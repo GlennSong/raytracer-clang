@@ -93,8 +93,8 @@ static void renderRocky(const PlanetParams& p, uint32_t seed, const char* file, 
                 if (dot(N, dirN) < 0) N = N * -1.0;
 
                 double h = planetHeight(p, seed, sdir(dirN));
-                Vec3 albedo = planetSurfaceColor(p, seed, sdir(dirN));
-                if (p.hasOcean && h < p.seaLevel) { albedo = p.oceanColor; N = dirN; }
+                Vec3 albedo = planetSurfaceColor(p, seed, sdir(dirN));   // ocean-aware
+                if (p.hasOcean && h < p.seaLevel) N = dirN;   // flat water surface normal
 
                 double ndl = std::max(0.0, dot(N, sun));
                 Vec3 ground;

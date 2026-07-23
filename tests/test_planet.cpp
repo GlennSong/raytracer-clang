@@ -140,6 +140,22 @@ TEST_CASE(planet_mesh_radii_stay_within_the_relief_band) {
     }
 }
 
+TEST_CASE(earthlike_planet_has_both_ocean_and_land) {
+    // An ocean world (hasOcean) flattens the sea floor to a water surface and tints
+    // it blue, so the mesh carries BOTH blue-dominant water vertices and green/brown
+    // land — not a uniform landmass. Airless presets (hasOcean=false) are unaffected.
+    PlanetParams p = planetEarthlike();
+    p.faceRes = 48;
+    RenderMesh m = generatePlanet(p, 1);
+    int ocean = 0, land = 0;
+    for (const Vertex& v : m.vertices) {
+        bool blueDominant = v.color.z > v.color.x + 0.05 && v.color.z > v.color.y + 0.02;
+        if (blueDominant) ocean++; else land++;
+    }
+    CHECK(ocean > 100);   // real seas, not a lake
+    CHECK(land > 100);    // and real continents
+}
+
 TEST_CASE(planet_generation_is_deterministic_and_seed_varies) {
     PlanetParams p = planetMoon();
     p.faceRes = 16;

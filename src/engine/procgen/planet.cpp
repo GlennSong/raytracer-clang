@@ -104,16 +104,26 @@ double planetHeight(const PlanetParams& p, uint32_t seed, const Vec3& dir) {
 }
 
 Vec3 planetSurfaceColor(const PlanetParams& p, uint32_t seed, const Vec3& dir) {
-    // A grey fallback ramp so a bare PlanetParams still colours to something sane.
-    ColorRamp ramp = p.landRamp;
-    if (ramp.stops.empty()) {
-        ramp = ColorRamp{{0.0, Vec3(0.32, 0.30, 0.28)}, {0.6, Vec3(0.55, 0.52, 0.48)},
-                         {1.0, Vec3(0.80, 0.78, 0.75)}};
-    }
     double h = planetHeight(p, seed, dir);
-    double elev = clampd((h - p.seaLevel) / std::max(1e-3, 1.0 - p.seaLevel), 0.0, 1.0);
-    Vec3 c = ramp.eval(elev);
-    if (p.polarCaps) {
+    Vec3 c;
+    if (p.hasOcean && h < p.seaLevel) {
+        // Water: bright coastal shelves fading to deep blue with depth, so seas read
+        // as water rather than the lowest land tone. (generatePlanet flattens the
+        // matching geometry to a single sea surface.)
+        double depthN = clampd((p.seaLevel - h) / 0.15, 0.0, 1.0);
+        Vec3 shallow = clampVec(p.oceanColor * 1.7, 0.0, 1.0);
+        c = lerp(shallow, p.oceanColor, depthN);
+    } else {
+        // A grey fallback ramp so a bare PlanetParams still colours to something sane.
+        ColorRamp ramp = p.landRamp;
+        if (ramp.stops.empty()) {
+            ramp = ColorRamp{{0.0, Vec3(0.32, 0.30, 0.28)}, {0.6, Vec3(0.55, 0.52, 0.48)},
+                             {1.0, Vec3(0.80, 0.78, 0.75)}};
+        }
+        double elev = clampd((h - p.seaLevel) / std::max(1e-3, 1.0 - p.seaLevel), 0.0, 1.0);
+        c = ramp.eval(elev);
+    }
+    if (p.polarCaps) {                          // ice caps over land AND frozen sea
         double capMask = smoothstep(p.capLatitude - 0.06, p.capLatitude + 0.06,
                                     std::fabs(dir.y));
         c = lerp(c, p.capColor, capMask);
@@ -128,7 +138,11 @@ RenderMesh generatePlanet(const PlanetParams& p, uint32_t seed) {
     for (Vertex& v : mesh.vertices) {
         Vec3 dir = normalize(v.position);
         double h = planetHeight(p, seed, dir);
-        v.position = dir * (static_cast<double>(p.radius) + amp * h);
+        // Ocean worlds flatten the sea floor up to one water surface at sea level, so
+        // continents read as land rising from an ocean, not uniform terrain. Colour
+        // (land ramp or depth-tinted water) comes from planetSurfaceColor.
+        double surfaceH = (p.hasOcean && h < p.seaLevel) ? p.seaLevel : h;
+        v.position = dir * (static_cast<double>(p.radius) + amp * surfaceH);
         v.color = planetSurfaceColor(p, seed, dir);
     }
 
