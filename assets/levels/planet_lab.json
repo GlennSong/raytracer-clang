@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.01, 0.012, 0.02],
+    "hdr": "../env/starfield.hdr",
+    "driveSun": false
+  },
+  "entities": [],
+  "atmosphere": { "center": [0, 0, -60], "radius": 20, "thickness": 0.1, "density": 1.5, "intensity": 45 },
+  "gravity": [0, 0, 0],
+  "player": { "position": [0, 2, 8] },
+  "lighting": {
+    "sun": {
+      "direction": [0.6, 0.3, -0.5],
+      "color": [1.0, 0.97, 0.92],
+      "intensity": 10.0,
+      "castsShadow": false
+    },
+    "exposure": 0.6,
+    "ambientMultiplier": 0.15
+  }
+}

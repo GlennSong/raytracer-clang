@@ -23,6 +23,7 @@
 #include "../engine/systems/audio_system.h"
 #include "../engine/audio/sfx.h"
 #include "../engine/systems/camera_panel_system.h"
+#include "../engine/systems/planet_lab_system.h"
 #include <algorithm>
 #ifdef RT_ENABLE_PHYSICS
 #include "../engine/systems/physics_system.h"
@@ -183,6 +184,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // Procedural clips + Collision -> impact cues (ADR-0071).
     addSystem<ArenaSoundSystem>(audioSys);
     addSystem<CameraPanelSystem>(camSys);
+    addSystem<PlanetLabSystem>();     // Debug > Planet Lab (RT_ENABLE_IMGUI)
 }
 
 // --- recipe hot-reload (the BUILDING LAB loop, building-grammar-plan.md P1) ---

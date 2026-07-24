@@ -149,6 +149,7 @@ add_library(engine_core STATIC
     src/engine/systems/debug_draw_system.cpp
     src/engine/systems/dev_control_system.cpp
     src/engine/systems/debug_overlay_system.cpp
+    src/engine/systems/planet_lab_system.cpp
     src/engine/systems/day_night_system.cpp
     src/engine/systems/terrain_lod_system.cpp
     # NOTE: the agent-based city simulation (ADR-0060…0066) is NOT here. It is an

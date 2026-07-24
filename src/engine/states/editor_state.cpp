@@ -6,6 +6,7 @@
 #include "../systems/dev_control_system.h"
 #include "../systems/camera_system.h"
 #include "../systems/camera_panel_system.h"
+#include "../systems/planet_lab_system.h"
 #include "../systems/terrain_lod_system.h"
 #include "../systems/render_system.h"
 #ifdef __EMSCRIPTEN__
@@ -32,6 +33,7 @@ EditorState::EditorState(Window& window, Renderer& renderer,
     addSystem<TerrainLodSystem>();   // CDLOD terrain draws (ADR-0036)
     addSystem<RenderSystem>();
     addSystem<CameraPanelSystem>(camSys);
+    addSystem<PlanetLabSystem>();     // Debug > Planet Lab (RT_ENABLE_IMGUI)
     addSystem<EditorSystem>(camSys, this->levelFile, std::move(makePlayState),
                             bridge);
 }

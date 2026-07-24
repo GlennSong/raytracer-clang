@@ -233,9 +233,23 @@ equirectangular albedo — latitudinal belts/zones warped by turbulent fbm flow,
 vortex storms — onto the smooth cube-sphere (`generateGasGiantMesh`), Jupiter /
 Neptune presets. Tested (`tests/test_planet.cpp`): longitude-seamless (the wrap step
 is no worse than an interior neighbour step), latitudinal banding, determinism,
-watertight sphere. **Still pending (device):** the evolving curl-noise fluid
-*animation* (ping-pong advection), limb darkening in-shader, and rings with mutual
-shadowing.
+watertight sphere. Now also **loadable in the viewer**: `generateGasGiantColoredMesh`
+bakes the same belts/zones/storms to VERTEX colour on the smooth sphere (no texture
+UVs to wire — the script mesh path re-projects UVs and would clobber an equirect
+map), exposed as `planet.gas_ball{preset=jupiter|neptune}` →
+`assets/levels/planet_gas.json` (`./build/viewer planet_gas`). **Still pending
+(device):** the evolving curl-noise fluid *animation* (ping-pong advection), limb
+darkening in-shader, and rings with mutual shadowing.
+
+### Interactive Planet Lab (native, RT_ENABLE_IMGUI)
+`src/engine/systems/planet_lab_system.cpp` — a debug-overlay panel (backtick →
+"Planet Lab") that drives the rocky and gas-giant generators live: type/preset/seed
++ sliders (sea level, continents, mountains, craters / bands, turbulence, storms),
+"Generate" spawns a planet in front of the camera, and each "Regenerate" rebuilds and
+re-uploads its mesh in place (leak-free via `AssetManager::acquireMesh`/`releaseMesh`,
+mirroring `EditorSystem`'s road regen). Registered in editor + arena states; inert
+without RT_ENABLE_IMGUI. Home scene `assets/levels/planet_lab.json` (empty space):
+`cmake --build build -DRT_ENABLE_IMGUI=ON` then `./build/viewer --edit planet_lab`.
 
 Original design notes:
 - **Curl-noise advection:** a band+detail field in a ping-pong texture, advected
