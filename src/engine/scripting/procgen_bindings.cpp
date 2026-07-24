@@ -2756,6 +2756,15 @@ int l_planet_gas_texture(lua_State* L) {
     return 1;
 }
 
+// planet.gas_ball{ preset='jupiter'|'neptune', seed=, radius=, face_res= } -> a gas
+// giant as one VERTEX-COLOURED Mesh (bands baked per vertex, no texture) so a scene
+// can drop it in exactly like planet.rocky, no albedo map or UVs to wire.
+int l_planet_gas_ball(lua_State* L) {
+    GasGiantParams p = gasParamsFromLua(L, 1);
+    pushMesh(L, std::make_shared<RenderMesh>(generateGasGiantColoredMesh(p, seedField(L, 1))));
+    return 1;
+}
+
 }  // namespace
 
 std::shared_ptr<RenderMesh> luaToMesh(lua_State* L, int idx) {
@@ -3035,6 +3044,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"rocky", l_planet_rocky},
         {"gas", l_planet_gas},
         {"gas_texture", l_planet_gas_texture},
+        {"gas_ball", l_planet_gas_ball},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kPlanetFns);

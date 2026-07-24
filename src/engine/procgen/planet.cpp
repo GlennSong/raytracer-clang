@@ -235,21 +235,16 @@ RenderMesh generateGasGiantMesh(const GasGiantParams& p) {
     return MeshBuilder::cubeSphere(p.radius, p.faceRes);
 }
 
-TextureData generateGasGiantTexture(const GasGiantParams& p, uint32_t seed) {
-    ColorRamp ramp = p.bandRamp;
-    if (ramp.stops.empty()) {
-        ramp = ColorRamp{{0.0, Vec3(0.35, 0.32, 0.30)}, {0.5, Vec3(0.62, 0.58, 0.52)},
-                         {1.0, Vec3(0.88, 0.85, 0.80)}};
-    }
+namespace {
 
-    Noise flow(seed + 11u);       // domain warp of the band latitude
-    Noise detail(seed + 29u);     // fine cloud turbulence
+// A vortex storm centre (e.g. the Great Red Spot) placed on the sphere.
+struct GasStorm { Vec3 dir; double size; double tint; };
 
-    // Storm centres + per-storm tint, placed deterministically on the sphere.
+// Deterministic storm placement, shared by the texture and vertex-colour paths.
+std::vector<GasStorm> gasStorms(const GasGiantParams& p, uint32_t seed) {
     std::mt19937 gen(seed + 991u);
     std::uniform_real_distribution<double> uni(0.0, 1.0);
-    struct Storm { Vec3 dir; double size; double tint; };
-    std::vector<Storm> storms;
+    std::vector<GasStorm> storms;
     for (int s = 0; s < p.stormCount; s++) {
         double lat = (uni(gen) - 0.5) * 1.4;             // avoid the very poles
         double lon = uni(gen) * 2.0 * PI;
@@ -257,6 +252,42 @@ TextureData generateGasGiantTexture(const GasGiantParams& p, uint32_t seed) {
         storms.push_back({Vec3(cl * std::cos(lon), std::sin(lat), cl * std::sin(lon)),
                           p.stormSize * (0.6 + 0.8 * uni(gen)), 0.5 + 0.5 * uni(gen)});
     }
+    return storms;
+}
+
+ColorRamp gasRampOrDefault(const GasGiantParams& p) {
+    if (!p.bandRamp.stops.empty()) return p.bandRamp;
+    return ColorRamp{{0.0, Vec3(0.35, 0.32, 0.30)}, {0.5, Vec3(0.62, 0.58, 0.52)},
+                     {1.0, Vec3(0.88, 0.85, 0.80)}};
+}
+
+// The gas-giant surface colour for a sphere direction: warp the band latitude by
+// turbulent flow (sampled in 3D → seamless in longitude), read alternating
+// belts/zones from a sine, break them up with fine turbulence, then blend in storms.
+Vec3 gasBandColor(const GasGiantParams& p, const ColorRamp& ramp, const Noise& flow,
+                  const Noise& detail, const std::vector<GasStorm>& storms,
+                  const Vec3& dir) {
+    double warp = flow.fbm3(dir.x * 1.5, dir.y * 1.5, dir.z * 1.5, p.warpOctaves);
+    double bandCoord = dir.y + warp * p.flowWarp;
+    double phase = 0.5 + 0.5 * std::sin(bandCoord * p.bandFreq * PI);
+    double d = detail.fbm3(dir.x * p.detailFreq, dir.y * p.detailFreq,
+                           dir.z * p.detailFreq, 4);
+    double t = clampd(phase + d * p.detailAmp, 0.0, 1.0);
+    Vec3 c = ramp.eval(t);
+    for (const GasStorm& st : storms) {
+        double ang = std::acos(clampd(dot(dir, st.dir), -1.0, 1.0));  // radians
+        double reach = st.size * PI;
+        if (ang < reach) c = lerp(c, p.stormColor, smoothstep(reach, reach * 0.2, ang) * st.tint);
+    }
+    return clampVec(c, 0.0, 1.0);
+}
+
+}  // namespace
+
+TextureData generateGasGiantTexture(const GasGiantParams& p, uint32_t seed) {
+    ColorRamp ramp = gasRampOrDefault(p);
+    Noise flow(seed + 11u), detail(seed + 29u);
+    std::vector<GasStorm> storms = gasStorms(p, seed);
 
     const int W = std::max(2, p.texWidth), H = std::max(2, p.texHeight);
     TextureData tex;
@@ -269,30 +300,7 @@ TextureData generateGasGiantTexture(const GasGiantParams& p, uint32_t seed) {
         double v = (j + 0.5) / H;
         for (int i = 0; i < W; i++) {
             double u = (i + 0.5) / W;
-            Vec3 dir = equirectDir(u, v);
-
-            // Warp the band latitude by turbulent flow (sampled in 3D → seamless in
-            // longitude), then read alternating belts/zones out of a sine.
-            double warp = flow.fbm3(dir.x * 1.5, dir.y * 1.5, dir.z * 1.5, p.warpOctaves);
-            double bandCoord = dir.y + warp * p.flowWarp;
-            double phase = 0.5 + 0.5 * std::sin(bandCoord * p.bandFreq * PI);
-            // Fine turbulence breaks the bands up.
-            double d = detail.fbm3(dir.x * p.detailFreq, dir.y * p.detailFreq,
-                                   dir.z * p.detailFreq, 4);
-            double t = clampd(phase + d * p.detailAmp, 0.0, 1.0);
-            Vec3 c = ramp.eval(t);
-
-            // Vortex storms: a smooth angular falloff toward the storm tint.
-            for (const Storm& st : storms) {
-                double ang = std::acos(clampd(dot(dir, st.dir), -1.0, 1.0));  // radians
-                double reach = st.size * PI;
-                if (ang < reach) {
-                    double m = smoothstep(reach, reach * 0.2, ang) * st.tint;
-                    c = lerp(c, p.stormColor, m);
-                }
-            }
-
-            c = clampVec(c, 0.0, 1.0);
+            Vec3 c = gasBandColor(p, ramp, flow, detail, storms, equirectDir(u, v));
             size_t idx = (static_cast<size_t>(j) * W + i) * 3;
             tex.pixels[idx + 0] = static_cast<uint8_t>(c.x * 255.0 + 0.5);
             tex.pixels[idx + 1] = static_cast<uint8_t>(c.y * 255.0 + 0.5);
@@ -300,6 +308,19 @@ TextureData generateGasGiantTexture(const GasGiantParams& p, uint32_t seed) {
         }
     }
     return tex;
+}
+
+RenderMesh generateGasGiantColoredMesh(const GasGiantParams& p, uint32_t seed) {
+    RenderMesh mesh = MeshBuilder::cubeSphere(p.radius, p.faceRes);
+    ColorRamp ramp = gasRampOrDefault(p);
+    Noise flow(seed + 11u), detail(seed + 29u);
+    std::vector<GasStorm> storms = gasStorms(p, seed);
+    for (Vertex& v : mesh.vertices) {
+        Vec3 dir = normalize(v.position);
+        v.color = gasBandColor(p, ramp, flow, detail, storms, dir);
+        v.normal = dir;                 // smooth sphere: radial normals, no relief
+    }
+    return mesh;
 }
 
 GasGiantParams gasGiantJupiter() {

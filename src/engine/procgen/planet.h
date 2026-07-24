@@ -125,6 +125,12 @@ RenderMesh generateGasGiantMesh(const GasGiantParams& p);
 // the 3D sphere direction so the longitude wrap is seamless; deterministic in seed.
 TextureData generateGasGiantTexture(const GasGiantParams& p, uint32_t seed);
 
+// A gas giant as a single VERTEX-COLOURED mesh: the same banded/turbulent/storm
+// palette baked per vertex instead of into an equirect texture, so it rides the
+// engine's no-texture PBR path exactly like generatePlanet (no UV mapping needed).
+// Face resolution sets the band sharpness; the smooth sphere keeps radial normals.
+RenderMesh generateGasGiantColoredMesh(const GasGiantParams& p, uint32_t seed);
+
 }  // namespace engine
 
 #endif

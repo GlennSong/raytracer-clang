@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "environment": {
+    "skyColor": [0.01, 0.012, 0.02],
+    "hdr": "../env/starfield.hdr",
+    "driveSun": false
+  },
+  "entities": [
+    {
+      "name": "planet",
+      "shape": "script",
+      "file": "../scripts/planet_gas.lua",
+      "opts": { "preset": "jupiter", "seed": 1, "radius": 20, "face_res": 96 },
+      "position": [0, 0, -60],
+      "angularVelocity": [0, 0.2, 0]
+    }
+  ],
+  "atmosphere": { "center": [0, 0, -60], "radius": 20, "thickness": 0.06, "density": 1.0, "intensity": 28 },
+  "gravity": [0, 0, 0],
+  "player": { "position": [0, 2, 8] },
+  "lighting": {
+    "sun": {
+      "direction": [0.6, 0.3, -0.5],
+      "color": [1.0, 0.97, 0.92],
+      "intensity": 10.0,
+      "castsShadow": false
+    },
+    "exposure": 0.6,
+    "ambientMultiplier": 0.15
+  }
+}

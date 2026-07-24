@@ -22,6 +22,13 @@
       "thumb": "thumbs/planet_moon.webp"
     },
     {
+      "id": "planet_gas",
+      "title": "Gas Giant",
+      "tag": "Space",
+      "blurb": "A banded gas giant — turbulent belts and zones with vortex storms, generated from domain-warped noise and baked to vertex colour.",
+      "thumb": "thumbs/planet_gas.webp"
+    },
+    {
       "id": "living_city",
       "title": "Living City",
       "tag": "Agents",

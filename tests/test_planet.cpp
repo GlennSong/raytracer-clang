@@ -156,6 +156,24 @@ TEST_CASE(earthlike_planet_has_both_ocean_and_land) {
     CHECK(land > 100);    // and real continents
 }
 
+TEST_CASE(gas_giant_colored_mesh_is_banded_and_smooth) {
+    // A gas giant bakes turbulent belts/zones + storms into vertex colour on a
+    // smooth sphere (no relief), so it needs real band contrast and radial normals.
+    GasGiantParams p = gasGiantJupiter();
+    p.faceRes = 48;
+    RenderMesh m = generateGasGiantColoredMesh(p, 1);
+    CHECK(mesh_invariants::triangleCount(m) == 6 * 48 * 48 * 2);
+    CHECK(!mesh_invariants::hasNonFinite(m));
+    double lo = 1e9, hi = -1e9;
+    for (const Vertex& v : m.vertices) {
+        double lum = 0.2126 * v.color.x + 0.7152 * v.color.y + 0.0722 * v.color.z;
+        lo = std::min(lo, lum);
+        hi = std::max(hi, lum);
+        CHECK(dot(v.normal, normalize(v.position)) > 0.99);   // smooth: radial normals
+    }
+    CHECK(hi - lo > 0.15);   // belts vs zones — real banding, not a flat ball
+}
+
 TEST_CASE(planet_generation_is_deterministic_and_seed_varies) {
     PlanetParams p = planetMoon();
     p.faceRes = 16;
