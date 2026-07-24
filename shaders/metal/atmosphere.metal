@@ -58,8 +58,12 @@ static float2 atmOpticalDepth(float3 pa, float3 pb, int steps,
 vertex AtmosphereOut vertexAtmosphere(uint vid [[vertex_id]]) {
     AtmosphereOut out;
     float2 uv = float2((vid << 1) & 2, vid & 2);
-    out.uv = uv;
     out.position = float4(uv * 2.0 - 1.0, 0.0, 1.0);
+    // Flip Y to Metal's texture origin (top-left), exactly like vertexComposite —
+    // the fragment's ndc reconstruction does `-(uv.y*2-1)` and the scene sample both
+    // assume this y-down uv. Without the flip the ray Y is inverted and the glow
+    // mirrors vertically, drifting off the planet as the camera pitches.
+    out.uv = float2(uv.x, 1.0 - uv.y);
     return out;
 }
 
