@@ -390,20 +390,27 @@ struct AtmosphereRenderParams {
 };
 
 // Earth-like atmosphere for a body of `radius` at `center` (mirrors the CPU
-// atmosphereEarth preset, scaled to the render-space radius). Thickness 2.5%.
-inline AtmosphereRenderParams atmosphereParamsFor(const Vec3& center, float radius) {
+// atmosphereEarth preset, scaled to the render-space radius). `thicknessFrac` is the
+// shell height as a fraction of the planet radius (0.08 ≈ a clearly visible limb
+// halo); `density` scales the scattering coefficients (brighter/deeper blue); and
+// `sunIntensity` the overall glow strength. The level's "atmosphere" block overrides
+// all three so the halo can be dialled without a recompile.
+inline AtmosphereRenderParams atmosphereParamsFor(const Vec3& center, float radius,
+                                                  float thicknessFrac = 0.08f,
+                                                  float density = 1.0f,
+                                                  float sunIntensity = 32.0f) {
     AtmosphereRenderParams a;
     a.enabled = true;
     a.planetCenter = center;
     a.planetRadius = radius;
-    a.atmosphereRadius = radius * 1.025f;
+    a.atmosphereRadius = radius * (1.0f + thicknessFrac);
     float thickness = a.atmosphereRadius - a.planetRadius;
     a.rayleighScaleHeight = thickness * 0.25f;
     a.mieScaleHeight = thickness * 0.07f;
-    a.rayleighCoeff = Vec3(20.0f, 47.0f, 115.0f) * (1.0f / radius);
-    a.mieCoeff = 42.0f / radius;
+    a.rayleighCoeff = Vec3(20.0f, 47.0f, 115.0f) * (density / radius);
+    a.mieCoeff = 42.0f * density / radius;
     a.mieG = 0.76f;
-    a.sunIntensity = 22.0f;
+    a.sunIntensity = sunIntensity;
     return a;
 }
 

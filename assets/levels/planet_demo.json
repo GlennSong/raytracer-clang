@@ -15,7 +15,7 @@
       "angularVelocity": [0, 0.15, 0]
     }
   ],
-  "atmosphere": { "center": [0, 0, -60], "radius": 20 },
+  "atmosphere": { "center": [0, 0, -60], "radius": 20, "thickness": 0.15, "density": 2.0, "intensity": 60 },
   "gravity": [0, 0, 0],
   "player": { "position": [0, 2, 8] },
   "lighting": {

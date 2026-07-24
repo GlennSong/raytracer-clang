@@ -3801,13 +3801,20 @@ bool LevelLoader::load(const std::string& path,
         world.add<SceneGravity>(g, SceneGravity{parseVec3(root["gravity"], Vec3(0, -9.81, 0))});
     }
 
-    // Planetary atmosphere glow (procedural-planet-plan P3): a top-level
-    // "atmosphere" block { center:[x,y,z], radius, enabled? } drives the renderer's
-    // scattering pass (Metal today; other backends ignore it). Absent clears it.
+    // Planetary atmosphere glow (procedural-planet-plan P3): a top-level "atmosphere"
+    // block { center:[x,y,z], radius, thickness?, density?, intensity?, enabled? }
+    // drives the renderer's scattering pass (Metal today; other backends ignore it).
+    // thickness = shell height as a fraction of radius, density scales the scattering,
+    // intensity the glow strength — turn them up for an unmistakable limb halo. Absent
+    // clears it.
     if (root.contains("atmosphere")) {
         const json& at = root["atmosphere"];
-        AtmosphereRenderParams ap = atmosphereParamsFor(parseVec3(at.value("center", json())),
-                                                  at.value("radius", 20.0f));
+        AtmosphereRenderParams ap = atmosphereParamsFor(
+            parseVec3(at.value("center", json())),
+            at.value("radius", 20.0f),
+            at.value("thickness", 0.08f),
+            at.value("density", 1.0f),
+            at.value("intensity", 32.0f));
         ap.enabled = at.value("enabled", true);
         renderer.setAtmosphere(ap);
     } else {
