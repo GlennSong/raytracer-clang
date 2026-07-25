@@ -1,8 +1,10 @@
 #include "erosion.h"
+#include "erosion_gpu.h"
 #include "../mesh_builder.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <random>
 
 namespace engine {
@@ -52,10 +54,27 @@ void heightAndGradient(const Heightmap& hm, float gx, float gz,
     height = (nw * (1 - fx) + ne * fx) * (1 - fz) + (sw * (1 - fx) + se * fx) * fz;
 }
 
+// RT_CPU_EROSION=1 pins the reference CPU sim (debugging, A/B comparisons,
+// and machines where the GPU result is unwanted).
+bool forceCpuErosion() {
+    const char* e = std::getenv("RT_CPU_EROSION");
+    return e && e[0] != '\0' && !(e[0] == '0' && e[1] == '\0');
+}
+
 }  // namespace
+
+const char* erosionBackendTag() {
+    return (!forceCpuErosion() && erodeGpuAvailable()) ? "gpu-erosion-v1"
+                                                       : "cpu";
+}
 
 void erode(Heightmap& hm, const ErosionParams& p) {
     if (hm.n < 3) return;
+    // GPU first (metropolis-scale-plan P0.5): the Metal port of this same
+    // droplet+thermal model turns a minutes-long bake into seconds at 2048
+    // res. Any failure (no device, kernel source missing, env pin) falls
+    // through to the reference CPU sim below, unchanged.
+    if (!forceCpuErosion() && erodeGpu(hm, p)) return;
     std::mt19937 gen(p.seed);
     std::uniform_real_distribution<float> pos(0.0f, static_cast<float>(hm.n - 1));
 

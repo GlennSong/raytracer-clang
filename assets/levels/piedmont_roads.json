@@ -74,5 +74,91 @@
   },
   "player": {
     "position": [900, 60, 900]
+  },
+  "entities": [
+    {
+      "id": 2,
+      "name": "streets",
+      "position": [0.0, 0.0, 0.0],
+      "shape": "road",
+      "road": {
+        "color": [0.09, 0.09, 0.1],
+        "corner_radius": 3.0,
+        "crosswalks": true,
+        "curb": 0.16,
+        "lift": 0.08,
+        "markings": true,
+        "sidewalk": 3.5,
+        "width": 11.0,
+        "generate": {
+          "kind": "metro",
+          "seed": 7,
+          "sites": [
+            {
+              "center": { "x": 900, "z": 900 },
+              "radius": 1400,
+              "hotspots": 9,
+              "block_size": 220,
+              "density": 1.0
+            },
+            {
+              "center": { "x": 3050, "z": 400 },
+              "radius": 420,
+              "hotspots": 3,
+              "block_size": 180,
+              "density": 0.55,
+              "kind_bias": "oldtown"
+            },
+            {
+              "center": { "x": 300, "z": 3050 },
+              "radius": 380,
+              "hotspots": 3,
+              "block_size": 180,
+              "density": 0.5,
+              "kind_bias": "residential"
+            }
+          ],
+          "freeways": true,
+          "backbone": "arterial",
+          "freeway_width": 17,
+          "corridor_freeways": false,
+          "interchange_spacing": 600,
+          "artery_width": 17,
+          "collector_width": 13,
+          "street_width": 11,
+          "block_size": 220,
+          "min_block_edge": 150,
+          "seg_length": 50,
+          "influence": 560,
+          "kill_radius": 110,
+          "merge_radius": 80,
+          "corridor_spacing": 120,
+          "ambient_per_500": 14,
+          "loop_min": 200,
+          "loop_max": 650,
+          "curviness": 0.25,
+          "min_road_len": 30,
+          "min_road_clearance": 0.9,
+          "max_slope": 0.32
+        }
+      }
+    }
+  ],
+  "citysim": {
+    "planOnly": true,
+    "buildLots": false,
+    "showPlan": true,
+    "debugWidgets": true,
+    "cars": 0,
+    "pedestrians": 0,
+    "seed": 7,
+    "plinth": 0.45,
+    "sidewalk": 4.0,
+    "detailDistance": 900,
+    "downtownRadius": 300,
+    "midtownRadius": 650,
+    "hubRadius": 320,
+    "vehicles": "vehicles.lua",
+    "wander": false
   }
 }

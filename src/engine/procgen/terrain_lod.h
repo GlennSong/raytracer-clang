@@ -2,6 +2,10 @@
 #define RAYTRACER_ENGINE_TERRAIN_LOD_H
 
 #include "terrain.h"   // TerrainParams, Noise, RenderMesh, terrainHeight
+#include <cstdint>
+#include <functional>
+#include <mutex>
+#include <unordered_map>
 #include <vector>
 
 namespace engine {
@@ -53,6 +57,20 @@ std::vector<LodNode> selectLodNodes(float worldHalf, int numLods,
                                     const std::vector<float>& ranges,
                                     float camX, float camZ);
 
+// Readiness-gated selection for async mesh streaming: identical descent to
+// selectLodNodes, except a node splits into its four children only when
+// `ensure` reports ALL FOUR renderable — otherwise the (renderable) parent is
+// emitted instead. `ensure(child)` returns true when that node's mesh is
+// available now (the callee may build it on the spot — it does for the coarse
+// levels); returning false is the callee's cue to start an async build. All
+// four children are probed even after one misses, so every absent sibling gets
+// requested in the same frame. Every emitted node had ensure() == true, so the
+// cut is always fully renderable: streaming shows temporarily coarser terrain,
+// never holes. If even the root isn't renderable the cut is empty.
+std::vector<LodNode> selectLodNodesGated(
+    float worldHalf, int numLods, const std::vector<float>& ranges,
+    float camX, float camZ, const std::function<bool(const LodNode&)>& ensure);
+
 // Distance in the XZ plane from a point to the nearest point of an axis-aligned
 // box [minX, minX+size] x [minZ, minZ+size]; 0 if the point is inside. Exposed for
 // testing the selection invariant.
@@ -77,6 +95,38 @@ struct LodNodeMesh {
 LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
                                 const LodNode& node, int gridRes,
                                 double normalEps = 0.0);
+
+// Bookkeeping for streaming node meshes off the render thread (JobSystem,
+// ADR-0014). The render thread `begin`s a cache key before enqueueing its build
+// job (dedupes against jobs already in flight), workers `complete` finished
+// builds into a mutex-guarded queue, and the render thread `drain`s them each
+// frame. A result is tagged with the config revision it was built against;
+// drain drops results whose revision is stale (a re-conform landed while the
+// job ran), so no stale mesh can reach the cache. `invalidate` on a revision
+// bump forgets the in-flight set so the same keys can be re-requested at the
+// new revision — a still-flying old job then neither blocks the re-request nor
+// corrupts its accounting (its entry only clears when revisions match). Only
+// `complete` may be called off the render thread.
+class LodMeshStream {
+public:
+    struct Result {
+        int64_t key = 0;
+        uint32_t revision = 0;
+        LodNodeMesh built;
+    };
+
+    bool begin(int64_t key, uint32_t revision);   // false: already in flight
+    void complete(Result r);                      // worker thread
+    // Finished builds whose revision matches; stale results are discarded.
+    std::vector<Result> drain(uint32_t currentRevision);
+    void invalidate();
+    std::size_t inFlightCount() const { return inFlight_.size(); }
+
+private:
+    std::unordered_map<int64_t, uint32_t> inFlight_;   // key -> revision at enqueue
+    std::mutex doneMutex_;
+    std::vector<Result> done_;
+};
 
 }  // namespace engine
 

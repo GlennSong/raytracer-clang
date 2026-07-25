@@ -162,6 +162,21 @@ target_include_directories(engine_core SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_p
 target_compile_options(engine_core PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(engine_core PUBLIC Threads::Threads)
 
+# GPU erosion bake (metropolis-scale-plan P0.5), Apple only: a self-contained
+# Metal compute host for the droplet/thermal sim — its own device + queue, no
+# renderer dependency — so every engine_core host (viewer, editor, headless
+# tests) gets the fast bake. Falls back to the CPU sim in erosion.cpp when no
+# Metal device or kernel source is present (erosion_gpu.h stubs it off-Apple).
+if(APPLE)
+    enable_language(OBJCXX)
+    target_sources(engine_core PRIVATE src/engine/procgen/erosion_gpu.mm)
+    set_source_files_properties(src/engine/procgen/erosion_gpu.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    target_link_libraries(engine_core PUBLIC
+        "-framework Metal"
+        "-framework Foundation")
+endif()
+
 # Dear ImGui (ADR-0011): core + ImGuizmo compile inside engine_core (the
 # panels/gizmos live there); platform backends (GLFW/Metal) attach per host.
 option(RT_ENABLE_IMGUI "Build with the Dear ImGui debug UI" OFF)
@@ -442,6 +457,7 @@ add_executable(run_tests
     tests/test_terrain_field.cpp
     tests/test_winding.cpp
     tests/test_road_constraints.cpp
+    tests/test_metro_sites.cpp
     tests/test_road_semantics.cpp
     tests/test_road_layers.cpp
     tests/test_road_offset.cpp
@@ -469,6 +485,7 @@ add_executable(run_tests
     tests/test_curb_return.cpp
     tests/test_animation_path.cpp
     tests/test_terrain_lod.cpp
+    tests/test_terrain_async.cpp
     tests/test_nav_graph.cpp
     tests/test_pathfind.cpp
     tests/test_perception.cpp
@@ -503,10 +520,14 @@ add_executable(run_tests
     tests/test_alignment.cpp
     tests/test_surface_field.cpp
     tests/test_architect.cpp
+    tests/test_erosion_gpu.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(run_tests PRIVATE citysim engine_core)
+# The GPU erosion test chdirs here to reach shaders/metal/erosion.metal (the
+# kernels are compiled from disk, CWD-relative, like the renderer's shaders).
+target_compile_definitions(run_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 if(RT_ENABLE_SCRIPTING)
     target_sources(run_tests PRIVATE
         tests/test_script_vm.cpp

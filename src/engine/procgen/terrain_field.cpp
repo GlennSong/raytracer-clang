@@ -642,6 +642,14 @@ HeightField erodeField(const HeightField& f, double worldSize, int resolution,
         fold(static_cast<double>(params.erodeRadius));
         fold(static_cast<double>(params.thermalIterations));
         fold(params.talus); fold(params.thermalRate);
+        // Backend tag (P0.5): the GPU and CPU sims are each deterministic but
+        // not bit-identical to each other, so the key names which one will
+        // run — CPU- and GPU-baked caches never cross-contaminate, and a
+        // kernel revision (tag bump) invalidates cleanly.
+        for (const char* t = erosionBackendTag(); *t; ++t) {
+            key ^= static_cast<unsigned char>(*t);
+            key *= 1099511628211ULL;
+        }
     }
     char cachePath[256] = {0};
     if (useCache) {

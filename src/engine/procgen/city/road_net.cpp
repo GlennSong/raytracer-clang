@@ -2049,6 +2049,34 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         mp.ambientPer500   = g.value("ambient_per_500", mp.ambientPer500);
         mp.loopMin         = g.value("loop_min", mp.loopMin);
         mp.loopMax         = g.value("loop_max", mp.loopMax);
+        mp.minBlockEdge    = g.value("min_block_edge", 0.0);
+        // "backbone": "arterial" keeps the hub-to-hub spine a street (a
+        // no-freeway metro); the historical default stays Freeway-class.
+        if (g.value("backbone", std::string("freeway")) == std::string("arterial"))
+            mp.backboneClass = RoadClass::Arterial;
+        // Multi-site metros (8km-city plan P2): sites[0] is the city, later
+        // entries are satellite towns; the backbone MST spans them all.
+        if (g.contains("sites") && g["sites"].is_array()) {
+            for (const auto& sj : g["sites"]) {
+                MetroSite ms;
+                if (sj.contains("center")) {
+                    const json& c = sj["center"];
+                    ms.center = Vec2(c.value("x", 0.0), c.value("z", 0.0));
+                }
+                ms.radius    = sj.value("radius", ms.radius);
+                ms.hotspots  = sj.value("hotspots", ms.hotspots);
+                ms.blockSize = sj.value("block_size", 0.0);
+                ms.density   = sj.value("density", 1.0);
+                const std::string bias = sj.value("kind_bias", std::string());
+                ms.kindBias = bias == "financial"   ? 0
+                            : bias == "commercial"  ? 1
+                            : bias == "residential" ? 2
+                            : bias == "oldtown"     ? 3
+                            : bias == "industrial"  ? 4
+                                                    : -1;
+                mp.sites.push_back(ms);
+            }
+        }
         mp.outHubs = &net.cityHubs;   // polycentric zoning reads these (city_lots)
         // Terrain-aware layout: when the road is draped on terrain, gate the city
         // on buildability so it hugs buildable land and avoids water / steep
@@ -2156,6 +2184,23 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
             for (std::size_t e = 0; e < cg.edges.size(); ++e)
                 if (!drop[e]) kept.edges.push_back(cg.edges[e]); else ++nDrop;
             if (nDrop > 0) cg = std::move(kept);
+        }
+        // BIG-BLOCK JUNCTION SPACING (8km-city plan P2): min_road_len is stub
+        // cleanup and must stay under the colonization step (an arterial is a
+        // chain of curve segments — raw edge length is sampling, not junction
+        // spacing). min_block_edge owns intersection spacing: the fabric fill
+        // floors its cells on it (with headroom, metro.cpp) and the span
+        // consolidation fuses/deletes/lengthens junction-to-junction spans
+        // under it. Double pass with a re-planarize between, exactly the
+        // sequence the standalone probe validated.
+        {
+            const double minBlockEdge = g.value("min_block_edge", 0.0);
+            if (minBlockEdge > 0.0) {
+                cg = consolidateJunctionSpans(cg, minBlockEdge, rules.maxDegree);
+                cg = capDegree(planarize(cg, 1.0), rules);
+                cg = mergeShortEdges(cg, g.value("min_road_len", 10.0), rules.maxDegree);
+                cg = consolidateJunctionSpans(cg, minBlockEdge, rules.maxDegree);
+            }
         }
     } else {
         // Minimum road length (device: "really short roads ... should be merged"):

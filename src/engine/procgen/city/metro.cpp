@@ -1,5 +1,6 @@
 #include "metro.h"
 
+#include "road_constraints.h"   // consolidateJunctionSpans (big-block skeleton)
 #include "../../../profile.h"
 
 #include <algorithm>
@@ -292,8 +293,22 @@ RoadGraph buildMetro(const MetroParams& p,
                      std::vector<std::vector<Vec2>>* freewayPlans) {
     RT_PROFILE_ZONE_NAMED("buildMetro");
     Lcg rng{0x9E3779B97F4A7C15ULL ^ (static_cast<std::uint64_t>(p.seed) * 0x100000001B3ULL)};
-    const double DOM = std::max(200.0, p.radius);
-    const int H = std::max(2, p.hotspots);
+
+    // Effective settlement list: explicit sites, or one legacy site from the
+    // flat params. sites[0] is the primary city everywhere below.
+    std::vector<MetroSite> sites = p.sites;
+    if (sites.empty()) {
+        MetroSite s;
+        s.center = p.center; s.radius = p.radius; s.hotspots = p.hotspots;
+        s.blockSize = p.blockSize;
+        sites.push_back(s);
+    }
+    for (MetroSite& s : sites) {
+        s.radius = std::max(200.0, s.radius);
+        s.hotspots = std::max(1, s.hotspots);
+        if (s.blockSize <= 0.0) s.blockSize = p.blockSize;
+    }
+    const double DOM = sites[0].radius;   // primary-city scale (legacy name)
 
     // --- hotspots: one central hub + the rest on a jittered ring; ~1 in 3 radial.
     // Terrain-aware gate: when a ground sampler is supplied, the city may only
@@ -302,14 +317,55 @@ RoadGraph buildMetro(const MetroParams& p,
     auto buildable = [&](double x, double z) {
         return !gated || isBuildable(p.build, p.ground, x, z);
     };
-    auto inDomain = [&](const Vec2& q) {
-        return std::fabs(q.x - p.center.x) <= DOM && std::fabs(q.y - p.center.y) <= DOM;
+    // Inter-site backbone anchor polylines (filled when the backbone is laid);
+    // growth may follow them through open country inside a capsule, so the
+    // connectors get frontage without the countryside sprawling.
+    std::vector<std::vector<Vec2>> backbonePaths;
+    const double kConnectorHalf = 150.0;
+    auto inSite = [&](const Vec2& q) -> int {
+        for (std::size_t s = 0; s < sites.size(); ++s)
+            if (std::fabs(q.x - sites[s].center.x) <= sites[s].radius &&
+                std::fabs(q.y - sites[s].center.y) <= sites[s].radius)
+                return static_cast<int>(s);
+        return -1;
     };
+    auto nearBackbone = [&](const Vec2& q) {
+        for (const auto& path : backbonePaths)
+            for (std::size_t k = 0; k + 1 < path.size(); ++k) {
+                Vec2 a = path[k], d = path[k + 1] - path[k];
+                double L2 = d.x * d.x + d.y * d.y;
+                double t = L2 > 1e-9
+                    ? std::clamp(((q.x - a.x) * d.x + (q.y - a.y) * d.y) / L2, 0.0, 1.0)
+                    : 0.0;
+                if (dist2(q, a + d * t) < kConnectorHalf * kConnectorHalf) return true;
+            }
+        return false;
+    };
+    auto inDomain = [&](const Vec2& q) {
+        return inSite(q) >= 0 || nearBackbone(q);
+    };
+    // Loose AABB over every site (+margin): the backbone anchor nudge can't use
+    // inDomain — mid-connector anchors precede their own capsule.
+    Vec2 gLo = sites[0].center, gHi = sites[0].center;
+    for (const MetroSite& s : sites) {
+        gLo.x = std::min(gLo.x, s.center.x - s.radius); gLo.y = std::min(gLo.y, s.center.y - s.radius);
+        gHi.x = std::max(gHi.x, s.center.x + s.radius); gHi.y = std::max(gHi.y, s.center.y + s.radius);
+    }
+    auto inGlobalBounds = [&](const Vec2& q) {
+        return q.x >= gLo.x - 200 && q.x <= gHi.x + 200 &&
+               q.y >= gLo.y - 200 && q.y <= gHi.y + 200;
+    };
+    // How far any stitch/search may reach: spans the farthest site pair.
+    double globalReach = 2.0 * DOM;
+    for (const MetroSite& a : sites)
+        for (const MetroSite& b : sites)
+            globalReach = std::max(globalReach,
+                                   (a.center - b.center).length() + a.radius + b.radius);
     // Nudge a point to the nearest buildable ground (spiral search); returns the
-    // input unchanged if none is found within the domain.
-    auto snapBuildable = [&](Vec2 s) -> Vec2 {
+    // input unchanged if none is found within the site.
+    auto snapBuildable = [&](Vec2 s, double reach) -> Vec2 {
         if (buildable(s.x, s.y)) return s;
-        for (double r = 25; r <= DOM; r += 25)
+        for (double r = 25; r <= reach; r += 25)
             for (int k = 0; k < 16; ++k) {
                 double t = kTau * k / 16;
                 Vec2 q = s + Vec2(std::cos(t), std::sin(t)) * r;
@@ -318,26 +374,40 @@ RoadGraph buildMetro(const MetroParams& p,
         return s;
     };
 
-    // Hub kinds mirror DistrictTag: the centre is the financial core; ring hubs
-    // draw from a weighted flavor cycle (commerce-heavy near the core is the
-    // architect's job — here each SECONDARY CENTRE gets one dominant flavor).
+    // Hub kinds mirror DistrictTag: the city centre is the financial core; ring
+    // hubs draw from a weighted flavor cycle (commerce-heavy near the core is
+    // the architect's job — here each SECONDARY CENTRE gets one dominant
+    // flavor). Town central hubs take the site's kindBias; town ring hubs stay
+    // residential/commercial (a town has no financial or industrial quarter).
     std::vector<CityHub> hots;
-    hots.push_back({snapBuildable(p.center), /*kind=*/0, /*radial=*/true});
     const int kindCycle[6] = {1, 2, 4, 1, 2, 3};   // commercial, residential,
                                                    // industrial, ..., oldtown
-    // One jittered ring up to 7 hubs; bigger metros add an OUTER ring so the
-    // footprint is covered by centres instead of leaving a bald mid-band.
-    const int ring1 = std::min(H - 1, 6);
-    for (int i = 1; i < H; ++i) {
-        const bool outer = (i - 1) >= ring1;
-        const int k = outer ? (i - 1 - ring1) : (i - 1);
-        const int n = outer ? (H - 1 - ring1) : ring1;
-        double ang = kTau * k / std::max(1, n) + rng.range(-0.35, 0.35) +
-                     (outer ? kTau * 0.5 / std::max(1, n) : 0.0);
-        double r = DOM * (outer ? rng.range(0.60, 0.80) : rng.range(0.34, 0.55));
-        hots.push_back({snapBuildable(p.center + Vec2(std::cos(ang), std::sin(ang)) * r),
-                        kindCycle[(i - 1) % 6], (i % 3) == 0});
+    const int townCycle[2] = {2, 1};               // residential, commercial
+    for (std::size_t si = 0; si < sites.size(); ++si) {
+        const MetroSite& S = sites[si];
+        const bool city = (si == 0);
+        const int SH = S.hotspots;
+        int centralKind = city ? 0 : (S.kindBias >= 0 ? S.kindBias : 2);
+        hots.push_back({snapBuildable(S.center, S.radius), centralKind,
+                        /*radial=*/city, static_cast<int>(si)});
+        // One jittered ring up to 7 hubs; bigger metros add an OUTER ring so the
+        // footprint is covered by centres instead of leaving a bald mid-band.
+        const int ring1 = std::min(SH - 1, 6);
+        for (int i = 1; i < SH; ++i) {
+            const bool outer = (i - 1) >= ring1;
+            const int k = outer ? (i - 1 - ring1) : (i - 1);
+            const int n = outer ? (SH - 1 - ring1) : ring1;
+            double ang = kTau * k / std::max(1, n) + rng.range(-0.35, 0.35) +
+                         (outer ? kTau * 0.5 / std::max(1, n) : 0.0);
+            double r = S.radius * (outer ? rng.range(0.60, 0.80) : rng.range(0.34, 0.55));
+            Vec2 pos = snapBuildable(S.center + Vec2(std::cos(ang), std::sin(ang)) * r,
+                                     S.radius);
+            hots.push_back({pos,
+                            city ? kindCycle[(i - 1) % 6] : townCycle[(i - 1) % 2],
+                            city && (i % 3) == 0, static_cast<int>(si)});
+        }
     }
+    const int H = static_cast<int>(hots.size());
     if (p.outHubs) *p.outHubs = hots;
 
     // --- freeway backbone (metropolis tier): connect the hubs with an MST plus
@@ -401,15 +471,20 @@ RoadGraph buildMetro(const MetroParams& p,
                                       : rng.range(-0.05, 0.05) * L;
                     Vec2 q = A + dir * (t * L) + nrm * sway;
                     if (!buildable(q.x, q.y)) {
+                        // inGlobalBounds, not inDomain: a mid-connector anchor
+                        // precedes its own capsule.
                         bool fixed = false;
                         for (double off = 30; off <= 210 && !fixed; off += 30)
                             for (double s : {+1.0, -1.0}) {
                                 Vec2 c2 = q + nrm * (off * s);
-                                if (inDomain(c2) && buildable(c2.x, c2.y)) { q = c2; fixed = true; break; }
+                                if (inGlobalBounds(c2) && buildable(c2.x, c2.y)) { q = c2; fixed = true; break; }
                             }
                     }
                     pts.push_back(q);
                 }
+                // Inter-site links open a growth capsule through the country.
+                if (hots[l.first].site != hots[l.second].site)
+                    backbonePaths.push_back(pts);
                 auto cr = [&](int i0) {
                     Vec2 p0 = pts[std::max(0, i0 - 1)], p1 = pts[i0],
                          p2 = pts[std::min<int>(pts.size() - 1, i0 + 1)],
@@ -431,7 +506,7 @@ RoadGraph buildMetro(const MetroParams& p,
                         Vec2 q = seg(static_cast<double>(s) / steps);
                         int id = Ga.addNode(q, 8.0);
                         if (prev >= 0 && id != prev)
-                            Ga.addEdge(prev, id, p.freewayWidth, RoadClass::Freeway);
+                            Ga.addEdge(prev, id, p.freewayWidth, p.backboneClass);
                         if (prev >= 0) {
                             along += segLen / steps;
                             if (along >= nextSeed) {
@@ -628,25 +703,41 @@ RoadGraph buildMetro(const MetroParams& p,
     std::vector<Vec2> attr;
     for (std::size_t i = 0; i < hots.size(); ++i)
         for (std::size_t j = i + 1; j < hots.size(); ++j) {
+            // Same-site pairs get the dense corridor field. Cross-site pairs
+            // only seed lightly (3x spacing) between CENTRAL hubs — the
+            // straight hub-to-hub line is not the backbone's curved path, so a
+            // dense field there would pull growth off the connector capsule.
+            const bool sameSite = hots[i].site == hots[j].site;
+            const bool centrals = !sameSite &&
+                (i == 0 || hots[i].site != hots[i - 1].site) &&
+                (j == 0 || hots[j].site != hots[j - 1].site);
+            if (!sameSite && !centrals) continue;
+            const double spacing = sameSite ? p.corridorSpacing : p.corridorSpacing * 3.0;
             double L = (hots[j].pos - hots[i].pos).length();
-            int n = static_cast<int>(L / p.corridorSpacing);
+            int n = static_cast<int>(L / spacing);
             for (int k = 0; k < n; ++k) {
                 double t = (k + 0.5) / std::max(1, n);
                 Vec2 m = hots[i].pos * (1.0 - t) + hots[j].pos * t;
-                Vec2 q{m.x + rng.range(-p.corridorSpacing, p.corridorSpacing),
-                       m.y + rng.range(-p.corridorSpacing, p.corridorSpacing)};
+                Vec2 q{m.x + rng.range(-spacing, spacing),
+                       m.y + rng.range(-spacing, spacing)};
                 if (buildable(q.x, q.y)) attr.push_back(q);   // corridor stays on land
             }
         }
-    // Ambient wander: ~90 per (500 m)^2 of domain. Colonization STOPS where no
-    // attractor sits within INFL of the growing trees, so the ambient field is
-    // what carries growth across the whole footprint — sparse ambient strands
-    // whole quarters (device: the southern hubs never grew streets). Tendrils
-    // stay bounded by the loop-closing pass + block subdivision.
-    int ambient = std::max(H * 3, static_cast<int>(p.ambientPer500 * (DOM / 500.0) * (DOM / 500.0)));
-    for (int k = 0; k < ambient; ++k) {
-        Vec2 q{p.center.x + rng.range(-DOM, DOM), p.center.y + rng.range(-DOM, DOM)};
-        if (buildable(q.x, q.y)) attr.push_back(q);
+    // Ambient wander: ~90 per (500 m)^2 of each site, scaled by its density
+    // (towns sparser). Colonization STOPS where no attractor sits within INFL
+    // of the growing trees, so the ambient field is what carries growth across
+    // each footprint — sparse ambient strands whole quarters (device: the
+    // southern hubs never grew streets). Tendrils stay bounded by the
+    // loop-closing pass + block subdivision.
+    for (const MetroSite& S : sites) {
+        int ambient = std::max(S.hotspots * 3,
+                               static_cast<int>(p.ambientPer500 * (S.radius / 500.0) *
+                                                (S.radius / 500.0) * S.density));
+        for (int k = 0; k < ambient; ++k) {
+            Vec2 q{S.center.x + rng.range(-S.radius, S.radius),
+                   S.center.y + rng.range(-S.radius, S.radius)};
+            if (buildable(q.x, q.y)) attr.push_back(q);
+        }
     }
 
     // --- multi-source space colonization: a growth tree seeded at each hotspot
@@ -688,8 +779,7 @@ RoadGraph buildMetro(const MetroParams& p,
             if (!votes[n]) continue;
             Vec2 dir = normalize(pull[n]); if (dir.length() < 1e-6) continue;
             Vec2 np = node[n] + dir * SEG;
-            if (np.x < p.center.x - DOM || np.x > p.center.x + DOM ||
-                np.y < p.center.y - DOM || np.y > p.center.y + DOM) continue;
+            if (!inDomain(np)) continue;   // site squares + connector capsules
             if (!buildable(np.x, np.y)) continue;   // don't grow into water / up the mountain
             int hit = nodeGrid.nearest(node, np, MERGE,
                                        [&](int m) { return src[m] == src[n]; });
@@ -725,7 +815,7 @@ RoadGraph buildMetro(const MetroParams& p,
         double bd = 1e30; int ba = -1, bb = -1;
         for (std::size_t i = 0; i < Ga.nodes.size(); ++i) {
             if (c[i] != small) continue;
-            int j = g.nearest(pos, pos[i], 2.0 * DOM, [](int) { return false; });
+            int j = g.nearest(pos, pos[i], globalReach, [](int) { return false; });
             if (j < 0) continue;
             double q = dist2(pos[i], pos[j]);
             if (q < bd) { bd = q; ba = static_cast<int>(i); bb = j; }
@@ -752,6 +842,30 @@ RoadGraph buildMetro(const MetroParams& p,
             }
             if (best >= 0 && static_cast<int>(i) < best) links.push_back({static_cast<int>(i), best});
         }
+        // Big-block thinning: each accepted loop link turns two chain nodes
+        // into junctions, so attachment spacing IS junction spacing. Reject a
+        // candidate whose endpoints land within minBlockEdge of an already
+        // accepted attachment (deterministic: candidates arrive in node order).
+        if (p.minBlockEdge > 0.0) {
+            const double gap = p.minBlockEdge * 1.35;   // headroom over the span
+                                                        // minimum (see fill floor)
+            std::vector<Vec2> taken;
+            std::vector<std::pair<int, int>> thinned;
+            for (const auto& l : links) {
+                const Vec2 a = Ga.nodes[l.first].pos, b = Ga.nodes[l.second].pos;
+                bool close = false;
+                for (const Vec2& t : taken)
+                    if (dist2(a, t) < gap * gap || dist2(b, t) < gap * gap) {
+                        close = true;
+                        break;
+                    }
+                if (close) continue;
+                thinned.push_back(l);
+                taken.push_back(a);
+                taken.push_back(b);
+            }
+            links = std::move(thinned);
+        }
         for (const auto& l : links) Ga.addEdge(l.first, l.second, p.arteryWidth, RoadClass::Arterial);
         if (p.ringRoad) {
             // §10.6: the ring stays an ARTERIAL — an orbital freeway would be
@@ -762,7 +876,7 @@ RoadGraph buildMetro(const MetroParams& p,
             int prev = -1, first = -1;
             for (int k = 0; k <= segs; ++k) {
                 double a = kTau * k / segs;
-                int id = Ga.addNode(p.center + Vec2(std::cos(a), std::sin(a)) * rr, 6.0);
+                int id = Ga.addNode(sites[0].center + Vec2(std::cos(a), std::sin(a)) * rr, 6.0);
                 if (prev >= 0) Ga.addEdge(prev, id, rw, rc); else first = id;
                 prev = id;
             }
@@ -773,6 +887,12 @@ RoadGraph buildMetro(const MetroParams& p,
     // v2: de-wobble + de-stub the skeleton, then re-planarize so any nodes the
     // smoothing pulled together fuse into clean junctions.
     Ga = planarize(cleanSkeleton(Ga), 1.0);
+    // Big-block metros consolidate the SKELETON's junction spacing before the
+    // fabric fill: faces are then born at block scale and the fill subdivides
+    // them with the same floor, instead of the post-pipeline cleanup eating
+    // finished blocks to fix skeleton spans.
+    if (p.minBlockEdge > 0.0)
+        Ga = planarize(consolidateJunctionSpans(Ga, p.minBlockEdge, 4), 1.0);
 
     // ARTERIALS-ONLY (v2 stage 1): Ga now holds the full arterial skeleton +
     // freeway-anchored growth, and NOT a single Local/Collector edge (the fill
@@ -783,7 +903,8 @@ RoadGraph buildMetro(const MetroParams& p,
     if (p.arterialsOnly) return Ga;
 
     // --- fill each enclosed block: subdivide (grid) or rings+spokes (radial hub).
-    std::vector<Poly2> faces = extractBlocks(Ga, std::max(200.0, p.blockSize * p.blockSize * 0.08));
+    std::vector<Poly2> faces =
+        extractBlocks(Ga, std::max(200.0, sites[0].blockSize * sites[0].blockSize * 0.08));
     RoadGraph full = Ga;
     auto nearestHot = [&](const Vec2& q) {
         int b = 0; double bd = 1e30;
@@ -796,17 +917,20 @@ RoadGraph buildMetro(const MetroParams& p,
     // Per-district grid crook (0 = crisp): OLD TOWN(3) crooked, industry(4)
     // slightly loose, the rest crisp — the visible district character.
     const double kindCrook[5]    = {0.0, 0.05, 0.10, 0.45, 0.18};
-    const double collectorSpan = p.collectorSpan > 0 ? p.collectorSpan : p.blockSize * 3.0;
+    const double collectorSpan =
+        p.collectorSpan > 0 ? p.collectorSpan : sites[0].blockSize * 3.0;
     for (const Poly2& f : faces) {
         if (f.size() < 3) continue;
         Vec2 c = centroid(f);
         if (gated && !buildable(c.x, c.y)) continue;   // don't fill a block that's mostly water/steep
         int h = nearestHot(c);
         const int kind = std::clamp(hots[h].kind, 0, 4);
-        const double mn = p.blockSize * kindBlockMul[kind] * 0.6;
-        const double mx = p.blockSize * kindBlockMul[kind] * 1.18;
+        const double siteBlock = sites[hots[h].site].blockSize;
+        const double mn = siteBlock * kindBlockMul[kind] * 0.6;
+        const double mx = siteBlock * kindBlockMul[kind] * 1.18;
         if (hots[h].radial && pointInPolygon(f, hots[h].pos)) {
-            Vec2 C = hots[h].pos; int spokes = 12; double ringStep = std::max(40.0, p.blockSize * 0.8);
+            Vec2 C = hots[h].pos; int spokes = 12;
+            double ringStep = std::max({40.0, siteBlock * 0.8, p.minBlockEdge});
             double R = 1e30; for (const Vec2& v : f) R = std::min(R, (v - C).length()); R *= 0.96;
             std::vector<std::vector<int>> sn(spokes);
             for (int sd = 0; sd < spokes; ++sd) {
@@ -849,11 +973,21 @@ RoadGraph buildMetro(const MetroParams& p,
             // district — residential runs longest (the NYC feel), old town
             // stays small and crooked, industrial takes the biggest plates.
             const double kindCellLong[5] = {170.0, 210.0, 260.0, 110.0, 320.0};
-            const double cell =
-                std::min(p.blockSize * kindBlockMul[kind], kindCellCap[kind]);
-            const double cellLong =
-                std::min(p.blockSize * kindBlockMul[kind] * 2.8,
+            double cell =
+                std::min(siteBlock * kindBlockMul[kind], kindCellCap[kind]);
+            double cellLong =
+                std::min(siteBlock * kindBlockMul[kind] * 2.8,
                          kindCellLong[kind]);
+            // Big-block floor (8km-city plan P2): without it the per-district
+            // caps clamp fabric to ~70-156 m no matter the blockSize, and a
+            // 150 m min_road_len would then fight every fabric cell. The 1.35x
+            // headroom keeps jittered/crooked cell sides ABOVE the span
+            // minimum — cells at exactly the minimum get eaten by the
+            // junction-span consolidation and faces collapse.
+            if (p.minBlockEdge > 0.0) {
+                cell = std::max(cell, p.minBlockEdge * 1.35);
+                cellLong = std::max(cellLong, p.minBlockEdge * 2.0);
+            }
             const double crook = kindCrook[kind];
             gridFill(f, cell, cellLong, collectorSpan, crook, rng, streets);
             for (const Cut& s : streets) {

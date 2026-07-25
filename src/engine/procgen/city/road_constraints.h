@@ -91,6 +91,19 @@ RoadGraph relaxSharpBends(const RoadGraph& graph, Real maxTurn = 0.9,
 // orphaned nodes are compacted away. Deterministic and pure.
 RoadGraph mergeShortEdges(const RoadGraph& graph, Real minLen, int maxDegree = 4);
 
+// Minimum INTERSECTION spacing (8km-city plan P2). mergeShortEdges works on raw
+// edges, but a colonization-grown arterial is a chain of ~40 m curve segments
+// between degree-2 nodes — raw edge length is curve sampling, not junction
+// spacing. This walks each junction-to-junction SPAN (through degree-2 nodes,
+// summing arc length) and fuses the two junctions of any span shorter than
+// minSpan (degree-weighted midpoint, curve nodes of the short span dropped,
+// every other chain re-targeted). Junctions whose fused degree would exceed
+// maxDegree keep their span. Deterministic: shortest span first, ties by node
+// index. Callers should re-planarize + re-cap afterwards — moving junctions
+// can introduce crossings.
+RoadGraph consolidateJunctionSpans(const RoadGraph& graph, Real minSpan,
+                                   int maxDegree = 4);
+
 }  // namespace engine
 
 #endif

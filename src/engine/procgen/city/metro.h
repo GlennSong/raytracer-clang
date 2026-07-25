@@ -25,6 +25,20 @@ struct CityHub {
     Vec2 pos{0, 0};
     int  kind = 0;
     bool radial = false;
+    int  site = 0;   // which MetroSite grew this hub (0 = the primary city)
+};
+
+// A settlement footprint for multi-site metros (8km-city plan P2): the primary
+// city plus satellite towns grow in ONE graph — one planarize, one mesher, and
+// the hub-to-hub backbone MST spans every site, so town connectivity is
+// structural rather than stitched.
+struct MetroSite {
+    Vec2   center{0, 0};
+    double radius    = 400.0;  // footprint half-extent (m)
+    int    hotspots  = 3;      // >=1; the first is the site's central hub
+    double blockSize = 0.0;    // 0 = inherit MetroParams::blockSize
+    double density   = 1.0;    // scales this site's ambient attractor field
+    int    kindBias  = -1;     // central-hub district kind (-1 = default cycle)
 };
 
 struct MetroParams {
@@ -52,6 +66,10 @@ struct MetroParams {
     // and each block takes its size from the nearest hub's district flavor.
     bool   freeways           = false;  // lay the hub-to-hub freeway backbone
     double freewayWidth       = 22.0;   // ~6 lanes (DesignRules::Freeway)
+    // Class stamped on the legacy backbone edges. Freeway (the historical
+    // behavior) strips sidewalks/crosswalks/frontage and blocks foot routing;
+    // a no-freeway metro sets Arterial so the spine stays a street.
+    RoadClass backboneClass   = RoadClass::Freeway;
     double collectorWidth     = 9.5;    // 2 lanes + parking
     double collectorSpan      = 0.0;    // faces wider than this get collector
                                         // cuts first (0 = 3x blockSize)
@@ -70,6 +88,19 @@ struct MetroParams {
     double ambientPer500   = 90.0;   // ambient attractors per (500 m)^2
     double loopMin         = 80.0;   // loop-closing link length range (m)
     double loopMax         = 190.0;
+
+    // Floor on the fabric-fill cell edge (m). The per-district cell caps
+    // (kindCellCap, ~70-156 m) clamp fabric to small-metro spacing no matter
+    // how big blockSize is; a big-block city (min intersection spacing 150 m)
+    // floors them here instead of fighting mergeShortEdges afterwards. 0 = the
+    // legacy caps apply unchanged.
+    double minBlockEdge = 0.0;
+
+    // Satellite settlements. Empty = single-site legacy behavior driven by
+    // center/radius/hotspots/blockSize above. Non-empty REPLACES them: sites[0]
+    // is the primary city (keeps the financial-core hub cycle), later sites are
+    // towns whose central hub takes kindBias.
+    std::vector<MetroSite> sites;
 
     // ARTERIALS-ONLY (city-pipeline v2 stage 1): emit ONLY the arterial
     // skeleton + freeway seeds; skip the per-face local/collector fabric fill.
