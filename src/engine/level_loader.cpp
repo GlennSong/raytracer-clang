@@ -1,5 +1,6 @@
 #include "level_loader.h"
 
+#include "../profile.h"
 #include "script_assets.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/script_modules.h"
@@ -2093,6 +2094,7 @@ static GrownLots growCityLots(const std::vector<engine::RoadNet>& nets,
                               const json& cs, const std::string& levelDir,
                               const HeightField& ground,
                               const engine::RoadGraph* freewayROW = nullptr) {
+    RT_PROFILE_ZONE_NAMED("growCityLots");
     GrownLots g;
     // Edge blocks (device feedback): the town RIM has no enclosed faces —
     // synthesize rectangular blocks on boundary roads' open sides so the
@@ -2804,10 +2806,14 @@ bool LevelLoader::load(const std::string& path,
     // generateLodNodeMesh), so its numbers are the game's numbers.
     if (std::getenv("RT_POKE_REPORT") && root.contains("terrain")) {
         TerrainParams tpFull;   // the FINAL carved params (with index)
-        world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) { tpFull = c.params; });
+        int pNumLods = 6, pGridRes = 32;
+        world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) {
+            tpFull = c.params;
+            pNumLods = c.numLods;
+            pGridRes = c.gridRes;
+        });
         Noise pnNoise(root["terrain"].value("seed", 0u));
         float pWorldHalf = root["terrain"]["cdlod"].value("worldHalf", 1024.0);
-        const int pNumLods = 6, pGridRes = 32;
         for (int lvl = 0; lvl < 3; ++lvl) {
             const double nodeSize = pWorldHalf * 2.0 / std::pow(2.0, pNumLods - 1 - lvl);
             const double step = nodeSize / pGridRes;
@@ -3746,6 +3752,15 @@ bool LevelLoader::load(const std::string& path,
 
     if (root.contains("lighting"))
         loadLighting(root["lighting"], view);
+
+    // Per-level instance-buffer capacities (8km-city plan P0.2). Values below
+    // the backend defaults are clamped up by the renderer.
+    if (root.contains("render") && root["render"].is_object()) {
+        const auto& r = root["render"];
+        renderer.setInstanceCapacities(r.value("maxInstances", 0u),
+                                       r.value("maxShadowInstances", 0u),
+                                       r.value("maxFoliageInstances", 0u));
+    }
 
     // Environment map (equirectangular .hdr) — bound before probes so the bake
     // captures it for IBL (ADR-0016). Lives under the "environment" object as

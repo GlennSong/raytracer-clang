@@ -17,6 +17,8 @@ public:
     Real fovDegrees = 60.0;
     Real panSpeed = 3.0;
     Real zoomSpeed = 1.0;
+    Real nearPlane = 0.1;
+    Real farPlane = 8000.0;   // CameraSystem widens this with the world extent
 
     void update(const CameraInput& input, Real dt) override;
     CameraState cameraState(float aspect) const override;

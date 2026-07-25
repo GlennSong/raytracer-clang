@@ -2,6 +2,7 @@
 
 #include "road_semantics.h"
 #include "../../../log.h"
+#include "../../../profile.h"
 #include "road_lattice.h"
 #include "road_offset.h"   // ribbonOutline + polygonUnion (S5 curb/sidewalk band)        // swept-lattice street mesher (stage 3)
 #include "../../mesh_builder.h"  // MeshBuilder::append
@@ -1356,6 +1357,7 @@ RenderMesh buildRoadNetMesh(const RoadNet& netIn) {
 
 std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& netIn, double shoulder,
                                                   double falloff, double maxGrade) {
+    RT_PROFILE_ZONE_NAMED("roadNetConformRegions");
     // 2e: the conform is the ONE consumer that still strips baked corridor
     // edges — corridorAuthor's engineered flatten (at-grade windows only,
     // viaducts fly) owns that carve; carving the baked chains here too would
@@ -1995,6 +1997,7 @@ static RoadGraph pruneAcuteArms(const RoadGraph& in, double hardMin) {
 }
 
 void applyGenerateRecipe(RoadNet& net, const json& g) {
+    RT_PROFILE_ZONE_NAMED("applyGenerateRecipe");
     if (!g.is_object()) return;
     // Pick the generator. "district" (default) subdivides one footprint; "metro"
     // grows organic arterials between hotspots and fills the blocks between them.

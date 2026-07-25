@@ -1,5 +1,7 @@
 #include "metro.h"
 
+#include "../../../profile.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -288,6 +290,7 @@ int components(const RoadGraph& g, std::vector<int>& comp) {
 
 RoadGraph buildMetro(const MetroParams& p,
                      std::vector<std::vector<Vec2>>* freewayPlans) {
+    RT_PROFILE_ZONE_NAMED("buildMetro");
     Lcg rng{0x9E3779B97F4A7C15ULL ^ (static_cast<std::uint64_t>(p.seed) * 0x100000001B3ULL)};
     const double DOM = std::max(200.0, p.radius);
     const int H = std::max(2, p.hotspots);

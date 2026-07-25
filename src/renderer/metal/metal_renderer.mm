@@ -6,6 +6,7 @@
 #import <QuartzCore/CABase.h>   // CACurrentMediaTime (wind sway clock)
 #import <AppKit/AppKit.h>
 #import <simd/simd.h>
+#include "../../profile.h"
 #include "../../slot_map.h"
 #include "../cube_faces.h"
 #include <vector>
@@ -35,6 +36,9 @@ struct GPUMesh {
     BoundingSphere bounds;
 };
 
+// Default per-frame instance capacities; setInstanceCapacities raises them per
+// level (ring buffers are reallocated — in-flight command buffers retain the
+// old ones, so a mid-session swap is safe).
 static constexpr uint32_t MAX_INSTANCES = 4096;
 
 // Shadow casters for every cascade share one buffer encoded into a single
@@ -86,6 +90,10 @@ struct MetalRenderer::Impl {
     id<MTLBuffer> instanceBuffers[MAX_FRAMES_IN_FLIGHT];  // ring; see frameIndex
     id<MTLBuffer> shadowInstanceBuffers[MAX_FRAMES_IN_FLIGHT];  // ring; shadow caster models
     id<MTLBuffer> foliageInstanceBuffers[MAX_FRAMES_IN_FLIGHT]; // ring; foliage prepass+lit
+    uint32_t maxInstances = MAX_INSTANCES;                // live capacities; see
+    uint32_t shadowMaxInstances = SHADOW_MAX_INSTANCES;   // setInstanceCapacities
+    uint32_t foliageMaxInstances = FOLIAGE_MAX_INSTANCES;
+    uint64_t lastOverflowWarnFrame = 0;                   // rate-limits the log
     int frameIndex = 0;                                   // advances each beginFrame
     uint64_t frameCount = 0;                              // monotonic; drives SSAO jitter
     CAMetalLayer* metalLayer;
@@ -753,13 +761,14 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
 
     // Instance data buffer
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        impl->instanceBuffers[i] = [impl->device newBufferWithLength:MAX_INSTANCES * sizeof(GPUInstanceData)
-                                                            options:MTLResourceStorageModeShared];
+        impl->instanceBuffers[i] =
+            [impl->device newBufferWithLength:impl->maxInstances * sizeof(GPUInstanceData)
+                                      options:MTLResourceStorageModeShared];
         impl->shadowInstanceBuffers[i] =
-            [impl->device newBufferWithLength:SHADOW_MAX_INSTANCES * sizeof(GPUInstanceData)
+            [impl->device newBufferWithLength:impl->shadowMaxInstances * sizeof(GPUInstanceData)
                                      options:MTLResourceStorageModeShared];
         impl->foliageInstanceBuffers[i] =
-            [impl->device newBufferWithLength:FOLIAGE_MAX_INSTANCES * sizeof(GPUInstanceData)
+            [impl->device newBufferWithLength:impl->foliageMaxInstances * sizeof(GPUInstanceData)
                                      options:MTLResourceStorageModeShared];
     }
 
@@ -1622,6 +1631,34 @@ RenderStats MetalRenderer::getRenderStats() const {
     return impl->lastStats;
 }
 
+void MetalRenderer::setInstanceCapacities(uint32_t instances, uint32_t shadow,
+                                          uint32_t foliage) {
+    // Clamp up to the defaults — shrinking buys nothing and risks overflow.
+    instances = std::max(instances, MAX_INSTANCES);
+    shadow = std::max(shadow, SHADOW_MAX_INSTANCES);
+    foliage = std::max(foliage, FOLIAGE_MAX_INSTANCES);
+    if (instances == impl->maxInstances && shadow == impl->shadowMaxInstances &&
+        foliage == impl->foliageMaxInstances)
+        return;
+    impl->maxInstances = instances;
+    impl->shadowMaxInstances = shadow;
+    impl->foliageMaxInstances = foliage;
+    if (!impl->device) return;  // pre-initialize: initialize() allocates at these sizes
+    // In-flight command buffers retain the old ring buffers, so replacing the
+    // ivars mid-session is safe; the GPU finishes on the old storage.
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        impl->instanceBuffers[i] =
+            [impl->device newBufferWithLength:instances * sizeof(GPUInstanceData)
+                                      options:MTLResourceStorageModeShared];
+        impl->shadowInstanceBuffers[i] =
+            [impl->device newBufferWithLength:shadow * sizeof(GPUInstanceData)
+                                     options:MTLResourceStorageModeShared];
+        impl->foliageInstanceBuffers[i] =
+            [impl->device newBufferWithLength:foliage * sizeof(GPUInstanceData)
+                                     options:MTLResourceStorageModeShared];
+    }
+}
+
 void MetalRenderer::beginFrame() {
     impl->opaqueDrawCalls.clear();
     impl->transparentDrawCalls.clear();
@@ -2231,7 +2268,11 @@ void MetalRenderer::drawTerrain(MeshHandle handle, const RenderMaterial& materia
 }
 
 void MetalRenderer::endFrame() {
+    RT_PROFILE_ZONE_NAMED("Metal endFrame");
     if (!impl->currentDrawable || !impl->currentPassDesc) return;
+
+    // Declared ahead of the shadow pass: overflow counters accumulate there too.
+    RenderStats stats;
 
     // Bake reflection probes on first frame when draw calls exist
     if (impl->probesPendingBake && !impl->opaqueDrawCalls.empty()) {
@@ -2313,7 +2354,10 @@ void MetalRenderer::endFrame() {
                     uint32_t runStart = shadowInstOffset;
                     uint32_t runCount = 0;
                     for (size_t j = batchStart; j < bi; j++) {
-                        if (shadowInstOffset >= SHADOW_MAX_INSTANCES) break;
+                        if (shadowInstOffset >= impl->shadowMaxInstances) {
+                            stats.shadowOverflow++;  // caster DROPPED this frame
+                            continue;
+                        }
                         // Debug-gizmo overlays (FLAG_OVERLAY) never cast shadows.
                         if (int(impl->opaqueDrawCalls[j].material.flags) &
                             RenderMaterial::FLAG_OVERLAY) continue;
@@ -2461,8 +2505,6 @@ void MetalRenderer::endFrame() {
         [impl->currentEncoder setFragmentBytes:&activeShadowU
                                         length:sizeof(ShadowUniforms) atIndex:5];
     }
-
-    RenderStats stats;
 
     auto computeTextureFlags = [&](const RenderMaterial& mat) -> uint32_t {
         uint32_t tf = 0;
@@ -2618,7 +2660,8 @@ void MetalRenderer::endFrame() {
                 continue;
             }
 
-            if (instanceOffset + batchSize > MAX_INSTANCES) {
+            if (instanceOffset + batchSize > impl->maxInstances) {
+                stats.instanceOverflow += static_cast<uint32_t>(batchSize);
                 [impl->currentEncoder setRenderPipelineState:singlePipeline];
                 for (size_t j = batchStart; j < batchStart + batchSize; j++)
                     issueSingleDraw(drawCalls[j]);
@@ -2690,11 +2733,18 @@ void MetalRenderer::endFrame() {
 
             const GPUMesh* mesh = impl->meshes.get(bm);
             if (!mesh) continue;
-            if (fOff >= FOLIAGE_MAX_INSTANCES) break;
+            if (fOff >= impl->foliageMaxInstances) {
+                stats.foliageOverflow += static_cast<uint32_t>(i - start);  // DROPPED
+                continue;
+            }
 
             uint32_t offset = fOff;
             uint32_t count = 0;
-            for (size_t j = start; j < i && fOff < FOLIAGE_MAX_INSTANCES; j++) {
+            for (size_t j = start; j < i; j++) {
+                if (fOff >= impl->foliageMaxInstances) {
+                    stats.foliageOverflow++;  // DROPPED
+                    continue;
+                }
                 fData[fOff++] = fillInstanceData(dcs[j]);
                 count++;
             }
@@ -2850,6 +2900,19 @@ void MetalRenderer::endFrame() {
         impl->cameraUniforms.wireColor.w = 0.0f;
     }
 
+    if (stats.instanceOverflow || stats.shadowOverflow || stats.foliageOverflow) {
+        // Loud, not fatal: shadow/foliage overflow DROPS geometry. Rate-limited
+        // so a sustained overflow doesn't flood the log.
+        if (impl->frameCount - impl->lastOverflowWarnFrame >= 120) {
+            impl->lastOverflowWarnFrame = impl->frameCount;
+            NSLog(@"Instance capacity overflow (raise setInstanceCapacities): "
+                  @"general %u spilled to per-draw (cap %u), shadow %u DROPPED "
+                  @"(cap %u), foliage %u DROPPED (cap %u)",
+                  stats.instanceOverflow, impl->maxInstances,
+                  stats.shadowOverflow, impl->shadowMaxInstances,
+                  stats.foliageOverflow, impl->foliageMaxInstances);
+        }
+    }
     impl->lastStats = stats;
 
     [impl->currentEncoder endEncoding];

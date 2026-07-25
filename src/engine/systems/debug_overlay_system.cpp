@@ -146,6 +146,11 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
     ImGui::Text("Draw calls: %u (instanced: %u)", rs.drawCalls, rs.instancedDrawCalls);
     ImGui::Text("Instances: %u  Triangles: %.2fM", rs.totalInstances,
                 rs.trianglesDrawn / 1e6);
+    if (rs.instanceOverflow || rs.shadowOverflow || rs.foliageOverflow)
+        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
+                           "OVERFLOW inst %u  shadow %u  foliage %u",
+                           rs.instanceOverflow, rs.shadowOverflow,
+                           rs.foliageOverflow);
 
     ImGui::Separator();
     const char* viewNames[] = {"Normal", "AO Only", "SSR Only", "Depth", "Normals",

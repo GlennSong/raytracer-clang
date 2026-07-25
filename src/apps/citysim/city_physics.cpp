@@ -4,6 +4,7 @@
 
 #include "../../engine/components.h"   // InstanceGroup
 #include "../../engine/world.h"
+#include "../../profile.h"
 
 #include <cmath>
 
@@ -39,6 +40,7 @@ void CityPhysicsSystem::syncKinematic(World& world, const std::vector<Entity>& g
                                       std::vector<PhysicsBodyId>& pool, Real dt,
                                       const std::vector<std::vector<int>>* agentIds,
                                       std::vector<char>* prevParked) {
+    RT_PROFILE_ZONE_NAMED("syncKinematic");
     // Gather every group's poses AND the matching per-body half-extent (each group
     // is one body size), so a rebuild boxes each car at its own fleet dimensions.
     std::vector<const Mat4*> poses;
@@ -127,6 +129,7 @@ void CityPhysicsSystem::step(World& world, Real dt) {
 }
 
 void CityPhysicsSystem::possessTier(World& world, Real dt) {
+    RT_PROFILE_ZONE_NAMED("possessTier");
     PhysicsWorld& pw = physics_.physicsWorld();
     // The tier centres on the PLAYER (the character controller's transform).
     Vec3 centre(0, 0, 0);

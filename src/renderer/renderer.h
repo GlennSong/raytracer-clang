@@ -342,6 +342,13 @@ struct RenderStats {
     uint32_t totalInstances = 0;
     uint32_t entitiesSubmitted = 0;
     uint32_t trianglesDrawn = 0;   // color pass only (excludes shadow casters)
+    // Instance-capacity overflow, per frame. Non-zero shadow/foliage counts mean
+    // geometry was DROPPED this frame; instanceOverflow counts instances that
+    // fell back to per-draw submission (correct image, draw-call cliff). Raise
+    // the capacities (setInstanceCapacities) when these are non-zero.
+    uint32_t instanceOverflow = 0;
+    uint32_t shadowOverflow = 0;
+    uint32_t foliageOverflow = 0;
 };
 
 enum class CameraProjection { Perspective, Orthographic };
@@ -451,6 +458,13 @@ public:
     // ADR-0016. An invalid handle restores the procedural sky. No-op by default.
     virtual void setEnvironmentMap(TextureHandle /*equirect*/) {}
     virtual RenderStats getRenderStats() const = 0;
+
+    // Per-frame instance buffer capacities (general/shadow/foliage). A big level
+    // (8 km city) raises these at load; small levels keep the lean defaults.
+    // Values below the backend's defaults are clamped up — shrinking buys
+    // nothing and risks overflow. Safe between frames; no-op by default.
+    virtual void setInstanceCapacities(uint32_t /*instances*/, uint32_t /*shadow*/,
+                                       uint32_t /*foliage*/) {}
 
     virtual void beginFrame() = 0;
     virtual void setCamera(const CameraState& camera) = 0;

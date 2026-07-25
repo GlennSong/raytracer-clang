@@ -1,5 +1,6 @@
 #include "application.h"
 #include "states/debug_overlay_state.h"
+#include "../log.h"
 #include "../profile.h"
 #include <thread>
 #include <chrono>
@@ -151,6 +152,10 @@ void Application::runFrame() {
 
     int steps = clock.advance(frameDelta);
     interpolation = clock.interpolationAlpha();
+    if (clock.droppedBacklog())
+        LOG_WARN << "SimClock dropped backlog (stall #" << clock.droppedBacklogCount()
+                 << "): fixed steps capped at " << steps
+                 << " this frame — motion will visibly jump";
     {
         RT_PROFILE_ZONE_NAMED("fixedUpdate");
         FrameContext ctx = makeContext();

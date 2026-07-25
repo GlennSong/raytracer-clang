@@ -2,6 +2,7 @@
 
 #include "traffic_rules.h"   // approachStop
 #include "../../engine/ai/idm.h"   // IDM car-following (roads-v2 S7)
+#include "../../profile.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1795,6 +1796,7 @@ void CitySim::computeCarWedge() {
 }
 
 void CitySim::step(Real dt, Real hoursPerSecond) {
+    RT_PROFILE_ZONE_NAMED("CitySim step");
     if (!nav_ || agents_.empty()) return;
 
     clockHours_ += dt * hoursPerSecond;

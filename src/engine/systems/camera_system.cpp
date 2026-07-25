@@ -1,5 +1,6 @@
 #include "camera_system.h"
 
+#include "../camera/view_distance.h"
 #include "../components.h"
 #include "../mesh_builder.h"
 #include "../camera_store.h"
@@ -123,6 +124,12 @@ void CameraSystem::update(FrameContext& ctx) {
         ? static_cast<float>(ctx.framebufferWidth) / ctx.framebufferHeight
         : 1.0f;
 
+    // Far plane follows the world extent (view_distance.h), not a constant.
+    Real viewFar = worldViewFar(ctx.world);
+    orbit.farPlane = viewFar;
+    fly.farPlane = viewFar;
+    follow.farPlane = viewFar;
+
     // Chase camera (ADR-0059): while following a vehicle, the view tracks it and
     // the editor controllers / placed cameras are bypassed. A dead target (the
     // car was destroyed) drops the follow back to the normal view.
@@ -209,6 +216,10 @@ void CameraSystem::update(FrameContext& ctx) {
         ctx.view.camera = sceneCameraState(*ctx.world.get<Transform>(activeCamera),
                                            *ctx.world.get<SceneCamera>(activeCamera),
                                            aspect);
+        // A placed camera's lens predates the level's world extent; the clip
+        // plane is render policy, not optics, so it widens with the world.
+        ctx.view.camera.farPlane =
+            std::max(ctx.view.camera.farPlane, static_cast<float>(viewFar));
     } else {
         active->update(gatherInput(ctx), ctx.frameDelta);
         ctx.view.camera = active->cameraState(aspect);

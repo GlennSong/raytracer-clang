@@ -18,7 +18,7 @@ public:
     Real moveSpeed = 14.0;   // scroll wheel throttles this live
     Real boostMultiplier = 6.0;
     Real nearPlane = 0.1;
-    Real farPlane = 8000.0;   // large enough for distant LOD terrain (view distance)
+    Real farPlane = 8000.0;   // CameraSystem widens this with the world extent
     bool positionLocked = false;
     // FPS walk: move on the horizontal plane (forward ignores pitch) at a fixed
     // eye height, no vertical axis. Off = free 6-DOF fly. Look is free either way.
