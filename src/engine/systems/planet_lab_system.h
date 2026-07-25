@@ -14,11 +14,13 @@ namespace engine {
 // registered in every build. It owns the one entity it spawns.
 class PlanetLabSystem : public System {
 public:
-    void render(FrameContext& ctx) override;
+    void update(FrameContext& ctx) override;   // web path: poll settings, regen on bump
+    void render(FrameContext& ctx) override;    // native path: the ImGui panel
 
 private:
     void rebuild(FrameContext& ctx);   // (re)generate + upload; spawn on first call
     void removePlanet(FrameContext& ctx);
+    bool sceneEnabled(FrameContext& ctx) const;   // is a ScenePlanetLab singleton present
 
     // Shared
     int   mode_ = 0;          // 0 = rocky, 1 = gas giant
@@ -45,6 +47,7 @@ private:
 
     Entity planet_{};
     bool   haveEntity_ = false;
+    int    lastGen_ = -1;     // last observed planetLab.gen (web regenerate counter)
 };
 
 }  // namespace engine

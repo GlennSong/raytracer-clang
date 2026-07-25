@@ -4,6 +4,7 @@
 #include "../asset_manager.h"
 #include "../procgen/planet.h"
 #include "../../renderer/renderer.h"
+#include "../../renderer/settings.h"
 #include "../../rt_math.h"
 
 #include <cstdint>
@@ -80,16 +81,48 @@ void PlanetLabSystem::removePlanet(FrameContext& ctx) {
     haveEntity_ = false;
 }
 
+bool PlanetLabSystem::sceneEnabled(FrameContext& ctx) const {
+    bool enabled = false;
+    ctx.world.each<ScenePlanetLab>([&](Entity, ScenePlanetLab&) { enabled = true; });
+    return enabled;
+}
+
+// Web front-end path: the browser has no ImGui, so its HTML panel writes params
+// into Settings and bumps "planetLab.gen" through rt_web_planet* (web_main.cpp).
+// Regenerate when that counter changes. On native nothing sets these keys, so this
+// is inert and the ImGui panel in render() drives everything instead.
+void PlanetLabSystem::update(FrameContext& ctx) {
+    if (!sceneEnabled(ctx)) return;
+    Settings& s = ctx.settings;
+    int gen = static_cast<int>(s.getDouble("planetLab.gen", 0));
+    if (gen == lastGen_) return;
+    if (lastGen_ < 0) { lastGen_ = gen; return; }   // sync on first observe; don't fire
+    lastGen_ = gen;
+
+    mode_ = static_cast<int>(s.getDouble("planetLab.mode", mode_));
+    seed_ = static_cast<int>(s.getDouble("planetLab.seed", seed_));
+    radius_ = static_cast<float>(s.getDouble("planetLab.radius", radius_));
+    faceRes_ = static_cast<int>(s.getDouble("planetLab.faceRes", faceRes_));
+    rockyPreset_ = static_cast<int>(s.getDouble("planetLab.rockyPreset", rockyPreset_));
+    gasPreset_ = static_cast<int>(s.getDouble("planetLab.gasPreset", gasPreset_));
+    seaLevel_ = static_cast<float>(s.getDouble("planetLab.seaLevel", seaLevel_));
+    hasOcean_ = s.getDouble("planetLab.hasOcean", hasOcean_ ? 1.0 : 0.0) != 0.0;
+    continentAmp_ = static_cast<float>(s.getDouble("planetLab.continentAmp", continentAmp_));
+    mountainAmp_ = static_cast<float>(s.getDouble("planetLab.mountainAmp", mountainAmp_));
+    craterAmp_ = static_cast<float>(s.getDouble("planetLab.craterAmp", craterAmp_));
+    relief_ = static_cast<float>(s.getDouble("planetLab.relief", relief_));
+    bandFreq_ = static_cast<float>(s.getDouble("planetLab.bandFreq", bandFreq_));
+    flowWarp_ = static_cast<float>(s.getDouble("planetLab.flowWarp", flowWarp_));
+    detailAmp_ = static_cast<float>(s.getDouble("planetLab.detailAmp", detailAmp_));
+    stormCount_ = static_cast<int>(s.getDouble("planetLab.stormCount", stormCount_));
+    spin_ = s.getDouble("planetLab.spin", spin_ ? 1.0 : 0.0) != 0.0;
+    rebuild(ctx);
+}
+
 void PlanetLabSystem::render(FrameContext& ctx) {
 #ifdef RT_ENABLE_IMGUI
     if (ImGui::GetCurrentContext() == nullptr) return;
-
-    // Scene-scoped: only a level that opted in (a ScenePlanetLab singleton from the
-    // loader) shows the panel — it doesn't float over every other scene. Shown
-    // whenever that scene is loaded, independent of the backtick debug overlay.
-    bool enabled = false;
-    ctx.world.each<ScenePlanetLab>([&](Entity, ScenePlanetLab&) { enabled = true; });
-    if (!enabled) return;
+    if (!sceneEnabled(ctx)) return;   // scene-scoped: only a level that opted in
 
     // Its own floating, draggable window (a "sidebar" seeded top-left on first use).
     ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);

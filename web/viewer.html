@@ -126,6 +126,39 @@
       <a href="index.html">← all scenes</a>
       <button class="close" id="dbgClose" aria-label="Close">✕</button>
     </div>
+    <details class="sec" id="planetLabSec" open style="display:none"><summary>Planet Lab</summary>
+    <div class="row"><span>Type</span>
+      <select id="plType" aria-label="Planet type"><option value="0">Rocky</option><option value="1">Gas Giant</option></select>
+    </div>
+    <div class="row"><span>Seed</span>
+      <input id="plSeed" type="number" aria-label="Seed" value="1" style="flex:1">
+      <button id="plRandom">random</button>
+    </div>
+    <div class="row"><span>Radius</span><input id="plRadius" type="range" min="5" max="40" value="20" style="flex:1"><span class="val" id="plRadiusVal">20</span></div>
+    <div class="row"><span>Detail</span><input id="plDetail" type="range" min="16" max="160" value="64" style="flex:1"><span class="val" id="plDetailVal">64</span></div>
+    <div id="plRocky">
+      <div class="row"><span>Preset</span>
+        <select id="plRockyPreset" aria-label="Rocky preset"><option value="0">Earth</option><option value="1">Mars</option><option value="2">Moon</option></select>
+      </div>
+      <div class="row"><span>Sea level</span><input id="plSea" type="range" min="-30" max="40" value="2" style="flex:1"><span class="val" id="plSeaVal">0.02</span></div>
+      <div class="row"><span>Ocean</span><button id="plOcean">on</button></div>
+      <div class="row"><span>Continents</span><input id="plCont" type="range" min="20" max="200" value="100" style="flex:1"><span class="val" id="plContVal">1.00</span></div>
+      <div class="row"><span>Mountains</span><input id="plMtn" type="range" min="0" max="150" value="70" style="flex:1"><span class="val" id="plMtnVal">0.70</span></div>
+      <div class="row"><span>Craters</span><input id="plCrat" type="range" min="0" max="60" value="5" style="flex:1"><span class="val" id="plCratVal">0.05</span></div>
+      <div class="row"><span>Relief</span><input id="plRelief" type="range" min="5" max="120" value="35" style="flex:1"><span class="val" id="plReliefVal">0.035</span></div>
+    </div>
+    <div id="plGas" style="display:none">
+      <div class="row"><span>Preset</span>
+        <select id="plGasPreset" aria-label="Gas preset"><option value="0">Jupiter</option><option value="1">Neptune</option></select>
+      </div>
+      <div class="row"><span>Bands</span><input id="plBands" type="range" min="3" max="30" value="13" style="flex:1"><span class="val" id="plBandsVal">13</span></div>
+      <div class="row"><span>Turbulence</span><input id="plTurb" type="range" min="0" max="100" value="40" style="flex:1"><span class="val" id="plTurbVal">0.40</span></div>
+      <div class="row"><span>Cloud detail</span><input id="plCloud" type="range" min="0" max="50" value="18" style="flex:1"><span class="val" id="plCloudVal">0.18</span></div>
+      <div class="row"><span>Storms</span><input id="plStorms" type="range" min="0" max="8" value="3" style="flex:1"><span class="val" id="plStormsVal">3</span></div>
+    </div>
+    <div class="row"><span>Spin</span><button id="plSpin">on</button></div>
+    <div class="row"><button id="plGen" style="flex:1">Generate Planet</button></div>
+    </details>
     <details class="sec" open><summary>Quality</summary>
     <div class="row"><span>Preset</span>
       <select id="quality" aria-label="Quality preset">
@@ -507,6 +540,63 @@
       };
       mkCity('cityMaster', 0); mkCity('cityAgents', 1); mkCity('cityCones', 2);
       mkCity('cityNav', 3); mkCity('cityPlan', 4);
+
+      // --- Planet Lab (rt_web_planet): only shown for the planet_lab scene. Each
+      // control writes a param to settings; Generate bumps the rebuild counter that
+      // PlanetLabSystem watches. Mirrors the native ImGui panel through the wasm. ---
+      (() => {
+        const lvl = new URLSearchParams(location.search).get('level') || '';
+        const isLab = lvl === 'planet_lab' || lvl === 'planet_lab.json'
+                   || lvl.endsWith('/planet_lab.json');
+        if (!isLab || typeof mod._rt_web_planet !== 'function') return;
+        $('planetLabSec').style.display = '';
+        openPanel();                         // the lab panel IS the point of this scene
+
+        const pl = (id, v) => mod._rt_web_planet(id, v);
+        const slider = (elId, pid, valId, scale, fmt) => {
+          const el = $(elId), lab = $(valId);
+          const push = () => { const v = scale(+el.value); lab.textContent = fmt(v); pl(pid, v); };
+          el.addEventListener('input', push); push();
+        };
+        const sel = (elId, pid) => { const el = $(elId);
+          el.addEventListener('change', () => pl(pid, +el.value)); pl(pid, +el.value); };
+        const toggle = (btnId, pid, def) => {
+          const b = $(btnId); let on = def;
+          const paint = () => { b.classList.toggle('on', on); b.textContent = on ? 'on' : 'off'; };
+          paint(); pl(pid, on ? 1 : 0);
+          b.onclick = () => { on = !on; paint(); pl(pid, on ? 1 : 0); };
+        };
+
+        const typeSel = $('plType'), rocky = $('plRocky'), gas = $('plGas');
+        const applyType = () => { const t = +typeSel.value;
+          rocky.style.display = t === 0 ? '' : 'none';
+          gas.style.display = t === 1 ? '' : 'none'; pl(0, t); };
+        typeSel.addEventListener('change', applyType); applyType();
+
+        const seed = $('plSeed');
+        const pushSeed = () => pl(1, +seed.value || 0);
+        seed.addEventListener('input', pushSeed); pushSeed();
+        $('plRandom').onclick = () => { seed.value = Math.floor(Math.random() * 1e6); pushSeed(); };
+
+        slider('plRadius', 2, 'plRadiusVal', v => v, v => String(Math.round(v)));
+        slider('plDetail', 3, 'plDetailVal', v => v, v => String(Math.round(v)));
+        sel('plRockyPreset', 4); sel('plGasPreset', 5);
+        slider('plSea', 6, 'plSeaVal', v => v / 100, v => v.toFixed(2));
+        toggle('plOcean', 7, true);
+        slider('plCont', 8, 'plContVal', v => v / 100, v => v.toFixed(2));
+        slider('plMtn', 9, 'plMtnVal', v => v / 100, v => v.toFixed(2));
+        slider('plCrat', 10, 'plCratVal', v => v / 100, v => v.toFixed(2));
+        slider('plRelief', 11, 'plReliefVal', v => v / 1000, v => v.toFixed(3));
+        slider('plBands', 12, 'plBandsVal', v => v, v => String(Math.round(v)));
+        slider('plTurb', 13, 'plTurbVal', v => v / 100, v => v.toFixed(2));
+        slider('plCloud', 14, 'plCloudVal', v => v / 100, v => v.toFixed(2));
+        slider('plStorms', 15, 'plStormsVal', v => v, v => String(Math.round(v)));
+        toggle('plSpin', 16, true);
+
+        $('plGen').onclick = () => {
+          if (typeof mod._rt_web_planet_generate === 'function') mod._rt_web_planet_generate();
+        };
+      })();
 
       // Touch-stick tuning sliders (values persist per browser; the numbers shown
       // are what to report back when dialling in the feel).

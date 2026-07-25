@@ -983,7 +983,7 @@ if(EMSCRIPTEN)
         "-sEXPORT_NAME=createViewer"
         "-sENVIRONMENT=web"
         # Hooks the page calls (on-screen sticks/buttons + debug panel; keep _main).
-        "-sEXPORTED_FUNCTIONS=_main,_rt_web_key,_rt_web_axis,_rt_web_button,_rt_web_look,_rt_web_camera,_rt_web_flag,_rt_web_stat,_rt_web_cam,_rt_web_play,_rt_web_env,_rt_web_sun,_rt_web_post,_rt_web_pause,_rt_web_city"
+        "-sEXPORTED_FUNCTIONS=_main,_rt_web_key,_rt_web_axis,_rt_web_button,_rt_web_look,_rt_web_camera,_rt_web_flag,_rt_web_stat,_rt_web_cam,_rt_web_play,_rt_web_env,_rt_web_sun,_rt_web_post,_rt_web_pause,_rt_web_city,_rt_web_planet,_rt_web_planet_generate"
         # web_main's EM_ASM uses stringToNewUTF8; Emscripten doesn't dependency-
         # scan EM_ASM bodies, so pin it explicitly or a toolchain bump can DCE it.
         "-sEXPORTED_RUNTIME_METHODS=stringToNewUTF8"
@@ -1006,6 +1006,7 @@ if(EMSCRIPTEN)
                 -DSRC=${CMAKE_SOURCE_DIR}/web/viewer.html
                 -DDST=$<TARGET_FILE_DIR:viewer_web>/viewer.html
                 -DWASM=$<TARGET_FILE_DIR:viewer_web>/viewer_web.wasm
+                -DDATA=$<TARGET_FILE_DIR:viewer_web>/viewer_web.data
                 -P ${CMAKE_SOURCE_DIR}/cmake/inject_build_id.cmake
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${CMAKE_SOURCE_DIR}/web/about.html

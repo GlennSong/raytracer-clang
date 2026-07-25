@@ -29,6 +29,13 @@
       "thumb": "thumbs/planet_gas.webp"
     },
     {
+      "id": "planet_lab",
+      "title": "Planet Lab",
+      "tag": "Space",
+      "blurb": "Design your own world — a live editor panel of sliders for the rocky and gas-giant generators. Tweak and hit Generate.",
+      "thumb": "thumbs/planet_lab.webp"
+    },
+    {
       "id": "living_city",
       "title": "Living City",
       "tag": "Agents",

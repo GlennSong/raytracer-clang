@@ -160,6 +160,31 @@ EMSCRIPTEN_KEEPALIVE void rt_web_city(int id, int val) {
         g_app.settings().setDouble(keys[id], val != 0 ? 1.0 : 0.0);
 }
 
+// Planet Lab controls from the page (the web has no ImGui, so its HTML panel
+// drives PlanetLabSystem through settings). Each id writes one param key; the
+// system reads them and rebuilds when rt_web_planet_generate bumps the counter.
+// ids: 0 mode(0 rocky/1 gas) 1 seed 2 radius 3 faceRes 4 rockyPreset 5 gasPreset
+// 6 seaLevel 7 hasOcean 8 continents 9 mountains 10 craters 11 relief 12 bands
+// 13 turbulence 14 cloudDetail 15 storms 16 spin.
+EMSCRIPTEN_KEEPALIVE void rt_web_planet(int id, float v) {
+    static const char* keys[] = {
+        "planetLab.mode", "planetLab.seed", "planetLab.radius", "planetLab.faceRes",
+        "planetLab.rockyPreset", "planetLab.gasPreset", "planetLab.seaLevel",
+        "planetLab.hasOcean", "planetLab.continentAmp", "planetLab.mountainAmp",
+        "planetLab.craterAmp", "planetLab.relief", "planetLab.bandFreq",
+        "planetLab.flowWarp", "planetLab.detailAmp", "planetLab.stormCount",
+        "planetLab.spin"};
+    if (id >= 0 && id < static_cast<int>(sizeof(keys) / sizeof(keys[0])))
+        g_app.settings().setDouble(keys[id], static_cast<double>(v));
+}
+
+// Commit the current params: bump the counter PlanetLabSystem watches, so it
+// regenerates + re-uploads the planet mesh on its next update.
+EMSCRIPTEN_KEEPALIVE void rt_web_planet_generate(void) {
+    Settings& s = g_app.settings();
+    s.setDouble("planetLab.gen", s.getDouble("planetLab.gen", 0) + 1.0);
+}
+
 // Per-frame render stats for the panel readout. 0=drawCalls 1=instancedDraws
 // 2=instances 3=triangles 4=entities.
 EMSCRIPTEN_KEEPALIVE int rt_web_stat(int which) {
