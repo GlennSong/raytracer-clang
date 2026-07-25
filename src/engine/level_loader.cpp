@@ -3801,6 +3801,13 @@ bool LevelLoader::load(const std::string& path,
         world.add<SceneGravity>(g, SceneGravity{parseVec3(root["gravity"], Vec3(0, -9.81, 0))});
     }
 
+    // Opt in this scene to the live Planet Lab editor panel (PlanetLabSystem draws
+    // its floating window only when this singleton is present).
+    if (root.value("planetLab", false)) {
+        Entity e = world.create();
+        world.add<ScenePlanetLab>(e, ScenePlanetLab{});
+    }
+
     // Planetary atmosphere glow (procedural-planet-plan P3): a top-level "atmosphere"
     // block { center:[x,y,z], radius, thickness?, density?, intensity?, enabled? }
     // drives the renderer's scattering pass (Metal today; other backends ignore it).

@@ -83,10 +83,18 @@ void PlanetLabSystem::removePlanet(FrameContext& ctx) {
 void PlanetLabSystem::render(FrameContext& ctx) {
 #ifdef RT_ENABLE_IMGUI
     if (ImGui::GetCurrentContext() == nullptr) return;
-    if (!ctx.debugOverlayActive) return;   // only with the backtick overlay up
 
-    ImGui::Begin("Debug");
-    if (ImGui::CollapsingHeader("Planet Lab")) {
+    // Scene-scoped: only a level that opted in (a ScenePlanetLab singleton from the
+    // loader) shows the panel — it doesn't float over every other scene. Shown
+    // whenever that scene is loaded, independent of the backtick debug overlay.
+    bool enabled = false;
+    ctx.world.each<ScenePlanetLab>([&](Entity, ScenePlanetLab&) { enabled = true; });
+    if (!enabled) return;
+
+    // Its own floating, draggable window (a "sidebar" seeded top-left on first use).
+    ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_FirstUseEver);   // 0 = auto-fit
+    if (ImGui::Begin("Planet Lab")) {
         ImGui::Combo("Type", &mode_, "Rocky\0Gas Giant\0");
 
         if (mode_ == 0) ImGui::Combo("Preset", &rockyPreset_, "Earth\0Mars\0Moon\0");
@@ -118,6 +126,7 @@ void PlanetLabSystem::render(FrameContext& ctx) {
         }
 
         ImGui::Checkbox("Spin", &spin_);
+        ImGui::Separator();
 
         if (ImGui::Button(haveEntity_ ? "Regenerate" : "Generate Planet"))
             rebuild(ctx);

@@ -6,6 +6,7 @@
     "driveSun": false
   },
   "entities": [],
+  "planetLab": true,
   "atmosphere": { "center": [0, 0, -60], "radius": 20, "thickness": 0.1, "density": 1.5, "intensity": 45 },
   "gravity": [0, 0, 0],
   "player": { "position": [0, 2, 8] },

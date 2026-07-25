@@ -58,6 +58,11 @@ struct SceneGravity {
     Vec3 value{0.0, -9.81, 0.0};
 };
 
+// Opt-in flag (a singleton the level loader adds from a top-level "planetLab":true)
+// that turns on the PlanetLabSystem's floating editor window for THAT scene only —
+// so the panel doesn't appear over every level. Absent = no lab panel.
+struct ScenePlanetLab {};
+
 // Debug render layers (device: "layers for roads, buildings, simulation ... so
 // we can turn them on or off"). A bit set on Renderable::renderLayer /
 // InstanceGroup::renderLayer; RenderSystem skips the draw when the same bit is
