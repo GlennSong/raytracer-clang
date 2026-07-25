@@ -138,6 +138,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         params_.seed = c.seed;
         params_.hoursPerSecond = c.hoursPerSecond;
         params_.perceptionReliability = c.perceptionReliability;
+        params_.tieredAgents = c.tieredAgents;
         params_.wander = c.wander;
         params_.agentScript = c.agentScript;
         params_.vehicleScript = c.vehicleScript;
@@ -254,6 +255,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
     sim_.build(nav_, carCount, pedCount, params_.seed);
     sim_.setPerceptionReliability(params_.perceptionReliability);
     sim_.setWander(params_.wander);
+    // Three-tier traffic (P4): the level's opt-in. The bubble only engages
+    // once a player position is fed each fixed step (see step() below) — the
+    // build warm-up therefore runs everything K, exactly as before.
+    sim_.tieringEnabled = params_.tieredAgents;
 #ifdef RT_ENABLE_SCRIPTING
     // Scripted goal tables (ADR-0064): a level's citysim block may name an
     // agents.lua-style script (level_loader reads its text into the config);
@@ -1077,6 +1082,7 @@ void CityRenderSystem::syncCarLamps(World& world) {
         if (!drawCars) continue;
         if (a.mode != Agent::Mode::Driver) continue;
         if (a.released) continue;      // commandeered: the physical car owns its lamps
+        if (a.tier == Agent::Tier::V) continue;   // far tier: no drawn car, no lamps
         const int v = (a.vehicle >= 0 ? a.vehicle : 0) % carVariantCount();
         if (v < 0 || v >= static_cast<int>(carLights_.size())) continue;
         const std::vector<LampMarker>& markers = carLights_[v];
@@ -1128,9 +1134,13 @@ void CityRenderSystem::syncGroups(World& world) {
     for (int s = 0; s < 3; ++s) if (sig[s]) sig[s]->transforms.clear();
 
     carAgentIds_.assign(cars.size(), {});
+    pedAgentIds_.assign(1, {});
     const auto& agents = sim_.agents();
     for (std::size_t ai = 0; ai < agents.size(); ++ai) {
         const Agent& a = agents[ai];
+        // P4: a far (V) agent has NO render membership — no instance, no lamp,
+        // no kinematic proxy (the physics diff keys off these id lists).
+        if (a.tier == Agent::Tier::V) continue;
         if (a.mode == Agent::Mode::Driver) {
             if (cars.empty()) continue;   // cars owned externally (ADR-0062 bridge)
             if (a.released) continue;     // commandeered: its PHYSICAL car replaced it
@@ -1148,6 +1158,7 @@ void CityRenderSystem::syncGroups(World& world) {
             carAgentIds_[v].push_back(static_cast<int>(ai));
         } else if (ped && !pedsExternallyOwned_) {   // walkers owned externally: no bake
             ped->transforms.push_back(agentPose(a));
+            pedAgentIds_[0].push_back(static_cast<int>(ai));
         }
     }
     // Scenery parked cars (R6b): bays seeded full at build render a real car
@@ -1225,6 +1236,7 @@ void CityRenderSystem::syncGroups(World& world) {
         const auto& agents = sim_.agents();
         for (std::size_t ai = 0; ai < agents.size() && debugWidgets_; ++ai) {
             const Agent& a = agents[ai];
+            if (a.tier == Agent::Tier::V) continue;   // far tier: nothing drawn
             bool car = a.mode == Agent::Mode::Driver;
             if (car && a.released) continue;   // commandeered: no ghost widget
             Real x = a.pos.x, z = a.pos.y;
@@ -1327,6 +1339,22 @@ void CityRenderSystem::syncGroups(World& world) {
 void CityRenderSystem::step(World& world, Real dt) {
     if (!built_) return;
     bakeDt_ = dt;   // the tilt low-pass keys its gain to the bake interval
+    // Three-tier traffic (P4): feed the sim the player's position each fixed
+    // step — the V/K bubble's centre. No player entity (headless tests, menu
+    // scenes) clears it, and everything stays K. Inert unless the level set
+    // tieredAgents; deterministic for a deterministic world.
+    {
+        bool haveCentre = false;
+        world.each<engine::CharacterController>(
+            [&](Entity e, engine::CharacterController&) {
+                if (haveCentre) return;
+                if (const engine::Transform* t = world.get<engine::Transform>(e)) {
+                    sim_.setTierCenter(engine::Vec2(t->position.x, t->position.z));
+                    haveCentre = true;
+                }
+            });
+        if (!haveCentre) sim_.clearTierCenter();
+    }
     sim_.step(dt, params_.hoursPerSecond);
     syncGroups(world);
 }

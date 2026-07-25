@@ -23,75 +23,87 @@ using engine::BodyMotion;
 
 void CityPhysicsSystem::releaseBodies() {
     PhysicsWorld& pw = physics_.physicsWorld();
-    for (PhysicsBodyId id : carBodies_) pw.removeBody(id);
-    for (PhysicsBodyId id : pedBodies_) pw.removeBody(id);
+    for (const auto& kv : carProxies_) pw.removeBody(kv.second.id);
+    for (const auto& kv : pedProxies_) pw.removeBody(kv.second.id);
     for (PhysicsBodyId id : poleBodies_) pw.removeBody(id);
-    carBodies_.clear();
-    pedBodies_.clear();
+    carProxies_.clear();
+    pedProxies_.clear();
     poleBodies_.clear();
     polesBuilt_ = false;
 }
 
-// Keep `pool` matched to every transform across `groups`, driving each kinematic
-// body to its instance's drawn pose. Group + agent order are stable, so pool
-// index i tracks the same instance across frames.
+// Keep `proxies` matched to every drawn instance across `groups` as an
+// incremental DIFF (P4.3): each instance keys its body by the baking agent's
+// stable uid (scenery cars by their fixed bake ordinal), so a tier promotion
+// adds ONE body, a demotion removes ONE, and everything else just moves —
+// the old positional pool tore down and rebuilt every box whenever the drawn
+// count changed, which tier churn would have turned into per-step O(n) churn.
 void CityPhysicsSystem::syncKinematic(World& world, const std::vector<Entity>& groups,
                                       const std::vector<Vec3>& groupExtents,
-                                      std::vector<PhysicsBodyId>& pool, Real dt,
-                                      const std::vector<std::vector<int>>* agentIds,
-                                      std::vector<char>* prevParked) {
+                                      std::unordered_map<long long, ProxyBody>& proxies,
+                                      Real dt,
+                                      const std::vector<std::vector<int>>* agentIds) {
     RT_PROFILE_ZONE_NAMED("syncKinematic");
-    // Gather every group's poses AND the matching per-body half-extent (each group
-    // is one body size), so a rebuild boxes each car at its own fleet dimensions.
-    std::vector<const Mat4*> poses;
-    std::vector<Vec3> extents;
-    std::vector<char> parked;
+    PhysicsWorld& pw = physics_.physicsWorld();
+    const std::vector<Agent>& agents = city_.sim().agents();
+    const uint32_t stamp = ++proxyStamp_;
+    long long sceneryKey = -1;   // scenery bake order is fixed for the run
     for (std::size_t gi = 0; gi < groups.size(); ++gi) {
         InstanceGroup* g = world.get<InstanceGroup>(groups[gi]);
         if (!g) continue;
         const Vec3& he = groupExtents[gi < groupExtents.size() ? gi : groupExtents.size() - 1];
         for (std::size_t ii = 0; ii < g->transforms.size(); ++ii) {
-            poses.push_back(&g->transforms[ii]);
-            extents.push_back(he);
-            bool phys = false;
-            if (agentIds && gi < agentIds->size() && ii < (*agentIds)[gi].size()) {
-                const int ai = (*agentIds)[gi][ii];
+            int ai = -1;
+            if (agentIds && gi < agentIds->size() && ii < (*agentIds)[gi].size())
+                ai = (*agentIds)[gi][ii];
+            const long long key =
+                (ai >= 0 && ai < static_cast<int>(agents.size()))
+                    ? static_cast<long long>(agents[ai].uid)
+                    : sceneryKey--;
+            bool isParked = false;
+            if (ai >= 0)
                 for (const Possessed& p : possessed_)
-                    if (p.agent == ai) { phys = true; break; }
+                    if (p.agent == ai) { isParked = true; break; }
+            const Mat4& m = g->transforms[ii];
+            Vec3 p(m.m[0][3], m.m[1][3], m.m[2][3]);
+            if (isParked) p.y = -1000.0;   // possessed: box parks below the world
+            Real yaw = std::atan2(m.m[0][2], m.m[2][2]);   // heading from local +Z basis
+            const Quat rot = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
+            auto it = proxies.find(key);
+            if (it == proxies.end()) {
+                // Newly drawn (first frame, or a V agent promoted into the K
+                // bubble): SPAWN the box at the drawn pose — like park/unpark
+                // below, arriving is a discontinuous move, never a sweep.
+                ProxyBody nb;
+                nb.id = pw.addBox(he, p, rot, BodyMotion::Kinematic,
+                                  /*restitution*/ 0.0, /*friction*/ 0.6);
+                nb.parked = isParked ? 1 : 0;
+                nb.stamp = stamp;
+                proxies.emplace(key, nb);
+                continue;
             }
-            parked.push_back(phys ? 1 : 0);
+            ProxyBody& b = it->second;
+            b.stamp = stamp;
+            const bool wasParked = b.parked != 0;
+            // Park/unpark is a DISCONTINUOUS move: teleport, never sweep — a
+            // MoveKinematic across the jump is a one-frame hypersonic sweep
+            // straight through the freshly spawned chassis (measured: it batted
+            // cars 1.7 km across the map).
+            if (isParked != wasParked) pw.teleport(b.id, p, rot);
+            else if (!isParked) pw.moveKinematic(b.id, p, rot, dt);
+            b.parked = isParked ? 1 : 0;
         }
     }
-    PhysicsWorld& pw = physics_.physicsWorld();
-    if (pool.size() != poses.size()) {
-        for (PhysicsBodyId id : pool) pw.removeBody(id);
-        pool.clear();
-        pool.reserve(poses.size());
-        for (std::size_t i = 0; i < poses.size(); ++i) {
-            const Mat4* m = poses[i];
-            Vec3 p(m->m[0][3], m->m[1][3], m->m[2][3]);
-            pool.push_back(pw.addBox(extents[i], p, Quat(), BodyMotion::Kinematic,
-                                     /*restitution*/ 0.0, /*friction*/ 0.6));
-        }
-        if (prevParked) prevParked->assign(pool.size(), 0);
-    }
-    if (prevParked && prevParked->size() != pool.size())
-        prevParked->assign(pool.size(), 0);
-    for (std::size_t i = 0; i < poses.size() && i < pool.size(); ++i) {
-        const Mat4& m = *poses[i];
-        Vec3 p(m.m[0][3], m.m[1][3], m.m[2][3]);
-        const bool isParked = i < parked.size() && parked[i];
-        const bool wasParked = prevParked && (*prevParked)[i];
-        if (isParked) p.y = -1000.0;   // possessed: box parks below the world
-        Real yaw = std::atan2(m.m[0][2], m.m[2][2]);   // heading from local +Z basis
-        const Quat rot = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
-        // Park/unpark is a DISCONTINUOUS move: teleport, never sweep — a
-        // MoveKinematic across the jump is a one-frame hypersonic sweep
-        // straight through the freshly spawned chassis (measured: it batted
-        // cars 1.7 km across the map).
-        if (isParked != wasParked) pw.teleport(pool[i], p, rot);
-        else if (!isParked) pw.moveKinematic(pool[i], p, rot, dt);
-        if (prevParked) (*prevParked)[i] = isParked ? 1 : 0;
+    // Instances gone this pass (tier demotion, a released driver): drop their
+    // bodies. Keys sorted so removal order reproduces run to run (ADR-0002).
+    staleScratch_.clear();
+    for (const auto& kv : proxies)
+        if (kv.second.stamp != stamp) staleScratch_.push_back(kv.first);
+    std::sort(staleScratch_.begin(), staleScratch_.end());
+    for (long long k : staleScratch_) {
+        auto it = proxies.find(k);
+        pw.removeBody(it->second.id);
+        proxies.erase(it);
     }
 }
 
@@ -104,11 +116,11 @@ void CityPhysicsSystem::step(World& world, Real dt) {
     // Cars + pedestrians: kinematic bodies that track the drawn poses so the
     // player and the physics gun collide with them.
     possessTier(world, dt);   // R5: physical tier drives + parks proxies BEFORE the box sync
-    syncKinematic(world, city_.carGroups(), city_.carGroupHalfExtents(), carBodies_, dt,
-                  &city_.carAgentIds(), &carParked_);
+    syncKinematic(world, city_.carGroups(), city_.carGroupHalfExtents(), carProxies_, dt,
+                  &city_.carAgentIds());
     { std::vector<Entity> peds{ city_.pedGroup() };
       std::vector<Vec3> pedExtents{ city_.pedHalfExtent() };
-      syncKinematic(world, peds, pedExtents, pedBodies_, dt); }
+      syncKinematic(world, peds, pedExtents, pedProxies_, dt, &city_.pedAgentIds()); }
 
     // Signal poles are static: one thin tall box per pole, built once (they never
     // move). The pole foot is the instance translation; the mast rises +Y.
@@ -170,10 +182,17 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
     if (static_cast<int>(possessed_.size()) < maxPhysical_) {
         const Real inR2 = possessRadius_ * possessRadius_;
         std::vector<std::pair<Real, int>> cand;
-        for (std::size_t ai = 0; ai < agents.size(); ++ai) {
+        // Grid candidates (P4.1) instead of the full agent scan — ascending,
+        // and the exact radius/state filters below are unchanged, so the same
+        // drivers are picked in the same order.
+        city_.sim().queryAgentsNear(engine::Vec2(centre.x, centre.z),
+                                    possessRadius_ + 8.0, nearScratch_);
+        for (int aidx : nearScratch_) {
+            const std::size_t ai = static_cast<std::size_t>(aidx);
             const Agent& a = agents[ai];
             if (a.mode != Agent::Mode::Driver || !a.moving || a.released)
                 continue;
+            if (a.tier != Agent::Tier::K) continue;   // far tier: nothing to possess
             bool already = false;
             for (const Possessed& p : possessed_)
                 if (p.agent == static_cast<int>(ai)) { already = true; break; }

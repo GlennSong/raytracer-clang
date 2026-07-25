@@ -50,6 +50,12 @@ struct CityRenderParams {
     // build. Loaded from the level's citysim block; used only in scripting
     // builds; any failure (or "") falls back to the C++ fleetCarMesh.
     std::string vehicleScript;
+    // Three-tier traffic (P4): opt this level into the V/K bubble — far agents
+    // become persistent coarse-tick "virtual" travellers (no render, no proxy,
+    // no sensing) promoted back to full kinematic agents near the player. Off
+    // by default so every existing level/test runs bit-identically. (The
+    // level_loader "tiered" JSON knob is the pending one-line hookup.)
+    bool tieredAgents = false;
 };
 
 // The Dear ImGui window this system appends its "Living City" section into. It
@@ -167,6 +173,13 @@ public:
     const std::vector<std::vector<int>>& carAgentIds() const {
         return carAgentIds_;
     }
+    // Same contract for the (single) pedestrian group, added for P4: the
+    // physics bridge's incremental proxy diff keys ped boxes by agent uid, so
+    // it needs each baked instance's agent — with V-tier walkers unbaked, the
+    // instance list is no longer "all pedestrians in agent order".
+    const std::vector<std::vector<int>>& pedAgentIds() const {
+        return pedAgentIds_;
+    }
     Real groundHeightAt(Real x, Real z) const { return groundAt(x, z); }
     // The stop-bar + lane-arrow paint mesh (R6c), rebuilt from the graph;
     // public so the gate can assert paint never leaves the carriageway.
@@ -258,6 +271,7 @@ private:
     std::vector<engine::Entity> carGroups_;   // one per car variant (body + colour)
     std::unordered_map<int, engine::Mat4> physPose_;      // R5: agent -> body pose
     std::vector<std::vector<int>> carAgentIds_;           // parallel to bakes
+    std::vector<std::vector<int>> pedAgentIds_;           // ditto, ped group (P4)
     engine::Entity pedGroup_;
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies

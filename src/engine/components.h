@@ -392,6 +392,7 @@ struct CitySimConfig {
     float hoursPerSecond = 0.05f;        // sim-clock hours per real second
     float perceptionReliability = 0.97f; // <1 -> agents occasionally err
     bool debugWidgets = false;           // start with the agent-state HUD on
+    bool tieredAgents = false;           // P4: opt into V/K traffic tiering
     bool showPlan = false;               // boot with block/lot outlines on
                                          // (plan-only demarcation levels)
     bool wander = false;                 // agents take perpetual random trips

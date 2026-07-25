@@ -167,3 +167,84 @@ TEST_CASE(city_phys_tier_soak) {
 
     physics.shutdown();
 }
+
+// P4: the possess tier fed by V promotions. With tiering ON and the bubble
+// shrunk below this small grid's span, most drivers live as far (V) agents;
+// the K set around the player — including cars promoted INTO it as they
+// drive up — is what the possess ring draws from, the render bake shows, and
+// the incremental proxy diff (uid-keyed add/remove/move) tracks. Gates: the
+// physical tier still engages and respects its budget, no flips, drawn cars +
+// far cars always account for every driver, and walking away releases all.
+TEST_CASE(city_phys_tier_with_tiering) {
+    World world;
+    world.add<RoadNet>(world.create(), cityGrid());
+
+    CityRenderParams params;
+    params.cars = 24;
+    params.pedestrians = 8;
+    params.seed = 7;
+    params.wander = true;
+    CityRenderSystem city(params);
+    CHECK(city.build(world, nullptr));
+    CitySim& sim = city.simMutable();
+    sim.tieringEnabled = true;
+    sim.carPromoteRadius = 100.0;   // the grid spans ~340 m corner to corner,
+    sim.carDemoteRadius = 130.0;    // so a mid-grid player K-bubbles a corner
+    sim.pedPromoteRadius = 100.0;   // of it and the rest of the town runs V
+    sim.pedDemoteRadius = 130.0;
+
+    Entity player = world.create();
+    Transform pt;
+    pt.position = Vec3(120, 0.9, 120);
+    world.add<Transform>(player, pt);
+    world.add<CharacterController>(player, CharacterController{});
+
+    PhysicsSystem physics;
+    physics.initialize();
+    physics.physicsWorld().addBox(Vec3(600, 1, 600), Vec3(120, -1, 120),
+                                  Quat::identity(), BodyMotion::Static);
+    CityPhysicsSystem bridge(city, physics);
+
+    const Real dt = 1.0 / 60.0;
+    std::size_t maxPossessed = 0;
+    Real minUp = 1.0;
+    for (int i = 0; i < 60 * 20; ++i) {
+        city.step(world, dt);
+        bridge.step(world, dt);
+        physics.step(world, dt);
+        maxPossessed = std::max(maxPossessed, bridge.possessed().size());
+        for (const auto& p : bridge.possessed())
+            minUp = std::min(
+                minUp, upDot(physics.physicsWorld().vehicleOrientation(p.vid)));
+        if (i % 120 == 0) {
+            // Conservation across the tier seam: every driver is either a
+            // drawn K car or a far V agent — never both, never neither.
+            int vDrivers = 0, kDrivers = 0;
+            for (const Agent& a : city.sim().agents()) {
+                if (a.mode != Agent::Mode::Driver) continue;
+                (a.tier == Agent::Tier::V ? vDrivers : kDrivers)++;
+            }
+            CHECK(vDrivers + kDrivers == 24);
+        }
+    }
+    std::printf("    [tier+V] maxPossessed=%zu minUp=%.3f promos=%ld demos=%ld "
+                "snaps=%d\n",
+                maxPossessed, minUp, sim.tierPromotions(), sim.tierDemotions(),
+                bridge.snapCount());
+    CHECK(sim.tierDemotions() > 0);   // the bubble engaged (town went far)
+    CHECK(maxPossessed >= 1);         // ...and K cars near the player possess
+    CHECK(maxPossessed <= 12);
+    CHECK(minUp > 0.5);               // no flips among the physical bodies
+
+    // Walk the player out: bodies release; the whole town demotes to V and
+    // the proxy diff strips every box without a rebuild storm.
+    world.get<Transform>(player)->position = Vec3(5000, 0.9, 5000);
+    for (int i = 0; i < 60 * 5; ++i) {
+        city.step(world, dt);
+        bridge.step(world, dt);
+        physics.step(world, dt);
+    }
+    CHECK(bridge.possessed().size() == 0);
+
+    physics.shutdown();
+}

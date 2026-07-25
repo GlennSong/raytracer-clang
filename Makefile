@@ -3,7 +3,7 @@ CXX = clang++
 # dependent .o to rebuild. Without this, editing a struct in a header (e.g.
 # city.h / terrain.h) left stale object files with a mismatched layout — the
 # "terrain but no city" class of bug. -include pulls the .d files in below.
-CXXFLAGS = -std=c++17 -Wall -Wextra -Wpedantic -pthread -isystem third_party -MMD -MP
+CXXFLAGS = -std=c++17 -Wall -Wextra -Wpedantic -pthread -isystem third_party -MMD -MP -DRT_NO_GPU_EROSION
 DEBUG_FLAGS = -g -O0
 RELEASE_FLAGS = -O2
 

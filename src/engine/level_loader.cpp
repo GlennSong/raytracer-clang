@@ -3104,6 +3104,7 @@ bool LevelLoader::load(const std::string& path,
         cfg.perceptionReliability =
             cs.value("perceptionReliability", cfg.perceptionReliability);
         cfg.debugWidgets = cs.value("debugWidgets", cfg.debugWidgets);
+        cfg.tieredAgents = cs.value("tiered", cfg.tieredAgents);
         cfg.showPlan = cs.value("showPlan", false);
         cfg.wander = cs.value("wander", cfg.wander);
         // Scripted goal tables (ADR-0064): `"agents": "agents.lua"` names a

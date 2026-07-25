@@ -516,6 +516,7 @@ add_executable(run_tests
     tests/test_relationships.cpp
     tests/test_ped_graph.cpp
     tests/test_city_generated.cpp
+    tests/test_tier_v.cpp
     tests/test_city_lots.cpp
     tests/test_alignment.cpp
     tests/test_surface_field.cpp

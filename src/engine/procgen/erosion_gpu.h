@@ -18,7 +18,10 @@ namespace engine {
 struct Heightmap;
 struct ErosionParams;
 
-#ifdef __APPLE__
+// RT_NO_GPU_EROSION: a build that doesn't compile erosion_gpu.mm (the plain
+// Makefile — offline tracer + Jolt-free unit tests) forces the CPU stubs even
+// on Apple, instead of failing to link.
+#if defined(__APPLE__) && !defined(RT_NO_GPU_EROSION)
 // True when a Metal device exists and the erosion kernels compiled. A missing
 // kernel file (e.g. run from outside the repo root) is probed again on the
 // next call; a real compile failure is cached.
