@@ -1,6 +1,41 @@
 {
   "scenes": [
     {
+      "id": "planet_demo",
+      "title": "Planet (Earth)",
+      "tag": "Space",
+      "blurb": "A procedural Earth-like world from orbit — displaced continents, depth-tinted oceans and polar ice on a spinning cube-sphere, under a fixed sun.",
+      "thumb": "thumbs/planet_demo.webp"
+    },
+    {
+      "id": "planet_mars",
+      "title": "Planet (Mars)",
+      "tag": "Space",
+      "blurb": "A dry, cratered red world — Tharsis-scale relief and no oceans, a different preset of the same procedural planet generator.",
+      "thumb": "thumbs/planet_mars.webp"
+    },
+    {
+      "id": "planet_moon",
+      "title": "Planet (Moon)",
+      "tag": "Space",
+      "blurb": "An airless, heavily-cratered grey body — the same generator with craters turned up and the sea turned off.",
+      "thumb": "thumbs/planet_moon.webp"
+    },
+    {
+      "id": "planet_gas",
+      "title": "Gas Giant",
+      "tag": "Space",
+      "blurb": "A banded gas giant — turbulent belts and zones with vortex storms, generated from domain-warped noise and baked to vertex colour.",
+      "thumb": "thumbs/planet_gas.webp"
+    },
+    {
+      "id": "planet_lab",
+      "title": "Planet Lab",
+      "tag": "Space",
+      "blurb": "Design your own world — a live editor panel of sliders for the rocky and gas-giant generators. Tweak and hit Generate.",
+      "thumb": "thumbs/planet_lab.webp"
+    },
+    {
       "id": "living_city",
       "title": "Living City",
       "tag": "Agents",
