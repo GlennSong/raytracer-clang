@@ -1423,6 +1423,24 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
     TerrainLodConfig cfg;
     cfg.params = p;
     cfg.seed = t.value("seed", 0u);
+    {
+        // Height sanity sweep of the FINAL params (flattens folded) — the same
+        // field every CDLOD node samples. Catches a garbage flatten plane or a
+        // broken eroded base before it renders as mystery geometry.
+        Noise sn(cfg.seed);
+        const double half = t.contains("cdlod") && t["cdlod"].is_object()
+                                ? t["cdlod"].value("worldHalf", 1024.0)
+                                : 1024.0;
+        double mn = 1e30, mx = -1e30;
+        for (int j = -4; j <= 4; ++j)
+            for (int i = -4; i <= 4; ++i) {
+                double h = terrainHeight(p, sn, half * i / 4.0, half * j / 4.0);
+                mn = std::min(mn, h);
+                mx = std::max(mx, h);
+            }
+        LOG_INFO << "[terrain] final field 9x9 sweep: h [" << mn << ", " << mx
+                 << "] over half-extent " << half;
+    }
     const json& c = t["cdlod"];
     if (c.is_object()) {
         cfg.worldHalf = c.value("worldHalf", cfg.worldHalf);

@@ -1351,8 +1351,35 @@ RenderMesh buildRoadNetMesh(const RoadNet& netIn) {
     // and per-class structure (freeway kit, ramp decks, layered bridges).
     // The union weld (weldSolid), the SDF grid and the analytic fallback are
     // deleted from this path; the lattice IS the road mesher.
-    return buildRoadNetLattice(g, net.heightAt, nullptr, net.sidewalk, net.curb,
-                               net.crosswalks);
+    RenderMesh rm = buildRoadNetLattice(g, net.heightAt, nullptr, net.sidewalk,
+                                        net.curb, net.crosswalks);
+    // Bounds + NaN audit: one NaN vertex poisons the bounding sphere and the
+    // whole road entity frustum-culls to nothing, silently.
+    std::size_t nans = 0;
+    Vec3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);
+    for (const Vertex& v : rm.vertices) {
+        if (!std::isfinite(v.position.x) || !std::isfinite(v.position.y) ||
+            !std::isfinite(v.position.z)) { ++nans; continue; }
+        lo.x = std::min(lo.x, v.position.x); hi.x = std::max(hi.x, v.position.x);
+        lo.y = std::min(lo.y, v.position.y); hi.y = std::max(hi.y, v.position.y);
+        lo.z = std::min(lo.z, v.position.z); hi.z = std::max(hi.z, v.position.z);
+    }
+    LOG_INFO << "[roadmesh] " << g.edges.size() << " edges -> "
+             << rm.vertices.size() << " verts, " << rm.indices.size() / 3
+             << " tris, nan " << nans << ", y [" << lo.y << ", " << hi.y
+             << "], x [" << lo.x << ", " << hi.x << "], z [" << lo.z << ", "
+             << hi.z << "]";
+    // RT_DUMP_ROADMESH=<path>: write the mesh's XZ vertex cloud so coverage can
+    // be plotted against the road graph (which chains actually meshed?).
+    if (const char* dp = std::getenv("RT_DUMP_ROADMESH")) {
+        if (FILE* f = std::fopen(dp, "w")) {
+            for (std::size_t i = 0; i < rm.vertices.size(); i += 16)
+                std::fprintf(f, "%.1f %.1f\n", rm.vertices[i].position.x,
+                             rm.vertices[i].position.z);
+            std::fclose(f);
+        }
+    }
+    return rm;
 }
 
 std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& netIn, double shoulder,

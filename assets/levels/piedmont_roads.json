@@ -1,4 +1,6 @@
 {
+  "version": 1,
+  "name": "Piedmont Roads",
   "_comment": "Piedmont roads sandbox (8km-city plan P1/P2): the 8 km x 8 km world. L-shaped range with varying peaks along the west + north edges (rangeSpine + ridge-network feathering), buildable piedmont flats to the SE. City site (+900,+900), east town (+3050,+400), south town (+300,+3050). Terrain-first; the multi-site road recipe lands in P2 (planOnly - roads iterate here, buildings live in piedmont.json).",
   "render": {
     "maxInstances": 16384,
@@ -31,11 +33,7 @@
     ],
     "rangeHeight": 420,
     "rangeVariation": 0.7,
-    "range": {
-      "width": 700,
-      "height": 140,
-      "seed": 7
-    },
+    "rangeWidth": 700,
     "mountainAlongRange": true,
     "mountainHeight": 260,
     "mountainScale": 0.002,
@@ -71,9 +69,6 @@
       "direction": [0.42, 0.52, -0.5],
       "intensity": 8.0
     }
-  },
-  "player": {
-    "position": [900, 60, 900]
   },
   "entities": [
     {
@@ -147,8 +142,8 @@
   "citysim": {
     "planOnly": true,
     "buildLots": false,
-    "showPlan": true,
-    "debugWidgets": true,
+    "showPlan": false,
+    "debugWidgets": false,
     "cars": 0,
     "pedestrians": 0,
     "seed": 7,

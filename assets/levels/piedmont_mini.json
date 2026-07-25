@@ -1,0 +1,189 @@
+{
+ "version": 1,
+ "name": "Piedmont Mini",
+ "_comment": "Piedmont roads sandbox (8km-city plan P1/P2): the 8 km x 8 km world. L-shaped range with varying peaks along the west + north edges (rangeSpine + ridge-network feathering), buildable piedmont flats to the SE. City site (+900,+900), east town (+3050,+400), south town (+300,+3050). Terrain-first; the multi-site road recipe lands in P2 (planOnly - roads iterate here, buildings live in piedmont.json).",
+ "render": {
+  "maxInstances": 16384,
+  "maxShadowInstances": 49152,
+  "maxFoliageInstances": 32768
+ },
+ "terrain": {
+  "size": 2600,
+  "resolution": 900,
+  "seed": 23,
+  "heightScale": 15,
+  "noiseScale": 0.0011,
+  "octaves": 6,
+  "warp": 0.35,
+  "erode": true,
+  "erodeRes": 800,
+  "erodeDroplets": 500000,
+  "erodeRadius": 4,
+  "erodeThermal": 14,
+  "erodeTalus": 1.0,
+  "rangeSpine": [
+   [
+    -1100,
+    1100
+   ],
+   [
+    -1150,
+    0
+   ],
+   [
+    -1050,
+    -1100
+   ]
+  ],
+  "rangeHeight": 260,
+  "rangeVariation": 0.7,
+  "rangeWidth": 300,
+  "mountainAlongRange": true,
+  "mountainHeight": 260,
+  "mountainScale": 0.002,
+  "mountainMaskScale": 0.001,
+  "mountainMaskLo": -0.1,
+  "mountainMaskHi": 0.4,
+  "rockLine": 140,
+  "snowLine": 330,
+  "material": {
+   "albedo": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "roughness": 1.0
+  },
+  "cdlod": {
+   "worldHalf": 1300,
+   "numLods": 6,
+   "gridRes": 32
+  }
+ },
+ "environment": {
+  "fog": {
+   "color": [
+    0.72,
+    0.79,
+    0.88
+   ],
+   "density": 0.0004,
+   "heightFalloff": 0.01
+  },
+  "skyColor": [
+   0.55,
+   0.68,
+   0.86
+  ]
+ },
+ "lighting": {
+  "ambientMultiplier": 0.6,
+  "exposure": 0.5,
+  "sun": {
+   "castsShadow": true,
+   "color": [
+    1.0,
+    0.96,
+    0.86
+   ],
+   "direction": [
+    0.42,
+    0.52,
+    -0.5
+   ],
+   "intensity": 8.0
+  }
+ },
+ "entities": [
+  {
+   "id": 2,
+   "name": "streets",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "shape": "road",
+   "road": {
+    "color": [
+     0.09,
+     0.09,
+     0.1
+    ],
+    "corner_radius": 3.0,
+    "crosswalks": true,
+    "curb": 0.16,
+    "lift": 0.08,
+    "markings": true,
+    "sidewalk": 3.5,
+    "width": 11.0,
+    "generate": {
+     "kind": "metro",
+     "seed": 7,
+     "sites": [
+      {
+       "center": {
+        "x": 0,
+        "z": 0
+       },
+       "radius": 700,
+       "hotspots": 6,
+       "block_size": 220,
+       "density": 1.0
+      },
+      {
+       "center": {
+        "x": 950,
+        "z": -200
+       },
+       "radius": 250,
+       "hotspots": 2,
+       "block_size": 180,
+       "density": 0.6,
+       "kind_bias": "oldtown"
+      }
+     ],
+     "freeways": true,
+     "backbone": "arterial",
+     "freeway_width": 17,
+     "corridor_freeways": false,
+     "interchange_spacing": 600,
+     "artery_width": 17,
+     "collector_width": 13,
+     "street_width": 11,
+     "block_size": 220,
+     "min_block_edge": 150,
+     "seg_length": 50,
+     "influence": 560,
+     "kill_radius": 110,
+     "merge_radius": 80,
+     "corridor_spacing": 120,
+     "ambient_per_500": 14,
+     "loop_min": 200,
+     "loop_max": 650,
+     "curviness": 0.25,
+     "min_road_len": 30,
+     "min_road_clearance": 0.9,
+     "max_slope": 0.32
+    }
+   }
+  }
+ ],
+ "citysim": {
+  "planOnly": true,
+  "buildLots": false,
+  "showPlan": true,
+  "debugWidgets": true,
+  "cars": 0,
+  "pedestrians": 0,
+  "seed": 7,
+  "plinth": 0.45,
+  "sidewalk": 4.0,
+  "detailDistance": 900,
+  "downtownRadius": 300,
+  "midtownRadius": 650,
+  "hubRadius": 320,
+  "vehicles": "vehicles.lua",
+  "wander": false
+ }
+}
