@@ -156,6 +156,42 @@ struct MetalRenderer::Impl {
     id<MTLRenderPipelineState> atmospherePipeline;
     AtmosphereRenderParams atmosphere;
 
+    // Scattering sky (cinematic-sky phase): Hillaire-style transmittance +
+    // sky-view LUTs (compute), baked into a cubemap + IBL cubes that ride the
+    // exact machinery a captured HDR uses (skybox/composite sky pixels, GGX
+    // prefilter + irradiance, the probe bake) — so lighting matches the
+    // backdrop by construction. Recomputed only when the cache key (sun
+    // direction, camera altitude band, params) changes; textures are allocated
+    // lazily so levels that don't opt in pay nothing.
+    id<MTLComputePipelineState> skyTransmittancePipeline;
+    id<MTLComputePipelineState> skyViewPipeline;
+    id<MTLRenderPipelineState> skyCubeBakePipeline;   // vertexSkybox + LUT sample
+    id<MTLTexture> skyTransmittanceLUT;   // 256x64 RGBA16Float
+    id<MTLTexture> skyViewLUT;            // 192x108 RGBA16Float
+    id<MTLTexture> skyCubemap;            // 512^3 faces RGBA16Float + mips
+    id<MTLTexture> skyPrefilteredCube;    // ENV_PREFILTER_* (shared constants)
+    id<MTLTexture> skyIrradianceCube;
+    static constexpr int SKY_TRANS_W = 256, SKY_TRANS_H = 64;
+    static constexpr int SKY_VIEW_W = 192, SKY_VIEW_H = 108;
+    static constexpr int SKY_CUBE_SIZE = 512;
+    SkyScatteringParams skyParams;        // level opt-in, copied in setLights
+    bool skyActive = false;               // params.enabled && gate && no real HDR
+    float skyCamHeightQ = 0.0f;           // quantized camera height the LUTs use
+    struct SkyKey { simd_float3 sunDir; float camH; SkyScatteringParams p; };
+    SkyKey skyKey = {};                   // last-baked key
+    float skyLastSunIntensity = -1.0f;    // sun illuminance is part of the key
+    bool skyBaked = false;
+    void updateSkyResources();
+
+    // Volumetric clouds (cinematic-sky phase): half-res march target composited
+    // onto the HDR scene with One+SourceAlpha blending (fragmentCloudComposite);
+    // sky pixels reuse the same overlay inside fragmentComposite. Lazy target.
+    id<MTLRenderPipelineState> cloudPipeline;
+    id<MTLRenderPipelineState> cloudCompositePipeline;
+    id<MTLTexture> cloudTexture;          // half-res RGBA16Float (S.rgb, T.a)
+    VolumetricCloudParams cloudParams;    // level opt-in, copied in setLights
+    bool cloudsActive = false;
+
     // Screen-space reflections (SSR)
     id<MTLTexture> ssrTexture;         // RGBA16Float — SSR result (rgb=color, a=confidence)
     id<MTLTexture> ssrBlurTemp;        // RGBA16Float — ping-pong for bilateral blur
@@ -325,7 +361,8 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         @"shaders/metal/shadows.metal",    // shadow pass + PCF lookup
         @"shaders/metal/lighting.metal",   // probes, direct light, shadeSurface
         @"shaders/metal/post.metal",       // SSR, GTAO, bloom, composite
-        @"shaders/metal/atmosphere.metal", // planetary atmosphere glow (P3)
+        @"shaders/metal/atmosphere.metal", // planetary atmosphere glow (P3) + sky LUTs
+        @"shaders/metal/clouds.metal",     // volumetric cloud slab (cinematic sky)
     ];
     NSMutableString* shaderSource = [NSMutableString string];
     for (NSString* path in shaderFiles) {
@@ -509,6 +546,71 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         impl->atmospherePipeline = [impl->device newRenderPipelineStateWithDescriptor:atmDesc
                                                                                 error:&error];
         if (!impl->atmospherePipeline) NSLog(@"Atmosphere pipeline error: %@", error);
+    }
+
+    // Scattering-sky pipelines (cinematic-sky phase): the two LUT compute
+    // kernels, plus the sky->cube bake (vertexSkybox reconstruction + LUT
+    // sample) that feeds the shared HDR-cube machinery. Missing functions just
+    // leave the scattering opt-in inert (logged), like every optional pass.
+    {
+        id<MTLFunction> transFunc = [library newFunctionWithName:@"skyTransmittanceLut"];
+        if (transFunc) {
+            impl->skyTransmittancePipeline =
+                [impl->device newComputePipelineStateWithFunction:transFunc error:&error];
+            if (!impl->skyTransmittancePipeline)
+                NSLog(@"Sky transmittance pipeline error: %@", error);
+        }
+        id<MTLFunction> skyViewFunc = [library newFunctionWithName:@"skyViewLut"];
+        if (skyViewFunc) {
+            impl->skyViewPipeline =
+                [impl->device newComputePipelineStateWithFunction:skyViewFunc error:&error];
+            if (!impl->skyViewPipeline) NSLog(@"Sky-view pipeline error: %@", error);
+        }
+        id<MTLFunction> skyVert = [library newFunctionWithName:@"vertexSkybox"];
+        id<MTLFunction> skyBakeFrag = [library newFunctionWithName:@"fragmentScatteringSkyBake"];
+        if (skyVert && skyBakeFrag) {
+            MTLRenderPipelineDescriptor* d = [[MTLRenderPipelineDescriptor alloc] init];
+            d.vertexFunction = skyVert;
+            d.fragmentFunction = skyBakeFrag;
+            d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+            impl->skyCubeBakePipeline =
+                [impl->device newRenderPipelineStateWithDescriptor:d error:&error];
+            if (!impl->skyCubeBakePipeline) NSLog(@"Sky cube bake pipeline error: %@", error);
+        }
+    }
+
+    // Volumetric cloud pipelines (cinematic-sky phase): the half-res march and
+    // its full-res composite onto the HDR scene. The composite blends
+    // dest * transmittance + scattered via One + SourceAlpha.
+    {
+        id<MTLFunction> cloudVert = [library newFunctionWithName:@"vertexClouds"];
+        id<MTLFunction> cloudFrag = [library newFunctionWithName:@"fragmentClouds"];
+        if (cloudVert && cloudFrag) {
+            MTLRenderPipelineDescriptor* d = [[MTLRenderPipelineDescriptor alloc] init];
+            d.vertexFunction = cloudVert;
+            d.fragmentFunction = cloudFrag;
+            d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+            impl->cloudPipeline = [impl->device newRenderPipelineStateWithDescriptor:d
+                                                                               error:&error];
+            if (!impl->cloudPipeline) NSLog(@"Cloud pipeline error: %@", error);
+        }
+        id<MTLFunction> cloudCompFrag = [library newFunctionWithName:@"fragmentCloudComposite"];
+        if (cloudVert && cloudCompFrag) {
+            MTLRenderPipelineDescriptor* d = [[MTLRenderPipelineDescriptor alloc] init];
+            d.vertexFunction = cloudVert;
+            d.fragmentFunction = cloudCompFrag;
+            d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+            d.colorAttachments[0].blendingEnabled = YES;
+            d.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
+            d.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
+            d.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
+            d.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorSourceAlpha;
+            d.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorZero;
+            d.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
+            impl->cloudCompositePipeline =
+                [impl->device newRenderPipelineStateWithDescriptor:d error:&error];
+            if (!impl->cloudCompositePipeline) NSLog(@"Cloud composite pipeline error: %@", error);
+        }
     }
 
     // Lens-warp pipeline (virtual-camera plan Phase 4): fullscreen resample of
@@ -1607,6 +1709,213 @@ void MetalRenderer::Impl::bakeEnvironmentIBL() {
     envIrradianceCube = irradiance;
 }
 
+// Scattering sky (cinematic-sky): recompute the LUTs and re-bake the sky cube +
+// IBL cubes when the cache key (sun direction, camera altitude band, params)
+// changes. One command buffer, committed without waiting — the queue is FIFO,
+// so everything encoded afterwards (probe bake included) sees the new sky.
+// GPU cost when it fires is ~a millisecond (tiny LUT marches + a 512 cube bake
+// + the prefilter kernels); with a static sun it fires once per level.
+void MetalRenderer::Impl::updateSkyResources() {
+    if (!skyActive || !skyTransmittancePipeline || !skyViewPipeline ||
+        !skyCubeBakePipeline || !prefilterPipeline || !irradiancePipeline) {
+        skyBaked = false;
+        return;
+    }
+
+    // Cache key: sun quantized to ~0.3 deg, camera height to its 100 m band
+    // (already quantized in setLights), params compared field-by-field.
+    SkyKey key;
+    simd_float3 sd = lightUniforms.skySunDir;
+    key.sunDir = simd_make_float3(std::round(sd.x * 200.0f) / 200.0f,
+                                  std::round(sd.y * 200.0f) / 200.0f,
+                                  std::round(sd.z * 200.0f) / 200.0f);
+    key.camH = skyCamHeightQ;
+    key.p = skyParams;
+    auto sameParams = [](const SkyScatteringParams& a, const SkyScatteringParams& b) {
+        return a.planetRadius == b.planetRadius &&
+               a.atmosphereHeight == b.atmosphereHeight &&
+               a.rayleighBeta.x == b.rayleighBeta.x &&
+               a.rayleighBeta.y == b.rayleighBeta.y &&
+               a.rayleighBeta.z == b.rayleighBeta.z &&
+               a.rayleighScaleHeight == b.rayleighScaleHeight &&
+               a.mieBeta == b.mieBeta && a.mieScaleHeight == b.mieScaleHeight &&
+               a.mieG == b.mieG && a.turbidity == b.turbidity &&
+               a.groundAlbedo.x == b.groundAlbedo.x &&
+               a.groundAlbedo.y == b.groundAlbedo.y &&
+               a.groundAlbedo.z == b.groundAlbedo.z &&
+               a.brightness == b.brightness && a.multiScatter == b.multiScatter &&
+               a.sunAngularRadius == b.sunAngularRadius;
+    };
+    if (skyBaked && simd_equal(key.sunDir, skyKey.sunDir) &&
+        key.camH == skyKey.camH && sameParams(key.p, skyKey.p) &&
+        lightUniforms.lights[0].intensity == skyLastSunIntensity)
+        return;
+    skyKey = key;
+    skyLastSunIntensity = lightUniforms.lights[0].intensity;
+    skyBaked = true;
+    NSLog(@"[SKY] baking LUTs + sky cube/IBL (sun %.3f %.3f %.3f, camH %.0f)",
+          sd.x, sd.y, sd.z, skyCamHeightQ);
+
+    // Lazy texture allocation — levels that never opt in allocate nothing.
+    if (!skyTransmittanceLUT) {
+        MTLTextureDescriptor* d = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                         width:SKY_TRANS_W height:SKY_TRANS_H
+                                     mipmapped:NO];
+        d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        d.storageMode = MTLStorageModePrivate;
+        skyTransmittanceLUT = [device newTextureWithDescriptor:d];
+    }
+    if (!skyViewLUT) {
+        MTLTextureDescriptor* d = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                         width:SKY_VIEW_W height:SKY_VIEW_H
+                                     mipmapped:NO];
+        d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        d.storageMode = MTLStorageModePrivate;
+        skyViewLUT = [device newTextureWithDescriptor:d];
+    }
+    if (!skyCubemap) {
+        NSUInteger mips = 1;
+        for (int s = SKY_CUBE_SIZE; s > 1; s >>= 1) mips++;
+        MTLTextureDescriptor* d = [[MTLTextureDescriptor alloc] init];
+        d.textureType = MTLTextureTypeCube;
+        d.pixelFormat = MTLPixelFormatRGBA16Float;
+        d.width = SKY_CUBE_SIZE;
+        d.height = SKY_CUBE_SIZE;
+        d.mipmapLevelCount = mips;
+        d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        d.storageMode = MTLStorageModePrivate;
+        skyCubemap = [device newTextureWithDescriptor:d];
+    }
+    if (!skyPrefilteredCube) {
+        MTLTextureDescriptor* d = [[MTLTextureDescriptor alloc] init];
+        d.textureType = MTLTextureTypeCube;
+        d.pixelFormat = MTLPixelFormatRGBA16Float;
+        d.width = ENV_PREFILTER_SIZE;
+        d.height = ENV_PREFILTER_SIZE;
+        d.mipmapLevelCount = ENV_PREFILTER_MIPS;
+        d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        d.storageMode = MTLStorageModePrivate;
+        skyPrefilteredCube = [device newTextureWithDescriptor:d];
+    }
+    if (!skyIrradianceCube) {
+        MTLTextureDescriptor* d = [[MTLTextureDescriptor alloc] init];
+        d.textureType = MTLTextureTypeCube;
+        d.pixelFormat = MTLPixelFormatRGBA16Float;
+        d.width = ENV_IRRADIANCE_SIZE;
+        d.height = ENV_IRRADIANCE_SIZE;
+        d.mipmapLevelCount = 1;
+        d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        d.storageMode = MTLStorageModePrivate;
+        skyIrradianceCube = [device newTextureWithDescriptor:d];
+    }
+
+    const SkyScatteringParams& p = skyParams;
+    SkyLUTUniforms su;
+    su.sunDirection = simd_make_float4(sd.x, sd.y, sd.z, skyCamHeightQ);
+    su.sunColor = simd_make_float4(lightUniforms.skySunColor.x,
+                                   lightUniforms.skySunColor.y,
+                                   lightUniforms.skySunColor.z,
+                                   lightUniforms.lights[0].intensity);
+    su.rayleigh = simd_make_float4(p.rayleighBeta.x, p.rayleighBeta.y,
+                                   p.rayleighBeta.z, p.rayleighScaleHeight);
+    su.mie = simd_make_float4(p.mieBeta * p.turbidity,
+                              p.mieBeta * 1.11f * p.turbidity,
+                              p.mieScaleHeight, p.mieG);
+    su.planet = simd_make_float4(p.planetRadius, p.planetRadius + p.atmosphereHeight,
+                                 p.brightness, p.multiScatter);
+    su.ground = simd_make_float4(p.groundAlbedo.x, p.groundAlbedo.y,
+                                 p.groundAlbedo.z, 0.0f);
+
+    id<MTLCommandBuffer> cmd = [commandQueue commandBuffer];
+
+    // 1) LUT kernels: transmittance, then the sky-view march that samples it.
+    {
+        id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+        MTLSize group = MTLSizeMake(8, 8, 1);
+        [enc setComputePipelineState:skyTransmittancePipeline];
+        [enc setTexture:skyTransmittanceLUT atIndex:0];
+        [enc setBytes:&su length:sizeof(su) atIndex:0];
+        [enc dispatchThreads:MTLSizeMake(SKY_TRANS_W, SKY_TRANS_H, 1)
+       threadsPerThreadgroup:group];
+        [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
+        [enc setComputePipelineState:skyViewPipeline];
+        [enc setTexture:skyViewLUT atIndex:0];
+        [enc setTexture:skyTransmittanceLUT atIndex:1];
+        [enc setBytes:&su length:sizeof(su) atIndex:0];
+        [enc dispatchThreads:MTLSizeMake(SKY_VIEW_W, SKY_VIEW_H, 1)
+       threadsPerThreadgroup:group];
+        [enc endEncoding];
+    }
+
+    // 2) Sky -> cube faces (the fragment reads the LightUniforms sky block,
+    //    which setLights just refreshed for this frame).
+    for (int face = 0; face < 6; face++) {
+        CameraUniforms cam = {};
+        cam.viewProjection = toSimd(cubeFaceViewProjection(face, Vec3(0, 0, 0), 0.1, 10.0));
+        cam.invViewProjection = simd_inverse(cam.viewProjection);
+        cam.cameraPosition = simd_make_float3(0, 0, 0);
+
+        MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
+        rp.colorAttachments[0].texture = skyCubemap;
+        rp.colorAttachments[0].slice = face;
+        rp.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+        rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> enc = [cmd renderCommandEncoderWithDescriptor:rp];
+        [enc setRenderPipelineState:skyCubeBakePipeline];
+        [enc setVertexBytes:&cam length:sizeof(cam) atIndex:1];
+        [enc setFragmentBuffer:lightBuffer offset:0 atIndex:4];
+        [enc setFragmentTexture:skyViewLUT atIndex:0];
+        [enc setFragmentTexture:skyTransmittanceLUT atIndex:1];
+        [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [enc endEncoding];
+    }
+    {
+        id<MTLBlitCommandEncoder> blit = [cmd blitCommandEncoder];
+        [blit generateMipmapsForTexture:skyCubemap];
+        [blit endEncoding];
+    }
+
+    // 3) IBL from the sky cube: GGX prefilter mips + cosine irradiance — the
+    //    same kernels the HDR path uses, so lighting matches the backdrop.
+    {
+        id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+        MTLSize group = MTLSizeMake(8, 8, 1);
+        [enc setComputePipelineState:prefilterPipeline];
+        [enc setTexture:skyCubemap atIndex:0];
+        [enc setSamplerState:mipClampSampler atIndex:0];
+        for (int mip = 0; mip < ENV_PREFILTER_MIPS; mip++) {
+            id<MTLTexture> mipView =
+                [skyPrefilteredCube newTextureViewWithPixelFormat:MTLPixelFormatRGBA16Float
+                                                      textureType:MTLTextureTypeCube
+                                                           levels:NSMakeRange(mip, 1)
+                                                           slices:NSMakeRange(0, 6)];
+            float roughness = static_cast<float>(mip) / (ENV_PREFILTER_MIPS - 1);
+            int mipSize = ENV_PREFILTER_SIZE >> mip;
+            [enc setTexture:mipView atIndex:1];
+            [enc setBytes:&roughness length:sizeof(roughness) atIndex:0];
+            for (int face = 0; face < 6; face++) {
+                [enc setBytes:&face length:sizeof(face) atIndex:1];
+                [enc dispatchThreads:MTLSizeMake(mipSize, mipSize, 1)
+               threadsPerThreadgroup:group];
+            }
+        }
+        [enc setComputePipelineState:irradiancePipeline];
+        [enc setTexture:skyCubemap atIndex:0];
+        [enc setTexture:skyIrradianceCube atIndex:1];
+        [enc setSamplerState:mipClampSampler atIndex:0];
+        for (int face = 0; face < 6; face++) {
+            [enc setBytes:&face length:sizeof(face) atIndex:0];
+            [enc dispatchThreads:MTLSizeMake(ENV_IRRADIANCE_SIZE, ENV_IRRADIANCE_SIZE, 1)
+           threadsPerThreadgroup:group];
+        }
+        [enc endEncoding];
+    }
+
+    [cmd commit];   // no wait: FIFO queue order covers this frame's consumers
+}
+
 void MetalRenderer::setEnvironmentMap(TextureHandle equirect) {
     auto* tex = impl->textures.get(equirect);
     impl->environmentTexture = tex ? *tex : nil;
@@ -1976,7 +2285,44 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
     lu.fogDensity = lighting.fog.enabled ? lighting.fog.density : 0.0f;
     lu.fogHeightFalloff = lighting.fog.enabled ? lighting.fog.heightFalloff : 0.0f;
 
-    impl->skyCloudsEnabled = sky.cloudsEnabled;
+    // Scattering sky (cinematic-sky): active only when the level opts in, the
+    // runtime gate is on, and no captured HDR owns the environment. The sun
+    // disc + LUT frame follow the SCENE sun (SceneLighting::sun), so shadows,
+    // direct light, and the backdrop agree; physically-based aerial perspective
+    // then replaces the exp fog (fog params keep working for other levels).
+    const SkyScatteringParams& sp = lighting.skyScattering;
+    impl->skyParams = sp;
+    impl->skyActive = sp.enabled && skyScatteringEnabled && !impl->environmentTexture;
+    lu.skyModel = impl->skyActive ? 1.0f : 0.0f;
+    if (impl->skyActive) {
+        Vec3 sunDir = normalize(lighting.sun.direction);
+        lu.skySunDir = toSimd3(sunDir);
+        lu.skySunColor = toSimd3(lighting.sun.color);
+        lu.skyMieG = sp.mieG;
+        lu.skyAerial = sp.aerialDensity;
+        lu.skyRayleighBeta = toSimd3(sp.rayleighBeta);
+        lu.skyRayleighH = sp.rayleighScaleHeight;
+        float mieExt = sp.mieBeta * 1.11f * sp.turbidity;   // scatter + absorb
+        lu.skyMieBeta = simd_make_float3(mieExt, mieExt, mieExt);
+        lu.skyMieH = sp.mieScaleHeight;
+        lu.skyPlanetRadius = sp.planetRadius;
+        lu.skyAtmosRadius = sp.planetRadius + sp.atmosphereHeight;
+        // Quantize the camera altitude to 100 m bands so the sky-view LUT (and
+        // the cube/IBL bake keyed on it) doesn't churn as the camera bobs.
+        impl->skyCamHeightQ =
+            std::round(std::max(static_cast<float>(impl->currentCameraPos.y), 0.5f)
+                       / 100.0f) * 100.0f;
+        lu.skyCamHeight = impl->skyCamHeightQ;
+        lu.skySunDiscCos = std::cos(sp.sunAngularRadius);
+        lu.fogDensity = 0.0f;            // aerial perspective replaces exp fog
+        lu.fogHeightFalloff = 0.0f;
+    }
+
+    // Volumetric clouds (cinematic-sky): the slab retires the 2D FBM overlay
+    // while active; both honor the runtime gates on the Renderer seam.
+    impl->cloudParams = lighting.volumetricClouds;
+    impl->cloudsActive = lighting.volumetricClouds.enabled && volumetricCloudsEnabled;
+    impl->skyCloudsEnabled = sky.cloudsEnabled && !impl->cloudsActive;
 
     memcpy([impl->lightBuffer contents], &lu, sizeof(LightUniforms));
 }
@@ -2120,13 +2466,19 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                 // Bind dummy textures for probe slots (shader expects them)
                 [enc setFragmentTexture:impl->brdfLUT atIndex:2];
                 [enc setFragmentSamplerState:impl->mipClampSampler atIndex:1];
-                // IBL bindings (procedural mode during the bake — geometry in
-                // reflection probes isn't re-lit by the env cubes; just bind so
-                // the shader's texture(8/9)/buffer(8) slots are satisfied).
-                EnvUniforms bakeEnv = {0, 0, 0, {0}};
+                // IBL bindings. Procedural mode geometry in probes isn't re-lit
+                // by env cubes; with the scattering sky active its baked IBL
+                // cubes ARE bound (mode 1) so probe-baked geometry sits in the
+                // same ambient as the live scene (cinematic-sky consistency).
+                bool skyIBL = impl->skyActive && impl->skyBaked &&
+                              impl->skyPrefilteredCube && impl->skyIrradianceCube;
+                EnvUniforms bakeEnv = {skyIBL ? 1 : 0, 0,
+                                       Impl::ENV_PREFILTER_MIPS - 1, 0};
                 [enc setFragmentBytes:&bakeEnv length:sizeof(bakeEnv) atIndex:8];
-                [enc setFragmentTexture:impl->defaultCubemap atIndex:8];
-                [enc setFragmentTexture:impl->defaultCubemap atIndex:9];
+                [enc setFragmentTexture:(skyIBL ? impl->skyPrefilteredCube
+                                                : impl->defaultCubemap) atIndex:8];
+                [enc setFragmentTexture:(skyIBL ? impl->skyIrradianceCube
+                                                : impl->defaultCubemap) atIndex:9];
 
                 // Draw skybox (HDR equirect or procedural — see ADR-0016). Baking
                 // it into the cube faces is what makes IBL track the environment.
@@ -2136,11 +2488,19 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                     [enc setVertexBytes:&faceCam length:sizeof(CameraUniforms) atIndex:1];
                     [enc setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
                     // cloudsEnabled = 0: clouds are never baked into probes.
-                    EnvUniforms envU = {impl->environmentCubemap ? 1 : 0, 0, 0, {0}};
+                    // The scattering sky's baked cube stands in for a captured
+                    // HDR here, so probes reflect the same sky the screen shows.
+                    id<MTLTexture> bakeSkyCube = impl->environmentCubemap;
+                    if (!bakeSkyCube && impl->skyActive && impl->skyBaked)
+                        bakeSkyCube = impl->skyCubemap;
+                    EnvUniforms envU = {bakeSkyCube ? 1 : 0, 0, 0, 0};
                     [enc setFragmentBytes:&envU length:sizeof(envU) atIndex:5];
-                    [enc setFragmentTexture:(impl->environmentCubemap ? impl->environmentCubemap
-                                                                       : impl->defaultCubemap)
+                    [enc setFragmentTexture:(bakeSkyCube ? bakeSkyCube
+                                                         : impl->defaultCubemap)
                                     atIndex:0];
+                    // fragmentSkybox statically references the sky LUT slots.
+                    [enc setFragmentTexture:impl->defaultWhiteTexture atIndex:10];
+                    [enc setFragmentTexture:impl->defaultWhiteTexture atIndex:11];
                     [enc setFragmentSamplerState:impl->equirectSampler atIndex:0];
                     [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 
@@ -2273,6 +2633,11 @@ void MetalRenderer::endFrame() {
 
     // Declared ahead of the shadow pass: overflow counters accumulate there too.
     RenderStats stats;
+
+    // Scattering sky (cinematic-sky): refresh the LUTs + sky cube/IBL if the
+    // cache key changed. Committed BEFORE the probe bake below, so a bake this
+    // frame renders the new sky into the probes (FIFO queue order).
+    impl->updateSkyResources();
 
     // Bake reflection probes on first frame when draw calls exist
     if (impl->probesPendingBake && !impl->opaqueDrawCalls.empty()) {
@@ -2462,18 +2827,25 @@ void MetalRenderer::endFrame() {
 
     // Image-based lighting (ADR-0017 Phase 3): the prefiltered radiance and
     // irradiance cubes drive ambient/specular when an HDR is bound; in
-    // procedural mode the shader evaluates the analytic sky instead.
+    // procedural mode the shader evaluates the analytic sky instead. The
+    // scattering sky (cinematic-sky) contributes its OWN baked IBL cubes, so
+    // ground bounce and speculars match the LUT backdrop exactly.
     {
         bool hasIBL = impl->envPrefilteredCube && impl->envIrradianceCube
                       && environmentMapEnabled;
-        EnvUniforms litEnv = {hasIBL ? 1 : 0, 0, Impl::ENV_PREFILTER_MIPS - 1, {0}};
+        bool skyIBLActive = !hasIBL && impl->skyActive && impl->skyBaked &&
+                            impl->skyPrefilteredCube && impl->skyIrradianceCube;
+        id<MTLTexture> pre = hasIBL ? impl->envPrefilteredCube
+                          : skyIBLActive ? impl->skyPrefilteredCube
+                                         : impl->defaultCubemap;
+        id<MTLTexture> irr = hasIBL ? impl->envIrradianceCube
+                          : skyIBLActive ? impl->skyIrradianceCube
+                                         : impl->defaultCubemap;
+        EnvUniforms litEnv = {(hasIBL || skyIBLActive) ? 1 : 0, 0,
+                              Impl::ENV_PREFILTER_MIPS - 1, 0};
         [impl->currentEncoder setFragmentBytes:&litEnv length:sizeof(litEnv) atIndex:8];
-        [impl->currentEncoder setFragmentTexture:(hasIBL ? impl->envPrefilteredCube
-                                                         : impl->defaultCubemap)
-                                         atIndex:8];
-        [impl->currentEncoder setFragmentTexture:(hasIBL ? impl->envIrradianceCube
-                                                         : impl->defaultCubemap)
-                                         atIndex:9];
+        [impl->currentEncoder setFragmentTexture:pre atIndex:8];
+        [impl->currentEncoder setFragmentTexture:irr atIndex:9];
     }
 
     // Draw skybox first (behind everything, no depth write)
@@ -2484,12 +2856,23 @@ void MetalRenderer::endFrame() {
                                       length:sizeof(CameraUniforms) atIndex:1];
         [impl->currentEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
         id<MTLTexture> envCube = environmentMapEnabled ? impl->environmentCubemap : nil;
+        // Scattering sky (cinematic-sky): the skybox samples the sky-view LUT
+        // directly (crisper than the 512 cube, and refreshed every bake). The
+        // LUT textures live at 10/11 — above the lit pass's slots, so no
+        // post-skybox restore is needed for them.
+        bool skyLut = !envCube && impl->skyActive && impl->skyBaked && impl->skyViewLUT;
         EnvUniforms envU = {envCube ? 1 : 0,
-                            impl->skyCloudsEnabled ? 1 : 0, 0, {0}};
+                            impl->skyCloudsEnabled ? 1 : 0, 0, skyLut ? 1 : 0};
         [impl->currentEncoder setFragmentBytes:&envU length:sizeof(envU) atIndex:5];
         [impl->currentEncoder setFragmentTexture:(envCube ? envCube
                                                           : impl->defaultCubemap)
                                          atIndex:0];
+        [impl->currentEncoder setFragmentTexture:(skyLut ? impl->skyViewLUT
+                                                         : impl->defaultWhiteTexture)
+                                         atIndex:10];
+        [impl->currentEncoder setFragmentTexture:(skyLut ? impl->skyTransmittanceLUT
+                                                         : impl->defaultWhiteTexture)
+                                         atIndex:11];
         [impl->currentEncoder setFragmentSamplerState:impl->equirectSampler atIndex:0];
         [impl->currentEncoder drawPrimitives:MTLPrimitiveTypeTriangle
                                  vertexStart:0 vertexCount:3];
@@ -2952,6 +3335,102 @@ void MetalRenderer::endFrame() {
         [atmEnc endEncoding];
     }
 
+    // --- Volumetric clouds (cinematic-sky) ---
+    // Half-res march into cloudTexture (depth-occluded, premultiplied overlay:
+    // rgb = in-scattered light, a = transmittance), then a full-res bilateral
+    // composite onto the HDR scene with One + SourceAlpha blending — before the
+    // post computes, so SSR/bloom/DOF all see the clouded scene. Sky pixels get
+    // the same overlay again inside fragmentComposite (which re-derives them).
+    // Both passes vanish entirely when a level doesn't opt in.
+    bool cloudsOn = impl->cloudsActive && impl->cloudPipeline &&
+                    impl->cloudCompositePipeline && impl->sceneColorTexture;
+    if (cloudsOn) {
+        int halfW = std::max(impl->framebufferWidth / 2, 1);
+        int halfH = std::max(impl->framebufferHeight / 2, 1);
+        if (!impl->cloudTexture || (int)impl->cloudTexture.width != halfW ||
+            (int)impl->cloudTexture.height != halfH) {
+            MTLTextureDescriptor* d = [MTLTextureDescriptor
+                texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                             width:halfW height:halfH mipmapped:NO];
+            d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+            d.storageMode = MTLStorageModePrivate;
+            impl->cloudTexture = [impl->device newTextureWithDescriptor:d];
+        }
+
+        const VolumetricCloudParams& cp = impl->cloudParams;
+        const GPULight& sun = impl->lightUniforms.lights[0];
+        CloudUniforms cu;
+        cu.invViewProjection = impl->cameraUniforms.invViewProjection;
+        simd_float3 camP = impl->cameraUniforms.cameraPosition;
+        cu.cameraPosition = simd_make_float4(camP.x, camP.y, camP.z, 0.0f);
+        cu.sunDirection = simd_make_float4(sun.direction.x, sun.direction.y,
+                                           sun.direction.z, 0.0f);
+        cu.sunColor = simd_make_float4(sun.color.x, sun.color.y, sun.color.z,
+                                       sun.intensity);
+        // Ambient reaching cloud interiors: the sky palette's zenith/horizon
+        // mix, so the deck sits in the same light as the backdrop.
+        simd_float3 amb = (impl->lightUniforms.skyZenith +
+                           impl->lightUniforms.skyHorizon) * 0.5f * cp.ambient;
+        // With the scattering sky on, redden the sun reaching the deck by the
+        // per-channel Rayleigh+Mie transmittance at cloud altitude (a cheap
+        // CPU air-mass integral) — sunset clouds go amber instead of staying
+        // noon-white — and let the ambient sag with it toward dusk.
+        if (impl->skyActive) {
+            const SkyScatteringParams& sp = impl->skyParams;
+            float h = std::max(0.5f * (cp.bottom + cp.top), 0.0f);
+            float sunY = std::max(impl->lightUniforms.skySunDir.y, 0.03f);
+            float airMass = 1.0f / sunY;
+            float mieExt = sp.mieBeta * 1.11f * sp.turbidity;
+            float tauM = mieExt * sp.mieScaleHeight *
+                         std::exp(-h / sp.mieScaleHeight);
+            float rhoR = std::exp(-h / sp.rayleighScaleHeight);
+            simd_float3 t;
+            t.x = std::exp(-(sp.rayleighBeta.x * sp.rayleighScaleHeight * rhoR + tauM) * airMass);
+            t.y = std::exp(-(sp.rayleighBeta.y * sp.rayleighScaleHeight * rhoR + tauM) * airMass);
+            t.z = std::exp(-(sp.rayleighBeta.z * sp.rayleighScaleHeight * rhoR + tauM) * airMass);
+            cu.sunColor.x *= t.x;
+            cu.sunColor.y *= t.y;
+            cu.sunColor.z *= t.z;
+            float lumT = 0.2126f * t.x + 0.7152f * t.y + 0.0722f * t.z;
+            amb = amb * (0.25f + 0.75f * lumT);
+        }
+        cu.skyAmbient = simd_make_float4(amb.x, amb.y, amb.z,
+                                         impl->cameraUniforms.windTime);
+        cu.planetCenter = simd_make_float4(0, 0, 0, 0);
+        cu.layer = simd_make_float4(cp.bottom, cp.top, 0.0f, 0.0f);  // SLAB mode
+        int steps = cloudStepsOverride > 0 ? cloudStepsOverride : cp.steps;
+        cu.params = simd_make_float4(cp.coverage, cp.density, cp.noiseScale, cp.wind);
+        cu.march = simd_make_float4((float)std::max(steps, 2),
+                                    (float)std::max(cp.lightSteps, 1),
+                                    cp.phaseG, cp.farDistance);
+
+        MTLRenderPassDescriptor* marchPass = [MTLRenderPassDescriptor renderPassDescriptor];
+        marchPass.colorAttachments[0].texture = impl->cloudTexture;
+        marchPass.colorAttachments[0].loadAction = MTLLoadActionDontCare;   // fullscreen
+        marchPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> marchEnc =
+            [impl->currentCommandBuffer renderCommandEncoderWithDescriptor:marchPass];
+        [marchEnc setRenderPipelineState:impl->cloudPipeline];
+        [marchEnc setFragmentTexture:impl->depthTexture atIndex:0];
+        [marchEnc setFragmentBytes:&cu length:sizeof(cu) atIndex:0];
+        [marchEnc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [marchEnc endEncoding];
+
+        MTLRenderPassDescriptor* compPass = [MTLRenderPassDescriptor renderPassDescriptor];
+        compPass.colorAttachments[0].texture = impl->sceneColorTexture;
+        compPass.colorAttachments[0].loadAction = MTLLoadActionLoad;    // keep the scene
+        compPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> compEnc =
+            [impl->currentCommandBuffer renderCommandEncoderWithDescriptor:compPass];
+        [compEnc setRenderPipelineState:impl->cloudCompositePipeline];
+        [compEnc setFragmentTexture:impl->cloudTexture atIndex:0];
+        [compEnc setFragmentTexture:impl->depthTexture atIndex:1];
+        [compEnc setFragmentBytes:&impl->cameraUniforms
+                           length:sizeof(CameraUniforms) atIndex:1];
+        [compEnc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [compEnc endEncoding];
+    }
+
     // Lens effects (virtual-camera plan Phase 4). Both passes are skipped
     // entirely — zero GPU cost — when toggled off or visually inert (no
     // aberrations / pinhole aperture). Debug views show raw buffers, so they
@@ -3206,12 +3685,20 @@ void MetalRenderer::endFrame() {
         compositeParams.ssrBlendStrength = ssrParams.blendStrength;
         compositeParams.bloomEnabled = bloomEnabled ? 1 : 0;
         compositeParams.bloomIntensity = bloomParams.intensity;
+        // Sky-pixel provider: a captured HDR cube, or the scattering sky's
+        // baked cube (cinematic-sky) — both ride the same envMode==1 path.
         id<MTLTexture> compEnvCube = environmentMapEnabled ? impl->environmentCubemap : nil;
+        if (!compEnvCube && impl->skyActive && impl->skyBaked)
+            compEnvCube = impl->skyCubemap;
         compositeParams.envMode = compEnvCube ? 1 : 0;
         compositeParams.aoFloor = ssaoParams.aoFloor;
         compositeParams.tonemapOp = tonemapOperator;
         compositeParams.gradeContrast = gradeParams.contrast;
         compositeParams.gradeSaturation = gradeParams.saturation;
+        compositeParams.cloudMode = cloudsOn ? 1 : 0;
+        [compEncoder setFragmentTexture:(cloudsOn ? impl->cloudTexture
+                                                  : impl->defaultWhiteTexture)
+                                atIndex:7];
         [compEncoder setFragmentBytes:&compositeParams
                                length:sizeof(compositeParams) atIndex:1];
         // Sky for composite sky pixels: day/night procedural (+clouds) or, when an
@@ -3294,6 +3781,23 @@ void MetalRenderer::endFrame() {
              destinationSlice:0 destinationLevel:0
             destinationOrigin:MTLOriginMake(0, 0, 0)];
         [blit endEncoding];
+    }
+
+    // RT_GPU_TIME=1: log the frame command buffer's average GPU time every 120
+    // frames — headless perf verification (e.g. the cloud pass budget) without
+    // Tracy or a window capture. Handlers fire in completion order, so the
+    // unsynchronized statics are safe in practice.
+    static const bool logGpuTime = std::getenv("RT_GPU_TIME") != nullptr;
+    if (logGpuTime) {
+        [impl->currentCommandBuffer addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+            static double acc = 0.0;
+            static int n = 0;
+            acc += (cb.GPUEndTime - cb.GPUStartTime) * 1000.0;
+            if (++n % 120 == 0) {
+                NSLog(@"[GPU TIME] avg frame %.2f ms over last 120", acc / 120.0);
+                acc = 0.0;
+            }
+        }];
     }
 
     [impl->currentCommandBuffer presentDrawable:impl->currentDrawable];

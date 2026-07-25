@@ -518,7 +518,33 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
     // With fogHeightFalloff > 0 the density decays with altitude and the optical
     // depth uses the closed-form integral of exp(-b*y) along the ray — low-lying
     // haze a high camera looks down THROUGH, not a distance white-out.
-    if (lightData.fogDensity > 0.0) {
+    if (lightData.skyModel > 0.5) {
+        // Scattering sky (cinematic-sky): physically-based aerial perspective
+        // replaces the exp fog. Per-channel Rayleigh + Mie optical depth along
+        // the ray (closed-form integral of the exponential height profiles,
+        // flat-world — exact at these distances), then the surface fades toward
+        // the sky radiance in the view direction, sampled from the sky-baked
+        // prefiltered environment cube (mip 1 softens the sun disc into a
+        // forward glow). Distant terrain thus dissolves into exactly the sky it
+        // occludes: bluer away from the sun, warmer toward it.
+        float dist = length(geom.worldPosition - camera.cameraPosition);
+        float3 rd = (geom.worldPosition - camera.cameraPosition) / max(dist, 1e-4);
+        float bR = 1.0 / max(lightData.skyRayleighH, 1.0);
+        float bM = 1.0 / max(lightData.skyMieH, 1.0);
+        float odR = exp(-bR * camera.cameraPosition.y) *
+                    (fabs(rd.y) > 1e-4 ? (1.0 - exp(-bR * rd.y * dist)) / (bR * rd.y)
+                                       : dist);
+        float odM = exp(-bM * camera.cameraPosition.y) *
+                    (fabs(rd.y) > 1e-4 ? (1.0 - exp(-bM * rd.y * dist)) / (bM * rd.y)
+                                       : dist);
+        float3 tau = (lightData.skyRayleighBeta * max(odR, 0.0)
+                    + lightData.skyMieBeta * max(odM, 0.0)) * lightData.skyAerial;
+        float3 tr = exp(-tau);
+        float3 inscatter = (env.mode == 1)
+            ? prefilteredEnv.sample(envSampler, rd, level(1.0)).rgb
+            : sampleEnvironment(rd, lightData);   // pre-bake fallback (frame 0)
+        color = color * tr + inscatter * (1.0 - tr);
+    } else if (lightData.fogDensity > 0.0) {
         float dist = length(geom.worldPosition - camera.cameraPosition);
         float f;
         if (lightData.fogHeightFalloff > 0.0) {

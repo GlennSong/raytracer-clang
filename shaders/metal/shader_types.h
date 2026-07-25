@@ -142,7 +142,48 @@ struct LightUniforms {
     // closed form along the view ray — ground vistas keep their haze while a
     // camera high above looks down through thin air instead of a white wash.
     // 0 = the old uniform fog.
-    float fogHeightFalloff; float _fog1; float _fog2; float _fog3;
+    float fogHeightFalloff;
+    // --- Scattering sky (cinematic-sky phase). skyModel 1 = the Hillaire-style
+    // LUT sky is active: the skybox samples the sky-view LUT, the lit pass
+    // replaces the exp fog with physically-based aerial perspective (per-channel
+    // Rayleigh+Mie transmittance fading toward the sky radiance in the view
+    // direction), and IBL rides the sky-baked environment cubes. 0 = legacy
+    // gradient sky; every field below is then ignored.
+    float skyModel;
+    float skyMieG;             // Mie phase asymmetry (sun-ward haze glow)
+    float skyAerial;           // aerial-perspective density multiplier (1 = physical)
+    simd_float3 skyRayleighBeta; float skyRayleighH;   // scatter /m, scale height m
+    simd_float3 skyMieBeta;      float skyMieH;        // EXTINCTION /m, scale height m
+    float skyPlanetRadius;     // ground radius (m) — sky-view LUT uv mapping
+    float skyAtmosRadius;      // atmosphere top radius (m)
+    float skyCamHeight;        // camera height above ground the LUT was built at (m)
+    float skySunDiscCos;       // cos of the sun's angular radius (disc cutoff)
+};
+
+// Sky LUT bake (cinematic-sky phase): parameters for the transmittance +
+// sky-view compute kernels in atmosphere.metal. Filled from
+// SkyScatteringParams + the scene sun whenever the cache key changes.
+struct SkyLUTUniforms {
+    simd_float4 sunDirection;   // xyz toward the sun (world), w = camera height (m)
+    simd_float4 sunColor;       // rgb, w = intensity (sun illuminance scale)
+    simd_float4 rayleigh;       // xyz scatter /m, w = scale height (m)
+    simd_float4 mie;            // x scatter /m, y extinction /m, z scale height, w = phase g
+    simd_float4 planet;         // x ground radius, y atmosphere top radius, z brightness, w = multiScatter
+    simd_float4 ground;         // rgb ground albedo, w unused
+};
+
+// Volumetric clouds (cinematic-sky phase): one shared uniform block for the
+// half-res cloud march (fragmentClouds) and its full-res composite.
+struct CloudUniforms {
+    simd_float4x4 invViewProjection;
+    simd_float4   cameraPosition;
+    simd_float4   sunDirection;
+    simd_float4   sunColor;        // rgb, w intensity
+    simd_float4   skyAmbient;      // rgb ambient, w time
+    simd_float4   planetCenter;
+    simd_float4   layer;           // x bottom, y top, z planetRadius, w domainMode
+    simd_float4   params;          // x coverage, y densityScale, z noiseScale, w windSpeed
+    simd_float4   march;           // x viewSteps, y lightSteps, z phaseG, w farDistance
 };
 
 // Per-frame shadow sampling parameters. The rasterization depth bias is NOT
@@ -176,7 +217,9 @@ struct EnvUniforms {
     int32_t mode;
     int32_t cloudsEnabled;
     int32_t envMaxMip;
-    float   _pad[1];
+    // Scattering sky (cinematic-sky): 1 = mode-0 sky pixels sample the sky-view
+    // LUT (+ analytic sun disc) instead of the gradient. Ignored when mode == 1.
+    int32_t skyModel;
 };
 
 struct GPUReflectionProbe {
@@ -259,7 +302,10 @@ struct CompositeUniforms {
     int32_t tonemapOp;      // 0=ACES, 1=AgX (the "view transform" / film curve)
     float   gradeContrast;  // log-space contrast around middle grey (1 = neutral)
     float   gradeSaturation;// saturation around luma (1 = neutral)
-    float   _pad[1];
+    // Volumetric clouds (cinematic-sky): 1 = overlay the half-res cloud texture
+    // onto sky pixels (geometry pixels already carry it via the scene-target
+    // composite pass) and suppress the legacy 2D FBM overlay.
+    int32_t cloudMode;
 };
 
 // Final lens-warp pass (virtual-camera plan Phase 4): Brown radial distortion,

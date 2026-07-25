@@ -43,6 +43,155 @@ float3 sampleEnvironment(float3 dir, device const LightUniforms& env) {
     return col;
 }
 
+// --- Scattering sky (cinematic-sky phase) ---
+// Hillaire-style two-LUT sky: a transmittance LUT (256x64, sun/space visibility
+// through the shell) and a sky-view LUT (192x108, the full sky dome radiance at
+// the camera), both computed by kernels in atmosphere.metal whenever the sun or
+// atmosphere parameters change. These helpers define the uv<->parameter
+// mappings shared by the bake kernels and every sampler (skybox, composite,
+// sky->cube bake), so they must agree exactly.
+
+// Distance from a point at radius r (view cos zenith mu) to the atmosphere top.
+static float skyDistToTop(float r, float mu, float Rt) {
+    float d = r * r * (mu * mu - 1.0) + Rt * Rt;
+    return max(-r * mu + sqrt(max(d, 0.0)), 0.0);
+}
+
+// Transmittance LUT mapping (Bruneton): u = normalized distance-to-top, v =
+// normalized horizon distance rho. Invertible; covers rays that reach space.
+static float2 skyTransRMuToUv(float r, float mu, float Rg, float Rt) {
+    float H = sqrt(max(Rt * Rt - Rg * Rg, 0.0));
+    float rho = sqrt(max(r * r - Rg * Rg, 0.0));
+    float d = skyDistToTop(r, mu, Rt);
+    float dMin = Rt - r;
+    float dMax = rho + H;
+    float u = (d - dMin) / max(dMax - dMin, 1e-4);
+    float v = rho / max(H, 1e-4);
+    return float2(clamp(u, 0.0, 1.0), clamp(v, 0.0, 1.0));
+}
+
+static void skyTransUvToRMu(float2 uv, float Rg, float Rt,
+                            thread float& r, thread float& mu) {
+    float H = sqrt(max(Rt * Rt - Rg * Rg, 0.0));
+    float rho = H * uv.y;
+    r = sqrt(rho * rho + Rg * Rg);
+    float dMin = Rt - r;
+    float dMax = rho + H;
+    float d = dMin + uv.x * (dMax - dMin);
+    mu = (d <= 0.0) ? 1.0
+                    : clamp((H * H - rho * rho - d * d) / (2.0 * r * d), -1.0, 1.0);
+}
+
+// Transmittance toward direction with cos-zenith mu from height (r above the
+// planet center). Returns 0 for rays that hit the ground (earth shadow).
+static float3 skySampleTransmittance(texture2d<float> transLut, float r, float mu,
+                                     float Rg, float Rt) {
+    constexpr sampler s(filter::linear, address::clamp_to_edge);
+    float horizonMu = -sqrt(max(1.0 - (Rg * Rg) / (r * r), 0.0));
+    if (mu < horizonMu) return float3(0.0);
+    return transLut.sample(s, skyTransRMuToUv(r, mu, Rg, Rt)).rgb;
+}
+
+// Sky-view LUT mapping (Hillaire): u = sqrt-warped azimuth from the sun
+// (resolution concentrated sun-ward, mirror-symmetric), v = nonlinear view
+// zenith with the break exactly on the horizon (v = 0.5), so the horizon line
+// stays crisp at 108 rows.
+static float2 skyViewDirToUv(float viewZenithCos, float lightViewAngle,
+                             float r, float Rg) {
+    float vHorizon = sqrt(max(r * r - Rg * Rg, 0.0));
+    float cosBeta = vHorizon / r;
+    float beta = acos(clamp(cosBeta, -1.0, 1.0));
+    float zenithHorizon = M_PI_F - beta;
+    float viewZenith = acos(clamp(viewZenithCos, -1.0, 1.0));
+    float v;
+    if (viewZenith < zenithHorizon) {
+        float c = viewZenith / max(zenithHorizon, 1e-4);
+        v = (1.0 - sqrt(max(1.0 - c, 0.0))) * 0.5;
+    } else {
+        float c = (viewZenith - zenithHorizon) / max(beta, 1e-4);
+        v = 0.5 + 0.5 * sqrt(saturate(c));
+    }
+    float u = sqrt(saturate(lightViewAngle / M_PI_F));
+    return float2(u, v);
+}
+
+static void skyViewUvToDir(float2 uv, float r, float Rg,
+                           thread float& viewZenith, thread float& lightViewAngle) {
+    float vHorizon = sqrt(max(r * r - Rg * Rg, 0.0));
+    float cosBeta = vHorizon / r;
+    float beta = acos(clamp(cosBeta, -1.0, 1.0));
+    float zenithHorizon = M_PI_F - beta;
+    if (uv.y < 0.5) {
+        float c = 1.0 - 2.0 * uv.y;      // 1 at zenith row, 0 at horizon
+        viewZenith = zenithHorizon * (1.0 - c * c);
+    } else {
+        float c = 2.0 * uv.y - 1.0;
+        viewZenith = zenithHorizon + beta * (c * c);
+    }
+    lightViewAngle = uv.x * uv.x * M_PI_F;
+}
+
+// Sample the sky-view LUT for a world-space direction. The LUT was built at
+// camera height env.skyCamHeight with planet-up = world +Y (a flat world), sun
+// azimuth at u = 0. Shallow below-horizon dips blend back toward the horizon
+// radiance over a few degrees — the LUT's true answer there is the (dark)
+// ground bounce, but on a finite flat world the region just under the horizon
+// stands in for implied distant terrain, which reads as haze, not soil; this is
+// the scattering-sky twin of sampleEnvironment's lowerHaze band, and it lets
+// the ocean/terrain edge dissolve instead of meeting a hard dark line.
+static float3 sampleSkyViewLut(float3 dir, texture2d<float> skyViewLut,
+                               device const LightUniforms& env) {
+    constexpr sampler s(filter::linear, address::clamp_to_edge);
+    float Rg = env.skyPlanetRadius;
+    float r = Rg + max(env.skyCamHeight, 0.5);
+    float3 sunDir = env.skySunDir;
+    // Azimuthal angle between view and sun on the horizontal plane.
+    float2 vh = dir.xz, sh = sunDir.xz;
+    float vl = length(vh), sl = length(sh);
+    float azim = (vl > 1e-4 && sl > 1e-4)
+        ? acos(clamp(dot(vh / vl, sh / sl), -1.0, 1.0))
+        : 0.0;
+    float3 col = skyViewLut.sample(s, skyViewDirToUv(dir.y, azim, r, Rg)).rgb;
+
+    // Below-horizon haze band: mix toward the just-above-horizon radiance.
+    float vHorizon = sqrt(max(r * r - Rg * Rg, 0.0));
+    float zenithHorizon = M_PI_F - acos(clamp(vHorizon / r, -1.0, 1.0));
+    float dip = acos(clamp(dir.y, -1.0, 1.0)) - zenithHorizon;   // >0 below horizon
+    if (dip > 0.0) {
+        const float HAZE_BAND = 0.10;   // ~6 degrees
+        float w = 1.0 - saturate(dip / HAZE_BAND);
+        if (w > 0.0) {
+            float horizonCos = cos(zenithHorizon * 0.995);
+            float3 horizonCol =
+                skyViewLut.sample(s, skyViewDirToUv(horizonCos, azim, r, Rg)).rgb;
+            col = mix(col, horizonCol, w * w);
+        }
+    }
+    return col;
+}
+
+// Full scattering-sky radiance for a direction: LUT sky plus an analytic sun
+// disc (the LUT is far too coarse for a crisp disc). The disc rides the
+// transmittance LUT, so it reddens and dims through the thick horizon air
+// exactly like the sky around it, and fades out below the horizon.
+static float3 scatteringSkyRadiance(float3 dir, texture2d<float> skyViewLut,
+                                    texture2d<float> transLut,
+                                    device const LightUniforms& env) {
+    float3 col = sampleSkyViewLut(dir, skyViewLut, env);
+    float cosSun = dot(dir, env.skySunDir);
+    if (cosSun > env.skySunDiscCos - 0.0002 && env.skySunIntensity > 0.0) {
+        float Rg = env.skyPlanetRadius;
+        float r = Rg + max(env.skyCamHeight, 0.5);
+        float3 t = skySampleTransmittance(transLut, r, dir.y, Rg, env.skyAtmosRadius);
+        // Soft limb: full radiance inside the disc, quick falloff at the edge.
+        float disc = smoothstep(env.skySunDiscCos - 0.0002, env.skySunDiscCos, cosSun);
+        // Artistic disc radiance: bright enough to saturate + bloom (the real
+        // sun is ~1.5e4x its illuminance — that would blow half-float range).
+        col += env.skySunColor * (env.skySunIntensity * 120.0) * t * disc;
+    }
+    return col;
+}
+
 // --- Procedural clouds (ADR-0016 step 3) ---
 // An FBM noise layer painted on the sky dome — not volumetric, and never baked
 // into reflection probes (a screen/SSR visual only). Overlaid by the skybox and
@@ -140,20 +289,41 @@ fragment float4 fragmentSkybox(
     device const LightUniforms& lightData [[buffer(4)]],
     constant EnvUniforms& env [[buffer(5)]],
     texturecube<float> envCube [[texture(0)]],
+    texture2d<float> skyViewLut [[texture(10)]],
+    texture2d<float> skyTransLut [[texture(11)]],
     sampler envSampler [[sampler(0)]]
 ) {
     float3 dir = normalize(in.viewDir);
     // HDR provider is pre-baked into a cubemap at load (ADR-0016) — a cheap cube
-    // lookup instead of per-sample equirect atan2/acos.
+    // lookup instead of per-sample equirect atan2/acos. The scattering sky
+    // (cinematic-sky, env.skyModel == 1) samples the sky-view LUT + sun disc.
     float3 color = (env.mode == 1) ? envCube.sample(envSampler, dir).rgb
-                                   : sampleEnvironment(dir, lightData);
+                 : (env.skyModel == 1)
+                     ? scatteringSkyRadiance(dir, skyViewLut, skyTransLut, lightData)
+                     : sampleEnvironment(dir, lightData);
     // Clouds overlay the procedural sky only (a captured HDR has its own), and
-    // are skipped during the probe bake (env.cloudsEnabled == 0).
+    // are skipped during the probe bake (env.cloudsEnabled == 0) and when the
+    // volumetric cloud layer replaces them (the renderer clears the flag).
     if (env.mode == 0 && env.cloudsEnabled != 0)
         color = applyClouds(color, dir, lightData);
     // Linear scene-referred radiance — exposure and tone mapping are applied
     // once, in the composite pass (this output also feeds SSR/probe bakes).
     return float4(color, 1.0);
+}
+
+// Scattering sky -> cubemap bake (cinematic-sky): renders one cube face per
+// draw by sampling the sky LUTs, exactly like fragmentEquirectBake does for a
+// captured HDR. The baked cube then feeds the SAME machinery a real HDR uses —
+// skybox/composite sky pixels, GGX prefilter + irradiance for IBL, and the
+// reflection-probe bake — so lighting matches the backdrop by construction.
+fragment float4 fragmentScatteringSkyBake(
+    SkyboxOut in [[stage_in]],
+    device const LightUniforms& lightData [[buffer(4)]],
+    texture2d<float> skyViewLut [[texture(0)]],
+    texture2d<float> skyTransLut [[texture(1)]]
+) {
+    float3 dir = normalize(in.viewDir);
+    return float4(scatteringSkyRadiance(dir, skyViewLut, skyTransLut, lightData), 1.0);
 }
 
 // Equirect → cubemap bake (ADR-0016): renders one cube face per draw, sampling

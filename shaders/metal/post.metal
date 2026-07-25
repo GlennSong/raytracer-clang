@@ -719,6 +719,13 @@ struct CompositeOut {
     float2 uv;
 };
 
+// Volumetric cloud overlay (defined in clouds.metal, later in the concatenated
+// unit): bilateral upsample of the half-res cloud target — rgb = in-scattered
+// radiance, a = transmittance. The sky branch below needs it because sky pixels
+// are re-derived here rather than read from the scene target.
+float4 cloudOverlaySample(float2 uv, texture2d<float> cloudTex,
+                          depth2d<float> depthTex, constant CameraUniforms& camera);
+
 vertex CompositeOut vertexComposite(uint vid [[vertex_id]]) {
     float2 uv = float2((vid << 1) & 2, vid & 2);
     CompositeOut out;
@@ -736,6 +743,7 @@ fragment float4 fragmentComposite(
     texture2d<float> normalTexture [[texture(4)]],
     texture2d<float> bloomTexture [[texture(5)]],
     texturecube<float> envCube [[texture(6)]],
+    texture2d<float> cloudTexture [[texture(7)]],
     constant CameraUniforms& camera [[buffer(0)]],
     constant CompositeUniforms& params [[buffer(1)]],
     device const LightUniforms& lightData [[buffer(4)]],
@@ -817,11 +825,21 @@ fragment float4 fragmentComposite(
         if (params.envMode == 1) {
             // HDR environment: a cheap cube lookup. The bake's orientation is
             // proven by tests/test_cube_faces.cpp (ADR-0017 Phase 3), so the
-            // old per-pixel equirect workaround is gone.
+            // old per-pixel equirect workaround is gone. The scattering sky
+            // (cinematic-sky) rides this same path via its sky-baked cube.
             hdrColor = envCube.sample(envSampler, rayDir).rgb;
         } else {
             hdrColor = sampleEnvironment(rayDir, lightData);
-            hdrColor = applyClouds(hdrColor, rayDir, lightData);
+            // The 2D FBM overlay is retired while volumetric clouds are on.
+            if (params.cloudMode != 1)
+                hdrColor = applyClouds(hdrColor, rayDir, lightData);
+        }
+        // Volumetric clouds (cinematic-sky): geometry pixels carry the overlay
+        // via the scene-target composite pass; sky pixels are re-derived here,
+        // so apply the same bilateral upsample on top.
+        if (params.cloudMode == 1) {
+            float4 cl = cloudOverlaySample(in.uv, cloudTexture, depthTex, camera);
+            hdrColor = hdrColor * cl.a + cl.rgb;
         }
     } else {
         float4 hdr = sceneColor.sample(smp, in.uv);

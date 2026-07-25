@@ -299,6 +299,50 @@ struct ProceduralSky {
     float cloudTime      = 0.0f;   // animation phase (advanced by the cycle)
 };
 
+// Physically-based scattering sky (cinematic-sky phase). Opt-in per level via
+// "environment": {"sky": {"model": "scattering", ...}}. The backend computes a
+// Hillaire-style transmittance LUT + sky-view LUT (recomputed only when the sun
+// or these params change), the skybox samples them, IBL is baked from the same
+// sky, and the lit pass swaps the exp height fog for per-channel Rayleigh+Mie
+// aerial perspective. The sun disc/color follow SceneLighting::sun. Defaults are
+// an Earth-like clear day; `turbidity` is the one-knob haze control.
+struct SkyScatteringParams {
+    bool  enabled = false;
+    float planetRadius = 6360000.0f;      // ground radius (world meters)
+    float atmosphereHeight = 100000.0f;   // shell thickness above ground (m)
+    Vec3  rayleighBeta{5.802e-6f, 13.558e-6f, 33.1e-6f};   // scatter /m (λ⁻⁴ blue)
+    float rayleighScaleHeight = 8000.0f;
+    float mieBeta = 3.996e-6f;            // scatter /m (extinction = 1.11x)
+    float mieScaleHeight = 1200.0f;
+    float mieG = 0.8f;                    // forward-scatter lobe (sun haze glow)
+    float turbidity = 1.0f;               // scales the Mie coefficients (haze)
+    Vec3  groundAlbedo{0.30f, 0.30f, 0.30f};
+    float brightness = 1.0f;              // artistic scale on the sky radiance
+    float multiScatter = 1.0f;            // strength of the multi-scatter approx
+    float aerialDensity = 1.0f;           // aerial-perspective distance scale
+    float sunAngularRadius = 0.0047f;     // radians (~0.27°, the real sun)
+};
+
+// Volumetric cloud layer (cinematic-sky phase). Opt-in per level via
+// "environment": {"clouds": {...}}. A slab [bottom, top] of raymarched clouds
+// rendered at half resolution after the scene (depth-occluded) and upsampled
+// bilaterally; replaces the 2D FBM sky overlay while active. Altitudes are
+// world meters; `wind` drifts the field along +X in m/s.
+struct VolumetricCloudParams {
+    bool  enabled = false;
+    float coverage = 0.35f;      // 0 = clear, 1 = overcast
+    float bottom = 900.0f;
+    float top = 1600.0f;
+    float density = 0.55f;       // extinction scale inside the slab
+    float noiseScale = 0.0011f;  // base noise frequency (1/m)
+    float wind = 12.0f;
+    int   steps = 40;            // view-march steps (perf/quality)
+    int   lightSteps = 6;        // sun-march steps per lit sample
+    float phaseG = 0.45f;        // Henyey-Greenstein silver-lining strength
+    float farDistance = 30000.0f;
+    float ambient = 0.5f;        // sky ambient reaching cloud interiors
+};
+
 // Aerial-perspective fog (ADR-0016 environment). Lit color lerps toward `color`
 // by 1-exp(-density*dist) from the camera, so distant terrain dissolves into
 // atmosphere — a depth cue that also hides the far clip / LOD seams. Mirrors the
@@ -320,6 +364,8 @@ struct SceneLighting {
     ShadowArtistic shadowArtistic;
     ProceduralSky sky;
     FogParams fog;
+    SkyScatteringParams skyScattering;      // cinematic-sky opt-in (per level)
+    VolumetricCloudParams volumetricClouds; // cloud-slab opt-in (per level)
     float exposure = 1.0f;
     float ambientMultiplier = 0.3f;
     Vec3 ambientTint{1, 1, 1};   // grades the ambient/irradiance term only
@@ -514,6 +560,13 @@ public:
     bool ssaoEnabled = true;
     bool ssrEnabled = true;
     bool reflectionProbesEnabled = true;
+
+    // Cinematic sky runtime gates (AND-ed with the level's opt-in params, so a
+    // HUD toggle can kill either without reloading). cloudStepsOverride > 0
+    // replaces the level's view-march step count (quality/perf knob).
+    bool skyScatteringEnabled = true;
+    bool volumetricCloudsEnabled = true;
+    int  cloudStepsOverride = 0;
 
     // Resolution scale for the screen-space effect buffers (SSAO + SSR), a
     // fraction of the framebuffer. These effects are low/medium frequency, so

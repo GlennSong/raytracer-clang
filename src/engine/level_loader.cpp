@@ -3765,8 +3765,52 @@ bool LevelLoader::load(const std::string& path,
     // Environment map (equirectangular .hdr) — bound before probes so the bake
     // captures it for IBL (ADR-0016). Lives under the "environment" object as
     // "hdr"; path is relative to the level file.
+    //
+    // Cinematic-sky opt-ins (reset first — the RenderView/renderer are reused
+    // across loads, so a previous level's sky must not leak):
+    //   "environment.sky"    {"model": "scattering", turbidity?, groundAlbedo?,
+    //                         brightness?, mieG?, multiScatter?, aerial?,
+    //                         sunAngularRadius?} -> LUT scattering sky + aerial
+    //                         perspective (replaces exp fog while active).
+    //   "environment.clouds" {coverage?, bottom?, top?, density?, noiseScale?,
+    //                         wind?, steps?, lightSteps?, phaseG?, far?,
+    //                         ambient?, enabled?} -> volumetric cloud slab
+    //                         (retires the 2D FBM overlay while active).
+    view.lighting.skyScattering = SkyScatteringParams{};
+    view.lighting.volumetricClouds = VolumetricCloudParams{};
     if (root.contains("environment") && root["environment"].is_object()) {
         const auto& env = root["environment"];
+        if (env.contains("sky") && env["sky"].is_object()) {
+            const auto& s = env["sky"];
+            if (s.value("model", std::string()) == "scattering") {
+                auto& ss = view.lighting.skyScattering;
+                ss.enabled = true;
+                ss.turbidity        = s.value("turbidity", ss.turbidity);
+                ss.brightness       = s.value("brightness", ss.brightness);
+                ss.mieG             = s.value("mieG", ss.mieG);
+                ss.multiScatter     = s.value("multiScatter", ss.multiScatter);
+                ss.aerialDensity    = s.value("aerial", ss.aerialDensity);
+                ss.sunAngularRadius = s.value("sunAngularRadius", ss.sunAngularRadius);
+                if (s.contains("groundAlbedo"))
+                    ss.groundAlbedo = parseVec3(s["groundAlbedo"], ss.groundAlbedo);
+            }
+        }
+        if (env.contains("clouds") && env["clouds"].is_object()) {
+            const auto& c = env["clouds"];
+            auto& vc = view.lighting.volumetricClouds;
+            vc.enabled     = c.value("enabled", true);
+            vc.coverage    = c.value("coverage", vc.coverage);
+            vc.bottom      = c.value("bottom", vc.bottom);
+            vc.top         = c.value("top", vc.top);
+            vc.density     = c.value("density", vc.density);
+            vc.noiseScale  = c.value("noiseScale", vc.noiseScale);
+            vc.wind        = c.value("wind", vc.wind);
+            vc.steps       = c.value("steps", vc.steps);
+            vc.lightSteps  = c.value("lightSteps", vc.lightSteps);
+            vc.phaseG      = c.value("phaseG", vc.phaseG);
+            vc.farDistance = c.value("far", vc.farDistance);
+            vc.ambient     = c.value("ambient", vc.ambient);
+        }
         // Aerial-perspective fog (matches the offline tracer's Scene::fog). Lives
         // under "environment" alongside the sky; pushed to the renderer via the
         // lighting block (setLights). density 0 = off.
