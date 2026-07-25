@@ -396,6 +396,119 @@ TEST_CASE(buildings_grow_from_terrain_base) {
     CHECK(sloped > 0);   // the slope actually moved buildings off y=0
 }
 
+TEST_CASE(parcel_overrides_rescale_the_lot_grain) {
+    // citysim.parcel (8km-city P3): a piedmont-scale metro lays 150 m+ blocks,
+    // so the level can ask for bigger lots. The override rescales the per-
+    // district grain; unset fields keep today's tuning exactly.
+    LotParams p;
+    p.seed = 3;
+    LotPlanDebug base;
+    growLotBuildings(squareBlocks(), p, &base);
+    CHECK(!base.lots.empty());
+
+    LotParams big = p;
+    big.parcelTargetArea = 840;    // 2x the stock 420
+    big.parcelFrontWidth = 32;     // 2x the stock 16
+    big.parcelLotDepth = 42;       // 1.5x the stock 28
+    big.parcelMinArea = 220;
+    LotPlanDebug bigDbg;
+    growLotBuildings(squareBlocks(), big, &bigDbg);
+    CHECK(!bigDbg.lots.empty());
+    CHECK(bigDbg.lots.size() < base.lots.size());   // bigger grain = fewer lots
+    auto medianArea = [](const std::vector<Poly2>& lots) {
+        std::vector<Real> a;
+        for (const Poly2& l : lots) a.push_back(area(l));
+        std::sort(a.begin(), a.end());
+        return a.empty() ? Real(0) : a[a.size() / 2];
+    };
+    CHECK(medianArea(bigDbg.lots) > medianArea(base.lots) * 1.3);
+    // Explicitly-unset overrides (< 0) change NOTHING: same plan as default.
+    LotParams same = p;
+    same.parcelTargetArea = -1;
+    same.parcelMinEdge = -1;
+    LotPlanDebug sameDbg;
+    growLotBuildings(squareBlocks(), same, &sameDbg);
+    CHECK(sameDbg.lots.size() == base.lots.size());
+}
+
+TEST_CASE(landmark_quotas_run_per_hub_cluster) {
+    // 8km-city P3: multi-site metros plan their civic anchors PER HUB CLUSTER
+    // — the primary city (cluster 0) keeps the global table (one courthouse),
+    // and every satellite town is guaranteed its own school and church when it
+    // has enough candidate lots. Planned, never rolled; deterministic.
+    std::vector<LandmarkCand> cands;
+    auto addLots = [&](int cluster, DistrictTag tag, int n, Vec2 base) {
+        for (int i = 0; i < n; ++i) {
+            LandmarkCand c;
+            c.tag = tag;
+            c.shortSide = 16 + (i % 5);
+            c.area = 360 + 8 * i;
+            c.pos = base + Vec2((i % 6) * 40.0, (i / 6) * 40.0);
+            c.cluster = cluster;
+            cands.push_back(c);
+        }
+    };
+    addLots(0, DistrictTag::Financial, 8, {0, 0});        // the city core...
+    addLots(0, DistrictTag::Commercial, 12, {150, 0});
+    addLots(0, DistrictTag::Residential, 14, {0, 200});
+    addLots(1, DistrictTag::Residential, 14, {2000, 0});  // a residential town
+    addLots(2, DistrictTag::OldTown, 12, {0, 2000});      // an old-town town
+    const std::vector<int> plan = planLandmarks(cands, Vec2(0, 0), 60.0);
+    CHECK(plan.size() == cands.size());
+    auto countIn = [&](int cluster, LandmarkKind k) {
+        int n = 0;
+        for (std::size_t i = 0; i < plan.size(); ++i)
+            if (cands[i].cluster == cluster &&
+                plan[i] == static_cast<int>(k)) ++n;
+        return n;
+    };
+    CHECK(countIn(0, LandmarkKind::Courthouse) == 1);   // the city's table holds
+    CHECK(countIn(1, LandmarkKind::School) >= 1);       // each town keeps its
+    CHECK(countIn(1, LandmarkKind::Church) >= 1);       // guaranteed anchors
+    CHECK(countIn(2, LandmarkKind::School) >= 1);
+    CHECK(countIn(2, LandmarkKind::Church) >= 1);
+    CHECK(countIn(2, LandmarkKind::Market) == 1);       // old town: market hall
+    for (std::size_t i = 0; i < plan.size(); ++i)       // city-only anchors
+        if (cands[i].cluster != 0) {                    // never leave the city
+            CHECK(plan[i] != static_cast<int>(LandmarkKind::Courthouse));
+            CHECK(plan[i] != static_cast<int>(LandmarkKind::Capitol));
+        }
+    CHECK(plan == planLandmarks(cands, Vec2(0, 0), 60.0));   // deterministic
+
+    // ...and the guarantee holds through the FULL lot pass: blocks around a
+    // residential hub far from the city (cluster 1) grow their own school and
+    // church, deterministically across two runs.
+    LotParams p;
+    p.seed = 11;
+    p.center = {0, 0};
+    p.hubs = {{Vec2(0, 0), 0}, {Vec2(900, 0), 2}};
+    p.hubClusters = {0, 1};
+    p.hubRadius = 260;
+    std::vector<Poly2> blocks;
+    auto grid = [&](Vec2 c) {
+        for (int gx = -1; gx <= 1; ++gx)
+            for (int gz = -1; gz <= 1; ++gz) {
+                Real cx = c.x + gx * 110.0, cz = c.y + gz * 110.0, h = 48.0;
+                blocks.push_back({{cx - h, cz - h}, {cx + h, cz - h},
+                                  {cx + h, cz + h}, {cx - h, cz + h}});
+            }
+    };
+    grid({0, 0});
+    grid({900, 0});
+    std::vector<LotBuilding> b = growLotBuildings(blocks, p);
+    int townSchools = 0, townChurches = 0;
+    for (const LotBuilding& lb : b) {
+        if (lb.site.x < 450) continue;   // the town's half of the world
+        if (lb.recipe == "school") ++townSchools;
+        if (lb.recipe == "church") ++townChurches;
+    }
+    CHECK(townSchools >= 1);
+    CHECK(townChurches >= 1);
+    std::vector<LotBuilding> b2 = growLotBuildings(blocks, p);
+    CHECK(b.size() == b2.size());
+    for (std::size_t i = 0; i < b.size(); ++i) CHECK(b[i].recipe == b2[i].recipe);
+}
+
 TEST_CASE(landmarks_are_planned_not_rolled) {
     // The planner fills civic quotas on the BEST lots: a city grown over real
     // blocks gets exactly one courthouse (on the most central financial lot),

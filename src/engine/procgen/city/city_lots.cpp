@@ -1160,6 +1160,17 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     };
     std::vector<BlockInfo> binfos;
     std::vector<LotCand> cands;
+    // Level-authored parcel grain (citysim.parcel, 8km-city P3): the override
+    // RESCALES the district tuning below relative to the stock defaults —
+    // absent (<= 0) every factor is 1 and the tuning is exactly today's.
+    const ParcelParams stockPP;
+    const Real ppAreaScale = p.parcelTargetArea > 0
+        ? p.parcelTargetArea / stockPP.targetArea : Real(1);
+    const Real ppFrontScale = p.parcelFrontWidth > 0
+        ? p.parcelFrontWidth / stockPP.frontWidth : Real(1);
+    const Real ppDepthScale = p.parcelLotDepth > 0
+        ? p.parcelLotDepth / stockPP.lotDepth : Real(1);
+    const Real ppMinArea = p.parcelMinArea > 0 ? p.parcelMinArea : p.minLotArea;
     for (std::size_t bi = 0; bi < blocks.size(); ++bi) {
         const Poly2& block = blocks[bi];
         if (block.size() < 3) continue;
@@ -1171,8 +1182,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         BlockInfo bf;
         bf.pp.seed = mix(static_cast<uint32_t>(bi), p.seed);
         bf.pp.targetArea = 480;
-        bf.pp.minArea = p.minLotArea;
-        bf.pp.minEdge = p.minShort;
+        bf.pp.minArea = ppMinArea;
+        bf.pp.minEdge = p.parcelMinEdge > 0 ? p.parcelMinEdge : p.minShort;
+        if (p.parcelCourtMinArea > 0) bf.pp.courtMinArea = p.parcelCourtMinArea;
         // DENSITY is a district decision too (device: "feels like a small
         // town"): urban quarters parcel small and build nearly wall-to-wall;
         // the financial core keeps big tower plates; suburbs keep their yards.
@@ -1197,7 +1209,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             case DistrictTag::OldTown:     // small, tight, narrow
                 bf.pp.frontWidth = 11; bf.pp.lotDepth = 22;
                 bf.pp.targetArea = 210;
-                bf.pp.minArea = std::min(p.minLotArea, Real(80));
+                bf.pp.minArea = std::min(ppMinArea, Real(80));
                 bf.lotSetback = 0.5; bf.buildChance = 0.98; break;
             case DistrictTag::Industrial:  // big parcels
                 bf.pp.frontWidth = 42; bf.pp.lotDepth = 52;
@@ -1206,6 +1218,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 bf.pp.frontWidth = 18; bf.pp.lotDepth = 27;
                 bf.pp.targetArea = 400; break;
         }
+        // The parcel override rescales the district grain it just chose.
+        bf.pp.targetArea *= ppAreaScale;
+        bf.pp.frontWidth *= ppFrontScale;
+        bf.pp.lotDepth *= ppDepthScale;
         // Sometimes a WHOLE small block is a park (device: "the green space
         // doesn't conform to the city block"): the pad is the block's own
         // road-inset interior, so its edges follow the surrounding streets
@@ -1249,93 +1265,39 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         }
     }
 
-    // ---- PASS B: the LANDMARK planner ---------------------------------------
-    // Civic anchors are PLACED, never rolled: quotas per city (one courthouse,
-    // one hospital, a school per residential quarter...) filled by the best-
+    // ---- PASS B: the LANDMARK planner (architect, per hub cluster) ----------
+    // Civic anchors are PLACED, never rolled: quotas filled by the best-
     // scoring eligible lot — biggest, and for the courthouse most central.
+    // 8km-city P3: the quotas run PER HUB CLUSTER now (nearest-hub assignment
+    // via hubClusters): the primary city keeps the full civic table; every
+    // satellite town is guaranteed its own school + church. No hubs (or no
+    // cluster ids) = one city, exactly the old plan.
     {
-        int nRes = 0, nCom = 0, nFin = 0, nOld = 0, nInd = 0;
-        for (const LotCand& c : cands) {
-            switch (binfos[c.block].tag) {
-                case DistrictTag::Residential: ++nRes; break;
-                case DistrictTag::Commercial:  ++nCom; break;
-                case DistrictTag::Financial:   ++nFin; break;
-                case DistrictTag::OldTown:     ++nOld; break;
-                case DistrictTag::Industrial:  ++nInd; break;
+        auto clusterOf = [&](const Vec2& q) -> int {
+            if (p.hubs.empty() || p.hubClusters.size() != p.hubs.size())
+                return 0;
+            std::size_t best = 0;
+            Real bd = 1e30;
+            for (std::size_t i = 0; i < p.hubs.size(); ++i) {
+                const Real dd = (q - p.hubs[i].first).lengthSquared();
+                if (dd < bd) { bd = dd; best = i; }
             }
-        }
-        struct Want {
-            LandmarkKind kind;
-            int count;
-            Real minShort, minArea;
-            bool wantCore;   // score by centrality too (the courthouse)
-            DistrictTag tagA, tagB;   // eligible districts (B may repeat A)
+            return p.hubClusters[best];
         };
-        const int total = static_cast<int>(cands.size());
-        const Want wants[] = {
-            {LandmarkKind::Capitol, (nFin + nCom) >= 6 ? 1 : 0, 13.0, 300.0,
-             true, DistrictTag::Financial, DistrictTag::Commercial},
-            {LandmarkKind::University, total >= 60 ? 1 : 0, 15.0, 380.0, false,
-             DistrictTag::Residential, DistrictTag::Commercial},
-            {LandmarkKind::Courthouse, nFin >= 2 ? 1 : 0, 12.0, 260.0, true,
-             DistrictTag::Financial, DistrictTag::Financial},
-            {LandmarkKind::Hospital, nCom >= 6 ? 1 : 0, 15.0, 380.0, false,
-             DistrictTag::Commercial, DistrictTag::Commercial},
-            {LandmarkKind::School, nRes >= 6 ? 1 + nRes / 50 : 0, 13.0, 320.0,
-             false, DistrictTag::Residential, DistrictTag::Residential},
-            {LandmarkKind::Police, nCom >= 4 ? 1 : 0, 9.0, 140.0, false,
-             DistrictTag::Commercial, DistrictTag::Commercial},
-            {LandmarkKind::Fire, (nCom + nInd) >= 8 ? 1 + total / 150 : 0,
-             11.0, 220.0, false, DistrictTag::Commercial,
-             DistrictTag::Industrial},
-            {LandmarkKind::Market, nOld >= 3 ? 1 : (nCom >= 8 ? 1 : 0),
-             10.0, 180.0, false,
-             nOld >= 3 ? DistrictTag::OldTown : DistrictTag::Commercial,
-             nOld >= 3 ? DistrictTag::OldTown : DistrictTag::Commercial},
-            {LandmarkKind::Church, nRes >= 8 ? 1 + nRes / 70 : 0, 10.0, 180.0,
-             false, DistrictTag::Residential, DistrictTag::OldTown},
-            {LandmarkKind::Library, nCom >= 5 ? 1 : 0, 12.0, 240.0, false,
-             DistrictTag::Commercial, DistrictTag::Residential},
-            {LandmarkKind::Museum, nFin >= 3 ? 1 : 0, 14.0, 320.0, true,
-             DistrictTag::Financial, DistrictTag::Commercial},
-        };
-        for (const Want& w : wants) {
-            for (int k = 0; k < w.count; ++k) {
-                int best = -1;
-                Real bestScore = -1;
-                // Preferred thresholds first; if no lot in the district can
-                // carry them (small towns parcel small), relax once — the
-                // quarter still gets its school, just a modest one.
-                for (Real relax : {Real(1.0), Real(0.72)}) {
-                    for (std::size_t ci = 0; ci < cands.size(); ++ci) {
-                        const LotCand& c = cands[ci];
-                        if (c.landmark >= 0) continue;
-                        const DistrictTag t = binfos[c.block].tag;
-                        if (t != w.tagA && t != w.tagB) continue;
-                        OBB2 ob = orientedBoundingBox(c.lot.footprint);
-                        const Real shortS = 2 * std::min(ob.half[0], ob.half[1]);
-                        const Real ar = area(c.lot.footprint);
-                        if (shortS < w.minShort * relax || ar < w.minArea * relax)
-                            continue;
-                        Real score = ar;
-                        if (w.wantCore) {
-                            const Real r =
-                                (centroid(c.lot.footprint) - p.center).length();
-                            score *= 0.4 + std::max(
-                                Real(0),
-                                1.0 - r / std::max(Real(1), p.innerRadius));
-                        }
-                        if (score > bestScore) {
-                            bestScore = score;
-                            best = static_cast<int>(ci);
-                        }
-                    }
-                    if (best >= 0) break;
-                }
-                if (best < 0) break;   // no lot can carry it: skip the quota
-                cands[best].landmark = static_cast<int>(w.kind);
-            }
+        std::vector<LandmarkCand> lmc(cands.size());
+        for (std::size_t ci = 0; ci < cands.size(); ++ci) {
+            const LotCand& c = cands[ci];
+            OBB2 ob = orientedBoundingBox(c.lot.footprint);
+            lmc[ci].tag = binfos[c.block].tag;
+            lmc[ci].shortSide = 2 * std::min(ob.half[0], ob.half[1]);
+            lmc[ci].area = area(c.lot.footprint);
+            lmc[ci].pos = centroid(c.lot.footprint);
+            lmc[ci].cluster = clusterOf(lmc[ci].pos);
         }
+        const std::vector<int> placed =
+            planLandmarks(lmc, p.center, p.innerRadius);
+        for (std::size_t ci = 0; ci < cands.size(); ++ci)
+            cands[ci].landmark = placed[ci];
     }
 
     // ---- PASS C: grow every lot (landmarks use their PLACED recipes) --------
@@ -2132,7 +2094,28 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
     // on the boundary roads' open sides so the outskirts build up too.
     std::vector<Poly2> rim = edgeBlocks(rg, blocks, edgeParams);
     blocks.insert(blocks.end(), rim.begin(), rim.end());
-    r.lots = growLotBuildings(blocks, params, &r.plan, &r.parts, &rgSampled,
+    // Per-hub-cluster landmark quotas (8km-city P3): the loader forwards hubs
+    // as {pos, kind} only, so recover each hub's SITE id (0 = the primary
+    // city, 1+ = satellite towns) from the nets' own cityHubs by position —
+    // both lists come from the same CityHub records. A caller that already
+    // filled hubClusters keeps its own mapping.
+    LotParams lp = params;
+    if (!lp.hubs.empty() && lp.hubClusters.size() != lp.hubs.size()) {
+        lp.hubClusters.assign(lp.hubs.size(), 0);
+        for (std::size_t i = 0; i < lp.hubs.size(); ++i) {
+            bool found = false;
+            for (const RoadNet& net : nets) {
+                for (const CityHub& h : net.cityHubs)
+                    if ((h.pos - lp.hubs[i].first).lengthSquared() < 1e-6) {
+                        lp.hubClusters[i] = h.site;
+                        found = true;
+                        break;
+                    }
+                if (found) break;
+            }
+        }
+    }
+    r.lots = growLotBuildings(blocks, lp, &r.plan, &r.parts, &rgSampled,
                               roadClearance);
     return r;
 }

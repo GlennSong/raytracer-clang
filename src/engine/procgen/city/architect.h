@@ -5,6 +5,7 @@
 #include "shape_grammar.h"  // BuildingParams (the recipe the architect fills)
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace engine {
 
@@ -89,6 +90,28 @@ enum class LandmarkKind : uint8_t {
 const char* landmarkName(LandmarkKind k);
 BuildingRecipe architectLandmark(LandmarkKind kind, Real shortSide, Real area,
                                  uint32_t seed);
+
+// The LANDMARK QUOTA PLAN (8km-city P3, per-hub-cluster): civic anchors are
+// placed on the best-scoring lots, never rolled — and the quotas are now
+// evaluated PER HUB CLUSTER. Cluster 0 (the primary city) keeps the full
+// city-wide table (one capitol, courthouse, hospital, a school per
+// residential quarter, ...); every other cluster is a satellite TOWN
+// guaranteed at least its own school and church (and, for an old-town
+// settlement, a market hall) once it has enough candidate lots — a town is a
+// settlement with its own anchors, not a suburb of the city's. Purely
+// best-score (no rng), so the plan is deterministic in the candidates' order.
+struct LandmarkCand {
+    DistrictTag tag = DistrictTag::Residential;  // the lot's district
+    Real shortSide = 0;    // lot OBB short side (m)
+    Real area = 0;         // lot polygon area (m²)
+    Vec2 pos{0, 0};        // lot centroid (world XZ)
+    int cluster = 0;       // hub-cluster id (0 = the city; 1+ = towns)
+};
+// One entry per candidate: the assigned LandmarkKind as int, -1 = none.
+// `cityCenter`/`innerRadius` feed the centrality scoring of the wantCore
+// picks (capitol, courthouse, museum), exactly as the city-only planner did.
+std::vector<int> planLandmarks(const std::vector<LandmarkCand>& cands,
+                               const Vec2& cityCenter, Real innerRadius);
 
 // One ROWHOUSE unit's dressed params for the RowStrip massing: the lot pass
 // splits the strip and calls this per unit, so neighbours vary in cladding

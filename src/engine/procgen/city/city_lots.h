@@ -82,6 +82,27 @@ struct LotParams {
     // DistrictMap::hubs (kind mirrors DistrictTag order). Empty = radial rings.
     std::vector<std::pair<Vec2, int>> hubs;
     Real hubRadius = 220.0;
+    // Hub CLUSTER ids parallel to `hubs` (multi-site metros, 8km-city P3):
+    // CityHub::site — 0 = the primary city, 1+ = satellite towns. The landmark
+    // planner runs its quotas PER CLUSTER (the city keeps the full civic
+    // table; each town is guaranteed its own school + church). Empty = every
+    // hub is the city; growLotBuildingsOnNets recovers the ids from the nets'
+    // own cityHubs when the caller leaves this unset.
+    std::vector<int> hubClusters;
+    // Level-authored PARCEL overrides (citysim.parcel — the 8km-metro knob:
+    // 150 m+ blocks parcel bigger lots). <= 0 = unset: the parceler keeps its
+    // compiled-in district tuning EXACTLY. When set, targetArea / frontWidth /
+    // lotDepth RESCALE the per-district grain (each district's value is
+    // multiplied by override/stock-default, so financial plates stay the
+    // widest and old town the tightest — the whole city just parcels bigger),
+    // while minArea / minEdge / courtMinArea replace their base values
+    // outright (they are floors, not grain).
+    Real parcelTargetArea = -1;     // stock 420 (ParcelParams::targetArea)
+    Real parcelMinArea = -1;        // stock: minLotArea above
+    Real parcelMinEdge = -1;        // stock: minShort above
+    Real parcelFrontWidth = -1;     // stock 16 (ParcelParams::frontWidth)
+    Real parcelLotDepth = -1;       // stock 28 (ParcelParams::lotDepth)
+    Real parcelCourtMinArea = -1;   // stock 400 (ParcelParams::courtMinArea)
     uint32_t seed = 1;
     // TERRAIN sampler (world y at x,z): buildings grow from their graded pad
     // plane (the ENTRANCE-side grade, so the front door sits level with the

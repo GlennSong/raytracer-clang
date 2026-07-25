@@ -1164,6 +1164,132 @@ BuildingRecipe architectLandmark(LandmarkKind kind, Real shortSide, Real area,
     return out;
 }
 
+std::vector<int> planLandmarks(const std::vector<LandmarkCand>& cands,
+                               const Vec2& cityCenter, Real innerRadius) {
+    std::vector<int> out(cands.size(), -1);
+
+    // The clusters present, ascending: the city (0) plans first, towns after —
+    // a stable order so the plan is deterministic in the candidates' order.
+    std::vector<int> clusters;
+    for (const LandmarkCand& c : cands)
+        if (std::find(clusters.begin(), clusters.end(), c.cluster) ==
+            clusters.end())
+            clusters.push_back(c.cluster);
+    std::sort(clusters.begin(), clusters.end());
+
+    struct Want {
+        LandmarkKind kind;
+        int count;
+        Real minShort, minArea;
+        bool wantCore;            // score by centrality too (the courthouse)
+        DistrictTag tagA, tagB;   // eligible districts (B may repeat A)
+        // TOWN guarantee: after both district-strict relax passes fail, take
+        // the best lot in the cluster regardless of district — a small town
+        // still gets its school even when its parcels all zoned commercial.
+        bool anyDistrict = false;
+    };
+
+    for (const int cl : clusters) {
+        int nRes = 0, nCom = 0, nFin = 0, nOld = 0, nInd = 0, total = 0;
+        for (const LandmarkCand& c : cands) {
+            if (c.cluster != cl) continue;
+            ++total;
+            switch (c.tag) {
+                case DistrictTag::Residential: ++nRes; break;
+                case DistrictTag::Commercial:  ++nCom; break;
+                case DistrictTag::Financial:   ++nFin; break;
+                case DistrictTag::OldTown:     ++nOld; break;
+                case DistrictTag::Industrial:  ++nInd; break;
+            }
+        }
+        std::vector<Want> wants;
+        if (cl == 0) {
+            // The CITY keeps the full civic table (quotas as before).
+            wants = {
+                {LandmarkKind::Capitol, (nFin + nCom) >= 6 ? 1 : 0, 13.0, 300.0,
+                 true, DistrictTag::Financial, DistrictTag::Commercial},
+                {LandmarkKind::University, total >= 60 ? 1 : 0, 15.0, 380.0,
+                 false, DistrictTag::Residential, DistrictTag::Commercial},
+                {LandmarkKind::Courthouse, nFin >= 2 ? 1 : 0, 12.0, 260.0, true,
+                 DistrictTag::Financial, DistrictTag::Financial},
+                {LandmarkKind::Hospital, nCom >= 6 ? 1 : 0, 15.0, 380.0, false,
+                 DistrictTag::Commercial, DistrictTag::Commercial},
+                {LandmarkKind::School, nRes >= 6 ? 1 + nRes / 50 : 0, 13.0,
+                 320.0, false, DistrictTag::Residential,
+                 DistrictTag::Residential},
+                {LandmarkKind::Police, nCom >= 4 ? 1 : 0, 9.0, 140.0, false,
+                 DistrictTag::Commercial, DistrictTag::Commercial},
+                {LandmarkKind::Fire, (nCom + nInd) >= 8 ? 1 + total / 150 : 0,
+                 11.0, 220.0, false, DistrictTag::Commercial,
+                 DistrictTag::Industrial},
+                {LandmarkKind::Market, nOld >= 3 ? 1 : (nCom >= 8 ? 1 : 0),
+                 10.0, 180.0, false,
+                 nOld >= 3 ? DistrictTag::OldTown : DistrictTag::Commercial,
+                 nOld >= 3 ? DistrictTag::OldTown : DistrictTag::Commercial},
+                {LandmarkKind::Church, nRes >= 8 ? 1 + nRes / 70 : 0, 10.0,
+                 180.0, false, DistrictTag::Residential, DistrictTag::OldTown},
+                {LandmarkKind::Library, nCom >= 5 ? 1 : 0, 12.0, 240.0, false,
+                 DistrictTag::Commercial, DistrictTag::Residential},
+                {LandmarkKind::Museum, nFin >= 3 ? 1 : 0, 14.0, 320.0, true,
+                 DistrictTag::Financial, DistrictTag::Commercial},
+            };
+        } else {
+            // A satellite TOWN: its guaranteed anchors — the school and the
+            // church — plus a market hall when the settlement is an old town.
+            // No capitol/courthouse/hospital: those stay the city's.
+            wants = {
+                {LandmarkKind::School, total >= 10 ? 1 : 0, 13.0, 320.0, false,
+                 DistrictTag::Residential, DistrictTag::OldTown, true},
+                {LandmarkKind::Church, total >= 8 ? 1 : 0, 10.0, 180.0, false,
+                 DistrictTag::Residential, DistrictTag::OldTown, true},
+                {LandmarkKind::Market, nOld >= 6 ? 1 : 0, 10.0, 180.0, false,
+                 DistrictTag::OldTown, DistrictTag::Commercial},
+            };
+        }
+        for (const Want& w : wants) {
+            for (int k = 0; k < w.count; ++k) {
+                int best = -1;
+                Real bestScore = -1;
+                // Preferred thresholds first; if no lot in the district can
+                // carry them (small towns parcel small), relax once — the
+                // quarter still gets its school, just a modest one. Town
+                // guarantees add a final any-district pass.
+                struct Pass { Real relax; bool any; };
+                const Pass passes[] = {
+                    {1.0, false}, {0.72, false}, {0.72, w.anyDistrict}};
+                const int nPasses = w.anyDistrict ? 3 : 2;
+                for (int pi = 0; pi < nPasses; ++pi) {
+                    const Pass& ps = passes[pi];
+                    for (std::size_t ci = 0; ci < cands.size(); ++ci) {
+                        const LandmarkCand& c = cands[ci];
+                        if (out[ci] >= 0 || c.cluster != cl) continue;
+                        if (!ps.any && c.tag != w.tagA && c.tag != w.tagB)
+                            continue;
+                        if (c.shortSide < w.minShort * ps.relax ||
+                            c.area < w.minArea * ps.relax)
+                            continue;
+                        Real score = c.area;
+                        if (w.wantCore) {
+                            const Real r = (c.pos - cityCenter).length();
+                            score *= 0.4 + std::max(
+                                Real(0),
+                                1.0 - r / std::max(Real(1), innerRadius));
+                        }
+                        if (score > bestScore) {
+                            bestScore = score;
+                            best = static_cast<int>(ci);
+                        }
+                    }
+                    if (best >= 0) break;
+                }
+                if (best < 0) break;   // no lot can carry it: skip the quota
+                out[best] = static_cast<int>(w.kind);
+            }
+        }
+    }
+    return out;
+}
+
 BuildingParams architectRowUnit(uint32_t seed, int floors) {
     Hash rng(seed * 2654435761u ^ 0x0BADCAFEu);
     BuildingParams p;

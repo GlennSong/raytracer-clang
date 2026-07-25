@@ -6,6 +6,8 @@ build-native/
 build-phys/
 build-web/
 build-web-oz/
+# per-agent / per-experiment build dirs
+build-*/
 raytracer
 viewer
 run_tests

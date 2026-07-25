@@ -2129,6 +2129,19 @@ static GrownLots growCityLots(const std::vector<engine::RoadNet>& nets,
     lp.innerRadius = cs.value("downtownRadius", 55.0);
     lp.midRadius = cs.value("midtownRadius", 135.0);
     lp.plinth = cs.value("plinth", lp.plinth);   // base height above the pad
+    // Level-authored parcel grain ("parcel", 8km-city P3): piedmont-scale
+    // metros lay 150 m+ blocks, so the level can ask for bigger lots. Six
+    // knobs only; absent = the compiled-in district tuning, untouched
+    // (city_lots rescales its per-district grain from these).
+    if (cs.contains("parcel") && cs["parcel"].is_object()) {
+        const auto& pj = cs["parcel"];
+        lp.parcelTargetArea = pj.value("targetArea", lp.parcelTargetArea);
+        lp.parcelMinArea = pj.value("minArea", lp.parcelMinArea);
+        lp.parcelMinEdge = pj.value("minEdge", lp.parcelMinEdge);
+        lp.parcelFrontWidth = pj.value("frontWidth", lp.parcelFrontWidth);
+        lp.parcelLotDepth = pj.value("lotDepth", lp.parcelLotDepth);
+        lp.parcelCourtMinArea = pj.value("courtMinArea", lp.parcelCourtMinArea);
+    }
     // Polycentric zoning: a metro recipe leaves its hubs (with district kinds)
     // on the net — forward them so lots zone by nearest hub, not one centre.
     for (const engine::RoadNet& n : nets)
