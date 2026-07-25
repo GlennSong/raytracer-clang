@@ -104,6 +104,17 @@ RoadGraph mergeShortEdges(const RoadGraph& graph, Real minLen, int maxDegree = 4
 RoadGraph consolidateJunctionSpans(const RoadGraph& graph, Real minSpan,
                                    int maxDegree = 4);
 
+// Corner-cut degree-2 vertices whose deflection exceeds maxTurn: delete the
+// vertex and chord its neighbours. Strictly bend-reducing (terminates),
+// face-preserving, junction-pinned — the backstop for bends relaxSharpBends
+// cannot converge.
+RoadGraph cutSharpCorners(const RoadGraph& graph, Real maxTurn);
+
+// Drop exact parallel duplicate edges (same node pair), keeping the widest.
+// A parallel pair is a two-edge loop: an un-relaxable 180-degree fold to any
+// chain walk and a sliver face to the block extractor.
+RoadGraph dropParallelEdges(const RoadGraph& graph);
+
 }  // namespace engine
 
 #endif

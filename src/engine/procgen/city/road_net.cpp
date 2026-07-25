@@ -2223,10 +2223,26 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         {
             const double minBlockEdge = g.value("min_block_edge", 0.0);
             if (minBlockEdge > 0.0) {
-                cg = consolidateJunctionSpans(cg, minBlockEdge, rules.maxDegree);
-                cg = capDegree(planarize(cg, 1.0), rules);
-                cg = mergeShortEdges(cg, g.value("min_road_len", 10.0), rules.maxDegree);
-                cg = consolidateJunctionSpans(cg, minBlockEdge, rules.maxDegree);
+                // Two rounds to a fixpoint: consolidation/merge move junctions
+                // (which can mint fresh folds) and relax shortens arcs (which
+                // can dip a span under the floor) — one pass of each leaves
+                // the other's debris. relaxSharpBends only moves degree-2
+                // curve nodes, junctions stay pinned, so the face subdivision
+                // survives (the reason the district cleanup was skipped
+                // here); 0.5 rad per node ≈ a >=60 m turn radius at the
+                // colonization step. dropParallelEdges first: a parallel pair
+                // is an un-relaxable 180-degree fold. NO FOLDBACKS is the
+                // contract (device: curved roads bending back on themselves
+                // break the swept geometry). Gated on minBlockEdge so shipped
+                // small-metro levels keep their exact geometry.
+                const double minLen = g.value("min_road_len", 10.0);
+                for (int round = 0; round < 2; ++round) {
+                    cg = dropParallelEdges(cg);
+                    cg = consolidateJunctionSpans(cg, minBlockEdge, rules.maxDegree);
+                    cg = capDegree(planarize(cg, 1.0), rules);
+                    cg = mergeShortEdges(cg, minLen, rules.maxDegree);
+                    cg = relaxSharpBends(cg, 0.5, 64);
+                }
             }
         }
     } else {

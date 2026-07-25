@@ -828,10 +828,11 @@ RoadGraph buildMetro(const MetroParams& p,
     {
         std::vector<std::vector<int>> adj(Ga.nodes.size());
         for (const RoadEdge& e : Ga.edges) { adj[e.a].push_back(e.b); adj[e.b].push_back(e.a); }
+        const int loopStride = 3;
         const double maxLoop = p.loopMax, minLoop = p.loopMin; const int hopBar = 9;
         std::vector<std::pair<int, int>> links;
         for (std::size_t i = 0; i < Ga.nodes.size(); ++i) {
-            if (adj[i].empty() || (i % 3) != 0) continue;
+            if (adj[i].empty() || (i % loopStride) != 0) continue;
             std::vector<int> d(Ga.nodes.size(), -1), q{static_cast<int>(i)}; d[i] = 0; std::size_t qi = 0;
             while (qi < q.size()) { int u = q[qi++]; if (d[u] >= hopBar) continue; for (int v : adj[u]) if (d[v] < 0) { d[v] = d[u] + 1; q.push_back(v); } }
             int best = -1; double bd = maxLoop * maxLoop;
@@ -978,17 +979,21 @@ RoadGraph buildMetro(const MetroParams& p,
             double cellLong =
                 std::min(siteBlock * kindBlockMul[kind] * 2.8,
                          kindCellLong[kind]);
-            // Big-block floor (8km-city plan P2): without it the per-district
-            // caps clamp fabric to ~70-156 m no matter the blockSize, and a
-            // 150 m min_road_len would then fight every fabric cell. The 1.35x
-            // headroom keeps jittered/crooked cell sides ABOVE the span
-            // minimum — cells at exactly the minimum get eaten by the
-            // junction-span consolidation and faces collapse.
+            double crook = kindCrook[kind];
+            // BIG-BLOCK fabric (P2.5, device: "big blocks but no grid
+            // structure"): explicit per-district cell tables at or above the
+            // span minimum, sized so a 500-900 m skeleton face subdivides
+            // into a legible 3-6 cell grid — a blunt floor at ~1.35x the
+            // minimum starved gridFill (1-2 cuts per face reads as no fabric
+            // at all). Grids go CRISP outside old town ("grids, radials");
+            // the small-metro caps above stay untouched for shipped levels.
             if (p.minBlockEdge > 0.0) {
-                cell = std::max(cell, p.minBlockEdge * 1.35);
-                cellLong = std::max(cellLong, p.minBlockEdge * 2.0);
+                const double bigCell[5]     = {160.0, 170.0, 190.0, 150.0, 240.0};
+                const double bigCellLong[5] = {240.0, 260.0, 320.0, 200.0, 400.0};
+                cell = std::max(bigCell[kind], p.minBlockEdge);
+                cellLong = std::max(bigCellLong[kind], p.minBlockEdge * 1.3);
+                if (kind != 3) crook = (kind == 4 ? 0.1 : 0.0);
             }
-            const double crook = kindCrook[kind];
             gridFill(f, cell, cellLong, collectorSpan, crook, rng, streets);
             for (const Cut& s : streets) {
                 int a = full.addNode(s.a, 6.0), b = full.addNode(s.b, 6.0);

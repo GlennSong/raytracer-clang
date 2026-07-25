@@ -375,6 +375,70 @@ RoadGraph mergeShortEdges(const RoadGraph& in, Real minLen, int maxDegree) {
     return out;
 }
 
+RoadGraph cutSharpCorners(const RoadGraph& in, Real maxTurn) {
+    // Corner-cut the bends relaxSharpBends cannot converge (easing one vertex
+    // can sharpen its neighbour — ping-pong): DELETE a degree-2 vertex whose
+    // deflection exceeds maxTurn and chord its neighbours. Removing a vertex
+    // strictly reduces the chain's bend, so this terminates, preserves every
+    // face, and never moves a junction. Sharpest first, deterministic.
+    RoadGraph g = in;
+    for (int guard = 0; guard < static_cast<int>(in.nodes.size()) + 16; ++guard) {
+        std::vector<int> deg(g.nodes.size(), 0);
+        std::vector<std::array<int, 2>> nbr(g.nodes.size(), {-1, -1});
+        std::vector<std::array<int, 2>> nbrEdge(g.nodes.size(), {-1, -1});
+        for (int ei = 0; ei < static_cast<int>(g.edges.size()); ++ei) {
+            const RoadEdge& e = g.edges[ei];
+            if (e.a == e.b) continue;
+            if (deg[e.a] < 2) { nbr[e.a][deg[e.a]] = e.b; nbrEdge[e.a][deg[e.a]] = ei; }
+            if (deg[e.b] < 2) { nbr[e.b][deg[e.b]] = e.a; nbrEdge[e.b][deg[e.b]] = ei; }
+            ++deg[e.a]; ++deg[e.b];
+        }
+        int worstV = -1;
+        Real worstCos = std::cos(maxTurn);   // sharper = smaller cosine
+        for (int v = 0; v < static_cast<int>(g.nodes.size()); ++v) {
+            if (deg[v] != 2) continue;
+            if (nbr[v][0] == nbr[v][1]) continue;   // parallel pair: dropParallelEdges' job
+            Vec2 d0 = g.nodes[v].pos - g.nodes[nbr[v][0]].pos;
+            Vec2 d1 = g.nodes[nbr[v][1]].pos - g.nodes[v].pos;
+            Real l0 = d0.length(), l1 = d1.length();
+            if (l0 < 1e-6 || l1 < 1e-6) continue;
+            Real c = dot(d0, d1) / (l0 * l1);
+            if (c < worstCos - 1e-9) { worstCos = c; worstV = v; }
+        }
+        if (worstV < 0) break;
+        // Chord: rewire the first edge to span both neighbours, drop the second.
+        RoadEdge& keep = g.edges[nbrEdge[worstV][0]];
+        const int other = nbr[worstV][1];
+        if (keep.a == worstV) keep.a = other; else keep.b = other;
+        const RoadEdge& gone = g.edges[nbrEdge[worstV][1]];
+        keep.width = std::max(keep.width, gone.width);
+        g.edges.erase(g.edges.begin() + nbrEdge[worstV][1]);
+    }
+    return g;
+}
+
+RoadGraph dropParallelEdges(const RoadGraph& in) {
+    // Exact parallel duplicates (two edges joining the same node pair) are
+    // degenerate two-edge loops: un-relaxable (the chord is a point), face
+    // slivers, and 180-degree "folds" to any chain audit. Keep the widest.
+    RoadGraph g = in;
+    std::vector<RoadEdge> kept;
+    kept.reserve(g.edges.size());
+    for (const RoadEdge& e : g.edges) {
+        if (e.a == e.b) continue;
+        bool dup = false;
+        for (RoadEdge& k : kept)
+            if ((k.a == e.a && k.b == e.b) || (k.a == e.b && k.b == e.a)) {
+                k.width = std::max(k.width, e.width);
+                dup = true;
+                break;
+            }
+        if (!dup) kept.push_back(e);
+    }
+    g.edges = std::move(kept);
+    return g;
+}
+
 RoadGraph consolidateJunctionSpans(const RoadGraph& in, Real minSpan,
                                    int maxDegree) {
     RoadGraph g = in;
