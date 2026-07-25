@@ -52,7 +52,9 @@ PY
 
 capture () {  # $1=outfile $2=waitquarters
   rm -f "$1"
-  RT_FRAME_DUMP="$1" "$VIEWER" "$LEVEL" --play >/dev/null 2>&1 &
+  # --edit, not --play: a citysim level's play state OWNS the camera every frame
+  # (player/spectate) and ignores the fly settings; the editor state honors them.
+  RT_FRAME_DUMP="$1" "$VIEWER" "$LEVEL" --edit >/dev/null 2>&1 &
   local pid=$!
   for _ in $(seq 1 "$2"); do [ -f "$1" ] && break; sleep 0.25; done
   sleep 0.5
