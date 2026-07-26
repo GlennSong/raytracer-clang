@@ -180,6 +180,16 @@ fragment float4 fragmentClouds(CloudsOut in [[stage_in]],
         }
     }
 
+    // AERIAL FADE (device: "a lot of white glare from the clouds at the
+    // horizon"): edge-on rays enter the slab kilometres out and stack into a
+    // solid white wall. Real distant clouds dissolve into the haze — fade this
+    // pixel's cloud contribution by its march ENTRY distance, on the same
+    // farDistance scale the march already carries (march.w): gone by ~far/3.
+    // Near-overhead cloud (small t0) is untouched.
+    float horizonFade = exp(-3.0 * t0 / max(u.march.w, 1.0));
+    scattered *= horizonFade;
+    transmittance = mix(1.0, transmittance, horizonFade);
+
     return float4(scattered, transmittance);
 }
 

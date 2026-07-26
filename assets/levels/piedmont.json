@@ -123,6 +123,7 @@
     "clouds": {
       "bottom": 900,
       "coverage": 0.35,
+      "far": 9000,
       "lightSteps": 6,
       "steps": 40,
       "top": 1600

@@ -189,7 +189,25 @@ static float3 scatteringSkyRadiance(float3 dir, texture2d<float> skyViewLut,
         // sun is ~1.5e4x its illuminance — that would blow half-float range).
         col += env.skySunColor * (env.skySunIntensity * 120.0) * t * disc;
     }
-    return col;
+    // CIRCUMSOLAR AUREOLE (device: "the sun looks like a white dot"): the warm
+    // few-degree glow around the sun is real forward-scattered radiance, not
+    // lens bloom — with the post bloom at a whisper the naked disc read as a
+    // dot. Two lobes: a tight hot core and a broad soft skirt, both tinted by
+    // transmittance so the glow oranges as the sun drops.
+    if (env.skySunIntensity > 0.0) {
+        float cosSun2 = clamp(dot(dir, env.skySunDir), 0.0, 1.0);
+        float Rg = env.skyPlanetRadius;
+        float r = Rg + max(env.skyCamHeight, 0.5);
+        float3 t = skySampleTransmittance(transLut, r, dir.y, Rg, env.skyAtmosRadius);
+        float core = pow(cosSun2, 4000.0);   // ~1.5 deg hot core
+        float skirt = pow(cosSun2, 250.0);   // ~7 deg soft skirt
+        col += env.skySunColor * env.skySunIntensity * t *
+               (core * 2.0 + skirt * 0.35);
+    }
+    // Half-float ceiling: the disc + aureole can sum past 65504 and the HDR
+    // target folds the overflow into a BLACK sun (measured: a dark disc at
+    // the sun's spot). Clamp comfortably under the format's edge.
+    return min(col, float3(60000.0));
 }
 
 // --- Procedural clouds (ADR-0016 step 3) ---
