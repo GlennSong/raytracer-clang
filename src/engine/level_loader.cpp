@@ -3854,6 +3854,19 @@ bool LevelLoader::load(const std::string& path,
             view.lighting.fog.color =
                 parseVec3(f.value("color", json()), view.lighting.fog.color);
         }
+        // Bloom, level-authored (device: "the bloom is really big"): the
+        // scattering sky pushed far more radiance over the default threshold
+        // than the analytic sky ever did, and until now the only dials were
+        // the debug HUD's. Absent keys keep the renderer defaults.
+        if (env.contains("bloom") && env["bloom"].is_object()) {
+            const auto& b = env["bloom"];
+            renderer.bloomEnabled = b.value("enabled", renderer.bloomEnabled);
+            renderer.bloomParams.threshold =
+                b.value("threshold", renderer.bloomParams.threshold);
+            renderer.bloomParams.knee = b.value("knee", renderer.bloomParams.knee);
+            renderer.bloomParams.intensity =
+                b.value("intensity", renderer.bloomParams.intensity);
+        }
         // Reset FIRST: only a successful HDR load below may raise this. It is
         // the flag DayNightSystem uses to yield to a baked HDR sun — leaving a
         // previous level's value in the reused renderer silently disabled the

@@ -17,6 +17,9 @@
 #include "scripting/agent_goals.h"      // scripted goal tables (ADR-0064)
 #include "scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
 #include "../../engine/scripting/script_vm.h"
+#include "../../engine/scripting/procgen_bindings.h"
+#include "../../engine/scripting/script_modules.h"
+#include "../../engine/script_assets.h"
 #include "../../log.h"
 #endif
 
@@ -341,6 +344,13 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         // fleetCarMesh, so the streets are never left empty. Lua runs only here;
         // the baked mesh is plain data (no sim state), so determinism is intact.
         engine::ScriptVM vehVM;
+        // Same layering as VehicleSystem's spawn path: mesh.* procgen builders
+        // plus the module loader — vehicles.lua begins with
+        // `require "vehicle_classes"`, so a bare VM fails its very first line
+        // and every city silently fell back to the box fleet ("why are we
+        // using the old cars?").
+        engine::openProcgenLibrary(vehVM);
+        engine::openModuleLoader(vehVM, engine::makeModuleSource(""));
         bool vehScript = assets && !params_.vehicleScript.empty();
         if (vehScript) {
             std::string err;

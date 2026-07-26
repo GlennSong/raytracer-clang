@@ -39,10 +39,8 @@ void DebugOverlaySystem::loadSettings(FrameContext& ctx) {
     // caused stale exposure/ambient to fight the level. Sliders still edit it live.
     (void)lit;
 
-    auto& bloom = ctx.renderer.bloomParams;
-    bloom.threshold = static_cast<float>(s.getDouble("bloom.threshold", bloom.threshold));
-    bloom.knee      = static_cast<float>(s.getDouble("bloom.knee", bloom.knee));
-    bloom.intensity = static_cast<float>(s.getDouble("bloom.intensity", bloom.intensity));
+    // Bloom is LEVEL-AUTHORED now (environment.bloom): the same silent-override
+    // rule as lighting above. Sliders still edit it live, nothing persists.
 
     ctx.renderer.tonemapOperator =
         static_cast<int>(s.getDouble("tonemap.op", ctx.renderer.tonemapOperator));
@@ -83,10 +81,6 @@ void DebugOverlaySystem::saveSettings(FrameContext& ctx) {
     // session's slider tweaks don't silently override the level on next launch.
     (void)lit;
 
-    auto& bloom = ctx.renderer.bloomParams;
-    s.setDouble("bloom.threshold", bloom.threshold);
-    s.setDouble("bloom.knee", bloom.knee);
-    s.setDouble("bloom.intensity", bloom.intensity);
 
     s.setDouble("tonemap.op", ctx.renderer.tonemapOperator);
     s.setDouble("grade.contrast", ctx.renderer.gradeParams.contrast);
