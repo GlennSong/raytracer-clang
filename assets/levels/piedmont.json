@@ -165,6 +165,19 @@
     }
   },
   "name": "Piedmont",
+  "player": {
+    "collider": {
+      "halfHeight": 0.4,
+      "radius": 0.3,
+      "shape": "capsule"
+    },
+    "friction": 0.5,
+    "position": [
+      920,
+      4.0,
+      935
+    ]
+  },
   "render": {
     "maxFoliageInstances": 32768,
     "maxInstances": 16384,
@@ -243,5 +256,17 @@
     "snowLine": 330,
     "warp": 0.35
   },
+  "vehicles": [
+    {
+      "position": [
+        928,
+        4.0,
+        944
+      ],
+      "recipe": "sedan",
+      "seed": 7,
+      "yaw": 205
+    }
+  ],
   "version": 1
 }

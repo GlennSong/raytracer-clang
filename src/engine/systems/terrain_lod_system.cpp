@@ -238,9 +238,21 @@ void TerrainLodSystem::fixedUpdate(FrameContext& ctx) {
     ctx.world.each<Transform, ControlledBy>(
         [&](Entity e, Transform& t, ControlledBy&) {
             if (found) return;
-            player = t.position;
+            // DRIVING (device: "as it accelerates the car begins to lag out"):
+            // while InVehicle the on-foot character is PARKED at the kerb and
+            // PlayerSystem stops moving it — centring the window there strands
+            // the floor at the entry point and the car outruns its own terrain
+            // collider within ~one window radius. Follow the CAR.
+            Entity tracked = e;
+            if (const InVehicle* iv = ctx.world.get<InVehicle>(e))
+                if (iv->vehicle.valid() && ctx.world.alive(iv->vehicle) &&
+                    ctx.world.has<Transform>(iv->vehicle))
+                    tracked = iv->vehicle;
+            const Transform* tt =
+                tracked == e ? &t : ctx.world.get<Transform>(tracked);
+            player = tt->position;
             playerPrev = player;
-            if (const PrevTransform* pt = ctx.world.get<PrevTransform>(e))
+            if (const PrevTransform* pt = ctx.world.get<PrevTransform>(tracked))
                 playerPrev = pt->value.position;
             found = true;
         });
