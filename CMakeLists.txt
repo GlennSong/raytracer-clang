@@ -123,6 +123,7 @@ add_library(engine_core STATIC
     src/engine/model_importer.cpp
     src/engine/camera_store.cpp
     src/engine/editor_bridge.cpp
+    src/engine/city_planner.cpp
     src/engine/properties.cpp
     src/engine/component_registry.cpp
     src/engine/property_json.cpp
@@ -847,6 +848,7 @@ if(Qt6_FOUND)
     add_executable(editor_app
         src/editor_app/editor_main.cpp
         src/editor_app/property_inspector.cpp
+        src/editor_app/city_planner_panel.cpp
         src/game/arena_state.cpp
     )
     target_compile_options(editor_app PRIVATE -Wall -Wextra -Wpedantic)
@@ -919,10 +921,13 @@ if(Qt6_FOUND)
     endif()
 
     # Headless widget-interaction tests for the generated inspector (the
-    # path that once crashed via a dangling visitor capture). Offscreen Qt.
+    # path that once crashed via a dangling visitor capture) and the City
+    # Planner bridge + panel (P7.3). Offscreen Qt.
     add_executable(editor_qt_tests
         tests/test_property_inspector_qt.cpp
+        tests/test_city_planner_qt.cpp
         src/editor_app/property_inspector.cpp
+        src/editor_app/city_planner_panel.cpp
         src/renderer/null_renderer.cpp   # satisfies Renderer::create; never renders
     )
     target_compile_options(editor_qt_tests PRIVATE -Wall -Wextra)

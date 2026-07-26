@@ -1,0 +1,416 @@
+#include "city_planner.h"
+
+#include "asset_manager.h"
+#include "components.h"
+#include "mesh_builder.h"
+#include "systems/camera_system.h"
+#include "procgen/city/corridor_plan.h"   // rebakeNetCorridors
+#include "procgen/city/road_net.h"
+#include "../log.h"
+
+#include <nlohmann/json.hpp>
+#include <chrono>
+#include <cmath>
+
+namespace engine {
+
+namespace {
+
+using nlohmann::json;
+
+// District-kind palette, matched to tools/diagnostics/road_map_svg.cpp
+// (kDistrictTint): Financial / Commercial / Residential / Old Town /
+// Industrial. sRGB hex / 255 — schematic overlay colour, not lit material.
+const Vec3 kHubTint[5] = {
+    {0.561, 0.659, 0.784},   // #8fa8c8 financial
+    {0.784, 0.706, 0.561},   // #c8b48f commercial
+    {0.624, 0.757, 0.604},   // #9fc19a residential
+    {0.784, 0.624, 0.604},   // #c89f9a old town
+    {0.690, 0.651, 0.769},   // #b0a6c4 industrial
+};
+
+// Road-class colours (road_map_svg): Arterial dark, Collector mid, Local light.
+Vec3 classColor(RoadClass k) {
+    switch (k) {
+        case RoadClass::Freeway:
+        case RoadClass::Arterial:  return {0.239, 0.275, 0.329};   // #3d4654
+        case RoadClass::Collector: return {0.353, 0.392, 0.447};   // #5a6472
+        default:                   return {0.545, 0.576, 0.631};   // #8b93a1
+    }
+}
+
+double classHalfWidth(RoadClass k) {
+    switch (k) {
+        case RoadClass::Freeway:
+        case RoadClass::Arterial:  return 4.5;
+        case RoadClass::Collector: return 3.0;
+        default:                   return 1.6;
+    }
+}
+
+// A closed regular polygon around `c` — the circle both the disc fill and the
+// ring outline are stroked from.
+std::vector<Vec2> circlePts(const Vec2& c, double r, int n) {
+    std::vector<Vec2> pts;
+    pts.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        double a = 2.0 * 3.14159265358979323846 * i / n;
+        pts.push_back(Vec2(c.x + r * std::cos(a), c.y + r * std::sin(a)));
+    }
+    return pts;
+}
+
+// Filled disc: a closed circle stroked at half its radius with halfW = half
+// its radius covers 0..r without a dedicated disc primitive.
+void appendDisc(RenderMesh& into, const Vec2& c, double r, double y,
+                const Vec3& color) {
+    MeshBuilder::append(
+        into, strokeRibbon(circlePts(c, r * 0.5, 24), {r * 0.5}, y, color,
+                           /*closed=*/true));
+}
+
+void appendRing(RenderMesh& into, const Vec2& c, double r, double halfW,
+                double y, const Vec3& color) {
+    MeshBuilder::append(
+        into, strokeRibbon(circlePts(c, r, 20), {halfW}, y, color,
+                           /*closed=*/true));
+}
+
+// Junction-to-junction span count: walk chains through degree-2 curve nodes
+// (the metric the metro span audits use — tests/test_metro_sites.cpp).
+int junctionSpanCount(const RoadNet& net) {
+    const int n = static_cast<int>(net.nodes.size());
+    std::vector<int> deg(n, 0);
+    std::vector<std::vector<std::pair<int, int>>> nbr(n);
+    for (int ei = 0; ei < static_cast<int>(net.edges.size()); ++ei) {
+        int a = net.edges[ei][0], b = net.edges[ei][1];
+        if (a < 0 || b < 0 || a >= n || b >= n) continue;
+        ++deg[a];
+        ++deg[b];
+        nbr[a].push_back({b, ei});
+        nbr[b].push_back({a, ei});
+    }
+    std::vector<char> walked(net.edges.size(), 0);
+    int spans = 0;
+    for (int start = 0; start < n; ++start) {
+        if (deg[start] == 2) continue;   // chain interiors don't start spans
+        for (auto [next, ei0] : nbr[start]) {
+            if (walked[ei0]) continue;
+            walked[ei0] = 1;
+            int prev = start, cur = next;
+            while (deg[cur] == 2) {
+                auto [a0, ea] = nbr[cur][0];
+                auto [a1, eb] = nbr[cur][1];
+                int nn = (a0 == prev) ? a1 : a0;
+                int ne = (a0 == prev) ? eb : ea;
+                if (walked[ne]) break;
+                walked[ne] = 1;
+                prev = cur;
+                cur = nn;
+            }
+            ++spans;
+        }
+    }
+    return spans;
+}
+
+}  // namespace
+
+void CityPlanner::attach(World* world, AssetManager* assets,
+                         Renderer* renderer, CameraSystem* cameras) {
+    world_ = world;
+    assets_ = assets;
+    renderer_ = renderer;
+    cameras_ = cameras;
+    // Fresh world: any prior overlay entities/meshes died with the old one
+    // (assets.clear() on state teardown). Visibility flags survive.
+    hubs_.group = arterials_.group = nodes_.group = Entity{};
+    hubs_.mesh = arterials_.mesh = nodes_.mesh = MeshHandle{};
+    bakedMesh_ = MeshHandle{};
+}
+
+void CityPlanner::detach() { attach(nullptr, nullptr, nullptr, nullptr); }
+
+Entity CityPlanner::roadEntity() {
+    Entity found;
+    if (!world_) return found;
+    world_->each<RoadNet, SourceSpec>(
+        [&](Entity e, RoadNet&, SourceSpec& spec) {
+            if (found.valid()) return;
+            json recipe = json::parse(spec.recipe, nullptr, false);
+            if (recipe.is_object() && recipe.contains("generate"))
+                found = e;
+        });
+    return found;
+}
+
+std::string CityPlanner::recipe() {
+    Entity e = roadEntity();
+    if (!e.valid()) return "";
+    SourceSpec* spec = world_->get<SourceSpec>(e);
+    json recipe = json::parse(spec->recipe, nullptr, false);
+    return recipe["generate"].dump();
+}
+
+CityPlannerStats CityPlanner::applyRecipe(const std::string& generateJson) {
+    CityPlannerStats stats;
+    Entity e = roadEntity();
+    if (!e.valid()) return stats;
+    RoadNet* net = world_->get<RoadNet>(e);
+    SourceSpec* spec = world_->get<SourceSpec>(e);
+    json gen = json::parse(generateJson, nullptr, false);
+    if (!net || !spec || !gen.is_object()) return stats;
+
+    // The panel hands back the WHOLE generate block; splice it into the
+    // recipe so keys the panel doesn't display survive the round-trip.
+    json recipe = json::parse(spec->recipe, nullptr, false);
+    if (!recipe.is_object()) recipe = json::object();
+    recipe["generate"] = gen;
+
+    const auto t0 = std::chrono::steady_clock::now();
+    // GRAPH-ONLY regen (never buildRoadNetMesh here — that is [Bake]'s job).
+    applyGenerateRecipe(*net, gen);
+    // A metro that grew freeway plans gets them re-baked into the fresh graph
+    // (same as the tuning panel's Regenerate) — otherwise the corridor and its
+    // ramps silently vanish from the editable graph.
+    if (const int baked =
+            rebakeNetCorridors(*net, gen.value("interchange_spacing", 700.0)))
+        LOG_INFO << "[planner] regenerate: " << baked
+                 << " corridor(s) re-baked into the graph";
+    stats.regenMs =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0)
+            .count();
+
+    // Round-trip: keep the generate block as the saved form (roadRecipeForSave
+    // refreshes only the look from the net — never bakes the nodes).
+    spec->recipe = roadRecipeForSave(recipe.dump(), *net).dump();
+
+    stats.nodes = static_cast<int>(net->nodes.size());
+    stats.edges = static_cast<int>(net->edges.size());
+    stats.spans = junctionSpanCount(*net);
+    stats.hubs = static_cast<int>(net->cityHubs.size());
+    stats.ok = true;
+
+    // NOTE: the road's RENDERED carriageway (Renderable.mesh) is deliberately
+    // left stale — the bones overlays are the live view; [Bake mesh] refreshes
+    // the asphalt on demand.
+    rebuildOverlays();
+    return stats;
+}
+
+bool CityPlanner::bakeMesh() {
+    Entity e = roadEntity();
+    if (!e.valid() || !assets_) return false;
+    RoadNet* net = world_->get<RoadNet>(e);
+    Renderable* r = world_->get<Renderable>(e);
+    if (!net || !r) return false;
+
+    RenderMesh mesh = buildRoadNetMesh(*net);
+    if (mesh.vertices.empty()) return false;
+    // Route the bake through the AssetManager (not renderer.uploadMesh, whose
+    // per-regenerate use leaks — editor_system.cpp regenerateRoad TECH_DEBT):
+    // acquire the new mesh, then release the handle the road held. The loader
+    // acquired the original through this same manager ("road:<n>"), so the
+    // release frees it; an unknown handle (a leaked legacy upload) is ignored
+    // — that single legacy mesh remains the pre-existing debt, but repeated
+    // bakes here do NOT accumulate.
+    MeshHandle nh =
+        assets_->acquireMesh(mesh, "cityplan:bake:" + std::to_string(++rev_));
+    if (!nh.valid()) return false;
+    if (r->mesh.valid() && !(r->mesh == nh)) assets_->releaseMesh(r->mesh);
+    r->mesh = nh;
+    bakedMesh_ = nh;
+    // The road's MeshCollider (if any) is load-time and stays stale until
+    // Play reloads the document — same lifetime as terrain/lots on a regen.
+    LOG_INFO << "[planner] baked road mesh: " << mesh.vertices.size()
+             << " vertices";
+    return true;
+}
+
+CityPlanner::Layer* CityPlanner::layerByName(const std::string& name) {
+    if (name == "hubs") return &hubs_;
+    if (name == "arterials") return &arterials_;
+    if (name == "nodes") return &nodes_;
+    return nullptr;
+}
+
+void CityPlanner::setLayer(const std::string& name, bool on) {
+    Layer* layer = layerByName(name);
+    if (!layer) return;
+    layer->visible = on;
+    if (!world_ || !world_->alive(layer->group)) return;
+    if (auto* g = world_->get<InstanceGroup>(layer->group))
+        g->transforms = (on && layer->mesh.valid()) ? std::vector<Mat4>{Mat4()}
+                                                    : std::vector<Mat4>{};
+}
+
+void CityPlanner::publishLayer(Layer& layer, const RenderMesh& mesh,
+                               const char* name) {
+    // Release the previous rebuild's mesh (we hold exactly one reference).
+    if (layer.mesh.valid()) assets_->releaseMesh(layer.mesh);
+    layer.mesh = MeshHandle{};
+
+    if (!world_->alive(layer.group)) {
+        layer.group = world_->create();
+        InstanceGroup g;
+        g.material.albedo = Vec3(1, 1, 1);   // colour rides Vertex::color
+        g.material.roughness = 1.0f;
+        // Overlay: on top of terrain/roads, unlit, never a shadow caster —
+        // the debug-gizmo path (render on the group's single identity
+        // instance goes through drawMesh, which routes FLAG_OVERLAY).
+        g.material.flags = RenderMaterial::FLAG_OVERLAY;
+        world_->add<InstanceGroup>(layer.group, g);
+    }
+    auto* g = world_->get<InstanceGroup>(layer.group);
+    if (mesh.vertices.empty()) {
+        g->mesh = MeshHandle{};
+        g->transforms.clear();
+        return;
+    }
+    layer.mesh = assets_->acquireMesh(
+        mesh, "cityplan:" + std::string(name) + ":" + std::to_string(rev_));
+    g->mesh = layer.mesh;
+    g->boundsCenter = Vec3(0, 0, 0);
+    g->boundsRadius = 1.0e6;   // city-wide merged mesh: never cull
+    g->transforms = (layer.visible && layer.mesh.valid())
+                        ? std::vector<Mat4>{Mat4()}
+                        : std::vector<Mat4>{};
+}
+
+void CityPlanner::rebuildOverlays() {
+    if (!world_ || !assets_) return;   // headless host: stats-only planner
+    Entity e = roadEntity();
+    if (!e.valid()) return;
+    RoadNet* net = world_->get<RoadNet>(e);
+    if (!net) return;
+    ++rev_;   // fresh acquireMesh keys for this rebuild
+
+    auto ground = [&](const Vec2& p) -> double {
+        return net->heightAt ? net->heightAt(p.x, p.y) : 0.0;
+    };
+
+    // --- hubs: kind-coloured discs + a dark outline ring --------------------
+    RenderMesh hubMesh;
+    for (const CityHub& h : net->cityHubs) {
+        const Vec3 tint = kHubTint[std::min(std::max(h.kind, 0), 4)];
+        const double r = (h.site == 0) ? 48.0 : 34.0;
+        const double y = ground(h.pos) + 2.2;
+        appendDisc(hubMesh, h.pos, r, y, tint);
+        appendRing(hubMesh, h.pos, r, 1.6, y + 0.05, Vec3(0.20, 0.23, 0.27));
+    }
+
+    // --- arterial graph: class-coloured schematic ribbons, per edge ---------
+    // Per-edge flat strokes at the local ground height: strokeRibbon is flat
+    // per call, and an edge (a colonization step / curve sample) is short
+    // against the terrain, so per-edge draping reads clean in the plan views.
+    RenderMesh roadMesh;
+    for (std::size_t ei = 0; ei < net->edges.size(); ++ei) {
+        const int a = net->edges[ei][0], b = net->edges[ei][1];
+        if (a < 0 || b < 0 || a >= static_cast<int>(net->nodes.size()) ||
+            b >= static_cast<int>(net->nodes.size()))
+            continue;
+        const RoadClass k = (ei < net->edgeClasses.size())
+                                ? net->edgeClasses[ei]
+                                : RoadClass::Local;
+        const Vec2 pa = net->nodes[a], pb = net->nodes[b];
+        const double y = std::max(ground(pa), ground(pb)) + 1.8;
+        MeshBuilder::append(roadMesh,
+                            strokeRibbon({pa, pb}, {classHalfWidth(k)}, y,
+                                         classColor(k)));
+    }
+
+    // --- junction nodes: small rings, arterial-tier vs local-tier tint ------
+    std::vector<int> deg(net->nodes.size(), 0);
+    std::vector<int> minK(net->nodes.size(), 99);
+    for (std::size_t ei = 0; ei < net->edges.size(); ++ei) {
+        const int a = net->edges[ei][0], b = net->edges[ei][1];
+        if (a < 0 || b < 0 || a >= static_cast<int>(net->nodes.size()) ||
+            b >= static_cast<int>(net->nodes.size()))
+            continue;
+        const int k = (ei < net->edgeClasses.size())
+                          ? static_cast<int>(net->edgeClasses[ei])
+                          : static_cast<int>(RoadClass::Local);
+        ++deg[a];
+        ++deg[b];
+        minK[a] = std::min(minK[a], k);
+        minK[b] = std::min(minK[b], k);
+    }
+    RenderMesh nodeMesh;
+    for (std::size_t i = 0; i < net->nodes.size(); ++i) {
+        if (deg[i] < 3) continue;   // junctions, not curve samples
+        const bool arterialTier =
+            minK[i] <= static_cast<int>(RoadClass::Collector);
+        const Vec3 tint = arterialTier ? Vec3(0.702, 0.271, 0.184)    // #b3452f
+                                       : Vec3(0.184, 0.435, 0.702);   // #2f6fb3
+        appendRing(nodeMesh, net->nodes[i], arterialTier ? 7.0 : 5.0, 1.4,
+                   ground(net->nodes[i]) + 2.0, tint);
+    }
+
+    publishLayer(hubs_, hubMesh, "hubs");
+    publishLayer(arterials_, roadMesh, "arterials");
+    publishLayer(nodes_, nodeMesh, "nodes");
+}
+
+void CityPlanner::cameraPreset(int preset) {
+    if (!cameras_) return;
+    if (preset == 2) {
+        // Free: the perspective fly camera, wherever it last was.
+        cameras_->flyController().setOrthographic(false);
+        cameras_->setActiveController(/*flyOn=*/true);
+        return;
+    }
+
+    // Plan framing: the primary city site from the recipe (sites[0], else the
+    // top-level center/radius), else the graph bounds.
+    Vec2 center(0, 0);
+    double radius = 700.0;
+    bool framed = false;
+    Entity e = roadEntity();
+    RoadNet* net = e.valid() ? world_->get<RoadNet>(e) : nullptr;
+    if (e.valid()) {
+        json gen = json::parse(recipe(), nullptr, false);
+        if (gen.is_object()) {
+            const json* site = &gen;
+            if (gen.contains("sites") && gen["sites"].is_array() &&
+                !gen["sites"].empty())
+                site = &gen["sites"][0];
+            if (site->contains("center")) {
+                center = Vec2((*site)["center"].value("x", 0.0),
+                              (*site)["center"].value("z", 0.0));
+                radius = site->value("radius", radius);
+                framed = true;
+            }
+        }
+    }
+    if (!framed && net && !net->nodes.empty()) {
+        Vec2 lo = net->nodes[0], hi = net->nodes[0];
+        for (const Vec2& p : net->nodes) {
+            lo.x = std::min(lo.x, p.x); lo.y = std::min(lo.y, p.y);
+            hi.x = std::max(hi.x, p.x); hi.y = std::max(hi.y, p.y);
+        }
+        center = (lo + hi) * 0.5;
+        radius = std::max(1.0, 0.5 * (hi - lo).length());
+    }
+
+    OrbitCameraController& orbit = cameras_->orbitController();
+    orbit.target = Vec3(
+        center.x, net && net->heightAt ? net->heightAt(center.x, center.y) : 0.0,
+        center.y);
+    orbit.distance = std::max(50.0, 2.0 * radius);
+    // Orbit pitch convention here: POSITIVE pitch raises the eye above the
+    // target (position() uses +sin(pitch)); "look straight down" is +89, not
+    // the -89 a Y-down convention would use. 35.264 = atan(1/sqrt(2)), the
+    // classic isometric elevation.
+    if (preset == 1) {
+        orbit.yaw = 45.0;
+        orbit.pitch = 35.264;
+    } else {
+        orbit.yaw = 0.0;
+        orbit.pitch = 89.0;
+    }
+    orbit.setOrthographic(true);   // ortho height tracks distance (plan view)
+    cameras_->setActiveController(/*flyOn=*/false);
+}
+
+}  // namespace engine

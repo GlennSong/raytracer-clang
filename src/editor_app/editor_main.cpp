@@ -19,6 +19,7 @@
 #include "../renderer/hosted_window.h"
 #include "../renderer/gamepad_gc.h"
 #include "../log.h"
+#include "city_planner_panel.h"
 #include "property_inspector.h"
 
 // Vulkan viewport surface seam (ADR-0057). Present only on non-Apple targets
@@ -533,6 +534,14 @@ int main(int argc, char** argv) {
     mainWindow.addDockWidget(Qt::LeftDockWidgetArea, hierarchyDock);
     mainWindow.addDockWidget(Qt::RightDockWidgetArea, inspectorDock);
 
+    // City Planner (P7.3 phase 1): recipe knobs + graph-only Regenerate +
+    // overlay layers + camera presets. Lives under the inspector on the
+    // right; its signals call the bridge directly, same as the inspector.
+    auto* plannerDock = new QDockWidget("City Planner", &mainWindow);
+    auto* plannerPanel = new CityPlannerPanel(bridge);
+    plannerDock->setWidget(plannerPanel);
+    mainWindow.addDockWidget(Qt::RightDockWidgetArea, plannerDock);
+
     // Asset browser: a filesystem view of assets/; double-clicking a level
     // opens it (Play/Stop and open both go through Application::requestState).
     auto* assetsDock = new QDockWidget("Assets", &mainWindow);
@@ -951,6 +960,7 @@ int main(int argc, char** argv) {
     // notice arrives, so mode/selection flips don't wait out the timer.
     auto refreshChrome = [&]() {
         const bool editing = bridge.editable();
+        plannerPanel->refresh();   // grays out while playing; reloads on attach
         playButton->setEnabled(editing);
         stopAction->setEnabled(!editing);
         addButton->setEnabled(editing);
