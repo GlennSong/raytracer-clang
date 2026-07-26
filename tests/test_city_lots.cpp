@@ -595,11 +595,16 @@ TEST_CASE(every_built_lot_touches_a_road) {
     // Post-process the graph as test_metro_sites does (two rounds of consolidation).
     RoadRules rules;
     rules.autoRoundabout = false;
+        auto spanFloor = [](const Vec2& q) -> Real {
+            const bool inCore =
+                std::fabs(q.x - 900.0) <= 1400.0 && std::fabs(q.y - 900.0) <= 1400.0;
+            return inCore ? 104.5 : 150.0;
+        };
     roads = capDegree(planarize(applyConstraints(roads, rules), 1.0), rules);
     for (int round = 0; round < 2; ++round) {
         roads = dropParallelEdges(roads);
         roads = dissolveAcuteArms(roads, 0.85, 3);
-        roads = consolidateJunctionSpans(roads, 150.0, rules.maxDegree);
+        roads = consolidateJunctionSpans(roads, spanFloor, rules.maxDegree);
         roads = capDegree(planarize(roads, 1.0), rules);
         roads = mergeShortEdges(roads, 30.0, rules.maxDegree);
         roads = relaxSharpBends(roads, 0.5, 64);

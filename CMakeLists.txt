@@ -459,6 +459,7 @@ add_executable(run_tests
     tests/test_winding.cpp
     tests/test_road_constraints.cpp
     tests/test_metro_sites.cpp
+    tests/test_fabric.cpp
     tests/test_city_stages.cpp
     tests/test_road_semantics.cpp
     tests/test_road_layers.cpp

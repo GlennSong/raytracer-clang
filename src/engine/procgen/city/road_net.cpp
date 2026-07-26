@@ -2077,6 +2077,15 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         mp.loopMin         = g.value("loop_min", mp.loopMin);
         mp.loopMax         = g.value("loop_max", mp.loopMax);
         mp.minBlockEdge    = g.value("min_block_edge", 0.0);
+        // P7 patch-conforming fabric: how city-site faces subdivide.
+        // "" = legacy gridFill; "chords" | "bisect" | "court" | "mix"
+        // (mix = seeded per-face choice weighted by district kind).
+        mp.fabric             = g.value("fabric", std::string());
+        mp.fabricCoreLen      = g.value("fabric_core_len",
+                                        mp.fabric.empty() ? 0.0 : 110.0);
+        mp.fabricConform      = g.value("fabric_conform", 0.15);
+        mp.fabricSoftCollapse = g.value("fabric_soft_collapse", 0.8);
+        mp.fabricJitter       = g.value("fabric_jitter", 0.12);
         // "backbone": "arterial" keeps the hub-to-hub spine a street (a
         // no-freeway metro); the historical default stays Freeway-class.
         if (g.value("backbone", std::string("freeway")) == std::string("arterial"))
@@ -2236,10 +2245,36 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
                 // break the swept geometry). Gated on minBlockEdge so shipped
                 // small-metro levels keep their exact geometry.
                 const double minLen = g.value("min_road_len", 10.0);
+                // REGION-AWARE floor (P7 density unlock): inside the primary
+                // city site the span floor drops to just under the fabric
+                // core block edge so dense downtown fabric survives the tail;
+                // the periphery keeps big-block spacing. Flat without a core.
+                const std::string fab = g.value("fabric", std::string());
+                const double coreLen =
+                    g.value("fabric_core_len", fab.empty() ? 0.0 : 110.0);
+                Vec2 coreC(g.contains("center") ? g["center"].value("x", 0.0) : 0.0,
+                           g.contains("center") ? g["center"].value("z", 0.0) : 0.0);
+                double coreR = g.value("radius", 700.0);
+                if (g.contains("sites") && g["sites"].is_array() &&
+                    !g["sites"].empty()) {
+                    const auto& s0 = g["sites"][0];
+                    if (s0.contains("center"))
+                        coreC = Vec2(s0["center"].value("x", 0.0),
+                                     s0["center"].value("z", 0.0));
+                    coreR = s0.value("radius", coreR);
+                }
+                auto spanFloor = [coreLen, coreC, coreR,
+                                  minBlockEdge](const Vec2& q) -> Real {
+                    if (coreLen <= 0) return minBlockEdge;
+                    const bool inCore = std::fabs(q.x - coreC.x) <= coreR &&
+                                        std::fabs(q.y - coreC.y) <= coreR;
+                    return inCore ? std::min(minBlockEdge, coreLen * 0.95)
+                                  : minBlockEdge;
+                };
                 for (int round = 0; round < 2; ++round) {
                     cg = dropParallelEdges(cg);
                     cg = dissolveAcuteArms(cg, 0.85, 3);
-                    cg = consolidateJunctionSpans(cg, minBlockEdge, rules.maxDegree);
+                    cg = consolidateJunctionSpans(cg, spanFloor, rules.maxDegree);
                     cg = capDegree(planarize(cg, 1.0), rules);
                     cg = mergeShortEdges(cg, minLen, rules.maxDegree);
                     cg = relaxSharpBends(cg, 0.5, 64);

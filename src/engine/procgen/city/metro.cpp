@@ -1,11 +1,14 @@
 #include "metro.h"
 
 #include "road_constraints.h"   // consolidateJunctionSpans (big-block skeleton)
+#include "patch_fabric.h"       // P7 patch-conforming fabric (chords/bisect/court)
 #include "../../../profile.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -907,6 +910,38 @@ RoadGraph buildMetro(const MetroParams& p,
     std::vector<Poly2> faces =
         extractBlocks(Ga, std::max(200.0, sites[0].blockSize * sites[0].blockSize * 0.08));
     RoadGraph full = Ga;
+    // P7 fabric needs the PATCH view of a face: its corners are the skeleton's
+    // junction vertices. Face vertices are exact Ga node positions, so a
+    // quantized position -> degree map identifies them.
+    auto posKey = [](const Vec2& v) {
+        return (static_cast<long long>(std::llround(v.x * 4.0)) << 32) ^
+               (static_cast<long long>(std::llround(v.y * 4.0)) & 0xffffffffLL);
+    };
+    std::unordered_map<long long, int> skelDeg;
+    if (!p.fabric.empty()) {
+        std::vector<int> gdeg(Ga.nodes.size(), 0);
+        for (const RoadEdge& e : Ga.edges) {
+            if (e.a == e.b) continue;
+            ++gdeg[e.a];
+            ++gdeg[e.b];
+        }
+        for (std::size_t i = 0; i < Ga.nodes.size(); ++i) {
+            long long k = posKey(Ga.nodes[i].pos);
+            auto it = skelDeg.find(k);
+            if (it == skelDeg.end() || it->second < gdeg[i]) skelDeg[k] = gdeg[i];
+        }
+    }
+    // Seeded per-face hash (position-keyed, iteration-order free) for the
+    // "mix" variant choice.
+    auto faceHash01 = [&](const Vec2& q, uint32_t salt) {
+        uint32_t v = p.seed ^ salt;
+        v ^= static_cast<uint32_t>(std::llround(q.x * 4.0)) * 0x9E3779B9u;
+        v ^= static_cast<uint32_t>(std::llround(q.y * 4.0)) * 0x85EBCA6Bu;
+        v ^= v >> 16; v *= 0x7feb352dU;
+        v ^= v >> 15; v *= 0x846ca68bU;
+        v ^= v >> 16;
+        return (v >> 8) * (1.0 / 16777216.0);
+    };
     auto nearestHot = [&](const Vec2& q) {
         int b = 0; double bd = 1e30;
         for (std::size_t h = 0; h < hots.size(); ++h) { double d = dist2(q, hots[h].pos); if (d < bd) { bd = d; b = static_cast<int>(h); } }
@@ -994,7 +1029,91 @@ RoadGraph buildMetro(const MetroParams& p,
                 cellLong = std::max(bigCellLong[kind], p.minBlockEdge * 1.3);
                 if (kind != 3) crook = (kind == 4 ? 0.1 : 0.0);
             }
-            gridFill(f, cell, cellLong, collectorSpan, crook, rng, streets);
+            // P7 PATCH-CONFORMING FABRIC: city-site faces take the fabric
+            // dispatch instead of gridFill (towns keep the legacy look).
+            // "mix" chooses per face, weighted by the nearest hub's district:
+            // planned cores get chords, grown quarters get bisect,
+            // residential leavens with ring courts. blockLen clamps >= 150
+            // this round (the Phase-0 gate reconciliation — the tail's
+            // consolidate-150 must never fight the fabric it was handed).
+            bool fabricHandled = false;
+            if (!p.fabric.empty() && hots[h].site == 0) {
+                PatchFabricParams fp;
+                // The Phase-0 clamp IS the grain this round: skeleton faces
+                // are born near block scale, so the district cell tables
+                // (160-240) would starve the stationing outright — the
+                // 110-190 m district grading arrives with region-aware
+                // consolidation (plan P7 step 1), not here.
+                fp.blockLen = p.fabricCoreLen > 0
+                                  ? std::max(90.0, p.fabricCoreLen)
+                                  : std::max(150.0, p.minBlockEdge);
+                fp.blockDepth = fp.blockLen;
+                fp.streetWidth = p.streetWidth;
+                fp.seed = p.seed;
+                fp.conform = p.fabricConform;
+                fp.jitter = p.fabricJitter;
+                fp.softCollapseP = p.fabricSoftCollapse;
+                std::string variant = p.fabric;
+                if (variant == "mix") {
+                    if (kind == 0 || kind == 1) variant = "chords";
+                    else if (kind == 3 || kind == 4) variant = "bisect";
+                    else variant = faceHash01(c, 0x50415443u) < 0.6 ? "chords"
+                                                                    : "court";
+                }
+                std::vector<FabricSegment> segs;
+                if (variant == "chords") {
+                    FabricPatch patch;
+                    patch.boundary = f;
+                    for (int vi = 0; vi < static_cast<int>(f.size()); ++vi) {
+                        auto it = skelDeg.find(posKey(f[vi]));
+                        if (it != skelDeg.end() && it->second >= 3)
+                            patch.corners.push_back(vi);
+                    }
+                    segs = fabricChords(patch, fp);
+                } else if (variant == "bisect") {
+                    segs = fabricBisect(f, fp);
+                } else if (variant == "court") {
+                    segs = fabricCourt(f, fp);
+                }
+                double fArea = 0;
+                for (std::size_t vi = 0; vi < f.size(); ++vi) {
+                    const Vec2& u = f[vi];
+                    const Vec2& v = f[(vi + 1) % f.size()];
+                    fArea += u.x * v.y - v.x * u.y;
+                }
+                fArea = std::fabs(fArea) * 0.5;
+                if (std::getenv("RT_FABRIC_DEBUG")) {
+                    int nc = 0;
+                    for (const Vec2& fv : f) {
+                        auto it = skelDeg.find(posKey(fv));
+                        if (it != skelDeg.end() && it->second >= 3) ++nc;
+                    }
+                    std::fprintf(stderr,
+                                 "[fabric] face@(%.0f,%.0f) verts=%zu corners=%d "
+                                 "area=%.0f kind=%d %s -> %zu segs\n",
+                                 c.x, c.y, f.size(), nc, fArea, kind,
+                                 variant.c_str(), segs.size());
+                }
+                if (!segs.empty()) {
+                    for (const FabricSegment& s : segs) {
+                        int a = full.addNode(s.a, 6.0), b = full.addNode(s.b, 6.0);
+                        if (a != b) full.addEdge(a, b, s.width, s.klass);
+                    }
+                    fabricHandled = true;
+                } else if (fArea < fp.blockLen * fp.blockDepth * 1.2) {
+                    fabricHandled = true;   // sub-block: nothing, by design
+                } else if (variant == "court" || variant == "bisect") {
+                    // An empty court/bisect answer is MEANINGFUL: the face
+                    // is one big block (court too tight to ring, bisect at
+                    // stop scale) — exactly the round-12 outcome.
+                    fabricHandled = true;
+                }
+                // else: chords refused a big face (degenerate boundary,
+                // < 2 junction corners, escaped centroid) — the legacy
+                // fill takes it below.
+            }
+            if (!fabricHandled)
+                gridFill(f, cell, cellLong, collectorSpan, crook, rng, streets);
             for (const Cut& s : streets) {
                 int a = full.addNode(s.a, 6.0), b = full.addNode(s.b, 6.0);
                 if (s.collector)

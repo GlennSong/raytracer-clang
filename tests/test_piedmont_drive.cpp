@@ -13,6 +13,7 @@
 #include "drive_probe.h"
 
 #include <cstdio>
+#include <cmath>
 #include <vector>
 
 using namespace engine;
@@ -70,11 +71,16 @@ RoadGraph buildPiedmontGraph() {
     RoadGraph g = buildMetro(p);
     RoadRules rules;
     rules.autoRoundabout = false;
+        auto spanFloor = [](const Vec2& q) -> Real {
+            const bool inCore =
+                std::fabs(q.x - 900.0) <= 1400.0 && std::fabs(q.y - 900.0) <= 1400.0;
+            return inCore ? 104.5 : 150.0;
+        };
     g = capDegree(planarize(applyConstraints(g, rules), 1.0), rules);
     for (int round = 0; round < 2; ++round) {
         g = dropParallelEdges(g);
         g = dissolveAcuteArms(g, 0.85, 3);
-        g = consolidateJunctionSpans(g, 150.0, rules.maxDegree);
+        g = consolidateJunctionSpans(g, spanFloor, rules.maxDegree);
         g = capDegree(planarize(g, 1.0), rules);
         g = mergeShortEdges(g, 30.0, rules.maxDegree);
         g = relaxSharpBends(g, 0.5, 64);

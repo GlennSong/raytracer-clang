@@ -1,7 +1,9 @@
 #ifndef RAYTRACER_ENGINE_PROCGEN_CITY_ROAD_CONSTRAINTS_H
 #define RAYTRACER_ENGINE_PROCGEN_CITY_ROAD_CONSTRAINTS_H
 
-#include "road_network.h"   // RoadGraph
+#include "road_network.h"
+
+#include <functional>   // RoadGraph
 
 namespace engine {
 
@@ -103,6 +105,14 @@ RoadGraph mergeShortEdges(const RoadGraph& graph, Real minLen, int maxDegree = 4
 // can introduce crossings.
 RoadGraph consolidateJunctionSpans(const RoadGraph& graph, Real minSpan,
                                    int maxDegree = 4);
+
+// Region-aware overload (P7 density unlock): the span floor varies by
+// position (evaluated at each span's midpoint) — a tight downtown floor and
+// a big-block periphery floor coexist in one pass. The victim each round is
+// the span most below its own floor (deterministic tie-breaks).
+RoadGraph consolidateJunctionSpans(
+    const RoadGraph& graph, const std::function<Real(const Vec2&)>& minSpanAt,
+    int maxDegree = 4);
 
 // Dissolve the redundant twin of a near-parallel junction arm pair (dir dot >
 // minDot): delete the narrower/shorter arm's whole span when its far junction

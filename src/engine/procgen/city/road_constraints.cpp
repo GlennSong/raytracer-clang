@@ -565,6 +565,18 @@ RoadGraph dropParallelEdges(const RoadGraph& in) {
 
 RoadGraph consolidateJunctionSpans(const RoadGraph& in, Real minSpan,
                                    int maxDegree) {
+    return consolidateJunctionSpans(
+        in, [minSpan](const Vec2&) { return minSpan; }, maxDegree);
+}
+
+// REGION-AWARE overload (P7 density unlock): the span floor is a function of
+// position, evaluated at the span midpoint — the city core keeps a tighter
+// floor than the periphery, so dense downtown fabric is LEGAL while country
+// arterials keep big-block spacing. Deterministic: the round's victim is the
+// span most below ITS OWN floor (ties: shorter, then lower node pair).
+RoadGraph consolidateJunctionSpans(
+    const RoadGraph& in, const std::function<Real(const Vec2&)>& minSpanAt,
+    int maxDegree) {
     RoadGraph g = in;
     // Iterate: each fuse changes degrees and span lengths, so recompute the
     // chain decomposition per round and take the globally shortest offender.
@@ -588,10 +600,11 @@ RoadGraph consolidateJunctionSpans(const RoadGraph& in, Real minSpan,
         // junctions is a redundant connection, removable when its endpoints
         // stay hop-connected without it. Unfixable spans are remembered and
         // skipped so the loop terminates.
-        struct Span { int a = -1, b = -1; Real len = 0; std::vector<int> path;
+        struct Span { int a = -1, b = -1; Real len = 0; Real floor = 0;
+                      std::vector<int> path;
                       std::vector<int> spanEdges; bool fuse = true; };
         Span best;
-        best.len = minSpan;
+        Real bestDeficit = -1e-9;   // most-below-floor wins
         std::vector<char> walked(g.edges.size(), 0);
         for (int n = 0; n < N; ++n) {
             if (deg[n] == 2 || deg[n] == 0) continue;
@@ -616,14 +629,19 @@ RoadGraph consolidateJunctionSpans(const RoadGraph& in, Real minSpan,
                 }
                 if (deg[cur] == 2) continue;             // hit a walked cycle
                 if (cur == n && path.empty()) continue;  // degenerate loop
-                if (len >= best.len - 1e-9) continue;
+                const Vec2 mid =
+                    (g.nodes[n].pos + g.nodes[cur].pos) * 0.5;
+                const Real floor = minSpanAt(mid);
+                const Real deficit = len - floor;        // negative = offender
+                if (deficit >= bestDeficit) continue;
                 const long long key =
                     static_cast<long long>(std::min(n, cur)) * N + std::max(n, cur);
                 if (unfixable.count(key)) continue;
                 int arms = deg[n] + deg[cur] - 2;
                 if (cur == n) arms = deg[n] - 2;         // short loop back onto itself
                 if (arms <= maxDegree) {
-                    best = {n, cur, len, path, spanEdges, /*fuse=*/true};
+                    best = {n, cur, len, floor, path, spanEdges, /*fuse=*/true};
+                    bestDeficit = deficit;
                     continue;
                 }
                 // FUSE would over-crowd: DELETE only a genuinely REDUNDANT
@@ -665,7 +683,8 @@ RoadGraph consolidateJunctionSpans(const RoadGraph& in, Real minSpan,
                     frontier = std::move(nextFrontier);
                 }
                 if (redundant) {
-                    best = {n, cur, len, path, spanEdges, /*fuse=*/false};
+                    best = {n, cur, len, floor, path, spanEdges, /*fuse=*/false};
+                    bestDeficit = deficit;
                     continue;
                 }
                 // Not redundant either: LENGTHEN in place — push the two
@@ -677,7 +696,7 @@ RoadGraph consolidateJunctionSpans(const RoadGraph& in, Real minSpan,
                     Vec2 chord = g.nodes[cur].pos - g.nodes[n].pos;
                     const Real clen = chord.length();
                     chord = clen > 1e-9 ? chord * (1.0 / clen) : Vec2(1, 0);
-                    const Real push = (minSpan - len) * 0.5;
+                    const Real push = (floor - len) * 0.5;
                     for (int pn : path) {
                         const Real t = clen > 1e-9
                             ? dot(g.nodes[pn].pos - g.nodes[n].pos, chord) / clen
@@ -736,7 +755,7 @@ RoadGraph consolidateJunctionSpans(const RoadGraph& in, Real minSpan,
     }
     if (fused > 0)
         LOG_INFO << "consolidateJunctionSpans: fused " << fused
-                 << " junction spans under " << minSpan << " m";
+                 << " junction spans under their regional floors";
 
     // Compact orphaned nodes.
     std::vector<int> remap(g.nodes.size(), -1);

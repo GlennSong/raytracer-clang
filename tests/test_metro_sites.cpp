@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cmath>
 #include <queue>
 #include <vector>
 
@@ -72,13 +73,18 @@ RoadGraph buildPiedmontGraph(std::vector<CityHub>* hubs = nullptr) {
     RoadGraph g = buildMetro(p);
     RoadRules rules;
     rules.autoRoundabout = false;
+        auto spanFloor = [](const Vec2& q) -> Real {
+            const bool inCore =
+                std::fabs(q.x - 900.0) <= 1400.0 && std::fabs(q.y - 900.0) <= 1400.0;
+            return inCore ? 104.5 : 150.0;
+        };
     g = capDegree(planarize(applyConstraints(g, rules), 1.0), rules);
     // Mirrors applyGenerateRecipe's big-block tail exactly (two rounds to a
     // fixpoint; relax LAST so no earlier pass can mint a fresh fold).
     for (int round = 0; round < 2; ++round) {
         g = dropParallelEdges(g);
         g = dissolveAcuteArms(g, 0.85, 3);
-        g = consolidateJunctionSpans(g, 150.0, rules.maxDegree);
+        g = consolidateJunctionSpans(g, spanFloor, rules.maxDegree);
         g = capDegree(planarize(g, 1.0), rules);
         g = mergeShortEdges(g, 30.0, rules.maxDegree);
         g = relaxSharpBends(g, 0.5, 64);
@@ -112,7 +118,8 @@ int reachableFrom0(const RoadGraph& g) {
 }
 
 // Junction-to-junction span lengths: walk chains through degree-2 curve nodes.
-std::vector<double> junctionSpans(const RoadGraph& g) {
+std::vector<double> junctionSpans(const RoadGraph& g,
+                                  std::vector<Vec2>* midsOut = nullptr) {
     std::vector<int> deg(g.nodes.size(), 0);
     for (const RoadEdge& e : g.edges) {
         ++deg[e.a];
@@ -125,6 +132,7 @@ std::vector<double> junctionSpans(const RoadGraph& g) {
     }
     std::vector<char> walked(g.edges.size(), 0);
     std::vector<double> spans;
+    if (midsOut) midsOut->clear();
     for (std::size_t n = 0; n < g.nodes.size(); ++n) {
         if (deg[n] == 2) continue;
         for (auto [next, ei0] : nbr[n]) {
@@ -144,6 +152,8 @@ std::vector<double> junctionSpans(const RoadGraph& g) {
                 cur = nn;
             }
             spans.push_back(len);
+            if (midsOut)
+                midsOut->push_back((g.nodes[n].pos + g.nodes[cur].pos) * 0.5);
         }
     }
     return spans;
@@ -207,14 +217,20 @@ TEST_CASE(multi_site_metro_towns_are_populated_and_reachable) {
 
 TEST_CASE(multi_site_metro_enforces_junction_spacing) {
     RoadGraph g = buildPiedmontGraph();
-    std::vector<double> spans = junctionSpans(g);
+    std::vector<Vec2> spanMids;
+    std::vector<double> spans = junctionSpans(g, &spanMids);
     std::printf("        [span audit] %zu junction spans\n", spans.size());
     // Floor tracks the dissolveAcuteArms-era network (sliver twins deleted).
     CHECK(spans.size() > 55u);
-    int under120 = 0;
-    for (double s : spans)
-        if (s < 120.0) ++under120;
-    CHECK(under120 == 0);
+    // REGIONAL floors (P7 density unlock): core fabric legally reaches ~105m
+    // inside the city site; the periphery keeps the big-block 120 audit.
+    int underFloor = 0;
+    for (std::size_t i = 0; i < spans.size(); ++i) {
+        const bool core = std::fabs(spanMids[i].x - 900.0) <= 1400.0 &&
+                          std::fabs(spanMids[i].y - 900.0) <= 1400.0;
+        if (spans[i] < (core ? 100.0 : 120.0)) ++underFloor;
+    }
+    CHECK(underFloor == 0);
 }
 
 TEST_CASE(multi_site_metro_grows_big_blocks_with_grid_fabric) {

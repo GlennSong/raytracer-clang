@@ -5,6 +5,7 @@
 #include "road_network.h"   // RoadGraph
 #include "buildability.h"   // HeightSampler, BuildabilityConfig (terrain-aware layout)
 #include <cstdint>
+#include <string>
 
 namespace engine {
 
@@ -95,6 +96,25 @@ struct MetroParams {
     // floors them here instead of fighting mergeShortEdges afterwards. 0 = the
     // legacy caps apply unchanged.
     double minBlockEdge = 0.0;
+
+    // P7 PATCH-CONFORMING FABRIC (8km-city plan): how city-site faces are
+    // subdivided. "" = legacy gridFill (every shipped level). "chords" =
+    // stationed opposite-side chords blended toward the Coons iso-curves;
+    // "bisect" = recursive near-midpoint bisection with node hygiene;
+    // "court" = one perimeter ring + ribs, big-block center; "mix" = seeded
+    // per-face choice weighted by the nearest hub's district kind
+    // (financial/commercial -> chords, oldtown/industrial -> bisect,
+    // residential -> 60/40 chords/court). Towns always keep gridFill. The
+    // fabric blockLen is clamped >= 150 m this round (Phase-0 gate
+    // reconciliation — regional 110 m grading is a later change).
+    std::string fabric;
+    // Core fabric block edge (m). 0 = flat max(150, minBlockEdge). Non-zero
+    // (typically 110) requires the REGION-AWARE consolidation floor in the
+    // recipe tail — the density unlock that makes downtown fabric legal.
+    double fabricCoreLen = 0;
+    double fabricConform = 0.15;        // 0 chord .. 1 Coons, per line
+    double fabricJitter = 0.12;         // station jitter (fraction of a gap)
+    double fabricSoftCollapse = 0.8;    // bisect soft-band fuse probability
 
     // Satellite settlements. Empty = single-site legacy behavior driven by
     // center/radius/hotspots/blockSize above. Non-empty REPLACES them: sites[0]
