@@ -379,6 +379,18 @@ struct AuthoredPlace {
     Vec3 buildingColor{0.72f, 0.70f, 0.64f};
 };
 
+// Level-authored day/night cycle policy (device: "the scene loads bright but
+// as soon as the level starts everything gets dark" — DayNightSystem was
+// overwriting the level's sun + ambient every frame with its own mid-morning
+// default, the same silent-override class as the bloom-settings stomp). A
+// level that authors a static sun sets enabled=false; one that wants the
+// cycle seeds its start time/speed. Absent block = cycle runs as before.
+struct DayNightConfig {
+    bool enabled = true;
+    float timeOfDay = -1.0f;   // [0,1) start; <0 = keep the cycle's default
+    float speed = -1.0f;       // cycle speed; <0 = keep default
+};
+
 struct CitySimConfig {
     // Population: explicit counts, or -1 = BY DENSITY (roads-v2.1 4c) — the
     // citysim bridge computes counts from the built nav graph's lane-km /

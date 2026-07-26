@@ -3646,6 +3646,19 @@ bool LevelLoader::load(const std::string& path,
         world.add<CitySimConfig>(world.create(), cfg);
     }
 
+    // Day/night policy (device: "the scene loads bright but everything gets
+    // dark when the level starts" — the cycle was overwriting the authored
+    // sun + ambient every frame). "dayNight": {"enabled": false} pins the
+    // level's static lighting; {"timeOfDay": .., "speed": ..} seeds the cycle.
+    if (root.contains("dayNight") && root["dayNight"].is_object()) {
+        const auto& dn = root["dayNight"];
+        DayNightConfig dc;
+        dc.enabled = dn.value("enabled", dc.enabled);
+        dc.timeOfDay = dn.value("timeOfDay", dc.timeOfDay);
+        dc.speed = dn.value("speed", dc.speed);
+        world.add<DayNightConfig>(world.create(), dc);
+    }
+
     // STREET FURNITURE at BUILD time (device: "place the stop lights when we
     // build the city instead of during the simulation ... the simulation
     // should use it but it shouldn't be responsible for where they are").

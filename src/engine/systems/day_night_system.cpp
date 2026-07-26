@@ -1,4 +1,5 @@
 #include "day_night_system.h"
+#include "../components.h"
 
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>
@@ -19,7 +20,20 @@ void DayNightSystem::onStart(FrameContext& ctx) {
     cloudScale     = static_cast<float>(s.getDouble("clouds.scale", cloudScale));
     cloudWindSpeed = static_cast<float>(s.getDouble("clouds.windSpeed", cloudWindSpeed));
 
-    if (enabled && !hdrEnvironmentActive(ctx)) applyLighting(ctx);
+    // Same level-policy gate as update(): a DayNightConfig with enabled=false
+    // means the level's authored sun is the truth — without this, the settings
+    // state restored above stomped it once here and the update() gate then
+    // preserved the stomp forever.
+    bool levelEnabled = true;
+    ctx.world.each<DayNightConfig>([&](Entity, DayNightConfig& c) {
+        levelEnabled = c.enabled;
+        if (!configSeeded_) {
+            if (c.timeOfDay >= 0.0f) cycle.timeOfDay = c.timeOfDay;
+            if (c.speed >= 0.0f) cycle.speed = c.speed;
+            configSeeded_ = true;
+        }
+    });
+    if (enabled && levelEnabled && !hdrEnvironmentActive(ctx)) applyLighting(ctx);
     applyClouds(ctx);
 }
 
@@ -71,8 +85,20 @@ void DayNightSystem::update(FrameContext& ctx) {
     if (tod != webLastTimeOfDay_) { cycle.timeOfDay = tod; webLastTimeOfDay_ = tod; }
 #endif
     // Pushing current state into the view every frame (cheap) keeps panel
+    // Level policy (DayNightConfig): a level that authors a static sun turns
+    // the cycle off — the same yield rule as a bound HDR environment. Seeds
+    // (time/speed) apply once.
+    bool levelEnabled = true;
+    ctx.world.each<DayNightConfig>([&](Entity, DayNightConfig& c) {
+        levelEnabled = c.enabled;
+        if (!configSeeded_) {
+            if (c.timeOfDay >= 0.0f) cycle.timeOfDay = c.timeOfDay;
+            if (c.speed >= 0.0f) cycle.speed = c.speed;
+            configSeeded_ = true;
+        }
+    });
     // edits live even while the simulation is paused.
-    if (enabled && !hdrEnvironmentActive(ctx)) applyLighting(ctx);
+    if (enabled && levelEnabled && !hdrEnvironmentActive(ctx)) applyLighting(ctx);
     applyClouds(ctx);
 }
 

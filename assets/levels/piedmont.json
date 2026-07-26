@@ -1,5 +1,5 @@
 {
-  "_comment": "Piedmont (8km-city plan P3): the full city on the P1/P2 sandbox's world \u2014 terrain + multi-site road recipe copied VERBATIM from piedmont_roads.json (same seeds, so the erosion/conform caches hit), plus the citysim block that builds it: lots + buildings on the metro's blocks, per-hub-cluster civic anchors (each town gets its school + church), piedmont-scale parcel grain (150 m+ blocks parcel bigger lots), and the P5 scattering sky + volumetric clouds as its flagship consumer.",
+  "_comment": "Piedmont (8km-city plan P3): the full city on the P1/P2 sandbox's world — terrain + multi-site road recipe copied VERBATIM from piedmont_roads.json (same seeds, so the erosion/conform caches hit), plus the citysim block that builds it: lots + buildings on the metro's blocks, per-hub-cluster civic anchors (each town gets its school + church), piedmont-scale parcel grain (150 m+ blocks parcel bigger lots), and the P5 scattering sky + volumetric clouds as its flagship consumer.",
   "citysim": {
     "buildChance": 0.9,
     "buildLots": true,
@@ -27,6 +27,9 @@
     "tiered": true,
     "vehicles": "vehicles.lua",
     "wander": false
+  },
+  "dayNight": {
+    "enabled": false
   },
   "entities": [
     {
