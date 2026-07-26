@@ -196,6 +196,44 @@ int runCityPlannerQtTests() {
         REQUIRE(visibleGroups(world) == 3);
     }
 
+    // --- reopen: a NEW session must invalidate the panel's cached recipe ----
+    // Opening a level from the asset browser swaps editor states within ONE
+    // engine frame, so a polling panel never observes an editable() dip —
+    // only the bridge's attach generation moves. (A boolean latch here kept
+    // the previous level's recipe: "No recipe to regenerate" on the freshly
+    // opened level.)
+    const uint64_t genBefore = bridge.attachGeneration();
+    World world2;
+    Entity road2 = world2.create();
+    world2.add<Transform>(road2);
+    SourceSpec spec2;
+    spec2.shape = "road";
+    spec2.id = 1;
+    json roadBlock2;
+    roadBlock2["width"] = 10.0;
+    json gen2 = gen;
+    gen2["seed"] = 21;
+    roadBlock2["generate"] = gen2;
+    spec2.recipe = roadBlock2.dump();
+    world2.add<SourceSpec>(road2, spec2);
+    RoadNet net2;
+    net2.width = 10.0;
+    net2.autoRoundabout = false;
+    world2.add<RoadNet>(road2, net2);
+    world2.add<Renderable>(road2);
+    EditorSystem editor2(cameras, "planner_test2.json", nullptr, &bridge);
+    bridge.attach(&world2, &editor2, "planner_test2.json");
+    bridge.attachPlanner(&assets, nullptr, &cameras);
+    REQUIRE(bridge.attachGeneration() != genBefore);
+    panel.refresh();   // editable() never dipped — the generation must trigger
+    if (seedSpin) REQUIRE(seedSpin->value() == 21);   // the NEW level's recipe
+    if (regen) {
+        regen->click();
+        json after2 = json::parse(bridge.plannerRecipe(), nullptr, false);
+        REQUIRE(after2.is_object() && after2.value("seed", 0) == 21);
+        REQUIRE(world2.get<RoadNet>(road2)->nodes.size() > 10);
+    }
+
     // Observer/detached: planner API goes inert, panel grays out.
     bridge.detach();
     REQUIRE(bridge.plannerRecipe().empty());

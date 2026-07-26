@@ -113,6 +113,13 @@ public:
     // (conservative: undoing back to the saved state still reads dirty).
     bool documentDirty();
 
+    // Bumped on every attach(): opening a level from the asset browser swaps
+    // editor states within a single engine frame, so a shell panel polling
+    // editable() never observes the detached gap. Panels that cache document
+    // state (the City Planner's recipe) compare this instead of watching for
+    // an editable() dip. 0 is never a live session.
+    uint64_t attachGeneration() const { return attachGen; }
+
     // The level's HDR environment is DOCUMENT state, not an entity: these
     // edit the level JSON's environment block directly (saving entities
     // first). Path is level-relative ("../env/x.hdr"); empty removes the
@@ -183,6 +190,7 @@ private:
     bool observerMode = false;
     Entity observerSelection;     // panel selection while no editor owns one
     std::string levelFile;
+    uint64_t attachGen = 0;       // see attachGeneration()
     uint64_t savedRevision = 0;   // command-log revision at the last save
     std::vector<EditorNotice> notices;
     CityPlanner planner_;         // City Planner engine side (P7.3 phase 1)

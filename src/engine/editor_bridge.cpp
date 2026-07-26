@@ -16,6 +16,8 @@ void EditorBridge::attach(World* world, EditorSystem* editor,
     worldPtr = world;
     editorPtr = editor;
     observerMode = false;
+    ++attachGen;   // a NEW edit session — even when a level swap never passes
+                   // through a detached state at the shell's poll cadence
     levelFile = std::move(level);
     // A session begins on a freshly loaded (or just-saved) document.
     savedRevision = editor && editor->undoStack()

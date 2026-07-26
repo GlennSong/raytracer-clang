@@ -40,7 +40,7 @@ private:
 
     engine::EditorBridge& bridge;
     std::string recipeJson;   // the whole generate block, as last synced
-    bool loaded = false;
+    uint64_t loadedGen = 0;   // bridge.attachGeneration() the recipe came from
 
     QSpinBox* seed = nullptr;
     QDoubleSpinBox* siteRadius = nullptr;

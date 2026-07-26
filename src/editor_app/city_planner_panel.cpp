@@ -122,15 +122,16 @@ CityPlannerPanel::CityPlannerPanel(engine::EditorBridge& bridge)
 void CityPlannerPanel::refresh() {
     const bool editing = bridge.editable();
     setEnabled(editing);
-    if (!editing) {
-        loaded = false;   // a fresh session re-reads its recipe
-        return;
-    }
-    if (!loaded) loadRecipe();
+    if (!editing) return;
+    // Compare the ATTACH GENERATION, not an editable() dip: opening a level
+    // from the asset browser swaps editor states within one engine frame, so
+    // a 150ms poll never sees the panel detached — a boolean latch kept the
+    // previous level's recipe forever ("No recipe to regenerate").
+    if (loadedGen != bridge.attachGeneration()) loadRecipe();
 }
 
 void CityPlannerPanel::loadRecipe() {
-    loaded = true;
+    loadedGen = bridge.attachGeneration();
     recipeJson = bridge.plannerRecipe();
     if (recipeJson.empty()) {
         stats->setText("No generated road in this level");
