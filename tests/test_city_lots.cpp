@@ -4,6 +4,8 @@
 #include "../src/engine/procgen/city/city_lots.h"
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/city/shape_grammar.h"   // PartId (surfaced walls)
+#include "../src/engine/procgen/city/metro.h"
+#include "../src/engine/procgen/city/road_constraints.h"
 
 using namespace engine;
 
@@ -539,4 +541,150 @@ TEST_CASE(landmarks_are_planned_not_rolled) {
     std::vector<LotBuilding> c = growLotBuildings(blocks, p);
     CHECK(b.size() == c.size());
     for (std::size_t i = 0; i < b.size(); ++i) CHECK(b[i].recipe == c[i].recipe);
+}
+
+// FRONTAGE GATE (ADR-0066, stage 4): every built lot must touch a road. A lot
+// "fronts" a street when its nearest road edge is within a reasonable setback
+// distance (max 30 m). This gate verifies that the lot-placement algorithm keeps
+// buildings from floating in the middle of the block, far from any street face.
+TEST_CASE(every_built_lot_touches_a_road) {
+    // Build a piedmont-style metro using the same multi-site params as test_metro_sites.
+    MetroParams p;
+    p.seed = 7;
+    p.freeways = true;
+    p.backboneClass = RoadClass::Arterial;
+    p.freewayWidth = 17;
+    p.arteryWidth = 17;
+    p.collectorWidth = 13;
+    p.streetWidth = 11;
+    p.blockSize = 220;
+    p.minBlockEdge = 150;
+    p.segLength = 120;
+    p.influence = 800;
+    p.killRadius = 300;
+    p.mergeRadius = 200;
+    p.corridorSpacing = 240;
+    p.ambientPer500 = 5;
+    p.loopMin = 550;
+    p.loopMax = 1300;
+    p.interchangeSpacing = 600;
+
+    MetroSite city;
+    city.center = {900, 900};
+    city.radius = 1400;
+    city.hotspots = 9;
+    city.blockSize = 220;
+    MetroSite east;
+    east.center = {3050, 400};
+    east.radius = 420;
+    east.hotspots = 3;
+    east.blockSize = 180;
+    east.density = 0.55;
+    east.kindBias = 3;
+    MetroSite south;
+    south.center = {300, 3050};
+    south.radius = 380;
+    south.hotspots = 3;
+    south.blockSize = 180;
+    south.density = 0.5;
+    south.kindBias = 2;
+    p.sites = {city, east, south};
+
+    RoadGraph roads = buildMetro(p);
+
+    // Post-process the graph as test_metro_sites does (two rounds of consolidation).
+    RoadRules rules;
+    rules.autoRoundabout = false;
+    roads = capDegree(planarize(applyConstraints(roads, rules), 1.0), rules);
+    for (int round = 0; round < 2; ++round) {
+        roads = dropParallelEdges(roads);
+        roads = consolidateJunctionSpans(roads, 150.0, rules.maxDegree);
+        roads = capDegree(planarize(roads, 1.0), rules);
+        roads = mergeShortEdges(roads, 30.0, rules.maxDegree);
+        roads = relaxSharpBends(roads, 0.5, 64);
+    }
+
+    // Extract the blocks and grow buildings on them.
+    std::vector<Poly2> blocks = extractBlocks(roads, 200.0);
+    CHECK(!blocks.empty());
+
+    LotParams lotParams;
+    lotParams.center = {900, 900};
+    lotParams.seed = 11;
+    std::vector<LotBuilding> buildings = growLotBuildings(blocks, lotParams);
+    CHECK(!buildings.empty());
+
+    // For each built (non-park/non-green) lot, compute the minimum distance from
+    // the lot's OBB to any road edge in the graph. The lot's rectangle is defined
+    // by site (centroid), width, depth (half-extents), and yaw (rotation).
+    //
+    // Helper: distance from a point to a line segment (a,b).
+    auto distPointToSegment = [](const Vec2& p, const Vec2& a, const Vec2& b) -> Real {
+        Vec2 ab = b - a;
+        Real len2 = ab.lengthSquared();
+        if (len2 < 1e-12) return (p - a).length();
+        Real t = std::clamp(dot(p - a, ab) / len2, 0.0, 1.0);
+        Vec2 closest = a + ab * t;
+        return (p - closest).length();
+    };
+
+    // Helper: get the 4 corners of the OBB.
+    auto getCorners = [](const Vec2& center, Real w, Real d, Real yaw) -> std::vector<Vec2> {
+        Real cx = std::cos(yaw), sy = std::sin(yaw);
+        Vec2 ax{cx, sy};      // long axis
+        Vec2 ay{-sy, cx};     // short axis (perpendicular)
+        return {
+            center + ax * w + ay * d,
+            center + ax * w - ay * d,
+            center - ax * w - ay * d,
+            center - ax * w + ay * d
+        };
+    };
+
+    // Helper: distance from the lot rectangle to the nearest road edge.
+    auto distToRoads = [&](const LotBuilding& lot) -> Real {
+        std::vector<Vec2> corners = getCorners(lot.site, lot.width, lot.depth, lot.yaw);
+        Real minDist = 1e30;
+
+        // For each road edge, compute the distance from each corner to the line segment.
+        for (const RoadEdge& edge : roads.edges) {
+            Vec2 a = roads.nodes[edge.a].pos;
+            Vec2 b = roads.nodes[edge.b].pos;
+            for (const Vec2& corner : corners) {
+                Real d = distPointToSegment(corner, a, b);
+                minDist = std::min(minDist, d);
+            }
+        }
+        return minDist;
+    };
+
+    // Measure frontage distances and report the distribution.
+    std::vector<Real> distances;
+    int nonCourtLots = 0;
+    Real maxFrontage = 0;
+    for (const LotBuilding& b : buildings) {
+        // Skip parks and greens (they're ground scenery, not buildings).
+        if (b.type == "park" || b.type == "green") continue;
+
+        Real dist = distToRoads(b);
+        distances.push_back(dist);
+        nonCourtLots++;
+        maxFrontage = std::max(maxFrontage, dist);
+    }
+
+    // Report the measured maximum frontage distance.
+    if (!distances.empty()) {
+        std::sort(distances.begin(), distances.end());
+        Real median = distances[distances.size() / 2];
+        std::printf("        [frontage] %d buildings, median %.1f m, max %.1f m\n",
+                    nonCourtLots, median, maxFrontage);
+    }
+
+    // Assert: every non-court lot must touch a road within 30 m.
+    // This is the frontage setback guarantee — lots are "adjacent" to the street.
+    for (const LotBuilding& b : buildings) {
+        if (b.type == "park" || b.type == "green") continue;
+        Real dist = distToRoads(b);
+        CHECK(dist <= 30.0);
+    }
 }

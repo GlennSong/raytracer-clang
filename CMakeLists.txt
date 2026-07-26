@@ -458,6 +458,7 @@ add_executable(run_tests
     tests/test_winding.cpp
     tests/test_road_constraints.cpp
     tests/test_metro_sites.cpp
+    tests/test_city_stages.cpp
     tests/test_road_semantics.cpp
     tests/test_road_layers.cpp
     tests/test_road_offset.cpp
@@ -467,6 +468,7 @@ add_executable(run_tests
     tests/test_road_weld.cpp
     tests/test_junction_surface.cpp
     tests/test_drive_freeway.cpp
+    tests/test_piedmont_drive.cpp
     tests/test_mesh_quality.cpp
     tests/test_mesh_lattice.cpp
     tests/test_road_lattice.cpp
