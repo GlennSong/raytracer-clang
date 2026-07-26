@@ -21,6 +21,8 @@
 #endif
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <string>
 
@@ -1355,8 +1357,29 @@ void CityRenderSystem::step(World& world, Real dt) {
             });
         if (!haveCentre) sim_.clearTierCenter();
     }
+    // RT_DUMP_STATS: split the fixed-step bill — CitySim::step vs the group
+    // bake — so the 20fps hunt names its target (8km-city plan P6).
+    static const bool dumpStats = std::getenv("RT_DUMP_STATS") != nullptr;
+    if (!dumpStats) {
+        sim_.step(dt, params_.hoursPerSecond);
+        syncGroups(world);
+        return;
+    }
+    static double simMs = 0.0, syncMs = 0.0;
+    static int calls = 0;
+    auto t0 = std::chrono::steady_clock::now();
     sim_.step(dt, params_.hoursPerSecond);
+    auto t1 = std::chrono::steady_clock::now();
     syncGroups(world);
+    auto t2 = std::chrono::steady_clock::now();
+    simMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
+    syncMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
+    if (++calls % 300 == 0) {
+        LOG_INFO << "[stats] citysim step " << (simMs / calls)
+                 << " ms, group sync " << (syncMs / calls) << " ms (per fixed step)";
+        simMs = syncMs = 0.0;
+        calls = 0;
+    }
 }
 
 void CityRenderSystem::onStart(engine::FrameContext& ctx) {

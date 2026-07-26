@@ -180,8 +180,26 @@ void Application::runFrame() {
     {
         RT_PROFILE_ZONE_NAMED("fixedUpdate");
         FrameContext ctx = makeContext();
+        // RT_DUMP_STATS phase timing: how much of the frame is the fixed
+        // step, and how many steps ran (perf triage without Tracy).
+        static const bool dumpStats = std::getenv("RT_DUMP_STATS") != nullptr;
+        const auto t0 = std::chrono::steady_clock::now();
         for (int i = 0; i < steps; i++)
             stateStack.forEachActive([&](AppState& state) { state.fixedUpdate(ctx); });
+        if (dumpStats && steps > 0) {
+            static int frames = 0;
+            static double ms = 0.0;
+            static int stepSum = 0;
+            ms += std::chrono::duration<double, std::milli>(
+                      std::chrono::steady_clock::now() - t0).count();
+            stepSum += steps;
+            if (++frames % 120 == 0) {
+                LOG_INFO << "[stats] fixedUpdate " << (ms / frames)
+                         << " ms/frame over " << (static_cast<double>(stepSum) / frames)
+                         << " steps/frame (" << (ms / stepSum) << " ms/step)";
+                frames = 0; ms = 0.0; stepSum = 0;
+            }
+        }
     }
 
     // Deliver everything enqueued during update/fixedUpdate before the frame

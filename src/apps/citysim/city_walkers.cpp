@@ -53,14 +53,49 @@ engine::MeshHandle CityWalkerSystem::poseMesh(engine::AssetManager& assets,
 }
 
 void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
-    if (spawned_ || !city_.built()) return;
+    // TIERED (8km-city plan P6, the 20fps fix): a physical walker body — a
+    // Jolt capsule stepped every tick plus 360-degree separation against
+    // every other body — exists ONLY for K-tier pedestrians (the bubble the
+    // player can see; ~200 downtown). Piedmont's 1800 all-city capsules were
+    // 10.1 ms of the 13 ms fixed step. V-tier peds keep full sim identity
+    // and re-grow a body the moment the bubble reaches them. With tiering
+    // off (small levels, tests) every ped is K and behavior is unchanged —
+    // except that this reconcile now also runs per step, which is what lets
+    // bodies come and go at all.
+    if (!city_.built()) return;
     World& world = ctx.world;
     const CitySim& sim = city_.sim();
+    PhysicsWorld& pw = physics_.physicsWorld();
 
     const auto& agents = sim.agents();
+    // Drop walkers whose agents left the K tier (explicit character removal —
+    // physics has no entity-destroy hook; see the onStop note).
+    for (std::size_t wi = 0; wi < walkers_.size();) {
+        Walker& w = walkers_[wi];
+        const bool stale =
+            w.agentId < 0 || w.agentId >= static_cast<int>(agents.size()) ||
+            agents[w.agentId].tier != Agent::Tier::K ||
+            agents[w.agentId].mode != Agent::Mode::Pedestrian;
+        if (!stale) { ++wi; continue; }
+        if (world.alive(w.entity)) {
+            if (CharacterController* cc = world.get<CharacterController>(w.entity))
+                if (cc->characterId != engine::INVALID_CHARACTER)
+                    pw.removeCharacter(cc->characterId);
+            world.destroy(w.entity);
+        }
+        walkers_[wi] = walkers_.back();
+        walkers_.pop_back();
+    }
+    // Membership of the CURRENT walker set, then grow the missing K peds.
+    haveWalker_.assign(agents.size(), 0);
+    for (const Walker& w : walkers_)
+        if (w.agentId >= 0 && w.agentId < static_cast<int>(agents.size()))
+            haveWalker_[w.agentId] = 1;
     for (int i = 0; i < static_cast<int>(agents.size()); ++i) {
         const Agent& a = agents[i];
         if (a.mode != Agent::Mode::Pedestrian) continue;
+        if (a.tier != Agent::Tier::K) continue;
+        if (haveWalker_[i]) continue;
 
         Entity e = world.create();
         // Spawn a little above the ghost's spot; the character settles under
@@ -102,7 +137,6 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
         w.blocked.minMotion = 0.15;
         walkers_.push_back(w);
     }
-    spawned_ = true;
 }
 
 void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
@@ -264,7 +298,6 @@ void CityWalkerSystem::onStop(engine::FrameContext&) {
     // same no-removal-hook note as the vehicle bridge — fine at level teardown).
     walkers_.clear();
     poseMeshes_.clear();
-    spawned_ = false;
 }
 
 }  // namespace citysim
