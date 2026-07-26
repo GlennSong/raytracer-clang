@@ -61,6 +61,7 @@
 #include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QStatusBar>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -401,7 +402,16 @@ struct Panels {
         column->addWidget(inspector);
         column->addStretch();
 
-        dock->setWidget(body);
+        // Scroll wrapper: a populated inspector's minimum height is the sum
+        // of its sections. Docked in a column with another panel, rigid
+        // minimums can exceed the window and the dock layout clips the
+        // panels into each other — scrolling makes the constraint always
+        // satisfiable instead.
+        auto* scroll = new QScrollArea(dock);
+        scroll->setWidget(body);
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        dock->setWidget(scroll);
         return dock;
     }
 
@@ -537,10 +547,20 @@ int main(int argc, char** argv) {
     // City Planner (P7.3 phase 1): recipe knobs + graph-only Regenerate +
     // overlay layers + camera presets. Lives under the inspector on the
     // right; its signals call the bridge directly, same as the inspector.
+    // Scroll-wrapped for the same reason as the inspector: the panel's
+    // natural minimum (~535px of rows) must never become a hard layout
+    // constraint on the shared column.
     auto* plannerDock = new QDockWidget("City Planner", &mainWindow);
     auto* plannerPanel = new CityPlannerPanel(bridge);
-    plannerDock->setWidget(plannerPanel);
+    auto* plannerScroll = new QScrollArea(plannerDock);
+    plannerScroll->setWidget(plannerPanel);
+    plannerScroll->setWidgetResizable(true);
+    plannerScroll->setFrameShape(QFrame::NoFrame);
+    plannerDock->setWidget(plannerScroll);
     mainWindow.addDockWidget(Qt::RightDockWidgetArea, plannerDock);
+    // Explicitly UNDER the inspector in the same column — addDockWidget
+    // alone leaves the arrangement to the dock area's discretion.
+    mainWindow.splitDockWidget(inspectorDock, plannerDock, Qt::Vertical);
 
     // Asset browser: a filesystem view of assets/; double-clicking a level
     // opens it (Play/Stop and open both go through Application::requestState).
@@ -635,8 +655,10 @@ int main(int argc, char** argv) {
     mainWindow.show();
     // Side panels start narrow; the viewport is the star. (resizeDocks only
     // takes effect once the window is realized.)
-    mainWindow.resizeDocks({hierarchyDock, inspectorDock}, {200, 330},
-                           Qt::Horizontal);
+    mainWindow.resizeDocks({hierarchyDock, inspectorDock, plannerDock},
+                           {200, 330, 330}, Qt::Horizontal);
+    // Right column: inspector gets the majority; the planner scrolls anyway.
+    mainWindow.resizeDocks({inspectorDock, plannerDock}, {3, 2}, Qt::Vertical);
     hosted->setNativeHandle(reinterpret_cast<void*>(viewport->winId()));
     {
         const qreal scale = viewport->devicePixelRatioF();
