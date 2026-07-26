@@ -2238,6 +2238,7 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
                 const double minLen = g.value("min_road_len", 10.0);
                 for (int round = 0; round < 2; ++round) {
                     cg = dropParallelEdges(cg);
+                    cg = dissolveAcuteArms(cg, 0.85, 3);
                     cg = consolidateJunctionSpans(cg, minBlockEdge, rules.maxDegree);
                     cg = capDegree(planarize(cg, 1.0), rules);
                     cg = mergeShortEdges(cg, minLen, rules.maxDegree);

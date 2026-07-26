@@ -107,6 +107,7 @@ TEST_CASE(stage2_fabric_subdivides_enclosed_faces) {
     g = capDegree(planarize(applyConstraints(g, rules), 1.0), rules);
     for (int round = 0; round < 2; ++round) {
         g = dropParallelEdges(g);
+        g = dissolveAcuteArms(g, 0.85, 3);
         g = consolidateJunctionSpans(g, 150.0, rules.maxDegree);
         g = capDegree(planarize(g, 1.0), rules);
         g = mergeShortEdges(g, 30.0, rules.maxDegree);
@@ -213,6 +214,7 @@ TEST_CASE(stage5_buildings_fit_their_lots) {
     g = capDegree(planarize(applyConstraints(g, rules), 1.0), rules);
     for (int round = 0; round < 2; ++round) {
         g = dropParallelEdges(g);
+        g = dissolveAcuteArms(g, 0.85, 3);
         g = consolidateJunctionSpans(g, 150.0, rules.maxDegree);
         g = capDegree(planarize(g, 1.0), rules);
         g = mergeShortEdges(g, 30.0, rules.maxDegree);

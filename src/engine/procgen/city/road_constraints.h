@@ -104,6 +104,15 @@ RoadGraph mergeShortEdges(const RoadGraph& graph, Real minLen, int maxDegree = 4
 RoadGraph consolidateJunctionSpans(const RoadGraph& graph, Real minSpan,
                                    int maxDegree = 4);
 
+// Dissolve the redundant twin of a near-parallel junction arm pair (dir dot >
+// minDot): delete the narrower/shorter arm's whole span when its far junction
+// stays reachable within maxDetourSpans span-hops without it. The mesher's
+// acute-pair trim cannot surface the sliver wedge such pairs enclose — the
+// drive probe measured the gap. Deletion-only: planarity-safe, connectivity
+// proven per cut.
+RoadGraph dissolveAcuteArms(const RoadGraph& graph, Real minDot = 0.85,
+                            int maxDetourSpans = 3);
+
 // Corner-cut degree-2 vertices whose deflection exceeds maxTurn: delete the
 // vertex and chord its neighbours. Strictly bend-reducing (terminates),
 // face-preserving, junction-pinned — the backstop for bends relaxSharpBends

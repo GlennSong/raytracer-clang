@@ -96,6 +96,27 @@ void Application::renderFrame() {
     rendererPtr->beginFrame();
     stateStack.forEachRenderable([&](AppState& state) { state.render(ctx); });
     rendererPtr->endFrame();
+    // RT_DUMP_STATS=1: periodic frame-cost report on stderr, so a headless run
+    // answers "what is eating the frame" without the ImGui HUD (perf triage,
+    // 8km-city plan P6).
+    static const bool dumpStats = std::getenv("RT_DUMP_STATS") != nullptr;
+    if (dumpStats) {
+        static int frames = 0;
+        static double accum = 0.0;
+        accum += frameDelta;
+        if (++frames % 120 == 0) {
+            const RenderStats rs = rendererPtr->getRenderStats();
+            LOG_INFO << "[stats] " << (frames / accum) << " fps ("
+                     << (accum / frames * 1000.0) << " ms) draws "
+                     << rs.drawCalls << " (inst " << rs.instancedDrawCalls
+                     << ") instances " << rs.totalInstances << " tris "
+                     << rs.trianglesDrawn / 1000000.0 << "M overflow i"
+                     << rs.instanceOverflow << "/s" << rs.shadowOverflow
+                     << "/f" << rs.foliageOverflow;
+            frames = 0;
+            accum = 0.0;
+        }
+    }
 }
 
 void Application::begin() {

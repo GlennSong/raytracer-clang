@@ -926,6 +926,29 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         }
         return true;
     };
+    // Distance from a point to the nearest road SURFACE edge (centreline
+    // distance minus half-width, floored at 0). Frontage gate: a lot whose
+    // whole footprint sits farther than the frontage bound from every road
+    // goes GREEN instead of building — stage 4 of the city contract ("lots
+    // touch the road; the middle of a block is parks and plazas").
+    auto roadSurfaceDist = [&](const Vec2& c) {
+        if (!roads) return Real(0);
+        Real best = Real(1e30);
+        for (const RoadEdge& e : roads->edges) {
+            if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(roads->nodes.size()) ||
+                e.b >= static_cast<int>(roads->nodes.size())) continue;
+            const Vec2& a = roads->nodes[e.a].pos;
+            const Vec2& b = roads->nodes[e.b].pos;
+            Vec2 ab = b - a;
+            Real len2 = ab.lengthSquared();
+            Real t = len2 > 1e-12 ? dot(c - a, ab) / len2 : 0.0;
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            Vec2 q(a.x + ab.x * t, a.y + ab.y * t);
+            Real d = (c - q).length() - e.width * 0.5;
+            best = std::min(best, d < 0 ? Real(0) : d);
+        }
+        return best;
+    };
     // PUSH a polygon clear of the sampled road ribbons (roads-v2.1 R4-6c,
     // drive feedback: "parks don't sit on their lots and explode into the
     // street including fences"). Buildings shrink-to-fit via clearOfRoads;
@@ -1333,6 +1356,20 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 // ground; the lot polygon still marks it for planting.
                 out.push_back(std::move(g));
             };
+            // FRONTAGE GATE (city contract stage 4): a building must front a
+            // street. A lot marooned >26m from every road surface (a block
+            // whose edge a cleanup pass dissolved, a deep interior scrap)
+            // becomes a mid-block green instead of an unreachable building.
+            // Courts are already green by design; this catches the strays.
+            {
+                Real front = Real(1e30);
+                for (const Vec2& v : lot.footprint)
+                    front = std::min(front, roadSurfaceDist(v));
+                if (front > 26.0 && cand.landmark < 0) {
+                    emitGreen();
+                    continue;
+                }
+            }
             // UNDER A FREEWAY DECK: a normal building would clip the elevated
             // structure, so this lot becomes something that FITS beneath it. The
             // block/lot pipeline thus builds the RIGHT thing under the freeway

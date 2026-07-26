@@ -375,6 +375,130 @@ RoadGraph mergeShortEdges(const RoadGraph& in, Real minLen, int maxDegree) {
     return out;
 }
 
+RoadGraph dissolveAcuteArms(const RoadGraph& in, Real minDot, int maxDetourSpans) {
+    // Two near-parallel arms leaving one junction enclose a sliver wedge the
+    // mesher's acute-pair trim can only partially cover — the piedmont drive
+    // probe measured 24 hole samples riding the trimmed twin (two width-17
+    // arterials 26 degrees apart at the city hub). Deletion-only: drop the
+    // narrower/shorter arm's whole span IF its far junction stays reachable
+    // within maxDetourSpans spans — planarity untouched, connectivity proven
+    // before every cut. Deterministic: node order, then arm order.
+    RoadGraph g = in;
+    for (int guard = 0; guard < 256; ++guard) {
+        // Span walk tables (junction-to-junction through degree-2 nodes).
+        const int N = static_cast<int>(g.nodes.size());
+        std::vector<int> deg(N, 0);
+        std::vector<std::vector<std::pair<int, int>>> nbr(N);
+        for (int ei = 0; ei < static_cast<int>(g.edges.size()); ++ei) {
+            const RoadEdge& e = g.edges[ei];
+            if (e.a == e.b) continue;
+            ++deg[e.a]; ++deg[e.b];
+            nbr[e.a].push_back({e.b, ei});
+            nbr[e.b].push_back({e.a, ei});
+        }
+        struct Span {
+            int far = -1;
+            Real len = 0, width = 0;
+            std::vector<int> edges;
+            std::vector<Vec2> pts;   // node polyline, junction first
+            Vec2 dir;   // unit, leaving the junction
+        };
+        auto walkSpan = [&](int from, int firstOther, int firstEdge) {
+            Span s;
+            s.width = g.edges[firstEdge].width;
+            s.edges.push_back(firstEdge);
+            s.pts.push_back(g.nodes[from].pos);
+            s.pts.push_back(g.nodes[firstOther].pos);
+            Vec2 d0 = g.nodes[firstOther].pos - g.nodes[from].pos;
+            s.len = d0.length();
+            s.dir = s.len > 1e-9 ? d0 * (1.0 / s.len) : Vec2(1, 0);
+            int prev = from, cur = firstOther;
+            while (deg[cur] == 2) {
+                auto [a0, ea] = nbr[cur][0];
+                auto [a1, eb] = nbr[cur][1];
+                int nn = (a0 == prev) ? a1 : a0;
+                int ne = (a0 == prev) ? eb : ea;
+                s.edges.push_back(ne);
+                s.pts.push_back(g.nodes[nn].pos);
+                s.len += (g.nodes[cur].pos - g.nodes[nn].pos).length();
+                prev = cur; cur = nn;
+            }
+            s.far = cur;
+            return s;
+        };
+        // Find the first dissolvable pair.
+        bool acted = false;
+        for (int v = 0; v < N && !acted; ++v) {
+            if (deg[v] < 3) continue;
+            std::vector<Span> arms;
+            for (auto [o, ei] : nbr[v]) arms.push_back(walkSpan(v, o, ei));
+            for (std::size_t i = 0; i < arms.size() && !acted; ++i)
+                for (std::size_t j = i + 1; j < arms.size() && !acted; ++j) {
+                    if (dot(arms[i].dir, arms[j].dir) < minDot) continue;
+                    if (arms[i].far == v || arms[j].far == v) continue;
+                    // Victim: narrower, then shorter, then higher j (determinism).
+                    const Span& victim =
+                        arms[i].width != arms[j].width
+                            ? (arms[i].width < arms[j].width ? arms[i] : arms[j])
+                            : (arms[i].len <= arms[j].len ? arms[i] : arms[j]);
+                    // Only SLIVER twins die: the un-meshable wedge is a
+                    // local artifact (~tens of metres). Long near-parallel
+                    // arms are structure — deleting one collapses blocks and
+                    // strands frontage (measured 33 -> 18 blocks). A stricter
+                    // ribbon-overlap criterion was tried and FALSIFIED: pairs
+                    // that diverge past ribbon reach still hole the mesh.
+                    if (victim.len > 250.0) continue;
+                    // Redundancy proof: far junction reachable without the span,
+                    // within maxDetourSpans span-hops.
+                    std::vector<char> banned(g.edges.size(), 0);
+                    for (int e : victim.edges) banned[e] = 1;
+                    std::vector<int> frontier{v};
+                    std::vector<char> seen(N, 0);
+                    seen[v] = 1;
+                    bool reach = false;
+                    for (int hop = 0; hop < maxDetourSpans && !reach; ++hop) {
+                        std::vector<int> next;
+                        for (int u : frontier)
+                            for (auto [o, ei] : nbr[u]) {
+                                if (banned[ei]) continue;
+                                Span sp = walkSpan(u, o, ei);
+                                bool skip = false;
+                                for (int e : sp.edges)
+                                    if (banned[e]) { skip = true; break; }
+                                if (skip || seen[sp.far]) continue;
+                                if (sp.far == victim.far) { reach = true; break; }
+                                seen[sp.far] = 1;
+                                next.push_back(sp.far);
+                            }
+                        frontier = std::move(next);
+                    }
+                    if (!reach) continue;
+                    std::vector<RoadEdge> kept;
+                    kept.reserve(g.edges.size());
+                    for (int ei = 0; ei < static_cast<int>(g.edges.size()); ++ei)
+                        if (!banned[ei]) kept.push_back(g.edges[ei]);
+                    g.edges = std::move(kept);
+                    acted = true;
+                }
+        }
+        if (!acted) break;
+    }
+    // Compact orphaned nodes.
+    std::vector<int> remap(g.nodes.size(), -1);
+    for (const RoadEdge& e : g.edges) { remap[e.a] = 0; remap[e.b] = 0; }
+    RoadGraph out;
+    for (int i = 0; i < static_cast<int>(g.nodes.size()); ++i)
+        if (remap[i] == 0) { remap[i] = static_cast<int>(out.nodes.size()); out.nodes.push_back(g.nodes[i]); }
+    out.edges.reserve(g.edges.size());
+    for (const RoadEdge& e : g.edges) {
+        RoadEdge o = e;
+        o.a = remap[e.a];
+        o.b = remap[e.b];
+        out.edges.push_back(o);
+    }
+    return out;
+}
+
 RoadGraph cutSharpCorners(const RoadGraph& in, Real maxTurn) {
     // Corner-cut the bends relaxSharpBends cannot converge (easing one vertex
     // can sharpen its neighbour — ping-pong): DELETE a degree-2 vertex whose

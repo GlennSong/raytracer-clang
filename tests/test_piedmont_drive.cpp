@@ -73,6 +73,7 @@ RoadGraph buildPiedmontGraph() {
     g = capDegree(planarize(applyConstraints(g, rules), 1.0), rules);
     for (int round = 0; round < 2; ++round) {
         g = dropParallelEdges(g);
+        g = dissolveAcuteArms(g, 0.85, 3);
         g = consolidateJunctionSpans(g, 150.0, rules.maxDegree);
         g = capDegree(planarize(g, 1.0), rules);
         g = mergeShortEdges(g, 30.0, rules.maxDegree);
@@ -112,6 +113,7 @@ TEST_CASE(city_to_towns_are_drivable_on_the_real_mesh) {
     // on the raw graph a 120m chord across a curved chain leaves the swept
     // ribbon entirely (measured: 25 "holes" that were really corner-cutting).
     NavGraph nav = buildNavGraph(navRoadGraph(net));
+
     const Vec2 city(900, 900);
     const Vec2 towns[2] = {Vec2(3050, 400), Vec2(300, 3050)};
     const char* names[2] = {"east", "south"};
@@ -144,16 +146,22 @@ TEST_CASE(city_to_towns_are_drivable_on_the_real_mesh) {
             std::printf("            hole at (%.0f, %.0f)\n", d.where.x, d.where.z);
             ++shown;
         }
-        // The bar: continuous surface (no holes), nothing standing across the
-        // carriageway (no blocked). Steps/grades stay small — flat-ground
-        // junction pads occasionally kink a probe sample at a mouth.
-        //
-        // OPEN DEFECT (ratcheted, not excused): the south route's FIRST ~150m
-        // — at the city-centre hub exit, (907,915) — reports 24 hole samples
-        // while the east route from the SAME start is clean. The south route's
-        // first nav links traverse something the mesher never sweeps.
-        // Localize via the printed hole positions; target is 0 on both routes.
-        CHECK(rep.holes <= (t == 1 ? 30 : 0));
+        // Localize the south-exit defect: what are the first links made of?
+        for (int li = 0; li < 3 && li < static_cast<int>(route.links.size()); ++li) {
+            const NavLink& l = nav.links[route.links[li]];
+            Vec2 a = nav.pointOnLink(route.links[li], 0.0);
+            Vec2 b = nav.pointOnLink(route.links[li], 1.0);
+            std::printf("            link[%d] (%.0f,%.0f)->(%.0f,%.0f) len %.0f "
+                        "klass %d lanes %d width %.1f layer %d walk %d\n",
+                        li, a.x, a.y, b.x, b.y, l.length,
+                        static_cast<int>(l.klass), l.lanes, l.width, l.layer,
+                        l.walkable ? 1 : 0);
+        }
+        // The bar: continuous surface (no holes), nothing standing across
+        // the carriageway (no blocked). The hub-exit wedge holes are FIXED —
+        // dissolveAcuteArms deletes the un-meshable sliver twin (road
+        // provenance: two width-17 arterials 26 deg apart at the city hub).
+        CHECK(rep.holes == 0);
         CHECK(rep.blocked == 0);
         CHECK(rep.steps <= 2);
         CHECK(rep.grades <= 2);
