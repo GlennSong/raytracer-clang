@@ -86,6 +86,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/polygon.cpp
     src/engine/procgen/city/shape_grammar.cpp
     src/engine/procgen/city/parcel.cpp
+    src/engine/procgen/city/patch_fabric.cpp
     src/engine/procgen/city/road_network.cpp
     src/engine/procgen/city/street_kit.cpp
     src/engine/procgen/city/street_furniture.cpp
