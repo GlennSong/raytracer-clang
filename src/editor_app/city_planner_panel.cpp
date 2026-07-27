@@ -107,10 +107,25 @@ CityPlannerPanel::CityPlannerPanel(engine::EditorBridge& bridge)
         layerColumn->addWidget(box);
         return box;
     };
+    layerFootprint = addLayer("Footprint", "footprint");
     layerHubs = addLayer("Hubs", "hubs");
     layerArterials = addLayer("Arterials", "arterials");
     layerNodes = addLayer("Nodes", "nodes");
     column->addWidget(layers);
+
+    // Start fresh on the terrain: graph + baked mesh + overlays gone, the
+    // recipe kept — the next Regenerate rebuilds from the dials.
+    clearButton = new QPushButton("Clear roads", this);
+    clearButton->setObjectName("plannerClear");
+    clearButton->setToolTip(
+        "Remove the road graph and baked mesh (bare terrain); the recipe "
+        "survives for the next Regenerate");
+    QObject::connect(clearButton, &QPushButton::clicked, [this]() {
+        stats->setText(this->bridge.plannerClearRoads()
+                           ? "Cleared — bare terrain (recipe kept)"
+                           : "Nothing to clear");
+    });
+    column->addWidget(clearButton);
 
     stats = new QLabel("—", this);
     stats->setObjectName("plannerStats");

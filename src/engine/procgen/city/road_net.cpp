@@ -2037,6 +2037,7 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
     // mesh, a stale nodeElev would lift a street onto a phantom deck.
     net.freewayPlans.clear();
     net.cityHubs.clear();
+    net.siteFootprints.clear();
     net.specs.clear();
     net.edgeSpecs.clear();
     net.edgeBaked.clear();
@@ -2086,6 +2087,17 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         mp.fabricConform      = g.value("fabric_conform", 0.15);
         mp.fabricSoftCollapse = g.value("fabric_soft_collapse", 0.8);
         mp.fabricJitter       = g.value("fabric_jitter", 0.12);
+        // P8 footprint-first skeleton ("" = legacy colonization). Stage B:
+        // footprints derive + export (planner overlay); P8-C swaps the
+        // skeleton construction itself.
+        mp.skeleton      = g.value("skeleton", std::string());
+        mp.footprintCell = g.value("footprint_cell", 80.0);
+        mp.districtLen   = g.value("district_len", 1500.0);
+        mp.gateSpacing   = g.value("gate_spacing", 1100.0);
+        mp.rimRoad       = g.value("rim_road", true);
+        mp.spineRoad     = g.value("spine", true);
+        mp.skeletonSway  = g.value("skeleton_sway", 0.05);
+        mp.arterialSpan  = g.value("arterial_span", 0.0);
         // "backbone": "arterial" keeps the hub-to-hub spine a street (a
         // no-freeway metro); the historical default stays Freeway-class.
         if (g.value("backbone", std::string("freeway")) == std::string("arterial"))
@@ -2114,6 +2126,7 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
             }
         }
         mp.outHubs = &net.cityHubs;   // polycentric zoning reads these (city_lots)
+        mp.outFootprints = &net.siteFootprints;   // planner overlay + hand-edit
         // Terrain-aware layout: when the road is draped on terrain, gate the city
         // on buildability so it hugs buildable land and avoids water / steep
         // mountain instead of marching over them. Opt out with terrain_aware:false.

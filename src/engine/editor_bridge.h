@@ -161,7 +161,10 @@ public:
     }
     // The one explicit full mesh build (buildRoadNetMesh), on demand.
     bool plannerBakeMesh() { return editable() && planner_.bakeMesh(); }
-    // Layer visibility: "hubs" | "arterials" | "nodes".
+    // Start fresh: empty the road graph + release the baked mesh + drop the
+    // overlays; the recipe survives for the next Regenerate.
+    bool plannerClearRoads() { return editable() && planner_.clearRoads(); }
+    // Layer visibility: "footprint" | "hubs" | "arterials" | "nodes".
     void plannerSetLayer(const std::string& layer, bool on) {
         if (editable()) planner_.setLayer(layer, on);
     }

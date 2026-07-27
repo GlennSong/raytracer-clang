@@ -52,6 +52,8 @@ private:
     QDoubleSpinBox* corridorSpacing = nullptr;
     QPushButton* regenButton = nullptr;
     QPushButton* bakeButton = nullptr;
+    QPushButton* clearButton = nullptr;
+    QCheckBox* layerFootprint = nullptr;
     QCheckBox* layerHubs = nullptr;
     QCheckBox* layerArterials = nullptr;
     QCheckBox* layerNodes = nullptr;

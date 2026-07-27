@@ -313,6 +313,38 @@ RoadGraph buildMetro(const MetroParams& p,
     }
     const double DOM = sites[0].radius;   // primary-city scale (legacy name)
 
+    // --- P8 footprint-first: derive the buildable polygon per site + gates.
+    // Stage B wiring: footprints are computed and EXPORTED (planner overlay,
+    // future hand-edit) while the skeleton below still comes from the legacy
+    // growth; P8-C replaces the growth with bisection of these polygons.
+    std::vector<Footprint> footprints;
+    if (p.skeleton == "footprint") {
+        const HeightSampler flat = [](double, double) { return 0.0; };
+        for (std::size_t si = 0; si < sites.size(); ++si) {
+            const MetroSite& S = sites[si];
+            FootprintParams fpp;
+            fpp.cell = p.footprintCell;
+            // City: kill lobes thinner than most of a district cell. Towns:
+            // enough to stay chunky without erasing a small site outright.
+            fpp.minWidth = si == 0
+                               ? std::min(0.8 * p.districtLen, 1.2 * S.radius)
+                               : std::max(3.0 * fpp.cell, 0.5 * S.radius);
+            Footprint f =
+                p.ground ? buildFootprint(S.center, S.radius, p.ground,
+                                          p.build, fpp)
+                         : buildFootprint(S.center, S.radius, flat,
+                                          BuildabilityConfig{}, fpp);
+            const double rimLen = perimeter(f.polygon);
+            const double spacing =
+                si == 0 ? p.gateSpacing : std::max(450.0, rimLen / 4.0);
+            placeFootprintGates(
+                f, spacing, p.seed + static_cast<std::uint32_t>(si) * 7919u);
+            footprints.push_back(std::move(f));
+        }
+        pairConnectorGates(footprints);
+        if (p.outFootprints) *p.outFootprints = footprints;
+    }
+
     // --- hotspots: one central hub + the rest on a jittered ring; ~1 in 3 radial.
     // Terrain-aware gate: when a ground sampler is supplied, the city may only
     // occupy buildable land (not water, not steep mountain).

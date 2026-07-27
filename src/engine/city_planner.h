@@ -65,8 +65,14 @@ public:
     // The explicit full carriageway mesh build (buildRoadNetMesh), on demand.
     bool bakeMesh();
 
-    // Layer visibility: "hubs" | "arterials" | "nodes". State persists across
-    // regenerates; overlays are only REBUILT by applyRecipe.
+    // Start fresh on the terrain: empty the road's graph (the same hygiene
+    // set a regenerate clears), release the baked carriageway mesh, and drop
+    // every overlay — bare ground. The SourceSpec recipe SURVIVES, so the
+    // next Regenerate rebuilds from the dials, not from nothing.
+    bool clearRoads();
+
+    // Layer visibility: "footprint" | "hubs" | "arterials" | "nodes". State
+    // persists across regenerates; overlays are only REBUILT by applyRecipe.
     void setLayer(const std::string& name, bool on);
 
     // 0 = Top (orbit ortho, straight down), 1 = Iso (orbit ortho, yaw 45 /
@@ -93,7 +99,7 @@ private:
     Renderer* renderer_ = nullptr;
     CameraSystem* cameras_ = nullptr;
 
-    Layer hubs_, arterials_, nodes_;
+    Layer footprint_, hubs_, arterials_, nodes_;
     MeshHandle bakedMesh_;     // last bake we acquired (released on the next one)
     uint64_t rev_ = 0;         // uniquifies acquireMesh keys across rebuilds
 };

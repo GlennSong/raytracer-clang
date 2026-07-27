@@ -124,8 +124,8 @@ void CityPlanner::attach(World* world, AssetManager* assets,
     cameras_ = cameras;
     // Fresh world: any prior overlay entities/meshes died with the old one
     // (assets.clear() on state teardown). Visibility flags survive.
-    hubs_.group = arterials_.group = nodes_.group = Entity{};
-    hubs_.mesh = arterials_.mesh = nodes_.mesh = MeshHandle{};
+    footprint_.group = hubs_.group = arterials_.group = nodes_.group = Entity{};
+    footprint_.mesh = hubs_.mesh = arterials_.mesh = nodes_.mesh = MeshHandle{};
     bakedMesh_ = MeshHandle{};
 }
 
@@ -229,10 +229,43 @@ bool CityPlanner::bakeMesh() {
 }
 
 CityPlanner::Layer* CityPlanner::layerByName(const std::string& name) {
+    if (name == "footprint") return &footprint_;
     if (name == "hubs") return &hubs_;
     if (name == "arterials") return &arterials_;
     if (name == "nodes") return &nodes_;
     return nullptr;
+}
+
+bool CityPlanner::clearRoads() {
+    Entity e = roadEntity();
+    if (!e.valid()) return false;
+    RoadNet* net = world_->get<RoadNet>(e);
+    if (!net) return false;
+    // Same hygiene set a regenerate clears, plus the graph itself.
+    net->nodes.clear();
+    net->edges.clear();
+    net->tangents.clear();
+    net->nodeElev.clear();
+    net->nodeKinds.clear();
+    net->edgeWidths.clear();
+    net->specs.clear();
+    net->edgeSpecs.clear();
+    net->edgeBaked.clear();
+    net->edgeLayers.clear();
+    net->edgeClasses.clear();
+    net->cityHubs.clear();
+    net->freewayPlans.clear();
+    net->siteFootprints.clear();
+    // Release the baked carriageway (the release half of bakeMesh's swap) so
+    // the terrain is genuinely bare — leak-free by the same path.
+    if (Renderable* r = world_->get<Renderable>(e)) {
+        if (assets_ && r->mesh.valid()) assets_->releaseMesh(r->mesh);
+        r->mesh = MeshHandle{};
+    }
+    bakedMesh_ = MeshHandle{};
+    rebuildOverlays();   // graph is empty: every layer publishes empty
+    LOG_INFO << "[planner] cleared roads (recipe preserved)";
+    return true;
 }
 
 void CityPlanner::setLayer(const std::string& name, bool on) {
@@ -289,6 +322,28 @@ void CityPlanner::rebuildOverlays() {
     auto ground = [&](const Vec2& p) -> double {
         return net->heightAt ? net->heightAt(p.x, p.y) : 0.0;
     };
+
+    // --- footprint: per-site polygon outline + rim gates --------------------
+    // Warm sand ribbon so the land contract reads apart from the road tiers;
+    // gates as small discs (connector gates darker + larger).
+    RenderMesh fpMesh;
+    for (const Footprint& sf : net->siteFootprints) {
+        if (sf.polygon.size() < 3) continue;
+        std::vector<Vec2> ring = sf.polygon;
+        double y = 0.0;
+        for (const Vec2& v : ring) y = std::max(y, ground(v) + 2.4);
+        MeshBuilder::append(
+            fpMesh, strokeRibbon(ring, {3.5}, y,
+                                 sf.degraded ? Vec3(0.75, 0.42, 0.34)
+                                             : Vec3(0.82, 0.68, 0.38),
+                                 /*closed=*/true));
+        for (const FootprintGate& gate : sf.gates) {
+            const bool conn = gate.toSite >= 0;
+            appendDisc(fpMesh, gate.pos, conn ? 22.0 : 14.0,
+                       ground(gate.pos) + 2.5,
+                       conn ? Vec3(0.55, 0.35, 0.16) : Vec3(0.82, 0.68, 0.38));
+        }
+    }
 
     // --- hubs: kind-coloured discs + a dark outline ring --------------------
     RenderMesh hubMesh;
@@ -347,6 +402,7 @@ void CityPlanner::rebuildOverlays() {
                    ground(net->nodes[i]) + 2.0, tint);
     }
 
+    publishLayer(footprint_, fpMesh, "footprint");
     publishLayer(hubs_, hubMesh, "hubs");
     publishLayer(arterials_, roadMesh, "arterials");
     publishLayer(nodes_, nodeMesh, "nodes");

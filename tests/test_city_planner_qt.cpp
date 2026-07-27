@@ -153,6 +153,37 @@ int runCityPlannerQtTests() {
     REQUIRE(world.get<Renderable>(road)->mesh.valid());
     REQUIRE(!(world.get<Renderable>(road)->mesh == firstBake));
 
+    // --- footprint skeleton (P8-B): derived polygon + gates + overlay -------
+    json fpGen = parsed;
+    fpGen["skeleton"] = "footprint";
+    CityPlannerStats fpStats = bridge.plannerApplyRecipe(fpGen.dump());
+    REQUIRE(fpStats.ok);
+    RoadNet* fpNet = world.get<RoadNet>(road);
+    REQUIRE(fpNet && fpNet->siteFootprints.size() == 1);
+    if (fpNet && !fpNet->siteFootprints.empty()) {
+        const Footprint& sf = fpNet->siteFootprints[0];
+        REQUIRE(sf.polygon.size() >= 12);
+        REQUIRE(sf.gates.size() >= 3);   // max(3, perimeter/gate_spacing)
+    }
+    REQUIRE(visibleGroups(world) == 4);   // footprint layer joins the three
+    bridge.plannerSetLayer("footprint", false);
+    REQUIRE(visibleGroups(world) == 3);
+    bridge.plannerSetLayer("footprint", true);
+    REQUIRE(visibleGroups(world) == 4);
+
+    // --- clear: bare terrain, recipe preserved (P8-B) -----------------------
+    REQUIRE(bridge.plannerClearRoads());
+    REQUIRE(fpNet->nodes.empty() && fpNet->edges.empty());
+    REQUIRE(fpNet->siteFootprints.empty());
+    REQUIRE(!world.get<Renderable>(road)->mesh.valid());   // bake released
+    REQUIRE(visibleGroups(world) == 0);
+    json keptRecipe = json::parse(bridge.plannerRecipe(), nullptr, false);
+    REQUIRE(keptRecipe.is_object());   // the recipe survived the clear
+    parsed.erase("skeleton");          // back to the legacy fixture
+    CityPlannerStats reborn = bridge.plannerApplyRecipe(parsed.dump());
+    REQUIRE(reborn.ok);
+    REQUIRE(reborn.nodes == stats.nodes);   // same recipe -> same graph
+
     // --- camera presets: controller + projection ----------------------------
     bridge.plannerCameraPreset(0);   // Top
     REQUIRE(!cameras.flyControllerActive());

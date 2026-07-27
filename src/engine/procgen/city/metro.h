@@ -4,6 +4,7 @@
 #include "polygon.h"
 #include "road_network.h"   // RoadGraph
 #include "buildability.h"   // HeightSampler, BuildabilityConfig (terrain-aware layout)
+#include "city_footprint.h" // Footprint (P8 footprint-first skeleton)
 #include <cstdint>
 #include <string>
 
@@ -128,6 +129,22 @@ struct MetroParams {
     // colonization, so the local grid is generated downstream, not here.
     bool   arterialsOnly = false;
 
+    // P8 FOOTPRINT-FIRST skeleton (Glenn's masterplan; city_footprint.h).
+    // "" = legacy colonization skeleton (every shipped level). "footprint" =
+    // derive a terrain-aware footprint polygon per site, gates on its rim,
+    // and (P8-C) build the arterials by recursive bisection of the polygon —
+    // no space colonization at the arterial tier. Stage B wiring: footprints
+    // are computed and exported for the planner overlay while the roads
+    // still come from the legacy growth; P8-C swaps the skeleton itself.
+    std::string skeleton;
+    double footprintCell = 80.0;    // F0 flood-fill grid pitch (m)
+    double districtLen   = 1500.0;  // bisection stop: target district cell (m)
+    double gateSpacing   = 1100.0;  // rim gate arc spacing (city; towns derive)
+    bool   rimRoad       = true;    // perimeter arterial on the boundary
+    bool   spineRoad     = true;    // founding road between opposite gates
+    double skeletonSway  = 0.05;    // spoke/cut meander amplitude
+    double arterialSpan  = 0.0;     // min arterial junction span; 0 = derived
+
     // Terrain-aware layout (optional). When `ground` is set, hotspots, arterial
     // growth and blocks are gated on the buildability of the ground: the city
     // hugs buildable land and avoids water / steep mountain, instead of marching
@@ -138,6 +155,11 @@ struct MetroParams {
     // When non-null, receives the hubs (with district kinds) so the caller can
     // drive polycentric zoning (DistrictMap::hubs) from the same layout.
     std::vector<CityHub>* outHubs = nullptr;
+
+    // When non-null (and skeleton == "footprint"), receives the per-site
+    // footprints (polygon + gates) — the planner's Footprint overlay and the
+    // editor's future hand-edit surface read these.
+    std::vector<Footprint>* outFootprints = nullptr;
 };
 
 // Grow the metro and return its planarized RoadGraph (arterials
