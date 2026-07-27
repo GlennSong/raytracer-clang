@@ -87,6 +87,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/shape_grammar.cpp
     src/engine/procgen/city/parcel.cpp
     src/engine/procgen/city/patch_fabric.cpp
+    src/engine/procgen/city/city_footprint.cpp
     src/engine/procgen/city/road_network.cpp
     src/engine/procgen/city/street_kit.cpp
     src/engine/procgen/city/street_furniture.cpp
@@ -461,6 +462,7 @@ add_executable(run_tests
     tests/test_road_constraints.cpp
     tests/test_metro_sites.cpp
     tests/test_fabric.cpp
+    tests/test_city_footprint.cpp
     tests/test_city_stages.cpp
     tests/test_road_semantics.cpp
     tests/test_road_layers.cpp
