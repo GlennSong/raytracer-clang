@@ -124,3 +124,43 @@ TEST_CASE(vehicles_lua_reader_needs_the_library_loaded) {
     CHECK(!loadFleetCarBody(vm, 0, body, &err));   // no global `vehicle` table
     CHECK(!err.empty());
 }
+
+TEST_CASE(fleet_cars_stand_on_their_wheels) {
+    VehiclesVM a;
+    CHECK(a.loaded);
+    // A parked car's wheels must reach the ROAD. The fleet bakes its own
+    // wheels around mesh.car's shell, and the class package puts its floor at
+    // -height/2 with the body floating a ride-height above it — so the mesh
+    // must extend BELOW the body's rocker, down to (near) that floor. Copying
+    // the drivable spec's suspension-attachment formula lifted every wheel by
+    // a ride height: the car sat on its rocker with the wheels tucked inside,
+    // and nothing touched the ground.
+    for (int slot = 0; slot < citysim::carVariantCount(); ++slot) {
+        CarBodyRecipe body;
+        std::string err;
+        CHECK(loadFleetCarBody(a.vm, slot, body, &err));
+        if (body.mesh.vertices.empty()) continue;
+        double lo = 1e30, hi = -1e30;
+        // Rocker line: the lowest point of the middle 40% of the car's LENGTH
+        // that is not a wheel — approximated by the lowest vertex near the
+        // centreline (x within 25% of half-width), where no wheel sits.
+        double zMin = 1e30, zMax = -1e30, xMax = 0;
+        for (const Vertex& v : body.mesh.vertices) {
+            lo = std::min(lo, static_cast<double>(v.position.y));
+            hi = std::max(hi, static_cast<double>(v.position.y));
+            zMin = std::min(zMin, static_cast<double>(v.position.z));
+            zMax = std::max(zMax, static_cast<double>(v.position.z));
+            xMax = std::max(xMax, std::fabs(static_cast<double>(v.position.x)));
+        }
+        double rocker = 1e30;
+        for (const Vertex& v : body.mesh.vertices)
+            if (std::fabs(v.position.x) < xMax * 0.25)
+                rocker = std::min(rocker, static_cast<double>(v.position.y));
+        const double height = hi - lo;
+        // Wheels reach below the centreline rocker by a real fraction of the
+        // car's height (a tucked-up wheel makes these equal).
+        std::printf("    [slot %2d] height %.2f, floor %.2f, rocker %.2f, drop %.3f\n",
+                    slot, height, lo, rocker, rocker - lo);
+        CHECK(rocker - lo > height * 0.04);
+    }
+}

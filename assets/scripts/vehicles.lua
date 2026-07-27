@@ -192,16 +192,47 @@ local function fleet_car(class_name, W, H, L, color)
     local shell = { car.body }
     if car.lamp then shell[#shell + 1] = car.lamp end
     if car.glass then shell[#shell + 1] = car.glass end
-    local body = mesh.merge(shell)
 
-    -- Fit the shell to the sim's reserved slot box. The traffic sim spaces,
-    -- follows and collides against kFleet's dimensions, so the DRAWN car must
-    -- fill exactly that box or cars visibly overlap or float apart.
+    -- WHEELS. mesh.car deliberately emits no wheel part (real wheels are placed
+    -- per-vehicle by the physics spec), so the fleet bakes its own — ROUND ones:
+    -- a cylinder laid on its side, not the box the old fleet used, since the
+    -- shell around them is now curved.
+    --
+    -- The GROUND DATUM is the thing to get right: the class package's box has
+    -- its floor at y = -height/2, and the BODY floats above that by the ride
+    -- height (h156). So a resting wheel's centre is one radius above the floor —
+    -- NOT floor + radius + h156, which is the SUSPENSION ATTACHMENT point the
+    -- drivable spec uses above (Jolt drops the wheel by its travel). Copying
+    -- that formula parked every wheel a ride-height too high, tucked up inside
+    -- the body with nothing touching the road.
+    local r = c.wheel_diameter * 0.5
+    local halfTrack = c.track * 0.5
+    local axleY = -d.height * 0.5 + r
+    local frontZ = d.length * 0.5 - d.front_overhang
+    local rearZ = -(d.length * 0.5 - d.rear_overhang)
+    local ww = math.max(0.18, c.track * 0.13)
+    local tyre = { 0.04, 0.04, 0.05 }
+    for _, wx in ipairs({ halfTrack - ww * 0.5, -halfTrack + ww * 0.5 }) do
+        for _, wz in ipairs({ frontZ, rearZ }) do
+            -- cylinder(radius, height) stands on +Y; roll it onto the lateral
+            -- axis so it spins the way the car drives. bake_height_color with
+            -- one colour top and bottom is a flat tint (the mesh API has no
+            -- separate vertex-paint call).
+            local w = mesh.rotate_z(mesh.cylinder(r, ww), math.pi * 0.5)
+            w = mesh.bake_height_color(w, tyre, tyre)
+            shell[#shell + 1] = mesh.translate(w, { wx, axleY, wz })
+        end
+    end
+
+    -- Fit body AND wheels together, once, to the sim's reserved slot box: the
+    -- traffic sim spaces, follows and collides against kFleet's dimensions, so
+    -- the drawn car must fill that box — and fitting the parts separately is
+    -- how they drift out of register.
     local he = car.half_extent
     local sx = W / (2 * he[1])
     local sy = H / (2 * he[2])
     local sz = L / (2 * he[3])
-    body = mesh.recompute_normals(mesh.scale(body, { sx, sy, sz }))
+    local body = mesh.recompute_normals(mesh.scale(mesh.merge(shell), { sx, sy, sz }))
 
     -- Lamp markers ride the same fit, or the emissive lenses float off the car.
     local lights = {}
@@ -211,27 +242,7 @@ local function fleet_car(class_name, W, H, L, color)
             { name = lt.name, pos = { p[1] * sx, p[2] * sy, p[3] * sz } }
     end
 
-    -- Wheels: derived from the class package (same arithmetic the drivable spec
-    -- uses for its physics wheels), then fitted into the slot box.
-    local r = c.wheel_diameter * 0.5
-    local halfTrack = c.track * 0.5
-    local axleY = -d.height * 0.5 + r + c.h156
-    local frontZ = d.length * 0.5 - d.front_overhang
-    local rearZ = -(d.length * 0.5 - d.rear_overhang)
-    local ww = math.max(0.18, c.track * 0.13)
-    local tyre = { 0.04, 0.04, 0.05 }
-    local parts = {}
-    for _, wx in ipairs({ halfTrack, -halfTrack }) do
-        for _, wz in ipairs({ frontZ, rearZ }) do
-            parts[#parts + 1] = {
-                size  = { ww * sx, r * 2 * sy, r * 2 * sz },
-                pos   = { wx * sx, axleY * sy, wz * sz },
-                color = tyre,
-            }
-        end
-    end
-
-    return { body = body, parts = parts, lights = lights }
+    return { body = body, lights = lights }
 end
 
 vehicle.fleet = {
