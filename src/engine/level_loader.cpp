@@ -2148,6 +2148,19 @@ static GrownLots growCityLots(const std::vector<engine::RoadNet>& nets,
         for (const engine::CityHub& h : n.cityHubs)
             lp.hubs.push_back({h.pos, h.kind});
     lp.hubRadius = cs.value("hubRadius", 220.0);
+    // CORENESS ANCHOR: height/landmark grading measures distance from
+    // LotParams::center — which no loader ever set (it defaulted to the
+    // world origin, so coreness was ZERO for every lot in any city not at
+    // (0,0): glass towers capped at 16 floors instead of 42, no skyline).
+    // The financial hub (kind 0) is downtown; first hub as fallback.
+    for (const engine::RoadNet& n : nets)
+        for (const engine::CityHub& h : n.cityHubs) {
+            if (lp.center.x == 0 && lp.center.y == 0) lp.center = h.pos;
+            if (h.kind == 0) {
+                lp.center = h.pos;
+                break;
+            }
+        }
     // TERRAIN: buildings grow from their graded pad plane, park/green pads
     // drape per-vertex (city-on-terrain; roads conform separately via
     // net.heightAt + the flatten ramps the loader carves).

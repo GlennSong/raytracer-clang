@@ -1281,7 +1281,29 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         for (std::size_t li = 0; li < lots.size(); ++li) {
             // A block-interior COURT (frontage parceler, v2 step 10) is open
             // space, never a building lot — nothing landlocked gets built.
-            if (lots[li].court) continue;
+            // But it IS emitted: a sculpted mid-block green. On the big-block
+            // geometry the court can be most of the block, and dropping it
+            // silently rendered as broken bare terrain (Glenn's report).
+            if (lots[li].court) {
+                if (area(lots[li].footprint) < 60.0) continue;
+                LotBuilding g;
+                const OBB2 gb = orientedBoundingBox(lots[li].footprint);
+                g.site = centroid(lots[li].footprint);
+                g.width = 2 * gb.half[0];
+                g.depth = 2 * gb.half[1];
+                g.height = 0.25;
+                g.yaw = std::atan2(gb.axis[0].y, gb.axis[0].x);
+                g.type = "park";
+                g.recipe = "court_green";
+                g.color = colorFor("park");
+                g.pad = pushPolyClearOfRoads(lots[li].footprint);
+                if (g.pad.empty()) continue;
+                sculptPark(g, g.pad, g.height, p.ground,
+                           mix(bf.pp.seed, 0xC0947u + static_cast<uint32_t>(li)),
+                           outParts);
+                out.push_back(std::move(g));
+                continue;
+            }
             if (area(lots[li].footprint) < bf.pp.minArea) continue;
             cands.push_back({li, static_cast<int>(binfos.size()) - 1,
                              lots[li], -1});

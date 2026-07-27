@@ -270,13 +270,18 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     baysOnLink_.assign(graph.linkCount(), {});
     for (int li = 0; li < graph.linkCount(); ++li) {
         const engine::NavLink& L = graph.links[li];
-        if (L.klass != engine::RoadClass::Local) continue;
+        // Locals AND collectors park curbside (a collector is 2 lanes +
+        // parking by its own spec); the footprint city's fabric is a mix of
+        // both, and Local-only left whole quarters bare of parked cars.
+        if (L.klass != engine::RoadClass::Local &&
+            L.klass != engine::RoadClass::Collector)
+            continue;
         if (L.layer != 0 || L.elevAbsolute) continue;
         // Semantic layer (#17/S7): bays only on FRONTAGE edges — never on a
         // ramp APPROACH (a street climbing to a landing has no frontage, so
         // no curbside parking on the on-ramp feeder).
         if (!(L.access & engine::road_access::kFrontage)) continue;
-        if (L.length < 40.0 || L.width < 9.5) continue;
+        if (L.length < 40.0 || L.width < 9.0) continue;
         const engine::Vec2 dir = graph.direction(li);
         const engine::Vec2 right(dir.y, -dir.x);
         const Real off = L.width * 0.5 - 1.05;   // hugging the curb line
@@ -461,8 +466,15 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     };
 
     for (Agent& a : agents_) {
-        // Home: deterministic pick from the agent's own brain bits (no rng draw).
-        PlaceId hp = homes[a.brain % homes.size()];
+        // Home: deterministic pick from the agent's own brain bits (no rng
+        // draw). MIXED first: brains are forced odd (rnd()|1), so a raw
+        // modulo could only ever reach odd home indices when homes.size()
+        // is even — half the housing stock sat empty.
+        std::uint32_t hmix = a.brain;
+        hmix ^= hmix >> 16; hmix *= 0x7feb352dU;
+        hmix ^= hmix >> 15; hmix *= 0x846ca68bU;
+        hmix ^= hmix >> 16;
+        PlaceId hp = homes[hmix % homes.size()];
         int hn = nodeOf(hp);
         a.homePlace = hp;
         a.home = hn;
@@ -496,13 +508,20 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 a.departHome = 15.5 + 1.5 * unit(a.brain >> 8);   // home mid-afternoon
             }
         } else if (!jobs.empty()) {
-            // Prefer the brain-picked workplace; if it isn't routable from home,
-            // scan for any that is; if none, the agent works from home.
+            // Prefer the brain-picked workplace; if it isn't routable from
+            // home, scan for any that is — STARTING FROM A PER-AGENT OFFSET.
+            // Scanning from index 0 funneled every fallback agent onto the
+            // FIRST routable workplace: one office, one street, the whole
+            // fleet parked in a line (Glenn's "cars all on one street").
             PlaceId pick = jobs[(a.brain >> 8) % jobs.size()];
             if (!commutable(hn, nodeOf(pick))) {
                 pick = kNoPlace;
-                for (PlaceId cand : jobs)
+                const std::size_t start =
+                    (a.brain * 2654435761u) % jobs.size();
+                for (std::size_t k = 0; k < jobs.size(); ++k) {
+                    PlaceId cand = jobs[(start + k) % jobs.size()];
                     if (commutable(hn, nodeOf(cand))) { pick = cand; break; }
+                }
             }
             if (pick != kNoPlace) {
                 a.workPlace = pick;

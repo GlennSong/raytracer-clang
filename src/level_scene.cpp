@@ -740,6 +740,32 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             lp.innerRadius = cs.value("downtownRadius", 55.0);
             lp.midRadius = cs.value("midtownRadius", 135.0);
             lp.plinth = cs.value("plinth", lp.plinth);
+            // EDITOR/RUNTIME PARITY: this path forwarded neither the hubs
+            // (polycentric zoning), the parcel grain, nor the coreness
+            // anchor — the editor preview grew a DIFFERENT city than the
+            // game (no districts past the radial rings, no tower core).
+            // Mirror level_loader's growCityLots exactly.
+            if (cs.contains("parcel") && cs["parcel"].is_object()) {
+                const auto& pj = cs["parcel"];
+                lp.parcelTargetArea = pj.value("targetArea", lp.parcelTargetArea);
+                lp.parcelMinArea = pj.value("minArea", lp.parcelMinArea);
+                lp.parcelMinEdge = pj.value("minEdge", lp.parcelMinEdge);
+                lp.parcelFrontWidth = pj.value("frontWidth", lp.parcelFrontWidth);
+                lp.parcelLotDepth = pj.value("lotDepth", lp.parcelLotDepth);
+                lp.parcelCourtMinArea = pj.value("courtMinArea", lp.parcelCourtMinArea);
+            }
+            for (const engine::RoadNet& n : lotNets)
+                for (const engine::CityHub& h : n.cityHubs)
+                    lp.hubs.push_back({h.pos, h.kind});
+            lp.hubRadius = cs.value("hubRadius", 220.0);
+            for (const engine::RoadNet& n : lotNets)
+                for (const engine::CityHub& h : n.cityHubs) {
+                    if (lp.center.x == 0 && lp.center.y == 0) lp.center = h.pos;
+                    if (h.kind == 0) {
+                        lp.center = h.pos;
+                        break;
+                    }
+                }
             lp.ground = [&ctp, &cnoise](engine::Real x, engine::Real z) {
                 return static_cast<engine::Real>(terrainHeight(ctp, cnoise, x, z));
             };
