@@ -56,10 +56,16 @@ void CityPhysicsSystem::syncKinematic(World& world, const std::vector<Entity>& g
             int ai = -1;
             if (agentIds && gi < agentIds->size() && ii < (*agentIds)[gi].size())
                 ai = (*agentIds)[gi][ii];
+            // Proxy identity. An agent keys on its uid. A SCENERY car keys on
+            // the id the bake hands over (-2 - bayIndex): stable across frames,
+            // which matters now that scenery is distance-culled — bake ORDER
+            // shifts as the player moves, so an order-derived key would shuffle
+            // every parked car's proxy each step. -1 (unknown) keeps the old
+            // sequential fallback.
             const long long key =
                 (ai >= 0 && ai < static_cast<int>(agents.size()))
                     ? static_cast<long long>(agents[ai].uid)
-                    : sceneryKey--;
+                    : (ai <= -2 ? static_cast<long long>(ai) : sceneryKey--);
             bool isParked = false;
             if (ai >= 0)
                 for (const Possessed& p : possessed_)

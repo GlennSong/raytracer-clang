@@ -143,6 +143,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         params_.seed = c.seed;
         params_.hoursPerSecond = c.hoursPerSecond;
         params_.perceptionReliability = c.perceptionReliability;
+        params_.sceneryRadius = c.sceneryRadius;
         params_.tieredAgents = c.tieredAgents;
         params_.wander = c.wander;
         params_.agentScript = c.agentScript;
@@ -1225,22 +1226,56 @@ void CityRenderSystem::syncGroups(World& world) {
     // Scenery parked cars (R6b): bays seeded full at build render a real car
     // (variant by bay index) — and, riding the car groups, they get the same
     // kinematic collision boxes as ambient traffic for free.
+    //
+    // PERF (measured): a city-wide InstanceGroup gets ONE bounding sphere, so
+    // the frustum cull can never reject part of it — every parked car in the
+    // city was drawn every frame, in the colour AND shadow passes. At piedmont
+    // scale that is ~4.4k cars; once the fleet moved from 170-triangle boxes to
+    // real 1.9k-triangle bodies it became ~8M triangles a frame, and re-deriving
+    // each pose (a terrain sample apiece) cost ~8ms per FIXED STEP. So: resolve
+    // the poses once, then draw only what is near the player.
     if (!cars.empty()) {
-        const std::vector<Vec3> he = carGroupHalfExtents();
-        const auto& bays = sim_.parkingBays();
-        for (std::size_t bi = 0; bi < bays.size(); ++bi) {
-            const CitySim::ParkingBay& b = bays[bi];
-            if (b.occupant != CitySim::kBayScenery) continue;
-            const int v = static_cast<int>(bi) % carVariantCount();
-            if (!cars[v]) continue;
-            const Real y = groundAt(b.pos.x, b.pos.y) +
-                           (v < static_cast<int>(he.size()) ? he[v].y : 0.65);
-            const Real yaw = std::atan2(b.heading.x, b.heading.y);
-            cars[v]->transforms.push_back(
-                Mat4::trs(Vec3(b.pos.x, y, b.pos.y),
-                          Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
-                          Vec3(1, 1, 1)));
-            carAgentIds_[v].push_back(-1);
+        if (!sceneryBuilt_) {
+            const std::vector<Vec3> he = carGroupHalfExtents();
+            const auto& bays = sim_.parkingBays();
+            scenery_.clear();
+            for (std::size_t bi = 0; bi < bays.size(); ++bi) {
+                const CitySim::ParkingBay& b = bays[bi];
+                if (b.occupant != CitySim::kBayScenery) continue;
+                const int v = static_cast<int>(bi) % carVariantCount();
+                const Real y = groundAt(b.pos.x, b.pos.y) +
+                               (v < static_cast<int>(he.size()) ? he[v].y : 0.65);
+                const Real yaw = std::atan2(b.heading.x, b.heading.y);
+                SceneryCar sc;
+                sc.pose = Mat4::trs(Vec3(b.pos.x, y, b.pos.y),
+                                    Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
+                                    Vec3(1, 1, 1));
+                sc.pos = b.pos;
+                sc.variant = v;
+                sc.bay = static_cast<int>(bi);
+                scenery_.push_back(sc);
+            }
+            sceneryBuilt_ = true;
+            LOG_INFO << "[citysim] scenery parked cars: " << scenery_.size()
+                     << " poses resolved once (drawn within "
+                     << params_.sceneryRadius << " m)";
+        }
+        // Draw radius from the tier centre (the player). Beyond it a parked car
+        // is a few pixels and costs a full body in two passes.
+        const Vec2 centre = sim_.tierCenter();
+        const bool haveCentre = sim_.hasTierCenter();
+        const Real rad = params_.sceneryRadius;
+        const Real rad2 = rad * rad;
+        for (const SceneryCar& sc : scenery_) {
+            if (haveCentre && rad > 0) {
+                const Real dx = sc.pos.x - centre.x, dz = sc.pos.y - centre.y;
+                if (dx * dx + dz * dz > rad2) continue;
+            }
+            if (!cars[sc.variant]) continue;
+            cars[sc.variant]->transforms.push_back(sc.pose);
+            // NEGATIVE-but-stable id: the physics proxy key must not shuffle
+            // when the cull changes bake order (-1 stays "unknown").
+            carAgentIds_[sc.variant].push_back(-2 - sc.bay);
         }
     }
 
@@ -1421,7 +1456,7 @@ void CityRenderSystem::step(World& world, Real dt) {
     static const bool dumpStats = std::getenv("RT_DUMP_STATS") != nullptr;
     if (!dumpStats) {
         sim_.step(dt, params_.hoursPerSecond);
-        syncGroups(world);
+        if (bakeThisStep_) syncGroups(world);
         return;
     }
     static double simMs = 0.0, syncMs = 0.0;
@@ -1429,7 +1464,7 @@ void CityRenderSystem::step(World& world, Real dt) {
     auto t0 = std::chrono::steady_clock::now();
     sim_.step(dt, params_.hoursPerSecond);
     auto t1 = std::chrono::steady_clock::now();
-    syncGroups(world);
+    if (bakeThisStep_) syncGroups(world);
     auto t2 = std::chrono::steady_clock::now();
     simMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
     syncMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
@@ -1695,7 +1730,13 @@ void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
         });
     sim_.setExternalObstacles(std::move(obstacles));
 
+    // The pose bake exists for the RENDERER. When the clock runs several fixed
+    // steps in one frame (catching up), only the last bake is ever drawn — the
+    // rest are pure waste, and at piedmont scale that was ~4.5 bakes a frame.
+    // Physics proxies read the bake too, so they track the freshest step.
+    bakeThisStep_ = (ctx.fixedStepIndex + 1 >= ctx.fixedStepCount);
     step(ctx.world, ctx.clock.fixedStep());
+    bakeThisStep_ = true;   // a direct step() call (tests) always bakes
 }
 
 }  // namespace citysim

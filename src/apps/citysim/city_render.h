@@ -39,6 +39,11 @@ struct CityRenderParams {
     engine::Vec3 carSize{1.8, 1.3, 4.2};   // matches the player sedan (W,H,L); +Z = travel
     engine::Vec3 pedSize{0.5, 1.8, 0.5};
     Real signalLensSize = 0.34;            // lit emissive lens cube edge (m)
+    // How far from the player a PARKED scenery car still draws (m). A city-wide
+    // instance group cannot be partially frustum-culled, so without this every
+    // parked car in the city is submitted every frame, in both the colour and
+    // shadow passes. 0 = no cull (the old behaviour).
+    Real sceneryRadius = 450.0;
     bool debugWidgets = false;             // draw each agent's footprint + trajectory
     bool wander = false;                   // perpetual random trips (the agent lab)
     // Scripted goal tables (ADR-0064): the SOURCE of an agents.lua-style script
@@ -271,6 +276,22 @@ private:
     std::vector<engine::Entity> carGroups_;   // one per car variant (body + colour)
     std::unordered_map<int, engine::Mat4> physPose_;      // R5: agent -> body pose
     std::vector<std::vector<int>> carAgentIds_;           // parallel to bakes
+    // Scenery parked cars, resolved ONCE (a parked car never moves, and its
+    // pose costs a terrain sample). The per-step bake then only distance-culls
+    // this list instead of re-deriving thousands of poses. Kept sorted by bay
+    // so `bay` doubles as the STABLE physics proxy key — bake order changes as
+    // the player moves, and the proxies must not shuffle with it.
+    struct SceneryCar {
+        engine::Mat4 pose;
+        engine::Vec2 pos;
+        int variant = 0;
+        int bay = 0;
+    };
+    std::vector<SceneryCar> scenery_;
+    bool sceneryBuilt_ = false;
+    // Set per fixed step: bake the render poses only on the frame's LAST step
+    // (see fixedUpdate). True by default so a direct step() call still bakes.
+    bool bakeThisStep_ = true;
     std::vector<std::vector<int>> pedAgentIds_;           // ditto, ped group (P4)
     engine::Entity pedGroup_;
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)

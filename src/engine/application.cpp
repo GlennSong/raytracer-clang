@@ -184,8 +184,11 @@ void Application::runFrame() {
         // step, and how many steps ran (perf triage without Tracy).
         static const bool dumpStats = std::getenv("RT_DUMP_STATS") != nullptr;
         const auto t0 = std::chrono::steady_clock::now();
-        for (int i = 0; i < steps; i++)
+        ctx.fixedStepCount = steps;
+        for (int i = 0; i < steps; i++) {
+            ctx.fixedStepIndex = i;
             stateStack.forEachActive([&](AppState& state) { state.fixedUpdate(ctx); });
+        }
         if (dumpStats && steps > 0) {
             static int frames = 0;
             static double ms = 0.0;

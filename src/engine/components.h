@@ -403,6 +403,10 @@ struct CitySimConfig {
     uint32_t seed = 1;
     float hoursPerSecond = 0.05f;        // sim-clock hours per real second
     float perceptionReliability = 0.97f; // <1 -> agents occasionally err
+    // Draw radius for PARKED scenery cars (m). City-wide instance groups can't
+    // be partially frustum-culled, so this is what keeps thousands of parked
+    // bodies out of the colour and shadow passes. 0 = draw them all.
+    float sceneryRadius = 450.0f;
     bool debugWidgets = false;           // start with the agent-state HUD on
     bool tieredAgents = false;           // P4: opt into V/K traffic tiering
     bool showPlan = false;               // boot with block/lot outlines on

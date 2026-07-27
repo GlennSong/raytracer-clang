@@ -80,6 +80,14 @@ struct FrameContext {
     // panels (Debug > Cameras) draw them only then, so plain play looks like
     // the shipped game.
     bool debugOverlayActive = false;
+    // Which fixed step of THIS frame is running (0-based) and how many run in
+    // total. The fixed loop can run several steps per frame when catching up,
+    // and work whose only consumer is the RENDERER (pose bakes) is wasted on
+    // every step but the last. Trailing + defaulted so the existing positional
+    // aggregate initialisers keep compiling, and so a system stepped directly
+    // by a test still reads as "the single, final step".
+    int fixedStepIndex = 0;
+    int fixedStepCount = 1;
 };
 
 // A unit of engine behaviour, ticked by Application each frame. Override only

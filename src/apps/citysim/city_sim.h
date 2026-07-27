@@ -287,6 +287,9 @@ public:
     // No centre = no player = everything stays K (headless sims/tests).
     void setTierCenter(engine::Vec2 c) { tierCenter_ = c; haveTierCenter_ = true; }
     void clearTierCenter() { haveTierCenter_ = false; }
+    // The bubble centre the render bridge also distance-culls scenery against.
+    engine::Vec2 tierCenter() const { return tierCenter_; }
+    bool hasTierCenter() const { return haveTierCenter_; }
 
     // Lifetime tier-transition counters (test gates: conservation, engagement).
     long tierPromotions() const { return promotions_; }

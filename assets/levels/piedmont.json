@@ -1,292 +1,292 @@
 {
-  "_comment": "Piedmont (8km-city plan P3): the full city on the P1/P2 sandbox's world — terrain + multi-site road recipe copied VERBATIM from piedmont_roads.json (same seeds, so the erosion/conform caches hit), plus the citysim block that builds it: lots + buildings on the metro's blocks, per-hub-cluster civic anchors (each town gets its school + church), piedmont-scale parcel grain (150 m+ blocks parcel bigger lots), and the P5 scattering sky + volumetric clouds as its flagship consumer.",
-  "citysim": {
-    "buildChance": 0.9,
-    "buildLots": true,
-    "cars": 3000,
-    "debugWidgets": false,
-    "detailDistance": 900,
-    "downtownRadius": 300,
-    "hubRadius": 320,
-    "midtownRadius": 650,
-    "parcel": {
-      "courtMinArea": 500,
-      "frontWidth": 18,
-      "lotDepth": 34,
-      "minArea": 140,
-      "minEdge": 7,
-      "targetArea": 620
-    },
-    "pedestrians": 1800,
-    "planOnly": false,
-    "plinth": 0.45,
-    "renderCell": 250,
-    "seed": 7,
-    "showPlan": false,
-    "sidewalk": 4.0,
-    "tiered": true,
-    "vehicles": "vehicles.lua",
-    "wander": false
+ "_comment": "Piedmont (8km-city plan P3): the full city on the P1/P2 sandbox's world \u2014 terrain + multi-site road recipe copied VERBATIM from piedmont_roads.json (same seeds, so the erosion/conform caches hit), plus the citysim block that builds it: lots + buildings on the metro's blocks, per-hub-cluster civic anchors (each town gets its school + church), piedmont-scale parcel grain (150 m+ blocks parcel bigger lots), and the P5 scattering sky + volumetric clouds as its flagship consumer.",
+ "citysim": {
+  "buildChance": 0.9,
+  "buildLots": true,
+  "cars": 3000,
+  "debugWidgets": false,
+  "detailDistance": 900,
+  "downtownRadius": 300,
+  "hubRadius": 320,
+  "midtownRadius": 650,
+  "parcel": {
+   "courtMinArea": 500,
+   "frontWidth": 18,
+   "lotDepth": 34,
+   "minArea": 140,
+   "minEdge": 7,
+   "targetArea": 620
   },
-  "dayNight": {
-    "enabled": false
-  },
-  "entities": [
-    {
-      "id": 2,
-      "name": "streets",
-      "position": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "road": {
-        "color": [
-          0.09,
-          0.09,
-          0.1
-        ],
-        "corner_radius": 3.0,
-        "crosswalks": true,
-        "curb": 0.16,
-        "generate": {
-          "ambient_per_500": 14,
-          "arterial_span": 0.0,
-          "artery_width": 17,
-          "backbone": "arterial",
-          "block_size": 220,
-          "collector_width": 13,
-          "corridor_freeways": false,
-          "corridor_spacing": 120,
-          "curviness": 0.25,
-          "district_len": 1200.0,
-          "fabric": "mix",
-          "fabric_conform": 0.15,
-          "fabric_core_len": 110,
-          "freeway_width": 17,
-          "freeways": true,
-          "gate_spacing": 1100.0,
-          "influence": 560,
-          "interchange_spacing": 600,
-          "kill_radius": 110,
-          "kind": "metro",
-          "loop_max": 650,
-          "loop_min": 200,
-          "max_slope": 0.32,
-          "merge_radius": 80,
-          "min_block_edge": 150,
-          "min_road_clearance": 0.9,
-          "min_road_len": 30,
-          "seed": 7,
-          "seg_length": 50,
-          "sites": [
-            {
-              "block_size": 220,
-              "center": {
-                "x": 900,
-                "z": 900
-              },
-              "density": 1.0,
-              "hotspots": 9,
-              "radius": 1400
-            },
-            {
-              "block_size": 180,
-              "center": {
-                "x": 3050,
-                "z": 400
-              },
-              "density": 0.55,
-              "hotspots": 3,
-              "kind_bias": "oldtown",
-              "radius": 420
-            },
-            {
-              "block_size": 180,
-              "center": {
-                "x": 300,
-                "z": 3050
-              },
-              "density": 0.5,
-              "hotspots": 3,
-              "kind_bias": "residential",
-              "radius": 380
-            }
-          ],
-          "skeleton": "footprint",
-          "skeleton_sway": 0.05,
-          "street_width": 12.0
-        },
-        "lift": 0.08,
-        "markings": true,
-        "sidewalk": 3.5,
-        "width": 12.0
-      },
-      "shape": "road"
-    }
-  ],
-  "environment": {
-    "bloom": {
-      "intensity": 0.05,
-      "knee": 0.3,
-      "threshold": 3.0
-    },
-    "clouds": {
-      "bottom": 900,
-      "coverage": 0.35,
-      "far": 9000,
-      "lightSteps": 6,
-      "steps": 40,
-      "top": 1600
-    },
-    "fog": {
-      "color": [
-        0.72,
-        0.79,
-        0.88
-      ],
-      "density": 0.0004,
-      "heightFalloff": 0.01
-    },
-    "sky": {
-      "model": "scattering"
-    },
-    "skyColor": [
-      0.55,
-      0.68,
-      0.86
-    ]
-  },
-  "lighting": {
-    "ambientMultiplier": 1.0,
-    "exposure": 0.5,
-    "shadow": {
-      "ambientStrength": 0.12,
-      "strength": 1.0,
-      "tint": [
-        0.05,
-        0.07,
-        0.12
-      ]
-    },
-    "sun": {
-      "castsShadow": true,
-      "color": [
-        1.0,
-        0.96,
-        0.86
-      ],
-      "direction": [
-        0.42,
-        0.52,
-        -0.5
-      ],
-      "intensity": 8.0
-    }
-  },
-  "name": "Piedmont",
-  "player": {
-    "collider": {
-      "halfHeight": 0.4,
-      "radius": 0.3,
-      "shape": "capsule"
-    },
-    "friction": 0.5,
-    "position": [
-      1030.0,
-      4.0,
-      830.0
-    ]
-  },
-  "render": {
-    "maxFoliageInstances": 32768,
-    "maxInstances": 16384,
-    "maxShadowInstances": 49152
-  },
-  "terrain": {
-    "cdlod": {
-      "gridRes": 32,
-      "numLods": 8,
-      "worldHalf": 4000
-    },
-    "erode": true,
-    "erodeDroplets": 3000000,
-    "erodeRadius": 4,
-    "erodeRes": 2048,
-    "erodeTalus": 1.0,
-    "erodeThermal": 14,
-    "heightScale": 15,
-    "material": {
-      "albedo": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "roughness": 1.0
-    },
-    "mountainAlongRange": true,
-    "mountainHeight": 260,
-    "mountainMaskHi": 0.4,
-    "mountainMaskLo": -0.1,
-    "mountainMaskScale": 0.001,
-    "mountainScale": 0.002,
-    "noiseScale": 0.0011,
-    "octaves": 6,
-    "rangeHeight": 420,
-    "rangeSpine": [
-      [
-        -3400,
-        3600
-      ],
-      [
-        -3500,
-        1600
-      ],
-      [
-        -3350,
-        -400
-      ],
-      [
-        -3550,
-        -2400
-      ],
-      [
-        -2600,
-        -3400
-      ],
-      [
-        -600,
-        -3550
-      ],
-      [
-        1400,
-        -3400
-      ],
-      [
-        3600,
-        -3500
-      ]
+  "pedestrians": 1800,
+  "planOnly": false,
+  "plinth": 0.45,
+  "renderCell": 250,
+  "seed": 7,
+  "showPlan": false,
+  "sidewalk": 4.0,
+  "tiered": true,
+  "vehicles": "vehicles.lua",
+  "wander": false
+ },
+ "dayNight": {
+  "enabled": false
+ },
+ "entities": [
+  {
+   "id": 2,
+   "name": "streets",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "road": {
+    "color": [
+     0.09,
+     0.09,
+     0.1
     ],
-    "rangeVariation": 0.7,
-    "rangeWidth": 700,
-    "resolution": 1600,
-    "rockLine": 140,
-    "seed": 23,
-    "size": 8000,
-    "snowLine": 330,
-    "warp": 0.35
+    "corner_radius": 3.0,
+    "crosswalks": true,
+    "curb": 0.16,
+    "generate": {
+     "ambient_per_500": 14,
+     "arterial_span": 0.0,
+     "artery_width": 17,
+     "backbone": "arterial",
+     "block_size": 220,
+     "collector_width": 13,
+     "corridor_freeways": false,
+     "corridor_spacing": 120,
+     "curviness": 0.25,
+     "district_len": 1200.0,
+     "fabric": "mix",
+     "fabric_conform": 0.15,
+     "fabric_core_len": 110,
+     "freeway_width": 17,
+     "freeways": true,
+     "gate_spacing": 1100.0,
+     "influence": 560,
+     "interchange_spacing": 600,
+     "kill_radius": 110,
+     "kind": "metro",
+     "loop_max": 650,
+     "loop_min": 200,
+     "max_slope": 0.32,
+     "merge_radius": 80,
+     "min_block_edge": 150,
+     "min_road_clearance": 0.9,
+     "min_road_len": 30,
+     "seed": 7,
+     "seg_length": 50,
+     "sites": [
+      {
+       "block_size": 220,
+       "center": {
+        "x": 900,
+        "z": 900
+       },
+       "density": 1.0,
+       "hotspots": 9,
+       "radius": 1400
+      },
+      {
+       "block_size": 180,
+       "center": {
+        "x": 3050,
+        "z": 400
+       },
+       "density": 0.55,
+       "hotspots": 3,
+       "kind_bias": "oldtown",
+       "radius": 420
+      },
+      {
+       "block_size": 180,
+       "center": {
+        "x": 300,
+        "z": 3050
+       },
+       "density": 0.5,
+       "hotspots": 3,
+       "kind_bias": "residential",
+       "radius": 380
+      }
+     ],
+     "skeleton": "footprint",
+     "skeleton_sway": 0.05,
+     "street_width": 12.0
+    },
+    "lift": 0.08,
+    "markings": true,
+    "sidewalk": 3.5,
+    "width": 12.0
+   },
+   "shape": "road"
+  }
+ ],
+ "environment": {
+  "bloom": {
+   "intensity": 0.05,
+   "knee": 0.3,
+   "threshold": 3.0
   },
-  "vehicles": [
-    {
-      "position": [
-        1040.0,
-        4.0,
-        838.0
-      ],
-      "recipe": "sedan",
-      "seed": 7,
-      "yaw": 205
-    }
+  "clouds": {
+   "bottom": 900,
+   "coverage": 0.35,
+   "far": 9000,
+   "lightSteps": 6,
+   "steps": 40,
+   "top": 1600
+  },
+  "fog": {
+   "color": [
+    0.72,
+    0.79,
+    0.88
+   ],
+   "density": 0.0004,
+   "heightFalloff": 0.01
+  },
+  "sky": {
+   "model": "scattering"
+  },
+  "skyColor": [
+   0.55,
+   0.68,
+   0.86
+  ]
+ },
+ "lighting": {
+  "ambientMultiplier": 1.0,
+  "exposure": 0.5,
+  "shadow": {
+   "ambientStrength": 0.12,
+   "strength": 1.0,
+   "tint": [
+    0.05,
+    0.07,
+    0.12
+   ]
+  },
+  "sun": {
+   "castsShadow": true,
+   "color": [
+    1.0,
+    0.96,
+    0.86
+   ],
+   "direction": [
+    0.42,
+    0.52,
+    -0.5
+   ],
+   "intensity": 8.0
+  }
+ },
+ "name": "Piedmont",
+ "player": {
+  "collider": {
+   "halfHeight": 0.4,
+   "radius": 0.3,
+   "shape": "capsule"
+  },
+  "friction": 0.5,
+  "position": [
+   1030.0,
+   4.0,
+   830.0
+  ]
+ },
+ "render": {
+  "maxFoliageInstances": 32768,
+  "maxInstances": 16384,
+  "maxShadowInstances": 49152
+ },
+ "terrain": {
+  "cdlod": {
+   "gridRes": 32,
+   "numLods": 8,
+   "worldHalf": 4000
+  },
+  "erode": true,
+  "erodeDroplets": 3000000,
+  "erodeRadius": 4,
+  "erodeRes": 2048,
+  "erodeTalus": 1.0,
+  "erodeThermal": 14,
+  "heightScale": 15,
+  "material": {
+   "albedo": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "roughness": 1.0
+  },
+  "mountainAlongRange": true,
+  "mountainHeight": 260,
+  "mountainMaskHi": 0.4,
+  "mountainMaskLo": -0.1,
+  "mountainMaskScale": 0.001,
+  "mountainScale": 0.002,
+  "noiseScale": 0.0011,
+  "octaves": 6,
+  "rangeHeight": 420,
+  "rangeSpine": [
+   [
+    -3400,
+    3600
+   ],
+   [
+    -3500,
+    1600
+   ],
+   [
+    -3350,
+    -400
+   ],
+   [
+    -3550,
+    -2400
+   ],
+   [
+    -2600,
+    -3400
+   ],
+   [
+    -600,
+    -3550
+   ],
+   [
+    1400,
+    -3400
+   ],
+   [
+    3600,
+    -3500
+   ]
   ],
-  "version": 1
+  "rangeVariation": 0.7,
+  "rangeWidth": 700,
+  "resolution": 1600,
+  "rockLine": 140,
+  "seed": 23,
+  "size": 8000,
+  "snowLine": 330,
+  "warp": 0.35
+ },
+ "vehicles": [
+  {
+   "position": [
+    1040.0,
+    4.0,
+    838.0
+   ],
+   "recipe": "sedan",
+   "seed": 7,
+   "yaw": 205
+  }
+ ],
+ "version": 1
 }

@@ -3123,6 +3123,8 @@ bool LevelLoader::load(const std::string& path,
         CitySimConfig cfg;
         cfg.cars = cs.value("cars", cfg.cars);
         cfg.pedestrians = cs.value("pedestrians", cfg.pedestrians);
+        // How far parked scenery cars still draw (0 = never cull).
+        cfg.sceneryRadius = cs.value("sceneryRadius", cfg.sceneryRadius);
         cfg.carsPerLaneKm = cs.value("carsPerLaneKm", cfg.carsPerLaneKm);
         cfg.pedsPerKm = cs.value("pedsPerKm", cfg.pedsPerKm);
         cfg.seed = cs.value("seed", cfg.seed);
