@@ -1,6 +1,7 @@
 #include "city_planner_panel.h"
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -65,8 +66,30 @@ CityPlannerPanel::CityPlannerPanel(engine::EditorBridge& bridge)
     hotspots->setObjectName("plannerHotspots");
     form->addRow("Hotspots cap", hotspots);
     arterialSpan = meterSpin(0, 3000, "plannerArterialSpan");
-    arterialSpan->setSpecialValueText("(min_block_edge)");   // 0 = derive
+    arterialSpan->setSpecialValueText("(derived)");   // 0 = derive
     form->addRow("Arterial span", arterialSpan);
+    // Footprint-skeleton dials (P8): shown when the recipe carries
+    // "skeleton": "footprint"; the growth dials below hide, and vice versa.
+    districtLen = meterSpin(300, 4000, "plannerDistrictLen");
+    form->addRow("District size", districtLen);
+    gateSpacing = meterSpin(300, 4000, "plannerGateSpacing");
+    form->addRow("Gate spacing", gateSpacing);
+    sway = new QDoubleSpinBox;
+    sway->setRange(0.0, 0.25);
+    sway->setDecimals(2);
+    sway->setSingleStep(0.01);
+    sway->setObjectName("plannerSway");
+    form->addRow("Meander", sway);
+    stage = new QComboBox;
+    stage->addItem("Footprint");    // stop_after footprint
+    stage->addItem("Arterials");    // stop_after skeleton
+    stage->addItem("Collectors");   // stop_after collectors
+    stage->addItem("Streets");      // full build
+    stage->setCurrentIndex(3);
+    stage->setObjectName("plannerStage");
+    stage->setToolTip("Build the pipeline up to this stage on Regenerate");
+    form->addRow("Build to", stage);
+    // Legacy growth dials (space-colonization recipes).
     loopMin = meterSpin(0, 10000, "plannerLoopMin");
     form->addRow("Loop min", loopMin);
     loopMax = meterSpin(0, 10000, "plannerLoopMax");
@@ -75,6 +98,7 @@ CityPlannerPanel::CityPlannerPanel(engine::EditorBridge& bridge)
     form->addRow("Kill radius", killRadius);
     corridorSpacing = meterSpin(0, 5000, "plannerCorridorSpacing");
     form->addRow("Corridor spacing", corridorSpacing);
+    bonesForm = form;
     column->addWidget(bones);
 
     // Regenerate (graph + overlays, fast) | Bake mesh (the slow explicit one).
@@ -167,12 +191,40 @@ void CityPlannerPanel::loadRecipe() {
     siteRadius->setValue(site->value("radius", 700.0));
     hotspots->setValue(site->value("hotspots", 6));
     arterialSpan->setValue(gen.value("arterial_span", 0.0));
+    // Footprint dials (defaults mirror MetroParams).
+    footprintMode = gen.value("skeleton", std::string()) == "footprint";
+    districtLen->setValue(gen.value("district_len", 1500.0));
+    gateSpacing->setValue(gen.value("gate_spacing", 1100.0));
+    sway->setValue(gen.value("skeleton_sway", 0.05));
+    const std::string stop = gen.value("stop_after", std::string());
+    stage->setCurrentIndex(stop == "footprint"    ? 0
+                           : stop == "skeleton"   ? 1
+                           : stop == "collectors" ? 2
+                                                  : 3);
     // Growth-dial defaults mirror MetroParams (metro.h).
     loopMin->setValue(gen.value("loop_min", 80.0));
     loopMax->setValue(gen.value("loop_max", 190.0));
     killRadius->setValue(gen.value("kill_radius", 48.0));
     corridorSpacing->setValue(gen.value("corridor_spacing", 55.0));
-    stats->setText("Recipe loaded — Regenerate to grow the bones");
+    // Mode-dependent rows: footprint recipes tune the footprint, legacy
+    // recipes tune the growth — never both.
+    auto showRow = [&](QWidget* field, bool on) {
+        field->setVisible(on);
+        if (QWidget* label = bonesForm->labelForField(field))
+            label->setVisible(on);
+    };
+    showRow(districtLen, footprintMode);
+    showRow(gateSpacing, footprintMode);
+    showRow(sway, footprintMode);
+    showRow(stage, footprintMode);
+    showRow(loopMin, !footprintMode);
+    showRow(loopMax, !footprintMode);
+    showRow(killRadius, !footprintMode);
+    showRow(corridorSpacing, !footprintMode);
+    showRow(hotspots, !footprintMode);   // footprint hubs derive from cells
+    stats->setText(footprintMode
+                       ? "Footprint recipe loaded — Regenerate to build"
+                       : "Recipe loaded — Regenerate to grow the bones");
 }
 
 std::string CityPlannerPanel::composeRecipe() const {
@@ -189,14 +241,25 @@ std::string CityPlannerPanel::composeRecipe() const {
         gen["radius"] = siteRadius->value();
         gen["hotspots"] = hotspots->value();
     }
-    // arterial_span 0 = "derive from min_block_edge"; only persist the key
-    // once it is set (or was already present) so recipes aren't polluted.
+    // arterial_span 0 = derived; only persist the key once it is set (or was
+    // already present) so recipes aren't polluted.
     if (arterialSpan->value() > 0.0 || gen.contains("arterial_span"))
         gen["arterial_span"] = arterialSpan->value();
-    gen["loop_min"] = loopMin->value();
-    gen["loop_max"] = loopMax->value();
-    gen["kill_radius"] = killRadius->value();
-    gen["corridor_spacing"] = corridorSpacing->value();
+    if (footprintMode) {
+        gen["district_len"] = districtLen->value();
+        gen["gate_spacing"] = gateSpacing->value();
+        gen["skeleton_sway"] = sway->value();
+        const int idx = stage->currentIndex();
+        gen["stop_after"] = idx == 0   ? "footprint"
+                            : idx == 1 ? "skeleton"
+                            : idx == 2 ? "collectors"
+                                       : "";
+    } else {
+        gen["loop_min"] = loopMin->value();
+        gen["loop_max"] = loopMax->value();
+        gen["kill_radius"] = killRadius->value();
+        gen["corridor_spacing"] = corridorSpacing->value();
+    }
     return gen.dump();
 }
 

@@ -7,7 +7,9 @@
 #include <string>
 
 class QCheckBox;
+class QComboBox;
 class QDoubleSpinBox;
+class QFormLayout;
 class QLabel;
 class QPushButton;
 class QSpinBox;
@@ -46,6 +48,12 @@ private:
     QDoubleSpinBox* siteRadius = nullptr;
     QSpinBox* hotspots = nullptr;
     QDoubleSpinBox* arterialSpan = nullptr;
+    bool footprintMode = false;   // recipe carries skeleton:"footprint"
+    QFormLayout* bonesForm = nullptr;
+    QDoubleSpinBox* districtLen = nullptr;
+    QDoubleSpinBox* gateSpacing = nullptr;
+    QDoubleSpinBox* sway = nullptr;
+    QComboBox* stage = nullptr;
     QDoubleSpinBox* loopMin = nullptr;
     QDoubleSpinBox* loopMax = nullptr;
     QDoubleSpinBox* killRadius = nullptr;
