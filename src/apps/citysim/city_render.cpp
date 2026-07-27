@@ -387,8 +387,21 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
                 }
 #endif
                 if (!scripted) mesh = fleetCarMesh(v);
-                if (scripted)
-                    fleetTriangles += static_cast<int>(mesh.indices.size() / 3);
+                if (scripted) {
+                    const int tris = static_cast<int>(mesh.indices.size() / 3);
+                    fleetTriangles += tris;
+                    // A car that is all wheels and no shell must SHOUT. This
+                    // exact skew shipped once: a binary older than the asset
+                    // ignored the recipe's `body` mesh, read only its `parts`
+                    // (the wheels) and drew headless cars — wheels and lamps
+                    // rolling down the street. The retired box fleet was ~168
+                    // tris; a real shell is thousands; wheels alone are ~48.
+                    if (tris < 100)
+                        LOG_ERROR << "[citysim] fleet slot " << v << ": only "
+                                  << tris << " triangles — this is not a car "
+                                     "body (stale binary vs vehicles.lua, or a "
+                                     "recipe with no `body` mesh)";
+                }
                 mh = assets->acquireMesh(mesh, "city:car" + std::to_string(v));
             }
             // No Lua markers (C++ fallback fleet, scripting off, or headless/no
