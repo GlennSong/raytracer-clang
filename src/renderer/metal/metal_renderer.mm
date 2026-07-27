@@ -9,6 +9,7 @@
 #include "../../profile.h"
 #include "../../slot_map.h"
 #include "../cube_faces.h"
+#include "cloud_noise.h"   // Perlin-Worley 3D noise bake (volumetric clouds)
 #include <vector>
 #include <algorithm>
 #include <cstdlib>
@@ -189,6 +190,11 @@ struct MetalRenderer::Impl {
     id<MTLRenderPipelineState> cloudPipeline;
     id<MTLRenderPipelineState> cloudCompositePipeline;
     id<MTLTexture> cloudTexture;          // half-res RGBA16Float (S.rgb, T.a)
+    // Tileable Perlin-Worley noise set the march samples (cloud_noise.h):
+    // 128^3 RGBA8 base shape + 32^3 RGBA8 detail erosion, baked CPU-side at
+    // init (disk-cached) and sampled with repeat addressing in cl_density.
+    id<MTLTexture> cloudBaseNoise;
+    id<MTLTexture> cloudDetailNoise;
     VolumetricCloudParams cloudParams;    // level opt-in, copied in setLights
     bool cloudsActive = false;
 
@@ -610,6 +616,29 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
             impl->cloudCompositePipeline =
                 [impl->device newRenderPipelineStateWithDescriptor:d error:&error];
             if (!impl->cloudCompositePipeline) NSLog(@"Cloud composite pipeline error: %@", error);
+        }
+        // Perlin-Worley 3D noise set the march samples (cloud_noise.h). The
+        // bake is deterministic and disk-cached (cache/clouds/), so only the
+        // very first run on a machine pays the few-hundred-ms CPU cost.
+        if (impl->cloudPipeline) {
+            cloudnoise::NoiseSet nz = cloudnoise::generateOrLoad();
+            auto make3D = [&](int n, const std::vector<uint8_t>& bytes) {
+                MTLTextureDescriptor* d = [[MTLTextureDescriptor alloc] init];
+                d.textureType = MTLTextureType3D;
+                d.pixelFormat = MTLPixelFormatRGBA8Unorm;
+                d.width = d.height = d.depth = (NSUInteger)n;
+                d.usage = MTLTextureUsageShaderRead;
+                id<MTLTexture> t = [impl->device newTextureWithDescriptor:d];
+                [t replaceRegion:MTLRegionMake3D(0, 0, 0, n, n, n)
+                     mipmapLevel:0
+                           slice:0
+                       withBytes:bytes.data()
+                     bytesPerRow:(NSUInteger)n * 4
+                   bytesPerImage:(NSUInteger)n * n * 4];
+                return t;
+            };
+            impl->cloudBaseNoise = make3D(nz.baseSize, nz.base);
+            impl->cloudDetailNoise = make3D(nz.detailSize, nz.detail);
         }
     }
 
@@ -3343,7 +3372,8 @@ void MetalRenderer::endFrame() {
     // the same overlay again inside fragmentComposite (which re-derives them).
     // Both passes vanish entirely when a level doesn't opt in.
     bool cloudsOn = impl->cloudsActive && impl->cloudPipeline &&
-                    impl->cloudCompositePipeline && impl->sceneColorTexture;
+                    impl->cloudCompositePipeline && impl->sceneColorTexture &&
+                    impl->cloudBaseNoise && impl->cloudDetailNoise;
     if (cloudsOn) {
         int halfW = std::max(impl->framebufferWidth / 2, 1);
         int halfH = std::max(impl->framebufferHeight / 2, 1);
@@ -3403,6 +3433,7 @@ void MetalRenderer::endFrame() {
         cu.march = simd_make_float4((float)std::max(steps, 2),
                                     (float)std::max(cp.lightSteps, 1),
                                     cp.phaseG, cp.farDistance);
+        cu.detail = simd_make_float4(cp.detailStrength, 0.0f, 0.0f, 0.0f);
 
         MTLRenderPassDescriptor* marchPass = [MTLRenderPassDescriptor renderPassDescriptor];
         marchPass.colorAttachments[0].texture = impl->cloudTexture;
@@ -3412,6 +3443,8 @@ void MetalRenderer::endFrame() {
             [impl->currentCommandBuffer renderCommandEncoderWithDescriptor:marchPass];
         [marchEnc setRenderPipelineState:impl->cloudPipeline];
         [marchEnc setFragmentTexture:impl->depthTexture atIndex:0];
+        [marchEnc setFragmentTexture:impl->cloudBaseNoise atIndex:1];
+        [marchEnc setFragmentTexture:impl->cloudDetailNoise atIndex:2];
         [marchEnc setFragmentBytes:&cu length:sizeof(cu) atIndex:0];
         [marchEnc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
         [marchEnc endEncoding];

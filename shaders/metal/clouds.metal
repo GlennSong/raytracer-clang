@@ -2,10 +2,12 @@
 // P4), WIRED by the cinematic-sky phase. A shared density + lighting + march core
 // over two domains selected by uni.layer.w: 0 = SLAB (the cloudscape over a ground
 // scene — the procgen city/terrain sky, depth-occluded) and 1 = SHELL (a planet's
-// cloud deck from space). Density is a compact inline hash-fbm (a 3D Perlin-Worley
-// texture set is the on-device upgrade); lighting is a sun light-march (Beer +
-// Powder) with a Henyey-Greenstein phase. Output is scene-linear HDR; the
-// composite pass tone maps.
+// cloud deck from space). Density samples the tileable 3D Perlin-Worley texture
+// set baked CPU-side (src/renderer/metal/cloud_noise.h, Schneider/Nubis-style:
+// 128^3 base shape + 32^3 detail erosion — this replaced the inline value-noise
+// fbm whose thresholded blobs read as small potatoes, not cumulus); lighting is
+// a sun light-march (Beer + Powder) with a Henyey-Greenstein phase. Output is
+// scene-linear HDR; the composite pass tone maps.
 //
 // Wiring (metal_renderer.mm): fragmentClouds renders the layer at HALF resolution
 // into an offscreen RGBA16F target as a premultiplied overlay — rgb = in-scattered
@@ -15,32 +17,13 @@
 // blending; the composite pass reuses cloudOverlaySample for sky pixels, which it
 // re-derives analytically. CloudUniforms lives in shader_types.h (shared C++/MSL).
 
-static float cl_hash13(float3 p) {
-    p = fract(p * 0.3183099 + float3(0.1, 0.2, 0.3));
-    p *= 17.0;
-    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
-}
+// The baked Perlin-Worley set tiles, so repeat addressing is the whole wrap
+// story; linear filtering does the octave smoothing the ALU fbm used to pay
+// for. Bound by the march pass at texture(1)/(2).
+constexpr sampler cl_noiseSamp(coord::normalized, filter::linear, address::repeat);
 
-static float cl_valueNoise(float3 p) {
-    float3 i = floor(p);
-    float3 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float n000 = cl_hash13(i + float3(0, 0, 0));
-    float n100 = cl_hash13(i + float3(1, 0, 0));
-    float n010 = cl_hash13(i + float3(0, 1, 0));
-    float n110 = cl_hash13(i + float3(1, 1, 0));
-    float n001 = cl_hash13(i + float3(0, 0, 1));
-    float n101 = cl_hash13(i + float3(1, 0, 1));
-    float n011 = cl_hash13(i + float3(0, 1, 1));
-    float n111 = cl_hash13(i + float3(1, 1, 1));
-    return mix(mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
-               mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);
-}
-
-static float cl_fbm(float3 p) {
-    float sum = 0.0, amp = 0.5;
-    for (int i = 0; i < 5; i++) { sum += cl_valueNoise(p) * amp; p *= 2.02; amp *= 0.5; }
-    return sum;
+static float cl_remap(float x, float a, float b, float c, float d) {
+    return c + (x - a) / max(b - a, 1e-5) * (d - c);
 }
 
 static float cl_layerHeight(float3 p, constant CloudUniforms& u) {
@@ -48,16 +31,28 @@ static float cl_layerHeight(float3 p, constant CloudUniforms& u) {
     return clamp((h - u.layer.x) / max(1e-4, u.layer.y - u.layer.x), 0.0, 1.0);
 }
 
-static float cl_density(float3 p, constant CloudUniforms& u) {
+static float cl_density(float3 p, constant CloudUniforms& u,
+                        texture3d<float> baseNoise, texture3d<float> detailNoise) {
     float hf = cl_layerHeight(p, u);
     if (hf <= 0.0 || hf >= 1.0) return 0.0;
     float profile = smoothstep(0.0, 0.15, hf) * smoothstep(1.0, 0.55, hf);
     float3 wind = float3(u.params.w * u.skyAmbient.w, 0.0, 0.0);
     float3 q = (p + wind) * u.params.z;
-    float base = cl_fbm(q);
+    // Base shape: R = perlin-worley, GBA = worley fBm at rising frequency.
+    // The 0.25 uv scale puts the texture's freq-4 perlin cell at ~1/noiseScale
+    // metres — the same feature scale the old value fbm gave params.z, so
+    // levels keep their meaning. The worley fBm remap carves the billows.
+    float4 nse = baseNoise.sample(cl_noiseSamp, q * 0.25);
+    float lowFbm = nse.g * 0.625 + nse.b * 0.25 + nse.a * 0.125;
+    float base = clamp(cl_remap(nse.r, lowFbm - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);
+    // Coverage knob: unchanged semantics — 1-coverage is the threshold, the
+    // remainder renormalised — so level JSON keeps meaning what it meant.
     float d = clamp((base - (1.0 - u.params.x)) / max(1e-3, u.params.x), 0.0, 1.0);
-    float detail = cl_fbm(q * 3.1 + 4.0);
-    d = clamp(d - detail * 0.35 * (1.0 - d), 0.0, 1.0);
+    // Edge erosion: subtract high-frequency worley scaled by (1 - d), so
+    // interiors stay solid and edges wisp away (the standard erode trick).
+    float3 det = detailNoise.sample(cl_noiseSamp, q * 2.0).rgb;
+    float detailFbm = det.r * 0.625 + det.g * 0.25 + det.b * 0.125;
+    d = clamp(d - detailFbm * u.detail.x * (1.0 - d), 0.0, 1.0);
     return d * profile * u.params.y;
 }
 
@@ -119,6 +114,8 @@ vertex CloudsOut vertexClouds(uint vid [[vertex_id]]) {
 // radiance, a = view transmittance (1 = no cloud). Composite: scene*a + rgb.
 fragment float4 fragmentClouds(CloudsOut in [[stage_in]],
                                depth2d<float> sceneDepth [[texture(0)]],
+                               texture3d<float> baseNoise [[texture(1)]],
+                               texture3d<float> detailNoise [[texture(2)]],
                                constant CloudUniforms& u [[buffer(0)]]) {
     constexpr sampler samp(coord::normalized, filter::linear, address::clamp_to_edge);
     const float4 CLEAR = float4(0.0, 0.0, 0.0, 1.0);
@@ -158,13 +155,13 @@ fragment float4 fragmentClouds(CloudsOut in [[stage_in]],
 
     for (int i = 0; i < viewSteps; i++) {
         float3 p = camPos + dir * (t0 + ds * (float(i) + jitter));
-        float density = cl_density(p, u);
+        float density = cl_density(p, u, baseNoise, detailNoise);
         if (density > 0.001) {
             float lightOD = 0.0;
             float lds = (u.layer.y - u.layer.x) / float(max(1, lightSteps));
             for (int j = 0; j < lightSteps; j++) {
                 float3 lp = p + sunDir * (lds * (float(j) + 0.5));
-                lightOD += cl_density(lp, u) * lds;
+                lightOD += cl_density(lp, u, baseNoise, detailNoise) * lds;
             }
             float beer = exp(-lightOD);
             float powder = 1.0 - exp(-2.0 * density * ds);

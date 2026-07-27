@@ -184,6 +184,7 @@ struct CloudUniforms {
     simd_float4   layer;           // x bottom, y top, z planetRadius, w domainMode
     simd_float4   params;          // x coverage, y densityScale, z noiseScale, w windSpeed
     simd_float4   march;           // x viewSteps, y lightSteps, z phaseG, w farDistance
+    simd_float4   detail;          // x detailStrength (edge-erosion depth), yzw unused
 };
 
 // Per-frame shadow sampling parameters. The rasterization depth bias is NOT

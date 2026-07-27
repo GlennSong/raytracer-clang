@@ -3832,8 +3832,9 @@ bool LevelLoader::load(const std::string& path,
     //                         perspective (replaces exp fog while active).
     //   "environment.clouds" {coverage?, bottom?, top?, density?, noiseScale?,
     //                         wind?, steps?, lightSteps?, phaseG?, far?,
-    //                         ambient?, enabled?} -> volumetric cloud slab
-    //                         (retires the 2D FBM overlay while active).
+    //                         ambient?, detailStrength?, enabled?} -> volumetric
+    //                         cloud slab (retires the 2D FBM overlay while
+    //                         active).
     view.lighting.skyScattering = SkyScatteringParams{};
     view.lighting.volumetricClouds = VolumetricCloudParams{};
     if (root.contains("environment") && root["environment"].is_object()) {
@@ -3868,6 +3869,7 @@ bool LevelLoader::load(const std::string& path,
             vc.phaseG      = c.value("phaseG", vc.phaseG);
             vc.farDistance = c.value("far", vc.farDistance);
             vc.ambient     = c.value("ambient", vc.ambient);
+            vc.detailStrength = c.value("detailStrength", vc.detailStrength);
         }
         // Aerial-perspective fog (matches the offline tracer's Scene::fog). Lives
         // under "environment" alongside the sky; pushed to the renderer via the

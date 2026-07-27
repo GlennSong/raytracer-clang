@@ -341,6 +341,10 @@ struct VolumetricCloudParams {
     float phaseG = 0.45f;        // Henyey-Greenstein silver-lining strength
     float farDistance = 30000.0f;
     float ambient = 0.5f;        // sky ambient reaching cloud interiors
+    // Perlin-Worley detail erosion: how deep the 32^3 worley detail texture
+    // eats into cloud edges (0 = solid billows, ~0.6 = ragged wisps). Matches
+    // the 0.35 the old inline-fbm erosion hardcoded.
+    float detailStrength = 0.35f;
 };
 
 // Aerial-perspective fog (ADR-0016 environment). Lit color lerps toward `color`
