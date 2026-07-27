@@ -365,6 +365,39 @@ Poly2 chaikinClosed(const Poly2& poly, int passes) {
     return cur;
 }
 
+// Deflection-bounded smoothing: corner-cut any vertex whose adjacent-segment
+// deflection exceeds maxDeg (a local Chaikin applied only where needed) —
+// the rim becomes a ROAD, and a road obeys the foldback gate. Small radii
+// need this: Douglas-Peucker leaves short segments whose rounded corners are
+// tighter than the resample spacing can represent.
+Poly2 limitDeflection(const Poly2& poly, double maxDeg, int passes) {
+    const double maxRad = maxDeg * kPi / 180.0;
+    Poly2 cur = poly;
+    for (int pass = 0; pass < passes; ++pass) {
+        bool any = false;
+        Poly2 next;
+        next.reserve(cur.size() + 8);
+        const std::size_t n = cur.size();
+        for (std::size_t i = 0; i < n; ++i) {
+            const Vec2& a = cur[(i + n - 1) % n];
+            const Vec2& m = cur[i];
+            const Vec2& b = cur[(i + 1) % n];
+            const Vec2 d0 = normalize(m - a), d1 = normalize(b - m);
+            const double c = std::clamp(dot(d0, d1), -1.0, 1.0);
+            if (std::acos(c) > maxRad) {
+                next.push_back(m * 0.75 + a * 0.25);
+                next.push_back(m * 0.75 + b * 0.25);
+                any = true;
+            } else {
+                next.push_back(m);
+            }
+        }
+        cur = std::move(next);
+        if (!any) break;
+    }
+    return cur;
+}
+
 Poly2 resampleClosed(const Poly2& poly, double spacing) {
     const std::size_t n = poly.size();
     if (n < 3) return poly;
@@ -495,6 +528,9 @@ Footprint buildFootprint(const Vec2& seed, double maxRadius,
     poly = simplifyClosed(poly, eps);
     poly = chaikinClosed(poly, std::max(0, params.smoothPasses));
     poly = resampleClosed(poly, std::max(cell * 0.25, params.resample));
+    // The rim becomes an arterial: bound its per-vertex deflection like any
+    // road chain (the foldback gate applies to the whole skeleton).
+    poly = limitDeflection(poly, 22.0, 5);
     ensureCCW(poly);
 
     // Center = deepest point of the FINAL mask (ties: lowest j, then i).

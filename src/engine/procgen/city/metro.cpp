@@ -1,5 +1,6 @@
 #include "metro.h"
 
+#include "arterial_skeleton.h"  // P8 footprint-first constructed skeleton
 #include "road_constraints.h"   // consolidateJunctionSpans (big-block skeleton)
 #include "patch_fabric.h"       // P7 patch-conforming fabric (chords/bisect/court)
 #include "../../../profile.h"
@@ -323,7 +324,9 @@ RoadGraph buildMetro(const MetroParams& p,
         for (std::size_t si = 0; si < sites.size(); ++si) {
             const MetroSite& S = sites[si];
             FootprintParams fpp;
-            fpp.cell = p.footprintCell;
+            // Raster scales with the site: a town's rim needs finer cells or
+            // its contour corners out-tighten what the resample can smooth.
+            fpp.cell = std::clamp(S.radius / 16.0, 40.0, p.footprintCell);
             // City: kill lobes thinner than most of a district cell. Towns:
             // enough to stay chunky without erasing a small site outright.
             fpp.minWidth = si == 0
@@ -418,32 +421,35 @@ RoadGraph buildMetro(const MetroParams& p,
     const int kindCycle[6] = {1, 2, 4, 1, 2, 3};   // commercial, residential,
                                                    // industrial, ..., oldtown
     const int townCycle[2] = {2, 1};               // residential, commercial
-    for (std::size_t si = 0; si < sites.size(); ++si) {
-        const MetroSite& S = sites[si];
-        const bool city = (si == 0);
-        const int SH = S.hotspots;
-        int centralKind = city ? 0 : (S.kindBias >= 0 ? S.kindBias : 2);
-        hots.push_back({snapBuildable(S.center, S.radius), centralKind,
-                        /*radial=*/city, static_cast<int>(si)});
-        // One jittered ring up to 7 hubs; bigger metros add an OUTER ring so the
-        // footprint is covered by centres instead of leaving a bald mid-band.
-        const int ring1 = std::min(SH - 1, 6);
-        for (int i = 1; i < SH; ++i) {
-            const bool outer = (i - 1) >= ring1;
-            const int k = outer ? (i - 1 - ring1) : (i - 1);
-            const int n = outer ? (SH - 1 - ring1) : ring1;
-            double ang = kTau * k / std::max(1, n) + rng.range(-0.35, 0.35) +
-                         (outer ? kTau * 0.5 / std::max(1, n) : 0.0);
-            double r = S.radius * (outer ? rng.range(0.60, 0.80) : rng.range(0.34, 0.55));
-            Vec2 pos = snapBuildable(S.center + Vec2(std::cos(ang), std::sin(ang)) * r,
-                                     S.radius);
-            hots.push_back({pos,
-                            city ? kindCycle[(i - 1) % 6] : townCycle[(i - 1) % 2],
-                            city && (i % 3) == 0, static_cast<int>(si)});
+    // Footprint mode derives its hubs FROM the built skeleton (one per
+    // district cell) below — the scatter here is the legacy path only.
+    if (p.skeleton != "footprint")
+        for (std::size_t si = 0; si < sites.size(); ++si) {
+            const MetroSite& S = sites[si];
+            const bool city = (si == 0);
+            const int SH = S.hotspots;
+            int centralKind = city ? 0 : (S.kindBias >= 0 ? S.kindBias : 2);
+            hots.push_back({snapBuildable(S.center, S.radius), centralKind,
+                            /*radial=*/city, static_cast<int>(si)});
+            // One jittered ring up to 7 hubs; bigger metros add an OUTER ring so the
+            // footprint is covered by centres instead of leaving a bald mid-band.
+            const int ring1 = std::min(SH - 1, 6);
+            for (int i = 1; i < SH; ++i) {
+                const bool outer = (i - 1) >= ring1;
+                const int k = outer ? (i - 1 - ring1) : (i - 1);
+                const int n = outer ? (SH - 1 - ring1) : ring1;
+                double ang = kTau * k / std::max(1, n) + rng.range(-0.35, 0.35) +
+                             (outer ? kTau * 0.5 / std::max(1, n) : 0.0);
+                double r = S.radius * (outer ? rng.range(0.60, 0.80) : rng.range(0.34, 0.55));
+                Vec2 pos = snapBuildable(S.center + Vec2(std::cos(ang), std::sin(ang)) * r,
+                                         S.radius);
+                hots.push_back({pos,
+                                city ? kindCycle[(i - 1) % 6] : townCycle[(i - 1) % 2],
+                                city && (i % 3) == 0, static_cast<int>(si)});
+            }
         }
-    }
     const int H = static_cast<int>(hots.size());
-    if (p.outHubs) *p.outHubs = hots;
+    if (p.skeleton != "footprint" && p.outHubs) *p.outHubs = hots;
 
     // --- freeway backbone (metropolis tier): connect the hubs with an MST plus
     // a few nearest extras, each link a gently-curved polyline. Laid down FIRST
@@ -451,6 +457,43 @@ RoadGraph buildMetro(const MetroParams& p,
     // lines join the arterial colonization below.
     RoadGraph Ga;
     std::vector<Vec2> seedPts;                      // extra colonization sources
+
+    // --- P8-C footprint skeleton: rim + spine + recursive bisection, per
+    // site, then curved connectors between paired gates. No colonization,
+    // no backbone MST (H == 0 self-skips the block below), no loop closure —
+    // the constructed skeleton already encloses its faces.
+    if (p.skeleton == "footprint") {
+        SkeletonParams sp;
+        sp.districtLen = p.districtLen;
+        sp.rimRoad = p.rimRoad;
+        sp.spineRoad = p.spineRoad;
+        sp.sway = p.skeletonSway;
+        sp.arteryWidth = p.arteryWidth;
+        sp.seed = p.seed;
+        for (std::size_t si = 0; si < footprints.size(); ++si)
+            buildFootprintSkeleton(Ga, footprints[si], static_cast<int>(si),
+                                   sites[si].hotspots, sites[si].kindBias, sp,
+                                   buildable, hots);
+        // Connectors: one curved road per paired gate link (emit each
+        // unordered pair once; endpoints are exact rim gate nodes).
+        for (std::size_t a = 0; a < footprints.size(); ++a)
+            for (const FootprintGate& gateA : footprints[a].gates) {
+                if (gateA.toSite < 0 ||
+                    gateA.toSite <= static_cast<int>(a))
+                    continue;
+                for (const FootprintGate& gateB :
+                     footprints[gateA.toSite].gates)
+                    if (gateB.toSite == static_cast<int>(a)) {
+                        emitConnectorRoad(Ga, gateA.pos, gateB.pos,
+                                          p.arteryWidth, RoadClass::Arterial,
+                                          buildable, p.skeletonSway,
+                                          p.seed ^ 0x9e3779b9u);
+                        break;
+                    }
+            }
+        if (p.outHubs) *p.outHubs = hots;
+    }
+
     if (p.freeways && H >= 2) {
         // MST over hubs (Prim) + each hub's nearest non-tree neighbour when the
         // link is under ~1.2 DOM (adds loops without a hairball).
@@ -735,6 +778,8 @@ RoadGraph buildMetro(const MetroParams& p,
 
     // --- attractors: dense along inter-hotspot corridors + ambient wander that
     // scales with the FOOTPRINT AREA (a fixed count starves a 2 km domain).
+    // (Legacy path only: the footprint skeleton is constructed above.)
+    if (p.skeleton != "footprint") {
     std::vector<Vec2> attr;
     for (std::size_t i = 0; i < hots.size(); ++i)
         for (std::size_t j = i + 1; j < hots.size(); ++j) {
@@ -831,6 +876,7 @@ RoadGraph buildMetro(const MetroParams& p,
     std::vector<int> amap(node.size());
     for (std::size_t i = 0; i < node.size(); ++i) amap[i] = Ga.addNode(node[i], 6.0);
     for (const auto& e : aedge) Ga.addEdge(amap[e.first], amap[e.second], p.arteryWidth, RoadClass::Arterial);
+    }   // end legacy attractors + colonization
 
     // --- stitch the separately-grown trees into ONE network (greedy nearest
     // link, grid-accelerated: for every node of the smallest component, query
@@ -860,7 +906,10 @@ RoadGraph buildMetro(const MetroParams& p,
 
     // --- close a few loops so the arterials enclose blocks (a tree encloses none):
     // link nodes near in space but far along the graph. Optionally a ring road too.
-    {
+    // Footprint mode: the constructed skeleton already encloses its faces —
+    // a loop chord across a district cell is exactly the failure this pass
+    // would create, so it is skipped whole.
+    if (p.skeleton != "footprint") {
         std::vector<std::vector<int>> adj(Ga.nodes.size());
         for (const RoadEdge& e : Ga.edges) { adj[e.a].push_back(e.b); adj[e.b].push_back(e.a); }
         const int loopStride = 3;
@@ -921,14 +970,25 @@ RoadGraph buildMetro(const MetroParams& p,
     }
     Ga = planarize(Ga, 1.0);
     // v2: de-wobble + de-stub the skeleton, then re-planarize so any nodes the
-    // smoothing pulled together fuse into clean junctions.
-    Ga = planarize(cleanSkeleton(Ga), 1.0);
+    // smoothing pulled together fuse into clean junctions. Footprint mode
+    // skips the Laplacian: constructed chains carry INTENDED sway (Glenn's
+    // line-to-curve), and there are no stubs by construction.
+    if (p.skeleton != "footprint")
+        Ga = planarize(cleanSkeleton(Ga), 1.0);
     // Big-block metros consolidate the SKELETON's junction spacing before the
     // fabric fill: faces are then born at block scale and the fill subdivides
     // them with the same floor, instead of the post-pipeline cleanup eating
-    // finished blocks to fix skeleton spans.
-    if (p.minBlockEdge > 0.0)
-        Ga = planarize(consolidateJunctionSpans(Ga, p.minBlockEdge, 4), 1.0);
+    // finished blocks to fix skeleton spans. Footprint mode finally CONSUMES
+    // arterial_span here (capped well under the district size so the backstop
+    // can never eat a legitimate cell edge).
+    const double skelFloor =
+        p.skeleton == "footprint"
+            ? std::max(p.minBlockEdge,
+                       std::min(p.arterialSpan > 0.0 ? p.arterialSpan : 650.0,
+                                0.35 * p.districtLen))
+            : p.minBlockEdge;
+    if (skelFloor > 0.0)
+        Ga = planarize(consolidateJunctionSpans(Ga, skelFloor, 4), 1.0);
 
     // ARTERIALS-ONLY (v2 stage 1): Ga now holds the full arterial skeleton +
     // freeway-anchored growth, and NOT a single Local/Collector edge (the fill
