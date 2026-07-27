@@ -2092,6 +2092,7 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         // skeleton construction itself.
         mp.skeleton      = g.value("skeleton", std::string());
         mp.footprintCell = g.value("footprint_cell", 80.0);
+        mp.footprintWobble = g.value("footprint_wobble", 0.12);
         mp.districtLen   = g.value("district_len", 1500.0);
         mp.gateSpacing   = g.value("gate_spacing", 1100.0);
         mp.rimRoad       = g.value("rim_road", true);

@@ -138,6 +138,7 @@ struct MetroParams {
     // still come from the legacy growth; P8-C swaps the skeleton itself.
     std::string skeleton;
     double footprintCell = 80.0;    // F0 flood-fill grid pitch (m)
+    double footprintWobble = 0.12;  // radial clip wobble (0 = compass circle)
     double districtLen   = 1500.0;  // bisection stop: target district cell (m)
     double gateSpacing   = 1100.0;  // rim gate arc spacing (city; towns derive)
     bool   rimRoad       = true;    // perimeter arterial on the boundary

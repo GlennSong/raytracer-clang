@@ -183,6 +183,31 @@ TEST_CASE(footprint_connector_gates_face_their_target) {
     CHECK(townConn == 1);
 }
 
+TEST_CASE(footprint_wobble_breaks_the_circle) {
+    FootprintParams fp;
+    fp.minWidth = 1200.0;
+    fp.wobble = 0.18;
+    fp.seed = 7u;
+    Footprint f = buildFootprint(Vec2(900, 900), 1400.0, plainHeight,
+                                 BuildabilityConfig{}, fp);
+    CHECK(!f.degraded);
+    double rMin = 1e30, rMax = 0;
+    for (const Vec2& v : f.polygon) {
+        const double r = (v - Vec2(900, 900)).length();
+        rMin = std::min(rMin, r);
+        rMax = std::max(rMax, r);
+    }
+    std::printf("        [wobble] radial extent %.0f..%.0f (ratio %.2f)\n",
+                rMin, rMax, rMax / std::max(1.0, rMin));
+    CHECK(rMax / std::max(1.0, rMin) > 1.15);   // organic, not a compass circle
+    CHECK(rMax < 1400.0 * (1.0 + 0.18) + 160.0);   // still bounded by the clip
+    // Different seed, different shape (phases move).
+    fp.seed = 8u;
+    Footprint f2 = buildFootprint(Vec2(900, 900), 1400.0, plainHeight,
+                                  BuildabilityConfig{}, fp);
+    CHECK(!polysIdentical(f.polygon, f2.polygon));
+}
+
 TEST_CASE(footprint_is_deterministic) {
     FootprintParams fp;
     fp.minWidth = 800.0;

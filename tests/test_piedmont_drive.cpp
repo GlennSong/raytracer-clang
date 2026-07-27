@@ -42,6 +42,11 @@ MetroParams piedmontParams() {
     p.loopMin = 550;
     p.loopMax = 1300;
     p.interchangeSpacing = 600;
+    // P8: the shipping recipe is footprint-first (growth dials above stay as
+    // the legacy fallback mirror; footprint mode ignores them).
+    p.skeleton = "footprint";
+    p.districtLen = 1200;
+    p.gateSpacing = 1100;
 
     MetroSite city;
     city.center = {900, 900};

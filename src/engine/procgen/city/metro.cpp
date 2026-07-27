@@ -327,6 +327,8 @@ RoadGraph buildMetro(const MetroParams& p,
             // Raster scales with the site: a town's rim needs finer cells or
             // its contour corners out-tighten what the resample can smooth.
             fpp.cell = std::clamp(S.radius / 16.0, 40.0, p.footprintCell);
+            fpp.wobble = p.footprintWobble;
+            fpp.seed = p.seed + static_cast<std::uint32_t>(si) * 7919u;
             // City: kill lobes thinner than most of a district cell. Towns:
             // enough to stay chunky without erasing a small site outright.
             fpp.minWidth = si == 0

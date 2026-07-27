@@ -159,6 +159,32 @@ int main(int argc, char** argv) {
     RoadGraph g = navRoadGraph(net);
     std::vector<Chain> chains = chainsOf(g);
 
+    // Spawn hint: the junction nearest the primary hub (player + parked car
+    // authoring after a regen — the downtown crossing moves with the recipe).
+    if (!net.cityHubs.empty()) {
+        std::vector<int> deg(g.nodes.size(), 0);
+        for (const RoadEdge& e : g.edges) {
+            ++deg[e.a];
+            ++deg[e.b];
+        }
+        int best = -1;
+        double bd = 1e30;
+        for (std::size_t n = 0; n < g.nodes.size(); ++n) {
+            if (deg[n] < 3) continue;
+            const double d =
+                (g.nodes[n].pos - net.cityHubs[0].pos).length();
+            if (d < bd) {
+                bd = d;
+                best = static_cast<int>(n);
+            }
+        }
+        if (best >= 0)
+            std::printf("[map] spawn hint: downtown junction (%.0f, %.0f), "
+                        "hub0 (%.0f, %.0f)\n",
+                        g.nodes[best].pos.x, g.nodes[best].pos.y,
+                        net.cityHubs[0].pos.x, net.cityHubs[0].pos.y);
+    }
+
     // Blocks + lots via the real grower (flat ground, level parcel defaults).
     LotParams lp;
     lp.seed = gen.value("seed", 7u);

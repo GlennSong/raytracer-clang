@@ -46,6 +46,13 @@ struct FootprintParams {
     double minWidth = 0.0;     // kill lobes narrower than this (m); 0 = keep all
     int smoothPasses = 2;      // Chaikin corner-cut rounds
     double resample = 60.0;    // final boundary vertex spacing (m)
+    // Radial wobble of the SITE CLIP: 0 = a hard disc (open terrain yields a
+    // circle), 0.1-0.2 = the clip radius varies by seeded low-frequency
+    // harmonics so even a city on a featureless plain gets an organic
+    // boundary. Terrain still carves the polygon regardless — the wobble
+    // only shapes the outer limit.
+    double wobble = 0.0;
+    std::uint32_t seed = 5u;   // wobble phases (gates hash their own seed)
 };
 
 // Step 1 (F0): seed + radius + terrain -> one regularized polygon.

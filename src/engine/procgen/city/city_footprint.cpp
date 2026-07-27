@@ -461,17 +461,34 @@ Footprint buildFootprint(const Vec2& seed, double maxRadius,
                          const BuildabilityConfig& build,
                          const FootprintParams& params) {
     const double cell = std::max(8.0, params.cell);
+    const double wobble = std::clamp(params.wobble, 0.0, 0.35);
+    const double reach = maxRadius * (1.0 + wobble);
     Grid g;
     g.cell = cell;
-    g.n = std::max(8, static_cast<int>(std::ceil(2.0 * maxRadius / cell)));
+    g.n = std::max(8, static_cast<int>(std::ceil(2.0 * reach / cell)));
     g.origin = seed - Vec2(g.n * cell * 0.5, g.n * cell * 0.5);
 
-    // Buildable field, clipped to the site disc.
+    // Site clip: a disc whose radius varies by seeded low-frequency
+    // harmonics — the city limit of a plains town is organic, not a compass
+    // circle. Terrain still carves the interior regardless.
+    const double ph1 = hash01(params.seed ^ 0x51u) * 2.0 * kPi;
+    const double ph2 = hash01(params.seed ^ 0x52u) * 2.0 * kPi;
+    const double ph3 = hash01(params.seed ^ 0x53u) * 2.0 * kPi;
+    auto clipRadius = [&](const Vec2& q) {
+        if (wobble <= 0.0) return maxRadius;
+        const double a = std::atan2(q.y - seed.y, q.x - seed.x);
+        const double m = 0.55 * std::sin(3.0 * a + ph1) +
+                         0.30 * std::sin(5.0 * a + ph2) +
+                         0.15 * std::sin(8.0 * a + ph3);
+        return maxRadius * (1.0 + wobble * m);
+    };
+
+    // Buildable field, clipped to the (wobbled) site disc.
     std::vector<char> buildableCell(g.n * g.n, 0);
     for (int j = 0; j < g.n; ++j)
         for (int i = 0; i < g.n; ++i) {
             const Vec2 q = g.center(i, j);
-            if ((q - seed).length() > maxRadius) continue;
+            if ((q - seed).length() > clipRadius(q)) continue;
             if (isBuildable(build, ground, q.x, q.y))
                 buildableCell[g.idx(i, j)] = 1;
         }
