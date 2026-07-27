@@ -2098,6 +2098,7 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         mp.spineRoad     = g.value("spine", true);
         mp.skeletonSway  = g.value("skeleton_sway", 0.05);
         mp.arterialSpan  = g.value("arterial_span", 0.0);
+        mp.stopAfter     = g.value("stop_after", std::string());
         // "backbone": "arterial" keeps the hub-to-hub spine a street (a
         // no-freeway metro); the historical default stays Freeway-class.
         if (g.value("backbone", std::string("freeway")) == std::string("arterial"))

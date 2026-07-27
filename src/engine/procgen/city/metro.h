@@ -144,6 +144,10 @@ struct MetroParams {
     bool   spineRoad     = true;    // founding road between opposite gates
     double skeletonSway  = 0.05;    // spoke/cut meander amplitude
     double arterialSpan  = 0.0;     // min arterial junction span; 0 = derived
+    // P8-D pipeline stepper (footprint mode only): "" = full build,
+    // "footprint" = polygons+gates only (empty graph), "skeleton" = arterials
+    // only, "collectors" = arterials + collector cuts, no street fabric.
+    std::string stopAfter;
 
     // Terrain-aware layout (optional). When `ground` is set, hotspots, arterial
     // growth and blocks are gated on the buildability of the ground: the city

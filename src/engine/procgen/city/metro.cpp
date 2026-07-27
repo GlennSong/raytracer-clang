@@ -346,6 +346,9 @@ RoadGraph buildMetro(const MetroParams& p,
         }
         pairConnectorGates(footprints);
         if (p.outFootprints) *p.outFootprints = footprints;
+        // Stepper stage 1: the footprint alone (polygons + gates via the
+        // overlay; no roads yet).
+        if (p.stopAfter == "footprint") return RoadGraph{};
     }
 
     // --- hotspots: one central hub + the rest on a jittered ring; ~1 in 3 radial.
@@ -997,6 +1000,88 @@ RoadGraph buildMetro(const MetroParams& p,
     // downstream. freewayPlans (corridor anchors) are populated upstream and
     // untouched by the fill, so the freeway backbone survives.
     if (p.arterialsOnly) return Ga;
+    // Stepper stage 2: the bare arterial skeleton.
+    if (p.skeleton == "footprint" && p.stopAfter == "skeleton") return Ga;
+
+    // --- P8-D tier 1 (footprint mode): COLLECTOR cuts subdivide the district
+    // cells into patch-scale faces before the street fabric runs — Glenn's
+    // step 3 ("enclose city blocks") as a coarser pass of the SAME fabric
+    // machinery. Chords where the face has real corners (the conforming
+    // ladder), bisect otherwise; every cut Collector-class. The street tier
+    // below re-extracts faces, so it sees patch-scale blocks.
+    if (p.skeleton == "footprint") {
+        const double collectorLen =
+            std::clamp(p.districtLen / 3.0, 400.0, 650.0);
+        auto dPosKey = [](const Vec2& v) {
+            return (static_cast<long long>(std::llround(v.x * 4.0)) << 32) ^
+                   (static_cast<long long>(std::llround(v.y * 4.0)) &
+                    0xffffffffLL);
+        };
+        std::unordered_map<long long, int> dDeg;
+        {
+            std::vector<int> gdeg(Ga.nodes.size(), 0);
+            for (const RoadEdge& e : Ga.edges) {
+                if (e.a == e.b) continue;
+                ++gdeg[e.a];
+                ++gdeg[e.b];
+            }
+            for (std::size_t i = 0; i < Ga.nodes.size(); ++i) {
+                const long long k = dPosKey(Ga.nodes[i].pos);
+                auto it = dDeg.find(k);
+                if (it == dDeg.end() || it->second < gdeg[i])
+                    dDeg[k] = gdeg[i];
+            }
+        }
+        int tierSegs = 0;
+        std::vector<Poly2> dfaces = extractBlocks(Ga, 200.0);
+        for (const Poly2& df : dfaces) {
+            if (df.size() < 3) continue;
+            const Vec2 c = centroid(df);
+            if (gated && !buildable(c.x, c.y)) continue;
+            // City districts only: town faces are already patch-sized.
+            int bh = 0;
+            double bd = 1e30;
+            for (std::size_t h = 0; h < hots.size(); ++h) {
+                const double d = dist2(c, hots[h].pos);
+                if (d < bd) {
+                    bd = d;
+                    bh = static_cast<int>(h);
+                }
+            }
+            if (hots.empty() || hots[bh].site != 0) continue;
+            PatchFabricParams cfp;
+            cfp.blockLen = collectorLen;
+            cfp.blockDepth = collectorLen;
+            cfp.streetWidth = p.collectorWidth;
+            cfp.seed = p.seed;
+            cfp.conform = p.fabricConform;
+            cfp.jitter = p.fabricJitter;
+            FabricPatch patch;
+            patch.boundary = df;
+            for (std::size_t v = 0; v < df.size(); ++v) {
+                auto it = dDeg.find(dPosKey(df[v]));
+                if (it != dDeg.end() && it->second >= 3)
+                    patch.corners.push_back(static_cast<int>(v));
+            }
+            const std::vector<FabricSegment> segs =
+                patch.corners.size() >= 2 ? fabricChords(patch, cfp)
+                                          : fabricBisect(df, cfp);
+            for (const FabricSegment& s : segs) {
+                const int a = Ga.addNode(s.a, 0.5);
+                const int b = Ga.addNode(s.b, 0.5);
+                if (a != b)
+                    Ga.addEdge(a, b, p.collectorWidth, RoadClass::Collector);
+            }
+            tierSegs += static_cast<int>(segs.size());
+        }
+        Ga = planarize(Ga, 1.0);
+        std::fprintf(stderr,
+                     "[metro] tier-1 collectors: %d segs across %zu district "
+                     "faces\n",
+                     tierSegs, dfaces.size());
+        // Stepper stage 3: districts enclosed, streets not yet grown.
+        if (p.stopAfter == "collectors") return Ga;
+    }
 
     // --- fill each enclosed block: subdivide (grid) or rings+spokes (radial hub).
     std::vector<Poly2> faces =

@@ -292,6 +292,58 @@ TEST_CASE(footprint_skeleton_derives_hub_contract) {
     CHECK(townSeen >= 1);
 }
 
+TEST_CASE(footprint_tiered_fill_grows_collectors_then_streets) {
+    MetroParams p = fixtureParams();
+    p.arterialsOnly = false;
+    p.fabric = "mix";
+    p.fabricCoreLen = 110.0;
+    p.blockSize = 150.0;
+    RoadGraph g = buildMetro(p, nullptr);
+    int art = 0, col = 0, loc = 0;
+    for (const RoadEdge& e : g.edges) {
+        if (e.klass == RoadClass::Arterial) ++art;
+        else if (e.klass == RoadClass::Collector) ++col;
+        else ++loc;
+    }
+    const std::size_t blocks = extractBlocks(g, 200.0).size();
+    std::printf(
+        "        [tiered fill] %d arterial / %d collector / %d local edges, "
+        "%zu blocks\n",
+        art, col, loc, blocks);
+    CHECK(art > 50);
+    CHECK(col > 10);    // tier-1 cuts enclosed the districts
+    CHECK(loc > 100);   // street fabric grew inside the patches
+    CHECK(blocks >= 30);
+}
+
+TEST_CASE(footprint_stop_after_steps_the_pipeline) {
+    MetroParams p = fixtureParams();
+    p.arterialsOnly = false;
+    p.fabric = "mix";
+    p.fabricCoreLen = 110.0;
+    auto classCounts = [](const RoadGraph& g, int& art, int& col, int& loc) {
+        art = col = loc = 0;
+        for (const RoadEdge& e : g.edges) {
+            if (e.klass == RoadClass::Arterial) ++art;
+            else if (e.klass == RoadClass::Collector) ++col;
+            else ++loc;
+        }
+    };
+    int art = 0, col = 0, loc = 0;
+    p.stopAfter = "footprint";
+    CHECK(buildMetro(p, nullptr).nodes.empty());
+    p.stopAfter = "skeleton";
+    classCounts(buildMetro(p, nullptr), art, col, loc);
+    CHECK(art > 0);
+    CHECK(col == 0);
+    CHECK(loc == 0);
+    p.stopAfter = "collectors";
+    classCounts(buildMetro(p, nullptr), art, col, loc);
+    CHECK(art > 0);
+    CHECK(col > 0);
+    CHECK(loc == 0);
+}
+
 TEST_CASE(footprint_skeleton_svg_debug_dump) {
     // Visual debugging artifact (not a gate): /tmp/skel_debug.svg
     MetroParams p = fixtureParams();
