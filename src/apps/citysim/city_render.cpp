@@ -404,6 +404,24 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
             carGroups_.push_back(e);
         }
     }
+    // FLEET VERDICT — loud, unmissable, once per build (Glenn has now twice
+    // reported "old cars" while probes showed the script loading; this line
+    // settles which fleet THIS process actually instanced).
+    {
+        int scriptedCount = 0;
+        for (const auto& lights : carLights_)
+            if (!lights.empty()) ++scriptedCount;   // markers only from Lua
+        if (params_.vehicleScript.empty())
+            LOG_ERROR << "[citysim] FLEET: BUILT-IN BOX CARS — no vehicles "
+                         "script configured (citysim.vehicles missing?)";
+        else if (scriptedCount == 0)
+            LOG_ERROR << "[citysim] FLEET: BUILT-IN BOX CARS — vehicles.lua "
+                         "loaded but produced 0 scripted bodies";
+        else
+            LOG_INFO << "[citysim] fleet: " << scriptedCount << "/"
+                     << carVariantCount()
+                     << " scripted car bodies (vehicles.lua)";
+    }
     pedGroup_ = world.create();
     { InstanceGroup g; g.mesh = pedMesh; g.material = pedMaterial();
       g.renderLayer = engine::LayerSim; world.add<InstanceGroup>(pedGroup_, g); }
