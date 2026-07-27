@@ -143,7 +143,9 @@ struct RecipeCtx {
 // slender cap is what keeps them believable.
 void recipeGlassTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    const int lift = static_cast<int>(cx.coreness * 26);
+    // Density round ("taller than 40 stories"): dead-centre coreness lifts
+    // the glass cluster to 55-62 floors; the rim keeps its 10-16.
+    const int lift = static_cast<int>(cx.coreness * 46);
     p.floors = rng.irange(cx.roomy ? 10 : 6, cx.roomy ? 16 : 9) + lift;
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
@@ -361,7 +363,7 @@ void recipeHotel(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // crown + mast SPIRE — the 1930s skyline silhouette.
 void recipeArtDecoTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(9, 14) + static_cast<int>(cx.coreness * 14);
+    p.floors = rng.irange(9, 14) + static_cast<int>(cx.coreness * 20);
     p.groundRetail = true;
     dress(p, rng.unit() < 0.5 ? FacadeStyle::DarkBrick : FacadeStyle::Sandstone,
           rng);
@@ -377,7 +379,7 @@ void recipeArtDecoTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // The STEPPED (wedding-cake) tower: light masonry, setbacks every few floors.
 void recipeSteppedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(10, 16) + static_cast<int>(cx.coreness * 10);
+    p.floors = rng.irange(10, 16) + static_cast<int>(cx.coreness * 14);
     p.groundRetail = true;
     dress(p, rng.unit() < 0.5 ? FacadeStyle::Sandstone : FacadeStyle::Brick, rng);
     p.setbackFloors = rng.irange(2, 4);
@@ -398,6 +400,23 @@ void recipeDrumTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.massing = BuildingRecipe::Massing::Circle;
     out.placeType = "office";
     out.name = "drum_tower";
+}
+
+// The PODIUM TOWER: a 3-5 floor full-lot podium (street wall, ground retail)
+// carrying a slender curtain-wall tower — the modern downtown block. The lot
+// pass grows the two masses (podium = the lot plan, tower = a centred shaft
+// from podiumFloors up); this recipe just declares the split and the dress.
+void recipePodiumTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    const int lift = static_cast<int>(cx.coreness * 44);
+    p.floors = rng.irange(cx.roomy ? 10 : 7, cx.roomy ? 16 : 10) + lift;
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    out.podiumFloors = rng.irange(2, 4);   // 3-5 storeys with the ground floor
+    cx.slender = 3.0 + cx.coreness * 4.5;
+    out.massing = BuildingRecipe::Massing::PodiumTower;
+    out.placeType = "office";
+    out.name = "podium_tower";
 }
 
 // The PARKING GARAGE: open concrete decks over a bay-door entry.
@@ -1059,14 +1078,15 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
     // The district ARCHETYPE TABLES: weighted picks over the named recipes.
     switch (tag) {
         case DistrictTag::Financial:
-            if (roll < 0.30)      recipeGlassTower(out, rng, cx);
-            else if (roll < 0.52) recipeOfficeSlab(out, rng, cx);
-            else if (roll < 0.62) recipeArtDecoTower(out, rng, cx);
-            else if (roll < 0.72) recipeSteppedTower(out, rng, cx);
+            if (roll < 0.26)      recipeGlassTower(out, rng, cx);
+            else if (roll < 0.38) recipePodiumTower(out, rng, cx);
+            else if (roll < 0.55) recipeOfficeSlab(out, rng, cx);
+            else if (roll < 0.64) recipeArtDecoTower(out, rng, cx);
+            else if (roll < 0.73) recipeSteppedTower(out, rng, cx);
             else if (roll < 0.80) recipeDrumTower(out, rng, cx);
-            else if (roll < 0.90) recipeCommercialBlock(out, rng, cx);
-            else if (roll < 0.94) recipeParkingGarage(out, rng, cx);
-            else if (roll < 0.975) recipePlaza(out, rng, cx);
+            else if (roll < 0.89) recipeCommercialBlock(out, rng, cx);
+            else if (roll < 0.935) recipeParkingGarage(out, rng, cx);
+            else if (roll < 0.97) recipePlaza(out, rng, cx);
             else                  recipeCivicHall(out, rng, cx);
             break;
         case DistrictTag::Commercial:
@@ -1074,7 +1094,8 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             else if (roll < 0.07) recipePlaza(out, rng, cx);
             else if (roll < 0.25) recipeBrickShop(out, rng, cx);
             else if (roll < 0.38) recipeMixedUse(out, rng, cx);
-            else if (roll < 0.48) recipeOfficeMidrise(out, rng, cx);
+            else if (roll < 0.46) recipeOfficeMidrise(out, rng, cx);
+            else if (roll < 0.49) recipePodiumTower(out, rng, cx);
             else if (roll < 0.55) recipeCondoTower(out, rng, cx);
             else if (roll < 0.61) recipeTerraceCondo(out, rng, cx);
             else if (roll < 0.67) recipeLoftConversion(out, rng, cx);

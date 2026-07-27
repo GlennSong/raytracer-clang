@@ -134,8 +134,11 @@ struct LotPlanDebug {
     int rejSliver = 0;   // site's OBB short side under minShort
     int rejAspect = 0;   // long/short over maxAspect (knife blade)
     int rejFill = 0;     // polygon fills too little of its OBB
+    int rejPlan = 0;     // finished plan too pinched (inradius gauge) — was
+                         // double-counted into rejFill
     int rejClear = 0;    // no inset of the plan cleared the road corridors
     int rejBox = 0;      // box fallback rejected (fill / shrink-fit too small)
+    int rejFrontage = 0; // whole footprint too far from any road surface
 };
 
 // One building per viable lot across every block. Deterministic in seed.

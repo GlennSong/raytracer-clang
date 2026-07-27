@@ -471,6 +471,12 @@ private:
     void refreshPose(Agent& a);
     void steer(Agent& a, Real dt);   // rate-limited heading (bounded turn radius)
     engine::Vec2 idlePose(int node, Agent::Mode mode, uint32_t brain) const;
+    // Push a parked/idle car pose OUT of every at-grade carriageway. A knot
+    // of short links can put one link's verge INSIDE a neighbour's lanes; a
+    // car resting there dams the junction until its driver departs (three
+    // drivers pinned for minutes behind one verge-parked car — surfaced by
+    // the density round's street-fronting places).
+    engine::Vec2 pushPoseClearOfLanes(engine::Vec2 p, engine::Real margin) const;
     uint32_t rnd();
     Real rndUnit();
 

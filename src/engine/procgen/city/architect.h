@@ -59,6 +59,9 @@ struct BuildingRecipe {
                      // non-box BuildingShapes (pagoda, cylinder) can dispatch
         Plaza,       // no storeys: a raised paver podium with stairs, fencing,
                      // fountain and planting ("a building without the building")
+        PodiumTower, // a full-lot PODIUM of a few floors carrying a slender
+                     // TOWER above it — the modern downtown block (density
+                     // round: "more varied building shapes")
     };
     Massing massing = Massing::LotPlan;
     BuildingParams params;      // style/windows/roof/floors, ready to grow
@@ -68,6 +71,9 @@ struct BuildingRecipe {
     // RectYard massing caps (a house keeps a small pad; a school a big one).
     Real yardHalfWMax = 7.0;
     Real yardHalfDMax = 6.0;
+    // PodiumTower massing: how many of params.floors belong to the full-lot
+    // podium (the rest rise in the tower). 0 elsewhere.
+    int podiumFloors = 0;
 };
 
 // LANDMARK archetypes: placed by the PLANNER (best-lot picks with quotas —

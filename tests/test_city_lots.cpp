@@ -2,6 +2,7 @@
 
 #include "../src/engine/procgen/city/architect.h"
 #include "../src/engine/procgen/city/city_lots.h"
+#include "../src/engine/procgen/city/parcel.h"
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/city/shape_grammar.h"   // PartId (surfaced walls)
 #include "../src/engine/procgen/city/metro.h"
@@ -634,32 +635,16 @@ TEST_CASE(every_built_lot_touches_a_road) {
         return (p - closest).length();
     };
 
-    // Helper: get the 4 corners of the OBB.
-    auto getCorners = [](const Vec2& center, Real w, Real d, Real yaw) -> std::vector<Vec2> {
-        Real cx = std::cos(yaw), sy = std::sin(yaw);
-        Vec2 ax{cx, sy};      // long axis
-        Vec2 ay{-sy, cx};     // short axis (perpendicular)
-        return {
-            center + ax * w + ay * d,
-            center + ax * w - ay * d,
-            center - ax * w - ay * d,
-            center - ax * w + ay * d
-        };
-    };
-
-    // Helper: distance from the lot rectangle to the nearest road edge.
+    // Helper: distance from the building's OBB CENTER to the nearest road
+    // CENTRELINE. The ring parceler fronts every lot on a block edge, so a
+    // built mass can never sit deeper than the lot depth behind the street —
+    // the centre-to-centreline bound is tight, not a corner-grazing 85 m.
     auto distToRoads = [&](const LotBuilding& lot) -> Real {
-        std::vector<Vec2> corners = getCorners(lot.site, lot.width, lot.depth, lot.yaw);
         Real minDist = 1e30;
-
-        // For each road edge, compute the distance from each corner to the line segment.
         for (const RoadEdge& edge : roads.edges) {
             Vec2 a = roads.nodes[edge.a].pos;
             Vec2 b = roads.nodes[edge.b].pos;
-            for (const Vec2& corner : corners) {
-                Real d = distPointToSegment(corner, a, b);
-                minDist = std::min(minDist, d);
-            }
+            minDist = std::min(minDist, distPointToSegment(lot.site, a, b));
         }
         return minDist;
     };
@@ -686,16 +671,60 @@ TEST_CASE(every_built_lot_touches_a_road) {
                     nonCourtLots, median, maxFrontage);
     }
 
-    // Assert: every non-court lot must touch a road within 30 m.
-    // This is the frontage setback guarantee — lots are "adjacent" to the street.
+    // Assert: every built (non-park/green) building's centre sits within
+    // max(lotDepth * 1.6, 60 m) of a road centreline. The ring parceler
+    // fronts every lot BY CONSTRUCTION (a lot is at most lotDepth deep behind
+    // the block edge, which is a road face), and the 14 m surface gate greens
+    // any stray — so a mid-block building here is a real regression. Stock
+    // lotDepth is 28 (financial pads reach 60), so the bound is 60 m.
+    const Real centreBound = std::max(ParcelParams().lotDepth * 1.6, Real(60.0));
     for (const LotBuilding& b : buildings) {
         if (b.type == "park" || b.type == "green") continue;
-        Real dist = distToRoads(b);
-        // The CONTRACT is lot-level: growLotBuildings guarantees every BUILT
-        // lot has a footprint vertex within 26m of a road surface (marooned
-        // lots go green). The building's mass may sit at the BACK of a deep
-        // fronting lot, so the box-to-road bound is the frontage bound plus
-        // the deep-lot envelope.
-        CHECK(dist <= 85.0);
+        CHECK(distToRoads(b) <= centreBound);
+    }
+}
+
+// The RING PARCELER contract (density round): on ANY simple block polygon —
+// a trapezoid, an L — every emitted non-court lot fronts the block boundary
+// (>= 1 footprint edge within 2 m of it); nothing is landlocked. This is the
+// unit-level guarantee behind the frontage gate above.
+TEST_CASE(ring_parceler_fronts_every_lot_on_any_polygon) {
+    const Poly2 trapezoid{{0, 0}, {90, 0}, {70, 60}, {15, 60}};
+    const Poly2 ell{{0, 0}, {120, 0}, {120, 50}, {60, 50}, {60, 110}, {0, 110}};
+    auto distToBoundary = [](const Poly2& poly, const Vec2& q) {
+        Real best = 1e30;
+        for (std::size_t i = 0; i < poly.size(); ++i) {
+            const Vec2& a = poly[i];
+            const Vec2& b = poly[(i + 1) % poly.size()];
+            Vec2 ab = b - a;
+            Real len2 = ab.lengthSquared();
+            Real t = len2 > 1e-12 ? std::clamp(dot(q - a, ab) / len2, 0.0, 1.0)
+                                  : 0.0;
+            best = std::min(best, (q - (a + ab * t)).length());
+        }
+        return best;
+    };
+    for (const Poly2* block : {&trapezoid, &ell}) {
+        ParcelParams pp;
+        pp.seed = 5;
+        std::vector<Lot> lots = subdivideBlock(*block, pp);
+        int nonCourt = 0, fronting = 0;
+        for (const Lot& l : lots) {
+            if (l.court) continue;
+            ++nonCourt;
+            bool fronts = false;
+            for (std::size_t i = 0; i < l.footprint.size() && !fronts; ++i) {
+                const Vec2& a = l.footprint[i];
+                const Vec2& b = l.footprint[(i + 1) % l.footprint.size()];
+                if ((b - a).length() < 3.0) continue;   // corner nicks
+                fronts = distToBoundary(*block, a) < 2.0 &&
+                         distToBoundary(*block, b) < 2.0;
+            }
+            if (fronts) ++fronting;
+        }
+        CHECK(nonCourt > 0);            // the walk parcels these shapes
+        CHECK(fronting == nonCourt);    // zero landlocked lots
+        // Deterministic for the seed.
+        CHECK(lots.size() == subdivideBlock(*block, pp).size());
     }
 }

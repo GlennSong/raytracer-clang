@@ -552,6 +552,34 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         }
 }
 
+Vec2 CitySim::pushPoseClearOfLanes(Vec2 p, Real margin) const {
+    if (!nav_) return p;
+    for (int guard = 0; guard < 6; ++guard) {
+        Real worst = 0;
+        Vec2 away(0, 0);
+        for (int li = 0; li < nav_->linkCount(); ++li) {
+            const engine::NavLink& L = nav_->links[li];
+            if (L.layer != 0 || L.elevAbsolute) continue;   // decks don't block ground
+            const Vec2& a = nav_->nodes[L.from];
+            const Vec2& b = nav_->nodes[L.to];
+            const Vec2 ab = b - a;
+            const Real len2 = ab.lengthSquared();
+            Real t = len2 > 1e-12 ? dot(p - a, ab) / len2 : 0.0;
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            const Vec2 q(a.x + ab.x * t, a.y + ab.y * t);
+            const Real d = (p - q).length();
+            const Real need = L.width * 0.5 + margin;
+            if (need - d > worst) {
+                worst = need - d;
+                away = d > 1e-6 ? (p - q) * (1.0 / d) : Vec2(1, 0);
+            }
+        }
+        if (worst <= 0) break;
+        p = p + away * (worst + 0.15);
+    }
+    return p;
+}
+
 Vec2 CitySim::idlePose(int node, Agent::Mode mode, uint32_t brain) const {
     if (!nav_ || node < 0 || node >= nav_->nodeCount()) return Vec2();
     const std::vector<int>& out = nav_->outLinks[node];
@@ -571,7 +599,11 @@ Vec2 CitySim::idlePose(int node, Agent::Mode mode, uint32_t brain) const {
     Real back = 2.0 + parkSetbackSlot(brain) *
                           ((mode == Agent::Mode::Driver) ? 1.4 : 0.6);
     back = std::min(back, nav_->links[li].length * 0.45);
-    return nav_->nodes[node] + dir * back + right * off;
+    Vec2 p = nav_->nodes[node] + dir * back + right * off;
+    // An idle CAR is a physical body: keep it out of every carriageway, not
+    // just this link's (short-link knots overlap their neighbours' verges).
+    if (mode == Agent::Mode::Driver) p = pushPoseClearOfLanes(p, 1.3);
+    return p;
 }
 
 // Pick a random routable wander goal from `from` and start the trip. Prefers a
@@ -1645,8 +1677,10 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             Real hw = nav_->links[lastLink].width * 0.5;
             Real back = 4.0 + parkSetbackSlot(a.brain) * 1.3;
             back = std::min(back, nav_->links[lastLink].length * 0.5);
-            a.pos = nav_->nodes[nav_->links[lastLink].to] - dir * back +
-                    right * (hw + 2.8);
+            a.pos = pushPoseClearOfLanes(
+                nav_->nodes[nav_->links[lastLink].to] - dir * back +
+                    right * (hw + 2.8),
+                1.3);
             a.heading = dir;
         }
         a.route.links.clear();
@@ -1674,14 +1708,19 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             a.heading = bays_[bay].heading;
         } else {
             // Verge fallback: a few metres short of the node, per-agent
-            // setback so arrivals at one destination don't stack.
+            // setback so arrivals at one destination don't stack. Pushed
+            // clear of EVERY carriageway: a knot's tiny arrival link has no
+            // bays, and its own verge can sit inside a neighbouring link's
+            // lanes — the parked car then dammed the junction for minutes.
             Vec2 dir = nav_->direction(lastLink);
             Vec2 right(dir.y, -dir.x);
             Real hw = nav_->links[lastLink].width * 0.5;
             Real back = 4.0 + parkSetbackSlot(a.brain) * 1.3;   // 4..13 m
             back = std::min(back, nav_->links[lastLink].length * 0.5);
-            a.pos = nav_->nodes[nav_->links[lastLink].to] - dir * back +
-                    right * (hw + 2.8);
+            a.pos = pushPoseClearOfLanes(
+                nav_->nodes[nav_->links[lastLink].to] - dir * back +
+                    right * (hw + 2.8),
+                1.3);
             a.heading = dir;
         }
     } else {
