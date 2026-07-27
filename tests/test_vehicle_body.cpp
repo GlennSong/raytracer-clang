@@ -1,5 +1,7 @@
 #include "test_framework.h"
 
+#include <cmath>
+
 #include "../src/apps/citysim/city_meshes.h"        // carVariantCount
 #include "../src/engine/scripting/script_vm.h"
 #include "../src/engine/scripting/procgen_bindings.h"   // openProcgenLibrary
@@ -80,15 +82,22 @@ TEST_CASE(vehicles_lua_light_markers_are_named_and_positioned) {
     CarBodyRecipe body;
     std::string err;
     CHECK(loadFleetCarBody(a.vm, 0, body, &err));
-    // The shipped sedan carries four named corner lamps (head/tail, L/R).
-    CHECK(body.lights.size() == 4);
-    bool head = false, tail = false;
+    // The shipped sedan carries four corner lamps (head/tail x L/R) at the
+    // right END of the car. It may carry OTHER named attachments too — the
+    // fleet is built by mesh.car now, which also marks the driver seat — so
+    // this pins the lamp set, not the marker count (the old box fleet's
+    // hand-authored "exactly 4" was a property of the retired box recipe).
+    int heads = 0, tails = 0;
     for (const Attachment& lt : body.lights) {
-        if (lt.name.rfind("headlight_", 0) == 0) { head = true; CHECK(lt.pos.z > 0); }
-        if (lt.name.rfind("taillight_", 0) == 0) { tail = true; CHECK(lt.pos.z < 0); }
+        CHECK(!lt.name.empty());
+        if (lt.name.rfind("headlight_", 0) == 0) { ++heads; CHECK(lt.pos.z > 0); }
+        if (lt.name.rfind("taillight_", 0) == 0) { ++tails; CHECK(lt.pos.z < 0); }
     }
-    CHECK(head);
-    CHECK(tail);
+    CHECK(heads == 2);   // left + right
+    CHECK(tails == 2);
+    // The lamps sit ON the body, not floating: within its own half-extents.
+    for (const Attachment& lt : body.lights)
+        CHECK(std::fabs(lt.pos.x) < 2.0 && std::fabs(lt.pos.z) < 4.0);
 }
 
 TEST_CASE(vehicles_lua_reader_rejects_malformed_recipe) {

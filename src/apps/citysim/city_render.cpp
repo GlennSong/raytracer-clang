@@ -361,6 +361,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
             }
         }
 #endif
+        int fleetTriangles = 0;
         for (int v = 0; v < carVariantCount(); ++v) {
             MeshHandle mh{};
             std::vector<LampMarker> lights;
@@ -386,6 +387,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
                 }
 #endif
                 if (!scripted) mesh = fleetCarMesh(v);
+                if (scripted)
+                    fleetTriangles += static_cast<int>(mesh.indices.size() / 3);
                 mh = assets->acquireMesh(mesh, "city:car" + std::to_string(v));
             }
             // No Lua markers (C++ fallback fleet, scripting off, or headless/no
@@ -403,11 +406,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
             world.add<InstanceGroup>(e, g);
             carGroups_.push_back(e);
         }
-    }
-    // FLEET VERDICT — loud, unmissable, once per build (Glenn has now twice
-    // reported "old cars" while probes showed the script loading; this line
-    // settles which fleet THIS process actually instanced).
-    {
+
+        // FLEET VERDICT — loud, unmissable, once per build. "Why is the city
+        // using the OLD cars?" was asked twice while terminal probes showed
+        // the script loading fine; this line settles it from the user's own
+        // console. Triangle count is the tell: the retired BOX fleet was ~170
+        // tris a slot, a real mesh.car shell is thousands.
         int scriptedCount = 0;
         for (const auto& lights : carLights_)
             if (!lights.empty()) ++scriptedCount;   // markers only from Lua
@@ -420,7 +424,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         else
             LOG_INFO << "[citysim] fleet: " << scriptedCount << "/"
                      << carVariantCount()
-                     << " scripted car bodies (vehicles.lua)";
+                     << " scripted car bodies (vehicles.lua), "
+                     << fleetTriangles / std::max(1, scriptedCount)
+                     << " tris/car avg";
     }
     pedGroup_ = world.create();
     { InstanceGroup g; g.mesh = pedMesh; g.material = pedMaterial();
