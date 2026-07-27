@@ -543,7 +543,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         g.material.roughness = 0.92f;
         g.renderLayer = 0;
         for (const CitySim::ParkingBay& b : sim_.parkingBays()) {
-            const Real y = groundAt(b.pos.x, b.pos.y) + 0.05;
+            // Bay paint is PAINT: it rides at the road mesher's own stripe
+            // lift (RoadMeshParams::markLift, 2 cm), not a hand-picked 5 cm —
+            // which read as a slab hovering over the asphalt.
+            const Real y = groundAt(b.pos.x, b.pos.y) + engine::kRoadMarkLift;
             const Real yaw = std::atan2(b.heading.x, b.heading.y);
             g.transforms.push_back(
                 Mat4::trs(Vec3(b.pos.x, y, b.pos.y),
