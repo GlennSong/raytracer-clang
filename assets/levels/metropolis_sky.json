@@ -57,7 +57,7 @@
      "sea_level": -5.0,
      "seed": 9,
      "seg_length": 32,
-     "street_width": 11
+     "street_width": 12.0
     },
     "lift": 0.08,
     "markings": true,

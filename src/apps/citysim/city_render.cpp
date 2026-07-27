@@ -521,8 +521,14 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
     }
 
     // Curbside bay markings (R6b): one white outline instanced per bay —
-    // two end ticks + the outer edge line of a 6.2 x 2.2 parallel bay,
-    // riding just above the asphalt. Local +Z = along the bay (like cars).
+    // two end ticks + the outer edge line of a 6.24 m parallel bay, riding just
+    // above the asphalt. Local +Z = along the bay (like cars).
+    //
+    // The mesh is authored in BAND-WIDTH UNITS across (x in [-0.5, +0.5]) and the
+    // instance scales x by the bay's Parking-band width, so the paint always ends
+    // exactly where the band does. It used to be a fixed 2.2 m box hung 1.05 m
+    // inside a hardcoded kerb line, whose outer edge lapped ~7 cm onto the
+    // sidewalk — the "half on the sidewalk" Glenn saw.
     {
         engine::RenderMesh bay;
         const Vec3 white(0.85, 0.85, 0.85);
@@ -531,9 +537,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
                                   Vec3(x1, 0, z1), Vec3(x0, 0, z1),
                                   Vec3(0, 1, 0), white);
         };
-        stripe(-1.1, 3.0, 1.1, 3.12);     // front tick
-        stripe(-1.1, -3.12, 1.1, -3.0);   // back tick
-        stripe(1.0, -3.12, 1.12, 3.12);   // outer (curb-side) edge line
+        stripe(-0.49, 3.0, 0.49, 3.12);     // front tick
+        stripe(-0.49, -3.12, 0.49, -3.0);   // back tick
+        stripe(0.43, -3.12, 0.49, 3.12);    // outer (curb-side) edge line
         MeshHandle bayMesh{};
         if (assets) bayMesh = assets->acquireMesh(bay, "city:parkbay");
         parkBayGroup_ = world.create();
@@ -548,10 +554,11 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
             // which read as a slab hovering over the asphalt.
             const Real y = groundAt(b.pos.x, b.pos.y) + engine::kRoadMarkLift;
             const Real yaw = std::atan2(b.heading.x, b.heading.y);
+            const Real bw = b.width > 0 ? b.width : Real(2.2);
             g.transforms.push_back(
                 Mat4::trs(Vec3(b.pos.x, y, b.pos.y),
                           Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
-                          Vec3(1, 1, 1)));
+                          Vec3(bw, 1, 1)));
         }
         refreshBounds(&g);
         world.add<InstanceGroup>(parkBayGroup_, g);
@@ -705,9 +712,11 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
     for (int li = 0; li < nav_.linkCount(); ++li) {
         const engine::NavLink& L = nav_.links[li];
         int lanes = L.lanes < 1 ? 1 : L.lanes;
-        // Mirror the sim's laneSpacing: the right half-carriageway split evenly
-        // among this direction's lanes, so the strips sit under real traffic.
-        Real spacing = (L.width * 0.5) / static_cast<Real>(lanes);
+        // ASK the sim for the spacing rather than re-deriving it: on a street
+        // with a Parking band the drivable width is the carriageway minus the
+        // two parked strips, so a re-derived "half the carriageway" strip drew
+        // the debug lanes under the parked cars instead of under the traffic.
+        Real spacing = sim_.laneSpacingFor(li);
         for (int lane = 0; lane < lanes; ++lane) {
             Vec2 a = nav_.laneCenter(li, lane, 0.0, spacing);
             Vec2 b = nav_.laneCenter(li, lane, 1.0, spacing);

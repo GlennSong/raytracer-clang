@@ -42,6 +42,15 @@ struct NavLink {
     // source RoadEdge. kWalkable mirrors `walkable`; the new consumers key
     // on kFrontage/kCrossable/kSignalable.
     uint8_t access = road_access::kAllStreet;
+    // Kerbside PARKING band of the source road (RoadEdge::parkOffset/parkWidth,
+    // resolved from its RoadSpec). parkWidth 0 = this road has no parking, and
+    // the sim must not put a bay on it. `parkOffset` is measured from the
+    // carriageway centreline toward the RIGHT of travel — the same side each
+    // directed link parks on — so a bay centre is
+    // pointOnLink(t) + rightOf(direction) * parkOffset, and nothing else needs
+    // to know how the cross-section is laid out.
+    Real parkOffset = 0;
+    Real parkWidth = 0;
 };
 
 // Semantic signal predicate (roads-v2.2 #17/S5): a node is signal-CONTROLLED

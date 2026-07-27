@@ -197,8 +197,22 @@ bool CitySim::nearJunction(Vec2 pos, Real margin) const {
 Real CitySim::laneSpacingFor(int li) const {
     const engine::NavLink& l = nav_->links[li];
     Real w = l.width;
-    if (li < static_cast<int>(bayNarrowed_.size()) && bayNarrowed_[li])
-        w = std::max(Real(4.8), w - 2.0 * 2.6);   // both curb strips parked
+    if (li < static_cast<int>(bayNarrowed_.size()) && bayNarrowed_[li]) {
+        // Both kerb strips are parked, so the DRIVABLE width is the carriageway
+        // minus the two Parking bands — the road's own numbers, not a guess.
+        // (A link with no band of its own but a parked-up reverse twin borrows
+        // the twin's; 2.6 remains the belt-and-braces fallback.)
+        Real strip = l.parkWidth;
+        if (strip <= 0) {
+            for (int ol : nav_->outLinks[l.to])
+                if (nav_->links[ol].to == l.from && nav_->links[ol].parkWidth > 0) {
+                    strip = nav_->links[ol].parkWidth;
+                    break;
+                }
+        }
+        if (strip <= 0) strip = 2.6;
+        w = std::max(Real(4.8), w - 2.0 * strip);
+    }
     return laneSpacing(l, w);
 }
 
@@ -263,28 +277,30 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
                             kAgentGridCell, 0);
     maxJunctionRadius_ = 0;
     signals_.build(graph);
-    // Curbside bays (R6b): mid-link on at-grade Local streets, right curb of
-    // each directed link, well clear of junction mouths; ~55% seeded with
-    // scenery cars so streets read parked-along from the first frame.
+    // Curbside bays (R6b): mid-link, in the road's own PARKING BAND, well clear
+    // of junction mouths; ~55% seeded with scenery cars so streets read
+    // parked-along from the first frame.
+    //
+    // The band is the gate AND the geometry. Before the parking round this loop
+    // guessed — "Local-or-Collector and at least 9 m wide" — and then hung the
+    // bay at a hardcoded `width*0.5 - 1.05`, which put the outer edge of a 2.2 m
+    // bay ~7 cm PAST the carriageway onto the kerb (Glenn: "it's half on the
+    // sidewalk"). Now a link parks iff its road spec actually gives it a Parking
+    // band, and the bay centre is that band's centre. No heuristic left.
     bays_.clear();
     baysOnLink_.assign(graph.linkCount(), {});
     for (int li = 0; li < graph.linkCount(); ++li) {
         const engine::NavLink& L = graph.links[li];
-        // Locals AND collectors park curbside (a collector is 2 lanes +
-        // parking by its own spec); the footprint city's fabric is a mix of
-        // both, and Local-only left whole quarters bare of parked cars.
-        if (L.klass != engine::RoadClass::Local &&
-            L.klass != engine::RoadClass::Collector)
-            continue;
+        if (L.parkWidth <= 0.0) continue;        // no Parking band => no bays
         if (L.layer != 0 || L.elevAbsolute) continue;
         // Semantic layer (#17/S7): bays only on FRONTAGE edges — never on a
         // ramp APPROACH (a street climbing to a landing has no frontage, so
         // no curbside parking on the on-ramp feeder).
         if (!(L.access & engine::road_access::kFrontage)) continue;
-        if (L.length < 40.0 || L.width < 9.0) continue;
+        if (L.length < 40.0) continue;
         const engine::Vec2 dir = graph.direction(li);
         const engine::Vec2 right(dir.y, -dir.x);
-        const Real off = L.width * 0.5 - 1.05;   // hugging the curb line
+        const Real off = L.parkOffset;   // centre of the kerbside Parking band
         // 22 m junction setback: a physical car exits a corner with ~1 m of
         // lateral error that decays over the first ~15 m — bays any closer
         // took sideswipes from the possession tier's real bodies.
@@ -294,6 +310,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
             b.station = st;
             b.pos = graph.pointOnLink(li, st / L.length) + right * off;
             b.heading = dir;
+            b.width = L.parkWidth;
             // Deterministic scenery fill (~55%), stable per (link, slot).
             const uint32_t h = (static_cast<uint32_t>(li) * 2654435761u) ^
                                (static_cast<uint32_t>(st * 8.0) * 40503u) ^ rng_;

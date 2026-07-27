@@ -82,12 +82,12 @@
        "radius": 250
       }
      ],
-     "street_width": 11
+     "street_width": 12.0
     },
     "lift": 0.08,
     "markings": true,
     "sidewalk": 3.5,
-    "width": 11.0
+    "width": 12.0
    },
    "shape": "road"
   }

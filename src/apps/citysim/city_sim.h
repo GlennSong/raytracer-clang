@@ -256,6 +256,9 @@ public:
         engine::Vec2 pos, heading;   // bay centre + facing (along the link)
         int link = -1;               // directed link whose right curb it hugs
         engine::Real station = 0;    // metres from the link's `from` node
+        // The Parking BAND this bay sits in (NavLink::parkWidth). The painted
+        // stall is drawn to it, so the markings can never lap onto the kerb.
+        engine::Real width = 0;
         int occupant = -1;
     };
     const std::vector<ParkingBay>& parkingBays() const { return bays_; }

@@ -96,6 +96,15 @@ struct RoadEdge {
     // Semantic layer: access bits (road_access::k*), derived by
     // classifyRoadGraph from class/spec/elevation/neighbours and stored.
     uint8_t access = road_access::kAllStreet;
+    // Roads-v2 kerbside PARKING band, RESOLVED from the spec when the graph is
+    // built (parkWidth 0 = this road has no parking). `parkOffset` is the
+    // lateral distance from the carriageway centreline to the CENTRE of the
+    // kerbside Parking band; `parkWidth` is that band's width. Baked onto the
+    // edge — exactly like `walkable` — because the consumers downstream (the
+    // nav graph, the city sim's parking bays) never see the owning net's spec
+    // table. Everything that places a parked car reads these two numbers.
+    Real parkOffset = 0;
+    Real parkWidth = 0;
 };
 
 struct RoadGraph {

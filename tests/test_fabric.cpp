@@ -231,7 +231,7 @@ MetroParams piedmontFabricParams(bool dense) {
     p.freewayWidth = 17;
     p.arteryWidth = 17;
     p.collectorWidth = 13;
-    p.streetWidth = 11;
+    p.streetWidth = 12.0;   // parking round: 2.5 park + 3.5 + 3.5 + 2.5 park
     p.blockSize = 220;
     p.minBlockEdge = 150;
     if (dense) {

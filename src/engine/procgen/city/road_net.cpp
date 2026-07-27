@@ -82,6 +82,19 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
         const RoadSpec sp = roadNetEdgeSpec(net, ei);
         return sp.hasSidewalk(-1) || sp.hasSidewalk(1);
     };
+    // Kerbside PARKING band, resolved here so nav/sim never need the spec table.
+    // Right-hand side (+1): a two-way street is symmetric, so one number serves
+    // both directed links.
+    auto epark = [&](int ei, Real& off, Real& w) {
+        const RoadSpec sp = roadNetEdgeSpec(net, ei);
+        double o = 0, bw = 0;
+        if (roadSpecParkingBand(sp, +1, o, bw)) {
+            off = static_cast<Real>(o);
+            w = static_cast<Real>(bw);
+        } else {
+            off = 0; w = 0;
+        }
+    };
     auto eclass = [&](int ei) {
         return (ei < static_cast<int>(net.edgeClasses.size())) ? net.edgeClasses[ei]
                                                                : RoadClass::Local;
@@ -185,6 +198,8 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
             for (std::size_t s = 1; s < poly.size(); ++s)
                 arc[s] = arc[s - 1] + (poly[s] - poly[s - 1]).length();
         }
+        Real parkOff = 0, parkW = 0;
+        epark(ei, parkOff, parkW);
         int prev = a;
         for (std::size_t s = 1; s + 1 < poly.size(); ++s) {     // interior -> new nodes
             int idx = static_cast<int>(g.nodes.size());
@@ -198,12 +213,14 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
             RoadEdge ge{prev, idx, w, kls, lay};
             ge.spec = espec(ei);                 // roads-v2: band model rides the graph
             ge.walkable = ewalk(ei);
+            ge.parkOffset = parkOff; ge.parkWidth = parkW;
             g.edges.push_back(ge);
             prev = idx;
         }
         RoadEdge geLast{prev, b, w, kls, lay};
         geLast.spec = espec(ei);
         geLast.walkable = ewalk(ei);
+        geLast.parkOffset = parkOff; geLast.parkWidth = parkW;
         g.edges.push_back(geLast);               // last -> shared node b
     }
     return g;
@@ -2328,6 +2345,55 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         net.edgeWidths.push_back(e.width);          // arterials wider than local streets
         net.edgeClasses.push_back(e.klass);         // carry the grown class (P1 unification)
         net.edgeLayers.push_back(e.layer);          // and its grade-separation tier
+    }
+    // --- REAL CROSS-SECTIONS FOR GENERATED STREETS (the parking round) -------
+    // Glenn: "the road doesn't really have any clearance for parking — it's half
+    // on the sidewalk". It was: a generated street had no spec, so roadNetEdgeSpec
+    // fell back to roadSpecFromLegacy, which splits the WHOLE carriageway into
+    // travel lanes. With no Parking band to aim at, the sim parked cars at a
+    // hardcoded inset that hung over the kerb. Now every frontage street/collector
+    // gets an authored section — sidewalk | curb | PARKING | travel | travel |
+    // PARKING | curb | sidewalk — and the bays are placed FROM it.
+    //
+    // WIDTH AGREEMENT (the correctness crux): lots (city_lots' roadSurfaceDist /
+    // pushPolyClearOfRoads), nav lane spacing and the mesher all read
+    // roadNetEdgeWidth / RoadEdge::width. roadSpecStreetParking carves its bands
+    // out of the width it is GIVEN, and we write carriagewayWidth() straight back
+    // into edgeWidths — so the drawn road can never grow wider than the width
+    // buildings keep clear of. A road too narrow to carry parking gets a spec
+    // with no Parking band (and, again, its exact original width).
+    // Arterials/boulevards/freeways/ramps are left specless: today's look.
+    if (kind == "metro" && g.value("street_parking", true)) {
+        const double parkW = g.value("parking_width", 2.5);
+        const double minLane = g.value("min_lane_width", 3.2);
+        net.specs.clear();
+        net.edgeSpecs.assign(net.edges.size(), -1);
+        // One spec per distinct (class, width) — a handful of entries, not one
+        // per edge, so the table stays inspectable and JSON-friendly.
+        std::vector<std::pair<RoadClass, double>> key;
+        for (std::size_t ei = 0; ei < net.edges.size(); ++ei) {
+            const RoadClass k = net.edgeClasses[ei];
+            if (k != RoadClass::Local && k != RoadClass::Collector) continue;
+            if (net.edgeLayers[ei] != 0) continue;   // a deck/bridge has no frontage
+            const double w = net.edgeWidths[ei];
+            int si = -1;
+            for (std::size_t t = 0; t < key.size(); ++t)
+                if (key[t].first == k && std::fabs(key[t].second - w) < 1e-9) {
+                    si = static_cast<int>(t);
+                    break;
+                }
+            if (si < 0) {
+                si = static_cast<int>(key.size());
+                key.push_back({k, w});
+                net.specs.push_back(roadSpecStreetParking(
+                    w, std::max(1, lanesForClass(k, /*perDirection=*/true)),
+                    net.sidewalk, net.curb > 0.0 ? 0.25 : 0.0, parkW, minLane));
+            }
+            net.edgeSpecs[ei] = si;
+            // Re-assert the ONE width every consumer reads. Equal by
+            // construction; written back so it can never silently drift.
+            net.edgeWidths[ei] = net.specs[si].carriagewayWidth();
+        }
     }
 }
 
