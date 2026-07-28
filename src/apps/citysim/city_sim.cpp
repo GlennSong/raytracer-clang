@@ -394,8 +394,32 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
             }
             if (!ok) a.work = a.home;   // stranded: stay put, never depart
         }
-        a.departWork = 7.5 + rndUnit() * 1.5;
-        a.departHome = 16.5 + rndUnit() * 1.5;
+        // SHIFT DIVERSITY. A single 7.5-9.0 departure window put the whole
+        // population on the road at once: one hot rush, a dead city either
+        // side of it, and a sim-cost spike where nearly every agent is moving
+        // in the same minutes. Real cities run shifts, so agents draw one from
+        // their own brain bits (deterministic, no rng draw) — the city now has
+        // hot and cold hours per district instead of one synchronised surge.
+        {
+            const uint32_t shift = (a.brain >> 12) & 0xFF;   // 0..255
+            const Real j0 = rndUnit(), j1 = rndUnit();       // per-agent jitter
+            if (shift < 26) {            // ~10% early shift (trades, transit)
+                a.departWork = 5.0 + j0 * 1.5;
+                a.departHome = 14.0 + j1 * 1.5;
+            } else if (shift < 166) {    // ~55% standard day, widened
+                a.departWork = 7.0 + j0 * 2.0;
+                a.departHome = 16.0 + j1 * 2.5;
+            } else if (shift < 204) {    // ~15% swing / late start
+                a.departWork = 11.5 + j0 * 3.0;
+                a.departHome = 20.0 + j1 * 3.0;
+            } else if (shift < 227) {    // ~9% night shift (wraps midnight)
+                a.departWork = 21.5 + j0 * 1.5;
+                a.departHome = 5.5 + j1 * 1.5;
+            } else {                     // ~11% part-time / midday
+                a.departWork = 9.5 + j0 * 2.0;
+                a.departHome = 14.5 + j1 * 2.0;
+            }
+        }
         a.activity = Agent::Activity::AtHome;
         a.goal = goalsFor(a.mode).entry();   // the day starts at the table's entry
         a.brain = rnd() | 1u;            // per-agent fault RNG (non-zero)
@@ -530,9 +554,31 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             // Scanning from index 0 funneled every fallback agent onto the
             // FIRST routable workplace: one office, one street, the whole
             // fleet parked in a line (Glenn's "cars all on one street").
-            PlaceId pick = jobs[(a.brain >> 8) % jobs.size()];
-            if (!commutable(hn, nodeOf(pick))) {
-                pick = kNoPlace;
+            // WORKPLACE CHOICE IS GRAVITY-BIASED, not uniform. Offices, shops
+            // and civic buildings concentrate downtown by district, so drawing
+            // uniformly over them sent most of the city to the same few blocks
+            // — a permanent downtown crush, and every agent inside the
+            // player's bubble at once when he stands there. Real commuting
+            // follows distance decay: sample a handful of candidates from the
+            // agent's own bits and take the NEAREST routable one. Because the
+            // candidates are random, long cross-town commutes still happen —
+            // they just stop being the default.
+            const Vec2 homePos = places[hp].site;
+            PlaceId pick = kNoPlace;
+            Real bestD2 = 1e30;
+            const int kCandidates = 6;
+            for (int c = 0; c < kCandidates; ++c) {
+                uint32_t h = a.brain + static_cast<uint32_t>(c) * 0x9E3779B9u;
+                h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15;
+                PlaceId cand = jobs[h % jobs.size()];
+                const Vec2 d = places[cand].site - homePos;
+                const Real d2 = d.x * d.x + d.y * d.y;
+                if (d2 >= bestD2) continue;
+                if (!commutable(hn, nodeOf(cand))) continue;
+                bestD2 = d2;
+                pick = cand;
+            }
+            if (pick == kNoPlace) {   // none of the samples routed: widen out
                 const std::size_t start =
                     (a.brain * 2654435761u) % jobs.size();
                 for (std::size_t k = 0; k < jobs.size(); ++k) {
