@@ -280,11 +280,28 @@ public:
     Real carDemoteRadius = 620.0;    // ...K->V beyond this (hysteresis)
     Real pedPromoteRadius = 280.0;
     Real pedDemoteRadius = 350.0;
+    // How often a FAR agent refreshes, in SIM SECONDS. The bucket count is
+    // derived from this and the tick length (capped by vTickDivisor), so the
+    // far tier keeps its ~1 Hz refresh whether the sim runs at 60 Hz or 15.
+    Real vRefreshSeconds = 1.0;
     int vTickDivisor = 60;           // V bucket count: uid % divisor, one bucket
                                      // per fixed frame (~1 Hz per agent at 60 Hz)
 
     // The tier bubble's centre (the player), fed by the host each fixed step.
     // No centre = no player = everything stays K (headless sims/tests).
+    // TICK CADENCE (P8.2e). The sim owns how often it advances — the caller
+    // only hands it elapsed time. `seconds` 0 = every call (historical, and
+    // what every existing level/test relies on); 1/30 = tick at 30 Hz,
+    // advancing by everything banked since the last tick. This used to live in
+    // the render bridge, which meant a system's cadence was decided one layer
+    // above the state it governs; the V tier's own bucket phase then quietly
+    // disagreed with it (see docs/piedmont-p8-report.md).
+    void setTickPeriod(Real seconds) { tickPeriodSeconds_ = seconds; }
+    Real tickPeriod() const { return tickPeriodSeconds_; }
+    // Sim seconds banked since the last tick — what a renderer extrapolates
+    // poses by so traffic stays smooth at rates below the frame rate.
+    Real secondsSinceTick() const { return sinceTick_; }
+
     void setTierCenter(engine::Vec2 c) { tierCenter_ = c; haveTierCenter_ = true; }
     void clearTierCenter() { haveTierCenter_ = false; }
     // The bubble centre the render bridge also distance-culls scenery against.
@@ -450,6 +467,8 @@ private:
     // One coarse V tick for agent `i`: goal layer at accumulated hours, then
     // vAdvance over the accumulated seconds; re-hashes the agent in the grid.
     // Promotion runs this as its catch-up so the K handoff pose is exact.
+    // The actual advance. step() is the cadence gate in front of it.
+    void stepTick(Real dt, Real hoursPerSecond);
     void tickV(int i, Real hoursPerSecond);
     // Advance a V agent along its REAL route at the modelled speed: link class
     // speed shaped by fixed average junction delays (vHold). No sensing, no
@@ -537,6 +556,11 @@ private:
     // Three-tier traffic state (P4): the fed bubble centre, the fixed-frame
     // counter the V buckets key off (frameIndex_ % vTickDivisor — no wall
     // clock), and the lifetime transition counters the tests gate on.
+    // Cadence state (see setTickPeriod): time banked toward the next tick, and
+    // time elapsed since the last one.
+    Real tickPeriodSeconds_ = 0.0;
+    Real tickAccum_ = 0.0;
+    Real sinceTick_ = 0.0;
     engine::Vec2 tierCenter_;
     // Indices of the agents that need this step's full passes (everything but
     // the far/V tier), resolved once per step in step(). Ascending, so the

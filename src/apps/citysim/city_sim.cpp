@@ -2028,6 +2028,20 @@ void CitySim::computeCarWedge() {
 }
 
 void CitySim::step(Real dt, Real hoursPerSecond) {
+    // Cadence gate. Traffic is not physics: agents follow lanes, so advancing
+    // by a bigger dt costs precision, not correctness. Bank the time and tick
+    // when the period is due; everything downstream (including the far tier's
+    // own schedule) then measures in SIM SECONDS rather than in calls.
+    tickAccum_ += dt;
+    sinceTick_ += dt;
+    if (tickPeriodSeconds_ > 0.0 && tickAccum_ + 1e-9 < tickPeriodSeconds_) return;
+    const Real simDt = tickAccum_;
+    tickAccum_ = 0.0;
+    sinceTick_ = 0.0;
+    stepTick(simDt, hoursPerSecond);
+}
+
+void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     RT_PROFILE_ZONE_NAMED("CitySim step");
     if (!nav_ || agents_.empty()) return;
 
@@ -2525,7 +2539,19 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // uid-derived (order-independent across promote/demote churn), processing
     // is agent-index order, and the phase never consults a wall clock.
     {
-        const int div = vTickDivisor > 0 ? vTickDivisor : 1;
+        // THE BUDGET IS IN SIM SECONDS, NOT TICKS. `vTickDivisor` (60) was
+        // used as a duration — "one bucket per tick, 60 buckets" only means
+        // "~1 Hz per agent" while 60 ticks happen to take a second. Slow the
+        // sim and distant agents silently refreshed at half rate; their
+        // positions went stale near the bubble edge, the tier pass promoted on
+        // those stale samples, and K/P inflated 950 -> 2650 (K agents are the
+        // DRAWN ones, so the cost landed twice). Deriving the bucket count
+        // from the tick length keeps a true vRefreshSeconds refresh at ANY
+        // rate: fewer buckets means more agents per tick but proportionally
+        // fewer ticks — the same agents per second, the same amortised cost.
+        const Real tickLen = dt > 1e-9 ? dt : (1.0 / 60.0);
+        int div = static_cast<int>(vRefreshSeconds / tickLen + 0.5);
+        div = std::max(1, std::min(div, vTickDivisor));
         const uint32_t bucket =
             static_cast<uint32_t>(frameIndex_ % static_cast<uint64_t>(div));
         for (std::size_t i = 0; i < agents_.size(); ++i) {

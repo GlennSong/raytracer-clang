@@ -997,3 +997,60 @@ TEST_CASE(city_sim_rate_poses_keep_moving_between_ticks) {
     std::printf("        [sim rate] frozen steps out of 8: %d\n", frozen);
     CHECK(frozen == 0);
 }
+
+TEST_CASE(city_sim_far_tier_refreshes_on_a_clock_not_a_tick_count) {
+    // The bug this pins: the far tier's refresh was budgeted in TICKS ("60
+    // buckets, one per tick"), which only means ~1 Hz while 60 ticks take a
+    // second. Halve the sim rate and distant agents refreshed half as often,
+    // went stale near the bubble edge, and the tier pass over-promoted them.
+    // Same wall time, two rates: the far population must be comparable.
+    auto activeCount = [](CityRenderSystem& c) {
+        int k = 0;
+        for (const Agent& a : c.sim().agents())
+            if (a.tier != Agent::Tier::V) ++k;
+        return k;
+    };
+    auto run = [&](Real hz, int& active, int& far) {
+        World world;
+        // A loop big enough that traffic actually LEAVES the bubble (promote
+        // 500 m / demote 620 m) — on a 40 m fixture everything stays K and the
+        // gate would prove nothing.
+        RoadNet big;
+        big.nodes = { Vec2(0, 0), Vec2(1600, 0), Vec2(1600, 1600), Vec2(0, 1600) };
+        big.edges = { {0, 1}, {1, 2}, {2, 3}, {3, 0} };
+        big.width = 10.0;
+        big.sidewalk = 2.5;
+        world.add<RoadNet>(world.create(), big);
+        CityRenderParams p;
+        p.cars = 60; p.pedestrians = 0; p.seed = 5;
+        p.wander = true;
+        p.tieredAgents = true;
+        p.localHz = hz;
+        p.adaptiveRate = false;
+        CityRenderSystem city(p);
+        CHECK(city.build(world, nullptr));
+        // A player entity IS the bubble centre: the bridge feeds its position
+        // to the sim every step (no player => everything stays K).
+        Entity player = world.create();
+        world.add<Transform>(player);
+        world.add<CharacterController>(player);
+        for (int i = 0; i < 600; ++i) city.step(world, 1.0 / 60.0);   // 10 s
+        active = activeCount(city);
+        far = static_cast<int>(city.sim().agents().size()) - active;
+    };
+    int a60 = 0, f60 = 0, a30 = 0, f30 = 0;
+    run(0.0, a60, f60);     // every step
+    run(30.0, a30, f30);    // half rate
+    std::printf("        [far tier] 60Hz active %d/far %d | 30Hz active %d/far %d\n",
+                a60, f60, a30, f30);
+    // The tier split must not depend on the sim's rate.
+    //
+    // HONEST SCOPE: this pins the INVARIANT, not the piedmont regression. On
+    // this fixture the old tick-count budget passes too — 60 agents on a 6.4 km
+    // loop put only a handful near the 500 m boundary, where two seconds of
+    // staleness moves a car ~26 m. Piedmont's K/P inflation (950 -> 2650) needs
+    // a dense population against that boundary to reproduce, so the mechanism
+    // there may be more than sample staleness. Enable localHz on a real level
+    // only behind a measurement.
+    CHECK(a30 <= a60 + 6);
+}

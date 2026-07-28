@@ -946,8 +946,9 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
     // instantaneous velocity). Agents follow lanes at a known speed along a
     // known heading, so carrying them forward along it is what they are
     // actually doing — no added latency, and the next tick lands the truth.
-    if (sinceSimTick_ > 0.0 && a.speed > 0.01 && !a.released) {
-        const Real adv = a.speed * sinceSimTick_;
+    const Real sinceTick = sim_.secondsSinceTick();
+    if (sinceTick > 0.0 && a.speed > 0.01 && !a.released) {
+        const Real adv = a.speed * sinceTick;
         x += a.heading.x * adv;
         z += a.heading.y * adv;
     }
@@ -1449,29 +1450,14 @@ void CityRenderSystem::syncGroups(World& world) {
 void CityRenderSystem::step(World& world, Real dt) {
     if (!built_) return;
     bakeDt_ = dt;   // the tilt low-pass keys its gain to the bake interval
-    // How many fixed steps per SIM tick. localHz 0 (or >= the fixed rate)
-    // keeps the historical every-step tick, so levels and tests that never opt
-    // in are bit-identical. The adaptive multiplier rides on top.
-    int divisor = 1;
-    if (params_.localHz > 0.0 && dt > 0.0) {
-        const Real fixedHz = 1.0 / dt;
-        if (params_.localHz < fixedHz)
-            divisor = static_cast<int>(fixedHz / params_.localHz + 0.5);
-    }
-    divisor = std::max(1, divisor * (params_.localHz > 0.0 ? loadMul_ : 1));
-    simAccumDt_ += dt;
-    sinceSimTick_ += dt;
-    if (++simStepCounter_ < divisor) {
-        // No sim tick this step. The bake still runs on the frame's last step:
-        // poses EXTRAPOLATE along heading (see agentPose), so traffic keeps
-        // moving smoothly at the render rate between ticks.
-        if (bakeThisStep_) syncGroups(world);
-        return;
-    }
-    simStepCounter_ = 0;
-    dt = simAccumDt_;          // the sim advances by everything banked
-    simAccumDt_ = 0.0;
-    sinceSimTick_ = 0.0;
+    // CADENCE IS THE SIM'S OWN (P8.2e): hand it the level's period, scaled by
+    // the adaptive load multiplier, and let it decide whether this call
+    // advances anything. The bridge's job is time in, poses out — deciding a
+    // system's rate one layer above the state it governs is what let the far
+    // tier's bucket phase silently disagree with it.
+    sim_.setTickPeriod(params_.localHz > 0.0
+                           ? (1.0 / params_.localHz) * static_cast<Real>(loadMul_)
+                           : 0.0);
     // Three-tier traffic (P4): feed the sim the player's position each fixed
     // step — the V/K bubble's centre. No player entity (headless tests, menu
     // scenes) clears it, and everything stays K. Inert unless the level set

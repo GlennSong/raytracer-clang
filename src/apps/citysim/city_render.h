@@ -311,12 +311,9 @@ private:
     // Set per fixed step: bake the render poses only on the frame's LAST step
     // (see fixedUpdate). True by default so a direct step() call still bakes.
     bool bakeThisStep_ = true;
-    // Sim-rate state (P8.2d): steps skipped since the last tick, the dt banked
-    // for it, how long ago it ran (drives pose extrapolation), and the load
-    // multiplier the adaptive dip applies on top of the level's rate.
-    int simStepCounter_ = 0;
-    Real simAccumDt_ = 0.0;
-    Real sinceSimTick_ = 0.0;
+    // Adaptive-dip state. The CADENCE itself lives in CitySim (setTickPeriod);
+    // this is only the load multiplier the bridge derives from the frame's
+    // fixed-step count and scales that period by.
     int loadMul_ = 1;
     int loadStreak_ = 0;
     std::vector<std::vector<int>> pedAgentIds_;           // ditto, ped group (P4)
