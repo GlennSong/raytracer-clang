@@ -1879,10 +1879,10 @@ void CitySim::computeCarWedge() {
     carAheadSpeed_.assign(agents_.size(), 0.0);
     constexpr Real kRange = 38.0;   // sense horizon (m)
     constexpr Real kLat = 2.15;     // corridor half-width: two bodies abreast
-    for (std::size_t i = 0; i < agents_.size(); ++i) {
-        Agent& a = agents_[i];
+    for (int ai : active_) {
+        Agent& a = agents_[ai];
+        const std::size_t i = static_cast<std::size_t>(ai);
         if (a.mode != Agent::Mode::Driver || !a.moving) continue;
-        if (a.tier == Agent::Tier::V) continue;   // far tier: senses nothing
         const Real fx = a.heading.x, fy = a.heading.y;
         Real linkLeft = kRange;
         if (nav_ && a.leg < static_cast<int>(a.route.links.size())) {
@@ -1994,6 +1994,16 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // pose is the exact lane pose). BEFORE the clock advances: a promoted
     // agent joins this step's K passes with no double-advanced time.
     tierPass(hoursPerSecond);
+    // ACTIVE LIST (perf). Every pass below used to walk the WHOLE population
+    // just to `continue` on the far tier: ~12 sweeps over thousands of
+    // 432-byte agents per step, which is memory traffic, not simulation. The
+    // tier bubble already knows who is live, so resolve that ONCE here and let
+    // the passes iterate the survivors. Ascending indices keep the iteration
+    // order (and therefore the results) bit-identical to the old sweeps.
+    active_.clear();
+    for (std::size_t i = 0; i < agents_.size(); ++i)
+        if (agents_[i].tier != Agent::Tier::V)
+            active_.push_back(static_cast<int>(i));
 
     clockHours_ += dt * hoursPerSecond;
     clockHours_ = std::fmod(clockHours_, 24.0);
@@ -2009,11 +2019,10 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // car waits out traffic near its spot and pulls out when clear). The
     // built-in tables reproduce the historical schedule and wander behaviour
     // exactly; see goalThink / city_goals.h.
-    for (std::size_t i = 0; i < agents_.size(); ++i) {
-        Agent& a = agents_[i];
+    for (int ai : active_) {
+        Agent& a = agents_[ai];
+        const std::size_t i = static_cast<std::size_t>(ai);
         if (a.playerControlled || a.released) continue;
-        if (a.tier == Agent::Tier::V) continue;   // V runs its goal layer on
-                                                  // its own coarse tick
         goalThink(a, dt * hoursPerSecond);
         // A departure moved the pose (idle verge -> lane start): re-hash NOW so
         // every later grid consumer this step sees current positions.
@@ -2029,9 +2038,9 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // for cross/oncoming cars in the cone deadlocked traffic.
     sensed_.clear();
     sensedIndex_.assign(agents_.size(), -1);   // agent -> its ghost (grid lookups)
-    for (std::size_t i = 0; i < agents_.size(); ++i) {
-        const Agent& a = agents_[i];
-        if (a.tier == Agent::Tier::V) continue;   // far tier: no sensable body
+    for (int ai : active_) {
+        const Agent& a = agents_[ai];
+        const std::size_t i = static_cast<std::size_t>(ai);
         // A RESTING pedestrian is INSIDE its place (home/shop/office) — not a
         // body on the street. Sensing it anyway had cars braking forever for a
         // person who is semantically indoors (a rest pose near the kerb sat in
@@ -2058,10 +2067,10 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     std::vector<uint8_t> advanced(agents_.size(), 0);
     computeGaps();
     computeCarWedge();   // S7 senses: bodies in the forward corridor
-    for (std::size_t i = 0; i < agents_.size(); ++i) {
-        Agent& a = agents_[i];
+    for (int ai : active_) {
+        Agent& a = agents_[ai];
+        const std::size_t i = static_cast<std::size_t>(ai);
         if (a.playerControlled || a.released) continue;
-        if (a.tier == Agent::Tier::V) continue;   // advanced on its coarse tick
         // Crashed (fender-bender): the car sits where it hit until its hold
         // expires — a crash is a real stop, not a suggestion.
         if (a.crashTimer > 0) {
@@ -2095,10 +2104,11 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // holds, so a junction tangle crunches to a stop and unwinds car by car.
     // Triggering only on a closing approach lets the first resumer drive OUT
     // through the residual overlap without instantly re-freezing the pair.
-    for (std::size_t i = 0; i < agents_.size(); ++i) {
-        Agent& a = agents_[i];
+    for (int ai : active_) {
+        Agent& a = agents_[ai];
+        const std::size_t i = static_cast<std::size_t>(ai);
         if (a.mode != Agent::Mode::Driver || !a.moving || a.released ||
-            a.playerControlled || a.tier == Agent::Tier::V)
+            a.playerControlled)
             continue;
         for (std::size_t j = i + 1; j < agents_.size(); ++j) {
             Agent& b = agents_[j];
@@ -2383,10 +2393,10 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // Hard body-overlap floor: several symmetric relaxation passes so two people
     // (whether or not they saw each other) never interpenetrate.
     for (int iter = 0; iter < 6; ++iter)
-        for (std::size_t i = 0; i < agents_.size(); ++i) {
-            Agent& a = agents_[i];
-            if (a.mode != Agent::Mode::Pedestrian || !a.moving ||
-                a.tier == Agent::Tier::V)
+        for (int ai : active_) {
+            Agent& a = agents_[ai];
+            const std::size_t i = static_cast<std::size_t>(ai);
+            if (a.mode != Agent::Mode::Pedestrian || !a.moving)
                 continue;
             for (std::size_t j = i + 1; j < agents_.size(); ++j) {
                 Agent& b = agents_[j];

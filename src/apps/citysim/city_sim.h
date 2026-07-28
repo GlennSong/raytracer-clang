@@ -538,6 +538,10 @@ private:
     // counter the V buckets key off (frameIndex_ % vTickDivisor — no wall
     // clock), and the lifetime transition counters the tests gate on.
     engine::Vec2 tierCenter_;
+    // Indices of the agents that need this step's full passes (everything but
+    // the far/V tier), resolved once per step in step(). Ascending, so the
+    // passes keep their original iteration order.
+    std::vector<int> active_;
     bool haveTierCenter_ = false;
     uint64_t frameIndex_ = 0;
     long promotions_ = 0;

@@ -1469,8 +1469,15 @@ void CityRenderSystem::step(World& world, Real dt) {
     simMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
     syncMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
     if (++calls % 300 == 0) {
+        int kTier = 0, vTier = 0, moving = 0;
+        for (const Agent& a : sim_.agents()) {
+            if (a.tier == Agent::Tier::V) ++vTier; else ++kTier;
+            if (a.moving) ++moving;
+        }
         LOG_INFO << "[stats] citysim step " << (simMs / calls)
-                 << " ms, group sync " << (syncMs / calls) << " ms (per fixed step)";
+                 << " ms, group sync " << (syncMs / calls)
+                 << " ms (per fixed step) | active(K/P) " << kTier
+                 << ", far(V) " << vTier << ", moving " << moving;
         simMs = syncMs = 0.0;
         calls = 0;
     }
