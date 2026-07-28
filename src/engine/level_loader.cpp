@@ -3125,6 +3125,8 @@ bool LevelLoader::load(const std::string& path,
         cfg.pedestrians = cs.value("pedestrians", cfg.pedestrians);
         // How far parked scenery cars still draw (0 = never cull).
         cfg.sceneryRadius = cs.value("sceneryRadius", cfg.sceneryRadius);
+        cfg.localHz = cs.value("localHz", cfg.localHz);
+        cfg.adaptiveRate = cs.value("adaptiveRate", cfg.adaptiveRate);
         cfg.carsPerLaneKm = cs.value("carsPerLaneKm", cfg.carsPerLaneKm);
         cfg.pedsPerKm = cs.value("pedsPerKm", cfg.pedsPerKm);
         cfg.seed = cs.value("seed", cfg.seed);

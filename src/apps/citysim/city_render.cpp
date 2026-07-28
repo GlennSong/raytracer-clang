@@ -144,6 +144,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         params_.hoursPerSecond = c.hoursPerSecond;
         params_.perceptionReliability = c.perceptionReliability;
         params_.sceneryRadius = c.sceneryRadius;
+        params_.localHz = c.localHz;
+        params_.adaptiveRate = c.adaptiveRate;
         params_.tieredAgents = c.tieredAgents;
         params_.wander = c.wander;
         params_.agentScript = c.agentScript;
@@ -937,6 +939,18 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
         return su;
     };
     Real x = a.pos.x, z = a.pos.y;          // Vec2 maps to world XZ (.y = world z)
+    // EXTRAPOLATE between sim ticks. With localHz below the fixed rate the
+    // sim's pose is up to a tick stale, and a body that freezes then jumps
+    // reads as judder AND shoves the player (Jolt infers a kinematic body's
+    // velocity from its position delta, so one 33 ms jump is a doubled
+    // instantaneous velocity). Agents follow lanes at a known speed along a
+    // known heading, so carrying them forward along it is what they are
+    // actually doing — no added latency, and the next tick lands the truth.
+    if (sinceSimTick_ > 0.0 && a.speed > 0.01 && !a.released) {
+        const Real adv = a.speed * sinceSimTick_;
+        x += a.heading.x * adv;
+        z += a.heading.y * adv;
+    }
     // Lift the box so it rests on the ground: half its OWN body height (a tall van
     // or box truck sits higher than a sedan). Read the height from the possessed
     // SimVehicle (authoritative), falling back to the default car/ped size.
@@ -1435,6 +1449,29 @@ void CityRenderSystem::syncGroups(World& world) {
 void CityRenderSystem::step(World& world, Real dt) {
     if (!built_) return;
     bakeDt_ = dt;   // the tilt low-pass keys its gain to the bake interval
+    // How many fixed steps per SIM tick. localHz 0 (or >= the fixed rate)
+    // keeps the historical every-step tick, so levels and tests that never opt
+    // in are bit-identical. The adaptive multiplier rides on top.
+    int divisor = 1;
+    if (params_.localHz > 0.0 && dt > 0.0) {
+        const Real fixedHz = 1.0 / dt;
+        if (params_.localHz < fixedHz)
+            divisor = static_cast<int>(fixedHz / params_.localHz + 0.5);
+    }
+    divisor = std::max(1, divisor * (params_.localHz > 0.0 ? loadMul_ : 1));
+    simAccumDt_ += dt;
+    sinceSimTick_ += dt;
+    if (++simStepCounter_ < divisor) {
+        // No sim tick this step. The bake still runs on the frame's last step:
+        // poses EXTRAPOLATE along heading (see agentPose), so traffic keeps
+        // moving smoothly at the render rate between ticks.
+        if (bakeThisStep_) syncGroups(world);
+        return;
+    }
+    simStepCounter_ = 0;
+    dt = simAccumDt_;          // the sim advances by everything banked
+    simAccumDt_ = 0.0;
+    sinceSimTick_ = 0.0;
     // Three-tier traffic (P4): feed the sim the player's position each fixed
     // step — the V/K bubble's centre. No player entity (headless tests, menu
     // scenes) clears it, and everything stays K. Inert unless the level set
@@ -1742,6 +1779,22 @@ void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
     // rest are pure waste, and at piedmont scale that was ~4.5 bakes a frame.
     // Physics proxies read the bake too, so they track the freshest step.
     bakeThisStep_ = (ctx.fixedStepIndex + 1 >= ctx.fixedStepCount);
+
+    // ADAPTIVE DIP. When the clock is behind it runs MORE fixed steps to catch
+    // up — and if the sim is what made us late, that deepens the hole (the
+    // spiral that pinned piedmont at the 8-step cap). Traffic is the one
+    // subsystem where catching up COARSELY is legitimate, so a sustained high
+    // step count slows the sim's own rate instead. Quantised and hysteretic
+    // (a streak, not a single frame) so the tick pattern doesn't flutter with
+    // frame-time noise, and only on the frame's first step.
+    if (params_.adaptiveRate && ctx.fixedStepIndex == 0) {
+        const int steps = ctx.fixedStepCount;
+        if (steps >= 5) loadStreak_ = std::min(loadStreak_ + 1, 30);
+        else if (steps <= 2) loadStreak_ = std::max(loadStreak_ - 1, -30);
+        if (loadStreak_ >= 8 && loadMul_ < 4) { loadMul_ *= 2; loadStreak_ = 0; }
+        else if (loadStreak_ <= -8 && loadMul_ > 1) { loadMul_ /= 2; loadStreak_ = 0; }
+    }
+
     step(ctx.world, ctx.clock.fixedStep());
     bakeThisStep_ = true;   // a direct step() call (tests) always bakes
 }

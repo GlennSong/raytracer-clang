@@ -407,6 +407,10 @@ struct CitySimConfig {
     // be partially frustum-culled, so this is what keeps thousands of parked
     // bodies out of the colour and shadow passes. 0 = draw them all.
     float sceneryRadius = 450.0f;
+    // Sim tick rate for LOCAL agents (Hz). 0 = every fixed step (historical).
+    // 30 halves the traffic sim's cost; poses extrapolate between ticks.
+    float localHz = 0.0f;
+    bool adaptiveRate = true;   // dip further while the clock is behind
     bool debugWidgets = false;           // start with the agent-state HUD on
     bool tieredAgents = false;           // P4: opt into V/K traffic tiering
     bool showPlan = false;               // boot with block/lot outlines on

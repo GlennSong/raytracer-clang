@@ -1,6 +1,7 @@
 {
  "_comment": "Piedmont (8km-city plan P3): the full city on the P1/P2 sandbox's world \u2014 terrain + multi-site road recipe copied VERBATIM from piedmont_roads.json (same seeds, so the erosion/conform caches hit), plus the citysim block that builds it: lots + buildings on the metro's blocks, per-hub-cluster civic anchors (each town gets its school + church), piedmont-scale parcel grain (150 m+ blocks parcel bigger lots), and the P5 scattering sky + volumetric clouds as its flagship consumer.",
  "citysim": {
+  "adaptiveRate": true,
   "buildChance": 0.9,
   "buildLots": true,
   "cars": 3000,
@@ -8,6 +9,7 @@
   "detailDistance": 900,
   "downtownRadius": 300,
   "hubRadius": 320,
+  "localHz": 0.0,
   "midtownRadius": 650,
   "parcel": {
    "courtMinArea": 500,

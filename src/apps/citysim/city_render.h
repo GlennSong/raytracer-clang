@@ -44,6 +44,25 @@ struct CityRenderParams {
     // parked car in the city is submitted every frame, in both the colour and
     // shadow passes. 0 = no cull (the old behaviour).
     Real sceneryRadius = 450.0;
+    // SIM RATE (P8.2d). Traffic is not physics: agents follow lanes, so a
+    // bigger dt costs nothing but precision. 0 or >= the fixed rate keeps the
+    // historical every-step tick (and every existing test/gate bit-identical);
+    // 30 halves the sim's cost outright. Poses are EXTRAPOLATED along heading
+    // between ticks, so the renderer and the kinematic proxies still see
+    // smooth 60 Hz motion. `adaptiveRate` lets the sim dip FURTHER (never
+    // below ~7.5 Hz) while the clock is behind — catching up by simulating
+    // coarsely instead of by running ever more expensive steps, which is the
+    // spiral that pins the frame at the step cap.
+    // MEASURED CAVEAT (P8.2d): enabling this on piedmont REGRESSED the frame
+    // (16 -> 9 fps). The far tier's coarse tick is `frameIndex_ % vTickDivisor`
+    // — a count of SIM TICKS, documented as "~1 Hz at the 60 Hz step" — so
+    // halving the sim rate also halves how often distant agents refresh their
+    // position. They then read stale near the bubble edge and the tier pass
+    // over-promotes: K/P went 950 -> 2650, and K agents are the ones that get
+    // DRAWN (instanced draws 25 -> 60, GPU 32 -> 86 ms). Express the V budget
+    // in sim SECONDS before turning this on.
+    Real localHz = 0.0;
+    bool adaptiveRate = true;
     bool debugWidgets = false;             // draw each agent's footprint + trajectory
     bool wander = false;                   // perpetual random trips (the agent lab)
     // Scripted goal tables (ADR-0064): the SOURCE of an agents.lua-style script
@@ -292,6 +311,14 @@ private:
     // Set per fixed step: bake the render poses only on the frame's LAST step
     // (see fixedUpdate). True by default so a direct step() call still bakes.
     bool bakeThisStep_ = true;
+    // Sim-rate state (P8.2d): steps skipped since the last tick, the dt banked
+    // for it, how long ago it ran (drives pose extrapolation), and the load
+    // multiplier the adaptive dip applies on top of the level's rate.
+    int simStepCounter_ = 0;
+    Real simAccumDt_ = 0.0;
+    Real sinceSimTick_ = 0.0;
+    int loadMul_ = 1;
+    int loadStreak_ = 0;
     std::vector<std::vector<int>> pedAgentIds_;           // ditto, ped group (P4)
     engine::Entity pedGroup_;
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
