@@ -2076,13 +2076,258 @@ static const char* bandName(BandRole r) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Sheet 9 — CORNERS AND STACKS: where the context facts come from.
-// ---------------------------------------------------------------------------
 static std::vector<Poly2> loftPlans(const std::vector<Poly2>& A,
                                     const std::vector<Poly2>& B, Real t,
                                     Real twistRad, Real cell);
+static Poly2 regularPoly(const Vec2& c, Real r, int n, Real rot);
 
+// ===========================================================================
+// THE 2-D PEN — the turtle from §3.4, built. A plan is walked, not typed as
+// vertex literals, which is what makes irregular plans authorable as data.
+// ===========================================================================
+struct Pen {
+    Poly2 pts;
+    Vec2 cur{0, 0};
+    Real dir = 0;                       // heading, radians
+
+    Pen& moveTo(Real x, Real y) { cur = Vec2(x, y); pts.push_back(cur); return *this; }
+    Pen& turn(Real deg) { dir += deg * kTau / 360.0; return *this; }
+    Pen& forward(Real d) {
+        cur = cur + Vec2(std::cos(dir), std::sin(dir)) * d;
+        pts.push_back(cur);
+        return *this;
+    }
+    // Sweep an arc of `deg` while advancing — a curved wall, as chords.
+    Pen& arc(Real radius, Real deg, int segs = 8) {
+        const Real step = deg / segs;
+        const Real chord = 2.0 * radius * std::sin(std::fabs(step) * kTau / 720.0);
+        for (int i = 0; i < segs; ++i) { turn(step * 0.5); forward(chord); turn(step * 0.5); }
+        return *this;
+    }
+    Poly2 close() {
+        Poly2 p = pts;
+        if (p.size() > 2 && (p.front() - p.back()).length() < 1e-6) p.pop_back();
+        if (engine::signedArea(p) < 0) std::reverse(p.begin(), p.end());
+        return p;
+    }
+};
+
+// ===========================================================================
+// VERTICAL DESCRIPTION — three INDEPENDENT knobs, not one.
+//
+//   plan     WHAT the footprint is        (a plan-grammar script)
+//   profile  HOW BIG it is at height t    (a scalar curve — the Gherkin)
+//   loft     WHAT IT BECOMES              (morph toward another plan — the arch)
+//   twist    HOW IT ROTATES               (rarely; see the quota note below)
+//
+// A Gherkin is ONE plan with a profile curve and no loft at all. A pyramid is
+// one plan with a linear profile. An arch is a loft that MERGES two loops into
+// one going up. Conflating "profile" with "loft" is why a system ends up
+// twisting everything: twist is the only knob it has for "make it interesting".
+// ===========================================================================
+
+using Profile = std::function<Real(Real)>;      // t in [0,1] -> scale
+
+static Profile profileConstant() { return [](Real) { return Real(1); }; }
+static Profile profileTaper(Real to) {          // pyramid / obelisk
+    return [to](Real t) { return 1.0 + (to - 1.0) * t; };
+}
+static Profile profileSwell() {                 // the Gherkin: bulge, then nose
+    return [](Real t) {
+        return std::pow(std::sin(kTau * 0.5 * (0.20 + 0.78 * t)), Real(0.85));
+    };
+}
+
+// One storey's plan: the band's plan, lofted if asked, then scaled by the
+// profile, then twisted. Order matters — profile is a size, twist is a frame.
+static std::vector<Poly2> storeyPlan(const std::vector<Poly2>& A,
+                                     const std::vector<Poly2>* B, Real t,
+                                     const Profile& prof, Real twist) {
+    std::vector<Poly2> loops = B ? loftPlans(A, *B, t, 0.0, 0.18) : A;
+    const Real s = std::max(Real(0.02), prof(t));
+    Vec2 c(0, 0);
+    Real n = 0;
+    for (const Poly2& p : loops) for (const Vec2& v : p) { c = c + v; n += 1; }
+    if (n > 0) c = c * (1.0 / n);
+    const Real cs = std::cos(twist), sn = std::sin(twist);
+    for (Poly2& p : loops)
+        for (Vec2& v : p) {
+            Vec2 r = (v - c) * s;
+            v = Vec2(c.x + r.x * cs - r.y * sn, c.y + r.x * sn + r.y * cs);
+        }
+    return loops;
+}
+
+// A centre SECTION built from the storey plans: for each level, the x-intervals
+// the plans actually occupy along the building's mid-line. This is what makes an
+// arch read as an arch and a donut read as a donut — the massing is legible from
+// the plans alone, with no 3-D anywhere.
+static void drawSection(Svg& s, const std::vector<std::vector<Poly2>>& levels,
+                        Real x0, Real x1, Real yMid, Real px, Real pyBase,
+                        Real sc, Real levelH, const char* fill) {
+    const int NS = 150;
+    for (std::size_t L = 0; L < levels.size(); ++L) {
+        const Real yTop = pyBase - static_cast<Real>(L + 1) * levelH;
+        int runStart = -1;
+        for (int i = 0; i <= NS; ++i) {
+            const Real x = x0 + (x1 - x0) * i / NS;
+            bool inside = false;
+            if (i < NS) {
+                int c = 0;
+                for (const Poly2& p : levels[L])
+                    if (engine::pointInPolygon(p, Vec2(x, yMid))) c ^= 1;
+                inside = c != 0;
+            }
+            if (inside && runStart < 0) runStart = i;
+            if (!inside && runStart >= 0) {
+                const Real a = px + (x0 + (x1 - x0) * runStart / NS - x0) * sc;
+                const Real b = px + (x0 + (x1 - x0) * i / NS - x0) * sc;
+                fprintf(s.f, "<rect x=\"%.2f\" y=\"%.2f\" width=\"%.2f\" height=\"%.2f\" "
+                             "fill=\"%s\" stroke=\"#232a36\" stroke-width=\"0.4\"/>\n",
+                        a, yTop, std::max(b - a, Real(0.8)), levelH + 0.4, fill);
+                runStart = -1;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sheet 10 — SILHOUETTES: profile curves, merging lofts, holes, and a pen plan.
+// ---------------------------------------------------------------------------
+static void sheetSilhouette(const char* dir, uint32_t seed) {
+    Svg s;
+    const Real cellW = 430, cellH = 470;
+    const int cols = 3, rows = 2;
+    svgOpen(s, (std::string(dir) + "/silhouette.svg").c_str(), cellW * cols + 60,
+            cellH * rows + 180, "Lot Lab — profile, loft and twist are different knobs");
+    s.textPx(28, 68, "A Gherkin is ONE plan with a PROFILE curve and no loft. A pyramid is a "
+                     "linear profile. An arch is a loft that MERGES going up. Twist is a "
+                     "fourth knob, and should be rationed (panel 6).", 12, "#6b7280");
+
+    auto panel = [&](int i, const char* title, const char* sub, const char* stat,
+                     const std::vector<std::vector<Poly2>>& levels,
+                     Real span, Real yMid) {
+        const int cx = i % cols, cy = i / cols;
+        const Real bx = 40 + cx * cellW + 30, by = 118 + cy * cellH;
+        // top: the storey plans, superimposed
+        const Real psc = 150.0 / span;
+        s.scale = psc;
+        s.ox = bx + 96;
+        s.oy = by + 84;
+        const std::size_t stride = std::max<std::size_t>(1, levels.size() / 6);
+        for (std::size_t L = 0; L < levels.size(); ++L) {
+            if (L % stride && L + 1 != levels.size()) continue;
+            char col[16];
+            const int g = 32 + static_cast<int>(120.0 * L / std::max<std::size_t>(1, levels.size() - 1));
+            snprintf(col, sizeof col, "#%02x%02x%02x", g, g + 8, g + 20);
+            for (const Poly2& p : levels[L])
+                s.poly(p, "none", col, L == 0 || L + 1 == levels.size() ? 1.8 : 0.9);
+        }
+        s.textPx(bx + 190, by + 18, "storey plans", 10, "#9aa1ad");
+        // bottom: the centre section, built from those same plans
+        const Real ssc = 150.0 / span;
+        drawSection(s, levels, -span * 0.5, span * 0.5, yMid, bx + 210,
+                    by + 300, ssc, 300.0 / levels.size(), "#c2c8d3");
+        s.textPx(bx + 210, by + 318, "centre section", 10, "#9aa1ad");
+        s.textPx(bx, by + 356, title, 14, "#1d2430", "start", "600");
+        s.textPx(bx, by + 373, sub, 11, "#6b7280");
+        s.textPx(bx, by + 388, stat, 10, "#9aa1ad");
+    };
+
+    const int NL = 16;
+    auto build = [&](const std::vector<Poly2>& A, const std::vector<Poly2>* B,
+                     const Profile& prof, Real twist) {
+        std::vector<std::vector<Poly2>> lv;
+        for (int i = 0; i < NL; ++i) {
+            const Real t = static_cast<Real>(i) / (NL - 1);
+            lv.push_back(storeyPlan(A, B, t, prof, twist * t));
+        }
+        return lv;
+    };
+
+    // 1 — the Gherkin: one plan, a swell profile, NO loft, NO twist
+    {
+        std::vector<Poly2> A{regularPoly(Vec2(0, 0), 15, 28, 0)};
+        panel(0, "1 · profile curve (Gherkin)", "one plan, swell-then-nose; no loft, no twist",
+              "profile = sin(pi(0.20+0.78t))^0.85", build(A, nullptr, profileSwell(), 0), 34, 0);
+    }
+    // 2 — pyramid
+    {
+        std::vector<Poly2> A{rectPoly(Rect(-16, -16, 16, 16))};
+        panel(1, "2 · linear taper (pyramid)", "same machinery, a straight-line profile",
+              "profile = 1 - 0.97t", build(A, nullptr, profileTaper(0.03), 0), 36, 0);
+    }
+    // 3 — the ARCH: two legs merging into one span going up
+    {
+        std::vector<Poly2> A{rectPoly(Rect(-17, -6, -7, 6)), rectPoly(Rect(7, -6, 17, 6))};
+        std::vector<Poly2> B{rectPoly(Rect(-17, -6, 17, 6))};
+        panel(2, "3 · loft that MERGES (arch)", "two legs at grade, one span at the top",
+              "topology merge — the mirror of the slab->towers split",
+              build(A, &B, profileConstant(), 0), 40, 0);
+    }
+    // 4 — donut: a plan with a hole, held all the way up
+    {
+        std::vector<Poly2> ring = polyBool({regularPoly(Vec2(0, 0), 17, 32, 0)},
+                                           {regularPoly(Vec2(0, 0), 8.5, 32, 0)},
+                                           BOp::Subtract);
+        panel(3, "4 · a hole, held (donut)", "Shape2 carries the hole; nothing else changes",
+              "the void is a loop, not a special case",
+              build(ring, nullptr, profileConstant(), 0), 38, 0);
+    }
+    // 5 — a PEN-drawn plan, then corner cuts on an irregular polygon
+    {
+        Pen pen;
+        pen.moveTo(-14, -10).forward(0);
+        pen.dir = 0;
+        pen.pts.clear();
+        pen.cur = Vec2(-14, -10);
+        pen.pts.push_back(pen.cur);
+        pen.forward(12).turn(-90).forward(6).turn(90).forward(9)
+           .turn(90).forward(7).turn(-90).forward(7).turn(90)
+           .forward(13).turn(90).forward(28).turn(90).forward(12);
+        Poly2 p = pen.close();
+        std::vector<WallRole> roles(p.size(), WallRole::Street);
+        // Corner cuts on an IRREGULAR plan — the op is per-vertex, so it never
+        // cared that the earlier demo happened to be a rectangle.
+        for (int k = 0; k < 3; ++k) {
+            std::size_t v = (k * 3 + 1) % p.size();
+            p = chamferCorner(p, roles, v, 2.6);
+        }
+        std::vector<Poly2> A{p};
+        panel(4, "5 · pen-drawn plan, corner cuts", "forward/turn walk, then chamfer 3 vertices",
+              "the chamfer op is per-vertex — shape-agnostic",
+              build(A, nullptr, profileTaper(0.55), 0), 42, -2);
+    }
+    // 6 — RARITY: signature massing is a quota, not a probability
+    {
+        const int cx = 2, cy = 1;
+        const Real bx = 40 + cx * cellW + 30, by = 118 + cy * cellH;
+        std::vector<Poly2> box{rectPoly(Rect(-9, -9, 9, 9))};
+        const Real bw = 34, gap = 6;
+        for (int k = 0; k < 9; ++k) {
+            const bool signature = (k == 5);
+            const Profile pr = signature ? profileSwell() : profileTaper(0.86);
+            std::vector<std::vector<Poly2>> lv;
+            const int nl = signature ? 18 : 8 + (k * 5) % 7;
+            for (int i = 0; i < nl; ++i)
+                lv.push_back(storeyPlan(box, nullptr, static_cast<Real>(i) / (nl - 1), pr,
+                                        signature ? 0.55 * i / (nl - 1) : 0));
+            drawSection(s, lv, -11, 11, 0, bx + k * (bw + gap) * 0.62, by + 250,
+                        1.5, 250.0 / 18.0, signature ? "#b48a5c" : "#c9ccd3");
+        }
+        s.textPx(bx, by + 300, "6 · signature massing is a QUOTA", 14, "#1d2430", "start", "600");
+        s.textPx(bx, by + 317, "one signature tower per city, PLACED on the best site",
+                 11, "#6b7280");
+        s.textPx(bx, by + 332, "the same planner that places one courthouse, not a per-lot roll",
+                 10, "#9aa1ad");
+    }
+    (void)seed;
+    svgClose(s);
+}
+
+// ---------------------------------------------------------------------------
+// Sheet 9 — CORNERS AND STACKS: where the context facts come from.
+// ---------------------------------------------------------------------------
 static void sheetCorner(const char* dir, uint32_t seed) {
     Svg s;
     const Real cellW = 430, cellH = 420;
@@ -2895,8 +3140,9 @@ int main(int argc, char** argv) {
     lab::sheetStack(out, seed);
     lab::sheetRecipes(out, seed);
     lab::sheetCorner(out, seed);
+    lab::sheetSilhouette(out, seed);
     printf("lot_lab: wrote %s/{lots,plans,shapes,curves,compose,blueprint,stack,"
-           "recipes,corner}.svg "
+           "recipes,corner,silhouette}.svg "
            "(seed %u)\n", out, seed);
     return 0;
 }

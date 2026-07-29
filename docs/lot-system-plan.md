@@ -573,9 +573,9 @@ later phase encodes assumptions about what the kernel can express.
 them out of the vocabulary above — `Region` with holes, the exact rectilinear
 boolean, the sampled-field path, per-edge setbacks, the plan grammar, the
 subtractive zone allocation, prop dart-throwing, gates placed where a path
-crosses a boundary — and writes nine sheets: `lots.svg`, `plans.svg`,
+crosses a boundary — and writes ten sheets: `lots.svg`, `plans.svg`,
 `shapes.svg`, `curves.svg`, `compose.svg`, `blueprint.svg`, `stack.svg`,
-`recipes.svg`, `corner.svg`.
+`recipes.svg`, `corner.svg`, `silhouette.svg`.
 
 ```sh
 c++ -std=c++17 -O1 tools/lot_lab.cpp \
@@ -920,6 +920,64 @@ is why the recipe-porting exercise (reinterpreting the existing ~40 architect
 recipes as tables) should happen *before* the vocabulary is frozen: anything the
 40 cannot express is a missing verb, and that is exactly what we want to find
 out early.
+
+### 15.8 Profile, loft and twist are different knobs (`silhouette.svg`)
+
+I conflated two things in §15.3 by treating the loft as *the* way a tower stops
+being a prism. There are four independent descriptions, and separating them is
+what stops every interesting building from having to twist:
+
+| Knob | Says | Example |
+|---|---|---|
+| `plan` | **what** the footprint is | a rounded polygon |
+| `profile` | **how big** it is at height *t* — a scalar curve | the Gherkin |
+| `loft_to` | **what it becomes** — morph toward another plan | the arch |
+| `twist` | **how it rotates** | Turning Torso |
+
+**A Gherkin is one plan with a profile curve and no loft at all** — the
+footprint never changes shape, only size, swelling to a bulge and closing to a
+nose. A pyramid is the same machinery with a straight line. Once profile exists
+as its own knob, most "interesting" towers need no loft and no twist, which is
+exactly the point.
+
+**The arch is a loft that MERGES.** Two legs at grade become one span at the
+top — the mirror image of the slab-splitting-into-towers case, and the field
+loft handles it for the same reason: topology change is free. A **donut** is
+simply a plan that carries a hole; `Shape2` already does, so nothing else
+changes. A **pen-drawn irregular plan** takes corner cuts exactly as a rectangle
+does, because `chamfer` is per-vertex and never cared about the shape.
+
+### 15.9 Rarity is a quota, not a probability
+
+The concern is right, and it is the most important thing in this section: **if
+twist is a per-building roll, every building twists and the skyline turns to
+mush.** A 3% chance of a twisted tower across 400 lots is twelve twisted towers,
+which is not a skyline, it is a texture.
+
+The fix is structural, and the machinery already exists. `city_lots.cpp` PASS B
+does not *roll* civic buildings — it **places** them: a quota table ("one
+courthouse per city, one school per residential quarter") filled by the
+best-scoring eligible lot, with a relaxation pass if nothing qualifies. Signature
+massing should go through exactly that planner:
+
+* A city gets **at most one or two signature towers**, placed on the best sites
+  — tallest allowance, most central, most visible — never rolled per lot.
+* `signature` becomes a **gate on the expensive knobs**: twist, merging lofts,
+  unusual plans. An ordinary tower may use `profile` freely (that is just good
+  massing) but may not twist.
+* The quota scales with the city, not with the lot count: one per city, plus
+  perhaps one per secondary hub — the same shape as the `Fire` station rule
+  (`1 + total / 150`).
+
+This also answers "how do we decide if a building has a twist": **nothing
+decides per building.** The planner decides *for the city* which one or two sites
+carry signature massing, and those sites get a signature recipe. Everything else
+draws from tables that do not contain a twist knob at all.
+
+The general principle, worth stating once: **anything that would stop being
+special if it were common must be a quota.** Landmarks already are. Signature
+massing, unusual materials, and landmark plan shapes should join them, and the
+architect's weighted tables should carry only the ordinary vocabulary.
 
 ## 16. Relationship to existing docs
 
