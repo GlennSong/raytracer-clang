@@ -464,6 +464,7 @@ add_executable(run_tests
     tests/test_metro_sites.cpp
     tests/test_fabric.cpp
     tests/test_city_footprint.cpp
+    tests/test_sim_rate_ab.cpp
     tests/test_footprint_skeleton.cpp
     tests/test_city_stages.cpp
     tests/test_road_semantics.cpp
