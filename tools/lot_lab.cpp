@@ -219,6 +219,130 @@ static std::vector<Region> traceRectSet(const RectSet& rs) {
     return regions;
 }
 
+// --- GENERAL polygon boolean (any angle, not just axis-aligned) ------------
+//
+// The rectilinear tracer above is exact and fast but only knows about boxes; a
+// pentagon's walls are at 72 degrees and it has nothing to say about them. This
+// is the general exact path, and it is the plan's claim made good: the engine's
+// `polygonUnion` (road_offset.cpp, built to weld road junctions) already does
+// arbitrary-angle UNION by splitting every edge at its crossings and keeping
+// the sub-edges whose midpoint is outside the other polygons. Subtract and
+// intersect are THE SAME ALGORITHM with a different keep rule — plus, for
+// subtract, reversing the clip's surviving edges so the hole winds the other
+// way. Reimplemented here so the lab can exercise all three.
+
+enum class BOp { Unite, Subtract, Intersect };
+
+// Even-odd containment across a whole loop set, so holes count correctly.
+static bool inLoops(const std::vector<Poly2>& L, const Vec2& p) {
+    int c = 0;
+    for (const Poly2& l : L)
+        if (l.size() >= 3 && engine::pointInPolygon(l, p)) c ^= 1;
+    return c != 0;
+}
+
+static bool segCross(const Vec2& a, const Vec2& b, const Vec2& c, const Vec2& d, Real& t) {
+    const Vec2 r = b - a, s = d - c;
+    const Real den = engine::cross(r, s);
+    if (std::fabs(den) < 1e-12) return false;
+    const Real tt = engine::cross(c - a, s) / den;
+    const Real uu = engine::cross(c - a, r) / den;
+    if (tt < -1e-9 || tt > 1 + 1e-9 || uu < -1e-9 || uu > 1 + 1e-9) return false;
+    t = std::max(Real(0), std::min(Real(1), tt));
+    return true;
+}
+
+static std::vector<Poly2> polyBool(const std::vector<Poly2>& A,
+                                   const std::vector<Poly2>& B, BOp op) {
+    struct E { Vec2 a, b; int set; };
+    std::vector<E> edges;
+    auto gather = [&](const std::vector<Poly2>& S, int set) {
+        for (const Poly2& p : S) {
+            if (p.size() < 3) continue;
+            for (std::size_t i = 0; i < p.size(); ++i)
+                edges.push_back({p[i], p[(i + 1) % p.size()], set});
+        }
+    };
+    gather(A, 0);
+    gather(B, 1);
+    if (edges.empty()) return {};
+
+    std::vector<std::pair<Vec2, Vec2>> kept;
+    for (const E& e : edges) {
+        std::vector<Real> ts{0.0, 1.0};
+        for (const E& o : edges) {
+            if (o.set == e.set) continue;
+            Real t;
+            if (segCross(e.a, e.b, o.a, o.b, t)) ts.push_back(t);
+        }
+        std::sort(ts.begin(), ts.end());
+        for (std::size_t k = 0; k + 1 < ts.size(); ++k) {
+            if (ts[k + 1] - ts[k] < 1e-7) continue;
+            const Vec2 P = e.a + (e.b - e.a) * ts[k];
+            const Vec2 Q = e.a + (e.b - e.a) * ts[k + 1];
+            const Vec2 mid = (P + Q) * 0.5;
+            const bool inOther = inLoops(e.set == 0 ? B : A, mid);
+            bool keep = false, flip = false;
+            switch (op) {
+                case BOp::Unite:                       // outside the other side
+                    keep = !inOther; break;
+                case BOp::Intersect:                   // inside the other side
+                    keep = inOther; break;
+                case BOp::Subtract:                    // A outside B; B inside A, reversed
+                    keep = (e.set == 0) ? !inOther : inOther;
+                    flip = (e.set == 1);
+                    break;
+            }
+            if (keep) kept.push_back(flip ? std::make_pair(Q, P) : std::make_pair(P, Q));
+        }
+    }
+    if (kept.empty()) return {};
+
+    // Chain head-to-tail; at a shared vertex take the most-clockwise turn so the
+    // walk hugs the boundary instead of cutting across it.
+    const Real tol = 1e-4;
+    auto key = [&](const Vec2& v) {
+        return std::make_pair(static_cast<long long>(std::llround(v.x / tol)),
+                              static_cast<long long>(std::llround(v.y / tol)));
+    };
+    std::map<std::pair<long long, long long>, std::vector<int>> byStart;
+    for (int i = 0; i < static_cast<int>(kept.size()); ++i)
+        byStart[key(kept[i].first)].push_back(i);
+    std::vector<char> used(kept.size(), 0);
+    std::vector<Poly2> loops;
+    for (int s = 0; s < static_cast<int>(kept.size()); ++s) {
+        if (used[s]) continue;
+        Poly2 loop;
+        int cur = s;
+        while (cur != -1 && !used[cur]) {
+            used[cur] = 1;
+            loop.push_back(kept[cur].first);
+            const Vec2 din = engine::normalize(kept[cur].second - kept[cur].first);
+            int next = -1;
+            Real best = -1e9;
+            auto it = byStart.find(key(kept[cur].second));
+            if (it != byStart.end()) {
+                for (int cand : it->second) {
+                    if (used[cand]) continue;
+                    const Vec2 dout = engine::normalize(kept[cand].second - kept[cand].first);
+                    const Real ang = std::atan2(engine::cross(din, dout), engine::dot(din, dout));
+                    if (-ang > best) { best = -ang; next = cand; }
+                }
+            }
+            cur = next;
+        }
+        if (loop.size() >= 3 && engine::area(loop) > 1e-3) loops.push_back(loop);
+    }
+    return loops;
+}
+
+// Fold a pile of polygons together with one op.
+static std::vector<Poly2> polyBoolAll(std::vector<Poly2> acc,
+                                      const std::vector<Poly2>& more, BOp op) {
+    for (const Poly2& p : more) acc = polyBool(acc, {p}, op);
+    return acc;
+}
+
 // --- Sampled-field path ---------------------------------------------------
 //
 // The robust complement (plan §3.3): booleans are min/max, offsets are an iso
@@ -466,6 +590,29 @@ static Arc2 filletCorners(const Arc2& in, const std::vector<Real>& radii) {
 }
 static Arc2 filletAllCorners(const Arc2& in, Real r) {
     return filletCorners(in, std::vector<Real>(in.size(), r));
+}
+
+// Orient a set of contour loops by NESTING rather than by winding: a loop
+// contained in an even number of others is an outer ring (forced CCW), an odd
+// number makes it a hole (forced CW). Marching squares hands back whatever
+// direction its cell walk happened to produce, so the winding sign it returns
+// says nothing — this is what makes a field result interchangeable with an
+// exact-boolean result downstream.
+static std::vector<Poly2> orientByNesting(std::vector<Poly2> loops) {
+    for (std::size_t i = 0; i < loops.size(); ++i) {
+        if (loops[i].size() < 3) continue;
+        int depth = 0;
+        for (std::size_t j = 0; j < loops.size(); ++j) {
+            if (i == j || loops[j].size() < 3) continue;
+            if (engine::area(loops[j]) > engine::area(loops[i]) &&
+                engine::pointInPolygon(loops[j], loops[i][0]))
+                ++depth;
+        }
+        const bool wantCCW = (depth % 2) == 0;
+        if ((engine::signedArea(loops[i]) > 0) != wantCCW)
+            std::reverse(loops[i].begin(), loops[i].end());
+    }
+    return loops;
 }
 
 // --- Polygon helpers ------------------------------------------------------
@@ -1391,6 +1538,154 @@ static void sheetPlans(const char* dir, uint32_t seed) {
 }
 
 // ---------------------------------------------------------------------------
+// Sheet 5 — THE COMPOSITION TEST. Do the pieces actually work together? Start
+// from a pentagon, grow a wing off every wall, cap the wings with drums, weld
+// the joints with a smooth-min field, and subtract a court from the middle.
+// Exact loop algebra and the sampled field, on one shape, in one pipeline.
+// ---------------------------------------------------------------------------
+
+// Exact signed distance to a simple polygon: nearest point on the boundary,
+// signed by containment. Works for any simple polygon, convex or not.
+static Real sdfPolyAt(const Poly2& p, const Vec2& q) {
+    Real best = 1e30;
+    for (std::size_t i = 0; i < p.size(); ++i) {
+        const Vec2& a = p[i];
+        const Vec2& b = p[(i + 1) % p.size()];
+        const Vec2 ab = b - a;
+        const Real l2 = ab.lengthSquared();
+        Real t = l2 > 1e-12 ? engine::dot(q - a, ab) / l2 : 0;
+        t = std::max(Real(0), std::min(Real(1), t));
+        best = std::min(best, (q - (a + ab * t)).length());
+    }
+    return engine::pointInPolygon(p, q) ? -best : best;
+}
+// Polynomial smooth minimum — the WELD. k is the blend radius in metres, so a
+// joint gets a real fillet instead of a crease.
+static Real smoothMin(Real a, Real b, Real k) {
+    if (k <= 1e-6) return std::min(a, b);
+    const Real h = std::max(Real(0), std::min(Real(1), 0.5 + 0.5 * (b - a) / k));
+    return b * (1 - h) + a * h - k * h * (1 - h);
+}
+
+static Poly2 regularPoly(const Vec2& c, Real r, int n, Real rot) {
+    Poly2 p;
+    for (int i = 0; i < n; ++i) {
+        const Real t = rot + kTau * i / n;
+        p.push_back(Vec2(c.x + r * std::cos(t), c.y + r * std::sin(t)));
+    }
+    return p;
+}
+
+static void sheetCompose(const char* dir, uint32_t seed) {
+    // --- the pieces -------------------------------------------------------
+    const Vec2 O(0, 0);
+    const Real R = 13.0;
+    const Poly2 pent = regularPoly(O, R, 5, -kTau * 0.25);
+
+    std::vector<Poly2> wings, drums;
+    for (std::size_t i = 0; i < pent.size(); ++i) {
+        const Vec2 a = pent[i], b = pent[(i + 1) % pent.size()];
+        const Vec2 u = engine::normalize(b - a);
+        const Vec2 n(u.y, -u.x);                 // outward: right of a CCW edge
+        const Vec2 m = (a + b) * 0.5;
+        const Real hw = 3.1, depth = 7.5;
+        Poly2 w{m - u * hw - n * 1.5, m + u * hw - n * 1.5,
+                m + u * hw + n * depth, m - u * hw + n * depth};
+        if (engine::signedArea(w) < 0) std::reverse(w.begin(), w.end());
+        wings.push_back(w);
+        drums.push_back(regularPoly(m + n * depth, 4.2, 28, 0));
+    }
+    const Poly2 court = regularPoly(O, R * 0.46, 5, -kTau * 0.25 + kTau * 0.1);
+
+    // --- exact path -------------------------------------------------------
+    std::vector<Poly2> step1{pent};
+    std::vector<Poly2> step2 = polyBoolAll(step1, wings, BOp::Unite);
+    std::vector<Poly2> step3 = polyBoolAll(step2, drums, BOp::Unite);
+    std::vector<Poly2> step5 = polyBool(step3, {court}, BOp::Subtract);
+
+    // --- field path: the same pieces, welded ------------------------------
+    auto buildField = [&](Real k, bool cut) {
+        Field f = fieldMake(Vec2(-30, -30), Vec2(30, 30), 0.14);
+        std::vector<const Poly2*> all{&pent};
+        for (const Poly2& w : wings) all.push_back(&w);
+        for (const Poly2& d : drums) all.push_back(&d);
+        for (int j = 0; j < f.ny; ++j)
+            for (int i = 0; i < f.nx; ++i) {
+                const Vec2 q = f.pos(i, j);
+                Real d = 1e30;
+                for (const Poly2* s : all) d = smoothMin(d, sdfPolyAt(*s, q), k);
+                if (cut) d = std::max(d, -sdfPolyAt(court, q));   // SDF subtract
+                f.d[static_cast<std::size_t>(j) * f.nx + i] = d;
+            }
+        return f;
+    };
+
+    struct Panel {
+        const char* t;
+        const char* d;
+        std::vector<Poly2> loops;
+        bool field = false;
+    };
+    std::vector<Panel> panels;
+    panels.push_back({"1 · seed", "a pentagon — the starting shape", step1, false});
+    panels.push_back({"2 · wings", "one wing pushed off every wall (exact union)", step2, false});
+    panels.push_back({"3 · drums", "a circle joined to each wing end (exact union)", step3, false});
+    panels.push_back({"4 · welded", "same pieces, smooth-min field: joints fillet",
+                      orientByNesting(fieldContour(buildField(2.6, false))), true});
+    panels.push_back({"5 · court cut", "inner pentagon subtracted (exact boolean)", step5, false});
+    panels.push_back({"6 · composite", "welded mass minus the court — one pipeline",
+                      orientByNesting(fieldContour(buildField(2.6, true))), true});
+
+    const Real cellW = 400, cellH = 400;
+    const int cols = 3, rows = 2;
+    Svg s;
+    svgOpen(s, (std::string(dir) + "/compose.svg").c_str(), cellW * cols + 60,
+            cellH * rows + 170, "Lot Lab — do the pieces compose?");
+    s.textPx(28, 68, "Pentagon -> a wing off every wall -> drums on the wing ends -> smooth-min "
+                     "weld -> subtract a court. Steps 1/2/3/5 are the EXACT arbitrary-angle "
+                     "boolean; 4 and 6 are the sampled field. Same shapes, one pipeline.",
+             12, "#6b7280");
+
+    const Real drawW = cellW - 90, drawH = 250;
+    for (std::size_t i = 0; i < panels.size(); ++i) {
+        const int cx = static_cast<int>(i) % cols, cy = static_cast<int>(i) / cols;
+        const Real bx = 40 + cx * cellW + 30, by = 118 + cy * cellH;
+        s.scale = std::min(drawW / 62.0, drawH / 62.0);
+        s.ox = bx + drawW * 0.5;
+        s.oy = by + drawH * 0.5;
+
+        // Ghost the input pieces behind the result, so each step SHOWS its move.
+        if (i >= 1 && i <= 3) {
+            for (std::size_t k = 0; k < wings.size(); ++k) {
+                if (i >= 2) s.poly(wings[k], "none", "#c9c3b4", 0.8, "stroke-dasharray=\"3 3\"");
+                if (i >= 3) s.poly(drums[k], "none", "#c9c3b4", 0.8, "stroke-dasharray=\"3 3\"");
+            }
+        }
+        if (i == 4 || i == 5) s.poly(court, "none", "#d3a08e", 1.0, "stroke-dasharray=\"4 3\"");
+
+        Real ar = 0;
+        int holes = 0;
+        for (const Poly2& l : panels[i].loops) {
+            const bool hole = engine::signedArea(l) < 0;
+            if (hole) ++holes;
+            s.poly(l, hole ? "#faf8f3" : "#b9c0cc", "#232a36", 2.0);
+            ar += hole ? -engine::area(l) : engine::area(l);
+        }
+        char buf[192];
+        snprintf(buf, sizeof buf, "%s", panels[i].t);
+        s.textPx(bx, by + drawH + 44, buf, 14, "#1d2430", "start", "600");
+        snprintf(buf, sizeof buf, "%s", panels[i].d);
+        s.textPx(bx, by + drawH + 61, buf, 11, "#6b7280");
+        snprintf(buf, sizeof buf, "%.0f m2  ·  %d loop(s), %d hole(s)  ·  %s",
+                 ar, static_cast<int>(panels[i].loops.size()), holes,
+                 panels[i].field ? "sampled field" : "exact boolean");
+        s.textPx(bx, by + drawH + 76, buf, 10, "#9aa1ad");
+    }
+    (void)seed;
+    svgClose(s);
+}
+
+// ---------------------------------------------------------------------------
 // Sheet 4 — MIXED CURVED / STRAIGHT PLANS. Every one of these is a single loop
 // where some edges are lines and some are true circular arcs. Straight walls
 // stay crisp; curved walls are exact, not sampled and not bezier-faked.
@@ -1598,6 +1893,7 @@ int main(int argc, char** argv) {
     lab::sheetPlans(out, seed);
     lab::sheetShapes(out, seed);
     lab::sheetCurves(out, seed);
-    printf("lot_lab: wrote %s/{lots,plans,shapes,curves}.svg (seed %u)\n", out, seed);
+    lab::sheetCompose(out, seed);
+    printf("lot_lab: wrote %s/{lots,plans,shapes,curves,compose}.svg (seed %u)\n", out, seed);
     return 0;
 }

@@ -573,8 +573,8 @@ later phase encodes assumptions about what the kernel can express.
 them out of the vocabulary above — `Region` with holes, the exact rectilinear
 boolean, the sampled-field path, per-edge setbacks, the plan grammar, the
 subtractive zone allocation, prop dart-throwing, gates placed where a path
-crosses a boundary — and writes four sheets: `lots.svg`, `plans.svg`,
-`shapes.svg`, `curves.svg`.
+crosses a boundary — and writes five sheets: `lots.svg`, `plans.svg`,
+`shapes.svg`, `curves.svg`, `compose.svg`.
 
 ```sh
 c++ -std=c++17 -O1 tools/lot_lab.cpp \
@@ -619,6 +619,34 @@ Findings from the first pass, already folded back into this document:
 * Corner filleting must run on the **orthogonal ring**, before rounding, and
   each tier must be rounded on its own radius. Insetting an already-rounded
   ring feeds chord joints to the miter limit and the tier outline crumples.
+
+### 15.1 The composition test (`compose.svg`)
+
+The question the whole design rests on: do the pieces actually compose? The
+sheet runs one pipeline end to end — a pentagon, a wing pushed off every wall,
+a drum joined to each wing end, a smooth-min weld, and a court subtracted from
+the middle. It works, and three things came out of it:
+
+* **The keep-rule claim (§3.2) holds.** `polygonUnion`'s method generalizes to
+  subtract and intersect exactly as predicted: split every edge at its
+  crossings, classify sub-edges by midpoint containment, and change only
+  *which* side you keep — plus reverse the clip's survivors for subtract so the
+  hole winds the other way. ~90 lines, and it handles the pentagon's 72° walls
+  that the rectilinear tracer cannot touch. **The exact path does not need to
+  be axis-aligned**, which retires the biggest open risk in P0.
+* **Marching-squares winding is not a hole flag.** The cell walk emits loops in
+  whatever direction it happened to produce, so a field result rendered as an
+  unfilled hole while the identical exact result rendered solid. Classify by
+  **nesting depth** instead (even = outer, odd = hole) and force the winding.
+  This is a hard interop requirement: the two kernel paths must be
+  interchangeable downstream, so the field path has to normalize before
+  handing anything on.
+* **The weld is not area-preserving.** Smooth-min *adds* material in every
+  joint — 793 m² of hard union became 825 m² welded at k = 2.6, about +4%.
+  Coverage and FAR must therefore be measured on the **finished** plan, not on
+  the union of the pieces that made it, or a program that asks for 26% will
+  quietly deliver more. The site layer should compute coverage after massing,
+  not before.
 
 ## 16. Relationship to existing docs
 
