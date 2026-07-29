@@ -567,7 +567,42 @@ later phase encodes assumptions about what the kernel can express.
 
 ---
 
-## 15. Relationship to existing docs
+## 15. The Lot Lab — the review loop for all of this
+
+`tools/lot_lab.cpp` draws site plans and floorplans top-down as SVG. It builds
+them out of the vocabulary above — `Region` with holes, the exact rectilinear
+boolean, the sampled-field path, per-edge setbacks, the plan grammar, the
+subtractive zone allocation, prop dart-throwing, gates placed where a path
+crosses a boundary — and writes three sheets: `lots.svg`, `plans.svg`,
+`shapes.svg`.
+
+```sh
+c++ -std=c++17 -O1 tools/lot_lab.cpp \
+    src/engine/procgen/city/polygon.cpp -o /tmp/lot_lab
+OUT=/tmp /tmp/lot_lab 7          # seed 7
+```
+
+This matters more than it looks. The subsystem's core bottleneck (§13) is that
+verification needs a Metal build, so anything visual gets written blind. But
+**the entire 2D layer can be judged on paper** — and that is where the design
+risk actually lives. The lab is the P0 acceptance harness: if a floorplan or a
+site plan is wrong, you see it in a browser in seconds, with no GPU involved.
+
+Findings from the first pass, already folded back into this document:
+
+* A plan is legitimately **several disjoint masses** (an office park's two
+  blocks). Returning only the largest region silently drops the rest — the
+  kernel's plan-finish must return them all.
+* `insetEdges` needs the same **miter limit** `offsetPlan` already documents:
+  without it the chord joints of a rounded ring fly off and the tier outline
+  grows spikes. The existing code's scar tissue is load-bearing.
+* Rounding by **quadratic bezier is not a true arc** — the r=8 "circle" in
+  `shapes.svg` is visibly not circular. This is the concrete argument for arc
+  (bulge) edges as a first-class kernel type rather than eager tessellation.
+* Ops must push off the **current mass**, not the envelope; referencing the
+  envelope makes every outset a no-op once the clip runs.
+
+## 16. Relationship to existing docs
 
 * **Supersedes** `building-floorplan-plan.md` (its `FloorPlan`/`PlanEdge` design
   is absorbed and extended into `Shape2` with holes, arcs and edge tags).
