@@ -11,7 +11,13 @@
 #   2. PIN THE CAMERA. The viewer persists its camera on exit, so a repeated
 #      capture silently frames somewhere else — and GPU cost is viewpoint
 #      bound. The camera is written fresh for every run.
-#   3. PRINT THE CENSUS NEXT TO THE FRAMERATE. Workload varies with the sim
+#   3. SAMPLE A FIXED SIM-HOUR WINDOW. Wall time is not comparable: a slower
+#      run drops more clock backlog and so reaches a given hour later, and the
+#      workload swings hugely across the day (everyone parked downtown vs
+#      everyone spread across the network). Runs are sampled between
+#      RT_PERF_HOUR_FROM and RT_PERF_HOUR_TO of SIM time, so two runs cover
+#      the same slice of the city's day.
+#   4. PRINT THE CENSUS NEXT TO THE FRAMERATE. Workload varies with the sim
 #      hour (rush hour costs more than mid-afternoon). A comparison whose
 #      active/far/moving counts disagree is INVALID, not interesting — the
 #      summary puts them side by side so that is obvious.
@@ -37,7 +43,14 @@ VIEWER="./build/viewer"
 OUT="/tmp/piedmont_perf"
 LOG="$OUT/$LABEL.log"
 BUILD_WAIT="${RT_PERF_BUILD_WAIT:-900}"   # seconds to allow for the city build
-MEASURE="${RT_PERF_MEASURE:-90}"          # seconds of steady-state sampling
+MEASURE="${RT_PERF_MEASURE:-90}"          # wall-clock cap on the sampling window
+# The window is RELATIVE to whatever hour the city comes up at (the build
+# takes minutes, during which the clock runs), and wide enough to contain
+# several stats prints: 0.05 sim-hours per real second, so 2 sim-hours is
+# ~40 s of frames at full speed and proportionally longer when slow — the
+# same SIMULATED slice either way, which is the whole point.
+HOUR_LEAD="${RT_PERF_HOUR_LEAD:-0.5}"     # settle this many sim-hours first
+HOUR_SPAN="${RT_PERF_HOUR_SPAN:-2.0}"     # then sample this many sim-hours
 
 mkdir -p "$OUT"
 [ -x "$VIEWER" ] || { echo "error: $VIEWER not built"; exit 1; }
@@ -86,11 +99,26 @@ for _ in $(seq 1 "$BUILD_WAIT"); do
 done
 [ "$built" = 1 ] || { echo "[perf] TIMEOUT: city never built — result would be meaningless"; exit 1; }
 
-# 2. Discard the build-transient frames, then sample steady state.
-echo "[perf] $LABEL: city up; settling, then sampling ${MEASURE}s..."
-sleep 15
+# 2. WAIT FOR THE SIM HOUR, then sample until it leaves the window. This is
+#    what makes two runs the same experiment rather than two different days.
+simhour() { grep -o "| hour [0-9.]*" "$LOG" 2>/dev/null | tail -1 | awk '{print $3}'; }
+H0=""
+for _ in $(seq 1 60); do H0=$(simhour); [ -n "$H0" ] && break; sleep 1; done
+[ -n "$H0" ] || { echo "[perf] the sim never reported an hour — INVALID"; exit 1; }
+FROM=$(awk "BEGIN{print $H0 + $HOUR_LEAD}")
+TO=$(awk "BEGIN{print $FROM + $HOUR_SPAN}")
+echo "[perf] $LABEL: city up at hour $H0; sampling sim hours $FROM -> $TO"
+for _ in $(seq 1 "$MEASURE"); do
+  kill -0 "$PID" 2>/dev/null || break
+  h=$(simhour); [ -n "$h" ] && awk "BEGIN{exit !($h >= $FROM)}" && break
+  sleep 1
+done
 MARK=$(wc -l < "$LOG" | tr -d " ")   # macOS pads wc output
-sleep "$MEASURE"
+for _ in $(seq 1 "$MEASURE"); do
+  kill -0 "$PID" 2>/dev/null || break
+  h=$(simhour); [ -n "$h" ] && awk "BEGIN{exit !($h >= $TO)}" && break
+  sleep 1
+done
 kill "$PID" 2>/dev/null; wait "$PID" 2>/dev/null
 PID=""
 
@@ -108,6 +136,7 @@ def nums(pat, cast=float):
 census = [ (int(a), int(b), int(c)) for a, b, c in
            re.findall(r"active\(K/P\) (\d+), far\(V\) (\d+), moving (\d+)",
                       "\n".join(rows)) ]
+hours = nums(r"\| hour ([\d.]+)")
 fps   = nums(r"\[stats\] ([\d.]+) fps")
 tris  = nums(r"tris ([\d.]+)M")
 gpu   = nums(r"avg frame ([\d.]+) ms")
@@ -126,4 +155,7 @@ print(f"  gpu       {med(gpu)} ms")
 print(f"  fixed     {med(fixed)} ms/frame over {med(steps)} steps/frame")
 print(f"  sim step  {med(sim)} ms")
 print(f"  triangles {med(tris)}M")
+if hours:
+    print(f"  sim hour  {min(hours):.2f} -> {max(hours):.2f}   "
+          f"<-- two runs are only comparable over the SAME slice")
 PY

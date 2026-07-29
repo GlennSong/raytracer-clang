@@ -301,6 +301,11 @@ public:
     // Sim seconds banked since the last tick — what a renderer extrapolates
     // poses by so traffic stays smooth at rates below the frame rate.
     Real secondsSinceTick() const { return sinceTick_; }
+    // The sim's time of day. Two runs can only be compared at the SAME sim
+    // hour: the workload (who is commuting, who is parked, and therefore who
+    // sits in the player's bubble) swings enormously across the day, and a
+    // slower run reaches a given hour later in wall time.
+    Real clockHours() const { return clockHours_; }
 
     void setTierCenter(engine::Vec2 c) { tierCenter_ = c; haveTierCenter_ = true; }
     void clearTierCenter() { haveTierCenter_ = false; }

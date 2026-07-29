@@ -1499,7 +1499,8 @@ void CityRenderSystem::step(World& world, Real dt) {
         }
         LOG_INFO << "[stats] citysim step " << (simMs / calls)
                  << " ms, group sync " << (syncMs / calls)
-                 << " ms (per fixed step) | active(K/P) " << kTier
+                 << " ms (per fixed step) | hour " << sim_.clockHours()
+                 << " | active(K/P) " << kTier
                  << ", far(V) " << vTier << ", moving " << moving;
         simMs = syncMs = 0.0;
         calls = 0;
