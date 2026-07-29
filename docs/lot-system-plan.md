@@ -573,9 +573,9 @@ later phase encodes assumptions about what the kernel can express.
 them out of the vocabulary above — `Region` with holes, the exact rectilinear
 boolean, the sampled-field path, per-edge setbacks, the plan grammar, the
 subtractive zone allocation, prop dart-throwing, gates placed where a path
-crosses a boundary — and writes eight sheets: `lots.svg`, `plans.svg`,
+crosses a boundary — and writes nine sheets: `lots.svg`, `plans.svg`,
 `shapes.svg`, `curves.svg`, `compose.svg`, `blueprint.svg`, `stack.svg`,
-`recipes.svg`.
+`recipes.svg`, `corner.svg`.
 
 ```sh
 c++ -std=c++17 -O1 tools/lot_lab.cpp \
@@ -823,6 +823,103 @@ city: recipes get schema-validated at load with a named fallback, and overrides
 stay pure (no RNG of their own) so determinism holds. The current `styleHook`
 bug — the style book applied *after* `capFloors`, so a data override can exceed
 the slenderness cap — is exactly the failure mode of skipping this.
+
+### 15.6 Context facts: corners, heights, lofts (`corner.svg`)
+
+**Where does "is this a corner?" come from?** Not from the building, and not
+derivable from its plan. It is a fact about **the parcel's place in the block** —
+what lies on the far side of each of its edges. The parceller just cut the
+block, so it is the only pass that knows, and it tags each edge as it emits it:
+
+| Tag | Meaning | Set when |
+|---|---|---|
+| `street` | faces a carriageway | the edge lies on the block boundary |
+| `rear` | faces the block core | the edge lies on the interior ring |
+| `party` | shares a wall with a neighbour | the edge is shared with another parcel |
+| `court` | faces an interior court | the edge bounds a block court |
+
+Then the classification is exact and needs no heuristics:
+
+* **corner** — two *adjacent* street edges
+* **through** — two *opposite* street edges (street front, lane behind)
+* **mid-block** — one
+* **island** — all of them
+
+**The diagonal corner entrance** then falls out of three layers each doing one
+job: the plan grammar's `chamfer(vertex, d)` *makes* the edge; the parceller's
+tag makes it **addressable**; and the fenestration table puts the door on it —
+`{ on = "edge:corner_chamfer", strategy = "storefront", door = true }`. No
+special case anywhere, and the same context can be answered differently by a
+different recipe (panel 4 puts wrapped corner *glazing* there instead). **The
+context is a fact; the response is a recipe choice.**
+
+**Where do floor heights come from?** A building is a list of **storey bands**,
+and height belongs to the band:
+
+```lua
+stack = {
+  { role="retail",  storeys=1,  height=5.4, plan="podium" },
+  { role="lobby",   storeys=1,  height=4.2, plan="podium" },
+  { role="parking", storeys=3,  height=3.0, plan="podium" },
+  { role="office",  storeys=9,  height=3.9, plan="shaft",
+                    loft_to="shaft_top", twist=0.30 },
+  { role="plant",   storeys=1,  height=4.6, plan="shaft"  },
+  { role="crown",   storeys=2,  height=5.0, plan="crown"  },
+}
+```
+
+That one tower carries five different floor-to-floor heights. `floorHeight` +
+`groundHeight` can express exactly two of them — which is why every generated
+tower today has one lobby height and one repeat height, forever.
+
+**Where does the loft structure come from?** The same place: it is a *band
+property*. `loft_to` names the plan to morph toward across the band, `twist` is
+the total rotation over it, and a profile curve can bend the parameter. Nine
+office floors resolve to nine storey plans. Bands without `loft_to` stay
+prismatic and share one plan — which is the level-run optimisation, expressed
+as data rather than as a special case.
+
+### 15.7 Does this retire the 45 booleans?
+
+Yes — and it is worth being precise, because this is the structural claim.
+Every field of today's `BuildingParams` lands in one of five tables:
+
+| Table | Absorbs (from `BuildingParams`) |
+|---|---|
+| **Stack** | `floors`, `floorHeight`, `groundHeight`, `groundRetail`, `setbackEvery`, `setbackFloors` |
+| **Fenestration** | `bayWidth`, `windowInset`, `curtainWall`, `solidFacade`, `retailStreetOnly`, `groundBays`, `sideBays`, and all seven `window.*` fields |
+| **Elements** | `baseCourse`, `stringCourse`, `pilasters`, `awning`, `quoins`, `portico`, `entranceSteps`, `dome`, `balconies`, `porch`, `chimney`, `spire`, `steeple`, `parkingDecks` |
+| **Palette** | `wallColor`, `trimColor`, `wallPart`, `window.frameColor` |
+| **Roof rule** | `roofStyle`, `roofPitch` (a rule on the top band) |
+
+Three fields don't move into a table — they **disappear**: `shape`, `tiers` and
+`sides`. "Cylinder" and "pagoda" stop being enum values the mesher switches on
+and become *plans and stacks*, which is why the `BoxMass` workaround (a recipe
+deliberately failing plan massing so a shape enum can dispatch) has nothing left
+to work around.
+
+One field is **replaced by something strictly better**: `faceDir` — a single
+direction the lot pass computes and pushes into the params — becomes the
+parcel's per-edge tags, which distinguish street from side from rear from party
+rather than collapsing all four into one vector.
+
+Four genuinely stay as scalars: `wallThickness`, `parapet`, `walkableGround`,
+`seed`.
+
+**What "more complete" actually means:** the number of tables does not grow when
+you add architecture — only the number of *entries* does. Today every new
+architectural idea costs a struct field, a branch in two grow functions, and a
+test; the marginal cost of variety rises forever. After this, a new style costs
+a file.
+
+**The honest bound.** The *strategies* (`punched`, `plate`, `curtain`, …) and
+the *element kinds* (portico, balcony, cornice, …) remain closed sets in C++.
+That is deliberate — they are the verbs — but it means the system is only as
+expressive as that vocabulary. Choosing it well is the real design work, and it
+is why the recipe-porting exercise (reinterpreting the existing ~40 architect
+recipes as tables) should happen *before* the vocabulary is frozen: anything the
+40 cannot express is a missing verb, and that is exactly what we want to find
+out early.
 
 ## 16. Relationship to existing docs
 

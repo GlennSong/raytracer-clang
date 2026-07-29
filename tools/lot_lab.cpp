@@ -1951,6 +1951,357 @@ static void drawBlueprint(Svg& s, const Poly2& plan, Real t,
     }
 }
 
+// ===========================================================================
+// LOT CONTEXT — where "is this a corner?" actually comes from.
+//
+// Cornerness is NOT a property of the building, and it is not derivable from
+// the plan. It is a fact about the PARCEL'S PLACE IN THE BLOCK: what lies on
+// the far side of each of its edges. The parcelling pass knows that (it just
+// cut the block), so it tags every parcel edge as it emits it, and everything
+// downstream — the plan grammar, the fenestration table, the architect's
+// recipe pick — selects on the tag instead of re-deriving it.
+//
+// This is the piece that makes `EdgeTag` more than a label: the tag has a
+// SOURCE, and the source is the only place that can know.
+// ===========================================================================
+
+enum class LotShape : uint8_t {
+    MidBlock,    // one street frontage
+    Corner,      // two ADJACENT street frontages — the interesting case
+    Through,     // two OPPOSITE frontages (street front, lane behind)
+    Island,      // street on every side
+};
+
+struct LotContext {
+    LotShape shape = LotShape::MidBlock;
+    std::vector<WallRole> roles;    // per edge, from the block topology
+    int cornerVertex = -1;          // the vertex where two street edges meet
+    Real cornerAngle = 0;           // interior angle there (radians)
+    int frontages = 0;
+};
+
+// Tag each parcel edge by what is across it, then classify the parcel. `onBlock`
+// answers "does this point sit on the block's street boundary", `onCore`
+// "…on the block's interior core" — both trivially known to the parceller.
+static LotContext classifyLot(const Poly2& lot,
+                              const std::function<bool(const Vec2&)>& onBlock,
+                              const std::function<bool(const Vec2&)>& onCore) {
+    LotContext c;
+    const std::size_t n = lot.size();
+    c.roles.assign(n, WallRole::Party);
+    for (std::size_t i = 0; i < n; ++i) {
+        const Vec2 m = (lot[i] + lot[(i + 1) % n]) * 0.5;
+        if (onBlock(m))      { c.roles[i] = WallRole::Street; ++c.frontages; }
+        else if (onCore(m))  { c.roles[i] = WallRole::Rear; }
+        else                 { c.roles[i] = WallRole::Party; }
+    }
+    // Two ADJACENT street edges meet at a corner; two opposite ones make a
+    // through lot. The distinction matters: only the first can be chamfered.
+    for (std::size_t i = 0; i < n; ++i) {
+        const std::size_t j = (i + 1) % n;
+        if (c.roles[i] == WallRole::Street && c.roles[j] == WallRole::Street) {
+            c.shape = LotShape::Corner;
+            c.cornerVertex = static_cast<int>(j);
+            const Vec2 d0 = engine::normalize(lot[j] - lot[i]);
+            const Vec2 d1 = engine::normalize(lot[(j + 1) % n] - lot[j]);
+            c.cornerAngle = kTau * 0.5 - std::atan2(engine::cross(d0, d1),
+                                                    engine::dot(d0, d1));
+            break;
+        }
+    }
+    if (c.shape != LotShape::Corner) {
+        if (c.frontages >= static_cast<int>(n)) c.shape = LotShape::Island;
+        else if (c.frontages >= 2)              c.shape = LotShape::Through;
+    }
+    return c;
+}
+
+// CHAMFER the corner: replace the vertex with a cut edge, and TAG that new edge
+// street — it faces the junction. This is why the doorway can land on it: the
+// plan grammar produces the edge, the tag makes it addressable, and the
+// fenestration table puts the entrance there. Three layers, no special case.
+static Poly2 chamferCorner(const Poly2& in, std::vector<WallRole>& roles,
+                           std::size_t vtx, Real cut) {
+    const std::size_t n = in.size();
+    if (n < 3) return in;
+    const Vec2 P = in[(vtx + n - 1) % n], V = in[vtx], N = in[(vtx + 1) % n];
+    const Vec2 d0 = engine::normalize(V - P), d1 = engine::normalize(N - V);
+    const Real c = std::min(cut, std::min((V - P).length(), (N - V).length()) * 0.45);
+    Poly2 out;
+    std::vector<WallRole> r;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (i == vtx) {
+            out.push_back(V - d0 * c);
+            r.push_back(WallRole::Street);      // the CUT edge faces the junction
+            out.push_back(V + d1 * c);
+            r.push_back(roles[i]);
+        } else {
+            out.push_back(in[i]);
+            r.push_back(roles[i]);
+        }
+    }
+    roles = r;
+    return out;
+}
+
+// ===========================================================================
+// THE STACK SPEC — where floor heights and the loft come from.
+//
+// A building is a list of STOREY BANDS. Height belongs to the band, not to the
+// building: that is what lets one tower carry a 5.2 m lobby, forty 3.9 m office
+// floors, a 4.5 m plant level and a 5 m crown. The current `floorHeight` +
+// `groundHeight` pair can express exactly two of those.
+// ===========================================================================
+
+enum class BandRole : uint8_t { Lobby, Retail, Office, Residential, Plant, Crown, Parking };
+
+struct StoreyBand {
+    BandRole role;
+    int storeys;
+    Real height;              // floor-to-floor for THIS band
+    const char* plan;         // which plan-grammar script this band runs on
+    const char* loftTo;       // nullptr = prismatic; else morph toward that plan
+    Real twist;               // total twist across the band (radians)
+};
+
+static const char* bandName(BandRole r) {
+    switch (r) {
+        case BandRole::Lobby:       return "lobby";
+        case BandRole::Retail:      return "retail";
+        case BandRole::Office:      return "office";
+        case BandRole::Residential: return "residential";
+        case BandRole::Plant:       return "plant";
+        case BandRole::Parking:     return "parking";
+        default:                    return "crown";
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sheet 9 — CORNERS AND STACKS: where the context facts come from.
+// ---------------------------------------------------------------------------
+static std::vector<Poly2> loftPlans(const std::vector<Poly2>& A,
+                                    const std::vector<Poly2>& B, Real t,
+                                    Real twistRad, Real cell);
+
+static void sheetCorner(const char* dir, uint32_t seed) {
+    Svg s;
+    const Real cellW = 430, cellH = 420;
+    const int cols = 3, rows = 2;
+    svgOpen(s, (std::string(dir) + "/corner.svg").c_str(), cellW * cols + 60,
+            cellH * rows + 180, "Lot Lab — corner lots, and where floor heights come from");
+    s.textPx(28, 68, "Cornerness is a fact about the PARCEL'S PLACE IN THE BLOCK, not about the "
+                     "building. The parceller tags each edge by what lies across it; everything "
+                     "downstream selects on the tag.", 12, "#6b7280");
+
+    // --- the block and its parcels ----------------------------------------
+    const Real BW = 62, BD = 42, D = 14;      // block size, lot depth
+    const Poly2 block{Vec2(0, 0), Vec2(BW, 0), Vec2(BW, BD), Vec2(0, BD)};
+    auto onBlock = [&](const Vec2& p) {
+        return p.x < 0.01 || p.y < 0.01 || p.x > BW - 0.01 || p.y > BD - 0.01;
+    };
+    auto onCore = [&](const Vec2& p) {
+        return p.x > D - 0.01 && p.x < BW - D + 0.01 &&
+               p.y > D - 0.01 && p.y < BD - D + 0.01;
+    };
+    std::vector<Poly2> lots;
+    lots.push_back(rectPoly(Rect(0, 0, D, D)));                    // 4 corners
+    lots.push_back(rectPoly(Rect(BW - D, 0, BW, D)));
+    lots.push_back(rectPoly(Rect(BW - D, BD - D, BW, BD)));
+    lots.push_back(rectPoly(Rect(0, BD - D, D, BD)));
+    for (int i = 0; i < 3; ++i) {                                  // top + bottom runs
+        const Real x0 = D + (BW - 2 * D) * i / 3.0, x1 = D + (BW - 2 * D) * (i + 1) / 3.0;
+        lots.push_back(rectPoly(Rect(x0, 0, x1, D)));
+        lots.push_back(rectPoly(Rect(x0, BD - D, x1, BD)));
+    }
+    lots.push_back(rectPoly(Rect(0, D, D, BD - D)));               // side runs
+    lots.push_back(rectPoly(Rect(BW - D, D, BW, BD - D)));
+
+    auto roleColor = [](WallRole r) {
+        switch (r) {
+            case WallRole::Street: return "#c9553d";
+            case WallRole::Rear:   return "#5d8a4c";
+            case WallRole::Party:  return "#7c86a0";
+            default:               return "#999";
+        }
+    };
+
+    // --- 1: the tagged block -----------------------------------------------
+    {
+        s.scale = std::min((cellW - 90) / BW, 250.0 / BD);
+        s.ox = 40 + 34;
+        s.oy = 118 + 20;
+        s.poly(block, "#f2eee5", "#c9c3b4", 1.0, "stroke-dasharray=\"5 4\"");
+        s.poly(rectPoly(Rect(D, D, BW - D, BD - D)), "#e7ecdf", "#c9c3b4", 1.0);
+        int corners = 0;
+        for (const Poly2& L : lots) {
+            const LotContext c = classifyLot(L, onBlock, onCore);
+            const bool isCorner = c.shape == LotShape::Corner;
+            if (isCorner) ++corners;
+            s.poly(L, isCorner ? "#f6e3c8" : "#faf8f3", "none", 0);
+            for (std::size_t i = 0; i < L.size(); ++i)
+                s.line(L[i], L[(i + 1) % L.size()], roleColor(c.roles[i]), 2.2);
+        }
+        char buf[160];
+        s.textPx(40 + 34, 118 + BD * s.scale + 60, "1 · the parceller tags every edge",
+                 14, "#1d2430", "start", "600");
+        snprintf(buf, sizeof buf,
+                 "red = street · green = block core (rear) · blue = neighbour (party)");
+        s.textPx(40 + 34, 118 + BD * s.scale + 77, buf, 10.5, "#6b7280");
+        snprintf(buf, sizeof buf, "%d lots · %d classify as CORNER (two adjacent street edges)",
+                 static_cast<int>(lots.size()), corners);
+        s.textPx(40 + 34, 118 + BD * s.scale + 92, buf, 10, "#9aa1ad");
+    }
+
+    // --- 2: the four contexts ----------------------------------------------
+    {
+        const Real bx = 40 + cellW + 34, by = 118 + 20;
+        struct Ctx { const char* n; std::vector<int> street; };
+        const Ctx kinds[4] = {{"mid-block", {0}}, {"corner", {0, 1}},
+                              {"through", {0, 2}}, {"island", {0, 1, 2, 3}}};
+        for (int k = 0; k < 4; ++k) {
+            const Real ox = bx + (k % 2) * 160, oy = by + (k / 2) * 120;
+            s.scale = 5.2;
+            s.ox = ox;
+            s.oy = oy;
+            const Poly2 L = rectPoly(Rect(0, 0, 16, 12));
+            s.poly(L, "#f6e3c8", "none", 0);
+            for (std::size_t i = 0; i < 4; ++i) {
+                const bool st = std::find(kinds[k].street.begin(), kinds[k].street.end(),
+                                          static_cast<int>(i)) != kinds[k].street.end();
+                s.line(L[i], L[(i + 1) % 4], st ? "#c9553d" : "#7c86a0", st ? 2.6 : 1.6);
+            }
+            s.textPx(ox, oy + 12 * s.scale + 16, kinds[k].n, 11, "#4b5563", "start", "600");
+        }
+        s.textPx(bx, by + 250, "2 · four contexts, one test", 14, "#1d2430", "start", "600");
+        s.textPx(bx, by + 267, "adjacent street edges = corner; opposite = through",
+                 10.5, "#6b7280");
+        s.textPx(bx, by + 282, "computable at parcel time, exact, no heuristics", 10, "#9aa1ad");
+    }
+
+    // --- 3: the chamfered corner entrance ----------------------------------
+    {
+        const Real bx = 40 + 2 * cellW + 34, by = 118 + 20;
+        Poly2 lot = rectPoly(Rect(0, 0, 15, 13));
+        std::vector<WallRole> roles{WallRole::Street, WallRole::Party,
+                                    WallRole::Rear, WallRole::Street};
+        // The corner is vertex 0 — where edge 3 (street) meets edge 0 (street).
+        lot = chamferCorner(lot, roles, 0, 3.6);
+        FenRecipe rec{"corner shop", "", {
+            {WallRole::Street, Fen::Storefront, 0, 0, 0, 0.25, 2.9, false},
+            {WallRole::Party,  Fen::Blank},
+            {WallRole::Rear,   Fen::Punched, 3.0, 1.0, 0, 1.2, 2.4, false}}, 0.0};
+        std::vector<Opening> ops = fenestrate(lot, roles, rec);
+        // The door goes on the CHAMFER — addressable because it carries a tag.
+        for (std::size_t i = 0; i < lot.size(); ++i) {
+            if (i != 0) continue;
+            const Real len = (lot[1] - lot[0]).length();
+            ops.erase(std::remove_if(ops.begin(), ops.end(),
+                                     [](const Opening& o) { return o.edge == 0; }),
+                      ops.end());
+            ops.push_back({0, len * 0.5 - 1.1, len * 0.5 + 1.1, true, -1, 0.0, 2.4});
+        }
+        s.scale = 15.0;
+        s.ox = bx + 10;
+        s.oy = by + 10;
+        drawBlueprint(s, lot, 0.32, ops);
+        for (std::size_t i = 0; i < lot.size(); ++i)
+            s.line(lot[i], lot[(i + 1) % lot.size()], roleColor(roles[i]), 1.8);
+        s.textPx(bx, by + 13 * s.scale + 74, "3 · diagonal corner entrance", 14,
+                 "#1d2430", "start", "600");
+        s.textPx(bx, by + 13 * s.scale + 91,
+                 "chamfer(vertex) makes the edge; the tag makes it addressable",
+                 10.5, "#6b7280");
+        s.textPx(bx, by + 13 * s.scale + 106,
+                 "door selector: on = \"edge:corner_chamfer\"", 10, "#9aa1ad");
+    }
+
+    // --- 4: same lot, different recipe answer ------------------------------
+    {
+        const Real bx = 40 + 34, by = 118 + cellH;
+        const Poly2 lot = rectPoly(Rect(0, 0, 15, 13));
+        std::vector<WallRole> roles{WallRole::Street, WallRole::Party,
+                                    WallRole::Rear, WallRole::Street};
+        FenRecipe rec{"modern corner", "", {
+            {WallRole::Street, Fen::Plate, 0, 0, 1.6, 0.45, 2.7, true},
+            {WallRole::Party,  Fen::Blank},
+            {WallRole::Rear,   Fen::Plate, 0, 0, 1.4, 0.45, 2.7, false}}, 2.6, 0.45, 2.7};
+        const std::vector<Opening> ops = fenestrate(lot, roles, rec);
+        s.scale = 15.0;
+        s.ox = bx + 10;
+        s.oy = by + 30;
+        drawBlueprint(s, lot, 0.32, ops);
+        for (std::size_t i = 0; i < lot.size(); ++i)
+            s.line(lot[i], lot[(i + 1) % lot.size()], roleColor(roles[i]), 1.8);
+        s.textPx(bx, by + 13 * s.scale + 94, "4 · same corner, other recipe", 14,
+                 "#1d2430", "start", "600");
+        s.textPx(bx, by + 13 * s.scale + 111,
+                 "corner GLAZING instead of a chamfer — one context, two answers",
+                 10.5, "#6b7280");
+        s.textPx(bx, by + 13 * s.scale + 126,
+                 "the context is a fact; the response is a recipe choice", 10, "#9aa1ad");
+    }
+
+    // --- 5: storey bands ----------------------------------------------------
+    {
+        const Real bx = 40 + cellW + 34, by = 118 + cellH + 20;
+        const StoreyBand kStack[] = {
+            {BandRole::Retail, 1, 5.4, "podium", nullptr, 0},
+            {BandRole::Lobby,  1, 4.2, "podium", nullptr, 0},
+            {BandRole::Parking, 3, 3.0, "podium", nullptr, 0},
+            {BandRole::Office, 9, 3.9, "shaft", "shaft_top", 0.30},
+            {BandRole::Plant,  1, 4.6, "shaft", nullptr, 0},
+            {BandRole::Crown,  2, 5.0, "crown", nullptr, 0},
+        };
+        const Real sc = 4.4, W = 120;
+        Real y = by + 250;
+        char buf[160];
+        for (const StoreyBand& b : kStack) {
+            const Real h = b.storeys * b.height * sc;
+            fprintf(s.f, "<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" "
+                         "fill=\"%s\" stroke=\"#232a36\" stroke-width=\"1.1\"/>\n",
+                    bx, y - h, W, h,
+                    b.role == BandRole::Crown ? "#aeb6c4"
+                        : b.role == BandRole::Plant ? "#cfd3da"
+                        : b.role == BandRole::Office ? "#c2c8d3" : "#dfe1e6");
+            for (int k = 1; k < b.storeys; ++k)          // floor lines
+                fprintf(s.f, "<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" "
+                             "stroke=\"#9aa1ad\" stroke-width=\"0.5\"/>\n",
+                        bx, y - h * k / b.storeys, bx + W, y - h * k / b.storeys);
+            snprintf(buf, sizeof buf, "%s  %d x %.1f m", bandName(b.role), b.storeys, b.height);
+            s.textPx(bx + W + 10, y - h * 0.5 + 4, buf, 10, "#4b5563");
+            y -= h;
+        }
+        s.textPx(bx, by + 288, "5 · height belongs to the BAND", 14, "#1d2430", "start", "600");
+        s.textPx(bx, by + 305, "one tower: 5.4 m retail, 4.2 lobby, 3.0 parking, 3.9 office…",
+                 10.5, "#6b7280");
+        s.textPx(bx, by + 320, "floorHeight + groundHeight can express exactly two of these",
+                 10, "#9aa1ad");
+    }
+
+    // --- 6: the loft is a band property -------------------------------------
+    {
+        const Real bx = 40 + 2 * cellW + 34, by = 118 + cellH + 20;
+        std::vector<Poly2> A{rectPoly(Rect(-13, -9, 13, 9))};
+        std::vector<Poly2> B{regularPoly(Vec2(0, 0), 7.5, 32, 0)};
+        s.scale = 7.0;
+        s.ox = bx + 130;
+        s.oy = by + 120;
+        for (int k = 0; k <= 6; ++k) {
+            const Real t = k / 6.0;
+            char col[16];
+            snprintf(col, sizeof col, "#%02x%02x%02x", 35 + k * 13, 42 + k * 13, 54 + k * 13);
+            for (const Poly2& p : loftPlans(A, B, t, t * 0.30, 0.16))
+                s.poly(p, "none", col, k == 0 || k == 6 ? 2.0 : 1.0);
+        }
+        s.textPx(bx, by + 288, "6 · the loft is band data", 14, "#1d2430", "start", "600");
+        s.textPx(bx, by + 305, "{ plan=\"shaft\", loft_to=\"shaft_top\", twist=0.30 }",
+                 10.5, "#6b7280");
+        s.textPx(bx, by + 320, "9 office floors resolve to 9 storey plans", 10, "#9aa1ad");
+    }
+    (void)seed;
+    svgClose(s);
+}
+
 // ---------------------------------------------------------------------------
 // Sheet 8 — ONE PLAN, FIVE RECIPES. Same geometry, same code path; only the
 // fenestration table differs. If this sheet varies, the data/code line holds.
@@ -2543,8 +2894,9 @@ int main(int argc, char** argv) {
     lab::sheetBlueprint(out, seed);
     lab::sheetStack(out, seed);
     lab::sheetRecipes(out, seed);
+    lab::sheetCorner(out, seed);
     printf("lot_lab: wrote %s/{lots,plans,shapes,curves,compose,blueprint,stack,"
-           "recipes}.svg "
+           "recipes,corner}.svg "
            "(seed %u)\n", out, seed);
     return 0;
 }
