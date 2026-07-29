@@ -573,8 +573,8 @@ later phase encodes assumptions about what the kernel can express.
 them out of the vocabulary above — `Region` with holes, the exact rectilinear
 boolean, the sampled-field path, per-edge setbacks, the plan grammar, the
 subtractive zone allocation, prop dart-throwing, gates placed where a path
-crosses a boundary — and writes three sheets: `lots.svg`, `plans.svg`,
-`shapes.svg`.
+crosses a boundary — and writes four sheets: `lots.svg`, `plans.svg`,
+`shapes.svg`, `curves.svg`.
 
 ```sh
 c++ -std=c++17 -O1 tools/lot_lab.cpp \
@@ -599,8 +599,26 @@ Findings from the first pass, already folded back into this document:
 * Rounding by **quadratic bezier is not a true arc** — the r=8 "circle" in
   `shapes.svg` is visibly not circular. This is the concrete argument for arc
   (bulge) edges as a first-class kernel type rather than eager tessellation.
+  **Now implemented** (`Arc2`, `curves.svg`): a loop carries one bulge per edge
+  in the DXF convention (`bulge = tan(sweep/4)`), so a wall is either a line or
+  an exact circular arc, and tessellation happens once at the end at a chosen
+  chord tolerance. Straight walls stay crisp; curves are exact. Eight mixed
+  plans — bay front, stadium, apsidal hall, crescent, moderne slab, bowed
+  terrace, flatiron prow, rotunda-and-wings — are one loop each.
 * Ops must push off the **current mass**, not the envelope; referencing the
   envelope makes every outset a no-op once the clip runs.
+* **A representation can hide a bug from the very view meant to check it.**
+  The arc centre was computed on the wrong side of the chord, and it stayed
+  invisible for a full round because the SVG writer emits `A` commands — the
+  renderer re-derives the centre from radius plus flags, so every curve drew
+  correctly. Only `tessellate`, which uses the centre, exposed it. The lesson
+  for the real kernel: **the acceptance test must consume the same numbers the
+  consumers do.** A drawing that bypasses a field cannot validate it — so P0's
+  test suite should assert on tessellated points and on areas, not on whether
+  a picture looks right.
+* Corner filleting must run on the **orthogonal ring**, before rounding, and
+  each tier must be rounded on its own radius. Insetting an already-rounded
+  ring feeds chord joints to the miter limit and the tier outline crumples.
 
 ## 16. Relationship to existing docs
 

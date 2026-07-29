@@ -323,6 +323,151 @@ static std::vector<Poly2> fieldContour(const Field& f, Real iso = 0.0) {
     return loops;
 }
 
+// --- ARC EDGES: the mixed curved/straight loop -----------------------------
+//
+// The plan's `Shape2` edge, made real. A loop carries one BULGE per edge in the
+// DXF convention — bulge = tan(sweep/4), 0 = straight, 1 = semicircle — so a
+// wall is either a line or a TRUE circular arc, never a bezier standing in for
+// one and never marching-squares wobble. Curves survive as curves through the
+// grammar and tessellate exactly once, at the end, at a chord tolerance the
+// caller picks (and the SVG writer doesn't tessellate them at all — it emits
+// real `A` arc commands).
+//
+// This is what the first Lot Lab pass argued for: rounding a square with a
+// quadratic bezier is visibly not a circle. With bulge it is one, to the
+// numerical limit.
+
+struct Arc2 {
+    Poly2 pts;                  // loop vertices
+    std::vector<Real> bulge;    // bulge[i] applies to the edge pts[i] -> pts[i+1]
+
+    std::size_t size() const { return pts.size(); }
+    Vec2 next(std::size_t i) const { return pts[(i + 1) % pts.size()]; }
+    void setBulge(std::size_t i, Real b) { bulge[i % bulge.size()] = b; }
+};
+
+static Arc2 arcFromPoly(const Poly2& p) {
+    Arc2 a;
+    a.pts = p;
+    a.bulge.assign(p.size(), 0.0);
+    return a;
+}
+
+// Circle through an arc edge: centre, radius, start angle and signed sweep.
+struct ArcGeom { Vec2 c; Real r = 0, a0 = 0, sweep = 0; bool straight = true; };
+
+static ArcGeom arcGeom(const Vec2& A, const Vec2& B, Real bulge) {
+    ArcGeom g;
+    if (std::fabs(bulge) < 1e-9) return g;
+    const Vec2 d = B - A;
+    const Real c = d.length();
+    if (c < 1e-9) return g;
+    g.straight = false;
+    g.sweep = 4.0 * std::atan(bulge);              // DXF: bulge = tan(sweep/4)
+    g.r = c / (2.0 * std::sin(std::fabs(g.sweep) * 0.5));
+    // Centre sits off the chord midpoint along the perpendicular; which side
+    // depends on the bulge sign (positive = counter-clockwise sweep).
+    const Vec2 m = (A + B) * 0.5;
+    const Vec2 n = engine::normalize(Vec2(-d.y, d.x));       // LEFT of A->B
+    const Real h = std::sqrt(std::max(Real(0), g.r * g.r - c * c * 0.25));
+    const Real side = (std::fabs(g.sweep) > kTau * 0.5) ? -1.0 : 1.0;   // major arc
+    // A positive (counter-clockwise) sweep puts the CENTRE on the left, so the
+    // arc itself swells to the RIGHT of A->B — and on a CCW loop, right is
+    // outside. Getting this sign wrong is invisible in the SVG (an `A` command
+    // re-derives the centre from radius + flags) and only shows up when the
+    // loop is tessellated.
+    g.c = m + n * (h * side * (bulge > 0 ? 1.0 : -1.0));
+    g.a0 = std::atan2(A.y - g.c.y, A.x - g.c.x);
+    return g;
+}
+
+// Flatten to chords no further than `chordTol` from the true arc.
+static Poly2 tessellate(const Arc2& a, Real chordTol = 0.12) {
+    Poly2 out;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        out.push_back(a.pts[i]);
+        const ArcGeom g = arcGeom(a.pts[i], a.next(i), a.bulge[i]);
+        if (g.straight) continue;
+        const Real maxStep = 2.0 * std::acos(std::max(Real(-1),
+                                 std::min(Real(1), 1.0 - chordTol / g.r)));
+        const int n = std::max(2, static_cast<int>(std::ceil(std::fabs(g.sweep) /
+                                                             std::max(maxStep, Real(1e-3)))));
+        for (int k = 1; k < n; ++k) {
+            const Real t = g.a0 + g.sweep * (static_cast<Real>(k) / n);
+            out.push_back(Vec2(g.c.x + g.r * std::cos(t), g.c.y + g.r * std::sin(t)));
+        }
+    }
+    return out;
+}
+
+// Area including the circular segments the chords cut off.
+static Real arcArea(const Arc2& a) {
+    Real ar = engine::signedArea(a.pts);
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        const ArcGeom g = arcGeom(a.pts[i], a.next(i), a.bulge[i]);
+        if (g.straight) continue;
+        ar += 0.5 * g.r * g.r * (g.sweep - std::sin(g.sweep));
+    }
+    return std::fabs(ar);
+}
+
+// BOW an edge into an arc of the given sagitta. The arc swells to the RIGHT of
+// the edge direction, and a CCW loop keeps its interior on the left — so a
+// positive sagitta bows OUTWARD and a negative one scoops in. A bay window, a
+// bowed shopfront, an apse when |sagitta| reaches half the chord.
+static void bow(Arc2& a, std::size_t edge, Real sagitta) {
+    const std::size_t i = edge % a.size();
+    const Real c = (a.next(i) - a.pts[i]).length();
+    if (c < 1e-6) return;
+    a.bulge[i] = 2.0 * sagitta / c;
+}
+// Turn an edge into a clean semicircular end (an apse / a stadium end).
+static void apse(Arc2& a, std::size_t edge, Real sign = 1.0) {
+    a.bulge[edge % a.size()] = sign;      // bulge 1 == half turn
+}
+
+// FILLET corners with a TRUE tangent arc: back off both edges by the tangent
+// distance and join them with an arc of exactly radius r. `radii[i] <= 0`
+// leaves that corner sharp — which is how one plan mixes crisp party walls
+// with a rounded street corner.
+static Arc2 filletCorners(const Arc2& in, const std::vector<Real>& radii) {
+    const std::size_t n = in.size();
+    if (n < 3 || radii.size() != n) return in;
+    Arc2 out;
+    for (std::size_t i = 0; i < n; ++i) {
+        const std::size_t prev = (i + n - 1) % n;
+        const Real r = radii[i];
+        // Only straight-to-straight corners are filleted here; an arc already
+        // meeting a wall is tangent-continuous or deliberately not.
+        if (r <= 1e-6 || std::fabs(in.bulge[prev]) > 1e-9 ||
+            std::fabs(in.bulge[i]) > 1e-9) {
+            out.pts.push_back(in.pts[i]);
+            out.bulge.push_back(in.bulge[i]);
+            continue;
+        }
+        const Vec2 P = in.pts[prev], V = in.pts[i], N = in.next(i);
+        const Vec2 d0 = engine::normalize(V - P), d1 = engine::normalize(N - V);
+        const Real crs = engine::cross(d0, d1);
+        const Real phi = std::atan2(crs, engine::dot(d0, d1));   // deviation angle
+        if (std::fabs(phi) < 1e-4 || std::fabs(phi) > kTau * 0.5 - 1e-4) {
+            out.pts.push_back(V);
+            out.bulge.push_back(in.bulge[i]);
+            continue;
+        }
+        // Tangent set-back, clamped so neighbouring fillets can't overrun.
+        Real t = r * std::fabs(std::tan(phi * 0.5));
+        t = std::min(t, std::min((V - P).length(), (N - V).length()) * 0.48);
+        out.pts.push_back(V - d0 * t);
+        out.bulge.push_back(std::tan(phi * 0.25));   // the fillet arc itself
+        out.pts.push_back(V + d1 * t);
+        out.bulge.push_back(in.bulge[i]);            // the outgoing wall
+    }
+    return out;
+}
+static Arc2 filletAllCorners(const Arc2& in, Real r) {
+    return filletCorners(in, std::vector<Real>(in.size(), r));
+}
+
 // --- Polygon helpers ------------------------------------------------------
 
 // Per-edge inset: each edge moves inward by its OWN distance. This is what
@@ -665,6 +810,28 @@ struct Svg {
                    "stroke-width=\"%.2f\" %s/>\n", X(c.x), Y(c.y), r * scale, fill, stroke,
                 sw, extra);
     }
+    // An arc loop drawn with REAL SVG arc commands — no tessellation on the way
+    // out, so a curved wall is a curve in the file, not a 200-point polyline.
+    void arcLoop(const Arc2& a, const char* fill, const char* stroke, Real sw,
+                 const char* extra = "") {
+        if (a.size() < 3) return;
+        fprintf(f, "<path d=\"M%.2f %.2f ", X(a.pts[0].x), Y(a.pts[0].y));
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            const Vec2 nx = a.next(i);
+            const ArcGeom g = arcGeom(a.pts[i], nx, a.bulge[i]);
+            if (g.straight) {
+                fprintf(f, "L%.2f %.2f ", X(nx.x), Y(nx.y));
+            } else {
+                const Real rr = g.r * scale;
+                const int large = std::fabs(g.sweep) > kTau * 0.5 ? 1 : 0;
+                const int sweep = g.sweep > 0 ? 1 : 0;   // our map preserves handedness
+                fprintf(f, "A%.2f %.2f 0 %d %d %.2f %.2f ", rr, rr, large, sweep,
+                        X(nx.x), Y(nx.y));
+            }
+        }
+        fprintf(f, "Z\" fill=\"%s\" stroke=\"%s\" stroke-width=\"%.2f\" %s/>\n",
+                fill, stroke, sw, extra);
+    }
     // A quarter-circle swing arc — the thing that makes a gate read as a gate.
     void arc(const Vec2& c, const Vec2& from, Real sweepDeg, const char* stroke, Real sw) {
         const Vec2 v = from - c;
@@ -843,7 +1010,7 @@ static SitePlan buildSite(const Program& pg, uint32_t seed, const Vec2& origin) 
         // The prow lot: the plan IS the setback polygon with its acute nose
         // rounded — the classic flatiron, and the one case where the lot
         // legitimately drives the shape.
-        planL = {regionOf(filletAll(envL, 3.4, 7))};
+        planL = {regionOf(tessellate(filletAllCorners(arcFromPoly(envL), 3.4), 0.06))};
         sp.entrance = sp.frame.toWorld((envL[0] + envL[1]) * 0.5 + Vec2(0, 0.6));
     } else if (nm.rfind("villa", 0) == 0) {
         // A house is a small pad in a big lot: main block + a front bay + a
@@ -873,16 +1040,21 @@ static SitePlan buildSite(const Program& pg, uint32_t seed, const Vec2& origin) 
         pc.rs.unite(Rect(cx - cw * 0.5, y0, cx + cw * 0.5, y0 + cd));
         pc.envelope = Rect(elo.x, elo.y, ehi.x, ehi.y);
         planL = planFinish(pc);
-        if (!planL.empty()) planL[0].outer = filletAll(planL[0].outer, 3.0, 2);
         // Upper tiers: each an independent plan constrained inside the one
-        // below — the mass stack, not a uniform inset (plan §5).
-        const Poly2& gp = planL.empty() ? envL : planL[0].outer;
-        Poly2 shaft = insetEdges(gp, std::vector<Real>(gp.size(), 2.2));
-        if (!shaft.empty()) sp.tiers.push_back(sp.frame.toWorld(shaft));
+        // below — the mass stack, not a uniform inset (plan §5). Inset the
+        // ORTHOGONAL ring, then round each tier on its own radius; insetting an
+        // already-rounded ring just feeds the miter limit chord joints.
+        const Poly2 rect = planL.empty() ? envL : planL[0].outer;
+        auto round = [](const Poly2& p, Real r) {
+            return tessellate(filletAllCorners(arcFromPoly(p), r), 0.06);
+        };
+        Poly2 shaft = insetEdges(rect, std::vector<Real>(rect.size(), 2.2));
         if (!shaft.empty()) {
+            sp.tiers.push_back(sp.frame.toWorld(round(shaft, 2.4)));
             Poly2 crown = insetEdges(shaft, std::vector<Real>(shaft.size(), 3.4));
-            if (!crown.empty()) sp.tiers.push_back(sp.frame.toWorld(crown));
+            if (!crown.empty()) sp.tiers.push_back(sp.frame.toWorld(round(crown, 1.8)));
         }
+        if (!planL.empty()) planL[0].outer = round(rect, 3.0);
         sp.entrance = sp.frame.toWorld(cx, y0);
     } else if (nm.rfind("rowhouse", 0) == 0) {
         // A terrace: ONE mass, read as units. Each unit gets its own front
@@ -1219,6 +1391,127 @@ static void sheetPlans(const char* dir, uint32_t seed) {
 }
 
 // ---------------------------------------------------------------------------
+// Sheet 4 — MIXED CURVED / STRAIGHT PLANS. Every one of these is a single loop
+// where some edges are lines and some are true circular arcs. Straight walls
+// stay crisp; curved walls are exact, not sampled and not bezier-faked.
+// ---------------------------------------------------------------------------
+static void sheetCurves(const char* dir, uint32_t seed) {
+    struct Cell { const char* t; const char* d; Arc2 a; };
+    std::vector<Cell> cells;
+
+    auto ccw = [](Poly2 p) {
+        if (engine::signedArea(p) < 0) std::reverse(p.begin(), p.end());
+        return p;
+    };
+
+    {   // 1 — bay-front house: straight walls, one bowed bay, rounded front corners
+        Arc2 a = arcFromPoly(ccw(Poly2{Vec2(0, 0), Vec2(4.5, 0), Vec2(9.5, 0),
+                                       Vec2(14, 0), Vec2(14, 11), Vec2(0, 11)}));
+        bow(a, 1, 1.7);                        // the bay swells toward the street
+        std::vector<Real> r(a.size(), 0.0);
+        r[0] = 0.9; r[3] = 0.9;                // soften only the street corners
+        a = filletCorners(a, r);
+        cells.push_back({"1 · bay front", "straight walls + one bowed bay", a});
+    }
+    {   // 2 — stadium/lozenge tower: two straight flanks, two semicircular ends
+        Arc2 a = arcFromPoly(ccw(Poly2{Vec2(0, 0), Vec2(16, 0), Vec2(16, 10), Vec2(0, 10)}));
+        apse(a, 1, 1.0);
+        apse(a, 3, 1.0);
+        cells.push_back({"2 · stadium plan", "flat flanks, semicircular ends", a});
+    }
+    {   // 3 — apsidal hall: a straight nave closed by a round apse
+        Arc2 a = arcFromPoly(ccw(Poly2{Vec2(0, 0), Vec2(11, 0), Vec2(11, 20), Vec2(0, 20)}));
+        apse(a, 2, 1.0);                       // the liturgical east end
+        cells.push_back({"3 · apsidal hall", "nave straight, one round end", a});
+    }
+    {   // 4 — crescent terrace: concentric arcs joined by straight radial ends
+        const Vec2 C(0, 0);
+        const Real Ri = 22, Ro = 33, a0 = kTau * 0.06, a1 = kTau * 0.44;
+        auto onC = [&](Real R, Real t) { return Vec2(C.x + R * std::cos(t), C.y + R * std::sin(t)); };
+        Arc2 a;
+        a.pts = {onC(Ri, a0), onC(Ro, a0), onC(Ro, a1), onC(Ri, a1)};
+        a.bulge = {0, std::tan((a1 - a0) * 0.25), 0, -std::tan((a1 - a0) * 0.25)};
+        cells.push_back({"4 · crescent", "two concentric arcs, radial ends", a});
+    }
+    {   // 5 — moderne slab: orthogonal, but the street corners turn a big radius
+        Arc2 a = arcFromPoly(ccw(Poly2{Vec2(0, 0), Vec2(22, 0), Vec2(22, 12), Vec2(0, 12)}));
+        std::vector<Real> r(a.size(), 0.0);
+        r[0] = 4.2; r[1] = 4.2;                // only the two street corners
+        a = filletCorners(a, r);
+        cells.push_back({"5 · moderne slab", "sharp rear, 4.2 m radius street corners", a});
+    }
+    {   // 6 — bowed terrace: one mass, a bow window per unit (Bath / Boston)
+        const int units = 5;
+        const Real w = 30.0, uw = w / units;
+        Poly2 p;
+        for (int u = 0; u <= units; ++u) p.push_back(Vec2(uw * u, 0));
+        p.push_back(Vec2(w, 12));
+        p.push_back(Vec2(0, 12));
+        Arc2 a = arcFromPoly(ccw(p));
+        for (int u = 0; u < units; ++u) bow(a, static_cast<std::size_t>(u), 1.25);
+        cells.push_back({"6 · bowed terrace", "a bow window per unit, shared party walls", a});
+    }
+    {   // 7 — flatiron with a TRUE arc prow (the bezier version was visibly not one)
+        Arc2 a = arcFromPoly(ccw(Poly2{Vec2(0, 0), Vec2(26, 9), Vec2(9, 22)}));
+        std::vector<Real> r(a.size(), 0.0);
+        r[1] = 3.2;                            // the acute nose
+        r[0] = 1.4; r[2] = 1.4;
+        a = filletCorners(a, r);
+        cells.push_back({"7 · flatiron prow", "acute corner rounded by a real arc", a});
+    }
+    {   // 8 — rotunda + wings: a drum and two straight bars, solved analytically
+        const Real R = 9.0, hw = 4.0, xo = 22.0;
+        const Real xi = std::sqrt(std::max(Real(0), R * R - hw * hw));
+        const Real al = std::atan2(hw, xi);
+        const Real sweep = kTau * 0.5 - 2 * al;
+        Arc2 a;
+        a.pts = {Vec2(xi, -hw), Vec2(xo, -hw), Vec2(xo, hw), Vec2(xi, hw),
+                 Vec2(-xi, hw), Vec2(-xo, hw), Vec2(-xo, -hw), Vec2(-xi, -hw)};
+        a.bulge.assign(8, 0.0);
+        a.bulge[3] = std::tan(sweep * 0.25);   // over the top of the drum
+        a.bulge[7] = std::tan(sweep * 0.25);   // under it
+        cells.push_back({"8 · rotunda + wings", "circular drum, straight wings", a});
+    }
+
+    const Real cellW = 340, cellH = 290;
+    const int cols = 4, rows = 2;
+    Svg s;
+    svgOpen(s, (std::string(dir) + "/curves.svg").c_str(), cellW * cols + 60,
+            cellH * rows + 190, "Lot Lab — mixed curved / straight floorplans");
+    s.textPx(28, 68, "One loop, per-edge bulge (DXF convention: bulge = tan(sweep/4)). Lines stay "
+                     "lines, curves are TRUE circular arcs — and the SVG carries them as arc "
+                     "commands, not polylines.", 12, "#6b7280");
+
+    const Real drawW = cellW - 80, drawH = 190;
+    for (std::size_t i = 0; i < cells.size(); ++i) {
+        const int cx = static_cast<int>(i) % cols, cy = static_cast<int>(i) / cols;
+        const Real bx = 40 + cx * cellW + 26;          // cell origin, px
+        const Real by = 118 + cy * cellH;
+        Vec2 lo, hi;
+        engine::bounds(tessellate(cells[i].a, 0.05), lo, hi);
+        const Real w = std::max(hi.x - lo.x, Real(1)), h = std::max(hi.y - lo.y, Real(1));
+        s.scale = std::min(drawW / w, drawH / h);
+        // Centre the plan in a fixed box so every label sits on one baseline.
+        s.ox = bx + (drawW - w * s.scale) * 0.5 - lo.x * s.scale;
+        s.oy = by + (drawH - h * s.scale) * 0.5 - lo.y * s.scale;
+        s.arcLoop(cells[i].a, "#b9c0cc", "#232a36", 2.0);
+
+        int arcs = 0;
+        for (Real b : cells[i].a.bulge) if (std::fabs(b) > 1e-9) ++arcs;
+        char buf[192];
+        snprintf(buf, sizeof buf, "%s", cells[i].t);
+        s.textPx(bx, by + drawH + 30, buf, 13.5, "#1d2430", "start", "600");
+        snprintf(buf, sizeof buf, "%s", cells[i].d);
+        s.textPx(bx, by + drawH + 47, buf, 11, "#6b7280");
+        snprintf(buf, sizeof buf, "%.0f m2  ·  %d edges, %d curved",
+                 arcArea(cells[i].a), static_cast<int>(cells[i].a.size()), arcs);
+        s.textPx(bx, by + drawH + 62, buf, 10, "#9aa1ad");
+    }
+    (void)seed;
+    svgClose(s);
+}
+
+// ---------------------------------------------------------------------------
 // Sheet 3 — the kernel: exact fillets, and the sampled-field boolean path.
 // ---------------------------------------------------------------------------
 static void sheetShapes(const char* dir, uint32_t seed) {
@@ -1304,6 +1597,7 @@ int main(int argc, char** argv) {
     lab::sheetLots(out, seed);
     lab::sheetPlans(out, seed);
     lab::sheetShapes(out, seed);
-    printf("lot_lab: wrote %s/{lots,plans,shapes}.svg (seed %u)\n", out, seed);
+    lab::sheetCurves(out, seed);
+    printf("lot_lab: wrote %s/{lots,plans,shapes,curves}.svg (seed %u)\n", out, seed);
     return 0;
 }
