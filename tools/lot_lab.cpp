@@ -659,9 +659,11 @@ struct Svg {
                    "stroke-width=\"%.2f\" %s/>\n", X(a.x), Y(a.y), X(b.x), Y(b.y),
                 stroke, sw, extra);
     }
-    void circle(const Vec2& c, Real r, const char* fill, const char* stroke, Real sw) {
+    void circle(const Vec2& c, Real r, const char* fill, const char* stroke, Real sw,
+                const char* extra = "") {
         fprintf(f, "<circle cx=\"%.2f\" cy=\"%.2f\" r=\"%.2f\" fill=\"%s\" stroke=\"%s\" "
-                   "stroke-width=\"%.2f\"/>\n", X(c.x), Y(c.y), r * scale, fill, stroke, sw);
+                   "stroke-width=\"%.2f\" %s/>\n", X(c.x), Y(c.y), r * scale, fill, stroke,
+                sw, extra);
     }
     // A quarter-circle swing arc — the thing that makes a gate read as a gate.
     void arc(const Vec2& c, const Vec2& from, Real sweepDeg, const char* stroke, Real sw) {
@@ -685,8 +687,9 @@ struct Svg {
 
 static void svgOpen(Svg& s, const char* path, Real w, Real h, const char* title) {
     s.f = fopen(path, "w");
-    fprintf(s.f, "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%.0f\" height=\"%.0f\" "
-                 "viewBox=\"0 0 %.0f %.0f\">\n", w, h, w, h);
+    fprintf(s.f, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    fprintf(s.f, "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" "
+                 "width=\"%.0f\" height=\"%.0f\" viewBox=\"0 0 %.0f %.0f\">\n", w, h, w, h);
     fprintf(s.f, "<rect width=\"%.0f\" height=\"%.0f\" fill=\"#faf8f3\"/>\n", w, h);
     s.textPx(28, 44, title, 21, "#1d2430", "start", "600");
 }
@@ -709,7 +712,7 @@ static void drawSite(Svg& s, const SitePlan& sp, Real labelY) {
     }
     s.poly(sp.lot, "#f2eee5", "#8a8578", 1.2, "stroke-dasharray=\"7 4\"");
     for (const auto& [z, r] : sp.zones)
-        if (z != Zone::Building) s.region(r, zoneFill(z), "#00000018", 0.6);
+        if (z != Zone::Building) s.region(r, zoneFill(z), "#000000", 0.6, "stroke-opacity=\"0.10\"");
     for (const Poly2& p : sp.paths) s.polyline(p, "#cfc7b4", 9.0, "stroke-linejoin=\"round\" stroke-linecap=\"round\"");
     for (const Poly2& p : sp.paths) s.polyline(p, "#e5dece", 7.0, "stroke-linejoin=\"round\" stroke-linecap=\"round\"");
 
@@ -728,7 +731,6 @@ static void drawSite(Svg& s, const SitePlan& sp, Real labelY) {
         }
     }
     for (const Gate& g : sp.gates) {
-        s.line(g.hinge, g.latch, "#00000000", 0);
         const Vec2 dir = engine::normalize(g.latch - g.hinge);
         const Vec2 open(-dir.y * g.swing, dir.x * g.swing);
         const Real w = (g.latch - g.hinge).length();
@@ -742,12 +744,12 @@ static void drawSite(Svg& s, const SitePlan& sp, Real labelY) {
     for (const Region& b : sp.building) s.region(b, "#b9c0cc", "#232a36", 2.0);
     for (const auto& [a, b] : sp.partyWalls) s.line(a, b, "#5a6272", 1.0);
     for (const Poly2& t : sp.tiers)
-        s.poly(t, "#00000000", "#414a5a", 1.1, "stroke-dasharray=\"5 4\"");
+        s.poly(t, "none", "#414a5a", 1.1, "stroke-dasharray=\"5 4\"");
 
     for (const Prop& p : sp.props) {
         switch (p.kind) {
             case PropKind::Tree:
-                s.circle(p.at, p.radius, "#8fb87a88", "#5f8a4c", 0.8);
+                s.circle(p.at, p.radius, "#8fb87a", "#5f8a4c", 0.8, "fill-opacity=\"0.55\"");
                 s.circle(p.at, 0.22, "#6b5030", "none", 0); break;
             case PropKind::Shrub:  s.circle(p.at, p.radius, "#a3c48e", "#6d9257", 0.6); break;
             case PropKind::Planter:s.poly(rectPoly(Rect(p.at.x - p.radius, p.at.y - p.radius,
@@ -757,7 +759,7 @@ static void drawSite(Svg& s, const SitePlan& sp, Real labelY) {
                                                         p.at.x + 0.9, p.at.y + 0.28)),
                                           "#a9906d", "#7a6247", 0.8); break;
             case PropKind::Lamp:
-                s.circle(p.at, 2.6, "#ffd88a22", "none", 0);
+                s.circle(p.at, 2.6, "#ffd88a", "none", 0, "fill-opacity=\"0.16\"");
                 s.circle(p.at, 0.30, "#3d4450", "#1d2430", 0.6); break;
             case PropKind::Bollard:s.circle(p.at, 0.20, "#5c6373", "none", 0); break;
             case PropKind::Bin:    s.circle(p.at, 0.45, "#8b8f96", "#5c6373", 0.6); break;
@@ -1102,7 +1104,7 @@ static void sheetLots(const char* dir, uint32_t seed) {
     for (int i = 0; i < 6; ++i) {
         const Real lx = 40 + i * 150;
         fprintf(s.f, "<rect x=\"%.1f\" y=\"%.1f\" width=\"18\" height=\"12\" fill=\"%s\" "
-                     "stroke=\"#00000022\"/>\n", lx, ly - 10, zoneFill(zs[i]));
+                     "stroke=\"#000000\" stroke-opacity=\"0.14\"/>\n", lx, ly - 10, zoneFill(zs[i]));
         s.textPx(lx + 24, ly, zoneName(zs[i]), 11.5, "#4b5563");
     }
     svgClose(s);
