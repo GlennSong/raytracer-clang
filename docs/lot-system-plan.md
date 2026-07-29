@@ -573,8 +573,8 @@ later phase encodes assumptions about what the kernel can express.
 them out of the vocabulary above — `Region` with holes, the exact rectilinear
 boolean, the sampled-field path, per-edge setbacks, the plan grammar, the
 subtractive zone allocation, prop dart-throwing, gates placed where a path
-crosses a boundary — and writes five sheets: `lots.svg`, `plans.svg`,
-`shapes.svg`, `curves.svg`, `compose.svg`.
+crosses a boundary — and writes seven sheets: `lots.svg`, `plans.svg`,
+`shapes.svg`, `curves.svg`, `compose.svg`, `blueprint.svg`, `stack.svg`.
 
 ```sh
 c++ -std=c++17 -O1 tools/lot_lab.cpp \
@@ -647,6 +647,110 @@ the middle. It works, and three things came out of it:
   the union of the pieces that made it, or a program that asks for 26% will
   quietly deliver more. The site layer should compute coverage after massing,
   not before.
+
+### 15.2 The blueprint as the authority (`blueprint.svg`)
+
+The move that makes the 2-D layer load-bearing rather than decorative. Today
+`emitFacadeRect` computes its bays privately, in 3-D, per wall rectangle — so
+nothing outside it can know where a window is, and nothing can be reviewed
+before geometry exists. Promote that decision onto the plan:
+
+> **An opening is a 1-D SPAN ALONG A WALL — the plan's business — plus a
+> SILL/HEAD height, the storey's business.** Those two facts together fully
+> determine the 3-D opening.
+
+```cpp
+struct Opening {
+    std::size_t edge;          // which wall
+    Real  s0, s1;              // span along it, metres from the wall's start
+    bool  door;  int swing;    // plan symbol: leaf + swing arc
+    Real  sill, head;          // the storey's half of the fact
+};
+struct WallProgram { WallRole role; BayGrid grid; std::vector<Opening> openings; };
+```
+
+Consequences, all demonstrated in `blueprint.svg`:
+
+* **Walls get real thickness.** The drawn wall is `outer − inset(outer, t)`,
+  and every opening is punched through the poché by boolean. Three subtracts,
+  no special cases — and it exercises the same kernel everything else uses.
+* **`WallRole` makes a party wall blank by construction**, not by a downstream
+  check that happens to skip it. The rowhouse unit carries openings on two
+  walls and literally cannot carry them on the other two.
+* **The constant-module rule survives the corner.** The L-plan runs one
+  program round six walls; a wide wall and a narrow one show the *same* window
+  with the piers absorbing the slack, which is what ADR-0040 already asks for
+  and what the current per-rectangle computation can only approximate.
+* **The bay grid becomes shared** — the prerequisite §6.1 already called for.
+  Balconies, pilasters, storefront mullions and (later) interior partitions can
+  all register against it, because it exists as data before geometry does.
+
+### 15.3 Blueprints going up (`stack.svg`)
+
+**Tiers.** A `MassStack` is a list of tiers; each tier holds a *list* of plans,
+not one. Two rules do all the work:
+
+1. **Every tier is CLIPPED to the tier below** (`intersect`). Containment stops
+   being a check that can fail and becomes a property of the construction —
+   the same guarantee the plan-in-envelope clip gives one level down.
+2. **A tier may hold several plans.** That is the whole of "towers on a
+   podium": tier 0 is the podium, tier 1 is three separate footprints each
+   clipped to it, and they need not survive to the same height. Different
+   towers, one base, no new concept.
+
+**Terraces fall out.** The exposed roof at any setback is `plan[i] −
+plan[i+1]` — a boolean, not a special case. Balconies, railings and roof
+furniture attach to that region without anything having to detect it.
+
+**Lofting is field interpolation, not vertex interpolation.** This is the
+finding worth keeping. A vertex lerp needs a correspondence between the two
+plans and dies the moment they differ in vertex count — and dies completely if
+the topology changes. Interpolating the two plans' *distance fields* and
+contouring per level handles a square becoming a circle (different counts) and,
+more importantly, **one slab splitting into two towers** (different topology),
+with no special case at all. Both halves already exist in the kernel.
+
+Three parameters make it architecture rather than a morph:
+
+* **A profile curve** on the loft parameter, so `t = profile(h)` rather than
+  `t = h`. Entasis, a fast taper near the crown, a slow one at the base. The
+  engine's `Spline` (curve.h) is the natural carrier.
+* **Twist**, applied to the *finished* storey plan, not to the sampling. (I
+  rotated one input's sample frame first; every intermediate level then blends
+  an unrotated field with a rotated one and the levels cross through each
+  other. The plan is what turns.)
+* **Level runs.** A straight shaft shares one plan across many storeys, so the
+  stack should store runs, not a plan per floor — otherwise a 60-storey tower
+  pays for 60 identical plans.
+
+### 15.4 How 3-D would consume this
+
+The point of all of the above is that the 3-D pass stops *deciding* and starts
+*reading*. Nothing here needs new geometry code — it needs the existing code to
+take its inputs from the blueprint:
+
+| 3-D output | Comes from | Today |
+|---|---|---|
+| Wall panel | `planEdgeRect(plan[i], edge)` — already exists | same |
+| Window / door | the storey's `Opening` list | `emitFacadeRect` recomputes bays |
+| Floor slab | `triangulateWithHoles(plan[i])` | outer ring only |
+| Terrace deck | `plan[i] − plan[i+1]` | `setbackEvery` uniform inset |
+| Corner post | plan vertices with a real turn | same |
+| Roof | the topmost plan | rect-ish plans only |
+
+So the porting job is narrower than it looks: `emitFacadeRect` loses its bay
+computation and gains an opening list; `emitPlanSlab` gains holes;
+`growPlanBuilding`'s tier loop is replaced by a walk over storey plans. The
+element emitters (portico, balcony, steeple, roof furniture) are untouched.
+
+**The one real cost:** a lofted tower has a different plan on every storey, so
+walls can no longer be shared up a run — which is exactly why level runs matter,
+and why lofting should be opt-in per recipe rather than the default.
+
+**Still unproven.** Arc-aware booleans. Every curved plan here is authored as
+one loop or tessellated before it meets the boolean, so the arc kernel and the
+boolean kernel do not yet talk to each other. A lofted *arc* plan is therefore
+tessellated too. That seam is the last open question in L0.
 
 ## 16. Relationship to existing docs
 

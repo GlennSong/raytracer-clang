@@ -43,6 +43,8 @@ using engine::Vec2;
 namespace lab {
 
 constexpr Real kTau = 6.283185307179586;
+// Human-scale constants the grammar already pins (shape_grammar.h, ADR-0038 §5).
+constexpr Real human_DOOR_WIDTH = 2.0;
 
 // The deterministic xorshift the city pipeline uses, so a design only moves
 // when its seed does.
@@ -1537,6 +1539,80 @@ static void sheetPlans(const char* dir, uint32_t seed) {
     svgClose(s);
 }
 
+// ===========================================================================
+// THE BLUEPRINT: walls with thickness, and OPENINGS decided on the plan.
+//
+// The move that makes the 2D layer load-bearing rather than decorative. Today
+// `emitFacadeRect` computes its bays privately, in 3D, per wall rectangle — so
+// nothing else can know where a window is, and nothing can be reviewed before
+// geometry exists. Here the plan owns it:
+//
+//   an opening is a 1-D SPAN ALONG A WALL (the plan's business) plus a
+//   SILL/HEAD height (the storey's business).
+//
+// Together those two facts fully determine the 3-D opening, so the blueprint
+// becomes the authority and the 3-D pass stops deciding and starts reading.
+// Everything below is drawable, reviewable, and testable with no renderer.
+// ===========================================================================
+
+enum class WallRole : uint8_t { Street, Side, Rear, Party, Court };
+
+struct Opening {
+    std::size_t edge = 0;
+    Real s0 = 0, s1 = 0;      // span along the edge, metres from its start
+    bool door = false;
+    int swing = 1;            // which way the leaf opens, for the plan symbol
+    Real sill = 0.9, head = 2.4;   // the storey's half of the fact (metres)
+};
+
+// The WALL PROGRAM: partition one wall into bays and place its openings. This
+// is the existing facade logic, lifted out of 3-D and made reviewable — same
+// constant-module rule (a wide wall and a narrow one show the SAME window, the
+// piers absorb the slack) that ADR-0040 already asks for.
+static std::vector<Opening> wallProgram(std::size_t edge, Real length, WallRole role,
+                                        Real bayW, int doorBay = -1) {
+    std::vector<Opening> out;
+    if (role == WallRole::Party || length < 1.2) return {};      // blank by construction
+    const int bays = std::max(1, static_cast<int>(std::lround(length / bayW)));
+    const Real bw = length / bays;
+    const Real winW = std::min(Real(1.25), std::max(Real(0.7), bw - 0.9));
+    for (int b = 0; b < bays; ++b) {
+        const Real c = bw * (b + 0.5);
+        if (role == WallRole::Street && b == doorBay) {
+            const Real dw = std::min(human_DOOR_WIDTH, bw - 0.5);
+            out.push_back({edge, c - dw * 0.5, c + dw * 0.5, true, (b % 2) ? 1 : -1, 0.0, 2.1});
+        } else {
+            const Real sill = (role == WallRole::Rear) ? 1.1 : 0.9;
+            out.push_back({edge, c - winW * 0.5, c + winW * 0.5, false, 1, sill, 2.4});
+        }
+    }
+    return out;
+}
+
+// The opening's footprint through the wall, for cutting the poche.
+static Poly2 openingRect(const Poly2& p, const Opening& o, Real t) {
+    const std::size_t n = p.size();
+    const Vec2 a = p[o.edge % n], b = p[(o.edge + 1) % n];
+    const Vec2 u = engine::normalize(b - a);
+    const Vec2 out(u.y, -u.x);                    // outward: right of a CCW edge
+    Poly2 r{a + u * o.s0 + out * 0.3, a + u * o.s1 + out * 0.3,
+            a + u * o.s1 - out * (t + 0.3), a + u * o.s0 - out * (t + 0.3)};
+    if (engine::signedArea(r) < 0) std::reverse(r.begin(), r.end());
+    return r;
+}
+
+// The drawn wall: an outer ring, an inner ring `t` in from it, and every
+// opening punched clean through both. Three booleans, no special cases.
+static std::vector<Poly2> wallBand(const Poly2& outer, Real t,
+                                   const std::vector<Opening>& ops) {
+    const Poly2 inner = insetEdges(outer, std::vector<Real>(outer.size(), t));
+    if (inner.size() < 3) return {outer};
+    std::vector<Poly2> band = polyBool({outer}, {inner}, BOp::Subtract);
+    for (const Opening& o : ops)
+        band = polyBool(band, {openingRect(outer, o, t)}, BOp::Subtract);
+    return band;
+}
+
 // ---------------------------------------------------------------------------
 // Sheet 5 — THE COMPOSITION TEST. Do the pieces actually work together? Start
 // from a pentagon, grow a wing off every wall, cap the wings with drums, weld
@@ -1680,6 +1756,317 @@ static void sheetCompose(const char* dir, uint32_t seed) {
                  ar, static_cast<int>(panels[i].loops.size()), holes,
                  panels[i].field ? "sampled field" : "exact boolean");
         s.textPx(bx, by + drawH + 76, buf, 10, "#9aa1ad");
+    }
+    (void)seed;
+    svgClose(s);
+}
+
+// ---------------------------------------------------------------------------
+// Sheet 6 — BLUEPRINTS. The same plans, drawn as construction documents:
+// walls with real thickness, doors with swings, windows with glazing lines.
+// ---------------------------------------------------------------------------
+static void drawBlueprint(Svg& s, const Poly2& plan, Real t,
+                          const std::vector<Opening>& ops) {
+    // Floor area first, so the poche reads as walls sitting on a slab.
+    s.poly(plan, "#eceadf", "none", 0);
+    for (const Poly2& b : wallBand(plan, t, ops))
+        s.poly(b, "#3a4252", "#232a36", 0.7);
+
+    const std::size_t n = plan.size();
+    for (const Opening& o : ops) {
+        const Vec2 a = plan[o.edge % n], b = plan[(o.edge + 1) % n];
+        const Vec2 u = engine::normalize(b - a);
+        const Vec2 inw(-u.y, u.x);                   // into the room
+        const Vec2 P0 = a + u * o.s0, P1 = a + u * o.s1;
+        if (o.door) {
+            // Standard plan symbol: leaf swung 90 deg off the hinge, plus the
+            // arc it sweeps. This is the cutaway that reads as a door.
+            const Vec2 hinge = o.swing > 0 ? P0 : P1;
+            const Vec2 latch = o.swing > 0 ? P1 : P0;
+            const Real w = (P1 - P0).length();
+            const Vec2 leaf = hinge + inw * w;
+            s.line(hinge - inw * (t * 0.5), leaf, "#1d2430", 1.6);
+            s.arc(hinge, latch, o.swing > 0 ? 90.0 : -90.0, "#8e97a6", 0.9);
+        } else {
+            // Glazing: a pair of thin lines set in the reveal, plus jambs.
+            s.line(P0 - inw * (t * 0.35), P1 - inw * (t * 0.35), "#4a7fa8", 1.0);
+            s.line(P0 - inw * (t * 0.65), P1 - inw * (t * 0.65), "#4a7fa8", 1.0);
+            s.line(P0, P0 - inw * t, "#232a36", 0.7);
+            s.line(P1, P1 - inw * t, "#232a36", 0.7);
+        }
+    }
+}
+
+static void sheetBlueprint(const char* dir, uint32_t seed) {
+    struct Cell { const char* t; const char* d; Poly2 plan; std::vector<Opening> ops; Real th; };
+    std::vector<Cell> cells;
+    const Real T = 0.34;                       // wall thickness (m)
+
+    auto roles = [](const Poly2& p, const std::vector<WallRole>& r, Real bay,
+                    int doorEdge, int doorBay) {
+        std::vector<Opening> out;
+        for (std::size_t i = 0; i < p.size(); ++i) {
+            const Real len = (p[(i + 1) % p.size()] - p[i]).length();
+            const auto o = wallProgram(i, len, r[i], bay,
+                                       static_cast<int>(i) == doorEdge ? doorBay : -1);
+            out.insert(out.end(), o.begin(), o.end());
+        }
+        return out;
+    };
+
+    {   // A house: street front with the door, windows all round, blank party side
+        Poly2 p{Vec2(0, 0), Vec2(12, 0), Vec2(12, 9), Vec2(0, 9)};
+        std::vector<WallRole> r{WallRole::Street, WallRole::Side, WallRole::Rear,
+                                WallRole::Side};
+        cells.push_back({"house", "door on the street bay; rear sills raised", p,
+                         roles(p, r, 3.0, 0, 1), T});
+    }
+    {   // A rowhouse unit: party walls BLANK by construction, not by luck
+        Poly2 p{Vec2(0, 0), Vec2(6.4, 0), Vec2(6.4, 11), Vec2(0, 11)};
+        std::vector<WallRole> r{WallRole::Street, WallRole::Party, WallRole::Rear,
+                                WallRole::Party};
+        cells.push_back({"rowhouse unit", "party walls carry no openings at all", p,
+                         roles(p, r, 2.9, 0, 0), T});
+    }
+    {   // An L-plan: the wall program follows the plan round every corner
+        Poly2 p{Vec2(0, 0), Vec2(15, 0), Vec2(15, 7), Vec2(8, 7), Vec2(8, 13), Vec2(0, 13)};
+        std::vector<WallRole> r{WallRole::Street, WallRole::Side, WallRole::Rear,
+                                WallRole::Side, WallRole::Rear, WallRole::Side};
+        cells.push_back({"L-plan", "one program, six walls, no special cases", p,
+                         roles(p, r, 3.2, 0, 2), T});
+    }
+    {   // A tower floor plate — thicker core walls, curtain bays all round
+        Poly2 p = tessellate(filletAllCorners(
+            arcFromPoly(Poly2{Vec2(0, 0), Vec2(20, 0), Vec2(20, 18), Vec2(0, 18)}), 2.6), 0.08);
+        std::vector<WallRole> r(p.size(), WallRole::Street);
+        std::vector<Opening> ops;
+        for (std::size_t i = 0; i < p.size(); ++i) {
+            const Real len = (p[(i + 1) % p.size()] - p[i]).length();
+            if (len < 1.6) continue;               // skip the corner chords
+            const auto o = wallProgram(i, len, r[i], 2.2, -1);
+            ops.insert(ops.end(), o.begin(), o.end());
+        }
+        cells.push_back({"tower plate", "rounded corners; bays skip the chord joints",
+                         p, ops, 0.28});
+    }
+
+    const Real cellW = 360, cellH = 400;
+    const int cols = 4;
+    Svg s;
+    svgOpen(s, (std::string(dir) + "/blueprint.svg").c_str(), cellW * cols + 60,
+            cellH + 190, "Lot Lab — the plan as a blueprint");
+    s.textPx(28, 68, "Walls have thickness; openings are punched through the poche by boolean. "
+                     "An opening is a SPAN ALONG A WALL (plan) plus a sill/head (storey) — "
+                     "together they fully determine the 3-D opening, so the blueprint decides "
+                     "and the 3-D pass reads.", 12, "#6b7280");
+
+    const Real drawW = cellW - 80, drawH = 250;
+    for (std::size_t i = 0; i < cells.size(); ++i) {
+        const Real bx = 40 + static_cast<Real>(i) * cellW + 26, by = 128;
+        Vec2 lo, hi;
+        engine::bounds(cells[i].plan, lo, hi);
+        const Real w = hi.x - lo.x, h = hi.y - lo.y;
+        s.scale = std::min(drawW / std::max(w, Real(1)), drawH / std::max(h, Real(1)));
+        s.ox = bx + (drawW - w * s.scale) * 0.5 - lo.x * s.scale;
+        s.oy = by + (drawH - h * s.scale) * 0.5 - lo.y * s.scale;
+        drawBlueprint(s, cells[i].plan, cells[i].th, cells[i].ops);
+
+        int doors = 0, wins = 0;
+        for (const Opening& o : cells[i].ops) (o.door ? doors : wins)++;
+        char buf[192];
+        snprintf(buf, sizeof buf, "%s", cells[i].t);
+        s.textPx(bx, by + drawH + 44, buf, 14, "#1d2430", "start", "600");
+        snprintf(buf, sizeof buf, "%s", cells[i].d);
+        s.textPx(bx, by + drawH + 61, buf, 11, "#6b7280");
+        snprintf(buf, sizeof buf, "%.0f m2  ·  %d doors, %d windows  ·  %.0f cm walls",
+                 engine::area(cells[i].plan), doors, wins, cells[i].th * 100);
+        s.textPx(bx, by + drawH + 76, buf, 10, "#9aa1ad");
+    }
+    (void)seed;
+    svgClose(s);
+}
+
+// ---------------------------------------------------------------------------
+// Sheet 7 — THE STACK. Blueprints going UP: base, shaft, crown; several towers
+// off one podium; and lofting between plans so a tower is not a prism.
+// ---------------------------------------------------------------------------
+
+// LOFT by interpolating the two plans' distance FIELDS, not their vertices.
+// Vertex-lerp needs a correspondence and dies the moment the plans differ in
+// count or topology; field-lerp handles a square becoming a circle, and one
+// loop splitting into two, with no special case. Both halves already exist.
+static std::vector<Poly2> loftPlans(const std::vector<Poly2>& A,
+                                    const std::vector<Poly2>& B, Real t,
+                                    Real twistRad = 0, Real cell = 0.16) {
+    Vec2 lo(1e30, 1e30), hi(-1e30, -1e30);
+    for (const auto* S : {&A, &B})
+        for (const Poly2& p : *S) {
+            Vec2 a, b;
+            engine::bounds(p, a, b);
+            lo = Vec2(std::min(lo.x, a.x), std::min(lo.y, a.y));
+            hi = Vec2(std::max(hi.x, b.x), std::max(hi.y, b.y));
+        }
+    lo = lo - Vec2(3, 3);
+    hi = hi + Vec2(3, 3);
+    Field f = fieldMake(lo, hi, cell);
+    const Vec2 c((lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5);
+    auto dist = [](const std::vector<Poly2>& S, const Vec2& q) {
+        Real d = 1e30;
+        for (const Poly2& p : S) d = std::min(d, sdfPolyAt(p, q));
+        return d;
+    };
+    for (int j = 0; j < f.ny; ++j)
+        for (int i = 0; i < f.nx; ++i) {
+            const Vec2 q = f.pos(i, j);
+            f.d[static_cast<std::size_t>(j) * f.nx + i] =
+                dist(A, q) * (1 - t) + dist(B, q) * t;
+        }
+    std::vector<Poly2> out = orientByNesting(fieldContour(f));
+    // TWIST is applied to the finished storey plan, not to the sampling: the
+    // plan is what rotates as the tower rises. Rotating one input's frame
+    // instead blends an unrotated field with a rotated one, and the levels
+    // cross through each other.
+    if (std::fabs(twistRad) > 1e-9) {
+        const Real cs = std::cos(twistRad), sn = std::sin(twistRad);
+        for (Poly2& p : out)
+            for (Vec2& v : p) {
+                const Vec2 r = v - c;
+                v = Vec2(c.x + r.x * cs - r.y * sn, c.y + r.x * sn + r.y * cs);
+            }
+    }
+    return out;
+}
+
+static void sheetStack(const char* dir, uint32_t seed) {
+    Svg s;
+    const Real cellW = 420, cellH = 400;
+    const int cols = 3, rows = 2;
+    svgOpen(s, (std::string(dir) + "/stack.svg").c_str(), cellW * cols + 60,
+            cellH * rows + 180, "Lot Lab — blueprints going up");
+    s.textPx(28, 68, "Every tier is CLIPPED to the tier below, so containment is a guarantee, "
+                     "not a check. Lofts interpolate distance fields, which survives a change "
+                     "of vertex count and even of topology.", 12, "#6b7280");
+
+    const Real drawW = cellW - 90, drawH = 250;
+    auto place = [&](int i, Real spanX, Real spanY) {
+        const int cx = i % cols, cy = i / cols;
+        const Real bx = 40 + cx * cellW + 34, by = 118 + cy * cellH;
+        s.scale = std::min(drawW / spanX, drawH / spanY);
+        s.ox = bx + drawW * 0.5;
+        s.oy = by + drawH * 0.5;
+        return std::make_pair(bx, by);
+    };
+    auto label = [&](Real bx, Real by, const char* t, const char* d, const char* stat) {
+        s.textPx(bx, by + drawH + 44, t, 14, "#1d2430", "start", "600");
+        s.textPx(bx, by + drawH + 61, d, 11, "#6b7280");
+        s.textPx(bx, by + drawH + 76, stat, 10, "#9aa1ad");
+    };
+
+    // --- 1: base / podium / shaft / crown, each clipped to the one below ----
+    {
+        auto [bx, by] = place(0, 46, 46);
+        auto roundedSquare = [](Real half, Real r) {
+            return tessellate(filletAllCorners(arcFromPoly(Poly2{
+                Vec2(-half, -half), Vec2(half, -half),
+                Vec2(half, half), Vec2(-half, half)}), r), 0.08);
+        };
+        std::vector<Poly2> podium{roundedSquare(19, 3.0)};
+        // Each tier is AUTHORED on its own terms, then clipped to the one
+        // below — that clip is what makes containment a guarantee.
+        std::vector<Poly2> shaft = polyBool({roundedSquare(14, 4.5)}, podium, BOp::Intersect);
+        std::vector<Poly2> crown =
+            polyBool({regularPoly(Vec2(0, 0), 9.0, 32, 0)}, shaft, BOp::Intersect);
+        const char* fills[3] = {"#d6dae2", "#c2c8d3", "#aeb6c4"};
+        int k = 0;
+        for (const auto* L : {&podium, &shaft, &crown}) {
+            for (const Poly2& p : *L) s.poly(p, fills[k], "#232a36", 1.6);
+            ++k;
+        }
+        label(bx, by, "1 · base → shaft → crown",
+              "each tier clipped to the one below",
+              "3 tiers · containment guaranteed by the clip");
+    }
+    // --- 2: several towers off one podium ---------------------------------
+    {
+        auto [bx, by] = place(1, 46, 46);
+        Poly2 podium{Vec2(-21, -13), Vec2(21, -13), Vec2(21, 13), Vec2(-21, 13)};
+        podium = tessellate(filletAllCorners(arcFromPoly(podium), 3.0), 0.1);
+        std::vector<Poly2> towers{
+            regularPoly(Vec2(-12, 0), 7.4, 6, kTau * 0.08),
+            regularPoly(Vec2(7, 2), 6.0, 24, 0),
+            Poly2{Vec2(12, -10), Vec2(19, -10), Vec2(19, -3), Vec2(12, -3)}};
+        std::vector<Poly2> clipped;
+        for (const Poly2& t : towers) {
+            auto c = polyBool({t}, {podium}, BOp::Intersect);
+            clipped.insert(clipped.end(), c.begin(), c.end());
+        }
+        s.poly(podium, "#d6dae2", "#232a36", 1.6);
+        for (const Poly2& p : clipped) s.poly(p, "#aeb6c4", "#232a36", 1.6);
+        label(bx, by, "2 · towers on a podium",
+              "one tier holds SEVERAL plans, each clipped",
+              "1 podium + 3 towers · different heights, one base");
+    }
+    // --- 3: loft square -> circle ------------------------------------------
+    {
+        auto [bx, by] = place(2, 40, 40);
+        std::vector<Poly2> A{Poly2{Vec2(-15, -15), Vec2(15, -15), Vec2(15, 15), Vec2(-15, 15)}};
+        std::vector<Poly2> B{regularPoly(Vec2(0, 0), 9, 40, 0)};
+        for (int k = 0; k <= 6; ++k) {
+            const Real t = k / 6.0;
+            char col[16];
+            snprintf(col, sizeof col, "#%02x%02x%02x", 35 + k * 12, 42 + k * 12, 54 + k * 12);
+            for (const Poly2& p : loftPlans(A, B, t))
+                s.poly(p, "none", col, k == 0 || k == 6 ? 2.0 : 1.0);
+        }
+        label(bx, by, "3 · loft: square → circle",
+              "7 storey plans, field-interpolated",
+              "vertex counts differ — a vertex lerp cannot do this");
+    }
+    // --- 4: lofted AND twisted ---------------------------------------------
+    {
+        auto [bx, by] = place(3, 44, 44);
+        std::vector<Poly2> A{Poly2{Vec2(-16, -11), Vec2(16, -11), Vec2(16, 11), Vec2(-16, 11)}};
+        std::vector<Poly2> B{Poly2{Vec2(-9, -7), Vec2(9, -7), Vec2(9, 7), Vec2(-9, 7)}};
+        for (int k = 0; k <= 7; ++k) {
+            const Real t = k / 7.0;
+            char col[16];
+            snprintf(col, sizeof col, "#%02x%02x%02x", 35 + k * 11, 42 + k * 11, 54 + k * 11);
+            for (const Poly2& p : loftPlans(A, B, t, t * kTau * 0.10))
+                s.poly(p, "none", col, k == 0 || k == 7 ? 2.0 : 1.0);
+        }
+        label(bx, by, "4 · loft + twist",
+              "the upper plan sampled in a rotating frame",
+              "8 storey plans · taper and spiral from one op");
+    }
+    // --- 5: the terrace is a boolean ---------------------------------------
+    {
+        auto [bx, by] = place(4, 46, 46);
+        Poly2 lower{Vec2(-20, -14), Vec2(20, -14), Vec2(20, 14), Vec2(-20, 14)};
+        std::vector<Poly2> upper{Poly2{Vec2(-20, -14), Vec2(4, -14), Vec2(4, 8), Vec2(-20, 8)}};
+        auto terrace = polyBool({lower}, upper, BOp::Subtract);
+        s.poly(lower, "#e6e9ee", "#8a8578", 1.0, "stroke-dasharray=\"5 4\"");
+        for (const Poly2& p : terrace) s.poly(p, "#a9c69a", "#4d6b43", 1.6);
+        for (const Poly2& p : upper) s.poly(p, "#aeb6c4", "#232a36", 1.8);
+        label(bx, by, "5 · terraces fall out",
+              "exposed roof = lower plan MINUS upper plan",
+              "no special case — the setback terrace is a subtract");
+    }
+    // --- 6: topology change through the loft --------------------------------
+    {
+        auto [bx, by] = place(5, 46, 46);
+        std::vector<Poly2> A{Poly2{Vec2(-19, -7), Vec2(19, -7), Vec2(19, 7), Vec2(-19, 7)}};
+        std::vector<Poly2> B{regularPoly(Vec2(-11, 0), 5.4, 26, 0),
+                             regularPoly(Vec2(11, 0), 5.4, 26, 0)};
+        for (int k = 0; k <= 5; ++k) {
+            const Real t = k / 5.0;
+            char col[16];
+            snprintf(col, sizeof col, "#%02x%02x%02x", 35 + k * 14, 42 + k * 14, 54 + k * 14);
+            for (const Poly2& p : loftPlans(A, B, t))
+                s.poly(p, "none", col, k == 0 || k == 5 ? 2.0 : 1.0);
+        }
+        label(bx, by, "6 · one slab → two towers",
+              "the loft SPLITS; the field does not care",
+              "topology change for free — the payoff for field lofting");
     }
     (void)seed;
     svgClose(s);
@@ -1894,6 +2281,9 @@ int main(int argc, char** argv) {
     lab::sheetShapes(out, seed);
     lab::sheetCurves(out, seed);
     lab::sheetCompose(out, seed);
-    printf("lot_lab: wrote %s/{lots,plans,shapes,curves,compose}.svg (seed %u)\n", out, seed);
+    lab::sheetBlueprint(out, seed);
+    lab::sheetStack(out, seed);
+    printf("lot_lab: wrote %s/{lots,plans,shapes,curves,compose,blueprint,stack}.svg "
+           "(seed %u)\n", out, seed);
     return 0;
 }
