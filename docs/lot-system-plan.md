@@ -573,8 +573,9 @@ later phase encodes assumptions about what the kernel can express.
 them out of the vocabulary above — `Region` with holes, the exact rectilinear
 boolean, the sampled-field path, per-edge setbacks, the plan grammar, the
 subtractive zone allocation, prop dart-throwing, gates placed where a path
-crosses a boundary — and writes seven sheets: `lots.svg`, `plans.svg`,
-`shapes.svg`, `curves.svg`, `compose.svg`, `blueprint.svg`, `stack.svg`.
+crosses a boundary — and writes eight sheets: `lots.svg`, `plans.svg`,
+`shapes.svg`, `curves.svg`, `compose.svg`, `blueprint.svg`, `stack.svg`,
+`recipes.svg`.
 
 ```sh
 c++ -std=c++17 -O1 tools/lot_lab.cpp \
@@ -751,6 +752,77 @@ and why lofting should be opt-in per recipe rather than the default.
 one loop or tessellated before it meets the boolean, so the arc kernel and the
 boolean kernel do not yet talk to each other. A lofted *arc* plan is therefore
 tessellated too. That seam is the last open question in L0.
+
+### 15.5 Where the data/code line sits (`recipes.svg`)
+
+The rule:
+
+> **Code owns verbs. Data owns nouns and numbers.**
+
+Code knows *how* to punch an opening, split a wall on a module, sweep a
+cornice, loft a plan. Data says *which*, *where*, and *how big*. The test for
+the line being in the right place: **if adding an architectural style requires
+a C++ change, the line is wrong.**
+
+| Layer | Code (C++, hot, tested) | Data (Lua, hot-reloadable) |
+|---|---|---|
+| L0 kernel | every geometric op | — (knows nothing about buildings) |
+| L1 grammars | the plan grammar's ops, the wall splitter, the element emitters, the loft | which ops, in what order, with what numbers |
+| L2 recipes | — | **the building designs live here** |
+| L3 site | the zone allocator, the prop packer | lot programs, coverage, setbacks, palettes |
+
+**Fenestration is the worked example.** There is a small **closed set of
+strategies** in code — `punched`, `plate`, `ribbon`, `curtain`, `clerestory`,
+`storefront`, `blank` — each of which knows how to glaze a wall run. Everything
+else is a table:
+
+```lua
+-- assets/recipes/buildings/modern_house.lua
+return {
+  fenestration = {
+    { on = "edge:street", strategy = "plate",  margin = 1.4, sill = 0.45, head = 2.7, door = true },
+    { on = "edge:side",   strategy = "plate",  margin = 2.2, sill = 0.45, head = 2.7 },
+    { on = "edge:party",  strategy = "blank" },
+    corner_glazing = { wrap = 2.4, sill = 0.45, head = 2.7 },
+  },
+  massing = "L", palette = "warm_concrete",
+}
+```
+
+`recipes.svg` is the proof: five visibly different buildings — Victorian
+terrace, modern house, glass tower, factory, corner shop — from **one plan and
+one code path**, differing only in that table. Adding Edwardian, brutalist or
+art deco is a new file. Adding *oriel windows* is one new strategy in C++, and
+then every oriel variant is data again.
+
+Three design consequences came out of building it:
+
+* **Fenestration must be a PLAN-level pass, not a per-wall function.** A corner
+  window spans two walls and deletes the post between them — a per-wall
+  function structurally cannot express it. So corners are claimed first, then
+  each wall glazes the run it has left. This is the concrete reason the
+  original §6.1 "bay grid per wall" is not sufficient on its own.
+* **The door is orthogonal to the glazing strategy.** A plate-glass wall still
+  needs an entrance. Placing the door first and letting it *split the run*
+  means every strategy — present and future — gets a door without knowing
+  doors exist.
+* **A wall's role is data, not geometry.** `party` is why the terrace's flank
+  is blank, and the glass tower's recipe overrides it to `curtain` because a
+  tower has no party walls. The role is asserted by the plan, honoured by the
+  table, and never inferred by the mesher.
+
+**What this means for the existing 40 architect recipes.** They are C++
+functions today (`recipeGlassTower`, `recipeBungalow`, …) that imperatively set
+~45 bools. They become tables of the shape above. Worth refining my earlier
+sequencing advice: keep them in **C++ through P2 for speed, but write them
+data-shaped from day one** — a list of `{selector, strategy, numbers}`, not a
+function body — so the move to Lua at P3 is mechanical rather than a rewrite.
+
+**The discipline this needs.** Data-driven means a bad table must not corrupt a
+city: recipes get schema-validated at load with a named fallback, and overrides
+stay pure (no RNG of their own) so determinism holds. The current `styleHook`
+bug — the style book applied *after* `capFloors`, so a data override can exceed
+the slenderness cap — is exactly the failure mode of skipping this.
 
 ## 16. Relationship to existing docs
 

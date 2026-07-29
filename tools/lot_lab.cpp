@@ -1565,6 +1565,55 @@ struct Opening {
     Real sill = 0.9, head = 2.4;   // the storey's half of the fact (metres)
 };
 
+// ===========================================================================
+// FENESTRATION: a small CLOSED set of strategies in code, an open set of
+// configurations in data.
+//
+// The line this draws: **code owns verbs, data owns nouns and numbers.** A
+// strategy knows HOW to glaze a wall — punch discrete openings on a module,
+// run a horizontal ribbon, glaze the whole thing as a curtain, leave it blank.
+// A recipe says WHICH strategy each wall gets and with what numbers. Adding
+// "Edwardian" or "brutalist" must be data only; adding a genuinely new kind of
+// geometry (oriels, a mansard) is one new strategy, and then every variant of
+// it is data again.
+//
+// Test for the line being in the right place: **if a new architectural style
+// requires a C++ change, the line is wrong.**
+// ===========================================================================
+
+enum class Fen : uint8_t {
+    Punched,      // discrete openings on a bay module (traditional)
+    Plate,        // one large fixed pane per wall (modern)
+    Ribbon,       // a continuous horizontal band (moderne / offices)
+    Curtain,      // the wall IS the glazing (towers)
+    Clerestory,   // a high strip, solid below (industrial)
+    Storefront,   // full-height glazing at grade (retail)
+    Blank,        // nothing, by construction (party walls)
+};
+
+// One rule: which walls it matches, and how to glaze them. A real system's
+// selector is richer (§6.2 — edge tag, floor range, bay index, corner
+// convexity); role is enough to make the point.
+struct WallRule {
+    WallRole role = WallRole::Street;
+    Fen fen = Fen::Punched;
+    Real bay = 3.0;          // Punched: target module
+    Real winW = 1.25;        // Punched: pane width (constant across walls)
+    Real margin = 1.2;       // Plate/Ribbon/Clerestory: inset from each end
+    Real sill = 0.9, head = 2.4;
+    bool door = false;       // this wall carries the entrance
+};
+
+// A building recipe's fenestration table. THIS is the thing that would live in
+// Lua; nothing below it changes when a new style is added.
+struct FenRecipe {
+    const char* name;
+    const char* blurb;
+    std::vector<WallRule> rules;   // matched by role; first match wins
+    Real cornerWrap = 0;           // >0: corner glazing wrapping this far each way
+    Real cornerSill = 0.4, cornerHead = 2.6;
+};
+
 // The WALL PROGRAM: partition one wall into bays and place its openings. This
 // is the existing facade logic, lifted out of 3-D and made reviewable — same
 // constant-module rule (a wide wall and a narrow one show the SAME window, the
@@ -1584,6 +1633,111 @@ static std::vector<Opening> wallProgram(std::size_t edge, Real length, WallRole 
         } else {
             const Real sill = (role == WallRole::Rear) ? 1.1 : 0.9;
             out.push_back({edge, c - winW * 0.5, c + winW * 0.5, false, 1, sill, 2.4});
+        }
+    }
+    return out;
+}
+
+// Glaze one wall run [a,b] (metres along the edge) with one strategy. This is
+// the ONLY place geometry decisions live — and it is a closed switch.
+static void glazeRun(std::vector<Opening>& out, std::size_t edge, Real a, Real b,
+                     const WallRule& r) {
+    const Real len = b - a;
+    if (len < 0.8) return;
+    switch (r.fen) {
+        case Fen::Blank:
+            return;
+        case Fen::Curtain: {                       // the wall IS the opening
+            out.push_back({edge, a + 0.12, b - 0.12, false, 1, 0.15, 3.0});
+            return;
+        }
+        case Fen::Storefront: {
+            if (len < 2.0) return;
+            out.push_back({edge, a + 0.5, b - 0.5, false, 1, 0.25, 2.9});
+            return;
+        }
+        case Fen::Plate: {
+            const Real m = std::min(r.margin, len * 0.28);
+            if (len - 2 * m < 1.0) return;
+            out.push_back({edge, a + m, b - m, false, 1, r.sill, r.head});
+            return;
+        }
+        case Fen::Ribbon:
+        case Fen::Clerestory: {
+            const Real m = std::min(r.margin, len * 0.18);
+            if (len - 2 * m < 1.0) return;
+            out.push_back({edge, a + m, b - m, false, 1, r.sill, r.head});
+            return;
+        }
+        case Fen::Punched:
+        default: {
+            const int bays = std::max(1, static_cast<int>(std::lround(len / r.bay)));
+            const Real bw = len / bays;
+            // Constant module: a wide wall and a narrow one show the SAME pane;
+            // the piers take the slack (ADR-0040).
+            const Real w = std::min(r.winW, std::max(Real(0.6), bw - 0.9));
+            for (int i = 0; i < bays; ++i) {
+                const Real c = a + bw * (i + 0.5);
+                out.push_back({edge, c - w * 0.5, c + w * 0.5, false, 1,
+                               r.sill, r.head});
+            }
+            return;
+        }
+    }
+}
+
+// FENESTRATE a whole plan. This runs per PLAN, not per wall — because a corner
+// window spans TWO walls and deletes the post between them, which a per-wall
+// function structurally cannot express. Corners are claimed first, then each
+// wall's remaining run is glazed by its rule.
+static std::vector<Opening> fenestrate(const Poly2& plan,
+                                       const std::vector<WallRole>& roles,
+                                       const FenRecipe& rec) {
+    const std::size_t n = plan.size();
+    std::vector<Opening> out;
+    std::vector<Real> claimStart(n, 0.0), claimEnd(n, 0.0);   // metres claimed at each end
+
+    auto ruleFor = [&](WallRole role) -> const WallRule* {
+        for (const WallRule& r : rec.rules) if (r.role == role) return &r;
+        return rec.rules.empty() ? nullptr : &rec.rules.front();
+    };
+
+    // 1. Corner glazing claims a span off BOTH walls meeting at a convex corner.
+    if (rec.cornerWrap > 0) {
+        for (std::size_t v = 0; v < n; ++v) {
+            const std::size_t prev = (v + n - 1) % n;
+            const Vec2 d0 = engine::normalize(plan[v] - plan[prev]);
+            const Vec2 d1 = engine::normalize(plan[(v + 1) % n] - plan[v]);
+            if (engine::cross(d0, d1) <= 1e-6) continue;   // CCW: convex is cross > 0
+            const Real lPrev = (plan[v] - plan[prev]).length();
+            const Real lNext = (plan[(v + 1) % n] - plan[v]).length();
+            const Real w = std::min(rec.cornerWrap,
+                                    std::min(lPrev, lNext) * 0.42);
+            if (w < 0.5) continue;
+            if (roles[prev] == WallRole::Party || roles[v] == WallRole::Party) continue;
+            out.push_back({prev, lPrev - w, lPrev, false, 1, rec.cornerSill, rec.cornerHead});
+            out.push_back({v, 0.0, w, false, 1, rec.cornerSill, rec.cornerHead});
+            claimEnd[prev] = std::max(claimEnd[prev], w);
+            claimStart[v] = std::max(claimStart[v], w);
+        }
+    }
+    // 2. Each wall glazes what is left of it, by its own rule.
+    for (std::size_t i = 0; i < n; ++i) {
+        const WallRule* r = ruleFor(roles[i]);
+        if (!r) continue;
+        const Real len = (plan[(i + 1) % n] - plan[i]).length();
+        const Real a = claimStart[i] + (claimStart[i] > 0 ? 0.35 : 0.0);
+        const Real b = len - claimEnd[i] - (claimEnd[i] > 0 ? 0.35 : 0.0);
+        // The DOOR is orthogonal to the glazing strategy: a plate-glass wall
+        // still needs an entrance. Place it first, then glaze what remains on
+        // either side — so every strategy gets a door without knowing about it.
+        if (r->door && b - a > human_DOOR_WIDTH + 1.2) {
+            const Real c = (a + b) * 0.5, dw = human_DOOR_WIDTH;
+            out.push_back({i, c - dw * 0.5, c + dw * 0.5, true, -1, 0.0, 2.1});
+            glazeRun(out, i, a, c - dw * 0.5 - 0.35, *r);
+            glazeRun(out, i, c + dw * 0.5 + 0.35, b, *r);
+        } else {
+            glazeRun(out, i, a, b, *r);
         }
     }
     return out;
@@ -1795,6 +1949,111 @@ static void drawBlueprint(Svg& s, const Poly2& plan, Real t,
             s.line(P1, P1 - inw * t, "#232a36", 0.7);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Sheet 8 — ONE PLAN, FIVE RECIPES. Same geometry, same code path; only the
+// fenestration table differs. If this sheet varies, the data/code line holds.
+// ---------------------------------------------------------------------------
+static void sheetRecipes(const char* dir, uint32_t seed) {
+    // The elevation is where the storey's half of the fact becomes visible:
+    // the plan owns the span along the wall, the storey owns sill and head.
+    auto elevation = [](Svg& s, Real px, Real py, Real len, Real storey,
+                        const std::vector<Opening>& ops, std::size_t edge,
+                        Real sc, bool mullions) {
+        const Real W = len * sc, H = storey * sc;
+        fprintf(s.f, "<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" "
+                     "fill=\"#e4e0d5\" stroke=\"#232a36\" stroke-width=\"1.4\"/>\n",
+                px, py - H, W, H);
+        fprintf(s.f, "<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" "
+                     "stroke=\"#8a8578\" stroke-width=\"1.0\"/>\n",
+                px - 8, py, px + W + 8, py);                   // ground line
+        for (const Opening& o : ops) {
+            if (o.edge != edge) continue;
+            const Real x0 = px + o.s0 * sc, x1 = px + o.s1 * sc;
+            const Real y0 = py - o.head * sc, y1 = py - o.sill * sc;
+            fprintf(s.f, "<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" "
+                         "fill=\"%s\" stroke=\"#232a36\" stroke-width=\"1.0\"/>\n",
+                    x0, y0, x1 - x0, y1 - y0, o.door ? "#6b5a45" : "#9fc4dd");
+            if (mullions && x1 - x0 > 20) {                    // curtain grid
+                for (Real x = x0 + 14; x < x1 - 6; x += 14)
+                    fprintf(s.f, "<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" "
+                                 "stroke=\"#5b6474\" stroke-width=\"0.9\"/>\n", x, y0, x, y1);
+            }
+        }
+    };
+
+    // ---- THE DATA. Everything that distinguishes these five buildings is in
+    // this array; not one line of geometry code below knows they exist. ----
+    const FenRecipe kRecipes[] = {
+        {"victorian terrace", "punched sash on a 3.0 m module; party walls blank",
+         {{WallRole::Street, Fen::Punched, 3.0, 1.05, 0, 0.9, 2.5, true},
+          {WallRole::Party,  Fen::Blank},
+          {WallRole::Rear,   Fen::Punched, 3.2, 1.0, 0, 1.1, 2.4, false},
+          {WallRole::Side,   Fen::Punched, 3.4, 0.9, 0, 1.1, 2.3, false}},
+         0.0},
+        {"modern house", "plate glass + wrapped CORNER windows",
+         {{WallRole::Street, Fen::Plate, 0, 0, 1.4, 0.45, 2.7, true},
+          {WallRole::Side,   Fen::Plate, 0, 0, 2.2, 0.45, 2.7, false},
+          {WallRole::Rear,   Fen::Plate, 0, 0, 1.2, 0.45, 2.7, false},
+          {WallRole::Party,  Fen::Blank}},
+         2.4, 0.45, 2.7},
+        {"glass tower", "curtain wall: the wall IS the opening",
+         {{WallRole::Street, Fen::Curtain}, {WallRole::Side, Fen::Curtain},
+          {WallRole::Rear,   Fen::Curtain}, {WallRole::Party, Fen::Curtain}},
+         0.0},
+        {"factory", "high clerestory strip, solid below",
+         {{WallRole::Street, Fen::Clerestory, 0, 0, 1.0, 3.3, 4.3, true},
+          {WallRole::Side,   Fen::Clerestory, 0, 0, 1.0, 3.3, 4.3, false},
+          {WallRole::Rear,   Fen::Clerestory, 0, 0, 1.0, 3.3, 4.3, false},
+          {WallRole::Party,  Fen::Blank}},
+         0.0},
+        {"corner shop", "storefront at grade, punched to the side",
+         {{WallRole::Street, Fen::Storefront, 0, 0, 0, 0.25, 2.9, false},
+          {WallRole::Side,   Fen::Storefront, 0, 0, 0, 0.25, 2.9, false},
+          {WallRole::Rear,   Fen::Punched, 3.0, 1.0, 0, 1.2, 2.4, false},
+          {WallRole::Party,  Fen::Blank}},
+         0.0},
+    };
+
+    const Poly2 plan{Vec2(0, 0), Vec2(13, 0), Vec2(13, 9), Vec2(0, 9)};
+    const std::vector<WallRole> roles{WallRole::Street, WallRole::Side,
+                                      WallRole::Rear, WallRole::Party};
+    const int n = static_cast<int>(sizeof kRecipes / sizeof kRecipes[0]);
+    const Real cellW = 350, cellH = 470;
+    Svg s;
+    svgOpen(s, (std::string(dir) + "/recipes.svg").c_str(), cellW * n + 60, cellH + 170,
+            "Lot Lab — one plan, one code path, five recipes");
+    s.textPx(28, 68, "Identical geometry and identical code. Everything that differs between "
+                     "these five buildings lives in a fenestration TABLE — strategy per wall "
+                     "role, plus numbers. Below each plan: the street elevation, where the "
+                     "storey's sill/head half of the fact becomes visible.", 12, "#6b7280");
+
+    for (int i = 0; i < n; ++i) {
+        const FenRecipe& rec = kRecipes[i];
+        const std::vector<Opening> ops = fenestrate(plan, roles, rec);
+        const Real bx = 40 + i * cellW + 26, by = 132;
+        s.scale = 17.0;
+        s.ox = bx + 8;
+        s.oy = by;
+        drawBlueprint(s, plan, 0.32, ops);
+
+        elevation(s, bx + 8, by + 9 * s.scale + 132, 13.0, 4.6, ops, 0, 17.0,
+                  rec.rules[0].fen == Fen::Curtain);
+
+        int doors = 0, wins = 0;
+        for (const Opening& o : ops) (o.door ? doors : wins)++;
+        char buf[192];
+        snprintf(buf, sizeof buf, "%s", rec.name);
+        s.textPx(bx, by + 9 * s.scale + 180, buf, 14, "#1d2430", "start", "600");
+        snprintf(buf, sizeof buf, "%s", rec.blurb);
+        s.textPx(bx, by + 9 * s.scale + 197, buf, 10.5, "#6b7280");
+        snprintf(buf, sizeof buf, "%d openings (%d door)  ·  %s", wins + doors, doors,
+                 rec.cornerWrap > 0 ? "corner glazing on" : "no corner glazing");
+        s.textPx(bx, by + 9 * s.scale + 212, buf, 10, "#9aa1ad");
+    }
+    (void)seed;
+    svgClose(s);
 }
 
 static void sheetBlueprint(const char* dir, uint32_t seed) {
@@ -2283,7 +2542,9 @@ int main(int argc, char** argv) {
     lab::sheetCompose(out, seed);
     lab::sheetBlueprint(out, seed);
     lab::sheetStack(out, seed);
-    printf("lot_lab: wrote %s/{lots,plans,shapes,curves,compose,blueprint,stack}.svg "
+    lab::sheetRecipes(out, seed);
+    printf("lot_lab: wrote %s/{lots,plans,shapes,curves,compose,blueprint,stack,"
+           "recipes}.svg "
            "(seed %u)\n", out, seed);
     return 0;
 }
