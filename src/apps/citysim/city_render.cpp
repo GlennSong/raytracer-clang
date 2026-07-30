@@ -1174,7 +1174,20 @@ void CityRenderSystem::syncCarLamps(World& world) {
                                       turnDir);
         if (!lamps.head && !lamps.brake && !lamps.left && !lamps.right) continue;
 
-        const Mat4 pose = agentPose(a);
+        // SAME POSE SOURCE AS THE BODY. A physically-possessed agent draws its
+        // car at the Jolt body's pose (physPose_), while the sim's kinematic
+        // ghost "legitimately runs ahead/behind" it — so taking agentPose()
+        // here hung the lamps off the GHOST and left them floating down the
+        // street beside their own car. One car, one pose.
+        const auto lampPo = physPose_.find(static_cast<int>(ai));
+        // NB: no agent index — agentPose(a, idx) ADVANCES the tilt low-pass for
+        // that agent, and the body already advanced it this step. Passing it
+        // here ran the filter twice a tick and reintroduced the pose vibration
+        // car_pose_probe_no_vibration_on_jagged_ground exists to catch. Lamps
+        // need the POSITION to match the car; a tick of tilt smoothing on a
+        // 0.28 m lens is not observable.
+        const Mat4 pose =
+            lampPo != physPose_.end() ? lampPo->second : agentPose(a);
         const Real yaw = std::atan2(a.heading.x, a.heading.y);
         const Quat rot = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
         for (const LampMarker& m : markers) {
