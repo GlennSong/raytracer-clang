@@ -10,13 +10,26 @@ paper**, and that is where the design risk actually lives. The lab is the P0
 acceptance harness.
 
 ```sh
-c++ -std=c++17 -O2 tools/lot_lab.cpp \
-    src/engine/procgen/city/polygon.cpp -o /tmp/lot_lab
-OUT=/tmp /tmp/lot_lab 7          # seed 7
+./tools/lot_lab_build.sh && OUT=/tmp /tmp/lot_lab 7
 ```
 
-Eleven sheets: `lots`, `plans`, `shapes`, `curves`, `compose`, `blueprint`,
-`stack`, `recipes`, `corner`, `silhouette`, `port`.
+**Two kinds of sheet, and the difference matters.**
+
+* **`engine.svg` is GROUND TRUTH.** The lab links the real city module and runs
+  the shipping pipeline headlessly — `gridRoads → planarize → extractBlocks →
+  growLotBuildings` — then draws what it actually produced, including the
+  architect's recipe tally and the rejection counters. Change `city_lots.cpp` or
+  `architect.cpp`, rebuild, and the difference appears here. Nothing on that
+  sheet is a reconstruction.
+* **Every other sheet is a PROTOTYPE** of ops the engine does not have yet. They
+  prove feasibility and they have earned their keep by finding real bugs, but
+  they are not engine functionality, and the "today" panels in `port.svg` and
+  `buildable.svg` are drawn from *reading* `architect.cpp`, not from running it.
+  Those must be regenerated from `engine.svg`'s pipeline once P0 lands.
+
+Thirteen sheets: `engine` (real), then `lots`, `plans`, `shapes`, `curves`,
+`compose`, `blueprint`, `stack`, `recipes`, `corner`, `silhouette`, `port`,
+`buildable` (prototype).
 
 **The three findings that changed the plan**, if you only want those:
 [where data ends and code begins](#where-the-datacode-line-sits-recipessvg),
@@ -496,6 +509,30 @@ Two limitations survive it, and both are honest costs rather than oversights:
   recipe knows about parcels. In the new model that inverts: the *program*
   (§8.1) reads the lot and picks a recipe that fits, so a recipe never needs to
   ask how big its site is.
+
+## What the engine sheet found immediately (`engine.svg`)
+
+The first run of the honest harness surfaced a defect in the shipping pipeline
+that no amount of prototyping would have shown, because it is a property of the
+real parceller on real blocks:
+
+**An 11,359 m² block produced three small buildings.** Panel 4 zooms the largest
+block in the default grid city: the parcel pass leaves one enormous lot covering
+most of the block, with three modest buildings clustered along one edge and the
+rest empty. Across the whole city (panel 3) the pattern repeats — blocks with
+one or two small masses adrift in open ground.
+
+And panel 6 shows *why it is not caught*: only **3 of 55 parcels** were rejected,
+all three by the occupancy roll. The sliver, aspect, fill, clearance and box
+counters are all **zero**. So nothing is being rejected — the parcels are simply
+being cut at a grain that has no relationship to what will be built on them, and
+the rejection counters cannot see that because they only ever ask "can this
+particular lot carry a building", never "is this a sensible way to cut a block".
+
+This is direct evidence for §17.1: the fix is not another gate. It is inverting
+the cut so a program's minimum rectangle drives the subdivision, at which point
+an 11,000 m² block either becomes many properly-sized lots or one large-program
+parcel — and never the current mixture of one giant lot and three cottages.
 
 ## Rarity is a quota, not a probability
 

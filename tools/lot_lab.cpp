@@ -8,13 +8,10 @@
 // layer (the 2D kernel) is also the one that needs no renderer to judge, and
 // this is the loop that judges it.
 //
-// Build (from the repo root). The only dependencies are two engine translation
-// units — which is itself the plan's claim, that the 2D machinery already
-// exists and is merely unwired:
+// Build (from the repo root) — see tools/lot_lab_build.sh, which links the real
+// city module so `sheetEngine` can drive the shipping pipeline headlessly:
 //
-//   c++ -std=c++17 -O1 tools/lot_lab.cpp \
-//       src/engine/procgen/city/polygon.cpp \
-//       src/engine/procgen/city/road_offset.cpp -o /tmp/lot_lab
+//   ./tools/lot_lab_build.sh && OUT=/tmp /tmp/lot_lab 7
 //
 // Run:
 //   /tmp/lot_lab              # writes lots.svg / plans.svg / shapes.svg to .
@@ -25,6 +22,15 @@
 // ---------------------------------------------------------------------------
 
 #include "../src/engine/procgen/city/polygon.h"
+// THE ENGINE ITSELF. `sheetEngine` drives the real road → block → parcel →
+// architect → building pipeline headlessly and draws what it actually produced.
+// Every other sheet on this tool is a PROTOTYPE of proposed ops that do not
+// exist in the engine yet; this one is ground truth, and it is what the
+// proposals get measured against.
+#include "../src/engine/procgen/city/road_network.h"
+#include "../src/engine/procgen/city/city_lots.h"
+#include "../src/engine/procgen/city/architect.h"
+#include "../src/engine/procgen/city/parcel.h"
 
 #include <algorithm>
 #include <cmath>
@@ -2278,6 +2284,190 @@ static PlanDefect planQuality(const Poly2& p, Real minEdge = 2.2,
     return d;
 }
 
+// ===========================================================================
+// Sheet 0 — THE ENGINE, drawn. No prototype code below this line: every shape
+// on this sheet came out of the shipping pipeline.
+//
+//   gridRoads -> planarize -> extractBlocks -> growLotBuildings
+//
+// This is the sheet that makes the tool honest. It is the baseline any proposal
+// has to beat, and it is the diagnostic for changing the engine: alter
+// `city_lots.cpp` or `architect.cpp`, rebuild, and see the difference on paper.
+// ===========================================================================
+static void sheetEngine(const char* dir, uint32_t seed) {
+    engine::GridRoadParams gp;
+    gp.extent = 150;
+    gp.seed = seed;
+    const engine::RoadGraph g = engine::planarize(engine::gridRoads(gp));
+    const std::vector<Poly2> blocks = engine::extractBlocks(g, 200);
+
+    engine::LotParams lp;
+    lp.seed = seed;
+    engine::LotPlanDebug dbg;
+    const std::vector<engine::LotBuilding> built =
+        engine::growLotBuildings(blocks, lp, &dbg);
+
+    Svg s;
+    const Real cellW = 470, cellH = 470;
+    svgOpen(s, (std::string(dir) + "/engine.svg").c_str(), cellW * 3 + 60, cellH * 2 + 190,
+            "Lot Lab — the ENGINE's own output (nothing on this sheet is a prototype)");
+    s.textPx(28, 68, "gridRoads -> planarize -> extractBlocks -> growLotBuildings, run headlessly. "
+                     "This is the baseline; change city_lots.cpp or architect.cpp, rebuild, and "
+                     "the difference shows up here.", 12, "#6b7280");
+
+    Vec2 lo, hi;
+    engine::bounds(blocks.empty() ? Poly2{Vec2(-150, -150), Vec2(150, 150)} : blocks[0], lo, hi);
+    for (const Poly2& b : blocks) {
+        Vec2 a, c;
+        engine::bounds(b, a, c);
+        lo = Vec2(std::min(lo.x, a.x), std::min(lo.y, a.y));
+        hi = Vec2(std::max(hi.x, c.x), std::max(hi.y, c.y));
+    }
+    const Real span = std::max(hi.x - lo.x, hi.y - lo.y) + 8;
+    const Vec2 mid((lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5);
+
+    auto frame = [&](int i, Real sp) {
+        const int cx = i % 3, cy = i / 3;
+        const Real bx = 40 + cx * cellW + 30, by = 118 + cy * cellH;
+        s.scale = 330.0 / sp;
+        s.ox = bx + 165 - mid.x * s.scale;
+        s.oy = by + 165 - mid.y * s.scale;
+        return std::make_pair(bx, by);
+    };
+    auto label = [&](Real bx, Real by, const char* t, const char* d, const char* st) {
+        s.textPx(bx, by + 372, t, 14, "#1d2430", "start", "600");
+        s.textPx(bx, by + 389, d, 10.5, "#6b7280");
+        s.textPx(bx, by + 404, st, 10, "#9aa1ad");
+    };
+    char buf[220];
+
+    // --- 1: the real road graph + the faces it encloses --------------------
+    {
+        auto [bx, by] = frame(0, span);
+        for (const Poly2& b : blocks) s.poly(b, "#eceadf", "#c9c3b4", 1.0);
+        for (const engine::RoadEdge& e : g.edges) {
+            if (e.a < 0 || e.b < 0) continue;
+            s.line(g.nodes[e.a].pos, g.nodes[e.b].pos, "#8a8578",
+                   std::max(Real(0.7), e.width * s.scale * 0.10));
+        }
+        snprintf(buf, sizeof buf, "%zu nodes, %zu edges -> %zu blocks",
+                 g.nodes.size(), g.edges.size(), blocks.size());
+        label(bx, by, "1 · engine roads and blocks",
+              "gridRoads -> planarize -> extractBlocks", buf);
+    }
+    // --- 2: the real parcels ------------------------------------------------
+    {
+        auto [bx, by] = frame(1, span);
+        for (const Poly2& b : dbg.blocks) s.poly(b, "#f2eee5", "#c9c3b4", 0.8);
+        for (const Poly2& l : dbg.lots) s.poly(l, "#dfe7d5", "#7d9a6c", 0.9);
+        snprintf(buf, sizeof buf, "%zu block interiors -> %zu parcels",
+                 dbg.blocks.size(), dbg.lots.size());
+        label(bx, by, "2 · engine parcels",
+              "subdivideBlock, inset by roadMargin first", buf);
+    }
+    // --- 3: what the engine actually built ----------------------------------
+    {
+        auto [bx, by] = frame(2, span);
+        for (const Poly2& b : dbg.blocks) s.poly(b, "#f7f4ec", "#ddd8cc", 0.6);
+        int greens = 0, parks = 0, bld = 0;
+        for (const engine::LotBuilding& lb : built) {
+            if (lb.type == "green") { ++greens; if (lb.pad.size() >= 3) s.poly(lb.pad, "#e2ecd8", "none", 0); continue; }
+            if (lb.type == "park")  { ++parks;  if (lb.pad.size() >= 3) s.poly(lb.pad, "#cfe1c2", "#7d9a6c", 0.8); continue; }
+            if (lb.plan.size() >= 3) { s.poly(lb.plan, "#b9c0cc", "#232a36", 1.0); ++bld; }
+        }
+        snprintf(buf, sizeof buf, "%d buildings, %d parks, %d greens", bld, parks, greens);
+        label(bx, by, "3 · engine buildings",
+              "growLotBuildings — these are its real plan polygons", buf);
+    }
+    // --- 4: one block, up close ---------------------------------------------
+    {
+        // Pick the largest block so the parcel grain is legible.
+        std::size_t big = 0;
+        Real bestA = 0;
+        for (std::size_t i = 0; i < blocks.size(); ++i)
+            if (engine::area(blocks[i]) > bestA) { bestA = engine::area(blocks[i]); big = i; }
+        Vec2 blo, bhi;
+        engine::bounds(blocks.empty() ? Poly2{} : blocks[big], blo, bhi);
+        const Vec2 bmid((blo.x + bhi.x) * 0.5, (blo.y + bhi.y) * 0.5);
+        const Real bspan = std::max(bhi.x - blo.x, bhi.y - blo.y) + 10;
+        const Real bx = 40 + 0 * cellW + 30, by = 118 + cellH;
+        s.scale = 330.0 / std::max(bspan, Real(1));
+        s.ox = bx + 165 - bmid.x * s.scale;
+        s.oy = by + 165 - bmid.y * s.scale;
+        if (!blocks.empty()) s.poly(blocks[big], "#f2eee5", "#c9c3b4", 1.2, "stroke-dasharray=\"5 4\"");
+        for (const Poly2& l : dbg.lots) {
+            if (l.empty() || blocks.empty()) continue;
+            if (!engine::pointInPolygon(blocks[big], engine::centroid(l))) continue;
+            s.poly(l, "#dfe7d5", "#7d9a6c", 1.0);
+        }
+        int here = 0;
+        for (const engine::LotBuilding& lb : built) {
+            if (blocks.empty() || lb.plan.size() < 3) continue;
+            if (!engine::pointInPolygon(blocks[big], lb.site)) continue;
+            s.poly(lb.plan, "#b9c0cc", "#232a36", 1.4);
+            ++here;
+        }
+        snprintf(buf, sizeof buf, "%.0f m2 block, %d buildings", bestA, here);
+        label(bx, by, "4 · one block, up close",
+              "the grain the engine actually cuts", buf);
+    }
+    // --- 5: what the architect chose ----------------------------------------
+    {
+        const Real bx = 40 + 1 * cellW + 30, by = 118 + cellH;
+        std::map<std::string, int> tally;
+        for (const engine::LotBuilding& lb : built) tally[lb.recipe]++;
+        std::vector<std::pair<int, std::string>> rows;
+        for (const auto& [k, v] : tally) rows.push_back({v, k});
+        std::sort(rows.rbegin(), rows.rend());
+        int maxN = rows.empty() ? 1 : rows.front().first;
+        for (std::size_t i = 0; i < rows.size() && i < 14; ++i) {
+            const Real y = by + 24 + static_cast<Real>(i) * 22;
+            const Real w = 150.0 * rows[i].first / std::max(1, maxN);
+            fprintf(s.f, "<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"13\" "
+                         "fill=\"#c2c8d3\" stroke=\"#8a8578\" stroke-width=\"0.5\"/>\n",
+                    bx + 130, y, std::max(w, Real(2)));
+            s.textPx(bx + 124, y + 11, rows[i].second.c_str(), 10, "#4b5563", "end");
+            snprintf(buf, sizeof buf, "%d", rows[i].first);
+            s.textPx(bx + 286, y + 11, buf, 10, "#9aa1ad");
+        }
+        snprintf(buf, sizeof buf, "%zu distinct recipes across %zu lots",
+                 tally.size(), built.size());
+        label(bx, by, "5 · what the architect picked",
+              "architectPick + the landmark planner, per lot", buf);
+    }
+    // --- 6: why lots did NOT build -------------------------------------------
+    {
+        const Real bx = 40 + 2 * cellW + 30, by = 118 + cellH;
+        const struct { const char* n; int v; } rej[] = {
+            {"occupancy roll", dbg.rejChance}, {"sliver (short side)", dbg.rejSliver},
+            {"aspect (knife)", dbg.rejAspect}, {"fill ratio", dbg.rejFill},
+            {"road clearance", dbg.rejClear},  {"box fallback", dbg.rejBox},
+        };
+        int worst = 1;
+        for (const auto& r : rej) worst = std::max(worst, r.v);
+        for (int i = 0; i < 6; ++i) {
+            const Real y = by + 34 + i * 30;
+            const Real w = 150.0 * rej[i].v / worst;
+            fprintf(s.f, "<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"16\" "
+                         "fill=\"%s\" stroke=\"#8a8578\" stroke-width=\"0.5\"/>\n",
+                    bx + 140, y, std::max(w, Real(2)),
+                    rej[i].v > 0 ? "#e8b9ad" : "#e4e0d5");
+            s.textPx(bx + 134, y + 13, rej[i].n, 10.5, "#4b5563", "end");
+            snprintf(buf, sizeof buf, "%d", rej[i].v);
+            s.textPx(bx + 298, y + 13, buf, 10.5, "#9aa1ad");
+        }
+        const int total = dbg.rejChance + dbg.rejSliver + dbg.rejAspect +
+                          dbg.rejFill + dbg.rejClear + dbg.rejBox;
+        snprintf(buf, sizeof buf, "%d of %zu parcels produced no building",
+                 total, dbg.lots.size());
+        label(bx, by, "6 · the engine's rejection counters",
+              "the dials §17.1 proposes to delete by inverting the cut", buf);
+    }
+    svgClose(s);
+    printf("  engine: %zu blocks, %zu parcels, %zu lot results\n",
+           blocks.size(), dbg.lots.size(), built.size());
+}
+
 // ---------------------------------------------------------------------------
 // Sheet 12 — BUILDABILITY: lots that can carry a building, and masses that can
 // stand up. Six things the plan had wrong or unsaid.
@@ -3530,6 +3720,7 @@ static void sheetShapes(const char* dir, uint32_t seed) {
 int main(int argc, char** argv) {
     const char* out = getenv("OUT") ? getenv("OUT") : ".";
     const uint32_t seed = argc > 1 ? static_cast<uint32_t>(atoi(argv[1])) : 7u;
+    lab::sheetEngine(out, seed);
     lab::sheetLots(out, seed);
     lab::sheetPlans(out, seed);
     lab::sheetShapes(out, seed);
@@ -3543,7 +3734,7 @@ int main(int argc, char** argv) {
     lab::sheetPort(out, seed);
     lab::sheetBuildable(out, seed);
     printf("lot_lab: wrote %s/{lots,plans,shapes,curves,compose,blueprint,stack,"
-           "recipes,corner,silhouette,port,buildable}.svg "
+           "engine,recipes,corner,silhouette,port,buildable}.svg "
            "(seed %u)\n", out, seed);
     return 0;
 }
