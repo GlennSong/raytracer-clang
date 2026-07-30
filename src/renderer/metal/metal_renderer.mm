@@ -320,12 +320,23 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     NSError* error = nil;
     NSArray<NSString*>* shaderFiles = @[
         @"shaders/metal/shader_types.h",   // GPU structs shared with C++
-        @"shaders/metal/common.metal",     // vertex layouts, BRDF + noise helpers
+        @"shaders/metal/common.metal",     // layouts, Fresnel, noise primitives
+
+        // --- surface library --- (each material owns its albedo *and* relief;
+        // surfaces.metal dispatches, so it comes last)
+        @"shaders/metal/surfaces_facade.metal", // brick/concrete/…/wood
+        @"shaders/metal/surface_road.metal",    // after facade: calls surfAsphalt
+        @"shaders/metal/surface_water.metal",
+        @"shaders/metal/surface_terrain.metal",
+        @"shaders/metal/surfaces.metal",        // applySurface + applySurfaceRelief
 
         // --- lighting ---
         @"shaders/metal/environment.metal",// sky/HDR providers, IBL precompute
         @"shaders/metal/shadows.metal",    // shadow pass + PCF lookup
-        @"shaders/metal/lighting.metal",   // probes, direct light, shadeSurface
+        @"shaders/metal/lighting_env.metal",     // IBL sampling + reflection probes
+        @"shaders/metal/lighting_brdf.metal",    // GGX terms + evaluateLighting
+        @"shaders/metal/lighting_surface.metal", // shadeSurface (needs surfaces.metal)
+        @"shaders/metal/lighting_entry.metal",   // vertex/fragment entry points
 
         // --- post stack --- (post_common first: SSR, AO *and* composite use it)
         @"shaders/metal/post_common.metal",   // unproject, linearize, bilateral

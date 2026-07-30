@@ -116,10 +116,18 @@ reads garbage (a 0 `shadowMapSize` → NaN). This is the #1 footgun in the file.
 | File | Role / key entry points |
 | --- | --- |
 | `shader_types.h` | All GPU structs (Camera/Light/Material/Instance/Shadow/Probe/Env/SSAO/SSR/Bloom/Composite/Lens/DOF/Terrain uniforms) |
-| `common.metal` | `Vertex`/`VertexOut`/`GBufferOut`, Fresnel/BRDF helpers, the analytic `applySurface` library (brick…road markings) |
+| `common.metal` | `Vertex`/`VertexOut`/`GBufferOut`, Fresnel/BRDF helpers, and the surface **primitives** (`hash21`/`vnoise2`/`fbm2`/`tile1`/`surfUV`) the library below is built from |
+| `surfaces_facade.metal` | The ten `(base, u, v)` tiling patterns: `surfBrick`, `surfConcrete`, `surfStucco`, `surfRoofTile`, `surfShingle`, `surfCorrugated`, `surfAsphalt`, `surfPavement`, `surfCobble`, `surfWood` |
+| `surface_road.metal` | `surfRoadMarkings` (albedo) + `surfaceReliefRoad` (normal/roughness). Must follow `surfaces_facade` — it calls `surfAsphalt` |
+| `surface_water.metal` | `surfWater` (albedo) + `surfaceReliefWater` (animated wave normals, sea-state roughness) |
+| `surface_terrain.metal` | `surfTerrain` (albedo) + `surfaceReliefTerrain` (slope-scaled relief) |
+| `surfaces.metal` | `applySurface` (albedo dispatch) + `applySurfaceRelief` (relief dispatch). Follows every `surface_*` module |
 | `environment.metal` | `vertexSkybox`/`fragmentSkybox`, `fragmentEquirectBake`, compute `integrateBRDF`/`prefilterEnvMap`/`convolveIrradiance` |
 | `shadows.metal` | `vertexShadow`(+`Instanced`), `terrainVertexShadow`, `computeShadow` (cascade select + PCF + cross-fade) |
-| `lighting.metal` | `vertexMain`/`terrainVertexMain`/`vertexMainInstanced`; `fragmentMain`(+`Instanced`) Cook-Torrance GGX + IBL + shadows + probes + fog; foliage depth/lit variants |
+| `lighting_env.metal` | `envIrradiance`, `envPrefilteredRadiance`, `boxProjectReflection`, `sampleReflectionProbes` |
+| `lighting_brdf.metal` | `distributionGGX`, `visibilitySmithGGX`, `distanceAttenuation`, `evaluateLighting` (Cook-Torrance) |
+| `lighting_surface.metal` | `SurfaceMaterial`/`SurfaceGeometry`, `shadeSurface` — the shared body both fragment entry points call. Needs `surfaces.metal` |
+| `lighting_entry.metal` | `vertexMain`/`terrainVertexMain`/`vertexMainInstanced`; `fragmentMain`(+`Instanced`); foliage depth/lit variants |
 | `post_common.metal` | `ssrViewPos` (unproject), `linearizeReverseZ`, `bilateralDepthWeight`. Shared by SSR, AO **and** composite — must precede all three |
 | `post_ssr.metal` | `ssrRayMarch`, `ssrBlurH`/`ssrBlurV` |
 | `post_ao.metal` | `aoCoordToGBuffer`, `gtaoCompute`, `aoBlurH`/`aoBlurV`, `aoTemporal` |

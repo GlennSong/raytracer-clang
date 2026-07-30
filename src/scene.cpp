@@ -77,9 +77,11 @@ Vec3 applyCheckerboard(const Vec3& albedo, const Vec3& worldPos) {
 // --- Procedural surface library --------------------------------------------
 // Analytic, world-space materials a city needs (brick, concrete, roof tiles,
 // asphalt, ...), evaluated at the hit point. Each is kept byte-for-byte in step
-// with common.metal's applySurface so the offline tracer previews exactly what
-// the Metal viewer draws. All take a base albedo (the material/vertex colour)
-// and return the patterned albedo. See material.h Surface ids.
+// with surfaces.metal's applySurface (the patterns themselves live in
+// surfaces_facade.metal and surface_{road,water,terrain}.metal) so the offline
+// tracer previews exactly what the Metal viewer draws. All take a base albedo
+// (the material/vertex colour) and return the patterned albedo. See material.h
+// Surface ids.
 double surfHash(double a, double b) {   // == common.metal hash21
     double s = std::sin(a * 12.9898 + b * 78.233) * 43758.5453;
     return s - std::floor(s);
