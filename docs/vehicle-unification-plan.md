@@ -4,6 +4,11 @@ Written at the end of the P8.2 perf round. This is the brief for the NEXT
 session: what was decided, what was measured, what to do, and what is still
 unknown. Read this before touching vehicle or citysim code.
 
+Companion: **`docs/piedmont-project-memory.md`** — the accumulated history and
+hard-won root causes (why things are the way they are). This file is the
+forward plan (what to do next). Read the memory first if you have no context
+on this project at all; read this one first if you are here to work.
+
 ## The architecture Glenn set
 
 **C++ is capability. Lua is description.** C++ owns primitives — `mesh.car`,
