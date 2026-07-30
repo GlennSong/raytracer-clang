@@ -8,6 +8,81 @@ those two become thin consumers of.
 
 ---
 
+## In plain terms
+
+**What we do now.** The generator picks a piece of land, then shrink-wraps a
+building onto its exact shape. Whatever is left over on the lot — a garden, a
+path, a car park — only appears when a lot *fails* to get a building. Gardens
+are a consolation prize.
+
+**What this proposes.** Treat a piece of land the way a real developer does.
+
+1. **Decide what the land is for** — a house with a garden, a shop meeting the
+   pavement, a tower with a public square. This decision carries its own
+   numbers: how much of the land the building may cover, how far back from the
+   street it sits.
+2. **Divide the land into areas** — building, front garden, paths, back yard,
+   parking, bin store. Each area is carved out of what's left of the previous
+   one, so **two things can never end up on top of each other.** That's a
+   property of how it's built, not something we check for afterwards.
+3. **Furnish each area.** The building fills the building area. Trees and lawn
+   fill the garden. A fence runs along the boundary — and a gate appears
+   wherever a path crosses that fence, because the geometry demands one.
+
+**Then draw the building as a real floor plan.** Walls with thickness, doors
+with the arc they swing through, windows in the walls. Not a sketch — the actual
+drawing the 3D builder later reads. Today the 3D code decides where windows go
+while it is building geometry, so nobody can see the decision or check it. If
+the plan decides instead, we can look at it on paper.
+
+**Buildings go up as a stack of floor plans.** Each floor's plan must fit inside
+the one below it. That single rule gives you setbacks, roof terraces (the
+exposed roof is just "the floor below minus the floor above"), several towers
+rising off one shared base, and towers that taper or curve as they climb.
+
+**The designs live in text files, not in code.** A file describes one kind of
+building: its floor heights, which walls get which sort of window, what it's
+made of. The program code only knows *how* to draw a wall or punch a window —
+never *which* building it's drawing. **Adding a new architectural style should
+be a new file, never a code change.** That's the test of whether we got this
+right.
+
+**Special buildings are rationed.** If "twisted tower" is a dice roll per
+building, a city gets fifty of them and none of them feels special. Instead the
+city decides up front: *one* signature tower, placed on the best site. The code
+that already places exactly one courthouse per city does this job.
+
+**We can review all of it on paper.** Everything above is 2D, and the companion
+tool draws it as diagrams you can open in a browser. That matters practically:
+this project can't run its 3D viewer in the environment where the code gets
+written, so being able to judge the design without a 3D view is the difference
+between reviewing it and guessing.
+
+### Words this document uses
+
+| Word | Means |
+|---|---|
+| **lot** / **parcel** | one piece of land, the thing a single building sits on |
+| **block** | the area enclosed by surrounding streets; gets cut into lots |
+| **plan** / **floor plan** | the outline of a building seen from above |
+| **footprint** | the ground the building actually covers |
+| **setback** | how far the building is held back from a boundary |
+| **coverage** | what fraction of the lot the building covers |
+| **frontage** | the side facing the street |
+| **party wall** | a wall shared with the building next door — no windows in it |
+| **fenestration** | the arrangement of windows and doors on a wall |
+| **poché** | the solid black of a wall in an architectural drawing |
+| **loft** | morphing one floor plan into a different one as the building rises |
+| **profile** | how the plan's *size* changes with height (a taper, a bulge) |
+| **recipe** | a text file describing one kind of building |
+| **selector** | a phrase in a recipe naming which walls a rule applies to |
+| **boolean** | adding, subtracting or intersecting two shapes |
+| **distance field** | a shape stored as "how far to the edge from here", which makes blending and merging easy |
+| **arc edge** | a wall stored as a true curve rather than as many short straight pieces |
+| **`Shape2`** | our name for a shape that has an outline *and* holes in it |
+
+---
+
 ## 0. Thesis
 
 **The lot is the unit of composition. The building is one occupant of it.**
@@ -68,7 +143,7 @@ model that ran out of room. Keep the parts, replace the model.
 
 ---
 
-## 2. Layer architecture
+## 2. How the pieces are layered
 
 Follows the layering ADR-0028 already ratified, extended one layer down and one
 layer out.
@@ -86,7 +161,7 @@ the renderer or the ECS; the host adapts the final `SitePlan` into entities.
 
 ---
 
-## 3. L0 — the 2D kernel
+## 3. The shape toolkit — 2D geometry we can trust (layer L0)
 
 This is the foundation and the riskiest piece. Everything above it is
 straightforward once it exists; nothing above it is possible until it does.
@@ -180,7 +255,7 @@ narrowly and honestly:
 
 ---
 
-## 4. L1a — the plan grammar
+## 4. Drawing a floor plan by rules (layer L1)
 
 Rewrites `Shape2` regions. This is the brief's "start with a box, iterate each
 edge, outset, grow wings, inset the back face."
@@ -218,7 +293,7 @@ Adding a template is Lua data, not C++.
 
 ---
 
-## 5. L1b — the mass stack
+## 5. Stacking floors to make a building (layer L1)
 
 Replaces `floors` + `setbackEvery`.
 
@@ -253,7 +328,7 @@ limitation on steep ground.
 
 ---
 
-## 6. L1c — facade elements
+## 6. Windows, cornices and the rest of the facade (layer L1)
 
 The facade splitter stays 1-D and stays as it is. Two changes around it.
 
@@ -299,7 +374,7 @@ retires the 45-bool struct in one move.
 
 ---
 
-## 7. Material sets
+## 7. What a building is made of
 
 The brief: *"buildings should be made out of sets of materials."*
 
@@ -326,7 +401,7 @@ both directions at once).
 
 ---
 
-## 8. L3 — the site layer
+## 8. Designing the whole lot (layer L3)
 
 The new layer, and the heart of the brief.
 
@@ -567,7 +642,7 @@ later phase encodes assumptions about what the kernel can express.
 
 ---
 
-## 15. The Lot Lab — the review loop for all of this
+## 15. The Lot Lab — the tool that draws all of this, and what it taught us
 
 `tools/lot_lab.cpp` draws site plans and floorplans top-down as SVG. It builds
 them out of the vocabulary above — `Region` with holes, the exact rectilinear
@@ -588,6 +663,13 @@ verification needs a Metal build, so anything visual gets written blind. But
 **the entire 2D layer can be judged on paper** — and that is where the design
 risk actually lives. The lab is the P0 acceptance harness: if a floorplan or a
 site plan is wrong, you see it in a browser in seconds, with no GPU involved.
+
+**How to read the rest of this section.** §15.1 onward is a running log of what
+the lab actually taught us, in the order we found it out — each subsection names
+the sheet that prompted it. It is evidence, not design: the design is §0–§14. If
+you only want the conclusions, the ones that changed the plan are §15.5 (where
+data ends and code begins), §15.7 (what replaces the 45 flags), and §15.9 (why
+special buildings must be rationed).
 
 Findings from the first pass, already folded back into this document:
 
