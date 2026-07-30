@@ -5,14 +5,21 @@
 // HDR scene by its transmittance. The planet is an analytic sphere so the march
 // clips at the surface without a depth fetch.
 //
-// This file is written to be CONCATENATED into the Metal library like the other
-// shaders/metal/*.metal (it relies on the prepended metal_stdlib / shader_types.h,
-// per metal_renderer.mm). To wire it on a Mac: (1) add "atmosphere.metal" to the
-// concatenation list in metal_renderer.mm's shader load, (2) move AtmosphereUniforms
-// to shader_types.h (shared C++/MSL), (3) build a pipeline from vertexAtmosphere /
-// fragmentAtmosphere and insert the pass after the scene, before the composite tone
-// map. The maths matches the SPIR-V-verified atmosphere.frag 1:1; only the MSL
-// syntax here is compile-unverified (no macOS toolchain in CI).
+// WIRED (metal_renderer.mm builds atmospherePipeline from vertexAtmosphere +
+// fragmentAtmosphereGlow, and endFrame runs the pass after the scene / before
+// post). Compiles clean on macOS as of 2026-07-29.
+//
+// TWO fragment entry points, deliberately:
+//   fragmentAtmosphereGlow — BOUND. Additive-only (no scene fetch, no view
+//     transmittance); the One+One blend does the compositing, so the limb halo
+//     feeds the bloom pass. This is what Metal and WebGPU ship.
+//   fragmentAtmosphere     — NOT bound. The full-composite variant
+//     (scene * transmittance + inScatter), kept as the 1:1 mirror of
+//     shaders/vulkan/atmosphere.frag, which is still shader-only. See the
+//     "Planetary atmosphere" row in docs/renderer-parity.md. Do not delete it
+//     without resolving that divergence — but note it IS compiled on every
+//     launch, so a backend subsetting shaderFiles for compile time should know
+//     it is paying for an unbound entry point.
 
 // AtmosphereUniforms is defined in shader_types.h (prepended by the shader loader).
 

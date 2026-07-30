@@ -94,23 +94,23 @@ dashes) and crisp edges via `smoothstep`/`fwidth`.
   (`scene.cpp:559,623`). So UVs reach the shader — roads just need to **bake** them:
   `u` = arc-length along the chain (`traceChains` already gives chains), `v` = signed
   lateral in `[-1,1]` across the carriageway. Write them while stroking the ribbon.
-- The procedural surface library `applySurface(id, base, worldPos, n)` (`scene.cpp:235` +
-  `common.metal`) is **world-position based and does not take UV today**. Add a
+- The procedural surface library `applySurface(id, base, worldPos, n)` (`scene.cpp` +
+  `surfaces.metal`) is **world-position based and does not take UV today**. Add a
   `RoadMarkings` surface id and **extend `applySurface` to also receive `(u,v)` + a few
   params** (lane count, centerline style, dash period). It then composites white/yellow
   paint over the asphalt albedo procedurally. Per-road params can pack into material
   `flags`/a field; `v` already encodes lateral position.
 - Crosswalk = a zebra via `fract` across the band where `u` is within `crosswalkDepth` of a
   junction mouth — also shader-side, also conforms for free.
-- One implementation in `common.metal` + `scene.cpp` covers both the offline tracer and the
-  viewer (shared surface library). Removes the entire spike/splinter bug class and frees
+- One implementation in `surface_road.metal` + `scene.cpp` covers both the offline tracer
+  and the viewer (shared surface library). Removes the entire spike/splinter bug class and frees
   geometry.
 
 ---
 
 **Landed.** (Problem 3) `RoadMarkings` surface — the editable road's carriageway bakes
 road-local UV (u = lateral, encoded 1=left / 2=centre / 3=right so non-carriageway u=0 is
-excluded; v = arc-length), and `applySurface` (scene.cpp + common.metal) composites a
+excluded; v = arc-length), and `applySurface` (scene.cpp + surfaces.metal) composites a
 double-yellow centreline + white edge lines procedurally instead of stroking stripe
 geometry. Conforms to terrain for free, no z-fight, crisp at any distance; the whole
 spike/splinter class is gone. The geometric `paintLine` pass is gated behind

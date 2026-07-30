@@ -56,7 +56,7 @@ struct Material {
         return mat;
     }
 
-    // Mirrors the realtime renderer's surface model (lighting.metal): albedo +
+    // Mirrors the realtime renderer's surface model (lighting_surface.metal): albedo +
     // perceptual roughness + metallic, f0 = lerp(0.04, albedo, metallic).
     static Material pbr(const Vec3& color, double metallic, double roughness) {
         Material mat;

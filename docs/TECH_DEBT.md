@@ -149,7 +149,7 @@ Minor: shadow-map size fixed at 2048 (expose a 4096 option as a slider).
   mesh ownership with `release` on overwrite and `clear()` on world teardown.
 
 **ADR-0037 follow-ups (perf + tone/grade pass — all Metal-only, viewer-verified, not on CI):**
-- **AgX display encode unverified.** `tonemapAgX` (`shaders/metal/post.metal`)
+- **AgX display encode unverified.** `tonemapAgX` (`shaders/metal/post_composite.metal`)
   bakes its own ~2.2 display encode (the minimal-fit convention) and was *not*
   bit-compared to ACES on-device. If AgX reads noticeably darker/brighter than
   ACES at neutral grade, it's a one-line gamma-convention fix. Eyeball on a bright

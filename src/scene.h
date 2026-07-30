@@ -13,7 +13,7 @@
 namespace engine {
 
 // A delta light, sampled explicitly with shadow rays (next-event estimation).
-// Types, units, and falloff mirror the realtime renderer (lighting.metal):
+// Types, units, and falloff mirror the realtime renderer (lighting_brdf.metal):
 // directional intensity is illuminance; point/spot color*intensity is the
 // illuminance at 1m with inverse-square falloff windowed to zero at `range`.
 // Directional `direction` points TOWARD the light (engine convention).

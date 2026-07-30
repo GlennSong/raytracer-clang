@@ -88,7 +88,7 @@ struct RenderMaterial {
     // change per batch, not per triangle.
     static constexpr uint32_t FLAG_TWO_SIDED = 16;
 
-    // World-space procedural surface library (applySurface in common.metal /
+    // World-space procedural surface library (applySurface in surfaces.metal /
     // scene.cpp): an analytic material — brick, concrete, roof tiles, asphalt,
     // ... — chosen by an id packed into bits 8..15 of `flags`, so it rides the
     // existing material path with no texture maps. 0 = none. Keep the ids in
@@ -111,7 +111,8 @@ struct RenderMaterial {
         // vertex colour; this surface adds procedural MICRO-RELIEF: a slope-scaled
         // normal perturbation + roughness variation (rougher/bumpier on steep rock,
         // smoother on flat sand/snow) so the ground isn't a flat-shaded plane.
-        // Albedo grain only; the normal/roughness work is in lighting.metal.
+        // Albedo grain only; the normal/roughness work is surfaceReliefTerrain
+        // (same file, surface_terrain.metal).
         TerrainGround,
         // Rooftop HVAC kit (device: "procedural recipe … UV wrap around the
         // HVAC unit"). Baked PBR sets like the facade surfaces:

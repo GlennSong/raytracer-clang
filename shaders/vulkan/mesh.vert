@@ -1,6 +1,6 @@
 #version 450
 // Phase 1 forward mesh vertex stage (ADR-0057). Ported from the Metal
-// vertexMain (shaders/metal/lighting.metal) + the Vertex layout in common.metal.
+// vertexMain (shaders/metal/lighting_entry.metal) + the Vertex layout in common.metal.
 // The viewProjection is uploaded already carrying the Vulkan clip-space Y-flip
 // (the C++ side negates clip row 1), so this stage needs no convention fix-ups.
 
@@ -58,7 +58,7 @@ void main() {
 
     // Wind sway (FLAG_WIND = bit 2): displace in the wind direction, weighted by
     // height above the model's base (planted root, moving tips) and phase-offset
-    // by world XZ so a field doesn't sway in unison. Ports lighting.metal.
+    // by world XZ so a field doesn't sway in unison. Ports lighting_entry.metal.
     if ((pc.surfaceFlags.y & 4u) != 0u) {
         float baseY = pc.model[3].y;
         float weight = clamp((world.y - baseY) / max(g.wind2.y, 0.001), 0.0, 1.0);
