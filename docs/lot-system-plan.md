@@ -596,7 +596,47 @@ Each phase is shippable, headless-testable, and useful before the next lands.
 | **P6** | **Instancing** (ADR-0041 Phase 2) — props as `InstanceGroup`s | Instance counts; per-instance culling |
 | **P7** | **Interactivity**: `Interactable`, interact action, sensors, hinge constraint, gates (Tier A then B), seats | Pure logic headless; Jolt bridge device-verified |
 | **P8** | **Lighting**: fixtures + emissive, unified `LightBudget` | Budget selection determinism; no starvation of street lamps |
-| **P9** | **Recipe library** — the long tail: townhouse, duplex, mixed-use, cafe frontage, church, cathedral, town hall, office park, big-box, strip mall, factory, flatiron, twin-tower, curved slab, stacked | Each recipe reachable, coherent, deterministic |
+| **P9** | **Recipe library** — port the existing 55 (see below), then the long tail: cathedral, big-box, twin-tower, curved slab, stacked | Each recipe reachable, coherent, deterministic |
+
+### The recipe port
+
+The existing `architect.cpp` carries **55 recipe functions** (44 district
+archetypes + 11 landmarks), and they all have the same five-slot shape: a floor
+range, a ground-floor mode, a `dress()` cladding bundle, a handful of element
+flags, a place type. **That uniformity means the port is mechanical** — and it is
+the strongest evidence that these are data typed as code.
+
+Audited in full (detail and before/after drawings in `lot-lab-findings.md`):
+
+* **46 port directly** — table only, no new capability needed.
+* **5 need several masses per tier** — `office_park`, `strip_mall`, `church`,
+  `market_hall`, `hospital`. All five today emit one prism where the name
+  promises a complex.
+* **6 need per-band floor heights** — `hotel`, `factory`, `warehouse`,
+  `capitol`, `library`, `museum`. They already fight this by overloading
+  `floorHeight`/`groundHeight`.
+* **8 collapse into other recipes with different numbers** — `civic_hall`/
+  `civic_midtown` differ by a floor range and a coin flip; `bungalow`/
+  `craftsman` by one bool. The port *reduces* 55 → ~47 while making each more
+  capable.
+* **2 are not buildings** — `pocket_park`, `plaza` become lot programs (§8.1).
+
+**Crucially: nothing in the 55 needs a verb the vocabulary lacks.** That was the
+question worth answering before freezing the strategy and element sets — anything
+they could not express would have been a missing operation. Every gap turned out
+to be expressiveness of the *container* (one mass, one floor height, one window
+style), not a missing op. **This is the green light for the P0 vocabulary**, and
+it is why the port should be scheduled early rather than last: it is the cheapest
+possible validation of the whole design, and it is pure 2D.
+
+Two things the port deliberately does **not** fix, both of which want addressing
+in the same pass:
+
+* `coreness` is copy-pasted across six tower recipes with a different constant
+  each. That is a *height model* and belongs in the architect above the tables.
+* `RecipeCtx` lets recipes read `shortSide`/`area`/`roomy`, so a recipe knows
+  about parcels. This inverts: the **program** reads the lot and picks a recipe
+  that fits, so a recipe never asks how big its site is.
 
 P0 is the gate. **Nothing else should start before it is solid**, because every
 later phase encodes assumptions about what the kernel can express.

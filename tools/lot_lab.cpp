@@ -2192,6 +2192,137 @@ static void drawSection(Svg& s, const std::vector<std::vector<Poly2>>& levels,
 }
 
 // ---------------------------------------------------------------------------
+// Sheet 11 — PORTING THE OLD RECIPES. Left: what the current architect can
+// actually produce for that recipe. Right: what the same recipe becomes once a
+// plan can be several masses, a stack can have per-band heights, and cladding
+// is decoupled from fenestration. Six of the weakest cases.
+// ---------------------------------------------------------------------------
+static void sheetPort(const char* dir, uint32_t seed) {
+    Svg s;
+    const Real cellW = 440, cellH = 400;
+    const int cols = 3, rows = 2;
+    svgOpen(s, (std::string(dir) + "/port.svg").c_str(), cellW * cols + 60,
+            cellH * rows + 180, "Lot Lab — porting the existing recipes, and what it buys");
+    s.textPx(28, 68, "Left of each pair: what today's recipe can express — one prism, one window "
+                     "style, one floor height. Right: the same recipe as a table, using masses, "
+                     "bands and per-wall fenestration.", 12, "#6b7280");
+
+    auto pair = [&](int i, const char* title, const char* was, const char* now,
+                    const Poly2& oldPlan,
+                    const std::vector<Poly2>& newPlans,
+                    const std::vector<Opening>& newOps,
+                    const Poly2& opsOn, Real span) {
+        const int cx = i % cols, cy = i / cols;
+        const Real bx = 40 + cx * cellW + 26, by = 118 + cy * cellH;
+        const Real half = (cellW - 90) * 0.5;
+        const Real sc = std::min(half / span, 190.0 / span);
+        // OLD — a thin grey outline, deliberately unglamorous
+        s.scale = sc;
+        s.ox = bx + half * 0.5;
+        s.oy = by + 100;
+        s.poly(oldPlan, "#e9e6de", "#a8a29a", 1.4);
+        s.textPx(bx, by + 200, "today", 10, "#a8a29a", "start", "600");
+        // NEW — the ported table's result
+        s.ox = bx + half + 26 + half * 0.5;
+        if (!newOps.empty() && opsOn.size() >= 3) drawBlueprint(s, opsOn, 0.32, newOps);
+        for (const Poly2& p : newPlans) s.poly(p, "#b9c0cc", "#232a36", 1.8);
+        s.textPx(bx + half + 26, by + 200, "ported", 10, "#4b5563", "start", "600");
+
+        s.textPx(bx, by + 244, title, 14, "#1d2430", "start", "600");
+        s.textPx(bx, by + 261, was, 10.5, "#9aa1ad");
+        s.textPx(bx, by + 277, now, 10.5, "#4b5563");
+    };
+
+    // 1 — office_park: the clearest failure. Wants two blocks; gets one box.
+    {
+        const Poly2 oldP = rectPoly(Rect(-13, -9, 13, 9));
+        PlanCtx a; a.envelope = Rect(-26, -14, 26, 14);
+        seedMass(a, Rect(-25, -3, -6, 13));
+        court(a, -19, 5, -12, 14);
+        a.rs.unite(Rect(3, -2, 24, 12));
+        a.rs.unite(Rect(-6, 3, 3, 7));                 // the link
+        std::vector<Region> rs = planFinish(a);
+        std::vector<Poly2> np;
+        for (const Region& r : rs) np.push_back(r.outer);
+        pair(0, "office_park", "one prism — the name is a lie",
+             "two blocks, atrium notch, a link bar", oldP, np, {}, {}, 56);
+    }
+    // 2 — church: floors = 0 plus a tall ground storey, faking a nave.
+    {
+        const Poly2 oldP = rectPoly(Rect(-8, -13, 8, 13));
+        PlanCtx a; a.envelope = Rect(-14, -16, 14, 16);
+        seedMass(a, Rect(-6, -12, 6, 10));             // nave
+        a.rs.unite(Rect(-11, -8, -6, 6));              // aisle
+        a.rs.unite(Rect(6, -8, 11, 6));                // aisle
+        a.rs.unite(Rect(-4, 10, 4, 15));               // tower base
+        std::vector<Region> rs = planFinish(a);
+        std::vector<Poly2> np;
+        for (const Region& r : rs) np.push_back(r.outer);
+        pair(1, "church", "one box, floors = 0 as a hack",
+             "nave + two aisles + tower base: 4 masses", oldP, np, {}, {}, 34);
+    }
+    // 3 — strip_mall: a long linear bar of units with a canopy.
+    {
+        const Poly2 oldP = rectPoly(Rect(-16, -8, 16, 8));
+        PlanCtx a; a.envelope = Rect(-30, -12, 30, 12);
+        seedMass(a, Rect(-26, -6, 20, 6));
+        a.rs.unite(Rect(20, -10, 28, 8));              // the end anchor
+        a.rs.unite(Rect(-26, -8, 20, -6));             // the canopy line
+        std::vector<Region> rs = planFinish(a);
+        std::vector<Poly2> np;
+        for (const Region& r : rs) np.push_back(r.outer);
+        pair(2, "strip_mall", "a square box called a strip",
+             "long bar + end anchor + canopy run", oldP, np, {}, {}, 62);
+    }
+    // 4 — hotel: same floor height as an office; podium never expressed.
+    {
+        const Poly2 oldP = rectPoly(Rect(-11, -9, 11, 9));
+        const Real bx = 40 + 0 * cellW + 26, by = 118 + cellH;
+        std::vector<Poly2> podium{rectPoly(Rect(-15, -11, 15, 11))};
+        std::vector<Poly2> tower =
+            polyBool({rectPoly(Rect(-9, -7, 9, 7))}, podium, BOp::Intersect);
+        std::vector<Poly2> np = podium;
+        np.insert(np.end(), tower.begin(), tower.end());
+        pair(3, "hotel", "3.2 m floors, no podium — an office in disguise",
+             "4.6 m lobby band + 3.1 m room band on a podium", oldP, np, {}, {}, 40);
+        // the height story needs a section
+        std::vector<std::vector<Poly2>> lv;
+        for (int k = 0; k < 4; ++k) lv.push_back(podium);
+        for (int k = 0; k < 11; ++k) lv.push_back(tower);
+        drawSection(s, lv, -17, 17, 0, bx + 372, by + 196, 2.1, 190.0 / 15.0, "#c2c8d3");
+        s.textPx(bx + 372, by + 208, "band section", 9.5, "#9aa1ad");
+    }
+    // 5 — loft_conversion: dress() forces arched sash onto brick.
+    {
+        const Poly2 plan = rectPoly(Rect(0, 0, 17, 11));
+        std::vector<WallRole> roles{WallRole::Street, WallRole::Party,
+                                    WallRole::Rear, WallRole::Party};
+        FenRecipe rec{"loft", "", {
+            {WallRole::Street, Fen::Plate, 0, 0, 1.1, 0.7, 3.1, true},
+            {WallRole::Rear,   Fen::Plate, 0, 0, 1.1, 0.7, 3.1, false},
+            {WallRole::Party,  Fen::Blank}}, 0.0};
+        pair(4, "loft_conversion", "brick forced to wear round-arched sash",
+             "brick walls, big steel plate glazing", plan, {},
+             fenestrate(plan, roles, rec), plan, 22);
+    }
+    // 6 — bungalow vs craftsman: two recipes, one shape, one differing bool.
+    {
+        const Poly2 oldP = rectPoly(Rect(0, 0, 13, 9));
+        PlanCtx a; a.envelope = Rect(-2, -4, 16, 13);
+        seedMass(a, Rect(0, 0, 13, 9));
+        a.rs.unite(Rect(0, 9, 8, 13));                 // the rear ell
+        a.rs.unite(Rect(-1.6, -2.6, 13, 0.1));         // the wrapping porch
+        std::vector<Region> rs = planFinish(a);
+        std::vector<Poly2> np;
+        for (const Region& r : rs) np.push_back(r.outer);
+        pair(5, "craftsman (vs bungalow)", "same rectangle; one bool apart",
+             "L-plan with a rear ell and a wrapping porch", oldP, np, {}, {}, 24);
+    }
+    (void)seed;
+    svgClose(s);
+}
+
+// ---------------------------------------------------------------------------
 // Sheet 10 — SILHOUETTES: profile curves, merging lofts, holes, and a pen plan.
 // ---------------------------------------------------------------------------
 static void sheetSilhouette(const char* dir, uint32_t seed) {
@@ -3141,8 +3272,9 @@ int main(int argc, char** argv) {
     lab::sheetRecipes(out, seed);
     lab::sheetCorner(out, seed);
     lab::sheetSilhouette(out, seed);
+    lab::sheetPort(out, seed);
     printf("lot_lab: wrote %s/{lots,plans,shapes,curves,compose,blueprint,stack,"
-           "recipes,corner,silhouette}.svg "
+           "recipes,corner,silhouette,port}.svg "
            "(seed %u)\n", out, seed);
     return 0;
 }

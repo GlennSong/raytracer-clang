@@ -15,13 +15,14 @@ c++ -std=c++17 -O2 tools/lot_lab.cpp \
 OUT=/tmp /tmp/lot_lab 7          # seed 7
 ```
 
-Ten sheets: `lots`, `plans`, `shapes`, `curves`, `compose`, `blueprint`,
-`stack`, `recipes`, `corner`, `silhouette`.
+Eleven sheets: `lots`, `plans`, `shapes`, `curves`, `compose`, `blueprint`,
+`stack`, `recipes`, `corner`, `silhouette`, `port`.
 
 **The three findings that changed the plan**, if you only want those:
 [where data ends and code begins](#where-the-datacode-line-sits-recipessvg),
 [what replaces the 45 flags](#does-this-retire-the-45-booleans),
-[why special buildings must be rationed](#rarity-is-a-quota-not-a-probability).
+[why special buildings must be rationed](#rarity-is-a-quota-not-a-probability),
+and [the audit of the existing 55 recipes](#porting-the-existing-recipes-portsvg).
 
 Everything below is in the order we found it out; each section names the sheet
 that prompted it.
@@ -387,6 +388,114 @@ loft handles it for the same reason: topology change is free. A **donut** is
 simply a plan that carries a hole; `Shape2` already does, so nothing else
 changes. A **pen-drawn irregular plan** takes corner cuts exactly as a rectangle
 does, because `chamfer` is per-vertex and never cared about the shape.
+
+## Porting the existing recipes (`port.svg`)
+
+An audit of all **55 recipe functions** in `architect.cpp` (44 district
+archetypes + 11 landmarks), read end to end.
+
+### They are already a table pretending to be code
+
+Almost every one has the identical shape:
+
+```cpp
+void recipeBrickShop(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    p.floors = rng.irange(3, 6);          // 1. a floor range
+    p.groundRetail = true;                // 2. ground-floor mode
+    dress(p, FacadeStyle::Brick, rng);    // 3. a cladding bundle
+    if (p.floors <= 3 && rng.unit() < 0.3) {   // 4. 0-6 element flags
+        p.roofStyle = RoofStyle::Gable;
+        p.roofPitch = rng.range(0.35, 0.5);
+    }
+    out.placeType = "shop";               // 5. place type + name
+    out.name = "brick_shop";
+}
+```
+
+Five slots, every time. **The port is therefore mechanical**, and the uniformity
+is itself the argument: 55 functions with one shape are data that has been
+typed as code.
+
+```lua
+brick_shop = {
+  place = "shop",
+  stack = { { role="retail", storeys=1, height=4.5 },
+            { role="office", storeys={3,6}, height=3.2 } },
+  palette = "warm_brick",
+  fenestration = {
+    { on="edge:street", strategy="storefront", floor=0 },
+    { on="edge:street", strategy="punched", bay=3.0, sill=0.9, head=2.4 },
+    { on="edge:party",  strategy="blank" },
+  },
+  elements = { {kind="awning", on="element:door"}, {kind="cornice", on="tier:top"} },
+  roof = { style="gable", pitch={0.35,0.5}, when="storeys<=3", chance=0.3 },
+}
+```
+
+### How the 55 divide
+
+| Group | Count | Port |
+|---|---|---|
+| Direct — floors, cladding, a few flags | **46** | mechanical; table only |
+| Need **several masses per tier** | **5** | `office_park`, `strip_mall`, `church`, `market_hall`, `hospital` |
+| Need **per-band floor heights** | **6** | `hotel`, `factory`, `warehouse`, `capitol`, `library`, `museum` (they already fight this with `floorHeight`/`groundHeight`) |
+| Not buildings at all | **2** | `pocket_park`, `plaza` → lot programs, not building recipes |
+| Collapse into another recipe + different numbers | **8** | see below |
+
+**Nothing in the 55 needs a verb the vocabulary lacks.** That was the real
+question — anything they could not express would have been a missing strategy or
+element — and the answer is that the gaps are all *expressiveness of the
+container*, not missing operations. That is the green light for P0's vocabulary.
+
+### The eight that should collapse
+
+`civic_hall` / `civic_midtown` differ by a floor range and a coin-flip on
+cladding. `bungalow` / `craftsman` differ by `floors` and one bool. Also
+`office_slab` / `office_midrise`, `oldtown_house` / `oldtown_grand`,
+`brick_warehouse` / `factory`, `walkup_homes` / `apartments`. As tables these
+are **one recipe with two number sets** — so the port *reduces* the count from 55
+to about 47 while making each more capable.
+
+### Six improvements the port buys (`port.svg`)
+
+Left of each pair is what today's recipe can actually produce; right is the
+ported table.
+
+1. **`office_park`** — the clearest failure. The name promises a campus; the
+   recipe emits one prism, because a plan cannot be two masses. Ported: two
+   blocks, an atrium notch, a link bar.
+2. **`church`** — sets `floors = 0` and one tall `groundHeight` to fake a nave.
+   That hack exists because a church is not a floor stack. Ported: nave + two
+   aisles + a tower base, four masses, and the steeple element lands on the
+   tower rather than on the roof ridge.
+3. **`strip_mall`** — a square box called a strip. Ported: a long bar of units,
+   an end anchor, and a canopy run along the frontage.
+4. **`hotel`** — carries an office's 3.2 m floors and cannot express a podium,
+   so it is an office slab with a different name. Ported: a 4.6 m lobby band on
+   a retail podium, then 3.1 m room floors. Same storey count, visibly
+   different silhouette — the band section shows it.
+5. **`loft_conversion`** — the sharpest case. Its defining feature is *big
+   industrial glazing in old masonry*, and `dress()` makes that impossible:
+   picking `Brick` also picks round-arched sash with muntins. Decoupling
+   cladding from fenestration is what lets the recipe be what its name says.
+6. **`craftsman` vs `bungalow`** — today one rectangle and one differing bool.
+   Ported, the craftsman gets an L-plan with a rear ell and a porch wrapping
+   two sides; the bungalow stays a simple gable. They stop being the same
+   building.
+
+### What the port cannot fix
+
+Two limitations survive it, and both are honest costs rather than oversights:
+
+* **`coreness` is copy-pasted skyline logic.** Six tower recipes each contain
+  their own `cx.coreness * N` lift with a different constant. That is a *height
+  model*, not a per-recipe property, and it belongs in the architect above the
+  tables — otherwise every new tower recipe re-invents the skyline.
+* **`RecipeCtx` couples recipes to lot size.** `cx.roomy`, `cx.shortSide` and
+  `cx.area` are read inside recipes to decide floors and massing, which means a
+  recipe knows about parcels. In the new model that inverts: the *program*
+  (§8.1) reads the lot and picks a recipe that fits, so a recipe never needs to
+  ask how big its site is.
 
 ## Rarity is a quota, not a probability
 
