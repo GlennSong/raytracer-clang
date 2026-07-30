@@ -309,14 +309,32 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     // Load shaders. Runtime newLibraryWithSource has no include paths, so the
     // modules are concatenated in dependency order; #line directives keep
     // compile diagnostics pointing at the right file (ADR-0017 Phase 0).
+    //
+    // THE ORDER IS LOAD-BEARING. Concatenation is textual with no forward
+    // declarations, so every module must follow the ones it calls into. This
+    // list is therefore both the build order and the dependency documentation:
+    // a mistake surfaces as a compile error naming the right file via #line.
+    // Subsetting it is also how a backend drops effects it never runs (these
+    // compile at runtime on every launch, so a headset build should not be
+    // compiling SSR/DOF/lens).
     NSError* error = nil;
     NSArray<NSString*>* shaderFiles = @[
         @"shaders/metal/shader_types.h",   // GPU structs shared with C++
-        @"shaders/metal/common.metal",     // vertex layouts, BRDF helpers
+        @"shaders/metal/common.metal",     // vertex layouts, BRDF + noise helpers
+
+        // --- lighting ---
         @"shaders/metal/environment.metal",// sky/HDR providers, IBL precompute
         @"shaders/metal/shadows.metal",    // shadow pass + PCF lookup
         @"shaders/metal/lighting.metal",   // probes, direct light, shadeSurface
-        @"shaders/metal/post.metal",       // SSR, GTAO, bloom, composite
+
+        // --- post stack --- (post_common first: SSR, AO *and* composite use it)
+        @"shaders/metal/post_common.metal",   // unproject, linearize, bilateral
+        @"shaders/metal/post_ssr.metal",      // ray march + separable blur
+        @"shaders/metal/post_ao.metal",       // GTAO + blurs + temporal reproject
+        @"shaders/metal/post_bloom.metal",    // downsample/upsample pyramid
+        @"shaders/metal/post_composite.metal",// tone map + grade → drawable
+        @"shaders/metal/post_lens.metal",     // DOF gather + distortion/CA/vignette
+
         @"shaders/metal/atmosphere.metal", // planetary atmosphere glow (P3)
     ];
     NSMutableString* shaderSource = [NSMutableString string];

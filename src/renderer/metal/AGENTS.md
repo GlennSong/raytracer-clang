@@ -11,10 +11,15 @@ Files: `metal_renderer.h` (thin), `metal_renderer.mm` (everything, pimpl'd as
 
 ## How shaders are built (important, differs from Vulkan)
 
-At `initialize`, the six `.metal` files are **read from disk and concatenated**
-in dependency order — `shader_types.h` → `common.metal` → `environment.metal` →
-`shadows.metal` → `lighting.metal` → `post.metal` — with `#line N "file"`
-directives between them, then compiled in one `newLibraryWithSource:` call. So:
+At `initialize`, the `.metal` modules are **read from disk and concatenated** in
+dependency order — see the `shaderFiles` array in `initialize` (grep it), which is
+the authoritative list — with `#line N "file"` directives between them, then
+compiled in one `newLibraryWithSource:` call. So:
+- **The order is load-bearing.** Concatenation is textual with no forward
+  declarations, so a module must follow everything it calls. `shaderFiles` is
+  therefore both the build order *and* the dependency documentation. One module
+  per effect (not one giant `post.metal`) also means a backend can **subset** the
+  list to skip effects it never runs — these compile at runtime on every launch.
 - **Shaders compile at runtime from source** (no offline step). Edit a `.metal`
   file, rerun — no rebuild. Errors report the right file via the `#line` pragmas.
 - Paths are **relative to the working directory** → run the viewer from the repo
@@ -115,7 +120,12 @@ reads garbage (a 0 `shadowMapSize` → NaN). This is the #1 footgun in the file.
 | `environment.metal` | `vertexSkybox`/`fragmentSkybox`, `fragmentEquirectBake`, compute `integrateBRDF`/`prefilterEnvMap`/`convolveIrradiance` |
 | `shadows.metal` | `vertexShadow`(+`Instanced`), `terrainVertexShadow`, `computeShadow` (cascade select + PCF + cross-fade) |
 | `lighting.metal` | `vertexMain`/`terrainVertexMain`/`vertexMainInstanced`; `fragmentMain`(+`Instanced`) Cook-Torrance GGX + IBL + shadows + probes + fog; foliage depth/lit variants |
-| `post.metal` | `ssrRayMarch`+blurs, `gtaoCompute`+blurs+`aoTemporal`, `bloomDownsample`/`Upsample`, `vertexComposite`/`fragmentComposite`, `dofGather`, `fragmentLensWarp` |
+| `post_common.metal` | `ssrViewPos` (unproject), `linearizeReverseZ`, `bilateralDepthWeight`. Shared by SSR, AO **and** composite — must precede all three |
+| `post_ssr.metal` | `ssrRayMarch`, `ssrBlurH`/`ssrBlurV` |
+| `post_ao.metal` | `aoCoordToGBuffer`, `gtaoCompute`, `aoBlurH`/`aoBlurV`, `aoTemporal` |
+| `post_bloom.metal` | `bloomDownsample`, `bloomUpsample` |
+| `post_composite.metal` | `applyGrade`, `tonemapACES`/`tonemapAgX`, `vertexComposite`/`fragmentComposite` |
+| `post_lens.metal` | `dofCocRadius`, `dofGather`, `fragmentLensWarp` |
 
 ## When you change something
 

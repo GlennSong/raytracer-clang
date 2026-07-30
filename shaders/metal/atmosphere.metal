@@ -73,7 +73,7 @@ fragment float4 fragmentAtmosphere(AtmosphereOut in [[stage_in]],
     constexpr sampler samp(coord::normalized, filter::linear, address::clamp_to_edge);
     const float PI = 3.14159265359;
 
-    // Metal NDC has a flipped Y vs the UV (see post.metal ssrViewPos).
+    // Metal NDC has a flipped Y vs the UV (see post_common.metal ssrViewPos).
     float2 ndc = float2(in.uv.x * 2.0 - 1.0, -(in.uv.y * 2.0 - 1.0));
     float4 world = a.invViewProjection * float4(ndc, 1.0, 1.0);
     float3 camPos = a.cameraPosition.xyz;
