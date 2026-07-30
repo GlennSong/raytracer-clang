@@ -35,10 +35,12 @@ drawing the 3D builder later reads. Today the 3D code decides where windows go
 while it is building geometry, so nobody can see the decision or check it. If
 the plan decides instead, we can look at it on paper.
 
-**Buildings go up as a stack of floor plans.** Each floor's plan must fit inside
-the one below it. That single rule gives you setbacks, roof terraces (the
-exposed roof is just "the floor below minus the floor above"), several towers
-rising off one shared base, and towers that taper or curve as they climb.
+**Buildings go up as a stack of floor plans.** Each floor's plan has to be
+*held up* by the one below — mostly that means sitting inside it, which gives
+setbacks, roof terraces (the exposed roof is just "the floor below minus the
+floor above"), and several towers rising off one shared base. Loosening how much
+support is required is what lets an upper floor jut out over the ground floor,
+the way a cantilevered house or a balconied tower does.
 
 **The designs live in text files, not in code.** A file describes one kind of
 building: its floor heights, which walls get which sort of window, what it's
@@ -46,6 +48,12 @@ made of. The program code only knows *how* to draw a wall or punch a window —
 never *which* building it's drawing. **Adding a new architectural style should
 be a new file, never a code change.** That's the test of whether we got this
 right.
+
+**Lots are cut to fit buildings, not the other way round.** A kind of building
+declares the smallest rectangle it can be built on, and a piece of land only
+becomes a lot if it holds one. Land that can hold nothing becomes open space on
+purpose. That is what stops a skinny scrap of ground getting a tiny triangular
+house, or a hundred-storey tower landing on a plot too small to carry its lifts.
 
 **Special buildings are rationed.** If "twisted tower" is a dice roll per
 building, a city gets fifty of them and none of them feels special. Instead the
@@ -73,6 +81,8 @@ between reviewing it and guessing.
 | **fenestration** | the arrangement of windows and doors on a wall |
 | **poché** | the solid black of a wall in an architectural drawing |
 | **loft** | morphing one floor plan into a different one as the building rises |
+| **cantilever** | an upper floor jutting out past the one below it |
+| **plate** | the floor area of one storey of a tower |
 | **profile** | how the plan's *size* changes with height (a taper, a bulge) |
 | **recipe** | a text file describing one kind of building |
 | **selector** | a phrase in a recipe naming which walls a rule applies to |
@@ -309,8 +319,9 @@ struct MassStack { std::vector<Tier> tiers; Foundation base; };
 ```
 
 Each tier's plan is produced by the plan grammar **independently**, then
-constrained to sit inside the tier below (`contains(below, tier)` — a real
-containment test, not the current three-part `insetOk` heuristic). This is
+constrained by the **support rule** (§17.4) — `area(above ∩ below) / area(above)
+>= minSupport`, with `minSupport = 1` meaning full containment and lower values
+admitting a bounded cantilever. This is
 literally the brief: *"once we've built a few stories we can create a different
 floorplan on top."*
 
@@ -588,10 +599,10 @@ Each phase is shippable, headless-testable, and useful before the next lands.
 | Phase | Contents | Test |
 |---|---|---|
 | **P0** | **2D kernel**: `Shape2`, booleans, topology-changing offset, fillet/chamfer, arcs, `simplify`, `tessellate`, the pen; 2D SDF fallback path | Property tests: area conservation, no self-intersection, hole preservation, offset round-trip, arc chord error |
-| **P1** | **Plan grammar + mass stack**; `growPlanBuilding` re-founded on `MassStack`; existing recipes ported 1:1 | Containment (plan ⊆ envelope), tier containment, wall-length minimums, determinism |
+| **P1** | **Plan grammar + mass stack**; `growPlanBuilding` re-founded on `MassStack`; `noop` as a weighted op (§17.5); the support rule (§17.4) | Plan-quality invariant after every op; support/overhang bounds; determinism |
 | **P2** | **Bay grid + element registry**; retire `BuildingParams` bools; port every existing element | Element selectors resolve to expected bays/edges; existing buildings visually unchanged (part-count/vertex-count goldens) |
 | **P3** | **Site layer**: programs, zone allocation, furnishers; retire the four `sculpt*` paths | **Zones are disjoint and tile the lot**; props never overlap; every path connects an access point to an entrance |
-| **P4** | **Parcelling rework**: program mixes, variable lot sizing, parcel merging | Block program mix satisfied; merged parcels are simple polygons |
+| **P4** | **Parcelling rework** (§17.1–17.3, 17.6): programs declare minimum rectangles, lots are cut to hold them, every lot carries its tags; rim blocks parcel coarse | No lot ships that fails its program's minimum; the six rejection counters are gone |
 | **P5** | **Material sets** + palette library; ADR-0040 Pass B (tier re-cladding, crown kit) | Palette coherence per district; height→structure→cladding rule holds |
 | **P6** | **Instancing** (ADR-0041 Phase 2) — props as `InstanceGroup`s | Instance counts; per-instance culling |
 | **P7** | **Interactivity**: `Interactable`, interact action, sensors, hinge constraint, gates (Tier A then B), seats | Pure logic headless; Jolt bridge device-verified |
@@ -716,3 +727,234 @@ special if it were common has to be a quota rather than a probability.
 * **Depends on** ADR-0041 Phase 2 for props and interactivity.
 * **Does not re-open** ADR-0038 §4 (interiors stay Tier C) — but §5's mass stack
   is deliberately the seam that generator would fill.
+
+---
+
+## 17. Buildability, tags, and the architect's decision (owner review round 2)
+
+This section answers a review pass that found several things the plan had wrong
+or simply unsaid. Drawings: `buildable.svg`.
+
+### 17.1 The inversion: lots are cut to fit buildings, not the reverse
+
+Today the parceller cuts a rhythm and `growLotBuildings` rejects what will not
+fit — six rejection counters. That is why a skinny trapezoid gets a tiny
+triangular house: **nothing upstream ever asked whether a building could stand
+there.** Invert it.
+
+* A program declares its **minimum buildable rectangle** (`minW × minD`) and
+  minimum area. This is a *property of the building type*, not of the lot.
+* The parceller emits a lot only if it **contains that rectangle** — measured
+  by the largest inscribed rectangle in the lot's own oriented frame, which is
+  the same shrink-to-fit construction `RectYard` already uses to seat a house,
+  promoted to a qualifying measurement.
+* Land that can carry no program becomes **open space by design**, not by
+  rejection. The six counters disappear; there is nothing left to reject.
+
+`buildable.svg` panel 1 shows the wedge block cut on a rhythm — every lot fails.
+Panel 2 shows the same block parcelled to the program's minimum: fewer lots,
+all viable, and the residue explicitly handed to open space.
+
+### 17.2 Height is capped by the plate, once
+
+Lifts, cores and structure scale with the storeys they serve, so a 100-storey
+tower needs a big floor plate — you cannot put one on 200 m². Today six tower
+recipes each carry their own `cx.coreness * N` guess. Replace with **one rule**
+above the tables:
+
+```
+maxStoreys = min(shortSide / 0.55, plateArea / 26)
+```
+
+Numbers are placeholders to be tuned; the point is that it is a *single* height
+model the architect consults, not a constant copy-pasted per recipe.
+
+### 17.3 Lot tags: what the architect actually reads
+
+The plan named `LotContext` but never said what it carries or who consumes it.
+It is the parceller's output and the architect's input:
+
+| Tag | Source | Used for |
+|---|---|---|
+| `frontages`, `shape` (corner/through/mid-block/island) | edge tagging (§15.6) | corner shops, chamfers, which walls get ornament |
+| `inscribedW/D`, `area` | measured at parcel time | which programs are even eligible |
+| `maxStoreys` | §17.2 from the plate | rejects a tower on a small plate |
+| `streetClass` (arterial / street / lane) | the road graph edge | retail wants an arterial; a lane gets service |
+| `enclosed` | block topology | false on rim blocks → coarse parcels (§17.6) |
+| `coreness` | distance to centre | the skyline model |
+| `slope`, `padPlane` | terrain | rejects a tower on a steep site |
+| `neighbours[]` | adjacency | party walls, terrace continuity, avoiding three identical shops in a row |
+
+**How the architect decides** is then a two-stage filter, not a dice roll:
+
+1. **Eligibility** — drop every program whose minimums the lot fails. A 12 × 14 m
+   mid-block lot is simply not eligible for `glass_tower`.
+2. **Weighted pick among survivors**, using the district's program mix, biased
+   by tags: `shape == Corner` lifts `corner_shop` and `bank`; `streetClass ==
+   Lane` lifts service programs; `enclosed == false` lifts campus programs.
+3. **Quotas run first** (§15.9) — landmarks and signature massing are *placed*
+   on the best eligible lot before the weighted pass sees it.
+
+This is the piece that was missing: cornerness, size and street class are
+**facts computed once by the parceller**; the architect only reads them.
+
+### 17.4 Support, not containment — cantilevers
+
+§15.3's "every tier is clipped to the tier below" is **too strong**, and it
+would have made Fallingwater and every cantilevered green tower impossible.
+Containment is not the real constraint; *support* is:
+
+```
+support = area(above ∩ below) / area(above)     >= minSupport
+overhang = max distance from `above` beyond `below`'s edge   <= maxOverhang
+```
+
+Containment is simply `minSupport = 1`. A recipe opts into an overhang by
+lowering `minSupport` and setting `maxOverhang`; the default stays 1 so ordinary
+buildings do not start floating. **This replaces the clip rule** rather than
+adding a special case to it — the honest version, per the codebase ethos.
+
+Same mechanism, one level down, gives per-floor **balconies**: a balcony is a
+small overhanging mass attached to a storey with `minSupport ≈ 0` and a
+structural depth cap, placed by a selector (`on = "edge:street floor:2.."`), so
+it is the same op as a cantilevered storey at a different scale.
+
+### 17.5 Plan quality is an invariant, and the no-op belongs in the grammar
+
+The divot riding a skyscraper's shaft for sixty storeys started as one bad
+vertex in the base plan. **A defect in the base plan is amplified up the entire
+stack**, which makes plan validation the highest-leverage check in the system.
+So it is an invariant checked *before* a plan is accepted, never a rejection
+after geometry exists:
+
+* every wall ≥ `minEdge` (~2.2 m — shorter is not a wall)
+* every interior angle ≥ `minAngle` (~42° — the knife-edge gate)
+* no notch narrower than a room
+* after **every** grammar op, not only at the end
+
+And the smaller point, which the grammar was missing: **`noop` is an op.** Every
+plan-grammar step should be a weighted choice *including doing nothing*, so a
+face that does not grow is a designed outcome with a probability, not an
+accident. This also stops the "every building has every feature" failure mode —
+the same disease as everything twisting (§15.9), one level down.
+
+### 17.6 Rim blocks parcel coarse
+
+A block on the city edge has no far-side street, so its depth is unbounded.
+That is not a special case to handle — it is a tag (`enclosed == false`) that
+admits a different program set: university campus, office park, big-box retail,
+works and industrial yards, all of which want parcels far larger than anything
+an enclosed block can offer. The coarse grain falls out of program-driven
+parcelling automatically once the eligible program list differs.
+
+### 17.7 Mixing materials, and painting inside separately
+
+**Mixing.** A `MaterialSet` is bound by **selector**, exactly like elements — so
+a plinth can be granite under brick walls under a copper cornice, and a podium
+can be stone under a glass tower. The rule that keeps it coherent is ADR-0040's:
+one *family* per mass, with a legitimate second treatment at the base. Mixing is
+therefore expressive but bounded, and the bound lives in data.
+
+**Inside vs outside.** A surface gains a **side**: `PartId` becomes
+`(part, Side::Exterior | Side::Interior)`. This costs almost nothing now — a
+wall's inner ring already exists as geometry once walls have thickness (§15.2) —
+and it is the difference between interiors being a rewrite later and being a new
+material binding later. Worth doing in P2 even though interiors stay out of
+scope (ADR-0038 §4).
+
+### 17.8 The Lua recipe surface
+
+Required by AGENTS.md's Procgen Authoring rule (ADR-0042) — recipes in Lua over
+a bound C++ substrate — so this is not a new policy, only its shape for
+buildings.
+
+**A recipe is a table with escape hatches.** Declarative for the 95% case;
+where a recipe needs real logic it supplies a function, which is ADR-0028's L2
+layer working as designed:
+
+```lua
+return {
+  name = "riverside_tower", place = "office",
+  requires = { min_w = 26, min_d = 26, min_storeys = 20, enclosed = false },
+
+  massing = function(lot, rng)              -- the escape hatch
+    local p = pen.new():move_to(0,0):forward(lot.w):turn(90):forward(lot.d)
+                        :turn(90):arc(18, 90):close()
+    return plan.fillet(p, 3.2)
+  end,
+
+  stack = {
+    { role="lobby",  storeys=1,  height=6.0, plan="podium" },
+    { role="office", storeys={20,34}, height=3.9, plan="shaft",
+      profile="swell", support=1.0 },
+    { role="crown",  storeys=2,  height=5.2, plan="shaft",
+      support=0.55, overhang=4.0 },       -- a cantilevered crown
+  },
+
+  fenestration = {
+    { on="edge:street", strategy="curtain" },
+    { on="edge:party",  strategy="blank" },
+    balconies = { on="edge:street floor:2..", depth=1.8, every=1 },
+  },
+  palette = { walls="glass_steel", base="dark_granite", trim="bronze" },
+}
+```
+
+**What C++ exposes** (the substrate — extends the existing `building.*` surface):
+
+| Namespace | Provides |
+|---|---|
+| `pen.*` | `move_to / forward / turn / arc / line_to / close` → a plan |
+| `plan.*` | `unite / subtract / intersect / offset / fillet / chamfer / outset / wing / court / clip / simplify` |
+| `field.*` | `from_plan / smooth_union / offset / contour` — the organic path |
+| `stack.*` | `band / loft / profile / twist / support` |
+| `fen.*` | the strategy set; `openings(plan, rules)` returns the opening list |
+| `elements.*` | the registry: `cornice / portico / balcony / quoin / steeple / …` |
+| `lot.*` | **read-only tags** (§17.3) — how a recipe adapts to its site |
+| `palette.*` | material sets, bound by selector |
+
+**How expressive.** Anything the pen and the plan ops can describe, which the
+composition test (§15.1) already showed is a wide space — and a recipe can go
+further by computing its plan in Lua. The bound is the *verb* set, and the
+recipe audit found that today's 55 need no verb we lack.
+
+### 17.9 The Building Lab in the Qt editor
+
+Most of this already exists and should be **wired, not rebuilt** (AGENTS.md:
+"use the technology you already have"):
+
+| Piece | Status |
+|---|---|
+| Hot-reload watching | **exists** — `ScriptWatch` was deliberately moved out of `ArenaState` so the Qt editor could drive it |
+| Lua recipe → mesh | **exists** — `building.grow_plan_parts`, `assets/scripts/building_lab.lua` |
+| A lab scene | **exists** — `assets/levels/building_lab.json` |
+| Qt shell + engine viewport | **exists** — `src/editor_app/` |
+| Reseed / re-run | partly — the viewer rewrites `opts`; needs a real control |
+| **A lot with editable tags** | **new** |
+| **A recipe browser + variant grid** | **new** |
+
+So the work is: a **Lab dock** in the Qt editor with (a) the recipe file being
+edited, (b) a **tag panel** whose fields are exactly §17.3's `LotContext` so you
+can force `shape = Corner`, `enclosed = false`, `maxStoreys = 40` and watch the
+architect respond, (c) a seed field plus **"regenerate N variants"** rendering a
+grid, and (d) a lot outline you can drag to resize. Save the file → it rebuilds.
+
+Two things to get right, both ethos points rather than features: the lab must
+drive the **same** `LotContext` struct the city uses (not a parallel one), and
+the variant grid must run the **same** architect pass, so what the lab shows is
+what the city builds.
+
+### 17.10 Committing to a massing discipline
+
+A tower should either be organic all the way up or change plan deliberately —
+not drift. So the *recipe* carries a **massing discipline**, and the architect
+picks a recipe, never a per-storey behaviour:
+
+* `prismatic` — one plan, repeated (most buildings)
+* `profiled` — one plan, a size curve (the Gherkin)
+* `staged` — plan changes at named band transitions (podium → tower → crown)
+* `continuous` — lofted throughout, committed from base to crown
+
+Mixing `profiled` and `staged` inside one band is what produces drift; the
+discipline is a per-band property and the validator rejects a band that sets
+both a loft target and an incompatible profile.

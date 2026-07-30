@@ -231,6 +231,15 @@ demo, not a screenshot prop. Build it to be used by everything that comes after.
 - **Design for extension and reuse.** Prefer interfaces and vocabularies that
   other parts of the engine (and future procgen projects) can build on, over a
   one-off that solves only today's case.
+- **Fix causes, never stack patches.** When something is wrong, find why it is
+  wrong and repair *that*, even when a narrower patch would make the symptom go
+  away today. Do not layer a correction on top of a correction: a guard added
+  because an earlier guard was in the wrong place is two bugs, not one fix. If
+  the right repair is large, or changes a rule the rest of the system leans on,
+  say so and do it properly — raise it, decide it (an ADR when it is a real
+  decision), then build it. A system that accumulates fixes stops being
+  understandable, and every later change gets more expensive. **The benefit of
+  doing it right outweighs the speed of doing it fast, every time.**
 
 ## Working & Communicating (Agent Rule)
 

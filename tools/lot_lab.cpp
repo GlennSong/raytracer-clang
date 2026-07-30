@@ -2191,6 +2191,274 @@ static void drawSection(Svg& s, const std::vector<std::vector<Poly2>>& levels,
     }
 }
 
+// ===========================================================================
+// BUILDABILITY — the inversion the plan was missing.
+//
+// Today: cut lots on a uniform rhythm, then REJECT the buildings that don't fit
+// (six rejection counters in growLotBuildings). That is why a skinny trapezoid
+// gets a tiny triangular house: nothing upstream ever asked whether a building
+// could stand there.
+//
+// Correct: a program declares the smallest RECTANGLE it can be built on, and
+// the parceller only emits lots that contain one. Land that can carry no
+// program becomes open space BY DESIGN, not by rejection.
+// ===========================================================================
+
+// The largest rectangle (in the lot's own oriented frame) that fits inside it.
+// Shrink-to-fit about the centroid — the same construction `RectYard` already
+// uses to seat a house, promoted to a lot-qualifying measurement.
+static void maxInscribedRect(const Poly2& lot, Real& outW, Real& outD) {
+    outW = outD = 0;
+    if (lot.size() < 3) return;
+    const engine::OBB2 ob = engine::orientedBoundingBox(lot);
+    Vec2 c = engine::centroid(lot);
+    if (!engine::pointInPolygon(lot, c)) c = ob.center;
+    Real hw = ob.half[0], hd = ob.half[1];
+    for (int iter = 0; iter < 40; ++iter) {
+        const Poly2 r{c - ob.axis[0] * hw - ob.axis[1] * hd,
+                      c + ob.axis[0] * hw - ob.axis[1] * hd,
+                      c + ob.axis[0] * hw + ob.axis[1] * hd,
+                      c - ob.axis[0] * hw + ob.axis[1] * hd};
+        bool ok = true;
+        for (const Vec2& v : r) if (!engine::pointInPolygon(lot, v)) { ok = false; break; }
+        if (ok) break;
+        hw *= 0.93;
+        hd *= 0.93;
+    }
+    outW = 2 * hw;
+    outD = 2 * hd;
+}
+
+// What a program needs to exist at all. A lot that cannot hold this is not a
+// lot for this program — full stop, decided before anything is grown.
+struct Buildable {
+    const char* program;
+    Real minW, minD;      // the smallest rectangle the building needs
+    Real minArea;
+    int  maxStoreys;      // what this plate can structurally carry
+};
+
+// Minimum PLATE grows with height: lifts, cores and structure scale with the
+// storeys they serve. This is the rule that stops a 100-storey tower landing on
+// a 200 m² plot — expressed once, not as a per-recipe guess.
+static int storeyCapFor(Real plateW, Real plateD) {
+    const Real shortSide = std::min(plateW, plateD);
+    const Real area = plateW * plateD;
+    // ~1 storey per 0.55 m of short side, and an area floor per 12 storeys.
+    const int bySide = static_cast<int>(shortSide / 0.55);
+    const int byArea = static_cast<int>(area / 26.0);
+    return std::max(1, std::min(bySide, byArea));
+}
+
+// PLAN QUALITY GATE — a real invariant, not a post-hoc rejection. A defect in
+// the base plan is AMPLIFIED up the whole stack (the divot that rides a
+// skyscraper's shaft for sixty storeys started as one bad vertex), so this is
+// the highest-leverage check in the system and it runs before a plan is
+// accepted, never after the geometry exists.
+struct PlanDefect { bool ok = true; const char* why = ""; Real value = 0; };
+
+static PlanDefect planQuality(const Poly2& p, Real minEdge = 2.2,
+                              Real minAngleDeg = 42.0) {
+    PlanDefect d;
+    const std::size_t n = p.size();
+    if (n < 3) { d.ok = false; d.why = "degenerate"; return d; }
+    for (std::size_t i = 0; i < n; ++i) {
+        const Real len = (p[(i + 1) % n] - p[i]).length();
+        if (len < minEdge) { d.ok = false; d.why = "wall shorter than minimum"; d.value = len; return d; }
+    }
+    for (std::size_t i = 0; i < n; ++i) {
+        const Vec2 a = p[(i + n - 1) % n], b = p[i], c = p[(i + 1) % n];
+        const Vec2 d0 = engine::normalize(b - a), d1 = engine::normalize(c - b);
+        const Real turn = std::atan2(engine::cross(d0, d1), engine::dot(d0, d1));
+        const Real interior = 180.0 - std::fabs(turn) * 360.0 / kTau;
+        if (interior < minAngleDeg) {
+            d.ok = false; d.why = "corner too acute"; d.value = interior; return d;
+        }
+    }
+    return d;
+}
+
+// ---------------------------------------------------------------------------
+// Sheet 12 — BUILDABILITY: lots that can carry a building, and masses that can
+// stand up. Six things the plan had wrong or unsaid.
+// ---------------------------------------------------------------------------
+static void sheetBuildable(const char* dir, uint32_t seed) {
+    Svg s;
+    const Real cellW = 440, cellH = 420;
+    const int cols = 3, rows = 2;
+    svgOpen(s, (std::string(dir) + "/buildable.svg").c_str(), cellW * cols + 60,
+            cellH * rows + 180, "Lot Lab — buildability: lots that work, masses that stand");
+    s.textPx(28, 68, "Today lots are cut on a rhythm and buildings that don't fit are rejected. "
+                     "Inverted: a program declares its minimum rectangle, and only land that "
+                     "holds one becomes a lot.", 12, "#6b7280");
+
+    auto cell = [&](int i) {
+        const int cx = i % cols, cy = i / cols;
+        return std::make_pair(40 + cx * cellW + 30, Real(118 + cy * cellH));
+    };
+    auto label = [&](Real bx, Real by, const char* t, const char* d, const char* st) {
+        s.textPx(bx, by + 262, t, 14, "#1d2430", "start", "600");
+        s.textPx(bx, by + 279, d, 10.5, "#6b7280");
+        s.textPx(bx, by + 294, st, 10, "#9aa1ad");
+    };
+
+    // A deliberately awkward block: a wedge, the shape that produces slivers.
+    const Poly2 block{Vec2(0, 0), Vec2(58, 0), Vec2(46, 26), Vec2(0, 20)};
+
+    // --- 1: uniform strips (today) — count what cannot build ---------------
+    {
+        auto [bx, by] = cell(0);
+        s.scale = 3.4; s.ox = bx; s.oy = by + 20;
+        s.poly(block, "#f2eee5", "#c9c3b4", 1.0, "stroke-dasharray=\"5 4\"");
+        int bad = 0, good = 0;
+        for (int k = 0; k < 7; ++k) {                    // uniform rhythm
+            const Real x0 = 58.0 * k / 7.0, x1 = 58.0 * (k + 1) / 7.0;
+            Poly2 lot = clipToLot(rectPoly(Rect(x0, -2, x1, 30)), block);
+            if (lot.size() < 3) continue;
+            Real w, d;
+            maxInscribedRect(lot, w, d);
+            const bool ok = std::min(w, d) >= 9.0 && engine::area(lot) >= 150.0;
+            (ok ? good : bad)++;
+            s.poly(lot, ok ? "#cfe1c2" : "#efc9be", "#8a8578", 1.2);
+        }
+        char buf[128];
+        snprintf(buf, sizeof buf, "%d of 7 lots cannot carry a house", bad);
+        label(bx, by, "1 · uniform rhythm (today)",
+              "cut first, reject later — red lots become slivers", buf);
+    }
+    // --- 2: program-driven parcelling ---------------------------------------
+    {
+        auto [bx, by] = cell(1);
+        s.scale = 3.4; s.ox = bx; s.oy = by + 20;
+        s.poly(block, "#f2eee5", "#c9c3b4", 1.0, "stroke-dasharray=\"5 4\"");
+        // Walk the frontage placing lots only where the minimum rectangle fits;
+        // widen until it does, and hand what is left to open space.
+        const Real minW = 11.0, minD = 12.0;
+        Real x = 0;
+        int placed = 0;
+        Real leftover = 0;
+        while (x < 58.0 - 1.0) {
+            Real w = minW;
+            Poly2 lot;
+            bool ok = false;
+            for (; w <= 26.0; w += 1.0) {
+                lot = clipToLot(rectPoly(Rect(x, -2, std::min(x + w, Real(58)), 30)), block);
+                if (lot.size() < 3) continue;
+                Real iw, id;
+                maxInscribedRect(lot, iw, id);
+                if (std::min(iw, id) >= std::min(minW, minD) * 0.82 &&
+                    engine::area(lot) >= 190.0) { ok = true; break; }
+            }
+            if (!ok) { leftover += 58.0 - x; break; }
+            s.poly(lot, "#cfe1c2", "#4d6b43", 1.4);
+            Real iw, id;
+            maxInscribedRect(lot, iw, id);
+            const engine::OBB2 ob = engine::orientedBoundingBox(lot);
+            Vec2 c = engine::centroid(lot);
+            if (!engine::pointInPolygon(lot, c)) c = ob.center;
+            s.poly(Poly2{c - ob.axis[0] * iw * 0.5 - ob.axis[1] * id * 0.5,
+                         c + ob.axis[0] * iw * 0.5 - ob.axis[1] * id * 0.5,
+                         c + ob.axis[0] * iw * 0.5 + ob.axis[1] * id * 0.5,
+                         c - ob.axis[0] * iw * 0.5 + ob.axis[1] * id * 0.5},
+                   "none", "#4d6b43", 0.8, "stroke-dasharray=\"3 3\"");
+            ++placed;
+            x += w;
+        }
+        if (leftover > 1.0) {
+            Poly2 rest = clipToLot(rectPoly(Rect(58.0 - leftover, -2, 60, 30)), block);
+            if (rest.size() >= 3) s.poly(rest, "#dbe4ee", "#7c86a0", 1.2);
+        }
+        char buf[128];
+        snprintf(buf, sizeof buf, "%d lots, every one holds its minimum rectangle", placed);
+        label(bx, by, "2 · program-driven (proposed)",
+              "dashed = the minimum rectangle the program needs", buf);
+    }
+    // --- 3: minimum plate vs height -----------------------------------------
+    {
+        auto [bx, by] = cell(2);
+        const Real plates[4][2] = {{12, 14}, {20, 22}, {30, 32}, {44, 46}};
+        for (int k = 0; k < 4; ++k) {
+            const Real w = plates[k][0], d = plates[k][1];
+            const int cap = storeyCapFor(w, d);
+            const Real px = bx + k * 92, py = by + 200;
+            s.scale = 1.5;
+            s.ox = px; s.oy = by + 40;
+            s.poly(rectPoly(Rect(0, 0, w, d)), "#dfe1e6", "#8a8578", 1.0);
+            const Real h = std::min(Real(150), cap * 2.4);
+            fprintf(s.f, "<rect x=\"%.1f\" y=\"%.1f\" width=\"20\" height=\"%.1f\" "
+                         "fill=\"#c2c8d3\" stroke=\"#232a36\" stroke-width=\"1\"/>\n",
+                    px + 24, py - h, h);
+            char buf[64];
+            snprintf(buf, sizeof buf, "%.0fx%.0f", w, d);
+            s.textPx(px, py + 14, buf, 9.5, "#6b7280");
+            snprintf(buf, sizeof buf, "%d fl", cap);
+            s.textPx(px, py + 26, buf, 9.5, "#9aa1ad");
+        }
+        label(bx, by, "3 · the plate caps the height",
+              "lifts, core and structure scale with the storeys they serve",
+              "one rule, not a guess repeated in six tower recipes");
+    }
+    // --- 4: the SUPPORT rule (cantilevers) ----------------------------------
+    {
+        auto [bx, by] = cell(3);
+        s.scale = 4.2; s.ox = bx + 90; s.oy = by + 110;
+        const Poly2 base = rectPoly(Rect(-11, -8, 11, 8));
+        const Poly2 upper = rectPoly(Rect(-5, -14, 17, 3));      // overhangs
+        auto lap = polyBool({upper}, {base}, BOp::Intersect);
+        Real over = 0;
+        for (const Poly2& p : lap) over += engine::area(p);
+        const Real frac = over / std::max(Real(1), engine::area(upper));
+        s.poly(base, "#dfe1e6", "#8a8578", 1.4, "stroke-dasharray=\"5 4\"");
+        for (const Poly2& p : polyBool({upper}, {base}, BOp::Subtract))
+            s.poly(p, "#e8c9a8", "#a5773f", 1.2);                // unsupported
+        for (const Poly2& p : lap) s.poly(p, "#b9c0cc", "#232a36", 1.6);
+        char buf[128];
+        snprintf(buf, sizeof buf, "support = %.0f%% of the upper plate", frac * 100);
+        label(bx, by, "4 · cantilever needs a SUPPORT rule",
+              "containment was too strong — orange is unsupported", buf);
+    }
+    // --- 5: the plan quality gate -------------------------------------------
+    {
+        auto [bx, by] = cell(4);
+        s.scale = 4.6; s.ox = bx + 100; s.oy = by + 76;
+        // The defect: a notch that would ride the whole shaft.
+        const Poly2 bad{Vec2(-14, -9), Vec2(14, -9), Vec2(14, 9), Vec2(2.4, 9),
+                        Vec2(1.2, -3), Vec2(0.0, 9), Vec2(-14, 9)};
+        const PlanDefect d = planQuality(bad);
+        s.poly(bad, "#efc9be", "#a5433a", 1.6);
+        const Poly2 fixed{Vec2(-14, -9), Vec2(14, -9), Vec2(14, 9), Vec2(-14, 9)};
+        s.ox = bx + 100; s.oy = by + 190;
+        s.poly(fixed, "#cfe1c2", "#4d6b43", 1.6);
+        char buf[160];
+        snprintf(buf, sizeof buf, "rejected: %s (%.1f)", d.why, d.value);
+        label(bx, by, "5 · plan quality is an invariant",
+              "a base defect is amplified up every storey above it", buf);
+    }
+    // --- 6: rim blocks can be big --------------------------------------------
+    {
+        auto [bx, by] = cell(5);
+        s.scale = 1.9; s.ox = bx; s.oy = by + 18;
+        // interior block: enclosed on all sides, fine grain
+        s.poly(rectPoly(Rect(0, 0, 46, 30)), "#f2eee5", "#c9c3b4", 1.0,
+               "stroke-dasharray=\"5 4\"");
+        for (int k = 0; k < 4; ++k)
+            s.poly(rectPoly(Rect(k * 11.5, 0, (k + 1) * 11.5, 14)), "#cfe1c2", "#8a8578", 1.0);
+        s.textPx(bx, by + 92, "enclosed block: fine grain", 9.5, "#6b7280");
+        // rim block: open on the far side, so depth is not bounded
+        s.oy = by + 116;
+        s.poly(rectPoly(Rect(0, 0, 46, 46)), "#f2eee5", "#c9c3b4", 1.0,
+               "stroke-dasharray=\"5 4\"");
+        s.poly(rectPoly(Rect(0, 0, 26, 44)), "#dbe4ee", "#4a6a8a", 1.4);
+        s.poly(rectPoly(Rect(27, 0, 46, 24)), "#dbe4ee", "#4a6a8a", 1.4);
+        s.textPx(bx, by + 214, "rim block: campus / industrial parcels", 9.5, "#6b7280");
+        label(bx, by, "6 · the city edge parcels coarse",
+              "no far-side street means depth is unbounded",
+              "university, office park, big box, works");
+    }
+    (void)seed;
+    svgClose(s);
+}
+
 // ---------------------------------------------------------------------------
 // Sheet 11 — PORTING THE OLD RECIPES. Left: what the current architect can
 // actually produce for that recipe. Right: what the same recipe becomes once a
@@ -3273,8 +3541,9 @@ int main(int argc, char** argv) {
     lab::sheetCorner(out, seed);
     lab::sheetSilhouette(out, seed);
     lab::sheetPort(out, seed);
+    lab::sheetBuildable(out, seed);
     printf("lot_lab: wrote %s/{lots,plans,shapes,curves,compose,blueprint,stack,"
-           "recipes,corner,silhouette,port}.svg "
+           "recipes,corner,silhouette,port,buildable}.svg "
            "(seed %u)\n", out, seed);
     return 0;
 }
