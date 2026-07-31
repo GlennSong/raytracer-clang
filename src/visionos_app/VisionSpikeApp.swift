@@ -21,6 +21,22 @@ struct SpikeLayerConfiguration: CompositorLayerConfiguration {
     func makeConfiguration(capabilities: LayerRenderer.Capabilities,
                            configuration: inout LayerRenderer.Configuration) {
         configuration.depthFormat = .depth32Float
+        // MUST be an sRGB format. CompositorServices rejects .bgra8Unorm with
+        // "Layer configuration not supported" (code -4) and the immersive space
+        // never comes up — the compositor requires correctly tagged colour so it
+        // can blend the layer with passthrough and system content.
+        //
+        // KNOWN CONSEQUENCE: the frame is currently gamma-encoded TWICE. The
+        // composite pass emits display-encoded values (post_composite.metal
+        // applies pow(c, 1/2.2), and the ACES/AgX tone mappers fold the encode
+        // in), and then the hardware encodes again on write to this target. That
+        // is why visionOS looks washed out relative to macOS, whose CAMetalLayer
+        // uses linear-storage MTLPixelFormatBGRA8Unorm.
+        //
+        // The fix is NOT to change this format — the platform will not allow it.
+        // It is to separate tone mapping from display encoding in the composite
+        // pass so the transfer function is applied exactly once, by whichever of
+        // shader or hardware owns it on that target.
         configuration.colorFormat = .bgra8Unorm_srgb
 
         let foveationEnabled = capabilities.supportsFoveation
