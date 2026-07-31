@@ -1,5 +1,6 @@
 #include "script_assets.h"
 
+#include "asset_root.h"
 #include "../log.h"
 
 #include <fstream>
@@ -12,11 +13,22 @@ namespace {
 // The union of every candidate list this engine used to carry. Order matters:
 // an explicit path wins, then the asset root, then the run-from-build/ variant,
 // then level-relative.
+//
+// When an asset root is set (a sandboxed bundle — see asset_root.h) the
+// root-prefixed forms are tried FIRST: inside a bundle the bare relative paths
+// cannot resolve, and letting them lose silently is what turns a packaging
+// mistake into a mystery. With no root set, assetPath is the identity and this
+// list is exactly what it always was.
 std::vector<std::string> candidates(const std::string& file,
                                     const std::string& levelDir) {
-    std::vector<std::string> out{file,
-                                 "assets/scripts/" + file,
-                                 "../assets/scripts/" + file};
+    std::vector<std::string> out;
+    if (!assetRoot().empty()) {
+        out.push_back(assetPath(file));
+        out.push_back(assetPath("assets/scripts/" + file));
+    }
+    out.push_back(file);
+    out.push_back("assets/scripts/" + file);
+    out.push_back("../assets/scripts/" + file);
     if (!levelDir.empty()) out.push_back(levelDir + "/" + file);
     return out;
 }

@@ -7,6 +7,7 @@
 #import <AppKit/AppKit.h>
 #import <simd/simd.h>
 #include "../../slot_map.h"
+#include "../../engine/asset_root.h"
 #include "../cube_faces.h"
 #include <vector>
 #include <algorithm>
@@ -350,11 +351,16 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     ];
     NSMutableString* shaderSource = [NSMutableString string];
     for (NSString* path in shaderFiles) {
-        NSString* chunk = [NSString stringWithContentsOfFile:path
+        // Resolve through the asset root so the same list works from the repo
+        // root (root unset -> identity) and from inside an app bundle, whose
+        // working directory is not the repo. See engine/asset_root.h.
+        NSString* resolved = [NSString
+            stringWithUTF8String:engine::assetPath([path UTF8String]).c_str()];
+        NSString* chunk = [NSString stringWithContentsOfFile:resolved
                                                     encoding:NSUTF8StringEncoding
                                                        error:&error];
         if (!chunk) {
-            NSLog(@"Failed to load shader %@: %@", path, error);
+            NSLog(@"Failed to load shader %@: %@", resolved, error);
             return false;
         }
         [shaderSource appendFormat:@"#line 1 \"%@\"\n%@\n",

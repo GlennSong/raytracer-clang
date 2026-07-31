@@ -115,6 +115,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/block_grade.cpp
     src/engine/ai/nav_graph.cpp
     src/engine/ai/pathfind.cpp
+    src/engine/asset_root.cpp
     src/engine/script_assets.cpp
     src/engine/script_watch.cpp
     src/engine/level_loader.cpp
