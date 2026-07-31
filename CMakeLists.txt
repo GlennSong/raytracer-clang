@@ -236,6 +236,16 @@ if(RT_ENABLE_SCRIPTING)
     target_include_directories(lua_static SYSTEM PUBLIC ${LUA_DIR})
     target_compile_options(lua_static PRIVATE -w)   # vendored C; not our warnings
 
+    # Apple's embedded platforms (visionOS, iOS, tvOS) are sandboxed and do not
+    # provide system(), so os.execute fails to COMPILE there. LUA_USE_IOS is
+    # Lua's own supported switch for exactly this — loslib.c reads it and stubs
+    # l_system out ("Despite claiming to be ISO C, iOS does not implement
+    # 'system'"). It also implies LUA_USE_POSIX + LUA_USE_DLOPEN, both fine here.
+    # Set it via the platform check rather than patching the submodule.
+    if(CMAKE_SYSTEM_NAME MATCHES "^(visionOS|iOS|tvOS|watchOS)$")
+        target_compile_definitions(lua_static PRIVATE LUA_USE_IOS=1)
+    endif()
+
     # NOTE: the citysim-specific Lua readers (agent_goals, vehicle_body) are NOT
     # here — they read citysim types, so they live in the `citysim` library
     # (src/apps/citysim/scripting) to keep engine_core free of any app dependency.
@@ -323,6 +333,19 @@ if(RT_ENABLE_AUDIO AND NOT EMSCRIPTEN)
         target_link_libraries(miniaudio_static PUBLIC
             "-framework CoreFoundation" "-framework CoreAudio"
             "-framework AudioToolbox")
+    endif()
+
+    # On Apple's EMBEDDED platforms miniaudio's Core Audio backend drives
+    # AVAudioSession, which is Objective-C — so the single TU has to be compiled
+    # as Objective-C or it fails on the first Foundation header ("expected
+    # identifier or '('", the compiler meeting @class in a .c file). macOS does
+    # not need this: its Core Audio path is plain C. Compiling as OBJC rather
+    # than renaming the file keeps one source serving every platform.
+    if(CMAKE_SYSTEM_NAME MATCHES "^(visionOS|iOS|tvOS|watchOS)$")
+        enable_language(OBJC)
+        set_source_files_properties(src/engine/audio/miniaudio_impl.c
+                                    PROPERTIES LANGUAGE OBJC)
+        target_link_libraries(miniaudio_static PUBLIC "-framework AVFoundation")
     endif()
 
     target_link_libraries(engine_core PUBLIC miniaudio_static)
