@@ -51,7 +51,8 @@ bool Application::initialize(const Config& config,
 
     // Audio is best-effort: a build without RT_ENABLE_AUDIO, or a machine
     // with no device, degrades to silence (ADR-0069) — never a failed boot.
-    audioEngine.initialize(AudioBackendMode::Auto);
+    // The host picks the mode (see Config::audio); Auto is the desktop default.
+    audioEngine.initialize(config.audio);
 
     clock.setFixedStep(settingsStore.getDouble("fixedTimestep", 1.0 / 60.0));
     return true;

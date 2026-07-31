@@ -37,8 +37,18 @@
 #import "vision_spike.h"
 
 #import <ARKit/ARKit.h>
+#import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <simd/simd.h>
+
+#include "../engine/application.h"
+#include "../engine/asset_root.h"
+#include "../game/arena_state.h"
+#include "../log.h"
+#include "../renderer/hosted_window.h"
+
+#include <fstream>
+#include <memory>
 
 namespace {
 
@@ -100,6 +110,72 @@ fragment float4 spikeFragment(VertexOut in [[stage_in]]) {
     return float4(in.color, 1.0);
 }
 )metal";
+
+// Boots the engine inside the bundle: points the asset root at the bundle,
+// loads arena.json, and pushes the same ArenaState the desktop viewer runs.
+//
+// Returns null if anything fails, and says why. This stage is deliberately
+// verbose — it is the first time the engine has run on this platform at all, and
+// "nothing appeared" is a useless symptom to debug from.
+std::unique_ptr<engine::Application> bootEngine() {
+    // A sandboxed bundle has no useful working directory, so every relative
+    // asset path has to resolve against the bundle instead (engine/asset_root.h).
+    // iOS-style bundles are flat, so resources sit at the bundle root.
+    const std::string root = [[NSBundle mainBundle] bundlePath].UTF8String;
+    engine::setAssetRoot(root);
+    NSLog(@"[vision] asset root: %s", root.c_str());
+
+    const std::string levelPath = engine::assetPath("assets/levels/arena.json");
+    if (!std::ifstream(levelPath).good()) {
+        NSLog(@"[vision] FATAL: level not found at %s — is assets/ in the bundle?",
+              levelPath.c_str());
+        return nullptr;
+    }
+
+    auto app = std::make_unique<engine::Application>();
+
+    // HostedWindow, not a platform window: the compositor owns presentation and
+    // there is no OS window to speak of. This is the same implementation the Qt
+    // editor uses for "the host owns the surface, the engine gets told the size".
+    auto window = std::make_unique<engine::HostedWindow>();
+    // Nominal until the first drawable reports the real per-eye size; systems
+    // that compute an aspect ratio need something non-degenerate before then.
+    window->setSizes(1024, 1024, 1024, 1024);
+
+    // Settings live in the bundle, which is READ-ONLY. Pointing Application at a
+    // path it cannot write would fail on exit, so send it somewhere writable.
+    NSString* docs = NSSearchPathForDirectoriesInDomains(
+        NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    const std::string settingsPath =
+        std::string(docs.UTF8String) + "/settings.json";
+
+    // Size is nominal — the compositor decides the real per-eye dimensions. It
+    // only has to be non-zero so nothing divides by it.
+    // Null audio, deliberately. Opening a real device on visionOS deadlocks
+    // AURemoteIO unless the app has configured and activated an AVAudioSession
+    // first — CoreAudio then aborts the process on its RPC timeout ("Initialize:
+    // RPC timeout. Apparently deadlocked."), which is a HANG, so Auto's
+    // open-failed fallback never gets a chance to run. Sounds still "play" into
+    // the null backend, so gameplay that waits on audio does not stall. Doing
+    // the AVAudioSession setup properly is its own piece of work.
+    engine::Application::Config cfg{1024, 1024, "Raytracer visionOS", settingsPath};
+    cfg.audio = engine::AudioBackendMode::Null;
+    if (!app->initialize(cfg, std::move(window))) {
+        NSLog(@"[vision] FATAL: Application::initialize failed");
+        return nullptr;
+    }
+
+    app->settings().setString("cameraMode", "fly");
+    // No editor on this platform, so the usual play/edit factory pair collapses
+    // to just play; ArenaState's "back to editor" factory is intentionally null.
+    app->pushState(std::make_unique<ArenaState>(app->windowRef(), app->renderer(),
+                                                levelPath, nullptr));
+    app->begin();
+
+    NSLog(@"[vision] engine booted — %zu entities from %s",
+          static_cast<size_t>(app->world().entityCount()), levelPath.c_str());
+    return app;
+}
 
 struct SpikeState {
     id<MTLDevice> device = nil;
@@ -321,8 +397,18 @@ void rt_vision_spike_run(cp_layer_renderer_t layerRenderer) {
 
         if (!startWorldTracking(state)) return;
 
+        // The engine runs on this thread, ticked once per compositor frame. This
+        // is the same per-frame decomposition the Qt editor and the Emscripten
+        // build already drive (Application::begin/runFrame), so CompositorServices
+        // is simply a third host — no engine change was needed to invert the loop.
+        std::unique_ptr<engine::Application> app = bootEngine();
+        if (!app) {
+            NSLog(@"[vision] engine failed to boot — rendering the spike triangle only");
+        }
+
         bool pipelineReady = false;
         bool loggedFirstPresent = false;
+        uint64_t frameCounter = 0;
 
         while (true) {
             @autoreleasepool {
@@ -345,7 +431,21 @@ void rt_vision_spike_run(cp_layer_renderer_t layerRenderer) {
                 if (!timing) continue;
 
                 cp_frame_start_update(frame);
-                // (Simulation would go here. The spike has no state to advance.)
+                if (app) {
+                    // One full engine frame: events, update, fixed physics steps,
+                    // and its own render (NullRenderer for now, so it queues draw
+                    // calls and discards them — the geometry is real, the output
+                    // is not yet).
+                    app->runFrame();
+
+                    // Proof of life at ~1 Hz: entity count moves as the level
+                    // settles, and a frozen number means the sim has stalled.
+                    if (++frameCounter % 90 == 0) {
+                        NSLog(@"[vision] frame %llu — %zu entities",
+                              frameCounter,
+                              static_cast<size_t>(app->world().entityCount()));
+                    }
+                }
                 cp_frame_end_update(frame);
 
                 // Sleep until the compositor's optimal input latch point, so the

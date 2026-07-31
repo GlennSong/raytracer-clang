@@ -28,6 +28,17 @@ public:
         int height = 1024;
         std::string title = "Application";
         std::string settingsFile = "settings.json";
+
+        // How the audio engine opens (ADR-0069). Auto probes for a real output
+        // device and falls back to the null backend if opening one FAILS.
+        //
+        // That fallback cannot save a host where opening one HANGS: on visionOS
+        // AURemoteIO deadlocks unless the app has configured and activated an
+        // AVAudioSession first, and CoreAudio aborts the process after its RPC
+        // timeout — there is no failure to catch. Such a host passes Null until
+        // it does that setup, which is why this is the host's choice and not a
+        // constant inside Application.
+        AudioBackendMode audio = AudioBackendMode::Auto;
     };
 
     Application();
