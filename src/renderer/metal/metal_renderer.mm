@@ -56,6 +56,59 @@ static constexpr uint32_t FOLIAGE_MAX_INSTANCES = 8192;
 // fence needed.
 static constexpr int MAX_FRAMES_IN_FLIGHT = 3;
 
+// Where the composited frame goes, and how it reaches the display.
+//
+// This is the ONLY part of the Metal backend that knows what it is presenting
+// to. The pass graph does not: the scene, shadow and post passes all render to
+// textures this backend owns, and the drawable is touched in exactly four
+// places — the composite target, the lens-warp target, the frame-dump source,
+// and present. Everything else is surface-agnostic, which is why visionOS can
+// reuse this renderer instead of growing a parallel one (AGENTS.md: "Use the
+// technology you already have").
+//
+// macOS presents through a CAMetalLayer. visionOS has no layer and no window at
+// all — CompositorServices hands out drawables — so it implements this instead.
+struct PresentationSurface {
+    virtual ~PresentationSurface() = default;
+
+    // Acquire this frame's target. False means "skip the frame": a layer can
+    // fail to vend a drawable, and a compositor can be paused.
+    virtual bool acquire() = 0;
+
+    // Where the composite pass writes. Valid only between acquire() and
+    // present(); nil if acquire() failed.
+    virtual id<MTLTexture> colorTarget() const = 0;
+
+    // Hand the finished frame to the display.
+    virtual void present(id<MTLCommandBuffer> commandBuffer) = 0;
+
+    // Backing-store size changed (window resize). Compositor-driven surfaces
+    // choose their own size, so this is a no-op there.
+    virtual void resize(int /*width*/, int /*height*/) {}
+};
+
+// The desktop surface: a CAMetalLayer attached to the host's NSView.
+struct LayerSurface final : PresentationSurface {
+    CAMetalLayer* layer = nil;
+    NSWindow* window = nil;              // nil when a host owns the window
+    id<CAMetalDrawable> drawable = nil;
+
+    bool acquire() override {
+        drawable = [layer nextDrawable];
+        return drawable != nil;
+    }
+    id<MTLTexture> colorTarget() const override { return drawable.texture; }
+    void present(id<MTLCommandBuffer> commandBuffer) override {
+        if (drawable) [commandBuffer presentDrawable:drawable];
+        drawable = nil;
+    }
+    void resize(int width, int height) override {
+        if (window)   // hosted mode: keep the scale set at initialize
+            layer.contentsScale = window.backingScaleFactor;
+        layer.drawableSize = CGSizeMake(width, height);
+    }
+};
+
 static simd_float4x4 toSimd(const Mat4& m) {
     simd_float4x4 result;
     for (int i = 0; i < 4; i++)
@@ -89,8 +142,9 @@ struct MetalRenderer::Impl {
     id<MTLBuffer> foliageInstanceBuffers[MAX_FRAMES_IN_FLIGHT]; // ring; foliage prepass+lit
     int frameIndex = 0;                                   // advances each beginFrame
     uint64_t frameCount = 0;                              // monotonic; drives SSAO jitter
-    CAMetalLayer* metalLayer;
-    NSWindow* nsWindow;
+    // How this frame reaches the display. The pass graph never looks at it —
+    // see PresentationSurface above.
+    std::unique_ptr<PresentationSurface> surface;
     id<MTLTexture> depthTexture;
 
     SlotMap<GPUMesh, MeshTag> meshes;
@@ -225,7 +279,9 @@ struct MetalRenderer::Impl {
     const char* frameDumpPath = nullptr;
     int frameDumpCounter = 0;
 
-    id<CAMetalDrawable> currentDrawable;
+    // Cached once per frame from surface->colorTarget(), so the composite, lens
+    // and frame-dump stages agree on the target even though they run apart.
+    id<MTLTexture> currentColorTarget;
     id<MTLCommandBuffer> currentCommandBuffer;
     id<MTLRenderCommandEncoder> currentEncoder;
     MTLRenderPassDescriptor* currentPassDesc;   // scene pass (HDR offscreen)
@@ -287,9 +343,10 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
 
     impl->commandQueue = [impl->device newCommandQueue];
 
-    impl->metalLayer = [CAMetalLayer layer];
-    impl->metalLayer.device = impl->device;
-    impl->metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    auto layerSurface = std::make_unique<LayerSurface>();
+    layerSurface->layer = [CAMetalLayer layer];
+    layerSurface->layer.device = impl->device;
+    layerSurface->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
     // framebufferOnly drawables can't be blitted from; relax it only when a
     // frame dump was requested (RT_FRAME_DUMP=<path.png>).
     impl->frameDumpPath = std::getenv("RT_FRAME_DUMP");
@@ -299,13 +356,14 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     // Without this the facing/normals views are reachable only from an
     // interactive ImGui build — useless for verifying a frame dump.
     if (const char* d = std::getenv("RT_DEBUG_VIEW")) debugView = std::atoi(d);
-    impl->metalLayer.framebufferOnly = impl->frameDumpPath ? NO : YES;
-    impl->metalLayer.contentsScale =
+    layerSurface->layer.framebufferOnly = impl->frameDumpPath ? NO : YES;
+    layerSurface->layer.contentsScale =
         nsWindow ? nsWindow.backingScaleFactor : 2.0;   // retina default
 
     hostView.wantsLayer = YES;
-    hostView.layer = impl->metalLayer;
-    impl->nsWindow = nsWindow;
+    hostView.layer = layerSurface->layer;
+    layerSurface->window = nsWindow;
+    impl->surface = std::move(layerSurface);
 
     // Load shaders. Runtime newLibraryWithSource has no include paths, so the
     // modules are concatenated in dependency order; #line directives keep
@@ -930,9 +988,7 @@ void MetalRenderer::shutdown() {
 void MetalRenderer::resize(int width, int height) {
     impl->framebufferWidth = width;
     impl->framebufferHeight = height;
-    if (impl->nsWindow)   // hosted mode: keep the scale set at initialize
-        impl->metalLayer.contentsScale = impl->nsWindow.backingScaleFactor;
-    impl->metalLayer.drawableSize = CGSizeMake(width, height);
+    impl->surface->resize(width, height);
 
     MTLTextureDescriptor* depthDesc = [MTLTextureDescriptor
         texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
@@ -1671,10 +1727,10 @@ void MetalRenderer::beginFrame() {
     // Acquire the drawable and build the pass descriptor up front so the debug
     // UI's new-frame (which needs the descriptor's formats) can run before
     // systems emit ImGui widgets in their render() hooks. endFrame() reuses it.
-    impl->currentDrawable = [impl->metalLayer nextDrawable];
+    impl->currentColorTarget = impl->surface->acquire() ? impl->surface->colorTarget() : nil;
     impl->currentPassDesc = nil;
     impl->compositePassDesc = nil;
-    if (impl->currentDrawable) {
+    if (impl->currentColorTarget) {
         // Main scene pass renders to offscreen HDR texture (not the drawable).
         // Tone mapping + gamma happens in a separate composite pass.
         MTLRenderPassDescriptor* passDesc = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -1694,7 +1750,7 @@ void MetalRenderer::beginFrame() {
 
         // Composite pass renders to the drawable (BGRA8Unorm, no depth).
         MTLRenderPassDescriptor* compDesc = [MTLRenderPassDescriptor renderPassDescriptor];
-        compDesc.colorAttachments[0].texture = impl->currentDrawable.texture;
+        compDesc.colorAttachments[0].texture = impl->currentColorTarget;
         compDesc.colorAttachments[0].loadAction = MTLLoadActionDontCare;
         compDesc.colorAttachments[0].storeAction = MTLStoreActionStore;
         impl->compositePassDesc = compDesc;
@@ -2266,7 +2322,7 @@ void MetalRenderer::drawTerrain(MeshHandle handle, const RenderMaterial& materia
 }
 
 void MetalRenderer::endFrame() {
-    if (!impl->currentDrawable || !impl->currentPassDesc) return;
+    if (!impl->currentColorTarget || !impl->currentPassDesc) return;
 
     // Bake reflection probes on first frame when draw calls exist
     if (impl->probesPendingBake && !impl->opaqueDrawCalls.empty()) {
@@ -3207,7 +3263,7 @@ void MetalRenderer::endFrame() {
             [compEncoder endEncoding];
 
             MTLRenderPassDescriptor* lensPassDesc = [MTLRenderPassDescriptor renderPassDescriptor];
-            lensPassDesc.colorAttachments[0].texture = impl->currentDrawable.texture;
+            lensPassDesc.colorAttachments[0].texture = impl->currentColorTarget;
             lensPassDesc.colorAttachments[0].loadAction = MTLLoadActionDontCare;
             lensPassDesc.colorAttachments[0].storeAction = MTLStoreActionStore;
 
@@ -3249,7 +3305,7 @@ void MetalRenderer::endFrame() {
     id<MTLTexture> dumpStaging = nil;
     bool dumpThisFrame = impl->frameDumpPath && ++impl->frameDumpCounter == 90;
     if (dumpThisFrame) {
-        id<MTLTexture> drawableTex = impl->currentDrawable.texture;
+        id<MTLTexture> drawableTex = impl->currentColorTarget;
         MTLTextureDescriptor* d = [MTLTextureDescriptor
             texture2DDescriptorWithPixelFormat:drawableTex.pixelFormat
                                          width:drawableTex.width
@@ -3268,7 +3324,7 @@ void MetalRenderer::endFrame() {
         [blit endEncoding];
     }
 
-    [impl->currentCommandBuffer presentDrawable:impl->currentDrawable];
+    impl->surface->present(impl->currentCommandBuffer);
     [impl->currentCommandBuffer commit];
 
     if (dumpThisFrame) {
