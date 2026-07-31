@@ -1,11 +1,24 @@
 #ifdef __APPLE__
 
 #import "metal_renderer.h"
+#import <TargetConditionals.h>
 #import <Metal/Metal.h>
-#import <QuartzCore/CAMetalLayer.h>
 #import <QuartzCore/CABase.h>   // CACurrentMediaTime (wind sway clock)
-#import <AppKit/AppKit.h>
 #import <simd/simd.h>
+
+// Presentation differs by platform, and so do the frameworks that carry it.
+// These guards are for AVAILABILITY only — CAMetalLayer/AppKit simply do not
+// exist in the visionOS SDK, and CompositorServices does not exist on macOS.
+// Behavioural differences stay behind PresentationSurface (AGENTS.md, Platform
+// Abstraction); nothing below threads a platform conditional through the pass
+// graph.
+#if TARGET_OS_OSX
+#import <QuartzCore/CAMetalLayer.h>
+#import <AppKit/AppKit.h>
+#elif TARGET_OS_VISION
+#import <CompositorServices/CompositorServices.h>
+#import <ARKit/ARKit.h>
+#endif
 #include "../../slot_map.h"
 #include "../../engine/asset_root.h"
 #include "../cube_faces.h"
@@ -108,6 +121,7 @@ struct PresentationSurface {
     virtual void resize(int /*width*/, int /*height*/) {}
 };
 
+#if TARGET_OS_OSX
 // The desktop surface: a CAMetalLayer attached to the host's NSView.
 struct LayerSurface final : PresentationSurface {
     CAMetalLayer* layer = nil;
@@ -129,6 +143,117 @@ struct LayerSurface final : PresentationSurface {
         layer.drawableSize = CGSizeMake(width, height);
     }
 };
+#endif  // TARGET_OS_OSX
+
+#if TARGET_OS_VISION
+// The immersive surface: CompositorServices vends drawables; there is no layer,
+// no window, and no swapchain we own.
+//
+// MONOSCOPIC FOR NOW. A drawable exposes one view per eye, but this composites
+// the single rendered image into view 0 only. It is head-tracked and correctly
+// projected, but the eyes do not disagree, so there is no parallax — it reads as
+// a flat image floating in space. Real per-eye rendering means running the pass
+// graph per view, which restructures endFrame, and that is its own change.
+// Calling this "stereo" before then would be exactly the smoke and mirrors the
+// Engineering Ethos rules out.
+struct CompositorSurface final : PresentationSurface {
+    cp_layer_renderer_t layerRenderer = nullptr;
+    ar_world_tracking_provider_t worldTracking = nullptr;
+
+    cp_frame_t frame = nullptr;
+    cp_drawable_t drawable = nullptr;
+
+    // Starts world tracking. Without a device anchor on every drawable the
+    // compositor refuses to present on real hardware ("Presenting a drawable
+    // without a device anchor. On device this drawable won't be presented.") —
+    // the simulator draws it anyway, which makes this an easy thing to get
+    // wrong and only discover on the headset.
+    bool startTracking() {
+        if (!ar_world_tracking_provider_is_supported()) return false;
+        ar_world_tracking_configuration_t config = ar_world_tracking_configuration_create();
+        worldTracking = ar_world_tracking_provider_create(config);
+        ar_data_providers_t providers = ar_data_providers_create();
+        ar_data_providers_add_data_provider(providers, worldTracking);
+        ar_session_t session = ar_session_create();
+        ar_session_run(session, providers);
+        return true;
+    }
+
+    bool acquire() override {
+        switch (cp_layer_renderer_get_state(layerRenderer)) {
+            case cp_layer_renderer_state_paused:
+                cp_layer_renderer_wait_until_running(layerRenderer);
+                return false;
+            case cp_layer_renderer_state_invalidated:
+                return false;
+            case cp_layer_renderer_state_running:
+                break;
+        }
+
+        frame = cp_layer_renderer_query_next_frame(layerRenderer);
+        if (!frame) return false;
+
+        cp_frame_timing_t timing = cp_frame_predict_timing(frame);
+        if (!timing) { frame = nullptr; return false; }
+
+        cp_frame_start_update(frame);
+        cp_frame_end_update(frame);
+
+        // Latch input as late as the compositor allows, so the pose we render
+        // against is the freshest one available.
+        cp_time_wait_until(cp_frame_timing_get_optimal_input_time(timing));
+
+        // Once a frame is taken it must be carried all the way through:
+        // start_submission -> query_drawable -> present -> end_submission. The
+        // protocol has no mid-frame escape, and each shortcut is its own
+        // diagnostic:
+        //   - drop the frame entirely      -> "more than 3 frames in flight"
+        //   - end without a drawable       -> "called cp_frame_end_submission()
+        //                                     before requesting a drawable"
+        //   - end with an unpresented one  -> "...before calling present on the
+        //                                     drawable"
+        // So there is no "skip this frame because tracking isn't ready" path.
+        cp_frame_start_submission(frame);
+        drawable = cp_frame_query_drawable(frame);
+        if (!drawable) { cp_frame_end_submission(frame); frame = nullptr; return false; }
+
+        // Pose for the moment this frame is actually SHOWN — the drawable's own
+        // timing, now that we have it. Sampling "now" instead would anchor to a
+        // pose already a frame stale at display time, which reads as the world
+        // swimming against head motion.
+        cp_frame_timing_t finalTiming = cp_drawable_get_frame_timing(drawable);
+        ar_device_anchor_t anchor = ar_device_anchor_create();
+        if (ar_world_tracking_provider_query_device_anchor_at_timestamp(
+                worldTracking,
+                cp_time_to_cf_time_interval(
+                    cp_frame_timing_get_presentation_time(finalTiming)),
+                anchor) == ar_device_anchor_query_status_success) {
+            cp_drawable_set_device_anchor(drawable, anchor);
+        }
+        // If the pose is not ready — normal for the first frames after launch,
+        // "Trying to get pose for nil service reference" — render and present
+        // anyway. The compositor will warn that an unanchored drawable won't
+        // display on device, which is correct and self-corrects the moment
+        // tracking converges. Completing the frame is not optional; being
+        // anchored is.
+        return true;
+    }
+
+    id<MTLTexture> colorTarget() const override {
+        return cp_drawable_get_color_texture(drawable, 0);
+    }
+
+    void present(id<MTLCommandBuffer> commandBuffer) override {
+        if (drawable) cp_drawable_encode_present(drawable, commandBuffer);
+    }
+
+    void frameSubmitted() override {
+        if (frame) cp_frame_end_submission(frame);
+        frame = nullptr;
+        drawable = nullptr;
+    }
+};
+#endif  // TARGET_OS_VISION
 
 static simd_float4x4 toSimd(const Mat4& m) {
     simd_float4x4 result;
@@ -342,10 +467,30 @@ MetalRenderer::MetalRenderer() : impl(std::make_unique<Impl>()) {}
 MetalRenderer::~MetalRenderer() { shutdown(); }
 
 bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
-    // The handle is opaque (ADR-0001): the GLFW runtime passes an NSWindow*;
-    // a host application embedding the engine (the Qt editor) passes the
-    // NSView* of its viewport widget. Attach the layer to whichever view we
-    // end up with.
+    // The handle is opaque (ADR-0001) and its concrete type is per-platform:
+    // the GLFW runtime passes an NSWindow*, the Qt editor passes the NSView* of
+    // its viewport widget, and visionOS passes the cp_layer_renderer_t handed
+    // to it by the SwiftUI immersive space. Unwrapping it is the one place that
+    // has to know which platform it is on; everything after this point does not.
+#if TARGET_OS_VISION
+    // The compositor already owns a device — never create a second one, or every
+    // resource below would belong to the wrong GPU object.
+    cp_layer_renderer_t layerRenderer = (__bridge cp_layer_renderer_t)windowHandle;
+    if (!layerRenderer) return false;
+
+    impl->device = cp_layer_renderer_get_device(layerRenderer);
+    if (!impl->device) return false;
+    impl->commandQueue = [impl->device newCommandQueue];
+
+    auto compositorSurface = std::make_unique<CompositorSurface>();
+    compositorSurface->layerRenderer = layerRenderer;
+    if (!compositorSurface->startTracking()) {
+        NSLog(@"[MetalRenderer] world tracking unavailable — cannot present");
+        return false;
+    }
+    impl->surface = std::move(compositorSurface);
+    impl->frameDumpPath = std::getenv("RT_FRAME_DUMP");
+#else
     NSObject* handleObj = (__bridge NSObject*)windowHandle;
     NSWindow* nsWindow = nil;
     NSView* hostView = nil;
@@ -385,6 +530,7 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     hostView.layer = layerSurface->layer;
     layerSurface->window = nsWindow;
     impl->surface = std::move(layerSurface);
+#endif  // TARGET_OS_VISION
 
     // Load shaders. Runtime newLibraryWithSource has no include paths, so the
     // modules are concatenated in dependency order; #line directives keep

@@ -756,7 +756,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
         src/visionos_app/VisionSpikeApp.swift
         src/visionos_app/vision_spike.mm
         src/visionos_app/vision_spike.h
-        src/renderer/null_renderer.cpp   # provides Renderer::create() for now
+        # The SAME Metal backend the macOS viewer uses. Presentation differs
+        # (CompositorServices vs CAMetalLayer) and is handled behind
+        # PresentationSurface inside this file — the pass graph is shared, not
+        # forked. This is what replaced NullRenderer.
+        src/renderer/metal/metal_renderer.mm
         src/game/arena_state.cpp
     )
     if(RT_ENABLE_PHYSICS)
@@ -779,6 +783,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
     endif()
 
     set_source_files_properties(src/visionos_app/vision_spike.mm
+                                src/renderer/metal/metal_renderer.mm
                                 PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 
     # Assets are COPIED INTO the bundle, and the app points the engine's asset
