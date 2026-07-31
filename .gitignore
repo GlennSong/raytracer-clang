@@ -30,3 +30,5 @@ assets/env/*.exr
 !assets/env/starfield.hdr
 assets/levels/.shot_*
 cache/
+build-visionos-sim/
+build-visionos/
