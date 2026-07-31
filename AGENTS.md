@@ -231,6 +231,24 @@ demo, not a screenshot prop. Build it to be used by everything that comes after.
 - **Design for extension and reuse.** Prefer interfaces and vocabularies that
   other parts of the engine (and future procgen projects) can build on, over a
   one-off that solves only today's case.
+- **Fix the cause, not the symptom.** When something breaks, find *why* before
+  changing anything. A fix that makes the symptom disappear without explaining
+  the mechanism is a patch, and patches stack into systems nobody can reason
+  about. If the cause is architectural, fix the architecture — even when a local
+  workaround is available and cheaper. Do the hard thing; the easy thing is how
+  you end up with N special cases and no model of the system.
+- **Never stack a fix on a fix.** If you are adding a second patch because the
+  first one didn't fully work, the first one was wrong. Revert it and fix the
+  actual cause rather than layering compensations on top of a bad diagnosis.
+  Two fixes for one bug is a signal to stop and re-diagnose, not to add a third.
+- **A bug is evidence about the design.** Ask what *let* it exist. If the answer
+  is "nothing prevented it", the fix is not complete until something does — a
+  type that makes the bad state unrepresentable, an invariant, or a test gate.
+  Fixing the instance without closing the class means you will meet it again.
+- **Build systematically, in reviewable steps.** Land one coherent change at a
+  time, each verified on its own, rather than a pile of half-finished edits that
+  can only be judged as a lump. If a step turns out to be wrong, it should be
+  revertable without unpicking three others that grew on top of it.
 
 ## Working & Communicating (Agent Rule)
 
