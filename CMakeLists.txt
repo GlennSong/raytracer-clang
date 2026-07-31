@@ -626,6 +626,22 @@ if(RT_ENABLE_PHYSICS)
     set(DOUBLE_PRECISION OFF CACHE BOOL "" FORCE)
     add_subdirectory(third_party/JoltPhysics/Build ${CMAKE_BINARY_DIR}/jolt)
 
+    # Jolt.cmake does `target_compile_options(Jolt PUBLIC -pthread)` on every
+    # non-Windows platform, so the flag reaches EVERY language compiled in any
+    # target that links Jolt. swiftc rejects it outright ("Driver threw unknown
+    # argument: '-pthread'"), which breaks the visionOS app the moment its Swift
+    # entry point shares a target with the engine.
+    #
+    # Re-scope Jolt's interface so the flag only reaches the C-family languages
+    # it was meant for, rather than patching the submodule or dropping Swift into
+    # a separate target to dodge it. C/C++/ObjC++ still get it exactly as before.
+    get_target_property(_jolt_opts Jolt INTERFACE_COMPILE_OPTIONS)
+    if(_jolt_opts)
+        list(REMOVE_ITEM _jolt_opts "-pthread")
+        list(APPEND _jolt_opts "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-pthread>")
+        set_target_properties(Jolt PROPERTIES INTERFACE_COMPILE_OPTIONS "${_jolt_opts}")
+    endif()
+
     # The physics-host source set every host target (viewer, editor_app,
     # viewer_web) compiles alongside engine_core: the Jolt world + job adapter,
     # the gameplay systems that need it, drivable vehicles, and the living-world
@@ -715,6 +731,79 @@ function(rt_build_vulkan_shaders)
     endforeach()
     add_custom_target(vulkan_shaders DEPENDS ${VK_SPV_FILES})
 endfunction()
+
+# ============================================================
+# visionOS immersive app. Built ONLY when cross-compiling for visionOS, which
+# is a separate configure from the host build:
+#
+#   cmake -S . -B build-visionos-sim -G Xcode \
+#         -DCMAKE_SYSTEM_NAME=visionOS -DCMAKE_OSX_SYSROOT=xrsimulator
+#   cmake --build build-visionos-sim --target VisionApp
+#
+# Deliberately a target in THIS file rather than a standalone project under
+# src/visionos_app: it links engine_core, citysim and the physics sources, and a
+# second project would have to duplicate those source lists. One source of truth
+# for what the engine is made of.
+#
+# The Xcode generator is required, not preferred — no other generator produces a
+# visionOS .app bundle with a Swift entry point.
+# ============================================================
+if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+    enable_language(Swift)
+    set(CMAKE_Swift_LANGUAGE_VERSION 5)
+
+    set(VISION_SOURCES
+        src/visionos_app/VisionSpikeApp.swift
+        src/visionos_app/vision_spike.mm
+        src/visionos_app/vision_spike.h
+        src/renderer/null_renderer.cpp   # provides Renderer::create() for now
+        src/game/arena_state.cpp
+    )
+    if(RT_ENABLE_PHYSICS)
+        list(APPEND VISION_SOURCES ${RT_PHYSICS_HOST_SOURCES})
+    endif()
+
+    add_executable(VisionApp MACOSX_BUNDLE ${VISION_SOURCES})
+    target_link_libraries(VisionApp PRIVATE
+        engine_core
+        citysim
+        "-framework CompositorServices"
+        "-framework Metal"
+        "-framework SwiftUI"
+        "-framework ARKit"
+        "-framework Foundation"
+    )
+    if(RT_ENABLE_PHYSICS)
+        target_link_libraries(VisionApp PRIVATE Jolt)
+        target_compile_definitions(VisionApp PRIVATE RT_ENABLE_PHYSICS=1)
+    endif()
+
+    set_source_files_properties(src/visionos_app/vision_spike.mm
+                                PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+
+    # Assets are COPIED INTO the bundle, and the app points the engine's asset
+    # root at them at startup (engine/asset_root.h). Nothing resolves relative to
+    # the working directory inside a sandboxed bundle.
+    target_sources(VisionApp PRIVATE
+        ${CMAKE_SOURCE_DIR}/assets ${CMAKE_SOURCE_DIR}/shaders)
+    set_source_files_properties(
+        ${CMAKE_SOURCE_DIR}/assets ${CMAKE_SOURCE_DIR}/shaders
+        PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+
+    set_target_properties(VisionApp PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/src/visionos_app/Info.plist.in"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.glennsong.raytracer.visionspike"
+        MACOSX_BUNDLE_BUNDLE_NAME "VisionApp"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
+        XCODE_ATTRIBUTE_SWIFT_OBJC_BRIDGING_HEADER
+            "${CMAKE_SOURCE_DIR}/src/visionos_app/VisionSpike-Bridging-Header.h"
+        XCODE_ATTRIBUTE_SWIFT_VERSION "5.0"
+        XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
+        XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO"
+        XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC "YES"
+    )
+endif()
 
 # ============================================================
 # Interactive viewer (GPU + windowing) — only when GLFW is available, so the
