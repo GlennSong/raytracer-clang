@@ -79,8 +79,29 @@ struct PresentationSurface {
     // present(); nil if acquire() failed.
     virtual id<MTLTexture> colorTarget() const = 0;
 
-    // Hand the finished frame to the display.
+    // Hand the finished frame to the display. Runs BEFORE the command buffer is
+    // committed, so implementations encode rather than submit.
     virtual void present(id<MTLCommandBuffer> commandBuffer) = 0;
+
+    // Runs AFTER the command buffer is committed, for surfaces that bracket a
+    // frame rather than just handing over a texture.
+    //
+    // A CAMetalLayer has nothing to do here — presentDrawable: was simply
+    // another encoded command, and once committed the layer is done. Nothing on
+    // macOS overrides this.
+    //
+    // CompositorServices does bracket the frame, with start_submission /
+    // end_submission around the GPU work. Those are not bookkeeping: per
+    // frame.h, "Compositor uses the time difference to improve its predictions
+    // for when to start the frame submission process." Closing the frame inside
+    // present() instead would time the interval EXCLUDING commit, so the
+    // compositor would mis-schedule the next frame — a latency and dropped-frame
+    // problem that looks fine in the simulator and shows up on device.
+    //
+    // Hence a hook rather than a preprocessor branch: platform differences
+    // belong behind this seam, not threaded through endFrame (AGENTS.md,
+    // Platform Abstraction).
+    virtual void frameSubmitted() {}
 
     // Backing-store size changed (window resize). Compositor-driven surfaces
     // choose their own size, so this is a no-op there.
@@ -3326,6 +3347,10 @@ void MetalRenderer::endFrame() {
 
     impl->surface->present(impl->currentCommandBuffer);
     [impl->currentCommandBuffer commit];
+    // Before any waitUntilCompleted below: a compositor-driven surface wants to
+    // close its frame as soon as the work is submitted, not after we have
+    // finished reading it back for a frame dump.
+    impl->surface->frameSubmitted();
 
     if (dumpThisFrame) {
         [impl->currentCommandBuffer waitUntilCompleted];
