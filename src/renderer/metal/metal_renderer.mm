@@ -96,6 +96,11 @@ struct PresentationSurface {
     // committed, so implementations encode rather than submit.
     virtual void present(id<MTLCommandBuffer> commandBuffer) = 0;
 
+    // The target's true pixel dimensions. The engine cannot infer these: on
+    // visionOS there is no window to measure, and the compositor picks the
+    // per-eye size itself. Returns false if it is not yet knowable.
+    virtual bool drawableSize(int& width, int& height) const = 0;
+
     // The colour target's pixel format. Must be known at initialize() time,
     // BEFORE any drawable exists, because the composite and lens pipelines are
     // built against it — a pipeline whose attachment format disagrees with the
@@ -157,6 +162,11 @@ struct LayerSurface final : PresentationSurface {
         layer.drawableSize = CGSizeMake(width, height);
     }
     MTLPixelFormat colorPixelFormat() const override { return layer.pixelFormat; }
+    bool drawableSize(int& width, int& height) const override {
+        width  = static_cast<int>(layer.drawableSize.width);
+        height = static_cast<int>(layer.drawableSize.height);
+        return width > 0 && height > 0;
+    }
 };
 #endif  // TARGET_OS_OSX
 
@@ -256,6 +266,14 @@ struct CompositorSurface final : PresentationSurface {
 
     id<MTLTexture> colorTarget() const override {
         return cp_drawable_get_color_texture(drawable, 0);
+    }
+
+    bool drawableSize(int& width, int& height) const override {
+        if (!drawable) return false;
+        id<MTLTexture> tex = cp_drawable_get_color_texture(drawable, 0);
+        width  = static_cast<int>(tex.width);
+        height = static_cast<int>(tex.height);
+        return width > 0 && height > 0;
     }
 
     // From the layer CONFIGURATION, not a drawable: pipelines are built during
@@ -511,7 +529,6 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         return false;
     }
     impl->surface = std::move(compositorSurface);
-    impl->frameDumpPath = std::getenv("RT_FRAME_DUMP");
 #else
     NSObject* handleObj = (__bridge NSObject*)windowHandle;
     NSWindow* nsWindow = nil;
@@ -538,12 +555,6 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     // framebufferOnly drawables can't be blitted from; relax it only when a
     // frame dump was requested (RT_FRAME_DUMP=<path.png>).
     impl->frameDumpPath = std::getenv("RT_FRAME_DUMP");
-    if (const char* w = std::getenv("RT_WIREFRAME")) wireframe = std::atoi(w);  // headless wire view
-    // Headless debug views (same ids as the ImGui overlay's View combo):
-    // 1=AO 2=SSR 3=depth 4=normals 5=shadow 6=albedo 7=facing 8=cascades.
-    // Without this the facing/normals views are reachable only from an
-    // interactive ImGui build — useless for verifying a frame dump.
-    if (const char* d = std::getenv("RT_DEBUG_VIEW")) debugView = std::atoi(d);
     layerSurface->layer.framebufferOnly = impl->frameDumpPath ? NO : YES;
     layerSurface->layer.contentsScale =
         nsWindow ? nsWindow.backingScaleFactor : 2.0;   // retina default
@@ -553,6 +564,15 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     layerSurface->window = nsWindow;
     impl->surface = std::move(layerSurface);
 #endif  // TARGET_OS_VISION
+
+    // Debug knobs, read on EVERY platform. These lived in the macOS branch until
+    // visionOS arrived, which silently made every headless debug view
+    // unreachable there — exactly when they were most needed for diagnosing a
+    // platform-specific rendering difference.
+    //   1=AO 2=SSR 3=depth 4=normals 5=shadow 6=albedo 7=facing 8=cascades
+    impl->frameDumpPath = std::getenv("RT_FRAME_DUMP");
+    if (const char* w = std::getenv("RT_WIREFRAME")) wireframe = std::atoi(w);
+    if (const char* d = std::getenv("RT_DEBUG_VIEW")) debugView = std::atoi(d);
 
     // Load shaders. Runtime newLibraryWithSource has no include paths, so the
     // modules are concatenated in dependency order; #line directives keep
@@ -1926,6 +1946,27 @@ void MetalRenderer::beginFrame() {
     // UI's new-frame (which needs the descriptor's formats) can run before
     // systems emit ImGui widgets in their render() hooks. endFrame() reuses it.
     impl->currentColorTarget = impl->surface->acquire() ? impl->surface->colorTarget() : nil;
+
+    // Keep the offscreen targets the same size as the thing we present to.
+    //
+    // The composite pass reads depth with depthTex.read(in.position.xy) — i.e.
+    // in TARGET pixel coordinates — so if the depth texture is smaller than the
+    // colour target, every fragment past its edge reads out of bounds, gets 0,
+    // and is classified as reverse-Z background. The symptom is a hard-edged
+    // black region exactly at the depth texture's width, which reads as missing
+    // geometry rather than as a sizing bug.
+    //
+    // Desktop never hit this because the window drives both. visionOS has no
+    // window: HostedWindow reports a nominal size and the compositor picks the
+    // real per-eye dimensions, so the two only agree if we ask.
+    if (impl->currentColorTarget) {
+        int targetWidth = 0, targetHeight = 0;
+        if (impl->surface->drawableSize(targetWidth, targetHeight) &&
+            (targetWidth != impl->framebufferWidth ||
+             targetHeight != impl->framebufferHeight)) {
+            resize(targetWidth, targetHeight);
+        }
+    }
     impl->currentPassDesc = nil;
     impl->compositePassDesc = nil;
     if (impl->currentColorTarget) {
