@@ -254,6 +254,41 @@ TEST_CASE(physics_threaded_is_repeatable) {
     CHECK(approxEqual(run(), run(), 1e-6));
 }
 
+// Tearing a PhysicsWorld down immediately after stepping must not outrun the
+// jobs it queued onto the shared pool.
+//
+// The bug this pins down: JoltJobAdapter had no destructor, so it could be
+// destroyed while a worker sat between Job::Execute() — which signals the
+// barrier the stepping thread was waiting on — and Job::Release(), which frees
+// the job out of the adapter's own free list. The worker then wrote into
+// destroyed storage. It crashed physics_tests twice under CPU contention
+// (SIGSEGV, null+0x48) while passing every time the machine was idle.
+//
+// Many short-lived worlds sharing one pool is the shape that provokes it: each
+// teardown races that window, and oversubscribing the pool (more workers than
+// cores) keeps threads getting descheduled inside it. Timing-dependent by
+// nature, so this is a probabilistic gate — but with the destructor removed it
+// fails readily, and it costs a fraction of a second to run.
+TEST_CASE(physics_world_teardown_waits_for_queued_jobs) {
+    JobSystem pool(8);   // oversubscribed on purpose: maximises preemption
+
+    for (int i = 0; i < 40; i++) {
+        PhysicsWorld world;
+        world.initialize(&pool);
+        addFloor(world);
+        world.addSphere(0.5, Vec3(0, 3, 0), Quat::identity(), BodyMotion::Dynamic);
+        world.optimizeBroadPhase();
+        // Just enough steps to have real jobs in flight, then drop the world
+        // straight away — the teardown is the thing under test, not the sim.
+        step(world, 2);
+        world.shutdown();
+    }
+
+    // Reaching here without a crash IS the assertion; the CHECK keeps the case
+    // from looking assertion-free to a reader skimming the file.
+    CHECK(pool.workerCount() == 8);
+}
+
 // Synchronous pool (0 workers): the adapter must still run the sim correctly,
 // executing Jolt's jobs inline like the single-threaded system does.
 TEST_CASE(physics_synchronous_pool_runs_sim) {
