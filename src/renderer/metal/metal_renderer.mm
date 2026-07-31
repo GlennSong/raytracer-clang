@@ -96,6 +96,20 @@ struct PresentationSurface {
     // committed, so implementations encode rather than submit.
     virtual void present(id<MTLCommandBuffer> commandBuffer) = 0;
 
+    // The colour target's pixel format. Must be known at initialize() time,
+    // BEFORE any drawable exists, because the composite and lens pipelines are
+    // built against it — a pipeline whose attachment format disagrees with the
+    // texture it renders into is invalid in Metal.
+    virtual MTLPixelFormat colorPixelFormat() const = 0;
+
+    // Whether that format applies the sRGB transfer function in HARDWARE on
+    // write. Drives whether the composite pass encodes in-shader, so the display
+    // transform is applied exactly once.
+    bool targetEncodesSRGB() const {
+        const MTLPixelFormat f = colorPixelFormat();
+        return f == MTLPixelFormatBGRA8Unorm_sRGB || f == MTLPixelFormatRGBA8Unorm_sRGB;
+    }
+
     // Runs AFTER the command buffer is committed, for surfaces that bracket a
     // frame rather than just handing over a texture.
     //
@@ -142,6 +156,7 @@ struct LayerSurface final : PresentationSurface {
             layer.contentsScale = window.backingScaleFactor;
         layer.drawableSize = CGSizeMake(width, height);
     }
+    MTLPixelFormat colorPixelFormat() const override { return layer.pixelFormat; }
 };
 #endif  // TARGET_OS_OSX
 
@@ -241,6 +256,13 @@ struct CompositorSurface final : PresentationSurface {
 
     id<MTLTexture> colorTarget() const override {
         return cp_drawable_get_color_texture(drawable, 0);
+    }
+
+    // From the layer CONFIGURATION, not a drawable: pipelines are built during
+    // initialize(), long before the first frame is queried.
+    MTLPixelFormat colorPixelFormat() const override {
+        return cp_layer_renderer_configuration_get_color_format(
+            cp_layer_renderer_get_configuration(layerRenderer));
     }
 
     void present(id<MTLCommandBuffer> commandBuffer) override {
@@ -733,7 +755,7 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         MTLRenderPipelineDescriptor* compDesc = [[MTLRenderPipelineDescriptor alloc] init];
         compDesc.vertexFunction = compVert;
         compDesc.fragmentFunction = compFrag;
-        compDesc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+        compDesc.colorAttachments[0].pixelFormat = impl->surface->colorPixelFormat();
         // No depth attachment for the composite pass
         impl->compositePipeline = [impl->device newRenderPipelineStateWithDescriptor:compDesc
                                                                                error:&error];
@@ -772,7 +794,7 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
             MTLRenderPipelineDescriptor* lensDesc = [[MTLRenderPipelineDescriptor alloc] init];
             lensDesc.vertexFunction = lensVert;
             lensDesc.fragmentFunction = lensFrag;
-            lensDesc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+            lensDesc.colorAttachments[0].pixelFormat = impl->surface->colorPixelFormat();
             // No depth attachment, same as the composite pass
             impl->lensWarpPipeline = [impl->device newRenderPipelineStateWithDescriptor:lensDesc
                                                                                    error:&error];
@@ -1236,9 +1258,18 @@ void MetalRenderer::resize(int width, int height) {
 
     // Lens effects (virtual-camera plan Phase 4): composite target for frames
     // where the lens-warp pass owns the drawable, + DOF gather output.
+    //
+    // postLDRTexture deliberately MATCHES THE SURFACE FORMAT. That makes the
+    // display transform land exactly once whether or not the lens pass runs:
+    // on a linear-storage target the composite encodes and the lens pass copies
+    // encoded bytes through; on an sRGB target the composite stays linear, the
+    // hardware encodes on write, sampling decodes back to linear for the lens
+    // pass, and the hardware encodes once more on the final write — a net single
+    // encode either way. Hardcoding BGRA8Unorm here would double-encode on
+    // visionOS the moment lens effects were switched on.
     {
         MTLTextureDescriptor* postDesc = [MTLTextureDescriptor
-            texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+            texture2DDescriptorWithPixelFormat:impl->surface->colorPixelFormat()
                                          width:width
                                         height:height
                                      mipmapped:NO];
@@ -3395,6 +3426,12 @@ void MetalRenderer::endFrame() {
         [compEncoder setFragmentBytes:&impl->cameraUniforms
                                length:sizeof(CameraUniforms) atIndex:0];
         CompositeUniforms compositeParams;
+        // Who owns the display transfer function this frame. Derived from the
+        // ACTUAL target format rather than assumed, because it differs by
+        // platform: macOS renders into a linear-storage BGRA8Unorm drawable, so
+        // the shader encodes; visionOS is handed a *_sRGB drawable it cannot
+        // opt out of, so the hardware does and the shader must not.
+        compositeParams.targetEncodesSRGB = impl->surface->targetEncodesSRGB() ? 1 : 0;
         compositeParams.ssaoEnabled = ssaoEnabled ? 1 : 0;
         compositeParams.ssrEnabled = ssrEnabled ? 1 : 0;
         compositeParams.debugView = debugView;

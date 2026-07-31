@@ -357,3 +357,27 @@ took shortcuts worth paying down before the binding surface grows much more.
 - **Several tests assert via vertex-count inequalities** ("different species ->
   different vertex counts", "leaves add vertices"). Brittle proxies that can
   break on tuning — smoke tests, not exact specs.
+
+- **Display encode is not separated on Vulkan or WebGPU.** Metal now applies the
+  sRGB transfer function exactly once, chosen per target: `CompositeUniforms
+  .targetEncodesSRGB` (set from the presentation surface's pixel format) tells
+  `encodeForTarget` in `shaders/metal/post_composite.metal` whether the shader or
+  the hardware owns it. `shaders/vulkan/composite.frag` and
+  `shaders/webgpu/composite.wgsl` still fold the ~2.2 encode into the tone
+  mappers and assume a linear-storage target — Vulkan goes as far as *selecting*
+  `VK_FORMAT_B8G8R8A8_UNORM` for that reason (`vulkan_renderer.cpp`, "Prefer a
+  UNORM swapchain"). That assumption is fine on both today, so this is a
+  divergence rather than a bug, but the three backends no longer share a
+  contract. Port the flag when either backend next needs an sRGB target — or
+  sooner, to keep the ledger honest. **No GPU here for either, so any port is
+  compile-verified only.**
+
+- **AgX's display encode is inverted approximately, not lifted.** ACES separated
+  exactly: its encode was a trailing `pow(c, 1/2.2)` that moved out unchanged, so
+  macOS output is provably identical. AgX's encode lives *inside* the polynomial
+  sigmoid fit (`agxContrastApprox`), so `tonemapAgX` recovers linear with a
+  closing `pow(c, 2.2)`. Against the shader's own encode that round-trips
+  cleanly, but against a hardware sRGB target it differs slightly near black,
+  where true sRGB has a linear toe that pure 2.2 does not. A linear-output AgX
+  fit would remove the approximation. Only visible with `tonemapOperator = 1` on
+  visionOS.
