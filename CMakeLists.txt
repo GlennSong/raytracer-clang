@@ -815,6 +815,16 @@ if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
         # API_AVAILABLE(visionos(2.0)) and is the newest thing we call. Nothing
         # here needs 26.x, so nothing here should demand it.
         XCODE_ATTRIBUTE_XROS_DEPLOYMENT_TARGET "2.0"
+        # Link the Swift runtime. VisionApp is one .swift file among many .mm/.cpp,
+        # so CMake picks C++ as the link language and omits Swift's runtime search
+        # paths — the device link then fails on the autolink stubs Swift emits
+        # (__swift_FORCE_LOAD_$_swiftARKit and friends) plus the stdlib itself.
+        # The simulator link happens to get away with it; the device one does not.
+        XCODE_ATTRIBUTE_LIBRARY_SEARCH_PATHS
+            "$(inherited) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)"
+        XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS
+            "$(inherited) /usr/lib/swift @executable_path/Frameworks"
+        XCODE_ATTRIBUTE_ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES "NO"
     )
 
     # Signing. The simulator does not need it and cannot use it; a real Vision
