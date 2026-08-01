@@ -804,10 +804,35 @@ if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
         XCODE_ATTRIBUTE_SWIFT_OBJC_BRIDGING_HEADER
             "${CMAKE_SOURCE_DIR}/src/visionos_app/VisionSpike-Bridging-Header.h"
         XCODE_ATTRIBUTE_SWIFT_VERSION "5.0"
-        XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
-        XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO"
         XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC "YES"
     )
+
+    # Signing. The simulator does not need it and cannot use it; a real Vision
+    # Pro will not install an unsigned bundle. Pass a team to switch over:
+    #
+    #   cmake -S . -B build-visionos -G Xcode \
+    #         -DCMAKE_SYSTEM_NAME=visionOS -DCMAKE_OSX_SYSROOT=xros \
+    #         -DRT_VISIONOS_TEAM_ID=ABCDE12345
+    #
+    # The ten-character team id is in Xcode > Settings > Accounts, or from
+    #   security find-identity -v -p codesigning
+    # which also tells you whether a usable certificate exists at all — it lists
+    # "0 valid identities found" until an Apple ID is added to Xcode.
+    set(RT_VISIONOS_TEAM_ID "" CACHE STRING
+        "Apple Developer team id for signing the visionOS device build")
+    if(RT_VISIONOS_TEAM_ID)
+        set_target_properties(VisionApp PROPERTIES
+            XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${RT_VISIONOS_TEAM_ID}"
+            XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic")
+        message(STATUS "visionOS: signing VisionApp with team ${RT_VISIONOS_TEAM_ID}")
+    else()
+        set_target_properties(VisionApp PROPERTIES
+            XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
+            XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO")
+        message(STATUS
+            "visionOS: VisionApp will be UNSIGNED (simulator only). "
+            "Set -DRT_VISIONOS_TEAM_ID=<team> to build for a device.")
+    endif()
 endif()
 
 # ============================================================

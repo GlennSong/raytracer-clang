@@ -32,3 +32,4 @@ assets/levels/.shot_*
 cache/
 build-visionos-sim/
 build-visionos/
+build-visionos-dev/
