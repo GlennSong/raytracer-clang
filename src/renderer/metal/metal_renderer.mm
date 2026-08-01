@@ -2312,8 +2312,14 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
     int count = std::min(static_cast<int>(probes.size()), static_cast<int>(8));
     impl->probeCount = count;
 
-    // Create cubemap array if needed
-    if (!impl->probeCubemapArray) {
+    // Create the real cubemap array if we are still holding the 1×1
+    // shader-binding dummy from init, or the probe count outgrew it. (Blitting
+    // 256×256 faces into the dummy is an out-of-bounds copy — the Metal debug
+    // layer asserts on it, and without validation the probes silently sample
+    // the dummy.)
+    if (!impl->probeCubemapArray
+        || impl->probeCubemapArray.width != static_cast<NSUInteger>(Impl::PROBE_CUBEMAP_SIZE)
+        || impl->probeCubemapArray.arrayLength < static_cast<NSUInteger>(count)) {
         int size = Impl::PROBE_CUBEMAP_SIZE;
         MTLTextureDescriptor* cubeDesc = [[MTLTextureDescriptor alloc] init];
         cubeDesc.textureType = MTLTextureTypeCubeArray;
