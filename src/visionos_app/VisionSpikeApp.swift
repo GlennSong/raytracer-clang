@@ -39,13 +39,16 @@ struct SpikeLayerConfiguration: CompositorLayerConfiguration {
         // shader or hardware owns it on that target.
         configuration.colorFormat = .bgra8Unorm_srgb
 
-        let foveationEnabled = capabilities.supportsFoveation
-        configuration.isFoveationEnabled = foveationEnabled
-
-        let options: LayerRenderer.Capabilities.SupportedLayoutsOptions =
-            foveationEnabled ? [.foveationEnabled] : []
-        let supported = capabilities.supportedLayouts(options: options)
-        configuration.layout = supported.contains(.layered) ? .layered : .dedicated
+        // Foveation OFF and .dedicated layout, deliberately. The renderer
+        // composites a plain full-resolution image per eye; it does not yet
+        // apply the compositor's rasterization rate map (foveation) or render
+        // to array slices (.layered). Enabling either without implementing it
+        // puts pixels where the compositor doesn't read them — on device that
+        // showed as a black view while the engine ran at full rate. Both come
+        // back with per-eye stereo (Task 3), which is where amplification and
+        // the rate map get implemented for real.
+        configuration.isFoveationEnabled = false
+        configuration.layout = .dedicated
     }
 }
 

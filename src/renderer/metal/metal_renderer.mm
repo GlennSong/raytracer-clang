@@ -288,8 +288,34 @@ struct CompositorSurface final : PresentationSurface {
     }
 
     void present(id<MTLCommandBuffer> commandBuffer) override {
-        if (drawable) cp_drawable_encode_present(drawable, commandBuffer);
+        if (!drawable) return;
+        // MONOSCOPIC bridge: the pass graph composites into texture 0 only.
+        // Mirror it into the second eye so both eyes see the same image —
+        // flat, but correct for a monoscopic renderer. Leaving eye 1 unwritten
+        // reads as a black right eye on device. Per-eye rendering (Task 3)
+        // replaces this blit with a second composite.
+        size_t texCount = cp_drawable_get_texture_count(drawable);
+        if (texCount >= 2) {
+            id<MTLTexture> eye0 = cp_drawable_get_color_texture(drawable, 0);
+            id<MTLTexture> eye1 = cp_drawable_get_color_texture(drawable, 1);
+            if (eye0 && eye1 && eye0 != eye1) {
+                id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
+                [blit copyFromTexture:eye0 toTexture:eye1];
+                [blit endEncoding];
+            }
+        }
+        if (!loggedLayout) {
+            loggedLayout = true;
+            id<MTLTexture> tex0 = cp_drawable_get_color_texture(drawable, 0);
+            NSLog(@"[vision] view count %zu, color textures %zu, tex0 %lux%lu (slices %lu)",
+                  cp_drawable_get_view_count(drawable), texCount,
+                  static_cast<unsigned long>(tex0.width),
+                  static_cast<unsigned long>(tex0.height),
+                  static_cast<unsigned long>(tex0.arrayLength));
+        }
+        cp_drawable_encode_present(drawable, commandBuffer);
     }
+    bool loggedLayout = false;
 
     void frameSubmitted() override {
         if (frame) cp_frame_end_submission(frame);
