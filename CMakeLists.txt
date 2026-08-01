@@ -805,6 +805,16 @@ if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
             "${CMAKE_SOURCE_DIR}/src/visionos_app/VisionSpike-Bridging-Header.h"
         XCODE_ATTRIBUTE_SWIFT_VERSION "5.0"
         XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC "YES"
+        # Deployment target, NOT the SDK version. Xcode defaults these to match,
+        # which silently makes the app require whatever visionOS the installed
+        # Xcode shipped with — so a device one point release behind is refused
+        # with "doesn't match VisionApp.app's deployment target", which reads
+        # like a device problem rather than a build setting.
+        #
+        # 2.0 is the true floor: cp_drawable_compute_projection is
+        # API_AVAILABLE(visionos(2.0)) and is the newest thing we call. Nothing
+        # here needs 26.x, so nothing here should demand it.
+        XCODE_ATTRIBUTE_XROS_DEPLOYMENT_TARGET "2.0"
     )
 
     # Signing. The simulator does not need it and cannot use it; a real Vision
