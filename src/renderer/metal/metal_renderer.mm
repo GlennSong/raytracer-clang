@@ -183,6 +183,10 @@ struct LayerSurface final : PresentationSurface {
 // Engineering Ethos rules out.
 struct CompositorSurface final : PresentationSurface {
     cp_layer_renderer_t layerRenderer = nullptr;
+    ar_session_t arSession = nullptr;   // owns the session: under ARC a local
+                                        // would be released on return, which
+                                        // STOPS the provider — device anchors
+                                        // then fail and no frame presents
     ar_world_tracking_provider_t worldTracking = nullptr;
 
     cp_frame_t frame = nullptr;
@@ -199,8 +203,8 @@ struct CompositorSurface final : PresentationSurface {
         worldTracking = ar_world_tracking_provider_create(config);
         ar_data_providers_t providers = ar_data_providers_create();
         ar_data_providers_add_data_provider(providers, worldTracking);
-        ar_session_t session = ar_session_create();
-        ar_session_run(session, providers);
+        arSession = ar_session_create();
+        ar_session_run(arSession, providers);
         return true;
     }
 
