@@ -307,6 +307,16 @@ static simd_float4x4 inverseTranspose(simd_float4x4 m) {
     return simd_transpose(simd_inverse(m));
 }
 
+// Threadgroup count covering `threads` (ceiling division). All compute
+// dispatches go through dispatchThreadgroups: — dispatchThreads: (non-uniform
+// threadgroups) is unsupported on visionOS-class GPU families, so kernels must
+// bounds-check against the real grid size.
+static MTLSize threadgroupsCovering(MTLSize threads, MTLSize group) {
+    return MTLSizeMake((threads.width  + group.width  - 1) / group.width,
+                       (threads.height + group.height - 1) / group.height,
+                       (threads.depth  + group.depth  - 1) / group.depth);
+}
+
 struct MetalRenderer::Impl {
     id<MTLDevice> device;
     id<MTLCommandQueue> commandQueue;
@@ -1012,9 +1022,10 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
             id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
             [enc setComputePipelineState:impl->brdfLUTPipeline];
             [enc setTexture:impl->brdfLUT atIndex:0];
-            MTLSize grid = MTLSizeMake(256, 256, 1);
+            MTLSize grid = MTLSizeMake(256, 256, 1);   // threads, not threadgroups
             MTLSize group = MTLSizeMake(16, 16, 1);
-            [enc dispatchThreads:grid threadsPerThreadgroup:group];
+            [enc dispatchThreadgroups:threadgroupsCovering(grid, group)
+                threadsPerThreadgroup:group];
             [enc endEncoding];
             [cmdBuf commit];
             [cmdBuf waitUntilCompleted];
@@ -1763,8 +1774,11 @@ void MetalRenderer::Impl::validateBakedCube(id<MTLTexture> cube) {
         [enc setBuffer:dirBuf offset:0 atIndex:0];
         [enc setBuffer:resBuf offset:0 atIndex:1];
         [enc setSamplerState:mipClampSampler atIndex:0];
-        [enc dispatchThreads:MTLSizeMake(N, 1, 1)
-       threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+        uint32_t sampleCount = static_cast<uint32_t>(N);
+        [enc setBytes:&sampleCount length:sizeof(sampleCount) atIndex:2];
+        MTLSize validateGroup = MTLSizeMake(64, 1, 1);
+        [enc dispatchThreadgroups:threadgroupsCovering(MTLSizeMake(N, 1, 1), validateGroup)
+            threadsPerThreadgroup:validateGroup];
         [enc endEncoding];
         [cmd commit];
         [cmd waitUntilCompleted];
@@ -1838,7 +1852,8 @@ void MetalRenderer::Impl::bakeEnvironmentIBL() {
         [enc setBytes:&roughness length:sizeof(roughness) atIndex:0];
         for (int face = 0; face < 6; face++) {
             [enc setBytes:&face length:sizeof(face) atIndex:1];
-            [enc dispatchThreads:grid threadsPerThreadgroup:group];
+            [enc dispatchThreadgroups:threadgroupsCovering(grid, group)
+                threadsPerThreadgroup:group];
         }
     }
 
@@ -1849,7 +1864,8 @@ void MetalRenderer::Impl::bakeEnvironmentIBL() {
     MTLSize irrGrid = MTLSizeMake(ENV_IRRADIANCE_SIZE, ENV_IRRADIANCE_SIZE, 1);
     for (int face = 0; face < 6; face++) {
         [enc setBytes:&face length:sizeof(face) atIndex:0];
-        [enc dispatchThreads:irrGrid threadsPerThreadgroup:group];
+        [enc dispatchThreadgroups:threadgroupsCovering(irrGrid, group)
+            threadsPerThreadgroup:group];
     }
 
     [enc endEncoding];
@@ -3270,7 +3286,8 @@ void MetalRenderer::endFrame() {
                 ssaoParams.directions, ssaoParams.steps, aoFrameRotation, {}
             };
             [enc setBytes:&aoP length:sizeof(aoP) atIndex:1];
-            [enc dispatchThreads:aoGrid threadsPerThreadgroup:group];
+            [enc dispatchThreadgroups:threadgroupsCovering(aoGrid, group)
+                threadsPerThreadgroup:group];
 
             if (impl->aoBlurHPipeline && impl->aoBlurVPipeline && impl->aoBlurTemp) {
                 [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
@@ -3279,7 +3296,8 @@ void MetalRenderer::endFrame() {
                 [enc setTexture:impl->depthTexture atIndex:1];
                 [enc setTexture:impl->aoBlurTemp atIndex:2];
                 [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
-                [enc dispatchThreads:aoGrid threadsPerThreadgroup:group];
+                [enc dispatchThreadgroups:threadgroupsCovering(aoGrid, group)
+                    threadsPerThreadgroup:group];
 
                 [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
                 [enc setComputePipelineState:impl->aoBlurVPipeline];
@@ -3287,7 +3305,8 @@ void MetalRenderer::endFrame() {
                 [enc setTexture:impl->depthTexture atIndex:1];
                 [enc setTexture:impl->aoTexture atIndex:2];
                 [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
-                [enc dispatchThreads:aoGrid threadsPerThreadgroup:group];
+                [enc dispatchThreadgroups:threadgroupsCovering(aoGrid, group)
+                    threadsPerThreadgroup:group];
             }
 
             // --- Temporal resolve: blend in reprojected history AO ---
@@ -3306,7 +3325,8 @@ void MetalRenderer::endFrame() {
                 tP.prevViewProjection = impl->aoPrevViewProjection;
                 tP.alpha = impl->aoHistoryValid ? ssaoParams.temporal : 0.0f;
                 [enc setBytes:&tP length:sizeof(tP) atIndex:1];
-                [enc dispatchThreads:aoGrid threadsPerThreadgroup:group];
+                [enc dispatchThreadgroups:threadgroupsCovering(aoGrid, group)
+                    threadsPerThreadgroup:group];
                 aoResolvedInBlurTemp = true;
                 impl->aoHistoryValid = true;
             }
@@ -3334,7 +3354,8 @@ void MetalRenderer::endFrame() {
                 ssrDebug ? 1.0f : 0.0f, 0.0f
             };
             [enc setBytes:&ssrP length:sizeof(ssrP) atIndex:1];
-            [enc dispatchThreads:ssrGrid threadsPerThreadgroup:group];
+            [enc dispatchThreadgroups:threadgroupsCovering(ssrGrid, group)
+                threadsPerThreadgroup:group];
 
             // Skip the bilateral blur in debug mode — it would smear the flat
             // color codes across surface edges and muddy the diagnostic.
@@ -3345,7 +3366,8 @@ void MetalRenderer::endFrame() {
                 [enc setTexture:impl->depthTexture atIndex:1];
                 [enc setTexture:impl->ssrBlurTemp atIndex:2];
                 [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
-                [enc dispatchThreads:ssrGrid threadsPerThreadgroup:group];
+                [enc dispatchThreadgroups:threadgroupsCovering(ssrGrid, group)
+                    threadsPerThreadgroup:group];
 
                 [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
                 [enc setComputePipelineState:impl->ssrBlurVPipeline];
@@ -3353,7 +3375,8 @@ void MetalRenderer::endFrame() {
                 [enc setTexture:impl->depthTexture atIndex:1];
                 [enc setTexture:impl->ssrTexture atIndex:2];
                 [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
-                [enc dispatchThreads:ssrGrid threadsPerThreadgroup:group];
+                [enc dispatchThreadgroups:threadgroupsCovering(ssrGrid, group)
+                    threadsPerThreadgroup:group];
             }
         }
 
@@ -3378,7 +3401,8 @@ void MetalRenderer::endFrame() {
                 [enc setTexture:dst atIndex:1];
                 [enc setBytes:&bp length:sizeof(bp) atIndex:0];
                 MTLSize grid = MTLSizeMake(dst.width, dst.height, 1);
-                [enc dispatchThreads:grid threadsPerThreadgroup:group];
+                [enc dispatchThreadgroups:threadgroupsCovering(grid, group)
+                    threadsPerThreadgroup:group];
             }
 
             // Upsample chain: read directly from downsample mips (no blit copy needed)
@@ -3402,7 +3426,8 @@ void MetalRenderer::endFrame() {
                 [enc setTexture:dst atIndex:2];
                 [enc setBytes:&bp length:sizeof(bp) atIndex:0];
                 MTLSize grid = MTLSizeMake(dst.width, dst.height, 1);
-                [enc dispatchThreads:grid threadsPerThreadgroup:group];
+                [enc dispatchThreadgroups:threadgroupsCovering(grid, group)
+                    threadsPerThreadgroup:group];
             }
         }
 
@@ -3429,7 +3454,8 @@ void MetalRenderer::endFrame() {
             [enc setBytes:&dofP length:sizeof(dofP) atIndex:1];
             MTLSize dofGrid = MTLSizeMake(impl->framebufferWidth,
                                           impl->framebufferHeight, 1);
-            [enc dispatchThreads:dofGrid threadsPerThreadgroup:group];
+            [enc dispatchThreadgroups:threadgroupsCovering(dofGrid, group)
+                threadsPerThreadgroup:group];
         }
 
         [enc endEncoding];

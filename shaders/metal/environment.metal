@@ -333,9 +333,11 @@ kernel void sampleCubeForValidation(
     texturecube<float> cube [[texture(0)]],
     device const float4* dirs [[buffer(0)]],
     device float4* results [[buffer(1)]],
+    constant uint& count [[buffer(2)]],
     sampler s [[sampler(0)]],
     uint i [[thread_position_in_grid]]
 ) {
+    if (i >= count) return;
     results[i] = cube.sample(s, normalize(dirs[i].xyz), level(4.0));
 }
 
