@@ -834,10 +834,15 @@ if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
     #         -DCMAKE_SYSTEM_NAME=visionOS -DCMAKE_OSX_SYSROOT=xros \
     #         -DRT_VISIONOS_TEAM_ID=ABCDE12345
     #
-    # The ten-character team id is in Xcode > Settings > Accounts, or from
-    #   security find-identity -v -p codesigning
-    # which also tells you whether a usable certificate exists at all — it lists
-    # "0 valid identities found" until an Apple ID is added to Xcode.
+    # The ten-character team id is the certificate's OU field:
+    #   security find-certificate -c "Apple Development" -p | \
+    #       openssl x509 -noout -subject
+    # Beware: the parenthetical in the certificate NAME ("Apple Development:
+    # you@example.com (XXXXXXXXXX)", as printed by `security find-identity`) is a
+    # certificate id, NOT the team — using it fails with "No Account for Team".
+    # `security find-identity -v -p codesigning` still tells you whether a usable
+    # certificate exists at all — "0 valid identities found" until an Apple ID
+    # is added to Xcode.
     set(RT_VISIONOS_TEAM_ID "" CACHE STRING
         "Apple Developer team id for signing the visionOS device build")
     if(RT_VISIONOS_TEAM_ID)
