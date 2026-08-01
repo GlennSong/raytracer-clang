@@ -20,6 +20,11 @@
     <string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
     <key>UILaunchScreen</key>
     <dict/>
+    <!-- World tracking (device pose for the compositor's device anchor).
+         Plain pose queries shouldn't need world-sensing authorization, but the
+         description must exist for ARKit to consider the request at all. -->
+    <key>NSWorldSensingUsageDescription</key>
+    <string>Tracks headset position so the scene stays anchored in your space.</string>
     <!-- Declares this as an immersive-space app so the system opens straight
          into the ImmersiveSpace rather than expecting a 2D window scene. -->
     <key>UIApplicationSceneManifest</key>

@@ -809,12 +809,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
         # which silently makes the app require whatever visionOS the installed
         # Xcode shipped with — so a device one point release behind is refused
         # with "doesn't match VisionApp.app's deployment target", which reads
-        # like a device problem rather than a build setting.
+        # like a device problem rather than a build setting. Keep this ≤ the
+        # headset's installed OS (26.3.1 at the time of writing).
         #
-        # 2.0 is the true floor: cp_drawable_compute_projection is
-        # API_AVAILABLE(visionos(2.0)) and is the newest thing we call. Nothing
-        # here needs 26.x, so nothing here should demand it.
-        XCODE_ATTRIBUTE_XROS_DEPLOYMENT_TARGET "2.0"
+        # 26.0, not the 2.0 API floor: Apple frameworks gate behavior on
+        # linked-on-or-after checks, and a 2.0-targeted CompositorServices
+        # layer on a 26.x runtime is exactly the compatibility-shim territory
+        # where frames run but never reach the display.
+        XCODE_ATTRIBUTE_XROS_DEPLOYMENT_TARGET "26.0"
         # Link the Swift runtime. VisionApp is one .swift file among many .mm/.cpp,
         # so CMake picks C++ as the link language and omits Swift's runtime search
         # paths — the device link then fails on the autolink stubs Swift emits

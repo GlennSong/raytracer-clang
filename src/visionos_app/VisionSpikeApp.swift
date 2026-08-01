@@ -21,23 +21,22 @@ struct SpikeLayerConfiguration: CompositorLayerConfiguration {
     func makeConfiguration(capabilities: LayerRenderer.Capabilities,
                            configuration: inout LayerRenderer.Configuration) {
         configuration.depthFormat = .depth32Float
-        // MUST be an sRGB format. CompositorServices rejects .bgra8Unorm with
-        // "Layer configuration not supported" (code -4) and the immersive space
-        // never comes up — the compositor requires correctly tagged colour so it
-        // can blend the layer with passthrough and system content.
-        //
-        // KNOWN CONSEQUENCE: the frame is currently gamma-encoded TWICE. The
-        // composite pass emits display-encoded values (post_composite.metal
-        // applies pow(c, 1/2.2), and the ACES/AgX tone mappers fold the encode
-        // in), and then the hardware encodes again on write to this target. That
-        // is why visionOS looks washed out relative to macOS, whose CAMetalLayer
-        // uses linear-storage MTLPixelFormatBGRA8Unorm.
-        //
-        // The fix is NOT to change this format — the platform will not allow it.
-        // It is to separate tone mapping from display encoding in the composite
-        // pass so the transfer function is applied exactly once, by whichever of
-        // shader or hardware owns it on that target.
-        configuration.colorFormat = .bgra8Unorm_srgb
+        // Ask the DEVICE what it can display instead of assuming. The 2.4
+        // simulator accepted .bgra8Unorm_srgb and displayed it; on hardware the
+        // layer came up and ran the whole frame protocol with that format, but
+        // nothing ever reached the display. Apple's immersive-Metal template
+        // uses .rgba16Float (linear EDR) — prefer that when offered, and log
+        // the supported list so the truth is in the console.
+        let formats = capabilities.supportedColorFormats
+        print("[vision] supported color formats: \(formats.map { $0.rawValue })")
+        if formats.contains(.rgba16Float) {
+            configuration.colorFormat = .rgba16Float
+        } else if let first = formats.first {
+            configuration.colorFormat = first
+        } else {
+            configuration.colorFormat = .bgra8Unorm_srgb
+        }
+        print("[vision] chose color format: \(configuration.colorFormat.rawValue)")
 
         // Foveation OFF and .dedicated layout, deliberately. The renderer
         // composites a plain full-resolution image per eye; it does not yet

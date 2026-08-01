@@ -204,6 +204,21 @@ struct CompositorSurface final : PresentationSurface {
         ar_data_providers_t providers = ar_data_providers_create();
         ar_data_providers_add_data_provider(providers, worldTracking);
         arSession = ar_session_create();
+        // Name the failure instead of guessing at it: if the provider never
+        // reaches running, every anchor query fails and the device presents
+        // nothing — the handler's error is the only place the OS says why.
+        ar_session_set_data_provider_state_change_handler(
+            arSession, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
+            ^(ar_data_providers_t, ar_data_provider_state_t newState,
+              ar_error_t error, ar_data_provider_t) {
+                NSLog(@"[vision] AR provider state -> %d%s", (int)newState,
+                      newState == ar_data_provider_state_running ? " (running)" : "");
+                if (error) {
+                    CFErrorRef cf = ar_error_copy_cf_error(error);
+                    NSLog(@"[vision] AR provider ERROR: %@", (__bridge NSError*)cf);
+                    if (cf) CFRelease(cf);
+                }
+            });
         ar_session_run(arSession, providers);
         return true;
     }
@@ -258,6 +273,14 @@ struct CompositorSurface final : PresentationSurface {
                     cp_frame_timing_get_presentation_time(finalTiming)),
                 anchor) == ar_device_anchor_query_status_success) {
             cp_drawable_set_device_anchor(drawable, anchor);
+            if (anchorFails > 0 || !anchorEverSucceeded) {
+                NSLog(@"[vision] device anchor OK (after %d failures)", anchorFails);
+                anchorEverSucceeded = true;
+                anchorFails = 0;
+            }
+        } else {
+            if ((anchorFails++ % 90) == 0)
+                NSLog(@"[vision] device anchor query FAILED (%d so far)", anchorFails);
         }
         // If the pose is not ready — normal for the first frames after launch,
         // "Trying to get pose for nil service reference" — render and present
@@ -289,6 +312,27 @@ struct CompositorSurface final : PresentationSurface {
 
     void present(id<MTLCommandBuffer> commandBuffer) override {
         if (!drawable) return;
+        // The device compositor reprojects the layer using the drawable's DEPTH
+        // texture; the pass graph renders depth only into its own offscreen
+        // targets, so the drawable depth is uninitialized — reprojection then
+        // consumes garbage and the view is black (the simulator blits without
+        // reprojecting, so it can't catch this). Until per-eye rendering
+        // (Task 3) writes real scene depth, clear every drawable depth to 0
+        // (reverse-Z far): the image reprojects as if at infinity, which is
+        // visible and stable, just without positional parallax.
+        size_t depthCount = cp_drawable_get_texture_count(drawable);
+        for (size_t i = 0; i < depthCount; i++) {
+            id<MTLTexture> depthTex = cp_drawable_get_depth_texture(drawable, i);
+            if (!depthTex) continue;
+            MTLRenderPassDescriptor* clearPass = [MTLRenderPassDescriptor renderPassDescriptor];
+            clearPass.depthAttachment.texture = depthTex;
+            clearPass.depthAttachment.loadAction = MTLLoadActionClear;
+            clearPass.depthAttachment.storeAction = MTLStoreActionStore;
+            clearPass.depthAttachment.clearDepth = 0.0;
+            id<MTLRenderCommandEncoder> enc =
+                [commandBuffer renderCommandEncoderWithDescriptor:clearPass];
+            [enc endEncoding];
+        }
         // MONOSCOPIC bridge: the pass graph composites into texture 0 only.
         // Mirror it into the second eye so both eyes see the same image —
         // flat, but correct for a monoscopic renderer. Leaving eye 1 unwritten
@@ -316,6 +360,8 @@ struct CompositorSurface final : PresentationSurface {
         cp_drawable_encode_present(drawable, commandBuffer);
     }
     bool loggedLayout = false;
+    int anchorFails = 0;
+    bool anchorEverSucceeded = false;
 
     void frameSubmitted() override {
         if (frame) cp_frame_end_submission(frame);
