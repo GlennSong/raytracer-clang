@@ -137,6 +137,11 @@ struct PresentationSurface {
         return false;
     }
 
+    // True once xrView has a live tracked pose. Lets the renderer re-derive
+    // the camera each frame from the fresh pose without disturbing surfaces
+    // (macOS) that don't track.
+    virtual bool xrTracking() const { return false; }
+
     // Runs AFTER the command buffer is committed, for surfaces that bracket a
     // frame rather than just handing over a texture.
     //
@@ -423,46 +428,12 @@ struct CompositorSurface final : PresentationSurface {
                 }
             }
 
-            // Same-texture slice-to-slice copies (the .layered case) are
-            // silently unreliable on device — one eye freezes on a stale
-            // frame. Stage the composited image through a scratch texture
-            // once, then copy the scratch into every destination.
-            if (!mirrorScratch || mirrorScratch.width != src.width
-                || mirrorScratch.height != src.height
-                || mirrorScratch.pixelFormat != src.pixelFormat) {
-                MTLTextureDescriptor* d = [MTLTextureDescriptor
-                    texture2DDescriptorWithPixelFormat:src.pixelFormat
-                                                 width:src.width
-                                                height:src.height
-                                             mipmapped:NO];
-                d.storageMode = MTLStorageModePrivate;
-                d.usage = MTLTextureUsageShaderRead;
-                mirrorScratch = [commandBuffer.device newTextureWithDescriptor:d];
-            }
-            id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
-            [blit copyFromTexture:src sourceSlice:0 sourceLevel:0
-                     sourceOrigin:MTLOriginMake(0, 0, 0)
-                       sourceSize:MTLSizeMake(src.width, src.height, 1)
-                        toTexture:mirrorScratch destinationSlice:0 destinationLevel:0
-                destinationOrigin:MTLOriginMake(0, 0, 0)];
-            for (size_t i = 0; i < texCount; i++) {
-                id<MTLTexture> dst = cp_drawable_get_color_texture(dr, i);
-                if (!dst) continue;
-                NSUInteger slices = MAX((NSUInteger)1, dst.arrayLength);
-                for (NSUInteger s = 0; s < slices; s++) {
-                    if (dst == src && i == 0 && s == 0) continue;  // the composited image itself
-                    // A different target (capture) can run at a different
-                    // resolution; a blit needs equal extents, so skip until a
-                    // real scaled copy is worth writing.
-                    if (dst.width != src.width || dst.height != src.height) continue;
-                    [blit copyFromTexture:mirrorScratch sourceSlice:0 sourceLevel:0
-                             sourceOrigin:MTLOriginMake(0, 0, 0)
-                               sourceSize:MTLSizeMake(src.width, src.height, 1)
-                                toTexture:dst destinationSlice:s destinationLevel:0
-                        destinationOrigin:MTLOriginMake(0, 0, 0)];
-                }
-            }
-            [blit endEncoding];
+            // Color for BOTH eye slices of the display drawable is written by
+            // the composite passes in endFrame (a real render pass per slice —
+            // blit mirrors between drawable slices are silently unreliable on
+            // device). Nothing to mirror here; dedicated-layout second
+            // textures and capture targets are left for per-eye rendering.
+            (void)src;
 
             if (!loggedLayout) {
                 NSLog(@"[vision] drawable %zu target=%d views=%zu textures=%zu "
@@ -480,7 +451,6 @@ struct CompositorSurface final : PresentationSurface {
     bool loggedLayout = false;
     int anchorFails = 0;
     bool anchorEverSucceeded = false;
-    id<MTLTexture> mirrorScratch = nil;  // staging for the eye-mirror copies
 
     // Head-tracked camera state for xrView() (see PresentationSurface).
     bool trackedPoseValid = false;
@@ -489,6 +459,8 @@ struct CompositorSurface final : PresentationSurface {
     simd_float4x4 eyeProjection;      // compositor projection for view 0
     bool xrBaseValid = false;
     simd_float3 xrBase = {0, 0, 0};   // locomotion base: tracking origin in world
+
+    bool xrTracking() const override { return trackedPoseValid; }
 
     bool xrView(simd_float3 baseHint, simd_float4x4& worldFromEye,
                 simd_float4x4& projection) override {
@@ -699,6 +671,8 @@ struct MetalRenderer::Impl {
     // Cached once per frame from surface->colorTarget(), so the composite, lens
     // and frame-dump stages agree on the target even though they run apart.
     id<MTLTexture> currentColorTarget;
+    CameraState lastCameraState;      // for the per-frame XR re-derive
+    bool hasLastCamera = false;
     id<MTLCommandBuffer> currentCommandBuffer;
     id<MTLRenderCommandEncoder> currentEncoder;
     MTLRenderPassDescriptor* currentPassDesc;   // scene pass (HDR offscreen)
@@ -2204,6 +2178,14 @@ void MetalRenderer::beginFrame() {
             resize(targetWidth, targetHeight);
         }
     }
+
+    // Head-tracked surfaces: re-derive the camera from the pose acquire() just
+    // captured. The game only calls setCamera when ITS camera changes; a
+    // static game camera must not freeze the user's head. Non-tracking
+    // surfaces (macOS) never enter here.
+    if (impl->hasLastCamera && impl->surface->xrTracking())
+        setCamera(impl->lastCameraState);
+
     impl->currentPassDesc = nil;
     impl->compositePassDesc = nil;
     if (impl->currentColorTarget) {
@@ -2242,6 +2224,8 @@ void MetalRenderer::beginFrame() {
 }
 
 void MetalRenderer::setCamera(const CameraState& camera) {
+    impl->lastCameraState = camera;
+    impl->hasLastCamera = true;
     float fovRad = static_cast<float>(degreesToRadians(camera.fovDegrees));
 
     // View and projection are both built engine-side (Mat4) and transposed into
@@ -3818,6 +3802,47 @@ void MetalRenderer::endFrame() {
 #endif
 
         [uiEncoder endEncoding];
+
+        // Second eye (visionOS .layered): composite the same image into
+        // slice 1 through a real render pass. Blit mirrors between slices of
+        // the drawable are silently unreliable on device — one eye froze on a
+        // stale frame; a render pass is the path the display provably honors.
+        // Same image in both eyes = monoscopic by construction, until per-eye
+        // cameras arrive.
+        if (impl->currentColorTarget.textureType == MTLTextureType2DArray
+            && impl->currentColorTarget.arrayLength > 1) {
+            MTLRenderPassDescriptor* eyeDesc = [MTLRenderPassDescriptor renderPassDescriptor];
+            eyeDesc.colorAttachments[0].texture = impl->currentColorTarget;
+            eyeDesc.colorAttachments[0].slice = 1;
+            eyeDesc.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+            eyeDesc.colorAttachments[0].storeAction = MTLStoreActionStore;
+            id<MTLRenderCommandEncoder> eye = [impl->currentCommandBuffer
+                renderCommandEncoderWithDescriptor:eyeDesc];
+            [eye setRenderPipelineState:impl->compositePipeline];
+            [eye setFragmentTexture:(dofActive ? impl->dofTexture
+                                               : impl->sceneColorTexture)
+                            atIndex:0];
+            [eye setFragmentTexture:impl->ssrTexture atIndex:1];
+            [eye setFragmentTexture:(aoResolvedInBlurTemp ? impl->aoBlurTemp
+                                                          : impl->aoTexture)
+                            atIndex:2];
+            [eye setFragmentTexture:impl->depthTexture atIndex:3];
+            [eye setFragmentTexture:impl->viewNormalTexture atIndex:4];
+            if (bloomEnabled && impl->bloomUpsampleMips[0])
+                [eye setFragmentTexture:impl->bloomUpsampleMips[0] atIndex:5];
+            [eye setFragmentBytes:&impl->cameraUniforms
+                           length:sizeof(CameraUniforms) atIndex:0];
+            [eye setFragmentBytes:&compositeParams
+                           length:sizeof(compositeParams) atIndex:1];
+            [eye setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
+            [eye setFragmentTexture:(compEnvCube ? compEnvCube
+                                                 : impl->defaultCubemap)
+                            atIndex:6];
+            [eye setFragmentSamplerState:impl->linearClampSampler atIndex:0];
+            [eye setFragmentSamplerState:impl->equirectSampler atIndex:1];
+            [eye drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+            [eye endEncoding];
+        }
     }
 
     // Headless frame capture (RT_FRAME_DUMP) — copy the composited drawable
