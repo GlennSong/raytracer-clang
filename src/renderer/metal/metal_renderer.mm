@@ -107,12 +107,17 @@ struct PresentationSurface {
     // texture it renders into is invalid in Metal.
     virtual MTLPixelFormat colorPixelFormat() const = 0;
 
-    // Whether that format applies the sRGB transfer function in HARDWARE on
-    // write. Drives whether the composite pass encodes in-shader, so the display
-    // transform is applied exactly once.
+    // Whether the display transform is applied AFTER the shader — by the
+    // hardware on write (sRGB formats) or by the presentation stack reading
+    // LINEAR values (float formats; the visionOS compositor applies the
+    // display transform itself). Either way the composite pass must NOT encode
+    // in-shader, so the transform is applied exactly once. Shader-encoding
+    // into a float target reads as washed out: the compositor treats the
+    // already-encoded values as linear.
     bool targetEncodesSRGB() const {
         const MTLPixelFormat f = colorPixelFormat();
-        return f == MTLPixelFormatBGRA8Unorm_sRGB || f == MTLPixelFormatRGBA8Unorm_sRGB;
+        return f == MTLPixelFormatBGRA8Unorm_sRGB || f == MTLPixelFormatRGBA8Unorm_sRGB
+            || f == MTLPixelFormatRGBA16Float;
     }
 
     // Runs AFTER the command buffer is committed, for surfaces that bracket a
@@ -190,7 +195,8 @@ struct CompositorSurface final : PresentationSurface {
     ar_world_tracking_provider_t worldTracking = nullptr;
 
     cp_frame_t frame = nullptr;
-    cp_drawable_t drawable = nullptr;
+    cp_drawable_array_t drawables = nullptr;  // all targets for this frame
+    cp_drawable_t drawable = nullptr;         // the built_in (display) drawable
 
     // Starts world tracking. Without a device anchor on every drawable the
     // compositor refuses to present on real hardware ("Presenting a drawable
@@ -247,47 +253,58 @@ struct CompositorSurface final : PresentationSurface {
         // against is the freshest one available.
         cp_time_wait_until(cp_frame_timing_get_optimal_input_time(timing));
 
-        // Once a frame is taken it must be carried all the way through:
-        // start_submission -> query_drawable -> present -> end_submission. The
-        // protocol has no mid-frame escape, and each shortcut is its own
-        // diagnostic:
-        //   - drop the frame entirely      -> "more than 3 frames in flight"
-        //   - end without a drawable       -> "called cp_frame_end_submission()
-        //                                     before requesting a drawable"
-        //   - end with an unpresented one  -> "...before calling present on the
-        //                                     drawable"
-        // So there is no "skip this frame because tracking isn't ready" path.
-        cp_frame_start_submission(frame);
-        drawable = cp_frame_query_drawable(frame);
-        if (!drawable) { cp_frame_end_submission(frame); frame = nullptr; return false; }
-
-        // Pose for the moment this frame is actually SHOWN — the drawable's own
-        // timing, now that we have it. Sampling "now" instead would anchor to a
-        // pose already a frame stale at display time, which reads as the world
-        // swimming against head motion.
-        cp_frame_timing_t finalTiming = cp_drawable_get_frame_timing(drawable);
-        ar_device_anchor_t anchor = ar_device_anchor_create();
-        if (ar_world_tracking_provider_query_device_anchor_at_timestamp(
-                worldTracking,
-                cp_time_to_cf_time_interval(
-                    cp_frame_timing_get_presentation_time(finalTiming)),
-                anchor) == ar_device_anchor_query_status_success) {
-            cp_drawable_set_device_anchor(drawable, anchor);
-            if (anchorFails > 0 || !anchorEverSucceeded) {
-                NSLog(@"[vision] device anchor OK (after %d failures)", anchorFails);
-                anchorEverSucceeded = true;
-                anchorFails = 0;
-            }
-        } else {
-            if ((anchorFails++ % 90) == 0)
-                NSLog(@"[vision] device anchor query FAILED (%d so far)", anchorFails);
+        // visionOS 26 drawable contract: a frame carries an ARRAY of drawables
+        // (built_in = the displays, capture = recording). The pre-26 singular
+        // cp_frame_query_drawable is deprecated and its drawable never reaches
+        // the displays on the 26 runtime — the whole protocol runs cleanly and
+        // the view stays black, which cost a full night to trace. Query the
+        // array BEFORE start_submission (the 26 ordering); an empty array is a
+        // cancelled frame that must be discarded without submission.
+        drawables = cp_frame_query_drawables(frame);
+        if (cp_drawable_array_get_count(drawables) == 0) {
+            drawables = nullptr;
+            frame = nullptr;
+            return false;
         }
-        // If the pose is not ready — normal for the first frames after launch,
-        // "Trying to get pose for nil service reference" — render and present
-        // anyway. The compositor will warn that an unanchored drawable won't
-        // display on device, which is correct and self-corrects the moment
-        // tracking converges. Completing the frame is not optional; being
-        // anchored is.
+        cp_frame_start_submission(frame);
+
+        // The pass graph composites into the built_in (display) drawable;
+        // present() copies that image into any other targets.
+        size_t count = cp_drawable_array_get_count(drawables);
+        drawable = cp_drawable_array_get_drawable(drawables, 0);
+        for (size_t d = 0; d < count; d++) {
+            cp_drawable_t dr = cp_drawable_array_get_drawable(drawables, d);
+            if (cp_drawable_get_target(dr) == cp_drawable_target_built_in) {
+                drawable = dr;
+                break;
+            }
+        }
+
+        // Pose for the moment this frame is actually SHOWN — each drawable's
+        // own timing. Sampling "now" instead would anchor to a pose already a
+        // frame stale at display time, which reads as the world swimming
+        // against head motion. Every drawable needs its anchor; an unanchored
+        // one is silently never displayed on device.
+        for (size_t d = 0; d < count; d++) {
+            cp_drawable_t dr = cp_drawable_array_get_drawable(drawables, d);
+            cp_frame_timing_t finalTiming = cp_drawable_get_frame_timing(dr);
+            ar_device_anchor_t anchor = ar_device_anchor_create();
+            if (ar_world_tracking_provider_query_device_anchor_at_timestamp(
+                    worldTracking,
+                    cp_time_to_cf_time_interval(
+                        cp_frame_timing_get_presentation_time(finalTiming)),
+                    anchor) == ar_device_anchor_query_status_success) {
+                cp_drawable_set_device_anchor(dr, anchor);
+                if (dr == drawable && (anchorFails > 0 || !anchorEverSucceeded)) {
+                    NSLog(@"[vision] device anchor OK (after %d failures)", anchorFails);
+                    anchorEverSucceeded = true;
+                    anchorFails = 0;
+                }
+            } else if (dr == drawable) {
+                if ((anchorFails++ % 90) == 0)
+                    NSLog(@"[vision] device anchor query FAILED (%d so far)", anchorFails);
+            }
+        }
         return true;
     }
 
@@ -311,53 +328,82 @@ struct CompositorSurface final : PresentationSurface {
     }
 
     void present(id<MTLCommandBuffer> commandBuffer) override {
-        if (!drawable) return;
-        // The device compositor reprojects the layer using the drawable's DEPTH
-        // texture; the pass graph renders depth only into its own offscreen
-        // targets, so the drawable depth is uninitialized — reprojection then
-        // consumes garbage and the view is black (the simulator blits without
-        // reprojecting, so it can't catch this). Until per-eye rendering
-        // (Task 3) writes real scene depth, clear every drawable depth to 0
-        // (reverse-Z far): the image reprojects as if at infinity, which is
-        // visible and stable, just without positional parallax.
-        size_t depthCount = cp_drawable_get_texture_count(drawable);
-        for (size_t i = 0; i < depthCount; i++) {
-            id<MTLTexture> depthTex = cp_drawable_get_depth_texture(drawable, i);
-            if (!depthTex) continue;
-            MTLRenderPassDescriptor* clearPass = [MTLRenderPassDescriptor renderPassDescriptor];
-            clearPass.depthAttachment.texture = depthTex;
-            clearPass.depthAttachment.loadAction = MTLLoadActionClear;
-            clearPass.depthAttachment.storeAction = MTLStoreActionStore;
-            clearPass.depthAttachment.clearDepth = 0.0;
-            id<MTLRenderCommandEncoder> enc =
-                [commandBuffer renderCommandEncoderWithDescriptor:clearPass];
-            [enc endEncoding];
-        }
-        // MONOSCOPIC bridge: the pass graph composites into texture 0 only.
-        // Mirror it into the second eye so both eyes see the same image —
-        // flat, but correct for a monoscopic renderer. Leaving eye 1 unwritten
-        // reads as a black right eye on device. Per-eye rendering (Task 3)
-        // replaces this blit with a second composite.
-        size_t texCount = cp_drawable_get_texture_count(drawable);
-        if (texCount >= 2) {
-            id<MTLTexture> eye0 = cp_drawable_get_color_texture(drawable, 0);
-            id<MTLTexture> eye1 = cp_drawable_get_color_texture(drawable, 1);
-            if (eye0 && eye1 && eye0 != eye1) {
-                id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
-                [blit copyFromTexture:eye0 toTexture:eye1];
-                [blit endEncoding];
+        if (!drawable || !drawables) return;
+        // The pass graph composited into the display drawable's texture 0,
+        // slice 0. MONOSCOPIC bridge: mirror that image into every other
+        // color destination — the second eye (texture 1 or array slice 1) and
+        // any additional drawable targets (e.g. capture) — so every consumer
+        // sees the same flat image. Per-eye rendering (Task 3) replaces the
+        // mirrors with real per-view composites.
+        id<MTLTexture> src = cp_drawable_get_color_texture(drawable, 0);
+        size_t count = cp_drawable_array_get_count(drawables);
+        for (size_t d = 0; d < count; d++) {
+            cp_drawable_t dr = cp_drawable_array_get_drawable(drawables, d);
+            size_t texCount = cp_drawable_get_texture_count(dr);
+
+            // The device compositor reprojects the layer using the drawable's
+            // DEPTH texture; the pass graph renders depth only into its own
+            // offscreen targets, so the drawable depth would be uninitialized.
+            // Depth matters MORE than "initialized": content at reverse-Z far
+            // (0.0, infinity) is reprojected as tile garbage, and a frame with
+            // nothing nearer is dropped outright — that was the all-black
+            // device view. Until per-eye rendering (Task 3) writes real scene
+            // depth, clear the drawable depth to the value of a virtual plane
+            // ~2m ahead, computed from the drawable's own projection: the
+            // image reprojects as a stable 2m billboard, the honest monoscopic
+            // model.
+            simd_float4x4 proj = cp_drawable_compute_projection(
+                dr, cp_axis_direction_convention_right_up_back, 0);
+            simd_float4 clip = simd_mul(proj, simd_make_float4(0, 0, -2.0f, 1));
+            double planeDepth = (clip.w != 0.0f) ? clip.z / clip.w : 0.5;
+            for (size_t i = 0; i < texCount; i++) {
+                id<MTLTexture> depthTex = cp_drawable_get_depth_texture(dr, i);
+                if (!depthTex) continue;
+                MTLRenderPassDescriptor* clearPass = [MTLRenderPassDescriptor renderPassDescriptor];
+                clearPass.depthAttachment.texture = depthTex;
+                clearPass.depthAttachment.loadAction = MTLLoadActionClear;
+                clearPass.depthAttachment.storeAction = MTLStoreActionStore;
+                clearPass.depthAttachment.clearDepth = planeDepth;
+                if (depthTex.textureType == MTLTextureType2DArray)
+                    clearPass.renderTargetArrayLength = depthTex.arrayLength;
+                id<MTLRenderCommandEncoder> enc =
+                    [commandBuffer renderCommandEncoderWithDescriptor:clearPass];
+                [enc endEncoding];
             }
+
+            id<MTLBlitCommandEncoder> blit = nil;
+            for (size_t i = 0; i < texCount; i++) {
+                id<MTLTexture> dst = cp_drawable_get_color_texture(dr, i);
+                if (!dst) continue;
+                NSUInteger slices = MAX((NSUInteger)1, dst.arrayLength);
+                for (NSUInteger s = 0; s < slices; s++) {
+                    if (dst == src && i == 0 && s == 0) continue;  // the composited image itself
+                    // A different target (capture) can run at a different
+                    // resolution; a blit needs equal extents, so skip until a
+                    // real scaled copy is worth writing.
+                    if (dst.width != src.width || dst.height != src.height) continue;
+                    if (!blit) blit = [commandBuffer blitCommandEncoder];
+                    [blit copyFromTexture:src sourceSlice:0 sourceLevel:0
+                             sourceOrigin:MTLOriginMake(0, 0, 0)
+                               sourceSize:MTLSizeMake(src.width, src.height, 1)
+                                toTexture:dst destinationSlice:s destinationLevel:0
+                        destinationOrigin:MTLOriginMake(0, 0, 0)];
+                }
+            }
+            if (blit) [blit endEncoding];
+
+            if (!loggedLayout) {
+                NSLog(@"[vision] drawable %zu target=%d views=%zu textures=%zu "
+                      @"tex0 %lux%lu (slices %lu)",
+                      d, (int)cp_drawable_get_target(dr),
+                      cp_drawable_get_view_count(dr), texCount,
+                      static_cast<unsigned long>(cp_drawable_get_color_texture(dr, 0).width),
+                      static_cast<unsigned long>(cp_drawable_get_color_texture(dr, 0).height),
+                      static_cast<unsigned long>(cp_drawable_get_color_texture(dr, 0).arrayLength));
+            }
+            cp_drawable_encode_present(dr, commandBuffer);
         }
-        if (!loggedLayout) {
-            loggedLayout = true;
-            id<MTLTexture> tex0 = cp_drawable_get_color_texture(drawable, 0);
-            NSLog(@"[vision] view count %zu, color textures %zu, tex0 %lux%lu (slices %lu)",
-                  cp_drawable_get_view_count(drawable), texCount,
-                  static_cast<unsigned long>(tex0.width),
-                  static_cast<unsigned long>(tex0.height),
-                  static_cast<unsigned long>(tex0.arrayLength));
-        }
-        cp_drawable_encode_present(drawable, commandBuffer);
+        loggedLayout = true;
     }
     bool loggedLayout = false;
     int anchorFails = 0;
@@ -367,6 +413,7 @@ struct CompositorSurface final : PresentationSurface {
         if (frame) cp_frame_end_submission(frame);
         frame = nullptr;
         drawable = nullptr;
+        drawables = nullptr;
     }
 };
 #endif  // TARGET_OS_VISION

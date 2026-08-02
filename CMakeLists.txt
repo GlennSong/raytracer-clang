@@ -754,6 +754,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
 
     set(VISION_SOURCES
         src/visionos_app/VisionSpikeApp.swift
+        src/visionos_app/TemplateRenderer.swift
         src/visionos_app/vision_spike.mm
         src/visionos_app/vision_spike.h
         # The SAME Metal backend the macOS viewer uses. Presentation differs
@@ -773,6 +774,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
         citysim
         "-framework CompositorServices"
         "-framework Metal"
+        "-framework MetalKit"
+        "-framework ModelIO"
         "-framework SwiftUI"
         "-framework ARKit"
         "-framework Foundation"

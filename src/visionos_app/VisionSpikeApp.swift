@@ -38,29 +38,79 @@ struct SpikeLayerConfiguration: CompositorLayerConfiguration {
         }
         print("[vision] chose color format: \(configuration.colorFormat.rawValue)")
 
-        // Foveation OFF and .dedicated layout, deliberately. The renderer
-        // composites a plain full-resolution image per eye; it does not yet
-        // apply the compositor's rasterization rate map (foveation) or render
-        // to array slices (.layered). Enabling either without implementing it
-        // puts pixels where the compositor doesn't read them — on device that
-        // showed as a black view while the engine ran at full rate. Both come
-        // back with per-eye stereo (Task 3), which is where amplification and
-        // the rate map get implemented for real.
+        // Match the layout/foveation choices of Apple's Metal template — the
+        // configuration proven to display on this headset. (.dedicated with
+        // foveation off also runs the full frame protocol but was never
+        // composited to the displays during the window-first probe rounds.)
+        // Foveation OFF while the renderer does not attach the drawable's
+        // rasterization rate map to its passes: writing a foveated (warped)
+        // texture without the map is the last untested difference from the
+        // template's working path. Foveation returns with Task 3, attached
+        // properly.
         configuration.isFoveationEnabled = false
-        configuration.layout = .dedicated
+        let supportedLayouts = capabilities.supportedLayouts(options: [])
+        configuration.layout = supportedLayouts.contains(.layered) ? .layered : .dedicated
+        print("[vision] foveation off, layered \(supportedLayouts.contains(.layered))")
+    }
+}
+
+/// Launcher window. The app used to be immersive-space-only, auto-opened via
+/// CPSceneSessionRoleImmersiveSpaceApplication — on visionOS 26.3 that path
+/// opens the space and runs the layer (frames accepted, anchors attached) but
+/// never composites it to the displays: black void, hands breaking through.
+/// Apple's own Metal template — window first, user-triggered
+/// openImmersiveSpace — displays fine on the same headset, so the engine now
+/// enters the arena the way the platform actually exercises.
+struct LaunchView: View {
+    @Environment(\.openImmersiveSpace) private var openImmersiveSpace
+    @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
+    @State private var inArena = false
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Raytracer")
+                .font(.title)
+            Button(inArena ? "Leave Arena" : "Enter Arena") {
+                Task { @MainActor in
+                    if inArena {
+                        await dismissImmersiveSpace()
+                        inArena = false
+                    } else if await openImmersiveSpace(id: "arena") == .opened {
+                        inArena = true
+                    }
+                }
+            }
+        }
+        .padding(32)
     }
 }
 
 @main
 struct VisionSpikeApp: App {
     var body: some Scene {
-        ImmersiveSpace {
+        WindowGroup {
+            LaunchView()
+        }
+        .defaultSize(width: 360, height: 240)
+
+        ImmersiveSpace(id: "arena") {
             CompositorLayer(configuration: SpikeLayerConfiguration()) { layerRenderer in
-                // rt_vision_spike_run blocks for the lifetime of the space, so it
-                // must not run on the main actor — the compositor would starve.
-                Thread.detachNewThread {
-                    Thread.current.name = "rt.vision.render"
-                    rt_vision_spike_run(layerRenderer)
+                // TEMPORARY DIAGNOSTIC: route to the ported Apple-template
+                // renderer (rotating cube on dark green) instead of the
+                // engine. Green cube visible -> the app shell and project are
+                // fine and the delta is the engine's frame structure. Black ->
+                // the app/project configuration is at fault; no render code is.
+                let useTemplateRenderer = false
+                if useTemplateRenderer {
+                    TemplateRenderer.start(layerRenderer)
+                } else {
+                    // rt_vision_spike_run blocks for the lifetime of the space,
+                    // so it must not run on the main actor — the compositor
+                    // would starve.
+                    Thread.detachNewThread {
+                        Thread.current.name = "rt.vision.render"
+                        rt_vision_spike_run(layerRenderer)
+                    }
                 }
             }
         }

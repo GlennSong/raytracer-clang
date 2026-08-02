@@ -121,9 +121,117 @@ std::unique_ptr<engine::Application> bootEngine(cp_layer_renderer_t layerRendere
     return app;
 }
 
+// TEMPORARY DIAGNOSTIC: the smallest legal CompositorServices frame loop —
+// no engine, no assets, just anchor + magenta/depth clear + present. If THIS
+// shows magenta, the compositor contract is satisfied and the engine's frame
+// structure is what breaks on device; if it stays black, our loop shape
+// deviates from the platform contract and content was never the issue.
+#define RT_VISION_MINIMAL_PROBE 0
+
+#if RT_VISION_MINIMAL_PROBE
+static void runMinimalProbe(cp_layer_renderer_t layerRenderer) {
+    id<MTLDevice> device = cp_layer_renderer_get_device(layerRenderer);
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+
+    ar_session_t session = nil;
+    ar_world_tracking_provider_t tracking = nil;
+    if (ar_world_tracking_provider_is_supported()) {
+        ar_world_tracking_configuration_t cfg = ar_world_tracking_configuration_create();
+        tracking = ar_world_tracking_provider_create(cfg);
+        ar_data_providers_t providers = ar_data_providers_create();
+        ar_data_providers_add_data_provider(providers, tracking);
+        session = ar_session_create();
+        ar_session_run(session, providers);
+    }
+
+    uint64_t n = 0;
+    uint64_t anchoredCount = 0;
+    while (cp_layer_renderer_get_state(layerRenderer)
+           != cp_layer_renderer_state_invalidated) {
+        @autoreleasepool {
+            if (cp_layer_renderer_get_state(layerRenderer)
+                == cp_layer_renderer_state_paused) {
+                cp_layer_renderer_wait_until_running(layerRenderer);
+                continue;
+            }
+            cp_frame_t frame = cp_layer_renderer_query_next_frame(layerRenderer);
+            if (!frame) continue;
+            cp_frame_timing_t timing = cp_frame_predict_timing(frame);
+            if (!timing) continue;
+            cp_frame_start_update(frame);
+            cp_frame_end_update(frame);
+            cp_time_wait_until(cp_frame_timing_get_optimal_input_time(timing));
+
+            // visionOS 26: a frame carries an ARRAY of drawables (built_in =
+            // the displays, capture = recording). The deprecated singular
+            // cp_frame_query_drawable ran the whole protocol without error but
+            // its drawable never reached the displays — every "black view with
+            // healthy logs" hour traces back to this. Query the array, render
+            // and present EVERY drawable. Empty array = cancelled frame:
+            // discard, no submission.
+            cp_drawable_array_t drawables = cp_frame_query_drawables(frame);
+            size_t drawableCount = cp_drawable_array_get_count(drawables);
+            if (drawableCount == 0) continue;
+            cp_frame_start_submission(frame);
+
+            id<MTLCommandBuffer> cmd = [queue commandBuffer];
+            for (size_t d = 0; d < drawableCount; d++) {
+                cp_drawable_t drawable = cp_drawable_array_get_drawable(drawables, d);
+                cp_frame_timing_t finalTiming = cp_drawable_get_frame_timing(drawable);
+                ar_device_anchor_t anchor = ar_device_anchor_create();
+                bool anchored = tracking
+                    && ar_world_tracking_provider_query_device_anchor_at_timestamp(
+                           tracking,
+                           cp_time_to_cf_time_interval(
+                               cp_frame_timing_get_presentation_time(finalTiming)),
+                           anchor) == ar_device_anchor_query_status_success;
+                if (anchored) { cp_drawable_set_device_anchor(drawable, anchor); anchoredCount++; }
+                if (n == 0)
+                    NSLog(@"[vision] drawable %zu target=%d (0=builtIn 1=capture)",
+                          d, (int)cp_drawable_get_target(drawable));
+
+                size_t texCount = cp_drawable_get_texture_count(drawable);
+                for (size_t i = 0; i < texCount; i++) {
+                    id<MTLTexture> color = cp_drawable_get_color_texture(drawable, i);
+                    MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
+                    rp.colorAttachments[0].texture = color;
+                    rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+                    rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+                    rp.colorAttachments[0].clearColor = MTLClearColorMake(1.0, 0.0, 1.0, 1.0);
+                    rp.depthAttachment.texture = cp_drawable_get_depth_texture(drawable, i);
+                    rp.depthAttachment.loadAction = MTLLoadActionClear;
+                    rp.depthAttachment.storeAction = MTLStoreActionStore;
+                    rp.depthAttachment.clearDepth = 0.0;
+                    // .layered delivers both eyes as slices of one array texture;
+                    // a clear pass touches only slice 0 unless the pass is told to
+                    // cover the whole array.
+                    if (color.textureType == MTLTextureType2DArray)
+                        rp.renderTargetArrayLength = color.arrayLength;
+                    id<MTLRenderCommandEncoder> enc =
+                        [cmd renderCommandEncoderWithDescriptor:rp];
+                    [enc endEncoding];
+                }
+                cp_drawable_encode_present(drawable, cmd);
+            }
+            [cmd commit];
+            cp_frame_end_submission(frame);
+            if (++n % 90 == 0)
+                NSLog(@"[vision] MINIMAL probe frame %llu (anchored %llu, drawables %zu)",
+                      n, anchoredCount, drawableCount);
+        }
+    }
+    NSLog(@"[vision] MINIMAL probe: layer invalidated, exiting");
+}
+#endif
+
 }  // namespace
 
 void rt_vision_spike_run(cp_layer_renderer_t layerRenderer) {
+#if RT_VISION_MINIMAL_PROBE
+    NSLog(@"[vision] MINIMAL PROBE build — engine bypassed, expect solid magenta");
+    runMinimalProbe(layerRenderer);
+    return;
+#endif
     @autoreleasepool {
         NSLog(@"[vision] device: %@", cp_layer_renderer_get_device(layerRenderer).name);
 

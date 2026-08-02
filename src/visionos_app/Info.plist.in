@@ -25,24 +25,16 @@
          description must exist for ARKit to consider the request at all. -->
     <key>NSWorldSensingUsageDescription</key>
     <string>Tracks headset position so the scene stays anchored in your space.</string>
-    <!-- Declares this as an immersive-space app so the system opens straight
-         into the ImmersiveSpace rather than expecting a 2D window scene. -->
+    <!-- Window-first launch, matching Apple's Metal template. The previous
+         immersive-space-only arrangement (CPSceneSessionRoleImmersiveSpaceApplication)
+         opened the space and ran the layer on visionOS 26.3 but never
+         composited it to the displays — black void, hands breaking through.
+         The launcher window's button opens the space via openImmersiveSpace,
+         the path the platform actually exercises. -->
     <key>UIApplicationSceneManifest</key>
     <dict>
-        <key>UIApplicationPreferredDefaultSceneSessionRole</key>
-        <string>CPSceneSessionRoleImmersiveSpaceApplication</string>
         <key>UIApplicationSupportsMultipleScenes</key>
         <true/>
-        <key>UISceneConfigurations</key>
-        <dict>
-            <key>CPSceneSessionRoleImmersiveSpaceApplication</key>
-            <array>
-                <dict>
-                    <key>UISceneInitialImmersionStyle</key>
-                    <string>UIImmersionStyleFull</string>
-                </dict>
-            </array>
-        </dict>
     </dict>
 </dict>
 </plist>
