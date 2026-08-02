@@ -94,7 +94,11 @@ struct PresentationSurface {
 
     // Hand the finished frame to the display. Runs BEFORE the command buffer is
     // committed, so implementations encode rather than submit.
-    virtual void present(id<MTLCommandBuffer> commandBuffer) = 0;
+    // sceneDepth is the frame's rendered depth buffer (reverse-Z). Surfaces
+    // that reproject (CompositorServices) hand it to the compositor; window
+    // surfaces ignore it.
+    virtual void present(id<MTLCommandBuffer> commandBuffer,
+                         id<MTLTexture> sceneDepth) = 0;
 
     // The target's true pixel dimensions. The engine cannot infer these: on
     // visionOS there is no window to measure, and the compositor picks the
@@ -118,6 +122,19 @@ struct PresentationSurface {
         const MTLPixelFormat f = colorPixelFormat();
         return f == MTLPixelFormatBGRA8Unorm_sRGB || f == MTLPixelFormatRGBA8Unorm_sRGB
             || f == MTLPixelFormatRGBA16Float;
+    }
+
+    // XR head-tracked camera. When the surface tracks a headset, this returns
+    // the eye pose in WORLD space (tracking pose composed with the surface's
+    // locomotion base) and the compositor's own projection for the composited
+    // view — the engine camera then follows the user's head instead of the
+    // game camera. baseHint seeds the locomotion base the first time tracking
+    // is live (the game camera's position, dropped to the floor, so the user
+    // stands where the level intended). Surfaces that don't track return
+    // false and the engine camera is used as-is.
+    virtual bool xrView(simd_float3 /*baseHint*/, simd_float4x4& /*worldFromEye*/,
+                        simd_float4x4& /*projection*/) {
+        return false;
     }
 
     // Runs AFTER the command buffer is committed, for surfaces that bracket a
@@ -157,7 +174,7 @@ struct LayerSurface final : PresentationSurface {
         return drawable != nil;
     }
     id<MTLTexture> colorTarget() const override { return drawable.texture; }
-    void present(id<MTLCommandBuffer> commandBuffer) override {
+    void present(id<MTLCommandBuffer> commandBuffer, id<MTLTexture>) override {
         if (drawable) [commandBuffer presentDrawable:drawable];
         drawable = nil;
     }
@@ -295,10 +312,22 @@ struct CompositorSurface final : PresentationSurface {
                         cp_frame_timing_get_presentation_time(finalTiming)),
                     anchor) == ar_device_anchor_query_status_success) {
                 cp_drawable_set_device_anchor(dr, anchor);
-                if (dr == drawable && (anchorFails > 0 || !anchorEverSucceeded)) {
-                    NSLog(@"[vision] device anchor OK (after %d failures)", anchorFails);
-                    anchorEverSucceeded = true;
-                    anchorFails = 0;
+                if (dr == drawable) {
+                    // Capture the head pose + view geometry for xrView(). The
+                    // pose is STICKY — a frame with a failed anchor query keeps
+                    // rendering from the last good pose instead of snapping
+                    // back to the game camera.
+                    originFromDevice = ar_anchor_get_origin_from_anchor_transform(anchor);
+                    deviceFromEye =
+                        cp_view_get_transform(cp_drawable_get_view(dr, 0));
+                    eyeProjection = cp_drawable_compute_projection(
+                        dr, cp_axis_direction_convention_right_up_back, 0);
+                    trackedPoseValid = true;
+                    if (anchorFails > 0 || !anchorEverSucceeded) {
+                        NSLog(@"[vision] device anchor OK (after %d failures)", anchorFails);
+                        anchorEverSucceeded = true;
+                        anchorFails = 0;
+                    }
                 }
             } else if (dr == drawable) {
                 if ((anchorFails++ % 90) == 0)
@@ -327,7 +356,8 @@ struct CompositorSurface final : PresentationSurface {
             cp_layer_renderer_get_configuration(layerRenderer));
     }
 
-    void present(id<MTLCommandBuffer> commandBuffer) override {
+    void present(id<MTLCommandBuffer> commandBuffer,
+                 id<MTLTexture> sceneDepth) override {
         if (!drawable || !drawables) return;
         // The pass graph composited into the display drawable's texture 0,
         // slice 0. MONOSCOPIC bridge: mirror that image into every other
@@ -342,36 +372,79 @@ struct CompositorSurface final : PresentationSurface {
             size_t texCount = cp_drawable_get_texture_count(dr);
 
             // The device compositor reprojects the layer using the drawable's
-            // DEPTH texture; the pass graph renders depth only into its own
-            // offscreen targets, so the drawable depth would be uninitialized.
-            // Depth matters MORE than "initialized": content at reverse-Z far
-            // (0.0, infinity) is reprojected as tile garbage, and a frame with
-            // nothing nearer is dropped outright — that was the all-black
-            // device view. Until per-eye rendering (Task 3) writes real scene
-            // depth, clear the drawable depth to the value of a virtual plane
-            // ~2m ahead, computed from the drawable's own projection: the
-            // image reprojects as a stable 2m billboard, the honest monoscopic
-            // model.
-            simd_float4x4 proj = cp_drawable_compute_projection(
-                dr, cp_axis_direction_convention_right_up_back, 0);
-            simd_float4 clip = simd_mul(proj, simd_make_float4(0, 0, -2.0f, 1));
-            double planeDepth = (clip.w != 0.0f) ? clip.z / clip.w : 0.5;
-            for (size_t i = 0; i < texCount; i++) {
-                id<MTLTexture> depthTex = cp_drawable_get_depth_texture(dr, i);
-                if (!depthTex) continue;
-                MTLRenderPassDescriptor* clearPass = [MTLRenderPassDescriptor renderPassDescriptor];
-                clearPass.depthAttachment.texture = depthTex;
-                clearPass.depthAttachment.loadAction = MTLLoadActionClear;
-                clearPass.depthAttachment.storeAction = MTLStoreActionStore;
-                clearPass.depthAttachment.clearDepth = planeDepth;
-                if (depthTex.textureType == MTLTextureType2DArray)
-                    clearPass.renderTargetArrayLength = depthTex.arrayLength;
-                id<MTLRenderCommandEncoder> enc =
-                    [commandBuffer renderCommandEncoderWithDescriptor:clearPass];
-                [enc endEncoding];
+            // DEPTH texture, per pixel. Since the engine renders with the
+            // compositor's own reverse-Z projection (xrView), the scene depth
+            // buffer IS valid compositor depth — copy it in, and reprojection
+            // becomes geometrically correct instead of flattening everything
+            // to a plane (which read as rubber-sheet distortion in motion).
+            // Fallback when the sizes don't line up: clear to a virtual plane
+            // ~2m ahead — never leave drawable depth uninitialized, and never
+            // all-far (both read as a black view; see AGENTS.md).
+            bool depthCopied = false;
+            if (sceneDepth) {
+                for (size_t i = 0; i < texCount; i++) {
+                    id<MTLTexture> depthTex = cp_drawable_get_depth_texture(dr, i);
+                    if (!depthTex || depthTex.pixelFormat != sceneDepth.pixelFormat
+                        || depthTex.width != sceneDepth.width
+                        || depthTex.height != sceneDepth.height) continue;
+                    id<MTLBlitCommandEncoder> dblit = [commandBuffer blitCommandEncoder];
+                    NSUInteger slices = MAX((NSUInteger)1, depthTex.arrayLength);
+                    for (NSUInteger s = 0; s < slices; s++) {
+                        [dblit copyFromTexture:sceneDepth sourceSlice:0 sourceLevel:0
+                                  sourceOrigin:MTLOriginMake(0, 0, 0)
+                                    sourceSize:MTLSizeMake(sceneDepth.width,
+                                                           sceneDepth.height, 1)
+                                     toTexture:depthTex destinationSlice:s
+                              destinationLevel:0
+                             destinationOrigin:MTLOriginMake(0, 0, 0)];
+                    }
+                    [dblit endEncoding];
+                    depthCopied = true;
+                }
+            }
+            if (!depthCopied) {
+                simd_float4x4 proj = cp_drawable_compute_projection(
+                    dr, cp_axis_direction_convention_right_up_back, 0);
+                simd_float4 clip = simd_mul(proj, simd_make_float4(0, 0, -2.0f, 1));
+                double planeDepth = (clip.w != 0.0f) ? clip.z / clip.w : 0.5;
+                for (size_t i = 0; i < texCount; i++) {
+                    id<MTLTexture> depthTex = cp_drawable_get_depth_texture(dr, i);
+                    if (!depthTex) continue;
+                    MTLRenderPassDescriptor* clearPass = [MTLRenderPassDescriptor renderPassDescriptor];
+                    clearPass.depthAttachment.texture = depthTex;
+                    clearPass.depthAttachment.loadAction = MTLLoadActionClear;
+                    clearPass.depthAttachment.storeAction = MTLStoreActionStore;
+                    clearPass.depthAttachment.clearDepth = planeDepth;
+                    if (depthTex.textureType == MTLTextureType2DArray)
+                        clearPass.renderTargetArrayLength = depthTex.arrayLength;
+                    id<MTLRenderCommandEncoder> enc =
+                        [commandBuffer renderCommandEncoderWithDescriptor:clearPass];
+                    [enc endEncoding];
+                }
             }
 
-            id<MTLBlitCommandEncoder> blit = nil;
+            // Same-texture slice-to-slice copies (the .layered case) are
+            // silently unreliable on device — one eye freezes on a stale
+            // frame. Stage the composited image through a scratch texture
+            // once, then copy the scratch into every destination.
+            if (!mirrorScratch || mirrorScratch.width != src.width
+                || mirrorScratch.height != src.height
+                || mirrorScratch.pixelFormat != src.pixelFormat) {
+                MTLTextureDescriptor* d = [MTLTextureDescriptor
+                    texture2DDescriptorWithPixelFormat:src.pixelFormat
+                                                 width:src.width
+                                                height:src.height
+                                             mipmapped:NO];
+                d.storageMode = MTLStorageModePrivate;
+                d.usage = MTLTextureUsageShaderRead;
+                mirrorScratch = [commandBuffer.device newTextureWithDescriptor:d];
+            }
+            id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
+            [blit copyFromTexture:src sourceSlice:0 sourceLevel:0
+                     sourceOrigin:MTLOriginMake(0, 0, 0)
+                       sourceSize:MTLSizeMake(src.width, src.height, 1)
+                        toTexture:mirrorScratch destinationSlice:0 destinationLevel:0
+                destinationOrigin:MTLOriginMake(0, 0, 0)];
             for (size_t i = 0; i < texCount; i++) {
                 id<MTLTexture> dst = cp_drawable_get_color_texture(dr, i);
                 if (!dst) continue;
@@ -382,15 +455,14 @@ struct CompositorSurface final : PresentationSurface {
                     // resolution; a blit needs equal extents, so skip until a
                     // real scaled copy is worth writing.
                     if (dst.width != src.width || dst.height != src.height) continue;
-                    if (!blit) blit = [commandBuffer blitCommandEncoder];
-                    [blit copyFromTexture:src sourceSlice:0 sourceLevel:0
+                    [blit copyFromTexture:mirrorScratch sourceSlice:0 sourceLevel:0
                              sourceOrigin:MTLOriginMake(0, 0, 0)
                                sourceSize:MTLSizeMake(src.width, src.height, 1)
                                 toTexture:dst destinationSlice:s destinationLevel:0
                         destinationOrigin:MTLOriginMake(0, 0, 0)];
                 }
             }
-            if (blit) [blit endEncoding];
+            [blit endEncoding];
 
             if (!loggedLayout) {
                 NSLog(@"[vision] drawable %zu target=%d views=%zu textures=%zu "
@@ -408,6 +480,32 @@ struct CompositorSurface final : PresentationSurface {
     bool loggedLayout = false;
     int anchorFails = 0;
     bool anchorEverSucceeded = false;
+    id<MTLTexture> mirrorScratch = nil;  // staging for the eye-mirror copies
+
+    // Head-tracked camera state for xrView() (see PresentationSurface).
+    bool trackedPoseValid = false;
+    simd_float4x4 originFromDevice;   // tracking origin -> headset
+    simd_float4x4 deviceFromEye;      // headset -> view 0's eye
+    simd_float4x4 eyeProjection;      // compositor projection for view 0
+    bool xrBaseValid = false;
+    simd_float3 xrBase = {0, 0, 0};   // locomotion base: tracking origin in world
+
+    bool xrView(simd_float3 baseHint, simd_float4x4& worldFromEye,
+                simd_float4x4& projection) override {
+        if (!trackedPoseValid) return false;
+        if (!xrBaseValid) {
+            // Stand where the level's camera stood, feet on the floor: the
+            // tracking origin is at the user's feet, so only the base's XZ
+            // comes from the game camera and Y stays on the ground plane.
+            xrBase = simd_make_float3(baseHint.x, 0.0f, baseHint.z);
+            xrBaseValid = true;
+        }
+        simd_float4x4 base = matrix_identity_float4x4;
+        base.columns[3] = simd_make_float4(xrBase.x, xrBase.y, xrBase.z, 1.0f);
+        worldFromEye = simd_mul(base, simd_mul(originFromDevice, deviceFromEye));
+        projection = eyeProjection;
+        return true;
+    }
 
     void frameSubmitted() override {
         if (frame) cp_frame_end_submission(frame);
@@ -2162,29 +2260,51 @@ void MetalRenderer::setCamera(const CameraState& camera) {
     projMat = Mat4::reverseZ() * projMat;
     simd_float4x4 proj = toSimd(projMat);
 
+    simd_float4x4 invView = toSimd(Mat4::lookAt(camera.position, camera.target,
+                                                camera.up).inverse());
+    simd_float4x4 invProj = toSimd(projMat.inverse());
+    simd_float3 camPos = {static_cast<float>(camera.position.x),
+                          static_cast<float>(camera.position.y),
+                          static_cast<float>(camera.position.z)};
+
+    // Head-tracked override (visionOS): when the surface tracks a headset,
+    // render from the user's eye — pose from tracking, projection from the
+    // compositor — instead of the game camera. The game camera still supplies
+    // the locomotion base (where in the world the user stands) via baseHint.
+    // Both projections are reverse-Z, so every depth consumer downstream is
+    // unaffected by the swap.
+    {
+        simd_float4x4 worldFromEye, xrProj;
+        if (impl->surface && impl->surface->xrView(camPos, worldFromEye, xrProj)) {
+            view = simd_inverse(worldFromEye);
+            invView = worldFromEye;
+            proj = xrProj;
+            invProj = simd_inverse(xrProj);
+            camPos = simd_make_float3(worldFromEye.columns[3].x,
+                                      worldFromEye.columns[3].y,
+                                      worldFromEye.columns[3].z);
+        }
+    }
+
     simd_float4x4 vp = simd_mul(proj, view);
     impl->cameraUniforms.viewProjection = vp;
     impl->cameraUniforms.view = view;
-    impl->cameraUniforms.cameraPosition = {static_cast<float>(camera.position.x),
-                                           static_cast<float>(camera.position.y),
-                                           static_cast<float>(camera.position.z)};
+    impl->cameraUniforms.cameraPosition = camPos;
     impl->cameraUniforms._camPad0 = 0;
 
     // Inverse matrices for screen-space effects (SSR, SSAO)
-    Mat4 viewMat = Mat4::lookAt(camera.position, camera.target, camera.up);
-    Mat4 vpMat = projMat * viewMat;
-    impl->cameraUniforms.invViewProjection = toSimd(vpMat.inverse());
+    impl->cameraUniforms.invViewProjection = simd_mul(invView, invProj);
     // Roll the view-projection history for temporal AO: this frame's VP (matching
     // the invViewProjection above) becomes "current"; last frame's becomes "prev".
     impl->aoPrevViewProjection = impl->aoCurrViewProjection;
-    impl->aoCurrViewProjection = toSimd(vpMat);
+    impl->aoCurrViewProjection = vp;
     impl->cameraUniforms.projection = proj;
-    impl->cameraUniforms.invProjection = toSimd(projMat.inverse());
+    impl->cameraUniforms.invProjection = invProj;
     impl->cameraUniforms.screenSize = {static_cast<float>(impl->framebufferWidth),
                                        static_cast<float>(impl->framebufferHeight)};
     impl->cameraUniforms.nearPlane = static_cast<float>(camera.nearPlane);
     impl->cameraUniforms.farPlane = static_cast<float>(camera.farPlane);
-    impl->currentCameraPos = camera.position;
+    impl->currentCameraPos = Vec3(camPos.x, camPos.y, camPos.z);
     impl->currentLens = camera.lens;   // drives the lens-warp + DOF passes
 
     // Wind for FLAG_WIND foliage (self-timed off the wall clock — purely
@@ -3724,7 +3844,7 @@ void MetalRenderer::endFrame() {
         [blit endEncoding];
     }
 
-    impl->surface->present(impl->currentCommandBuffer);
+    impl->surface->present(impl->currentCommandBuffer, impl->depthTexture);
     [impl->currentCommandBuffer commit];
     // Before any waitUntilCompleted below: a compositor-driven surface wants to
     // close its frame as soon as the work is submitted, not after we have
