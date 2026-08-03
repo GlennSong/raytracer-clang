@@ -66,7 +66,10 @@ std::string gLevelName = "arena";
 
 // World units per real meter for the next boot (menu-set; also scales the
 // spatial-event rays so gameplay targeting matches the render composition).
-std::atomic<double> gWorldScale{1.0};
+// Default matches the menu's "Life size" (UI 1.0 x baseline 2.0): the levels
+// are authored larger than strict metric — see baselineScale in
+// VisionSpikeApp.swift, the single place to tune it.
+std::atomic<double> gWorldScale{2.0};
 
 // Boots the engine: points asset resolution at the bundle, loads arena.json,
 // and pushes the same ArenaState the desktop viewer runs.

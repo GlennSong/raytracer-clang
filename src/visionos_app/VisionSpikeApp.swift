@@ -74,6 +74,12 @@ struct LaunchView: View {
     @State private var selectedLevel = "arena"
     @State private var worldScale = 1.0
     private static let scales: [Double] = [1, 2, 5, 10, 25]
+    /// The engine's levels are authored larger than strict metric (the arena
+    /// car is several units tall) — at 1 world-unit-per-meter a person reads
+    /// knee-high. This baseline calibrates "Life size" to feel life-size in
+    /// the arena; the picker's giant modes multiply on top. TUNE BY FEEL:
+    /// stand next to the arena car — it should read as a real car.
+    private static let baselineScale = 2.0
 
     /// Level shortnames from the bundled assets/levels/*.json (the sidecar
     /// .cameras.json files are not levels).
@@ -112,7 +118,7 @@ struct LaunchView: View {
                         shell.inArena = false
                     } else {
                         rt_vision_set_level(selectedLevel)
-                        rt_vision_set_world_scale(worldScale)
+                        rt_vision_set_world_scale(worldScale * Self.baselineScale)
                         if await openImmersiveSpace(id: "arena") == .opened {
                             shell.inArena = true
                         }
