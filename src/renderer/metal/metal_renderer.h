@@ -34,6 +34,7 @@ public:
 
     void beginFrame() override;
     void setCamera(const CameraState& camera) override;
+    XrBackend* xrBackend() override;   // visionOS: CompositorServices adapter
     void setLights(const SceneLighting& lighting) override;
     void drawMesh(MeshHandle handle, const Mat4& transform,
                   const RenderMaterial& material) override;

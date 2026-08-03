@@ -21,7 +21,9 @@
 #endif
 #include "../../slot_map.h"
 #include "../../engine/asset_root.h"
+#include "../../engine/xr/xr_backend.h"
 #include "../cube_faces.h"
+#include <mutex>
 #include <vector>
 #include <algorithm>
 #include <cstdlib>
@@ -141,6 +143,11 @@ struct PresentationSurface {
     // the camera each frame from the fresh pose without disturbing surfaces
     // (macOS) that don't track.
     virtual bool xrTracking() const { return false; }
+
+    // The second eye's color texture when the surface uses one texture per
+    // eye (dedicated layout). nil everywhere else — including layered
+    // surfaces, where the second eye is slice 1 of colorTarget().
+    virtual id<MTLTexture> secondColorTarget() const { return nil; }
 
     // Runs AFTER the command buffer is committed, for surfaces that bracket a
     // frame rather than just handing over a texture.
@@ -318,15 +325,23 @@ struct CompositorSurface final : PresentationSurface {
                     anchor) == ar_device_anchor_query_status_success) {
                 cp_drawable_set_device_anchor(dr, anchor);
                 if (dr == drawable) {
-                    // Capture the head pose + view geometry for xrView(). The
-                    // pose is STICKY — a frame with a failed anchor query keeps
-                    // rendering from the last good pose instead of snapping
-                    // back to the game camera.
+                    // Capture the head pose + BOTH views' geometry for
+                    // xrView() and the XR backend. The pose is STICKY — a
+                    // frame with a failed anchor query keeps rendering from
+                    // the last good pose instead of snapping back to the game
+                    // camera.
                     originFromDevice = ar_anchor_get_origin_from_anchor_transform(anchor);
-                    deviceFromEye =
-                        cp_view_get_transform(cp_drawable_get_view(dr, 0));
-                    eyeProjection = cp_drawable_compute_projection(
-                        dr, cp_axis_direction_convention_right_up_back, 0);
+                    trackedViewCount =
+                        (int)MIN((size_t)2, cp_drawable_get_view_count(dr));
+                    for (int v = 0; v < trackedViewCount; v++) {
+                        deviceFromEye[v] =
+                            cp_view_get_transform(cp_drawable_get_view(dr, v));
+                        eyeProjection[v] = cp_drawable_compute_projection(
+                            dr, cp_axis_direction_convention_right_up_back, v);
+                    }
+                    id<MTLTexture> tex0 = cp_drawable_get_color_texture(dr, 0);
+                    trackedViewWidth = (int)tex0.width;
+                    trackedViewHeight = (int)tex0.height;
                     trackedPoseValid = true;
                     if (anchorFails > 0 || !anchorEverSucceeded) {
                         NSLog(@"[vision] device anchor OK (after %d failures)", anchorFails);
@@ -344,6 +359,11 @@ struct CompositorSurface final : PresentationSurface {
 
     id<MTLTexture> colorTarget() const override {
         return cp_drawable_get_color_texture(drawable, 0);
+    }
+
+    id<MTLTexture> secondColorTarget() const override {
+        if (!drawable || cp_drawable_get_texture_count(drawable) < 2) return nil;
+        return cp_drawable_get_color_texture(drawable, 1);
     }
 
     bool drawableSize(int& width, int& height) const override {
@@ -452,11 +472,14 @@ struct CompositorSurface final : PresentationSurface {
     int anchorFails = 0;
     bool anchorEverSucceeded = false;
 
-    // Head-tracked camera state for xrView() (see PresentationSurface).
+    // Head-tracked camera state for xrView() and the XR backend adapter.
+    // Sticky: a frame with a failed anchor query keeps the last good pose.
     bool trackedPoseValid = false;
-    simd_float4x4 originFromDevice;   // tracking origin -> headset
-    simd_float4x4 deviceFromEye;      // headset -> view 0's eye
-    simd_float4x4 eyeProjection;      // compositor projection for view 0
+    simd_float4x4 originFromDevice;      // tracking origin -> headset
+    int trackedViewCount = 0;
+    simd_float4x4 deviceFromEye[2];      // headset -> each eye
+    simd_float4x4 eyeProjection[2];      // compositor projection per eye
+    int trackedViewWidth = 0, trackedViewHeight = 0;
     bool xrBaseValid = false;
     simd_float3 xrBase = {0, 0, 0};   // locomotion base: tracking origin in world
 
@@ -474,8 +497,8 @@ struct CompositorSurface final : PresentationSurface {
         }
         simd_float4x4 base = matrix_identity_float4x4;
         base.columns[3] = simd_make_float4(xrBase.x, xrBase.y, xrBase.z, 1.0f);
-        worldFromEye = simd_mul(base, simd_mul(originFromDevice, deviceFromEye));
-        projection = eyeProjection;
+        worldFromEye = simd_mul(base, simd_mul(originFromDevice, deviceFromEye[0]));
+        projection = eyeProjection[0];
         return true;
     }
 
@@ -484,6 +507,82 @@ struct CompositorSurface final : PresentationSurface {
         frame = nullptr;
         drawable = nullptr;
         drawables = nullptr;
+    }
+};
+
+// simd -> engine Mat4 (transpose + widen): the inverse of toSimd below. Lives
+// here because only the XR backend crosses this boundary in this direction.
+static Mat4 fromSimd(simd_float4x4 m) {
+    Mat4 r;
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++)
+            r.m[i][j] = static_cast<Real>(m.columns[j][i]);
+    return r;
+}
+
+// The engine-facing XR backend (engine/xr/xr_backend.h) for CompositorServices.
+// Owned by MetalRenderer::Impl, wraps the CompositorSurface's tracking session.
+// beginFrame answers with a PREDICTED head pose (the render still late-latches
+// against the drawable's own timing); input is a thread-safe queue the Swift
+// host pushes spatial events into (Phase 3).
+struct CompositorXrBackend final : engine::XrBackend {
+    CompositorSurface* surface = nullptr;
+    uint64_t frameCounter = 0;
+    std::mutex inputMutex;
+    std::vector<engine::XrInputEvent> inputQueue;
+
+    bool active() const override { return surface && surface->trackedPoseValid; }
+
+    bool beginFrame(engine::XrState& out) override {
+        out.active = false;
+        if (!surface || !surface->worldTracking || !surface->trackedPoseValid)
+            return false;
+
+        // Predict roughly a frame ahead; if the query misses (tracking
+        // momentarily paused), fall back to the sticky pose so the view
+        // degrades to "held still", never to garbage.
+        simd_float4x4 head = surface->originFromDevice;
+        ar_device_anchor_t anchor = ar_device_anchor_create();
+        if (ar_world_tracking_provider_query_device_anchor_at_timestamp(
+                surface->worldTracking, CACurrentMediaTime() + 0.033, anchor)
+            == ar_device_anchor_query_status_success) {
+            head = ar_anchor_get_origin_from_anchor_transform(anchor);
+        }
+
+        out.frameIndex = ++frameCounter;
+        out.originFromHead = fromSimd(head);
+        out.viewCount = surface->trackedViewCount;
+        for (int v = 0; v < out.viewCount; v++) {
+            // ORIGIN-space eye pose for the predicted head.
+            out.views[v].originFromEye =
+                out.originFromHead * fromSimd(surface->deviceFromEye[v]);
+            out.views[v].projection = fromSimd(surface->eyeProjection[v]);
+            out.views[v].targetIndex = v;
+            out.views[v].width = surface->trackedViewWidth;
+            out.views[v].height = surface->trackedViewHeight;
+        }
+        out.active = true;
+
+        if ((frameCounter % 90) == 0) {
+            NSLog(@"[xr] predict #%llu head(%.2f %.2f %.2f) fwd(%.2f %.2f %.2f) views %d",
+                  (unsigned long long)out.frameIndex,
+                  out.originFromHead.m[0][3], out.originFromHead.m[1][3],
+                  out.originFromHead.m[2][3],
+                  -out.originFromHead.m[0][2], -out.originFromHead.m[1][2],
+                  -out.originFromHead.m[2][2], out.viewCount);
+        }
+        return true;
+    }
+
+    void pushInput(const engine::XrInputEvent& event) override {
+        std::lock_guard<std::mutex> lock(inputMutex);
+        inputQueue.push_back(event);
+    }
+
+    void pollInput(std::vector<engine::XrInputEvent>& out) override {
+        std::lock_guard<std::mutex> lock(inputMutex);
+        out.insert(out.end(), inputQueue.begin(), inputQueue.end());
+        inputQueue.clear();
     }
 };
 #endif  // TARGET_OS_VISION
@@ -534,6 +633,11 @@ struct MetalRenderer::Impl {
     // How this frame reaches the display. The pass graph never looks at it —
     // see PresentationSurface above.
     std::unique_ptr<PresentationSurface> surface;
+#if TARGET_OS_VISION
+    // Engine-facing XR backend (engine/xr/): wraps the surface's tracking.
+    // Points INTO `surface` — declared after it so it destructs first.
+    std::unique_ptr<CompositorXrBackend> xrAdapter;
+#endif
     id<MTLTexture> depthTexture;
 
     SlotMap<GPUMesh, MeshTag> meshes;
@@ -733,6 +837,8 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         NSLog(@"[MetalRenderer] world tracking unavailable — cannot present");
         return false;
     }
+    impl->xrAdapter = std::make_unique<CompositorXrBackend>();
+    impl->xrAdapter->surface = compositorSurface.get();
     impl->surface = std::move(compositorSurface);
 #else
     NSObject* handleObj = (__bridge NSObject*)windowHandle;
@@ -2223,6 +2329,14 @@ void MetalRenderer::beginFrame() {
 #endif
 }
 
+XrBackend* MetalRenderer::xrBackend() {
+#if TARGET_OS_VISION
+    return impl->xrAdapter.get();
+#else
+    return nullptr;
+#endif
+}
+
 void MetalRenderer::setCamera(const CameraState& camera) {
     impl->lastCameraState = camera;
     impl->hasLastCamera = true;
@@ -2267,6 +2381,20 @@ void MetalRenderer::setCamera(const CameraState& camera) {
             camPos = simd_make_float3(worldFromEye.columns[3].x,
                                       worldFromEye.columns[3].y,
                                       worldFromEye.columns[3].z);
+            // Heartbeat stage 2/3 ("override"): proves the render camera is
+            // LIVE. The forward vector must change as the user turns their
+            // head — if it doesn't while "[xr] predict" moves, the sticky
+            // capture in acquire() froze; if BOTH move but the display
+            // doesn't, the fault is downstream (see the composite stage).
+#if TARGET_OS_VISION
+            static int xrCamBeat = 0;
+            if ((xrCamBeat++ % 90) == 0) {
+                simd_float4 fwd = worldFromEye.columns[2];
+                NSLog(@"[xr] override #%llu pos(%.2f %.2f %.2f) fwd(%.2f %.2f %.2f)",
+                      (unsigned long long)(impl->xrAdapter ? impl->xrAdapter->frameCounter : 0),
+                      camPos.x, camPos.y, camPos.z, -fwd.x, -fwd.y, -fwd.z);
+            }
+#endif
         }
     }
 
@@ -3809,11 +3937,29 @@ void MetalRenderer::endFrame() {
         // stale frame; a render pass is the path the display provably honors.
         // Same image in both eyes = monoscopic by construction, until per-eye
         // cameras arrive.
-        if (impl->currentColorTarget.textureType == MTLTextureType2DArray
-            && impl->currentColorTarget.arrayLength > 1) {
+        id<MTLTexture> secondEyeTex = impl->surface->secondColorTarget();
+        bool layeredSecondEye = impl->currentColorTarget.textureType == MTLTextureType2DArray
+            && impl->currentColorTarget.arrayLength > 1;
+#if TARGET_OS_VISION
+        // Heartbeat stage 3/3 ("composite"): names which second-eye path ran.
+        // If predict+override move but one eye is frozen, this line says
+        // whether the frozen eye ever received a render pass at all.
+        static int xrCompBeat = 0;
+        if (impl->xrAdapter && ((xrCompBeat++ % 90) == 0)) {
+            NSLog(@"[xr] composite #%llu layered=%d secondTex=%d slices=%lu",
+                  (unsigned long long)impl->xrAdapter->frameCounter,
+                  layeredSecondEye ? 1 : 0, secondEyeTex ? 1 : 0,
+                  (unsigned long)impl->currentColorTarget.arrayLength);
+        }
+#endif
+        if (layeredSecondEye || secondEyeTex) {
             MTLRenderPassDescriptor* eyeDesc = [MTLRenderPassDescriptor renderPassDescriptor];
-            eyeDesc.colorAttachments[0].texture = impl->currentColorTarget;
-            eyeDesc.colorAttachments[0].slice = 1;
+            if (layeredSecondEye) {
+                eyeDesc.colorAttachments[0].texture = impl->currentColorTarget;
+                eyeDesc.colorAttachments[0].slice = 1;
+            } else {
+                eyeDesc.colorAttachments[0].texture = secondEyeTex;
+            }
             eyeDesc.colorAttachments[0].loadAction = MTLLoadActionDontCare;
             eyeDesc.colorAttachments[0].storeAction = MTLStoreActionStore;
             id<MTLRenderCommandEncoder> eye = [impl->currentCommandBuffer

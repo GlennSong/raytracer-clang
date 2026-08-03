@@ -12,6 +12,7 @@
 namespace engine {
 
 class Window;
+class XrBackend;  // engine/xr/xr_backend.h — owned by headset-capable renderers
 
 struct MeshTag {};
 struct BufferTag {};
@@ -369,6 +370,29 @@ struct CameraState {
           nearPlane(0.1f), farPlane(1000.0f) {}
 };
 
+// One explicit XR view: matrices the renderer uses AS-IS. CameraState cannot
+// express a headset's off-axis eye projection, so XR hands the renderer the
+// finished matrices instead of a look-at description.
+struct RenderViewDesc {
+    Mat4 view;            // world -> eye
+    Mat4 projection;      // reverse-Z, off-axis, GPU-ready
+    int targetIndex = 0;  // color slice / texture index
+};
+
+// Per-frame XR render info, produced by XrCameraSystem (engine/systems) and
+// handed to the renderer via Renderer::setXrViews. Contract: a compositor-
+// owned backend MAY refine each view's ORIGIN-space eye pose/projection with
+// a same-frame late latch (fresher anchor, exact current-drawable projection);
+// it must NEVER touch worldFromOrigin — the locomotion base belongs to the
+// game. That split is what makes "the renderer second-guessed the camera"
+// structurally impossible.
+struct XrRenderInfo {
+    bool active = false;
+    Mat4 worldFromOrigin;  // locomotion base: tracking origin in world space
+    int viewCount = 0;
+    RenderViewDesc views[2];
+};
+
 // Planetary atmosphere (procedural-planet-plan P3). A single-scattering Rayleigh+Mie
 // glow the backend raymarches as a fullscreen pass and adds over the HDR scene. The
 // values mirror the tested CPU reference (engine/procgen/atmosphere.cpp); build them
@@ -455,6 +479,17 @@ public:
 
     virtual void beginFrame() = 0;
     virtual void setCamera(const CameraState& camera) = 0;
+
+    // XR (engine/xr/): the headset backend this renderer owns, or nullptr —
+    // the visionOS Metal backend returns its CompositorServices adapter; all
+    // other backends (and macOS Metal) inherit nullptr and XR stays inert.
+    virtual XrBackend* xrBackend() { return nullptr; }
+
+    // Explicit per-view matrices for XR frames. Called by RenderSystem after
+    // setCamera when XR is active; setCamera still runs every frame and
+    // remains the mono truth (culling, audio, effects). Default: ignore.
+    virtual void setXrViews(const XrRenderInfo& /*info*/) {}
+
     virtual void setLights(const SceneLighting& lighting) = 0;
     virtual void drawMesh(MeshHandle handle, const Mat4& transform,
                           const RenderMaterial& material) = 0;

@@ -4,6 +4,7 @@
 #include "system.h"
 #include "state_stack.h"
 #include "world.h"
+#include "xr/xr_backend.h"
 #include "clock.h"
 #include "asset_manager.h"
 #include "audio/audio_engine.h"
@@ -112,6 +113,11 @@ private:
     AudioEngine audioEngine;
     InputMap inputMap;
     PlayerInputs playerInputs;
+    // Headset state (engine/xr/). `xr` is the renderer's backend or null;
+    // `xrState` is refreshed at the top of every runFrame and handed to all
+    // systems through FrameContext. Inert (active=false) without a headset.
+    XrBackend* xr = nullptr;
+    XrState xrState;
     RenderView view;
     StateStack stateStack;
     bool debugOverlayActive = false;

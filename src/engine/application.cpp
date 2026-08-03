@@ -39,6 +39,10 @@ bool Application::initialize(const Config& config,
         return false;
     }
 
+    // Headset backend, if this renderer owns one (visionOS Metal). Null
+    // everywhere else, which keeps xrState.active false and XR inert.
+    xr = rendererPtr->xrBackend();
+
     // Debug UI (ADR-0011): renderer creates the ImGui context, then the window
     // attaches its platform backend. Both no-ops without RT_ENABLE_IMGUI.
     // The asset manager owns GPU mesh lifetime, driving the renderer through
@@ -72,7 +76,7 @@ FrameContext Application::makeContext() {
     return FrameContext{
         worldState, *rendererPtr, *assetManager, view, clock, settingsStore, jobs,
         eventBus, debugLines, audioEngine,
-        window->getInput(), inputMap, playerInputs,
+        window->getInput(), inputMap, playerInputs, xrState,
         framebufferWidth, framebufferHeight, winW, winH,
         frameDelta, interpolation, quit, transitionRequest,
         debugOverlayActive
@@ -118,6 +122,15 @@ void Application::runFrame() {
     frameDelta = window->getDeltaTime();
     reconcileFramebuffer();
     debugLines.update(frameDelta);   // age timed debug shapes (ADR-0067)
+
+    // Headset pose for this frame, BEFORE any system updates: camera writers
+    // (XrCameraSystem) must see the pose the user's head will have when the
+    // frame is displayed, not last frame's. Inert when no backend exists.
+    if (xr) {
+        if (!xr->beginFrame(xrState)) xrState.active = false;
+    } else {
+        xrState.active = false;
+    }
 
     {
         RT_PROFILE_ZONE_NAMED("update");
