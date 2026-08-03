@@ -144,10 +144,25 @@ struct PresentationSurface {
     // (macOS) that don't track.
     virtual bool xrTracking() const { return false; }
 
-    // The second eye's color texture when the surface uses one texture per
-    // eye (dedicated layout). nil everywhere else — including layered
-    // surfaces, where the second eye is slice 1 of colorTarget().
-    virtual id<MTLTexture> secondColorTarget() const { return nil; }
+    // Number of XR views to render this frame. 0 = not an XR surface (or
+    // tracking not live): endFrame runs its single mono pass, untouched.
+    virtual int xrViewCount() const { return 0; }
+
+    // Camera for view v: eye pose in world space (tracking pose composed with
+    // the locomotion base) and the compositor's projection for that view.
+    virtual bool xrViewCamera(int /*v*/, simd_float3 /*baseHint*/,
+                              simd_float4x4& /*worldFromEye*/,
+                              simd_float4x4& /*projection*/) { return false; }
+
+    // Where view v's content goes: color/depth textures, array slice, and the
+    // viewport within them. The texture map is the contract — never assume
+    // view v lands in slice v or covers the full texture. (__strong on the
+    // out-params: ARC defaults id& parameters to __autoreleasing, which
+    // cannot bind to strong locals at the call site.)
+    virtual bool xrViewTarget(int /*v*/, id<MTLTexture> __strong& /*color*/,
+                              id<MTLTexture> __strong& /*depth*/,
+                              NSUInteger& /*slice*/,
+                              MTLViewport& /*viewport*/) { return false; }
 
     // Runs AFTER the command buffer is committed, for surfaces that bracket a
     // frame rather than just handing over a texture.
@@ -361,11 +376,6 @@ struct CompositorSurface final : PresentationSurface {
         return cp_drawable_get_color_texture(drawable, 0);
     }
 
-    id<MTLTexture> secondColorTarget() const override {
-        if (!drawable || cp_drawable_get_texture_count(drawable) < 2) return nil;
-        return cp_drawable_get_color_texture(drawable, 1);
-    }
-
     bool drawableSize(int& width, int& height) const override {
         if (!drawable) return false;
         id<MTLTexture> tex = cp_drawable_get_color_texture(drawable, 0);
@@ -382,84 +392,20 @@ struct CompositorSurface final : PresentationSurface {
     }
 
     void present(id<MTLCommandBuffer> commandBuffer,
-                 id<MTLTexture> sceneDepth) override {
+                 id<MTLTexture> /*sceneDepth*/) override {
         if (!drawable || !drawables) return;
-        // The pass graph composited into the display drawable's texture 0,
-        // slice 0. MONOSCOPIC bridge: mirror that image into every other
-        // color destination — the second eye (texture 1 or array slice 1) and
-        // any additional drawable targets (e.g. capture) — so every consumer
-        // sees the same flat image. Per-eye rendering (Task 3) replaces the
-        // mirrors with real per-view composites.
-        id<MTLTexture> src = cp_drawable_get_color_texture(drawable, 0);
+        // Color AND depth for every view are written by endFrame's per-view
+        // passes (composite + depth blit through xrViewTarget's texture map).
+        // All that remains here is presenting every drawable target.
         size_t count = cp_drawable_array_get_count(drawables);
         for (size_t d = 0; d < count; d++) {
             cp_drawable_t dr = cp_drawable_array_get_drawable(drawables, d);
-            size_t texCount = cp_drawable_get_texture_count(dr);
-
-            // The device compositor reprojects the layer using the drawable's
-            // DEPTH texture, per pixel. Since the engine renders with the
-            // compositor's own reverse-Z projection (xrView), the scene depth
-            // buffer IS valid compositor depth — copy it in, and reprojection
-            // becomes geometrically correct instead of flattening everything
-            // to a plane (which read as rubber-sheet distortion in motion).
-            // Fallback when the sizes don't line up: clear to a virtual plane
-            // ~2m ahead — never leave drawable depth uninitialized, and never
-            // all-far (both read as a black view; see AGENTS.md).
-            bool depthCopied = false;
-            if (sceneDepth) {
-                for (size_t i = 0; i < texCount; i++) {
-                    id<MTLTexture> depthTex = cp_drawable_get_depth_texture(dr, i);
-                    if (!depthTex || depthTex.pixelFormat != sceneDepth.pixelFormat
-                        || depthTex.width != sceneDepth.width
-                        || depthTex.height != sceneDepth.height) continue;
-                    id<MTLBlitCommandEncoder> dblit = [commandBuffer blitCommandEncoder];
-                    NSUInteger slices = MAX((NSUInteger)1, depthTex.arrayLength);
-                    for (NSUInteger s = 0; s < slices; s++) {
-                        [dblit copyFromTexture:sceneDepth sourceSlice:0 sourceLevel:0
-                                  sourceOrigin:MTLOriginMake(0, 0, 0)
-                                    sourceSize:MTLSizeMake(sceneDepth.width,
-                                                           sceneDepth.height, 1)
-                                     toTexture:depthTex destinationSlice:s
-                              destinationLevel:0
-                             destinationOrigin:MTLOriginMake(0, 0, 0)];
-                    }
-                    [dblit endEncoding];
-                    depthCopied = true;
-                }
-            }
-            if (!depthCopied) {
-                simd_float4x4 proj = cp_drawable_compute_projection(
-                    dr, cp_axis_direction_convention_right_up_back, 0);
-                simd_float4 clip = simd_mul(proj, simd_make_float4(0, 0, -2.0f, 1));
-                double planeDepth = (clip.w != 0.0f) ? clip.z / clip.w : 0.5;
-                for (size_t i = 0; i < texCount; i++) {
-                    id<MTLTexture> depthTex = cp_drawable_get_depth_texture(dr, i);
-                    if (!depthTex) continue;
-                    MTLRenderPassDescriptor* clearPass = [MTLRenderPassDescriptor renderPassDescriptor];
-                    clearPass.depthAttachment.texture = depthTex;
-                    clearPass.depthAttachment.loadAction = MTLLoadActionClear;
-                    clearPass.depthAttachment.storeAction = MTLStoreActionStore;
-                    clearPass.depthAttachment.clearDepth = planeDepth;
-                    if (depthTex.textureType == MTLTextureType2DArray)
-                        clearPass.renderTargetArrayLength = depthTex.arrayLength;
-                    id<MTLRenderCommandEncoder> enc =
-                        [commandBuffer renderCommandEncoderWithDescriptor:clearPass];
-                    [enc endEncoding];
-                }
-            }
-
-            // Color for BOTH eye slices of the display drawable is written by
-            // the composite passes in endFrame (a real render pass per slice —
-            // blit mirrors between drawable slices are silently unreliable on
-            // device). Nothing to mirror here; dedicated-layout second
-            // textures and capture targets are left for per-eye rendering.
-            (void)src;
-
             if (!loggedLayout) {
                 NSLog(@"[vision] drawable %zu target=%d views=%zu textures=%zu "
                       @"tex0 %lux%lu (slices %lu)",
                       d, (int)cp_drawable_get_target(dr),
-                      cp_drawable_get_view_count(dr), texCount,
+                      cp_drawable_get_view_count(dr),
+                      cp_drawable_get_texture_count(dr),
                       static_cast<unsigned long>(cp_drawable_get_color_texture(dr, 0).width),
                       static_cast<unsigned long>(cp_drawable_get_color_texture(dr, 0).height),
                       static_cast<unsigned long>(cp_drawable_get_color_texture(dr, 0).arrayLength));
@@ -485,9 +431,13 @@ struct CompositorSurface final : PresentationSurface {
 
     bool xrTracking() const override { return trackedPoseValid; }
 
-    bool xrView(simd_float3 baseHint, simd_float4x4& worldFromEye,
-                simd_float4x4& projection) override {
-        if (!trackedPoseValid) return false;
+    int xrViewCount() const override {
+        return (drawable && trackedPoseValid) ? trackedViewCount : 0;
+    }
+
+    bool xrViewCamera(int v, simd_float3 baseHint, simd_float4x4& worldFromEye,
+                      simd_float4x4& projection) override {
+        if (!trackedPoseValid || v < 0 || v >= trackedViewCount) return false;
         if (!xrBaseValid) {
             // Stand where the level's camera stood, feet on the floor: the
             // tracking origin is at the user's feet, so only the base's XZ
@@ -497,9 +447,29 @@ struct CompositorSurface final : PresentationSurface {
         }
         simd_float4x4 base = matrix_identity_float4x4;
         base.columns[3] = simd_make_float4(xrBase.x, xrBase.y, xrBase.z, 1.0f);
-        worldFromEye = simd_mul(base, simd_mul(originFromDevice, deviceFromEye[0]));
-        projection = eyeProjection[0];
+        worldFromEye = simd_mul(base, simd_mul(originFromDevice, deviceFromEye[v]));
+        projection = eyeProjection[v];
         return true;
+    }
+
+    bool xrView(simd_float3 baseHint, simd_float4x4& worldFromEye,
+                simd_float4x4& projection) override {
+        return xrViewCamera(0, baseHint, worldFromEye, projection);
+    }
+
+    bool xrViewTarget(int v, id<MTLTexture> __strong& color,
+                      id<MTLTexture> __strong& depth,
+                      NSUInteger& slice, MTLViewport& viewport) override {
+        if (!drawable || v < 0
+            || v >= (int)cp_drawable_get_view_count(drawable)) return false;
+        cp_view_t view = cp_drawable_get_view(drawable, v);
+        cp_view_texture_map_t map = cp_view_get_view_texture_map(view);
+        size_t texIndex = cp_view_texture_map_get_texture_index(map);
+        slice = cp_view_texture_map_get_slice_index(map);
+        viewport = cp_view_texture_map_get_viewport(map);
+        color = cp_drawable_get_color_texture(drawable, texIndex);
+        depth = cp_drawable_get_depth_texture(drawable, texIndex);
+        return color != nil;
     }
 
     void frameSubmitted() override {
@@ -2937,6 +2907,25 @@ void MetalRenderer::drawTerrain(MeshHandle handle, const RenderMaterial& materia
     impl->terrainDrawCalls.push_back({handle, material, morphStart, morphEnd});
 }
 
+// Point the camera uniforms at one XR view's matrices. Used by endFrame's
+// per-view loop; everything not overwritten here (wind, lens, near/far,
+// screenSize) keeps the values setCamera computed earlier this frame.
+static void applyXrCameraMatrices(CameraUniforms& u, Vec3& camPosOut,
+                                  simd_float4x4 worldFromEye,
+                                  simd_float4x4 proj) {
+    simd_float4x4 view = simd_inverse(worldFromEye);
+    u.view = view;
+    u.projection = proj;
+    u.viewProjection = simd_mul(proj, view);
+    u.invProjection = simd_inverse(proj);
+    u.invViewProjection = simd_mul(worldFromEye, u.invProjection);
+    u.cameraPosition =
+        simd_make_float3(worldFromEye.columns[3].x, worldFromEye.columns[3].y,
+                         worldFromEye.columns[3].z);
+    camPosOut = Vec3(worldFromEye.columns[3].x, worldFromEye.columns[3].y,
+                     worldFromEye.columns[3].z);
+}
+
 void MetalRenderer::endFrame() {
     if (!impl->currentColorTarget || !impl->currentPassDesc) return;
 
@@ -3084,6 +3073,27 @@ void MetalRenderer::endFrame() {
             }
             [shadowEncoder endEncoding];
         }
+    }
+
+    // --- Per-view render loop -------------------------------------------
+    // XR surfaces render the entire view-dependent pipeline (scene color,
+    // atmosphere, post, composite) once per eye, each pass reading the
+    // camera uniforms pointed at that eye. Desktop and the mono path run
+    // exactly one iteration with untouched camera state. View-independent
+    // work (probe bake, shadow cascades) stays above this line. The body
+    // keeps its original indentation — it predates the loop.
+    const int xrViewsToRender = impl->surface->xrViewCount();
+    const int renderPassCount = xrViewsToRender > 0 ? xrViewsToRender : 1;
+    for (int viewPass = 0; viewPass < renderPassCount; viewPass++) {
+    if (xrViewsToRender > 0) {
+        simd_float4x4 worldFromEye, xrProj;
+        simd_float3 hint = simd_make_float3(
+            static_cast<float>(impl->lastCameraState.position.x),
+            static_cast<float>(impl->lastCameraState.position.y),
+            static_cast<float>(impl->lastCameraState.position.z));
+        if (impl->surface->xrViewCamera(viewPass, hint, worldFromEye, xrProj))
+            applyXrCameraMatrices(impl->cameraUniforms, impl->currentCameraPos,
+                                  worldFromEye, xrProj);
     }
 
     // --- Main color pass ---
@@ -3684,7 +3694,11 @@ void MetalRenderer::endFrame() {
                 [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
                 AOTemporalUniforms tP = {};
                 tP.prevViewProjection = impl->aoPrevViewProjection;
-                tP.alpha = impl->aoHistoryValid ? ssaoParams.temporal : 0.0f;
+                // Temporal history is single-view; with per-eye rendering the
+                // history would belong to the other eye. Disable blending (not
+                // the pass) until history goes per-view.
+                tP.alpha = (impl->aoHistoryValid && xrViewsToRender <= 1)
+                    ? ssaoParams.temporal : 0.0f;
                 [enc setBytes:&tP length:sizeof(tP) atIndex:1];
                 [enc dispatchThreadgroups:threadgroupsCovering(aoGrid, group)
                     threadsPerThreadgroup:group];
@@ -3822,7 +3836,7 @@ void MetalRenderer::endFrame() {
         [enc endEncoding];
 
         // Save this frame's resolved AO as next frame's temporal history.
-        if (aoResolvedInBlurTemp && impl->aoHistory) {
+        if (aoResolvedInBlurTemp && impl->aoHistory && xrViewsToRender <= 1) {
             id<MTLBlitCommandEncoder> aoBlit = [impl->currentCommandBuffer blitCommandEncoder];
             [aoBlit copyFromTexture:impl->aoBlurTemp toTexture:impl->aoHistory];
             [aoBlit endEncoding];
@@ -3836,8 +3850,38 @@ void MetalRenderer::endFrame() {
         if (lensWarpActive) {
             impl->compositePassDesc.colorAttachments[0].texture = impl->postLDRTexture;
         }
+        // XR: this view's content goes where the drawable's texture map says
+        // (texture index + array slice + viewport) — never "view v = slice v".
+        MTLRenderPassDescriptor* compositeDesc = impl->compositePassDesc;
+        bool haveXrTarget = false;
+        MTLViewport xrViewport = {};
+        NSUInteger xrSlice = 0;
+        id<MTLTexture> xrDepthDst = nil;
+        if (xrViewsToRender > 0) {
+            id<MTLTexture> xrColor = nil, xrDepth = nil;
+            if (impl->surface->xrViewTarget(viewPass, xrColor, xrDepth,
+                                            xrSlice, xrViewport) && xrColor) {
+                compositeDesc = [MTLRenderPassDescriptor renderPassDescriptor];
+                compositeDesc.colorAttachments[0].texture = xrColor;
+                compositeDesc.colorAttachments[0].slice = xrSlice;
+                compositeDesc.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+                compositeDesc.colorAttachments[0].storeAction = MTLStoreActionStore;
+                haveXrTarget = true;
+                xrDepthDst = xrDepth;
+#if TARGET_OS_VISION
+                static int xrCompBeat = 0;
+                if ((xrCompBeat++ % 180) == 0) {
+                    NSLog(@"[xr] composite view=%d texSlice=%lu viewport(%.0f,%.0f %'.0fx%.0f)",
+                          viewPass, (unsigned long)xrSlice,
+                          xrViewport.originX, xrViewport.originY,
+                          xrViewport.width, xrViewport.height);
+                }
+#endif
+            }
+        }
         id<MTLRenderCommandEncoder> compEncoder = [impl->currentCommandBuffer
-            renderCommandEncoderWithDescriptor:impl->compositePassDesc];
+            renderCommandEncoderWithDescriptor:compositeDesc];
+        if (haveXrTarget) [compEncoder setViewport:xrViewport];
         [compEncoder setRenderPipelineState:impl->compositePipeline];
         [compEncoder setFragmentTexture:(dofActive ? impl->dofTexture
                                                    : impl->sceneColorTexture)
@@ -3919,9 +3963,10 @@ void MetalRenderer::endFrame() {
             uiEncoder = lensEncoder;
         }
 
-        // Debug UI (ADR-0011) renders on top of the tone-mapped image.
+        // Debug UI (ADR-0011) renders on top of the tone-mapped image. One
+        // view only under XR — the HUD is not stereo-correct content.
 #ifdef RT_ENABLE_IMGUI
-        if (impl->imguiInitialized) {
+        if (impl->imguiInitialized && viewPass == 0) {
             ImGui::Render();
             ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(),
                                            impl->currentCommandBuffer,
@@ -3931,65 +3976,27 @@ void MetalRenderer::endFrame() {
 
         [uiEncoder endEncoding];
 
-        // Second eye (visionOS .layered): composite the same image into
-        // slice 1 through a real render pass. Blit mirrors between slices of
-        // the drawable are silently unreliable on device — one eye froze on a
-        // stale frame; a render pass is the path the display provably honors.
-        // Same image in both eyes = monoscopic by construction, until per-eye
-        // cameras arrive.
-        id<MTLTexture> secondEyeTex = impl->surface->secondColorTarget();
-        bool layeredSecondEye = impl->currentColorTarget.textureType == MTLTextureType2DArray
-            && impl->currentColorTarget.arrayLength > 1;
-#if TARGET_OS_VISION
-        // Heartbeat stage 3/3 ("composite"): names which second-eye path ran.
-        // If predict+override move but one eye is frozen, this line says
-        // whether the frozen eye ever received a render pass at all.
-        static int xrCompBeat = 0;
-        if (impl->xrAdapter && ((xrCompBeat++ % 90) == 0)) {
-            NSLog(@"[xr] composite #%llu layered=%d secondTex=%d slices=%lu",
-                  (unsigned long long)impl->xrAdapter->frameCounter,
-                  layeredSecondEye ? 1 : 0, secondEyeTex ? 1 : 0,
-                  (unsigned long)impl->currentColorTarget.arrayLength);
-        }
-#endif
-        if (layeredSecondEye || secondEyeTex) {
-            MTLRenderPassDescriptor* eyeDesc = [MTLRenderPassDescriptor renderPassDescriptor];
-            if (layeredSecondEye) {
-                eyeDesc.colorAttachments[0].texture = impl->currentColorTarget;
-                eyeDesc.colorAttachments[0].slice = 1;
-            } else {
-                eyeDesc.colorAttachments[0].texture = secondEyeTex;
-            }
-            eyeDesc.colorAttachments[0].loadAction = MTLLoadActionDontCare;
-            eyeDesc.colorAttachments[0].storeAction = MTLStoreActionStore;
-            id<MTLRenderCommandEncoder> eye = [impl->currentCommandBuffer
-                renderCommandEncoderWithDescriptor:eyeDesc];
-            [eye setRenderPipelineState:impl->compositePipeline];
-            [eye setFragmentTexture:(dofActive ? impl->dofTexture
-                                               : impl->sceneColorTexture)
-                            atIndex:0];
-            [eye setFragmentTexture:impl->ssrTexture atIndex:1];
-            [eye setFragmentTexture:(aoResolvedInBlurTemp ? impl->aoBlurTemp
-                                                          : impl->aoTexture)
-                            atIndex:2];
-            [eye setFragmentTexture:impl->depthTexture atIndex:3];
-            [eye setFragmentTexture:impl->viewNormalTexture atIndex:4];
-            if (bloomEnabled && impl->bloomUpsampleMips[0])
-                [eye setFragmentTexture:impl->bloomUpsampleMips[0] atIndex:5];
-            [eye setFragmentBytes:&impl->cameraUniforms
-                           length:sizeof(CameraUniforms) atIndex:0];
-            [eye setFragmentBytes:&compositeParams
-                           length:sizeof(compositeParams) atIndex:1];
-            [eye setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
-            [eye setFragmentTexture:(compEnvCube ? compEnvCube
-                                                 : impl->defaultCubemap)
-                            atIndex:6];
-            [eye setFragmentSamplerState:impl->linearClampSampler atIndex:0];
-            [eye setFragmentSamplerState:impl->equirectSampler atIndex:1];
-            [eye drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
-            [eye endEncoding];
+        // XR: the compositor reprojects using the drawable's DEPTH, per view.
+        // The scene depth buffer holds THIS view's depth (rendered with this
+        // view's compositor projection, reverse-Z — bit-compatible), so copy
+        // it to the view's mapped depth slice while it is still this view's.
+        if (haveXrTarget && xrDepthDst && impl->depthTexture
+            && xrDepthDst.pixelFormat == impl->depthTexture.pixelFormat
+            && xrDepthDst.width == impl->depthTexture.width
+            && xrDepthDst.height == impl->depthTexture.height) {
+            id<MTLBlitCommandEncoder> dblit =
+                [impl->currentCommandBuffer blitCommandEncoder];
+            [dblit copyFromTexture:impl->depthTexture sourceSlice:0 sourceLevel:0
+                      sourceOrigin:MTLOriginMake(0, 0, 0)
+                        sourceSize:MTLSizeMake(impl->depthTexture.width,
+                                               impl->depthTexture.height, 1)
+                         toTexture:xrDepthDst destinationSlice:xrSlice
+                  destinationLevel:0
+                 destinationOrigin:MTLOriginMake(0, 0, 0)];
+            [dblit endEncoding];
         }
     }
+    }  // --- end per-view render loop ---
 
     // Headless frame capture (RT_FRAME_DUMP) — copy the composited drawable
     // before present, then write it out once the GPU finishes.
