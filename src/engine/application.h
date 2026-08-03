@@ -118,6 +118,8 @@ private:
     // systems through FrameContext. Inert (active=false) without a headset.
     XrBackend* xr = nullptr;
     XrState xrState;
+    std::vector<XrInputEvent> xrInputScratch;  // per-frame drain buffer
+    double xrPinchSeconds = 0.0;               // current pinch hold duration
     RenderView view;
     StateStack stateStack;
     bool debugOverlayActive = false;

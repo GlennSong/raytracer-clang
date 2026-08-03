@@ -34,6 +34,7 @@ public:
     void bindButton(const std::string& action, KeyCode key);
     void bindButton(const std::string& action, MouseButton button);
     void bindButton(const std::string& action, GamepadButton button);
+    void bindButton(const std::string& action, XrButton button);  // pinch etc.
     void bindAxis(const std::string& axis, KeyCode key, Real scale);
     // Bind an analog gamepad axis (stick/trigger) to a named axis. Bindings are
     // device-relative ("left stick X"); the player layer routes a hardware pad
@@ -78,6 +79,7 @@ private:
     static int encodeKey(KeyCode key);
     static int encodeMouse(MouseButton button);
     static int encodeGamepadButton(GamepadButton button);
+    static int encodeXrButton(XrButton button);
     Real applyDeadzone(Real value) const;
     bool anyBoundSourceIn(const std::string& action,
                           const std::unordered_set<int>& sources) const;

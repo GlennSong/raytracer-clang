@@ -48,7 +48,10 @@ struct XrState {
     Vec3 gazeDir;
     bool pinchHeld = false;
     bool pinchBegan = false;   // edge: went down this frame
-    bool pinchEnded = false;   // edge: released this frame
+    bool pinchEnded = false;   // edge: RELEASED this frame (cancels excluded)
+    double pinchHeldSeconds = 0.0;  // duration of the current/last hold —
+                                    // lets gameplay separate a quick pinch
+                                    // (teleport) from a long hold (menu)
 
     // WORLD-space mirror of the gaze ray, written by XrCameraSystem after the
     // locomotion base is composed. Gameplay (teleport targeting) reads these.

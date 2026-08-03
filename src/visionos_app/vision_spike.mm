@@ -43,10 +43,25 @@
 #include "../log.h"
 #include "../renderer/hosted_window.h"
 
+#include "../engine/xr/xr_backend.h"
+
+#include <atomic>
 #include <fstream>
 #include <memory>
+#include <mutex>
+#include <string>
 
 namespace {
+
+// Spatial-input handoff: the SwiftUI host pushes pinch events from the main
+// actor; the engine's XR backend (set while rt_vision_spike_run is alive)
+// consumes them. Events arriving while the engine is down are dropped.
+std::atomic<engine::XrBackend*> gXrInput{nullptr};
+
+// The level the NEXT rt_vision_spike_run boots (menu-selected). Guarded by a
+// mutex because the menu writes from the main actor.
+std::mutex gLevelMutex;
+std::string gLevelName = "arena";
 
 // Boots the engine: points asset resolution at the bundle, loads arena.json,
 // and pushes the same ArenaState the desktop viewer runs.
@@ -63,7 +78,18 @@ std::unique_ptr<engine::Application> bootEngine(cp_layer_renderer_t layerRendere
     engine::setAssetRoot(root);
     NSLog(@"[vision] asset root: %s", root.c_str());
 
-    const std::string levelPath = engine::assetPath("assets/levels/arena.json");
+    std::string levelName;
+    {
+        std::lock_guard<std::mutex> lock(gLevelMutex);
+        levelName = gLevelName;
+    }
+    std::string levelPath =
+        engine::assetPath("assets/levels/" + levelName + ".json");
+    if (!std::ifstream(levelPath).good()) {
+        NSLog(@"[vision] level '%s' not found — falling back to arena",
+              levelName.c_str());
+        levelPath = engine::assetPath("assets/levels/arena.json");
+    }
     if (!std::ifstream(levelPath).good()) {
         NSLog(@"[vision] FATAL: level not found at %s — is assets/ in the bundle?",
               levelPath.c_str());
@@ -251,6 +277,10 @@ void rt_vision_spike_run(cp_layer_renderer_t layerRenderer) {
         // metal_renderer.mm, reached through MetalRenderer::beginFrame/endFrame.
         // That is the point of the PresentationSurface seam: this loop is the
         // same shape it would be on any platform.
+        // Publish the XR input funnel now that the engine (and its backend)
+        // exist; the Swift host's spatial events start flowing into gameplay.
+        gXrInput.store(app->renderer().xrBackend());
+
         uint64_t frameCounter = 0;
         while (cp_layer_renderer_get_state(layerRenderer) != cp_layer_renderer_state_invalidated) {
             @autoreleasepool {
@@ -265,7 +295,32 @@ void rt_vision_spike_run(cp_layer_renderer_t layerRenderer) {
                 }
             }
         }
+        gXrInput.store(nullptr);
         NSLog(@"[vision] layer invalidated - shutting down");
         app->end();
     }
+}
+
+void rt_vision_xr_pinch(int phase,
+                        double ox, double oy, double oz,
+                        double dx, double dy, double dz) {
+    engine::XrBackend* backend = gXrInput.load();
+    if (!backend) return;
+    engine::XrInputEvent event;
+    switch (phase) {
+        case 0: event.kind = engine::XrInputEvent::Kind::PinchBegan; break;
+        case 1: event.kind = engine::XrInputEvent::Kind::PinchMoved; break;
+        case 2: event.kind = engine::XrInputEvent::Kind::PinchEnded; break;
+        default: event.kind = engine::XrInputEvent::Kind::PinchCancelled; break;
+    }
+    event.rayOrigin = engine::Vec3(ox, oy, oz);
+    event.rayDir = engine::Vec3(dx, dy, dz);
+    backend->pushInput(event);
+}
+
+void rt_vision_set_level(const char* name) {
+    if (!name || !*name) return;
+    std::lock_guard<std::mutex> lock(gLevelMutex);
+    gLevelName = name;
+    NSLog(@"[vision] next level: %s", name);
 }

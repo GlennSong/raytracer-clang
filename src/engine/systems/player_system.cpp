@@ -21,6 +21,9 @@ void PlayerSystem::onStart(FrameContext& ctx) {
     // crosshair — fly somewhere in the freecam, look at a street, press T,
     // and you are PLAYING there (the camera re-attaches automatically).
     ctx.actions.bindButton("player_teleport", KeyCode::T);
+    // XR: the same action fires on a quick gaze-pinch (see update() — the
+    // release edge, so a long HOLD can mean something else to the shell).
+    ctx.actions.bindButton("player_teleport", XrButton::Pinch);
     // First <-> third person on foot. V is also CameraSystem's viewport-cycle
     // key; see the placed-camera guard in update().
     ctx.actions.bindButton("player_camera_toggle", KeyCode::V);
@@ -87,31 +90,45 @@ void PlayerSystem::respawn(CharacterId characterId, bool manual) {
 }
 
 void PlayerSystem::update(FrameContext& ctx) {
-    // Point-and-teleport (T): ray from the eye through the crosshair onto
-    // whatever physics surface it hits — deck, rooftop, terrain — then stand
-    // the player there and re-attach the camera so play continues in place.
-    if (ctx.actions.pressed("player_teleport") && ctx.world.alive(playerEntity)) {
-        if (auto* cc = ctx.world.get<CharacterController>(playerEntity)) {
-            if (cc->characterId != INVALID_CHARACTER) {
-                Vec3 hit;
-                if (physicsSys.physicsWorld().castRay(
-                        camera.eye, camera.forward() * 4000.0, hit)) {
-                    const Vec3 stand = hit + Vec3(0, 1.4, 0);
-                    physicsSys.physicsWorld().setCharacterPosition(
-                        cc->characterId, stand);
-                    if (auto* t = ctx.world.get<Transform>(playerEntity)) {
-                        t->position = stand;
-                        if (auto* pt = ctx.world.get<PrevTransform>(playerEntity))
-                            pt->value = *t;   // no interpolation streak
-                    }
-                    fall.onGrounded(stand.y);   // new baseline: a teleport is
-                                                // never a "fall" to respawn from
-                    camera.positionLocked = true;   // re-attach: back to playing
-                    LOG_INFO << "Teleported to (" << hit.x << ", " << hit.y
-                             << ", " << hit.z << ")";
-                }
-            }
+    // Point-and-teleport: ray onto whatever physics surface it hits — deck,
+    // rooftop, terrain — then stand the player there and re-attach the camera
+    // so play continues in place. Two triggers, one landing:
+    //   - Desktop (T press): ray from the eye through the crosshair.
+    //   - XR (quick pinch RELEASE, < 0.4s): the gaze ray at the pinch. The
+    //     release edge — not the press — so a long hold stays free for shell
+    //     gestures (the host's hold-for-menu), and cancels never teleport.
+    auto teleportAlong = [&](const Vec3& origin, const Vec3& dir) {
+        if (!ctx.world.alive(playerEntity)) return;
+        auto* cc = ctx.world.get<CharacterController>(playerEntity);
+        if (!cc || cc->characterId == INVALID_CHARACTER) return;
+        Vec3 hit;
+        if (!physicsSys.physicsWorld().castRay(origin, dir * 4000.0, hit)) return;
+        const Vec3 stand = hit + Vec3(0, 1.4, 0);
+        physicsSys.physicsWorld().setCharacterPosition(cc->characterId, stand);
+        if (auto* t = ctx.world.get<Transform>(playerEntity)) {
+            t->position = stand;
+            if (auto* pt = ctx.world.get<PrevTransform>(playerEntity))
+                pt->value = *t;   // no interpolation streak
         }
+        fall.onGrounded(stand.y);   // new baseline: a teleport is
+                                    // never a "fall" to respawn from
+        camera.positionLocked = true;   // re-attach: back to playing
+        LOG_INFO << "Teleported to (" << hit.x << ", " << hit.y
+                 << ", " << hit.z << ")";
+    };
+    if (ctx.xr.active) {
+        if (ctx.actions.released("player_teleport") && ctx.xr.pinchEnded
+            && ctx.xr.pinchHeldSeconds < 0.4 && ctx.xr.gazeValid) {
+            // The gaze ray is in tracking-origin space; world = base + ray,
+            // where the base is the same seed the render side uses (the game
+            // camera's position dropped to the floor). Pure translation, so
+            // the direction passes through unchanged. XrCameraSystem will own
+            // this composition properly (plan Phase B).
+            Vec3 base(camera.eye.x, 0.0, camera.eye.z);
+            teleportAlong(base + ctx.xr.gazeOrigin, ctx.xr.gazeDir);
+        }
+    } else if (ctx.actions.pressed("player_teleport")) {
+        teleportAlong(camera.eye, camera.forward());
     }
 
     // Respawn: snap the character back to its spawn (and re-settle under gravity). Works even when

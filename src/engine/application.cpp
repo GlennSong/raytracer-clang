@@ -158,6 +158,46 @@ void Application::runFrame() {
                 stateStack.onEvent(event, ctx);
             }
         }
+        // XR spatial input: drain the backend's thread-safe queue, fold the
+        // gaze ray + pinch edges into xrState, and re-issue pinch as XrButton
+        // events through the exact same routing as window events — game code
+        // binds "player_teleport" to XrButton::Pinch like any key.
+        if (xr) {
+            xrState.pinchBegan = false;
+            xrState.pinchEnded = false;
+            xrInputScratch.clear();
+            xr->pollInput(xrInputScratch);
+            for (const XrInputEvent& e : xrInputScratch) {
+                xrState.gazeValid = true;
+                xrState.gazeOrigin = e.rayOrigin;
+                xrState.gazeDir = e.rayDir;
+                Event ev(EventType::XrButtonPressed);
+                ev.xrButton = XrButton::Pinch;
+                switch (e.kind) {
+                    case XrInputEvent::Kind::PinchBegan:
+                        xrState.pinchHeld = true;
+                        xrState.pinchBegan = true;
+                        xrPinchSeconds = 0.0;
+                        break;
+                    case XrInputEvent::Kind::PinchMoved:
+                        continue;   // ray already captured above; no edge
+                    case XrInputEvent::Kind::PinchEnded:
+                        xrState.pinchHeld = false;
+                        xrState.pinchEnded = true;   // a REAL release edge
+                        ev.type = EventType::XrButtonReleased;
+                        break;
+                    case XrInputEvent::Kind::PinchCancelled:
+                        xrState.pinchHeld = false;   // clears held state, but
+                        ev.type = EventType::XrButtonReleased;  // no pinchEnded:
+                        break;                        // gameplay ignores cancels
+                }
+                inputMap.processEvent(ev);
+                playerInputs.routeEvent(ev);
+                stateStack.onEvent(ev, ctx);
+            }
+            if (xrState.pinchHeld) xrPinchSeconds += frameDelta;
+            xrState.pinchHeldSeconds = xrPinchSeconds;
+        }
         playerInputs.updateGamepads(window->getGamepads());
         inputMap.updateGamepad(window->getGamepads()[0]);
         stateStack.forEachActive([&](AppState& state) { state.update(ctx); });

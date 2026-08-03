@@ -19,6 +19,20 @@ extern "C" {
 // `LayerRenderer` — Swift's value and this parameter are the same object.
 void rt_vision_spike_run(cp_layer_renderer_t layerRenderer);
 
+// Spatial input bridge. The SwiftUI host forwards CompositorLayer spatial
+// events (gaze/selection ray + pinch phase) here; the engine consumes them
+// through its XR backend queue. Safe from any thread; a no-op while the
+// engine is not running. phase: 0=began 1=moved 2=ended 3=cancelled.
+// Ray origin/direction are in the immersive space's tracking-origin frame.
+void rt_vision_xr_pinch(int phase,
+                        double ox, double oy, double oz,
+                        double dx, double dy, double dz);
+
+// Level selection for the NEXT rt_vision_spike_run (the menu sets it before
+// reopening the immersive space). `name` is a level shortname resolved as
+// assets/levels/<name>.json inside the bundle. Copies the string.
+void rt_vision_set_level(const char* name);
+
 #ifdef __cplusplus
 }
 #endif

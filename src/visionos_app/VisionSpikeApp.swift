@@ -54,34 +54,121 @@ struct SpikeLayerConfiguration: CompositorLayerConfiguration {
     }
 }
 
-/// Launcher window. The app used to be immersive-space-only, auto-opened via
-/// CPSceneSessionRoleImmersiveSpaceApplication — on visionOS 26.3 that path
-/// opens the space and runs the layer (frames accepted, anchors attached) but
-/// never composites it to the displays: black void, hands breaking through.
-/// Apple's own Metal template — window first, user-triggered
-/// openImmersiveSpace — displays fine on the same headset, so the engine now
-/// enters the arena the way the platform actually exercises.
+/// Shell state shared between the launcher window and the immersive space's
+/// spatial-event handler. The handler runs where SwiftUI environment actions
+/// don't reach, so the window deposits its open/dismiss actions here — the
+/// MetalCheck template's AppModel pattern.
+@MainActor
+final class XrShellModel: ObservableObject {
+    static let shared = XrShellModel()
+    @Published var inArena = false
+    var dismissSpace: (() async -> Void)?
+}
+
+/// Launcher window AND in-game menu: pick a scene, enter it, and return here
+/// with a long pinch (~1s) from inside the arena.
 struct LaunchView: View {
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
-    @State private var inArena = false
+    @ObservedObject private var shell = XrShellModel.shared
+    @State private var selectedLevel = "arena"
+
+    /// Level shortnames from the bundled assets/levels/*.json (the sidecar
+    /// .cameras.json files are not levels).
+    static let levels: [String] = {
+        guard let root = Bundle.main.resourceURL?
+            .appendingPathComponent("assets/levels") else { return ["arena"] }
+        let files = (try? FileManager.default
+            .contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+        let names = files
+            .filter { $0.pathExtension == "json" }
+            .map { $0.deletingPathExtension().lastPathComponent }
+            .filter { !$0.hasSuffix(".cameras") && !$0.hasSuffix(".json") }
+        return names.isEmpty ? ["arena"] : names.sorted()
+    }()
 
     var body: some View {
         VStack(spacing: 16) {
             Text("Raytracer")
                 .font(.title)
-            Button(inArena ? "Leave Arena" : "Enter Arena") {
+            Picker("Scene", selection: $selectedLevel) {
+                ForEach(Self.levels, id: \.self) { Text($0).tag($0) }
+            }
+            .pickerStyle(.wheel)
+            .frame(height: 120)
+            .disabled(shell.inArena)
+            Button(shell.inArena ? "Leave \(selectedLevel)" : "Enter \(selectedLevel)") {
                 Task { @MainActor in
-                    if inArena {
+                    if shell.inArena {
                         await dismissImmersiveSpace()
-                        inArena = false
-                    } else if await openImmersiveSpace(id: "arena") == .opened {
-                        inArena = true
+                        shell.inArena = false
+                    } else {
+                        rt_vision_set_level(selectedLevel)
+                        if await openImmersiveSpace(id: "arena") == .opened {
+                            shell.inArena = true
+                        }
                     }
                 }
             }
+            Text("In the scene: quick pinch teleports to where you look;\nhold a pinch ~1s to come back to this menu.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
         .padding(32)
+        .onAppear {
+            shell.dismissSpace = { [dismissImmersiveSpace] in
+                await dismissImmersiveSpace()
+                XrShellModel.shared.inArena = false
+            }
+        }
+    }
+}
+
+/// Forwards CompositorLayer spatial events to the engine (gaze ray + pinch
+/// phases) and owns the long-pinch shell gesture: hold ~1s to leave the scene
+/// for the menu. Runs on the main actor.
+@MainActor
+final class SpatialEventRelay {
+    static let shared = SpatialEventRelay()
+    private var activePinchStart: [SpatialEventCollection.Event.ID: Date] = [:]
+    private var menuTriggered = false
+    private let menuHoldSeconds: TimeInterval = 1.0
+
+    func handle(_ events: SpatialEventCollection) {
+        for event in events {
+            let ray = event.selectionRay
+            let origin = ray?.origin ?? .zero
+            let direction = ray?.direction ?? .init(x: 0, y: 0, z: -1)
+            switch event.phase {
+            case .active:
+                if activePinchStart[event.id] == nil {
+                    activePinchStart[event.id] = Date()
+                    menuTriggered = false
+                    rt_vision_xr_pinch(0, origin.x, origin.y, origin.z,
+                                       direction.x, direction.y, direction.z)
+                } else {
+                    rt_vision_xr_pinch(1, origin.x, origin.y, origin.z,
+                                       direction.x, direction.y, direction.z)
+                    if !menuTriggered,
+                       let start = activePinchStart[event.id],
+                       Date().timeIntervalSince(start) >= menuHoldSeconds {
+                        menuTriggered = true
+                        Task { await XrShellModel.shared.dismissSpace?() }
+                    }
+                }
+            case .ended:
+                activePinchStart[event.id] = nil
+                rt_vision_xr_pinch(2, origin.x, origin.y, origin.z,
+                                   direction.x, direction.y, direction.z)
+            case .cancelled:
+                activePinchStart[event.id] = nil
+                rt_vision_xr_pinch(3, origin.x, origin.y, origin.z,
+                                   direction.x, direction.y, direction.z)
+            @unknown default:
+                break
+            }
+        }
     }
 }
 
@@ -91,26 +178,21 @@ struct VisionSpikeApp: App {
         WindowGroup {
             LaunchView()
         }
-        .defaultSize(width: 360, height: 240)
+        .defaultSize(width: 400, height: 340)
 
         ImmersiveSpace(id: "arena") {
             CompositorLayer(configuration: SpikeLayerConfiguration()) { layerRenderer in
-                // TEMPORARY DIAGNOSTIC: route to the ported Apple-template
-                // renderer (rotating cube on dark green) instead of the
-                // engine. Green cube visible -> the app shell and project are
-                // fine and the delta is the engine's frame structure. Black ->
-                // the app/project configuration is at fault; no render code is.
-                let useTemplateRenderer = false
-                if useTemplateRenderer {
-                    TemplateRenderer.start(layerRenderer)
-                } else {
-                    // rt_vision_spike_run blocks for the lifetime of the space,
-                    // so it must not run on the main actor — the compositor
-                    // would starve.
-                    Thread.detachNewThread {
-                        Thread.current.name = "rt.vision.render"
-                        rt_vision_spike_run(layerRenderer)
+                layerRenderer.onSpatialEvent = { events in
+                    Task { @MainActor in
+                        SpatialEventRelay.shared.handle(events)
                     }
+                }
+                // rt_vision_spike_run blocks for the lifetime of the space,
+                // so it must not run on the main actor — the compositor
+                // would starve.
+                Thread.detachNewThread {
+                    Thread.current.name = "rt.vision.render"
+                    rt_vision_spike_run(layerRenderer)
                 }
             }
         }
