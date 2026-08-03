@@ -47,6 +47,7 @@
 
 #include <atomic>
 #include <fstream>
+#include <unistd.h>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -77,6 +78,12 @@ std::unique_ptr<engine::Application> bootEngine(cp_layer_renderer_t layerRendere
     const std::string root = [[NSBundle mainBundle] bundlePath].UTF8String;
     engine::setAssetRoot(root);
     NSLog(@"[vision] asset root: %s", root.c_str());
+
+    // Some levels write relative cache directories (terrain/coast bakes).
+    // The sandbox working directory is NOT writable — creating "cache" threw
+    // an uncaught filesystem_error and killed the app. Park the CWD in the
+    // app's temp dir so every relative write lands somewhere legal.
+    chdir(NSTemporaryDirectory().UTF8String);
 
     std::string levelName;
     {

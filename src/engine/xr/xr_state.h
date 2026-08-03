@@ -38,6 +38,11 @@ struct XrState {
                               // [xr] heartbeat shows up as a mismatch here
 
     Mat4 originFromHead;    // predicted head pose for this frame's update
+    // World position of the tracking origin (the locomotion base). ORIGIN-
+    // space rays become world rays by adding this (the base is translation-
+    // only). Filled by the backend; XrCameraSystem will own it in Phase B.
+    bool originBaseValid = false;
+    Vec3 originBase;
     int viewCount = 0;      // 0 (inactive), 1 (simulator), 2 (device)
     XrViewPose views[2];
 

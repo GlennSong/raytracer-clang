@@ -94,8 +94,7 @@ struct LaunchView: View {
             Picker("Scene", selection: $selectedLevel) {
                 ForEach(Self.levels, id: \.self) { Text($0).tag($0) }
             }
-            .pickerStyle(.wheel)
-            .frame(height: 120)
+            .pickerStyle(.menu)
             .disabled(shell.inArena)
             Button(shell.inArena ? "Leave \(selectedLevel)" : "Enter \(selectedLevel)") {
                 Task { @MainActor in
@@ -110,7 +109,7 @@ struct LaunchView: View {
                     }
                 }
             }
-            Text("In the scene: quick pinch teleports to where you look;\nhold a pinch ~1s to come back to this menu.")
+            Text("In the scene: pinch and hold to aim (a ring marks the spot),\nrelease to teleport there. Hold ~1.2s to come back to this menu.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -133,7 +132,7 @@ final class SpatialEventRelay {
     static let shared = SpatialEventRelay()
     private var activePinchStart: [SpatialEventCollection.Event.ID: Date] = [:]
     private var menuTriggered = false
-    private let menuHoldSeconds: TimeInterval = 1.0
+    private let menuHoldSeconds: TimeInterval = 1.2
 
     func handle(_ events: SpatialEventCollection) {
         for event in events {

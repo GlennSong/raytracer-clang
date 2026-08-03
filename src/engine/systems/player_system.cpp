@@ -117,15 +117,31 @@ void PlayerSystem::update(FrameContext& ctx) {
                  << ", " << hit.z << ")";
     };
     if (ctx.xr.active) {
+        // While the pinch is held, show WHERE it will land: raycast the live
+        // gaze and ring the hit point. The marker is the aim feedback that
+        // makes blink teleport legible — pinch, sweep your gaze, release.
+        if (ctx.xr.pinchHeld && ctx.xr.gazeValid && ctx.xr.originBaseValid) {
+            Vec3 origin = ctx.xr.originBase + ctx.xr.gazeOrigin;
+            Vec3 hit;
+            if (physicsSys.physicsWorld().castRay(origin, ctx.xr.gazeDir * 4000.0,
+                                                  hit)) {
+                const Vec3 up(0, 1, 0);
+                const Vec3 c = hit + Vec3(0, 0.03, 0);
+                const Vec3 teal(0.25, 0.9, 1.0);
+                ctx.debug.circle(c, up, 0.35, teal);
+                ctx.debug.circle(c, up, 0.18, teal);
+                ctx.debug.line(c, c + Vec3(0, 0.9, 0), teal);
+            }
+        }
+        // Teleport on a QUICK release (the marker is aimed while holding);
+        // longer holds belong to the shell (hold ≈1.2s exits to the menu),
+        // and cancels never teleport.
         if (ctx.actions.released("player_teleport") && ctx.xr.pinchEnded
-            && ctx.xr.pinchHeldSeconds < 0.4 && ctx.xr.gazeValid) {
-            // The gaze ray is in tracking-origin space; world = base + ray,
-            // where the base is the same seed the render side uses (the game
-            // camera's position dropped to the floor). Pure translation, so
-            // the direction passes through unchanged. XrCameraSystem will own
-            // this composition properly (plan Phase B).
-            Vec3 base(camera.eye.x, 0.0, camera.eye.z);
-            teleportAlong(base + ctx.xr.gazeOrigin, ctx.xr.gazeDir);
+            && ctx.xr.pinchHeldSeconds < 0.8 && ctx.xr.gazeValid
+            && ctx.xr.originBaseValid) {
+            // ORIGIN-space ray → world: the base is translation-only, so the
+            // direction passes through unchanged.
+            teleportAlong(ctx.xr.originBase + ctx.xr.gazeOrigin, ctx.xr.gazeDir);
         }
     } else if (ctx.actions.pressed("player_teleport")) {
         teleportAlong(camera.eye, camera.forward());

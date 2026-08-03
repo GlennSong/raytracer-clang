@@ -428,6 +428,7 @@ struct CompositorSurface final : PresentationSurface {
     int trackedViewWidth = 0, trackedViewHeight = 0;
     bool xrBaseValid = false;
     simd_float3 xrBase = {0, 0, 0};   // locomotion base: tracking origin in world
+    simd_float3 baseHintPrev = {0, 0, 0};  // last game-camera position seen
 
     bool xrTracking() const override { return trackedPoseValid; }
 
@@ -443,7 +444,20 @@ struct CompositorSurface final : PresentationSurface {
             // tracking origin is at the user's feet, so only the base's XZ
             // comes from the game camera and Y stays on the ground plane.
             xrBase = simd_make_float3(baseHint.x, 0.0f, baseHint.z);
+            baseHintPrev = baseHint;
             xrBaseValid = true;
+        } else {
+            // FOLLOW the game camera by deltas: when gameplay moves the
+            // camera (teleport, vehicles, elevators), the tracking origin
+            // moves with it — otherwise a teleport moves the character but
+            // the user stays put, which reads as "I pinched and the world
+            // glitched but I didn't go anywhere". Deltas (not absolutes)
+            // keep the user's real head motion free, and re-applying a zero
+            // delta is harmless, so no per-frame gating is needed.
+            xrBase.x += baseHint.x - baseHintPrev.x;
+            xrBase.y += baseHint.y - baseHintPrev.y;
+            xrBase.z += baseHint.z - baseHintPrev.z;
+            baseHintPrev = baseHint;
         }
         simd_float4x4 base = matrix_identity_float4x4;
         base.columns[3] = simd_make_float4(xrBase.x, xrBase.y, xrBase.z, 1.0f);
@@ -521,6 +535,11 @@ struct CompositorXrBackend final : engine::XrBackend {
 
         out.frameIndex = ++frameCounter;
         out.originFromHead = fromSimd(head);
+        // The locomotion base: where the tracking origin sits in the world.
+        // Gameplay composes world-space rays from it (teleport targeting).
+        out.originBaseValid = surface->xrBaseValid;
+        out.originBase = Vec3(surface->xrBase.x, surface->xrBase.y,
+                              surface->xrBase.z);
         out.viewCount = surface->trackedViewCount;
         for (int v = 0; v < out.viewCount; v++) {
             // ORIGIN-space eye pose for the predicted head.
