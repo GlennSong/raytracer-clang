@@ -147,6 +147,7 @@ add_library(engine_core STATIC
     src/engine/audio/sfx.cpp
     src/engine/systems/audio_system.cpp
     src/engine/systems/render_system.cpp
+    src/engine/systems/xr_camera_system.cpp
     src/engine/systems/debug_draw_system.cpp
     src/engine/systems/dev_control_system.cpp
     src/engine/systems/debug_overlay_system.cpp
@@ -756,6 +757,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
         src/visionos_app/VisionSpikeApp.swift
         src/visionos_app/TemplateRenderer.swift
         src/visionos_app/vision_spike.mm
+        src/renderer/gamepad_gc.mm
         src/visionos_app/vision_spike.h
         # The SAME Metal backend the macOS viewer uses. Presentation differs
         # (CompositorServices vs CAMetalLayer) and is handled behind
@@ -773,6 +775,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
         engine_core
         citysim
         "-framework CompositorServices"
+        "-framework GameController"
         "-framework Metal"
         "-framework MetalKit"
         "-framework ModelIO"

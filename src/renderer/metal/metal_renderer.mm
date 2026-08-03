@@ -792,6 +792,12 @@ struct MetalRenderer::Impl {
     id<MTLTexture> currentColorTarget;
     CameraState lastCameraState;      // for the per-frame XR re-derive
     bool hasLastCamera = false;
+    // Locomotion-base hint from XrCameraSystem (the GAMEPLAY camera, pre
+    // head-overwrite). Preferred over lastCameraState for base following —
+    // once the shared camera follows the head, using it as the hint would
+    // feed head motion straight back into the base.
+    simd_float3 xrBaseHint = {0, 0, 0};
+    bool xrBaseHintValid = false;
     id<MTLCommandBuffer> currentCommandBuffer;
     id<MTLRenderCommandEncoder> currentEncoder;
     MTLRenderPassDescriptor* currentPassDesc;   // scene pass (HDR offscreen)
@@ -2353,6 +2359,13 @@ XrBackend* MetalRenderer::xrBackend() {
 #endif
 }
 
+void MetalRenderer::setXrBaseHint(const Vec3& worldPosition) {
+    impl->xrBaseHint = simd_make_float3(static_cast<float>(worldPosition.x),
+                                        static_cast<float>(worldPosition.y),
+                                        static_cast<float>(worldPosition.z));
+    impl->xrBaseHintValid = true;
+}
+
 void MetalRenderer::setCamera(const CameraState& camera) {
     impl->lastCameraState = camera;
     impl->hasLastCamera = true;
@@ -2389,7 +2402,8 @@ void MetalRenderer::setCamera(const CameraState& camera) {
     // unaffected by the swap.
     {
         simd_float4x4 worldFromEye, xrProj;
-        if (impl->surface && impl->surface->xrView(camPos, worldFromEye, xrProj)) {
+        simd_float3 baseHint = impl->xrBaseHintValid ? impl->xrBaseHint : camPos;
+        if (impl->surface && impl->surface->xrView(baseHint, worldFromEye, xrProj)) {
             view = simd_inverse(worldFromEye);
             invView = worldFromEye;
             proj = xrProj;
@@ -3133,10 +3147,11 @@ void MetalRenderer::endFrame() {
     for (int viewPass = 0; viewPass < renderPassCount; viewPass++) {
     if (xrViewsToRender > 0) {
         simd_float4x4 worldFromEye, xrProj;
-        simd_float3 hint = simd_make_float3(
-            static_cast<float>(impl->lastCameraState.position.x),
-            static_cast<float>(impl->lastCameraState.position.y),
-            static_cast<float>(impl->lastCameraState.position.z));
+        simd_float3 hint = impl->xrBaseHintValid
+            ? impl->xrBaseHint
+            : simd_make_float3(static_cast<float>(impl->lastCameraState.position.x),
+                               static_cast<float>(impl->lastCameraState.position.y),
+                               static_cast<float>(impl->lastCameraState.position.z));
         if (impl->surface->xrViewCamera(viewPass, hint, worldFromEye, xrProj))
             applyXrCameraMatrices(impl->cameraUniforms, impl->currentCameraPos,
                                   worldFromEye, xrProj);

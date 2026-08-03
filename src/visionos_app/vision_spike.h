@@ -38,6 +38,13 @@ void rt_vision_set_level(const char* name);
 // before entering a scene.
 void rt_vision_set_world_scale(double scale);
 
+// Engine settings applied at the NEXT boot (menu-set): written into the
+// engine's Settings store before systems start, so anything data-driven —
+// daynight.timeOfDay, daynight.paused, clouds.*, exposure — is reachable
+// from the shell without engine changes. Copies the key.
+void rt_vision_set_pref_double(const char* key, double value);
+void rt_vision_set_pref_bool(const char* key, int value);
+
 #ifdef __cplusplus
 }
 #endif

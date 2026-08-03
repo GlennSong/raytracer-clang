@@ -44,10 +44,12 @@
 #include "../renderer/hosted_window.h"
 
 #include "../engine/xr/xr_backend.h"
+#include "../renderer/gamepad_gc.h"
 
 #include <atomic>
 #include <fstream>
 #include <unistd.h>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -70,6 +72,14 @@ std::string gLevelName = "arena";
 // are authored larger than strict metric — see baselineScale in
 // VisionSpikeApp.swift, the single place to tune it.
 std::atomic<double> gWorldScale{2.0};
+
+// Engine Settings overrides applied at boot. Defaults freeze the day/night
+// cycle at NOON — the cycle runs a full day in ~50s, and "everything went
+// dark before I could look around" is a terrible first minute in a headset.
+// The menu's Time-of-day picker overwrites these.
+std::mutex gPrefsMutex;
+std::map<std::string, double> gPrefsDouble = {{"daynight.timeOfDay", 0.5}};
+std::map<std::string, bool> gPrefsBool = {{"daynight.paused", true}};
 
 // Boots the engine: points asset resolution at the bundle, loads arena.json,
 // and pushes the same ArenaState the desktop viewer runs.
@@ -151,6 +161,16 @@ std::unique_ptr<engine::Application> bootEngine(cp_layer_renderer_t layerRendere
 
     app->renderer().xrWorldScale = static_cast<float>(gWorldScale.load());
     app->settings().setString("cameraMode", "fly");
+
+    // Menu-set engine settings, written before systems start so everything
+    // data-driven (day/night, clouds, exposure) picks them up at onStart.
+    {
+        std::lock_guard<std::mutex> lock(gPrefsMutex);
+        for (const auto& [key, value] : gPrefsDouble)
+            app->settings().setDouble(key, value);
+        for (const auto& [key, value] : gPrefsBool)
+            app->settings().setBool(key, value);
+    }
     // No editor on this platform, so the usual play/edit factory pair collapses
     // to just play; ArenaState's "back to editor" factory is intentionally null.
     app->pushState(std::make_unique<ArenaState>(app->windowRef(), app->renderer(),
@@ -296,9 +316,17 @@ void rt_vision_spike_run(cp_layer_renderer_t layerRenderer) {
         // exist; the Swift host's spatial events start flowing into gameplay.
         gXrInput.store(app->renderer().xrBackend());
 
+        // Bluetooth gamepads (PS5/Xbox/Switch pair straight to the headset):
+        // the same GCController backend the macOS viewer uses, injected
+        // through HostedWindow so the engine's bindings work unmodified.
+        auto* hostedWindow = static_cast<engine::HostedWindow*>(&app->windowRef());
+
         uint64_t frameCounter = 0;
         while (cp_layer_renderer_get_state(layerRenderer) != cp_layer_renderer_state_invalidated) {
             @autoreleasepool {
+                engine::GamepadSet pads{};
+                engine::gcPollGamepads(pads);
+                hostedWindow->setGamepads(pads);
                 app->runFrame();
 
                 // Proof of life at ~1 Hz: a frozen entity count means the sim
@@ -341,6 +369,20 @@ void rt_vision_set_world_scale(double scale) {
     if (scale < 0.05 || scale > 100.0) return;
     gWorldScale.store(scale);
     NSLog(@"[vision] world scale: %.2f", scale);
+}
+
+void rt_vision_set_pref_double(const char* key, double value) {
+    if (!key || !*key) return;
+    std::lock_guard<std::mutex> lock(gPrefsMutex);
+    gPrefsDouble[key] = value;
+    NSLog(@"[vision] pref %s = %.3f", key, value);
+}
+
+void rt_vision_set_pref_bool(const char* key, int value) {
+    if (!key || !*key) return;
+    std::lock_guard<std::mutex> lock(gPrefsMutex);
+    gPrefsBool[key] = (value != 0);
+    NSLog(@"[vision] pref %s = %s", key, value ? "true" : "false");
 }
 
 void rt_vision_set_level(const char* name) {

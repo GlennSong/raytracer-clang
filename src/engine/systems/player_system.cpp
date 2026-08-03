@@ -117,6 +117,20 @@ void PlayerSystem::update(FrameContext& ctx) {
                  << ", " << hit.z << ")";
     };
     if (ctx.xr.active) {
+        // Idle look-target: a faint ring where the HEAD is pointing, always
+        // on — "if I pinched now, roughly there". The pinch marker below is
+        // the precise gaze-driven version.
+        if (!ctx.xr.pinchHeld && ctx.xr.originBaseValid) {
+            const Mat4& h = ctx.xr.originFromHead;
+            Vec3 headPos(h.m[0][3], h.m[1][3], h.m[2][3]);
+            Vec3 headFwd(-h.m[0][2], -h.m[1][2], -h.m[2][2]);
+            Vec3 hit;
+            if (physicsSys.physicsWorld().castRay(ctx.xr.originBase + headPos,
+                                                  headFwd * 4000.0, hit)) {
+                ctx.debug.circle(hit + Vec3(0, 0.03, 0), Vec3(0, 1, 0), 0.2,
+                                 Vec3(0.45, 0.55, 0.6));
+            }
+        }
         // While the pinch is held, show WHERE it will land: raycast the live
         // gaze and ring the hit point. The marker is the aim feedback that
         // makes blink teleport legible — pinch, sweep your gaze, release.

@@ -490,6 +490,12 @@ public:
     // remains the mono truth (culling, audio, effects). Default: ignore.
     virtual void setXrViews(const XrRenderInfo& /*info*/) {}
 
+    // The GAMEPLAY camera's position — the locomotion-base hint for
+    // head-tracked surfaces. XrCameraSystem calls this each frame BEFORE it
+    // rewrites the shared camera to follow the head; the base-follow must
+    // track gameplay movement (teleports, vehicles), never head motion.
+    virtual void setXrBaseHint(const Vec3& /*worldPosition*/) {}
+
     virtual void setLights(const SceneLighting& lighting) = 0;
     virtual void drawMesh(MeshHandle handle, const Mat4& transform,
                           const RenderMaterial& material) = 0;

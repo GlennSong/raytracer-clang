@@ -73,7 +73,15 @@ struct LaunchView: View {
     @ObservedObject private var shell = XrShellModel.shared
     @State private var selectedLevel = "arena"
     @State private var worldScale = 1.0
+    @State private var timeOfDay = "Noon"
     private static let scales: [Double] = [1, 2, 5, 10, 25]
+    /// Engine day/night cycle: [0,1) with 0.5 = noon. "Cycling" resumes the
+    /// authored ~50s/day cycle; everything else freezes the sun.
+    private static let times: [(String, Double, Bool)] = [
+        ("Morning", 0.35, true), ("Noon", 0.5, true),
+        ("Sunset", 0.72, true), ("Night", 0.95, true),
+        ("Cycling", 0.35, false),
+    ]
     /// The engine's levels are authored larger than strict metric (the arena
     /// car is several units tall) — at 1 world-unit-per-meter a person reads
     /// knee-high. This baseline calibrates "Life size" to feel life-size in
@@ -111,6 +119,11 @@ struct LaunchView: View {
             }
             .pickerStyle(.menu)
             .disabled(shell.inArena)
+            Picker("Time of day", selection: $timeOfDay) {
+                ForEach(Self.times, id: \.0) { Text($0.0).tag($0.0) }
+            }
+            .pickerStyle(.menu)
+            .disabled(shell.inArena)
             Button(shell.inArena ? "Leave \(selectedLevel)" : "Enter \(selectedLevel)") {
                 Task { @MainActor in
                     if shell.inArena {
@@ -119,6 +132,10 @@ struct LaunchView: View {
                     } else {
                         rt_vision_set_level(selectedLevel)
                         rt_vision_set_world_scale(worldScale * Self.baselineScale)
+                        if let t = Self.times.first(where: { $0.0 == timeOfDay }) {
+                            rt_vision_set_pref_double("daynight.timeOfDay", t.1)
+                            rt_vision_set_pref_bool("daynight.paused", t.2 ? 1 : 0)
+                        }
                         if await openImmersiveSpace(id: "arena") == .opened {
                             shell.inArena = true
                         }
