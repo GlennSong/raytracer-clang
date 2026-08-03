@@ -64,6 +64,10 @@ std::atomic<engine::XrBackend*> gXrInput{nullptr};
 std::mutex gLevelMutex;
 std::string gLevelName = "arena";
 
+// World units per real meter for the next boot (menu-set; also scales the
+// spatial-event rays so gameplay targeting matches the render composition).
+std::atomic<double> gWorldScale{1.0};
+
 // Boots the engine: points asset resolution at the bundle, loads arena.json,
 // and pushes the same ArenaState the desktop viewer runs.
 //
@@ -142,6 +146,7 @@ std::unique_ptr<engine::Application> bootEngine(cp_layer_renderer_t layerRendere
         return nullptr;
     }
 
+    app->renderer().xrWorldScale = static_cast<float>(gWorldScale.load());
     app->settings().setString("cameraMode", "fly");
     // No editor on this platform, so the usual play/edit factory pair collapses
     // to just play; ArenaState's "back to editor" factory is intentionally null.
@@ -320,9 +325,19 @@ void rt_vision_xr_pinch(int phase,
         case 2: event.kind = engine::XrInputEvent::Kind::PinchEnded; break;
         default: event.kind = engine::XrInputEvent::Kind::PinchCancelled; break;
     }
-    event.rayOrigin = engine::Vec3(ox, oy, oz);
+    // Ray origins are real-world meters from the tracking origin; scale them
+    // into world units so targeting matches the scaled render composition.
+    // Directions are unit-free and pass through.
+    const double s = gWorldScale.load();
+    event.rayOrigin = engine::Vec3(ox * s, oy * s, oz * s);
     event.rayDir = engine::Vec3(dx, dy, dz);
     backend->pushInput(event);
+}
+
+void rt_vision_set_world_scale(double scale) {
+    if (scale < 0.05 || scale > 100.0) return;
+    gWorldScale.store(scale);
+    NSLog(@"[vision] world scale: %.2f", scale);
 }
 
 void rt_vision_set_level(const char* name) {

@@ -72,6 +72,8 @@ struct LaunchView: View {
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     @ObservedObject private var shell = XrShellModel.shared
     @State private var selectedLevel = "arena"
+    @State private var worldScale = 1.0
+    private static let scales: [Double] = [1, 2, 5, 10, 25]
 
     /// Level shortnames from the bundled assets/levels/*.json (the sidecar
     /// .cameras.json files are not levels).
@@ -96,6 +98,13 @@ struct LaunchView: View {
             }
             .pickerStyle(.menu)
             .disabled(shell.inArena)
+            Picker("Player scale", selection: $worldScale) {
+                ForEach(Self.scales, id: \.self) {
+                    Text($0 == 1 ? "Life size" : "\(Int($0))× giant").tag($0)
+                }
+            }
+            .pickerStyle(.menu)
+            .disabled(shell.inArena)
             Button(shell.inArena ? "Leave \(selectedLevel)" : "Enter \(selectedLevel)") {
                 Task { @MainActor in
                     if shell.inArena {
@@ -103,6 +112,7 @@ struct LaunchView: View {
                         shell.inArena = false
                     } else {
                         rt_vision_set_level(selectedLevel)
+                        rt_vision_set_world_scale(worldScale)
                         if await openImmersiveSpace(id: "arena") == .opened {
                             shell.inArena = true
                         }

@@ -33,6 +33,11 @@ void rt_vision_xr_pinch(int phase,
 // assets/levels/<name>.json inside the bundle. Copies the string.
 void rt_vision_set_level(const char* name);
 
+// World scale for the NEXT rt_vision_spike_run: world units traversed per
+// real meter (1 = life-size, 5 = feel five times taller). The menu sets it
+// before entering a scene.
+void rt_vision_set_world_scale(double scale);
+
 #ifdef __cplusplus
 }
 #endif

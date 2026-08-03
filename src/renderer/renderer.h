@@ -533,6 +533,12 @@ public:
     virtual void shutdownDebugUi() {}
 
     // Runtime toggles for post-processing effects (debug/tuning)
+    // XR world scale: how many world units the user traverses per real
+    // meter. >1 makes the user FEEL larger (wider virtual IPD, longer
+    // strides — the world reads smaller); 1 = life-size. Head-tracking
+    // backends apply it to head/eye translations; ignored elsewhere.
+    float xrWorldScale = 1.0f;
+
     bool ssaoEnabled = true;
     bool ssrEnabled = true;
     bool reflectionProbesEnabled = true;

@@ -164,6 +164,10 @@ struct PresentationSurface {
                               NSUInteger& /*slice*/,
                               MTLViewport& /*viewport*/) { return false; }
 
+    // World units per real meter for head-tracked composition (see
+    // Renderer::xrWorldScale). No-op for non-tracking surfaces.
+    virtual void setXrWorldScale(float /*scale*/) {}
+
     // Runs AFTER the command buffer is committed, for surfaces that bracket a
     // frame rather than just handing over a texture.
     //
@@ -429,6 +433,21 @@ struct CompositorSurface final : PresentationSurface {
     bool xrBaseValid = false;
     simd_float3 xrBase = {0, 0, 0};   // locomotion base: tracking origin in world
     simd_float3 baseHintPrev = {0, 0, 0};  // last game-camera position seen
+    float worldScale = 1.0f;   // world units per real meter (Renderer::xrWorldScale)
+
+    // Scale a rigid ORIGIN-space transform's translation by worldScale —
+    // rotation (and therefore IPD *direction*) is untouched; the distances
+    // the head and eyes travel are what make the user feel larger.
+    simd_float4x4 scaledOriginTransform(simd_float4x4 m) const {
+        m.columns[3].x *= worldScale;
+        m.columns[3].y *= worldScale;
+        m.columns[3].z *= worldScale;
+        return m;
+    }
+
+    void setXrWorldScale(float scale) override {
+        worldScale = (scale > 0.01f) ? scale : 1.0f;
+    }
 
     bool xrTracking() const override { return trackedPoseValid; }
 
@@ -440,10 +459,13 @@ struct CompositorSurface final : PresentationSurface {
                       simd_float4x4& projection) override {
         if (!trackedPoseValid || v < 0 || v >= trackedViewCount) return false;
         if (!xrBaseValid) {
-            // Stand where the level's camera stood, feet on the floor: the
-            // tracking origin is at the user's feet, so only the base's XZ
-            // comes from the game camera and Y stays on the ground plane.
-            xrBase = simd_make_float3(baseHint.x, 0.0f, baseHint.z);
+            // Stand where the level's player stood, feet on the ground. In
+            // play mode the game camera IS the player's eye, ~1.6m above
+            // whatever it stands on — so ground ≈ hint.y - 1.6, which also
+            // works on terrain and elevated city decks where the old
+            // "Y = 0" seed buried the user under the world. (Arena floor is
+            // at 0 with an eye ~1.6, so this changes nothing there.)
+            xrBase = simd_make_float3(baseHint.x, baseHint.y - 1.6f, baseHint.z);
             baseHintPrev = baseHint;
             xrBaseValid = true;
         } else {
@@ -461,7 +483,8 @@ struct CompositorSurface final : PresentationSurface {
         }
         simd_float4x4 base = matrix_identity_float4x4;
         base.columns[3] = simd_make_float4(xrBase.x, xrBase.y, xrBase.z, 1.0f);
-        worldFromEye = simd_mul(base, simd_mul(originFromDevice, deviceFromEye[v]));
+        worldFromEye = simd_mul(base, scaledOriginTransform(
+            simd_mul(originFromDevice, deviceFromEye[v])));
         projection = eyeProjection[v];
         return true;
     }
@@ -534,7 +557,9 @@ struct CompositorXrBackend final : engine::XrBackend {
         }
 
         out.frameIndex = ++frameCounter;
-        out.originFromHead = fromSimd(head);
+        // World scale applies at the source so all XrState consumers see
+        // world-metric values (matching what the render path composes).
+        out.originFromHead = fromSimd(surface->scaledOriginTransform(head));
         // The locomotion base: where the tracking origin sits in the world.
         // Gameplay composes world-space rays from it (teleport targeting).
         out.originBaseValid = surface->xrBaseValid;
@@ -542,9 +567,10 @@ struct CompositorXrBackend final : engine::XrBackend {
                               surface->xrBase.z);
         out.viewCount = surface->trackedViewCount;
         for (int v = 0; v < out.viewCount; v++) {
-            // ORIGIN-space eye pose for the predicted head.
-            out.views[v].originFromEye =
-                out.originFromHead * fromSimd(surface->deviceFromEye[v]);
+            // ORIGIN-space eye pose for the predicted head (scaled as one
+            // rigid transform so the IPD scales with the stride).
+            out.views[v].originFromEye = fromSimd(surface->scaledOriginTransform(
+                simd_mul(head, surface->deviceFromEye[v])));
             out.views[v].projection = fromSimd(surface->eyeProjection[v]);
             out.views[v].targetIndex = v;
             out.views[v].width = surface->trackedViewWidth;
@@ -2251,6 +2277,7 @@ void MetalRenderer::beginFrame() {
     // Acquire the drawable and build the pass descriptor up front so the debug
     // UI's new-frame (which needs the descriptor's formats) can run before
     // systems emit ImGui widgets in their render() hooks. endFrame() reuses it.
+    impl->surface->setXrWorldScale(xrWorldScale);
     impl->currentColorTarget = impl->surface->acquire() ? impl->surface->colorTarget() : nil;
 
     // Keep the offscreen targets the same size as the thing we present to.
