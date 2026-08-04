@@ -795,11 +795,36 @@ if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
     # Assets are COPIED INTO the bundle, and the app points the engine's asset
     # root at them at startup (engine/asset_root.h). Nothing resolves relative to
     # the working directory inside a sandboxed bundle.
+    #
+    # Downloaded assets (*.glb models, *.hdr env maps) are gitignored — a fresh
+    # worktree does not inherit them from the main checkout, and the bundle copy
+    # silently ships without them (levels that reference them then fail to load
+    # on device, where there is no fallback path outside the bundle).
+    foreach(_dlAsset
+            assets/models/DamagedHelmet.glb
+            assets/env/tree_lined_driveway_1k.hdr
+            assets/env/grasslands_sunset_1k.hdr)
+        if(NOT EXISTS "${CMAKE_SOURCE_DIR}/${_dlAsset}")
+            message(WARNING
+                "${_dlAsset} is missing (gitignored, not shared into worktrees) "
+                "— levels reference it and the app bundle will ship without it. "
+                "Copy it from the main checkout.")
+        endif()
+    endforeach()
     target_sources(VisionApp PRIVATE
         ${CMAKE_SOURCE_DIR}/assets ${CMAKE_SOURCE_DIR}/shaders)
     set_source_files_properties(
         ${CMAKE_SOURCE_DIR}/assets ${CMAKE_SOURCE_DIR}/shaders
         PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+
+    # The generated Info.plist (CMakeFiles/VisionApp.dir/Info.plist) is written
+    # at cmake-generate time only. Without this, editing Info.plist.in and
+    # rebuilding via xcodebuild ships the STALE plist — which is how the app
+    # once reached the device without NSHandsTrackingUsageDescription and was
+    # killed by ARKit at hand-tracking start. Registering the template as a
+    # configure dependency makes ZERO_CHECK re-run cmake when it changes.
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/src/visionos_app/Info.plist.in")
 
     set_target_properties(VisionApp PROPERTIES
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/src/visionos_app/Info.plist.in"

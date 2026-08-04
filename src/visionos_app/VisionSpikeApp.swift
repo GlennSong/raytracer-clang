@@ -130,15 +130,7 @@ struct LaunchView: View {
                         await dismissImmersiveSpace()
                         shell.inArena = false
                     } else {
-                        rt_vision_set_level(selectedLevel)
-                        rt_vision_set_world_scale(worldScale * Self.baselineScale)
-                        if let t = Self.times.first(where: { $0.0 == timeOfDay }) {
-                            rt_vision_set_pref_double("daynight.timeOfDay", t.1)
-                            rt_vision_set_pref_bool("daynight.paused", t.2 ? 1 : 0)
-                        }
-                        if await openImmersiveSpace(id: "arena") == .opened {
-                            shell.inArena = true
-                        }
+                        await enterScene()
                     }
                 }
             }
@@ -153,6 +145,25 @@ struct LaunchView: View {
                 await dismissImmersiveSpace()
                 XrShellModel.shared.inArena = false
             }
+            // Headless verification path: the simulator's synthetic taps never
+            // reach visionOS window UI, so scripted runs can't press the button.
+            //   xcrun simctl launch <udid> com.glennsong.raytracer.visionspike --auto-enter
+            if ProcessInfo.processInfo.arguments.contains("--auto-enter"), !shell.inArena {
+                Task { @MainActor in await enterScene() }
+            }
+        }
+    }
+
+    /// The button's "enter" half, shared with the --auto-enter launch argument.
+    private func enterScene() async {
+        rt_vision_set_level(selectedLevel)
+        rt_vision_set_world_scale(worldScale * Self.baselineScale)
+        if let t = Self.times.first(where: { $0.0 == timeOfDay }) {
+            rt_vision_set_pref_double("daynight.timeOfDay", t.1)
+            rt_vision_set_pref_bool("daynight.paused", t.2 ? 1 : 0)
+        }
+        if await openImmersiveSpace(id: "arena") == .opened {
+            shell.inArena = true
         }
     }
 }

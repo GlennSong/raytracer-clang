@@ -3,6 +3,7 @@
 #include "../engine/editor_bridge.h"
 #include "../engine/level_loader.h"
 #include "../engine/script_assets.h"
+#include "../engine/asset_root.h"
 #include "../engine/asset_manager.h"
 #include "../engine/systems/dev_control_system.h"
 #include "../engine/systems/camera_system.h"
@@ -322,7 +323,9 @@ void ArenaState::onEnter(FrameContext& ctx) {
     ctx.actions.bindButton("slot_1", KeyCode::Num1);   // bare hands (start here)
     ctx.actions.bindButton("slot_2", KeyCode::Num2);   // draw the gun
     {
-        std::string gun = readTextFile("assets/scripts/gun.lua");
+        // Through the asset root: inside a sandboxed bundle (visionOS) the CWD
+        // is a temp dir and the bare relative path finds nothing — no gun.
+        std::string gun = readTextFile(engine::assetPath("assets/scripts/gun.lua"));
         if (gun.empty()) {
             LOG_WARN << "assets/scripts/gun.lua not found; player has no gun";
         } else {
