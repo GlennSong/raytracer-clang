@@ -192,12 +192,17 @@ fragment float4 fragmentComposite(
     float3 hdrColor;
     if (depth <= 0.0) {   // reverse-Z background (cleared far value)
         // Sky pixel — re-derive the active environment directly in composite.
-        // Reverse-Z: the near plane is at clip z=1, the far plane at z=0, so the
-        // view ray runs from the z=1 point out to the z=0 point.
+        // Reverse-Z: the near plane is at clip z=1. The second point is taken
+        // at clip z=0.5, NOT the far plane (z=0): under XR the engine renders
+        // with the compositor's infinite-far projection, where unprojecting
+        // z=0 divides by w=0 — a NaN ray. saturate() masked that for the
+        // procedural sky (flat horizon color), but a cube sample along a NaN
+        // direction is undefined: black sky in the simulator, flickering
+        // garbage tiles on device. Any finite z gives the same ray direction.
         float2 ndc = float2(in.uv.x * 2.0 - 1.0, -(in.uv.y * 2.0 - 1.0));
         float4 nearWorld = camera.invViewProjection * float4(ndc, 1.0, 1.0);
-        float4 farWorld  = camera.invViewProjection * float4(ndc, 0.0, 1.0);
-        float3 rayDir = normalize(farWorld.xyz / farWorld.w - nearWorld.xyz / nearWorld.w);
+        float4 midWorld  = camera.invViewProjection * float4(ndc, 0.5, 1.0);
+        float3 rayDir = normalize(midWorld.xyz / midWorld.w - nearWorld.xyz / nearWorld.w);
         if (params.envMode == 1) {
             // HDR environment: a cheap cube lookup. The bake's orientation is
             // proven by tests/test_cube_faces.cpp (ADR-0017 Phase 3), so the
