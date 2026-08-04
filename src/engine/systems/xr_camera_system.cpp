@@ -29,6 +29,35 @@ void XrCameraSystem::update(FrameContext& ctx) {
         cam.aspectRatio = static_cast<float>(ctx.xr.views[0].width)
                         / static_cast<float>(ctx.xr.views[0].height);
     }
+
+    // (3) Hand skeletons, drawn as bones in the world: a line per joint to
+    // its parent, tips capped with a small marker. The user's real hands,
+    // rendered by the engine — left teal, right amber.
+    for (int handIndex = 0; handIndex < 2; handIndex++) {
+        const XrHand& hand = ctx.xr.hands[handIndex];
+        if (!hand.tracked) continue;
+        const Vec3 color = handIndex == 0 ? Vec3(0.3, 0.9, 0.9)
+                                          : Vec3(1.0, 0.7, 0.25);
+        Vec3 world[XR_HAND_JOINT_COUNT];
+        for (int j = 0; j < XR_HAND_JOINT_COUNT; j++) {
+            const Mat4& m = hand.joints[j].originFromJoint;
+            world[j] = ctx.xr.originBase + Vec3(m.m[0][3], m.m[1][3], m.m[2][3]);
+        }
+        for (int j = 0; j < XR_HAND_JOINT_COUNT; j++) {
+            if (!hand.joints[j].tracked) continue;
+            const int parent = xrHandJointParent(j);
+            if (parent >= 0 && hand.joints[parent].tracked)
+                ctx.debug.line(world[parent], world[j], color);
+        }
+        // Fingertip caps make individual finger motion easy to read.
+        static const int kTips[] = {XR_JOINT_THUMB_TIP, XR_JOINT_INDEX_TIP,
+                                    XR_JOINT_MIDDLE_TIP, XR_JOINT_RING_TIP,
+                                    XR_JOINT_LITTLE_TIP};
+        for (int tip : kTips) {
+            if (hand.joints[tip].tracked)
+                ctx.debug.sphere(world[tip], 0.008, color, 0, 8);
+        }
+    }
 }
 
 }  // namespace engine

@@ -25,6 +25,8 @@
          description must exist for ARKit to consider the request at all. -->
     <key>NSWorldSensingUsageDescription</key>
     <string>Tracks headset position so the scene stays anchored in your space.</string>
+    <key>NSHandsTrackingUsageDescription</key>
+    <string>Shows your hands in the world and enables hand gestures.</string>
     <!-- Window-first launch, matching Apple's Metal template. The previous
          immersive-space-only arrangement (CPSceneSessionRoleImmersiveSpaceApplication)
          opened the space and ran the layer on visionOS 26.3 but never

@@ -241,6 +241,7 @@ struct CompositorSurface final : PresentationSurface {
                                         // STOPS the provider — device anchors
                                         // then fail and no frame presents
     ar_world_tracking_provider_t worldTracking = nullptr;
+    ar_hand_tracking_provider_t handTracking = nullptr;
 
     cp_frame_t frame = nullptr;
     cp_drawable_array_t drawables = nullptr;  // all targets for this frame
@@ -257,6 +258,15 @@ struct CompositorSurface final : PresentationSurface {
         worldTracking = ar_world_tracking_provider_create(config);
         ar_data_providers_t providers = ar_data_providers_create();
         ar_data_providers_add_data_provider(providers, worldTracking);
+        // Hand skeletons (27 joints per hand). The first run prompts the user
+        // for permission; until granted the anchors just report untracked —
+        // world tracking is unaffected either way.
+        if (ar_hand_tracking_provider_is_supported()) {
+            handTracking = ar_hand_tracking_provider_create(
+                ar_hand_tracking_configuration_create());
+            ar_data_providers_add_data_provider(providers, handTracking);
+            NSLog(@"[xr] hand tracking provider added");
+        }
         arSession = ar_session_create();
         // Name the failure instead of guessing at it: if the provider never
         // reaches running, every anchor query fails and the device presents
@@ -537,6 +547,60 @@ struct CompositorXrBackend final : engine::XrBackend {
     uint64_t frameCounter = 0;
     std::mutex inputMutex;
     std::vector<engine::XrInputEvent> inputQueue;
+    // Reused hand-anchor scratch objects for get_latest_anchors.
+    ar_hand_anchor_t handAnchorLeft = nullptr;
+    ar_hand_anchor_t handAnchorRight = nullptr;
+
+    // Fill one XrHand from an ARKit hand anchor, mapping the runtime's named
+    // joints onto the engine's canonical XrHandJointId order. Joint transforms
+    // land in ORIGIN space with the world scale already applied.
+    void fillHand(engine::XrHand& out, ar_hand_anchor_t anchor) {
+        out.tracked = anchor && ar_hand_anchor_is_tracked(anchor);
+        if (!out.tracked) return;
+        static const ar_hand_skeleton_joint_name_t kJointNames[
+            engine::XR_HAND_JOINT_COUNT] = {
+            ar_hand_skeleton_joint_name_wrist,
+            ar_hand_skeleton_joint_name_forearm_wrist,
+            ar_hand_skeleton_joint_name_forearm_arm,
+            ar_hand_skeleton_joint_name_thumb_knuckle,
+            ar_hand_skeleton_joint_name_thumb_intermediate_base,
+            ar_hand_skeleton_joint_name_thumb_intermediate_tip,
+            ar_hand_skeleton_joint_name_thumb_tip,
+            ar_hand_skeleton_joint_name_index_finger_metacarpal,
+            ar_hand_skeleton_joint_name_index_finger_knuckle,
+            ar_hand_skeleton_joint_name_index_finger_intermediate_base,
+            ar_hand_skeleton_joint_name_index_finger_intermediate_tip,
+            ar_hand_skeleton_joint_name_index_finger_tip,
+            ar_hand_skeleton_joint_name_middle_finger_metacarpal,
+            ar_hand_skeleton_joint_name_middle_finger_knuckle,
+            ar_hand_skeleton_joint_name_middle_finger_intermediate_base,
+            ar_hand_skeleton_joint_name_middle_finger_intermediate_tip,
+            ar_hand_skeleton_joint_name_middle_finger_tip,
+            ar_hand_skeleton_joint_name_ring_finger_metacarpal,
+            ar_hand_skeleton_joint_name_ring_finger_knuckle,
+            ar_hand_skeleton_joint_name_ring_finger_intermediate_base,
+            ar_hand_skeleton_joint_name_ring_finger_intermediate_tip,
+            ar_hand_skeleton_joint_name_ring_finger_tip,
+            ar_hand_skeleton_joint_name_little_finger_metacarpal,
+            ar_hand_skeleton_joint_name_little_finger_knuckle,
+            ar_hand_skeleton_joint_name_little_finger_intermediate_base,
+            ar_hand_skeleton_joint_name_little_finger_intermediate_tip,
+            ar_hand_skeleton_joint_name_little_finger_tip,
+        };
+        ar_hand_skeleton_t skeleton = ar_hand_anchor_get_hand_skeleton(anchor);
+        simd_float4x4 originFromAnchor =
+            ar_hand_anchor_get_origin_from_anchor_transform(anchor);
+        for (int j = 0; j < engine::XR_HAND_JOINT_COUNT; j++) {
+            ar_skeleton_joint_t joint =
+                ar_hand_skeleton_get_joint_named(skeleton, kJointNames[j]);
+            if (!joint) { out.joints[j].tracked = false; continue; }
+            out.joints[j].tracked = ar_skeleton_joint_is_tracked(joint);
+            out.joints[j].originFromJoint =
+                fromSimd(surface->scaledOriginTransform(simd_mul(
+                    originFromAnchor,
+                    ar_skeleton_joint_get_anchor_from_joint_transform(joint))));
+        }
+    }
 
     bool active() const override { return surface && surface->trackedPoseValid; }
 
@@ -576,15 +640,30 @@ struct CompositorXrBackend final : engine::XrBackend {
             out.views[v].width = surface->trackedViewWidth;
             out.views[v].height = surface->trackedViewHeight;
         }
+        // Hand skeletons: latest tracked pose for both hands. Reports
+        // untracked until the user grants the hands permission.
+        out.hands[0].tracked = false;
+        out.hands[1].tracked = false;
+        if (surface->handTracking) {
+            if (!handAnchorLeft) handAnchorLeft = ar_hand_anchor_create();
+            if (!handAnchorRight) handAnchorRight = ar_hand_anchor_create();
+            if (ar_hand_tracking_provider_get_latest_anchors(
+                    surface->handTracking, handAnchorLeft, handAnchorRight)) {
+                fillHand(out.hands[0], handAnchorLeft);
+                fillHand(out.hands[1], handAnchorRight);
+            }
+        }
+
         out.active = true;
 
         if ((frameCounter % 90) == 0) {
-            NSLog(@"[xr] predict #%llu head(%.2f %.2f %.2f) fwd(%.2f %.2f %.2f) views %d",
+            NSLog(@"[xr] predict #%llu head(%.2f %.2f %.2f) fwd(%.2f %.2f %.2f) views %d hands L%d R%d",
                   (unsigned long long)out.frameIndex,
                   out.originFromHead.m[0][3], out.originFromHead.m[1][3],
                   out.originFromHead.m[2][3],
                   -out.originFromHead.m[0][2], -out.originFromHead.m[1][2],
-                  -out.originFromHead.m[2][2], out.viewCount);
+                  -out.originFromHead.m[2][2], out.viewCount,
+                  out.hands[0].tracked ? 1 : 0, out.hands[1].tracked ? 1 : 0);
         }
         return true;
     }

@@ -24,6 +24,66 @@
 
 namespace engine {
 
+// Canonical hand-skeleton joint indexing, mirroring the ARKit hand skeleton
+// (27 joints). Backends map their runtime's naming onto this order; anything
+// engine-side (visualizers, gesture recognizers) uses only these indices.
+enum XrHandJointId : int {
+    XR_JOINT_WRIST = 0,
+    XR_JOINT_FOREARM_WRIST,
+    XR_JOINT_FOREARM_ARM,
+    XR_JOINT_THUMB_KNUCKLE,
+    XR_JOINT_THUMB_INTERMEDIATE_BASE,
+    XR_JOINT_THUMB_INTERMEDIATE_TIP,
+    XR_JOINT_THUMB_TIP,
+    XR_JOINT_INDEX_METACARPAL,
+    XR_JOINT_INDEX_KNUCKLE,
+    XR_JOINT_INDEX_INTERMEDIATE_BASE,
+    XR_JOINT_INDEX_INTERMEDIATE_TIP,
+    XR_JOINT_INDEX_TIP,
+    XR_JOINT_MIDDLE_METACARPAL,
+    XR_JOINT_MIDDLE_KNUCKLE,
+    XR_JOINT_MIDDLE_INTERMEDIATE_BASE,
+    XR_JOINT_MIDDLE_INTERMEDIATE_TIP,
+    XR_JOINT_MIDDLE_TIP,
+    XR_JOINT_RING_METACARPAL,
+    XR_JOINT_RING_KNUCKLE,
+    XR_JOINT_RING_INTERMEDIATE_BASE,
+    XR_JOINT_RING_INTERMEDIATE_TIP,
+    XR_JOINT_RING_TIP,
+    XR_JOINT_LITTLE_METACARPAL,
+    XR_JOINT_LITTLE_KNUCKLE,
+    XR_JOINT_LITTLE_INTERMEDIATE_BASE,
+    XR_JOINT_LITTLE_INTERMEDIATE_TIP,
+    XR_JOINT_LITTLE_TIP,
+    XR_HAND_JOINT_COUNT,
+};
+
+// Bone connectivity: parent joint index per joint, -1 for the wrist root.
+// One shared table — draw a line joint→parent and you have the skeleton.
+inline int xrHandJointParent(int joint) {
+    switch (joint) {
+        case XR_JOINT_WRIST: return -1;
+        case XR_JOINT_FOREARM_WRIST: return XR_JOINT_WRIST;
+        case XR_JOINT_FOREARM_ARM: return XR_JOINT_FOREARM_WRIST;
+        case XR_JOINT_THUMB_KNUCKLE: return XR_JOINT_WRIST;
+        case XR_JOINT_INDEX_METACARPAL: return XR_JOINT_WRIST;
+        case XR_JOINT_MIDDLE_METACARPAL: return XR_JOINT_WRIST;
+        case XR_JOINT_RING_METACARPAL: return XR_JOINT_WRIST;
+        case XR_JOINT_LITTLE_METACARPAL: return XR_JOINT_WRIST;
+        default: return joint - 1;   // every chain is contiguous in the enum
+    }
+}
+
+struct XrHandJoint {
+    Mat4 originFromJoint;   // ORIGIN space (world = originBase + translation)
+    bool tracked = false;
+};
+
+struct XrHand {
+    bool tracked = false;
+    XrHandJoint joints[XR_HAND_JOINT_COUNT];
+};
+
 struct XrViewPose {
     Mat4 originFromEye;   // rigid: tracking origin -> this eye
     Mat4 projection;      // reverse-Z, off-axis
@@ -63,6 +123,10 @@ struct XrState {
     bool gazeWorldValid = false;
     Vec3 gazeWorldOrigin;
     Vec3 gazeWorldDir;
+
+    // Hand skeletons (ARKit hand tracking; requires user permission — hands
+    // stay untracked until granted). Index 0 = left, 1 = right.
+    XrHand hands[2];
 };
 
 }  // namespace engine
