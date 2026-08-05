@@ -8,6 +8,7 @@
 #include "../components.h"
 #include "../asset_manager.h"
 #include "../../log.h"
+#include "../../profile.h"
 
 #include <cstdint>
 #include <vector>
@@ -85,6 +86,7 @@ void ScriptSystem::update(FrameContext& ctx) {
 }
 
 void ScriptSystem::tick(World& world, double dt) {
+    RT_PROFILE_ZONE_NAMED("scriptTick");
     lua_State* L = luaState(vm_);
 
     std::vector<SpawnCommand> spawns;

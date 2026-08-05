@@ -4,6 +4,7 @@
 #include "../asset_manager.h"
 #include "../procgen/terrain_lod.h"
 #include "../procgen/noise.h"
+#include "../../profile.h"
 
 #include <algorithm>
 #include <cmath>
@@ -27,6 +28,7 @@ int64_t nodeKey(const LodNode& n) {
 }  // namespace
 
 void TerrainLodSystem::render(FrameContext& ctx) {
+    RT_PROFILE_ZONE_NAMED("terrainLod");
     // One CDLOD terrain per level. Grab the first config (if any).
     const TerrainLodConfig* cfg = nullptr;
     ctx.world.each<TerrainLodConfig>(
@@ -106,6 +108,7 @@ void TerrainLodSystem::render(FrameContext& ctx) {
 // the window. Bodies are owned directly (addMesh/removeBody), not via ECS, so there
 // is no entity/body churn. Runs only with physics (play mode).
 void TerrainLodSystem::fixedUpdate(FrameContext& ctx) {
+    RT_PROFILE_ZONE_NAMED("terrainColliders");
     if (!physics_) return;
 
     const TerrainLodConfig* cfg = nullptr;

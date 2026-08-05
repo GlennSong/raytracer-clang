@@ -1,6 +1,7 @@
 #include "physics_system.h"
 
 #include "../components.h"
+#include "../../profile.h"
 #include <unordered_map>
 #include <vector>
 
@@ -135,6 +136,7 @@ void PhysicsSystem::onStart(FrameContext& ctx) {
 }
 
 void PhysicsSystem::fixedUpdate(FrameContext& ctx) {
+    RT_PROFILE_ZONE_NAMED("physicsStep");
     createBodies(ctx.world);
     step(ctx.world, ctx.clock.fixedStep());
     publishContacts(ctx.world, ctx.events);

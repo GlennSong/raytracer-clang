@@ -1,5 +1,6 @@
 #include "level_loader.h"
 
+#include "../profile.h"
 #include "script_assets.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/script_modules.h"
@@ -1533,6 +1534,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                            const std::string& levelDir,
                            const std::string& tag = "veg",
                            const std::vector<engine::LotBuilding>* lots = nullptr) {
+    RT_PROFILE_ZONE_NAMED("loadVegetation");
     if (!veg.contains("species") || !veg["species"].is_array()) return;
 
     // A species variant is now a multi-part model (ADR-0032): each part is one
@@ -2164,6 +2166,7 @@ const std::vector<std::string>& LevelLoader::lastLoadedScriptFiles() {
 bool LevelLoader::load(const std::string& path,
                        World& world, Renderer& renderer, RenderView& view,
                        AssetManager& assets, bool editorMode) {
+    RT_PROFILE_ZONE_NAMED("levelLoad");
     g_loadedScriptFiles.clear();
     std::ifstream file(path);
     if (!file.is_open()) {
