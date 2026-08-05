@@ -358,7 +358,24 @@ took shortcuts worth paying down before the binding surface grows much more.
   different vertex counts", "leaves add vertices"). Brittle proxies that can
   break on tuning — smoke tests, not exact specs.
 
-- **Display encode is not separated on Vulkan or WebGPU.** Metal now applies the
+- **The visionOS branch was verified Metal-only; Vulkan/WebGPU are
+  compile-risk-unverified against its shared-code changes.** The branch's
+  renderer work is all Metal (`post_composite.metal` sky pass-through,
+  skybox cull fix, DoF/bloom NaN guards, visionOS depth-carry clamp), but it
+  also touched shared engine code every backend compiles:
+  `Application::settingsFilePath()`, the `DebugOverlaySystem::load/saveSettings`
+  split (which added bloom/AO/SSR *enable* toggles to settings — Vulkan/web will
+  now honor those keys at boot), and a `DayNightSystem` boot log. macOS +
+  Emscripten compiles cover most of the header risk, but no Vulkan compile has
+  seen it. Two lessons worth porting deliberately, not urgently:
+  (a) **one sky** — Metal's composite used to re-derive sky from
+  `invViewProjection` (a June workaround outliving its bug) and it broke under
+  XR's asymmetric infinite-far projections; Vulkan/WebGPU already pass the
+  skybox through (written post-lesson), so they need only a *visual* confirm
+  next time they run; (b) **infinite-far robustness** — any shader that
+  linearizes reverse-Z depth or unprojects clip z=0 NaNs under an infinite far
+  plane (Metal's DoF CoC and bloom did; grep the other backends' post stacks
+  when they next get attention). Metal now applies the
   sRGB transfer function exactly once, chosen per target: `CompositeUniforms
   .targetEncodesSRGB` (set from the presentation surface's pixel format) tells
   `encodeForTarget` in `shaders/metal/post_composite.metal` whether the shader or
