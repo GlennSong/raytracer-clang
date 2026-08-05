@@ -67,37 +67,9 @@ namespace engine {
 static std::vector<std::string> g_loadedScriptFiles;
 
 
-static Vec3 parseVec3(const json& j, Vec3 fallback = Vec3()) {
-    if (!j.is_array() || j.size() < 3) return fallback;
-    return Vec3(j[0].get<double>(), j[1].get<double>(), j[2].get<double>());
-}
-
-// Default every road recipe's buildability `sea_level` (and beach reserve) from
-// the level's top-level "water" block, so the coast's water and the city's
-// land-gate share ONE number. A recipe that sets its own sea_level keeps it.
-// Mutates `root` in place; a no-op when there's no water block. Shared by both
-// loaders' road pre-pass and real build so they gate on an identical graph.
-static void propagateWaterSeaLevel(json& root) {
-    if (!root.contains("water")) return;
-    const json& w = root["water"];
-    double sea = w.value("seaLevel", 0.0);
-    double beach = w.value("beachRise", 2.5);
-    // The terrain colours its coast by this same sea level (beach/rock/sea floor).
-    if (root.contains("terrain") && root["terrain"].is_object() &&
-        !root["terrain"].contains("seaLevel"))
-        root["terrain"]["seaLevel"] = sea;
-    // Every road recipe gates buildability on it (roads/blocks stay on land).
-    if (!root.contains("entities") || !root["entities"].is_array()) return;
-    for (auto& ent : root["entities"]) {
-        if (ent.value("shape", std::string()) != "road" || !ent.contains("road"))
-            continue;
-        json& road = ent["road"];
-        if (!road.contains("generate") || !road["generate"].is_object()) continue;
-        json& g = road["generate"];
-        if (!g.contains("sea_level")) g["sea_level"] = sea;
-        if (!g.contains("beach_rise")) g["beach_rise"] = beach;
-    }
-}
+// parseVec3/parseOrientation and propagateWaterSeaLevel come from
+// level_params.h — one definition for both this loader and the offline
+// importer (their local copies had already drifted: exact-3 vs >=3 arrays).
 
 // Applies a material block onto `mat` through the property layer: described
 // fields only, missing keys leave values untouched (so a partial block acts
@@ -252,12 +224,7 @@ static void createEntityCommon(Entity e, const json& ent, World& world) {
         t.position = parseVec3(ent["position"]);
     if (ent.contains("scale"))
         t.scale = parseVec3(ent["scale"], Vec3(1, 1, 1));
-    if (ent.contains("orientation")) {
-        auto& o = ent["orientation"];
-        Vec3 axis = parseVec3(o["axis"], Vec3(0, 1, 0));
-        Real angle = degreesToRadians(o.value("angleDeg", 0.0));
-        t.orientation = Quat::fromAxisAngle(axis, angle);
-    }
+    t.orientation = parseOrientation(ent);
     world.add<Transform>(e, t);
     world.add<PrevTransform>(e, PrevTransform{t});
 }

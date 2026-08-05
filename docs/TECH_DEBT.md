@@ -188,9 +188,13 @@ Minor: shadow-map size fixed at 2048 (expose a 4096 option as a slider).
 
 ## Offline tracer
 
-- **glTF ("mesh") entities are skipped** by the level importer — offline
-  renders omit imported models. Tessellating glTF into tracer triangles via
-  ModelImporter is the fix (it already produces vertex/index arrays).
+- **Scattered vegetation is not imported.** The `vegetation`/`foliage` blocks
+  are handled only by the engine loader (`loadVegetation`), so offline forest
+  renders omit the scatter — hero `shape:"tree"` entities and rocks DO import.
+  (A previous entry here claimed glTF `"mesh"` entities were skipped; that was
+  stale — `addGltfModel` has imported them since ADR-0039, re-verified
+  2026-08-05 by rendering arena.json's DamagedHelmet offline, 70k triangles,
+  textures intact.)
 - **No HDR importance sampling** — bright skies converge slowly (the
   extracted-sun NEE covers the worst case).
 - **Emissive geometry has no NEE** — the Cornell light is found by chance,
@@ -380,6 +384,17 @@ up, they drift.
   `city.cpp:164` ↔ `street_kit.cpp:12` 14×2, `city_lots.cpp` 11×2
   (952/984), `city_render.cpp` 10×2 (901/929), `level_scene.cpp` 10×2
   (383/434), `procgen_bindings.cpp` 10×2 (1814/2154).
+- **Parses judged intentionally PARALLEL between the two loaders — do not
+  force-share.** The lighting/environment blocks (the tracer's `SceneLight`
+  list vs the viewer's `SceneLighting` differ in substance: `castsShadow` and
+  shadow tuning are viewer-only, the default-noon-sun fallback and HDR sun
+  extraction are tracer-only) and the primitive material parse (the loader
+  goes through the editor's property layer; the tracer builds its `Material`
+  directly). For these, the JSON *field names* are the shared contract — when
+  adding a lighting or material field, grep BOTH loaders. Everything that was
+  genuinely one parse in two places is now in `level_params`
+  (terrain/tree/city/erosion/lots/water params, `parseVec3`/`parseOrientation`,
+  `propagateWaterSeaLevel`).
 - **Scanner blind spot (tool debt).** `code-health.py` matches VERBATIM
   (whitespace-insensitive) lines, so a clone with renamed identifiers evades
   it — the two `parseTerrainParams` copies (`tp` vs `p`) were only caught by

@@ -24,6 +24,31 @@
 
 namespace engine {
 
+// A [x,y,z] JSON array; `fallback` when absent/short. Lenient about extra
+// elements (the loader always was; the importer's stricter copy had drifted
+// to exact-3 before this was unified).
+inline Vec3 parseVec3(const nlohmann::json& j, Vec3 fallback = Vec3()) {
+    if (!j.is_array() || j.size() < 3) return fallback;
+    return Vec3(j[0].get<Real>(), j[1].get<Real>(), j[2].get<Real>());
+}
+
+// An entity's "orientation" block: { "axis": [x,y,z], "angleDeg": d }.
+inline Quat parseOrientation(const nlohmann::json& ent) {
+    if (!ent.contains("orientation")) return Quat::identity();
+    const auto& o = ent["orientation"];
+    Vec3 axis = parseVec3(o.value("axis", nlohmann::json()), Vec3(0, 1, 0));
+    return Quat::fromAxisAngle(axis,
+                               degreesToRadians(o.value("angleDeg", 0.0)));
+}
+
+// Default every road recipe's buildability sea_level (and beach reserve) from
+// the level's top-level "water" block, so the waterline that draws IS the
+// waterline the city respects — ONE number. A recipe that sets its own
+// sea_level keeps it. Mutates `root` in place; no-op without a water block.
+// Run before the road pre-pass in BOTH pipelines so they gate on an
+// identical graph.
+void propagateWaterSeaLevel(nlohmann::json& root);
+
 // The level's top-level "terrain" block.
 TerrainParams readTerrainParams(const nlohmann::json& t);
 

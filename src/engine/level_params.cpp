@@ -7,12 +7,27 @@ using json = nlohmann::json;
 
 namespace engine {
 
-namespace {
-Vec3 readVec3(const json& j, Vec3 fallback = Vec3()) {
-    if (!j.is_array() || j.size() != 3) return fallback;
-    return Vec3(j[0].get<Real>(), j[1].get<Real>(), j[2].get<Real>());
+void propagateWaterSeaLevel(json& root) {
+    if (!root.contains("water")) return;
+    const json& w = root["water"];
+    double sea = w.value("seaLevel", 0.0);
+    double beach = w.value("beachRise", 2.5);
+    // The terrain colours its coast by this same sea level (beach/rock/sea floor).
+    if (root.contains("terrain") && root["terrain"].is_object() &&
+        !root["terrain"].contains("seaLevel"))
+        root["terrain"]["seaLevel"] = sea;
+    // Every road recipe gates buildability on it (roads/blocks stay on land).
+    if (!root.contains("entities") || !root["entities"].is_array()) return;
+    for (auto& ent : root["entities"]) {
+        if (ent.value("shape", std::string()) != "road" || !ent.contains("road"))
+            continue;
+        json& road = ent["road"];
+        if (!road.contains("generate") || !road["generate"].is_object()) continue;
+        json& g = road["generate"];
+        if (!g.contains("sea_level")) g["sea_level"] = sea;
+        if (!g.contains("beach_rise")) g["beach_rise"] = beach;
+    }
 }
-}  // namespace
 
 TerrainParams readTerrainParams(const json& t) {
     TerrainParams p;
@@ -85,15 +100,15 @@ TreeParams readTreeParams(const json& ent, uint32_t& seedOut) {
     tp.leafSize        = j.value("leafSize", tp.leafSize);
     tp.leavesPerTip    = j.value("leavesPerTip", tp.leavesPerTip);
     tp.leafThickness   = j.value("leafThickness", tp.leafThickness);
-    tp.barkColor       = readVec3(j.value("barkColor", json()), tp.barkColor);
-    tp.leafColor       = readVec3(j.value("leafColor", json()), tp.leafColor);
+    tp.barkColor       = parseVec3(j.value("barkColor", json()), tp.barkColor);
+    tp.leafColor       = parseVec3(j.value("leafColor", json()), tp.leafColor);
     seedOut            = j.value("seed", 0u);
     return tp;
 }
 
 CityParams readCityParams(const json& ent, const json& root) {
     CityParams cp;
-    Vec3 pos = readVec3(ent.value("position", json()));
+    Vec3 pos = parseVec3(ent.value("position", json()));
     cp.center = {pos.x, pos.z};
     cp.baseY = pos.y;
     bool onTerrain = false;

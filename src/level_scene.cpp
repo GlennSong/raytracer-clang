@@ -34,17 +34,10 @@ namespace engine {
 
 namespace {
 
-Vec3 parseVec3(const json& j, Vec3 fallback = Vec3()) {
-    if (!j.is_array() || j.size() != 3) return fallback;
-    return Vec3(j[0].get<Real>(), j[1].get<Real>(), j[2].get<Real>());
-}
-
-Quat parseOrientation(const json& ent) {
-    if (!ent.contains("orientation")) return Quat::identity();
-    const auto& o = ent["orientation"];
-    Vec3 axis = parseVec3(o.value("axis", json()), Vec3(0, 1, 0));
-    return Quat::fromAxisAngle(axis, degreesToRadians(o.value("angleDeg", 0.0)));
-}
+// parseVec3/parseOrientation come from level_params.h — one definition for
+// both this importer and the engine loader. (This file's old parseVec3
+// rejected arrays longer than 3; the shared one keeps the loader's lenient
+// >=3 read.)
 
 int addSurfaceTexture(Scene& scene, const TextureData& td) {
     Texture t;
@@ -466,26 +459,8 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
     }
 
     // Sea level is ONE source of truth: the terrain colours its coast by it and
-    // every road recipe gates buildability on it (see the loader for rationale).
-    if (root.contains("water")) {
-        double sea = root["water"].value("seaLevel", 0.0);
-        double beach = root["water"].value("beachRise", 2.5);
-        if (root.contains("terrain") && root["terrain"].is_object() &&
-            !root["terrain"].contains("seaLevel"))
-            root["terrain"]["seaLevel"] = sea;
-        if (root.contains("entities") && root["entities"].is_array())
-            for (auto& ent : root["entities"]) {
-                if (ent.value("shape", std::string()) != "road" ||
-                    !ent.contains("road"))
-                    continue;
-                json& road = ent["road"];
-                if (!road.contains("generate") || !road["generate"].is_object())
-                    continue;
-                json& g = road["generate"];
-                if (!g.contains("sea_level")) g["sea_level"] = sea;
-                if (!g.contains("beach_rise")) g["beach_rise"] = beach;
-            }
-    }
+    // every road recipe gates buildability on it (see level_params.h).
+    propagateWaterSeaLevel(root);
 
     // A city draped on the terrain has to be generated BEFORE the terrain mesh:
     // it computes its road/block grades from the natural ground, then hands back
