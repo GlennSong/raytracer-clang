@@ -134,7 +134,11 @@ Minor: shadow-map size fixed at 2048 (expose a 4096 option as a slider).
   mesh-bounds queries per entity in RenderSystem. Needs a frame capture on
   the Mac (Xcode GPU capture) before optimizing blind. Quick levers to try:
   half-res SSAO/SSR, FPS cap comparison, toggling passes in the Debug panel
-  to bisect the cost.
+  to bisect the cost. *The CPU side of that capture now exists (ADR-0077):
+  run the arena with `RT_FRAME_STATS=arena.csv`, read it with
+  `tools/frame-report.py` — if `render` is fat while draw calls are modest,
+  the frame is GPU-bound and the Xcode GPU capture is the next step; if
+  update/fixed are fat, attach Tracy and skip the GPU capture.*
 - **Realtime depth of field doesn't visibly work** (Metal `dofGather` pass,
   written blind on Linux, default-off). The lens-warp pass (distortion/CA/
   vignette) reportedly works; DOF needs on-device debugging — check the CoC

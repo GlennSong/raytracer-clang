@@ -31,6 +31,10 @@ surface is covered by `tests/test_script_vm.cpp`. Audio
 `AudioEngine` (ADR-0069) — device-optional, tested headless via a pumped mix
 (`tests/test_audio.cpp`). `-DRT_ENABLE_PROFILER=ON` compiles the Tracy client
 (ADR-0068); the `RT_PROFILE_*` macros in `src/profile.h` are no-ops without it.
+Every build also carries the always-on frame ledger (ADR-0077):
+`RT_FRAME_STATS=<csv>` captures per-frame timings on any host,
+`tools/frame-report.py` renders the capture, `make health` scans for
+duplicated/patchy code — workflow in `docs/profiling.md`.
 
 Gamepad support uses Apple's GCController framework on macOS (ADR-0013) for
 Xbox/PS controllers, with GLFW's IOKit path as fallback. A
