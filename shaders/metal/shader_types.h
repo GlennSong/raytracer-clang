@@ -260,7 +260,6 @@ struct CompositeUniforms {
     float   ssrBlendStrength;
     int32_t bloomEnabled;
     float   bloomIntensity;
-    int32_t envMode;        // 0=procedural sky (+clouds), 1=HDR equirect
     float   aoFloor;        // darkest the AO multiply can go
     int32_t tonemapOp;      // 0=ACES, 1=AgX (the "view transform" / film curve)
     float   gradeContrast;  // log-space contrast around middle grey (1 = neutral)

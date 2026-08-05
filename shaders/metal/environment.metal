@@ -109,7 +109,11 @@ struct SkyboxOut {
     float3 viewDir;
 };
 
-// Fullscreen triangle: 3 vertices cover the screen without a vertex buffer
+// Fullscreen triangle: 3 vertices cover the screen without a vertex buffer.
+// It winds COUNTER-CLOCKWISE in screen space (as do the copies of this idiom
+// in post_composite/atmosphere/clouds/star): encoders that cull — the main
+// pass and probe bake front-face and back-cull for scene meshes — must set
+// CullModeNone around this draw or the whole sky silently disappears.
 vertex SkyboxOut vertexSkybox(
     constant CameraUniforms& camera [[buffer(1)]],
     uint vid [[vertex_id]]
