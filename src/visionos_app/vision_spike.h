@@ -38,12 +38,29 @@ void rt_vision_set_level(const char* name);
 // before entering a scene.
 void rt_vision_set_world_scale(double scale);
 
-// Engine settings applied at the NEXT boot (menu-set): written into the
-// engine's Settings store before systems start, so anything data-driven —
-// daynight.timeOfDay, daynight.paused, clouds.*, exposure — is reachable
-// from the shell without engine changes. Copies the key.
+// Engine settings bridge. Values land in a mutex-guarded store; while the
+// engine is RUNNING they are drained on the engine thread at the top of the
+// next frame and applied straight through to the renderer (live sliders),
+// and at boot the whole store is written into Settings before systems start
+// — so the same call works from the menu and from the in-scene settings
+// panel. Copies the key.
 void rt_vision_set_pref_double(const char* key, double value);
 void rt_vision_set_pref_bool(const char* key, int value);
+
+// Current value of a pref as the engine sees it (seeded from the renderer
+// after boot, updated by the setters). Falls back when the key was never
+// set — e.g. the settings panel opened before any scene has booted.
+double rt_vision_get_pref_double(const char* key, double fallback);
+int rt_vision_get_pref_bool(const char* key, int fallback);
+
+// Persist the current render settings to the app's writable settings.json
+// (Documents). Runs on the engine thread at the next frame boundary; a
+// no-op while no scene is running.
+void rt_vision_save_settings(void);
+
+// Reset the render knobs (bloom/ssao/ssr/tonemap/grade) to engine defaults,
+// live. Does not touch the saved file until the next save.
+void rt_vision_reset_render_prefs(void);
 
 #ifdef __cplusplus
 }

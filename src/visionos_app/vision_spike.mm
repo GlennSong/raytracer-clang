@@ -39,6 +39,7 @@
 
 #include "../engine/application.h"
 #include "../engine/asset_root.h"
+#include "../engine/systems/debug_overlay_system.h"
 #include "../game/arena_state.h"
 #include "../log.h"
 #include "../renderer/hosted_window.h"
@@ -80,6 +81,66 @@ std::atomic<double> gWorldScale{2.0};
 std::mutex gPrefsMutex;
 std::map<std::string, double> gPrefsDouble = {{"daynight.timeOfDay", 0.5}};
 std::map<std::string, bool> gPrefsBool = {{"daynight.paused", true}};
+
+// Settings-panel plumbing: setters raise gPrefsDirty and the engine thread
+// drains the store into Settings + renderer at the next frame boundary
+// (live sliders at 90fps). Save/reset are one-shot requests handled on the
+// same thread — Settings and Renderer are not touched off-thread.
+std::atomic<bool> gPrefsDirty{false};
+std::atomic<bool> gSaveRequested{false};
+std::atomic<bool> gResetRequested{false};
+
+// Mirror the renderer's current render knobs into the pref store, so the
+// Swift settings panel reads back the truth (saved settings applied at boot,
+// engine defaults otherwise) instead of its own hardcoded fallbacks.
+void seedPrefsFromRenderer(engine::Renderer& r) {
+    std::lock_guard<std::mutex> lock(gPrefsMutex);
+    gPrefsDouble["bloom.intensity"] = r.bloomParams.intensity;
+    gPrefsDouble["bloom.threshold"] = r.bloomParams.threshold;
+    gPrefsDouble["bloom.knee"]      = r.bloomParams.knee;
+    gPrefsDouble["ssao.intensity"]  = r.ssaoParams.intensity;
+    gPrefsDouble["ssr.blendStrength"] = r.ssrParams.blendStrength;
+    gPrefsDouble["tonemap.op"]      = r.tonemapOperator;
+    gPrefsDouble["grade.contrast"]  = r.gradeParams.contrast;
+    gPrefsDouble["grade.saturation"] = r.gradeParams.saturation;
+    gPrefsBool["bloom.enabled"] = r.bloomEnabled;
+    gPrefsBool["ssao.enabled"]  = r.ssaoEnabled;
+    gPrefsBool["ssr.enabled"]   = r.ssrEnabled;
+}
+
+// Engine-thread drain: prefs -> Settings -> renderer, plus save/reset
+// requests. Called once per frame before runFrame.
+void drainPrefRequests(engine::Application& app) {
+    if (gResetRequested.exchange(false)) {
+        auto& r = app.renderer();
+        r.bloomParams = engine::Renderer::BloomParams{};
+        r.ssaoParams = engine::Renderer::SSAOParams{};
+        r.ssrParams = engine::Renderer::SSRParams{};
+        r.gradeParams = engine::Renderer::GradeParams{};
+        r.tonemapOperator = 0;
+        r.bloomEnabled = r.ssaoEnabled = r.ssrEnabled = true;
+        seedPrefsFromRenderer(r);
+        // Push the reset values into Settings too, so a later save persists
+        // the defaults rather than resurrecting the pre-reset values.
+        engine::DebugOverlaySystem::saveSettings(app.settings(), r);
+        NSLog(@"[vision] render prefs reset to defaults");
+    }
+    if (gPrefsDirty.exchange(false)) {
+        {
+            std::lock_guard<std::mutex> lock(gPrefsMutex);
+            for (const auto& [key, value] : gPrefsDouble)
+                app.settings().setDouble(key, value);
+            for (const auto& [key, value] : gPrefsBool)
+                app.settings().setBool(key, value);
+        }
+        engine::DebugOverlaySystem::loadSettings(app.settings(), app.renderer());
+    }
+    if (gSaveRequested.exchange(false)) {
+        engine::DebugOverlaySystem::saveSettings(app.settings(), app.renderer());
+        app.settings().save(app.settingsFilePath());
+        NSLog(@"[vision] settings saved to %s", app.settingsFilePath().c_str());
+    }
+}
 
 // Boots the engine: points asset resolution at the bundle, loads arena.json,
 // and pushes the same ArenaState the desktop viewer runs.
@@ -316,6 +377,12 @@ void rt_vision_spike_run(cp_layer_renderer_t layerRenderer) {
         // exist; the Swift host's spatial events start flowing into gameplay.
         gXrInput.store(app->renderer().xrBackend());
 
+        // Systems have started (begin -> onStart -> loadSettings), so the
+        // renderer now holds the effective render knobs: saved settings where
+        // they exist, engine defaults otherwise. Mirror them into the pref
+        // store so the Swift settings panel opens showing the truth.
+        seedPrefsFromRenderer(app->renderer());
+
         // Bluetooth gamepads (PS5/Xbox/Switch pair straight to the headset):
         // the same GCController backend the macOS viewer uses, injected
         // through HostedWindow so the engine's bindings work unmodified.
@@ -327,6 +394,7 @@ void rt_vision_spike_run(cp_layer_renderer_t layerRenderer) {
                 engine::GamepadSet pads{};
                 engine::gcPollGamepads(pads);
                 hostedWindow->setGamepads(pads);
+                drainPrefRequests(*app);
                 app->runFrame();
 
                 // Proof of life at ~1 Hz: a frozen entity count means the sim
@@ -373,16 +441,44 @@ void rt_vision_set_world_scale(double scale) {
 
 void rt_vision_set_pref_double(const char* key, double value) {
     if (!key || !*key) return;
-    std::lock_guard<std::mutex> lock(gPrefsMutex);
-    gPrefsDouble[key] = value;
+    {
+        std::lock_guard<std::mutex> lock(gPrefsMutex);
+        gPrefsDouble[key] = value;
+    }
+    gPrefsDirty.store(true);
     NSLog(@"[vision] pref %s = %.3f", key, value);
 }
 
 void rt_vision_set_pref_bool(const char* key, int value) {
     if (!key || !*key) return;
-    std::lock_guard<std::mutex> lock(gPrefsMutex);
-    gPrefsBool[key] = (value != 0);
+    {
+        std::lock_guard<std::mutex> lock(gPrefsMutex);
+        gPrefsBool[key] = (value != 0);
+    }
+    gPrefsDirty.store(true);
     NSLog(@"[vision] pref %s = %s", key, value ? "true" : "false");
+}
+
+double rt_vision_get_pref_double(const char* key, double fallback) {
+    if (!key || !*key) return fallback;
+    std::lock_guard<std::mutex> lock(gPrefsMutex);
+    auto it = gPrefsDouble.find(key);
+    return it != gPrefsDouble.end() ? it->second : fallback;
+}
+
+int rt_vision_get_pref_bool(const char* key, int fallback) {
+    if (!key || !*key) return fallback;
+    std::lock_guard<std::mutex> lock(gPrefsMutex);
+    auto it = gPrefsBool.find(key);
+    return it != gPrefsBool.end() ? (it->second ? 1 : 0) : fallback;
+}
+
+void rt_vision_save_settings(void) {
+    gSaveRequested.store(true);
+}
+
+void rt_vision_reset_render_prefs(void) {
+    gResetRequested.store(true);
 }
 
 void rt_vision_set_level(const char* name) {

@@ -75,6 +75,10 @@ public:
     RenderView& renderView() { return view; }
     Window& windowRef() { return *window; }
     Settings& settings() { return settingsStore; }
+    // Absolute path settings were loaded from (Config::settingsFile) — hosts
+    // whose working directory is not the settings directory (the visionOS app
+    // saves to Documents) must save back to THIS path, not a relative name.
+    const std::string& settingsFilePath() const { return settingsFile; }
     EventBus& events() { return eventBus; }
     DebugDraw& debugDraw() { return debugLines; }
     AudioEngine& audio() { return audioEngine; }

@@ -103,10 +103,25 @@ struct LaunchView: View {
         return names.isEmpty ? ["arena"] : names.sorted()
     }()
 
+    @State private var showSettings = false
+
     var body: some View {
         VStack(spacing: 16) {
-            Text("Raytracer")
-                .font(.title)
+            HStack {
+                // Balance the trailing gear so the title stays centered.
+                Image(systemName: "gearshape").opacity(0)
+                Spacer()
+                Text("Raytracer")
+                    .font(.title)
+                Spacer()
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Render settings")
+            }
             Picker("Scene", selection: $selectedLevel) {
                 ForEach(Self.levels, id: \.self) { Text($0).tag($0) }
             }
@@ -140,6 +155,9 @@ struct LaunchView: View {
                 .multilineTextAlignment(.center)
         }
         .padding(32)
+        .sheet(isPresented: $showSettings) {
+            RenderSettingsView()
+        }
         .onAppear {
             shell.dismissSpace = { [dismissImmersiveSpace] in
                 await dismissImmersiveSpace()
@@ -172,6 +190,141 @@ struct LaunchView: View {
         if await openImmersiveSpace(id: "arena") == .opened {
             shell.inArena = true
         }
+    }
+}
+
+/// Render settings panel (gear icon in the launcher window). Every control
+/// applies LIVE — the engine drains pref changes once per frame — and "Save"
+/// persists them to the app's writable settings.json so they survive
+/// relaunches. Values are read back from the engine on open, so the panel
+/// shows the effective state (saved settings or engine defaults), not its
+/// own guesses. Opening it before entering a scene also works: the values
+/// queue and apply at the next boot.
+struct RenderSettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    // Engine defaults (renderer.h param structs) — used as getter fallbacks
+    // before a scene has booted, and to restore the UI after Reset.
+    private static let defaults = Defaults()
+    struct Defaults {
+        let bloomOn = true, ssaoOn = true, ssrOn = true
+        let bloomIntensity = 0.3, bloomThreshold = 1.0
+        let ssaoIntensity = 0.8
+        let ssrStrength = 0.5
+        let contrast = 1.0, saturation = 1.0
+        let tonemap = 0.0
+    }
+
+    @State private var bloomOn = Self.defaults.bloomOn
+    @State private var bloomIntensity = Self.defaults.bloomIntensity
+    @State private var bloomThreshold = Self.defaults.bloomThreshold
+    @State private var ssaoOn = Self.defaults.ssaoOn
+    @State private var ssaoIntensity = Self.defaults.ssaoIntensity
+    @State private var ssrOn = Self.defaults.ssrOn
+    @State private var ssrStrength = Self.defaults.ssrStrength
+    @State private var contrast = Self.defaults.contrast
+    @State private var saturation = Self.defaults.saturation
+    @State private var tonemap = Self.defaults.tonemap
+    @State private var saved = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Bloom") {
+                    Toggle("Enabled", isOn: $bloomOn)
+                        .onChange(of: bloomOn) { _, v in
+                            rt_vision_set_pref_bool("bloom.enabled", v ? 1 : 0)
+                        }
+                    slider("Intensity", $bloomIntensity, 0...2, "bloom.intensity")
+                    slider("Threshold", $bloomThreshold, 0...3, "bloom.threshold")
+                }
+                Section("Ambient occlusion") {
+                    Toggle("Enabled", isOn: $ssaoOn)
+                        .onChange(of: ssaoOn) { _, v in
+                            rt_vision_set_pref_bool("ssao.enabled", v ? 1 : 0)
+                        }
+                    slider("Intensity", $ssaoIntensity, 0...3, "ssao.intensity")
+                }
+                Section("Reflections") {
+                    Toggle("Enabled", isOn: $ssrOn)
+                        .onChange(of: ssrOn) { _, v in
+                            rt_vision_set_pref_bool("ssr.enabled", v ? 1 : 0)
+                        }
+                    slider("Strength", $ssrStrength, 0...1, "ssr.blendStrength")
+                }
+                Section("Look") {
+                    Picker("View transform", selection: $tonemap) {
+                        Text("ACES").tag(0.0)
+                        Text("AgX").tag(1.0)
+                    }
+                    .onChange(of: tonemap) { _, v in
+                        rt_vision_set_pref_double("tonemap.op", v)
+                    }
+                    slider("Contrast", $contrast, 0.5...1.5, "grade.contrast")
+                    slider("Saturation", $saturation, 0...2, "grade.saturation")
+                }
+                Section {
+                    Button(saved ? "Saved ✓" : "Save to device") {
+                        rt_vision_save_settings()
+                        saved = true
+                    }
+                    Button("Reset to defaults", role: .destructive) {
+                        rt_vision_reset_render_prefs()
+                        let d = Self.defaults
+                        bloomOn = d.bloomOn; bloomIntensity = d.bloomIntensity
+                        bloomThreshold = d.bloomThreshold
+                        ssaoOn = d.ssaoOn; ssaoIntensity = d.ssaoIntensity
+                        ssrOn = d.ssrOn; ssrStrength = d.ssrStrength
+                        contrast = d.contrast; saturation = d.saturation
+                        tonemap = d.tonemap
+                        saved = false
+                    }
+                } footer: {
+                    Text("Changes apply immediately. Save keeps them for future launches.")
+                }
+            }
+            .navigationTitle("Render settings")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .frame(minWidth: 380, minHeight: 520)
+        .onAppear { load() }
+    }
+
+    /// Slider row that pushes its value to the engine as it moves.
+    private func slider(_ label: String, _ value: Binding<Double>,
+                        _ range: ClosedRange<Double>, _ key: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label)
+                Spacer()
+                Text(String(format: "%.2f", value.wrappedValue))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            Slider(value: value, in: range) { _ in }
+                .onChange(of: value.wrappedValue) { _, v in
+                    rt_vision_set_pref_double(key, v)
+                    saved = false
+                }
+        }
+    }
+
+    private func load() {
+        let d = Self.defaults
+        bloomOn = rt_vision_get_pref_bool("bloom.enabled", d.bloomOn ? 1 : 0) != 0
+        bloomIntensity = rt_vision_get_pref_double("bloom.intensity", d.bloomIntensity)
+        bloomThreshold = rt_vision_get_pref_double("bloom.threshold", d.bloomThreshold)
+        ssaoOn = rt_vision_get_pref_bool("ssao.enabled", d.ssaoOn ? 1 : 0) != 0
+        ssaoIntensity = rt_vision_get_pref_double("ssao.intensity", d.ssaoIntensity)
+        ssrOn = rt_vision_get_pref_bool("ssr.enabled", d.ssrOn ? 1 : 0) != 0
+        ssrStrength = rt_vision_get_pref_double("ssr.blendStrength", d.ssrStrength)
+        contrast = rt_vision_get_pref_double("grade.contrast", d.contrast)
+        saturation = rt_vision_get_pref_double("grade.saturation", d.saturation)
+        tonemap = rt_vision_get_pref_double("tonemap.op", d.tonemap)
     }
 }
 
