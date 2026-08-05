@@ -4,6 +4,7 @@
 #include "system.h"
 #include "state_stack.h"
 #include "world.h"
+#include "xr/xr_backend.h"
 #include "clock.h"
 #include "asset_manager.h"
 #include "audio/audio_engine.h"
@@ -28,6 +29,17 @@ public:
         int height = 1024;
         std::string title = "Application";
         std::string settingsFile = "settings.json";
+
+        // How the audio engine opens (ADR-0069). Auto probes for a real output
+        // device and falls back to the null backend if opening one FAILS.
+        //
+        // That fallback cannot save a host where opening one HANGS: on visionOS
+        // AURemoteIO deadlocks unless the app has configured and activated an
+        // AVAudioSession first, and CoreAudio aborts the process after its RPC
+        // timeout — there is no failure to catch. Such a host passes Null until
+        // it does that setup, which is why this is the host's choice and not a
+        // constant inside Application.
+        AudioBackendMode audio = AudioBackendMode::Auto;
     };
 
     Application();
@@ -63,6 +75,10 @@ public:
     RenderView& renderView() { return view; }
     Window& windowRef() { return *window; }
     Settings& settings() { return settingsStore; }
+    // Absolute path settings were loaded from (Config::settingsFile) — hosts
+    // whose working directory is not the settings directory (the visionOS app
+    // saves to Documents) must save back to THIS path, not a relative name.
+    const std::string& settingsFilePath() const { return settingsFile; }
     EventBus& events() { return eventBus; }
     DebugDraw& debugDraw() { return debugLines; }
     AudioEngine& audio() { return audioEngine; }
@@ -101,6 +117,13 @@ private:
     AudioEngine audioEngine;
     InputMap inputMap;
     PlayerInputs playerInputs;
+    // Headset state (engine/xr/). `xr` is the renderer's backend or null;
+    // `xrState` is refreshed at the top of every runFrame and handed to all
+    // systems through FrameContext. Inert (active=false) without a headset.
+    XrBackend* xr = nullptr;
+    XrState xrState;
+    std::vector<XrInputEvent> xrInputScratch;  // per-frame drain buffer
+    double xrPinchSeconds = 0.0;               // current pinch hold duration
     RenderView view;
     StateStack stateStack;
     bool debugOverlayActive = false;

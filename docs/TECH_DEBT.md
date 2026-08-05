@@ -149,7 +149,7 @@ Minor: shadow-map size fixed at 2048 (expose a 4096 option as a slider).
   mesh ownership with `release` on overwrite and `clear()` on world teardown.
 
 **ADR-0037 follow-ups (perf + tone/grade pass — all Metal-only, viewer-verified, not on CI):**
-- **AgX display encode unverified.** `tonemapAgX` (`shaders/metal/post.metal`)
+- **AgX display encode unverified.** `tonemapAgX` (`shaders/metal/post_composite.metal`)
   bakes its own ~2.2 display encode (the minimal-fit convention) and was *not*
   bit-compared to ACES on-device. If AgX reads noticeably darker/brighter than
   ACES at neutral grade, it's a one-line gamma-convention fix. Eyeball on a bright
@@ -338,7 +338,21 @@ took shortcuts worth paying down before the binding surface grows much more.
 
 ## Verification gap (the meta-debt)
 
-- **No CI exists, and the render backends are never compiled in it.** This is the
+- **Linux CI is red on arrival: 2/1083 test cases fail only on Linux.**
+  The first-ever ubuntu run of the suite (Build & Test workflow, run
+  30992735285) passed everything except `drive_freeway_mainline_is_clear` and
+  `zoo_acute_four_way` — both road-network drive probes that pass on macOS.
+  Likely floating-point precision in freeway-weld/acute-junction geometry (the
+  "3 welds is a metric artifact" family). Until fixed or per-platform gated,
+  the Linux job's signal reads "expected red", which is CI rot — fix soon.
+- **No CI existed until 2026-08-05, and the render backends were never
+  compiled in it.** Stages 0+1 of the plan below now run on every push
+  (`.github/workflows/build.yml`): Linux compiles the Vulkan backend with
+  glslc-validated shaders (asserting the backend was actually selected), macOS
+  builds the Metal viewer, runs ctest, and offline-compiles the Metal shader
+  library via `tools/check-metal-shaders.sh` (which extracts the runtime
+  concatenation list from `metal_renderer.mm`). Stage 2 (headless offscreen
+  render + golden-image parity) remains open. Historical context: This is the
   root of the gap below. The Vulkan backend shipped Phases 0–3 *never compiled*
   (no SDK in the loop), and Metal shaders are runtime-compiled, so neither
   `vulkan_renderer.cpp`/`shaders/vulkan/*` nor `shaders/metal/*` is validated until
@@ -357,3 +371,54 @@ took shortcuts worth paying down before the binding surface grows much more.
 - **Several tests assert via vertex-count inequalities** ("different species ->
   different vertex counts", "leaves add vertices"). Brittle proxies that can
   break on tuning — smoke tests, not exact specs.
+
+- **The visionOS branch was verified Metal-only; Vulkan/WebGPU are
+  compile-risk-unverified against its shared-code changes.** The branch's
+  renderer work is all Metal (`post_composite.metal` sky pass-through,
+  skybox cull fix, DoF/bloom NaN guards, visionOS depth-carry clamp), but it
+  also touched shared engine code every backend compiles:
+  `Application::settingsFilePath()`, the `DebugOverlaySystem::load/saveSettings`
+  split (which added bloom/AO/SSR *enable* toggles to settings — Vulkan/web will
+  now honor those keys at boot), and a `DayNightSystem` boot log.
+  Verified 2026-08-05 pre-merge: the Vulkan backend compiles the branch clean
+  on Linux CI (real shaders via glslc); the Emscripten build compiles clean
+  from two fresh configures and boots the arena (level load + frame-0 draws
+  confirmed). Full web *visual* verification needs a real browser — the
+  agent-embedded browser pane starves requestAnimationFrame (the production
+  gh-pages site freezes on one frame in-pane too), so in-pane screenshots only
+  show each build's boot frame. Two build-tooling traps documented the hard
+  way: an incremental emscripten rebuild across a git checkout produces
+  silently-broken artifacts (always fresh-configure per commit when bisecting
+  web behavior), and the boot frame can render before the canvas size reaches
+  the engine (benign under live rAF; it IS the visible frame when starved).
+  Two lessons worth porting deliberately, not urgently:
+  (a) **one sky** — Metal's composite used to re-derive sky from
+  `invViewProjection` (a June workaround outliving its bug) and it broke under
+  XR's asymmetric infinite-far projections; Vulkan/WebGPU already pass the
+  skybox through (written post-lesson), so they need only a *visual* confirm
+  next time they run; (b) **infinite-far robustness** — any shader that
+  linearizes reverse-Z depth or unprojects clip z=0 NaNs under an infinite far
+  plane (Metal's DoF CoC and bloom did; grep the other backends' post stacks
+  when they next get attention). Metal now applies the
+  sRGB transfer function exactly once, chosen per target: `CompositeUniforms
+  .targetEncodesSRGB` (set from the presentation surface's pixel format) tells
+  `encodeForTarget` in `shaders/metal/post_composite.metal` whether the shader or
+  the hardware owns it. `shaders/vulkan/composite.frag` and
+  `shaders/webgpu/composite.wgsl` still fold the ~2.2 encode into the tone
+  mappers and assume a linear-storage target — Vulkan goes as far as *selecting*
+  `VK_FORMAT_B8G8R8A8_UNORM` for that reason (`vulkan_renderer.cpp`, "Prefer a
+  UNORM swapchain"). That assumption is fine on both today, so this is a
+  divergence rather than a bug, but the three backends no longer share a
+  contract. Port the flag when either backend next needs an sRGB target — or
+  sooner, to keep the ledger honest. **No GPU here for either, so any port is
+  compile-verified only.**
+
+- **AgX's display encode is inverted approximately, not lifted.** ACES separated
+  exactly: its encode was a trailing `pow(c, 1/2.2)` that moved out unchanged, so
+  macOS output is provably identical. AgX's encode lives *inside* the polynomial
+  sigmoid fit (`agxContrastApprox`), so `tonemapAgX` recovers linear with a
+  closing `pow(c, 2.2)`. Against the shader's own encode that round-trips
+  cleanly, but against a hardware sRGB target it differs slightly near black,
+  where true sRGB has a linear toe that pure 2.2 does not. A linear-output AgX
+  fit would remove the approximation. Only visible with `tonemapOperator = 1` on
+  visionOS.

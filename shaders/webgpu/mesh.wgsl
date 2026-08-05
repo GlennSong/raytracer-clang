@@ -233,7 +233,7 @@ fn sampleEquirect(dir : vec3<f32>) -> vec3<f32> {
   return textureSampleLevel(envTex, envSamp, vec2<f32>(u, v), 0.0).rgb;
 }
 
-// ---- procedural surface library (ported from common.metal / mesh.frag) -----
+// ---- procedural surface library (ported from surfaces_*.metal / mesh.frag) --
 fn hash21(a : f32, b : f32) -> f32 { return fract(sin(a * 12.9898 + b * 78.233) * 43758.5453); }
 fn mod2(x : f32) -> f32 { return x - 2.0 * floor(x / 2.0); }
 fn vnoise2(x : f32, y : f32) -> f32 {
@@ -394,7 +394,7 @@ fn surfRoadMarkings(base : vec3<f32>, mu : f32, mv : f32, wu : f32, wv : f32) ->
   // Zebra crosswalk painted into the road texture (ADR-0062): mv = metres PAST
   // the junction mouth (baked by the road mesher), so the band sits set back on
   // the approach, not in the intersection. Bars run across the carriageway (mu).
-  // Mirror of Metal (shaders/metal/common.metal) and Vulkan (mesh.frag) for
+  // Mirror of Metal (shaders/metal/surface_road.metal) and Vulkan (mesh.frag) for
   // backend parity. Gate on mu > 1.05: the raised curb shares this surface with
   // a 0..1 UV, and the band must never paint onto it.
   let cwEdge = smoothstep(0.5, 0.8, mv) * (1.0 - smoothstep(3.3, 3.6, mv));
@@ -539,7 +539,7 @@ fn fs_main(in : VSOut) -> FsOut {
   // space), so perturb the normal and vary the roughness procedurally from the
   // same world-planar noise the asphalt albedo tiles by. Subtle undulation +
   // sparkle-scale roughness break the uniform specular sheet the flat deck had.
-  // Mirrors Metal (common.metal) / Vulkan (mesh.frag).
+  // Mirrors Metal (surface_road.metal, surfaceReliefRoad) / Vulkan (mesh.frag).
   if (d.surfaceFlags.x == 11u) {
     let rx = in.worldPos.x; let rz = in.worldPos.z;
     // Three octaves: metre-scale undulation, decimetre patching, and a

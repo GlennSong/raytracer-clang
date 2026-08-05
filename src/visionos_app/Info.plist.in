@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+    <key>CFBundleIdentifier</key>
+    <string>${MACOSX_BUNDLE_GUI_IDENTIFIER}</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+    <key>CFBundleVersion</key>
+    <string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
+    <key>UILaunchScreen</key>
+    <dict/>
+    <!-- World tracking (device pose for the compositor's device anchor).
+         Plain pose queries shouldn't need world-sensing authorization, but the
+         description must exist for ARKit to consider the request at all. -->
+    <key>NSWorldSensingUsageDescription</key>
+    <string>Tracks headset position so the scene stays anchored in your space.</string>
+    <key>NSHandsTrackingUsageDescription</key>
+    <string>Shows your hands in the world and enables hand gestures.</string>
+    <!-- Window-first launch, matching Apple's Metal template. The previous
+         immersive-space-only arrangement (CPSceneSessionRoleImmersiveSpaceApplication)
+         opened the space and ran the layer on visionOS 26.3 but never
+         composited it to the displays — black void, hands breaking through.
+         The launcher window's button opens the space via openImmersiveSpace,
+         the path the platform actually exercises. -->
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key>
+        <true/>
+    </dict>
+</dict>
+</plist>

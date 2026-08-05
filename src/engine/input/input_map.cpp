@@ -10,6 +10,7 @@ namespace {
 // offset each past the others' range so encodings never collide.
 constexpr int MOUSE_SOURCE_BASE = 100000;
 constexpr int GAMEPAD_BUTTON_BASE = 200000;
+constexpr int XR_BUTTON_BASE = 300000;
 
 // Canonical KeyCode <-> name table. Order mirrors the enum for readability.
 const std::vector<std::pair<KeyCode, const char*>>& keyNameTable() {
@@ -68,6 +69,10 @@ int InputMap::encodeGamepadButton(GamepadButton button) {
     return GAMEPAD_BUTTON_BASE + static_cast<int>(button);
 }
 
+int InputMap::encodeXrButton(XrButton button) {
+    return XR_BUTTON_BASE + static_cast<int>(button);
+}
+
 Real InputMap::applyDeadzone(Real value) const {
     Real magnitude = std::abs(value);
     if (magnitude < deadzone) return 0.0;
@@ -93,6 +98,10 @@ void InputMap::bindButton(const std::string& action, MouseButton button) {
 
 void InputMap::bindButton(const std::string& action, GamepadButton button) {
     buttons[action].push_back(encodeGamepadButton(button));
+}
+
+void InputMap::bindButton(const std::string& action, XrButton button) {
+    buttons[action].push_back(encodeXrButton(button));
 }
 
 void InputMap::bindAxis(const std::string& axis, KeyCode key, Real scale) {
@@ -150,6 +159,14 @@ void InputMap::processEvent(const Event& event) {
         case EventType::MouseButtonReleased:
             heldSources.erase(encodeMouse(event.button));
             releasedSources.insert(encodeMouse(event.button));
+            break;
+        case EventType::XrButtonPressed:
+            heldSources.insert(encodeXrButton(event.xrButton));
+            pressedSources.insert(encodeXrButton(event.xrButton));
+            break;
+        case EventType::XrButtonReleased:
+            heldSources.erase(encodeXrButton(event.xrButton));
+            releasedSources.insert(encodeXrButton(event.xrButton));
             break;
         case EventType::WindowUnfocused:
             // Dropping focus means we stop seeing key-up events, so clear held

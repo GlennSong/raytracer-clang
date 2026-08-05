@@ -115,6 +115,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/block_grade.cpp
     src/engine/ai/nav_graph.cpp
     src/engine/ai/pathfind.cpp
+    src/engine/asset_root.cpp
     src/engine/script_assets.cpp
     src/engine/script_watch.cpp
     src/engine/level_loader.cpp
@@ -146,6 +147,7 @@ add_library(engine_core STATIC
     src/engine/audio/sfx.cpp
     src/engine/systems/audio_system.cpp
     src/engine/systems/render_system.cpp
+    src/engine/systems/xr_camera_system.cpp
     src/engine/systems/debug_draw_system.cpp
     src/engine/systems/dev_control_system.cpp
     src/engine/systems/debug_overlay_system.cpp
@@ -236,6 +238,16 @@ if(RT_ENABLE_SCRIPTING)
     target_include_directories(lua_static SYSTEM PUBLIC ${LUA_DIR})
     target_compile_options(lua_static PRIVATE -w)   # vendored C; not our warnings
 
+    # Apple's embedded platforms (visionOS, iOS, tvOS) are sandboxed and do not
+    # provide system(), so os.execute fails to COMPILE there. LUA_USE_IOS is
+    # Lua's own supported switch for exactly this — loslib.c reads it and stubs
+    # l_system out ("Despite claiming to be ISO C, iOS does not implement
+    # 'system'"). It also implies LUA_USE_POSIX + LUA_USE_DLOPEN, both fine here.
+    # Set it via the platform check rather than patching the submodule.
+    if(CMAKE_SYSTEM_NAME MATCHES "^(visionOS|iOS|tvOS|watchOS)$")
+        target_compile_definitions(lua_static PRIVATE LUA_USE_IOS=1)
+    endif()
+
     # NOTE: the citysim-specific Lua readers (agent_goals, vehicle_body) are NOT
     # here — they read citysim types, so they live in the `citysim` library
     # (src/apps/citysim/scripting) to keep engine_core free of any app dependency.
@@ -323,6 +335,19 @@ if(RT_ENABLE_AUDIO AND NOT EMSCRIPTEN)
         target_link_libraries(miniaudio_static PUBLIC
             "-framework CoreFoundation" "-framework CoreAudio"
             "-framework AudioToolbox")
+    endif()
+
+    # On Apple's EMBEDDED platforms miniaudio's Core Audio backend drives
+    # AVAudioSession, which is Objective-C — so the single TU has to be compiled
+    # as Objective-C or it fails on the first Foundation header ("expected
+    # identifier or '('", the compiler meeting @class in a .c file). macOS does
+    # not need this: its Core Audio path is plain C. Compiling as OBJC rather
+    # than renaming the file keeps one source serving every platform.
+    if(CMAKE_SYSTEM_NAME MATCHES "^(visionOS|iOS|tvOS|watchOS)$")
+        enable_language(OBJC)
+        set_source_files_properties(src/engine/audio/miniaudio_impl.c
+                                    PROPERTIES LANGUAGE OBJC)
+        target_link_libraries(miniaudio_static PUBLIC "-framework AVFoundation")
     endif()
 
     target_link_libraries(engine_core PUBLIC miniaudio_static)
@@ -602,6 +627,22 @@ if(RT_ENABLE_PHYSICS)
     set(DOUBLE_PRECISION OFF CACHE BOOL "" FORCE)
     add_subdirectory(third_party/JoltPhysics/Build ${CMAKE_BINARY_DIR}/jolt)
 
+    # Jolt.cmake does `target_compile_options(Jolt PUBLIC -pthread)` on every
+    # non-Windows platform, so the flag reaches EVERY language compiled in any
+    # target that links Jolt. swiftc rejects it outright ("Driver threw unknown
+    # argument: '-pthread'"), which breaks the visionOS app the moment its Swift
+    # entry point shares a target with the engine.
+    #
+    # Re-scope Jolt's interface so the flag only reaches the C-family languages
+    # it was meant for, rather than patching the submodule or dropping Swift into
+    # a separate target to dodge it. C/C++/ObjC++ still get it exactly as before.
+    get_target_property(_jolt_opts Jolt INTERFACE_COMPILE_OPTIONS)
+    if(_jolt_opts)
+        list(REMOVE_ITEM _jolt_opts "-pthread")
+        list(APPEND _jolt_opts "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-pthread>")
+        set_target_properties(Jolt PROPERTIES INTERFACE_COMPILE_OPTIONS "${_jolt_opts}")
+    endif()
+
     # The physics-host source set every host target (viewer, editor_app,
     # viewer_web) compiles alongside engine_core: the Jolt world + job adapter,
     # the gameplay systems that need it, drivable vehicles, and the living-world
@@ -691,6 +732,166 @@ function(rt_build_vulkan_shaders)
     endforeach()
     add_custom_target(vulkan_shaders DEPENDS ${VK_SPV_FILES})
 endfunction()
+
+# ============================================================
+# visionOS immersive app. Built ONLY when cross-compiling for visionOS, which
+# is a separate configure from the host build:
+#
+#   cmake -S . -B build-visionos-sim -G Xcode \
+#         -DCMAKE_SYSTEM_NAME=visionOS -DCMAKE_OSX_SYSROOT=xrsimulator
+#   cmake --build build-visionos-sim --target VisionApp
+#
+# Deliberately a target in THIS file rather than a standalone project under
+# src/visionos_app: it links engine_core, citysim and the physics sources, and a
+# second project would have to duplicate those source lists. One source of truth
+# for what the engine is made of.
+#
+# The Xcode generator is required, not preferred — no other generator produces a
+# visionOS .app bundle with a Swift entry point.
+# ============================================================
+if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+    enable_language(Swift)
+    set(CMAKE_Swift_LANGUAGE_VERSION 5)
+
+    set(VISION_SOURCES
+        src/visionos_app/VisionSpikeApp.swift
+        src/visionos_app/TemplateRenderer.swift
+        src/visionos_app/vision_spike.mm
+        src/renderer/gamepad_gc.mm
+        src/visionos_app/vision_spike.h
+        # The SAME Metal backend the macOS viewer uses. Presentation differs
+        # (CompositorServices vs CAMetalLayer) and is handled behind
+        # PresentationSurface inside this file — the pass graph is shared, not
+        # forked. This is what replaced NullRenderer.
+        src/renderer/metal/metal_renderer.mm
+        src/game/arena_state.cpp
+    )
+    if(RT_ENABLE_PHYSICS)
+        list(APPEND VISION_SOURCES ${RT_PHYSICS_HOST_SOURCES})
+    endif()
+
+    add_executable(VisionApp MACOSX_BUNDLE ${VISION_SOURCES})
+    target_link_libraries(VisionApp PRIVATE
+        engine_core
+        citysim
+        "-framework CompositorServices"
+        "-framework GameController"
+        "-framework Metal"
+        "-framework MetalKit"
+        "-framework ModelIO"
+        "-framework SwiftUI"
+        "-framework ARKit"
+        "-framework Foundation"
+    )
+    if(RT_ENABLE_PHYSICS)
+        target_link_libraries(VisionApp PRIVATE Jolt)
+        target_compile_definitions(VisionApp PRIVATE RT_ENABLE_PHYSICS=1)
+    endif()
+
+    set_source_files_properties(src/visionos_app/vision_spike.mm
+                                src/renderer/metal/metal_renderer.mm
+                                PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+
+    # Assets are COPIED INTO the bundle, and the app points the engine's asset
+    # root at them at startup (engine/asset_root.h). Nothing resolves relative to
+    # the working directory inside a sandboxed bundle.
+    #
+    # Downloaded assets (*.glb models, *.hdr env maps) are gitignored — a fresh
+    # worktree does not inherit them from the main checkout, and the bundle copy
+    # silently ships without them (levels that reference them then fail to load
+    # on device, where there is no fallback path outside the bundle).
+    foreach(_dlAsset
+            assets/models/DamagedHelmet.glb
+            assets/env/tree_lined_driveway_1k.hdr
+            assets/env/grasslands_sunset_1k.hdr)
+        if(NOT EXISTS "${CMAKE_SOURCE_DIR}/${_dlAsset}")
+            message(WARNING
+                "${_dlAsset} is missing (gitignored, not shared into worktrees) "
+                "— levels reference it and the app bundle will ship without it. "
+                "Copy it from the main checkout.")
+        endif()
+    endforeach()
+    target_sources(VisionApp PRIVATE
+        ${CMAKE_SOURCE_DIR}/assets ${CMAKE_SOURCE_DIR}/shaders)
+    set_source_files_properties(
+        ${CMAKE_SOURCE_DIR}/assets ${CMAKE_SOURCE_DIR}/shaders
+        PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+
+    # The generated Info.plist (CMakeFiles/VisionApp.dir/Info.plist) is written
+    # at cmake-generate time only. Without this, editing Info.plist.in and
+    # rebuilding via xcodebuild ships the STALE plist — which is how the app
+    # once reached the device without NSHandsTrackingUsageDescription and was
+    # killed by ARKit at hand-tracking start. Registering the template as a
+    # configure dependency makes ZERO_CHECK re-run cmake when it changes.
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/src/visionos_app/Info.plist.in")
+
+    set_target_properties(VisionApp PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/src/visionos_app/Info.plist.in"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.glennsong.raytracer.visionspike"
+        MACOSX_BUNDLE_BUNDLE_NAME "VisionApp"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
+        XCODE_ATTRIBUTE_SWIFT_OBJC_BRIDGING_HEADER
+            "${CMAKE_SOURCE_DIR}/src/visionos_app/VisionSpike-Bridging-Header.h"
+        XCODE_ATTRIBUTE_SWIFT_VERSION "5.0"
+        XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC "YES"
+        # Deployment target, NOT the SDK version. Xcode defaults these to match,
+        # which silently makes the app require whatever visionOS the installed
+        # Xcode shipped with — so a device one point release behind is refused
+        # with "doesn't match VisionApp.app's deployment target", which reads
+        # like a device problem rather than a build setting. Keep this ≤ the
+        # headset's installed OS (26.3.1 at the time of writing).
+        #
+        # 26.0, not the 2.0 API floor: Apple frameworks gate behavior on
+        # linked-on-or-after checks, and a 2.0-targeted CompositorServices
+        # layer on a 26.x runtime is exactly the compatibility-shim territory
+        # where frames run but never reach the display.
+        XCODE_ATTRIBUTE_XROS_DEPLOYMENT_TARGET "26.0"
+        # Link the Swift runtime. VisionApp is one .swift file among many .mm/.cpp,
+        # so CMake picks C++ as the link language and omits Swift's runtime search
+        # paths — the device link then fails on the autolink stubs Swift emits
+        # (__swift_FORCE_LOAD_$_swiftARKit and friends) plus the stdlib itself.
+        # The simulator link happens to get away with it; the device one does not.
+        XCODE_ATTRIBUTE_LIBRARY_SEARCH_PATHS
+            "$(inherited) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)"
+        XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS
+            "$(inherited) /usr/lib/swift @executable_path/Frameworks"
+        XCODE_ATTRIBUTE_ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES "NO"
+    )
+
+    # Signing. The simulator does not need it and cannot use it; a real Vision
+    # Pro will not install an unsigned bundle. Pass a team to switch over:
+    #
+    #   cmake -S . -B build-visionos -G Xcode \
+    #         -DCMAKE_SYSTEM_NAME=visionOS -DCMAKE_OSX_SYSROOT=xros \
+    #         -DRT_VISIONOS_TEAM_ID=ABCDE12345
+    #
+    # The ten-character team id is the certificate's OU field:
+    #   security find-certificate -c "Apple Development" -p | \
+    #       openssl x509 -noout -subject
+    # Beware: the parenthetical in the certificate NAME ("Apple Development:
+    # you@example.com (XXXXXXXXXX)", as printed by `security find-identity`) is a
+    # certificate id, NOT the team — using it fails with "No Account for Team".
+    # `security find-identity -v -p codesigning` still tells you whether a usable
+    # certificate exists at all — "0 valid identities found" until an Apple ID
+    # is added to Xcode.
+    set(RT_VISIONOS_TEAM_ID "" CACHE STRING
+        "Apple Developer team id for signing the visionOS device build")
+    if(RT_VISIONOS_TEAM_ID)
+        set_target_properties(VisionApp PROPERTIES
+            XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${RT_VISIONOS_TEAM_ID}"
+            XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic")
+        message(STATUS "visionOS: signing VisionApp with team ${RT_VISIONOS_TEAM_ID}")
+    else()
+        set_target_properties(VisionApp PROPERTIES
+            XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
+            XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO")
+        message(STATUS
+            "visionOS: VisionApp will be UNSIGNED (simulator only). "
+            "Set -DRT_VISIONOS_TEAM_ID=<team> to build for a device.")
+    endif()
+endif()
 
 # ============================================================
 # Interactive viewer (GPU + windowing) — only when GLFW is available, so the

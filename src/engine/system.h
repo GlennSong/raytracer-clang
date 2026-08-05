@@ -8,6 +8,7 @@
 #include "event_bus.h"
 #include "input/input_map.h"
 #include "input/player_input.h"
+#include "xr/xr_state.h"
 #include "../renderer/renderer.h"
 #include "../renderer/window.h"
 #include "../renderer/settings.h"
@@ -44,6 +45,10 @@ struct RenderView {
     // editor controllers drive it). Lets the render system hide that entity's
     // gizmo — you don't draw the camera you are inside of.
     Entity activeCameraEntity;
+    // Explicit per-eye matrices when a headset drives the view, produced by
+    // XrCameraSystem (which also rewrites `camera` to follow the head, so
+    // culling/audio/Lua stay coherent). Inactive by default.
+    XrRenderInfo xr;
 };
 
 // Services and per-frame data handed to every system hook. Field validity by
@@ -66,6 +71,8 @@ struct FrameContext {
     const InputState& input;   // polled continuous snapshot (mouse, raw keys)
     InputMap& actions;         // global/system actions (quit, pause): keyboard
     PlayerInputs& players;     // per-player gameplay input (see player_input.h)
+    XrState& xr;               // headset state for this frame (engine/xr/);
+                               // xr.active is false everywhere but headsets
     int framebufferWidth;
     int framebufferHeight;
     // Logical window size — mouse coordinates live in this space (it differs

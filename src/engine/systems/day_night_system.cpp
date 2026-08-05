@@ -1,5 +1,7 @@
 #include "day_night_system.h"
 
+#include "../../log.h"
+
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>
 #endif
@@ -18,6 +20,14 @@ void DayNightSystem::onStart(FrameContext& ctx) {
     cloudDensity   = static_cast<float>(s.getDouble("clouds.density", cloudDensity));
     cloudScale     = static_cast<float>(s.getDouble("clouds.scale", cloudScale));
     cloudWindSpeed = static_cast<float>(s.getDouble("clouds.windSpeed", cloudWindSpeed));
+
+    // One boot line so a headset/simulator console shows the resolved state —
+    // "why is it dusk" is unanswerable from the picture alone.
+    LOG_INFO << "DayNight onStart: enabled=" << enabled
+             << " timeOfDay=" << cycle.timeOfDay
+             << " paused=" << cycle.paused
+             << " speed=" << cycle.speed
+             << " hdrActive=" << hdrEnvironmentActive(ctx);
 
     if (enabled && !hdrEnvironmentActive(ctx)) applyLighting(ctx);
     applyClouds(ctx);

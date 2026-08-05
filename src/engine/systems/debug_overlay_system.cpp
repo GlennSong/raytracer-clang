@@ -8,11 +8,9 @@
 
 namespace engine {
 
-void DebugOverlaySystem::loadSettings(FrameContext& ctx) {
-    auto& s = ctx.settings;
-    auto& ao = ctx.renderer.ssaoParams;
-    auto& ssr = ctx.renderer.ssrParams;
-    auto& lit = ctx.view.lighting;
+void DebugOverlaySystem::loadSettings(Settings& s, Renderer& r) {
+    auto& ao = r.ssaoParams;
+    auto& ssr = r.ssrParams;
 
     ao.radius    = static_cast<float>(s.getDouble("ssao.radius", ao.radius));
     ao.intensity = static_cast<float>(s.getDouble("ssao.intensity", ao.intensity));
@@ -28,38 +26,43 @@ void DebugOverlaySystem::loadSettings(FrameContext& ctx) {
     ssr.blendStrength = static_cast<float>(s.getDouble("ssr.blendStrength", ssr.blendStrength));
     ssr.maxRoughness  = static_cast<float>(s.getDouble("ssr.maxRoughness", ssr.maxRoughness));
 
-    auto& sh = ctx.renderer.shadowParams;
+    auto& sh = r.shadowParams;
     sh.distance     = static_cast<float>(s.getDouble("shadow.distance", sh.distance));
     sh.cascadeCount = static_cast<int>(s.getDouble("shadow.cascades", sh.cascadeCount));
     sh.splitLambda  = static_cast<float>(s.getDouble("shadow.splitLambda", sh.splitLambda));
 
-    // NOTE: scene lighting (exposure, ambient, sun) is owned by the LEVEL file, not
-    // settings.json — the cascade is code defaults -> level JSON -> runtime (sliders
-    // / day-night). Persisting it here silently overrode the level on load, which
-    // caused stale exposure/ambient to fight the level. Sliders still edit it live.
-    (void)lit;
-
-    auto& bloom = ctx.renderer.bloomParams;
+    auto& bloom = r.bloomParams;
     bloom.threshold = static_cast<float>(s.getDouble("bloom.threshold", bloom.threshold));
     bloom.knee      = static_cast<float>(s.getDouble("bloom.knee", bloom.knee));
     bloom.intensity = static_cast<float>(s.getDouble("bloom.intensity", bloom.intensity));
 
-    ctx.renderer.tonemapOperator =
-        static_cast<int>(s.getDouble("tonemap.op", ctx.renderer.tonemapOperator));
-    ctx.renderer.gradeParams.contrast =
-        static_cast<float>(s.getDouble("grade.contrast", ctx.renderer.gradeParams.contrast));
-    ctx.renderer.gradeParams.saturation =
-        static_cast<float>(s.getDouble("grade.saturation", ctx.renderer.gradeParams.saturation));
+    r.bloomEnabled = s.getBool("bloom.enabled", r.bloomEnabled);
+    r.ssaoEnabled  = s.getBool("ssao.enabled", r.ssaoEnabled);
+    r.ssrEnabled   = s.getBool("ssr.enabled", r.ssrEnabled);
 
-    ctx.renderer.showHud = s.getBool("hud.show", ctx.renderer.showHud);
-    ctx.renderer.targetFps = static_cast<int>(s.getDouble("targetFps", ctx.renderer.targetFps));
+    r.tonemapOperator =
+        static_cast<int>(s.getDouble("tonemap.op", r.tonemapOperator));
+    r.gradeParams.contrast =
+        static_cast<float>(s.getDouble("grade.contrast", r.gradeParams.contrast));
+    r.gradeParams.saturation =
+        static_cast<float>(s.getDouble("grade.saturation", r.gradeParams.saturation));
+
+    r.showHud = s.getBool("hud.show", r.showHud);
+    r.targetFps = static_cast<int>(s.getDouble("targetFps", r.targetFps));
 }
 
-void DebugOverlaySystem::saveSettings(FrameContext& ctx) {
-    auto& s = ctx.settings;
-    auto& ao = ctx.renderer.ssaoParams;
-    auto& ssr = ctx.renderer.ssrParams;
-    auto& lit = ctx.view.lighting;
+void DebugOverlaySystem::loadSettings(FrameContext& ctx) {
+    // Scene lighting (exposure, ambient, sun) is owned by the LEVEL file, not
+    // settings.json — the cascade is code defaults -> level JSON -> runtime
+    // (sliders / day-night). Persisting it here silently overrode the level on
+    // load, which caused stale exposure/ambient to fight the level. Sliders
+    // still edit it live.
+    loadSettings(ctx.settings, ctx.renderer);
+}
+
+void DebugOverlaySystem::saveSettings(Settings& s, Renderer& r) {
+    auto& ao = r.ssaoParams;
+    auto& ssr = r.ssrParams;
 
     s.setDouble("ssao.radius", ao.radius);
     s.setDouble("ssao.intensity", ao.intensity);
@@ -75,27 +78,32 @@ void DebugOverlaySystem::saveSettings(FrameContext& ctx) {
     s.setDouble("ssr.blendStrength", ssr.blendStrength);
     s.setDouble("ssr.maxRoughness", ssr.maxRoughness);
 
-    s.setDouble("shadow.distance", ctx.renderer.shadowParams.distance);
-    s.setDouble("shadow.cascades", ctx.renderer.shadowParams.cascadeCount);
-    s.setDouble("shadow.splitLambda", ctx.renderer.shadowParams.splitLambda);
+    s.setDouble("shadow.distance", r.shadowParams.distance);
+    s.setDouble("shadow.cascades", r.shadowParams.cascadeCount);
+    s.setDouble("shadow.splitLambda", r.shadowParams.splitLambda);
 
-    // Scene lighting is level-owned (see loadSettings) — not persisted here, so a
-    // session's slider tweaks don't silently override the level on next launch.
-    (void)lit;
-
-    auto& bloom = ctx.renderer.bloomParams;
+    auto& bloom = r.bloomParams;
     s.setDouble("bloom.threshold", bloom.threshold);
     s.setDouble("bloom.knee", bloom.knee);
     s.setDouble("bloom.intensity", bloom.intensity);
 
-    s.setDouble("tonemap.op", ctx.renderer.tonemapOperator);
-    s.setDouble("grade.contrast", ctx.renderer.gradeParams.contrast);
-    s.setDouble("grade.saturation", ctx.renderer.gradeParams.saturation);
+    s.setBool("bloom.enabled", r.bloomEnabled);
+    s.setBool("ssao.enabled", r.ssaoEnabled);
+    s.setBool("ssr.enabled", r.ssrEnabled);
 
-    s.setBool("hud.show", ctx.renderer.showHud);
-    s.setDouble("targetFps", ctx.renderer.targetFps);
+    s.setDouble("tonemap.op", r.tonemapOperator);
+    s.setDouble("grade.contrast", r.gradeParams.contrast);
+    s.setDouble("grade.saturation", r.gradeParams.saturation);
 
-    s.save("settings.json");
+    s.setBool("hud.show", r.showHud);
+    s.setDouble("targetFps", r.targetFps);
+}
+
+void DebugOverlaySystem::saveSettings(FrameContext& ctx) {
+    // Scene lighting is level-owned (see loadSettings) — not persisted here, so a
+    // session's slider tweaks don't silently override the level on next launch.
+    saveSettings(ctx.settings, ctx.renderer);
+    ctx.settings.save("settings.json");
 }
 
 void DebugOverlaySystem::resetDefaults(FrameContext& ctx) {

@@ -247,6 +247,12 @@ struct BloomUniforms {
 };
 
 struct CompositeUniforms {
+    // Does the render target apply the sRGB transfer function in HARDWARE on
+    // write? Set from the presentation surface's pixel format, so the display
+    // encode happens exactly once: in-shader for a linear-storage target
+    // (macOS BGRA8Unorm, Vulkan's preferred UNORM swapchain), in hardware for
+    // an sRGB one (visionOS — CompositorServices allows nothing else).
+    int32_t targetEncodesSRGB;
     int32_t ssaoEnabled;
     int32_t ssrEnabled;
     int32_t debugView;      // 0=normal, 1=AO only, 2=SSR only, 3=depth, 4=normals,
@@ -254,7 +260,6 @@ struct CompositeUniforms {
     float   ssrBlendStrength;
     int32_t bloomEnabled;
     float   bloomIntensity;
-    int32_t envMode;        // 0=procedural sky (+clouds), 1=HDR equirect
     float   aoFloor;        // darkest the AO multiply can go
     int32_t tonemapOp;      // 0=ACES, 1=AgX (the "view transform" / film curve)
     float   gradeContrast;  // log-space contrast around middle grey (1 = neutral)
