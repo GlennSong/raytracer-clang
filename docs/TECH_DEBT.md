@@ -379,9 +379,19 @@ took shortcuts worth paying down before the binding surface grows much more.
   also touched shared engine code every backend compiles:
   `Application::settingsFilePath()`, the `DebugOverlaySystem::load/saveSettings`
   split (which added bloom/AO/SSR *enable* toggles to settings — Vulkan/web will
-  now honor those keys at boot), and a `DayNightSystem` boot log. macOS +
-  Emscripten compiles cover most of the header risk, but no Vulkan compile has
-  seen it. Two lessons worth porting deliberately, not urgently:
+  now honor those keys at boot), and a `DayNightSystem` boot log.
+  Verified 2026-08-05 pre-merge: the Vulkan backend compiles the branch clean
+  on Linux CI (real shaders via glslc); the Emscripten build compiles clean
+  from two fresh configures and boots the arena (level load + frame-0 draws
+  confirmed). Full web *visual* verification needs a real browser — the
+  agent-embedded browser pane starves requestAnimationFrame (the production
+  gh-pages site freezes on one frame in-pane too), so in-pane screenshots only
+  show each build's boot frame. Two build-tooling traps documented the hard
+  way: an incremental emscripten rebuild across a git checkout produces
+  silently-broken artifacts (always fresh-configure per commit when bisecting
+  web behavior), and the boot frame can render before the canvas size reaches
+  the engine (benign under live rAF; it IS the visible frame when starved).
+  Two lessons worth porting deliberately, not urgently:
   (a) **one sky** — Metal's composite used to re-derive sky from
   `invViewProjection` (a June workaround outliving its bug) and it broke under
   XR's asymmetric infinite-far projections; Vulkan/WebGPU already pass the
