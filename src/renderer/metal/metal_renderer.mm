@@ -2549,6 +2549,23 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
     int idx = 0;
     constexpr int MAX_LIGHTS = 32;
 
+    // Throttled state line: the one place every platform's lighting funnels
+    // through, so a headset/simulator console can answer "what light state is
+    // the GPU actually being handed" without a debugger attached.
+    static int lightBeat = 0;
+    if ((lightBeat++ % 300) == 0) {
+        NSLog(@"[lights] sunI=%.2f dir(%.2f %.2f %.2f) zen(%.2f %.2f %.2f) "
+              @"hor(%.2f %.2f %.2f) ambient=%.2f exposure=%.2f debugView=%d",
+              lighting.sun.intensity,
+              lighting.sun.direction.x, lighting.sun.direction.y,
+              lighting.sun.direction.z,
+              lighting.sky.zenithColor.x, lighting.sky.zenithColor.y,
+              lighting.sky.zenithColor.z,
+              lighting.sky.horizonColor.x, lighting.sky.horizonColor.y,
+              lighting.sky.horizonColor.z,
+              lighting.ambientMultiplier, lighting.exposure, debugView);
+    }
+
     // Per-level cascade-fit overrides (0 = unset, keep the settings-driven value):
     // a large CDLOD world needs a far longer shadow range than the 150 m default.
     if (lighting.shadow.distance > 0.0f) shadowParams.distance = lighting.shadow.distance;

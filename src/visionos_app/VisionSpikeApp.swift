@@ -147,7 +147,14 @@ struct LaunchView: View {
             }
             // Headless verification path: the simulator's synthetic taps never
             // reach visionOS window UI, so scripted runs can't press the button.
-            //   xcrun simctl launch <udid> com.glennsong.raytracer.visionspike --auto-enter
+            //   xcrun simctl launch <udid> com.glennsong.raytracer.visionspike \
+            //       --auto-enter [--level=building_lab]
+            for arg in ProcessInfo.processInfo.arguments {
+                if arg.hasPrefix("--level=") {
+                    let name = String(arg.dropFirst("--level=".count))
+                    if Self.levels.contains(name) { selectedLevel = name }
+                }
+            }
             if ProcessInfo.processInfo.arguments.contains("--auto-enter"), !shell.inArena {
                 Task { @MainActor in await enterScene() }
             }
