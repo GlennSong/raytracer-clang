@@ -747,6 +747,12 @@ struct MetalRenderer::Impl {
     id<MTLRenderPipelineState> skyboxPipeline;
     id<MTLDepthStencilState> skyboxDepthState;
 
+    // XR depth carry (depth-only fullscreen pass): moves scene depth into the
+    // compositor drawable while clamping the reverse-Z far background to a
+    // finite virtual sky plane — see the endFrame pass for the why.
+    id<MTLRenderPipelineState> depthCarryPipeline;
+    id<MTLDepthStencilState> depthCarryDepthState;
+
     // Environment (ADR-0016): an equirectangular HDR map drives the skybox and,
     // via the probe bake, IBL. nil => procedural sky.
     bool skyCloudsEnabled = true;  // mirrors SceneLighting::sky.cloudsEnabled
@@ -1191,6 +1197,29 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         impl->compositePipeline = [impl->device newRenderPipelineStateWithDescriptor:compDesc
                                                                                error:&error];
         if (!impl->compositePipeline) NSLog(@"Composite pipeline error: %@", error);
+    }
+
+    // XR depth-carry pipeline: depth-only, no color attachments. Replaces the
+    // plain depth blit into the compositor drawable so the far background can
+    // be clamped to a finite plane (endFrame has the full story).
+    {
+        id<MTLFunction> dcVert = [library newFunctionWithName:@"vertexComposite"];
+        id<MTLFunction> dcFrag = [library newFunctionWithName:@"fragmentDepthCarry"];
+        if (dcVert && dcFrag) {
+            MTLRenderPipelineDescriptor* dcDesc = [[MTLRenderPipelineDescriptor alloc] init];
+            dcDesc.vertexFunction = dcVert;
+            dcDesc.fragmentFunction = dcFrag;
+            dcDesc.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+            impl->depthCarryPipeline =
+                [impl->device newRenderPipelineStateWithDescriptor:dcDesc error:&error];
+            if (!impl->depthCarryPipeline)
+                NSLog(@"Depth-carry pipeline error: %@", error);
+            MTLDepthStencilDescriptor* dcDepth = [[MTLDepthStencilDescriptor alloc] init];
+            dcDepth.depthCompareFunction = MTLCompareFunctionAlways;
+            dcDepth.depthWriteEnabled = YES;
+            impl->depthCarryDepthState =
+                [impl->device newDepthStencilStateWithDescriptor:dcDepth];
+        }
     }
 
     // Atmosphere-glow pipeline (procedural-planet-plan P3): a fullscreen triangle
@@ -2927,6 +2956,13 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                 // Draw skybox (HDR equirect or procedural — see ADR-0016). Baking
                 // it into the cube faces is what makes IBL track the environment.
                 if (impl->skyboxPipeline) {
+                    // Same rule as the main pass: the fullscreen triangle's
+                    // winding must not depend on this encoder's front-face
+                    // convention. Here it happens to be front-facing (CCW
+                    // triangle, CCW-front encoder) — that coincidence is what
+                    // kept probe skies alive while the main-pass skybox was
+                    // silently culled. Cull nothing while the sky draws.
+                    [enc setCullMode:MTLCullModeNone];
                     [enc setRenderPipelineState:impl->skyboxPipeline];
                     [enc setDepthStencilState:impl->skyboxDepthState];
                     [enc setVertexBytes:&faceCam length:sizeof(CameraUniforms) atIndex:1];
@@ -2947,6 +2983,7 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                     [enc setFragmentTexture:impl->shadowMap atIndex:0];
                     [enc setFragmentSamplerState:impl->shadowSampler atIndex:0];
                     [enc setFragmentBytes:&noShadow length:sizeof(ShadowUniforms) atIndex:5];
+                    [enc setCullMode:MTLCullModeBack];
                 }
 
                 // Draw opaque scene geometry
@@ -3257,6 +3294,15 @@ void MetalRenderer::endFrame() {
     impl->currentEncoder = [impl->currentCommandBuffer
         renderCommandEncoderWithDescriptor:impl->currentPassDesc];
 
+    // Winding convention: scene meshes are authored clockwise-front, so every
+    // scene-geometry encoder fronts Clockwise (here and the shadow pass) — with
+    // one principled exception: a pass whose projection mirrors an axis flips
+    // apparent winding, so the cube-face probe bake fronts CounterClockwise to
+    // cull the same mesh faces. Fullscreen triangles are the trap: they wind
+    // counter-clockwise in screen space, so any fullscreen draw that shares a
+    // culling scene encoder (the skybox, in both passes) must set CullModeNone
+    // for the draw. Post passes are safe by construction — each runs on a
+    // fresh encoder whose default cull mode is None.
     [impl->currentEncoder setFrontFacingWinding:MTLWindingClockwise];
     [impl->currentEncoder setCullMode:MTLCullModeBack];
 
@@ -4075,7 +4121,6 @@ void MetalRenderer::endFrame() {
         compositeParams.ssrBlendStrength = ssrParams.blendStrength;
         compositeParams.bloomEnabled = bloomEnabled ? 1 : 0;
         compositeParams.bloomIntensity = bloomParams.intensity;
-        compositeParams.envMode = 0;   // unused: composite sky passes sceneColor through
         compositeParams.aoFloor = ssaoParams.aoFloor;
         compositeParams.tonemapOp = tonemapOperator;
         compositeParams.gradeContrast = gradeParams.contrast;
@@ -4137,22 +4182,45 @@ void MetalRenderer::endFrame() {
 
         // XR: the compositor reprojects using the drawable's DEPTH, per view.
         // The scene depth buffer holds THIS view's depth (rendered with this
-        // view's compositor projection, reverse-Z — bit-compatible), so copy
-        // it to the view's mapped depth slice while it is still this view's.
+        // view's compositor projection, reverse-Z — bit-compatible). But it
+        // can NOT be copied verbatim: sky pixels sit at exactly 0.0 =
+        // infinity, and the compositor's tile reprojector turns all-infinity
+        // tiles into flickering garbage blocks and drops fully-far regions to
+        // black — the sky vanishes while tiles that straddle a silhouette
+        // survive (display contract rule 3; the monoscopic bridge's 2 m
+        // virtual plane existed for the same reason). So the depth rides a
+        // fullscreen depth-only pass that clamps everything beyond a far
+        // virtual sky plane (~200 real meters, world-scaled) onto that plane:
+        // the sky reprojects as a distant surface, and geometry past 200 m
+        // reprojects as if at 200 m — sub-pixel error at that distance.
         if (haveXrTarget && xrDepthDst && impl->depthTexture
-            && xrDepthDst.pixelFormat == impl->depthTexture.pixelFormat
+            && impl->depthCarryPipeline
+            && xrDepthDst.pixelFormat == MTLPixelFormatDepth32Float
+            && impl->depthTexture.pixelFormat == MTLPixelFormatDepth32Float
             && xrDepthDst.width == impl->depthTexture.width
             && xrDepthDst.height == impl->depthTexture.height) {
-            id<MTLBlitCommandEncoder> dblit =
-                [impl->currentCommandBuffer blitCommandEncoder];
-            [dblit copyFromTexture:impl->depthTexture sourceSlice:0 sourceLevel:0
-                      sourceOrigin:MTLOriginMake(0, 0, 0)
-                        sourceSize:MTLSizeMake(impl->depthTexture.width,
-                                               impl->depthTexture.height, 1)
-                         toTexture:xrDepthDst destinationSlice:xrSlice
-                  destinationLevel:0
-                 destinationOrigin:MTLOriginMake(0, 0, 0)];
-            [dblit endEncoding];
+            // Reverse-Z depth of a point 200 real meters ahead, through THIS
+            // view's own projection (world-scale converts real meters to the
+            // world units the depth buffer was rendered in).
+            float dist = 200.0f * std::max(xrWorldScale, 0.01f);
+            simd_float4 clip = simd_mul(impl->cameraUniforms.projection,
+                                        simd_make_float4(0, 0, -dist, 1));
+            float skyFloor = (clip.w > 0.0f) ? clip.z / clip.w : 0.0f;
+            if (!(skyFloor > 0.0f && skyFloor < 1.0f)) skyFloor = 0.0f;
+
+            MTLRenderPassDescriptor* dp = [MTLRenderPassDescriptor renderPassDescriptor];
+            dp.depthAttachment.texture = xrDepthDst;
+            dp.depthAttachment.slice = xrSlice;
+            dp.depthAttachment.loadAction = MTLLoadActionDontCare;
+            dp.depthAttachment.storeAction = MTLStoreActionStore;
+            id<MTLRenderCommandEncoder> denc = [impl->currentCommandBuffer
+                renderCommandEncoderWithDescriptor:dp];
+            [denc setRenderPipelineState:impl->depthCarryPipeline];
+            [denc setDepthStencilState:impl->depthCarryDepthState];
+            [denc setFragmentTexture:impl->depthTexture atIndex:0];
+            [denc setFragmentBytes:&skyFloor length:sizeof(skyFloor) atIndex:0];
+            [denc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+            [denc endEncoding];
         }
     }
     }  // --- end per-view render loop ---

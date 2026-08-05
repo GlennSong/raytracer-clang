@@ -104,6 +104,25 @@ vertex CompositeOut vertexComposite(uint vid [[vertex_id]]) {
     return out;
 }
 
+// XR depth carry: moves scene depth into the compositor drawable's depth
+// buffer, clamping the reverse-Z far background (0.0 = infinity) to a finite
+// virtual sky plane. The Vision Pro compositor reprojects each presented
+// frame by its depth, tile by tile; all-infinity tiles come back as
+// flickering garbage or dropped-black pixels, so the sky must present as a
+// very distant surface instead. skyFloor is that plane's reverse-Z depth,
+// computed per view by the renderer from the view's own projection.
+struct DepthCarryOut { float depth [[depth(any)]]; };
+
+fragment DepthCarryOut fragmentDepthCarry(
+    CompositeOut in [[stage_in]],
+    depth2d<float, access::read> src [[texture(0)]],
+    constant float& skyFloor [[buffer(0)]]
+) {
+    DepthCarryOut out;
+    out.depth = max(src.read(uint2(in.position.xy)), skyFloor);
+    return out;
+}
+
 fragment float4 fragmentComposite(
     CompositeOut in [[stage_in]],
     texture2d<float> sceneColor [[texture(0)]],
