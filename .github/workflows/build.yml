@@ -1,0 +1,80 @@
+name: Build & Test
+
+# docs/ci-plan.md Stages 0 + 1: headless build + unit/physics tests on both
+# platforms, PLUS render-backend compile coverage — the Vulkan backend compiles
+# with real shaders (glslc) on Linux, and the Metal shader library is
+# offline-compiled on macOS exactly as the runtime concatenates it. This is the
+# gate that prevents "render code shipped that never once compiled"
+# (see docs/TECH_DEBT.md → "Verification gap").
+#
+# Stage 2 (headless offscreen render + golden-image parity) is future work.
+
+on:
+  push:
+    branches-ignore: [gh-pages]
+  pull_request: {}
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-vulkan:
+    name: Linux — Vulkan compile + headless tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libvulkan-dev libglfw3-dev glslc
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release 2>&1 | tee configure.log
+
+      # Without this, a missing SDK silently degrades the viewer to
+      # NullRenderer and the job passes while compiling zero render code —
+      # the exact blind spot this workflow exists to close.
+      - name: Assert the Vulkan backend was selected
+        run: grep -q "Vulkan found — building the viewer with the Vulkan backend" configure.log
+
+      - name: Build (engine + viewer + Vulkan shaders)
+        run: cmake --build build
+
+      - name: Tests
+        run: ctest --test-dir build --output-on-failure
+
+  macos-metal:
+    name: macOS — Metal + tests + offline shader check
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: brew install glfw ninja
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      # The viewer only builds where GLFW is found; if it quietly vanished
+      # this job would stop covering the Metal backend at all.
+      - name: Assert the Metal viewer was built
+        run: test -f build/viewer
+
+      - name: Tests
+        run: ctest --test-dir build --output-on-failure
+
+      # Metal shaders are runtime-compiled (newLibraryWithSource), so a .metal
+      # error otherwise only surfaces when the app launches on somebody's Mac.
+      # The script extracts the runtime's own concatenation list from
+      # metal_renderer.mm and offline-compiles the identical result.
+      - name: Offline-compile the Metal shader library
+        run: bash tools/check-metal-shaders.sh
