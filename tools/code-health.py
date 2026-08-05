@@ -16,7 +16,11 @@ What it looks for:
   * duplicate blocks — runs of >= WINDOW significant lines repeated verbatim
     (whitespace-insensitive) within or across files: the "second copy drifts"
     hazard (e.g. the checkVec3/pushVec3 helpers duplicated across Lua binding
-    surfaces, see TECH_DEBT.md).
+    surfaces, see TECH_DEBT.md). KNOWN BLIND SPOT: matching is verbatim, so a
+    clone whose identifiers were renamed evades it (the two parseTerrainParams
+    copies differed only by `tp` vs `p` and were caught by hand). Treat the
+    list as a floor, not a census; identifier-normalized hashing is the
+    planned upgrade.
   * long functions — bodies over --long-fn physical lines; candidates for a
     seam, like loadVegetation's species/scatter/spawn split.
   * debt markers — TODO/FIXME/HACK/XXX/"workaround"/"for now": where past

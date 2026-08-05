@@ -291,7 +291,8 @@ took shortcuts worth paying down before the binding surface grows much more.
 
 ## Lua flora / forest assembly
 
-- **`loadVegetation` is a 213-line god-function.** It handles tree/rock/builtin/
+- **`loadVegetation` is a 493-line god-function** (213 when this entry was
+  written — it has more than doubled). It handles tree/rock/builtin/
   graph/script kinds, inline-vs-path detection, per-variant seeds, two scatter
   passes, and entity creation. The mesh-source branching wants a small "species
   mesh provider" seam (builtin | graph | script -> mesh).
@@ -331,6 +332,64 @@ took shortcuts worth paying down before the binding surface grows much more.
   uniformly by path depth, not botanically. Good enough; revisit for nicer trees.
 - **Leaf cards orient `+Y -> heading` with no variation,** chosen blind. Likely
   needs jitter/scale variation and visual tuning on-device.
+
+## Code health — scanned, judged, parked (2026-08-05)
+
+First full `make health` run (ADR-0077). The same-day fixes: the copied Lua
+binding helpers (now `scripting/lua_helpers.h`) and the level-JSON parse
+clones between the two loaders (now `engine/level_params.{h,cpp}` — which
+also healed a real drift: the offline city parse had silently dropped the
+district-road fields). What follows is what the scan found that was judged
+REAL but deliberately NOT fixed, with the reason and the intended fix. Line
+refs are from the 2026-08-05 scan — re-run `make health` before picking one
+up, they drift.
+
+- **Vulkan pipeline boilerplate is the dominant duplication family.** One
+  ~22-line pipeline-creation block appears at TEN sites in
+  `vulkan_renderer.cpp` (1327, 1598, 1677, 1924, 2177, 2327, 2644, 2983,
+  3022, 3546), a 35-line variant at five (1207, 1467, 1822, 2075, 2582),
+  plus several smaller echoes (12×4, 10×9, 8×4…) — a few hundred redundant
+  lines total. Fix: a `makePipeline`-style helper taking a small
+  pass-description struct, absorbing the repeated create-info dance.
+  **Deliberately not done in this pass: no Vulkan SDK in the agent
+  environment, and editing 3.5k lines of backend blind is the
+  43-broken-logging-calls failure mode.** Do it in a session where the
+  backend compiles (Linux CI validates real shaders; a Vulkan-capable
+  machine verifies) — never blind.
+- **WebGPU repeats the same shape at smaller scale.** `createPipeline`
+  (`webgpu_renderer.cpp:1616`) is 663 lines with its own internal 12×2 dup
+  (1103/1176). When the Vulkan helper lands, port the pattern.
+- **Cross-backend near-clones to judge, not auto-fix.**
+  `vulkan_renderer.cpp:60-76` ≈ `webgpu_renderer.cpp:71-87` (11 lines) and
+  `metal_renderer.h:20-30` ≈ `vulkan_renderer.h:23-33` (10). Backends repeat
+  structure by design (parity docs, renderer AGENTS.md); lift a shared
+  helper only where it doesn't couple the seams.
+- **God-function ranking (seam candidates — each is its own reviewed
+  refactor, not a drive-by).** `LevelLoader::load` 1661 lines
+  (`level_loader.cpp:2053`; the level_params extraction was the first slice —
+  the natural next one is per-shape entity loaders, the giant shape-dispatch
+  if/else wants a table). `MetalRenderer::endFrame` 1153 + `initialize` 708
+  (`metal_renderer.mm`; a pass-graph split — Metal-only, needs on-device
+  verification). `growLotBuildings` 1004 (`city_lots.cpp:897`). The 775-line
+  unnamed lambda in `road_net.cpp:469` (naming it is step one).
+  `CityRenderSystem::build` 636, `buildCarMesh` 618, `buildMetro` 577,
+  `LevelScene::load` 490 — and `loadVegetation` 493, which has its own entry
+  above and has DOUBLED since that entry was written.
+- **Small intra-file clone pairs — fix on touch, not worth standalone PRs:**
+  `alignment.cpp` 18×2 (128/164), `road_constraints.cpp` 12×2 (197/340),
+  `city.cpp:164` ↔ `street_kit.cpp:12` 14×2, `city_lots.cpp` 11×2
+  (952/984), `city_render.cpp` 10×2 (901/929), `level_scene.cpp` 10×2
+  (383/434), `procgen_bindings.cpp` 10×2 (1814/2154).
+- **Scanner blind spot (tool debt).** `code-health.py` matches VERBATIM
+  (whitespace-insensitive) lines, so a clone with renamed identifiers evades
+  it — the two `parseTerrainParams` copies (`tp` vs `p`) were only caught by
+  hand-diffing. Upgrade: normalize identifiers to placeholder tokens before
+  hashing. Until then, treat the duplicate list as a floor, not a census.
+- **Baseline for the trend** (compare future `--json` snapshots against
+  this): 367 files / 87,292 lines; top-20 duplication ≈ 670 redundant line
+  copies (was 731 before the same-day fixes); 12 debt markers; the fan-in
+  heavyweights are `rt_math.h` (57 includers × 629 lines), `renderer.h`
+  (44 × 666), `components.h` (35 × 472).
 
 ## Verification gap (the meta-debt)
 
