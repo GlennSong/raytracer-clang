@@ -1,6 +1,8 @@
 #include "application.h"
 #include "states/debug_overlay_state.h"
+#include "../log.h"
 #include "../profile.h"
+#include <cstdlib>
 #include <thread>
 #include <chrono>
 
@@ -59,6 +61,22 @@ bool Application::initialize(const Config& config,
     audioEngine.initialize(config.audio);
 
     clock.setFixedStep(settingsStore.getDouble("fixedTimestep", 1.0 / 60.0));
+
+    // Frame-ledger capture without a UI (ADR-0077): RT_FRAME_STATS=<path.csv>
+    // records every frame from boot; RT_FRAME_STATS_LOG=<seconds> prints a
+    // periodic summary line — the capture path on hosts where only a console
+    // is reachable (visionOS device logs, headless soaks). Same env-var
+    // convention as RT_DEBUG_VIEW / RT_FRAME_DUMP.
+    if (const char* capturePath = std::getenv("RT_FRAME_STATS")) {
+        if (frameStats.startCapture(capturePath))
+            LOG_INFO("frame stats capture -> %s", capturePath);
+        else
+            LOG_WARN("frame stats capture failed to open %s", capturePath);
+    }
+    if (const char* logEvery = std::getenv("RT_FRAME_STATS_LOG")) {
+        statsLogInterval = std::atof(logEvery);
+        if (statsLogInterval <= 0.0) statsLogInterval = 5.0;
+    }
     return true;
 }
 
@@ -75,7 +93,7 @@ FrameContext Application::makeContext() {
     window->getSize(winW, winH);
     return FrameContext{
         worldState, *rendererPtr, *assetManager, view, clock, settingsStore, jobs,
-        eventBus, debugLines, audioEngine,
+        eventBus, debugLines, audioEngine, frameStats,
         window->getInput(), inputMap, playerInputs, xrState,
         framebufferWidth, framebufferHeight, winW, winH,
         frameDelta, interpolation, quit, transitionRequest,
@@ -118,6 +136,7 @@ bool Application::running() const {
 }
 
 void Application::runFrame() {
+    frameStats.beginFrame();
     window->pollEvents();
     frameDelta = window->getDeltaTime();
     reconcileFramebuffer();
@@ -134,6 +153,7 @@ void Application::runFrame() {
 
     {
         RT_PROFILE_ZONE_NAMED("update");
+        frameStats.beginPhase(FramePhase::Update);
         FrameContext ctx = makeContext();
         inputMap.beginFrame();
         playerInputs.beginFrame();
@@ -201,15 +221,18 @@ void Application::runFrame() {
         playerInputs.updateGamepads(window->getGamepads());
         inputMap.updateGamepad(window->getGamepads()[0]);
         stateStack.forEachActive([&](AppState& state) { state.update(ctx); });
+        frameStats.endPhase(FramePhase::Update);
     }
 
     int steps = clock.advance(frameDelta);
     interpolation = clock.interpolationAlpha();
     {
         RT_PROFILE_ZONE_NAMED("fixedUpdate");
+        frameStats.beginPhase(FramePhase::FixedUpdate);
         FrameContext ctx = makeContext();
         for (int i = 0; i < steps; i++)
             stateStack.forEachActive([&](AppState& state) { state.fixedUpdate(ctx); });
+        frameStats.endPhase(FramePhase::FixedUpdate);
     }
 
     // Deliver everything enqueued during update/fixedUpdate before the frame
@@ -217,7 +240,9 @@ void Application::runFrame() {
     eventBus.dispatchQueued();
 
     auto frameStart = std::chrono::steady_clock::now();
+    frameStats.beginPhase(FramePhase::Render);
     renderFrame();
+    frameStats.endPhase(FramePhase::Render);
     // Drop expired debug shapes now that they've been drawn; one-frame shapes
     // (the immediate-mode default) live exactly this long. The modal-resize
     // draw callback renders without expiring, so paused frames keep their
@@ -227,8 +252,11 @@ void Application::runFrame() {
     if (rendererPtr->targetFps > 0) {
         auto targetDuration = std::chrono::duration<double>(1.0 / rendererPtr->targetFps);
         auto elapsed = std::chrono::steady_clock::now() - frameStart;
-        if (elapsed < targetDuration)
+        if (elapsed < targetDuration) {
+            frameStats.beginPhase(FramePhase::Wait);
             std::this_thread::sleep_for(targetDuration - elapsed);
+            frameStats.endPhase(FramePhase::Wait);
+        }
     }
 
     {
@@ -241,6 +269,28 @@ void Application::runFrame() {
             stateStack.popState();
             stateStack.pushState(std::move(transitionRequest.next));
             stateStack.applyPending(ctx);
+        }
+    }
+
+    // Close this frame's ledger row with the renderer's submission counters,
+    // so a capture correlates time spikes with what was drawn. The same
+    // counters feed Tracy plots in profiler builds (ADR-0068).
+    RenderStats rs = rendererPtr->getRenderStats();
+    frameStats.endFrame(frameDelta, steps, rs.drawCalls, rs.totalInstances,
+                        rs.trianglesDrawn);
+    RT_PROFILE_PLOT("draw calls", static_cast<int64_t>(rs.drawCalls));
+    RT_PROFILE_PLOT("instances", static_cast<int64_t>(rs.totalInstances));
+    RT_PROFILE_PLOT("triangles", static_cast<int64_t>(rs.trianglesDrawn));
+
+    if (statsLogInterval > 0.0) {
+        statsLogTimer += frameDelta;
+        if (statsLogTimer >= statsLogInterval) {
+            statsLogTimer = 0.0;
+            FrameStats::Summary s = frameStats.summarize();
+            LOG_INFO("frame %.2fms avg / %.2f p95 / %.2f max (%.0f fps) | "
+                     "update %.2f fixed %.2f render %.2f wait %.2f",
+                     s.avgTotalMs, s.p95TotalMs, s.maxTotalMs, s.avgFps,
+                     s.avgUpdateMs, s.avgFixedMs, s.avgRenderMs, s.avgWaitMs);
         }
     }
     RT_PROFILE_FRAME();
@@ -259,6 +309,11 @@ void Application::end() {
     settingsStore.setDouble("fixedTimestep", clock.fixedStep());
     settingsStore.save(settingsFile);
 
+    if (frameStats.capturing()) {
+        LOG_INFO("frame stats capture closed: %ld frames -> %s",
+                 frameStats.capturedFrames(), frameStats.capturePath().c_str());
+        frameStats.stopCapture();
+    }
     audioEngine.shutdown();
     window->shutdownDebugUi();
     rendererPtr->shutdownDebugUi();

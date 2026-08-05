@@ -6,6 +6,7 @@
 #include "world.h"
 #include "xr/xr_backend.h"
 #include "clock.h"
+#include "frame_stats.h"
 #include "asset_manager.h"
 #include "audio/audio_engine.h"
 #include "mesh_uploader.h"
@@ -85,6 +86,9 @@ public:
     // The simulation clock, exposed so an editor shell can drive pause /
     // single-step transport controls during play (same switch Space toggles).
     SimClock& simClock() { return clock; }
+    // The frame ledger (ADR-0077). Hosts without ImGui — the visionOS panel —
+    // read summarize()/lastFrame() here; any host may start a CSV capture.
+    FrameStats& stats() { return frameStats; }
 
 private:
     void reconcileFramebuffer();
@@ -101,6 +105,12 @@ private:
     std::unique_ptr<AssetManager> assetManager;
     World worldState;
     SimClock clock;
+    FrameStats frameStats;
+    // Interval (seconds) between LOG_INFO frame summaries, 0 = off. Set from
+    // RT_FRAME_STATS_LOG for hosts where only a console is visible (device
+    // logs on visionOS, headless runs).
+    double statsLogInterval = 0.0;
+    double statsLogTimer = 0.0;
     Settings settingsStore;
     // The one shared thread pool (ADR-0014). Declared before `systems` so it
     // outlives them — a system (e.g. physics) may hold work referencing it.

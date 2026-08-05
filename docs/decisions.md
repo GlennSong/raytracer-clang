@@ -5555,6 +5555,78 @@ this: that is the point to build the dormant cube-face quadtree LOD, camera-
 relative rendering, and floating-origin rebasing — i.e. the full capstone this ADR
 scopes out.
 
+## ADR-0077 — The frame ledger: always-on frame accounting beside Tracy, plus a code-health scanner
+**Status:** Accepted · **Date:** 2026-08-05
+
+**Context.** With the visionOS port merged, the engine runs on a surface where
+its one profiler is hardest to use: Tracy (ADR-0068) needs its UI on a second
+machine, and the wearer of a headset cannot glance at it. The same gap shows up
+headless (CI, soak runs, the web build) and in history: TECH_DEBT's "arena dips
+to ~20 fps" entry stalled on "needs a frame capture before optimizing blind"
+because producing any *record* of frame behaviour required a profiler build
+plus an attached UI. Separately, the debt ledger tracks patch-shaped code
+(duplicated binding helpers, god-functions) found by hand, one entry at a time.
+
+**Decision.** Three pieces, smallest that closes each gap:
+
+1. **`engine::FrameStats` — the frame ledger** (`src/engine/frame_stats.{h,cpp}`),
+   owned by `Application`, always compiled, always on. A 240-frame ring of
+   per-phase CPU times (update / fixedUpdate / render / FPS-cap wait) bracketed
+   in `runFrame`, joined with the renderer's existing `RenderStats` counters at
+   end of frame. Consumers: the debug overlay's **Performance** panel (frame
+   graph + p95/max + phase split, ADR-0011), any host via `Application::stats()`
+   (the visionOS panel path, like the `loadSettings` seam), a **CSV capture**
+   (`startCapture`, or `RT_FRAME_STATS=<path>` from boot, or the overlay
+   button) rendered by `tools/frame-report.py` into a self-contained HTML
+   report with a `--compare` mode for before/after, and a periodic summary
+   log line (`RT_FRAME_STATS_LOG=<sec>`) for console-only surfaces.
+   Exposed through `FrameContext.stats`; unit-tested headless via the
+   clock-free `record()` seam (`tests/test_frame_stats.cpp`).
+2. **Wider Tracy coverage, one new macro.** `RT_PROFILE_PLOT` (Tracy plots,
+   inert otherwise) graphs the `RenderStats` counters; zones added at the
+   "obvious next" sites ADR-0068 named: physics step, render submit, script
+   tick, terrain LOD, level load / vegetation, SDF polygonize, asset upload,
+   kd-tree build, path-tracer rows.
+3. **`tools/code-health.py` (`make health`)** — a stdlib-only scanner for
+   patch-shaped code: verbatim duplicate blocks (clustered into families),
+   long functions, debt markers, include fan-in. A *finder*, not a gate: its
+   output is candidates for TECH_DEBT/register entries, and `--json` snapshots
+   make cleanups measurable. First run validated it against known debt (it
+   rediscovered the Lua binding-helper duplication and `loadVegetation`) and
+   surfaced new families (the offline `level_scene` importer clones five
+   blocks of `level_loader`; the Vulkan pipeline builders repeat one block at
+   ten sites).
+
+**The boundary with ADR-0068** (which rejected "hand-rolled zone timers +
+ImGui plot"): that rejection was of building a worse *Tracy* — zones, threads,
+history, a UI. The ledger is deliberately not that: fixed phases only, no
+hierarchy, no threads, ~8 clock reads a frame. Tracy answers "*why* was this
+frame slow" when a UI can attach; the ledger answers "*was* it slow, where,
+and is it better than yesterday" everywhere, always, in a diffable file. If
+the ledger ever grows toward zones, that is the signal to stop and use Tracy.
+
+**Alternatives.** (a) Tracy-only + on-demand capture tooling (`tracy-capture`
+headless): still needs the profiler build + a connecting host, produces
+gigabyte traces where a CSV row per frame answers the regression question, and
+gives the headset wearer nothing. (b) Renderer-side HUD text (the existing
+`showHud`): presentation without a record — no history, no capture, nothing
+comparable. (c) clang-tidy/CodeChecker for code health: real linters find
+different classes of issue (correctness); the duplication/fan-in/god-function
+report wanted here is cheap, dependency-free, and tuned to this repo's debt
+vocabulary.
+
+**Consequences.** `FrameContext` carries a `stats` reference (one construction
+site). Every host gets the ledger with no wiring (editor, viewer, visionOS,
+web). The overlay's Performance panel and the CSV share one source of truth,
+so HUD numbers and reports can't disagree. The visionOS profiler story is now:
+glance at the ledger (panel/log), capture CSV to Documents, attach Tracy from
+the paired Mac only when a deep dive is warranted — `RT_ENABLE_PROFILER` on
+the visionOS build is compile-unverified here (no SDK), flagged per
+convention. **Revisit trigger:** GPU time is the ledger's known blind spot
+(render phase = CPU submit + present wait); when a frame goes GPU-bound with
+CPU headroom, adopt Tracy GPU contexts behind `profile.h` (the ADR-0068
+trigger) and consider a `gpuMs` column then.
+
 ---
 
 ## Interim seams & tech-debt register

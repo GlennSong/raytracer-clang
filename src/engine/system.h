@@ -19,6 +19,7 @@
 namespace engine {
 
 class AssetManager;
+class FrameStats;
 
 // End-of-frame request to swap the active app state (e.g. the editor's Play
 // button, the game's Stop). Application pops the current state and pushes
@@ -68,6 +69,9 @@ struct FrameContext {
                                // drawn on top by DebugDrawSystem
     AudioEngine& audio;        // sealed miniaudio engine (ADR-0069); prefer
                                // PlaySound events over direct play() calls
+    FrameStats& stats;         // the frame ledger (ADR-0077): per-phase times,
+                               // history ring, CSV capture — read-mostly; only
+                               // Application writes timings
     const InputState& input;   // polled continuous snapshot (mouse, raw keys)
     InputMap& actions;         // global/system actions (quit, pause): keyboard
     PlayerInputs& players;     // per-player gameplay input (see player_input.h)
