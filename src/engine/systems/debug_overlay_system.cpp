@@ -1,5 +1,7 @@
 #include "debug_overlay_system.h"
 
+#include "../frame_stats.h"
+
 #include <algorithm>
 
 #ifdef RT_ENABLE_IMGUI
@@ -154,6 +156,43 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
     ImGui::Text("Draw calls: %u (instanced: %u)", rs.drawCalls, rs.instancedDrawCalls);
     ImGui::Text("Instances: %u  Triangles: %.2fM", rs.totalInstances,
                 rs.trianglesDrawn / 1e6);
+
+    // The frame ledger (ADR-0077): where the frame's CPU time goes, over the
+    // last ~4 s. Wait is FPS-cap sleep — headroom, not cost. For anything the
+    // per-phase split can't answer, attach Tracy (RT_ENABLE_PROFILER).
+    if (ImGui::CollapsingHeader("Performance")) {
+        FrameStats& fs = ctx.stats;
+        FrameStats::Summary sum = fs.summarize();
+        ImGui::Text("frame  %5.2f ms avg   %5.2f p95   %5.2f max",
+                    sum.avgTotalMs, sum.p95TotalMs, sum.maxTotalMs);
+        ImGui::Text("update %5.2f   fixed %5.2f   render %5.2f   wait %5.2f",
+                    sum.avgUpdateMs, sum.avgFixedMs, sum.avgRenderMs,
+                    sum.avgWaitMs);
+
+        static float plotBuf[FrameStats::HISTORY];
+        const int n = fs.historySize();
+        for (int i = 0; i < n; i++) plotBuf[i] = fs.historyAt(i).totalMs;
+        // Fixed 0..2x-budget scale so spikes read against 16.6/33.3 ms rather
+        // than autoscale flattening everything.
+        float budgetMs = ctx.renderer.targetFps > 0
+                             ? 1000.0f / static_cast<float>(ctx.renderer.targetFps)
+                             : 16.6f;
+        ImGui::PlotLines("##frameTimes", plotBuf, n, 0, nullptr, 0.0f,
+                         budgetMs * 2.0f, ImVec2(-1, 64));
+        ImGui::TextDisabled("last %d frames, scale 0-%.1f ms", n,
+                            budgetMs * 2.0f);
+
+        if (!fs.capturing()) {
+            if (ImGui::Button("Start CSV capture"))
+                fs.startCapture("frame-capture.csv");
+            ImGui::SameLine();
+            ImGui::TextDisabled("-> frame-capture.csv (tools/frame-report.py)");
+        } else {
+            if (ImGui::Button("Stop CSV capture")) fs.stopCapture();
+            ImGui::SameLine();
+            ImGui::Text("recording: %ld frames", fs.capturedFrames());
+        }
+    }
 
     ImGui::Separator();
     const char* viewNames[] = {"Normal", "AO Only", "SSR Only", "Depth", "Normals",
