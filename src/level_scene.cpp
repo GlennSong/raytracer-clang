@@ -13,6 +13,7 @@
 #include "engine/procgen/terrain_field.h"   // HeightField (level ground sampler)
 #include "engine/procgen/city/water_mesh.h" // buildWaterMesh (ocean/lake surface)
 #include "engine/procgen/proc_model.h"      // ProcModel (script model cache)
+#include "engine/level_params.h"            // shared level-JSON -> params readers
 #include "log.h"
 #include <unordered_map>
 #include <array>
@@ -201,49 +202,9 @@ bool isIdentity(const Quat& q) {
     return q.x == 0.0 && q.y == 0.0 && q.z == 0.0;
 }
 
-// Parse a terrain JSON block into TerrainParams (shared by addTerrain and the
-// city's ground-height sampler, so the city drapes onto the exact same surface).
-TerrainParams parseTerrainParams(const json& t) {
-    TerrainParams tp;
-    tp.size        = t.value("size", tp.size);
-    tp.resolution  = t.value("resolution", tp.resolution);
-    tp.heightScale = t.value("heightScale", tp.heightScale);
-    tp.noiseScale  = t.value("noiseScale", tp.noiseScale);
-    tp.octaves     = t.value("octaves", tp.octaves);
-    tp.warp        = t.value("warp", tp.warp);
-    tp.mountainHeight = t.value("mountainHeight", tp.mountainHeight);
-    tp.mountainScale  = t.value("mountainScale", tp.mountainScale);
-    tp.mountainMaskScale = t.value("mountainMaskScale", tp.mountainMaskScale);
-    tp.mountainAlongRange = t.value("mountainAlongRange", tp.mountainAlongRange);
-    tp.tiltX = t.value("tiltX", tp.tiltX);
-    tp.tiltZ = t.value("tiltZ", tp.tiltZ);
-    tp.seaLevel = t.value("seaLevel", tp.seaLevel);
-    tp.snowLine = t.value("snowLine", tp.snowLine);   // colour-band scaling
-    tp.rockLine = t.value("rockLine", tp.rockLine);
-    tp.mountainMaskLo = t.value("mountainMaskLo", tp.mountainMaskLo);
-    tp.mountainMaskHi = t.value("mountainMaskHi", tp.mountainMaskHi);
-    if (t.contains("rangeSpine") && t["rangeSpine"].is_array()) {
-        std::vector<Vec3> ctl;
-        for (const auto& pt : t["rangeSpine"])
-            if (pt.is_array() && pt.size() >= 2)
-                ctl.push_back(Vec3(pt[0].get<double>(), 0.0, pt[1].get<double>()));
-        tp.rangeSpine = sampleRangeSpine(ctl);
-    }
-    tp.rangeWidth = t.value("rangeWidth", tp.rangeWidth);
-    tp.rangeHeight = t.value("rangeHeight", tp.rangeHeight);
-    tp.rangeVariation = t.value("rangeVariation", tp.rangeVariation);
-    if (t.contains("range") && t["range"].is_object()) {
-        const auto& r = t["range"];
-        tp.rangeRidges = buildRangeRidges(
-            r.value("length", 60.0f), r.value("branchAngle", 38.0f),
-            r.value("falloff", 0.55f), r.value("leaderFalloff", 0.92f),
-            r.value("iterations", 5), r.value("height", 130.0f),
-            r.value("depthFalloff", 0.62f), r.value("angleJitter", 12.0f),
-            r.value("seed", 0u));
-        tp.rangeWidth = r.value("width", tp.rangeWidth);
-    }
-    return tp;
-}
+// (parseTerrainParams moved to engine/level_params.cpp as readTerrainParams —
+// the ONE parse this importer and the engine loader share, so the city, roads,
+// and the offline render all drape onto the exact same surface.)
 
 // A procedural terrain block: regenerate the same mesh the engine does and add
 // it (vertex color carries the slope/height coloring; material albedo
@@ -252,7 +213,7 @@ void addTerrain(const json& t, Scene& scene, const MaterialTable& materials,
                 const std::vector<TerrainFlatten>& flatten = {},
                 std::shared_ptr<const std::function<double(double, double)>>
                     erodedBase = nullptr) {
-    TerrainParams tp = parseTerrainParams(t);
+    TerrainParams tp = readTerrainParams(t);
     tp.erodedBase = erodedBase;   // shared eroded surface (roads conform to it)
     tp.flatten = flatten;   // city cut/fill so the ground meets the roads/blocks
     rebuildFlattenIndex(tp);   // index the cut/fill set (ADR-0075 P0)
@@ -304,38 +265,8 @@ void addTerrain(const json& t, Scene& scene, const MaterialTable& materials,
 // is baked into the vertex color, so both materials use a white albedo — the
 // leaf texture's alpha drives the cutout (FLAG_ALPHA_TEST in the viewer).
 void addTree(const json& ent, Scene& scene) {
-    TreeParams tp;
     uint32_t seed = 0;
-    if (ent.contains("tree")) {
-        const auto& j = ent["tree"];
-        tp.iterations      = j.value("iterations", tp.iterations);
-        tp.trunkLength     = j.value("trunkLength", tp.trunkLength);
-        tp.lengthFalloff   = j.value("lengthFalloff", tp.lengthFalloff);
-        tp.leaderFalloff   = j.value("leaderFalloff", tp.leaderFalloff);
-        tp.branchAngle     = j.value("branchAngle", tp.branchAngle);
-        tp.angleJitter     = j.value("angleJitter", tp.angleJitter);
-        tp.branchesPerNode = j.value("branchesPerNode", tp.branchesPerNode);
-        tp.phyllotaxis     = j.value("phyllotaxis", tp.phyllotaxis);
-        tp.terminalFraction = j.value("terminalFraction", tp.terminalFraction);
-        tp.terminalForks   = j.value("terminalForks", tp.terminalForks);
-        tp.droop           = j.value("droop", tp.droop);
-        tp.wander          = j.value("wander", tp.wander);
-        tp.rootCount       = j.value("rootCount", tp.rootCount);
-        tp.rootSpread      = j.value("rootSpread", tp.rootSpread);
-        tp.leafClump       = j.value("leafClump", tp.leafClump);
-        tp.maxLeafCards    = j.value("maxLeafCards", tp.maxLeafCards);
-        tp.tipRadius       = j.value("tipRadius", tp.tipRadius);
-        tp.pipeExponent    = j.value("pipeExponent", tp.pipeExponent);
-        tp.radiusScale     = j.value("radiusScale", tp.radiusScale);
-        tp.ringSegments    = j.value("ringSegments", tp.ringSegments);
-        tp.leaves          = j.value("leaves", tp.leaves);
-        tp.leafSize        = j.value("leafSize", tp.leafSize);
-        tp.leavesPerTip    = j.value("leavesPerTip", tp.leavesPerTip);
-        tp.leafThickness   = j.value("leafThickness", tp.leafThickness);
-        tp.barkColor       = parseVec3(j.value("barkColor", json()), tp.barkColor);
-        tp.leafColor       = parseVec3(j.value("leafColor", json()), tp.leafColor);
-        seed               = j.value("seed", 0u);
-    }
+    TreeParams tp = readTreeParams(ent, seed);
 
     Vec3 position = parseVec3(ent.value("position", json()));
     Quat orientation = parseOrientation(ent);
@@ -380,39 +311,10 @@ bool cityIsOnTerrain(const json& ent) {
 }
 
 CityModel generateCityModel(const json& ent, const json& root) {
-    CityParams cp;
-    Vec3 pos = parseVec3(ent.value("position", json()));
-    cp.center = {pos.x, pos.z};
-    cp.baseY = pos.y;
-    bool onTerrain = false;
-    if (ent.contains("city")) {
-        const auto& j = ent["city"];
-        cp.extent         = j.value("extent", cp.extent);
-        cp.cellSize       = j.value("cellSize", cp.cellSize);
-        cp.roadJitter     = j.value("roadJitter", cp.roadJitter);
-        cp.sidewalk       = j.value("sidewalk", cp.sidewalk);
-        cp.downtownRadius = j.value("downtownRadius", cp.downtownRadius);
-        cp.midtownRadius  = j.value("midtownRadius", cp.midtownRadius);
-        cp.parkFraction   = j.value("parkFraction", cp.parkFraction);
-        cp.buildChance    = j.value("buildChance", cp.buildChance);
-        cp.scatterTrees   = j.value("scatterTrees", cp.scatterTrees);
-        cp.seed           = j.value("seed", cp.seed);
-        onTerrain         = j.value("onTerrain", false);
-    }
-
-    // City Arena (ADR-0038 §6): drape onto the level's terrain. The shared_ptr
-    // keeps the params/noise alive for the sampler closure the model may hold.
-    // The sampler reads the *base* terrain (no flatten) so the city decides its
-    // grades from natural ground; its flatten footprints then cut the mesh.
-    if (onTerrain && root.contains("terrain")) {
-        auto tp = std::make_shared<TerrainParams>(parseTerrainParams(root["terrain"]));
-        auto noise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
-        Real base = cp.baseY;
-        cp.groundAt = [tp, noise, base](const Vec2& p) {
-            return base + terrainHeight(*tp, *noise, p.x, p.y);
-        };
-    }
-    return generateCity(cp);
+    // readCityParams parses the FULL field set (district roads included — this
+    // importer's old local parse had drifted and silently dropped them) and
+    // builds the groundAt drape closure when the city is on terrain.
+    return generateCity(readCityParams(ent, root));
 }
 
 int addCpuImage(Scene& scene, const CpuImage& img) {
@@ -620,24 +522,11 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
     // eroded height field ONCE and share the sampler across levelGround (roads/lots
     // conform to it), the lot ground, and addTerrain's mesh — so the offline render
     // matches the same eroded surface everywhere (see level_loader for the rationale).
-    std::shared_ptr<const std::function<double(double, double)>> sharedEroded;
-    if (root.contains("terrain") && root["terrain"].value("erode", false)) {
-        const json& tj = root["terrain"];
-        TerrainParams eb = parseTerrainParams(tj);
-        Noise en(tj.value("seed", 0u));
-        ErosionParams ep;
-        ep.seed = tj.value("seed", 0u) + 1234u;
-        ep.droplets = tj.value("erodeDroplets", ep.droplets);
-        ep.erodeRadius = tj.value("erodeRadius", ep.erodeRadius);
-        ep.thermalIterations = tj.value("erodeThermal", ep.thermalIterations);
-        ep.talus = tj.value("erodeTalus", ep.talus);
-        bakeErodedTerrain(eb, en, eb.size, tj.value("erodeRes", 512), ep);
-        sharedEroded = eb.erodedBase;
-    }
+    auto sharedEroded = readErodedBase(root);
 
     HeightField levelGround;
     if (root.contains("terrain")) {
-        auto tp = std::make_shared<TerrainParams>(parseTerrainParams(root["terrain"]));
+        auto tp = std::make_shared<TerrainParams>(readTerrainParams(root["terrain"]));
         tp->erodedBase = sharedEroded;
         auto noise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
         levelGround = [tp, noise](double x, double z) {
@@ -723,23 +612,14 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         if (levelGround && !lotNets.empty() && root.contains("citysim") &&
             root["citysim"].value("buildLots", false)) {
             const json& cs = root["citysim"];
-            TerrainParams ctp = parseTerrainParams(root["terrain"]);
+            TerrainParams ctp = readTerrainParams(root["terrain"]);
             ctp.erodedBase = sharedEroded;   // lots grade off the eroded ground
             ctp.flatten = allFlatten;   // the road-carved ground the lots see
             rebuildFlattenIndex(ctp);   // index the cut/fill set (ADR-0075 P0)
             Noise cnoise(root["terrain"].value("seed", 0u));
             engine::EdgeBlockParams ep;
-            ep.depth = cs.value("edgeBlockDepth", ep.depth);
-            ep.minLen = cs.value("edgeBlockMinLen", ep.minLen);
-            ep.maxLen = cs.value("edgeBlockMaxLen", ep.maxLen);
-            ep.margin = 4.0 + cs.value("sidewalk", 4.0);
             engine::LotParams lp;
-            lp.seed = cs.value("seed", 1u) ^ 0x10c5u;
-            lp.buildChance = cs.value("buildChance", 0.9);
-            lp.roadMargin = 4.0 + cs.value("sidewalk", 4.0);
-            lp.innerRadius = cs.value("downtownRadius", 55.0);
-            lp.midRadius = cs.value("midtownRadius", 135.0);
-            lp.plinth = cs.value("plinth", lp.plinth);
+            readLotGrowParams(cs, ep, lp);
             lp.ground = [&ctp, &cnoise](engine::Real x, engine::Real z) {
                 return static_cast<engine::Real>(terrainHeight(ctp, cnoise, x, z));
             };
@@ -854,18 +734,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
     // gives on device. Needs a terrain floor, so it's gated on levelGround.
     if (root.contains("water") && levelGround) {
         const json& w = root["water"];
-        engine::WaterMeshParams wp;
-        wp.seaLevel = w.value("seaLevel", 0.0);
-        if (double region = w.value("region", 0.0); region > 0.0) {
-            wp.lo = {-region, -region};
-            wp.hi = {region, region};
-        }
-        if (w.contains("lo") && w["lo"].is_array())
-            wp.lo = {w["lo"][0].get<double>(), w["lo"][1].get<double>()};
-        if (w.contains("hi") && w["hi"].is_array())
-            wp.hi = {w["hi"][0].get<double>(), w["hi"][1].get<double>()};
-        wp.cell = w.value("cell", wp.cell);
-        wp.foamBand = w.value("foamBand", wp.foamBand);
+        engine::WaterMeshParams wp = readWaterParams(w);
         RenderMesh wmesh = engine::buildWaterMesh(levelGround, wp);
         if (!wmesh.vertices.empty()) {
             Vec3 tint(0.015, 0.05, 0.09);

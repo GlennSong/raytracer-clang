@@ -1,6 +1,7 @@
 #include "level_loader.h"
 
 #include "../profile.h"
+#include "level_params.h"   // shared level-JSON -> params readers (both loaders)
 #include "script_assets.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/script_modules.h"
@@ -223,8 +224,6 @@ static MeshHandle getOrCreateMesh(const std::string& shape, const json& sizeJ,
     return handle;
 }
 
-static TerrainParams parseTerrainParams(const json& t);   // defined below
-
 static Collider buildCollider(const std::string& shape, const json& sizeJ,
                                const json& physics) {
     Vec3 sz = parseVec3(sizeJ, Vec3(1, 1, 1));
@@ -441,38 +440,8 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
 // cards, no collision). docs/lsystem-botany-plan.md.
 static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
                            AssetManager& assets, int index) {
-    TreeParams tp;
     uint32_t seed = 0;
-    if (ent.contains("tree")) {
-        const auto& j = ent["tree"];
-        tp.iterations     = j.value("iterations", tp.iterations);
-        tp.trunkLength    = j.value("trunkLength", tp.trunkLength);
-        tp.lengthFalloff  = j.value("lengthFalloff", tp.lengthFalloff);
-        tp.leaderFalloff  = j.value("leaderFalloff", tp.leaderFalloff);
-        tp.branchAngle    = j.value("branchAngle", tp.branchAngle);
-        tp.angleJitter    = j.value("angleJitter", tp.angleJitter);
-        tp.branchesPerNode = j.value("branchesPerNode", tp.branchesPerNode);
-        tp.phyllotaxis    = j.value("phyllotaxis", tp.phyllotaxis);
-        tp.terminalFraction = j.value("terminalFraction", tp.terminalFraction);
-        tp.terminalForks  = j.value("terminalForks", tp.terminalForks);
-        tp.droop          = j.value("droop", tp.droop);
-        tp.wander         = j.value("wander", tp.wander);
-        tp.rootCount      = j.value("rootCount", tp.rootCount);
-        tp.rootSpread     = j.value("rootSpread", tp.rootSpread);
-        tp.leafClump      = j.value("leafClump", tp.leafClump);
-        tp.maxLeafCards   = j.value("maxLeafCards", tp.maxLeafCards);
-        tp.tipRadius      = j.value("tipRadius", tp.tipRadius);
-        tp.pipeExponent   = j.value("pipeExponent", tp.pipeExponent);
-        tp.radiusScale    = j.value("radiusScale", tp.radiusScale);
-        tp.ringSegments   = j.value("ringSegments", tp.ringSegments);
-        tp.leaves         = j.value("leaves", tp.leaves);
-        tp.leafSize       = j.value("leafSize", tp.leafSize);
-        tp.leavesPerTip   = j.value("leavesPerTip", tp.leavesPerTip);
-        tp.leafThickness  = j.value("leafThickness", tp.leafThickness);
-        tp.barkColor      = parseVec3(j.value("barkColor", json()), tp.barkColor);
-        tp.leafColor      = parseVec3(j.value("leafColor", json()), tp.leafColor);
-        seed              = j.value("seed", 0u);
-    }
+    TreeParams tp = readTreeParams(ent, seed);
 
     TreeMesh tm = growTree(tp, seed);
     if (tm.branches.vertices.empty()) return;
@@ -549,43 +518,7 @@ static bool cityIsOnTerrain(const json& ent) {
 // the spawn so the loader can pull model.flatten and grade the terrain to it
 // before the terrain mesh is built.
 static CityModel cityModelFromEntity(const json& ent, const json& root) {
-    CityParams cp;
-    Vec3 pos = parseVec3(ent.value("position", json()));
-    cp.center = {pos.x, pos.z};
-    cp.baseY = pos.y;
-    bool onTerrain = false;
-    if (ent.contains("city")) {
-        const auto& j = ent["city"];
-        cp.extent         = j.value("extent", cp.extent);
-        cp.cellSize       = j.value("cellSize", cp.cellSize);
-        cp.roadJitter     = j.value("roadJitter", cp.roadJitter);
-        cp.sidewalk       = j.value("sidewalk", cp.sidewalk);
-        cp.downtownRadius = j.value("downtownRadius", cp.downtownRadius);
-        cp.midtownRadius  = j.value("midtownRadius", cp.midtownRadius);
-        cp.parkFraction   = j.value("parkFraction", cp.parkFraction);
-        cp.buildChance    = j.value("buildChance", cp.buildChance);
-        cp.scatterTrees   = j.value("scatterTrees", cp.scatterTrees);
-        cp.seed           = j.value("seed", cp.seed);
-        onTerrain         = j.value("onTerrain", false);
-        // District road tech (ADR-0066): real arterials + irregular streets whose
-        // blocks feed the lot/building pipeline, instead of the regular grid.
-        cp.districtRoads  = j.value("districtRoads", cp.districtRoads);
-        cp.arterials      = j.value("arterials", cp.arterials);
-        cp.blockSizeMin   = j.value("blockSizeMin", cp.blockSizeMin);
-        cp.blockSizeMax   = j.value("blockSizeMax", cp.blockSizeMax);
-        cp.arteryWidth    = j.value("arteryWidth", cp.arteryWidth);
-        cp.streetWidth    = j.value("streetWidth", cp.streetWidth);
-        cp.irregular      = j.value("irregular", cp.irregular);
-    }
-    if (onTerrain && root.contains("terrain")) {
-        auto tp = std::make_shared<TerrainParams>(parseTerrainParams(root["terrain"]));
-        auto noise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
-        Real base = cp.baseY;
-        cp.groundAt = [tp, noise, base](const Vec2& p) {
-            return base + terrainHeight(*tp, *noise, p.x, p.y);
-        };
-    }
-    return generateCity(cp);
+    return generateCity(readCityParams(ent, root));
 }
 
 static void loadCityEntity(const json& ent, const json& root, World& world,
@@ -1322,47 +1255,8 @@ static void loadPlayerSpawn(const json& player, World& world,
     world.add<Renderable>(e, gizmo);
 }
 
-static TerrainParams parseTerrainParams(const json& t) {
-    TerrainParams p;
-    p.size        = t.value("size", p.size);
-    p.resolution  = t.value("resolution", p.resolution);
-    p.heightScale = t.value("heightScale", p.heightScale);
-    p.noiseScale  = t.value("noiseScale", p.noiseScale);
-    p.octaves     = t.value("octaves", p.octaves);
-    p.warp        = t.value("warp", p.warp);
-    p.mountainHeight = t.value("mountainHeight", p.mountainHeight);
-    p.mountainScale  = t.value("mountainScale", p.mountainScale);
-    p.mountainMaskScale = t.value("mountainMaskScale", p.mountainMaskScale);
-    p.mountainMaskLo = t.value("mountainMaskLo", p.mountainMaskLo);
-    p.mountainMaskHi = t.value("mountainMaskHi", p.mountainMaskHi);
-    p.mountainAlongRange = t.value("mountainAlongRange", p.mountainAlongRange);
-    p.tiltX = t.value("tiltX", p.tiltX);
-    p.tiltZ = t.value("tiltZ", p.tiltZ);
-    p.seaLevel = t.value("seaLevel", p.seaLevel);   // set from the water block below
-    p.snowLine = t.value("snowLine", p.snowLine);   // colour-band scaling
-    p.rockLine = t.value("rockLine", p.rockLine);
-    if (t.contains("rangeSpine") && t["rangeSpine"].is_array()) {
-        std::vector<Vec3> ctl;
-        for (const auto& pt : t["rangeSpine"])
-            if (pt.is_array() && pt.size() >= 2)
-                ctl.push_back(Vec3(pt[0].get<double>(), 0.0, pt[1].get<double>()));
-        p.rangeSpine = sampleRangeSpine(ctl);
-    }
-    p.rangeWidth = t.value("rangeWidth", p.rangeWidth);
-    p.rangeHeight = t.value("rangeHeight", p.rangeHeight);
-    p.rangeVariation = t.value("rangeVariation", p.rangeVariation);
-    if (t.contains("range") && t["range"].is_object()) {
-        const auto& r = t["range"];
-        p.rangeRidges = buildRangeRidges(
-            r.value("length", 60.0f), r.value("branchAngle", 38.0f),
-            r.value("falloff", 0.55f), r.value("leaderFalloff", 0.92f),
-            r.value("iterations", 5), r.value("height", 130.0f),
-            r.value("depthFalloff", 0.62f), r.value("angleJitter", 12.0f),
-            r.value("seed", 0u));
-        p.rangeWidth = r.value("width", p.rangeWidth);
-    }
-    return p;
-}
+// (parseTerrainParams moved to level_params.cpp as readTerrainParams — the
+// ONE parse both this loader and the offline importer use.)
 
 // Procedural terrain (ADR-0021 persistence: the document stores the recipe —
 // seed + params — and the engine regenerates the mesh at load, rather than
@@ -2100,17 +1994,8 @@ static GrownLots growCityLots(const std::vector<engine::RoadNet>& nets,
     // synthesize rectangular blocks on boundary roads' open sides so the
     // outskirts build up too. Sized by min/max length + depth knobs.
     engine::EdgeBlockParams ep;
-    ep.depth = cs.value("edgeBlockDepth", ep.depth);
-    ep.minLen = cs.value("edgeBlockMinLen", ep.minLen);
-    ep.maxLen = cs.value("edgeBlockMaxLen", ep.maxLen);
-    ep.margin = 4.0 + cs.value("sidewalk", 4.0);
     engine::LotParams lp;
-    lp.seed = cs.value("seed", 1u) ^ 0x10c5u;
-    lp.buildChance = cs.value("buildChance", 0.9);
-    lp.roadMargin = 4.0 + cs.value("sidewalk", 4.0);   // road half + sidewalk
-    lp.innerRadius = cs.value("downtownRadius", 55.0);
-    lp.midRadius = cs.value("midtownRadius", 135.0);
-    lp.plinth = cs.value("plinth", lp.plinth);   // base height above the pad
+    readLotGrowParams(cs, ep, lp);
     // Polycentric zoning: a metro recipe leaves its hubs (with district kinds)
     // on the net — forward them so lots zone by nearest hub, not one centre.
     for (const engine::RoadNet& n : nets)
@@ -2212,20 +2097,7 @@ bool LevelLoader::load(const std::string& path,
     // conform to analytic relief that the eroded mesh no longer matches, so they'd
     // sink or poke. terrainHeight reads params.erodedBase, so injecting the same
     // shared_ptr into every params copy is all it takes.
-    std::shared_ptr<const std::function<double(double, double)>> sharedEroded;
-    if (root.contains("terrain") && root["terrain"].value("erode", false)) {
-        const json& tj = root["terrain"];
-        TerrainParams eb = parseTerrainParams(tj);
-        Noise en(tj.value("seed", 0u));
-        ErosionParams ep;
-        ep.seed = tj.value("seed", 0u) + 1234u;
-        ep.droplets = tj.value("erodeDroplets", ep.droplets);
-        ep.erodeRadius = tj.value("erodeRadius", ep.erodeRadius);
-        ep.thermalIterations = tj.value("erodeThermal", ep.thermalIterations);
-        ep.talus = tj.value("erodeTalus", ep.talus);
-        bakeErodedTerrain(eb, en, eb.size, tj.value("erodeRes", 512), ep);
-        sharedEroded = eb.erodedBase;
-    }
+    auto sharedEroded = readErodedBase(root);
 
     // A city draped on the terrain is generated BEFORE the terrain: it grades its
     // roads/blocks off the natural ground, then returns cut/fill footprints the
@@ -2250,7 +2122,7 @@ bool LevelLoader::load(const std::string& path,
     // conforms the CDLOD terrain — the script sibling of the C++ city's groundAt.
     HeightField levelGround;
     if (root.contains("terrain")) {
-        auto tp = std::make_shared<TerrainParams>(parseTerrainParams(root["terrain"]));
+        auto tp = std::make_shared<TerrainParams>(readTerrainParams(root["terrain"]));
         tp->erodedBase = sharedEroded;   // roads/lots conform to the ERODED surface
         auto noise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
         levelGround = [tp, noise](double x, double z) {
@@ -2608,7 +2480,7 @@ bool LevelLoader::load(const std::string& path,
     // the same surface it generates.
     GrownLots preLots;   // lots grown by the terrain pre-pass (reused below)
     if (root.contains("terrain")) {
-        TerrainParams terrainParams = parseTerrainParams(root["terrain"]);
+        TerrainParams terrainParams = readTerrainParams(root["terrain"]);
         terrainParams.erodedBase = sharedEroded;   // eroded base for mesh + carve + drape
         terrainParams.flatten = cityFlatten;   // grade flat under the city
         terrainParams.flatten.insert(terrainParams.flatten.end(),
@@ -2701,18 +2573,7 @@ bool LevelLoader::load(const std::string& path,
         if (root["terrain"].contains("water") || root.contains("water")) {
             const json& w = root.contains("water") ? root["water"]
                                                    : root["terrain"]["water"];
-            engine::WaterMeshParams wp;
-            wp.seaLevel = w.value("seaLevel", 0.0);
-            if (double region = w.value("region", 0.0); region > 0.0) {
-                wp.lo = {-region, -region};
-                wp.hi = {region, region};
-            }
-            if (w.contains("lo") && w["lo"].is_array())
-                wp.lo = {w["lo"][0].get<double>(), w["lo"][1].get<double>()};
-            if (w.contains("hi") && w["hi"].is_array())
-                wp.hi = {w["hi"][0].get<double>(), w["hi"][1].get<double>()};
-            wp.cell = w.value("cell", wp.cell);
-            wp.foamBand = w.value("foamBand", wp.foamBand);
+            engine::WaterMeshParams wp = readWaterParams(w);
             RenderMesh wmesh = engine::buildWaterMesh(levelGround, wp);
             if (!wmesh.vertices.empty()) {
                 Entity we = world.create();

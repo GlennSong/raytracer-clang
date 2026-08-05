@@ -120,6 +120,7 @@ add_library(engine_core STATIC
     src/engine/script_assets.cpp
     src/engine/script_watch.cpp
     src/engine/level_loader.cpp
+    src/engine/level_params.cpp
     src/engine/level_writer.cpp
     src/engine/model_importer.cpp
     src/engine/camera_store.cpp

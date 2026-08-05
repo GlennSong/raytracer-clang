@@ -42,6 +42,7 @@ SRCS = \
 	$(SRC_DIR)/instance.cpp \
 	$(SRC_DIR)/curve.cpp \
 	$(SRC_DIR)/level_scene.cpp \
+	$(SRC_DIR)/engine/level_params.cpp \
 	$(SRC_DIR)/path_tracer.cpp \
 	$(SRC_DIR)/engine/mesh_builder.cpp \
 	$(SRC_DIR)/engine/editable_curve.cpp \
@@ -309,6 +310,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/apps/citysim/city_meshes.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/level_scene.cpp \
+	$(SRC_DIR)/engine/level_params.cpp \
 	$(SRC_DIR)/scene.cpp \
 	$(SRC_DIR)/geometry.cpp \
 	$(SRC_DIR)/kdtree.cpp \
