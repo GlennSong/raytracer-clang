@@ -37,6 +37,11 @@ Xbox/PS controllers, with GLFW's IOKit path as fallback. A
 `gamecontrollerdb.txt` (SDL_GameControllerDB) is loaded at init for the IOKit
 path. See `src/renderer/gamepad_gc.mm`.
 
+Other targets: `docs/visionos-build.md` (Apple Vision Pro — simulator +
+device, same MetalRenderer behind the PresentationSurface seam;
+`src/visionos_app/AGENTS.md` has the display contract) and
+`docs/web-build.md` (WebGPU/WASM via Emscripten).
+
 ## Planning
 
 See `docs/ROADMAP.md` for the multi-tier development plan (foundation → 3D
