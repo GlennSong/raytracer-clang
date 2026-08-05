@@ -3308,6 +3308,13 @@ void MetalRenderer::endFrame() {
 
     // Draw skybox first (behind everything, no depth write)
     if (impl->skyboxPipeline) {
+        // The fullscreen triangle winds counter-clockwise, and this encoder
+        // fronts clockwise + culls back faces — which silently culled the
+        // whole skybox for months (the probe-bake encoder fronts CCW, so
+        // probes kept their sky and hid the loss; the composite's sky
+        // recompute painted over it on screen). Cull nothing while the sky
+        // draws, then restore.
+        [impl->currentEncoder setCullMode:MTLCullModeNone];
         [impl->currentEncoder setRenderPipelineState:impl->skyboxPipeline];
         [impl->currentEncoder setDepthStencilState:impl->skyboxDepthState];
         [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
@@ -3334,6 +3341,7 @@ void MetalRenderer::endFrame() {
         [impl->currentEncoder setFragmentSamplerState:impl->shadowSampler atIndex:0];
         [impl->currentEncoder setFragmentBytes:&activeShadowU
                                         length:sizeof(ShadowUniforms) atIndex:5];
+        [impl->currentEncoder setCullMode:MTLCullModeBack];
     }
 
     RenderStats stats;
@@ -4067,23 +4075,17 @@ void MetalRenderer::endFrame() {
         compositeParams.ssrBlendStrength = ssrParams.blendStrength;
         compositeParams.bloomEnabled = bloomEnabled ? 1 : 0;
         compositeParams.bloomIntensity = bloomParams.intensity;
-        id<MTLTexture> compEnvCube = environmentMapEnabled ? impl->environmentCubemap : nil;
-        compositeParams.envMode = compEnvCube ? 1 : 0;
+        compositeParams.envMode = 0;   // unused: composite sky passes sceneColor through
         compositeParams.aoFloor = ssaoParams.aoFloor;
         compositeParams.tonemapOp = tonemapOperator;
         compositeParams.gradeContrast = gradeParams.contrast;
         compositeParams.gradeSaturation = gradeParams.saturation;
         [compEncoder setFragmentBytes:&compositeParams
                                length:sizeof(compositeParams) atIndex:1];
-        // Sky for composite sky pixels: day/night procedural (+clouds) or, when an
-        // HDR map is bound, the baked environment cubemap — matching the skybox/IBL.
-        // (Cube orientation is unit-tested; the old equirect workaround is gone.)
+        // Sky pixels pass the scene image through (the skybox pass drew the
+        // real environment); lightData is still bound for exposure.
         [compEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
-        [compEncoder setFragmentTexture:(compEnvCube ? compEnvCube
-                                                     : impl->defaultCubemap)
-                                atIndex:6];
         [compEncoder setFragmentSamplerState:impl->linearClampSampler atIndex:0];
-        [compEncoder setFragmentSamplerState:impl->equirectSampler atIndex:1];
         [compEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 
         // --- Lens-warp pass (virtual-camera plan Phase 4) ---

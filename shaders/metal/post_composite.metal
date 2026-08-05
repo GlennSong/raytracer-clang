@@ -112,12 +112,10 @@ fragment float4 fragmentComposite(
     depth2d<float> depthTex [[texture(3)]],
     texture2d<float> normalTexture [[texture(4)]],
     texture2d<float> bloomTexture [[texture(5)]],
-    texturecube<float> envCube [[texture(6)]],
     constant CameraUniforms& camera [[buffer(0)]],
     constant CompositeUniforms& params [[buffer(1)]],
     device const LightUniforms& lightData [[buffer(4)]],
-    sampler smp [[sampler(0)]],
-    sampler envSampler [[sampler(1)]]
+    sampler smp [[sampler(0)]]
 ) {
     // Read depth at this fragment's pixel position (no sampler needed)
     float depth = depthTex.read(uint2(in.position.xy));
@@ -191,27 +189,17 @@ fragment float4 fragmentComposite(
     // --- Normal rendering ---
     float3 hdrColor;
     if (depth <= 0.0) {   // reverse-Z background (cleared far value)
-        // Sky pixel — re-derive the active environment directly in composite.
-        // Reverse-Z: the near plane is at clip z=1. The second point is taken
-        // at clip z=0.5, NOT the far plane (z=0): under XR the engine renders
-        // with the compositor's infinite-far projection, where unprojecting
-        // z=0 divides by w=0 — a NaN ray. saturate() masked that for the
-        // procedural sky (flat horizon color), but a cube sample along a NaN
-        // direction is undefined: black sky in the simulator, flickering
-        // garbage tiles on device. Any finite z gives the same ray direction.
-        float2 ndc = float2(in.uv.x * 2.0 - 1.0, -(in.uv.y * 2.0 - 1.0));
-        float4 nearWorld = camera.invViewProjection * float4(ndc, 1.0, 1.0);
-        float4 midWorld  = camera.invViewProjection * float4(ndc, 0.5, 1.0);
-        float3 rayDir = normalize(midWorld.xyz / midWorld.w - nearWorld.xyz / nearWorld.w);
-        if (params.envMode == 1) {
-            // HDR environment: a cheap cube lookup. The bake's orientation is
-            // proven by tests/test_cube_faces.cpp (ADR-0017 Phase 3), so the
-            // old per-pixel equirect workaround is gone.
-            hdrColor = envCube.sample(envSampler, rayDir).rgb;
-        } else {
-            hdrColor = sampleEnvironment(rayDir, lightData);
-            hdrColor = applyClouds(hdrColor, rayDir, lightData);
-        }
+        // Sky pixel — pass the scene image through. The skybox pass already
+        // drew the active environment (HDR cube or procedural + clouds) behind
+        // the geometry with the real rasterization camera, so it is correct on
+        // every projection the engine renders with — including the device
+        // compositor's asymmetric infinite-far per-eye matrices. This branch
+        // once re-derived the sky from invViewProjection instead: a June 2026
+        // workaround (dfc88fc) for a then-misoriented skybox/bake path, kept
+        // after the bake was fixed, and the duplicated ray math broke under XR
+        // projections (NaN far-plane unproject; device-only black sky). One
+        // sky, one code path — skip AO/SSR, which are geometry effects.
+        hdrColor = sceneColor.sample(smp, in.uv).rgb;
     } else {
         float4 hdr = sceneColor.sample(smp, in.uv);
 

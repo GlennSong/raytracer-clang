@@ -12,8 +12,9 @@ float dofCocRadius(float linZ, constant DOFUniforms& dof) {
 }
 
 // Depth of field: single-pass scatter-as-gather on the HDR scene color, before
-// composite. Sky pixels (reverse-Z depth <= 0) sit at far-plane CoC but composite
-// re-derives the sky analytically, so blur there is never visible.
+// composite. Sky pixels (reverse-Z depth <= 0) sit at far-plane CoC and their
+// blur IS visible — the composite passes the scene image through for sky, so
+// the skybox defocuses consistently with distant geometry.
 kernel void dofGather(
     texture2d<float, access::read> sceneColor [[texture(0)]],
     texture2d<float, access::read> depthTex [[texture(1)]],
