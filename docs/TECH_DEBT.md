@@ -338,7 +338,21 @@ took shortcuts worth paying down before the binding surface grows much more.
 
 ## Verification gap (the meta-debt)
 
-- **No CI exists, and the render backends are never compiled in it.** This is the
+- **Linux CI is red on arrival: 2/1083 test cases fail only on Linux.**
+  The first-ever ubuntu run of the suite (Build & Test workflow, run
+  30992735285) passed everything except `drive_freeway_mainline_is_clear` and
+  `zoo_acute_four_way` — both road-network drive probes that pass on macOS.
+  Likely floating-point precision in freeway-weld/acute-junction geometry (the
+  "3 welds is a metric artifact" family). Until fixed or per-platform gated,
+  the Linux job's signal reads "expected red", which is CI rot — fix soon.
+- **No CI existed until 2026-08-05, and the render backends were never
+  compiled in it.** Stages 0+1 of the plan below now run on every push
+  (`.github/workflows/build.yml`): Linux compiles the Vulkan backend with
+  glslc-validated shaders (asserting the backend was actually selected), macOS
+  builds the Metal viewer, runs ctest, and offline-compiles the Metal shader
+  library via `tools/check-metal-shaders.sh` (which extracts the runtime
+  concatenation list from `metal_renderer.mm`). Stage 2 (headless offscreen
+  render + golden-image parity) remains open. Historical context: This is the
   root of the gap below. The Vulkan backend shipped Phases 0–3 *never compiled*
   (no SDK in the loop), and Metal shaders are runtime-compiled, so neither
   `vulkan_renderer.cpp`/`shaders/vulkan/*` nor `shaders/metal/*` is validated until
