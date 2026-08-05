@@ -35,7 +35,8 @@ import os
 import re
 import sys
 
-EXTENSIONS = {".h", ".hpp", ".cpp", ".cc", ".mm", ".m", ".metal"}
+EXTENSIONS = {".h", ".hpp", ".cpp", ".cc", ".mm", ".m",
+              ".metal", ".frag", ".vert", ".comp", ".glsl", ".wgsl"}
 SKIP_DIRS = {"third_party", ".git", "build", "web"}
 SKIP_DIR_PREFIXES = ("build-",)
 

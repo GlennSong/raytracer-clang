@@ -38,11 +38,10 @@ when fixed (git history is the archive).
    unprojected with the wrong reverse-Z NDC z), and SSR (needed a confidence fix —
    the dielectric-F0 fresnel crushed head-on hits to ~4%; replaced with a
    high-floor grazing term). A color-coded SSR debug view (view 2) was added to
-   localize this. Remaining follow-up: the bilateral edge-stop constants in the
-   SSR blur (`exp(-|Δdepth|/0.003)`) and AO blur (`exp(-Δdepth²·1e5)`) are still
-   tuned for the old forward-Z NDC distribution; reflections look correct, so this
-   is a possible quality retune, not a bug (those kernels don't bind near/far, so
-   linearizing them means plumbing a camera uniform).
+   localize this. The bilateral edge-stop follow-up is DONE (stale here until
+   2026-08-05): both blurs now use `bilateralDepthWeight` in
+   `post_common.metal`, which linearizes reverse-Z via the camera uniform and
+   weights by *relative* depth difference — no forward-Z-era constants remain.
 3. **Ambient-only AO (gather/respond split, ADR-0017 Phase 4)** — stop the
    composite multiplying AO into direct sun + emissive so residual AO wobble stops
    being amplified. Needs the ambient term carried separately into the composite.
@@ -141,10 +140,13 @@ Minor: shadow-map size fixed at 2048 (expose a 4096 option as a slider).
   update/fixed are fat, attach Tracy and skip the GPU capture.*
 - **Realtime depth of field doesn't visibly work** (Metal `dofGather` pass,
   written blind on Linux, default-off). The lens-warp pass (distortion/CA/
-  vignette) reportedly works; DOF needs on-device debugging — check the CoC
-  scale (sensor-meters -> pixels), that `dofTexture` actually replaces
-  `sceneColorTexture` at composite, and the depth fetch. The offline tracer
-  is the reference: same LensParams produce correct thin-lens DOF there.
+  vignette) reportedly works; DOF needs on-device debugging. One of the three
+  original suspects is RULED OUT by code inspection (2026-08-05):
+  `dofTexture` DOES replace `sceneColorTexture` at composite when active
+  (`metal_renderer.mm` binds `dofActive ? dofTexture : ...`), so the remaining
+  suspects are the CoC scale (sensor-meters -> pixels) and the depth fetch.
+  The offline tracer is the reference: same LensParams produce correct
+  thin-lens DOF there.
 - **Camera gizmos render in reflections/shadows** (they are plain
   Renderables). Fine until a debug-draw layer exists.
 - **Repeated edit/play cycles re-upload level meshes** without freeing the
@@ -395,6 +397,21 @@ up, they drift.
   genuinely one parse in two places is now in `level_params`
   (terrain/tree/city/erosion/lots/water params, `parseVec3`/`parseOrientation`,
   `propagateWaterSeaLevel`).
+- **Shader scan (2026-08-05, after adding .frag/.vert/.wgsl to the scanner —
+  the first scan covered .metal only).** Judged, parked:
+  (a) **Every Vulkan shader repeats the same ~36-line uniform-block header**
+  (10 files, `dof/mesh/sky/ssao/ssr/terrain/water.*`) — GLSL has no includes
+  by default, but glslc supports `#include`; one `common.glsl` would collapse
+  it. This block is exactly where the first real Vulkan compile found the
+  wrong-uniform-field bug — the highest-value shader dedup, Vulkan-verify
+  needed. (b) **The Metal AO and SSR blurs are H/V copy-pairs**
+  (`post_ao.metal` 17×2, `post_ssr.metal` 20×2) — a fix applied to one
+  direction and not the other would be a subtle axis-dependent artifact;
+  fold each into one templated/param'd kernel on next touch. (c)
+  `lighting_entry.metal` repeats a 33-line vertex-transform block across its
+  three entry variants. (d) Cross-backend clones (metal↔vulkan surfaces/
+  common/brdf blocks) are the parity-by-design family — governed by
+  `docs/renderer-parity.md`, not for blind dedup.
 - **Scanner blind spot (tool debt).** `code-health.py` matches VERBATIM
   (whitespace-insensitive) lines, so a clone with renamed identifiers evades
   it — the two `parseTerrainParams` copies (`tp` vs `p`) were only caught by
