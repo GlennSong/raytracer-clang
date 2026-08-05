@@ -250,14 +250,6 @@ Minor: shadow-map size fixed at 2048 (expose a 4096 option as a slider).
 Added fast across several sessions; the logic is headless-tested but the code
 took shortcuts worth paying down before the binding surface grows much more.
 
-- **Binding helpers are copy-pasted across surfaces.** `checkVec3`, `pushVec3`,
-  `optField` are defined independently in both `procgen_bindings.cpp` and
-  `gameplay_bindings.cpp` (anon namespaces). Lift them into one module-internal
-  `lua_helpers.h` so there's a single definition.
-- **Entity pack/unpack is duplicated and must stay in sync by hand.** The
-  `(generation<<32)|index` encoding lives in `script_system.cpp` (`packEntity`)
-  and the decode in `gameplay_bindings.cpp` (`toEntity`). If one drifts, entity
-  ids corrupt silently. Move both to one shared `packEntity/unpackEntity`.
 - **Every binding is hand-written C-API stack juggling** (manual push/pop
   balance, magic stack indices) — verbose and easy to get subtly wrong. ADR-0023
   deferred a binding lib (sol2); revisit when the surface grows, since the

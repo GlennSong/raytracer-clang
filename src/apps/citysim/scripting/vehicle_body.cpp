@@ -1,6 +1,7 @@
 #include "vehicle_body.h"
 
 #include "../../../engine/scripting/lua_state.h"   // luaState() + the Lua C API (scripting-internal)
+#include "../../../engine/scripting/lua_helpers.h" // strField/vec3Field spec readers
 #include "../../../engine/mesh_builder.h"          // MeshBuilder::box (same primitive as addBox)
 
 namespace engine {
@@ -12,35 +13,8 @@ bool fail(std::string* err, const std::string& msg) {
     return false;
 }
 
-// String field of the table at absolute stack index `t` ("" when absent).
-std::string strField(lua_State* L, int t, const char* key) {
-    lua_getfield(L, t, key);
-    const char* s = lua_isstring(L, -1) ? lua_tostring(L, -1) : nullptr;
-    std::string v = s ? s : "";
-    lua_pop(L, 1);
-    return v;
-}
-
-// A {x,y,z} array-field of the table at absolute stack index `t` (like
-// vehicle_spec's reader): missing components keep `def`.
-Vec3 vec3Field(lua_State* L, int t, const char* key, Vec3 def) {
-    lua_getfield(L, t, key);
-    Vec3 r = def;
-    if (lua_istable(L, -1)) {
-        int st = lua_gettop(L);
-        lua_rawgeti(L, st, 1);
-        if (lua_isnumber(L, -1)) r.x = lua_tonumber(L, -1);
-        lua_pop(L, 1);
-        lua_rawgeti(L, st, 2);
-        if (lua_isnumber(L, -1)) r.y = lua_tonumber(L, -1);
-        lua_pop(L, 1);
-        lua_rawgeti(L, st, 3);
-        if (lua_isnumber(L, -1)) r.z = lua_tonumber(L, -1);
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-    return r;
-}
+// strField and vec3Field come from the scripting module's shared
+// lua_helpers.h — the same readers vehicle_spec uses, no local copy.
 
 // Append a vertex-coloured box (centred at `c`, dimensions `size`) into `out` —
 // the EXACT primitive citysim's addBox uses (MeshBuilder::box, offset, tint), so

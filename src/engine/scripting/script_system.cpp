@@ -1,6 +1,7 @@
 #include "script_system.h"
 
 #include "lua_state.h"
+#include "lua_helpers.h"     // packEntity (scripts see self.entity as this)
 #include "gameplay_bindings.h"
 #include "procgen_bindings.h"
 #include "script_behaviour.h"
@@ -15,13 +16,6 @@
 
 namespace engine {
 namespace {
-
-// Pack an Entity to the integer scripts see (must match gameplay_bindings'
-// toEntity: generation<<32 | index).
-lua_Integer packEntity(Entity e) {
-    return static_cast<lua_Integer>(
-        (static_cast<uint64_t>(e.generation) << 32) | static_cast<uint64_t>(e.index));
-}
 
 // Load a behaviour's chunk, which must return a table (the per-entity instance);
 // store it in the registry and record the ref. Returns false (logging) on error.
