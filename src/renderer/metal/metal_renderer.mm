@@ -23,6 +23,8 @@
 #include "../../engine/asset_root.h"
 #include "../../engine/xr/xr_backend.h"
 #include "../cube_faces.h"
+#include <atomic>
+#include <memory>
 #include <mutex>
 #include <vector>
 #include <algorithm>
@@ -724,6 +726,13 @@ struct MetalRenderer::Impl {
     id<MTLBuffer> foliageInstanceBuffers[MAX_FRAMES_IN_FLIGHT]; // ring; foliage prepass+lit
     int frameIndex = 0;                                   // advances each beginFrame
     uint64_t frameCount = 0;                              // monotonic; drives SSAO jitter
+    // Measured GPU time of the last COMPLETED frame (ms), written from Metal's
+    // completion handler on an arbitrary thread and read by the frame ledger on
+    // the main thread — hence atomic. Held by shared_ptr so a frame still in
+    // flight when the renderer is destroyed writes to live storage, not a
+    // dangling Impl (completion handlers outlive commit by design).
+    std::shared_ptr<std::atomic<float>> gpuFrameMs =
+        std::make_shared<std::atomic<float>>(0.0f);
     // How this frame reaches the display. The pass graph never looks at it —
     // see PresentationSurface above.
     std::unique_ptr<PresentationSurface> surface;
@@ -2375,6 +2384,10 @@ BoundingSphere MetalRenderer::getMeshBounds(MeshHandle handle) const {
 
 RenderStats MetalRenderer::getRenderStats() const {
     return impl->lastStats;
+}
+
+float MetalRenderer::lastGpuFrameMs() const {
+    return impl->gpuFrameMs->load(std::memory_order_relaxed);
 }
 
 void MetalRenderer::beginFrame() {
@@ -4250,6 +4263,22 @@ void MetalRenderer::endFrame() {
     }
 
     impl->surface->present(impl->currentCommandBuffer, impl->depthTexture);
+
+    // Real GPU time for this frame (ADR-0077): the driver stamps the command
+    // buffer's execution window, so this is the GPU's own cost — independent of
+    // how long nextDrawable made the CPU wait. Reads back a frame or two later
+    // (that IS when the GPU finishes); the ledger treats it as a rolling value.
+    // Capturing a shared_ptr COPY keeps the storage alive if the renderer is
+    // torn down with this frame still in flight.
+    {
+        auto gpuSlot = impl->gpuFrameMs;
+        [impl->currentCommandBuffer addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+            const CFTimeInterval seconds = cb.GPUEndTime - cb.GPUStartTime;
+            if (seconds > 0.0)
+                gpuSlot->store(static_cast<float>(seconds * 1000.0),
+                               std::memory_order_relaxed);
+        }];
+    }
     [impl->currentCommandBuffer commit];
     // Before any waitUntilCompleted below: a compositor-driven surface wants to
     // close its frame as soon as the work is submitted, not after we have

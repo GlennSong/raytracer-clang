@@ -168,6 +168,18 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
         ImGui::Text("update %5.2f   fixed %5.2f   render %5.2f   wait %5.2f",
                     sum.avgUpdateMs, sum.avgFixedMs, sum.avgRenderMs,
                     sum.avgWaitMs);
+        // The render split is the actionable part: acquire is time BLOCKED on
+        // the GPU/vsync (CPU idle), encode+submit is real CPU work.
+        ImGui::Text("  acquire %5.2f (gpu wait)   encode %5.2f   submit %5.2f",
+                    sum.avgAcquireMs, sum.avgEncodeMs, sum.avgSubmitMs);
+        if (sum.avgGpuMs > 0.0f) {
+            ImGui::Text("  GPU     %5.2f ms/frame", sum.avgGpuMs);
+            ImGui::SameLine();
+            ImGui::TextDisabled(sum.avgGpuMs > sum.avgEncodeMs + sum.avgSubmitMs
+                                    ? "(GPU-bound)" : "(CPU-bound)");
+        } else {
+            ImGui::TextDisabled("  GPU     n/a (backend reports no timing)");
+        }
 
         static float plotBuf[FrameStats::HISTORY];
         const int n = fs.historySize();

@@ -59,6 +59,40 @@ TEST_CASE(frame_stats_summary_empty_is_zero) {
     CHECK(s.avgFps == 0.0f);
 }
 
+TEST_CASE(frame_stats_render_split_phases_are_distinct) {
+    FrameStats fs;
+    fs.beginFrame();
+    // The render split (ADR-0077): each sub-phase lands in its own field, so a
+    // frame blocked on the GPU (acquire) is never confused with CPU work.
+    fs.beginPhase(FramePhase::RenderAcquire);
+    fs.endPhase(FramePhase::RenderAcquire);
+    fs.beginPhase(FramePhase::RenderEncode);
+    fs.endPhase(FramePhase::RenderEncode);
+    fs.beginPhase(FramePhase::RenderSubmit);
+    fs.endPhase(FramePhase::RenderSubmit);
+    fs.endFrame(1.0 / 60.0, 1, 0, 0, 0, 12.5f);
+
+    const FrameSample& f = fs.lastFrame();
+    CHECK(f.acquireMs >= 0.0f);
+    CHECK(f.encodeMs >= 0.0f);
+    CHECK(f.submitMs >= 0.0f);
+    // Sub-phases are tracked separately from the aggregate render bracket,
+    // which this frame never opened — so it must stay zero, not absorb them.
+    CHECK(f.renderMs == 0.0f);
+    CHECK_APPROX(f.gpuMs, 12.5, 1e-4);
+
+    FrameStats::Summary s = fs.summarize();
+    CHECK_APPROX(s.avgGpuMs, 12.5, 1e-4);
+}
+
+TEST_CASE(frame_stats_gpu_defaults_to_zero_when_unsupported) {
+    FrameStats fs;
+    fs.beginFrame();
+    fs.endFrame(1.0 / 60.0, 1, 0, 0, 0);   // backend reports no GPU timing
+    CHECK(fs.lastFrame().gpuMs == 0.0f);
+    CHECK(fs.summarize().avgGpuMs == 0.0f);
+}
+
 TEST_CASE(frame_stats_phase_brackets_fill_sample) {
     FrameStats fs;
     fs.beginFrame();
@@ -121,7 +155,8 @@ TEST_CASE(frame_stats_csv_capture_round_trips) {
     bool hasExtra = static_cast<bool>(std::getline(in, extra));
     CHECK(header ==
           "frame,total_ms,update_ms,fixed_ms,render_ms,wait_ms,"
-          "host_delta_ms,fixed_steps,draw_calls,instances,triangles");
+          "host_delta_ms,fixed_steps,draw_calls,instances,triangles,"
+          "acquire_ms,encode_ms,submit_ms,gpu_ms");
     CHECK(row1.substr(0, 2) == "1,");
     CHECK(row1.find(",42,") != std::string::npos);   // draw calls column
     CHECK(row2.substr(0, 2) == "2,");

@@ -31,6 +31,7 @@ public:
     void removeTexture(TextureHandle handle) override;
     void setEnvironmentMap(TextureHandle equirect) override;
     RenderStats getRenderStats() const override;
+    float lastGpuFrameMs() const override;
 
     void beginFrame() override;
     void setCamera(const CameraState& camera) override;

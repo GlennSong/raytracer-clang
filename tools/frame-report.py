@@ -29,24 +29,52 @@ PHASES = [
 ]
 
 
+ALL_COLUMNS = ("total_ms", "update_ms", "fixed_ms", "render_ms", "wait_ms",
+               "host_delta_ms", "fixed_steps", "draw_calls", "instances",
+               "triangles", "acquire_ms", "encode_ms", "submit_ms", "gpu_ms")
+
+
 def load_capture(path):
-    """Read a FrameStats CSV into a dict of column -> list of floats."""
+    """Read a FrameStats CSV into a dict of column -> list of floats.
+
+    Tolerant of schema versions: captures predating the render split (no
+    acquire/encode/submit/gpu columns) read fine, their missing columns
+    filled with zeros, so an old capture still opens and still compares."""
     with open(path, newline="") as f:
         reader = csv.DictReader(f)
-        need = {"total_ms", "update_ms", "fixed_ms", "render_ms", "wait_ms"}
-        if not reader.fieldnames or not need.issubset(reader.fieldnames):
-            sys.exit(f"{path}: not a FrameStats capture "
-                     f"(missing columns {sorted(need)})")
-        cols = {name: [] for name in reader.fieldnames}
+        if not reader.fieldnames or "total_ms" not in reader.fieldnames:
+            sys.exit(f"{path}: not a FrameStats capture (no total_ms column)")
+        cols = {name: [] for name in set(reader.fieldnames) | set(ALL_COLUMNS)}
+        rows = 0
         for row in reader:
-            for name, value in row.items():
+            rows += 1
+            for name in cols:
                 try:
-                    cols[name].append(float(value))
+                    cols[name].append(float(row.get(name) or 0.0))
                 except (TypeError, ValueError):
                     cols[name].append(0.0)
-    if not cols["total_ms"]:
+    if not rows:
         sys.exit(f"{path}: capture holds no frames")
     return cols
+
+
+def has_render_split(cols):
+    """True when the capture carries the acquire/encode/submit breakdown."""
+    return any(v > 0 for v in cols["acquire_ms"]) or \
+           any(v > 0 for v in cols["encode_ms"]) or \
+           any(v > 0 for v in cols["submit_ms"])
+
+
+def phases_for(cols):
+    """Stack layers: the render split when present, else the flat render."""
+    if has_render_split(cols):
+        return [("update_ms", "update", "#4e79a7"),
+                ("fixed_ms", "fixed", "#f28e2b"),
+                ("encode_ms", "encode (cpu)", "#59a14f"),
+                ("submit_ms", "submit (cpu)", "#b07aa1"),
+                ("acquire_ms", "acquire (waiting on GPU)", "#e15759"),
+                ("wait_ms", "wait", "#bbbbbb")]
+    return PHASES
 
 
 def percentile(sorted_values, fraction):
@@ -54,6 +82,99 @@ def percentile(sorted_values, fraction):
         return 0.0
     index = min(len(sorted_values) - 1, int(len(sorted_values) * fraction))
     return sorted_values[index]
+
+
+def vsync_note(median_ms, budget_ms):
+    """A frame that misses the display's deadline waits for the NEXT refresh, so
+    costs cluster on multiples of the refresh interval (16.7 / 33.3 / 50 ms at
+    60 Hz). Spotting that clustering matters: once frames are quantized, the
+    measured time is 'work + waiting for the next scanout', so the real cost is
+    hidden and only gpu_ms can reveal it."""
+    for multiple in (1, 2, 3, 4):
+        target = budget_ms * multiple
+        if abs(median_ms - target) <= max(0.6, target * 0.03):
+            if multiple == 1:
+                return None      # hitting the budget; nothing to explain
+            return (f"Frames are landing on <b>{target:.1f} ms</b> — exactly "
+                    f"{multiple}&times; the {budget_ms:.1f} ms display "
+                    f"interval. The engine is missing the deadline and waiting "
+                    f"for the next refresh, so it runs at "
+                    f"{1000.0 / target:.0f} fps in lockstep. The measured time "
+                    f"includes that waiting, so the true cost is somewhere "
+                    f"between {budget_ms:.1f} and {target:.1f} ms — the "
+                    f"<code>gpu_ms</code> column is what pins it down.")
+    return None
+
+
+def verdict(cols, s, budget_ms):
+    """Plain-language reading of what this capture says, and what to do next."""
+    lines = []
+    note = vsync_note(s["median"], budget_ms)
+    if note:
+        lines.append(note)
+
+    cpu_render = s["encode"] + s["submit"]
+    logic = s["update"] + s["fixed"]
+    split = has_render_split(cols)
+    draws = s["draw_calls"][0]
+    tris = s["triangles"][0]
+
+    if split and s["acquire"] > max(cpu_render, logic) and s["acquire"] > 1.0:
+        lines.append(
+            f"<b>The frame is GPU-bound.</b> {s['acquire']:.1f} ms of every "
+            f"{s['avg']:.1f} ms frame is spent <i>blocked</i> waiting for the "
+            f"GPU to hand back a drawable — the CPU is idle in that time. Your "
+            f"own code is cheap: {logic:.2f} ms of game logic and "
+            f"{cpu_render:.2f} ms building the frame. Optimising C++ will not "
+            f"move this number; the work is in the shaders and passes.")
+        if draws and draws < 200 and tris < 2e6:
+            lines.append(
+                f"Scene complexity is <b>not</b> the cause either: only "
+                f"{draws:.0f} draw calls and {tris/1e6:.2f}M triangles per "
+                f"frame. That points at the <b>screen-space passes</b> (SSAO, "
+                f"SSR, bloom, shadow maps), whose cost scales with PIXELS, not "
+                f"geometry. Two experiments that need no code: shrink the "
+                f"window by half (if frame time drops hard, it is pixel-bound "
+                f"— on a Retina display the framebuffer is 4&times; the logical "
+                f"size), and toggle SSAO / SSR / Bloom in the Debug panel one "
+                f"at a time, watching the Performance readout to rank them.")
+    elif split and cpu_render > logic and cpu_render > 1.0:
+        lines.append(
+            f"<b>The frame is CPU-bound in the renderer.</b> {cpu_render:.1f} "
+            f"ms goes to walking the world and building command buffers "
+            f"(encode {s['encode']:.1f} + submit {s['submit']:.1f}), against "
+            f"{logic:.2f} ms of game logic. Attach Tracy "
+            f"(-DRT_ENABLE_PROFILER=ON) to see which system.")
+    elif logic > 1.0 and logic > cpu_render:
+        lines.append(
+            f"<b>The frame is CPU-bound in game logic</b> ({logic:.1f} ms in "
+            f"update+fixed). Attach Tracy (-DRT_ENABLE_PROFILER=ON) to see "
+            f"which system.")
+    elif not split:
+        lines.append(
+            "This capture predates the render split, so it can only say "
+            "<i>render</i> is where the time goes — not whether that is real "
+            "work or waiting on the GPU. Re-capture with a current build to "
+            "get the acquire / encode / submit breakdown and the GPU column.")
+
+    if s["gpu"] > 0:
+        head = "GPU-bound" if s["gpu"] > cpu_render else "CPU-bound"
+        lines.append(
+            f"Measured GPU time: <b>{s['gpu']:.1f} ms/frame</b> against "
+            f"{cpu_render:.1f} ms of CPU frame-building &mdash; {head}. "
+            f"(Budget is {budget_ms:.1f} ms.)")
+    elif split:
+        lines.append(
+            "No GPU timing in this capture — the backend does not report it "
+            "(Metal does; Vulkan/WebGPU do not yet).")
+
+    if s["max"] > 4 * budget_ms:
+        lines.append(
+            f"One-off hitches: the worst frame took <b>{s['max']:.0f} ms</b> "
+            f"(p99 {s['p99']:.0f} ms). Spikes that big are usually a load, an "
+            f"upload, or a shader compile rather than steady-state cost — find "
+            f"them by where they sit in chart 1.")
+    return lines
 
 
 def summarize(cols):
@@ -70,8 +191,9 @@ def summarize(cols):
         "max": totals[-1],
         "fps": (1000.0 * len(host) / sum(host)) if host else 0.0,
     }
-    for column, label, _ in PHASES:
-        s[label] = sum(cols[column]) / n
+    for column in ("update_ms", "fixed_ms", "render_ms", "wait_ms",
+                   "acquire_ms", "encode_ms", "submit_ms", "gpu_ms"):
+        s[column[:-3]] = sum(cols[column]) / n
     for column in ("draw_calls", "instances", "triangles"):
         values = cols.get(column, [])
         s[column] = (sum(values) / n, max(values)) if values else (0, 0)
@@ -137,7 +259,7 @@ def stacked_phase_chart(cols, y_max):
     n_points = width // 2
     stacked = [0.0] * min(n_points, len(cols["total_ms"]))
     layers = []
-    for column, _, color in PHASES:
+    for column, _, color in phases_for(cols):
         means, _ = bucket(cols[column], n_points)
         stacked = [s + v for s, v in zip(stacked, means)]
         layers.append((list(stacked), color))
@@ -190,7 +312,10 @@ def summary_rows(label, s):
             f"<td>{s['median']:.2f}</td><td>{s['p95']:.2f}</td>"
             f"<td>{s['p99']:.2f}</td><td>{s['max']:.2f}</td>"
             f"<td>{s['update']:.2f}</td><td>{s['fixed']:.2f}</td>"
-            f"<td>{s['render']:.2f}</td><td>{s['wait']:.2f}</td>"
+            f"<td>{s['render']:.2f}</td><td>{s['acquire']:.2f}</td>"
+            f"<td>{s['encode']:.2f}</td><td>{s['submit']:.2f}</td>"
+            f"<td>{s['wait']:.2f}</td>"
+            f"<td>{s['gpu']:.2f}</td>"
             f"<td>{s['draw_calls'][0]:.0f} / {s['draw_calls'][1]:.0f}</td>"
             f"<td>{s['triangles'][0] / 1e6:.2f}M</td></tr>")
 
@@ -222,8 +347,10 @@ def main():
 
     legend = " ".join(
         f'<span style="color:{color}">&#9632; {label}</span>'
-        for _, label, color in PHASES)
+        for _, label, color in phases_for(cols))
     compare_note = (" — baseline in grey" if baseline else "")
+    verdict_html = "".join(f"<p>{line}</p>" for line in
+                           verdict(cols, s, budget_ms))
 
     doc = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Frame report — {html.escape(os.path.basename(args.capture))}</title>
@@ -239,6 +366,12 @@ h2 {{ margin-top: 1.6em; font-size: 16px; }}
 .howto {{ background: #f6f8fa; border: 1px solid #ddd; border-radius: 6px;
           padding: 0.2em 1.2em 0.8em; font-size: 13px; margin: 1em 0; }}
 .howto li {{ margin: 0.3em 0; }}
+.verdict {{ background: #fff8e6; border: 1px solid #e8d8a8;
+            border-left: 4px solid #e8b93b; border-radius: 6px;
+            padding: 0.8em 1.2em; margin: 1em 0; }}
+.verdict p {{ margin: 0.5em 0; }}
+.verdict h2 {{ margin: 0 0 0.3em; font-size: 15px; }}
+code {{ background: #eee; padding: 0 3px; border-radius: 3px; }}
 </style></head><body>
 <h1>Frame report</h1>
 <p class="note">{s['frames']} frames, {s['seconds']:.1f}s at {s['fps']:.1f} fps
@@ -269,9 +402,11 @@ the platform GPU profiler (Xcode's capture). If
 <span style="color:#4e79a7">update</span>/<span style="color:#f28e2b">fixed</span>
 dominate, it's CPU-bound — attach Tracy (docs/profiling.md).</li>
 </ul></details>
+<div class="verdict"><h2>What this capture says</h2>{verdict_html}</div>
 <table><tr><th>capture</th><th>frames</th><th>time</th><th>fps</th>
 <th>avg</th><th>median</th><th>p95</th><th>p99</th><th>max</th>
-<th>update</th><th>fixed</th><th>render</th><th>wait</th>
+<th>update</th><th>fixed</th><th>render</th><th>acquire</th><th>encode</th>
+<th>submit</th><th>wait</th><th>gpu</th>
 <th>draws avg/max</th><th>tris</th></tr>{''.join(rows)}</table>
 <h2>Chart 1 &mdash; Frame time over the session (blue typical, red worst{compare_note})</h2>
 {frame_time_chart(cols, baseline, y_max, [(budget_ms, f"{args.budget_fps} fps"), (budget_ms * 2, f"{args.budget_fps // 2} fps")])}

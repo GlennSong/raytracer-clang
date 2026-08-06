@@ -12,10 +12,13 @@ float msBetween(std::chrono::steady_clock::time_point start,
 
 float* phaseField(FrameSample& s, FramePhase phase) {
     switch (phase) {
-        case FramePhase::Update:      return &s.updateMs;
-        case FramePhase::FixedUpdate: return &s.fixedMs;
-        case FramePhase::Render:      return &s.renderMs;
-        case FramePhase::Wait:        return &s.waitMs;
+        case FramePhase::Update:        return &s.updateMs;
+        case FramePhase::FixedUpdate:   return &s.fixedMs;
+        case FramePhase::Render:        return &s.renderMs;
+        case FramePhase::Wait:          return &s.waitMs;
+        case FramePhase::RenderAcquire: return &s.acquireMs;
+        case FramePhase::RenderEncode:  return &s.encodeMs;
+        case FramePhase::RenderSubmit:  return &s.submitMs;
     }
     return &s.updateMs;   // unreachable; keeps -Wreturn-type honest
 }
@@ -40,7 +43,7 @@ void FrameStats::endPhase(FramePhase phase) {
 
 void FrameStats::endFrame(double hostDeltaSeconds, int fixedSteps,
                           uint32_t drawCalls, uint32_t instances,
-                          uint32_t triangles) {
+                          uint32_t triangles, float gpuMs) {
     if (!frameOpen) return;
     frameOpen = false;
     current.totalMs = msBetween(frameStart, Clock::now());
@@ -49,6 +52,7 @@ void FrameStats::endFrame(double hostDeltaSeconds, int fixedSteps,
     current.drawCalls = drawCalls;
     current.instances = instances;
     current.triangles = triangles;
+    current.gpuMs = gpuMs;
     record(current);
 }
 
@@ -65,7 +69,9 @@ void FrameStats::record(const FrameSample& sample) {
                     << sample.renderMs << ',' << sample.waitMs << ','
                     << sample.hostDeltaMs << ',' << sample.fixedSteps << ','
                     << sample.drawCalls << ',' << sample.instances << ','
-                    << sample.triangles << '\n';
+                    << sample.triangles << ',' << sample.acquireMs << ','
+                    << sample.encodeMs << ',' << sample.submitMs << ','
+                    << sample.gpuMs << '\n';
         captureRows++;
     }
 }
@@ -76,7 +82,8 @@ FrameStats::Summary FrameStats::summarize() const {
 
     std::array<float, HISTORY> totals;
     double sumTotal = 0, sumUpdate = 0, sumFixed = 0, sumRender = 0,
-           sumWait = 0, sumDelta = 0;
+           sumWait = 0, sumDelta = 0, sumAcquire = 0, sumEncode = 0,
+           sumSubmit = 0, sumGpu = 0;
     for (int i = 0; i < count; i++) {
         const FrameSample& f = historyAt(i);
         totals[i] = f.totalMs;
@@ -86,6 +93,10 @@ FrameStats::Summary FrameStats::summarize() const {
         sumRender += f.renderMs;
         sumWait += f.waitMs;
         sumDelta += f.hostDeltaMs;
+        sumAcquire += f.acquireMs;
+        sumEncode += f.encodeMs;
+        sumSubmit += f.submitMs;
+        sumGpu += f.gpuMs;
         s.maxTotalMs = std::max(s.maxTotalMs, f.totalMs);
     }
     s.avgTotalMs = static_cast<float>(sumTotal / count);
@@ -93,6 +104,10 @@ FrameStats::Summary FrameStats::summarize() const {
     s.avgFixedMs = static_cast<float>(sumFixed / count);
     s.avgRenderMs = static_cast<float>(sumRender / count);
     s.avgWaitMs = static_cast<float>(sumWait / count);
+    s.avgAcquireMs = static_cast<float>(sumAcquire / count);
+    s.avgEncodeMs = static_cast<float>(sumEncode / count);
+    s.avgSubmitMs = static_cast<float>(sumSubmit / count);
+    s.avgGpuMs = static_cast<float>(sumGpu / count);
     if (sumDelta > 0)
         s.avgFps = static_cast<float>(count / (sumDelta / 1000.0));
 
@@ -111,7 +126,8 @@ bool FrameStats::startCapture(const std::string& path) {
     captureTarget = path;
     captureRows = 0;
     captureFile << "frame,total_ms,update_ms,fixed_ms,render_ms,wait_ms,"
-                   "host_delta_ms,fixed_steps,draw_calls,instances,triangles\n";
+                   "host_delta_ms,fixed_steps,draw_calls,instances,triangles,"
+                   "acquire_ms,encode_ms,submit_ms,gpu_ms\n";
     return true;
 }
 

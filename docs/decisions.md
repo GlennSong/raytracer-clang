@@ -5622,10 +5622,34 @@ so HUD numbers and reports can't disagree. The visionOS profiler story is now:
 glance at the ledger (panel/log), capture CSV to Documents, attach Tracy from
 the paired Mac only when a deep dive is warranted — `RT_ENABLE_PROFILER` on
 the visionOS build is compile-unverified here (no SDK), flagged per
-convention. **Revisit trigger:** GPU time is the ledger's known blind spot
-(render phase = CPU submit + present wait); when a frame goes GPU-bound with
-CPU headroom, adopt Tracy GPU contexts behind `profile.h` (the ADR-0068
-trigger) and consider a `gpuMs` column then.
+convention. **Revisit trigger — FIRED 2026-08-06, and resolved.** The first real capture
+(macOS, `arena.json`, 1078 frames) showed 27.33 ms of a 27.87 ms frame in
+`render` with update+fixed at 0.04 ms — the exact GPU-bound-with-CPU-headroom
+case this trigger named, and the flat `render` phase could not say whether
+that time was work or waiting. Two additions closed it:
+
+- **The render phase splits three ways** — `acquire` (`beginFrame`, which
+  BLOCKS in `nextDrawable` while the GPU is behind), `encode` (the states'
+  `render()` hooks), `submit` (`endFrame`'s pass-graph command buffers).
+  Purely an Application-side bracket change, so every backend and platform
+  gets it. Fat `acquire` = the CPU is idle waiting on the GPU, which no
+  amount of C++ optimisation will move.
+- **Real GPU time** via `Renderer::lastGpuFrameMs()` (default 0 =
+  unsupported), implemented on Metal by reading `GPUEndTime - GPUStartTime`
+  in the command buffer's completion handler into a `shared_ptr<atomic<float>>`
+  (the handler can outlive the renderer). It lags a frame or two by nature and
+  is documented as a rolling value — but it is the only number that survives a
+  vsync block, which inflates `acquire` without any work happening.
+
+That capture also showed frame times clustered on 33.3 ms — exactly two 60 Hz
+refresh intervals — so `frame-report.py` now detects refresh-multiple
+quantisation and explains it, alongside a verdict paragraph that names the
+bound (GPU / renderer-CPU / logic-CPU) in plain language. **New revisit
+trigger:** per-pass GPU attribution. Total GPU time says the post stack is the
+cost but not which pass; when that ranking is needed beyond what the Debug
+panel's enable toggles can bisect, add Metal `MTLCounterSampleBuffer` stage
+timestamps behind a backend-neutral "pass timings" seam — still not Tracy GPU
+contexts, which remain the answer for interleaved CPU/GPU timelines.
 
 ---
 

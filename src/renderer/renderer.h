@@ -477,6 +477,15 @@ public:
     virtual void setEnvironmentMap(TextureHandle /*equirect*/) {}
     virtual RenderStats getRenderStats() const = 0;
 
+    // GPU execution time of the most recently COMPLETED frame, in ms; 0 when
+    // the backend can't measure it (the frame ledger then shows no GPU column).
+    // Necessarily lags the current frame — the GPU runs behind the CPU — so it
+    // is a rolling truth, not this frame's cost. It is also the only timing
+    // that survives a vsync block: when the swapchain makes the CPU wait, the
+    // ledger's acquire phase inflates without any work being done, and this
+    // number is what says whether the GPU was actually busy that whole time.
+    virtual float lastGpuFrameMs() const { return 0.0f; }
+
     virtual void beginFrame() = 0;
     virtual void setCamera(const CameraState& camera) = 0;
 

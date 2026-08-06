@@ -115,9 +115,27 @@ void Application::renderFrame() {
     RT_PROFILE_ZONE_NAMED("render");
     reconcileFramebuffer();
     FrameContext ctx = makeContext();
-    rendererPtr->beginFrame();
-    stateStack.forEachRenderable([&](AppState& state) { state.render(ctx); });
-    rendererPtr->endFrame();
+    // Three brackets, because "render is slow" was never actionable (ADR-0077):
+    // acquire BLOCKS while the GPU is behind, encode is the world walk, submit
+    // builds the pass graph's command buffers. See FramePhase.
+    {
+        RT_PROFILE_ZONE_NAMED("acquire");
+        frameStats.beginPhase(FramePhase::RenderAcquire);
+        rendererPtr->beginFrame();
+        frameStats.endPhase(FramePhase::RenderAcquire);
+    }
+    {
+        RT_PROFILE_ZONE_NAMED("encode");
+        frameStats.beginPhase(FramePhase::RenderEncode);
+        stateStack.forEachRenderable([&](AppState& state) { state.render(ctx); });
+        frameStats.endPhase(FramePhase::RenderEncode);
+    }
+    {
+        RT_PROFILE_ZONE_NAMED("submit");
+        frameStats.beginPhase(FramePhase::RenderSubmit);
+        rendererPtr->endFrame();
+        frameStats.endPhase(FramePhase::RenderSubmit);
+    }
 }
 
 void Application::begin() {
@@ -277,7 +295,7 @@ void Application::runFrame() {
     // counters feed Tracy plots in profiler builds (ADR-0068).
     RenderStats rs = rendererPtr->getRenderStats();
     frameStats.endFrame(frameDelta, steps, rs.drawCalls, rs.totalInstances,
-                        rs.trianglesDrawn);
+                        rs.trianglesDrawn, rendererPtr->lastGpuFrameMs());
     RT_PROFILE_PLOT("draw calls", static_cast<int64_t>(rs.drawCalls));
     RT_PROFILE_PLOT("instances", static_cast<int64_t>(rs.totalInstances));
     RT_PROFILE_PLOT("triangles", static_cast<int64_t>(rs.trianglesDrawn));

@@ -12,7 +12,20 @@ namespace engine {
 // Which slice of the frame a timing bracket covers. Application brackets each
 // phase of runFrame; everything not covered (event-bus dispatch, state swaps)
 // lands in the frame total but no phase — that gap is itself a signal.
-enum class FramePhase { Update, FixedUpdate, Render, Wait };
+//
+// Render splits three ways, because "render is slow" was never actionable:
+//   Acquire — renderer.beginFrame(): getting a drawable to render into. This
+//             BLOCKS while the GPU is behind (Metal's nextDrawable waits for a
+//             free swapchain image / the vsync deadline). Fat acquire means the
+//             CPU is IDLE waiting on the GPU — a GPU-bound frame, not CPU work.
+//   Encode  — the states' render() hooks: walking the world, culling, and
+//             describing draws. Real CPU work that scales with scene size.
+//   Submit  — renderer.endFrame(): building command buffers for every pass and
+//             committing. CPU cost of the pass graph itself.
+// Render stays the total of the three, so old captures remain comparable.
+enum class FramePhase {
+    Update, FixedUpdate, Render, Wait, RenderAcquire, RenderEncode, RenderSubmit
+};
 
 // One frame of the ledger: CPU phase times plus the renderer's submission
 // counters (RenderStats), copied at end of frame so a capture row correlates
@@ -21,8 +34,16 @@ struct FrameSample {
     float totalMs = 0.0f;      // runFrame wall time, sleep included
     float updateMs = 0.0f;     // input + state update()
     float fixedMs = 0.0f;      // all fixed steps this frame
-    float renderMs = 0.0f;     // renderFrame(): submit + present
+    float renderMs = 0.0f;     // renderFrame() total = acquire + encode + submit
+    float acquireMs = 0.0f;    // blocked getting a drawable (GPU behind / vsync)
+    float encodeMs = 0.0f;     // states' render(): cull + describe draws
+    float submitMs = 0.0f;     // endFrame(): build command buffers + commit
     float waitMs = 0.0f;       // FPS-cap sleep (budget headroom, not cost)
+    // GPU execution time the backend measured, 0 when unsupported. Lags by a
+    // frame or two (the GPU is behind the CPU) and is therefore a rolling
+    // truth, not this row's own cost — but it is the ONLY number here that
+    // survives a vsync block, which inflates acquire without doing work.
+    float gpuMs = 0.0f;
     float hostDeltaMs = 0.0f;  // window-reported frame-to-frame delta —
                                // what the player actually feels
     int fixedSteps = 0;
@@ -50,7 +71,8 @@ public:
     void beginPhase(FramePhase phase);
     void endPhase(FramePhase phase);
     void endFrame(double hostDeltaSeconds, int fixedSteps,
-                  uint32_t drawCalls, uint32_t instances, uint32_t triangles);
+                  uint32_t drawCalls, uint32_t instances, uint32_t triangles,
+                  float gpuMs = 0.0f);
 
     // Clock-free seam: fold a ready-made sample into the ring (and the capture
     // file, if open). endFrame() lands here; tests feed synthetic frames.
@@ -74,7 +96,11 @@ public:
         float avgUpdateMs = 0.0f;
         float avgFixedMs = 0.0f;
         float avgRenderMs = 0.0f;
+        float avgAcquireMs = 0.0f;
+        float avgEncodeMs = 0.0f;
+        float avgSubmitMs = 0.0f;
         float avgWaitMs = 0.0f;
+        float avgGpuMs = 0.0f;
         float avgFps = 0.0f;       // from hostDeltaMs, the felt rate
     };
     Summary summarize() const;
@@ -91,7 +117,7 @@ public:
 
 private:
     using Clock = std::chrono::steady_clock;
-    static constexpr int PHASE_COUNT = 4;
+    static constexpr int PHASE_COUNT = 7;
 
     std::array<FrameSample, HISTORY> ring{};
     int head = 0;    // next write slot

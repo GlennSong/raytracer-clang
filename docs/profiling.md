@@ -58,12 +58,37 @@ distribution histogram against the 30/60/90 fps lines, and a summary table.
 it faster". Keep the *before* capture from the same scene, camera, and
 duration as the *after*.
 
-**Interpreting phases:** `wait` is the FPS-cap sleep — headroom, not cost.
-`render` is CPU submit + present; a fat `render` with low draw calls usually
-means the CPU is *waiting* on the GPU — the ledger's known blind spot is GPU
-time, so confirm with Xcode's GPU capture (Metal) before optimizing CPU-side.
-The gap between the phase stack and total is unattributed engine time; if it
-grows, a bracket is missing — add one rather than guessing.
+**Interpreting phases.** `wait` is the FPS-cap sleep — headroom, not cost.
+The gap between the phase stack and the total is unattributed engine time; if
+it grows, a bracket is missing — add one rather than guessing. `render` splits
+three ways, and the split is the whole diagnosis:
+
+| Phase | What it is | Fat means |
+|---|---|---|
+| `acquire` | `beginFrame` — getting a drawable to render into. **Blocks** when the GPU is behind or the vsync deadline was missed. | **GPU-bound.** The CPU is *idle* here. Optimising C++ changes nothing; the cost is in shaders/passes. |
+| `encode` | The states' `render()` hooks: world walk, culling, describing draws. | CPU cost that scales with scene size — cull, batch, or reduce entity count. |
+| `submit` | `endFrame` — building every pass's command buffers, then commit. | The pass graph's own CPU cost; usually means too many passes/encoders. |
+
+`gpu_ms` is the measured GPU execution time (Metal only today; other backends
+report 0 and the column shows as unavailable). It lags a frame or two — the
+GPU runs behind the CPU — so treat it as a rolling value. It is the **only**
+number that survives a vsync block: when the display makes the engine wait,
+`acquire` inflates without work happening, and `gpu_ms` is what says whether
+the GPU was actually busy that whole time.
+
+**Vsync quantisation.** If frame times cluster on a multiple of the refresh
+interval (33.3 ms on a 60 Hz display = two intervals), the engine missed the
+deadline and is waiting for the next scanout, so it runs at a locked lower
+rate. The measured frame time then includes that waiting and the true cost is
+somewhere between one interval and the observed value — `gpu_ms` pins it down.
+`frame-report.py` detects this and says so.
+
+**Once you know it is GPU-bound**, rank the passes without writing code:
+resize the window to half (frame time dropping hard = pixel-bound, and note a
+Retina framebuffer is 4× the logical size), then toggle SSAO / SSR / Bloom in
+the Debug panel one at a time and watch the Performance readout. For per-pass
+GPU numbers beyond that, use Xcode's GPU capture (Metal) — per-pass timestamps
+inside the engine are the ADR-0077 follow-up, not built yet.
 
 ## Tracy (the deep dive)
 
