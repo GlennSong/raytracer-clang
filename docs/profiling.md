@@ -137,18 +137,26 @@ somewhere between one interval and the observed value — `gpu_ms` pins it down.
 `frame-report.py` detects this and says so.
 
 **Once you know it is GPU-bound**, rank the passes with the Performance
-panel's **Rank post passes** button. It holds each configuration (all on,
-then SSAO / SSR / bloom disabled in turn) for two seconds, discards the frames
-while the pipeline settles, takes the *median* of the rest, restores your
-settings, and prints how much each pass saves. Median, not average, so one OS
-stall doesn't swamp the result.
+panel's **Rank post passes** button. It **turns presentation sync off first**
+— this is the whole trick — then holds each configuration (all on, then SSAO /
+SSR / bloom disabled in turn) for two seconds, discards the frames while the
+pipeline settles, takes the *median* of the rest, restores your settings and
+your vsync, and prints what each pass costs.
 
-One trap it warns about: **vsync hides small savings.** If frames are pinned
-to a display interval, removing 4 ms of GPU work changes nothing measurable —
-the frame still waits for the same scanout. Shrink the window (or uncap) and
-re-run so the frame time can move continuously. Halving the window is also the
-pixel-bound test: a hard drop means the cost scales with pixels, and a Retina
-framebuffer is 4× its logical size.
+Why sync must be off: with vsync on, frame time is **quantised to the refresh
+interval**, so a genuine 4 ms saving reads as `0.00` — the frame just waits the
+same. Worse, a frame sitting *on* the boundary flips between one and two
+intervals, which reads as a pass costing a *negative* amount. A real run
+produced `17.11 / 33.27 / 17.81 / 33.20` — pure boundary flipping, no pass
+information at all.
+
+The tool refuses to report a ranking it can't trust: if any pass appears to
+cost negative time, or the medians look quantised to 60/90/120 Hz, or the
+backend can't disable sync (a compositor-driven surface owns its pacing), it
+prints the raw times marked **UNRELIABLE** and points at a GPU capture instead.
+
+Separately, halving the window is the pixel-bound test: a hard drop means the
+cost scales with pixels, and a Retina framebuffer is 4× its logical size.
 
 For per-pass GPU numbers beyond that, use Xcode's GPU capture (Metal) —
 per-pass timestamps inside the engine are the ADR-0077 follow-up, not built.

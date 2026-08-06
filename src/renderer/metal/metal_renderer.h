@@ -32,6 +32,7 @@ public:
     void setEnvironmentMap(TextureHandle equirect) override;
     RenderStats getRenderStats() const override;
     float lastGpuFrameMs() const override;
+    bool setPresentSync(bool enabled) override;
 
     void beginFrame() override;
     void setCamera(const CameraState& camera) override;

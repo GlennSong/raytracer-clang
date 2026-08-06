@@ -170,6 +170,12 @@ struct PresentationSurface {
     // Renderer::xrWorldScale). No-op for non-tracking surfaces.
     virtual void setXrWorldScale(float /*scale*/) {}
 
+    // Present without waiting for the display refresh (Renderer::
+    // setPresentSync). Only a surface that owns its pacing can honour this;
+    // returning false says "pacing isn't mine", which is the truth for a
+    // compositor-driven surface.
+    virtual bool setPresentSync(bool /*enabled*/) { return false; }
+
     // Runs AFTER the command buffer is committed, for surfaces that bracket a
     // frame rather than just handing over a texture.
     //
@@ -205,6 +211,13 @@ struct LayerSurface final : PresentationSurface {
     bool acquire() override {
         drawable = [layer nextDrawable];
         return drawable != nil;
+    }
+    // CAMetalLayer paces presentation itself, so this layer CAN honour it:
+    // with displaySync off, nextDrawable stops blocking on the refresh and
+    // frame time becomes a measure of work instead of a multiple of 16.67 ms.
+    bool setPresentSync(bool enabled) override {
+        layer.displaySyncEnabled = enabled ? YES : NO;
+        return true;
     }
     id<MTLTexture> colorTarget() const override { return drawable.texture; }
     void present(id<MTLCommandBuffer> commandBuffer, id<MTLTexture>) override {
@@ -2402,6 +2415,10 @@ RenderStats MetalRenderer::getRenderStats() const {
 
 float MetalRenderer::lastGpuFrameMs() const {
     return impl->gpuFrameMs->load(std::memory_order_relaxed);
+}
+
+bool MetalRenderer::setPresentSync(bool enabled) {
+    return impl->surface && impl->surface->setPresentSync(enabled);
 }
 
 void MetalRenderer::beginFrame() {

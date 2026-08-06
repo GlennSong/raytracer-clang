@@ -492,6 +492,16 @@ public:
     // number is what says whether the GPU was actually busy that whole time.
     virtual float lastGpuFrameMs() const { return 0.0f; }
 
+    // Present without waiting for the display refresh. Measurement-only:
+    // while vsync is on, frame time is quantised to the refresh interval, so
+    // removing 4 ms of GPU work changes NOTHING measurable — the frame just
+    // waits the same. Ranking passes by frame time therefore requires turning
+    // this off first (PassBisect does, and restores it). Returns false when
+    // the backend can't control presentation pacing — a compositor-driven
+    // surface (visionOS) owns it — so callers can say the measurement is
+    // unreliable rather than report noise.
+    virtual bool setPresentSync(bool /*enabled*/) { return false; }
+
     virtual void beginFrame() = 0;
     virtual void setCamera(const CameraState& camera) = 0;
 

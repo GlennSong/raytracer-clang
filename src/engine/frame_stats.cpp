@@ -81,6 +81,10 @@ void FrameStats::record(const FrameSample& sample) {
                     << sample.textureUploads << ',' << sample.pollMs << ','
                     << sample.dispatchMs << ',' << sample.stateSwapMs << '\n';
         captureRows++;
+        // Flush periodically so a session that is force-quit or crashes still
+        // leaves a usable capture — losing the whole run to a buffered tail is
+        // how a capture "doesn't save".
+        if (captureRows % 120 == 0) captureFile.flush();
     }
 }
 

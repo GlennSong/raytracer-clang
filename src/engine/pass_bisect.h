@@ -34,6 +34,13 @@ public:
 
     State state = Idle;
     std::string result;
+    // True while the run has presentation sync switched off. Measuring frame
+    // time with vsync ON cannot rank passes: the frame is quantised to the
+    // refresh interval, so a real 4 ms saving reads as 0.00 — and a frame
+    // sitting exactly ON the boundary flips between one and two intervals,
+    // which reads as a pass "costing" a negative amount. Both happened on a
+    // real machine before this existed.
+    bool syncDisabled = false;
 
     void begin(FrameContext& ctx);
     void update(FrameContext& ctx);
@@ -66,8 +73,10 @@ private:
     std::vector<float> samples;
     std::vector<float> medians;   // one per completed step
     bool savedSsao = true, savedSsr = true, savedBloom = true;
+    int framebufferPixels = 0;    // conditions the run was measured under
 
     void applyStep(FrameContext& ctx, int index);
+    void restore(FrameContext& ctx);
     void finish();
 };
 

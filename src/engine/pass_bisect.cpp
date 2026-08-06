@@ -1,7 +1,9 @@
 #include "pass_bisect.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <vector>
 
 namespace engine {
 
@@ -11,6 +13,10 @@ void PassBisect::begin(FrameContext& ctx) {
     savedSsao = ctx.renderer.ssaoEnabled;
     savedSsr = ctx.renderer.ssrEnabled;
     savedBloom = ctx.renderer.bloomEnabled;
+    framebufferPixels = ctx.framebufferWidth * ctx.framebufferHeight;
+    // Unlock presentation first: with vsync on, frame time is a multiple of
+    // the refresh interval and the whole measurement is meaningless.
+    syncDisabled = ctx.renderer.setPresentSync(false);
     step = 0;
     elapsed = 0.0;
     samples.clear();
@@ -20,10 +26,18 @@ void PassBisect::begin(FrameContext& ctx) {
     applyStep(ctx, 0);
 }
 
-void PassBisect::cancel(FrameContext& ctx) {
+void PassBisect::restore(FrameContext& ctx) {
     ctx.renderer.ssaoEnabled = savedSsao;
     ctx.renderer.ssrEnabled = savedSsr;
     ctx.renderer.bloomEnabled = savedBloom;
+    if (syncDisabled) {
+        ctx.renderer.setPresentSync(true);
+        syncDisabled = false;
+    }
+}
+
+void PassBisect::cancel(FrameContext& ctx) {
+    restore(ctx);
     state = Idle;
     samples.clear();
     medians.clear();
@@ -57,38 +71,84 @@ void PassBisect::update(FrameContext& ctx) {
     elapsed = 0.0;
 
     if (++step >= STEP_COUNT) {
-        ctx.renderer.ssaoEnabled = savedSsao;
-        ctx.renderer.ssrEnabled = savedSsr;
-        ctx.renderer.bloomEnabled = savedBloom;
+        restore(ctx);
         finish();
         return;
     }
     applyStep(ctx, step);
 }
 
+// Do the measured times look quantised to a display refresh interval? If so
+// the numbers describe the display, not the passes, and must not be reported
+// as pass costs. Checked against common refresh rates rather than assuming
+// 60 Hz — a ProMotion panel is 120.
+static bool looksVsyncQuantised(const std::vector<float>& medians) {
+    for (double interval : {1000.0 / 60.0, 1000.0 / 120.0, 1000.0 / 90.0}) {
+        bool all = true;
+        for (float ms : medians) {
+            const double k = ms / interval;
+            const double nearest = std::floor(k + 0.5);
+            if (nearest < 0.9 || std::fabs(k - nearest) > 0.06) { all = false; break; }
+        }
+        if (all) return true;
+    }
+    return false;
+}
+
 void PassBisect::finish() {
     state = Finished;
     if (medians.empty()) { result = "bisect produced no samples"; return; }
 
-    const float baseline = medians[0];
-    char buf[512];
-    std::snprintf(buf, sizeof(buf),
-                  "baseline %.2f ms/frame (median)\n", baseline);
+    char buf[640];
+    std::snprintf(buf, sizeof(buf), "measured at %.2fM pixels%s\n",
+                  framebufferPixels / 1.0e6,
+                  syncDisabled ? "" : " (vsync NOT disabled)");
     result = buf;
+
+    // Disabling a pass cannot make the frame SLOWER. If one did, the numbers
+    // are not measuring the pass — they are measuring something else moving
+    // underneath (typically the frame flipping across a refresh boundary).
+    // This catches cases the quantisation test alone misses: a real run read
+    // 17.11 / 33.27 / 17.81 / 33.20, where only the boundary was moving.
+    bool negativeSaving = false;
+    for (int i = 1; i < static_cast<int>(medians.size()); i++)
+        if (medians[i] > medians[0] * 1.05f) negativeSaving = true;
+
+    // Refuse to report pass costs that are really display artefacts.
+    if (!syncDisabled || negativeSaving || looksVsyncQuantised(medians)) {
+        result += negativeSaving
+            ? "UNRELIABLE: disabling a pass made frames SLOWER, which is\n"
+              "impossible — the frame is flipping across a refresh boundary,\n"
+              "so these times measure the display, not the passes. Measured:\n"
+            : "UNRELIABLE: frame times are quantised to the display refresh,\n"
+              "so this cannot rank passes — a real saving reads as 0.00.\n"
+              "Measured:\n";
+        for (int i = 0; i < static_cast<int>(medians.size()); i++) {
+            std::snprintf(buf, sizeof(buf), "  %-18s %6.2f ms\n",
+                          STEPS[i].name, medians[i]);
+            result += buf;
+        }
+        result += !syncDisabled
+            ? "This backend cannot disable presentation sync, so use a GPU\n"
+              "capture (Xcode) to rank passes instead."
+            : "Sync was disabled but the times still look quantised — the\n"
+              "display may be pacing elsewhere; try a GPU capture.";
+        return;
+    }
+
+    const float baseline = medians[0];
+    std::snprintf(buf, sizeof(buf), "baseline %.2f ms/frame (median)\n",
+                  baseline);
+    result += buf;
     for (int i = 1; i < static_cast<int>(medians.size()); i++) {
-        // Turning a pass OFF should make frames FASTER; the drop is that
-        // pass's cost. A near-zero drop means the pass is not what's
-        // expensive — or the frame is pinned to a display interval, which
-        // hides everything smaller than one interval (the report warns about
-        // that separately).
+        // Turning a pass OFF makes frames faster; the drop IS that pass's
+        // cost. With sync off this is a real measurement, not a boundary flip.
         const float saved = baseline - medians[i];
-        std::snprintf(buf, sizeof(buf), "%-18s %6.2f ms  (saves %+.2f ms)\n",
+        std::snprintf(buf, sizeof(buf),
+                      "%-18s %6.2f ms  (that pass costs %+.2f ms)\n",
                       STEPS[i].name, medians[i], saved);
         result += buf;
     }
-    result += "note: if every saving reads ~0 while frames sit on a display\n"
-              "interval, vsync is masking the difference — uncap or shrink the\n"
-              "window and re-run.";
 }
 
 const char* PassBisect::label() const {

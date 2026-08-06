@@ -519,10 +519,38 @@ split capture had a 16.70 ms median (60 fps) on the same scene; captures 2 and
 3 are both 30 fps. Pin down what differs (window size, display, power state)
 before optimising, or every before/after comparison is unreliable.
 
-Next step is measurement, not reading: the Performance panel's **Rank post
-passes** button times SSAO/SSR/bloom by holding each configuration and taking
-medians — but note vsync will mask savings smaller than a display interval, so
-shrink the window or uncap first.
+**Fourth capture (base.csv, 2056x1302 = 2.68M px, all passes on) + two bisect
+runs.** Steady state unchanged: median 33.40 ms, typical `acquire` 32.32 ms,
+0.8 ms of CPU work in the whole frame — GPU-bound at 30 fps.
+
+New from this one:
+
+- **A 1-second stall.** Frame 1329: 1029.87 ms total, **1014 ms in
+  `acquire`** — the GPU (or the display pipeline) went away for a full second.
+  It sits in a burst with frames 1363–1381 (84/82/152/310/114 ms, all
+  acquire-dominated), so something happened *around* that moment rather than
+  steady cost. Worth reproducing before chasing: window focus change, display
+  mode switch, or another process taking the GPU.
+- **A 296 ms state swap.** Frame 1691 spent **296.60 ms in `state_swap`** —
+  the split from `dispatch` paid off immediately: it is a state's `onEnter`,
+  not the event bus. Prime suspect remains the debug overlay's first push
+  (ImGui font-atlas build, which uploads through ImGui's own Metal path and is
+  therefore invisible to our upload counters).
+- **`poll` at 240 ms on frame 1** — boot-time OS event pump, expected.
+- **Uploads confirmed irrelevant a third time**: 38 of 62 on frame 1, and only
+  that one slow frame carries any.
+
+**The pass bisect was broken, and the numbers it produced were nonsense:**
+`17.11 / 33.27 / 17.81 / 33.20` (SSAO and bloom "costing" −16 ms) and, at
+quarter size, `16.72 / 16.67 / 16.66 / 16.66` (everything "costing" 0.05 ms).
+Both are vsync artefacts — the first a frame flipping across the refresh
+boundary, the second every configuration finishing early and waiting. *Fixed:*
+`Renderer::setPresentSync` (Metal: `CAMetalLayer.displaySyncEnabled`) lets the
+bisect unlock presentation for the measurement and restore it after, and the
+bisect now refuses to report a ranking when a pass appears to cost negative
+time, when the medians look quantised to 60/90/120 Hz, or when the backend
+cannot disable sync. **Still owed: an actual pass ranking** — nobody has one
+yet, so which post pass dominates the 30 fps steady state remains unmeasured.
 
 ## Verification gap (the meta-debt)
 
