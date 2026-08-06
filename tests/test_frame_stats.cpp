@@ -85,6 +85,28 @@ TEST_CASE(frame_stats_render_split_phases_are_distinct) {
     CHECK_APPROX(s.avgGpuMs, 12.5, 1e-4);
 }
 
+TEST_CASE(frame_stats_summary_reports_unattributed_time) {
+    FrameStats fs;
+    // A frame whose brackets cover only part of its duration: the remainder
+    // must surface as `other`, not vanish. (A real capture hid a 307 ms stall
+    // in exactly this gap.)
+    FrameSample s;
+    s.totalMs = 100.0f;
+    s.updateMs = 10.0f;
+    s.acquireMs = 20.0f;
+    fs.record(s);
+    CHECK_APPROX(fs.summarize().avgOtherMs, 70.0, 1e-4);
+
+    // Fully bracketed frame: nothing unattributed.
+    FrameStats covered;
+    FrameSample c;
+    c.totalMs = 30.0f;
+    c.updateMs = 10.0f;
+    c.encodeMs = 20.0f;
+    covered.record(c);
+    CHECK_APPROX(covered.summarize().avgOtherMs, 0.0, 1e-4);
+}
+
 TEST_CASE(frame_stats_records_per_frame_uploads) {
     FrameStats fs;
     fs.beginFrame();
@@ -169,7 +191,8 @@ TEST_CASE(frame_stats_csv_capture_round_trips) {
     CHECK(header ==
           "frame,total_ms,update_ms,fixed_ms,render_ms,wait_ms,"
           "host_delta_ms,fixed_steps,draw_calls,instances,triangles,"
-          "acquire_ms,encode_ms,submit_ms,gpu_ms,mesh_uploads,texture_uploads");
+          "acquire_ms,encode_ms,submit_ms,gpu_ms,mesh_uploads,texture_uploads,"
+          "poll_ms,dispatch_ms");
     CHECK(row1.substr(0, 2) == "1,");
     CHECK(row1.find(",42,") != std::string::npos);   // draw calls column
     CHECK(row2.substr(0, 2) == "2,");

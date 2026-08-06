@@ -438,6 +438,39 @@ The ledger now records per-frame `mesh_uploads` / `texture_uploads`
 (monotonic counters in `RenderStats`, diffed per frame) so this class stops
 being guesswork: a slow frame that uploaded something names its own cause.
 
+**Second capture (arena2, with the upload counters) settled several of these
+— including against me:**
+
+- **Mid-play uploads are NOT the hitch. Falsified.** 62 uploads across the
+  run, 38 of them on frame 1 (level load); of the 34 slowest frames exactly
+  ONE uploaded anything, and that one was frame 1. Suspects 1 and 2 below are
+  therefore *not* the cause of the in-play hitches (the pose meshes do upload
+  during play — ~24 of them — they just never land on a slow frame). The
+  uploadTexture stall and the lazy pose meshes remain worth fixing on
+  principle; they are not this bug.
+- **`gpu_ms` is contaminated and must not be read as GPU cost.** It reported
+  58.4 ms typical against a 33.35 ms typical frame — impossible, since a frame
+  cannot finish faster than its own GPU work. The timed command buffer also
+  carries `presentDrawable`, so its GPU window includes waiting on the display
+  for a free drawable. **Fix:** time a command buffer that does not present —
+  submit the render work and the present as two buffers on the same queue
+  (ordering is preserved), or move the present to a scheduled handler. Both
+  restructure frame submission, and visionOS's `CompositorSurface` brackets
+  the frame differently, so this needs a device to verify. Until then the
+  report labels the number an upper bound rather than a cost.
+- **The biggest hitch was in code no bracket covered.** Frame 3324 took
+  307 ms while its phases summed to 30 ms — 90% unattributed. *Fixed:*
+  `Poll` (window/OS event pump) and `Dispatch` (event-bus drain + end-of-frame
+  state swap) are now bracketed, and the report charts a derived
+  **unattributed** band so a gap is visible instead of invisible. A re-capture
+  will name that 277 ms.
+- **This run's real problem is steady state, not hitching.** Typical `acquire`
+  is already 31.80 ms and the median frame is 33.35 ms — vsync-locked at 30 fps
+  on *every* frame; spikes add only +16.87 ms on top. Note the previous arena
+  capture had a 16.70 ms median (a clean 60 fps) on the same scene, so
+  something environmental differs between the two runs (window size, display,
+  or power state) and is worth pinning down before optimising anything.
+
 Suspects, in confidence order — none yet confirmed on device:
 
 1. **`MetalRenderer::uploadTexture` stalls the pipeline.** It ends with

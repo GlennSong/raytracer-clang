@@ -35,7 +35,12 @@ PHASES = [
 ALL_COLUMNS = ("total_ms", "update_ms", "fixed_ms", "render_ms", "wait_ms",
                "host_delta_ms", "fixed_steps", "draw_calls", "instances",
                "triangles", "acquire_ms", "encode_ms", "submit_ms", "gpu_ms",
-               "mesh_uploads", "texture_uploads")
+               "mesh_uploads", "texture_uploads", "poll_ms", "dispatch_ms")
+
+# Derived, never read from the CSV: frame time no bracket claimed. A real
+# capture hid a 307 ms stall in here (90% of that frame), so it is charted as
+# a layer of its own rather than left as an invisible gap.
+OTHER = "other_ms"
 
 
 def load_capture(path):
@@ -59,6 +64,15 @@ def load_capture(path):
                     cols[name].append(0.0)
     if not rows:
         sys.exit(f"{path}: capture holds no frames")
+
+    split = any(v > 0 for v in cols["acquire_ms"])
+    render_parts = (["acquire_ms", "encode_ms", "submit_ms"] if split
+                    else ["render_ms"])
+    accounted = ["update_ms", "fixed_ms", "wait_ms", "poll_ms",
+                 "dispatch_ms"] + render_parts
+    cols[OTHER] = [max(0.0, cols["total_ms"][i] - sum(cols[c][i]
+                                                      for c in accounted))
+                   for i in range(rows)]
     return cols
 
 
@@ -74,11 +88,14 @@ def phases_for(cols):
     if has_render_split(cols):
         return [("update_ms", "update", "#4e79a7"),
                 ("fixed_ms", "fixed", "#f28e2b"),
+                ("poll_ms", "poll (os events)", "#76b7b2"),
+                ("dispatch_ms", "dispatch (events/state)", "#edc949"),
                 ("encode_ms", "encode (cpu)", "#59a14f"),
                 ("submit_ms", "submit (cpu)", "#b07aa1"),
                 ("acquire_ms", "acquire (waiting on GPU)", "#e15759"),
+                (OTHER, "unattributed", "#333333"),
                 ("wait_ms", "wait", "#bbbbbb")]
-    return PHASES
+    return PHASES + [(OTHER, "unattributed", "#333333")]
 
 
 def percentile(sorted_values, fraction):
@@ -105,8 +122,9 @@ def vsync_note(median_ms, budget_ms):
                     f"for the next refresh, so it runs at "
                     f"{1000.0 / target:.0f} fps in lockstep. The measured time "
                     f"includes that waiting, so the true cost is somewhere "
-                    f"between {budget_ms:.1f} and {target:.1f} ms — the "
-                    f"<code>gpu_ms</code> column is what pins it down.")
+                    f"between {budget_ms:.1f} and {target:.1f} ms — a GPU "
+                    f"capture pins it down exactly (<code>gpu_ms</code> helps, "
+                    f"but read the note on it below first).")
     return None
 
 
@@ -161,7 +179,22 @@ def verdict(cols, s, budget_ms):
             "work or waiting on the GPU. Re-capture with a current build to "
             "get the acquire / encode / submit breakdown and the GPU column.")
 
-    if s["gpu"] > 0:
+    if s["gpu"] > s["avg"] * 1.05 and s["gpu"] > 0:
+        # Physically impossible as "work": a frame cannot finish in less time
+        # than its own GPU work takes. The command buffer that is timed also
+        # carries presentDrawable, so its GPU window includes waiting on the
+        # display for a free drawable. Report it as a ceiling, not a cost.
+        lines.append(
+            f"<b>Treat the GPU number as an upper bound, not a cost.</b> It "
+            f"reads {s['gpu']:.1f} ms against an average frame of "
+            f"{s['avg']:.1f} ms &mdash; impossible as pure work, since a frame "
+            f"cannot finish faster than its own GPU work. The timed command "
+            f"buffer also carries the present, so its window includes waiting "
+            f"for the display to release a drawable. Real GPU cost is "
+            f"somewhere below this; a platform GPU capture (Xcode) is the "
+            f"trustworthy per-pass number until the engine times work "
+            f"separately from presentation.")
+    elif s["gpu"] > 0:
         head = "GPU-bound" if s["gpu"] > cpu_render else "CPU-bound"
         lines.append(
             f"Measured GPU time: <b>{s['gpu']:.1f} ms/frame</b> against "
@@ -173,16 +206,27 @@ def verdict(cols, s, budget_ms):
             lines.append(
                 f"Note the tension: mean GPU time ({s['gpu']:.1f} ms) is over "
                 f"budget, yet the median frame ({s['median']:.1f} ms) fits "
-                f"inside it — a frame cannot take {s['median']:.1f} ms while "
-                f"its own GPU work takes {s['gpu']:.1f}. Both are true because "
-                f"the <i>mean</i> is inflated by the spikes. Your typical "
-                f"frame is close to budget and the spikes are what break it, "
-                f"so <b>chase the hitches first</b>; chart 4's <i>typical</i> "
-                f"column is the steady-state number to judge by.")
+                f"inside it &mdash; a frame cannot take {s['median']:.1f} ms "
+                f"while its own GPU work takes {s['gpu']:.1f}. Both are true "
+                f"because the <i>mean</i> is inflated by the spikes. Your "
+                f"typical frame is close to budget and the spikes are what "
+                f"break it, so <b>chase the hitches first</b>; chart 4's "
+                f"<i>typical</i> column is the steady-state number.")
     elif split:
         lines.append(
-            "No GPU timing in this capture — the backend does not report it "
-            "(Metal does; Vulkan/WebGPU do not yet).")
+            "No GPU timing in this capture &mdash; the backend does not report "
+            "it (Metal does; Vulkan/WebGPU do not yet).")
+
+    other = s.get("other", 0.0)
+    if other > max(1.0, s["avg"] * 0.10):
+        lines.append(
+            f"<b>{other:.1f} ms of the average frame is unattributed</b> "
+            f"&mdash; inside the frame but outside every bracket. That is "
+            f"{other / s['avg'] * 100:.0f}% of it, and it is where a stall can "
+            f"hide: check the <i>unattributed</i> band in chart 2 and the "
+            f"worst-frames table. If it concentrates on the slow frames, the "
+            f"cause is in code no phase covers yet &mdash; add a bracket there "
+            f"rather than guessing.")
 
     # Steady-state cost and hitching are different problems with different
     # fixes, and an average blends them into one misleading number.
@@ -221,7 +265,8 @@ def summarize(cols):
         "fps": (1000.0 * len(host) / sum(host)) if host else 0.0,
     }
     for column in ("update_ms", "fixed_ms", "render_ms", "wait_ms",
-                   "acquire_ms", "encode_ms", "submit_ms", "gpu_ms"):
+                   "acquire_ms", "encode_ms", "submit_ms", "gpu_ms",
+                   "poll_ms", "dispatch_ms", OTHER):
         s[column[:-3]] = sum(cols[column]) / n
     for column in ("draw_calls", "instances", "triangles"):
         values = cols.get(column, [])

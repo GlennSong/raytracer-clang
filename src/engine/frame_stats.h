@@ -24,7 +24,13 @@ namespace engine {
 //             committing. CPU cost of the pass graph itself.
 // Render stays the total of the three, so old captures remain comparable.
 enum class FramePhase {
-    Update, FixedUpdate, Render, Wait, RenderAcquire, RenderEncode, RenderSubmit
+    Update, FixedUpdate, Render, Wait, RenderAcquire, RenderEncode, RenderSubmit,
+    // Everything between the named phases used to be invisible, and it hid the
+    // biggest hitch in a real capture: a 307 ms frame whose brackets summed to
+    // 30 ms. Poll covers window/OS event pumping (a classic source of
+    // multi-hundred-ms stalls); Dispatch covers the event-bus drain and the
+    // end-of-frame state swap (where a level load runs).
+    Poll, Dispatch
 };
 
 // One frame of the ledger: CPU phase times plus the renderer's submission
@@ -38,6 +44,8 @@ struct FrameSample {
     float acquireMs = 0.0f;    // blocked getting a drawable (GPU behind / vsync)
     float encodeMs = 0.0f;     // states' render(): cull + describe draws
     float submitMs = 0.0f;     // endFrame(): build command buffers + commit
+    float pollMs = 0.0f;       // window/OS event pump + framebuffer reconcile
+    float dispatchMs = 0.0f;   // event-bus drain + end-of-frame state swap
     float waitMs = 0.0f;       // FPS-cap sleep (budget headroom, not cost)
     // GPU execution time the backend measured, 0 when unsupported. Lags by a
     // frame or two (the GPU is behind the CPU) and is therefore a rolling
@@ -107,6 +115,7 @@ public:
         float avgSubmitMs = 0.0f;
         float avgWaitMs = 0.0f;
         float avgGpuMs = 0.0f;
+        float avgOtherMs = 0.0f;   // frame time no bracket claimed
         float avgFps = 0.0f;       // from hostDeltaMs, the felt rate
     };
     Summary summarize() const;
@@ -123,7 +132,7 @@ public:
 
 private:
     using Clock = std::chrono::steady_clock;
-    static constexpr int PHASE_COUNT = 7;
+    static constexpr int PHASE_COUNT = 9;
 
     std::array<FrameSample, HISTORY> ring{};
     int head = 0;    // next write slot

@@ -90,12 +90,23 @@ three ways, and the split is the whole diagnosis:
 | `encode` | The states' `render()` hooks: world walk, culling, describing draws. | CPU cost that scales with scene size — cull, batch, or reduce entity count. |
 | `submit` | `endFrame` — building every pass's command buffers, then commit. | The pass graph's own CPU cost; usually means too many passes/encoders. |
 
-`gpu_ms` is the measured GPU execution time (Metal only today; other backends
-report 0 and the column shows as unavailable). It lags a frame or two — the
-GPU runs behind the CPU — so treat it as a rolling value. It is the **only**
-number that survives a vsync block: when the display makes the engine wait,
-`acquire` inflates without work happening, and `gpu_ms` is what says whether
-the GPU was actually busy that whole time.
+`poll` (window/OS event pump) and `dispatch` (event-bus drain + end-of-frame
+state swap, where a level load runs) cover the parts of the frame that used to
+fall between the named phases. Anything still uncovered shows as
+**unattributed** — a derived band in chart 2 and a row in chart 4. Watch it:
+a real capture once hid a 307 ms stall there, 90% of the worst frame, simply
+because no bracket claimed that code. A growing unattributed band means *add a
+bracket*, not *guess*.
+
+`gpu_ms` is the GPU timeline of the frame's command buffer (Metal only today;
+other backends report 0). **Read it as an upper bound, not a cost.** It lags a
+frame or two, and — more importantly — the timed command buffer also carries
+`presentDrawable`, so its window includes waiting on the display for a free
+drawable. The giveaway is `gpu_ms` exceeding the frame's own duration, which is
+impossible for pure work; the report detects that and says so. Timing a buffer
+that does not present (split submission, or a scheduled-handler present) is the
+fix, and it needs a device to verify — until then Xcode's GPU capture is the
+trustworthy per-pass number.
 
 **Vsync quantisation.** If frame times cluster on a multiple of the refresh
 interval (33.3 ms on a 60 Hz display = two intervals), the engine missed the

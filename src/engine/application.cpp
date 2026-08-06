@@ -155,9 +155,14 @@ bool Application::running() const {
 
 void Application::runFrame() {
     frameStats.beginFrame();
+    // Bracketed because it is OS/driver code we don't control and a real
+    // capture caught a 307 ms frame whose named phases summed to 30 ms —
+    // whatever stalled it lived outside every bracket (ADR-0077).
+    frameStats.beginPhase(FramePhase::Poll);
     window->pollEvents();
     frameDelta = window->getDeltaTime();
     reconcileFramebuffer();
+    frameStats.endPhase(FramePhase::Poll);
     debugLines.update(frameDelta);   // age timed debug shapes (ADR-0067)
 
     // Headset pose for this frame, BEFORE any system updates: camera writers
@@ -255,7 +260,9 @@ void Application::runFrame() {
 
     // Deliver everything enqueued during update/fixedUpdate before the frame
     // renders, so reactions land in the same frame as their cause (ADR-0066).
+    frameStats.beginPhase(FramePhase::Dispatch);
     eventBus.dispatchQueued();
+    frameStats.endPhase(FramePhase::Dispatch);
 
     auto frameStart = std::chrono::steady_clock::now();
     frameStats.beginPhase(FramePhase::Render);
@@ -278,6 +285,10 @@ void Application::runFrame() {
     }
 
     {
+        // Same bracket as the event drain: a state swap here runs a level
+        // load, which is exactly the kind of multi-hundred-ms work that used
+        // to land outside every phase.
+        frameStats.beginPhase(FramePhase::Dispatch);
         FrameContext ctx = makeContext();
         stateStack.applyPending(ctx);
 
@@ -288,6 +299,7 @@ void Application::runFrame() {
             stateStack.pushState(std::move(transitionRequest.next));
             stateStack.applyPending(ctx);
         }
+        frameStats.endPhase(FramePhase::Dispatch);
     }
 
     // Close this frame's ledger row with the renderer's submission counters,

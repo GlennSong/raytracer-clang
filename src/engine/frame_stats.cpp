@@ -19,6 +19,8 @@ float* phaseField(FrameSample& s, FramePhase phase) {
         case FramePhase::RenderAcquire: return &s.acquireMs;
         case FramePhase::RenderEncode:  return &s.encodeMs;
         case FramePhase::RenderSubmit:  return &s.submitMs;
+        case FramePhase::Poll:          return &s.pollMs;
+        case FramePhase::Dispatch:      return &s.dispatchMs;
     }
     return &s.updateMs;   // unreachable; keeps -Wreturn-type honest
 }
@@ -75,7 +77,8 @@ void FrameStats::record(const FrameSample& sample) {
                     << sample.triangles << ',' << sample.acquireMs << ','
                     << sample.encodeMs << ',' << sample.submitMs << ','
                     << sample.gpuMs << ',' << sample.meshUploads << ','
-                    << sample.textureUploads << '\n';
+                    << sample.textureUploads << ',' << sample.pollMs << ','
+                    << sample.dispatchMs << '\n';
         captureRows++;
     }
 }
@@ -87,7 +90,7 @@ FrameStats::Summary FrameStats::summarize() const {
     std::array<float, HISTORY> totals;
     double sumTotal = 0, sumUpdate = 0, sumFixed = 0, sumRender = 0,
            sumWait = 0, sumDelta = 0, sumAcquire = 0, sumEncode = 0,
-           sumSubmit = 0, sumGpu = 0;
+           sumSubmit = 0, sumGpu = 0, sumOther = 0;
     for (int i = 0; i < count; i++) {
         const FrameSample& f = historyAt(i);
         totals[i] = f.totalMs;
@@ -101,6 +104,12 @@ FrameStats::Summary FrameStats::summarize() const {
         sumEncode += f.encodeMs;
         sumSubmit += f.submitMs;
         sumGpu += f.gpuMs;
+        // Time inside the frame that no bracket claimed. Watching it is how a
+        // missing bracket announces itself instead of hiding a stall.
+        sumOther += std::max(0.0f, f.totalMs - (f.updateMs + f.fixedMs +
+                                                f.acquireMs + f.encodeMs +
+                                                f.submitMs + f.waitMs +
+                                                f.pollMs + f.dispatchMs));
         s.maxTotalMs = std::max(s.maxTotalMs, f.totalMs);
     }
     s.avgTotalMs = static_cast<float>(sumTotal / count);
@@ -112,6 +121,7 @@ FrameStats::Summary FrameStats::summarize() const {
     s.avgEncodeMs = static_cast<float>(sumEncode / count);
     s.avgSubmitMs = static_cast<float>(sumSubmit / count);
     s.avgGpuMs = static_cast<float>(sumGpu / count);
+    s.avgOtherMs = static_cast<float>(sumOther / count);
     if (sumDelta > 0)
         s.avgFps = static_cast<float>(count / (sumDelta / 1000.0));
 
@@ -132,7 +142,7 @@ bool FrameStats::startCapture(const std::string& path) {
     captureFile << "frame,total_ms,update_ms,fixed_ms,render_ms,wait_ms,"
                    "host_delta_ms,fixed_steps,draw_calls,instances,triangles,"
                    "acquire_ms,encode_ms,submit_ms,gpu_ms,mesh_uploads,"
-                   "texture_uploads\n";
+                   "texture_uploads,poll_ms,dispatch_ms\n";
     return true;
 }
 
