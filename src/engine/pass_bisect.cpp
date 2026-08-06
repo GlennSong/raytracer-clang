@@ -1,8 +1,11 @@
 #include "pass_bisect.h"
 
+#include "../log.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <utility>
 #include <vector>
 
 namespace engine {
@@ -17,6 +20,9 @@ void PassBisect::begin(FrameContext& ctx) {
     // Unlock presentation first: with vsync on, frame time is a multiple of
     // the refresh interval and the whole measurement is meaningless.
     syncDisabled = ctx.renderer.setPresentSync(false);
+    if (!syncDisabled)
+        LOG_WARN << "pass bisect: renderer would not disable presentation "
+                    "sync; results will be lower bounds";
     step = 0;
     elapsed = 0.0;
     samples.clear();
@@ -114,8 +120,13 @@ void PassBisect::finish() {
     for (int i = 1; i < static_cast<int>(medians.size()); i++)
         if (medians[i] > medians[0] * 1.05f) negativeSaving = true;
 
-    // Refuse to report pass costs that are really display artefacts.
-    if (!syncDisabled || negativeSaving || looksVsyncQuantised(medians)) {
+    // Failing to disable sync is NOT by itself a reason to discard the run:
+    // if the frame is well over the refresh interval the times still vary
+    // continuously and rank correctly — they just understate each saving,
+    // because part of it is absorbed by the wait. Only genuinely artefactual
+    // numbers (quantised, or a negative cost) are refused. Throwing away a
+    // sound measurement because one flag was off wasted a real result once.
+    if (negativeSaving || looksVsyncQuantised(medians)) {
         result += negativeSaving
             ? "UNRELIABLE: disabling a pass made frames SLOWER, which is\n"
               "impossible — the frame is flipping across a refresh boundary,\n"
@@ -128,11 +139,12 @@ void PassBisect::finish() {
                           STEPS[i].name, medians[i]);
             result += buf;
         }
-        result += !syncDisabled
-            ? "This backend cannot disable presentation sync, so use a GPU\n"
-              "capture (Xcode) to rank passes instead."
-            : "Sync was disabled but the times still look quantised — the\n"
-              "display may be pacing elsewhere; try a GPU capture.";
+        result += syncDisabled
+            ? "Sync WAS disabled and the times still look like this — the\n"
+              "display may be pacing elsewhere; use a GPU capture."
+            : "Presentation sync could not be disabled here, which is the\n"
+              "likely cause. Shrink the window (fewer pixels moves the frame\n"
+              "off the refresh boundary) and re-run, or use a GPU capture.";
         return;
     }
 
@@ -140,15 +152,25 @@ void PassBisect::finish() {
     std::snprintf(buf, sizeof(buf), "baseline %.2f ms/frame (median)\n",
                   baseline);
     result += buf;
-    for (int i = 1; i < static_cast<int>(medians.size()); i++) {
-        // Turning a pass OFF makes frames faster; the drop IS that pass's
-        // cost. With sync off this is a real measurement, not a boundary flip.
-        const float saved = baseline - medians[i];
-        std::snprintf(buf, sizeof(buf),
-                      "%-18s %6.2f ms  (that pass costs %+.2f ms)\n",
-                      STEPS[i].name, medians[i], saved);
+
+    // Rank the passes by cost, so the answer is the FIRST line read rather
+    // than something to work out from four numbers.
+    std::vector<std::pair<float, const char*>> ranked;
+    for (int i = 1; i < static_cast<int>(medians.size()); i++)
+        ranked.emplace_back(baseline - medians[i], STEPS[i].name);
+    std::sort(ranked.begin(), ranked.end(),
+              [](const auto& a, const auto& b) { return a.first > b.first; });
+
+    for (const auto& [saved, name] : ranked) {
+        std::snprintf(buf, sizeof(buf), "%-18s costs %5.2f ms  (%.0f%%)\n",
+                      name, saved,
+                      baseline > 0 ? 100.0 * saved / baseline : 0.0);
         result += buf;
     }
+    if (!syncDisabled)
+        result += "note: presentation sync could not be disabled, so each\n"
+                  "figure is a LOWER bound — part of a saving is absorbed by\n"
+                  "the wait for the display.";
 }
 
 const char* PassBisect::label() const {

@@ -549,8 +549,30 @@ boundary, the second every configuration finishing early and waiting. *Fixed:*
 bisect unlock presentation for the measurement and restore it after, and the
 bisect now refuses to report a ranking when a pass appears to cost negative
 time, when the medians look quantised to 60/90/120 Hz, or when the backend
-cannot disable sync. **Still owed: an actual pass ranking** — nobody has one
-yet, so which post pass dominates the 30 fps steady state remains unmeasured.
+cannot disable sync. **FIRST REAL PASS RANKING (2026-08-06, half-width window, 2.68M px scene,
+sync NOT disabled so these are LOWER bounds):**
+
+| pass | cost | share of a 32.44 ms frame |
+|---|---|---|
+| **bloom** | **7.01 ms** | 22% |
+| SSAO | 3.93 ms | 12% |
+| SSR | 1.59 ms | 5% |
+| (the three together) | 12.53 ms | 39% |
+
+**Bloom is the most expensive post pass — more than SSAO and SSR combined**,
+which contradicts the standing assumption in the notes above that SSAO
+dominates (the "SSAO floor ~16 ms" entry was never measured, it was inferred).
+Bloom is a mip chain: its cost is resolution-driven and the usual fix is fewer
+mips / a cheaper downsample, not tuning thresholds. Verify at full size before
+acting, and note the third run had `setPresentSync` return false on a Mac
+where `CAMetalLayer.displaySyncEnabled` should have worked — worth a look, as
+the true costs are higher than these lower bounds.
+
+A tool lesson worth keeping: the bisect originally REFUSED this result merely
+because the sync flag was off, discarding a sound measurement. Failing to
+disable sync understates savings; it does not invalidate them. Only genuinely
+artefactual numbers (a negative cost, or medians quantised to a refresh rate)
+are refused now.
 
 ## Verification gap (the meta-debt)
 
