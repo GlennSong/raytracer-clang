@@ -496,8 +496,33 @@ Suspects, in confidence order — none yet confirmed on device:
    Correct for genuinely unique procgen meshes; a hitch source if a recipe
    spawns repeatedly.
 
-Next step is evidence, not more reading: re-capture with the upload columns,
-then read chart 4's `uploads` column on the ten worst frames.
+**Third capture (arena3, with poll/dispatch bracketed): the hitches now have
+names, and they are three unrelated problems.** `unattributed` fell to 0.00 —
+the frame is fully accounted for. The worst frames split into:
+
+- **`dispatch`/state-swap stalls** — frame 2614 spent **241 ms** in the
+  event-drain + state-swap bracket (they were one bracket then; now split into
+  `dispatch` and `state_swap` so the next capture says which). One occurrence
+  in 2644 frames. Prime suspect: pushing `DebugOverlayState` runs ImGui's
+  first-time font-atlas build, which goes through ImGui's own Metal upload
+  (invisible to our upload counters).
+- **`poll` stalls** — 157 ms on frame 1 (boot) and **99 ms on frame 864**,
+  mid-session, inside the window/OS event pump. Not engine code; a window
+  server or system hiccup. Worth confirming it recurs before chasing.
+- **`acquire` spikes** — frames 10/12/29/1141/1374/543 at 50–114 ms, purely
+  GPU-side, the same class as the steady-state cost.
+
+**Steady state is unchanged and is the bigger problem:** typical `acquire`
+32.37 ms, median frame 33.31 ms — vsync-locked at 30 fps on *every* frame,
+with only 0.64 ms of CPU work in the whole frame. Still unexplained: the FIRST
+split capture had a 16.70 ms median (60 fps) on the same scene; captures 2 and
+3 are both 30 fps. Pin down what differs (window size, display, power state)
+before optimising, or every before/after comparison is unreliable.
+
+Next step is measurement, not reading: the Performance panel's **Rank post
+passes** button times SSAO/SSR/bloom by holding each configuration and taking
+medians — but note vsync will mask savings smaller than a display interval, so
+shrink the window or uncap first.
 
 ## Verification gap (the meta-debt)
 

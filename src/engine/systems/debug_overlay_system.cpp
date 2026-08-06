@@ -1,6 +1,7 @@
 #include "debug_overlay_system.h"
 
 #include "../frame_stats.h"
+#include "../pass_bisect.h"
 
 #include <algorithm>
 
@@ -160,6 +161,7 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
     // The frame ledger (ADR-0077): where the frame's CPU time goes, over the
     // last ~4 s. Wait is FPS-cap sleep — headroom, not cost. For anything the
     // per-phase split can't answer, attach Tracy (RT_ENABLE_PROFILER).
+    static PassBisect bisect;   // one run at a time; survives panel collapse
     if (ImGui::CollapsingHeader("Performance")) {
         FrameStats& fs = ctx.stats;
         FrameStats::Summary sum = fs.summarize();
@@ -193,6 +195,27 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
                          budgetMs * 2.0f, ImVec2(-1, 64));
         ImGui::TextDisabled("last %d frames, scale 0-%.1f ms", n,
                             budgetMs * 2.0f);
+
+        // Pass-cost bisect: the only reliable way to rank the screen-space
+        // passes while gpu_ms is present-contaminated (ADR-0077). Holds each
+        // configuration for a fixed window, then reports the median frame time
+        // of each — measured, not eyeballed, and no toggling by hand.
+        if (bisect.state == PassBisect::Idle) {
+            if (ImGui::Button("Rank post passes (~10s)")) bisect.begin(ctx);
+            ImGui::SameLine();
+            ImGui::TextDisabled("toggles SSAO/SSR/bloom in turn, times each");
+        } else {
+            ImGui::Text("ranking: %s  (%.1fs left)", bisect.label(),
+                        bisect.secondsLeft());
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) bisect.cancel(ctx);
+        }
+        if (!bisect.result.empty()) {
+            ImGui::TextUnformatted(bisect.result.c_str());
+            ImGui::SameLine();
+            if (ImGui::Button("Clear##bisect")) bisect.result.clear();
+        }
+        bisect.update(ctx);
 
         if (!fs.capturing()) {
             if (ImGui::Button("Start CSV capture"))

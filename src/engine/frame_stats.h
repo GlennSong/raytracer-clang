@@ -28,9 +28,12 @@ enum class FramePhase {
     // Everything between the named phases used to be invisible, and it hid the
     // biggest hitch in a real capture: a 307 ms frame whose brackets summed to
     // 30 ms. Poll covers window/OS event pumping (a classic source of
-    // multi-hundred-ms stalls); Dispatch covers the event-bus drain and the
-    // end-of-frame state swap (where a level load runs).
-    Poll, Dispatch
+    // multi-hundred-ms stalls); Dispatch is the event-bus drain; StateSwap is
+    // the end-of-frame push/pop (where a level load or a state's onEnter runs).
+    // Dispatch and StateSwap were one bracket until a 241 ms frame landed in
+    // it and could not be pinned to either — a bracket that can't discriminate
+    // is only half an instrument.
+    Poll, Dispatch, StateSwap
 };
 
 // One frame of the ledger: CPU phase times plus the renderer's submission
@@ -45,7 +48,8 @@ struct FrameSample {
     float encodeMs = 0.0f;     // states' render(): cull + describe draws
     float submitMs = 0.0f;     // endFrame(): build command buffers + commit
     float pollMs = 0.0f;       // window/OS event pump + framebuffer reconcile
-    float dispatchMs = 0.0f;   // event-bus drain + end-of-frame state swap
+    float dispatchMs = 0.0f;   // event-bus drain (reactions to this frame)
+    float stateSwapMs = 0.0f;  // end-of-frame push/pop: a state's onEnter/onExit
     float waitMs = 0.0f;       // FPS-cap sleep (budget headroom, not cost)
     // GPU execution time the backend measured, 0 when unsupported. Lags by a
     // frame or two (the GPU is behind the CPU) and is therefore a rolling
@@ -132,7 +136,7 @@ public:
 
 private:
     using Clock = std::chrono::steady_clock;
-    static constexpr int PHASE_COUNT = 9;
+    static constexpr int PHASE_COUNT = 10;
 
     std::array<FrameSample, HISTORY> ring{};
     int head = 0;    // next write slot

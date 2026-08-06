@@ -285,10 +285,10 @@ void Application::runFrame() {
     }
 
     {
-        // Same bracket as the event drain: a state swap here runs a level
-        // load, which is exactly the kind of multi-hundred-ms work that used
-        // to land outside every phase.
-        frameStats.beginPhase(FramePhase::Dispatch);
+        // Its own bracket, separate from the event drain: a push here runs the
+        // new state's onEnter (a level load, an overlay's first-time setup),
+        // which is a different cause with a different fix.
+        frameStats.beginPhase(FramePhase::StateSwap);
         FrameContext ctx = makeContext();
         stateStack.applyPending(ctx);
 
@@ -299,7 +299,7 @@ void Application::runFrame() {
             stateStack.pushState(std::move(transitionRequest.next));
             stateStack.applyPending(ctx);
         }
-        frameStats.endPhase(FramePhase::Dispatch);
+        frameStats.endPhase(FramePhase::StateSwap);
     }
 
     // Close this frame's ledger row with the renderer's submission counters,

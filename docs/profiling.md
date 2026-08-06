@@ -115,12 +115,22 @@ rate. The measured frame time then includes that waiting and the true cost is
 somewhere between one interval and the observed value — `gpu_ms` pins it down.
 `frame-report.py` detects this and says so.
 
-**Once you know it is GPU-bound**, rank the passes without writing code:
-resize the window to half (frame time dropping hard = pixel-bound, and note a
-Retina framebuffer is 4× the logical size), then toggle SSAO / SSR / Bloom in
-the Debug panel one at a time and watch the Performance readout. For per-pass
-GPU numbers beyond that, use Xcode's GPU capture (Metal) — per-pass timestamps
-inside the engine are the ADR-0077 follow-up, not built yet.
+**Once you know it is GPU-bound**, rank the passes with the Performance
+panel's **Rank post passes** button. It holds each configuration (all on,
+then SSAO / SSR / bloom disabled in turn) for two seconds, discards the frames
+while the pipeline settles, takes the *median* of the rest, restores your
+settings, and prints how much each pass saves. Median, not average, so one OS
+stall doesn't swamp the result.
+
+One trap it warns about: **vsync hides small savings.** If frames are pinned
+to a display interval, removing 4 ms of GPU work changes nothing measurable —
+the frame still waits for the same scanout. Shrink the window (or uncap) and
+re-run so the frame time can move continuously. Halving the window is also the
+pixel-bound test: a hard drop means the cost scales with pixels, and a Retina
+framebuffer is 4× its logical size.
+
+For per-pass GPU numbers beyond that, use Xcode's GPU capture (Metal) —
+per-pass timestamps inside the engine are the ADR-0077 follow-up, not built.
 
 ## Tracy (the deep dive)
 

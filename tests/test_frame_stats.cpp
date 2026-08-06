@@ -192,7 +192,7 @@ TEST_CASE(frame_stats_csv_capture_round_trips) {
           "frame,total_ms,update_ms,fixed_ms,render_ms,wait_ms,"
           "host_delta_ms,fixed_steps,draw_calls,instances,triangles,"
           "acquire_ms,encode_ms,submit_ms,gpu_ms,mesh_uploads,texture_uploads,"
-          "poll_ms,dispatch_ms");
+          "poll_ms,dispatch_ms,state_swap_ms");
     CHECK(row1.substr(0, 2) == "1,");
     CHECK(row1.find(",42,") != std::string::npos);   // draw calls column
     CHECK(row2.substr(0, 2) == "2,");

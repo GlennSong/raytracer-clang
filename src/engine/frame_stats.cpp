@@ -21,6 +21,7 @@ float* phaseField(FrameSample& s, FramePhase phase) {
         case FramePhase::RenderSubmit:  return &s.submitMs;
         case FramePhase::Poll:          return &s.pollMs;
         case FramePhase::Dispatch:      return &s.dispatchMs;
+        case FramePhase::StateSwap:     return &s.stateSwapMs;
     }
     return &s.updateMs;   // unreachable; keeps -Wreturn-type honest
 }
@@ -78,7 +79,7 @@ void FrameStats::record(const FrameSample& sample) {
                     << sample.encodeMs << ',' << sample.submitMs << ','
                     << sample.gpuMs << ',' << sample.meshUploads << ','
                     << sample.textureUploads << ',' << sample.pollMs << ','
-                    << sample.dispatchMs << '\n';
+                    << sample.dispatchMs << ',' << sample.stateSwapMs << '\n';
         captureRows++;
     }
 }
@@ -109,7 +110,8 @@ FrameStats::Summary FrameStats::summarize() const {
         sumOther += std::max(0.0f, f.totalMs - (f.updateMs + f.fixedMs +
                                                 f.acquireMs + f.encodeMs +
                                                 f.submitMs + f.waitMs +
-                                                f.pollMs + f.dispatchMs));
+                                                f.pollMs + f.dispatchMs +
+                                                f.stateSwapMs));
         s.maxTotalMs = std::max(s.maxTotalMs, f.totalMs);
     }
     s.avgTotalMs = static_cast<float>(sumTotal / count);
@@ -142,7 +144,7 @@ bool FrameStats::startCapture(const std::string& path) {
     captureFile << "frame,total_ms,update_ms,fixed_ms,render_ms,wait_ms,"
                    "host_delta_ms,fixed_steps,draw_calls,instances,triangles,"
                    "acquire_ms,encode_ms,submit_ms,gpu_ms,mesh_uploads,"
-                   "texture_uploads,poll_ms,dispatch_ms\n";
+                   "texture_uploads,poll_ms,dispatch_ms,state_swap_ms\n";
     return true;
 }
 

@@ -35,7 +35,8 @@ PHASES = [
 ALL_COLUMNS = ("total_ms", "update_ms", "fixed_ms", "render_ms", "wait_ms",
                "host_delta_ms", "fixed_steps", "draw_calls", "instances",
                "triangles", "acquire_ms", "encode_ms", "submit_ms", "gpu_ms",
-               "mesh_uploads", "texture_uploads", "poll_ms", "dispatch_ms")
+               "mesh_uploads", "texture_uploads", "poll_ms", "dispatch_ms",
+               "state_swap_ms")
 
 # Derived, never read from the CSV: frame time no bracket claimed. A real
 # capture hid a 307 ms stall in here (90% of that frame), so it is charted as
@@ -68,8 +69,8 @@ def load_capture(path):
     split = any(v > 0 for v in cols["acquire_ms"])
     render_parts = (["acquire_ms", "encode_ms", "submit_ms"] if split
                     else ["render_ms"])
-    accounted = ["update_ms", "fixed_ms", "wait_ms", "poll_ms",
-                 "dispatch_ms"] + render_parts
+    accounted = ["update_ms", "fixed_ms", "wait_ms", "poll_ms", "dispatch_ms",
+                 "state_swap_ms"] + render_parts
     cols[OTHER] = [max(0.0, cols["total_ms"][i] - sum(cols[c][i]
                                                       for c in accounted))
                    for i in range(rows)]
@@ -89,7 +90,8 @@ def phases_for(cols):
         return [("update_ms", "update", "#4e79a7"),
                 ("fixed_ms", "fixed", "#f28e2b"),
                 ("poll_ms", "poll (os events)", "#76b7b2"),
-                ("dispatch_ms", "dispatch (events/state)", "#edc949"),
+                ("dispatch_ms", "dispatch (event bus)", "#edc949"),
+                ("state_swap_ms", "state swap (onEnter)", "#ff9da7"),
                 ("encode_ms", "encode (cpu)", "#59a14f"),
                 ("submit_ms", "submit (cpu)", "#b07aa1"),
                 ("acquire_ms", "acquire (waiting on GPU)", "#e15759"),
