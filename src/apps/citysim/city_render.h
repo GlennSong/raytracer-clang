@@ -4,7 +4,7 @@
 #include "../../engine/system.h"
 #include "../../engine/ai/nav_graph.h"
 #include "../../engine/components.h"   // engine::AuthoredPlace (level-authored places)
-#include "city_meshes.h"   // fleetCarMesh, buildPersonMesh, materials (was declared here)
+#include "city_meshes.h"   // buildPersonMesh, materials (was declared here)
 #include "city_sim.h"
 #include "places.h"        // PlaceMap (ADR-0066)
 #include <functional>
@@ -35,6 +35,11 @@ struct CityRenderParams {
     Real pedsPerKm = 6.0;
     uint32_t seed = 1;
     Real hoursPerSecond = 0.05;            // sim-clock hours advanced per real second
+    // The in-world hour the level OPENS at. The population is placed directly
+    // from its schedules at this hour (CitySim::seedFromSchedule), so any hour
+    // costs the same: 22:00 is as cheap as 08:00. 10.5 keeps the historical
+    // feel of the retired warm-up, which landed around mid-morning.
+    Real startHour = 10.5;
     Real perceptionReliability = 0.97;     // <1 -> agents occasionally err (ADR-0060)
     engine::Vec3 carSize{1.8, 1.3, 4.2};   // matches the player sedan (W,H,L); +Z = travel
     engine::Vec3 pedSize{0.5, 1.8, 0.5};
@@ -44,6 +49,9 @@ struct CityRenderParams {
     // parked car in the city is submitted every frame, in both the colour and
     // shadow passes. 0 = no cull (the old behaviour).
     Real sceneryRadius = 450.0;
+    // Physical-walker budget; see CityWalkerSystem. 0 or negative = unbounded
+    // (the historical behaviour, kept so a measurement can A/B against it).
+    int maxWalkerBodies = 200;
     // SIM RATE (P8.2d). Traffic is not physics: agents follow lanes, so a
     // bigger dt costs nothing but precision. 0 or >= the fixed rate keeps the
     // historical every-step tick (and every existing test/gate bit-identical);
@@ -72,7 +80,8 @@ struct CityRenderParams {
     // Data-driven fleet bodies (ADR-0065): the SOURCE of a vehicles.lua-style
     // script whose `vehicle.fleet` recipes build the instanced car meshes at
     // build. Loaded from the level's citysim block; used only in scripting
-    // builds; any failure (or "") falls back to the C++ fleetCarMesh.
+    // builds. Absent or empty means this level draws NO cars — vehicles are
+    // optional content, and there is no built-in substitute.
     std::string vehicleScript;
     // Three-tier traffic (P4): opt this level into the V/K bubble — far agents
     // become persistent coarse-tick "virtual" travellers (no render, no proxy,
@@ -80,6 +89,8 @@ struct CityRenderParams {
     // by default so every existing level/test runs bit-identically. (The
     // level_loader "tiered" JSON knob is the pending one-line hookup.)
     bool tieredAgents = false;
+    // P5 dormancy (see components.h). Needs tieredAgents to do anything.
+    bool dormantAgents = false;
 };
 
 // The Dear ImGui window this system appends its "Living City" section into. It
@@ -93,6 +104,7 @@ inline constexpr const char* kDebugWindowTitle = "Debug";
 
 class CityRenderSystem : public engine::System {
 public:
+    const CityRenderParams& params() const { return params_; }
     explicit CityRenderSystem(const CityRenderParams& params = {})
         : params_(params), debugWidgets_(params.debugWidgets) {}
 
@@ -270,7 +282,63 @@ public:
         engine::Vec3 pos;
     };
 
+    // One wheel of a fleet car, in body-local space (+Z forward, x>0 right).
+    // Same independence rationale as LampMarker: a mirror of the scripting-only
+    // engine::WheelPlacement, so the non-scripting build still compiles.
+    struct CarWheel {
+        engine::Vec3 pos;
+        Real radius = 0.3;
+        Real width = 0.2;
+        bool steered = false;
+        bool driven = true;
+        bool handBrake = false;
+    };
+
+    // The fleet slot's car WITHOUT its wheels, for a car the player commandeers
+    // (ADR-0062): it becomes a real Vehicle and grows physics wheels, so drawing
+    // the baked ones too would put it on eight. Invalid when the level's fleet
+    // recipes publish no separate wheelset (or scripting is off) — the caller
+    // then draws no car for that slot.
+    engine::MeshHandle carChassisMesh(int slot) const {
+        if (carChassis_.empty()) return engine::MeshHandle{};
+        return carChassis_[((slot % static_cast<int>(carChassis_.size())) +
+                            static_cast<int>(carChassis_.size())) %
+                           static_cast<int>(carChassis_.size())];
+    }
+    // That car's lamp markers, for a promoted car's lenses. VehicleSystem falls
+    // back to four lenses at GUESSED chassis corners when a Vehicle carries no
+    // markers — which sat harmlessly on top of the old box car's baked lamp
+    // boxes, but floats clear of a real generated body's inset housings and
+    // draws every taillight twice. Never empty (a synthesized default set backs
+    // the built-in fleet).
+    const std::vector<LampMarker>& carLamps(int slot) const {
+        static const std::vector<LampMarker> kNone;
+        if (carLights_.empty()) return kNone;
+        return carLights_[((slot % static_cast<int>(carLights_.size())) +
+                           static_cast<int>(carLights_.size())) %
+                          static_cast<int>(carLights_.size())];
+    }
+    // That car's wheels as data, for its Jolt config. Empty => no layout was
+    // published; the caller derives one as before.
+    const std::vector<CarWheel>& carWheels(int slot) const {
+        static const std::vector<CarWheel> kNone;
+        if (carWheels_.empty()) return kNone;
+        return carWheels_[((slot % static_cast<int>(carWheels_.size())) +
+                           static_cast<int>(carWheels_.size())) %
+                          static_cast<int>(carWheels_.size())];
+    }
+
 private:
+    // How many car variants were actually BUILT — the Lua fleet's length when a
+    // level ships recipes, the built-in table's size otherwise. Agent-to-group
+    // mapping must wrap by this and not by the C++ colour table, or a fleet of
+    // any other length indexes off the end of its own groups. 1 when there are
+    // no groups, so the modulo stays defined; the callers' index guards do the
+    // rest.
+    int drawVariantCount() const {
+        return carGroups_.empty() ? 1 : static_cast<int>(carGroups_.size());
+    }
+
     void syncGroups(engine::World& world);
     void syncCarLamps(engine::World& world);   // bake the emissive lamp instances
     int carTurnDir(const Agent& a) const;      // route-bend turn side (-1/0/+1)
@@ -304,19 +372,10 @@ private:
     std::vector<engine::Entity> carGroups_;   // one per car variant (body + colour)
     std::unordered_map<int, engine::Mat4> physPose_;      // R5: agent -> body pose
     std::vector<std::vector<int>> carAgentIds_;           // parallel to bakes
-    // Scenery parked cars, resolved ONCE (a parked car never moves, and its
-    // pose costs a terrain sample). The per-step bake then only distance-culls
-    // this list instead of re-deriving thousands of poses. Kept sorted by bay
-    // so `bay` doubles as the STABLE physics proxy key — bake order changes as
-    // the player moves, and the proxies must not shuffle with it.
-    struct SceneryCar {
-        engine::Mat4 pose;
-        engine::Vec2 pos;
-        int variant = 0;
-        int bay = 0;
-    };
-    std::vector<SceneryCar> scenery_;
-    bool sceneryBuilt_ = false;
+    // (The one-shot SceneryCar bake that used to live here is gone: parked cars
+    // are real SimVehicles now, drawn straight off the vehicle list in
+    // syncGroups. A cached pose would be wrong rather than stale, because a
+    // parked car moves as soon as its owner drives it away.)
     // Set per fixed step: bake the render poses only on the frame's LAST step
     // (see fixedUpdate). True by default so a direct step() call still bakes.
     bool bakeThisStep_ = true;
@@ -341,6 +400,15 @@ private:
     // or a synthesized default set for C++ fallback cars. An empty entry => that
     // variant draws no lamps.
     std::vector<std::vector<LampMarker>> carLights_;
+    // Wheel-less bodies + wheel layouts, one per car variant (indexed like
+    // carGroups_). Populated only from Lua fleet recipes that publish a separate
+    // wheelset; see carChassisMesh() / carWheels().
+    std::vector<engine::MeshHandle> carChassis_;
+    std::vector<std::vector<CarWheel>> carWheels_;
+    // Parked cars that survived the distance cull on the last bake — how many
+    // car bodies the frame actually pays for. This was computed and discarded,
+    // which left the car share of the frame a guess with a 2.7x spread.
+    int parkedDrawn_ = 0;
     std::vector<Real> prevCarSpeed_;
     mutable std::vector<engine::Vec3> smoothUp_;   // per-agent tilt low-pass
     Real bakeDt_ = 1.0 / 60.0;                     // last step's dt (filter gain)   // last step's per-agent speed (brake decel)

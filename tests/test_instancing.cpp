@@ -106,6 +106,44 @@ TEST_CASE(instance_group_culls_per_instance) {
     CHECK_APPROX(vis[0].m[2][3], 0.0, 1e-9);   // the one at the origin survived
 }
 
+TEST_CASE(cull_into_scratch_reuses_the_buffer) {
+    // The draw path culls into a reused buffer instead of returning a fresh
+    // vector sized to the FULL instance count every group every frame. Reusing
+    // it only works if the callee clears first — otherwise groups accumulate
+    // into each other and the second group draws the first group's plants too.
+    Mat4 view = Mat4::lookAt(Vec3(0, 0, 5), Vec3(0, 0, 0), Vec3(0, 1, 0));
+    Mat4 proj = Mat4::perspective(degreesToRadians(60), 1.0, 0.1, 100.0);
+    Frustum f = Frustum::fromViewProjection(proj * view);
+
+    std::vector<Mat4> xf = {Mat4::translate(0, 0, 0), Mat4::translate(0, 0, 50)};
+    std::vector<Mat4> scratch;
+    frustumCullInstances(xf, f, Vec3(0, 0, 0), 0.5, Vec3(0, 0, 5), 0, scratch);
+    CHECK(scratch.size() == 1);
+    const size_t cap = scratch.capacity();
+    frustumCullInstances(xf, f, Vec3(0, 0, 0), 0.5, Vec3(0, 0, 5), 0, scratch);
+    CHECK(scratch.size() == 1);          // cleared, not appended
+    CHECK(scratch.capacity() == cap);    // and no reallocation the second time
+}
+
+TEST_CASE(draw_policy_resolves_distance_by_class) {
+    // The whole point of DrawClass: the distance for a class is stated ONCE and
+    // every drawable of that class inherits it, while a site that computed its
+    // own distance (the HLOD building chunks) keeps it.
+    DrawPolicy p;
+    p.distance[static_cast<int>(DrawClass::Scenery)] = 600.0;
+    p.distance[static_cast<int>(DrawClass::GroundPaint)] = 220.0;
+
+    CHECK_APPROX(p.distanceFor(DrawClass::Scenery), 600.0, 1e-9);
+    CHECK_APPROX(p.distanceFor(DrawClass::GroundPaint), 220.0, 1e-9);
+    // Unlimited is explicit and stays unlimited; Unset resolves to the same
+    // thing (0), which is what every drawable did before the class existed —
+    // so adding the class to the engine changes nothing until a level opts in.
+    CHECK_APPROX(p.distanceFor(DrawClass::Unlimited), 0.0, 1e-9);
+    CHECK_APPROX(p.distanceFor(DrawClass::Unset), 0.0, 1e-9);
+    // A class the level did not mention is unlimited, not accidentally zero-range.
+    CHECK_APPROX(p.distanceFor(DrawClass::Structure), 0.0, 1e-9);
+}
+
 TEST_CASE(renderer_default_instanced_draw_loops_draw_mesh) {
     CountingRenderer r;
     std::vector<Mat4> xf = {Mat4::identity(), Mat4::translate(1, 0, 0),

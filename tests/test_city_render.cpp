@@ -1,12 +1,19 @@
 #include "test_framework.h"
 
 #include "../src/apps/citysim/city_render.h"
+#include "../src/apps/citysim/city_vehicles.h"   // promotedLamps (pure mapping)
+#include "../src/engine/asset_manager.h"
 #include "../src/engine/components.h"
+#include "../src/engine/mesh_uploader.h"
 #include "../src/engine/procgen/city/road_net.h"
 #include "../src/engine/world.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <fstream>
+#include <sstream>
+#include <string>
 #include <vector>
 
 using namespace engine;
@@ -35,6 +42,32 @@ RoadNet crossRoads() {
     return net;
 }
 
+// The shipped vehicle catalogue. Cars are CONTENT: a city with no recipes draws
+// none at all now (the built-in box fleet is gone), so any test that expects to
+// see cars has to say which cars — exactly as a level does.
+std::string readAsset(const std::string& name) {
+    std::ifstream in(std::string(RT_SOURCE_DIR) + "/assets/scripts/" + name);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+// Lamp markers are published by a car's RECIPE, so a test that asserts on lamps
+// needs the geometry actually built — which needs somewhere to upload it. This
+// is that somewhere: a stub backend, no GPU.
+struct StubUploader : MeshUploader {
+    uint32_t next = 1;
+    MeshHandle uploadMesh(const RenderMesh&) override { return MeshHandle{next++, 1}; }
+    void removeMesh(MeshHandle) override {}
+    BoundingSphere getMeshBounds(MeshHandle) const override { return {}; }
+};
+
+CityRenderParams cityParams() {
+    CityRenderParams p;
+    p.vehicleScript = readAsset("vehicles.lua");
+    return p;
+}
+
 std::size_t groupCount(World& world, Entity e) {
     InstanceGroup* g = world.get<InstanceGroup>(e);
     return g ? g->transforms.size() : 0;
@@ -53,7 +86,7 @@ TEST_CASE(city_render_builds_from_roadnet) {
     World world;
     world.add<RoadNet>(world.create(), squareLoop());
 
-    CityRenderParams p;
+    CityRenderParams p = cityParams();
     p.cars = 8;
     p.pedestrians = 6;
     CityRenderSystem city(p);
@@ -62,8 +95,16 @@ TEST_CASE(city_render_builds_from_roadnet) {
     CHECK(city.nav().linkCount() > 0);
     CHECK(city.sim().agents().size() == 14u);
 
-    CHECK(carTotal(world, city) == 8u);     // 8 cars, spread across variant groups
-    CHECK(groupCount(world, city.pedGroup()) == 6u);
+    // CONSERVATION, not a fixed split. Eight cars exist and are always drawn —
+    // whether being driven (agent-keyed) or parked with their owner away
+    // (vehicle-keyed) — so the car count is exact. The PERSON count is not 6
+    // any more: a car owner walks the last few metres of every arrival, so at
+    // any instant some of the eight drivers are also on foot. What must hold is
+    // that every agent is drawn exactly once, as one or the other.
+    CHECK(carTotal(world, city) == 8u);
+    const std::size_t peds = groupCount(world, city.pedGroup());
+    CHECK(peds >= 6u);                      // at least the dedicated walkers
+    CHECK(peds <= 14u);                     // ...and never more than the population
     CHECK(city.carGroups().size() > 1u);    // there really are multiple variants
 }
 
@@ -71,7 +112,7 @@ TEST_CASE(city_render_debug_widgets) {
     World world;
     world.add<RoadNet>(world.create(), squareLoop());
 
-    CityRenderParams p;
+    CityRenderParams p = cityParams();
     p.cars = 5;
     p.pedestrians = 5;
     p.debugWidgets = true;
@@ -103,7 +144,7 @@ TEST_CASE(debug_widgets_ring_the_real_car_when_cars_are_external) {
     // reported car draw no ring; pedestrian rings are unaffected.
     World world;
     world.add<RoadNet>(world.create(), squareLoop());
-    CityRenderParams p;
+    CityRenderParams p = cityParams();
     p.cars = 4;
     p.pedestrians = 3;
     p.debugWidgets = true;
@@ -111,9 +152,27 @@ TEST_CASE(debug_widgets_ring_the_real_car_when_cars_are_external) {
     city.setCarsExternallyOwned(true);
     CHECK(city.build(world, nullptr));
 
-    // Report a real pose for agent 0 only, far from any ghost.
+    // Report a real pose for ONE agent that is actually driving right now, far
+    // from any ghost. Picked dynamically: a car owner that has already parked is
+    // on foot, and a car pose reported for it would describe a car it is not in.
+    // Step until somebody is actually behind a wheel. On a fixture this small
+    // every commute finishes inside the build warm-up, so the whole car-owning
+    // population is parked and on foot at t=0; a driver appears again at the
+    // next scheduled departure.
+    int driving = -1;
+    for (int t = 0; t < 4000 && driving < 0; ++t) {
+        city.step(world, 0.1);
+        for (std::size_t i = 0; i < city.sim().agents().size(); ++i)
+            if (city.sim().agents()[i].mode == Agent::Mode::Driver) {
+                driving = static_cast<int>(i);
+                break;
+            }
+    }
+    CHECK(driving >= 0);
     const Vec2 realPos(500.0, -500.0);
-    city.setExternalCarPoses({ CityRenderSystem::ExternalAgentPose{0, realPos, Vec2(0, 1)} });
+    city.setExternalCarPoses(
+        { CityRenderSystem::ExternalAgentPose{driving, realPos, Vec2(0, 1),
+                                              realPos} });
     city.step(world, 0.1);
 
     std::size_t rings = 0;
@@ -129,7 +188,15 @@ TEST_CASE(debug_widgets_ring_the_real_car_when_cars_are_external) {
                 ringAtReal = true;
         }
     }
-    CHECK(rings == 4u);      // 3 ped ghosts + the 1 reported car; 3 unreported drivers skip
+    // Derived, not hardcoded: with cars externally owned, a ring is drawn for
+    // every agent currently ON FOOT (peds are not external here) plus the one
+    // car whose real pose was reported. Unreported drivers still draw none.
+    // The count is derived because a car owner that has parked is on foot —
+    // the split between the two groups moves over the day.
+    std::size_t onFoot = 0;
+    for (const Agent& a : city.sim().agents())
+        if (a.mode == Agent::Mode::Pedestrian) ++onFoot;
+    CHECK(rings == onFoot + 1u);
     CHECK(ringAtReal);       // and the car's ring sits at the REAL pose
 }
 
@@ -139,7 +206,7 @@ TEST_CASE(external_peds_stop_the_instanced_bake_and_ring_real_walkers) {
     // ring follows the bridge-reported REAL body — unreported walkers draw none.
     World world;
     world.add<RoadNet>(world.create(), squareLoop());
-    CityRenderParams p;
+    CityRenderParams p = cityParams();
     p.cars = 2;
     p.pedestrians = 3;
     p.debugWidgets = true;
@@ -192,7 +259,7 @@ TEST_CASE(commandeered_car_leaves_the_instanced_fleet) {
     // real Vehicle takes its visual place). Widgets drop it too.
     World world;
     world.add<RoadNet>(world.create(), squareLoop());
-    CityRenderParams p;
+    CityRenderParams p = cityParams();
     p.cars = 5;
     p.pedestrians = 0;
     CityRenderSystem city(p);
@@ -205,39 +272,33 @@ TEST_CASE(commandeered_car_leaves_the_instanced_fleet) {
     CHECK(carTotal(world, city) == 4u);   // the commandeered car vanished
 }
 
-TEST_CASE(fleet_mesh_wheelless_variant_drops_the_wheels) {
-    // A promoted physical car renders VehicleSystem's physics wheels; its body
-    // mesh must not bake a second set (the "double wheels" device bug).
-    RenderMesh with = fleetCarMesh(0, true);
-    RenderMesh without = fleetCarMesh(0, false);
-    CHECK(without.vertices.size() < with.vertices.size());
-    CHECK(!without.vertices.empty());
-}
-
 TEST_CASE(city_render_car_colliders_scale_with_the_fleet) {
     World world;
     world.add<RoadNet>(world.create(), squareLoop());
-    CityRenderSystem city;
+    CityRenderSystem city(cityParams());
     CHECK(city.build(world, nullptr));
 
     // One collider extent per car group, and they follow the shared fleet: a group
     // is a body slot, so a box-truck slot's box is bigger than a sedan slot's.
     std::vector<Vec3> ext = city.carGroupHalfExtents();
     CHECK(ext.size() == city.carGroups().size());
-    Real sedanZ = 0, maxZ = 0;
+    CHECK(!ext.empty());
+    Real minZ = 1e30, maxZ = 0;
     for (std::size_t v = 0; v < ext.size(); ++v) {
         CHECK(ext[v].x > 0 && ext[v].y > 0 && ext[v].z > 0);
-        // Half-extent mirrors the fleet body's half-length.
-        CHECK(std::fabs(ext[v].z - vehicleFleetBody(static_cast<int>(v)).length * 0.5) < 1e-6);
-        if (vehicleFleetBody(static_cast<int>(v)).type == VehicleType::Sedan) sedanZ = ext[v].z;
+        // Half-extent mirrors the ADOPTED fleet body's half-length — the sizes
+        // the catalogue published, not a table transcribed into C++.
+        const VehicleBody& b = city.sim().fleetBody(static_cast<int>(v));
+        CHECK(std::fabs(ext[v].z - b.length * 0.5) < 1e-6);
+        minZ = std::min(minZ, ext[v].z);
         maxZ = std::max(maxZ, ext[v].z);
     }
-    CHECK(maxZ > sedanZ);   // a bigger body has a bigger collider
+    CHECK(maxZ > minZ);   // a bigger body has a bigger collider
 }
 
 TEST_CASE(city_render_build_fails_without_roads) {
     World world;
-    CityRenderSystem city;
+    CityRenderSystem city(cityParams());
     CHECK(!city.build(world, nullptr));
     CHECK(!city.built());
 }
@@ -246,7 +307,7 @@ TEST_CASE(city_render_agents_move_when_stepped) {
     World world;
     world.add<RoadNet>(world.create(), squareLoop());
 
-    CityRenderParams p;
+    CityRenderParams p = cityParams();
     p.cars = 12;
     p.pedestrians = 0;
     CityRenderSystem city(p);
@@ -282,7 +343,7 @@ TEST_CASE(city_render_signals_light_up_and_change_state) {
     World world;
     world.add<RoadNet>(world.create(), crossRoads());
 
-    CityRenderParams p;
+    CityRenderParams p = cityParams();
     p.cars = 6;
     p.pedestrians = 0;
     CityRenderSystem city(p);
@@ -325,14 +386,16 @@ TEST_CASE(city_render_signals_light_up_and_change_state) {
 // these are stable, not flaky.
 
 TEST_CASE(car_headlights_track_the_night_clock) {
+    StubUploader up;
+    AssetManager assets(up);
     World world;
     world.add<RoadNet>(world.create(), squareLoop());
-    CityRenderParams p;
+    CityRenderParams p = cityParams();
     p.cars = 6;
     p.pedestrians = 0;
     p.hoursPerSecond = 3.0;   // sweep a full day in a few hundred steps
     CityRenderSystem city(p);
-    CHECK(city.build(world, nullptr));
+    CHECK(city.build(world, &assets));
 
     bool nightLit = false, dayDark = false;
     for (int i = 0; i < 2000; ++i) {
@@ -351,13 +414,15 @@ TEST_CASE(car_headlights_track_the_night_clock) {
 }
 
 TEST_CASE(car_brake_lights_come_on_when_holding) {
+    StubUploader up;
+    AssetManager assets(up);
     World world;
     world.add<RoadNet>(world.create(), crossRoads());   // signalled junction
-    CityRenderParams p;
+    CityRenderParams p = cityParams();
     p.cars = 8;
     p.pedestrians = 0;
     CityRenderSystem city(p);
-    CHECK(city.build(world, nullptr));
+    CHECK(city.build(world, &assets));
 
     bool sawBrake = false;
     for (int i = 0; i < 3000; ++i) {
@@ -368,13 +433,15 @@ TEST_CASE(car_brake_lights_come_on_when_holding) {
 }
 
 TEST_CASE(car_turn_signals_flash_on_turns) {
+    StubUploader up;
+    AssetManager assets(up);
     World world;
     world.add<RoadNet>(world.create(), crossRoads());
-    CityRenderParams p;
+    CityRenderParams p = cityParams();
     p.cars = 8;
     p.pedestrians = 0;
     CityRenderSystem city(p);
-    CHECK(city.build(world, nullptr));
+    CHECK(city.build(world, &assets));
 
     bool sawTurn = false;
     for (int i = 0; i < 4000; ++i) {
@@ -391,7 +458,7 @@ TEST_CASE(externally_owned_cars_draw_no_lamps) {
     // lamps here either (its real Vehicle owns them) — even at night.
     World world;
     world.add<RoadNet>(world.create(), squareLoop());
-    CityRenderParams p;
+    CityRenderParams p = cityParams();
     p.cars = 5;
     p.pedestrians = 0;
     p.hoursPerSecond = 3.0;   // pass through night too
@@ -432,7 +499,7 @@ TEST_CASE(signal_poles_stand_outside_the_carriageway) {
 
     World world;
     world.add<RoadNet>(world.create(), net);
-    CityRenderSystem city;
+    CityRenderSystem city(cityParams());
     CHECK(city.build(world, nullptr));
 
     const NavGraph& nav = city.nav();
@@ -452,7 +519,7 @@ TEST_CASE(signal_poles_stand_outside_the_carriageway) {
 TEST_CASE(crosswalks_sit_at_junction_mouths) {
     World world;
     world.add<RoadNet>(world.create(), crossRoads());   // 4-arm cross, width 10
-    CityRenderSystem city;
+    CityRenderSystem city(cityParams());
     CHECK(city.build(world, nullptr));
 
     const NavGraph& nav = city.nav();
@@ -490,9 +557,10 @@ TEST_CASE(level_citysim_config_overrides_build_params) {
     cfg.pedestrians = 1;
     cfg.seed = 7;
     cfg.debugWidgets = true;
+    cfg.vehicleScript = readAsset("vehicles.lua");   // the block wins, catalogue included
     world.add<CitySimConfig>(world.create(), cfg);
 
-    CityRenderParams p;          // the constructor asks for a crowd...
+    CityRenderParams p = cityParams();          // the constructor asks for a crowd...
     p.cars = 40;
     p.pedestrians = 40;
     CityRenderSystem city(p);
@@ -523,7 +591,7 @@ TEST_CASE(agent_lab_theta_circuit_is_navigable) {
     cfg.seed = 7;
     cfg.wander = true;   // the lab keeps its agents perpetually on the move
     world.add<CitySimConfig>(world.create(), cfg);
-    CityRenderSystem city;
+    CityRenderSystem city(cityParams());
     CHECK(city.build(world, nullptr));
     CHECK(city.sim().wander());
 
@@ -597,7 +665,7 @@ TEST_CASE(debug_navgraph_and_vision_cones_draw_with_the_hud) {
     // moving agent, in its mode's group).
     World world;
     world.add<RoadNet>(world.create(), crossRoads());
-    CityRenderParams p;
+    CityRenderParams p = cityParams();
     p.cars = 4;
     p.pedestrians = 3;
     p.debugWidgets = true;
@@ -645,7 +713,7 @@ TEST_CASE(debug_navgraph_and_vision_cones_draw_with_the_hud) {
 TEST_CASE(debug_navgraph_and_cones_vanish_when_the_hud_is_off) {
     World world;
     world.add<RoadNet>(world.create(), crossRoads());
-    CityRenderParams p;
+    CityRenderParams p = cityParams();
     p.cars = 4;
     p.pedestrians = 3;
     p.debugWidgets = false;   // HUD off: every debug group must stay empty
@@ -750,7 +818,7 @@ TEST_CASE(car_pose_probe_no_vibration_on_jagged_ground) {
     };
     world.add<RoadNet>(world.create(), net);
 
-    CityRenderParams params;
+    CityRenderParams params = cityParams();
     params.cars = 4;
     params.pedestrians = 0;
     params.seed = 3;
@@ -793,7 +861,7 @@ TEST_CASE(density_population_scales_with_the_graph) {
     // traffic from the same recipe, and explicit counts stay overrides.
     auto build = [](RoadNet net, int cars, Real perLaneKm, World& world) {
         world.add<RoadNet>(world.create(), std::move(net));
-        CityRenderParams p;
+        CityRenderParams p = cityParams();
         p.cars = cars;
         p.pedestrians = -1;
         p.carsPerLaneKm = perLaneKm;
@@ -802,7 +870,10 @@ TEST_CASE(density_population_scales_with_the_graph) {
         CHECK(city.build(world, nullptr));
         int drivers = 0, peds = 0;
         for (const Agent& a : city.sim().agents())
-            (a.mode == Agent::Mode::Driver ? drivers : peds)++;
+            // POPULATION, so archetype: this counts how many car owners the
+            // density rule created, not how many happen to be behind a wheel at
+            // the instant we look.
+            (a.archetype == Agent::Mode::Driver ? drivers : peds)++;
         return std::make_pair(drivers, peds);
     };
     auto grid = []() {
@@ -840,7 +911,7 @@ TEST_CASE(road_markings_stay_inside_the_carriageway) {
     // arrow per lane, and no paint vertex ever leaves the carriageway.
     World world;
     world.add<RoadNet>(world.create(), crossRoads());   // signalled 4-way
-    CityRenderParams params;
+    CityRenderParams params = cityParams();
     params.cars = 0;
     params.pedestrians = 0;
     CityRenderSystem city(params);
@@ -916,7 +987,7 @@ TEST_CASE(city_sim_rate_default_is_every_step) {
     World a, b;
     a.add<RoadNet>(a.create(), squareLoop());
     b.add<RoadNet>(b.create(), squareLoop());
-    CityRenderParams p;
+    CityRenderParams p = cityParams();
     p.cars = 6; p.pedestrians = 0; p.seed = 5;
     p.wander = true;              // drive continuously (no schedule window)
     CityRenderParams q = p;
@@ -940,7 +1011,7 @@ TEST_CASE(city_sim_rate_30hz_covers_the_same_ground) {
     World a, b;
     a.add<RoadNet>(a.create(), squareLoop());
     b.add<RoadNet>(b.create(), squareLoop());
-    CityRenderParams p;
+    CityRenderParams p = cityParams();
     p.cars = 8; p.pedestrians = 0; p.seed = 5;
     p.wander = true;              // drive continuously (no schedule window)
     CityRenderParams q = p;
@@ -964,7 +1035,7 @@ TEST_CASE(city_sim_rate_poses_keep_moving_between_ticks) {
     // freeze for a step and then teleport.
     World world;
     world.add<RoadNet>(world.create(), squareLoop());
-    CityRenderParams p;
+    CityRenderParams p = cityParams();
     p.cars = 8; p.pedestrians = 0; p.seed = 5;
     p.wander = true;              // drive continuously (no schedule window)
     p.localHz = 30.0;
@@ -1021,7 +1092,7 @@ TEST_CASE(city_sim_far_tier_refreshes_on_a_clock_not_a_tick_count) {
         big.width = 10.0;
         big.sidewalk = 2.5;
         world.add<RoadNet>(world.create(), big);
-        CityRenderParams p;
+        CityRenderParams p = cityParams();
         p.cars = 60; p.pedestrians = 0; p.seed = 5;
         p.wander = true;
         p.tieredAgents = true;
@@ -1054,3 +1125,178 @@ TEST_CASE(city_sim_far_tier_refreshes_on_a_clock_not_a_tick_count) {
     // only behind a measurement.
     CHECK(a30 <= a60 + 6);
 }
+
+// The fleet bridge end to end (scripting builds only): a level whose citysim
+// block names a vehicles.lua-style script must leave the render bridge holding
+// a WHEEL-LESS body and a wheel layout for every variant. That pair is what a
+// commandeered car (CityVehicleSystem, ADR-0062) is dressed and wheeled from;
+// without it, promotion silently falls back to the retired C++ box body, which
+// is exactly the skew that shipped — a whole city of mesh.car traffic and a box
+// in the player's hands.
+TEST_CASE(fleet_bridge_holds_a_promotable_body_per_variant) {
+    struct StubUploader : MeshUploader {
+        uint32_t next = 1;
+        MeshHandle uploadMesh(const RenderMesh&) override { return MeshHandle{next++, 1}; }
+        void removeMesh(MeshHandle) override {}
+        BoundingSphere getMeshBounds(MeshHandle) const override { return {}; }
+    };
+    StubUploader up;
+    AssetManager assets(up);
+
+    World world;
+    world.add<RoadNet>(world.create(), squareLoop());
+    CityRenderParams p = cityParams();
+    p.cars = 8;
+    p.pedestrians = 0;
+    p.vehicleScript = readAsset("vehicles.lua");
+    CHECK(!p.vehicleScript.empty());
+    CityRenderSystem city(p);
+    CHECK(city.build(world, &assets));
+
+    for (int v = 0; v < static_cast<int>(city.carGroups().size()); ++v) {
+        CHECK(city.carChassisMesh(v).valid());
+        CHECK(city.carWheels(v).size() == 4u);
+    }
+    // Slots wrap the way a driver's vehicle index does, so a car in any slot can
+    // be promoted (the sim hands out indices unbounded by the fleet size).
+    CHECK(city.carChassisMesh(static_cast<int>(city.carGroups().size())).valid());
+
+    // DOUBLED TAILLIGHTS. VehicleSystem lights a promoted car from the markers
+    // its Vehicle carries, and falls back to four lenses at guessed chassis
+    // CORNERS when it carries none. Those corners sat almost exactly on the
+    // retired box car's baked lamp boxes, so the guess was invisible; against a
+    // real generated body, whose housings are inset from the extremes, it lit a
+    // second pair out beyond the bodywork. Every promoted car must therefore
+    // arrive with its own four lamps.
+    for (int v = 0; v < static_cast<int>(city.carGroups().size()); ++v) {
+        engine::Vec3 seat(0, 0, 0);
+        bool hasSeat = false;
+        const std::vector<PromotedLamp> lamps =
+            promotedLamps(city.carLamps(v), &seat, &hasSeat);
+        CHECK(lamps.size() == 4u);
+        int front = 0, left = 0;
+        for (const PromotedLamp& l : lamps) {
+            if (l.front) ++front;
+            if (l.left) ++left;
+        }
+        CHECK(front == 2);   // two at the nose...
+        CHECK(left == 2);    // ...and one of each pair per indicator side
+        // ON the bodywork, which is the whole difference from the corner guess:
+        // that fallback puts its lenses at ±(halfLength + 0.05), i.e. floating
+        // just PAST the tail. A real marker sits on the nose/tail ring itself
+        // (so |z| reaches the half-length but never exceeds it) and is inset
+        // laterally to the lamp housing.
+        const Vec3 he = city.carGroupHalfExtents()[v];
+        for (const PromotedLamp& l : lamps) {
+            CHECK(std::fabs(l.local.z) <= he.z + 1e-3);
+            CHECK(std::fabs(l.local.x) < he.x);
+        }
+    }
+}
+
+TEST_CASE(promoted_lamp_mapping_reads_names_not_positions) {
+    // The mapping itself, on hand-written markers: prefix picks the end, the
+    // trailing l/r picks the indicator side, driver_seat is extracted rather
+    // than lit, and anything else is ignored.
+    std::vector<CityRenderSystem::LampMarker> markers = {
+        {"headlight_l", Vec3(-0.7, -0.1, 2.0)},
+        {"headlight_r", Vec3(0.7, -0.1, 2.0)},
+        {"taillight_l", Vec3(-0.7, -0.1, -2.0)},
+        {"taillight_r", Vec3(0.7, -0.1, -2.0)},
+        {"driver_seat", Vec3(-0.35, 0.1, 0.2)},
+        {"badge", Vec3(0, 0, 2.1)},
+    };
+    Vec3 seat(0, 0, 0);
+    bool hasSeat = false;
+    std::vector<PromotedLamp> lamps = promotedLamps(markers, &seat, &hasSeat);
+    CHECK(lamps.size() == 4u);        // the badge is not a lamp
+    CHECK(hasSeat);
+    CHECK(std::fabs(seat.x + 0.35) < 1e-9);
+    CHECK(lamps[0].front && lamps[0].left);
+    CHECK(lamps[1].front && !lamps[1].left);
+    CHECK(!lamps[2].front && lamps[2].left);
+    CHECK(!lamps[3].front && !lamps[3].left);
+
+    // A seat marker at the body origin still reports as PRESENT (the reason
+    // presence is a flag and not a non-zero test).
+    std::vector<CityRenderSystem::LampMarker> atOrigin = {
+        {"driver_seat", Vec3(0, 0, 0)}};
+    promotedLamps(atOrigin, &seat, &hasSeat);
+    CHECK(hasSeat);
+
+    // No markers at all: no lamps, no seat — the caller leaves VehicleSystem to
+    // its corner fallback rather than fabricating one.
+    promotedLamps({}, &seat, &hasSeat);
+    CHECK(!hasSeat);
+}
+
+// THE ASSET SETS THE FLEET'S LENGTH. This was a C++ constant (the size of
+// city_meshes' colour table), so a level whose recipes declared any other number
+// of cars got silently corrected: extra slots were never built, missing ones
+// each fell back to a box. A three-car fleet must produce three variants, and
+// every driver must map into them.
+TEST_CASE(fleet_length_comes_from_the_asset_not_from_cpp) {
+    struct StubUploader : MeshUploader {
+        uint32_t next = 1;
+        MeshHandle uploadMesh(const RenderMesh&) override { return MeshHandle{next++, 1}; }
+        void removeMesh(MeshHandle) override {}
+        BoundingSphere getMeshBounds(MeshHandle) const override { return {}; }
+    };
+    StubUploader up;
+    AssetManager assets(up);
+
+    World world;
+    world.add<RoadNet>(world.create(), squareLoop());
+    CityRenderParams p = cityParams();
+    p.cars = 10;               // more drivers than slots: the mapping must wrap
+    p.pedestrians = 0;
+    // Three slots, each a plain box body with a size — no mesh.car needed.
+    p.vehicleScript = R"lua(
+        local function slot(w, h, l)
+          return { size = { w, h, l },
+                   parts = { { pos = {0,0,0}, size = {w,h,l}, color = {1,0,0} } } }
+        end
+        vehicle = { fleet = { slot(1.8,1.4,4.0), slot(2.0,1.9,5.2), slot(2.3,2.7,6.4) } }
+    )lua";
+    CityRenderSystem city(p);
+    CHECK(city.build(world, &assets));
+
+    CHECK(city.carGroups().size() == 3u);
+    CHECK(city.sim().fleetSize() == 3);
+    // The adopted sizes are the recipe's, in slot order.
+    CHECK(std::fabs(city.sim().fleetBody(0).length - 4.0) < 1e-9);
+    CHECK(std::fabs(city.sim().fleetBody(2).height - 2.7) < 1e-9);
+    // ...and they wrap, so driver 3 wears slot 0's body.
+    CHECK(std::fabs(city.sim().fleetBody(3).length - 4.0) < 1e-9);
+    // Collider proxies follow the same three sizes.
+    CHECK(city.carGroupHalfExtents().size() == 3u);
+    CHECK(std::fabs(city.carGroupHalfExtents()[2].z - 6.4 * 0.5) < 1e-9);
+}
+
+// The other half of the contract: NO vehicle script means no promotable body,
+// and the caller must be able to see that rather than receive a wheeled mesh.
+TEST_CASE(fleet_bridge_reports_no_promotable_body_without_a_script) {
+    struct StubUploader : MeshUploader {
+        uint32_t next = 1;
+        MeshHandle uploadMesh(const RenderMesh&) override { return MeshHandle{next++, 1}; }
+        void removeMesh(MeshHandle) override {}
+        BoundingSphere getMeshBounds(MeshHandle) const override { return {}; }
+    };
+    StubUploader up;
+    AssetManager assets(up);
+
+    World world;
+    world.add<RoadNet>(world.create(), squareLoop());
+    CityRenderParams p;                // deliberately NO vehicle catalogue
+    p.cars = 4;
+    p.pedestrians = 0;
+    CityRenderSystem city(p);
+    CHECK(city.build(world, &assets));
+    // No recipes, no cars — not a substitute car. The built-in box fleet that
+    // used to stand in here is gone; a level says `"vehicles": "..."` to have
+    // traffic, and its absence is a decision the level made.
+    CHECK(city.carGroups().empty());
+    CHECK(!city.carChassisMesh(0).valid());
+    CHECK(city.carWheels(0).empty());
+}
+

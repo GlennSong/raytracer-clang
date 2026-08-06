@@ -216,6 +216,11 @@ if(RT_ENABLE_IMGUI)
     if(EXISTS ${IMGUIZMO_DIR}/src/ImGuizmo.cpp)
         target_sources(engine_core PRIVATE ${IMGUIZMO_DIR}/src/ImGuizmo.cpp)
         target_include_directories(engine_core SYSTEM PRIVATE ${IMGUIZMO_DIR}/src)
+        # Vendored third-party source: not our warnings to fix, and it trips
+        # -Wnested-anon-types. Same treatment as lua_static below — silencing it
+        # per-file keeps OUR warnings visible instead of drowning them.
+        set_source_files_properties(${IMGUIZMO_DIR}/src/ImGuizmo.cpp
+                                    PROPERTIES COMPILE_OPTIONS "-w")
     else()
         message(WARNING "ImGuizmo submodule missing - editor gizmos disabled; "
                         "run: git submodule update --init third_party/ImGuizmo")
@@ -710,6 +715,10 @@ if(RT_ENABLE_PHYSICS)
     )
     target_include_directories(physics_tests PRIVATE src)
     target_compile_options(physics_tests PRIVATE -Wall -Wextra)
+    # Cars are CONTENT now (the built-in box fleet is gone), so the tier soak has
+    # to read the shipped vehicle catalogue the way a level does — otherwise the
+    # city it drives has no cars at all to collide with.
+    target_compile_definitions(physics_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     target_link_libraries(physics_tests PRIVATE citysim engine_core Jolt Threads::Threads)
     add_test(NAME physics_tests COMMAND physics_tests)
 

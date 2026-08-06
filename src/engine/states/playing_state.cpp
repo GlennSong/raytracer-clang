@@ -53,9 +53,15 @@ void PlayingState::update(FrameContext& ctx) {
     }
     if (++calls % 300 == 0) {
         for (std::size_t i = 0; i < systems.size(); ++i)
-            if (ms[i] / calls > 0.05)
+            if (ms[i] / calls > 0.05) {
+                // Name the system through a reference, not `*systems[i]`:
+                // typeid EVALUATES a polymorphic operand (it reads the vtable),
+                // and a unique_ptr deref inside it reads as a side-effecting
+                // expression. Same lookup, no warning.
+                const System& sys = *systems[i];
                 LOG_INFO << "[stats] update " << (ms[i] / calls) << " ms  "
-                         << typeid(*systems[i]).name();
+                         << typeid(sys).name();
+            }
         std::fill(ms.begin(), ms.end(), 0.0);
         calls = 0;
     }
@@ -80,9 +86,11 @@ void PlayingState::fixedUpdate(FrameContext& ctx) {
     }
     if (++calls % 300 == 0) {
         for (std::size_t i = 0; i < systems.size(); ++i)
-            if (ms[i] / calls > 0.05)
+            if (ms[i] / calls > 0.05) {
+                const System& sys = *systems[i];   // see the update() note above
                 LOG_INFO << "[stats] fixed " << (ms[i] / calls) << " ms  "
-                         << typeid(*systems[i]).name();
+                         << typeid(sys).name();
+            }
         std::fill(ms.begin(), ms.end(), 0.0);
         calls = 0;
     }

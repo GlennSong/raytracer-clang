@@ -288,3 +288,143 @@ TEST_CASE(tier_v_stress_deterministic) {
     CHECK(countTier(simA, Agent::Tier::V) > 0);   // the bubble engaged
     CHECK(countTier(simA, Agent::Tier::K) > 0);
 }
+
+// ---- Tier::D, dormancy (P5) -------------------------------------------------
+
+// OFF MUST BE INVISIBLE. Same shape as tier_v_off_matches_legacy: with the
+// switch off, or with no player centre fed, dormancy must not exist — no agent
+// reaches Tier::D and the sim marches exactly as the V/K sim does.
+TEST_CASE(dormancy_off_matches_tier_v) {
+    const NavGraph nav = citytest::cityNav(400, 110, 7);
+    CitySim plain, switchOnNoCentre, centreNoSwitch;
+    for (CitySim* s : {&plain, &switchOnNoCentre, &centreNoSwitch}) {
+        s->build(nav, 30, 20, 9);
+        s->setWander(true);
+        s->tieringEnabled = true;
+    }
+    switchOnNoCentre.dormancyEnabled = true;   // no centre fed: must stay awake
+    centreNoSwitch.dormancyEnabled = false;
+    const Real dt = 1.0 / 60.0;
+    for (int i = 0; i < 600; ++i) {
+        plain.setTierCenter(Vec2(0, 0));
+        centreNoSwitch.setTierCenter(Vec2(0, 0));
+        plain.step(dt, 0.05);
+        switchOnNoCentre.step(dt, 0.05);
+        centreNoSwitch.step(dt, 0.05);
+    }
+    CHECK(agentMismatches(plain, centreNoSwitch) == 0);
+    CHECK(plain.dormantAgents() == 0);
+    CHECK(switchOnNoCentre.dormantAgents() == 0);
+    CHECK(centreNoSwitch.dormantAgents() == 0);
+}
+
+// Agents beyond the dormant radius stop being simulated, and come back when the
+// player returns — rebuilt from their schedule, not resumed from a stale pose.
+TEST_CASE(dormancy_sleeps_the_far_field_and_wakes_it_back) {
+    const NavGraph nav = citytest::cityNav(1600, 120, 3);
+    CitySim sim;
+    sim.build(nav, 200, 100, 11);
+    sim.tieringEnabled = true;
+    sim.dormancyEnabled = true;
+    sim.dormantRadius = 600.0;         // tight, so the fixture actually reaches it
+    sim.dormantResumeRadius = 500.0;
+
+    // Sit in one corner: the far side of the city should go dormant.
+    for (int i = 0; i < 1200; ++i) {
+        sim.setTierCenter(Vec2(-700, -700));
+        sim.step(1.0 / 60.0, 0.05);
+    }
+    const int dormant = sim.dormantAgents();
+    std::printf("    [dormancy] %d of %zu agents dormant, %d sleeps / %d wakes\n",
+                dormant, sim.agents().size(), sim.dormancies(), sim.wakes());
+    CHECK(dormant > 0);
+    CHECK(sim.dormancies() > 0);
+
+    // Walk to the other corner: they must come back.
+    for (int i = 0; i < 1200; ++i) {
+        sim.setTierCenter(Vec2(700, 700));
+        sim.step(1.0 / 60.0, 0.05);
+    }
+    std::printf("    [dormancy] after crossing: %d dormant, %d wakes\n",
+                sim.dormantAgents(), sim.wakes());
+    CHECK(sim.wakes() > 0);
+    // Nobody is lost: every agent still exists and holds a sane tier.
+    CHECK(sim.agents().size() == 300u);
+}
+
+// DORMANCY STRIPS THE AGENT, NEVER THE VEHICLE. A parked car keeps its pose
+// while its owner does not exist — otherwise a car the player is looking at
+// would move (or vanish) the moment its owner slept, and the whole "you can
+// steal a parked car" premise depends on the car outliving the agent.
+TEST_CASE(dormant_agents_do_not_move_their_parked_cars) {
+    const NavGraph nav = citytest::cityNav(1600, 120, 3);
+    CitySim sim;
+    sim.build(nav, 150, 0, 21);
+    sim.tieringEnabled = true;
+    sim.dormantRadius = 600.0;
+    sim.dormantResumeRadius = 500.0;
+
+    // SETTLE FIRST, with dormancy OFF. A dormant agent does not drive anywhere,
+    // so switching it on before the city has run leaves nothing parked to test
+    // — the far field simply freezes at its starting pose.
+    sim.dormancyEnabled = false;
+    for (int i = 0; i < 9000; ++i) {
+        sim.setTierCenter(Vec2(-700, -700));
+        sim.step(0.1, 0.05);
+    }
+    // Now sleep the far field.
+    sim.dormancyEnabled = true;
+    for (int i = 0; i < 600; ++i) {
+        sim.setTierCenter(Vec2(-700, -700));
+        sim.step(0.1, 0.05);
+    }
+
+    // Snapshot the cars whose owner is dormant RIGHT NOW. A car whose owner is
+    // awake may legitimately be driven away and re-parked somewhere else; the
+    // invariant is only about the ones nobody is simulating.
+    std::vector<int> ownerOf(sim.vehicles().size(), -1);
+    for (std::size_t i = 0; i < sim.agents().size(); ++i)
+        if (sim.agents()[i].car >= 0) ownerOf[sim.agents()[i].car] = static_cast<int>(i);
+
+    {   // diagnostic: why are there (or aren't there) parked cars to watch?
+        int driverless = 0, dormant = 0, dormantWithParkedCar = 0, peds = 0;
+        for (std::size_t v = 0; v < sim.vehicles().size(); ++v)
+            if (sim.vehicles()[v].driver < 0) ++driverless;
+        for (const Agent& a : sim.agents()) {
+            if (a.tier == Agent::Tier::D) ++dormant;
+            if (a.mode == Agent::Mode::Pedestrian) ++peds;
+            if (a.tier == Agent::Tier::D && a.car >= 0 &&
+                sim.vehicles()[a.car].driver < 0) ++dormantWithParkedCar;
+        }
+        std::printf("    [dormancy] %d driverless cars, %d dormant agents, "
+                    "%d on foot, %d dormant-with-parked-car\n",
+                    driverless, dormant, peds, dormantWithParkedCar);
+    }
+
+    std::vector<int> watch;
+    std::vector<Vec2> before;
+    for (std::size_t v = 0; v < sim.vehicles().size(); ++v) {
+        const int o = ownerOf[v];
+        if (o < 0 || sim.vehicles()[v].driver >= 0) continue;
+        if (sim.agents()[o].tier != Agent::Tier::D) continue;
+        watch.push_back(static_cast<int>(v));
+        before.push_back(sim.vehicles()[v].pos);
+    }
+
+    // Keep the player put so nothing wakes, and run on.
+    for (int i = 0; i < 3000; ++i) {
+        sim.setTierCenter(Vec2(-700, -700));
+        sim.step(0.1, 0.05);
+    }
+
+    int held = 0;
+    for (std::size_t k = 0; k < watch.size(); ++k) {
+        const int v = watch[k];
+        if (sim.agents()[ownerOf[v]].tier != Agent::Tier::D) continue;  // woke: fair game
+        ++held;
+        CHECK((sim.vehicles()[v].pos - before[k]).length() < 1e-9);
+    }
+    std::printf("    [dormancy] %d cars of still-dormant owners held their pose\n",
+                held);
+    CHECK(held > 0);   // the invariant must actually have been exercised
+}

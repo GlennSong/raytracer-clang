@@ -56,9 +56,14 @@ static float cl_density(float3 p, constant CloudUniforms& u,
     return d * profile * u.params.y;
 }
 
+// Henyey-Greenstein, normalised so ISOTROPIC (g = 0) RETURNS 1 rather than
+// 1/4pi. The 1/4pi belongs to a phase function integrated over the sphere; here
+// the result multiplies a directional sun term that carries no compensating
+// 4pi, so keeping it dimmed every lit sample by ~12.6x and the deck could only
+// be recovered by pushing ambient up — which is what made it read flat and grey.
 static float cl_phaseHG(float mu, float g) {
     float g2 = g * g;
-    return (1.0 - g2) / (4.0 * M_PI_F * pow(1.0 + g2 - 2.0 * g * mu, 1.5));
+    return (1.0 - g2) / pow(1.0 + g2 - 2.0 * g * mu, 1.5);
 }
 
 static bool cl_layerInterval(float3 origin, float3 dir, constant CloudUniforms& u,
@@ -157,8 +162,15 @@ fragment float4 fragmentClouds(CloudsOut in [[stage_in]],
         float3 p = camPos + dir * (t0 + ds * (float(i) + jitter));
         float density = cl_density(p, u, baseNoise, detailNoise);
         if (density > 0.001) {
+            // SUN MARCH over a FIXED SHORT SPAN, not the whole slab. This used
+            // to step (top - bottom) per sample — the full 700 m — from
+            // wherever the sample sat, so lightOD reached ~64 and exp(-64) is
+            // exactly zero: every sample inside a cloud was lit purely by
+            // ambient. That, not the noise, is why the deck was never white.
+            float slab = max(1.0, u.layer.y - u.layer.x);
+            float lightSpan = min(slab, 240.0);
+            float lds = lightSpan / float(max(1, lightSteps));
             float lightOD = 0.0;
-            float lds = (u.layer.y - u.layer.x) / float(max(1, lightSteps));
             for (int j = 0; j < lightSteps; j++) {
                 float3 lp = p + sunDir * (lds * (float(j) + 0.5));
                 lightOD += cl_density(lp, u, baseNoise, detailNoise) * lds;
@@ -169,24 +181,36 @@ fragment float4 fragmentClouds(CloudsOut in [[stage_in]],
             // shadow, tops face the open sky — gives the deck its underside.
             float hf = cl_layerHeight(p, u);
             float3 ambient = u.skyAmbient.rgb * (0.5 + 0.5 * hf);
-            float3 lum = (sunLight * beer * phase * powder + ambient) * density;
+            // ANALYTIC in-scatter for the step. The source term is radiance and
+            // must NOT be multiplied by density: the correct integral of
+            // source * sigma * exp(-sigma * s) across the step is
+            // source * (1 - exp(-sigma * ds)) = source * (1 - stepT).
+            // The old form was source * density * ds — a rectangle rule only
+            // valid for thin steps, and at density 0.55 with ds ~= 17.5 m the
+            // per-step optical depth is ~9.6, so it overshot by that factor AND
+            // the error grew with ds, which is precisely the horizon white wall
+            // that `horizonFade` below was invented to hide.
+            float3 lum = sunLight * beer * phase * powder + ambient;
             float stepT = exp(-density * ds);
-            scattered += transmittance * lum * ds;
+            scattered += transmittance * lum * (1.0 - stepT);
             transmittance *= stepT;
             if (transmittance < 0.01) break;
         }
     }
 
-    // AERIAL FADE (device: "a lot of white glare from the clouds at the
-    // horizon"): edge-on rays enter the slab kilometres out and stack into a
-    // solid white wall. Real distant clouds dissolve into the haze — fade this
-    // pixel's cloud contribution by its march ENTRY distance, on the same
-    // farDistance scale the march already carries (march.w): gone by ~far/3.
-    // Near-overhead cloud (small t0) is untouched.
-    float horizonFade = exp(-3.0 * t0 / max(u.march.w, 1.0));
-    scattered *= horizonFade;
-    transmittance = mix(1.0, transmittance, horizonFade);
-
+    // The "white glare at the horizon" this used to fade away was not a real
+    // horizon effect: the old rectangle-rule in-scatter overshot by roughly the
+    // per-step optical depth, and ds grows with the slant path, so grazing rays
+    // overshot several times harder than overhead ones and stacked into a wall.
+    // The fade hid that — at the cost of dissolving a large share of the deck
+    // into blue sky even at zenith, which is the other half of "the clouds
+    // don't look right". With the analytic step above, a long slant path now
+    // converges to an opaque cloud instead of diverging, so the fade has
+    // nothing left to hide and is gone.
+    //
+    // VISUAL GATE: this needs to be LOOKED at, not measured. Clouds should read
+    // white and solid with no per-pixel sparkle, and the deck should continue
+    // to the horizon rather than dissolving into blue.
     return float4(scattered, transmittance);
 }
 

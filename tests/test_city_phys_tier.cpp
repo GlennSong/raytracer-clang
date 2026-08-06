@@ -12,11 +12,16 @@
 #include "../src/engine/components.h"
 #include "../src/engine/procgen/city/road_net.h"
 #include "../src/engine/systems/physics_system.h"
+#include "../src/engine/asset_manager.h"
+#include "../src/engine/mesh_uploader.h"
 #include "../src/engine/world.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
+#include <sstream>
+#include <string>
 #include <unordered_map>
 
 using namespace engine;
@@ -42,6 +47,27 @@ RoadNet cityGrid() {
     net.sidewalk = 2.5;
     return net;
 }
+
+// The shipped vehicle catalogue. Cars are CONTENT: a city with no recipes draws
+// none at all (the built-in box fleet is gone), so a soak that expects cars to
+// collide with has to say which cars — exactly as a level does.
+std::string readAsset(const std::string& name) {
+    std::ifstream in(std::string(RT_SOURCE_DIR) + "/assets/scripts/" + name);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+// A stub mesh backend: car bodies must actually be built for the fleet to
+// exist, and building needs somewhere to upload to. No GPU.
+struct StubUploader : engine::MeshUploader {
+    uint32_t next = 1;
+    engine::MeshHandle uploadMesh(const engine::RenderMesh&) override {
+        return engine::MeshHandle{next++, 1};
+    }
+    void removeMesh(engine::MeshHandle) override {}
+    engine::BoundingSphere getMeshBounds(engine::MeshHandle) const override { return {}; }
+};
 
 Real upDot(const Quat& q) { return q.rotate(Vec3(0, 1, 0)).y; }
 
@@ -267,8 +293,12 @@ TEST_CASE(city_every_drawn_car_is_solid) {
     params.pedestrians = 0;
     params.seed = 7;
     params.wander = true;
+    params.vehicleScript = readAsset("vehicles.lua");
+    CHECK(!params.vehicleScript.empty());
     CityRenderSystem city(params);
-    CHECK(city.build(world, nullptr));
+    StubUploader uploader;
+    engine::AssetManager assets(uploader);
+    CHECK(city.build(world, &assets));
 
     Entity player = world.create();
     Transform pt;

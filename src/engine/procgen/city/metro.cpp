@@ -207,30 +207,6 @@ struct Cut {
     bool collector = false;
 };
 
-// Recursively bisect a face along its long OBB axis until block-sized, recording
-// each cut as a street segment (the same recipe as district::subdivideStreets).
-// `collectorSpan` <= 0 disables the collector tier (every cut is Local).
-void subdivide(const Poly2& poly, double mn, double mx, double jitter,
-               double collectorSpan, Lcg& rng, std::vector<Cut>& streets,
-               int depth = 0) {
-    if (poly.size() < 3 || depth > 22) return;
-    OBB2 o = orientedBoundingBox(poly);
-    int la = o.longAxis();
-    double longHalf = o.half[la], shortHalf = o.half[1 - la];
-    if (longHalf * 2.0 <= mx || longHalf < mn || shortHalf * 2.0 < mn) return;
-    Vec2 dirLong = o.axis[la], cutDir = o.axis[1 - la];
-    double off = (rng.unit() - 0.5) * 2.0 * jitter * longHalf;
-    Vec2 sp = o.center + dirLong * off;
-    Poly2 left, right;
-    splitByLine(poly, sp, cutDir, left, right);
-    if (left.size() < 3 || right.size() < 3) return;
-    Vec2 a, b;
-    if (cutSpan(poly, sp, cutDir, a, b))
-        streets.push_back({a, b, collectorSpan > 0 && longHalf * 2.0 > collectorSpan});
-    subdivide(left, mn, mx, jitter, collectorSpan, rng, streets, depth + 1);
-    subdivide(right, mn, mx, jitter, collectorSpan, rng, streets, depth + 1);
-}
-
 // GRID template (city-pipeline v2 stage 3): fill a block with a clean rotated
 // grid aligned to its own OBB axes, so every sub-block is a rectangle that
 // parcels into street-fronting lots. Streets are full chords across the block

@@ -141,11 +141,6 @@ std::vector<CrossingViolation> auditRoadGraph(const RoadGraph& g,
     // cell; each pair is tested once (a < b).
     const double cell = 16.0;
     std::unordered_map<long long, std::vector<int>> grid;
-    auto key = [&](double x, double y) {
-        const long long ix = static_cast<long long>(std::floor(x / cell));
-        const long long iy = static_cast<long long>(std::floor(y / cell));
-        return ix * 73856093LL ^ iy * 19349663LL;
-    };
     auto edgeOk = [&](const RoadEdge& e) {
         return e.a >= 0 && e.a < n && e.b >= 0 && e.b < n && e.a != e.b;
     };

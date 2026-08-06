@@ -61,24 +61,6 @@ constexpr Real kPedConeRange = 4.5, kPedConeHalfAngle = 1.2;
 const Vec3 kNavTint(0.18, 0.32, 0.55);    // faint blue: the road/lane graph
 const Vec3 kConeTint(0.55, 0.36, 0.10);   // dim amber: the sensing wedge
 
-// Synthesize a default lamp marker set for a car of body `size` (x=width,
-// y=height, z=length; +Z forward) — used for the C++ fallback fleet, a
-// scripting-off build, and headless tests where no Lua `lights` markers exist.
-// Mirrors vehicles.lua `fleet_car`: head/taillights at the front/rear corners, so
-// fallback cars still light up rather than going dark.
-std::vector<CityRenderSystem::LampMarker> defaultLampMarkers(Vec3 size) {
-    const Real hw = size.x * 0.5, hl = size.z * 0.5;
-    const Real ly = -size.y * 0.08;   // lamp band height
-    const Real lx = hw - 0.30;        // inset from the corner
-    std::vector<CityRenderSystem::LampMarker> out;
-    for (Real s : {Real(1), Real(-1)}) {
-        const std::string side = s > 0 ? "r" : "l";
-        out.push_back({"headlight_" + side, Vec3(s * lx, ly, hl - 0.05)});
-        out.push_back({"taillight_" + side, Vec3(s * lx, ly, -hl + 0.05)});
-    }
-    return out;
-}
-
 void refreshBounds(InstanceGroup* g) {
     if (!g) return;
     if (g->transforms.empty()) { g->boundsRadius = 0; return; }
@@ -160,11 +142,13 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         params_.pedsPerKm = c.pedsPerKm;
         params_.seed = c.seed;
         params_.hoursPerSecond = c.hoursPerSecond;
+        params_.startHour = c.startHour;
         params_.perceptionReliability = c.perceptionReliability;
         params_.sceneryRadius = c.sceneryRadius;
         params_.localHz = c.localHz;
         params_.adaptiveRate = c.adaptiveRate;
         params_.tieredAgents = c.tieredAgents;
+        params_.dormantAgents = c.dormantAgents;
         params_.wander = c.wander;
         params_.agentScript = c.agentScript;
         params_.vehicleScript = c.vehicleScript;
@@ -295,6 +279,68 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
                  << laneKm << " lane-km), " << pedCount << " walkers ("
                  << walkKm << " sidewalk-km)";
     }
+    // THE FLEET CATALOGUE, loaded before the sim builds. Drivers take their body
+    // at build time, so the sim has to know the real sizes first — the recipes
+    // publish them (vehicle_classes.lua), and adopting them here is what keeps
+    // one set of numbers behind the drawn car, its follow gaps, its parking bay
+    // and its physics chassis. The meshes are built further down from these same
+    // recipes; only the load is hoisted.
+    // How many car variants this city has — the Lua fleet's length, and ZERO
+    // when the level ships no vehicle recipes.
+    //
+    // Vehicles are optional CONTENT. A level with no catalogue draws no cars,
+    // which is a legitimate thing for a level to be; it does NOT get a built-in
+    // substitute. There used to be one — a hand-written box car in C++ — and
+    // because it stood in silently, "the fleet is scripted" and "the fleet is
+    // boxes" looked identical from the outside for as long as it took two
+    // people to notice the city was full of blocks. Absence is a data decision;
+    // say `"vehicles": "vehicles.lua"` to have cars, or `"cars": 0` not to.
+    int fleetVariants = 0;
+#ifdef RT_ENABLE_SCRIPTING
+    engine::ScriptVM fleetVM_;
+    bool fleetScripted = false;
+    if (!carsExternallyOwned_ && !params_.vehicleScript.empty()) {
+        // Same layering as VehicleSystem's spawn path: mesh.* procgen builders
+        // plus the module loader — vehicles.lua begins with
+        // `require "vehicle_classes"`, so a bare VM fails its very first line
+        // and every city silently drew the retired box fleet ("why are we
+        // using the old cars?").
+        engine::openProcgenLibrary(fleetVM_);
+        engine::openModuleLoader(fleetVM_, engine::makeModuleSource(""));
+        std::string err;
+        if (!fleetVM_.doString(params_.vehicleScript, &err)) {
+            LOG_WARN << "citysim vehicles script: " << err
+                     << " — this level draws NO cars";
+        } else if (int slots = engine::fleetSlotCount(fleetVM_); slots > 0) {
+            // THE ASSET decides how many cars the fleet has. This used to be a
+            // C++ constant, so a thirteenth slot was never built and a shorter
+            // fleet gave every missing slot a box car.
+            // Now the asset simply says how many there are.
+            fleetVariants = slots;
+            std::vector<VehicleBody> catalogue;
+            for (int v = 0; v < slots; ++v) {
+                VehicleBody body = vehicleFleetBody(v);
+                Vec3 size(0, 0, 0);
+                std::string className;
+                std::string slotErr;
+                if (!engine::loadFleetCatalogueEntry(fleetVM_, v, size, className,
+                                                     &slotErr))
+                    LOG_WARN << "citysim vehicles fleet[" << v << "]: " << slotErr
+                             << " (using built-in dimensions)";
+                // A slot with no `size` keeps the built-in one (legacy recipe).
+                else if (size.x > 0 && size.y > 0 && size.z > 0) {
+                    body.width = size.x;
+                    body.height = size.y;
+                    body.length = size.z;
+                }
+                catalogue.push_back(body);
+            }
+            sim_.setFleet(std::move(catalogue));
+            fleetScripted = true;
+        }
+    }
+#endif
+
     sim_.build(nav_, carCount, pedCount, params_.seed);
     sim_.setPerceptionReliability(params_.perceptionReliability);
     sim_.setWander(params_.wander);
@@ -302,6 +348,25 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
     // once a player position is fed each fixed step (see step() below) — the
     // build warm-up therefore runs everything K, exactly as before.
     sim_.tieringEnabled = params_.tieredAgents;
+    sim_.dormancyEnabled = params_.dormantAgents;
+    // DORMANCY MUST BE FURTHER OUT THAN ANYTHING DRAWN. A dormant agent's
+    // position is rebuilt from its schedule when it wakes, so if it slept while
+    // its parked car was still on screen, world-hours could pass and the wake
+    // would move a car the player is looking at. Keeping the dormant radius
+    // outside the parked-car draw radius makes that unobservable — and this is
+    // exactly the coupling someone breaks later by tuning sceneryRadius up, so
+    // it is enforced here rather than written in a comment somewhere.
+    if (sim_.dormancyEnabled &&
+        sim_.dormantResumeRadius <= params_.sceneryRadius) {
+        const Real want = params_.sceneryRadius * 2.0;
+        LOG_WARN << "[citysim] dormantResumeRadius ("
+                 << sim_.dormantResumeRadius << " m) is inside the parked-car "
+                    "draw radius (" << params_.sceneryRadius
+                 << " m) — cars could visibly jump when their owner wakes; "
+                    "raising to " << want << " m";
+        sim_.dormantResumeRadius = want;
+        sim_.dormantRadius = std::max(sim_.dormantRadius, want * 1.2);
+    }
 #ifdef RT_ENABLE_SCRIPTING
     // Scripted goal tables (ADR-0064): a level's citysim block may name an
     // agents.lua-style script (level_loader reads its text into the config);
@@ -330,9 +395,53 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
     // (persistent) mode is settled; before the warm-up so day one runs on places.
     sim_.assignPlaces(places_, nav_);
 
-    // Warm up so the city is already ALIVE when the level appears — agents depart
-    // and spread onto the roads instead of standing still for the first minute.
-    for (int i = 0; i < 400; ++i) sim_.step(0.1, params_.hoursPerSecond);
+    // IS THERE ENOUGH DAY TO LIVE IN? Agents move at true metres per second
+    // while the clock runs at hoursPerSecond, so a journey costs
+    // (distance / speed) * hoursPerSecond * 3600 times more of the day than it
+    // would in reality. At the historical default of 0.05 that is a 180x
+    // compression: on an 8 km city a 3 km commute eats 12.5 in-world hours, the
+    // agent arrives as its shift ends, and the 50 m walk from a parking bay to
+    // a door costs nearly two hours. The schedule silently becomes unlivable
+    // and the only symptom is a city permanently stuck in rush hour — so say it
+    // at load instead.
+    {
+        // Reported PER MODE. A blended median is driver-dominated (drivers
+        // outnumber walkers and occupy the low agent indices), so a city that
+        // is fine to drive across and impossible to walk across looks fine.
+        const Real driveHours =
+            sim_.commuteSecondsDrive() * params_.hoursPerSecond;
+        const Real walkHours =
+            sim_.commuteSecondsWalk() * params_.hoursPerSecond;
+        auto report = [&](const char* who, Real hours, Real secs) {
+            if (hours <= 0) return;
+            LOG_INFO << "[citysim] median " << who << " commute " << hours
+                     << " in-world hours (" << secs << " s at "
+                     << params_.hoursPerSecond << " h/s)";
+            // A round trip plus a shift has to fit inside a 24 h day.
+            if (hours > 2.0)
+                LOG_ERROR << "[citysim] " << who << "S CANNOT COMPLETE A DAY: "
+                          << hours << " in-world hours each way. Either lower "
+                             "citysim.hoursPerSecond (try "
+                          << params_.hoursPerSecond * (1.0 / hours)
+                          << "), or shorten this group's journeys — for walkers "
+                             "that means homes nearer their work, or transit.";
+        };
+        report("DRIVER", driveHours, sim_.commuteSecondsDrive());
+        report("WALKER", walkHours, sim_.commuteSecondsWalk());
+    }
+
+    // Open the city at its authored hour, with everyone already where their own
+    // day puts them. This replaces a 400-step warm-up that existed only to get
+    // the population moving before the level appeared: at city scale that is
+    // thousands of agents stepped at full fidelity for 40 sim-seconds, and it
+    // could only ever express "a little after the build hour" — opening at
+    // 22:00 would have meant simulating 27 in-world hours to reach it.
+    // The rate FIRST: seeding converts commute seconds into a share of the day,
+    // and step() has not run yet to supply it. Without this the sim seeded at
+    // the 0.05 default while the level ran at 0.004 — a travel window 12.5x too
+    // wide, which put ~3/4 of the city mid-commute the moment it loaded.
+    sim_.setHoursPerSecond(params_.hoursPerSecond);
+    sim_.seedFromSchedule(params_.startHour);
 
     {   // Freeway usage check (companion to the weld report above): the welds
         // prove the corridor is REACHABLE; this proves cars actually ROUTE
@@ -371,60 +480,56 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
     // twice. The CitySim still runs as the planner; the bridge reads its ghosts.
     carGroups_.clear();
     carLights_.clear();
+    carChassis_.clear();
+    carWheels_.clear();
     if (!carsExternallyOwned_) {
 #ifdef RT_ENABLE_SCRIPTING
-        // Data-driven fleet bodies (ADR-0065): the citysim block may name a
-        // vehicles.lua-style script (level_loader reads its text into the
-        // config). Run it ONCE here, at load, and build each variant's instanced
-        // mesh from its `vehicle.fleet[slot]` recipe (parts -> vertex-coloured
-        // boxes, plus named light attachment markers). ANY failure — no script,
-        // a Lua error, a malformed slot — LOG_WARNs and falls back to the C++
-        // fleetCarMesh, so the streets are never left empty. Lua runs only here;
-        // the baked mesh is plain data (no sim state), so determinism is intact.
-        engine::ScriptVM vehVM;
-        // Same layering as VehicleSystem's spawn path: mesh.* procgen builders
-        // plus the module loader — vehicles.lua begins with
-        // `require "vehicle_classes"`, so a bare VM fails its very first line
-        // and every city silently fell back to the box fleet ("why are we
-        // using the old cars?").
-        engine::openProcgenLibrary(vehVM);
-        engine::openModuleLoader(vehVM, engine::makeModuleSource(""));
-        bool vehScript = assets && !params_.vehicleScript.empty();
-        if (vehScript) {
-            std::string err;
-            if (!vehVM.doString(params_.vehicleScript, &err)) {
-                LOG_WARN << "citysim vehicles script: " << err
-                         << " (using built-in fleet meshes)";
-                vehScript = false;
-            }
-        }
+        // Data-driven fleet bodies (ADR-0065). The recipes were already read
+        // above — before sim_.build, because the sim adopts their dimensions —
+        // so this only turns each one into an instanced mesh. Lua ran once, at
+        // load, and a baked mesh is plain data — determinism is intact.
+        const bool vehScript = assets && fleetScripted;
 #endif
         int fleetTriangles = 0;
-        for (int v = 0; v < carVariantCount(); ++v) {
-            MeshHandle mh{};
+        for (int v = 0; v < fleetVariants; ++v) {
+            MeshHandle mh{}, chassisMh{};
             std::vector<LampMarker> lights;
+            std::vector<CarWheel> wheels;
             if (assets) {
                 engine::RenderMesh mesh;
                 bool scripted = false;
 #ifdef RT_ENABLE_SCRIPTING
-                if (vehScript) {
-                    engine::CarBodyRecipe recipe;
-                    std::string err;
-                    if (engine::loadFleetCarBody(vehVM, v, recipe, &err)) {
-                        mesh = std::move(recipe.mesh);
-                        scripted = true;
+                // Geometry, finally: this is the call that runs the slot's
+                // build() and costs a mesh.car shell. It happens only with an
+                // AssetManager to upload into — the catalogue above was read
+                // without it, so a headless sim gets real car sizes for free.
+                engine::CarBodyRecipe recipe;
+                std::string slotErr;
+                if (vehScript &&
+                    engine::loadFleetCarBody(fleetVM_, v, recipe, &slotErr)) {
+                    mesh = std::move(recipe.mesh);
+                    scripted = true;
+                        // The WHEEL-LESS form of the same car, for a promoted
+                        // (commandeered) one — VehicleSystem gives that car real
+                        // physics wheels, so the baked pair must come off. Empty
+                        // when the recipe publishes no separate wheelset.
+                        if (!recipe.chassis.vertices.empty())
+                            chassisMh = assets->acquireMesh(
+                                recipe.chassis,
+                                "city:carbody" + std::to_string(v));
+                        for (const engine::WheelPlacement& w : recipe.wheels)
+                            wheels.push_back({w.pos, w.radius, w.width,
+                                              w.steered, w.driven, w.handBrake});
                         // RETAIN the Lua fleet's light markers (ADR-0065 follow-up):
                         // headlight_l/r + taillight_l/r become the emissive lamps
                         // baked in syncCarLamps. Previously parsed-and-dropped.
                         for (const engine::Attachment& att : recipe.lights)
                             lights.push_back({att.name, att.pos});
-                    } else {
-                        LOG_WARN << "citysim vehicles fleet[" << v << "]: " << err
-                                 << " (using built-in fleet mesh)";
-                    }
+                } else if (vehScript) {
+                    LOG_ERROR << "[citysim] fleet slot " << v << ": " << slotErr
+                              << " — this slot draws NO car";
                 }
 #endif
-                if (!scripted) mesh = fleetCarMesh(v);
                 if (scripted) {
                     const int tris = static_cast<int>(mesh.indices.size() / 3);
                     fleetTriangles += tris;
@@ -432,62 +537,60 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
                     // exact skew shipped once: a binary older than the asset
                     // ignored the recipe's `body` mesh, read only its `parts`
                     // (the wheels) and drew headless cars — wheels and lamps
-                    // rolling down the street. The retired box fleet was ~168
-                    // tris; a real shell is thousands; wheels alone are ~48.
+                    // rolling down the street. A real shell is thousands of
+                    // triangles; wheels alone are ~48.
                     if (tris < 100)
                         LOG_ERROR << "[citysim] fleet slot " << v << ": only "
                                   << tris << " triangles — this is not a car "
                                      "body (stale binary vs vehicles.lua, or a "
                                      "recipe with no `body` mesh)";
+                    mh = assets->acquireMesh(mesh, "city:car" + std::to_string(v));
                 }
-                mh = assets->acquireMesh(mesh, "city:car" + std::to_string(v));
             }
-            // No Lua markers (C++ fallback fleet, scripting off, or headless/no
-            // assets): synthesize a default set from the body size so fallback cars
-            // still light up. (Skipping lamps for fallback cars was the alternative
-            // — see the ADR-0065 follow-up; we synthesize instead.)
-            if (lights.empty()) lights = defaultLampMarkers(fleetBodySize(v));
             carLights_.push_back(std::move(lights));
+            carChassis_.push_back(chassisMh);
+            carWheels_.push_back(std::move(wheels));
 
             Entity e = world.create();
             InstanceGroup g;
             g.mesh = mh;
             g.material = carMaterial();
             g.renderLayer = engine::LayerSim;   // debug layer toggle
+            g.drawClass = engine::DrawClass::SimBody;
             world.add<InstanceGroup>(e, g);
             carGroups_.push_back(e);
         }
 
         // FLEET VERDICT — loud, unmissable, once per build. "Why is the city
-        // using the OLD cars?" was asked twice while terminal probes showed
-        // the script loading fine; this line settles it from the user's own
-        // console. Triangle count is the tell: the retired BOX fleet was ~170
-        // tris a slot, a real mesh.car shell is thousands.
+        // using the OLD cars?" was asked twice while terminal probes showed the
+        // script loading fine; this line settles it from the user's own console.
         int scriptedCount = 0;
         for (const auto& lights : carLights_)
             if (!lights.empty()) ++scriptedCount;   // markers only from Lua
         if (params_.vehicleScript.empty())
-            LOG_ERROR << "[citysim] FLEET: BUILT-IN BOX CARS — no vehicles "
-                         "script configured (citysim.vehicles missing?)";
+            LOG_WARN << "[citysim] fleet: NO CARS — this level ships no vehicle "
+                        "catalogue (set citysim.vehicles, or cars: 0 to mean it)";
         else if (scriptedCount == 0)
-            LOG_ERROR << "[citysim] FLEET: BUILT-IN BOX CARS — vehicles.lua "
-                         "loaded but produced 0 scripted bodies";
+            LOG_ERROR << "[citysim] fleet: NO CARS — a vehicles script is "
+                         "configured but produced 0 bodies";
         else
             LOG_INFO << "[citysim] fleet: " << scriptedCount << "/"
-                     << carVariantCount()
+                     << fleetVariants
                      << " scripted car bodies (vehicles.lua), "
                      << fleetTriangles / std::max(1, scriptedCount)
                      << " tris/car avg";
     }
     pedGroup_ = world.create();
     { InstanceGroup g; g.mesh = pedMesh; g.material = pedMaterial();
-      g.renderLayer = engine::LayerSim; world.add<InstanceGroup>(pedGroup_, g); }
+      g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::SimBody;
+      world.add<InstanceGroup>(pedGroup_, g); }
     for (int s = 0; s < 3; ++s) {
         signalGroups_[s] = world.create();
         InstanceGroup g;
         g.mesh = lensMesh;
         g.material = signalMaterial(static_cast<SignalState>(s));
         g.renderLayer = engine::LayerSim;   // debug layer toggle
+        g.drawClass = engine::DrawClass::Effect;
         world.add<InstanceGroup>(signalGroups_[s], g);
     }
 
@@ -500,13 +603,16 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
                                        "city:carlamp");
     headlightGroup_ = world.create();
     { InstanceGroup g; g.mesh = lampMesh; g.material = lampMaterial(Vec3(1.5, 1.45, 1.2));
-      g.renderLayer = engine::LayerSim; world.add<InstanceGroup>(headlightGroup_, g); }
+      g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::Effect;
+      world.add<InstanceGroup>(headlightGroup_, g); }
     brakeLightGroup_ = world.create();
     { InstanceGroup g; g.mesh = lampMesh; g.material = lampMaterial(Vec3(1.7, 0.06, 0.04));
-      g.renderLayer = engine::LayerSim; world.add<InstanceGroup>(brakeLightGroup_, g); }
+      g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::Effect;
+      world.add<InstanceGroup>(brakeLightGroup_, g); }
     turnSignalGroup_ = world.create();
     { InstanceGroup g; g.mesh = lampMesh; g.material = lampMaterial(Vec3(1.7, 0.75, 0.05));
-      g.renderLayer = engine::LayerSim; world.add<InstanceGroup>(turnSignalGroup_, g); }
+      g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::Effect;
+      world.add<InstanceGroup>(turnSignalGroup_, g); }
 
     // Reuse the city's street-kit traffic-signal model: one pole+arm+head
     // assembly per signalled approach, placed on the near-right corner facing the
@@ -553,6 +659,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         g.mesh = postMesh;
         g.material = signalPostMaterial();
         g.renderLayer = engine::LayerSim;   // debug layer toggle
+        g.drawClass = engine::DrawClass::Furniture;
         for (int li : signalLinks_) g.transforms.push_back(signalPostPose(li));
         refreshBounds(&g);
         world.add<InstanceGroup>(signalPostGroup_, g);
@@ -586,6 +693,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         g.material.albedo = Vec3(1, 1, 1);
         g.material.roughness = 0.92f;
         g.renderLayer = 0;
+        // Thousands of separate instances, so the per-instance distance cull in
+        // RenderSystem actually bites here.
+        g.drawClass = engine::DrawClass::GroundPaint;
         for (const CitySim::ParkingBay& b : sim_.parkingBays()) {
             // Bay paint is PAINT: it rides at the road mesher's own stripe
             // lift (RoadMeshParams::markLift, 2 cm), not a hand-picked 5 cm —
@@ -616,6 +726,11 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         g.mesh = mh;
         g.material.albedo = Vec3(1, 1, 1);
         g.material.roughness = 0.92f;
+        // NOT GroundPaint, despite being paint: this is one city-wide merged
+        // mesh on a single identity instance, so a distance test measures the
+        // camera against the CITY CENTRE and would blink every stop bar in the
+        // world out at once. It needs chunking before it can carry a distance.
+        g.drawClass = engine::DrawClass::Unlimited;
         g.transforms.push_back(Mat4());   // world-space mesh, identity instance
         refreshBounds(&g);
         world.add<InstanceGroup>(roadMarkGroup_, g);
@@ -1084,8 +1199,11 @@ std::vector<Vec3> CityRenderSystem::carGroupHalfExtents() const {
     std::vector<Vec3> out;
     out.reserve(carGroups_.size());
     for (std::size_t v = 0; v < carGroups_.size(); ++v) {
-        Vec3 s = fleetBodySize(static_cast<int>(v));   // (width, height, length)
-        out.push_back(Vec3(s.x * 0.5, s.y * 0.5, s.z * 0.5));
+        // The ADOPTED fleet, not the built-in table: these half-extents size the
+        // kinematic collider proxies and the parked-car placement, so they have
+        // to be the dimensions the drawn car was actually built at.
+        const VehicleBody& b = sim_.fleetBody(static_cast<int>(v));
+        out.push_back(Vec3(b.width * 0.5, b.height * 0.5, b.length * 0.5));
     }
     return out;
 }
@@ -1198,8 +1316,8 @@ void CityRenderSystem::syncCarLamps(World& world) {
         if (!drawCars) continue;
         if (a.mode != Agent::Mode::Driver) continue;
         if (a.released) continue;      // commandeered: the physical car owns its lamps
-        if (a.tier == Agent::Tier::V) continue;   // far tier: no drawn car, no lamps
-        const int v = (a.vehicle >= 0 ? a.vehicle : 0) % carVariantCount();
+        if (a.far()) continue;   // far tier: no drawn car, no lamps
+        const int v = (a.vehicle >= 0 ? a.vehicle : 0) % drawVariantCount();
         if (v < 0 || v >= static_cast<int>(carLights_.size())) continue;
         const std::vector<LampMarker>& markers = carLights_[v];
         if (markers.empty()) continue;
@@ -1269,13 +1387,13 @@ void CityRenderSystem::syncGroups(World& world) {
         const Agent& a = agents[ai];
         // P4: a far (V) agent has NO render membership — no instance, no lamp,
         // no kinematic proxy (the physics diff keys off these id lists).
-        if (a.tier == Agent::Tier::V) continue;
+        if (a.far()) continue;
         if (a.mode == Agent::Mode::Driver) {
             if (cars.empty()) continue;   // cars owned externally (ADR-0062 bridge)
             if (a.released) continue;     // commandeered: its PHYSICAL car replaced it
             // Each driver keeps the same variant (keyed off its car index), so a
             // given car is always the same model + colour.
-            int v = (a.vehicle >= 0 ? a.vehicle : 0) % carVariantCount();
+            int v = (a.vehicle >= 0 ? a.vehicle : 0) % drawVariantCount();
             if (!cars[v]) continue;
             // R5: a physically-possessed agent renders its Jolt body's pose —
             // real suspension, pitch and roll — while the sim's kinematic
@@ -1301,35 +1419,25 @@ void CityRenderSystem::syncGroups(World& world) {
     // real 1.9k-triangle bodies it became ~8M triangles a frame, and re-deriving
     // each pose (a terrain sample apiece) cost ~8ms per FIXED STEP. So: resolve
     // the poses once, then draw only what is near the player.
+    // PARKED CARS ARE REAL CARS NOW. This used to draw a one-shot bake of
+    // decorative cars owned by nobody; it draws the actual fleet instead — every
+    // SimVehicle whose driver got out and walked away. Driving what to draw off
+    // the VEHICLE list rather than off bay occupancy is what covers the ones
+    // parked on the verge (the bay probe only reaches ~30 m from a node, so a
+    // lot of arrivals end up there), and it makes SimVehicle::pos the single
+    // source of truth for where a car is.
     if (!cars.empty()) {
-        if (!sceneryBuilt_) {
-            const std::vector<Vec3> he = carGroupHalfExtents();
-            const auto& bays = sim_.parkingBays();
-            scenery_.clear();
-            for (std::size_t bi = 0; bi < bays.size(); ++bi) {
-                const CitySim::ParkingBay& b = bays[bi];
-                if (b.occupant != CitySim::kBayScenery) continue;
-                const int v = static_cast<int>(bi) % carVariantCount();
-                // Wheels on the DECK (#25): the bay's own link/station height,
-                // the same surface a moving car rides, plus half the body so
-                // the car rests on it instead of sinking into the terrain or
-                // hovering over a graded street.
-                const Real y = deckYAt(b.link, b.station, b.pos) +
-                               (v < static_cast<int>(he.size()) ? he[v].y : 0.65);
-                const Real yaw = std::atan2(b.heading.x, b.heading.y);
-                SceneryCar sc;
-                sc.pose = Mat4::trs(Vec3(b.pos.x, y, b.pos.y),
-                                    Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
-                                    Vec3(1, 1, 1));
-                sc.pos = b.pos;
-                sc.variant = v;
-                sc.bay = static_cast<int>(bi);
-                scenery_.push_back(sc);
-            }
-            sceneryBuilt_ = true;
-            LOG_INFO << "[citysim] scenery parked cars: " << scenery_.size()
-                     << " poses resolved once (drawn within "
-                     << params_.sceneryRadius << " m)";
+        const std::vector<Vec3> he = carGroupHalfExtents();
+        const auto& vehicles = sim_.vehicles();
+        // A car the PLAYER has taken over (ADR-0062) is drawn by the physical
+        // Vehicle that replaced it, so the bridge must not draw it a second
+        // time. The owner is released, not its car — the ownership link is kept
+        // deliberately, so the agent can later discover the car is gone.
+        std::vector<char> suppressed(vehicles.size(), 0);
+        for (const Agent& a : sim_.agents()) {
+            if (!a.released && !a.playerControlled) continue;
+            if (a.car >= 0 && a.car < static_cast<int>(vehicles.size()))
+                suppressed[a.car] = 1;
         }
         // Draw radius from the tier centre (the player). Beyond it a parked car
         // is a few pixels and costs a full body in two passes.
@@ -1337,17 +1445,46 @@ void CityRenderSystem::syncGroups(World& world) {
         const bool haveCentre = sim_.hasTierCenter();
         const Real rad = params_.sceneryRadius;
         const Real rad2 = rad * rad;
-        for (const SceneryCar& sc : scenery_) {
+        int drawn = 0;
+        for (std::size_t vi = 0; vi < vehicles.size(); ++vi) {
+            const SimVehicle& sv = vehicles[vi];
+            if (sv.driver >= 0) continue;      // someone is driving it: the agent
+                                               // bake above already drew it
+            if (suppressed[vi]) continue;      // the player is driving it
             if (haveCentre && rad > 0) {
-                const Real dx = sc.pos.x - centre.x, dz = sc.pos.y - centre.y;
+                const Real dx = sv.pos.x - centre.x, dz = sv.pos.y - centre.y;
                 if (dx * dx + dz * dz > rad2) continue;
             }
-            if (!cars[sc.variant]) continue;
-            cars[sc.variant]->transforms.push_back(sc.pose);
-            // NEGATIVE-but-stable id: the physics proxy key must not shuffle
-            // when the cull changes bake order (-1 stays "unknown").
-            carAgentIds_[sc.variant].push_back(-2 - sc.bay);
+            const int v = static_cast<int>(vi) % drawVariantCount();
+            if (!cars[v]) continue;
+            // The ground sample is the per-frame cost the old one-shot bake
+            // existed to avoid — but only a few dozen cars survive the cull, and
+            // a parked car may now be anywhere (it moves when its owner drives
+            // it), so a cached pose would be wrong rather than merely stale.
+            // groundAt is the CARVED road surface now (#25), not the natural
+            // hillside, so this rests on the asphalt. A parked SimVehicle keeps
+            // no link/station, so it cannot use deckYAt the way a marked BAY
+            // does — on an elevated deck it would still take the ground below.
+            // No level parks on one today; if that changes, carry the bay (or
+            // the link) on SimVehicle and switch this to deckYAt.
+            const Real y = groundAt(sv.pos.x, sv.pos.y) +
+                           (v < static_cast<int>(he.size()) ? he[v].y : 0.65);
+            const Real yaw = std::atan2(sv.heading.x, sv.heading.y);
+            cars[v]->transforms.push_back(
+                Mat4::trs(Vec3(sv.pos.x, y, sv.pos.y),
+                          Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
+                          Vec3(1, 1, 1)));
+            // NEGATIVE-but-stable id keyed on the VEHICLE: the physics proxy key
+            // must not shuffle when the cull changes bake order (-1 stays
+            // "unknown"). Vehicle indices are fixed for the run, exactly as bay
+            // indices were.
+            carAgentIds_[v].push_back(-2 - static_cast<int>(vi));
+            ++drawn;
         }
+        // Publish it. This was computed and then discarded, which made the car
+        // share of the frame a guess with a 2.7x spread (285-760 K triangles at
+        // ~1.9 K each) purely for want of one number.
+        parkedDrawn_ = drawn;
     }
 
     // Each signalled approach lights ONE lamp on its head — the lens for its
@@ -1403,7 +1540,7 @@ void CityRenderSystem::syncGroups(World& world) {
         const auto& agents = sim_.agents();
         for (std::size_t ai = 0; ai < agents.size() && debugWidgets_; ++ai) {
             const Agent& a = agents[ai];
-            if (a.tier == Agent::Tier::V) continue;   // far tier: nothing drawn
+            if (a.far()) continue;   // far tier: nothing drawn
             bool car = a.mode == Agent::Mode::Driver;
             if (car && a.released) continue;   // commandeered: no ghost widget
             Real x = a.pos.x, z = a.pos.y;
@@ -1520,14 +1657,30 @@ void CityRenderSystem::step(World& world, Real dt) {
     // tieredAgents; deterministic for a deterministic world.
     {
         bool haveCentre = false;
-        world.each<engine::CharacterController>(
-            [&](Entity e, engine::CharacterController&) {
+        // THE PLAYER, identified by ControlledBy — not "the first entity that
+        // happens to have a CharacterController". Every walker has one of
+        // those, so this used to centre the whole tier bubble on an arbitrary
+        // pedestrian, and which one depended on component-pool churn. The
+        // bubble decides who is simulated, drawn and given a body, so it has to
+        // follow the actual player.
+        world.each<engine::Transform, engine::ControlledBy>(
+            [&](Entity, engine::Transform& t, engine::ControlledBy&) {
                 if (haveCentre) return;
-                if (const engine::Transform* t = world.get<engine::Transform>(e)) {
-                    sim_.setTierCenter(engine::Vec2(t->position.x, t->position.z));
-                    haveCentre = true;
-                }
+                sim_.setTierCenter(engine::Vec2(t.position.x, t.position.z));
+                haveCentre = true;
             });
+        // Fallback for hosts that stand in a bare character for the player (the
+        // headless tier tests do exactly this). A real level's player carries
+        // ControlledBy, so the walker crowd can never win the branch above.
+        if (!haveCentre)
+            world.each<engine::CharacterController>(
+                [&](Entity e, engine::CharacterController&) {
+                    if (haveCentre) return;
+                    if (const engine::Transform* t = world.get<engine::Transform>(e)) {
+                        sim_.setTierCenter(engine::Vec2(t->position.x, t->position.z));
+                        haveCentre = true;
+                    }
+                });
         if (!haveCentre) sim_.clearTierCenter();
     }
     // RT_DUMP_STATS: split the fixed-step bill — CitySim::step vs the group
@@ -1548,16 +1701,28 @@ void CityRenderSystem::step(World& world, Real dt) {
     simMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
     syncMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
     if (++calls % 300 == 0) {
-        int kTier = 0, vTier = 0, moving = 0;
+        // `moving` means "has an open route" — it stays true through red
+        // lights, crash freezes, car-following stops and the far tier's
+        // modelled junction dwells. On its own it cannot tell a jam from a
+        // backlog of trips still in flight, so count the ones with actual
+        // speed beside it: a big gap between the two IS the jam.
+        int kTier = 0, vTier = 0, moving = 0, rolling = 0, dormant = 0;
         for (const Agent& a : sim_.agents()) {
-            if (a.tier == Agent::Tier::V) ++vTier; else ++kTier;
-            if (a.moving) ++moving;
+            if (a.far()) ++vTier; else ++kTier;
+            if (a.tier == Agent::Tier::D) ++dormant;
+            if (a.moving) {
+                ++moving;
+                if (a.speed > 0.5) ++rolling;
+            }
         }
         LOG_INFO << "[stats] citysim step " << (simMs / calls)
                  << " ms, group sync " << (syncMs / calls)
                  << " ms (per fixed step) | hour " << sim_.clockHours()
                  << " | active(K/P) " << kTier
-                 << ", far(V) " << vTier << ", moving " << moving;
+                 << ", far(V) " << vTier << ", dormant(D) " << dormant
+                 << ", moving " << moving << ", rolling " << rolling
+                 << ", asleep " << sim_.sleepingAgents()
+                 << " | parked cars drawn " << parkedDrawn_;
         simMs = syncMs = 0.0;
         calls = 0;
     }

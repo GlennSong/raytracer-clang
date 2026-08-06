@@ -23,12 +23,17 @@
 #include "../src/engine/procgen/city/road_spec.h"
 #include "../src/engine/procgen/noise.h"
 #include "../src/engine/procgen/terrain.h"
+#include "../src/engine/asset_manager.h"
+#include "../src/engine/mesh_uploader.h"
 #include "../src/engine/world.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <memory>
+#include <sstream>
+#include <string>
 
 using namespace engine;
 using namespace citysim;
@@ -62,6 +67,27 @@ TerrainParams hillParams() {
     p.octaves = 4;
     return p;
 }
+
+// The shipped vehicle catalogue. Cars are CONTENT: a city with no recipes draws
+// none at all (the built-in box fleet is gone), so the scenery arm of this gate
+// has to say which cars — exactly as a level does.
+std::string readAsset(const std::string& name) {
+    std::ifstream in(std::string(RT_SOURCE_DIR) + "/assets/scripts/" + name);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+// A stub mesh backend: the fleet must actually be built for parked cars to
+// exist, and building needs somewhere to upload to. No GPU.
+struct StubUploader : engine::MeshUploader {
+    uint32_t next = 1;
+    engine::MeshHandle uploadMesh(const engine::RenderMesh&) override {
+        return engine::MeshHandle{next++, 1};
+    }
+    void removeMesh(engine::MeshHandle) override {}
+    engine::BoundingSphere getMeshBounds(engine::MeshHandle) const override { return {}; }
+};
 
 // The highest road surface under (x, z), or NaN where the mesh has none.
 double meshDeckAt(const RenderMesh& mesh, double x, double z) {
@@ -103,9 +129,22 @@ TEST_CASE(parked_cars_and_bay_paint_sit_on_the_road_deck) {
     p.cars = 6;
     p.pedestrians = 0;
     p.seed = 3;
+    p.vehicleScript = readAsset("vehicles.lua");
+    CHECK(!p.vehicleScript.empty());
     CityRenderSystem city(p);
-    CHECK(city.build(world, nullptr));
-    city.step(world, 0.1);
+    StubUploader uploader;
+    engine::AssetManager assets(uploader);
+    CHECK(city.build(world, &assets));
+    // A PARKED car is a SimVehicle whose driver has left it — not a bay flag —
+    // so the fixture has to run until somebody actually parks. Drivers rest on
+    // arrival, which on this cross takes a few in-world minutes.
+    int parkedSeen = 0;
+    for (int i = 0; i < 6000 && parkedSeen == 0; ++i) {
+        city.step(world, 0.1);
+        for (const SimVehicle& sv : city.sim().vehicles())
+            if (sv.driver < 0) { ++parkedSeen; break; }
+    }
+    CHECK(parkedSeen > 0);
 
     // 4. The road mesh: the surface a player actually stands on.
     const RenderMesh roadMesh = buildRoadNetMesh(net);
@@ -137,16 +176,19 @@ TEST_CASE(parked_cars_and_bay_paint_sit_on_the_road_deck) {
             const double deck = meshDeckAt(roadMesh, bays[i].pos.x, bays[i].pos.y);
             if (std::isnan(deck)) continue;
             ++paintChecked;
-            // The outline is authored at deck + 5 cm; measure the residual.
+            // The outline is authored at deck + the mesher's own stripe lift
+            // (kRoadMarkLift, 2 cm — the same one the lane paint uses); measure
+            // the residual against the mesh.
             const double resid =
-                std::fabs((g->transforms[i].m[1][3] - 0.05) - deck);
+                std::fabs((g->transforms[i].m[1][3] - engine::kRoadMarkLift) - deck);
             worstPaint = std::max(worstPaint, resid);
         }
     }
     CHECK(paintChecked > 0);
 
-    // 6. The scenery parked cars rest wheels-on-deck. Their instances are the
-    // ones the bake tagged with agent id -1 (drivers carry a real id).
+    // 6. The parked cars rest wheels-on-deck. Their instances are the ones the
+    // bake tagged with a NEGATIVE id (-2 - vehicleIndex); a driver carries its
+    // agent index.
     double worstCar = 0;
     int carsChecked = 0;
     const std::vector<Vec3> he = city.carGroupHalfExtents();

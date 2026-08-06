@@ -95,12 +95,19 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/surface_field.cpp \
 	$(SRC_DIR)/engine/procgen/city/structure_set.cpp \
 	$(SRC_DIR)/engine/procgen/city/block_grade.cpp \
+	$(SRC_DIR)/engine/procgen/city/city_footprint.cpp \
+	$(SRC_DIR)/engine/procgen/city/arterial_skeleton.cpp \
+	$(SRC_DIR)/engine/procgen/city/patch_fabric.cpp \
 	$(SRC_DIR)/engine/procgen/scatter.cpp \
 	$(SRC_DIR)/engine/procgen/cellular.cpp \
 	$(SRC_DIR)/engine/procgen/planet.cpp \
 	$(SRC_DIR)/engine/procgen/atmosphere.cpp \
 	$(SRC_DIR)/engine/scripting/script_vm.cpp \
-	$(SRC_DIR)/engine/scripting/procgen_bindings.cpp
+	$(SRC_DIR)/engine/scripting/procgen_bindings.cpp \
+	$(SRC_DIR)/engine/scripting/script_modules.cpp \
+	$(SRC_DIR)/engine/script_assets.cpp \
+	$(SRC_DIR)/engine/ai/nav_graph.cpp \
+	$(SRC_DIR)/engine/ai/pathfind.cpp
 OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
 # Unit tests. Header-only core (math, Handle/SlotMap, SparseSet) plus the few
@@ -195,6 +202,13 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_city_fleet.cpp \
 	$(TEST_DIR)/test_city_drive.cpp \
 	$(TEST_DIR)/test_city_render.cpp \
+	$(TEST_DIR)/test_script_vm.cpp \
+	$(TEST_DIR)/test_script_modules.cpp \
+	$(TEST_DIR)/test_script_system.cpp \
+	$(TEST_DIR)/test_gun_script.cpp \
+	$(TEST_DIR)/test_flora.cpp \
+	$(TEST_DIR)/test_agent_goals.cpp \
+	$(TEST_DIR)/test_vehicle_body.cpp \
 	$(TEST_DIR)/test_car_lamps.cpp \
 	$(TEST_DIR)/test_city_flow.cpp \
 	$(TEST_DIR)/test_city_spectate.cpp \
@@ -231,6 +245,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/renderer/hosted_window.cpp \
 	$(SRC_DIR)/renderer/settings.cpp \
 	$(SRC_DIR)/engine/editor_bridge.cpp \
+	$(SRC_DIR)/engine/city_planner.cpp \
 	$(SRC_DIR)/engine/properties.cpp \
 	$(SRC_DIR)/engine/component_registry.cpp \
 	$(SRC_DIR)/engine/property_json.cpp \
@@ -293,6 +308,9 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/surface_field.cpp \
 	$(SRC_DIR)/engine/procgen/city/structure_set.cpp \
 	$(SRC_DIR)/engine/procgen/city/block_grade.cpp \
+	$(SRC_DIR)/engine/procgen/city/city_footprint.cpp \
+	$(SRC_DIR)/engine/procgen/city/arterial_skeleton.cpp \
+	$(SRC_DIR)/engine/procgen/city/patch_fabric.cpp \
 	$(SRC_DIR)/engine/ai/nav_graph.cpp \
 	$(SRC_DIR)/engine/ai/pathfind.cpp \
 	$(SRC_DIR)/apps/citysim/traffic_signal.cpp \
@@ -305,6 +323,15 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/apps/citysim/city_render.cpp \
 	$(SRC_DIR)/apps/citysim/city_spectate.cpp \
 	$(SRC_DIR)/apps/citysim/city_meshes.cpp \
+	$(SRC_DIR)/engine/script_assets.cpp \
+	$(SRC_DIR)/engine/scripting/script_vm.cpp \
+	$(SRC_DIR)/engine/scripting/script_modules.cpp \
+	$(SRC_DIR)/engine/scripting/procgen_bindings.cpp \
+	$(SRC_DIR)/engine/scripting/gameplay_bindings.cpp \
+	$(SRC_DIR)/engine/scripting/script_system.cpp \
+	$(SRC_DIR)/engine/scripting/vehicle_spec.cpp \
+	$(SRC_DIR)/apps/citysim/scripting/agent_goals.cpp \
+	$(SRC_DIR)/apps/citysim/scripting/vehicle_body.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/level_scene.cpp \
 	$(SRC_DIR)/scene.cpp \
@@ -351,8 +378,22 @@ test: CXXFLAGS += $(DEBUG_FLAGS)
 test: $(TEST_TARGET)
 	./$(TEST_TARGET)
 
-$(TEST_TARGET): $(TEST_SRCS) $(TEST_ENGINE_SRCS)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+# The test build carries Lua. Scripting is ENGINE INFRASTRUCTURE, not a build
+# option: the city's cars, agent goals and procgen recipes are DATA, and a test
+# build without Lua does not exercise the game — it exercises the C++ fallbacks
+# that exist only because this build once had no Lua. Keeping the two apart is
+# what let "the fleet is scripted" and "the fleet is boxes" both look green.
+# RT_SOURCE_DIR lets a test read the shipped assets/scripts/*.lua regardless of
+# the working directory it is run from.
+$(TEST_TARGET): CXXFLAGS += $(SCRIPT_FLAGS) -DRT_SOURCE_DIR='"$(CURDIR)"'
+#
+# Depends on the Makefile itself: this target compiles its whole source list in
+# one command with no .o files, so ADDING a source cannot make the binary out of
+# date on its own — the new file is older than the last link, and make declares
+# the stale binary up to date. That silently kept newly-listed tests out of the
+# run (they were "passing" by not existing).
+$(TEST_TARGET): $(TEST_SRCS) $(TEST_ENGINE_SRCS) $(LUA_OBJS) Makefile
+	$(CXX) $(CXXFLAGS) -o $@ $(filter-out Makefile,$^)
 
 # Headless "from space" preview of the procedural planets (procedural-planet-plan):
 # orthographic disc renders to out_*.png — a GPU-free way to eyeball the generator.
