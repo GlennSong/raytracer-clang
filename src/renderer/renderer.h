@@ -344,6 +344,12 @@ struct RenderStats {
     uint32_t totalInstances = 0;
     uint32_t entitiesSubmitted = 0;
     uint32_t trianglesDrawn = 0;   // color pass only (excludes shadow casters)
+    // MONOTONIC totals since startup (not per-frame) — the frame ledger diffs
+    // them to get "resources created during this frame", the signature of a
+    // hitch caused by creating something mid-play rather than by steady cost.
+    // A backend that doesn't count leaves them 0 and the ledger reports none.
+    uint64_t meshUploadsTotal = 0;
+    uint64_t textureUploadsTotal = 0;
 };
 
 enum class CameraProjection { Perspective, Orthographic };

@@ -50,6 +50,11 @@ struct FrameSample {
     uint32_t drawCalls = 0;
     uint32_t instances = 0;
     uint32_t triangles = 0;
+    // Resources CREATED during this frame (see RenderStats). Nonzero on a slow
+    // frame is a direct answer to "why did this one hitch": something was
+    // uploaded to the GPU mid-play. Steady-state frames should read 0.
+    uint32_t meshUploads = 0;
+    uint32_t textureUploads = 0;
 };
 
 // The frame ledger (ADR-0077): a fixed ring of per-frame samples every build
@@ -72,7 +77,8 @@ public:
     void endPhase(FramePhase phase);
     void endFrame(double hostDeltaSeconds, int fixedSteps,
                   uint32_t drawCalls, uint32_t instances, uint32_t triangles,
-                  float gpuMs = 0.0f);
+                  float gpuMs = 0.0f, uint32_t meshUploads = 0,
+                  uint32_t textureUploads = 0);
 
     // Clock-free seam: fold a ready-made sample into the ring (and the capture
     // file, if open). endFrame() lands here; tests feed synthetic frames.

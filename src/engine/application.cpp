@@ -294,8 +294,18 @@ void Application::runFrame() {
     // so a capture correlates time spikes with what was drawn. The same
     // counters feed Tracy plots in profiler builds (ADR-0068).
     RenderStats rs = rendererPtr->getRenderStats();
+    // Resources created during THIS frame: the backend counts monotonically,
+    // we diff. A nonzero count on a slow frame names the hitch's cause
+    // outright — something was built mid-play instead of at load.
+    const uint32_t meshUploads =
+        static_cast<uint32_t>(rs.meshUploadsTotal - prevMeshUploads);
+    const uint32_t textureUploads =
+        static_cast<uint32_t>(rs.textureUploadsTotal - prevTextureUploads);
+    prevMeshUploads = rs.meshUploadsTotal;
+    prevTextureUploads = rs.textureUploadsTotal;
     frameStats.endFrame(frameDelta, steps, rs.drawCalls, rs.totalInstances,
-                        rs.trianglesDrawn, rendererPtr->lastGpuFrameMs());
+                        rs.trianglesDrawn, rendererPtr->lastGpuFrameMs(),
+                        meshUploads, textureUploads);
     RT_PROFILE_PLOT("draw calls", static_cast<int64_t>(rs.drawCalls));
     RT_PROFILE_PLOT("instances", static_cast<int64_t>(rs.totalInstances));
     RT_PROFILE_PLOT("triangles", static_cast<int64_t>(rs.trianglesDrawn));

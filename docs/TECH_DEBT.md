@@ -423,6 +423,49 @@ up, they drift.
   heavyweights are `rt_math.h` (57 includers × 629 lines), `renderer.h`
   (44 × 666), `components.h` (35 × 472).
 
+## Hitching: diagnosed suspects (2026-08-06, device-reported)
+
+A real macOS arena capture reads: median 16.70 ms (a clean 60 fps) but p99
+116.57 and max 755.13 — **hitching, not steady-state cost**. CPU work is
+0.70 ms/frame total; 94% of the frame is `acquire`. Glenn reports the hitches
+fire **when the physics gun is used and intermittently while walking**.
+
+Read `acquire` correctly first: it is `nextDrawable` blocking until a
+swapchain image frees, which happens when the GPU finishes an earlier frame.
+So it is where a stall SURFACES, not where it is CAUSED — anything that makes
+the GPU or its queue fall behind shows up as acquire on the FOLLOWING frames.
+The ledger now records per-frame `mesh_uploads` / `texture_uploads`
+(monotonic counters in `RenderStats`, diffed per frame) so this class stops
+being guesswork: a slow frame that uploaded something names its own cause.
+
+Suspects, in confidence order — none yet confirmed on device:
+
+1. **`MetalRenderer::uploadTexture` stalls the pipeline.** It ends with
+   `[cmdBuf waitUntilCompleted]` purely to build mipmaps, so ANY texture
+   created during play blocks the CPU until the GPU drains. Command buffers on
+   one queue already execute in submission order, so a later render would see
+   the mipmaps without the wait — a one-line removal, but Metal-unverifiable
+   here, so it is recorded rather than changed blind. Confirm first with the
+   new `texture_uploads` column; if slow frames carry a texture upload, this
+   is it.
+2. **Lazy per-pose player-body meshes.** `CityPlayerBodySystem::poseMesh`
+   builds and uploads a mesh the first time each of `kWalkPoses` poses is
+   used — i.e. *while you walk*, one hitch per new pose until the set is warm.
+   Matches "every so often while walking" exactly. Fix: pre-warm all poses at
+   level load (they are a fixed, small set), don't build them mid-play.
+3. **The gun's bullets are cache hits** (`acquirePrimitive("box", …)` by key),
+   so the mesh is not the cost — but each shot creates a Jolt dynamic body and
+   `gun.lua` caps at MAX=500 live bullets, so repeated firing grows the
+   physics set. That cost lands in `fixed`, which the capture shows at
+   0.20 ms average — check its spike-anatomy row before pursuing.
+4. **`spawn.model` uploads without a dedup key** (`script_system.cpp`
+   `acquireMesh(*c.mesh)`), as does `spawnVehicle` (commented "unique upload").
+   Correct for genuinely unique procgen meshes; a hitch source if a recipe
+   spawns repeatedly.
+
+Next step is evidence, not more reading: re-capture with the upload columns,
+then read chart 4's `uploads` column on the ten worst frames.
+
 ## Verification gap (the meta-debt)
 
 - **Linux CI is red on arrival: 2/1083 test cases fail only on Linux.**

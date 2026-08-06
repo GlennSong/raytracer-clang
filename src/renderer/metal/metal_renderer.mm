@@ -923,6 +923,11 @@ struct MetalRenderer::Impl {
 
     Vec3 currentCameraPos;
     RenderStats lastStats;
+    // Monotonic resource-creation counters (see RenderStats): the ledger diffs
+    // them per frame, so a hitch can be attributed to "a mesh/texture was
+    // created here" instead of guessed at.
+    uint64_t meshUploadsTotal = 0;
+    uint64_t textureUploadsTotal = 0;
 
     static void bakeProbes(Impl* impl, const std::vector<ReflectionProbe>& probes);
 };
@@ -1801,6 +1806,7 @@ MeshHandle MetalRenderer::uploadMesh(const RenderMesh& mesh) {
     gpuMesh.indexCount = static_cast<uint32_t>(mesh.indices.size());
     gpuMesh.bounds = computeBoundingSphere(mesh.vertices.data(), mesh.vertices.size());
 
+    impl->meshUploadsTotal++;
     return impl->meshes.insert(gpuMesh);
 }
 
@@ -1837,7 +1843,14 @@ TextureHandle MetalRenderer::uploadTexture(int width, int height, int channels,
                    bytesPerRow:width * 4];
     }
 
-    // Generate mipmaps
+    // Generate mipmaps. NOTE (ADR-0077 hitch hunt): the waitUntilCompleted here
+    // drains the whole GPU pipeline on the calling thread, so a texture created
+    // DURING play stalls the frame and shows up as a long acquire on the frames
+    // after it. Command buffers on one queue already execute in submission
+    // order, so a later render sees the mipmaps without this wait — but that is
+    // a Metal change nobody can verify in this environment, so it is recorded
+    // in TECH_DEBT with the counter below to prove when it fires, rather than
+    // removed blind.
     id<MTLCommandBuffer> cmdBuf = [impl->commandQueue commandBuffer];
     id<MTLBlitCommandEncoder> blit = [cmdBuf blitCommandEncoder];
     [blit generateMipmapsForTexture:texture];
@@ -1845,6 +1858,7 @@ TextureHandle MetalRenderer::uploadTexture(int width, int height, int channels,
     [cmdBuf commit];
     [cmdBuf waitUntilCompleted];
 
+    impl->textureUploadsTotal++;
     return impl->textures.insert(texture);
 }
 
@@ -3791,6 +3805,8 @@ void MetalRenderer::endFrame() {
         impl->cameraUniforms.wireColor.w = 0.0f;
     }
 
+    stats.meshUploadsTotal = impl->meshUploadsTotal;
+    stats.textureUploadsTotal = impl->textureUploadsTotal;
     impl->lastStats = stats;
 
     [impl->currentEncoder endEncoding];

@@ -43,7 +43,8 @@ void FrameStats::endPhase(FramePhase phase) {
 
 void FrameStats::endFrame(double hostDeltaSeconds, int fixedSteps,
                           uint32_t drawCalls, uint32_t instances,
-                          uint32_t triangles, float gpuMs) {
+                          uint32_t triangles, float gpuMs,
+                          uint32_t meshUploads, uint32_t textureUploads) {
     if (!frameOpen) return;
     frameOpen = false;
     current.totalMs = msBetween(frameStart, Clock::now());
@@ -53,6 +54,8 @@ void FrameStats::endFrame(double hostDeltaSeconds, int fixedSteps,
     current.instances = instances;
     current.triangles = triangles;
     current.gpuMs = gpuMs;
+    current.meshUploads = meshUploads;
+    current.textureUploads = textureUploads;
     record(current);
 }
 
@@ -71,7 +74,8 @@ void FrameStats::record(const FrameSample& sample) {
                     << sample.drawCalls << ',' << sample.instances << ','
                     << sample.triangles << ',' << sample.acquireMs << ','
                     << sample.encodeMs << ',' << sample.submitMs << ','
-                    << sample.gpuMs << '\n';
+                    << sample.gpuMs << ',' << sample.meshUploads << ','
+                    << sample.textureUploads << '\n';
         captureRows++;
     }
 }
@@ -127,7 +131,8 @@ bool FrameStats::startCapture(const std::string& path) {
     captureRows = 0;
     captureFile << "frame,total_ms,update_ms,fixed_ms,render_ms,wait_ms,"
                    "host_delta_ms,fixed_steps,draw_calls,instances,triangles,"
-                   "acquire_ms,encode_ms,submit_ms,gpu_ms\n";
+                   "acquire_ms,encode_ms,submit_ms,gpu_ms,mesh_uploads,"
+                   "texture_uploads\n";
     return true;
 }
 

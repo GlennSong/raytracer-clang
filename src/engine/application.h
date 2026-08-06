@@ -111,6 +111,10 @@ private:
     // logs on visionOS, headless runs).
     double statsLogInterval = 0.0;
     double statsLogTimer = 0.0;
+    // Previous frame's monotonic upload totals, so the ledger can record
+    // per-frame resource creation as a delta (see runFrame).
+    uint64_t prevMeshUploads = 0;
+    uint64_t prevTextureUploads = 0;
     Settings settingsStore;
     // The one shared thread pool (ADR-0014). Declared before `systems` so it
     // outlives them — a system (e.g. physics) may hold work referencing it.

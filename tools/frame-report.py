@@ -34,7 +34,8 @@ PHASES = [
 
 ALL_COLUMNS = ("total_ms", "update_ms", "fixed_ms", "render_ms", "wait_ms",
                "host_delta_ms", "fixed_steps", "draw_calls", "instances",
-               "triangles", "acquire_ms", "encode_ms", "submit_ms", "gpu_ms")
+               "triangles", "acquire_ms", "encode_ms", "submit_ms", "gpu_ms",
+               "mesh_uploads", "texture_uploads")
 
 
 def load_capture(path):
@@ -303,16 +304,26 @@ def spike_anatomy(cols, layers):
     rows.sort(key=lambda r: -abs(r["delta"]))
 
     worst = sorted(range(n), key=lambda i: -totals[i])[:10]
+    uploads_on_slow = sum(cols["mesh_uploads"][i] + cols["texture_uploads"][i]
+                          for i in slow)
+    uploads_total = sum(cols["mesh_uploads"]) + sum(cols["texture_uploads"])
     return {
         "typical_total": mean(typical, "total_ms"),
         "slow_total": mean(slow, "total_ms"),
         "typical_count": len(typical),
         "slow_count": len(slow),
         "rows": rows,
+        "uploads_on_slow": uploads_on_slow,
+        "uploads_total": uploads_total,
+        "slow_with_uploads": sum(
+            1 for i in slow
+            if cols["mesh_uploads"][i] + cols["texture_uploads"][i] > 0),
         "worst": [{"frame": i + 1, "total": totals[i],
                    "parts": [(label, cols[key][i]) for key, label, _ in layers],
                    "gpu": cols["gpu_ms"][i],
-                   "draws": int(cols["draw_calls"][i])} for i in worst],
+                   "draws": int(cols["draw_calls"][i]),
+                   "uploads": int(cols["mesh_uploads"][i] +
+                                  cols["texture_uploads"][i])} for i in worst],
     }
 
 
@@ -336,10 +347,23 @@ def spike_section(a, budget_ms):
     worst = "".join(
         f"<tr><td>{w['frame']}</td><td>{w['total']:.1f}</td>"
         + "".join(f"<td>{v:.2f}</td>" for _, v in w["parts"])
-        + f"<td>{w['gpu']:.2f}</td><td>{w['draws']}</td></tr>"
+        + f"<td>{w['gpu']:.2f}</td><td>{w['draws']}</td>"
+        + (f"<td><b>{w['uploads']}</b></td>" if w["uploads"]
+           else "<td>0</td>") + "</tr>"
         for w in a["worst"])
     part_heads = "".join(f"<th>{html.escape(label)}</th>"
                          for label, _ in a["worst"][0]["parts"])
+    upload_note = ""
+    if a["uploads_total"]:
+        upload_note = (
+            f"<p class='note'><b>Resource creation during play:</b> "
+            f"{a['uploads_total']:.0f} mesh/texture uploads across the capture, "
+            f"{a['uploads_on_slow']:.0f} of them landing on the slowest 1% of "
+            f"frames ({a['slow_with_uploads']} of those {a['slow_count']} "
+            f"frames uploaded something). Uploading mid-play stalls the frame "
+            f"and shows up as a long acquire afterwards — if the slow frames "
+            f"cluster here, the fix is to build the resource at load time or "
+            f"reuse it, not to make the renderer faster.</p>")
     return f"""
 <h2>Chart 4 &mdash; Spike anatomy: what grows when a frame goes slow</h2>
 <p class="note">The slowest 1% ({a['slow_count']} frames, avg
@@ -362,8 +386,9 @@ one or two, so read that row as "around here", not exact.</p>
 <p class="note">Frame numbers are positions in the capture &mdash; early ones
 are usually load, upload, or shader compilation rather than steady-state
 cost. Budget is {budget_ms:.1f} ms.</p>
+{upload_note}
 <table><tr><th>frame</th><th>total</th>{part_heads}<th>gpu</th><th>draws</th>
-</tr>{worst}</table>"""
+<th>uploads</th></tr>{worst}</table>"""
 
 
 def histogram_chart(values, y_max_ms):
@@ -626,14 +651,19 @@ def text_report(name, s, cols, layers, budget_ms):
         for r in a["rows"]:
             out.append(f"{r['label'][:28]:<28}{r['typical']:>9.2f}"
                        f"{r['mean']:>9.2f}{r['slow']:>10.2f}{r['delta']:>+10.2f}")
+        if a["uploads_total"]:
+            out += ["", f"uploads during play: {a['uploads_total']:.0f} total, "
+                        f"{a['uploads_on_slow']:.0f} on the slowest 1% "
+                        f"({a['slow_with_uploads']}/{a['slow_count']} slow "
+                        f"frames uploaded something)"]
         out += ["", "--- ten worst frames ---",
                 "frame".rjust(7) + "total".rjust(9) +
                 "".join(label[:9].rjust(10) for label, _ in a["worst"][0]["parts"]) +
-                "gpu".rjust(9) + "draws".rjust(7)]
+                "gpu".rjust(9) + "draws".rjust(7) + "uploads".rjust(9)]
         for w in a["worst"]:
             out.append(f"{w['frame']:>7}{w['total']:>9.1f}" +
                        "".join(f"{v:>10.2f}" for _, v in w["parts"]) +
-                       f"{w['gpu']:>9.2f}{w['draws']:>7}")
+                       f"{w['gpu']:>9.2f}{w['draws']:>7}{w['uploads']:>9}")
     return "\n".join(out)
 
 

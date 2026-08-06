@@ -85,6 +85,19 @@ TEST_CASE(frame_stats_render_split_phases_are_distinct) {
     CHECK_APPROX(s.avgGpuMs, 12.5, 1e-4);
 }
 
+TEST_CASE(frame_stats_records_per_frame_uploads) {
+    FrameStats fs;
+    fs.beginFrame();
+    fs.endFrame(1.0 / 60.0, 1, 5, 0, 0, 8.0f, 3, 1);
+    CHECK(fs.lastFrame().meshUploads == 3);
+    CHECK(fs.lastFrame().textureUploads == 1);
+    // A steady frame creates nothing — that is the signal a hitch frame breaks.
+    fs.beginFrame();
+    fs.endFrame(1.0 / 60.0, 1, 5, 0, 0, 8.0f);
+    CHECK(fs.lastFrame().meshUploads == 0);
+    CHECK(fs.lastFrame().textureUploads == 0);
+}
+
 TEST_CASE(frame_stats_gpu_defaults_to_zero_when_unsupported) {
     FrameStats fs;
     fs.beginFrame();
@@ -156,7 +169,7 @@ TEST_CASE(frame_stats_csv_capture_round_trips) {
     CHECK(header ==
           "frame,total_ms,update_ms,fixed_ms,render_ms,wait_ms,"
           "host_delta_ms,fixed_steps,draw_calls,instances,triangles,"
-          "acquire_ms,encode_ms,submit_ms,gpu_ms");
+          "acquire_ms,encode_ms,submit_ms,gpu_ms,mesh_uploads,texture_uploads");
     CHECK(row1.substr(0, 2) == "1,");
     CHECK(row1.find(",42,") != std::string::npos);   // draw calls column
     CHECK(row2.substr(0, 2) == "2,");
