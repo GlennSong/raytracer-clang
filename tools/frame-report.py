@@ -164,6 +164,18 @@ def verdict(cols, s, budget_ms):
             f"Measured GPU time: <b>{s['gpu']:.1f} ms/frame</b> against "
             f"{cpu_render:.1f} ms of CPU frame-building &mdash; {head}. "
             f"(Budget is {budget_ms:.1f} ms.)")
+        # A mean above budget while the median frame fits inside it is
+        # arithmetic, not a contradiction — and it changes what to fix.
+        if s["gpu"] > budget_ms and s["median"] <= budget_ms * 1.05:
+            lines.append(
+                f"Note the tension: mean GPU time ({s['gpu']:.1f} ms) is over "
+                f"budget, yet the median frame ({s['median']:.1f} ms) fits "
+                f"inside it — a frame cannot take {s['median']:.1f} ms while "
+                f"its own GPU work takes {s['gpu']:.1f}. Both are true because "
+                f"the <i>mean</i> is inflated by the spikes. Your typical "
+                f"frame is close to budget and the spikes are what break it, "
+                f"so <b>chase the hitches first</b>; chart 4's <i>typical</i> "
+                f"column is the steady-state number to judge by.")
     elif split:
         lines.append(
             "No GPU timing in this capture — the backend does not report it "
@@ -275,13 +287,15 @@ def spike_anatomy(cols, layers):
     def mean(indices, column):
         return sum(cols[column][i] for i in indices) / len(indices)
 
+    every = range(n)
     rows = []
     for key, label, color in layers:
         t, sl = mean(typical, key), mean(slow, key)
         rows.append({"label": label, "color": color, "typical": t,
-                     "slow": sl, "delta": sl - t})
+                     "mean": mean(every, key), "slow": sl, "delta": sl - t})
     rows.append({"label": "GPU (lags 1-2 frames)", "color": "#666",
                  "typical": mean(typical, "gpu_ms"),
+                 "mean": mean(every, "gpu_ms"),
                  "slow": mean(slow, "gpu_ms"),
                  "delta": mean(slow, "gpu_ms") - mean(typical, "gpu_ms")})
     rows.sort(key=lambda r: -abs(r["delta"]))
@@ -311,7 +325,8 @@ def spike_section(a, budget_ms):
         bars.append(
             f"<tr><td style='text-align:left'><span style='color:{r['color']}'>"
             f"&#9632;</span> {html.escape(r['label'])}</td>"
-            f"<td>{r['typical']:.2f}</td><td>{r['slow']:.2f}</td>"
+            f"<td>{r['typical']:.2f}</td><td>{r['mean']:.2f}</td>"
+            f"<td>{r['slow']:.2f}</td>"
             f"<td><b>{r['delta']:+.2f}</b></td>"
             f"<td style='width:40%'><div style='background:{r['color']};"
             f"height:10px;width:{max(0.0, r['slow']) / scale * 100:.1f}%'></div>"
@@ -329,8 +344,14 @@ def spike_section(a, budget_ms):
 <b>{a['slow_total']:.1f} ms</b>) against typical ones ({a['typical_count']}
 frames near the median, avg {a['typical_total']:.1f} ms). Sorted by how much
 each phase grew &mdash; <b>the top row is what a spike actually is</b>.</p>
-<table><tr><th>phase</th><th>typical</th><th>slow 1%</th><th>growth</th>
-<th>slow-frame size</th></tr>{''.join(bars)}</table>
+<table><tr><th>phase</th><th>typical</th><th>mean (all)</th><th>slow 1%</th>
+<th>growth</th><th>slow-frame size</th></tr>{''.join(bars)}</table>
+<p class="note"><b>typical</b> is what a normal frame costs; <b>mean</b> is the
+average the summary table above reports. When they differ, the mean is being
+pulled up by the slow frames &mdash; read <i>typical</i> to judge steady-state
+cost and <i>slow 1%</i> to judge hitching. (A mean GPU time above the budget
+while the median frame is under it means exactly this: the typical frame fits,
+the spikes do not.)</p>
 <p class="note"><b>{html.escape(top['label'])}</b> accounts for
 {share:.0f}% of the extra time in a slow frame ({top['delta']:+.2f} ms of
 {a['slow_total'] - a['typical_total']:+.2f} ms). GPU time lags its frame by
