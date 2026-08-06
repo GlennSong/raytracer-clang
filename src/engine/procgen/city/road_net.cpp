@@ -2,6 +2,7 @@
 
 #include "road_semantics.h"
 #include "../../../log.h"
+#include "../../../profile.h"
 #include "road_lattice.h"
 #include "road_offset.h"   // ribbonOutline + polygonUnion (S5 curb/sidewalk band)        // swept-lattice street mesher (stage 3)
 #include "../../mesh_builder.h"  // MeshBuilder::append
@@ -80,6 +81,19 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
     auto ewalk = [&](int ei) {
         const RoadSpec sp = roadNetEdgeSpec(net, ei);
         return sp.hasSidewalk(-1) || sp.hasSidewalk(1);
+    };
+    // Kerbside PARKING band, resolved here so nav/sim never need the spec table.
+    // Right-hand side (+1): a two-way street is symmetric, so one number serves
+    // both directed links.
+    auto epark = [&](int ei, Real& off, Real& w) {
+        const RoadSpec sp = roadNetEdgeSpec(net, ei);
+        double o = 0, bw = 0;
+        if (roadSpecParkingBand(sp, +1, o, bw)) {
+            off = static_cast<Real>(o);
+            w = static_cast<Real>(bw);
+        } else {
+            off = 0; w = 0;
+        }
     };
     auto eclass = [&](int ei) {
         return (ei < static_cast<int>(net.edgeClasses.size())) ? net.edgeClasses[ei]
@@ -184,6 +198,8 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
             for (std::size_t s = 1; s < poly.size(); ++s)
                 arc[s] = arc[s - 1] + (poly[s] - poly[s - 1]).length();
         }
+        Real parkOff = 0, parkW = 0;
+        epark(ei, parkOff, parkW);
         int prev = a;
         for (std::size_t s = 1; s + 1 < poly.size(); ++s) {     // interior -> new nodes
             int idx = static_cast<int>(g.nodes.size());
@@ -197,12 +213,14 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
             RoadEdge ge{prev, idx, w, kls, lay};
             ge.spec = espec(ei);                 // roads-v2: band model rides the graph
             ge.walkable = ewalk(ei);
+            ge.parkOffset = parkOff; ge.parkWidth = parkW;
             g.edges.push_back(ge);
             prev = idx;
         }
         RoadEdge geLast{prev, b, w, kls, lay};
         geLast.spec = espec(ei);
         geLast.walkable = ewalk(ei);
+        geLast.parkOffset = parkOff; geLast.parkWidth = parkW;
         g.edges.push_back(geLast);               // last -> shared node b
     }
     return g;
@@ -1350,12 +1368,40 @@ RenderMesh buildRoadNetMesh(const RoadNet& netIn) {
     // and per-class structure (freeway kit, ramp decks, layered bridges).
     // The union weld (weldSolid), the SDF grid and the analytic fallback are
     // deleted from this path; the lattice IS the road mesher.
-    return buildRoadNetLattice(g, net.heightAt, nullptr, net.sidewalk, net.curb,
-                               net.crosswalks);
+    RenderMesh rm = buildRoadNetLattice(g, net.heightAt, nullptr, net.sidewalk,
+                                        net.curb, net.crosswalks);
+    // Bounds + NaN audit: one NaN vertex poisons the bounding sphere and the
+    // whole road entity frustum-culls to nothing, silently.
+    std::size_t nans = 0;
+    Vec3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);
+    for (const Vertex& v : rm.vertices) {
+        if (!std::isfinite(v.position.x) || !std::isfinite(v.position.y) ||
+            !std::isfinite(v.position.z)) { ++nans; continue; }
+        lo.x = std::min(lo.x, v.position.x); hi.x = std::max(hi.x, v.position.x);
+        lo.y = std::min(lo.y, v.position.y); hi.y = std::max(hi.y, v.position.y);
+        lo.z = std::min(lo.z, v.position.z); hi.z = std::max(hi.z, v.position.z);
+    }
+    LOG_INFO << "[roadmesh] " << g.edges.size() << " edges -> "
+             << rm.vertices.size() << " verts, " << rm.indices.size() / 3
+             << " tris, nan " << nans << ", y [" << lo.y << ", " << hi.y
+             << "], x [" << lo.x << ", " << hi.x << "], z [" << lo.z << ", "
+             << hi.z << "]";
+    // RT_DUMP_ROADMESH=<path>: write the mesh's XZ vertex cloud so coverage can
+    // be plotted against the road graph (which chains actually meshed?).
+    if (const char* dp = std::getenv("RT_DUMP_ROADMESH")) {
+        if (FILE* f = std::fopen(dp, "w")) {
+            for (std::size_t i = 0; i < rm.vertices.size(); i += 16)
+                std::fprintf(f, "%.1f %.1f\n", rm.vertices[i].position.x,
+                             rm.vertices[i].position.z);
+            std::fclose(f);
+        }
+    }
+    return rm;
 }
 
 std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& netIn, double shoulder,
                                                   double falloff, double maxGrade) {
+    RT_PROFILE_ZONE_NAMED("roadNetConformRegions");
     // 2e: the conform is the ONE consumer that still strips baked corridor
     // edges — corridorAuthor's engineered flatten (at-grade windows only,
     // viaducts fly) owns that carve; carving the baked chains here too would
@@ -1995,6 +2041,7 @@ static RoadGraph pruneAcuteArms(const RoadGraph& in, double hardMin) {
 }
 
 void applyGenerateRecipe(RoadNet& net, const json& g) {
+    RT_PROFILE_ZONE_NAMED("applyGenerateRecipe");
     if (!g.is_object()) return;
     // Pick the generator. "district" (default) subdivides one footprint; "metro"
     // grows organic arterials between hotspots and fills the blocks between them.
@@ -2007,6 +2054,7 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
     // mesh, a stale nodeElev would lift a street onto a phantom deck.
     net.freewayPlans.clear();
     net.cityHubs.clear();
+    net.siteFootprints.clear();
     net.specs.clear();
     net.edgeSpecs.clear();
     net.edgeBaked.clear();
@@ -2046,7 +2094,58 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         mp.ambientPer500   = g.value("ambient_per_500", mp.ambientPer500);
         mp.loopMin         = g.value("loop_min", mp.loopMin);
         mp.loopMax         = g.value("loop_max", mp.loopMax);
+        mp.minBlockEdge    = g.value("min_block_edge", 0.0);
+        // P7 patch-conforming fabric: how city-site faces subdivide.
+        // "" = legacy gridFill; "chords" | "bisect" | "court" | "mix"
+        // (mix = seeded per-face choice weighted by district kind).
+        mp.fabric             = g.value("fabric", std::string());
+        mp.fabricCoreLen      = g.value("fabric_core_len",
+                                        mp.fabric.empty() ? 0.0 : 110.0);
+        mp.fabricConform      = g.value("fabric_conform", 0.15);
+        mp.fabricSoftCollapse = g.value("fabric_soft_collapse", 0.8);
+        mp.fabricJitter       = g.value("fabric_jitter", 0.12);
+        // P8 footprint-first skeleton ("" = legacy colonization). Stage B:
+        // footprints derive + export (planner overlay); P8-C swaps the
+        // skeleton construction itself.
+        mp.skeleton      = g.value("skeleton", std::string());
+        mp.footprintCell = g.value("footprint_cell", 80.0);
+        mp.footprintWobble = g.value("footprint_wobble", 0.12);
+        mp.districtLen   = g.value("district_len", 1500.0);
+        mp.gateSpacing   = g.value("gate_spacing", 1100.0);
+        mp.rimRoad       = g.value("rim_road", true);
+        mp.spineRoad     = g.value("spine", true);
+        mp.skeletonSway  = g.value("skeleton_sway", 0.05);
+        mp.arterialSpan  = g.value("arterial_span", 0.0);
+        mp.stopAfter     = g.value("stop_after", std::string());
+        // "backbone": "arterial" keeps the hub-to-hub spine a street (a
+        // no-freeway metro); the historical default stays Freeway-class.
+        if (g.value("backbone", std::string("freeway")) == std::string("arterial"))
+            mp.backboneClass = RoadClass::Arterial;
+        // Multi-site metros (8km-city plan P2): sites[0] is the city, later
+        // entries are satellite towns; the backbone MST spans them all.
+        if (g.contains("sites") && g["sites"].is_array()) {
+            for (const auto& sj : g["sites"]) {
+                MetroSite ms;
+                if (sj.contains("center")) {
+                    const json& c = sj["center"];
+                    ms.center = Vec2(c.value("x", 0.0), c.value("z", 0.0));
+                }
+                ms.radius    = sj.value("radius", ms.radius);
+                ms.hotspots  = sj.value("hotspots", ms.hotspots);
+                ms.blockSize = sj.value("block_size", 0.0);
+                ms.density   = sj.value("density", 1.0);
+                const std::string bias = sj.value("kind_bias", std::string());
+                ms.kindBias = bias == "financial"   ? 0
+                            : bias == "commercial"  ? 1
+                            : bias == "residential" ? 2
+                            : bias == "oldtown"     ? 3
+                            : bias == "industrial"  ? 4
+                                                    : -1;
+                mp.sites.push_back(ms);
+            }
+        }
         mp.outHubs = &net.cityHubs;   // polycentric zoning reads these (city_lots)
+        mp.outFootprints = &net.siteFootprints;   // planner overlay + hand-edit
         // Terrain-aware layout: when the road is draped on terrain, gate the city
         // on buildability so it hugs buildable land and avoids water / steep
         // mountain instead of marching over them. Opt out with terrain_aware:false.
@@ -2154,6 +2253,66 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
                 if (!drop[e]) kept.edges.push_back(cg.edges[e]); else ++nDrop;
             if (nDrop > 0) cg = std::move(kept);
         }
+        // BIG-BLOCK JUNCTION SPACING (8km-city plan P2): min_road_len is stub
+        // cleanup and must stay under the colonization step (an arterial is a
+        // chain of curve segments — raw edge length is sampling, not junction
+        // spacing). min_block_edge owns intersection spacing: the fabric fill
+        // floors its cells on it (with headroom, metro.cpp) and the span
+        // consolidation fuses/deletes/lengthens junction-to-junction spans
+        // under it. Double pass with a re-planarize between, exactly the
+        // sequence the standalone probe validated.
+        {
+            const double minBlockEdge = g.value("min_block_edge", 0.0);
+            if (minBlockEdge > 0.0) {
+                // Two rounds to a fixpoint: consolidation/merge move junctions
+                // (which can mint fresh folds) and relax shortens arcs (which
+                // can dip a span under the floor) — one pass of each leaves
+                // the other's debris. relaxSharpBends only moves degree-2
+                // curve nodes, junctions stay pinned, so the face subdivision
+                // survives (the reason the district cleanup was skipped
+                // here); 0.5 rad per node ≈ a >=60 m turn radius at the
+                // colonization step. dropParallelEdges first: a parallel pair
+                // is an un-relaxable 180-degree fold. NO FOLDBACKS is the
+                // contract (device: curved roads bending back on themselves
+                // break the swept geometry). Gated on minBlockEdge so shipped
+                // small-metro levels keep their exact geometry.
+                const double minLen = g.value("min_road_len", 10.0);
+                // REGION-AWARE floor (P7 density unlock): inside the primary
+                // city site the span floor drops to just under the fabric
+                // core block edge so dense downtown fabric survives the tail;
+                // the periphery keeps big-block spacing. Flat without a core.
+                const std::string fab = g.value("fabric", std::string());
+                const double coreLen =
+                    g.value("fabric_core_len", fab.empty() ? 0.0 : 110.0);
+                Vec2 coreC(g.contains("center") ? g["center"].value("x", 0.0) : 0.0,
+                           g.contains("center") ? g["center"].value("z", 0.0) : 0.0);
+                double coreR = g.value("radius", 700.0);
+                if (g.contains("sites") && g["sites"].is_array() &&
+                    !g["sites"].empty()) {
+                    const auto& s0 = g["sites"][0];
+                    if (s0.contains("center"))
+                        coreC = Vec2(s0["center"].value("x", 0.0),
+                                     s0["center"].value("z", 0.0));
+                    coreR = s0.value("radius", coreR);
+                }
+                auto spanFloor = [coreLen, coreC, coreR,
+                                  minBlockEdge](const Vec2& q) -> Real {
+                    if (coreLen <= 0) return minBlockEdge;
+                    const bool inCore = std::fabs(q.x - coreC.x) <= coreR &&
+                                        std::fabs(q.y - coreC.y) <= coreR;
+                    return inCore ? std::min(minBlockEdge, coreLen * 0.95)
+                                  : minBlockEdge;
+                };
+                for (int round = 0; round < 2; ++round) {
+                    cg = dropParallelEdges(cg);
+                    cg = dissolveAcuteArms(cg, 0.85, 3);
+                    cg = consolidateJunctionSpans(cg, spanFloor, rules.maxDegree);
+                    cg = capDegree(planarize(cg, 1.0), rules);
+                    cg = mergeShortEdges(cg, minLen, rules.maxDegree);
+                    cg = relaxSharpBends(cg, 0.5, 64);
+                }
+            }
+        }
     } else {
         // Minimum road length (device: "really short roads ... should be merged"):
         // fold crossings that landed close together into one junction, or stretch a
@@ -2186,6 +2345,55 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         net.edgeWidths.push_back(e.width);          // arterials wider than local streets
         net.edgeClasses.push_back(e.klass);         // carry the grown class (P1 unification)
         net.edgeLayers.push_back(e.layer);          // and its grade-separation tier
+    }
+    // --- REAL CROSS-SECTIONS FOR GENERATED STREETS (the parking round) -------
+    // Glenn: "the road doesn't really have any clearance for parking — it's half
+    // on the sidewalk". It was: a generated street had no spec, so roadNetEdgeSpec
+    // fell back to roadSpecFromLegacy, which splits the WHOLE carriageway into
+    // travel lanes. With no Parking band to aim at, the sim parked cars at a
+    // hardcoded inset that hung over the kerb. Now every frontage street/collector
+    // gets an authored section — sidewalk | curb | PARKING | travel | travel |
+    // PARKING | curb | sidewalk — and the bays are placed FROM it.
+    //
+    // WIDTH AGREEMENT (the correctness crux): lots (city_lots' roadSurfaceDist /
+    // pushPolyClearOfRoads), nav lane spacing and the mesher all read
+    // roadNetEdgeWidth / RoadEdge::width. roadSpecStreetParking carves its bands
+    // out of the width it is GIVEN, and we write carriagewayWidth() straight back
+    // into edgeWidths — so the drawn road can never grow wider than the width
+    // buildings keep clear of. A road too narrow to carry parking gets a spec
+    // with no Parking band (and, again, its exact original width).
+    // Arterials/boulevards/freeways/ramps are left specless: today's look.
+    if (kind == "metro" && g.value("street_parking", true)) {
+        const double parkW = g.value("parking_width", 2.5);
+        const double minLane = g.value("min_lane_width", 3.2);
+        net.specs.clear();
+        net.edgeSpecs.assign(net.edges.size(), -1);
+        // One spec per distinct (class, width) — a handful of entries, not one
+        // per edge, so the table stays inspectable and JSON-friendly.
+        std::vector<std::pair<RoadClass, double>> key;
+        for (std::size_t ei = 0; ei < net.edges.size(); ++ei) {
+            const RoadClass k = net.edgeClasses[ei];
+            if (k != RoadClass::Local && k != RoadClass::Collector) continue;
+            if (net.edgeLayers[ei] != 0) continue;   // a deck/bridge has no frontage
+            const double w = net.edgeWidths[ei];
+            int si = -1;
+            for (std::size_t t = 0; t < key.size(); ++t)
+                if (key[t].first == k && std::fabs(key[t].second - w) < 1e-9) {
+                    si = static_cast<int>(t);
+                    break;
+                }
+            if (si < 0) {
+                si = static_cast<int>(key.size());
+                key.push_back({k, w});
+                net.specs.push_back(roadSpecStreetParking(
+                    w, std::max(1, lanesForClass(k, /*perDirection=*/true)),
+                    net.sidewalk, net.curb > 0.0 ? 0.25 : 0.0, parkW, minLane));
+            }
+            net.edgeSpecs[ei] = si;
+            // Re-assert the ONE width every consumer reads. Equal by
+            // construction; written back so it can never silently drift.
+            net.edgeWidths[ei] = net.specs[si].carriagewayWidth();
+        }
     }
 }
 

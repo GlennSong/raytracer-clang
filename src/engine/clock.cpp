@@ -38,8 +38,12 @@ int SimClock::advance(double realDeltaSeconds) {
 
     // Hit the cap with work still pending: drop the backlog rather than carry
     // lag into the next frame forever.
-    if (steps == MAX_STEPS_PER_ADVANCE && accumulator > fixedStepSeconds)
+    backlogDropped = false;
+    if (steps == MAX_STEPS_PER_ADVANCE && accumulator > fixedStepSeconds) {
         accumulator = 0.0;
+        backlogDropped = true;
+        backlogDrops++;
+    }
 
     alpha = accumulator / fixedStepSeconds;
     return steps;

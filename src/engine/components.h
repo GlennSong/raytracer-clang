@@ -379,6 +379,18 @@ struct AuthoredPlace {
     Vec3 buildingColor{0.72f, 0.70f, 0.64f};
 };
 
+// Level-authored day/night cycle policy (device: "the scene loads bright but
+// as soon as the level starts everything gets dark" — DayNightSystem was
+// overwriting the level's sun + ambient every frame with its own mid-morning
+// default, the same silent-override class as the bloom-settings stomp). A
+// level that authors a static sun sets enabled=false; one that wants the
+// cycle seeds its start time/speed. Absent block = cycle runs as before.
+struct DayNightConfig {
+    bool enabled = true;
+    float timeOfDay = -1.0f;   // [0,1) start; <0 = keep the cycle's default
+    float speed = -1.0f;       // cycle speed; <0 = keep default
+};
+
 struct CitySimConfig {
     // Population: explicit counts, or -1 = BY DENSITY (roads-v2.1 4c) — the
     // citysim bridge computes counts from the built nav graph's lane-km /
@@ -391,7 +403,16 @@ struct CitySimConfig {
     uint32_t seed = 1;
     float hoursPerSecond = 0.05f;        // sim-clock hours per real second
     float perceptionReliability = 0.97f; // <1 -> agents occasionally err
+    // Draw radius for PARKED scenery cars (m). City-wide instance groups can't
+    // be partially frustum-culled, so this is what keeps thousands of parked
+    // bodies out of the colour and shadow passes. 0 = draw them all.
+    float sceneryRadius = 450.0f;
+    // Sim tick rate for LOCAL agents (Hz). 0 = every fixed step (historical).
+    // 30 halves the traffic sim's cost; poses extrapolate between ticks.
+    float localHz = 0.0f;
+    bool adaptiveRate = true;   // dip further while the clock is behind
     bool debugWidgets = false;           // start with the agent-state HUD on
+    bool tieredAgents = false;           // P4: opt into V/K traffic tiering
     bool showPlan = false;               // boot with block/lot outlines on
                                          // (plan-only demarcation levels)
     bool wander = false;                 // agents take perpetual random trips

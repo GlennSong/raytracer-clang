@@ -213,3 +213,131 @@ fragment float4 fragmentAtmosphereGlow(AtmosphereOut in [[stage_in]],
     float3 inScatter = a.sunColor.rgb * (rayleigh + mieTerm) * a.sunColor.w;
     return float4(inScatter, 1.0);
 }
+
+// --- Scattering-sky LUT bake (cinematic-sky phase) ---
+// Hillaire-style two-LUT sky for the ground-level scenes (the planet-limb pass
+// above stays for space views). The uv<->parameter mappings live in
+// environment.metal (skyTrans*/skyView* helpers) so bake and sample agree.
+// Dispatched by the renderer only when the sun direction, camera altitude band,
+// or atmosphere parameters change — effectively free per frame.
+
+// Ozone absorption (no scattering): a tent profile centered at 25 km. Gives the
+// deep zenith blue and keeps sunsets from going green.
+constant float3 SKY_OZONE_ABS = float3(0.650e-6, 1.881e-6, 0.085e-6);
+
+static float skyOzoneDensity(float h) {
+    return max(0.0, 1.0 - fabs(h - 25000.0) / 15000.0);
+}
+
+// Transmittance LUT: for each (r, mu) texel, march to the top of the atmosphere
+// accumulating Rayleigh + Mie + ozone optical depth; store exp(-tau).
+kernel void skyTransmittanceLut(
+    texture2d<float, access::write> lut [[texture(0)]],
+    constant SkyLUTUniforms& u [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    uint W = lut.get_width(), H = lut.get_height();
+    if (gid.x >= W || gid.y >= H) return;
+    float2 uv = (float2(gid) + 0.5) / float2(W, H);
+    float Rg = u.planet.x, Rt = u.planet.y;
+    float r, mu;
+    skyTransUvToRMu(uv, Rg, Rt, r, mu);
+
+    float dist = skyDistToTop(r, mu, Rt);
+    const int STEPS = 48;
+    float ds = dist / float(STEPS);
+    float3 od = float3(0.0);
+    for (int i = 0; i < STEPS; i++) {
+        float t = (float(i) + 0.5) * ds;
+        float rp = sqrt(max(r * r + t * t + 2.0 * r * mu * t, 1.0));
+        float h = max(rp - Rg, 0.0);
+        od += (u.rayleigh.xyz * exp(-h / u.rayleigh.w)
+             + float3(u.mie.y) * exp(-h / u.mie.z)
+             + SKY_OZONE_ABS * skyOzoneDensity(h)) * ds;
+    }
+    lut.write(float4(exp(-od), 1.0), gid);
+}
+
+// Sky-view LUT: single-scattered radiance over the whole dome as seen from the
+// camera's altitude, with sun transmittance from the LUT above, an analytic
+// per-step scattering integral (Hillaire), a cheap uniform multiple-scattering
+// boost (keeps the away-from-sun sky and twilight from collapsing to black),
+// and a diffuse ground bounce for below-horizon rays.
+kernel void skyViewLut(
+    texture2d<float, access::write> lut [[texture(0)]],
+    texture2d<float> transLut [[texture(1)]],
+    constant SkyLUTUniforms& u [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    uint W = lut.get_width(), H = lut.get_height();
+    if (gid.x >= W || gid.y >= H) return;
+    float2 uv = (float2(gid) + 0.5) / float2(W, H);
+
+    float Rg = u.planet.x, Rt = u.planet.y;
+    float r = Rg + max(u.sunDirection.w, 0.5);
+
+    float viewZenith, azim;
+    skyViewUvToDir(uv, r, Rg, viewZenith, azim);
+    float sz = sin(viewZenith);
+    float3 dir = float3(sz * cos(azim), cos(viewZenith), sz * sin(azim));
+
+    // Sun in the LUT frame: planet-up = +Y, sun azimuth = 0.
+    float cz = clamp(u.sunDirection.y, -1.0, 1.0);
+    float3 sunDir = float3(sqrt(max(1.0 - cz * cz, 0.0)), cz, 0.0);
+
+    float3 origin = float3(0.0, r, 0.0);
+    float tMax = skyDistToTop(r, dir.y, Rt);
+    bool hitGround = false;
+    {
+        float b = r * dir.y;
+        float c = r * r - Rg * Rg;
+        float disc = b * b - c;
+        if (disc > 0.0) {
+            float tg = -b - sqrt(disc);
+            if (tg > 0.0) { tMax = tg; hitGround = true; }
+        }
+    }
+
+    float nu = dot(dir, sunDir);
+    float phaseR = 3.0 / (16.0 * M_PI_F) * (1.0 + nu * nu);
+    float g = u.mie.w, g2 = g * g;
+    float phaseM = 3.0 / (8.0 * M_PI_F) * ((1.0 - g2) * (1.0 + nu * nu)) /
+                   ((2.0 + g2) * pow(1.0 + g2 - 2.0 * g * nu, 1.5));
+
+    // Uniform multiple-scattering stand-in, faded through twilight into night.
+    float msGain = 0.10 * u.planet.w * saturate(cz * 4.0 + 0.25);
+
+    const int STEPS = 48;
+    float ds = tMax / float(STEPS);
+    float3 T = float3(1.0);
+    float3 L = float3(0.0);
+    float3 pLast = origin;
+    for (int i = 0; i < STEPS; i++) {
+        float t = (float(i) + 0.5) * ds;
+        float3 p = origin + dir * t;
+        pLast = p;
+        float rp = length(p);
+        float h = max(rp - Rg, 0.0);
+        float rhoR = exp(-h / u.rayleigh.w);
+        float rhoM = exp(-h / u.mie.z);
+        float3 extinction = max(u.rayleigh.xyz * rhoR + float3(u.mie.y) * rhoM
+                              + SKY_OZONE_ABS * skyOzoneDensity(h), float3(1e-9));
+        float muS = dot(p / rp, sunDir);
+        float3 sunT = skySampleTransmittance(transLut, rp, muS, Rg, Rt);
+        float3 S = sunT * (u.rayleigh.xyz * rhoR * phaseR + float3(u.mie.x) * rhoM * phaseM)
+                 + (u.rayleigh.xyz * rhoR + float3(u.mie.x) * rhoM) * msGain;
+        float3 stepT = exp(-extinction * ds);
+        L += T * (S - S * stepT) / extinction;   // analytic in-step integral
+        T *= stepT;
+    }
+
+    if (hitGround) {
+        float rp = max(length(pLast), Rg);
+        float muS = dot(pLast / rp, sunDir);
+        float3 sunT = skySampleTransmittance(transLut, rp, muS, Rg, Rt);
+        L += T * u.ground.rgb * (1.0 / M_PI_F) * sunT * max(muS, 0.0);
+    }
+
+    float3 radiance = L * u.sunColor.rgb * u.sunColor.w * u.planet.z;
+    lut.write(float4(radiance, 1.0), gid);
+}

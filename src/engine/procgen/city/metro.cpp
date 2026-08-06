@@ -1,8 +1,15 @@
 #include "metro.h"
 
+#include "arterial_skeleton.h"  // P8 footprint-first constructed skeleton
+#include "road_constraints.h"   // consolidateJunctionSpans (big-block skeleton)
+#include "patch_fabric.h"       // P7 patch-conforming fabric (chords/bisect/court)
+#include "../../../profile.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -288,9 +295,63 @@ int components(const RoadGraph& g, std::vector<int>& comp) {
 
 RoadGraph buildMetro(const MetroParams& p,
                      std::vector<std::vector<Vec2>>* freewayPlans) {
+    RT_PROFILE_ZONE_NAMED("buildMetro");
     Lcg rng{0x9E3779B97F4A7C15ULL ^ (static_cast<std::uint64_t>(p.seed) * 0x100000001B3ULL)};
-    const double DOM = std::max(200.0, p.radius);
-    const int H = std::max(2, p.hotspots);
+
+    // Effective settlement list: explicit sites, or one legacy site from the
+    // flat params. sites[0] is the primary city everywhere below.
+    std::vector<MetroSite> sites = p.sites;
+    if (sites.empty()) {
+        MetroSite s;
+        s.center = p.center; s.radius = p.radius; s.hotspots = p.hotspots;
+        s.blockSize = p.blockSize;
+        sites.push_back(s);
+    }
+    for (MetroSite& s : sites) {
+        s.radius = std::max(200.0, s.radius);
+        s.hotspots = std::max(1, s.hotspots);
+        if (s.blockSize <= 0.0) s.blockSize = p.blockSize;
+    }
+    const double DOM = sites[0].radius;   // primary-city scale (legacy name)
+
+    // --- P8 footprint-first: derive the buildable polygon per site + gates.
+    // Stage B wiring: footprints are computed and EXPORTED (planner overlay,
+    // future hand-edit) while the skeleton below still comes from the legacy
+    // growth; P8-C replaces the growth with bisection of these polygons.
+    std::vector<Footprint> footprints;
+    if (p.skeleton == "footprint") {
+        const HeightSampler flat = [](double, double) { return 0.0; };
+        for (std::size_t si = 0; si < sites.size(); ++si) {
+            const MetroSite& S = sites[si];
+            FootprintParams fpp;
+            // Raster scales with the site: a town's rim needs finer cells or
+            // its contour corners out-tighten what the resample can smooth.
+            fpp.cell = std::clamp(S.radius / 16.0, 40.0, p.footprintCell);
+            fpp.wobble = p.footprintWobble;
+            fpp.seed = p.seed + static_cast<std::uint32_t>(si) * 7919u;
+            // City: kill lobes thinner than most of a district cell. Towns:
+            // enough to stay chunky without erasing a small site outright.
+            fpp.minWidth = si == 0
+                               ? std::min(0.8 * p.districtLen, 1.2 * S.radius)
+                               : std::max(3.0 * fpp.cell, 0.5 * S.radius);
+            Footprint f =
+                p.ground ? buildFootprint(S.center, S.radius, p.ground,
+                                          p.build, fpp)
+                         : buildFootprint(S.center, S.radius, flat,
+                                          BuildabilityConfig{}, fpp);
+            const double rimLen = perimeter(f.polygon);
+            const double spacing =
+                si == 0 ? p.gateSpacing : std::max(450.0, rimLen / 4.0);
+            placeFootprintGates(
+                f, spacing, p.seed + static_cast<std::uint32_t>(si) * 7919u);
+            footprints.push_back(std::move(f));
+        }
+        pairConnectorGates(footprints);
+        if (p.outFootprints) *p.outFootprints = footprints;
+        // Stepper stage 1: the footprint alone (polygons + gates via the
+        // overlay; no roads yet).
+        if (p.stopAfter == "footprint") return RoadGraph{};
+    }
 
     // --- hotspots: one central hub + the rest on a jittered ring; ~1 in 3 radial.
     // Terrain-aware gate: when a ground sampler is supplied, the city may only
@@ -299,14 +360,55 @@ RoadGraph buildMetro(const MetroParams& p,
     auto buildable = [&](double x, double z) {
         return !gated || isBuildable(p.build, p.ground, x, z);
     };
-    auto inDomain = [&](const Vec2& q) {
-        return std::fabs(q.x - p.center.x) <= DOM && std::fabs(q.y - p.center.y) <= DOM;
+    // Inter-site backbone anchor polylines (filled when the backbone is laid);
+    // growth may follow them through open country inside a capsule, so the
+    // connectors get frontage without the countryside sprawling.
+    std::vector<std::vector<Vec2>> backbonePaths;
+    const double kConnectorHalf = 150.0;
+    auto inSite = [&](const Vec2& q) -> int {
+        for (std::size_t s = 0; s < sites.size(); ++s)
+            if (std::fabs(q.x - sites[s].center.x) <= sites[s].radius &&
+                std::fabs(q.y - sites[s].center.y) <= sites[s].radius)
+                return static_cast<int>(s);
+        return -1;
     };
+    auto nearBackbone = [&](const Vec2& q) {
+        for (const auto& path : backbonePaths)
+            for (std::size_t k = 0; k + 1 < path.size(); ++k) {
+                Vec2 a = path[k], d = path[k + 1] - path[k];
+                double L2 = d.x * d.x + d.y * d.y;
+                double t = L2 > 1e-9
+                    ? std::clamp(((q.x - a.x) * d.x + (q.y - a.y) * d.y) / L2, 0.0, 1.0)
+                    : 0.0;
+                if (dist2(q, a + d * t) < kConnectorHalf * kConnectorHalf) return true;
+            }
+        return false;
+    };
+    auto inDomain = [&](const Vec2& q) {
+        return inSite(q) >= 0 || nearBackbone(q);
+    };
+    // Loose AABB over every site (+margin): the backbone anchor nudge can't use
+    // inDomain — mid-connector anchors precede their own capsule.
+    Vec2 gLo = sites[0].center, gHi = sites[0].center;
+    for (const MetroSite& s : sites) {
+        gLo.x = std::min(gLo.x, s.center.x - s.radius); gLo.y = std::min(gLo.y, s.center.y - s.radius);
+        gHi.x = std::max(gHi.x, s.center.x + s.radius); gHi.y = std::max(gHi.y, s.center.y + s.radius);
+    }
+    auto inGlobalBounds = [&](const Vec2& q) {
+        return q.x >= gLo.x - 200 && q.x <= gHi.x + 200 &&
+               q.y >= gLo.y - 200 && q.y <= gHi.y + 200;
+    };
+    // How far any stitch/search may reach: spans the farthest site pair.
+    double globalReach = 2.0 * DOM;
+    for (const MetroSite& a : sites)
+        for (const MetroSite& b : sites)
+            globalReach = std::max(globalReach,
+                                   (a.center - b.center).length() + a.radius + b.radius);
     // Nudge a point to the nearest buildable ground (spiral search); returns the
-    // input unchanged if none is found within the domain.
-    auto snapBuildable = [&](Vec2 s) -> Vec2 {
+    // input unchanged if none is found within the site.
+    auto snapBuildable = [&](Vec2 s, double reach) -> Vec2 {
         if (buildable(s.x, s.y)) return s;
-        for (double r = 25; r <= DOM; r += 25)
+        for (double r = 25; r <= reach; r += 25)
             for (int k = 0; k < 16; ++k) {
                 double t = kTau * k / 16;
                 Vec2 q = s + Vec2(std::cos(t), std::sin(t)) * r;
@@ -315,27 +417,44 @@ RoadGraph buildMetro(const MetroParams& p,
         return s;
     };
 
-    // Hub kinds mirror DistrictTag: the centre is the financial core; ring hubs
-    // draw from a weighted flavor cycle (commerce-heavy near the core is the
-    // architect's job — here each SECONDARY CENTRE gets one dominant flavor).
+    // Hub kinds mirror DistrictTag: the city centre is the financial core; ring
+    // hubs draw from a weighted flavor cycle (commerce-heavy near the core is
+    // the architect's job — here each SECONDARY CENTRE gets one dominant
+    // flavor). Town central hubs take the site's kindBias; town ring hubs stay
+    // residential/commercial (a town has no financial or industrial quarter).
     std::vector<CityHub> hots;
-    hots.push_back({snapBuildable(p.center), /*kind=*/0, /*radial=*/true});
     const int kindCycle[6] = {1, 2, 4, 1, 2, 3};   // commercial, residential,
                                                    // industrial, ..., oldtown
-    // One jittered ring up to 7 hubs; bigger metros add an OUTER ring so the
-    // footprint is covered by centres instead of leaving a bald mid-band.
-    const int ring1 = std::min(H - 1, 6);
-    for (int i = 1; i < H; ++i) {
-        const bool outer = (i - 1) >= ring1;
-        const int k = outer ? (i - 1 - ring1) : (i - 1);
-        const int n = outer ? (H - 1 - ring1) : ring1;
-        double ang = kTau * k / std::max(1, n) + rng.range(-0.35, 0.35) +
-                     (outer ? kTau * 0.5 / std::max(1, n) : 0.0);
-        double r = DOM * (outer ? rng.range(0.60, 0.80) : rng.range(0.34, 0.55));
-        hots.push_back({snapBuildable(p.center + Vec2(std::cos(ang), std::sin(ang)) * r),
-                        kindCycle[(i - 1) % 6], (i % 3) == 0});
-    }
-    if (p.outHubs) *p.outHubs = hots;
+    const int townCycle[2] = {2, 1};               // residential, commercial
+    // Footprint mode derives its hubs FROM the built skeleton (one per
+    // district cell) below — the scatter here is the legacy path only.
+    if (p.skeleton != "footprint")
+        for (std::size_t si = 0; si < sites.size(); ++si) {
+            const MetroSite& S = sites[si];
+            const bool city = (si == 0);
+            const int SH = S.hotspots;
+            int centralKind = city ? 0 : (S.kindBias >= 0 ? S.kindBias : 2);
+            hots.push_back({snapBuildable(S.center, S.radius), centralKind,
+                            /*radial=*/city, static_cast<int>(si)});
+            // One jittered ring up to 7 hubs; bigger metros add an OUTER ring so the
+            // footprint is covered by centres instead of leaving a bald mid-band.
+            const int ring1 = std::min(SH - 1, 6);
+            for (int i = 1; i < SH; ++i) {
+                const bool outer = (i - 1) >= ring1;
+                const int k = outer ? (i - 1 - ring1) : (i - 1);
+                const int n = outer ? (SH - 1 - ring1) : ring1;
+                double ang = kTau * k / std::max(1, n) + rng.range(-0.35, 0.35) +
+                             (outer ? kTau * 0.5 / std::max(1, n) : 0.0);
+                double r = S.radius * (outer ? rng.range(0.60, 0.80) : rng.range(0.34, 0.55));
+                Vec2 pos = snapBuildable(S.center + Vec2(std::cos(ang), std::sin(ang)) * r,
+                                         S.radius);
+                hots.push_back({pos,
+                                city ? kindCycle[(i - 1) % 6] : townCycle[(i - 1) % 2],
+                                city && (i % 3) == 0, static_cast<int>(si)});
+            }
+        }
+    const int H = static_cast<int>(hots.size());
+    if (p.skeleton != "footprint" && p.outHubs) *p.outHubs = hots;
 
     // --- freeway backbone (metropolis tier): connect the hubs with an MST plus
     // a few nearest extras, each link a gently-curved polyline. Laid down FIRST
@@ -343,6 +462,43 @@ RoadGraph buildMetro(const MetroParams& p,
     // lines join the arterial colonization below.
     RoadGraph Ga;
     std::vector<Vec2> seedPts;                      // extra colonization sources
+
+    // --- P8-C footprint skeleton: rim + spine + recursive bisection, per
+    // site, then curved connectors between paired gates. No colonization,
+    // no backbone MST (H == 0 self-skips the block below), no loop closure —
+    // the constructed skeleton already encloses its faces.
+    if (p.skeleton == "footprint") {
+        SkeletonParams sp;
+        sp.districtLen = p.districtLen;
+        sp.rimRoad = p.rimRoad;
+        sp.spineRoad = p.spineRoad;
+        sp.sway = p.skeletonSway;
+        sp.arteryWidth = p.arteryWidth;
+        sp.seed = p.seed;
+        for (std::size_t si = 0; si < footprints.size(); ++si)
+            buildFootprintSkeleton(Ga, footprints[si], static_cast<int>(si),
+                                   sites[si].hotspots, sites[si].kindBias, sp,
+                                   buildable, hots);
+        // Connectors: one curved road per paired gate link (emit each
+        // unordered pair once; endpoints are exact rim gate nodes).
+        for (std::size_t a = 0; a < footprints.size(); ++a)
+            for (const FootprintGate& gateA : footprints[a].gates) {
+                if (gateA.toSite < 0 ||
+                    gateA.toSite <= static_cast<int>(a))
+                    continue;
+                for (const FootprintGate& gateB :
+                     footprints[gateA.toSite].gates)
+                    if (gateB.toSite == static_cast<int>(a)) {
+                        emitConnectorRoad(Ga, gateA.pos, gateB.pos,
+                                          p.arteryWidth, RoadClass::Arterial,
+                                          buildable, p.skeletonSway,
+                                          p.seed ^ 0x9e3779b9u);
+                        break;
+                    }
+            }
+        if (p.outHubs) *p.outHubs = hots;
+    }
+
     if (p.freeways && H >= 2) {
         // MST over hubs (Prim) + each hub's nearest non-tree neighbour when the
         // link is under ~1.2 DOM (adds loops without a hairball).
@@ -398,15 +554,20 @@ RoadGraph buildMetro(const MetroParams& p,
                                       : rng.range(-0.05, 0.05) * L;
                     Vec2 q = A + dir * (t * L) + nrm * sway;
                     if (!buildable(q.x, q.y)) {
+                        // inGlobalBounds, not inDomain: a mid-connector anchor
+                        // precedes its own capsule.
                         bool fixed = false;
                         for (double off = 30; off <= 210 && !fixed; off += 30)
                             for (double s : {+1.0, -1.0}) {
                                 Vec2 c2 = q + nrm * (off * s);
-                                if (inDomain(c2) && buildable(c2.x, c2.y)) { q = c2; fixed = true; break; }
+                                if (inGlobalBounds(c2) && buildable(c2.x, c2.y)) { q = c2; fixed = true; break; }
                             }
                     }
                     pts.push_back(q);
                 }
+                // Inter-site links open a growth capsule through the country.
+                if (hots[l.first].site != hots[l.second].site)
+                    backbonePaths.push_back(pts);
                 auto cr = [&](int i0) {
                     Vec2 p0 = pts[std::max(0, i0 - 1)], p1 = pts[i0],
                          p2 = pts[std::min<int>(pts.size() - 1, i0 + 1)],
@@ -428,7 +589,7 @@ RoadGraph buildMetro(const MetroParams& p,
                         Vec2 q = seg(static_cast<double>(s) / steps);
                         int id = Ga.addNode(q, 8.0);
                         if (prev >= 0 && id != prev)
-                            Ga.addEdge(prev, id, p.freewayWidth, RoadClass::Freeway);
+                            Ga.addEdge(prev, id, p.freewayWidth, p.backboneClass);
                         if (prev >= 0) {
                             along += segLen / steps;
                             if (along >= nextSeed) {
@@ -622,28 +783,46 @@ RoadGraph buildMetro(const MetroParams& p,
 
     // --- attractors: dense along inter-hotspot corridors + ambient wander that
     // scales with the FOOTPRINT AREA (a fixed count starves a 2 km domain).
+    // (Legacy path only: the footprint skeleton is constructed above.)
+    if (p.skeleton != "footprint") {
     std::vector<Vec2> attr;
     for (std::size_t i = 0; i < hots.size(); ++i)
         for (std::size_t j = i + 1; j < hots.size(); ++j) {
+            // Same-site pairs get the dense corridor field. Cross-site pairs
+            // only seed lightly (3x spacing) between CENTRAL hubs — the
+            // straight hub-to-hub line is not the backbone's curved path, so a
+            // dense field there would pull growth off the connector capsule.
+            const bool sameSite = hots[i].site == hots[j].site;
+            const bool centrals = !sameSite &&
+                (i == 0 || hots[i].site != hots[i - 1].site) &&
+                (j == 0 || hots[j].site != hots[j - 1].site);
+            if (!sameSite && !centrals) continue;
+            const double spacing = sameSite ? p.corridorSpacing : p.corridorSpacing * 3.0;
             double L = (hots[j].pos - hots[i].pos).length();
-            int n = static_cast<int>(L / p.corridorSpacing);
+            int n = static_cast<int>(L / spacing);
             for (int k = 0; k < n; ++k) {
                 double t = (k + 0.5) / std::max(1, n);
                 Vec2 m = hots[i].pos * (1.0 - t) + hots[j].pos * t;
-                Vec2 q{m.x + rng.range(-p.corridorSpacing, p.corridorSpacing),
-                       m.y + rng.range(-p.corridorSpacing, p.corridorSpacing)};
+                Vec2 q{m.x + rng.range(-spacing, spacing),
+                       m.y + rng.range(-spacing, spacing)};
                 if (buildable(q.x, q.y)) attr.push_back(q);   // corridor stays on land
             }
         }
-    // Ambient wander: ~90 per (500 m)^2 of domain. Colonization STOPS where no
-    // attractor sits within INFL of the growing trees, so the ambient field is
-    // what carries growth across the whole footprint — sparse ambient strands
-    // whole quarters (device: the southern hubs never grew streets). Tendrils
-    // stay bounded by the loop-closing pass + block subdivision.
-    int ambient = std::max(H * 3, static_cast<int>(p.ambientPer500 * (DOM / 500.0) * (DOM / 500.0)));
-    for (int k = 0; k < ambient; ++k) {
-        Vec2 q{p.center.x + rng.range(-DOM, DOM), p.center.y + rng.range(-DOM, DOM)};
-        if (buildable(q.x, q.y)) attr.push_back(q);
+    // Ambient wander: ~90 per (500 m)^2 of each site, scaled by its density
+    // (towns sparser). Colonization STOPS where no attractor sits within INFL
+    // of the growing trees, so the ambient field is what carries growth across
+    // each footprint — sparse ambient strands whole quarters (device: the
+    // southern hubs never grew streets). Tendrils stay bounded by the
+    // loop-closing pass + block subdivision.
+    for (const MetroSite& S : sites) {
+        int ambient = std::max(S.hotspots * 3,
+                               static_cast<int>(p.ambientPer500 * (S.radius / 500.0) *
+                                                (S.radius / 500.0) * S.density));
+        for (int k = 0; k < ambient; ++k) {
+            Vec2 q{S.center.x + rng.range(-S.radius, S.radius),
+                   S.center.y + rng.range(-S.radius, S.radius)};
+            if (buildable(q.x, q.y)) attr.push_back(q);
+        }
     }
 
     // --- multi-source space colonization: a growth tree seeded at each hotspot
@@ -685,8 +864,7 @@ RoadGraph buildMetro(const MetroParams& p,
             if (!votes[n]) continue;
             Vec2 dir = normalize(pull[n]); if (dir.length() < 1e-6) continue;
             Vec2 np = node[n] + dir * SEG;
-            if (np.x < p.center.x - DOM || np.x > p.center.x + DOM ||
-                np.y < p.center.y - DOM || np.y > p.center.y + DOM) continue;
+            if (!inDomain(np)) continue;   // site squares + connector capsules
             if (!buildable(np.x, np.y)) continue;   // don't grow into water / up the mountain
             int hit = nodeGrid.nearest(node, np, MERGE,
                                        [&](int m) { return src[m] == src[n]; });
@@ -703,6 +881,7 @@ RoadGraph buildMetro(const MetroParams& p,
     std::vector<int> amap(node.size());
     for (std::size_t i = 0; i < node.size(); ++i) amap[i] = Ga.addNode(node[i], 6.0);
     for (const auto& e : aedge) Ga.addEdge(amap[e.first], amap[e.second], p.arteryWidth, RoadClass::Arterial);
+    }   // end legacy attractors + colonization
 
     // --- stitch the separately-grown trees into ONE network (greedy nearest
     // link, grid-accelerated: for every node of the smallest component, query
@@ -722,7 +901,7 @@ RoadGraph buildMetro(const MetroParams& p,
         double bd = 1e30; int ba = -1, bb = -1;
         for (std::size_t i = 0; i < Ga.nodes.size(); ++i) {
             if (c[i] != small) continue;
-            int j = g.nearest(pos, pos[i], 2.0 * DOM, [](int) { return false; });
+            int j = g.nearest(pos, pos[i], globalReach, [](int) { return false; });
             if (j < 0) continue;
             double q = dist2(pos[i], pos[j]);
             if (q < bd) { bd = q; ba = static_cast<int>(i); bb = j; }
@@ -732,13 +911,17 @@ RoadGraph buildMetro(const MetroParams& p,
 
     // --- close a few loops so the arterials enclose blocks (a tree encloses none):
     // link nodes near in space but far along the graph. Optionally a ring road too.
-    {
+    // Footprint mode: the constructed skeleton already encloses its faces —
+    // a loop chord across a district cell is exactly the failure this pass
+    // would create, so it is skipped whole.
+    if (p.skeleton != "footprint") {
         std::vector<std::vector<int>> adj(Ga.nodes.size());
         for (const RoadEdge& e : Ga.edges) { adj[e.a].push_back(e.b); adj[e.b].push_back(e.a); }
+        const int loopStride = 3;
         const double maxLoop = p.loopMax, minLoop = p.loopMin; const int hopBar = 9;
         std::vector<std::pair<int, int>> links;
         for (std::size_t i = 0; i < Ga.nodes.size(); ++i) {
-            if (adj[i].empty() || (i % 3) != 0) continue;
+            if (adj[i].empty() || (i % loopStride) != 0) continue;
             std::vector<int> d(Ga.nodes.size(), -1), q{static_cast<int>(i)}; d[i] = 0; std::size_t qi = 0;
             while (qi < q.size()) { int u = q[qi++]; if (d[u] >= hopBar) continue; for (int v : adj[u]) if (d[v] < 0) { d[v] = d[u] + 1; q.push_back(v); } }
             int best = -1; double bd = maxLoop * maxLoop;
@@ -748,6 +931,30 @@ RoadGraph buildMetro(const MetroParams& p,
                 if (dd < bd && dd > minLoop * minLoop) { bd = dd; best = static_cast<int>(j); }
             }
             if (best >= 0 && static_cast<int>(i) < best) links.push_back({static_cast<int>(i), best});
+        }
+        // Big-block thinning: each accepted loop link turns two chain nodes
+        // into junctions, so attachment spacing IS junction spacing. Reject a
+        // candidate whose endpoints land within minBlockEdge of an already
+        // accepted attachment (deterministic: candidates arrive in node order).
+        if (p.minBlockEdge > 0.0) {
+            const double gap = p.minBlockEdge * 1.35;   // headroom over the span
+                                                        // minimum (see fill floor)
+            std::vector<Vec2> taken;
+            std::vector<std::pair<int, int>> thinned;
+            for (const auto& l : links) {
+                const Vec2 a = Ga.nodes[l.first].pos, b = Ga.nodes[l.second].pos;
+                bool close = false;
+                for (const Vec2& t : taken)
+                    if (dist2(a, t) < gap * gap || dist2(b, t) < gap * gap) {
+                        close = true;
+                        break;
+                    }
+                if (close) continue;
+                thinned.push_back(l);
+                taken.push_back(a);
+                taken.push_back(b);
+            }
+            links = std::move(thinned);
         }
         for (const auto& l : links) Ga.addEdge(l.first, l.second, p.arteryWidth, RoadClass::Arterial);
         if (p.ringRoad) {
@@ -759,7 +966,7 @@ RoadGraph buildMetro(const MetroParams& p,
             int prev = -1, first = -1;
             for (int k = 0; k <= segs; ++k) {
                 double a = kTau * k / segs;
-                int id = Ga.addNode(p.center + Vec2(std::cos(a), std::sin(a)) * rr, 6.0);
+                int id = Ga.addNode(sites[0].center + Vec2(std::cos(a), std::sin(a)) * rr, 6.0);
                 if (prev >= 0) Ga.addEdge(prev, id, rw, rc); else first = id;
                 prev = id;
             }
@@ -768,8 +975,25 @@ RoadGraph buildMetro(const MetroParams& p,
     }
     Ga = planarize(Ga, 1.0);
     // v2: de-wobble + de-stub the skeleton, then re-planarize so any nodes the
-    // smoothing pulled together fuse into clean junctions.
-    Ga = planarize(cleanSkeleton(Ga), 1.0);
+    // smoothing pulled together fuse into clean junctions. Footprint mode
+    // skips the Laplacian: constructed chains carry INTENDED sway (Glenn's
+    // line-to-curve), and there are no stubs by construction.
+    if (p.skeleton != "footprint")
+        Ga = planarize(cleanSkeleton(Ga), 1.0);
+    // Big-block metros consolidate the SKELETON's junction spacing before the
+    // fabric fill: faces are then born at block scale and the fill subdivides
+    // them with the same floor, instead of the post-pipeline cleanup eating
+    // finished blocks to fix skeleton spans. Footprint mode finally CONSUMES
+    // arterial_span here (capped well under the district size so the backstop
+    // can never eat a legitimate cell edge).
+    const double skelFloor =
+        p.skeleton == "footprint"
+            ? std::max(p.minBlockEdge,
+                       std::min(p.arterialSpan > 0.0 ? p.arterialSpan : 650.0,
+                                0.35 * p.districtLen))
+            : p.minBlockEdge;
+    if (skelFloor > 0.0)
+        Ga = planarize(consolidateJunctionSpans(Ga, skelFloor, 4), 1.0);
 
     // ARTERIALS-ONLY (v2 stage 1): Ga now holds the full arterial skeleton +
     // freeway-anchored growth, and NOT a single Local/Collector edge (the fill
@@ -778,10 +1002,125 @@ RoadGraph buildMetro(const MetroParams& p,
     // downstream. freewayPlans (corridor anchors) are populated upstream and
     // untouched by the fill, so the freeway backbone survives.
     if (p.arterialsOnly) return Ga;
+    // Stepper stage 2: the bare arterial skeleton.
+    if (p.skeleton == "footprint" && p.stopAfter == "skeleton") return Ga;
+
+    // --- P8-D tier 1 (footprint mode): COLLECTOR cuts subdivide the district
+    // cells into patch-scale faces before the street fabric runs — Glenn's
+    // step 3 ("enclose city blocks") as a coarser pass of the SAME fabric
+    // machinery. Chords where the face has real corners (the conforming
+    // ladder), bisect otherwise; every cut Collector-class. The street tier
+    // below re-extracts faces, so it sees patch-scale blocks.
+    if (p.skeleton == "footprint") {
+        const double collectorLen =
+            std::clamp(p.districtLen / 3.0, 400.0, 650.0);
+        auto dPosKey = [](const Vec2& v) {
+            return (static_cast<long long>(std::llround(v.x * 4.0)) << 32) ^
+                   (static_cast<long long>(std::llround(v.y * 4.0)) &
+                    0xffffffffLL);
+        };
+        std::unordered_map<long long, int> dDeg;
+        {
+            std::vector<int> gdeg(Ga.nodes.size(), 0);
+            for (const RoadEdge& e : Ga.edges) {
+                if (e.a == e.b) continue;
+                ++gdeg[e.a];
+                ++gdeg[e.b];
+            }
+            for (std::size_t i = 0; i < Ga.nodes.size(); ++i) {
+                const long long k = dPosKey(Ga.nodes[i].pos);
+                auto it = dDeg.find(k);
+                if (it == dDeg.end() || it->second < gdeg[i])
+                    dDeg[k] = gdeg[i];
+            }
+        }
+        int tierSegs = 0;
+        std::vector<Poly2> dfaces = extractBlocks(Ga, 200.0);
+        for (const Poly2& df : dfaces) {
+            if (df.size() < 3) continue;
+            const Vec2 c = centroid(df);
+            if (gated && !buildable(c.x, c.y)) continue;
+            // City districts only: town faces are already patch-sized.
+            int bh = 0;
+            double bd = 1e30;
+            for (std::size_t h = 0; h < hots.size(); ++h) {
+                const double d = dist2(c, hots[h].pos);
+                if (d < bd) {
+                    bd = d;
+                    bh = static_cast<int>(h);
+                }
+            }
+            if (hots.empty() || hots[bh].site != 0) continue;
+            PatchFabricParams cfp;
+            cfp.blockLen = collectorLen;
+            cfp.blockDepth = collectorLen;
+            cfp.streetWidth = p.collectorWidth;
+            cfp.seed = p.seed;
+            cfp.conform = p.fabricConform;
+            cfp.jitter = p.fabricJitter;
+            FabricPatch patch;
+            patch.boundary = df;
+            for (std::size_t v = 0; v < df.size(); ++v) {
+                auto it = dDeg.find(dPosKey(df[v]));
+                if (it != dDeg.end() && it->second >= 3)
+                    patch.corners.push_back(static_cast<int>(v));
+            }
+            const std::vector<FabricSegment> segs =
+                patch.corners.size() >= 2 ? fabricChords(patch, cfp)
+                                          : fabricBisect(df, cfp);
+            for (const FabricSegment& s : segs) {
+                const int a = Ga.addNode(s.a, 0.5);
+                const int b = Ga.addNode(s.b, 0.5);
+                if (a != b)
+                    Ga.addEdge(a, b, p.collectorWidth, RoadClass::Collector);
+            }
+            tierSegs += static_cast<int>(segs.size());
+        }
+        Ga = planarize(Ga, 1.0);
+        std::fprintf(stderr,
+                     "[metro] tier-1 collectors: %d segs across %zu district "
+                     "faces\n",
+                     tierSegs, dfaces.size());
+        // Stepper stage 3: districts enclosed, streets not yet grown.
+        if (p.stopAfter == "collectors") return Ga;
+    }
 
     // --- fill each enclosed block: subdivide (grid) or rings+spokes (radial hub).
-    std::vector<Poly2> faces = extractBlocks(Ga, std::max(200.0, p.blockSize * p.blockSize * 0.08));
+    std::vector<Poly2> faces =
+        extractBlocks(Ga, std::max(200.0, sites[0].blockSize * sites[0].blockSize * 0.08));
     RoadGraph full = Ga;
+    // P7 fabric needs the PATCH view of a face: its corners are the skeleton's
+    // junction vertices. Face vertices are exact Ga node positions, so a
+    // quantized position -> degree map identifies them.
+    auto posKey = [](const Vec2& v) {
+        return (static_cast<long long>(std::llround(v.x * 4.0)) << 32) ^
+               (static_cast<long long>(std::llround(v.y * 4.0)) & 0xffffffffLL);
+    };
+    std::unordered_map<long long, int> skelDeg;
+    if (!p.fabric.empty()) {
+        std::vector<int> gdeg(Ga.nodes.size(), 0);
+        for (const RoadEdge& e : Ga.edges) {
+            if (e.a == e.b) continue;
+            ++gdeg[e.a];
+            ++gdeg[e.b];
+        }
+        for (std::size_t i = 0; i < Ga.nodes.size(); ++i) {
+            long long k = posKey(Ga.nodes[i].pos);
+            auto it = skelDeg.find(k);
+            if (it == skelDeg.end() || it->second < gdeg[i]) skelDeg[k] = gdeg[i];
+        }
+    }
+    // Seeded per-face hash (position-keyed, iteration-order free) for the
+    // "mix" variant choice.
+    auto faceHash01 = [&](const Vec2& q, uint32_t salt) {
+        uint32_t v = p.seed ^ salt;
+        v ^= static_cast<uint32_t>(std::llround(q.x * 4.0)) * 0x9E3779B9u;
+        v ^= static_cast<uint32_t>(std::llround(q.y * 4.0)) * 0x85EBCA6Bu;
+        v ^= v >> 16; v *= 0x7feb352dU;
+        v ^= v >> 15; v *= 0x846ca68bU;
+        v ^= v >> 16;
+        return (v >> 8) * (1.0 / 16777216.0);
+    };
     auto nearestHot = [&](const Vec2& q) {
         int b = 0; double bd = 1e30;
         for (std::size_t h = 0; h < hots.size(); ++h) { double d = dist2(q, hots[h].pos); if (d < bd) { bd = d; b = static_cast<int>(h); } }
@@ -793,17 +1132,20 @@ RoadGraph buildMetro(const MetroParams& p,
     // Per-district grid crook (0 = crisp): OLD TOWN(3) crooked, industry(4)
     // slightly loose, the rest crisp — the visible district character.
     const double kindCrook[5]    = {0.0, 0.05, 0.10, 0.45, 0.18};
-    const double collectorSpan = p.collectorSpan > 0 ? p.collectorSpan : p.blockSize * 3.0;
+    const double collectorSpan =
+        p.collectorSpan > 0 ? p.collectorSpan : sites[0].blockSize * 3.0;
     for (const Poly2& f : faces) {
         if (f.size() < 3) continue;
         Vec2 c = centroid(f);
         if (gated && !buildable(c.x, c.y)) continue;   // don't fill a block that's mostly water/steep
         int h = nearestHot(c);
         const int kind = std::clamp(hots[h].kind, 0, 4);
-        const double mn = p.blockSize * kindBlockMul[kind] * 0.6;
-        const double mx = p.blockSize * kindBlockMul[kind] * 1.18;
+        const double siteBlock = sites[hots[h].site].blockSize;
+        const double mn = siteBlock * kindBlockMul[kind] * 0.6;
+        const double mx = siteBlock * kindBlockMul[kind] * 1.18;
         if (hots[h].radial && pointInPolygon(f, hots[h].pos)) {
-            Vec2 C = hots[h].pos; int spokes = 12; double ringStep = std::max(40.0, p.blockSize * 0.8);
+            Vec2 C = hots[h].pos; int spokes = 12;
+            double ringStep = std::max({40.0, siteBlock * 0.8, p.minBlockEdge});
             double R = 1e30; for (const Vec2& v : f) R = std::min(R, (v - C).length()); R *= 0.96;
             std::vector<std::vector<int>> sn(spokes);
             for (int sd = 0; sd < spokes; ++sd) {
@@ -846,13 +1188,111 @@ RoadGraph buildMetro(const MetroParams& p,
             // district — residential runs longest (the NYC feel), old town
             // stays small and crooked, industrial takes the biggest plates.
             const double kindCellLong[5] = {170.0, 210.0, 260.0, 110.0, 320.0};
-            const double cell =
-                std::min(p.blockSize * kindBlockMul[kind], kindCellCap[kind]);
-            const double cellLong =
-                std::min(p.blockSize * kindBlockMul[kind] * 2.8,
+            double cell =
+                std::min(siteBlock * kindBlockMul[kind], kindCellCap[kind]);
+            double cellLong =
+                std::min(siteBlock * kindBlockMul[kind] * 2.8,
                          kindCellLong[kind]);
-            const double crook = kindCrook[kind];
-            gridFill(f, cell, cellLong, collectorSpan, crook, rng, streets);
+            double crook = kindCrook[kind];
+            // BIG-BLOCK fabric (P2.5, device: "big blocks but no grid
+            // structure"): explicit per-district cell tables at or above the
+            // span minimum, sized so a 500-900 m skeleton face subdivides
+            // into a legible 3-6 cell grid — a blunt floor at ~1.35x the
+            // minimum starved gridFill (1-2 cuts per face reads as no fabric
+            // at all). Grids go CRISP outside old town ("grids, radials");
+            // the small-metro caps above stay untouched for shipped levels.
+            if (p.minBlockEdge > 0.0) {
+                const double bigCell[5]     = {160.0, 170.0, 190.0, 150.0, 240.0};
+                const double bigCellLong[5] = {240.0, 260.0, 320.0, 200.0, 400.0};
+                cell = std::max(bigCell[kind], p.minBlockEdge);
+                cellLong = std::max(bigCellLong[kind], p.minBlockEdge * 1.3);
+                if (kind != 3) crook = (kind == 4 ? 0.1 : 0.0);
+            }
+            // P7 PATCH-CONFORMING FABRIC: city-site faces take the fabric
+            // dispatch instead of gridFill (towns keep the legacy look).
+            // "mix" chooses per face, weighted by the nearest hub's district:
+            // planned cores get chords, grown quarters get bisect,
+            // residential leavens with ring courts. blockLen clamps >= 150
+            // this round (the Phase-0 gate reconciliation — the tail's
+            // consolidate-150 must never fight the fabric it was handed).
+            bool fabricHandled = false;
+            if (!p.fabric.empty() && hots[h].site == 0) {
+                PatchFabricParams fp;
+                // The Phase-0 clamp IS the grain this round: skeleton faces
+                // are born near block scale, so the district cell tables
+                // (160-240) would starve the stationing outright — the
+                // 110-190 m district grading arrives with region-aware
+                // consolidation (plan P7 step 1), not here.
+                fp.blockLen = p.fabricCoreLen > 0
+                                  ? std::max(90.0, p.fabricCoreLen)
+                                  : std::max(150.0, p.minBlockEdge);
+                fp.blockDepth = fp.blockLen;
+                fp.streetWidth = p.streetWidth;
+                fp.seed = p.seed;
+                fp.conform = p.fabricConform;
+                fp.jitter = p.fabricJitter;
+                fp.softCollapseP = p.fabricSoftCollapse;
+                std::string variant = p.fabric;
+                if (variant == "mix") {
+                    if (kind == 0 || kind == 1) variant = "chords";
+                    else if (kind == 3 || kind == 4) variant = "bisect";
+                    else variant = faceHash01(c, 0x50415443u) < 0.6 ? "chords"
+                                                                    : "court";
+                }
+                std::vector<FabricSegment> segs;
+                if (variant == "chords") {
+                    FabricPatch patch;
+                    patch.boundary = f;
+                    for (int vi = 0; vi < static_cast<int>(f.size()); ++vi) {
+                        auto it = skelDeg.find(posKey(f[vi]));
+                        if (it != skelDeg.end() && it->second >= 3)
+                            patch.corners.push_back(vi);
+                    }
+                    segs = fabricChords(patch, fp);
+                } else if (variant == "bisect") {
+                    segs = fabricBisect(f, fp);
+                } else if (variant == "court") {
+                    segs = fabricCourt(f, fp);
+                }
+                double fArea = 0;
+                for (std::size_t vi = 0; vi < f.size(); ++vi) {
+                    const Vec2& u = f[vi];
+                    const Vec2& v = f[(vi + 1) % f.size()];
+                    fArea += u.x * v.y - v.x * u.y;
+                }
+                fArea = std::fabs(fArea) * 0.5;
+                if (std::getenv("RT_FABRIC_DEBUG")) {
+                    int nc = 0;
+                    for (const Vec2& fv : f) {
+                        auto it = skelDeg.find(posKey(fv));
+                        if (it != skelDeg.end() && it->second >= 3) ++nc;
+                    }
+                    std::fprintf(stderr,
+                                 "[fabric] face@(%.0f,%.0f) verts=%zu corners=%d "
+                                 "area=%.0f kind=%d %s -> %zu segs\n",
+                                 c.x, c.y, f.size(), nc, fArea, kind,
+                                 variant.c_str(), segs.size());
+                }
+                if (!segs.empty()) {
+                    for (const FabricSegment& s : segs) {
+                        int a = full.addNode(s.a, 6.0), b = full.addNode(s.b, 6.0);
+                        if (a != b) full.addEdge(a, b, s.width, s.klass);
+                    }
+                    fabricHandled = true;
+                } else if (fArea < fp.blockLen * fp.blockDepth * 1.2) {
+                    fabricHandled = true;   // sub-block: nothing, by design
+                } else if (variant == "court" || variant == "bisect") {
+                    // An empty court/bisect answer is MEANINGFUL: the face
+                    // is one big block (court too tight to ring, bisect at
+                    // stop scale) — exactly the round-12 outcome.
+                    fabricHandled = true;
+                }
+                // else: chords refused a big face (degenerate boundary,
+                // < 2 junction corners, escaped centroid) — the legacy
+                // fill takes it below.
+            }
+            if (!fabricHandled)
+                gridFill(f, cell, cellLong, collectorSpan, crook, rng, streets);
             for (const Cut& s : streets) {
                 int a = full.addNode(s.a, 6.0), b = full.addNode(s.b, 6.0);
                 if (s.collector)

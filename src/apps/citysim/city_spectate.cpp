@@ -1,6 +1,7 @@
 #include "city_spectate.h"
 
 #include "city_render.h"
+#include "../../engine/camera/view_distance.h"
 #include "../../renderer/event.h"   // KeyCode
 
 #include <cmath>
@@ -79,6 +80,7 @@ void CitySpectateSystem::stopSpectating(engine::FrameContext& /*ctx*/) {
 void CitySpectateSystem::update(engine::FrameContext& ctx) {
     const std::vector<Agent>& agents = render_.sim().agents();
     const int count = static_cast<int>(agents.size());
+    follow_.farPlane = engine::worldViewFar(ctx.world);
 
     // K toggles spectate. Turning ON forces the debug widgets on (so the followed
     // agent shows its ring/cone) after stashing the prior state; a city with no

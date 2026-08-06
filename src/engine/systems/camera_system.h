@@ -26,6 +26,19 @@ public:
     void onStop(FrameContext& ctx) override;
 
     FlyCameraController& flyController() { return fly; }
+    // City Planner presets (P7.3): the ORBIT controller is the ortho-capable
+    // plan-view camera (its orthoHeight scales with distance; fly-ortho is a
+    // fixed ~10 m and unusable for plan views), and setActiveController is
+    // the programmatic twin of the Tab toggle so presets can switch between
+    // orbit plan views and the free fly camera. Inline, like everything the
+    // bridge calls.
+    OrbitCameraController& orbitController() { return orbit; }
+    void setActiveController(bool flyOn) {
+        flyActive = flyOn;
+        active = flyOn ? static_cast<CameraController*>(&fly)
+                       : static_cast<CameraController*>(&orbit);
+    }
+    bool flyControllerActive() const { return flyActive; }
     Entity activeSceneCamera() const { return activeCamera; }
 
     // Chase-camera control (ADR-0059): while a target is set, the view follows it

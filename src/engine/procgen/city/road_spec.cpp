@@ -191,6 +191,75 @@ RoadSpec roadSpecFromLegacy(double width, bool oneWay, double sidewalkWidth,
     return s;
 }
 
+RoadSpec roadSpecStreetParking(double carriageway, int lanesPerDir,
+                               double sidewalkWidth, double curbWidth,
+                               double parkWidth, double minLane) {
+    const int n = std::max(1, lanesPerDir);
+    const double park = std::max(0.0, parkWidth);
+    // Too narrow to carry parking AND drivable lanes: NO Parking band, and the
+    // section falls back to the legacy split (same lanes as before) rather than
+    // inventing absurd 5 m ones. Better a road you honestly cannot park on.
+    if (park <= 0.0 || carriageway - 2.0 * park < 2.0 * n * minLane)
+        return roadSpecFromLegacy(carriageway, false, sidewalkWidth,
+                                  /*curbHeight=*/curbWidth > 0.0 ? 1.0 : 0.0);
+    // The lanes absorb whatever is left, so carriagewayWidth() == carriageway to
+    // the last millimetre (the width-agreement contract; see the header).
+    const double laneW = (carriageway - 2.0 * park) / (2.0 * n);
+    RoadSpec s;
+    s.name = "";                       // custom: synthesized, not a preset
+    const bool curbs = curbWidth > 0.0 && sidewalkWidth > 0.0;
+    if (curbs) {
+        s.bands.push_back(band(BandKind::Sidewalk, static_cast<float>(sidewalkWidth),
+                               0, BandSurface::Concrete));
+        s.bands.push_back(band(BandKind::Curb, static_cast<float>(curbWidth), 0,
+                               BandSurface::Concrete));
+    }
+    s.bands.push_back(band(BandKind::Parking, static_cast<float>(park), -1));
+    for (int i = 0; i < n; ++i)
+        s.bands.push_back(band(BandKind::Travel, static_cast<float>(laneW), -1));
+    for (int i = 0; i < n; ++i)
+        s.bands.push_back(band(BandKind::Travel, static_cast<float>(laneW), +1));
+    s.bands.push_back(band(BandKind::Parking, static_cast<float>(park), +1));
+    if (curbs) {
+        s.bands.push_back(band(BandKind::Curb, static_cast<float>(curbWidth), 0,
+                               BandSurface::Concrete));
+        s.bands.push_back(band(BandKind::Sidewalk, static_cast<float>(sidewalkWidth),
+                               0, BandSurface::Concrete));
+    }
+    return s;
+}
+
+bool roadSpecParkingBand(const RoadSpec& spec, int side, double& centerOffset,
+                         double& width) {
+    // The carriageway's own span: the mesher sweeps the road centred on THAT,
+    // not on the full section (a one-sided sidewalk would otherwise bias every
+    // offset). c0 = left edge of the first drivable band, c1 = right edge of the
+    // last one.
+    double x = 0, c0 = -1, c1 = -1;
+    for (const RoadBand& b : spec.bands) {
+        if (drivable(b.kind)) {
+            if (c0 < 0) c0 = x;
+            c1 = x + b.width;
+        }
+        x += b.width;
+    }
+    if (c0 < 0) return false;
+    const double mid = (c0 + c1) * 0.5;
+    const int n = static_cast<int>(spec.bands.size());
+    for (int k = 0; k < n; ++k) {
+        const int i = side < 0 ? k : n - 1 - k;     // scan inward from that end
+        if (spec.bands[i].kind != BandKind::Parking) continue;
+        double x0 = 0, x1 = 0;
+        spec.bandSpan(i, x0, x1);
+        const double c = (x0 + x1) * 0.5;
+        if (side < 0 ? c > mid : c < mid) break;    // crossed to the other side
+        centerOffset = c - mid;
+        width = x1 - x0;
+        return true;
+    }
+    return false;
+}
+
 RoadSpec roadSpecFromJson(const nlohmann::json& j) {
     if (j.is_string()) return roadSpecPreset(j.get<std::string>());
     RoadSpec s;

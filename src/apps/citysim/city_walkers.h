@@ -61,7 +61,7 @@ private:
     // a handful of pre-built limb-swing poses the walkers hop between by phase.
     engine::MeshHandle poseMesh(engine::AssetManager& assets, int outfit, int pose);
     std::unordered_map<int, engine::MeshHandle> poseMeshes_;
-    bool spawned_ = false;
+    std::vector<char> haveWalker_;   // agentId -> has a body (reconcile scratch)
 };
 
 }  // namespace citysim

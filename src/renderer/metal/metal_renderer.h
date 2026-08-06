@@ -31,6 +31,8 @@ public:
     void removeTexture(TextureHandle handle) override;
     void setEnvironmentMap(TextureHandle equirect) override;
     RenderStats getRenderStats() const override;
+    void setInstanceCapacities(uint32_t instances, uint32_t shadow,
+                               uint32_t foliage) override;
 
     void beginFrame() override;
     void setCamera(const CameraState& camera) override;

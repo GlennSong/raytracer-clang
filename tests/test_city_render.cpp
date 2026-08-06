@@ -877,3 +877,180 @@ TEST_CASE(road_markings_stay_inside_the_carriageway) {
     // (a bar is 1 quad = 4 verts; an arrow is >= 3 quads).
     CHECK(paint.vertices.size() >= 4 * 4 * 4);
 }
+
+// --- P8.2d: sim rate below the fixed step -----------------------------------
+// Traffic is not physics, so it may tick slower than 60 Hz — but the DRAWN
+// world must not: a body that freezes for a tick then jumps both judders and
+// (because Jolt reads a kinematic body's velocity from its position delta)
+// shoves the player. These pin the three properties that make the rate ladder
+// safe: the historical default is untouched, a slower rate still covers the
+// same ground, and poses keep moving between ticks.
+
+namespace {
+// Sum of |position| deltas across every car instance, over `steps` calls.
+Real driveDistance(World& world, CityRenderSystem& city, int steps, Real dt) {
+    auto snapshot = [&]() {
+        std::vector<Vec3> out;
+        for (Entity e : city.carGroups())
+            if (InstanceGroup* g = world.get<InstanceGroup>(e))
+                for (const Mat4& m : g->transforms)
+                    out.push_back(Vec3(m.m[0][3], m.m[1][3], m.m[2][3]));
+        return out;
+    };
+    std::vector<Vec3> prev = snapshot();
+    Real total = 0;
+    for (int i = 0; i < steps; ++i) {
+        city.step(world, dt);
+        std::vector<Vec3> now = snapshot();
+        for (std::size_t k = 0; k < now.size() && k < prev.size(); ++k)
+            total += (now[k] - prev[k]).length();
+        prev = std::move(now);
+    }
+    return total;
+}
+}  // namespace
+
+TEST_CASE(city_sim_rate_default_is_every_step) {
+    // localHz 0 must reproduce the historical tick exactly — every existing
+    // level and gate depends on it.
+    World a, b;
+    a.add<RoadNet>(a.create(), squareLoop());
+    b.add<RoadNet>(b.create(), squareLoop());
+    CityRenderParams p;
+    p.cars = 6; p.pedestrians = 0; p.seed = 5;
+    p.wander = true;              // drive continuously (no schedule window)
+    CityRenderParams q = p;
+    q.localHz = 0.0;              // explicit default
+    CityRenderSystem ca(p), cb(q);
+    CHECK(ca.build(a, nullptr));
+    CHECK(cb.build(b, nullptr));
+    for (int i = 0; i < 120; ++i) { ca.step(a, 1.0 / 60.0); cb.step(b, 1.0 / 60.0); }
+    const auto& A = ca.sim().agents();
+    const auto& B = cb.sim().agents();
+    CHECK(A.size() == B.size());
+    bool identical = true;
+    for (std::size_t i = 0; i < A.size() && i < B.size(); ++i)
+        identical = identical && A[i].pos.x == B[i].pos.x && A[i].pos.y == B[i].pos.y;
+    CHECK(identical);
+}
+
+TEST_CASE(city_sim_rate_30hz_covers_the_same_ground) {
+    // Half the ticks, twice the dt: the fleet must travel a comparable
+    // distance (coarser integration, not slower traffic).
+    World a, b;
+    a.add<RoadNet>(a.create(), squareLoop());
+    b.add<RoadNet>(b.create(), squareLoop());
+    CityRenderParams p;
+    p.cars = 8; p.pedestrians = 0; p.seed = 5;
+    p.wander = true;              // drive continuously (no schedule window)
+    CityRenderParams q = p;
+    q.localHz = 30.0;
+    q.adaptiveRate = false;       // pin the rate: this asserts 30 Hz, not load
+    CityRenderSystem ca(p), cb(q);
+    CHECK(ca.build(a, nullptr));
+    CHECK(cb.build(b, nullptr));
+    const Real full = driveDistance(a, ca, 600, 1.0 / 60.0);
+    const Real half = driveDistance(b, cb, 600, 1.0 / 60.0);
+    std::printf("        [sim rate] 60Hz travel %.1f m, 30Hz travel %.1f m\n",
+                full, half);
+    CHECK(full > 1.0);            // the fixture actually drives
+    CHECK(half > full * 0.75);    // and 30 Hz covers the same ground
+    CHECK(half < full * 1.25);
+}
+
+TEST_CASE(city_sim_rate_poses_keep_moving_between_ticks) {
+    // THE judder/shove gate: on a fixed step where the sim does NOT tick, the
+    // baked poses must still advance (extrapolated along heading), or cars
+    // freeze for a step and then teleport.
+    World world;
+    world.add<RoadNet>(world.create(), squareLoop());
+    CityRenderParams p;
+    p.cars = 8; p.pedestrians = 0; p.seed = 5;
+    p.wander = true;              // drive continuously (no schedule window)
+    p.localHz = 30.0;
+    p.adaptiveRate = false;
+    CityRenderSystem city(p);
+    CHECK(city.build(world, nullptr));
+    for (int i = 0; i < 240; ++i) city.step(world, 1.0 / 60.0);   // get rolling
+
+    auto poses = [&]() {
+        std::vector<Vec3> out;
+        for (Entity e : city.carGroups())
+            if (InstanceGroup* g = world.get<InstanceGroup>(e))
+                for (const Mat4& m : g->transforms)
+                    out.push_back(Vec3(m.m[0][3], m.m[1][3], m.m[2][3]));
+        return out;
+    };
+    // Two consecutive steps: one of them ticks the sim, the other must still
+    // move the drawn cars. Neither may be a frozen frame.
+    int frozen = 0;
+    std::vector<Vec3> prev = poses();
+    for (int i = 0; i < 8; ++i) {
+        city.step(world, 1.0 / 60.0);
+        std::vector<Vec3> now = poses();
+        Real moved = 0;
+        for (std::size_t k = 0; k < now.size() && k < prev.size(); ++k)
+            moved = std::max(moved, (now[k] - prev[k]).length());
+        if (moved < 1e-6) ++frozen;
+        prev = std::move(now);
+    }
+    std::printf("        [sim rate] frozen steps out of 8: %d\n", frozen);
+    CHECK(frozen == 0);
+}
+
+TEST_CASE(city_sim_far_tier_refreshes_on_a_clock_not_a_tick_count) {
+    // The bug this pins: the far tier's refresh was budgeted in TICKS ("60
+    // buckets, one per tick"), which only means ~1 Hz while 60 ticks take a
+    // second. Halve the sim rate and distant agents refreshed half as often,
+    // went stale near the bubble edge, and the tier pass over-promoted them.
+    // Same wall time, two rates: the far population must be comparable.
+    auto activeCount = [](CityRenderSystem& c) {
+        int k = 0;
+        for (const Agent& a : c.sim().agents())
+            if (a.tier != Agent::Tier::V) ++k;
+        return k;
+    };
+    auto run = [&](Real hz, int& active, int& far) {
+        World world;
+        // A loop big enough that traffic actually LEAVES the bubble (promote
+        // 500 m / demote 620 m) — on a 40 m fixture everything stays K and the
+        // gate would prove nothing.
+        RoadNet big;
+        big.nodes = { Vec2(0, 0), Vec2(1600, 0), Vec2(1600, 1600), Vec2(0, 1600) };
+        big.edges = { {0, 1}, {1, 2}, {2, 3}, {3, 0} };
+        big.width = 10.0;
+        big.sidewalk = 2.5;
+        world.add<RoadNet>(world.create(), big);
+        CityRenderParams p;
+        p.cars = 60; p.pedestrians = 0; p.seed = 5;
+        p.wander = true;
+        p.tieredAgents = true;
+        p.localHz = hz;
+        p.adaptiveRate = false;
+        CityRenderSystem city(p);
+        CHECK(city.build(world, nullptr));
+        // A player entity IS the bubble centre: the bridge feeds its position
+        // to the sim every step (no player => everything stays K).
+        Entity player = world.create();
+        world.add<Transform>(player);
+        world.add<CharacterController>(player);
+        for (int i = 0; i < 600; ++i) city.step(world, 1.0 / 60.0);   // 10 s
+        active = activeCount(city);
+        far = static_cast<int>(city.sim().agents().size()) - active;
+    };
+    int a60 = 0, f60 = 0, a30 = 0, f30 = 0;
+    run(0.0, a60, f60);     // every step
+    run(30.0, a30, f30);    // half rate
+    std::printf("        [far tier] 60Hz active %d/far %d | 30Hz active %d/far %d\n",
+                a60, f60, a30, f30);
+    // The tier split must not depend on the sim's rate.
+    //
+    // HONEST SCOPE: this pins the INVARIANT, not the piedmont regression. On
+    // this fixture the old tick-count budget passes too — 60 agents on a 6.4 km
+    // loop put only a handful near the 500 m boundary, where two seconds of
+    // staleness moves a car ~26 m. Piedmont's K/P inflation (950 -> 2650) needs
+    // a dense population against that boundary to reproduce, so the mechanism
+    // there may be more than sample staleness. Enable localHz on a real level
+    // only behind a measurement.
+    CHECK(a30 <= a60 + 6);
+}

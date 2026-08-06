@@ -31,10 +31,16 @@ void DebugOverlaySystem::loadSettings(Settings& s, Renderer& r) {
     sh.cascadeCount = static_cast<int>(s.getDouble("shadow.cascades", sh.cascadeCount));
     sh.splitLambda  = static_cast<float>(s.getDouble("shadow.splitLambda", sh.splitLambda));
 
-    auto& bloom = r.bloomParams;
-    bloom.threshold = static_cast<float>(s.getDouble("bloom.threshold", bloom.threshold));
-    bloom.knee      = static_cast<float>(s.getDouble("bloom.knee", bloom.knee));
-    bloom.intensity = static_cast<float>(s.getDouble("bloom.intensity", bloom.intensity));
+    // NOTE: scene lighting (exposure, ambient, sun) is owned by the LEVEL file, not
+    // settings.json — the cascade is code defaults -> level JSON -> runtime (sliders
+    // / day-night). Persisting it here silently overrode the level on load, which
+    // caused stale exposure/ambient to fight the level. Sliders still edit it live.
+
+    // Bloom is LEVEL-AUTHORED now (environment.bloom): the same silent-override
+    // rule as lighting above. Sliders still edit it live, nothing persists.
+    // (The visionOS render panel is unaffected — it keeps its own on-device pref
+    // store in vision_spike.mm, seeded from the live renderer params, and never
+    // touches settings.json.)
 
     r.bloomEnabled = s.getBool("bloom.enabled", r.bloomEnabled);
     r.ssaoEnabled  = s.getBool("ssao.enabled", r.ssaoEnabled);
@@ -82,10 +88,10 @@ void DebugOverlaySystem::saveSettings(Settings& s, Renderer& r) {
     s.setDouble("shadow.cascades", r.shadowParams.cascadeCount);
     s.setDouble("shadow.splitLambda", r.shadowParams.splitLambda);
 
-    auto& bloom = r.bloomParams;
-    s.setDouble("bloom.threshold", bloom.threshold);
-    s.setDouble("bloom.knee", bloom.knee);
-    s.setDouble("bloom.intensity", bloom.intensity);
+    // Scene lighting is level-owned (see loadSettings) — not persisted here, so a
+    // session's slider tweaks don't silently override the level on next launch.
+    // Bloom rides the same rule.
+
 
     s.setBool("bloom.enabled", r.bloomEnabled);
     s.setBool("ssao.enabled", r.ssaoEnabled);
@@ -154,6 +160,11 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
     ImGui::Text("Draw calls: %u (instanced: %u)", rs.drawCalls, rs.instancedDrawCalls);
     ImGui::Text("Instances: %u  Triangles: %.2fM", rs.totalInstances,
                 rs.trianglesDrawn / 1e6);
+    if (rs.instanceOverflow || rs.shadowOverflow || rs.foliageOverflow)
+        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
+                           "OVERFLOW inst %u  shadow %u  foliage %u",
+                           rs.instanceOverflow, rs.shadowOverflow,
+                           rs.foliageOverflow);
 
     ImGui::Separator();
     const char* viewNames[] = {"Normal", "AO Only", "SSR Only", "Depth", "Normals",

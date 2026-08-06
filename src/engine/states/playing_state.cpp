@@ -1,6 +1,12 @@
 #include "playing_state.h"
 #include "../systems/debug_overlay_system.h"
 #include "../../renderer/window.h"
+#include "../../log.h"
+
+#include <chrono>
+#include <cstdlib>
+#include <typeinfo>
+#include <vector>
 
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>
@@ -31,11 +37,55 @@ void PlayingState::onEvent(const Event& event, FrameContext& ctx) {
 }
 
 void PlayingState::update(FrameContext& ctx) {
-    for (auto& system : systems) system->update(ctx);
+    static const bool dumpStats = std::getenv("RT_DUMP_STATS") != nullptr;
+    if (!dumpStats) {
+        for (auto& system : systems) system->update(ctx);
+        return;
+    }
+    static std::vector<double> ms;
+    static int calls = 0;
+    ms.resize(systems.size(), 0.0);
+    for (std::size_t i = 0; i < systems.size(); ++i) {
+        const auto t0 = std::chrono::steady_clock::now();
+        systems[i]->update(ctx);
+        ms[i] += std::chrono::duration<double, std::milli>(
+                     std::chrono::steady_clock::now() - t0).count();
+    }
+    if (++calls % 300 == 0) {
+        for (std::size_t i = 0; i < systems.size(); ++i)
+            if (ms[i] / calls > 0.05)
+                LOG_INFO << "[stats] update " << (ms[i] / calls) << " ms  "
+                         << typeid(*systems[i]).name();
+        std::fill(ms.begin(), ms.end(), 0.0);
+        calls = 0;
+    }
 }
 
 void PlayingState::fixedUpdate(FrameContext& ctx) {
-    for (auto& system : systems) system->fixedUpdate(ctx);
+    // RT_DUMP_STATS: per-system fixed-step bill (typeid names), printed every
+    // ~300 steps — the instrument that ends bottleneck guessing.
+    static const bool dumpStats = std::getenv("RT_DUMP_STATS") != nullptr;
+    if (!dumpStats) {
+        for (auto& system : systems) system->fixedUpdate(ctx);
+        return;
+    }
+    static std::vector<double> ms;
+    static int calls = 0;
+    ms.resize(systems.size(), 0.0);
+    for (std::size_t i = 0; i < systems.size(); ++i) {
+        const auto t0 = std::chrono::steady_clock::now();
+        systems[i]->fixedUpdate(ctx);
+        ms[i] += std::chrono::duration<double, std::milli>(
+                     std::chrono::steady_clock::now() - t0).count();
+    }
+    if (++calls % 300 == 0) {
+        for (std::size_t i = 0; i < systems.size(); ++i)
+            if (ms[i] / calls > 0.05)
+                LOG_INFO << "[stats] fixed " << (ms[i] / calls) << " ms  "
+                         << typeid(*systems[i]).name();
+        std::fill(ms.begin(), ms.end(), 0.0);
+        calls = 0;
+    }
 }
 
 void PlayingState::render(FrameContext& ctx) {

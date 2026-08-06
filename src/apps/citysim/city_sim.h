@@ -4,6 +4,7 @@
 #include "../../engine/ai/agent_memory.h"
 #include "../../engine/ai/nav_graph.h"
 #include "../../engine/ai/pathfind.h"
+#include "agent_grid.h"
 #include "agent_id.h"
 #include "city_goals.h"
 #include "places.h"
@@ -43,6 +44,18 @@ struct Agent {
         Count
     };
 
+    // Simulation tier (P4 three-tier traffic). K (Kinematic) is the full agent
+    // as it always ran: sensing, FSM, signals, render bake, kinematic proxy.
+    // V (Virtual) is a persistent FAR agent: full identity + exact route state
+    // (link, lane, param, speed) but no rendering, no physics proxy, no
+    // sensing/FSM and no live signal queries — it traverses its real A* route
+    // on a coarse ~1 Hz tick at a modelled speed (class speed shaped by fixed
+    // average junction delays), so promotion finds it where it should be.
+    // P (the physical Jolt tier) stays what it was: possessTier's overlay on K.
+    // Everything is K until a level opts in (CitySim::tieringEnabled) AND a
+    // player position is fed (setTierCenter) — headless sims are unchanged.
+    enum class Tier : uint8_t { V, K };
+
     // Stable identity (Living City, ADR-0066 Phase 1). Assigned once at build in
     // agent order and never reused for a different agent this run, so relationship
     // tables / per-agent memory / job assignment key on THIS, not the array slot.
@@ -59,6 +72,12 @@ struct Agent {
 
     Mode mode = Mode::Driver;
     State state = State::Resting;
+    Tier tier = Tier::K;
+    // V-tier bookkeeping: sim-seconds at this agent's last coarse tick (its
+    // next tick advances by the difference — no wall clock), and the remaining
+    // modelled junction dwell it is currently "waiting out" mid-route.
+    Real vLastTick = 0;
+    Real vHold = 0;
     bool playerControlled = false;   // brain = host input; the sim won't auto-drive it
     bool released = false;           // ejected by the player (ADR-0062): the sim stops
                                      // driving this agent's ghost so it can't fight the
@@ -237,6 +256,9 @@ public:
         engine::Vec2 pos, heading;   // bay centre + facing (along the link)
         int link = -1;               // directed link whose right curb it hugs
         engine::Real station = 0;    // metres from the link's `from` node
+        // The Parking BAND this bay sits in (NavLink::parkWidth). The painted
+        // stall is drawn to it, so the markings can never lap onto the kerb.
+        engine::Real width = 0;
         int occupant = -1;
     };
     const std::vector<ParkingBay>& parkingBays() const { return bays_; }
@@ -246,6 +268,63 @@ public:
     engine::Real laneSpacingFor(int li) const;
     const engine::NavGraph* graph() const { return nav_; }
     SignalController& signals() { return signals_; }
+
+    // --- three-tier traffic (P4) --------------------------------------------
+    // Public knobs with the approved defaults; a level/test opts in by setting
+    // tieringEnabled and feeding the player position each fixed step. (The
+    // level_loader JSON pass-through is a one-line hookup owned by the level
+    // pipeline; the sim only exposes the fields.) Without BOTH the switch and
+    // a centre, every agent stays K and behaviour is bit-identical to before.
+    bool tieringEnabled = false;
+    Real carPromoteRadius = 500.0;   // V->K inside this range of the player...
+    Real carDemoteRadius = 620.0;    // ...K->V beyond this (hysteresis)
+    Real pedPromoteRadius = 280.0;
+    Real pedDemoteRadius = 350.0;
+    // How often a FAR agent refreshes, in SIM SECONDS. The bucket count is
+    // derived from this and the tick length (capped by vTickDivisor), so the
+    // far tier keeps its ~1 Hz refresh whether the sim runs at 60 Hz or 15.
+    Real vRefreshSeconds = 1.0;
+    int vTickDivisor = 60;           // V bucket count: uid % divisor, one bucket
+                                     // per fixed frame (~1 Hz per agent at 60 Hz)
+
+    // The tier bubble's centre (the player), fed by the host each fixed step.
+    // No centre = no player = everything stays K (headless sims/tests).
+    // TICK CADENCE (P8.2e). The sim owns how often it advances — the caller
+    // only hands it elapsed time. `seconds` 0 = every call (historical, and
+    // what every existing level/test relies on); 1/30 = tick at 30 Hz,
+    // advancing by everything banked since the last tick. This used to live in
+    // the render bridge, which meant a system's cadence was decided one layer
+    // above the state it governs; the V tier's own bucket phase then quietly
+    // disagreed with it (see docs/piedmont-p8-report.md).
+    void setTickPeriod(Real seconds) { tickPeriodSeconds_ = seconds; }
+    Real tickPeriod() const { return tickPeriodSeconds_; }
+    // Sim seconds banked since the last tick — what a renderer extrapolates
+    // poses by so traffic stays smooth at rates below the frame rate.
+    Real secondsSinceTick() const { return sinceTick_; }
+    // The sim's time of day. Two runs can only be compared at the SAME sim
+    // hour: the workload (who is commuting, who is parked, and therefore who
+    // sits in the player's bubble) swings enormously across the day, and a
+    // slower run reaches a given hour later in wall time.
+    Real clockHours() const { return clockHours_; }
+
+    void setTierCenter(engine::Vec2 c) { tierCenter_ = c; haveTierCenter_ = true; }
+    void clearTierCenter() { haveTierCenter_ = false; }
+    // The bubble centre the render bridge also distance-culls scenery against.
+    engine::Vec2 tierCenter() const { return tierCenter_; }
+    bool hasTierCenter() const { return haveTierCenter_; }
+
+    // Lifetime tier-transition counters (test gates: conservation, engagement).
+    long tierPromotions() const { return promotions_; }
+    long tierDemotions() const { return demotions_; }
+
+    // Agent indices whose grid cell falls within `radius` of `pos`: a SUPERSET
+    // by cell coverage, sorted ascending — callers apply exact predicates (the
+    // physics bridge's possess ring uses this instead of a full agent scan).
+    // Positions are exact for V agents and at most a step's drift stale for K.
+    void queryAgentsNear(engine::Vec2 pos, Real radius,
+                         std::vector<int>& out) const {
+        grid_.query(pos, radius, out);
+    }
 
     // Mark an agent as host-driven (the player): the sim won't run its AI brain.
     void setPlayerControlled(int agentIndex, bool on) {
@@ -386,6 +465,20 @@ private:
     void labelDriverState(Agent& a, Real seenAhead, Real gap, int legCount) const;
     void computeGaps();
     void computeCarWedge();   // fills carAheadGap_/carAheadSpeed_ (S7 senses)
+    // --- three-tier traffic (P4) ---
+    // Promote/demote against the bubble (fixed update, agent-index order:
+    // demotions swept first, then promotions from a grid query — deterministic).
+    void tierPass(Real hoursPerSecond);
+    // One coarse V tick for agent `i`: goal layer at accumulated hours, then
+    // vAdvance over the accumulated seconds; re-hashes the agent in the grid.
+    // Promotion runs this as its catch-up so the K handoff pose is exact.
+    // The actual advance. step() is the cadence gate in front of it.
+    void stepTick(Real dt, Real hoursPerSecond);
+    void tickV(int i, Real hoursPerSecond);
+    // Advance a V agent along its REAL route at the modelled speed: link class
+    // speed shaped by fixed average junction delays (vHold). No sensing, no
+    // FSM, no live signal state — hasSignal() is static topology, not a query.
+    void vAdvance(Agent& a, Real dt);
 
 public:
     // Car-contact events since build — the roads-v2 S7 soak gate reads these
@@ -408,6 +501,12 @@ private:
     void refreshPose(Agent& a);
     void steer(Agent& a, Real dt);   // rate-limited heading (bounded turn radius)
     engine::Vec2 idlePose(int node, Agent::Mode mode, uint32_t brain) const;
+    // Push a parked/idle car pose OUT of every at-grade carriageway. A knot
+    // of short links can put one link's verge INSIDE a neighbour's lanes; a
+    // car resting there dams the junction until its driver departs (three
+    // drivers pinned for minutes behind one verge-parked car — surfaced by
+    // the density round's street-fronting places).
+    engine::Vec2 pushPoseClearOfLanes(engine::Vec2 p, engine::Real margin) const;
     uint32_t rnd();
     Real rndUnit();
 
@@ -431,10 +530,22 @@ private:
     int fastCrashEvents_ = 0;          // contacts with both bodies > 2 m/s
     std::vector<SensedGhost> sensed_;   // per-step snapshot of bodies cars/peds may SEE
                                         // (peds + players + external obstacles)
+    std::vector<int> sensedIndex_;      // per agent: its slot in sensed_, -1 = absent
+                                        // (lets grid candidates map back to ghosts)
     std::vector<engine::Vec2> externalObstacles_;   // host-injected (the live player)
     std::vector<engine::Vec2> staticObstacles_;     // host-injected, static (signal poles)
     std::vector<std::pair<engine::Vec2, Real>> junctions_;   // centre + box radius
     std::vector<Real> nodeBoxRadius_;   // per node: widest incident half-width
+    // P4.1 spatial index. grid_ holds every agent (K re-hashed each step —
+    // effectively free, place() early-outs on an unchanged cell; V only on its
+    // coarse tick, when its position actually moves). junctionGrid_ is a static
+    // bake of junctions_ so nearJunction() stops scanning the whole list.
+    AgentGrid grid_;
+    AgentGrid junctionGrid_;
+    Real maxJunctionRadius_ = 0;
+    mutable std::vector<int> queryScratch_;   // shared candidate buffer (queries
+                                              // never nest across a live iteration)
+    std::vector<int> tierScratch_;            // tierPass promotion candidates
     SignalController signals_;
     // Per-archetype goal tables (ADR-0064): what each agent's day IS. Built-in
     // defaults mirror the historical schedule/wander control flow bit-exactly;
@@ -447,6 +558,23 @@ private:
     Real simSeconds_ = 0;   // seconds since build — the time base memory decays on
     Real thinkPeriod_ = 0.35;   // reactive re-decide cadence (s), staggered per agent
     bool wander_ = false;       // lab mode: perpetual random trips, no schedule
+    // Three-tier traffic state (P4): the fed bubble centre, the fixed-frame
+    // counter the V buckets key off (frameIndex_ % vTickDivisor — no wall
+    // clock), and the lifetime transition counters the tests gate on.
+    // Cadence state (see setTickPeriod): time banked toward the next tick, and
+    // time elapsed since the last one.
+    Real tickPeriodSeconds_ = 0.0;
+    Real tickAccum_ = 0.0;
+    Real sinceTick_ = 0.0;
+    engine::Vec2 tierCenter_;
+    // Indices of the agents that need this step's full passes (everything but
+    // the far/V tier), resolved once per step in step(). Ascending, so the
+    // passes keep their original iteration order.
+    std::vector<int> active_;
+    bool haveTierCenter_ = false;
+    uint64_t frameIndex_ = 0;
+    long promotions_ = 0;
+    long demotions_ = 0;
     uint32_t rng_ = 1;
     // Hands out agent UIDs (ADR-0066): reset at build, then one per agent in
     // order. Separate from rng_ so identity allocation never perturbs the sim's

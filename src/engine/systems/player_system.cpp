@@ -229,6 +229,7 @@ void PlayerSystem::update(FrameContext& ctx) {
         shoulder.update(zoom, ctx.frameDelta);
         shoulder.orbitPitch =
             std::clamp(camera.pitch, kShoulderPitchMin, kShoulderPitchMax);
+        shoulder.farPlane = camera.farPlane;  // fly carries the world-extent value
         ctx.view.camera = shoulder.cameraState(aspect);
     } else {
         ctx.view.camera = camera.cameraState(aspect);

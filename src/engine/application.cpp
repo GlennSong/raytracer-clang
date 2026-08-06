@@ -1,5 +1,6 @@
 #include "application.h"
 #include "states/debug_overlay_state.h"
+#include "../log.h"
 #include "../profile.h"
 #include <thread>
 #include <chrono>
@@ -100,6 +101,27 @@ void Application::renderFrame() {
     rendererPtr->beginFrame();
     stateStack.forEachRenderable([&](AppState& state) { state.render(ctx); });
     rendererPtr->endFrame();
+    // RT_DUMP_STATS=1: periodic frame-cost report on stderr, so a headless run
+    // answers "what is eating the frame" without the ImGui HUD (perf triage,
+    // 8km-city plan P6).
+    static const bool dumpStats = std::getenv("RT_DUMP_STATS") != nullptr;
+    if (dumpStats) {
+        static int frames = 0;
+        static double accum = 0.0;
+        accum += frameDelta;
+        if (++frames % 120 == 0) {
+            const RenderStats rs = rendererPtr->getRenderStats();
+            LOG_INFO << "[stats] " << (frames / accum) << " fps ("
+                     << (accum / frames * 1000.0) << " ms) draws "
+                     << rs.drawCalls << " (inst " << rs.instancedDrawCalls
+                     << ") instances " << rs.totalInstances << " tris "
+                     << rs.trianglesDrawn / 1000000.0 << "M overflow i"
+                     << rs.instanceOverflow << "/s" << rs.shadowOverflow
+                     << "/f" << rs.foliageOverflow;
+            frames = 0;
+            accum = 0.0;
+        }
+    }
 }
 
 void Application::begin() {
@@ -205,11 +227,36 @@ void Application::runFrame() {
 
     int steps = clock.advance(frameDelta);
     interpolation = clock.interpolationAlpha();
+    if (clock.droppedBacklog())
+        LOG_WARN << "SimClock dropped backlog (stall #" << clock.droppedBacklogCount()
+                 << "): fixed steps capped at " << steps
+                 << " this frame — motion will visibly jump";
     {
         RT_PROFILE_ZONE_NAMED("fixedUpdate");
         FrameContext ctx = makeContext();
-        for (int i = 0; i < steps; i++)
+        // RT_DUMP_STATS phase timing: how much of the frame is the fixed
+        // step, and how many steps ran (perf triage without Tracy).
+        static const bool dumpStats = std::getenv("RT_DUMP_STATS") != nullptr;
+        const auto t0 = std::chrono::steady_clock::now();
+        ctx.fixedStepCount = steps;
+        for (int i = 0; i < steps; i++) {
+            ctx.fixedStepIndex = i;
             stateStack.forEachActive([&](AppState& state) { state.fixedUpdate(ctx); });
+        }
+        if (dumpStats && steps > 0) {
+            static int frames = 0;
+            static double ms = 0.0;
+            static int stepSum = 0;
+            ms += std::chrono::duration<double, std::milli>(
+                      std::chrono::steady_clock::now() - t0).count();
+            stepSum += steps;
+            if (++frames % 120 == 0) {
+                LOG_INFO << "[stats] fixedUpdate " << (ms / frames)
+                         << " ms/frame over " << (static_cast<double>(stepSum) / frames)
+                         << " steps/frame (" << (ms / stepSum) << " ms/step)";
+                frames = 0; ms = 0.0; stepSum = 0;
+            }
+        }
     }
 
     // Deliver everything enqueued during update/fixedUpdate before the frame

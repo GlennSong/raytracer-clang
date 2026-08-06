@@ -42,6 +42,10 @@ void VehicleSystem::onStart(FrameContext& ctx) {
 
     ctx.actions.bindButton("enter_vehicle", KeyCode::G);
     ctx.actions.bindButton("enter_vehicle", GamepadButton::DpadUp);
+    // The conventional get-in/out face button (Y on Xbox, Triangle on PS) —
+    // D-pad Up alone was undiscoverable (Glenn asked for "a button to get in
+    // and out" twice while one existed).
+    ctx.actions.bindButton("enter_vehicle", GamepadButton::Y);
 
     // Recover a rolled car (keep heading, level it, lift it).
     ctx.actions.bindButton("vehicle_flip", KeyCode::T);

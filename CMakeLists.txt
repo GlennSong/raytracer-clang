@@ -86,6 +86,9 @@ add_library(engine_core STATIC
     src/engine/procgen/city/polygon.cpp
     src/engine/procgen/city/shape_grammar.cpp
     src/engine/procgen/city/parcel.cpp
+    src/engine/procgen/city/patch_fabric.cpp
+    src/engine/procgen/city/city_footprint.cpp
+    src/engine/procgen/city/arterial_skeleton.cpp
     src/engine/procgen/city/road_network.cpp
     src/engine/procgen/city/street_kit.cpp
     src/engine/procgen/city/street_furniture.cpp
@@ -123,6 +126,7 @@ add_library(engine_core STATIC
     src/engine/model_importer.cpp
     src/engine/camera_store.cpp
     src/engine/editor_bridge.cpp
+    src/engine/city_planner.cpp
     src/engine/properties.cpp
     src/engine/component_registry.cpp
     src/engine/property_json.cpp
@@ -163,6 +167,21 @@ add_library(engine_core STATIC
 target_include_directories(engine_core SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party)
 target_compile_options(engine_core PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(engine_core PUBLIC Threads::Threads)
+
+# GPU erosion bake (metropolis-scale-plan P0.5), Apple only: a self-contained
+# Metal compute host for the droplet/thermal sim — its own device + queue, no
+# renderer dependency — so every engine_core host (viewer, editor, headless
+# tests) gets the fast bake. Falls back to the CPU sim in erosion.cpp when no
+# Metal device or kernel source is present (erosion_gpu.h stubs it off-Apple).
+if(APPLE)
+    enable_language(OBJCXX)
+    target_sources(engine_core PRIVATE src/engine/procgen/erosion_gpu.mm)
+    set_source_files_properties(src/engine/procgen/erosion_gpu.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    target_link_libraries(engine_core PUBLIC
+        "-framework Metal"
+        "-framework Foundation")
+endif()
 
 # Dear ImGui (ADR-0011): core + ImGuizmo compile inside engine_core (the
 # panels/gizmos live there); platform backends (GLFW/Metal) attach per host.
@@ -467,6 +486,12 @@ add_executable(run_tests
     tests/test_terrain_field.cpp
     tests/test_winding.cpp
     tests/test_road_constraints.cpp
+    tests/test_metro_sites.cpp
+    tests/test_fabric.cpp
+    tests/test_city_footprint.cpp
+    tests/test_sim_rate_ab.cpp
+    tests/test_footprint_skeleton.cpp
+    tests/test_city_stages.cpp
     tests/test_road_semantics.cpp
     tests/test_road_layers.cpp
     tests/test_road_offset.cpp
@@ -476,6 +501,7 @@ add_executable(run_tests
     tests/test_road_weld.cpp
     tests/test_junction_surface.cpp
     tests/test_drive_freeway.cpp
+    tests/test_piedmont_drive.cpp
     tests/test_mesh_quality.cpp
     tests/test_mesh_lattice.cpp
     tests/test_road_lattice.cpp
@@ -494,6 +520,7 @@ add_executable(run_tests
     tests/test_curb_return.cpp
     tests/test_animation_path.cpp
     tests/test_terrain_lod.cpp
+    tests/test_terrain_async.cpp
     tests/test_nav_graph.cpp
     tests/test_pathfind.cpp
     tests/test_perception.cpp
@@ -524,14 +551,19 @@ add_executable(run_tests
     tests/test_relationships.cpp
     tests/test_ped_graph.cpp
     tests/test_city_generated.cpp
+    tests/test_tier_v.cpp
     tests/test_city_lots.cpp
     tests/test_alignment.cpp
     tests/test_surface_field.cpp
     tests/test_architect.cpp
+    tests/test_erosion_gpu.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(run_tests PRIVATE citysim engine_core)
+# The GPU erosion test chdirs here to reach shaders/metal/erosion.metal (the
+# kernels are compiled from disk, CWD-relative, like the renderer's shaders).
+target_compile_definitions(run_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 if(RT_ENABLE_SCRIPTING)
     target_sources(run_tests PRIVATE
         tests/test_script_vm.cpp
@@ -1022,6 +1054,7 @@ if(Qt6_FOUND)
     add_executable(editor_app
         src/editor_app/editor_main.cpp
         src/editor_app/property_inspector.cpp
+        src/editor_app/city_planner_panel.cpp
         src/game/arena_state.cpp
     )
     target_compile_options(editor_app PRIVATE -Wall -Wextra -Wpedantic)
@@ -1094,10 +1127,13 @@ if(Qt6_FOUND)
     endif()
 
     # Headless widget-interaction tests for the generated inspector (the
-    # path that once crashed via a dangling visitor capture). Offscreen Qt.
+    # path that once crashed via a dangling visitor capture) and the City
+    # Planner bridge + panel (P7.3). Offscreen Qt.
     add_executable(editor_qt_tests
         tests/test_property_inspector_qt.cpp
+        tests/test_city_planner_qt.cpp
         src/editor_app/property_inspector.cpp
+        src/editor_app/city_planner_panel.cpp
         src/renderer/null_renderer.cpp   # satisfies Renderer::create; never renders
     )
     target_compile_options(editor_qt_tests PRIVATE -Wall -Wextra)

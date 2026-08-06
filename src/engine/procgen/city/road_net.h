@@ -92,6 +92,11 @@ struct RoadNet {
     // anchor polylines the loader builds as real corridors (alignment,
     // profile, interchanges). Never street edges.
     std::vector<std::vector<Vec2>> freewayPlans;
+    // P8 footprint-first: the per-site footprint polygons (+ rim gates) the
+    // skeleton was derived from. Empty unless the recipe sets
+    // "skeleton": "footprint". The planner's Footprint overlay draws these;
+    // the P8-G hand-edit surface writes back through them.
+    std::vector<Footprint> siteFootprints;
 };
 
 // Build the road surface for `net` (its graph fed to buildRoadMesh with the look).

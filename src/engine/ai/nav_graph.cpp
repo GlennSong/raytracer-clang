@@ -255,6 +255,8 @@ NavGraph buildNavGraph(const RoadGraph& roadsIn, const NavBuildParams& params) {
         l.lanes = std::max(1, lanesForClass(e.klass, /*perDirection=*/true));
         l.walkable = e.walkable;
         l.access = e.access;   // semantic layer (#17)
+        l.parkOffset = e.parkOffset;   // kerbside Parking band (roads-v2 spec)
+        l.parkWidth = e.parkWidth;
         l.layer = e.layer;
         l.elevA = elev[a];
         l.elevB = elev[b];

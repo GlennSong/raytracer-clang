@@ -1,5 +1,6 @@
 #include "level_loader.h"
 
+#include "../profile.h"
 #include "script_assets.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/script_modules.h"
@@ -1422,6 +1423,24 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
     TerrainLodConfig cfg;
     cfg.params = p;
     cfg.seed = t.value("seed", 0u);
+    {
+        // Height sanity sweep of the FINAL params (flattens folded) — the same
+        // field every CDLOD node samples. Catches a garbage flatten plane or a
+        // broken eroded base before it renders as mystery geometry.
+        Noise sn(cfg.seed);
+        const double half = t.contains("cdlod") && t["cdlod"].is_object()
+                                ? t["cdlod"].value("worldHalf", 1024.0)
+                                : 1024.0;
+        double mn = 1e30, mx = -1e30;
+        for (int j = -4; j <= 4; ++j)
+            for (int i = -4; i <= 4; ++i) {
+                double h = terrainHeight(p, sn, half * i / 4.0, half * j / 4.0);
+                mn = std::min(mn, h);
+                mx = std::max(mx, h);
+            }
+        LOG_INFO << "[terrain] final field 9x9 sweep: h [" << mn << ", " << mx
+                 << "] over half-extent " << half;
+    }
     const json& c = t["cdlod"];
     if (c.is_object()) {
         cfg.worldHalf = c.value("worldHalf", cfg.worldHalf);
@@ -2093,6 +2112,7 @@ static GrownLots growCityLots(const std::vector<engine::RoadNet>& nets,
                               const json& cs, const std::string& levelDir,
                               const HeightField& ground,
                               const engine::RoadGraph* freewayROW = nullptr) {
+    RT_PROFILE_ZONE_NAMED("growCityLots");
     GrownLots g;
     // Edge blocks (device feedback): the town RIM has no enclosed faces —
     // synthesize rectangular blocks on boundary roads' open sides so the
@@ -2109,12 +2129,38 @@ static GrownLots growCityLots(const std::vector<engine::RoadNet>& nets,
     lp.innerRadius = cs.value("downtownRadius", 55.0);
     lp.midRadius = cs.value("midtownRadius", 135.0);
     lp.plinth = cs.value("plinth", lp.plinth);   // base height above the pad
+    // Level-authored parcel grain ("parcel", 8km-city P3): piedmont-scale
+    // metros lay 150 m+ blocks, so the level can ask for bigger lots. Six
+    // knobs only; absent = the compiled-in district tuning, untouched
+    // (city_lots rescales its per-district grain from these).
+    if (cs.contains("parcel") && cs["parcel"].is_object()) {
+        const auto& pj = cs["parcel"];
+        lp.parcelTargetArea = pj.value("targetArea", lp.parcelTargetArea);
+        lp.parcelMinArea = pj.value("minArea", lp.parcelMinArea);
+        lp.parcelMinEdge = pj.value("minEdge", lp.parcelMinEdge);
+        lp.parcelFrontWidth = pj.value("frontWidth", lp.parcelFrontWidth);
+        lp.parcelLotDepth = pj.value("lotDepth", lp.parcelLotDepth);
+        lp.parcelCourtMinArea = pj.value("courtMinArea", lp.parcelCourtMinArea);
+    }
     // Polycentric zoning: a metro recipe leaves its hubs (with district kinds)
     // on the net — forward them so lots zone by nearest hub, not one centre.
     for (const engine::RoadNet& n : nets)
         for (const engine::CityHub& h : n.cityHubs)
             lp.hubs.push_back({h.pos, h.kind});
     lp.hubRadius = cs.value("hubRadius", 220.0);
+    // CORENESS ANCHOR: height/landmark grading measures distance from
+    // LotParams::center — which no loader ever set (it defaulted to the
+    // world origin, so coreness was ZERO for every lot in any city not at
+    // (0,0): glass towers capped at 16 floors instead of 42, no skyline).
+    // The financial hub (kind 0) is downtown; first hub as fallback.
+    for (const engine::RoadNet& n : nets)
+        for (const engine::CityHub& h : n.cityHubs) {
+            if (lp.center.x == 0 && lp.center.y == 0) lp.center = h.pos;
+            if (h.kind == 0) {
+                lp.center = h.pos;
+                break;
+            }
+        }
     // TERRAIN: buildings grow from their graded pad plane, park/green pads
     // drape per-vertex (city-on-terrain; roads conform separately via
     // net.heightAt + the flatten ramps the loader carves).
@@ -2804,10 +2850,14 @@ bool LevelLoader::load(const std::string& path,
     // generateLodNodeMesh), so its numbers are the game's numbers.
     if (std::getenv("RT_POKE_REPORT") && root.contains("terrain")) {
         TerrainParams tpFull;   // the FINAL carved params (with index)
-        world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) { tpFull = c.params; });
+        int pNumLods = 6, pGridRes = 32;
+        world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) {
+            tpFull = c.params;
+            pNumLods = c.numLods;
+            pGridRes = c.gridRes;
+        });
         Noise pnNoise(root["terrain"].value("seed", 0u));
         float pWorldHalf = root["terrain"]["cdlod"].value("worldHalf", 1024.0);
-        const int pNumLods = 6, pGridRes = 32;
         for (int lvl = 0; lvl < 3; ++lvl) {
             const double nodeSize = pWorldHalf * 2.0 / std::pow(2.0, pNumLods - 1 - lvl);
             const double step = nodeSize / pGridRes;
@@ -3073,6 +3123,10 @@ bool LevelLoader::load(const std::string& path,
         CitySimConfig cfg;
         cfg.cars = cs.value("cars", cfg.cars);
         cfg.pedestrians = cs.value("pedestrians", cfg.pedestrians);
+        // How far parked scenery cars still draw (0 = never cull).
+        cfg.sceneryRadius = cs.value("sceneryRadius", cfg.sceneryRadius);
+        cfg.localHz = cs.value("localHz", cfg.localHz);
+        cfg.adaptiveRate = cs.value("adaptiveRate", cfg.adaptiveRate);
         cfg.carsPerLaneKm = cs.value("carsPerLaneKm", cfg.carsPerLaneKm);
         cfg.pedsPerKm = cs.value("pedsPerKm", cfg.pedsPerKm);
         cfg.seed = cs.value("seed", cfg.seed);
@@ -3080,6 +3134,7 @@ bool LevelLoader::load(const std::string& path,
         cfg.perceptionReliability =
             cs.value("perceptionReliability", cfg.perceptionReliability);
         cfg.debugWidgets = cs.value("debugWidgets", cfg.debugWidgets);
+        cfg.tieredAgents = cs.value("tiered", cfg.tieredAgents);
         cfg.showPlan = cs.value("showPlan", false);
         cfg.wander = cs.value("wander", cfg.wander);
         // Scripted goal tables (ADR-0064): `"agents": "agents.lua"` names a
@@ -3608,6 +3663,19 @@ bool LevelLoader::load(const std::string& path,
         world.add<CitySimConfig>(world.create(), cfg);
     }
 
+    // Day/night policy (device: "the scene loads bright but everything gets
+    // dark when the level starts" — the cycle was overwriting the authored
+    // sun + ambient every frame). "dayNight": {"enabled": false} pins the
+    // level's static lighting; {"timeOfDay": .., "speed": ..} seeds the cycle.
+    if (root.contains("dayNight") && root["dayNight"].is_object()) {
+        const auto& dn = root["dayNight"];
+        DayNightConfig dc;
+        dc.enabled = dn.value("enabled", dc.enabled);
+        dc.timeOfDay = dn.value("timeOfDay", dc.timeOfDay);
+        dc.speed = dn.value("speed", dc.speed);
+        world.add<DayNightConfig>(world.create(), dc);
+    }
+
     // STREET FURNITURE at BUILD time (device: "place the stop lights when we
     // build the city instead of during the simulation ... the simulation
     // should use it but it shouldn't be responsible for where they are").
@@ -3747,11 +3815,66 @@ bool LevelLoader::load(const std::string& path,
     if (root.contains("lighting"))
         loadLighting(root["lighting"], view);
 
+    // Per-level instance-buffer capacities (8km-city plan P0.2). Values below
+    // the backend defaults are clamped up by the renderer.
+    if (root.contains("render") && root["render"].is_object()) {
+        const auto& r = root["render"];
+        renderer.setInstanceCapacities(r.value("maxInstances", 0u),
+                                       r.value("maxShadowInstances", 0u),
+                                       r.value("maxFoliageInstances", 0u));
+    }
+
     // Environment map (equirectangular .hdr) — bound before probes so the bake
     // captures it for IBL (ADR-0016). Lives under the "environment" object as
     // "hdr"; path is relative to the level file.
+    //
+    // Cinematic-sky opt-ins (reset first — the RenderView/renderer are reused
+    // across loads, so a previous level's sky must not leak):
+    //   "environment.sky"    {"model": "scattering", turbidity?, groundAlbedo?,
+    //                         brightness?, mieG?, multiScatter?, aerial?,
+    //                         sunAngularRadius?} -> LUT scattering sky + aerial
+    //                         perspective (replaces exp fog while active).
+    //   "environment.clouds" {coverage?, bottom?, top?, density?, noiseScale?,
+    //                         wind?, steps?, lightSteps?, phaseG?, far?,
+    //                         ambient?, detailStrength?, enabled?} -> volumetric
+    //                         cloud slab (retires the 2D FBM overlay while
+    //                         active).
+    view.lighting.skyScattering = SkyScatteringParams{};
+    view.lighting.volumetricClouds = VolumetricCloudParams{};
     if (root.contains("environment") && root["environment"].is_object()) {
         const auto& env = root["environment"];
+        if (env.contains("sky") && env["sky"].is_object()) {
+            const auto& s = env["sky"];
+            if (s.value("model", std::string()) == "scattering") {
+                auto& ss = view.lighting.skyScattering;
+                ss.enabled = true;
+                ss.turbidity        = s.value("turbidity", ss.turbidity);
+                ss.brightness       = s.value("brightness", ss.brightness);
+                ss.mieG             = s.value("mieG", ss.mieG);
+                ss.multiScatter     = s.value("multiScatter", ss.multiScatter);
+                ss.aerialDensity    = s.value("aerial", ss.aerialDensity);
+                ss.sunAngularRadius = s.value("sunAngularRadius", ss.sunAngularRadius);
+                if (s.contains("groundAlbedo"))
+                    ss.groundAlbedo = parseVec3(s["groundAlbedo"], ss.groundAlbedo);
+            }
+        }
+        if (env.contains("clouds") && env["clouds"].is_object()) {
+            const auto& c = env["clouds"];
+            auto& vc = view.lighting.volumetricClouds;
+            vc.enabled     = c.value("enabled", true);
+            vc.coverage    = c.value("coverage", vc.coverage);
+            vc.bottom      = c.value("bottom", vc.bottom);
+            vc.top         = c.value("top", vc.top);
+            vc.density     = c.value("density", vc.density);
+            vc.noiseScale  = c.value("noiseScale", vc.noiseScale);
+            vc.wind        = c.value("wind", vc.wind);
+            vc.steps       = c.value("steps", vc.steps);
+            vc.lightSteps  = c.value("lightSteps", vc.lightSteps);
+            vc.phaseG      = c.value("phaseG", vc.phaseG);
+            vc.farDistance = c.value("far", vc.farDistance);
+            vc.ambient     = c.value("ambient", vc.ambient);
+            vc.detailStrength = c.value("detailStrength", vc.detailStrength);
+        }
         // Aerial-perspective fog (matches the offline tracer's Scene::fog). Lives
         // under "environment" alongside the sky; pushed to the renderer via the
         // lighting block (setLights). density 0 = off.
@@ -3762,6 +3885,19 @@ bool LevelLoader::load(const std::string& path,
             view.lighting.fog.heightFalloff = f.value("heightFalloff", 0.0f);
             view.lighting.fog.color =
                 parseVec3(f.value("color", json()), view.lighting.fog.color);
+        }
+        // Bloom, level-authored (device: "the bloom is really big"): the
+        // scattering sky pushed far more radiance over the default threshold
+        // than the analytic sky ever did, and until now the only dials were
+        // the debug HUD's. Absent keys keep the renderer defaults.
+        if (env.contains("bloom") && env["bloom"].is_object()) {
+            const auto& b = env["bloom"];
+            renderer.bloomEnabled = b.value("enabled", renderer.bloomEnabled);
+            renderer.bloomParams.threshold =
+                b.value("threshold", renderer.bloomParams.threshold);
+            renderer.bloomParams.knee = b.value("knee", renderer.bloomParams.knee);
+            renderer.bloomParams.intensity =
+                b.value("intensity", renderer.bloomParams.intensity);
         }
         // Reset FIRST: only a successful HDR load below may raise this. It is
         // the flag DayNightSystem uses to yield to a baked HDR sun — leaving a

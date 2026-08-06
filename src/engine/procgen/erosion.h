@@ -47,7 +47,14 @@ struct ErosionParams {
     uint32_t seed = 0;
 };
 
+// Runs the GPU (Metal) port when available — same model, seconds instead of
+// minutes — else the reference CPU sim. RT_CPU_EROSION=1 pins the CPU path.
 void erode(Heightmap& hm, const ErosionParams& params);
+
+// Which backend erode() will use: "gpu-erosion-v1" (Metal compute) or "cpu".
+// Folded into content-hash cache keys so CPU- and GPU-baked terrain caches
+// never cross-contaminate, and a future kernel revision invalidates cleanly.
+const char* erosionBackendTag();
 
 // Build a terrain mesh from a (possibly eroded) heightmap: smooth normals,
 // planar UVs, and the same height/slope/altitude vertex coloring as

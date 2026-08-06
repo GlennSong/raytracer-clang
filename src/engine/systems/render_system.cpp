@@ -2,6 +2,8 @@
 #include "../components.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 namespace engine {
@@ -92,10 +94,31 @@ void RenderSystem::render(FrameContext& ctx) {
                               cam.nearPlane, cam.farPlane);
     Frustum frustum = Frustum::fromViewProjection(proj * view);
 
+    // RT_DUMP_DRAWS=1: one-shot draw audit — every Renderable's bounds and the
+    // cull verdict, printed once around frame ~60. The tool that ends "the mesh
+    // exists but nothing shows" mysteries.
+    static int auditFrame = std::getenv("RT_DUMP_DRAWS") ? 60 : -1;
+    const bool audit = auditFrame >= 0 && --auditFrame == 0;
+    if (audit)
+        std::fprintf(stderr,
+                     "[draw-audit] cam (%.0f,%.0f,%.0f) fov %.1f far %.0f\n",
+                     cam.position.x, cam.position.y, cam.position.z,
+                     cam.fovDegrees, cam.farPlane);
+
     Real alpha = ctx.interpolation;
     ctx.world.each<Transform, PrevTransform, Renderable>(
         [&](Entity entity, Transform& t, PrevTransform& prev, Renderable& r) {
             if (entity == ctx.view.activeCameraEntity) return;
+            if (audit) {
+                BoundingSphere ab = ctx.renderer.getMeshBounds(r.mesh);
+                std::fprintf(stderr,
+                             "[draw-audit] e%u mesh %u layer %u hidden %d aabb "
+                             "(%.0f,%.0f,%.0f)-(%.0f,%.0f,%.0f)\n",
+                             entity.index, r.mesh.index, r.renderLayer,
+                             (r.renderLayer & ctx.renderer.hiddenLayers) ? 1 : 0,
+                             ab.boxMin.x, ab.boxMin.y, ab.boxMin.z, ab.boxMax.x,
+                             ab.boxMax.y, ab.boxMax.z);
+            }
             if (r.renderLayer & ctx.renderer.hiddenLayers) return;   // debug layer hidden
             // Interpolated local matrix, then composed through any parent
             // chain (editor only — PLAY flattens parenting at load, so there
@@ -113,8 +136,19 @@ void RenderSystem::render(FrameContext& ctx) {
             BoundingSphere bounds = ctx.renderer.getMeshBounds(r.mesh);
             Vec3 worldMin, worldMax;
             transformedAABB(model, bounds.boxMin, bounds.boxMax, worldMin, worldMax);
-            if (!frustum.containsAABB(worldMin, worldMax))
+            if (!frustum.containsAABB(worldMin, worldMax)) {
+                if (audit)
+                    std::fprintf(stderr, "[draw-audit] e%u FRUSTUM-CULLED world "
+                                 "(%.0f,%.0f,%.0f)-(%.0f,%.0f,%.0f)\n",
+                                 entity.index, worldMin.x, worldMin.y, worldMin.z,
+                                 worldMax.x, worldMax.y, worldMax.z);
                 return;
+            }
+            if (audit)
+                std::fprintf(stderr, "[draw-audit] e%u DRAWN world "
+                             "(%.0f,%.0f,%.0f)-(%.0f,%.0f,%.0f)\n",
+                             entity.index, worldMin.x, worldMin.y, worldMin.z,
+                             worldMax.x, worldMax.y, worldMax.z);
             // HLOD distance policy (P1.2): detail chunks fade out past
             // drawDistance, their mass-box proxies fade IN at minDistance —
             // measured to the bounds centre so the pair swaps in lockstep.

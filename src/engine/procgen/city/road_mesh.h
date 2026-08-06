@@ -10,6 +10,11 @@
 
 namespace engine {
 
+// How far ANY road paint floats above the asphalt (m). One constant so every
+// decal agrees: the mesher's own stripes/crosswalks and the sim's parking-bay
+// markings, which drifted to 5 cm and read as a slab hovering over the road.
+constexpr double kRoadMarkLift = 0.02;
+
 // Turn a road graph into a connected road *surface* (ADR-0044). The naive
 // approach — one full-width ribbon per edge, run to the node centre — overlaps
 // badly where roads meet (worst at a radial hub). This builds it properly:
@@ -59,7 +64,7 @@ struct RoadMeshParams {
     bool   shaderMarkings = false;
     double laneWidth = 3.5;             // nominal lane width -> lane count (m)
     double markWidth = 0.16;            // painted stripe width (m)
-    double markLift = 0.02;             // raise stripes above the asphalt (m)
+    double markLift = kRoadMarkLift;    // raise stripes above the asphalt (m)
     double dashLength = 3.0, dashGap = 3.0;   // lane-divider dash pattern (m)
     Vec3   laneColor{0.85, 0.85, 0.82};       // white lines
     Vec3   centerColor{0.80, 0.70, 0.12};     // yellow centreline

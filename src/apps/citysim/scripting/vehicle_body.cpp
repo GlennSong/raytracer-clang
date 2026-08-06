@@ -1,6 +1,7 @@
 #include "vehicle_body.h"
 
 #include "../../../engine/scripting/lua_state.h"   // luaState() + the Lua C API (scripting-internal)
+#include "../../../engine/scripting/procgen_mesh.h"   // luaToMesh (mesh.car shells)
 #include "../../../engine/mesh_builder.h"          // MeshBuilder::box (same primitive as addBox)
 
 namespace engine {
@@ -90,17 +91,41 @@ bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
     const int rec = lua_gettop(L);
     CarBodyRecipe body;
 
+    // body = a procgen Mesh (mesh.car's shell — the SAME generator the car lab
+    // and the drivable spec use). Optional: a slot may be mesh-only, boxes-only
+    // (the legacy box fleet), or a mesh shell PLUS box parts (the shipping
+    // shape: real body + baked wheels, since mesh.car leaves the wheel part to
+    // its caller). Vertex colours ride the mesh, matching carMaterial's white
+    // albedo exactly as the box path did.
+    lua_getfield(L, rec, "body");
+    const bool hasBody = !lua_isnil(L, -1);
+    if (hasBody) {
+        std::shared_ptr<RenderMesh> shell = luaToMesh(L, -1);
+        if (!shell || shell->vertices.empty()) {
+            lua_settop(L, base);
+            return fail(err, where + ": `body` is not a non-empty Mesh");
+        }
+        const uint32_t vbase = static_cast<uint32_t>(body.mesh.vertices.size());
+        body.mesh.vertices.insert(body.mesh.vertices.end(),
+                                  shell->vertices.begin(),
+                                  shell->vertices.end());
+        for (uint32_t i : shell->indices) body.mesh.indices.push_back(vbase + i);
+    }
+    lua_pop(L, 1);   // body (or nil)
+
     // parts = { { pos={x,y,z}, size={w,h,l}, color={r,g,b} }, ... }
+    // Required only when there is no `body` mesh to carry the slot.
     lua_getfield(L, rec, "parts");
-    if (!lua_istable(L, -1)) {
+    const bool hasParts = lua_istable(L, -1);
+    if (!hasParts && !hasBody) {
         lua_settop(L, base);
-        return fail(err, where + ": missing `parts` array");
+        return fail(err, where + ": missing `parts` array (and no `body` mesh)");
     }
     const int parts = lua_gettop(L);
-    const int nParts = static_cast<int>(luaL_len(L, parts));
-    if (nParts <= 0) {
+    const int nParts = hasParts ? static_cast<int>(luaL_len(L, parts)) : 0;
+    if (nParts <= 0 && !hasBody) {
         lua_settop(L, base);
-        return fail(err, where + ": empty `parts` array");
+        return fail(err, where + ": empty `parts` array (and no `body` mesh)");
     }
     for (int i = 1; i <= nParts; ++i) {
         lua_rawgeti(L, parts, i);

@@ -2,6 +2,7 @@
 
 #include "traffic_rules.h"   // approachStop
 #include "../../engine/ai/idm.h"   // IDM car-following (roads-v2 S7)
+#include "../../profile.h"
 
 #include <algorithm>
 #include <cmath>
@@ -77,6 +78,16 @@ constexpr Real kMemoryActConfidence = 0.25;
 constexpr Real kTtcHorizon = 2.0;       // brake when a collision is predicted this soon (s)
 constexpr Real kCollisionRadius = 1.5;  // car-vs-person combined disc radius for that test
 constexpr Real kPedAnticipation = 0.4;  // walkers dodge where a neighbour WILL be (s ahead)
+
+// Three-tier traffic (P4). The far (V) tier traverses its real route at the
+// link class speed shaped by FIXED average junction costs — it runs no sensing
+// and reads no live signal state, so a junction is a modelled dwell, not a
+// queue. kAgentGridCell sizes the P4.1 spatial grid; kGridPad widens its
+// bounds past the graph for parked verges, doorsteps and corner blends.
+constexpr Real kVSignalDelay = 4.0;     // avg dwell per SIGNALIZED junction crossed
+constexpr Real kVJunctionDelay = 1.5;   // avg dwell per stop/yield junction crossed
+constexpr Real kAgentGridCell = 64.0;
+constexpr Real kGridPad = 250.0;
 
 // Lane spacing that fits THIS road: split the right half of the carriageway
 // evenly among the direction's lanes, so a car sits centred in its own lane and
@@ -169,7 +180,14 @@ Real CitySim::junctionRadius(int node) const {
 }
 
 bool CitySim::nearJunction(Vec2 pos, Real margin) const {
-    for (const auto& j : junctions_) {
+    if (junctions_.empty()) return false;
+    // Grid-backed (P4.1): candidate junctions from the static bake, then the
+    // exact per-junction radius test — the same answer the full scan gave.
+    // A local buffer (not queryScratch_) so the host may call this any time.
+    std::vector<int> cand;
+    junctionGrid_.query(pos, maxJunctionRadius_ + margin, cand);
+    for (int ji : cand) {
+        const auto& j = junctions_[ji];
         Real r = j.second + margin;
         if ((pos - j.first).lengthSquared() <= r * r) return true;
     }
@@ -179,8 +197,22 @@ bool CitySim::nearJunction(Vec2 pos, Real margin) const {
 Real CitySim::laneSpacingFor(int li) const {
     const engine::NavLink& l = nav_->links[li];
     Real w = l.width;
-    if (li < static_cast<int>(bayNarrowed_.size()) && bayNarrowed_[li])
-        w = std::max(Real(4.8), w - 2.0 * 2.6);   // both curb strips parked
+    if (li < static_cast<int>(bayNarrowed_.size()) && bayNarrowed_[li]) {
+        // Both kerb strips are parked, so the DRIVABLE width is the carriageway
+        // minus the two Parking bands — the road's own numbers, not a guess.
+        // (A link with no band of its own but a parked-up reverse twin borrows
+        // the twin's; 2.6 remains the belt-and-braces fallback.)
+        Real strip = l.parkWidth;
+        if (strip <= 0) {
+            for (int ol : nav_->outLinks[l.to])
+                if (nav_->links[ol].to == l.from && nav_->links[ol].parkWidth > 0) {
+                    strip = nav_->links[ol].parkWidth;
+                    break;
+                }
+        }
+        if (strip <= 0) strip = 2.6;
+        w = std::max(Real(4.8), w - 2.0 * strip);
+    }
     return laneSpacing(l, w);
 }
 
@@ -233,24 +265,42 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     faultCount_ = 0;
     rng_ = seed ? seed : 0x6c078965u;
     ids_.reset();   // fresh scene → UIDs restart at 0 (reproducible from seed)
+    // Three-tier bookkeeping (P4): a rebuild starts everyone K on frame 0 with
+    // no bubble centre — the host re-feeds the player each step. The knobs
+    // (tieringEnabled, radii) persist like wander_: the host owns them.
+    frameIndex_ = 0;
+    promotions_ = 0;
+    demotions_ = 0;
+    haveTierCenter_ = false;
+    grid_.configure(engine::Vec2(0, 0), engine::Vec2(1, 1), kAgentGridCell, 0);
+    junctionGrid_.configure(engine::Vec2(0, 0), engine::Vec2(1, 1),
+                            kAgentGridCell, 0);
+    maxJunctionRadius_ = 0;
     signals_.build(graph);
-    // Curbside bays (R6b): mid-link on at-grade Local streets, right curb of
-    // each directed link, well clear of junction mouths; ~55% seeded with
-    // scenery cars so streets read parked-along from the first frame.
+    // Curbside bays (R6b): mid-link, in the road's own PARKING BAND, well clear
+    // of junction mouths; ~55% seeded with scenery cars so streets read
+    // parked-along from the first frame.
+    //
+    // The band is the gate AND the geometry. Before the parking round this loop
+    // guessed — "Local-or-Collector and at least 9 m wide" — and then hung the
+    // bay at a hardcoded `width*0.5 - 1.05`, which put the outer edge of a 2.2 m
+    // bay ~7 cm PAST the carriageway onto the kerb (Glenn: "it's half on the
+    // sidewalk"). Now a link parks iff its road spec actually gives it a Parking
+    // band, and the bay centre is that band's centre. No heuristic left.
     bays_.clear();
     baysOnLink_.assign(graph.linkCount(), {});
     for (int li = 0; li < graph.linkCount(); ++li) {
         const engine::NavLink& L = graph.links[li];
-        if (L.klass != engine::RoadClass::Local) continue;
+        if (L.parkWidth <= 0.0) continue;        // no Parking band => no bays
         if (L.layer != 0 || L.elevAbsolute) continue;
         // Semantic layer (#17/S7): bays only on FRONTAGE edges — never on a
         // ramp APPROACH (a street climbing to a landing has no frontage, so
         // no curbside parking on the on-ramp feeder).
         if (!(L.access & engine::road_access::kFrontage)) continue;
-        if (L.length < 40.0 || L.width < 9.5) continue;
+        if (L.length < 40.0) continue;
         const engine::Vec2 dir = graph.direction(li);
         const engine::Vec2 right(dir.y, -dir.x);
-        const Real off = L.width * 0.5 - 1.05;   // hugging the curb line
+        const Real off = L.parkOffset;   // centre of the kerbside Parking band
         // 22 m junction setback: a physical car exits a corner with ~1 m of
         // lateral error that decays over the first ~15 m — bays any closer
         // took sideswipes from the possession tier's real bodies.
@@ -260,6 +310,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
             b.station = st;
             b.pos = graph.pointOnLink(li, st / L.length) + right * off;
             b.heading = dir;
+            b.width = L.parkWidth;
             // Deterministic scenery fill (~55%), stable per (link, slot).
             const uint32_t h = (static_cast<uint32_t>(li) * 2654435761u) ^
                                (static_cast<uint32_t>(st * 8.0) * 40503u) ^ rng_;
@@ -343,8 +394,32 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
             }
             if (!ok) a.work = a.home;   // stranded: stay put, never depart
         }
-        a.departWork = 7.5 + rndUnit() * 1.5;
-        a.departHome = 16.5 + rndUnit() * 1.5;
+        // SHIFT DIVERSITY. A single 7.5-9.0 departure window put the whole
+        // population on the road at once: one hot rush, a dead city either
+        // side of it, and a sim-cost spike where nearly every agent is moving
+        // in the same minutes. Real cities run shifts, so agents draw one from
+        // their own brain bits (deterministic, no rng draw) — the city now has
+        // hot and cold hours per district instead of one synchronised surge.
+        {
+            const uint32_t shift = (a.brain >> 12) & 0xFF;   // 0..255
+            const Real j0 = rndUnit(), j1 = rndUnit();       // per-agent jitter
+            if (shift < 26) {            // ~10% early shift (trades, transit)
+                a.departWork = 5.0 + j0 * 1.5;
+                a.departHome = 14.0 + j1 * 1.5;
+            } else if (shift < 166) {    // ~55% standard day, widened
+                a.departWork = 7.0 + j0 * 2.0;
+                a.departHome = 16.0 + j1 * 2.5;
+            } else if (shift < 204) {    // ~15% swing / late start
+                a.departWork = 11.5 + j0 * 3.0;
+                a.departHome = 20.0 + j1 * 3.0;
+            } else if (shift < 227) {    // ~9% night shift (wraps midnight)
+                a.departWork = 21.5 + j0 * 1.5;
+                a.departHome = 5.5 + j1 * 1.5;
+            } else {                     // ~11% part-time / midday
+                a.departWork = 9.5 + j0 * 2.0;
+                a.departHome = 14.5 + j1 * 2.0;
+            }
+        }
         a.activity = Agent::Activity::AtHome;
         a.goal = goalsFor(a.mode).entry();   // the day starts at the table's entry
         a.brain = rnd() | 1u;            // per-agent fault RNG (non-zero)
@@ -378,6 +453,30 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         }
         agents_.push_back(a);
     }
+
+    // P4.1: size the spatial grid to the graph (padded for verges, doorsteps
+    // and corner blends) and hash the initial cohort; the junction grid is a
+    // static bake of junctions_ so nearJunction() stops scanning the list.
+    {
+        Vec2 lo = graph.nodes[0], hi = graph.nodes[0];
+        for (const Vec2& p : graph.nodes) {
+            lo.x = std::min(lo.x, p.x);
+            lo.y = std::min(lo.y, p.y);
+            hi.x = std::max(hi.x, p.x);
+            hi.y = std::max(hi.y, p.y);
+        }
+        const Vec2 pad(kGridPad, kGridPad);
+        grid_.configure(lo - pad, hi + pad, kAgentGridCell,
+                        static_cast<int>(agents_.size()));
+        for (std::size_t i = 0; i < agents_.size(); ++i)
+            grid_.place(static_cast<int>(i), agents_[i].pos);
+        junctionGrid_.configure(lo - pad, hi + pad, kAgentGridCell,
+                                static_cast<int>(junctions_.size()));
+        for (std::size_t j = 0; j < junctions_.size(); ++j) {
+            junctionGrid_.place(static_cast<int>(j), junctions_[j].first);
+            maxJunctionRadius_ = std::max(maxJunctionRadius_, junctions_[j].second);
+        }
+    }
 }
 
 void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
@@ -408,8 +507,15 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     };
 
     for (Agent& a : agents_) {
-        // Home: deterministic pick from the agent's own brain bits (no rng draw).
-        PlaceId hp = homes[a.brain % homes.size()];
+        // Home: deterministic pick from the agent's own brain bits (no rng
+        // draw). MIXED first: brains are forced odd (rnd()|1), so a raw
+        // modulo could only ever reach odd home indices when homes.size()
+        // is even — half the housing stock sat empty.
+        std::uint32_t hmix = a.brain;
+        hmix ^= hmix >> 16; hmix *= 0x7feb352dU;
+        hmix ^= hmix >> 15; hmix *= 0x846ca68bU;
+        hmix ^= hmix >> 16;
+        PlaceId hp = homes[hmix % homes.size()];
         int hn = nodeOf(hp);
         a.homePlace = hp;
         a.home = hn;
@@ -443,13 +549,42 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 a.departHome = 15.5 + 1.5 * unit(a.brain >> 8);   // home mid-afternoon
             }
         } else if (!jobs.empty()) {
-            // Prefer the brain-picked workplace; if it isn't routable from home,
-            // scan for any that is; if none, the agent works from home.
-            PlaceId pick = jobs[(a.brain >> 8) % jobs.size()];
-            if (!commutable(hn, nodeOf(pick))) {
-                pick = kNoPlace;
-                for (PlaceId cand : jobs)
+            // Prefer the brain-picked workplace; if it isn't routable from
+            // home, scan for any that is — STARTING FROM A PER-AGENT OFFSET.
+            // Scanning from index 0 funneled every fallback agent onto the
+            // FIRST routable workplace: one office, one street, the whole
+            // fleet parked in a line (Glenn's "cars all on one street").
+            // WORKPLACE CHOICE IS GRAVITY-BIASED, not uniform. Offices, shops
+            // and civic buildings concentrate downtown by district, so drawing
+            // uniformly over them sent most of the city to the same few blocks
+            // — a permanent downtown crush, and every agent inside the
+            // player's bubble at once when he stands there. Real commuting
+            // follows distance decay: sample a handful of candidates from the
+            // agent's own bits and take the NEAREST routable one. Because the
+            // candidates are random, long cross-town commutes still happen —
+            // they just stop being the default.
+            const Vec2 homePos = places[hp].site;
+            PlaceId pick = kNoPlace;
+            Real bestD2 = 1e30;
+            const int kCandidates = 6;
+            for (int c = 0; c < kCandidates; ++c) {
+                uint32_t h = a.brain + static_cast<uint32_t>(c) * 0x9E3779B9u;
+                h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15;
+                PlaceId cand = jobs[h % jobs.size()];
+                const Vec2 d = places[cand].site - homePos;
+                const Real d2 = d.x * d.x + d.y * d.y;
+                if (d2 >= bestD2) continue;
+                if (!commutable(hn, nodeOf(cand))) continue;
+                bestD2 = d2;
+                pick = cand;
+            }
+            if (pick == kNoPlace) {   // none of the samples routed: widen out
+                const std::size_t start =
+                    (a.brain * 2654435761u) % jobs.size();
+                for (std::size_t k = 0; k < jobs.size(); ++k) {
+                    PlaceId cand = jobs[(start + k) % jobs.size()];
                     if (commutable(hn, nodeOf(cand))) { pick = cand; break; }
+                }
             }
             if (pick != kNoPlace) {
                 a.workPlace = pick;
@@ -480,6 +615,34 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         }
 }
 
+Vec2 CitySim::pushPoseClearOfLanes(Vec2 p, Real margin) const {
+    if (!nav_) return p;
+    for (int guard = 0; guard < 6; ++guard) {
+        Real worst = 0;
+        Vec2 away(0, 0);
+        for (int li = 0; li < nav_->linkCount(); ++li) {
+            const engine::NavLink& L = nav_->links[li];
+            if (L.layer != 0 || L.elevAbsolute) continue;   // decks don't block ground
+            const Vec2& a = nav_->nodes[L.from];
+            const Vec2& b = nav_->nodes[L.to];
+            const Vec2 ab = b - a;
+            const Real len2 = ab.lengthSquared();
+            Real t = len2 > 1e-12 ? dot(p - a, ab) / len2 : 0.0;
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            const Vec2 q(a.x + ab.x * t, a.y + ab.y * t);
+            const Real d = (p - q).length();
+            const Real need = L.width * 0.5 + margin;
+            if (need - d > worst) {
+                worst = need - d;
+                away = d > 1e-6 ? (p - q) * (1.0 / d) : Vec2(1, 0);
+            }
+        }
+        if (worst <= 0) break;
+        p = p + away * (worst + 0.15);
+    }
+    return p;
+}
+
 Vec2 CitySim::idlePose(int node, Agent::Mode mode, uint32_t brain) const {
     if (!nav_ || node < 0 || node >= nav_->nodeCount()) return Vec2();
     const std::vector<int>& out = nav_->outLinks[node];
@@ -499,7 +662,11 @@ Vec2 CitySim::idlePose(int node, Agent::Mode mode, uint32_t brain) const {
     Real back = 2.0 + parkSetbackSlot(brain) *
                           ((mode == Agent::Mode::Driver) ? 1.4 : 0.6);
     back = std::min(back, nav_->links[li].length * 0.45);
-    return nav_->nodes[node] + dir * back + right * off;
+    Vec2 p = nav_->nodes[node] + dir * back + right * off;
+    // An idle CAR is a physical body: keep it out of every carriageway, not
+    // just this link's (short-link knots overlap their neighbours' verges).
+    if (mode == Agent::Mode::Driver) p = pushPoseClearOfLanes(p, 1.3);
+    return p;
 }
 
 // Pick a random routable wander goal from `from` and start the trip. Prefers a
@@ -596,7 +763,10 @@ CitySim::GoalFire CitySim::tryGoalEvent(Agent& a, GoalEvent event) {
     const GoalState& to = t.state(next);
     if (to.action == GoalAction::GoTo) {
         int from = departNode(a);
-        if (a.mode == Agent::Mode::Driver && !launchClear(a, from))
+        // A far (V) agent departs ungated: nobody is watching a spawn 600 m
+        // out, and clearance against other far ghosts is meaningless.
+        if (a.mode == Agent::Mode::Driver && a.tier != Agent::Tier::V &&
+            !launchClear(a, from))
             return GoalFire::Blocked;
         a.goal = next;
         a.goalHours = 0;
@@ -620,7 +790,8 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
     if (s.action == GoalAction::GoTo) {
         if (!a.moving) {
             int from = departNode(a);
-            if (a.mode != Agent::Mode::Driver || launchClear(a, from))
+            if (a.mode != Agent::Mode::Driver || a.tier == Agent::Tier::V ||
+                launchClear(a, from))
                 startGoalTrip(a, from, /*fromRest=*/true);
         }
         return;
@@ -679,8 +850,13 @@ bool CitySim::launchClear(const Agent& a, int node) const {
     // first link) — a 5 m check let a second car spawn exactly on a first one
     // that had been skipped 6 m out.
     Real clear = junctionRadius(node) + 2.0 + 6.0;
-    for (const Agent& b : agents_) {
+    // Grid candidates (P4.1): pass 1 re-hashes each agent right after its goal
+    // tick, so positions are current here; the slack covers cell granularity.
+    grid_.query(p, clear + 4.0, queryScratch_);
+    for (int bi : queryScratch_) {
+        const Agent& b = agents_[bi];
         if (&b == &a || b.mode != Agent::Mode::Driver) continue;
+        if (b.tier == Agent::Tier::V) continue;   // far tier: no body here
         if (!b.moving || b.released) continue;
         if (std::fabs(b.elevation - a.elevation) > 3.0) continue;
         Real dx = b.pos.x - p.x, dy = b.pos.y - p.y;
@@ -979,8 +1155,13 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
             // so a ring of mutual waiters releases one at a time, deterministic.
             const bool gridlocked =
                 a.holdTimer > 6.0 + static_cast<Real>(a.brain % 4u) * 1.5;
-            for (const Agent& b : agents_) {
+            // Grid candidates (P4.1): every rule below re-applies its exact
+            // range/heading predicate, so the verdict matches the full scan.
+            grid_.query(jc, range + 4.0, queryScratch_);
+            for (int bi : queryScratch_) {
+                const Agent& b = agents_[bi];
                 if (&b == &a || b.mode != Agent::Mode::Driver) continue;
+                if (b.tier == Agent::Tier::V) continue;   // far tier: no body
                 if (!b.moving || b.released) continue;
                 if (std::fabs(b.elevation - a.elevation) > 3.0) continue;
                 Real dx = b.pos.x - jc.x, dy = b.pos.y - jc.y;
@@ -1052,11 +1233,22 @@ Real CitySim::senseAhead(Agent& a) {
     if (brainUnit(a) <= a.reliability) {
         engine::SensorVolume sensor;
         sensor.cone = cone;
+        // Agent-backed ghosts come from the grid (P4.1) — candidates sorted
+        // ascending, so sightings land in memory in the same order the full
+        // sensed_ scan produced. The slack past the cone range covers a
+        // TETHERED walker's ghost sitting at its body anchor (± its lead).
+        grid_.query(a.pos, cone.range + 12.0, queryScratch_);
+        for (int gi : queryScratch_) {
+            if (sensedIndex_[gi] < 0) continue;   // not a sensable body this step
+            const SensedGhost& g = sensed_[sensedIndex_[gi]];
+            if (engine::sees(sensor, g.pos, g.elevation - a.elevation))
+                a.memory.observe(g.id, g.pos, simSeconds_);
+        }
+        // External points (the live player) carry no elevation from the
+        // host — skip the height gate rather than invent one for them.
         for (const SensedGhost& g : sensed_) {
-            // External points (the live player) carry no elevation from the
-            // host — skip the height gate rather than invent one for them.
-            Real dh = g.id < 0 ? 0.0 : g.elevation - a.elevation;
-            if (engine::sees(sensor, g.pos, dh))
+            if (g.id >= 0) continue;   // agent ghosts handled via the grid above
+            if (engine::sees(sensor, g.pos, 0.0))
                 a.memory.observe(g.id, g.pos, simSeconds_);
         }
     } else {
@@ -1126,10 +1318,15 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
                 const int dir = (preferred > a.lane) - (preferred < a.lane);
                 if (dir != 0) {
                     const int want = a.lane + dir;
-                    // room check: nobody in the target lane alongside
+                    // room check: nobody in the target lane alongside.
+                    // Grid candidates (P4.1): 13 m along + the widest
+                    // carriageway's lane offsets fit well inside 26 m.
                     bool room = true;
-                    for (const Agent& b : agents_) {
+                    grid_.query(a.pos, 26.0, queryScratch_);
+                    for (int bi : queryScratch_) {
+                        const Agent& b = agents_[bi];
                         if (&b == &a || b.mode != Agent::Mode::Driver ||
+                            b.tier == Agent::Tier::V ||
                             !b.moving || b.leg >= (int)b.route.links.size())
                             continue;
                         if (b.route.links[b.leg] != li) continue;
@@ -1333,8 +1530,14 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             // ped 1.3 m in front of a braking car's bumper).
             const bool patient = a.holdTimer < 12.0;
             bool carInbound = false;
-            for (const Agent& c : agents_) {
-                if (c.mode != Agent::Mode::Driver || !c.moving || c.speed < 0.5)
+            // Grid candidates (P4.1): the widest accepted-gap radius is
+            // speed * 2.5 + 4 at the fastest personality-scaled class speed
+            // (~32 m/s -> ~85 m); 92 m covers it plus a step's drift.
+            grid_.query(nodeP, 92.0, queryScratch_);
+            for (int ci : queryScratch_) {
+                const Agent& c = agents_[ci];
+                if (c.mode != Agent::Mode::Driver || c.tier == Agent::Tier::V ||
+                    !c.moving || c.speed < 0.5)
                     continue;
                 if (std::fabs(c.elevation - a.elevation) > 2.5) continue;
                 const Real cd = (c.pos - nodeP).length();
@@ -1364,7 +1567,18 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     if (!car && motion > 0) {
         const Vec2 probe(a.pos.x + a.heading.x * 1.0,
                          a.pos.y + a.heading.y * 1.0);
-        for (const SimVehicle& v : vehicles_) {
+        // Vehicle bodies via their DRIVERS in the grid (P4.1): every vehicle
+        // mirrors its driver's pose, so driver candidates near the probe find
+        // every body the vehicles_ scan found. 26 m covers the 6 m body test
+        // plus a launch-tick's ghost-vs-mirror gap.
+        grid_.query(probe, 26.0, queryScratch_);
+        for (int di : queryScratch_) {
+            const Agent& drv = agents_[di];
+            if (drv.mode != Agent::Mode::Driver || drv.tier == Agent::Tier::V ||
+                drv.vehicle < 0 ||
+                drv.vehicle >= static_cast<int>(vehicles_.size()))
+                continue;
+            const SimVehicle& v = vehicles_[drv.vehicle];
             const Real dx = probe.x - v.pos.x, dy = probe.y - v.pos.y;
             if (dx * dx + dy * dy > 36.0) continue;
             const Real lx = std::fabs(dx * v.heading.x + dy * v.heading.y);
@@ -1526,8 +1740,10 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             Real hw = nav_->links[lastLink].width * 0.5;
             Real back = 4.0 + parkSetbackSlot(a.brain) * 1.3;
             back = std::min(back, nav_->links[lastLink].length * 0.5);
-            a.pos = nav_->nodes[nav_->links[lastLink].to] - dir * back +
-                    right * (hw + 2.8);
+            a.pos = pushPoseClearOfLanes(
+                nav_->nodes[nav_->links[lastLink].to] - dir * back +
+                    right * (hw + 2.8),
+                1.3);
             a.heading = dir;
         }
         a.route.links.clear();
@@ -1555,14 +1771,19 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             a.heading = bays_[bay].heading;
         } else {
             // Verge fallback: a few metres short of the node, per-agent
-            // setback so arrivals at one destination don't stack.
+            // setback so arrivals at one destination don't stack. Pushed
+            // clear of EVERY carriageway: a knot's tiny arrival link has no
+            // bays, and its own verge can sit inside a neighbouring link's
+            // lanes — the parked car then dammed the junction for minutes.
             Vec2 dir = nav_->direction(lastLink);
             Vec2 right(dir.y, -dir.x);
             Real hw = nav_->links[lastLink].width * 0.5;
             Real back = 4.0 + parkSetbackSlot(a.brain) * 1.3;   // 4..13 m
             back = std::min(back, nav_->links[lastLink].length * 0.5);
-            a.pos = nav_->nodes[nav_->links[lastLink].to] - dir * back +
-                    right * (hw + 2.8);
+            a.pos = pushPoseClearOfLanes(
+                nav_->nodes[nav_->links[lastLink].to] - dir * back +
+                    right * (hw + 2.8),
+                1.3);
             a.heading = dir;
         }
     } else {
@@ -1635,6 +1856,7 @@ void CitySim::computeGaps() {
     std::unordered_map<long long, std::vector<std::pair<Real, int>>> lanes;
     for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
         const Agent& a = agents_[i];
+        if (a.tier == Agent::Tier::V) continue;   // far tier: not on the road
         if (!a.moving || a.leg >= static_cast<int>(a.route.links.size())) continue;
         lanes[laneKeyOf(a, a.route.links[a.leg])].push_back({a.distOnLeg, i});
     }
@@ -1664,6 +1886,7 @@ void CitySim::computeGaps() {
     for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
         const Agent& a = agents_[i];
         if (gaps_[i] != INF) continue;                 // has a same-link leader already
+        if (a.tier == Agent::Tier::V) continue;        // far tier: no following
         if (!a.moving) continue;
         int legN = static_cast<int>(a.route.links.size());
         Real ahead = nav_->links[a.route.links[a.leg]].length - a.distOnLeg;  // to end of this link
@@ -1702,8 +1925,9 @@ void CitySim::computeCarWedge() {
     carAheadSpeed_.assign(agents_.size(), 0.0);
     constexpr Real kRange = 38.0;   // sense horizon (m)
     constexpr Real kLat = 2.15;     // corridor half-width: two bodies abreast
-    for (std::size_t i = 0; i < agents_.size(); ++i) {
-        Agent& a = agents_[i];
+    for (int ai : active_) {
+        Agent& a = agents_[ai];
+        const std::size_t i = static_cast<std::size_t>(ai);
         if (a.mode != Agent::Mode::Driver || !a.moving) continue;
         const Real fx = a.heading.x, fy = a.heading.y;
         Real linkLeft = kRange;
@@ -1712,10 +1936,17 @@ void CitySim::computeCarWedge() {
             linkLeft = nav_->links[li].length - a.distOnLeg + 10.0;
         }
         const Real horizon = std::min(kRange, linkLeft);
-        for (std::size_t j = 0; j < agents_.size(); ++j) {
+        // ONE grid fetch (P4.1) feeds both the corridor and the crossing
+        // senses below — candidates ascending, exactly the order (and, after
+        // the identical in-loop predicates, exactly the result) the full
+        // agent scans produced.
+        grid_.query(a.pos, kRange + 6.0, queryScratch_);
+        for (int bi : queryScratch_) {
+            const std::size_t j = static_cast<std::size_t>(bi);
             if (j == i) continue;
             const Agent& b = agents_[j];
             if (b.mode != Agent::Mode::Driver) continue;
+            if (b.tier == Agent::Tier::V) continue;   // far tier: no body
             // Different decks never conflict (viaduct vs the street below).
             if (std::fabs(b.elevation - a.elevation) > 2.5) continue;
             const Real dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
@@ -1751,11 +1982,13 @@ void CitySim::computeCarWedge() {
         // drives on — mutual yield cannot form. A crosser that a red signal
         // will stop before the box is exempt (a green driver assumes signal-
         // stopped traffic stays stopped); one already committed is not.
-        for (std::size_t j = 0; j < agents_.size(); ++j) {
+        for (int bi : queryScratch_) {
+            const std::size_t j = static_cast<std::size_t>(bi);
             if (j == i) continue;
             const Agent& b = agents_[j];
             if (b.mode != Agent::Mode::Driver || !b.moving || b.speed < 0.3)
                 continue;
+            if (b.tier == Agent::Tier::V) continue;   // far tier: no body
             if (std::fabs(b.elevation - a.elevation) > 2.5) continue;
             const Real dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
             if (dx * dx + dy * dy > kRange * kRange) continue;
@@ -1795,7 +2028,42 @@ void CitySim::computeCarWedge() {
 }
 
 void CitySim::step(Real dt, Real hoursPerSecond) {
+    // Cadence gate. Traffic is not physics: agents follow lanes, so advancing
+    // by a bigger dt costs precision, not correctness. Bank the time and tick
+    // when the period is due; everything downstream (including the far tier's
+    // own schedule) then measures in SIM SECONDS rather than in calls.
+    tickAccum_ += dt;
+    sinceTick_ += dt;
+    if (tickPeriodSeconds_ > 0.0 && tickAccum_ + 1e-9 < tickPeriodSeconds_) return;
+    const Real simDt = tickAccum_;
+    tickAccum_ = 0.0;
+    sinceTick_ = 0.0;
+    stepTick(simDt, hoursPerSecond);
+}
+
+void CitySim::stepTick(Real dt, Real hoursPerSecond) {
+    RT_PROFILE_ZONE_NAMED("CitySim step");
     if (!nav_ || agents_.empty()) return;
+
+    // P4.1: re-hash the population. place() early-outs on an unchanged cell,
+    // so a V agent (whose pose only moves on its coarse tick) costs a compare.
+    for (std::size_t i = 0; i < agents_.size(); ++i)
+        grid_.place(static_cast<int>(i), agents_[i].pos);
+    // P4.2: the tier bubble — demote K agents past the outer ring, promote V
+    // agents inside the inner one (each with a catch-up tick, so the handoff
+    // pose is the exact lane pose). BEFORE the clock advances: a promoted
+    // agent joins this step's K passes with no double-advanced time.
+    tierPass(hoursPerSecond);
+    // ACTIVE LIST (perf). Every pass below used to walk the WHOLE population
+    // just to `continue` on the far tier: ~12 sweeps over thousands of
+    // 432-byte agents per step, which is memory traffic, not simulation. The
+    // tier bubble already knows who is live, so resolve that ONCE here and let
+    // the passes iterate the survivors. Ascending indices keep the iteration
+    // order (and therefore the results) bit-identical to the old sweeps.
+    active_.clear();
+    for (std::size_t i = 0; i < agents_.size(); ++i)
+        if (agents_[i].tier != Agent::Tier::V)
+            active_.push_back(static_cast<int>(i));
 
     clockHours_ += dt * hoursPerSecond;
     clockHours_ = std::fmod(clockHours_, 24.0);
@@ -1811,9 +2079,14 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // car waits out traffic near its spot and pulls out when clear). The
     // built-in tables reproduce the historical schedule and wander behaviour
     // exactly; see goalThink / city_goals.h.
-    for (Agent& a : agents_) {
+    for (int ai : active_) {
+        Agent& a = agents_[ai];
+        const std::size_t i = static_cast<std::size_t>(ai);
         if (a.playerControlled || a.released) continue;
         goalThink(a, dt * hoursPerSecond);
+        // A departure moved the pose (idle verge -> lane start): re-hash NOW so
+        // every later grid consumer this step sees current positions.
+        grid_.place(static_cast<int>(i), a.pos);
     }
 
     // Snapshot the bodies agents may SENSE this step — pedestrians and the
@@ -1824,8 +2097,10 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // advance()): lanes + car-following + signals govern car-vs-car, and braking
     // for cross/oncoming cars in the cone deadlocked traffic.
     sensed_.clear();
-    for (std::size_t i = 0; i < agents_.size(); ++i) {
-        const Agent& a = agents_[i];
+    sensedIndex_.assign(agents_.size(), -1);   // agent -> its ghost (grid lookups)
+    for (int ai : active_) {
+        const Agent& a = agents_[ai];
+        const std::size_t i = static_cast<std::size_t>(ai);
         // A RESTING pedestrian is INSIDE its place (home/shop/office) — not a
         // body on the street. Sensing it anyway had cars braking forever for a
         // person who is semantically indoors (a rest pose near the kerb sat in
@@ -1838,6 +2113,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
             // cars must brake for where the person IS, not where the plan is.
             Vec2 sp = (a.mode == Agent::Mode::Pedestrian && a.tethered)
                           ? a.tetherAnchor : a.pos;
+            sensedIndex_[i] = static_cast<int>(sensed_.size());
             sensed_.push_back({sp, a.elevation, static_cast<int>(i)});
         }
     }
@@ -1851,8 +2127,9 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     std::vector<uint8_t> advanced(agents_.size(), 0);
     computeGaps();
     computeCarWedge();   // S7 senses: bodies in the forward corridor
-    for (std::size_t i = 0; i < agents_.size(); ++i) {
-        Agent& a = agents_[i];
+    for (int ai : active_) {
+        Agent& a = agents_[ai];
+        const std::size_t i = static_cast<std::size_t>(ai);
         if (a.playerControlled || a.released) continue;
         // Crashed (fender-bender): the car sits where it hit until its hold
         // expires — a crash is a real stop, not a suggestion.
@@ -1887,15 +2164,16 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // holds, so a junction tangle crunches to a stop and unwinds car by car.
     // Triggering only on a closing approach lets the first resumer drive OUT
     // through the residual overlap without instantly re-freezing the pair.
-    for (std::size_t i = 0; i < agents_.size(); ++i) {
-        Agent& a = agents_[i];
+    for (int ai : active_) {
+        Agent& a = agents_[ai];
+        const std::size_t i = static_cast<std::size_t>(ai);
         if (a.mode != Agent::Mode::Driver || !a.moving || a.released ||
             a.playerControlled)
             continue;
         for (std::size_t j = i + 1; j < agents_.size(); ++j) {
             Agent& b = agents_[j];
             if (b.mode != Agent::Mode::Driver || !b.moving || b.released ||
-                b.playerControlled)
+                b.playerControlled || b.tier == Agent::Tier::V)
                 continue;
             if (std::fabs(b.elevation - a.elevation) > 3.0) continue;  // bridge deck
             // ESCAPE VALVE: a car wedged through many consecutive freezes (a
@@ -2076,13 +2354,23 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
             // apart are what give each track its velocity estimate.
             engine::SensorVolume sensor;
             sensor.cone = cone;
-            for (const SensedGhost& g : sensed_) {
-                if (g.id == static_cast<int>(i)) continue;   // not myself
+            // Agent-backed ghosts from the grid (P4.1), ascending, then the
+            // host-injected externals — the order the full sensed_ scan used.
+            // Slack past the cone range covers a tethered ghost at its anchor.
+            grid_.query(a.pos, cone.range + 12.0, queryScratch_);
+            for (int gi : queryScratch_) {
+                if (gi == static_cast<int>(i)) continue;   // not myself
+                if (sensedIndex_[gi] < 0) continue;        // no sensable body
                 // Skip player-agent ghosts: the host already injects the live
                 // player as an external point — seeing both would double it.
-                if (g.id >= 0 && agents_[g.id].playerControlled) continue;
-                Real dh = g.id < 0 ? 0.0 : g.elevation - a.elevation;
-                if (engine::sees(sensor, g.pos, dh))
+                if (agents_[gi].playerControlled) continue;
+                const SensedGhost& g = sensed_[sensedIndex_[gi]];
+                if (engine::sees(sensor, g.pos, g.elevation - a.elevation))
+                    a.memory.observe(g.id, g.pos, simSeconds_);
+            }
+            for (const SensedGhost& g : sensed_) {
+                if (g.id >= 0) continue;   // agent ghosts handled above
+                if (engine::sees(sensor, g.pos, 0.0))
                     a.memory.observe(g.id, g.pos, simSeconds_);
             }
             a.memory.update(simSeconds_);
@@ -2111,7 +2399,18 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
             // its centre, which sits outside the short vision cone when you're
             // up against a long body — so the lean routes around the car. Both
             // driven and parked cars: vehicles_ carries every body's live pose.
-            for (const SimVehicle& v : vehicles_) {
+            // Car bodies via their DRIVERS in the grid (P4.1): every vehicle
+            // mirrors its driver's pose, and ascending driver order IS
+            // ascending vehicle order (drivers are built first, one car each),
+            // so the bias sum accumulates in the vehicles_ scan's order.
+            grid_.query(a.pos, 26.0, queryScratch_);
+            for (int di : queryScratch_) {
+                const Agent& drv = agents_[di];
+                if (drv.mode != Agent::Mode::Driver ||
+                    drv.tier == Agent::Tier::V || drv.vehicle < 0 ||
+                    drv.vehicle >= static_cast<int>(vehicles_.size()))
+                    continue;
+                const SimVehicle& v = vehicles_[drv.vehicle];
                 const Real ve = (v.driver >= 0 &&
                                  v.driver < static_cast<int>(agents_.size()))
                                     ? agents_[v.driver].elevation : 0.0;
@@ -2154,12 +2453,16 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // Hard body-overlap floor: several symmetric relaxation passes so two people
     // (whether or not they saw each other) never interpenetrate.
     for (int iter = 0; iter < 6; ++iter)
-        for (std::size_t i = 0; i < agents_.size(); ++i) {
-            Agent& a = agents_[i];
-            if (a.mode != Agent::Mode::Pedestrian || !a.moving) continue;
+        for (int ai : active_) {
+            Agent& a = agents_[ai];
+            const std::size_t i = static_cast<std::size_t>(ai);
+            if (a.mode != Agent::Mode::Pedestrian || !a.moving)
+                continue;
             for (std::size_t j = i + 1; j < agents_.size(); ++j) {
                 Agent& b = agents_[j];
-                if (b.mode != Agent::Mode::Pedestrian || !b.moving) continue;
+                if (b.mode != Agent::Mode::Pedestrian || !b.moving ||
+                    b.tier == Agent::Tier::V)
+                    continue;
                 Real dx = a.pos.x - b.pos.x, dy = a.pos.y - b.pos.y;
                 Real d = std::sqrt(dx * dx + dy * dy);
                 if (d > 1e-4 && d < kPedBodyMin) {
@@ -2178,7 +2481,9 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // player (a wider berth, so a near miss reads as a step-around). The cone
     // bias above makes it lean away in advance; this is the physical backstop.
     for (Agent& a : agents_) {
-        if (a.mode != Agent::Mode::Pedestrian || !a.moving) continue;
+        if (a.mode != Agent::Mode::Pedestrian || !a.moving ||
+            a.tier == Agent::Tier::V)
+            continue;
         auto pushOut = [&](const Vec2& o, Real clearance) {
             Real dx = a.pos.x - o.x, dy = a.pos.y - o.y;
             Real d = std::sqrt(dx * dx + dy * dy);
@@ -2197,7 +2502,16 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
         // car-local box, so a walker pressed against a door is squeezed out
         // sideways and SLIDES along the body until it clears the bumper —
         // combined with the cone lean above, it walks around the car.
-        for (const SimVehicle& v : vehicles_) {
+        // Bodies via their drivers in the grid (P4.1), ascending = the
+        // vehicles_ scan's order, so sequential pushes resolve identically.
+        grid_.query(a.pos, 26.0, queryScratch_);
+        for (int di : queryScratch_) {
+            const Agent& drv = agents_[di];
+            if (drv.mode != Agent::Mode::Driver || drv.tier == Agent::Tier::V ||
+                drv.vehicle < 0 ||
+                drv.vehicle >= static_cast<int>(vehicles_.size()))
+                continue;
+            const SimVehicle& v = vehicles_[drv.vehicle];
             const Real ve = (v.driver >= 0 &&
                              v.driver < static_cast<int>(agents_.size()))
                                 ? agents_[v.driver].elevation : 0.0;
@@ -2219,6 +2533,37 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
         }
     }
 
+    // P4.2: the far tier's coarse ticks — one uid-keyed bucket per fixed frame
+    // (~1 Hz per agent at the 60 Hz step), each advancing by the sim time
+    // accumulated since that agent's last tick. Deterministic: membership is
+    // uid-derived (order-independent across promote/demote churn), processing
+    // is agent-index order, and the phase never consults a wall clock.
+    {
+        // THE BUDGET IS IN SIM SECONDS, NOT TICKS. `vTickDivisor` (60) was
+        // used as a duration — "one bucket per tick, 60 buckets" only means
+        // "~1 Hz per agent" while 60 ticks happen to take a second. Slow the
+        // sim and distant agents silently refreshed at half rate; their
+        // positions went stale near the bubble edge, the tier pass promoted on
+        // those stale samples, and K/P inflated 950 -> 2650 (K agents are the
+        // DRAWN ones, so the cost landed twice). Deriving the bucket count
+        // from the tick length keeps a true vRefreshSeconds refresh at ANY
+        // rate: fewer buckets means more agents per tick but proportionally
+        // fewer ticks — the same agents per second, the same amortised cost.
+        const Real tickLen = dt > 1e-9 ? dt : (1.0 / 60.0);
+        int div = static_cast<int>(vRefreshSeconds / tickLen + 0.5);
+        div = std::max(1, std::min(div, vTickDivisor));
+        const uint32_t bucket =
+            static_cast<uint32_t>(frameIndex_ % static_cast<uint64_t>(div));
+        for (std::size_t i = 0; i < agents_.size(); ++i) {
+            Agent& a = agents_[i];
+            if (a.tier != Agent::Tier::V) continue;
+            if (a.playerControlled || a.released) continue;
+            if (a.uid % static_cast<uint32_t>(div) != bucket) continue;
+            tickV(static_cast<int>(i), hoursPerSecond);
+        }
+    }
+    ++frameIndex_;
+
     // A possessed car mirrors its driver; an unpossessed (parked) car stays put.
     for (Agent& a : agents_) {
         if (a.mode == Agent::Mode::Driver && a.vehicle >= 0 &&
@@ -2227,6 +2572,124 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
             vehicles_[a.vehicle].heading = a.heading;
         }
     }
+}
+
+// --- three-tier traffic (P4.2) ----------------------------------------------
+
+// The bubble: demotions swept in agent-index order, then promotions from a
+// grid query around the centre (candidates ascending) — a deterministic
+// sequence for a deterministic centre feed. Hysteresis (demote radius >
+// promote radius) keeps a boundary agent from flapping tiers step to step.
+void CitySim::tierPass(Real hoursPerSecond) {
+    if (!tieringEnabled || !haveTierCenter_) return;   // no player: all K
+    const Vec2 c = tierCenter_;
+    for (std::size_t i = 0; i < agents_.size(); ++i) {
+        Agent& a = agents_[i];
+        if (a.tier != Agent::Tier::K) continue;
+        // Player-adjacent agents never demote: host-driven, released to the
+        // player, or tethered to a physical body another bridge owns.
+        if (a.playerControlled || a.released || a.tethered) continue;
+        const Real dr = a.mode == Agent::Mode::Driver ? carDemoteRadius
+                                                      : pedDemoteRadius;
+        const Real dx = a.pos.x - c.x, dy = a.pos.y - c.y;
+        if (dx * dx + dy * dy <= dr * dr) continue;
+        a.tier = Agent::Tier::V;
+        a.vLastTick = simSeconds_;   // its first coarse tick advances from here
+        a.vHold = 0;
+        // Strip K-only transients: wreck/hold state would be minutes stale at
+        // re-promotion, and remembered tracks describe bodies long gone. The
+        // route itself is KEPT — that is the far tier's whole point.
+        a.crashTimer = 0;
+        a.crashCount = 0;
+        a.holdTimer = 0;
+        a.memory.clear();
+        ++demotions_;
+    }
+    const Real reach = std::max(carPromoteRadius, pedPromoteRadius);
+    grid_.query(c, reach + 4.0, tierScratch_);
+    for (int idx : tierScratch_) {
+        Agent& a = agents_[static_cast<std::size_t>(idx)];
+        if (a.tier != Agent::Tier::V) continue;
+        const Real pr = a.mode == Agent::Mode::Driver ? carPromoteRadius
+                                                      : pedPromoteRadius;
+        const Real dx = a.pos.x - c.x, dy = a.pos.y - c.y;
+        if (dx * dx + dy * dy >= pr * pr) continue;
+        // Catch the V state up to NOW, then hand it to K exactly where the
+        // catch-up left it: the promotion pose IS the lane pose — no teleport,
+        // no snap. Render + kinematic proxy pick it up on this step's bake.
+        tickV(idx, hoursPerSecond);
+        a.tier = Agent::Tier::K;
+        ++promotions_;
+    }
+}
+
+// One coarse tick: the goal layer at accumulated hours (departures, dwell,
+// commute windows — same tables, coarser cadence), then the modelled route
+// advance over the accumulated seconds. Also promotion's catch-up.
+void CitySim::tickV(int i, Real hoursPerSecond) {
+    Agent& a = agents_[static_cast<std::size_t>(i)];
+    const Real dts = simSeconds_ - a.vLastTick;
+    a.vLastTick = simSeconds_;
+    if (dts <= 1e-9) return;
+    if (a.playerControlled || a.released) return;
+    if (!a.moving) goalThink(a, dts * hoursPerSecond);
+    if (a.moving) vAdvance(a, dts);
+    grid_.place(i, a.pos);   // the far tier re-hashes on its tick, not per step
+}
+
+// Advance a V agent along its REAL A* route at the modelled pace: link class
+// speed scaled by its personality, shaped by fixed average junction dwells
+// (vHold). No sensing, no FSM, no live signal state — hasSignal() is static
+// topology. Arrival runs the same arriveOrChain K uses (bays, goal table,
+// wander chains), so a far agent's day stays the same day.
+void CitySim::vAdvance(Agent& a, Real dt) {
+    const bool car = a.mode == Agent::Mode::Driver;
+    const int legCount = static_cast<int>(a.route.links.size());
+    if (a.leg >= legCount) { a.moving = false; return; }
+    Real t = dt;
+    while (t > 1e-9 && a.leg < legCount) {
+        if (a.vHold > 0) {   // waiting out a modelled junction dwell
+            const Real h = std::min(a.vHold, t);
+            a.vHold -= h;
+            t -= h;
+            continue;
+        }
+        const int li = a.route.links[a.leg];
+        const engine::NavLink& L = nav_->links[li];
+        const Real v = (car ? engine::classSpeed(L.klass) : kWalkSpeed) *
+                       a.speedFactor;
+        a.speed = v;
+        const Real remain = L.length - a.distOnLeg;
+        if (remain > v * t) {
+            a.distOnLeg += v * t;
+            t = 0;
+            break;
+        }
+        t -= v > 1e-9 ? remain / v : 0.0;
+        const int toNode = L.to;
+        ++a.leg;
+        a.distOnLeg = 0;
+        if (a.leg < legCount) {
+            // The same lane re-clamp advance() applies at a leg change.
+            const engine::NavLink& NL = nav_->links[a.route.links[a.leg]];
+            const int lanes = std::max(1, NL.lanes);
+            if (a.lane >= lanes) a.lane = lanes - 1;
+            if (a.laneF > Real(lanes - 1)) a.laneF = Real(lanes - 1);
+            if (nav_->isJunction(toNode))
+                a.vHold += signals_.hasSignal(li) ? kVSignalDelay
+                                                  : kVJunctionDelay;
+        }
+    }
+    if (a.leg >= legCount) {
+        // Arrived: park/rest/chain exactly like a K arrival. The tick's
+        // leftover seconds (sub-tick) are dropped — modelled travel, not
+        // integrated motion.
+        a.vHold = 0;
+        arriveOrChain(a, a.speed);
+        return;
+    }
+    refreshPose(a);
+    a.heading = nav_->direction(a.route.links[a.leg]);
 }
 
 }  // namespace citysim

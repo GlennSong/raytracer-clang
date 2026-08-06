@@ -39,6 +39,30 @@ struct CityRenderParams {
     engine::Vec3 carSize{1.8, 1.3, 4.2};   // matches the player sedan (W,H,L); +Z = travel
     engine::Vec3 pedSize{0.5, 1.8, 0.5};
     Real signalLensSize = 0.34;            // lit emissive lens cube edge (m)
+    // How far from the player a PARKED scenery car still draws (m). A city-wide
+    // instance group cannot be partially frustum-culled, so without this every
+    // parked car in the city is submitted every frame, in both the colour and
+    // shadow passes. 0 = no cull (the old behaviour).
+    Real sceneryRadius = 450.0;
+    // SIM RATE (P8.2d). Traffic is not physics: agents follow lanes, so a
+    // bigger dt costs nothing but precision. 0 or >= the fixed rate keeps the
+    // historical every-step tick (and every existing test/gate bit-identical);
+    // 30 halves the sim's cost outright. Poses are EXTRAPOLATED along heading
+    // between ticks, so the renderer and the kinematic proxies still see
+    // smooth 60 Hz motion. `adaptiveRate` lets the sim dip FURTHER (never
+    // below ~7.5 Hz) while the clock is behind — catching up by simulating
+    // coarsely instead of by running ever more expensive steps, which is the
+    // spiral that pins the frame at the step cap.
+    // MEASURED CAVEAT (P8.2d): enabling this on piedmont REGRESSED the frame
+    // (16 -> 9 fps). The far tier's coarse tick is `frameIndex_ % vTickDivisor`
+    // — a count of SIM TICKS, documented as "~1 Hz at the 60 Hz step" — so
+    // halving the sim rate also halves how often distant agents refresh their
+    // position. They then read stale near the bubble edge and the tier pass
+    // over-promotes: K/P went 950 -> 2650, and K agents are the ones that get
+    // DRAWN (instanced draws 25 -> 60, GPU 32 -> 86 ms). Express the V budget
+    // in sim SECONDS before turning this on.
+    Real localHz = 0.0;
+    bool adaptiveRate = true;
     bool debugWidgets = false;             // draw each agent's footprint + trajectory
     bool wander = false;                   // perpetual random trips (the agent lab)
     // Scripted goal tables (ADR-0064): the SOURCE of an agents.lua-style script
@@ -50,6 +74,12 @@ struct CityRenderParams {
     // build. Loaded from the level's citysim block; used only in scripting
     // builds; any failure (or "") falls back to the C++ fleetCarMesh.
     std::string vehicleScript;
+    // Three-tier traffic (P4): opt this level into the V/K bubble — far agents
+    // become persistent coarse-tick "virtual" travellers (no render, no proxy,
+    // no sensing) promoted back to full kinematic agents near the player. Off
+    // by default so every existing level/test runs bit-identically. (The
+    // level_loader "tiered" JSON knob is the pending one-line hookup.)
+    bool tieredAgents = false;
 };
 
 // The Dear ImGui window this system appends its "Living City" section into. It
@@ -167,6 +197,13 @@ public:
     const std::vector<std::vector<int>>& carAgentIds() const {
         return carAgentIds_;
     }
+    // Same contract for the (single) pedestrian group, added for P4: the
+    // physics bridge's incremental proxy diff keys ped boxes by agent uid, so
+    // it needs each baked instance's agent — with V-tier walkers unbaked, the
+    // instance list is no longer "all pedestrians in agent order".
+    const std::vector<std::vector<int>>& pedAgentIds() const {
+        return pedAgentIds_;
+    }
     Real groundHeightAt(Real x, Real z) const { return groundAt(x, z); }
     // The stop-bar + lane-arrow paint mesh (R6c), rebuilt from the graph;
     // public so the gate can assert paint never leaves the carriageway.
@@ -258,6 +295,28 @@ private:
     std::vector<engine::Entity> carGroups_;   // one per car variant (body + colour)
     std::unordered_map<int, engine::Mat4> physPose_;      // R5: agent -> body pose
     std::vector<std::vector<int>> carAgentIds_;           // parallel to bakes
+    // Scenery parked cars, resolved ONCE (a parked car never moves, and its
+    // pose costs a terrain sample). The per-step bake then only distance-culls
+    // this list instead of re-deriving thousands of poses. Kept sorted by bay
+    // so `bay` doubles as the STABLE physics proxy key — bake order changes as
+    // the player moves, and the proxies must not shuffle with it.
+    struct SceneryCar {
+        engine::Mat4 pose;
+        engine::Vec2 pos;
+        int variant = 0;
+        int bay = 0;
+    };
+    std::vector<SceneryCar> scenery_;
+    bool sceneryBuilt_ = false;
+    // Set per fixed step: bake the render poses only on the frame's LAST step
+    // (see fixedUpdate). True by default so a direct step() call still bakes.
+    bool bakeThisStep_ = true;
+    // Adaptive-dip state. The CADENCE itself lives in CitySim (setTickPeriod);
+    // this is only the load multiplier the bridge derives from the frame's
+    // fixed-step count and scales that period by.
+    int loadMul_ = 1;
+    int loadStreak_ = 0;
+    std::vector<std::vector<int>> pedAgentIds_;           // ditto, ped group (P4)
     engine::Entity pedGroup_;
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
