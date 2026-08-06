@@ -48,6 +48,7 @@ public:
     bool shouldClose() const override;
     void pollEvents() override;
     void getSize(int& width, int& height) const override;
+    bool setSize(int width, int height) override;
     void getFramebufferSize(int& width, int& height) const override;
     void* nativeWindowHandle() const override;
     bool createVulkanSurface(void* instance, uint64_t* outSurface) const override;
@@ -585,6 +586,11 @@ void GlfwWindow::pollEvents() {
 
 void GlfwWindow::getSize(int& width, int& height) const {
     glfwGetWindowSize(impl->window, &width, &height);
+}
+
+bool GlfwWindow::setSize(int width, int height) {
+    glfwSetWindowSize(impl->window, width, height);
+    return true;
 }
 
 void GlfwWindow::getFramebufferSize(int& width, int& height) const {

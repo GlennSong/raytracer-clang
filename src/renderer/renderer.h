@@ -496,7 +496,7 @@ public:
     // while vsync is on, frame time is quantised to the refresh interval, so
     // removing 4 ms of GPU work changes NOTHING measurable — the frame just
     // waits the same. Ranking passes by frame time therefore requires turning
-    // this off first (PassBisect does, and restores it). Returns false when
+    // this off first (PassCost does, and restores it). Returns false when
     // the backend can't control presentation pacing — a compositor-driven
     // surface (visionOS) owns it — so callers can say the measurement is
     // unreliable rather than report noise.

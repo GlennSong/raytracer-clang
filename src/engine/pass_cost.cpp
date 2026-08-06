@@ -1,6 +1,10 @@
-#include "pass_bisect.h"
+#include "pass_cost.h"
 
 #include "../log.h"
+#include "../renderer/window.h"
+
+#include <fstream>
+#include <string>
 
 #include <algorithm>
 #include <cmath>
@@ -10,9 +14,9 @@
 
 namespace engine {
 
-constexpr PassBisect::Step PassBisect::STEPS[];
+constexpr PassCost::Step PassCost::STEPS[];
 
-void PassBisect::begin(FrameContext& ctx) {
+void PassCost::begin(FrameContext& ctx) {
     savedSsao = ctx.renderer.ssaoEnabled;
     savedSsr = ctx.renderer.ssrEnabled;
     savedBloom = ctx.renderer.bloomEnabled;
@@ -21,7 +25,7 @@ void PassBisect::begin(FrameContext& ctx) {
     // the refresh interval and the whole measurement is meaningless.
     syncDisabled = ctx.renderer.setPresentSync(false);
     if (!syncDisabled)
-        LOG_WARN << "pass bisect: renderer would not disable presentation "
+        LOG_WARN << "pass cost: renderer would not disable presentation "
                     "sync; results will be lower bounds";
     step = 0;
     elapsed = 0.0;
@@ -32,7 +36,7 @@ void PassBisect::begin(FrameContext& ctx) {
     applyStep(ctx, 0);
 }
 
-void PassBisect::restore(FrameContext& ctx) {
+void PassCost::restore(FrameContext& ctx) {
     ctx.renderer.ssaoEnabled = savedSsao;
     ctx.renderer.ssrEnabled = savedSsr;
     ctx.renderer.bloomEnabled = savedBloom;
@@ -42,20 +46,20 @@ void PassBisect::restore(FrameContext& ctx) {
     }
 }
 
-void PassBisect::cancel(FrameContext& ctx) {
+void PassCost::cancel(FrameContext& ctx) {
     restore(ctx);
     state = Idle;
     samples.clear();
     medians.clear();
 }
 
-void PassBisect::applyStep(FrameContext& ctx, int index) {
+void PassCost::applyStep(FrameContext& ctx, int index) {
     ctx.renderer.ssaoEnabled = STEPS[index].ssao;
     ctx.renderer.ssrEnabled = STEPS[index].ssr;
     ctx.renderer.bloomEnabled = STEPS[index].bloom;
 }
 
-void PassBisect::update(FrameContext& ctx) {
+void PassCost::update(FrameContext& ctx) {
     if (state != Running) return;
 
     elapsed += ctx.frameDelta;
@@ -101,9 +105,13 @@ static bool looksVsyncQuantised(const std::vector<float>& medians) {
     return false;
 }
 
-void PassBisect::finish() {
+void PassCost::finish() {
     state = Finished;
-    if (medians.empty()) { result = "bisect produced no samples"; return; }
+    measured.clear();
+    resultTrusted = false;
+    for (int i = 0; i < static_cast<int>(medians.size()); i++)
+        measured.push_back({STEPS[i].name, medians[i]});
+    if (medians.empty()) { result = "pass-cost run produced no samples"; return; }
 
     char buf[640];
     std::snprintf(buf, sizeof(buf), "measured at %.2fM pixels%s\n",
@@ -148,6 +156,7 @@ void PassBisect::finish() {
         return;
     }
 
+    resultTrusted = true;
     const float baseline = medians[0];
     std::snprintf(buf, sizeof(buf), "baseline %.2f ms/frame (median)\n",
                   baseline);
@@ -173,15 +182,121 @@ void PassBisect::finish() {
                   "the wait for the display.";
 }
 
-const char* PassBisect::label() const {
+const char* PassCost::label() const {
     return (state == Running && step < STEP_COUNT) ? STEPS[step].name : "done";
 }
 
-float PassBisect::secondsLeft() const {
+float PassCost::secondsLeft() const {
     if (state != Running) return 0.0f;
     const double remaining =
         (STEP_COUNT - step) * STEP_SECONDS - elapsed;
     return static_cast<float>(remaining > 0 ? remaining : 0);
+}
+
+
+
+// --- PassSweep: the same measurement at several sizes, unattended ---
+
+constexpr double PassSweep::SCALES[];
+
+void PassSweep::begin(const std::string& path) {
+    if (path.empty()) return;
+    outPath = path;
+    scaleIndex = 0;
+    rows.clear();
+    baseWidth = baseHeight = 0;
+    settle = 0.0;
+    state = Resizing;
+}
+
+void PassSweep::update(FrameContext& ctx, Window& window, bool& quit) {
+    if (state == Idle || state == Done) return;
+
+    if (baseWidth == 0) {   // first tick: remember the launch size
+        window.getSize(baseWidth, baseHeight);
+        if (baseWidth <= 0 || baseHeight <= 0) { state = Done; return; }
+        LOG_INFO("pass sweep: %d sizes from %dx%d -> %s",
+                 SCALE_COUNT, baseWidth, baseHeight, outPath.c_str());
+    }
+
+    if (state == Resizing) {
+        if (settle == 0.0) {
+            const int w = static_cast<int>(baseWidth * SCALES[scaleIndex]);
+            const int h = static_cast<int>(baseHeight * SCALES[scaleIndex]);
+            if (!window.setSize(w, h)) {
+                LOG_WARN << "pass sweep: window cannot be resized by the app "
+                            "(hosted window?); measuring at the current size only";
+                // Not fatal — one size still yields a ranking.
+            }
+        }
+        settle += ctx.frameDelta;
+        // The framebuffer, swapchain and offscreen targets all resize
+        // asynchronously; measuring before they settle times the resize.
+        if (settle < RESIZE_SETTLE_SECONDS) return;
+        settle = 0.0;
+        cost.begin(ctx);
+        state = Measuring;
+        return;
+    }
+
+    cost.update(ctx);
+    if (cost.state != PassCost::Finished) return;
+
+    const int fbW = ctx.framebufferWidth;
+    const int fbH = ctx.framebufferHeight;
+    for (const PassCost::Measured& m : cost.measurements())
+        rows.push_back({fbW * fbH, fbW, fbH, m.name, m.medianMs,
+                        cost.trustworthy()});
+
+    if (++scaleIndex >= SCALE_COUNT) {
+        window.setSize(baseWidth, baseHeight);   // leave the window as found
+        writeCsv();
+        logSummary();
+        state = Done;
+        quit = true;                              // unattended run ends itself
+        return;
+    }
+    state = Resizing;
+}
+
+void PassSweep::writeCsv() const {
+    std::ofstream out(outPath, std::ios::out | std::ios::trunc);
+    if (!out.is_open()) {
+        LOG_WARN("pass sweep: cannot write %s", outPath.c_str());
+        return;
+    }
+    out << "framebuffer_w,framebuffer_h,megapixels,config,median_ms,trusted\n";
+    for (const Row& r : rows)
+        out << r.width << ',' << r.height << ','
+            << (r.pixels / 1.0e6) << ',' << r.config << ','
+            << r.medianMs << ',' << (r.trusted ? 1 : 0) << '\n';
+    LOG_INFO("pass sweep: wrote %s (%zu rows)", outPath.c_str(), rows.size());
+}
+
+void PassSweep::logSummary() const {
+    // One line per size: what each pass cost there. Printed as well as written
+    // so an unattended run is readable straight from the terminal.
+    for (int i = 0; i < SCALE_COUNT; i++) {
+        const size_t base = static_cast<size_t>(i) * PassCost::STEP_COUNT;
+        if (base + PassCost::STEP_COUNT > rows.size()) break;
+        const Row& baseline = rows[base];
+        if (!baseline.trusted) {
+            LOG_WARN("pass sweep %dx%d (%.2fM px): UNRELIABLE at this size",
+                     baseline.width, baseline.height, baseline.pixels / 1.0e6);
+            continue;
+        }
+        std::string line;
+        char buf[128];
+        for (size_t k = 1; k < PassCost::STEP_COUNT; k++) {
+            std::snprintf(buf, sizeof(buf), "  %s=%.2fms",
+                          rows[base + k].config,
+                          baseline.medianMs - rows[base + k].medianMs);
+            line += buf;
+        }
+        LOG_INFO("pass sweep %dx%d (%.2fM px) baseline %.2fms |%s",
+                 baseline.width, baseline.height, baseline.pixels / 1.0e6,
+                 baseline.medianMs, line.c_str());
+    }
 }
 
 }  // namespace engine

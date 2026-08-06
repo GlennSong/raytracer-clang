@@ -50,6 +50,12 @@ public:
     virtual bool shouldClose() const = 0;
     virtual void pollEvents() = 0;
     virtual void getSize(int& width, int& height) const = 0;
+    // Resize the window programmatically. Returns false when the host owns the
+    // size (an embedded/hosted window, a compositor-driven surface), so a
+    // caller can say the measurement could not be run rather than silently
+    // measuring the wrong thing. Used by the automated pass-cost sweep, which
+    // needs several resolutions without a human dragging a corner.
+    virtual bool setSize(int /*width*/, int /*height*/) { return false; }
     virtual void getFramebufferSize(int& width, int& height) const = 0;
 
     // Opaque native OS handle (NSWindow*/NSView* on macOS, HWND on Windows...)

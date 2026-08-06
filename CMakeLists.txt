@@ -48,7 +48,7 @@ add_library(engine_core STATIC
     src/engine/recent_scenes.cpp
     src/engine/clock.cpp
     src/engine/frame_stats.cpp
-    src/engine/pass_bisect.cpp
+    src/engine/pass_cost.cpp
     src/engine/event_bus.cpp
     src/engine/debug_draw.cpp
     src/engine/world.cpp

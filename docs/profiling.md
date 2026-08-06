@@ -136,8 +136,22 @@ rate. The measured frame time then includes that waiting and the true cost is
 somewhere between one interval and the observed value — `gpu_ms` pins it down.
 `frame-report.py` detects this and says so.
 
-**Once you know it is GPU-bound**, rank the passes with the Performance
-panel's **Rank post passes** button. It **turns presentation sync off first**
+**Once you know it is GPU-bound**, rank the passes. The unattended way — one
+command, no interaction, no way to get the procedure wrong:
+
+```bash
+RT_PASS_SWEEP=passes.csv ./build/viewer assets/levels/arena.json
+```
+
+It resizes the window through four sizes (100%, 75%, 50%, 35% of what you
+launched with), measures every pass configuration at each, writes `passes.csv`,
+prints a per-size summary, restores your window, and quits. Several sizes
+matter because a pass whose cost scales with area is the one worth attacking
+at high resolution — the sweep shows that scaling directly instead of leaving
+it to be inferred.
+
+The interactive equivalent is the Performance panel's **Rank post passes**
+button. It **turns presentation sync off first**
 — this is the whole trick — then holds each configuration (all on, then SSAO /
 SSR / bloom disabled in turn) for two seconds, discards the frames while the
 pipeline settles, takes the *median* of the rest, restores your settings and

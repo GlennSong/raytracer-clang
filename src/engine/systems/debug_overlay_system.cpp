@@ -126,19 +126,19 @@ void DebugOverlaySystem::onStart(FrameContext& ctx) {
 }
 
 void DebugOverlaySystem::onStop(FrameContext& ctx) {
-    // Put the passes back BEFORE persisting: quitting mid-bisect must not
+    // Put the passes back BEFORE persisting: quitting mid-run must not
     // save a measurement configuration as if it were the user's choice.
-    bisect.cancel(ctx);
+    passCost.cancel(ctx);
     saveSettings(ctx);
 }
 
 void DebugOverlaySystem::render(FrameContext& ctx) {
-    // Advanced FIRST and unconditionally: a running bisect has passes
+    // Advanced FIRST and unconditionally: a running measurement has passes
     // disabled to time them, so it must keep ticking to its end and restore
     // them even if the panel is collapsed, the window hidden, or ImGui absent
     // entirely. Driving it from inside the panel's if-block once left a pass
     // switched off for the rest of the session.
-    bisect.update(ctx);
+    passCost.update(ctx);
 
 #ifdef RT_ENABLE_IMGUI
     // No ImGui context (e.g. a backend without debug-UI support): stay inert.
@@ -204,24 +204,24 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
         ImGui::TextDisabled("last %d frames, scale 0-%.1f ms", n,
                             budgetMs * 2.0f);
 
-        // Pass-cost bisect: the only reliable way to rank the screen-space
+        // Pass-cost probe: the only reliable way to rank the screen-space
         // passes while gpu_ms is present-contaminated (ADR-0077). Holds each
         // configuration for a fixed window, then reports the median frame time
         // of each — measured, not eyeballed, and no toggling by hand.
-        if (bisect.state == PassBisect::Idle) {
-            if (ImGui::Button("Rank post passes (~10s)")) bisect.begin(ctx);
+        if (passCost.state == PassCost::Idle) {
+            if (ImGui::Button("Rank post passes (~10s)")) passCost.begin(ctx);
             ImGui::SameLine();
             ImGui::TextDisabled("toggles SSAO/SSR/bloom in turn, times each");
         } else {
-            ImGui::Text("ranking: %s  (%.1fs left)", bisect.label(),
-                        bisect.secondsLeft());
+            ImGui::Text("ranking: %s  (%.1fs left)", passCost.label(),
+                        passCost.secondsLeft());
             ImGui::SameLine();
-            if (ImGui::Button("Cancel")) bisect.cancel(ctx);
+            if (ImGui::Button("Cancel")) passCost.cancel(ctx);
         }
-        if (!bisect.result.empty()) {
-            ImGui::TextUnformatted(bisect.result.c_str());
+        if (!passCost.result.empty()) {
+            ImGui::TextUnformatted(passCost.result.c_str());
             ImGui::SameLine();
-            if (ImGui::Button("Clear##bisect")) bisect.result.clear();
+            if (ImGui::Button("Clear##passcost")) passCost.result.clear();
         }
 
         if (!fs.capturing()) {

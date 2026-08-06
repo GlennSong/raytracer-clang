@@ -99,6 +99,11 @@ bool Application::initialize(const Config& config,
     // framebuffer size and pass config, not the pre-resize guesses.
     if (const char* capturePath = std::getenv("RT_FRAME_STATS"))
         pendingCapturePath = capturePath;
+    // Unattended pass-cost sweep: measure every post pass at several window
+    // sizes and quit, so a ranking needs one command and no interaction (and
+    // none of the mistakes a manual procedure invites).
+    if (const char* sweepPath = std::getenv("RT_PASS_SWEEP"))
+        passSweep.begin(sweepPath);
     if (const char* logEvery = std::getenv("RT_FRAME_STATS_LOG")) {
         statsLogInterval = std::atof(logEvery);
         if (statsLogInterval <= 0.0) statsLogInterval = 5.0;
@@ -359,6 +364,11 @@ void Application::runFrame() {
     RT_PROFILE_PLOT("draw calls", static_cast<int64_t>(rs.drawCalls));
     RT_PROFILE_PLOT("instances", static_cast<int64_t>(rs.totalInstances));
     RT_PROFILE_PLOT("triangles", static_cast<int64_t>(rs.trianglesDrawn));
+
+    if (passSweep.active()) {
+        FrameContext ctx = makeContext();
+        passSweep.update(ctx, *window, quit);
+    }
 
     if (statsLogInterval > 0.0) {
         statsLogTimer += frameDelta;

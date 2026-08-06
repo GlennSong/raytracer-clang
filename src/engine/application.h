@@ -7,6 +7,7 @@
 #include "xr/xr_backend.h"
 #include "clock.h"
 #include "frame_stats.h"
+#include "pass_cost.h"
 #include "asset_manager.h"
 #include "audio/audio_engine.h"
 #include "mesh_uploader.h"
@@ -118,6 +119,11 @@ private:
     // RT_FRAME_STATS path, held until the first frame so the capture header
     // can record the real framebuffer size (see runFrame).
     std::string pendingCapturePath;
+    // Unattended pass-cost sweep (RT_PASS_SWEEP). Lives here, not in the debug
+    // overlay, because it resizes the WINDOW — and because the overlay system
+    // only exists while the backtick overlay is open, which an automated run
+    // cannot rely on.
+    PassSweep passSweep;
     Settings settingsStore;
     // The one shared thread pool (ADR-0014). Declared before `systems` so it
     // outlives them — a system (e.g. physics) may hold work referencing it.
