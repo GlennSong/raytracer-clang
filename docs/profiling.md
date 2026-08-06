@@ -51,12 +51,33 @@ python3 tools/frame-report.py after.csv --compare before.csv    # before/after
 python3 tools/frame-report.py capture.csv --budget-fps 90       # Vision Pro budget
 ```
 
-The report (self-contained HTML, stdlib-only script) shows the frame-time
-series with spike peaks, a stacked where-does-the-frame-go chart, a
-distribution histogram against the 30/60/90 fps lines, and a summary table.
+The report (self-contained HTML, stdlib-only script) opens with a plain-language
+verdict — which bound you are in and what to do next — then:
+
+- **Chart 1, frame time over the session.** Hover for one frame's exact
+  breakdown, drag across to zoom (the y-scale follows the zoom), *Jump to
+  worst frame* for the biggest hitch. Scaled to the visible 98th percentile so
+  a single load spike can't flatten everything else; clipped frames are
+  counted beside the buttons.
+- **Chart 2, where the frame goes.** Stacked phases, scaled to typical frames.
+  Click a legend colour to hide that layer — the fastest way to see what's
+  underneath the dominant one.
+- **Chart 4, spike anatomy.** The slowest 1% of frames against typical ones,
+  phase by phase, sorted by growth. **The top row is what a spike actually
+  is** — the summary table can't show this, because an average frame and a
+  spike often differ in *which* phase grew. Plus the ten worst frames with
+  their full breakdown; early frame numbers usually mean load, upload, or
+  shader compilation rather than steady-state cost.
+- **Chart 3**, the distribution against the 30/60/90 fps lines.
+
 `--compare` overlays a baseline in grey — the honest way to claim "this made
 it faster". Keep the *before* capture from the same scene, camera, and
 duration as the *after*.
+
+**Steady-state cost and hitching are different problems.** If p99 is more than
+about 3× the median, the average is being dragged by a minority of very slow
+frames and the report says so: fix the hitch and the average moves without the
+typical frame changing at all. Chart 4 tells you which of the two you have.
 
 **Interpreting phases.** `wait` is the FPS-cap sleep — headroom, not cost.
 The gap between the phase stack and the total is unattributed engine time; if

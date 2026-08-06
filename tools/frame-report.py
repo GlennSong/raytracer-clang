@@ -16,6 +16,7 @@ phases), how spiky is it (p95/p99 + histogram), and did a change help
 import argparse
 import csv
 import html
+import json
 import math
 import os
 import sys
@@ -168,7 +169,20 @@ def verdict(cols, s, budget_ms):
             "No GPU timing in this capture — the backend does not report it "
             "(Metal does; Vulkan/WebGPU do not yet).")
 
-    if s["max"] > 4 * budget_ms:
+    # Steady-state cost and hitching are different problems with different
+    # fixes, and an average blends them into one misleading number.
+    if s["median"] > 0 and s["p99"] > 3 * s["median"]:
+        lines.append(
+            f"<b>Hitching is a separate problem here, and probably the one you "
+            f"feel.</b> The typical frame is {s['median']:.1f} ms but 1 in 100 "
+            f"takes {s['p99']:.0f} ms — {s['p99'] / s['median']:.0f}&times; "
+            f"longer — and the worst hit {s['max']:.0f} ms. That is why the "
+            f"average ({s['avg']:.1f} ms) sits so far above the median: a "
+            f"minority of very slow frames is dragging it. Steady-state cost "
+            f"and hitching need different fixes — see <b>chart 4</b> for which "
+            f"phase actually grows during a spike, and use "
+            f"<i>Jump to worst frame</i> on chart 1 to see where they fall.")
+    elif s["max"] > 4 * budget_ms:
         lines.append(
             f"One-off hitches: the worst frame took <b>{s['max']:.0f} ms</b> "
             f"(p99 {s['p99']:.0f} ms). Spikes that big are usually a load, an "
@@ -200,76 +214,133 @@ def summarize(cols):
     return s
 
 
-def bucket(values, max_points):
-    """Downsample to at most max_points buckets of (mean, peak) pairs, so a
-    100k-frame soak still charts — mean draws the area, peak keeps spikes."""
-    n = len(values)
-    if n <= max_points:
-        return list(values), list(values)
-    means, peaks = [], []
-    step = n / max_points
-    for i in range(max_points):
-        chunk = values[int(i * step):max(int(i * step) + 1, int((i + 1) * step))]
-        means.append(sum(chunk) / len(chunk))
-        peaks.append(max(chunk))
-    return means, peaks
+MAX_EMBEDDED = 40000   # frames sent to the browser verbatim (~2 MB of JSON)
 
 
-def polyline(values, width, height, y_max, color, opacity=1.0, fill=None):
-    if not values or y_max <= 0:
-        return ""
-    step = width / max(1, len(values) - 1)
-    points = " ".join(
-        f"{i * step:.1f},{height - min(v, y_max) / y_max * height:.1f}"
-        for i, v in enumerate(values))
-    if fill:
-        return (f'<polygon points="0,{height} {points} {width},{height}" '
-                f'fill="{fill}" opacity="{opacity}"/>')
-    return (f'<polyline points="{points}" fill="none" stroke="{color}" '
-            f'stroke-width="1.2" opacity="{opacity}"/>')
+def embed_series(cols, baseline, layers, budget_ms, y_max):
+    """The per-frame data the page's charts render from.
 
+    Sent verbatim (rounded to 2 dp) so hovering reports a REAL frame's numbers
+    rather than a bucket average. Very long captures are strided down, but
+    every frame at or above the 99th percentile is kept regardless — losing
+    the spikes would lose the thing worth looking at."""
+    n = len(cols["total_ms"])
+    keep = list(range(n))
+    if n > MAX_EMBEDDED:
+        cut = percentile(sorted(cols["total_ms"]), 0.99)
+        stride = math.ceil(n / MAX_EMBEDDED)
+        keep = sorted({i for i in range(0, n, stride)} |
+                      {i for i, v in enumerate(cols["total_ms"]) if v >= cut})
 
-def budget_lines(width, height, y_max, budgets_ms):
-    parts = []
-    for ms, label in budgets_ms:
-        if ms >= y_max:
-            continue
-        y = height - ms / y_max * height
-        parts.append(f'<line x1="0" y1="{y:.1f}" x2="{width}" y2="{y:.1f}" '
-                     f'stroke="#888" stroke-dasharray="4 3" stroke-width="1"/>')
-        parts.append(f'<text x="4" y="{y - 3:.1f}" class="tick">{label}</text>')
-    return "".join(parts)
+    def series(column):
+        return [round(cols[column][i], 2) for i in keep]
 
-
-def frame_time_chart(cols, baseline, y_max, budgets):
-    width, height = 900, 220
-    parts = [budget_lines(width, height, y_max, budgets)]
+    data = {
+        "n": len(keep),
+        "frameNo": [i + 1 for i in keep],
+        "budget": round(budget_ms, 3),
+        "yMax": round(y_max, 2),
+        "total": series("total_ms"),
+        "gpu": series("gpu_ms"),
+        "draws": [int(cols["draw_calls"][i]) for i in keep],
+        "tris": [int(cols["triangles"][i]) for i in keep],
+        "layers": [{"key": key, "label": label, "color": color,
+                    "values": series(key)} for key, label, color in layers],
+        "strided": len(keep) < n,
+    }
     if baseline:
-        base_means, base_peaks = bucket(baseline["total_ms"], width // 2)
-        parts.append(polyline(base_peaks, width, height, y_max, "#999", 0.5))
-        parts.append(polyline(base_means, width, height, y_max, "#666", 0.8))
-    means, peaks = bucket(cols["total_ms"], width // 2)
-    parts.append(polyline(peaks, width, height, y_max, "#e15759", 0.45))
-    parts.append(polyline(means, width, height, y_max, "#4e79a7"))
-    return svg(width, height, "".join(parts))
+        bn = len(baseline["total_ms"])
+        step = max(1, math.ceil(bn / 2000))
+        data["baseline"] = [round(baseline["total_ms"][i], 2)
+                            for i in range(0, bn, step)]
+    return data
 
 
-def stacked_phase_chart(cols, y_max):
-    width, height = 900, 220
-    n_points = width // 2
-    stacked = [0.0] * min(n_points, len(cols["total_ms"]))
-    layers = []
-    for column, _, color in phases_for(cols):
-        means, _ = bucket(cols[column], n_points)
-        stacked = [s + v for s, v in zip(stacked, means)]
-        layers.append((list(stacked), color))
-    parts = []
-    for values, color in reversed(layers):   # tallest first so lower shows
-        parts.append(polyline(values, width, height, y_max, color, 0.9,
-                              fill=color))
-    parts.append(budget_lines(width, height, y_max,
-                              [(16.67, "60 fps"), (11.11, "90 fps")]))
-    return svg(width, height, "".join(parts))
+def spike_anatomy(cols, layers):
+    """Compare the composition of the slowest 1% of frames against typical
+    ones, phase by phase. This is what a summary table cannot show: an average
+    frame and a spike can differ in WHICH phase grew, and that difference names
+    the cause (a stall waiting on the GPU vs a pipeline build vs a CPU hitch)."""
+    totals = cols["total_ms"]
+    n = len(totals)
+    ordered = sorted(totals)
+    p99 = percentile(ordered, 0.99)
+    lo, hi = percentile(ordered, 0.40), percentile(ordered, 0.60)
+
+    typical = [i for i, v in enumerate(totals) if lo <= v <= hi]
+    slow = [i for i, v in enumerate(totals) if v >= p99]
+    if not typical or not slow:
+        return None
+
+    def mean(indices, column):
+        return sum(cols[column][i] for i in indices) / len(indices)
+
+    rows = []
+    for key, label, color in layers:
+        t, sl = mean(typical, key), mean(slow, key)
+        rows.append({"label": label, "color": color, "typical": t,
+                     "slow": sl, "delta": sl - t})
+    rows.append({"label": "GPU (lags 1-2 frames)", "color": "#666",
+                 "typical": mean(typical, "gpu_ms"),
+                 "slow": mean(slow, "gpu_ms"),
+                 "delta": mean(slow, "gpu_ms") - mean(typical, "gpu_ms")})
+    rows.sort(key=lambda r: -abs(r["delta"]))
+
+    worst = sorted(range(n), key=lambda i: -totals[i])[:10]
+    return {
+        "typical_total": mean(typical, "total_ms"),
+        "slow_total": mean(slow, "total_ms"),
+        "typical_count": len(typical),
+        "slow_count": len(slow),
+        "rows": rows,
+        "worst": [{"frame": i + 1, "total": totals[i],
+                   "parts": [(label, cols[key][i]) for key, label, _ in layers],
+                   "gpu": cols["gpu_ms"][i],
+                   "draws": int(cols["draw_calls"][i])} for i in worst],
+    }
+
+
+def spike_section(a, budget_ms):
+    if not a:
+        return ""
+    top = a["rows"][0]
+    share = (top["delta"] / max(1e-6, a["slow_total"] - a["typical_total"])) * 100
+    bars = []
+    scale = max(r["slow"] for r in a["rows"]) or 1.0
+    for r in a["rows"]:
+        bars.append(
+            f"<tr><td style='text-align:left'><span style='color:{r['color']}'>"
+            f"&#9632;</span> {html.escape(r['label'])}</td>"
+            f"<td>{r['typical']:.2f}</td><td>{r['slow']:.2f}</td>"
+            f"<td><b>{r['delta']:+.2f}</b></td>"
+            f"<td style='width:40%'><div style='background:{r['color']};"
+            f"height:10px;width:{max(0.0, r['slow']) / scale * 100:.1f}%'></div>"
+            f"</td></tr>")
+    worst = "".join(
+        f"<tr><td>{w['frame']}</td><td>{w['total']:.1f}</td>"
+        + "".join(f"<td>{v:.2f}</td>" for _, v in w["parts"])
+        + f"<td>{w['gpu']:.2f}</td><td>{w['draws']}</td></tr>"
+        for w in a["worst"])
+    part_heads = "".join(f"<th>{html.escape(label)}</th>"
+                         for label, _ in a["worst"][0]["parts"])
+    return f"""
+<h2>Chart 4 &mdash; Spike anatomy: what grows when a frame goes slow</h2>
+<p class="note">The slowest 1% ({a['slow_count']} frames, avg
+<b>{a['slow_total']:.1f} ms</b>) against typical ones ({a['typical_count']}
+frames near the median, avg {a['typical_total']:.1f} ms). Sorted by how much
+each phase grew &mdash; <b>the top row is what a spike actually is</b>.</p>
+<table><tr><th>phase</th><th>typical</th><th>slow 1%</th><th>growth</th>
+<th>slow-frame size</th></tr>{''.join(bars)}</table>
+<p class="note"><b>{html.escape(top['label'])}</b> accounts for
+{share:.0f}% of the extra time in a slow frame ({top['delta']:+.2f} ms of
+{a['slow_total'] - a['typical_total']:+.2f} ms). GPU time lags its frame by
+one or two, so read that row as "around here", not exact.</p>
+<h2>The ten worst frames</h2>
+<p class="note">Frame numbers are positions in the capture &mdash; early ones
+are usually load, upload, or shader compilation rather than steady-state
+cost. Budget is {budget_ms:.1f} ms.</p>
+<table><tr><th>frame</th><th>total</th>{part_heads}<th>gpu</th><th>draws</th>
+</tr>{worst}</table>"""
 
 
 def histogram_chart(values, y_max_ms):
@@ -303,6 +374,207 @@ def svg(width, height, body):
     return (f'<svg viewBox="0 0 {width} {height}" '
             f'style="width:100%;max-width:{width}px;background:#fafafa;'
             f'border:1px solid #ddd">{body}</svg>')
+
+
+# The timeline charts render in the browser from the embedded per-frame data:
+# one renderer, so zoom/hover/layer-toggle reuse the same drawing code instead
+# of a second copy of it in Python. Plain string (not an f-string) — JS is all
+# braces. __DATA__ is replaced with the JSON payload.
+CHART_JS = r"""
+<script>
+const R = __DATA__;
+const W = 900, H = 220;
+let view = {lo: 0, hi: R.n};
+let hidden = {};
+
+const svgNS = "http://www.w3.org/2000/svg";
+const el = (id) => document.getElementById(id);
+
+// Bucket [lo,hi) down to W/2 columns; keep the peak as well as the mean so a
+// one-frame spike survives being drawn at 450 px wide.
+function buckets(values, lo, hi, cols) {
+  const out = {mean: [], peak: [], idx: []};
+  const span = Math.max(1, hi - lo), step = span / cols;
+  for (let i = 0; i < cols; i++) {
+    const a = lo + Math.floor(i * step), b = Math.max(a + 1, lo + Math.floor((i + 1) * step));
+    let sum = 0, peak = -Infinity, peakAt = a;
+    for (let j = a; j < b && j < R.n; j++) {
+      sum += values[j];
+      if (values[j] > peak) { peak = values[j]; peakAt = j; }
+    }
+    const count = Math.max(1, Math.min(b, R.n) - a);
+    out.mean.push(sum / count); out.peak.push(peak); out.idx.push(peakAt);
+  }
+  return out;
+}
+
+function yOf(v, yMax) { return H - Math.min(v, yMax) / yMax * H; }
+
+function pathFor(values, yMax) {
+  const step = W / Math.max(1, values.length - 1);
+  return values.map((v, i) => (i ? "L" : "M") + (i * step).toFixed(1) + "," + yOf(v, yMax).toFixed(1)).join(" ");
+}
+
+function budgetLines(yMax) {
+  let out = "";
+  [[R.budget, (1000 / R.budget).toFixed(0) + " fps"],
+   [R.budget * 2, (500 / R.budget).toFixed(0) + " fps"]].forEach(([ms, label]) => {
+    if (ms >= yMax) return;
+    const y = yOf(ms, yMax);
+    out += `<line x1="0" y1="${y}" x2="${W}" y2="${y}" stroke="#888" stroke-dasharray="4 3"/>`;
+    out += `<text x="4" y="${y - 3}" class="tick">${label}</text>`;
+  });
+  return out;
+}
+
+// Scale to the 98th percentile of what is VISIBLE, not the maximum: a single
+// 700 ms load hitch would otherwise squash every normal frame into a flat line
+// at the bottom (and make the stacked chart look empty). Outliers clip at the
+// ceiling — still visible, and counted in the caption. Zooming into a spike
+// raises the visible p98, so the scale follows you in.
+function autoMax(lo, hi) {
+  const vis = R.total.slice(lo, hi).sort((a, b) => a - b);
+  if (!vis.length) return R.budget * 2;
+  const p98 = vis[Math.min(vis.length - 1, Math.floor(vis.length * 0.98))];
+  return Math.max(R.budget * 1.5, p98 * 1.15);
+}
+
+function clipCount(lo, hi, yMax) {
+  let n = 0;
+  for (let i = lo; i < hi; i++) if (R.total[i] > yMax) n++;
+  return n;
+}
+
+// An <svg> only hit-tests PAINTED geometry — a CSS background is not painted,
+// so without this transparent rect the mouse handlers never fire over empty
+// chart area (found by driving the page headlessly, not by reading it).
+const HIT = `<rect x="0" y="0" width="${W}" height="${H}" fill="transparent"/>`;
+
+function drawTimeline(lo, hi, yMax) {
+  const b = buckets(R.total, lo, hi, W / 2);
+  let s = HIT + budgetLines(yMax);
+  if (R.baseline) {
+    const bb = buckets(R.baseline, 0, R.baseline.length, W / 2);
+    s += `<path d="${pathFor(bb.mean, yMax)}" fill="none" stroke="#999" stroke-width="1.2" opacity="0.7"/>`;
+  }
+  s += `<path d="${pathFor(b.peak, yMax)}" fill="none" stroke="#e15759" stroke-width="1" opacity="0.5"/>`;
+  s += `<path d="${pathFor(b.mean, yMax)}" fill="none" stroke="#4e79a7" stroke-width="1.3"/>`;
+  el("chart1").innerHTML = s + '<rect id="sel1" x="0" y="0" width="0" height="' + H + '" fill="#4e79a7" opacity="0.15"/><line id="cross1" y1="0" y2="' + H + '" stroke="#333" stroke-width="0.7" opacity="0"/>';
+}
+
+// Chart 2 answers "where does a TYPICAL frame's time go", so it gets its own
+// scale from its own (bucket-averaged) heights. Sharing chart 1's spike-driven
+// scale flattened the whole stack into an unreadable strip at the bottom.
+function drawStack(lo, hi) {
+  const active = R.layers.filter(l => !hidden[l.key]);
+  const cols = W / 2;
+  let stacked = new Array(cols).fill(0), s = HIT;
+  const bands = [];
+  active.forEach(layer => {
+    const b = buckets(layer.values, lo, hi, cols);
+    stacked = stacked.map((v, i) => v + b.mean[i]);
+    bands.push({color: layer.color, values: stacked.slice()});
+  });
+  const sorted = stacked.slice().sort((a, b) => a - b);
+  const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] || 0;
+  const yMax = Math.max(R.budget * 1.2, p95 * 1.25);
+  const step = W / Math.max(1, cols - 1);
+  bands.slice().reverse().forEach(band => {
+    const pts = band.values.map((v, i) => (i * step).toFixed(1) + "," + yOf(v, yMax).toFixed(1)).join(" ");
+    s += `<polygon points="0,${H} ${pts} ${W},${H}" fill="${band.color}" opacity="0.92"/>`;
+  });
+  s += budgetLines(yMax);
+  s += `<text x="${W - 4}" y="12" class="tick" text-anchor="end">0-${yMax.toFixed(1)} ms (mean per column)</text>`;
+  el("chart2").innerHTML = s + '<line id="cross2" y1="0" y2="' + H + '" stroke="#333" stroke-width="0.7" opacity="0"/>';
+}
+
+function render() {
+  const yMax = autoMax(view.lo, view.hi);
+  drawTimeline(view.lo, view.hi, yMax);
+  drawStack(view.lo, view.hi);
+  const clipped = clipCount(view.lo, view.hi, yMax);
+  el("range").textContent = "frames " + (R.frameNo[view.lo] || 1) + "-" +
+    (R.frameNo[Math.min(view.hi, R.n) - 1] || R.n) + " of " + R.n +
+    "  ·  scale 0-" + yMax.toFixed(1) + " ms" +
+    (clipped ? "  ·  " + clipped + " frame" + (clipped > 1 ? "s" : "") +
+               " clip above the top (drag over one to zoom in)" : "") +
+    (R.strided ? "  ·  strided (spikes kept)" : "");
+}
+
+function frameAt(clientX, svgEl) {
+  const box = svgEl.getBoundingClientRect();
+  const t = Math.min(1, Math.max(0, (clientX - box.left) / box.width));
+  return Math.min(R.n - 1, view.lo + Math.floor(t * (view.hi - view.lo)));
+}
+
+function showTip(evt, svgEl) {
+  const i = frameAt(evt.clientX, svgEl);
+  const tip = el("tip");
+  let rows = `<b>frame ${R.frameNo[i]}</b> &nbsp; total <b>${R.total[i].toFixed(2)} ms</b>`;
+  R.layers.forEach(l => {
+    rows += `<br><span style="color:${l.color}">&#9632;</span> ${l.label}: ${l.values[i].toFixed(2)}`;
+  });
+  if (R.gpu[i] > 0) rows += `<br><span style="color:#666">&#9632;</span> gpu: ${R.gpu[i].toFixed(2)} <span style="opacity:.6">(lags)</span>`;
+  rows += `<br><span style="opacity:.6">${R.draws[i]} draws · ${(R.tris[i] / 1e6).toFixed(2)}M tris</span>`;
+  tip.innerHTML = rows;
+  tip.style.display = "block";
+  tip.style.left = Math.min(window.innerWidth - 220, evt.clientX + 14) + "px";
+  tip.style.top = (evt.clientY + window.scrollY + 14) + "px";
+  const frac = (i - view.lo) / Math.max(1, view.hi - view.lo);
+  ["cross1", "cross2"].forEach(id => {
+    const c = el(id);
+    if (c) { c.setAttribute("x1", frac * W); c.setAttribute("x2", frac * W); c.setAttribute("opacity", "0.6"); }
+  });
+}
+
+function hideTip() {
+  el("tip").style.display = "none";
+  ["cross1", "cross2"].forEach(id => { const c = el(id); if (c) c.setAttribute("opacity", "0"); });
+}
+
+// Drag across either chart to zoom into that span; both charts follow.
+function wire(svgId) {
+  const s = el(svgId);
+  let dragFrom = null;
+  s.addEventListener("mousemove", (e) => {
+    showTip(e, s);
+    if (dragFrom !== null) {
+      const box = s.getBoundingClientRect();
+      const a = Math.min(dragFrom, e.clientX) - box.left, b = Math.max(dragFrom, e.clientX) - box.left;
+      const sel = el("sel1");
+      if (sel) { sel.setAttribute("x", a / box.width * W); sel.setAttribute("width", (b - a) / box.width * W); }
+    }
+  });
+  s.addEventListener("mouseleave", hideTip);
+  s.addEventListener("mousedown", (e) => { dragFrom = e.clientX; e.preventDefault(); });
+  s.addEventListener("mouseup", (e) => {
+    if (dragFrom === null) return;
+    const lo = frameAt(Math.min(dragFrom, e.clientX), s), hi = frameAt(Math.max(dragFrom, e.clientX), s);
+    dragFrom = null;
+    const sel = el("sel1"); if (sel) sel.setAttribute("width", 0);
+    if (hi - lo >= 4) { view = {lo: lo, hi: hi + 1}; render(); }
+  });
+}
+
+function resetZoom() { view = {lo: 0, hi: R.n}; render(); }
+
+function jumpToWorst() {
+  let worst = 0;
+  for (let i = 0; i < R.n; i++) if (R.total[i] > R.total[worst]) worst = i;
+  const pad = Math.max(30, Math.floor(R.n * 0.01));
+  view = {lo: Math.max(0, worst - pad), hi: Math.min(R.n, worst + pad)};
+  render();
+}
+
+function toggleLayer(key, node) {
+  hidden[key] = !hidden[key];
+  node.style.opacity = hidden[key] ? 0.35 : 1;
+  node.style.textDecoration = hidden[key] ? "line-through" : "none";
+  render();
+}
+
+wire("chart1"); wire("chart2"); render();
+</script>"""
 
 
 def summary_rows(label, s):
@@ -345,12 +617,19 @@ def main():
         rows.append(summary_rows(os.path.basename(args.compare) + " (baseline)",
                                  summarize(baseline)))
 
+    layers = phases_for(cols)
     legend = " ".join(
-        f'<span style="color:{color}">&#9632; {label}</span>'
-        for _, label, color in phases_for(cols))
+        f'<span class="lg" style="color:{color}" '
+        f'onclick="toggleLayer(\'{key}\', this)">&#9632; {label}</span>'
+        for key, label, color in layers)
     compare_note = (" — baseline in grey" if baseline else "")
     verdict_html = "".join(f"<p>{line}</p>" for line in
                            verdict(cols, s, budget_ms))
+    chart_js = CHART_JS.replace(
+        "__DATA__",
+        json.dumps(embed_series(cols, baseline, layers, budget_ms, y_max),
+                   separators=(",", ":")))
+    spikes = spike_section(spike_anatomy(cols, layers), budget_ms)
 
     doc = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Frame report — {html.escape(os.path.basename(args.capture))}</title>
@@ -372,6 +651,16 @@ h2 {{ margin-top: 1.6em; font-size: 16px; }}
 .verdict p {{ margin: 0.5em 0; }}
 .verdict h2 {{ margin: 0 0 0.3em; font-size: 15px; }}
 code {{ background: #eee; padding: 0 3px; border-radius: 3px; }}
+.chart {{ width: 100%; max-width: 900px; background: #fafafa;
+          border: 1px solid #ddd; cursor: crosshair; user-select: none; }}
+.ctrl {{ margin: 0.4em 0; display: flex; gap: 8px; align-items: center; }}
+.ctrl button {{ font: 12px inherit; padding: 3px 10px; cursor: pointer;
+                border: 1px solid #ccc; border-radius: 4px; background: #fff; }}
+.lg {{ cursor: pointer; margin-right: 10px; }}
+#tip {{ position: absolute; display: none; background: #222; color: #fff;
+        font: 12px/1.45 -apple-system, sans-serif; padding: 7px 10px;
+        border-radius: 5px; pointer-events: none; z-index: 10;
+        box-shadow: 0 2px 8px rgba(0,0,0,.3); }}
 </style></head><body>
 <h1>Frame report</h1>
 <p class="note">{s['frames']} frames, {s['seconds']:.1f}s at {s['fps']:.1f} fps
@@ -394,8 +683,17 @@ hitches you felt, at the moment you felt them.</li>
 <li><b>Chart 2</b>: the same timeline, each frame's cost split into stacked
 colored layers — <b>the fattest layer is where the time goes</b>; grey on
 top is sleep (good).</li>
+<li><b>Chart 4</b>: what actually grows when a frame goes slow — the slowest
+1% of frames next to typical ones, phase by phase. <b>The top row is what a
+spike is.</b> Steady-state cost and hitching are different problems; this
+separates them.</li>
 <li><b>Chart 3</b>: how often each frame cost occurred. One tight clump left
 of the budget line = smooth; a tail smearing right = stutter.</li>
+<li>The timeline charts are <b>interactive</b>: hover for one frame's exact
+numbers, drag across to zoom (the scale follows), click a legend colour to
+hide that layer, and <i>Jump to worst frame</i> goes straight to the biggest
+hitch. Chart 1 is scaled to the 98th percentile so one load spike cannot
+flatten everything else — clipped frames are counted next to the buttons.</li>
 <li><b>The decision</b>: if <span style="color:#e15759">render</span>
 dominates chart 2 while draw calls are modest, the frame is GPU-bound — use
 the platform GPU profiler (Xcode's capture). If
@@ -409,15 +707,26 @@ dominate, it's CPU-bound — attach Tracy (docs/profiling.md).</li>
 <th>submit</th><th>wait</th><th>gpu</th>
 <th>draws avg/max</th><th>tris</th></tr>{''.join(rows)}</table>
 <h2>Chart 1 &mdash; Frame time over the session (blue typical, red worst{compare_note})</h2>
-{frame_time_chart(cols, baseline, y_max, [(budget_ms, f"{args.budget_fps} fps"), (budget_ms * 2, f"{args.budget_fps // 2} fps")])}
+<div class="ctrl"><button onclick="resetZoom()">Reset zoom</button>
+<button onclick="jumpToWorst()">Jump to worst frame</button>
+<span class="note" id="range"></span></div>
+<svg id="chart1" viewBox="0 0 900 220" class="chart"></svg>
+<p class="note"><b>Hover</b> any point for that frame's exact breakdown;
+<b>drag across</b> either chart to zoom into a span; the y-scale follows the
+zoom, so zooming into a quiet stretch reveals detail the spikes were
+flattening.</p>
 <h2>Chart 2 &mdash; Where the frame goes, stacked: {legend}</h2>
-{stacked_phase_chart(cols, y_max)}
-<p class="note">Wait is the FPS-cap sleep &mdash; headroom, not cost. The gap
-between the stack and the frame-time line is unattributed time (event
-dispatch, state swaps, host overhead): if it grows, a phase bracket is
-missing.</p>
+<svg id="chart2" viewBox="0 0 900 220" class="chart"></svg>
+<p class="note">Click a colour in the heading to hide that layer &mdash; the
+quickest way to see what the rest look like without the dominant one. Wait is
+the FPS-cap sleep (headroom, not cost); the gap between the stack and the
+frame-time line is unattributed time (event dispatch, state swaps, host
+overhead).</p>
+{spikes}
 <h2>Chart 3 &mdash; How often each frame cost occurred</h2>
 {histogram_chart(cols["total_ms"], y_max)}
+<div id="tip"></div>
+{chart_js}
 </body></html>
 """
     with open(out_path, "w") as f:
