@@ -135,12 +135,14 @@ FrameStats::Summary FrameStats::summarize() const {
     return s;
 }
 
-bool FrameStats::startCapture(const std::string& path) {
+bool FrameStats::startCapture(const std::string& path,
+                              const std::string& context) {
     stopCapture();
     captureFile.open(path, std::ios::out | std::ios::trunc);
     if (!captureFile.is_open()) return false;
     captureTarget = path;
     captureRows = 0;
+    if (!context.empty()) captureFile << "# " << context << '\n';
     captureFile << "frame,total_ms,update_ms,fixed_ms,render_ms,wait_ms,"
                    "host_delta_ms,fixed_steps,draw_calls,instances,triangles,"
                    "acquire_ms,encode_ms,submit_ms,gpu_ms,mesh_uploads,"

@@ -128,7 +128,12 @@ public:
     // false (and stays off) if the path can't be opened — a read-only bundle
     // dir on visionOS, say; pass a Documents path there. Restarting an active
     // capture closes the old file first.
-    bool startCapture(const std::string& path);
+    // `context` is written as a leading `# key=value ...` comment line. It
+    // exists because two captures of the same scene came out 2x apart and
+    // nobody could say what differed — resolution, pass config and refresh
+    // rate decide the answer, so a capture that doesn't record them is not
+    // comparable to any other. Readers must skip `#` lines.
+    bool startCapture(const std::string& path, const std::string& context = "");
     void stopCapture();
     bool capturing() const { return captureFile.is_open(); }
     const std::string& capturePath() const { return captureTarget; }

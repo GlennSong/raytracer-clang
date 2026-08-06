@@ -115,6 +115,9 @@ private:
     // per-frame resource creation as a delta (see runFrame).
     uint64_t prevMeshUploads = 0;
     uint64_t prevTextureUploads = 0;
+    // RT_FRAME_STATS path, held until the first frame so the capture header
+    // can record the real framebuffer size (see runFrame).
+    std::string pendingCapturePath;
     Settings settingsStore;
     // The one shared thread pool (ADR-0014). Declared before `systems` so it
     // outlives them — a system (e.g. physics) may hold work referencing it.

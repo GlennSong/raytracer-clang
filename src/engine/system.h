@@ -15,6 +15,7 @@
 #include "../job_system.h"
 #include <vector>
 #include <memory>
+#include <string>
 
 namespace engine {
 
@@ -92,6 +93,12 @@ struct FrameContext {
     // the shipped game.
     bool debugOverlayActive = false;
 };
+
+// The conditions a frame capture was taken under, as a one-line
+// `key=value` string for the capture's header (see FrameStats::startCapture).
+// Defined once (application.cpp) and used by every place that starts a
+// capture, so two captures always describe themselves the same way.
+std::string describeCaptureContext(const FrameContext& ctx);
 
 // A unit of engine behaviour, ticked by Application each frame. Override only
 // the hooks you need; all default to no-ops. The interface is deliberately

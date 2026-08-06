@@ -2,11 +2,39 @@
 #include "states/debug_overlay_state.h"
 #include "../log.h"
 #include "../profile.h"
+#include <cstdio>
 #include <cstdlib>
 #include <thread>
 #include <chrono>
 
 namespace engine {
+
+std::string describeCaptureContext(const FrameContext& ctx) {
+    // Resolution first: it is the single biggest lever on a GPU-bound frame
+    // (a Retina framebuffer is 4x its logical window), and it was the first
+    // thing we could not reconstruct when two captures disagreed by 2x.
+    char buf[512];
+    std::snprintf(buf, sizeof(buf),
+                  "framebuffer=%dx%d window=%dx%d megapixels=%.2f "
+                  "ssao=%d ssr=%d bloom=%d probes=%d envmap=%d prepass=%d "
+                  "shadow_cascades=%d shadow_distance=%.0f tonemap=%d "
+                  "target_fps=%d fixed_step=%.4f",
+                  ctx.framebufferWidth, ctx.framebufferHeight,
+                  ctx.windowWidth, ctx.windowHeight,
+                  ctx.framebufferWidth * ctx.framebufferHeight / 1.0e6,
+                  ctx.renderer.ssaoEnabled ? 1 : 0,
+                  ctx.renderer.ssrEnabled ? 1 : 0,
+                  ctx.renderer.bloomEnabled ? 1 : 0,
+                  ctx.renderer.reflectionProbesEnabled ? 1 : 0,
+                  ctx.renderer.environmentMapEnabled ? 1 : 0,
+                  ctx.renderer.depthPrepassEnabled ? 1 : 0,
+                  ctx.renderer.shadowParams.cascadeCount,
+                  static_cast<double>(ctx.renderer.shadowParams.distance),
+                  ctx.renderer.tonemapOperator,
+                  ctx.renderer.targetFps,
+                  ctx.clock.fixedStep());
+    return std::string(buf);
+}
 
 StateTransition::StateTransition() = default;
 StateTransition::~StateTransition() = default;
@@ -67,12 +95,10 @@ bool Application::initialize(const Config& config,
     // periodic summary line — the capture path on hosts where only a console
     // is reachable (visionOS device logs, headless soaks). Same env-var
     // convention as RT_DEBUG_VIEW / RT_FRAME_DUMP.
-    if (const char* capturePath = std::getenv("RT_FRAME_STATS")) {
-        if (frameStats.startCapture(capturePath))
-            LOG_INFO("frame stats capture -> %s", capturePath);
-        else
-            LOG_WARN("frame stats capture failed to open %s", capturePath);
-    }
+    // Deferred to the first frame so the capture header records the REAL
+    // framebuffer size and pass config, not the pre-resize guesses.
+    if (const char* capturePath = std::getenv("RT_FRAME_STATS"))
+        pendingCapturePath = capturePath;
     if (const char* logEvery = std::getenv("RT_FRAME_STATS_LOG")) {
         statsLogInterval = std::atof(logEvery);
         if (statsLogInterval <= 0.0) statsLogInterval = 5.0;
@@ -163,6 +189,18 @@ void Application::runFrame() {
     frameDelta = window->getDeltaTime();
     reconcileFramebuffer();
     frameStats.endPhase(FramePhase::Poll);
+
+    if (!pendingCapturePath.empty()) {
+        FrameContext ctx = makeContext();
+        const std::string context = describeCaptureContext(ctx);
+        if (frameStats.startCapture(pendingCapturePath, context))
+            LOG_INFO("frame stats capture -> %s (%s)",
+                     pendingCapturePath.c_str(), context.c_str());
+        else
+            LOG_WARN("frame stats capture failed to open %s",
+                     pendingCapturePath.c_str());
+        pendingCapturePath.clear();
+    }
     debugLines.update(frameDelta);   // age timed debug shapes (ADR-0067)
 
     // Headset pose for this frame, BEFORE any system updates: camera writers

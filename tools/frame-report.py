@@ -16,6 +16,7 @@ phases), how spiky is it (p95/p99 + histogram), and did a change help
 import argparse
 import csv
 import html
+import io
 import json
 import math
 import os
@@ -50,19 +51,34 @@ def load_capture(path):
     Tolerant of schema versions: captures predating the render split (no
     acquire/encode/submit/gpu columns) read fine, their missing columns
     filled with zeros, so an old capture still opens and still compares."""
-    with open(path, newline="") as f:
-        reader = csv.DictReader(f)
-        if not reader.fieldnames or "total_ms" not in reader.fieldnames:
-            sys.exit(f"{path}: not a FrameStats capture (no total_ms column)")
-        cols = {name: [] for name in set(reader.fieldnames) | set(ALL_COLUMNS)}
-        rows = 0
-        for row in reader:
-            rows += 1
-            for name in cols:
-                try:
-                    cols[name].append(float(row.get(name) or 0.0))
-                except (TypeError, ValueError):
-                    cols[name].append(0.0)
+    meta = {}
+    with open(path, newline="") as raw:
+        lines = raw.readlines()
+    # Leading `# key=value ...` lines record the conditions the capture was
+    # taken under. Without them two captures of the same scene cannot be
+    # meaningfully compared — resolution and pass config decide the result.
+    body = []
+    for line in lines:
+        if line.startswith("#"):
+            for token in line[1:].split():
+                if "=" in token:
+                    key, _, value = token.partition("=")
+                    meta[key] = value
+        else:
+            body.append(line)
+
+    reader = csv.DictReader(io.StringIO("".join(body)))
+    if not reader.fieldnames or "total_ms" not in reader.fieldnames:
+        sys.exit(f"{path}: not a FrameStats capture (no total_ms column)")
+    cols = {name: [] for name in set(reader.fieldnames) | set(ALL_COLUMNS)}
+    rows = 0
+    for row in reader:
+        rows += 1
+        for name in cols:
+            try:
+                cols[name].append(float(row.get(name) or 0.0))
+            except (TypeError, ValueError):
+                cols[name].append(0.0)
     if not rows:
         sys.exit(f"{path}: capture holds no frames")
 
@@ -74,6 +90,7 @@ def load_capture(path):
     cols[OTHER] = [max(0.0, cols["total_ms"][i] - sum(cols[c][i]
                                                       for c in accounted))
                    for i in range(rows)]
+    cols["__meta__"] = meta
     return cols
 
 
@@ -151,6 +168,16 @@ def verdict(cols, s, budget_ms):
             f"own code is cheap: {logic:.2f} ms of game logic and "
             f"{cpu_render:.2f} ms building the frame. Optimising C++ will not "
             f"move this number; the work is in the shaders and passes.")
+        meta = cols.get("__meta__", {})
+        if meta.get("framebuffer"):
+            lines.append(
+                f"This capture ran at "
+                f"<b>{html.escape(meta['framebuffer'])} = "
+                f"{html.escape(megapixels(meta))}M pixels</b> with these "
+                f"passes on: <b>{html.escape(passes_on(meta))}</b>. For a "
+                f"GPU-bound frame those two facts are most of the cost — "
+                f"compare only against captures with the same values (shown "
+                f"under <i>Capture conditions</i>).")
         if draws and draws < 200 and tris < 2e6:
             lines.append(
                 f"Scene complexity is <b>not</b> the cause either: only "
@@ -672,6 +699,68 @@ wire("chart1"); wire("chart2"); render();
 </script>"""
 
 
+def megapixels(meta):
+    """Framebuffer size in megapixels. Accepts the current `megapixels=` key,
+    the older `pixels=1.30M` spelling, or derives it from `framebuffer=WxH`."""
+    raw = meta.get("megapixels") or meta.get("pixels")
+    if raw:
+        return raw.rstrip("M")
+    fb = meta.get("framebuffer", "")
+    if "x" in fb:
+        try:
+            w, _, h = fb.partition("x")
+            return f"{int(w) * int(h) / 1e6:.2f}"
+        except ValueError:
+            pass
+    return "?"
+
+
+def passes_on(meta):
+    return " ".join(k for k in ("ssao", "ssr", "bloom", "probes", "envmap",
+                                "prepass") if meta.get(k) == "1") or "none"
+
+
+def context_section(meta, baseline_meta, baseline_name):
+    """Show the conditions a capture was taken under, and — when comparing —
+    shout about any that DIFFER. Two captures of the same scene came out 2x
+    apart in this project; without this the reason is unrecoverable."""
+    if not meta and not baseline_meta:
+        return ("<p class='note'>This capture predates capture-context "
+                "recording, so the resolution and pass configuration it ran "
+                "under are unknown &mdash; re-capture with a current build to "
+                "make it comparable.</p>")
+
+    def row(m):
+        if not m:
+            return "<td colspan='3'><i>not recorded</i></td>"
+        return (f"<td>{html.escape(m.get('framebuffer', '?'))}</td>"
+                f"<td>{html.escape(megapixels(m))}M</td>"
+                f"<td>{html.escape(passes_on(m))}</td>")
+
+    rows = f"<tr><th>this capture</th>{row(meta)}</tr>"
+    warning = ""
+    if baseline_meta is not None:
+        rows += (f"<tr><th>{html.escape(baseline_name)}</th>"
+                 f"{row(baseline_meta)}</tr>")
+        differing = [k for k in ("framebuffer", "ssao", "ssr", "bloom",
+                                 "probes", "envmap", "prepass",
+                                 "shadow_cascades", "target_fps")
+                     if meta.get(k) != baseline_meta.get(k)
+                     and (k in meta or k in baseline_meta)]
+        if differing:
+            warning = (
+                f"<p class='warn'><b>These two captures are not directly "
+                f"comparable.</b> They differ in: "
+                f"<b>{html.escape(', '.join(differing))}</b>. A frame-time "
+                f"difference here may be that change, not the code change you "
+                f"are testing &mdash; resolution especially, since a GPU-bound "
+                f"frame scales with pixel count. Re-capture the baseline under "
+                f"the same conditions before trusting the delta.</p>")
+    return (f"<h2>Capture conditions</h2>{warning}"
+            f"<table><tr><th></th><th>framebuffer</th><th>pixels</th>"
+            f"<th>passes on</th></tr>{rows}</table>")
+
+
 def plain(markup):
     """HTML fragment -> terminal text (the verdict is authored once, in HTML)."""
     text = re.sub(r"<[^>]+>", "", markup)
@@ -681,7 +770,11 @@ def plain(markup):
 def text_report(name, s, cols, layers, budget_ms):
     """The report's findings as paste-able text — for sharing an analysis in a
     chat or a PR without attaching an HTML file."""
+    meta = cols.get("__meta__", {})
     out = [f"=== frame report: {name} ===",
+           (f"conditions: {meta.get('framebuffer', '?')} "
+            f"({megapixels(meta)}M px), passes on: {passes_on(meta)}")
+           if meta else "conditions: not recorded",
            f"{s['frames']} frames, {s['seconds']:.1f}s, {s['fps']:.1f} fps avg",
            f"total ms  avg {s['avg']:.2f}  median {s['median']:.2f}  "
            f"p95 {s['p95']:.2f}  p99 {s['p99']:.2f}  max {s['max']:.2f}"
@@ -770,6 +863,10 @@ def main():
         json.dumps(embed_series(cols, baseline, layers, budget_ms, y_max),
                    separators=(",", ":")))
     spikes = spike_section(spike_anatomy(cols, layers), budget_ms)
+    context = context_section(
+        cols.get("__meta__", {}),
+        baseline.get("__meta__", {}) if baseline else None,
+        os.path.basename(args.compare) if args.compare else "")
 
     doc = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Frame report — {html.escape(os.path.basename(args.capture))}</title>
@@ -791,6 +888,9 @@ h2 {{ margin-top: 1.6em; font-size: 16px; }}
 .verdict p {{ margin: 0.5em 0; }}
 .verdict h2 {{ margin: 0 0 0.3em; font-size: 15px; }}
 code {{ background: #eee; padding: 0 3px; border-radius: 3px; }}
+.warn {{ background: #fdecea; border: 1px solid #f5c2c0;
+         border-left: 4px solid #d93025; border-radius: 6px;
+         padding: 0.7em 1em; margin: 0.8em 0; }}
 .chart {{ width: 100%; max-width: 900px; background: #fafafa;
           border: 1px solid #ddd; cursor: crosshair; user-select: none; }}
 .ctrl {{ margin: 0.4em 0; display: flex; gap: 8px; align-items: center; }}
@@ -841,6 +941,7 @@ the platform GPU profiler (Xcode's capture). If
 dominate, it's CPU-bound — attach Tracy (docs/profiling.md).</li>
 </ul></details>
 <div class="verdict"><h2>What this capture says</h2>{verdict_html}</div>
+{context}
 <table><tr><th>capture</th><th>frames</th><th>time</th><th>fps</th>
 <th>avg</th><th>median</th><th>p95</th><th>p99</th><th>max</th>
 <th>update</th><th>fixed</th><th>render</th><th>acquire</th><th>encode</th>

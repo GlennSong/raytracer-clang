@@ -29,6 +29,27 @@ looks: a few clock reads per frame.
 split, a frame-time graph scaled to the FPS budget, and a capture button.
 p95 is the number to watch — avg hides spikes.
 
+**Every capture records its own conditions.** The first line of a CSV is a
+`# framebuffer=… megapixels=… ssao=… ssr=…` header, and the report shows it
+under *Capture conditions*. This exists because two captures of the same scene
+came out 2× apart and nothing in the data could say why. `--compare` checks
+the two headers and **refuses to let a mismatch pass quietly** — different
+resolution or pass config means the delta you are looking at may be that
+difference, not your change.
+
+**A repeatable capture protocol** (do this the same way every time, or the
+numbers aren't comparable):
+
+1. Same window size, same display, and **plugged in** — laptop GPUs throttle
+   hard on battery, which alone can halve the frame rate.
+2. Let it run ~10 seconds before you start caring; the first frames are level
+   load, shader compilation, and probe bake.
+3. Capture 60–90 seconds of *representative* play — the same route and the
+   same actions each time.
+4. Quit cleanly (don't kill the process) so the capture is flushed and closed.
+5. Check the *Capture conditions* line matches your previous run before
+   comparing anything.
+
 **To a file (any host, no UI needed):**
 
 ```bash

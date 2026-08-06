@@ -219,7 +219,8 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
 
         if (!fs.capturing()) {
             if (ImGui::Button("Start CSV capture"))
-                fs.startCapture("frame-capture.csv");
+                fs.startCapture("frame-capture.csv",
+                                describeCaptureContext(ctx));
             ImGui::SameLine();
             ImGui::TextDisabled("-> frame-capture.csv (tools/frame-report.py)");
         } else {
