@@ -19,7 +19,9 @@ import html
 import json
 import math
 import os
+import re
 import sys
+import textwrap
 
 PHASES = [
     # (csv column, label, fill color) — draw order is stack order, bottom-up.
@@ -598,6 +600,43 @@ wire("chart1"); wire("chart2"); render();
 </script>"""
 
 
+def plain(markup):
+    """HTML fragment -> terminal text (the verdict is authored once, in HTML)."""
+    text = re.sub(r"<[^>]+>", "", markup)
+    return " ".join(html.unescape(text).split())
+
+
+def text_report(name, s, cols, layers, budget_ms):
+    """The report's findings as paste-able text — for sharing an analysis in a
+    chat or a PR without attaching an HTML file."""
+    out = [f"=== frame report: {name} ===",
+           f"{s['frames']} frames, {s['seconds']:.1f}s, {s['fps']:.1f} fps avg",
+           f"total ms  avg {s['avg']:.2f}  median {s['median']:.2f}  "
+           f"p95 {s['p95']:.2f}  p99 {s['p99']:.2f}  max {s['max']:.2f}"
+           f"   (budget {budget_ms:.2f})", ""]
+    for line in verdict(cols, s, budget_ms):
+        out += [textwrap.fill(plain(line), 78), ""]
+
+    a = spike_anatomy(cols, layers)
+    if a:
+        out.append(f"--- spike anatomy: typical ({a['typical_count']} frames) "
+                   f"vs slowest 1% ({a['slow_count']} frames) ---")
+        out.append(f"{'phase':<28}{'typical':>9}{'mean':>9}{'slow 1%':>10}"
+                   f"{'growth':>10}")
+        for r in a["rows"]:
+            out.append(f"{r['label'][:28]:<28}{r['typical']:>9.2f}"
+                       f"{r['mean']:>9.2f}{r['slow']:>10.2f}{r['delta']:>+10.2f}")
+        out += ["", "--- ten worst frames ---",
+                "frame".rjust(7) + "total".rjust(9) +
+                "".join(label[:9].rjust(10) for label, _ in a["worst"][0]["parts"]) +
+                "gpu".rjust(9) + "draws".rjust(7)]
+        for w in a["worst"]:
+            out.append(f"{w['frame']:>7}{w['total']:>9.1f}" +
+                       "".join(f"{v:>10.2f}" for _, v in w["parts"]) +
+                       f"{w['gpu']:>9.2f}{w['draws']:>7}")
+    return "\n".join(out)
+
+
 def summary_rows(label, s):
     return (f"<tr><th>{html.escape(label)}</th>"
             f"<td>{s['frames']}</td><td>{s['seconds']:.1f}s</td>"
@@ -622,6 +661,9 @@ def main():
                         help="output HTML path (default: <capture>.html)")
     parser.add_argument("--budget-fps", type=int, default=60,
                         help="frame budget the charts are scaled to (default 60)")
+    parser.add_argument("--text", action="store_true",
+                        help="also print the verdict + spike anatomy to the "
+                             "terminal (paste-able; no browser needed)")
     args = parser.parse_args()
 
     cols = load_capture(args.capture)
@@ -754,6 +796,10 @@ overhead).</p>
         f.write(doc)
     print(f"report: {out_path}  ({s['frames']} frames, avg {s['avg']:.2f} ms, "
           f"p95 {s['p95']:.2f} ms, max {s['max']:.2f} ms)")
+    if args.text:
+        print()
+        print(text_report(os.path.basename(args.capture), s, cols, layers,
+                          budget_ms))
 
 
 if __name__ == "__main__":
