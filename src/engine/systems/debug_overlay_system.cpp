@@ -1,7 +1,6 @@
 #include "debug_overlay_system.h"
 
 #include "../frame_stats.h"
-#include "../pass_bisect.h"
 
 #include <algorithm>
 
@@ -127,10 +126,20 @@ void DebugOverlaySystem::onStart(FrameContext& ctx) {
 }
 
 void DebugOverlaySystem::onStop(FrameContext& ctx) {
+    // Put the passes back BEFORE persisting: quitting mid-bisect must not
+    // save a measurement configuration as if it were the user's choice.
+    bisect.cancel(ctx);
     saveSettings(ctx);
 }
 
 void DebugOverlaySystem::render(FrameContext& ctx) {
+    // Advanced FIRST and unconditionally: a running bisect has passes
+    // disabled to time them, so it must keep ticking to its end and restore
+    // them even if the panel is collapsed, the window hidden, or ImGui absent
+    // entirely. Driving it from inside the panel's if-block once left a pass
+    // switched off for the rest of the session.
+    bisect.update(ctx);
+
 #ifdef RT_ENABLE_IMGUI
     // No ImGui context (e.g. a backend without debug-UI support): stay inert.
     if (ImGui::GetCurrentContext() == nullptr) return;
@@ -161,7 +170,6 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
     // The frame ledger (ADR-0077): where the frame's CPU time goes, over the
     // last ~4 s. Wait is FPS-cap sleep — headroom, not cost. For anything the
     // per-phase split can't answer, attach Tracy (RT_ENABLE_PROFILER).
-    static PassBisect bisect;   // one run at a time; survives panel collapse
     if (ImGui::CollapsingHeader("Performance")) {
         FrameStats& fs = ctx.stats;
         FrameStats::Summary sum = fs.summarize();
@@ -215,7 +223,6 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
             ImGui::SameLine();
             if (ImGui::Button("Clear##bisect")) bisect.result.clear();
         }
-        bisect.update(ctx);
 
         if (!fs.capturing()) {
             if (ImGui::Button("Start CSV capture"))

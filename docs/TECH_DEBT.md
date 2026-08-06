@@ -568,6 +568,19 @@ acting, and note the third run had `setPresentSync` return false on a Mac
 where `CAMetalLayer.displaySyncEnabled` should have worked — worth a look, as
 the true costs are higher than these lower bounds.
 
+**Bisect bug that cost a user their bloom (found 2026-08-06, fixed):** the
+bisect was driven from inside the Performance panel's `CollapsingHeader`
+block, so collapsing the header (or hiding the panel) mid-run froze it with a
+pass still disabled — and `onStop` then persisted that measurement state into
+`settings.json` as if it were the user's choice, so bloom silently stayed off
+on the next launch. *Fixed:* the bisect is a member of `DebugOverlaySystem`
+(not a function-local static), `update()` runs unconditionally at the top of
+`render()` so it always reaches its end and restores, and `onStop` cancels it
+BEFORE saving settings. **If a session was quit mid-bisect before this fix,
+`settings.json` may hold `bloom.enabled=false` / `ssao.enabled=false` /
+`ssr.enabled=false`** — the Debug panel's Reset Defaults + Save Settings, or
+deleting those keys, restores it.
+
 A tool lesson worth keeping: the bisect originally REFUSED this result merely
 because the sync flag was off, discarding a sound measurement. Failing to
 disable sync understates savings; it does not invalidate them. Only genuinely
