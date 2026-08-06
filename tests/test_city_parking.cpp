@@ -1,9 +1,12 @@
-// Curbside parking (roads-v2.1 R6b, plan 4d phase 1): marked parallel bays
-// mid-link on at-grade Local streets, seeded ~half full with scenery cars;
-// an arriving driver claims a free bay on its arrival link (the old grass
-// verge remains the fallback), and pulling out frees it. Gates, per the
-// plan: bays never crowd junction mouths, arrivals really park and depart,
-// scenery bays are never stolen, and no bay ever holds two cars.
+// Curbside parking (roads-v2.1 R6b): marked parallel bays mid-link on at-grade
+// Local streets. Every bay starts EMPTY — the ~55% seeded with decorative cars
+// owned by nobody are gone — so a parked car is only ever one an agent drove
+// there. An arriving driver claims a free bay on its arrival link (the grass
+// verge remains the fallback), gets out and walks the last stretch to its door,
+// and reclaims the car on its next departure. Gates: bays never crowd junction
+// mouths, arrivals really park and depart, occupancy is conserved in both
+// directions, no bay ever holds two cars, and a parked car does not follow its
+// owner around.
 #include "test_framework.h"
 
 #include "../src/apps/citysim/city_sim.h"
@@ -69,10 +72,12 @@ TEST_CASE(parking_bays_stay_clear_of_junction_mouths) {
         CHECK(lat + b.width * 0.5 <= L.width * 0.5 + 1e-9);
         if (b.occupant == CitySim::kBayScenery) ++scenery;
     }
-    const Real frac = Real(scenery) / Real(bays.size());
-    std::printf("[parking] bays=%zu sceneryFrac=%.2f\n", bays.size(), frac);
-    CHECK(frac > 0.3);
-    CHECK(frac < 0.8);
+    std::printf("[parking] bays=%zu scenery=%d\n", bays.size(), scenery);
+    // EVERY BAY IS BORN FREE. The build used to seed ~55% of them with a
+    // decorative car owned by nobody; a bay is now only ever occupied by an
+    // agent that drove there, so a freshly built city has none.
+    CHECK(scenery == 0);
+    for (const CitySim::ParkingBay& b : bays) CHECK(b.occupant == -1);
 }
 
 TEST_CASE(parking_arrivals_claim_bays_and_departures_free_them) {
@@ -81,7 +86,7 @@ TEST_CASE(parking_arrivals_claim_bays_and_departures_free_them) {
     sim.build(nav, 10, 0, 9);   // scheduled day: commutes arrive + rest
 
     long parkTicks = 0, freedAfterPark = 0;
-    bool sceneryStolen = false, doubleParked = false, wrongPose = false;
+    bool orphanedBay = false, doubleParked = false, wrongPose = false;
     std::vector<int> lastOccupant(sim.parkingBays().size(), -1);
     for (std::size_t i = 0; i < sim.parkingBays().size(); ++i)
         lastOccupant[i] = sim.parkingBays()[i].occupant;
@@ -103,9 +108,14 @@ TEST_CASE(parking_arrivals_claim_bays_and_departures_free_them) {
         }
         for (std::size_t bi = 0; bi < bays.size(); ++bi) {
             if (users[bi] > 1) doubleParked = true;
-            if (lastOccupant[bi] == CitySim::kBayScenery &&
-                bays[bi].occupant != CitySim::kBayScenery)
-                sceneryStolen = true;
+            // CONSERVATION, the other direction: a bay claiming an agent must
+            // be claimed back by that agent. With the decorative filler gone,
+            // occupancy is the only record of where a car is — a bay holding a
+            // stale index is a car nobody can ever retrieve.
+            const int occ = bays[bi].occupant;
+            if (occ >= 0 && (occ >= static_cast<int>(ag.size()) ||
+                             ag[occ].parkedBay != static_cast<int>(bi)))
+                orphanedBay = true;
             // A bay that held an agent and is free again = a real departure.
             if (lastOccupant[bi] >= 0 && bays[bi].occupant == -1)
                 ++freedAfterPark;
@@ -116,7 +126,7 @@ TEST_CASE(parking_arrivals_claim_bays_and_departures_free_them) {
                 freedAfterPark);
     CHECK(parkTicks > 0);          // drivers really rest in bays
     CHECK(freedAfterPark > 0);     // and pull out again
-    CHECK(!sceneryStolen);
+    CHECK(!orphanedBay);
     CHECK(!doubleParked);
     CHECK(!wrongPose);
 }
@@ -229,4 +239,102 @@ TEST_CASE(parking_bays_live_inside_the_road_s_parking_band) {
                 "travel lane %.4f m\n", widestCar, worstOut, worstIn);
     CHECK(worstOut <= 1e-9);   // NOT half on the sidewalk
     CHECK(worstIn <= 1e-9);    // NOT half in the travel lane
+}
+
+// THE PARK-AND-WALK CYCLE. A car owner drives to its destination, leaves the car
+// at the kerb, and covers the last stretch to its door on foot. The car stays
+// exactly where it was left for the whole rest — it is an object the world
+// contains, not a decoration that follows its owner around.
+//
+// Before this, `mode` meant both "what this agent is" and "how it is moving", so
+// an agent could never get out: flipping it would have deleted the car. The
+// split is `archetype` (identity, fixed) vs `mode` (locomotion, mutable).
+TEST_CASE(a_driver_parks_its_car_and_walks_away_from_it) {
+    NavGraph nav = wideCross();
+    CitySim sim;
+    sim.build(nav, 12, 0, 9);
+
+    const std::size_t vehiclesAtBuild = sim.vehicles().size();
+    bool sawDismount = false, carFollowedOwner = false, lostOwnership = false;
+    bool doubleDriven = false;
+    Vec2 parkedAt(0, 0);
+    int watched = -1;
+    long restTicks = 0;
+
+    for (int i = 0; i < 6000; ++i) {
+        sim.step(0.1, 0.5);
+        const auto& ag = sim.agents();
+        const auto& veh = sim.vehicles();
+
+        // Conservation: cars are never created or destroyed, and no two agents
+        // are ever in the same one.
+        if (veh.size() != vehiclesAtBuild) lostOwnership = true;
+        std::vector<int> inUse(veh.size(), 0);
+        for (const Agent& a : ag) {
+            if (a.archetype == Agent::Mode::Driver && a.car < 0) lostOwnership = true;
+            if (a.vehicle >= 0) {
+                if (a.vehicle != a.car) lostOwnership = true;   // only ever its own
+                if (++inUse[a.vehicle] > 1) doubleDriven = true;
+            }
+        }
+
+        // Watch the first owner we catch on foot with its car left behind.
+        if (watched < 0) {
+            for (std::size_t k = 0; k < ag.size(); ++k) {
+                const Agent& a = ag[k];
+                if (a.archetype != Agent::Mode::Driver) continue;
+                if (a.mode != Agent::Mode::Pedestrian || a.moving) continue;
+                if (a.car < 0 || veh[a.car].driver >= 0) continue;
+                watched = static_cast<int>(k);
+                parkedAt = veh[a.car].pos;
+                sawDismount = true;
+                break;
+            }
+        } else {
+            const Agent& a = ag[watched];
+            if (a.mode == Agent::Mode::Pedestrian && !a.moving && a.vehicle < 0) {
+                ++restTicks;
+                // The car has NOT moved while its owner is away from it.
+                if ((veh[a.car].pos - parkedAt).length() > 1e-9)
+                    carFollowedOwner = true;
+            } else {
+                watched = -1;   // it drove off again; look for the next one
+            }
+        }
+    }
+
+    std::printf("[parking] dismounts seen=%d, watched rest ticks=%ld\n",
+                sawDismount ? 1 : 0, restTicks);
+    CHECK(sawDismount);          // owners really do get out
+    CHECK(restTicks > 0);        // ...and stay out for a while
+    CHECK(!carFollowedOwner);    // the car stays where it was parked
+    CHECK(!lostOwnership);       // every owner still owns exactly its own car
+    CHECK(!doubleDriven);        // and no car has two drivers
+}
+
+// HOW OFTEN DOES AN ARRIVAL ACTUALLY GET A MARKED BAY? The probe only considers
+// bays within 30 m of the arrival node on the arrival link, so contention pushes
+// the rest onto the verge. Printed rather than asserted tightly: this is the
+// number that says whether the bay search needs widening, and it only became
+// visible once real agents were the only thing filling bays.
+TEST_CASE(parking_bay_hit_rate_is_reported) {
+    NavGraph nav = wideCross();
+    CitySim sim;
+    sim.build(nav, 16, 0, 3);
+
+    long parkedInBay = 0, parkedOnVerge = 0;
+    for (int i = 0; i < 4000; ++i) {
+        sim.step(0.1, 0.5);
+        for (const Agent& a : sim.agents()) {
+            if (a.archetype != Agent::Mode::Driver) continue;
+            if (a.mode != Agent::Mode::Pedestrian || a.moving) continue;
+            (a.parkedBay >= 0 ? parkedInBay : parkedOnVerge)++;
+        }
+    }
+    const long total = parkedInBay + parkedOnVerge;
+    std::printf("[parking] resting-owner ticks: %ld in a bay, %ld on the verge "
+                "(%.0f%% bay)\n",
+                parkedInBay, parkedOnVerge,
+                total ? 100.0 * double(parkedInBay) / double(total) : 0.0);
+    CHECK(total > 0);
 }

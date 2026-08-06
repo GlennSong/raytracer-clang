@@ -26,7 +26,10 @@ int countArrivals(CitySim& sim, int steps) {
         sim.step(0.1, 0.5);
         const auto& ag = sim.agents();
         for (std::size_t k = 0; k < ag.size(); ++k) {
-            if (ag[k].mode != Agent::Mode::Driver) continue;
+            // By ARCHETYPE, not by current locomotion: a car owner parks and
+            // steps out at the moment it arrives, so filtering on `mode` here
+            // skipped every arrival at exactly the tick it happened.
+            if (ag[k].archetype != Agent::Mode::Driver) continue;
             bool nowArrived = ag[k].activity == Agent::Activity::AtWork ||
                               ag[k].activity == Agent::Activity::AtHome;
             bool wasMoving = prev[k] == Agent::Activity::Commuting ||
@@ -238,9 +241,11 @@ TEST_CASE(cross_node_following_keeps_cars_off_each_other) {
         a.step(0.1, 0.5);
         b.step(0.1, 0.5);
         const auto& ag = a.agents();
-        // Arrivals (count over ALL drivers — an arrived car has moving == false).
+        // Arrivals (count over ALL car owners — an arrived car has
+        // moving == false, and its owner has already stepped out of it, so this
+        // filters on ARCHETYPE rather than current locomotion).
         for (std::size_t k = 0; k < ag.size(); ++k) {
-            if (ag[k].mode != Agent::Mode::Driver) continue;
+            if (ag[k].archetype != Agent::Mode::Driver) continue;
             bool arrived = ag[k].activity == Agent::Activity::AtWork ||
                            ag[k].activity == Agent::Activity::AtHome;
             bool wasMoving = prev[k] == Agent::Activity::Commuting ||
@@ -388,6 +393,8 @@ TEST_CASE(cars_crash_and_stop_instead_of_ghosting) {
     // Escapes must not be the STEADY state. This synthetic map is escape-heavy
     // by construction (every trip crosses ONE junction; dead-end tips force
     // U-turn chains into head-on meets) — real levels have neither.
+    std::printf("    [escape] %ld/%ld ticks (%.1f%%)\n", escapeTicks, ticks,
+                100.0 * double(escapeTicks) / double(ticks));
     CHECK(escapeTicks < ticks / 3);
 }
 
@@ -511,6 +518,7 @@ TEST_CASE(walkers_gap_accept_at_unsignalled_junctions) {
             }
         }
     }
+    std::printf("    [ped] near-box %ld ticks, contact %ld\n", pedNearBox, contact);
     CHECK(pedNearBox > 0);   // walkers really do reach and cross the junction
     CHECK(contact == 0);     // never under a fast car's bumper while doing so
 }

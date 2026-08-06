@@ -159,17 +159,30 @@ vehicle.from_class = from_class
 --
 -- A recipe is:
 --   body   = a Mesh (the mesh.car shell: painted body + lamps + tinted glass)
---   parts  = { { pos={x,y,z}, size={w,h,l}, color={r,g,b} }, ... }   -- boxes
+--   wheels = a Mesh (the baked wheelset, kept SEPARATE from the body — see below)
+--   wheel_layout = { { pos=, radius=, width=, steered=, driven=, hand_brake= }, ... }
+--   parts  = { { pos={x,y,z}, size={w,h,l}, color={r,g,b} }, ... }   -- boxes (legacy)
 --   lights = { { name=, pos={x,y,z} }, ... }   -- named lamp ATTACHMENT markers
--- `parts` carries only the WHEELS now: mesh.car deliberately leaves the wheel
--- part to its caller (real wheels are placed per-vehicle by the physics spec),
--- and ambient traffic has no physics wheels, so they bake into the instance.
+--
+-- WHY body AND wheels, separately. mesh.car deliberately emits no wheel part
+-- (real wheels are placed per-vehicle by the physics spec), so the fleet bakes
+-- its own. Ambient instanced traffic has no physics wheels and wants them baked
+-- IN; a car the player COMMANDEERS (ADR-0062) becomes a real Jolt Vehicle that
+-- grows its own wheel entities, and wants the body WITHOUT them or it drives on
+-- eight. Publishing both, cut from the same fitted geometry, is what lets the
+-- promoted car be the same car — the alternative (one merged mesh) is why
+-- promotion fell back to the retired C++ box body for so long.
+--
+-- `wheel_layout` is the same wheelset as DATA, post-fit: it is what the promoted
+-- car's Jolt config is built from, so the simulated wheels land in the arches
+-- drawn for them rather than at a second set of guessed numbers.
 -- `lights` mark the front/rear lamp positions the emissive lamp pass draws
 -- (city_render syncCarLamps). Car faces +Z; x>0 = right.
 --
--- Slot order + dimensions MIRROR the sim fleet (city_sim.cpp kFleet) and the
--- paints (city_meshes.cpp kCarColors) slot for slot: 3 sedans, 3 hatchbacks,
--- 3 SUVs, a pickup, a van, a box truck.
+-- The fleet is 3 sedans, 3 hatchbacks, 3 SUVs, a pickup, a van, a box truck.
+-- Its DIMENSIONS are no longer mirrored in C++: each recipe publishes its own
+-- `size` from the class package and the sim adopts it (CitySim::setFleet). The
+-- built-in C++ table survives only as the Lua-free build's fallback.
 
 -- Ambient traffic is instanced in the hundreds inside the render bubble, so the
 -- fleet runs a cheaper LOD than the hero car: "mid" keeps cut window apertures
@@ -178,9 +191,17 @@ vehicle.from_class = from_class
 local FLEET_LOD = "mid"
 
 -- Build one fleet recipe from the real generator. `class_name` picks the
--- vehicle_classes package; W/H/L are the SIM's reserved slot box (kFleet) and
--- `color` the paint.
-local function fleet_car(class_name, W, H, L, color)
+-- vehicle_classes package; `color` is the paint. THE CLASS IS THE SIZE: the
+-- recipe publishes the package's own dimensions and the sim adopts them, so
+-- there is one set of numbers per vehicle instead of two.
+--
+-- This replaces a hardcoded per-slot box (the C++ kFleet table) that every car
+-- was scaled to fit. That box disagreed with the packages by up to 18% — and
+-- because the disagreement differed per axis, the fit was NON-UNIFORM, which
+-- turns a round wheel into an ellipse: the pickup's wheels were squashed 10%,
+-- the hatchback's 8%. Nothing is scaled now; mesh.car builds at the class's
+-- nominal size and that is what ships.
+local function fleet_car(class_name, color)
     local c = classes.apply(class_name)
     local d = classes.dims(c)
     local car = mesh.car(forms.car_params(c, d, { color = color, lod = FLEET_LOD }))
@@ -212,6 +233,7 @@ local function fleet_car(class_name, W, H, L, color)
     local rearZ = -(d.length * 0.5 - d.rear_overhang)
     local ww = math.max(0.18, c.track * 0.13)
     local tyre = { 0.04, 0.04, 0.05 }
+    local wheelParts, placements = {}, {}
     for _, wx in ipairs({ halfTrack - ww * 0.5, -halfTrack + ww * 0.5 }) do
         for _, wz in ipairs({ frontZ, rearZ }) do
             -- cylinder(radius, height) stands on +Y; roll it onto the lateral
@@ -220,44 +242,85 @@ local function fleet_car(class_name, W, H, L, color)
             -- separate vertex-paint call).
             local w = mesh.rotate_z(mesh.cylinder(r, ww), math.pi * 0.5)
             w = mesh.bake_height_color(w, tyre, tyre)
-            shell[#shell + 1] = mesh.translate(w, { wx, axleY, wz })
+            wheelParts[#wheelParts + 1] = mesh.translate(w, { wx, axleY, wz })
+            -- Front wheels steer; all four are driven (a loaded van still pulls
+            -- away); the rears take the handbrake. Same roles the drivable spec
+            -- above assigns, so a commandeered car handles like the player's own.
+            placements[#placements + 1] =
+                { x = wx, y = axleY, z = wz, front = (wz == frontZ) }
         end
     end
 
-    -- Fit body AND wheels together, once, to the sim's reserved slot box: the
-    -- traffic sim spaces, follows and collides against kFleet's dimensions, so
-    -- the drawn car must fill that box — and fitting the parts separately is
-    -- how they drift out of register.
-    local he = car.half_extent
-    local sx = W / (2 * he[1])
-    local sy = H / (2 * he[2])
-    local sz = L / (2 * he[3])
-    local body = mesh.recompute_normals(mesh.scale(mesh.merge(shell), { sx, sy, sz }))
+    -- No fit. Body and wheelset are built at the class's own size and stay there;
+    -- `size` below tells the sim what that size is. They remain two meshes so a
+    -- commandeered car can drop the baked wheels and grow physics ones.
+    local body = mesh.recompute_normals(mesh.merge(shell))
+    local wheels = mesh.recompute_normals(mesh.merge(wheelParts))
 
-    -- Lamp markers ride the same fit, or the emissive lenses float off the car.
-    local lights = {}
-    for _, lt in ipairs(car.lights or {}) do
-        local p = lt.pos
-        lights[#lights + 1] =
-            { name = lt.name, pos = { p[1] * sx, p[2] * sy, p[3] * sz } }
+    -- The wheelset as DATA for the physics tier: exactly the wheels drawn above,
+    -- round and at their true radius (nothing to correct for now that nothing is
+    -- scaled). C++ converts these resting centres into Jolt suspension
+    -- attachment points — see configFromBody.
+    local layout = {}
+    for _, p in ipairs(placements) do
+        layout[#layout + 1] = {
+            pos = { p.x, p.y, p.z },
+            radius = r, width = ww,
+            steered = p.front, driven = true, hand_brake = not p.front,
+        }
     end
 
-    return { body = body, lights = lights }
+    local lights = {}
+    for _, lt in ipairs(car.lights or {}) do
+        lights[#lights + 1] = { name = lt.name, pos = lt.pos }
+    end
+
+    return {
+        body = body, wheels = wheels, wheel_layout = layout, lights = lights,
+        -- THE CATALOGUE ENTRY the sim adopts: how much road this car occupies.
+        -- Car-following gaps, parking bays, kinematic collider proxies and the
+        -- promoted car's chassis all read it, so they agree with the drawn body
+        -- by construction rather than by a transcribed table.
+        size = { d.width, d.height, d.length },
+        class = class_name,
+    }
 end
 
-vehicle.fleet = {
-    fleet_car("sedan",     1.80, 1.30, 4.2, { 0.72, 0.10, 0.10 }),   -- sedan (red)
-    fleet_car("sedan",     1.80, 1.30, 4.2, { 0.10, 0.18, 0.52 }),   -- sedan (blue)
-    fleet_car("sedan",     1.80, 1.30, 4.2, { 0.90, 0.90, 0.90 }),   -- sedan (white)
-    fleet_car("hatchback", 1.82, 1.45, 4.2, { 0.85, 0.78, 0.10 }),   -- hatchback (yellow)
-    fleet_car("hatchback", 1.82, 1.45, 4.2, { 0.10, 0.45, 0.30 }),   -- hatchback (green)
-    fleet_car("hatchback", 1.82, 1.45, 4.2, { 0.80, 0.40, 0.08 }),   -- hatchback (orange)
-    fleet_car("jeep",      1.95, 1.70, 4.6, { 0.09, 0.09, 0.11 }),   -- SUV (black)
-    fleet_car("jeep",      1.95, 1.70, 4.6, { 0.52, 0.53, 0.56 }),   -- SUV (silver)
-    fleet_car("jeep",      1.95, 1.70, 4.6, { 0.30, 0.22, 0.14 }),   -- SUV (brown)
-    fleet_car("pickup",    1.95, 1.60, 5.2, { 0.14, 0.30, 0.20 }),   -- pickup (green)
-    fleet_car("van",       2.00, 2.10, 5.4, { 0.62, 0.60, 0.42 }),   -- van (tan)
-    fleet_car("box_truck", 2.40, 2.80, 6.6, { 0.20, 0.42, 0.55 }),   -- box truck (teal)
+-- A slot is a CLASS plus a PAINT. Adding a vehicle is a line here (and a package
+-- in vehicle_classes.lua) — no C++ table to keep in step.
+local FLEET_SLOTS = {
+    { class = "sedan",     color = { 0.72, 0.10, 0.10 } },   -- sedan (red)
+    { class = "sedan",     color = { 0.10, 0.18, 0.52 } },   -- sedan (blue)
+    { class = "sedan",     color = { 0.90, 0.90, 0.90 } },   -- sedan (white)
+    { class = "hatchback", color = { 0.85, 0.78, 0.10 } },   -- hatchback (yellow)
+    { class = "hatchback", color = { 0.10, 0.45, 0.30 } },   -- hatchback (green)
+    { class = "hatchback", color = { 0.80, 0.40, 0.08 } },   -- hatchback (orange)
+    { class = "jeep",      color = { 0.09, 0.09, 0.11 } },   -- SUV (black)
+    { class = "jeep",      color = { 0.52, 0.53, 0.56 } },   -- SUV (silver)
+    { class = "jeep",      color = { 0.30, 0.22, 0.14 } },   -- SUV (brown)
+    { class = "pickup",    color = { 0.14, 0.30, 0.20 } },   -- pickup (green)
+    { class = "van",       color = { 0.62, 0.60, 0.42 } },   -- van (tan)
+    { class = "box_truck", color = { 0.20, 0.42, 0.55 } },   -- box truck (teal)
 }
+
+-- The fleet is DESCRIPTION up front and GEOMETRY on demand.
+--
+-- Each slot carries its catalogue entry — class and size — as plain data, which
+-- is all the SIM needs (follow gaps, parking bays, collider proxies) and costs
+-- nothing to read. The body itself arrives only when `build()` is called, which
+-- is where the real expense is: twelve mesh.car shells. A headless run that
+-- wants correct car SIZES must not have to pay for twelve car MESHES to get
+-- them — building them eagerly here made every headless city build do exactly
+-- that.
+vehicle.fleet = {}
+for i, slot in ipairs(FLEET_SLOTS) do
+    local c = classes.apply(slot.class)
+    local d = classes.dims(c)
+    vehicle.fleet[i] = {
+        class = slot.class,
+        size = { d.width, d.height, d.length },
+        build = function() return fleet_car(slot.class, slot.color) end,
+    }
+end
 
 return vehicle

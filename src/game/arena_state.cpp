@@ -160,7 +160,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // trivially controllable, so bodies-follow-planner works for them everywhere.
     citySys.setPedsExternallyOwned(true);
     addSystem<citysim::CityPhysicsSystem>(citySys, physSys);   // car proxies + poles
-    addSystem<citysim::CityVehicleSystem>(citySys, physSys);   // commandeer promotion
+    addSystem<citysim::CityVehicleSystem>(citySys);            // commandeer promotion
     addSystem<citysim::CityWalkerSystem>(citySys, physSys);    // spawn + drive walkers
     // The player IS a person in third person (ADR-0064): draws the walker body
     // over the on-foot shoulder camera, walk cycle shared with the crowd. After

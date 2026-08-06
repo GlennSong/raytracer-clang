@@ -72,6 +72,55 @@ enum RenderLayer : uint32_t {
     LayerRoads     = 1u << 0,
     LayerBuildings = 1u << 1,
     LayerSim       = 1u << 2,
+    // Trees and scattered greenery. Untagged until now, which put them in the
+    // layer-0 residual along with terrain and ground paint — and that residual
+    // turned out to be ~3.9 M of piedmont's 8.2 M triangles, larger than the
+    // building share, with no way to find out what it was.
+    LayerFoliage   = 1u << 3,
+};
+
+// WHAT a drawable is, so that DrawPolicy can decide HOW FAR it draws.
+//
+// Draw distance used to be a bare number set at each creation site, defaulting
+// to 0 = "draw to the far plane". That default made forgetting silent, and of
+// every drawable in the engine exactly two remembered — vegetation and street
+// lamps. Cars, pedestrians, signal lenses and posts, car lamps, road markings
+// and a 7964-instance parking-bay paint group all drew to the horizon, and the
+// bay group additionally carried a city-wide bounding sphere so even the coarse
+// group reject could never fire.
+//
+// So the class is the thing a site states, and the distance is derived. A site
+// that says nothing lands in Unset, which the loader COUNTS AND REPORTS — the
+// point of this enum is that the next forgotten site is loud instead of free.
+// Unlimited is still available, but it must now be asked for by name.
+enum class DrawClass : uint8_t {
+    Unset = 0,     // nobody said — reported at load, treated as Unlimited
+    Terrain,       // the ground itself; CDLOD does its own selection
+    Structure,     // buildings and large static world geometry
+    Scenery,       // trees, rocks, props — the bulk of the triangles
+    Furniture,     // lamps, signals, signs, benches
+    GroundPaint,   // road markings, bay paint — flat, short range, no shadow
+    SimBody,       // cars and pedestrians; follows the sim's tier radii
+    Effect,        // glows, signal lenses, lamp halos
+    Unlimited,     // explicit opt-out: the only way to say "draw forever"
+    Count
+};
+
+// The single owner of draw-distance policy: class -> metres (0 = unlimited).
+// One per level (a singleton component the loader stamps), so distances scale
+// with the world — 250 m of scenery is right for an 8 km city and absurd for a
+// 100 m arena. Absent entirely = every class unlimited, i.e. exactly the old
+// behaviour, which is what keeps levels that have not opted in unchanged.
+// (A per-class shadow opt-out belongs here too — flat ground paint is invisible
+// in a shadow map and is currently cast into all three cascades — but there is
+// no per-drawable caster flag to hang it on yet. That arrives with the shadow
+// pass's own culling; the field is deliberately absent until something reads it.)
+struct DrawPolicy {
+    Real distance[static_cast<int>(DrawClass::Count)] = {};
+
+    Real distanceFor(DrawClass c) const {
+        return distance[static_cast<int>(c)];
+    }
 };
 
 // What to draw for an entity.
@@ -83,9 +132,12 @@ struct Renderable {
     // cull when the camera is farther than this from the mesh bounds — the
     // full-detail city chunks. minDistance > 0: cull when NEARER than this —
     // the chunk's mass-box HLOD proxy, which takes over exactly where the
-    // detail chunk fades. 0 = always drawn (default, everything else).
+    // detail chunk fades. 0 = defer to DrawPolicy via drawClass below.
     Real drawDistance = 0;
     Real minDistance = 0;
+    // Content class. An explicit drawDistance above still wins (the HLOD chunks
+    // compute theirs); this is what everything else resolves through.
+    DrawClass drawClass = DrawClass::Unset;
 };
 
 // Many instances of one mesh, drawn as a batch (ROADMAP Phase B instancing).
@@ -101,11 +153,13 @@ struct InstanceGroup {
     std::vector<Mat4> transforms;   // world matrices, one per instance
     Vec3 boundsCenter;              // world-space group bounds (coarse cull)
     Real boundsRadius = 0;
-    // Per-instance draw distance (0 = unlimited): instances farther than this from
-    // the camera are not drawn. Distant L-system trees/rocks dominate the triangle
-    // budget, so a finite radius is the cheapest large fps win in a big world.
+    // Per-instance draw distance (0 = defer to DrawPolicy via drawClass below):
+    // instances farther than this from the camera are not drawn. Distant
+    // L-system trees/rocks dominate the triangle budget, so a finite radius is
+    // the cheapest large fps win in a big world.
     Real drawDistance = 0;
     uint32_t renderLayer = 0;   // debug layer bits (0 = always visible)
+    DrawClass drawClass = DrawClass::Unset;   // see DrawClass above
 };
 
 // CDLOD heightfield terrain (ADR-0036, open-world Phase 1c). One per level: when a
@@ -402,17 +456,29 @@ struct CitySimConfig {
     float pedsPerKm = 6.0f;        // density mode: walkers per sidewalk-km
     uint32_t seed = 1;
     float hoursPerSecond = 0.05f;        // sim-clock hours per real second
+    // The in-world hour the level OPENS at. Agents are placed straight from
+    // their schedules at this hour, so any start costs the same — a level can
+    // open at 03:00 as cheaply as at midday.
+    float startHour = 10.5f;
     float perceptionReliability = 0.97f; // <1 -> agents occasionally err
     // Draw radius for PARKED scenery cars (m). City-wide instance groups can't
     // be partially frustum-culled, so this is what keeps thousands of parked
     // bodies out of the colour and shadow passes. 0 = draw them all.
     float sceneryRadius = 450.0f;
+    // How many pedestrians may hold a real Jolt capsule at once. The rest are
+    // drawn and animated from the sim ghost. Bounds an O(bodies^2) separation
+    // pass that was otherwise a function of how crowded downtown happened to be.
+    int maxWalkerBodies = 200;
     // Sim tick rate for LOCAL agents (Hz). 0 = every fixed step (historical).
     // 30 halves the traffic sim's cost; poses extrapolate between ticks.
     float localHz = 0.0f;
     bool adaptiveRate = true;   // dip further while the clock is behind
     bool debugWidgets = false;           // start with the agent-state HUD on
     bool tieredAgents = false;           // P4: opt into V/K traffic tiering
+    // P5: opt into the DORMANT tier below V — far agents stop being simulated
+    // entirely and are rebuilt from their schedule when the player returns.
+    // Requires tieredAgents (dormancy is a demotion from V).
+    bool dormantAgents = false;
     bool showPlan = false;               // boot with block/lot outlines on
                                          // (plan-only demarcation levels)
     bool wander = false;                 // agents take perpetual random trips
@@ -426,7 +492,7 @@ struct CitySimConfig {
     // `"vehicles"` script (a vehicles.lua-style file resolved by level_loader).
     // The citysim render bridge runs it at build (scripting builds only) and
     // builds each instanced fleet mesh from its `vehicle.fleet` recipes. Any
-    // failure falls back to the C++ fleetCarMesh; "" = built-in fleet meshes.
+    // "" = this level draws no cars (vehicles are optional content).
     std::string vehicleScript;
     // Level-authored places (ADR-0066): labelled destinations (home/shop/office/
     // park/civic) the citysim bridge turns into a routable PlaceMap at build.

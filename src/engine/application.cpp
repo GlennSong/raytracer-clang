@@ -110,7 +110,9 @@ void Application::renderFrame() {
                      << (accum / frames * 1000.0) << " ms) draws "
                      << rs.drawCalls << " (inst " << rs.instancedDrawCalls
                      << ") instances " << rs.totalInstances << " tris "
-                     << rs.trianglesDrawn / 1000000.0 << "M overflow i"
+                     << rs.trianglesDrawn / 1000000.0 << "M shadowcasters "
+                     << rs.shadowCasters << " (terrain " << rs.shadowTerrainNodes
+                     << ") overflow i"
                      << rs.instanceOverflow << "/s" << rs.shadowOverflow
                      << "/f" << rs.foliageOverflow;
             frames = 0;

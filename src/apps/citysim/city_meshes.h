@@ -11,38 +11,6 @@ namespace citysim {
 // is pure construction (vertex-coloured boxes, flat widget geometry, material
 // constants) with no ECS or sim-state dependency.
 
-// Build the fleet body mesh for slot `slot` (wraps into the fleet) — the same
-// vertex-coloured car the instanced renderer uses, so a PROMOTED physical
-// Vehicle (ADR-0062: the player commandeers an ambient car) looks identical to
-// the instanced car it replaces. `withWheels` false for that promotion —
-// VehicleSystem gives a real Vehicle physics wheels. x=width, y=height,
-// z=length (travel +Z).
-engine::RenderMesh fleetCarMesh(int slot, bool withWheels = true);
-
-// A vertex-coloured car that mirrors the PLAYER's car body (vehicles.lua
-// `car_body`): a low hull, a set-back greenhouse cabin, dark windshield + rear
-// glass, and pale front / red rear corner lights — so NPC cars share the
-// player's look. `withWheels` bakes wheels into the instanced mesh (ambient
-// traffic); a PROMOTED physical car omits them — VehicleSystem gives it physics
-// wheels. Body STYLE varies the hull/cabin for a mixed fleet. `size` is
-// x=width, y=height, z=length (travel axis, +Z); faces +Z.
-engine::RenderMesh buildCarMesh(int style, engine::Vec3 color, engine::Vec3 size,
-                                bool withWheels = true);
-
-// The mesh style that draws each body TYPE (matches buildCarMesh's switch).
-int styleForType(VehicleType t);
-
-// A body slot's mesh size (x=width, y=height, z=length), from the shared fleet
-// table (city_sim kFleet) — so the drawn car is exactly the size the sim follows
-// and collides at.
-engine::Vec3 fleetBodySize(int slot);
-
-// Number of car paint/body variants (one colour per fleet slot, mirroring
-// city_sim kFleet slot for slot). Each variant is its own instance group (a
-// group shares one mesh + material); a driver keeps slot vehicleIndex % this,
-// so a given car keeps its shape, size, and colour.
-int carVariantCount();
-
 // A simple articulated PERSON (device ask: "people should look like people"):
 // six vertex-coloured boxes — head, torso, two legs, two arms — centred like the
 // old walker box (y in [-0.9, 0.9], facing +Z). `swing` pitches the limbs about

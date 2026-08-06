@@ -2005,6 +2005,8 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                 g.boundsRadius = spread + (mb.center.length() + mb.radius) *
                                               static_cast<Real>(scatter.maxScale);
                 g.drawDistance = vegDrawDistance;
+                g.drawClass = engine::DrawClass::Scenery;
+                g.renderLayer = engine::LayerFoliage;   // debug layer toggle
                 world.add<InstanceGroup>(world.create(), g);
             }
         }
@@ -2597,7 +2599,10 @@ bool LevelLoader::load(const std::string& path,
             {
                 const auto viols =
                     engine::auditRoadGraph(lrg.graph, levelGround);
-                int corridorViols = 0, street = 0;
+                // Corridor crossings are reported individually below (each is
+                // its own LOG_ERROR); only the street-street count is
+                // summarised, so there is nothing to tally for them.
+                int street = 0;
                 for (const auto& v : viols) {
                     const bool corr =
                         lrg.graph.edges[v.edgeA].klass == engine::RoadClass::Freeway ||
@@ -2605,7 +2610,6 @@ bool LevelLoader::load(const std::string& path,
                         lrg.graph.edges[v.edgeB].klass == engine::RoadClass::Freeway ||
                         lrg.graph.edges[v.edgeB].klass == engine::RoadClass::Ramp;
                     if (corr) {
-                        ++corridorViols;
                         LOG_ERROR << "[roadgraph] corridor edges " << v.edgeA
                                   << " and " << v.edgeB << " cross at ("
                                   << v.at.x << ", " << v.at.y << ") with only "
@@ -3125,16 +3129,19 @@ bool LevelLoader::load(const std::string& path,
         cfg.pedestrians = cs.value("pedestrians", cfg.pedestrians);
         // How far parked scenery cars still draw (0 = never cull).
         cfg.sceneryRadius = cs.value("sceneryRadius", cfg.sceneryRadius);
+        cfg.maxWalkerBodies = cs.value("maxWalkerBodies", cfg.maxWalkerBodies);
         cfg.localHz = cs.value("localHz", cfg.localHz);
         cfg.adaptiveRate = cs.value("adaptiveRate", cfg.adaptiveRate);
         cfg.carsPerLaneKm = cs.value("carsPerLaneKm", cfg.carsPerLaneKm);
         cfg.pedsPerKm = cs.value("pedsPerKm", cfg.pedsPerKm);
         cfg.seed = cs.value("seed", cfg.seed);
         cfg.hoursPerSecond = cs.value("hoursPerSecond", cfg.hoursPerSecond);
+        cfg.startHour = cs.value("startHour", cfg.startHour);
         cfg.perceptionReliability =
             cs.value("perceptionReliability", cfg.perceptionReliability);
         cfg.debugWidgets = cs.value("debugWidgets", cfg.debugWidgets);
         cfg.tieredAgents = cs.value("tiered", cfg.tieredAgents);
+        cfg.dormantAgents = cs.value("dormancy", cfg.dormantAgents);
         cfg.showPlan = cs.value("showPlan", false);
         cfg.wander = cs.value("wander", cfg.wander);
         // Scripted goal tables (ADR-0064): `"agents": "agents.lua"` names a
@@ -3395,6 +3402,8 @@ bool LevelLoader::load(const std::string& path,
                     Renderable tr;
                     tr.mesh = kit.bark;
                     tr.material = kit.barkMat;
+                    tr.renderLayer = engine::LayerFoliage;
+                    tr.drawClass = engine::DrawClass::Scenery;
                     world.add<Renderable>(te, tr);
                     if (kit.leaves.index) {
                         Entity le = world.create();
@@ -3403,6 +3412,8 @@ bool LevelLoader::load(const std::string& path,
                         Renderable lr;
                         lr.mesh = kit.leaves;
                         lr.material = kit.leafMat;
+                        lr.renderLayer = engine::LayerFoliage;
+                        lr.drawClass = engine::DrawClass::Scenery;
                         world.add<Renderable>(le, lr);
                     }
                 };
@@ -3556,6 +3567,7 @@ bool LevelLoader::load(const std::string& path,
                         if (chunk.vertices.empty()) continue;
                         Renderable r = proto;
                         if (detailDistance > 0) r.drawDistance = detailDistance * ddScale;
+                        r.drawClass = engine::DrawClass::Structure;
                         r.mesh = assets.acquireMesh(chunk, "");   // world-space, unkeyed
                         Entity e = world.create();
                         Transform t;   // identity — the mesh sits in world space
@@ -3766,6 +3778,7 @@ bool LevelLoader::load(const std::string& path,
                     g.material.roughness = 0.7f;
                     g.transforms = transforms;
                     g.drawDistance = 650.0;
+                    g.drawClass = engine::DrawClass::Furniture;
                     groupBounds(g, lp.height + 1.0);
                     world.add<InstanceGroup>(world.create(), g);
                     InstanceGroup glow;
@@ -3775,6 +3788,7 @@ bool LevelLoader::load(const std::string& path,
                     glow.material.roughness = 0.4f;
                     glow.transforms = std::move(transforms);
                     glow.drawDistance = 650.0;
+                    glow.drawClass = engine::DrawClass::Effect;
                     groupBounds(glow, lp.height + 1.0);
                     world.add<InstanceGroup>(world.create(), glow);
                 }
@@ -3822,6 +3836,48 @@ bool LevelLoader::load(const std::string& path,
         renderer.setInstanceCapacities(r.value("maxInstances", 0u),
                                        r.value("maxShadowInstances", 0u),
                                        r.value("maxFoliageInstances", 0u));
+
+        // "render.drawDistances": the level's draw-distance policy, by content
+        // class (metres; omitted or 0 = unlimited). Stamped as a singleton that
+        // RenderSystem resolves every Renderable/InstanceGroup through, so the
+        // distance for e.g. every tree in the world lives HERE and not at the
+        // dozen sites that create drawables. Absent block = no policy entity =
+        // everything unlimited, which is what levels did before this existed.
+        if (r.contains("drawDistances") && r["drawDistances"].is_object()) {
+            const auto& d = r["drawDistances"];
+            DrawPolicy p;
+            auto set = [&](DrawClass c, const char* key) {
+                p.distance[static_cast<int>(c)] = d.value(key, 0.0);
+            };
+            set(DrawClass::Terrain,     "terrain");
+            set(DrawClass::Structure,   "structure");
+            set(DrawClass::Scenery,     "scenery");
+            set(DrawClass::Furniture,   "furniture");
+            set(DrawClass::GroundPaint, "groundPaint");
+            set(DrawClass::SimBody,     "simBody");
+            set(DrawClass::Effect,      "effect");
+            world.add<DrawPolicy>(world.create(), p);
+        }
+    }
+
+    // Report drawables that never declared a content class. They resolve to
+    // unlimited (the old default), so this is not an error — it is the thing
+    // that used to be invisible. A site added later without a DrawClass shows
+    // up here instead of quietly drawing to the far plane forever.
+    {
+        size_t unsetR = 0, totalR = 0, unsetG = 0, totalG = 0;
+        world.each<Renderable>([&](Entity, Renderable& r) {
+            ++totalR;
+            if (r.drawClass == DrawClass::Unset) ++unsetR;
+        });
+        world.each<InstanceGroup>([&](Entity, InstanceGroup& g) {
+            ++totalG;
+            if (g.drawClass == DrawClass::Unset) ++unsetG;
+        });
+        if (unsetR || unsetG)
+            LOG_INFO << "[draw-policy] " << unsetR << "/" << totalR
+                     << " renderables and " << unsetG << "/" << totalG
+                     << " instance groups have no DrawClass (drawing unlimited)";
     }
 
     // Environment map (equirectangular .hdr) — bound before probes so the bake

@@ -165,13 +165,53 @@ void DayNightSystem::render(FrameContext& ctx) {
         ImGui::EndDisabled();
     }
 
-    if (ImGui::CollapsingHeader("Clouds")) {
-        ImGui::Checkbox("Enabled##clouds", &cloudsEnabled);
-        ImGui::SliderFloat("Coverage", &cloudCoverage, 0.0f, 1.0f);
-        ImGui::SliderFloat("Density", &cloudDensity, 0.0f, 1.0f);
-        ImGui::SliderFloat("Scale", &cloudScale, 0.2f, 5.0f);
-        ImGui::SliderFloat("Wind Speed", &cloudWindSpeed, 0.0f, 5.0f);
-        applyClouds(ctx);  // reflect edits immediately, even while paused
+    // CLOUDS — there are two independent cloud systems and only one runs at a
+    // time: the 2D FBM sky overlay, and the volumetric slab that REPLACES it
+    // (post.metal switches the overlay off whenever the slab is active). This
+    // header used to edit the FBM fields unconditionally, so on a level with a
+    // volumetric deck every slider did nothing while still writing itself to
+    // settings.json as though it were authoritative. Show the controls for the
+    // deck that is actually live, and say which one that is.
+    {
+        VolumetricCloudParams& vc = ctx.view.lighting.volumetricClouds;
+        const bool volumetric = vc.enabled;
+        if (ImGui::CollapsingHeader(volumetric ? "Clouds (volumetric)"
+                                               : "Clouds (2D overlay)")) {
+            if (volumetric) {
+                // Bound STRAIGHT to the live params: the level loader writes
+                // them once at load and the renderer reads them fresh each
+                // frame, with nothing re-applying in between — so an edit here
+                // is the value the next frame marches.
+                ImGui::Checkbox("Enabled##vclouds",
+                                &ctx.renderer.volumetricCloudsEnabled);
+                ImGui::SliderFloat("Coverage##v", &vc.coverage, 0.0f, 1.0f);
+                ImGui::SliderFloat("Density##v", &vc.density, 0.0f, 1.0f);
+                ImGui::SliderFloat("Ambient##v", &vc.ambient, 0.0f, 2.0f);
+                ImGui::SliderFloat("Detail erosion##v", &vc.detailStrength,
+                                   0.0f, 1.0f);
+                ImGui::SliderFloat("Phase g##v", &vc.phaseG, -0.9f, 0.9f);
+                ImGui::SliderFloat("Wind (m/s)##v", &vc.wind, 0.0f, 60.0f);
+                ImGui::SliderFloat("Noise scale##v", &vc.noiseScale,
+                                   0.0002f, 0.005f, "%.4f");
+                ImGui::DragFloatRange2("Slab bottom / top##v", &vc.bottom,
+                                       &vc.top, 10.0f, 100.0f, 6000.0f,
+                                       "%.0f m", "%.0f m");
+                ImGui::SliderInt("Light steps##v", &vc.lightSteps, 1, 16);
+                // The step-count override lives on the renderer, not the params,
+                // so it belongs in the same panel rather than beside it.
+                ImGui::SliderInt("View steps (0 = level)##v",
+                                 &ctx.renderer.cloudStepsOverride, 0, 96);
+                ImGui::TextDisabled("Authored per level in environment.clouds;");
+                ImGui::TextDisabled("edits here are session-only, not saved.");
+            } else {
+                ImGui::Checkbox("Enabled##clouds", &cloudsEnabled);
+                ImGui::SliderFloat("Coverage", &cloudCoverage, 0.0f, 1.0f);
+                ImGui::SliderFloat("Density", &cloudDensity, 0.0f, 1.0f);
+                ImGui::SliderFloat("Scale", &cloudScale, 0.2f, 5.0f);
+                ImGui::SliderFloat("Wind Speed", &cloudWindSpeed, 0.0f, 5.0f);
+                applyClouds(ctx);  // reflect edits immediately, even while paused
+            }
+        }
     }
     ImGui::End();
 #else

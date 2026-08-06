@@ -69,20 +69,6 @@ const PersonOutfit kOutfits[] = {
 };
 constexpr int kNumOutfits = static_cast<int>(sizeof(kOutfits) / sizeof(kOutfits[0]));
 
-// The car fleet's PAINT, one colour per fleet slot (mirrors city_sim kFleet slot
-// for slot; body style + size come from the fleet body). Each slot is its own
-// instance group (a group shares one mesh + material). Drivers spread across them
-// by vehicle index, so a given car keeps its shape, size, and colour.
-const Vec3 kCarColors[] = {
-    Vec3(0.72, 0.10, 0.10), Vec3(0.10, 0.18, 0.52), Vec3(0.90, 0.90, 0.90),  // sedans
-    Vec3(0.85, 0.78, 0.10), Vec3(0.10, 0.45, 0.30), Vec3(0.80, 0.40, 0.08),  // hatchbacks
-    Vec3(0.09, 0.09, 0.11), Vec3(0.52, 0.53, 0.56), Vec3(0.30, 0.22, 0.14),  // SUVs
-    Vec3(0.14, 0.30, 0.20),                                                  // pickup
-    Vec3(0.62, 0.60, 0.42),                                                  // van (tan)
-    Vec3(0.20, 0.42, 0.55),                                                  // box truck (teal)
-};
-constexpr int kNumCarVariants = static_cast<int>(sizeof(kCarColors) / sizeof(kCarColors[0]));
-
 // Append a flat white quad (two triangles, +Y normal) — the building block of
 // the ground-projected debug meshes (strips, wedge edges/arc).
 void addQuadXZ(engine::RenderMesh& m, Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
@@ -96,99 +82,6 @@ void addQuadXZ(engine::RenderMesh& m, Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
 }
 
 }  // namespace
-
-engine::RenderMesh buildCarMesh(int style, Vec3 color, Vec3 size, bool withWheels) {
-    const Real w = size.x, h = size.y, l = size.z;
-    const Real hw = w * 0.5, hl = l * 0.5;
-    const Vec3 glass(0.05, 0.06, 0.09);    // dark glass (matches car_body)
-    const Vec3 tyre(0.04, 0.04, 0.05);
-    const Vec3 head(1.0, 0.97, 0.82), tail(0.85, 0.06, 0.05);
-    engine::RenderMesh m;
-
-    switch (style) {
-        case 1:  // hatchback: hull + cabin carried back to the tail, glass fore & aft
-            addBox(m, Vec3(w, h * 0.46, l * 0.92), Vec3(0, 0, 0), color);
-            addBox(m, Vec3(w * 0.86, h * 0.44, l * 0.56), Vec3(0, h * 0.40, -l * 0.06), color);
-            addBox(m, Vec3(w * 0.80, h * 0.30, l * 0.05), Vec3(0, h * 0.44, l * 0.12), glass);
-            addBox(m, Vec3(w * 0.80, h * 0.30, l * 0.05), Vec3(0, h * 0.44, -l * 0.34), glass);
-            break;
-        case 2:  // SUV: tall hull, big greenhouse
-            addBox(m, Vec3(w, h * 0.58, l), Vec3(0, 0, 0), color);
-            addBox(m, Vec3(w * 0.90, h * 0.46, l * 0.62), Vec3(0, h * 0.44, -l * 0.02), color);
-            addBox(m, Vec3(w * 0.84, h * 0.34, l * 0.05), Vec3(0, h * 0.46, l * 0.20), glass);
-            addBox(m, Vec3(w * 0.84, h * 0.34, l * 0.05), Vec3(0, h * 0.46, -l * 0.26), glass);
-            break;
-        case 3:  // pickup: forward cab + open bed
-            addBox(m, Vec3(w, h * 0.42, l), Vec3(0, -h * 0.04, 0), color);
-            addBox(m, Vec3(w * 0.90, h * 0.40, l * 0.34), Vec3(0, h * 0.34, l * 0.22), color);
-            addBox(m, Vec3(w * 0.80, h * 0.26, l * 0.05), Vec3(0, h * 0.40, l * 0.38), glass);
-            addBox(m, Vec3(w * 0.92, h * 0.20, l * 0.42), Vec3(0, h * 0.10, -l * 0.26), color); // bed walls
-            break;
-        case 4:  // van: one tall slab body, raked windshield, low nose
-            addBox(m, Vec3(w, h * 0.72, l * 0.86), Vec3(0, h * 0.06, -l * 0.06), color);
-            addBox(m, Vec3(w, h * 0.34, l * 0.20), Vec3(0, -h * 0.10, l * 0.40), color);       // nose
-            addBox(m, Vec3(w * 0.86, h * 0.30, l * 0.05), Vec3(0, h * 0.22, l * 0.30), glass);  // windshield
-            addBox(m, Vec3(w * 0.86, h * 0.24, l * 0.05), Vec3(0, h * 0.24, -l * 0.48), glass); // rear glass
-            break;
-        case 5:  // box truck: a small cab up front + a tall square cargo box
-            addBox(m, Vec3(w, h * 0.44, l * 0.30), Vec3(0, -h * 0.04, l * 0.33), color);        // cab lower
-            addBox(m, Vec3(w * 0.94, h * 0.40, l * 0.24), Vec3(0, h * 0.30, l * 0.35), color);  // cab roof
-            addBox(m, Vec3(w * 0.84, h * 0.30, l * 0.05), Vec3(0, h * 0.30, l * 0.47), glass);  // windshield
-            addBox(m, Vec3(w, h * 0.86, l * 0.62), Vec3(0, h * 0.12, -l * 0.17), color);        // cargo box
-            break;
-        default: // sedan — matches the player's car_body proportions exactly
-            addBox(m, Vec3(w, h * 0.46, l), Vec3(0, 0, 0), color);
-            addBox(m, Vec3(w * 0.84, h * 0.42, l * 0.46), Vec3(0, h * 0.40, -l * 0.04), color);
-            addBox(m, Vec3(w * 0.80, h * 0.30, l * 0.05), Vec3(0, h * 0.42, l * 0.15), glass);
-            addBox(m, Vec3(w * 0.80, h * 0.26, l * 0.05), Vec3(0, h * 0.42, -l * 0.23), glass);
-            break;
-    }
-
-    // Head/taillights at the corners (front +Z pale, rear -Z red) — like car_body.
-    Real ly = -h * 0.08, lx = hw - 0.30;
-    for (Real sx : { Real(1), Real(-1) }) {
-        addBox(m, Vec3(0.34, 0.18, 0.10), Vec3(sx * lx, ly, hl - 0.05), head);
-        addBox(m, Vec3(0.34, 0.18, 0.10), Vec3(sx * lx, ly, -hl + 0.05), tail);
-    }
-
-    // Four wheels (dark discs, thin along X), sat at the hull's lower edge —
-    // skipped for a promoted physical car (its wheels are physics entities).
-    if (withWheels) {
-        Real wr = h * 0.26, axleY = -h * 0.5 + wr, fz = l * 0.32, wxo = hw - 0.03;
-        for (Real wx : { wxo, -wxo })
-            for (Real wz : { fz, -fz })
-                addBox(m, Vec3(0.12, wr * 2, wr * 2), Vec3(wx, axleY, wz), tyre);
-    } else {
-        (void)tyre;
-    }
-    return m;
-}
-
-int styleForType(VehicleType t) {
-    switch (t) {
-        case VehicleType::Hatchback: return 1;
-        case VehicleType::SUV:       return 2;
-        case VehicleType::Pickup:    return 3;
-        case VehicleType::Van:       return 4;
-        case VehicleType::BoxTruck:  return 5;
-        default:                     return 0;   // Sedan
-    }
-}
-
-Vec3 fleetBodySize(int slot) {
-    const VehicleBody& b = vehicleFleetBody(slot);
-    return Vec3(b.width, b.height, b.length);
-}
-
-int carVariantCount() { return kNumCarVariants; }
-
-engine::RenderMesh fleetCarMesh(int slot, bool withWheels) {
-    int n = vehicleFleetSize();
-    int s = ((slot % n) + n) % n;
-    const VehicleBody& b = vehicleFleetBody(s);
-    return buildCarMesh(styleForType(b.type), kCarColors[s % kNumCarVariants],
-                        Vec3(b.width, b.height, b.length), withWheels);
-}
 
 int personOutfitCount() { return kNumOutfits - 1; }   // last slot = the player's
 int playerOutfit() { return kNumOutfits - 1; }

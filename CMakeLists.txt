@@ -214,6 +214,11 @@ if(RT_ENABLE_IMGUI)
     if(EXISTS ${IMGUIZMO_DIR}/src/ImGuizmo.cpp)
         target_sources(engine_core PRIVATE ${IMGUIZMO_DIR}/src/ImGuizmo.cpp)
         target_include_directories(engine_core SYSTEM PRIVATE ${IMGUIZMO_DIR}/src)
+        # Vendored third-party source: not our warnings to fix, and it trips
+        # -Wnested-anon-types. Same treatment as lua_static below — silencing it
+        # per-file keeps OUR warnings visible instead of drowning them.
+        set_source_files_properties(${IMGUIZMO_DIR}/src/ImGuizmo.cpp
+                                    PROPERTIES COMPILE_OPTIONS "-w")
     else()
         message(WARNING "ImGuizmo submodule missing - editor gizmos disabled; "
                         "run: git submodule update --init third_party/ImGuizmo")

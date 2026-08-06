@@ -18,6 +18,9 @@ using engine::NavGraph;
 
 namespace {
 constexpr Real kWalkSpeed = 1.4;
+// "Wakes on nothing": a rest with no dwell and no commute. Large enough to mean
+// never in any real session, finite so the arithmetic stays ordinary.
+constexpr Real kNeverWakes = 1e9;
 // 4.0, not the old 6.0: the physical tier measured the real sedan's launch
 // (driving-lab envelope probe) — the brains must not plan accelerations the
 // body cannot follow, or every possessed car falls behind its ghost out of
@@ -26,7 +29,29 @@ constexpr Real kCarAccel = 4.0;
 constexpr Real kPedAccel = 1.0;
 constexpr Real kCarMinGap = 5.0, kCarSlowZone = 14.0;
 constexpr Real kPedMinGap = 0.8, kPedSlowZone = 2.5;
-constexpr Real kCarBumperGap = 0.8;   // clear space kept between two cars' bumpers
+// Clear space a STOPPED car keeps to the bumper in front (IDM's jam gap s0).
+//
+// This stays at 0.8 m — which really does read as bumper-to-bumper in a queue —
+// because THE NETWORK CANNOT AFFORD MORE. Junction knots are ~4.5 m links, so a
+// bigger standstill gap pushes a stopped queue back across the junction it came
+// through and deadlocks it. Measured on the signalled-cross soak
+// (cars_crash_and_stop_instead_of_ghosting, wreck-escape share of ticks, at
+// headway 1.8): 0.8 m -> 7.1%, 1.0 -> 15.4%, 1.2 -> 20.6%, 1.5 -> 70.9%.
+// Opening this up is a ROAD-GEOMETRY job (don't let queues stand in junction
+// knots), not a constant to raise.
+constexpr Real kCarBumperGap = 0.8;
+// Desired time headway T (s) — what actually puts room between MOVING cars: IDM
+// asks for s0 + v*T of clear road, so at 12 m/s this is ~22 m rather than the
+// ~14 m the old 1.1 s left. Following further apart also rear-ends less: same
+// soak, at s0 = 0.8, T = 1.1 -> 17.4% wreck-escapes, 1.4 -> 16.3%, 1.8 -> 7.1%,
+// 2.2 -> 18.0% (past ~2 s they hesitate and block junctions instead).
+//
+// CAPPED AT 1.4 BY PEDESTRIAN SAFETY, not by flow: at 1.8 traffic runs freely
+// enough that walkers_gap_accept_at_unsignalled_junctions starts recording
+// walkers within 1.3 m of a fast car (0 contacts at 1.1/1.4, 3 at 1.8). The
+// kerb rule's gap-accept is judging a gap that faster approach speeds close
+// sooner than it expects — fix that before opening the headway further.
+constexpr Real kCarHeadway = 1.4;
 
 // The fleet of body slots (ADR-0061 Phase 4). A sedan is the player's body
 // exactly (4.2 long) and its follow gap works out to the historical 5.0 m; larger
@@ -123,6 +148,19 @@ Vec2 rotateToward(Vec2 from, Vec2 to, Real maxRad) {
     Real a = maxRad * sign;
     Real ca = std::cos(a), sa = std::sin(a);
     return Vec2(from.x * ca - from.y * sa, from.x * sa + from.y * ca);
+}
+
+// Is in-world hour `clock` inside the window [from, to)? A window whose `from`
+// is LATER than its `to` wraps midnight — a night shift leaving at 21:30 and
+// coming home at 05:30 is at work from 21:30 THROUGH to 05:30, not never.
+//
+// The naive `clock >= from && clock < to` silently makes every wrapping window
+// empty, so a night-shift agent would never depart for work at all. Mirrors
+// Place::openAt (places.cpp:30-35), which already got this right.
+bool inWindow(Real clock, Real from, Real to) {
+    if (from == to) return true;                  // degenerate → always inside
+    if (from < to) return clock >= from && clock < to;
+    return clock >= from || clock < to;           // wraps midnight
 }
 
 // Personality traits read from FIXED bits of an agent's `brain` (ADR-0062): no
@@ -246,6 +284,25 @@ uint32_t CitySim::rnd() {
 }
 Real CitySim::rndUnit() { return (rnd() >> 8) * (1.0 / 16777216.0); }
 
+// A draw from THIS AGENT'S OWN stream. Trip decisions (which lane to take, where
+// to wander to) used to come off the shared `rng_`, which made every agent's
+// choices depend on how many decisions every OTHER agent had made first. That is
+// fine while the population is stepped in one fixed order, and fatal the moment
+// anything advances an agent out of turn — which is exactly what waking a
+// dormant agent from its schedule does. Per-agent streams make a decision depend
+// only on how many decisions that agent has made.
+//
+// Seeded from `brain` by hash at build (never a draw), so the build stream — and
+// every seeded scenario — is untouched. Distinct from brainUnit's stream: that
+// one owns perception faults, and sharing would couple a car's lane choice to
+// how often it had misperceived something.
+uint32_t CitySim::tripRnd(Agent& a) {
+    a.tripRng ^= a.tripRng << 13;
+    a.tripRng ^= a.tripRng >> 17;
+    a.tripRng ^= a.tripRng << 5;
+    return a.tripRng;
+}
+
 Real CitySim::brainUnit(Agent& a) {
     a.brain ^= a.brain << 13;
     a.brain ^= a.brain >> 17;
@@ -273,6 +330,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     demotions_ = 0;
     haveTierCenter_ = false;
     grid_.configure(engine::Vec2(0, 0), engine::Vec2(1, 1), kAgentGridCell, 0);
+    parkedGrid_.configure(engine::Vec2(0, 0), engine::Vec2(1, 1), kAgentGridCell, 0);
     junctionGrid_.configure(engine::Vec2(0, 0), engine::Vec2(1, 1),
                             kAgentGridCell, 0);
     maxJunctionRadius_ = 0;
@@ -311,10 +369,15 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
             b.pos = graph.pointOnLink(li, st / L.length) + right * off;
             b.heading = dir;
             b.width = L.parkWidth;
-            // Deterministic scenery fill (~55%), stable per (link, slot).
-            const uint32_t h = (static_cast<uint32_t>(li) * 2654435761u) ^
-                               (static_cast<uint32_t>(st * 8.0) * 40503u) ^ rng_;
-            b.occupant = (h % 100u) < 55u ? kBayScenery : -1;
+            // EVERY BAY IS BORN FREE. This used to seed ~55% of them with
+            // kBayScenery — a decorative car belonging to nobody, ~4400 of them
+            // on piedmont, ~700 of which were drawn and given a Jolt proxy at
+            // any moment (~1.3 M triangles). They made the city look inhabited
+            // while hiding the fact that its actual population never parked
+            // anywhere: a real driver could only take a bay the filler had left
+            // free. Parked cars are now exclusively cars that an agent drove
+            // there and will drive away again.
+            b.occupant = -1;
             baysOnLink_[li].push_back(static_cast<int>(bays_.size()));
             bays_.push_back(b);
         }
@@ -373,6 +436,10 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         Agent a;
         a.uid = ids_.next();   // stable identity for relationships / memory / jobs
         a.mode = (i < driverCount) ? Agent::Mode::Driver : Agent::Mode::Pedestrian;
+        // Identity, fixed for the run. Starts equal to the initial locomotion:
+        // a car owner begins the day in its car, a walker on foot. Only `mode`
+        // moves from here.
+        a.archetype = a.mode;
         a.home = static_cast<int>(rnd() % n);
         a.work = static_cast<int>(rnd() % n);
         // Pick a work node the home can actually REACH. An unroutable pair used to
@@ -394,15 +461,34 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
             }
             if (!ok) a.work = a.home;   // stranded: stay put, never depart
         }
+        // SHIFT DIVERSITY jitter. The two draws stay HERE, at this exact point
+        // in the rng stream — the shift ladder that consumes them lives below
+        // the brain seed (see there for why), and moving these would shift every
+        // later draw and re-pin every seeded scenario in the suite.
+        const Real j0 = rndUnit(), j1 = rndUnit();       // per-agent jitter
+        a.activity = Agent::Activity::AtHome;
+        a.goal = goalsFor(a.archetype).entry();   // the day starts at the table's entry
+        a.brain = rnd() | 1u;            // per-agent fault RNG (non-zero)
+        // Trip stream: HASHED from the brain, not drawn, so the build sequence
+        // (and every seeded scenario's layout) is unchanged. Must be non-zero —
+        // a xorshift seeded at 0 stays at 0 forever.
+        a.tripRng = (a.brain * 2654435761u) ^ 0x9E3779B9u;
+        if (a.tripRng == 0) a.tripRng = 1u;
         // SHIFT DIVERSITY. A single 7.5-9.0 departure window put the whole
         // population on the road at once: one hot rush, a dead city either
         // side of it, and a sim-cost spike where nearly every agent is moving
         // in the same minutes. Real cities run shifts, so agents draw one from
         // their own brain bits (deterministic, no rng draw) — the city now has
         // hot and cold hours per district instead of one synchronised surge.
+        //
+        // THIS BLOCK MUST FOLLOW THE BRAIN SEED. It used to sit above it and so
+        // read the default `brain = 1`, making `shift` 0 for EVERY agent: the
+        // whole city took the first branch, the five archetypes below never
+        // existed, and — because the build clock starts at 8.5, inside every
+        // agent's [5.0, 14.0) window — the entire fleet departed on the first
+        // think and spent the opening minutes of play as one city-wide jam.
         {
             const uint32_t shift = (a.brain >> 12) & 0xFF;   // 0..255
-            const Real j0 = rndUnit(), j1 = rndUnit();       // per-agent jitter
             if (shift < 26) {            // ~10% early shift (trades, transit)
                 a.departWork = 5.0 + j0 * 1.5;
                 a.departHome = 14.0 + j1 * 1.5;
@@ -420,9 +506,6 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
                 a.departHome = 14.5 + j1 * 2.0;
             }
         }
-        a.activity = Agent::Activity::AtHome;
-        a.goal = goalsFor(a.mode).entry();   // the day starts at the table's entry
-        a.brain = rnd() | 1u;            // per-agent fault RNG (non-zero)
         // Personality from the brain's own bits (NOT an rnd() draw, so the build
         // stream — and every seeded test scenario — is unchanged).
         a.speedFactor = paceFactor(a.brain);
@@ -441,7 +524,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         // maps the same index to a body) draws exactly this shape + size.
         if (a.mode == Agent::Mode::Driver) {
             SimVehicle v;
-            const VehicleBody& body = vehicleFleetBody(static_cast<int>(vehicles_.size()));
+            const VehicleBody& body = fleetBody(static_cast<int>(vehicles_.size()));
             v.length = body.length;
             v.width = body.width;
             v.height = body.height;
@@ -449,6 +532,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
             v.driver = static_cast<int>(agents_.size());
             v.pos = a.pos;
             a.vehicle = static_cast<int>(vehicles_.size());
+            a.car = a.vehicle;   // owns it for the run; `vehicle` is only "in it now"
             vehicles_.push_back(v);
         }
         agents_.push_back(a);
@@ -470,6 +554,15 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
                         static_cast<int>(agents_.size()));
         for (std::size_t i = 0; i < agents_.size(); ++i)
             grid_.place(static_cast<int>(i), agents_[i].pos);
+        // PARKED CARS get their own index. A car left at the kerb is nowhere
+        // near its owner — who is standing at a door tens of metres away — so
+        // it cannot be found by querying agents, which is how every other body
+        // in the sim is located. Placement happens only when a car parks, so
+        // this costs nothing per step.
+        parkedGrid_.configure(lo - pad, hi + pad, kAgentGridCell,
+                              static_cast<int>(vehicles_.size()));
+        for (std::size_t v = 0; v < vehicles_.size(); ++v)
+            parkedGrid_.place(static_cast<int>(v), vehicles_[v].pos);
         junctionGrid_.configure(lo - pad, hi + pad, kAgentGridCell,
                                 static_cast<int>(junctions_.size()));
         for (std::size_t j = 0; j < junctions_.size(); ++j) {
@@ -477,6 +570,10 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
             maxJunctionRadius_ = std::max(maxJunctionRadius_, junctions_[j].second);
         }
     }
+    // Measure the commute here as well as after assignPlaces: a level with no
+    // authored places never calls that, and scheduleSnapshot (and the host's
+    // clock-scale warning) both need a travel time to be meaningful.
+    measureCommute(graph);
 }
 
 void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
@@ -591,28 +688,273 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 a.work = nodeOf(pick);
                 a.workDoor = doorOf(pick);
                 if (places[pick].type == PlaceType::Shop) {
-                    // Shopkeeper: open the shop before it opens, close it after.
-                    a.role = Agent::Role::Shopkeeper;
-                    Real open = places[pick].openHour, close = places[pick].closeHour;
-                    a.departWork = open > 0.5 ? open - 0.5 : 0.0;
-                    a.departHome = close < 23.5 ? close + 0.5 : 24.0;
+                    const Real open = places[pick].openHour;
+                    const Real close = places[pick].closeHour;
+                    // ONLY when the shop actually authored hours. A place minted
+                    // from a LotBuilding carries the wide-open default (0..24,
+                    // components.h:373), and running that through the formula
+                    // below yields departWork 0.0 / departHome 24.0 — a window
+                    // that is open every hour of the day. Such an agent departs
+                    // for work once and is never again outside its work window,
+                    // so it never goes home and its car never comes back. On
+                    // piedmont, where every place is lot-derived, that was every
+                    // shop worker in the city. Without authored hours it simply
+                    // keeps the shift it drew at build.
+                    const bool authored = open > 0.0 || close < 24.0;
+                    const Real dw = open > 0.5 ? open - 0.5 : 0.0;
+                    const Real dh = close < 23.5 ? close + 0.5 : 24.0;
+                    if (authored && dw != dh) {
+                        // Open the shop before it opens, close it after.
+                        a.role = Agent::Role::Shopkeeper;
+                        a.departWork = dw;
+                        a.departHome = dh;
+                    }
                 }
                 // else Commuter — keep the jittered office hours from build().
             }
         }
     }
 
+    measureCommute(graph);
+
     // Seed the surface-level social graph: agents sharing a workplace are
-    // coworkers; those sharing a home are neighbors (housemates). Insertion order.
-    for (std::size_t i = 0; i < agents_.size(); ++i)
-        for (std::size_t j = i + 1; j < agents_.size(); ++j) {
+    // coworkers; those sharing a home are neighbors (housemates).
+    //
+    // Only agents who share a PLACE can be related, so bucket by place and pair
+    // within a bucket instead of testing every pair in the city against every
+    // other. The old double loop was ~11.5 M pair tests on piedmont — paid on
+    // every single level load — to discover a comparatively tiny number of
+    // bonds. Emission order is preserved exactly: for each agent in ascending
+    // index, its partners in ascending index, with the same work-beats-home
+    // precedence, so the resulting table is identical.
+    {
+        std::unordered_map<PlaceId, std::vector<int>> byWork, byHome;
+        for (std::size_t i = 0; i < agents_.size(); ++i) {
             const Agent& A = agents_[i];
-            const Agent& B = agents_[j];
-            if (A.workPlace != kNoPlace && A.workPlace == B.workPlace)
-                relationships_.set(A.uid, B.uid, Relationship::Coworker);
-            else if (A.homePlace != kNoPlace && A.homePlace == B.homePlace)
-                relationships_.set(A.uid, B.uid, Relationship::Neighbor);
+            if (A.workPlace != kNoPlace)
+                byWork[A.workPlace].push_back(static_cast<int>(i));
+            if (A.homePlace != kNoPlace)
+                byHome[A.homePlace].push_back(static_cast<int>(i));
         }
+        std::vector<int> partners;
+        for (std::size_t i = 0; i < agents_.size(); ++i) {
+            const Agent& A = agents_[i];
+            partners.clear();
+            // Buckets were filled in ascending index, so the tail past `i` is
+            // already ascending; merging two such tails and sorting reproduces
+            // the inner loop's visit order over exactly the pairs that matter.
+            auto tailOf = [&](std::unordered_map<PlaceId, std::vector<int>>& m,
+                              PlaceId key) {
+                if (key == kNoPlace) return;
+                auto it = m.find(key);
+                if (it == m.end()) return;
+                for (int j : it->second)
+                    if (j > static_cast<int>(i)) partners.push_back(j);
+            };
+            tailOf(byWork, A.workPlace);
+            tailOf(byHome, A.homePlace);
+            std::sort(partners.begin(), partners.end());
+            partners.erase(std::unique(partners.begin(), partners.end()),
+                           partners.end());
+            for (int j : partners) {
+                const Agent& B = agents_[j];
+                if (A.workPlace != kNoPlace && A.workPlace == B.workPlace)
+                    relationships_.set(A.uid, B.uid, Relationship::Coworker);
+                else if (A.homePlace != kNoPlace && A.homePlace == B.homePlace)
+                    relationships_.set(A.uid, B.uid, Relationship::Neighbor);
+            }
+        }
+    }
+}
+
+// MEDIAN COMMUTE, in sim-seconds. Sampled (every 64th commuter) because each
+// probe is a fresh uncached A*.
+//
+// Two things read it. The host multiplies it by hoursPerSecond to find what a
+// commute COSTS in in-world hours — the number that decides whether an agent's
+// day is livable at all, since a clock running 180x real time turns a 3 km
+// drive into 12.5 in-world hours. And scheduleSnapshot uses it to decide how
+// long after a departure boundary an agent is still on the road.
+//
+// Measured at build (where home/work are first assigned) and again after
+// assignPlaces moves work to a real building, so it is never stale.
+void CitySim::measureCommute(const NavGraph& graph) {
+    // SPLIT BY MODE. Drivers occupy the low indices (build assigns
+    // 0..driverCount-1), so a single stride-64 sample over the whole array is
+    // driver-dominated and a single median hides the walkers completely. That
+    // matters: at kWalkSpeed a kilometre-scale home/work pair is an hours-long
+    // journey in world time, so a population can be perfectly livable for its
+    // drivers and impossible for everyone on foot.
+    std::vector<Real> driveSamples, walkSamples;
+    for (std::size_t i = 0; i < agents_.size(); i += 16) {
+        const Agent& a = agents_[i];
+        if (a.home == a.work) continue;
+        const bool onFoot = a.archetype == Agent::Mode::Pedestrian;
+        const engine::Route r = engine::findRoute(graph, a.home, a.work, onFoot);
+        if (!r.valid()) continue;
+        Real secs = 0;
+        for (int li : r.links) {
+            const engine::NavLink& L = graph.links[li];
+            const Real v = onFoot ? kWalkSpeed : engine::classSpeed(L.klass);
+            secs += L.length / std::max(Real(0.1), v * a.speedFactor);
+        }
+        (onFoot ? walkSamples : driveSamples).push_back(secs);
+    }
+    auto median = [](std::vector<Real>& v) -> Real {
+        if (v.empty()) return 0;
+        std::sort(v.begin(), v.end());
+        return v[v.size() / 2];
+    };
+    commuteSecondsDrive_ = median(driveSamples);
+    commuteSecondsWalk_ = median(walkSamples);
+    // The blended figure scheduleSnapshot uses stays the whole-population
+    // median, since it places both kinds of agent.
+    std::vector<Real> all;
+    all.insert(all.end(), driveSamples.begin(), driveSamples.end());
+    all.insert(all.end(), walkSamples.begin(), walkSamples.end());
+    const Real m = median(all);
+    if (m > 0) commuteSecondsMedian_ = m;
+}
+
+// Where an agent's own day puts it at in-world hour `clock`. See the header for
+// why this takes the clock as a parameter instead of reading the sim's.
+//
+// The model is the one goalThink already runs, read forwards instead of ticked:
+// inside [departWork, departHome) the day says "be at work", outside it "be at
+// home", and the agent is TRAVELLING for as long as the journey takes after each
+// boundary. Travel time comes from the measured median rather than this agent's
+// own route, which is deliberate — the point is to place a population without
+// paying an A* per agent. A seeded agent is approximately right immediately and
+// exactly right as soon as it takes its next real trip.
+CitySim::Snapshot CitySim::scheduleSnapshot(const Agent& a, Real clock) const {
+    Snapshot s;
+    // No commute: it is always home. Also the stranded case (work == home),
+    // which goalThink short-circuits in exactly the same way.
+    if (a.home == a.work) return s;
+
+    const bool atWorkWindow = inWindow(clock, a.departWork, a.departHome);
+    // Hours since the boundary that put us in this half of the day.
+    const Real since = std::fmod(
+        clock - (atWorkWindow ? a.departWork : a.departHome) + 24.0, 24.0);
+    const Real travelHours =
+        commuteSecondsMedian_ * (hoursPerSecond_ > 0 ? hoursPerSecond_ : 0.0);
+
+    if (since < travelHours) {
+        // Still on the road: under way for `since`, heading to whichever end
+        // this half of the day belongs to.
+        s.where = atWorkWindow ? Snapshot::Where::ToWork : Snapshot::Where::ToHome;
+        s.elapsedSeconds =
+            hoursPerSecond_ > 0 ? since / hoursPerSecond_ : 0.0;
+        return s;
+    }
+    s.where = atWorkWindow ? Snapshot::Where::AtWork : Snapshot::Where::AtHome;
+    return s;
+}
+
+// SEED THE CITY AT AN HOUR instead of stepping up to it.
+//
+// The host used to run 400 full-fidelity steps purely to get the population
+// moving before the level appeared. That is expensive at city scale, and it
+// cannot express an arbitrary start: opening at 22:00 would mean simulating 27
+// in-world hours. Here every agent is placed directly from its own schedule —
+// at home, at work, or a measured distance along its commute.
+//
+// Ascending agent order, and every decision comes from the agent's own state or
+// its own rng stream, so the result is deterministic and independent of how the
+// population is ordered relative to anything else.
+void CitySim::seedFromSchedule(Real clock) {
+    if (!nav_ || agents_.empty()) return;
+    clockHours_ = std::fmod(clock, 24.0);
+    if (clockHours_ < 0) clockHours_ += 24.0;
+
+    for (std::size_t i = 0; i < agents_.size(); ++i)
+        placeFromSchedule(static_cast<int>(i));
+}
+
+// Put ONE agent where its day says it should be, right now. Shared by the
+// load-time seeding above and by waking a dormant agent, so a city that was
+// seeded and a city that was simulated place an agent by identical rules —
+// there is no second, subtly different reconstruction to drift apart.
+void CitySim::placeFromSchedule(int idx) {
+    if (!nav_ || idx < 0 || idx >= static_cast<int>(agents_.size())) return;
+    {
+        const std::size_t i = static_cast<std::size_t>(idx);
+        Agent& a = agents_[i];
+        if (a.playerControlled || a.released) return;
+        const Snapshot s = scheduleSnapshot(a, clockHours_);
+        const bool travelling = s.where == Snapshot::Where::ToWork ||
+                                s.where == Snapshot::Where::ToHome;
+        const Agent::Activity want =
+            s.where == Snapshot::Where::AtHome   ? Agent::Activity::AtHome
+            : s.where == Snapshot::Where::AtWork ? Agent::Activity::AtWork
+            : s.where == Snapshot::Where::ToWork ? Agent::Activity::Commuting
+                                                 : Agent::Activity::Returning;
+        // Seat the agent on the table state wearing that label (the same
+        // remapping installGoalTables uses), so its next transition is the one
+        // its day actually calls for.
+        const GoalTable& t = goalsFor(a.archetype);
+        int goal = -1;
+        for (int st = 0; st < t.stateCount(); ++st)
+            if (t.state(st).activity == want) { goal = st; break; }
+        if (goal < 0) return;   // this table has no such state: leave as built
+        a.goal = goal;
+        a.goalHours = 0;
+        a.activity = want;
+        a.wakeAt = -1;
+
+        if (!travelling) {
+            // At one end of the day. Rest there, and park the car with it.
+            const int node = s.where == Snapshot::Where::AtWork ? a.work : a.home;
+            a.restNode = node;
+            a.moving = false;
+            a.speed = 0;
+            a.route.links.clear();
+            a.leg = 0;
+            a.distOnLeg = 0;
+            a.elevation = 0;
+            a.pos = idlePose(node, a.mode, a.brain);
+            if (!nav_->outLinks[node].empty())
+                a.heading = nav_->direction(nav_->outLinks[node][0]);
+            if (a.mode == Agent::Mode::Driver && a.car >= 0 &&
+                a.car < static_cast<int>(vehicles_.size())) {
+                vehicles_[a.car].pos = a.pos;
+                vehicles_[a.car].heading = a.heading;
+                parkedGrid_.place(a.car, a.pos);
+            }
+        } else {
+            // Under way. Launch the real trip, then run the far-tier advance for
+            // as long as the schedule says it has been travelling — the same
+            // primitive that catches a distant agent up when it is promoted, so
+            // a seeded agent and a simulated one move by identical rules.
+            const int from = s.where == Snapshot::Where::ToWork ? a.home : a.work;
+            const int to = s.where == Snapshot::Where::ToWork ? a.work : a.home;
+            a.restNode = from;
+            startTrip(a, from, to, /*fromRest=*/true);
+            if (a.moving && s.elapsedSeconds > 0) vAdvance(a, s.elapsedSeconds);
+        }
+        grid_.place(static_cast<int>(i), a.pos);
+        a.vLastTick = simSeconds_;
+    }
+}
+
+// Bring a dormant agent back. Its stored position is however many world-hours
+// stale, so it is not resumed — it is REBUILT from its schedule, by the same
+// function that seeds the city at load.
+//
+// It wakes to V, never straight to K. Waking is an approximation (the snapshot
+// places it from the population's median commute, not its own), and V is
+// precisely the tier whose job is to be approximate; by the time the player is
+// close enough for the difference to matter, the promote pass has already run
+// its catch-up and handed over an exact lane pose.
+void CitySim::wakeDormant(int idx) {
+    if (idx < 0 || idx >= static_cast<int>(agents_.size())) return;
+    Agent& a = agents_[static_cast<std::size_t>(idx)];
+    placeFromSchedule(idx);
+    a.tier = Agent::Tier::V;
+    a.vLastTick = simSeconds_;   // its next coarse tick advances from now
+    a.vHold = 0;
+    // Any wake time it was carrying belongs to a day that has since moved on.
+    a.wakeAt = -1;
 }
 
 Vec2 CitySim::pushPoseClearOfLanes(Vec2 p, Real margin) const {
@@ -673,9 +1015,27 @@ Vec2 CitySim::idlePose(int node, Agent::Mode mode, uint32_t brain) const {
 // goal that doesn't begin by U-TURNING back up the link just arrived on (a
 // standstill 180 flips the lane offset to the other side of the road — a
 // visible pop); falls back to a U-turn when nothing else routes (dead ends).
+// GET BACK IN. A car owner walks the last few metres of every arrival, so it is
+// on foot when the next departure comes round; it drives again as soon as its
+// own car is there to be driven. If the car is GONE — stolen by the player, or
+// never owned in the first place — the agent stays on foot and walks the trip,
+// which is the honest outcome rather than conjuring a car back under it.
+//
+// Called from BOTH trip starters. A wander trip builds its own route and would
+// otherwise leave a dismounted driver walking the rest of the level.
+void CitySim::remountOwnedCar(Agent& a) {
+    if (a.archetype != Agent::Mode::Driver || a.vehicle >= 0) return;
+    if (a.car < 0 || a.car >= static_cast<int>(vehicles_.size())) return;
+    if (vehicles_[a.car].driver >= 0) return;   // someone else is in it
+    a.vehicle = a.car;
+    vehicles_[a.car].driver = static_cast<int>(&a - agents_.data());
+    a.mode = Agent::Mode::Driver;
+}
+
 bool CitySim::startWanderTrip(Agent& a, int from, bool fromRest) {
     const int n = nav_ ? nav_->nodeCount() : 0;
     if (n <= 1 || from < 0 || from >= n) return false;
+    remountOwnedCar(a);
     auto reversesArrival = [&](const engine::Route& r) {
         if (a.arrivedLink < 0 || r.links.empty()) return false;
         const engine::NavLink& in = nav_->links[a.arrivedLink];
@@ -685,7 +1045,7 @@ bool CitySim::startWanderTrip(Agent& a, int from, bool fromRest) {
     // Scan EVERY node from a random start, so a non-reversing goal is found
     // whenever one exists — dice rolls occasionally picked only U-turn goals,
     // and each of those flipped the car to the other side of the road in place.
-    int start = static_cast<int>(rnd() % static_cast<uint32_t>(n));
+    int start = static_cast<int>(tripRnd(a) % static_cast<uint32_t>(n));
     int fallback = -1;
     for (int k = 0; k < n; ++k) {
         int goal = (start + k) % n;
@@ -724,7 +1084,7 @@ int CitySim::departNode(const Agent& a) const {
 // target. On failure the table's NoRoute row (if any) decides the fallback
 // state — the historical "no path: fall back to the origin's resting state".
 bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
-    const GoalState& s = goalsFor(a.mode).state(a.goal);
+    const GoalState& s = goalsFor(a.archetype).state(a.goal);
     bool started = false;
     switch (s.target) {
         case GoalTarget::Random:
@@ -743,11 +1103,11 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
         a.activity = s.activity;   // the day now reads as this state's label
         return true;
     }
-    int next = goalsFor(a.mode).onEvent(a.goal, GoalEvent::NoRoute);
+    int next = goalsFor(a.archetype).onEvent(a.goal, GoalEvent::NoRoute);
     if (next >= 0) {
         a.goal = next;
         a.goalHours = 0;
-        a.activity = goalsFor(a.mode).state(next).activity;
+        a.activity = goalsFor(a.archetype).state(next).activity;
     }
     return false;
 }
@@ -757,7 +1117,7 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
 // its spawn area is clear of moving traffic — it waits out the traffic and the
 // event simply fires again next tick, like anyone pulling out of a spot).
 CitySim::GoalFire CitySim::tryGoalEvent(Agent& a, GoalEvent event) {
-    const GoalTable& t = goalsFor(a.mode);
+    const GoalTable& t = goalsFor(a.archetype);
     int next = t.onEvent(a.goal, event);
     if (next < 0) return GoalFire::NoRow;
     const GoalState& to = t.state(next);
@@ -765,7 +1125,13 @@ CitySim::GoalFire CitySim::tryGoalEvent(Agent& a, GoalEvent event) {
         int from = departNode(a);
         // A far (V) agent departs ungated: nobody is watching a spawn 600 m
         // out, and clearance against other far ghosts is meaningless.
-        if (a.mode == Agent::Mode::Driver && a.tier != Agent::Tier::V &&
+        // ARCHETYPE, not mode. A driver that has parked is walking (mode ==
+        // Pedestrian) right up until startTrip puts it back in its car, so
+        // gating on `mode` skipped clearance for every driver after its first
+        // arrival — which is to say, almost all of them. That reinstates the
+        // "two cars spawn inside each other at a node" case launchClear exists
+        // to prevent, and the fender-bender rule then freezes both in place.
+        if (a.archetype == Agent::Mode::Driver && !a.far() &&
             !launchClear(a, from))
             return GoalFire::Blocked;
         a.goal = next;
@@ -784,13 +1150,20 @@ CitySim::GoalFire CitySim::tryGoalEvent(Agent& a, GoalEvent event) {
 // tick's events in a fixed order — DwellDone, the clock-window depart, Idle —
 // and the first row that fires (or blocks on launch clearance) wins.
 void CitySim::goalThink(Agent& a, Real dtHours) {
-    const GoalTable& t = goalsFor(a.mode);
+    // WAKING. While asleep the agent was skipped entirely, so its dwell clock
+    // stopped with it — catch it up before anything reads it.
+    if (a.wakeAt >= 0) {
+        a.goalHours += (simSeconds_ - a.sleptAt) * hoursPerSecond_;
+        a.wakeAt = -1;
+    }
+    const GoalTable& t = goalsFor(a.archetype);
     if (a.goal < 0 || a.goal >= t.stateCount()) return;   // no table: inert
     const GoalState& s = t.state(a.goal);
     if (s.action == GoalAction::GoTo) {
         if (!a.moving) {
             int from = departNode(a);
-            if (a.mode != Agent::Mode::Driver || a.tier == Agent::Tier::V ||
+            // Archetype, for the same reason as tryGoalEvent above.
+            if (a.archetype != Agent::Mode::Driver || a.far() ||
                 launchClear(a, from))
                 startGoalTrip(a, from, /*fromRest=*/true);
         }
@@ -805,12 +1178,41 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
     // with a real commute — a stranded pair (work == home, no route at build)
     // never departs, exactly as before.
     if (a.home != a.work) {
-        bool inWindow = clockHours_ >= a.departWork && clockHours_ < a.departHome;
-        if (tryGoalEvent(a, inWindow ? GoalEvent::DepartWork
-                                     : GoalEvent::DepartHome) != GoalFire::NoRow)
+        const bool atWorkNow = inWindow(clockHours_, a.departWork, a.departHome);
+        if (tryGoalEvent(a, atWorkNow ? GoalEvent::DepartWork
+                                      : GoalEvent::DepartHome) != GoalFire::NoRow)
             return;
     }
-    tryGoalEvent(a, GoalEvent::Idle);
+    if (tryGoalEvent(a, GoalEvent::Idle) != GoalFire::NoRow) return;
+
+    // NOTHING FIRED, AND NOTHING CAN UNTIL A KNOWN TIME. An agent resting at
+    // home or at work is waiting for its own day, not reacting to the world, so
+    // rather than asking it the same question sixty times a second it names the
+    // moment it next has something to decide and leaves the active list until
+    // then. Its car stays exactly where it is, drawn and collidable — cars are
+    // state, agents are the thing that can be recomputed.
+    //
+    // Reaching here means no Idle row exists for this state, so the only things
+    // that can move it are its dwell timer and its clock window; both are known
+    // in advance. (A wander table always has an Idle row, so wanderers never
+    // sleep — which is right: they are supposed to keep moving.)
+    if (hoursPerSecond_ <= 0) return;   // clock stopped: nothing to wait for
+    Real hoursUntil = kNeverWakes;
+    if (s.dwellHours > 0)
+        hoursUntil = std::max(Real(0), s.dwellHours - a.goalHours);
+    if (a.home != a.work) {
+        // The commute fires when the window predicate FLIPS, so the next
+        // boundary is whichever end of the window is ahead of us.
+        const bool atWorkNow = inWindow(clockHours_, a.departWork, a.departHome);
+        const Real boundary = atWorkNow ? a.departHome : a.departWork;
+        Real delta = std::fmod(boundary - clockHours_, Real(24));
+        if (delta < 0) delta += 24.0;
+        hoursUntil = std::min(hoursUntil, delta);
+    }
+    // A stranded agent (work == home) with no dwell waits forever — and that is
+    // the cheapest agent in the city, which is exactly right.
+    a.sleptAt = simSeconds_;
+    a.wakeAt = simSeconds_ + hoursUntil / hoursPerSecond_;
 }
 
 // Re-seat every agent onto the (new) tables: the first state wearing the
@@ -820,7 +1222,7 @@ void CitySim::installGoalTables(GoalTable pedestrian, GoalTable driver) {
     goalPed_ = std::move(pedestrian);
     goalDriver_ = std::move(driver);
     for (Agent& a : agents_) {
-        const GoalTable& t = goalsFor(a.mode);
+        const GoalTable& t = goalsFor(a.archetype);
         int mapped = t.entry();
         for (int s = 0; s < t.stateCount(); ++s)
             if (t.state(s).activity == a.activity) { mapped = s; break; }
@@ -856,7 +1258,7 @@ bool CitySim::launchClear(const Agent& a, int node) const {
     for (int bi : queryScratch_) {
         const Agent& b = agents_[bi];
         if (&b == &a || b.mode != Agent::Mode::Driver) continue;
-        if (b.tier == Agent::Tier::V) continue;   // far tier: no body here
+        if (b.far()) continue;   // far tier: no body here
         if (!b.moving || b.released) continue;
         if (std::fabs(b.elevation - a.elevation) > 3.0) continue;
         Real dx = b.pos.x - p.x, dy = b.pos.y - p.y;
@@ -866,6 +1268,7 @@ bool CitySim::launchClear(const Agent& a, int node) const {
 }
 
 void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
+    remountOwnedCar(a);
     a.route = engine::findRoute(*nav_, origin, goal,
                                 a.mode == Agent::Mode::Pedestrian);
     a.leg = 0;
@@ -882,7 +1285,7 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
     }
     int lanes = nav_->links[a.route.links.front()].lanes;
     a.lane = (a.mode == Agent::Mode::Driver && lanes > 1)
-                 ? static_cast<int>(rnd() % static_cast<uint32_t>(lanes))
+                 ? static_cast<int>(tripRnd(a) % static_cast<uint32_t>(lanes))
                  : 0;
     a.laneF = a.lane;
     a.laneTimer = 4.0 + (a.home % 11);
@@ -1161,7 +1564,7 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
             for (int bi : queryScratch_) {
                 const Agent& b = agents_[bi];
                 if (&b == &a || b.mode != Agent::Mode::Driver) continue;
-                if (b.tier == Agent::Tier::V) continue;   // far tier: no body
+                if (b.far()) continue;   // far tier: no body
                 if (!b.moving || b.released) continue;
                 if (std::fabs(b.elevation - a.elevation) > 3.0) continue;
                 Real dx = b.pos.x - jc.x, dy = b.pos.y - jc.y;
@@ -1326,7 +1729,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
                     for (int bi : queryScratch_) {
                         const Agent& b = agents_[bi];
                         if (&b == &a || b.mode != Agent::Mode::Driver ||
-                            b.tier == Agent::Tier::V ||
+                            b.far() ||
                             !b.moving || b.leg >= (int)b.route.links.size())
                             continue;
                         if (b.route.links[b.leg] != li) continue;
@@ -1403,6 +1806,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         idm.accelMax = accel;
         idm.decelComf = kCarDecel;
         idm.minGap = kCarBumperGap;
+        idm.headway = kCarHeadway;
         Real netGap = gap < 1e8
             ? std::max(Real(0.05), gap - (minGap - kCarBumperGap))
             : std::numeric_limits<Real>::infinity();
@@ -1536,7 +1940,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             grid_.query(nodeP, 92.0, queryScratch_);
             for (int ci : queryScratch_) {
                 const Agent& c = agents_[ci];
-                if (c.mode != Agent::Mode::Driver || c.tier == Agent::Tier::V ||
+                if (c.mode != Agent::Mode::Driver || c.far() ||
                     !c.moving || c.speed < 0.5)
                     continue;
                 if (std::fabs(c.elevation - a.elevation) > 2.5) continue;
@@ -1574,7 +1978,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         grid_.query(probe, 26.0, queryScratch_);
         for (int di : queryScratch_) {
             const Agent& drv = agents_[di];
-            if (drv.mode != Agent::Mode::Driver || drv.tier == Agent::Tier::V ||
+            if (drv.mode != Agent::Mode::Driver || drv.far() ||
                 drv.vehicle < 0 ||
                 drv.vehicle >= static_cast<int>(vehicles_.size()))
                 continue;
@@ -1711,7 +2115,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
     // arrivals at ground level, under their own road.
     a.elevation = nav_->links[lastLink].layer * kLayerClearance +
                   nav_->links[lastLink].elevB;
-    const GoalTable& t = goalsFor(a.mode);
+    const GoalTable& t = goalsFor(a.archetype);
     int next = t.onEvent(a.goal, GoalEvent::Arrived);
     if (a.mode == Agent::Mode::Driver && next >= 0 &&
         t.state(next).action == GoalAction::GoTo) {
@@ -1786,13 +2190,33 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
                 1.3);
             a.heading = dir;
         }
+        // GET OUT. The leg that just ended was the DRIVING part of the day; the
+        // rest of it happens on foot. The car is left exactly where it was
+        // parked and stops following its owner around — from here it is an
+        // object the world contains, which is what lets it be seen parked, be
+        // missed when its owner comes back, and be stolen.
+        if (a.car >= 0 && a.car < static_cast<int>(vehicles_.size())) {
+            SimVehicle& v = vehicles_[a.car];
+            v.pos = a.pos;          // the pose it keeps until someone drives it
+            v.heading = a.heading;
+            v.driver = -1;          // nobody is in it
+            // Index it where it stands: from here it is a body in the world
+            // that nothing can find through its owner.
+            parkedGrid_.place(a.car, v.pos);
+        }
+        a.vehicle = -1;             // ...and the agent is no longer driving one
+        a.mode = Agent::Mode::Pedestrian;
     } else {
         // A walker rests at the end of its sidewalk (continuous with the final
         // motion — not snapped across the node, which was the old visible jump).
         a.pos = nav_->sidewalkPoint(lastLink, 1.0);
-        // Living City: an arrival AT one of its places rests at THAT DOOR — the
-        // walker is semantically indoors. The corner pose could sit inside the
-        // traffic corridor (and, sensed, froze every approaching car — device).
+    }
+    // Living City: an arrival AT one of its own places rests at THAT DOOR — the
+    // agent is semantically indoors. The corner pose could sit inside the
+    // traffic corridor (and, sensed, froze every approaching car — device).
+    // Applies to a driver too now that it finishes its trip on foot: it leaves
+    // the car at the kerb and covers the last few metres to the door.
+    {
         const int node = nav_->links[lastLink].to;
         const bool atHome = a.homePlace != kNoPlace && node == a.home;
         const bool atWork =
@@ -1856,7 +2280,7 @@ void CitySim::computeGaps() {
     std::unordered_map<long long, std::vector<std::pair<Real, int>>> lanes;
     for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
         const Agent& a = agents_[i];
-        if (a.tier == Agent::Tier::V) continue;   // far tier: not on the road
+        if (a.far()) continue;   // far tier: not on the road
         if (!a.moving || a.leg >= static_cast<int>(a.route.links.size())) continue;
         lanes[laneKeyOf(a, a.route.links[a.leg])].push_back({a.distOnLeg, i});
     }
@@ -1886,7 +2310,7 @@ void CitySim::computeGaps() {
     for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
         const Agent& a = agents_[i];
         if (gaps_[i] != INF) continue;                 // has a same-link leader already
-        if (a.tier == Agent::Tier::V) continue;        // far tier: no following
+        if (a.far()) continue;        // far tier: no following
         if (!a.moving) continue;
         int legN = static_cast<int>(a.route.links.size());
         Real ahead = nav_->links[a.route.links[a.leg]].length - a.distOnLeg;  // to end of this link
@@ -1946,7 +2370,7 @@ void CitySim::computeCarWedge() {
             if (j == i) continue;
             const Agent& b = agents_[j];
             if (b.mode != Agent::Mode::Driver) continue;
-            if (b.tier == Agent::Tier::V) continue;   // far tier: no body
+            if (b.far()) continue;   // far tier: no body
             // Different decks never conflict (viaduct vs the street below).
             if (std::fabs(b.elevation - a.elevation) > 2.5) continue;
             const Real dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
@@ -1988,7 +2412,7 @@ void CitySim::computeCarWedge() {
             const Agent& b = agents_[j];
             if (b.mode != Agent::Mode::Driver || !b.moving || b.speed < 0.3)
                 continue;
-            if (b.tier == Agent::Tier::V) continue;   // far tier: no body
+            if (b.far()) continue;   // far tier: no body
             if (std::fabs(b.elevation - a.elevation) > 2.5) continue;
             const Real dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
             if (dx * dx + dy * dy > kRange * kRange) continue;
@@ -2049,6 +2473,10 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // so a V agent (whose pose only moves on its coarse tick) costs a compare.
     for (std::size_t i = 0; i < agents_.size(); ++i)
         grid_.place(static_cast<int>(i), agents_[i].pos);
+    // Record the rate BEFORE tierPass: waking a dormant agent reconstructs it
+    // through scheduleSnapshot, which converts commute seconds into a share of
+    // the day and so needs the CURRENT rate, not last step's.
+    hoursPerSecond_ = hoursPerSecond;
     // P4.2: the tier bubble — demote K agents past the outer ring, promote V
     // agents inside the inner one (each with a catch-up tick, so the handoff
     // pose is the exact lane pose). BEFORE the clock advances: a promoted
@@ -2060,10 +2488,20 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // tier bubble already knows who is live, so resolve that ONCE here and let
     // the passes iterate the survivors. Ascending indices keep the iteration
     // order (and therefore the results) bit-identical to the old sweeps.
+    //
+    // SLEEPERS drop out here too. An agent waiting out its day at a door has
+    // nothing to contribute to any of these passes — it does not move, and a
+    // resting pedestrian is already excluded from the sensed set as
+    // semantically indoors — so skipping it removes it from all of them at
+    // once. It reappears the instant its own schedule calls for it.
     active_.clear();
-    for (std::size_t i = 0; i < agents_.size(); ++i)
-        if (agents_[i].tier != Agent::Tier::V)
-            active_.push_back(static_cast<int>(i));
+    sleeping_ = 0;
+    for (std::size_t i = 0; i < agents_.size(); ++i) {
+        const Agent& a = agents_[i];
+        if (a.far()) continue;
+        if (a.wakeAt >= 0 && simSeconds_ < a.wakeAt) { ++sleeping_; continue; }
+        active_.push_back(static_cast<int>(i));
+    }
 
     clockHours_ += dt * hoursPerSecond;
     clockHours_ = std::fmod(clockHours_, 24.0);
@@ -2173,7 +2611,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         for (std::size_t j = i + 1; j < agents_.size(); ++j) {
             Agent& b = agents_[j];
             if (b.mode != Agent::Mode::Driver || !b.moving || b.released ||
-                b.playerControlled || b.tier == Agent::Tier::V)
+                b.playerControlled || b.far())
                 continue;
             if (std::fabs(b.elevation - a.elevation) > 3.0) continue;  // bridge deck
             // ESCAPE VALVE: a car wedged through many consecutive freezes (a
@@ -2407,7 +2845,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             for (int di : queryScratch_) {
                 const Agent& drv = agents_[di];
                 if (drv.mode != Agent::Mode::Driver ||
-                    drv.tier == Agent::Tier::V || drv.vehicle < 0 ||
+                    drv.far() || drv.vehicle < 0 ||
                     drv.vehicle >= static_cast<int>(vehicles_.size()))
                     continue;
                 const SimVehicle& v = vehicles_[drv.vehicle];
@@ -2461,7 +2899,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             for (std::size_t j = i + 1; j < agents_.size(); ++j) {
                 Agent& b = agents_[j];
                 if (b.mode != Agent::Mode::Pedestrian || !b.moving ||
-                    b.tier == Agent::Tier::V)
+                    b.far())
                     continue;
                 Real dx = a.pos.x - b.pos.x, dy = a.pos.y - b.pos.y;
                 Real d = std::sqrt(dx * dx + dy * dy);
@@ -2482,7 +2920,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // bias above makes it lean away in advance; this is the physical backstop.
     for (Agent& a : agents_) {
         if (a.mode != Agent::Mode::Pedestrian || !a.moving ||
-            a.tier == Agent::Tier::V)
+            a.far())
             continue;
         auto pushOut = [&](const Vec2& o, Real clearance) {
             Real dx = a.pos.x - o.x, dy = a.pos.y - o.y;
@@ -2504,24 +2942,15 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         // combined with the cone lean above, it walks around the car.
         // Bodies via their drivers in the grid (P4.1), ascending = the
         // vehicles_ scan's order, so sequential pushes resolve identically.
-        grid_.query(a.pos, 26.0, queryScratch_);
-        for (int di : queryScratch_) {
-            const Agent& drv = agents_[di];
-            if (drv.mode != Agent::Mode::Driver || drv.tier == Agent::Tier::V ||
-                drv.vehicle < 0 ||
-                drv.vehicle >= static_cast<int>(vehicles_.size()))
-                continue;
-            const SimVehicle& v = vehicles_[drv.vehicle];
-            const Real ve = (v.driver >= 0 &&
-                             v.driver < static_cast<int>(agents_.size()))
-                                ? agents_[v.driver].elevation : 0.0;
-            if (std::fabs(ve - a.elevation) > 2.0) continue;
+        // Squeeze out of one car's oriented footprint along its shallowest axis.
+        auto clearOfCar = [&](const SimVehicle& v, Real ve) {
+            if (std::fabs(ve - a.elevation) > 2.0) return;
             const Vec2 f = v.heading, r(v.heading.y, -v.heading.x);
             const Vec2 rel(a.pos.x - v.pos.x, a.pos.y - v.pos.y);
             const Real cx = v.length * 0.5 + 0.35, cy = v.width * 0.5 + 0.35;
             const Real lx = rel.x * f.x + rel.y * f.y;
             const Real ly = rel.x * r.x + rel.y * r.y;
-            if (std::fabs(lx) >= cx || std::fabs(ly) >= cy) continue;
+            if (std::fabs(lx) >= cx || std::fabs(ly) >= cy) return;
             const Real px = cx - std::fabs(lx), py = cy - std::fabs(ly);
             if (px < py) {
                 const Real s = lx >= 0 ? 1.0 : -1.0;
@@ -2530,6 +2959,29 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
                 const Real s = ly >= 0 ? 1.0 : -1.0;
                 a.pos.x += r.x * s * py; a.pos.y += r.y * s * py;
             }
+        };
+        grid_.query(a.pos, 26.0, queryScratch_);
+        for (int di : queryScratch_) {
+            const Agent& drv = agents_[di];
+            if (drv.mode != Agent::Mode::Driver || drv.far() ||
+                drv.vehicle < 0 ||
+                drv.vehicle >= static_cast<int>(vehicles_.size()))
+                continue;
+            const SimVehicle& v = vehicles_[drv.vehicle];
+            const Real ve = (v.driver >= 0 &&
+                             v.driver < static_cast<int>(agents_.size()))
+                                ? agents_[v.driver].elevation : 0.0;
+            clearOfCar(v, ve);
+        }
+        // PARKED cars are bodies too, and cannot be reached through a driver —
+        // theirs got out and walked away. Before they were indexed separately,
+        // a walker strolled straight through every car at the kerb.
+        parkedGrid_.query(a.pos, 26.0, parkedScratch_);
+        for (int vi : parkedScratch_) {
+            if (vi < 0 || vi >= static_cast<int>(vehicles_.size())) continue;
+            const SimVehicle& v = vehicles_[vi];
+            if (v.driver >= 0) continue;   // driven: handled by the scan above
+            clearOfCar(v, a.elevation);    // parked at grade with the walker
         }
     }
 
@@ -2605,6 +3057,36 @@ void CitySim::tierPass(Real hoursPerSecond) {
         a.memory.clear();
         ++demotions_;
     }
+    // V -> D. A far agent still ticks once a second; past this range even that
+    // is wasted, so it stops being simulated and will be rebuilt from its own
+    // schedule when the player returns. Its car is deliberately left alone.
+    if (dormancyEnabled) {
+        for (std::size_t i = 0; i < agents_.size(); ++i) {
+            Agent& a = agents_[i];
+            if (a.tier != Agent::Tier::V) continue;
+            if (a.playerControlled || a.released || a.tethered) continue;
+            const Real dx = a.pos.x - c.x, dy = a.pos.y - c.y;
+            if (dx * dx + dy * dy <= dormantRadius * dormantRadius) continue;
+            a.tier = Agent::Tier::D;
+            a.dormantSince = simSeconds_;
+            ++dormancies_;
+        }
+        // D -> V. Reconstruct from the schedule and hand to the far tier, never
+        // straight to K: waking is an approximation, and V is the tier whose
+        // whole job is being approximate until the player is close enough for
+        // it to matter.
+        grid_.query(c, dormantResumeRadius + 4.0, dormantScratch_);
+        for (int idx : dormantScratch_) {
+            Agent& a = agents_[static_cast<std::size_t>(idx)];
+            if (a.tier != Agent::Tier::D) continue;
+            const Real dx = a.pos.x - c.x, dy = a.pos.y - c.y;
+            if (dx * dx + dy * dy >= dormantResumeRadius * dormantResumeRadius)
+                continue;
+            wakeDormant(idx);
+            ++wakes_;
+        }
+    }
+
     const Real reach = std::max(carPromoteRadius, pedPromoteRadius);
     grid_.query(c, reach + 4.0, tierScratch_);
     for (int idx : tierScratch_) {

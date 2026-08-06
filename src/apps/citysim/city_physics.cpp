@@ -149,17 +149,30 @@ void CityPhysicsSystem::step(World& world, Real dt) {
 void CityPhysicsSystem::possessTier(World& world, Real dt) {
     RT_PROFILE_ZONE_NAMED("possessTier");
     PhysicsWorld& pw = physics_.physicsWorld();
-    // The tier centres on the PLAYER (the character controller's transform).
+    // The tier centres on the PLAYER — found by ControlledBy, not by "the first
+    // entity with a CharacterController". Every walker has one of those, so the
+    // old scan could centre the possession ring on an arbitrary pedestrian
+    // depending on component-pool order.
     Vec3 centre(0, 0, 0);
     bool haveCentre = false;
-    world.each<engine::CharacterController>(
-        [&](Entity e, engine::CharacterController&) {
+    world.each<engine::Transform, engine::ControlledBy>(
+        [&](engine::Entity, engine::Transform& t, engine::ControlledBy&) {
             if (haveCentre) return;
-            if (const engine::Transform* t = world.get<engine::Transform>(e)) {
-                centre = t->position;
-                haveCentre = true;
-            }
+            centre = t.position;
+            haveCentre = true;
         });
+    // Fallback for hosts that stand in a bare character for the player (the
+    // headless tier tests do exactly this). In a real level the player carries
+    // ControlledBy, so the walker crowd can never win this.
+    if (!haveCentre)
+        world.each<engine::CharacterController>(
+            [&](engine::Entity e, engine::CharacterController&) {
+                if (haveCentre) return;
+                if (const engine::Transform* t = world.get<engine::Transform>(e)) {
+                    centre = t->position;
+                    haveCentre = true;
+                }
+            });
     const auto& agents = city_.sim().agents();
     if (!haveCentre || agents.empty()) return;
 
@@ -198,7 +211,7 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
             const Agent& a = agents[ai];
             if (a.mode != Agent::Mode::Driver || !a.moving || a.released)
                 continue;
-            if (a.tier != Agent::Tier::K) continue;   // far tier: nothing to possess
+            if (a.far()) continue;   // far tier: nothing to possess
             bool already = false;
             for (const Possessed& p : possessed_)
                 if (p.agent == static_cast<int>(ai)) { already = true; break; }

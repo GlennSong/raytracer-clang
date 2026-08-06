@@ -1,15 +1,20 @@
 {
   "_comment": "Piedmont (8km-city plan P3): the full city on the P1/P2 sandbox's world — terrain + multi-site road recipe copied VERBATIM from piedmont_roads.json (same seeds, so the erosion/conform caches hit), plus the citysim block that builds it: lots + buildings on the metro's blocks, per-hub-cluster civic anchors (each town gets its school + church), piedmont-scale parcel grain (150 m+ blocks parcel bigger lots), and the P5 scattering sky + volumetric clouds as its flagship consumer.",
   "citysim": {
+    "_comment_clock": "8 km world: agents move at real m/s while the clock runs at hoursPerSecond, so 0.05 (180x) made a 3 km commute cost 12.5 in-world hours and a 50 m walk 1.8 h. 0.004 gives a 100-minute day and a ~1 h commute.",
+    "_comment_dormancy": "P5: agents past ~1.2 km stop being simulated entirely and are rebuilt from their schedule when the player returns. Their parked cars stay put — dormancy strips the agent, never the vehicle.",
     "adaptiveRate": true,
     "buildChance": 0.9,
     "buildLots": true,
     "cars": 3000,
     "debugWidgets": false,
     "detailDistance": 900,
+    "dormancy": true,
     "downtownRadius": 300,
+    "hoursPerSecond": 0.004,
     "hubRadius": 320,
     "localHz": 30.0,
+    "maxWalkerBodies": 200,
     "midtownRadius": 650,
     "parcel": {
       "courtMinArea": 500,
@@ -201,6 +206,13 @@
     ]
   },
   "render": {
+    "drawDistances": {
+      "effect": 250,
+      "furniture": 500,
+      "groundPaint": 220,
+      "scenery": 600,
+      "simBody": 400
+    },
     "maxFoliageInstances": 32768,
     "maxInstances": 16384,
     "maxShadowInstances": 49152

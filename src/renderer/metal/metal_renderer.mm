@@ -261,6 +261,13 @@ struct MetalRenderer::Impl {
     // Per-cascade light VP (for the shadow pass) and world bounds (for culling
     // casters per cascade). activeCascadeCount cascades are live this frame.
     simd_float4x4 cascadeVP[RT_MAX_CASCADES];
+    // Same matrices as Mat4, kept for CPU-side caster culling (the simd form is
+    // for upload). Orthographic, so clip z runs near->0, far->1 with w == 1.
+    Mat4 cascadeVPMat[RT_MAX_CASCADES];
+    // The postEffectScale the SSR/AO textures were actually built at, so a
+    // change to the live knob can rebuild them instead of being ignored until
+    // the next window resize.
+    float postEffectScaleApplied = -1.0f;
     Vec3 cascadeCenter[RT_MAX_CASCADES];
     Real cascadeRadius[RT_MAX_CASCADES] = {0};
     int activeCascadeCount = 0;
@@ -348,6 +355,20 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     // Without this the facing/normals views are reachable only from an
     // interactive ImGui build — useless for verifying a frame dump.
     if (const char* d = std::getenv("RT_DEBUG_VIEW")) debugView = std::atoi(d);
+    // PER-PASS GATES, from the environment. These already existed as ImGui
+    // checkboxes, which makes them useless to the headless perf harness — and
+    // the harness is the only place a GPU cost can be attributed honestly,
+    // because it pins the camera and samples a fixed sim-hour window.
+    //
+    // Turning one pass off and re-measuring the whole-frame GPU time is a
+    // complete attribution with no counter-buffer plumbing: the delta IS that
+    // pass's cost, at this viewpoint, on this frame's real workload.
+    if (std::getenv("RT_NO_SSAO"))   ssaoEnabled = false;
+    if (std::getenv("RT_NO_SSR"))    ssrEnabled = false;
+    if (std::getenv("RT_NO_PROBES")) reflectionProbesEnabled = false;
+    if (std::getenv("RT_NO_CLOUDS")) volumetricCloudsEnabled = false;
+    // (Content-layer gates are parsed in RenderSystem, where the RenderLayer
+    //  enum lives — the renderer treats hiddenLayers as an opaque mask.)
     impl->metalLayer.framebufferOnly = impl->frameDumpPath ? NO : YES;
     impl->metalLayer.contentsScale =
         nsWindow ? nsWindow.backingScaleFactor : 2.0;   // retina default
@@ -1068,9 +1089,15 @@ void MetalRenderer::resize(int width, int height) {
     normalDesc.storageMode = MTLStorageModePrivate;
     impl->viewNormalTexture = [impl->device newTextureWithDescriptor:normalDesc];
 
-    // SSR textures (half resolution for performance)
-    int halfW = std::max(width / 2, 1);
-    int halfH = std::max(height / 2, 1);
+    // SSR + AO buffer resolution. `postEffectScale` is documented as exactly
+    // this knob and is honoured by the WebGPU and web backends, but Metal read
+    // it NOWHERE and hardcoded width/2 — so a level or slider setting it was
+    // silently ignored on the one backend where SSAO is the measured dominant
+    // cost. Clamped to a sane range; 0.5 reproduces the old hardcoded halving.
+    const float peScale = std::clamp(postEffectScale, 0.25f, 1.0f);
+    impl->postEffectScaleApplied = peScale;
+    int halfW = std::max(static_cast<int>(width * peScale), 1);
+    int halfH = std::max(static_cast<int>(height * peScale), 1);
     MTLTextureDescriptor* ssrDesc = [MTLTextureDescriptor
         texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
                                      width:halfW
@@ -1998,6 +2025,14 @@ void MetalRenderer::setInstanceCapacities(uint32_t instances, uint32_t shadow,
 }
 
 void MetalRenderer::beginFrame() {
+    // Live postEffectScale changes rebuild the SSR/AO buffers. Without this the
+    // knob would only take effect on the next window resize, which is its own
+    // flavour of "the setting does nothing".
+    if (std::abs(std::clamp(postEffectScale, 0.25f, 1.0f) -
+                 impl->postEffectScaleApplied) > 1e-4f &&
+        impl->framebufferWidth > 0 && impl->framebufferHeight > 0) {
+        resize(impl->framebufferWidth, impl->framebufferHeight);
+    }
     impl->opaqueDrawCalls.clear();
     impl->transparentDrawCalls.clear();
     impl->overlayDrawCalls.clear();
@@ -2109,6 +2144,58 @@ static simd_float3 toSimd3(const Vec3& v) {
             static_cast<float>(v.z)};
 }
 
+// SHADOW CASTER SELECTION — the shadow pass's own culling model, replacing a
+// bounding sphere of twice the cascade radius.
+//
+// Why the sphere was wrong, not merely loose: a cascade is an ORTHOGRAPHIC BOX,
+// and `cascadeRadius * 2` circumscribes roughly four times its footprint area,
+// three cascades over. It was inflated for a real reason — a caster standing
+// outside the box can still shadow INTO it — but a symmetric sphere pays that
+// cost in every direction, including the two where nothing can ever cast.
+//
+// The correct shape is the box extended ALONG THE LIGHT only. Because the
+// cascade projection is orthographic, w stays 1 through the transform, so
+// clip space needs no perspective divide and the test below is exact:
+//   - reject on x/y entirely outside [-1, 1]  (outside the footprint: cannot cast in)
+//   - reject on z beyond the far plane        (behind the receiver set)
+//   - NEVER reject on z before the near plane (that is toward the light — the
+//     tall-caster case the inflation existed for, now kept for free)
+static bool aabbCastsIntoCascade(const Mat4& cascadeVP, const Vec3& bmin,
+                                 const Vec3& bmax) {
+    Vec3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);
+    for (int i = 0; i < 8; ++i) {
+        const Vec3 corner((i & 1) ? bmax.x : bmin.x,
+                          (i & 2) ? bmax.y : bmin.y,
+                          (i & 4) ? bmax.z : bmin.z);
+        const Vec3 c = cascadeVP.transformPoint(corner);
+        lo.x = std::min(lo.x, c.x); hi.x = std::max(hi.x, c.x);
+        lo.y = std::min(lo.y, c.y); hi.y = std::max(hi.y, c.y);
+        lo.z = std::min(lo.z, c.z); hi.z = std::max(hi.z, c.z);
+    }
+    if (lo.x > 1.0 || hi.x < -1.0) return false;
+    if (lo.y > 1.0 || hi.y < -1.0) return false;
+    if (lo.z > 1.0) return false;   // past the far plane; nothing to shadow
+    return true;                    // hi.z < 0 is deliberately KEPT
+}
+
+// World-space AABB of a mesh's local box under `m`, by transforming all eight
+// corners (a transformed box is not an axis-aligned box; taking min/max of two
+// transformed corners under-covers any rotation).
+static void worldAABB(const Mat4& m, const Vec3& bmin, const Vec3& bmax,
+                      Vec3& outMin, Vec3& outMax) {
+    outMin = Vec3(1e30, 1e30, 1e30);
+    outMax = Vec3(-1e30, -1e30, -1e30);
+    for (int i = 0; i < 8; ++i) {
+        const Vec3 corner((i & 1) ? bmax.x : bmin.x,
+                          (i & 2) ? bmax.y : bmin.y,
+                          (i & 4) ? bmax.z : bmin.z);
+        const Vec3 w = m.transformPoint(corner);
+        outMin.x = std::min(outMin.x, w.x); outMax.x = std::max(outMax.x, w.x);
+        outMin.y = std::min(outMin.y, w.y); outMax.y = std::max(outMax.y, w.y);
+        outMin.z = std::min(outMin.z, w.z); outMax.z = std::max(outMax.z, w.z);
+    }
+}
+
 void MetalRenderer::setLights(const SceneLighting& lighting) {
     auto& lu = impl->lightUniforms;
     int idx = 0;
@@ -2211,6 +2298,7 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
                 Mat4 lightVP = lightProj * lightView;
 
                 impl->cascadeVP[c] = toSimd(lightVP);
+                impl->cascadeVPMat[c] = lightVP;
                 impl->shadowUniforms.cascadeViewProjection[c] = toSimd(lightVP);
                 impl->cascadeCenter[c] = snapped;
                 impl->cascadeRadius[c] = radius;
@@ -2230,6 +2318,23 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
             impl->shadowDepthBias = lighting.shadow.bias;
             impl->shadowUniforms.normalBias = lighting.shadow.normalBias;
             impl->shadowUniforms.pcfRadius = lighting.shadow.pcfRadius;
+            // ShadowConfig::resolution had NO CONSUMER here: Metal hardcoded
+            // 2048, so a level that set it was silently ignored while WebGPU
+            // honoured it. Reallocate the depth array when it actually changes;
+            // a knob that lies is worse than no knob.
+            if (lighting.shadow.resolution > 0 &&
+                lighting.shadow.resolution != impl->shadowMapSize) {
+                impl->shadowMapSize = lighting.shadow.resolution;
+                MTLTextureDescriptor* d = [[MTLTextureDescriptor alloc] init];
+                d.textureType = MTLTextureType2DArray;
+                d.pixelFormat = MTLPixelFormatDepth32Float;
+                d.width = impl->shadowMapSize;
+                d.height = impl->shadowMapSize;
+                d.arrayLength = RT_MAX_CASCADES;
+                d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+                d.storageMode = MTLStorageModePrivate;
+                impl->shadowMap = [impl->device newTextureWithDescriptor:d];
+            }
             impl->shadowUniforms.shadowMapSize = impl->shadowMapSize;
         } else {
             g.lightViewProjection = simd_matrix_from_rows(
@@ -2720,11 +2825,17 @@ void MetalRenderer::endFrame() {
             CameraUniforms cascadeCam = {};
             cascadeCam.viewProjection = impl->cascadeVP[c];
 
-            // Conservative caster cull: a sphere reject around the cascade,
-            // inflated by its own radius so the near cascade skips the distant
-            // forest yet still catches tall casters that shadow into it.
-            Vec3 cc = impl->cascadeCenter[c];
-            Real cullR = impl->cascadeRadius[c] * 2.0;
+            // Caster cull: the cascade's own ortho box, extended toward the
+            // light (see aabbCastsIntoCascade). Was a sphere of twice the
+            // cascade radius — ~4x the footprint, three cascades over.
+            const Mat4& cascadeVPm = impl->cascadeVPMat[c];
+            // A/B gate. Changing caster selection can silently DELETE shadows,
+            // and "it looks fine" is not a check without the other image to
+            // compare against. RT_OLD_SHADOW_CULL=1 restores the sphere test so
+            // both can be captured from one build.
+            static const bool oldCull = std::getenv("RT_OLD_SHADOW_CULL") != nullptr;
+            const Vec3 cc = impl->cascadeCenter[c];
+            const Real cullR = impl->cascadeRadius[c] * 2.0;
 
             // One instanced draw per mesh: compact the run's casters that pass
             // the cascade cull into a contiguous instance range, then draw them
@@ -2756,12 +2867,21 @@ void MetalRenderer::endFrame() {
                         if (int(impl->opaqueDrawCalls[j].material.flags) &
                             RenderMaterial::FLAG_OVERLAY) continue;
                         const Mat4& m = impl->opaqueDrawCalls[j].transform;
-                        Vec3 wc = m.transformPoint(b.center);
-                        Real maxScale = std::max(
-                            {Vec3(m.m[0][0], m.m[1][0], m.m[2][0]).length(),
-                             Vec3(m.m[0][1], m.m[1][1], m.m[2][1]).length(),
-                             Vec3(m.m[0][2], m.m[1][2], m.m[2][2]).length()});
-                        if ((wc - cc).length() > cullR + b.radius * maxScale) continue;
+                        if (oldCull) {
+                            Vec3 wc = m.transformPoint(b.center);
+                            Real maxScale = std::max(
+                                {Vec3(m.m[0][0], m.m[1][0], m.m[2][0]).length(),
+                                 Vec3(m.m[0][1], m.m[1][1], m.m[2][1]).length(),
+                                 Vec3(m.m[0][2], m.m[1][2], m.m[2][2]).length()});
+                            if ((wc - cc).length() > cullR + b.radius * maxScale)
+                                continue;
+                        } else {
+                            Vec3 wMin, wMax;
+                            worldAABB(m, b.boxMin, b.boxMax, wMin, wMax);
+                            if (!aabbCastsIntoCascade(cascadeVPm, wMin, wMax))
+                                continue;
+                        }
+                        stats.shadowCasters++;
                         shadowInstBuf[shadowInstOffset].model = toSimd(m);
                         shadowInstOffset++;
                         runCount++;
@@ -2798,7 +2918,19 @@ void MetalRenderer::endFrame() {
                     const GPUMesh* mesh = impl->meshes.get(tdc.meshHandle);
                     if (!mesh) continue;
                     BoundingSphere b = getMeshBounds(tdc.meshHandle);
-                    if ((b.center - cc).length() > cullR + b.radius) continue;
+                    // A COARSE CDLOD NODE'S SPHERE RADIUS IS HUNDREDS TO
+                    // THOUSANDS OF METRES, so the old `dist > cullR + b.radius`
+                    // test could never be true for it: the entire visible
+                    // terrain cut was redrawn into every cascade, one draw per
+                    // node, every frame. The node's AABB against the cascade
+                    // box actually discriminates (terrain nodes are world-space
+                    // already, so there is no transform to apply).
+                    if (oldCull) {
+                        if ((b.center - cc).length() > cullR + b.radius) continue;
+                    } else if (!aabbCastsIntoCascade(cascadeVPm, b.boxMin, b.boxMax)) {
+                        continue;
+                    }
+                    stats.shadowTerrainNodes++;
 
                     TerrainUniforms tu = {tdc.morphStart, tdc.morphEnd, {0.0f, 0.0f}};
                     [shadowEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];

@@ -74,7 +74,7 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
         Walker& w = walkers_[wi];
         const bool stale =
             w.agentId < 0 || w.agentId >= static_cast<int>(agents.size()) ||
-            agents[w.agentId].tier != Agent::Tier::K ||
+            agents[w.agentId].far() ||
             agents[w.agentId].mode != Agent::Mode::Pedestrian;
         if (!stale) { ++wi; continue; }
         if (world.alive(w.entity)) {
@@ -94,7 +94,7 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
     for (int i = 0; i < static_cast<int>(agents.size()); ++i) {
         const Agent& a = agents[i];
         if (a.mode != Agent::Mode::Pedestrian) continue;
-        if (a.tier != Agent::Tier::K) continue;
+        if (a.far()) continue;
         if (haveWalker_[i]) continue;
 
         Entity e = world.create();
@@ -121,11 +121,8 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
         r.material.opacity = 1.0f;
         world.add<Renderable>(e, r);
 
-        CharacterController cc;
-        cc.radius = kCapsuleRadius;
-        cc.halfHeight = kCapsuleHalf;
-        cc.stepHeight = 0.4;                 // kerbs and sidewalk lips
-        world.add<CharacterController>(e, cc);   // PhysicsSystem creates the capsule
+        // NO CharacterController yet — the body budget below decides who gets
+        // one. An entity without it is drawn and animated but has no capsule.
 
         Walker w;
         w.entity = e;
@@ -136,6 +133,73 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
         w.blocked.minCommand = 0.5;
         w.blocked.minMotion = 0.15;
         walkers_.push_back(w);
+    }
+
+    // --- THE BODY BUDGET ------------------------------------------------
+    // Every K pedestrian now has an entity and is drawn; this decides which of
+    // them also get a Jolt capsule. Nearest-first up to the level's budget,
+    // exactly
+    // the shape CityPhysicsSystem::possessTier uses for its 12 physical cars.
+    const int budget = city_.params().maxWalkerBodies;
+    if (budget <= 0) {   // unbounded: every K ped keeps a capsule (historical)
+        for (Walker& w : walkers_) {
+            if (!world.alive(w.entity)) continue;
+            if (world.get<CharacterController>(w.entity)) continue;
+            CharacterController add;
+            add.radius = kCapsuleRadius;
+            add.halfHeight = kCapsuleHalf;
+            add.stepHeight = 0.4;
+            world.add<CharacterController>(w.entity, add);
+        }
+        return;
+    }
+    if (!sim.hasTierCenter()) return;   // no player fed: leave bodies as they are
+    const Vec2 centre = sim.tierCenter();
+    auto dist2 = [&](const Agent& a) {
+        const Real dx = a.pos.x - centre.x, dy = a.pos.y - centre.y;
+        return dx * dx + dy * dy;
+    };
+
+    // Rank every walker by distance, uid breaking ties so the choice cannot
+    // depend on walker_ ordering (which swap-erase churns) — ADR-0002.
+    bodyRank_.clear();
+    bodyRank_.reserve(walkers_.size());
+    for (std::size_t wi = 0; wi < walkers_.size(); ++wi) {
+        const Walker& w = walkers_[wi];
+        if (w.agentId < 0 || w.agentId >= static_cast<int>(agents.size())) continue;
+        const Agent& a = agents[w.agentId];
+        bodyRank_.push_back({dist2(a), a.uid, static_cast<int>(wi)});
+    }
+    std::sort(bodyRank_.begin(), bodyRank_.end(),
+              [](const BodyRank& x, const BodyRank& y) {
+                  if (x.d2 != y.d2) return x.d2 < y.d2;
+                  return x.uid < y.uid;
+              });
+
+    const Real acquire2 = bodyRadius_ * bodyRadius_;
+    const Real keep2 = (bodyRadius_ * 1.3) * (bodyRadius_ * 1.3);
+    const int keepRank = static_cast<int>(budget * 1.3);
+    for (int rank = 0; rank < static_cast<int>(bodyRank_.size()); ++rank) {
+        Walker& w = walkers_[static_cast<std::size_t>(bodyRank_[rank].pos)];
+        if (!world.alive(w.entity)) continue;
+        CharacterController* cc = world.get<CharacterController>(w.entity);
+        const Real d2 = bodyRank_[rank].d2;
+        // Hysteresis in BOTH the rank and the radius: a walker keeps a body it
+        // already has until it is clearly outside the set, so a body is never
+        // created and destroyed on alternating steps.
+        const bool wantBody = cc ? (rank < keepRank && d2 < keep2)
+                                 : (rank < budget && d2 < acquire2);
+        if (wantBody && !cc) {
+            CharacterController add;
+            add.radius = kCapsuleRadius;
+            add.halfHeight = kCapsuleHalf;
+            add.stepHeight = 0.4;            // kerbs and sidewalk lips
+            world.add<CharacterController>(w.entity, add);   // PhysicsSystem makes it
+        } else if (!wantBody && cc) {
+            if (cc->characterId != engine::INVALID_CHARACTER)
+                pw.removeCharacter(cc->characterId);   // no entity-destroy hook
+            world.remove<CharacterController>(w.entity);
+        }
     }
 }
 
@@ -161,6 +225,12 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
     });
     for (const Agent& a : sim.agents()) {
         if (a.mode != Agent::Mode::Driver || a.released || !a.moving) continue;
+        // FAR CARS CANNOT RUN ANYONE OVER. This was the only place in citysim
+        // that iterated far-tier agents: it gathered every moving driver in the
+        // whole 8 km city, and the knockdown test below is O(walkers x this
+        // list). A car with no body, hundreds of metres away, was being
+        // distance-tested against every walker on screen, every step.
+        if (a.far()) continue;
         carPos.push_back(a.pos);
         carSpeed.push_back(a.speed);
     }
@@ -181,9 +251,26 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         if (!world.alive(w.entity)) continue;
         CharacterController* cc = world.get<CharacterController>(w.entity);
         Transform* t = world.get<Transform>(w.entity);
-        if (!cc || !t || cc->characterId == engine::INVALID_CHARACTER) continue;
+        if (!t) continue;
         if (w.agentId < 0 || w.agentId >= static_cast<int>(sim.agents().size())) continue;
         const Agent& g = sim.agents()[w.agentId];
+
+        // BODYLESS (outside the physical budget): no capsule to step, nothing
+        // to separate, nobody to knock down. Just wear the ghost's pose and
+        // keep walking — visually identical, and the entire expensive tail of
+        // this loop is skipped.
+        if (!cc || cc->characterId == engine::INVALID_CHARACTER) {
+            t->position = Vec3(g.pos.x, city_.groundHeightAt(g.pos.x, g.pos.y) +
+                                            kCapsuleHalf + kCapsuleRadius,
+                               g.pos.y);
+            if (g.speed > 0.05) w.facing = g.heading;
+            t->orientation = Quat::fromAxisAngle(
+                Vec3(0, 1, 0), std::atan2(w.facing.x, w.facing.y));
+            const int pose = walkPoseIndex(w.stride, g.speed, dt);
+            if (Renderable* r = world.get<Renderable>(w.entity))
+                r->mesh = poseMesh(ctx.assets, w.outfit, pose);
+            continue;
+        }
 
         Vec3 pos = pw.characterPosition(cc->characterId);
         Vec2 posXZ(pos.x, pos.z);

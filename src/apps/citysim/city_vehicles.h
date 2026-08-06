@@ -2,13 +2,49 @@
 #define RAYTRACER_APPS_CITYSIM_CITY_VEHICLES_H
 
 #include "../../engine/system.h"
-#include "../../engine/systems/physics_system.h"
 #include "../../renderer/renderer.h"   // engine::MeshHandle
 #include "city_render.h"
 
 #include <vector>
 
 namespace citysim {
+
+// A lens a PROMOTED car should carry, derived from its fleet slot's lamp
+// markers. Kept pure and Jolt-free (this header's system class is viewer-only)
+// so the mapping itself is directly testable: it is the thing that stops
+// VehicleSystem from falling back to four lenses at guessed chassis corners,
+// which is what drew a second pair of taillights beyond the bodywork.
+struct PromotedLamp {
+    engine::Vec3 local;
+    bool front = true;   // headlight end vs tail end
+    bool left = false;   // indicator side
+};
+
+// Split a slot's markers into lamp lenses. Markers that name neither a
+// headlight nor a taillight are skipped, except `driver_seat`: when one is
+// present its position is written to `driverSeat` and the function returns true
+// through `hasDriverSeat` (it is where the seated occupant belongs; without it
+// that too is guessed off the chassis box). Presence is reported explicitly
+// rather than inferred from a non-zero position — a seat marker AT the body
+// origin is unusual but legal, and must not read as "absent".
+inline std::vector<PromotedLamp> promotedLamps(
+    const std::vector<CityRenderSystem::LampMarker>& markers,
+    engine::Vec3* driverSeat = nullptr, bool* hasDriverSeat = nullptr) {
+    if (hasDriverSeat) *hasDriverSeat = false;
+    std::vector<PromotedLamp> out;
+    for (const CityRenderSystem::LampMarker& m : markers) {
+        if (m.name.rfind("driver_seat", 0) == 0) {
+            if (driverSeat) *driverSeat = m.pos;
+            if (hasDriverSeat) *hasDriverSeat = true;
+            continue;
+        }
+        const bool front = m.name.rfind("headlight", 0) == 0;
+        const bool rear = m.name.rfind("taillight", 0) == 0;
+        if (!front && !rear) continue;
+        out.push_back({m.pos, front, !m.name.empty() && m.name.back() == 'l'});
+    }
+    return out;
+}
 
 // PROMOTION-on-interaction (ADR-0062, motion-authority rethink). Ambient NPC
 // traffic is moved by ONE authority — the CitySim planner, drawn instanced and
@@ -31,8 +67,11 @@ namespace citysim {
 // engine_core. UNVERIFIED on device, like the rest of the Jolt path.
 class CityVehicleSystem : public engine::System {
 public:
-    CityVehicleSystem(CityRenderSystem& city, engine::PhysicsSystem& physics)
-        : city_(city), physics_(physics) {}
+    // No PhysicsSystem: promotion spawns a Vehicle COMPONENT and VehicleSystem
+    // does every Jolt call (body, wheels, lamps). This system held a
+    // PhysicsSystem& for symmetry with its walker counterpart, which really does
+    // need one — here it was never once read.
+    explicit CityVehicleSystem(CityRenderSystem& city) : city_(city) {}
 
     void update(engine::FrameContext& ctx) override;   // commandeer check (per frame)
     void onStop(engine::FrameContext& ctx) override;
@@ -44,7 +83,6 @@ private:
     };
 
     CityRenderSystem& city_;
-    engine::PhysicsSystem& physics_;
     std::vector<PromotedCar> promoted_;
 };
 

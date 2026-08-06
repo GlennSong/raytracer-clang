@@ -62,7 +62,12 @@ TEST_CASE(car_heading_yaw_rate_is_bounded_by_turn_radius) {
         const auto& ag = sim.agents();
         for (std::size_t k = 0; k < ag.size(); ++k) {
             const Agent& a = ag[k];
-            if (a.mode != Agent::Mode::Driver) continue;
+            // Not driving right now — a walker, or a car owner that parked and
+            // is covering the last stretch on foot. The yaw-rate contract is
+            // about CONTINUOUS steering, so drop the tracked heading rather
+            // than comparing across the gap: the agent re-enters its car facing
+            // however the car was left, which is not a steering event.
+            if (a.mode != Agent::Mode::Driver) { have[k] = false; continue; }
             // A car that CRASHED this tick is not steering: the contact rule
             // zeroed its speed after the yaw was already applied, so the
             // speed-proportional bound doesn't describe it. The turn-radius

@@ -5,7 +5,7 @@ namespace engine {
 
 DebugOverlayState::DebugOverlayState(Window& window) : window(window) {}
 
-void DebugOverlayState::onEnter(FrameContext& ctx) {
+void DebugOverlayState::onEnter(FrameContext&) {
     window.setCursorMode(CursorMode::Normal);
 }
 

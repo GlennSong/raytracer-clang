@@ -333,7 +333,17 @@ struct VolumetricCloudParams {
     float coverage = 0.35f;      // 0 = clear, 1 = overcast
     float bottom = 900.0f;
     float top = 1600.0f;
-    float density = 0.55f;       // extinction scale inside the slab
+    // Extinction per metre inside the slab. 0.55 was not a volume coefficient —
+    // at a ~17.5 m step it puts the per-step optical depth near 10, so the very
+    // first non-empty sample saturated the ray and the march broke out of its
+    // loop after ONE iteration. Visible brightness was then whatever density
+    // that single jittered sample happened to hit, which is where the per-pixel
+    // sparkle came from: neighbouring pixels sampled different points and
+    // differed severalfold. At 0.05 a step is ~0.4-0.9 optical depths, so the
+    // ray actually integrates across many samples and the noise averages out.
+    // (metropolis_sky.json already authored 0.05 by hand; this makes the
+    // default agree with the one level that had been tuned.)
+    float density = 0.05f;       // extinction scale inside the slab
     float noiseScale = 0.0011f;  // base noise frequency (1/m)
     float wind = 12.0f;
     int   steps = 40;            // view-march steps (perf/quality)
@@ -399,6 +409,12 @@ struct RenderStats {
     uint32_t instanceOverflow = 0;
     uint32_t shadowOverflow = 0;
     uint32_t foliageOverflow = 0;
+    // Casters actually submitted to the shadow pass, summed over all cascades,
+    // and terrain nodes likewise. The shadow pass re-submits the colour pass's
+    // geometry per cascade and NOTHING counted it, so "shadows cost ~3x the
+    // colour pass" was an inference rather than a measurement.
+    uint32_t shadowCasters = 0;
+    uint32_t shadowTerrainNodes = 0;
 };
 
 enum class CameraProjection { Perspective, Orthographic };

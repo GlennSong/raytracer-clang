@@ -8,12 +8,17 @@
 
 namespace engine {
 
-std::vector<Mat4> frustumCullInstances(const std::vector<Mat4>& transforms,
-                                       const Frustum& frustum,
-                                       const Vec3& meshCenter, Real meshRadius,
-                                       const Vec3& cameraPos, Real maxDistance) {
-    std::vector<Mat4> visible;
-    visible.reserve(transforms.size());
+// Cull one group's instances into `out`. `out` is a caller-owned scratch buffer
+// reused across groups and frames: this used to return by value with
+// reserve(transforms.size()), so every group heap-allocated its FULL instance
+// count every frame (~510 KB for the 7964-instance parking-bay group) and then
+// copied the survivors again into the draw.
+void frustumCullInstances(const std::vector<Mat4>& transforms,
+                          const Frustum& frustum,
+                          const Vec3& meshCenter, Real meshRadius,
+                          const Vec3& cameraPos, Real maxDistance,
+                          std::vector<Mat4>& out) {
+    out.clear();
     Real maxDistSq = maxDistance * maxDistance;
     for (const Mat4& m : transforms) {
         Vec3 center = m.transformPoint(meshCenter);
@@ -24,8 +29,17 @@ std::vector<Mat4> frustumCullInstances(const std::vector<Mat4>& transforms,
         Vec3 cz(m.m[0][2], m.m[1][2], m.m[2][2]);
         Real maxScale = std::max({cx.length(), cy.length(), cz.length()});
         if (frustum.containsSphere(center, meshRadius * maxScale))
-            visible.push_back(m);
+            out.push_back(m);
     }
+}
+
+std::vector<Mat4> frustumCullInstances(const std::vector<Mat4>& transforms,
+                                       const Frustum& frustum,
+                                       const Vec3& meshCenter, Real meshRadius,
+                                       const Vec3& cameraPos, Real maxDistance) {
+    std::vector<Mat4> visible;
+    frustumCullInstances(transforms, frustum, meshCenter, meshRadius, cameraPos,
+                         maxDistance, visible);
     return visible;
 }
 
@@ -99,6 +113,42 @@ void RenderSystem::render(FrameContext& ctx) {
     // exists but nothing shows" mysteries.
     static int auditFrame = std::getenv("RT_DUMP_DRAWS") ? 60 : -1;
     const bool audit = auditFrame >= 0 && --auditFrame == 0;
+
+    // CONTENT GATES for attribution: hide a whole class of geometry and read the
+    // triangle/draw delta off the next [stats] line. `hiddenLayers` was already
+    // honoured below (and by the InstanceGroup pass), but nothing anywhere set
+    // it — so the cheapest attribution tool in the engine was unreachable
+    // outside an ImGui build. Parsed here rather than in the renderer, which
+    // treats the mask as opaque and does not know the RenderLayer bits.
+    //
+    // Read before trusting a subtraction: terrain, trees, lot pads, street
+    // lamps, signal posts and road paint are all layer 0, so they are never
+    // hidden and always land in the residual.
+    static const uint32_t envHidden = []() {
+        uint32_t m = 0;
+        if (std::getenv("RT_NO_ROADS"))     m |= LayerRoads;
+        if (std::getenv("RT_NO_BUILDINGS")) m |= LayerBuildings;
+        if (std::getenv("RT_NO_SIM"))       m |= LayerSim;
+        if (std::getenv("RT_NO_FOLIAGE"))   m |= LayerFoliage;
+        return m;
+    }();
+    ctx.renderer.hiddenLayers |= envHidden;
+
+    // THE draw-distance owner. Every drawable states a DrawClass; this table
+    // turns the class into metres, once, with the level's scale in hand. A
+    // level that stamps no policy resolves everything to unlimited, which is
+    // byte-for-byte the behaviour before DrawClass existed — so opting in is
+    // per level and nothing else moves.
+    const DrawPolicy* policy = nullptr;
+    ctx.world.each<DrawPolicy>(
+        [&](Entity, DrawPolicy& p) { if (!policy) policy = &p; });
+    // An explicit drawDistance at the site still wins: the HLOD building chunks
+    // and their mass-box proxies compute a matched pair and must stay matched.
+    auto resolveDistance = [&](Real explicitDist, DrawClass cls) -> Real {
+        if (explicitDist > 0) return explicitDist;
+        return policy ? policy->distanceFor(cls) : Real(0);
+    };
+
     if (audit)
         std::fprintf(stderr,
                      "[draw-audit] cam (%.0f,%.0f,%.0f) fov %.1f far %.0f\n",
@@ -152,10 +202,11 @@ void RenderSystem::render(FrameContext& ctx) {
             // HLOD distance policy (P1.2): detail chunks fade out past
             // drawDistance, their mass-box proxies fade IN at minDistance —
             // measured to the bounds centre so the pair swaps in lockstep.
-            if (r.drawDistance > 0 || r.minDistance > 0) {
+            const Real drawDist = resolveDistance(r.drawDistance, r.drawClass);
+            if (drawDist > 0 || r.minDistance > 0) {
                 const Vec3 c = (worldMin + worldMax) * 0.5;
                 const Real dist = (c - cam.position).length();
-                if (r.drawDistance > 0 && dist > r.drawDistance) return;
+                if (drawDist > 0 && dist > drawDist) return;
                 if (r.minDistance > 0 && dist <= r.minDistance) return;
             }
             ctx.renderer.drawMesh(r.mesh, model, r.material);
@@ -169,22 +220,22 @@ void RenderSystem::render(FrameContext& ctx) {
             if (g.transforms.empty()) return;
             if (g.renderLayer & ctx.renderer.hiddenLayers) return;   // debug layer hidden
             if (!frustum.containsSphere(g.boundsCenter, g.boundsRadius)) return;
-            // Live override (slider) wins over the level's per-group value; 0 = use
-            // the level value. Lets draw distance be balanced against fog at runtime.
+            // Live override (slider) wins over the level's per-group value, which
+            // in turn wins over the class policy. Lets draw distance be balanced
+            // against fog at runtime.
             Real drawDist = ctx.renderer.vegetationDrawDistance > 0.0f
                                 ? static_cast<Real>(ctx.renderer.vegetationDrawDistance)
-                                : g.drawDistance;
+                                : resolveDistance(g.drawDistance, g.drawClass);
             // Whole-group distance reject: skip if the nearest point of the group's
             // bounds is beyond the draw distance (cheap before the per-instance pass).
             if (drawDist > 0 &&
                 (g.boundsCenter - cam.position).length() - g.boundsRadius > drawDist)
                 return;
             BoundingSphere mb = ctx.renderer.getMeshBounds(g.mesh);
-            std::vector<Mat4> visible =
-                frustumCullInstances(g.transforms, frustum, mb.center, mb.radius,
-                                     cam.position, drawDist);
-            if (!visible.empty())
-                ctx.renderer.drawMeshInstanced(g.mesh, visible, g.material);
+            frustumCullInstances(g.transforms, frustum, mb.center, mb.radius,
+                                 cam.position, drawDist, instanceScratch_);
+            if (!instanceScratch_.empty())
+                ctx.renderer.drawMeshInstanced(g.mesh, instanceScratch_, g.material);
         });
 }
 
