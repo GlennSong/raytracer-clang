@@ -236,24 +236,52 @@ th {{ background: #f4f4f4; }} tr th:first-child {{ text-align: left; }}
 h2 {{ margin-top: 1.6em; font-size: 16px; }}
 .tick {{ font-size: 11px; fill: #666; }}
 .note {{ color: #666; font-size: 13px; }}
+.howto {{ background: #f6f8fa; border: 1px solid #ddd; border-radius: 6px;
+          padding: 0.2em 1.2em 0.8em; font-size: 13px; margin: 1em 0; }}
+.howto li {{ margin: 0.3em 0; }}
 </style></head><body>
 <h1>Frame report</h1>
 <p class="note">{s['frames']} frames, {s['seconds']:.1f}s at {s['fps']:.1f} fps
 avg. Scale: 0&ndash;{y_max:.0f} ms, budget {budget_ms:.2f} ms
 ({args.budget_fps} fps).</p>
+<details class="howto" open><summary><b>How to read this report</b></summary>
+<ul>
+<li>Every number is <b>milliseconds per frame</b> — how long each drawn
+picture took. The budget is {budget_ms:.1f} ms ({args.budget_fps} fps):
+staying under it is the whole game.</li>
+<li><b>avg</b> = a typical frame. <b>p95</b> = 19 of every 20 frames were
+faster than this — the <i>stutter detector</i>: a good avg with a bad p95
+means the game runs fast but hitches. <b>max</b> = the single worst hitch.</li>
+<li>Phases: <b>update</b> = input + game logic, <b>fixed</b> = physics
+steps, <b>render</b> = building + submitting the picture, <b>wait</b> =
+finished early and slept. Wait is <i>headroom</i>, not cost.</li>
+<li><b>Chart 1</b>: your session left to right; height = each frame's cost.
+Blue under the dashed budget line = running fine; red spikes above it =
+hitches you felt, at the moment you felt them.</li>
+<li><b>Chart 2</b>: the same timeline, each frame's cost split into stacked
+colored layers — <b>the fattest layer is where the time goes</b>; grey on
+top is sleep (good).</li>
+<li><b>Chart 3</b>: how often each frame cost occurred. One tight clump left
+of the budget line = smooth; a tail smearing right = stutter.</li>
+<li><b>The decision</b>: if <span style="color:#e15759">render</span>
+dominates chart 2 while draw calls are modest, the frame is GPU-bound — use
+the platform GPU profiler (Xcode's capture). If
+<span style="color:#4e79a7">update</span>/<span style="color:#f28e2b">fixed</span>
+dominate, it's CPU-bound — attach Tracy (docs/profiling.md).</li>
+</ul></details>
 <table><tr><th>capture</th><th>frames</th><th>time</th><th>fps</th>
 <th>avg</th><th>median</th><th>p95</th><th>p99</th><th>max</th>
 <th>update</th><th>fixed</th><th>render</th><th>wait</th>
 <th>draws avg/max</th><th>tris</th></tr>{''.join(rows)}</table>
-<h2>Frame time (blue mean, red peaks{compare_note})</h2>
+<h2>Chart 1 &mdash; Frame time over the session (blue typical, red worst{compare_note})</h2>
 {frame_time_chart(cols, baseline, y_max, [(budget_ms, f"{args.budget_fps} fps"), (budget_ms * 2, f"{args.budget_fps // 2} fps")])}
-<h2>Where the frame goes &mdash; stacked phases: {legend}</h2>
+<h2>Chart 2 &mdash; Where the frame goes, stacked: {legend}</h2>
 {stacked_phase_chart(cols, y_max)}
 <p class="note">Wait is the FPS-cap sleep &mdash; headroom, not cost. The gap
 between the stack and the frame-time line is unattributed time (event
 dispatch, state swaps, host overhead): if it grows, a phase bracket is
 missing.</p>
-<h2>Frame-time distribution</h2>
+<h2>Chart 3 &mdash; How often each frame cost occurred</h2>
 {histogram_chart(cols["total_ms"], y_max)}
 </body></html>
 """
