@@ -51,7 +51,6 @@ constexpr int kFleetSize = static_cast<int>(sizeof(kFleet) / sizeof(kFleet[0]));
 constexpr Real kJunctionApproach = 9.0, kJunctionSpeed = 4.0;
 constexpr Real kSignalApproach = 14.0;          // start braking for a light this far out
 constexpr Real kCarDecel = 6.0, kPedDecel = 3.0;
-constexpr Real kLayerClearance = 5.8;   // bridge-deck height per grade layer
 constexpr Real kCarMinTurnRadius = 6.0; // tightest arc a car can trace (m)
 constexpr Real kPedVisionRange = 4.5;      // how far ahead a walker perceives (m)
 constexpr Real kPedVisionHalfAngle = 1.2;  // ~69 deg to each side (wide peripheral)

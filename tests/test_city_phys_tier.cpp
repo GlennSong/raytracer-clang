@@ -15,6 +15,7 @@
 #include "../src/engine/world.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <unordered_map>
 
@@ -245,6 +246,144 @@ TEST_CASE(city_phys_tier_with_tiering) {
         physics.step(world, dt);
     }
     CHECK(bridge.possessed().size() == 0);
+
+    physics.shutdown();
+}
+
+// GATE for #26 ("I can walk through cars"). A drawn ambient car the player can
+// walk through is one with no SOLID body where it is drawn: either its kinematic
+// proxy box is missing, or the box parked itself below the world (which the tier
+// does on purpose for possessed cars, whose dynamic chassis takes over), or the
+// pool drifted out of step with the instances it is meant to track. This soak
+// asserts the invariant directly, every tick: every drawn car is backed by
+// SOMETHING solid at its own position — a proxy box or a possessed chassis —
+// and then physically walks the player into one to prove it blocks.
+TEST_CASE(city_every_drawn_car_is_solid) {
+    World world;
+    world.add<RoadNet>(world.create(), cityGrid());
+
+    CityRenderParams params;
+    params.cars = 24;
+    params.pedestrians = 0;
+    params.seed = 7;
+    params.wander = true;
+    CityRenderSystem city(params);
+    CHECK(city.build(world, nullptr));
+
+    Entity player = world.create();
+    Transform pt;
+    pt.position = Vec3(120, 0.9, 120);
+    world.add<Transform>(player, pt);
+    world.add<CharacterController>(player, CharacterController{});
+
+    PhysicsSystem physics;
+    physics.initialize();
+    physics.physicsWorld().addBox(Vec3(600, 1, 600), Vec3(120, -1, 120),
+                                  Quat::identity(), BodyMotion::Static);
+    physics.createBodies(world);   // makes the player's real capsule
+    CityPhysicsSystem bridge(city, physics);
+    PhysicsWorld& pw = physics.physicsWorld();
+
+    const Real dt = 1.0 / 60.0;
+    long worstUncovered = 0;      // drawn cars with nothing solid at them
+    Real worstGap = 0;            // how far the nearest solid body was (m)
+    long checkedCars = 0;
+    for (int i = 0; i < 60 * 30; ++i) {
+        city.step(world, dt);
+        bridge.step(world, dt);
+        physics.step(world, dt);
+
+        // Where is something SOLID? Every proxy box, plus every possessed
+        // chassis (whose proxy deliberately parks out of the way).
+        std::vector<Vec3> solid;
+        for (engine::PhysicsBodyId id : bridge.carProxyBodies())
+            solid.push_back(pw.bodyPosition(id));
+        for (const auto& p : bridge.possessed())
+            solid.push_back(pw.vehiclePosition(p.vid));
+
+        long uncovered = 0;
+        for (std::size_t gi = 0; gi < city.carGroups().size(); ++gi) {
+            InstanceGroup* g = world.get<InstanceGroup>(city.carGroups()[gi]);
+            if (!g) continue;
+            for (std::size_t ii = 0; ii < g->transforms.size(); ++ii) {
+                const Mat4& m = g->transforms[ii];
+                ++checkedCars;
+                const Vec3 c(m.m[0][3], m.m[1][3], m.m[2][3]);
+                Real best = 1e30;
+                for (const Vec3& s : solid)
+                    best = std::min(best, (s - c).length());
+                // A possessed chassis trails its drawn pose by a metre or two
+                // only when the render pose is the ghost's; here the drawn pose
+                // IS the body pose, so the tolerance only has to absorb the
+                // chassis origin vs box centre offset.
+                if (best > 1.5) {
+                    ++uncovered;
+                    const int aid = gi < city.carAgentIds().size() &&
+                                            ii < city.carAgentIds()[gi].size()
+                                        ? city.carAgentIds()[gi][ii]
+                                        : -2;
+                    bool poss = false;
+                    for (const auto& pp : bridge.possessed())
+                        if (pp.agent == aid) poss = true;
+                    // Only printed when the invariant breaks: which car, where
+                    // it was drawn, and whether the tier owned it — enough to
+                    // tell a missing proxy from a possessed car drawn off its
+                    // chassis without re-instrumenting.
+                    Vec3 chassis(0, 0, 0);
+                    for (const auto& pp : bridge.possessed())
+                        if (pp.agent == aid) chassis = pw.vehiclePosition(pp.vid);
+                    std::printf("    [hole] tick=%d agent=%d possessed=%d "
+                                "gap=%.2f drawn=(%.1f,%.1f) chassis=(%.1f,%.1f)\n",
+                                i, aid, poss ? 1 : 0, (double)best, (double)c.x,
+                                (double)c.z, (double)chassis.x, (double)chassis.z);
+                }
+                worstGap = std::max(worstGap, std::min(best, Real(50)));
+            }
+        }
+        worstUncovered = std::max(worstUncovered, uncovered);
+    }
+    std::printf("    [solid] checked=%ld worstUncovered=%ld worstGap=%.2f\n",
+                checkedCars, worstUncovered, worstGap);
+    CHECK(checkedCars > 0);
+    CHECK(worstUncovered == 0);   // no drawn car is ever a hologram
+
+    // And the invariant is not vacuous: walk the player straight at a drawn car
+    // and it must not pass through. Pick a car, stand 4 m in front of its nose,
+    // and push toward it for two seconds.
+    Vec3 target(0, 0, 0);
+    bool haveTarget = false;
+    for (Entity ge : city.carGroups()) {
+        InstanceGroup* g = world.get<InstanceGroup>(ge);
+        if (!g || g->transforms.empty()) continue;
+        const Mat4& m = g->transforms[0];
+        target = Vec3(m.m[0][3], m.m[1][3], m.m[2][3]);
+        haveTarget = true;
+        break;
+    }
+    CHECK(haveTarget);
+
+    CharacterController* cc = world.get<CharacterController>(player);
+    CHECK(cc && cc->characterId != engine::INVALID_CHARACTER);
+    const Vec3 approach(1, 0, 0);
+    const Vec3 start = target - approach * 4.0 + Vec3(0, 0.9 - target.y, 0);
+    pw.setCharacterPosition(cc->characterId, Vec3(start.x, 0.9, start.z));
+
+    Real closest = 1e30;
+    bool passedThrough = false;
+    for (int i = 0; i < 120; ++i) {
+        // Freeze the city so the target car stays put under the walk test —
+        // this leg is about the proxy being solid, not about chasing traffic.
+        bridge.step(world, dt);
+        pw.moveCharacter(cc->characterId, approach * 3.0, dt);
+        physics.step(world, dt);
+        const Vec3 pp = pw.characterPosition(cc->characterId);
+        closest = std::min(closest, std::fabs(pp.x - target.x));
+        // Past the car's far side = walked through it.
+        if (pp.x > target.x + 1.0) passedThrough = true;
+    }
+    std::printf("    [walk] closestApproach=%.2f m passedThrough=%d\n",
+                closest, passedThrough ? 1 : 0);
+    CHECK(!passedThrough);
 
     physics.shutdown();
 }

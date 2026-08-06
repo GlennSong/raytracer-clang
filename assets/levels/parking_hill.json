@@ -1,0 +1,69 @@
+{
+  "name": "parking_hill",
+  "version": 1,
+  "_comment": "Curbside parking on a GRADED street (#25). A small, fast-loading hill with one long two-way street cut across the slope, wide enough for the citysim to lay parallel bays and seed them with scenery cars. Flat ground hides this bug entirely — the whole point is that the terrain under the road is CARVED to the road's smoothed profile, so anything placed from the raw hillside height instead of the carved deck sinks into a cut or hovers over a fill. Walk the curb and look at where the parked cars' wheels and the painted bay outlines meet the asphalt.",
+  "citysim": {
+    "cars": 8,
+    "pedestrians": 4,
+    "seed": 5,
+    "hoursPerSecond": 0.05,
+    "perceptionReliability": 1.0,
+    "debugWidgets": false,
+    "wander": true,
+    "vehicles": "vehicles.lua"
+  },
+  "entities": [
+    {
+      "id": 2,
+      "name": "hill street",
+      "position": [0.0, 0.0, 0.0],
+      "shape": "road",
+      "road": {
+        "nodes": [
+          { "x": -220.0, "z": -60.0 },
+          { "x": -70.0, "z": -20.0 },
+          { "x": 80.0, "z": 20.0 },
+          { "x": 230.0, "z": 60.0 }
+        ],
+        "edges": [[0, 1], [1, 2], [2, 3]],
+        "width": 11.0,
+        "sidewalk": 3.5,
+        "curb": 0.16,
+        "corner_radius": 3.0,
+        "lift": 0.08,
+        "markings": true,
+        "crosswalks": true,
+        "color": [0.09, 0.09, 0.1]
+      }
+    }
+  ],
+  "environment": {
+    "skyColor": [0.55, 0.68, 0.86]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.6,
+    "exposure": 0.5,
+    "sun": {
+      "castsShadow": true,
+      "color": [1.0, 0.96, 0.86],
+      "direction": [0.42, 0.52, -0.5],
+      "intensity": 8.0
+    }
+  },
+  "player": {
+    "collider": { "halfHeight": 0.8, "radius": 0.3, "shape": "capsule" },
+    "friction": 0.5,
+    "position": [0.0, 2.0, 6.0]
+  },
+  "terrain": {
+    "cdlod": { "worldHalf": 400 },
+    "heightScale": 26,
+    "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 },
+    "noiseScale": 0.004,
+    "octaves": 4,
+    "resolution": 400,
+    "seed": 9,
+    "size": 800,
+    "warp": 0.3
+  }
+}

@@ -18,6 +18,13 @@ namespace citysim {
 
 using engine::Real;   // the engine's scalar (double); used throughout the sim
 
+// How high one grade-separation LAYER sits above the one below (m). A legacy
+// bridge link carries `layer > 0` instead of an absolute deck elevation, so
+// everything that places geometry on such a link — the sim's agent height, the
+// render bridge's decals, parked cars and bay outlines — must lift by the same
+// amount. Shared so those readings cannot drift apart.
+constexpr Real kLayerClearance = 5.8;
+
 // The agent-based city simulation (ADR-0060). An Agent is a brain (data): it
 // either WALKS (a pedestrian) or POSSESSES and drives a SimVehicle. A car has no
 // agency of its own — a SimVehicle with no driver is inert (parked). The player

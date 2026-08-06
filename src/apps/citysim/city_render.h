@@ -228,6 +228,9 @@ public:
     engine::Entity brakeLightGroup() const { return brakeLightGroup_; }
     engine::Entity turnSignalGroup() const { return turnSignalGroup_; }
     const std::vector<engine::Vec2>& crosswalkCenters() const { return crosswalkCenters_; }
+    // The painted curbside bay outlines (R6b). Exposed so the height gate (#25)
+    // can check the paint lands on the asphalt instead of floating over it.
+    engine::Entity parkBayGroup() const { return parkBayGroup_; }
     // Debug widgets (ADR-0061): per-agent ground footprint coloured by behaviour
     // state, and a forward trajectory arrow. Empty unless params.debugWidgets.
     engine::Entity footprintGroup(Agent::State s) const { return footprintGroups_[static_cast<int>(s)]; }
@@ -288,6 +291,12 @@ private:
     engine::Mat4 signalPostPose(int link) const;            // the pole assembly
     engine::Mat4 signalLensPose(int link, SignalState s) const;  // lit lens at active slot
     Real groundAt(Real x, Real z) const;
+    // The height of the DRIVING SURFACE on `link` at `station` metres along it —
+    // the same reading the sim gives a car driving that spot (Agent::deckY), so
+    // anything placed against the road (a parked car, a painted bay outline)
+    // lands on the deck the mesher actually built rather than on the raw
+    // terrain beside it (#25). Falls back to the ground for an unknown link.
+    Real deckYAt(int link, Real station, engine::Vec2 p) const;
 
     CityRenderParams params_;
     engine::NavGraph nav_;

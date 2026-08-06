@@ -118,10 +118,46 @@ void CityPhysicsSystem::fixedUpdate(engine::FrameContext& ctx) {
     step(ctx.world, ctx.clock.fixedStep());
 }
 
+// Re-stamp every possessed car's DRAWN transform from its body, in place, right
+// after the tier has run (#26: "I can walk through cars"). The bake happens once
+// per step, before this system runs, so a possessed car was always drawn one
+// frame behind its chassis — and on the frame the tier's backstop SNAPS a lost
+// body onto its ghost, that is a 10 m gap between where the car is drawn and
+// where the only solid thing standing in for it actually is (a possessed car's
+// kinematic proxy parks below the world, so the chassis is all there is).
+// Writing the pose here closes the gap within the frame and leaves the proxy
+// sync below reading fresh poses.
+void CityPhysicsSystem::syncPossessedInstances(World& world) {
+    if (possessed_.empty()) return;
+    PhysicsWorld& pw = physics_.physicsWorld();
+    const std::vector<engine::Entity>& groups = city_.carGroups();
+    const std::vector<std::vector<int>>& ids = city_.carAgentIds();
+    for (std::size_t gi = 0; gi < groups.size() && gi < ids.size(); ++gi) {
+        InstanceGroup* g = world.get<InstanceGroup>(groups[gi]);
+        if (!g) continue;
+        for (std::size_t ii = 0; ii < ids[gi].size() && ii < g->transforms.size();
+             ++ii) {
+            const int aid = ids[gi][ii];
+            if (aid < 0) continue;   // scenery parked car, no agent
+            for (const Possessed& p : possessed_) {
+                if (p.agent != aid) continue;
+                const Vec3 bp = pw.vehiclePosition(p.vid);
+                const Quat bq = pw.vehicleOrientation(p.vid);
+                const Mat4 pose =
+                    Mat4::translate(bp.x, bp.y, bp.z) * bq.toMat4();
+                g->transforms[ii] = pose;
+                city_.setAgentPhysPose(aid, pose);
+                break;
+            }
+        }
+    }
+}
+
 void CityPhysicsSystem::step(World& world, Real dt) {
     // Cars + pedestrians: kinematic bodies that track the drawn poses so the
     // player and the physics gun collide with them.
     possessTier(world, dt);   // R5: physical tier drives + parks proxies BEFORE the box sync
+    syncPossessedInstances(world);   // drawn car == its body, this frame
     syncKinematic(world, city_.carGroups(), city_.carGroupHalfExtents(), carProxies_, dt,
                   &city_.carAgentIds());
     { std::vector<Entity> peds{ city_.pedGroup() };
@@ -302,6 +338,13 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
                 Vec3(a.heading.x * a.speed, 0, a.heading.y * a.speed));
             ++snapCount_;
             p.stuckTime = 0;
+            // Move the RENDER pose with the body (#26). Skipping this left the
+            // car drawn at the pre-snap spot until the next bake, while its
+            // chassis — the only solid thing standing in for it — was already
+            // metres away. syncPossessedInstances re-stamps the instance too.
+            city_.setAgentPhysPose(
+                p.agent, Mat4::translate(a.pos.x, gy2 + 0.8, a.pos.y) *
+                             Quat::fromAxisAngle(Vec3(0, 1, 0), yaw2).toMat4());
             continue;
         }
 

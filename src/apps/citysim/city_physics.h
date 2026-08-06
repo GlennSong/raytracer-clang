@@ -41,6 +41,16 @@ public:
         engine::Real lastDist = 0;    // gap last tick, for closing-rate
     };
     const std::vector<Possessed>& possessed() const { return possessed_; }
+    // The kinematic proxy boxes standing in for the drawn ambient cars — the
+    // bodies the player actually bumps into. Exposed so the walk-through gate
+    // (#26) can check every drawn car really has one where it is drawn. The
+    // value type is private, so this hands out just the body ids.
+    std::vector<engine::PhysicsBodyId> carProxyBodies() const {
+        std::vector<engine::PhysicsBodyId> out;
+        out.reserve(carProxies_.size());
+        for (const auto& kv : carProxies_) out.push_back(kv.second.id);
+        return out;
+    }
     // Times the backstop snapped a lost body onto its ghost. The soak gate
     // asserts the CONTROLLER never needs it; in production it's the fuse.
     int snapCount() const { return snapCount_; }
@@ -78,6 +88,9 @@ private:
     // kinematic brains produce (driveTowards chases the sim's ghost); their
     // render pose comes from the body (city_.setAgentPhysPose).
     void possessTier(engine::World& world, engine::Real dt);
+    // Stamp each possessed car's drawn instance transform from its live body,
+    // so the car is never drawn where its chassis no longer is (#26).
+    void syncPossessedInstances(engine::World& world);
 
     CityRenderSystem& city_;
     engine::PhysicsSystem& physics_;

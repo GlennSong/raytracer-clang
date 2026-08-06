@@ -8,6 +8,8 @@
 #include "../../engine/procgen/city/road_net.h"
 #include "../../engine/procgen/city/road_mesh.h"     // strokeRibbon (closed lot/block outlines)
 #include "../../engine/procgen/city/street_kit.h"   // trafficSignalProto, SignalParams
+#include "../../engine/procgen/noise.h"             // Noise (carved-terrain sampler)
+#include "../../engine/procgen/terrain.h"            // terrainHeight, TerrainParams
 #include "../../log.h"                               // LOG_WARN (place-type validation)
 #include "../../renderer/event.h"                    // KeyCode (debug-widget toggle)
 #ifdef RT_ENABLE_IMGUI
@@ -96,6 +98,22 @@ Real CityRenderSystem::groundAt(Real x, Real z) const {
     return (heightAt_ ? heightAt_(x, z) : 0.0) + roadLift_;
 }
 
+// The mirror of CitySim's own per-agent height read (city_sim.cpp, "continuous
+// carriageway height"): lerp the link's end elevations along it, absolute for a
+// corridor deck/ramp, ground-relative plus the layer lift otherwise. Keeping the
+// two readings identical is the whole point — a parked car placed by this and a
+// moving car placed by the sim sit on the same surface (#25).
+Real CityRenderSystem::deckYAt(int link, Real station, Vec2 p) const {
+    if (link < 0 || link >= nav_.linkCount()) return groundAt(p.x, p.y);
+    const engine::NavLink& L = nav_.links[link];
+    const Real t = L.length > 1e-6
+                       ? std::clamp(station / L.length, Real(0), Real(1))
+                       : Real(0);
+    const Real e = L.elevA + (L.elevB - L.elevA) * t;
+    if (L.elevAbsolute) return e;
+    return groundAt(p.x, p.y) + L.layer * kLayerClearance + e;
+}
+
 bool CityRenderSystem::agentWorldPose(int agentId, Vec3& outPos,
                                       Vec2& outHeading) const {
     if (agentId < 0 || agentId >= static_cast<int>(sim_.agents().size()))
@@ -171,6 +189,23 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         }
         if (!heightAt_ && net.heightAt) heightAt_ = net.heightAt;
         roadLift_ = std::max(roadLift_, static_cast<Real>(net.lift));
+    });
+    // THE GROUND THIS BRIDGE STANDS THINGS ON (#25). A pre-pass RoadNet keeps
+    // its NATURAL, pre-carve `heightAt` on purpose — the mesher has to re-derive
+    // the identical road profile from it, and re-deriving over already-carved
+    // ground diverges. But everything THIS bridge places sits on the finished
+    // road: parked cars, painted bay outlines, crosswalk decals, at-grade
+    // traffic. Reading the natural sampler put them on the raw hillside instead
+    // — cars sunk into a cut, hovering over a fill, "at all kinds of different
+    // heights". The level's CDLOD terrain config already folds every road's
+    // cut/fill footprint into `params.flatten`, so sampling THAT is sampling the
+    // road surface. Test worlds with no terrain keep the RoadNet sampler.
+    world.each<engine::TerrainLodConfig>([&](Entity, engine::TerrainLodConfig& c) {
+        auto params = std::make_shared<engine::TerrainParams>(c.params);
+        auto noise = std::make_shared<engine::Noise>(c.seed);
+        heightAt_ = [params, noise](double x, double z) {
+            return engine::terrainHeight(*params, *noise, x, z);
+        };
     });
     // §10: the LEVEL owns the one road graph — streets + corridor chains
     // welded at load (LevelRoadGraph). When present it replaces the private
@@ -555,7 +590,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
             // Bay paint is PAINT: it rides at the road mesher's own stripe
             // lift (RoadMeshParams::markLift, 2 cm), not a hand-picked 5 cm —
             // which read as a slab hovering over the asphalt.
-            const Real y = groundAt(b.pos.x, b.pos.y) + engine::kRoadMarkLift;
+            // ...and on the DECK, not on the terrain beside it (#25): a bay on
+            // a graded or lifted street had its outline painted at raw ground
+            // height and floated above the asphalt.
+            const Real y = deckYAt(b.link, b.station, b.pos) + engine::kRoadMarkLift;
             const Real yaw = std::atan2(b.heading.x, b.heading.y);
             const Real bw = b.width > 0 ? b.width : Real(2.2);
             g.transforms.push_back(
@@ -726,7 +764,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
             Vec2 d(b.x - a.x, b.y - a.y);
             Real len = std::sqrt(d.x * d.x + d.y * d.y);
             if (len < 1e-6) continue;
-            Real y = groundAt(a.x, a.y) + L.layer * Real(5.8) + 0.04;
+            Real y = groundAt(a.x, a.y) + L.layer * kLayerClearance + 0.04;
             Real yaw = std::atan2(d.x, d.y);
             navLinkBake_.push_back(Mat4::trs(
                 Vec3(a.x, y, a.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
@@ -1086,7 +1124,8 @@ CityRenderSystem::SignalSite CityRenderSystem::signalSite(int link) const {
                       ? nav_.nodeSpread[toNode] : 0.0;
     Vec2 corner = node - d * (crossHalf + spread + kCurbGap) +
                   right * (thisHalf + kCurbGap);
-    Real baseY = groundAt(corner.x, corner.y) + nav_.links[link].layer * Real(5.8);
+    Real baseY = groundAt(corner.x, corner.y) +
+                 nav_.links[link].layer * kLayerClearance;
     SignalSite s;
     s.base = Vec3(corner.x, baseY, corner.y);
     s.face = Vec3(-d.x, 0, -d.y);                 // head faces approaching traffic
@@ -1271,7 +1310,11 @@ void CityRenderSystem::syncGroups(World& world) {
                 const CitySim::ParkingBay& b = bays[bi];
                 if (b.occupant != CitySim::kBayScenery) continue;
                 const int v = static_cast<int>(bi) % carVariantCount();
-                const Real y = groundAt(b.pos.x, b.pos.y) +
+                // Wheels on the DECK (#25): the bay's own link/station height,
+                // the same surface a moving car rides, plus half the body so
+                // the car rests on it instead of sinking into the terrain or
+                // hovering over a graded street.
+                const Real y = deckYAt(b.link, b.station, b.pos) +
                                (v < static_cast<int>(he.size()) ? he[v].y : 0.65);
                 const Real yaw = std::atan2(b.heading.x, b.heading.y);
                 SceneryCar sc;
