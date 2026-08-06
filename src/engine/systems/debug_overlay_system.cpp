@@ -42,7 +42,12 @@ void DebugOverlaySystem::loadSettings(Settings& s, Renderer& r) {
     // store in vision_spike.mm, seeded from the live renderer params, and never
     // touches settings.json.)
 
-    r.bloomEnabled = s.getBool("bloom.enabled", r.bloomEnabled);
+    // ...including the ON/OFF bit. This one was left behind when the bloom
+    // PARAMS stopped persisting, and loadSettings runs AFTER the level load in
+    // both states, so a single stale `bloom.enabled: false` in settings.json
+    // silently un-bloomed every level ever after (measured on metropolis_sky:
+    // mean frame luma 208 -> 115). The FX checkbox still toggles it live; it
+    // just no longer outlives the session.
     r.ssaoEnabled  = s.getBool("ssao.enabled", r.ssaoEnabled);
     r.ssrEnabled   = s.getBool("ssr.enabled", r.ssrEnabled);
 
@@ -93,7 +98,6 @@ void DebugOverlaySystem::saveSettings(Settings& s, Renderer& r) {
     // Bloom rides the same rule.
 
 
-    s.setBool("bloom.enabled", r.bloomEnabled);
     s.setBool("ssao.enabled", r.ssaoEnabled);
     s.setBool("ssr.enabled", r.ssrEnabled);
 

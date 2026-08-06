@@ -4439,6 +4439,23 @@ void MetalRenderer::endFrame() {
     bool cloudsOn = impl->cloudsActive && impl->cloudPipeline &&
                     impl->cloudCompositePipeline && impl->sceneColorTexture &&
                     impl->cloudBaseNoise && impl->cloudDetailNoise;
+    // Say it ONCE, with the reason. The volumetric slab has five independent
+    // preconditions and a silent nil among them is indistinguishable from a
+    // level that simply authored no clouds — which is exactly how it went
+    // unnoticed that a "cloudy" frame was the legacy 2D overlay all along.
+    {
+        static bool announced = false;
+        if (!announced) {
+            announced = true;
+            NSLog(@"[clouds] volumetric=%d (active=%d march=%d comp=%d scene=%d "
+                   "noise=%d/%d) — 2D FBM overlay %s",
+                  cloudsOn ? 1 : 0, impl->cloudsActive ? 1 : 0,
+                  impl->cloudPipeline != nil, impl->cloudCompositePipeline != nil,
+                  impl->sceneColorTexture != nil, impl->cloudBaseNoise != nil,
+                  impl->cloudDetailNoise != nil,
+                  impl->skyCloudsEnabled ? "ON" : "off");
+        }
+    }
     if (cloudsOn) {
         int halfW = std::max(impl->framebufferWidth / 2, 1);
         int halfH = std::max(impl->framebufferHeight / 2, 1);
