@@ -1,5 +1,7 @@
 #include "debug_overlay_system.h"
 
+#include "../frame_stats.h"
+
 #include <algorithm>
 
 #ifdef RT_ENABLE_IMGUI
@@ -134,10 +136,20 @@ void DebugOverlaySystem::onStart(FrameContext& ctx) {
 }
 
 void DebugOverlaySystem::onStop(FrameContext& ctx) {
+    // Put the passes back BEFORE persisting: quitting mid-run must not
+    // save a measurement configuration as if it were the user's choice.
+    passCost.cancel(ctx);
     saveSettings(ctx);
 }
 
 void DebugOverlaySystem::render(FrameContext& ctx) {
+    // Advanced FIRST and unconditionally: a running measurement has passes
+    // disabled to time them, so it must keep ticking to its end and restore
+    // them even if the panel is collapsed, the window hidden, or ImGui absent
+    // entirely. Driving it from inside the panel's if-block once left a pass
+    // switched off for the rest of the session.
+    passCost.update(ctx);
+
 #ifdef RT_ENABLE_IMGUI
     // No ImGui context (e.g. a backend without debug-UI support): stay inert.
     if (ImGui::GetCurrentContext() == nullptr) return;
@@ -169,6 +181,76 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
                            "OVERFLOW inst %u  shadow %u  foliage %u",
                            rs.instanceOverflow, rs.shadowOverflow,
                            rs.foliageOverflow);
+
+    // The frame ledger (ADR-0077): where the frame's CPU time goes, over the
+    // last ~4 s. Wait is FPS-cap sleep — headroom, not cost. For anything the
+    // per-phase split can't answer, attach Tracy (RT_ENABLE_PROFILER).
+    if (ImGui::CollapsingHeader("Performance")) {
+        FrameStats& fs = ctx.stats;
+        FrameStats::Summary sum = fs.summarize();
+        ImGui::Text("frame  %5.2f ms avg   %5.2f p95   %5.2f max",
+                    sum.avgTotalMs, sum.p95TotalMs, sum.maxTotalMs);
+        ImGui::Text("update %5.2f   fixed %5.2f   render %5.2f   wait %5.2f",
+                    sum.avgUpdateMs, sum.avgFixedMs, sum.avgRenderMs,
+                    sum.avgWaitMs);
+        // The render split is the actionable part: acquire is time BLOCKED on
+        // the GPU/vsync (CPU idle), encode+submit is real CPU work.
+        ImGui::Text("  acquire %5.2f (gpu wait)   encode %5.2f   submit %5.2f",
+                    sum.avgAcquireMs, sum.avgEncodeMs, sum.avgSubmitMs);
+        if (sum.avgGpuMs > 0.0f) {
+            ImGui::Text("  GPU     %5.2f ms/frame", sum.avgGpuMs);
+            ImGui::SameLine();
+            ImGui::TextDisabled(sum.avgGpuMs > sum.avgEncodeMs + sum.avgSubmitMs
+                                    ? "(GPU-bound)" : "(CPU-bound)");
+        } else {
+            ImGui::TextDisabled("  GPU     n/a (backend reports no timing)");
+        }
+
+        static float plotBuf[FrameStats::HISTORY];
+        const int n = fs.historySize();
+        for (int i = 0; i < n; i++) plotBuf[i] = fs.historyAt(i).totalMs;
+        // Fixed 0..2x-budget scale so spikes read against 16.6/33.3 ms rather
+        // than autoscale flattening everything.
+        float budgetMs = ctx.renderer.targetFps > 0
+                             ? 1000.0f / static_cast<float>(ctx.renderer.targetFps)
+                             : 16.6f;
+        ImGui::PlotLines("##frameTimes", plotBuf, n, 0, nullptr, 0.0f,
+                         budgetMs * 2.0f, ImVec2(-1, 64));
+        ImGui::TextDisabled("last %d frames, scale 0-%.1f ms", n,
+                            budgetMs * 2.0f);
+
+        // Pass-cost probe: the only reliable way to rank the screen-space
+        // passes while gpu_ms is present-contaminated (ADR-0077). Holds each
+        // configuration for a fixed window, then reports the median frame time
+        // of each — measured, not eyeballed, and no toggling by hand.
+        if (passCost.state == PassCost::Idle) {
+            if (ImGui::Button("Rank post passes (~10s)")) passCost.begin(ctx);
+            ImGui::SameLine();
+            ImGui::TextDisabled("toggles SSAO/SSR/bloom in turn, times each");
+        } else {
+            ImGui::Text("ranking: %s  (%.1fs left)", passCost.label(),
+                        passCost.secondsLeft());
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) passCost.cancel(ctx);
+        }
+        if (!passCost.result.empty()) {
+            ImGui::TextUnformatted(passCost.result.c_str());
+            ImGui::SameLine();
+            if (ImGui::Button("Clear##passcost")) passCost.result.clear();
+        }
+
+        if (!fs.capturing()) {
+            if (ImGui::Button("Start CSV capture"))
+                fs.startCapture("frame-capture.csv",
+                                describeCaptureContext(ctx));
+            ImGui::SameLine();
+            ImGui::TextDisabled("-> frame-capture.csv (tools/frame-report.py)");
+        } else {
+            if (ImGui::Button("Stop CSV capture")) fs.stopCapture();
+            ImGui::SameLine();
+            ImGui::Text("recording: %ld frames", fs.capturedFrames());
+        }
+    }
 
     ImGui::Separator();
     const char* viewNames[] = {"Normal", "AO Only", "SSR Only", "Depth", "Normals",

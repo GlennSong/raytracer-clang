@@ -1,6 +1,7 @@
 #include "script_system.h"
 
 #include "lua_state.h"
+#include "lua_helpers.h"     // packEntity (scripts see self.entity as this)
 #include "gameplay_bindings.h"
 #include "procgen_bindings.h"
 #include "script_behaviour.h"
@@ -8,19 +9,13 @@
 #include "../components.h"
 #include "../asset_manager.h"
 #include "../../log.h"
+#include "../../profile.h"
 
 #include <cstdint>
 #include <vector>
 
 namespace engine {
 namespace {
-
-// Pack an Entity to the integer scripts see (must match gameplay_bindings'
-// toEntity: generation<<32 | index).
-lua_Integer packEntity(Entity e) {
-    return static_cast<lua_Integer>(
-        (static_cast<uint64_t>(e.generation) << 32) | static_cast<uint64_t>(e.index));
-}
 
 // Load a behaviour's chunk, which must return a table (the per-entity instance);
 // store it in the registry and record the ref. Returns false (logging) on error.
@@ -85,6 +80,7 @@ void ScriptSystem::update(FrameContext& ctx) {
 }
 
 void ScriptSystem::tick(World& world, double dt) {
+    RT_PROFILE_ZONE_NAMED("scriptTick");
     lua_State* L = luaState(vm_);
 
     std::vector<SpawnCommand> spawns;

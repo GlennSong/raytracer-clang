@@ -417,6 +417,12 @@ struct RenderStats {
     // colour pass" was an inference rather than a measurement.
     uint32_t shadowCasters = 0;
     uint32_t shadowTerrainNodes = 0;
+    // MONOTONIC totals since startup (not per-frame) — the frame ledger diffs
+    // them to get "resources created during this frame", the signature of a
+    // hitch caused by creating something mid-play rather than by steady cost.
+    // A backend that doesn't count leaves them 0 and the ledger reports none.
+    uint64_t meshUploadsTotal = 0;
+    uint64_t textureUploadsTotal = 0;
 };
 
 enum class CameraProjection { Perspective, Orthographic };
@@ -556,6 +562,24 @@ public:
     // nothing and risks overflow. Safe between frames; no-op by default.
     virtual void setInstanceCapacities(uint32_t /*instances*/, uint32_t /*shadow*/,
                                        uint32_t /*foliage*/) {}
+    // GPU execution time of the most recently COMPLETED frame, in ms; 0 when
+    // the backend can't measure it (the frame ledger then shows no GPU column).
+    // Necessarily lags the current frame — the GPU runs behind the CPU — so it
+    // is a rolling truth, not this frame's cost. It is also the only timing
+    // that survives a vsync block: when the swapchain makes the CPU wait, the
+    // ledger's acquire phase inflates without any work being done, and this
+    // number is what says whether the GPU was actually busy that whole time.
+    virtual float lastGpuFrameMs() const { return 0.0f; }
+
+    // Present without waiting for the display refresh. Measurement-only:
+    // while vsync is on, frame time is quantised to the refresh interval, so
+    // removing 4 ms of GPU work changes NOTHING measurable — the frame just
+    // waits the same. Ranking passes by frame time therefore requires turning
+    // this off first (PassCost does, and restores it). Returns false when
+    // the backend can't control presentation pacing — a compositor-driven
+    // surface (visionOS) owns it — so callers can say the measurement is
+    // unreliable rather than report noise.
+    virtual bool setPresentSync(bool /*enabled*/) { return false; }
 
     virtual void beginFrame() = 0;
     virtual void setCamera(const CameraState& camera) = 0;

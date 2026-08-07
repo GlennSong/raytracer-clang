@@ -47,6 +47,8 @@ add_library(engine_core STATIC
     src/renderer/hosted_window.cpp
     src/engine/recent_scenes.cpp
     src/engine/clock.cpp
+    src/engine/frame_stats.cpp
+    src/engine/pass_cost.cpp
     src/engine/event_bus.cpp
     src/engine/debug_draw.cpp
     src/engine/world.cpp
@@ -122,6 +124,7 @@ add_library(engine_core STATIC
     src/engine/script_assets.cpp
     src/engine/script_watch.cpp
     src/engine/level_loader.cpp
+    src/engine/level_params.cpp
     src/engine/level_writer.cpp
     src/engine/model_importer.cpp
     src/engine/camera_store.cpp
@@ -443,6 +446,7 @@ add_executable(run_tests
     tests/test_sparse_set.cpp
     tests/test_world.cpp
     tests/test_clock.cpp
+    tests/test_frame_stats.cpp
     tests/test_event_bus.cpp
     tests/test_debug_draw.cpp
     tests/test_skeleton.cpp

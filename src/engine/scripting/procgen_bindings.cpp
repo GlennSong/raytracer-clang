@@ -2,6 +2,7 @@
 
 #include "procgen_mesh.h"
 #include "lua_state.h"
+#include "lua_helpers.h"     // optField, checkVec3/pushVec3
 #include "../procgen/sdf.h"
 #include "../procgen/noise.h"
 #include "../procgen/lsystem.h"
@@ -122,34 +123,8 @@ int modulesGc(lua_State* L) {
 }
 
 // --- argument helpers ---
-
-// Read an optional numeric field `key` from the table at `idx` (default if
-// absent). Used to turn a Lua params table into a C++ params struct.
-double optField(lua_State* L, int idx, const char* key, double fallback) {
-    idx = lua_absindex(L, idx);
-    lua_getfield(L, idx, key);
-    double v = luaL_optnumber(L, -1, fallback);
-    lua_pop(L, 1);
-    return v;
-}
-
-// A Vec3 is a 3-element Lua array, e.g. {x, y, z}.
-Vec3 checkVec3(lua_State* L, int idx) {
-    idx = lua_absindex(L, idx);  // we push while reading; pin the table index
-    luaL_checktype(L, idx, LUA_TTABLE);
-    Vec3 v;
-    lua_geti(L, idx, 1); v.x = luaL_checknumber(L, -1); lua_pop(L, 1);
-    lua_geti(L, idx, 2); v.y = luaL_checknumber(L, -1); lua_pop(L, 1);
-    lua_geti(L, idx, 3); v.z = luaL_checknumber(L, -1); lua_pop(L, 1);
-    return v;
-}
-
-void pushVec3(lua_State* L, const Vec3& v) {
-    lua_createtable(L, 3, 0);
-    lua_pushnumber(L, v.x); lua_seti(L, -2, 1);
-    lua_pushnumber(L, v.y); lua_seti(L, -2, 2);
-    lua_pushnumber(L, v.z); lua_seti(L, -2, 3);
-}
+// optField, checkVec3, and pushVec3 come from lua_helpers.h — one definition
+// shared by every binding surface.
 
 // --- sdf.* ---
 
@@ -3051,9 +3026,11 @@ void openProcgenLibrary(ScriptVM& vm) {
     lua_setglobal(L, "planet");
 }
 
-bool runProcgenMesh(ScriptVM& vm, const std::string& code,
-                    std::shared_ptr<RenderMesh>& out, std::string* error) {
-    lua_State* L = luaState(vm);
+// Load + run `code` as a chunk that must leave ONE return value on the stack.
+// On failure: formats the Lua error into *error, cleans the stack, returns
+// false. The shared preamble of every runProcgen* entry point below.
+static bool runProcgenChunk(lua_State* L, const std::string& code,
+                            std::string* error) {
     if (luaL_loadstring(L, code.c_str()) != LUA_OK ||
         lua_pcall(L, 0, 1, 0) != LUA_OK) {
         if (error != nullptr) {
@@ -3063,6 +3040,13 @@ bool runProcgenMesh(ScriptVM& vm, const std::string& code,
         lua_pop(L, 1);
         return false;
     }
+    return true;
+}
+
+bool runProcgenMesh(ScriptVM& vm, const std::string& code,
+                    std::shared_ptr<RenderMesh>& out, std::string* error) {
+    lua_State* L = luaState(vm);
+    if (!runProcgenChunk(L, code, error)) return false;
 
     if (auto* mesh = static_cast<MeshPtr*>(luaL_testudata(L, -1, kMeshMt))) {
         out = *mesh;
@@ -3127,15 +3111,7 @@ void setGlobalHeightField(ScriptVM& vm, const char* name, HeightField field) {
 bool runProcgenModelValue(ScriptVM& vm, const std::string& code, ProcModel& out,
                           std::string* error) {
     lua_State* L = luaState(vm);
-    if (luaL_loadstring(L, code.c_str()) != LUA_OK ||
-        lua_pcall(L, 0, 1, 0) != LUA_OK) {
-        if (error != nullptr) {
-            const char* msg = lua_tostring(L, -1);
-            *error = msg != nullptr ? msg : "unknown Lua error";
-        }
-        lua_pop(L, 1);
-        return false;
-    }
+    if (!runProcgenChunk(L, code, error)) return false;
     if (auto* mdl = static_cast<ModelPtr*>(luaL_testudata(L, -1, kModelMt))) {
         out = **mdl;                     // copy out the parts + instance groups
         lua_pop(L, 1);
@@ -3154,15 +3130,7 @@ bool runProcgenModelValue(ScriptVM& vm, const std::string& code, ProcModel& out,
 bool runProcgenTexture(ScriptVM& vm, const std::string& code, TextureData& out,
                        std::string* error) {
     lua_State* L = luaState(vm);
-    if (luaL_loadstring(L, code.c_str()) != LUA_OK ||
-        lua_pcall(L, 0, 1, 0) != LUA_OK) {
-        if (error != nullptr) {
-            const char* msg = lua_tostring(L, -1);
-            *error = msg != nullptr ? msg : "unknown Lua error";
-        }
-        lua_pop(L, 1);
-        return false;
-    }
+    if (!runProcgenChunk(L, code, error)) return false;
     if (auto* img = static_cast<ImagePtr*>(luaL_testudata(L, -1, kImageMt))) {
         out = **img;
         lua_pop(L, 1);
@@ -3209,15 +3177,7 @@ bool readModelPart(lua_State* L, int idx, ScriptMeshPart& part) {
 bool runProcgenModel(ScriptVM& vm, const std::string& code,
                      std::vector<ScriptMeshPart>& out, std::string* error) {
     lua_State* L = luaState(vm);
-    if (luaL_loadstring(L, code.c_str()) != LUA_OK ||
-        lua_pcall(L, 0, 1, 0) != LUA_OK) {
-        if (error != nullptr) {
-            const char* msg = lua_tostring(L, -1);
-            *error = msg != nullptr ? msg : "unknown Lua error";
-        }
-        lua_pop(L, 1);
-        return false;
-    }
+    if (!runProcgenChunk(L, code, error)) return false;
 
     out.clear();
     // A single Mesh return -> one part using the caller's default material.

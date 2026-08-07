@@ -27,6 +27,8 @@
 #include "../cube_faces.h"
 #include "cloud_noise.h"   // Perlin-Worley 3D noise bake (volumetric clouds)
 
+#include <atomic>
+#include <memory>
 #include <mutex>
 #include <vector>
 #include <algorithm>
@@ -175,6 +177,12 @@ struct PresentationSurface {
     // Renderer::xrWorldScale). No-op for non-tracking surfaces.
     virtual void setXrWorldScale(float /*scale*/) {}
 
+    // Present without waiting for the display refresh (Renderer::
+    // setPresentSync). Only a surface that owns its pacing can honour this;
+    // returning false says "pacing isn't mine", which is the truth for a
+    // compositor-driven surface.
+    virtual bool setPresentSync(bool /*enabled*/) { return false; }
+
     // Runs AFTER the command buffer is committed, for surfaces that bracket a
     // frame rather than just handing over a texture.
     //
@@ -210,6 +218,13 @@ struct LayerSurface final : PresentationSurface {
     bool acquire() override {
         drawable = [layer nextDrawable];
         return drawable != nil;
+    }
+    // CAMetalLayer paces presentation itself, so this layer CAN honour it:
+    // with displaySync off, nextDrawable stops blocking on the refresh and
+    // frame time becomes a measure of work instead of a multiple of 16.67 ms.
+    bool setPresentSync(bool enabled) override {
+        layer.displaySyncEnabled = enabled ? YES : NO;
+        return true;
     }
     id<MTLTexture> colorTarget() const override { return drawable.texture; }
     void present(id<MTLCommandBuffer> commandBuffer, id<MTLTexture>) override {
@@ -735,6 +750,13 @@ struct MetalRenderer::Impl {
     uint64_t lastOverflowWarnFrame = 0;                   // rate-limits the log
     int frameIndex = 0;                                   // advances each beginFrame
     uint64_t frameCount = 0;                              // monotonic; drives SSAO jitter
+    // Measured GPU time of the last COMPLETED frame (ms), written from Metal's
+    // completion handler on an arbitrary thread and read by the frame ledger on
+    // the main thread — hence atomic. Held by shared_ptr so a frame still in
+    // flight when the renderer is destroyed writes to live storage, not a
+    // dangling Impl (completion handlers outlive commit by design).
+    std::shared_ptr<std::atomic<float>> gpuFrameMs =
+        std::make_shared<std::atomic<float>>(0.0f);
     // How this frame reaches the display. The pass graph never looks at it —
     // see PresentationSurface above.
     std::unique_ptr<PresentationSurface> surface;
@@ -973,6 +995,11 @@ struct MetalRenderer::Impl {
 
     Vec3 currentCameraPos;
     RenderStats lastStats;
+    // Monotonic resource-creation counters (see RenderStats): the ledger diffs
+    // them per frame, so a hitch can be attributed to "a mesh/texture was
+    // created here" instead of guessed at.
+    uint64_t meshUploadsTotal = 0;
+    uint64_t textureUploadsTotal = 0;
 
     static void bakeProbes(Impl* impl, const std::vector<ReflectionProbe>& probes);
 };
@@ -1965,6 +1992,7 @@ MeshHandle MetalRenderer::uploadMesh(const RenderMesh& mesh) {
     gpuMesh.indexCount = static_cast<uint32_t>(mesh.indices.size());
     gpuMesh.bounds = computeBoundingSphere(mesh.vertices.data(), mesh.vertices.size());
 
+    impl->meshUploadsTotal++;
     return impl->meshes.insert(gpuMesh);
 }
 
@@ -2001,7 +2029,14 @@ TextureHandle MetalRenderer::uploadTexture(int width, int height, int channels,
                    bytesPerRow:width * 4];
     }
 
-    // Generate mipmaps
+    // Generate mipmaps. NOTE (ADR-0077 hitch hunt): the waitUntilCompleted here
+    // drains the whole GPU pipeline on the calling thread, so a texture created
+    // DURING play stalls the frame and shows up as a long acquire on the frames
+    // after it. Command buffers on one queue already execute in submission
+    // order, so a later render sees the mipmaps without this wait — but that is
+    // a Metal change nobody can verify in this environment, so it is recorded
+    // in TECH_DEBT with the counter below to prove when it fires, rather than
+    // removed blind.
     id<MTLCommandBuffer> cmdBuf = [impl->commandQueue commandBuffer];
     id<MTLBlitCommandEncoder> blit = [cmdBuf blitCommandEncoder];
     [blit generateMipmapsForTexture:texture];
@@ -2009,6 +2044,7 @@ TextureHandle MetalRenderer::uploadTexture(int width, int height, int channels,
     [cmdBuf commit];
     [cmdBuf waitUntilCompleted];
 
+    impl->textureUploadsTotal++;
     return impl->textures.insert(texture);
 }
 
@@ -2783,6 +2819,14 @@ void MetalRenderer::setInstanceCapacities(uint32_t instances, uint32_t shadow,
             [impl->device newBufferWithLength:foliage * sizeof(GPUInstanceData)
                                      options:MTLResourceStorageModeShared];
     }
+}
+
+float MetalRenderer::lastGpuFrameMs() const {
+    return impl->gpuFrameMs->load(std::memory_order_relaxed);
+}
+
+bool MetalRenderer::setPresentSync(bool enabled) {
+    return impl->surface && impl->surface->setPresentSync(enabled);
 }
 
 void MetalRenderer::beginFrame() {
@@ -4394,6 +4438,8 @@ void MetalRenderer::endFrame() {
                   stats.foliageOverflow, impl->foliageMaxInstances);
         }
     }
+    stats.meshUploadsTotal = impl->meshUploadsTotal;
+    stats.textureUploadsTotal = impl->textureUploadsTotal;
     impl->lastStats = stats;
 
     [impl->currentEncoder endEncoding];
@@ -5012,6 +5058,22 @@ void MetalRenderer::endFrame() {
     // visionOS has no CAMetalDrawable, and the compositor needs the depth
     // texture alongside the colour target.
     impl->surface->present(impl->currentCommandBuffer, impl->depthTexture);
+
+    // Real GPU time for this frame (ADR-0077): the driver stamps the command
+    // buffer's execution window, so this is the GPU's own cost — independent of
+    // how long nextDrawable made the CPU wait. Reads back a frame or two later
+    // (that IS when the GPU finishes); the ledger treats it as a rolling value.
+    // Capturing a shared_ptr COPY keeps the storage alive if the renderer is
+    // torn down with this frame still in flight.
+    {
+        auto gpuSlot = impl->gpuFrameMs;
+        [impl->currentCommandBuffer addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+            const CFTimeInterval seconds = cb.GPUEndTime - cb.GPUStartTime;
+            if (seconds > 0.0)
+                gpuSlot->store(static_cast<float>(seconds * 1000.0),
+                               std::memory_order_relaxed);
+        }];
+    }
     [impl->currentCommandBuffer commit];
     // Before any waitUntilCompleted below: a compositor-driven surface wants to
     // close its frame as soon as the work is submitted, not after we have

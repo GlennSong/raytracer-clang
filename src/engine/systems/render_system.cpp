@@ -1,5 +1,6 @@
 #include "render_system.h"
 #include "../components.h"
+#include "../../profile.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -63,6 +64,7 @@ void RenderSystem::update(FrameContext& ctx) {
 }
 
 void RenderSystem::render(FrameContext& ctx) {
+    RT_PROFILE_ZONE_NAMED("renderSubmit");
     ctx.renderer.setCamera(ctx.view.camera);
     // Street lamps become REAL point lights near the camera (device: "working
     // street lights"): the loader's StreetFurniture carries every bulb

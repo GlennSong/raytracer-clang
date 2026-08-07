@@ -2,6 +2,7 @@
 
 #include "../../../engine/scripting/lua_state.h"   // luaState() + the Lua C API (scripting-internal)
 #include "../../../engine/scripting/procgen_mesh.h"   // luaToMesh (mesh.car shells)
+#include "../../../engine/scripting/lua_helpers.h" // strField/vec3Field spec readers
 #include "../../../engine/mesh_builder.h"          // MeshBuilder::box (same primitive as addBox)
 
 namespace engine {
@@ -13,43 +14,14 @@ bool fail(std::string* err, const std::string& msg) {
     return false;
 }
 
-// String field of the table at absolute stack index `t` ("" when absent).
-std::string strField(lua_State* L, int t, const char* key) {
-    lua_getfield(L, t, key);
-    const char* s = lua_isstring(L, -1) ? lua_tostring(L, -1) : nullptr;
-    std::string v = s ? s : "";
-    lua_pop(L, 1);
-    return v;
-}
-
-// A {x,y,z} array-field of the table at absolute stack index `t` (like
-// vehicle_spec's reader): missing components keep `def`.
-Vec3 vec3Field(lua_State* L, int t, const char* key, Vec3 def) {
-    lua_getfield(L, t, key);
-    Vec3 r = def;
-    if (lua_istable(L, -1)) {
-        int st = lua_gettop(L);
-        lua_rawgeti(L, st, 1);
-        if (lua_isnumber(L, -1)) r.x = lua_tonumber(L, -1);
-        lua_pop(L, 1);
-        lua_rawgeti(L, st, 2);
-        if (lua_isnumber(L, -1)) r.y = lua_tonumber(L, -1);
-        lua_pop(L, 1);
-        lua_rawgeti(L, st, 3);
-        if (lua_isnumber(L, -1)) r.z = lua_tonumber(L, -1);
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-    return r;
-}
-
-// Boolean field of the table at absolute stack index `t` (`def` when absent).
-bool boolField(lua_State* L, int t, const char* key, bool def) {
-    lua_getfield(L, t, key);
-    bool v = lua_isnil(L, -1) ? def : lua_toboolean(L, -1) != 0;
-    lua_pop(L, 1);
-    return v;
-}
+// strField, vec3Field AND boolField all come from the scripting module's shared
+// lua_helpers.h — the same readers vehicle_spec uses, no local copy. The local
+// boolField that used to live here differed subtly: it treated any non-nil value
+// as Lua-truthy, so `steered = 1` read as true, where the shared one requires an
+// actual boolean and otherwise keeps the default (`steered = 1` would read
+// FALSE). Every shipped recipe writes real booleans, so this is a no-op today —
+// but it is the kind of difference that only shows up as a car that will not
+// steer, so: one reader.
 
 // Concatenate `src` onto `dst`, rebasing indices.
 void appendMesh(RenderMesh& dst, const RenderMesh& src) {

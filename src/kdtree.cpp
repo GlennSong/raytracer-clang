@@ -1,4 +1,5 @@
 #include "kdtree.h"
+#include "profile.h"
 #include <algorithm>
 #include <numeric>
 
@@ -58,6 +59,7 @@ AABB triangleBounds(const Triangle& tri) {
 }
 
 void KdTree::build(const std::vector<Triangle>& triangles) {
+    RT_PROFILE_ZONE_NAMED("kdTreeBuild");
     if (triangles.empty()) {
         root = nullptr;
         return;

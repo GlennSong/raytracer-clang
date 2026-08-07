@@ -203,6 +203,29 @@ In the headset:
 - **Gamepads** pair to the headset over Bluetooth (PS5/Xbox/Switch via
   GCController) and drive locomotion directly.
 
+## Profiling on the headset
+
+The frame budget is **11.1 ms at 90 Hz**, and the simulator's timings are
+fiction (see `src/visionos_app/AGENTS.md`) — measure on device. The tools and
+recipes live in [`docs/profiling.md`](profiling.md); the visionOS-specific
+short version:
+
+- **Summary log line:** set `RT_FRAME_STATS_LOG=5` (Xcode scheme env var on
+  device; `SIMCTL_CHILD_` prefix in the simulator, like `RT_DEBUG_VIEW`) for a
+  frame/phase summary every 5 s in the app log. Use Xcode's console —
+  `devicectl --console` misses os_log.
+- **CSV capture:** set `RT_FRAME_STATS=<Documents path>/capture.csv` (the
+  bundle is read-only — same rule as `settings.json`), pull the file from the
+  app container in Xcode, then
+  `python3 tools/frame-report.py capture.csv --budget-fps 90`.
+- **In-engine numbers** are available to the launcher window via
+  `Application::stats()` (the same host seam the settings panel uses) if a
+  panel row is wanted.
+- **Tracy** (`-DRT_ENABLE_PROFILER=ON`) captures over the network from the
+  paired Mac; the option is wired through the normal CMake path but is
+  compile-unverified for the visionOS toolchain. GPU time needs Xcode's Metal
+  debugger / Instruments — the ledger and Tracy are CPU-side.
+
 ## Troubleshooting
 
 | Symptom | Likely cause / fix |

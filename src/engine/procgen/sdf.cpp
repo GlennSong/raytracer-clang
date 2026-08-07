@@ -1,5 +1,7 @@
 #include "sdf.h"
 
+#include "../../profile.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -93,6 +95,7 @@ Vec3 sdfGradient(const Sdf& field, const Vec3& p, double eps) {
 // --- Surface Nets polygonization ---
 
 RenderMesh polygonizeSdf(const Sdf& field, const SdfBounds& bounds, int resolution) {
+    RT_PROFILE_ZONE_NAMED("polygonizeSdf");
     RenderMesh mesh;
     const int res = std::max(1, resolution);
     const int N = res + 1;                       // grid corners per axis

@@ -42,6 +42,7 @@ SRCS = \
 	$(SRC_DIR)/instance.cpp \
 	$(SRC_DIR)/curve.cpp \
 	$(SRC_DIR)/level_scene.cpp \
+	$(SRC_DIR)/engine/level_params.cpp \
 	$(SRC_DIR)/path_tracer.cpp \
 	$(SRC_DIR)/engine/mesh_builder.cpp \
 	$(SRC_DIR)/engine/editable_curve.cpp \
@@ -121,6 +122,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_sparse_set.cpp \
 	$(TEST_DIR)/test_world.cpp \
 	$(TEST_DIR)/test_clock.cpp \
+	$(TEST_DIR)/test_frame_stats.cpp \
 	$(TEST_DIR)/test_event_bus.cpp \
 	$(TEST_DIR)/test_debug_draw.cpp \
 	$(TEST_DIR)/test_skeleton.cpp \
@@ -224,6 +226,7 @@ TEST_SRCS = \
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
+	$(SRC_DIR)/engine/frame_stats.cpp \
 	$(SRC_DIR)/engine/day_night_cycle.cpp \
 	$(SRC_DIR)/engine/event_bus.cpp \
 	$(SRC_DIR)/engine/debug_draw.cpp \
@@ -334,6 +337,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/apps/citysim/scripting/vehicle_body.cpp \
 	$(SRC_DIR)/camera.cpp \
 	$(SRC_DIR)/level_scene.cpp \
+	$(SRC_DIR)/engine/level_params.cpp \
 	$(SRC_DIR)/scene.cpp \
 	$(SRC_DIR)/geometry.cpp \
 	$(SRC_DIR)/kdtree.cpp \
@@ -344,7 +348,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/rt_math.cpp
 TEST_TARGET = run_tests
 
-.PHONY: all release test planet_preview clean
+.PHONY: all release test planet_preview health clean
 
 all: CXXFLAGS += $(DEBUG_FLAGS)
 all: $(TARGET)
@@ -394,6 +398,11 @@ $(TEST_TARGET): CXXFLAGS += $(SCRIPT_FLAGS) -DRT_SOURCE_DIR='"$(CURDIR)"'
 # run (they were "passing" by not existing).
 $(TEST_TARGET): $(TEST_SRCS) $(TEST_ENGINE_SRCS) $(LUA_OBJS) Makefile
 	$(CXX) $(CXXFLAGS) -o $@ $(filter-out Makefile,$^)
+
+# Code-health report (docs/profiling.md): duplication, god-functions, debt
+# markers, include fan-in. Informational — a finder, not a gate.
+health:
+	python3 tools/code-health.py
 
 # Headless "from space" preview of the procedural planets (procedural-planet-plan):
 # orthographic disc renders to out_*.png — a GPU-free way to eyeball the generator.

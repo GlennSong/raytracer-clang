@@ -2,10 +2,39 @@
 #include "states/debug_overlay_state.h"
 #include "../log.h"
 #include "../profile.h"
+#include <cstdio>
+#include <cstdlib>
 #include <thread>
 #include <chrono>
 
 namespace engine {
+
+std::string describeCaptureContext(const FrameContext& ctx) {
+    // Resolution first: it is the single biggest lever on a GPU-bound frame
+    // (a Retina framebuffer is 4x its logical window), and it was the first
+    // thing we could not reconstruct when two captures disagreed by 2x.
+    char buf[512];
+    std::snprintf(buf, sizeof(buf),
+                  "framebuffer=%dx%d window=%dx%d megapixels=%.2f "
+                  "ssao=%d ssr=%d bloom=%d probes=%d envmap=%d prepass=%d "
+                  "shadow_cascades=%d shadow_distance=%.0f tonemap=%d "
+                  "target_fps=%d fixed_step=%.4f",
+                  ctx.framebufferWidth, ctx.framebufferHeight,
+                  ctx.windowWidth, ctx.windowHeight,
+                  ctx.framebufferWidth * ctx.framebufferHeight / 1.0e6,
+                  ctx.renderer.ssaoEnabled ? 1 : 0,
+                  ctx.renderer.ssrEnabled ? 1 : 0,
+                  ctx.renderer.bloomEnabled ? 1 : 0,
+                  ctx.renderer.reflectionProbesEnabled ? 1 : 0,
+                  ctx.renderer.environmentMapEnabled ? 1 : 0,
+                  ctx.renderer.depthPrepassEnabled ? 1 : 0,
+                  ctx.renderer.shadowParams.cascadeCount,
+                  static_cast<double>(ctx.renderer.shadowParams.distance),
+                  ctx.renderer.tonemapOperator,
+                  ctx.renderer.targetFps,
+                  ctx.clock.fixedStep());
+    return std::string(buf);
+}
 
 StateTransition::StateTransition() = default;
 StateTransition::~StateTransition() = default;
@@ -60,6 +89,25 @@ bool Application::initialize(const Config& config,
     audioEngine.initialize(config.audio);
 
     clock.setFixedStep(settingsStore.getDouble("fixedTimestep", 1.0 / 60.0));
+
+    // Frame-ledger capture without a UI (ADR-0077): RT_FRAME_STATS=<path.csv>
+    // records every frame from boot; RT_FRAME_STATS_LOG=<seconds> prints a
+    // periodic summary line — the capture path on hosts where only a console
+    // is reachable (visionOS device logs, headless soaks). Same env-var
+    // convention as RT_DEBUG_VIEW / RT_FRAME_DUMP.
+    // Deferred to the first frame so the capture header records the REAL
+    // framebuffer size and pass config, not the pre-resize guesses.
+    if (const char* capturePath = std::getenv("RT_FRAME_STATS"))
+        pendingCapturePath = capturePath;
+    // Unattended pass-cost sweep: measure every post pass at several window
+    // sizes and quit, so a ranking needs one command and no interaction (and
+    // none of the mistakes a manual procedure invites).
+    if (const char* sweepPath = std::getenv("RT_PASS_SWEEP"))
+        passSweep.begin(sweepPath);
+    if (const char* logEvery = std::getenv("RT_FRAME_STATS_LOG")) {
+        statsLogInterval = std::atof(logEvery);
+        if (statsLogInterval <= 0.0) statsLogInterval = 5.0;
+    }
     return true;
 }
 
@@ -76,7 +124,7 @@ FrameContext Application::makeContext() {
     window->getSize(winW, winH);
     return FrameContext{
         worldState, *rendererPtr, *assetManager, view, clock, settingsStore, jobs,
-        eventBus, debugLines, audioEngine,
+        eventBus, debugLines, audioEngine, frameStats,
         window->getInput(), inputMap, playerInputs, xrState,
         framebufferWidth, framebufferHeight, winW, winH,
         frameDelta, interpolation, quit, transitionRequest,
@@ -98,12 +146,32 @@ void Application::renderFrame() {
     RT_PROFILE_ZONE_NAMED("render");
     reconcileFramebuffer();
     FrameContext ctx = makeContext();
-    rendererPtr->beginFrame();
-    stateStack.forEachRenderable([&](AppState& state) { state.render(ctx); });
-    rendererPtr->endFrame();
-    // RT_DUMP_STATS=1: periodic frame-cost report on stderr, so a headless run
-    // answers "what is eating the frame" without the ImGui HUD (perf triage,
-    // 8km-city plan P6).
+    // Three brackets, because "render is slow" was never actionable (ADR-0077):
+    // acquire BLOCKS while the GPU is behind, encode is the world walk, submit
+    // builds the pass graph's command buffers. See FramePhase.
+    {
+        RT_PROFILE_ZONE_NAMED("acquire");
+        frameStats.beginPhase(FramePhase::RenderAcquire);
+        rendererPtr->beginFrame();
+        frameStats.endPhase(FramePhase::RenderAcquire);
+    }
+    {
+        RT_PROFILE_ZONE_NAMED("encode");
+        frameStats.beginPhase(FramePhase::RenderEncode);
+        stateStack.forEachRenderable([&](AppState& state) { state.render(ctx); });
+        frameStats.endPhase(FramePhase::RenderEncode);
+    }
+    {
+        RT_PROFILE_ZONE_NAMED("submit");
+        frameStats.beginPhase(FramePhase::RenderSubmit);
+        rendererPtr->endFrame();
+        frameStats.endPhase(FramePhase::RenderSubmit);
+    }
+    // RT_DUMP_STATS=1: periodic frame COMPOSITION report on stderr — draw calls,
+    // instances, triangles, shadow casters, capacity overflow. Kept alongside
+    // the phase ledger above because the two answer different questions: the
+    // ledger says WHERE the time went, this says WHAT was submitted. (It is
+    // what found CityWalkerSystem eating 10 of 13 ms in the P8.2 round.)
     static const bool dumpStats = std::getenv("RT_DUMP_STATS") != nullptr;
     if (dumpStats) {
         static int frames = 0;
@@ -142,9 +210,27 @@ bool Application::running() const {
 }
 
 void Application::runFrame() {
+    frameStats.beginFrame();
+    // Bracketed because it is OS/driver code we don't control and a real
+    // capture caught a 307 ms frame whose named phases summed to 30 ms —
+    // whatever stalled it lived outside every bracket (ADR-0077).
+    frameStats.beginPhase(FramePhase::Poll);
     window->pollEvents();
     frameDelta = window->getDeltaTime();
     reconcileFramebuffer();
+    frameStats.endPhase(FramePhase::Poll);
+
+    if (!pendingCapturePath.empty()) {
+        FrameContext ctx = makeContext();
+        const std::string context = describeCaptureContext(ctx);
+        if (frameStats.startCapture(pendingCapturePath, context))
+            LOG_INFO("frame stats capture -> %s (%s)",
+                     pendingCapturePath.c_str(), context.c_str());
+        else
+            LOG_WARN("frame stats capture failed to open %s",
+                     pendingCapturePath.c_str());
+        pendingCapturePath.clear();
+    }
     debugLines.update(frameDelta);   // age timed debug shapes (ADR-0067)
 
     // Headset pose for this frame, BEFORE any system updates: camera writers
@@ -158,6 +244,7 @@ void Application::runFrame() {
 
     {
         RT_PROFILE_ZONE_NAMED("update");
+        frameStats.beginPhase(FramePhase::Update);
         FrameContext ctx = makeContext();
         inputMap.beginFrame();
         playerInputs.beginFrame();
@@ -225,6 +312,7 @@ void Application::runFrame() {
         playerInputs.updateGamepads(window->getGamepads());
         inputMap.updateGamepad(window->getGamepads()[0]);
         stateStack.forEachActive([&](AppState& state) { state.update(ctx); });
+        frameStats.endPhase(FramePhase::Update);
     }
 
     int steps = clock.advance(frameDelta);
@@ -235,6 +323,7 @@ void Application::runFrame() {
                  << " this frame — motion will visibly jump";
     {
         RT_PROFILE_ZONE_NAMED("fixedUpdate");
+        frameStats.beginPhase(FramePhase::FixedUpdate);
         FrameContext ctx = makeContext();
         // RT_DUMP_STATS phase timing: how much of the frame is the fixed
         // step, and how many steps ran (perf triage without Tracy).
@@ -245,6 +334,10 @@ void Application::runFrame() {
             ctx.fixedStepIndex = i;
             stateStack.forEachActive([&](AppState& state) { state.fixedUpdate(ctx); });
         }
+        frameStats.endPhase(FramePhase::FixedUpdate);
+        // The ledger times the whole phase; this adds the STEP COUNT, which is
+        // what separates "the step got dearer" from "we ran more steps" — the
+        // difference between a slow simulation and a backlog.
         if (dumpStats && steps > 0) {
             static int frames = 0;
             static double ms = 0.0;
@@ -263,10 +356,14 @@ void Application::runFrame() {
 
     // Deliver everything enqueued during update/fixedUpdate before the frame
     // renders, so reactions land in the same frame as their cause (ADR-0066).
+    frameStats.beginPhase(FramePhase::Dispatch);
     eventBus.dispatchQueued();
+    frameStats.endPhase(FramePhase::Dispatch);
 
     auto frameStart = std::chrono::steady_clock::now();
+    frameStats.beginPhase(FramePhase::Render);
     renderFrame();
+    frameStats.endPhase(FramePhase::Render);
     // Drop expired debug shapes now that they've been drawn; one-frame shapes
     // (the immediate-mode default) live exactly this long. The modal-resize
     // draw callback renders without expiring, so paused frames keep their
@@ -276,11 +373,18 @@ void Application::runFrame() {
     if (rendererPtr->targetFps > 0) {
         auto targetDuration = std::chrono::duration<double>(1.0 / rendererPtr->targetFps);
         auto elapsed = std::chrono::steady_clock::now() - frameStart;
-        if (elapsed < targetDuration)
+        if (elapsed < targetDuration) {
+            frameStats.beginPhase(FramePhase::Wait);
             std::this_thread::sleep_for(targetDuration - elapsed);
+            frameStats.endPhase(FramePhase::Wait);
+        }
     }
 
     {
+        // Its own bracket, separate from the event drain: a push here runs the
+        // new state's onEnter (a level load, an overlay's first-time setup),
+        // which is a different cause with a different fix.
+        frameStats.beginPhase(FramePhase::StateSwap);
         FrameContext ctx = makeContext();
         stateStack.applyPending(ctx);
 
@@ -290,6 +394,44 @@ void Application::runFrame() {
             stateStack.popState();
             stateStack.pushState(std::move(transitionRequest.next));
             stateStack.applyPending(ctx);
+        }
+        frameStats.endPhase(FramePhase::StateSwap);
+    }
+
+    // Close this frame's ledger row with the renderer's submission counters,
+    // so a capture correlates time spikes with what was drawn. The same
+    // counters feed Tracy plots in profiler builds (ADR-0068).
+    RenderStats rs = rendererPtr->getRenderStats();
+    // Resources created during THIS frame: the backend counts monotonically,
+    // we diff. A nonzero count on a slow frame names the hitch's cause
+    // outright — something was built mid-play instead of at load.
+    const uint32_t meshUploads =
+        static_cast<uint32_t>(rs.meshUploadsTotal - prevMeshUploads);
+    const uint32_t textureUploads =
+        static_cast<uint32_t>(rs.textureUploadsTotal - prevTextureUploads);
+    prevMeshUploads = rs.meshUploadsTotal;
+    prevTextureUploads = rs.textureUploadsTotal;
+    frameStats.endFrame(frameDelta, steps, rs.drawCalls, rs.totalInstances,
+                        rs.trianglesDrawn, rendererPtr->lastGpuFrameMs(),
+                        meshUploads, textureUploads);
+    RT_PROFILE_PLOT("draw calls", static_cast<int64_t>(rs.drawCalls));
+    RT_PROFILE_PLOT("instances", static_cast<int64_t>(rs.totalInstances));
+    RT_PROFILE_PLOT("triangles", static_cast<int64_t>(rs.trianglesDrawn));
+
+    if (passSweep.active()) {
+        FrameContext ctx = makeContext();
+        passSweep.update(ctx, *window, quit);
+    }
+
+    if (statsLogInterval > 0.0) {
+        statsLogTimer += frameDelta;
+        if (statsLogTimer >= statsLogInterval) {
+            statsLogTimer = 0.0;
+            FrameStats::Summary s = frameStats.summarize();
+            LOG_INFO("frame %.2fms avg / %.2f p95 / %.2f max (%.0f fps) | "
+                     "update %.2f fixed %.2f render %.2f wait %.2f",
+                     s.avgTotalMs, s.p95TotalMs, s.maxTotalMs, s.avgFps,
+                     s.avgUpdateMs, s.avgFixedMs, s.avgRenderMs, s.avgWaitMs);
         }
     }
     RT_PROFILE_FRAME();
@@ -308,6 +450,11 @@ void Application::end() {
     settingsStore.setDouble("fixedTimestep", clock.fixedStep());
     settingsStore.save(settingsFile);
 
+    if (frameStats.capturing()) {
+        LOG_INFO("frame stats capture closed: %ld frames -> %s",
+                 frameStats.capturedFrames(), frameStats.capturePath().c_str());
+        frameStats.stopCapture();
+    }
     audioEngine.shutdown();
     window->shutdownDebugUi();
     rendererPtr->shutdownDebugUi();

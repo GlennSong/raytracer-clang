@@ -1,6 +1,7 @@
 #include "gameplay_bindings.h"
 
 #include "lua_state.h"
+#include "lua_helpers.h"            // unpackEntity, checkVec3/pushVec3, optField
 #include "procgen_mesh.h"           // luaToMesh
 #include "../audio/audio_engine.h"  // PlaySound (the sound.play cue)
 #include "../event_bus.h"
@@ -27,40 +28,8 @@ GameplayContext* gameplayCtx(lua_State* L) {
     return g;
 }
 
-// Entities cross to Lua as a packed integer (generation<<32 | index) — opaque to
-// scripts, round-trips exactly, and lets `alive` check the generation.
-Entity toEntity(lua_Integer packed) {
-    auto bits = static_cast<uint64_t>(packed);
-    Entity e;
-    e.index = static_cast<uint32_t>(bits & 0xffffffffu);
-    e.generation = static_cast<uint32_t>(bits >> 32);
-    return e;
-}
-
-Vec3 checkVec3(lua_State* L, int idx) {
-    idx = lua_absindex(L, idx);
-    luaL_checktype(L, idx, LUA_TTABLE);
-    Vec3 v;
-    lua_geti(L, idx, 1); v.x = luaL_checknumber(L, -1); lua_pop(L, 1);
-    lua_geti(L, idx, 2); v.y = luaL_checknumber(L, -1); lua_pop(L, 1);
-    lua_geti(L, idx, 3); v.z = luaL_checknumber(L, -1); lua_pop(L, 1);
-    return v;
-}
-
-void pushVec3(lua_State* L, const Vec3& v) {
-    lua_createtable(L, 3, 0);
-    lua_pushnumber(L, v.x); lua_seti(L, -2, 1);
-    lua_pushnumber(L, v.y); lua_seti(L, -2, 2);
-    lua_pushnumber(L, v.z); lua_seti(L, -2, 3);
-}
-
-double optField(lua_State* L, int idx, const char* key, double fallback) {
-    idx = lua_absindex(L, idx);
-    lua_getfield(L, idx, key);
-    double v = luaL_optnumber(L, -1, fallback);
-    lua_pop(L, 1);
-    return v;
-}
+// packEntity/unpackEntity, checkVec3/pushVec3, and optField come from
+// lua_helpers.h — one definition shared by every binding surface.
 
 Vec3 fieldVec3(lua_State* L, int idx, const char* key) {
     idx = lua_absindex(L, idx);
@@ -88,7 +57,7 @@ World* requireWorld(lua_State* L) {
 
 Transform* checkTransform(lua_State* L, int idx) {
     World* world = requireWorld(L);
-    Entity e = toEntity(luaL_checkinteger(L, idx));
+    Entity e = unpackEntity(luaL_checkinteger(L, idx));
     Transform* t = world->get<Transform>(e);
     if (t == nullptr) luaL_error(L, "entity has no Transform (or is dead)");
     return t;
@@ -104,7 +73,7 @@ int l_log(lua_State* L) {
 int l_entity_alive(lua_State* L) {
     GameplayContext* g = gameplayCtx(L);
     bool alive = g != nullptr && g->world != nullptr &&
-                 g->world->alive(toEntity(luaL_checkinteger(L, 1)));
+                 g->world->alive(unpackEntity(luaL_checkinteger(L, 1)));
     lua_pushboolean(L, alive);
     return 1;
 }
@@ -151,7 +120,7 @@ int l_entity_look_along(lua_State* L) {
 // camera-following viewmodel) renders at its new pose without interpolation smear.
 int l_entity_snap_prev(lua_State* L) {
     World* world = requireWorld(L);
-    Entity e = toEntity(luaL_checkinteger(L, 1));
+    Entity e = unpackEntity(luaL_checkinteger(L, 1));
     Transform* t = world->get<Transform>(e);
     PrevTransform* p = world->get<PrevTransform>(e);
     if (t != nullptr && p != nullptr) p->value = *t;

@@ -1,4 +1,5 @@
 #include "path_tracer.h"
+#include "profile.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -14,6 +15,7 @@ namespace {
 // transform so offline renders match the realtime look.
 void renderRow(const Scene& scene, const Camera& camera, Image& image,
                const RenderConfig& cfg, int y) {
+    RT_PROFILE_ZONE_NAMED("renderRow");
     const int size = cfg.imageSize;
     const double ca = camera.lens.chromaticAberration;
     for (int x = 0; x < size; x++) {
