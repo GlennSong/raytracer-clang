@@ -13,20 +13,38 @@ kernel void bloomDownsample(
 ) {
     if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
 
-    // Map output texel to source center (each output pixel = 2x2 source block)
-    float2 srcCoord = float2(gid) * 2.0 + 0.5;
+    // Map the output texel to the CENTRE of the source block it averages, from
+    // the REAL size ratio rather than an assumed one.
+    //
+    // This was `gid * 2.0 + 0.5`, which silently encoded "dst is exactly half of
+    // src". That held for every pass while the chain started at half-res, and
+    // stopped holding the moment the base moved to quarter-res: mip 0 then
+    // covered only the top-left quarter of the screen, and the composite
+    // stretched that over the whole frame with normalised UVs. Symptom — a bloom
+    // visibly 2x the size of the scene, sliding against it. Derive it; never
+    // assume it.
+    const float2 srcSize = float2(params.srcWidth, params.srcHeight);
+    const float2 dstSize = float2(dst.get_width(), dst.get_height());
+    const float2 ratio = srcSize / dstSize;              // src texels per dst texel
+    const float2 srcCoord = (float2(gid) + 0.5) * ratio - 0.5;
+    // Tap spacing follows the ratio so the tent actually covers the block it is
+    // averaging: +/-1 src texel at a 2x reduction, +/-2 at 4x. Fixed spacing
+    // would sample a 3x3 hole in the middle of a 4x4 footprint and alias —
+    // which is how a downsample breeds fireflies instead of removing them.
+    const float2 o = max(ratio * 0.5, float2(1.0));
+    const float2 lo = float2(0);
+    const float2 hi = srcSize - 1.0;
 
-    // 13-tap downsample: 4 corner samples + 4 edge samples + 1 center + 4 diagonal
-    // Weights: center cross = 0.5, corners = 0.125 each (energy preserving)
-    float3 a = src.read(uint2(clamp(srcCoord + float2(-1, -1), float2(0), float2(params.srcWidth-1, params.srcHeight-1)))).rgb;
-    float3 b = src.read(uint2(clamp(srcCoord + float2( 0, -1), float2(0), float2(params.srcWidth-1, params.srcHeight-1)))).rgb;
-    float3 c = src.read(uint2(clamp(srcCoord + float2( 1, -1), float2(0), float2(params.srcWidth-1, params.srcHeight-1)))).rgb;
-    float3 d = src.read(uint2(clamp(srcCoord + float2(-1,  0), float2(0), float2(params.srcWidth-1, params.srcHeight-1)))).rgb;
-    float3 e = src.read(uint2(clamp(srcCoord,                  float2(0), float2(params.srcWidth-1, params.srcHeight-1)))).rgb;
-    float3 f = src.read(uint2(clamp(srcCoord + float2( 1,  0), float2(0), float2(params.srcWidth-1, params.srcHeight-1)))).rgb;
-    float3 g = src.read(uint2(clamp(srcCoord + float2(-1,  1), float2(0), float2(params.srcWidth-1, params.srcHeight-1)))).rgb;
-    float3 h = src.read(uint2(clamp(srcCoord + float2( 0,  1), float2(0), float2(params.srcWidth-1, params.srcHeight-1)))).rgb;
-    float3 i = src.read(uint2(clamp(srcCoord + float2( 1,  1), float2(0), float2(params.srcWidth-1, params.srcHeight-1)))).rgb;
+    // 9-tap 3x3 tent: centre 0.25, edges 0.125, corners 0.0625 (sums to 1).
+    float3 a = src.read(uint2(clamp(srcCoord + float2(-o.x, -o.y), lo, hi))).rgb;
+    float3 b = src.read(uint2(clamp(srcCoord + float2( 0.0, -o.y), lo, hi))).rgb;
+    float3 c = src.read(uint2(clamp(srcCoord + float2( o.x, -o.y), lo, hi))).rgb;
+    float3 d = src.read(uint2(clamp(srcCoord + float2(-o.x,  0.0), lo, hi))).rgb;
+    float3 e = src.read(uint2(clamp(srcCoord,                     lo, hi))).rgb;
+    float3 f = src.read(uint2(clamp(srcCoord + float2( o.x,  0.0), lo, hi))).rgb;
+    float3 g = src.read(uint2(clamp(srcCoord + float2(-o.x,  o.y), lo, hi))).rgb;
+    float3 h = src.read(uint2(clamp(srcCoord + float2( 0.0,  o.y), lo, hi))).rgb;
+    float3 i = src.read(uint2(clamp(srcCoord + float2( o.x,  o.y), lo, hi))).rgb;
 
     // Weighted average (box filter with center emphasis)
     float3 color = e * 0.25
