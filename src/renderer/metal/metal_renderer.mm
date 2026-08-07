@@ -4898,6 +4898,22 @@ void MetalRenderer::endFrame() {
         // the shader encodes; visionOS is handed a *_sRGB drawable it cannot
         // opt out of, so the hardware does and the shader must not.
         compositeParams.targetEncodesSRGB = impl->surface->targetEncodesSRGB() ? 1 : 0;
+        // Ground truth for the pass switches, printed only when one CHANGES.
+        // A toggle that appears to "turn itself back on" is either the flag
+        // being rewritten by something else (this line names the frame it
+        // happened on) or the effect simply not being visible at its current
+        // strength — and those two need opposite fixes. Costs nothing while
+        // nothing changes.
+        {
+            static int lastAo = -1, lastSsr = -1, lastBloom = -1, lastProbes = -1;
+            const int ao = ssaoEnabled ? 1 : 0, sr = ssrEnabled ? 1 : 0;
+            const int bl = bloomEnabled ? 1 : 0, pr = reflectionProbesEnabled ? 1 : 0;
+            if (ao != lastAo || sr != lastSsr || bl != lastBloom || pr != lastProbes) {
+                NSLog(@"[passes] frame %llu: ssao=%d ssr=%d bloom=%d probes=%d",
+                      (unsigned long long)impl->frameCount, ao, sr, bl, pr);
+                lastAo = ao; lastSsr = sr; lastBloom = bl; lastProbes = pr;
+            }
+        }
         compositeParams.ssaoEnabled = ssaoEnabled ? 1 : 0;
         compositeParams.ssrEnabled = ssrEnabled ? 1 : 0;
         compositeParams.debugView = debugView;
