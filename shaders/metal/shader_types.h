@@ -287,7 +287,14 @@ struct BloomUniforms {
     float   intensity;
     int32_t srcWidth;
     int32_t srcHeight;
-    float   _pad[3];
+    // Is this the FIRST downsample (scene -> mip 0)? Only that pass applies the
+    // bright-pass threshold. This used to be inferred as `srcWidth > dstWidth*3`
+    // — which is never true, because every pass halves the width, so src is
+    // always ~2x dst. The threshold therefore never ran once: bloom was the
+    // whole image blurred and added back, which is what "it blows everything
+    // out" was. Do not re-derive this from sizes.
+    int32_t firstPass;
+    float   _pad[2];
 };
 
 struct CompositeUniforms {

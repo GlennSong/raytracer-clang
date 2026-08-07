@@ -1,7 +1,10 @@
 // --- Bloom: threshold extract + progressive downsample/upsample ---
 
-// Extract bright pixels and downsample to first mip (half-res).
-// Uses a 13-tap filter (Jimenez 2014 / Call of Duty) for stable downsampling.
+// Extract bright pixels and downsample to the first mip (QUARTER-res base; the
+// chain halves from there). 9-tap 3x3 tent, energy-preserving — note this is NOT
+// the 13-tap Jimenez/CoD kernel the comment used to claim; that one takes four
+// extra half-texel-offset bilinear taps and is more stable against fireflies.
+// Worth upgrading alongside a Karis average on this first pass.
 kernel void bloomDownsample(
     texture2d<float, access::read>  src  [[texture(0)]],
     texture2d<float, access::write> dst  [[texture(1)]],
@@ -30,8 +33,10 @@ kernel void bloomDownsample(
                  + (b + d + f + h) * 0.125
                  + (a + c + g + i) * 0.0625;
 
-    // Soft threshold on first pass (srcWidth == full resolution means this is pass 0)
-    if (params.srcWidth > int(dst.get_width()) * 3) {
+    // Soft threshold, first pass only — the BRIGHT PASS. Everything below the
+    // threshold contributes nothing; the knee is the soft shoulder so a pixel
+    // crossing it fades in instead of popping.
+    if (params.firstPass != 0) {
         float brightness = max(color.r, max(color.g, color.b));
         float soft = brightness - params.threshold + params.knee;
         soft = clamp(soft, 0.0, 2.0 * params.knee);

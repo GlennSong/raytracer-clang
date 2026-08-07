@@ -235,7 +235,7 @@ struct RenderSettingsView: View {
                         .onChange(of: bloomOn) { _, v in
                             rt_vision_set_pref_bool("bloom.enabled", v ? 1 : 0)
                         }
-                    slider("Intensity", $bloomIntensity, 0...2, "bloom.intensity")
+                    slider("Intensity", $bloomIntensity, 0...0.5, "bloom.intensity")
                     slider("Threshold", $bloomThreshold, 0...3, "bloom.threshold")
                 }
                 Section("Ambient occlusion") {

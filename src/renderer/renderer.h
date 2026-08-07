@@ -688,9 +688,14 @@ public:
     // Bloom
     bool bloomEnabled = true;
     struct BloomParams {
-        float threshold = 1.0f;
-        float knee      = 0.5f;
-        float intensity = 0.3f;
+        float threshold = 1.0f;   // scene-referred radiance a pixel must exceed to bloom
+        float knee      = 0.5f;   // soft shoulder around the threshold (no popping)
+        // SCATTER FRACTION, not a gain: the composite lerps the frame toward the
+        // blurred bright pass by this much, so 0.05 = "5% of the light at this
+        // pixel arrived via the halo". Was 0.3 while the bright pass was dead
+        // and the mix was additive, which is why everything blew out. Real
+        // lenses scatter a few percent; film/game references sit at 0.02-0.10.
+        float intensity = 0.05f;
     } bloomParams;
 
     // Tone mapping + color grade (the composite "Look" + view transform). The

@@ -1867,10 +1867,14 @@ void MetalRenderer::resize(int width, int height) {
     impl->aoHistory = [impl->device newTextureWithDescriptor:aoDesc];
     impl->aoHistoryValid = false;   // contents undefined until the first resolve
 
-    // Bloom mip chain (progressive half-res)
+    // Bloom mip chain. The base is QUARTER-res, not half: bloom is a very
+    // low-frequency signal (a wide, soft halo), so the top mip carries almost no
+    // information the second one lacks — dropping it quarters the pixels every
+    // pass in the chain touches, and the visible difference is a slightly softer
+    // halo, which is the direction a lens PSF goes anyway.
     {
-        int mipW = halfW;
-        int mipH = halfH;
+        int mipW = std::max(halfW / 2, 1);
+        int mipH = std::max(halfH / 2, 1);
         for (int m = 0; m < MetalRenderer::Impl::BLOOM_MIP_COUNT; m++) {
             MTLTextureDescriptor* bloomDesc = [MTLTextureDescriptor
                 texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
@@ -4708,7 +4712,9 @@ void MetalRenderer::endFrame() {
 
                 BloomUniforms bp = {
                     bloomParams.threshold, bloomParams.knee, bloomParams.intensity,
-                    static_cast<int32_t>(src.width), static_cast<int32_t>(src.height), {}
+                    static_cast<int32_t>(src.width), static_cast<int32_t>(src.height),
+                    m == 0 ? 1 : 0,   // the bright pass runs ONCE, on the scene
+                    {}
                 };
 
                 [enc setComputePipelineState:impl->bloomDownsamplePipeline];
@@ -4732,7 +4738,9 @@ void MetalRenderer::endFrame() {
 
                 BloomUniforms bp = {
                     bloomParams.threshold, bloomParams.knee, bloomParams.intensity,
-                    static_cast<int32_t>(src.width), static_cast<int32_t>(src.height), {}
+                    static_cast<int32_t>(src.width), static_cast<int32_t>(src.height),
+                    0,   // upsample never thresholds
+                    {}
                 };
 
                 [enc setComputePipelineState:impl->bloomUpsamplePipeline];

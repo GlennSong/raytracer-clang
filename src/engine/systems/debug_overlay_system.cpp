@@ -276,7 +276,7 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
         auto& bloom = ctx.renderer.bloomParams;
         ImGui::SliderFloat("Threshold", &bloom.threshold, 0.0f, 3.0f);
         ImGui::SliderFloat("Knee", &bloom.knee, 0.0f, 1.0f);
-        ImGui::SliderFloat("Intensity##bloom", &bloom.intensity, 0.0f, 2.0f);
+        ImGui::SliderFloat("Intensity##bloom", &bloom.intensity, 0.0f, 0.5f);
     }
 
     if (ImGui::CollapsingHeader("Tonemap / Grade")) {

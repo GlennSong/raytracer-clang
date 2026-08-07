@@ -237,15 +237,27 @@ fragment float4 fragmentComposite(
         hdrColor = hdr.rgb;
     }
 
-    // Camera exposure — the single scene-referred multiplier, applied uniformly
-    // to sky and objects before tone mapping (nothing upstream pre-exposes).
-    hdrColor *= lightData.exposure;
-
-    // Add bloom
+    // BLOOM, mixed BEFORE exposure and as a LERP, not an add.
+    //
+    // Both of those are corrections. The bloom pyramid is built from the
+    // scene-referred colour target, so mixing it after `*= exposure` made bloom
+    // the one term in the frame that ignored the camera — at the exposure 0.5
+    // the city levels author, its relative weight was doubled. And an ADD can
+    // only ever put more light in the frame: with the bright pass dead (see
+    // post_bloom.metal) that was the whole image added on top of itself.
+    //
+    // A lerp is what a lens actually does: some fraction of the light arriving
+    // at each pixel is scattered off it into a halo, and that light LEAVES the
+    // pixel it came from. `intensity` is therefore a scatter fraction — a few
+    // percent — not a gain.
     if (params.bloomEnabled != 0) {
         float3 bloom = bloomTexture.sample(smp, in.uv).rgb;
-        hdrColor += bloom * params.bloomIntensity;
+        hdrColor = mix(hdrColor, bloom, saturate(params.bloomIntensity));
     }
+
+    // Camera exposure — the single scene-referred multiplier, applied uniformly
+    // to sky, objects and now bloom, before tone mapping.
+    hdrColor *= lightData.exposure;
 
     // Color grade (the "Look": contrast + saturation) in scene-linear, then the
     // tone map / view transform. Both stages run before the display encode, which
