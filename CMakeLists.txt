@@ -536,6 +536,7 @@ add_executable(run_tests
     tests/test_agent_memory.cpp
     tests/test_state_machine.cpp
     tests/test_cascade_fit.cpp
+    tests/test_xr_stereo.cpp
     tests/test_fall_respawn.cpp
     tests/test_traffic_signal.cpp
     tests/test_traffic_rules.cpp

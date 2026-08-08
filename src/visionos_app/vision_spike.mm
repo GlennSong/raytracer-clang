@@ -23,10 +23,13 @@
 // drawable carries a pose queried for its PRESENTATION time.
 //
 // Current limitations, deliberate and tracked:
-//  - MONOSCOPIC. The pass graph runs once and composites into view 0. It is
-//    head-tracked and correctly projected, but the eyes do not disagree, so
-//    there is no parallax. Per-eye rendering restructures endFrame and is its
-//    own change; until then this must not be described as stereo.
+//  - Stereo is rendered but NOT VERIFIED BY EYE, and cannot be: the simulator
+//    reports one view, so the two-view path runs only on device. The eye math
+//    is therefore kept in engine/xr/xr_view_math.h and pinned numerically by
+//    tests/test_xr_stereo.cpp, and each run prints an `[xr] stereo:` line with
+//    the measured separation and IPD. Trust those, not the sensation.
+//  - Foveation stays OFF until every pass targeting drawable textures attaches
+//    the drawable's rasterization rate map.
 //  - The scene sits at the tracking origin established at launch, not on a
 //    detected floor plane. Floor anchoring needs PlaneDetectionProvider.
 

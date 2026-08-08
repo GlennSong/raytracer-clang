@@ -54,21 +54,35 @@ but the logs are healthy, start here.
    vertex amplification. Configure only what the render path actually
    implements. Both are currently OFF pending per-eye rendering.
 
-## Current state: the monoscopic bridge (and its known artifacts)
+## Current state: stereo, head-tracked, unverified by eye
 
-The pass graph runs once from the engine camera and composites into eye 0 of
-the `built_in` drawable; `present()` mirrors that image into the other eye
-slice/texture and any extra targets, and clears depth to the 2 m plane. The
-consequences are known and expected until Task 3 (per-eye rendering):
+The monoscopic bridge is GONE. `endFrame` runs the view-dependent pass graph
+once per view, each pass reading camera uniforms pointed at that eye; each
+view's colour and depth land where that view's texture map says (texture index
++ array slice + viewport — never "view v = slice v"); the engine camera follows
+the device-anchor pose; and `present()` only presents. If you are reading a
+comment or a doc that says otherwise, it predates
+`57a4366 xr: per-eye rendering through the drawable's texture maps`.
 
-- **Head-locked view.** The engine ignores the head pose, and each frame is
-  re-anchored at the current pose, so the image sits dead ahead no matter where
-  you look. Fix = feed the device-anchor pose into the engine camera.
-- **Per-eye misalignment.** Both eyes get the IDENTICAL image but the
-  compositor reprojects each eye separately against the 2 m plane; close one
-  eye and the other's view is visibly shifted. Fix = render each eye with its
-  own `cp_view` transform + `cp_drawable_compute_projection`.
-- **No parallax, billboard feel.** All content depth-flattens to 2 m.
+What is genuinely unresolved is **verification**, and it is worth being blunt
+about why. `cp_drawable_get_view_count` returns 1 in the simulator, so the
+two-view path only ever executes on a device. Its characteristic failures —
+eyes swapped, an offset dropped, separation not tracking world scale — do not
+announce themselves: they read as vague discomfort, or as nothing at all to
+anyone who does not fuse stereo. "Put it on and look" is not a test.
+
+So the eye math does not live in this backend. It lives in
+`engine/xr/xr_view_math.h`, in pure engine types, and `tests/test_xr_stereo.cpp`
+pins it numerically on any host — separation equals IPD x world scale, the
+separation axis follows head yaw, a point ahead projects right-of-centre in the
+left eye (the swapped-eye check), disparity falls off inversely with distance.
+Those tests are mutation-checked: breaking the scale, the composition order, or
+the eye offset each makes them fail.
+
+On device, `[xr] stereo:` reports the same quantities per run — view count,
+both eye positions, separation, and the implied IPD. A healthy headset line
+reads `views=2` with an ipd near 0.06 m. `views=1 MONO` means the simulator.
+Read the numbers; do not trust the sensation.
 
 ## Building
 

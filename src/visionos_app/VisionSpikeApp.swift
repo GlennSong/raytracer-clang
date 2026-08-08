@@ -45,8 +45,8 @@ struct SpikeLayerConfiguration: CompositorLayerConfiguration {
         // Foveation OFF while the renderer does not attach the drawable's
         // rasterization rate map to its passes: writing a foveated (warped)
         // texture without the map is the last untested difference from the
-        // template's working path. Foveation returns with Task 3, attached
-        // properly.
+        // template's working path. Foveation returns once every pass that
+        // targets a drawable texture attaches that rate map.
         configuration.isFoveationEnabled = false
         let supportedLayouts = capabilities.supportedLayouts(options: [])
         configuration.layout = supportedLayouts.contains(.layered) ? .layered : .dedicated

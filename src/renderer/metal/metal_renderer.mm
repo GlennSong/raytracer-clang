@@ -24,6 +24,7 @@
 #include "../../slot_map.h"
 #include "../../engine/asset_root.h"
 #include "../../engine/xr/xr_backend.h"
+#include "../../engine/xr/xr_view_math.h"
 #include "../cube_faces.h"
 #include "cloud_noise.h"   // Perlin-Worley 3D noise bake (volumetric clouds)
 
@@ -177,6 +178,10 @@ struct PresentationSurface {
     // Renderer::xrWorldScale). No-op for non-tracking surfaces.
     virtual void setXrWorldScale(float /*scale*/) {}
 
+    // Report stereo health as NUMBERS (see CompositorSurface's override).
+    // No-op for non-tracking surfaces.
+    virtual void logStereoHealth() {}
+
     // Present without waiting for the display refresh (Renderer::
     // setPresentSync). Only a surface that owns its pacing can honour this;
     // returning false says "pacing isn't mine", which is the truth for a
@@ -246,16 +251,21 @@ struct LayerSurface final : PresentationSurface {
 #endif  // TARGET_OS_OSX
 
 #if TARGET_OS_VISION
+// simd <-> engine Mat4, defined further down; declared here so the eye math
+// below can hand its matrices to engine/xr/xr_view_math.h.
+static Mat4 fromSimd(simd_float4x4 m);
+static simd_float4x4 toSimd(const Mat4& m);
+
 // The immersive surface: CompositorServices vends drawables; there is no layer,
 // no window, and no swapchain we own.
 //
-// MONOSCOPIC FOR NOW. A drawable exposes one view per eye, but this composites
-// the single rendered image into view 0 only. It is head-tracked and correctly
-// projected, but the eyes do not disagree, so there is no parallax — it reads as
-// a flat image floating in space. Real per-eye rendering means running the pass
-// graph per view, which restructures endFrame, and that is its own change.
-// Calling this "stereo" before then would be exactly the smoke and mirrors the
-// Engineering Ethos rules out.
+// STEREO. endFrame runs the view-dependent pass graph once per view, and each
+// view's content lands where that view's texture map says (texture index +
+// array slice + viewport) — never "view v = slice v". The eye poses come from
+// engine::xrWorldFromEye rather than being composed here, because the two-view
+// path executes ONLY on device (the simulator reports one view), so this math
+// would otherwise be unverifiable anywhere; tests/test_xr_stereo.cpp pins it
+// numerically instead.
 struct CompositorSurface final : PresentationSurface {
     cp_layer_renderer_t layerRenderer = nullptr;
     ar_session_t arSession = nullptr;   // owns the session: under ARC a local
@@ -464,22 +474,64 @@ struct CompositorSurface final : PresentationSurface {
     int trackedViewWidth = 0, trackedViewHeight = 0;
     bool xrBaseValid = false;
     simd_float3 xrBase = {0, 0, 0};   // locomotion base: tracking origin in world
-    simd_float3 baseHintPrev = {0, 0, 0};  // last game-camera position seen
+    engine::XrLocomotionBase locomotion;   // seeds it, then follows gameplay
     float worldScale = 1.0f;   // world units per real meter (Renderer::xrWorldScale)
 
     // Scale a rigid ORIGIN-space transform's translation by worldScale —
     // rotation (and therefore IPD *direction*) is untouched; the distances
     // the head and eyes travel are what make the user feel larger.
     simd_float4x4 scaledOriginTransform(simd_float4x4 m) const {
-        m.columns[3].x *= worldScale;
-        m.columns[3].y *= worldScale;
-        m.columns[3].z *= worldScale;
-        return m;
+        return toSimd(engine::xrScaleOriginTransform(fromSimd(m), worldScale));
     }
 
     void setXrWorldScale(float scale) override {
         worldScale = (scale > 0.01f) ? scale : 1.0f;
     }
+
+    // Stereo, reported as numbers.
+    //
+    // The two-view path executes only on device, and its characteristic
+    // failures — eyes swapped, an offset dropped, separation not tracking
+    // world scale — are either invisible or read as vague discomfort rather
+    // than as a bug with a name. Nobody should have to FUSE stereo to find out
+    // whether stereo works, so the frame says so out loud. A healthy line
+    // reads views=2, an ipd near 0.06 m, and a separation of scale x ipd.
+    //
+    // Logged on change and then as a slow heartbeat: a value that only appears
+    // once scrolls away, and one that appears every frame is noise.
+    void logStereoHealth() override {
+        // Runs before this frame's per-view loop, so it reports the base that
+        // loop last set — skip until there is one rather than print zeros.
+        if (!trackedPoseValid || !xrBaseValid) return;
+        const bool changed = trackedViewCount != loggedViewCount
+                          || worldScale != loggedWorldScale;
+        if (!changed && (++stereoBeat % 900) != 0) return;
+        loggedViewCount = trackedViewCount;
+        loggedWorldScale = worldScale;
+
+        if (trackedViewCount < 2) {
+            NSLog(@"[xr] stereo: views=%d MONO - the simulator reports one "
+                  @"view; only a device runs the two-view path",
+                  trackedViewCount);
+            return;
+        }
+        const Mat4 head = fromSimd(originFromDevice);
+        const Vec3 base(xrBase.x, xrBase.y, xrBase.z);
+        const Mat4 left = engine::xrWorldFromEye(
+            base, head, fromSimd(deviceFromEye[0]), worldScale);
+        const Mat4 right = engine::xrWorldFromEye(
+            base, head, fromSimd(deviceFromEye[1]), worldScale);
+        const Vec3 l = engine::xrTranslationOf(left);
+        const Vec3 r = engine::xrTranslationOf(right);
+        const Real separation = engine::xrEyeSeparation(left, right);
+        NSLog(@"[xr] stereo: views=2 scale=%.2f ipd=%.4fm separation=%.4f "
+              @"L(%.3f %.3f %.3f) R(%.3f %.3f %.3f)",
+              worldScale, separation / worldScale, separation,
+              l.x, l.y, l.z, r.x, r.y, r.z);
+    }
+    int loggedViewCount = -1;
+    float loggedWorldScale = -1.0f;
+    int stereoBeat = 0;
 
     bool xrTracking() const override { return trackedPoseValid; }
 
@@ -490,33 +542,22 @@ struct CompositorSurface final : PresentationSurface {
     bool xrViewCamera(int v, simd_float3 baseHint, simd_float4x4& worldFromEye,
                       simd_float4x4& projection) override {
         if (!trackedPoseValid || v < 0 || v >= trackedViewCount) return false;
-        if (!xrBaseValid) {
-            // Stand where the level's player stood, feet on the ground. In
-            // play mode the game camera IS the player's eye, ~1.6m above
-            // whatever it stands on — so ground ≈ hint.y - 1.6, which also
-            // works on terrain and elevated city decks where the old
-            // "Y = 0" seed buried the user under the world. (Arena floor is
-            // at 0 with an eye ~1.6, so this changes nothing there.)
-            xrBase = simd_make_float3(baseHint.x, baseHint.y - 1.6f, baseHint.z);
-            baseHintPrev = baseHint;
-            xrBaseValid = true;
-        } else {
-            // FOLLOW the game camera by deltas: when gameplay moves the
-            // camera (teleport, vehicles, elevators), the tracking origin
-            // moves with it — otherwise a teleport moves the character but
-            // the user stays put, which reads as "I pinched and the world
-            // glitched but I didn't go anywhere". Deltas (not absolutes)
-            // keep the user's real head motion free, and re-applying a zero
-            // delta is harmless, so no per-frame gating is needed.
-            xrBase.x += baseHint.x - baseHintPrev.x;
-            xrBase.y += baseHint.y - baseHintPrev.y;
-            xrBase.z += baseHint.z - baseHintPrev.z;
-            baseHintPrev = baseHint;
-        }
-        simd_float4x4 base = matrix_identity_float4x4;
-        base.columns[3] = simd_make_float4(xrBase.x, xrBase.y, xrBase.z, 1.0f);
-        worldFromEye = simd_mul(base, scaledOriginTransform(
-            simd_mul(originFromDevice, deviceFromEye[v])));
+        // Seed the locomotion base at the level's player, feet on the ground,
+        // then follow the gameplay camera (teleport, vehicles, elevators) —
+        // otherwise a teleport moves the character but the user stays put,
+        // which reads as "I pinched and the world glitched but I didn't go
+        // anywhere". Both halves live in engine::XrLocomotionBase, where they
+        // are tested; here we only carry the result back into simd.
+        const Vec3 base = locomotion.update(
+            Vec3(baseHint.x, baseHint.y, baseHint.z));
+        xrBase = simd_make_float3(static_cast<float>(base.x),
+                                  static_cast<float>(base.y),
+                                  static_cast<float>(base.z));
+        xrBaseValid = true;
+
+        worldFromEye = toSimd(engine::xrWorldFromEye(
+            base, fromSimd(originFromDevice), fromSimd(deviceFromEye[v]),
+            worldScale));
         projection = eyeProjection[v];
         return true;
     }
@@ -3900,6 +3941,7 @@ void MetalRenderer::endFrame() {
     // keeps its original indentation — it predates the loop.
     const int xrViewsToRender = impl->surface->xrViewCount();
     const int renderPassCount = xrViewsToRender > 0 ? xrViewsToRender : 1;
+    if (xrViewsToRender > 0) impl->surface->logStereoHealth();
     for (int viewPass = 0; viewPass < renderPassCount; viewPass++) {
     if (xrViewsToRender > 0) {
         simd_float4x4 worldFromEye, xrProj;
