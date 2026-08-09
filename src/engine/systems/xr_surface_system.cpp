@@ -206,18 +206,43 @@ void XrSurfaceSystem::placeOnPinch(FrameContext& ctx) {
     }
     if (!found) return;   // pinch stays; PlayerSystem may teleport with it
 
-    Marker marker;
-    marker.anchorId = bestAnchor;
-    marker.anchorPoint = bestPoint;
-    if (markers_.size() >= kMaxMarkers) markers_.erase(markers_.begin());
-    markers_.push_back(marker);
-
     // CONSUME the pinch so this gesture is a placement, not also a teleport.
     // ctx.xr is the frame's shared state and this system runs before
     // PlayerSystem precisely so this write is seen there.
     ctx.xr.pinchEnded = false;
 
     const auto& cls = ledger_.surfaces().at(bestAnchor).cls;
+
+    if (physics_) {
+        // Physics mode (the sandbox): drop a dynamic 10cm cube from 25 real
+        // cm above the hit — the visible, audible proof that the pinched
+        // surface's collider is really there to catch it.
+        const Mat4 world = xrSurfaceWorldTransform(
+            ctx.xr.originBase, scale,
+            ledger_.surfaces().at(bestAnchor).originFromAnchor);
+        const Vec3 spawn = world.transformPoint(bestPoint + Vec3(0, 0.25, 0));
+        const PhysicsBodyId id = physics_->physicsWorld().addBox(
+            Vec3(0.05, 0.05, 0.05), spawn, Quat::identity(),
+            BodyMotion::Dynamic, /*restitution=*/0.25, /*friction=*/0.5);
+        if (id != INVALID_PHYSICS_BODY) {
+            if (dropCubes_.size() >= kMaxMarkers) {
+                physics_->physicsWorld().removeBody(dropCubes_.front());
+                dropCubes_.erase(dropCubes_.begin());
+            }
+            dropCubes_.push_back(id);
+            LOG_INFO("[xr] dropped cube %zu onto %s at %.2fm (anchor %llx)",
+                     dropCubes_.size(), xrSurfaceClassName(cls), bestT,
+                     static_cast<unsigned long long>(bestAnchor));
+        }
+        return;
+    }
+
+    Marker marker;
+    marker.anchorId = bestAnchor;
+    marker.anchorPoint = bestPoint;
+    if (markers_.size() >= kMaxMarkers) markers_.erase(markers_.begin());
+    markers_.push_back(marker);
+
     LOG_INFO("[xr] placed marker %zu on %s at %.2fm (anchor %llx)",
              markers_.size(), xrSurfaceClassName(cls), bestT,
              static_cast<unsigned long long>(bestAnchor));
@@ -296,7 +321,8 @@ void XrSurfaceSystem::update(FrameContext& ctx) {
 void XrSurfaceSystem::render(FrameContext& ctx) {
     if (!visible_) return;
     if (!ctx.xr.active || !ctx.xr.originBaseValid) return;
-    if (ledger_.surfaces().empty() && markers_.empty()) return;
+    if (ledger_.surfaces().empty() && markers_.empty() && dropCubes_.empty())
+        return;
 
     const Real scale = worldScaleOf(ctx);
 
@@ -344,6 +370,25 @@ void XrSurfaceSystem::render(FrameContext& ctx) {
         }
     }
 
+    // Drop cubes (physics mode): drawn at the pose Jolt says, which IS the
+    // verification — a cube resting flush on the real table means the
+    // collider matches the surface.
+    if (!dropCubes_.empty() && physics_) {
+        if (!markerMesh_.valid())
+            markerMesh_ = ctx.renderer.uploadMesh(
+                MeshBuilder::box(Vec3(0.1, 0.1, 0.1)));
+        RenderMaterial cubeMaterial;
+        cubeMaterial.albedo = Vec3(0.95, 0.55, 0.15);   // orange: dynamic
+        cubeMaterial.metallic = 0.0f;
+        cubeMaterial.roughness = 0.5f;
+        for (PhysicsBodyId id : dropCubes_) {
+            const Vec3 p = physics_->physicsWorld().bodyPosition(id);
+            const Mat4 world = Mat4::translate(p.x, p.y, p.z) *
+                               physics_->physicsWorld().bodyOrientation(id).toMat4();
+            ctx.renderer.drawMesh(markerMesh_, world, cubeMaterial);
+        }
+    }
+
     // Markers: 10 real cm cubes, magenta, riding their plane's anchor — the
     // live probe of anchoring quality. Orphans draw at their frozen pose.
     if (!markers_.empty()) {
@@ -377,7 +422,10 @@ void XrSurfaceSystem::onStop(FrameContext& ctx) {
     if (physics_) {
         for (const auto& [anchorId, body] : colliderBodies_)
             physics_->physicsWorld().removeBody(body);
+        for (PhysicsBodyId id : dropCubes_)
+            physics_->physicsWorld().removeBody(id);
     }
+    dropCubes_.clear();
     colliderBodies_.clear();
     colliderGeom_.clear();
     colliderPolicy_ = XrColliderPolicy{};

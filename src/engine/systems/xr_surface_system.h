@@ -82,6 +82,11 @@ private:
         Mat4 frozenWorld;         // orphans only: last composed world pose
     };
     std::vector<Marker> markers_;
+    // Physics mode only: quick-pinch drops a DYNAMIC cube instead of a static
+    // marker — the on-device proof that room colliders work (it should thud
+    // onto the real table and can be knocked to the real floor). Poses are
+    // read back from Jolt each frame.
+    std::vector<PhysicsBodyId> dropCubes_;
     MeshHandle markerMesh_;
     uint64_t frame_ = 0;
     bool visible_ = true;
