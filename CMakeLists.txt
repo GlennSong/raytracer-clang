@@ -122,6 +122,7 @@ add_library(engine_core STATIC
     src/engine/ai/pathfind.cpp
     src/engine/asset_root.cpp
     src/engine/xr/xr_surfaces.cpp
+    src/engine/xr/xr_gestures.cpp
     src/engine/script_assets.cpp
     src/engine/script_watch.cpp
     src/engine/level_loader.cpp
@@ -815,6 +816,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
         # forked. This is what replaced NullRenderer.
         src/renderer/metal/metal_renderer.mm
         src/game/arena_state.cpp
+        src/game/sandbox_state.cpp
     )
     if(RT_ENABLE_PHYSICS)
         list(APPEND VISION_SOURCES ${RT_PHYSICS_HOST_SOURCES})
@@ -955,6 +957,7 @@ set(VIEWER_SOURCES
     src/viewer_main.cpp
     src/renderer/window.cpp
     src/game/arena_state.cpp
+    src/game/sandbox_state.cpp
 )
 
 if(RT_ENABLE_PHYSICS)
@@ -1074,6 +1077,7 @@ if(Qt6_FOUND)
         src/editor_app/property_inspector.cpp
         src/editor_app/city_planner_panel.cpp
         src/game/arena_state.cpp
+        src/game/sandbox_state.cpp
     )
     target_compile_options(editor_app PRIVATE -Wall -Wextra -Wpedantic)
     target_link_libraries(editor_app PRIVATE citysim engine_core Qt6::Widgets Threads::Threads)
@@ -1180,6 +1184,7 @@ if(EMSCRIPTEN)
         src/renderer/window.cpp
         src/renderer/webgpu/webgpu_renderer.cpp
         src/game/arena_state.cpp
+        src/game/sandbox_state.cpp
     )
     # engine_core's terrain_lod_system references PhysicsWorld, so the host must
     # bring the physics sources + Jolt (same as the desktop viewer). Jolt is

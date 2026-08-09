@@ -1,0 +1,64 @@
+#include "sandbox_state.h"
+
+#include "../engine/systems/camera_system.h"
+#include "../engine/systems/xr_camera_system.h"
+#include "../engine/systems/xr_surface_system.h"
+#include "../engine/systems/render_system.h"
+#include "../engine/systems/debug_draw_system.h"
+#include "../engine/systems/audio_system.h"
+#ifdef RT_ENABLE_PHYSICS
+#include "../engine/systems/physics_system.h"
+#endif
+#include "../log.h"
+
+using namespace engine;
+
+SandboxState::SandboxState(Window& window, Renderer& renderer)
+    : PlayingState(window), renderer_(renderer) {
+    addSystem<CameraSystem>();
+#ifdef RT_ENABLE_PHYSICS
+    auto& physSys = addSystem<PhysicsSystem>();
+    // Surfaces WITH colliders (the point of the sandbox: things land on the
+    // real furniture) and WITHOUT the room-mesh draw — in passthrough the
+    // couch renders itself. Planes keep their outlines and extent rectangles.
+    addSystem<XrSurfaceSystem>(&physSys, /*drawRoomMesh=*/false);
+#else
+    addSystem<XrSurfaceSystem>(nullptr, /*drawRoomMesh=*/false);
+#endif
+    // No PlayerSystem: locomotion is the user's own legs. XrCameraSystem still
+    // owns the locomotion base + head-following camera; with nothing moving
+    // the base, the world stays put and the pinch gesture is free for
+    // interaction.
+    addSystem<XrCameraSystem>();
+    addSystem<RenderSystem>();
+    addSystem<DebugDrawSystem>();
+    addSystem<AudioSystem>();
+}
+
+void SandboxState::onEnter(FrameContext& ctx) {
+    ctx.world.destroyAll();
+    ctx.assets.clear();
+
+    // Life-size, always: sandbox objects are authored in real metres and the
+    // room colliders assume it. The launcher also sets this, but the state is
+    // the authority — a stale menu scale must not make the room knee-high.
+    renderer_.xrWorldScale = 1.0f;
+
+    // Neutral indoor light until the light-estimate seam lands: soft, slightly
+    // warm, mostly ambient — believable on passthrough without claiming to
+    // know the room. Shadow maps stay on so objects shade each other; the
+    // room itself receives nothing (its mesh is hidden), grounding comes from
+    // the contact-shadow round.
+    ctx.view.lighting = SceneLighting{};
+    ctx.view.lighting.sun.direction = Vec3(0.3, 0.9, 0.2);
+    ctx.view.lighting.sun.color = Vec3(1.0, 0.97, 0.92);
+    ctx.view.lighting.sun.intensity = 1.6f;
+    ctx.view.lighting.sun.castsShadow = true;
+    ctx.view.lighting.ambientMultiplier = 0.55f;
+    ctx.view.lighting.exposure = 1.0f;
+
+    LOG_INFO("[xr] sandbox: scale=1 passthrough=%d",
+             renderer_.xrPassthrough ? 1 : 0);
+
+    PlayingState::onEnter(ctx);
+}

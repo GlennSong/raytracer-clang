@@ -145,7 +145,8 @@ struct LaunchView: View {
                 }
             }
             .pickerStyle(.menu)
-            .disabled(shell.inArena)
+            // The sandbox is always life-size (room colliders assume it).
+            .disabled(shell.inArena || selectedLevel == Self.sandboxEntry)
             Picker("Time of day", selection: $timeOfDay) {
                 ForEach(Self.times, id: \.0) { Text($0.0).tag($0.0) }
             }
@@ -196,10 +197,12 @@ struct LaunchView: View {
         let sandbox = selectedLevel == Self.sandboxEntry
         shell.immersion = sandbox ? .mixed : .full
         rt_vision_set_passthrough(sandbox ? 1 : 0)
-        // Sandbox boots the arena level for now — the dedicated SandboxState
-        // replaces this in the next round.
-        rt_vision_set_level(sandbox ? "arena" : selectedLevel)
-        rt_vision_set_world_scale(worldScale * Self.baselineScale)
+        // "sandbox" is the engine's reserved name for SandboxState (no level
+        // file). It is always life-size: sandbox content is authored in real
+        // metres and the room colliders assume scale 1 — the giant modes
+        // would put the real floor at the wrong height.
+        rt_vision_set_level(sandbox ? "sandbox" : selectedLevel)
+        rt_vision_set_world_scale(sandbox ? 1.0 : worldScale * Self.baselineScale)
         if let t = Self.times.first(where: { $0.0 == timeOfDay }) {
             rt_vision_set_pref_double("daynight.timeOfDay", t.1)
             rt_vision_set_pref_bool("daynight.paused", t.2 ? 1 : 0)

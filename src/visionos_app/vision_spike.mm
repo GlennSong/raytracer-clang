@@ -48,6 +48,7 @@
 #include "../engine/asset_root.h"
 #include "../engine/systems/debug_overlay_system.h"
 #include "../game/arena_state.h"
+#include "../game/sandbox_state.h"
 #include "../log.h"
 #include "../renderer/hosted_window.h"
 
@@ -178,17 +179,22 @@ std::unique_ptr<engine::Application> bootEngine(cp_layer_renderer_t layerRendere
         std::lock_guard<std::mutex> lock(gLevelMutex);
         levelName = gLevelName;
     }
-    std::string levelPath =
-        engine::assetPath("assets/levels/" + levelName + ".json");
-    if (!std::ifstream(levelPath).good()) {
-        NSLog(@"[vision] level '%s' not found — falling back to arena",
-              levelName.c_str());
-        levelPath = engine::assetPath("assets/levels/arena.json");
-    }
-    if (!std::ifstream(levelPath).good()) {
-        NSLog(@"[vision] FATAL: level not found at %s — is assets/ in the bundle?",
-              levelPath.c_str());
-        return nullptr;
+    // "sandbox" is a reserved name, not a level file: the AR sandbox state
+    // builds its world from the real room, so there is no JSON to resolve.
+    const bool sandbox = (levelName == "sandbox");
+    std::string levelPath;
+    if (!sandbox) {
+        levelPath = engine::assetPath("assets/levels/" + levelName + ".json");
+        if (!std::ifstream(levelPath).good()) {
+            NSLog(@"[vision] level '%s' not found — falling back to arena",
+                  levelName.c_str());
+            levelPath = engine::assetPath("assets/levels/arena.json");
+        }
+        if (!std::ifstream(levelPath).good()) {
+            NSLog(@"[vision] FATAL: level not found at %s — is assets/ in the bundle?",
+                  levelPath.c_str());
+            return nullptr;
+        }
     }
 
     auto app = std::make_unique<engine::Application>();
@@ -250,12 +256,19 @@ std::unique_ptr<engine::Application> bootEngine(cp_layer_renderer_t layerRendere
     }
     // No editor on this platform, so the usual play/edit factory pair collapses
     // to just play; ArenaState's "back to editor" factory is intentionally null.
-    app->pushState(std::make_unique<ArenaState>(app->windowRef(), app->renderer(),
-                                                levelPath, nullptr));
+    if (sandbox) {
+        app->pushState(std::make_unique<SandboxState>(app->windowRef(),
+                                                      app->renderer()));
+    } else {
+        app->pushState(std::make_unique<ArenaState>(app->windowRef(),
+                                                    app->renderer(),
+                                                    levelPath, nullptr));
+    }
     app->begin();
 
     NSLog(@"[vision] engine booted — %zu entities from %s",
-          static_cast<size_t>(app->world().entityCount()), levelPath.c_str());
+          static_cast<size_t>(app->world().entityCount()),
+          sandbox ? "AR sandbox" : levelPath.c_str());
     return app;
 }
 
