@@ -524,10 +524,22 @@ struct CompositorSurface final : PresentationSurface {
         const Vec3 l = engine::xrTranslationOf(left);
         const Vec3 r = engine::xrTranslationOf(right);
         const Real separation = engine::xrEyeSeparation(left, right);
-        NSLog(@"[xr] stereo: views=2 scale=%.2f ipd=%.4fm separation=%.4f "
-              @"L(%.3f %.3f %.3f) R(%.3f %.3f %.3f)",
-              worldScale, separation / worldScale, separation,
-              l.x, l.y, l.z, r.x, r.y, r.z);
+
+        // WHICH PHYSICAL EYE each view is — the one thing the offline tests
+        // structurally cannot answer, because they pick the assignment
+        // themselves and then verify the math preserves it. Only the runtime
+        // knows what it means by view 0. Read it from the head-space offsets
+        // (not the world positions below, which reorder as the head turns):
+        // view 0 must sit on -X to be the left eye. If this ever prints
+        // SWAPPED, depth is inside out and no amount of squinting will say so.
+        const float view0X = deviceFromEye[0].columns[3].x;
+        const float view1X = deviceFromEye[1].columns[3].x;
+        const char* order = (view0X < view1X) ? "view0=left" : "view0=RIGHT-SWAPPED";
+
+        NSLog(@"[xr] stereo: views=2 %s scale=%.2f ipd=%.4fm separation=%.4f "
+              @"eyeX(%.4f %.4f) L(%.3f %.3f %.3f) R(%.3f %.3f %.3f)",
+              order, worldScale, separation / worldScale, separation,
+              view0X, view1X, l.x, l.y, l.z, r.x, r.y, r.z);
     }
     int loggedViewCount = -1;
     float loggedWorldScale = -1.0f;
