@@ -38,6 +38,13 @@ void rt_vision_set_level(const char* name);
 // before entering a scene.
 void rt_vision_set_world_scale(double scale);
 
+// Passthrough (mixed immersion) for the NEXT rt_vision_spike_run. When on,
+// the renderer presents background pixels at alpha 0 (the real room shows
+// through) and skips the sky passes. The launcher sets it together with the
+// SwiftUI immersion style — this flag is the engine half, the style is the
+// compositor half; both must agree.
+void rt_vision_set_passthrough(int enabled);
+
 // Engine settings bridge. Values land in a mutex-guarded store; while the
 // engine is RUNNING they are drained on the engine thread at the top of the
 // next frame and applied straight through to the renderer (live sliders),

@@ -80,6 +80,9 @@ std::string gLevelName = "arena";
 // are authored larger than strict metric — see baselineScale in
 // VisionSpikeApp.swift, the single place to tune it.
 std::atomic<double> gWorldScale{2.0};
+// Passthrough (mixed immersion) for the NEXT run — set by the launcher
+// alongside the immersion style, read once at boot into Renderer::xrPassthrough.
+std::atomic<bool> gPassthrough{false};
 
 // Engine Settings overrides applied at boot. Defaults freeze the day/night
 // cycle at NOON — the cycle runs a full day in ~50s, and "everything went
@@ -228,6 +231,12 @@ std::unique_ptr<engine::Application> bootEngine(cp_layer_renderer_t layerRendere
     }
 
     app->renderer().xrWorldScale = static_cast<float>(gWorldScale.load());
+    app->renderer().xrPassthrough = gPassthrough.load();
+    if (gPassthrough.load()) {
+        // Numeric ground truth for the mixed-immersion contract: background
+        // alpha 0, geometry alpha 1 premultiplied, sky passes skipped.
+        NSLog(@"[xr] passthrough: mixed alpha=premultiplied sky=off");
+    }
     app->settings().setString("cameraMode", "fly");
 
     // Menu-set engine settings, written before systems start so everything
@@ -444,6 +453,11 @@ void rt_vision_set_world_scale(double scale) {
     if (scale < 0.05 || scale > 100.0) return;
     gWorldScale.store(scale);
     NSLog(@"[vision] world scale: %.2f", scale);
+}
+
+void rt_vision_set_passthrough(int enabled) {
+    gPassthrough.store(enabled != 0);
+    NSLog(@"[vision] passthrough: %s", enabled ? "on" : "off");
 }
 
 void rt_vision_set_pref_double(const char* key, double value) {

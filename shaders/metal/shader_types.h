@@ -315,6 +315,12 @@ struct CompositeUniforms {
     int32_t tonemapOp;      // 0=ACES, 1=AgX (the "view transform" / film curve)
     float   gradeContrast;  // log-space contrast around middle grey (1 = neutral)
     float   gradeSaturation;// saturation around luma (1 = neutral)
+    // Mixed-immersion passthrough (visionOS): background pixels (reverse-Z
+    // depth == 0) write alpha 0 so the device compositor shows the real room
+    // through them; geometry pixels write alpha 1 (premultiplied — colour is
+    // unchanged at full coverage). Off everywhere else: alpha is ignored by
+    // opaque swapchains, but writing 0 would poison any future readback.
+    int32_t passthrough;
     // (No cloudMode. The volumetric overlay is composited onto the SCENE target
     // by fragmentCloudComposite, a fullscreen pass — so sky pixels carry it too,
     // and this pass just passes them through. It only needed a flag back when

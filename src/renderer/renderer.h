@@ -655,6 +655,12 @@ public:
     // backends apply it to head/eye translations; ignored elsewhere.
     float xrWorldScale = 1.0f;
 
+    // XR passthrough (mixed immersion): background pixels present alpha 0 so
+    // the device compositor shows the real room, and the sky passes (skybox,
+    // volumetric clouds) are skipped — the room IS the sky. Set at boot by the
+    // visionOS host when the user enters an AR scene; ignored elsewhere.
+    bool xrPassthrough = false;
+
     bool ssaoEnabled = true;
     bool ssrEnabled = true;
     bool reflectionProbesEnabled = true;

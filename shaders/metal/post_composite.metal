@@ -206,6 +206,13 @@ fragment float4 fragmentComposite(
     }
 
     // --- Normal rendering ---
+    // Passthrough (mixed immersion): the background is the user's real room.
+    // Alpha 0 tells the device compositor to show passthrough video here; the
+    // skybox pass is skipped renderer-side so no sky was drawn to leak through
+    // bloom. Geometry keeps the normal path below and lands at alpha 1.
+    if (params.passthrough != 0 && depth <= 0.0) {
+        return float4(0.0, 0.0, 0.0, 0.0);
+    }
     float3 hdrColor;
     if (depth <= 0.0) {   // reverse-Z background (cleared far value)
         // Sky pixel — pass the scene image through. The skybox pass already

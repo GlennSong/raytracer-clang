@@ -4239,8 +4239,11 @@ void MetalRenderer::endFrame() {
         [impl->currentEncoder setFragmentTexture:irr atIndex:9];
     }
 
-    // Draw skybox first (behind everything, no depth write)
-    if (impl->skyboxPipeline) {
+    // Draw skybox first (behind everything, no depth write). Under XR
+    // passthrough there is no sky — the real room shows through alpha-0
+    // background pixels — and skipping the draw keeps sky colour out of the
+    // bloom pyramid (which samples the scene target, not the composite).
+    if (impl->skyboxPipeline && !xrPassthrough) {
         // The fullscreen triangle winds counter-clockwise, and this encoder
         // fronts clockwise + culls back faces — which silently culled the
         // whole skybox for months (the probe-bake encoder fronts CCW, so
@@ -4743,7 +4746,8 @@ void MetalRenderer::endFrame() {
     // post computes, so SSR/bloom/DOF all see the clouded scene. Sky pixels get
     // the same overlay again inside fragmentComposite (which re-derives them).
     // Both passes vanish entirely when a level doesn't opt in.
-    bool cloudsOn = impl->cloudsActive && impl->cloudPipeline &&
+    bool cloudsOn = !xrPassthrough &&
+                    impl->cloudsActive && impl->cloudPipeline &&
                     impl->cloudCompositePipeline && impl->sceneColorTexture &&
                     impl->cloudBaseNoise && impl->cloudDetailNoise;
     // Say it ONCE, with the reason. The volumetric slab has five independent
@@ -5186,6 +5190,7 @@ void MetalRenderer::endFrame() {
         compositeParams.tonemapOp = tonemapOperator;
         compositeParams.gradeContrast = gradeParams.contrast;
         compositeParams.gradeSaturation = gradeParams.saturation;
+        compositeParams.passthrough = xrPassthrough ? 1 : 0;
         [compEncoder setFragmentBytes:&compositeParams
                                length:sizeof(compositeParams) atIndex:1];
         // Sky pixels pass the scene image through (the skybox pass drew the

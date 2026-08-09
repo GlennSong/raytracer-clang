@@ -62,6 +62,13 @@ struct SpikeLayerConfiguration: CompositorLayerConfiguration {
 final class XrShellModel: ObservableObject {
     static let shared = XrShellModel()
     @Published var inArena = false
+    /// Immersion style for the NEXT space open: .full for VR scenes, .mixed
+    /// for the AR sandbox (passthrough). Must agree with the engine's
+    /// rt_vision_set_passthrough flag — the style controls the compositor's
+    /// blending, the flag controls the alpha the renderer presents.
+    /// VERIFY: ImmersionStyle stored-property + $binding pattern is from
+    /// Apple's immersive Metal template (AppModel.immersionStyle).
+    @Published var immersion: ImmersionStyle = .full
     var dismissSpace: (() async -> Void)?
 }
 
@@ -89,18 +96,23 @@ struct LaunchView: View {
     /// stand next to the arena car — it should read as a real car.
     private static let baselineScale = 2.0
 
+    /// The scene-picker entry that is not a level: mixed-immersion
+    /// passthrough of the user's real room. Phase A shows the selected VR
+    /// content over passthrough; the dedicated sandbox state lands next.
+    static let sandboxEntry = "AR sandbox"
+
     /// Level shortnames from the bundled assets/levels/*.json (the sidecar
-    /// .cameras.json files are not levels).
+    /// .cameras.json files are not levels), plus the AR sandbox entry.
     static let levels: [String] = {
         guard let root = Bundle.main.resourceURL?
-            .appendingPathComponent("assets/levels") else { return ["arena"] }
+            .appendingPathComponent("assets/levels") else { return [sandboxEntry, "arena"] }
         let files = (try? FileManager.default
             .contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
         let names = files
             .filter { $0.pathExtension == "json" }
             .map { $0.deletingPathExtension().lastPathComponent }
             .filter { !$0.hasSuffix(".cameras") && !$0.hasSuffix(".json") }
-        return names.isEmpty ? ["arena"] : names.sorted()
+        return [sandboxEntry] + (names.isEmpty ? ["arena"] : names.sorted())
     }()
 
     @State private var showSettings = false
@@ -181,7 +193,12 @@ struct LaunchView: View {
 
     /// The button's "enter" half, shared with the --auto-enter launch argument.
     private func enterScene() async {
-        rt_vision_set_level(selectedLevel)
+        let sandbox = selectedLevel == Self.sandboxEntry
+        shell.immersion = sandbox ? .mixed : .full
+        rt_vision_set_passthrough(sandbox ? 1 : 0)
+        // Sandbox boots the arena level for now — the dedicated SandboxState
+        // replaces this in the next round.
+        rt_vision_set_level(sandbox ? "arena" : selectedLevel)
         rt_vision_set_world_scale(worldScale * Self.baselineScale)
         if let t = Self.times.first(where: { $0.0 == timeOfDay }) {
             rt_vision_set_pref_double("daynight.timeOfDay", t.1)
@@ -377,6 +394,7 @@ final class SpatialEventRelay {
 
 @main
 struct VisionSpikeApp: App {
+    @ObservedObject private var shell = XrShellModel.shared
     var body: some Scene {
         WindowGroup {
             LaunchView()
@@ -399,6 +417,10 @@ struct VisionSpikeApp: App {
                 }
             }
         }
-        .immersionStyle(selection: .constant(.full), in: .full)
+        // Mixed = passthrough (AR sandbox), full = VR scenes. The selection is
+        // set by the launcher BEFORE the space opens; changing it mid-session
+        // is not supported. VERIFY: selection-binding form of immersionStyle
+        // with both styles offered, per Apple's immersive Metal template.
+        .immersionStyle(selection: $shell.immersion, in: .mixed, .full)
     }
 }
