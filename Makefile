@@ -146,6 +146,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_cascade_fit.cpp \
 	$(TEST_DIR)/test_xr_stereo.cpp \
 	$(TEST_DIR)/test_xr_surfaces.cpp \
+	$(TEST_DIR)/test_xr_gestures.cpp \
 	$(TEST_DIR)/test_fall_respawn.cpp \
 	$(TEST_DIR)/test_day_night.cpp \
 	$(TEST_DIR)/test_cube_faces.cpp \
@@ -331,6 +332,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/script_assets.cpp \
 	$(SRC_DIR)/engine/asset_root.cpp \
 	$(SRC_DIR)/engine/xr/xr_surfaces.cpp \
+	$(SRC_DIR)/engine/xr/xr_gestures.cpp \
 	$(SRC_DIR)/engine/scripting/script_vm.cpp \
 	$(SRC_DIR)/engine/scripting/script_modules.cpp \
 	$(SRC_DIR)/engine/scripting/procgen_bindings.cpp \
