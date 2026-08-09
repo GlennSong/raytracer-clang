@@ -5733,6 +5733,52 @@ backend and mark it UNVERIFIED so a device pass closes it.
 | Water STATIC ripples added (Metal); reflection/animation device-UNVERIFIED | `shaders/metal/surface_water.metal` (`surfWater` + `surfaceReliefWater` — both halves now live together), `engine/level_loader.cpp`, level `water` blocks | After device feedback ("no ripples, no reflection, too light"): `surfWater` now derives its depth gradient from the material's `water.color` (so the deep ocean tone is ADJUSTABLE per level — darken the JSON to darken the sea) and lighting.metal (surfId 12) adds a STATIC (wind-less) multi-octave normal perturbation so the sky/sun reflection shimmers instead of reading as a dead mirror. color/roughness/opacity are level-authored. Still NO wave ANIMATION (no wind/Gerstner/FFT), and the "no reflection" report is SSR/fresnel on device that can't be debugged here — the ripples + low roughness should help but are UNVERIFIED (no Metal build). Metal-ONLY; Vulkan/WGSL have no water surface (flat translucent colour there). | Device pass: confirm the ripples read + tune amp/freq; diagnose why SSR/fresnel gives no reflection (opacity? SSR pass? reflection probe?); then wind-animated waves + Vulkan/WGSL parity |
 | Sea level is now ONE number: water = city land-gate | `engine/level_loader.cpp` (`propagateWaterSeaLevel`), `src/level_scene.cpp`, `engine/procgen/city/{metro,buildability}.*`, `assets/levels/coast_city.json` | The metro generator already gated buildability on `sea_level` (roads/blocks stay on land above sea, off steep mountain — `isBuildable`/`classifyLand`), but it read a SEPARATE `generate.sea_level` (default off), so the cosmetic water plane and the city's land-gate were two unlinked numbers — a coast city would happily build into the water. Both loaders now default every road recipe's `sea_level` + beach reserve from the level's top-level `water.seaLevel` (author can still override per recipe), so the waterline that draws IS the waterline the city respects. Verified OFFLINE: `coast_city.json` renders a metro seated on the land between the range and the sea, roads/buildings stopping at the coast (top-down + oblique). | Reserve/decorate the beach fringe (`LandClass::Beach`); bridges where an arterial must cross a channel; a viewer land-class debug overlay |
 
+## ADR-0078 — Room surfaces: ARKit planes + scene reconstruction sealed behind XrSurfaceStore/Ledger
+**Status:** Accepted · **Date:** 2026-08-09
+
+**Context.** The AR roadmap (place the arena on a real table, later passthrough
+and physics against real furniture) starts with knowing where the room's
+surfaces are. On visionOS that data comes from two ARKit data providers —
+plane detection (semantic flat surfaces: floor/wall/table/…, with extents) and
+scene reconstruction (a triangle mesh of everything else, delivered as chunk
+anchors that appear, change, and vanish). Neither runs in the simulator, both
+need user-granted world sensing, and their callbacks arrive on an ARKit
+dispatch queue with geometry that does not outlive the callback.
+
+**Decision.** Seal the runtime behind engine types, the way PhysicsWorld seals
+Jolt (ADR-0012) and AudioEngine seals miniaudio (ADR-0069) — and for the same
+reason the stereo eye math moved into `xr_view_math.h`: the only place this
+code can RUN is a physical headset, so everything that can go wrong logically
+must be testable on hosts that will never see one.
+
+- `engine/xr/xr_surfaces.h`: `XrSurfaceUpdate` (engine math + plain buffers,
+  ORIGIN space, real metres), `XrSurfaceStore` (the mutex'd thread crossing,
+  same shape as the XR input queue), and `XrSurfaceLedger` — anchor→mesh
+  bookkeeping through opaque uint64 mesh tokens, so the module never sees a
+  renderer type. Tolerates the runtime's real orderings: Updated-before-Added,
+  unknown/duplicate Removed, session-restart clear().
+- `XrSurfaceSystem` (engine/systems) drains the store once a frame, packs
+  MeshHandles into ledger tokens, draws chunks as classification-tinted
+  two-sided meshes and planes as boundary outlines + normal tick, and logs the
+  `[xr] surfaces:` census (per-class counts, triangles, lowest floor height —
+  the number a future table-anchoring round consumes). Inert wherever
+  `Renderer::xrSurfaceStore()` is null: desktop, tests, simulator.
+- The visionOS adapter in `CompositorSurface` adds both providers to the
+  existing `ar_session_t`, converts anchors inside the callbacks (geometry
+  copied out; serial queue so per-anchor event order survives), and pushes
+  updates. Every thinly-documented C symbol is confined there and marked
+  VERIFY for the first device build.
+
+**Consequences.** Lifecycle (the leak-prone part — `uploadMesh` has no
+update-in-place, so every anchor refresh is a create+destroy pair) is pinned by
+mutation-checked host tests in `tests/test_xr_surfaces.cpp`. Surface geometry
+is world-scaled at draw time (`xrSurfaceWorldTransform` — uniform scale, not
+the rigid-translation scaling eyes use), so giant mode shrinks the room mesh
+around the user consistently. Follow-ups this unlocks, deliberately not in
+scope here: feeding chunks to Jolt as static colliders, anchoring the arena to
+the detected floor/table, and passthrough (.mixed) so the surfaces overlay the
+real room.
+
 ---
 
 *Add a new ADR when a decision is hard to reverse, affects multiple modules, or

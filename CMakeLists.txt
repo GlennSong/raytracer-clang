@@ -121,6 +121,7 @@ add_library(engine_core STATIC
     src/engine/ai/nav_graph.cpp
     src/engine/ai/pathfind.cpp
     src/engine/asset_root.cpp
+    src/engine/xr/xr_surfaces.cpp
     src/engine/script_assets.cpp
     src/engine/script_watch.cpp
     src/engine/level_loader.cpp
@@ -155,6 +156,7 @@ add_library(engine_core STATIC
     src/engine/systems/audio_system.cpp
     src/engine/systems/render_system.cpp
     src/engine/systems/xr_camera_system.cpp
+    src/engine/systems/xr_surface_system.cpp
     src/engine/systems/debug_draw_system.cpp
     src/engine/systems/dev_control_system.cpp
     src/engine/systems/debug_overlay_system.cpp
@@ -537,6 +539,7 @@ add_executable(run_tests
     tests/test_state_machine.cpp
     tests/test_cascade_fit.cpp
     tests/test_xr_stereo.cpp
+    tests/test_xr_surfaces.cpp
     tests/test_fall_respawn.cpp
     tests/test_traffic_signal.cpp
     tests/test_traffic_rules.cpp

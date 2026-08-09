@@ -21,6 +21,7 @@
 #include "../engine/systems/vehicle_system.h"
 #include "../engine/systems/render_system.h"
 #include "../engine/systems/xr_camera_system.h"
+#include "../engine/systems/xr_surface_system.h"
 #include "../engine/systems/debug_draw_system.h"
 #include "../engine/systems/audio_system.h"
 #include "../engine/audio/sfx.h"
@@ -184,6 +185,9 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // to the renderer as the locomotion-base hint. Must stay after every
     // other camera writer and before RenderSystem. Inert without a headset.
     addSystem<XrCameraSystem>();
+    // Real-room surfaces (ARKit planes + reconstruction). Inert wherever the
+    // renderer vends no surface store — desktop, tests, the simulator.
+    addSystem<XrSurfaceSystem>();
     addSystem<RenderSystem>();
     addSystem<DebugDrawSystem>();   // ctx.debug lines on top of the scene (ADR-0067)
     // After the camera systems so the listener follows this frame's view.

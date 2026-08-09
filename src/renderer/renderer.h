@@ -12,7 +12,8 @@
 namespace engine {
 
 class Window;
-class XrBackend;  // engine/xr/xr_backend.h — owned by headset-capable renderers
+class XrBackend;       // engine/xr/xr_backend.h — owned by headset-capable renderers
+class XrSurfaceStore;  // engine/xr/xr_surfaces.h — room-surface update queue
 
 struct MeshTag {};
 struct BufferTag {};
@@ -588,6 +589,11 @@ public:
     // the visionOS Metal backend returns its CompositorServices adapter; all
     // other backends (and macOS Metal) inherit nullptr and XR stays inert.
     virtual XrBackend* xrBackend() { return nullptr; }
+
+    // Room-surface updates (ARKit planes + scene reconstruction), or nullptr
+    // where no runtime feeds them. XrSurfaceSystem drains this once a frame;
+    // same ownership story as xrBackend above.
+    virtual XrSurfaceStore* xrSurfaceStore() { return nullptr; }
 
     // Explicit per-view matrices for XR frames. Called by RenderSystem after
     // setCamera when XR is active; setCamera still runs every frame and

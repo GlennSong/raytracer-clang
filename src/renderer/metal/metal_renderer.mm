@@ -24,6 +24,7 @@
 #include "../../slot_map.h"
 #include "../../engine/asset_root.h"
 #include "../../engine/xr/xr_backend.h"
+#include "../../engine/xr/xr_surfaces.h"
 #include "../../engine/xr/xr_view_math.h"
 #include "../cube_faces.h"
 #include "cloud_noise.h"   // Perlin-Worley 3D noise bake (volumetric clouds)
@@ -266,6 +267,83 @@ static simd_float4x4 toSimd(const Mat4& m);
 // path executes ONLY on device (the simulator reports one view), so this math
 // would otherwise be unverifiable anywhere; tests/test_xr_stereo.cpp pins it
 // numerically instead.
+// --- Room-surface anchor conversion (ARKit -> engine::XrSurfaceUpdate) ----
+//
+// SYMBOL VERIFICATION NOTE. Everything below follows the ARKit C API's
+// provider conventions (the same family as the ar_world_tracking_* and
+// ar_hand_tracking_* calls this file already makes), but plane-detection and
+// scene-reconstruction C symbols are thinly documented outside the SDK
+// headers, and this change was authored where visionOS code cannot compile.
+// At first build, check the exact spellings against the SDK:
+//   fd . "$(xcrun --sdk xros --show-sdk-path)/System/Library/Frameworks/ARKit.framework/Headers"
+// The uncertain names are all in the next ~120 lines and nowhere else:
+// anchor identifiers, plane classification enum values, geometry accessors
+// (ar_geometry_source_*/ar_geometry_element_*), and the two
+// set_anchor_update_handler registrations. The engine side consumes only
+// XrSurfaceUpdate and cannot be broken by a renamed symbol here.
+
+// UUID (16 bytes) -> the ledger's uint64 anchor key, folding both halves so
+// distinct anchors stay distinct in practice.
+static uint64_t surfaceAnchorKey(ar_anchor_t anchor) {
+    unsigned char uuid[16] = {};
+    ar_anchor_get_identifier(anchor, uuid);   // VERIFY signature
+    uint64_t lo = 0, hi = 0;
+    memcpy(&lo, uuid, 8);
+    memcpy(&hi, uuid + 8, 8);
+    return lo ^ (hi * 0x9e3779b97f4a7c15ull);
+}
+
+// Copy a float3 geometry source (MTLBuffer-backed, CPU-visible) out of the
+// anchor. Copying is not optional: the buffer is only valid during the
+// update callback.
+static void copyGeometryVec3(ar_geometry_source_t source,
+                             std::vector<Vec3>& out) {
+    if (!source) return;
+    id<MTLBuffer> buffer = ar_geometry_source_get_buffer(source);
+    const int64_t count = ar_geometry_source_get_count(source);
+    const int64_t stride = ar_geometry_source_get_stride(source);
+    const int64_t offset = ar_geometry_source_get_offset(source);
+    if (!buffer || count <= 0) return;
+    const uint8_t* base = static_cast<const uint8_t*>(buffer.contents) + offset;
+    out.reserve(out.size() + (size_t)count);
+    for (int64_t i = 0; i < count; i++) {
+        float v[3];
+        memcpy(v, base + i * stride, sizeof v);
+        out.push_back(Vec3(v[0], v[1], v[2]));
+    }
+}
+
+// Copy a triangle-list geometry element (16- or 32-bit indices).
+static void copyGeometryIndices(ar_geometry_element_t element,
+                                std::vector<uint32_t>& out) {
+    if (!element) return;
+    id<MTLBuffer> buffer = ar_geometry_element_get_buffer(element);
+    const int64_t primitives = ar_geometry_element_get_count(element);
+    const int64_t bytesPerIndex = ar_geometry_element_get_bytes_per_index(element);
+    if (!buffer || primitives <= 0) return;
+    const uint8_t* base = static_cast<const uint8_t*>(buffer.contents);
+    out.reserve(out.size() + (size_t)primitives * 3);
+    for (int64_t i = 0; i < primitives * 3; i++) {
+        uint32_t index = 0;
+        memcpy(&index, base + i * bytesPerIndex,
+               (size_t)MIN(bytesPerIndex, (int64_t)sizeof index));
+        out.push_back(index);
+    }
+}
+
+static engine::XrSurfaceClass surfaceClassOf(ar_plane_anchor_t anchor) {
+    switch (ar_plane_anchor_get_plane_classification(anchor)) {  // VERIFY enum
+        case ar_plane_classification_wall:    return engine::XrSurfaceClass::Wall;
+        case ar_plane_classification_floor:   return engine::XrSurfaceClass::Floor;
+        case ar_plane_classification_ceiling: return engine::XrSurfaceClass::Ceiling;
+        case ar_plane_classification_table:   return engine::XrSurfaceClass::Table;
+        case ar_plane_classification_seat:    return engine::XrSurfaceClass::Seat;
+        case ar_plane_classification_window:  return engine::XrSurfaceClass::Window;
+        case ar_plane_classification_door:    return engine::XrSurfaceClass::Door;
+        default:                              return engine::XrSurfaceClass::Unknown;
+    }
+}
+
 struct CompositorSurface final : PresentationSurface {
     cp_layer_renderer_t layerRenderer = nullptr;
     ar_session_t arSession = nullptr;   // owns the session: under ARC a local
@@ -274,6 +352,12 @@ struct CompositorSurface final : PresentationSurface {
                                         // then fail and no frame presents
     ar_world_tracking_provider_t worldTracking = nullptr;
     ar_hand_tracking_provider_t handTracking = nullptr;
+    ar_plane_detection_provider_t planeDetection = nullptr;
+    ar_scene_reconstruction_provider_t sceneReconstruction = nullptr;
+    // Handlers run on this SERIAL queue so events keep arrival order — the
+    // ledger relies on an anchor's Updated landing after its Added.
+    dispatch_queue_t surfaceQueue = nullptr;
+    engine::XrSurfaceStore surfaceStore;   // drained by XrSurfaceSystem
 
     cp_frame_t frame = nullptr;
     cp_drawable_array_t drawables = nullptr;  // all targets for this frame
@@ -299,6 +383,7 @@ struct CompositorSurface final : PresentationSurface {
             ar_data_providers_add_data_provider(providers, handTracking);
             NSLog(@"[xr] hand tracking provider added");
         }
+        startSurfaceProviders(providers);
         arSession = ar_session_create();
         // Name the failure instead of guessing at it: if the provider never
         // reaches running, every anchor query fails and the device presents
@@ -317,6 +402,114 @@ struct CompositorSurface final : PresentationSurface {
             });
         ar_session_run(arSession, providers);
         return true;
+    }
+
+    // Room surfaces: plane detection (semantic flat surfaces) and scene
+    // reconstruction (the mesh of everything else). Both are optional — the
+    // simulator supports neither, and a user can deny world sensing — and in
+    // every such case the store simply stays empty; nothing engine-side
+    // branches on their absence. Anchor geometry is copied INSIDE the
+    // callbacks (it does not outlive them) and pushed into surfaceStore,
+    // which XrSurfaceSystem drains on the engine thread.
+    void startSurfaceProviders(ar_data_providers_t providers) {
+        surfaceQueue = dispatch_queue_create("engine.xr.surfaces",
+                                             DISPATCH_QUEUE_SERIAL);
+        using Op = engine::XrSurfaceUpdate::Op;
+
+        if (ar_plane_detection_provider_is_supported()) {
+            ar_plane_detection_configuration_t config =
+                ar_plane_detection_configuration_create();
+            // Default configuration: both alignments. If the SDK requires the
+            // alignment set explicitly, this is the place (VERIFY).
+            planeDetection = ar_plane_detection_provider_create(config);
+
+            engine::XrSurfaceStore* store = &surfaceStore;
+            auto convertPlane = [](ar_plane_anchor_t anchor, Op op) {
+                engine::XrSurfaceUpdate u;
+                u.anchorId = surfaceAnchorKey(anchor);
+                u.op = op;
+                if (op != Op::Removed) {
+                    u.cls = surfaceClassOf(anchor);
+                    u.originFromAnchor = fromSimd(
+                        ar_anchor_get_origin_from_anchor_transform(anchor));
+                    ar_plane_geometry_t geometry =
+                        ar_plane_anchor_get_geometry(anchor);   // VERIFY
+                    copyGeometryVec3(
+                        ar_plane_geometry_get_mesh_vertices(geometry),
+                        u.positions);                            // VERIFY
+                    copyGeometryIndices(
+                        ar_plane_geometry_get_mesh_faces(geometry),
+                        u.indices);                              // VERIFY
+                }
+                return u;
+            };
+            ar_plane_detection_provider_set_update_handler(  // VERIFY name
+                planeDetection, surfaceQueue,
+                ^(ar_plane_anchors_t added, ar_plane_anchors_t updated,
+                  ar_plane_anchors_t removed) {
+                    auto forEach = [&](ar_plane_anchors_t anchors, Op op) {
+                        if (!anchors) return;
+                        ar_plane_anchors_enumerate_anchors(  // VERIFY name
+                            anchors, ^bool(ar_plane_anchor_t anchor) {
+                                store->push(convertPlane(anchor, op));
+                                return true;
+                            });
+                    };
+                    forEach(added, Op::Added);
+                    forEach(updated, Op::Updated);
+                    forEach(removed, Op::Removed);
+                });
+            ar_data_providers_add_data_provider(providers, planeDetection);
+            NSLog(@"[xr] plane detection provider added");
+        } else {
+            NSLog(@"[xr] plane detection unsupported here (simulator?)");
+        }
+
+        if (ar_scene_reconstruction_provider_is_supported()) {
+            sceneReconstruction = ar_scene_reconstruction_provider_create(
+                ar_scene_reconstruction_configuration_create());
+
+            engine::XrSurfaceStore* store = &surfaceStore;
+            auto convertMesh = [](ar_mesh_anchor_t anchor, Op op) {
+                engine::XrSurfaceUpdate u;
+                u.anchorId = surfaceAnchorKey(anchor);
+                u.op = op;
+                if (op != Op::Removed) {
+                    u.cls = engine::XrSurfaceClass::Mesh;
+                    u.originFromAnchor = fromSimd(
+                        ar_anchor_get_origin_from_anchor_transform(anchor));
+                    ar_mesh_geometry_t geometry =
+                        ar_mesh_anchor_get_geometry(anchor);     // VERIFY
+                    copyGeometryVec3(ar_mesh_geometry_get_vertices(geometry),
+                                     u.positions);               // VERIFY
+                    copyGeometryVec3(ar_mesh_geometry_get_normals(geometry),
+                                     u.normals);                 // VERIFY
+                    copyGeometryIndices(ar_mesh_geometry_get_faces(geometry),
+                                        u.indices);              // VERIFY
+                }
+                return u;
+            };
+            ar_scene_reconstruction_provider_set_update_handler(  // VERIFY name
+                sceneReconstruction, surfaceQueue,
+                ^(ar_mesh_anchors_t added, ar_mesh_anchors_t updated,
+                  ar_mesh_anchors_t removed) {
+                    auto forEach = [&](ar_mesh_anchors_t anchors, Op op) {
+                        if (!anchors) return;
+                        ar_mesh_anchors_enumerate_anchors(  // VERIFY name
+                            anchors, ^bool(ar_mesh_anchor_t anchor) {
+                                store->push(convertMesh(anchor, op));
+                                return true;
+                            });
+                    };
+                    forEach(added, Op::Added);
+                    forEach(updated, Op::Updated);
+                    forEach(removed, Op::Removed);
+                });
+            ar_data_providers_add_data_provider(providers, sceneReconstruction);
+            NSLog(@"[xr] scene reconstruction provider added");
+        } else {
+            NSLog(@"[xr] scene reconstruction unsupported here (simulator?)");
+        }
     }
 
     bool acquire() override {
@@ -2975,6 +3168,16 @@ void MetalRenderer::beginFrame() {
 XrBackend* MetalRenderer::xrBackend() {
 #if TARGET_OS_VISION
     return impl->xrAdapter.get();
+#else
+    return nullptr;
+#endif
+}
+
+XrSurfaceStore* MetalRenderer::xrSurfaceStore() {
+#if TARGET_OS_VISION
+    return impl->surface ? &static_cast<CompositorSurface*>(
+                                impl->surface.get())->surfaceStore
+                         : nullptr;
 #else
     return nullptr;
 #endif

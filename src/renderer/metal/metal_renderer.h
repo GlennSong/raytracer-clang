@@ -39,6 +39,7 @@ public:
     void beginFrame() override;
     void setCamera(const CameraState& camera) override;
     XrBackend* xrBackend() override;   // visionOS: CompositorServices adapter
+    XrSurfaceStore* xrSurfaceStore() override;   // visionOS: ARKit room surfaces
     void setXrBaseHint(const Vec3& worldPosition) override;
     void setLights(const SceneLighting& lighting) override;
     void drawMesh(MeshHandle handle, const Mat4& transform,

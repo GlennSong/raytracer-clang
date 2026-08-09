@@ -84,6 +84,30 @@ both eye positions, separation, and the implied IPD. A healthy headset line
 reads `views=2` with an ipd near 0.06 m. `views=1 MONO` means the simulator.
 Read the numbers; do not trust the sensation.
 
+## Room surfaces (ADR-0078)
+
+Two more ARKit providers ride the same `ar_session_t` as world/hand tracking:
+plane detection (semantic flat surfaces — floor/wall/table/… with outlines)
+and scene reconstruction (the triangle mesh of everything else, as chunk
+anchors). Callbacks land on a serial queue, geometry is copied out (it does
+not outlive the callback) into `engine::XrSurfaceUpdate`s and pushed through
+`XrSurfaceStore`; `XrSurfaceSystem` drains, bookkeeps via the host-tested
+`XrSurfaceLedger`, and draws — chunks as classification-tinted meshes, planes
+as outlines. `RT_XR_SURFACES=0` hides the drawing (ingest continues).
+
+Read health from the census line, not the render:
+`[xr] surfaces: total=… floor=1 wall=3 … tris=… floorY=-0.02m` — counts should
+climb as you look around, the classes should match the actual room, and
+`floorY` (ORIGIN space, metres) should sit near 0 when standing on the floor
+where the app launched. In the simulator both providers log `unsupported` and
+zero surfaces is CORRECT, not a failure.
+
+First-build caveat: the plane/mesh C symbols in `startSurfaceProviders` and
+the conversion helpers above `CompositorSurface` are marked VERIFY — they
+follow the provider conventions this file already uses, but were authored
+where visionOS code cannot compile. Check spellings against the SDK's ARKit
+headers on first build; every uncertain symbol is confined to that one block.
+
 ## Building
 
 Simulator (no signing, no account needed):

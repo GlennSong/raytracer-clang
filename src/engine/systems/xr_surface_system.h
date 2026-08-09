@@ -1,0 +1,50 @@
+#ifndef RAYTRACER_ENGINE_XR_SURFACE_SYSTEM_H
+#define RAYTRACER_ENGINE_XR_SURFACE_SYSTEM_H
+
+#include <map>
+#include <vector>
+
+#include "../system.h"
+#include "../xr/xr_surfaces.h"
+
+namespace engine {
+
+// Draws what ARKit knows about the user's real room. Drains the renderer's
+// XrSurfaceStore once a frame (nullptr everywhere but a visionOS device, so
+// the system is inert on desktop, in tests, and in the simulator), feeds the
+// XrSurfaceLedger, and renders the result: reconstruction chunks as
+// classification-tinted translucent-ish meshes, detected planes additionally
+// outlined with debug lines and a normal tick.
+//
+// The mesh lifecycle (one live mesh per anchor, updates replace, removes
+// destroy) is the ledger's, tested in test_xr_surfaces.cpp; this system only
+// packs MeshHandle into the ledger's opaque tokens and turns census numbers
+// into the periodic `[xr] surfaces:` log line — the readout that lets surface
+// mapping be verified from a console instead of by eye.
+//
+// Visibility: RT_XR_SURFACES=0 in the environment disables drawing (data is
+// still ingested, so flipping it back on shows the full room, not a restart).
+class XrSurfaceSystem : public System {
+public:
+    void onStart(FrameContext& ctx) override;
+    void update(FrameContext& ctx) override;
+    void render(FrameContext& ctx) override;
+    void onStop(FrameContext& ctx) override;
+
+private:
+    XrSurfaceLedger ledger_;
+    std::vector<XrSurfaceUpdate> drainScratch_;
+    // Anchor-space outline segments per plane anchor, cached at ingest so the
+    // per-frame render cost is a transform + line per segment, not an edge
+    // count over the mesh.
+    std::map<uint64_t, std::vector<std::pair<Vec3, Vec3>>> outlines_;
+    uint64_t frame_ = 0;
+    bool visible_ = true;
+    int lastLoggedTotal_ = -1;
+
+    XrSurfaceLedger::MeshOps meshOps(FrameContext& ctx);
+};
+
+}  // namespace engine
+
+#endif  // RAYTRACER_ENGINE_XR_SURFACE_SYSTEM_H

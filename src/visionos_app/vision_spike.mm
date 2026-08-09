@@ -30,8 +30,12 @@
 //    the measured separation and IPD. Trust those, not the sensation.
 //  - Foveation stays OFF until every pass targeting drawable textures attaches
 //    the drawable's rasterization rate map.
-//  - The scene sits at the tracking origin established at launch, not on a
-//    detected floor plane. Floor anchoring needs PlaneDetectionProvider.
+//  - Room surfaces (ARKit plane detection + scene reconstruction) are
+//    ingested and VISUALIZED (ADR-0078; `[xr] surfaces:` census in the log,
+//    RT_XR_SURFACES=0 to hide) but not yet USED: the scene still sits at the
+//    tracking origin established at launch rather than anchoring to the
+//    detected floor/table, and nothing collides with the room mesh. Both are
+//    named follow-ups, consuming the census's floorY.
 
 #import "vision_spike.h"
 
