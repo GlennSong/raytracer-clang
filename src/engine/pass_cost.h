@@ -86,6 +86,14 @@ private:
     double elapsed = 0.0;
     std::vector<float> samples;
     std::vector<float> medians;   // one per completed step
+    // The user's pass switches, captured by begin(). `haveSaved` is what makes
+    // restore() safe to call unconditionally: without it the three defaults
+    // above ARE a configuration — all passes on — and any caller that cancels a
+    // measurement that never started silently forces the user's switches back
+    // on. That is exactly what happened: DebugOverlaySystem::onStop cancels on
+    // every state exit, so toggling bloom off in the editor put it back ~2 s
+    // later with no measurement involved.
+    bool haveSaved = false;
     bool savedSsao = true, savedSsr = true, savedBloom = true;
     int framebufferPixels = 0;    // conditions the run was measured under
     std::vector<Measured> measured;

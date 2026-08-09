@@ -20,6 +20,7 @@ void PassCost::begin(FrameContext& ctx) {
     savedSsao = ctx.renderer.ssaoEnabled;
     savedSsr = ctx.renderer.ssrEnabled;
     savedBloom = ctx.renderer.bloomEnabled;
+    haveSaved = true;
     framebufferPixels = ctx.framebufferWidth * ctx.framebufferHeight;
     // Unlock presentation first: with vsync on, frame time is a multiple of
     // the refresh interval and the whole measurement is meaningless.
@@ -37,9 +38,14 @@ void PassCost::begin(FrameContext& ctx) {
 }
 
 void PassCost::restore(FrameContext& ctx) {
+    // Nothing captured means nothing to put back. Writing the defaults here
+    // would be this class inventing a pass configuration for a measurement it
+    // never took.
+    if (!haveSaved) return;
     ctx.renderer.ssaoEnabled = savedSsao;
     ctx.renderer.ssrEnabled = savedSsr;
     ctx.renderer.bloomEnabled = savedBloom;
+    haveSaved = false;
     if (syncDisabled) {
         ctx.renderer.setPresentSync(true);
         syncDisabled = false;
