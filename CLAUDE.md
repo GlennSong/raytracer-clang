@@ -46,6 +46,12 @@ device, same MetalRenderer behind the PresentationSurface seam;
 `src/visionos_app/AGENTS.md` has the display contract) and
 `docs/web-build.md` (WebGPU/WASM via Emscripten).
 
+The user's own Mac has Xcode with the visionOS SDK installed, signing already
+set up, and the VisionApp target building — so visionOS changes authored in
+environments without the SDK (remote/Linux sessions) get compile-verified by
+the user locally; hand off with exact build commands and any unverified
+symbols marked (grep VERIFY), rather than treating device builds as blocked.
+
 ## Planning
 
 See `docs/ROADMAP.md` for the multi-tier development plan (foundation → 3D
