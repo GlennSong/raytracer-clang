@@ -96,11 +96,30 @@ not outlive the callback) into `engine::XrSurfaceUpdate`s and pushed through
 as outlines. `RT_XR_SURFACES=0` hides the drawing (ingest continues).
 
 Read health from the census line, not the render:
-`[xr] surfaces: total=… floor=1 wall=3 … tris=… floorY=-0.02m` — counts should
-climb as you look around, the classes should match the actual room, and
-`floorY` (ORIGIN space, metres) should sit near 0 when standing on the floor
-where the app launched. In the simulator both providers log `unsupported` and
-zero surfaces is CORRECT, not a failure.
+`[xr] surfaces: total=… floor=1 wall=3 … tris=… markers=… floorY=-0.02m` —
+counts should climb as you look around, the classes should match the actual
+room, and `floorY` (ORIGIN space, metres) should sit near 0 when standing on
+the floor where the app launched. In the simulator both providers log
+`unsupported` and zero surfaces is CORRECT, not a failure.
+
+### The placement demo (and what it measures)
+
+Plane dimensions print as they settle (`[xr] plane table 1.20m x 0.75m …`,
+re-logged when refinement moves a dimension > 5 cm) and each plane draws its
+measured extent as a dimmed rectangle, since the engine has no 3D text.
+
+A QUICK pinch (same < 0.8 s window as teleport) while gazing at a detected
+plane within ~3 real metres drops a 10 cm magenta cube on it — and consumes
+the pinch, so the gesture does not also teleport; that interception is why
+XrSurfaceSystem registers before PlayerSystem (arena_state.cpp) and why the
+ordering must not be "tidied". Gazing past every plane leaves teleport alone.
+
+Markers are stored in the PLANE'S anchor space, so they are the anchoring
+probe: as ARKit refines or re-poses a plane, its cubes ride along. Watch a
+cube on your desk while walking the room and returning — it should sit still
+to within roughly a centimetre. If the runtime removes a plane (merges it),
+its markers freeze at their last world pose and the log says so — evidence
+never silently vanishes. Census carries `markers=N`.
 
 First-build caveat: the plane/mesh C symbols in `startSurfaceProviders` and
 the conversion helpers above `CompositorSurface` are marked VERIFY — they

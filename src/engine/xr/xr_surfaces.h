@@ -164,6 +164,27 @@ inline Mat4 xrSurfaceWorldTransform(const Vec3& originBase, Real worldScale,
 std::vector<std::pair<uint32_t, uint32_t>> xrSurfaceBoundaryEdges(
     const std::vector<uint32_t>& indices);
 
+// Anchor-space bounding box of a surface's vertices. For a detected plane
+// (which lies in its anchor's XZ, +Y normal) extent.x by extent.z ARE the
+// surface's real-world dimensions in metres — the numbers the debug readout
+// prints, since the engine has no 3D text to draw them with.
+struct XrSurfaceExtent {
+    bool valid = false;
+    Vec3 min, max;
+    Vec3 size() const { return max - min; }
+};
+XrSurfaceExtent xrSurfaceExtent(const std::vector<Vec3>& positions);
+
+// Nearest hit of a ray against a triangle list, both spaces the caller's
+// (placement transforms a world gaze ray into anchor space and gets t back in
+// real metres). Two-sided deliberately: a plane's winding depends on which
+// side ARKit meshed it from, and a placement ray must not fall through a
+// table because the runtime wound it face-down. Returns false on no hit;
+// degenerate triangles are skipped, not fatal.
+bool xrRaycastTriangles(const Vec3& origin, const Vec3& dir,
+                        const std::vector<Vec3>& positions,
+                        const std::vector<uint32_t>& indices, Real& tOut);
+
 }  // namespace engine
 
 #endif  // ENGINE_XR_SURFACES_H

@@ -24,6 +24,16 @@ namespace engine {
 //
 // Visibility: RT_XR_SURFACES=0 in the environment disables drawing (data is
 // still ingested, so flipping it back on shows the full room, not a restart).
+//
+// Placement demo: a QUICK pinch while gazing at a detected plane within reach
+// (~3 real metres) drops a 10 cm marker cube on it — and CONSUMES the pinch,
+// so PlayerSystem's teleport never sees it. That interception is why this
+// system registers BEFORE PlayerSystem in arena_state.cpp; gazing past every
+// plane leaves the pinch alone and teleport behaves as always. Markers are
+// stored in ANCHOR space, keyed by the plane's anchor id: when ARKit refines
+// or re-poses the plane, its markers ride along — which makes them a live
+// probe of how well surfaces anchor. A marker whose plane is removed keeps
+// its last world pose, orphaned (logged), so evidence never silently vanishes.
 class XrSurfaceSystem : public System {
 public:
     void onStart(FrameContext& ctx) override;
@@ -38,11 +48,30 @@ private:
     // per-frame render cost is a transform + line per segment, not an edge
     // count over the mesh.
     std::map<uint64_t, std::vector<std::pair<Vec3, Vec3>>> outlines_;
+    // Retained anchor-space triangles per PLANE anchor (never the room mesh:
+    // tens of triangles each, cheap to keep and to raycast linearly). This is
+    // what gaze placement intersects.
+    struct PlaneGeometry {
+        std::vector<Vec3> positions;
+        std::vector<uint32_t> indices;
+        Vec3 extent;              // anchor-space size (x by z = printed dims)
+    };
+    std::map<uint64_t, PlaneGeometry> planes_;
+    // Placed markers. anchorId = 0 marks an orphan frozen at originFromWorld.
+    struct Marker {
+        uint64_t anchorId = 0;
+        Vec3 anchorPoint;         // anchor space, real metres
+        Mat4 frozenWorld;         // orphans only: last composed world pose
+    };
+    std::vector<Marker> markers_;
+    MeshHandle markerMesh_;
     uint64_t frame_ = 0;
     bool visible_ = true;
     int lastLoggedTotal_ = -1;
 
     XrSurfaceLedger::MeshOps meshOps(FrameContext& ctx);
+    void ingest(FrameContext& ctx);
+    void placeOnPinch(FrameContext& ctx);
 };
 
 }  // namespace engine

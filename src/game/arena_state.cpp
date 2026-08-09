@@ -132,6 +132,12 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     auto& camSys = addSystem<CameraSystem>();
 #ifdef RT_ENABLE_PHYSICS
     auto& physSys = addSystem<PhysicsSystem>();
+    // Real-room surfaces (ARKit planes + reconstruction; ADR-0078). MUST stay
+    // registered BEFORE PlayerSystem: a quick pinch aimed at a detected plane
+    // places a marker and consumes ctx.xr.pinchEnded, which is what keeps the
+    // same gesture from ALSO teleporting. Inert wherever the renderer vends
+    // no surface store — desktop, tests, the simulator.
+    addSystem<XrSurfaceSystem>();
     addSystem<PlayerSystem>(camSys.flyController(), physSys);
 #ifdef RT_ENABLE_SCRIPTING
     // The shooting gun is now a Lua ScriptBehaviour on the player (ADR-0024);
@@ -185,9 +191,6 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // to the renderer as the locomotion-base hint. Must stay after every
     // other camera writer and before RenderSystem. Inert without a headset.
     addSystem<XrCameraSystem>();
-    // Real-room surfaces (ARKit planes + reconstruction). Inert wherever the
-    // renderer vends no surface store — desktop, tests, the simulator.
-    addSystem<XrSurfaceSystem>();
     addSystem<RenderSystem>();
     addSystem<DebugDrawSystem>();   // ctx.debug lines on top of the scene (ADR-0067)
     // After the camera systems so the listener follows this frame's view.

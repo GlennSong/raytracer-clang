@@ -253,6 +253,123 @@ TEST_CASE(boundary_of_a_lone_triangle_is_all_three_edges) {
     CHECK(boundary.size() == 3);
 }
 
+// --- Extent (the dimensions readout) --------------------------------------
+
+TEST_CASE(extent_measures_a_plane_in_anchor_space) {
+    // A 2.4 x 0 x 1.5 m tabletop: extent.x/z are the printed dimensions.
+    std::vector<Vec3> quad = {Vec3(-1.2, 0, -0.75), Vec3(1.2, 0, -0.75),
+                              Vec3(1.2, 0, 0.75), Vec3(-1.2, 0, 0.75)};
+    const auto extent = xrSurfaceExtent(quad);
+    CHECK(extent.valid);
+    CHECK_APPROX(extent.size().x, 2.4, 1e-9);
+    CHECK_APPROX(extent.size().z, 1.5, 1e-9);
+    CHECK(!xrSurfaceExtent({}).valid);
+}
+
+// --- Placement raycast ----------------------------------------------------
+
+namespace {
+// A unit quad in the XZ plane at y=0 (two triangles), ARKit plane style.
+struct QuadMesh {
+    std::vector<Vec3> positions = {Vec3(-0.5, 0, -0.5), Vec3(0.5, 0, -0.5),
+                                   Vec3(0.5, 0, 0.5), Vec3(-0.5, 0, 0.5)};
+    std::vector<uint32_t> indices = {0, 1, 2, 0, 2, 3};
+};
+}  // namespace
+
+TEST_CASE(raycast_hits_a_plane_from_above_at_the_right_distance) {
+    QuadMesh quad;
+    Real t = 0;
+    CHECK(xrRaycastTriangles(Vec3(0.25, 2, 0.25), Vec3(0, -1, 0),
+                             quad.positions, quad.indices, t));
+    CHECK_APPROX(t, 2.0, 1e-9);
+}
+
+TEST_CASE(raycast_is_two_sided) {
+    // From BELOW: same quad, winding now faces away. A one-sided test would
+    // let a placement ray fall through every table ARKit happened to wind
+    // face-down — the reason the header promises two-sided.
+    QuadMesh quad;
+    Real t = 0;
+    CHECK(xrRaycastTriangles(Vec3(0, -3, 0), Vec3(0, 1, 0),
+                             quad.positions, quad.indices, t));
+    CHECK_APPROX(t, 3.0, 1e-9);
+}
+
+TEST_CASE(raycast_misses_beside_and_behind) {
+    QuadMesh quad;
+    Real t = 0;
+    // Beside the quad.
+    CHECK(!xrRaycastTriangles(Vec3(2, 1, 2), Vec3(0, -1, 0),
+                              quad.positions, quad.indices, t));
+    // Pointing away: the surface is behind the ray, and hits at negative t
+    // must not count — that would let you place objects behind your head.
+    CHECK(!xrRaycastTriangles(Vec3(0, 1, 0), Vec3(0, 1, 0),
+                              quad.positions, quad.indices, t));
+}
+
+TEST_CASE(raycast_returns_the_nearest_of_stacked_surfaces) {
+    // Two parallel quads, shelf over floor: gaze from above must land on the
+    // shelf, not tunnel to the floor behind it.
+    QuadMesh quad;
+    std::vector<Vec3> positions = quad.positions;      // y = 0 (floor)
+    for (const Vec3& p : quad.positions)
+        positions.push_back(Vec3(p.x, 1.0, p.z));      // y = 1 (shelf)
+    std::vector<uint32_t> indices = quad.indices;
+    for (uint32_t i : quad.indices) indices.push_back(i + 4);
+
+    Real t = 0;
+    CHECK(xrRaycastTriangles(Vec3(0, 3, 0), Vec3(0, -1, 0),
+                             positions, indices, t));
+    CHECK_APPROX(t, 2.0, 1e-9);                        // shelf at y=1, not floor
+}
+
+TEST_CASE(raycast_skips_degenerate_triangles) {
+    // A zero-area triangle in front of a real one: skipped, not hit, not fatal.
+    std::vector<Vec3> positions = {Vec3(0, 1, 0), Vec3(0, 1, 0), Vec3(0, 1, 0),
+                                   Vec3(-1, 0, -1), Vec3(1, 0, -1), Vec3(0, 0, 1)};
+    std::vector<uint32_t> indices = {0, 1, 2, 3, 4, 5};
+    Real t = 0;
+    CHECK(xrRaycastTriangles(Vec3(0, 2, 0), Vec3(0, -1, 0), positions, indices, t));
+    CHECK_APPROX(t, 2.0, 1e-9);                        // the real one, at y=0
+}
+
+TEST_CASE(a_world_ray_round_trips_through_the_anchor_transform) {
+    // The composition placement actually runs: world gaze ray -> anchor space
+    // via the inverse world transform, raycast in real metres, point back out
+    // to world. At scale 2 with a shifted base, a hit 10 real cm off the
+    // anchor's centre must come back to the matching world position.
+    QuadMesh quad;
+    const Vec3 base(10, 3, -5);
+    const Real scale = 2.0;
+    const Mat4 anchor = Mat4::translate(1, 0.8, 2);    // a table anchor
+    const Mat4 world = xrSurfaceWorldTransform(base, scale, anchor);
+    const Mat4 inv = world.inverse();
+
+    // Aim straight down over the point 0.1 m across the table in anchor space.
+    const Vec3 targetWorld = world.transformPoint(Vec3(0.1, 0, 0.1));
+    const Vec3 originWorld = targetWorld + Vec3(0, 4, 0);
+
+    Vec3 o = inv.transformPoint(originWorld);
+    Vec3 d = inv.transformDirection(Vec3(0, -1, 0));
+    const Real dLen = d.length();
+    d /= dLen;
+    Real t = 0;
+    CHECK(xrRaycastTriangles(o, d, quad.positions, quad.indices, t));
+
+    const Vec3 hitAnchor = o + d * t;
+    CHECK_APPROX(hitAnchor.x, 0.1, 1e-9);
+    CHECK_APPROX(hitAnchor.y, 0.0, 1e-9);
+    CHECK_APPROX(hitAnchor.z, 0.1, 1e-9);
+    const Vec3 hitWorld = world.transformPoint(hitAnchor);
+    CHECK_APPROX(hitWorld.x, targetWorld.x, 1e-9);
+    CHECK_APPROX(hitWorld.y, targetWorld.y, 1e-9);
+    CHECK_APPROX(hitWorld.z, targetWorld.z, 1e-9);
+    // And t is REAL metres (anchor units), not world units: 4 world units of
+    // drop at scale 2 is 2 real metres.
+    CHECK_APPROX(t, 2.0, 1e-9);
+}
+
 // --- Store ----------------------------------------------------------------
 
 TEST_CASE(store_drains_in_arrival_order_and_empties) {

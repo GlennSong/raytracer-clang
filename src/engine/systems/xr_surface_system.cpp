@@ -3,6 +3,7 @@
 #include <cstdlib>
 
 #include "../../log.h"
+#include "../mesh_builder.h"
 
 namespace engine {
 
@@ -58,6 +59,17 @@ RenderMesh buildSurfaceMesh(const XrSurfaceUpdate& update) {
     return mesh;
 }
 
+Real worldScaleOf(FrameContext& ctx) {
+    return (ctx.renderer.xrWorldScale > 0.01f)
+        ? static_cast<Real>(ctx.renderer.xrWorldScale) : 1.0;
+}
+
+// Reach for gaze placement, real metres. Generous enough for a far wall of a
+// normal room, short enough that pinching at the far virtual landscape still
+// means teleport.
+constexpr Real kPlaceReachMetres = 3.0;
+constexpr size_t kMaxMarkers = 64;
+
 }  // namespace
 
 XrSurfaceLedger::MeshOps XrSurfaceSystem::meshOps(FrameContext& ctx) {
@@ -74,29 +86,129 @@ void XrSurfaceSystem::onStart(FrameContext&) {
     visible_ = !(env && env[0] == '0');
 }
 
+void XrSurfaceSystem::ingest(FrameContext& ctx) {
+    drainScratch_.clear();
+    ctx.renderer.xrSurfaceStore()->drain(drainScratch_);
+    if (drainScratch_.empty()) return;
+
+    const Real scale = worldScaleOf(ctx);
+    for (const XrSurfaceUpdate& u : drainScratch_) {
+        if (u.op == XrSurfaceUpdate::Op::Removed) {
+            outlines_.erase(u.anchorId);
+            planes_.erase(u.anchorId);
+            // Orphan this anchor's markers at their last composed world pose
+            // rather than deleting them: a marker that silently vanished
+            // would read as "placement is broken", when the truth is "the
+            // runtime merged/replaced that plane" — worth SEEING.
+            auto ledgerIt = ledger_.surfaces().find(u.anchorId);
+            if (ledgerIt != ledger_.surfaces().end()) {
+                const Mat4 world = xrSurfaceWorldTransform(
+                    ctx.xr.originBase, scale,
+                    ledgerIt->second.originFromAnchor);
+                int orphaned = 0;
+                for (Marker& m : markers_) {
+                    if (m.anchorId != u.anchorId) continue;
+                    m.frozenWorld =
+                        world * Mat4::translate(m.anchorPoint.x, m.anchorPoint.y,
+                                                m.anchorPoint.z);
+                    m.anchorId = 0;
+                    orphaned++;
+                }
+                if (orphaned)
+                    LOG_INFO << "[xr] plane removed; " << orphaned
+                             << " marker(s) orphaned in place";
+            }
+            continue;
+        }
+        if (u.cls == XrSurfaceClass::Mesh || u.indices.empty()) continue;
+
+        // Plane bookkeeping: outline for drawing, triangles for placement
+        // raycasts, extent for the dimensions readout.
+        auto& segments = outlines_[u.anchorId];
+        segments.clear();
+        for (const auto& [ia, ib] : xrSurfaceBoundaryEdges(u.indices))
+            segments.emplace_back(u.positions[ia], u.positions[ib]);
+
+        PlaneGeometry& plane = planes_[u.anchorId];
+        const Vec3 oldExtent = plane.extent;
+        plane.positions = u.positions;
+        plane.indices = u.indices;
+        plane.extent = xrSurfaceExtent(u.positions).size();
+        // The dimensions display, by log line (the engine draws no 3D text):
+        // announced when a plane appears and whenever refinement moves a
+        // dimension by more than 5 cm, so the console shows sizes settling
+        // without spamming every refinement tick.
+        if (std::abs(plane.extent.x - oldExtent.x) > 0.05 ||
+            std::abs(plane.extent.z - oldExtent.z) > 0.05) {
+            LOG_INFO("[xr] plane %s %.2fm x %.2fm (id %llx)",
+                     xrSurfaceClassName(u.cls), plane.extent.x, plane.extent.z,
+                     static_cast<unsigned long long>(u.anchorId));
+        }
+    }
+    ledger_.apply(drainScratch_, meshOps(ctx));
+}
+
+void XrSurfaceSystem::placeOnPinch(FrameContext& ctx) {
+    // Quick pinch, same window PlayerSystem calls a teleport (< 0.8 s hold).
+    if (!ctx.xr.pinchEnded || ctx.xr.pinchHeldSeconds >= 0.8) return;
+    if (!ctx.xr.gazeValid || !ctx.xr.originBaseValid) return;
+
+    const Real scale = worldScaleOf(ctx);
+    const Vec3 rayOrigin = ctx.xr.originBase + ctx.xr.gazeOrigin;
+    const Vec3 rayDir = ctx.xr.gazeDir;
+
+    // Nearest plane hit within reach. t comes back in real metres for every
+    // plane (the anchor spaces are unscaled), so hits compare directly.
+    bool found = false;
+    Real bestT = kPlaceReachMetres;
+    uint64_t bestAnchor = 0;
+    Vec3 bestPoint;
+    for (const auto& [anchorId, plane] : planes_) {
+        auto ledgerIt = ledger_.surfaces().find(anchorId);
+        if (ledgerIt == ledger_.surfaces().end()) continue;
+        const Mat4 world = xrSurfaceWorldTransform(
+            ctx.xr.originBase, scale, ledgerIt->second.originFromAnchor);
+        const Mat4 inv = world.inverse();
+        Vec3 o = inv.transformPoint(rayOrigin);
+        Vec3 d = inv.transformDirection(rayDir);
+        const Real dLen = d.length();
+        if (dLen < 1e-12) continue;
+        d /= dLen;
+        Real t = 0;
+        if (!xrRaycastTriangles(o, d, plane.positions, plane.indices, t))
+            continue;
+        if (t < bestT) {
+            found = true;
+            bestT = t;
+            bestAnchor = anchorId;
+            bestPoint = o + d * t;
+        }
+    }
+    if (!found) return;   // pinch stays; PlayerSystem may teleport with it
+
+    Marker marker;
+    marker.anchorId = bestAnchor;
+    marker.anchorPoint = bestPoint;
+    if (markers_.size() >= kMaxMarkers) markers_.erase(markers_.begin());
+    markers_.push_back(marker);
+
+    // CONSUME the pinch so this gesture is a placement, not also a teleport.
+    // ctx.xr is the frame's shared state and this system runs before
+    // PlayerSystem precisely so this write is seen there.
+    ctx.xr.pinchEnded = false;
+
+    const auto& cls = ledger_.surfaces().at(bestAnchor).cls;
+    LOG_INFO("[xr] placed marker %zu on %s at %.2fm (anchor %llx)",
+             markers_.size(), xrSurfaceClassName(cls), bestT,
+             static_cast<unsigned long long>(bestAnchor));
+}
+
 void XrSurfaceSystem::update(FrameContext& ctx) {
     XrSurfaceStore* store = ctx.renderer.xrSurfaceStore();
     if (!store) return;
 
-    drainScratch_.clear();
-    store->drain(drainScratch_);
-    if (!drainScratch_.empty()) {
-        // Cache plane outlines before the ledger consumes the updates. Only
-        // classified planes get outlines — the room mesh's boundary is chunk
-        // seams, which read as noise, not structure.
-        for (const XrSurfaceUpdate& u : drainScratch_) {
-            if (u.op == XrSurfaceUpdate::Op::Removed) {
-                outlines_.erase(u.anchorId);
-                continue;
-            }
-            if (u.cls == XrSurfaceClass::Mesh || u.indices.empty()) continue;
-            auto& segments = outlines_[u.anchorId];
-            segments.clear();
-            for (const auto& [ia, ib] : xrSurfaceBoundaryEdges(u.indices))
-                segments.emplace_back(u.positions[ia], u.positions[ib]);
-        }
-        ledger_.apply(drainScratch_, meshOps(ctx));
-    }
+    ingest(ctx);
+    if (visible_ && ctx.xr.active) placeOnPinch(ctx);
 
     // The numeric readout — how surface mapping is verified without seeing the
     // render. Logged when the census changes shape and as a slow heartbeat.
@@ -111,17 +223,18 @@ void XrSurfaceSystem::update(FrameContext& ctx) {
             line << " " << xrSurfaceClassName(static_cast<XrSurfaceClass>(i))
                  << "=" << census.countByClass[i];
         }
-        line << " tris=" << census.triangles;
+        line << " tris=" << census.triangles
+             << " markers=" << markers_.size();
         if (census.floorValid) line << " floorY=" << census.floorY << "m";
     }
 }
 
 void XrSurfaceSystem::render(FrameContext& ctx) {
-    if (!visible_ || ledger_.surfaces().empty()) return;
+    if (!visible_) return;
     if (!ctx.xr.active || !ctx.xr.originBaseValid) return;
+    if (ledger_.surfaces().empty() && markers_.empty()) return;
 
-    const Real scale = (ctx.renderer.xrWorldScale > 0.01f)
-        ? static_cast<Real>(ctx.renderer.xrWorldScale) : 1.0;
+    const Real scale = worldScaleOf(ctx);
 
     RenderMaterial material;
     material.albedo = Vec3(1, 1, 1);   // tint rides Vertex::color
@@ -146,12 +259,64 @@ void XrSurfaceSystem::render(FrameContext& ctx) {
             const Vec3 tip = world.transformPoint(Vec3(0, 0.1, 0));
             ctx.debug.line(foot, tip, color);
         }
+
+        // Extent rectangle, dimmed: the measured bounding box the dimension
+        // log lines refer to, so "2.40m x 1.95m" has a visible referent.
+        auto plane = planes_.find(anchorId);
+        if (plane != planes_.end()) {
+            const auto extent = xrSurfaceExtent(plane->second.positions);
+            if (extent.valid) {
+                const Vec3 dim = xrSurfaceClassColor(entry.cls) * 0.45;
+                const Vec3 c[4] = {
+                    world.transformPoint(Vec3(extent.min.x, 0, extent.min.z)),
+                    world.transformPoint(Vec3(extent.max.x, 0, extent.min.z)),
+                    world.transformPoint(Vec3(extent.max.x, 0, extent.max.z)),
+                    world.transformPoint(Vec3(extent.min.x, 0, extent.max.z)),
+                };
+                for (int i = 0; i < 4; i++)
+                    ctx.debug.line(c[i], c[(i + 1) % 4], dim);
+            }
+        }
+    }
+
+    // Markers: 10 real cm cubes, magenta, riding their plane's anchor — the
+    // live probe of anchoring quality. Orphans draw at their frozen pose.
+    if (!markers_.empty()) {
+        if (!markerMesh_.valid())
+            markerMesh_ = ctx.renderer.uploadMesh(
+                MeshBuilder::box(Vec3(0.1, 0.1, 0.1)));
+        RenderMaterial markerMaterial;
+        markerMaterial.albedo = Vec3(0.95, 0.2, 0.9);
+        markerMaterial.metallic = 0.0f;
+        markerMaterial.roughness = 0.6f;
+        const Mat4 lift = Mat4::translate(0, 0.05, 0);   // sit ON the surface
+        for (const Marker& m : markers_) {
+            Mat4 world;
+            if (m.anchorId == 0) {
+                world = m.frozenWorld * lift;
+            } else {
+                auto it = ledger_.surfaces().find(m.anchorId);
+                if (it == ledger_.surfaces().end()) continue;
+                world = xrSurfaceWorldTransform(ctx.xr.originBase, scale,
+                                                it->second.originFromAnchor)
+                      * Mat4::translate(m.anchorPoint.x, m.anchorPoint.y,
+                                        m.anchorPoint.z)
+                      * lift;
+            }
+            ctx.renderer.drawMesh(markerMesh_, world, markerMaterial);
+        }
     }
 }
 
 void XrSurfaceSystem::onStop(FrameContext& ctx) {
     ledger_.clear(meshOps(ctx));
     outlines_.clear();
+    planes_.clear();
+    markers_.clear();
+    if (markerMesh_.valid()) {
+        ctx.renderer.removeMesh(markerMesh_);
+        markerMesh_ = MeshHandle{};
+    }
     lastLoggedTotal_ = -1;
 }
 

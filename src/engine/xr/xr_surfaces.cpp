@@ -120,4 +120,56 @@ std::vector<std::pair<uint32_t, uint32_t>> xrSurfaceBoundaryEdges(
     return boundary;
 }
 
+XrSurfaceExtent xrSurfaceExtent(const std::vector<Vec3>& positions) {
+    XrSurfaceExtent extent;
+    for (const Vec3& p : positions) {
+        if (!extent.valid) {
+            extent.min = extent.max = p;
+            extent.valid = true;
+            continue;
+        }
+        extent.min.x = std::min(extent.min.x, p.x);
+        extent.min.y = std::min(extent.min.y, p.y);
+        extent.min.z = std::min(extent.min.z, p.z);
+        extent.max.x = std::max(extent.max.x, p.x);
+        extent.max.y = std::max(extent.max.y, p.y);
+        extent.max.z = std::max(extent.max.z, p.z);
+    }
+    return extent;
+}
+
+bool xrRaycastTriangles(const Vec3& origin, const Vec3& dir,
+                        const std::vector<Vec3>& positions,
+                        const std::vector<uint32_t>& indices, Real& tOut) {
+    // Moller-Trumbore, two-sided (see header), nearest positive t. Sizes here
+    // are plane meshes — tens of triangles — so a linear walk is the right
+    // tool; the room mesh deliberately does not come through this path.
+    constexpr Real kEpsilon = 1e-9;
+    bool hit = false;
+    Real best = 0;
+    for (size_t t = 0; t + 2 < indices.size(); t += 3) {
+        const Vec3& a = positions[indices[t]];
+        const Vec3 e1 = positions[indices[t + 1]] - a;
+        const Vec3 e2 = positions[indices[t + 2]] - a;
+        const Vec3 p = cross(dir, e2);
+        const Real det = dot(e1, p);
+        if (std::abs(det) < kEpsilon) continue;   // parallel or degenerate
+        const Real invDet = 1.0 / det;
+        const Vec3 s = origin - a;
+        const Real u = dot(s, p) * invDet;
+        if (u < 0.0 || u > 1.0) continue;
+        const Vec3 q = cross(s, e1);
+        const Real v = dot(dir, q) * invDet;
+        if (v < 0.0 || u + v > 1.0) continue;
+        const Real dist = dot(e2, q) * invDet;
+        if (dist <= kEpsilon) continue;            // behind the origin
+        if (!hit || dist < best) {
+            hit = true;
+            best = dist;
+        }
+    }
+    if (hit) tOut = best;
+    return hit;
+}
+
 }  // namespace engine
