@@ -4,10 +4,13 @@
 #include <map>
 #include <vector>
 
+#include "../physics/physics_world.h"   // PhysicsBodyId
 #include "../system.h"
 #include "../xr/xr_surfaces.h"
 
 namespace engine {
+
+class PhysicsSystem;
 
 // Draws what ARKit knows about the user's real room. Drains the renderer's
 // XrSurfaceStore once a frame (nullptr everywhere but a visionOS device, so
@@ -34,8 +37,23 @@ namespace engine {
 // or re-poses the plane, its markers ride along — which makes them a live
 // probe of how well surfaces anchor. A marker whose plane is removed keeps
 // its last world pose, orphaned (logged), so evidence never silently vanishes.
+// Physics (optional): constructed with a PhysicsSystem, every surface — the
+// planes AND the reconstruction chunks — also gets a static Jolt mesh
+// collider in world space, so dynamic bodies land on the real floor and real
+// furniture. Rebuilds ride XrColliderPolicy (first build immediate, refresh
+// throttled per anchor); an XR origin or world-scale change invalidates
+// everything, since world-space colliders bake both in. Null physics (the
+// default) keeps the system render-only.
+// Display: drawRoomMesh=false hides the reconstruction chunks (the sandbox's
+// passthrough shows the real couch; drawing its scan over it is noise) while
+// planes keep their outlines/extent rectangles and EVERYTHING still ingests
+// and colliders still build — visibility and physics are independent.
 class XrSurfaceSystem : public System {
 public:
+    explicit XrSurfaceSystem(PhysicsSystem* physics = nullptr,
+                             bool drawRoomMesh = true)
+        : physics_(physics), drawRoomMesh_(drawRoomMesh) {}
+
     void onStart(FrameContext& ctx) override;
     void update(FrameContext& ctx) override;
     void render(FrameContext& ctx) override;
@@ -67,11 +85,31 @@ private:
     MeshHandle markerMesh_;
     uint64_t frame_ = 0;
     bool visible_ = true;
+    bool drawRoomMesh_ = true;
     int lastLoggedTotal_ = -1;
+
+    // Room colliders (only populated when physics_ != nullptr).
+    PhysicsSystem* physics_ = nullptr;
+    XrColliderPolicy colliderPolicy_;
+    // Anchor-space geometry retained for cooking. Separate from planes_
+    // because colliders also cover Mesh chunks, which planes_ deliberately
+    // never stores.
+    struct ColliderGeometry {
+        std::vector<Vec3> positions;
+        std::vector<uint32_t> indices;
+    };
+    std::map<uint64_t, ColliderGeometry> colliderGeom_;
+    std::map<uint64_t, PhysicsBodyId> colliderBodies_;
+    // The origin/scale the live colliders were baked with; a change beyond
+    // noise means every world-space collider is wrong.
+    Vec3 colliderOrigin_{0, 0, 0};
+    Real colliderScale_ = 0;
+    double timeSeconds_ = 0;
 
     XrSurfaceLedger::MeshOps meshOps(FrameContext& ctx);
     void ingest(FrameContext& ctx);
     void placeOnPinch(FrameContext& ctx);
+    void rebuildDueColliders(FrameContext& ctx);
 };
 
 }  // namespace engine

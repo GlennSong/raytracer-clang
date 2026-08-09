@@ -388,3 +388,83 @@ TEST_CASE(store_drains_in_arrival_order_and_empties) {
     store.drain(drained);
     CHECK(drained.empty());
 }
+
+// --- XrColliderPolicy: when room colliders get (re)built ------------------
+//
+// The physics side (Jolt MeshShape cooking) runs only in the CMake build;
+// what the policy owns — and what these tests pin — is the SCHEDULE: first
+// build immediate, refreshes throttled per anchor, removal forgetting, and
+// the invalidate-all wave after an origin/scale move.
+
+TEST_CASE(collider_policy_first_build_is_immediate) {
+    XrColliderPolicy policy(1.0);
+    policy.noteUpdate(1, 0.0);
+    auto due = policy.drainDue(0.0);
+    CHECK(due.size() == 1);
+    CHECK(due[0] == 1);
+    CHECK(policy.pendingCount() == 0);
+}
+
+TEST_CASE(collider_policy_throttles_update_storms) {
+    XrColliderPolicy policy(1.0);
+    policy.noteUpdate(1, 0.0);
+    CHECK(policy.drainDue(0.0).size() == 1);
+
+    // A storm of refinements inside the interval: all deferred, none lost.
+    policy.noteUpdate(1, 0.1);
+    policy.noteUpdate(1, 0.3);
+    policy.noteUpdate(1, 0.5);
+    CHECK(policy.drainDue(0.5).empty());
+    CHECK(policy.pendingCount() == 1);
+
+    // Past the interval the ONE coalesced rebuild fires.
+    auto due = policy.drainDue(1.05);
+    CHECK(due.size() == 1);
+    CHECK(policy.pendingCount() == 0);
+    // ...and nothing further without a new update.
+    CHECK(policy.drainDue(5.0).empty());
+}
+
+TEST_CASE(collider_policy_new_anchor_unaffected_by_others_throttle) {
+    XrColliderPolicy policy(1.0);
+    policy.noteUpdate(1, 0.0);
+    CHECK(policy.drainDue(0.0).size() == 1);
+
+    policy.noteUpdate(1, 0.2);   // throttled refresh
+    policy.noteUpdate(2, 0.2);   // brand-new anchor: a hole in the floor
+    auto due = policy.drainDue(0.2);
+    CHECK(due.size() == 1);
+    CHECK(due[0] == 2);
+}
+
+TEST_CASE(collider_policy_removed_anchor_is_forgotten) {
+    XrColliderPolicy policy(1.0);
+    policy.noteUpdate(1, 0.0);
+    policy.noteRemoved(1);
+    CHECK(policy.drainDue(0.0).empty());
+    CHECK(policy.pendingCount() == 0);
+
+    // Re-added later: a fresh anchor again, immediate build.
+    policy.noteUpdate(1, 3.0);
+    CHECK(policy.drainDue(3.0).size() == 1);
+}
+
+TEST_CASE(collider_policy_invalidate_all_staggers_by_last_build) {
+    XrColliderPolicy policy(1.0);
+    policy.noteUpdate(1, 0.0);
+    policy.noteUpdate(2, 0.0);
+    CHECK(policy.drainDue(0.0).size() == 2);
+
+    // Anchor 2 refreshes at t=1.2; both then invalidated at t=1.5 (origin
+    // moved). Anchor 1's last build is old — it rebuilds now; anchor 2 waits
+    // out its own interval. The wave staggers instead of spiking.
+    policy.noteUpdate(2, 1.2);
+    CHECK(policy.drainDue(1.2).size() == 1);
+    policy.invalidateAll();
+    auto due = policy.drainDue(1.5);
+    CHECK(due.size() == 1);
+    CHECK(due[0] == 1);
+    CHECK(policy.pendingCount() == 1);
+    CHECK(policy.drainDue(2.3).size() == 1);
+    CHECK(policy.pendingCount() == 0);
+}

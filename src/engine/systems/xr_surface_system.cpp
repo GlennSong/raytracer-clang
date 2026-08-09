@@ -4,6 +4,7 @@
 
 #include "../../log.h"
 #include "../mesh_builder.h"
+#include "physics_system.h"
 
 namespace engine {
 
@@ -96,6 +97,15 @@ void XrSurfaceSystem::ingest(FrameContext& ctx) {
         if (u.op == XrSurfaceUpdate::Op::Removed) {
             outlines_.erase(u.anchorId);
             planes_.erase(u.anchorId);
+            if (physics_) {
+                auto body = colliderBodies_.find(u.anchorId);
+                if (body != colliderBodies_.end()) {
+                    physics_->physicsWorld().removeBody(body->second);
+                    colliderBodies_.erase(body);
+                }
+                colliderGeom_.erase(u.anchorId);
+                colliderPolicy_.noteRemoved(u.anchorId);
+            }
             // Orphan this anchor's markers at their last composed world pose
             // rather than deleting them: a marker that silently vanished
             // would read as "placement is broken", when the truth is "the
@@ -120,6 +130,16 @@ void XrSurfaceSystem::ingest(FrameContext& ctx) {
             }
             continue;
         }
+        // Colliders want EVERY surface with geometry — the reconstruction
+        // chunks are the furniture. The cook itself is deferred to
+        // rebuildDueColliders via the policy; here only the geometry is kept.
+        if (physics_ && !u.indices.empty() && !u.positions.empty()) {
+            ColliderGeometry& geom = colliderGeom_[u.anchorId];
+            geom.positions = u.positions;
+            geom.indices = u.indices;
+            colliderPolicy_.noteUpdate(u.anchorId, timeSeconds_);
+        }
+
         if (u.cls == XrSurfaceClass::Mesh || u.indices.empty()) continue;
 
         // Plane bookkeeping: outline for drawing, triangles for placement
@@ -203,11 +223,52 @@ void XrSurfaceSystem::placeOnPinch(FrameContext& ctx) {
              static_cast<unsigned long long>(bestAnchor));
 }
 
+void XrSurfaceSystem::rebuildDueColliders(FrameContext& ctx) {
+    if (!physics_ || !ctx.xr.originBaseValid) return;
+
+    // World-space colliders bake origin + scale in; if either moved (teleport
+    // locomotion, a scale change), every live collider is somewhere the room
+    // no longer is. Invalidate them all — the policy staggers the rebuild.
+    const Real scale = worldScaleOf(ctx);
+    const bool baked = colliderScale_ > 0;
+    if (baked && ((ctx.xr.originBase - colliderOrigin_).length() > 1e-3 ||
+                  std::abs(scale - colliderScale_) > 1e-6)) {
+        colliderPolicy_.invalidateAll();
+        LOG_INFO("[xr] origin/scale moved; room colliders invalidated");
+    }
+    colliderOrigin_ = ctx.xr.originBase;
+    colliderScale_ = scale;
+
+    std::vector<Vec3> worldVerts;
+    for (uint64_t anchorId : colliderPolicy_.drainDue(timeSeconds_)) {
+        auto geom = colliderGeom_.find(anchorId);
+        auto entry = ledger_.surfaces().find(anchorId);
+        if (geom == colliderGeom_.end() || entry == ledger_.surfaces().end())
+            continue;
+        const Mat4 world = xrSurfaceWorldTransform(
+            ctx.xr.originBase, scale, entry->second.originFromAnchor);
+        worldVerts.clear();
+        worldVerts.reserve(geom->second.positions.size());
+        for (const Vec3& p : geom->second.positions)
+            worldVerts.push_back(world.transformPoint(p));
+
+        auto body = colliderBodies_.find(anchorId);
+        if (body != colliderBodies_.end())
+            physics_->physicsWorld().removeBody(body->second);
+        const PhysicsBodyId id = physics_->physicsWorld().addMesh(
+            worldVerts, geom->second.indices, Vec3(0, 0, 0), 0.6);
+        if (id != INVALID_PHYSICS_BODY) colliderBodies_[anchorId] = id;
+        else colliderBodies_.erase(anchorId);
+    }
+}
+
 void XrSurfaceSystem::update(FrameContext& ctx) {
     XrSurfaceStore* store = ctx.renderer.xrSurfaceStore();
     if (!store) return;
 
+    timeSeconds_ += ctx.frameDelta;
     ingest(ctx);
+    rebuildDueColliders(ctx);
     if (visible_ && ctx.xr.active) placeOnPinch(ctx);
 
     // The numeric readout — how surface mapping is verified without seeing the
@@ -225,6 +286,9 @@ void XrSurfaceSystem::update(FrameContext& ctx) {
         }
         line << " tris=" << census.triangles
              << " markers=" << markers_.size();
+        if (physics_)
+            line << " colliders=" << colliderBodies_.size()
+                 << " pending=" << colliderPolicy_.pendingCount();
         if (census.floorValid) line << " floorY=" << census.floorY << "m";
     }
 }
@@ -245,7 +309,8 @@ void XrSurfaceSystem::render(FrameContext& ctx) {
     for (const auto& [anchorId, entry] : ledger_.surfaces()) {
         const Mat4 world = xrSurfaceWorldTransform(ctx.xr.originBase, scale,
                                                    entry.originFromAnchor);
-        if (entry.meshToken)
+        if (entry.meshToken &&
+            (drawRoomMesh_ || entry.cls != XrSurfaceClass::Mesh))
             ctx.renderer.drawMesh(unpackMesh(entry.meshToken), world, material);
 
         auto outline = outlines_.find(anchorId);
@@ -309,6 +374,14 @@ void XrSurfaceSystem::render(FrameContext& ctx) {
 }
 
 void XrSurfaceSystem::onStop(FrameContext& ctx) {
+    if (physics_) {
+        for (const auto& [anchorId, body] : colliderBodies_)
+            physics_->physicsWorld().removeBody(body);
+    }
+    colliderBodies_.clear();
+    colliderGeom_.clear();
+    colliderPolicy_ = XrColliderPolicy{};
+    colliderScale_ = 0;
     ledger_.clear(meshOps(ctx));
     outlines_.clear();
     planes_.clear();

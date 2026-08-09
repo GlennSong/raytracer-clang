@@ -172,4 +172,37 @@ bool xrRaycastTriangles(const Vec3& origin, const Vec3& dir,
     return hit;
 }
 
+void XrColliderPolicy::noteUpdate(uint64_t anchorId, Real now) {
+    (void)now;   // build time is stamped in drainDue, when the cook happens
+    anchors_[anchorId].dirty = true;
+}
+
+void XrColliderPolicy::noteRemoved(uint64_t anchorId) {
+    anchors_.erase(anchorId);
+}
+
+void XrColliderPolicy::invalidateAll() {
+    for (auto& [id, state] : anchors_) state.dirty = true;
+}
+
+std::vector<uint64_t> XrColliderPolicy::drainDue(Real now) {
+    std::vector<uint64_t> due;
+    for (auto& [id, state] : anchors_) {
+        if (!state.dirty) continue;
+        if (state.everBuilt && now - state.lastBuild < minInterval_) continue;
+        state.dirty = false;
+        state.everBuilt = true;
+        state.lastBuild = now;
+        due.push_back(id);
+    }
+    return due;
+}
+
+size_t XrColliderPolicy::pendingCount() const {
+    size_t n = 0;
+    for (const auto& [id, state] : anchors_)
+        if (state.dirty) n++;
+    return n;
+}
+
 }  // namespace engine

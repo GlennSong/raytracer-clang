@@ -185,6 +185,48 @@ bool xrRaycastTriangles(const Vec3& origin, const Vec3& dir,
                         const std::vector<Vec3>& positions,
                         const std::vector<uint32_t>& indices, Real& tOut);
 
+// When an anchor's static physics collider gets (re)built. ARKit refines
+// anchors in storms — a wall can update several times a second while the
+// user looks at it — and cooking a Jolt MeshShape per update would spend the
+// frame budget on geometry the renderer already shrugged off. The policy
+// throttles rebuilds to one per anchor per `minInterval` seconds, EXCEPT the
+// first build of a never-seen anchor, which is immediate: a new surface with
+// no collider yet is a hole in the floor, worth a cook right now.
+//
+// Pure and renderer/physics-free so test_xr_surfaces.cpp can drive it with a
+// synthetic clock; the system feeds it real time and does the Jolt calls.
+class XrColliderPolicy {
+public:
+    explicit XrColliderPolicy(Real minInterval = 1.0)
+        : minInterval_(minInterval) {}
+
+    // Geometry arrived for this anchor (Added or Updated).
+    void noteUpdate(uint64_t anchorId, Real now);
+    // The anchor is gone; forget it entirely.
+    void noteRemoved(uint64_t anchorId);
+    // Everything is stale (the XR origin or world scale moved — every world-
+    // space collider is now wrong). Existing anchors keep their last-build
+    // times, so the rebuild wave still respects the throttle and staggers.
+    void invalidateAll();
+
+    // Anchors due for a (re)build at `now`: dirty, and either never built or
+    // past the interval since their last build. Returned anchors are marked
+    // built-at-`now` and clean; call once per frame and cook what comes back.
+    std::vector<uint64_t> drainDue(Real now);
+
+    // Dirty anchors still waiting on the throttle (the census readout).
+    size_t pendingCount() const;
+
+private:
+    struct State {
+        Real lastBuild = 0;
+        bool everBuilt = false;
+        bool dirty = false;
+    };
+    std::map<uint64_t, State> anchors_;
+    Real minInterval_;
+};
+
 }  // namespace engine
 
 #endif  // ENGINE_XR_SURFACES_H
