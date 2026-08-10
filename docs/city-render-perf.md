@@ -94,8 +94,9 @@ loader chunks both tiers through the same `spawnPartChunks` path with
 `minDistance`/`drawDistance` pairing, and HLOD starts at
 `max(detailDistance, facadeDistance)`.
 
-Measured on `piedmont_mini` (headless, same probe as the baseline table):
-LOD0 697 002 tris vs **LOD1 36 512 tris — 5.2% of full**, in line with the
+Measured headlessly (same probe as the baseline table): mini LOD0 697 002
+tris vs **LOD1 36 512 — 5.2% of full**; full Piedmont (7 792 lots) LOD0
+30 101 512 tris vs **LOD1 1 410 632 — 4.7%**, in line with the
 ~50–100-per-building prediction. `piedmont.json` and `piedmont_mini.json`
 now ship `detailDistance: 300, facadeDistance: 900`, so the full-grammar
 radius drops 900 → 300 m and the LOD0 load falls roughly with the square of
