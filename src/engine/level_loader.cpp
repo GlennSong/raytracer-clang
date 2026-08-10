@@ -1,4 +1,5 @@
 #include "level_loader.h"
+#include "road_chunks.h"
 
 #include "../profile.h"
 #include "level_params.h"   // shared level-JSON -> params readers (both loaders)
@@ -289,48 +290,6 @@ static Entity spawnDocumentEntity(const json& ent, const std::string& shape,
 // look) baked to a carriageway mesh and carried as a first-class DOCUMENT entity,
 // so the inspector can widen it and the viewport can drag its nodes — the editor
 // regenerates the mesh through onEdited. Drapes on the level terrain (`ground`).
-// Split a WORLD-SPACE mesh into grid-cell chunks by triangle centroid, so the
-// per-Renderable frustum/AABB cull (render_system) drops city blocks instead of
-// treating a district-wide merged mesh as one always-visible draw (plan
-// metropolis-scale P1.1/P1.3). Vertices are duplicated per chunk (cheap: a
-// vertex is shared by few triangles); materialIndex carries over.
-static std::vector<RenderMesh> chunkMeshByCell(const RenderMesh& m, double cell) {
-    std::vector<RenderMesh> out;
-    if (cell <= 0.0 || m.indices.size() < 3) {
-        out.push_back(m);
-        return out;
-    }
-    std::map<std::pair<int, int>, std::size_t> slot;
-    std::vector<std::unordered_map<uint32_t, uint32_t>> remap;
-    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
-        const uint32_t i0 = m.indices[t], i1 = m.indices[t + 1], i2 = m.indices[t + 2];
-        const Vec3& a = m.vertices[i0].position;
-        const Vec3& b = m.vertices[i1].position;
-        const Vec3& c = m.vertices[i2].position;
-        const double cx = (a.x + b.x + c.x) / 3.0, cz = (a.z + b.z + c.z) / 3.0;
-        const std::pair<int, int> key{static_cast<int>(std::floor(cx / cell)),
-                                      static_cast<int>(std::floor(cz / cell))};
-        auto it = slot.find(key);
-        if (it == slot.end()) {
-            it = slot.emplace(key, out.size()).first;
-            out.emplace_back();
-            out.back().materialIndex = m.materialIndex;
-            remap.emplace_back();
-        }
-        RenderMesh& dst = out[it->second];
-        auto& rm = remap[it->second];
-        for (uint32_t src_i : {i0, i1, i2}) {
-            auto ri = rm.find(src_i);
-            if (ri == rm.end()) {
-                ri = rm.emplace(src_i, static_cast<uint32_t>(dst.vertices.size())).first;
-                dst.vertices.push_back(m.vertices[src_i]);
-            }
-            dst.indices.push_back(ri->second);
-        }
-    }
-    return out;
-}
-
 static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
                            int index, const HeightField* ground,
                            const RoadNet* preNet = nullptr) {
@@ -374,16 +333,15 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     world.add<SourceSpec>(e, spec);
     world.add<RoadNet>(e, net);                      // the editable source of truth
 
-    Renderable r;
-    r.renderLayer = engine::LayerRoads;              // debug layer toggle
-    r.material.albedo = Vec3(1, 1, 1);               // hue carried in vertex colour
-    r.material.roughness = 0.93f;
-    if (net.markings)                                // lane paint via the surface shader
-        r.material.setSurface(RenderMaterial::Surface::RoadMarkings);
+    // The rendered carriageway is per-cell CHUNK companions, not a Renderable
+    // on the road entity itself: one network-wide mesh has an AABB the frustum
+    // cull can never reject, so every street drew every frame (Piedmont: 587 K
+    // triangles in one draw — docs/city-render-perf.md R1). The helper owns
+    // material + mesh lifetime for every producer (load, editor regenerates,
+    // planner bake). The mesh is built ONCE here and shared with the collider.
+    (void)index;
     RenderMesh mesh = buildRoadNetMesh(net);
-    if (!mesh.vertices.empty())
-        r.mesh = assets.acquireMesh(mesh, "road:" + std::to_string(index));
-    world.add<Renderable>(e, r);
+    rebuildRoadRenderChunks(world, assets, e, net, kRoadRenderCell, &mesh);
 
     // Static collision from the carriageway geometry (ADR-0059): without this a
     // road has no collider of its own — ground roads borrow the terrain's, but an
@@ -3380,7 +3338,7 @@ bool LevelLoader::load(const std::string& path,
                             ddScale = 0.55; break;
                         default: break;
                     }
-                    for (RenderMesh& chunk : chunkMeshByCell(pm, renderCell)) {
+                    for (RenderMesh& chunk : MeshBuilder::chunkByCell(pm, renderCell)) {
                         if (chunk.vertices.empty()) continue;
                         Renderable r = proto;
                         if (detailDistance > 0) r.drawDistance = detailDistance * ddScale;

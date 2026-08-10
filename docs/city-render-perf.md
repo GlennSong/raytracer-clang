@@ -11,9 +11,9 @@ Measured from the shipping pipeline, `piedmont_mini.json`:
 
 | Content | Meshes | Triangles | Culling today |
 |---|---|---|---|
-| Roads (`buildRoadNetMesh`) | **1 per road entity** | 22 K (mini) | **none that works** — one AABB spans the whole city, so the frustum test never rejects it and every street draws every frame |
-| Buildings (`growLotBuildingsOnNets`) | 19 part-meshes → chunked at 250 m | **697 K (mini, 132 lots)** | AABB frustum + `drawDistance` 900 m, HLOD mass boxes past that |
-| Full `piedmont.json` | — | generation alone runs **minutes**, headless | — |
+| Roads (`buildRoadNetMesh`) | **1 per road entity** | 22 K (mini) / **587 K (full)** | **none that works** — one AABB spans the whole city, so the frustum test never rejects it and every street draws every frame |
+| Buildings (`growLotBuildingsOnNets`) | 19 part-meshes → chunked at 250 m | 697 K (mini, 132 lots) / **30.1 M (full, 7 792 lots)** | AABB frustum + `drawDistance` 900 m, HLOD mass boxes past that |
+| Full `piedmont.json` | — | generation alone runs **10½ minutes**, headless | — |
 
 Two structural facts fall out:
 
@@ -52,13 +52,21 @@ hide, or cull against, even though the generator knows all of it
 
 Ordered by measured leverage; each item is independently landable.
 
-### R1 — chunk the road mesh (small, headless, do first)
+### R1 — chunk the road mesh ✅ landed
 
-`buildRoadNetMesh` output goes through the same `chunkMeshByCell` the buildings
-already use: one Renderable per 250 m cell, each with a real AABB. Frustum
-culling starts working on roads; distance policy becomes possible. No new
-tech — reusing the existing chunker on one more producer. Same treatment for
-`road_walls`.
+`rebuildRoadRenderChunks` (`src/engine/road_chunks.{h,cpp}`) is now the ONE
+producer of the rendered carriageway — the loader, the editor's node-drag and
+recipe regenerates, and the City Planner's [Bake] all call it. It splits the
+mesh through `MeshBuilder::chunkByCell` (promoted from the loader's static)
+into per-250 m-cell companion entities with real AABBs, so the frustum cull
+rejects streets behind the camera; Piedmont's 587 K-triangle single draw
+becomes ~120 cullable chunks. Chunks carry `PickTarget` so clicking a street
+still selects the editable road; `RenderChunks` on the road entity owns the
+companion lifetime, which also retires the documented uploadMesh-per-drag
+leak (regenerates now swap through the AssetManager). Headless-tested
+(`tests/test_road_chunks.cpp`): exact triangle partition, rebuild-without-leak,
+empty-net teardown. Still owed: the same treatment for `road_walls` and
+`water`, and an on-device before/after with `RT_DUMP_DRAWS=1`.
 
 ### R2 — a real middle LOD for buildings (the big win)
 

@@ -1,4 +1,5 @@
 #include "city_planner.h"
+#include "road_chunks.h"
 
 #include "asset_manager.h"
 #include "components.h"
@@ -126,7 +127,6 @@ void CityPlanner::attach(World* world, AssetManager* assets,
     // (assets.clear() on state teardown). Visibility flags survive.
     footprint_.group = hubs_.group = arterials_.group = nodes_.group = Entity{};
     footprint_.mesh = hubs_.mesh = arterials_.mesh = nodes_.mesh = MeshHandle{};
-    bakedMesh_ = MeshHandle{};
 }
 
 void CityPlanner::detach() { attach(nullptr, nullptr, nullptr, nullptr); }
@@ -203,28 +203,18 @@ bool CityPlanner::bakeMesh() {
     Entity e = roadEntity();
     if (!e.valid() || !assets_) return false;
     RoadNet* net = world_->get<RoadNet>(e);
-    Renderable* r = world_->get<Renderable>(e);
-    if (!net || !r) return false;
+    if (!net || !assets_) return false;
 
-    RenderMesh mesh = buildRoadNetMesh(*net);
-    if (mesh.vertices.empty()) return false;
-    // Route the bake through the AssetManager (not renderer.uploadMesh, whose
-    // per-regenerate use leaks — editor_system.cpp regenerateRoad TECH_DEBT):
-    // acquire the new mesh, then release the handle the road held. The loader
-    // acquired the original through this same manager ("road:<n>"), so the
-    // release frees it; an unknown handle (a leaked legacy upload) is ignored
-    // — that single legacy mesh remains the pre-existing debt, but repeated
-    // bakes here do NOT accumulate.
-    MeshHandle nh =
-        assets_->acquireMesh(mesh, "cityplan:bake:" + std::to_string(++rev_));
-    if (!nh.valid()) return false;
-    if (r->mesh.valid() && !(r->mesh == nh)) assets_->releaseMesh(r->mesh);
-    r->mesh = nh;
-    bakedMesh_ = nh;
+    // The rendered carriageway is per-cell chunk companions owned by the road
+    // entity (road_chunks) — the same producer the loader and the editor
+    // regenerates use, so bake/drag/load can never diverge on material or
+    // lifetime, and the chunk teardown inside the helper keeps repeated bakes
+    // leak-free by construction.
+    const int chunks = rebuildRoadRenderChunks(*world_, *assets_, e, *net);
+    if (chunks == 0) return false;
     // The road's MeshCollider (if any) is load-time and stays stale until
     // Play reloads the document — same lifetime as terrain/lots on a regen.
-    LOG_INFO << "[planner] baked road mesh: " << mesh.vertices.size()
-             << " vertices";
+    LOG_INFO << "[planner] baked road mesh: " << chunks << " render chunk(s)";
     return true;
 }
 
@@ -256,13 +246,10 @@ bool CityPlanner::clearRoads() {
     net->cityHubs.clear();
     net->freewayPlans.clear();
     net->siteFootprints.clear();
-    // Release the baked carriageway (the release half of bakeMesh's swap) so
-    // the terrain is genuinely bare — leak-free by the same path.
-    if (Renderable* r = world_->get<Renderable>(e)) {
-        if (assets_ && r->mesh.valid()) assets_->releaseMesh(r->mesh);
-        r->mesh = MeshHandle{};
-    }
-    bakedMesh_ = MeshHandle{};
+    // Release the baked carriageway: rebuilding chunks from the now-empty net
+    // tears the old set down and spawns nothing — bare terrain, leak-free by
+    // the same path every producer uses.
+    if (assets_) rebuildRoadRenderChunks(*world_, *assets_, e, *net);
     rebuildOverlays();   // graph is empty: every layer publishes empty
     LOG_INFO << "[planner] cleared roads (recipe preserved)";
     return true;

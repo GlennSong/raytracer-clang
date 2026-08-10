@@ -100,7 +100,6 @@ private:
     CameraSystem* cameras_ = nullptr;
 
     Layer footprint_, hubs_, arterials_, nodes_;
-    MeshHandle bakedMesh_;     // last bake we acquired (released on the next one)
     uint64_t rev_ = 0;         // uniquifies acquireMesh keys across rebuilds
 };
 

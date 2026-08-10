@@ -1,4 +1,5 @@
 #include "editor_system.h"
+#include "../road_chunks.h"
 #include <cstdlib>
 
 #include "../components.h"
@@ -179,13 +180,13 @@ Vec3 defaultShapeSize(const std::string& shape) {
 // Rebuild an editable road's carriageway from its RoadNet and keep the saved recipe in sync, after a
 // property edit or a node drag (ADR-0049). A generated road keeps its recipe — roadRecipeForSave
 // preserves the "generate" block instead of baking the nodes (road-network-v2-plan T2.1).
-void regenerateRoad(World& world, Entity e, Renderer& renderer) {
+void regenerateRoad(World& world, Entity e, AssetManager& assets) {
     RoadNet* net = world.get<RoadNet>(e);
     if (!net) return;
-    if (Renderable* r = world.get<Renderable>(e)) {
-        RenderMesh mesh = buildRoadNetMesh(*net);
-        if (!mesh.vertices.empty()) r->mesh = renderer.uploadMesh(mesh);
-    }
+    // One producer for the rendered carriageway (road_chunks): per-cell chunk
+    // companions the frustum cull works on, meshes through the AssetManager —
+    // which also retires this function's documented uploadMesh-per-drag leak.
+    rebuildRoadRenderChunks(world, assets, e, *net);
     if (SourceSpec* spec = world.get<SourceSpec>(e))
         spec->recipe = roadRecipeForSave(spec->recipe, *net).dump();
 }
@@ -193,7 +194,7 @@ void regenerateRoad(World& world, Entity e, Renderer& renderer) {
 // Rebuild a generated road from its (edited) generate recipe — the tuning panel's Regenerate. Re-runs
 // buildDistrict from the updated params (which the caller has written into spec.recipe), re-meshes,
 // and keeps the recipe a generate recipe. No-op for a hand-authored road. (road-network-v2-plan T2.3)
-void regenerateRoadFromRecipe(World& world, Entity e, Renderer& renderer) {
+void regenerateRoadFromRecipe(World& world, Entity e, AssetManager& assets) {
     RoadNet* net = world.get<RoadNet>(e);
     SourceSpec* spec = net ? world.get<SourceSpec>(e) : nullptr;
     if (!spec) return;
@@ -210,10 +211,7 @@ void regenerateRoadFromRecipe(World& world, Entity e, Renderer& renderer) {
             *net, recipe["generate"].value("interchange_spacing", 700.0)))
         LOG_INFO << "[bake] regenerate: " << baked
                  << " corridor(s) re-baked into the editable graph";
-    if (Renderable* r = world.get<Renderable>(e)) {
-        RenderMesh mesh = buildRoadNetMesh(*net);
-        if (!mesh.vertices.empty()) r->mesh = renderer.uploadMesh(mesh);
-    }
+    rebuildRoadRenderChunks(world, assets, e, *net);
     spec->recipe = roadRecipeForSave(spec->recipe, *net).dump();
 }
 
@@ -265,7 +263,7 @@ void EditorSystem::conformTerrainToRoads(FrameContext& ctx) {
         };
     ctx.world.each<RoadNet>([&](Entity e, RoadNet& net) {
         net.heightAt = carved;
-        regenerateRoad(ctx.world, e, ctx.renderer);
+        regenerateRoad(ctx.world, e, ctx.assets);
     });
     LOG_INFO << "Conformed terrain to " << roads.size() << " road footprint(s)";
 }
@@ -309,10 +307,13 @@ void EditorSystem::onStart(FrameContext& ctx) {
     }
     // Editable road (ADR-0049): any inspector edit (Width, sidewalk, ...) — or an
     // undo/paste (label == null) — regenerates the carriageway and re-syncs the
-    // saved recipe, so widening a road is live and round-trips.
+    // saved recipe, so widening a road is live and round-trips. The asset
+    // manager outlives editor states (Application owns it, like the renderer),
+    // so the captured pointer stays valid across sessions.
+    AssetManager* assetsPtr = &ctx.assets;
     if (ComponentRegistry::Entry* road = registry.find("Road")) {
-        road->onEdited = [renderer](World& world, Entity e, const char*) {
-            regenerateRoad(world, e, *renderer);
+        road->onEdited = [assetsPtr](World& world, Entity e, const char*) {
+            regenerateRoad(world, e, *assetsPtr);
         };
     }
 }
@@ -324,6 +325,26 @@ void EditorSystem::frameSelected(FrameContext& ctx) {
     Vec3 worldPos = Vec3(wm.m[0][3], wm.m[1][3], wm.m[2][3]);
     Renderable* r = ctx.world.get<Renderable>(selected);
     Real radius = 1.0;
+    // A chunked entity (a road) has no Renderable of its own; frame the union
+    // of its chunk companions instead of collapsing to the entity origin.
+    if (!r) {
+        if (RenderChunks* rc = ctx.world.get<RenderChunks>(selected)) {
+            Vec3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);
+            for (Entity ce : rc->entities) {
+                Renderable* cr = ctx.world.get<Renderable>(ce);
+                if (!cr || !cr->mesh.valid()) continue;
+                BoundingSphere b = ctx.renderer.getMeshBounds(cr->mesh);
+                lo = Vec3(std::min(lo.x, b.boxMin.x), std::min(lo.y, b.boxMin.y),
+                          std::min(lo.z, b.boxMin.z));
+                hi = Vec3(std::max(hi.x, b.boxMax.x), std::max(hi.y, b.boxMax.y),
+                          std::max(hi.z, b.boxMax.z));
+            }
+            if (hi.x >= lo.x) {
+                worldPos = (lo + hi) * 0.5;
+                radius = std::max((hi - lo).length() * 0.5, Real(0.5));
+            }
+        }
+    }
     if (r) {
         BoundingSphere bounds = ctx.renderer.getMeshBounds(r->mesh);
         Vec3 cx(wm.m[0][0], wm.m[1][0], wm.m[2][0]);
@@ -460,6 +481,11 @@ void EditorSystem::pickAtCursor(FrameContext& ctx) {
             }
         });
 
+    // A hit on a runtime render chunk means the user clicked the thing it is a
+    // piece of (the road): redirect to the editable source entity.
+    if (best.valid())
+        if (PickTarget* pt = ctx.world.get<PickTarget>(best)) best = pt->target;
+
     // Shift-click extends the selection (toggle the hit); plain click
     // replaces it. Shift-clicking empty space leaves the set alone.
     if (ctx.input.keyShift) {
@@ -505,7 +531,7 @@ bool EditorSystem::updatePathEdit(FrameContext& ctx, bool click) {
     }
     // Rebuild the carriageway after each applied move (ctx is only touched synchronously,
     // inside drag() below, so capturing it by reference is safe).
-    pathTool.onEdit([this, &ctx] { regenerateRoad(ctx.world, selected, ctx.renderer); });
+    pathTool.onEdit([this, &ctx] { regenerateRoad(ctx.world, selected, ctx.assets); });
 
     PickRay pr = rayThroughCursor(ctx);
     EditRay ray{pr.origin, pr.direction};
@@ -530,7 +556,7 @@ bool EditorSystem::updatePathEdit(FrameContext& ctx, bool click) {
         // Shift+click a node -> delete it.
         if (ctx.input.keyShift && hov >= 0) {
             int node = pathTool.handles()[hov].index;
-            if (deleteRoadNode(ctx.world, selected, node, ctx.renderer)) pathTool.clearSelection();
+            if (deleteRoadNode(ctx.world, selected, node, ctx.assets)) pathTool.clearSelection();
             return true;
         }
         // Ctrl+click -> subdivide the edge under the cursor, or (over empty ground, with a
@@ -539,9 +565,9 @@ bool EditorSystem::updatePathEdit(FrameContext& ctx, bool click) {
         if (ctx.actions.held("road_edit_modifier") && hov < 0) {
             int edge = nearestRoadEdge(ctx.world, selected, ground, std::max(2.5, radius));
             int newNode = (edge >= 0)
-                ? splitRoadEdge(ctx.world, selected, edge, ground, ctx.renderer)
+                ? splitRoadEdge(ctx.world, selected, edge, ground, ctx.assets)
                 : (pathTool.selectedNode() >= 0
-                       ? extendRoad(ctx.world, selected, pathTool.selectedNode(), ground, ctx.renderer)
+                       ? extendRoad(ctx.world, selected, pathTool.selectedNode(), ground, ctx.assets)
                        : -1);
             if (newNode >= 0) pathTool.selectNode(newNode);
             if (edge >= 0 || newNode >= 0) return true;
@@ -969,7 +995,7 @@ void EditorSystem::drawInspector(FrameContext& ctx) {
 
                 if (changed) {
                     rspec->recipe = recipe.dump();                    // panel writes the params...
-                    regenerateRoadFromRecipe(ctx.world, selected, ctx.renderer);   // ...then rebuilds live
+                    regenerateRoadFromRecipe(ctx.world, selected, ctx.assets);   // ...then rebuilds live
                 }
             }
         }
@@ -1291,10 +1317,10 @@ std::vector<Vec3> roadNodeHandles(World& world, Entity e) {
     return handles;
 }
 
-bool moveRoadNode(World& world, Entity e, int node, const Vec3& worldPos, Renderer& renderer) {
+bool moveRoadNode(World& world, Entity e, int node, const Vec3& worldPos, AssetManager& assets) {
     RoadNet* net = world.get<RoadNet>(e);
     if (!net || !roadNetMoveNode(*net, node, Vec2(worldPos.x, worldPos.z))) return false;
-    regenerateRoad(world, e, renderer);
+    regenerateRoad(world, e, assets);
     return true;
 }
 
@@ -1313,12 +1339,12 @@ std::vector<Vec3> roadTangentHandles(World& world, Entity e) {
     return handles;
 }
 
-bool moveRoadTangent(World& world, Entity e, int node, const Vec3& worldPos, Renderer& renderer) {
+bool moveRoadTangent(World& world, Entity e, int node, const Vec3& worldPos, AssetManager& assets) {
     RoadNet* net = world.get<RoadNet>(e);
     if (!net || node < 0 || node >= static_cast<int>(net->nodes.size())) return false;
     Vec2 tangent = Vec2(worldPos.x, worldPos.z) - net->nodes[node];   // handle - node
     if (!roadNetSetTangent(*net, node, tangent)) return false;
-    regenerateRoad(world, e, renderer);
+    regenerateRoad(world, e, assets);
     return true;
 }
 
@@ -1328,33 +1354,33 @@ int nearestRoadEdge(World& world, Entity e, const Vec3& worldPos, double maxDist
     return roadNetNearestEdge(*net, Vec2(worldPos.x, worldPos.z), maxDist);
 }
 
-bool setRoadEdgeWidth(World& world, Entity e, int edge, double width, Renderer& renderer) {
+bool setRoadEdgeWidth(World& world, Entity e, int edge, double width, AssetManager& assets) {
     RoadNet* net = world.get<RoadNet>(e);
     if (!net || !roadNetSetEdgeWidth(*net, edge, width)) return false;
-    regenerateRoad(world, e, renderer);
+    regenerateRoad(world, e, assets);
     return true;
 }
 
-int splitRoadEdge(World& world, Entity e, int edge, const Vec3& worldPos, Renderer& renderer) {
+int splitRoadEdge(World& world, Entity e, int edge, const Vec3& worldPos, AssetManager& assets) {
     RoadNet* net = world.get<RoadNet>(e);
     if (!net) return -1;
     int ni = roadNetSplitEdge(*net, edge, Vec2(worldPos.x, worldPos.z));
-    if (ni >= 0) regenerateRoad(world, e, renderer);
+    if (ni >= 0) regenerateRoad(world, e, assets);
     return ni;
 }
 
-int extendRoad(World& world, Entity e, int fromNode, const Vec3& worldPos, Renderer& renderer) {
+int extendRoad(World& world, Entity e, int fromNode, const Vec3& worldPos, AssetManager& assets) {
     RoadNet* net = world.get<RoadNet>(e);
     if (!net) return -1;
     int ni = roadNetExtend(*net, fromNode, Vec2(worldPos.x, worldPos.z));
-    if (ni >= 0) regenerateRoad(world, e, renderer);
+    if (ni >= 0) regenerateRoad(world, e, assets);
     return ni;
 }
 
-bool deleteRoadNode(World& world, Entity e, int node, Renderer& renderer) {
+bool deleteRoadNode(World& world, Entity e, int node, AssetManager& assets) {
     RoadNet* net = world.get<RoadNet>(e);
     if (!net || !roadNetDeleteNode(*net, node)) return false;
-    regenerateRoad(world, e, renderer);
+    regenerateRoad(world, e, assets);
     return true;
 }
 

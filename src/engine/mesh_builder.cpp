@@ -2,6 +2,7 @@
 #include "../renderer/cube_faces.h"   // cubeFaceDirection — the cubemap convention
 #include <cmath>
 #include <map>
+#include <unordered_map>
 
 namespace engine {
 
@@ -680,5 +681,44 @@ void MeshBuilder::generatePlanarUVs(RenderMesh& mesh, int axis, float scale) {
         v.v = vv * scale;
     }
 }
+
+
+std::vector<RenderMesh> MeshBuilder::chunkByCell(const RenderMesh& m, double cell) {
+    std::vector<RenderMesh> out;
+    if (cell <= 0.0 || m.indices.size() < 3) {
+        out.push_back(m);
+        return out;
+    }
+    std::map<std::pair<int, int>, std::size_t> slot;
+    std::vector<std::unordered_map<uint32_t, uint32_t>> remap;
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const uint32_t i0 = m.indices[t], i1 = m.indices[t + 1], i2 = m.indices[t + 2];
+        const Vec3& a = m.vertices[i0].position;
+        const Vec3& b = m.vertices[i1].position;
+        const Vec3& c = m.vertices[i2].position;
+        const double cx = (a.x + b.x + c.x) / 3.0, cz = (a.z + b.z + c.z) / 3.0;
+        const std::pair<int, int> key{static_cast<int>(std::floor(cx / cell)),
+                                      static_cast<int>(std::floor(cz / cell))};
+        auto it = slot.find(key);
+        if (it == slot.end()) {
+            it = slot.emplace(key, out.size()).first;
+            out.emplace_back();
+            out.back().materialIndex = m.materialIndex;
+            remap.emplace_back();
+        }
+        RenderMesh& dst = out[it->second];
+        auto& rm = remap[it->second];
+        for (uint32_t src_i : {i0, i1, i2}) {
+            auto ri = rm.find(src_i);
+            if (ri == rm.end()) {
+                ri = rm.emplace(src_i, static_cast<uint32_t>(dst.vertices.size())).first;
+                dst.vertices.push_back(m.vertices[src_i]);
+            }
+            dst.indices.push_back(ri->second);
+        }
+    }
+    return out;
+}
+
 
 }  // namespace engine

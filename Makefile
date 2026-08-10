@@ -163,6 +163,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_sdf.cpp \
 	$(TEST_DIR)/test_curve.cpp \
 	$(TEST_DIR)/test_city.cpp \
+	$(TEST_DIR)/test_road_chunks.cpp \
 	$(TEST_DIR)/test_road_net.cpp \
 	$(TEST_DIR)/test_road_rules.cpp \
 	$(TEST_DIR)/test_road_weld.cpp \
@@ -261,6 +262,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/handle_source.cpp \
 	$(SRC_DIR)/engine/path_edit_tool.cpp \
 	$(SRC_DIR)/engine/asset_manager.cpp \
+	$(SRC_DIR)/engine/road_chunks.cpp \
 	$(SRC_DIR)/engine/procgen/noise.cpp \
 	$(SRC_DIR)/engine/procgen/terrain.cpp \
 	$(SRC_DIR)/engine/procgen/terrain_lod.cpp \

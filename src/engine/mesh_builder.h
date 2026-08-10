@@ -56,6 +56,15 @@ struct MeshBuilder {
     // Merge several meshes into one.
     static RenderMesh merged(const std::vector<RenderMesh>& parts);
 
+    // Split a WORLD-SPACE mesh into grid-cell chunks by triangle centroid (XZ),
+    // so the per-Renderable frustum/AABB cull drops city blocks instead of
+    // treating a district-wide merged mesh as one always-visible draw. The
+    // inverse of merged(): triangle sets partition exactly (no triangle lost or
+    // duplicated); vertices duplicate across chunk borders (cheap — a vertex is
+    // shared by few triangles); materialIndex carries over. cell <= 0 returns
+    // the mesh whole. Shared by the city building bake and the road mesher.
+    static std::vector<RenderMesh> chunkByCell(const RenderMesh& mesh, double cell);
+
     // Recompute smooth vertex normals from face geometry (area-weighted by the
     // face cross product), e.g. after displacing vertices (noise terrain).
     static void recomputeNormals(RenderMesh& mesh);

@@ -14,6 +14,8 @@
 
 namespace engine {
 
+class AssetManager;
+
 class Renderer;
 
 // Road sub-object editing (ADR-0049), for the viewport's node handles. The engine
@@ -23,23 +25,23 @@ class Renderer;
 //   moveRoadNode     -> drop a node at a new world XZ: updates the RoadNet, rebuilds
 //                       the carriageway mesh, and keeps the saved recipe in sync.
 std::vector<Vec3> roadNodeHandles(World& world, Entity e);
-bool moveRoadNode(World& world, Entity e, int node, const Vec3& worldPos, Renderer& renderer);
+bool moveRoadNode(World& world, Entity e, int node, const Vec3& worldPos, AssetManager& assets);
 // Spline tangent handles (ADR-0049): a world point per node offset along its current
 // tangent (drawn distinct from the node handles). Dragging one sets that knot's
 // tangent (handle - node), shaping the curve, and regenerates. Every road is a spline,
 // so every node carries a tangent handle.
 std::vector<Vec3> roadTangentHandles(World& world, Entity e);
-bool moveRoadTangent(World& world, Entity e, int node, const Vec3& worldPos, Renderer& renderer);
+bool moveRoadTangent(World& world, Entity e, int node, const Vec3& worldPos, AssetManager& assets);
 // Road topology editing for the viewport (ADR-0049). Each regenerates the mesh +
 // syncs the saved recipe. nearestRoadEdge picks which edge a world point is over
 // (-1 = none within maxDist), so the shell can route a click on the road to a split;
 // splitRoadEdge / extendRoad return the new node's index (to select it); deleteRoadNode
 // removes a node + its edges.
 int  nearestRoadEdge(World& world, Entity e, const Vec3& worldPos, double maxDist);
-bool setRoadEdgeWidth(World& world, Entity e, int edge, double width, Renderer& renderer);
-int  splitRoadEdge(World& world, Entity e, int edge, const Vec3& worldPos, Renderer& renderer);
-int  extendRoad(World& world, Entity e, int fromNode, const Vec3& worldPos, Renderer& renderer);
-bool deleteRoadNode(World& world, Entity e, int node, Renderer& renderer);
+bool setRoadEdgeWidth(World& world, Entity e, int edge, double width, AssetManager& assets);
+int  splitRoadEdge(World& world, Entity e, int edge, const Vec3& worldPos, AssetManager& assets);
+int  extendRoad(World& world, Entity e, int fromNode, const Vec3& worldPos, AssetManager& assets);
+bool deleteRoadNode(World& world, Entity e, int node, AssetManager& assets);
 
 // The edit-mode workhorse (docs/edit-mode-plan.md): click-to-select with
 // bounding-sphere picking, an ImGuizmo move/rotate/scale gizmo, an inspector

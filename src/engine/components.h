@@ -162,6 +162,23 @@ struct InstanceGroup {
     DrawClass drawClass = DrawClass::Unset;   // see DrawClass above
 };
 
+// The render-chunk companion entities an editable source entity currently owns
+// (a road's carriageway split into per-cell Renderables so the frustum cull
+// works on it — one city-spanning mesh has an AABB that never rejects). The
+// owner is the single lifetime authority: a regenerate destroys this set and
+// spawns a fresh one instead of leaking companions or re-uploading in place.
+// Runtime-only, never saved; the SourceSpec recipe remains the document form.
+struct RenderChunks {
+    std::vector<Entity> entities;
+};
+
+// Viewport-picking redirect for runtime companion entities: clicking a render
+// chunk selects the entity the user means — the editable source (the road),
+// not an anonymous mesh fragment. Editor-only semantics; harmless in play.
+struct PickTarget {
+    Entity target;
+};
+
 // CDLOD heightfield terrain (ADR-0036, open-world Phase 1c). One per level: when a
 // terrain block opts in via "cdlod", the loader stamps this instead of static chunk
 // entities, and TerrainLodSystem reads it each frame to select a quadtree of nodes
