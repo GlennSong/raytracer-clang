@@ -201,8 +201,11 @@ public:
     explicit XrColliderPolicy(Real minInterval = 1.0)
         : minInterval_(minInterval) {}
 
-    // Geometry arrived for this anchor (Added or Updated).
-    void noteUpdate(uint64_t anchorId, Real now);
+    // Geometry arrived for this anchor (Added or Updated). minInterval > 0
+    // overrides the policy default FOR THIS ANCHOR — big reconstruction
+    // chunks can refresh their colliders far less often than small planes
+    // (the cook cost scales with triangles; furniture doesn't move).
+    void noteUpdate(uint64_t anchorId, Real now, Real minInterval = -1);
     // The anchor is gone; forget it entirely.
     void noteRemoved(uint64_t anchorId);
     // Everything is stale (the XR origin or world scale moved — every world-
@@ -223,6 +226,7 @@ public:
 private:
     struct State {
         Real lastBuild = 0;
+        Real interval = -1;   // per-anchor override; <=0 uses the default
         bool everBuilt = false;
         bool dirty = false;
     };

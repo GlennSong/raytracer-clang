@@ -172,9 +172,12 @@ bool xrRaycastTriangles(const Vec3& origin, const Vec3& dir,
     return hit;
 }
 
-void XrColliderPolicy::noteUpdate(uint64_t anchorId, Real now) {
+void XrColliderPolicy::noteUpdate(uint64_t anchorId, Real now,
+                                  Real minInterval) {
     (void)now;   // build time is stamped in drainDue, when the cook happens
-    anchors_[anchorId].dirty = true;
+    State& state = anchors_[anchorId];
+    state.dirty = true;
+    if (minInterval > 0) state.interval = minInterval;
 }
 
 void XrColliderPolicy::noteRemoved(uint64_t anchorId) {
@@ -190,7 +193,9 @@ std::vector<uint64_t> XrColliderPolicy::drainDue(Real now, size_t maxCount) {
     for (auto& [id, state] : anchors_) {
         if (due.size() >= maxCount) break;
         if (!state.dirty) continue;
-        if (state.everBuilt && now - state.lastBuild < minInterval_) continue;
+        const Real interval =
+            state.interval > 0 ? state.interval : minInterval_;
+        if (state.everBuilt && now - state.lastBuild < interval) continue;
         state.dirty = false;
         state.everBuilt = true;
         state.lastBuild = now;

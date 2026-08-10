@@ -73,7 +73,20 @@ bool HandInteractionSystem::makeRoom() {
 
 void HandInteractionSystem::spawnDynamicAt(FrameContext& ctx,
                                            const Vec3& worldPos) {
-    if (!physics_ || !makeRoom()) return;
+    if (!physics_) return;
+    // Guardrails from the device logs: a missed grab (pinch near an object
+    // but past reach) fell through to the gaze ray and dropped a NEW object
+    // — and repeated pinches machine-gunned a pile. No spawn near an
+    // existing free object, and no more than two a second.
+    if (timeSeconds_ - lastGazeDrop_ < 0.5) return;
+    for (const SandboxObject& obj : objects_) {
+        if (obj.heldByHand >= 0) continue;
+        if ((physics_->physicsWorld().bodyPosition(obj.body) - worldPos)
+                .length() < 0.5)
+            return;
+    }
+    if (!makeRoom()) return;
+    lastGazeDrop_ = timeSeconds_;
     const int item = gazeDropCounter_++ % kItemCount;
     const ItemDef& def = kItems[item];
     SandboxObject obj;
@@ -158,7 +171,7 @@ void HandInteractionSystem::updatePalette(FrameContext& ctx) {
     for (int h = 0; h < 2; h++) {
         if (heldObject_[h] >= 0) continue;
         const XrPalmPose palm = xrPalmPose(ctx.xr.hands[h], h == 0);
-        const Real keepAngle = (h == paletteHand_) ? 1.05 : 0.7;
+        const Real keepAngle = (h == paletteHand_) ? 1.3 : 0.7;
         if (xrPalmUp(palm, keepAngle)) {
             anchor = h;
             anchorPalm = palm;
@@ -166,7 +179,7 @@ void HandInteractionSystem::updatePalette(FrameContext& ctx) {
         }
     }
     if (anchor < 0 && paletteHand_ >= 0 &&
-        timeSeconds_ - paletteLastUp_ < 0.35) {
+        timeSeconds_ - paletteLastUp_ < 0.6) {
         // Linger: palm dipped for a beat, keep the palette where it was.
         anchor = paletteHand_;
         anchorPalm = xrPalmPose(ctx.xr.hands[anchor], anchor == 0);

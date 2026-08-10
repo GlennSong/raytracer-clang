@@ -89,6 +89,7 @@ private:
     int hoverItem_ = -1;
     double paletteLastUp_ = -1;   // last time the anchor palm was truly up
     int gazeDropCounter_ = 0;     // cycles items for spawnDynamicAt
+    double lastGazeDrop_ = -1;    // rate limit for gaze spawns
     float previewSpin_ = 0;
     double consumePinchUntil_ = 0;   // suppress the gaze-drop probe until then
     double timeSeconds_ = 0;

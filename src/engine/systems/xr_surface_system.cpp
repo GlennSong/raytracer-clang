@@ -65,6 +65,27 @@ Real worldScaleOf(FrameContext& ctx) {
         ? static_cast<Real>(ctx.renderer.xrWorldScale) : 1.0;
 }
 
+// Sentinel ledger token for a surface whose render mesh is deliberately never
+// built (sandbox reconstruction chunks: hidden by display mode, yet their
+// re-uploads were the largest steady frame-thread cost — tens of thousands
+// of triangles rebuilt and re-uploaded per refinement for meshes nobody
+// draws). Cannot collide with a packed MeshHandle: generation 0xffffffff is
+// never minted.
+constexpr uint64_t kHiddenMeshToken = ~0ull;
+
+// Which surface classes the sandbox DRAWS: the horizontal, actionable ones.
+// Walls/windows/doors/ceiling still ingest and collide, but painting them
+// tinted every frame was most of the on-device visual noise.
+bool sandboxShowsClass(XrSurfaceClass cls) {
+    return cls == XrSurfaceClass::Floor || cls == XrSurfaceClass::Table ||
+           cls == XrSurfaceClass::Seat || cls == XrSurfaceClass::Unknown;
+}
+
+// Collider refresh intervals, per anchor kind. Chunk cooks scale with
+// triangle count and the furniture they model doesn't move; planes are tiny.
+constexpr Real kPlaneColliderInterval = 2.0;
+constexpr Real kChunkColliderInterval = 6.0;
+
 // Reach for gaze placement, real metres. Generous enough for a far wall of a
 // normal room, short enough that pinching at the far virtual landscape still
 // means teleport.
@@ -74,11 +95,17 @@ constexpr size_t kMaxMarkers = 64;
 }  // namespace
 
 XrSurfaceLedger::MeshOps XrSurfaceSystem::meshOps(FrameContext& ctx) {
+    const bool skipChunkMeshes = !fillSurfaces_;
     return {
-        [&ctx](const XrSurfaceUpdate& update) {
+        [&ctx, skipChunkMeshes](const XrSurfaceUpdate& update) {
+            if (skipChunkMeshes && update.cls == XrSurfaceClass::Mesh)
+                return kHiddenMeshToken;
             return packMesh(ctx.renderer.uploadMesh(buildSurfaceMesh(update)));
         },
-        [&ctx](uint64_t token) { ctx.renderer.removeMesh(unpackMesh(token)); },
+        [&ctx](uint64_t token) {
+            if (token == kHiddenMeshToken) return;
+            ctx.renderer.removeMesh(unpackMesh(token));
+        },
     };
 }
 
@@ -155,7 +182,10 @@ void XrSurfaceSystem::ingest(FrameContext& ctx) {
             ColliderGeometry& geom = colliderGeom_[u.anchorId];
             geom.positions = u.positions;
             geom.indices = u.indices;
-            colliderPolicy_.noteUpdate(u.anchorId, timeSeconds_);
+            colliderPolicy_.noteUpdate(u.anchorId, timeSeconds_,
+                                       u.cls == XrSurfaceClass::Mesh
+                                           ? kChunkColliderInterval
+                                           : kPlaneColliderInterval);
         }
 
         if (u.cls == XrSurfaceClass::Mesh || u.indices.empty()) continue;
@@ -380,19 +410,27 @@ void XrSurfaceSystem::render(FrameContext& ctx) {
     material.flags = RenderMaterial::FLAG_TWO_SIDED;
 
     for (const auto& [anchorId, entry] : ledger_.surfaces()) {
+        // Sandbox display: only the horizontal, actionable surfaces draw —
+        // floor/table/seat/unknown as stippled translucent fills the room
+        // stays visible through. Walls, windows, doors and the ceiling were
+        // most of the on-device noise ('I'm not sure what all these planes
+        // mean'); they keep ingesting and colliding, invisibly.
+        const bool shown =
+            fillSurfaces_ || (entry.cls != XrSurfaceClass::Mesh &&
+                              sandboxShowsClass(entry.cls));
+        if (!shown) continue;
         const Mat4 world = xrSurfaceWorldTransform(ctx.xr.originBase, scale,
                                                    entry.originFromAnchor);
-        if (entry.meshToken && fillSurfaces_) {
-            ctx.renderer.drawMesh(unpackMesh(entry.meshToken), world, material);
-        } else if (entry.meshToken && entry.cls != XrSurfaceClass::Mesh) {
-            // Sandbox display: PLANES as stippled translucent fills — a
-            // readable sheet the real room stays visible through — instead
-            // of the ragged per-triangle boundary wires (device feedback:
-            // "super noisy"). Room-mesh chunks stay hidden; the couch
-            // renders itself.
-            RenderMaterial fill = material;
-            fill.flags |= RenderMaterial::FLAG_STIPPLE;
-            ctx.renderer.drawMesh(unpackMesh(entry.meshToken), world, fill);
+        if (entry.meshToken && entry.meshToken != kHiddenMeshToken) {
+            if (fillSurfaces_) {
+                ctx.renderer.drawMesh(unpackMesh(entry.meshToken), world,
+                                      material);
+            } else {
+                RenderMaterial fill = material;
+                fill.flags |= RenderMaterial::FLAG_STIPPLE;
+                ctx.renderer.drawMesh(unpackMesh(entry.meshToken), world,
+                                      fill);
+            }
         }
 
         auto outline = outlines_.find(anchorId);
