@@ -107,6 +107,14 @@ struct LotProgram {
     bool requiresRim = false;
     StreetClass minStreetClass = StreetClass::Lane;
 
+    // WHICH BUILDINGS BELONG HERE. The plan's `BuildingRecipeRef building`,
+    // widened to a list so one program can vary. Without it "a recipe that
+    // fits" degenerates into "a recipe whose storey range overlaps", and a
+    // residential walkup gets handed an industrial works shed — which is
+    // exactly what the first drawn sheet showed. Empty means "any recipe whose
+    // storey range fits", which is only ever a fallback.
+    std::vector<std::string> recipes;
+
     // Relative likelihood among eligible survivors, before tag biasing.
     Real weight = 1.0;
 

@@ -260,7 +260,8 @@ namespace {
 LotProgram makeProgram(const char* name, Real minW, Real minD, Real minArea,
                        Real coverage, Real front, Real side, Real rear,
                        FrontageKind fk, OpenKind ok, int stalls,
-                       int minS, int maxS, Real weight) {
+                       int minS, int maxS, Real weight,
+                       std::vector<std::string> recipes = {}) {
     LotProgram p;
     p.name = name;
     p.minW = minW;
@@ -277,6 +278,7 @@ LotProgram makeProgram(const char* name, Real minW, Real minD, Real minArea,
     p.minStoreys = minS;
     p.maxStoreys = maxS;
     p.weight = weight;
+    p.recipes = std::move(recipes);
     return p;
 }
 
@@ -286,19 +288,19 @@ ProgramSet residentialPrograms() {
     ProgramSet s;
     s.programs.push_back(makeProgram("cottage", 7, 7, 90, 0.35, 5, 2, 6,
                                      FrontageKind::Garden, OpenKind::Lawn, 1,
-                                     1, 2, 3.0));
+                                     1, 2, 3.0, {"cottage_house", "craftsman"}));
     s.programs.push_back(makeProgram("villa", 12, 11, 320, 0.30, 8, 4, 8,
                                      FrontageKind::Garden, OpenKind::Garden, 2,
-                                     1, 3, 1.6));
+                                     1, 3, 1.6, {"villa", "craftsman"}));
     s.programs.push_back(makeProgram("townhouse", 6, 11, 80, 0.62, 2, 0, 5,
                                      FrontageKind::Patio, OpenKind::Lawn, 0,
-                                     2, 4, 2.2));
+                                     2, 4, 2.2, {"townhouse", "rowhouse"}));
     s.programs.push_back(makeProgram("walkup", 14, 14, 260, 0.55, 3, 3, 5,
                                      FrontageKind::Forecourt, OpenKind::Court, 2,
-                                     3, 6, 1.2));
+                                     3, 6, 1.2, {"walkup", "apartment_slab"}));
     LotProgram corner = makeProgram("corner_shopfront", 9, 10, 130, 0.75, 0, 0, 3,
                                     FrontageKind::Direct, OpenKind::None, 0,
-                                    2, 4, 1.0);
+                                    2, 4, 1.0, {"corner_shopfront"});
     corner.requiresCorner = true;
     s.programs.push_back(corner);
     s.reset();
@@ -309,16 +311,16 @@ ProgramSet commercialPrograms() {
     ProgramSet s;
     s.programs.push_back(makeProgram("shopfront", 8, 12, 120, 0.85, 0, 0, 2,
                                      FrontageKind::Direct, OpenKind::None, 0,
-                                     1, 3, 3.0));
+                                     1, 3, 3.0, {"shopfront", "big_box"}));
     s.programs.push_back(makeProgram("mixed_use", 12, 16, 240, 0.78, 0, 0, 3,
                                      FrontageKind::Direct, OpenKind::None, 0,
-                                     3, 6, 2.0));
+                                     3, 6, 2.0, {"mixed_use", "flatiron"}));
     s.programs.push_back(makeProgram("office_block", 18, 18, 420, 0.70, 2, 2, 4,
                                      FrontageKind::Forecourt, OpenKind::None, 4,
-                                     4, 10, 1.4));
+                                     4, 10, 1.4, {"office_block", "hotel"}));
     LotProgram bank = makeProgram("bank", 14, 14, 260, 0.72, 1, 1, 3,
                                   FrontageKind::Plaza, OpenKind::None, 0,
-                                  2, 5, 0.8);
+                                  2, 5, 0.8, {"bank", "library"});
     bank.requiresCorner = true;
     s.programs.push_back(bank);
     s.reset();
@@ -329,23 +331,27 @@ ProgramSet downtownPrograms() {
     ProgramSet s;
     s.programs.push_back(makeProgram("mixed_use", 12, 16, 240, 0.80, 0, 0, 2,
                                      FrontageKind::Direct, OpenKind::None, 0,
-                                     4, 8, 2.2));
+                                     4, 8, 2.2, {"mixed_use", "flatiron"}));
     s.programs.push_back(makeProgram("office_tower", 26, 26, 900, 0.68, 3, 3, 4,
                                      FrontageKind::Plaza, OpenKind::None, 0,
-                                     12, 45, 1.5));
+                                     12, 45, 1.5,
+                                     {"office_tower", "stepped_tower",
+                                      "terraced_tower"}));
     // A slender tower needs a plate that can carry a core: §17.2 gates this,
     // not a per-recipe constant.
     s.programs.push_back(makeProgram("glass_tower", 32, 30, 1300, 0.62, 4, 4, 5,
                                      FrontageKind::Plaza, OpenKind::None, 0,
-                                     22, 70, 1.0));
+                                     22, 70, 1.0,
+                                     {"glass_tower", "profile_tower",
+                                      "arch_tower", "pyramid_landmark"}));
     LotProgram cathedral = makeProgram("cathedral", 26, 42, 1200, 0.55, 8, 6, 8,
                                        FrontageKind::Plaza, OpenKind::Park, 0,
-                                       1, 3, 0.5);
+                                       1, 3, 0.5, {"cathedral", "church"});
     cathedral.quota = 1;              // exactly one, not a one-in-fifty chance
     s.programs.push_back(cathedral);
     LotProgram hall = makeProgram("civic_hall", 24, 30, 900, 0.55, 10, 8, 8,
                                   FrontageKind::Plaza, OpenKind::Park, 0,
-                                  2, 5, 0.5);
+                                  2, 5, 0.5, {"civic_hall", "capitol", "museum"});
     hall.quota = 1;
     s.programs.push_back(hall);
     s.reset();
@@ -359,21 +365,24 @@ ProgramSet rimPrograms() {
     // set. The coarse grain falls out of the minimums, not out of a branch.
     LotProgram campus = makeProgram("university_campus", 70, 80, 8000, 0.28,
                                     16, 12, 16, FrontageKind::Forecourt,
-                                    OpenKind::Park, 30, 2, 6, 1.0);
+                                    OpenKind::Park, 30, 2, 6, 1.0,
+                                    {"university_campus", "school"});
     campus.requiresRim = true;
     s.programs.push_back(campus);
     LotProgram park = makeProgram("office_park", 55, 60, 4500, 0.32, 14, 10, 12,
                                   FrontageKind::Forecourt, OpenKind::Lawn, 40,
-                                  2, 5, 1.4);
+                                  2, 5, 1.4, {"office_park", "hospital"});
     park.requiresRim = true;
     s.programs.push_back(park);
     LotProgram box = makeProgram("big_box", 48, 44, 3200, 0.52, 10, 6, 8,
-                                 FrontageKind::Yard, OpenKind::None, 60, 1, 1, 1.6);
+                                 FrontageKind::Yard, OpenKind::None, 60, 1, 1, 1.6,
+                                 {"big_box", "warehouse"});
     box.requiresRim = true;
     box.service = ServiceKind::Loading;
     s.programs.push_back(box);
     LotProgram works = makeProgram("works", 40, 40, 2400, 0.48, 8, 6, 8,
-                                   FrontageKind::Yard, OpenKind::None, 20, 1, 3, 1.2);
+                                   FrontageKind::Yard, OpenKind::None, 20, 1, 3, 1.2,
+                                   {"works", "factory", "warehouse"});
     works.requiresRim = true;
     works.service = ServiceKind::Loading;
     s.programs.push_back(works);
@@ -381,7 +390,7 @@ ProgramSet rimPrograms() {
     // parcel on it would have no program at all and silently become lawn.
     s.programs.push_back(makeProgram("cottage", 7, 7, 90, 0.35, 5, 2, 6,
                                      FrontageKind::Garden, OpenKind::Lawn, 1,
-                                     1, 2, 0.8));
+                                     1, 2, 0.8, {"cottage_house"}));
     s.reset();
     return s;
 }

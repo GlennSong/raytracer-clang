@@ -761,11 +761,31 @@ const BuildingRecipe* RecipeBook::byName(const std::string& name) const {
 std::vector<int> RecipeBook::forProgram(const LotProgram& program,
                                         int storeysAvailable) const {
     std::vector<int> out;
+    // WHICH BUILDINGS BELONG HERE comes from the program, by name. Matching on
+    // the storey range alone is not "a recipe that fits" — it is "a recipe of
+    // roughly the right height", and it hands a residential walkup an
+    // industrial works shed. That is not a hypothetical: it is what the first
+    // drawn sheet showed, on the first lot.
+    for (const std::string& want : program.recipes) {
+        for (std::size_t i = 0; i < recipes.size(); ++i) {
+            if (recipes[i].name != want) continue;
+            if (recipes[i].minStoreys > storeysAvailable) break;
+            // The PROGRAM's height range binds too. A walkup program that says
+            // 3-6 storeys must not end up 14 storeys tall because the recipe it
+            // named happens to reach that high — the program is the brief for
+            // the lot, and a brief that can be ignored is not a brief.
+            if (recipes[i].minStoreys > program.maxStoreys) break;
+            out.push_back(static_cast<int>(i));
+            break;
+        }
+    }
+    if (!out.empty()) return out;
+
+    // FALLBACK, for a program that names nothing or whose named recipes all
+    // want more height than the plate can carry: anything of the right height
+    // whose place type is not obviously wrong for the frontage.
     for (std::size_t i = 0; i < recipes.size(); ++i) {
         const BuildingRecipe& r = recipes[i];
-        // The recipe never inspects the lot. The PROGRAM has already decided
-        // what belongs here; the only question left is whether the recipe's
-        // storey range overlaps what the plate can carry.
         if (r.minStoreys > storeysAvailable) continue;
         if (r.maxStoreys < program.minStoreys) continue;
         if (r.minStoreys > program.maxStoreys) continue;
@@ -807,7 +827,9 @@ BuiltBuilding buildFromRecipe(const BuildingRecipe& recipe,
     Rng rng(seed ? seed : 23u);
 
     // HEIGHT: the recipe's range, capped by the PLATE (§17.2) — one model
-    // consulted once, not a coreness constant per recipe.
+    // consulted once, not a coreness constant per recipe. `tags.maxStoreys` is
+    // the whole budget: a caller that also has a program should hand in the
+    // smaller of the plate cap and the program's own ceiling.
     const int plateCap = std::max(1, static_cast<int>(tags.maxStoreys));
     int storeys = rng.irange(recipe.minStoreys, recipe.maxStoreys);
     storeys = std::max(1, std::min({storeys, recipe.maxStoreys, plateCap}));

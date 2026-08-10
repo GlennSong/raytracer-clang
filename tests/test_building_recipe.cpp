@@ -359,3 +359,70 @@ TEST_CASE(built_element_registry_drives_the_dressing) {
     CHECK(!has(b, ElementKind::Balcony));
     CHECK(has(a, ElementKind::Opening) && has(b, ElementKind::Opening));
 }
+
+// The first drawn sheet handed a residential walkup an industrial WORKS shed,
+// because "a recipe that fits" meant only "a recipe of roughly the right
+// height". A program names the buildings that belong on it.
+TEST_CASE(recipes_match_the_program_not_just_its_height) {
+    RecipeBook book = stockRecipes();
+    auto namesFor = [&](const LotProgram& p, int storeys) {
+        std::set<std::string> out;
+        for (int i : book.forProgram(p, storeys)) out.insert(book.recipes[i].name);
+        return out;
+    };
+    for (const LotProgram& p : residentialPrograms().programs) {
+        CHECK(!p.recipes.empty());
+        std::set<std::string> got = namesFor(p, 12);
+        CHECK(!got.empty());
+        // Nothing industrial ever lands on a home.
+        CHECK(got.count("works") == 0);
+        CHECK(got.count("factory") == 0);
+        CHECK(got.count("warehouse") == 0);
+        CHECK(got.count("cathedral") == 0);
+        // ... and every name the program asked for is a real recipe.
+        for (const std::string& want : p.recipes)
+            CHECK(book.byName(want) != nullptr);
+    }
+    for (const LotProgram& p : downtownPrograms().programs)
+        for (const std::string& want : p.recipes)
+            CHECK(book.byName(want) != nullptr);
+    for (const LotProgram& p : rimPrograms().programs)
+        for (const std::string& want : p.recipes)
+            CHECK(book.byName(want) != nullptr);
+    for (const LotProgram& p : commercialPrograms().programs)
+        for (const std::string& want : p.recipes)
+            CHECK(book.byName(want) != nullptr);
+
+    // A cathedral program builds a cathedral or a church, never a shopfront.
+    for (const LotProgram& p : downtownPrograms().programs)
+        if (p.name == "cathedral") {
+            std::set<std::string> got = namesFor(p, 6);
+            CHECK(got.count("shopfront") == 0);
+            CHECK(got.count("cathedral") + got.count("church") > 0);
+        }
+}
+
+// A program's declared height range binds as hard as the plate does. A walkup
+// that says 3-6 storeys must not come out 14 storeys tall because the recipe it
+// named happens to reach that high — a brief that can be ignored is not a brief.
+TEST_CASE(recipes_respect_the_programs_height_range) {
+    RecipeBook book = stockRecipes();
+    LotProgram walkup;
+    for (const LotProgram& p : residentialPrograms().programs)
+        if (p.name == "walkup") walkup = p;
+    CHECK(walkup.maxStoreys <= 6);
+    for (int i : book.forProgram(walkup, 60))
+        CHECK(book.recipes[i].minStoreys <= walkup.maxStoreys);
+
+    // And the built height honours the budget it is handed.
+    PaletteLibrary lib = stockPalettes();
+    Shape2 env = rectShape(0, 0, 30, 24);
+    env.outer.edges[0].tag = EdgeTag::Street;
+    LotTags tags;
+    inscribedRect(env, tags.inscribedW, tags.inscribedD);
+    tags.maxStoreys = walkup.maxStoreys;
+    for (int i : book.forProgram(walkup, walkup.maxStoreys)) {
+        BuiltBuilding b = buildFromRecipe(book.recipes[i], env, tags, lib, 2, 31);
+        CHECK(b.storeys <= walkup.maxStoreys);
+    }
+}

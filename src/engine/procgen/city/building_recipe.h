@@ -122,6 +122,9 @@ struct BuiltBuilding {
 
 // Build a recipe inside a site's building envelope. `tags` supplies only the
 // height cap and the coreness — never the lot's dimensions to the recipe.
+// `tags.maxStoreys` is the WHOLE height budget: a caller that also has a
+// program should pass min(plate cap, program.maxStoreys), because the
+// program's declared range binds as much as the plate does.
 // Deterministic for `seed`.
 BuiltBuilding buildFromRecipe(const BuildingRecipe& recipe,
                               const Shape2& envelope, const LotTags& tags,
