@@ -125,17 +125,30 @@ void HandInteractionSystem::release(FrameContext& ctx, int hand) {
 void HandInteractionSystem::updatePalette(FrameContext& ctx) {
     // The palette anchors to whichever palm faces up (either hand — that IS
     // the lefty support); with both up, the first wins. A hand carrying an
-    // object doesn't offer a palette.
+    // object doesn't offer a palette. Hysteresis on the angle (tight to
+    // show, loose to keep) plus a short linger absorb a palm hovering right
+    // at the threshold — device session two logged the palette flapping
+    // shown/hidden several times a second.
     int anchor = -1;
     XrPalmPose anchorPalm;
     for (int h = 0; h < 2; h++) {
         if (heldObject_[h] >= 0) continue;
         const XrPalmPose palm = xrPalmPose(ctx.xr.hands[h], h == 0);
-        if (xrPalmUp(palm)) {
+        const Real keepAngle = (h == paletteHand_) ? 1.05 : 0.7;
+        if (xrPalmUp(palm, keepAngle)) {
             anchor = h;
             anchorPalm = palm;
             break;
         }
+    }
+    if (anchor < 0 && paletteHand_ >= 0 &&
+        timeSeconds_ - paletteLastUp_ < 0.35) {
+        // Linger: palm dipped for a beat, keep the palette where it was.
+        anchor = paletteHand_;
+        anchorPalm = xrPalmPose(ctx.xr.hands[anchor], anchor == 0);
+        if (!anchorPalm.valid) anchor = -1;
+    } else if (anchor >= 0) {
+        paletteLastUp_ = timeSeconds_;
     }
     if (anchor != paletteHand_) {
         paletteHand_ = anchor;
@@ -143,6 +156,8 @@ void HandInteractionSystem::updatePalette(FrameContext& ctx) {
         if (anchor >= 0)
             LOG_INFO("[xr] palette shown (%s palm)",
                      anchor == 0 ? "left" : "right");
+        else
+            LOG_INFO("[xr] palette hidden");
     }
     if (paletteHand_ < 0) return;
 

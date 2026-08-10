@@ -62,6 +62,12 @@ struct SpikeLayerConfiguration: CompositorLayerConfiguration {
 final class XrShellModel: ObservableObject {
     static let shared = XrShellModel()
     @Published var inArena = false
+    /// True while the AR sandbox is the active scene. The long-pinch menu
+    /// gesture is DISABLED there: grabbing and carrying an object IS a held
+    /// pinch, so the shell gesture was throwing users back to the menu mid-
+    /// carry (device session two). In passthrough the launcher window is
+    /// visible in the room — its Leave button is the exit.
+    var inSandbox = false
     /// Immersion style for the NEXT space open: .full for VR scenes, .mixed
     /// for the AR sandbox (passthrough). Must agree with the engine's
     /// rt_vision_set_passthrough flag — the style controls the compositor's
@@ -157,12 +163,15 @@ struct LaunchView: View {
                     if shell.inArena {
                         await dismissImmersiveSpace()
                         shell.inArena = false
+                        shell.inSandbox = false
                     } else {
                         await enterScene()
                     }
                 }
             }
-            Text("In the scene: pinch and hold to aim (a ring marks the spot),\nrelease to teleport there. Hold ~1.2s to come back to this menu.")
+            Text(selectedLevel == Self.sandboxEntry
+                 ? "Sandbox: palm up = palette, pinch near an object = grab,\nopen fingers = throw. Leave with the button above."
+                 : "In the scene: pinch and hold to aim (a ring marks the spot),\nrelease to teleport there. Hold ~1.2s to come back to this menu.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -196,6 +205,7 @@ struct LaunchView: View {
     private func enterScene() async {
         let sandbox = selectedLevel == Self.sandboxEntry
         shell.immersion = sandbox ? .mixed : .full
+        shell.inSandbox = sandbox
         rt_vision_set_passthrough(sandbox ? 1 : 0)
         // "sandbox" is the engine's reserved name for SandboxState (no level
         // file). It is always life-size: sandbox content is authored in real
@@ -374,6 +384,7 @@ final class SpatialEventRelay {
                     rt_vision_xr_pinch(1, origin.x, origin.y, origin.z,
                                        direction.x, direction.y, direction.z)
                     if !menuTriggered,
+                       !XrShellModel.shared.inSandbox,
                        let start = activePinchStart[event.id],
                        Date().timeIntervalSince(start) >= menuHoldSeconds {
                         menuTriggered = true

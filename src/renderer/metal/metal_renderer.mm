@@ -986,6 +986,7 @@ struct MetalRenderer::Impl {
     id<MTLDepthStencilState> depthStateTransparent;   // reverse-Z: Greater, no write
     id<MTLDepthStencilState> depthStateWireOverlay;   // reverse-Z: GreaterEqual, no write
     id<MTLDepthStencilState> depthStateOverlay;       // Always pass, no write (debug gizmos on top)
+    id<MTLDepthStencilState> depthStateOverlayWrite;  // Always pass, WRITE (overlays under passthrough)
     id<MTLDepthStencilState> depthStateOpaqueForwardZ; // probe bake: Less, write
     id<MTLBuffer> instanceBuffers[MAX_FRAMES_IN_FLIGHT];  // ring; see frameIndex
     id<MTLBuffer> shadowInstanceBuffers[MAX_FRAMES_IN_FLIGHT];  // ring; shadow caster models
@@ -2052,6 +2053,17 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     depthDesc.depthCompareFunction = MTLCompareFunctionAlways;
     depthDesc.depthWriteEnabled = NO;
     impl->depthStateOverlay = [impl->device newDepthStencilStateWithDescriptor:depthDesc];
+
+    // Same, but WRITING depth — for overlays under XR passthrough. The mixed-
+    // immersion composite derives per-pixel alpha (real room vs rendered) from
+    // the DEPTH buffer, so a depthless overlay lands at background depth, gets
+    // alpha 0, and vanishes into the passthrough video (device: surface
+    // outlines invisible except where a cube behind them had written depth).
+    // Overlay ribbons are world-space geometry drawn last in the pass, so
+    // writing their true depth also hands the compositor the right
+    // reprojection distance.
+    depthDesc.depthWriteEnabled = YES;
+    impl->depthStateOverlayWrite = [impl->device newDepthStencilStateWithDescriptor:depthDesc];
     depthDesc.depthCompareFunction = MTLCompareFunctionGreaterEqual;   // restore for below
 
     // Forward-Z opaque state for the reflection-probe bake only: that pass owns
@@ -4422,7 +4434,9 @@ void MetalRenderer::endFrame() {
             // world; everything else uses the pass's depth state.
             [impl->currentEncoder setDepthStencilState:
                 (int(drawCalls[batchStart].material.flags) & RenderMaterial::FLAG_OVERLAY)
-                    ? impl->depthStateOverlay : depthState];
+                    ? (xrPassthrough ? impl->depthStateOverlayWrite
+                                     : impl->depthStateOverlay)
+                    : depthState];
 
             // FLAG_TWO_SIDED batches draw both faces. Cull mode is encoder state,
             // not per-instance, so unlike the shading flags this cannot ride the
