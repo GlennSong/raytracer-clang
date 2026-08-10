@@ -72,6 +72,8 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/plan_grammar.cpp \
 	$(SRC_DIR)/engine/procgen/city/mass_stack.cpp \
 	$(SRC_DIR)/engine/procgen/city/facade_plan.cpp \
+	$(SRC_DIR)/engine/procgen/city/lot_program.cpp \
+	$(SRC_DIR)/engine/procgen/city/site_plan.cpp \
 	$(SRC_DIR)/engine/procgen/city/shape_grammar.cpp \
 	$(SRC_DIR)/engine/procgen/city/parcel.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_network.cpp \
@@ -159,6 +161,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_shape_ops.cpp \
 	$(TEST_DIR)/test_plan_grammar.cpp \
 	$(TEST_DIR)/test_facade_plan.cpp \
+	$(TEST_DIR)/test_site_plan.cpp \
 	$(TEST_DIR)/test_cube_sphere.cpp \
 	$(TEST_DIR)/test_noise.cpp \
 	$(TEST_DIR)/test_terrain.cpp \
@@ -299,6 +302,8 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/plan_grammar.cpp \
 	$(SRC_DIR)/engine/procgen/city/mass_stack.cpp \
 	$(SRC_DIR)/engine/procgen/city/facade_plan.cpp \
+	$(SRC_DIR)/engine/procgen/city/lot_program.cpp \
+	$(SRC_DIR)/engine/procgen/city/site_plan.cpp \
 	$(SRC_DIR)/engine/procgen/city/shape_grammar.cpp \
 	$(SRC_DIR)/engine/procgen/city/parcel.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_network.cpp \

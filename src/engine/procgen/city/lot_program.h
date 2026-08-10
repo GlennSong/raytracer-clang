@@ -1,0 +1,150 @@
+#ifndef RAYTRACER_ENGINE_PROCGEN_CITY_LOT_PROGRAM_H
+#define RAYTRACER_ENGINE_PROCGEN_CITY_LOT_PROGRAM_H
+
+#include "shape_ops.h"
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace engine {
+
+// Programs, lot tags, and the buildability inversion (docs/lot-system-plan.md
+// §8.1, §17.1-17.3).
+//
+// THE INVERSION. Today the parceller cuts a rhythm and the builder rejects what
+// will not fit — six rejection counters, and a skinny trapezoid still gets a
+// tiny triangular house, because NOTHING UPSTREAM EVER ASKED whether a building
+// could stand there. The fix is to turn the question around: a program declares
+// the minimum rectangle its building needs, the parceller only emits lots that
+// can hold one, and land that can carry no program becomes open space BY
+// DESIGN. There is then nothing left to reject.
+
+// --- lot tags (§17.3) ------------------------------------------------------
+
+// What kind of position the lot occupies in its block. Computed by the
+// parceller from edge tagging, never re-derived downstream.
+enum class LotShape : uint8_t {
+    MidBlock,   // one street frontage
+    Corner,     // two streets meet here: corner shops, chamfers, entrances
+    Through,    // frontage on opposite sides
+    Island,     // street on every side
+};
+
+enum class StreetClass : uint8_t { Lane, Street, Arterial };
+
+const char* lotShapeName(LotShape s);
+
+// FACTS COMPUTED ONCE by the parceller and only READ by the architect. This is
+// the piece the plan named but never specified, and the reason the architect's
+// decision can be a filter rather than a dice roll.
+struct LotTags {
+    int frontages = 1;
+    LotShape shape = LotShape::MidBlock;
+    StreetClass streetClass = StreetClass::Street;
+
+    Real area = 0;
+    Real inscribedW = 0, inscribedD = 0;   // the largest rectangle that fits
+    Real frontWidth = 0;                   // metres of street frontage
+    Real maxStoreys = 0;                   // from the plate, see §17.2
+
+    bool enclosed = true;    // false on a rim block -> campus-scale programs
+    Real coreness = 0;       // 0 at the edge, 1 downtown: the skyline model
+    Real slope = 0;          // radians of the pad's tilt
+    int neighbours = 0;      // adjacency, for party walls and terrace runs
+};
+
+// HEIGHT IS CAPPED BY THE PLATE, ONCE (§17.2). Lifts, cores and structure scale
+// with the storeys they serve, so a hundred-storey tower needs a big floor
+// plate — you cannot put one on 200 m2. Today six tower recipes each carry
+// their own `coreness * N` guess; this is the single model above the tables.
+Real maxStoreysFor(Real shortSide, Real plateArea);
+
+// The largest axis-aligned rectangle inside `shape` when measured in the frame
+// of its own oriented bounding box — the same shrink-to-fit construction that
+// already seats a house, promoted to a QUALIFYING MEASUREMENT. Returns the
+// rectangle's dimensions; `outRect` receives the rectangle itself.
+void inscribedRect(const Shape2& shape, Real& w, Real& d,
+                   Shape2* outRect = nullptr);
+
+// Measure a parcel into tags. `streetDirs` are outward directions of the lot's
+// street-facing edges (the parceller knows them; nothing downstream should have
+// to guess).
+LotTags measureLot(const Shape2& lot, const std::vector<Vec2>& streetDirs,
+                   StreetClass klass, bool enclosed, Real coreness);
+
+// --- programs (§8.1) -------------------------------------------------------
+
+enum class FrontageKind : uint8_t { Direct, Forecourt, Garden, Plaza, Patio, Yard };
+enum class OpenKind : uint8_t { None, Lawn, Garden, Court, Park };
+enum class ServiceKind : uint8_t { None, Bins, Loading };
+
+// The brief for a lot. Note what MOVED here: setbacks and coverage are program
+// properties, not global constants. Today `lotSetback` is one number per
+// district; a villa wants 8 m of front garden, a shopfront wants zero, and a
+// tower wants a plaza on the corner and nothing at the rear.
+struct LotProgram {
+    std::string name;
+
+    // THE MINIMUM BUILDABLE RECTANGLE — a property of the BUILDING TYPE, not of
+    // the lot. This single pair of numbers is what makes the inversion work.
+    Real minW = 8, minD = 8;
+    Real minArea = 90;
+    Real minFrontage = 6;
+
+    Real coverage = 0.45;                  // footprint / lot area
+    Real frontSetback = 4, sideSetback = 2, rearSetback = 5;
+
+    FrontageKind frontage = FrontageKind::Garden;
+    OpenKind open = OpenKind::Lawn;
+    int parkingStalls = 0;
+    ServiceKind service = ServiceKind::None;
+
+    int minStoreys = 1, maxStoreys = 3;
+
+    // Eligibility bias. A program can require a corner, a rim block, or a
+    // street class — the tags the parceller already computed.
+    bool requiresCorner = false;
+    bool requiresRim = false;
+    StreetClass minStreetClass = StreetClass::Lane;
+
+    // Relative likelihood among eligible survivors, before tag biasing.
+    Real weight = 1.0;
+
+    // A QUOTA runs before the weighted pass: at most this many per district
+    // (0 = unlimited). Rarity as a quota, not a probability — the fix for
+    // "one in fifty buildings is a landmark" producing either none or twelve.
+    int quota = 0;
+};
+
+// Does this lot satisfy the program's minimums? The whole eligibility test, in
+// one place, used identically by the parceller (to decide what to cut) and by
+// the architect (to decide what to build).
+bool lotFitsProgram(const LotTags& tags, const LotProgram& p);
+
+// --- the architect's decision (§17.3) --------------------------------------
+
+// A district's program mix plus its quota state. Quotas are consumed as they
+// are placed, which is what makes "one cathedral per district" mean exactly
+// one rather than a probability that yields zero or three.
+struct ProgramSet {
+    std::vector<LotProgram> programs;
+    std::vector<int> placed;               // parallel to `programs`
+
+    void reset();
+    // Eligible programs for a lot, with their tag-biased weights.
+    std::vector<std::pair<int, Real>> eligible(const LotTags& tags) const;
+    // Two-stage filter: quota-first, then a weighted pick among survivors.
+    // Returns -1 when nothing is eligible — which is a legitimate answer
+    // meaning "this land is open space", not a failure.
+    int pick(const LotTags& tags, std::uint32_t seed);
+};
+
+// The stock residential/commercial/civic mixes, as data.
+ProgramSet residentialPrograms();
+ProgramSet commercialPrograms();
+ProgramSet downtownPrograms();
+ProgramSet rimPrograms();          // campus, office park, big box, works
+
+}  // namespace engine
+
+#endif

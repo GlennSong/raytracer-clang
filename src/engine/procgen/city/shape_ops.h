@@ -45,6 +45,13 @@ enum class BoolOp { Unite, Subtract, Intersect };
 // Returns zero, one, or MANY shapes: subtracting a bar from a plate yields two
 // pieces, and the caller must be able to see that. Holes are assigned to the
 // smallest outer loop containing them.
+//
+// PRECONDITION: each operand must be a WELL-FORMED REGION SET — its shapes may
+// not overlap one another (holes nesting inside their own outer loop is fine).
+// The classification only ever compares a fragment against the OTHER operand,
+// never against its own, so overlapping members of one operand produce a
+// self-overlapping boundary and one of them is silently dropped. Fold a pile of
+// possibly-overlapping shapes with uniteAll() before passing it in.
 std::vector<Shape2> shapeBool(const std::vector<Shape2>& a,
                               const std::vector<Shape2>& b, BoolOp op,
                               Real chordTol = 0.02);
