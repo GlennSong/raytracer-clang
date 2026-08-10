@@ -227,6 +227,18 @@ SitePlan layoutSite(const Shape2& lot, const LotTags& tags,
         case FrontageKind::Garden:    bias = 0.68; break;
         case FrontageKind::Yard:      bias = 0.40; break;
     }
+    // A CORNER lot with a plaza program keeps its corner open — that is where
+    // the plaza goes — so the building is pushed further back than the same
+    // program would sit on a mid-block parcel. This is the lot's TAG changing
+    // the design, which is the whole reason the parceller computes it.
+    if (tags.shape == LotShape::Corner &&
+        (program.frontage == FrontageKind::Plaza ||
+         program.frontage == FrontageKind::Forecourt))
+        bias = std::min(Real(0.82), bias + 0.16);
+    // An island lot has no back: pull the building to the middle so every side
+    // reads as a front.
+    if (tags.shape == LotShape::Island) bias = 0.5;
+
     // Which way is "toward the street" in the box's frame?
     const Vec2 toStreet = normalize(site.access[0].at - lotCentre);
     const int axis = std::fabs(dot(toStreet, box.axis[0])) >
@@ -348,14 +360,22 @@ SitePlan layoutSite(const Shape2& lot, const LotTags& tags,
     // --- 5. FRONTAGE / PARKING / SERVICE / OPEN fill what remains ------------
     // Frontage: the strip between the street and the building.
     if (program.frontage != FrontageKind::Direct && totalArea(free) > 2) {
+        // A strip along EVERY street frontage, not just the first — a corner
+        // lot has a garden on both streets, which is what makes it read as a
+        // corner rather than as a mid-block lot that happens to be exposed.
         const Real depth = std::max(Real(1.5), program.frontSetback);
-        const Vec2 n = site.access[0].inward;
-        const Vec2 a = site.access[0].at;
-        Poly2 strip = {a - Vec2(-n.y, n.x) * 60 - n * 5,
-                       a + Vec2(-n.y, n.x) * 60 - n * 5,
-                       a + Vec2(-n.y, n.x) * 60 + n * depth,
-                       a - Vec2(-n.y, n.x) * 60 + n * depth};
-        std::vector<Shape2> front = carve(free, {shapeFromPoly(strip)});
+        std::vector<Shape2> strips;
+        for (const AccessPoint& ap : site.access) {
+            const Vec2 n = ap.inward;
+            const Vec2 s(-n.y, n.x);
+            Poly2 strip = {ap.at - s * 60 - n * 5, ap.at + s * 60 - n * 5,
+                           ap.at + s * 60 + n * depth, ap.at - s * 60 + n * depth};
+            strips.push_back(shapeFromPoly(strip));
+        }
+        std::vector<Shape2> merged{strips[0]};
+        for (std::size_t i = 1; i < strips.size(); ++i)
+            merged = shapeBool(merged, {strips[i]}, BoolOp::Unite);
+        std::vector<Shape2> front = carve(free, merged);
         if (!front.empty()) site.zones.push_back({Zone::Frontage, front});
     }
 

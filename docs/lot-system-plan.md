@@ -1,10 +1,47 @@
 # The Lot System — a designed site, not a building on a polygon
 
-Status: **proposal / research** (owner brief, July 2026). Supersedes
-`building-floorplan-plan.md` and absorbs the unbuilt half of
+Status: **substrate built, not yet wired into the city** (August 2026).
+Supersedes `building-floorplan-plan.md` and absorbs the unbuilt half of
 `building-grammar-plan.md` (P3 lot-driven composition, P4 curtain panels).
 Not a patch on `city_lots.cpp` + `shape_grammar.cpp` — a replacement substrate
 those two become thin consumers of.
+
+## What is built
+
+Every phase P0–P9 below has landed as a tested headless module. **130 test
+cases across seven files**, built by `tools/lot_system_build.sh`.
+
+| Phase | Module | What it gives you |
+|---|---|---|
+| P0a | `shape2.{h,cpp}` | `Shape2` — regions with holes, true circular arcs (bulge), edge tags; the `Pen` turtle |
+| P0b | `shape_ops.{h,cpp}` | arc-preserving booleans, topology-changing offset, fillet/chamfer, the sampled-field fallback |
+| P1 | `plan_grammar.{h,cpp}` | selectors, plan ops, the quality invariant, 13 named templates |
+| P1 | `mass_stack.{h,cpp}` | tiers, per-band floor heights, profile/loft/twist, the support rule |
+| P2 | `facade_plan.{h,cpp}` | the shared bay grid, openings as data, the element registry |
+| P4 | `lot_program.{h,cpp}` | lot tags, the inscribed-rectangle measurement, programs, quotas |
+| P3 | `site_plan.{h,cpp}` | subtractive zone allocation, boundaries, gates, furnishing |
+| P5 | `material_set.{h,cpp}` | coherent palettes, district families, per-building perturbation |
+| P9 | `building_recipe.{h,cpp}` | 34 recipes as data rows + `buildFromRecipe`, which composes every layer |
+| P6–P8 | `lot_fixtures.{h,cpp}` | prop instance batches, interactable/hinge/sensor/seat specs, the unified `LightBudget` |
+
+**What is NOT done**, stated plainly:
+
+* **Nothing is wired into the shipping city yet.** `city_lots.cpp` and
+  `shape_grammar.cpp` still run the old path; Piedmont looks exactly as it did.
+  The substrate exists and is tested, but becoming "thin consumers of" it is
+  the next body of work, and it is deliberately a separate reviewable step.
+* **No mesher.** These modules produce plans, levels, placements, specs and
+  palettes — the *decisions*. Turning a `Level`'s `Shape2` into walls with
+  thickness, and an `ElementPlacement` into the existing emitters' geometry, is
+  the bridge to `shape_grammar.cpp`.
+* **No Lua yet** (§17.8). The recipes are C++ data rows with no logic in them,
+  which is the shape a Lua table needs — but the binding is unwritten.
+* **No Qt Building Lab** (§17.9).
+* **Physics and rendering bridges are unverifiable here**: the Jolt submodule
+  cannot be fetched in this environment, so `HingeSpec`/`SensorSpec` stop at the
+  specification boundary, and `InstanceBatch` still needs ADR-0041 Phase 2.
+* **Nothing has been seen on a screen.** There is no GPU in this environment.
+  Every claim below is backed by a headless test, not by an image.
 
 ---
 
@@ -651,6 +688,46 @@ in the same pass:
 
 P0 is the gate. **Nothing else should start before it is solid**, because every
 later phase encodes assumptions about what the kernel can express.
+
+### What the build actually found
+
+Each phase was landed with tests written to the invariant, not to the
+implementation, and several of those tests found real defects. The ones worth
+remembering, because they are design lessons rather than typos:
+
+* **Collinear shared edges broke the boolean.** Two shapes that share a wall
+  have no proper crossing, so the shared run was never split and three
+  overlapping bars united to 90 m² instead of 260. Uniting a wing onto a box
+  shares an edge *by construction* — this is the common case, not a corner one.
+  Fixed with a four-way fragment classification (Outside / Inside / OnSame /
+  OnOpposite) and a rule per op.
+* **Offsetting an arc offset its chord**, so a circle grown by 3 m came back
+  the wrong size and shape. An offset arc is a *concentric* arc; edges now
+  offset as curves and each bulge is recomputed from where its endpoints land.
+* **An over-shrunk square survives every cheap test.** Push a 10 m square in by
+  6 m and it comes back as the same square rotated 180°, which preserves
+  winding *and* has plausible positive area. Only the definition catches it:
+  every point of an offset by d sits |d| from the original boundary.
+* **The support rule was being applied between every pair of levels**, which
+  clipped a Gherkin's bulge away floor by floor and left a prism. Support is a
+  *tier-to-tier* constraint; within a tier the profile curve is the design.
+* **Lofting toward the union of two towers is a no-op** — two disjoint shapes
+  united are still two disjoint shapes. An arch's loft target has to be the
+  mass that *bridges* them.
+* **`carve` kept only the largest region**, so a circulation zone split by the
+  building lost either its front path or its driveway. Zones are genuinely
+  multi-part.
+* **xorshift32's first output is strongly correlated for nearby seeds.** The
+  "one RNG per building, ask it one question" pattern this whole system is
+  built on therefore gave *every* building the same first answer — forty
+  buildings on a street and forty different districts all chose the identical
+  palette. `Rng` now scrambles its seed. Any code doing `Rng(seed).unit()` was
+  affected, not just palettes.
+
+The last one is the most important: it was invisible in every individual
+module and only showed up when a test asked a question about a *population*
+("does a street share a family, with a minority that does not?"). Tests that
+assert on distributions, not just on single outputs, are what caught it.
 
 ---
 

@@ -115,6 +115,14 @@ std::vector<Opening> fenestrate(const BayGrid& grid, WallRole role,
         return out;
     }
 
+    // Windows DIMINISH WITH HEIGHT in a classical facade — an upper storey's
+    // opening is shorter than the piano nobile's below it. Small, but it is
+    // what stops a tall masonry building reading as a stack of identical
+    // photocopied floors.
+    const Real headScale =
+        floor <= 0 ? Real(1.0)
+                   : std::max(Real(0.80), Real(1.0) - static_cast<Real>(floor) * 0.022);
+
     const int doorBay = grid.centreBay();
     for (int b = 0; b < grid.bays; ++b) {
         Real t0, t1;
@@ -171,7 +179,7 @@ std::vector<Opening> fenestrate(const BayGrid& grid, WallRole role,
         o.t0 = t0 + pad;
         o.t1 = t1 - pad;
         o.sill = style.sill;
-        o.head = style.head;
+        o.head = style.sill + (style.head - style.sill) * headScale;
         o.kind = OpeningKind::Window;
         o.bay = b;
         out.push_back(o);
