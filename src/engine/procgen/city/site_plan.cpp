@@ -165,7 +165,9 @@ SitePlan layoutSite(const Shape2& lot, const LotTags& tags,
 
     // --- 1. ACCESS: where the lot meets the street ---------------------------
     for (std::size_t i = 0; i < lot.outer.size(); ++i) {
-        if (lot.outer.edges[i].tag != EdgeTag::Street) continue;
+        // A lane is a real way in — a mews house's door is on the lane.
+        const EdgeTag et = lot.outer.edges[i].tag;
+        if (et != EdgeTag::Street && et != EdgeTag::Lane) continue;
         const Vec2 a = lot.outer.start(i), b = lot.outer.end(i);
         const Vec2 d = b - a;
         if (d.lengthSquared() < 1e-6) continue;
@@ -202,6 +204,7 @@ SitePlan layoutSite(const Shape2& lot, const LotTags& tags,
     setbacks.side = -program.sideSetback;
     setbacks.rear = -program.rearSetback;
     setbacks.court = -program.sideSetback;
+    setbacks.lane = -std::min(program.rearSetback, Real(2.0));  // a back lane
     setbacks.party = 0;                       // a party wall stands ON the line
     setbacks.none = -program.sideSetback;
     Shape2 buildable = offsetByTag(lot, setbacks);

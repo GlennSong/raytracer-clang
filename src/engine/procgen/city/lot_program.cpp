@@ -125,10 +125,15 @@ LotTags measureLot(const Shape2& lot, const std::vector<Vec2>& streetDirs,
                                  t.inscribedW * t.inscribedD);
 
     // Frontage: total length of edges tagged Street, and how many DISTINCT
-    // directions they face — which is what makes a lot a corner.
-    Real front = 0;
+    // directions they face — which is what makes a lot a corner. Lane frontage
+    // is accumulated separately: it grants ACCESS without granting cornerness.
+    Real front = 0, lane = 0;
     std::vector<Vec2> dirs;
     for (std::size_t i = 0; i < lot.outer.size(); ++i) {
+        if (lot.outer.edges[i].tag == EdgeTag::Lane) {
+            lane += (lot.outer.end(i) - lot.outer.start(i)).length();
+            continue;
+        }
         if (lot.outer.edges[i].tag != EdgeTag::Street) continue;
         const Vec2 d = lot.outer.end(i) - lot.outer.start(i);
         const Real len = d.length();
@@ -142,6 +147,7 @@ LotTags measureLot(const Shape2& lot, const std::vector<Vec2>& streetDirs,
     }
     if (dirs.empty() && !streetDirs.empty()) dirs = streetDirs;
     t.frontWidth = front;
+    t.laneWidth = lane;
     t.frontages = static_cast<int>(dirs.size());
 
     if (t.frontages >= 4) t.shape = LotShape::Island;
@@ -166,7 +172,10 @@ bool lotFitsProgram(const LotTags& tags, const LotProgram& p) {
     // The inversion in one function: everything that used to be a rejection
     // counter downstream is a precondition here.
     if (tags.area < p.minArea) return false;
-    if (tags.frontWidth < p.minFrontage) return false;
+    // ACCESS, not show frontage: a mews house reached from a lane is perfectly
+    // buildable. Requiring street frontage alone is what leaves a block's
+    // interior landlocked and green by accident rather than by design.
+    if (tags.frontWidth + tags.laneWidth < p.minFrontage) return false;
     // The lot must contain the program's minimum rectangle in EITHER
     // orientation — a 20x8 lot can hold an 8x20 building.
     const Real lw = std::max(tags.inscribedW, tags.inscribedD);

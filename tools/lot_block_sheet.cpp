@@ -108,6 +108,7 @@ const char* tagColor(EdgeTag t) {
         case EdgeTag::Rear:   return "#7a6f9b";
         case EdgeTag::Party:  return "#ef476f";
         case EdgeTag::Court:  return "#06d6a0";
+        case EdgeTag::Lane:   return "#f4a261";
         case EdgeTag::None:   break;
     }
     return "#555";
@@ -217,6 +218,8 @@ int main(int argc, char** argv) {
     std::vector<ParcelledBlock> parcelled;
     std::vector<std::vector<BuiltLot>> built;
     int totalLots = 0, totalGates = 0, totalProps = 0, totalStoreys = 0;
+    int totalLanes = 0, totalPassages = 0;
+    Real totalOpen = 0, totalBlockArea = 0;
 
     for (std::size_t bi = 0; bi < blocks.size(); ++bi) {
         SceneBlock& sb = blocks[bi];
@@ -255,6 +258,11 @@ int main(int argc, char** argv) {
             lots.push_back(std::move(bl));
         }
         totalLots += (int)pb.lots.size();
+        for (const BlockLane& l : pb.lanes) (l.passage ? totalPassages : totalLanes)++;
+        totalOpen += pb.openArea();
+        totalBlockArea += area(sb.shape);
+        if (!pb.openSpaceIsReachable())
+            printf("  WARNING: block %zu has an unreachable green\n", bi);
         parcelled.push_back(std::move(pb));
         built.push_back(std::move(lots));
     }
@@ -300,6 +308,9 @@ int main(int argc, char** argv) {
             drawShape(s, v, parcelled[bi].block, "#171d27", 1.0, "#39445a", 1.2);
             for (const Shape2& o : parcelled[bi].openSpace)
                 drawShape(s, v, o, "#3d5c38", 0.55, "#4f7c46", 0.8);
+            for (const BlockLane& l : parcelled[bi].lanes)
+                drawShape(s, v, l.area, l.paved ? "#4a4f5a" : "#6b7f5a", 0.95,
+                          l.paved ? "#6c7482" : "#8aa06f", 0.8);
             for (const BuiltLot& bl : built[bi]) {
                 for (const ZoneArea& z : bl.site.zones)
                     for (const Shape2& part : z.parts)
@@ -322,10 +333,12 @@ int main(int argc, char** argv) {
         }
         char t[300];
         snprintf(t, sizeof t,
-                 "%zu blocks   %d lots   %d storeys   %d gates   %d props   "
-                 "— every lot passes its program's minimum, every zone disjoint "
-                 "by construction",
-                 parcelled.size(), totalLots, totalStoreys, totalGates, totalProps);
+                 "%zu blocks   %d lots   %d storeys   %d service lanes   "
+                 "%d passages   %d gates   %.0f%% open space — every shared green "
+                 "reachable, every lot passing its program's minimum",
+                 parcelled.size(), totalLots, totalStoreys, totalLanes,
+                 totalPassages, totalGates,
+                 100.0 * totalOpen / std::max(Real(1), totalBlockArea));
         label(s, 40, H - 58, t, "#e9eef6", 15);
         label(s, 40, H - 34,
               "Blocks: tight terrace / high street (arterial) / downtown plate / "
@@ -369,6 +382,9 @@ int main(int argc, char** argv) {
             drawShape(s, v, parcelled[bi].block, "#171d27", 1.0, "#39445a", 1.2);
             for (const Shape2& o : parcelled[bi].openSpace)
                 drawShape(s, v, o, "#2f4a2c", 0.85, "#4f7c46", 0.8);
+            for (const BlockLane& l : parcelled[bi].lanes)
+                drawShape(s, v, l.area, l.paved ? "#4a4f5a" : "#6b7f5a", 0.95,
+                          l.paved ? "#6c7482" : "#8aa06f", 0.8);
             for (const BuiltLot& bl : built[bi]) {
                 drawShape(s, v, bl.parcel.shape, progColor(bl.program), 0.60,
                           "#0d1117", 0.5);
@@ -379,12 +395,12 @@ int main(int argc, char** argv) {
             }
         }
         // Legend.
-        const char* names[5] = {"street", "side", "rear", "PARTY (blank wall)",
-                                "court"};
-        const EdgeTag tags[5] = {EdgeTag::Street, EdgeTag::Side, EdgeTag::Rear,
-                                 EdgeTag::Party, EdgeTag::Court};
-        for (int i = 0; i < 5; ++i) {
-            const Real x = 40 + i * 200;
+        const char* names[6] = {"street", "side", "rear", "PARTY (blank wall)",
+                                "court", "LANE (service back)"};
+        const EdgeTag tags[6] = {EdgeTag::Street, EdgeTag::Side, EdgeTag::Rear,
+                                 EdgeTag::Party, EdgeTag::Court, EdgeTag::Lane};
+        for (int i = 0; i < 6; ++i) {
+            const Real x = 40 + i * 210;
             fprintf(s.f, "<line x1=\"%.0f\" y1=\"%.0f\" x2=\"%.0f\" y2=\"%.0f\" "
                          "stroke=\"%s\" stroke-width=\"4\"/>\n",
                     x, H - 60, x + 26, H - 60, tagColor(tags[i]));

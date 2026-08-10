@@ -50,6 +50,8 @@ enum class EdgeTag : uint8_t {
     Rear,      // faces the back of the lot: service doors, plain
     Court,     // faces an interior court/atrium: windows, quiet
     Party,     // shared with the neighbouring building: blank by construction
+    Lane,      // faces a service lane / mews: real access, but a BACK face —
+               // bins and service doors, never the show frontage
 };
 
 // One vertex and the edge LEAVING it. The plan sketched `Edge2 {Vec2 a, b;}`,

@@ -406,6 +406,7 @@ Real TagOffsets::forTag(EdgeTag t) const {
         case EdgeTag::Rear:   return rear;
         case EdgeTag::Court:  return court;
         case EdgeTag::Party:  return party;
+        case EdgeTag::Lane:   return lane;
         case EdgeTag::None:   break;
     }
     return none;

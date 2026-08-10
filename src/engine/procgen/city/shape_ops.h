@@ -86,7 +86,8 @@ Shape2 offsetEdges(const Shape2& shape, const std::vector<Real>& dist);
 // The form the site layer actually calls — a program says "front 7, side 3,
 // rear 8" and never has to know edge indices.
 struct TagOffsets {
-    Real street = 0, side = 0, rear = 0, court = 0, party = 0, none = 0;
+    Real street = 0, side = 0, rear = 0, court = 0, party = 0, lane = 0,
+         none = 0;
     Real forTag(EdgeTag t) const;
 };
 Shape2 offsetByTag(const Shape2& shape, const TagOffsets& offsets);

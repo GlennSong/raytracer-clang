@@ -79,6 +79,9 @@ WallRole roleForTag(EdgeTag tag, int floor, bool retail) {
             // accidentally sprout windows into the neighbour's building.
             return WallRole::Blank;
         case EdgeTag::Rear:
+        case EdgeTag::Lane:
+            // A lane IS access, but it is the back of the building: service
+            // doors and a few small openings, never the show facade.
             return WallRole::Sparse;
         case EdgeTag::Street:
             return (retail && floor == 0) ? WallRole::Storefront

@@ -20,7 +20,7 @@ TEST_CASE(parcel_block_conserves_area) {
     ParcelledBlock r = parcelBlock(block, set, params, true, 0.3, StreetClass::Street, 5);
 
     const Real margin = area(block) - area(r.parcellable);
-    const Real accounted = r.lotArea() + r.openArea() + margin;
+    const Real accounted = r.lotArea() + r.openArea() + r.laneArea() + margin;
     CHECK(near(accounted, area(block), area(block) * 0.02));
     CHECK(r.lotArea() > 0);
 }
@@ -76,24 +76,53 @@ TEST_CASE(parcel_unbuildable_land_becomes_open_space) {
     CHECK(r.openArea() > 0);
 }
 
-TEST_CASE(parcel_every_lot_has_street_frontage_or_is_a_court) {
-    ProgramSet set = residentialPrograms();
+// Every lot has a WAY IN — a street or a lane. A mews lot reached only from a
+// back lane is legitimate (that is what lanes are for); a lot reached from
+// nothing is the defect.
+TEST_CASE(parcel_every_lot_has_access) {
     ParcelParams params;
-    Shape2 block = rectShape(0, 0, 110, 80);
-    ParcelledBlock r = parcelBlock(block, set, params, true, 0.3, StreetClass::Street, 4);
-    for (const ParcelledLot& lot : r.lots) {
-        Real front = 0;
-        int court = 0;
-        for (std::size_t i = 0; i < lot.shape.outer.size(); ++i) {
-            const EdgeTag t = lot.shape.outer.edges[i].tag;
-            if (t == EdgeTag::Street)
-                front += (lot.shape.outer.end(i) - lot.shape.outer.start(i)).length();
-            if (t == EdgeTag::Court) ++court;
+    for (std::uint32_t seed = 1; seed <= 6; ++seed) {
+        ProgramSet set = residentialPrograms();
+        Shape2 block = rectShape(0, 0, 110 + seed * 11, 80 + seed * 14);
+        ParcelledBlock r = parcelBlock(block, set, params, true, 0.3,
+                                       StreetClass::Street, seed);
+        CHECK(!r.lots.empty());
+        for (const ParcelledLot& lot : r.lots) {
+            Real access = 0;
+            int court = 0;
+            for (std::size_t i = 0; i < lot.shape.outer.size(); ++i) {
+                const EdgeTag t = lot.shape.outer.edges[i].tag;
+                if (t == EdgeTag::Street || t == EdgeTag::Lane)
+                    access += (lot.shape.outer.end(i) -
+                               lot.shape.outer.start(i)).length();
+                if (t == EdgeTag::Court) ++court;
+            }
+            CHECK(access > 1.0 || court > 0);
         }
-        // A frontage-first split keeps every emitted lot on a street. A
-        // landlocked region has no eligible program and never becomes a lot.
-        CHECK(front > 1.0 || court > 0);
     }
+}
+
+// The tagging bug worth a test of its own: an inherited LANE tag must survive
+// the rear/side pass. When it did not, a strip between two lanes lost all its
+// frontage and shipped as a single 273 m slab instead of a row of lots.
+TEST_CASE(parcel_an_inherited_lane_tag_survives_tagging) {
+    Shape2 subBlock = rectShape(0, 0, 120, 40);
+    subBlock.outer.edges[0].tag = EdgeTag::Lane;    // y = 0 is a service lane
+    subBlock.outer.edges[1].tag = EdgeTag::Street;
+    subBlock.outer.edges[2].tag = EdgeTag::Lane;    // y = 40 is another
+    subBlock.outer.edges[3].tag = EdgeTag::Street;
+
+    Shape2 lot = rectShape(20, 0, 44, 40);
+    tagLotEdges(lot, subBlock, 9.0);
+    int lanes = 0;
+    Real laneLen = 0;
+    for (std::size_t i = 0; i < lot.outer.size(); ++i)
+        if (lot.outer.edges[i].tag == EdgeTag::Lane) {
+            ++lanes;
+            laneLen += (lot.outer.end(i) - lot.outer.start(i)).length();
+        }
+    CHECK(lanes == 2);
+    CHECK(near(laneLen, 48, 0.01));
 }
 
 TEST_CASE(parcel_tags_a_lot_street_rear_and_sides) {
@@ -187,4 +216,121 @@ TEST_CASE(parcel_quotas_hold_across_a_whole_block) {
         if (lot.program >= 0 && set.programs[lot.program].name == "cathedral")
             ++cathedrals;
     CHECK(cathedrals <= 1);
+}
+
+
+// --- lanes and passages ----------------------------------------------------
+
+// A block deeper than its programs can serve from the perimeter gets a service
+// lane. Without one, a frontage-first parceller rings the outside and strands
+// the middle as a green nobody can reach.
+TEST_CASE(parcel_deep_blocks_get_a_service_lane) {
+    ProgramSet set = residentialPrograms();
+    ParcelParams params;
+    // 150 m deep: far more than two lots back to back.
+    Shape2 deep = rectShape(0, 0, 140, 150);
+    ParcelledBlock r = parcelBlock(deep, set, params, true, 0.3, StreetClass::Street, 8);
+    int service = 0;
+    for (const BlockLane& l : r.lanes) if (!l.passage) ++service;
+    CHECK(service >= 1);
+    CHECK(r.laneArea() > 0);
+
+    // A SHALLOW block needs none — the perimeter reaches everything.
+    Shape2 shallow = rectShape(0, 0, 140, 44);
+    ParcelledBlock t = parcelBlock(shallow, set, params, true, 0.3,
+                                   StreetClass::Street, 8);
+    int shallowLanes = 0;
+    for (const BlockLane& l : t.lanes) if (!l.passage) ++shallowLanes;
+    CHECK(shallowLanes == 0);
+}
+
+// The invariant the lanes exist to guarantee.
+TEST_CASE(parcel_every_shared_green_is_reachable) {
+    ParcelParams params;
+    for (std::uint32_t seed = 1; seed <= 8; ++seed) {
+        ProgramSet set = residentialPrograms();
+        Shape2 block = rectShape(0, 0, 110 + seed * 9, 120 + seed * 6);
+        ParcelledBlock r = parcelBlock(block, set, params, true, 0.3,
+                                       StreetClass::Street, seed);
+        CHECK(r.openSpaceIsReachable());
+    }
+}
+
+// What a lane actually buys on a deep block. Once the cutter refuses to strand
+// a half, a lane-less block stops producing green — it produces LOTS 150 m
+// DEEP instead, which is just as wrong and harder to see. The lane is what
+// makes the interior reachable at a sane lot depth.
+TEST_CASE(parcel_lanes_keep_lots_from_becoming_absurdly_deep) {
+    ProgramSet a = residentialPrograms(), b = residentialPrograms();
+    Shape2 block = rectShape(0, 0, 150, 150);
+
+    ParcelParams withLanes;
+    ParcelParams without;
+    without.lanes = false;
+    without.passageWidth = 0;
+
+    ParcelledBlock on = parcelBlock(block, a, withLanes, true, 0.3,
+                                    StreetClass::Street, 12);
+    ParcelledBlock off = parcelBlock(block, b, without, true, 0.3,
+                                     StreetClass::Street, 12);
+    CHECK(on.lots.size() > off.lots.size());
+
+    auto deepest = [](const ParcelledBlock& p) {
+        Real d = 0;
+        for (const ParcelledLot& l : p.lots)
+            d = std::max(d, std::min(l.tags.inscribedW, l.tags.inscribedD));
+        return d;
+    };
+    CHECK(deepest(on) < deepest(off));
+    // Both stay reachable; the lane version simply has a better grain.
+    CHECK(on.openSpaceIsReachable());
+    CHECK(off.openSpaceIsReachable());
+}
+
+// The reason the depth split has to check access: a split whose back half is
+// landlocked converts buildable ground into stranded green, which is the whole
+// complaint about big blocks.
+TEST_CASE(parcel_a_split_never_strands_a_half) {
+    ProgramSet set = residentialPrograms();
+    ParcelParams params;
+    for (std::uint32_t seed = 1; seed <= 8; ++seed) {
+        Shape2 block = rectShape(0, 0, 120 + seed * 8, 130 + seed * 7);
+        ParcelledBlock r = parcelBlock(block, set, params, true, 0.3,
+                                       StreetClass::Street, seed);
+        // Green is now a rounding error, not most of the block.
+        CHECK(r.openArea() < area(block) * 0.12);
+        CHECK(r.lotArea() > area(block) * 0.5);
+    }
+}
+
+// A lot reached only from a lane is a MEWS: buildable, but its lane face is a
+// back face, never a show frontage — so it must not read as a corner site.
+TEST_CASE(parcel_a_lane_grants_access_but_not_cornerness) {
+    Shape2 block = rectShape(0, 0, 60, 40);
+    for (Edge2& e : block.outer.edges) e.tag = EdgeTag::Street;
+    Shape2 mews = rectShape(10, 10, 26, 26);
+    // Two perpendicular LANE edges: access on two sides, but not a corner shop.
+    mews.outer.edges[0].tag = EdgeTag::Lane;
+    mews.outer.edges[1].tag = EdgeTag::Lane;
+    mews.outer.edges[2].tag = EdgeTag::Rear;
+    mews.outer.edges[3].tag = EdgeTag::Side;
+    LotTags t = measureLot(mews, {}, StreetClass::Lane, true, 0.2);
+    CHECK(t.laneWidth > 30);
+    CHECK(near(t.frontWidth, 0, 1e-9));
+    CHECK(t.shape == LotShape::MidBlock);       // NOT a corner
+    // Access still makes it buildable.
+    LotProgram cottage;
+    for (const LotProgram& p : residentialPrograms().programs)
+        if (p.name == "cottage") cottage = p;
+    CHECK(lotFitsProgram(t, cottage));
+}
+
+TEST_CASE(parcel_lanes_are_deterministic) {
+    Shape2 block = rectShape(0, 0, 130, 140);
+    ParcelParams params;
+    ProgramSet a = residentialPrograms(), b = residentialPrograms();
+    ParcelledBlock x = parcelBlock(block, a, params, true, 0.3, StreetClass::Street, 21);
+    ParcelledBlock y = parcelBlock(block, b, params, true, 0.3, StreetClass::Street, 21);
+    CHECK(x.lanes.size() == y.lanes.size());
+    CHECK(near(x.laneArea(), y.laneArea(), 1e-9));
 }

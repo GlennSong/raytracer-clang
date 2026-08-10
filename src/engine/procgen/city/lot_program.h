@@ -44,7 +44,11 @@ struct LotTags {
 
     Real area = 0;
     Real inscribedW = 0, inscribedD = 0;   // the largest rectangle that fits
-    Real frontWidth = 0;                   // metres of street frontage
+    Real frontWidth = 0;                   // metres of STREET frontage
+    // Metres of LANE frontage. Kept separate from frontWidth on purpose: a lane
+    // is access (a lot on one is reachable and buildable) but it is not a show
+    // frontage, so it must not turn a mid-block lot into a corner shop site.
+    Real laneWidth = 0;
     Real maxStoreys = 0;                   // from the plate, see §17.2
 
     bool enclosed = true;    // false on a rim block -> campus-scale programs

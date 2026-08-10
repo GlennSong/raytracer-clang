@@ -32,6 +32,40 @@ struct ParcelParams {
     Real minLotArea = 55.0;    // below this nothing is worth cutting
     Real partyMaxFront = 9.0;  // narrower than this and the side walls are PARTY
     int maxDepth = 7;          // recursion guard
+
+    // SERVICE LANES. A block deeper than about two lots cannot be served from
+    // its perimeter alone: a frontage-first parceller rings the outside and
+    // leaves the middle landlocked, which reads as a vast green nobody can
+    // reach. Real cities answer this with a mews or a back lane, so a block too
+    // deep for its programs gets one cut through it — which also makes the
+    // resulting sub-blocks more rectangular.
+    bool lanes = true;
+    Real laneWidth = 6.0;
+    // A perimeter ring of lots consumes roughly this multiple of a program's
+    // minimum depth on each side. What is left over in the middle is the
+    // STRANDED CORE, and a lane is worth cutting only when that core is big
+    // enough to be a problem — asking "is the block deep?" instead cuts lanes
+    // into blocks that a perimeter ring already serves perfectly well.
+    Real ringDepthFactor = 1.6;
+    Real strandedCoreDepth = 26.0;   // metres of core before a lane is justified
+    int maxLanes = 2;                // recursion depth: at most 3 corridors
+
+    // PASSAGES. Whatever green survives should still be reachable. A shared
+    // green above this size gets a pedestrian passage cut to the nearest street
+    // or lane; below it, the green is a private back garden reached through the
+    // house, which needs no passage of its own.
+    Real sharedGreenMinArea = 260.0;
+    Real passageWidth = 2.6;
+};
+
+// A lane or passage cut through a block. `paved` distinguishes a service lane
+// (hard surface, vehicles) from a footpath into a green (soft, pedestrian).
+struct BlockLane {
+    Shape2 area;               // the corridor itself
+    Vec2 from, to;             // its centreline endpoints
+    Real width = 6.0;
+    bool paved = true;
+    bool passage = false;      // true = pedestrian spur into a green
 };
 
 struct ParcelledLot {
@@ -45,8 +79,15 @@ struct ParcelledBlock {
     Shape2 parcellable;               // after the road margin
     std::vector<ParcelledLot> lots;
     std::vector<Shape2> openSpace;    // residue, open BY DESIGN
+    std::vector<BlockLane> lanes;     // service lanes + pedestrian passages
     Real lotArea() const;
     Real openArea() const;
+    Real laneArea() const;
+    // Is every SHARED open region reachable? True when each one touches a
+    // street, a lane or a passage — the invariant the lanes exist to guarantee.
+    // Greens below `minArea` are exempt: a small back garden is reached through
+    // the house that owns it and needs no passage of its own.
+    bool openSpaceIsReachable(Real minArea = 200.0, Real tol = 1.0) const;
 };
 
 // Cut one block. `enclosed` false marks a rim block, which admits the
