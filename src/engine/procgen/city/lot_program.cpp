@@ -186,6 +186,18 @@ bool lotFitsProgram(const LotTags& tags, const LotProgram& p) {
 
 void ProgramSet::reset() { placed.assign(programs.size(), 0); }
 
+int ProgramSet::bestFor(const LotTags& tags) const {
+    // The highest-weighted eligible program, with no RNG and no quota consumed
+    // — a stable answer to "what is this land for", which is what a parceller
+    // needs to decide how finely to cut it.
+    std::vector<std::pair<int, Real>> el = eligible(tags);
+    int best = -1;
+    Real bestW = -1;
+    for (const auto& [i, w] : el)
+        if (w > bestW) { bestW = w; best = i; }
+    return best;
+}
+
 std::vector<std::pair<int, Real>> ProgramSet::eligible(const LotTags& tags) const {
     std::vector<std::pair<int, Real>> out;
     for (std::size_t i = 0; i < programs.size(); ++i) {
@@ -195,6 +207,13 @@ std::vector<std::pair<int, Real>> ProgramSet::eligible(const LotTags& tags) cons
         // Tag biasing: the facts the parceller measured, tilting the odds
         // rather than gating them.
         Real w = std::max(Real(0), p.weight);
+        // SCALE FIT. A cottage technically fits on a 25 000 m2 rim parcel, and
+        // if that counts as an equal candidate then the smallest program in a
+        // mix drives every decision — the parceller cuts a campus block into
+        // cottages and the coarse grain the rim exists for never appears.
+        // Prefer the most demanding program the land can actually satisfy.
+        const Real scale = tags.area > 1.0 ? p.minArea / tags.area : 1.0;
+        w *= scale >= 0.25 ? 1.0 : std::max(Real(0.01), scale * 4.0);
         if (tags.shape == LotShape::Corner && p.requiresCorner) w *= 3.0;
         if (tags.streetClass == StreetClass::Arterial &&
             p.frontage == FrontageKind::Direct)

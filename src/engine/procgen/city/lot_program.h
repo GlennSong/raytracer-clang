@@ -139,8 +139,14 @@ struct ProgramSet {
     std::vector<int> placed;               // parallel to `programs`
 
     void reset();
-    // Eligible programs for a lot, with their tag-biased weights.
+    // Eligible programs for a lot, with their tag-biased weights. Weights also
+    // account for SCALE FIT: a program whose minimums are tiny relative to the
+    // land is heavily downweighted, so the smallest entry in a mix cannot
+    // dominate large parcels.
     std::vector<std::pair<int, Real>> eligible(const LotTags& tags) const;
+    // What this land is BEST for: highest-weighted eligible program, no RNG,
+    // no quota consumed. The parceller asks this to decide how finely to cut.
+    int bestFor(const LotTags& tags) const;
     // Two-stage filter: quota-first, then a weighted pick among survivors.
     // Returns -1 when nothing is eligible — which is a legitimate answer
     // meaning "this land is open space", not a failure.
