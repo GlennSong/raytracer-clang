@@ -1,6 +1,7 @@
 #ifndef RAYTRACER_ENGINE_XR_SURFACE_SYSTEM_H
 #define RAYTRACER_ENGINE_XR_SURFACE_SYSTEM_H
 
+#include <functional>
 #include <map>
 #include <vector>
 
@@ -62,9 +63,22 @@ public:
     void render(FrameContext& ctx) override;
     void onStop(FrameContext& ctx) override;
 
+    // When set (the sandbox), the gaze-pinch placement delegates spawning to
+    // this instead of making its own drop cube — so everything spawned lives
+    // in ONE grabbable pool (device feedback: gaze-dropped cubes could not
+    // be picked up, because they weren't the hand system's objects).
+    using DropSpawner = std::function<void(FrameContext&, const Vec3&)>;
+    void setDropSpawner(DropSpawner spawner) {
+        dropSpawner_ = std::move(spawner);
+    }
+
 private:
     XrSurfaceLedger ledger_;
     std::vector<XrSurfaceUpdate> drainScratch_;
+    // Drained-but-not-yet-processed updates: processing is capped per frame
+    // (mesh re-uploads hitch), so bursts queue here and smooth out.
+    std::vector<XrSurfaceUpdate> pendingUpdates_;
+    std::vector<XrSurfaceUpdate> processScratch_;
     // Anchor-space outline segments per plane anchor, cached at ingest so the
     // per-frame render cost is a transform + line per segment, not an edge
     // count over the mesh.
@@ -90,9 +104,11 @@ private:
     // onto the real table and can be knocked to the real floor). Poses are
     // read back from Jolt each frame.
     std::vector<PhysicsBodyId> dropCubes_;
+    DropSpawner dropSpawner_;
     MeshHandle markerMesh_;
     uint64_t frame_ = 0;
     bool visible_ = true;
+    bool visibleDefault_ = true;
     bool fillSurfaces_ = true;
     int lastLoggedTotal_ = -1;
 

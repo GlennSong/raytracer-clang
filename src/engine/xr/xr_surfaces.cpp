@@ -185,9 +185,10 @@ void XrColliderPolicy::invalidateAll() {
     for (auto& [id, state] : anchors_) state.dirty = true;
 }
 
-std::vector<uint64_t> XrColliderPolicy::drainDue(Real now) {
+std::vector<uint64_t> XrColliderPolicy::drainDue(Real now, size_t maxCount) {
     std::vector<uint64_t> due;
     for (auto& [id, state] : anchors_) {
+        if (due.size() >= maxCount) break;
         if (!state.dirty) continue;
         if (state.everBuilt && now - state.lastBuild < minInterval_) continue;
         state.dirty = false;

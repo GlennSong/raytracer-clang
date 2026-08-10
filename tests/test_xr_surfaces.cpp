@@ -468,3 +468,16 @@ TEST_CASE(collider_policy_invalidate_all_staggers_by_last_build) {
     CHECK(policy.drainDue(2.3).size() == 1);
     CHECK(policy.pendingCount() == 0);
 }
+
+TEST_CASE(collider_policy_drain_cap_spreads_a_burst) {
+    // A whole room arriving at once must not cook in one frame: capped
+    // drains return a slice and KEEP the rest dirty for later calls.
+    XrColliderPolicy policy(1.0);
+    for (uint64_t id = 1; id <= 5; id++) policy.noteUpdate(id, 0.0);
+    CHECK(policy.drainDue(0.0, 2).size() == 2);
+    CHECK(policy.pendingCount() == 3);
+    CHECK(policy.drainDue(0.1, 2).size() == 2);
+    CHECK(policy.drainDue(0.2, 2).size() == 1);
+    CHECK(policy.pendingCount() == 0);
+    CHECK(policy.drainDue(0.3, 2).empty());
+}

@@ -23,11 +23,16 @@ SandboxState::SandboxState(Window& window, Renderer& renderer)
     // Hands BEFORE surfaces: while the palette is up or a grab is active,
     // HandInteractionSystem consumes the system pinch so the surface
     // gaze-drop probe doesn't also fire on the same gesture.
-    addSystem<HandInteractionSystem>(&physSys);
+    auto& handSys = addSystem<HandInteractionSystem>(&physSys);
     // Surfaces WITH colliders (the point of the sandbox: things land on the
-    // real furniture) and OUTLINES ONLY — in passthrough the couch renders
-    // itself, and filled planes stacked over walls/windows read as clutter.
-    addSystem<XrSurfaceSystem>(&physSys, /*fillSurfaces=*/false);
+    // real furniture), drawn as stippled translucent planes (fillSurfaces
+    // false) — the room stays visible through them. Gaze-drops spawn through
+    // the hand system so every dropped object is grabbable.
+    auto& surfSys = addSystem<XrSurfaceSystem>(&physSys, /*fillSurfaces=*/false);
+    surfSys.setDropSpawner(
+        [&handSys](engine::FrameContext& ctx, const engine::Vec3& pos) {
+            handSys.spawnDynamicAt(ctx, pos);
+        });
 #else
     addSystem<XrSurfaceSystem>(nullptr, /*fillSurfaces=*/false);
 #endif

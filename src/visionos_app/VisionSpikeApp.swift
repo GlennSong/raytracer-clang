@@ -255,6 +255,7 @@ struct RenderSettingsView: View {
     @State private var contrast = Self.defaults.contrast
     @State private var saturation = Self.defaults.saturation
     @State private var tonemap = Self.defaults.tonemap
+    @State private var showSurfaces = true
     @State private var saved = false
 
     var body: some View {
@@ -281,6 +282,12 @@ struct RenderSettingsView: View {
                             rt_vision_set_pref_bool("ssr.enabled", v ? 1 : 0)
                         }
                     slider("Strength", $ssrStrength, 0...1, "ssr.blendStrength")
+                }
+                Section("AR") {
+                    Toggle("Show detected surfaces", isOn: $showSurfaces)
+                        .onChange(of: showSurfaces) { _, v in
+                            rt_vision_set_pref_bool("xr.showSurfaces", v ? 1 : 0)
+                        }
                 }
                 Section("Look") {
                     Picker("View transform", selection: $tonemap) {
@@ -355,6 +362,7 @@ struct RenderSettingsView: View {
         contrast = rt_vision_get_pref_double("grade.contrast", d.contrast)
         saturation = rt_vision_get_pref_double("grade.saturation", d.saturation)
         tonemap = rt_vision_get_pref_double("tonemap.op", d.tonemap)
+        showSurfaces = rt_vision_get_pref_bool("xr.showSurfaces", 1) != 0
     }
 }
 

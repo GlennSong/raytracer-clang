@@ -84,16 +84,34 @@ XrSurfaceLedger::MeshOps XrSurfaceSystem::meshOps(FrameContext& ctx) {
 
 void XrSurfaceSystem::onStart(FrameContext&) {
     const char* env = std::getenv("RT_XR_SURFACES");
-    visible_ = !(env && env[0] == '0');
+    visibleDefault_ = !(env && env[0] == '0');
+    visible_ = visibleDefault_;
 }
 
 void XrSurfaceSystem::ingest(FrameContext& ctx) {
+    // Drain everything, PROCESS a few. Each processed update re-uploads its
+    // anchor's render mesh on the frame thread; a refinement burst (session
+    // start delivers the whole room at once) used to spend tens of
+    // milliseconds in one frame — the compositor reprojects the stale frame
+    // and the world visibly drags and snaps (device: "loses anchoring when I
+    // turn my head"). Four per frame absorbs the same burst over a dozen
+    // frames instead.
     drainScratch_.clear();
     ctx.renderer.xrSurfaceStore()->drain(drainScratch_);
-    if (drainScratch_.empty()) return;
+    pendingUpdates_.insert(pendingUpdates_.end(),
+                           std::make_move_iterator(drainScratch_.begin()),
+                           std::make_move_iterator(drainScratch_.end()));
+    if (pendingUpdates_.empty()) return;
+
+    constexpr size_t kMaxUpdatesPerFrame = 4;
+    const size_t take = std::min(kMaxUpdatesPerFrame, pendingUpdates_.size());
+    processScratch_.assign(std::make_move_iterator(pendingUpdates_.begin()),
+                           std::make_move_iterator(pendingUpdates_.begin() + take));
+    pendingUpdates_.erase(pendingUpdates_.begin(),
+                          pendingUpdates_.begin() + take);
 
     const Real scale = worldScaleOf(ctx);
-    for (const XrSurfaceUpdate& u : drainScratch_) {
+    for (const XrSurfaceUpdate& u : processScratch_) {
         if (u.op == XrSurfaceUpdate::Op::Removed) {
             outlines_.erase(u.anchorId);
             planes_.erase(u.anchorId);
@@ -165,7 +183,7 @@ void XrSurfaceSystem::ingest(FrameContext& ctx) {
                      static_cast<unsigned long long>(u.anchorId));
         }
     }
-    ledger_.apply(drainScratch_, meshOps(ctx));
+    ledger_.apply(processScratch_, meshOps(ctx));
 }
 
 void XrSurfaceSystem::placeOnPinch(FrameContext& ctx) {
@@ -214,13 +232,20 @@ void XrSurfaceSystem::placeOnPinch(FrameContext& ctx) {
     const auto& cls = ledger_.surfaces().at(bestAnchor).cls;
 
     if (physics_) {
-        // Physics mode (the sandbox): drop a dynamic 10cm cube from 25 real
-        // cm above the hit — the visible, audible proof that the pinched
+        // Physics mode (the sandbox): drop a dynamic object from 25 real cm
+        // above the hit — the visible, audible proof that the pinched
         // surface's collider is really there to catch it.
         const Mat4 world = xrSurfaceWorldTransform(
             ctx.xr.originBase, scale,
             ledger_.surfaces().at(bestAnchor).originFromAnchor);
         const Vec3 spawn = world.transformPoint(bestPoint + Vec3(0, 0.25, 0));
+        if (dropSpawner_) {
+            dropSpawner_(ctx, spawn);
+            LOG_INFO("[xr] gaze drop onto %s at %.2fm (anchor %llx)",
+                     xrSurfaceClassName(cls), bestT,
+                     static_cast<unsigned long long>(bestAnchor));
+            return;
+        }
         const PhysicsBodyId id = physics_->physicsWorld().addBox(
             Vec3(0.05, 0.05, 0.05), spawn, Quat::identity(),
             BodyMotion::Dynamic, /*restitution=*/0.25, /*friction=*/0.5);
@@ -264,8 +289,10 @@ void XrSurfaceSystem::rebuildDueColliders(FrameContext& ctx) {
     colliderOrigin_ = ctx.xr.originBase;
     colliderScale_ = scale;
 
+    // One cook per frame: a 6-25k-triangle chunk's MeshShape cook runs
+    // milliseconds; several in one frame is a visible hitch (see ingest).
     std::vector<Vec3> worldVerts;
-    for (uint64_t anchorId : colliderPolicy_.drainDue(timeSeconds_)) {
+    for (uint64_t anchorId : colliderPolicy_.drainDue(timeSeconds_, 1)) {
         auto geom = colliderGeom_.find(anchorId);
         auto entry = ledger_.surfaces().find(anchorId);
         if (geom == colliderGeom_.end() || entry == ledger_.surfaces().end())
@@ -308,6 +335,9 @@ void XrSurfaceSystem::update(FrameContext& ctx) {
     XrSurfaceStore* store = ctx.renderer.xrSurfaceStore();
     if (!store) return;
 
+    // Runtime display toggle (settings panel / prefs); env var is the boot
+    // default. Ingest and colliders are never gated by visibility.
+    visible_ = ctx.settings.getBool("xr.showSurfaces", visibleDefault_);
     timeSeconds_ += ctx.frameDelta;
     ingest(ctx);
     rebuildDueColliders(ctx);
@@ -352,15 +382,27 @@ void XrSurfaceSystem::render(FrameContext& ctx) {
     for (const auto& [anchorId, entry] : ledger_.surfaces()) {
         const Mat4 world = xrSurfaceWorldTransform(ctx.xr.originBase, scale,
                                                    entry.originFromAnchor);
-        if (entry.meshToken && fillSurfaces_)
+        if (entry.meshToken && fillSurfaces_) {
             ctx.renderer.drawMesh(unpackMesh(entry.meshToken), world, material);
+        } else if (entry.meshToken && entry.cls != XrSurfaceClass::Mesh) {
+            // Sandbox display: PLANES as stippled translucent fills — a
+            // readable sheet the real room stays visible through — instead
+            // of the ragged per-triangle boundary wires (device feedback:
+            // "super noisy"). Room-mesh chunks stay hidden; the couch
+            // renders itself.
+            RenderMaterial fill = material;
+            fill.flags |= RenderMaterial::FLAG_STIPPLE;
+            ctx.renderer.drawMesh(unpackMesh(entry.meshToken), world, fill);
+        }
 
         auto outline = outlines_.find(anchorId);
         if (outline != outlines_.end()) {
             const Vec3 color = xrSurfaceClassColor(entry.cls);
-            for (const auto& [a, b] : outline->second)
-                ctx.debug.line(world.transformPoint(a), world.transformPoint(b),
-                               color);
+            if (fillSurfaces_) {
+                for (const auto& [a, b] : outline->second)
+                    ctx.debug.line(world.transformPoint(a),
+                                   world.transformPoint(b), color);
+            }
             // Normal tick: ARKit planes face +Y in anchor space. 10 real cm.
             const Vec3 foot = world.transformPoint(Vec3(0, 0, 0));
             const Vec3 tip = world.transformPoint(Vec3(0, 0.1, 0));
@@ -450,6 +492,8 @@ void XrSurfaceSystem::onStop(FrameContext& ctx) {
     outlines_.clear();
     planes_.clear();
     markers_.clear();
+    pendingUpdates_.clear();
+    processScratch_.clear();
     if (markerMesh_.valid()) {
         ctx.renderer.removeMesh(markerMesh_);
         markerMesh_ = MeshHandle{};

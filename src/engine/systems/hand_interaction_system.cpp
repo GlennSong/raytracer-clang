@@ -57,20 +57,43 @@ MeshHandle HandInteractionSystem::itemMesh(FrameContext& ctx, int item) {
     return itemMeshes_[item];
 }
 
+// Room for one more: recycle the oldest FREE object, never a held one.
+bool HandInteractionSystem::makeRoom() {
+    if (objects_.size() < kMaxObjects) return true;
+    for (size_t i = 0; i < objects_.size(); i++) {
+        if (objects_[i].heldByHand >= 0) continue;
+        physics_->physicsWorld().removeBody(objects_[i].body);
+        objects_.erase(objects_.begin() + i);
+        for (int h = 0; h < 2; h++)   // reindex held slots past the hole
+            if (heldObject_[h] > static_cast<int>(i)) heldObject_[h]--;
+        return true;
+    }
+    return false;   // everything held + cap (unreachable with two hands)
+}
+
+void HandInteractionSystem::spawnDynamicAt(FrameContext& ctx,
+                                           const Vec3& worldPos) {
+    if (!physics_ || !makeRoom()) return;
+    const int item = gazeDropCounter_++ % kItemCount;
+    const ItemDef& def = kItems[item];
+    SandboxObject obj;
+    obj.item = item;
+    obj.body = def.sphere
+        ? physics_->physicsWorld().addSphere(def.halfExtent.x, worldPos,
+                                             Quat::identity(),
+                                             BodyMotion::Dynamic, 0.3, 0.5)
+        : physics_->physicsWorld().addBox(def.halfExtent, worldPos,
+                                          Quat::identity(),
+                                          BodyMotion::Dynamic, 0.2, 0.5);
+    if (obj.body == INVALID_PHYSICS_BODY) return;
+    objects_.push_back(obj);
+    LOG_INFO("[xr] gaze-dropped %s (%zu objects)", def.name, objects_.size());
+    (void)ctx;
+}
+
 void HandInteractionSystem::spawnIntoHand(FrameContext& ctx, int item,
                                           int hand) {
-    // Room for one more: recycle the oldest FREE object, never a held one.
-    if (objects_.size() >= kMaxObjects) {
-        for (size_t i = 0; i < objects_.size(); i++) {
-            if (objects_[i].heldByHand >= 0) continue;
-            physics_->physicsWorld().removeBody(objects_[i].body);
-            objects_.erase(objects_.begin() + i);
-            for (int h = 0; h < 2; h++)   // reindex held slots past the hole
-                if (heldObject_[h] > static_cast<int>(i)) heldObject_[h]--;
-            break;
-        }
-        if (objects_.size() >= kMaxObjects) return;   // both hands full + cap
-    }
+    if (!makeRoom()) return;
 
     const ItemDef& def = kItems[item];
     const Vec3 at = handWorld(ctx, pinch_[hand].pinchPoint());
@@ -80,6 +103,7 @@ void HandInteractionSystem::spawnIntoHand(FrameContext& ctx, int item,
     obj.item = item;
     obj.heldByHand = hand;
     obj.gripOffset = Quat::identity();   // spawned aligned to the hand
+    obj.gripPosOffset = Vec3(0, 0, 0);   // spawned centred on the pinch
     obj.body = def.sphere
         ? physics_->physicsWorld().addSphere(def.halfExtent.x, at, q,
                                              BodyMotion::Kinematic)
@@ -170,10 +194,13 @@ void HandInteractionSystem::updatePalette(FrameContext& ctx) {
             handWorld(ctx, xrJointPosition(freeHand, XR_JOINT_INDEX_TIP));
         Real best = kPaletteHoverRadius;
         for (int i = 0; i < kItemCount; i++) {
+            // The row runs along palm.fingers — wrist toward fingertips, i.e.
+            // along the forearm axis (device feedback: across the palm read
+            // as sideways).
             const Vec3 slot = handWorld(ctx, anchorPalm.position)
                 + anchorPalm.normal * kPaletteLift
-                + anchorPalm.across * ((i - (kItemCount - 1) * 0.5) *
-                                       kPaletteSlotSpacing);
+                + anchorPalm.fingers * ((i - (kItemCount - 1) * 0.5) *
+                                        kPaletteSlotSpacing);
             const Real d = (tip - slot).length();
             if (d < best) {
                 best = d;
@@ -200,12 +227,15 @@ void HandInteractionSystem::updateGrabs(FrameContext& ctx) {
         if (heldObject_[h] >= 0) {
             SandboxObject& obj = objects_[heldObject_[h]];
             if (pinch_[h].tracking()) {
-                // Carry: drive the kinematic body to the pinch point with the
-                // hand's orientation (grip offset preserved), and feed the
-                // throw estimator. Tracking loss skips all of it — the
-                // object freezes in place until the hand returns.
-                const Vec3 target = handWorld(ctx, pinch_[h].pinchPoint());
-                const Quat q = handOrientation(hand) * obj.gripOffset;
+                // Carry: drive the kinematic body to follow the pinch point
+                // with the grip offsets preserved (both orientation AND the
+                // where-you-grabbed-it position), and feed the throw
+                // estimator. Tracking loss skips all of it — the object
+                // freezes in place until the hand returns.
+                const Quat handQ = handOrientation(hand);
+                const Quat q = handQ * obj.gripOffset;
+                const Vec3 target = handWorld(ctx, pinch_[h].pinchPoint()) +
+                    handQ.toMat4().transformDirection(obj.gripPosOffset);
                 physics_->physicsWorld().moveKinematic(
                     obj.body, target, q,
                     std::max(ctx.frameDelta, 1.0 / 240.0));
@@ -238,15 +268,19 @@ void HandInteractionSystem::updateGrabs(FrameContext& ctx) {
         const ItemDef& def = kItems[obj.item];
         const Vec3 p = physics_->physicsWorld().bodyPosition(obj.body);
         const Quat q = physics_->physicsWorld().bodyOrientation(obj.body);
-        // Re-create as kinematic; remember the object's orientation relative
-        // to the hand so it keeps its grip alignment while carried.
+        // Re-create as kinematic; remember the object's pose relative to the
+        // hand — orientation AND position — so it carries exactly as
+        // grabbed instead of snapping its centre into the fingers.
         physics_->physicsWorld().removeBody(obj.body);
         obj.body = def.sphere
             ? physics_->physicsWorld().addSphere(def.halfExtent.x, p, q,
                                                  BodyMotion::Kinematic)
             : physics_->physicsWorld().addBox(def.halfExtent, p, q,
                                               BodyMotion::Kinematic);
-        obj.gripOffset = handOrientation(hand).conjugate() * q;
+        const Quat handQ = handOrientation(hand);
+        obj.gripOffset = handQ.conjugate() * q;
+        obj.gripPosOffset =
+            handQ.conjugate().toMat4().transformDirection(p - at);
         obj.heldByHand = h;
         heldObject_[h] = best;
         grip_[h].clear();
@@ -264,8 +298,13 @@ void HandInteractionSystem::update(FrameContext& ctx) {
     pinch_[0].feed(ctx.xr.hands[0]);
     pinch_[1].feed(ctx.xr.hands[1]);
 
-    updatePalette(ctx);
+    // Grabs BEFORE the palette: a pinch that lands near an existing object
+    // means "pick that up", even with the palette open — spawning a fresh
+    // item on top of it was the device-reported "I drop new objects when I
+    // pick existing ones". A successful grab occupies the hand, which the
+    // palette's spawn check respects.
     updateGrabs(ctx);
+    updatePalette(ctx);
 
     // While hands are interacting, the SYSTEM gaze+pinch must not also fire
     // the surface gaze-drop probe. This system registers before
@@ -343,8 +382,8 @@ void HandInteractionSystem::render(FrameContext& ctx) {
             for (int i = 0; i < kItemCount; i++) {
                 const Vec3 slot = handWorld(ctx, palm.position)
                     + palm.normal * kPaletteLift
-                    + palm.across * ((i - (kItemCount - 1) * 0.5) *
-                                     kPaletteSlotSpacing);
+                    + palm.fingers * ((i - (kItemCount - 1) * 0.5) *
+                                      kPaletteSlotSpacing);
                 const ItemDef& def = kItems[i];
                 // Fit each preview into a ~6cm cell regardless of item size.
                 const Real maxDim =

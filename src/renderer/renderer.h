@@ -89,6 +89,14 @@ struct RenderMaterial {
     // pane blends once. Backend-honoured via cull mode, so it costs a state
     // change per batch, not per triangle.
     static constexpr uint32_t FLAG_TWO_SIDED = 16;
+    // Stipple: discard alternating pixels (checkerboard) in the lit pass, so
+    // the surface reads as translucent WITHOUT an alpha pass — built for AR
+    // passthrough, where scene alpha is binary (depth-derived) and a filled
+    // surface would otherwise fully hide the real room behind it. The
+    // discarded pixels show whatever is behind (passthrough video on device)
+    // at full resolution; at headset pixel densities the pattern reads as a
+    // uniform 50% tint.
+    static constexpr uint32_t FLAG_STIPPLE = 32;
 
     // World-space procedural surface library (applySurface in surfaces.metal /
     // scene.cpp): an analytic material — brick, concrete, roof tiles, asphalt,

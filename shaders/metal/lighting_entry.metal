@@ -113,6 +113,12 @@ fragment GBufferOut fragmentMain(
         GBufferOut wf; wf.color = float4(camera.wireColor.rgb, 1.0);
         wf.viewNormal = float4(0.0, 0.0, 1.0, 0.0); return wf;
     }
+    // Stipple (FLAG_STIPPLE): checkerboard discard = translucency that works
+    // over passthrough (discarded pixels show the real room behind).
+    if ((int(material.flags) & 32) != 0) {
+        uint2 sp = uint2(in.position.xy);
+        if (((sp.x + sp.y) & 1u) != 0u) discard_fragment();
+    }
     SurfaceGeometry geom = {in.worldPosition, in.worldNormal,
                             in.worldTangent, in.texcoord};
     // Per-vertex tint (default white) modulates the material albedo — this is
@@ -154,6 +160,12 @@ fragment GBufferOut fragmentMainInstanced(
     if (camera.wireColor.w > 0.5) {                 // wireframe lines: flat colour
         GBufferOut wf; wf.color = float4(camera.wireColor.rgb, 1.0);
         wf.viewNormal = float4(0.0, 0.0, 1.0, 0.0); return wf;
+    }
+    // Stipple (FLAG_STIPPLE): checkerboard discard = translucency that works
+    // over passthrough (discarded pixels show the real room behind).
+    if ((int(in.flags) & 32) != 0) {
+        uint2 sp = uint2(in.position.xy);
+        if (((sp.x + sp.y) & 1u) != 0u) discard_fragment();
     }
     SurfaceGeometry geom = {in.worldPosition, in.worldNormal,
                             in.worldTangent, in.texcoord};

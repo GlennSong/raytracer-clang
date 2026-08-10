@@ -48,6 +48,11 @@ public:
     void render(FrameContext& ctx) override;
     void onStop(FrameContext& ctx) override;
 
+    // Spawn an item as a FREE dynamic body at a world position — the surface
+    // system's gaze-drop delegates here so everything dropped is grabbable.
+    // Cycles through the item set so gaze-dropping gives variety.
+    void spawnDynamicAt(FrameContext& ctx, const Vec3& worldPos);
+
 private:
     struct ItemDef {
         const char* name;
@@ -66,6 +71,9 @@ private:
         int item = 0;
         int heldByHand = -1;   // -1 free, 0 left, 1 right
         Quat gripOffset;       // object orientation relative to the hand's
+        Vec3 gripPosOffset;    // object centre relative to the pinch point,
+                               // hand space — grabbing the corner of a slab
+                               // must not snap its centre to the fingers
     };
 
     PhysicsSystem* physics_ = nullptr;
@@ -80,12 +88,14 @@ private:
     int paletteHand_ = -1;
     int hoverItem_ = -1;
     double paletteLastUp_ = -1;   // last time the anchor palm was truly up
+    int gazeDropCounter_ = 0;     // cycles items for spawnDynamicAt
     float previewSpin_ = 0;
     double consumePinchUntil_ = 0;   // suppress the gaze-drop probe until then
     double timeSeconds_ = 0;
 
     Vec3 handWorld(FrameContext& ctx, const Vec3& originPoint) const;
     Quat handOrientation(const XrHand& hand) const;
+    bool makeRoom();
     void updatePalette(FrameContext& ctx);
     void updateGrabs(FrameContext& ctx);
     void spawnIntoHand(FrameContext& ctx, int item, int hand);

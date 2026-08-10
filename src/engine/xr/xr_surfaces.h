@@ -25,6 +25,7 @@
 #ifndef ENGINE_XR_SURFACES_H
 #define ENGINE_XR_SURFACES_H
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -212,7 +213,9 @@ public:
     // Anchors due for a (re)build at `now`: dirty, and either never built or
     // past the interval since their last build. Returned anchors are marked
     // built-at-`now` and clean; call once per frame and cook what comes back.
-    std::vector<uint64_t> drainDue(Real now);
+    // maxCount caps the batch (cooks hitch — spread them across frames);
+    // anchors past the cap stay dirty and return on later calls.
+    std::vector<uint64_t> drainDue(Real now, size_t maxCount = SIZE_MAX);
 
     // Dirty anchors still waiting on the throttle (the census readout).
     size_t pendingCount() const;
