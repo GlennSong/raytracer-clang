@@ -384,6 +384,13 @@ void PhysicsWorld::setAngularVelocity(PhysicsBodyId id, const Vec3& velocity) {
     impl->bodies().SetAngularVelocity(JPH::BodyID(id), toJolt(velocity));
 }
 
+void PhysicsWorld::setMotionType(PhysicsBodyId id, BodyMotion motion) {
+    if (!impl || id == INVALID_PHYSICS_BODY) return;
+    if (motion == BodyMotion::Static) return;   // layer change — unsupported
+    impl->bodies().SetMotionType(JPH::BodyID(id), toMotionType(motion),
+                                 JPH::EActivation::Activate);
+}
+
 Vec3 PhysicsWorld::getLinearVelocity(PhysicsBodyId id) const {
     if (!impl || id == INVALID_PHYSICS_BODY) return Vec3();
     return fromJolt(impl->bodies().GetLinearVelocity(JPH::BodyID(id)));

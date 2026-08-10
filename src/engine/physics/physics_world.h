@@ -86,6 +86,14 @@ public:
     // from the wrist (XrPoseHistory::angularVelocity).
     void setAngularVelocity(PhysicsBodyId id, const Vec3& velocity);
 
+    // Switch a live body between Dynamic and Kinematic (a grab takes an
+    // object kinematic, the release hands it back) without recreating it —
+    // the id stays stable for the object's lifetime. Both motions live on
+    // the same object layer, so no layer bookkeeping; converting to/from
+    // Static is NOT supported here (that changes layers — create the body
+    // with the right motion instead).
+    void setMotionType(PhysicsBodyId id, BodyMotion motion);
+
     // Drive a KINEMATIC body toward a target pose over `dt` (Jolt MoveKinematic):
     // the body moves with the velocity needed to arrive, so it pushes dynamic
     // bodies and blocks characters instead of tunnelling. For sim-owned movers

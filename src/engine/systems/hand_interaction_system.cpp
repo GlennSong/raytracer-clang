@@ -1,23 +1,42 @@
 #include "hand_interaction_system.h"
 
+#include <cmath>
+
 #include "../../log.h"
 #include "../mesh_builder.h"
+#include "../xr/xr_touch.h"
 #include "physics_system.h"
 
 namespace engine {
 
 namespace {
 
-// Reach for a grab: pinch within this of an object's centre grabs it. Wide
-// enough to be forgiving (tracked fingertips wander a centimetre or two),
-// tight enough that a pinch across the room never teleports an object.
-constexpr Real kGrabReach = 0.30;
-// Affordance range: objects inside this of a fingertip show the highlight.
-constexpr Real kApproachRange = 0.45;
-constexpr Real kPaletteSlotSpacing = 0.09;
-constexpr Real kPaletteLift = 0.09;       // above the palm, metres
-constexpr Real kPaletteHoverRadius = 0.055;
+// Grab reach, measured to the object's SURFACE (nearest point on its
+// oriented shape): forgiving of centimetre fingertip wander, but the pick
+// region has exactly the object's shape — a lying pillar grabs along its
+// whole lying length.
+constexpr Real kGrabSurfaceReach = 0.10;
+// Affordance range: candidates inside this of the pinch point show the
+// oriented highlight + fingertip projection cues.
+constexpr Real kApproachRange = 0.35;
 constexpr size_t kMaxObjects = 32;
+// Carry filter time constant (also reused for the hand spheres, tighter).
+constexpr Real kCarryTau = 0.05;
+constexpr Real kHandTau = 0.03;
+
+// Hand-presence sphere set: five fingertips + the palm.
+constexpr XrHandJointId kHandSphereJoints[] = {
+    XR_JOINT_THUMB_TIP, XR_JOINT_INDEX_TIP, XR_JOINT_MIDDLE_TIP,
+    XR_JOINT_RING_TIP, XR_JOINT_LITTLE_TIP, XR_JOINT_WRIST,
+};
+constexpr Real kFingertipRadius = 0.012;
+constexpr Real kPalmRadius = 0.035;
+
+XrPalette::Config paletteConfig(int itemCount) {
+    XrPalette::Config c;
+    c.itemCount = itemCount;
+    return c;
+}
 
 }  // namespace
 
@@ -35,6 +54,9 @@ const int HandInteractionSystem::kItemCount =
     static_cast<int>(sizeof(HandInteractionSystem::kItems) /
                      sizeof(HandInteractionSystem::kItems[0]));
 
+HandInteractionSystem::HandInteractionSystem(PhysicsSystem* physics)
+    : physics_(physics), palette_(paletteConfig(kItemCount)) {}
+
 Vec3 HandInteractionSystem::handWorld(FrameContext& ctx,
                                       const Vec3& originPoint) const {
     // Sandbox scale is locked to 1, so ORIGIN -> WORLD is the base
@@ -45,6 +67,41 @@ Vec3 HandInteractionSystem::handWorld(FrameContext& ctx,
 Quat HandInteractionSystem::handOrientation(const XrHand& hand) const {
     return Quat::fromRotationMatrix(
         hand.joints[XR_JOINT_WRIST].originFromJoint);
+}
+
+Real HandInteractionSystem::objectSurfaceDistance(const SandboxObject& obj,
+                                                  const Vec3& p) const {
+    const ItemDef& def = kItems[obj.item];
+    const Vec3 c = physics_->physicsWorld().bodyPosition(obj.body);
+    if (def.sphere) return xrSphereSurfaceDistance(def.halfExtent.x, c, p);
+    return xrBoxSurfaceDistance(def.halfExtent, c,
+                                physics_->physicsWorld().bodyOrientation(obj.body),
+                                p);
+}
+
+Vec3 HandInteractionSystem::objectNearestPoint(const SandboxObject& obj,
+                                               const Vec3& p) const {
+    const ItemDef& def = kItems[obj.item];
+    const Vec3 c = physics_->physicsWorld().bodyPosition(obj.body);
+    if (def.sphere) return xrNearestPointOnSphere(def.halfExtent.x, c, p);
+    return xrNearestPointOnBox(def.halfExtent, c,
+                               physics_->physicsWorld().bodyOrientation(obj.body),
+                               p);
+}
+
+int HandInteractionSystem::nearestFreeObject(const Vec3& p,
+                                             Real maxSurfaceDistance) const {
+    int best = -1;
+    Real bestD = maxSurfaceDistance;
+    for (size_t i = 0; i < objects_.size(); i++) {
+        if (objects_[i].heldByHand >= 0) continue;
+        const Real d = objectSurfaceDistance(objects_[i], p);
+        if (d < bestD) {
+            bestD = d;
+            best = static_cast<int>(i);
+        }
+    }
+    return best;
 }
 
 MeshHandle HandInteractionSystem::itemMesh(FrameContext& ctx, int item) {
@@ -71,39 +128,6 @@ bool HandInteractionSystem::makeRoom() {
     return false;   // everything held + cap (unreachable with two hands)
 }
 
-void HandInteractionSystem::spawnDynamicAt(FrameContext& ctx,
-                                           const Vec3& worldPos) {
-    if (!physics_) return;
-    // Guardrails from the device logs: a missed grab (pinch near an object
-    // but past reach) fell through to the gaze ray and dropped a NEW object
-    // — and repeated pinches machine-gunned a pile. No spawn near an
-    // existing free object, and no more than two a second.
-    if (timeSeconds_ - lastGazeDrop_ < 0.5) return;
-    for (const SandboxObject& obj : objects_) {
-        if (obj.heldByHand >= 0) continue;
-        if ((physics_->physicsWorld().bodyPosition(obj.body) - worldPos)
-                .length() < 0.5)
-            return;
-    }
-    if (!makeRoom()) return;
-    lastGazeDrop_ = timeSeconds_;
-    const int item = gazeDropCounter_++ % kItemCount;
-    const ItemDef& def = kItems[item];
-    SandboxObject obj;
-    obj.item = item;
-    obj.body = def.sphere
-        ? physics_->physicsWorld().addSphere(def.halfExtent.x, worldPos,
-                                             Quat::identity(),
-                                             BodyMotion::Dynamic, 0.3, 0.5)
-        : physics_->physicsWorld().addBox(def.halfExtent, worldPos,
-                                          Quat::identity(),
-                                          BodyMotion::Dynamic, 0.0, 0.7);
-    if (obj.body == INVALID_PHYSICS_BODY) return;
-    objects_.push_back(obj);
-    LOG_INFO("[xr] gaze-dropped %s (%zu objects)", def.name, objects_.size());
-    (void)ctx;
-}
-
 void HandInteractionSystem::spawnIntoHand(FrameContext& ctx, int item,
                                           int hand) {
     if (!makeRoom()) return;
@@ -123,6 +147,8 @@ void HandInteractionSystem::spawnIntoHand(FrameContext& ctx, int item,
         : physics_->physicsWorld().addBox(def.halfExtent, at, q,
                                           BodyMotion::Kinematic);
     if (obj.body == INVALID_PHYSICS_BODY) return;
+    obj.posPrev = obj.posCurr = at;
+    obj.quatPrev = obj.quatCurr = q;
 
     objects_.push_back(obj);
     heldObject_[hand] = static_cast<int>(objects_.size()) - 1;
@@ -138,22 +164,15 @@ void HandInteractionSystem::release(FrameContext& ctx, int hand) {
     if (idx < 0) return;
     SandboxObject& obj = objects_[idx];
     const ItemDef& def = kItems[obj.item];
+    (void)ctx;
 
-    // Swap the kinematic carrier for a dynamic body at the same pose, leaving
-    // with the hand's velocities: linear from the windowed fit, angular from
-    // the wrist — the throw itself.
-    const Vec3 p = physics_->physicsWorld().bodyPosition(obj.body);
-    const Quat q = physics_->physicsWorld().bodyOrientation(obj.body);
-    physics_->physicsWorld().removeBody(obj.body);
-    obj.body = def.sphere
-        ? physics_->physicsWorld().addSphere(def.halfExtent.x, p, q,
-                                             BodyMotion::Dynamic, 0.3, 0.5)
-        : physics_->physicsWorld().addBox(def.halfExtent, p, q,
-                                          BodyMotion::Dynamic, 0.0, 0.7);
-    // Placement vs throw: a hand that is HOLDING STILL when it opens means
-    // "set it down" — residual estimator noise (a few tenths of m/s) would
-    // knock the stack it was placed on. Below the threshold both velocities
-    // zero; above it the fit velocities carry through unchanged.
+    // Back to dynamic IN PLACE (SetMotionType — the body id is stable for
+    // the object's life), leaving with the hand's velocities: linear from
+    // the windowed fit, angular from the wrist. A hand that is HOLDING
+    // STILL when it opens means "set it down" — residual estimator noise (a
+    // few tenths of m/s) would knock the stack it was placed on, so below
+    // the threshold both velocities zero.
+    physics_->physicsWorld().setMotionType(obj.body, BodyMotion::Dynamic);
     Vec3 v = grip_[hand].linearVelocity();
     Vec3 w = grip_[hand].angularVelocity();
     if (v.length() < 0.25) {
@@ -169,77 +188,89 @@ void HandInteractionSystem::release(FrameContext& ctx, int hand) {
              hand == 0 ? "L" : "R", v.length(), w.length());
 }
 
-void HandInteractionSystem::updatePalette(FrameContext& ctx) {
-    // The palette anchors to whichever palm faces up (either hand — that IS
-    // the lefty support); with both up, the first wins. A hand carrying an
-    // object doesn't offer a palette. Hysteresis on the angle (tight to
-    // show, loose to keep) plus a short linger absorb a palm hovering right
-    // at the threshold — device session two logged the palette flapping
-    // shown/hidden several times a second.
-    int anchor = -1;
-    XrPalmPose anchorPalm;
+void HandInteractionSystem::updateHandPresence(FrameContext& ctx) {
+    // Six kinematic spheres per tracked hand — the physical presence that
+    // lets an open hand shove and scatter blocks. Driven kinematically so
+    // Jolt derives real velocities (a swing imparts a swing's impulse).
     for (int h = 0; h < 2; h++) {
-        if (heldObject_[h] >= 0) continue;
-        const XrPalmPose palm = xrPalmPose(ctx.xr.hands[h], h == 0);
-        const Real keepAngle = (h == paletteHand_) ? 1.3 : 0.7;
-        if (xrPalmUp(palm, keepAngle)) {
-            anchor = h;
-            anchorPalm = palm;
-            break;
-        }
-    }
-    if (anchor < 0 && paletteHand_ >= 0 &&
-        timeSeconds_ - paletteLastUp_ < 0.6) {
-        // Linger: palm dipped for a beat, keep the palette where it was.
-        anchor = paletteHand_;
-        anchorPalm = xrPalmPose(ctx.xr.hands[anchor], anchor == 0);
-        if (!anchorPalm.valid) anchor = -1;
-    } else if (anchor >= 0) {
-        paletteLastUp_ = timeSeconds_;
-    }
-    if (anchor != paletteHand_) {
-        paletteHand_ = anchor;
-        hoverItem_ = -1;
-        if (anchor >= 0)
-            LOG_INFO("[xr] palette shown (%s palm)",
-                     anchor == 0 ? "left" : "right");
-        else
-            LOG_INFO("[xr] palette hidden");
-    }
-    if (paletteHand_ < 0) return;
-
-    // Hover: the free hand's index fingertip against the slot centres.
-    const int free = 1 - paletteHand_;
-    const XrHand& freeHand = ctx.xr.hands[free];
-    int hover = -1;
-    if (freeHand.tracked && freeHand.joints[XR_JOINT_INDEX_TIP].tracked) {
-        const Vec3 tip =
-            handWorld(ctx, xrJointPosition(freeHand, XR_JOINT_INDEX_TIP));
-        Real best = kPaletteHoverRadius;
-        for (int i = 0; i < kItemCount; i++) {
-            // The row runs along palm.fingers — wrist toward fingertips, i.e.
-            // along the forearm axis (device feedback: across the palm read
-            // as sideways).
-            const Vec3 slot = handWorld(ctx, anchorPalm.position)
-                + anchorPalm.normal * kPaletteLift
-                + anchorPalm.fingers * ((i - (kItemCount - 1) * 0.5) *
-                                        kPaletteSlotSpacing);
-            const Real d = (tip - slot).length();
-            if (d < best) {
-                best = d;
-                hover = i;
+        const XrHand& hand = ctx.xr.hands[h];
+        if (!hand.tracked) {
+            if (handActive_[h]) {
+                // Park far below the room; teleport (not a kinematic sweep
+                // — that would batter everything on the way down).
+                const Vec3 park =
+                    ctx.xr.originBase + Vec3(h == 0 ? -2 : 2, -100, 0);
+                for (int s = 0; s < kHandSpheres; s++)
+                    physics_->physicsWorld().teleport(handBodies_[h][s], park,
+                                                      Quat::identity());
+                handActive_[h] = false;
             }
+            continue;
         }
-    }
-    if (hover != hoverItem_) {
-        hoverItem_ = hover;
-        if (hover >= 0) LOG_INFO("[xr] palette hover %s", kItems[hover].name);
-    }
 
-    // Free-hand pinch on a hovered item spawns it into that hand.
-    if (hover >= 0 && pinch_[free].began() && heldObject_[free] < 0) {
-        spawnIntoHand(ctx, hover, free);
-        consumePinchUntil_ = timeSeconds_ + 0.4;
+        const Real alpha = 1.0 - std::exp(-ctx.frameDelta / kHandTau);
+        for (int s = 0; s < kHandSpheres; s++) {
+            const XrHandJointId joint = kHandSphereJoints[s];
+            if (!hand.joints[joint].tracked) continue;
+            const Vec3 target = handWorld(ctx, xrJointPosition(hand, joint));
+
+            if (handBodies_[h][s] == INVALID_PHYSICS_BODY) {
+                handBodies_[h][s] = physics_->physicsWorld().addSphere(
+                    s == kHandSpheres - 1 ? kPalmRadius : kFingertipRadius,
+                    target, Quat::identity(), BodyMotion::Kinematic);
+                handSmooth_[h][s] = target;
+                continue;
+            }
+            if (!handActive_[h]) {
+                // Returning from the park: teleport back, never sweep.
+                physics_->physicsWorld().teleport(handBodies_[h][s], target,
+                                                  Quat::identity());
+                handSmooth_[h][s] = target;
+                continue;
+            }
+            handSmooth_[h][s] =
+                handSmooth_[h][s] + (target - handSmooth_[h][s]) * alpha;
+            physics_->physicsWorld().moveKinematic(
+                handBodies_[h][s], handSmooth_[h][s], Quat::identity(),
+                std::max(ctx.frameDelta, 1.0 / 240.0));
+        }
+        handActive_[h] = true;
+    }
+}
+
+void HandInteractionSystem::updatePalette(FrameContext& ctx) {
+    XrPalette::Inputs in;
+    for (int h = 0; h < 2; h++) {
+        in.palm[h] = xrPalmPose(ctx.xr.hands[h], h == 0);
+        if (in.palm[h].valid)
+            in.palm[h].position = handWorld(ctx, in.palm[h].position);
+        in.handBusy[h] = heldObject_[h] >= 0;
+        const XrHand& hand = ctx.xr.hands[h];
+        in.fingertipValid[h] =
+            hand.tracked && hand.joints[XR_JOINT_INDEX_TIP].tracked;
+        if (in.fingertipValid[h])
+            in.fingertip[h] =
+                handWorld(ctx, xrJointPosition(hand, XR_JOINT_INDEX_TIP));
+    }
+    palette_.update(in, timeSeconds_);
+
+    if (palette_.shownEdge())
+        LOG_INFO("[xr] palette shown (%s palm)",
+                 palette_.anchorHand() == 0 ? "left" : "right");
+    if (palette_.hiddenEdge()) LOG_INFO("[xr] palette hidden");
+    if (palette_.hoverChanged() && palette_.hoverItem() >= 0)
+        LOG_INFO("[xr] palette hover %s", kItems[palette_.hoverItem()].name);
+
+    // Free-hand pinch on a hovered item spawns it into that hand. Grabs ran
+    // first this frame, so a pinch that landed near an existing object
+    // already took it and set handBusy.
+    const int anchor = palette_.anchorHand();
+    if (anchor >= 0 && palette_.hoverItem() >= 0) {
+        const int free = 1 - anchor;
+        if (pinch_[free].began() && heldObject_[free] < 0) {
+            spawnIntoHand(ctx, palette_.hoverItem(), free);
+            consumePinchUntil_ = timeSeconds_ + 0.4;
+        }
     }
 }
 
@@ -251,24 +282,20 @@ void HandInteractionSystem::updateGrabs(FrameContext& ctx) {
             SandboxObject& obj = objects_[heldObject_[h]];
             if (pinch_[h].tracking()) {
                 // Carry: drive the kinematic body to follow the pinch point
-                // with the grip offsets preserved (both orientation AND the
-                // where-you-grabbed-it position), and feed the throw
-                // estimator. The RAW hand pose is millimetre-noisy, so the
-                // target runs through a ~50ms low-pass (exponential toward
-                // the raw pose): the object carries steady in the fingers
-                // and stops hammering whatever it is placed against, at a
-                // lag well under perception. Tracking loss skips all of it —
-                // the object freezes in place until the hand returns.
+                // with the grip offsets preserved. The RAW hand pose is
+                // millimetre-noisy, so the target runs through a ~50ms
+                // low-pass: steady in the fingers, lag under perception.
+                // Tracking loss skips all of it — the object freezes until
+                // the hand returns.
                 const Quat handQ = handOrientation(hand);
                 const Quat rawQ = handQ * obj.gripOffset;
                 const Vec3 rawTarget =
                     handWorld(ctx, pinch_[h].pinchPoint()) +
-                    handQ.toMat4().transformDirection(obj.gripPosOffset);
+                    handQ.rotate(obj.gripPosOffset);
                 const Real alpha =
-                    1.0 - std::exp(-ctx.frameDelta / 0.05);
+                    1.0 - std::exp(-ctx.frameDelta / kCarryTau);
                 carryPos_[h] = carryPos_[h] + (rawTarget - carryPos_[h]) * alpha;
-                carryQ_[h] = Quat::slerp(carryQ_[h], rawQ,
-                                         static_cast<Real>(alpha));
+                carryQ_[h] = Quat::slerp(carryQ_[h], rawQ, alpha);
                 physics_->physicsWorld().moveKinematic(
                     obj.body, carryPos_[h], carryQ_[h],
                     std::max(ctx.frameDelta, 1.0 / 240.0));
@@ -278,50 +305,33 @@ void HandInteractionSystem::updateGrabs(FrameContext& ctx) {
             continue;
         }
 
-        // Not holding: a fresh pinch near a free object grabs it. (A pinch
-        // that just spawned from the palette set heldObject_ already and
-        // never reaches here.)
+        // Not holding: a fresh pinch within surface reach grabs. Surface
+        // distance against the ORIENTED shape (xr_touch) — the pick region
+        // is the object, whatever way it lies.
         if (!pinch_[h].began()) continue;
         const Vec3 at = handWorld(ctx, pinch_[h].pinchPoint());
-        int best = -1;
-        Real bestD = kGrabReach;
-        for (size_t i = 0; i < objects_.size(); i++) {
-            if (objects_[i].heldByHand >= 0) continue;
-            const Real d =
-                (physics_->physicsWorld().bodyPosition(objects_[i].body) - at)
-                    .length();
-            if (d < bestD) {
-                bestD = d;
-                best = static_cast<int>(i);
-            }
-        }
+        const int best = nearestFreeObject(at, kGrabSurfaceReach);
         if (best < 0) continue;
 
         SandboxObject& obj = objects_[best];
-        const ItemDef& def = kItems[obj.item];
         const Vec3 p = physics_->physicsWorld().bodyPosition(obj.body);
         const Quat q = physics_->physicsWorld().bodyOrientation(obj.body);
-        // Re-create as kinematic; remember the object's pose relative to the
-        // hand — orientation AND position — so it carries exactly as
-        // grabbed instead of snapping its centre into the fingers.
-        physics_->physicsWorld().removeBody(obj.body);
-        obj.body = def.sphere
-            ? physics_->physicsWorld().addSphere(def.halfExtent.x, p, q,
-                                                 BodyMotion::Kinematic)
-            : physics_->physicsWorld().addBox(def.halfExtent, p, q,
-                                              BodyMotion::Kinematic);
+        // Take it kinematic IN PLACE and remember the grip — orientation
+        // AND position — so it carries exactly as grabbed instead of
+        // snapping its centre into the fingers.
+        physics_->physicsWorld().setMotionType(obj.body,
+                                               BodyMotion::Kinematic);
         const Quat handQ = handOrientation(hand);
         obj.gripOffset = handQ.conjugate() * q;
-        obj.gripPosOffset =
-            handQ.conjugate().toMat4().transformDirection(p - at);
-        carryPos_[h] = p;   // seed the carry filter at the grabbed pose
-        carryQ_[h] = q;
+        obj.gripPosOffset = handQ.conjugate().rotate(p - at);
         obj.heldByHand = h;
         heldObject_[h] = best;
         grip_[h].clear();
+        carryPos_[h] = p;   // seed the carry filter at the grabbed pose
+        carryQ_[h] = q;
         consumePinchUntil_ = timeSeconds_ + 0.4;
-        LOG_INFO("[xr] grab %s %s at %.2fm", h == 0 ? "L" : "R", def.name,
-                 bestD);
+        LOG_INFO("[xr] grab %s %s (surface %.2fm)", h == 0 ? "L" : "R",
+                 kItems[obj.item].name, objectSurfaceDistance(obj, at));
     }
 }
 
@@ -333,108 +343,122 @@ void HandInteractionSystem::update(FrameContext& ctx) {
     pinch_[0].feed(ctx.xr.hands[0]);
     pinch_[1].feed(ctx.xr.hands[1]);
 
+    updateHandPresence(ctx);
     // Grabs BEFORE the palette: a pinch that lands near an existing object
-    // means "pick that up", even with the palette open — spawning a fresh
-    // item on top of it was the device-reported "I drop new objects when I
-    // pick existing ones". A successful grab occupies the hand, which the
-    // palette's spawn check respects.
+    // means "pick that up", even with the palette open.
     updateGrabs(ctx);
     updatePalette(ctx);
 
     // While hands are interacting, the SYSTEM gaze+pinch must not also fire
-    // the surface gaze-drop probe. This system registers before
-    // XrSurfaceSystem, so clearing the edge here is seen there.
-    if (paletteHand_ >= 0 || heldObject_[0] >= 0 || heldObject_[1] >= 0 ||
-        timeSeconds_ < consumePinchUntil_) {
+    // gaze-driven consumers (this system registers before XrSurfaceSystem).
+    if (palette_.anchorHand() >= 0 || heldObject_[0] >= 0 ||
+        heldObject_[1] >= 0 || timeSeconds_ < consumePinchUntil_) {
         ctx.xr.pinchEnded = false;
         ctx.xr.pinchBegan = false;
+    }
+}
+
+void HandInteractionSystem::fixedUpdate(FrameContext& ctx) {
+    if (!physics_) return;
+    // Post-step pose snapshots (PhysicsSystem registers first, so the step
+    // already ran): render() interpolates between these with
+    // ctx.interpolation, exactly the Transform/PrevTransform contract
+    // RenderSystem applies to entities — raw fixed-step poses stair-step
+    // 60Hz physics onto a 90Hz display, which reads as jitter.
+    (void)ctx;
+    for (SandboxObject& obj : objects_) {
+        obj.posPrev = obj.posCurr;
+        obj.quatPrev = obj.quatCurr;
+        obj.posCurr = physics_->physicsWorld().bodyPosition(obj.body);
+        obj.quatCurr = physics_->physicsWorld().bodyOrientation(obj.body);
     }
 }
 
 void HandInteractionSystem::render(FrameContext& ctx) {
     if (!physics_ || !ctx.xr.active || !ctx.xr.originBaseValid) return;
 
-    // Spawned objects, at the pose Jolt says.
+    // Spawned objects. Held: at the carry filter pose (90Hz smooth, zero
+    // fixed-step quantisation in the hand). Free: interpolated between the
+    // last two fixed steps.
+    const Real alpha = ctx.interpolation;
     RenderMaterial material;
     material.metallic = 0.0f;
     material.roughness = 0.6f;
     for (const SandboxObject& obj : objects_) {
         material.albedo = kItems[obj.item].color;
-        const Vec3 p = physics_->physicsWorld().bodyPosition(obj.body);
-        const Mat4 world =
-            Mat4::translate(p.x, p.y, p.z) *
-            physics_->physicsWorld().bodyOrientation(obj.body).toMat4();
+        Vec3 p;
+        Quat q;
+        if (obj.heldByHand >= 0) {
+            p = carryPos_[obj.heldByHand];
+            q = carryQ_[obj.heldByHand];
+        } else {
+            p = obj.posPrev + (obj.posCurr - obj.posPrev) * alpha;
+            q = Quat::slerp(obj.quatPrev, obj.quatCurr, alpha);
+        }
+        const Mat4 world = Mat4::translate(p.x, p.y, p.z) * q.toMat4();
         ctx.renderer.drawMesh(itemMesh(ctx, obj.item), world, material);
     }
 
-    // Grab affordance: the nearest free object to each open hand's pinch
-    // point shows a wire box, brightening as the fingers get in range.
+    // Grab affordance + depth cues per reaching hand: the candidate shows
+    // an ORIENTED wire box that turns green in grab range, and the thumb
+    // and index tips project onto its surface — dot on the surface, faint
+    // ruler line from fingertip to dot. That projection is the depth cue
+    // that says how far the fingers are from touching.
     for (int h = 0; h < 2; h++) {
         if (heldObject_[h] >= 0 || !pinch_[h].tracking()) continue;
         const Vec3 at = handWorld(ctx, pinch_[h].pinchPoint());
-        int best = -1;
-        Real bestD = kApproachRange;
-        for (size_t i = 0; i < objects_.size(); i++) {
-            if (objects_[i].heldByHand >= 0) continue;
-            const Real d =
-                (physics_->physicsWorld().bodyPosition(objects_[i].body) - at)
-                    .length();
-            if (d < bestD) {
-                bestD = d;
-                best = static_cast<int>(i);
-            }
-        }
+        const int best = nearestFreeObject(at, kApproachRange);
         if (best < 0) continue;
         const SandboxObject& obj = objects_[best];
-        const Vec3 c = physics_->physicsWorld().bodyPosition(obj.body);
-        const Vec3 he = kItems[obj.item].halfExtent * 1.15;
-        const Real glow = 1.0 - bestD / kApproachRange;
-        const Vec3 color = (bestD < kGrabReach ? Vec3(0.2, 1.0, 0.4)
-                                               : Vec3(1.0, 1.0, 1.0))
-                         * (0.35 + 0.65 * glow);
-        // Axis-aligned wire box (orientation omitted on purpose: it is an
-        // affordance, not a bounding proof).
-        const Vec3 mn = c - he, mx = c + he;
-        const Vec3 corners[8] = {
-            {mn.x, mn.y, mn.z}, {mx.x, mn.y, mn.z}, {mx.x, mn.y, mx.z},
-            {mn.x, mn.y, mx.z}, {mn.x, mx.y, mn.z}, {mx.x, mx.y, mn.z},
-            {mx.x, mx.y, mx.z}, {mn.x, mx.y, mx.z}};
-        const int edges[12][2] = {{0, 1}, {1, 2}, {2, 3}, {3, 0},
-                                  {4, 5}, {5, 6}, {6, 7}, {7, 4},
-                                  {0, 4}, {1, 5}, {2, 6}, {3, 7}};
-        for (const auto& e : edges)
-            ctx.debug.line(corners[e[0]], corners[e[1]], color);
+        const Real surface = objectSurfaceDistance(obj, at);
+        const Real glow = 1.0 - surface / kApproachRange;
+        const bool inReach = surface < kGrabSurfaceReach;
+        const Vec3 color =
+            (inReach ? Vec3(0.2, 1.0, 0.4) : Vec3(1.0, 1.0, 1.0)) *
+            (0.35 + 0.65 * glow);
+        ctx.debug.box(physics_->physicsWorld().bodyPosition(obj.body),
+                      kItems[obj.item].halfExtent * 1.08,
+                      physics_->physicsWorld().bodyOrientation(obj.body),
+                      color);
+
+        const XrHand& hand = ctx.xr.hands[h];
+        const XrHandJointId tips[2] = {XR_JOINT_THUMB_TIP,
+                                       XR_JOINT_INDEX_TIP};
+        for (const XrHandJointId tip : tips) {
+            if (!hand.joints[tip].tracked) continue;
+            const Vec3 tipWorld = handWorld(ctx, xrJointPosition(hand, tip));
+            const Vec3 onSurface = objectNearestPoint(obj, tipWorld);
+            ctx.debug.sphere(onSurface, 0.008, color, 0, 8);
+            ctx.debug.line(tipWorld, onSurface, color * 0.5);
+        }
     }
 
     // The palette: item previews spinning above the anchor palm, hover ring
     // under the hovered one.
-    if (paletteHand_ >= 0) {
-        const XrPalmPose palm =
-            xrPalmPose(ctx.xr.hands[paletteHand_], paletteHand_ == 0);
+    const int anchor = palette_.anchorHand();
+    if (anchor >= 0) {
+        XrPalmPose palm = xrPalmPose(ctx.xr.hands[anchor], anchor == 0);
         if (palm.valid) {
-            const Quat spin = Quat::fromAxisAngle(Vec3(0, 1, 0),
-                                                  previewSpin_ * 1.2);
+            palm.position = handWorld(ctx, palm.position);
+            const Quat spin =
+                Quat::fromAxisAngle(Vec3(0, 1, 0), previewSpin_ * 1.2);
             for (int i = 0; i < kItemCount; i++) {
-                const Vec3 slot = handWorld(ctx, palm.position)
-                    + palm.normal * kPaletteLift
-                    + palm.fingers * ((i - (kItemCount - 1) * 0.5) *
-                                      kPaletteSlotSpacing);
+                const Vec3 slot = palette_.slotPosition(palm, i);
                 const ItemDef& def = kItems[i];
                 // Fit each preview into a ~6cm cell regardless of item size.
                 const Real maxDim =
                     2.0 * std::max(def.halfExtent.x,
                                    std::max(def.halfExtent.y,
                                             def.halfExtent.z));
-                const Real s = (i == hoverItem_ ? 0.075 : 0.06) / maxDim;
+                const Real s =
+                    (i == palette_.hoverItem() ? 0.075 : 0.06) / maxDim;
                 material.albedo = def.color;
                 const Mat4 world = Mat4::translate(slot.x, slot.y, slot.z) *
                                    spin.toMat4() * Mat4::scale(s, s, s);
                 ctx.renderer.drawMesh(itemMesh(ctx, i), world, material);
-                if (i == hoverItem_) {
-                    // Hover ring: a small square of lines under the item.
+                if (i == palette_.hoverItem()) {
                     const Vec3 a = palm.across * 0.035;
-                    const Vec3 b =
-                        cross(palm.normal, palm.across) * 0.035;
+                    const Vec3 b = palm.fingers * 0.035;
                     const Vec3 base = slot - palm.normal * 0.03;
                     const Vec3 ring = Vec3(0.3, 1.0, 0.5);
                     ctx.debug.line(base - a - b, base + a - b, ring);
@@ -451,11 +475,17 @@ void HandInteractionSystem::onStop(FrameContext& ctx) {
     if (physics_) {
         for (const SandboxObject& obj : objects_)
             physics_->physicsWorld().removeBody(obj.body);
+        for (int h = 0; h < 2; h++)
+            for (int s = 0; s < kHandSpheres; s++)
+                if (handBodies_[h][s] != INVALID_PHYSICS_BODY) {
+                    physics_->physicsWorld().removeBody(handBodies_[h][s]);
+                    handBodies_[h][s] = INVALID_PHYSICS_BODY;
+                }
     }
     objects_.clear();
     heldObject_[0] = heldObject_[1] = -1;
-    paletteHand_ = -1;
-    hoverItem_ = -1;
+    handActive_[0] = handActive_[1] = false;
+    palette_ = XrPalette(paletteConfig(kItemCount));
     for (auto& mesh : itemMeshes_) {
         if (mesh.valid()) {
             ctx.renderer.removeMesh(mesh);

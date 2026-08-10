@@ -254,6 +254,10 @@ void XrSurfaceSystem::ingest(FrameContext& ctx) {
 }
 
 void XrSurfaceSystem::placeOnPinch(FrameContext& ctx) {
+    // Sandbox mode (outline display): no gaze placement at all — the hand
+    // palette owns spawning there, and a pinch must only ever mean grab or
+    // palette pick. The arena keeps its marker probe.
+    if (!fillSurfaces_) return;
     // Quick pinch, same window PlayerSystem calls a teleport (< 0.8 s hold).
     if (!ctx.xr.pinchEnded || ctx.xr.pinchHeldSeconds >= 0.8) return;
     if (!ctx.xr.gazeValid || !ctx.xr.originBaseValid) return;
