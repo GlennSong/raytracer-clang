@@ -1,5 +1,7 @@
 #include "level_loader.h"
 
+#include "../profile.h"
+#include "level_params.h"   // shared level-JSON -> params readers (both loaders)
 #include "script_assets.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/script_modules.h"
@@ -65,37 +67,9 @@ namespace engine {
 static std::vector<std::string> g_loadedScriptFiles;
 
 
-static Vec3 parseVec3(const json& j, Vec3 fallback = Vec3()) {
-    if (!j.is_array() || j.size() < 3) return fallback;
-    return Vec3(j[0].get<double>(), j[1].get<double>(), j[2].get<double>());
-}
-
-// Default every road recipe's buildability `sea_level` (and beach reserve) from
-// the level's top-level "water" block, so the coast's water and the city's
-// land-gate share ONE number. A recipe that sets its own sea_level keeps it.
-// Mutates `root` in place; a no-op when there's no water block. Shared by both
-// loaders' road pre-pass and real build so they gate on an identical graph.
-static void propagateWaterSeaLevel(json& root) {
-    if (!root.contains("water")) return;
-    const json& w = root["water"];
-    double sea = w.value("seaLevel", 0.0);
-    double beach = w.value("beachRise", 2.5);
-    // The terrain colours its coast by this same sea level (beach/rock/sea floor).
-    if (root.contains("terrain") && root["terrain"].is_object() &&
-        !root["terrain"].contains("seaLevel"))
-        root["terrain"]["seaLevel"] = sea;
-    // Every road recipe gates buildability on it (roads/blocks stay on land).
-    if (!root.contains("entities") || !root["entities"].is_array()) return;
-    for (auto& ent : root["entities"]) {
-        if (ent.value("shape", std::string()) != "road" || !ent.contains("road"))
-            continue;
-        json& road = ent["road"];
-        if (!road.contains("generate") || !road["generate"].is_object()) continue;
-        json& g = road["generate"];
-        if (!g.contains("sea_level")) g["sea_level"] = sea;
-        if (!g.contains("beach_rise")) g["beach_rise"] = beach;
-    }
-}
+// parseVec3/parseOrientation and propagateWaterSeaLevel come from
+// level_params.h — one definition for both this loader and the offline
+// importer (their local copies had already drifted: exact-3 vs >=3 arrays).
 
 // Applies a material block onto `mat` through the property layer: described
 // fields only, missing keys leave values untouched (so a partial block acts
@@ -222,8 +196,6 @@ static MeshHandle getOrCreateMesh(const std::string& shape, const json& sizeJ,
     return handle;
 }
 
-static TerrainParams parseTerrainParams(const json& t);   // defined below
-
 static Collider buildCollider(const std::string& shape, const json& sizeJ,
                                const json& physics) {
     Vec3 sz = parseVec3(sizeJ, Vec3(1, 1, 1));
@@ -252,12 +224,7 @@ static void createEntityCommon(Entity e, const json& ent, World& world) {
         t.position = parseVec3(ent["position"]);
     if (ent.contains("scale"))
         t.scale = parseVec3(ent["scale"], Vec3(1, 1, 1));
-    if (ent.contains("orientation")) {
-        auto& o = ent["orientation"];
-        Vec3 axis = parseVec3(o["axis"], Vec3(0, 1, 0));
-        Real angle = degreesToRadians(o.value("angleDeg", 0.0));
-        t.orientation = Quat::fromAxisAngle(axis, angle);
-    }
+    t.orientation = parseOrientation(ent);
     world.add<Transform>(e, t);
     world.add<PrevTransform>(e, PrevTransform{t});
 }
@@ -440,38 +407,8 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
 // cards, no collision). docs/lsystem-botany-plan.md.
 static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
                            AssetManager& assets, int index) {
-    TreeParams tp;
     uint32_t seed = 0;
-    if (ent.contains("tree")) {
-        const auto& j = ent["tree"];
-        tp.iterations     = j.value("iterations", tp.iterations);
-        tp.trunkLength    = j.value("trunkLength", tp.trunkLength);
-        tp.lengthFalloff  = j.value("lengthFalloff", tp.lengthFalloff);
-        tp.leaderFalloff  = j.value("leaderFalloff", tp.leaderFalloff);
-        tp.branchAngle    = j.value("branchAngle", tp.branchAngle);
-        tp.angleJitter    = j.value("angleJitter", tp.angleJitter);
-        tp.branchesPerNode = j.value("branchesPerNode", tp.branchesPerNode);
-        tp.phyllotaxis    = j.value("phyllotaxis", tp.phyllotaxis);
-        tp.terminalFraction = j.value("terminalFraction", tp.terminalFraction);
-        tp.terminalForks  = j.value("terminalForks", tp.terminalForks);
-        tp.droop          = j.value("droop", tp.droop);
-        tp.wander         = j.value("wander", tp.wander);
-        tp.rootCount      = j.value("rootCount", tp.rootCount);
-        tp.rootSpread     = j.value("rootSpread", tp.rootSpread);
-        tp.leafClump      = j.value("leafClump", tp.leafClump);
-        tp.maxLeafCards   = j.value("maxLeafCards", tp.maxLeafCards);
-        tp.tipRadius      = j.value("tipRadius", tp.tipRadius);
-        tp.pipeExponent   = j.value("pipeExponent", tp.pipeExponent);
-        tp.radiusScale    = j.value("radiusScale", tp.radiusScale);
-        tp.ringSegments   = j.value("ringSegments", tp.ringSegments);
-        tp.leaves         = j.value("leaves", tp.leaves);
-        tp.leafSize       = j.value("leafSize", tp.leafSize);
-        tp.leavesPerTip   = j.value("leavesPerTip", tp.leavesPerTip);
-        tp.leafThickness  = j.value("leafThickness", tp.leafThickness);
-        tp.barkColor      = parseVec3(j.value("barkColor", json()), tp.barkColor);
-        tp.leafColor      = parseVec3(j.value("leafColor", json()), tp.leafColor);
-        seed              = j.value("seed", 0u);
-    }
+    TreeParams tp = readTreeParams(ent, seed);
 
     TreeMesh tm = growTree(tp, seed);
     if (tm.branches.vertices.empty()) return;
@@ -548,43 +485,7 @@ static bool cityIsOnTerrain(const json& ent) {
 // the spawn so the loader can pull model.flatten and grade the terrain to it
 // before the terrain mesh is built.
 static CityModel cityModelFromEntity(const json& ent, const json& root) {
-    CityParams cp;
-    Vec3 pos = parseVec3(ent.value("position", json()));
-    cp.center = {pos.x, pos.z};
-    cp.baseY = pos.y;
-    bool onTerrain = false;
-    if (ent.contains("city")) {
-        const auto& j = ent["city"];
-        cp.extent         = j.value("extent", cp.extent);
-        cp.cellSize       = j.value("cellSize", cp.cellSize);
-        cp.roadJitter     = j.value("roadJitter", cp.roadJitter);
-        cp.sidewalk       = j.value("sidewalk", cp.sidewalk);
-        cp.downtownRadius = j.value("downtownRadius", cp.downtownRadius);
-        cp.midtownRadius  = j.value("midtownRadius", cp.midtownRadius);
-        cp.parkFraction   = j.value("parkFraction", cp.parkFraction);
-        cp.buildChance    = j.value("buildChance", cp.buildChance);
-        cp.scatterTrees   = j.value("scatterTrees", cp.scatterTrees);
-        cp.seed           = j.value("seed", cp.seed);
-        onTerrain         = j.value("onTerrain", false);
-        // District road tech (ADR-0066): real arterials + irregular streets whose
-        // blocks feed the lot/building pipeline, instead of the regular grid.
-        cp.districtRoads  = j.value("districtRoads", cp.districtRoads);
-        cp.arterials      = j.value("arterials", cp.arterials);
-        cp.blockSizeMin   = j.value("blockSizeMin", cp.blockSizeMin);
-        cp.blockSizeMax   = j.value("blockSizeMax", cp.blockSizeMax);
-        cp.arteryWidth    = j.value("arteryWidth", cp.arteryWidth);
-        cp.streetWidth    = j.value("streetWidth", cp.streetWidth);
-        cp.irregular      = j.value("irregular", cp.irregular);
-    }
-    if (onTerrain && root.contains("terrain")) {
-        auto tp = std::make_shared<TerrainParams>(parseTerrainParams(root["terrain"]));
-        auto noise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
-        Real base = cp.baseY;
-        cp.groundAt = [tp, noise, base](const Vec2& p) {
-            return base + terrainHeight(*tp, *noise, p.x, p.y);
-        };
-    }
-    return generateCity(cp);
+    return generateCity(readCityParams(ent, root));
 }
 
 static void loadCityEntity(const json& ent, const json& root, World& world,
@@ -1321,47 +1222,8 @@ static void loadPlayerSpawn(const json& player, World& world,
     world.add<Renderable>(e, gizmo);
 }
 
-static TerrainParams parseTerrainParams(const json& t) {
-    TerrainParams p;
-    p.size        = t.value("size", p.size);
-    p.resolution  = t.value("resolution", p.resolution);
-    p.heightScale = t.value("heightScale", p.heightScale);
-    p.noiseScale  = t.value("noiseScale", p.noiseScale);
-    p.octaves     = t.value("octaves", p.octaves);
-    p.warp        = t.value("warp", p.warp);
-    p.mountainHeight = t.value("mountainHeight", p.mountainHeight);
-    p.mountainScale  = t.value("mountainScale", p.mountainScale);
-    p.mountainMaskScale = t.value("mountainMaskScale", p.mountainMaskScale);
-    p.mountainMaskLo = t.value("mountainMaskLo", p.mountainMaskLo);
-    p.mountainMaskHi = t.value("mountainMaskHi", p.mountainMaskHi);
-    p.mountainAlongRange = t.value("mountainAlongRange", p.mountainAlongRange);
-    p.tiltX = t.value("tiltX", p.tiltX);
-    p.tiltZ = t.value("tiltZ", p.tiltZ);
-    p.seaLevel = t.value("seaLevel", p.seaLevel);   // set from the water block below
-    p.snowLine = t.value("snowLine", p.snowLine);   // colour-band scaling
-    p.rockLine = t.value("rockLine", p.rockLine);
-    if (t.contains("rangeSpine") && t["rangeSpine"].is_array()) {
-        std::vector<Vec3> ctl;
-        for (const auto& pt : t["rangeSpine"])
-            if (pt.is_array() && pt.size() >= 2)
-                ctl.push_back(Vec3(pt[0].get<double>(), 0.0, pt[1].get<double>()));
-        p.rangeSpine = sampleRangeSpine(ctl);
-    }
-    p.rangeWidth = t.value("rangeWidth", p.rangeWidth);
-    p.rangeHeight = t.value("rangeHeight", p.rangeHeight);
-    p.rangeVariation = t.value("rangeVariation", p.rangeVariation);
-    if (t.contains("range") && t["range"].is_object()) {
-        const auto& r = t["range"];
-        p.rangeRidges = buildRangeRidges(
-            r.value("length", 60.0f), r.value("branchAngle", 38.0f),
-            r.value("falloff", 0.55f), r.value("leaderFalloff", 0.92f),
-            r.value("iterations", 5), r.value("height", 130.0f),
-            r.value("depthFalloff", 0.62f), r.value("angleJitter", 12.0f),
-            r.value("seed", 0u));
-        p.rangeWidth = r.value("width", p.rangeWidth);
-    }
-    return p;
-}
+// (parseTerrainParams moved to level_params.cpp as readTerrainParams — the
+// ONE parse both this loader and the offline importer use.)
 
 // Procedural terrain (ADR-0021 persistence: the document stores the recipe —
 // seed + params — and the engine regenerates the mesh at load, rather than
@@ -1422,6 +1284,24 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
     TerrainLodConfig cfg;
     cfg.params = p;
     cfg.seed = t.value("seed", 0u);
+    {
+        // Height sanity sweep of the FINAL params (flattens folded) — the same
+        // field every CDLOD node samples. Catches a garbage flatten plane or a
+        // broken eroded base before it renders as mystery geometry.
+        Noise sn(cfg.seed);
+        const double half = t.contains("cdlod") && t["cdlod"].is_object()
+                                ? t["cdlod"].value("worldHalf", 1024.0)
+                                : 1024.0;
+        double mn = 1e30, mx = -1e30;
+        for (int j = -4; j <= 4; ++j)
+            for (int i = -4; i <= 4; ++i) {
+                double h = terrainHeight(p, sn, half * i / 4.0, half * j / 4.0);
+                mn = std::min(mn, h);
+                mx = std::max(mx, h);
+            }
+        LOG_INFO << "[terrain] final field 9x9 sweep: h [" << mn << ", " << mx
+                 << "] over half-extent " << half;
+    }
     const json& c = t["cdlod"];
     if (c.is_object()) {
         cfg.worldHalf = c.value("worldHalf", cfg.worldHalf);
@@ -1533,6 +1413,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                            const std::string& levelDir,
                            const std::string& tag = "veg",
                            const std::vector<engine::LotBuilding>* lots = nullptr) {
+    RT_PROFILE_ZONE_NAMED("loadVegetation");
     if (!veg.contains("species") || !veg["species"].is_array()) return;
 
     // A species variant is now a multi-part model (ADR-0032): each part is one
@@ -1986,6 +1867,8 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                 g.boundsRadius = spread + (mb.center.length() + mb.radius) *
                                               static_cast<Real>(scatter.maxScale);
                 g.drawDistance = vegDrawDistance;
+                g.drawClass = engine::DrawClass::Scenery;
+                g.renderLayer = engine::LayerFoliage;   // debug layer toggle
                 world.add<InstanceGroup>(world.create(), g);
             }
         }
@@ -2093,28 +1976,33 @@ static GrownLots growCityLots(const std::vector<engine::RoadNet>& nets,
                               const json& cs, const std::string& levelDir,
                               const HeightField& ground,
                               const engine::RoadGraph* freewayROW = nullptr) {
+    RT_PROFILE_ZONE_NAMED("growCityLots");
     GrownLots g;
     // Edge blocks (device feedback): the town RIM has no enclosed faces —
     // synthesize rectangular blocks on boundary roads' open sides so the
     // outskirts build up too. Sized by min/max length + depth knobs.
     engine::EdgeBlockParams ep;
-    ep.depth = cs.value("edgeBlockDepth", ep.depth);
-    ep.minLen = cs.value("edgeBlockMinLen", ep.minLen);
-    ep.maxLen = cs.value("edgeBlockMaxLen", ep.maxLen);
-    ep.margin = 4.0 + cs.value("sidewalk", 4.0);
     engine::LotParams lp;
-    lp.seed = cs.value("seed", 1u) ^ 0x10c5u;
-    lp.buildChance = cs.value("buildChance", 0.9);
-    lp.roadMargin = 4.0 + cs.value("sidewalk", 4.0);   // road half + sidewalk
-    lp.innerRadius = cs.value("downtownRadius", 55.0);
-    lp.midRadius = cs.value("midtownRadius", 135.0);
-    lp.plinth = cs.value("plinth", lp.plinth);   // base height above the pad
+    readLotGrowParams(cs, ep, lp);
     // Polycentric zoning: a metro recipe leaves its hubs (with district kinds)
     // on the net — forward them so lots zone by nearest hub, not one centre.
     for (const engine::RoadNet& n : nets)
         for (const engine::CityHub& h : n.cityHubs)
             lp.hubs.push_back({h.pos, h.kind});
     lp.hubRadius = cs.value("hubRadius", 220.0);
+    // CORENESS ANCHOR: height/landmark grading measures distance from
+    // LotParams::center — which no loader ever set (it defaulted to the
+    // world origin, so coreness was ZERO for every lot in any city not at
+    // (0,0): glass towers capped at 16 floors instead of 42, no skyline).
+    // The financial hub (kind 0) is downtown; first hub as fallback.
+    for (const engine::RoadNet& n : nets)
+        for (const engine::CityHub& h : n.cityHubs) {
+            if (lp.center.x == 0 && lp.center.y == 0) lp.center = h.pos;
+            if (h.kind == 0) {
+                lp.center = h.pos;
+                break;
+            }
+        }
     // TERRAIN: buildings grow from their graded pad plane, park/green pads
     // drape per-vertex (city-on-terrain; roads conform separately via
     // net.heightAt + the flatten ramps the loader carves).
@@ -2164,6 +2052,7 @@ const std::vector<std::string>& LevelLoader::lastLoadedScriptFiles() {
 bool LevelLoader::load(const std::string& path,
                        World& world, Renderer& renderer, RenderView& view,
                        AssetManager& assets, bool editorMode) {
+    RT_PROFILE_ZONE_NAMED("levelLoad");
     g_loadedScriptFiles.clear();
     std::ifstream file(path);
     if (!file.is_open()) {
@@ -2209,20 +2098,7 @@ bool LevelLoader::load(const std::string& path,
     // conform to analytic relief that the eroded mesh no longer matches, so they'd
     // sink or poke. terrainHeight reads params.erodedBase, so injecting the same
     // shared_ptr into every params copy is all it takes.
-    std::shared_ptr<const std::function<double(double, double)>> sharedEroded;
-    if (root.contains("terrain") && root["terrain"].value("erode", false)) {
-        const json& tj = root["terrain"];
-        TerrainParams eb = parseTerrainParams(tj);
-        Noise en(tj.value("seed", 0u));
-        ErosionParams ep;
-        ep.seed = tj.value("seed", 0u) + 1234u;
-        ep.droplets = tj.value("erodeDroplets", ep.droplets);
-        ep.erodeRadius = tj.value("erodeRadius", ep.erodeRadius);
-        ep.thermalIterations = tj.value("erodeThermal", ep.thermalIterations);
-        ep.talus = tj.value("erodeTalus", ep.talus);
-        bakeErodedTerrain(eb, en, eb.size, tj.value("erodeRes", 512), ep);
-        sharedEroded = eb.erodedBase;
-    }
+    auto sharedEroded = readErodedBase(root);
 
     // A city draped on the terrain is generated BEFORE the terrain: it grades its
     // roads/blocks off the natural ground, then returns cut/fill footprints the
@@ -2247,7 +2123,7 @@ bool LevelLoader::load(const std::string& path,
     // conforms the CDLOD terrain — the script sibling of the C++ city's groundAt.
     HeightField levelGround;
     if (root.contains("terrain")) {
-        auto tp = std::make_shared<TerrainParams>(parseTerrainParams(root["terrain"]));
+        auto tp = std::make_shared<TerrainParams>(readTerrainParams(root["terrain"]));
         tp->erodedBase = sharedEroded;   // roads/lots conform to the ERODED surface
         auto noise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
         levelGround = [tp, noise](double x, double z) {
@@ -2551,7 +2427,10 @@ bool LevelLoader::load(const std::string& path,
             {
                 const auto viols =
                     engine::auditRoadGraph(lrg.graph, levelGround);
-                int corridorViols = 0, street = 0;
+                // Corridor crossings are reported individually below (each is
+                // its own LOG_ERROR); only the street-street count is
+                // summarised, so there is nothing to tally for them.
+                int street = 0;
                 for (const auto& v : viols) {
                     const bool corr =
                         lrg.graph.edges[v.edgeA].klass == engine::RoadClass::Freeway ||
@@ -2559,7 +2438,6 @@ bool LevelLoader::load(const std::string& path,
                         lrg.graph.edges[v.edgeB].klass == engine::RoadClass::Freeway ||
                         lrg.graph.edges[v.edgeB].klass == engine::RoadClass::Ramp;
                     if (corr) {
-                        ++corridorViols;
                         LOG_ERROR << "[roadgraph] corridor edges " << v.edgeA
                                   << " and " << v.edgeB << " cross at ("
                                   << v.at.x << ", " << v.at.y << ") with only "
@@ -2605,7 +2483,7 @@ bool LevelLoader::load(const std::string& path,
     // the same surface it generates.
     GrownLots preLots;   // lots grown by the terrain pre-pass (reused below)
     if (root.contains("terrain")) {
-        TerrainParams terrainParams = parseTerrainParams(root["terrain"]);
+        TerrainParams terrainParams = readTerrainParams(root["terrain"]);
         terrainParams.erodedBase = sharedEroded;   // eroded base for mesh + carve + drape
         terrainParams.flatten = cityFlatten;   // grade flat under the city
         terrainParams.flatten.insert(terrainParams.flatten.end(),
@@ -2698,18 +2576,7 @@ bool LevelLoader::load(const std::string& path,
         if (root["terrain"].contains("water") || root.contains("water")) {
             const json& w = root.contains("water") ? root["water"]
                                                    : root["terrain"]["water"];
-            engine::WaterMeshParams wp;
-            wp.seaLevel = w.value("seaLevel", 0.0);
-            if (double region = w.value("region", 0.0); region > 0.0) {
-                wp.lo = {-region, -region};
-                wp.hi = {region, region};
-            }
-            if (w.contains("lo") && w["lo"].is_array())
-                wp.lo = {w["lo"][0].get<double>(), w["lo"][1].get<double>()};
-            if (w.contains("hi") && w["hi"].is_array())
-                wp.hi = {w["hi"][0].get<double>(), w["hi"][1].get<double>()};
-            wp.cell = w.value("cell", wp.cell);
-            wp.foamBand = w.value("foamBand", wp.foamBand);
+            engine::WaterMeshParams wp = readWaterParams(w);
             RenderMesh wmesh = engine::buildWaterMesh(levelGround, wp);
             if (!wmesh.vertices.empty()) {
                 Entity we = world.create();
@@ -2804,10 +2671,14 @@ bool LevelLoader::load(const std::string& path,
     // generateLodNodeMesh), so its numbers are the game's numbers.
     if (std::getenv("RT_POKE_REPORT") && root.contains("terrain")) {
         TerrainParams tpFull;   // the FINAL carved params (with index)
-        world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) { tpFull = c.params; });
+        int pNumLods = 6, pGridRes = 32;
+        world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) {
+            tpFull = c.params;
+            pNumLods = c.numLods;
+            pGridRes = c.gridRes;
+        });
         Noise pnNoise(root["terrain"].value("seed", 0u));
         float pWorldHalf = root["terrain"]["cdlod"].value("worldHalf", 1024.0);
-        const int pNumLods = 6, pGridRes = 32;
         for (int lvl = 0; lvl < 3; ++lvl) {
             const double nodeSize = pWorldHalf * 2.0 / std::pow(2.0, pNumLods - 1 - lvl);
             const double step = nodeSize / pGridRes;
@@ -3073,13 +2944,21 @@ bool LevelLoader::load(const std::string& path,
         CitySimConfig cfg;
         cfg.cars = cs.value("cars", cfg.cars);
         cfg.pedestrians = cs.value("pedestrians", cfg.pedestrians);
+        // How far parked scenery cars still draw (0 = never cull).
+        cfg.sceneryRadius = cs.value("sceneryRadius", cfg.sceneryRadius);
+        cfg.maxWalkerBodies = cs.value("maxWalkerBodies", cfg.maxWalkerBodies);
+        cfg.localHz = cs.value("localHz", cfg.localHz);
+        cfg.adaptiveRate = cs.value("adaptiveRate", cfg.adaptiveRate);
         cfg.carsPerLaneKm = cs.value("carsPerLaneKm", cfg.carsPerLaneKm);
         cfg.pedsPerKm = cs.value("pedsPerKm", cfg.pedsPerKm);
         cfg.seed = cs.value("seed", cfg.seed);
         cfg.hoursPerSecond = cs.value("hoursPerSecond", cfg.hoursPerSecond);
+        cfg.startHour = cs.value("startHour", cfg.startHour);
         cfg.perceptionReliability =
             cs.value("perceptionReliability", cfg.perceptionReliability);
         cfg.debugWidgets = cs.value("debugWidgets", cfg.debugWidgets);
+        cfg.tieredAgents = cs.value("tiered", cfg.tieredAgents);
+        cfg.dormantAgents = cs.value("dormancy", cfg.dormantAgents);
         cfg.showPlan = cs.value("showPlan", false);
         cfg.wander = cs.value("wander", cfg.wander);
         // Scripted goal tables (ADR-0064): `"agents": "agents.lua"` names a
@@ -3340,6 +3219,8 @@ bool LevelLoader::load(const std::string& path,
                     Renderable tr;
                     tr.mesh = kit.bark;
                     tr.material = kit.barkMat;
+                    tr.renderLayer = engine::LayerFoliage;
+                    tr.drawClass = engine::DrawClass::Scenery;
                     world.add<Renderable>(te, tr);
                     if (kit.leaves.index) {
                         Entity le = world.create();
@@ -3348,6 +3229,8 @@ bool LevelLoader::load(const std::string& path,
                         Renderable lr;
                         lr.mesh = kit.leaves;
                         lr.material = kit.leafMat;
+                        lr.renderLayer = engine::LayerFoliage;
+                        lr.drawClass = engine::DrawClass::Scenery;
                         world.add<Renderable>(le, lr);
                     }
                 };
@@ -3501,6 +3384,7 @@ bool LevelLoader::load(const std::string& path,
                         if (chunk.vertices.empty()) continue;
                         Renderable r = proto;
                         if (detailDistance > 0) r.drawDistance = detailDistance * ddScale;
+                        r.drawClass = engine::DrawClass::Structure;
                         r.mesh = assets.acquireMesh(chunk, "");   // world-space, unkeyed
                         Entity e = world.create();
                         Transform t;   // identity — the mesh sits in world space
@@ -3608,6 +3492,19 @@ bool LevelLoader::load(const std::string& path,
         world.add<CitySimConfig>(world.create(), cfg);
     }
 
+    // Day/night policy (device: "the scene loads bright but everything gets
+    // dark when the level starts" — the cycle was overwriting the authored
+    // sun + ambient every frame). "dayNight": {"enabled": false} pins the
+    // level's static lighting; {"timeOfDay": .., "speed": ..} seeds the cycle.
+    if (root.contains("dayNight") && root["dayNight"].is_object()) {
+        const auto& dn = root["dayNight"];
+        DayNightConfig dc;
+        dc.enabled = dn.value("enabled", dc.enabled);
+        dc.timeOfDay = dn.value("timeOfDay", dc.timeOfDay);
+        dc.speed = dn.value("speed", dc.speed);
+        world.add<DayNightConfig>(world.create(), dc);
+    }
+
     // STREET FURNITURE at BUILD time (device: "place the stop lights when we
     // build the city instead of during the simulation ... the simulation
     // should use it but it shouldn't be responsible for where they are").
@@ -3698,6 +3595,7 @@ bool LevelLoader::load(const std::string& path,
                     g.material.roughness = 0.7f;
                     g.transforms = transforms;
                     g.drawDistance = 650.0;
+                    g.drawClass = engine::DrawClass::Furniture;
                     groupBounds(g, lp.height + 1.0);
                     world.add<InstanceGroup>(world.create(), g);
                     InstanceGroup glow;
@@ -3707,6 +3605,7 @@ bool LevelLoader::load(const std::string& path,
                     glow.material.roughness = 0.4f;
                     glow.transforms = std::move(transforms);
                     glow.drawDistance = 650.0;
+                    glow.drawClass = engine::DrawClass::Effect;
                     groupBounds(glow, lp.height + 1.0);
                     world.add<InstanceGroup>(world.create(), glow);
                 }
@@ -3747,11 +3646,108 @@ bool LevelLoader::load(const std::string& path,
     if (root.contains("lighting"))
         loadLighting(root["lighting"], view);
 
+    // Per-level instance-buffer capacities (8km-city plan P0.2). Values below
+    // the backend defaults are clamped up by the renderer.
+    if (root.contains("render") && root["render"].is_object()) {
+        const auto& r = root["render"];
+        renderer.setInstanceCapacities(r.value("maxInstances", 0u),
+                                       r.value("maxShadowInstances", 0u),
+                                       r.value("maxFoliageInstances", 0u));
+
+        // "render.drawDistances": the level's draw-distance policy, by content
+        // class (metres; omitted or 0 = unlimited). Stamped as a singleton that
+        // RenderSystem resolves every Renderable/InstanceGroup through, so the
+        // distance for e.g. every tree in the world lives HERE and not at the
+        // dozen sites that create drawables. Absent block = no policy entity =
+        // everything unlimited, which is what levels did before this existed.
+        if (r.contains("drawDistances") && r["drawDistances"].is_object()) {
+            const auto& d = r["drawDistances"];
+            DrawPolicy p;
+            auto set = [&](DrawClass c, const char* key) {
+                p.distance[static_cast<int>(c)] = d.value(key, 0.0);
+            };
+            set(DrawClass::Terrain,     "terrain");
+            set(DrawClass::Structure,   "structure");
+            set(DrawClass::Scenery,     "scenery");
+            set(DrawClass::Furniture,   "furniture");
+            set(DrawClass::GroundPaint, "groundPaint");
+            set(DrawClass::SimBody,     "simBody");
+            set(DrawClass::Effect,      "effect");
+            world.add<DrawPolicy>(world.create(), p);
+        }
+    }
+
+    // Report drawables that never declared a content class. They resolve to
+    // unlimited (the old default), so this is not an error — it is the thing
+    // that used to be invisible. A site added later without a DrawClass shows
+    // up here instead of quietly drawing to the far plane forever.
+    {
+        size_t unsetR = 0, totalR = 0, unsetG = 0, totalG = 0;
+        world.each<Renderable>([&](Entity, Renderable& r) {
+            ++totalR;
+            if (r.drawClass == DrawClass::Unset) ++unsetR;
+        });
+        world.each<InstanceGroup>([&](Entity, InstanceGroup& g) {
+            ++totalG;
+            if (g.drawClass == DrawClass::Unset) ++unsetG;
+        });
+        if (unsetR || unsetG)
+            LOG_INFO << "[draw-policy] " << unsetR << "/" << totalR
+                     << " renderables and " << unsetG << "/" << totalG
+                     << " instance groups have no DrawClass (drawing unlimited)";
+    }
+
     // Environment map (equirectangular .hdr) — bound before probes so the bake
     // captures it for IBL (ADR-0016). Lives under the "environment" object as
     // "hdr"; path is relative to the level file.
+    //
+    // Cinematic-sky opt-ins (reset first — the RenderView/renderer are reused
+    // across loads, so a previous level's sky must not leak):
+    //   "environment.sky"    {"model": "scattering", turbidity?, groundAlbedo?,
+    //                         brightness?, mieG?, multiScatter?, aerial?,
+    //                         sunAngularRadius?} -> LUT scattering sky + aerial
+    //                         perspective (replaces exp fog while active).
+    //   "environment.clouds" {coverage?, bottom?, top?, density?, noiseScale?,
+    //                         wind?, steps?, lightSteps?, phaseG?, far?,
+    //                         ambient?, detailStrength?, enabled?} -> volumetric
+    //                         cloud slab (retires the 2D FBM overlay while
+    //                         active).
+    view.lighting.skyScattering = SkyScatteringParams{};
+    view.lighting.volumetricClouds = VolumetricCloudParams{};
     if (root.contains("environment") && root["environment"].is_object()) {
         const auto& env = root["environment"];
+        if (env.contains("sky") && env["sky"].is_object()) {
+            const auto& s = env["sky"];
+            if (s.value("model", std::string()) == "scattering") {
+                auto& ss = view.lighting.skyScattering;
+                ss.enabled = true;
+                ss.turbidity        = s.value("turbidity", ss.turbidity);
+                ss.brightness       = s.value("brightness", ss.brightness);
+                ss.mieG             = s.value("mieG", ss.mieG);
+                ss.multiScatter     = s.value("multiScatter", ss.multiScatter);
+                ss.aerialDensity    = s.value("aerial", ss.aerialDensity);
+                ss.sunAngularRadius = s.value("sunAngularRadius", ss.sunAngularRadius);
+                if (s.contains("groundAlbedo"))
+                    ss.groundAlbedo = parseVec3(s["groundAlbedo"], ss.groundAlbedo);
+            }
+        }
+        if (env.contains("clouds") && env["clouds"].is_object()) {
+            const auto& c = env["clouds"];
+            auto& vc = view.lighting.volumetricClouds;
+            vc.enabled     = c.value("enabled", true);
+            vc.coverage    = c.value("coverage", vc.coverage);
+            vc.bottom      = c.value("bottom", vc.bottom);
+            vc.top         = c.value("top", vc.top);
+            vc.density     = c.value("density", vc.density);
+            vc.noiseScale  = c.value("noiseScale", vc.noiseScale);
+            vc.wind        = c.value("wind", vc.wind);
+            vc.steps       = c.value("steps", vc.steps);
+            vc.lightSteps  = c.value("lightSteps", vc.lightSteps);
+            vc.phaseG      = c.value("phaseG", vc.phaseG);
+            vc.farDistance = c.value("far", vc.farDistance);
+            vc.ambient     = c.value("ambient", vc.ambient);
+            vc.detailStrength = c.value("detailStrength", vc.detailStrength);
+        }
         // Aerial-perspective fog (matches the offline tracer's Scene::fog). Lives
         // under "environment" alongside the sky; pushed to the renderer via the
         // lighting block (setLights). density 0 = off.
@@ -3762,6 +3758,19 @@ bool LevelLoader::load(const std::string& path,
             view.lighting.fog.heightFalloff = f.value("heightFalloff", 0.0f);
             view.lighting.fog.color =
                 parseVec3(f.value("color", json()), view.lighting.fog.color);
+        }
+        // Bloom, level-authored (device: "the bloom is really big"): the
+        // scattering sky pushed far more radiance over the default threshold
+        // than the analytic sky ever did, and until now the only dials were
+        // the debug HUD's. Absent keys keep the renderer defaults.
+        if (env.contains("bloom") && env["bloom"].is_object()) {
+            const auto& b = env["bloom"];
+            renderer.bloomEnabled = b.value("enabled", renderer.bloomEnabled);
+            renderer.bloomParams.threshold =
+                b.value("threshold", renderer.bloomParams.threshold);
+            renderer.bloomParams.knee = b.value("knee", renderer.bloomParams.knee);
+            renderer.bloomParams.intensity =
+                b.value("intensity", renderer.bloomParams.intensity);
         }
         // Reset FIRST: only a successful HDR load below may raise this. It is
         // the flag DayNightSystem uses to yield to a baked HDR sun — leaving a

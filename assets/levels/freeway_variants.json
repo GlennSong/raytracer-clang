@@ -1,6 +1,7 @@
 {
   "_comment": "Freeway VARIANTS lab (device: 'break down the problem'): four isolated specimens west->east — A 2-lane at-grade, B 2-lane elevated, C 3-lane at-grade, D 3-lane elevated — each with one exit + one on-ramp landing on its own frontage street. Every corridor feature must read clean HERE before any level composes them.",
   "citysim": {
+    "vehicles": "vehicles.lua",
     "buildLots": false,
     "cars": 24,
     "debugWidgets": false,

@@ -4,7 +4,7 @@
 #include "../../engine/system.h"
 #include "../../engine/ai/nav_graph.h"
 #include "../../engine/components.h"   // engine::AuthoredPlace (level-authored places)
-#include "city_meshes.h"   // fleetCarMesh, buildPersonMesh, materials (was declared here)
+#include "city_meshes.h"   // buildPersonMesh, materials (was declared here)
 #include "city_sim.h"
 #include "places.h"        // PlaceMap (ADR-0066)
 #include <functional>
@@ -35,10 +35,42 @@ struct CityRenderParams {
     Real pedsPerKm = 6.0;
     uint32_t seed = 1;
     Real hoursPerSecond = 0.05;            // sim-clock hours advanced per real second
+    // The in-world hour the level OPENS at. The population is placed directly
+    // from its schedules at this hour (CitySim::seedFromSchedule), so any hour
+    // costs the same: 22:00 is as cheap as 08:00. 10.5 keeps the historical
+    // feel of the retired warm-up, which landed around mid-morning.
+    Real startHour = 10.5;
     Real perceptionReliability = 0.97;     // <1 -> agents occasionally err (ADR-0060)
     engine::Vec3 carSize{1.8, 1.3, 4.2};   // matches the player sedan (W,H,L); +Z = travel
     engine::Vec3 pedSize{0.5, 1.8, 0.5};
     Real signalLensSize = 0.34;            // lit emissive lens cube edge (m)
+    // How far from the player a PARKED scenery car still draws (m). A city-wide
+    // instance group cannot be partially frustum-culled, so without this every
+    // parked car in the city is submitted every frame, in both the colour and
+    // shadow passes. 0 = no cull (the old behaviour).
+    Real sceneryRadius = 450.0;
+    // Physical-walker budget; see CityWalkerSystem. 0 or negative = unbounded
+    // (the historical behaviour, kept so a measurement can A/B against it).
+    int maxWalkerBodies = 200;
+    // SIM RATE (P8.2d). Traffic is not physics: agents follow lanes, so a
+    // bigger dt costs nothing but precision. 0 or >= the fixed rate keeps the
+    // historical every-step tick (and every existing test/gate bit-identical);
+    // 30 halves the sim's cost outright. Poses are EXTRAPOLATED along heading
+    // between ticks, so the renderer and the kinematic proxies still see
+    // smooth 60 Hz motion. `adaptiveRate` lets the sim dip FURTHER (never
+    // below ~7.5 Hz) while the clock is behind — catching up by simulating
+    // coarsely instead of by running ever more expensive steps, which is the
+    // spiral that pins the frame at the step cap.
+    // MEASURED CAVEAT (P8.2d): enabling this on piedmont REGRESSED the frame
+    // (16 -> 9 fps). The far tier's coarse tick is `frameIndex_ % vTickDivisor`
+    // — a count of SIM TICKS, documented as "~1 Hz at the 60 Hz step" — so
+    // halving the sim rate also halves how often distant agents refresh their
+    // position. They then read stale near the bubble edge and the tier pass
+    // over-promotes: K/P went 950 -> 2650, and K agents are the ones that get
+    // DRAWN (instanced draws 25 -> 60, GPU 32 -> 86 ms). Express the V budget
+    // in sim SECONDS before turning this on.
+    Real localHz = 0.0;
+    bool adaptiveRate = true;
     bool debugWidgets = false;             // draw each agent's footprint + trajectory
     bool wander = false;                   // perpetual random trips (the agent lab)
     // Scripted goal tables (ADR-0064): the SOURCE of an agents.lua-style script
@@ -48,8 +80,17 @@ struct CityRenderParams {
     // Data-driven fleet bodies (ADR-0065): the SOURCE of a vehicles.lua-style
     // script whose `vehicle.fleet` recipes build the instanced car meshes at
     // build. Loaded from the level's citysim block; used only in scripting
-    // builds; any failure (or "") falls back to the C++ fleetCarMesh.
+    // builds. Absent or empty means this level draws NO cars — vehicles are
+    // optional content, and there is no built-in substitute.
     std::string vehicleScript;
+    // Three-tier traffic (P4): opt this level into the V/K bubble — far agents
+    // become persistent coarse-tick "virtual" travellers (no render, no proxy,
+    // no sensing) promoted back to full kinematic agents near the player. Off
+    // by default so every existing level/test runs bit-identically. (The
+    // level_loader "tiered" JSON knob is the pending one-line hookup.)
+    bool tieredAgents = false;
+    // P5 dormancy (see components.h). Needs tieredAgents to do anything.
+    bool dormantAgents = false;
 };
 
 // The Dear ImGui window this system appends its "Living City" section into. It
@@ -63,6 +104,7 @@ inline constexpr const char* kDebugWindowTitle = "Debug";
 
 class CityRenderSystem : public engine::System {
 public:
+    const CityRenderParams& params() const { return params_; }
     explicit CityRenderSystem(const CityRenderParams& params = {})
         : params_(params), debugWidgets_(params.debugWidgets) {}
 
@@ -167,6 +209,13 @@ public:
     const std::vector<std::vector<int>>& carAgentIds() const {
         return carAgentIds_;
     }
+    // Same contract for the (single) pedestrian group, added for P4: the
+    // physics bridge's incremental proxy diff keys ped boxes by agent uid, so
+    // it needs each baked instance's agent — with V-tier walkers unbaked, the
+    // instance list is no longer "all pedestrians in agent order".
+    const std::vector<std::vector<int>>& pedAgentIds() const {
+        return pedAgentIds_;
+    }
     Real groundHeightAt(Real x, Real z) const { return groundAt(x, z); }
     // The stop-bar + lane-arrow paint mesh (R6c), rebuilt from the graph;
     // public so the gate can assert paint never leaves the carriageway.
@@ -191,6 +240,9 @@ public:
     engine::Entity brakeLightGroup() const { return brakeLightGroup_; }
     engine::Entity turnSignalGroup() const { return turnSignalGroup_; }
     const std::vector<engine::Vec2>& crosswalkCenters() const { return crosswalkCenters_; }
+    // The painted curbside bay outlines (R6b). Exposed so the height gate (#25)
+    // can check the paint lands on the asphalt instead of floating over it.
+    engine::Entity parkBayGroup() const { return parkBayGroup_; }
     // Debug widgets (ADR-0061): per-agent ground footprint coloured by behaviour
     // state, and a forward trajectory arrow. Empty unless params.debugWidgets.
     engine::Entity footprintGroup(Agent::State s) const { return footprintGroups_[static_cast<int>(s)]; }
@@ -230,7 +282,63 @@ public:
         engine::Vec3 pos;
     };
 
+    // One wheel of a fleet car, in body-local space (+Z forward, x>0 right).
+    // Same independence rationale as LampMarker: a mirror of the scripting-only
+    // engine::WheelPlacement, so the non-scripting build still compiles.
+    struct CarWheel {
+        engine::Vec3 pos;
+        Real radius = 0.3;
+        Real width = 0.2;
+        bool steered = false;
+        bool driven = true;
+        bool handBrake = false;
+    };
+
+    // The fleet slot's car WITHOUT its wheels, for a car the player commandeers
+    // (ADR-0062): it becomes a real Vehicle and grows physics wheels, so drawing
+    // the baked ones too would put it on eight. Invalid when the level's fleet
+    // recipes publish no separate wheelset (or scripting is off) — the caller
+    // then draws no car for that slot.
+    engine::MeshHandle carChassisMesh(int slot) const {
+        if (carChassis_.empty()) return engine::MeshHandle{};
+        return carChassis_[((slot % static_cast<int>(carChassis_.size())) +
+                            static_cast<int>(carChassis_.size())) %
+                           static_cast<int>(carChassis_.size())];
+    }
+    // That car's lamp markers, for a promoted car's lenses. VehicleSystem falls
+    // back to four lenses at GUESSED chassis corners when a Vehicle carries no
+    // markers — which sat harmlessly on top of the old box car's baked lamp
+    // boxes, but floats clear of a real generated body's inset housings and
+    // draws every taillight twice. Never empty (a synthesized default set backs
+    // the built-in fleet).
+    const std::vector<LampMarker>& carLamps(int slot) const {
+        static const std::vector<LampMarker> kNone;
+        if (carLights_.empty()) return kNone;
+        return carLights_[((slot % static_cast<int>(carLights_.size())) +
+                           static_cast<int>(carLights_.size())) %
+                          static_cast<int>(carLights_.size())];
+    }
+    // That car's wheels as data, for its Jolt config. Empty => no layout was
+    // published; the caller derives one as before.
+    const std::vector<CarWheel>& carWheels(int slot) const {
+        static const std::vector<CarWheel> kNone;
+        if (carWheels_.empty()) return kNone;
+        return carWheels_[((slot % static_cast<int>(carWheels_.size())) +
+                           static_cast<int>(carWheels_.size())) %
+                          static_cast<int>(carWheels_.size())];
+    }
+
 private:
+    // How many car variants were actually BUILT — the Lua fleet's length when a
+    // level ships recipes, the built-in table's size otherwise. Agent-to-group
+    // mapping must wrap by this and not by the C++ colour table, or a fleet of
+    // any other length indexes off the end of its own groups. 1 when there are
+    // no groups, so the modulo stays defined; the callers' index guards do the
+    // rest.
+    int drawVariantCount() const {
+        return carGroups_.empty() ? 1 : static_cast<int>(carGroups_.size());
+    }
+
     void syncGroups(engine::World& world);
     void syncCarLamps(engine::World& world);   // bake the emissive lamp instances
     int carTurnDir(const Agent& a) const;      // route-bend turn side (-1/0/+1)
@@ -251,6 +359,12 @@ private:
     engine::Mat4 signalPostPose(int link) const;            // the pole assembly
     engine::Mat4 signalLensPose(int link, SignalState s) const;  // lit lens at active slot
     Real groundAt(Real x, Real z) const;
+    // The height of the DRIVING SURFACE on `link` at `station` metres along it —
+    // the same reading the sim gives a car driving that spot (Agent::deckY), so
+    // anything placed against the road (a parked car, a painted bay outline)
+    // lands on the deck the mesher actually built rather than on the raw
+    // terrain beside it (#25). Falls back to the ground for an unknown link.
+    Real deckYAt(int link, Real station, engine::Vec2 p) const;
 
     CityRenderParams params_;
     engine::NavGraph nav_;
@@ -258,6 +372,19 @@ private:
     std::vector<engine::Entity> carGroups_;   // one per car variant (body + colour)
     std::unordered_map<int, engine::Mat4> physPose_;      // R5: agent -> body pose
     std::vector<std::vector<int>> carAgentIds_;           // parallel to bakes
+    // (The one-shot SceneryCar bake that used to live here is gone: parked cars
+    // are real SimVehicles now, drawn straight off the vehicle list in
+    // syncGroups. A cached pose would be wrong rather than stale, because a
+    // parked car moves as soon as its owner drives it away.)
+    // Set per fixed step: bake the render poses only on the frame's LAST step
+    // (see fixedUpdate). True by default so a direct step() call still bakes.
+    bool bakeThisStep_ = true;
+    // Adaptive-dip state. The CADENCE itself lives in CitySim (setTickPeriod);
+    // this is only the load multiplier the bridge derives from the frame's
+    // fixed-step count and scales that period by.
+    int loadMul_ = 1;
+    int loadStreak_ = 0;
+    std::vector<std::vector<int>> pedAgentIds_;           // ditto, ped group (P4)
     engine::Entity pedGroup_;
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
@@ -273,6 +400,15 @@ private:
     // or a synthesized default set for C++ fallback cars. An empty entry => that
     // variant draws no lamps.
     std::vector<std::vector<LampMarker>> carLights_;
+    // Wheel-less bodies + wheel layouts, one per car variant (indexed like
+    // carGroups_). Populated only from Lua fleet recipes that publish a separate
+    // wheelset; see carChassisMesh() / carWheels().
+    std::vector<engine::MeshHandle> carChassis_;
+    std::vector<std::vector<CarWheel>> carWheels_;
+    // Parked cars that survived the distance cull on the last bake — how many
+    // car bodies the frame actually pays for. This was computed and discarded,
+    // which left the car share of the frame a guess with a 2.7x spread.
+    int parkedDrawn_ = 0;
     std::vector<Real> prevCarSpeed_;
     mutable std::vector<engine::Vec3> smoothUp_;   // per-agent tilt low-pass
     Real bakeDt_ = 1.0 / 60.0;                     // last step's dt (filter gain)   // last step's per-agent speed (brake decel)

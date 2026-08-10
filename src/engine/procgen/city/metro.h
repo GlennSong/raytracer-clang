@@ -4,7 +4,9 @@
 #include "polygon.h"
 #include "road_network.h"   // RoadGraph
 #include "buildability.h"   // HeightSampler, BuildabilityConfig (terrain-aware layout)
+#include "city_footprint.h" // Footprint (P8 footprint-first skeleton)
 #include <cstdint>
+#include <string>
 
 namespace engine {
 
@@ -25,6 +27,20 @@ struct CityHub {
     Vec2 pos{0, 0};
     int  kind = 0;
     bool radial = false;
+    int  site = 0;   // which MetroSite grew this hub (0 = the primary city)
+};
+
+// A settlement footprint for multi-site metros (8km-city plan P2): the primary
+// city plus satellite towns grow in ONE graph — one planarize, one mesher, and
+// the hub-to-hub backbone MST spans every site, so town connectivity is
+// structural rather than stitched.
+struct MetroSite {
+    Vec2   center{0, 0};
+    double radius    = 400.0;  // footprint half-extent (m)
+    int    hotspots  = 3;      // >=1; the first is the site's central hub
+    double blockSize = 0.0;    // 0 = inherit MetroParams::blockSize
+    double density   = 1.0;    // scales this site's ambient attractor field
+    int    kindBias  = -1;     // central-hub district kind (-1 = default cycle)
 };
 
 struct MetroParams {
@@ -52,6 +68,10 @@ struct MetroParams {
     // and each block takes its size from the nearest hub's district flavor.
     bool   freeways           = false;  // lay the hub-to-hub freeway backbone
     double freewayWidth       = 22.0;   // ~6 lanes (DesignRules::Freeway)
+    // Class stamped on the legacy backbone edges. Freeway (the historical
+    // behavior) strips sidewalks/crosswalks/frontage and blocks foot routing;
+    // a no-freeway metro sets Arterial so the spine stays a street.
+    RoadClass backboneClass   = RoadClass::Freeway;
     double collectorWidth     = 9.5;    // 2 lanes + parking
     double collectorSpan      = 0.0;    // faces wider than this get collector
                                         // cuts first (0 = 3x blockSize)
@@ -71,11 +91,64 @@ struct MetroParams {
     double loopMin         = 80.0;   // loop-closing link length range (m)
     double loopMax         = 190.0;
 
+    // Floor on the fabric-fill cell edge (m). The per-district cell caps
+    // (kindCellCap, ~70-156 m) clamp fabric to small-metro spacing no matter
+    // how big blockSize is; a big-block city (min intersection spacing 150 m)
+    // floors them here instead of fighting mergeShortEdges afterwards. 0 = the
+    // legacy caps apply unchanged.
+    double minBlockEdge = 0.0;
+
+    // P7 PATCH-CONFORMING FABRIC (8km-city plan): how city-site faces are
+    // subdivided. "" = legacy gridFill (every shipped level). "chords" =
+    // stationed opposite-side chords blended toward the Coons iso-curves;
+    // "bisect" = recursive near-midpoint bisection with node hygiene;
+    // "court" = one perimeter ring + ribs, big-block center; "mix" = seeded
+    // per-face choice weighted by the nearest hub's district kind
+    // (financial/commercial -> chords, oldtown/industrial -> bisect,
+    // residential -> 60/40 chords/court). Towns always keep gridFill. The
+    // fabric blockLen is clamped >= 150 m this round (Phase-0 gate
+    // reconciliation — regional 110 m grading is a later change).
+    std::string fabric;
+    // Core fabric block edge (m). 0 = flat max(150, minBlockEdge). Non-zero
+    // (typically 110) requires the REGION-AWARE consolidation floor in the
+    // recipe tail — the density unlock that makes downtown fabric legal.
+    double fabricCoreLen = 0;
+    double fabricConform = 0.15;        // 0 chord .. 1 Coons, per line
+    double fabricJitter = 0.12;         // station jitter (fraction of a gap)
+    double fabricSoftCollapse = 0.8;    // bisect soft-band fuse probability
+
+    // Satellite settlements. Empty = single-site legacy behavior driven by
+    // center/radius/hotspots/blockSize above. Non-empty REPLACES them: sites[0]
+    // is the primary city (keeps the financial-core hub cycle), later sites are
+    // towns whose central hub takes kindBias.
+    std::vector<MetroSite> sites;
+
     // ARTERIALS-ONLY (city-pipeline v2 stage 1): emit ONLY the arterial
     // skeleton + freeway seeds; skip the per-face local/collector fabric fill.
     // The two-tier rebuild fills blocks from district templates instead of
     // colonization, so the local grid is generated downstream, not here.
     bool   arterialsOnly = false;
+
+    // P8 FOOTPRINT-FIRST skeleton (Glenn's masterplan; city_footprint.h).
+    // "" = legacy colonization skeleton (every shipped level). "footprint" =
+    // derive a terrain-aware footprint polygon per site, gates on its rim,
+    // and (P8-C) build the arterials by recursive bisection of the polygon —
+    // no space colonization at the arterial tier. Stage B wiring: footprints
+    // are computed and exported for the planner overlay while the roads
+    // still come from the legacy growth; P8-C swaps the skeleton itself.
+    std::string skeleton;
+    double footprintCell = 80.0;    // F0 flood-fill grid pitch (m)
+    double footprintWobble = 0.12;  // radial clip wobble (0 = compass circle)
+    double districtLen   = 1500.0;  // bisection stop: target district cell (m)
+    double gateSpacing   = 1100.0;  // rim gate arc spacing (city; towns derive)
+    bool   rimRoad       = true;    // perimeter arterial on the boundary
+    bool   spineRoad     = true;    // founding road between opposite gates
+    double skeletonSway  = 0.05;    // spoke/cut meander amplitude
+    double arterialSpan  = 0.0;     // min arterial junction span; 0 = derived
+    // P8-D pipeline stepper (footprint mode only): "" = full build,
+    // "footprint" = polygons+gates only (empty graph), "skeleton" = arterials
+    // only, "collectors" = arterials + collector cuts, no street fabric.
+    std::string stopAfter;
 
     // Terrain-aware layout (optional). When `ground` is set, hotspots, arterial
     // growth and blocks are gated on the buildability of the ground: the city
@@ -87,6 +160,11 @@ struct MetroParams {
     // When non-null, receives the hubs (with district kinds) so the caller can
     // drive polycentric zoning (DistrictMap::hubs) from the same layout.
     std::vector<CityHub>* outHubs = nullptr;
+
+    // When non-null (and skeleton == "footprint"), receives the per-site
+    // footprints (polygon + gates) — the planner's Footprint overlay and the
+    // editor's future hand-edit surface read these.
+    std::vector<Footprint>* outFootprints = nullptr;
 };
 
 // Grow the metro and return its planarized RoadGraph (arterials

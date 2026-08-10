@@ -40,6 +40,11 @@ public:
     void setFixedStep(double seconds);
     double fixedStep() const { return fixedStepSeconds; }
 
+    // Stall telemetry (rubber-band diagnosis): true when the last advance()
+    // hit the step cap and dropped backlog — sim time visibly jumped.
+    bool droppedBacklog() const { return backlogDropped; }
+    unsigned long long droppedBacklogCount() const { return backlogDrops; }
+
 private:
     double fixedStepSeconds;
     double scale;
@@ -48,6 +53,8 @@ private:
     double simTime;
     bool isPaused = false;
     bool stepRequested = false;
+    bool backlogDropped = false;
+    unsigned long long backlogDrops = 0;
 
     // After a long stall (debugger pause, window drag) the accumulator must not
     // grow without bound, or the sim tries to "catch up" forever — the spiral

@@ -41,14 +41,22 @@ struct PickRay {
     Vec3 direction;
 };
 
-PickRay rayThroughCursor(const FrameContext& ctx) {
-    const CameraState& cam = ctx.view.camera;
-    Mat4 view = Mat4::lookAt(cam.position, cam.target, cam.up);
-    Mat4 proj = (cam.projection == CameraProjection::Perspective)
+// The projection the ACTUAL camera uses — perspective OR orthographic. Every
+// screen-space overlay (group markers, camera frustums, path handles,
+// selection rings, gizmo) must project through this; hardcoding perspective
+// misprojected them all in the City Planner's ortho plan views (P7.3).
+Mat4 cameraProjection(const CameraState& cam) {
+    return (cam.projection == CameraProjection::Perspective)
         ? Mat4::perspective(degreesToRadians(cam.fovDegrees), cam.aspectRatio,
                             cam.nearPlane, cam.farPlane)
         : Mat4::orthographic(cam.orthoHeight, cam.aspectRatio,
                              cam.nearPlane, cam.farPlane);
+}
+
+PickRay rayThroughCursor(const FrameContext& ctx) {
+    const CameraState& cam = ctx.view.camera;
+    Mat4 view = Mat4::lookAt(cam.position, cam.target, cam.up);
+    Mat4 proj = cameraProjection(cam);
     Mat4 invVP = (proj * view).inverse();
 
     double w = std::max(ctx.windowWidth, 1);
@@ -271,7 +279,13 @@ void EditorSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("road_edit_modifier", KeyCode::LeftControl);
     ctx.actions.bindButton("road_edit_modifier", KeyCode::RightControl);
     ctx.actions.bindButton("editor_conform", KeyCode::G);   // grade terrain to the roads
-    if (bridge) bridge->attach(&ctx.world, this, levelFile);
+    if (bridge) {
+        bridge->attach(&ctx.world, this, levelFile);
+        // City Planner (P7.3): the planner needs services that never cross
+        // the bridge otherwise — the asset manager (leak-free overlay/bake
+        // meshes via acquire/release) and the camera system (Top/Iso/Free).
+        bridge->attachPlanner(&ctx.assets, &ctx.renderer, &cameras);
+    }
 
     ComponentRegistry& registry = componentRegistry();
     undoStack();   // session log exists before any panel asks for it
@@ -668,8 +682,7 @@ void EditorSystem::render(FrameContext& ctx) {
 void EditorSystem::drawGroupMarkers(FrameContext& ctx) const {
     const CameraState& cam = ctx.view.camera;
     Mat4 view = Mat4::lookAt(cam.position, cam.target, cam.up);
-    Mat4 proj = Mat4::perspective(degreesToRadians(cam.fovDegrees),
-                                  cam.aspectRatio, cam.nearPlane, cam.farPlane);
+    Mat4 proj = cameraProjection(cam);   // respect ortho plan views (P7.3)
     const ImGuiViewport* vp = ImGui::GetMainViewport();
 
     // A small axis-aligned wireframe box at each group's world origin, so a
@@ -702,8 +715,7 @@ void EditorSystem::drawCameraFrustums(FrameContext& ctx) const {
     // it reads as "what this camera sees".
     const CameraState& cam = ctx.view.camera;
     Mat4 view = Mat4::lookAt(cam.position, cam.target, cam.up);
-    Mat4 proj = Mat4::perspective(degreesToRadians(cam.fovDegrees),
-                                  cam.aspectRatio, cam.nearPlane, cam.farPlane);
+    Mat4 proj = cameraProjection(cam);   // respect ortho plan views (P7.3)
     const ImGuiViewport* vp = ImGui::GetMainViewport();
 
     for (Entity e : selection) {
@@ -740,15 +752,14 @@ void EditorSystem::drawGrid(FrameContext& ctx) const {
 
     const CameraState& cam = ctx.view.camera;
     Mat4 view = Mat4::lookAt(cam.position, cam.target, cam.up);
-    Mat4 proj = Mat4::perspective(degreesToRadians(cam.fovDegrees),
-                                  cam.aspectRatio, cam.nearPlane, cam.farPlane);
+    Mat4 proj = cameraProjection(cam);   // respect ortho plan views (P7.3)
     float viewF[16], projF[16];
     toGizmo(view, viewF);
     toGizmo(proj, projF);
     static const float IDENTITY[16] = {1, 0, 0, 0, 0, 1, 0, 0,
                                        0, 0, 1, 0, 0, 0, 0, 1};
     ImGuiIO& io = ImGui::GetIO();
-    ImGuizmo::SetOrthographic(false);
+    ImGuizmo::SetOrthographic(cam.projection == CameraProjection::Orthographic);
     ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
     // Ground-plane reference (y = 0), drawn into ImGuizmo's overlay window —
     // over the scene, under every panel.
@@ -1058,8 +1069,7 @@ void EditorSystem::drawGizmo(FrameContext& ctx) {
 
     const CameraState& cam = ctx.view.camera;
     Mat4 view = Mat4::lookAt(cam.position, cam.target, cam.up);
-    Mat4 proj = Mat4::perspective(degreesToRadians(cam.fovDegrees),
-                                  cam.aspectRatio, cam.nearPlane, cam.farPlane);
+    Mat4 proj = cameraProjection(cam);   // respect ortho plan views (P7.3)
 
     float viewF[16], projF[16], modelF[16];
     toGizmo(view, viewF);
@@ -1068,7 +1078,7 @@ void EditorSystem::drawGizmo(FrameContext& ctx) {
     toGizmo(worldMatrix(ctx.world, selected), modelF);
 
     ImGuiIO& io = ImGui::GetIO();
-    ImGuizmo::SetOrthographic(false);
+    ImGuizmo::SetOrthographic(cam.projection == CameraProjection::Orthographic);
     ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
 
     ImGuizmo::OPERATION op = (gizmoOp == 1)   ? ImGuizmo::ROTATE
@@ -1141,9 +1151,9 @@ void EditorSystem::drawSelectionMarker(FrameContext& ctx) const {
     // anchor) rings brighter so it's distinguishable in a multi-selection.
     const CameraState& cam = ctx.view.camera;
     Mat4 view = Mat4::lookAt(cam.position, cam.target, cam.up);
-    Mat4 proj = Mat4::perspective(degreesToRadians(cam.fovDegrees),
-                                  cam.aspectRatio, cam.nearPlane, cam.farPlane);
+    Mat4 proj = cameraProjection(cam);   // respect ortho plan views (P7.3)
     const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const bool ortho = cam.projection == CameraProjection::Orthographic;
     float fovScale =
         vp->Size.y / (2.0f * std::tan(degreesToRadians(cam.fovDegrees) * 0.5f));
 
@@ -1166,8 +1176,13 @@ void EditorSystem::drawSelectionMarker(FrameContext& ctx) const {
         Vec3 wcz(wm.m[0][2], wm.m[1][2], wm.m[2][2]);
         Real maxScale = std::max({wcx.length(), wcy.length(), wcz.length()});
         float dist = static_cast<float>(-viewPos.z);
+        // Screen radius: perspective shrinks with distance; ortho is a fixed
+        // world-units-per-pixel scale (orthoHeight = full vertical extent).
         float radius =
-            static_cast<float>(bounds.radius * maxScale) / dist * fovScale;
+            ortho ? static_cast<float>(bounds.radius * maxScale) /
+                        std::max(cam.orthoHeight, 1e-3f) * vp->Size.y
+                  : static_cast<float>(bounds.radius * maxScale) / dist *
+                        fovScale;
         radius = std::clamp(radius * 1.15f, 12.0f, 0.6f * vp->Size.y);
 
         bool primary = (e == selected);
@@ -1185,8 +1200,7 @@ void EditorSystem::drawPathHandles(FrameContext& ctx) const {
     if (!pathTool.bound()) return;
     const CameraState& cam = ctx.view.camera;
     Mat4 view = Mat4::lookAt(cam.position, cam.target, cam.up);
-    Mat4 proj = Mat4::perspective(degreesToRadians(cam.fovDegrees),
-                                  cam.aspectRatio, cam.nearPlane, cam.farPlane);
+    Mat4 proj = cameraProjection(cam);   // respect ortho plan views (P7.3)
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     auto toScreen = [&](const Vec3& w, ImVec2& out) -> bool {
         Vec3 vpos = view.transformPoint(w);

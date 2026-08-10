@@ -9,6 +9,15 @@ JoltJobAdapter::JoltJobAdapter(engine::JobSystem& pool, JPH::uint maxJobs, JPH::
     jobs.Init(maxJobs, maxJobs);
 }
 
+JoltJobAdapter::~JoltJobAdapter() {
+    // See the header: a worker can still be between Execute() (which released
+    // the barrier our caller was waiting on) and Release() (which frees the job
+    // out of `jobs`). Leaving before it gets there frees the storage underneath
+    // it. wait() also drains the queue on this thread, so a job that has not
+    // started yet runs here rather than against a half-destroyed adapter.
+    pool.wait(&outstanding);
+}
+
 int JoltJobAdapter::GetMaxConcurrency() const {
     // Our background workers, plus the thread that calls WaitForJobs — the base
     // barrier's Wait() executes jobs on it while it waits, so it counts too.
@@ -37,10 +46,13 @@ void JoltJobAdapter::QueueJob(Job* inJob) {
     // reference to carry it onto a worker thread (JobSystem.h contract); the
     // worker releases it after Execute(), which triggers FreeJob when it hits 0.
     inJob->AddRef();
+    // Counted, so ~JoltJobAdapter can wait for it. The pool decrements only
+    // after this lambda returns — i.e. after Release() — which is what makes the
+    // wait sufficient rather than merely likely.
     pool.run([inJob] {
         inJob->Execute();
         inJob->Release();
-    });
+    }, &outstanding);
 }
 
 void JoltJobAdapter::QueueJobs(Job** inJobs, JPH::uint inNumJobs) {

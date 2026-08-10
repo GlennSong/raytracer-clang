@@ -1,6 +1,7 @@
 #include "vehicle_spec.h"
 
 #include "lua_state.h"        // luaState() + the Lua C API (scripting-internal)
+#include "lua_helpers.h"      // numField/boolField/vec3Field spec readers
 #include "procgen_mesh.h"     // luaToMesh
 #include "../components.h"
 #include "../asset_manager.h"
@@ -9,39 +10,7 @@ namespace engine {
 
 namespace {
 
-// Field readers over a table at absolute stack index `t`.
-double numField(lua_State* L, int t, const char* key, double def) {
-    lua_getfield(L, t, key);
-    double v = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : def;
-    lua_pop(L, 1);
-    return v;
-}
-
-bool boolField(lua_State* L, int t, const char* key, bool def) {
-    lua_getfield(L, t, key);
-    bool v = lua_isboolean(L, -1) ? (lua_toboolean(L, -1) != 0) : def;
-    lua_pop(L, 1);
-    return v;
-}
-
-Vec3 vec3Field(lua_State* L, int t, const char* key, Vec3 def) {
-    lua_getfield(L, t, key);
-    Vec3 r = def;
-    if (lua_istable(L, -1)) {
-        int st = lua_gettop(L);
-        lua_rawgeti(L, st, 1);
-        if (lua_isnumber(L, -1)) r.x = lua_tonumber(L, -1);
-        lua_pop(L, 1);
-        lua_rawgeti(L, st, 2);
-        if (lua_isnumber(L, -1)) r.y = lua_tonumber(L, -1);
-        lua_pop(L, 1);
-        lua_rawgeti(L, st, 3);
-        if (lua_isnumber(L, -1)) r.z = lua_tonumber(L, -1);
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-    return r;
-}
+// Field readers (numField/boolField/vec3Field) come from lua_helpers.h.
 
 }  // namespace
 

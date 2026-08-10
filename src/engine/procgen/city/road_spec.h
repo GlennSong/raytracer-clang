@@ -72,6 +72,29 @@ RoadSpec roadSpecPreset(const std::string& name);
 RoadSpec roadSpecFromLegacy(double width, bool oneWay, double sidewalkWidth,
                             double curbHeight);
 
+// A STREET cross-section WITH kerbside parallel parking:
+//   sidewalk | curb | PARKING | travel... | travel... | PARKING | curb | sidewalk
+// `carriageway` is the drivable width the road ALREADY occupies — the section is
+// carved out of it and the returned spec's carriagewayWidth() equals it exactly,
+// so attaching a spec never moves the drawn road edge away from the width lots
+// and nav agree on. `parkWidth` goes to each kerb; the remainder splits into
+// 2 * lanesPerDir travel lanes. A road too narrow to carry both (travel lanes
+// would fall under `minLane`) comes back with NO Parking band — travel lanes
+// only, which is honest: you cannot park on it. This replaces the legacy shim
+// for generated streets, which split the WHOLE carriageway into travel lanes and
+// so left the sim parking cars in the outermost travel lane against the kerb.
+RoadSpec roadSpecStreetParking(double carriageway, int lanesPerDir,
+                               double sidewalkWidth, double curbWidth,
+                               double parkWidth = 2.5, double minLane = 3.2);
+
+// The kerbside Parking band on `side` (-1 = the left end of the band list,
+// +1 = the right end), in the form every consumer needs: the lateral offset from
+// the CARRIAGEWAY CENTRELINE (the chain the road is swept along) to the band's
+// CENTRE, and the band's width. False when that side carries no Parking band.
+// This is the ONE place a parking bay's lateral position comes from.
+bool roadSpecParkingBand(const RoadSpec& spec, int side, double& centerOffset,
+                         double& width);
+
 // JSON: either a preset name ("freeway3") or an object with a "bands" array
 // (each {kind, width, dir?, surface?, paint?}). Round-trips.
 RoadSpec roadSpecFromJson(const nlohmann::json& j);

@@ -12,6 +12,7 @@
 namespace engine {
 
 class Window;
+class XrBackend;  // engine/xr/xr_backend.h — owned by headset-capable renderers
 
 struct MeshTag {};
 struct BufferTag {};
@@ -88,7 +89,7 @@ struct RenderMaterial {
     // change per batch, not per triangle.
     static constexpr uint32_t FLAG_TWO_SIDED = 16;
 
-    // World-space procedural surface library (applySurface in common.metal /
+    // World-space procedural surface library (applySurface in surfaces.metal /
     // scene.cpp): an analytic material — brick, concrete, roof tiles, asphalt,
     // ... — chosen by an id packed into bits 8..15 of `flags`, so it rides the
     // existing material path with no texture maps. 0 = none. Keep the ids in
@@ -111,7 +112,8 @@ struct RenderMaterial {
         // vertex colour; this surface adds procedural MICRO-RELIEF: a slope-scaled
         // normal perturbation + roughness variation (rougher/bumpier on steep rock,
         // smoother on flat sand/snow) so the ground isn't a flat-shaded plane.
-        // Albedo grain only; the normal/roughness work is in lighting.metal.
+        // Albedo grain only; the normal/roughness work is surfaceReliefTerrain
+        // (same file, surface_terrain.metal).
         TerrainGround,
         // Rooftop HVAC kit (device: "procedural recipe … UV wrap around the
         // HVAC unit"). Baked PBR sets like the facade surfaces:
@@ -299,6 +301,64 @@ struct ProceduralSky {
     float cloudTime      = 0.0f;   // animation phase (advanced by the cycle)
 };
 
+// Physically-based scattering sky (cinematic-sky phase). Opt-in per level via
+// "environment": {"sky": {"model": "scattering", ...}}. The backend computes a
+// Hillaire-style transmittance LUT + sky-view LUT (recomputed only when the sun
+// or these params change), the skybox samples them, IBL is baked from the same
+// sky, and the lit pass swaps the exp height fog for per-channel Rayleigh+Mie
+// aerial perspective. The sun disc/color follow SceneLighting::sun. Defaults are
+// an Earth-like clear day; `turbidity` is the one-knob haze control.
+struct SkyScatteringParams {
+    bool  enabled = false;
+    float planetRadius = 6360000.0f;      // ground radius (world meters)
+    float atmosphereHeight = 100000.0f;   // shell thickness above ground (m)
+    Vec3  rayleighBeta{5.802e-6f, 13.558e-6f, 33.1e-6f};   // scatter /m (λ⁻⁴ blue)
+    float rayleighScaleHeight = 8000.0f;
+    float mieBeta = 3.996e-6f;            // scatter /m (extinction = 1.11x)
+    float mieScaleHeight = 1200.0f;
+    float mieG = 0.8f;                    // forward-scatter lobe (sun haze glow)
+    float turbidity = 1.0f;               // scales the Mie coefficients (haze)
+    Vec3  groundAlbedo{0.30f, 0.30f, 0.30f};
+    float brightness = 1.0f;              // artistic scale on the sky radiance
+    float multiScatter = 1.0f;            // strength of the multi-scatter approx
+    float aerialDensity = 1.0f;           // aerial-perspective distance scale
+    float sunAngularRadius = 0.0047f;     // radians (~0.27°, the real sun)
+};
+
+// Volumetric cloud layer (cinematic-sky phase). Opt-in per level via
+// "environment": {"clouds": {...}}. A slab [bottom, top] of raymarched clouds
+// rendered at half resolution after the scene (depth-occluded) and upsampled
+// bilaterally; replaces the 2D FBM sky overlay while active. Altitudes are
+// world meters; `wind` drifts the field along +X in m/s.
+struct VolumetricCloudParams {
+    bool  enabled = false;
+    float coverage = 0.35f;      // 0 = clear, 1 = overcast
+    float bottom = 900.0f;
+    float top = 1600.0f;
+    // Extinction per metre inside the slab. 0.55 was not a volume coefficient —
+    // at a ~17.5 m step it puts the per-step optical depth near 10, so the very
+    // first non-empty sample saturated the ray and the march broke out of its
+    // loop after ONE iteration. Visible brightness was then whatever density
+    // that single jittered sample happened to hit, which is where the per-pixel
+    // sparkle came from: neighbouring pixels sampled different points and
+    // differed severalfold. At 0.05 a step is ~0.4-0.9 optical depths, so the
+    // ray actually integrates across many samples and the noise averages out.
+    // (metropolis_sky.json already authored 0.05 by hand; this makes the
+    // default agree with the one level that had been tuned.)
+    float density = 0.05f;       // extinction scale inside the slab
+    float noiseScale = 0.0011f;  // base noise frequency (1/m)
+    float wind = 12.0f;
+    int   steps = 40;            // view-march steps (perf/quality)
+    int   lightSteps = 6;        // sun-march steps per lit sample
+    float phaseG = 0.45f;        // Henyey-Greenstein silver-lining strength
+    float farDistance = 30000.0f;
+    float ambient = 0.5f;        // sky ambient reaching cloud interiors
+    // Perlin-Worley detail erosion: how deep the 32^3 worley detail texture
+    // eats into cloud edges (0 = solid billows, ~0.6 = ragged wisps). Matches
+    // the 0.35 the old inline-fbm erosion hardcoded.
+    float detailStrength = 0.35f;
+};
+
 // Aerial-perspective fog (ADR-0016 environment). Lit color lerps toward `color`
 // by 1-exp(-density*dist) from the camera, so distant terrain dissolves into
 // atmosphere — a depth cue that also hides the far clip / LOD seams. Mirrors the
@@ -320,6 +380,8 @@ struct SceneLighting {
     ShadowArtistic shadowArtistic;
     ProceduralSky sky;
     FogParams fog;
+    SkyScatteringParams skyScattering;      // cinematic-sky opt-in (per level)
+    VolumetricCloudParams volumetricClouds; // cloud-slab opt-in (per level)
     float exposure = 1.0f;
     float ambientMultiplier = 0.3f;
     Vec3 ambientTint{1, 1, 1};   // grades the ambient/irradiance term only
@@ -342,6 +404,25 @@ struct RenderStats {
     uint32_t totalInstances = 0;
     uint32_t entitiesSubmitted = 0;
     uint32_t trianglesDrawn = 0;   // color pass only (excludes shadow casters)
+    // Instance-capacity overflow, per frame. Non-zero shadow/foliage counts mean
+    // geometry was DROPPED this frame; instanceOverflow counts instances that
+    // fell back to per-draw submission (correct image, draw-call cliff). Raise
+    // the capacities (setInstanceCapacities) when these are non-zero.
+    uint32_t instanceOverflow = 0;
+    uint32_t shadowOverflow = 0;
+    uint32_t foliageOverflow = 0;
+    // Casters actually submitted to the shadow pass, summed over all cascades,
+    // and terrain nodes likewise. The shadow pass re-submits the colour pass's
+    // geometry per cascade and NOTHING counted it, so "shadows cost ~3x the
+    // colour pass" was an inference rather than a measurement.
+    uint32_t shadowCasters = 0;
+    uint32_t shadowTerrainNodes = 0;
+    // MONOTONIC totals since startup (not per-frame) — the frame ledger diffs
+    // them to get "resources created during this frame", the signature of a
+    // hitch caused by creating something mid-play rather than by steady cost.
+    // A backend that doesn't count leaves them 0 and the ledger reports none.
+    uint64_t meshUploadsTotal = 0;
+    uint64_t textureUploadsTotal = 0;
 };
 
 enum class CameraProjection { Perspective, Orthographic };
@@ -366,6 +447,29 @@ struct CameraState {
         : position(0, 0, 3), target(0, 0, 0), up(0, 1, 0),
           fovDegrees(60.0f), orthoHeight(10.0f), aspectRatio(1.0f),
           nearPlane(0.1f), farPlane(1000.0f) {}
+};
+
+// One explicit XR view: matrices the renderer uses AS-IS. CameraState cannot
+// express a headset's off-axis eye projection, so XR hands the renderer the
+// finished matrices instead of a look-at description.
+struct RenderViewDesc {
+    Mat4 view;            // world -> eye
+    Mat4 projection;      // reverse-Z, off-axis, GPU-ready
+    int targetIndex = 0;  // color slice / texture index
+};
+
+// Per-frame XR render info, produced by XrCameraSystem (engine/systems) and
+// handed to the renderer via Renderer::setXrViews. Contract: a compositor-
+// owned backend MAY refine each view's ORIGIN-space eye pose/projection with
+// a same-frame late latch (fresher anchor, exact current-drawable projection);
+// it must NEVER touch worldFromOrigin — the locomotion base belongs to the
+// game. That split is what makes "the renderer second-guessed the camera"
+// structurally impossible.
+struct XrRenderInfo {
+    bool active = false;
+    Mat4 worldFromOrigin;  // locomotion base: tracking origin in world space
+    int viewCount = 0;
+    RenderViewDesc views[2];
 };
 
 // Planetary atmosphere (procedural-planet-plan P3). A single-scattering Rayleigh+Mie
@@ -452,8 +556,50 @@ public:
     virtual void setEnvironmentMap(TextureHandle /*equirect*/) {}
     virtual RenderStats getRenderStats() const = 0;
 
+    // Per-frame instance buffer capacities (general/shadow/foliage). A big level
+    // (8 km city) raises these at load; small levels keep the lean defaults.
+    // Values below the backend's defaults are clamped up — shrinking buys
+    // nothing and risks overflow. Safe between frames; no-op by default.
+    virtual void setInstanceCapacities(uint32_t /*instances*/, uint32_t /*shadow*/,
+                                       uint32_t /*foliage*/) {}
+    // GPU execution time of the most recently COMPLETED frame, in ms; 0 when
+    // the backend can't measure it (the frame ledger then shows no GPU column).
+    // Necessarily lags the current frame — the GPU runs behind the CPU — so it
+    // is a rolling truth, not this frame's cost. It is also the only timing
+    // that survives a vsync block: when the swapchain makes the CPU wait, the
+    // ledger's acquire phase inflates without any work being done, and this
+    // number is what says whether the GPU was actually busy that whole time.
+    virtual float lastGpuFrameMs() const { return 0.0f; }
+
+    // Present without waiting for the display refresh. Measurement-only:
+    // while vsync is on, frame time is quantised to the refresh interval, so
+    // removing 4 ms of GPU work changes NOTHING measurable — the frame just
+    // waits the same. Ranking passes by frame time therefore requires turning
+    // this off first (PassCost does, and restores it). Returns false when
+    // the backend can't control presentation pacing — a compositor-driven
+    // surface (visionOS) owns it — so callers can say the measurement is
+    // unreliable rather than report noise.
+    virtual bool setPresentSync(bool /*enabled*/) { return false; }
+
     virtual void beginFrame() = 0;
     virtual void setCamera(const CameraState& camera) = 0;
+
+    // XR (engine/xr/): the headset backend this renderer owns, or nullptr —
+    // the visionOS Metal backend returns its CompositorServices adapter; all
+    // other backends (and macOS Metal) inherit nullptr and XR stays inert.
+    virtual XrBackend* xrBackend() { return nullptr; }
+
+    // Explicit per-view matrices for XR frames. Called by RenderSystem after
+    // setCamera when XR is active; setCamera still runs every frame and
+    // remains the mono truth (culling, audio, effects). Default: ignore.
+    virtual void setXrViews(const XrRenderInfo& /*info*/) {}
+
+    // The GAMEPLAY camera's position — the locomotion-base hint for
+    // head-tracked surfaces. XrCameraSystem calls this each frame BEFORE it
+    // rewrites the shared camera to follow the head; the base-follow must
+    // track gameplay movement (teleports, vehicles), never head motion.
+    virtual void setXrBaseHint(const Vec3& /*worldPosition*/) {}
+
     virtual void setLights(const SceneLighting& lighting) = 0;
     virtual void drawMesh(MeshHandle handle, const Mat4& transform,
                           const RenderMaterial& material) = 0;
@@ -497,9 +643,22 @@ public:
     virtual void shutdownDebugUi() {}
 
     // Runtime toggles for post-processing effects (debug/tuning)
+    // XR world scale: how many world units the user traverses per real
+    // meter. >1 makes the user FEEL larger (wider virtual IPD, longer
+    // strides — the world reads smaller); 1 = life-size. Head-tracking
+    // backends apply it to head/eye translations; ignored elsewhere.
+    float xrWorldScale = 1.0f;
+
     bool ssaoEnabled = true;
     bool ssrEnabled = true;
     bool reflectionProbesEnabled = true;
+
+    // Cinematic sky runtime gates (AND-ed with the level's opt-in params, so a
+    // HUD toggle can kill either without reloading). cloudStepsOverride > 0
+    // replaces the level's view-march step count (quality/perf knob).
+    bool skyScatteringEnabled = true;
+    bool volumetricCloudsEnabled = true;
+    int  cloudStepsOverride = 0;
 
     // Resolution scale for the screen-space effect buffers (SSAO + SSR), a
     // fraction of the framebuffer. These effects are low/medium frequency, so
@@ -553,9 +712,14 @@ public:
     // Bloom
     bool bloomEnabled = true;
     struct BloomParams {
-        float threshold = 1.0f;
-        float knee      = 0.5f;
-        float intensity = 0.3f;
+        float threshold = 1.0f;   // scene-referred radiance a pixel must exceed to bloom
+        float knee      = 0.5f;   // soft shoulder around the threshold (no popping)
+        // SCATTER FRACTION, not a gain: the composite lerps the frame toward the
+        // blurred bright pass by this much, so 0.05 = "5% of the light at this
+        // pixel arrived via the halo". Was 0.3 while the bright pass was dead
+        // and the mix was additive, which is why everything blew out. Real
+        // lenses scatter a few percent; film/game references sit at 0.02-0.10.
+        float intensity = 0.05f;
     } bloomParams;
 
     // Tone mapping + color grade (the composite "Look" + view transform). The

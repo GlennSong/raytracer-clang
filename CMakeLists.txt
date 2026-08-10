@@ -47,6 +47,8 @@ add_library(engine_core STATIC
     src/renderer/hosted_window.cpp
     src/engine/recent_scenes.cpp
     src/engine/clock.cpp
+    src/engine/frame_stats.cpp
+    src/engine/pass_cost.cpp
     src/engine/event_bus.cpp
     src/engine/debug_draw.cpp
     src/engine/world.cpp
@@ -86,6 +88,9 @@ add_library(engine_core STATIC
     src/engine/procgen/city/polygon.cpp
     src/engine/procgen/city/shape_grammar.cpp
     src/engine/procgen/city/parcel.cpp
+    src/engine/procgen/city/patch_fabric.cpp
+    src/engine/procgen/city/city_footprint.cpp
+    src/engine/procgen/city/arterial_skeleton.cpp
     src/engine/procgen/city/road_network.cpp
     src/engine/procgen/city/street_kit.cpp
     src/engine/procgen/city/street_furniture.cpp
@@ -115,13 +120,16 @@ add_library(engine_core STATIC
     src/engine/procgen/city/block_grade.cpp
     src/engine/ai/nav_graph.cpp
     src/engine/ai/pathfind.cpp
+    src/engine/asset_root.cpp
     src/engine/script_assets.cpp
     src/engine/script_watch.cpp
     src/engine/level_loader.cpp
+    src/engine/level_params.cpp
     src/engine/level_writer.cpp
     src/engine/model_importer.cpp
     src/engine/camera_store.cpp
     src/engine/editor_bridge.cpp
+    src/engine/city_planner.cpp
     src/engine/properties.cpp
     src/engine/component_registry.cpp
     src/engine/property_json.cpp
@@ -146,6 +154,7 @@ add_library(engine_core STATIC
     src/engine/audio/sfx.cpp
     src/engine/systems/audio_system.cpp
     src/engine/systems/render_system.cpp
+    src/engine/systems/xr_camera_system.cpp
     src/engine/systems/debug_draw_system.cpp
     src/engine/systems/dev_control_system.cpp
     src/engine/systems/debug_overlay_system.cpp
@@ -161,6 +170,21 @@ add_library(engine_core STATIC
 target_include_directories(engine_core SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party)
 target_compile_options(engine_core PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(engine_core PUBLIC Threads::Threads)
+
+# GPU erosion bake (metropolis-scale-plan P0.5), Apple only: a self-contained
+# Metal compute host for the droplet/thermal sim — its own device + queue, no
+# renderer dependency — so every engine_core host (viewer, editor, headless
+# tests) gets the fast bake. Falls back to the CPU sim in erosion.cpp when no
+# Metal device or kernel source is present (erosion_gpu.h stubs it off-Apple).
+if(APPLE)
+    enable_language(OBJCXX)
+    target_sources(engine_core PRIVATE src/engine/procgen/erosion_gpu.mm)
+    set_source_files_properties(src/engine/procgen/erosion_gpu.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    target_link_libraries(engine_core PUBLIC
+        "-framework Metal"
+        "-framework Foundation")
+endif()
 
 # Dear ImGui (ADR-0011): core + ImGuizmo compile inside engine_core (the
 # panels/gizmos live there); platform backends (GLFW/Metal) attach per host.
@@ -195,6 +219,11 @@ if(RT_ENABLE_IMGUI)
     if(EXISTS ${IMGUIZMO_DIR}/src/ImGuizmo.cpp)
         target_sources(engine_core PRIVATE ${IMGUIZMO_DIR}/src/ImGuizmo.cpp)
         target_include_directories(engine_core SYSTEM PRIVATE ${IMGUIZMO_DIR}/src)
+        # Vendored third-party source: not our warnings to fix, and it trips
+        # -Wnested-anon-types. Same treatment as lua_static below — silencing it
+        # per-file keeps OUR warnings visible instead of drowning them.
+        set_source_files_properties(${IMGUIZMO_DIR}/src/ImGuizmo.cpp
+                                    PROPERTIES COMPILE_OPTIONS "-w")
     else()
         message(WARNING "ImGuizmo submodule missing - editor gizmos disabled; "
                         "run: git submodule update --init third_party/ImGuizmo")
@@ -235,6 +264,16 @@ if(RT_ENABLE_SCRIPTING)
     add_library(lua_static STATIC ${LUA_SOURCES})
     target_include_directories(lua_static SYSTEM PUBLIC ${LUA_DIR})
     target_compile_options(lua_static PRIVATE -w)   # vendored C; not our warnings
+
+    # Apple's embedded platforms (visionOS, iOS, tvOS) are sandboxed and do not
+    # provide system(), so os.execute fails to COMPILE there. LUA_USE_IOS is
+    # Lua's own supported switch for exactly this — loslib.c reads it and stubs
+    # l_system out ("Despite claiming to be ISO C, iOS does not implement
+    # 'system'"). It also implies LUA_USE_POSIX + LUA_USE_DLOPEN, both fine here.
+    # Set it via the platform check rather than patching the submodule.
+    if(CMAKE_SYSTEM_NAME MATCHES "^(visionOS|iOS|tvOS|watchOS)$")
+        target_compile_definitions(lua_static PRIVATE LUA_USE_IOS=1)
+    endif()
 
     # NOTE: the citysim-specific Lua readers (agent_goals, vehicle_body) are NOT
     # here — they read citysim types, so they live in the `citysim` library
@@ -325,6 +364,19 @@ if(RT_ENABLE_AUDIO AND NOT EMSCRIPTEN)
             "-framework AudioToolbox")
     endif()
 
+    # On Apple's EMBEDDED platforms miniaudio's Core Audio backend drives
+    # AVAudioSession, which is Objective-C — so the single TU has to be compiled
+    # as Objective-C or it fails on the first Foundation header ("expected
+    # identifier or '('", the compiler meeting @class in a .c file). macOS does
+    # not need this: its Core Audio path is plain C. Compiling as OBJC rather
+    # than renaming the file keeps one source serving every platform.
+    if(CMAKE_SYSTEM_NAME MATCHES "^(visionOS|iOS|tvOS|watchOS)$")
+        enable_language(OBJC)
+        set_source_files_properties(src/engine/audio/miniaudio_impl.c
+                                    PROPERTIES LANGUAGE OBJC)
+        target_link_libraries(miniaudio_static PUBLIC "-framework AVFoundation")
+    endif()
+
     target_link_libraries(engine_core PUBLIC miniaudio_static)
     target_compile_definitions(engine_core PUBLIC RT_ENABLE_AUDIO=1)
 endif()
@@ -394,6 +446,7 @@ add_executable(run_tests
     tests/test_sparse_set.cpp
     tests/test_world.cpp
     tests/test_clock.cpp
+    tests/test_frame_stats.cpp
     tests/test_event_bus.cpp
     tests/test_debug_draw.cpp
     tests/test_skeleton.cpp
@@ -442,6 +495,12 @@ add_executable(run_tests
     tests/test_terrain_field.cpp
     tests/test_winding.cpp
     tests/test_road_constraints.cpp
+    tests/test_metro_sites.cpp
+    tests/test_fabric.cpp
+    tests/test_city_footprint.cpp
+    tests/test_sim_rate_ab.cpp
+    tests/test_footprint_skeleton.cpp
+    tests/test_city_stages.cpp
     tests/test_road_semantics.cpp
     tests/test_road_layers.cpp
     tests/test_road_offset.cpp
@@ -451,6 +510,7 @@ add_executable(run_tests
     tests/test_road_weld.cpp
     tests/test_junction_surface.cpp
     tests/test_drive_freeway.cpp
+    tests/test_piedmont_drive.cpp
     tests/test_mesh_quality.cpp
     tests/test_mesh_lattice.cpp
     tests/test_road_lattice.cpp
@@ -469,6 +529,7 @@ add_executable(run_tests
     tests/test_curb_return.cpp
     tests/test_animation_path.cpp
     tests/test_terrain_lod.cpp
+    tests/test_terrain_async.cpp
     tests/test_nav_graph.cpp
     tests/test_pathfind.cpp
     tests/test_perception.cpp
@@ -491,6 +552,7 @@ add_executable(run_tests
     tests/test_city_drive.cpp
     tests/test_city_render.cpp
     tests/test_city_parking.cpp
+    tests/test_city_deck_height.cpp
     tests/test_car_lamps.cpp
     tests/test_city_flow.cpp
     tests/test_city_spectate.cpp
@@ -499,14 +561,19 @@ add_executable(run_tests
     tests/test_relationships.cpp
     tests/test_ped_graph.cpp
     tests/test_city_generated.cpp
+    tests/test_tier_v.cpp
     tests/test_city_lots.cpp
     tests/test_alignment.cpp
     tests/test_surface_field.cpp
     tests/test_architect.cpp
+    tests/test_erosion_gpu.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(run_tests PRIVATE citysim engine_core)
+# The GPU erosion test chdirs here to reach shaders/metal/erosion.metal (the
+# kernels are compiled from disk, CWD-relative, like the renderer's shaders).
+target_compile_definitions(run_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 if(RT_ENABLE_SCRIPTING)
     target_sources(run_tests PRIVATE
         tests/test_script_vm.cpp
@@ -602,6 +669,22 @@ if(RT_ENABLE_PHYSICS)
     set(DOUBLE_PRECISION OFF CACHE BOOL "" FORCE)
     add_subdirectory(third_party/JoltPhysics/Build ${CMAKE_BINARY_DIR}/jolt)
 
+    # Jolt.cmake does `target_compile_options(Jolt PUBLIC -pthread)` on every
+    # non-Windows platform, so the flag reaches EVERY language compiled in any
+    # target that links Jolt. swiftc rejects it outright ("Driver threw unknown
+    # argument: '-pthread'"), which breaks the visionOS app the moment its Swift
+    # entry point shares a target with the engine.
+    #
+    # Re-scope Jolt's interface so the flag only reaches the C-family languages
+    # it was meant for, rather than patching the submodule or dropping Swift into
+    # a separate target to dodge it. C/C++/ObjC++ still get it exactly as before.
+    get_target_property(_jolt_opts Jolt INTERFACE_COMPILE_OPTIONS)
+    if(_jolt_opts)
+        list(REMOVE_ITEM _jolt_opts "-pthread")
+        list(APPEND _jolt_opts "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-pthread>")
+        set_target_properties(Jolt PROPERTIES INTERFACE_COMPILE_OPTIONS "${_jolt_opts}")
+    endif()
+
     # The physics-host source set every host target (viewer, editor_app,
     # viewer_web) compiles alongside engine_core: the Jolt world + job adapter,
     # the gameplay systems that need it, drivable vehicles, and the living-world
@@ -636,6 +719,10 @@ if(RT_ENABLE_PHYSICS)
     )
     target_include_directories(physics_tests PRIVATE src)
     target_compile_options(physics_tests PRIVATE -Wall -Wextra)
+    # Cars are CONTENT now (the built-in box fleet is gone), so the tier soak has
+    # to read the shipped vehicle catalogue the way a level does — otherwise the
+    # city it drives has no cars at all to collide with.
+    target_compile_definitions(physics_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     target_link_libraries(physics_tests PRIVATE citysim engine_core Jolt Threads::Threads)
     add_test(NAME physics_tests COMMAND physics_tests)
 
@@ -691,6 +778,166 @@ function(rt_build_vulkan_shaders)
     endforeach()
     add_custom_target(vulkan_shaders DEPENDS ${VK_SPV_FILES})
 endfunction()
+
+# ============================================================
+# visionOS immersive app. Built ONLY when cross-compiling for visionOS, which
+# is a separate configure from the host build:
+#
+#   cmake -S . -B build-visionos-sim -G Xcode \
+#         -DCMAKE_SYSTEM_NAME=visionOS -DCMAKE_OSX_SYSROOT=xrsimulator
+#   cmake --build build-visionos-sim --target VisionApp
+#
+# Deliberately a target in THIS file rather than a standalone project under
+# src/visionos_app: it links engine_core, citysim and the physics sources, and a
+# second project would have to duplicate those source lists. One source of truth
+# for what the engine is made of.
+#
+# The Xcode generator is required, not preferred — no other generator produces a
+# visionOS .app bundle with a Swift entry point.
+# ============================================================
+if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+    enable_language(Swift)
+    set(CMAKE_Swift_LANGUAGE_VERSION 5)
+
+    set(VISION_SOURCES
+        src/visionos_app/VisionSpikeApp.swift
+        src/visionos_app/TemplateRenderer.swift
+        src/visionos_app/vision_spike.mm
+        src/renderer/gamepad_gc.mm
+        src/visionos_app/vision_spike.h
+        # The SAME Metal backend the macOS viewer uses. Presentation differs
+        # (CompositorServices vs CAMetalLayer) and is handled behind
+        # PresentationSurface inside this file — the pass graph is shared, not
+        # forked. This is what replaced NullRenderer.
+        src/renderer/metal/metal_renderer.mm
+        src/game/arena_state.cpp
+    )
+    if(RT_ENABLE_PHYSICS)
+        list(APPEND VISION_SOURCES ${RT_PHYSICS_HOST_SOURCES})
+    endif()
+
+    add_executable(VisionApp MACOSX_BUNDLE ${VISION_SOURCES})
+    target_link_libraries(VisionApp PRIVATE
+        engine_core
+        citysim
+        "-framework CompositorServices"
+        "-framework GameController"
+        "-framework Metal"
+        "-framework MetalKit"
+        "-framework ModelIO"
+        "-framework SwiftUI"
+        "-framework ARKit"
+        "-framework Foundation"
+    )
+    if(RT_ENABLE_PHYSICS)
+        target_link_libraries(VisionApp PRIVATE Jolt)
+        target_compile_definitions(VisionApp PRIVATE RT_ENABLE_PHYSICS=1)
+    endif()
+
+    set_source_files_properties(src/visionos_app/vision_spike.mm
+                                src/renderer/metal/metal_renderer.mm
+                                PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+
+    # Assets are COPIED INTO the bundle, and the app points the engine's asset
+    # root at them at startup (engine/asset_root.h). Nothing resolves relative to
+    # the working directory inside a sandboxed bundle.
+    #
+    # Downloaded assets (*.glb models, *.hdr env maps) are gitignored — a fresh
+    # worktree does not inherit them from the main checkout, and the bundle copy
+    # silently ships without them (levels that reference them then fail to load
+    # on device, where there is no fallback path outside the bundle).
+    foreach(_dlAsset
+            assets/models/DamagedHelmet.glb
+            assets/env/tree_lined_driveway_1k.hdr
+            assets/env/grasslands_sunset_1k.hdr)
+        if(NOT EXISTS "${CMAKE_SOURCE_DIR}/${_dlAsset}")
+            message(WARNING
+                "${_dlAsset} is missing (gitignored, not shared into worktrees) "
+                "— levels reference it and the app bundle will ship without it. "
+                "Copy it from the main checkout.")
+        endif()
+    endforeach()
+    target_sources(VisionApp PRIVATE
+        ${CMAKE_SOURCE_DIR}/assets ${CMAKE_SOURCE_DIR}/shaders)
+    set_source_files_properties(
+        ${CMAKE_SOURCE_DIR}/assets ${CMAKE_SOURCE_DIR}/shaders
+        PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+
+    # The generated Info.plist (CMakeFiles/VisionApp.dir/Info.plist) is written
+    # at cmake-generate time only. Without this, editing Info.plist.in and
+    # rebuilding via xcodebuild ships the STALE plist — which is how the app
+    # once reached the device without NSHandsTrackingUsageDescription and was
+    # killed by ARKit at hand-tracking start. Registering the template as a
+    # configure dependency makes ZERO_CHECK re-run cmake when it changes.
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/src/visionos_app/Info.plist.in")
+
+    set_target_properties(VisionApp PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/src/visionos_app/Info.plist.in"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.glennsong.raytracer.visionspike"
+        MACOSX_BUNDLE_BUNDLE_NAME "VisionApp"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
+        XCODE_ATTRIBUTE_SWIFT_OBJC_BRIDGING_HEADER
+            "${CMAKE_SOURCE_DIR}/src/visionos_app/VisionSpike-Bridging-Header.h"
+        XCODE_ATTRIBUTE_SWIFT_VERSION "5.0"
+        XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC "YES"
+        # Deployment target, NOT the SDK version. Xcode defaults these to match,
+        # which silently makes the app require whatever visionOS the installed
+        # Xcode shipped with — so a device one point release behind is refused
+        # with "doesn't match VisionApp.app's deployment target", which reads
+        # like a device problem rather than a build setting. Keep this ≤ the
+        # headset's installed OS (26.3.1 at the time of writing).
+        #
+        # 26.0, not the 2.0 API floor: Apple frameworks gate behavior on
+        # linked-on-or-after checks, and a 2.0-targeted CompositorServices
+        # layer on a 26.x runtime is exactly the compatibility-shim territory
+        # where frames run but never reach the display.
+        XCODE_ATTRIBUTE_XROS_DEPLOYMENT_TARGET "26.0"
+        # Link the Swift runtime. VisionApp is one .swift file among many .mm/.cpp,
+        # so CMake picks C++ as the link language and omits Swift's runtime search
+        # paths — the device link then fails on the autolink stubs Swift emits
+        # (__swift_FORCE_LOAD_$_swiftARKit and friends) plus the stdlib itself.
+        # The simulator link happens to get away with it; the device one does not.
+        XCODE_ATTRIBUTE_LIBRARY_SEARCH_PATHS
+            "$(inherited) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)"
+        XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS
+            "$(inherited) /usr/lib/swift @executable_path/Frameworks"
+        XCODE_ATTRIBUTE_ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES "NO"
+    )
+
+    # Signing. The simulator does not need it and cannot use it; a real Vision
+    # Pro will not install an unsigned bundle. Pass a team to switch over:
+    #
+    #   cmake -S . -B build-visionos -G Xcode \
+    #         -DCMAKE_SYSTEM_NAME=visionOS -DCMAKE_OSX_SYSROOT=xros \
+    #         -DRT_VISIONOS_TEAM_ID=ABCDE12345
+    #
+    # The ten-character team id is the certificate's OU field:
+    #   security find-certificate -c "Apple Development" -p | \
+    #       openssl x509 -noout -subject
+    # Beware: the parenthetical in the certificate NAME ("Apple Development:
+    # you@example.com (XXXXXXXXXX)", as printed by `security find-identity`) is a
+    # certificate id, NOT the team — using it fails with "No Account for Team".
+    # `security find-identity -v -p codesigning` still tells you whether a usable
+    # certificate exists at all — "0 valid identities found" until an Apple ID
+    # is added to Xcode.
+    set(RT_VISIONOS_TEAM_ID "" CACHE STRING
+        "Apple Developer team id for signing the visionOS device build")
+    if(RT_VISIONOS_TEAM_ID)
+        set_target_properties(VisionApp PROPERTIES
+            XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${RT_VISIONOS_TEAM_ID}"
+            XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic")
+        message(STATUS "visionOS: signing VisionApp with team ${RT_VISIONOS_TEAM_ID}")
+    else()
+        set_target_properties(VisionApp PROPERTIES
+            XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
+            XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO")
+        message(STATUS
+            "visionOS: VisionApp will be UNSIGNED (simulator only). "
+            "Set -DRT_VISIONOS_TEAM_ID=<team> to build for a device.")
+    endif()
+endif()
 
 # ============================================================
 # Interactive viewer (GPU + windowing) — only when GLFW is available, so the
@@ -821,6 +1068,7 @@ if(Qt6_FOUND)
     add_executable(editor_app
         src/editor_app/editor_main.cpp
         src/editor_app/property_inspector.cpp
+        src/editor_app/city_planner_panel.cpp
         src/game/arena_state.cpp
     )
     target_compile_options(editor_app PRIVATE -Wall -Wextra -Wpedantic)
@@ -893,10 +1141,13 @@ if(Qt6_FOUND)
     endif()
 
     # Headless widget-interaction tests for the generated inspector (the
-    # path that once crashed via a dangling visitor capture). Offscreen Qt.
+    # path that once crashed via a dangling visitor capture) and the City
+    # Planner bridge + panel (P7.3). Offscreen Qt.
     add_executable(editor_qt_tests
         tests/test_property_inspector_qt.cpp
+        tests/test_city_planner_qt.cpp
         src/editor_app/property_inspector.cpp
+        src/editor_app/city_planner_panel.cpp
         src/renderer/null_renderer.cpp   # satisfies Renderer::create; never renders
     )
     target_compile_options(editor_qt_tests PRIVATE -Wall -Wextra)

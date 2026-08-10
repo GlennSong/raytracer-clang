@@ -4,6 +4,7 @@
 #include "../../engine/ai/agent_memory.h"
 #include "../../engine/ai/nav_graph.h"
 #include "../../engine/ai/pathfind.h"
+#include "agent_grid.h"
 #include "agent_id.h"
 #include "city_goals.h"
 #include "places.h"
@@ -16,6 +17,13 @@
 namespace citysim {
 
 using engine::Real;   // the engine's scalar (double); used throughout the sim
+
+// How high one grade-separation LAYER sits above the one below (m). A legacy
+// bridge link carries `layer > 0` instead of an absolute deck elevation, so
+// everything that places geometry on such a link — the sim's agent height, the
+// render bridge's decals, parked cars and bay outlines — must lift by the same
+// amount. Shared so those readings cannot drift apart.
+constexpr Real kLayerClearance = 5.8;
 
 // The agent-based city simulation (ADR-0060). An Agent is a brain (data): it
 // either WALKS (a pedestrian) or POSSESSES and drives a SimVehicle. A car has no
@@ -43,6 +51,28 @@ struct Agent {
         Count
     };
 
+    // Simulation tier (P4 three-tier traffic). K (Kinematic) is the full agent
+    // as it always ran: sensing, FSM, signals, render bake, kinematic proxy.
+    // V (Virtual) is a persistent FAR agent: full identity + exact route state
+    // (link, lane, param, speed) but no rendering, no physics proxy, no
+    // sensing/FSM and no live signal queries — it traverses its real A* route
+    // on a coarse ~1 Hz tick at a modelled speed (class speed shaped by fixed
+    // average junction delays), so promotion finds it where it should be.
+    // P (the physical Jolt tier) stays what it was: possessTier's overlay on K.
+    // Everything is K until a level opts in (CitySim::tieringEnabled) AND a
+    // player position is fed (setTierCenter) — headless sims are unchanged.
+    // D (Dormant) is the tier BELOW V: not simulated at all, not even coarsely.
+    // A V agent still walks its route link by link once a second — cheap, but
+    // not free, and there are thousands of them. A D agent costs nothing: when
+    // the player comes near it is reconstructed from its own schedule
+    // (scheduleSnapshot) and handed to V.
+    //
+    // Its CAR is untouched by any of this. Dormancy strips the agent, never the
+    // vehicle — a parked car keeps its pose, its bay, its instance and its
+    // proxy, which is what lets it still be seen, collided with and stolen
+    // while its owner does not exist.
+    enum class Tier : uint8_t { D, V, K };
+
     // Stable identity (Living City, ADR-0066 Phase 1). Assigned once at build in
     // agent order and never reused for a different agent this run, so relationship
     // tables / per-agent memory / job assignment key on THIS, not the array slot.
@@ -57,13 +87,57 @@ struct Agent {
     enum class Role : uint8_t { Commuter, Shopkeeper, Stroller, Count };
     Role role = Role::Commuter;
 
+    // HOW THIS AGENT IS MOVING RIGHT NOW. Nearly everything that reads `mode`
+    // is asking exactly this — which route space to plan in, whether to sample a
+    // lane or a sidewalk, whether to draw a car or a person, whether to grow a
+    // Jolt character or a vehicle proxy — so flipping it is how an agent parks
+    // and walks away. It is NOT identity: see `archetype`.
     Mode mode = Mode::Driver;
+    // WHAT THIS AGENT IS, for the whole run. Only the goal-table lookup reads
+    // this. Keeping it separate is what stops an agent hopping to a different
+    // daily schedule the moment it gets out of its car.
+    Mode archetype = Mode::Driver;
     State state = State::Resting;
+    Tier tier = Tier::K;
+    // Sim-seconds at which a DORMANT agent stopped being simulated. Its state is
+    // reconstructed from its schedule on waking, so this is only telemetry.
+    Real dormantSince = 0;
+    // "Is this agent too far away to have a body?" — no drawn instance, no
+    // physics proxy, nothing for anyone to sense or brake for.
+    //
+    // Ask through this rather than comparing to a specific tier. Nearly every
+    // site in the sim wants exactly this question, and writing it as
+    // `tier == Tier::V` silently means "the ONE far tier", so adding another
+    // one below V turns each of those into a wrong answer with no compile
+    // error. The tier PASS itself still compares explicitly — it is the thing
+    // that decides which tier an agent belongs in.
+    bool far() const { return tier != Tier::K; }
+    // V-tier bookkeeping: sim-seconds at this agent's last coarse tick (its
+    // next tick advances by the difference — no wall clock), and the remaining
+    // modelled junction dwell it is currently "waiting out" mid-route.
+    Real vLastTick = 0;
+    Real vHold = 0;
+    // SCHEDULED WAKE. An agent resting at home or at work has nothing to decide
+    // until its own day says otherwise, so instead of re-reading the clock every
+    // tick it names the sim-second it next needs thinking about and drops out of
+    // the active list entirely until then. `wakeAt` < 0 means awake; `sleptAt`
+    // is when it went under, so the dwell clock can be caught up on waking.
+    //
+    // This is why the schedule had to be fixed first: a population that all
+    // departs in the same 90 minutes has almost nobody asleep at any moment.
+    Real wakeAt = -1;
+    Real sleptAt = 0;
     bool playerControlled = false;   // brain = host input; the sim won't auto-drive it
     bool released = false;           // ejected by the player (ADR-0062): the sim stops
                                      // driving this agent's ghost so it can't fight the
                                      // now player-driven physical car
-    int vehicle = -1;                // possessed SimVehicle index (Driver only; -1 = none)
+    int vehicle = -1;                // the car being DRIVEN right now; -1 while on foot
+    // The car this agent OWNS, for the whole run (-1 = carless — it walks, and
+    // later takes transit). Survives parking: `vehicle` goes to -1 when the
+    // agent gets out, but `car` still says which vehicle is sitting in that bay
+    // waiting for it. That is what lets a car persist as an object in the world,
+    // be stolen, and be missed by its owner.
+    int car = -1;
 
     // Where this agent lives and works (Living City, ADR-0066 Phase 3): the
     // PlaceMap UIDs assigned at build, or kNoPlace when the city authored none.
@@ -153,6 +227,12 @@ struct Agent {
     // per-agent deterministic RNG so faults reproduce from the sim seed.
     Real reliability = 1.0;
     uint32_t brain = 1;
+    // This agent's own stream for TRIP decisions (lane choice, wander goal),
+    // separate from `brain`'s fault stream. Per-agent so a decision depends only
+    // on how many decisions THIS agent has made — the property that lets an
+    // agent be advanced out of turn (waking from its schedule) without shifting
+    // everybody else's choices. Seeded from `brain` by hash at build.
+    uint32_t tripRng = 1;
     // Working memory (ADR-0063: sense -> REMEMBER -> predict -> decide -> act).
     // Sightings become tracks with velocity estimates; a body that leaves the
     // cone persists a few seconds, extrapolated along where it was heading
@@ -184,8 +264,16 @@ struct VehicleBody {
     VehicleType type = VehicleType::Sedan;
 };
 
-// The fleet: a fixed, deterministic set of body slots. A driver takes slot
-// (vehicleIndex % size), so its body is stable and the renderer can mirror it.
+// The BUILT-IN fleet: a fixed, deterministic set of body slots. A driver takes
+// slot (vehicleIndex % size), so its body is stable and the renderer can mirror
+// it.
+//
+// This is the FALLBACK, not the source of truth. The catalogue lives in
+// vehicle_classes.lua and reaches the sim through CitySim::setFleet — one set of
+// numbers per vehicle, shared by the drawn body, the follow gaps and the physics
+// chassis. These values are what a build with no scripting (or a level with no
+// vehicle recipes) falls back to; they are deliberately close to, but not
+// authoritative for, the shipped classes.
 int vehicleFleetSize();
 const VehicleBody& vehicleFleetBody(int slot);   // slot wraps into [0, size)
 
@@ -218,9 +306,87 @@ public:
     void build(const engine::NavGraph& graph, int driverCount, int pedCount,
                uint32_t seed);
 
+    // Adopt a fleet catalogue (vehicle_classes.lua, via the level's vehicle
+    // recipes). Call BEFORE build(): drivers take their body at build time, so a
+    // later call would leave the cars already on the road at the old sizes. An
+    // empty table restores the built-in one. Slots wrap exactly as the built-in
+    // table's do.
+    void setFleet(std::vector<VehicleBody> fleet) { fleet_ = std::move(fleet); }
+    int fleetSize() const {
+        return fleet_.empty() ? vehicleFleetSize()
+                              : static_cast<int>(fleet_.size());
+    }
+    const VehicleBody& fleetBody(int slot) const {
+        if (fleet_.empty()) return vehicleFleetBody(slot);
+        const int n = static_cast<int>(fleet_.size());
+        return fleet_[((slot % n) + n) % n];
+    }
+
     // Advance by `dt` seconds; `hoursPerSecond` maps real time to the wrapping
     // in-world clock. Signals advance with it.
     void step(Real dt, Real hoursPerSecond = 0.05);
+
+    // Median home->work travel time in SIM-SECONDS, measured over a sample in
+    // assignPlaces. Multiply by the host's hoursPerSecond to get what a commute
+    // costs in in-world HOURS — the number that says whether a day is livable
+    // at this world's scale. 0 before assignPlaces runs.
+    Real commuteSecondsMedian() const { return commuteSecondsMedian_; }
+    // The same measure SPLIT BY MODE. A city can be perfectly livable for its
+    // drivers and impossible for everyone on foot — a kilometre-scale walk is
+    // hours of world time — and a blended median hides exactly that. 0 when no
+    // agent of that kind has a routable commute.
+    Real commuteSecondsDrive() const { return commuteSecondsDrive_; }
+    Real commuteSecondsWalk() const { return commuteSecondsWalk_; }
+
+    // WHERE AN AGENT'S DAY SAYS IT SHOULD BE at in-world hour `clock`.
+    //
+    // Pure: no rng, no shared state, and the clock is a PARAMETER rather than
+    // the sim's own — so it can be asked about any hour, tested in isolation,
+    // and reused to place an agent that has not been simulated at all. That is
+    // what lets a city be seeded at its start hour instead of stepped up to it,
+    // and (later) lets an agent sleep through hours of world time and be
+    // reconstructed on demand when the player comes near.
+    struct Snapshot {
+        enum class Where : uint8_t { AtHome, AtWork, ToWork, ToHome };
+        Where where = Where::AtHome;
+        // For the travelling cases: how long the agent has been under way, in
+        // sim-seconds. Zero when it is at either end.
+        Real elapsedSeconds = 0;
+    };
+    Snapshot scheduleSnapshot(const Agent& a, Real clock) const;
+
+    // Tell the sim how fast its clock runs, BEFORE seeding it.
+    //
+    // step() supplies this per call, but seedFromSchedule happens before any
+    // step, and scheduleSnapshot needs the rate to turn "how long a commute
+    // takes in seconds" into "how much of the day it eats". Seeding without it
+    // used the header default (0.05) against a level authored at 0.004, which
+    // made the travel window 12.5x too wide and launched roughly three quarters
+    // of the population onto the road at load.
+    void setHoursPerSecond(Real h) { hoursPerSecond_ = h; }
+    Real hoursPerSecond() const { return hoursPerSecond_; }
+
+    // Place the whole population where `clock` says it should be, and set the
+    // sim clock to it. Replaces stepping the city up to its start hour: opening
+    // at 22:00 is the same cost as opening at 08:00. Call after build() and
+    // assignPlaces(); the host then steps normally from there.
+    void seedFromSchedule(Real clock);
+
+    // Dormancy telemetry: how many agents were put to sleep / rebuilt so far,
+    // and how many are dormant right now. A healthy far field is mostly
+    // dormant with a trickle of wakes, not a churn of both.
+    int dormancies() const { return dormancies_; }
+    int wakes() const { return wakes_; }
+    int dormantAgents() const {
+        int n = 0;
+        for (const Agent& a : agents_) if (a.tier == Agent::Tier::D) ++n;
+        return n;
+    }
+
+    // How many agents the scheduled wake skipped on the last step — the ones
+    // waiting out their day at a door and costing nothing. Rises at night and
+    // midday, falls through both rush hours.
+    int sleepingAgents() const { return sleeping_; }
 
     Real timeOfDay() const { return clockHours_; }
     Real seconds() const { return simSeconds_; }   // monotonic sim clock (memory time base)
@@ -237,6 +403,9 @@ public:
         engine::Vec2 pos, heading;   // bay centre + facing (along the link)
         int link = -1;               // directed link whose right curb it hugs
         engine::Real station = 0;    // metres from the link's `from` node
+        // The Parking BAND this bay sits in (NavLink::parkWidth). The painted
+        // stall is drawn to it, so the markings can never lap onto the kerb.
+        engine::Real width = 0;
         int occupant = -1;
     };
     const std::vector<ParkingBay>& parkingBays() const { return bays_; }
@@ -246,6 +415,78 @@ public:
     engine::Real laneSpacingFor(int li) const;
     const engine::NavGraph* graph() const { return nav_; }
     SignalController& signals() { return signals_; }
+
+    // --- three-tier traffic (P4) --------------------------------------------
+    // Public knobs with the approved defaults; a level/test opts in by setting
+    // tieringEnabled and feeding the player position each fixed step. (The
+    // level_loader JSON pass-through is a one-line hookup owned by the level
+    // pipeline; the sim only exposes the fields.) Without BOTH the switch and
+    // a centre, every agent stays K and behaviour is bit-identical to before.
+    bool tieringEnabled = false;
+    Real carPromoteRadius = 500.0;   // V->K inside this range of the player...
+    Real carDemoteRadius = 620.0;    // ...K->V beyond this (hysteresis)
+    Real pedPromoteRadius = 280.0;
+    Real pedDemoteRadius = 350.0;
+    // How often a FAR agent refreshes, in SIM SECONDS. The bucket count is
+    // derived from this and the tick length (capped by vTickDivisor), so the
+    // far tier keeps its ~1 Hz refresh whether the sim runs at 60 Hz or 15.
+    Real vRefreshSeconds = 1.0;
+    int vTickDivisor = 60;           // V bucket count: uid % divisor, one bucket
+                                     // per fixed frame (~1 Hz per agent at 60 Hz)
+
+    // DORMANCY (the tier below V). Off by default: with the switch off nothing
+    // ever enters Tier::D and behaviour is bit-identical to the V/K sim.
+    bool dormancyEnabled = false;
+    // V->D beyond this, D->V inside `dormantResumeRadius` (hysteresis).
+    //
+    // THIS MUST EXCEED THE RADIUS AT WHICH PARKED CARS ARE DRAWN (the render
+    // bridge's sceneryRadius, 450 m by default). A dormant agent's position is
+    // reconstructed from its schedule when it wakes, so if it went dormant
+    // while its car was still on screen, hours of world time could pass and the
+    // wake would move it — teleporting a car the player is looking at. Keeping
+    // dormancy strictly further out than anything drawn makes that
+    // unobservable. The host asserts the relation at build.
+    Real dormantRadius = 1200.0;
+    Real dormantResumeRadius = 1000.0;
+
+    // The tier bubble's centre (the player), fed by the host each fixed step.
+    // No centre = no player = everything stays K (headless sims/tests).
+    // TICK CADENCE (P8.2e). The sim owns how often it advances — the caller
+    // only hands it elapsed time. `seconds` 0 = every call (historical, and
+    // what every existing level/test relies on); 1/30 = tick at 30 Hz,
+    // advancing by everything banked since the last tick. This used to live in
+    // the render bridge, which meant a system's cadence was decided one layer
+    // above the state it governs; the V tier's own bucket phase then quietly
+    // disagreed with it (see docs/piedmont-p8-report.md).
+    void setTickPeriod(Real seconds) { tickPeriodSeconds_ = seconds; }
+    Real tickPeriod() const { return tickPeriodSeconds_; }
+    // Sim seconds banked since the last tick — what a renderer extrapolates
+    // poses by so traffic stays smooth at rates below the frame rate.
+    Real secondsSinceTick() const { return sinceTick_; }
+    // The sim's time of day. Two runs can only be compared at the SAME sim
+    // hour: the workload (who is commuting, who is parked, and therefore who
+    // sits in the player's bubble) swings enormously across the day, and a
+    // slower run reaches a given hour later in wall time.
+    Real clockHours() const { return clockHours_; }
+
+    void setTierCenter(engine::Vec2 c) { tierCenter_ = c; haveTierCenter_ = true; }
+    void clearTierCenter() { haveTierCenter_ = false; }
+    // The bubble centre the render bridge also distance-culls scenery against.
+    engine::Vec2 tierCenter() const { return tierCenter_; }
+    bool hasTierCenter() const { return haveTierCenter_; }
+
+    // Lifetime tier-transition counters (test gates: conservation, engagement).
+    long tierPromotions() const { return promotions_; }
+    long tierDemotions() const { return demotions_; }
+
+    // Agent indices whose grid cell falls within `radius` of `pos`: a SUPERSET
+    // by cell coverage, sorted ascending — callers apply exact predicates (the
+    // physics bridge's possess ring uses this instead of a full agent scan).
+    // Positions are exact for V agents and at most a step's drift stale for K.
+    void queryAgentsNear(engine::Vec2 pos, Real radius,
+                         std::vector<int>& out) const {
+        grid_.query(pos, radius, out);
+    }
 
     // Mark an agent as host-driven (the player): the sim won't run its AI brain.
     void setPlayerControlled(int agentIndex, bool on) {
@@ -316,8 +557,10 @@ public:
     // (first state with a matching label, else the entry state); a rebuild or
     // setWander() resets back to the built-ins.
     void setGoalTables(GoalTable pedestrian, GoalTable driver);
-    const GoalTable& goalTable(Agent::Mode mode) const {
-        return mode == Agent::Mode::Driver ? goalDriver_ : goalPed_;
+    // Keyed by ARCHETYPE (see goalsFor): pass an agent's `archetype`, not its
+    // current `mode`.
+    const GoalTable& goalTable(Agent::Mode archetype) const {
+        return archetype == Agent::Mode::Driver ? goalDriver_ : goalPed_;
     }
 
     // Make agents LIVE in the city (ADR-0066 Phase 3). Assign each agent a home
@@ -356,6 +599,8 @@ private:
     // never materializes among crossing traffic.
     void startTrip(Agent& a, int origin, int goal, bool fromRest = true);
     bool startWanderTrip(Agent& a, int from, bool fromRest = true);
+    // Put a car owner back in its own car before a departure (see .cpp).
+    void remountOwnedCar(Agent& a);
     // Goal layer (ADR-0064). goalThink is step()'s pass 1 for one agent: run
     // the agent's current goal state — retry a GoTo departure, or (Rest) emit
     // this tick's events and take the first table row that fires.
@@ -366,8 +611,12 @@ private:
     // False when no trip launched (then a NoRoute row, if any, has been taken).
     bool startGoalTrip(Agent& a, int origin, bool fromRest);
     int departNode(const Agent& a) const;   // where a rest departure starts from
-    GoalTable& goalsFor(Agent::Mode mode) {
-        return mode == Agent::Mode::Driver ? goalDriver_ : goalPed_;
+    // Selects by ARCHETYPE (what the agent is), never by `mode` (how it happens
+    // to be moving). An agent that parks and walks to a door must keep running
+    // the same day — if this read `mode`, getting out of the car would swap it
+    // onto the pedestrian schedule mid-commute.
+    GoalTable& goalsFor(Agent::Mode archetype) {
+        return archetype == Agent::Mode::Driver ? goalDriver_ : goalPed_;
     }
     void installGoalTables(GoalTable pedestrian, GoalTable driver);
     bool launchClear(const Agent& a, int node) const;   // no moving car near the spawn
@@ -386,6 +635,24 @@ private:
     void labelDriverState(Agent& a, Real seenAhead, Real gap, int legCount) const;
     void computeGaps();
     void computeCarWedge();   // fills carAheadGap_/carAheadSpeed_ (S7 senses)
+    // --- three-tier traffic (P4) ---
+    // Promote/demote against the bubble (fixed update, agent-index order:
+    // demotions swept first, then promotions from a grid query — deterministic).
+    void tierPass(Real hoursPerSecond);
+    // Put one agent where its schedule says it is; shared by load-time seeding
+    // and by waking a dormant agent, so both place by identical rules.
+    void placeFromSchedule(int idx);
+    void wakeDormant(int idx);        // D -> V, rebuilt from the schedule
+    // One coarse V tick for agent `i`: goal layer at accumulated hours, then
+    // vAdvance over the accumulated seconds; re-hashes the agent in the grid.
+    // Promotion runs this as its catch-up so the K handoff pose is exact.
+    // The actual advance. step() is the cadence gate in front of it.
+    void stepTick(Real dt, Real hoursPerSecond);
+    void tickV(int i, Real hoursPerSecond);
+    // Advance a V agent along its REAL route at the modelled speed: link class
+    // speed shaped by fixed average junction delays (vHold). No sensing, no
+    // FSM, no live signal state — hasSignal() is static topology, not a query.
+    void vAdvance(Agent& a, Real dt);
 
 public:
     // Car-contact events since build — the roads-v2 S7 soak gate reads these
@@ -404,16 +671,26 @@ private:
     Real junctionRadius(int node) const;
     Real vehicleLength(int agentIndex) const;      // body length, or a ped's footprint
     Real pairMinGap(int follower, int leader) const;   // bumper-to-bumper follow gap
+    void measureCommute(const engine::NavGraph& graph);   // median commute (see .cpp)
     Real brainUnit(Agent& a);   // per-agent deterministic roll for faults
+    uint32_t tripRnd(Agent& a); // per-agent stream for TRIP decisions (see .cpp)
     void refreshPose(Agent& a);
     void steer(Agent& a, Real dt);   // rate-limited heading (bounded turn radius)
     engine::Vec2 idlePose(int node, Agent::Mode mode, uint32_t brain) const;
+    // Push a parked/idle car pose OUT of every at-grade carriageway. A knot
+    // of short links can put one link's verge INSIDE a neighbour's lanes; a
+    // car resting there dams the junction until its driver departs (three
+    // drivers pinned for minutes behind one verge-parked car — surfaced by
+    // the density round's street-fronting places).
+    engine::Vec2 pushPoseClearOfLanes(engine::Vec2 p, engine::Real margin) const;
     uint32_t rnd();
     Real rndUnit();
 
     const engine::NavGraph* nav_ = nullptr;
     std::vector<Agent> agents_;
     std::vector<SimVehicle> vehicles_;
+    // Adopted fleet catalogue; empty = use the built-in table (see setFleet).
+    std::vector<VehicleBody> fleet_;
     std::vector<ParkingBay> bays_;
     std::vector<std::vector<int>> baysOnLink_;   // link -> bay indices
     std::vector<char> bayNarrowed_;   // link (or its reverse) carries bays
@@ -431,10 +708,33 @@ private:
     int fastCrashEvents_ = 0;          // contacts with both bodies > 2 m/s
     std::vector<SensedGhost> sensed_;   // per-step snapshot of bodies cars/peds may SEE
                                         // (peds + players + external obstacles)
+    std::vector<int> sensedIndex_;      // per agent: its slot in sensed_, -1 = absent
+                                        // (lets grid candidates map back to ghosts)
     std::vector<engine::Vec2> externalObstacles_;   // host-injected (the live player)
     std::vector<engine::Vec2> staticObstacles_;     // host-injected, static (signal poles)
     std::vector<std::pair<engine::Vec2, Real>> junctions_;   // centre + box radius
     std::vector<Real> nodeBoxRadius_;   // per node: widest incident half-width
+    // P4.1 spatial index. grid_ holds every agent (K re-hashed each step —
+    // effectively free, place() early-outs on an unchanged cell; V only on its
+    // coarse tick, when its position actually moves). junctionGrid_ is a static
+    // bake of junctions_ so nearJunction() stops scanning the whole list.
+    AgentGrid grid_;
+    // Spatial index of PARKED cars, keyed by vehicle index. A driven car is
+    // found through its driver in `grid_`; a parked one has no driver and sits
+    // far from its owner, so it needs its own. Entries for driven cars go stale
+    // harmlessly — every consumer filters on `driver < 0`.
+    AgentGrid parkedGrid_;
+    AgentGrid junctionGrid_;
+    Real maxJunctionRadius_ = 0;
+    mutable std::vector<int> parkedScratch_;  // parkedGrid_ candidates (kept
+                                              // separate so a vehicle query can
+                                              // nest inside an agent query)
+    mutable std::vector<int> queryScratch_;   // shared candidate buffer (queries
+                                              // never nest across a live iteration)
+    std::vector<int> tierScratch_;            // tierPass promotion candidates
+    std::vector<int> dormantScratch_;         // tierPass wake candidates
+    int dormancies_ = 0;
+    int wakes_ = 0;
     SignalController signals_;
     // Per-archetype goal tables (ADR-0064): what each agent's day IS. Built-in
     // defaults mirror the historical schedule/wander control flow bit-exactly;
@@ -443,10 +743,34 @@ private:
     GoalTable goalDriver_ = defaultScheduleGoals();
     RelationshipTable relationships_;   // surface-level social graph (ADR-0066)
     long faultCount_ = 0;
+    Real commuteSecondsMedian_ = 0;
+    Real commuteSecondsDrive_ = 0;
+    Real commuteSecondsWalk_ = 0;
+    // Last step's clock rate, so a sleeping agent can convert "in-world hours
+    // until my next event" into a sim-second wake time.
+    Real hoursPerSecond_ = 0.05;
+    int sleeping_ = 0;   // agents skipped this step by the scheduled wake
     Real clockHours_ = 6.0;
     Real simSeconds_ = 0;   // seconds since build — the time base memory decays on
     Real thinkPeriod_ = 0.35;   // reactive re-decide cadence (s), staggered per agent
     bool wander_ = false;       // lab mode: perpetual random trips, no schedule
+    // Three-tier traffic state (P4): the fed bubble centre, the fixed-frame
+    // counter the V buckets key off (frameIndex_ % vTickDivisor — no wall
+    // clock), and the lifetime transition counters the tests gate on.
+    // Cadence state (see setTickPeriod): time banked toward the next tick, and
+    // time elapsed since the last one.
+    Real tickPeriodSeconds_ = 0.0;
+    Real tickAccum_ = 0.0;
+    Real sinceTick_ = 0.0;
+    engine::Vec2 tierCenter_;
+    // Indices of the agents that need this step's full passes (everything but
+    // the far/V tier), resolved once per step in step(). Ascending, so the
+    // passes keep their original iteration order.
+    std::vector<int> active_;
+    bool haveTierCenter_ = false;
+    uint64_t frameIndex_ = 0;
+    long promotions_ = 0;
+    long demotions_ = 0;
     uint32_t rng_ = 1;
     // Hands out agent UIDs (ADR-0066): reset at build, then one per agent in
     // order. Separate from rng_ so identity allocation never perturbs the sim's

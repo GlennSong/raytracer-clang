@@ -1,7 +1,9 @@
 #ifndef RAYTRACER_ENGINE_PROCGEN_CITY_ROAD_CONSTRAINTS_H
 #define RAYTRACER_ENGINE_PROCGEN_CITY_ROAD_CONSTRAINTS_H
 
-#include "road_network.h"   // RoadGraph
+#include "road_network.h"
+
+#include <functional>   // RoadGraph
 
 namespace engine {
 
@@ -90,6 +92,47 @@ RoadGraph relaxSharpBends(const RoadGraph& graph, Real maxTurn = 0.9,
 // Self-loops and duplicate parallel edges from a merge are dropped (widest wins);
 // orphaned nodes are compacted away. Deterministic and pure.
 RoadGraph mergeShortEdges(const RoadGraph& graph, Real minLen, int maxDegree = 4);
+
+// Minimum INTERSECTION spacing (8km-city plan P2). mergeShortEdges works on raw
+// edges, but a colonization-grown arterial is a chain of ~40 m curve segments
+// between degree-2 nodes — raw edge length is curve sampling, not junction
+// spacing. This walks each junction-to-junction SPAN (through degree-2 nodes,
+// summing arc length) and fuses the two junctions of any span shorter than
+// minSpan (degree-weighted midpoint, curve nodes of the short span dropped,
+// every other chain re-targeted). Junctions whose fused degree would exceed
+// maxDegree keep their span. Deterministic: shortest span first, ties by node
+// index. Callers should re-planarize + re-cap afterwards — moving junctions
+// can introduce crossings.
+RoadGraph consolidateJunctionSpans(const RoadGraph& graph, Real minSpan,
+                                   int maxDegree = 4);
+
+// Region-aware overload (P7 density unlock): the span floor varies by
+// position (evaluated at each span's midpoint) — a tight downtown floor and
+// a big-block periphery floor coexist in one pass. The victim each round is
+// the span most below its own floor (deterministic tie-breaks).
+RoadGraph consolidateJunctionSpans(
+    const RoadGraph& graph, const std::function<Real(const Vec2&)>& minSpanAt,
+    int maxDegree = 4);
+
+// Dissolve the redundant twin of a near-parallel junction arm pair (dir dot >
+// minDot): delete the narrower/shorter arm's whole span when its far junction
+// stays reachable within maxDetourSpans span-hops without it. The mesher's
+// acute-pair trim cannot surface the sliver wedge such pairs enclose — the
+// drive probe measured the gap. Deletion-only: planarity-safe, connectivity
+// proven per cut.
+RoadGraph dissolveAcuteArms(const RoadGraph& graph, Real minDot = 0.85,
+                            int maxDetourSpans = 3);
+
+// Corner-cut degree-2 vertices whose deflection exceeds maxTurn: delete the
+// vertex and chord its neighbours. Strictly bend-reducing (terminates),
+// face-preserving, junction-pinned — the backstop for bends relaxSharpBends
+// cannot converge.
+RoadGraph cutSharpCorners(const RoadGraph& graph, Real maxTurn);
+
+// Drop exact parallel duplicate edges (same node pair), keeping the widest.
+// A parallel pair is a two-edge loop: an un-relaxable 180-degree fold to any
+// chain walk and a sliver face to the block extractor.
+RoadGraph dropParallelEdges(const RoadGraph& graph);
 
 }  // namespace engine
 

@@ -147,3 +147,39 @@ TEST_CASE(assign_places_roles_are_consistent_and_deterministic) {
         CHECK(ag.role == b.agents()[i].role);
     }
 }
+
+// A SHOP WITH NO AUTHORED HOURS MUST NOT CREATE AN AGENT WHO NEVER GOES HOME.
+//
+// PlaceMap::add defaults to openHour 0 / closeHour 24, and every place minted
+// from a LotBuilding takes that default — which is every place on piedmont.
+// assignPlaces used to turn those wide-open hours into departWork 0.0 /
+// departHome 24.0, a window covering the entire day. Such an agent is inside
+// its work window at every hour, so it commutes once and is never again told to
+// go home: its car parks at the office and stays there for good. On piedmont
+// that was every shop worker in the city, quietly pinning a slice of the
+// population (and their parked cars) in place forever.
+TEST_CASE(shop_without_hours_does_not_strand_its_worker) {
+    NavGraph nav = citytest::cross4(45);
+    PlaceMap places;
+    for (int i = 0; i < 3; ++i)
+        places.add(PlaceType::Home, Vec2(-30 + i * 8.0, 20), nav);
+    places.add(PlaceType::Shop, Vec2(30, 20), nav);      // NO hours: 0..24
+    places.add(PlaceType::Shop, Vec2(30, -20), nav);
+
+    CitySim sim;
+    sim.build(nav, 6, 6, 21);
+    sim.assignPlaces(places, nav);
+
+    for (const Agent& a : sim.agents()) {
+        if (a.home == a.work) continue;   // stranded at build, not our concern
+        // Nobody may hold an all-day window — it is indistinguishable from
+        // "always at work" and the agent can never be sent home.
+        const bool allDay = a.departWork <= 0.0 && a.departHome >= 24.0;
+        CHECK(!allDay);
+        CHECK(a.departWork != a.departHome);
+        // A shop that never said when it opens cannot claim its worker's hours;
+        // the agent keeps the shift it drew at build.
+        if (a.workPlace != kNoPlace && places[a.workPlace].type == PlaceType::Shop)
+            CHECK(a.role != Agent::Role::Shopkeeper);
+    }
+}

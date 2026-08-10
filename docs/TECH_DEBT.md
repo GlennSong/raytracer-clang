@@ -38,11 +38,10 @@ when fixed (git history is the archive).
    unprojected with the wrong reverse-Z NDC z), and SSR (needed a confidence fix —
    the dielectric-F0 fresnel crushed head-on hits to ~4%; replaced with a
    high-floor grazing term). A color-coded SSR debug view (view 2) was added to
-   localize this. Remaining follow-up: the bilateral edge-stop constants in the
-   SSR blur (`exp(-|Δdepth|/0.003)`) and AO blur (`exp(-Δdepth²·1e5)`) are still
-   tuned for the old forward-Z NDC distribution; reflections look correct, so this
-   is a possible quality retune, not a bug (those kernels don't bind near/far, so
-   linearizing them means plumbing a camera uniform).
+   localize this. The bilateral edge-stop follow-up is DONE (stale here until
+   2026-08-05): both blurs now use `bilateralDepthWeight` in
+   `post_common.metal`, which linearizes reverse-Z via the camera uniform and
+   weights by *relative* depth difference — no forward-Z-era constants remain.
 3. **Ambient-only AO (gather/respond split, ADR-0017 Phase 4)** — stop the
    composite multiplying AO into direct sun + emissive so residual AO wobble stops
    being amplified. Needs the ambient term carried separately into the composite.
@@ -134,13 +133,20 @@ Minor: shadow-map size fixed at 2048 (expose a 4096 option as a slider).
   mesh-bounds queries per entity in RenderSystem. Needs a frame capture on
   the Mac (Xcode GPU capture) before optimizing blind. Quick levers to try:
   half-res SSAO/SSR, FPS cap comparison, toggling passes in the Debug panel
-  to bisect the cost.
+  to bisect the cost. *The CPU side of that capture now exists (ADR-0077):
+  run the arena with `RT_FRAME_STATS=arena.csv`, read it with
+  `tools/frame-report.py` — if `render` is fat while draw calls are modest,
+  the frame is GPU-bound and the Xcode GPU capture is the next step; if
+  update/fixed are fat, attach Tracy and skip the GPU capture.*
 - **Realtime depth of field doesn't visibly work** (Metal `dofGather` pass,
   written blind on Linux, default-off). The lens-warp pass (distortion/CA/
-  vignette) reportedly works; DOF needs on-device debugging — check the CoC
-  scale (sensor-meters -> pixels), that `dofTexture` actually replaces
-  `sceneColorTexture` at composite, and the depth fetch. The offline tracer
-  is the reference: same LensParams produce correct thin-lens DOF there.
+  vignette) reportedly works; DOF needs on-device debugging. One of the three
+  original suspects is RULED OUT by code inspection (2026-08-05):
+  `dofTexture` DOES replace `sceneColorTexture` at composite when active
+  (`metal_renderer.mm` binds `dofActive ? dofTexture : ...`), so the remaining
+  suspects are the CoC scale (sensor-meters -> pixels) and the depth fetch.
+  The offline tracer is the reference: same LensParams produce correct
+  thin-lens DOF there.
 - **Camera gizmos render in reflections/shadows** (they are plain
   Renderables). Fine until a debug-draw layer exists.
 - **Repeated edit/play cycles re-upload level meshes** without freeing the
@@ -149,7 +155,7 @@ Minor: shadow-map size fixed at 2048 (expose a 4096 option as a slider).
   mesh ownership with `release` on overwrite and `clear()` on world teardown.
 
 **ADR-0037 follow-ups (perf + tone/grade pass — all Metal-only, viewer-verified, not on CI):**
-- **AgX display encode unverified.** `tonemapAgX` (`shaders/metal/post.metal`)
+- **AgX display encode unverified.** `tonemapAgX` (`shaders/metal/post_composite.metal`)
   bakes its own ~2.2 display encode (the minimal-fit convention) and was *not*
   bit-compared to ACES on-device. If AgX reads noticeably darker/brighter than
   ACES at neutral grade, it's a one-line gamma-convention fix. Eyeball on a bright
@@ -184,9 +190,13 @@ Minor: shadow-map size fixed at 2048 (expose a 4096 option as a slider).
 
 ## Offline tracer
 
-- **glTF ("mesh") entities are skipped** by the level importer — offline
-  renders omit imported models. Tessellating glTF into tracer triangles via
-  ModelImporter is the fix (it already produces vertex/index arrays).
+- **Scattered vegetation is not imported.** The `vegetation`/`foliage` blocks
+  are handled only by the engine loader (`loadVegetation`), so offline forest
+  renders omit the scatter — hero `shape:"tree"` entities and rocks DO import.
+  (A previous entry here claimed glTF `"mesh"` entities were skipped; that was
+  stale — `addGltfModel` has imported them since ADR-0039, re-verified
+  2026-08-05 by rendering arena.json's DamagedHelmet offline, 70k triangles,
+  textures intact.)
 - **No HDR importance sampling** — bright skies converge slowly (the
   extracted-sun NEE covers the worst case).
 - **Emissive geometry has no NEE** — the Cornell light is found by chance,
@@ -246,14 +256,6 @@ Minor: shadow-map size fixed at 2048 (expose a 4096 option as a slider).
 Added fast across several sessions; the logic is headless-tested but the code
 took shortcuts worth paying down before the binding surface grows much more.
 
-- **Binding helpers are copy-pasted across surfaces.** `checkVec3`, `pushVec3`,
-  `optField` are defined independently in both `procgen_bindings.cpp` and
-  `gameplay_bindings.cpp` (anon namespaces). Lift them into one module-internal
-  `lua_helpers.h` so there's a single definition.
-- **Entity pack/unpack is duplicated and must stay in sync by hand.** The
-  `(generation<<32)|index` encoding lives in `script_system.cpp` (`packEntity`)
-  and the decode in `gameplay_bindings.cpp` (`toEntity`). If one drifts, entity
-  ids corrupt silently. Move both to one shared `packEntity/unpackEntity`.
 - **Every binding is hand-written C-API stack juggling** (manual push/pop
   balance, magic stack indices) — verbose and easy to get subtly wrong. ADR-0023
   deferred a binding lib (sol2); revisit when the surface grows, since the
@@ -295,7 +297,8 @@ took shortcuts worth paying down before the binding surface grows much more.
 
 ## Lua flora / forest assembly
 
-- **`loadVegetation` is a 213-line god-function.** It handles tree/rock/builtin/
+- **`loadVegetation` is a 493-line god-function** (213 when this entry was
+  written — it has more than doubled). It handles tree/rock/builtin/
   graph/script kinds, inline-vs-path detection, per-variant seeds, two scatter
   passes, and entity creation. The mesh-source branching wants a small "species
   mesh provider" seam (builtin | graph | script -> mesh).
@@ -336,9 +339,271 @@ took shortcuts worth paying down before the binding surface grows much more.
 - **Leaf cards orient `+Y -> heading` with no variation,** chosen blind. Likely
   needs jitter/scale variation and visual tuning on-device.
 
+## Code health — scanned, judged, parked (2026-08-05)
+
+First full `make health` run (ADR-0077). The same-day fixes: the copied Lua
+binding helpers (now `scripting/lua_helpers.h`) and the level-JSON parse
+clones between the two loaders (now `engine/level_params.{h,cpp}` — which
+also healed a real drift: the offline city parse had silently dropped the
+district-road fields). What follows is what the scan found that was judged
+REAL but deliberately NOT fixed, with the reason and the intended fix. Line
+refs are from the 2026-08-05 scan — re-run `make health` before picking one
+up, they drift.
+
+- **Vulkan pipeline boilerplate is the dominant duplication family.** One
+  ~22-line pipeline-creation block appears at TEN sites in
+  `vulkan_renderer.cpp` (1327, 1598, 1677, 1924, 2177, 2327, 2644, 2983,
+  3022, 3546), a 35-line variant at five (1207, 1467, 1822, 2075, 2582),
+  plus several smaller echoes (12×4, 10×9, 8×4…) — a few hundred redundant
+  lines total. Fix: a `makePipeline`-style helper taking a small
+  pass-description struct, absorbing the repeated create-info dance.
+  **Deliberately not done in this pass: no Vulkan SDK in the agent
+  environment, and editing 3.5k lines of backend blind is the
+  43-broken-logging-calls failure mode.** Do it in a session where the
+  backend compiles (Linux CI validates real shaders; a Vulkan-capable
+  machine verifies) — never blind.
+- **WebGPU repeats the same shape at smaller scale.** `createPipeline`
+  (`webgpu_renderer.cpp:1616`) is 663 lines with its own internal 12×2 dup
+  (1103/1176). When the Vulkan helper lands, port the pattern.
+- **Cross-backend near-clones to judge, not auto-fix.**
+  `vulkan_renderer.cpp:60-76` ≈ `webgpu_renderer.cpp:71-87` (11 lines) and
+  `metal_renderer.h:20-30` ≈ `vulkan_renderer.h:23-33` (10). Backends repeat
+  structure by design (parity docs, renderer AGENTS.md); lift a shared
+  helper only where it doesn't couple the seams.
+- **God-function ranking (seam candidates — each is its own reviewed
+  refactor, not a drive-by).** `LevelLoader::load` 1661 lines
+  (`level_loader.cpp:2053`; the level_params extraction was the first slice —
+  the natural next one is per-shape entity loaders, the giant shape-dispatch
+  if/else wants a table). `MetalRenderer::endFrame` 1153 + `initialize` 708
+  (`metal_renderer.mm`; a pass-graph split — Metal-only, needs on-device
+  verification). `growLotBuildings` 1004 (`city_lots.cpp:897`). The 775-line
+  unnamed lambda in `road_net.cpp:469` (naming it is step one).
+  `CityRenderSystem::build` 636, `buildCarMesh` 618, `buildMetro` 577,
+  `LevelScene::load` 490 — and `loadVegetation` 493, which has its own entry
+  above and has DOUBLED since that entry was written.
+- **Small intra-file clone pairs — fix on touch, not worth standalone PRs:**
+  `alignment.cpp` 18×2 (128/164), `road_constraints.cpp` 12×2 (197/340),
+  `city.cpp:164` ↔ `street_kit.cpp:12` 14×2, `city_lots.cpp` 11×2
+  (952/984), `city_render.cpp` 10×2 (901/929), `level_scene.cpp` 10×2
+  (383/434), `procgen_bindings.cpp` 10×2 (1814/2154).
+- **Parses judged intentionally PARALLEL between the two loaders — do not
+  force-share.** The lighting/environment blocks (the tracer's `SceneLight`
+  list vs the viewer's `SceneLighting` differ in substance: `castsShadow` and
+  shadow tuning are viewer-only, the default-noon-sun fallback and HDR sun
+  extraction are tracer-only) and the primitive material parse (the loader
+  goes through the editor's property layer; the tracer builds its `Material`
+  directly). For these, the JSON *field names* are the shared contract — when
+  adding a lighting or material field, grep BOTH loaders. Everything that was
+  genuinely one parse in two places is now in `level_params`
+  (terrain/tree/city/erosion/lots/water params, `parseVec3`/`parseOrientation`,
+  `propagateWaterSeaLevel`).
+- **Shader scan (2026-08-05, after adding .frag/.vert/.wgsl to the scanner —
+  the first scan covered .metal only).** Judged, parked:
+  (a) **Every Vulkan shader repeats the same ~36-line uniform-block header**
+  (10 files, `dof/mesh/sky/ssao/ssr/terrain/water.*`) — GLSL has no includes
+  by default, but glslc supports `#include`; one `common.glsl` would collapse
+  it. This block is exactly where the first real Vulkan compile found the
+  wrong-uniform-field bug — the highest-value shader dedup, Vulkan-verify
+  needed. (b) **The Metal AO and SSR blurs are H/V copy-pairs**
+  (`post_ao.metal` 17×2, `post_ssr.metal` 20×2) — a fix applied to one
+  direction and not the other would be a subtle axis-dependent artifact;
+  fold each into one templated/param'd kernel on next touch. (c)
+  `lighting_entry.metal` repeats a 33-line vertex-transform block across its
+  three entry variants. (d) Cross-backend clones (metal↔vulkan surfaces/
+  common/brdf blocks) are the parity-by-design family — governed by
+  `docs/renderer-parity.md`, not for blind dedup.
+- **Scanner blind spot (tool debt).** `code-health.py` matches VERBATIM
+  (whitespace-insensitive) lines, so a clone with renamed identifiers evades
+  it — the two `parseTerrainParams` copies (`tp` vs `p`) were only caught by
+  hand-diffing. Upgrade: normalize identifiers to placeholder tokens before
+  hashing. Until then, treat the duplicate list as a floor, not a census.
+- **Baseline for the trend** (compare future `--json` snapshots against
+  this): 367 files / 87,292 lines; top-20 duplication ≈ 670 redundant line
+  copies (was 731 before the same-day fixes); 12 debt markers; the fan-in
+  heavyweights are `rt_math.h` (57 includers × 629 lines), `renderer.h`
+  (44 × 666), `components.h` (35 × 472).
+
+## Hitching: diagnosed suspects (2026-08-06, device-reported)
+
+A real macOS arena capture reads: median 16.70 ms (a clean 60 fps) but p99
+116.57 and max 755.13 — **hitching, not steady-state cost**. CPU work is
+0.70 ms/frame total; 94% of the frame is `acquire`. Glenn reports the hitches
+fire **when the physics gun is used and intermittently while walking**.
+
+Read `acquire` correctly first: it is `nextDrawable` blocking until a
+swapchain image frees, which happens when the GPU finishes an earlier frame.
+So it is where a stall SURFACES, not where it is CAUSED — anything that makes
+the GPU or its queue fall behind shows up as acquire on the FOLLOWING frames.
+The ledger now records per-frame `mesh_uploads` / `texture_uploads`
+(monotonic counters in `RenderStats`, diffed per frame) so this class stops
+being guesswork: a slow frame that uploaded something names its own cause.
+
+**Second capture (arena2, with the upload counters) settled several of these
+— including against me:**
+
+- **Mid-play uploads are NOT the hitch. Falsified.** 62 uploads across the
+  run, 38 of them on frame 1 (level load); of the 34 slowest frames exactly
+  ONE uploaded anything, and that one was frame 1. Suspects 1 and 2 below are
+  therefore *not* the cause of the in-play hitches (the pose meshes do upload
+  during play — ~24 of them — they just never land on a slow frame). The
+  uploadTexture stall and the lazy pose meshes remain worth fixing on
+  principle; they are not this bug.
+- **`gpu_ms` is contaminated and must not be read as GPU cost.** It reported
+  58.4 ms typical against a 33.35 ms typical frame — impossible, since a frame
+  cannot finish faster than its own GPU work. The timed command buffer also
+  carries `presentDrawable`, so its GPU window includes waiting on the display
+  for a free drawable. **Fix:** time a command buffer that does not present —
+  submit the render work and the present as two buffers on the same queue
+  (ordering is preserved), or move the present to a scheduled handler. Both
+  restructure frame submission, and visionOS's `CompositorSurface` brackets
+  the frame differently, so this needs a device to verify. Until then the
+  report labels the number an upper bound rather than a cost.
+- **The biggest hitch was in code no bracket covered.** Frame 3324 took
+  307 ms while its phases summed to 30 ms — 90% unattributed. *Fixed:*
+  `Poll` (window/OS event pump) and `Dispatch` (event-bus drain + end-of-frame
+  state swap) are now bracketed, and the report charts a derived
+  **unattributed** band so a gap is visible instead of invisible. A re-capture
+  will name that 277 ms.
+- **This run's real problem is steady state, not hitching.** Typical `acquire`
+  is already 31.80 ms and the median frame is 33.35 ms — vsync-locked at 30 fps
+  on *every* frame; spikes add only +16.87 ms on top. Note the previous arena
+  capture had a 16.70 ms median (a clean 60 fps) on the same scene, so
+  something environmental differs between the two runs (window size, display,
+  or power state) and is worth pinning down before optimising anything.
+
+Suspects, in confidence order — none yet confirmed on device:
+
+1. **`MetalRenderer::uploadTexture` stalls the pipeline.** It ends with
+   `[cmdBuf waitUntilCompleted]` purely to build mipmaps, so ANY texture
+   created during play blocks the CPU until the GPU drains. Command buffers on
+   one queue already execute in submission order, so a later render would see
+   the mipmaps without the wait — a one-line removal, but Metal-unverifiable
+   here, so it is recorded rather than changed blind. Confirm first with the
+   new `texture_uploads` column; if slow frames carry a texture upload, this
+   is it.
+2. **Lazy per-pose player-body meshes.** `CityPlayerBodySystem::poseMesh`
+   builds and uploads a mesh the first time each of `kWalkPoses` poses is
+   used — i.e. *while you walk*, one hitch per new pose until the set is warm.
+   Matches "every so often while walking" exactly. Fix: pre-warm all poses at
+   level load (they are a fixed, small set), don't build them mid-play.
+3. **The gun's bullets are cache hits** (`acquirePrimitive("box", …)` by key),
+   so the mesh is not the cost — but each shot creates a Jolt dynamic body and
+   `gun.lua` caps at MAX=500 live bullets, so repeated firing grows the
+   physics set. That cost lands in `fixed`, which the capture shows at
+   0.20 ms average — check its spike-anatomy row before pursuing.
+4. **`spawn.model` uploads without a dedup key** (`script_system.cpp`
+   `acquireMesh(*c.mesh)`), as does `spawnVehicle` (commented "unique upload").
+   Correct for genuinely unique procgen meshes; a hitch source if a recipe
+   spawns repeatedly.
+
+**Third capture (arena3, with poll/dispatch bracketed): the hitches now have
+names, and they are three unrelated problems.** `unattributed` fell to 0.00 —
+the frame is fully accounted for. The worst frames split into:
+
+- **`dispatch`/state-swap stalls** — frame 2614 spent **241 ms** in the
+  event-drain + state-swap bracket (they were one bracket then; now split into
+  `dispatch` and `state_swap` so the next capture says which). One occurrence
+  in 2644 frames. Prime suspect: pushing `DebugOverlayState` runs ImGui's
+  first-time font-atlas build, which goes through ImGui's own Metal upload
+  (invisible to our upload counters).
+- **`poll` stalls** — 157 ms on frame 1 (boot) and **99 ms on frame 864**,
+  mid-session, inside the window/OS event pump. Not engine code; a window
+  server or system hiccup. Worth confirming it recurs before chasing.
+- **`acquire` spikes** — frames 10/12/29/1141/1374/543 at 50–114 ms, purely
+  GPU-side, the same class as the steady-state cost.
+
+**Steady state is unchanged and is the bigger problem:** typical `acquire`
+32.37 ms, median frame 33.31 ms — vsync-locked at 30 fps on *every* frame,
+with only 0.64 ms of CPU work in the whole frame. Still unexplained: the FIRST
+split capture had a 16.70 ms median (60 fps) on the same scene; captures 2 and
+3 are both 30 fps. Pin down what differs (window size, display, power state)
+before optimising, or every before/after comparison is unreliable.
+
+**Fourth capture (base.csv, 2056x1302 = 2.68M px, all passes on) + two bisect
+runs.** Steady state unchanged: median 33.40 ms, typical `acquire` 32.32 ms,
+0.8 ms of CPU work in the whole frame — GPU-bound at 30 fps.
+
+New from this one:
+
+- **A 1-second stall.** Frame 1329: 1029.87 ms total, **1014 ms in
+  `acquire`** — the GPU (or the display pipeline) went away for a full second.
+  It sits in a burst with frames 1363–1381 (84/82/152/310/114 ms, all
+  acquire-dominated), so something happened *around* that moment rather than
+  steady cost. Worth reproducing before chasing: window focus change, display
+  mode switch, or another process taking the GPU.
+- **A 296 ms state swap.** Frame 1691 spent **296.60 ms in `state_swap`** —
+  the split from `dispatch` paid off immediately: it is a state's `onEnter`,
+  not the event bus. Prime suspect remains the debug overlay's first push
+  (ImGui font-atlas build, which uploads through ImGui's own Metal path and is
+  therefore invisible to our upload counters).
+- **`poll` at 240 ms on frame 1** — boot-time OS event pump, expected.
+- **Uploads confirmed irrelevant a third time**: 38 of 62 on frame 1, and only
+  that one slow frame carries any.
+
+**The pass bisect was broken, and the numbers it produced were nonsense:**
+`17.11 / 33.27 / 17.81 / 33.20` (SSAO and bloom "costing" −16 ms) and, at
+quarter size, `16.72 / 16.67 / 16.66 / 16.66` (everything "costing" 0.05 ms).
+Both are vsync artefacts — the first a frame flipping across the refresh
+boundary, the second every configuration finishing early and waiting. *Fixed:*
+`Renderer::setPresentSync` (Metal: `CAMetalLayer.displaySyncEnabled`) lets the
+bisect unlock presentation for the measurement and restore it after, and the
+bisect now refuses to report a ranking when a pass appears to cost negative
+time, when the medians look quantised to 60/90/120 Hz, or when the backend
+cannot disable sync. **FIRST REAL PASS RANKING (2026-08-06, half-width window, 2.68M px scene,
+sync NOT disabled so these are LOWER bounds):**
+
+| pass | cost | share of a 32.44 ms frame |
+|---|---|---|
+| **bloom** | **7.01 ms** | 22% |
+| SSAO | 3.93 ms | 12% |
+| SSR | 1.59 ms | 5% |
+| (the three together) | 12.53 ms | 39% |
+
+**Bloom is the most expensive post pass — more than SSAO and SSR combined**,
+which contradicts the standing assumption in the notes above that SSAO
+dominates (the "SSAO floor ~16 ms" entry was never measured, it was inferred).
+Bloom is a mip chain: its cost is resolution-driven and the usual fix is fewer
+mips / a cheaper downsample, not tuning thresholds. Verify at full size before
+acting, and note the third run had `setPresentSync` return false on a Mac
+where `CAMetalLayer.displaySyncEnabled` should have worked — worth a look, as
+the true costs are higher than these lower bounds.
+
+**Bisect bug that cost a user their bloom (found 2026-08-06, fixed):** the
+bisect was driven from inside the Performance panel's `CollapsingHeader`
+block, so collapsing the header (or hiding the panel) mid-run froze it with a
+pass still disabled — and `onStop` then persisted that measurement state into
+`settings.json` as if it were the user's choice, so bloom silently stayed off
+on the next launch. *Fixed:* the bisect is a member of `DebugOverlaySystem`
+(not a function-local static), `update()` runs unconditionally at the top of
+`render()` so it always reaches its end and restores, and `onStop` cancels it
+BEFORE saving settings. **If a session was quit mid-bisect before this fix,
+`settings.json` may hold `bloom.enabled=false` / `ssao.enabled=false` /
+`ssr.enabled=false`** — the Debug panel's Reset Defaults + Save Settings, or
+deleting those keys, restores it.
+
+A tool lesson worth keeping: the bisect originally REFUSED this result merely
+because the sync flag was off, discarding a sound measurement. Failing to
+disable sync understates savings; it does not invalidate them. Only genuinely
+artefactual numbers (a negative cost, or medians quantised to a refresh rate)
+are refused now.
+
 ## Verification gap (the meta-debt)
 
-- **No CI exists, and the render backends are never compiled in it.** This is the
+- **Linux CI is red on arrival: 2/1083 test cases fail only on Linux.**
+  The first-ever ubuntu run of the suite (Build & Test workflow, run
+  30992735285) passed everything except `drive_freeway_mainline_is_clear` and
+  `zoo_acute_four_way` — both road-network drive probes that pass on macOS.
+  Likely floating-point precision in freeway-weld/acute-junction geometry (the
+  "3 welds is a metric artifact" family). Until fixed or per-platform gated,
+  the Linux job's signal reads "expected red", which is CI rot — fix soon.
+- **No CI existed until 2026-08-05, and the render backends were never
+  compiled in it.** Stages 0+1 of the plan below now run on every push
+  (`.github/workflows/build.yml`): Linux compiles the Vulkan backend with
+  glslc-validated shaders (asserting the backend was actually selected), macOS
+  builds the Metal viewer, runs ctest, and offline-compiles the Metal shader
+  library via `tools/check-metal-shaders.sh` (which extracts the runtime
+  concatenation list from `metal_renderer.mm`). Stage 2 (headless offscreen
+  render + golden-image parity) remains open. Historical context: This is the
   root of the gap below. The Vulkan backend shipped Phases 0–3 *never compiled*
   (no SDK in the loop), and Metal shaders are runtime-compiled, so neither
   `vulkan_renderer.cpp`/`shaders/vulkan/*` nor `shaders/metal/*` is validated until
@@ -357,3 +622,54 @@ took shortcuts worth paying down before the binding surface grows much more.
 - **Several tests assert via vertex-count inequalities** ("different species ->
   different vertex counts", "leaves add vertices"). Brittle proxies that can
   break on tuning — smoke tests, not exact specs.
+
+- **The visionOS branch was verified Metal-only; Vulkan/WebGPU are
+  compile-risk-unverified against its shared-code changes.** The branch's
+  renderer work is all Metal (`post_composite.metal` sky pass-through,
+  skybox cull fix, DoF/bloom NaN guards, visionOS depth-carry clamp), but it
+  also touched shared engine code every backend compiles:
+  `Application::settingsFilePath()`, the `DebugOverlaySystem::load/saveSettings`
+  split (which added bloom/AO/SSR *enable* toggles to settings — Vulkan/web will
+  now honor those keys at boot), and a `DayNightSystem` boot log.
+  Verified 2026-08-05 pre-merge: the Vulkan backend compiles the branch clean
+  on Linux CI (real shaders via glslc); the Emscripten build compiles clean
+  from two fresh configures and boots the arena (level load + frame-0 draws
+  confirmed). Full web *visual* verification needs a real browser — the
+  agent-embedded browser pane starves requestAnimationFrame (the production
+  gh-pages site freezes on one frame in-pane too), so in-pane screenshots only
+  show each build's boot frame. Two build-tooling traps documented the hard
+  way: an incremental emscripten rebuild across a git checkout produces
+  silently-broken artifacts (always fresh-configure per commit when bisecting
+  web behavior), and the boot frame can render before the canvas size reaches
+  the engine (benign under live rAF; it IS the visible frame when starved).
+  Two lessons worth porting deliberately, not urgently:
+  (a) **one sky** — Metal's composite used to re-derive sky from
+  `invViewProjection` (a June workaround outliving its bug) and it broke under
+  XR's asymmetric infinite-far projections; Vulkan/WebGPU already pass the
+  skybox through (written post-lesson), so they need only a *visual* confirm
+  next time they run; (b) **infinite-far robustness** — any shader that
+  linearizes reverse-Z depth or unprojects clip z=0 NaNs under an infinite far
+  plane (Metal's DoF CoC and bloom did; grep the other backends' post stacks
+  when they next get attention). Metal now applies the
+  sRGB transfer function exactly once, chosen per target: `CompositeUniforms
+  .targetEncodesSRGB` (set from the presentation surface's pixel format) tells
+  `encodeForTarget` in `shaders/metal/post_composite.metal` whether the shader or
+  the hardware owns it. `shaders/vulkan/composite.frag` and
+  `shaders/webgpu/composite.wgsl` still fold the ~2.2 encode into the tone
+  mappers and assume a linear-storage target — Vulkan goes as far as *selecting*
+  `VK_FORMAT_B8G8R8A8_UNORM` for that reason (`vulkan_renderer.cpp`, "Prefer a
+  UNORM swapchain"). That assumption is fine on both today, so this is a
+  divergence rather than a bug, but the three backends no longer share a
+  contract. Port the flag when either backend next needs an sRGB target — or
+  sooner, to keep the ledger honest. **No GPU here for either, so any port is
+  compile-verified only.**
+
+- **AgX's display encode is inverted approximately, not lifted.** ACES separated
+  exactly: its encode was a trailing `pow(c, 1/2.2)` that moved out unchanged, so
+  macOS output is provably identical. AgX's encode lives *inside* the polynomial
+  sigmoid fit (`agxContrastApprox`), so `tonemapAgX` recovers linear with a
+  closing `pow(c, 2.2)`. Against the shader's own encode that round-trips
+  cleanly, but against a hardware sRGB target it differs slightly near black,
+  where true sRGB has a linear toe that pure 2.2 does not. A linear-output AgX
+  fit would remove the approximation. Only visible with `tonemapOperator = 1` on
+  visionOS.

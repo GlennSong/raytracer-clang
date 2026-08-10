@@ -47,7 +47,7 @@ in `src/renderer/vulkan/` and what has been confirmed on the Windows/RTX 3060.
 | Texture maps: albedo / MR / AO / emissive | ✅ | ✅ | glTF MR convention. |
 | Normal mapping (TBN) | ✅ | ✅ | Vulkan `mesh.vert` passes world tangent; `mesh.frag` builds the TBN and perturbs N on texFlags bit 2 (ported from `lighting.metal`). |
 | Per-vertex tint | ✅ | ✅ | |
-| Analytic procedural surface library | ✅ | ✅ | Ported byte-for-byte from `common.metal`. |
+| Analytic procedural surface library | ✅ | ✅ | Ported byte-for-byte from the Metal library, which since 2026-07-29 is one module per material: `surfaces_facade.metal` (the ten tiling patterns) + `surface_{road,water,terrain}.metal` (each holding that material's albedo **and** its normal/roughness relief) + `surfaces.metal` (the `applySurface` / `applySurfaceRelief` dispatchers). The primitives they build on (`hash21`/`vnoise2`/`fbm2`/`tile1`/`surfUV`) stay in `common.metal`. |
 | Directional / point / spot lights | ✅ | ✅ | ADR-0017 physical units. |
 | Fog | ✅ | ✅ | Aerial-perspective fog in `mesh.frag` (1-exp(-density·dist) toward fog color), params via the globals UBO `fog` field. Ported from `lighting.metal`. |
 | Transparency / alpha blending | ✅ | 🟡 | Material `opacity < 1` routes to a blended pipeline (src-alpha/one-minus, no depth write, normal G-buffer masked), drawn back-to-front after opaque. Unverified on device. |

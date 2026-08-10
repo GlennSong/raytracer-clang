@@ -143,7 +143,9 @@ struct RecipeCtx {
 // slender cap is what keeps them believable.
 void recipeGlassTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    const int lift = static_cast<int>(cx.coreness * 26);
+    // Density round ("taller than 40 stories"): dead-centre coreness lifts
+    // the glass cluster to 55-62 floors; the rim keeps its 10-16.
+    const int lift = static_cast<int>(cx.coreness * 46);
     p.floors = rng.irange(cx.roomy ? 10 : 6, cx.roomy ? 16 : 9) + lift;
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
@@ -361,7 +363,7 @@ void recipeHotel(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // crown + mast SPIRE — the 1930s skyline silhouette.
 void recipeArtDecoTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(9, 14) + static_cast<int>(cx.coreness * 14);
+    p.floors = rng.irange(9, 14) + static_cast<int>(cx.coreness * 20);
     p.groundRetail = true;
     dress(p, rng.unit() < 0.5 ? FacadeStyle::DarkBrick : FacadeStyle::Sandstone,
           rng);
@@ -377,7 +379,7 @@ void recipeArtDecoTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // The STEPPED (wedding-cake) tower: light masonry, setbacks every few floors.
 void recipeSteppedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(10, 16) + static_cast<int>(cx.coreness * 10);
+    p.floors = rng.irange(10, 16) + static_cast<int>(cx.coreness * 14);
     p.groundRetail = true;
     dress(p, rng.unit() < 0.5 ? FacadeStyle::Sandstone : FacadeStyle::Brick, rng);
     p.setbackFloors = rng.irange(2, 4);
@@ -398,6 +400,23 @@ void recipeDrumTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.massing = BuildingRecipe::Massing::Circle;
     out.placeType = "office";
     out.name = "drum_tower";
+}
+
+// The PODIUM TOWER: a 3-5 floor full-lot podium (street wall, ground retail)
+// carrying a slender curtain-wall tower — the modern downtown block. The lot
+// pass grows the two masses (podium = the lot plan, tower = a centred shaft
+// from podiumFloors up); this recipe just declares the split and the dress.
+void recipePodiumTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    const int lift = static_cast<int>(cx.coreness * 44);
+    p.floors = rng.irange(cx.roomy ? 10 : 7, cx.roomy ? 16 : 10) + lift;
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    out.podiumFloors = rng.irange(2, 4);   // 3-5 storeys with the ground floor
+    cx.slender = 3.0 + cx.coreness * 4.5;
+    out.massing = BuildingRecipe::Massing::PodiumTower;
+    out.placeType = "office";
+    out.name = "podium_tower";
 }
 
 // The PARKING GARAGE: open concrete decks over a bay-door entry.
@@ -1059,14 +1078,15 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
     // The district ARCHETYPE TABLES: weighted picks over the named recipes.
     switch (tag) {
         case DistrictTag::Financial:
-            if (roll < 0.30)      recipeGlassTower(out, rng, cx);
-            else if (roll < 0.52) recipeOfficeSlab(out, rng, cx);
-            else if (roll < 0.62) recipeArtDecoTower(out, rng, cx);
-            else if (roll < 0.72) recipeSteppedTower(out, rng, cx);
+            if (roll < 0.26)      recipeGlassTower(out, rng, cx);
+            else if (roll < 0.38) recipePodiumTower(out, rng, cx);
+            else if (roll < 0.55) recipeOfficeSlab(out, rng, cx);
+            else if (roll < 0.64) recipeArtDecoTower(out, rng, cx);
+            else if (roll < 0.73) recipeSteppedTower(out, rng, cx);
             else if (roll < 0.80) recipeDrumTower(out, rng, cx);
-            else if (roll < 0.90) recipeCommercialBlock(out, rng, cx);
-            else if (roll < 0.94) recipeParkingGarage(out, rng, cx);
-            else if (roll < 0.975) recipePlaza(out, rng, cx);
+            else if (roll < 0.89) recipeCommercialBlock(out, rng, cx);
+            else if (roll < 0.935) recipeParkingGarage(out, rng, cx);
+            else if (roll < 0.97) recipePlaza(out, rng, cx);
             else                  recipeCivicHall(out, rng, cx);
             break;
         case DistrictTag::Commercial:
@@ -1074,7 +1094,8 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             else if (roll < 0.07) recipePlaza(out, rng, cx);
             else if (roll < 0.25) recipeBrickShop(out, rng, cx);
             else if (roll < 0.38) recipeMixedUse(out, rng, cx);
-            else if (roll < 0.48) recipeOfficeMidrise(out, rng, cx);
+            else if (roll < 0.46) recipeOfficeMidrise(out, rng, cx);
+            else if (roll < 0.49) recipePodiumTower(out, rng, cx);
             else if (roll < 0.55) recipeCondoTower(out, rng, cx);
             else if (roll < 0.61) recipeTerraceCondo(out, rng, cx);
             else if (roll < 0.67) recipeLoftConversion(out, rng, cx);
@@ -1161,6 +1182,132 @@ BuildingRecipe architectLandmark(LandmarkKind kind, Real shortSide, Real area,
         default: break;
     }
     capFloors(out.params, shortSide, cx.slender);
+    return out;
+}
+
+std::vector<int> planLandmarks(const std::vector<LandmarkCand>& cands,
+                               const Vec2& cityCenter, Real innerRadius) {
+    std::vector<int> out(cands.size(), -1);
+
+    // The clusters present, ascending: the city (0) plans first, towns after —
+    // a stable order so the plan is deterministic in the candidates' order.
+    std::vector<int> clusters;
+    for (const LandmarkCand& c : cands)
+        if (std::find(clusters.begin(), clusters.end(), c.cluster) ==
+            clusters.end())
+            clusters.push_back(c.cluster);
+    std::sort(clusters.begin(), clusters.end());
+
+    struct Want {
+        LandmarkKind kind;
+        int count;
+        Real minShort, minArea;
+        bool wantCore;            // score by centrality too (the courthouse)
+        DistrictTag tagA, tagB;   // eligible districts (B may repeat A)
+        // TOWN guarantee: after both district-strict relax passes fail, take
+        // the best lot in the cluster regardless of district — a small town
+        // still gets its school even when its parcels all zoned commercial.
+        bool anyDistrict = false;
+    };
+
+    for (const int cl : clusters) {
+        int nRes = 0, nCom = 0, nFin = 0, nOld = 0, nInd = 0, total = 0;
+        for (const LandmarkCand& c : cands) {
+            if (c.cluster != cl) continue;
+            ++total;
+            switch (c.tag) {
+                case DistrictTag::Residential: ++nRes; break;
+                case DistrictTag::Commercial:  ++nCom; break;
+                case DistrictTag::Financial:   ++nFin; break;
+                case DistrictTag::OldTown:     ++nOld; break;
+                case DistrictTag::Industrial:  ++nInd; break;
+            }
+        }
+        std::vector<Want> wants;
+        if (cl == 0) {
+            // The CITY keeps the full civic table (quotas as before).
+            wants = {
+                {LandmarkKind::Capitol, (nFin + nCom) >= 6 ? 1 : 0, 13.0, 300.0,
+                 true, DistrictTag::Financial, DistrictTag::Commercial},
+                {LandmarkKind::University, total >= 60 ? 1 : 0, 15.0, 380.0,
+                 false, DistrictTag::Residential, DistrictTag::Commercial},
+                {LandmarkKind::Courthouse, nFin >= 2 ? 1 : 0, 12.0, 260.0, true,
+                 DistrictTag::Financial, DistrictTag::Financial},
+                {LandmarkKind::Hospital, nCom >= 6 ? 1 : 0, 15.0, 380.0, false,
+                 DistrictTag::Commercial, DistrictTag::Commercial},
+                {LandmarkKind::School, nRes >= 6 ? 1 + nRes / 50 : 0, 13.0,
+                 320.0, false, DistrictTag::Residential,
+                 DistrictTag::Residential},
+                {LandmarkKind::Police, nCom >= 4 ? 1 : 0, 9.0, 140.0, false,
+                 DistrictTag::Commercial, DistrictTag::Commercial},
+                {LandmarkKind::Fire, (nCom + nInd) >= 8 ? 1 + total / 150 : 0,
+                 11.0, 220.0, false, DistrictTag::Commercial,
+                 DistrictTag::Industrial},
+                {LandmarkKind::Market, nOld >= 3 ? 1 : (nCom >= 8 ? 1 : 0),
+                 10.0, 180.0, false,
+                 nOld >= 3 ? DistrictTag::OldTown : DistrictTag::Commercial,
+                 nOld >= 3 ? DistrictTag::OldTown : DistrictTag::Commercial},
+                {LandmarkKind::Church, nRes >= 8 ? 1 + nRes / 70 : 0, 10.0,
+                 180.0, false, DistrictTag::Residential, DistrictTag::OldTown},
+                {LandmarkKind::Library, nCom >= 5 ? 1 : 0, 12.0, 240.0, false,
+                 DistrictTag::Commercial, DistrictTag::Residential},
+                {LandmarkKind::Museum, nFin >= 3 ? 1 : 0, 14.0, 320.0, true,
+                 DistrictTag::Financial, DistrictTag::Commercial},
+            };
+        } else {
+            // A satellite TOWN: its guaranteed anchors — the school and the
+            // church — plus a market hall when the settlement is an old town.
+            // No capitol/courthouse/hospital: those stay the city's.
+            wants = {
+                {LandmarkKind::School, total >= 10 ? 1 : 0, 13.0, 320.0, false,
+                 DistrictTag::Residential, DistrictTag::OldTown, true},
+                {LandmarkKind::Church, total >= 8 ? 1 : 0, 10.0, 180.0, false,
+                 DistrictTag::Residential, DistrictTag::OldTown, true},
+                {LandmarkKind::Market, nOld >= 6 ? 1 : 0, 10.0, 180.0, false,
+                 DistrictTag::OldTown, DistrictTag::Commercial},
+            };
+        }
+        for (const Want& w : wants) {
+            for (int k = 0; k < w.count; ++k) {
+                int best = -1;
+                Real bestScore = -1;
+                // Preferred thresholds first; if no lot in the district can
+                // carry them (small towns parcel small), relax once — the
+                // quarter still gets its school, just a modest one. Town
+                // guarantees add a final any-district pass.
+                struct Pass { Real relax; bool any; };
+                const Pass passes[] = {
+                    {1.0, false}, {0.72, false}, {0.72, w.anyDistrict}};
+                const int nPasses = w.anyDistrict ? 3 : 2;
+                for (int pi = 0; pi < nPasses; ++pi) {
+                    const Pass& ps = passes[pi];
+                    for (std::size_t ci = 0; ci < cands.size(); ++ci) {
+                        const LandmarkCand& c = cands[ci];
+                        if (out[ci] >= 0 || c.cluster != cl) continue;
+                        if (!ps.any && c.tag != w.tagA && c.tag != w.tagB)
+                            continue;
+                        if (c.shortSide < w.minShort * ps.relax ||
+                            c.area < w.minArea * ps.relax)
+                            continue;
+                        Real score = c.area;
+                        if (w.wantCore) {
+                            const Real r = (c.pos - cityCenter).length();
+                            score *= 0.4 + std::max(
+                                Real(0),
+                                1.0 - r / std::max(Real(1), innerRadius));
+                        }
+                        if (score > bestScore) {
+                            bestScore = score;
+                            best = static_cast<int>(ci);
+                        }
+                    }
+                    if (best >= 0) break;
+                }
+                if (best < 0) break;   // no lot can carry it: skip the quota
+                out[best] = static_cast<int>(w.kind);
+            }
+        }
+    }
     return out;
 }
 

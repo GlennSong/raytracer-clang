@@ -1,13 +1,35 @@
 #ifdef __APPLE__
 
 #import "metal_renderer.h"
+#import <TargetConditionals.h>
 #import <Metal/Metal.h>
-#import <QuartzCore/CAMetalLayer.h>
 #import <QuartzCore/CABase.h>   // CACurrentMediaTime (wind sway clock)
-#import <AppKit/AppKit.h>
 #import <simd/simd.h>
+
+// Presentation differs by platform, and so do the frameworks that carry it.
+// These guards are for AVAILABILITY only — CAMetalLayer/AppKit simply do not
+// exist in the visionOS SDK, and CompositorServices does not exist on macOS.
+// Behavioural differences stay behind PresentationSurface (AGENTS.md, Platform
+// Abstraction); nothing below threads a platform conditional through the pass
+// graph.
+#if TARGET_OS_OSX
+#import <QuartzCore/CAMetalLayer.h>
+#import <AppKit/AppKit.h>
+#elif TARGET_OS_VISION
+#import <CompositorServices/CompositorServices.h>
+#import <ARKit/ARKit.h>
+#endif
+
+#include "../../profile.h"
 #include "../../slot_map.h"
+#include "../../engine/asset_root.h"
+#include "../../engine/xr/xr_backend.h"
 #include "../cube_faces.h"
+#include "cloud_noise.h"   // Perlin-Worley 3D noise bake (volumetric clouds)
+
+#include <atomic>
+#include <memory>
+#include <mutex>
 #include <vector>
 #include <algorithm>
 #include <cstdlib>
@@ -35,6 +57,9 @@ struct GPUMesh {
     BoundingSphere bounds;
 };
 
+// Default per-frame instance capacities; setInstanceCapacities raises them per
+// level (ring buffers are reallocated — in-flight command buffers retain the
+// old ones, so a mid-session swap is safe).
 static constexpr uint32_t MAX_INSTANCES = 4096;
 
 // Shadow casters for every cascade share one buffer encoded into a single
@@ -55,6 +80,629 @@ static constexpr uint32_t FOLIAGE_MAX_INSTANCES = 8192;
 // fence needed.
 static constexpr int MAX_FRAMES_IN_FLIGHT = 3;
 
+// Where the composited frame goes, and how it reaches the display.
+//
+// This is the ONLY part of the Metal backend that knows what it is presenting
+// to. The pass graph does not: the scene, shadow and post passes all render to
+// textures this backend owns, and the drawable is touched in exactly four
+// places — the composite target, the lens-warp target, the frame-dump source,
+// and present. Everything else is surface-agnostic, which is why visionOS can
+// reuse this renderer instead of growing a parallel one (AGENTS.md: "Use the
+// technology you already have").
+//
+// macOS presents through a CAMetalLayer. visionOS has no layer and no window at
+// all — CompositorServices hands out drawables — so it implements this instead.
+struct PresentationSurface {
+    virtual ~PresentationSurface() = default;
+
+    // Acquire this frame's target. False means "skip the frame": a layer can
+    // fail to vend a drawable, and a compositor can be paused.
+    virtual bool acquire() = 0;
+
+    // Where the composite pass writes. Valid only between acquire() and
+    // present(); nil if acquire() failed.
+    virtual id<MTLTexture> colorTarget() const = 0;
+
+    // Hand the finished frame to the display. Runs BEFORE the command buffer is
+    // committed, so implementations encode rather than submit.
+    // sceneDepth is the frame's rendered depth buffer (reverse-Z). Surfaces
+    // that reproject (CompositorServices) hand it to the compositor; window
+    // surfaces ignore it.
+    virtual void present(id<MTLCommandBuffer> commandBuffer,
+                         id<MTLTexture> sceneDepth) = 0;
+
+    // The target's true pixel dimensions. The engine cannot infer these: on
+    // visionOS there is no window to measure, and the compositor picks the
+    // per-eye size itself. Returns false if it is not yet knowable.
+    virtual bool drawableSize(int& width, int& height) const = 0;
+
+    // The colour target's pixel format. Must be known at initialize() time,
+    // BEFORE any drawable exists, because the composite and lens pipelines are
+    // built against it — a pipeline whose attachment format disagrees with the
+    // texture it renders into is invalid in Metal.
+    virtual MTLPixelFormat colorPixelFormat() const = 0;
+
+    // Whether the display transform is applied AFTER the shader — by the
+    // hardware on write (sRGB formats) or by the presentation stack reading
+    // LINEAR values (float formats; the visionOS compositor applies the
+    // display transform itself). Either way the composite pass must NOT encode
+    // in-shader, so the transform is applied exactly once. Shader-encoding
+    // into a float target reads as washed out: the compositor treats the
+    // already-encoded values as linear.
+    bool targetEncodesSRGB() const {
+        const MTLPixelFormat f = colorPixelFormat();
+        return f == MTLPixelFormatBGRA8Unorm_sRGB || f == MTLPixelFormatRGBA8Unorm_sRGB
+            || f == MTLPixelFormatRGBA16Float;
+    }
+
+    // XR head-tracked camera. When the surface tracks a headset, this returns
+    // the eye pose in WORLD space (tracking pose composed with the surface's
+    // locomotion base) and the compositor's own projection for the composited
+    // view — the engine camera then follows the user's head instead of the
+    // game camera. baseHint seeds the locomotion base the first time tracking
+    // is live (the game camera's position, dropped to the floor, so the user
+    // stands where the level intended). Surfaces that don't track return
+    // false and the engine camera is used as-is.
+    virtual bool xrView(simd_float3 /*baseHint*/, simd_float4x4& /*worldFromEye*/,
+                        simd_float4x4& /*projection*/) {
+        return false;
+    }
+
+    // True once xrView has a live tracked pose. Lets the renderer re-derive
+    // the camera each frame from the fresh pose without disturbing surfaces
+    // (macOS) that don't track.
+    virtual bool xrTracking() const { return false; }
+
+    // Number of XR views to render this frame. 0 = not an XR surface (or
+    // tracking not live): endFrame runs its single mono pass, untouched.
+    virtual int xrViewCount() const { return 0; }
+
+    // Camera for view v: eye pose in world space (tracking pose composed with
+    // the locomotion base) and the compositor's projection for that view.
+    virtual bool xrViewCamera(int /*v*/, simd_float3 /*baseHint*/,
+                              simd_float4x4& /*worldFromEye*/,
+                              simd_float4x4& /*projection*/) { return false; }
+
+    // Where view v's content goes: color/depth textures, array slice, and the
+    // viewport within them. The texture map is the contract — never assume
+    // view v lands in slice v or covers the full texture. (__strong on the
+    // out-params: ARC defaults id& parameters to __autoreleasing, which
+    // cannot bind to strong locals at the call site.)
+    virtual bool xrViewTarget(int /*v*/, id<MTLTexture> __strong& /*color*/,
+                              id<MTLTexture> __strong& /*depth*/,
+                              NSUInteger& /*slice*/,
+                              MTLViewport& /*viewport*/) { return false; }
+
+    // World units per real meter for head-tracked composition (see
+    // Renderer::xrWorldScale). No-op for non-tracking surfaces.
+    virtual void setXrWorldScale(float /*scale*/) {}
+
+    // Present without waiting for the display refresh (Renderer::
+    // setPresentSync). Only a surface that owns its pacing can honour this;
+    // returning false says "pacing isn't mine", which is the truth for a
+    // compositor-driven surface.
+    virtual bool setPresentSync(bool /*enabled*/) { return false; }
+
+    // Runs AFTER the command buffer is committed, for surfaces that bracket a
+    // frame rather than just handing over a texture.
+    //
+    // A CAMetalLayer has nothing to do here — presentDrawable: was simply
+    // another encoded command, and once committed the layer is done. Nothing on
+    // macOS overrides this.
+    //
+    // CompositorServices does bracket the frame, with start_submission /
+    // end_submission around the GPU work. Those are not bookkeeping: per
+    // frame.h, "Compositor uses the time difference to improve its predictions
+    // for when to start the frame submission process." Closing the frame inside
+    // present() instead would time the interval EXCLUDING commit, so the
+    // compositor would mis-schedule the next frame — a latency and dropped-frame
+    // problem that looks fine in the simulator and shows up on device.
+    //
+    // Hence a hook rather than a preprocessor branch: platform differences
+    // belong behind this seam, not threaded through endFrame (AGENTS.md,
+    // Platform Abstraction).
+    virtual void frameSubmitted() {}
+
+    // Backing-store size changed (window resize). Compositor-driven surfaces
+    // choose their own size, so this is a no-op there.
+    virtual void resize(int /*width*/, int /*height*/) {}
+};
+
+#if TARGET_OS_OSX
+// The desktop surface: a CAMetalLayer attached to the host's NSView.
+struct LayerSurface final : PresentationSurface {
+    CAMetalLayer* layer = nil;
+    NSWindow* window = nil;              // nil when a host owns the window
+    id<CAMetalDrawable> drawable = nil;
+
+    bool acquire() override {
+        drawable = [layer nextDrawable];
+        return drawable != nil;
+    }
+    // CAMetalLayer paces presentation itself, so this layer CAN honour it:
+    // with displaySync off, nextDrawable stops blocking on the refresh and
+    // frame time becomes a measure of work instead of a multiple of 16.67 ms.
+    bool setPresentSync(bool enabled) override {
+        layer.displaySyncEnabled = enabled ? YES : NO;
+        return true;
+    }
+    id<MTLTexture> colorTarget() const override { return drawable.texture; }
+    void present(id<MTLCommandBuffer> commandBuffer, id<MTLTexture>) override {
+        if (drawable) [commandBuffer presentDrawable:drawable];
+        drawable = nil;
+    }
+    void resize(int width, int height) override {
+        if (window)   // hosted mode: keep the scale set at initialize
+            layer.contentsScale = window.backingScaleFactor;
+        layer.drawableSize = CGSizeMake(width, height);
+    }
+    MTLPixelFormat colorPixelFormat() const override { return layer.pixelFormat; }
+    bool drawableSize(int& width, int& height) const override {
+        width  = static_cast<int>(layer.drawableSize.width);
+        height = static_cast<int>(layer.drawableSize.height);
+        return width > 0 && height > 0;
+    }
+};
+#endif  // TARGET_OS_OSX
+
+#if TARGET_OS_VISION
+// The immersive surface: CompositorServices vends drawables; there is no layer,
+// no window, and no swapchain we own.
+//
+// MONOSCOPIC FOR NOW. A drawable exposes one view per eye, but this composites
+// the single rendered image into view 0 only. It is head-tracked and correctly
+// projected, but the eyes do not disagree, so there is no parallax — it reads as
+// a flat image floating in space. Real per-eye rendering means running the pass
+// graph per view, which restructures endFrame, and that is its own change.
+// Calling this "stereo" before then would be exactly the smoke and mirrors the
+// Engineering Ethos rules out.
+struct CompositorSurface final : PresentationSurface {
+    cp_layer_renderer_t layerRenderer = nullptr;
+    ar_session_t arSession = nullptr;   // owns the session: under ARC a local
+                                        // would be released on return, which
+                                        // STOPS the provider — device anchors
+                                        // then fail and no frame presents
+    ar_world_tracking_provider_t worldTracking = nullptr;
+    ar_hand_tracking_provider_t handTracking = nullptr;
+
+    cp_frame_t frame = nullptr;
+    cp_drawable_array_t drawables = nullptr;  // all targets for this frame
+    cp_drawable_t drawable = nullptr;         // the built_in (display) drawable
+
+    // Starts world tracking. Without a device anchor on every drawable the
+    // compositor refuses to present on real hardware ("Presenting a drawable
+    // without a device anchor. On device this drawable won't be presented.") —
+    // the simulator draws it anyway, which makes this an easy thing to get
+    // wrong and only discover on the headset.
+    bool startTracking() {
+        if (!ar_world_tracking_provider_is_supported()) return false;
+        ar_world_tracking_configuration_t config = ar_world_tracking_configuration_create();
+        worldTracking = ar_world_tracking_provider_create(config);
+        ar_data_providers_t providers = ar_data_providers_create();
+        ar_data_providers_add_data_provider(providers, worldTracking);
+        // Hand skeletons (27 joints per hand). The first run prompts the user
+        // for permission; until granted the anchors just report untracked —
+        // world tracking is unaffected either way.
+        if (ar_hand_tracking_provider_is_supported()) {
+            handTracking = ar_hand_tracking_provider_create(
+                ar_hand_tracking_configuration_create());
+            ar_data_providers_add_data_provider(providers, handTracking);
+            NSLog(@"[xr] hand tracking provider added");
+        }
+        arSession = ar_session_create();
+        // Name the failure instead of guessing at it: if the provider never
+        // reaches running, every anchor query fails and the device presents
+        // nothing — the handler's error is the only place the OS says why.
+        ar_session_set_data_provider_state_change_handler(
+            arSession, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
+            ^(ar_data_providers_t, ar_data_provider_state_t newState,
+              ar_error_t error, ar_data_provider_t) {
+                NSLog(@"[vision] AR provider state -> %d%s", (int)newState,
+                      newState == ar_data_provider_state_running ? " (running)" : "");
+                if (error) {
+                    CFErrorRef cf = ar_error_copy_cf_error(error);
+                    NSLog(@"[vision] AR provider ERROR: %@", (__bridge NSError*)cf);
+                    if (cf) CFRelease(cf);
+                }
+            });
+        ar_session_run(arSession, providers);
+        return true;
+    }
+
+    bool acquire() override {
+        switch (cp_layer_renderer_get_state(layerRenderer)) {
+            case cp_layer_renderer_state_paused:
+                cp_layer_renderer_wait_until_running(layerRenderer);
+                return false;
+            case cp_layer_renderer_state_invalidated:
+                return false;
+            case cp_layer_renderer_state_running:
+                break;
+        }
+
+        frame = cp_layer_renderer_query_next_frame(layerRenderer);
+        if (!frame) return false;
+
+        cp_frame_timing_t timing = cp_frame_predict_timing(frame);
+        if (!timing) { frame = nullptr; return false; }
+
+        cp_frame_start_update(frame);
+        cp_frame_end_update(frame);
+
+        // Latch input as late as the compositor allows, so the pose we render
+        // against is the freshest one available.
+        cp_time_wait_until(cp_frame_timing_get_optimal_input_time(timing));
+
+        // visionOS 26 drawable contract: a frame carries an ARRAY of drawables
+        // (built_in = the displays, capture = recording). The pre-26 singular
+        // cp_frame_query_drawable is deprecated and its drawable never reaches
+        // the displays on the 26 runtime — the whole protocol runs cleanly and
+        // the view stays black, which cost a full night to trace. Query the
+        // array BEFORE start_submission (the 26 ordering); an empty array is a
+        // cancelled frame that must be discarded without submission.
+        drawables = cp_frame_query_drawables(frame);
+        if (cp_drawable_array_get_count(drawables) == 0) {
+            drawables = nullptr;
+            frame = nullptr;
+            return false;
+        }
+        cp_frame_start_submission(frame);
+
+        // The pass graph composites into the built_in (display) drawable;
+        // present() copies that image into any other targets.
+        size_t count = cp_drawable_array_get_count(drawables);
+        drawable = cp_drawable_array_get_drawable(drawables, 0);
+        for (size_t d = 0; d < count; d++) {
+            cp_drawable_t dr = cp_drawable_array_get_drawable(drawables, d);
+            if (cp_drawable_get_target(dr) == cp_drawable_target_built_in) {
+                drawable = dr;
+                break;
+            }
+        }
+
+        // Pose for the moment this frame is actually SHOWN — each drawable's
+        // own timing. Sampling "now" instead would anchor to a pose already a
+        // frame stale at display time, which reads as the world swimming
+        // against head motion. Every drawable needs its anchor; an unanchored
+        // one is silently never displayed on device.
+        for (size_t d = 0; d < count; d++) {
+            cp_drawable_t dr = cp_drawable_array_get_drawable(drawables, d);
+            cp_frame_timing_t finalTiming = cp_drawable_get_frame_timing(dr);
+            ar_device_anchor_t anchor = ar_device_anchor_create();
+            if (ar_world_tracking_provider_query_device_anchor_at_timestamp(
+                    worldTracking,
+                    cp_time_to_cf_time_interval(
+                        cp_frame_timing_get_presentation_time(finalTiming)),
+                    anchor) == ar_device_anchor_query_status_success) {
+                cp_drawable_set_device_anchor(dr, anchor);
+                if (dr == drawable) {
+                    // Capture the head pose + BOTH views' geometry for
+                    // xrView() and the XR backend. The pose is STICKY — a
+                    // frame with a failed anchor query keeps rendering from
+                    // the last good pose instead of snapping back to the game
+                    // camera.
+                    originFromDevice = ar_anchor_get_origin_from_anchor_transform(anchor);
+                    trackedViewCount =
+                        (int)MIN((size_t)2, cp_drawable_get_view_count(dr));
+                    for (int v = 0; v < trackedViewCount; v++) {
+                        deviceFromEye[v] =
+                            cp_view_get_transform(cp_drawable_get_view(dr, v));
+                        eyeProjection[v] = cp_drawable_compute_projection(
+                            dr, cp_axis_direction_convention_right_up_back, v);
+                    }
+                    id<MTLTexture> tex0 = cp_drawable_get_color_texture(dr, 0);
+                    trackedViewWidth = (int)tex0.width;
+                    trackedViewHeight = (int)tex0.height;
+                    trackedPoseValid = true;
+                    if (anchorFails > 0 || !anchorEverSucceeded) {
+                        NSLog(@"[vision] device anchor OK (after %d failures)", anchorFails);
+                        anchorEverSucceeded = true;
+                        anchorFails = 0;
+                    }
+                }
+            } else if (dr == drawable) {
+                if ((anchorFails++ % 90) == 0)
+                    NSLog(@"[vision] device anchor query FAILED (%d so far)", anchorFails);
+            }
+        }
+        return true;
+    }
+
+    id<MTLTexture> colorTarget() const override {
+        return cp_drawable_get_color_texture(drawable, 0);
+    }
+
+    bool drawableSize(int& width, int& height) const override {
+        if (!drawable) return false;
+        id<MTLTexture> tex = cp_drawable_get_color_texture(drawable, 0);
+        width  = static_cast<int>(tex.width);
+        height = static_cast<int>(tex.height);
+        return width > 0 && height > 0;
+    }
+
+    // From the layer CONFIGURATION, not a drawable: pipelines are built during
+    // initialize(), long before the first frame is queried.
+    MTLPixelFormat colorPixelFormat() const override {
+        return cp_layer_renderer_configuration_get_color_format(
+            cp_layer_renderer_get_configuration(layerRenderer));
+    }
+
+    void present(id<MTLCommandBuffer> commandBuffer,
+                 id<MTLTexture> /*sceneDepth*/) override {
+        if (!drawable || !drawables) return;
+        // Color AND depth for every view are written by endFrame's per-view
+        // passes (composite + depth blit through xrViewTarget's texture map).
+        // All that remains here is presenting every drawable target.
+        size_t count = cp_drawable_array_get_count(drawables);
+        for (size_t d = 0; d < count; d++) {
+            cp_drawable_t dr = cp_drawable_array_get_drawable(drawables, d);
+            if (!loggedLayout) {
+                NSLog(@"[vision] drawable %zu target=%d views=%zu textures=%zu "
+                      @"tex0 %lux%lu (slices %lu)",
+                      d, (int)cp_drawable_get_target(dr),
+                      cp_drawable_get_view_count(dr),
+                      cp_drawable_get_texture_count(dr),
+                      static_cast<unsigned long>(cp_drawable_get_color_texture(dr, 0).width),
+                      static_cast<unsigned long>(cp_drawable_get_color_texture(dr, 0).height),
+                      static_cast<unsigned long>(cp_drawable_get_color_texture(dr, 0).arrayLength));
+            }
+            cp_drawable_encode_present(dr, commandBuffer);
+        }
+        loggedLayout = true;
+    }
+    bool loggedLayout = false;
+    int anchorFails = 0;
+    bool anchorEverSucceeded = false;
+
+    // Head-tracked camera state for xrView() and the XR backend adapter.
+    // Sticky: a frame with a failed anchor query keeps the last good pose.
+    bool trackedPoseValid = false;
+    simd_float4x4 originFromDevice;      // tracking origin -> headset
+    int trackedViewCount = 0;
+    simd_float4x4 deviceFromEye[2];      // headset -> each eye
+    simd_float4x4 eyeProjection[2];      // compositor projection per eye
+    int trackedViewWidth = 0, trackedViewHeight = 0;
+    bool xrBaseValid = false;
+    simd_float3 xrBase = {0, 0, 0};   // locomotion base: tracking origin in world
+    simd_float3 baseHintPrev = {0, 0, 0};  // last game-camera position seen
+    float worldScale = 1.0f;   // world units per real meter (Renderer::xrWorldScale)
+
+    // Scale a rigid ORIGIN-space transform's translation by worldScale —
+    // rotation (and therefore IPD *direction*) is untouched; the distances
+    // the head and eyes travel are what make the user feel larger.
+    simd_float4x4 scaledOriginTransform(simd_float4x4 m) const {
+        m.columns[3].x *= worldScale;
+        m.columns[3].y *= worldScale;
+        m.columns[3].z *= worldScale;
+        return m;
+    }
+
+    void setXrWorldScale(float scale) override {
+        worldScale = (scale > 0.01f) ? scale : 1.0f;
+    }
+
+    bool xrTracking() const override { return trackedPoseValid; }
+
+    int xrViewCount() const override {
+        return (drawable && trackedPoseValid) ? trackedViewCount : 0;
+    }
+
+    bool xrViewCamera(int v, simd_float3 baseHint, simd_float4x4& worldFromEye,
+                      simd_float4x4& projection) override {
+        if (!trackedPoseValid || v < 0 || v >= trackedViewCount) return false;
+        if (!xrBaseValid) {
+            // Stand where the level's player stood, feet on the ground. In
+            // play mode the game camera IS the player's eye, ~1.6m above
+            // whatever it stands on — so ground ≈ hint.y - 1.6, which also
+            // works on terrain and elevated city decks where the old
+            // "Y = 0" seed buried the user under the world. (Arena floor is
+            // at 0 with an eye ~1.6, so this changes nothing there.)
+            xrBase = simd_make_float3(baseHint.x, baseHint.y - 1.6f, baseHint.z);
+            baseHintPrev = baseHint;
+            xrBaseValid = true;
+        } else {
+            // FOLLOW the game camera by deltas: when gameplay moves the
+            // camera (teleport, vehicles, elevators), the tracking origin
+            // moves with it — otherwise a teleport moves the character but
+            // the user stays put, which reads as "I pinched and the world
+            // glitched but I didn't go anywhere". Deltas (not absolutes)
+            // keep the user's real head motion free, and re-applying a zero
+            // delta is harmless, so no per-frame gating is needed.
+            xrBase.x += baseHint.x - baseHintPrev.x;
+            xrBase.y += baseHint.y - baseHintPrev.y;
+            xrBase.z += baseHint.z - baseHintPrev.z;
+            baseHintPrev = baseHint;
+        }
+        simd_float4x4 base = matrix_identity_float4x4;
+        base.columns[3] = simd_make_float4(xrBase.x, xrBase.y, xrBase.z, 1.0f);
+        worldFromEye = simd_mul(base, scaledOriginTransform(
+            simd_mul(originFromDevice, deviceFromEye[v])));
+        projection = eyeProjection[v];
+        return true;
+    }
+
+    bool xrView(simd_float3 baseHint, simd_float4x4& worldFromEye,
+                simd_float4x4& projection) override {
+        return xrViewCamera(0, baseHint, worldFromEye, projection);
+    }
+
+    bool xrViewTarget(int v, id<MTLTexture> __strong& color,
+                      id<MTLTexture> __strong& depth,
+                      NSUInteger& slice, MTLViewport& viewport) override {
+        if (!drawable || v < 0
+            || v >= (int)cp_drawable_get_view_count(drawable)) return false;
+        cp_view_t view = cp_drawable_get_view(drawable, v);
+        cp_view_texture_map_t map = cp_view_get_view_texture_map(view);
+        size_t texIndex = cp_view_texture_map_get_texture_index(map);
+        slice = cp_view_texture_map_get_slice_index(map);
+        viewport = cp_view_texture_map_get_viewport(map);
+        color = cp_drawable_get_color_texture(drawable, texIndex);
+        depth = cp_drawable_get_depth_texture(drawable, texIndex);
+        return color != nil;
+    }
+
+    void frameSubmitted() override {
+        if (frame) cp_frame_end_submission(frame);
+        frame = nullptr;
+        drawable = nullptr;
+        drawables = nullptr;
+    }
+};
+
+// simd -> engine Mat4 (transpose + widen): the inverse of toSimd below. Lives
+// here because only the XR backend crosses this boundary in this direction.
+static Mat4 fromSimd(simd_float4x4 m) {
+    Mat4 r;
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++)
+            r.m[i][j] = static_cast<Real>(m.columns[j][i]);
+    return r;
+}
+
+// The engine-facing XR backend (engine/xr/xr_backend.h) for CompositorServices.
+// Owned by MetalRenderer::Impl, wraps the CompositorSurface's tracking session.
+// beginFrame answers with a PREDICTED head pose (the render still late-latches
+// against the drawable's own timing); input is a thread-safe queue the Swift
+// host pushes spatial events into (Phase 3).
+struct CompositorXrBackend final : engine::XrBackend {
+    CompositorSurface* surface = nullptr;
+    uint64_t frameCounter = 0;
+    std::mutex inputMutex;
+    std::vector<engine::XrInputEvent> inputQueue;
+    // Reused hand-anchor scratch objects for get_latest_anchors.
+    ar_hand_anchor_t handAnchorLeft = nullptr;
+    ar_hand_anchor_t handAnchorRight = nullptr;
+
+    // Fill one XrHand from an ARKit hand anchor, mapping the runtime's named
+    // joints onto the engine's canonical XrHandJointId order. Joint transforms
+    // land in ORIGIN space with the world scale already applied.
+    void fillHand(engine::XrHand& out, ar_hand_anchor_t anchor) {
+        out.tracked = anchor && ar_hand_anchor_is_tracked(anchor);
+        if (!out.tracked) return;
+        static const ar_hand_skeleton_joint_name_t kJointNames[
+            engine::XR_HAND_JOINT_COUNT] = {
+            ar_hand_skeleton_joint_name_wrist,
+            ar_hand_skeleton_joint_name_forearm_wrist,
+            ar_hand_skeleton_joint_name_forearm_arm,
+            ar_hand_skeleton_joint_name_thumb_knuckle,
+            ar_hand_skeleton_joint_name_thumb_intermediate_base,
+            ar_hand_skeleton_joint_name_thumb_intermediate_tip,
+            ar_hand_skeleton_joint_name_thumb_tip,
+            ar_hand_skeleton_joint_name_index_finger_metacarpal,
+            ar_hand_skeleton_joint_name_index_finger_knuckle,
+            ar_hand_skeleton_joint_name_index_finger_intermediate_base,
+            ar_hand_skeleton_joint_name_index_finger_intermediate_tip,
+            ar_hand_skeleton_joint_name_index_finger_tip,
+            ar_hand_skeleton_joint_name_middle_finger_metacarpal,
+            ar_hand_skeleton_joint_name_middle_finger_knuckle,
+            ar_hand_skeleton_joint_name_middle_finger_intermediate_base,
+            ar_hand_skeleton_joint_name_middle_finger_intermediate_tip,
+            ar_hand_skeleton_joint_name_middle_finger_tip,
+            ar_hand_skeleton_joint_name_ring_finger_metacarpal,
+            ar_hand_skeleton_joint_name_ring_finger_knuckle,
+            ar_hand_skeleton_joint_name_ring_finger_intermediate_base,
+            ar_hand_skeleton_joint_name_ring_finger_intermediate_tip,
+            ar_hand_skeleton_joint_name_ring_finger_tip,
+            ar_hand_skeleton_joint_name_little_finger_metacarpal,
+            ar_hand_skeleton_joint_name_little_finger_knuckle,
+            ar_hand_skeleton_joint_name_little_finger_intermediate_base,
+            ar_hand_skeleton_joint_name_little_finger_intermediate_tip,
+            ar_hand_skeleton_joint_name_little_finger_tip,
+        };
+        ar_hand_skeleton_t skeleton = ar_hand_anchor_get_hand_skeleton(anchor);
+        simd_float4x4 originFromAnchor =
+            ar_hand_anchor_get_origin_from_anchor_transform(anchor);
+        for (int j = 0; j < engine::XR_HAND_JOINT_COUNT; j++) {
+            ar_skeleton_joint_t joint =
+                ar_hand_skeleton_get_joint_named(skeleton, kJointNames[j]);
+            if (!joint) { out.joints[j].tracked = false; continue; }
+            out.joints[j].tracked = ar_skeleton_joint_is_tracked(joint);
+            out.joints[j].originFromJoint =
+                fromSimd(surface->scaledOriginTransform(simd_mul(
+                    originFromAnchor,
+                    ar_skeleton_joint_get_anchor_from_joint_transform(joint))));
+        }
+    }
+
+    bool active() const override { return surface && surface->trackedPoseValid; }
+
+    bool beginFrame(engine::XrState& out) override {
+        out.active = false;
+        if (!surface || !surface->worldTracking || !surface->trackedPoseValid)
+            return false;
+
+        // Predict roughly a frame ahead; if the query misses (tracking
+        // momentarily paused), fall back to the sticky pose so the view
+        // degrades to "held still", never to garbage.
+        simd_float4x4 head = surface->originFromDevice;
+        ar_device_anchor_t anchor = ar_device_anchor_create();
+        if (ar_world_tracking_provider_query_device_anchor_at_timestamp(
+                surface->worldTracking, CACurrentMediaTime() + 0.033, anchor)
+            == ar_device_anchor_query_status_success) {
+            head = ar_anchor_get_origin_from_anchor_transform(anchor);
+        }
+
+        out.frameIndex = ++frameCounter;
+        // World scale applies at the source so all XrState consumers see
+        // world-metric values (matching what the render path composes).
+        out.originFromHead = fromSimd(surface->scaledOriginTransform(head));
+        // The locomotion base: where the tracking origin sits in the world.
+        // Gameplay composes world-space rays from it (teleport targeting).
+        out.originBaseValid = surface->xrBaseValid;
+        out.originBase = Vec3(surface->xrBase.x, surface->xrBase.y,
+                              surface->xrBase.z);
+        out.viewCount = surface->trackedViewCount;
+        for (int v = 0; v < out.viewCount; v++) {
+            // ORIGIN-space eye pose for the predicted head (scaled as one
+            // rigid transform so the IPD scales with the stride).
+            out.views[v].originFromEye = fromSimd(surface->scaledOriginTransform(
+                simd_mul(head, surface->deviceFromEye[v])));
+            out.views[v].projection = fromSimd(surface->eyeProjection[v]);
+            out.views[v].targetIndex = v;
+            out.views[v].width = surface->trackedViewWidth;
+            out.views[v].height = surface->trackedViewHeight;
+        }
+        // Hand skeletons: latest tracked pose for both hands. Reports
+        // untracked until the user grants the hands permission.
+        out.hands[0].tracked = false;
+        out.hands[1].tracked = false;
+        if (surface->handTracking) {
+            if (!handAnchorLeft) handAnchorLeft = ar_hand_anchor_create();
+            if (!handAnchorRight) handAnchorRight = ar_hand_anchor_create();
+            if (ar_hand_tracking_provider_get_latest_anchors(
+                    surface->handTracking, handAnchorLeft, handAnchorRight)) {
+                fillHand(out.hands[0], handAnchorLeft);
+                fillHand(out.hands[1], handAnchorRight);
+            }
+        }
+
+        out.active = true;
+
+        if ((frameCounter % 90) == 0) {
+            NSLog(@"[xr] predict #%llu head(%.2f %.2f %.2f) fwd(%.2f %.2f %.2f) views %d hands L%d R%d",
+                  (unsigned long long)out.frameIndex,
+                  out.originFromHead.m[0][3], out.originFromHead.m[1][3],
+                  out.originFromHead.m[2][3],
+                  -out.originFromHead.m[0][2], -out.originFromHead.m[1][2],
+                  -out.originFromHead.m[2][2], out.viewCount,
+                  out.hands[0].tracked ? 1 : 0, out.hands[1].tracked ? 1 : 0);
+        }
+        return true;
+    }
+
+    void pushInput(const engine::XrInputEvent& event) override {
+        std::lock_guard<std::mutex> lock(inputMutex);
+        inputQueue.push_back(event);
+    }
+
+    void pollInput(std::vector<engine::XrInputEvent>& out) override {
+        std::lock_guard<std::mutex> lock(inputMutex);
+        out.insert(out.end(), inputQueue.begin(), inputQueue.end());
+        inputQueue.clear();
+    }
+};
+#endif  // TARGET_OS_VISION
+
 static simd_float4x4 toSimd(const Mat4& m) {
     simd_float4x4 result;
     for (int i = 0; i < 4; i++)
@@ -65,6 +713,16 @@ static simd_float4x4 toSimd(const Mat4& m) {
 
 static simd_float4x4 inverseTranspose(simd_float4x4 m) {
     return simd_transpose(simd_inverse(m));
+}
+
+// Threadgroup count covering `threads` (ceiling division). All compute
+// dispatches go through dispatchThreadgroups: — dispatchThreads: (non-uniform
+// threadgroups) is unsupported on visionOS-class GPU families, so kernels must
+// bounds-check against the real grid size.
+static MTLSize threadgroupsCovering(MTLSize threads, MTLSize group) {
+    return MTLSizeMake((threads.width  + group.width  - 1) / group.width,
+                       (threads.height + group.height - 1) / group.height,
+                       (threads.depth  + group.depth  - 1) / group.depth);
 }
 
 struct MetalRenderer::Impl {
@@ -86,10 +744,27 @@ struct MetalRenderer::Impl {
     id<MTLBuffer> instanceBuffers[MAX_FRAMES_IN_FLIGHT];  // ring; see frameIndex
     id<MTLBuffer> shadowInstanceBuffers[MAX_FRAMES_IN_FLIGHT];  // ring; shadow caster models
     id<MTLBuffer> foliageInstanceBuffers[MAX_FRAMES_IN_FLIGHT]; // ring; foliage prepass+lit
+    uint32_t maxInstances = MAX_INSTANCES;                // live capacities; see
+    uint32_t shadowMaxInstances = SHADOW_MAX_INSTANCES;   // setInstanceCapacities
+    uint32_t foliageMaxInstances = FOLIAGE_MAX_INSTANCES;
+    uint64_t lastOverflowWarnFrame = 0;                   // rate-limits the log
     int frameIndex = 0;                                   // advances each beginFrame
     uint64_t frameCount = 0;                              // monotonic; drives SSAO jitter
-    CAMetalLayer* metalLayer;
-    NSWindow* nsWindow;
+    // Measured GPU time of the last COMPLETED frame (ms), written from Metal's
+    // completion handler on an arbitrary thread and read by the frame ledger on
+    // the main thread — hence atomic. Held by shared_ptr so a frame still in
+    // flight when the renderer is destroyed writes to live storage, not a
+    // dangling Impl (completion handlers outlive commit by design).
+    std::shared_ptr<std::atomic<float>> gpuFrameMs =
+        std::make_shared<std::atomic<float>>(0.0f);
+    // How this frame reaches the display. The pass graph never looks at it —
+    // see PresentationSurface above.
+    std::unique_ptr<PresentationSurface> surface;
+#if TARGET_OS_VISION
+    // Engine-facing XR backend (engine/xr/): wraps the surface's tracking.
+    // Points INTO `surface` — declared after it so it destructs first.
+    std::unique_ptr<CompositorXrBackend> xrAdapter;
+#endif
     id<MTLTexture> depthTexture;
 
     SlotMap<GPUMesh, MeshTag> meshes;
@@ -104,6 +779,12 @@ struct MetalRenderer::Impl {
     // Skybox
     id<MTLRenderPipelineState> skyboxPipeline;
     id<MTLDepthStencilState> skyboxDepthState;
+
+    // XR depth carry (depth-only fullscreen pass): moves scene depth into the
+    // compositor drawable while clamping the reverse-Z far background to a
+    // finite virtual sky plane — see the endFrame pass for the why.
+    id<MTLRenderPipelineState> depthCarryPipeline;
+    id<MTLDepthStencilState> depthCarryDepthState;
 
     // Environment (ADR-0016): an equirectangular HDR map drives the skybox and,
     // via the probe bake, IBL. nil => procedural sky.
@@ -147,6 +828,47 @@ struct MetalRenderer::Impl {
     // scene-set params (centre/radii/coeffs); camera + sun are filled per frame.
     id<MTLRenderPipelineState> atmospherePipeline;
     AtmosphereRenderParams atmosphere;
+
+    // Scattering sky (cinematic-sky phase): Hillaire-style transmittance +
+    // sky-view LUTs (compute), baked into a cubemap + IBL cubes that ride the
+    // exact machinery a captured HDR uses (skybox/composite sky pixels, GGX
+    // prefilter + irradiance, the probe bake) — so lighting matches the
+    // backdrop by construction. Recomputed only when the cache key (sun
+    // direction, camera altitude band, params) changes; textures are allocated
+    // lazily so levels that don't opt in pay nothing.
+    id<MTLComputePipelineState> skyTransmittancePipeline;
+    id<MTLComputePipelineState> skyViewPipeline;
+    id<MTLRenderPipelineState> skyCubeBakePipeline;   // vertexSkybox + LUT sample
+    id<MTLTexture> skyTransmittanceLUT;   // 256x64 RGBA16Float
+    id<MTLTexture> skyViewLUT;            // 192x108 RGBA16Float
+    id<MTLTexture> skyCubemap;            // 512^3 faces RGBA16Float + mips
+    id<MTLTexture> skyPrefilteredCube;    // ENV_PREFILTER_* (shared constants)
+    id<MTLTexture> skyIrradianceCube;
+    static constexpr int SKY_TRANS_W = 256, SKY_TRANS_H = 64;
+    static constexpr int SKY_VIEW_W = 192, SKY_VIEW_H = 108;
+    static constexpr int SKY_CUBE_SIZE = 512;
+    SkyScatteringParams skyParams;        // level opt-in, copied in setLights
+    bool skyActive = false;               // params.enabled && gate && no real HDR
+    float skyCamHeightQ = 0.0f;           // quantized camera height the LUTs use
+    struct SkyKey { simd_float3 sunDir; float camH; SkyScatteringParams p; };
+    SkyKey skyKey = {};                   // last-baked key
+    float skyLastSunIntensity = -1.0f;    // sun illuminance is part of the key
+    bool skyBaked = false;
+    void updateSkyResources();
+
+    // Volumetric clouds (cinematic-sky phase): half-res march target composited
+    // onto the HDR scene with One+SourceAlpha blending (fragmentCloudComposite);
+    // sky pixels reuse the same overlay inside fragmentComposite. Lazy target.
+    id<MTLRenderPipelineState> cloudPipeline;
+    id<MTLRenderPipelineState> cloudCompositePipeline;
+    id<MTLTexture> cloudTexture;          // half-res RGBA16Float (S.rgb, T.a)
+    // Tileable Perlin-Worley noise set the march samples (cloud_noise.h):
+    // 128^3 RGBA8 base shape + 32^3 RGBA8 detail erosion, baked CPU-side at
+    // init (disk-cached) and sampled with repeat addressing in cl_density.
+    id<MTLTexture> cloudBaseNoise;
+    id<MTLTexture> cloudDetailNoise;
+    VolumetricCloudParams cloudParams;    // level opt-in, copied in setLights
+    bool cloudsActive = false;
 
     // Screen-space reflections (SSR)
     id<MTLTexture> ssrTexture;         // RGBA16Float — SSR result (rgb=color, a=confidence)
@@ -211,6 +933,13 @@ struct MetalRenderer::Impl {
     // Per-cascade light VP (for the shadow pass) and world bounds (for culling
     // casters per cascade). activeCascadeCount cascades are live this frame.
     simd_float4x4 cascadeVP[RT_MAX_CASCADES];
+    // Same matrices as Mat4, kept for CPU-side caster culling (the simd form is
+    // for upload). Orthographic, so clip z runs near->0, far->1 with w == 1.
+    Mat4 cascadeVPMat[RT_MAX_CASCADES];
+    // The postEffectScale the SSR/AO textures were actually built at, so a
+    // change to the live knob can rebuild them instead of being ignored until
+    // the next window resize.
+    float postEffectScaleApplied = -1.0f;
     Vec3 cascadeCenter[RT_MAX_CASCADES];
     Real cascadeRadius[RT_MAX_CASCADES] = {0};
     int activeCascadeCount = 0;
@@ -224,7 +953,17 @@ struct MetalRenderer::Impl {
     const char* frameDumpPath = nullptr;
     int frameDumpCounter = 0;
 
-    id<CAMetalDrawable> currentDrawable;
+    // Cached once per frame from surface->colorTarget(), so the composite, lens
+    // and frame-dump stages agree on the target even though they run apart.
+    id<MTLTexture> currentColorTarget;
+    CameraState lastCameraState;      // for the per-frame XR re-derive
+    bool hasLastCamera = false;
+    // Locomotion-base hint from XrCameraSystem (the GAMEPLAY camera, pre
+    // head-overwrite). Preferred over lastCameraState for base following —
+    // once the shared camera follows the head, using it as the hint would
+    // feed head motion straight back into the base.
+    simd_float3 xrBaseHint = {0, 0, 0};
+    bool xrBaseHintValid = false;
     id<MTLCommandBuffer> currentCommandBuffer;
     id<MTLRenderCommandEncoder> currentEncoder;
     MTLRenderPassDescriptor* currentPassDesc;   // scene pass (HDR offscreen)
@@ -256,6 +995,11 @@ struct MetalRenderer::Impl {
 
     Vec3 currentCameraPos;
     RenderStats lastStats;
+    // Monotonic resource-creation counters (see RenderStats): the ledger diffs
+    // them per frame, so a hitch can be attributed to "a mesh/texture was
+    // created here" instead of guessed at.
+    uint64_t meshUploadsTotal = 0;
+    uint64_t textureUploadsTotal = 0;
 
     static void bakeProbes(Impl* impl, const std::vector<ReflectionProbe>& probes);
 };
@@ -264,10 +1008,31 @@ MetalRenderer::MetalRenderer() : impl(std::make_unique<Impl>()) {}
 MetalRenderer::~MetalRenderer() { shutdown(); }
 
 bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
-    // The handle is opaque (ADR-0001): the GLFW runtime passes an NSWindow*;
-    // a host application embedding the engine (the Qt editor) passes the
-    // NSView* of its viewport widget. Attach the layer to whichever view we
-    // end up with.
+    // The handle is opaque (ADR-0001) and its concrete type is per-platform:
+    // the GLFW runtime passes an NSWindow*, the Qt editor passes the NSView* of
+    // its viewport widget, and visionOS passes the cp_layer_renderer_t handed
+    // to it by the SwiftUI immersive space. Unwrapping it is the one place that
+    // has to know which platform it is on; everything after this point does not.
+#if TARGET_OS_VISION
+    // The compositor already owns a device — never create a second one, or every
+    // resource below would belong to the wrong GPU object.
+    cp_layer_renderer_t layerRenderer = (__bridge cp_layer_renderer_t)windowHandle;
+    if (!layerRenderer) return false;
+
+    impl->device = cp_layer_renderer_get_device(layerRenderer);
+    if (!impl->device) return false;
+    impl->commandQueue = [impl->device newCommandQueue];
+
+    auto compositorSurface = std::make_unique<CompositorSurface>();
+    compositorSurface->layerRenderer = layerRenderer;
+    if (!compositorSurface->startTracking()) {
+        NSLog(@"[MetalRenderer] world tracking unavailable — cannot present");
+        return false;
+    }
+    impl->xrAdapter = std::make_unique<CompositorXrBackend>();
+    impl->xrAdapter->surface = compositorSurface.get();
+    impl->surface = std::move(compositorSurface);
+#else
     NSObject* handleObj = (__bridge NSObject*)windowHandle;
     NSWindow* nsWindow = nil;
     NSView* hostView = nil;
@@ -286,46 +1051,101 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
 
     impl->commandQueue = [impl->device newCommandQueue];
 
-    impl->metalLayer = [CAMetalLayer layer];
-    impl->metalLayer.device = impl->device;
-    impl->metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    auto layerSurface = std::make_unique<LayerSurface>();
+    layerSurface->layer = [CAMetalLayer layer];
+    layerSurface->layer.device = impl->device;
+    layerSurface->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
     // framebufferOnly drawables can't be blitted from; relax it only when a
     // frame dump was requested (RT_FRAME_DUMP=<path.png>).
     impl->frameDumpPath = std::getenv("RT_FRAME_DUMP");
-    if (const char* w = std::getenv("RT_WIREFRAME")) wireframe = std::atoi(w);  // headless wire view
-    // Headless debug views (same ids as the ImGui overlay's View combo):
-    // 1=AO 2=SSR 3=depth 4=normals 5=shadow 6=albedo 7=facing 8=cascades.
-    // Without this the facing/normals views are reachable only from an
-    // interactive ImGui build — useless for verifying a frame dump.
-    if (const char* d = std::getenv("RT_DEBUG_VIEW")) debugView = std::atoi(d);
-    impl->metalLayer.framebufferOnly = impl->frameDumpPath ? NO : YES;
-    impl->metalLayer.contentsScale =
+    layerSurface->layer.framebufferOnly = impl->frameDumpPath ? NO : YES;
+    layerSurface->layer.contentsScale =
         nsWindow ? nsWindow.backingScaleFactor : 2.0;   // retina default
 
     hostView.wantsLayer = YES;
-    hostView.layer = impl->metalLayer;
-    impl->nsWindow = nsWindow;
+    hostView.layer = layerSurface->layer;
+    layerSurface->window = nsWindow;
+    impl->surface = std::move(layerSurface);
+#endif  // TARGET_OS_VISION
+
+    // Debug knobs, read on EVERY platform. These lived in the macOS branch until
+    // visionOS arrived, which silently made every headless debug view
+    // unreachable there — exactly when they were most needed for diagnosing a
+    // platform-specific rendering difference.
+    //   1=AO 2=SSR 3=depth 4=normals 5=shadow 6=albedo 7=facing 8=cascades
+    impl->frameDumpPath = std::getenv("RT_FRAME_DUMP");
+    if (const char* w = std::getenv("RT_WIREFRAME")) wireframe = std::atoi(w);
+    if (const char* d = std::getenv("RT_DEBUG_VIEW")) debugView = std::atoi(d);
+    // PER-PASS GATES, from the environment. These already existed as ImGui
+    // checkboxes, which makes them useless to the headless perf harness — and
+    // the harness is the only place a GPU cost can be attributed honestly,
+    // because it pins the camera and samples a fixed sim-hour window.
+    //
+    // Turning one pass off and re-measuring the whole-frame GPU time is a
+    // complete attribution with no counter-buffer plumbing: the delta IS that
+    // pass's cost, at this viewpoint, on this frame's real workload.
+    if (std::getenv("RT_NO_SSAO"))   ssaoEnabled = false;
+    if (std::getenv("RT_NO_SSR"))    ssrEnabled = false;
+    if (std::getenv("RT_NO_PROBES")) reflectionProbesEnabled = false;
+    if (std::getenv("RT_NO_CLOUDS")) volumetricCloudsEnabled = false;
+    // (Content-layer gates are parsed in RenderSystem, where the RenderLayer
+    //  enum lives — the renderer treats hiddenLayers as an opaque mask.)
 
     // Load shaders. Runtime newLibraryWithSource has no include paths, so the
     // modules are concatenated in dependency order; #line directives keep
     // compile diagnostics pointing at the right file (ADR-0017 Phase 0).
+    //
+    // THE ORDER IS LOAD-BEARING. Concatenation is textual with no forward
+    // declarations, so every module must follow the ones it calls into. This
+    // list is therefore both the build order and the dependency documentation:
+    // a mistake surfaces as a compile error naming the right file via #line.
+    // Subsetting it is also how a backend drops effects it never runs (these
+    // compile at runtime on every launch, so a headset build should not be
+    // compiling SSR/DOF/lens).
     NSError* error = nil;
     NSArray<NSString*>* shaderFiles = @[
         @"shaders/metal/shader_types.h",   // GPU structs shared with C++
-        @"shaders/metal/common.metal",     // vertex layouts, BRDF helpers
+        @"shaders/metal/common.metal",     // layouts, Fresnel, noise primitives
+
+        // --- surface library --- (each material owns its albedo *and* relief;
+        // surfaces.metal dispatches, so it comes last)
+        @"shaders/metal/surfaces_facade.metal", // brick/concrete/…/wood
+        @"shaders/metal/surface_road.metal",    // after facade: calls surfAsphalt
+        @"shaders/metal/surface_water.metal",
+        @"shaders/metal/surface_terrain.metal",
+        @"shaders/metal/surfaces.metal",        // applySurface + applySurfaceRelief
+
+        // --- lighting ---
         @"shaders/metal/environment.metal",// sky/HDR providers, IBL precompute
         @"shaders/metal/shadows.metal",    // shadow pass + PCF lookup
-        @"shaders/metal/lighting.metal",   // probes, direct light, shadeSurface
-        @"shaders/metal/post.metal",       // SSR, GTAO, bloom, composite
-        @"shaders/metal/atmosphere.metal", // planetary atmosphere glow (P3)
+        @"shaders/metal/lighting_env.metal",     // IBL sampling + reflection probes
+        @"shaders/metal/lighting_brdf.metal",    // GGX terms + evaluateLighting
+        @"shaders/metal/lighting_surface.metal", // shadeSurface (needs surfaces.metal)
+        @"shaders/metal/lighting_entry.metal",   // vertex/fragment entry points
+
+        // --- post stack --- (post_common first: SSR, AO *and* composite use it)
+        @"shaders/metal/post_common.metal",   // unproject, linearize, bilateral
+        @"shaders/metal/post_ssr.metal",      // ray march + separable blur
+        @"shaders/metal/post_ao.metal",       // GTAO + blurs + temporal reproject
+        @"shaders/metal/post_bloom.metal",    // downsample/upsample pyramid
+        @"shaders/metal/post_composite.metal",// tone map + grade → drawable
+        @"shaders/metal/post_lens.metal",     // DOF gather + distortion/CA/vignette
+
+        @"shaders/metal/atmosphere.metal", // planetary atmosphere glow (P3) + sky LUTs
+        @"shaders/metal/clouds.metal",     // volumetric cloud slab (cinematic sky)
     ];
     NSMutableString* shaderSource = [NSMutableString string];
     for (NSString* path in shaderFiles) {
-        NSString* chunk = [NSString stringWithContentsOfFile:path
+        // Resolve through the asset root so the same list works from the repo
+        // root (root unset -> identity) and from inside an app bundle, whose
+        // working directory is not the repo. See engine/asset_root.h.
+        NSString* resolved = [NSString
+            stringWithUTF8String:engine::assetPath([path UTF8String]).c_str()];
+        NSString* chunk = [NSString stringWithContentsOfFile:resolved
                                                     encoding:NSUTF8StringEncoding
                                                        error:&error];
         if (!chunk) {
-            NSLog(@"Failed to load shader %@: %@", path, error);
+            NSLog(@"Failed to load shader %@: %@", resolved, error);
             return false;
         }
         [shaderSource appendFormat:@"#line 1 \"%@\"\n%@\n",
@@ -473,11 +1293,34 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         MTLRenderPipelineDescriptor* compDesc = [[MTLRenderPipelineDescriptor alloc] init];
         compDesc.vertexFunction = compVert;
         compDesc.fragmentFunction = compFrag;
-        compDesc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+        compDesc.colorAttachments[0].pixelFormat = impl->surface->colorPixelFormat();
         // No depth attachment for the composite pass
         impl->compositePipeline = [impl->device newRenderPipelineStateWithDescriptor:compDesc
                                                                                error:&error];
         if (!impl->compositePipeline) NSLog(@"Composite pipeline error: %@", error);
+    }
+
+    // XR depth-carry pipeline: depth-only, no color attachments. Replaces the
+    // plain depth blit into the compositor drawable so the far background can
+    // be clamped to a finite plane (endFrame has the full story).
+    {
+        id<MTLFunction> dcVert = [library newFunctionWithName:@"vertexComposite"];
+        id<MTLFunction> dcFrag = [library newFunctionWithName:@"fragmentDepthCarry"];
+        if (dcVert && dcFrag) {
+            MTLRenderPipelineDescriptor* dcDesc = [[MTLRenderPipelineDescriptor alloc] init];
+            dcDesc.vertexFunction = dcVert;
+            dcDesc.fragmentFunction = dcFrag;
+            dcDesc.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+            impl->depthCarryPipeline =
+                [impl->device newRenderPipelineStateWithDescriptor:dcDesc error:&error];
+            if (!impl->depthCarryPipeline)
+                NSLog(@"Depth-carry pipeline error: %@", error);
+            MTLDepthStencilDescriptor* dcDepth = [[MTLDepthStencilDescriptor alloc] init];
+            dcDepth.depthCompareFunction = MTLCompareFunctionAlways;
+            dcDepth.depthWriteEnabled = YES;
+            impl->depthCarryDepthState =
+                [impl->device newDepthStencilStateWithDescriptor:dcDepth];
+        }
     }
 
     // Atmosphere-glow pipeline (procedural-planet-plan P3): a fullscreen triangle
@@ -503,6 +1346,94 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         if (!impl->atmospherePipeline) NSLog(@"Atmosphere pipeline error: %@", error);
     }
 
+    // Scattering-sky pipelines (cinematic-sky phase): the two LUT compute
+    // kernels, plus the sky->cube bake (vertexSkybox reconstruction + LUT
+    // sample) that feeds the shared HDR-cube machinery. Missing functions just
+    // leave the scattering opt-in inert (logged), like every optional pass.
+    {
+        id<MTLFunction> transFunc = [library newFunctionWithName:@"skyTransmittanceLut"];
+        if (transFunc) {
+            impl->skyTransmittancePipeline =
+                [impl->device newComputePipelineStateWithFunction:transFunc error:&error];
+            if (!impl->skyTransmittancePipeline)
+                NSLog(@"Sky transmittance pipeline error: %@", error);
+        }
+        id<MTLFunction> skyViewFunc = [library newFunctionWithName:@"skyViewLut"];
+        if (skyViewFunc) {
+            impl->skyViewPipeline =
+                [impl->device newComputePipelineStateWithFunction:skyViewFunc error:&error];
+            if (!impl->skyViewPipeline) NSLog(@"Sky-view pipeline error: %@", error);
+        }
+        id<MTLFunction> skyVert = [library newFunctionWithName:@"vertexSkybox"];
+        id<MTLFunction> skyBakeFrag = [library newFunctionWithName:@"fragmentScatteringSkyBake"];
+        if (skyVert && skyBakeFrag) {
+            MTLRenderPipelineDescriptor* d = [[MTLRenderPipelineDescriptor alloc] init];
+            d.vertexFunction = skyVert;
+            d.fragmentFunction = skyBakeFrag;
+            d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+            impl->skyCubeBakePipeline =
+                [impl->device newRenderPipelineStateWithDescriptor:d error:&error];
+            if (!impl->skyCubeBakePipeline) NSLog(@"Sky cube bake pipeline error: %@", error);
+        }
+    }
+
+    // Volumetric cloud pipelines (cinematic-sky phase): the half-res march and
+    // its full-res composite onto the HDR scene. The composite blends
+    // dest * transmittance + scattered via One + SourceAlpha.
+    {
+        id<MTLFunction> cloudVert = [library newFunctionWithName:@"vertexClouds"];
+        id<MTLFunction> cloudFrag = [library newFunctionWithName:@"fragmentClouds"];
+        if (cloudVert && cloudFrag) {
+            MTLRenderPipelineDescriptor* d = [[MTLRenderPipelineDescriptor alloc] init];
+            d.vertexFunction = cloudVert;
+            d.fragmentFunction = cloudFrag;
+            d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+            impl->cloudPipeline = [impl->device newRenderPipelineStateWithDescriptor:d
+                                                                               error:&error];
+            if (!impl->cloudPipeline) NSLog(@"Cloud pipeline error: %@", error);
+        }
+        id<MTLFunction> cloudCompFrag = [library newFunctionWithName:@"fragmentCloudComposite"];
+        if (cloudVert && cloudCompFrag) {
+            MTLRenderPipelineDescriptor* d = [[MTLRenderPipelineDescriptor alloc] init];
+            d.vertexFunction = cloudVert;
+            d.fragmentFunction = cloudCompFrag;
+            d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+            d.colorAttachments[0].blendingEnabled = YES;
+            d.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
+            d.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
+            d.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
+            d.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorSourceAlpha;
+            d.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorZero;
+            d.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
+            impl->cloudCompositePipeline =
+                [impl->device newRenderPipelineStateWithDescriptor:d error:&error];
+            if (!impl->cloudCompositePipeline) NSLog(@"Cloud composite pipeline error: %@", error);
+        }
+        // Perlin-Worley 3D noise set the march samples (cloud_noise.h). The
+        // bake is deterministic and disk-cached (cache/clouds/), so only the
+        // very first run on a machine pays the few-hundred-ms CPU cost.
+        if (impl->cloudPipeline) {
+            cloudnoise::NoiseSet nz = cloudnoise::generateOrLoad();
+            auto make3D = [&](int n, const std::vector<uint8_t>& bytes) {
+                MTLTextureDescriptor* d = [[MTLTextureDescriptor alloc] init];
+                d.textureType = MTLTextureType3D;
+                d.pixelFormat = MTLPixelFormatRGBA8Unorm;
+                d.width = d.height = d.depth = (NSUInteger)n;
+                d.usage = MTLTextureUsageShaderRead;
+                id<MTLTexture> t = [impl->device newTextureWithDescriptor:d];
+                [t replaceRegion:MTLRegionMake3D(0, 0, 0, n, n, n)
+                     mipmapLevel:0
+                           slice:0
+                       withBytes:bytes.data()
+                     bytesPerRow:(NSUInteger)n * 4
+                   bytesPerImage:(NSUInteger)n * n * 4];
+                return t;
+            };
+            impl->cloudBaseNoise = make3D(nz.baseSize, nz.base);
+            impl->cloudDetailNoise = make3D(nz.detailSize, nz.detail);
+        }
+    }
+
     // Lens-warp pipeline (virtual-camera plan Phase 4): fullscreen resample of
     // the composited LDR image (distortion + CA + vignette), writes the drawable.
     {
@@ -512,7 +1443,7 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
             MTLRenderPipelineDescriptor* lensDesc = [[MTLRenderPipelineDescriptor alloc] init];
             lensDesc.vertexFunction = lensVert;
             lensDesc.fragmentFunction = lensFrag;
-            lensDesc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+            lensDesc.colorAttachments[0].pixelFormat = impl->surface->colorPixelFormat();
             // No depth attachment, same as the composite pass
             impl->lensWarpPipeline = [impl->device newRenderPipelineStateWithDescriptor:lensDesc
                                                                                    error:&error];
@@ -710,9 +1641,10 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
             id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
             [enc setComputePipelineState:impl->brdfLUTPipeline];
             [enc setTexture:impl->brdfLUT atIndex:0];
-            MTLSize grid = MTLSizeMake(256, 256, 1);
+            MTLSize grid = MTLSizeMake(256, 256, 1);   // threads, not threadgroups
             MTLSize group = MTLSizeMake(16, 16, 1);
-            [enc dispatchThreads:grid threadsPerThreadgroup:group];
+            [enc dispatchThreadgroups:threadgroupsCovering(grid, group)
+                threadsPerThreadgroup:group];
             [enc endEncoding];
             [cmdBuf commit];
             [cmdBuf waitUntilCompleted];
@@ -753,13 +1685,14 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
 
     // Instance data buffer
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        impl->instanceBuffers[i] = [impl->device newBufferWithLength:MAX_INSTANCES * sizeof(GPUInstanceData)
-                                                            options:MTLResourceStorageModeShared];
+        impl->instanceBuffers[i] =
+            [impl->device newBufferWithLength:impl->maxInstances * sizeof(GPUInstanceData)
+                                      options:MTLResourceStorageModeShared];
         impl->shadowInstanceBuffers[i] =
-            [impl->device newBufferWithLength:SHADOW_MAX_INSTANCES * sizeof(GPUInstanceData)
+            [impl->device newBufferWithLength:impl->shadowMaxInstances * sizeof(GPUInstanceData)
                                      options:MTLResourceStorageModeShared];
         impl->foliageInstanceBuffers[i] =
-            [impl->device newBufferWithLength:FOLIAGE_MAX_INSTANCES * sizeof(GPUInstanceData)
+            [impl->device newBufferWithLength:impl->foliageMaxInstances * sizeof(GPUInstanceData)
                                      options:MTLResourceStorageModeShared];
     }
 
@@ -895,9 +1828,7 @@ void MetalRenderer::shutdown() {
 void MetalRenderer::resize(int width, int height) {
     impl->framebufferWidth = width;
     impl->framebufferHeight = height;
-    if (impl->nsWindow)   // hosted mode: keep the scale set at initialize
-        impl->metalLayer.contentsScale = impl->nsWindow.backingScaleFactor;
-    impl->metalLayer.drawableSize = CGSizeMake(width, height);
+    impl->surface->resize(width, height);
 
     MTLTextureDescriptor* depthDesc = [MTLTextureDescriptor
         texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
@@ -928,9 +1859,15 @@ void MetalRenderer::resize(int width, int height) {
     normalDesc.storageMode = MTLStorageModePrivate;
     impl->viewNormalTexture = [impl->device newTextureWithDescriptor:normalDesc];
 
-    // SSR textures (half resolution for performance)
-    int halfW = std::max(width / 2, 1);
-    int halfH = std::max(height / 2, 1);
+    // SSR + AO buffer resolution. `postEffectScale` is documented as exactly
+    // this knob and is honoured by the WebGPU and web backends, but Metal read
+    // it NOWHERE and hardcoded width/2 — so a level or slider setting it was
+    // silently ignored on the one backend where SSAO is the measured dominant
+    // cost. Clamped to a sane range; 0.5 reproduces the old hardcoded halving.
+    const float peScale = std::clamp(postEffectScale, 0.25f, 1.0f);
+    impl->postEffectScaleApplied = peScale;
+    int halfW = std::max(static_cast<int>(width * peScale), 1);
+    int halfH = std::max(static_cast<int>(height * peScale), 1);
     MTLTextureDescriptor* ssrDesc = [MTLTextureDescriptor
         texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
                                      width:halfW
@@ -957,10 +1894,14 @@ void MetalRenderer::resize(int width, int height) {
     impl->aoHistory = [impl->device newTextureWithDescriptor:aoDesc];
     impl->aoHistoryValid = false;   // contents undefined until the first resolve
 
-    // Bloom mip chain (progressive half-res)
+    // Bloom mip chain. The base is QUARTER-res, not half: bloom is a very
+    // low-frequency signal (a wide, soft halo), so the top mip carries almost no
+    // information the second one lacks — dropping it quarters the pixels every
+    // pass in the chain touches, and the visible difference is a slightly softer
+    // halo, which is the direction a lens PSF goes anyway.
     {
-        int mipW = halfW;
-        int mipH = halfH;
+        int mipW = std::max(halfW / 2, 1);
+        int mipH = std::max(halfH / 2, 1);
         for (int m = 0; m < MetalRenderer::Impl::BLOOM_MIP_COUNT; m++) {
             MTLTextureDescriptor* bloomDesc = [MTLTextureDescriptor
                 texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
@@ -978,9 +1919,18 @@ void MetalRenderer::resize(int width, int height) {
 
     // Lens effects (virtual-camera plan Phase 4): composite target for frames
     // where the lens-warp pass owns the drawable, + DOF gather output.
+    //
+    // postLDRTexture deliberately MATCHES THE SURFACE FORMAT. That makes the
+    // display transform land exactly once whether or not the lens pass runs:
+    // on a linear-storage target the composite encodes and the lens pass copies
+    // encoded bytes through; on an sRGB target the composite stays linear, the
+    // hardware encodes on write, sampling decodes back to linear for the lens
+    // pass, and the hardware encodes once more on the final write — a net single
+    // encode either way. Hardcoding BGRA8Unorm here would double-encode on
+    // visionOS the moment lens effects were switched on.
     {
         MTLTextureDescriptor* postDesc = [MTLTextureDescriptor
-            texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+            texture2DDescriptorWithPixelFormat:impl->surface->colorPixelFormat()
                                          width:width
                                         height:height
                                      mipmapped:NO];
@@ -1042,6 +1992,7 @@ MeshHandle MetalRenderer::uploadMesh(const RenderMesh& mesh) {
     gpuMesh.indexCount = static_cast<uint32_t>(mesh.indices.size());
     gpuMesh.bounds = computeBoundingSphere(mesh.vertices.data(), mesh.vertices.size());
 
+    impl->meshUploadsTotal++;
     return impl->meshes.insert(gpuMesh);
 }
 
@@ -1078,7 +2029,14 @@ TextureHandle MetalRenderer::uploadTexture(int width, int height, int channels,
                    bytesPerRow:width * 4];
     }
 
-    // Generate mipmaps
+    // Generate mipmaps. NOTE (ADR-0077 hitch hunt): the waitUntilCompleted here
+    // drains the whole GPU pipeline on the calling thread, so a texture created
+    // DURING play stalls the frame and shows up as a long acquire on the frames
+    // after it. Command buffers on one queue already execute in submission
+    // order, so a later render sees the mipmaps without this wait — but that is
+    // a Metal change nobody can verify in this environment, so it is recorded
+    // in TECH_DEBT with the counter below to prove when it fires, rather than
+    // removed blind.
     id<MTLCommandBuffer> cmdBuf = [impl->commandQueue commandBuffer];
     id<MTLBlitCommandEncoder> blit = [cmdBuf blitCommandEncoder];
     [blit generateMipmapsForTexture:texture];
@@ -1086,6 +2044,7 @@ TextureHandle MetalRenderer::uploadTexture(int width, int height, int channels,
     [cmdBuf commit];
     [cmdBuf waitUntilCompleted];
 
+    impl->textureUploadsTotal++;
     return impl->textures.insert(texture);
 }
 
@@ -1454,8 +2413,11 @@ void MetalRenderer::Impl::validateBakedCube(id<MTLTexture> cube) {
         [enc setBuffer:dirBuf offset:0 atIndex:0];
         [enc setBuffer:resBuf offset:0 atIndex:1];
         [enc setSamplerState:mipClampSampler atIndex:0];
-        [enc dispatchThreads:MTLSizeMake(N, 1, 1)
-       threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+        uint32_t sampleCount = static_cast<uint32_t>(N);
+        [enc setBytes:&sampleCount length:sizeof(sampleCount) atIndex:2];
+        MTLSize validateGroup = MTLSizeMake(64, 1, 1);
+        [enc dispatchThreadgroups:threadgroupsCovering(MTLSizeMake(N, 1, 1), validateGroup)
+            threadsPerThreadgroup:validateGroup];
         [enc endEncoding];
         [cmd commit];
         [cmd waitUntilCompleted];
@@ -1529,7 +2491,8 @@ void MetalRenderer::Impl::bakeEnvironmentIBL() {
         [enc setBytes:&roughness length:sizeof(roughness) atIndex:0];
         for (int face = 0; face < 6; face++) {
             [enc setBytes:&face length:sizeof(face) atIndex:1];
-            [enc dispatchThreads:grid threadsPerThreadgroup:group];
+            [enc dispatchThreadgroups:threadgroupsCovering(grid, group)
+                threadsPerThreadgroup:group];
         }
     }
 
@@ -1540,7 +2503,8 @@ void MetalRenderer::Impl::bakeEnvironmentIBL() {
     MTLSize irrGrid = MTLSizeMake(ENV_IRRADIANCE_SIZE, ENV_IRRADIANCE_SIZE, 1);
     for (int face = 0; face < 6; face++) {
         [enc setBytes:&face length:sizeof(face) atIndex:0];
-        [enc dispatchThreads:irrGrid threadsPerThreadgroup:group];
+        [enc dispatchThreadgroups:threadgroupsCovering(irrGrid, group)
+            threadsPerThreadgroup:group];
     }
 
     [enc endEncoding];
@@ -1598,6 +2562,213 @@ void MetalRenderer::Impl::bakeEnvironmentIBL() {
     envIrradianceCube = irradiance;
 }
 
+// Scattering sky (cinematic-sky): recompute the LUTs and re-bake the sky cube +
+// IBL cubes when the cache key (sun direction, camera altitude band, params)
+// changes. One command buffer, committed without waiting — the queue is FIFO,
+// so everything encoded afterwards (probe bake included) sees the new sky.
+// GPU cost when it fires is ~a millisecond (tiny LUT marches + a 512 cube bake
+// + the prefilter kernels); with a static sun it fires once per level.
+void MetalRenderer::Impl::updateSkyResources() {
+    if (!skyActive || !skyTransmittancePipeline || !skyViewPipeline ||
+        !skyCubeBakePipeline || !prefilterPipeline || !irradiancePipeline) {
+        skyBaked = false;
+        return;
+    }
+
+    // Cache key: sun quantized to ~0.3 deg, camera height to its 100 m band
+    // (already quantized in setLights), params compared field-by-field.
+    SkyKey key;
+    simd_float3 sd = lightUniforms.skySunDir;
+    key.sunDir = simd_make_float3(std::round(sd.x * 200.0f) / 200.0f,
+                                  std::round(sd.y * 200.0f) / 200.0f,
+                                  std::round(sd.z * 200.0f) / 200.0f);
+    key.camH = skyCamHeightQ;
+    key.p = skyParams;
+    auto sameParams = [](const SkyScatteringParams& a, const SkyScatteringParams& b) {
+        return a.planetRadius == b.planetRadius &&
+               a.atmosphereHeight == b.atmosphereHeight &&
+               a.rayleighBeta.x == b.rayleighBeta.x &&
+               a.rayleighBeta.y == b.rayleighBeta.y &&
+               a.rayleighBeta.z == b.rayleighBeta.z &&
+               a.rayleighScaleHeight == b.rayleighScaleHeight &&
+               a.mieBeta == b.mieBeta && a.mieScaleHeight == b.mieScaleHeight &&
+               a.mieG == b.mieG && a.turbidity == b.turbidity &&
+               a.groundAlbedo.x == b.groundAlbedo.x &&
+               a.groundAlbedo.y == b.groundAlbedo.y &&
+               a.groundAlbedo.z == b.groundAlbedo.z &&
+               a.brightness == b.brightness && a.multiScatter == b.multiScatter &&
+               a.sunAngularRadius == b.sunAngularRadius;
+    };
+    if (skyBaked && simd_equal(key.sunDir, skyKey.sunDir) &&
+        key.camH == skyKey.camH && sameParams(key.p, skyKey.p) &&
+        lightUniforms.lights[0].intensity == skyLastSunIntensity)
+        return;
+    skyKey = key;
+    skyLastSunIntensity = lightUniforms.lights[0].intensity;
+    skyBaked = true;
+    NSLog(@"[SKY] baking LUTs + sky cube/IBL (sun %.3f %.3f %.3f, camH %.0f)",
+          sd.x, sd.y, sd.z, skyCamHeightQ);
+
+    // Lazy texture allocation — levels that never opt in allocate nothing.
+    if (!skyTransmittanceLUT) {
+        MTLTextureDescriptor* d = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                         width:SKY_TRANS_W height:SKY_TRANS_H
+                                     mipmapped:NO];
+        d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        d.storageMode = MTLStorageModePrivate;
+        skyTransmittanceLUT = [device newTextureWithDescriptor:d];
+    }
+    if (!skyViewLUT) {
+        MTLTextureDescriptor* d = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                         width:SKY_VIEW_W height:SKY_VIEW_H
+                                     mipmapped:NO];
+        d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        d.storageMode = MTLStorageModePrivate;
+        skyViewLUT = [device newTextureWithDescriptor:d];
+    }
+    if (!skyCubemap) {
+        NSUInteger mips = 1;
+        for (int s = SKY_CUBE_SIZE; s > 1; s >>= 1) mips++;
+        MTLTextureDescriptor* d = [[MTLTextureDescriptor alloc] init];
+        d.textureType = MTLTextureTypeCube;
+        d.pixelFormat = MTLPixelFormatRGBA16Float;
+        d.width = SKY_CUBE_SIZE;
+        d.height = SKY_CUBE_SIZE;
+        d.mipmapLevelCount = mips;
+        d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        d.storageMode = MTLStorageModePrivate;
+        skyCubemap = [device newTextureWithDescriptor:d];
+    }
+    if (!skyPrefilteredCube) {
+        MTLTextureDescriptor* d = [[MTLTextureDescriptor alloc] init];
+        d.textureType = MTLTextureTypeCube;
+        d.pixelFormat = MTLPixelFormatRGBA16Float;
+        d.width = ENV_PREFILTER_SIZE;
+        d.height = ENV_PREFILTER_SIZE;
+        d.mipmapLevelCount = ENV_PREFILTER_MIPS;
+        d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        d.storageMode = MTLStorageModePrivate;
+        skyPrefilteredCube = [device newTextureWithDescriptor:d];
+    }
+    if (!skyIrradianceCube) {
+        MTLTextureDescriptor* d = [[MTLTextureDescriptor alloc] init];
+        d.textureType = MTLTextureTypeCube;
+        d.pixelFormat = MTLPixelFormatRGBA16Float;
+        d.width = ENV_IRRADIANCE_SIZE;
+        d.height = ENV_IRRADIANCE_SIZE;
+        d.mipmapLevelCount = 1;
+        d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        d.storageMode = MTLStorageModePrivate;
+        skyIrradianceCube = [device newTextureWithDescriptor:d];
+    }
+
+    const SkyScatteringParams& p = skyParams;
+    SkyLUTUniforms su;
+    su.sunDirection = simd_make_float4(sd.x, sd.y, sd.z, skyCamHeightQ);
+    su.sunColor = simd_make_float4(lightUniforms.skySunColor.x,
+                                   lightUniforms.skySunColor.y,
+                                   lightUniforms.skySunColor.z,
+                                   lightUniforms.lights[0].intensity);
+    su.rayleigh = simd_make_float4(p.rayleighBeta.x, p.rayleighBeta.y,
+                                   p.rayleighBeta.z, p.rayleighScaleHeight);
+    su.mie = simd_make_float4(p.mieBeta * p.turbidity,
+                              p.mieBeta * 1.11f * p.turbidity,
+                              p.mieScaleHeight, p.mieG);
+    su.planet = simd_make_float4(p.planetRadius, p.planetRadius + p.atmosphereHeight,
+                                 p.brightness, p.multiScatter);
+    su.ground = simd_make_float4(p.groundAlbedo.x, p.groundAlbedo.y,
+                                 p.groundAlbedo.z, 0.0f);
+
+    id<MTLCommandBuffer> cmd = [commandQueue commandBuffer];
+
+    // 1) LUT kernels: transmittance, then the sky-view march that samples it.
+    {
+        id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+        MTLSize group = MTLSizeMake(8, 8, 1);
+        [enc setComputePipelineState:skyTransmittancePipeline];
+        [enc setTexture:skyTransmittanceLUT atIndex:0];
+        [enc setBytes:&su length:sizeof(su) atIndex:0];
+        [enc dispatchThreads:MTLSizeMake(SKY_TRANS_W, SKY_TRANS_H, 1)
+       threadsPerThreadgroup:group];
+        [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
+        [enc setComputePipelineState:skyViewPipeline];
+        [enc setTexture:skyViewLUT atIndex:0];
+        [enc setTexture:skyTransmittanceLUT atIndex:1];
+        [enc setBytes:&su length:sizeof(su) atIndex:0];
+        [enc dispatchThreads:MTLSizeMake(SKY_VIEW_W, SKY_VIEW_H, 1)
+       threadsPerThreadgroup:group];
+        [enc endEncoding];
+    }
+
+    // 2) Sky -> cube faces (the fragment reads the LightUniforms sky block,
+    //    which setLights just refreshed for this frame).
+    for (int face = 0; face < 6; face++) {
+        CameraUniforms cam = {};
+        cam.viewProjection = toSimd(cubeFaceViewProjection(face, Vec3(0, 0, 0), 0.1, 10.0));
+        cam.invViewProjection = simd_inverse(cam.viewProjection);
+        cam.cameraPosition = simd_make_float3(0, 0, 0);
+
+        MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
+        rp.colorAttachments[0].texture = skyCubemap;
+        rp.colorAttachments[0].slice = face;
+        rp.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+        rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> enc = [cmd renderCommandEncoderWithDescriptor:rp];
+        [enc setRenderPipelineState:skyCubeBakePipeline];
+        [enc setVertexBytes:&cam length:sizeof(cam) atIndex:1];
+        [enc setFragmentBuffer:lightBuffer offset:0 atIndex:4];
+        [enc setFragmentTexture:skyViewLUT atIndex:0];
+        [enc setFragmentTexture:skyTransmittanceLUT atIndex:1];
+        [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [enc endEncoding];
+    }
+    {
+        id<MTLBlitCommandEncoder> blit = [cmd blitCommandEncoder];
+        [blit generateMipmapsForTexture:skyCubemap];
+        [blit endEncoding];
+    }
+
+    // 3) IBL from the sky cube: GGX prefilter mips + cosine irradiance — the
+    //    same kernels the HDR path uses, so lighting matches the backdrop.
+    {
+        id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+        MTLSize group = MTLSizeMake(8, 8, 1);
+        [enc setComputePipelineState:prefilterPipeline];
+        [enc setTexture:skyCubemap atIndex:0];
+        [enc setSamplerState:mipClampSampler atIndex:0];
+        for (int mip = 0; mip < ENV_PREFILTER_MIPS; mip++) {
+            id<MTLTexture> mipView =
+                [skyPrefilteredCube newTextureViewWithPixelFormat:MTLPixelFormatRGBA16Float
+                                                      textureType:MTLTextureTypeCube
+                                                           levels:NSMakeRange(mip, 1)
+                                                           slices:NSMakeRange(0, 6)];
+            float roughness = static_cast<float>(mip) / (ENV_PREFILTER_MIPS - 1);
+            int mipSize = ENV_PREFILTER_SIZE >> mip;
+            [enc setTexture:mipView atIndex:1];
+            [enc setBytes:&roughness length:sizeof(roughness) atIndex:0];
+            for (int face = 0; face < 6; face++) {
+                [enc setBytes:&face length:sizeof(face) atIndex:1];
+                [enc dispatchThreads:MTLSizeMake(mipSize, mipSize, 1)
+               threadsPerThreadgroup:group];
+            }
+        }
+        [enc setComputePipelineState:irradiancePipeline];
+        [enc setTexture:skyCubemap atIndex:0];
+        [enc setTexture:skyIrradianceCube atIndex:1];
+        [enc setSamplerState:mipClampSampler atIndex:0];
+        for (int face = 0; face < 6; face++) {
+            [enc setBytes:&face length:sizeof(face) atIndex:0];
+            [enc dispatchThreads:MTLSizeMake(ENV_IRRADIANCE_SIZE, ENV_IRRADIANCE_SIZE, 1)
+           threadsPerThreadgroup:group];
+        }
+        [enc endEncoding];
+    }
+
+    [cmd commit];   // no wait: FIFO queue order covers this frame's consumers
+}
+
 void MetalRenderer::setEnvironmentMap(TextureHandle equirect) {
     auto* tex = impl->textures.get(equirect);
     impl->environmentTexture = tex ? *tex : nil;
@@ -1622,7 +2793,51 @@ RenderStats MetalRenderer::getRenderStats() const {
     return impl->lastStats;
 }
 
+void MetalRenderer::setInstanceCapacities(uint32_t instances, uint32_t shadow,
+                                          uint32_t foliage) {
+    // Clamp up to the defaults — shrinking buys nothing and risks overflow.
+    instances = std::max(instances, MAX_INSTANCES);
+    shadow = std::max(shadow, SHADOW_MAX_INSTANCES);
+    foliage = std::max(foliage, FOLIAGE_MAX_INSTANCES);
+    if (instances == impl->maxInstances && shadow == impl->shadowMaxInstances &&
+        foliage == impl->foliageMaxInstances)
+        return;
+    impl->maxInstances = instances;
+    impl->shadowMaxInstances = shadow;
+    impl->foliageMaxInstances = foliage;
+    if (!impl->device) return;  // pre-initialize: initialize() allocates at these sizes
+    // In-flight command buffers retain the old ring buffers, so replacing the
+    // ivars mid-session is safe; the GPU finishes on the old storage.
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        impl->instanceBuffers[i] =
+            [impl->device newBufferWithLength:instances * sizeof(GPUInstanceData)
+                                      options:MTLResourceStorageModeShared];
+        impl->shadowInstanceBuffers[i] =
+            [impl->device newBufferWithLength:shadow * sizeof(GPUInstanceData)
+                                     options:MTLResourceStorageModeShared];
+        impl->foliageInstanceBuffers[i] =
+            [impl->device newBufferWithLength:foliage * sizeof(GPUInstanceData)
+                                     options:MTLResourceStorageModeShared];
+    }
+}
+
+float MetalRenderer::lastGpuFrameMs() const {
+    return impl->gpuFrameMs->load(std::memory_order_relaxed);
+}
+
+bool MetalRenderer::setPresentSync(bool enabled) {
+    return impl->surface && impl->surface->setPresentSync(enabled);
+}
+
 void MetalRenderer::beginFrame() {
+    // Live postEffectScale changes rebuild the SSR/AO buffers. Without this the
+    // knob would only take effect on the next window resize, which is its own
+    // flavour of "the setting does nothing".
+    if (std::abs(std::clamp(postEffectScale, 0.25f, 1.0f) -
+                 impl->postEffectScaleApplied) > 1e-4f &&
+        impl->framebufferWidth > 0 && impl->framebufferHeight > 0) {
+        resize(impl->framebufferWidth, impl->framebufferHeight);
+    }
     impl->opaqueDrawCalls.clear();
     impl->transparentDrawCalls.clear();
     impl->overlayDrawCalls.clear();
@@ -1636,10 +2851,40 @@ void MetalRenderer::beginFrame() {
     // Acquire the drawable and build the pass descriptor up front so the debug
     // UI's new-frame (which needs the descriptor's formats) can run before
     // systems emit ImGui widgets in their render() hooks. endFrame() reuses it.
-    impl->currentDrawable = [impl->metalLayer nextDrawable];
+    impl->surface->setXrWorldScale(xrWorldScale);
+    impl->currentColorTarget = impl->surface->acquire() ? impl->surface->colorTarget() : nil;
+
+    // Keep the offscreen targets the same size as the thing we present to.
+    //
+    // The composite pass reads depth with depthTex.read(in.position.xy) — i.e.
+    // in TARGET pixel coordinates — so if the depth texture is smaller than the
+    // colour target, every fragment past its edge reads out of bounds, gets 0,
+    // and is classified as reverse-Z background. The symptom is a hard-edged
+    // black region exactly at the depth texture's width, which reads as missing
+    // geometry rather than as a sizing bug.
+    //
+    // Desktop never hit this because the window drives both. visionOS has no
+    // window: HostedWindow reports a nominal size and the compositor picks the
+    // real per-eye dimensions, so the two only agree if we ask.
+    if (impl->currentColorTarget) {
+        int targetWidth = 0, targetHeight = 0;
+        if (impl->surface->drawableSize(targetWidth, targetHeight) &&
+            (targetWidth != impl->framebufferWidth ||
+             targetHeight != impl->framebufferHeight)) {
+            resize(targetWidth, targetHeight);
+        }
+    }
+
+    // Head-tracked surfaces: re-derive the camera from the pose acquire() just
+    // captured. The game only calls setCamera when ITS camera changes; a
+    // static game camera must not freeze the user's head. Non-tracking
+    // surfaces (macOS) never enter here.
+    if (impl->hasLastCamera && impl->surface->xrTracking())
+        setCamera(impl->lastCameraState);
+
     impl->currentPassDesc = nil;
     impl->compositePassDesc = nil;
-    if (impl->currentDrawable) {
+    if (impl->currentColorTarget) {
         // Main scene pass renders to offscreen HDR texture (not the drawable).
         // Tone mapping + gamma happens in a separate composite pass.
         MTLRenderPassDescriptor* passDesc = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -1659,7 +2904,7 @@ void MetalRenderer::beginFrame() {
 
         // Composite pass renders to the drawable (BGRA8Unorm, no depth).
         MTLRenderPassDescriptor* compDesc = [MTLRenderPassDescriptor renderPassDescriptor];
-        compDesc.colorAttachments[0].texture = impl->currentDrawable.texture;
+        compDesc.colorAttachments[0].texture = impl->currentColorTarget;
         compDesc.colorAttachments[0].loadAction = MTLLoadActionDontCare;
         compDesc.colorAttachments[0].storeAction = MTLStoreActionStore;
         impl->compositePassDesc = compDesc;
@@ -1674,7 +2919,24 @@ void MetalRenderer::beginFrame() {
 #endif
 }
 
+XrBackend* MetalRenderer::xrBackend() {
+#if TARGET_OS_VISION
+    return impl->xrAdapter.get();
+#else
+    return nullptr;
+#endif
+}
+
+void MetalRenderer::setXrBaseHint(const Vec3& worldPosition) {
+    impl->xrBaseHint = simd_make_float3(static_cast<float>(worldPosition.x),
+                                        static_cast<float>(worldPosition.y),
+                                        static_cast<float>(worldPosition.z));
+    impl->xrBaseHintValid = true;
+}
+
 void MetalRenderer::setCamera(const CameraState& camera) {
+    impl->lastCameraState = camera;
+    impl->hasLastCamera = true;
     float fovRad = static_cast<float>(degreesToRadians(camera.fovDegrees));
 
     // View and projection are both built engine-side (Mat4) and transposed into
@@ -1693,29 +2955,66 @@ void MetalRenderer::setCamera(const CameraState& camera) {
     projMat = Mat4::reverseZ() * projMat;
     simd_float4x4 proj = toSimd(projMat);
 
+    simd_float4x4 invView = toSimd(Mat4::lookAt(camera.position, camera.target,
+                                                camera.up).inverse());
+    simd_float4x4 invProj = toSimd(projMat.inverse());
+    simd_float3 camPos = {static_cast<float>(camera.position.x),
+                          static_cast<float>(camera.position.y),
+                          static_cast<float>(camera.position.z)};
+
+    // Head-tracked override (visionOS): when the surface tracks a headset,
+    // render from the user's eye — pose from tracking, projection from the
+    // compositor — instead of the game camera. The game camera still supplies
+    // the locomotion base (where in the world the user stands) via baseHint.
+    // Both projections are reverse-Z, so every depth consumer downstream is
+    // unaffected by the swap.
+    {
+        simd_float4x4 worldFromEye, xrProj;
+        simd_float3 baseHint = impl->xrBaseHintValid ? impl->xrBaseHint : camPos;
+        if (impl->surface && impl->surface->xrView(baseHint, worldFromEye, xrProj)) {
+            view = simd_inverse(worldFromEye);
+            invView = worldFromEye;
+            proj = xrProj;
+            invProj = simd_inverse(xrProj);
+            camPos = simd_make_float3(worldFromEye.columns[3].x,
+                                      worldFromEye.columns[3].y,
+                                      worldFromEye.columns[3].z);
+            // Heartbeat stage 2/3 ("override"): proves the render camera is
+            // LIVE. The forward vector must change as the user turns their
+            // head — if it doesn't while "[xr] predict" moves, the sticky
+            // capture in acquire() froze; if BOTH move but the display
+            // doesn't, the fault is downstream (see the composite stage).
+#if TARGET_OS_VISION
+            static int xrCamBeat = 0;
+            if ((xrCamBeat++ % 90) == 0) {
+                simd_float4 fwd = worldFromEye.columns[2];
+                NSLog(@"[xr] override #%llu pos(%.2f %.2f %.2f) fwd(%.2f %.2f %.2f)",
+                      (unsigned long long)(impl->xrAdapter ? impl->xrAdapter->frameCounter : 0),
+                      camPos.x, camPos.y, camPos.z, -fwd.x, -fwd.y, -fwd.z);
+            }
+#endif
+        }
+    }
+
     simd_float4x4 vp = simd_mul(proj, view);
     impl->cameraUniforms.viewProjection = vp;
     impl->cameraUniforms.view = view;
-    impl->cameraUniforms.cameraPosition = {static_cast<float>(camera.position.x),
-                                           static_cast<float>(camera.position.y),
-                                           static_cast<float>(camera.position.z)};
+    impl->cameraUniforms.cameraPosition = camPos;
     impl->cameraUniforms._camPad0 = 0;
 
     // Inverse matrices for screen-space effects (SSR, SSAO)
-    Mat4 viewMat = Mat4::lookAt(camera.position, camera.target, camera.up);
-    Mat4 vpMat = projMat * viewMat;
-    impl->cameraUniforms.invViewProjection = toSimd(vpMat.inverse());
+    impl->cameraUniforms.invViewProjection = simd_mul(invView, invProj);
     // Roll the view-projection history for temporal AO: this frame's VP (matching
     // the invViewProjection above) becomes "current"; last frame's becomes "prev".
     impl->aoPrevViewProjection = impl->aoCurrViewProjection;
-    impl->aoCurrViewProjection = toSimd(vpMat);
+    impl->aoCurrViewProjection = vp;
     impl->cameraUniforms.projection = proj;
-    impl->cameraUniforms.invProjection = toSimd(projMat.inverse());
+    impl->cameraUniforms.invProjection = invProj;
     impl->cameraUniforms.screenSize = {static_cast<float>(impl->framebufferWidth),
                                        static_cast<float>(impl->framebufferHeight)};
     impl->cameraUniforms.nearPlane = static_cast<float>(camera.nearPlane);
     impl->cameraUniforms.farPlane = static_cast<float>(camera.farPlane);
-    impl->currentCameraPos = camera.position;
+    impl->currentCameraPos = Vec3(camPos.x, camPos.y, camPos.z);
     impl->currentLens = camera.lens;   // drives the lens-warp + DOF passes
 
     // Wind for FLAG_WIND foliage (self-timed off the wall clock — purely
@@ -1734,10 +3033,79 @@ static simd_float3 toSimd3(const Vec3& v) {
             static_cast<float>(v.z)};
 }
 
+// SHADOW CASTER SELECTION — the shadow pass's own culling model, replacing a
+// bounding sphere of twice the cascade radius.
+//
+// Why the sphere was wrong, not merely loose: a cascade is an ORTHOGRAPHIC BOX,
+// and `cascadeRadius * 2` circumscribes roughly four times its footprint area,
+// three cascades over. It was inflated for a real reason — a caster standing
+// outside the box can still shadow INTO it — but a symmetric sphere pays that
+// cost in every direction, including the two where nothing can ever cast.
+//
+// The correct shape is the box extended ALONG THE LIGHT only. Because the
+// cascade projection is orthographic, w stays 1 through the transform, so
+// clip space needs no perspective divide and the test below is exact:
+//   - reject on x/y entirely outside [-1, 1]  (outside the footprint: cannot cast in)
+//   - reject on z beyond the far plane        (behind the receiver set)
+//   - NEVER reject on z before the near plane (that is toward the light — the
+//     tall-caster case the inflation existed for, now kept for free)
+static bool aabbCastsIntoCascade(const Mat4& cascadeVP, const Vec3& bmin,
+                                 const Vec3& bmax) {
+    Vec3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);
+    for (int i = 0; i < 8; ++i) {
+        const Vec3 corner((i & 1) ? bmax.x : bmin.x,
+                          (i & 2) ? bmax.y : bmin.y,
+                          (i & 4) ? bmax.z : bmin.z);
+        const Vec3 c = cascadeVP.transformPoint(corner);
+        lo.x = std::min(lo.x, c.x); hi.x = std::max(hi.x, c.x);
+        lo.y = std::min(lo.y, c.y); hi.y = std::max(hi.y, c.y);
+        lo.z = std::min(lo.z, c.z); hi.z = std::max(hi.z, c.z);
+    }
+    if (lo.x > 1.0 || hi.x < -1.0) return false;
+    if (lo.y > 1.0 || hi.y < -1.0) return false;
+    if (lo.z > 1.0) return false;   // past the far plane; nothing to shadow
+    return true;                    // hi.z < 0 is deliberately KEPT
+}
+
+// World-space AABB of a mesh's local box under `m`, by transforming all eight
+// corners (a transformed box is not an axis-aligned box; taking min/max of two
+// transformed corners under-covers any rotation).
+static void worldAABB(const Mat4& m, const Vec3& bmin, const Vec3& bmax,
+                      Vec3& outMin, Vec3& outMax) {
+    outMin = Vec3(1e30, 1e30, 1e30);
+    outMax = Vec3(-1e30, -1e30, -1e30);
+    for (int i = 0; i < 8; ++i) {
+        const Vec3 corner((i & 1) ? bmax.x : bmin.x,
+                          (i & 2) ? bmax.y : bmin.y,
+                          (i & 4) ? bmax.z : bmin.z);
+        const Vec3 w = m.transformPoint(corner);
+        outMin.x = std::min(outMin.x, w.x); outMax.x = std::max(outMax.x, w.x);
+        outMin.y = std::min(outMin.y, w.y); outMax.y = std::max(outMax.y, w.y);
+        outMin.z = std::min(outMin.z, w.z); outMax.z = std::max(outMax.z, w.z);
+    }
+}
+
 void MetalRenderer::setLights(const SceneLighting& lighting) {
     auto& lu = impl->lightUniforms;
     int idx = 0;
     constexpr int MAX_LIGHTS = 32;
+
+    // Throttled state line: the one place every platform's lighting funnels
+    // through, so a headset/simulator console can answer "what light state is
+    // the GPU actually being handed" without a debugger attached.
+    static int lightBeat = 0;
+    if ((lightBeat++ % 300) == 0) {
+        NSLog(@"[lights] sunI=%.2f dir(%.2f %.2f %.2f) zen(%.2f %.2f %.2f) "
+              @"hor(%.2f %.2f %.2f) ambient=%.2f exposure=%.2f debugView=%d",
+              lighting.sun.intensity,
+              lighting.sun.direction.x, lighting.sun.direction.y,
+              lighting.sun.direction.z,
+              lighting.sky.zenithColor.x, lighting.sky.zenithColor.y,
+              lighting.sky.zenithColor.z,
+              lighting.sky.horizonColor.x, lighting.sky.horizonColor.y,
+              lighting.sky.horizonColor.z,
+              lighting.ambientMultiplier, lighting.exposure, debugView);
+    }
 
     // Per-level cascade-fit overrides (0 = unset, keep the settings-driven value):
     // a large CDLOD world needs a far longer shadow range than the 150 m default.
@@ -1836,6 +3204,7 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
                 Mat4 lightVP = lightProj * lightView;
 
                 impl->cascadeVP[c] = toSimd(lightVP);
+                impl->cascadeVPMat[c] = lightVP;
                 impl->shadowUniforms.cascadeViewProjection[c] = toSimd(lightVP);
                 impl->cascadeCenter[c] = snapped;
                 impl->cascadeRadius[c] = radius;
@@ -1855,6 +3224,23 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
             impl->shadowDepthBias = lighting.shadow.bias;
             impl->shadowUniforms.normalBias = lighting.shadow.normalBias;
             impl->shadowUniforms.pcfRadius = lighting.shadow.pcfRadius;
+            // ShadowConfig::resolution had NO CONSUMER here: Metal hardcoded
+            // 2048, so a level that set it was silently ignored while WebGPU
+            // honoured it. Reallocate the depth array when it actually changes;
+            // a knob that lies is worse than no knob.
+            if (lighting.shadow.resolution > 0 &&
+                lighting.shadow.resolution != impl->shadowMapSize) {
+                impl->shadowMapSize = lighting.shadow.resolution;
+                MTLTextureDescriptor* d = [[MTLTextureDescriptor alloc] init];
+                d.textureType = MTLTextureType2DArray;
+                d.pixelFormat = MTLPixelFormatDepth32Float;
+                d.width = impl->shadowMapSize;
+                d.height = impl->shadowMapSize;
+                d.arrayLength = RT_MAX_CASCADES;
+                d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+                d.storageMode = MTLStorageModePrivate;
+                impl->shadowMap = [impl->device newTextureWithDescriptor:d];
+            }
             impl->shadowUniforms.shadowMapSize = impl->shadowMapSize;
         } else {
             g.lightViewProjection = simd_matrix_from_rows(
@@ -1939,7 +3325,44 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
     lu.fogDensity = lighting.fog.enabled ? lighting.fog.density : 0.0f;
     lu.fogHeightFalloff = lighting.fog.enabled ? lighting.fog.heightFalloff : 0.0f;
 
-    impl->skyCloudsEnabled = sky.cloudsEnabled;
+    // Scattering sky (cinematic-sky): active only when the level opts in, the
+    // runtime gate is on, and no captured HDR owns the environment. The sun
+    // disc + LUT frame follow the SCENE sun (SceneLighting::sun), so shadows,
+    // direct light, and the backdrop agree; physically-based aerial perspective
+    // then replaces the exp fog (fog params keep working for other levels).
+    const SkyScatteringParams& sp = lighting.skyScattering;
+    impl->skyParams = sp;
+    impl->skyActive = sp.enabled && skyScatteringEnabled && !impl->environmentTexture;
+    lu.skyModel = impl->skyActive ? 1.0f : 0.0f;
+    if (impl->skyActive) {
+        Vec3 sunDir = normalize(lighting.sun.direction);
+        lu.skySunDir = toSimd3(sunDir);
+        lu.skySunColor = toSimd3(lighting.sun.color);
+        lu.skyMieG = sp.mieG;
+        lu.skyAerial = sp.aerialDensity;
+        lu.skyRayleighBeta = toSimd3(sp.rayleighBeta);
+        lu.skyRayleighH = sp.rayleighScaleHeight;
+        float mieExt = sp.mieBeta * 1.11f * sp.turbidity;   // scatter + absorb
+        lu.skyMieBeta = simd_make_float3(mieExt, mieExt, mieExt);
+        lu.skyMieH = sp.mieScaleHeight;
+        lu.skyPlanetRadius = sp.planetRadius;
+        lu.skyAtmosRadius = sp.planetRadius + sp.atmosphereHeight;
+        // Quantize the camera altitude to 100 m bands so the sky-view LUT (and
+        // the cube/IBL bake keyed on it) doesn't churn as the camera bobs.
+        impl->skyCamHeightQ =
+            std::round(std::max(static_cast<float>(impl->currentCameraPos.y), 0.5f)
+                       / 100.0f) * 100.0f;
+        lu.skyCamHeight = impl->skyCamHeightQ;
+        lu.skySunDiscCos = std::cos(sp.sunAngularRadius);
+        lu.fogDensity = 0.0f;            // aerial perspective replaces exp fog
+        lu.fogHeightFalloff = 0.0f;
+    }
+
+    // Volumetric clouds (cinematic-sky): the slab retires the 2D FBM overlay
+    // while active; both honor the runtime gates on the Renderer seam.
+    impl->cloudParams = lighting.volumetricClouds;
+    impl->cloudsActive = lighting.volumetricClouds.enabled && volumetricCloudsEnabled;
+    impl->skyCloudsEnabled = sky.cloudsEnabled && !impl->cloudsActive;
 
     memcpy([impl->lightBuffer contents], &lu, sizeof(LightUniforms));
 }
@@ -1966,8 +3389,14 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
     int count = std::min(static_cast<int>(probes.size()), static_cast<int>(8));
     impl->probeCount = count;
 
-    // Create cubemap array if needed
-    if (!impl->probeCubemapArray) {
+    // Create the real cubemap array if we are still holding the 1×1
+    // shader-binding dummy from init, or the probe count outgrew it. (Blitting
+    // 256×256 faces into the dummy is an out-of-bounds copy — the Metal debug
+    // layer asserts on it, and without validation the probes silently sample
+    // the dummy.)
+    if (!impl->probeCubemapArray
+        || impl->probeCubemapArray.width != static_cast<NSUInteger>(Impl::PROBE_CUBEMAP_SIZE)
+        || impl->probeCubemapArray.arrayLength < static_cast<NSUInteger>(count)) {
         int size = Impl::PROBE_CUBEMAP_SIZE;
         MTLTextureDescriptor* cubeDesc = [[MTLTextureDescriptor alloc] init];
         cubeDesc.textureType = MTLTextureTypeCubeArray;
@@ -2083,27 +3512,48 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                 // Bind dummy textures for probe slots (shader expects them)
                 [enc setFragmentTexture:impl->brdfLUT atIndex:2];
                 [enc setFragmentSamplerState:impl->mipClampSampler atIndex:1];
-                // IBL bindings (procedural mode during the bake — geometry in
-                // reflection probes isn't re-lit by the env cubes; just bind so
-                // the shader's texture(8/9)/buffer(8) slots are satisfied).
-                EnvUniforms bakeEnv = {0, 0, 0, {0}};
+                // IBL bindings. Procedural mode geometry in probes isn't re-lit
+                // by env cubes; with the scattering sky active its baked IBL
+                // cubes ARE bound (mode 1) so probe-baked geometry sits in the
+                // same ambient as the live scene (cinematic-sky consistency).
+                bool skyIBL = impl->skyActive && impl->skyBaked &&
+                              impl->skyPrefilteredCube && impl->skyIrradianceCube;
+                EnvUniforms bakeEnv = {skyIBL ? 1 : 0, 0,
+                                       Impl::ENV_PREFILTER_MIPS - 1, 0};
                 [enc setFragmentBytes:&bakeEnv length:sizeof(bakeEnv) atIndex:8];
-                [enc setFragmentTexture:impl->defaultCubemap atIndex:8];
-                [enc setFragmentTexture:impl->defaultCubemap atIndex:9];
+                [enc setFragmentTexture:(skyIBL ? impl->skyPrefilteredCube
+                                                : impl->defaultCubemap) atIndex:8];
+                [enc setFragmentTexture:(skyIBL ? impl->skyIrradianceCube
+                                                : impl->defaultCubemap) atIndex:9];
 
                 // Draw skybox (HDR equirect or procedural — see ADR-0016). Baking
                 // it into the cube faces is what makes IBL track the environment.
                 if (impl->skyboxPipeline) {
+                    // Same rule as the main pass: the fullscreen triangle's
+                    // winding must not depend on this encoder's front-face
+                    // convention. Here it happens to be front-facing (CCW
+                    // triangle, CCW-front encoder) — that coincidence is what
+                    // kept probe skies alive while the main-pass skybox was
+                    // silently culled. Cull nothing while the sky draws.
+                    [enc setCullMode:MTLCullModeNone];
                     [enc setRenderPipelineState:impl->skyboxPipeline];
                     [enc setDepthStencilState:impl->skyboxDepthState];
                     [enc setVertexBytes:&faceCam length:sizeof(CameraUniforms) atIndex:1];
                     [enc setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
                     // cloudsEnabled = 0: clouds are never baked into probes.
-                    EnvUniforms envU = {impl->environmentCubemap ? 1 : 0, 0, 0, {0}};
+                    // The scattering sky's baked cube stands in for a captured
+                    // HDR here, so probes reflect the same sky the screen shows.
+                    id<MTLTexture> bakeSkyCube = impl->environmentCubemap;
+                    if (!bakeSkyCube && impl->skyActive && impl->skyBaked)
+                        bakeSkyCube = impl->skyCubemap;
+                    EnvUniforms envU = {bakeSkyCube ? 1 : 0, 0, 0, 0};
                     [enc setFragmentBytes:&envU length:sizeof(envU) atIndex:5];
-                    [enc setFragmentTexture:(impl->environmentCubemap ? impl->environmentCubemap
-                                                                       : impl->defaultCubemap)
+                    [enc setFragmentTexture:(bakeSkyCube ? bakeSkyCube
+                                                         : impl->defaultCubemap)
                                     atIndex:0];
+                    // fragmentSkybox statically references the sky LUT slots.
+                    [enc setFragmentTexture:impl->defaultWhiteTexture atIndex:10];
+                    [enc setFragmentTexture:impl->defaultWhiteTexture atIndex:11];
                     [enc setFragmentSamplerState:impl->equirectSampler atIndex:0];
                     [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 
@@ -2114,6 +3564,7 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                     [enc setFragmentTexture:impl->shadowMap atIndex:0];
                     [enc setFragmentSamplerState:impl->shadowSampler atIndex:0];
                     [enc setFragmentBytes:&noShadow length:sizeof(ShadowUniforms) atIndex:5];
+                    [enc setCullMode:MTLCullModeBack];
                 }
 
                 // Draw opaque scene geometry
@@ -2230,8 +3681,39 @@ void MetalRenderer::drawTerrain(MeshHandle handle, const RenderMaterial& materia
     impl->terrainDrawCalls.push_back({handle, material, morphStart, morphEnd});
 }
 
+// Point the camera uniforms at one XR view's matrices. Used by endFrame's
+// per-view loop; everything not overwritten here (wind, lens, near/far,
+// screenSize) keeps the values setCamera computed earlier this frame.
+static void applyXrCameraMatrices(CameraUniforms& u, Vec3& camPosOut,
+                                  simd_float4x4 worldFromEye,
+                                  simd_float4x4 proj) {
+    simd_float4x4 view = simd_inverse(worldFromEye);
+    u.view = view;
+    u.projection = proj;
+    u.viewProjection = simd_mul(proj, view);
+    u.invProjection = simd_inverse(proj);
+    u.invViewProjection = simd_mul(worldFromEye, u.invProjection);
+    u.cameraPosition =
+        simd_make_float3(worldFromEye.columns[3].x, worldFromEye.columns[3].y,
+                         worldFromEye.columns[3].z);
+    camPosOut = Vec3(worldFromEye.columns[3].x, worldFromEye.columns[3].y,
+                     worldFromEye.columns[3].z);
+}
+
 void MetalRenderer::endFrame() {
-    if (!impl->currentDrawable || !impl->currentPassDesc) return;
+    RT_PROFILE_ZONE_NAMED("Metal endFrame");
+    // The guard is on the COLOR TARGET, not the drawable: on visionOS there is
+    // no CAMetalDrawable at all — the target comes from the compositor through
+    // PresentationSurface.
+    if (!impl->currentColorTarget || !impl->currentPassDesc) return;
+
+    // Declared ahead of the shadow pass: overflow counters accumulate there too.
+    RenderStats stats;
+
+    // Scattering sky (cinematic-sky): refresh the LUTs + sky cube/IBL if the
+    // cache key changed. Committed BEFORE the probe bake below, so a bake this
+    // frame renders the new sky into the probes (FIFO queue order).
+    impl->updateSkyResources();
 
     // Bake reflection probes on first frame when draw calls exist
     if (impl->probesPendingBake && !impl->opaqueDrawCalls.empty()) {
@@ -2285,11 +3767,17 @@ void MetalRenderer::endFrame() {
             CameraUniforms cascadeCam = {};
             cascadeCam.viewProjection = impl->cascadeVP[c];
 
-            // Conservative caster cull: a sphere reject around the cascade,
-            // inflated by its own radius so the near cascade skips the distant
-            // forest yet still catches tall casters that shadow into it.
-            Vec3 cc = impl->cascadeCenter[c];
-            Real cullR = impl->cascadeRadius[c] * 2.0;
+            // Caster cull: the cascade's own ortho box, extended toward the
+            // light (see aabbCastsIntoCascade). Was a sphere of twice the
+            // cascade radius — ~4x the footprint, three cascades over.
+            const Mat4& cascadeVPm = impl->cascadeVPMat[c];
+            // A/B gate. Changing caster selection can silently DELETE shadows,
+            // and "it looks fine" is not a check without the other image to
+            // compare against. RT_OLD_SHADOW_CULL=1 restores the sphere test so
+            // both can be captured from one build.
+            static const bool oldCull = std::getenv("RT_OLD_SHADOW_CULL") != nullptr;
+            const Vec3 cc = impl->cascadeCenter[c];
+            const Real cullR = impl->cascadeRadius[c] * 2.0;
 
             // One instanced draw per mesh: compact the run's casters that pass
             // the cascade cull into a contiguous instance range, then draw them
@@ -2313,17 +3801,29 @@ void MetalRenderer::endFrame() {
                     uint32_t runStart = shadowInstOffset;
                     uint32_t runCount = 0;
                     for (size_t j = batchStart; j < bi; j++) {
-                        if (shadowInstOffset >= SHADOW_MAX_INSTANCES) break;
+                        if (shadowInstOffset >= impl->shadowMaxInstances) {
+                            stats.shadowOverflow++;  // caster DROPPED this frame
+                            continue;
+                        }
                         // Debug-gizmo overlays (FLAG_OVERLAY) never cast shadows.
                         if (int(impl->opaqueDrawCalls[j].material.flags) &
                             RenderMaterial::FLAG_OVERLAY) continue;
                         const Mat4& m = impl->opaqueDrawCalls[j].transform;
-                        Vec3 wc = m.transformPoint(b.center);
-                        Real maxScale = std::max(
-                            {Vec3(m.m[0][0], m.m[1][0], m.m[2][0]).length(),
-                             Vec3(m.m[0][1], m.m[1][1], m.m[2][1]).length(),
-                             Vec3(m.m[0][2], m.m[1][2], m.m[2][2]).length()});
-                        if ((wc - cc).length() > cullR + b.radius * maxScale) continue;
+                        if (oldCull) {
+                            Vec3 wc = m.transformPoint(b.center);
+                            Real maxScale = std::max(
+                                {Vec3(m.m[0][0], m.m[1][0], m.m[2][0]).length(),
+                                 Vec3(m.m[0][1], m.m[1][1], m.m[2][1]).length(),
+                                 Vec3(m.m[0][2], m.m[1][2], m.m[2][2]).length()});
+                            if ((wc - cc).length() > cullR + b.radius * maxScale)
+                                continue;
+                        } else {
+                            Vec3 wMin, wMax;
+                            worldAABB(m, b.boxMin, b.boxMax, wMin, wMax);
+                            if (!aabbCastsIntoCascade(cascadeVPm, wMin, wMax))
+                                continue;
+                        }
+                        stats.shadowCasters++;
                         shadowInstBuf[shadowInstOffset].model = toSimd(m);
                         shadowInstOffset++;
                         runCount++;
@@ -2360,7 +3860,19 @@ void MetalRenderer::endFrame() {
                     const GPUMesh* mesh = impl->meshes.get(tdc.meshHandle);
                     if (!mesh) continue;
                     BoundingSphere b = getMeshBounds(tdc.meshHandle);
-                    if ((b.center - cc).length() > cullR + b.radius) continue;
+                    // A COARSE CDLOD NODE'S SPHERE RADIUS IS HUNDREDS TO
+                    // THOUSANDS OF METRES, so the old `dist > cullR + b.radius`
+                    // test could never be true for it: the entire visible
+                    // terrain cut was redrawn into every cascade, one draw per
+                    // node, every frame. The node's AABB against the cascade
+                    // box actually discriminates (terrain nodes are world-space
+                    // already, so there is no transform to apply).
+                    if (oldCull) {
+                        if ((b.center - cc).length() > cullR + b.radius) continue;
+                    } else if (!aabbCastsIntoCascade(cascadeVPm, b.boxMin, b.boxMax)) {
+                        continue;
+                    }
+                    stats.shadowTerrainNodes++;
 
                     TerrainUniforms tu = {tdc.morphStart, tdc.morphEnd, {0.0f, 0.0f}};
                     [shadowEncoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:0];
@@ -2379,10 +3891,41 @@ void MetalRenderer::endFrame() {
         }
     }
 
+    // --- Per-view render loop -------------------------------------------
+    // XR surfaces render the entire view-dependent pipeline (scene color,
+    // atmosphere, post, composite) once per eye, each pass reading the
+    // camera uniforms pointed at that eye. Desktop and the mono path run
+    // exactly one iteration with untouched camera state. View-independent
+    // work (probe bake, shadow cascades) stays above this line. The body
+    // keeps its original indentation — it predates the loop.
+    const int xrViewsToRender = impl->surface->xrViewCount();
+    const int renderPassCount = xrViewsToRender > 0 ? xrViewsToRender : 1;
+    for (int viewPass = 0; viewPass < renderPassCount; viewPass++) {
+    if (xrViewsToRender > 0) {
+        simd_float4x4 worldFromEye, xrProj;
+        simd_float3 hint = impl->xrBaseHintValid
+            ? impl->xrBaseHint
+            : simd_make_float3(static_cast<float>(impl->lastCameraState.position.x),
+                               static_cast<float>(impl->lastCameraState.position.y),
+                               static_cast<float>(impl->lastCameraState.position.z));
+        if (impl->surface->xrViewCamera(viewPass, hint, worldFromEye, xrProj))
+            applyXrCameraMatrices(impl->cameraUniforms, impl->currentCameraPos,
+                                  worldFromEye, xrProj);
+    }
+
     // --- Main color pass ---
     impl->currentEncoder = [impl->currentCommandBuffer
         renderCommandEncoderWithDescriptor:impl->currentPassDesc];
 
+    // Winding convention: scene meshes are authored clockwise-front, so every
+    // scene-geometry encoder fronts Clockwise (here and the shadow pass) — with
+    // one principled exception: a pass whose projection mirrors an axis flips
+    // apparent winding, so the cube-face probe bake fronts CounterClockwise to
+    // cull the same mesh faces. Fullscreen triangles are the trap: they wind
+    // counter-clockwise in screen space, so any fullscreen draw that shares a
+    // culling scene encoder (the skybox, in both passes) must set CullModeNone
+    // for the draw. Post passes are safe by construction — each runs on a
+    // fresh encoder whose default cull mode is None.
     [impl->currentEncoder setFrontFacingWinding:MTLWindingClockwise];
     [impl->currentEncoder setCullMode:MTLCullModeBack];
 
@@ -2418,34 +3961,59 @@ void MetalRenderer::endFrame() {
 
     // Image-based lighting (ADR-0017 Phase 3): the prefiltered radiance and
     // irradiance cubes drive ambient/specular when an HDR is bound; in
-    // procedural mode the shader evaluates the analytic sky instead.
+    // procedural mode the shader evaluates the analytic sky instead. The
+    // scattering sky (cinematic-sky) contributes its OWN baked IBL cubes, so
+    // ground bounce and speculars match the LUT backdrop exactly.
     {
         bool hasIBL = impl->envPrefilteredCube && impl->envIrradianceCube
                       && environmentMapEnabled;
-        EnvUniforms litEnv = {hasIBL ? 1 : 0, 0, Impl::ENV_PREFILTER_MIPS - 1, {0}};
+        bool skyIBLActive = !hasIBL && impl->skyActive && impl->skyBaked &&
+                            impl->skyPrefilteredCube && impl->skyIrradianceCube;
+        id<MTLTexture> pre = hasIBL ? impl->envPrefilteredCube
+                          : skyIBLActive ? impl->skyPrefilteredCube
+                                         : impl->defaultCubemap;
+        id<MTLTexture> irr = hasIBL ? impl->envIrradianceCube
+                          : skyIBLActive ? impl->skyIrradianceCube
+                                         : impl->defaultCubemap;
+        EnvUniforms litEnv = {(hasIBL || skyIBLActive) ? 1 : 0, 0,
+                              Impl::ENV_PREFILTER_MIPS - 1, 0};
         [impl->currentEncoder setFragmentBytes:&litEnv length:sizeof(litEnv) atIndex:8];
-        [impl->currentEncoder setFragmentTexture:(hasIBL ? impl->envPrefilteredCube
-                                                         : impl->defaultCubemap)
-                                         atIndex:8];
-        [impl->currentEncoder setFragmentTexture:(hasIBL ? impl->envIrradianceCube
-                                                         : impl->defaultCubemap)
-                                         atIndex:9];
+        [impl->currentEncoder setFragmentTexture:pre atIndex:8];
+        [impl->currentEncoder setFragmentTexture:irr atIndex:9];
     }
 
     // Draw skybox first (behind everything, no depth write)
     if (impl->skyboxPipeline) {
+        // The fullscreen triangle winds counter-clockwise, and this encoder
+        // fronts clockwise + culls back faces — which silently culled the
+        // whole skybox for months (the probe-bake encoder fronts CCW, so
+        // probes kept their sky and hid the loss; the composite's sky
+        // recompute painted over it on screen). Cull nothing while the sky
+        // draws, then restore.
+        [impl->currentEncoder setCullMode:MTLCullModeNone];
         [impl->currentEncoder setRenderPipelineState:impl->skyboxPipeline];
         [impl->currentEncoder setDepthStencilState:impl->skyboxDepthState];
         [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
                                       length:sizeof(CameraUniforms) atIndex:1];
         [impl->currentEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
         id<MTLTexture> envCube = environmentMapEnabled ? impl->environmentCubemap : nil;
+        // Scattering sky (cinematic-sky): the skybox samples the sky-view LUT
+        // directly (crisper than the 512 cube, and refreshed every bake). The
+        // LUT textures live at 10/11 — above the lit pass's slots, so no
+        // post-skybox restore is needed for them.
+        bool skyLut = !envCube && impl->skyActive && impl->skyBaked && impl->skyViewLUT;
         EnvUniforms envU = {envCube ? 1 : 0,
-                            impl->skyCloudsEnabled ? 1 : 0, 0, {0}};
+                            impl->skyCloudsEnabled ? 1 : 0, 0, skyLut ? 1 : 0};
         [impl->currentEncoder setFragmentBytes:&envU length:sizeof(envU) atIndex:5];
         [impl->currentEncoder setFragmentTexture:(envCube ? envCube
                                                           : impl->defaultCubemap)
                                          atIndex:0];
+        [impl->currentEncoder setFragmentTexture:(skyLut ? impl->skyViewLUT
+                                                         : impl->defaultWhiteTexture)
+                                         atIndex:10];
+        [impl->currentEncoder setFragmentTexture:(skyLut ? impl->skyTransmittanceLUT
+                                                         : impl->defaultWhiteTexture)
+                                         atIndex:11];
         [impl->currentEncoder setFragmentSamplerState:impl->equirectSampler atIndex:0];
         [impl->currentEncoder drawPrimitives:MTLPrimitiveTypeTriangle
                                  vertexStart:0 vertexCount:3];
@@ -2460,9 +4028,8 @@ void MetalRenderer::endFrame() {
         [impl->currentEncoder setFragmentSamplerState:impl->shadowSampler atIndex:0];
         [impl->currentEncoder setFragmentBytes:&activeShadowU
                                         length:sizeof(ShadowUniforms) atIndex:5];
+        [impl->currentEncoder setCullMode:MTLCullModeBack];
     }
-
-    RenderStats stats;
 
     auto computeTextureFlags = [&](const RenderMaterial& mat) -> uint32_t {
         uint32_t tf = 0;
@@ -2618,7 +4185,8 @@ void MetalRenderer::endFrame() {
                 continue;
             }
 
-            if (instanceOffset + batchSize > MAX_INSTANCES) {
+            if (instanceOffset + batchSize > impl->maxInstances) {
+                stats.instanceOverflow += static_cast<uint32_t>(batchSize);
                 [impl->currentEncoder setRenderPipelineState:singlePipeline];
                 for (size_t j = batchStart; j < batchStart + batchSize; j++)
                     issueSingleDraw(drawCalls[j]);
@@ -2690,11 +4258,18 @@ void MetalRenderer::endFrame() {
 
             const GPUMesh* mesh = impl->meshes.get(bm);
             if (!mesh) continue;
-            if (fOff >= FOLIAGE_MAX_INSTANCES) break;
+            if (fOff >= impl->foliageMaxInstances) {
+                stats.foliageOverflow += static_cast<uint32_t>(i - start);  // DROPPED
+                continue;
+            }
 
             uint32_t offset = fOff;
             uint32_t count = 0;
-            for (size_t j = start; j < i && fOff < FOLIAGE_MAX_INSTANCES; j++) {
+            for (size_t j = start; j < i; j++) {
+                if (fOff >= impl->foliageMaxInstances) {
+                    stats.foliageOverflow++;  // DROPPED
+                    continue;
+                }
                 fData[fOff++] = fillInstanceData(dcs[j]);
                 count++;
             }
@@ -2850,6 +4425,21 @@ void MetalRenderer::endFrame() {
         impl->cameraUniforms.wireColor.w = 0.0f;
     }
 
+    if (stats.instanceOverflow || stats.shadowOverflow || stats.foliageOverflow) {
+        // Loud, not fatal: shadow/foliage overflow DROPS geometry. Rate-limited
+        // so a sustained overflow doesn't flood the log.
+        if (impl->frameCount - impl->lastOverflowWarnFrame >= 120) {
+            impl->lastOverflowWarnFrame = impl->frameCount;
+            NSLog(@"Instance capacity overflow (raise setInstanceCapacities): "
+                  @"general %u spilled to per-draw (cap %u), shadow %u DROPPED "
+                  @"(cap %u), foliage %u DROPPED (cap %u)",
+                  stats.instanceOverflow, impl->maxInstances,
+                  stats.shadowOverflow, impl->shadowMaxInstances,
+                  stats.foliageOverflow, impl->foliageMaxInstances);
+        }
+    }
+    stats.meshUploadsTotal = impl->meshUploadsTotal;
+    stats.textureUploadsTotal = impl->textureUploadsTotal;
     impl->lastStats = stats;
 
     [impl->currentEncoder endEncoding];
@@ -2887,6 +4477,123 @@ void MetalRenderer::endFrame() {
         [atmEnc setFragmentBytes:&au length:sizeof(au) atIndex:0];
         [atmEnc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
         [atmEnc endEncoding];
+    }
+
+    // --- Volumetric clouds (cinematic-sky) ---
+    // Half-res march into cloudTexture (depth-occluded, premultiplied overlay:
+    // rgb = in-scattered light, a = transmittance), then a full-res bilateral
+    // composite onto the HDR scene with One + SourceAlpha blending — before the
+    // post computes, so SSR/bloom/DOF all see the clouded scene. Sky pixels get
+    // the same overlay again inside fragmentComposite (which re-derives them).
+    // Both passes vanish entirely when a level doesn't opt in.
+    bool cloudsOn = impl->cloudsActive && impl->cloudPipeline &&
+                    impl->cloudCompositePipeline && impl->sceneColorTexture &&
+                    impl->cloudBaseNoise && impl->cloudDetailNoise;
+    // Say it ONCE, with the reason. The volumetric slab has five independent
+    // preconditions and a silent nil among them is indistinguishable from a
+    // level that simply authored no clouds — which is exactly how it went
+    // unnoticed that a "cloudy" frame was the legacy 2D overlay all along.
+    {
+        static bool announced = false;
+        if (!announced) {
+            announced = true;
+            NSLog(@"[clouds] volumetric=%d (active=%d march=%d comp=%d scene=%d "
+                   "noise=%d/%d) — 2D FBM overlay %s",
+                  cloudsOn ? 1 : 0, impl->cloudsActive ? 1 : 0,
+                  impl->cloudPipeline != nil, impl->cloudCompositePipeline != nil,
+                  impl->sceneColorTexture != nil, impl->cloudBaseNoise != nil,
+                  impl->cloudDetailNoise != nil,
+                  impl->skyCloudsEnabled ? "ON" : "off");
+        }
+    }
+    if (cloudsOn) {
+        int halfW = std::max(impl->framebufferWidth / 2, 1);
+        int halfH = std::max(impl->framebufferHeight / 2, 1);
+        if (!impl->cloudTexture || (int)impl->cloudTexture.width != halfW ||
+            (int)impl->cloudTexture.height != halfH) {
+            MTLTextureDescriptor* d = [MTLTextureDescriptor
+                texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                             width:halfW height:halfH mipmapped:NO];
+            d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+            d.storageMode = MTLStorageModePrivate;
+            impl->cloudTexture = [impl->device newTextureWithDescriptor:d];
+        }
+
+        const VolumetricCloudParams& cp = impl->cloudParams;
+        const GPULight& sun = impl->lightUniforms.lights[0];
+        CloudUniforms cu;
+        cu.invViewProjection = impl->cameraUniforms.invViewProjection;
+        simd_float3 camP = impl->cameraUniforms.cameraPosition;
+        cu.cameraPosition = simd_make_float4(camP.x, camP.y, camP.z, 0.0f);
+        cu.sunDirection = simd_make_float4(sun.direction.x, sun.direction.y,
+                                           sun.direction.z, 0.0f);
+        cu.sunColor = simd_make_float4(sun.color.x, sun.color.y, sun.color.z,
+                                       sun.intensity);
+        // Ambient reaching cloud interiors: the sky palette's zenith/horizon
+        // mix, so the deck sits in the same light as the backdrop.
+        simd_float3 amb = (impl->lightUniforms.skyZenith +
+                           impl->lightUniforms.skyHorizon) * 0.5f * cp.ambient;
+        // With the scattering sky on, redden the sun reaching the deck by the
+        // per-channel Rayleigh+Mie transmittance at cloud altitude (a cheap
+        // CPU air-mass integral) — sunset clouds go amber instead of staying
+        // noon-white — and let the ambient sag with it toward dusk.
+        if (impl->skyActive) {
+            const SkyScatteringParams& sp = impl->skyParams;
+            float h = std::max(0.5f * (cp.bottom + cp.top), 0.0f);
+            float sunY = std::max(impl->lightUniforms.skySunDir.y, 0.03f);
+            float airMass = 1.0f / sunY;
+            float mieExt = sp.mieBeta * 1.11f * sp.turbidity;
+            float tauM = mieExt * sp.mieScaleHeight *
+                         std::exp(-h / sp.mieScaleHeight);
+            float rhoR = std::exp(-h / sp.rayleighScaleHeight);
+            simd_float3 t;
+            t.x = std::exp(-(sp.rayleighBeta.x * sp.rayleighScaleHeight * rhoR + tauM) * airMass);
+            t.y = std::exp(-(sp.rayleighBeta.y * sp.rayleighScaleHeight * rhoR + tauM) * airMass);
+            t.z = std::exp(-(sp.rayleighBeta.z * sp.rayleighScaleHeight * rhoR + tauM) * airMass);
+            cu.sunColor.x *= t.x;
+            cu.sunColor.y *= t.y;
+            cu.sunColor.z *= t.z;
+            float lumT = 0.2126f * t.x + 0.7152f * t.y + 0.0722f * t.z;
+            amb = amb * (0.25f + 0.75f * lumT);
+        }
+        cu.skyAmbient = simd_make_float4(amb.x, amb.y, amb.z,
+                                         impl->cameraUniforms.windTime);
+        cu.planetCenter = simd_make_float4(0, 0, 0, 0);
+        cu.layer = simd_make_float4(cp.bottom, cp.top, 0.0f, 0.0f);  // SLAB mode
+        int steps = cloudStepsOverride > 0 ? cloudStepsOverride : cp.steps;
+        cu.params = simd_make_float4(cp.coverage, cp.density, cp.noiseScale, cp.wind);
+        cu.march = simd_make_float4((float)std::max(steps, 2),
+                                    (float)std::max(cp.lightSteps, 1),
+                                    cp.phaseG, cp.farDistance);
+        cu.detail = simd_make_float4(cp.detailStrength, 0.0f, 0.0f, 0.0f);
+
+        MTLRenderPassDescriptor* marchPass = [MTLRenderPassDescriptor renderPassDescriptor];
+        marchPass.colorAttachments[0].texture = impl->cloudTexture;
+        marchPass.colorAttachments[0].loadAction = MTLLoadActionDontCare;   // fullscreen
+        marchPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> marchEnc =
+            [impl->currentCommandBuffer renderCommandEncoderWithDescriptor:marchPass];
+        [marchEnc setRenderPipelineState:impl->cloudPipeline];
+        [marchEnc setFragmentTexture:impl->depthTexture atIndex:0];
+        [marchEnc setFragmentTexture:impl->cloudBaseNoise atIndex:1];
+        [marchEnc setFragmentTexture:impl->cloudDetailNoise atIndex:2];
+        [marchEnc setFragmentBytes:&cu length:sizeof(cu) atIndex:0];
+        [marchEnc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [marchEnc endEncoding];
+
+        MTLRenderPassDescriptor* compPass = [MTLRenderPassDescriptor renderPassDescriptor];
+        compPass.colorAttachments[0].texture = impl->sceneColorTexture;
+        compPass.colorAttachments[0].loadAction = MTLLoadActionLoad;    // keep the scene
+        compPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> compEnc =
+            [impl->currentCommandBuffer renderCommandEncoderWithDescriptor:compPass];
+        [compEnc setRenderPipelineState:impl->cloudCompositePipeline];
+        [compEnc setFragmentTexture:impl->cloudTexture atIndex:0];
+        [compEnc setFragmentTexture:impl->depthTexture atIndex:1];
+        [compEnc setFragmentBytes:&impl->cameraUniforms
+                           length:sizeof(CameraUniforms) atIndex:1];
+        [compEnc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [compEnc endEncoding];
     }
 
     // Lens effects (virtual-camera plan Phase 4). Both passes are skipped
@@ -2940,7 +4647,8 @@ void MetalRenderer::endFrame() {
                 ssaoParams.directions, ssaoParams.steps, aoFrameRotation, {}
             };
             [enc setBytes:&aoP length:sizeof(aoP) atIndex:1];
-            [enc dispatchThreads:aoGrid threadsPerThreadgroup:group];
+            [enc dispatchThreadgroups:threadgroupsCovering(aoGrid, group)
+                threadsPerThreadgroup:group];
 
             if (impl->aoBlurHPipeline && impl->aoBlurVPipeline && impl->aoBlurTemp) {
                 [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
@@ -2949,7 +4657,8 @@ void MetalRenderer::endFrame() {
                 [enc setTexture:impl->depthTexture atIndex:1];
                 [enc setTexture:impl->aoBlurTemp atIndex:2];
                 [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
-                [enc dispatchThreads:aoGrid threadsPerThreadgroup:group];
+                [enc dispatchThreadgroups:threadgroupsCovering(aoGrid, group)
+                    threadsPerThreadgroup:group];
 
                 [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
                 [enc setComputePipelineState:impl->aoBlurVPipeline];
@@ -2957,7 +4666,8 @@ void MetalRenderer::endFrame() {
                 [enc setTexture:impl->depthTexture atIndex:1];
                 [enc setTexture:impl->aoTexture atIndex:2];
                 [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
-                [enc dispatchThreads:aoGrid threadsPerThreadgroup:group];
+                [enc dispatchThreadgroups:threadgroupsCovering(aoGrid, group)
+                    threadsPerThreadgroup:group];
             }
 
             // --- Temporal resolve: blend in reprojected history AO ---
@@ -2974,9 +4684,14 @@ void MetalRenderer::endFrame() {
                 [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
                 AOTemporalUniforms tP = {};
                 tP.prevViewProjection = impl->aoPrevViewProjection;
-                tP.alpha = impl->aoHistoryValid ? ssaoParams.temporal : 0.0f;
+                // Temporal history is single-view; with per-eye rendering the
+                // history would belong to the other eye. Disable blending (not
+                // the pass) until history goes per-view.
+                tP.alpha = (impl->aoHistoryValid && xrViewsToRender <= 1)
+                    ? ssaoParams.temporal : 0.0f;
                 [enc setBytes:&tP length:sizeof(tP) atIndex:1];
-                [enc dispatchThreads:aoGrid threadsPerThreadgroup:group];
+                [enc dispatchThreadgroups:threadgroupsCovering(aoGrid, group)
+                    threadsPerThreadgroup:group];
                 aoResolvedInBlurTemp = true;
                 impl->aoHistoryValid = true;
             }
@@ -3004,7 +4719,8 @@ void MetalRenderer::endFrame() {
                 ssrDebug ? 1.0f : 0.0f, 0.0f
             };
             [enc setBytes:&ssrP length:sizeof(ssrP) atIndex:1];
-            [enc dispatchThreads:ssrGrid threadsPerThreadgroup:group];
+            [enc dispatchThreadgroups:threadgroupsCovering(ssrGrid, group)
+                threadsPerThreadgroup:group];
 
             // Skip the bilateral blur in debug mode — it would smear the flat
             // color codes across surface edges and muddy the diagnostic.
@@ -3015,7 +4731,8 @@ void MetalRenderer::endFrame() {
                 [enc setTexture:impl->depthTexture atIndex:1];
                 [enc setTexture:impl->ssrBlurTemp atIndex:2];
                 [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
-                [enc dispatchThreads:ssrGrid threadsPerThreadgroup:group];
+                [enc dispatchThreadgroups:threadgroupsCovering(ssrGrid, group)
+                    threadsPerThreadgroup:group];
 
                 [enc memoryBarrierWithScope:MTLBarrierScopeTextures];
                 [enc setComputePipelineState:impl->ssrBlurVPipeline];
@@ -3023,7 +4740,8 @@ void MetalRenderer::endFrame() {
                 [enc setTexture:impl->depthTexture atIndex:1];
                 [enc setTexture:impl->ssrTexture atIndex:2];
                 [enc setBytes:&impl->cameraUniforms length:sizeof(CameraUniforms) atIndex:0];
-                [enc dispatchThreads:ssrGrid threadsPerThreadgroup:group];
+                [enc dispatchThreadgroups:threadgroupsCovering(ssrGrid, group)
+                    threadsPerThreadgroup:group];
             }
         }
 
@@ -3040,7 +4758,9 @@ void MetalRenderer::endFrame() {
 
                 BloomUniforms bp = {
                     bloomParams.threshold, bloomParams.knee, bloomParams.intensity,
-                    static_cast<int32_t>(src.width), static_cast<int32_t>(src.height), {}
+                    static_cast<int32_t>(src.width), static_cast<int32_t>(src.height),
+                    m == 0 ? 1 : 0,   // the bright pass runs ONCE, on the scene
+                    {}
                 };
 
                 [enc setComputePipelineState:impl->bloomDownsamplePipeline];
@@ -3048,7 +4768,8 @@ void MetalRenderer::endFrame() {
                 [enc setTexture:dst atIndex:1];
                 [enc setBytes:&bp length:sizeof(bp) atIndex:0];
                 MTLSize grid = MTLSizeMake(dst.width, dst.height, 1);
-                [enc dispatchThreads:grid threadsPerThreadgroup:group];
+                [enc dispatchThreadgroups:threadgroupsCovering(grid, group)
+                    threadsPerThreadgroup:group];
             }
 
             // Upsample chain: read directly from downsample mips (no blit copy needed)
@@ -3063,7 +4784,9 @@ void MetalRenderer::endFrame() {
 
                 BloomUniforms bp = {
                     bloomParams.threshold, bloomParams.knee, bloomParams.intensity,
-                    static_cast<int32_t>(src.width), static_cast<int32_t>(src.height), {}
+                    static_cast<int32_t>(src.width), static_cast<int32_t>(src.height),
+                    0,   // upsample never thresholds
+                    {}
                 };
 
                 [enc setComputePipelineState:impl->bloomUpsamplePipeline];
@@ -3072,7 +4795,8 @@ void MetalRenderer::endFrame() {
                 [enc setTexture:dst atIndex:2];
                 [enc setBytes:&bp length:sizeof(bp) atIndex:0];
                 MTLSize grid = MTLSizeMake(dst.width, dst.height, 1);
-                [enc dispatchThreads:grid threadsPerThreadgroup:group];
+                [enc dispatchThreadgroups:threadgroupsCovering(grid, group)
+                    threadsPerThreadgroup:group];
             }
         }
 
@@ -3099,13 +4823,14 @@ void MetalRenderer::endFrame() {
             [enc setBytes:&dofP length:sizeof(dofP) atIndex:1];
             MTLSize dofGrid = MTLSizeMake(impl->framebufferWidth,
                                           impl->framebufferHeight, 1);
-            [enc dispatchThreads:dofGrid threadsPerThreadgroup:group];
+            [enc dispatchThreadgroups:threadgroupsCovering(dofGrid, group)
+                threadsPerThreadgroup:group];
         }
 
         [enc endEncoding];
 
         // Save this frame's resolved AO as next frame's temporal history.
-        if (aoResolvedInBlurTemp && impl->aoHistory) {
+        if (aoResolvedInBlurTemp && impl->aoHistory && xrViewsToRender <= 1) {
             id<MTLBlitCommandEncoder> aoBlit = [impl->currentCommandBuffer blitCommandEncoder];
             [aoBlit copyFromTexture:impl->aoBlurTemp toTexture:impl->aoHistory];
             [aoBlit endEncoding];
@@ -3119,8 +4844,38 @@ void MetalRenderer::endFrame() {
         if (lensWarpActive) {
             impl->compositePassDesc.colorAttachments[0].texture = impl->postLDRTexture;
         }
+        // XR: this view's content goes where the drawable's texture map says
+        // (texture index + array slice + viewport) — never "view v = slice v".
+        MTLRenderPassDescriptor* compositeDesc = impl->compositePassDesc;
+        bool haveXrTarget = false;
+        MTLViewport xrViewport = {};
+        NSUInteger xrSlice = 0;
+        id<MTLTexture> xrDepthDst = nil;
+        if (xrViewsToRender > 0) {
+            id<MTLTexture> xrColor = nil, xrDepth = nil;
+            if (impl->surface->xrViewTarget(viewPass, xrColor, xrDepth,
+                                            xrSlice, xrViewport) && xrColor) {
+                compositeDesc = [MTLRenderPassDescriptor renderPassDescriptor];
+                compositeDesc.colorAttachments[0].texture = xrColor;
+                compositeDesc.colorAttachments[0].slice = xrSlice;
+                compositeDesc.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+                compositeDesc.colorAttachments[0].storeAction = MTLStoreActionStore;
+                haveXrTarget = true;
+                xrDepthDst = xrDepth;
+#if TARGET_OS_VISION
+                static int xrCompBeat = 0;
+                if ((xrCompBeat++ % 180) == 0) {
+                    NSLog(@"[xr] composite view=%d texSlice=%lu viewport(%.0f,%.0f %'.0fx%.0f)",
+                          viewPass, (unsigned long)xrSlice,
+                          xrViewport.originX, xrViewport.originY,
+                          xrViewport.width, xrViewport.height);
+                }
+#endif
+            }
+        }
         id<MTLRenderCommandEncoder> compEncoder = [impl->currentCommandBuffer
-            renderCommandEncoderWithDescriptor:impl->compositePassDesc];
+            renderCommandEncoderWithDescriptor:compositeDesc];
+        if (haveXrTarget) [compEncoder setViewport:xrViewport];
         [compEncoder setRenderPipelineState:impl->compositePipeline];
         [compEncoder setFragmentTexture:(dofActive ? impl->dofTexture
                                                    : impl->sceneColorTexture)
@@ -3137,29 +4892,49 @@ void MetalRenderer::endFrame() {
         [compEncoder setFragmentBytes:&impl->cameraUniforms
                                length:sizeof(CameraUniforms) atIndex:0];
         CompositeUniforms compositeParams;
+        // Who owns the display transfer function this frame. Derived from the
+        // ACTUAL target format rather than assumed, because it differs by
+        // platform: macOS renders into a linear-storage BGRA8Unorm drawable, so
+        // the shader encodes; visionOS is handed a *_sRGB drawable it cannot
+        // opt out of, so the hardware does and the shader must not.
+        compositeParams.targetEncodesSRGB = impl->surface->targetEncodesSRGB() ? 1 : 0;
+        // Ground truth for the pass switches, printed only when one CHANGES.
+        // A toggle that appears to "turn itself back on" is either the flag
+        // being rewritten by something else (this line names the frame it
+        // happened on) or the effect simply not being visible at its current
+        // strength — and those two need opposite fixes. Costs nothing while
+        // nothing changes.
+        {
+            static int lastAo = -1, lastSsr = -1, lastBloom = -1, lastProbes = -1;
+            const int ao = ssaoEnabled ? 1 : 0, sr = ssrEnabled ? 1 : 0;
+            const int bl = bloomEnabled ? 1 : 0, pr = reflectionProbesEnabled ? 1 : 0;
+            if (ao != lastAo || sr != lastSsr || bl != lastBloom || pr != lastProbes) {
+                NSLog(@"[passes] frame %llu: ssao=%d ssr=%d bloom=%d probes=%d",
+                      (unsigned long long)impl->frameCount, ao, sr, bl, pr);
+                lastAo = ao; lastSsr = sr; lastBloom = bl; lastProbes = pr;
+            }
+        }
         compositeParams.ssaoEnabled = ssaoEnabled ? 1 : 0;
         compositeParams.ssrEnabled = ssrEnabled ? 1 : 0;
         compositeParams.debugView = debugView;
         compositeParams.ssrBlendStrength = ssrParams.blendStrength;
         compositeParams.bloomEnabled = bloomEnabled ? 1 : 0;
         compositeParams.bloomIntensity = bloomParams.intensity;
-        id<MTLTexture> compEnvCube = environmentMapEnabled ? impl->environmentCubemap : nil;
-        compositeParams.envMode = compEnvCube ? 1 : 0;
+        // (No composite env cube. The scattering sky reaches the screen through
+        // the SKYBOX pass — which samples the sky-view LUT directly — and the
+        // composite passes sky pixels through from the scene target. That is the
+        // one-sky rule; `envMode` here was the second, redundant sky path and is
+        // gone with it.)
         compositeParams.aoFloor = ssaoParams.aoFloor;
         compositeParams.tonemapOp = tonemapOperator;
         compositeParams.gradeContrast = gradeParams.contrast;
         compositeParams.gradeSaturation = gradeParams.saturation;
         [compEncoder setFragmentBytes:&compositeParams
                                length:sizeof(compositeParams) atIndex:1];
-        // Sky for composite sky pixels: day/night procedural (+clouds) or, when an
-        // HDR map is bound, the baked environment cubemap — matching the skybox/IBL.
-        // (Cube orientation is unit-tested; the old equirect workaround is gone.)
+        // Sky pixels pass the scene image through (the skybox pass drew the
+        // real environment); lightData is still bound for exposure.
         [compEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
-        [compEncoder setFragmentTexture:(compEnvCube ? compEnvCube
-                                                     : impl->defaultCubemap)
-                                atIndex:6];
         [compEncoder setFragmentSamplerState:impl->linearClampSampler atIndex:0];
-        [compEncoder setFragmentSamplerState:impl->equirectSampler atIndex:1];
         [compEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 
         // --- Lens-warp pass (virtual-camera plan Phase 4) ---
@@ -3172,7 +4947,7 @@ void MetalRenderer::endFrame() {
             [compEncoder endEncoding];
 
             MTLRenderPassDescriptor* lensPassDesc = [MTLRenderPassDescriptor renderPassDescriptor];
-            lensPassDesc.colorAttachments[0].texture = impl->currentDrawable.texture;
+            lensPassDesc.colorAttachments[0].texture = impl->currentColorTarget;
             lensPassDesc.colorAttachments[0].loadAction = MTLLoadActionDontCare;
             lensPassDesc.colorAttachments[0].storeAction = MTLStoreActionStore;
 
@@ -3196,9 +4971,10 @@ void MetalRenderer::endFrame() {
             uiEncoder = lensEncoder;
         }
 
-        // Debug UI (ADR-0011) renders on top of the tone-mapped image.
+        // Debug UI (ADR-0011) renders on top of the tone-mapped image. One
+        // view only under XR — the HUD is not stereo-correct content.
 #ifdef RT_ENABLE_IMGUI
-        if (impl->imguiInitialized) {
+        if (impl->imguiInitialized && viewPass == 0) {
             ImGui::Render();
             ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(),
                                            impl->currentCommandBuffer,
@@ -3207,14 +4983,58 @@ void MetalRenderer::endFrame() {
 #endif
 
         [uiEncoder endEncoding];
+
+        // XR: the compositor reprojects using the drawable's DEPTH, per view.
+        // The scene depth buffer holds THIS view's depth (rendered with this
+        // view's compositor projection, reverse-Z — bit-compatible). But it
+        // can NOT be copied verbatim: sky pixels sit at exactly 0.0 =
+        // infinity, and the compositor's tile reprojector turns all-infinity
+        // tiles into flickering garbage blocks and drops fully-far regions to
+        // black — the sky vanishes while tiles that straddle a silhouette
+        // survive (display contract rule 3; the monoscopic bridge's 2 m
+        // virtual plane existed for the same reason). So the depth rides a
+        // fullscreen depth-only pass that clamps everything beyond a far
+        // virtual sky plane (~200 real meters, world-scaled) onto that plane:
+        // the sky reprojects as a distant surface, and geometry past 200 m
+        // reprojects as if at 200 m — sub-pixel error at that distance.
+        if (haveXrTarget && xrDepthDst && impl->depthTexture
+            && impl->depthCarryPipeline
+            && xrDepthDst.pixelFormat == MTLPixelFormatDepth32Float
+            && impl->depthTexture.pixelFormat == MTLPixelFormatDepth32Float
+            && xrDepthDst.width == impl->depthTexture.width
+            && xrDepthDst.height == impl->depthTexture.height) {
+            // Reverse-Z depth of a point 200 real meters ahead, through THIS
+            // view's own projection (world-scale converts real meters to the
+            // world units the depth buffer was rendered in).
+            float dist = 200.0f * std::max(xrWorldScale, 0.01f);
+            simd_float4 clip = simd_mul(impl->cameraUniforms.projection,
+                                        simd_make_float4(0, 0, -dist, 1));
+            float skyFloor = (clip.w > 0.0f) ? clip.z / clip.w : 0.0f;
+            if (!(skyFloor > 0.0f && skyFloor < 1.0f)) skyFloor = 0.0f;
+
+            MTLRenderPassDescriptor* dp = [MTLRenderPassDescriptor renderPassDescriptor];
+            dp.depthAttachment.texture = xrDepthDst;
+            dp.depthAttachment.slice = xrSlice;
+            dp.depthAttachment.loadAction = MTLLoadActionDontCare;
+            dp.depthAttachment.storeAction = MTLStoreActionStore;
+            id<MTLRenderCommandEncoder> denc = [impl->currentCommandBuffer
+                renderCommandEncoderWithDescriptor:dp];
+            [denc setRenderPipelineState:impl->depthCarryPipeline];
+            [denc setDepthStencilState:impl->depthCarryDepthState];
+            [denc setFragmentTexture:impl->depthTexture atIndex:0];
+            [denc setFragmentBytes:&skyFloor length:sizeof(skyFloor) atIndex:0];
+            [denc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+            [denc endEncoding];
+        }
     }
+    }  // --- end per-view render loop ---
 
     // Headless frame capture (RT_FRAME_DUMP) — copy the composited drawable
     // before present, then write it out once the GPU finishes.
     id<MTLTexture> dumpStaging = nil;
     bool dumpThisFrame = impl->frameDumpPath && ++impl->frameDumpCounter == 90;
     if (dumpThisFrame) {
-        id<MTLTexture> drawableTex = impl->currentDrawable.texture;
+        id<MTLTexture> drawableTex = impl->currentColorTarget;
         MTLTextureDescriptor* d = [MTLTextureDescriptor
             texture2DDescriptorWithPixelFormat:drawableTex.pixelFormat
                                          width:drawableTex.width
@@ -3233,8 +5053,48 @@ void MetalRenderer::endFrame() {
         [blit endEncoding];
     }
 
-    [impl->currentCommandBuffer presentDrawable:impl->currentDrawable];
+    // RT_GPU_TIME=1: log the frame command buffer's average GPU time every 120
+    // frames — headless perf verification (e.g. the cloud pass budget) without
+    // Tracy or a window capture. Handlers fire in completion order, so the
+    // unsynchronized statics are safe in practice.
+    static const bool logGpuTime = std::getenv("RT_GPU_TIME") != nullptr;
+    if (logGpuTime) {
+        [impl->currentCommandBuffer addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+            static double acc = 0.0;
+            static int n = 0;
+            acc += (cb.GPUEndTime - cb.GPUStartTime) * 1000.0;
+            if (++n % 120 == 0) {
+                NSLog(@"[GPU TIME] avg frame %.2f ms over last 120", acc / 120.0);
+                acc = 0.0;
+            }
+        }];
+    }
+
+    // Presentation goes through the surface seam, not presentDrawable directly:
+    // visionOS has no CAMetalDrawable, and the compositor needs the depth
+    // texture alongside the colour target.
+    impl->surface->present(impl->currentCommandBuffer, impl->depthTexture);
+
+    // Real GPU time for this frame (ADR-0077): the driver stamps the command
+    // buffer's execution window, so this is the GPU's own cost — independent of
+    // how long nextDrawable made the CPU wait. Reads back a frame or two later
+    // (that IS when the GPU finishes); the ledger treats it as a rolling value.
+    // Capturing a shared_ptr COPY keeps the storage alive if the renderer is
+    // torn down with this frame still in flight.
+    {
+        auto gpuSlot = impl->gpuFrameMs;
+        [impl->currentCommandBuffer addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+            const CFTimeInterval seconds = cb.GPUEndTime - cb.GPUStartTime;
+            if (seconds > 0.0)
+                gpuSlot->store(static_cast<float>(seconds * 1000.0),
+                               std::memory_order_relaxed);
+        }];
+    }
     [impl->currentCommandBuffer commit];
+    // Before any waitUntilCompleted below: a compositor-driven surface wants to
+    // close its frame as soon as the work is submitted, not after we have
+    // finished reading it back for a frame dump.
+    impl->surface->frameSubmitted();
 
     if (dumpThisFrame) {
         [impl->currentCommandBuffer waitUntilCompleted];

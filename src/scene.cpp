@@ -5,7 +5,7 @@
 namespace engine {
 
 // --- BRDF + light falloff, mirroring the realtime renderer ----------------
-// These are line-for-line ports of lighting.metal so direct light, shadows,
+// These are line-for-line ports of lighting_brdf.metal so direct light, shadows,
 // and materials match the viewer (ADR-0017): GGX NDF, height-correlated Smith
 // visibility (with the 1/(4 NdotL NdotV) folded in), Schlick Fresnel with
 // f0 = lerp(0.04, albedo, metallic), and UE-style windowed inverse-square
@@ -42,7 +42,7 @@ Vec3 f0For(const Vec3& albedo, double metallic) {
     return Vec3(0.04, 0.04, 0.04) * (1.0 - metallic) + albedo * metallic;
 }
 
-// lighting.metal's per-light evaluation: specular D*Vis*F plus an
+// lighting_brdf.metal's per-light evaluation: specular D*Vis*F plus an
 // energy-balanced Lambert term ((1-F)(1-metallic) albedo / pi).
 Vec3 evalBRDF(const Vec3& n, const Vec3& v, const Vec3& l,
               const Vec3& albedo, double metallic, double roughness) {
@@ -77,9 +77,11 @@ Vec3 applyCheckerboard(const Vec3& albedo, const Vec3& worldPos) {
 // --- Procedural surface library --------------------------------------------
 // Analytic, world-space materials a city needs (brick, concrete, roof tiles,
 // asphalt, ...), evaluated at the hit point. Each is kept byte-for-byte in step
-// with common.metal's applySurface so the offline tracer previews exactly what
-// the Metal viewer draws. All take a base albedo (the material/vertex colour)
-// and return the patterned albedo. See material.h Surface ids.
+// with surfaces.metal's applySurface (the patterns themselves live in
+// surfaces_facade.metal and surface_{road,water,terrain}.metal) so the offline
+// tracer previews exactly what the Metal viewer draws. All take a base albedo
+// (the material/vertex colour) and return the patterned albedo. See material.h
+// Surface ids.
 double surfHash(double a, double b) {   // == common.metal hash21
     double s = std::sin(a * 12.9898 + b * 78.233) * 43758.5453;
     return s - std::floor(s);

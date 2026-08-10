@@ -21,6 +21,9 @@ void PlayerSystem::onStart(FrameContext& ctx) {
     // crosshair — fly somewhere in the freecam, look at a street, press T,
     // and you are PLAYING there (the camera re-attaches automatically).
     ctx.actions.bindButton("player_teleport", KeyCode::T);
+    // XR: the same action fires on a quick gaze-pinch (see update() — the
+    // release edge, so a long HOLD can mean something else to the shell).
+    ctx.actions.bindButton("player_teleport", XrButton::Pinch);
     // First <-> third person on foot. V is also CameraSystem's viewport-cycle
     // key; see the placed-camera guard in update().
     ctx.actions.bindButton("player_camera_toggle", KeyCode::V);
@@ -87,31 +90,75 @@ void PlayerSystem::respawn(CharacterId characterId, bool manual) {
 }
 
 void PlayerSystem::update(FrameContext& ctx) {
-    // Point-and-teleport (T): ray from the eye through the crosshair onto
-    // whatever physics surface it hits — deck, rooftop, terrain — then stand
-    // the player there and re-attach the camera so play continues in place.
-    if (ctx.actions.pressed("player_teleport") && ctx.world.alive(playerEntity)) {
-        if (auto* cc = ctx.world.get<CharacterController>(playerEntity)) {
-            if (cc->characterId != INVALID_CHARACTER) {
-                Vec3 hit;
-                if (physicsSys.physicsWorld().castRay(
-                        camera.eye, camera.forward() * 4000.0, hit)) {
-                    const Vec3 stand = hit + Vec3(0, 1.4, 0);
-                    physicsSys.physicsWorld().setCharacterPosition(
-                        cc->characterId, stand);
-                    if (auto* t = ctx.world.get<Transform>(playerEntity)) {
-                        t->position = stand;
-                        if (auto* pt = ctx.world.get<PrevTransform>(playerEntity))
-                            pt->value = *t;   // no interpolation streak
-                    }
-                    fall.onGrounded(stand.y);   // new baseline: a teleport is
-                                                // never a "fall" to respawn from
-                    camera.positionLocked = true;   // re-attach: back to playing
-                    LOG_INFO << "Teleported to (" << hit.x << ", " << hit.y
-                             << ", " << hit.z << ")";
-                }
+    // Point-and-teleport: ray onto whatever physics surface it hits — deck,
+    // rooftop, terrain — then stand the player there and re-attach the camera
+    // so play continues in place. Two triggers, one landing:
+    //   - Desktop (T press): ray from the eye through the crosshair.
+    //   - XR (quick pinch RELEASE, < 0.4s): the gaze ray at the pinch. The
+    //     release edge — not the press — so a long hold stays free for shell
+    //     gestures (the host's hold-for-menu), and cancels never teleport.
+    auto teleportAlong = [&](const Vec3& origin, const Vec3& dir) {
+        if (!ctx.world.alive(playerEntity)) return;
+        auto* cc = ctx.world.get<CharacterController>(playerEntity);
+        if (!cc || cc->characterId == INVALID_CHARACTER) return;
+        Vec3 hit;
+        if (!physicsSys.physicsWorld().castRay(origin, dir * 4000.0, hit)) return;
+        const Vec3 stand = hit + Vec3(0, 1.4, 0);
+        physicsSys.physicsWorld().setCharacterPosition(cc->characterId, stand);
+        if (auto* t = ctx.world.get<Transform>(playerEntity)) {
+            t->position = stand;
+            if (auto* pt = ctx.world.get<PrevTransform>(playerEntity))
+                pt->value = *t;   // no interpolation streak
+        }
+        fall.onGrounded(stand.y);   // new baseline: a teleport is
+                                    // never a "fall" to respawn from
+        camera.positionLocked = true;   // re-attach: back to playing
+        LOG_INFO << "Teleported to (" << hit.x << ", " << hit.y
+                 << ", " << hit.z << ")";
+    };
+    if (ctx.xr.active) {
+        // Idle look-target: a faint ring where the HEAD is pointing, always
+        // on — "if I pinched now, roughly there". The pinch marker below is
+        // the precise gaze-driven version.
+        if (!ctx.xr.pinchHeld && ctx.xr.originBaseValid) {
+            const Mat4& h = ctx.xr.originFromHead;
+            Vec3 headPos(h.m[0][3], h.m[1][3], h.m[2][3]);
+            Vec3 headFwd(-h.m[0][2], -h.m[1][2], -h.m[2][2]);
+            Vec3 hit;
+            if (physicsSys.physicsWorld().castRay(ctx.xr.originBase + headPos,
+                                                  headFwd * 4000.0, hit)) {
+                ctx.debug.circle(hit + Vec3(0, 0.03, 0), Vec3(0, 1, 0), 0.2,
+                                 Vec3(0.45, 0.55, 0.6));
             }
         }
+        // While the pinch is held, show WHERE it will land: raycast the live
+        // gaze and ring the hit point. The marker is the aim feedback that
+        // makes blink teleport legible — pinch, sweep your gaze, release.
+        if (ctx.xr.pinchHeld && ctx.xr.gazeValid && ctx.xr.originBaseValid) {
+            Vec3 origin = ctx.xr.originBase + ctx.xr.gazeOrigin;
+            Vec3 hit;
+            if (physicsSys.physicsWorld().castRay(origin, ctx.xr.gazeDir * 4000.0,
+                                                  hit)) {
+                const Vec3 up(0, 1, 0);
+                const Vec3 c = hit + Vec3(0, 0.03, 0);
+                const Vec3 teal(0.25, 0.9, 1.0);
+                ctx.debug.circle(c, up, 0.35, teal);
+                ctx.debug.circle(c, up, 0.18, teal);
+                ctx.debug.line(c, c + Vec3(0, 0.9, 0), teal);
+            }
+        }
+        // Teleport on a QUICK release (the marker is aimed while holding);
+        // longer holds belong to the shell (hold ≈1.2s exits to the menu),
+        // and cancels never teleport.
+        if (ctx.actions.released("player_teleport") && ctx.xr.pinchEnded
+            && ctx.xr.pinchHeldSeconds < 0.8 && ctx.xr.gazeValid
+            && ctx.xr.originBaseValid) {
+            // ORIGIN-space ray → world: the base is translation-only, so the
+            // direction passes through unchanged.
+            teleportAlong(ctx.xr.originBase + ctx.xr.gazeOrigin, ctx.xr.gazeDir);
+        }
+    } else if (ctx.actions.pressed("player_teleport")) {
+        teleportAlong(camera.eye, camera.forward());
     }
 
     // Respawn: snap the character back to its spawn (and re-settle under gravity). Works even when
@@ -182,6 +229,7 @@ void PlayerSystem::update(FrameContext& ctx) {
         shoulder.update(zoom, ctx.frameDelta);
         shoulder.orbitPitch =
             std::clamp(camera.pitch, kShoulderPitchMin, kShoulderPitchMax);
+        shoulder.farPlane = camera.farPlane;  // fly carries the world-extent value
         ctx.view.camera = shoulder.cameraState(aspect);
     } else {
         ctx.view.camera = camera.cameraState(aspect);

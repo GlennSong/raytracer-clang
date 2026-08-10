@@ -896,6 +896,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                           std::vector<RenderMesh>* outParts,
                                           const RoadGraph* roads, Real roadClearance) {
     std::vector<LotBuilding> out;
+    // The plan counters always run (the build-end density line below reads
+    // them); `debug` just decides whether the caller sees them too.
+    LotPlanDebug localDbg;
+    LotPlanDebug* dbg = debug ? debug : &localDbg;
     // The ARCHITECT's district map (P5): radial rings + seeded old-town and
     // industrial quarters. Every lot asks the architect what belongs here.
     DistrictMap districts;
@@ -925,6 +929,29 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             if ((c - q).length() < e.width * 0.5 + roadClearance) return false;
         }
         return true;
+    };
+    // Distance from a point to the nearest road SURFACE edge (centreline
+    // distance minus half-width, floored at 0). Frontage gate: a lot whose
+    // whole footprint sits farther than the frontage bound from every road
+    // goes GREEN instead of building — stage 4 of the city contract ("lots
+    // touch the road; the middle of a block is parks and plazas").
+    auto roadSurfaceDist = [&](const Vec2& c) {
+        if (!roads) return Real(0);
+        Real best = Real(1e30);
+        for (const RoadEdge& e : roads->edges) {
+            if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(roads->nodes.size()) ||
+                e.b >= static_cast<int>(roads->nodes.size())) continue;
+            const Vec2& a = roads->nodes[e.a].pos;
+            const Vec2& b = roads->nodes[e.b].pos;
+            Vec2 ab = b - a;
+            Real len2 = ab.lengthSquared();
+            Real t = len2 > 1e-12 ? dot(c - a, ab) / len2 : 0.0;
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            Vec2 q(a.x + ab.x * t, a.y + ab.y * t);
+            Real d = (c - q).length() - e.width * 0.5;
+            best = std::min(best, d < 0 ? Real(0) : d);
+        }
+        return best;
     };
     // PUSH a polygon clear of the sampled road ribbons (roads-v2.1 R4-6c,
     // drive feedback: "parks don't sit on their lots and explode into the
@@ -1160,23 +1187,36 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     };
     std::vector<BlockInfo> binfos;
     std::vector<LotCand> cands;
+    // Level-authored parcel grain (citysim.parcel, 8km-city P3): the override
+    // RESCALES the district tuning below relative to the stock defaults —
+    // absent (<= 0) every factor is 1 and the tuning is exactly today's.
+    const ParcelParams stockPP;
+    const Real ppAreaScale = p.parcelTargetArea > 0
+        ? p.parcelTargetArea / stockPP.targetArea : Real(1);
+    const Real ppFrontScale = p.parcelFrontWidth > 0
+        ? p.parcelFrontWidth / stockPP.frontWidth : Real(1);
+    const Real ppDepthScale = p.parcelLotDepth > 0
+        ? p.parcelLotDepth / stockPP.lotDepth : Real(1);
+    const Real ppMinArea = p.parcelMinArea > 0 ? p.parcelMinArea : p.minLotArea;
     for (std::size_t bi = 0; bi < blocks.size(); ++bi) {
         const Poly2& block = blocks[bi];
         if (block.size() < 3) continue;
         // Pull in from the road edge to the buildable interior (road + sidewalk).
         Poly2 foot = inset(block, p.roadMargin);
         if (foot.size() < 3 || area(foot) < p.minLotArea * 1.5) continue;
-        if (debug) debug->blocks.push_back(foot);
+        dbg->blocks.push_back(foot);
 
         BlockInfo bf;
         bf.pp.seed = mix(static_cast<uint32_t>(bi), p.seed);
         bf.pp.targetArea = 480;
-        bf.pp.minArea = p.minLotArea;
-        bf.pp.minEdge = p.minShort;
+        bf.pp.minArea = ppMinArea;
+        bf.pp.minEdge = p.parcelMinEdge > 0 ? p.parcelMinEdge : p.minShort;
+        if (p.parcelCourtMinArea > 0) bf.pp.courtMinArea = p.parcelCourtMinArea;
         // DENSITY is a district decision too (device: "feels like a small
         // town"): urban quarters parcel small and build nearly wall-to-wall;
         // the financial core keeps big tower plates; suburbs keep their yards.
-        bf.tag = districts.tagAt(centroid(foot));
+        const Vec2 footC = centroid(foot);
+        bf.tag = districts.tagAt(footC);
         bf.lotSetback = p.lotSetback;
         bf.buildChance = p.buildChance;
         // Lot DIMENSIONS drive the row-split parceler now (frontWidth along
@@ -1186,10 +1226,20 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         // town/city scale knob is p.blockSize upstream — a town parcels the
         // same district a touch bigger.)
         switch (bf.tag) {
-            case DistrictTag::Financial:   // wide tower plates
-                bf.pp.frontWidth = 30; bf.pp.lotDepth = 34;
-                bf.pp.targetArea = 560; bf.lotSetback = 1.0;
-                bf.buildChance = std::min(Real(1), p.buildChance + 0.06); break;
+            case DistrictTag::Financial: {  // SKYSCRAPER pads (density round)
+                // Big plates, bigger still toward the hub: the core mints
+                // 42-55 m frontages x 48-60 m depths, so glass/podium towers
+                // stand on real floor plates instead of rowhouse slots.
+                const Real cness = std::sqrt(std::max(
+                    Real(0), 1.0 - (footC - p.center).length() /
+                                       std::max(Real(1), p.innerRadius)));
+                const Real ct = std::max(Real(0), (cness - 0.5) * 2.0);
+                bf.pp.frontWidth = 42 + 13 * ct;   // 42 -> 55 at the hub
+                bf.pp.lotDepth = 48 + 12 * ct;     // 48 -> 60
+                bf.pp.targetArea = 2400;           // the OBB fallback matches
+                bf.lotSetback = 1.0;
+                bf.buildChance = std::min(Real(1), p.buildChance + 0.06);
+                break; }
             case DistrictTag::Commercial:  // narrow, deep retail frontage
                 bf.pp.frontWidth = 13; bf.pp.lotDepth = 30;
                 bf.pp.targetArea = 300; bf.lotSetback = 0.7;
@@ -1197,7 +1247,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             case DistrictTag::OldTown:     // small, tight, narrow
                 bf.pp.frontWidth = 11; bf.pp.lotDepth = 22;
                 bf.pp.targetArea = 210;
-                bf.pp.minArea = std::min(p.minLotArea, Real(80));
+                bf.pp.minArea = std::min(ppMinArea, Real(80));
                 bf.lotSetback = 0.5; bf.buildChance = 0.98; break;
             case DistrictTag::Industrial:  // big parcels
                 bf.pp.frontWidth = 42; bf.pp.lotDepth = 52;
@@ -1206,6 +1256,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 bf.pp.frontWidth = 18; bf.pp.lotDepth = 27;
                 bf.pp.targetArea = 400; break;
         }
+        // The parcel override rescales the district grain it just chose.
+        bf.pp.targetArea *= ppAreaScale;
+        bf.pp.frontWidth *= ppFrontScale;
+        bf.pp.lotDepth *= ppDepthScale;
         // Sometimes a WHOLE small block is a park (device: "the green space
         // doesn't conform to the city block"): the pad is the block's own
         // road-inset interior, so its edges follow the surrounding streets
@@ -1236,106 +1290,73 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             }
         }
         std::vector<Lot> lots = subdivideBlock(foot, bf.pp);
-        if (debug)
-            for (const Lot& lot : lots) debug->lots.push_back(lot.footprint);
+        for (const Lot& lot : lots) dbg->lots.push_back(lot.footprint);
         binfos.push_back(bf);
         for (std::size_t li = 0; li < lots.size(); ++li) {
             // A block-interior COURT (frontage parceler, v2 step 10) is open
             // space, never a building lot — nothing landlocked gets built.
-            if (lots[li].court) continue;
+            // But it IS emitted: a sculpted mid-block green. On the big-block
+            // geometry the court can be most of the block, and dropping it
+            // silently rendered as broken bare terrain (Glenn's report).
+            if (lots[li].court) {
+                if (area(lots[li].footprint) < 60.0) continue;
+                LotBuilding g;
+                const OBB2 gb = orientedBoundingBox(lots[li].footprint);
+                g.site = centroid(lots[li].footprint);
+                g.width = 2 * gb.half[0];
+                g.depth = 2 * gb.half[1];
+                g.height = 0.25;
+                g.yaw = std::atan2(gb.axis[0].y, gb.axis[0].x);
+                g.type = "park";
+                g.recipe = "court_green";
+                g.color = colorFor("park");
+                g.pad = pushPolyClearOfRoads(lots[li].footprint);
+                if (g.pad.empty()) continue;
+                sculptPark(g, g.pad, g.height, p.ground,
+                           mix(bf.pp.seed, 0xC0947u + static_cast<uint32_t>(li)),
+                           outParts);
+                out.push_back(std::move(g));
+                continue;
+            }
             if (area(lots[li].footprint) < bf.pp.minArea) continue;
             cands.push_back({li, static_cast<int>(binfos.size()) - 1,
                              lots[li], -1});
         }
     }
 
-    // ---- PASS B: the LANDMARK planner ---------------------------------------
-    // Civic anchors are PLACED, never rolled: quotas per city (one courthouse,
-    // one hospital, a school per residential quarter...) filled by the best-
+    // ---- PASS B: the LANDMARK planner (architect, per hub cluster) ----------
+    // Civic anchors are PLACED, never rolled: quotas filled by the best-
     // scoring eligible lot — biggest, and for the courthouse most central.
+    // 8km-city P3: the quotas run PER HUB CLUSTER now (nearest-hub assignment
+    // via hubClusters): the primary city keeps the full civic table; every
+    // satellite town is guaranteed its own school + church. No hubs (or no
+    // cluster ids) = one city, exactly the old plan.
     {
-        int nRes = 0, nCom = 0, nFin = 0, nOld = 0, nInd = 0;
-        for (const LotCand& c : cands) {
-            switch (binfos[c.block].tag) {
-                case DistrictTag::Residential: ++nRes; break;
-                case DistrictTag::Commercial:  ++nCom; break;
-                case DistrictTag::Financial:   ++nFin; break;
-                case DistrictTag::OldTown:     ++nOld; break;
-                case DistrictTag::Industrial:  ++nInd; break;
+        auto clusterOf = [&](const Vec2& q) -> int {
+            if (p.hubs.empty() || p.hubClusters.size() != p.hubs.size())
+                return 0;
+            std::size_t best = 0;
+            Real bd = 1e30;
+            for (std::size_t i = 0; i < p.hubs.size(); ++i) {
+                const Real dd = (q - p.hubs[i].first).lengthSquared();
+                if (dd < bd) { bd = dd; best = i; }
             }
-        }
-        struct Want {
-            LandmarkKind kind;
-            int count;
-            Real minShort, minArea;
-            bool wantCore;   // score by centrality too (the courthouse)
-            DistrictTag tagA, tagB;   // eligible districts (B may repeat A)
+            return p.hubClusters[best];
         };
-        const int total = static_cast<int>(cands.size());
-        const Want wants[] = {
-            {LandmarkKind::Capitol, (nFin + nCom) >= 6 ? 1 : 0, 13.0, 300.0,
-             true, DistrictTag::Financial, DistrictTag::Commercial},
-            {LandmarkKind::University, total >= 60 ? 1 : 0, 15.0, 380.0, false,
-             DistrictTag::Residential, DistrictTag::Commercial},
-            {LandmarkKind::Courthouse, nFin >= 2 ? 1 : 0, 12.0, 260.0, true,
-             DistrictTag::Financial, DistrictTag::Financial},
-            {LandmarkKind::Hospital, nCom >= 6 ? 1 : 0, 15.0, 380.0, false,
-             DistrictTag::Commercial, DistrictTag::Commercial},
-            {LandmarkKind::School, nRes >= 6 ? 1 + nRes / 50 : 0, 13.0, 320.0,
-             false, DistrictTag::Residential, DistrictTag::Residential},
-            {LandmarkKind::Police, nCom >= 4 ? 1 : 0, 9.0, 140.0, false,
-             DistrictTag::Commercial, DistrictTag::Commercial},
-            {LandmarkKind::Fire, (nCom + nInd) >= 8 ? 1 + total / 150 : 0,
-             11.0, 220.0, false, DistrictTag::Commercial,
-             DistrictTag::Industrial},
-            {LandmarkKind::Market, nOld >= 3 ? 1 : (nCom >= 8 ? 1 : 0),
-             10.0, 180.0, false,
-             nOld >= 3 ? DistrictTag::OldTown : DistrictTag::Commercial,
-             nOld >= 3 ? DistrictTag::OldTown : DistrictTag::Commercial},
-            {LandmarkKind::Church, nRes >= 8 ? 1 + nRes / 70 : 0, 10.0, 180.0,
-             false, DistrictTag::Residential, DistrictTag::OldTown},
-            {LandmarkKind::Library, nCom >= 5 ? 1 : 0, 12.0, 240.0, false,
-             DistrictTag::Commercial, DistrictTag::Residential},
-            {LandmarkKind::Museum, nFin >= 3 ? 1 : 0, 14.0, 320.0, true,
-             DistrictTag::Financial, DistrictTag::Commercial},
-        };
-        for (const Want& w : wants) {
-            for (int k = 0; k < w.count; ++k) {
-                int best = -1;
-                Real bestScore = -1;
-                // Preferred thresholds first; if no lot in the district can
-                // carry them (small towns parcel small), relax once — the
-                // quarter still gets its school, just a modest one.
-                for (Real relax : {Real(1.0), Real(0.72)}) {
-                    for (std::size_t ci = 0; ci < cands.size(); ++ci) {
-                        const LotCand& c = cands[ci];
-                        if (c.landmark >= 0) continue;
-                        const DistrictTag t = binfos[c.block].tag;
-                        if (t != w.tagA && t != w.tagB) continue;
-                        OBB2 ob = orientedBoundingBox(c.lot.footprint);
-                        const Real shortS = 2 * std::min(ob.half[0], ob.half[1]);
-                        const Real ar = area(c.lot.footprint);
-                        if (shortS < w.minShort * relax || ar < w.minArea * relax)
-                            continue;
-                        Real score = ar;
-                        if (w.wantCore) {
-                            const Real r =
-                                (centroid(c.lot.footprint) - p.center).length();
-                            score *= 0.4 + std::max(
-                                Real(0),
-                                1.0 - r / std::max(Real(1), p.innerRadius));
-                        }
-                        if (score > bestScore) {
-                            bestScore = score;
-                            best = static_cast<int>(ci);
-                        }
-                    }
-                    if (best >= 0) break;
-                }
-                if (best < 0) break;   // no lot can carry it: skip the quota
-                cands[best].landmark = static_cast<int>(w.kind);
-            }
+        std::vector<LandmarkCand> lmc(cands.size());
+        for (std::size_t ci = 0; ci < cands.size(); ++ci) {
+            const LotCand& c = cands[ci];
+            OBB2 ob = orientedBoundingBox(c.lot.footprint);
+            lmc[ci].tag = binfos[c.block].tag;
+            lmc[ci].shortSide = 2 * std::min(ob.half[0], ob.half[1]);
+            lmc[ci].area = area(c.lot.footprint);
+            lmc[ci].pos = centroid(c.lot.footprint);
+            lmc[ci].cluster = clusterOf(lmc[ci].pos);
         }
+        const std::vector<int> placed =
+            planLandmarks(lmc, p.center, p.innerRadius);
+        for (std::size_t ci = 0; ci < cands.size(); ++ci)
+            cands[ci].landmark = placed[ci];
     }
 
     // ---- PASS C: grow every lot (landmarks use their PLACED recipes) --------
@@ -1371,6 +1392,24 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 // ground; the lot polygon still marks it for planting.
                 out.push_back(std::move(g));
             };
+            // FRONTAGE GATE (city contract stage 4): a building must front a
+            // street. Ring lots front by construction, so the bound is TIGHT
+            // now (14 m — a sidewalk plus a setback, not half a block), and
+            // it applies to EVERYONE: landmarks are chosen from ring lots
+            // that already front, and fallback-path lots (synthesized
+            // frontage) must pass the same bar — no more corner-grazing
+            // mid-block builds. Courts are green by design; this catches
+            // the strays.
+            {
+                Real front = Real(1e30);
+                for (const Vec2& v : lot.footprint)
+                    front = std::min(front, roadSurfaceDist(v));
+                if (front > 14.0) {
+                    dbg->rejFrontage++;
+                    emitGreen();
+                    continue;
+                }
+            }
             // UNDER A FREEWAY DECK: a normal building would clip the elevated
             // structure, so this lot becomes something that FITS beneath it. The
             // block/lot pipeline thus builds the RIGHT thing under the freeway
@@ -1418,7 +1457,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 }
             }
             if (cand.landmark < 0 && rng.unit() > buildChance) {
-                if (debug) debug->rejChance++;
+                dbg->rejChance++;
                 emitGreen(); continue;   // plaza / gap (landmarks always build)
             }
 
@@ -1427,8 +1466,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             if (site.size() < 3 || area(site) < 30) site = lot.footprint;
 
             OBB2 obb = orientedBoundingBox(site);
-            const Real w = 2 * obb.half[0], d = 2 * obb.half[1];
-            const Real shortSide = std::min(w, d), longSide = std::max(w, d);
+            Real w = 2 * obb.half[0], d = 2 * obb.half[1];
+            Real shortSide = std::min(w, d), longSide = std::max(w, d);
             // Dense districts parcel small — an 8 m rowhouse plan is CORRECT
             // in old town — so the sliver floor relaxes there.
             const Real minShort =
@@ -1436,12 +1475,58 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                  blockTag == DistrictTag::Commercial)
                     ? std::min(p.minShort, p.minShortUrban) : p.minShort;
             if (shortSide < minShort) {                                         // sliver
-                if (debug) debug->rejSliver++;
+                dbg->rejSliver++;
                 emitGreen(); continue;
             }
+            // A rescued site is the sub-rectangle the building actually
+            // takes; recompute the derived frame from it.
+            auto retakeSite = [&](Poly2 rect) {
+                site = std::move(rect);
+                obb = orientedBoundingBox(site);
+                w = 2 * obb.half[0];
+                d = 2 * obb.half[1];
+                shortSide = std::min(w, d);
+                longSide = std::max(w, d);
+            };
+            // Is `rect` usable ground: corners + edge midpoints on the lot
+            // and clear of the road corridors (concave-safe enough for the
+            // convex-ish ring lots this sees).
+            auto rectFits = [&](const Poly2& rect, const Poly2& host) {
+                const Vec2 c0 = centroid(rect);
+                for (std::size_t vi = 0; vi < rect.size(); ++vi) {
+                    const Vec2& v = rect[vi];
+                    const Vec2 m2 = (v + rect[(vi + 1) % rect.size()]) * 0.5;
+                    if (!pointInPolygon(host, v + (c0 - v) * 0.02)) return false;
+                    if (!pointInPolygon(host, m2 + (c0 - m2) * 0.02)) return false;
+                    if (roads && (!clearOfRoads(v) || !clearOfRoads(m2)))
+                        return false;
+                }
+                return true;
+            };
             if (longSide > shortSide * p.maxAspect) {                           // knife blade
-                if (debug) debug->rejAspect++;
-                emitGreen(); continue;
+                // RECOVERABLE (density round): a too-long lot still holds a
+                // fine building on PART of its length — clamp the site to a
+                // maxAspect rectangle before giving up and greening.
+                bool rescued = false;
+                const int la = obb.longAxis();
+                const Vec2 U = obb.axis[la], V = obb.axis[1 - la];
+                const Real hs = obb.half[1 - la] * 0.96;
+                Real hl = shortSide * p.maxAspect * 0.5 * 0.95;
+                for (int attempt = 0; attempt < 4 && hl > hs; ++attempt, hl *= 0.85) {
+                    Poly2 rect{obb.center - U * hl - V * hs,
+                               obb.center + U * hl - V * hs,
+                               obb.center + U * hl + V * hs,
+                               obb.center - U * hl + V * hs};
+                    if (rectFits(rect, site)) {
+                        retakeSite(std::move(rect));
+                        rescued = true;
+                        break;
+                    }
+                }
+                if (!rescued) {
+                    dbg->rejAspect++;
+                    emitGreen(); continue;
+                }
             }
             // How much of its oriented box the lot actually fills. PLAN massing
             // takes the polygon itself, so off-cut lots (L / triangle /
@@ -1450,8 +1535,29 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // lots"). Only truly degenerate slivers go green here; the BOX
             // fallback below still demands the old 0.72 fill, since a box on a
             // low-fill lot is the "malformed overhanging mass" bug.
-            const Real fill = area(site) / std::max(Real(1e-6), w * d);
-            if (fill < 0.45) { if (debug) debug->rejFill++; emitGreen(); continue; }
+            Real fill = area(site) / std::max(Real(1e-6), w * d);
+            if (fill < 0.45) {
+                // RECOVERABLE: shrink-fit a box INSIDE the polygon (the same
+                // mechanism as the box fallback below) — a wedge or L off-cut
+                // still builds on its fat part instead of greening whole.
+                Scope sc = scopeFromFootprint(site, 0.0, 10.0, clearOfRoads);
+                const Real fitShort = std::min(sc.size.x, sc.size.z);
+                const Real fitLong = std::max(sc.size.x, sc.size.z);
+                Vec2 r2(sc.axis[0].x, sc.axis[0].z);
+                Vec2 f2(sc.axis[2].x, sc.axis[2].z);
+                Vec2 o2(sc.origin.x, sc.origin.z);
+                Poly2 rect{o2, o2 + r2 * sc.size.x,
+                           o2 + r2 * sc.size.x + f2 * sc.size.z,
+                           o2 + f2 * sc.size.z};
+                if (fitShort >= minShort && fitLong <= fitShort * p.maxAspect &&
+                    rectFits(rect, site)) {
+                    retakeSite(std::move(rect));
+                    fill = 1.0;
+                } else {
+                    dbg->rejFill++;
+                    emitGreen(); continue;
+                }
+            }
 
             LotBuilding b;
             b.site = centroid(site);
@@ -1619,7 +1725,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         fit = true;
                     }
                 }
-                if (!fit && debug) debug->rejClear++;   // (box fallback may still build)
+                if (!fit) dbg->rejClear++;   // (box fallback may still build)
                 planOk = fit;
             }
             // COURTYARD massing (device: "a lot of same-y looking ones"): a
@@ -1795,7 +1901,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 const Real effShort = std::min(
                     shortSide, 4 * area(plan) / std::max(per, Real(1e-6)));
                 if (effShort < 5.5) {
-                    if (debug) debug->rejFill++;
+                    dbg->rejPlan++;
                     emitGreen(); continue;
                 }
                 const Real qq = effShort / std::max(shortSide, Real(1e-6));
@@ -1837,6 +1943,83 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             if (p.ground && !bp.entranceSteps && bp.portico == 0 &&
                 bp.groundBays == 0 && !bp.porch && bp.floors > 0)
                 bp.entranceSteps = true;
+            // PODIUM TOWER massing (density round, "more varied building
+            // shapes"): a few-storey podium takes the WHOLE lot plan (street
+            // wall, ground retail), and a slender curtain-wall tower rises
+            // from its roof — the modern downtown block. Falls through to a
+            // single mass when the plan can't stand a tower.
+            if (planOk && rec.massing == BuildingRecipe::Massing::PodiumTower &&
+                rec.podiumFloors > 0 && bp.floors > rec.podiumFloors + 4) {
+                OBB2 pb = orientedBoundingBox(plan);
+                Real thw = std::min(pb.half[0] * 0.62, Real(15.0));
+                Real thd = std::min(pb.half[1] * 0.62, Real(15.0));
+                Poly2 tplan;
+                bool towerOk = false;
+                for (int attempt = 0; attempt < 3 && !towerOk; ++attempt) {
+                    if (std::min(thw, thd) < 5.5) break;
+                    tplan = {pb.center - pb.axis[0] * thw - pb.axis[1] * thd,
+                             pb.center + pb.axis[0] * thw - pb.axis[1] * thd,
+                             pb.center + pb.axis[0] * thw + pb.axis[1] * thd,
+                             pb.center - pb.axis[0] * thw + pb.axis[1] * thd};
+                    towerOk = true;
+                    for (const Vec2& v : tplan)
+                        if (!pointInPolygon(plan, v) ||
+                            (roads && !clearOfRoads(v))) {
+                            towerOk = false;
+                            break;
+                        }
+                    if (!towerOk) { thw *= 0.85; thd *= 0.85; }
+                }
+                if (towerOk) {
+                    BuildingParams pod = bp;   // the street-wall base
+                    pod.floors = rec.podiumFloors;
+                    pod.setbackFloors = 0;
+                    pod.spire = false;
+                    pod.dome = false;
+                    BuildingMesh pm = growPlanBuilding(plan, pod, b.baseY);
+                    BuildingParams twr = bp;   // the shaft: no street-level kit
+                    twr.floors = std::max(1, bp.floors - rec.podiumFloors);
+                    twr.groundRetail = false;
+                    twr.walkableGround = false;
+                    twr.baseCourse = false;
+                    twr.awning = false;
+                    twr.entranceSteps = false;
+                    twr.groundHeight = twr.floorHeight;
+                    if (twr.floors > 18) {
+                        twr.setbackFloors = 6;   // tall shafts keep tiers
+                        twr.setbackEvery = 1.5;
+                    }
+                    // The tower roots just below the podium parapet, so the
+                    // joint never shows a gap.
+                    const Real towerBase =
+                        b.baseY +
+                        std::max(Real(0), pm.height - human::PARAPET - 0.15);
+                    BuildingMesh tm = growPlanBuilding(tplan, twr, towerBase);
+                    if (outParts) {
+                        for (const RenderMesh& part : pm.parts) {
+                            const int mi = part.materialIndex;
+                            if (mi >= 0 &&
+                                mi < static_cast<int>(outParts->size()))
+                                MeshBuilder::append((*outParts)[mi], part);
+                        }
+                        for (const RenderMesh& part : tm.parts) {
+                            const int mi = part.materialIndex;
+                            if (mi >= 0 &&
+                                mi < static_cast<int>(outParts->size()))
+                                MeshBuilder::append((*outParts)[mi], part);
+                        }
+                    }
+                    b.site = pb.center;
+                    b.width = 2 * pb.half[0];
+                    b.depth = 2 * pb.half[1];
+                    b.yaw = std::atan2(pb.axis[0].y, pb.axis[0].x);
+                    b.plan = plan;
+                    b.height = (towerBase - b.baseY) + tm.height;
+                    emitFoundation(b.plan, b.groundY, b.baseY);
+                    out.push_back(std::move(b));
+                    continue;
+                }
+            }
             if (planOk) {
                 bm = growPlanBuilding(plan, bp, b.baseY);
                 OBB2 pb = orientedBoundingBox(plan);
@@ -1848,14 +2031,14 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             } else {
                 // The box fallback fills the OBB: on a low-fill lot that IS
                 // the overhanging-mass bug, so those go green instead.
-                if (fill < 0.72) { if (debug) debug->rejBox++; emitGreen(); continue; }
+                if (fill < 0.72) { dbg->rejBox++; emitGreen(); continue; }
                 Scope scope = scopeFromFootprint(site, b.baseY, 10.0, clearOfRoads);
                 const Real fitShort = std::min(scope.size.x, scope.size.z);
                 // The urban sliver floor holds for the box path too: a
                 // shrink-fit below minShortUrban is a knife blade, not a mass.
                 if (fitShort < std::max(p.minShort * 0.75,
                                         std::min(p.minShort, p.minShortUrban))) {
-                    if (debug) debug->rejBox++;
+                    dbg->rejBox++;
                     emitGreen(); continue;
                 }
                 Vec3 sc = scope.center();
@@ -1896,6 +2079,24 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         LOG_INFO << "[citylots] under-freeway lots: " << underFwCount
                  << " re-zoned to fit beneath the deck (open space / parking / "
                     "utility / short building)";
+    // The DENSITY line (Glenn's "why did lots fail" dial): one glance says how
+    // much of the parcelled city actually built and where the rest went.
+    {
+        int nBuilt = 0, nGreen = 0, nCourt = 0;
+        for (const LotBuilding& lb : out) {
+            if (lb.type == "green") ++nGreen;
+            else if (lb.recipe == "court_green") ++nCourt;
+            else if (lb.type != "park") ++nBuilt;
+        }
+        LOG_INFO << "[citylots] " << dbg->blocks.size() << " blocks -> "
+                 << dbg->lots.size() << " lots, " << nBuilt << " built, "
+                 << nGreen << " green, " << nCourt << " courts | rej: chance "
+                 << dbg->rejChance << ", sliver " << dbg->rejSliver
+                 << ", aspect " << dbg->rejAspect << ", fill " << dbg->rejFill
+                 << ", plan " << dbg->rejPlan << ", clear " << dbg->rejClear
+                 << ", box " << dbg->rejBox << ", frontage "
+                 << dbg->rejFrontage;
+    }
     return out;
 }
 
@@ -2132,7 +2333,28 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
     // on the boundary roads' open sides so the outskirts build up too.
     std::vector<Poly2> rim = edgeBlocks(rg, blocks, edgeParams);
     blocks.insert(blocks.end(), rim.begin(), rim.end());
-    r.lots = growLotBuildings(blocks, params, &r.plan, &r.parts, &rgSampled,
+    // Per-hub-cluster landmark quotas (8km-city P3): the loader forwards hubs
+    // as {pos, kind} only, so recover each hub's SITE id (0 = the primary
+    // city, 1+ = satellite towns) from the nets' own cityHubs by position —
+    // both lists come from the same CityHub records. A caller that already
+    // filled hubClusters keeps its own mapping.
+    LotParams lp = params;
+    if (!lp.hubs.empty() && lp.hubClusters.size() != lp.hubs.size()) {
+        lp.hubClusters.assign(lp.hubs.size(), 0);
+        for (std::size_t i = 0; i < lp.hubs.size(); ++i) {
+            bool found = false;
+            for (const RoadNet& net : nets) {
+                for (const CityHub& h : net.cityHubs)
+                    if ((h.pos - lp.hubs[i].first).lengthSquared() < 1e-6) {
+                        lp.hubClusters[i] = h.site;
+                        found = true;
+                        break;
+                    }
+                if (found) break;
+            }
+        }
+    }
+    r.lots = growLotBuildings(blocks, lp, &r.plan, &r.parts, &rgSampled,
                               roadClearance);
     return r;
 }

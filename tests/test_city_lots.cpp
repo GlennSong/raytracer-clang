@@ -2,8 +2,11 @@
 
 #include "../src/engine/procgen/city/architect.h"
 #include "../src/engine/procgen/city/city_lots.h"
+#include "../src/engine/procgen/city/parcel.h"
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/city/shape_grammar.h"   // PartId (surfaced walls)
+#include "../src/engine/procgen/city/metro.h"
+#include "../src/engine/procgen/city/road_constraints.h"
 
 using namespace engine;
 
@@ -396,6 +399,119 @@ TEST_CASE(buildings_grow_from_terrain_base) {
     CHECK(sloped > 0);   // the slope actually moved buildings off y=0
 }
 
+TEST_CASE(parcel_overrides_rescale_the_lot_grain) {
+    // citysim.parcel (8km-city P3): a piedmont-scale metro lays 150 m+ blocks,
+    // so the level can ask for bigger lots. The override rescales the per-
+    // district grain; unset fields keep today's tuning exactly.
+    LotParams p;
+    p.seed = 3;
+    LotPlanDebug base;
+    growLotBuildings(squareBlocks(), p, &base);
+    CHECK(!base.lots.empty());
+
+    LotParams big = p;
+    big.parcelTargetArea = 840;    // 2x the stock 420
+    big.parcelFrontWidth = 32;     // 2x the stock 16
+    big.parcelLotDepth = 42;       // 1.5x the stock 28
+    big.parcelMinArea = 220;
+    LotPlanDebug bigDbg;
+    growLotBuildings(squareBlocks(), big, &bigDbg);
+    CHECK(!bigDbg.lots.empty());
+    CHECK(bigDbg.lots.size() < base.lots.size());   // bigger grain = fewer lots
+    auto medianArea = [](const std::vector<Poly2>& lots) {
+        std::vector<Real> a;
+        for (const Poly2& l : lots) a.push_back(area(l));
+        std::sort(a.begin(), a.end());
+        return a.empty() ? Real(0) : a[a.size() / 2];
+    };
+    CHECK(medianArea(bigDbg.lots) > medianArea(base.lots) * 1.3);
+    // Explicitly-unset overrides (< 0) change NOTHING: same plan as default.
+    LotParams same = p;
+    same.parcelTargetArea = -1;
+    same.parcelMinEdge = -1;
+    LotPlanDebug sameDbg;
+    growLotBuildings(squareBlocks(), same, &sameDbg);
+    CHECK(sameDbg.lots.size() == base.lots.size());
+}
+
+TEST_CASE(landmark_quotas_run_per_hub_cluster) {
+    // 8km-city P3: multi-site metros plan their civic anchors PER HUB CLUSTER
+    // — the primary city (cluster 0) keeps the global table (one courthouse),
+    // and every satellite town is guaranteed its own school and church when it
+    // has enough candidate lots. Planned, never rolled; deterministic.
+    std::vector<LandmarkCand> cands;
+    auto addLots = [&](int cluster, DistrictTag tag, int n, Vec2 base) {
+        for (int i = 0; i < n; ++i) {
+            LandmarkCand c;
+            c.tag = tag;
+            c.shortSide = 16 + (i % 5);
+            c.area = 360 + 8 * i;
+            c.pos = base + Vec2((i % 6) * 40.0, (i / 6) * 40.0);
+            c.cluster = cluster;
+            cands.push_back(c);
+        }
+    };
+    addLots(0, DistrictTag::Financial, 8, {0, 0});        // the city core...
+    addLots(0, DistrictTag::Commercial, 12, {150, 0});
+    addLots(0, DistrictTag::Residential, 14, {0, 200});
+    addLots(1, DistrictTag::Residential, 14, {2000, 0});  // a residential town
+    addLots(2, DistrictTag::OldTown, 12, {0, 2000});      // an old-town town
+    const std::vector<int> plan = planLandmarks(cands, Vec2(0, 0), 60.0);
+    CHECK(plan.size() == cands.size());
+    auto countIn = [&](int cluster, LandmarkKind k) {
+        int n = 0;
+        for (std::size_t i = 0; i < plan.size(); ++i)
+            if (cands[i].cluster == cluster &&
+                plan[i] == static_cast<int>(k)) ++n;
+        return n;
+    };
+    CHECK(countIn(0, LandmarkKind::Courthouse) == 1);   // the city's table holds
+    CHECK(countIn(1, LandmarkKind::School) >= 1);       // each town keeps its
+    CHECK(countIn(1, LandmarkKind::Church) >= 1);       // guaranteed anchors
+    CHECK(countIn(2, LandmarkKind::School) >= 1);
+    CHECK(countIn(2, LandmarkKind::Church) >= 1);
+    CHECK(countIn(2, LandmarkKind::Market) == 1);       // old town: market hall
+    for (std::size_t i = 0; i < plan.size(); ++i)       // city-only anchors
+        if (cands[i].cluster != 0) {                    // never leave the city
+            CHECK(plan[i] != static_cast<int>(LandmarkKind::Courthouse));
+            CHECK(plan[i] != static_cast<int>(LandmarkKind::Capitol));
+        }
+    CHECK(plan == planLandmarks(cands, Vec2(0, 0), 60.0));   // deterministic
+
+    // ...and the guarantee holds through the FULL lot pass: blocks around a
+    // residential hub far from the city (cluster 1) grow their own school and
+    // church, deterministically across two runs.
+    LotParams p;
+    p.seed = 11;
+    p.center = {0, 0};
+    p.hubs = {{Vec2(0, 0), 0}, {Vec2(900, 0), 2}};
+    p.hubClusters = {0, 1};
+    p.hubRadius = 260;
+    std::vector<Poly2> blocks;
+    auto grid = [&](Vec2 c) {
+        for (int gx = -1; gx <= 1; ++gx)
+            for (int gz = -1; gz <= 1; ++gz) {
+                Real cx = c.x + gx * 110.0, cz = c.y + gz * 110.0, h = 48.0;
+                blocks.push_back({{cx - h, cz - h}, {cx + h, cz - h},
+                                  {cx + h, cz + h}, {cx - h, cz + h}});
+            }
+    };
+    grid({0, 0});
+    grid({900, 0});
+    std::vector<LotBuilding> b = growLotBuildings(blocks, p);
+    int townSchools = 0, townChurches = 0;
+    for (const LotBuilding& lb : b) {
+        if (lb.site.x < 450) continue;   // the town's half of the world
+        if (lb.recipe == "school") ++townSchools;
+        if (lb.recipe == "church") ++townChurches;
+    }
+    CHECK(townSchools >= 1);
+    CHECK(townChurches >= 1);
+    std::vector<LotBuilding> b2 = growLotBuildings(blocks, p);
+    CHECK(b.size() == b2.size());
+    for (std::size_t i = 0; i < b.size(); ++i) CHECK(b[i].recipe == b2[i].recipe);
+}
+
 TEST_CASE(landmarks_are_planned_not_rolled) {
     // The planner fills civic quotas on the BEST lots: a city grown over real
     // blocks gets exactly one courthouse (on the most central financial lot),
@@ -426,4 +542,189 @@ TEST_CASE(landmarks_are_planned_not_rolled) {
     std::vector<LotBuilding> c = growLotBuildings(blocks, p);
     CHECK(b.size() == c.size());
     for (std::size_t i = 0; i < b.size(); ++i) CHECK(b[i].recipe == c[i].recipe);
+}
+
+// FRONTAGE GATE (ADR-0066, stage 4): every built lot must touch a road. A lot
+// "fronts" a street when its nearest road edge is within a reasonable setback
+// distance (max 30 m). This gate verifies that the lot-placement algorithm keeps
+// buildings from floating in the middle of the block, far from any street face.
+TEST_CASE(every_built_lot_touches_a_road) {
+    // Build a piedmont-style metro using the same multi-site params as test_metro_sites.
+    MetroParams p;
+    p.seed = 7;
+    p.freeways = true;
+    p.backboneClass = RoadClass::Arterial;
+    p.freewayWidth = 17;
+    p.arteryWidth = 17;
+    p.collectorWidth = 13;
+    p.streetWidth = 12.0;   // parking round: 2.5 park + 3.5 + 3.5 + 2.5 park
+    p.blockSize = 220;
+    p.minBlockEdge = 150;
+    p.segLength = 120;
+    p.influence = 800;
+    p.killRadius = 300;
+    p.mergeRadius = 200;
+    p.corridorSpacing = 240;
+    p.ambientPer500 = 5;
+    p.loopMin = 550;
+    p.loopMax = 1300;
+    p.interchangeSpacing = 600;
+
+    MetroSite city;
+    city.center = {900, 900};
+    city.radius = 1400;
+    city.hotspots = 9;
+    city.blockSize = 220;
+    MetroSite east;
+    east.center = {3050, 400};
+    east.radius = 420;
+    east.hotspots = 3;
+    east.blockSize = 180;
+    east.density = 0.55;
+    east.kindBias = 3;
+    MetroSite south;
+    south.center = {300, 3050};
+    south.radius = 380;
+    south.hotspots = 3;
+    south.blockSize = 180;
+    south.density = 0.5;
+    south.kindBias = 2;
+    p.sites = {city, east, south};
+
+    RoadGraph roads = buildMetro(p);
+
+    // Post-process the graph as test_metro_sites does (two rounds of consolidation).
+    RoadRules rules;
+    rules.autoRoundabout = false;
+        auto spanFloor = [](const Vec2& q) -> Real {
+            const bool inCore =
+                std::fabs(q.x - 900.0) <= 1400.0 && std::fabs(q.y - 900.0) <= 1400.0;
+            return inCore ? 104.5 : 150.0;
+        };
+    roads = capDegree(planarize(applyConstraints(roads, rules), 1.0), rules);
+    for (int round = 0; round < 2; ++round) {
+        roads = dropParallelEdges(roads);
+        roads = dissolveAcuteArms(roads, 0.85, 3);
+        roads = consolidateJunctionSpans(roads, spanFloor, rules.maxDegree);
+        roads = capDegree(planarize(roads, 1.0), rules);
+        roads = mergeShortEdges(roads, 30.0, rules.maxDegree);
+        roads = relaxSharpBends(roads, 0.5, 64);
+    }
+
+    // Extract the blocks and grow buildings on them.
+    std::vector<Poly2> blocks = extractBlocks(roads, 200.0);
+    CHECK(!blocks.empty());
+
+    LotParams lotParams;
+    lotParams.center = {900, 900};
+    lotParams.seed = 11;
+    std::vector<LotBuilding> buildings = growLotBuildings(blocks, lotParams);
+    CHECK(!buildings.empty());
+
+    // For each built (non-park/non-green) lot, compute the minimum distance from
+    // the lot's OBB to any road edge in the graph. The lot's rectangle is defined
+    // by site (centroid), width, depth (half-extents), and yaw (rotation).
+    //
+    // Helper: distance from a point to a line segment (a,b).
+    auto distPointToSegment = [](const Vec2& p, const Vec2& a, const Vec2& b) -> Real {
+        Vec2 ab = b - a;
+        Real len2 = ab.lengthSquared();
+        if (len2 < 1e-12) return (p - a).length();
+        Real t = std::clamp(dot(p - a, ab) / len2, 0.0, 1.0);
+        Vec2 closest = a + ab * t;
+        return (p - closest).length();
+    };
+
+    // Helper: distance from the building's OBB CENTER to the nearest road
+    // CENTRELINE. The ring parceler fronts every lot on a block edge, so a
+    // built mass can never sit deeper than the lot depth behind the street —
+    // the centre-to-centreline bound is tight, not a corner-grazing 85 m.
+    auto distToRoads = [&](const LotBuilding& lot) -> Real {
+        Real minDist = 1e30;
+        for (const RoadEdge& edge : roads.edges) {
+            Vec2 a = roads.nodes[edge.a].pos;
+            Vec2 b = roads.nodes[edge.b].pos;
+            minDist = std::min(minDist, distPointToSegment(lot.site, a, b));
+        }
+        return minDist;
+    };
+
+    // Measure frontage distances and report the distribution.
+    std::vector<Real> distances;
+    int nonCourtLots = 0;
+    Real maxFrontage = 0;
+    for (const LotBuilding& b : buildings) {
+        // Skip parks and greens (they're ground scenery, not buildings).
+        if (b.type == "park" || b.type == "green") continue;
+
+        Real dist = distToRoads(b);
+        distances.push_back(dist);
+        nonCourtLots++;
+        maxFrontage = std::max(maxFrontage, dist);
+    }
+
+    // Report the measured maximum frontage distance.
+    if (!distances.empty()) {
+        std::sort(distances.begin(), distances.end());
+        Real median = distances[distances.size() / 2];
+        std::printf("        [frontage] %d buildings, median %.1f m, max %.1f m\n",
+                    nonCourtLots, median, maxFrontage);
+    }
+
+    // Assert: every built (non-park/green) building's centre sits within
+    // max(lotDepth * 1.6, 60 m) of a road centreline. The ring parceler
+    // fronts every lot BY CONSTRUCTION (a lot is at most lotDepth deep behind
+    // the block edge, which is a road face), and the 14 m surface gate greens
+    // any stray — so a mid-block building here is a real regression. Stock
+    // lotDepth is 28 (financial pads reach 60), so the bound is 60 m.
+    const Real centreBound = std::max(ParcelParams().lotDepth * 1.6, Real(60.0));
+    for (const LotBuilding& b : buildings) {
+        if (b.type == "park" || b.type == "green") continue;
+        CHECK(distToRoads(b) <= centreBound);
+    }
+}
+
+// The RING PARCELER contract (density round): on ANY simple block polygon —
+// a trapezoid, an L — every emitted non-court lot fronts the block boundary
+// (>= 1 footprint edge within 2 m of it); nothing is landlocked. This is the
+// unit-level guarantee behind the frontage gate above.
+TEST_CASE(ring_parceler_fronts_every_lot_on_any_polygon) {
+    const Poly2 trapezoid{{0, 0}, {90, 0}, {70, 60}, {15, 60}};
+    const Poly2 ell{{0, 0}, {120, 0}, {120, 50}, {60, 50}, {60, 110}, {0, 110}};
+    auto distToBoundary = [](const Poly2& poly, const Vec2& q) {
+        Real best = 1e30;
+        for (std::size_t i = 0; i < poly.size(); ++i) {
+            const Vec2& a = poly[i];
+            const Vec2& b = poly[(i + 1) % poly.size()];
+            Vec2 ab = b - a;
+            Real len2 = ab.lengthSquared();
+            Real t = len2 > 1e-12 ? std::clamp(dot(q - a, ab) / len2, 0.0, 1.0)
+                                  : 0.0;
+            best = std::min(best, (q - (a + ab * t)).length());
+        }
+        return best;
+    };
+    for (const Poly2* block : {&trapezoid, &ell}) {
+        ParcelParams pp;
+        pp.seed = 5;
+        std::vector<Lot> lots = subdivideBlock(*block, pp);
+        int nonCourt = 0, fronting = 0;
+        for (const Lot& l : lots) {
+            if (l.court) continue;
+            ++nonCourt;
+            bool fronts = false;
+            for (std::size_t i = 0; i < l.footprint.size() && !fronts; ++i) {
+                const Vec2& a = l.footprint[i];
+                const Vec2& b = l.footprint[(i + 1) % l.footprint.size()];
+                if ((b - a).length() < 3.0) continue;   // corner nicks
+                fronts = distToBoundary(*block, a) < 2.0 &&
+                         distToBoundary(*block, b) < 2.0;
+            }
+            if (fronts) ++fronting;
+        }
+        CHECK(nonCourt > 0);            // the walk parcels these shapes
+        CHECK(fronting == nonCourt);    // zero landlocked lots
+        // Deterministic for the seed.
+        CHECK(lots.size() == subdivideBlock(*block, pp).size());
+    }
 }

@@ -54,6 +54,31 @@ private:
         engine::Real stride = 0;           // walk-cycle phase (advances with speed)
     };
 
+    // PHYSICAL-BODY BUDGET. A walker's Jolt capsule is stepped every tick and
+    // separated against every other body, so the per-step cost is
+    // O(bodies^2) + O(bodies x moving cars) + one character update each. Tying
+    // that to "every pedestrian in the K bubble" gave it no upper bound at all:
+    // 280 m of a dense downtown is several hundred to a thousand capsules, and
+    // the system went from 0.5 ms to 10+ ms of a 16.7 ms step.
+    //
+    // The nearest `maxWalkerBodies` walkers (a level knob) get a real capsule;
+    // the rest keep their
+    // entity, their mesh and their walk cycle and are simply posed from the sim
+    // ghost. They look identical — they just cannot be collided with, which at
+    // that distance nothing is trying to do. Cost is now a fixed budget instead
+    // of a function of how crowded the city happens to be.
+    // Scratch for the nearest-first ranking (kept as a member so the per-step
+    // pass does not allocate).
+    struct BodyRank {
+        engine::Real d2;
+        uint32_t uid;   // deterministic tiebreak — walker order is churned
+        int pos;        // index into walkers_
+    };
+    std::vector<BodyRank> bodyRank_;
+    // Acquire inside this; keep until 1.3x it. The band is what stops a walker
+    // on the boundary gaining and losing its capsule every step.
+    engine::Real bodyRadius_ = 140.0;
+
     CityRenderSystem& city_;
     engine::PhysicsSystem& physics_;
     std::vector<Walker> walkers_;
@@ -61,7 +86,7 @@ private:
     // a handful of pre-built limb-swing poses the walkers hop between by phase.
     engine::MeshHandle poseMesh(engine::AssetManager& assets, int outfit, int pose);
     std::unordered_map<int, engine::MeshHandle> poseMeshes_;
-    bool spawned_ = false;
+    std::vector<char> haveWalker_;   // agentId -> has a body (reconcile scratch)
 };
 
 }  // namespace citysim

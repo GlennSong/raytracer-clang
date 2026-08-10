@@ -1,5 +1,5 @@
 #version 450
-// CDLOD terrain vertex stage (ADR-0036; ports lighting.metal terrainVertexMain).
+// CDLOD terrain vertex stage (ADR-0036; ports lighting_entry.metal terrainVertexMain).
 // Terrain nodes are world-space meshes with an identity model. The tangent slot
 // carries each vertex's morph target — the position it collapses to on the next-
 // coarser grid — and we blend toward it by camera distance over [morphStart,

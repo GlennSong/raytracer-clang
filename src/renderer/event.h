@@ -25,6 +25,15 @@ enum class EventType {
     WindowCloseRequested,
     GamepadConnected,
     GamepadDisconnected,
+    XrButtonPressed,      // spatial input edge (pinch); ray rides XrState
+    XrButtonReleased,
+};
+
+// Spatial-input buttons. The gaze/selection ray for the gesture does NOT ride
+// the Event (it would bloat every keyboard event) — it lives in XrState,
+// updated by Application when the backend's input queue is drained.
+enum class XrButton {
+    Pinch,
 };
 
 enum class KeyCode {
@@ -58,6 +67,7 @@ struct Event {
     KeyCode key = KeyCode::Unknown;
     bool repeat = false;
     MouseButton button = MouseButton::Left;
+    XrButton xrButton = XrButton::Pinch;
     double x = 0.0, y = 0.0;
     int width = 0, height = 0;
     int gamepad = -1;

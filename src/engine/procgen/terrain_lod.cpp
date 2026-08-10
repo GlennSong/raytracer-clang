@@ -87,6 +87,88 @@ std::vector<LodNode> selectLodNodes(float worldHalf, int numLods,
     return out;
 }
 
+namespace {
+// selectRec with the descent gated on child readiness: where the ideal cut
+// would split, the parent is emitted instead until all four children report
+// renderable. Coarser than ideal is the only divergence — coverage stays exact.
+void selectGatedRec(float minX, float minZ, float size, int level,
+                    const std::vector<float>& ranges, float camX, float camZ,
+                    const std::function<bool(const LodNode&)>& ensure,
+                    std::vector<LodNode>& out) {
+    if (level <= 0) {
+        out.push_back(LodNode{minX, minZ, size, 0});
+        return;
+    }
+    int finer = level - 1;
+    float d = distanceToBoxXZ(camX, camZ, minX, minZ, size);
+    if (d > ranges[finer]) {
+        out.push_back(LodNode{minX, minZ, size, level});
+        return;
+    }
+    float h = size * 0.5f;
+    const LodNode kids[4] = {LodNode{minX,     minZ,     h, finer},
+                             LodNode{minX + h, minZ,     h, finer},
+                             LodNode{minX,     minZ + h, h, finer},
+                             LodNode{minX + h, minZ + h, h, finer}};
+    bool allReady = true;
+    for (const LodNode& k : kids)   // probe all four: request every absent sibling
+        if (!ensure(k)) allReady = false;
+    if (!allReady) {
+        out.push_back(LodNode{minX, minZ, size, level});
+        return;
+    }
+    for (const LodNode& k : kids)
+        selectGatedRec(k.minX, k.minZ, k.size, finer, ranges, camX, camZ,
+                       ensure, out);
+}
+}  // namespace
+
+std::vector<LodNode> selectLodNodesGated(
+    float worldHalf, int numLods, const std::vector<float>& ranges,
+    float camX, float camZ, const std::function<bool(const LodNode&)>& ensure) {
+    numLods = std::max(1, numLods);
+    std::vector<LodNode> out;
+    LodNode root{-worldHalf, -worldHalf, worldHalf * 2.0f, numLods - 1};
+    if (!ensure(root)) return out;   // nothing renderable yet
+    if (numLods == 1 || ranges.empty()) {
+        out.push_back(root);
+        return out;
+    }
+    selectGatedRec(root.minX, root.minZ, root.size, root.level, ranges,
+                   camX, camZ, ensure, out);
+    return out;
+}
+
+bool LodMeshStream::begin(int64_t key, uint32_t revision) {
+    return inFlight_.emplace(key, revision).second;
+}
+
+void LodMeshStream::complete(Result r) {
+    std::lock_guard<std::mutex> lock(doneMutex_);
+    done_.push_back(std::move(r));
+}
+
+std::vector<LodMeshStream::Result> LodMeshStream::drain(uint32_t currentRevision) {
+    std::vector<Result> finished;
+    {
+        std::lock_guard<std::mutex> lock(doneMutex_);
+        finished.swap(done_);
+    }
+    std::vector<Result> ready;
+    ready.reserve(finished.size());
+    for (Result& r : finished) {
+        // Clear the in-flight entry only when it belongs to THIS job: after an
+        // invalidate + re-request, the entry is the new revision's and must
+        // survive the old job's arrival.
+        auto it = inFlight_.find(r.key);
+        if (it != inFlight_.end() && it->second == r.revision) inFlight_.erase(it);
+        if (r.revision == currentRevision) ready.push_back(std::move(r));
+    }
+    return ready;
+}
+
+void LodMeshStream::invalidate() { inFlight_.clear(); }
+
 LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
                                 const LodNode& node, int gridRes, double normalEps) {
     // Even grid so the next-coarser level samples align on even indices.

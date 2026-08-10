@@ -629,10 +629,25 @@ HeightField erodeField(const HeightField& f, double worldSize, int resolution,
         key *= 1099511628211ULL;
     };
     if (useCache) {
+        // MULTI-SCALE probe: a sparse pseudo-random pattern alone can miss a
+        // localized feature entirely (a +/-1.4 km ridge network in an 8 km
+        // domain slipped through all 64 points — the stale field then grew
+        // ROADS against terrain that no longer existed). Uniform lattices at
+        // full/half/quarter extent bound the largest invisible feature to
+        // under a quarter of a fine cell.
         for (int i = 0; i < 64; ++i) {           // deterministic probe pattern
             const double px = -half + worldSize * ((i * 37) % 61) / 61.0;
             const double pz = -half + worldSize * ((i * 53) % 67) / 67.0;
             fold(f(px, pz));
+        }
+        for (int scale = 0; scale < 3; ++scale) {
+            const double ext = worldSize / (1 << scale);   // full, half, quarter
+            for (int j = 0; j < 16; ++j)
+                for (int i = 0; i < 16; ++i) {
+                    const double px = -ext * 0.5 + ext * (i + 0.5) / 16.0;
+                    const double pz = -ext * 0.5 + ext * (j + 0.5) / 16.0;
+                    fold(f(px, pz));
+                }
         }
         fold(worldSize); fold(static_cast<double>(n));
         fold(static_cast<double>(params.droplets));
@@ -642,6 +657,14 @@ HeightField erodeField(const HeightField& f, double worldSize, int resolution,
         fold(static_cast<double>(params.erodeRadius));
         fold(static_cast<double>(params.thermalIterations));
         fold(params.talus); fold(params.thermalRate);
+        // Backend tag (P0.5): the GPU and CPU sims are each deterministic but
+        // not bit-identical to each other, so the key names which one will
+        // run — CPU- and GPU-baked caches never cross-contaminate, and a
+        // kernel revision (tag bump) invalidates cleanly.
+        for (const char* t = erosionBackendTag(); *t; ++t) {
+            key ^= static_cast<unsigned char>(*t);
+            key *= 1099511628211ULL;
+        }
     }
     char cachePath[256] = {0};
     if (useCache) {

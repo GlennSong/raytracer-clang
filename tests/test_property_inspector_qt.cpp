@@ -29,6 +29,10 @@ int failures = 0;
     } while (0)
 }  // namespace
 
+// City Planner bridge + panel suite (test_city_planner_qt.cpp) — runs in the
+// same offscreen QApplication; returns its failure count.
+int runCityPlannerQtTests();
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication app(argc, argv);
@@ -170,5 +174,7 @@ int main(int argc, char** argv) {
     std::printf(failures == 0 ? "inspector qt test: OK\n"
                               : "inspector qt test: %d FAILURES\n",
                 failures);
+
+    failures += runCityPlannerQtTests();   // City Planner bridge + panel (P7.3)
     return failures == 0 ? 0 : 1;
 }

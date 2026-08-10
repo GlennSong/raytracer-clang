@@ -1,5 +1,6 @@
 #include "asset_manager.h"
 #include "mesh_builder.h"
+#include "../profile.h"
 #include <cstdio>
 
 namespace engine {
@@ -25,6 +26,7 @@ MeshHandle AssetManager::acquirePrimitive(const std::string& shape, Vec3 size) {
 }
 
 MeshHandle AssetManager::acquireMesh(const RenderMesh& mesh, const std::string& key) {
+    RT_PROFILE_ZONE_NAMED("acquireMesh");
     if (!key.empty()) {
         auto it = byKey_.find(key);
         if (it != byKey_.end()) {

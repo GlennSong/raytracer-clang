@@ -8,7 +8,7 @@
 using namespace engine;  // namespace migration (ADR-0015)
 
 // Path-traced parity with the realtime renderer's lights and shadows
-// (ADR-0017 / lighting.metal): explicit light sampling, GGX surfaces,
+// (ADR-0017 / lighting_brdf.metal): explicit light sampling, GGX surfaces,
 // windowed falloff, HDR environment with the dominant sun extracted.
 
 namespace {
@@ -59,7 +59,7 @@ TEST_CASE(point_light_illuminates_and_is_shadowed) {
 }
 
 TEST_CASE(point_light_falloff_is_windowed_to_range) {
-    // Mirrors lighting.metal's distanceAttenuation: inverse-square, smoothly
+    // Mirrors lighting_brdf.metal's distanceAttenuation: inverse-square, smoothly
     // windowed to exactly zero at range.
     Scene near = groundScene();
     Scene far = groundScene();

@@ -1,5 +1,7 @@
 #include "debug_overlay_system.h"
 
+#include "../frame_stats.h"
+
 #include <algorithm>
 
 #ifdef RT_ENABLE_IMGUI
@@ -8,11 +10,9 @@
 
 namespace engine {
 
-void DebugOverlaySystem::loadSettings(FrameContext& ctx) {
-    auto& s = ctx.settings;
-    auto& ao = ctx.renderer.ssaoParams;
-    auto& ssr = ctx.renderer.ssrParams;
-    auto& lit = ctx.view.lighting;
+void DebugOverlaySystem::loadSettings(Settings& s, Renderer& r) {
+    auto& ao = r.ssaoParams;
+    auto& ssr = r.ssrParams;
 
     ao.radius    = static_cast<float>(s.getDouble("ssao.radius", ao.radius));
     ao.intensity = static_cast<float>(s.getDouble("ssao.intensity", ao.intensity));
@@ -28,7 +28,7 @@ void DebugOverlaySystem::loadSettings(FrameContext& ctx) {
     ssr.blendStrength = static_cast<float>(s.getDouble("ssr.blendStrength", ssr.blendStrength));
     ssr.maxRoughness  = static_cast<float>(s.getDouble("ssr.maxRoughness", ssr.maxRoughness));
 
-    auto& sh = ctx.renderer.shadowParams;
+    auto& sh = r.shadowParams;
     sh.distance     = static_cast<float>(s.getDouble("shadow.distance", sh.distance));
     sh.cascadeCount = static_cast<int>(s.getDouble("shadow.cascades", sh.cascadeCount));
     sh.splitLambda  = static_cast<float>(s.getDouble("shadow.splitLambda", sh.splitLambda));
@@ -37,29 +37,45 @@ void DebugOverlaySystem::loadSettings(FrameContext& ctx) {
     // settings.json — the cascade is code defaults -> level JSON -> runtime (sliders
     // / day-night). Persisting it here silently overrode the level on load, which
     // caused stale exposure/ambient to fight the level. Sliders still edit it live.
-    (void)lit;
 
-    auto& bloom = ctx.renderer.bloomParams;
-    bloom.threshold = static_cast<float>(s.getDouble("bloom.threshold", bloom.threshold));
-    bloom.knee      = static_cast<float>(s.getDouble("bloom.knee", bloom.knee));
-    bloom.intensity = static_cast<float>(s.getDouble("bloom.intensity", bloom.intensity));
+    // Bloom is LEVEL-AUTHORED now (environment.bloom): the same silent-override
+    // rule as lighting above. Sliders still edit it live, nothing persists.
+    // (The visionOS render panel is unaffected — it keeps its own on-device pref
+    // store in vision_spike.mm, seeded from the live renderer params, and never
+    // touches settings.json.)
 
-    ctx.renderer.tonemapOperator =
-        static_cast<int>(s.getDouble("tonemap.op", ctx.renderer.tonemapOperator));
-    ctx.renderer.gradeParams.contrast =
-        static_cast<float>(s.getDouble("grade.contrast", ctx.renderer.gradeParams.contrast));
-    ctx.renderer.gradeParams.saturation =
-        static_cast<float>(s.getDouble("grade.saturation", ctx.renderer.gradeParams.saturation));
+    // ...including the ON/OFF bit. This one was left behind when the bloom
+    // PARAMS stopped persisting, and loadSettings runs AFTER the level load in
+    // both states, so a single stale `bloom.enabled: false` in settings.json
+    // silently un-bloomed every level ever after (measured on metropolis_sky:
+    // mean frame luma 208 -> 115). The FX checkbox still toggles it live; it
+    // just no longer outlives the session.
+    r.ssaoEnabled  = s.getBool("ssao.enabled", r.ssaoEnabled);
+    r.ssrEnabled   = s.getBool("ssr.enabled", r.ssrEnabled);
 
-    ctx.renderer.showHud = s.getBool("hud.show", ctx.renderer.showHud);
-    ctx.renderer.targetFps = static_cast<int>(s.getDouble("targetFps", ctx.renderer.targetFps));
+    r.tonemapOperator =
+        static_cast<int>(s.getDouble("tonemap.op", r.tonemapOperator));
+    r.gradeParams.contrast =
+        static_cast<float>(s.getDouble("grade.contrast", r.gradeParams.contrast));
+    r.gradeParams.saturation =
+        static_cast<float>(s.getDouble("grade.saturation", r.gradeParams.saturation));
+
+    r.showHud = s.getBool("hud.show", r.showHud);
+    r.targetFps = static_cast<int>(s.getDouble("targetFps", r.targetFps));
 }
 
-void DebugOverlaySystem::saveSettings(FrameContext& ctx) {
-    auto& s = ctx.settings;
-    auto& ao = ctx.renderer.ssaoParams;
-    auto& ssr = ctx.renderer.ssrParams;
-    auto& lit = ctx.view.lighting;
+void DebugOverlaySystem::loadSettings(FrameContext& ctx) {
+    // Scene lighting (exposure, ambient, sun) is owned by the LEVEL file, not
+    // settings.json — the cascade is code defaults -> level JSON -> runtime
+    // (sliders / day-night). Persisting it here silently overrode the level on
+    // load, which caused stale exposure/ambient to fight the level. Sliders
+    // still edit it live.
+    loadSettings(ctx.settings, ctx.renderer);
+}
+
+void DebugOverlaySystem::saveSettings(Settings& s, Renderer& r) {
+    auto& ao = r.ssaoParams;
+    auto& ssr = r.ssrParams;
 
     s.setDouble("ssao.radius", ao.radius);
     s.setDouble("ssao.intensity", ao.intensity);
@@ -75,27 +91,31 @@ void DebugOverlaySystem::saveSettings(FrameContext& ctx) {
     s.setDouble("ssr.blendStrength", ssr.blendStrength);
     s.setDouble("ssr.maxRoughness", ssr.maxRoughness);
 
-    s.setDouble("shadow.distance", ctx.renderer.shadowParams.distance);
-    s.setDouble("shadow.cascades", ctx.renderer.shadowParams.cascadeCount);
-    s.setDouble("shadow.splitLambda", ctx.renderer.shadowParams.splitLambda);
+    s.setDouble("shadow.distance", r.shadowParams.distance);
+    s.setDouble("shadow.cascades", r.shadowParams.cascadeCount);
+    s.setDouble("shadow.splitLambda", r.shadowParams.splitLambda);
 
     // Scene lighting is level-owned (see loadSettings) — not persisted here, so a
     // session's slider tweaks don't silently override the level on next launch.
-    (void)lit;
+    // Bloom rides the same rule.
 
-    auto& bloom = ctx.renderer.bloomParams;
-    s.setDouble("bloom.threshold", bloom.threshold);
-    s.setDouble("bloom.knee", bloom.knee);
-    s.setDouble("bloom.intensity", bloom.intensity);
 
-    s.setDouble("tonemap.op", ctx.renderer.tonemapOperator);
-    s.setDouble("grade.contrast", ctx.renderer.gradeParams.contrast);
-    s.setDouble("grade.saturation", ctx.renderer.gradeParams.saturation);
+    s.setBool("ssao.enabled", r.ssaoEnabled);
+    s.setBool("ssr.enabled", r.ssrEnabled);
 
-    s.setBool("hud.show", ctx.renderer.showHud);
-    s.setDouble("targetFps", ctx.renderer.targetFps);
+    s.setDouble("tonemap.op", r.tonemapOperator);
+    s.setDouble("grade.contrast", r.gradeParams.contrast);
+    s.setDouble("grade.saturation", r.gradeParams.saturation);
 
-    s.save("settings.json");
+    s.setBool("hud.show", r.showHud);
+    s.setDouble("targetFps", r.targetFps);
+}
+
+void DebugOverlaySystem::saveSettings(FrameContext& ctx) {
+    // Scene lighting is level-owned (see loadSettings) — not persisted here, so a
+    // session's slider tweaks don't silently override the level on next launch.
+    saveSettings(ctx.settings, ctx.renderer);
+    ctx.settings.save("settings.json");
 }
 
 void DebugOverlaySystem::resetDefaults(FrameContext& ctx) {
@@ -116,10 +136,20 @@ void DebugOverlaySystem::onStart(FrameContext& ctx) {
 }
 
 void DebugOverlaySystem::onStop(FrameContext& ctx) {
+    // Put the passes back BEFORE persisting: quitting mid-run must not
+    // save a measurement configuration as if it were the user's choice.
+    passCost.cancel(ctx);
     saveSettings(ctx);
 }
 
 void DebugOverlaySystem::render(FrameContext& ctx) {
+    // Advanced FIRST and unconditionally: a running measurement has passes
+    // disabled to time them, so it must keep ticking to its end and restore
+    // them even if the panel is collapsed, the window hidden, or ImGui absent
+    // entirely. Driving it from inside the panel's if-block once left a pass
+    // switched off for the rest of the session.
+    passCost.update(ctx);
+
 #ifdef RT_ENABLE_IMGUI
     // No ImGui context (e.g. a backend without debug-UI support): stay inert.
     if (ImGui::GetCurrentContext() == nullptr) return;
@@ -146,6 +176,81 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
     ImGui::Text("Draw calls: %u (instanced: %u)", rs.drawCalls, rs.instancedDrawCalls);
     ImGui::Text("Instances: %u  Triangles: %.2fM", rs.totalInstances,
                 rs.trianglesDrawn / 1e6);
+    if (rs.instanceOverflow || rs.shadowOverflow || rs.foliageOverflow)
+        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
+                           "OVERFLOW inst %u  shadow %u  foliage %u",
+                           rs.instanceOverflow, rs.shadowOverflow,
+                           rs.foliageOverflow);
+
+    // The frame ledger (ADR-0077): where the frame's CPU time goes, over the
+    // last ~4 s. Wait is FPS-cap sleep — headroom, not cost. For anything the
+    // per-phase split can't answer, attach Tracy (RT_ENABLE_PROFILER).
+    if (ImGui::CollapsingHeader("Performance")) {
+        FrameStats& fs = ctx.stats;
+        FrameStats::Summary sum = fs.summarize();
+        ImGui::Text("frame  %5.2f ms avg   %5.2f p95   %5.2f max",
+                    sum.avgTotalMs, sum.p95TotalMs, sum.maxTotalMs);
+        ImGui::Text("update %5.2f   fixed %5.2f   render %5.2f   wait %5.2f",
+                    sum.avgUpdateMs, sum.avgFixedMs, sum.avgRenderMs,
+                    sum.avgWaitMs);
+        // The render split is the actionable part: acquire is time BLOCKED on
+        // the GPU/vsync (CPU idle), encode+submit is real CPU work.
+        ImGui::Text("  acquire %5.2f (gpu wait)   encode %5.2f   submit %5.2f",
+                    sum.avgAcquireMs, sum.avgEncodeMs, sum.avgSubmitMs);
+        if (sum.avgGpuMs > 0.0f) {
+            ImGui::Text("  GPU     %5.2f ms/frame", sum.avgGpuMs);
+            ImGui::SameLine();
+            ImGui::TextDisabled(sum.avgGpuMs > sum.avgEncodeMs + sum.avgSubmitMs
+                                    ? "(GPU-bound)" : "(CPU-bound)");
+        } else {
+            ImGui::TextDisabled("  GPU     n/a (backend reports no timing)");
+        }
+
+        static float plotBuf[FrameStats::HISTORY];
+        const int n = fs.historySize();
+        for (int i = 0; i < n; i++) plotBuf[i] = fs.historyAt(i).totalMs;
+        // Fixed 0..2x-budget scale so spikes read against 16.6/33.3 ms rather
+        // than autoscale flattening everything.
+        float budgetMs = ctx.renderer.targetFps > 0
+                             ? 1000.0f / static_cast<float>(ctx.renderer.targetFps)
+                             : 16.6f;
+        ImGui::PlotLines("##frameTimes", plotBuf, n, 0, nullptr, 0.0f,
+                         budgetMs * 2.0f, ImVec2(-1, 64));
+        ImGui::TextDisabled("last %d frames, scale 0-%.1f ms", n,
+                            budgetMs * 2.0f);
+
+        // Pass-cost probe: the only reliable way to rank the screen-space
+        // passes while gpu_ms is present-contaminated (ADR-0077). Holds each
+        // configuration for a fixed window, then reports the median frame time
+        // of each — measured, not eyeballed, and no toggling by hand.
+        if (passCost.state == PassCost::Idle) {
+            if (ImGui::Button("Rank post passes (~10s)")) passCost.begin(ctx);
+            ImGui::SameLine();
+            ImGui::TextDisabled("toggles SSAO/SSR/bloom in turn, times each");
+        } else {
+            ImGui::Text("ranking: %s  (%.1fs left)", passCost.label(),
+                        passCost.secondsLeft());
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) passCost.cancel(ctx);
+        }
+        if (!passCost.result.empty()) {
+            ImGui::TextUnformatted(passCost.result.c_str());
+            ImGui::SameLine();
+            if (ImGui::Button("Clear##passcost")) passCost.result.clear();
+        }
+
+        if (!fs.capturing()) {
+            if (ImGui::Button("Start CSV capture"))
+                fs.startCapture("frame-capture.csv",
+                                describeCaptureContext(ctx));
+            ImGui::SameLine();
+            ImGui::TextDisabled("-> frame-capture.csv (tools/frame-report.py)");
+        } else {
+            if (ImGui::Button("Stop CSV capture")) fs.stopCapture();
+            ImGui::SameLine();
+            ImGui::Text("recording: %ld frames", fs.capturedFrames());
+        }
+    }
 
     ImGui::Separator();
     const char* viewNames[] = {"Normal", "AO Only", "SSR Only", "Depth", "Normals",
@@ -253,7 +358,7 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
         auto& bloom = ctx.renderer.bloomParams;
         ImGui::SliderFloat("Threshold", &bloom.threshold, 0.0f, 3.0f);
         ImGui::SliderFloat("Knee", &bloom.knee, 0.0f, 1.0f);
-        ImGui::SliderFloat("Intensity##bloom", &bloom.intensity, 0.0f, 2.0f);
+        ImGui::SliderFloat("Intensity##bloom", &bloom.intensity, 0.0f, 0.5f);
     }
 
     if (ImGui::CollapsingHeader("Tonemap / Grade")) {

@@ -3,6 +3,7 @@
 #include "../engine/editor_bridge.h"
 #include "../engine/level_loader.h"
 #include "../engine/script_assets.h"
+#include "../engine/asset_root.h"
 #include "../engine/asset_manager.h"
 #include "../engine/systems/dev_control_system.h"
 #include "../engine/systems/camera_system.h"
@@ -19,6 +20,7 @@
 #endif
 #include "../engine/systems/vehicle_system.h"
 #include "../engine/systems/render_system.h"
+#include "../engine/systems/xr_camera_system.h"
 #include "../engine/systems/debug_draw_system.h"
 #include "../engine/systems/audio_system.h"
 #include "../engine/audio/sfx.h"
@@ -160,7 +162,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // trivially controllable, so bodies-follow-planner works for them everywhere.
     citySys.setPedsExternallyOwned(true);
     addSystem<citysim::CityPhysicsSystem>(citySys, physSys);   // car proxies + poles
-    addSystem<citysim::CityVehicleSystem>(citySys, physSys);   // commandeer promotion
+    addSystem<citysim::CityVehicleSystem>(citySys);            // commandeer promotion
     addSystem<citysim::CityWalkerSystem>(citySys, physSys);    // spawn + drive walkers
     // The player IS a person in third person (ADR-0064): draws the walker body
     // over the on-foot shoulder camera, walk cycle shared with the crowd. After
@@ -177,6 +179,11 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
 #else
     addSystem<TerrainLodSystem>();          // CDLOD draws only (no physics build)
 #endif
+    // LAST camera writer: when a headset tracks, rewrite the shared camera to
+    // follow the head (culling/lamps/audio/Lua) and hand the gameplay camera
+    // to the renderer as the locomotion-base hint. Must stay after every
+    // other camera writer and before RenderSystem. Inert without a headset.
+    addSystem<XrCameraSystem>();
     addSystem<RenderSystem>();
     addSystem<DebugDrawSystem>();   // ctx.debug lines on top of the scene (ADR-0067)
     // After the camera systems so the listener follows this frame's view.
@@ -316,7 +323,9 @@ void ArenaState::onEnter(FrameContext& ctx) {
     ctx.actions.bindButton("slot_1", KeyCode::Num1);   // bare hands (start here)
     ctx.actions.bindButton("slot_2", KeyCode::Num2);   // draw the gun
     {
-        std::string gun = readTextFile("assets/scripts/gun.lua");
+        // Through the asset root: inside a sandboxed bundle (visionOS) the CWD
+        // is a temp dir and the bare relative path finds nothing — no gun.
+        std::string gun = readTextFile(engine::assetPath("assets/scripts/gun.lua"));
         if (gun.empty()) {
             LOG_WARN << "assets/scripts/gun.lua not found; player has no gun";
         } else {

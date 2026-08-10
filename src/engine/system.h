@@ -8,16 +8,19 @@
 #include "event_bus.h"
 #include "input/input_map.h"
 #include "input/player_input.h"
+#include "xr/xr_state.h"
 #include "../renderer/renderer.h"
 #include "../renderer/window.h"
 #include "../renderer/settings.h"
 #include "../job_system.h"
 #include <vector>
 #include <memory>
+#include <string>
 
 namespace engine {
 
 class AssetManager;
+class FrameStats;
 
 // End-of-frame request to swap the active app state (e.g. the editor's Play
 // button, the game's Stop). Application pops the current state and pushes
@@ -44,6 +47,10 @@ struct RenderView {
     // editor controllers drive it). Lets the render system hide that entity's
     // gizmo — you don't draw the camera you are inside of.
     Entity activeCameraEntity;
+    // Explicit per-eye matrices when a headset drives the view, produced by
+    // XrCameraSystem (which also rewrites `camera` to follow the head, so
+    // culling/audio/Lua stay coherent). Inactive by default.
+    XrRenderInfo xr;
 };
 
 // Services and per-frame data handed to every system hook. Field validity by
@@ -63,9 +70,14 @@ struct FrameContext {
                                // drawn on top by DebugDrawSystem
     AudioEngine& audio;        // sealed miniaudio engine (ADR-0069); prefer
                                // PlaySound events over direct play() calls
+    FrameStats& stats;         // the frame ledger (ADR-0077): per-phase times,
+                               // history ring, CSV capture — read-mostly; only
+                               // Application writes timings
     const InputState& input;   // polled continuous snapshot (mouse, raw keys)
     InputMap& actions;         // global/system actions (quit, pause): keyboard
     PlayerInputs& players;     // per-player gameplay input (see player_input.h)
+    XrState& xr;               // headset state for this frame (engine/xr/);
+                               // xr.active is false everywhere but headsets
     int framebufferWidth;
     int framebufferHeight;
     // Logical window size — mouse coordinates live in this space (it differs
@@ -80,7 +92,21 @@ struct FrameContext {
     // panels (Debug > Cameras) draw them only then, so plain play looks like
     // the shipped game.
     bool debugOverlayActive = false;
+    // Which fixed step of THIS frame is running (0-based) and how many run in
+    // total. The fixed loop can run several steps per frame when catching up,
+    // and work whose only consumer is the RENDERER (pose bakes) is wasted on
+    // every step but the last. Trailing + defaulted so the existing positional
+    // aggregate initialisers keep compiling, and so a system stepped directly
+    // by a test still reads as "the single, final step".
+    int fixedStepIndex = 0;
+    int fixedStepCount = 1;
 };
+
+// The conditions a frame capture was taken under, as a one-line
+// `key=value` string for the capture's header (see FrameStats::startCapture).
+// Defined once (application.cpp) and used by every place that starts a
+// capture, so two captures always describe themselves the same way.
+std::string describeCaptureContext(const FrameContext& ctx);
 
 // A unit of engine behaviour, ticked by Application each frame. Override only
 // the hooks you need; all default to no-ops. The interface is deliberately

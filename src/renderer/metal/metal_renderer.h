@@ -31,9 +31,15 @@ public:
     void removeTexture(TextureHandle handle) override;
     void setEnvironmentMap(TextureHandle equirect) override;
     RenderStats getRenderStats() const override;
+    void setInstanceCapacities(uint32_t instances, uint32_t shadow,
+                               uint32_t foliage) override;
+    float lastGpuFrameMs() const override;
+    bool setPresentSync(bool enabled) override;
 
     void beginFrame() override;
     void setCamera(const CameraState& camera) override;
+    XrBackend* xrBackend() override;   // visionOS: CompositorServices adapter
+    void setXrBaseHint(const Vec3& worldPosition) override;
     void setLights(const SceneLighting& lighting) override;
     void drawMesh(MeshHandle handle, const Mat4& transform,
                   const RenderMaterial& material) override;

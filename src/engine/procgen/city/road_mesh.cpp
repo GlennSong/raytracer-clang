@@ -1121,32 +1121,6 @@ RenderMesh weldRibbons(const std::vector<UnionSpine>& spines, double y, const Ve
     return mesh;
 }
 
-// Harden a union-boundary loop: snap vertices to a fine grid (collapses the sub-mm zigzag slivers a
-// glancing ribbon-vs-ribbon crossing leaves behind), drop consecutive duplicates, and remove needle
-// SPIKES — a vertex whose two edges nearly reverse, which is what the sidewalk offset later amplifies
-// into a visible spire at a sharp junction. Iterated until stable.
-static Poly2 cleanPolygon(const Poly2& in, double grid) {
-    Poly2 s;
-    for (const Vec2& p : in) {
-        Vec2 q(std::round(p.x / grid) * grid, std::round(p.y / grid) * grid);
-        if (s.empty() || (q - s.back()).length() > grid * 0.5) s.push_back(q);
-    }
-    if (s.size() >= 2 && (s.front() - s.back()).length() <= grid * 0.5) s.pop_back();
-    bool changed = true;
-    while (changed && static_cast<int>(s.size()) > 3) {
-        changed = false;
-        int n = static_cast<int>(s.size());
-        for (int i = 0; i < n; ++i) {
-            Vec2 e0 = s[i] - s[(i + n - 1) % n], e1 = s[(i + 1) % n] - s[i];
-            double l0 = e0.length(), l1 = e1.length();
-            if (l0 < 1e-9 || l1 < 1e-9 || dot(e0, e1) / (l0 * l1) < -0.985) {   // dup or ~reversal spike
-                s.erase(s.begin() + i); changed = true; break;
-            }
-        }
-    }
-    return s;
-}
-
 // Per-spine smoothed deck profiles with junction RECONCILIATION: each chain's
 // profile is grade-limited independently (roadProfile), then chains sharing an
 // endpoint AGREE on its height (the average of their independent ends, blended

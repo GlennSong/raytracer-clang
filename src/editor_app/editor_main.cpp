@@ -19,6 +19,7 @@
 #include "../renderer/hosted_window.h"
 #include "../renderer/gamepad_gc.h"
 #include "../log.h"
+#include "city_planner_panel.h"
 #include "property_inspector.h"
 
 // Vulkan viewport surface seam (ADR-0057). Present only on non-Apple targets
@@ -37,6 +38,8 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QCursor>
+#include <QDialog>
+#include <QSlider>
 #include <QDir>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
@@ -60,6 +63,7 @@
 #include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QStatusBar>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -400,7 +404,16 @@ struct Panels {
         column->addWidget(inspector);
         column->addStretch();
 
-        dock->setWidget(body);
+        // Scroll wrapper: a populated inspector's minimum height is the sum
+        // of its sections. Docked in a column with another panel, rigid
+        // minimums can exceed the window and the dock layout clips the
+        // panels into each other — scrolling makes the constraint always
+        // satisfiable instead.
+        auto* scroll = new QScrollArea(dock);
+        scroll->setWidget(body);
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        dock->setWidget(scroll);
         return dock;
     }
 
@@ -497,6 +510,77 @@ struct Panels {
     std::vector<QTreeWidgetItem*> rowItems;
 };
 
+// Cloud tuning panel — MODELESS, because tuning a volume means dragging a
+// slider and watching the sky, not committing a number in a modal box and
+// reopening it to try the next one.
+//
+// Bound straight to the live VolumetricCloudParams: the level loader writes
+// them once at load and the renderer reads them fresh each frame with nothing
+// re-applying in between, so an edit here is what the next frame marches.
+// Deliberately NOT persisted to settings.json — these are authored per level
+// (`environment.clouds`), and a global override would silently apply one
+// level's sky to every other one. Copy the printed JSON into the level to keep
+// a tuning.
+void showCloudPanel(QWidget& parent, engine::Application& app) {
+    static QDialog* panel = nullptr;
+    if (panel) { panel->raise(); panel->activateWindow(); return; }
+
+    panel = new QDialog(&parent);
+    panel->setWindowTitle("Clouds");
+    panel->setAttribute(Qt::WA_DeleteOnClose);
+    QObject::connect(panel, &QObject::destroyed, []() { panel = nullptr; });
+
+    auto* form = new QFormLayout(panel);
+    VolumetricCloudParams& vc = app.renderView().lighting.volumetricClouds;
+
+    auto* readout = new QLabel(panel);
+    readout->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    readout->setWordWrap(true);
+
+    auto refresh = [readout, &vc]() {
+        readout->setText(QString(
+            "\"clouds\": { \"coverage\": %1, \"density\": %2,\n"
+            "  \"detailStrength\": %3, \"ambient\": %4 }")
+            .arg(vc.coverage, 0, 'f', 3).arg(vc.density, 0, 'f', 4)
+            .arg(vc.detailStrength, 0, 'f', 3).arg(vc.ambient, 0, 'f', 3));
+    };
+
+    // Sliders are integer-valued in Qt, so each carries a scale to its float.
+    auto addSlider = [&](const char* label, float* target, float lo, float hi,
+                         const char* tip) {
+        auto* s = new QSlider(Qt::Horizontal, panel);
+        s->setRange(0, 1000);
+        s->setValue(static_cast<int>((*target - lo) / (hi - lo) * 1000.0f));
+        s->setToolTip(tip);
+        QObject::connect(s, &QSlider::valueChanged,
+                         [target, lo, hi, refresh](int v) {
+                             *target = lo + (hi - lo) * (v / 1000.0f);
+                             refresh();
+                         });
+        form->addRow(label, s);
+    };
+
+    // COVERAGE is "how much sky has cloud in it" (sparse <-> overcast).
+    // DENSITY is "how thick the cloud material is" (wispy <-> solid). They are
+    // genuinely different knobs and both were previously unreachable at
+    // runtime; density in particular had a default of 0.55, which is not a
+    // volume coefficient at all — see the note on VolumetricCloudParams.
+    addSlider("Coverage (sparse - overcast)", &vc.coverage, 0.0f, 1.0f,
+              "How much of the sky has cloud in it.");
+    addSlider("Density (wispy - solid)", &vc.density, 0.005f, 0.20f,
+              "Extinction per metre. ~0.02 = thin and translucent, "
+              "~0.05 = normal cumulus, ~0.12 = heavy and dark.");
+    addSlider("Detail erosion (billowy - ragged)", &vc.detailStrength,
+              0.0f, 1.0f, "How deeply the detail noise eats into cloud edges.");
+    addSlider("Ambient (contrast)", &vc.ambient, 0.0f, 2.0f,
+              "Sky light reaching cloud interiors. Lower = moodier.");
+
+    form->addRow(new QLabel("Paste into the level's environment block:", panel));
+    form->addRow(readout);
+    refresh();
+    panel->show();
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -532,6 +616,24 @@ int main(int argc, char** argv) {
     QDockWidget* inspectorDock = panels.buildInspectorDock(&mainWindow);
     mainWindow.addDockWidget(Qt::LeftDockWidgetArea, hierarchyDock);
     mainWindow.addDockWidget(Qt::RightDockWidgetArea, inspectorDock);
+
+    // City Planner (P7.3 phase 1): recipe knobs + graph-only Regenerate +
+    // overlay layers + camera presets. Lives under the inspector on the
+    // right; its signals call the bridge directly, same as the inspector.
+    // Scroll-wrapped for the same reason as the inspector: the panel's
+    // natural minimum (~535px of rows) must never become a hard layout
+    // constraint on the shared column.
+    auto* plannerDock = new QDockWidget("City Planner", &mainWindow);
+    auto* plannerPanel = new CityPlannerPanel(bridge);
+    auto* plannerScroll = new QScrollArea(plannerDock);
+    plannerScroll->setWidget(plannerPanel);
+    plannerScroll->setWidgetResizable(true);
+    plannerScroll->setFrameShape(QFrame::NoFrame);
+    plannerDock->setWidget(plannerScroll);
+    mainWindow.addDockWidget(Qt::RightDockWidgetArea, plannerDock);
+    // Explicitly UNDER the inspector in the same column — addDockWidget
+    // alone leaves the arrangement to the dock area's discretion.
+    mainWindow.splitDockWidget(inspectorDock, plannerDock, Qt::Vertical);
 
     // Asset browser: a filesystem view of assets/; double-clicking a level
     // opens it (Play/Stop and open both go through Application::requestState).
@@ -626,8 +728,10 @@ int main(int argc, char** argv) {
     mainWindow.show();
     // Side panels start narrow; the viewport is the star. (resizeDocks only
     // takes effect once the window is realized.)
-    mainWindow.resizeDocks({hierarchyDock, inspectorDock}, {200, 330},
-                           Qt::Horizontal);
+    mainWindow.resizeDocks({hierarchyDock, inspectorDock, plannerDock},
+                           {200, 330, 330}, Qt::Horizontal);
+    // Right column: inspector gets the majority; the planner scrolls anyway.
+    mainWindow.resizeDocks({inspectorDock, plannerDock}, {3, 2}, Qt::Vertical);
     hosted->setNativeHandle(reinterpret_cast<void*>(viewport->winId()));
     {
         const qreal scale = viewport->devicePixelRatioF();
@@ -752,6 +856,68 @@ int main(int argc, char** argv) {
     fileMenu->insertMenu(fileTailSeparator, recentMenu);
 
     // Level menu: document-level properties (they belong to the level, not
+    // ---- Render menu: feature switches + cloud tuning -------------------
+    // These existed only as RT_NO_* environment variables (set before launch,
+    // fixed for the process) and as ImGui sliders in a debug overlay that is
+    // compiled out by default (RT_ENABLE_IMGUI=OFF) and is a different UI from
+    // this one. Neither is reachable while looking at a scene in the editor,
+    // which is where the "why is this 5 fps" question actually gets asked.
+    // Everything here is live: toggle, look, toggle back.
+    {
+        auto* renderMenu = mainWindow.menuBar()->addMenu("&Render");
+
+        auto addToggle = [](QMenu* m, const char* label, bool initial,
+                            std::function<void(bool)> apply) {
+            QAction* a = m->addAction(label);
+            a->setCheckable(true);
+            a->setChecked(initial);
+            QObject::connect(a, &QAction::toggled, std::move(apply));
+            return a;
+        };
+
+        // EFFECTS — the screen-space and lighting passes, in rough order of
+        // measured cost. SSAO was ~15% of the frame in the one isolated
+        // measurement that survived scrutiny.
+        auto* fx = renderMenu->addMenu("Effects");
+        Renderer& r = app.renderer();
+        addToggle(fx, "Shadows", app.renderView().lighting.shadow.enabled,
+                  [&app](bool on) {
+                      app.renderView().lighting.shadow.enabled = on;
+                  });
+        addToggle(fx, "SSAO (ambient occlusion)", r.ssaoEnabled,
+                  [&r](bool on) { r.ssaoEnabled = on; });
+        addToggle(fx, "SSR (screen-space reflections)", r.ssrEnabled,
+                  [&r](bool on) { r.ssrEnabled = on; });
+        addToggle(fx, "Reflection probes", r.reflectionProbesEnabled,
+                  [&r](bool on) { r.reflectionProbesEnabled = on; });
+        addToggle(fx, "Bloom", r.bloomEnabled,
+                  [&r](bool on) { r.bloomEnabled = on; });
+        addToggle(fx, "Volumetric clouds", r.volumetricCloudsEnabled,
+                  [&r](bool on) { r.volumetricCloudsEnabled = on; });
+        addToggle(fx, "Sky scattering", r.skyScatteringEnabled,
+                  [&r](bool on) { r.skyScatteringEnabled = on; });
+
+        // CONTENT LAYERS — hide a whole class of geometry and read the frame
+        // cost off the difference. This is the attribution tool: it is how the
+        // city's triangles were split into foliage / buildings / roads / sim.
+        auto* layers = renderMenu->addMenu("Show layers");
+        auto layerToggle = [&](const char* label, uint32_t bit) {
+            addToggle(layers, label, true, [&r, bit](bool on) {
+                if (on) r.hiddenLayers &= ~bit;
+                else    r.hiddenLayers |= bit;
+            });
+        };
+        layerToggle("Buildings", engine::LayerBuildings);
+        layerToggle("Foliage (trees)", engine::LayerFoliage);
+        layerToggle("Roads", engine::LayerRoads);
+        layerToggle("Sim (cars + people)", engine::LayerSim);
+
+        renderMenu->addSeparator();
+        renderMenu->addAction("&Clouds...", [&mainWindow, &app]() {
+            showCloudPanel(mainWindow, app);
+        });
+    }
+
     // to any entity in the hierarchy). The environment HDR is the first.
     // Built here, after the state factories exist (its action reloads).
     auto* levelMenu = mainWindow.menuBar()->addMenu("&Level");
@@ -951,6 +1117,7 @@ int main(int argc, char** argv) {
     // notice arrives, so mode/selection flips don't wait out the timer.
     auto refreshChrome = [&]() {
         const bool editing = bridge.editable();
+        plannerPanel->refresh();   // grays out while playing; reloads on attach
         playButton->setEnabled(editing);
         stopAction->setEnabled(!editing);
         addButton->setEnabled(editing);
