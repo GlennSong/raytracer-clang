@@ -2543,9 +2543,6 @@ bool LevelLoader::load(const std::string& path,
             engine::WaterMeshParams wp = readWaterParams(w);
             RenderMesh wmesh = engine::buildWaterMesh(levelGround, wp);
             if (!wmesh.vertices.empty()) {
-                Entity we = world.create();
-                world.add<Transform>(we, Transform{});
-                world.add<PrevTransform>(we, PrevTransform{Transform{}});
                 Renderable wr;
                 wr.material.albedo = Vec3(0.05, 0.14, 0.22);   // deep-water tint
                 if (w.contains("color") && w["color"].is_array() &&
@@ -2555,8 +2552,20 @@ bool LevelLoader::load(const std::string& path,
                 wr.material.roughness = static_cast<float>(w.value("roughness", 0.06));
                 wr.material.opacity = static_cast<float>(w.value("opacity", 0.72));
                 wr.material.setSurface(RenderMaterial::Surface::Water);
-                wr.mesh = assets.acquireMesh(wmesh, "water");
-                world.add<Renderable>(we, wr);
+                // Per-cell chunks (city-render-perf R1): one city-spanning
+                // plane has an AABB the frustum test can never reject. The
+                // chunks are disjoint in XZ at one height, so transparency
+                // order between them is a non-issue.
+                for (RenderMesh& chunk :
+                     MeshBuilder::chunkByCell(wmesh, kRoadRenderCell)) {
+                    if (chunk.vertices.empty()) continue;
+                    Entity we = world.create();
+                    world.add<Transform>(we, Transform{});
+                    world.add<PrevTransform>(we, PrevTransform{Transform{}});
+                    Renderable r = wr;
+                    r.mesh = assets.acquireMesh(chunk, "");   // world-space, unkeyed
+                    world.add<Renderable>(we, r);
+                }
             }
         }
         // Retaining/fill walls (ADR-0075 P1b): one world-space entity for every
@@ -2590,21 +2599,33 @@ bool LevelLoader::load(const std::string& path,
             }
         }
         if (!roadWallMesh.vertices.empty()) {
+            // The collider stays whole on one entity (physics does its own
+            // broadphase); only the DRAWN mesh is split into per-cell chunks
+            // so the frustum cull can reject walls behind the camera
+            // (city-render-perf R1 — same treatment as the carriageway).
             Entity we = world.create();
             world.add<Transform>(we, Transform{});             // mesh is world-space
             world.add<PrevTransform>(we, PrevTransform{Transform{}});
-            Renderable wr;
-            wr.renderLayer = engine::LayerRoads;
-            wr.material.albedo = Vec3(1, 1, 1);                // grey carried in vertex colour
-            wr.material.roughness = 0.9f;
-            wr.mesh = assets.acquireMesh(roadWallMesh, "road_walls");
-            world.add<Renderable>(we, wr);
             MeshCollider mc;
             mc.vertices.reserve(roadWallMesh.vertices.size());
             for (const Vertex& v : roadWallMesh.vertices) mc.vertices.push_back(v.position);
             mc.indices = roadWallMesh.indices;
             mc.friction = 0.9;
             world.add<MeshCollider>(we, mc);
+            Renderable wr;
+            wr.renderLayer = engine::LayerRoads;
+            wr.material.albedo = Vec3(1, 1, 1);                // grey carried in vertex colour
+            wr.material.roughness = 0.9f;
+            for (RenderMesh& chunk :
+                 MeshBuilder::chunkByCell(roadWallMesh, kRoadRenderCell)) {
+                if (chunk.vertices.empty()) continue;
+                Entity ce = world.create();
+                world.add<Transform>(ce, Transform{});
+                world.add<PrevTransform>(ce, PrevTransform{Transform{}});
+                Renderable r = wr;
+                r.mesh = assets.acquireMesh(chunk, "");        // world-space, unkeyed
+                world.add<Renderable>(ce, r);
+            }
         }
         // Entities (roads especially) drape on the CARVED terrain, so a road sits exactly
         // on its graded profile instead of the raw ground it no longer matches.

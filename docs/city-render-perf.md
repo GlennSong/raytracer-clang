@@ -65,8 +65,11 @@ still selects the editable road; `RenderChunks` on the road entity owns the
 companion lifetime, which also retires the documented uploadMesh-per-drag
 leak (regenerates now swap through the AssetManager). Headless-tested
 (`tests/test_road_chunks.cpp`): exact triangle partition, rebuild-without-leak,
-empty-net teardown. Still owed: the same treatment for `road_walls` and
-`water`, and an on-device before/after with `RT_DUMP_DRAWS=1`.
+empty-net teardown. `road_walls` and `water` now get the same per-cell split
+in the loader (the wall COLLIDER stays whole — physics has its own broadphase;
+only the drawn mesh is chunked, and water chunks are disjoint in XZ at one
+height so transparency order between them is moot). Still owed: an on-device
+before/after with `RT_DUMP_DRAWS=1`.
 
 ### R2 — a real middle LOD for buildings ✅ landed
 
@@ -106,12 +109,33 @@ full and deterministic, keeps the opening set, keeps curtain-wall banding,
 and the lots pipeline emits the twin on request. Still owed: an on-device
 before/after (`RT_DUMP_DRAWS=1` + frame ledger).
 
-### R3 — turn the haze back on, value-matched
+### R3 — turn the haze back on ✅ landed (values want on-device eyes)
 
-Raise fog toward the 0.002–0.003 band on city levels and tint the LOD2 mass
-boxes toward the fog colour at distance (the loader already value-matches their
-albedo; extend that to the fog term). Haze is the cheapest LOD blender there
-is, and it is currently doing nothing.
+The diagnosis above named the wrong knob. Piedmont runs the scattering sky
+(`"sky": {"model": "scattering"}`), and while that is active the lit pass
+**replaces exp fog with physically-based aerial perspective** — `fog.density`
+is disconnected (`metal_renderer.mm` zeroes it). The haze was "off" because
+physically-exact clear air at 900 m is a 1–3% fade; real hazy-city reads come
+from aerosols, which is what the sky params model:
+
+* `turbidity: 3` — urban aerosol load. Scales the Mie term coherently through
+  the whole system: hazier sky dome, brighter horizon, sun glow, AND the
+  surface fade, so the haze and the sky it fades into agree by construction.
+* `aerial: 10` — the designed artistic multiplier on the aerial-perspective
+  optical depth (surface fade only; the sky LUTs stay physical). Together
+  these put the fade at roughly 20% (red) → 40% (blue) at 900 m and 50–80%
+  at 3 km: blue-shifted distance haze that covers the 300 m and 900 m LOD
+  swaps without murking the foreground (6–15% at 300 m).
+* `fog.density: 0.0025` on both Piedmont levels — the exp-fog fallback for
+  backends without the scattering sky (and mini, which has no sky block),
+  matched to the band the working fog levels use.
+
+The old "tint the LOD2 boxes toward the fog colour" idea is retired: the
+aerial term already fades *everything* toward the actual occluded sky
+radiance in-shader, mass boxes included — a second CPU-side tint would
+double-apply. The two dial values are picked by arithmetic, not by eye;
+judge them on device and tune `turbidity`/`aerial` (both hot-reload with the
+level).
 
 ### R4 — bake cache: generate once, load fast
 

@@ -153,11 +153,13 @@
         0.79,
         0.88
       ],
-      "density": 0.0004,
+      "density": 0.0025,
       "heightFalloff": 0.01
     },
     "sky": {
-      "model": "scattering"
+      "model": "scattering",
+      "turbidity": 3.0,
+      "aerial": 10.0
     },
     "skyColor": [
       0.55,
