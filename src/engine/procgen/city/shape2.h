@@ -168,6 +168,26 @@ std::vector<Poly2> orientByNesting(std::vector<Poly2> loops);
 Loop2 simplify(const Loop2& loop, Real tol);
 Shape2 simplify(const Shape2& shape, Real tol);
 
+// The INVERSE of tessellate: refit a dense polyline as the few true arcs and
+// straight runs it came from. A marching-squares contour (shape_ops' sampled
+// field — the only way to get a smooth blend) hands back hundreds of chords a
+// third of a metre long, and downstream that is three separate problems: a
+// wall shorter than a door fails the plan invariant, a sixty-storey stack
+// multiplies the vertex count by sixty, and the facade grammar has no wall to
+// put a window on. Fitting arcs back on solves all three at once, and it is
+// the operation this kernel is shaped for — a blended lobe genuinely IS a
+// circular arc, so the fit is a recovery rather than an approximation.
+//
+// `tol` is the maximum distance from the fitted arc to the sampled points;
+// pick it at the field's cell size, since resolving finer than the samples
+// only fits the sampling noise. `minEdge`, when > 0, is a floor the fit is
+// then pushed to meet: the shortest edge is absorbed into whichever neighbour
+// refits with less error, repeatedly, so the result has no wall too short to
+// build. Corners survive — a fit that would round one off exceeds `tol` long
+// before it gets there, and existing arc edges are never spanned across.
+Loop2 fitArcs(const Loop2& loop, Real tol, Real minEdge = 0);
+Shape2 fitArcs(const Shape2& shape, Real tol, Real minEdge = 0);
+
 // --- tessellation ----------------------------------------------------------
 
 // Arcs -> chords, at the END of the pipeline, at the consumer's tolerance.

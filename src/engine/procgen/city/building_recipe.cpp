@@ -150,7 +150,7 @@ void addPortico(ElementRegistry& r, int columns) {
 
 // A compact builder so each recipe below reads as a ROW rather than a function.
 struct R {
-    BuildingRecipe r;
+    LotRecipe r;
     R(const char* name, const char* place) {
         r.name = name;
         r.placeType = place;
@@ -178,7 +178,7 @@ struct R {
     }
     R& weight(Real w) { r.weight = w; return *this; }
     R& dress(void (*fn)(ElementRegistry&)) { fn(r.elements); return *this; }
-    BuildingRecipe done() { return std::move(r); }
+    LotRecipe done() { return std::move(r); }
 };
 
 }  // namespace
@@ -211,7 +211,7 @@ const char* massKindName(MassKind m) {
 
 RecipeBook stockRecipes() {
     RecipeBook book;
-    auto add = [&](BuildingRecipe r) { book.recipes.push_back(std::move(r)); };
+    auto add = [&](LotRecipe r) { book.recipes.push_back(std::move(r)); };
 
     // --- houses -------------------------------------------------------------
     // bungalow and craftsman COLLAPSE into one row: the originals differed by
@@ -309,7 +309,7 @@ RecipeBook stockRecipes() {
         // The BRIEF's cantilevered green tower — the one recipe that opts out
         // of containment, which §17.4's support rule exists to allow.
         R r("terraced_tower", "home");
-        r.plans({PlanTemplate::Bar, PlanTemplate::Pinwheel})
+        r.plans({PlanTemplate::Bar, PlanTemplate::Pinwheel, PlanTemplate::Trefoil})
             .mass(MassKind::WeddingCake)
             .storeys(10, 26)
             .band(3.5, 1, 1)
@@ -358,7 +358,7 @@ RecipeBook stockRecipes() {
     }
     {
         R r("mixed_use", "shop");
-        r.plans({PlanTemplate::Bar, PlanTemplate::L, PlanTemplate::Courtyard})
+        r.plans({PlanTemplate::Bar, PlanTemplate::L, PlanTemplate::Courtyard, PlanTemplate::AtriumRing})
             .storeys(3, 8)
             .band(4.4, 1, 1)
             .band(3.0, 2, 7)
@@ -390,7 +390,7 @@ RecipeBook stockRecipes() {
     }
     {
         R r("market_hall", "shop");
-        r.plans({PlanTemplate::Bar, PlanTemplate::BowFront})
+        r.plans({PlanTemplate::Bar, PlanTemplate::BowFront, PlanTemplate::SawtoothShed})
             .mass(MassKind::MultiMass)
             .masses(2, 3)
             .storeys(1, 2)
@@ -405,7 +405,7 @@ RecipeBook stockRecipes() {
     }
     {
         R r("bank", "civic");
-        r.plans({PlanTemplate::ChamferedSquare, PlanTemplate::Bar})
+        r.plans({PlanTemplate::ChamferedSquare, PlanTemplate::Bar, PlanTemplate::Hexagon})
             .storeys(2, 5)
             .band(5.2, 1, 1)              // a banking hall
             .band(3.3, 1, 4)
@@ -420,7 +420,7 @@ RecipeBook stockRecipes() {
         R r("hotel", "hotel");
         // One of the SIX that overloaded floorHeight: a lobby, a mezzanine and
         // a bedroom stack are three different floor heights.
-        r.plans({PlanTemplate::Bar, PlanTemplate::U, PlanTemplate::L})
+        r.plans({PlanTemplate::Bar, PlanTemplate::U, PlanTemplate::L, PlanTemplate::CourtyardWings})
             .mass(MassKind::PodiumTower)
             .storeys(5, 18)
             .band(5.4, 1, 1)              // lobby
@@ -438,7 +438,7 @@ RecipeBook stockRecipes() {
     // --- offices and towers -------------------------------------------------
     {
         R r("office_block", "office");
-        r.plans({PlanTemplate::Bar, PlanTemplate::L, PlanTemplate::Courtyard})
+        r.plans({PlanTemplate::Bar, PlanTemplate::L, PlanTemplate::Courtyard, PlanTemplate::AtriumRing})
             .storeys(4, 12)
             .band(4.0, 1, 1)
             .band(3.3, 3, 11)
@@ -451,7 +451,7 @@ RecipeBook stockRecipes() {
     }
     {
         R r("office_tower", "office");
-        r.plans({PlanTemplate::Bar, PlanTemplate::Octagon, PlanTemplate::ChamferedSquare})
+        r.plans({PlanTemplate::Bar, PlanTemplate::Octagon, PlanTemplate::ChamferedSquare, PlanTemplate::WedgeTower})
             .mass(MassKind::PodiumTower)
             .storeys(12, 45)
             .band(5.0, 1, 1)
@@ -467,7 +467,7 @@ RecipeBook stockRecipes() {
     }
     {
         R r("glass_tower", "office");
-        r.plans({PlanTemplate::Bar, PlanTemplate::CurvedCornerSlab, PlanTemplate::Octagon})
+        r.plans({PlanTemplate::Bar, PlanTemplate::CurvedCornerSlab, PlanTemplate::LobedTower, PlanTemplate::Trefoil})
             .mass(MassKind::WeddingCake)
             .storeys(20, 70)
             .band(5.2, 1, 1)
@@ -486,7 +486,7 @@ RecipeBook stockRecipes() {
         // silhouette is the profile — which is the whole reason profile and
         // loft are separate knobs.
         R r("profile_tower", "office");
-        r.plans({PlanTemplate::Octagon})
+        r.plans({PlanTemplate::Octagon, PlanTemplate::LobedTower, PlanTemplate::Trefoil})
             .mass(MassKind::Gherkin)
             .storeys(24, 46)
             .band(4.6, 1, 1)
@@ -515,7 +515,7 @@ RecipeBook stockRecipes() {
     }
     {
         R r("stepped_tower", "office");
-        r.plans({PlanTemplate::Bar, PlanTemplate::ChamferedSquare})
+        r.plans({PlanTemplate::Bar, PlanTemplate::ChamferedSquare, PlanTemplate::WedgeTower})
             .mass(MassKind::WeddingCake)
             .storeys(14, 34)
             .band(5.0, 1, 1)
@@ -547,7 +547,7 @@ RecipeBook stockRecipes() {
         // CHURCH — nave plus tower, two masses. The original emitted one prism
         // with a steeple stuck on it.
         R r("church", "civic");
-        r.plans({PlanTemplate::Bar, PlanTemplate::Cruciform})
+        r.plans({PlanTemplate::Bar, PlanTemplate::Cruciform, PlanTemplate::CrossApse})
             .mass(MassKind::MultiMass)
             .masses(2, 2)
             .storeys(1, 2)
@@ -560,7 +560,7 @@ RecipeBook stockRecipes() {
     }
     {
         R r("cathedral", "civic");
-        r.plans({PlanTemplate::Cruciform})
+        r.plans({PlanTemplate::Cruciform, PlanTemplate::CrossApse})
             .mass(MassKind::MultiMass)
             .masses(2, 3)
             .storeys(1, 2)
@@ -574,7 +574,7 @@ RecipeBook stockRecipes() {
     }
     {
         R r("civic_hall", "civic");
-        r.plans({PlanTemplate::H, PlanTemplate::Bar, PlanTemplate::U})
+        r.plans({PlanTemplate::H, PlanTemplate::Bar, PlanTemplate::U, PlanTemplate::CourtyardWings})
             .storeys(2, 5)
             .band(6.0, 1, 1)              // a hall, then offices above
             .band(3.6, 1, 4)
@@ -587,7 +587,7 @@ RecipeBook stockRecipes() {
     }
     {
         R r("capitol", "civic");
-        r.plans({PlanTemplate::Cruciform, PlanTemplate::H})
+        r.plans({PlanTemplate::Cruciform, PlanTemplate::H, PlanTemplate::CrossApse, PlanTemplate::RadialWings})
             .storeys(2, 4)
             .band(7.5, 1, 1)
             .band(4.5, 1, 3)
@@ -600,7 +600,7 @@ RecipeBook stockRecipes() {
     }
     {
         R r("library", "civic");
-        r.plans({PlanTemplate::Bar, PlanTemplate::U})
+        r.plans({PlanTemplate::Bar, PlanTemplate::U, PlanTemplate::Hexagon, PlanTemplate::AtriumRing})
             .storeys(2, 4)
             .band(5.4, 1, 1)              // reading room
             .band(3.6, 1, 3)
@@ -613,7 +613,7 @@ RecipeBook stockRecipes() {
     }
     {
         R r("museum", "civic");
-        r.plans({PlanTemplate::H, PlanTemplate::Courtyard})
+        r.plans({PlanTemplate::H, PlanTemplate::Courtyard, PlanTemplate::AtriumRing, PlanTemplate::Hexagon})
             .storeys(2, 3)
             .band(6.5, 1, 1)              // gallery volumes
             .band(5.0, 1, 2)
@@ -626,7 +626,7 @@ RecipeBook stockRecipes() {
     }
     {
         R r("school", "school");
-        r.plans({PlanTemplate::H, PlanTemplate::L, PlanTemplate::U})
+        r.plans({PlanTemplate::H, PlanTemplate::L, PlanTemplate::U, PlanTemplate::CourtyardWings})
             .mass(MassKind::MultiMass)
             .masses(1, 3)
             .storeys(2, 3)
@@ -642,7 +642,7 @@ RecipeBook stockRecipes() {
         // HOSPITAL — wards, a tower and a service block: three masses, three
         // floor heights. Another of the five that promised a complex.
         R r("hospital", "hospital");
-        r.plans({PlanTemplate::H, PlanTemplate::T, PlanTemplate::Bar})
+        r.plans({PlanTemplate::H, PlanTemplate::T, PlanTemplate::Bar, PlanTemplate::RadialWings, PlanTemplate::CourtyardWings})
             .mass(MassKind::MultiMass)
             .masses(2, 4)
             .storeys(3, 10)
@@ -659,7 +659,7 @@ RecipeBook stockRecipes() {
     // --- industrial and edge-of-city ---------------------------------------
     {
         R r("factory", "work");
-        r.plans({PlanTemplate::Bar, PlanTemplate::L})
+        r.plans({PlanTemplate::Bar, PlanTemplate::L, PlanTemplate::SawtoothShed})
             .mass(MassKind::MultiMass)
             .masses(1, 3)
             .storeys(1, 3)
@@ -673,7 +673,7 @@ RecipeBook stockRecipes() {
     }
     {
         R r("warehouse", "work");
-        r.plans({PlanTemplate::Bar})
+        r.plans({PlanTemplate::Bar, PlanTemplate::SawtoothShed})
             .storeys(1, 2)
             .band(8.5, 1, 1)
             .band(3.4, 0, 1)
@@ -697,7 +697,7 @@ RecipeBook stockRecipes() {
     }
     {
         R r("office_park", "office");
-        r.plans({PlanTemplate::L, PlanTemplate::U, PlanTemplate::Bar})
+        r.plans({PlanTemplate::L, PlanTemplate::U, PlanTemplate::Bar, PlanTemplate::Hexagon})
             .mass(MassKind::MultiMass)
             .masses(2, 5)
             .storeys(2, 5)
@@ -711,7 +711,7 @@ RecipeBook stockRecipes() {
     }
     {
         R r("university_campus", "school");
-        r.plans({PlanTemplate::Courtyard, PlanTemplate::H, PlanTemplate::U})
+        r.plans({PlanTemplate::Courtyard, PlanTemplate::H, PlanTemplate::U, PlanTemplate::CourtyardWings, PlanTemplate::RadialWings})
             .mass(MassKind::MultiMass)
             .masses(3, 6)
             .storeys(2, 6)
@@ -726,7 +726,7 @@ RecipeBook stockRecipes() {
     }
     {
         R r("works", "work");
-        r.plans({PlanTemplate::Bar, PlanTemplate::L})
+        r.plans({PlanTemplate::Bar, PlanTemplate::L, PlanTemplate::SawtoothShed})
             .mass(MassKind::MultiMass)
             .masses(2, 4)
             .storeys(1, 3)
@@ -751,7 +751,7 @@ RecipeBook stockRecipes() {
     {
         // The LUXOR: one plan, a linear taper. No twist, no loft.
         R r("pyramid_landmark", "civic");
-        r.plans({PlanTemplate::Bar, PlanTemplate::Octagon})
+        r.plans({PlanTemplate::Bar, PlanTemplate::Octagon, PlanTemplate::Pentagon, PlanTemplate::Hexagon})
             .mass(MassKind::Pyramid)
             .storeys(12, 30)
             .band(6.0, 1, 1)
@@ -765,8 +765,8 @@ RecipeBook stockRecipes() {
     return book;
 }
 
-const BuildingRecipe* RecipeBook::byName(const std::string& name) const {
-    for (const BuildingRecipe& r : recipes)
+const LotRecipe* RecipeBook::byName(const std::string& name) const {
+    for (const LotRecipe& r : recipes)
         if (r.name == name) return &r;
     return nullptr;
 }
@@ -798,7 +798,7 @@ std::vector<int> RecipeBook::forProgram(const LotProgram& program,
     // want more height than the plate can carry: anything of the right height
     // whose place type is not obviously wrong for the frontage.
     for (std::size_t i = 0; i < recipes.size(); ++i) {
-        const BuildingRecipe& r = recipes[i];
+        const LotRecipe& r = recipes[i];
         if (r.minStoreys > storeysAvailable) continue;
         if (r.maxStoreys < program.minStoreys) continue;
         if (r.minStoreys > program.maxStoreys) continue;
@@ -830,7 +830,7 @@ int RecipeBook::pick(const LotProgram& program, int storeysAvailable,
 // Assembly
 // ---------------------------------------------------------------------------
 
-BuiltBuilding buildFromRecipe(const BuildingRecipe& recipe,
+BuiltBuilding buildFromRecipe(const LotRecipe& recipe,
                               const Shape2& envelope, const LotTags& tags,
                               const PaletteLibrary& palettes,
                               std::uint32_t districtSeed, std::uint32_t seed) {

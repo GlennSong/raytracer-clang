@@ -360,6 +360,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/apps/citysim/city_spectate.cpp \
 	$(SRC_DIR)/apps/citysim/city_meshes.cpp \
 	$(SRC_DIR)/engine/script_assets.cpp \
+	$(SRC_DIR)/engine/asset_root.cpp \
 	$(SRC_DIR)/engine/scripting/script_vm.cpp \
 	$(SRC_DIR)/engine/scripting/script_modules.cpp \
 	$(SRC_DIR)/engine/scripting/procgen_bindings.cpp \

@@ -338,6 +338,56 @@ Two invariants make this safe, and both are cheap unit tests:
 short scripts in this grammar, fitted to the envelope's frame and clipped.
 Adding a template is Lua data, not C++.
 
+### 4.1 Composed plans — the grammar actually used
+
+The list above is thirteen *single shapes*: a rectangle with a bite taken out,
+a corner rounded, a wall bowed. Each is one op on one seed, which meant the
+grammar's own machinery — selectors, multi-step scripts, blended unions — was
+carrying no weight, and every building on the street was recognisably a box.
+
+The **composed** templates are the answer: a seed rewritten by a *sequence* of
+ops, which is what the grammar was built for and what a list of one-shot shapes
+can never reach.
+
+| template | what it composes |
+| --- | --- |
+| `pentagon`, `hexagon` | a regular n-gon seed, so a plan need not start rectangular |
+| `radial-wings` | polygon + a `Wing` on **every** face + a disc blended onto each tip |
+| `trefoil` | three discs smooth-joined into one organic plate |
+| `cross-apse` | cruciform + a true semicircular apse on one arm |
+| `atrium-ring` | courtyard + fillet + an entrance notch |
+| `lobed-tower` | square + `Bow` on every edge — a clover plate of four true arcs |
+| `wedge-tower` | trapezoid + a buildable chamfer on its sharp end |
+| `sawtooth-shed` | a shed whose rear wall is notched into structural bays |
+| `courtyard-wings` | two wings off a spine, open on one side, closed around a real court on the other |
+
+Two rules make these work at any size the caller asks for, and both are the
+template taking responsibility rather than the caller knowing each one's
+minimum frame:
+
+* **A feature is spent only if the frame can pay for it.** A fillet whose arc
+  would be shorter than a wall, a notch that would eat through the ring it is
+  cut into, a wing narrower than a corridor with rooms either side — each is
+  skipped, and the plan scales down to the simpler thing a small site actually
+  gets built as. A radial-winged plan is a *large-site* plan; below about 30 m
+  it becomes a lobed polygon instead of a knobbly blob whose every feature is
+  smaller than a room.
+* **A cap is tangent, not overlapping.** A disc blended onto a wing tip sits
+  exactly on the end face, so its circle meets both side walls tangentially. A
+  wider disc pushed further out re-enters the walls at a grazing angle, and a
+  cusp is the one thing the plan invariant will not accept.
+
+The blended ones (`radial-wings`, `trefoil`) can only be built by the sampled
+field — a smooth join between two masses is not expressible in loop algebra —
+and the field returns a *contour*: several hundred half-metre chords. That is
+unusable three ways over (no wall long enough for a window, a vertex count
+multiplied by the storey count, and every wall below the invariant's minimum),
+so the kernel gained the inverse of tessellation: **`fitArcs`** refits a dense
+polyline as the few true arcs and straight runs it came from. A 428-chord
+blend of two circles comes back as **four arcs** with 0.2 % area error, and
+corners survive because a fit that would round one off exceeds its tolerance
+long before it gets there.
+
 ---
 
 ## 5. Stacking floors to make a building (layer L1)
@@ -724,7 +774,19 @@ remembering, because they are design lessons rather than typos:
   palette. `Rng` now scrambles its seed. Any code doing `Rng(seed).unit()` was
   affected, not just palettes.
 
-The last one is the most important: it was invisible in every individual
+* **Two `engine::ParcelParams`, two `engine::BuildingRecipe`.** The new modules
+  named types the old city pipeline already had, with different layouts and
+  the same namespace — a textbook ODR violation. It cost nothing while the two
+  systems were compiled into separate test binaries and corrupted the stack the
+  moment they were linked into one: a default member initializer from the new
+  `ParcelParams` (`sharedGreenMinArea = 260.0`) landed past the end of the old
+  one and overwrote the caller's vector. Renamed to `BlockParcelParams` and
+  `LotRecipe`. The lesson is about the *guard*, not the names: `make test` links
+  every test file into one binary and is the only thing that can catch this, so
+  it had been failing to link for unrelated reasons long enough for the bug to
+  get in. A build target that does not run is not a guard.
+
+The RNG one is the most important: it was invisible in every individual
 module and only showed up when a test asked a question about a *population*
 ("does a street share a family, with a minority that does not?"). Tests that
 assert on distributions, not just on single outputs, are what caught it.

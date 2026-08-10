@@ -260,6 +260,60 @@ TEST_CASE(plan_courtyard_template_has_a_real_hole) {
     CHECK(!contains(c, centroid(c)) || area(c.holes[0]) > 1);
 }
 
+TEST_CASE(plan_composed_templates_are_actually_composed) {
+    // The grammar's ops existed for a release without a single template using
+    // them: `planTemplate` was a switch over one-shot shapes, so the ops, the
+    // selectors and the scripts were dead weight and every plan was a box with
+    // a bite out of it. These templates are the ops put to work, and the check
+    // is that each one is REACHED — a composed plan that quietly degrades to
+    // its seed is the failure this is here to catch.
+    const Real W = 56, D = 40;
+    struct Want { PlanTemplate t; int minEdges; bool wantArc; bool wantHole; };
+    const Want wants[] = {
+        {PlanTemplate::Pentagon,       5,  false, false},
+        {PlanTemplate::Hexagon,        6,  false, false},
+        {PlanTemplate::RadialWings,    10, true,  false},
+        {PlanTemplate::Trefoil,        3,  true,  false},
+        {PlanTemplate::CrossApse,      12, true,  false},
+        {PlanTemplate::AtriumRing,     8,  true,  true},
+        {PlanTemplate::LobedTower,     4,  true,  false},
+        {PlanTemplate::WedgeTower,     5,  false, false},
+        {PlanTemplate::SawtoothShed,   8,  false, false},
+        {PlanTemplate::CourtyardWings, 8,  false, true},
+    };
+    for (const Want& w : wants) {
+        Shape2 p = planTemplate(w.t, W, D, 3);
+        CHECK(static_cast<int>(p.outer.size()) >= w.minEdges);
+        CHECK(area(p) > 200);
+        // Not the frame it was fitted to, i.e. not a bar wearing a new name.
+        CHECK(area(p) < W * D * 0.94);
+        if (w.wantHole) CHECK(!p.holes.empty());
+        int arcs = 0;
+        for (const Edge2& e : p.outer.edges)
+            if (std::fabs(e.bulge) > 1e-6) ++arcs;
+        if (w.wantArc) CHECK(arcs > 0);
+    }
+}
+
+// A blended plan comes off the sampled field as hundreds of half-metre chords.
+// Left that way it is three problems at once: a mass stack multiplies the
+// vertex count by the storey count, the facade grammar has no wall long enough
+// to hang a window on, and the plan invariant rejects every one of them. The
+// refit is what makes the field usable as a design tool at all.
+TEST_CASE(plan_blended_templates_come_back_as_few_true_arcs) {
+    for (PlanTemplate t : {PlanTemplate::Trefoil, PlanTemplate::RadialWings}) {
+        Shape2 p = planTemplate(t, 60, 42, 2);
+        CHECK(p.outer.size() < 40);
+        int arcs = 0;
+        for (const Edge2& e : p.outer.edges)
+            if (std::fabs(e.bulge) > 1e-6) ++arcs;
+        CHECK(arcs >= 3);
+        PlanQuality q;
+        std::string why;
+        CHECK(q.ok(p, &why));
+    }
+}
+
 TEST_CASE(plan_curved_templates_carry_true_arcs) {
     Shape2 slab = planTemplate(PlanTemplate::CurvedCornerSlab, 30, 20, 2);
     int arcs = 0;

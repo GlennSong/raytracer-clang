@@ -15,7 +15,7 @@ TEST_CASE(parcel_block_conserves_area) {
     // the road margin. Area silently going missing is the defect the old
     // parceller was measured to have (41% court + 31% unaccounted).
     ProgramSet set = residentialPrograms();
-    ParcelParams params;
+    BlockParcelParams params;
     Shape2 block = rectShape(0, 0, 90, 70);
     ParcelledBlock r = parcelBlock(block, set, params, true, 0.3, StreetClass::Street, 5);
 
@@ -27,7 +27,7 @@ TEST_CASE(parcel_block_conserves_area) {
 
 TEST_CASE(parcel_lots_do_not_overlap_and_stay_in_the_block) {
     ProgramSet set = residentialPrograms();
-    ParcelParams params;
+    BlockParcelParams params;
     Shape2 block = rectShape(0, 0, 100, 64);
     ParcelledBlock r = parcelBlock(block, set, params, true, 0.3, StreetClass::Street, 9);
     CHECK(r.lots.size() >= 4);
@@ -53,7 +53,7 @@ TEST_CASE(parcel_lots_do_not_overlap_and_stay_in_the_block) {
 TEST_CASE(parcel_no_lot_ships_that_fails_its_program) {
     for (std::uint32_t seed = 1; seed <= 10; ++seed) {
         ProgramSet set = residentialPrograms();
-        ParcelParams params;
+        BlockParcelParams params;
         Shape2 block = rectShape(0, 0, 70 + seed * 7, 55 + seed * 3);
         ParcelledBlock r = parcelBlock(block, set, params, true, 0.3,
                                        StreetClass::Street, seed);
@@ -67,7 +67,7 @@ TEST_CASE(parcel_no_lot_ships_that_fails_its_program) {
 // Land that can carry nothing becomes open space BY DESIGN, not by rejection.
 TEST_CASE(parcel_unbuildable_land_becomes_open_space) {
     ProgramSet set = residentialPrograms();
-    ParcelParams params;
+    BlockParcelParams params;
     // A block too small for any residential program at all.
     Shape2 tiny = rectShape(0, 0, 12, 9);
     ParcelledBlock r = parcelBlock(tiny, set, params, true, 0.3, StreetClass::Street, 3);
@@ -80,7 +80,7 @@ TEST_CASE(parcel_unbuildable_land_becomes_open_space) {
 // back lane is legitimate (that is what lanes are for); a lot reached from
 // nothing is the defect.
 TEST_CASE(parcel_every_lot_has_access) {
-    ParcelParams params;
+    BlockParcelParams params;
     for (std::uint32_t seed = 1; seed <= 6; ++seed) {
         ProgramSet set = residentialPrograms();
         Shape2 block = rectShape(0, 0, 110 + seed * 11, 80 + seed * 14);
@@ -172,7 +172,7 @@ TEST_CASE(parcel_narrow_lots_get_party_walls) {
 // §17.6: a rim block is not a special case, it is a TAG. The coarse grain falls
 // out of the eligible programs' larger minimums, with no branch anywhere.
 TEST_CASE(parcel_rim_blocks_come_out_coarser) {
-    ParcelParams params;
+    BlockParcelParams params;
     Shape2 block = rectShape(0, 0, 180, 140);
 
     ProgramSet fine = residentialPrograms();
@@ -192,7 +192,7 @@ TEST_CASE(parcel_rim_blocks_come_out_coarser) {
 
 TEST_CASE(parcel_is_deterministic) {
     Shape2 block = rectShape(0, 0, 96, 72);
-    ParcelParams params;
+    BlockParcelParams params;
     ProgramSet a = residentialPrograms(), b = residentialPrograms();
     ParcelledBlock x = parcelBlock(block, a, params, true, 0.3, StreetClass::Street, 77);
     ParcelledBlock y = parcelBlock(block, b, params, true, 0.3, StreetClass::Street, 77);
@@ -207,7 +207,7 @@ TEST_CASE(parcel_is_deterministic) {
 // one per lot that happens to qualify.
 TEST_CASE(parcel_quotas_hold_across_a_whole_block) {
     ProgramSet set = downtownPrograms();
-    ParcelParams params;
+    BlockParcelParams params;
     Shape2 block = rectShape(0, 0, 220, 180);
     ParcelledBlock r = parcelBlock(block, set, params, true, 0.9,
                                    StreetClass::Arterial, 6);
@@ -226,7 +226,7 @@ TEST_CASE(parcel_quotas_hold_across_a_whole_block) {
 // the middle as a green nobody can reach.
 TEST_CASE(parcel_deep_blocks_get_a_service_lane) {
     ProgramSet set = residentialPrograms();
-    ParcelParams params;
+    BlockParcelParams params;
     // 150 m deep: far more than two lots back to back.
     Shape2 deep = rectShape(0, 0, 140, 150);
     ParcelledBlock r = parcelBlock(deep, set, params, true, 0.3, StreetClass::Street, 8);
@@ -246,7 +246,7 @@ TEST_CASE(parcel_deep_blocks_get_a_service_lane) {
 
 // The invariant the lanes exist to guarantee.
 TEST_CASE(parcel_every_shared_green_is_reachable) {
-    ParcelParams params;
+    BlockParcelParams params;
     for (std::uint32_t seed = 1; seed <= 8; ++seed) {
         ProgramSet set = residentialPrograms();
         Shape2 block = rectShape(0, 0, 110 + seed * 9, 120 + seed * 6);
@@ -264,8 +264,8 @@ TEST_CASE(parcel_lanes_keep_lots_from_becoming_absurdly_deep) {
     ProgramSet a = residentialPrograms(), b = residentialPrograms();
     Shape2 block = rectShape(0, 0, 150, 150);
 
-    ParcelParams withLanes;
-    ParcelParams without;
+    BlockParcelParams withLanes;
+    BlockParcelParams without;
     without.lanes = false;
     without.passageWidth = 0;
 
@@ -292,7 +292,7 @@ TEST_CASE(parcel_lanes_keep_lots_from_becoming_absurdly_deep) {
 // complaint about big blocks.
 TEST_CASE(parcel_a_split_never_strands_a_half) {
     ProgramSet set = residentialPrograms();
-    ParcelParams params;
+    BlockParcelParams params;
     for (std::uint32_t seed = 1; seed <= 8; ++seed) {
         Shape2 block = rectShape(0, 0, 120 + seed * 8, 130 + seed * 7);
         ParcelledBlock r = parcelBlock(block, set, params, true, 0.3,
@@ -327,7 +327,7 @@ TEST_CASE(parcel_a_lane_grants_access_but_not_cornerness) {
 
 TEST_CASE(parcel_lanes_are_deterministic) {
     Shape2 block = rectShape(0, 0, 130, 140);
-    ParcelParams params;
+    BlockParcelParams params;
     ProgramSet a = residentialPrograms(), b = residentialPrograms();
     ParcelledBlock x = parcelBlock(block, a, params, true, 0.3, StreetClass::Street, 21);
     ParcelledBlock y = parcelBlock(block, b, params, true, 0.3, StreetClass::Street, 21);

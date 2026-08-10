@@ -132,7 +132,7 @@ TEST_CASE(recipes_are_data_rows_with_the_five_slots_filled) {
     RecipeBook book = stockRecipes();
     CHECK(book.recipes.size() >= 30);
     std::set<std::string> names;
-    for (const BuildingRecipe& r : book.recipes) {
+    for (const LotRecipe& r : book.recipes) {
         CHECK(!r.name.empty());
         CHECK(!r.placeType.empty());
         CHECK(names.insert(r.name).second);         // no duplicate names
@@ -153,7 +153,7 @@ TEST_CASE(recipes_that_promise_a_complex_declare_several_masses) {
     RecipeBook book = stockRecipes();
     for (const char* n : {"office_park", "strip_mall", "church", "market_hall",
                           "hospital"}) {
-        const BuildingRecipe* r = book.byName(n);
+        const LotRecipe* r = book.byName(n);
         CHECK(r != nullptr);
         CHECK(r->mass == MassKind::MultiMass);
         CHECK(r->maxMasses >= 2);
@@ -165,7 +165,7 @@ TEST_CASE(recipes_that_need_per_band_heights_declare_them) {
     RecipeBook book = stockRecipes();
     for (const char* n : {"hotel", "factory", "warehouse", "capitol", "library",
                           "museum"}) {
-        const BuildingRecipe* r = book.byName(n);
+        const LotRecipe* r = book.byName(n);
         CHECK(r != nullptr);
         CHECK(r->bands.size() >= 2);
         // The bands genuinely differ — otherwise declaring them changes nothing.
@@ -240,7 +240,7 @@ TEST_CASE(built_every_recipe_produces_a_valid_building) {
     PaletteLibrary lib = stockPalettes();
     RecipeBook book = stockRecipes();
     PlanQuality quality;
-    for (const BuildingRecipe& r : book.recipes) {
+    for (const LotRecipe& r : book.recipes) {
         for (Real w : {Real(22), Real(48), Real(90)}) {
             Shape2 env = rectShape(0, 0, w, w * 0.72);
             for (Edge2& e : env.outer.edges) e.tag = EdgeTag::Side;
@@ -271,7 +271,7 @@ TEST_CASE(built_every_recipe_produces_a_valid_building) {
 TEST_CASE(built_height_is_capped_by_the_plate) {
     PaletteLibrary lib = stockPalettes();
     RecipeBook book = stockRecipes();
-    const BuildingRecipe* tower = book.byName("glass_tower");
+    const LotRecipe* tower = book.byName("glass_tower");
     CHECK(tower != nullptr);
     CHECK(tower->minStoreys >= 20);
 
@@ -299,7 +299,7 @@ TEST_CASE(built_height_is_capped_by_the_plate) {
 TEST_CASE(built_multimass_recipes_really_emit_several_masses) {
     PaletteLibrary lib = stockPalettes();
     RecipeBook book = stockRecipes();
-    const BuildingRecipe* park = book.byName("office_park");
+    const LotRecipe* park = book.byName("office_park");
     CHECK(park != nullptr);
     Shape2 env = rectShape(0, 0, 120, 70);
     for (Edge2& e : env.outer.edges) e.tag = EdgeTag::Side;
@@ -325,7 +325,7 @@ TEST_CASE(built_buildings_are_deterministic) {
     LotTags tags;
     inscribedRect(env, tags.inscribedW, tags.inscribedD);
     tags.maxStoreys = 20;
-    for (const BuildingRecipe& r : book.recipes) {
+    for (const LotRecipe& r : book.recipes) {
         BuiltBuilding a = buildFromRecipe(r, env, tags, lib, 8, 44);
         BuiltBuilding b = buildFromRecipe(r, env, tags, lib, 8, 44);
         CHECK(a.storeys == b.storeys);
@@ -346,8 +346,8 @@ TEST_CASE(built_element_registry_drives_the_dressing) {
     inscribedRect(env, tags.inscribedW, tags.inscribedD);
     tags.maxStoreys = 30;
 
-    const BuildingRecipe* walkup = book.byName("walkup");
-    const BuildingRecipe* shed = book.byName("warehouse");
+    const LotRecipe* walkup = book.byName("walkup");
+    const LotRecipe* shed = book.byName("warehouse");
     CHECK(walkup && shed);
     BuiltBuilding a = buildFromRecipe(*walkup, env, tags, lib, 2, 6);
     BuiltBuilding b = buildFromRecipe(*shed, env, tags, lib, 2, 6);

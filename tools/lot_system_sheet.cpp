@@ -255,17 +255,22 @@ int main(int argc, char** argv) {
     {
         Svg s;
         const Real PW = 240, PH = 230;
-        open(s, std::string(out) + "/lotsystem_plans.svg", PW * 5 + 40, PH * 3 + 120,
+        std::vector<PlanTemplate> tpl = allPlanTemplates();
+        const std::size_t COLS = 6;
+        const std::size_t rows = (tpl.size() + COLS - 1) / COLS;
+        open(s, std::string(out) + "/lotsystem_plans.svg", PW * COLS + 40,
+             PH * (rows + 1) + 120,
              "Lot System — plan templates and mass stacks");
         label(s, 28, 66,
-              "Row 1-2: every named plan template (plan_grammar). Row 3: mass "
-              "stacks drawn as stacked floor plates (mass_stack).");
+              "Every named plan template (plan_grammar), each on a 56 x 40 m "
+              "frame. The last row is mass stacks drawn as stacked floor plates "
+              "(mass_stack). The COMPOSED plans — from radial-wings on — are "
+              "scripts in the grammar's own ops rather than single shapes.");
 
-        std::vector<PlanTemplate> tpl = allPlanTemplates();
         for (std::size_t i = 0; i < tpl.size(); ++i) {
-            const Real px = 20 + (i % 5) * PW;
-            const Real py = 90 + (i / 5) * PH;
-            Shape2 p = planTemplate(tpl[i], 40, 28, seed + (std::uint32_t)i);
+            const Real px = 20 + (i % COLS) * PW;
+            const Real py = 90 + (i / COLS) * PH;
+            Shape2 p = planTemplate(tpl[i], 56, 40, seed + (std::uint32_t)i);
             View v = fitView(p, px, py, PW, PH - 34, 20);
             shape(s, v, p, "#f2cc8f", 0.8, "#2b3140", 1.4);
             char t[128];
@@ -275,7 +280,7 @@ int main(int argc, char** argv) {
 
         // Mass stacks: draw every level's plan, faintly, so the silhouette reads.
         struct Stack { const char* name; MassStack (*make)(); };
-        const Real rowY = 90 + 2 * PH;
+        const Real rowY = 90 + rows * PH;
         Shape2 base = rectShape(0, 0, 34, 26);
         Shape2 disc = circleShape(Vec2(17, 13), 15);
         struct Item { const char* name; MassStack st; };

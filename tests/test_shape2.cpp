@@ -207,3 +207,79 @@ TEST_CASE(shape2_nesting_decides_holes_not_winding) {
     CHECK(signedArea(out[1]) < 0);    // hole
     CHECK(signedArea(out[2]) > 0);    // island in the hole
 }
+
+TEST_CASE(shape2_fit_arcs_inverts_tessellation) {
+    // Round-trip: a shape with true arcs, tessellated to chords, must come back
+    // as arcs — the same arcs, not a polyline that resembles them. This is the
+    // property the sampled field depends on, because a marching-squares contour
+    // is exactly a tessellation whose source is gone.
+    Shape2 s = rectShape(0, 0, 40, 24);
+    bowEdge(s.outer, 0, 6.0);
+    apseEdge(s.outer, 2);
+    const Real before = area(s);
+
+    Poly2 dense = tessellate(s.outer, 0.02);
+    CHECK(dense.size() > 40);
+    Loop2 refit = fitArcs(loopFromPoly(dense), 0.05);
+    CHECK(refit.size() <= 6);
+    CHECK(near(area(refit), before, before * 0.005));
+
+    // The bow comes back as ITS arc, on the same chord, with the same bulge —
+    // recovery, not resemblance. (The apse is not checked for a matching
+    // vertex: a semicircle on the top edge leaves TANGENT to the side wall, so
+    // there is no corner there to find, and a fit that invented one would be
+    // reporting a feature the shape does not have.)
+    CHECK(near(refit.start(0).x, 0, 1e-6) && near(refit.start(0).y, 0, 1e-6));
+    CHECK(near(refit.bulge(0), 0.3, 1e-3));
+    // Two SUBSTANTIAL curves, counted above the whisker of bulge a straight
+    // run picks up where it leaves tangent to one of them.
+    int arcs = 0;
+    for (const Edge2& e : refit.edges) if (std::fabs(e.bulge) > 0.1) ++arcs;
+    CHECK(arcs == 2);                       // the bow and the apse, recovered
+}
+
+TEST_CASE(shape2_fit_arcs_keeps_the_corners) {
+    // The failure that matters: a fit that smooths a building's corners away.
+    // A tessellated rectangle has four corners and no curvature anywhere else,
+    // so the refit must be the rectangle itself.
+    Shape2 s = rectShape(0, 0, 30, 18);
+    Loop2 refit = fitArcs(loopFromPoly(tessellate(s.outer, 0.02)), 0.05);
+    CHECK(refit.size() == 4);
+    CHECK(near(area(refit), 540, 1e-6));
+}
+
+TEST_CASE(shape2_fit_arcs_enforces_a_minimum_wall) {
+    // A contour off the field has hundreds of half-metre chords, and a wall
+    // shorter than a door fails the plan invariant downstream. With a minimum
+    // asked for, no edge may come back below it — and the shape must still be
+    // the shape.
+    Shape2 s = circleShape(Vec2(0, 0), 14);
+    Poly2 dense = tessellate(s.outer, 0.01);
+    Loop2 refit = fitArcs(loopFromPoly(dense), 0.05, 6.0);
+    for (std::size_t i = 0; i < refit.size(); ++i) {
+        const ArcGeom g = arcGeom(refit.start(i), refit.end(i), refit.bulge(i));
+        const Real len = g.straight ? (refit.end(i) - refit.start(i)).length()
+                                    : std::fabs(g.radius * g.sweep);
+        CHECK(len >= 6.0);
+    }
+    CHECK(near(area(refit), 14 * 14 * 3.14159265358979, 1.0));
+}
+
+TEST_CASE(shape2_fit_arcs_never_spans_a_tag_change) {
+    // Edge identity is the whole reason tags exist: a fit that merged a street
+    // wall into a rear one would hand the facade grammar a wall with no answer
+    // to "what do I face".
+    Shape2 s = circleShape(Vec2(0, 0), 20);
+    Poly2 dense = tessellate(s.outer, 0.01);
+    Loop2 l = loopFromPoly(dense);
+    for (std::size_t i = 0; i < l.size(); ++i)
+        l.edges[i].tag = (l.edges[i].a.y >= 0) ? EdgeTag::Street : EdgeTag::Rear;
+    Loop2 refit = fitArcs(l, 0.05, 8.0);
+    int street = 0, rear = 0;
+    for (const Edge2& e : refit.edges) {
+        if (e.tag == EdgeTag::Street) ++street;
+        if (e.tag == EdgeTag::Rear) ++rear;
+    }
+    CHECK(street > 0 && rear > 0);
+    CHECK(street + rear == static_cast<int>(refit.size()));
+}

@@ -8,6 +8,7 @@ namespace {
 
 constexpr Real kTau = 6.28318530717958647692;
 constexpr Real kEps = 1e-9;
+constexpr Real kInf = 1e30;
 
 }  // namespace
 
@@ -277,6 +278,239 @@ Shape2 simplify(const Shape2& shape, Real tol) {
         if (sh.size() >= 3) s.holes.push_back(std::move(sh));
     }
     return s;
+}
+
+// ---------------------------------------------------------------------------
+// Arc refitting (the inverse of tessellation)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// The circle through three points. False when they are collinear enough that a
+// straight edge is the better answer — the caller then measures against the
+// chord instead.
+bool circleThrough(const Vec2& a, const Vec2& b, const Vec2& c, Vec2& centre,
+                   Real& radius) {
+    const Vec2 ab = b - a, ac = c - a;
+    const Real det = 2.0 * cross(ab, ac);
+    const Real scale = std::max(ab.length(), ac.length());
+    if (scale < kEps || std::fabs(det) < kEps * scale * scale) return false;
+    const Real ab2 = dot(ab, ab), ac2 = dot(ac, ac);
+    centre = a + Vec2((ac.y * ab2 - ab.y * ac2) / det,
+                      (ab.x * ac2 - ac.x * ab2) / det);
+    radius = (a - centre).length();
+    return radius > kEps;
+}
+
+// Angle in [0, tau) measured CCW from `from`.
+Real ccwDelta(Real from, Real to) {
+    Real d = std::fmod(to - from, kTau);
+    if (d < 0) d += kTau;
+    return d;
+}
+
+// Fit the dense samples P[s..e] (walking forward, indices mod n) with ONE edge.
+// Returns the deviation; `bulge` is 0 for a straight fit. A run that doubles
+// back on itself, or wraps most of the way round a circle, is rejected outright
+// (deviation = infinity) rather than fitted to something the samples never said.
+Real fitSpan(const std::vector<Vec2>& p, std::size_t s, std::size_t e,
+             Real& bulge) {
+    const std::size_t n = p.size();
+    const std::size_t steps = (e + n - s) % n;
+    bulge = 0;
+    if (steps < 2) return 0;
+
+    const Vec2 A = p[s], B = p[e];
+    const Vec2 M = p[(s + steps / 2) % n];
+
+    // The straight candidate, always available.
+    Real straightErr = 0;
+    const Vec2 chord = B - A;
+    const Real chordLen = chord.length();
+    if (chordLen < kEps) return kInf;
+    const Vec2 cdir = chord / chordLen;
+    for (std::size_t k = 1; k < steps; ++k)
+        straightErr = std::max(straightErr,
+                               std::fabs(cross(cdir, p[(s + k) % n] - A)));
+
+    Vec2 centre;
+    Real radius = 0;
+    if (!circleThrough(A, M, B, centre, radius)) return straightErr;
+
+    const Real a0 = std::atan2(A.y - centre.y, A.x - centre.x);
+    const Real aM = ccwDelta(a0, std::atan2(M.y - centre.y, M.x - centre.x));
+    const Real aB = ccwDelta(a0, std::atan2(B.y - centre.y, B.x - centre.x));
+    // The middle sample picks the direction: whichever way round the circle
+    // passes through it is the arc the samples actually traced.
+    const Real sweep = (aM < aB) ? aB : aB - kTau;
+    if (std::fabs(sweep) > kTau * 0.85) return straightErr;
+
+    Real arcErr = 0;
+    Real last = 0;
+    for (std::size_t k = 1; k < steps; ++k) {
+        const Vec2 q = p[(s + k) % n];
+        arcErr = std::max(arcErr, std::fabs((q - centre).length() - radius));
+        if (arcErr > 1e9) break;
+        // Monotone progress along the sweep, so a polyline that goes out and
+        // comes back is never mistaken for an arc that happens to pass through
+        // both ends.
+        Real t = ccwDelta(a0, std::atan2(q.y - centre.y, q.x - centre.x));
+        if (sweep < 0) t -= kTau;
+        const Real frac = t / sweep;
+        if (frac < last - 0.05 || frac > 1.05) return straightErr;
+        last = frac;
+    }
+    if (arcErr >= straightErr) return straightErr;
+    bulge = std::tan(sweep * 0.25);
+    return arcErr;
+}
+
+Real spanLength(const std::vector<Vec2>& p, std::size_t s, std::size_t e,
+                Real bulge) {
+    const ArcGeom g = arcGeom(p[s], p[e], bulge);
+    return g.straight ? (p[e] - p[s]).length() : std::fabs(g.radius * g.sweep);
+}
+
+}  // namespace
+
+Loop2 fitArcs(const Loop2& loop, Real tol, Real minEdge) {
+    const std::size_t n = loop.size();
+    if (n < 8 || tol <= 0) return loop;
+
+    std::vector<Vec2> p(n);
+    std::vector<bool> hardBreak(n, false);   // no span may span PAST vertex i
+    for (std::size_t i = 0; i < n; ++i) p[i] = loop.edges[i].a;
+    for (std::size_t i = 0; i < n; ++i) {
+        const std::size_t prev = (i + n - 1) % n;
+        // An authored arc is exact; a tag change is a real boundary. Neither is
+        // something a fit is allowed to smear across.
+        if (std::fabs(loop.bulge(i)) > kEps ||
+            std::fabs(loop.bulge(prev)) > kEps ||
+            loop.edges[i].tag != loop.edges[prev].tag)
+            hardBreak[i] = true;
+    }
+
+    // Start at the sharpest corner so the seam of the walk falls where the
+    // shape already has one, instead of splitting a smooth run in two.
+    std::size_t start = 0;
+    Real sharpest = 2;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (hardBreak[i]) { start = i; break; }
+        const Vec2 din = normalize(p[i] - p[(i + n - 1) % n]);
+        const Vec2 dout = normalize(p[(i + 1) % n] - p[i]);
+        if (din.lengthSquared() < 0.5 || dout.lengthSquared() < 0.5) continue;
+        const Real c = dot(din, dout);
+        if (c < sharpest) { sharpest = c; start = i; }
+    }
+
+    // PASS 1 — greedy longest-arc fit. Each span grows while it still fits.
+    struct Span { std::size_t s, e; Real bulge; };
+    std::vector<Span> spans;
+    std::size_t s = start, covered = 0;
+    while (covered < n) {
+        Real bestBulge = 0;
+        std::size_t bestEnd = (s + 1) % n;
+        for (std::size_t steps = 2; covered + steps <= n; ++steps) {
+            const std::size_t e = (s + steps) % n;
+            if (hardBreak[(s + steps - 1) % n]) break;
+            Real b = 0;
+            if (fitSpan(p, s, e, b) > tol) break;
+            bestEnd = e;
+            bestBulge = b;
+        }
+        const std::size_t steps = (bestEnd + n - s) % n;
+        spans.push_back({s, bestEnd, bestBulge});
+        covered += steps;
+        s = bestEnd;
+    }
+
+    // PASS 2 — absorb walls too short to build. The shortest span is merged
+    // into whichever neighbour refits with less deviation, which is the only
+    // choice that spends the error where the shape can afford it. The error cap
+    // stops the pass from dissolving a genuinely small feature into a smooth
+    // curve that was never there.
+    if (minEdge > 0) {
+        const Real errCap = std::max(tol * 4, minEdge * 0.25);
+        // A span that cannot be merged without exceeding the cap is a real
+        // feature: it is LOCKED and skipped, not treated as the end of the pass.
+        // Erasing it instead would be worse than useless — the spans tile the
+        // loop, so dropping one hands its arc to a neighbour that never fitted
+        // it — and stopping at it leaves every other short wall unmerged behind
+        // it.
+        std::vector<bool> locked(spans.size(), false);
+        while (spans.size() > 4) {
+            std::size_t worst = spans.size();
+            Real shortest = kInf;
+            for (std::size_t i = 0; i < spans.size(); ++i) {
+                if (locked[i]) continue;
+                const Real len = spanLength(p, spans[i].s, spans[i].e, spans[i].bulge);
+                if (len < minEdge && len < shortest) { shortest = len; worst = i; }
+            }
+            if (worst == spans.size()) break;
+
+            const std::size_t prev = (worst + spans.size() - 1) % spans.size();
+            const std::size_t next = (worst + 1) % spans.size();
+            Real bp = 0, bn = 0;
+            const Real ep = hardBreak[spans[worst].s]
+                                ? kInf : fitSpan(p, spans[prev].s, spans[worst].e, bp);
+            const Real en = hardBreak[spans[next].s]
+                                ? kInf : fitSpan(p, spans[worst].s, spans[next].e, bn);
+            if (ep > errCap && en > errCap) { locked[worst] = true; continue; }
+            if (ep <= en) {
+                spans[prev].e = spans[worst].e;
+                spans[prev].bulge = bp;
+            } else {
+                spans[next].s = spans[worst].s;
+                spans[next].bulge = bn;
+            }
+            spans.erase(spans.begin() + static_cast<std::ptrdiff_t>(worst));
+            locked.erase(locked.begin() + static_cast<std::ptrdiff_t>(worst));
+        }
+    }
+
+    // A shape can genuinely fit in one or two arcs — a circle is the obvious
+    // case — but `Shape2::empty()` reads a loop of fewer than three edges as
+    // nothing at all, which is why circleShape spends four quarter-arcs on a
+    // circle. So split rather than give up: splitting an arc at a sample it
+    // already passes through is exact, and the alternative (returning the dense
+    // input) is the one outcome that helps nobody.
+    while (spans.size() < 3 && spans.size() >= 1) {
+        std::size_t longest = 0, best = 0;
+        for (std::size_t i = 0; i < spans.size(); ++i) {
+            const std::size_t len = (spans[i].e + n - spans[i].s) % n;
+            if (len > longest) { longest = len; best = i; }
+        }
+        if (longest < 2) break;
+        const std::size_t mid = (spans[best].s + longest / 2) % n;
+        Real b0 = 0, b1 = 0;
+        fitSpan(p, spans[best].s, mid, b0);
+        fitSpan(p, mid, spans[best].e, b1);
+        const Span tail{mid, spans[best].e, b1};
+        spans[best].e = mid;
+        spans[best].bulge = b0;
+        spans.insert(spans.begin() + static_cast<std::ptrdiff_t>(best) + 1, tail);
+    }
+    if (spans.size() < 3) return loop;
+    Loop2 out;
+    out.edges.reserve(spans.size());
+    for (const Span& sp : spans) {
+        Edge2 e;
+        e.a = p[sp.s];
+        e.bulge = sp.bulge;
+        e.tag = loop.edges[sp.s].tag;
+        out.edges.push_back(e);
+    }
+    return out;
+}
+
+Shape2 fitArcs(const Shape2& shape, Real tol, Real minEdge) {
+    Shape2 out;
+    out.outer = fitArcs(shape.outer, tol, minEdge);
+    for (const Loop2& h : shape.holes) {
+        Loop2 fh = fitArcs(h, tol, minEdge);
+        if (fh.size() >= 3) out.holes.push_back(std::move(fh));
+    }
+    return out;
 }
 
 // ---------------------------------------------------------------------------

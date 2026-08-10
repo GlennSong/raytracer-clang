@@ -18,6 +18,7 @@
 #include "../src/engine/procgen/city/road_network.h"
 
 #include <algorithm>
+#include <map>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -227,7 +228,7 @@ int main(int argc, char** argv) {
     for (std::size_t bi = 0; bi < blocks.size(); ++bi) {
         SceneBlock& sb = blocks[bi];
         ProgramSet set = sb.mix();
-        ParcelParams pp;
+        BlockParcelParams pp;
         ParcelledBlock pb = parcelBlock(sb.shape, set, pp, sb.enclosed, sb.coreness,
                                         sb.klass, seed + (std::uint32_t)bi * 17);
         std::vector<BuiltLot> lots;
@@ -275,6 +276,30 @@ int main(int argc, char** argv) {
     }
     printf("parcelled %zu blocks -> %d lots, %d gates, %d props, %d storeys total\n",
            parcelled.size(), totalLots, totalGates, totalProps, totalStoreys);
+
+    // WHICH PLANS actually got built, counted. "A lot of the buildings look
+    // like a square" is a question about this histogram, and it is the only
+    // honest way to answer it — a sheet shows what a shape looks like, a count
+    // shows how often the pipeline reaches for it.
+    {
+        std::map<std::string, int> hist;
+        int shaped = 0, boxes = 0, lost = 0;
+        for (const auto& blk : built)
+            for (const BuiltLot& b : blk) {
+                if (!b.built) continue;
+                ++hist[b.tmpl];
+                if (b.fit == "envelope") ++lost;
+                else if (b.tmpl == "bar") ++boxes;
+                else ++shaped;
+            }
+        std::vector<std::pair<int, std::string>> rows;
+        for (const auto& kv : hist) rows.push_back({kv.second, kv.first});
+        std::sort(rows.begin(), rows.end(),
+                  [](const auto& a, const auto& b) { return a.first > b.first; });
+        printf("plans: %d shaped, %d bar, %d fell back to the envelope\n",
+               shaped, boxes, lost);
+        for (const auto& r : rows) printf("  %-20s %3d\n", r.second.c_str(), r.first);
+    }
 
     // --- draw ----------------------------------------------------------------
     Vec2 lo(1e30, 1e30), hi(-1e30, -1e30);

@@ -60,7 +60,7 @@ enum class RoofKind : std::uint8_t {
     Flat, Parapet, Gable, Hip, Mansard, Sawtooth, Dome, Steeple, Spire,
 };
 
-struct BuildingRecipe {
+struct LotRecipe {
     std::string name;
     std::string placeType;
 
@@ -95,9 +95,9 @@ struct BuildingRecipe {
 
 // Every ported recipe.
 struct RecipeBook {
-    std::vector<BuildingRecipe> recipes;
+    std::vector<LotRecipe> recipes;
 
-    const BuildingRecipe* byName(const std::string& name) const;
+    const LotRecipe* byName(const std::string& name) const;
     // Recipes credible for a program on a lot this tall. The PROGRAM does the
     // asking; the recipe never inspects the lot.
     std::vector<int> forProgram(const LotProgram& program, int storeysAvailable) const;
@@ -140,7 +140,7 @@ struct BuiltBuilding {
 // program should pass min(plate cap, program.maxStoreys), because the
 // program's declared range binds as much as the plate does.
 // Deterministic for `seed`.
-BuiltBuilding buildFromRecipe(const BuildingRecipe& recipe,
+BuiltBuilding buildFromRecipe(const LotRecipe& recipe,
                               const Shape2& envelope, const LotTags& tags,
                               const PaletteLibrary& palettes,
                               std::uint32_t districtSeed, std::uint32_t seed);

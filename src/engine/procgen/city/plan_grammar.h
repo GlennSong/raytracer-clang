@@ -134,7 +134,28 @@ enum class PlanTemplate {
     Pinwheel,
     Octagon,
     BowFront,          // a bar with a bowed street wall
+
+    // --- COMPOSED plans -----------------------------------------------------
+    // Everything above is one shape. These are SCRIPTS: a seed rewritten by the
+    // grammar's own ops, which is what the grammar was built for and what the
+    // template list alone could never reach. They are where a landmark stops
+    // being a box with a different roof.
+    Pentagon,          // a regular five-sided seed
+    Hexagon,
+    RadialWings,       // polygon + a wing off every face + discs blended on
+    Trefoil,           // three lobes smooth-joined: an organic tower plate
+    CrossApse,         // cruciform with a semicircular apse on one arm
+    AtriumRing,        // a ring with a real atrium and a notched entrance
+    LobedTower,        // square with every face bowed out — a clover plate
+    WedgeTower,        // trapezoid with its sharp end chamfered
+    SawtoothShed,      // industrial: one long edge notched into bays
+    CourtyardWings,    // H-plan closed into a court by two link wings
 };
+
+// A regular n-gon inscribed in the w x d frame, as a seed for the composed
+// plans. Exposed because "start from a pentagon" is a thing a recipe should be
+// able to say directly.
+Shape2 regularPolygon(int sides, Real w, Real d, Real rotation = 0);
 
 // Build a template inside a w x d frame whose lower-left corner is at the
 // origin. `seed` varies proportions within the template's character.

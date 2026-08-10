@@ -27,7 +27,7 @@ namespace engine {
 // There is nothing left to reject downstream, so there are no rejection
 // counters — their absence is the point, not an oversight.
 
-struct ParcelParams {
+struct BlockParcelParams {
     Real roadMargin = 2.0;     // verge between the carriageway and the first lot
     Real minLotArea = 55.0;    // below this nothing is worth cutting
     Real partyMaxFront = 9.0;  // narrower than this and the side walls are PARTY
@@ -94,7 +94,7 @@ struct ParcelledBlock {
 // campus-scale programs (§17.6) purely through their larger minimums.
 // Deterministic for `seed`.
 ParcelledBlock parcelBlock(const Shape2& block, ProgramSet& programs,
-                           const ParcelParams& params, bool enclosed,
+                           const BlockParcelParams& params, bool enclosed,
                            Real coreness, StreetClass klass, std::uint32_t seed);
 
 // Tag a lot's edges against the region it was cut out of. An edge lying on that

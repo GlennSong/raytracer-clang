@@ -208,7 +208,7 @@ namespace {
 
 struct Cutter {
     ProgramSet* programs = nullptr;
-    const ParcelParams* params = nullptr;
+    const BlockParcelParams* params = nullptr;
     const Shape2* reference = nullptr;   // the PARCELLABLE region, not the block
     bool enclosed = true;
     Real coreness = 0;
@@ -353,7 +353,7 @@ Shape2 laneCorridor(const Shape2& region, const Vec2& at, const Vec2& dir,
 
 // Split a region with service lanes until no piece is deeper than its programs
 // can serve from the perimeter. Returns the sub-blocks; appends the corridors.
-void insertLanes(const Shape2& region, Real lotDepth, const ParcelParams& params,
+void insertLanes(const Shape2& region, Real lotDepth, const BlockParcelParams& params,
                  int lanesLeft, std::vector<Shape2>& out,
                  std::vector<BlockLane>& lanes) {
     Vec2 lo, hi;
@@ -399,7 +399,7 @@ void insertLanes(const Shape2& region, Real lotDepth, const ParcelParams& params
 }  // namespace
 
 ParcelledBlock parcelBlock(const Shape2& block, ProgramSet& programs,
-                           const ParcelParams& params, bool enclosed,
+                           const BlockParcelParams& params, bool enclosed,
                            Real coreness, StreetClass klass,
                            std::uint32_t seed) {
     ParcelledBlock out;
