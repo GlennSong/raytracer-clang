@@ -1,5 +1,6 @@
 #include "sandbox_state.h"
 
+#include "../engine/asset_manager.h"
 #include "../engine/systems/camera_system.h"
 #include "../engine/systems/xr_camera_system.h"
 #include "../engine/systems/xr_surface_system.h"
