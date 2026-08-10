@@ -436,10 +436,22 @@ RenderMesh MeshBuilder::capsule(float radius, float height, int stacks, int slic
 // Procgen-grade assembly ops (ROADMAP 3.3)
 // ---------------------------------------------------------------------------
 
+// reserve() for a repeated-append verb. An EXACT-FIT reserve(size + n) here is
+// the classic accidental quadratic: reserve reallocates to precisely the
+// requested capacity, so a mesh appended to N times copies its whole payload
+// on every call — sum O(total^2 / N). Full Piedmont hit exactly this merging
+// 7 792 buildings into 19 shared part meshes: 10 of its 10.5 generation
+// minutes were this memcpy. Growing geometrically keeps append amortized O(n).
+template <class T>
+static void reserveForAppend(std::vector<T>& v, std::size_t extra) {
+    const std::size_t need = v.size() + extra;
+    if (need > v.capacity()) v.reserve(std::max(need, v.capacity() * 2));
+}
+
 void MeshBuilder::append(RenderMesh& dst, const RenderMesh& src) {
     const uint32_t base = static_cast<uint32_t>(dst.vertices.size());
     dst.vertices.insert(dst.vertices.end(), src.vertices.begin(), src.vertices.end());
-    dst.indices.reserve(dst.indices.size() + src.indices.size());
+    reserveForAppend(dst.indices, src.indices.size());
     for (uint32_t idx : src.indices) dst.indices.push_back(base + idx);
 }
 
@@ -447,7 +459,7 @@ void MeshBuilder::appendTransformed(RenderMesh& dst, const RenderMesh& src,
                                     const Mat4& xform) {
     const uint32_t base = static_cast<uint32_t>(dst.vertices.size());
     const Mat4 normalMatrix = xform.inverse().transpose();
-    dst.vertices.reserve(dst.vertices.size() + src.vertices.size());
+    reserveForAppend(dst.vertices, src.vertices.size());
     for (const Vertex& v : src.vertices) {
         Vertex out = v;
         out.position = xform.transformPoint(v.position);
@@ -455,7 +467,7 @@ void MeshBuilder::appendTransformed(RenderMesh& dst, const RenderMesh& src,
         out.tangent = normalize(xform.transformDirection(v.tangent));
         dst.vertices.push_back(out);
     }
-    dst.indices.reserve(dst.indices.size() + src.indices.size());
+    reserveForAppend(dst.indices, src.indices.size());
     for (uint32_t idx : src.indices) dst.indices.push_back(base + idx);
 }
 

@@ -13,7 +13,7 @@ Measured from the shipping pipeline, `piedmont_mini.json`:
 |---|---|---|---|
 | Roads (`buildRoadNetMesh`) | **1 per road entity** | 22 K (mini) / **587 K (full)** | **none that works** — one AABB spans the whole city, so the frustum test never rejects it and every street draws every frame |
 | Buildings (`growLotBuildingsOnNets`) | 19 part-meshes → chunked at 250 m | 697 K (mini, 132 lots) / **30.1 M (full, 7 792 lots)** | AABB frustum + `drawDistance` 900 m, HLOD mass boxes past that |
-| Full `piedmont.json` | — | generation alone runs **10½ minutes**, headless | — |
+| Full `piedmont.json` | — | generation alone ran **10½ minutes**, headless (now ~80 s — see R4) | — |
 
 Two structural facts fall out:
 
@@ -139,9 +139,22 @@ level).
 
 ### R4 — bake cache: generate once, load fast
 
-Everything is regenerated on every load; full Piedmont takes minutes before
-the GPU sees a byte. The fix is the ADR-0022 "baked static asset" tier applied
-to the whole generated city:
+**First finding (landed): the 10½ minutes was not generation — it was an
+accidental quadratic in `MeshBuilder::append`.** Phase-timing the probe put
+596 of the 612 seconds inside `growLotBuildingsOnNets`, at 33× worse
+per-lot than mini — and every gdb stack sample landed on the same line:
+`append`'s exact-fit `reserve(size + n)`, which reallocates the destination
+on EVERY call, so merging 7 792 buildings into 19 shared part meshes
+recopied the whole accumulated city per building. Growing geometrically
+instead (`reserveForAppend`, also applied to `appendTransformed`) took the
+lot pass from 596 s to 64 s and full-city generation from **10½ minutes to
+~80 s**, output bit-identical. Regression-pinned by
+`mesh_append_amortizes_reallocation` (tests/test_mesh_builder.cpp), which
+counts reallocations across 4 096 appends.
+
+The remaining ~80 s is real work, and the cache is still the right call for
+it — plus it unlocks offline LOD1 texture baking. The ADR-0022 "baked static
+asset" tier applied to the whole generated city:
 
 * Key = hash(level JSON + generator code version + seed).
 * Value = the loader's post-generation products, serialized: chunked meshes,

@@ -169,3 +169,40 @@ TEST_CASE(mesh_grid_indices_face_up) {
     MeshBuilder::gridIndices(tiny, 1, 5);
     CHECK(tiny.indices.empty());
 }
+
+TEST_CASE(mesh_append_amortizes_reallocation) {
+    // Full Piedmont's 10-minute generation was MeshBuilder::append itself:
+    // an exact-fit reserve() reallocated the destination on EVERY append, so
+    // merging N buildings into a shared part mesh recopied the whole city per
+    // building. Appending N times must reallocate O(log N) times, not O(N).
+    RenderMesh part = MeshBuilder::box(Vec3(1, 1, 1));
+    RenderMesh city;
+    int vertexReallocs = 0, indexReallocs = 0;
+    const Vertex* vp = city.vertices.data();
+    const uint32_t* ip = city.indices.data();
+    const int N = 4096;
+    for (int i = 0; i < N; ++i) {
+        MeshBuilder::append(city, part);
+        if (city.vertices.data() != vp) { ++vertexReallocs; vp = city.vertices.data(); }
+        if (city.indices.data() != ip) { ++indexReallocs; ip = city.indices.data(); }
+    }
+    CHECK(city.vertices.size() == part.vertices.size() * N);
+    CHECK(city.indices.size() == part.indices.size() * N);
+    // Geometric growth: ~log2(N * 36) ≈ 18 reallocations; 64 leaves headroom
+    // for any sane growth policy while still failing hard on exact-fit (4096).
+    CHECK(vertexReallocs < 64);
+    CHECK(indexReallocs < 64);
+
+    // appendTransformed shares the verbs — hold it to the same bar.
+    RenderMesh city2;
+    ip = city2.indices.data(); vp = city2.vertices.data();
+    vertexReallocs = indexReallocs = 0;
+    for (int i = 0; i < N; ++i) {
+        MeshBuilder::appendTransformed(city2, part, Mat4::translate(i * 2.0, 0, 0));
+        if (city2.vertices.data() != vp) { ++vertexReallocs; vp = city2.vertices.data(); }
+        if (city2.indices.data() != ip) { ++indexReallocs; ip = city2.indices.data(); }
+    }
+    CHECK(city2.vertices.size() == part.vertices.size() * N);
+    CHECK(vertexReallocs < 64);
+    CHECK(indexReallocs < 64);
+}
