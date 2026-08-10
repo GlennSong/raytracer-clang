@@ -220,9 +220,24 @@ std::vector<std::pair<int, Real>> ProgramSet::eligible(const LotTags& tags) cons
         // if that counts as an equal candidate then the smallest program in a
         // mix drives every decision — the parceller cuts a campus block into
         // cottages and the coarse grain the rim exists for never appears.
-        // Prefer the most demanding program the land can actually satisfy.
-        const Real scale = tags.area > 1.0 ? p.minArea / tags.area : 1.0;
-        w *= scale >= 0.25 ? 1.0 : std::max(Real(0.01), scale * 4.0);
+        //
+        // The fit PEAKS where the land matches the lot this program is built on
+        // and falls away on both sides. A one-sided penalty (only punishing the
+        // too-small) decays every candidate by the same factor, so it changes
+        // the magnitudes and never the ORDER — which meant the highest base
+        // weight won at every size and the largest program in a mix could never
+        // be reached at all. Measured: `glass_tower` lost to `office_tower` on
+        // a 1600 m2 parcel and on a 48 000 m2 one alike, so the cutter always
+        // aimed at the smaller plate and the skyscraper program was dead
+        // weight in the list.
+        if (tags.area > 1.0 && p.targetArea() > 1.0) {
+            const Real ratio = tags.area / p.targetArea();
+            // Symmetric in log space: half the land, or twice it, costs the
+            // same. Gentle, because this is a bias among survivors and not a
+            // gate — `lotFitsProgram` already threw out what does not fit.
+            const Real lg = std::log(ratio);
+            w *= std::max(Real(0.02), std::exp(-(lg * lg) * 0.30));
+        }
         if (tags.shape == LotShape::Corner && p.requiresCorner) w *= 3.0;
         if (tags.streetClass == StreetClass::Arterial &&
             p.frontage == FrontageKind::Direct)
@@ -310,26 +325,73 @@ LotProgram makeProgram(const char* name, Real minW, Real minD, Real minArea,
     return p;
 }
 
+// The lot a program is BUILT on. Stated for anything whose normal site is
+// meaningfully bigger than the smallest one it would take — which is every
+// program that wants a shaped plan, because a plan can only grow wings on a
+// plate wide enough to have them.
+// The verge between the carriageway and the first lot, counted once per side
+// of a block. Matches BlockParcelParams::roadMargin, which is what the
+// parceller will actually take off again.
+constexpr Real kRoadVerge = 2.0;
+// How many lots a block face carries before it stops reading as a block.
+constexpr Real kLotsPerFrontage = 4.0;
+
+LotProgram& built(LotProgram& p, Real w, Real d) {
+    p.targetW = w;
+    p.targetD = d;
+    return p;
+}
+
 }  // namespace
+
+BlockGrain blockGrainFor(const ProgramSet& mix) {
+    const LotProgram* drive = nullptr;
+    for (const LotProgram& p : mix.programs) {
+        if (p.quota > 0) continue;                     // landmarks size nothing
+        if (!drive || p.targetArea() > drive->targetArea()) drive = &p;
+    }
+    BlockGrain g;
+    if (!drive) return g;
+    // Street to street: a row of lots, back to back with the row behind it,
+    // plus the verge between the carriageway and the first lot on each side.
+    const Real lotDepth = drive->targetDepth() + drive->frontSetback +
+                          drive->rearSetback;
+    g.depth = 2 * lotDepth + 2 * kRoadVerge;
+    // Along the street: enough lots to read as a block rather than a pair.
+    g.length = std::max(g.depth, kLotsPerFrontage * drive->targetWidth());
+    return g;
+}
 
 ProgramSet residentialPrograms() {
     ProgramSet s;
-    s.programs.push_back(makeProgram("cottage", 7, 7, 90, 0.35, 5, 2, 6,
+    // A cottage will squeeze onto 7 x 7 m; it is BUILT on a modest house plot,
+    // and the difference is the whole grain of a neighbourhood. Deriving the
+    // target from the minimum would ask for an 89 m2 lot, which is not a house
+    // plot anywhere.
+    LotProgram cottage = makeProgram("cottage", 7, 7, 90, 0.35, 5, 2, 6,
                                      FrontageKind::Garden, OpenKind::Lawn, 1,
-                                     1, 2, 3.0, {"cottage_house", "craftsman"}));
-    s.programs.push_back(makeProgram("villa", 12, 11, 320, 0.30, 8, 4, 8,
-                                     FrontageKind::Garden, OpenKind::Garden, 2,
-                                     1, 3, 1.6, {"villa", "craftsman"}));
-    s.programs.push_back(makeProgram("townhouse", 6, 11, 80, 0.62, 2, 0, 5,
+                                     1, 2, 3.0, {"cottage_house", "craftsman"});
+    s.programs.push_back(built(cottage, 13, 22));
+    LotProgram villa = makeProgram("villa", 12, 11, 320, 0.30, 8, 4, 8,
+                                   FrontageKind::Garden, OpenKind::Garden, 2,
+                                   1, 3, 1.6, {"villa", "craftsman"});
+    s.programs.push_back(built(villa, 20, 24));
+    // A terrace is NARROW and deep — the densest thing on this list, and the
+    // reason a neighbourhood block can hold four times the lots a downtown one
+    // does on the same land.
+    LotProgram terrace = makeProgram("townhouse", 6, 11, 80, 0.62, 2, 0, 5,
                                      FrontageKind::Patio, OpenKind::Lawn, 0,
-                                     2, 4, 2.2, {"townhouse", "rowhouse"}));
-    s.programs.push_back(makeProgram("walkup", 14, 14, 260, 0.55, 3, 3, 5,
-                                     FrontageKind::Forecourt, OpenKind::Court, 2,
-                                     3, 6, 1.2, {"walkup", "apartment_slab"}));
+                                     2, 4, 2.2, {"townhouse", "rowhouse"});
+    s.programs.push_back(built(terrace, 7, 24));
+    LotProgram walkup = makeProgram("walkup", 14, 14, 260, 0.55, 3, 3, 5,
+                                    FrontageKind::Forecourt, OpenKind::Court, 2,
+                                    3, 6, 1.2, {"walkup", "apartment_slab"});
+    s.programs.push_back(built(walkup, 22, 26));
     LotProgram corner = makeProgram("corner_shopfront", 9, 10, 130, 0.75, 0, 0, 3,
                                     FrontageKind::Direct, OpenKind::None, 0,
                                     2, 4, 1.0, {"corner_shopfront"});
     corner.requiresCorner = true;
+    built(corner, 11, 15);
     s.programs.push_back(corner);
     s.reset();
     return s;
@@ -337,15 +399,19 @@ ProgramSet residentialPrograms() {
 
 ProgramSet commercialPrograms() {
     ProgramSet s;
-    s.programs.push_back(makeProgram("shopfront", 8, 12, 120, 0.85, 0, 0, 2,
-                                     FrontageKind::Direct, OpenKind::None, 0,
-                                     1, 3, 3.0, {"shopfront", "big_box"}));
+    LotProgram shop = makeProgram("shopfront", 8, 12, 120, 0.85, 0, 0, 2,
+                                  FrontageKind::Direct, OpenKind::None, 0,
+                                  1, 3, 3.0, {"shopfront", "big_box"});
+    s.programs.push_back(built(shop, 9, 26));      // the high-street plot
     s.programs.push_back(makeProgram("mixed_use", 12, 16, 240, 0.78, 0, 0, 3,
                                      FrontageKind::Direct, OpenKind::None, 0,
                                      3, 6, 2.0, {"mixed_use", "flatiron"}));
-    s.programs.push_back(makeProgram("office_block", 18, 18, 420, 0.70, 2, 2, 4,
-                                     FrontageKind::Forecourt, OpenKind::None, 4,
-                                     4, 10, 1.4, {"office_block", "hotel"}));
+    // An office block is the smallest program that can carry a courtyard or an
+    // atrium ring, and it only can on a plate wide enough for one.
+    LotProgram block = makeProgram("office_block", 18, 18, 420, 0.70, 2, 2, 4,
+                                   FrontageKind::Forecourt, OpenKind::None, 4,
+                                   4, 10, 1.4, {"office_block", "hotel"});
+    s.programs.push_back(built(block, 34, 38));
     LotProgram bank = makeProgram("bank", 14, 14, 260, 0.72, 1, 1, 3,
                                   FrontageKind::Plaza, OpenKind::None, 0,
                                   2, 5, 0.8, {"bank", "library"});
@@ -360,26 +426,33 @@ ProgramSet downtownPrograms() {
     s.programs.push_back(makeProgram("mixed_use", 12, 16, 240, 0.80, 0, 0, 2,
                                      FrontageKind::Direct, OpenKind::None, 0,
                                      4, 8, 2.2, {"mixed_use", "flatiron"}));
-    s.programs.push_back(makeProgram("office_tower", 26, 26, 900, 0.68, 3, 3, 4,
-                                     FrontageKind::Plaza, OpenKind::None, 0,
-                                     12, 45, 1.5,
-                                     {"office_tower", "stepped_tower",
-                                      "terraced_tower"}));
+    // A TOWER PLATE. The minimum (26 x 26) is what a tower will squeeze onto;
+    // the target is what one is actually built on, and the difference is the
+    // whole reason a downtown lot can carry a shaped plan instead of a box.
+    LotProgram tower = makeProgram("office_tower", 26, 26, 900, 0.68, 3, 3, 4,
+                                   FrontageKind::Plaza, OpenKind::None, 0,
+                                   12, 45, 1.5,
+                                   {"office_tower", "stepped_tower",
+                                    "terraced_tower"});
+    s.programs.push_back(built(tower, 44, 46));
     // A slender tower needs a plate that can carry a core: §17.2 gates this,
     // not a per-recipe constant.
-    s.programs.push_back(makeProgram("glass_tower", 32, 30, 1300, 0.62, 4, 4, 5,
-                                     FrontageKind::Plaza, OpenKind::None, 0,
-                                     22, 70, 1.0,
-                                     {"glass_tower", "profile_tower",
-                                      "arch_tower", "pyramid_landmark"}));
+    LotProgram glass = makeProgram("glass_tower", 32, 30, 1300, 0.62, 4, 4, 5,
+                                   FrontageKind::Plaza, OpenKind::None, 0,
+                                   22, 70, 1.0,
+                                   {"glass_tower", "profile_tower",
+                                    "arch_tower", "pyramid_landmark"});
+    s.programs.push_back(built(glass, 56, 54));
     LotProgram cathedral = makeProgram("cathedral", 26, 42, 1200, 0.55, 8, 6, 8,
                                        FrontageKind::Plaza, OpenKind::Park, 0,
                                        1, 3, 0.5, {"cathedral", "church"});
+    built(cathedral, 46, 64);
     cathedral.quota = 1;              // exactly one, not a one-in-fifty chance
     s.programs.push_back(cathedral);
     LotProgram hall = makeProgram("civic_hall", 24, 30, 900, 0.55, 10, 8, 8,
                                   FrontageKind::Plaza, OpenKind::Park, 0,
                                   2, 5, 0.5, {"civic_hall", "capitol", "museum"});
+    built(hall, 48, 56);
     hall.quota = 1;
     s.programs.push_back(hall);
     s.reset();

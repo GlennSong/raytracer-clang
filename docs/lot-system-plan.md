@@ -527,6 +527,74 @@ constants.** Today `lotSetback` is one number per district. A villa wants 8 m
 of front garden; a shopfront wants zero; a tower wants a plaza on the corner
 and nothing at the rear.
 
+#### Minimums decide eligibility; TARGETS decide grain
+
+A program states two rectangles, and conflating them is a bug that hides for a
+long time:
+
+* the **minimum** it will accept — what `lotFitsProgram` gates on;
+* the lot it is actually **built** on (`targetW` × `targetD`) — what the cutter
+  aims at.
+
+Without the second, a recursive cutter can only halve until it happens to fall
+under the first, so every lot is `frontage / 2^k` and the grain is an artefact
+of the block's dimensions rather than anything a program asked for. Measured
+before targets existed: a 110 m downtown block produced 2100 m² tower plates
+and a 150 m one produced 1040 m² — **the bigger block gave the smaller lots**,
+and whether a tower had a plate wide enough for a shaped plan was luck. The
+cutter now stations its cuts on whole target-width lots and divides depth into
+a whole number of rows, so the same programs give 1700–2600 m² plates on every
+block size from 100 m to 240 m.
+
+Two consequences fall out of the same change. Lot depth is bounded by the row
+stationing rather than by a service lane, and the last row is no longer the odd
+one out. And the frontage-normal depth is measured by projection instead of off
+an axis-aligned bounding box — a block at an angle to the axes is the normal
+case, not a special one, and its bounding box is deeper than the block is.
+
+#### The scale fit has to PEAK, not decay
+
+Eligible programs are weighted by how well the land fits them. The first
+version only punished programs that were too small for the parcel, which decays
+every candidate by the same factor: it changes the magnitudes and never the
+**order**. The highest base weight therefore won at every size, and the largest
+program in a mix could never be reached at all — `glass_tower` lost to
+`office_tower` on a 1600 m² parcel and on a 48 000 m² one alike, so the cutter
+always aimed at the smaller plate and the skyscraper program was dead weight in
+the list. The fit is now symmetric in log space (half the land, or twice it,
+costs the same), so the ranking moves with the parcel: a modest plate is an
+office tower, a whole block is a skyscraper site.
+
+#### 8.1a The block a district needs
+
+The same inversion, one level **up**. A block is not a number of metres
+somebody liked; it is two rows of the lots that district's programs are built
+on, plus the verge — which `blockGrainFor` derives from the programs
+themselves:
+
+| mix | derived block | driving program |
+| --- | --- | --- |
+| downtown | 130 × 224 m | glass tower |
+| commercial | 92 × 136 m | office block |
+| residential | 72 × 88 m | walkup |
+| rim | 284 × 378 m | campus |
+
+The road layer consumes this as a **ratio against the commercial mix**, so a
+level's own block size still sets the city's scale and this only decides each
+district's share of it. Two places take it: the patch fabric's cell size, and —
+through the region-aware `consolidateJunctionSpans` overload that had been
+sitting unused since it was written — the arterial skeleton's junction floor,
+so downtown consolidates to fewer, bigger junctions and a neighbourhood keeps
+its tight ones.
+
+Measured on a generated city, before: financial blocks came out at ~105 m and
+residential at ~140 m, so the district with the towers had the *tightest* land
+in the city and the variation that did exist was noise from the skeleton rather
+than intent. After: financial is the largest grain in the city, commercial the
+tightest. The effect is bounded — face size in this generator is dominated by
+the arterial skeleton and freeway geometry, not by the fill — but it now points
+the right way, and it points that way *because of what each district builds*.
+
 ### 8.2 The site plan — zones
 
 ```cpp

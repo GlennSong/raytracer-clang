@@ -1,6 +1,8 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/city/parcel_block.h"
+#include "../src/engine/procgen/city/site_plan.h"
+#include <algorithm>
 #include <cmath>
 #include <set>
 
@@ -281,7 +283,18 @@ TEST_CASE(parcel_lanes_keep_lots_from_becoming_absurdly_deep) {
             d = std::max(d, std::min(l.tags.inscribedW, l.tags.inscribedD));
         return d;
     };
-    CHECK(deepest(on) < deepest(off));
+    // Lot DEPTH is now bounded by the row stationing whether or not a lane is
+    // cut — a block is a whole number of rows of the depth its programs are
+    // built at, so there is no leftover row to be absurdly deep. (This check
+    // used to read `deepest(on) < deepest(off)`, on the older cutter where
+    // peeling one row off the front left the remainder as one deep back lot
+    // and only a lane could break it up. The lane still earns its keep on the
+    // count above; it is no longer what bounds the depth.)
+    Real rowDepth = 0;
+    for (const LotProgram& p : residentialPrograms().programs)
+        if (p.quota <= 0) rowDepth = std::max(rowDepth, p.targetDepth());
+    CHECK(deepest(on) < rowDepth * 1.2);
+    CHECK(deepest(off) < rowDepth * 1.2);
     // Both stay reachable; the lane version simply has a better grain.
     CHECK(on.openSpaceIsReachable());
     CHECK(off.openSpaceIsReachable());
@@ -333,4 +346,156 @@ TEST_CASE(parcel_lanes_are_deterministic) {
     ParcelledBlock y = parcelBlock(block, b, params, true, 0.3, StreetClass::Street, 21);
     CHECK(x.lanes.size() == y.lanes.size());
     CHECK(near(x.laneArea(), y.laneArea(), 1e-9));
+}
+
+// --- grain: the size a lot comes out at ------------------------------------
+
+namespace {
+
+// The median lot area, which is what "the grain" means for a block.
+Real medianLotArea(const ParcelledBlock& pb) {
+    std::vector<Real> a;
+    for (const ParcelledLot& l : pb.lots) a.push_back(area(l.shape));
+    if (a.empty()) return 0;
+    std::sort(a.begin(), a.end());
+    return a[a.size() / 2];
+}
+
+// The shortest side of the biggest building envelope the block produced — the
+// number that decides whether a plan can grow WINGS rather than being a box.
+Real widestPlate(const ParcelledBlock& pb, ProgramSet& mix) {
+    Real best = 0;
+    for (const ParcelledLot& l : pb.lots) {
+        const int pi = mix.bestFor(l.tags);
+        if (pi < 0) continue;
+        SitePlan sp = layoutSite(l.shape, l.tags, mix.programs[pi], 5);
+        for (const ZoneArea& z : sp.zones) {
+            if (z.zone != Zone::Building) continue;
+            for (const Shape2& s : z.parts) {
+                Vec2 lo, hi;
+                bounds(s, lo, hi);
+                best = std::max(best, std::min(hi.x - lo.x, hi.y - lo.y));
+            }
+        }
+    }
+    return best;
+}
+
+}  // namespace
+
+// THE BUG THIS EXISTS FOR: a recursive cutter that splits near the middle can
+// only ever produce lots of `frontage / 2^k`, so the grain is an artefact of
+// where the halving cascade happens to stop. Measured before programs carried
+// a target: a 110 m downtown block gave 2100 m2 tower plates and a 150 m one
+// gave 1040 m2 — the BIGGER block gave the SMALLER lots, and whether a tower
+// had room for a shaped plan was luck.
+//
+// The invariant is not monotonicity (a block is not obliged to divide evenly);
+// it is that the lot comes out at the size the PROGRAM asked for, whatever
+// block it is handed. Stationing the cuts on whole target-width lots is what
+// makes that true.
+TEST_CASE(parcel_lot_size_follows_the_program_not_the_block) {
+    BlockParcelParams params;
+    Real smallest = 1e30, largest = 0;
+    for (Real side : {Real(100), Real(120), Real(150), Real(190), Real(240)}) {
+        ProgramSet mix = downtownPrograms();
+        ParcelledBlock pb = parcelBlock(rectShape(0, 0, side, side), mix, params,
+                                        true, 0.9, StreetClass::Street, 11);
+        const Real med = medianLotArea(pb);
+        CHECK(med > 1500);
+        // Whatever the block, downtown land ends up carrying a plate wide
+        // enough for a plan with wings — 30 m is where plan_grammar's
+        // `radial-wings` stops being able to grow one.
+        CHECK(widestPlate(pb, mix) >= 30.0);
+        smallest = std::min(smallest, med);
+        largest = std::max(largest, med);
+    }
+    // The whole spread across every block size, against the 2x INVERSION this
+    // replaced (110 m -> 2100 m2, 150 m -> 1040 m2).
+    CHECK(largest / smallest < 1.6);
+}
+
+// The biggest program in a mix has to be REACHABLE. A one-sided scale penalty
+// decays every candidate by the same factor, so it changes the magnitudes and
+// never the order — the highest base weight then wins at every size and the
+// skyscraper program is dead weight in the list. Measured before the fit was
+// made symmetric: `glass_tower` lost to `office_tower` on a 1600 m2 parcel and
+// on a 48 000 m2 one alike.
+TEST_CASE(parcel_the_largest_program_wins_the_largest_land) {
+    ProgramSet mix = downtownPrograms();
+    auto bestOn = [&](Real side) {
+        Shape2 s = rectShape(0, 0, side, side);
+        for (Edge2& e : s.outer.edges) e.tag = EdgeTag::Street;
+        const LotTags t = measureLot(s, {}, StreetClass::Street, true, 0.9);
+        const int i = mix.bestFor(t);
+        return i >= 0 ? mix.programs[i].name : std::string("-");
+    };
+    // A modest plate is an office tower; a whole block is a skyscraper site.
+    CHECK(bestOn(40) == "office_tower");
+    CHECK(bestOn(200) == "glass_tower");
+}
+
+// A block at an angle to the axes is the normal case, not a special one: the
+// generator's streets follow arterials, not the X axis. Depth was measured off
+// an axis-aligned bounding box, which is deeper than an angled block actually
+// is, so the same land parcelled differently depending on its rotation.
+TEST_CASE(parcel_grain_survives_a_rotated_block) {
+    BlockParcelParams params;
+    auto grainOf = [&](Real deg) {
+        const Real c = std::cos(deg * 3.14159265358979 / 180.0);
+        const Real sn = std::sin(deg * 3.14159265358979 / 180.0);
+        Poly2 ring;
+        for (const Vec2& v : {Vec2(0, 0), Vec2(150, 0), Vec2(150, 150), Vec2(0, 150)})
+            ring.push_back(Vec2(v.x * c - v.y * sn, v.x * sn + v.y * c));
+        ProgramSet mix = downtownPrograms();
+        ParcelledBlock pb = parcelBlock(shapeFromPoly(ring), mix, params, true,
+                                        0.9, StreetClass::Street, 11);
+        return medianLotArea(pb);
+    };
+    const Real flat = grainOf(0);
+    CHECK(flat > 0);
+    for (Real deg : {Real(17), Real(31), Real(45)}) {
+        const Real turned = grainOf(deg);
+        CHECK(turned > flat * 0.6);
+        CHECK(turned < flat * 1.7);
+    }
+}
+
+// The other half of the same question: a downtown lot has to be big enough to
+// carry a plan with wings, and a neighbourhood lot has to stay small. One
+// parceller, one rule, opposite answers — because the PROGRAMS differ, not
+// because anything branches on district.
+TEST_CASE(parcel_downtown_builds_tower_plates_and_terraces_stay_tight) {
+    BlockParcelParams params;
+    ProgramSet down = downtownPrograms();
+    ParcelledBlock city = parcelBlock(rectShape(0, 0, 120, 120), down, params,
+                                      true, 0.9, StreetClass::Street, 3);
+    // 30 m is the width a plan needs before `radial-wings` will grow wings at
+    // all (plan_grammar's kMinWing); a plate under it can only be a box.
+    CHECK(widestPlate(city, down) >= 30.0);
+    CHECK(medianLotArea(city) > 1200);
+
+    ProgramSet res = residentialPrograms();
+    ParcelledBlock hood = parcelBlock(rectShape(0, 0, 120, 120), res, params,
+                                      true, 0.2, StreetClass::Street, 3);
+    CHECK(medianLotArea(hood) < 500);
+    CHECK(hood.lots.size() > city.lots.size() * 4);
+}
+
+// The block a district needs is DERIVED from what it intends to build, not
+// chosen. If this inverts, the road layer is laying the wrong grain and no
+// amount of parcelling downstream can recover the land.
+TEST_CASE(parcel_block_grain_follows_the_programs) {
+    const BlockGrain down = blockGrainFor(downtownPrograms());
+    const BlockGrain com = blockGrainFor(commercialPrograms());
+    const BlockGrain res = blockGrainFor(residentialPrograms());
+    const BlockGrain rim = blockGrainFor(rimPrograms());
+    CHECK(down.depth > com.depth);
+    CHECK(com.depth > res.depth);
+    CHECK(rim.depth > down.depth);
+    // Deep enough for two rows of what it is for, and no deeper.
+    CHECK(res.depth > 60 && res.depth < 90);
+    CHECK(down.depth > 110 && down.depth < 160);
+    // A block face carries several lots, so it reads as a block.
+    CHECK(down.length >= down.depth);
 }

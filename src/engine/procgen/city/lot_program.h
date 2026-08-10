@@ -95,6 +95,25 @@ struct LotProgram {
     Real minArea = 90;
     Real minFrontage = 6;
 
+    // THE LOT THIS PROGRAM IS BUILT ON, as opposed to the smallest one it will
+    // accept. Minimums decide ELIGIBILITY; targets decide GRAIN, and they are
+    // not the same question.
+    //
+    // Without targets a recursive cutter can only halve until it happens to
+    // fall under a minimum, so the lot size is a power-of-two artefact of the
+    // block's dimensions rather than anything a program asked for — measured
+    // before this existed, a 110 m downtown block produced 2100 m² tower
+    // plates and a 150 m one produced 1040 m² plates, so the BIGGER block gave
+    // the SMALLER lots and whether a tower had room for wings was an accident
+    // of where the cascade landed.
+    //
+    // 0 means "derive from the minimum", which is right for anything whose
+    // minimum already is its normal size (a terrace house).
+    Real targetW = 0, targetD = 0;
+    Real targetWidth() const { return targetW > 0 ? targetW : minW * 1.35; }
+    Real targetDepth() const { return targetD > 0 ? targetD : minD * 1.35; }
+    Real targetArea() const { return targetWidth() * targetDepth(); }
+
     Real coverage = 0.45;                  // footprint / lot area
     Real frontSetback = 4, sideSetback = 2, rearSetback = 5;
 
@@ -158,6 +177,29 @@ struct ProgramSet {
 };
 
 // The stock residential/commercial/civic mixes, as data.
+// --- what block a district needs -------------------------------------------
+
+// The buildability inversion, one level UP. A block is not a number of metres
+// somebody liked; it is however much land the buildings a district intends to
+// put there actually need. Two rows of lots back to back plus the verge each
+// side IS the street-to-street depth, and a few lots along the frontage is the
+// length — so a downtown of tower plates gets deep blocks and a dense
+// neighbourhood of terraces gets shallow ones, from the same rule.
+//
+// This is the number the road layer wants: without it a city lays one grain
+// everywhere and the district character has to be faked with street pattern
+// alone, which cannot produce a lot big enough for a tower with wings.
+struct BlockGrain {
+    Real depth = 110;    // street to street
+    Real length = 150;   // along the street
+};
+
+// Derived from the mix's DRIVING program: the largest ordinary one. Quota'd
+// landmarks are excluded on purpose — a cathedral is a one-off that takes
+// whatever block it lands on, and sizing every block in the district to it
+// would coarsen the whole grid for one building.
+BlockGrain blockGrainFor(const ProgramSet& mix);
+
 ProgramSet residentialPrograms();
 ProgramSet commercialPrograms();
 ProgramSet downtownPrograms();

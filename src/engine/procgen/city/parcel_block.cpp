@@ -271,17 +271,31 @@ struct Cutter {
         const bool hasFront = frontageAxis(region, along, mid, frontLen);
         const LotProgram* want = target(tags);
         const Real useful = want ? std::min(want->minW, want->minD) : 8.0;
-        // Stop splitting once the land is close to what the target actually
-        // needs — cutting a campus parcel in half again serves nothing.
-        const bool roomToSplit = !want || area(region) > want->minArea * 2.0;
+        // Stop splitting once the land is close to the lot the target is BUILT
+        // on — cutting a campus parcel in half again serves nothing.
+        const bool roomToSplit = !want || area(region) > want->targetArea() * 1.5;
 
         if (hasFront && roomToSplit && frontLen > useful * 2.2) {
             // FRONTAGE-FIRST: cut perpendicular to the street so both halves
             // keep a frontage. A split parallel to it would leave the back half
             // landlocked, which is how a parceller produces lots with no way in.
             const Vec2 cutDir(-along.y, along.x);
-            const Real jitter = rng.range(0.42, 0.58);
-            const Vec2 at = mid + along * (frontLen * (jitter - 0.5));
+            // STATION the cut on whole lots rather than halving. Splitting near
+            // the middle makes every lot width `frontage / 2^k`, so the grain is
+            // a power-of-two artefact of the block's dimensions — a wider block
+            // does not give wider lots, it gives one more halving. Rounding the
+            // frontage to a whole number of target-width lots and cutting on a
+            // lot boundary makes both halves whole, so the recursion bottoms out
+            // at the width the program actually asked for.
+            const Real targetFront = want ? want->targetWidth() : useful * 1.35;
+            const int lots = std::max(2, static_cast<int>(
+                                             std::lround(frontLen / targetFront)));
+            // Off-centre by up to one lot, so a street does not read as though
+            // every block were folded down the middle.
+            const int cutAt = std::max(1, std::min(lots - 1,
+                                                   lots / 2 + rng.irange(-1, 1)));
+            const Real frac = static_cast<Real>(cutAt) / lots;
+            const Vec2 at = mid + along * (frontLen * (frac - 0.5));
             std::vector<Shape2> a, b;
             splitShape(region, at, cutDir, a, b);
             if (!a.empty() && !b.empty()) {
@@ -295,14 +309,30 @@ struct Cutter {
         // row and a back region. The back may be landlocked, in which case the
         // recursion finds no eligible program for it and it becomes the block's
         // interior green — which is exactly what a real block has.
-        Vec2 lo, hi;
-        bounds(region, lo, hi);
-        const Real deep = std::max(hi.x - lo.x, hi.y - lo.y);
-        const Real wantDepth =
-            want ? std::max(want->minW, want->minD) : 14.0;
+        // The depth a lot of this program is BUILT at, not the shallowest one
+        // it would accept — same reason as the frontage above.
+        const Real wantDepth = want ? want->targetDepth() : 14.0;
+        const Vec2 inward(-along.y, along.x);
+        // Measured ALONG the frontage normal, not from an axis-aligned box: a
+        // block at an angle to the axes is the normal case, and its bounding
+        // box is deeper than the block is.
+        Real dlo = 1e30, dhi = -1e30;
+        for (const Vec2& v : tessellate(region.outer, 0.25)) {
+            const Real t = dot(v, inward);
+            dlo = std::min(dlo, t);
+            dhi = std::max(dhi, t);
+        }
+        const Real deep = dhi - dlo;
         if (hasFront && roomToSplit && deep > wantDepth * 2.1) {
-            const Vec2 inward(-along.y, along.x);
-            const Vec2 at = mid + inward * (wantDepth * rng.range(1.05, 1.35));
+            // ROWS, evenly: peeling one target-deep row off the front leaves a
+            // remainder of whatever is left over, and that remainder is the
+            // odd lot out. Dividing the depth into a whole number of rows makes
+            // every row the same — the same stationing argument as the
+            // frontage, in the other direction.
+            const int rows = std::max(2, static_cast<int>(
+                                             std::lround(deep / wantDepth)));
+            const Real step = deep / rows;
+            const Vec2 at = mid + inward * (step - (dot(mid, inward) - dlo));
             std::vector<Shape2> a, b;
             splitShape(region, at, along, a, b);
             // Only take the split if BOTH halves still have a way in. A depth

@@ -3,6 +3,7 @@
 #include "arterial_skeleton.h"  // P8 footprint-first constructed skeleton
 #include "road_constraints.h"   // consolidateJunctionSpans (big-block skeleton)
 #include "patch_fabric.h"       // P7 patch-conforming fabric (chords/bisect/court)
+#include "lot_program.h"        // blockGrainFor: the grain a district's programs need
 #include "../../../profile.h"
 
 #include <algorithm>
@@ -18,6 +19,42 @@ namespace engine {
 namespace {
 
 constexpr double kTau = 6.283185307179586;
+
+// THE GRAIN EACH DISTRICT ASKS FOR, indexed by CityHub::kind (financial,
+// commercial, residential, oldtown, industrial).
+//
+// A district's block size is not a taste: it is two rows of the lots that
+// district's PROGRAM MIX is built on, plus the verge. `blockGrainFor` derives
+// that from the programs' own target rectangles, so a downtown of tower plates
+// asks for deep blocks and a dense neighbourhood of terraces asks for shallow
+// ones — and changing what a district builds changes its streets, instead of
+// the two drifting apart.
+//
+// Expressed as a RATIO against the commercial mix so the level keeps control of
+// the city's overall scale; this only sets each district's share of it. Clamped
+// because a rim-scale mix legitimately wants a 280 m block, and letting one
+// district triple the grain of a city tuned for 110 m would not be district
+// character, it would be a different city.
+const double* districtGrainRatio() {
+    static const std::array<double, 5> r = [] {
+        const double base = blockGrainFor(commercialPrograms()).depth;
+        auto ratio = [&](const ProgramSet& mix, double flavour) {
+            const double v = blockGrainFor(mix).depth / base * flavour;
+            return std::max(0.55, std::min(2.2, v));
+        };
+        return std::array<double, 5>{
+            ratio(downtownPrograms(), 1.0),
+            1.0,
+            ratio(residentialPrograms(), 1.0),
+            // Old town builds the same houses on a tighter, crookeder grain —
+            // the one flavour multiplier here, and it is a character choice
+            // rather than a buildability one.
+            ratio(residentialPrograms(), 0.78),
+            ratio(rimPrograms(), 1.0),
+        };
+    }();
+    return r.data();
+}
 
 // Clean the arterial skeleton (city-pipeline v2): colonization grows JITTERY
 // chains and short dangling stubs — the "degenerate roads" the device flagged.
@@ -968,8 +1005,28 @@ RoadGraph buildMetro(const MetroParams& p,
                        std::min(p.arterialSpan > 0.0 ? p.arterialSpan : 650.0,
                                 0.35 * p.districtLen))
             : p.minBlockEdge;
-    if (skelFloor > 0.0)
-        Ga = planarize(consolidateJunctionSpans(Ga, skelFloor, 4), 1.0);
+    if (skelFloor > 0.0) {
+        // DISTRICT-AWARE, via the region overload that has been sitting unused:
+        // the floor is what each district's own programs need, so downtown
+        // consolidates to fewer, bigger junctions (a tower plate) and a
+        // neighbourhood keeps its tight ones. A single floor for the whole city
+        // is why every district's blocks came out the same size and the
+        // district with the towers had no room for one.
+        const double* grain = districtGrainRatio();
+        const std::vector<CityHub>& hubsForFloor = hots;
+        auto floorAt = [&](const Vec2& q) -> Real {
+            if (hubsForFloor.empty()) return skelFloor;
+            int best = 0;
+            double bd = 1e30;
+            for (std::size_t h = 0; h < hubsForFloor.size(); ++h) {
+                const double d = dist2(q, hubsForFloor[h].pos);
+                if (d < bd) { bd = d; best = static_cast<int>(h); }
+            }
+            const int kind = std::clamp(hubsForFloor[best].kind, 0, 4);
+            return skelFloor * grain[kind];
+        };
+        Ga = planarize(consolidateJunctionSpans(Ga, floorAt, 4), 1.0);
+    }
 
     // ARTERIALS-ONLY (v2 stage 1): Ga now holds the full arterial skeleton +
     // freeway-anchored growth, and NOT a single Local/Collector edge (the fill
@@ -1102,9 +1159,16 @@ RoadGraph buildMetro(const MetroParams& p,
         for (std::size_t h = 0; h < hots.size(); ++h) { double d = dist2(q, hots[h].pos); if (d < bd) { bd = d; b = static_cast<int>(h); } }
         return b;
     };
-    // District flavor drives the grain: financial cores parcel tight, industry
-    // parcels wide; old town is small and crooked. (Indexed by CityHub::kind.)
-    const double kindBlockMul[5] = {0.72, 0.95, 1.15, 0.60, 1.70};
+    // District flavor drives the grain — but the numbers are DERIVED, not
+    // liked: each district's block is however much land the buildings that
+    // district intends to put there actually need (blockGrainFor, the
+    // buildability inversion one level up). Measured before this: financial
+    // blocks came out SMALLER than residential ones, so the district with the
+    // towers had the tightest land in the city and no lot on it could carry a
+    // plan with wings. Ratios are against the commercial mix — the middle of
+    // the range — so a level's own block size still sets the city's SCALE and
+    // this only decides each district's share of it.
+    const double* kindBlockMul = districtGrainRatio();
     // Per-district grid crook (0 = crisp): OLD TOWN(3) crooked, industry(4)
     // slightly loose, the rest crisp — the visible district character.
     const double kindCrook[5]    = {0.0, 0.05, 0.10, 0.45, 0.18};
@@ -1199,9 +1263,15 @@ RoadGraph buildMetro(const MetroParams& p,
                 // (160-240) would starve the stationing outright — the
                 // 110-190 m district grading arrives with region-aware
                 // consolidation (plan P7 step 1), not here.
-                fp.blockLen = p.fabricCoreLen > 0
-                                  ? std::max(90.0, p.fabricCoreLen)
-                                  : std::max(150.0, p.minBlockEdge);
+                const double coreLen = p.fabricCoreLen > 0
+                                           ? std::max(90.0, p.fabricCoreLen)
+                                           : std::max(150.0, p.minBlockEdge);
+                // The level's core length is the city's SCALE; the district's
+                // own program mix decides its share of it. Without this every
+                // district gets one flat grain and district character has to be
+                // faked with street PATTERN alone — which cannot produce a lot
+                // big enough for a tower with wings, however it is drawn.
+                fp.blockLen = coreLen * kindBlockMul[kind];
                 fp.blockDepth = fp.blockLen;
                 fp.streetWidth = p.streetWidth;
                 fp.seed = p.seed;
