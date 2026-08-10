@@ -68,23 +68,42 @@ leak (regenerates now swap through the AssetManager). Headless-tested
 empty-net teardown. Still owed: the same treatment for `road_walls` and
 `water`, and an on-device before/after with `RT_DUMP_DRAWS=1`.
 
-### R2 — a real middle LOD for buildings (the big win)
+### R2 — a real middle LOD for buildings ✅ landed
 
 Three tiers instead of two, so the detail radius can drop:
 
 | Tier | Range | What it is |
 |---|---|---|
-| LOD0 full grammar | 0–~300 m | today's facades |
-| **LOD1 flat facade** | ~300–900 m | walls as single quads per plan edge, windows painted into a per-building **texture** (or the window-grid shader the surface library already supports), roof slab + parapet only. No reveals, frames, muntins, trim, balconies. ~50–100 triangles per building instead of ~5 000 |
-| LOD2 mass box | 900 m+ | today's `appendLotMassBox` |
+| LOD0 full grammar | 0–`detailDistance` (300 m) | today's facades |
+| **LOD1 flat facade** | `detailDistance`–`facadeDistance` (900 m) | one wall quad per facade rect, openings as flat glass/door panes 2 cm proud of the wall, curtain walls as spandrel+vision banding only. No reveals, frames, muntins, sills, trim, balconies, porches, cornices, quoins. Silhouette elements — roofs, spires, domes, parapets, setbacks — are kept |
+| LOD2 mass box | `facadeDistance`+ | today's `appendLotMassBox` (HLOD) |
 
-The blueprint work makes LOD1 nearly free to generate: the opening list *is*
-the data a facade texture needs — spans along the wall × sill/head heights —
-without touching 3-D geometry. LOD1 is the first consumer of the plan-owns-
-openings model, and the reason it can look *good* rather than approximate.
+The mechanism is `FacadeDetail::{Full,Flat}` threaded through the grammar
+(`shape_grammar.h`). Both emitters consume the SAME `facadeLayout` — the
+per-facade list of opening spans × sill/head heights — so the two LOD levels
+cannot disagree about where the windows are. That layout list is exactly the
+plan-owns-openings model from the lot-system plan; LOD1 is its first
+in-engine consumer, and the reason the flat tier reads as "the same building,
+simplified" rather than an approximation. (A baked facade *texture* per
+building can later replace the flat panes without touching this seam — that
+wants the R4 bake cache.)
 
-With LOD1 in place, `detailDistance` drops to ~300 and the LOD0 triangle load
-falls roughly with the square of the radius — order of magnitude.
+`growLotBuildingsOnNets(..., wantFlatParts)` grows the flat twin of every
+building into `NetLotResult::flatParts` with matching PartId indexing; the
+loader chunks both tiers through the same `spawnPartChunks` path with
+`minDistance`/`drawDistance` pairing, and HLOD starts at
+`max(detailDistance, facadeDistance)`.
+
+Measured on `piedmont_mini` (headless, same probe as the baseline table):
+LOD0 697 002 tris vs **LOD1 36 512 tris — 5.2% of full**, in line with the
+~50–100-per-building prediction. `piedmont.json` and `piedmont_mini.json`
+now ship `detailDistance: 300, facadeDistance: 900`, so the full-grammar
+radius drops 900 → 300 m and the LOD0 load falls roughly with the square of
+the radius, with the flat tier covering 300–900 m at ~1/20 the cost.
+Headless-tested (`tests/test_building_lod.cpp`): flat is a small fraction of
+full and deterministic, keeps the opening set, keeps curtain-wall banding,
+and the lots pipeline emits the twin on request. Still owed: an on-device
+before/after (`RT_DUMP_DRAWS=1` + frame ledger).
 
 ### R3 — turn the haze back on, value-matched
 
@@ -132,6 +151,8 @@ exists, so this is naming and parenting, not re-meshing.
 ## Sequencing against the lot plan
 
 R1 and R4 touch nothing the lot plan changes — land any time. R2's LOD1
-consumes the blueprint/opening model, which argues for pulling that slice of
-P2 forward. R5 is the same entity-promotion the Qt lab needs. The two tracks
-converge rather than compete.
+consumes the blueprint/opening model — landing it pulled that slice of P2
+forward (`facadeLayout` is now the single owner of opening placement inside
+the grammar, the seam the blueprint work will widen). R5 is the same
+entity-promotion the Qt lab needs. The two tracks converge rather than
+compete.

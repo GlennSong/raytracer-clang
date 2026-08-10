@@ -151,6 +151,12 @@ struct LotPlanDebug {
 // pipeline uses, and the whole district draws as a handful of textured meshes.
 // Each entry's materialIndex is set to its PartId.
 //
+// `outFlatParts`, when non-null, additionally receives the SAME buildings grown
+// at FacadeDetail::Flat — the middle LOD (city-render-perf R2): identical bay
+// and opening layout, a fraction of the triangles. Same PartId merge scheme as
+// `outParts`, so the loader binds the same materials and chunks it the same
+// way, drawn only between the detail and mass-box distances.
+//
 // `roads` + `roadClearance` (device: "buildings overlapping sidewalks and poking
 // out onto the street"): when given, every building box is additionally kept at
 // least `edge width/2 + roadClearance` from every road centreline — pass the
@@ -161,7 +167,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                           LotPlanDebug* debug = nullptr,
                                           std::vector<RenderMesh>* outParts = nullptr,
                                           const RoadGraph* roads = nullptr,
-                                          Real roadClearance = 0.0);
+                                          Real roadClearance = 0.0,
+                                          std::vector<RenderMesh>* outFlatParts = nullptr);
 
 // EDGE blocks (ADR-0066, device feedback): only fully ENCLOSED faces become city
 // blocks, which leaves the town rim bare. Synthesize rectangular blocks on the
@@ -191,6 +198,7 @@ struct NetLotResult {
     std::vector<LotBuilding> lots;
     LotPlanDebug plan;               // blocks + lots, for debug overlays
     std::vector<RenderMesh> parts;   // grown geometry merged by PartId
+    std::vector<RenderMesh> flatParts;   // the LOD1 twin of `parts` (R2)
 };
 // `freewayROW` (optional): the ACTUAL freeway right-of-way — the corridor's
 // dual carriageways (RoadClass::Freeway) and its ramps (RoadClass::Ramp), in
@@ -199,11 +207,15 @@ struct NetLotResult {
 // freewayPlans mainline proxy, so the city clears (and, under a deck, re-zones)
 // around the WHOLE freeway footprint — ramps and gores included, not just the
 // mainline centreline.
+// `wantFlatParts`: also grow every building's LOD1 twin into `flatParts`
+// (city-render-perf R2). Off by default so the offline tracer and diagnostics
+// don't pay for a detail tier they never draw.
 NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
                                     const LotParams& params,
                                     const EdgeBlockParams& edgeParams,
                                     Real roadClearance,
-                                    const RoadGraph* freewayROW = nullptr);
+                                    const RoadGraph* freewayROW = nullptr,
+                                    bool wantFlatParts = false);
 
 // The HLOD mass box for one lot (metropolis-scale-plan P1.2): the building's
 // oriented box, ground to roof, four walls + a roof cap. This is what the DISTANT
