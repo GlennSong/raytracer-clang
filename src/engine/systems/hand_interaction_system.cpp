@@ -97,7 +97,7 @@ void HandInteractionSystem::spawnDynamicAt(FrameContext& ctx,
                                              BodyMotion::Dynamic, 0.3, 0.5)
         : physics_->physicsWorld().addBox(def.halfExtent, worldPos,
                                           Quat::identity(),
-                                          BodyMotion::Dynamic, 0.2, 0.5);
+                                          BodyMotion::Dynamic, 0.0, 0.7);
     if (obj.body == INVALID_PHYSICS_BODY) return;
     objects_.push_back(obj);
     LOG_INFO("[xr] gaze-dropped %s (%zu objects)", def.name, objects_.size());
@@ -127,6 +127,8 @@ void HandInteractionSystem::spawnIntoHand(FrameContext& ctx, int item,
     objects_.push_back(obj);
     heldObject_[hand] = static_cast<int>(objects_.size()) - 1;
     grip_[hand].clear();
+    carryPos_[hand] = at;   // seed the carry filter at the spawn pose
+    carryQ_[hand] = q;
     LOG_INFO("[xr] spawned %s into %s hand (%zu objects)", def.name,
              hand == 0 ? "left" : "right", objects_.size());
 }
@@ -147,9 +149,17 @@ void HandInteractionSystem::release(FrameContext& ctx, int hand) {
         ? physics_->physicsWorld().addSphere(def.halfExtent.x, p, q,
                                              BodyMotion::Dynamic, 0.3, 0.5)
         : physics_->physicsWorld().addBox(def.halfExtent, p, q,
-                                          BodyMotion::Dynamic, 0.2, 0.5);
-    const Vec3 v = grip_[hand].linearVelocity();
-    const Vec3 w = grip_[hand].angularVelocity();
+                                          BodyMotion::Dynamic, 0.0, 0.7);
+    // Placement vs throw: a hand that is HOLDING STILL when it opens means
+    // "set it down" — residual estimator noise (a few tenths of m/s) would
+    // knock the stack it was placed on. Below the threshold both velocities
+    // zero; above it the fit velocities carry through unchanged.
+    Vec3 v = grip_[hand].linearVelocity();
+    Vec3 w = grip_[hand].angularVelocity();
+    if (v.length() < 0.25) {
+        v = Vec3(0, 0, 0);
+        w = Vec3(0, 0, 0);
+    }
     physics_->physicsWorld().setLinearVelocity(obj.body, v);
     physics_->physicsWorld().setAngularVelocity(obj.body, w);
     obj.heldByHand = -1;
@@ -243,16 +253,26 @@ void HandInteractionSystem::updateGrabs(FrameContext& ctx) {
                 // Carry: drive the kinematic body to follow the pinch point
                 // with the grip offsets preserved (both orientation AND the
                 // where-you-grabbed-it position), and feed the throw
-                // estimator. Tracking loss skips all of it — the object
-                // freezes in place until the hand returns.
+                // estimator. The RAW hand pose is millimetre-noisy, so the
+                // target runs through a ~50ms low-pass (exponential toward
+                // the raw pose): the object carries steady in the fingers
+                // and stops hammering whatever it is placed against, at a
+                // lag well under perception. Tracking loss skips all of it —
+                // the object freezes in place until the hand returns.
                 const Quat handQ = handOrientation(hand);
-                const Quat q = handQ * obj.gripOffset;
-                const Vec3 target = handWorld(ctx, pinch_[h].pinchPoint()) +
+                const Quat rawQ = handQ * obj.gripOffset;
+                const Vec3 rawTarget =
+                    handWorld(ctx, pinch_[h].pinchPoint()) +
                     handQ.toMat4().transformDirection(obj.gripPosOffset);
+                const Real alpha =
+                    1.0 - std::exp(-ctx.frameDelta / 0.05);
+                carryPos_[h] = carryPos_[h] + (rawTarget - carryPos_[h]) * alpha;
+                carryQ_[h] = Quat::slerp(carryQ_[h], rawQ,
+                                         static_cast<Real>(alpha));
                 physics_->physicsWorld().moveKinematic(
-                    obj.body, target, q,
+                    obj.body, carryPos_[h], carryQ_[h],
                     std::max(ctx.frameDelta, 1.0 / 240.0));
-                grip_[h].push(timeSeconds_, target, q);
+                grip_[h].push(timeSeconds_, carryPos_[h], carryQ_[h]);
             }
             if (pinch_[h].released()) release(ctx, h);
             continue;
@@ -294,6 +314,8 @@ void HandInteractionSystem::updateGrabs(FrameContext& ctx) {
         obj.gripOffset = handQ.conjugate() * q;
         obj.gripPosOffset =
             handQ.conjugate().toMat4().transformDirection(p - at);
+        carryPos_[h] = p;   // seed the carry filter at the grabbed pose
+        carryQ_[h] = q;
         obj.heldByHand = h;
         heldObject_[h] = best;
         grip_[h].clear();

@@ -83,6 +83,11 @@ private:
     XrPinchTracker pinch_[2];
     XrPoseHistory grip_[2];
     int heldObject_[2] = {-1, -1};   // index into objects_ per hand
+    // Low-pass-filtered carry target per hand: raw joint poses jitter at the
+    // millimetre level, and driving a kinematic body with that noise makes
+    // the held object vibrate — and hammer anything it touches.
+    Vec3 carryPos_[2];
+    Quat carryQ_[2];
 
     // Palette state: which hand anchors it (-1 hidden), current hover.
     int paletteHand_ = -1;

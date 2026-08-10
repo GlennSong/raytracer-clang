@@ -138,7 +138,7 @@ void XrSurfaceSystem::ingest(FrameContext& ctx) {
                           pendingUpdates_.begin() + take);
 
     const Real scale = worldScaleOf(ctx);
-    for (const XrSurfaceUpdate& u : processScratch_) {
+    for (XrSurfaceUpdate& u : processScratch_) {
         if (u.op == XrSurfaceUpdate::Op::Removed) {
             outlines_.erase(u.anchorId);
             planes_.erase(u.anchorId);
@@ -175,17 +175,54 @@ void XrSurfaceSystem::ingest(FrameContext& ctx) {
             }
             continue;
         }
+        // Pose dead-band (the settle-toward-static half of a persistent room
+        // model): ARKit micro-refines anchor poses continuously, which reads
+        // as the whole surface JITTERING in place — and every accepted pose
+        // ripples into re-uploads and re-cooks. A pose within 5mm / ~0.6° of
+        // the one we hold is re-stamped with the OLD pose; a real move (new
+        // extent, relocalisation) passes through untouched.
+        bool poseSteady = false;
+        {
+            auto ledgerIt = ledger_.surfaces().find(u.anchorId);
+            if (ledgerIt != ledger_.surfaces().end()) {
+                const Mat4& oldM = ledgerIt->second.originFromAnchor;
+                Real dt2 = 0, dr = 0;
+                for (int r = 0; r < 3; r++) {
+                    const Real d = u.originFromAnchor.m[r][3] - oldM.m[r][3];
+                    dt2 += d * d;
+                    for (int c = 0; c < 3; c++)
+                        dr = std::max(dr,
+                                      std::abs(u.originFromAnchor.m[r][c] -
+                                               oldM.m[r][c]));
+                }
+                if (dt2 < 0.005 * 0.005 && dr < 0.01) {
+                    u.originFromAnchor = oldM;
+                    poseSteady = true;
+                }
+            }
+        }
+
         // Colliders want EVERY surface with geometry — the reconstruction
         // chunks are the furniture. The cook itself is deferred to
-        // rebuildDueColliders via the policy; here only the geometry is kept.
+        // rebuildDueColliders via the policy; here only the geometry is
+        // kept. A steady pose with near-identical geometry (< 5% triangle
+        // delta) doesn't even mark dirty: a mapped room settles to ZERO
+        // steady-state cooking instead of rebuilding forever.
         if (physics_ && !u.indices.empty() && !u.positions.empty()) {
             ColliderGeometry& geom = colliderGeom_[u.anchorId];
+            const size_t oldTris = geom.indices.size();
             geom.positions = u.positions;
             geom.indices = u.indices;
-            colliderPolicy_.noteUpdate(u.anchorId, timeSeconds_,
-                                       u.cls == XrSurfaceClass::Mesh
-                                           ? kChunkColliderInterval
-                                           : kPlaneColliderInterval);
+            const long delta =
+                std::labs(static_cast<long>(geom.indices.size()) -
+                          static_cast<long>(oldTris));
+            const bool geomSteady =
+                oldTris > 0 && delta * 20 < static_cast<long>(oldTris);
+            if (!(poseSteady && geomSteady))
+                colliderPolicy_.noteUpdate(u.anchorId, timeSeconds_,
+                                           u.cls == XrSurfaceClass::Mesh
+                                               ? kChunkColliderInterval
+                                               : kPlaneColliderInterval);
         }
 
         if (u.cls == XrSurfaceClass::Mesh || u.indices.empty()) continue;
