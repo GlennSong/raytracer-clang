@@ -22,6 +22,7 @@ $CITY/road_spec.cpp $CITY/road_semantics.cpp $CITY/metro.cpp $CITY/structure_set
 $CITY/corridor_plan.cpp $CITY/corridor_mesh.cpp $CITY/corridor_bake.cpp
 $CITY/road_lattice.cpp $CITY/block_grade.cpp $CITY/buildability.cpp
 $CITY/alignment.cpp $CITY/water_mesh.cpp $CITY/surface_field.cpp
+$CITY/city_footprint.cpp $CITY/arterial_skeleton.cpp $CITY/patch_fabric.cpp
 $PROC/surface_maps.cpp $PROC/terrain.cpp $PROC/terrain_lod.cpp $PROC/terrain_field.cpp
 $PROC/noise.cpp $PROC/lsystem.cpp $PROC/skeleton.cpp $PROC/erosion.cpp $PROC/sdf.cpp
 $PROC/tree.cpp $PROC/scatter.cpp $PROC/cellular.cpp $PROC/rock.cpp $PROC/texture_field.cpp
