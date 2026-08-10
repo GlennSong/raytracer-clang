@@ -36,3 +36,6 @@ build-visionos-sim/
 build-visionos/
 build-visionos-dev/
 .DS_Store
+
+# Lot Lab sheets from a run with OUT unset (generated, regenerable)
+/*.svg
