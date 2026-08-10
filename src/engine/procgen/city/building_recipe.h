@@ -109,6 +109,18 @@ RecipeBook stockRecipes();
 
 // --- assembly --------------------------------------------------------------
 
+// How the plan actually turned out. A recipe naming an L and getting a plain
+// rectangle used to be SILENT, so a whole city could come out square with
+// nothing in the output saying so — the author's only signal was looking at it.
+// Recording the outcome is what makes that measurable.
+enum class PlanFit : std::uint8_t {
+    Template,    // the template survived intact
+    Clipped,     // it survived, but the envelope trimmed it
+    Envelope,    // it was discarded and the plan is the bare envelope
+};
+
+const char* planFitName(PlanFit f);
+
 // Everything a built lot produces. This is the type that proves the layers
 // compose: L0 shapes, L1 plan/stack/facade, L3 site, and the palette.
 struct BuiltBuilding {
@@ -118,6 +130,8 @@ struct BuiltBuilding {
     BuildingMaterials materials;
     std::string recipeName;
     int storeys = 0;
+    PlanTemplate plan = PlanTemplate::Bar;   // what the recipe asked for
+    PlanFit planFit = PlanFit::Template;     // what it got
 };
 
 // Build a recipe inside a site's building envelope. `tags` supplies only the

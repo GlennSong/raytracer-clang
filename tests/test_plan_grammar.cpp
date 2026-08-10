@@ -269,8 +269,18 @@ TEST_CASE(plan_curved_templates_carry_true_arcs) {
     arcs = 0;
     for (const Edge2& e : bow.outer.edges) if (std::fabs(e.bulge) > 1e-9) ++arcs;
     CHECK(arcs == 1);
-    // The bow bulges OUT toward the street, adding floor area.
-    CHECK(area(bow) > 30 * 20);
+    // The bow bulges toward the street but STAYS INSIDE its own w x d frame:
+    // a template that overhangs the frame it was sized to is trimmed straight
+    // back off by the envelope, which is what made every bow-front collapse.
+    Vec2 blo, bhi;
+    bounds(bow, blo, bhi);
+    CHECK(blo.x >= -1e-6 && blo.y >= -1e-6);
+    CHECK(bhi.x <= 30 + 1e-6 && bhi.y <= 20 + 1e-6);
+    // The bow reserves a band inside the frame and then bulges back into most
+    // of it, so the plan recovers nearly all the frame's area without ever
+    // leaving it.
+    CHECK(area(bow) > 30 * 20 * 0.85);
+    CHECK(area(bow) < 30 * 20);
 }
 
 // --- mass stack ------------------------------------------------------------

@@ -464,11 +464,13 @@ Shape2 planTemplate(PlanTemplate t, Real w, Real d, std::uint32_t seed) {
         }
 
         case PlanTemplate::BowFront: {
-            Shape2 s = frame;
-            // Edge 0 is the y = 0 wall — the street face in the template frame.
-            // A positive sagitta bows OUTWARD on a CCW loop, so the shopfront
-            // bulges toward the street rather than eating into the plan.
-            bowEdge(s.outer, 0, d * rng.range(0.10, 0.18));
+            // The bow bulges OUTWARD, so it has to be given room INSIDE the
+            // w x d frame — otherwise the finished shape always overhangs the
+            // envelope it was sized to and is trimmed straight back off again.
+            // Measured before this: every single bow-front was clipped.
+            const Real sag = d * rng.range(0.10, 0.16);
+            Shape2 s = rectShape(0, sag, w, d);
+            bowEdge(s.outer, 0, sag);          // bows down into the reserved band
             return s;
         }
     }

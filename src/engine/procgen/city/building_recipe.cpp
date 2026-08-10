@@ -183,6 +183,15 @@ struct R {
 
 }  // namespace
 
+const char* planFitName(PlanFit f) {
+    switch (f) {
+        case PlanFit::Template: return "template";
+        case PlanFit::Clipped:  return "clipped";
+        case PlanFit::Envelope: return "ENVELOPE (template discarded)";
+    }
+    return "?";
+}
+
 const char* massKindName(MassKind m) {
     switch (m) {
         case MassKind::Simple:      return "simple";
@@ -244,7 +253,10 @@ RecipeBook stockRecipes() {
     }
     {
         R r("townhouse", "home");
-        r.plans({PlanTemplate::Bar})
+        // A terrace is a rectangle in plan, but a Victorian one very often has
+        // a rear closet wing — which is an L. Listing only Bar is what made a
+        // whole terraced block read as identical boxes.
+        r.plans({PlanTemplate::Bar, PlanTemplate::L})
             .storeys(2, 4)
             .band(3.4, 1, 1)
             .band(3.0, 1, 3)
@@ -257,7 +269,7 @@ RecipeBook stockRecipes() {
     }
     {
         R r("rowhouse", "home");
-        r.plans({PlanTemplate::Bar})
+        r.plans({PlanTemplate::Bar, PlanTemplate::L, PlanTemplate::T})
             .storeys(2, 3)
             .band(3.2, 1, 3)
             .roof(RoofKind::Gable, 0.4, 0.55)
@@ -315,7 +327,8 @@ RecipeBook stockRecipes() {
     // --- high street --------------------------------------------------------
     {
         R r("shopfront", "shop");
-        r.plans({PlanTemplate::Bar})
+        // A shop is a bar to the street with a store room behind it.
+        r.plans({PlanTemplate::Bar, PlanTemplate::L, PlanTemplate::BowFront})
             .storeys(1, 3)
             .band(4.2, 1, 1)              // a retail ground floor is TALLER
             .band(3.1, 0, 2)
@@ -835,30 +848,69 @@ BuiltBuilding buildFromRecipe(const BuildingRecipe& recipe,
     storeys = std::max(1, std::min({storeys, recipe.maxStoreys, plateCap}));
     out.storeys = storeys;
 
-    // PLAN: fit a template to the envelope's own oriented frame, then clip. The
-    // recipe chose a shape; the envelope decides how big it is.
-    Vec2 lo, hi;
-    bounds(envelope, lo, hi);
-    const Real w = std::max(Real(4), hi.x - lo.x);
-    const Real d = std::max(Real(4), hi.y - lo.y);
+    // PLAN: fit a template into the envelope's OWN ORIENTED FRAME.
+    //
+    // Building it against the axis-aligned bounds and clipping was wrong twice
+    // over. A lot on an angled street has an AABB much larger than itself, so
+    // the template overhangs and the clip eats its arms — measured, an L lost
+    // half its instances and a T lost five of six, silently. And a non-
+    // rectangular envelope trimmed even a plain bar. Fitting in the oriented
+    // frame and SHRINKING to fit keeps the shape the recipe asked for; the
+    // clip then has nothing left to do in the common case.
+    const Poly2 envRing = tessellate(envelope.outer, 0.15);
+    const OBB2 box = orientedBoundingBox(envRing);
+    const Real w = std::max(Real(4), box.half[0] * 2);
+    const Real d = std::max(Real(4), box.half[1] * 2);
     const PlanTemplate tmpl =
         recipe.plans.empty()
             ? PlanTemplate::Bar
             : recipe.plans[rng.irange(0, static_cast<int>(recipe.plans.size()) - 1)];
     Shape2 tpl = planTemplate(tmpl, w, d, seed);
-    // Move the template into the envelope's position.
-    Vec2 tlo, thi;
-    bounds(tpl, tlo, thi);
-    const Vec2 shift = lo - tlo;
-    for (Edge2& e : tpl.outer.edges) e.a = e.a + shift;
-    for (Loop2& h : tpl.holes)
-        for (Edge2& e : h.edges) e.a = e.a + shift;
+
+    // Local (0..w, 0..d) -> the envelope's oriented frame.
+    auto toFrame = [&](const Vec2& p, Real scale) {
+        const Vec2 c(w * 0.5, d * 0.5);
+        const Vec2 r = (p - c) * scale;
+        return box.center + box.axis[0] * r.x + box.axis[1] * r.y;
+    };
+    auto placed = [&](Real scale) {
+        Shape2 t = tpl;
+        for (Edge2& e : t.outer.edges) e.a = toFrame(e.a, scale);
+        for (Loop2& h : t.holes)
+            for (Edge2& e : h.edges) e.a = toFrame(e.a, scale);
+        orient(t);
+        return t;
+    };
+    // Shrink until it sits inside the envelope. The OBB already bounds the
+    // envelope, so scale 1 fits whenever the envelope IS its own box; anything
+    // concave needs a little less.
+    Real fit = 1.0;
+    for (int i = 0; i < 6; ++i) {
+        Shape2 cand = placed(fit);
+        std::vector<Shape2> outside =
+            shapeBool({cand}, {envelope}, BoolOp::Subtract);
+        Real spill = 0;
+        for (const Shape2& o : outside) spill += area(o);
+        if (spill <= area(cand) * 0.02) break;
+        fit *= 0.92;
+    }
+    tpl = placed(fit);
+    out.plan = tmpl;
+    const Real tplArea = area(tpl);
     Shape2 plan = clipToEnvelope(tpl, envelope);
-    if (plan.outer.size() < 3) plan = envelope;
+    if (plan.outer.size() < 3) {
+        plan = envelope;
+        out.planFit = PlanFit::Envelope;
+    } else if (area(plan) < tplArea * 0.98) {
+        out.planFit = PlanFit::Clipped;
+    }
 
     // Plan quality is enforced before the stack can amplify a defect.
     PlanQuality quality;
-    if (!quality.ok(plan)) plan = envelope;
+    if (!quality.ok(plan)) {
+        plan = envelope;
+        out.planFit = PlanFit::Envelope;
+    }
 
     // Tag the plan's walls from the envelope's, so the facade grammar knows
     // which way the street is without re-deriving it.
@@ -896,6 +948,10 @@ BuiltBuilding buildFromRecipe(const BuildingRecipe& recipe,
     }
     if (storeysOut.empty()) storeysOut.push_back(Storey{3.2, storeys});
     if (left > 0) storeysOut.back().count += left;
+
+    // The finished plan's extent, for the mass kinds that slice it up.
+    Vec2 lo, hi;
+    bounds(plan, lo, hi);
 
     // MASS: each kind is a configuration of the same stack, not a code path.
     switch (recipe.mass) {

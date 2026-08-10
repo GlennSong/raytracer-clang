@@ -17,6 +17,7 @@
 #include "../src/engine/procgen/city/site_plan.h"
 #include "../src/engine/procgen/city/road_network.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -212,6 +213,8 @@ int main(int argc, char** argv) {
         SiteFurnishing furn;
         LotFixtures fx;
         std::string program, recipe;
+        Shape2 footprint;
+        std::string tmpl, fit;
         int storeys = 0;
         bool built = false;
     };
@@ -249,6 +252,10 @@ int main(int argc, char** argv) {
                                                    palettes, (std::uint32_t)bi + 1, s);
                 bl.recipe = bb.recipeName;
                 bl.storeys = bb.storeys;
+                bl.tmpl = planTemplateName(bb.plan);
+                bl.fit = planFitName(bb.planFit);
+                if (!bb.surfaces.levels.empty() && !bb.surfaces.levels[0].plans.empty())
+                    bl.footprint = bb.surfaces.levels[0].plans[0];
                 bl.fx = fixturesFor(bl.site, bl.furn, prog, bb, 0, s);
                 bl.built = true;
                 totalStoreys += bb.storeys;
@@ -421,6 +428,55 @@ int main(int argc, char** argv) {
         close(s);
     }
 
-    printf("wrote %s/block_{site,parcels}.svg\n", out);
+    // ------------------------------------------------------------- sheet 3
+    // The overview above is ~2 px per metre, at which an L-shaped rear wing on
+    // a 12 m house is two pixels. Judging building SHAPE needs its own scale.
+    {
+        Svg s;
+        const Real PW = 150, PH = 150;
+        const int cols = 12, rows = 8;
+        open(s, std::string(out) + "/block_plans.svg", cols * PW + 60,
+             rows * PH + 150,
+             "The same buildings' footprints, at a scale you can actually read",
+             "Every ground-floor plan from the scene above, largest first. "
+             "Label: recipe / template requested. Red label = the template was "
+             "discarded and the plan fell back to the bare lot envelope.");
+
+        std::vector<const BuiltLot*> all;
+        for (const auto& blk : built)
+            for (const BuiltLot& bl : blk)
+                if (bl.built && bl.footprint.outer.size() >= 3) all.push_back(&bl);
+        std::sort(all.begin(), all.end(), [](const BuiltLot* a, const BuiltLot* b) {
+            return area(a->footprint) > area(b->footprint);
+        });
+
+        int shown = 0;
+        for (const BuiltLot* bl : all) {
+            if (shown >= cols * rows) break;
+            const Real px = 30 + (shown % cols) * PW;
+            const Real py = 110 + (shown / cols) * PH;
+            Vec2 flo, fhi;
+            bounds(bl->footprint, flo, fhi);
+            View v;
+            v.sc = std::min((PW - 26) / std::max(Real(0.01), fhi.x - flo.x),
+                            (PH - 52) / std::max(Real(0.01), fhi.y - flo.y));
+            v.px = px + 13;
+            v.py = py + 8;
+            v.minx = flo.x;
+            v.miny = flo.y;
+            v.h = PH - 52;
+            drawShape(s, v, bl->footprint, "#f2cc8f", 0.88, "#2b3140", 1.2);
+            char t[160];
+            snprintf(t, sizeof t, "%s", bl->recipe.c_str());
+            label(s, px + 8, py + PH - 26, t, "#e9eef6", 11);
+            const bool lost = bl->fit.rfind("ENVELOPE", 0) == 0;
+            snprintf(t, sizeof t, "%s%s", bl->tmpl.c_str(), lost ? "  (lost)" : "");
+            label(s, px + 8, py + PH - 12, t, lost ? "#ef476f" : "#8fa1ba", 11);
+            ++shown;
+        }
+        close(s);
+    }
+
+    printf("wrote %s/block_{site,parcels,plans}.svg\n", out);
     return 0;
 }
