@@ -88,6 +88,8 @@ add_library(engine_core STATIC
     src/engine/procgen/city/polygon.cpp
     src/engine/procgen/city/shape2.cpp
     src/engine/procgen/city/shape_ops.cpp
+    src/engine/procgen/city/plan_grammar.cpp
+    src/engine/procgen/city/mass_stack.cpp
     src/engine/procgen/city/shape_grammar.cpp
     src/engine/procgen/city/parcel.cpp
     src/engine/procgen/city/patch_fabric.cpp
@@ -478,6 +480,7 @@ add_executable(run_tests
     tests/test_mesh_builder.cpp
     tests/test_shape2.cpp
     tests/test_shape_ops.cpp
+    tests/test_plan_grammar.cpp
     tests/test_cube_sphere.cpp
     tests/test_noise.cpp
     tests/test_terrain.cpp
