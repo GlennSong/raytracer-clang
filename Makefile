@@ -67,6 +67,7 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/terrain_field.cpp \
 	$(SRC_DIR)/engine/procgen/erosion.cpp \
 	$(SRC_DIR)/engine/procgen/city/polygon.cpp \
+	$(SRC_DIR)/engine/procgen/city/shape2.cpp \
 	$(SRC_DIR)/engine/procgen/city/shape_grammar.cpp \
 	$(SRC_DIR)/engine/procgen/city/parcel.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_network.cpp \
@@ -150,6 +151,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_path_tracer.cpp \
 	$(TEST_DIR)/test_asset_manager.cpp \
 	$(TEST_DIR)/test_mesh_builder.cpp \
+	$(TEST_DIR)/test_shape2.cpp \
 	$(TEST_DIR)/test_cube_sphere.cpp \
 	$(TEST_DIR)/test_noise.cpp \
 	$(TEST_DIR)/test_terrain.cpp \
@@ -285,6 +287,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/scatter.cpp \
 	$(SRC_DIR)/engine/procgen/sdf.cpp \
 	$(SRC_DIR)/engine/procgen/city/polygon.cpp \
+	$(SRC_DIR)/engine/procgen/city/shape2.cpp \
 	$(SRC_DIR)/engine/procgen/city/shape_grammar.cpp \
 	$(SRC_DIR)/engine/procgen/city/parcel.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_network.cpp \
