@@ -93,6 +93,8 @@ add_library(engine_core STATIC
     src/engine/procgen/city/facade_plan.cpp
     src/engine/procgen/city/lot_program.cpp
     src/engine/procgen/city/site_plan.cpp
+    src/engine/procgen/city/material_set.cpp
+    src/engine/procgen/city/building_recipe.cpp
     src/engine/procgen/city/shape_grammar.cpp
     src/engine/procgen/city/parcel.cpp
     src/engine/procgen/city/patch_fabric.cpp
@@ -486,6 +488,7 @@ add_executable(run_tests
     tests/test_plan_grammar.cpp
     tests/test_facade_plan.cpp
     tests/test_site_plan.cpp
+    tests/test_building_recipe.cpp
     tests/test_cube_sphere.cpp
     tests/test_noise.cpp
     tests/test_terrain.cpp

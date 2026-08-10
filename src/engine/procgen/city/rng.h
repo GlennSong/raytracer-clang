@@ -18,7 +18,25 @@ namespace engine {
 // code uses this one.
 struct Rng {
     std::uint32_t s;
-    explicit Rng(std::uint32_t seed) : s(seed ? seed : 0x2545f491u) {}
+
+    explicit Rng(std::uint32_t seed) {
+        // SCRAMBLE THE SEED before use. xorshift32's first outputs are strongly
+        // correlated for nearby seeds, so seeding it raw and taking one number
+        // — the "one RNG per building, ask it one question" pattern this whole
+        // system is built on — gives every building the SAME first answer.
+        // Measured: with raw seeding, forty buildings on a street and forty
+        // different districts all chose the identical palette, because the
+        // first unit() landed in the same bucket every time. A finalizer mix
+        // costs three multiplies once per RNG and makes independent streams
+        // actually independent.
+        std::uint32_t h = seed ? seed : 0x2545f491u;
+        h ^= h >> 16;
+        h *= 0x7feb352du;
+        h ^= h >> 15;
+        h *= 0x846ca68bu;
+        h ^= h >> 16;
+        s = h ? h : 0x2545f491u;
+    }
 
     std::uint32_t next() {
         s ^= s << 13;
