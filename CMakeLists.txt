@@ -158,6 +158,7 @@ add_library(engine_core STATIC
     src/engine/systems/render_system.cpp
     src/engine/systems/xr_camera_system.cpp
     src/engine/systems/xr_surface_system.cpp
+    src/engine/systems/hand_interaction_system.cpp
     src/engine/systems/debug_draw_system.cpp
     src/engine/systems/dev_control_system.cpp
     src/engine/systems/debug_overlay_system.cpp

@@ -82,6 +82,9 @@ public:
 
     void setLinearVelocity(PhysicsBodyId id, const Vec3& velocity);
     Vec3 getLinearVelocity(PhysicsBodyId id) const;
+    // Angular velocity in rad/s (axis * rate) — what a released throw carries
+    // from the wrist (XrPoseHistory::angularVelocity).
+    void setAngularVelocity(PhysicsBodyId id, const Vec3& velocity);
 
     // Drive a KINEMATIC body toward a target pose over `dt` (Jolt MoveKinematic):
     // the body moves with the velocity needed to arrive, so it pushes dynamic

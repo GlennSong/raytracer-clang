@@ -2,6 +2,7 @@
 
 #include "../engine/asset_manager.h"
 #include "../engine/systems/camera_system.h"
+#include "../engine/systems/hand_interaction_system.h"
 #include "../engine/systems/xr_camera_system.h"
 #include "../engine/systems/xr_surface_system.h"
 #include "../engine/systems/render_system.h"
@@ -19,12 +20,16 @@ SandboxState::SandboxState(Window& window, Renderer& renderer)
     addSystem<CameraSystem>();
 #ifdef RT_ENABLE_PHYSICS
     auto& physSys = addSystem<PhysicsSystem>();
+    // Hands BEFORE surfaces: while the palette is up or a grab is active,
+    // HandInteractionSystem consumes the system pinch so the surface
+    // gaze-drop probe doesn't also fire on the same gesture.
+    addSystem<HandInteractionSystem>(&physSys);
     // Surfaces WITH colliders (the point of the sandbox: things land on the
-    // real furniture) and WITHOUT the room-mesh draw — in passthrough the
-    // couch renders itself. Planes keep their outlines and extent rectangles.
-    addSystem<XrSurfaceSystem>(&physSys, /*drawRoomMesh=*/false);
+    // real furniture) and OUTLINES ONLY — in passthrough the couch renders
+    // itself, and filled planes stacked over walls/windows read as clutter.
+    addSystem<XrSurfaceSystem>(&physSys, /*fillSurfaces=*/false);
 #else
-    addSystem<XrSurfaceSystem>(nullptr, /*drawRoomMesh=*/false);
+    addSystem<XrSurfaceSystem>(nullptr, /*fillSurfaces=*/false);
 #endif
     // No PlayerSystem: locomotion is the user's own legs. XrCameraSystem still
     // owns the locomotion base + head-following camera; with nothing moving

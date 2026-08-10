@@ -379,6 +379,11 @@ void PhysicsWorld::setLinearVelocity(PhysicsBodyId id, const Vec3& velocity) {
     impl->bodies().SetLinearVelocity(JPH::BodyID(id), toJolt(velocity));
 }
 
+void PhysicsWorld::setAngularVelocity(PhysicsBodyId id, const Vec3& velocity) {
+    if (!impl || id == INVALID_PHYSICS_BODY) return;
+    impl->bodies().SetAngularVelocity(JPH::BodyID(id), toJolt(velocity));
+}
+
 Vec3 PhysicsWorld::getLinearVelocity(PhysicsBodyId id) const {
     if (!impl || id == INVALID_PHYSICS_BODY) return Vec3();
     return fromJolt(impl->bodies().GetLinearVelocity(JPH::BodyID(id)));

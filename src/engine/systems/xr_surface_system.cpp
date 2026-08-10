@@ -280,8 +280,25 @@ void XrSurfaceSystem::rebuildDueColliders(FrameContext& ctx) {
         auto body = colliderBodies_.find(anchorId);
         if (body != colliderBodies_.end())
             physics_->physicsWorld().removeBody(body->second);
+        // BOTH windings of every triangle. Jolt mesh triangles are solid from
+        // one side (their winding's normal side), and addMesh flips winding
+        // assuming the ENGINE's clockwise convention — which ARKit does not
+        // follow, so single-sided room colliders came out solid from BELOW
+        // and dropped cubes fell straight through the real floor (device
+        // log, first sandbox session). Doubling the triangles makes every
+        // surface solid from both sides for 2x cook cost — the room is
+        // static scenery, and 100k one-sided tris is still small for Jolt.
+        const std::vector<uint32_t>& src = geom->second.indices;
+        std::vector<uint32_t> twoSided;
+        twoSided.reserve(src.size() * 2);
+        twoSided.insert(twoSided.end(), src.begin(), src.end());
+        for (size_t i = 0; i + 2 < src.size(); i += 3) {
+            twoSided.push_back(src[i]);
+            twoSided.push_back(src[i + 2]);
+            twoSided.push_back(src[i + 1]);
+        }
         const PhysicsBodyId id = physics_->physicsWorld().addMesh(
-            worldVerts, geom->second.indices, Vec3(0, 0, 0), 0.6);
+            worldVerts, twoSided, Vec3(0, 0, 0), 0.6);
         if (id != INVALID_PHYSICS_BODY) colliderBodies_[anchorId] = id;
         else colliderBodies_.erase(anchorId);
     }
@@ -335,8 +352,7 @@ void XrSurfaceSystem::render(FrameContext& ctx) {
     for (const auto& [anchorId, entry] : ledger_.surfaces()) {
         const Mat4 world = xrSurfaceWorldTransform(ctx.xr.originBase, scale,
                                                    entry.originFromAnchor);
-        if (entry.meshToken &&
-            (drawRoomMesh_ || entry.cls != XrSurfaceClass::Mesh))
+        if (entry.meshToken && fillSurfaces_)
             ctx.renderer.drawMesh(unpackMesh(entry.meshToken), world, material);
 
         auto outline = outlines_.find(anchorId);

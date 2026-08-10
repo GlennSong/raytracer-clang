@@ -44,15 +44,18 @@ class PhysicsSystem;
 // throttled per anchor); an XR origin or world-scale change invalidates
 // everything, since world-space colliders bake both in. Null physics (the
 // default) keeps the system render-only.
-// Display: drawRoomMesh=false hides the reconstruction chunks (the sandbox's
-// passthrough shows the real couch; drawing its scan over it is noise) while
-// planes keep their outlines/extent rectangles and EVERYTHING still ingests
-// and colliders still build — visibility and physics are independent.
+// Display: fillSurfaces=false draws OUTLINES ONLY — no filled plane meshes,
+// no reconstruction chunks. The sandbox uses it: passthrough already shows
+// the real room, so opaque fills were 40+ overlapping tinted sheets stacked
+// over walls and windows (device feedback: "messy as hell"), where thin
+// class-colored outlines + extent rectangles read cleanly over video.
+// EVERYTHING still ingests and colliders still build — visibility and
+// physics are independent.
 class XrSurfaceSystem : public System {
 public:
     explicit XrSurfaceSystem(PhysicsSystem* physics = nullptr,
-                             bool drawRoomMesh = true)
-        : physics_(physics), drawRoomMesh_(drawRoomMesh) {}
+                             bool fillSurfaces = true)
+        : physics_(physics), fillSurfaces_(fillSurfaces) {}
 
     void onStart(FrameContext& ctx) override;
     void update(FrameContext& ctx) override;
@@ -90,7 +93,7 @@ private:
     MeshHandle markerMesh_;
     uint64_t frame_ = 0;
     bool visible_ = true;
-    bool drawRoomMesh_ = true;
+    bool fillSurfaces_ = true;
     int lastLoggedTotal_ = -1;
 
     // Room colliders (only populated when physics_ != nullptr).
