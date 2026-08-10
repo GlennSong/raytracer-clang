@@ -1,5 +1,16 @@
 // --- Vertex/fragment entry points ---
 
+// Depth-only stage for the NON-instanced occluder pipeline (FLAG_OCCLUDER,
+// AR passthrough): the rasterizer writes depth, the fragment does nothing.
+// Its [[stage_in]] must be VertexOut — vertexMain's output. Pairing the
+// instanced foliage-depth fragment (FragmentData stage_in) here made Metal
+// reject the pipeline at creation, and the guarded issue site then silently
+// skipped every occluder: no room depth, no occlusion (device session
+// eight). The instanced occluder pipeline keeps
+// fragmentFoliageDepthInstanced, whose pairing with vertexMainInstanced is
+// production-proven by the foliage prepass.
+fragment void fragmentDepthOnly(VertexOut in [[stage_in]]) {}
+
 vertex VertexOut vertexMain(
     const device Vertex* vertices [[buffer(0)]],
     constant CameraUniforms& camera [[buffer(1)]],

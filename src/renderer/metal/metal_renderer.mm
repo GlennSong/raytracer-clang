@@ -1487,9 +1487,16 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     // depth fragment does the job for both vertex paths (its alpha-cut
     // branch is dead with textureFlags 0).
     {
+        // Stage pairing matters: vertexMain outputs VertexOut, so the
+        // non-instanced pipeline needs the VertexOut depth-only fragment;
+        // the FragmentData one (fragmentFoliageDepthInstanced) only links
+        // against vertexMainInstanced. The mismatched pairing failed
+        // pipeline creation and silently disabled all occlusion.
         id<MTLFunction> depthOnlyFrag =
+            [library newFunctionWithName:@"fragmentDepthOnly"];
+        id<MTLFunction> depthOnlyInstancedFrag =
             [library newFunctionWithName:@"fragmentFoliageDepthInstanced"];
-        if (depthOnlyFrag) {
+        if (depthOnlyFrag && depthOnlyInstancedFrag) {
             pipelineDesc.colorAttachments[0].writeMask = MTLColorWriteMaskNone;
             pipelineDesc.colorAttachments[1].writeMask = MTLColorWriteMaskNone;
             pipelineDesc.vertexFunction = vertexFunc;
@@ -1500,6 +1507,7 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
             if (!impl->occluderPipeline)
                 NSLog(@"Occluder pipeline error: %@", error);
             pipelineDesc.vertexFunction = vertexInstancedFunc;
+            pipelineDesc.fragmentFunction = depthOnlyInstancedFrag;
             impl->occluderInstancedPipeline =
                 [impl->device newRenderPipelineStateWithDescriptor:pipelineDesc
                                                              error:&error];
@@ -4678,11 +4686,22 @@ void MetalRenderer::endFrame() {
     // against the actual room — a block behind the real stool is hidden,
     // and the pixel keeps alpha 0, which the composite reads as "show the
     // passthrough". Skipped entirely when the pipelines are absent.
-    if (!impl->occluderDrawCalls.empty() && impl->occluderPipeline &&
-        impl->occluderInstancedPipeline) {
-        issuePass(impl->occluderDrawCalls, impl->occluderPipeline,
-                  impl->occluderInstancedPipeline, impl->depthStateOpaque,
-                  /*skipFoliage=*/false);
+    if (!impl->occluderDrawCalls.empty()) {
+        if (impl->occluderPipeline && impl->occluderInstancedPipeline) {
+            issuePass(impl->occluderDrawCalls, impl->occluderPipeline,
+                      impl->occluderInstancedPipeline, impl->depthStateOpaque,
+                      /*skipFoliage=*/false);
+        } else {
+            // NEVER skip silently: a missing pipeline here is invisible on
+            // screen (things simply fail to occlude), which is exactly how
+            // the stage-mismatch bug hid.
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                NSLog(@"[xr] occluder pipelines missing — room occlusion "
+                      @"DISABLED (check pipeline creation errors above)");
+            }
+        }
     }
 
     // Sort each pass by distance first, then issuePass stable-sorts by mesh.
