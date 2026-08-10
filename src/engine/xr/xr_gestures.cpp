@@ -1,5 +1,8 @@
 #include "xr_gestures.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace engine {
 
 void XrPinchTracker::feed(const XrHand& hand) {
@@ -80,6 +83,55 @@ XrPalmPose xrPalmPose(const XrHand& hand, bool leftHand) {
 bool xrPalmUp(const XrPalmPose& palm, Real maxAngleRadians) {
     if (!palm.valid) return false;
     return dot(palm.normal, Vec3(0, 1, 0)) > std::cos(maxAngleRadians);
+}
+
+void XrAdaptiveFilter::reset(const Vec3& position, const Quat& orientation) {
+    position_ = position;
+    orientation_ = orientation;
+    hasLastRaw_ = false;
+}
+
+void XrAdaptiveFilter::feed(const Vec3& rawPosition, const Quat& rawOrientation,
+                            Real dt) {
+    if (dt <= 0) return;
+    // Speed of the RAW target decides the smoothing: at rest tauSlow (noise
+    // damped), in motion tau collapses toward zero (the filter gets out of
+    // the way). Using the raw speed rather than the filtered one means the
+    // very first fast frame already responds.
+    Real speed = 0;
+    if (hasLastRaw_) speed = (rawPosition - lastRaw_).length() / dt;
+    lastRaw_ = rawPosition;
+    hasLastRaw_ = true;
+
+    const Real tau = config_.tauSlow / (1.0 + speed / config_.speedRef);
+    const Real alpha = 1.0 - std::exp(-dt / std::max(tau, 1e-4));
+    position_ = position_ + (rawPosition - position_) * alpha;
+    orientation_ = Quat::slerp(orientation_, rawOrientation, alpha);
+}
+
+XrBoneCapsule xrBoneCapsule(const Vec3& a, const Vec3& b, Real radius) {
+    XrBoneCapsule capsule;
+    capsule.center = (a + b) * 0.5;
+    const Vec3 d = b - a;
+    const Real len = d.length();
+    capsule.halfHeight = std::max<Real>(0.0, len * 0.5 - radius);
+    if (len < 1e-9) {
+        capsule.orientation = Quat::identity();
+        return capsule;
+    }
+    // Rotate +Y onto the bone direction. Antiparallel (straight down) has
+    // no unique axis — any perpendicular works; pick +X.
+    const Vec3 dir = d / len;
+    const Real c = dot(Vec3(0, 1, 0), dir);
+    if (c > 1.0 - 1e-9) {
+        capsule.orientation = Quat::identity();
+    } else if (c < -1.0 + 1e-9) {
+        capsule.orientation = Quat::fromAxisAngle(Vec3(1, 0, 0), PI);
+    } else {
+        const Vec3 axis = cross(Vec3(0, 1, 0), dir);
+        capsule.orientation = Quat::fromAxisAngle(axis, std::acos(c));
+    }
+    return capsule;
 }
 
 void XrPoseHistory::push(Real timeSeconds, const Vec3& position,

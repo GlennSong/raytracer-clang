@@ -53,13 +53,13 @@ void SandboxState::onEnter(FrameContext& ctx) {
     // the authority — a stale menu scale must not make the room knee-high.
     renderer_.xrWorldScale = 1.0f;
 
-    // Neutral indoor light until the light-estimate seam lands: soft, slightly
-    // warm, mostly ambient — believable on passthrough without claiming to
-    // know the room. Shadow maps stay on so objects shade each other; the
-    // room itself receives nothing (its mesh is hidden), grounding comes from
-    // the contact-shadow round.
+    // Near-noon sun (user's call): a mostly-vertical light we cannot measure
+    // but everyone finds believable indoors, and — through the shadow
+    // catchers on the real floor/table planes — the one that makes virtual
+    // objects cast shadows onto the real world directly beneath them, the
+    // strongest depth cue available without camera access.
     ctx.view.lighting = SceneLighting{};
-    ctx.view.lighting.sun.direction = Vec3(0.3, 0.9, 0.2);
+    ctx.view.lighting.sun.direction = Vec3(0.15, 0.97, 0.2);
     ctx.view.lighting.sun.color = Vec3(1.0, 0.97, 0.92);
     ctx.view.lighting.sun.intensity = 1.6f;
     ctx.view.lighting.sun.castsShadow = true;

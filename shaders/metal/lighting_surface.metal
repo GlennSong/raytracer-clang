@@ -59,6 +59,37 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
         return dbg;
     }
 
+    // Shadow CATCHER (FLAG_SHADOW_CATCHER = 128): draws ONLY the sun shadow
+    // falling on it. Fully lit fragments discard — the real surface behind
+    // shows through untouched — and shadowed ones output black with DITHERED
+    // coverage so the PCF penumbra fades instead of stepping. The dither hash
+    // keys on WORLD position, so the pattern is glued to the floor rather
+    // than swimming with the head. Materials pair this with FLAG_STIPPLE
+    // (checker discard in the entry shader) for a 50% maximum density that
+    // dims passthrough rather than blackening it.
+    if ((int(mat.flags) & 128) != 0) {
+        float viewDepth = -(camera.view * float4(geom.worldPosition, 1.0)).z;
+        float s = 1.0;
+        for (uint i = 0; i < uint(lightData.lightCount); i++) {
+            if (lightData.lights[i].type == LightType_Directional &&
+                lightData.lights[i].shadowMapIndex >= 0) {
+                s = computeShadow(shadowMap, shadowSampler,
+                                  geom.worldPosition,
+                                  normalize(geom.worldNormal), viewDepth,
+                                  shadowData);
+                break;
+            }
+        }
+        float density = 1.0 - s;
+        float h = fract(sin(dot(geom.worldPosition.xz,
+                                float2(12.9898, 78.233))) * 43758.5453);
+        if (density < 0.02 || h > density) discard_fragment();
+        GBufferOut sh;
+        sh.color = float4(0.0, 0.0, 0.0, 1.0);
+        sh.viewNormal = float4(0.5, 0.5, 1.0, 1.0);
+        return sh;
+    }
+
     float3 albedo = mat.albedo;
     float mtl = mat.metallic;
     float rough = mat.roughness;

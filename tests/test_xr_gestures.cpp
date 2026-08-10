@@ -254,3 +254,73 @@ TEST_CASE(throw_history_ring_survives_wraparound) {
     CHECK(history.size() == 0);
     CHECK(nearVec(history.linearVelocity(), Vec3(0, 0, 0), 1e-12));
 }
+
+// --- XrAdaptiveFilter: smooth at rest, responsive in motion ---------------
+
+TEST_CASE(adaptive_filter_damps_static_noise) {
+    XrAdaptiveFilter filter;
+    filter.reset(Vec3(0, 1, 0), Quat::identity());
+    // 2mm oscillation at 90Hz around a stationary point: the output must
+    // wobble far less than the input.
+    Real maxDev = 0;
+    for (int i = 0; i < 180; i++) {
+        const Vec3 raw(0.002 * ((i % 2) ? 1 : -1), 1, 0);
+        filter.feed(raw, Quat::identity(), 1.0 / 90.0);
+        maxDev = std::max(maxDev, std::abs(filter.position().x));
+    }
+    CHECK(maxDev < 0.0008);   // >60% of the jitter absorbed
+}
+
+TEST_CASE(adaptive_filter_tracks_fast_motion_closely) {
+    // A hand sweeping at 1.5 m/s. The FIXED 50ms filter lags such a ramp by
+    // tau*v = 7.5cm; the adaptive filter must stay within 1.5cm.
+    XrAdaptiveFilter filter;
+    filter.reset(Vec3(0, 1, 0), Quat::identity());
+    Vec3 raw(0, 1, 0);
+    for (int i = 1; i <= 90; i++) {
+        raw = Vec3(1.5 * i / 90.0, 1, 0);
+        filter.feed(raw, Quat::identity(), 1.0 / 90.0);
+    }
+    const Real lag = (raw - filter.position()).length();
+    CHECK(lag < 0.015);
+    const Real fixedLag = 0.05 * 1.5;   // what the old constant filter cost
+    CHECK(lag < fixedLag / 3);
+}
+
+TEST_CASE(adaptive_filter_reset_snaps_without_history) {
+    XrAdaptiveFilter filter;
+    filter.reset(Vec3(5, 5, 5), Quat::identity());
+    CHECK((filter.position() - Vec3(5, 5, 5)).length() < 1e-12);
+    // First feed after reset must not see a phantom velocity spike from the
+    // pre-reset raw sample.
+    filter.feed(Vec3(5.001, 5, 5), Quat::identity(), 1.0 / 90.0);
+    CHECK((filter.position() - Vec3(5, 5, 5)).length() < 0.001);
+}
+
+// --- xrBoneCapsule: capsules along finger bones ---------------------------
+
+TEST_CASE(bone_capsule_aligns_y_along_the_bone) {
+    // Horizontal bone along +X, 4cm long, 1cm radius.
+    const XrBoneCapsule c =
+        xrBoneCapsule(Vec3(0, 1, 0), Vec3(0.04, 1, 0), 0.01);
+    CHECK((c.center - Vec3(0.02, 1, 0)).length() < 1e-9);
+    CHECK(std::abs(c.halfHeight - 0.01) < 1e-9);   // 0.02 - radius
+    const Vec3 up = c.orientation.rotate(Vec3(0, 1, 0));
+    CHECK((up - Vec3(1, 0, 0)).length() < 1e-6);
+}
+
+TEST_CASE(bone_capsule_degenerate_cases_are_safe) {
+    // Zero-length bone: identity orientation, zero half-height.
+    const XrBoneCapsule zero =
+        xrBoneCapsule(Vec3(1, 1, 1), Vec3(1, 1, 1), 0.01);
+    CHECK(zero.halfHeight == 0.0);
+    // Bone shorter than 2*radius: half-height clamps to zero (a sphere).
+    const XrBoneCapsule stub =
+        xrBoneCapsule(Vec3(0, 0, 0), Vec3(0, 0.01, 0), 0.01);
+    CHECK(stub.halfHeight == 0.0);
+    // Straight-down bone (antiparallel to +Y): still a valid rotation.
+    const XrBoneCapsule down =
+        xrBoneCapsule(Vec3(0, 1, 0), Vec3(0, 0.9, 0), 0.005);
+    const Vec3 axis = down.orientation.rotate(Vec3(0, 1, 0));
+    CHECK((axis - Vec3(0, -1, 0)).length() < 1e-6);
+}

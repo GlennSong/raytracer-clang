@@ -207,10 +207,13 @@ fragment float4 fragmentComposite(
 
     // --- Normal rendering ---
     // Passthrough (mixed immersion): the background is the user's real room.
-    // Alpha 0 tells the device compositor to show passthrough video here; the
-    // skybox pass is skipped renderer-side so no sky was drawn to leak through
-    // bloom. Geometry keeps the normal path below and lands at alpha 1.
-    if (params.passthrough != 0 && depth <= 0.0) {
+    // Coverage comes from scene COLOR alpha, not depth: content (objects,
+    // fills, ribbons) writes alpha 1, the clear is alpha 0, and depth-only
+    // OCCLUDERS (real-room geometry) write depth without alpha — so a pixel
+    // where the room hides a virtual object correctly shows the room, not a
+    // silhouette. Alpha 0 tells the device compositor: passthrough here.
+    if (params.passthrough != 0 &&
+        sceneColor.sample(smp, in.uv).a < 0.01) {
         return float4(0.0, 0.0, 0.0, 0.0);
     }
     float3 hdrColor;

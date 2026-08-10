@@ -110,6 +110,10 @@ private:
     bool visible_ = true;
     bool visibleDefault_ = true;
     bool fillSurfaces_ = true;
+    Real surfaceOpacity_ = 0.5;    // sandbox fill strength (pref)
+    bool showNormals_ = false;     // normal tick lines (pref)
+    bool shadowsEnabled_ = true;   // shadow catchers on real planes (pref)
+    bool lastDepthView_ = false;
     int lastLoggedTotal_ = -1;
 
     // Room colliders (only populated when physics_ != nullptr).

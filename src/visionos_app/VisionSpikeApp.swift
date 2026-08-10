@@ -256,6 +256,10 @@ struct RenderSettingsView: View {
     @State private var saturation = Self.defaults.saturation
     @State private var tonemap = Self.defaults.tonemap
     @State private var showSurfaces = true
+    @State private var surfaceOpacity = 0.5
+    @State private var showNormals = false
+    @State private var arShadows = true
+    @State private var depthView = false
     @State private var saved = false
 
     var body: some View {
@@ -287,6 +291,19 @@ struct RenderSettingsView: View {
                     Toggle("Show detected surfaces", isOn: $showSurfaces)
                         .onChange(of: showSurfaces) { _, v in
                             rt_vision_set_pref_bool("xr.showSurfaces", v ? 1 : 0)
+                        }
+                    slider("Surface opacity", $surfaceOpacity, 0...1, "xr.surfaceOpacity")
+                    Toggle("Surface normals", isOn: $showNormals)
+                        .onChange(of: showNormals) { _, v in
+                            rt_vision_set_pref_bool("xr.showNormals", v ? 1 : 0)
+                        }
+                    Toggle("Shadows on real surfaces", isOn: $arShadows)
+                        .onChange(of: arShadows) { _, v in
+                            rt_vision_set_pref_bool("xr.shadows", v ? 1 : 0)
+                        }
+                    Toggle("Depth view", isOn: $depthView)
+                        .onChange(of: depthView) { _, v in
+                            rt_vision_set_pref_bool("xr.depthView", v ? 1 : 0)
                         }
                 }
                 Section("Look") {
@@ -363,6 +380,10 @@ struct RenderSettingsView: View {
         saturation = rt_vision_get_pref_double("grade.saturation", d.saturation)
         tonemap = rt_vision_get_pref_double("tonemap.op", d.tonemap)
         showSurfaces = rt_vision_get_pref_bool("xr.showSurfaces", 1) != 0
+        surfaceOpacity = rt_vision_get_pref_double("xr.surfaceOpacity", 0.5)
+        showNormals = rt_vision_get_pref_bool("xr.showNormals", 0) != 0
+        arShadows = rt_vision_get_pref_bool("xr.shadows", 1) != 0
+        depthView = rt_vision_get_pref_bool("xr.depthView", 0) != 0
     }
 }
 

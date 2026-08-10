@@ -89,16 +89,21 @@ private:
     XrPinchTracker pinch_[2];
     XrPoseHistory grip_[2];
     int heldObject_[2] = {-1, -1};   // index into objects_ per hand
-    // Low-pass-filtered carry target per hand: raw joint poses jitter at the
-    // millimetre level, and driving a kinematic body with that noise makes
-    // the held object vibrate — and hammer anything it touches.
-    Vec3 carryPos_[2];
-    Quat carryQ_[2];
+    // Adaptive carry filter per hand (heavy smoothing at rest, nearly none
+    // in motion — a constant filter lagged fast carries by centimetres).
+    XrAdaptiveFilter carry_[2];
 
-    // Hand presence: five fingertips + palm per hand, kinematic spheres.
-    static constexpr int kHandSpheres = 6;
-    PhysicsBodyId handBodies_[2][kHandSpheres] = {};
-    Vec3 handSmooth_[2][kHandSpheres];
+    // Articulated hand presence: a kinematic capsule per finger bone plus a
+    // palm sphere, driven from adaptively-filtered joint positions.
+    struct HandBone {
+        PhysicsBodyId body = INVALID_PHYSICS_BODY;
+        int jointA = 0;      // parent joint
+        int jointB = 0;      // child joint
+        Real radius = 0.009;
+    };
+    std::vector<HandBone> handBones_[2];   // built at first tracked sighting
+    PhysicsBodyId palmBody_[2] = {INVALID_PHYSICS_BODY, INVALID_PHYSICS_BODY};
+    XrAdaptiveFilter jointFilter_[2][XR_HAND_JOINT_COUNT];
     bool handActive_[2] = {false, false};   // false = parked / not created
 
     XrPalette palette_;

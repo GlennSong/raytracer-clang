@@ -65,14 +65,6 @@ Real worldScaleOf(FrameContext& ctx) {
         ? static_cast<Real>(ctx.renderer.xrWorldScale) : 1.0;
 }
 
-// Sentinel ledger token for a surface whose render mesh is deliberately never
-// built (sandbox reconstruction chunks: hidden by display mode, yet their
-// re-uploads were the largest steady frame-thread cost — tens of thousands
-// of triangles rebuilt and re-uploaded per refinement for meshes nobody
-// draws). Cannot collide with a packed MeshHandle: generation 0xffffffff is
-// never minted.
-constexpr uint64_t kHiddenMeshToken = ~0ull;
-
 // Which surface classes the sandbox DRAWS: the horizontal, actionable ones.
 // Walls/windows/doors/ceiling still ingest and collide, but painting them
 // tinted every frame was most of the on-device visual noise.
@@ -95,17 +87,15 @@ constexpr size_t kMaxMarkers = 64;
 }  // namespace
 
 XrSurfaceLedger::MeshOps XrSurfaceSystem::meshOps(FrameContext& ctx) {
-    const bool skipChunkMeshes = !fillSurfaces_;
+    // Every surface keeps a GPU mesh again — sandbox chunks included, since
+    // occlusion draws them depth-only every frame. The upload churn that
+    // once made chunks worth skipping was fixed at the source (pose
+    // dead-band + geometry gating + the 4-updates/frame ingest cap).
     return {
-        [&ctx, skipChunkMeshes](const XrSurfaceUpdate& update) {
-            if (skipChunkMeshes && update.cls == XrSurfaceClass::Mesh)
-                return kHiddenMeshToken;
+        [&ctx](const XrSurfaceUpdate& update) {
             return packMesh(ctx.renderer.uploadMesh(buildSurfaceMesh(update)));
         },
-        [&ctx](uint64_t token) {
-            if (token == kHiddenMeshToken) return;
-            ctx.renderer.removeMesh(unpackMesh(token));
-        },
+        [&ctx](uint64_t token) { ctx.renderer.removeMesh(unpackMesh(token)); },
     };
 }
 
@@ -406,9 +396,23 @@ void XrSurfaceSystem::update(FrameContext& ctx) {
     XrSurfaceStore* store = ctx.renderer.xrSurfaceStore();
     if (!store) return;
 
-    // Runtime display toggle (settings panel / prefs); env var is the boot
-    // default. Ingest and colliders are never gated by visibility.
+    // Runtime display controls (settings panel / prefs); env var is the boot
+    // default. Ingest, colliders, occlusion and shadow catching are never
+    // gated by visibility — visibility is only the debug drawing.
     visible_ = ctx.settings.getBool("xr.showSurfaces", visibleDefault_);
+    surfaceOpacity_ = ctx.settings.getDouble("xr.surfaceOpacity", 0.5);
+    showNormals_ = ctx.settings.getBool("xr.showNormals", false);
+    shadowsEnabled_ = ctx.settings.getBool("xr.shadows", true);
+    if (!fillSurfaces_) {
+        // Depth view (sandbox): the composite's depth debug mode over the
+        // whole display — with occluders writing room depth, this is a live
+        // depth map of the real room plus the virtual objects in it.
+        const bool depthView = ctx.settings.getBool("xr.depthView", false);
+        if (depthView != lastDepthView_) {
+            ctx.renderer.debugView = depthView ? 3 : 0;
+            lastDepthView_ = depthView;
+        }
+    }
     timeSeconds_ += ctx.frameDelta;
     ingest(ctx);
     rebuildDueColliders(ctx);
@@ -437,12 +441,40 @@ void XrSurfaceSystem::update(FrameContext& ctx) {
 }
 
 void XrSurfaceSystem::render(FrameContext& ctx) {
-    if (!visible_) return;
     if (!ctx.xr.active || !ctx.xr.originBaseValid) return;
-    if (ledger_.surfaces().empty() && markers_.empty() && dropCubes_.empty())
-        return;
 
     const Real scale = worldScaleOf(ctx);
+
+    // Presence layer (sandbox only), independent of the debug display
+    // toggle — occlusion and shadows are features, not diagnostics:
+    // - EVERY surface (chunks + all plane classes) draws as a depth-only
+    //   OCCLUDER, so real furniture hides virtual objects and the
+    //   compositor gets true room depth.
+    // - The horizontal planes also draw as SHADOW CATCHERS: virtual objects
+    //   cast the noon sun's shadows onto the real floor and table.
+    if (!fillSurfaces_) {
+        RenderMaterial occluder;
+        occluder.flags = RenderMaterial::FLAG_OCCLUDER;
+        RenderMaterial catcher;
+        catcher.flags = RenderMaterial::FLAG_SHADOW_CATCHER |
+                        RenderMaterial::FLAG_STIPPLE |
+                        RenderMaterial::FLAG_TWO_SIDED;
+        for (const auto& [anchorId, entry] : ledger_.surfaces()) {
+            if (!entry.meshToken) continue;
+            const Mat4 world = xrSurfaceWorldTransform(
+                ctx.xr.originBase, scale, entry.originFromAnchor);
+            ctx.renderer.drawMesh(unpackMesh(entry.meshToken), world,
+                                  occluder);
+            if (shadowsEnabled_ && entry.cls != XrSurfaceClass::Mesh &&
+                sandboxShowsClass(entry.cls))
+                ctx.renderer.drawMesh(unpackMesh(entry.meshToken), world,
+                                      catcher);
+        }
+    }
+
+    if (!visible_) return;
+    if (ledger_.surfaces().empty() && markers_.empty() && dropCubes_.empty())
+        return;
 
     RenderMaterial material;
     material.albedo = Vec3(1, 1, 1);   // tint rides Vertex::color
@@ -462,13 +494,16 @@ void XrSurfaceSystem::render(FrameContext& ctx) {
         if (!shown) continue;
         const Mat4 world = xrSurfaceWorldTransform(ctx.xr.originBase, scale,
                                                    entry.originFromAnchor);
-        if (entry.meshToken && entry.meshToken != kHiddenMeshToken) {
+        if (entry.meshToken) {
             if (fillSurfaces_) {
                 ctx.renderer.drawMesh(unpackMesh(entry.meshToken), world,
                                       material);
-            } else {
+            } else if (surfaceOpacity_ > 0.01) {
                 RenderMaterial fill = material;
                 fill.flags |= RenderMaterial::FLAG_STIPPLE;
+                // The opacity slider dims the tint (the stipple pattern
+                // already lets the room through); 0 removes fills entirely.
+                fill.albedo = material.albedo * surfaceOpacity_ * 2.0;
                 ctx.renderer.drawMesh(unpackMesh(entry.meshToken), world,
                                       fill);
             }
@@ -483,9 +518,12 @@ void XrSurfaceSystem::render(FrameContext& ctx) {
                                    world.transformPoint(b), color);
             }
             // Normal tick: ARKit planes face +Y in anchor space. 10 real cm.
-            const Vec3 foot = world.transformPoint(Vec3(0, 0, 0));
-            const Vec3 tip = world.transformPoint(Vec3(0, 0.1, 0));
-            ctx.debug.line(foot, tip, color);
+            // Off by default now — a settings toggle brings them back.
+            if (showNormals_) {
+                const Vec3 foot = world.transformPoint(Vec3(0, 0, 0));
+                const Vec3 tip = world.transformPoint(Vec3(0, 0.1, 0));
+                ctx.debug.line(foot, tip, color);
+            }
         }
 
         // Extent rectangle, dimmed: the measured bounding box the dimension

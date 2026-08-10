@@ -571,11 +571,18 @@ struct CompositorSurface final : PresentationSurface {
         for (size_t d = 0; d < count; d++) {
             cp_drawable_t dr = cp_drawable_array_get_drawable(drawables, d);
             cp_frame_timing_t finalTiming = cp_drawable_get_frame_timing(dr);
+            const CFTimeInterval presentation = cp_time_to_cf_time_interval(
+                cp_frame_timing_get_presentation_time(finalTiming));
+            if (dr == drawable) {
+                // Cached for the HAND query: beginFrame runs before this
+                // frame's acquire, so hands are predicted against LAST
+                // frame's presentation plus one frame period — far closer to
+                // display time than the un-timestamped "latest" snapshot.
+                lastPresentationTime = presentation;
+            }
             ar_device_anchor_t anchor = ar_device_anchor_create();
             if (ar_world_tracking_provider_query_device_anchor_at_timestamp(
-                    worldTracking,
-                    cp_time_to_cf_time_interval(
-                        cp_frame_timing_get_presentation_time(finalTiming)),
+                    worldTracking, presentation,
                     anchor) == ar_device_anchor_query_status_success) {
                 cp_drawable_set_device_anchor(dr, anchor);
                 if (dr == drawable) {
@@ -661,6 +668,9 @@ struct CompositorSurface final : PresentationSurface {
     // Sticky: a frame with a failed anchor query keeps the last good pose.
     bool trackedPoseValid = false;
     simd_float4x4 originFromDevice;      // tracking origin -> headset
+    // Last frame's presentation time (CFTimeInterval) — the hand query's
+    // prediction anchor; 0 until the first anchored frame.
+    CFTimeInterval lastPresentationTime = 0;
     int trackedViewCount = 0;
     simd_float4x4 deviceFromEye[2];      // headset -> each eye
     simd_float4x4 eyeProjection[2];      // compositor projection per eye
@@ -908,15 +918,33 @@ struct CompositorXrBackend final : engine::XrBackend {
             out.views[v].width = surface->trackedViewWidth;
             out.views[v].height = surface->trackedViewHeight;
         }
-        // Hand skeletons: latest tracked pose for both hands. Reports
-        // untracked until the user grants the hands permission.
+        // Hand skeletons, PREDICTED to display time. The un-timestamped
+        // "latest" snapshot is the sensed pose — a frame-plus older than the
+        // head (which IS queried at presentation time), which read as a
+        // carried object lagging the hand. beginFrame runs before this
+        // frame's acquire, so the anchor is last frame's presentation plus
+        // one frame period. Reports untracked until the user grants the
+        // hands permission.
         out.hands[0].tracked = false;
         out.hands[1].tracked = false;
         if (surface->handTracking) {
             if (!handAnchorLeft) handAnchorLeft = ar_hand_anchor_create();
             if (!handAnchorRight) handAnchorRight = ar_hand_anchor_create();
-            if (ar_hand_tracking_provider_get_latest_anchors(
-                    surface->handTracking, handAnchorLeft, handAnchorRight)) {
+            bool got = false;
+            if (surface->lastPresentationTime > 0) {
+                // VERIFY: ar_hand_tracking_provider_query_anchors_at_timestamp
+                // (predicted hand query, visionOS 2+). If the local SDK lacks
+                // it, delete this call and keep the get_latest_anchors
+                // fallback below.
+                got = ar_hand_tracking_provider_query_anchors_at_timestamp(
+                    surface->handTracking,
+                    surface->lastPresentationTime + (1.0 / 90.0),
+                    handAnchorLeft, handAnchorRight);
+            }
+            if (!got)
+                got = ar_hand_tracking_provider_get_latest_anchors(
+                    surface->handTracking, handAnchorLeft, handAnchorRight);
+            if (got) {
                 fillHand(out.hands[0], handAnchorLeft);
                 fillHand(out.hands[1], handAnchorRight);
             }
@@ -978,6 +1006,8 @@ struct MetalRenderer::Impl {
     id<MTLRenderPipelineState> terrainPipeline;   // CDLOD vertex morph (ADR-0036)
     id<MTLRenderPipelineState> transparentPipeline;
     id<MTLRenderPipelineState> opaqueInstancedPipeline;
+    id<MTLRenderPipelineState> occluderPipeline;           // depth-only (FLAG_OCCLUDER)
+    id<MTLRenderPipelineState> occluderInstancedPipeline;
     id<MTLRenderPipelineState> transparentInstancedPipeline;
     id<MTLRenderPipelineState> foliageDepthPipeline;   // alpha-cut depth prepass (perf)
     id<MTLRenderPipelineState> foliageLitPipeline;     // foliage lit w/ early depth test
@@ -986,7 +1016,6 @@ struct MetalRenderer::Impl {
     id<MTLDepthStencilState> depthStateTransparent;   // reverse-Z: Greater, no write
     id<MTLDepthStencilState> depthStateWireOverlay;   // reverse-Z: GreaterEqual, no write
     id<MTLDepthStencilState> depthStateOverlay;       // Always pass, no write (debug gizmos on top)
-    id<MTLDepthStencilState> depthStateOverlayWrite;  // Always pass, WRITE (overlays under passthrough)
     id<MTLDepthStencilState> depthStateOpaqueForwardZ; // probe bake: Less, write
     id<MTLBuffer> instanceBuffers[MAX_FRAMES_IN_FLIGHT];  // ring; see frameIndex
     id<MTLBuffer> shadowInstanceBuffers[MAX_FRAMES_IN_FLIGHT];  // ring; shadow caster models
@@ -1230,6 +1259,7 @@ struct MetalRenderer::Impl {
     std::vector<DrawCall> opaqueDrawCalls;
     std::vector<DrawCall> transparentDrawCalls;
     std::vector<DrawCall> overlayDrawCalls;   // FLAG_OVERLAY gizmos, issued last
+    std::vector<DrawCall> occluderDrawCalls;  // FLAG_OCCLUDER depth-only, issued first
 
     // CDLOD terrain nodes (ADR-0036): drawn with the morph pipeline after opaque.
     struct TerrainDrawCall {
@@ -1449,6 +1479,35 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     if (!impl->opaqueInstancedPipeline) {
         NSLog(@"Instanced pipeline error: %@", error);
         return false;
+    }
+
+    // Occluder pipelines (FLAG_OCCLUDER, AR passthrough): depth-only — no
+    // colour writes on either MRT attachment — issued BEFORE the opaque
+    // pass so real-room geometry hides virtual content. The void foliage
+    // depth fragment does the job for both vertex paths (its alpha-cut
+    // branch is dead with textureFlags 0).
+    {
+        id<MTLFunction> depthOnlyFrag =
+            [library newFunctionWithName:@"fragmentFoliageDepthInstanced"];
+        if (depthOnlyFrag) {
+            pipelineDesc.colorAttachments[0].writeMask = MTLColorWriteMaskNone;
+            pipelineDesc.colorAttachments[1].writeMask = MTLColorWriteMaskNone;
+            pipelineDesc.vertexFunction = vertexFunc;
+            pipelineDesc.fragmentFunction = depthOnlyFrag;
+            impl->occluderPipeline =
+                [impl->device newRenderPipelineStateWithDescriptor:pipelineDesc
+                                                             error:&error];
+            if (!impl->occluderPipeline)
+                NSLog(@"Occluder pipeline error: %@", error);
+            pipelineDesc.vertexFunction = vertexInstancedFunc;
+            impl->occluderInstancedPipeline =
+                [impl->device newRenderPipelineStateWithDescriptor:pipelineDesc
+                                                             error:&error];
+            if (!impl->occluderInstancedPipeline)
+                NSLog(@"Occluder instanced pipeline error: %@", error);
+            pipelineDesc.colorAttachments[0].writeMask = MTLColorWriteMaskAll;
+            pipelineDesc.colorAttachments[1].writeMask = MTLColorWriteMaskAll;
+        }
     }
 
     // Foliage depth-prepass + lit pipelines (perf — alpha-cut overdraw). Both
@@ -2054,16 +2113,9 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     depthDesc.depthWriteEnabled = NO;
     impl->depthStateOverlay = [impl->device newDepthStencilStateWithDescriptor:depthDesc];
 
-    // Same, but WRITING depth — for overlays under XR passthrough. The mixed-
-    // immersion composite derives per-pixel alpha (real room vs rendered) from
-    // the DEPTH buffer, so a depthless overlay lands at background depth, gets
-    // alpha 0, and vanishes into the passthrough video (device: surface
-    // outlines invisible except where a cube behind them had written depth).
-    // Overlay ribbons are world-space geometry drawn last in the pass, so
-    // writing their true depth also hands the compositor the right
-    // reprojection distance.
-    depthDesc.depthWriteEnabled = YES;
-    impl->depthStateOverlayWrite = [impl->device newDepthStencilStateWithDescriptor:depthDesc];
+    // (The passthrough overlay depth-WRITE state is gone: coverage now comes
+    // from scene COLOR alpha, which overlay ribbons write like any colour —
+    // the depth hack that kept them visible is no longer needed.)
     depthDesc.depthCompareFunction = MTLCompareFunctionGreaterEqual;   // restore for below
 
     // Forward-Z opaque state for the reflection-probe bake only: that pass owns
@@ -3099,6 +3151,7 @@ void MetalRenderer::beginFrame() {
     impl->opaqueDrawCalls.clear();
     impl->transparentDrawCalls.clear();
     impl->overlayDrawCalls.clear();
+    impl->occluderDrawCalls.clear();
     impl->terrainDrawCalls.clear();
     // Advance the dynamic-buffer ring so this frame writes a slot the GPU isn't
     // still reading for an in-flight earlier frame (fixes instance tearing —
@@ -3149,7 +3202,11 @@ void MetalRenderer::beginFrame() {
         passDesc.colorAttachments[0].texture = impl->sceneColorTexture;
         passDesc.colorAttachments[0].loadAction = MTLLoadActionClear;
         passDesc.colorAttachments[0].storeAction = MTLStoreActionStore;
-        passDesc.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
+        // Passthrough coverage comes from scene ALPHA (a pixel with alpha 0
+        // shows the real room), so the clear must start uncovered there.
+        // Everywhere else alpha clears to 1 as always — nothing samples it.
+        passDesc.colorAttachments[0].clearColor =
+            MTLClearColorMake(0.0, 0.0, 0.0, xrPassthrough ? 0.0 : 1.0);
         passDesc.colorAttachments[1].texture = impl->viewNormalTexture;
         passDesc.colorAttachments[1].loadAction = MTLLoadActionClear;
         passDesc.colorAttachments[1].storeAction = MTLStoreActionStore;
@@ -3925,7 +3982,11 @@ void MetalRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
     dc.material = material;
     dc.distanceToCamera = dist;
 
-    if (material.flags & RenderMaterial::FLAG_OVERLAY) {
+    if (material.flags & RenderMaterial::FLAG_OCCLUDER) {
+        // Depth-only real-room geometry, issued FIRST so everything else
+        // depth-tests against it.
+        impl->occluderDrawCalls.push_back(dc);
+    } else if (material.flags & RenderMaterial::FLAG_OVERLAY) {
         // Debug gizmos must be issued LAST: they pass depth but never write it,
         // so anything drawn after them in the opaque pass — and the terrain /
         // foliage passes, which run later — painted straight over them
@@ -4073,9 +4134,12 @@ void MetalRenderer::endFrame() {
                             stats.shadowOverflow++;  // caster DROPPED this frame
                             continue;
                         }
-                        // Debug-gizmo overlays (FLAG_OVERLAY) never cast shadows.
+                        // Debug-gizmo overlays and shadow CATCHERS never cast
+                        // shadows (a catcher casting onto itself would darken
+                        // the whole real floor).
                         if (int(impl->opaqueDrawCalls[j].material.flags) &
-                            RenderMaterial::FLAG_OVERLAY) continue;
+                            (RenderMaterial::FLAG_OVERLAY |
+                             RenderMaterial::FLAG_SHADOW_CATCHER)) continue;
                         const Mat4& m = impl->opaqueDrawCalls[j].transform;
                         if (oldCull) {
                             Vec3 wc = m.transformPoint(b.center);
@@ -4430,13 +4494,21 @@ void MetalRenderer::endFrame() {
             const GPUMesh* mesh = impl->meshes.get(batchMesh);
             if (!mesh) continue;
 
-            // Debug-gizmo overlay batches ignore depth so they draw on top of the
-            // world; everything else uses the pass's depth state.
-            [impl->currentEncoder setDepthStencilState:
-                (int(drawCalls[batchStart].material.flags) & RenderMaterial::FLAG_OVERLAY)
-                    ? (xrPassthrough ? impl->depthStateOverlayWrite
-                                     : impl->depthStateOverlay)
-                    : depthState];
+            // Per-batch depth-state overrides. Overlay gizmos ignore depth so
+            // they draw on top of the world. Stipple fills sit exactly ON
+            // their own occluder's depth (the surface planes draw both), so
+            // they need GreaterEqual/no-write: equal depth passes, nearer
+            // occluders still hide them. Everything else uses the pass state.
+            {
+                const int f = int(drawCalls[batchStart].material.flags);
+                id<MTLDepthStencilState> ds = depthState;
+                if (f & RenderMaterial::FLAG_OVERLAY)
+                    ds = impl->depthStateOverlay;
+                else if (f & (RenderMaterial::FLAG_STIPPLE |
+                              RenderMaterial::FLAG_SHADOW_CATCHER))
+                    ds = impl->depthStateWireOverlay;   // sit ON own occluder depth
+                [impl->currentEncoder setDepthStencilState:ds];
+            }
 
             // FLAG_TWO_SIDED batches draw both faces. Cull mode is encoder state,
             // not per-instance, so unlike the shading flags this cannot ride the
@@ -4600,6 +4672,18 @@ void MetalRenderer::endFrame() {
     // already drew filled above; overlay (mode 2) re-draws lines after the fills.
     [impl->currentEncoder setTriangleFillMode:
         (wireframe == 1 ? MTLTriangleFillModeLines : MTLTriangleFillModeFill)];
+
+    // Occluders FIRST (FLAG_OCCLUDER, AR passthrough): real-room geometry
+    // writes depth with no colour, so everything after it depth-tests
+    // against the actual room — a block behind the real stool is hidden,
+    // and the pixel keeps alpha 0, which the composite reads as "show the
+    // passthrough". Skipped entirely when the pipelines are absent.
+    if (!impl->occluderDrawCalls.empty() && impl->occluderPipeline &&
+        impl->occluderInstancedPipeline) {
+        issuePass(impl->occluderDrawCalls, impl->occluderPipeline,
+                  impl->occluderInstancedPipeline, impl->depthStateOpaque,
+                  /*skipFoliage=*/false);
+    }
 
     // Sort each pass by distance first, then issuePass stable-sorts by mesh.
     std::sort(impl->opaqueDrawCalls.begin(), impl->opaqueDrawCalls.end(),
@@ -4879,10 +4963,13 @@ void MetalRenderer::endFrame() {
     bool lensWarpActive = lensEffectsEnabled && lens.hasAberrations()
                        && impl->lensWarpPipeline && impl->postLDRTexture
                        && debugView == 0;
+    // No DoF under passthrough: the composite would sample the DoF output,
+    // whose alpha (the passthrough coverage channel) is not preserved — and
+    // simulated camera blur is meaningless composited over real vision.
     bool dofActive = dofEnabled && lens.apertureDiameter() > 0.0
                   && lens.sensorHeight > 0.0
                   && impl->dofPipeline && impl->dofTexture
-                  && debugView == 0;
+                  && debugView == 0 && !xrPassthrough;
 
     // --- Post-processing compute passes (single encoder) ---
     // Batching SSAO, SSR, and bloom into one compute encoder eliminates

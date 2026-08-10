@@ -89,6 +89,53 @@ XrPalmPose xrPalmPose(const XrHand& hand, bool leftHand);
 // Palm facing up (within maxAngle of +Y) — the palette summon gesture.
 bool xrPalmUp(const XrPalmPose& palm, Real maxAngleRadians = 0.7);
 
+// --- Adaptive pose filter -------------------------------------------------
+//
+// One-euro-style low-pass for carried objects and hand colliders: heavy
+// smoothing at rest (millimetre tracking noise must not vibrate a held
+// object), nearly none in motion (a constant 50ms filter lagged a fast
+// carry by several centimetres — device feedback: "the response can get
+// very laggy"). The time constant shrinks with the RAW target's speed:
+//   tau(speed) = tauSlow / (1 + speed / speedRef)
+struct XrAdaptiveFilterConfig {
+    Real tauSlow = 0.05;    // seconds of smoothing at rest
+    Real speedRef = 0.5;    // m/s at which tau has halved
+};
+
+class XrAdaptiveFilter {
+public:
+    explicit XrAdaptiveFilter(XrAdaptiveFilterConfig config = {})
+        : config_(config) {}
+
+    // Reset to a known pose (grab/spawn seed, tracking reacquired).
+    void reset(const Vec3& position, const Quat& orientation);
+    // Advance toward the raw pose over dt; returns nothing — read pose().
+    void feed(const Vec3& rawPosition, const Quat& rawOrientation, Real dt);
+
+    const Vec3& position() const { return position_; }
+    const Quat& orientation() const { return orientation_; }
+
+private:
+    XrAdaptiveFilterConfig config_;
+    Vec3 position_{0, 0, 0};
+    Quat orientation_;
+    Vec3 lastRaw_{0, 0, 0};
+    bool hasLastRaw_ = false;
+};
+
+// --- Bone capsules --------------------------------------------------------
+//
+// The pose of a kinematic capsule spanning two joints — the articulated
+// hand collider's unit. The engine's capsules stand along +Y, so the
+// orientation rotates +Y onto the bone direction (degenerate-safe: zero-
+// length bones return identity with zero halfHeight).
+struct XrBoneCapsule {
+    Vec3 center;
+    Quat orientation;   // +Y runs along the bone
+    Real halfHeight;    // cylindrical half-length (excludes the caps)
+};
+XrBoneCapsule xrBoneCapsule(const Vec3& a, const Vec3& b, Real radius);
+
 // --- Throw estimation -----------------------------------------------------
 //
 // Ring of timestamped grip poses while an object is carried. On release, the

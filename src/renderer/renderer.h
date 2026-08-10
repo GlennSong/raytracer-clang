@@ -97,6 +97,19 @@ struct RenderMaterial {
     // at full resolution; at headset pixel densities the pattern reads as a
     // uniform 50% tint.
     static constexpr uint32_t FLAG_STIPPLE = 32;
+    // Occluder: depth-only draw issued BEFORE the opaque pass, no colour
+    // writes. Built for AR passthrough: real-room geometry (scene
+    // reconstruction) occludes virtual content, and because passthrough
+    // coverage is derived from scene COLOR alpha, an occluded pixel shows
+    // the real room — not a silhouette. Also hands the compositor true
+    // room depth for reprojection. Never casts shadows.
+    static constexpr uint32_t FLAG_OCCLUDER = 64;
+    // Shadow catcher: draws ONLY the sun shadow falling on it — fully lit
+    // fragments discard, shadowed ones output dithered+stippled darkening
+    // that dims the passthrough video beneath. Put it on real-room floor
+    // and table planes so virtual objects cast shadows onto the real world.
+    // Never casts shadows itself.
+    static constexpr uint32_t FLAG_SHADOW_CATCHER = 128;
 
     // World-space procedural surface library (applySurface in surfaces.metal /
     // scene.cpp): an analytic material — brick, concrete, roof tiles, asphalt,

@@ -20,16 +20,6 @@ constexpr Real kGrabSurfaceReach = 0.10;
 // oriented highlight + fingertip projection cues.
 constexpr Real kApproachRange = 0.35;
 constexpr size_t kMaxObjects = 32;
-// Carry filter time constant (also reused for the hand spheres, tighter).
-constexpr Real kCarryTau = 0.05;
-constexpr Real kHandTau = 0.03;
-
-// Hand-presence sphere set: five fingertips + the palm.
-constexpr XrHandJointId kHandSphereJoints[] = {
-    XR_JOINT_THUMB_TIP, XR_JOINT_INDEX_TIP, XR_JOINT_MIDDLE_TIP,
-    XR_JOINT_RING_TIP, XR_JOINT_LITTLE_TIP, XR_JOINT_WRIST,
-};
-constexpr Real kFingertipRadius = 0.012;
 constexpr Real kPalmRadius = 0.035;
 
 XrPalette::Config paletteConfig(int itemCount) {
@@ -153,8 +143,7 @@ void HandInteractionSystem::spawnIntoHand(FrameContext& ctx, int item,
     objects_.push_back(obj);
     heldObject_[hand] = static_cast<int>(objects_.size()) - 1;
     grip_[hand].clear();
-    carryPos_[hand] = at;   // seed the carry filter at the spawn pose
-    carryQ_[hand] = q;
+    carry_[hand].reset(at, q);   // seed the carry filter at the spawn pose
     LOG_INFO("[xr] spawned %s into %s hand (%zu objects)", def.name,
              hand == 0 ? "left" : "right", objects_.size());
 }
@@ -189,9 +178,13 @@ void HandInteractionSystem::release(FrameContext& ctx, int hand) {
 }
 
 void HandInteractionSystem::updateHandPresence(FrameContext& ctx) {
-    // Six kinematic spheres per tracked hand — the physical presence that
-    // lets an open hand shove and scatter blocks. Driven kinematically so
-    // Jolt derives real velocities (a swing imparts a swing's impulse).
+    // The articulated hand: a kinematic capsule per finger bone plus a palm
+    // sphere, driven from adaptively-filtered joints — the physical presence
+    // that lets an open hand shove, backhand, and scatter blocks with
+    // finger-shaped contacts. Kinematic drive means Jolt derives real
+    // velocities: a swing imparts a swing's impulse.
+    const Real dt = ctx.frameDelta;
+    const Real moveDt = std::max(ctx.frameDelta, 1.0 / 240.0);
     for (int h = 0; h < 2; h++) {
         const XrHand& hand = ctx.xr.hands[h];
         if (!hand.tracked) {
@@ -200,39 +193,85 @@ void HandInteractionSystem::updateHandPresence(FrameContext& ctx) {
                 // — that would batter everything on the way down).
                 const Vec3 park =
                     ctx.xr.originBase + Vec3(h == 0 ? -2 : 2, -100, 0);
-                for (int s = 0; s < kHandSpheres; s++)
-                    physics_->physicsWorld().teleport(handBodies_[h][s], park,
+                for (HandBone& bone : handBones_[h])
+                    physics_->physicsWorld().teleport(bone.body, park,
+                                                      Quat::identity());
+                if (palmBody_[h] != INVALID_PHYSICS_BODY)
+                    physics_->physicsWorld().teleport(palmBody_[h], park,
                                                       Quat::identity());
                 handActive_[h] = false;
             }
             continue;
         }
 
-        const Real alpha = 1.0 - std::exp(-ctx.frameDelta / kHandTau);
-        for (int s = 0; s < kHandSpheres; s++) {
-            const XrHandJointId joint = kHandSphereJoints[s];
-            if (!hand.joints[joint].tracked) continue;
-            const Vec3 target = handWorld(ctx, xrJointPosition(hand, joint));
+        // Filter every finger joint + wrist (position only; capsule
+        // orientation derives from the filtered endpoints).
+        const bool reacquired = !handActive_[h];
+        for (int j = XR_JOINT_WRIST; j < XR_HAND_JOINT_COUNT; j++) {
+            if (!hand.joints[j].tracked) continue;
+            const Vec3 target = handWorld(ctx, xrJointPosition(
+                hand, static_cast<XrHandJointId>(j)));
+            if (reacquired)
+                jointFilter_[h][j].reset(target, Quat::identity());
+            else
+                jointFilter_[h][j].feed(target, Quat::identity(), dt);
+        }
 
-            if (handBodies_[h][s] == INVALID_PHYSICS_BODY) {
-                handBodies_[h][s] = physics_->physicsWorld().addSphere(
-                    s == kHandSpheres - 1 ? kPalmRadius : kFingertipRadius,
-                    target, Quat::identity(), BodyMotion::Kinematic);
-                handSmooth_[h][s] = target;
-                continue;
+        // Build the bone set once, at first sighting: every finger joint
+        // whose parent is another finger joint (the wrist-rooted metacarpal
+        // bones span the palm — the palm sphere covers those).
+        if (handBones_[h].empty()) {
+            for (int j = XR_JOINT_THUMB_KNUCKLE; j < XR_HAND_JOINT_COUNT;
+                 j++) {
+                const int parent = xrHandJointParent(j);
+                if (parent < XR_JOINT_THUMB_KNUCKLE) continue;
+                if (!hand.joints[j].tracked || !hand.joints[parent].tracked)
+                    continue;
+                HandBone bone;
+                bone.jointA = parent;
+                bone.jointB = j;
+                bone.radius = (j <= XR_JOINT_THUMB_TIP) ? 0.011 : 0.009;
+                const XrBoneCapsule c = xrBoneCapsule(
+                    jointFilter_[h][parent].position(),
+                    jointFilter_[h][j].position(), bone.radius);
+                bone.body = physics_->physicsWorld().addCapsule(
+                    c.halfHeight, bone.radius, c.center, c.orientation,
+                    BodyMotion::Kinematic);
+                if (bone.body != INVALID_PHYSICS_BODY)
+                    handBones_[h].push_back(bone);
             }
-            if (!handActive_[h]) {
-                // Returning from the park: teleport back, never sweep.
-                physics_->physicsWorld().teleport(handBodies_[h][s], target,
+        }
+        if (palmBody_[h] == INVALID_PHYSICS_BODY &&
+            hand.joints[XR_JOINT_WRIST].tracked) {
+            palmBody_[h] = physics_->physicsWorld().addSphere(
+                kPalmRadius, jointFilter_[h][XR_JOINT_WRIST].position(),
+                Quat::identity(), BodyMotion::Kinematic);
+        }
+
+        for (const HandBone& bone : handBones_[h]) {
+            if (!hand.joints[bone.jointA].tracked ||
+                !hand.joints[bone.jointB].tracked)
+                continue;
+            const XrBoneCapsule c = xrBoneCapsule(
+                jointFilter_[h][bone.jointA].position(),
+                jointFilter_[h][bone.jointB].position(), bone.radius);
+            if (reacquired)
+                physics_->physicsWorld().teleport(bone.body, c.center,
+                                                  c.orientation);
+            else
+                physics_->physicsWorld().moveKinematic(bone.body, c.center,
+                                                       c.orientation, moveDt);
+        }
+        if (palmBody_[h] != INVALID_PHYSICS_BODY &&
+            hand.joints[XR_JOINT_WRIST].tracked) {
+            const Vec3 p = jointFilter_[h][XR_JOINT_WRIST].position();
+            if (reacquired)
+                physics_->physicsWorld().teleport(palmBody_[h], p,
                                                   Quat::identity());
-                handSmooth_[h][s] = target;
-                continue;
-            }
-            handSmooth_[h][s] =
-                handSmooth_[h][s] + (target - handSmooth_[h][s]) * alpha;
-            physics_->physicsWorld().moveKinematic(
-                handBodies_[h][s], handSmooth_[h][s], Quat::identity(),
-                std::max(ctx.frameDelta, 1.0 / 240.0));
+            else
+                physics_->physicsWorld().moveKinematic(palmBody_[h], p,
+                                                       Quat::identity(),
+                                                       moveDt);
         }
         handActive_[h] = true;
     }
@@ -282,9 +321,10 @@ void HandInteractionSystem::updateGrabs(FrameContext& ctx) {
             SandboxObject& obj = objects_[heldObject_[h]];
             if (pinch_[h].tracking()) {
                 // Carry: drive the kinematic body to follow the pinch point
-                // with the grip offsets preserved. The RAW hand pose is
-                // millimetre-noisy, so the target runs through a ~50ms
-                // low-pass: steady in the fingers, lag under perception.
+                // with the grip offsets preserved. The ADAPTIVE filter kills
+                // millimetre noise at rest but gets out of the way at speed
+                // — a fast carry tracks within ~1cm instead of trailing by
+                // several (device: "the response can get very laggy").
                 // Tracking loss skips all of it — the object freezes until
                 // the hand returns.
                 const Quat handQ = handOrientation(hand);
@@ -292,14 +332,12 @@ void HandInteractionSystem::updateGrabs(FrameContext& ctx) {
                 const Vec3 rawTarget =
                     handWorld(ctx, pinch_[h].pinchPoint()) +
                     handQ.rotate(obj.gripPosOffset);
-                const Real alpha =
-                    1.0 - std::exp(-ctx.frameDelta / kCarryTau);
-                carryPos_[h] = carryPos_[h] + (rawTarget - carryPos_[h]) * alpha;
-                carryQ_[h] = Quat::slerp(carryQ_[h], rawQ, alpha);
+                carry_[h].feed(rawTarget, rawQ, ctx.frameDelta);
                 physics_->physicsWorld().moveKinematic(
-                    obj.body, carryPos_[h], carryQ_[h],
+                    obj.body, carry_[h].position(), carry_[h].orientation(),
                     std::max(ctx.frameDelta, 1.0 / 240.0));
-                grip_[h].push(timeSeconds_, carryPos_[h], carryQ_[h]);
+                grip_[h].push(timeSeconds_, carry_[h].position(),
+                              carry_[h].orientation());
             }
             if (pinch_[h].released()) release(ctx, h);
             continue;
@@ -327,8 +365,7 @@ void HandInteractionSystem::updateGrabs(FrameContext& ctx) {
         obj.heldByHand = h;
         heldObject_[h] = best;
         grip_[h].clear();
-        carryPos_[h] = p;   // seed the carry filter at the grabbed pose
-        carryQ_[h] = q;
+        carry_[h].reset(p, q);   // seed the carry filter at the grabbed pose
         consumePinchUntil_ = timeSeconds_ + 0.4;
         LOG_INFO("[xr] grab %s %s (surface %.2fm)", h == 0 ? "L" : "R",
                  kItems[obj.item].name, objectSurfaceDistance(obj, at));
@@ -389,8 +426,8 @@ void HandInteractionSystem::render(FrameContext& ctx) {
         Vec3 p;
         Quat q;
         if (obj.heldByHand >= 0) {
-            p = carryPos_[obj.heldByHand];
-            q = carryQ_[obj.heldByHand];
+            p = carry_[obj.heldByHand].position();
+            q = carry_[obj.heldByHand].orientation();
         } else {
             p = obj.posPrev + (obj.posCurr - obj.posPrev) * alpha;
             q = Quat::slerp(obj.quatPrev, obj.quatCurr, alpha);
@@ -475,12 +512,15 @@ void HandInteractionSystem::onStop(FrameContext& ctx) {
     if (physics_) {
         for (const SandboxObject& obj : objects_)
             physics_->physicsWorld().removeBody(obj.body);
-        for (int h = 0; h < 2; h++)
-            for (int s = 0; s < kHandSpheres; s++)
-                if (handBodies_[h][s] != INVALID_PHYSICS_BODY) {
-                    physics_->physicsWorld().removeBody(handBodies_[h][s]);
-                    handBodies_[h][s] = INVALID_PHYSICS_BODY;
-                }
+        for (int h = 0; h < 2; h++) {
+            for (const HandBone& bone : handBones_[h])
+                physics_->physicsWorld().removeBody(bone.body);
+            handBones_[h].clear();
+            if (palmBody_[h] != INVALID_PHYSICS_BODY) {
+                physics_->physicsWorld().removeBody(palmBody_[h]);
+                palmBody_[h] = INVALID_PHYSICS_BODY;
+            }
+        }
     }
     objects_.clear();
     heldObject_[0] = heldObject_[1] = -1;
