@@ -45,6 +45,19 @@ int districtKindAt(const LotParams& p, const Vec2& q) {
     return std::max(0, std::min(4, p.hubs[best].second));
 }
 
+// The recipe library names more place types than the SIM knows: it has hotels,
+// schools, hospitals, works and parking decks, while citysim's PlaceType is
+// home/shop/office/park/civic. An unrecognised tag is dropped with a warning, so
+// those buildings would stand there with nobody able to route to them — present
+// but not part of the city. Mapping them to the nearest kind the sim models is
+// the honest stopgap until PlaceType grows.
+std::string placeTypeFor(const std::string& recipeType) {
+    if (recipeType == "hotel") return "home";
+    if (recipeType == "school" || recipeType == "hospital") return "civic";
+    if (recipeType == "work" || recipeType == "parking") return "office";
+    return recipeType;   // home, shop, office, civic, park pass through
+}
+
 }  // namespace
 
 ProgramSet programsForDistrict(int kind) {
@@ -194,7 +207,7 @@ void growLotSystemBlocks(const std::vector<Poly2>& blocks, const LotParams& para
                 lb.depth = hi.y - lo.y;
                 lb.height = bb.surfaces.levels.back().y1;
                 lb.yaw = 0;
-                lb.type = rec->placeType;
+                lb.type = placeTypeFor(rec->placeType);
                 lb.recipe = rec->name;
                 lb.baseY = baseY;
                 lb.groundY = baseY;

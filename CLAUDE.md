@@ -46,6 +46,17 @@ device, same MetalRenderer behind the PresentationSurface seam;
 `src/visionos_app/AGENTS.md` has the display contract) and
 `docs/web-build.md` (WebGPU/WASM via Emscripten).
 
+## Lot System (in progress)
+
+A replacement building pipeline lives in `src/engine/procgen/city/`
+(shape2 → shape_ops → plan_grammar → mass_stack → facade_plan → lot_program →
+site_plan → building_recipe → parcel_block → lot_mesh → lot_city). It is
+switched per level by `citysim.lotSystem`; `assets/levels/lot_lab.json` turns it
+on. **Read `docs/lot-system-handoff.md` before working on it** — it has the
+current state, the open crash, the review tooling (`tools/lot_sheets.sh` renders
+SVG sheets, including a software render of every meshed building) and the
+invariants that are easy to break.
+
 ## Planning
 
 See `docs/ROADMAP.md` for the multi-tier development plan (foundation → 3D
