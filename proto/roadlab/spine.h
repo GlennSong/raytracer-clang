@@ -90,6 +90,8 @@ public:
     Profile1D& superelevation() { return super_; }
     Profile1D& lateralOffset() { return offset_; }
     const Profile1D& elevationConst() const { return elevation_; }
+    const Profile1D& superelevationConst() const { return super_; }
+    const Profile1D& lateralOffsetConst() const { return offset_; }
 
     // Crossfall: the drainage slope from the crown outward (typically 2%). Not a
     // profile — it is a property of the cross-section shape, applied as

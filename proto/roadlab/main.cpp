@@ -9,6 +9,7 @@
 //   roadlab --city --seed 3 --report --lint
 //   roadlab --shots out/            (renders the whole demo set)
 
+#include "odr.h"
 #include "scene.h"
 #include "sim.h"
 #include <cstdio>
@@ -27,6 +28,7 @@ struct Options {
     std::string view = "top";
     std::string shotsDir;
     std::string dumpJson;
+    std::string xodrPath;
     bool city = false;
     int width = 1600, height = 1000;
     int cars = 0, peds = 0;
@@ -81,6 +83,7 @@ void usage() {
         "  --report            print a structural report\n"
         "  --lint              print design-rule violations\n"
         "  --dump <file.json>  write a summary of the built network\n"
+        "  --xodr <file.xodr>  export the network as OpenDRIVE\n"
         "  --list              list presets and demos\n");
 }
 
@@ -208,6 +211,7 @@ int main(int argc, char** argv) {
         if (matchArg(i, argc, argv, "--shots", opt.shotsDir)) continue;
         if (matchArg(i, argc, argv, "--view", opt.view)) continue;
         if (matchArg(i, argc, argv, "--dump", opt.dumpJson)) continue;
+        if (matchArg(i, argc, argv, "--xodr", opt.xodrPath)) continue;
         if (matchNum(i, argc, argv, "--width", d)) { opt.width = int(d); continue; }
         if (matchNum(i, argc, argv, "--height", d)) { opt.height = int(d); continue; }
         if (matchNum(i, argc, argv, "--cars", d)) { opt.cars = int(d); continue; }
@@ -338,6 +342,15 @@ int main(int argc, char** argv) {
                 std::printf("lint: %zu finding(s)\n", sc.lint.size());
                 for (const std::string& m : sc.lint) std::printf("  ! %s\n", m.c_str());
             }
+        }
+        if (!opt.xodrPath.empty()) {
+            std::string err;
+            OdrOptions oo;
+            oo.name = sc.name;
+            if (writeOpenDrive(sc.net, opt.xodrPath, err, oo))
+                std::printf("wrote %s\n", opt.xodrPath.c_str());
+            else
+                std::fprintf(stderr, "roadlab: %s\n", err.c_str());
         }
         if (!opt.dumpJson.empty()) {
             std::string err;

@@ -12,14 +12,16 @@ window, so it builds and runs anywhere `make` does.
 
 ```bash
 make roadlab                      # build ./roadlab
-make roadlab-test                 # 844 assertions, no framework
+make roadlab-test                 # 2406 assertions, no framework
 make roadlab-shots                # render every demo to out_roadlab/
 
 ./roadlab --demo showcase --view persp --out shot.png
+./roadlab --demo grades --view persp            # skewed junction, four grades
 ./roadlab --demo lanes --view top --focus 90 4 220
 ./roadlab --scene proto/roadlab/scenes/example.json --report --lint
 ./roadlab --city --seed 3 --sim 60 --cars 200 --peds 60 --view top
 ./roadlab --demo interchange --debug strips     # false-colour the cross-section
+./roadlab --demo interchange --xodr out.xodr    # export OpenDRIVE
 ```
 
 ---
@@ -112,6 +114,27 @@ window — the geometry is never destroyed), builds a pad polygon with rounded k
 returns, and generates a **connector road** per turning movement, so a left turn
 is a real curve of real width rather than a spline hack.
 
+### The pad surface
+
+This was the piece I expected to be hardest, and it was. A skewed junction whose
+arms arrive at different heights, grades, crossfalls and banks cannot be covered
+by an averaged plane without putting a lip at every approach.
+
+The answer is **transfinite interpolation from the boundary**. Each boundary
+vertex carries the height its own arm produced — the left and right corners of an
+arm differ, which is how crossfall and superelevation come through — and the
+interior is **mean value coordinates** over the pad polygon. MVC reproduces the
+boundary exactly, is smooth inside, and unlike the Coons patch it generalises is
+defined for any simple polygon. Points outside take the nearest boundary height,
+so the terrain meets the kerb without a step.
+
+The pad is triangulated by **ear clipping** (concave outlines from acute
+multi-arm junctions are fine) and refined until no edge exceeds ~2.5 m, so the
+interpolated surface has somewhere to curve. The `grades` demo is a deliberately
+skewed four-arm junction built to exercise exactly this; a test asserts the pad
+meets every arm at that arm's own surface height across the arm's full width, and
+that the interior has no steps.
+
 ## Markings are a shader, not geometry
 
 `surface.cpp` is a CPU reference implementation of a fragment shader, written to
@@ -181,7 +204,79 @@ finished traffic model. It adds **no new road data**:
 - Right of way reads the junction conflict table — the same table the signal
   phases were coloured from. Signals, yields, priority-stop, all-way stop and
   roundabout circulating priority all run off it.
-- Pedestrians walk the footway strips; parked cars occupy the slot rule's output.
+- Parked cars occupy the slot rule's output — the same strip the shader paints
+  bay tees on. A test asserts no parked car ends up outside a parking strip.
+
+### Routing, and the query the two-resolution graph exists for
+
+Vehicles plan with Dijkstra over the **lane** graph by travel time and follow the
+plan through junctions. That makes the second resolution earn its keep:
+`routeDemand` walks the plan to find the first road the current lane *cannot*
+reach, and how far away it is becomes the urgency behind a mandatory lane change.
+A driver who needs a lane will accept a tighter gap — but still will not cross a
+solid line, so missing an exit is possible, which is correct.
+
+The test for this is the honest one: on the interchange, `lanesReaching` for the
+off-ramp returns a non-empty **strict subset** of the mainline's lanes, and a lane
+outside that subset genuinely cannot reach the ramp. If every lane could, the
+query would be meaningless.
+
+### Pedestrians
+
+Sidewalk strips are graph edges. The links between them are either a **corner**
+(round the kerb returns, ordered by bearing so the footway actually wraps the
+intersection) or a **crossing** — and the crossings come from
+`junctionCrosswalks()`, the same call that generates the zebra paint, so a
+pedestrian can only cross where a crossing is painted.
+
+Deciding to cross is a commitment: they wait at the kerb until it is safe.
+Safety comes from two places, neither of which is new data:
+
+- at a signalised junction the pedestrian reads the **same phase table** the
+  drivers obey — walkable exactly when no movement using that arm's carriageway
+  is green. A test walks a whole cycle asserting the two agree;
+- elsewhere it is gap acceptance against real vehicles, with patience shrinking
+  the gap they will take so a busy kerb resolves instead of deadlocking.
+
+And drivers give way: a vehicle closing on an occupied crossing treats it as an
+obstacle. The crossing the driver stops for is the crossing the shader painted
+and the pedestrian walked.
+
+## OpenDRIVE export
+
+`--xodr out.xodr` writes the network as OpenDRIVE 1.7. The model was built to be
+convergent with the standard on purpose — reference line of line/arc/clothoid,
+elevation and superelevation as cubics in s, lane sections of width polynomials,
+signed lane ordinals, junctions as sets of connecting roads — so the exporter is
+mostly transcription. That is the point: if it had needed a translation layer,
+the model would have been drifting away from the one format the industry reads.
+
+Coordinates line up without a transform. This prototype is Y-up with the plan in
+XZ and heading from +X toward +Z; OpenDRIVE is Z-up with the plan in XY and
+heading from +X toward +Y. Both rotate the first plan axis toward the second and
+both put +t to the left, so `(x, z, y)` maps onto `(x, y, z)` with the same
+signs — including superelevation.
+
+Roads export over their **active window**, so a junction-trimmed arm or a split
+piece becomes a road starting at `s = 0` with every piecewise function re-based
+(`Poly3::shifted`), including re-deriving a clipped clothoid's start pose and end
+curvature. Tests assert the geometry lengths sum to each road's declared length
+and that a trimmed arm's first geometry sits at the trim pose, not the original
+road start.
+
+## Performance
+
+Terrain generation was 95% of all runtime. Three fixes gave about 8x: the surface
+normal now comes from grid heights the loop already computed rather than four
+extra evaluations of the height field per vertex; a uniform bucket index over the
+roads means "which roads are near this point" stops meaning "all of them" (which
+also speeds up every re-localisation the simulator does); and bounding-box
+rejects plus scratch reuse cut the per-junction work. The spine inverse uses a
+coarse-to-fine seed search rather than a flat scan.
+
+The urban demo's terrain went from 6.5 s to 1.2 s and the whole test suite from
+57 s to ~32 s. The route-reachability query is cached on a 0.4 s timer per
+vehicle — a driver does not re-ask the graph ten times a second either.
 
 ## Design lint
 
@@ -226,24 +321,27 @@ tests.cpp          844 assertions, invariant-focused.
 
 Honest list of what a prototype this size does not do yet.
 
-- **Junction surfaces between differently-graded approaches.** The pad's height
-  is an inverse-distance blend of the arms. A Coons patch is the right answer for
-  a skewed junction where each arm arrives at its own grade. This is the piece I
-  would prototype next; it is the one place the model is genuinely hard.
-- **Concave junction pads** are triangulated as a fan from the centroid, which
-  assumes near-convexity. Very acute multi-arm junctions will need a real
-  triangulation.
+- **No OpenDRIVE import.** Export works; reading real networks back in is the
+  highest-value next addition, because it is what would let the junction solver
+  be pointed at a real cloverleaf instead of at scenes I wrote myself.
+- **Hatching and chevrons have no OpenDRIVE equivalent** and export as `none`.
+  A faithful export would emit them as `<object>` surfaces.
+- **Very acute or self-intersecting pad outlines** fall back to a centroid fan.
+  Ear clipping handles ordinary concave pads, but a pathological boundary from a
+  near-parallel pair of arms is covered rather than solved.
 - **Strip heights do not blend through a transition.** A cross-section change
   that also changes a kerb height steps rather than ramps.
-- **`toST` is a linear scan** over the sample cache per road. Fine at prototype
-  scale; a production version wants a spatial index and a per-agent cache.
 - **No LOD, no tiling, no streaming.** The shader's distance-fade is the only LOD
   in the system. A real version would bake the procedural surface into a virtual
   texture or clipmap around the camera.
-- **The sim has no routing.** Vehicles pick successors at random. The lane graph
-  supports the real query (`lanesReaching`) but nothing drives it yet.
-- **Pedestrians walk their own road's footway** and turn around at the ends; they
-  do not cross at the crosswalks the paint generator emits.
-- **No OpenDRIVE import/export.** The model is deliberately convergent with it,
-  and this is the highest-value next addition: it would buy real-world networks
-  to test the junction solver against.
+- **Pedestrian crossings are derived from the vehicle phases** rather than having
+  their own phase with a clearance interval. Defensible, and it guarantees the
+  two agree, but it is not what a real controller does.
+- **Vehicles only yield to pedestrians on arms**, not on the connector roads
+  inside a junction — a pedestrian on a crossing is invisible to a car already
+  committed to a turn.
+- **`saveSceneJson` writes a summary, not a reloadable scene.** Authored scenes
+  round-trip through the hand-written JSON only.
+- **`toST` still has no per-agent cache.** The spatial index and the
+  coarse-to-fine seed made it cheap enough; a production version would also cache
+  the last road per agent.

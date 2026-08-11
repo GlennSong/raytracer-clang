@@ -436,6 +436,7 @@ ROADLAB_LIB_SRCS = \
 	$(ROADLAB_DIR)/raster.cpp \
 	$(ROADLAB_DIR)/props.cpp \
 	$(ROADLAB_DIR)/sim.cpp \
+	$(ROADLAB_DIR)/odr.cpp \
 	$(ROADLAB_DIR)/scene.cpp
 ROADLAB_FLAGS = -std=c++17 -Wall -Wextra -Wpedantic -pthread -O2 \
 	-isystem third_party -isystem third_party/tinygltf
@@ -460,6 +461,7 @@ roadlab-shots: roadlab
 		--out out_roadlab/lanes_driver.png
 	./roadlab --city --seed 3 --view top --width 1400 --height 1100 \
 		--sim 45 --cars 220 --peds 80 --out out_roadlab/city.png
+	./roadlab --demo showcase --xodr out_roadlab/showcase.xodr --out /dev/null --quiet
 
 clean:
 	rm -rf $(BUILD_DIR) $(TARGET) $(TEST_TARGET) planet_preview out_*.png \

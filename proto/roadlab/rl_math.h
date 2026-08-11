@@ -102,6 +102,16 @@ struct Poly3 {
     double eval(double ds) const { return a + ds * (b + ds * (c + ds * d)); }
     double deriv(double ds) const { return b + ds * (2.0 * c + ds * 3.0 * d); }
 
+    // The same cubic measured from a new origin `c` further along: q(u) = p(u+c).
+    // Needed whenever a piecewise function has to be re-based — clipping a road
+    // to a window, or exporting a section that starts partway through a piece.
+    Poly3 shifted(double c) const {
+        return {a + c * (b + c * (this->c + c * d)),
+                b + c * (2.0 * this->c + 3.0 * d * c),
+                this->c + 3.0 * d * c,
+                d};
+    }
+
     static Poly3 constant(double v) { return {v, 0, 0, 0}; }
     static Poly3 linear(double v0, double v1, double len) {
         if (len <= 1e-9) return constant(v1);

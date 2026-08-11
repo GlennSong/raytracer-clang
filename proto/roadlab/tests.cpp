@@ -10,6 +10,7 @@
 #include "builders.h"
 #include "junction.h"
 #include "network.h"
+#include "odr.h"
 #include "profile.h"
 #include "props.h"
 #include "scene.h"
@@ -967,6 +968,140 @@ void testPedestrianSignalsAgreeWithDrivers() {
     check(sawWait, "and blocked at some point in the cycle");
 }
 
+// --- OpenDRIVE ------------------------------------------------------------
+
+namespace {
+
+// Value of the first `key="..."` at or after `from`, or NaN.
+double attrAfter(const std::string& doc, const char* key, size_t from, size_t limit) {
+    std::string needle = std::string(key) + "=\"";
+    size_t at = doc.find(needle, from);
+    if (at == std::string::npos || at > limit) return std::nan("");
+    at += needle.size();
+    return std::atof(doc.c_str() + at);
+}
+
+}  // namespace
+
+void testPolyShift() {
+    group("polynomial rebasing");
+    // Re-basing a cubic must be exact, because every clipped profile in the
+    // exporter depends on it.
+    Poly3 p{1.5, -0.25, 0.03, -0.0007};
+    for (double c : {0.0, 3.0, 41.7}) {
+        Poly3 q = p.shifted(c);
+        for (double u : {0.0, 1.0, 7.5, 30.0}) {
+            checkNear(q.eval(u), p.eval(u + c), 1e-9, "shifted cubic matches the original");
+            checkNear(q.deriv(u), p.deriv(u + c), 1e-9, "shifted derivative matches too");
+        }
+    }
+}
+
+void testOpenDriveExport() {
+    group("OpenDRIVE export");
+    for (const std::string& name : {std::string("lanes"), std::string("interchange"),
+                                    std::string("roundabout"), std::string("grades")}) {
+        Scene sc;
+        buildDemo(name, sc);
+        finalizeScene(sc, false, false);
+        OdrOptions oo;
+        oo.name = name;
+        std::string doc = openDriveString(sc.net, oo);
+
+        check(doc.find("<OpenDRIVE>") != std::string::npos, "the document has a root element");
+        check(doc.find("</OpenDRIVE>") != std::string::npos, "and closes it");
+        check(doc.find("revMajor=\"1\"") != std::string::npos, "it declares a version");
+        check(doc.find("nan") == std::string::npos, "no NaNs leaked into the file");
+        check(doc.find("inf") == std::string::npos, "no infinities either");
+
+        // One <road> per exported road, and every one carries geometry.
+        size_t roads = 0, planViews = 0;
+        for (size_t at = doc.find("<road "); at != std::string::npos;
+             at = doc.find("<road ", at + 1))
+            ++roads;
+        for (size_t at = doc.find("<planView>"); at != std::string::npos;
+             at = doc.find("<planView>", at + 1))
+            ++planViews;
+        size_t expected = 0;
+        for (const Road& r : sc.net.roads())
+            if (r.activeLength() >= 1e-3) ++expected;
+        check(roads == expected, "every road with length is exported");
+        check(planViews == roads, "every road has a plan view");
+
+        // THE structural invariant: the geometry pieces of a road must add up to
+        // the road's declared length. A clipped clothoid getting its length or
+        // its re-derived start pose wrong shows up here immediately.
+        size_t at = doc.find("<road ");
+        while (at != std::string::npos) {
+            size_t headEnd = doc.find('>', at);
+            double roadLen = attrAfter(doc, "length", at, headEnd);
+            size_t pvStart = doc.find("<planView>", at);
+            size_t pvEnd = doc.find("</planView>", at);
+            check(pvStart != std::string::npos && pvEnd != std::string::npos,
+                  "the road has a plan view");
+            double sum = 0;
+            for (size_t g = doc.find("<geometry ", pvStart); g != std::string::npos && g < pvEnd;
+                 g = doc.find("<geometry ", g + 1)) {
+                size_t gEnd = doc.find('>', g);
+                sum += attrAfter(doc, "length", g, gEnd);
+            }
+            checkNear(sum, roadLen, 0.02, "geometry lengths sum to the road length");
+            at = doc.find("<road ", pvEnd);
+        }
+
+        // Junction connections must name roads that exist in the file.
+        for (size_t c = doc.find("<connection "); c != std::string::npos;
+             c = doc.find("<connection ", c + 1)) {
+            size_t cEnd = doc.find('>', c);
+            double incoming = attrAfter(doc, "incomingRoad", c, cEnd);
+            double connecting = attrAfter(doc, "connectingRoad", c, cEnd);
+            check(incoming >= 0 && incoming < sc.net.roadCount(), "incomingRoad exists");
+            check(connecting >= 0 && connecting < sc.net.roadCount(), "connectingRoad exists");
+            check(sc.net.road(int(connecting)).junctionId >= 0,
+                  "the connecting road is marked as a junction connector");
+        }
+    }
+}
+
+void testOpenDriveClipping() {
+    group("OpenDRIVE clipping");
+    // A junction-trimmed arm exports as a road starting at s = 0. The exported
+    // start pose must be the pose at the TRIM, not at the original road start —
+    // getting this wrong silently shifts every trimmed road in the file.
+    Scene sc;
+    buildDemo("grades", sc);
+    finalizeScene(sc, false, false);
+    std::string doc = openDriveString(sc.net);
+
+    const Junction& j = sc.net.junction(0);
+    check(!j.arms.empty(), "the demo has arms");
+    for (const JunctionArm& arm : j.arms) {
+        const Road& r = sc.net.road(arm.road);
+        check(arm.trim > 0.0, "the arm really was trimmed");
+        // Find this road's block and its first geometry.
+        std::string needle = "id=\"" + std::to_string(r.id) + "\" junction=";
+        size_t at = doc.find(needle);
+        check(at != std::string::npos, "the trimmed arm is in the file");
+        if (at == std::string::npos) continue;
+        size_t g = doc.find("<geometry ", at);
+        size_t gEnd = doc.find('>', g);
+        double s0 = attrAfter(doc, "s", g, gEnd);
+        double x = attrAfter(doc, "x", g, gEnd);
+        double y = attrAfter(doc, "y", g, gEnd);
+        Frame f = r.spine.frameAt(r.begin());
+        checkNear(s0, 0.0, 1e-9, "an exported road starts at s = 0");
+        checkNear(x, f.planPos.x, 1e-6, "the first geometry starts at the trimmed pose (x)");
+        checkNear(y, f.planPos.y, 1e-6, "the first geometry starts at the trimmed pose (y)");
+        // The declared length is the ACTIVE length, not the whole spine.
+        size_t roadTag = doc.rfind("<road ", at);
+        size_t headEnd = doc.find('>', roadTag);
+        checkNear(attrAfter(doc, "length", roadTag, headEnd), r.activeLength(), 1e-6,
+                  "the exported length is the active window, not the whole spine");
+        check(r.activeLength() < r.spineLength() - 0.5,
+              "which is genuinely shorter than the spine");
+    }
+}
+
 // --- end to end -----------------------------------------------------------
 
 void testAllDemosBuild() {
@@ -1049,6 +1184,9 @@ int main() {
     testSignalsStopTraffic();
     testPedestrianGraph();
     testPedestrianSignalsAgreeWithDrivers();
+    testPolyShift();
+    testOpenDriveExport();
+    testOpenDriveClipping();
     testAllDemosBuild();
     testGeneratedCity();
 
