@@ -3,7 +3,8 @@
 #include "parcel.h"          // subdivideBlock, Lot, ParcelParams
 #include "road_net.h"        // RoadNet + navRoadGraph (growLotBuildingsOnNets)
 #include "road_network.h"    // RoadGraph (edge blocks walk its chains)
-#include "architect.h"       // DistrictMap + archetype tables (the architect pass)
+#include "architect.h"
+#include "lot_city.h"     // the Lot System pass (LotParams::lotSystem)       // DistrictMap + archetype tables (the architect pass)
 #include "shape_grammar.h"   // scopeFromFootprint, growBuilding — REAL buildings
 #include "road_mesh.h"       // triangulatePolygon (lot-shaped park pads)
 #include "street_kit.h"      // streetLamp (plaza lamp posts)
@@ -2371,6 +2372,15 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
                 if (found) break;
             }
         }
+    }
+    if (lp.lotSystem) {
+        // The new pipeline, block for block. Same outputs, so the loader, the
+        // colliders, the chunker and the HLOD never learn which pass ran.
+        growLotSystemBlocks(blocks, lp, &r.plan, &r.parts,
+                            wantFlatParts ? &r.flatParts : nullptr, &r.lots);
+        LOG_INFO << "[citylots] lot system: " << blocks.size() << " blocks -> "
+                 << r.lots.size() << " lots";
+        return r;
     }
     r.lots = growLotBuildings(blocks, lp, &r.plan, &r.parts, &rgSampled,
                               roadClearance,

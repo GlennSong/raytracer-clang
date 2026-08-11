@@ -104,6 +104,13 @@ struct LotParams {
     Real parcelLotDepth = -1;       // stock 28 (ParcelParams::lotDepth)
     Real parcelCourtMinArea = -1;   // stock 400 (ParcelParams::courtMinArea)
     uint32_t seed = 1;
+    // THE LOT SYSTEM (docs/lot-system-plan.md §15.3). Off keeps the shipped
+    // pass exactly as it is; on routes blocks through parcel_block ->
+    // lot_program -> site_plan -> building_recipe -> lot_mesh instead. Both
+    // fill the same LotBuilding records and the same PartId-merged parts, so
+    // nothing downstream changes — which is what makes it safe to flip per
+    // level while the old path still ships.
+    bool lotSystem = false;
     // TERRAIN sampler (world y at x,z): buildings grow from their graded pad
     // plane (the ENTRANCE-side grade, so the front door sits level with the
     // sidewalk it faces), park/green pads drape per-vertex, and

@@ -861,6 +861,58 @@ assert on distributions, not just on single outputs, are what caught it.
 
 ---
 
+## 12a. The bridge to the engine — what it took
+
+The system described a building; nothing turned that description into triangles.
+`lot_mesh` does, and `lot_city` runs the whole chain per block.
+
+The decisive design choice is that both emit into the types the city path
+ALREADY speaks — `BuildingMesh` parts keyed by `PartId`, `LotBuilding` records,
+the LOD1 twin, the HLOD proxy. The loader, the renderer, the procedural surface
+bake, the box colliders, the chunker and the editor's save/load round trip all
+consume those today, so a building described the new way needs no new code
+anywhere downstream, and `LotParams::lotSystem` can switch a level between the
+two pipelines with everything else none the wiser. A migration that needs a
+fork is a migration that never lands.
+
+What the wiring found, all of it invisible until geometry existed:
+
+* **The engine's winding convention is not the obvious one.** `MeshBuilder::
+  emitQuad` orders indices so `cross(b - a, c - a)` points AGAINST the shading
+  normal. Every mesh in the engine is built that way. Hand-wound slabs that
+  disagreed were backfacing against the whole world — and it does not look like
+  a winding bug, it looks like a hole in the roof.
+* **A dense field contour is a latent performance bomb.** Harmless while it is
+  only drawn on an SVG sheet; ruinous once a mass stack repeats it per storey
+  and a mesher extrudes every edge. A 24-storey tower whose taper went through
+  the sampled field carried 8 684 plan edges and meshed to **13.8 million**
+  triangles. Every field result is refit as arcs on the way out now: the same
+  tower is 20 000 triangles.
+* **`fitArcs` was not idempotent.** Fitting a loop that already carries arcs
+  re-derived each arc from its two endpoints — which is a chord — so a second
+  pass silently flattened every curve. It now fits over the TESSELLATED loop, so
+  a span crossing an arc has real samples to measure against, and a span
+  covering exactly one input edge keeps that edge verbatim.
+* **Fitting twice costs shape.** The second pass has only the first pass's
+  output to measure against, and each round trip through the raster loses a
+  little more. The field takes the caller's wall minimum instead, and fits once.
+* **A face is not always a block.** Where the road fill fails, `extractBlocks`
+  hands back a face a kilometre across; parcelling that at house grain is
+  thousands of buildings and gigabytes of triangles, and it OOM-killed the first
+  end-to-end run. A face far over its district's grain is now reported and left
+  unbuilt.
+
+Reviewed the same way the plans were: `tools/lot_mesh_sheet.cpp` renders every
+meshed building isometrically to SVG with a painter's sort, because there is no
+GPU on the machine that generates them and "it compiles and the triangle count
+is plausible" is not a check that a building looks like a building. It caught
+the inverted cull and the missing roofs in one glance.
+
+Measured: 266 triangles for a cottage, ~2 000 for a walkup, ~20 000 for a
+36-storey tower. The three detail levels of a glass tower are 22 546 / 756 / 10.
+
+---
+
 ## 13. Risks
 
 * **The 2D kernel is the crux.** Robust polygon booleans are a classic source

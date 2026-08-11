@@ -375,13 +375,11 @@ Shape2 blendDisc(const Shape2& base, const Vec2& at, Real r, Real k) {
     // Fine enough that the contour, not the sampling, is what the fit sees;
     // coarse enough that a 60 m plate does not rasterize a million cells.
     const Real cell = std::max(Real(0.15), std::min(Real(0.45), r * 0.05));
-    std::vector<Shape2> b = smoothUnion(base, circleShape(at, r), k, cell);
-    if (b.empty()) return base;
-    // Straight out of the field a blend is hundreds of half-metre chords. Refit
-    // it as the arcs it actually is, at the sampling's own accuracy — otherwise
-    // every wall is shorter than a door and the mass stack multiplies the
-    // vertex count by the storey count.
-    return fitArcs(largest(b), cell * 0.9, 3.0);
+    // The field refits its own result on the way out; asking for the plan's
+    // wall minimum THERE means one fit rather than two, and a second fit has
+    // only the first one's output to measure against.
+    std::vector<Shape2> b = smoothUnion(base, circleShape(at, r), k, cell, 3.0);
+    return b.empty() ? base : largest(b);
 }
 
 // The outward normal at the midpoint of edge i, and that midpoint.

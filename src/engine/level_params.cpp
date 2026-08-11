@@ -180,6 +180,10 @@ void readLotGrowParams(const json& cityJson,
     lots.midRadius = cityJson.value("midtownRadius", 135.0);
     lots.plinth = cityJson.value("plinth", lots.plinth);   // base height above the pad
     lots.hubRadius = cityJson.value("hubRadius", lots.hubRadius);
+    // The Lot System (docs/lot-system-plan.md §15.3). One flag, read in the
+    // SHARED reader so the editor and the game cannot grow different cities —
+    // which is the mistake this function exists to prevent.
+    lots.lotSystem = cityJson.value("lotSystem", lots.lotSystem);
     // Level-authored parcel grain ("parcel", 8km-city P3): piedmont-scale metros
     // lay 150 m+ blocks, so the level can ask for bigger lots. Six knobs only;
     // absent = the compiled-in district tuning, untouched (city_lots rescales

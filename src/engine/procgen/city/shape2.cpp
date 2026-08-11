@@ -374,19 +374,59 @@ Real spanLength(const std::vector<Vec2>& p, std::size_t s, std::size_t e,
 }  // namespace
 
 Loop2 fitArcs(const Loop2& loop, Real tol, Real minEdge) {
-    const std::size_t n = loop.size();
-    if (n < 8 || tol <= 0) return loop;
+    const std::size_t nEdges = loop.size();
+    if (nEdges < 3 || tol <= 0) return loop;
 
-    std::vector<Vec2> p(n);
-    std::vector<bool> hardBreak(n, false);   // no span may span PAST vertex i
-    for (std::size_t i = 0; i < n; ++i) p[i] = loop.edges[i].a;
+    // Fit over the TESSELLATED loop, not over its vertices. A loop that already
+    // carries arcs has almost no vertices to fit — so fitting the vertex ring
+    // re-derives each arc from its two endpoints, which is a chord, and a
+    // second pass silently flattens every curve. Sampling the arcs gives every
+    // span real points to measure against, which makes the fit idempotent and
+    // lets a short arc fragment be absorbed like any other short wall.
+    std::vector<Vec2> p;
+    std::vector<int> srcEdge;      // which input edge each sample came from
+    std::vector<bool> atVertex;    // is this sample an original vertex?
+    const Real sampleTol = std::max(tol * 0.35, Real(0.01));
+    auto edgeLen = [&](std::size_t i) {
+        const ArcGeom g = arcGeom(loop.start(i), loop.end(i), loop.bulge(i));
+        return g.straight ? (loop.end(i) - loop.start(i)).length()
+                          : std::fabs(g.radius * g.sweep);
+    };
+    for (std::size_t i = 0; i < nEdges; ++i) {
+        const ArcGeom g = arcGeom(loop.start(i), loop.end(i), loop.bulge(i));
+        int steps = 1;
+        if (!g.straight && g.radius > 1e-6) {
+            const Real ratio =
+                std::max(Real(-1), std::min(Real(1), 1.0 - sampleTol / g.radius));
+            const Real maxStep = 2.0 * std::acos(ratio);
+            steps = std::max(1, static_cast<int>(std::ceil(std::fabs(g.sweep) /
+                                                           std::max(maxStep, Real(1e-4)))));
+        }
+        for (int k = 0; k < steps; ++k) {
+            p.push_back(arcPoint(loop.start(i), loop.end(i), loop.bulge(i),
+                                 static_cast<Real>(k) / steps));
+            srcEdge.push_back(static_cast<int>(i));
+            atVertex.push_back(k == 0);
+        }
+    }
+    const std::size_t n = p.size();
+    if (n < 8) return loop;
+
+    std::vector<bool> hardBreak(n, false);   // no span may span PAST sample i
     for (std::size_t i = 0; i < n; ++i) {
-        const std::size_t prev = (i + n - 1) % n;
-        // An authored arc is exact; a tag change is a real boundary. Neither is
-        // something a fit is allowed to smear across.
-        if (std::fabs(loop.bulge(i)) > kEps ||
-            std::fabs(loop.bulge(prev)) > kEps ||
-            loop.edges[i].tag != loop.edges[prev].tag)
+        if (!atVertex[i]) continue;
+        const std::size_t e = static_cast<std::size_t>(srcEdge[i]);
+        const std::size_t prev = (e + nEdges - 1) % nEdges;
+        // An arc long enough to be a wall is a DESIGNED curve and survives the
+        // fit untouched. An arc shorter than the floor the caller asked for is
+        // a fragment — usually left by an earlier fit — and protecting it would
+        // make the floor unenforceable. A tag change is always a boundary:
+        // merging a street wall into a rear one would hand the facade grammar a
+        // wall with no answer to "what do I face".
+        auto keep = [&](std::size_t x) {
+            return std::fabs(loop.bulge(x)) > kEps && edgeLen(x) >= minEdge;
+        };
+        if (keep(e) || keep(prev) || loop.edges[e].tag != loop.edges[prev].tag)
             hardBreak[i] = true;
     }
 
@@ -496,8 +536,14 @@ Loop2 fitArcs(const Loop2& loop, Real tol, Real minEdge) {
     for (const Span& sp : spans) {
         Edge2 e;
         e.a = p[sp.s];
-        e.bulge = sp.bulge;
-        e.tag = loop.edges[sp.s].tag;
+        // A span that covers exactly ONE input edge, end to end, keeps that
+        // edge verbatim rather than a re-derived approximation of it — an
+        // authored arc comes back bit-identical.
+        const bool whole = atVertex[sp.s] && atVertex[sp.e] &&
+                           (srcEdge[sp.e] + static_cast<int>(nEdges) -
+                            srcEdge[sp.s]) % static_cast<int>(nEdges) == 1;
+        e.bulge = whole ? loop.edges[srcEdge[sp.s]].bulge : sp.bulge;
+        e.tag = loop.edges[srcEdge[sp.s]].tag;
         out.edges.push_back(e);
     }
     return out;

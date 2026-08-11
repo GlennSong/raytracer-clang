@@ -986,11 +986,26 @@ std::vector<Poly2> contour(const Field2& f, Real level) {
 
 namespace {
 
-std::vector<Shape2> shapesFromContour(std::vector<Poly2> loops) {
+// EVERY field result is refit before it leaves. A marching-squares contour is
+// a tessellation whose source is gone — hundreds of chords a fraction of a
+// metre long — and handing that back as a Shape2 is a latent bomb: harmless
+// while it is only drawn, ruinous the moment a mass stack repeats it once per
+// storey and a mesher extrudes each edge. Measured before this: a 24-storey
+// tower whose taper went through the field had 8 684 plan edges and meshed to
+// 13.8 MILLION triangles.
+//
+// The refit is a RECOVERY, not an approximation — the contour of an offset
+// circle really is an arc — so it costs accuracy nothing. `tol` tracks the
+// sampling, because resolving finer than the samples only fits noise.
+std::vector<Shape2> shapesFromContour(std::vector<Poly2> loops, Real cell,
+                                      Real minEdge = 0) {
     std::vector<Loop2> ls;
     ls.reserve(loops.size());
+    const Real floorLen = minEdge > 0 ? minEdge : cell * 2.5;
     for (const Poly2& p : loops)
-        if (p.size() >= 3) ls.push_back(loopFromPoly(p));
+        if (p.size() >= 3)
+            ls.push_back(fitArcs(loopFromPoly(p), std::max(Real(0.02), cell * 0.9),
+                                 floorLen));
     return assembleShapes(std::move(ls));
 }
 
@@ -1003,7 +1018,7 @@ std::vector<Shape2> fieldOffset(const Shape2& shape, Real d, Real cell) {
     Field2 f = rasterize({shape}, c, std::fabs(d) * 1.5 + c * 4);
     // sdf < 0 inside, so the offset region is {sdf <= d}: positive d grows.
     std::vector<Poly2> loops = contour(f, d);
-    return shapesFromContour(std::move(loops));
+    return shapesFromContour(std::move(loops), c);
 }
 
 std::vector<Shape2> fieldBool(const std::vector<Shape2>& a,
@@ -1030,11 +1045,11 @@ std::vector<Shape2> fieldBool(const std::vector<Shape2>& a,
             }
             f.d[static_cast<std::size_t>(y) * f.nx + x] = v;
         }
-    return shapesFromContour(contour(f, 0.0));
+    return shapesFromContour(contour(f, 0.0), cell);
 }
 
 std::vector<Shape2> smoothUnion(const Shape2& a, const Shape2& b, Real k,
-                                Real cell) {
+                                Real cell, Real minEdge) {
     if (k <= 0) return unite(a, b);
     std::vector<Shape2> all{a, b};
     Field2 fa = rasterize({a}, cell, k * 2 + cell * 4);
@@ -1052,7 +1067,7 @@ std::vector<Shape2> smoothUnion(const Shape2& a, const Shape2& b, Real k,
             f.d[static_cast<std::size_t>(y) * f.nx + x] =
                 db * (1 - h) + da * h - k * h * (1 - h);
         }
-    return shapesFromContour(contour(f, 0.0));
+    return shapesFromContour(contour(f, 0.0), cell, minEdge);
 }
 
 }  // namespace engine

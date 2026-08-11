@@ -147,8 +147,15 @@ std::vector<Shape2> fieldOffset(const Shape2& shape, Real d, Real cell = 0.25);
 // Smooth (blended) union — the "SDF join a circle onto the end of this wing"
 // the brief asked for. `k` is the blend radius in metres; 0 is a hard union.
 // Only the field can do this: a blend is not expressible in loop algebra.
+// `minEdge` is the shortest wall the caller can build with. Every field result
+// is refit as arcs on the way out (a contour is a tessellation whose source is
+// gone), and the refit will absorb anything below this floor — so a caller that
+// needs plan-scale walls says so HERE rather than refitting afterwards. Fitting
+// twice is not free: the second pass has only the first pass's output to
+// measure against, and each round trip through the raster loses a little more
+// of the shape. 0 = derive a floor from the cell size.
 std::vector<Shape2> smoothUnion(const Shape2& a, const Shape2& b, Real k,
-                                Real cell = 0.25);
+                                Real cell = 0.25, Real minEdge = 0);
 
 // --- assembly --------------------------------------------------------------
 

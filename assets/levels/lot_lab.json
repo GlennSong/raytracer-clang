@@ -1,0 +1,204 @@
+{
+ "_comment": "THE LOT SYSTEM, in engine (docs/lot-system-plan.md 15.3). The same streets piedmont_mini lays, but the buildings come from the new pipeline: parcel_block cuts the lots, lot_program says what belongs on each, site_plan allocates the zones, building_recipe builds the mass and lot_mesh turns it into triangles. One flag (citysim.lotSystem) chooses the pass; everything downstream - colliders, chunking, LOD, the editor round trip - is the same either way, which is what makes the migration a flag rather than a fork. Set lotSystem false to A/B against the shipped path on identical streets.",
+ "citysim": {
+  "buildLots": true,
+  "cars": 0,
+  "debugWidgets": true,
+  "detailDistance": 300,
+  "downtownRadius": 300,
+  "facadeDistance": 900,
+  "hubRadius": 320,
+  "lotSystem": true,
+  "midtownRadius": 650,
+  "pedestrians": 0,
+  "planOnly": false,
+  "plinth": 0.45,
+  "seed": 7,
+  "showPlan": false,
+  "sidewalk": 4.0,
+  "vehicles": "vehicles.lua",
+  "wander": false
+ },
+ "entities": [
+  {
+   "id": 2,
+   "name": "streets",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "road": {
+    "color": [
+     0.09,
+     0.09,
+     0.1
+    ],
+    "corner_radius": 3.0,
+    "crosswalks": true,
+    "curb": 0.16,
+    "generate": {
+     "ambient_per_500": 5,
+     "artery_width": 17,
+     "backbone": "arterial",
+     "block_size": 220,
+     "collector_width": 13,
+     "corridor_freeways": false,
+     "corridor_spacing": 240,
+     "curviness": 0.25,
+     "freeway_width": 17,
+     "freeways": false,
+     "influence": 800,
+     "interchange_spacing": 600,
+     "kill_radius": 300,
+     "kind": "metro",
+     "loop_max": 1300,
+     "loop_min": 550,
+     "max_slope": 0.32,
+     "merge_radius": 200,
+     "min_block_edge": 150,
+     "min_road_clearance": 0.9,
+     "min_road_len": 30,
+     "seed": 7,
+     "seg_length": 120,
+     "sites": [
+      {
+       "block_size": 200,
+       "center": {
+        "x": 0,
+        "z": 0
+       },
+       "density": 1.0,
+       "hotspots": 5,
+       "radius": 520
+      },
+      {
+       "block_size": 150,
+       "center": {
+        "x": 700,
+        "z": -150
+       },
+       "density": 0.6,
+       "hotspots": 2,
+       "kind_bias": "oldtown",
+       "radius": 200
+      }
+     ],
+     "street_width": 12.0
+    },
+    "lift": 0.08,
+    "markings": true,
+    "sidewalk": 3.5,
+    "width": 12.0
+   },
+   "shape": "road"
+  }
+ ],
+ "environment": {
+  "fog": {
+   "color": [
+    0.72,
+    0.79,
+    0.88
+   ],
+   "density": 0.0025,
+   "heightFalloff": 0.01
+  },
+  "skyColor": [
+   0.55,
+   0.68,
+   0.86
+  ]
+ },
+ "lighting": {
+  "ambientMultiplier": 0.6,
+  "exposure": 0.5,
+  "sun": {
+   "castsShadow": true,
+   "color": [
+    1.0,
+    0.96,
+    0.86
+   ],
+   "direction": [
+    0.42,
+    0.52,
+    -0.5
+   ],
+   "intensity": 8.0
+  }
+ },
+ "name": "Lot Lab",
+ "player": {
+  "collider": {
+   "halfHeight": 0.8,
+   "radius": 0.3,
+   "shape": "capsule"
+  },
+  "friction": 0.5,
+  "position": [
+   0,
+   2,
+   260
+  ]
+ },
+ "render": {
+  "maxFoliageInstances": 32768,
+  "maxInstances": 16384,
+  "maxShadowInstances": 49152
+ },
+ "terrain": {
+  "cdlod": {
+   "gridRes": 32,
+   "numLods": 6,
+   "worldHalf": 900
+  },
+  "erode": true,
+  "erodeDroplets": 120000,
+  "erodeRadius": 4,
+  "erodeRes": 800,
+  "erodeTalus": 1.0,
+  "erodeThermal": 14,
+  "heightScale": 15,
+  "material": {
+   "albedo": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "roughness": 1.0
+  },
+  "mountainAlongRange": true,
+  "mountainHeight": 260,
+  "mountainMaskHi": 0.4,
+  "mountainMaskLo": -0.1,
+  "mountainMaskScale": 0.001,
+  "mountainScale": 0.002,
+  "noiseScale": 0.0011,
+  "octaves": 6,
+  "rangeHeight": 260,
+  "rangeSpine": [
+   [
+    -800,
+    800
+   ],
+   [
+    -850,
+    0
+   ],
+   [
+    -780,
+    -800
+   ]
+  ],
+  "rangeVariation": 0.7,
+  "rangeWidth": 300,
+  "resolution": 900,
+  "rockLine": 140,
+  "seed": 23,
+  "size": 1800,
+  "snowLine": 330,
+  "warp": 0.35
+ },
+ "version": 1
+}
