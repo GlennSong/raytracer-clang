@@ -157,6 +157,49 @@ std::vector<int> LaneGraph::lanesReaching(int fromNode, int targetRoad, int maxD
     return result;
 }
 
+// --- spatial index --------------------------------------------------------
+
+void RoadIndex::build(const std::vector<Road>& roads, double pad, double cellSize) {
+    cells_.clear();
+    empty_.clear();
+    cell_ = std::max(8.0, cellSize);
+    if (roads.empty()) {
+        nx_ = nz_ = 0;
+        return;
+    }
+    Vec2 hi{-1e300, -1e300};
+    lo_ = {1e300, 1e300};
+    for (const Road& r : roads) {
+        Vec2 a, b;
+        r.spine.planBounds(a, b);
+        lo_.x = std::min(lo_.x, a.x - pad);
+        lo_.y = std::min(lo_.y, a.y - pad);
+        hi.x = std::max(hi.x, b.x + pad);
+        hi.y = std::max(hi.y, b.y + pad);
+    }
+    nx_ = std::max(1, std::min(2048, int((hi.x - lo_.x) / cell_) + 1));
+    nz_ = std::max(1, std::min(2048, int((hi.y - lo_.y) / cell_) + 1));
+    cells_.assign(size_t(nx_) * size_t(nz_), {});
+    for (const Road& r : roads) {
+        Vec2 a, b;
+        r.spine.planBounds(a, b);
+        int i0 = std::max(0, int((a.x - pad - lo_.x) / cell_));
+        int i1 = std::min(nx_ - 1, int((b.x + pad - lo_.x) / cell_));
+        int k0 = std::max(0, int((a.y - pad - lo_.y) / cell_));
+        int k1 = std::min(nz_ - 1, int((b.y + pad - lo_.y) / cell_));
+        for (int k = k0; k <= k1; ++k)
+            for (int i = i0; i <= i1; ++i) cells_[size_t(k) * size_t(nx_) + size_t(i)].push_back(r.id);
+    }
+}
+
+const std::vector<int>& RoadIndex::near(Vec2 p) const {
+    if (cells_.empty()) return empty_;
+    int i = int((p.x - lo_.x) / cell_);
+    int k = int((p.y - lo_.y) / cell_);
+    if (i < 0 || k < 0 || i >= nx_ || k >= nz_) return empty_;
+    return cells_[size_t(k) * size_t(nx_) + size_t(i)];
+}
+
 // --- network --------------------------------------------------------------
 
 int Network::addRoad(Road r) {
@@ -219,6 +262,7 @@ int Network::splitRoad(int roadId, double s) {
 void Network::build() {
     for (Junction& j : junctions_) buildJunction(*this, j);
     buildLaneGraph();
+    index_.build(roads_);
 }
 
 void Network::linkRoadToRoad(int roadA, bool aAtEnd, int roadB, bool bAtStart,
@@ -643,7 +687,17 @@ std::vector<std::string> Network::validate() const {
 bool Network::sample(Vec2 planPoint, RoadHit& hit, double maxDistance) const {
     bool found = false;
     double best = 1e300;
-    for (const Road& r : roads_) {
+    // The index narrows this to the handful of roads that could possibly matter;
+    // without it every query walks the whole network.
+    static thread_local std::vector<int> all;
+    const std::vector<int>* candidates = &roadsNear(planPoint);
+    if (index_.empty()) {
+        all.clear();
+        for (const Road& r : roads_) all.push_back(r.id);
+        candidates = &all;
+    }
+    for (int rid : *candidates) {
+        const Road& r = roads_[size_t(rid)];
         Vec2 lo, hi;
         r.spine.planBounds(lo, hi);
         double pad = 40.0;

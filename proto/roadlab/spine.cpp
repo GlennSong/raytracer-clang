@@ -285,9 +285,24 @@ bool Spine::toST(Vec2 planPoint, double& s, double& t, double sTolerance) const 
     // Coarse: nearest cached sample. Fine: Newton on d/ds |P - C(s)|^2 = 0, whose
     // derivative includes the curvature term so it converges inside tight arcs
     // too.
+    // Coarse-to-fine over the sample cache. A flat scan is O(n) and this runs
+    // per terrain vertex per road, which made ground generation the slowest
+    // thing in the system; a sqrt-stride pass then a local refine is O(2*sqrt(n))
+    // and finds the same seed for any curve that is locally well behaved.
+    const size_t n = samples_.size();
+    size_t stride = std::max<size_t>(1, size_t(std::sqrt(double(n))));
     size_t best = 0;
     double bestD = 1e300;
-    for (size_t i = 0; i < samples_.size(); ++i) {
+    for (size_t i = 0; i < n; i += stride) {
+        double d = lengthSq(planPoint - samples_[i].planPos);
+        if (d < bestD) {
+            bestD = d;
+            best = i;
+        }
+    }
+    size_t lo = best > stride ? best - stride : 0;
+    size_t hi = std::min(n - 1, best + stride);
+    for (size_t i = lo; i <= hi; ++i) {
         double d = lengthSq(planPoint - samples_[i].planPos);
         if (d < bestD) {
             bestD = d;

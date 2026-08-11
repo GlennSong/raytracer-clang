@@ -266,6 +266,19 @@ double terrainHeightAt(const Network& net, const TerrainParams& p, double x, dou
     // intersection, which read as a black wedge in the render.
     for (const Junction& j : net.junctions()) {
         if (j.boundary.size() < 3) continue;
+        // Bounding-box reject first. polygonDistance walks every edge, and this
+        // runs per terrain vertex per junction — without the cheap test in front
+        // of it, ground generation is the slowest thing in the whole system.
+        Vec2 lo{1e300, 1e300}, hi{-1e300, -1e300};
+        for (Vec2 q : j.boundary) {
+            lo.x = std::min(lo.x, q.x);
+            lo.y = std::min(lo.y, q.y);
+            hi.x = std::max(hi.x, q.x);
+            hi.y = std::max(hi.y, q.y);
+        }
+        if (x < lo.x - p.slopeWidth || x > hi.x + p.slopeWidth || z < lo.y - p.slopeWidth ||
+            z > hi.y + p.slopeWidth)
+            continue;
         double d = polygonDistance(j.boundary, plan);
         if (d > p.slopeWidth) continue;
         double w = d <= 0 ? 1.0 : 1.0 - smoothstepd(0.0, p.slopeWidth, d);
@@ -277,7 +290,8 @@ double terrainHeightAt(const Network& net, const TerrainParams& p, double x, dou
         hsum += w * w * junctionElevationAt(net, j, plan);
         bestWeight = std::max(bestWeight, w);
     }
-    for (const Road& r : net.roads()) {
+    for (int rid : net.roadsNear(plan)) {
+        const Road& r = net.road(rid);
         if (r.kind == RoadKind::Connector) continue;
         Vec2 lo, hi;
         r.spine.planBounds(lo, hi);
@@ -339,8 +353,17 @@ void tessellateTerrain(const Network& net, const TerrainParams& p, Vec2 lo, Vec2
         if (vid[k] != 0xFFFFFFFFu) return vid[k];
         double x = lo.x + dx * i, z = lo.y + dz * j;
         double h = height[k];
-        double hx = terrainHeightAt(net, p, x + 0.75, z) - terrainHeightAt(net, p, x - 0.75, z);
-        double hz = terrainHeightAt(net, p, x, z + 0.75) - terrainHeightAt(net, p, x, z - 0.75);
+        // The gradient comes from the neighbours already in the grid. Re-sampling
+        // the height field four more times per vertex would be five times the
+        // work for an answer the grid already contains.
+        int im = std::max(0, i - 1), ip = std::min(nx - 1, i + 1);
+        int jm = std::max(0, j - 1), jp = std::min(nz - 1, j + 1);
+        double hx = (height[size_t(j) * size_t(nx) + size_t(ip)] -
+                     height[size_t(j) * size_t(nx) + size_t(im)]) /
+                    std::max(1e-6, double(ip - im) * dx) * 1.5;
+        double hz = (height[size_t(jp) * size_t(nx) + size_t(i)] -
+                     height[size_t(jm) * size_t(nx) + size_t(i)]) /
+                    std::max(1e-6, double(jp - jm) * dz) * 1.5;
         Vertex v;
         v.pos = {x, h, z};
         // Clamp the shading slope. A batter steeper than 45 degrees is an

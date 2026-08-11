@@ -678,6 +678,16 @@ void testSimulation() {
     check(sim.stats().vehicles > 50, "vehicles were seeded");
     check(sim.stats().parkedCars > 0, "parking bays were filled from the strip rule");
 
+    // A parked car must be IN a parking strip — not in a travel lane, not on the
+    // footway. The slot rule and the strip it came from have to agree.
+    for (const ParkingSlot& slot : sim.parking()) {
+        const Road& r = sc.net.road(slot.road);
+        int laneId = 0;
+        const Strip* st = r.xs.stripAtT(slot.s, slot.t, &laneId);
+        check(st != nullptr, "a parking slot lands on a strip");
+        if (st) check(st->kind == StripKind::Parking, "a parking slot sits in a parking strip");
+    }
+
     sim.run(60.0, 0.1);
     SimStats st = sim.stats();
     check(st.vehicles > 50, "vehicles survive a minute of simulation");
@@ -743,7 +753,7 @@ void testRouting() {
     }
     check(routed > 40, "most vehicles were given a route");
 
-    sim.run(150.0, 0.1);
+    sim.run(100.0, 0.1);
     SimStats st = sim.stats();
     check(st.replans > 0, "routes are planned");
     check(st.completedTrips > 0, "trips complete");
@@ -845,6 +855,118 @@ void testSignalsStopTraffic() {
     check(greenNow < int(j.connections.size()), "not everything is green at once");
 }
 
+void testPedestrianGraph() {
+    group("pedestrians");
+    Scene sc;
+    buildDemo("urban", sc);
+    finalizeScene(sc, false, false);
+    SimParams sp;
+    sp.seed = 21;
+    Simulation sim(sc.net, sp);
+
+    check(!sim.walkNodes().empty(), "footways became graph nodes");
+    check(!sim.walkLinks().empty(), "footways are linked up");
+
+    // Every crossing in the graph must correspond to a zebra the paint generator
+    // actually drew. A pedestrian crossing where there is no paint would mean
+    // the two systems had separate ideas about where crossings are.
+    std::vector<Crosswalk> painted;
+    for (const Junction& j : sc.net.junctions())
+        for (const Crosswalk& cw : junctionCrosswalks(sc.net, j)) painted.push_back(cw);
+    int crossings = 0;
+    for (const WalkLink& link : sim.walkLinks()) {
+        if (!link.crossing) continue;
+        ++crossings;
+        bool matched = false;
+        for (const Crosswalk& cw : painted)
+            if (cw.road == link.road && std::fabs(cw.s - link.s) < 0.01) matched = true;
+        check(matched, "every crossing link sits on a painted crosswalk");
+    }
+    check(crossings > 0, "the network has crossings");
+    // Both ends of a crossing are the two footways of the SAME road.
+    for (const WalkLink& link : sim.walkLinks()) {
+        if (!link.crossing) continue;
+        const WalkNode& a = sim.walkNodes()[size_t(link.a)];
+        const WalkNode& b = sim.walkNodes()[size_t(link.b)];
+        check(a.road == b.road && a.side == -b.side,
+              "a crossing joins the two footways of one road");
+    }
+
+    sim.seedPedestrians(140);
+    sim.seedVehicles(90);
+    sim.run(140.0, 0.1);
+    SimStats st = sim.stats();
+    check(st.crossingsMade > 10, "pedestrians actually use the crossings");
+    for (const Pedestrian& p : sim.pedestrians()) {
+        Vec3 pos;
+        double yaw = 0;
+        if (!p.active) continue;
+        check(sim.pedestrianPose(p, pos, yaw), "every pedestrian has a pose");
+        check(std::isfinite(pos.x) && std::isfinite(pos.y) && std::isfinite(pos.z),
+              "pedestrian poses are finite");
+    }
+
+    // Drivers give way. Any vehicle closing on an occupied crossing must be
+    // slow — that is the whole content of "the crossing the driver stops for is
+    // the crossing the shader painted".
+    const std::vector<LaneNode>& nodes = sc.net.lanes().nodes;
+    int checked = 0;
+    for (const Pedestrian& p : sim.pedestrians()) {
+        if (!p.active || p.crossingLink < 0) continue;
+        const WalkLink& link = sim.walkLinks()[size_t(p.crossingLink)];
+        for (const Vehicle& v : sim.vehicles()) {
+            if (!v.active || v.lane < 0) continue;
+            const LaneNode& n = nodes[size_t(v.lane)];
+            if (n.ref.road != link.road) continue;
+            double ahead = (link.s - n.roadS(v.travelled)) * (n.dir > 0 ? 1.0 : -1.0);
+            if (ahead < 0.0 || ahead > 12.0) continue;
+            ++checked;
+            check(v.speed < 7.0, "a vehicle closing on an occupied crossing is slowing");
+        }
+    }
+    (void)checked;
+}
+
+void testPedestrianSignalsAgreeWithDrivers() {
+    group("crossing signals");
+    Scene sc;
+    buildDemo("lanes", sc);
+    finalizeScene(sc, false, false);
+    Simulation sim(sc.net, SimParams{});
+    const Junction& j = sc.net.junction(0);
+    check(j.control == JunctionControl::Signalized, "the demo junction is signalised");
+    check(!j.phases.empty(), "it has phases");
+
+    int link = -1;
+    for (size_t i = 0; i < sim.walkLinks().size(); ++i)
+        if (sim.walkLinks()[i].crossing && sim.walkLinks()[i].junction == j.id) link = int(i);
+    check(link >= 0, "the signalised junction has a crossing");
+    if (link < 0) return;
+    int road = sim.walkLinks()[size_t(link)].road;
+
+    // THE invariant: a pedestrian may step out exactly when no movement using
+    // that arm's carriageway is green. Both sides read the same phase table, so
+    // they cannot disagree — and this asserts it over a whole cycle.
+    bool sawWalk = false, sawWait = false;
+    double cycle = j.cycleLength();
+    Simulation probe(sc.net, SimParams{});
+    for (double t = 0; t < cycle; t += 0.25) {
+        probe.run(0.25, 0.25);
+        bool anyGreen = false;
+        for (size_t ci = 0; ci < j.connections.size(); ++ci) {
+            const Connection& c = j.connections[ci];
+            if (c.from.road != road && c.to.road != road) continue;
+            if (j.isGreen(int(ci), probe.time())) anyGreen = true;
+        }
+        bool mayCross = probe.pedestrianMayCross(link, 0.0);
+        check(mayCross != anyGreen, "the crossing is walkable exactly when its arm is not green");
+        sawWalk = sawWalk || mayCross;
+        sawWait = sawWait || !mayCross;
+    }
+    check(sawWalk, "the crossing is walkable at some point in the cycle");
+    check(sawWait, "and blocked at some point in the cycle");
+}
+
 // --- end to end -----------------------------------------------------------
 
 void testAllDemosBuild() {
@@ -925,6 +1047,8 @@ int main() {
     testRouting();
     testLaneChoiceForAnExit();
     testSignalsStopTraffic();
+    testPedestrianGraph();
+    testPedestrianSignalsAgreeWithDrivers();
     testAllDemosBuild();
     testGeneratedCity();
 

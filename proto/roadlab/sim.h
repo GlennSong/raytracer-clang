@@ -38,6 +38,12 @@ struct Vehicle {
     size_t routePos = 0;
     int targetRoad = -1;    // the road this trip ends on
     double routeUrgency = 0;   // 0 = on-route, 1 = must change lanes now
+    // The reachability query behind routeDemand is a graph search, and a driver
+    // does not re-ask it ten times a second. Cached and refreshed on a timer,
+    // with the distance carried forward by how far they have actually driven.
+    double routeCheckIn = 0;
+    int cachedDemandRoad = -1;
+    double cachedDemandDist = 1e9;
     Vec3 color{0.6, 0.6, 0.6};
     bool active = true;
     double waited = 0;      // seconds spent below 0.5 m/s
@@ -56,12 +62,41 @@ struct ParkingSlot {
     bool occupied = false;
 };
 
-struct Pedestrian {
+// The footway network. Sidewalk strips are edges; the links between them are
+// either a CORNER (walking round an intersection on the footway) or a CROSSING
+// (stepping off the kerb onto the zebra the paint generator drew). The crossings
+// come from junctionCrosswalks() — the same function that produces the paint —
+// so a pedestrian can only cross where a crossing is actually painted.
+struct WalkNode {
     int road = -1;
     int side = 1;           // +1 left footway, -1 right
+    bool atEnd = true;      // which end of the road this node sits at
+    int junction = -1;
+    Vec3 pos{0, 0, 0};
+};
+
+struct WalkLink {
+    int a = -1, b = -1;
+    bool crossing = false;  // false = corner / continuation, true = carriageway
+    int road = -1;          // the road being crossed
+    double s = 0;           // station of the crossing
+    int junction = -1;
+    double length = 4.0;
+};
+
+struct Pedestrian {
+    int node = -1;          // the footway end being walked toward
+    int road = -1;
+    int side = 1;
     double s = 0;
     double dir = 1;         // +1 with s
     double speed = 1.35;
+    // Crossing state. A pedestrian either walks a footway or occupies a
+    // crossing; vehicles read the second case and give way.
+    int pendingLink = -1;   // a crossing decided on but not yet safe to start
+    int crossingLink = -1;
+    double crossProgress = 0;
+    double waiting = 0;     // seconds spent at a kerb
     bool active = true;
     Vec3 color{0.7, 0.6, 0.5};
 };
@@ -78,6 +113,10 @@ struct SimStats {
     int replans = 0;
     int offRoute = 0;       // vehicles currently in a lane that cannot serve their route
     int pedestrians = 0;
+    int pedsCrossing = 0;
+    int pedsWaiting = 0;
+    int crossingsMade = 0;
+    double meanPedWait = 0;
     int parkedCars = 0;
 };
 
@@ -92,6 +131,9 @@ struct SimParams {
     double routeLookahead = 400.0; // how far ahead a driver plans their lane
     int routeMaxDepth = 8;         // lane-graph hops searched for "can I still get there"
     bool routing = true;
+    double pedCrossGap = 4.5;      // seconds of clear road a pedestrian wants
+    double pedMaxWait = 25.0;      // after which they take a smaller gap
+    bool vehiclesYieldToPeds = true;
     double spawnRespawn = true;    // recycle vehicles that run out of road
     uint32_t seed = 3;
 };
@@ -112,6 +154,12 @@ public:
     const std::vector<Pedestrian>& pedestrians() const { return peds_; }
     const std::vector<ParkingSlot>& parking() const { return slots_; }
     const std::vector<ParkedCar>& parkedCars() const { return parked_; }
+    const std::vector<WalkNode>& walkNodes() const { return walkNodes_; }
+    const std::vector<WalkLink>& walkLinks() const { return walkLinks_; }
+    // Would a pedestrian step onto this crossing right now? Public because it is
+    // the thing worth asserting about: at a signalised junction the answer must
+    // agree with the phase table the drivers are obeying.
+    bool pedestrianMayCross(int linkIndex, double patience = 0.0) const;
     SimStats stats() const;
 
     // World pose of a vehicle, including its lane-change lateral offset.
@@ -131,6 +179,18 @@ private:
 
     std::vector<Vehicle> vehicles_;
     std::vector<Pedestrian> peds_;
+    std::vector<WalkNode> walkNodes_;
+    std::vector<WalkLink> walkLinks_;
+    std::vector<std::vector<int>> walkLinksOf_;
+    // Crossings currently occupied, so a vehicle can be told to give way. Keyed
+    // by (road, station) because that is how a driver perceives it.
+    struct ActiveCrossing {
+        int road;
+        double s;
+    };
+    std::vector<ActiveCrossing> occupiedCrossings_;
+    double pedWaitTotal_ = 0;
+    int crossingsMade_ = 0;
     std::vector<ParkingSlot> slots_;
     std::vector<ParkedCar> parked_;
 
@@ -157,6 +217,13 @@ private:
     double gapToLeader(const Vehicle& v, double& leaderSpeed, double horizon = 140.0) const;
     double gapBehind(int laneNode, double travelled, double& followerSpeed) const;
     bool blockedByJunction(const Vehicle& v, double& distance) const;
+    bool blockedByCrossing(const Vehicle& v, double& distance) const;
+    void buildWalkGraph();
+    // Is it safe to step off the kerb? Signalised crossings read the junction's
+    // own phase table; everything else is gap acceptance against real vehicles.
+    bool crossingClear(const WalkLink& link, double patience) const;
+    int findWalkNode(int road, int side, bool atEnd) const;
+    void stepPedestrians(double dt);
     int chooseSuccessor(Vehicle& v);
     // Dijkstra over the lane graph by travel time. Returns a lane-node path to a
     // destination chosen from what is actually reachable.

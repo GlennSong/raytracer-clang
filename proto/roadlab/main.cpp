@@ -140,10 +140,13 @@ void printReport(const Scene& sc, const Simulation* sim) {
         std::printf("\nsim after %.0fs: %d vehicles (%d moving, %d stopped), mean %.1f km/h,\n"
                     "  mean wait %.1fs, %d lane changes (%d mandatory), %d trips completed,\n"
                     "  %d routes planned, %d currently needing a lane change for their route,\n"
-                    "  %d pedestrians, %d parked cars\n",
+                    "  %d pedestrians (%d crossing now, %d waiting at a kerb, %d crossings made,\n"
+                    "    mean kerb wait %.1fs),\n"
+                    "  %d parked cars\n",
                     sim->time(), st.vehicles, st.moving, st.stopped, st.meanSpeedKph, st.meanWait,
                     st.laneChanges, st.mandatoryChanges, st.completedTrips, st.replans,
-                    st.offRoute, st.pedestrians, st.parkedCars);
+                    st.offRoute, st.pedestrians, st.pedsCrossing, st.pedsWaiting,
+                    st.crossingsMade, st.meanPedWait, st.parkedCars);
     }
 }
 

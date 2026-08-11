@@ -155,7 +155,10 @@ bool meanValueCoords(const std::vector<Vec2>& poly, Vec2 p, std::vector<double>&
     weights.assign(n, 0.0);
     if (n < 3) return false;
 
-    std::vector<double> dist(n);
+    // Scratch is kept alive: this is called per terrain vertex per junction, and
+    // two heap allocations per call dominated everything else.
+    static thread_local std::vector<double> dist;
+    dist.assign(n, 0.0);
     for (size_t i = 0; i < n; ++i) {
         dist[i] = length(poly[i] - p);
         if (dist[i] < 1e-7) {   // exactly on a vertex
@@ -179,7 +182,8 @@ bool meanValueCoords(const std::vector<Vec2>& poly, Vec2 p, std::vector<double>&
     }
 
     // tan(alpha_i / 2) for the angle subtended at p by edge i -> i+1.
-    std::vector<double> tanHalf(n, 0.0);
+    static thread_local std::vector<double> tanHalf;
+    tanHalf.assign(n, 0.0);
     for (size_t i = 0; i < n; ++i) {
         size_t k = (i + 1) % n;
         Vec2 a = poly[i] - p, b = poly[k] - p;

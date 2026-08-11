@@ -205,6 +205,24 @@ struct ExtraLaneLink {
 
 // --- network --------------------------------------------------------------
 
+// A uniform bucket grid over the plan, so "which roads are near this point" does
+// not mean "all of them". Terrain generation asks it once per grid vertex and
+// the simulator asks it whenever an agent needs re-localising, which is enough
+// to make a linear scan over every road the slowest thing in the system.
+class RoadIndex {
+public:
+    void build(const std::vector<Road>& roads, double pad = 60.0, double cellSize = 48.0);
+    const std::vector<int>& near(Vec2 p) const;
+    bool empty() const { return cells_.empty(); }
+
+private:
+    Vec2 lo_{0, 0};
+    double cell_ = 48.0;
+    int nx_ = 0, nz_ = 0;
+    std::vector<std::vector<int>> cells_;
+    std::vector<int> empty_;
+};
+
 struct RoadHit {
     int road = -1;
     double s = 0, t = 0;
@@ -250,10 +268,15 @@ public:
 
     std::vector<ExtraLaneLink> extraLinks;
 
+    // Spatial index over the roads, rebuilt by build().
+    const RoadIndex& index() const { return index_; }
+    const std::vector<int>& roadsNear(Vec2 planPoint) const { return index_.near(planPoint); }
+
 private:
     std::vector<Road> roads_;
     std::vector<Junction> junctions_;
     LaneGraph lanes_;
+    RoadIndex index_;
 
     void buildLaneGraph();
     void linkRoadToRoad(int roadA, bool aAtEnd, int roadB, bool bAtStart,

@@ -18,6 +18,142 @@ Simulation::Simulation(const Network& net, const SimParams& params)
             if (cr >= 0 && cr < net_.roadCount()) connectorOf_[size_t(cr)] = {j.id, int(ci)};
         }
     }
+    buildWalkGraph();
+}
+
+namespace {
+
+// The centre of a road's footway on one side, if it has one there.
+bool footwayOffset(const Road& r, double s, int side, double& tOut) {
+    const LaneSection& sec = r.xs.sectionAt(s);
+    const std::vector<Strip>& stack = side > 0 ? sec.left : sec.right;
+    double ds = s - sec.s0, acc = 0;
+    for (const Strip& st : stack) {
+        double w = std::max(0.0, st.width.eval(ds));
+        if (st.kind == StripKind::Sidewalk && w > 0.5) {
+            tOut = (side > 0 ? 1.0 : -1.0) * (acc + w * 0.5);
+            return true;
+        }
+        acc += w;
+    }
+    return false;
+}
+
+}  // namespace
+
+int Simulation::findWalkNode(int road, int side, bool atEnd) const {
+    for (size_t i = 0; i < walkNodes_.size(); ++i) {
+        const WalkNode& n = walkNodes_[i];
+        if (n.road == road && n.side == side && n.atEnd == atEnd) return int(i);
+    }
+    return -1;
+}
+
+void Simulation::buildWalkGraph() {
+    walkNodes_.clear();
+    walkLinks_.clear();
+
+    // A node per (road, side, end) that actually has a footway there.
+    for (const Road& r : net_.roads()) {
+        if (!r.allowsPedestrians || r.kind == RoadKind::Connector) continue;
+        if (r.activeLength() < 6.0) continue;
+        for (int side : {-1, 1}) {
+            double t = 0;
+            if (!footwayOffset(r, r.begin() + 1.0, side, t)) continue;
+            for (bool atEnd : {false, true}) {
+                double s = atEnd ? r.end() - 0.5 : r.begin() + 0.5;
+                double tt = 0;
+                if (!footwayOffset(r, s, side, tt)) tt = t;
+                WalkNode n;
+                n.road = r.id;
+                n.side = side;
+                n.atEnd = atEnd;
+                n.pos = r.surfacePoint(s, tt);
+                walkNodes_.push_back(n);
+            }
+        }
+    }
+
+    // CROSSINGS, straight from the paint generator: a pedestrian can only cross
+    // where a zebra was actually drawn.
+    for (const Junction& j : net_.junctions()) {
+        for (const Crosswalk& cw : junctionCrosswalks(net_, j)) {
+            const Road& r = net_.road(cw.road);
+            bool atEnd = std::fabs(cw.s - r.end()) < std::fabs(cw.s - r.begin());
+            int a = findWalkNode(cw.road, +1, atEnd);
+            int b = findWalkNode(cw.road, -1, atEnd);
+            if (a < 0 || b < 0) continue;
+            WalkLink link;
+            link.a = a;
+            link.b = b;
+            link.crossing = true;
+            link.road = cw.road;
+            link.s = cw.s;
+            link.junction = j.id;
+            link.length = std::max(3.0, cw.tMax - cw.tMin);
+            walkLinks_.push_back(link);
+            walkNodes_[size_t(a)].junction = j.id;
+            walkNodes_[size_t(b)].junction = j.id;
+        }
+    }
+
+    // CORNERS: walking round an intersection. Nodes belonging to a junction are
+    // ordered by bearing and consecutive ones joined, which is exactly the ring
+    // of footway that wraps the kerb returns. Consecutive nodes on the SAME road
+    // are skipped — that pair is the crossing, not a corner.
+    for (const Junction& j : net_.junctions()) {
+        std::vector<int> ring;
+        for (size_t i = 0; i < walkNodes_.size(); ++i) {
+            const WalkNode& n = walkNodes_[i];
+            for (const JunctionArm& arm : j.arms) {
+                if (arm.road == n.road && arm.atEnd == n.atEnd) {
+                    ring.push_back(int(i));
+                    walkNodes_[i].junction = j.id;
+                    break;
+                }
+            }
+        }
+        if (ring.size() < 2) continue;
+        std::sort(ring.begin(), ring.end(), [&](int a, int b) {
+            Vec2 pa = planOf(walkNodes_[size_t(a)].pos) - j.center;
+            Vec2 pb = planOf(walkNodes_[size_t(b)].pos) - j.center;
+            return std::atan2(pa.y, pa.x) < std::atan2(pb.y, pb.x);
+        });
+        for (size_t i = 0; i < ring.size(); ++i) {
+            int a = ring[i];
+            int b = ring[(i + 1) % ring.size()];
+            if (a == b) continue;
+            if (walkNodes_[size_t(a)].road == walkNodes_[size_t(b)].road) continue;
+            WalkLink link;
+            link.a = a;
+            link.b = b;
+            link.crossing = false;
+            link.junction = j.id;
+            link.length = length(walkNodes_[size_t(a)].pos - walkNodes_[size_t(b)].pos);
+            walkLinks_.push_back(link);
+        }
+    }
+
+    // Plain road-to-road continuations, where the footway just carries on.
+    for (const Road& r : net_.roads()) {
+        if (r.succ.type != LinkType::Road || r.succ.id < 0) continue;
+        for (int side : {-1, 1}) {
+            int a = findWalkNode(r.id, side, true);
+            int b = findWalkNode(r.succ.id, side, !r.succ.toStart);
+            if (a < 0 || b < 0) continue;
+            WalkLink link;
+            link.a = a;
+            link.b = b;
+            link.length = length(walkNodes_[size_t(a)].pos - walkNodes_[size_t(b)].pos);
+            walkLinks_.push_back(link);
+        }
+    }
+
+    walkLinksOf_.assign(walkNodes_.size(), {});
+    for (size_t i = 0; i < walkLinks_.size(); ++i) {
+        walkLinksOf_[size_t(walkLinks_[i].a)].push_back(int(i));
+        walkLinksOf_[size_t(walkLinks_[i].b)].push_back(int(i));
+    }
 }
 
 double Simulation::laneLength(int node) const {
@@ -70,24 +206,19 @@ void Simulation::seedVehicles(int count) {
 }
 
 void Simulation::seedPedestrians(int count) {
-    std::vector<int> footwayRoads;
-    for (const Road& r : net_.roads()) {
-        if (!r.allowsPedestrians || r.kind == RoadKind::Connector) continue;
-        const LaneSection& sec = r.xs.sectionAt(r.begin() + 1.0);
-        bool has = false;
-        for (const std::vector<Strip>* st : {&sec.left, &sec.right})
-            for (const Strip& x : *st)
-                if (x.kind == StripKind::Sidewalk) has = true;
-        if (has && r.activeLength() > 15.0) footwayRoads.push_back(r.id);
-    }
-    if (footwayRoads.empty()) return;
+    if (walkNodes_.empty()) return;
     for (int i = 0; i < count; ++i) {
+        // Start on a footway, heading for one of its ends.
+        int node = rng_.rangeI(0, int(walkNodes_.size()) - 1);
+        const WalkNode& n = walkNodes_[size_t(node)];
+        const Road& r = net_.road(n.road);
         Pedestrian p;
-        p.road = footwayRoads[size_t(rng_.rangeI(0, int(footwayRoads.size()) - 1))];
-        const Road& r = net_.road(p.road);
-        p.side = rng_.chance(0.5) ? 1 : -1;
+        p.node = node;
+        p.road = n.road;
+        p.side = n.side;
         p.s = rng_.range(r.begin() + 1.0, r.end() - 1.0);
-        p.dir = rng_.chance(0.5) ? 1.0 : -1.0;
+        // Walk toward the end this node sits at.
+        p.dir = n.atEnd ? 1.0 : -1.0;
         p.speed = rng_.range(1.05, 1.65);
         p.color = {rng_.range(0.2, 0.8), rng_.range(0.2, 0.7), rng_.range(0.2, 0.8)};
         peds_.push_back(p);
@@ -345,6 +476,9 @@ std::vector<int> Simulation::planRoute(int fromNode) {
 }
 
 void Simulation::assignRoute(Vehicle& v) {
+    v.routeCheckIn = 0;
+    v.cachedDemandRoad = -1;
+    v.cachedDemandDist = 1e9;
     if (!params_.routing) {
         v.route.clear();
         v.routePos = 0;
@@ -378,6 +512,64 @@ int Simulation::routeDemand(const Vehicle& v, double& distance) const {
         if (ahead > params_.routeLookahead) break;
     }
     return -1;
+}
+
+bool Simulation::pedestrianMayCross(int linkIndex, double patience) const {
+    if (linkIndex < 0 || size_t(linkIndex) >= walkLinks_.size()) return false;
+    return crossingClear(walkLinks_[size_t(linkIndex)], patience);
+}
+
+bool Simulation::crossingClear(const WalkLink& link, double patience) const {
+    if (!link.crossing) return true;
+
+    // Signalised: the pedestrian reads the SAME phase table the drivers obey. A
+    // crossing is walkable when no movement using this arm's carriageway is
+    // green — which is derived, not a separate pedestrian signal plan someone
+    // had to keep in sync.
+    if (link.junction >= 0 && link.junction < net_.junctionCount()) {
+        const Junction& j = net_.junction(link.junction);
+        if (j.control == JunctionControl::Signalized && !j.phases.empty()) {
+            for (size_t ci = 0; ci < j.connections.size(); ++ci) {
+                const Connection& c = j.connections[ci];
+                if (c.from.road != link.road && c.to.road != link.road) continue;
+                if (j.isGreen(int(ci), time_)) return false;
+            }
+            return true;
+        }
+    }
+
+    // Otherwise: gap acceptance against the traffic that would actually hit
+    // them. Patience shrinks the gap they will take, which is why a pedestrian
+    // at a busy kerb eventually steps out rather than waiting forever.
+    double need = params_.pedCrossGap * (1.0 - 0.7 * saturate(patience / params_.pedMaxWait));
+    const std::vector<LaneNode>& nodes = net_.lanes().nodes;
+    for (const Vehicle& v : vehicles_) {
+        if (!v.active || v.lane < 0) continue;
+        const LaneNode& n = nodes[size_t(v.lane)];
+        if (n.ref.road != link.road) continue;
+        double station = n.roadS(v.travelled);
+        // Only traffic approaching the crossing matters.
+        double ahead = (link.s - station) * (n.dir > 0 ? 1.0 : -1.0);
+        if (ahead < -1.0 || ahead > 90.0) continue;
+        double eta = ahead / std::max(1.0, v.speed);
+        if (eta < need) return false;
+    }
+    return true;
+}
+
+bool Simulation::blockedByCrossing(const Vehicle& v, double& distance) const {
+    if (!params_.vehiclesYieldToPeds || occupiedCrossings_.empty()) return false;
+    const LaneNode& n = net_.lanes().nodes[size_t(v.lane)];
+    double station = n.roadS(v.travelled);
+    for (const ActiveCrossing& c : occupiedCrossings_) {
+        if (c.road != n.ref.road) continue;
+        double ahead = (c.s - station) * (n.dir > 0 ? 1.0 : -1.0);
+        // Stop short of the zebra, not on it.
+        if (ahead < 0.5 || ahead > 60.0) continue;
+        distance = ahead - 2.0;
+        return true;
+    }
+    return false;
 }
 
 int Simulation::chooseSuccessor(Vehicle& v) {
@@ -437,8 +629,14 @@ void Simulation::considerLaneChange(Vehicle& v) {
     // trip is going. THIS is the query the two-resolution graph exists for —
     // "I need the third exit, so I must be in one of these lanes by then" — and
     // it is answered by walking the plan, not by a special case per junction.
-    double demandDistance = 1e9;
-    int demandRoad = routeDemand(v, demandDistance);
+    // Refresh the (graph-searching) route demand on a timer rather than every
+    // tick; in between, the distance simply shrinks as the vehicle drives.
+    if (v.routeCheckIn <= 0.0) {
+        v.cachedDemandRoad = routeDemand(v, v.cachedDemandDist);
+        v.routeCheckIn = 0.4;
+    }
+    double demandDistance = v.cachedDemandDist;
+    int demandRoad = v.cachedDemandRoad;
     bool routeForces = demandRoad >= 0 && demandDistance < params_.routeLookahead;
     v.routeUrgency = routeForces ? saturate(1.0 - demandDistance / params_.routeLookahead) : 0.0;
 
@@ -538,6 +736,9 @@ void Simulation::respawn(Vehicle& v) {
     v.lateral = 0;
     v.waited = 0;
     v.routeUrgency = 0;
+    v.routeCheckIn = 0;
+    v.cachedDemandRoad = -1;
+    v.cachedDemandDist = 1e9;
     assignRoute(v);
 }
 
@@ -561,6 +762,13 @@ void Simulation::step(double dt) {
                 leaderSpeed = 0.0;
             }
         }
+        // Someone is on the zebra. The crossing the driver stops for is the same
+        // crossing the shader painted and the pedestrian graph walked.
+        double pedDist = 0;
+        if (blockedByCrossing(v, pedDist) && pedDist < gap) {
+            gap = std::max(0.4, pedDist);
+            leaderSpeed = 0.0;
+        }
 
         // IDM.
         double a = params_.idmMaxAccel;
@@ -577,6 +785,8 @@ void Simulation::step(double dt) {
         if (v.speed < 0.5) v.waited += dt;
         else v.waited = std::max(0.0, v.waited - dt * 0.5);
 
+        v.routeCheckIn -= dt;
+        v.cachedDemandDist -= v.speed * dt;
         considerLaneChange(v);
 
         if (v.changingTo >= 0) {
@@ -657,17 +867,103 @@ void Simulation::step(double dt) {
         }
     }
 
+    stepPedestrians(dt);
+    time_ += dt;
+}
+
+void Simulation::stepPedestrians(double dt) {
+    occupiedCrossings_.clear();
+    if (walkNodes_.empty()) return;
+
     for (Pedestrian& p : peds_) {
         if (!p.active) continue;
-        const Road& r = net_.road(p.road);
-        p.s += p.dir * p.speed * dt;
-        if (p.s > r.end() - 0.5 || p.s < r.begin() + 0.5) {
-            p.dir = -p.dir;
-            p.s = clampd(p.s, r.begin() + 0.5, r.end() - 0.5);
-        }
-    }
 
-    time_ += dt;
+        // Mid-crossing: keep going, and stay visible to drivers while doing it.
+        if (p.crossingLink >= 0) {
+            const WalkLink& link = walkLinks_[size_t(p.crossingLink)];
+            p.crossProgress += p.speed * dt / std::max(1.0, link.length);
+            occupiedCrossings_.push_back({link.road, link.s});
+            if (p.crossProgress >= 1.0) {
+                ++crossingsMade_;
+                int arrive = (p.node == link.a) ? link.b : link.a;
+                const WalkNode& n = walkNodes_[size_t(arrive)];
+                p.node = arrive;
+                p.road = n.road;
+                p.side = n.side;
+                p.s = n.atEnd ? net_.road(n.road).end() - 0.5 : net_.road(n.road).begin() + 0.5;
+                // Arriving at a footway end means turning to walk back down it.
+                p.dir = n.atEnd ? -1.0 : 1.0;
+                p.crossingLink = -1;
+                p.crossProgress = 0;
+                p.waiting = 0;
+            }
+            continue;
+        }
+
+        const Road& r = net_.road(p.road);
+        double target = p.dir > 0 ? r.end() - 0.5 : r.begin() + 0.5;
+        double before = p.s;
+        p.s += p.dir * p.speed * dt;
+        bool arrived = (p.dir > 0) ? (p.s >= target) : (p.s <= target);
+        if (!arrived) {
+            (void)before;
+            continue;
+        }
+        p.s = target;
+
+        // At a footway end: pick a link out. Corners are free; a crossing has to
+        // be safe first, and until it is the pedestrian stands at the kerb.
+        int node = findWalkNode(p.road, p.side, p.dir > 0);
+        if (node < 0) {
+            p.dir = -p.dir;
+            continue;
+        }
+        p.node = node;
+        const std::vector<int>& links = walkLinksOf_[size_t(node)];
+        if (links.empty()) {
+            p.dir = -p.dir;
+            continue;
+        }
+
+        // A pedestrian who has decided to cross COMMITS to it and waits at the
+        // kerb. Re-rolling the choice every tick would mean nobody ever waits,
+        // which quietly removes the interesting half of the behaviour.
+        int chosen = p.pendingLink;
+        if (chosen < 0) {
+            for (int attempt = 0; attempt < 6 && chosen < 0; ++attempt) {
+                int cand = links[size_t(rng_.rangeI(0, int(links.size()) - 1))];
+                const WalkLink& cl = walkLinks_[size_t(cand)];
+                if (cl.crossing && !rng_.chance(0.5)) continue;
+                chosen = cand;
+            }
+            if (chosen < 0) chosen = links[0];
+        }
+
+        const WalkLink& link = walkLinks_[size_t(chosen)];
+        if (link.crossing) {
+            if (!crossingClear(link, p.waiting)) {
+                p.pendingLink = chosen;
+                p.waiting += dt;
+                pedWaitTotal_ += dt;
+                continue;   // stand at the kerb
+            }
+            p.crossingLink = chosen;
+            p.pendingLink = -1;
+            p.crossProgress = 0;
+            p.waiting = 0;
+            continue;
+        }
+        p.pendingLink = -1;
+
+        int other = (link.a == node) ? link.b : link.a;
+        const WalkNode& n = walkNodes_[size_t(other)];
+        p.node = other;
+        p.road = n.road;
+        p.side = n.side;
+        p.s = n.atEnd ? net_.road(n.road).end() - 0.5 : net_.road(n.road).begin() + 0.5;
+        p.dir = n.atEnd ? -1.0 : 1.0;
+        p.waiting = 0;
+    }
 }
 
 void Simulation::run(double seconds, double dt) {
@@ -689,6 +985,16 @@ bool Simulation::vehiclePose(const Vehicle& v, Vec3& pos, double& yaw) const {
 
 bool Simulation::pedestrianPose(const Pedestrian& p, Vec3& pos, double& yaw) const {
     if (!p.active || p.road < 0) return false;
+    if (p.crossingLink >= 0) {
+        const WalkLink& link = walkLinks_[size_t(p.crossingLink)];
+        Vec3 a = walkNodes_[size_t(link.a)].pos;
+        Vec3 b = walkNodes_[size_t(link.b)].pos;
+        if (p.node == link.b) std::swap(a, b);
+        pos = lerp(a, b, saturate(p.crossProgress)) + Vec3{0, 0.88, 0};
+        Vec3 d = b - a;
+        yaw = std::atan2(d.z, d.x);
+        return true;
+    }
     const Road& r = net_.road(p.road);
     const LaneSection& sec = r.xs.sectionAt(p.s);
     const std::vector<Strip>& stack = p.side > 0 ? sec.left : sec.right;
@@ -733,6 +1039,13 @@ SimStats Simulation::stats() const {
         if (routeDemand(v, d) >= 0 && d < params_.routeLookahead) ++st.offRoute;
     }
     st.pedestrians = int(peds_.size());
+    for (const Pedestrian& p : peds_) {
+        if (!p.active) continue;
+        if (p.crossingLink >= 0) ++st.pedsCrossing;
+        else if (p.pendingLink >= 0) ++st.pedsWaiting;
+    }
+    st.meanPedWait = peds_.empty() ? 0.0 : pedWaitTotal_ / double(peds_.size());
+    st.crossingsMade = crossingsMade_;
     st.parkedCars = int(parked_.size());
     return st;
 }
