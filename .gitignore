@@ -36,3 +36,8 @@ build-visionos-sim/
 build-visionos/
 build-visionos-dev/
 .DS_Store
+
+# roadlab prototype (proto/roadlab/README.md)
+/roadlab
+/roadlab_tests
+/out_roadlab/

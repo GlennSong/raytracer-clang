@@ -417,5 +417,50 @@ PLANET_PREVIEW_SRCS = tools/planet_preview.cpp \
 planet_preview: $(PLANET_PREVIEW_SRCS)
 	$(CXX) $(CXXFLAGS) -O2 -I$(SRC_DIR) -o $@ $^
 
+# roadlab (proto/roadlab/README.md): a clean-room prototype of a parametric road
+# system, deliberately isolated from src/ — it includes nothing from the engine
+# and the engine includes nothing from it, so it can be replaced or deleted
+# without touching the game. Headless: renders to PNG, so it builds anywhere.
+# Depends only on the STL plus nlohmann/json and the bundled stb_image_write.
+ROADLAB_DIR = proto/roadlab
+ROADLAB_LIB_SRCS = \
+	$(ROADLAB_DIR)/rl_math.cpp \
+	$(ROADLAB_DIR)/spine.cpp \
+	$(ROADLAB_DIR)/profile.cpp \
+	$(ROADLAB_DIR)/network.cpp \
+	$(ROADLAB_DIR)/junction.cpp \
+	$(ROADLAB_DIR)/builders.cpp \
+	$(ROADLAB_DIR)/structure.cpp \
+	$(ROADLAB_DIR)/surface.cpp \
+	$(ROADLAB_DIR)/tessellate.cpp \
+	$(ROADLAB_DIR)/raster.cpp \
+	$(ROADLAB_DIR)/props.cpp \
+	$(ROADLAB_DIR)/sim.cpp \
+	$(ROADLAB_DIR)/scene.cpp
+ROADLAB_FLAGS = -std=c++17 -Wall -Wextra -Wpedantic -pthread -O2 \
+	-isystem third_party -isystem third_party/tinygltf
+
+roadlab: $(ROADLAB_LIB_SRCS) $(ROADLAB_DIR)/main.cpp Makefile
+	$(CXX) $(ROADLAB_FLAGS) -o $@ $(filter %.cpp,$^)
+
+roadlab_tests: $(ROADLAB_LIB_SRCS) $(ROADLAB_DIR)/tests.cpp Makefile
+	$(CXX) $(ROADLAB_FLAGS) -o $@ $(filter %.cpp,$^)
+
+roadlab-test: roadlab_tests
+	./roadlab_tests
+
+# Every demo, top-down and in perspective, into out_roadlab/ — the quickest way
+# to see whether a change to the shader or the solvers broke something visible.
+roadlab-shots: roadlab
+	mkdir -p out_roadlab
+	./roadlab --shots out_roadlab --view top --width 1400 --height 900
+	./roadlab --demo showcase --view persp --width 1400 --height 900 \
+		--out out_roadlab/showcase_persp.png
+	./roadlab --demo lanes --view driver --width 1400 --height 900 \
+		--out out_roadlab/lanes_driver.png
+	./roadlab --city --seed 3 --view top --width 1400 --height 1100 \
+		--sim 45 --cars 220 --peds 80 --out out_roadlab/city.png
+
 clean:
-	rm -rf $(BUILD_DIR) $(TARGET) $(TEST_TARGET) planet_preview out_*.png
+	rm -rf $(BUILD_DIR) $(TARGET) $(TEST_TARGET) planet_preview out_*.png \
+		roadlab roadlab_tests out_roadlab

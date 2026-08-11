@@ -1,0 +1,74 @@
+{
+  "_comment": "roadlab scene format. Roads are referenced by their INDEX in this array. Everything else (markings, signs, signals, lane graph, conflict points, parking slots) is derived — none of it appears here, because none of it is authored.",
+  "name": "example",
+
+  "terrain": { "enabled": true, "amplitude": 4.0, "frequency": 0.0035, "seed": 5 },
+  "shade": { "wear": 0.35, "grime": 0.4, "seed": 7 },
+
+  "roads": [
+    {
+      "_": "0 — arterial that sheds a lane and gains a left-turn bay at the junction",
+      "name": "market-street",
+      "preset": "arterial6_median",
+      "points": [[-420, 0], [-120, -6], [140, 4]],
+      "cornerRadius": 260,
+      "designSpeed": 70,
+      "laneChanges": [{ "s": 170, "side": -1, "delta": -1 }],
+      "turnBays": [{ "s": 440, "atEnd": true, "side": 1, "length": 90 }]
+    },
+    {
+      "_": "1 — the cross street: two lanes, kerbside parking, footways",
+      "name": "mill-road",
+      "preset": "street2_park",
+      "points": [[152, 210], [144, 70], [141, 4]],
+      "cornerRadius": 110,
+      "designSpeed": 40
+    },
+    {
+      "_": "2 — continues east as a boulevard with a two-way left-turn lane",
+      "name": "market-east",
+      "preset": "boulevard_twltl",
+      "points": [[142, 4], [320, 20], [520, 60]],
+      "cornerRadius": 240,
+      "designSpeed": 60
+    },
+    {
+      "_": "3 — a country road that climbs over the freeway and drops back",
+      "name": "hill-lane",
+      "preset": "country2",
+      "points": [[-260, -420], [-220, -140], [-190, 160], [-160, 420]],
+      "cornerRadius": 420,
+      "designSpeed": 90,
+      "overpass": { "s0": 400, "s1": 470, "rise": 8.5, "approach": 190, "pierSpacing": 28 }
+    },
+    {
+      "_": "4 — the freeway underneath it, with an entrance further along",
+      "name": "freeway",
+      "preset": "freeway3",
+      "points": [[-700, 240], [-260, 200], [200, 240], [640, 200]],
+      "cornerRadius": 700,
+      "designSpeed": 110
+    }
+  ],
+
+  "junctions": [
+    {
+      "name": "market-and-mill",
+      "control": "signalized",
+      "cornerRadius": 8,
+      "arms": [[0, true], [1, true], [2, false]]
+    }
+  ],
+
+  "onRamps": [
+    {
+      "name": "east-on",
+      "main": 4,
+      "s": 830,
+      "from": [330, 90],
+      "heading": 118,
+      "fromHeight": 1.0,
+      "auxLength": 200
+    }
+  ]
+}
