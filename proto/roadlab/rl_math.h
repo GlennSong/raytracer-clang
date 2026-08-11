@@ -53,6 +53,7 @@ inline Vec3 cross(Vec3 a, Vec3 b) {
     return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
 }
 inline double length(Vec3 a) { return std::sqrt(dot(a, a)); }
+inline double lengthSq(Vec3 a) { return dot(a, a); }
 inline Vec3 normalize(Vec3 a) {
     double l = length(a);
     return l > 1e-12 ? Vec3{a.x / l, a.y / l, a.z / l} : Vec3{0, 1, 0};

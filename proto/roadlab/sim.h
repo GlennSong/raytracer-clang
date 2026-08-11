@@ -30,7 +30,14 @@ struct Vehicle {
     double lateral = 0;     // offset from the lane centre, for lane changes
     int changingTo = -1;    // lane node being moved into
     double changeTime = 0;
-    int targetRoad = -1;    // where this trip is heading
+    // The trip. `route` is a path of lane nodes from a Dijkstra over the lane
+    // graph; `routePos` is where along it the vehicle currently is. Keeping the
+    // route at LANE resolution rather than road resolution is what makes "you
+    // must be in one of these two lanes by the time you get there" answerable.
+    std::vector<int> route;
+    size_t routePos = 0;
+    int targetRoad = -1;    // the road this trip ends on
+    double routeUrgency = 0;   // 0 = on-route, 1 = must change lanes now
     Vec3 color{0.6, 0.6, 0.6};
     bool active = true;
     double waited = 0;      // seconds spent below 0.5 m/s
@@ -66,7 +73,10 @@ struct SimStats {
     double meanSpeedKph = 0;
     double meanWait = 0;
     int laneChanges = 0;
+    int mandatoryChanges = 0;
     int completedTrips = 0;
+    int replans = 0;
+    int offRoute = 0;       // vehicles currently in a lane that cannot serve their route
     int pedestrians = 0;
     int parkedCars = 0;
 };
@@ -79,6 +89,9 @@ struct SimParams {
     double lateralAccelLimit = 2.6;   // m/s^2 through curves
     double laneChangeDuration = 2.6;  // s
     double yieldHorizon = 4.0;     // s of approaching traffic that blocks a yield
+    double routeLookahead = 400.0; // how far ahead a driver plans their lane
+    int routeMaxDepth = 8;         // lane-graph hops searched for "can I still get there"
+    bool routing = true;
     double spawnRespawn = true;    // recycle vehicles that run out of road
     uint32_t seed = 3;
 };
@@ -112,7 +125,9 @@ private:
     double time_ = 0;
     int nextId_ = 1;
     int laneChanges_ = 0;
+    int mandatory_ = 0;
     int completed_ = 0;
+    int replans_ = 0;
 
     std::vector<Vehicle> vehicles_;
     std::vector<Pedestrian> peds_;
@@ -142,7 +157,14 @@ private:
     double gapToLeader(const Vehicle& v, double& leaderSpeed, double horizon = 140.0) const;
     double gapBehind(int laneNode, double travelled, double& followerSpeed) const;
     bool blockedByJunction(const Vehicle& v, double& distance) const;
-    int chooseSuccessor(int node);
+    int chooseSuccessor(Vehicle& v);
+    // Dijkstra over the lane graph by travel time. Returns a lane-node path to a
+    // destination chosen from what is actually reachable.
+    std::vector<int> planRoute(int fromNode);
+    void assignRoute(Vehicle& v);
+    // The next road on the route that the vehicle's current lane cannot reach,
+    // and how far away it is. -1 when the current lane still serves the plan.
+    int routeDemand(const Vehicle& v, double& distance) const;
     void considerLaneChange(Vehicle& v);
     void respawn(Vehicle& v);
     int randomStartLane();

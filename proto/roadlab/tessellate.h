@@ -14,6 +14,7 @@
 
 #include "network.h"
 #include "junction.h"
+#include <array>
 #include <vector>
 
 namespace roadlab {
@@ -68,14 +69,33 @@ struct TessParams {
 // shared boundary offsets are computed exactly once.
 void tessellateRoad(const Road& road, Mesh& out, const TessParams& p = {});
 
-// The pad: the boundary polygon fanned from its centroid, with vertex heights
-// interpolated from the arms so the surface meets every approach at its own
-// grade. Shaded in junction-local coordinates.
-void tessellateJunction(const Network& net, const Junction& j, Mesh& out);
+// The pad: the boundary polygon triangulated (ear clipping, so concave pads from
+// acute multi-arm junctions are fine), then refined until no edge is longer than
+// `padDetail` metres so the interpolated surface can actually curve.
+void tessellateJunction(const Network& net, const Junction& j, Mesh& out,
+                        double padDetail = 2.5);
 
-// Surface height inside a junction pad, blended from the arms. Used both by the
-// tessellator and by anything that needs to stand something on the pad.
+// Surface height inside a junction pad.
+//
+// This is the piece that was flagged as the genuinely hard part of the whole
+// model: a skewed junction whose arms arrive at different grades, crossfalls and
+// banks. The answer is transfinite interpolation from the boundary — MEAN VALUE
+// COORDINATES over the pad polygon, with each boundary vertex carrying the height
+// its own arm produced. Mean value coordinates reproduce the boundary exactly, are
+// smooth inside, and are defined for any simple polygon, which the Coons patch
+// this generalises is not. Points outside the pad take the nearest boundary
+// height, so the terrain conform meets the kerb without a step.
 double junctionElevationAt(const Network& net, const Junction& j, Vec2 planPoint);
+
+// --- polygon utilities ----------------------------------------------------
+
+// Ear-clipping triangulation of a simple polygon. Returns index triples into
+// `poly`. Handles concave outlines; returns empty for degenerate input.
+std::vector<std::array<uint32_t, 3>> triangulatePolygon(const std::vector<Vec2>& poly);
+
+// Mean value coordinates of `p` with respect to `poly`. Sums to one, reproduces
+// the polygon's vertices exactly, and is smooth in between.
+bool meanValueCoords(const std::vector<Vec2>& poly, Vec2 p, std::vector<double>& weights);
 
 // Everything at once, including structures (structure.h) if `withStructures`.
 void tessellateNetwork(const Network& net, Mesh& out, const TessParams& p = {},

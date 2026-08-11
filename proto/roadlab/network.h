@@ -173,6 +173,9 @@ public:
     // `maxDepth` hops. This is what turns "I need to turn right in 400 m" into
     // "I must be in one of these lanes".
     std::vector<int> lanesReaching(int fromNode, int targetRoad, int maxDepth = 6) const;
+    // The same question for a single lane, which is what a driver actually asks
+    // every time they check whether they are still in the right one.
+    bool reaches(int fromNode, int targetRoad, int maxDepth = 6) const;
 
 private:
     struct Key {

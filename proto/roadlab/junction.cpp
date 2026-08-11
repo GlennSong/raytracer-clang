@@ -115,6 +115,7 @@ void buildJunction(Network& net, Junction& j) {
     j.conflicts.clear();
     j.phases.clear();
     j.boundary.clear();
+    j.boundaryHeight.clear();
 
     // 0. Undo any previous trim so the resolve is idempotent — the parametric
     // source was never destroyed, only windowed.
@@ -207,6 +208,7 @@ void buildJunction(Network& net, Junction& j) {
 
     struct ArmCorners {
         Vec2 first, second;   // in CCW order around the junction
+        double firstH, secondH;
         Vec2 outward;
     };
     std::vector<ArmCorners> corners(order.size());
@@ -216,21 +218,28 @@ void buildJunction(Network& net, Junction& j) {
         const Road& r = net.road(a.road);
         Vec2 pLeft = r.spine.toPlan(a.sContact, a.leftExtent);
         Vec2 pRight = r.spine.toPlan(a.sContact, a.rightExtent);
+        // The two corners of an arm are at DIFFERENT heights whenever the road is
+        // banked or crowned. Taking them from the arm's own surface is what lets
+        // the pad meet a superelevated approach without a lip.
+        double hLeft = r.surfacePoint(a.sContact, a.leftExtent).y;
+        double hRight = r.surfacePoint(a.sContact, a.rightExtent).y;
         Vec2 u = dirOf(geom[i].outward);
         // Going counter-clockwise we meet the corner on the -perpLeft(u) side
         // first. Which of the road's own edges that is depends on which end of
         // the road the junction holds.
         if (a.atEnd) {
-            corners[oi] = {pLeft, pRight, u};
+            corners[oi] = {pLeft, pRight, hLeft, hRight, u};
         } else {
-            corners[oi] = {pRight, pLeft, u};
+            corners[oi] = {pRight, pLeft, hRight, hLeft, u};
         }
     }
     for (size_t oi = 0; oi < corners.size(); ++oi) {
         const ArmCorners& cur = corners[oi];
         const ArmCorners& nxt = corners[(oi + 1) % corners.size()];
         j.boundary.push_back(cur.first);
+        j.boundaryHeight.push_back(cur.firstH);
         j.boundary.push_back(cur.second);
+        j.boundaryHeight.push_back(cur.secondH);
         bool ok = false;
         Vec2 c = lineIntersect(cur.second, cur.outward, nxt.first, nxt.outward, ok);
         // A kerb return only makes sense if the two edges meet somewhere near
@@ -238,12 +247,14 @@ void buildJunction(Network& net, Junction& j) {
         // of metres away, which would drag the pad out into a spike.
         double reach = 2.5 * (geom[order[oi]].halfWidth + j.cornerRadius) + 8.0;
         if (ok && length(c - j.center) < reach) {
-            // Quadratic Bezier through the edge intersection: a real kerb return.
+            // Quadratic Bezier through the edge intersection: a real kerb return,
+            // with its height ramping between the two arms it joins.
             for (int k = 1; k < 5; ++k) {
                 double u = double(k) / 5.0;
                 Vec2 p = cur.second * ((1 - u) * (1 - u)) + c * (2 * u * (1 - u)) +
                          nxt.first * (u * u);
                 j.boundary.push_back(p);
+                j.boundaryHeight.push_back(lerp(cur.secondH, nxt.firstH, u));
             }
         }
     }

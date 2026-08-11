@@ -547,6 +547,90 @@ void testTunnelKeepsTerrain() {
               "a tunnel does not deform the terrain at all");
 }
 
+// --- junction surfaces ----------------------------------------------------
+
+void testPolygonUtilities() {
+    group("polygon utilities");
+    // A concave polygon (an L) must still triangulate into n-2 triangles that
+    // cover exactly its own area — the fan-from-centroid it replaces does not.
+    std::vector<Vec2> el = {{0, 0}, {6, 0}, {6, 2}, {2, 2}, {2, 6}, {0, 6}};   // area 20
+    auto tris = triangulatePolygon(el);
+    check(tris.size() == el.size() - 2, "ear clipping yields n-2 triangles");
+    double area = 0;
+    for (const auto& t : tris) {
+        Vec2 a = el[t[0]], b = el[t[1]], c = el[t[2]];
+        area += std::fabs(cross(b - a, c - a)) * 0.5;
+    }
+    checkNear(area, 20.0, 1e-6, "the triangles cover the concave polygon exactly");
+
+    // Mean value coordinates: partition of unity, and exact at the vertices.
+    std::vector<Vec2> quad = {{0, 0}, {10, 0}, {12, 8}, {-1, 7}};
+    std::vector<double> w;
+    check(meanValueCoords(quad, {4, 3}, w), "MVC solves for an interior point");
+    double sum = 0;
+    for (double v : w) sum += v;
+    checkNear(sum, 1.0, 1e-9, "MVC is a partition of unity");
+    for (double v : w) check(v > -1e-9, "MVC is positive inside a convex polygon");
+    for (size_t i = 0; i < quad.size(); ++i) {
+        check(meanValueCoords(quad, quad[i], w), "MVC solves at a vertex");
+        checkNear(w[i], 1.0, 1e-9, "MVC reproduces the vertex exactly");
+    }
+    // On an edge it must be the linear blend of that edge's endpoints only.
+    check(meanValueCoords(quad, (quad[0] + quad[1]) * 0.5, w), "MVC solves on an edge");
+    checkNear(w[0], 0.5, 1e-9, "MVC on an edge blends its endpoints");
+    checkNear(w[1], 0.5, 1e-9, "MVC on an edge blends its endpoints");
+    checkNear(w[2] + w[3], 0.0, 1e-9, "MVC on an edge ignores the far vertices");
+}
+
+void testGradedJunctionSurface() {
+    group("graded junction");
+    Scene sc;
+    check(buildDemo("grades", sc), "the graded demo builds");
+    finalizeScene(sc, true, false);
+    const Junction& j = sc.net.junction(0);
+    check(j.arms.size() == 4, "four skewed arms");
+    check(j.boundary.size() == j.boundaryHeight.size(), "every boundary vertex carries a height");
+
+    // The arms really do arrive at different heights and grades — otherwise the
+    // test proves nothing.
+    double lo = 1e9, hi = -1e9;
+    for (const JunctionArm& a : j.arms) {
+        double y = sc.net.road(a.road).surfacePoint(a.sContact, 0).y;
+        lo = std::min(lo, y);
+        hi = std::max(hi, y);
+    }
+    check(hi - lo > 0.15, "the approaches meet the pad at genuinely different heights");
+
+    // THE claim: the pad meets every arm at that arm's own surface, across the
+    // arm's full width — including whatever crossfall and bank it carries. A
+    // single averaged pad height cannot do this.
+    for (const JunctionArm& a : j.arms) {
+        const Road& r = sc.net.road(a.road);
+        for (double f : {0.05, 0.5, 0.95}) {
+            double t = lerp(a.rightExtent, a.leftExtent, f);
+            Vec2 p = r.spine.toPlan(a.sContact, t);
+            double armY = r.surfacePoint(a.sContact, t).y;
+            double padY = junctionElevationAt(sc.net, j, p);
+            checkNear(padY, armY, 0.05, "the pad meets the arm at the arm's own height");
+        }
+    }
+
+    // ...and the interior is a smooth blend, not a plateau or a set of steps.
+    double prev = junctionElevationAt(sc.net, j, j.center);
+    check(prev > lo - 0.5 && prev < hi + 0.5, "the pad centre lies between the arms");
+    double maxJump = 0;
+    for (int i = 0; i <= 60; ++i) {
+        Vec2 a = j.arms[0].contact, b = j.arms[2].contact;
+        Vec2 p = a + (b - a) * (double(i) / 60.0);
+        double h = junctionElevationAt(sc.net, j, p);
+        if (i > 0) maxJump = std::max(maxJump, std::fabs(h - prev));
+        prev = h;
+    }
+    check(maxJump < 0.25, "the pad surface has no steps across it");
+
+    check(sc.lint.empty(), "the graded junction passes the design lint");
+}
+
 // --- props ----------------------------------------------------------------
 
 void testPropsFollowSemantics() {
@@ -624,6 +708,118 @@ void testSimulation() {
         check(std::isfinite(pos.x) && std::isfinite(pos.y) && std::isfinite(pos.z),
               "poses are finite");
     }
+}
+
+void testRouting() {
+    group("routing");
+    Scene sc;
+    buildDemo("urban", sc);
+    finalizeScene(sc, false, false);
+    const std::vector<LaneNode>& nodes = sc.net.lanes().nodes;
+
+    SimParams sp;
+    sp.seed = 9;
+    Simulation sim(sc.net, sp);
+    sim.seedVehicles(90);
+
+    int routed = 0;
+    for (const Vehicle& v : sim.vehicles()) {
+        if (v.route.size() < 2) continue;
+        ++routed;
+        check(v.route.front() == v.lane, "a route starts at the vehicle's own lane");
+        check(v.targetRoad == nodes[size_t(v.route.back())].ref.road,
+              "the target road is the route's last road");
+        // Every step of the plan must be an edge the lane graph actually has.
+        for (size_t i = 0; i + 1 < v.route.size(); ++i) {
+            const LaneNode& a = nodes[size_t(v.route[i])];
+            bool linked = false;
+            for (int nx : a.successors)
+                if (nx == v.route[i + 1]) linked = true;
+            if (!linked) {
+                check(false, "consecutive route nodes are connected in the lane graph");
+                break;
+            }
+        }
+    }
+    check(routed > 40, "most vehicles were given a route");
+
+    sim.run(150.0, 0.1);
+    SimStats st = sim.stats();
+    check(st.replans > 0, "routes are planned");
+    check(st.completedTrips > 0, "trips complete");
+    check(st.mandatoryChanges > 0, "the route forces lane changes");
+    check(st.mandatoryChanges <= st.laneChanges, "mandatory changes are a subset of all changes");
+
+    // With routing off nothing plans, which is the control for the above.
+    SimParams plainParams = sp;
+    plainParams.routing = false;
+    Simulation plain(sc.net, plainParams);
+    plain.seedVehicles(90);
+    plain.run(30.0, 0.1);
+    check(plain.stats().replans == 0, "routing off means no plans");
+    for (const Vehicle& v : plain.vehicles()) check(v.route.empty(), "routing off means no routes");
+}
+
+void testLaneChoiceForAnExit() {
+    group("lane choice");
+    // THE query the two-resolution graph exists for. On a freeway with an
+    // off-ramp, not every lane can reach the ramp — so "which lane must I be in"
+    // has a non-trivial answer, and it has to come out of the topology rather
+    // than a hand-written rule.
+    Scene sc;
+    buildDemo("interchange", sc);
+    finalizeScene(sc, false, false);
+    const LaneGraph& lg = sc.net.lanes();
+
+    int rampRoad = -1;
+    for (const Road& r : sc.net.roads())
+        if (r.kind == RoadKind::Ramp && r.name == "off-ramp") rampRoad = r.id;
+    check(rampRoad >= 0, "the off-ramp exists");
+    if (rampRoad < 0) return;
+
+    // The mainline lane that feeds the ramp, found by walking the link the
+    // builder recorded rather than by guessing.
+    int feederRoad = -1, feederLane = 0;
+    for (const ExtraLaneLink& el : sc.net.extraLinks)
+        if (el.toRoad == rampRoad) {
+            feederRoad = el.fromRoad;
+            feederLane = el.fromLane;
+        }
+    check(feederRoad >= 0, "the diverge is recorded as a lane link");
+    if (feederRoad < 0) return;
+
+    const Road& main = sc.net.road(feederRoad);
+    int sec = main.xs.sectionIndexAt(main.end() - 1e-3);
+    int node = lg.find({feederRoad, sec, feederLane});
+    check(node >= 0, "the deceleration lane is in the lane graph");
+    if (node < 0) return;
+
+    check(lg.reaches(node, rampRoad, 4), "the deceleration lane reaches the ramp");
+
+    // Count how many lanes of that section can, and how many exist. If the
+    // answer were "all of them" the query would be meaningless.
+    std::vector<int> can = lg.lanesReaching(node, rampRoad, 4);
+    int total = 0;
+    for (const LaneNode& n : lg.nodes)
+        if (n.ref.road == feederRoad && n.ref.section == sec && n.dir == lg.nodes[size_t(node)].dir)
+            ++total;
+    check(total >= 3, "the mainline has several lanes here");
+    check(!can.empty(), "at least one lane can reach the exit");
+    check(int(can.size()) < total, "not every lane can reach the exit");
+
+    // And an inner lane genuinely cannot, so a driver in it must move over.
+    int inner = -1;
+    for (const LaneNode& n : lg.nodes) {
+        int idx = int(&n - &lg.nodes[0]);
+        if (n.ref.road != feederRoad || n.ref.section != sec) continue;
+        if (n.dir != lg.nodes[size_t(node)].dir) continue;
+        bool listed = false;
+        for (int c : can)
+            if (c == idx) listed = true;
+        if (!listed) inner = idx;
+    }
+    check(inner >= 0, "some lane cannot reach the exit");
+    if (inner >= 0) check(!lg.reaches(inner, rampRoad, 4), "and it really cannot");
 }
 
 void testSignalsStopTraffic() {
@@ -722,8 +918,12 @@ int main() {
     testRamps();
     testStructuresAndClearance();
     testTunnelKeepsTerrain();
+    testPolygonUtilities();
+    testGradedJunctionSurface();
     testPropsFollowSemantics();
     testSimulation();
+    testRouting();
+    testLaneChoiceForAnExit();
     testSignalsStopTraffic();
     testAllDemosBuild();
     testGeneratedCity();

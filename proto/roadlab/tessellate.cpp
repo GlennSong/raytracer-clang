@@ -86,57 +86,240 @@ void tessellateRoad(const Road& road, Mesh& out, const TessParams& p) {
     }
 }
 
-double junctionElevationAt(const Network& net, const Junction& j, Vec2 planPoint) {
-    // Inverse-distance blend of the arms' surface heights. A Coons patch would
-    // be the right answer for a skewed junction between differently-graded
-    // approaches; IDW is smooth, always defined, and meets each arm closely
-    // enough for a prototype.
-    double num = 0, den = 0;
-    for (const JunctionArm& a : j.arms) {
-        const Road& r = net.road(a.road);
-        double y = r.surfacePoint(a.sContact, 0).y;
-        double d = std::max(0.6, length(planPoint - a.contact));
-        double w = 1.0 / (d * d);
-        num += y * w;
-        den += w;
-    }
-    return den > 0 ? num / den : j.elevation;
+// --- polygon utilities ----------------------------------------------------
+
+namespace {
+
+double polygonArea2(const std::vector<Vec2>& poly) {
+    double a = 0;
+    for (size_t i = 0, k = poly.size() - 1; i < poly.size(); k = i++)
+        a += cross(poly[k], poly[i]);
+    return a;
 }
 
-void tessellateJunction(const Network& net, const Junction& j, Mesh& out) {
-    if (j.boundary.size() < 3) return;
-    Vec2 centroid{0, 0};
-    for (Vec2 p : j.boundary) centroid = centroid + p;
-    centroid = centroid * (1.0 / double(j.boundary.size()));
+bool pointInTriangle(Vec2 p, Vec2 a, Vec2 b, Vec2 c) {
+    double d1 = cross(b - a, p - a);
+    double d2 = cross(c - b, p - b);
+    double d3 = cross(a - c, p - c);
+    bool neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+    bool pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+    return !(neg && pos);
+}
 
-    auto makeVert = [&](Vec2 p) {
+}  // namespace
+
+std::vector<std::array<uint32_t, 3>> triangulatePolygon(const std::vector<Vec2>& poly) {
+    std::vector<std::array<uint32_t, 3>> out;
+    const size_t n = poly.size();
+    if (n < 3) return out;
+
+    // Work counter-clockwise so "convex" has one meaning throughout.
+    std::vector<uint32_t> idx(n);
+    bool ccw = polygonArea2(poly) > 0;
+    for (size_t i = 0; i < n; ++i) idx[i] = uint32_t(ccw ? i : n - 1 - i);
+
+    int guard = int(n) * int(n) + 16;
+    while (idx.size() > 3 && guard-- > 0) {
+        bool clipped = false;
+        for (size_t i = 0; i < idx.size(); ++i) {
+            size_t prev = (i + idx.size() - 1) % idx.size();
+            size_t next = (i + 1) % idx.size();
+            Vec2 a = poly[idx[prev]], b = poly[idx[i]], c = poly[idx[next]];
+            if (cross(b - a, c - b) <= 1e-12) continue;   // reflex or degenerate
+            bool ear = true;
+            for (size_t k = 0; k < idx.size() && ear; ++k) {
+                if (k == prev || k == i || k == next) continue;
+                if (pointInTriangle(poly[idx[k]], a, b, c)) ear = false;
+            }
+            if (!ear) continue;
+            out.push_back({idx[prev], idx[i], idx[next]});
+            idx.erase(idx.begin() + long(i));
+            clipped = true;
+            break;
+        }
+        if (!clipped) {
+            // Self-intersecting or otherwise pathological: fall back to a fan so
+            // the pad is still covered rather than missing.
+            out.clear();
+            for (size_t i = 1; i + 1 < n; ++i)
+                out.push_back({uint32_t(0), uint32_t(i), uint32_t(i + 1)});
+            return out;
+        }
+    }
+    if (idx.size() == 3) out.push_back({idx[0], idx[1], idx[2]});
+    return out;
+}
+
+bool meanValueCoords(const std::vector<Vec2>& poly, Vec2 p, std::vector<double>& weights) {
+    const size_t n = poly.size();
+    weights.assign(n, 0.0);
+    if (n < 3) return false;
+
+    std::vector<double> dist(n);
+    for (size_t i = 0; i < n; ++i) {
+        dist[i] = length(poly[i] - p);
+        if (dist[i] < 1e-7) {   // exactly on a vertex
+            weights[i] = 1.0;
+            return true;
+        }
+    }
+    // On an edge, the coordinates collapse to a linear blend of its endpoints.
+    for (size_t i = 0; i < n; ++i) {
+        size_t k = (i + 1) % n;
+        Vec2 a = poly[i], b = poly[k];
+        Vec2 ab = b - a;
+        double len2 = dot(ab, ab);
+        if (len2 < 1e-12) continue;
+        double u = clampd(dot(p - a, ab) / len2, 0.0, 1.0);
+        if (length(a + ab * u - p) < 1e-7) {
+            weights[i] = 1.0 - u;
+            weights[k] = u;
+            return true;
+        }
+    }
+
+    // tan(alpha_i / 2) for the angle subtended at p by edge i -> i+1.
+    std::vector<double> tanHalf(n, 0.0);
+    for (size_t i = 0; i < n; ++i) {
+        size_t k = (i + 1) % n;
+        Vec2 a = poly[i] - p, b = poly[k] - p;
+        double den = dist[i] * dist[k] + dot(a, b);
+        if (std::fabs(den) < 1e-12) return false;   // p lies on the line, outside
+        tanHalf[i] = cross(a, b) / den;
+    }
+    double sum = 0;
+    for (size_t i = 0; i < n; ++i) {
+        size_t prev = (i + n - 1) % n;
+        weights[i] = (tanHalf[prev] + tanHalf[i]) / dist[i];
+        sum += weights[i];
+    }
+    if (std::fabs(sum) < 1e-12) return false;
+    for (double& w : weights) w /= sum;
+    return true;
+}
+
+double junctionElevationAt(const Network& net, const Junction& j, Vec2 planPoint) {
+    const std::vector<Vec2>& poly = j.boundary;
+    const std::vector<double>& hb = j.boundaryHeight;
+    if (poly.size() < 3 || hb.size() != poly.size()) {
+        // No usable boundary: fall back to the arms.
+        double num = 0, den = 0;
+        for (const JunctionArm& a : j.arms) {
+            double y = net.road(a.road).surfacePoint(a.sContact, 0).y;
+            double d = std::max(0.6, length(planPoint - a.contact));
+            num += y / (d * d);
+            den += 1.0 / (d * d);
+        }
+        return den > 0 ? num / den : j.elevation;
+    }
+
+    // Inside the pad: transfinite interpolation of the boundary heights, which
+    // meets every arm exactly at its own grade, crossfall and bank.
+    static thread_local std::vector<double> w;
+    if (meanValueCoords(poly, planPoint, w)) {
+        bool inside = true;
+        for (double v : w) {
+            if (v < -1e-9) {   // MVC goes negative outside the polygon
+                inside = false;
+                break;
+            }
+        }
+        if (inside) {
+            double h = 0;
+            for (size_t i = 0; i < w.size(); ++i) h += w[i] * hb[i];
+            return h;
+        }
+    }
+
+    // Outside: the height of the nearest point ON the boundary, so the terrain
+    // meets the kerb line without a step.
+    double best = 1e300, bestH = j.elevation;
+    for (size_t i = 0, k = poly.size() - 1; i < poly.size(); k = i++) {
+        Vec2 a = poly[k], b = poly[i];
+        Vec2 ab = b - a;
+        double len2 = std::max(1e-12, dot(ab, ab));
+        double u = clampd(dot(planPoint - a, ab) / len2, 0.0, 1.0);
+        double d = length(a + ab * u - planPoint);
+        if (d < best) {
+            best = d;
+            bestH = lerp(hb[k], hb[i], u);
+        }
+    }
+    return bestH;
+}
+
+void tessellateJunction(const Network& net, const Junction& j, Mesh& out, double padDetail) {
+    if (j.boundary.size() < 3) return;
+
+    // Positions first, heights second: every vertex — boundary, interior, or one
+    // created by refinement — takes its height from the same interpolant, so the
+    // pad is one continuous surface that happens to be pinned at the arms.
+    std::vector<Vec2> pts = j.boundary;
+    std::vector<std::array<uint32_t, 3>> tris = triangulatePolygon(pts);
+    if (tris.empty()) return;
+
+    // Refine until no edge is longer than padDetail. A flat pad does not need
+    // this; a pad spanning a grade change does, or the interpolation has nowhere
+    // to show itself.
+    for (int level = 0; level < 4; ++level) {
+        double longest = 0;
+        for (const auto& t : tris) {
+            for (int e = 0; e < 3; ++e)
+                longest =
+                    std::max(longest, length(pts[t[size_t(e)]] - pts[t[size_t((e + 1) % 3)]]));
+        }
+        if (longest <= padDetail || pts.size() > 6000) break;
+        std::vector<std::array<uint32_t, 3>> next;
+        next.reserve(tris.size() * 4);
+        // Midpoints are cached on the ordered vertex pair so neighbouring
+        // triangles share the split point and the surface stays watertight.
+        std::vector<std::pair<uint64_t, uint32_t>> mids;
+        auto midpoint = [&](uint32_t a, uint32_t b) {
+            uint64_t key = (uint64_t(std::min(a, b)) << 32) | uint64_t(std::max(a, b));
+            for (const auto& m : mids)
+                if (m.first == key) return m.second;
+            pts.push_back((pts[a] + pts[b]) * 0.5);
+            uint32_t id = uint32_t(pts.size() - 1);
+            mids.push_back({key, id});
+            return id;
+        };
+        for (const auto& t : tris) {
+            uint32_t ab = midpoint(t[0], t[1]);
+            uint32_t bc = midpoint(t[1], t[2]);
+            uint32_t ca = midpoint(t[2], t[0]);
+            next.push_back({t[0], ab, ca});
+            next.push_back({ab, t[1], bc});
+            next.push_back({ca, bc, t[2]});
+            next.push_back({ab, bc, ca});
+        }
+        tris.swap(next);
+    }
+
+    std::vector<uint32_t> vid(pts.size(), 0);
+    for (size_t i = 0; i < pts.size(); ++i) {
         Vertex v;
-        v.pos = worldOf(p, junctionElevationAt(net, j, p));
+        v.pos = worldOf(pts[i], junctionElevationAt(net, j, pts[i]));
         v.normal = {0, 1, 0};
-        v.s = p.y;
-        v.t = p.x;
+        v.s = pts[i].y;
+        v.t = pts[i].x;
         v.junction = j.id;
         v.material = MatKind::JunctionPad;
-        return out.push(v);
-    };
-
-    uint32_t c = makeVert(centroid);
-    std::vector<uint32_t> ring;
-    ring.reserve(j.boundary.size());
-    for (Vec2 p : j.boundary) ring.push_back(makeVert(p));
-    for (size_t i = 0; i < ring.size(); ++i) {
-        out.tri(c, ring[i], ring[(i + 1) % ring.size()]);
+        vid[i] = out.push(v);
     }
-    // Recompute the fan's normals from the actual triangle plane so a pad that
-    // spans a grade change is not lit as if it were flat.
-    for (size_t i = 0; i < ring.size(); ++i) {
-        Vec3 a = out.verts[c].pos;
-        Vec3 b = out.verts[ring[i]].pos;
-        Vec3 d = out.verts[ring[(i + 1) % ring.size()]].pos;
-        Vec3 n = normalize(cross(d - a, b - a));
+    // Area-weighted vertex normals, so a pad spanning a grade change is lit as
+    // the ramp it is rather than as a flat plate.
+    std::vector<Vec3> accum(pts.size(), Vec3{0, 0, 0});
+    for (const auto& t : tris) {
+        Vec3 a = out.verts[vid[t[0]]].pos;
+        Vec3 b = out.verts[vid[t[1]]].pos;
+        Vec3 c = out.verts[vid[t[2]]].pos;
+        Vec3 n = cross(c - a, b - a);
         if (n.y < 0) n = -n;
-        out.verts[ring[i]].normal = n;
+        for (int k = 0; k < 3; ++k) accum[t[size_t(k)]] += n;
+        out.tri(vid[t[0]], vid[t[1]], vid[t[2]]);
     }
+    for (size_t i = 0; i < pts.size(); ++i)
+        if (lengthSq(accum[i]) > 1e-18) out.verts[vid[i]].normal = normalize(accum[i]);
 }
 
 void tessellateNetwork(const Network& net, Mesh& out, const TessParams& p, bool withStructures) {

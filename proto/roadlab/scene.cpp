@@ -258,7 +258,7 @@ bool saveSceneJson(const Scene& scene, const std::string& path, std::string& err
 // --- demos ----------------------------------------------------------------
 
 std::vector<std::string> demoNames() {
-    return {"lanes", "roundabout", "interchange", "urban", "tiers", "showcase"};
+    return {"lanes", "roundabout", "interchange", "urban", "tiers", "grades", "showcase"};
 }
 
 namespace {
@@ -428,6 +428,54 @@ void demoTiers(Scene& sc) {
     makeTunnel(sc.net, tu, L * 0.34, L * 0.66, 11.0, 165.0);
 }
 
+// A skewed junction whose four arms arrive at four different heights, on four
+// different grades, each carrying some curvature (and so some bank) into the
+// pad. This is the case the pad's height interpolation exists for; with a flat
+// blend it produces a visible lip at every approach.
+void demoGrades(Scene& sc) {
+    sc.name = "grades";
+    sc.terrain.amplitude = 3.0;
+    sc.terrain.frequency = 1.0 / 220.0;
+
+    struct Arm {
+        const char* name;
+        double bearingDeg;
+        double outerHeight;
+        const char* preset;
+        double reach;
+    };
+    // Deliberately not at 90-degree spacing: a skewed junction is the hard case.
+    const Arm arms[4] = {
+        {"north", 96, 3.2, "arterial4", 170},
+        {"east", 8, -1.4, "collector4", 190},
+        {"south", -104, -2.6, "arterial4", 175},
+        {"west", 168, 1.1, "street2_park", 150},
+    };
+    std::vector<std::pair<int, bool>> junctionArms;
+    for (const Arm& a : arms) {
+        double ang = a.bearingDeg * kDeg2Rad;
+        Vec2 outer{std::cos(ang) * a.reach, std::sin(ang) * a.reach};
+        Vec2 mid{std::cos(ang) * a.reach * 0.5, std::sin(ang) * a.reach * 0.5};
+        Vec2 inner{std::cos(ang) * 16.0, std::sin(ang) * 16.0};
+        RoadDesc d;
+        d.name = a.name;
+        d.preset = a.preset;
+        // A slight sway so each arm carries curvature and superelevation into the
+        // junction rather than arriving dead straight.
+        Vec2 nrm = perpLeft(normalize(inner - outer));
+        d.points = {outer, mid + nrm * 7.0, inner};
+        d.cornerRadius = 400;
+        // The whole point: each approach reaches the pad at its own height, on
+        // its own grade.
+        d.elevationKnots = {{0.0, a.outerHeight},
+                            {a.reach * 0.55, a.outerHeight * 0.45},
+                            {a.reach, 0.0}};
+        int id = buildRoad(sc.net, d);
+        junctionArms.push_back({id, true});
+    }
+    buildIntersection(sc.net, "graded", junctionArms, JunctionControl::PriorityStop, 8.0);
+}
+
 void demoShowcase(Scene& sc) {
     sc.name = "showcase";
     sc.terrain.amplitude = 4.0;
@@ -501,6 +549,7 @@ bool buildDemo(const std::string& name, Scene& out) {
     else if (name == "interchange") demoInterchange(out);
     else if (name == "urban") demoUrban(out);
     else if (name == "tiers") demoTiers(out);
+    else if (name == "grades") demoGrades(out);
     else if (name == "showcase") demoShowcase(out);
     else return false;
     return true;

@@ -84,6 +84,10 @@ struct Junction {
     std::vector<ConflictPoint> conflicts;
     std::vector<SignalPhase> phases;
     std::vector<Vec2> boundary;      // the pad polygon, CCW
+    // Height of each boundary vertex, taken from the arm that produced it. The
+    // pad's interior is interpolated from these, so a junction between arms that
+    // arrive at different grades meets every one of them exactly.
+    std::vector<double> boundaryHeight;
 
     double cycleLength() const;
     // Which phase is green at time `t`, and how long it has left.

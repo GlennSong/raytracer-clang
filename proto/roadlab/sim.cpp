@@ -1,6 +1,7 @@
 #include "sim.h"
 
 #include <algorithm>
+#include <queue>
 
 namespace roadlab {
 
@@ -64,6 +65,7 @@ void Simulation::seedVehicles(int count) {
         v.color = {rng_.range(0.10, 0.75), rng_.range(0.10, 0.70), rng_.range(0.10, 0.75)};
         vehicles_.push_back(v);
     }
+    for (Vehicle& v : vehicles_) assignRoute(v);
     rebuildOccupancy();
 }
 
@@ -290,9 +292,130 @@ bool Simulation::blockedByJunction(const Vehicle& v, double& distance) const {
     return false;
 }
 
-int Simulation::chooseSuccessor(int node) {
-    const LaneNode& n = net_.lanes().nodes[size_t(node)];
+std::vector<int> Simulation::planRoute(int fromNode) {
+    const std::vector<LaneNode>& nodes = net_.lanes().nodes;
+    std::vector<int> path;
+    if (fromNode < 0 || size_t(fromNode) >= nodes.size()) return path;
+
+    // Dijkstra by travel TIME, not distance: a driver routing by distance would
+    // happily take a residential street over the parallel arterial.
+    std::vector<double> dist(nodes.size(), 1e300);
+    std::vector<int> prev(nodes.size(), -1);
+    using Entry = std::pair<double, int>;
+    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> pq;
+    dist[size_t(fromNode)] = 0.0;
+    pq.push({0.0, fromNode});
+    double furthest = 0;
+    while (!pq.empty()) {
+        auto [d, n] = pq.top();
+        pq.pop();
+        if (d > dist[size_t(n)] + 1e-9) continue;
+        furthest = std::max(furthest, d);
+        for (int nx : nodes[size_t(n)].successors) {
+            const LaneNode& t = nodes[size_t(nx)];
+            if (!(t.access & kAccessCar)) continue;
+            double cost = t.length / std::max(3.0, double(t.speedLimit) / 3.6);
+            // A small per-hop penalty keeps routes from threading a hundred tiny
+            // junction connectors when a straight run would do.
+            cost += 0.6;
+            if (dist[size_t(n)] + cost < dist[size_t(nx)] - 1e-9) {
+                dist[size_t(nx)] = dist[size_t(n)] + cost;
+                prev[size_t(nx)] = n;
+                pq.push({dist[size_t(nx)], nx});
+            }
+        }
+    }
+
+    // Pick a destination among the genuinely-far reachable lanes, so trips are
+    // long enough to require real lane planning.
+    std::vector<int> candidates;
+    double floorTime = std::max(15.0, furthest * 0.45);
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        if (dist[i] > 1e299 || dist[i] < floorTime) continue;
+        if (nodes[i].junctionId >= 0) continue;   // don't end inside a junction
+        if (nodes[i].length < 15.0) continue;
+        candidates.push_back(int(i));
+    }
+    if (candidates.empty()) return path;
+    int dest = candidates[size_t(rng_.rangeI(0, int(candidates.size()) - 1))];
+    for (int n = dest; n >= 0; n = prev[size_t(n)]) path.push_back(n);
+    std::reverse(path.begin(), path.end());
+    ++replans_;
+    return path;
+}
+
+void Simulation::assignRoute(Vehicle& v) {
+    if (!params_.routing) {
+        v.route.clear();
+        v.routePos = 0;
+        v.targetRoad = -1;
+        return;
+    }
+    v.route = planRoute(v.lane);
+    v.routePos = 0;
+    v.targetRoad = v.route.empty() ? -1 : net_.lanes().nodes[size_t(v.route.back())].ref.road;
+}
+
+int Simulation::routeDemand(const Vehicle& v, double& distance) const {
+    distance = 1e9;
+    if (v.route.empty() || v.routePos + 1 >= v.route.size()) return -1;
+    const std::vector<LaneNode>& nodes = net_.lanes().nodes;
+    const LaneNode& cur = nodes[size_t(v.lane)];
+
+    // Walk forward along the plan accumulating distance. The interesting road is
+    // the first one the CURRENT lane cannot reach — that is the thing the driver
+    // has to do something about, and how far away it is sets the urgency.
+    double ahead = std::max(0.0, cur.length - v.travelled);
+    for (size_t i = v.routePos + 1; i < v.route.size(); ++i) {
+        int node = v.route[i];
+        int road = nodes[size_t(node)].ref.road;
+        if (road != cur.ref.road &&
+            !net_.lanes().reaches(v.lane, road, params_.routeMaxDepth)) {
+            distance = ahead;
+            return road;
+        }
+        ahead += nodes[size_t(node)].length;
+        if (ahead > params_.routeLookahead) break;
+    }
+    return -1;
+}
+
+int Simulation::chooseSuccessor(Vehicle& v) {
+    const std::vector<LaneNode>& nodes = net_.lanes().nodes;
+    const LaneNode& n = nodes[size_t(v.lane)];
     if (n.successors.empty()) return -1;
+
+    // Follow the plan when the plan is still followable.
+    if (!v.route.empty()) {
+        // Re-sync: the vehicle may have changed lanes since the route was made.
+        for (size_t i = v.routePos; i < v.route.size(); ++i) {
+            if (v.route[i] == v.lane) {
+                v.routePos = i;
+                break;
+            }
+        }
+        if (v.routePos + 1 < v.route.size()) {
+            int want = v.route[v.routePos + 1];
+            for (int s : n.successors) {
+                if (s == want) {
+                    ++v.routePos;
+                    return s;
+                }
+            }
+        }
+        // The plan no longer connects from here — lane changes have taken the
+        // vehicle off it. Re-plan from where it actually is.
+        v.route = planRoute(v.lane);
+        v.routePos = 0;
+        v.targetRoad = v.route.empty() ? -1 : nodes[size_t(v.route.back())].ref.road;
+        if (v.route.size() > 1) {
+            for (int s : n.successors)
+                if (s == v.route[1]) {
+                    v.routePos = 1;
+                    return s;
+                }
+        }
+    }
     return n.successors[size_t(rng_.rangeI(0, int(n.successors.size()) - 1))];
 }
 
@@ -303,10 +426,23 @@ void Simulation::considerLaneChange(Vehicle& v) {
     if (n.junctionId >= 0) return;
 
     double toEnd = n.length - v.travelled;
-    // MANDATORY: this lane goes nowhere. The taper the shader draws and the
-    // "successors is empty" the sim reads are the same fact, so the driver is
-    // never surprised by paint that says merge while the graph says continue.
-    bool mustLeave = n.successors.empty() && toEnd < 220.0;
+
+    // MANDATORY, reason one: this lane goes nowhere. The taper the shader draws
+    // and the "successors is empty" the sim reads are the same fact, so the
+    // driver is never surprised by paint that says merge while the graph says
+    // continue.
+    bool laneEnds = n.successors.empty() && toEnd < 220.0;
+
+    // MANDATORY, reason two: the lane still goes somewhere, just not where this
+    // trip is going. THIS is the query the two-resolution graph exists for —
+    // "I need the third exit, so I must be in one of these lanes by then" — and
+    // it is answered by walking the plan, not by a special case per junction.
+    double demandDistance = 1e9;
+    int demandRoad = routeDemand(v, demandDistance);
+    bool routeForces = demandRoad >= 0 && demandDistance < params_.routeLookahead;
+    v.routeUrgency = routeForces ? saturate(1.0 - demandDistance / params_.routeLookahead) : 0.0;
+
+    bool mustLeave = laneEnds || routeForces;
 
     struct Option {
         int node;
@@ -318,11 +454,16 @@ void Simulation::considerLaneChange(Vehicle& v) {
     int best = -1;
     for (const Option& opt : options) {
         if (opt.node < 0) continue;
-        // A solid line is not crossable. Same field as the paint.
-        if (!opt.crossable && !mustLeave) continue;
+        // A solid line is not crossable. Same field as the paint. Even a driver
+        // who NEEDS the lane will not cross a solid line here; that is what
+        // makes a missed exit possible, which is correct behaviour.
+        if (!opt.crossable) continue;
         const LaneNode& tgt = nodes[size_t(opt.node)];
         if (!(tgt.access & kAccessCar)) continue;
-        if (mustLeave && tgt.successors.empty()) continue;
+        if (laneEnds && tgt.successors.empty()) continue;
+        // A neighbour that cannot serve the plan either is no help.
+        if (routeForces && !net_.lanes().reaches(opt.node, demandRoad, params_.routeMaxDepth))
+            continue;
 
         double leadSpeed = 0, followSpeed = 0;
         double gapAhead = 1e9;
@@ -338,14 +479,17 @@ void Simulation::considerLaneChange(Vehicle& v) {
         gapBack -= 0.5 * v.length + 2.5;
 
         // Gap acceptance: room in front, and room behind measured against how
-        // fast the follower is closing.
-        double needBack = 4.0 + std::max(0.0, followSpeed - v.speed) * 1.6;
-        if (gapAhead < 6.0 + v.speed * 0.6 || gapBack < needBack) continue;
+        // fast the follower is closing. A driver running out of road accepts a
+        // tighter gap than one merely looking for a faster lane.
+        double squeeze = 1.0 - 0.55 * std::max(v.routeUrgency, laneEnds ? 0.8 : 0.0);
+        double needBack = (4.0 + std::max(0.0, followSpeed - v.speed) * 1.6) * squeeze;
+        if (gapAhead < (6.0 + v.speed * 0.6) * squeeze || gapBack < needBack) continue;
 
         double myGapSpeed = 0;
         double myGap = gapToLeader(v, myGapSpeed);
         double score = (gapAhead - myGap) * 0.02 + (leadSpeed - myGapSpeed) * 0.35;
-        if (mustLeave) score += 1000.0 / std::max(8.0, toEnd);
+        if (laneEnds) score += 1000.0 / std::max(8.0, toEnd);
+        if (routeForces) score += 1000.0 * (0.2 + v.routeUrgency);
         if (score > bestScore) {
             bestScore = score;
             best = opt.node;
@@ -355,11 +499,11 @@ void Simulation::considerLaneChange(Vehicle& v) {
         v.changingTo = best;
         v.changeTime = 0;
         ++laneChanges_;
+        if (mustLeave) ++mandatory_;
     }
 }
 
 void Simulation::respawn(Vehicle& v) {
-    ++completed_;
     if (!params_.spawnRespawn) {
         v.active = false;
         return;
@@ -393,6 +537,8 @@ void Simulation::respawn(Vehicle& v) {
     v.changingTo = -1;
     v.lateral = 0;
     v.waited = 0;
+    v.routeUrgency = 0;
+    assignRoute(v);
 }
 
 void Simulation::step(double dt) {
@@ -480,10 +626,22 @@ void Simulation::step(double dt) {
         v.travelled += v.speed * dt;
         double len = laneLength(v.lane);
         while (v.travelled > len) {
-            int next = chooseSuccessor(v.lane);
+            // Arrived: the plan is spent. A real trip ends here; this one starts
+            // a new leg from where it is, which keeps the population steady
+            // without teleporting anybody.
+            if (!v.route.empty() && v.routePos + 1 >= v.route.size()) {
+                ++completed_;
+                assignRoute(v);
+                if (v.route.size() < 2) {
+                    respawn(v);
+                    break;
+                }
+            }
+            int next = chooseSuccessor(v);
             if (next < 0) {
                 // Ran out of lane. In a real game this is a despawn or a
                 // network-boundary handoff; here it recycles.
+                ++completed_;
                 respawn(v);
                 break;
             }
@@ -566,7 +724,14 @@ SimStats Simulation::stats() const {
     st.meanSpeedKph = st.vehicles ? sum / st.vehicles * 3.6 : 0.0;
     st.meanWait = st.vehicles ? wait / st.vehicles : 0.0;
     st.laneChanges = laneChanges_;
+    st.mandatoryChanges = mandatory_;
     st.completedTrips = completed_;
+    st.replans = replans_;
+    for (const Vehicle& v : vehicles_) {
+        if (!v.active) continue;
+        double d = 0;
+        if (routeDemand(v, d) >= 0 && d < params_.routeLookahead) ++st.offRoute;
+    }
     st.pedestrians = int(peds_.size());
     st.parkedCars = int(parked_.size());
     return st;

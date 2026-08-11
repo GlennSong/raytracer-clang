@@ -113,6 +113,34 @@ void LaneGraph::addIndex(const LaneRef& ref, int node) {
     index_.insert(it, {k, node});
 }
 
+bool LaneGraph::reaches(int fromNode, int targetRoad, int maxDepth) const {
+    if (fromNode < 0 || size_t(fromNode) >= nodes.size()) return false;
+    // Small, bounded, and called per vehicle per step, so it uses a scratch mark
+    // buffer rather than allocating a visited set every time.
+    static thread_local std::vector<int> stamp;
+    static thread_local int epoch = 0;
+    if (stamp.size() != nodes.size()) {
+        stamp.assign(nodes.size(), 0);
+        epoch = 0;
+    }
+    ++epoch;
+    static thread_local std::vector<std::pair<int, int>> queue;
+    queue.clear();
+    queue.push_back({fromNode, 0});
+    stamp[size_t(fromNode)] = epoch;
+    for (size_t head = 0; head < queue.size(); ++head) {
+        auto [n, d] = queue[head];
+        if (nodes[size_t(n)].ref.road == targetRoad) return true;
+        if (d >= maxDepth) continue;
+        for (int nx : nodes[size_t(n)].successors) {
+            if (stamp[size_t(nx)] == epoch) continue;
+            stamp[size_t(nx)] = epoch;
+            queue.push_back({nx, d + 1});
+        }
+    }
+    return false;
+}
+
 std::vector<int> LaneGraph::lanesReaching(int fromNode, int targetRoad, int maxDepth) const {
     std::vector<int> result;
     if (fromNode < 0 || size_t(fromNode) >= nodes.size()) return result;
@@ -120,31 +148,11 @@ std::vector<int> LaneGraph::lanesReaching(int fromNode, int targetRoad, int maxD
 
     // Which lanes of the same road+section can get to targetRoad? That is the
     // question a driver is actually asking 400 m before their exit.
-    auto reaches = [&](int node) {
-        std::vector<char> seen(nodes.size(), 0);
-        std::queue<std::pair<int, int>> q;
-        q.push({node, 0});
-        seen[size_t(node)] = 1;
-        while (!q.empty()) {
-            auto [n, d] = q.front();
-            q.pop();
-            if (nodes[size_t(n)].ref.road == targetRoad) return true;
-            if (d >= maxDepth) continue;
-            for (int nx : nodes[size_t(n)].successors) {
-                if (!seen[size_t(nx)]) {
-                    seen[size_t(nx)] = 1;
-                    q.push({nx, d + 1});
-                }
-            }
-        }
-        return false;
-    };
-
     for (size_t i = 0; i < nodes.size(); ++i) {
         const LaneNode& n = nodes[i];
         if (n.ref.road != start.ref.road || n.ref.section != start.ref.section) continue;
         if (n.dir != start.dir) continue;
-        if (reaches(int(i))) result.push_back(int(i));
+        if (reaches(int(i), targetRoad, maxDepth)) result.push_back(int(i));
     }
     return result;
 }
