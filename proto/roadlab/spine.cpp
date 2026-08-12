@@ -70,6 +70,25 @@ void Spine::addSpiral(double length, double curvStart, double curvEnd) {
     finalized_ = false;
 }
 
+void Spine::addAnchored(GeomKind kind, Vec2 p0, double heading, double length, double curvStart,
+                        double curvEnd) {
+    if (length <= 1e-9) return;
+    GeomPrim g;
+    g.kind = kind;
+    g.length = length;
+    g.curv0 = curvStart;
+    g.curv1 = (kind == GeomKind::Spiral) ? curvEnd : curvStart;
+    g.p0 = p0;
+    g.hdg0 = heading;
+    g.anchored = true;
+    if (prims_.empty()) {
+        start_ = p0;
+        startHdg_ = heading;
+    }
+    prims_.push_back(g);
+    finalized_ = false;
+}
+
 void Spine::setFlatElevation(double y) { elevation_.set(y); }
 
 void Spine::setElevationKnots(const std::vector<Vec2>& sHeight) {
@@ -187,8 +206,13 @@ void Spine::finalize(double maxSampleStep) {
     double s = 0;
     for (GeomPrim& g : prims_) {
         g.s0 = s;
-        g.p0 = p;
-        g.hdg0 = hdg;
+        if (g.anchored) {
+            p = g.p0;
+            hdg = g.hdg0;
+        } else {
+            g.p0 = p;
+            g.hdg0 = hdg;
+        }
         primEnd(g, p, hdg);
         s += g.length;
     }
@@ -319,11 +343,16 @@ bool Spine::toST(Vec2 planPoint, double& s, double& t, double sTolerance) const 
         Vec2 tan = dirOf(hdg);
         Vec2 nrm = perpLeft(tan);
         Vec2 d = planPoint - c;
+        // Newton on f(s) = (P - C(s))·T(s) = 0, so the step is -f/f'. Getting the
+        // sign wrong here does not fail loudly: it walks AWAY from the foot of
+        // the perpendicular, doubling the seed's error every iteration, and the
+        // residual guard below then rejects the answer. The symptom is an
+        // inverse map that quietly never resolves anything.
         double f = dot(d, tan);
         double fp = -1.0 + k * dot(d, nrm);
         if (std::fabs(fp) < 1e-9) break;
         double step = clampd(-f / fp, -20.0, 20.0);
-        cur -= step;
+        cur += step;
         if (std::fabs(step) < 1e-7) break;
     }
     double sc = clampd(cur, 0.0, length_);

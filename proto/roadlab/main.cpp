@@ -8,6 +8,7 @@
 //   roadlab --scene my.json --sim 45 --cars 160 --view persp
 //   roadlab --city --seed 3 --report --lint
 //   roadlab --shots out/            (renders the whole demo set)
+//   roadlab --import town.xodr --view top --report
 
 #include "odr.h"
 #include "scene.h"
@@ -29,6 +30,7 @@ struct Options {
     std::string shotsDir;
     std::string dumpJson;
     std::string xodrPath;
+    std::string importPath;
     bool city = false;
     int width = 1600, height = 1000;
     int cars = 0, peds = 0;
@@ -84,6 +86,7 @@ void usage() {
         "  --lint              print design-rule violations\n"
         "  --dump <file.json>  write a summary of the built network\n"
         "  --xodr <file.xodr>  export the network as OpenDRIVE\n"
+        "  --import <f.xodr>   load an OpenDRIVE file as the scene\n"
         "  --list              list presets and demos\n");
 }
 
@@ -212,6 +215,7 @@ int main(int argc, char** argv) {
         if (matchArg(i, argc, argv, "--view", opt.view)) continue;
         if (matchArg(i, argc, argv, "--dump", opt.dumpJson)) continue;
         if (matchArg(i, argc, argv, "--xodr", opt.xodrPath)) continue;
+        if (matchArg(i, argc, argv, "--import", opt.importPath)) continue;
         if (matchNum(i, argc, argv, "--width", d)) { opt.width = int(d); continue; }
         if (matchNum(i, argc, argv, "--height", d)) { opt.height = int(d); continue; }
         if (matchNum(i, argc, argv, "--cars", d)) { opt.cars = int(d); continue; }
@@ -287,7 +291,22 @@ int main(int argc, char** argv) {
         sc.shade.decals = opt.decals;
         sc.shade.debugMode = opt.debugMode;
 
-        if (!opt.scenePath.empty()) {
+        if (!opt.importPath.empty()) {
+            std::string err;
+            OdrImportReport rep;
+            if (!readOpenDrive(opt.importPath, sc.net, err, &rep)) {
+                std::fprintf(stderr, "roadlab: %s\n", err.c_str());
+                return false;
+            }
+            if (!rep.name.empty()) sc.name = rep.name;
+            if (!opt.quiet) {
+                std::printf("imported %s: %d roads, %d junctions, %d lane sections, %d lanes\n",
+                            opt.importPath.c_str(), rep.roads, rep.junctions, rep.laneSections,
+                            rep.lanes);
+                for (const std::string& note : rep.notes)
+                    std::printf("  note: %s\n", note.c_str());
+            }
+        } else if (!opt.scenePath.empty()) {
             std::string err;
             if (!loadSceneJson(opt.scenePath, sc, err)) {
                 std::fprintf(stderr, "roadlab: %s\n", err.c_str());

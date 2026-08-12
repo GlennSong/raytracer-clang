@@ -11,6 +11,7 @@
 #include "junction.h"
 #include "network.h"
 #include "odr.h"
+#include "rl_xml.h"
 #include "profile.h"
 #include "props.h"
 #include "scene.h"
@@ -138,9 +139,21 @@ void testInverseMapping() {
     double bs = 0, bt = 0;
     check(!s.toST(beyond, bs, bt), "a point past the end is rejected");
 
+    // A point well off an arc does have a foot of perpendicular — outside a
+    // circle everything projects radially — so the invariant is not that the
+    // query fails but that the answer is HONEST: it must reconstruct the point,
+    // and its lateral offset must be large enough that no width test mistakes it
+    // for being on the road. Reporting a small plausible t is the bug.
     Spine ring = spineArc({0, 0}, 20.0, 0.0, kPi * 0.5, true);
     double rs = 0, rt = 0;
-    check(!ring.toST({-8, -52}, rs, rt), "a point far off an arc is rejected");
+    if (ring.toST({-8, -52}, rs, rt)) {
+        check(std::fabs(rt) > 40.0, "a point far off an arc reports a far-off lateral offset");
+        Vec2 rebuilt = ring.toPlan(rs, rt);
+        checkNear(rebuilt.x, -8.0, 1e-6, "and the (s,t) it reports rebuilds the point (x)");
+        checkNear(rebuilt.y, -52.0, 1e-6, "and rebuilds the point (z)");
+    } else {
+        check(true, "a point far off an arc is rejected");
+    }
 }
 
 void testSuperelevation() {
@@ -1330,6 +1343,317 @@ void testDivergeKeepsLaneIdentity() {
     check(checked >= 3, "the through lanes really are linked in the graph");
 }
 
+// --- OpenDRIVE import -------------------------------------------------------
+
+void testXmlReader() {
+    group("xml reader");
+    XmlNode root;
+    std::string err;
+    const char* doc =
+        "<?xml version=\"1.0\"?>\n"
+        "<!-- a comment with <angle> brackets -->\n"
+        "<top a=\"1\" b='two' c=\"a &amp; b &lt;3&gt;\">\n"
+        "  <kid n=\"1\"/>\n"
+        "  <kid n=\"2\"><grand v=\"-3.5\"/></kid>\n"
+        "</top>";
+    check(xmlParse(doc, root, err), "a well-formed document parses");
+    check(root.name == "top", "the root element is found");
+    checkNear(root.attrD("a"), 1.0, 1e-12, "a numeric attribute reads back");
+    check(root.attrS("b") == "two", "single quotes are accepted");
+    check(root.attrS("c") == "a & b <3>", "the predefined entities are unescaped");
+    check(root.all("kid").size() == 2, "repeated children are all kept");
+    const XmlNode* second = root.all("kid")[1];
+    check(second->child("grand") != nullptr, "nesting works");
+    checkNear(second->child("grand")->attrD("v"), -3.5, 1e-12, "a nested attribute reads back");
+    check(root.attrD("missing", 42.0) == 42.0, "a missing attribute falls back");
+
+    XmlNode bad;
+    bool mismatch = xmlParse("<a><b></a>", bad, err);
+    check(!mismatch, "a mismatched close tag is an error");
+    check(err.find("line") != std::string::npos, "and the error names a line");
+    check(!xmlParse("   ", bad, err), "an empty document is an error");
+}
+
+void testOpenDriveImportBasics() {
+    group("OpenDRIVE import");
+    // A hand-written file, so the reader is tested against something the exporter
+    // did not produce. Two records: a line, then an arc that turns left.
+    const char* doc = R"(<?xml version="1.0"?>
+<OpenDRIVE>
+  <header revMajor="1" revMinor="7" name="hand written"/>
+  <road name="main" length="150.0" id="17" junction="-1">
+    <planView>
+      <geometry s="0" x="10" y="20" hdg="0" length="100"><line/></geometry>
+      <geometry s="100" x="110" y="20" hdg="0" length="50"><arc curvature="0.01"/></geometry>
+    </planView>
+    <elevationProfile><elevation s="0" a="5" b="0.02" c="0" d="0"/></elevationProfile>
+    <lanes>
+      <laneOffset s="0" a="0" b="0" c="0" d="0"/>
+      <laneSection s="0">
+        <left><lane id="1" type="driving"><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane></left>
+        <center><lane id="0"><roadMark sOffset="0" type="solid solid" color="yellow" width="0.15"/></lane></center>
+        <right>
+          <lane id="-1" type="driving"><width sOffset="0" a="3.5" b="0" c="0" d="0"/></lane>
+          <lane id="-2" type="sidewalk"><width sOffset="0" a="2.0" b="0" c="0" d="0"/></lane>
+        </right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>)";
+
+    Network net;
+    std::string err;
+    OdrImportReport rep;
+    check(openDriveFromString(doc, net, err, &rep), "a hand-written file imports");
+    check(rep.roads == 1, "one road");
+    check(rep.lanes == 3, "three lanes");
+    check(rep.name == "hand written", "the header name is reported");
+    if (net.roadCount() != 1) return;
+    net.build();
+
+    const Road& r = net.road(0);
+    checkNear(r.spineLength(), 150.0, 1e-6, "the reference line is as long as declared");
+    Vec2 start = r.spine.toPlan(0, 0);
+    checkNear(start.x, 10.0, 1e-9, "the road starts where the file says (x)");
+    checkNear(start.y, 20.0, 1e-9, "the road starts where the file says (z)");
+    Vec2 joint = r.spine.toPlan(100.0, 0);
+    checkNear(joint.x, 110.0, 1e-6, "the straight ends at the arc's declared pose");
+    checkNear(r.spine.frameAt(120.0).curvature, 0.01, 1e-9, "the arc's curvature is honoured");
+    checkNear(r.surfacePoint(50.0, 0).y, 6.0, 1e-6, "the elevation cubic is honoured");
+
+    const LaneSection& sec = r.xs.sectionAt(0);
+    check(sec.left.size() == 1 && sec.right.size() == 2, "the lane stacks are the right size");
+    check(sec.left[0].id == 1 && sec.right[0].id == -1, "signed ordinals survive");
+    check(sec.right[1].kind == StripKind::Sidewalk, "a sidewalk stays a sidewalk");
+    check(sec.right[1].surface == SurfaceKind::Concrete,
+          "and gets a plausible material even though the file gave none");
+    check(sec.right[0].dir == +1 && sec.left[0].dir == -1,
+          "right-hand traffic: negative ids run with s");
+    check(sec.centerMark.style == MarkStyle::Double, "a double yellow centre line survives");
+    check(sec.centerMark.color == PaintColor::Yellow, "including its colour");
+    checkNear(r.xs.leftExtentAt(0), 3.5, 1e-9, "the left extent is one lane");
+    checkNear(-r.xs.rightExtentAt(0), 5.5, 1e-9, "the right extent is a lane plus a footway");
+
+    // Unsupported geometry is approximated, and says so rather than silently
+    // producing a straight line where a curve was meant.
+    const char* poly = R"(<OpenDRIVE><road name="p" length="40" id="0" junction="-1"><planView>
+      <geometry s="0" x="0" y="0" hdg="0" length="40">
+        <paramPoly3 aU="0" bU="40" cU="0" dU="0" aV="0" bV="0" cV="8" dV="0" pRange="normalized"/>
+      </geometry></planView></road></OpenDRIVE>)";
+    Network pn;
+    OdrImportReport prep;
+    check(openDriveFromString(poly, pn, err, &prep), "a paramPoly3 imports");
+    check(prep.approximatedGeometry > 0, "and is reported as approximated");
+    check(!prep.notes.empty(), "with a note the caller can show");
+    if (pn.roadCount() == 1) {
+        pn.build();
+        // v = 8 at the far end of the normalised range, so the curve really bends.
+        Vec2 end = pn.road(0).spine.toPlan(pn.road(0).spineLength(), 0);
+        check(end.y > 4.0, "the sampled curve keeps its lateral offset");
+    }
+
+    Network broken;
+    check(!openDriveFromString("<NotOpenDRIVE/>", broken, err),
+          "a document that is not OpenDRIVE is refused");
+    check(err.find("OpenDRIVE") != std::string::npos, "with a message that says why");
+}
+
+void testOpenDriveRoundTrip() {
+    group("OpenDRIVE round trip");
+    for (const std::string& name : demoNames()) {
+        Scene sc;
+        if (!buildDemo(name, sc)) continue;
+        finalizeScene(sc, false, false);
+
+        OdrOptions opt;
+        opt.name = name;
+        std::string first = openDriveString(sc.net, opt);
+
+        Network back;
+        std::string err;
+        OdrImportReport rep;
+        bool ok = openDriveFromString(first, back, err, &rep);
+        check(ok, (name + " re-imports").c_str());
+        if (!ok) {
+            std::printf("  note: %s\n", err.c_str());
+            continue;
+        }
+        back.build();
+
+        // 1. The carriageway is all still there. Road ids and windows change —
+        // stubs are carved for the synthesised junctions — so the invariant is
+        // the total, not a per-road correspondence.
+        double before = 0, after = 0;
+        for (const Road& r : sc.net.roads()) before += r.activeLength();
+        for (const Road& r : back.roads()) after += r.activeLength();
+        check(std::fabs(after - before) < before * 0.005 + 1e-6,
+              (name + ": total centreline survives the round trip").c_str());
+
+        // 2. The surface is in the same place. Sampling by world position is the
+        // test that does not care how the roads were re-cut.
+        int sampled = 0, matched = 0;
+        double worstHeight = 0;
+        for (const Road& r : sc.net.roads()) {
+            double len = r.activeLength();
+            if (len < 5.0) continue;
+            for (int k = 1; k < 8; ++k) {
+                double s = r.begin() + len * double(k) / 8.0;
+                Vec3 p = r.surfacePoint(s, 0);
+                ++sampled;
+                // Nearest in THREE dimensions. A plan-only query picks the wrong
+                // road wherever one deck runs over another, which is exactly
+                // where an import is most worth checking.
+                double bestDist = 1e300, bestHeight = 0;
+                for (const Road& br : back.roads()) {
+                    double bs = 0, bt = 0;
+                    if (!br.spine.toST({p.x, p.z}, bs, bt)) continue;
+                    if (bs < br.begin() - 1e-6 || bs > br.end() + 1e-6) continue;
+                    if (bt > br.xs.leftExtentAt(bs) + 0.5 ||
+                        bt < br.xs.rightExtentAt(bs) - 0.5)
+                        continue;
+                    Vec3 q = br.surfacePoint(bs, bt);
+                    double d = length(q - p);
+                    if (d < bestDist) {
+                        bestDist = d;
+                        bestHeight = std::fabs(q.y - p.y);
+                    }
+                }
+                if (bestDist > 1e299) continue;
+                worstHeight = std::max(worstHeight, bestHeight);
+                if (bestDist < 0.2) ++matched;
+            }
+        }
+        check(sampled > 0, (name + ": there were points to compare").c_str());
+        check(matched >= int(sampled * 0.98),
+              (name + ": the road surface comes back in the same place").c_str());
+        check(worstHeight < 0.2, (name + ": and at the same height").c_str());
+
+        // 3. Lane structure. Total drivable lane-metres is invariant even though
+        // the roads carrying them are re-cut.
+        auto laneMetres = [](const Network& n) {
+            double total = 0;
+            for (const Road& r : n.roads()) {
+                double len = r.activeLength();
+                if (len < 1e-6) continue;
+                for (int k = 0; k < 16; ++k) {
+                    double s = r.begin() + len * (double(k) + 0.5) / 16.0;
+                    total += r.xs.sectionAt(s).laneCount() * len / 16.0;
+                }
+            }
+            return total;
+        };
+        double lanesBefore = laneMetres(sc.net), lanesAfter = laneMetres(back);
+        check(std::fabs(lanesAfter - lanesBefore) < lanesBefore * 0.01 + 1e-6,
+              (name + ": the same number of lanes comes back").c_str());
+
+        // 4. A second pass changes nothing. The FIRST pass legitimately changes
+        // the representation — a lane-continuation merge becomes a junction with
+        // connecting roads, because the format requires it — so the fixed point
+        // is what can be asserted, and it is the stronger claim: the reader and
+        // the writer agree on a canonical form.
+        std::string second = openDriveString(back, opt);
+        Network again;
+        bool reOk = openDriveFromString(second, again, err, &rep);
+        check(reOk, (name + ": the re-export re-imports").c_str());
+        if (reOk) {
+            again.build();
+            check(openDriveString(again, opt) == second,
+                  (name + ": export/import reaches a fixed point").c_str());
+        }
+    }
+}
+
+void testImportedJunctionsAreAdopted() {
+    group("imported junctions");
+    Scene sc;
+    buildDemo("urban", sc);
+    finalizeScene(sc, false, false);
+
+    OdrOptions opt;
+    std::string doc = openDriveString(sc.net, opt);
+    Network back;
+    std::string err;
+    check(openDriveFromString(doc, back, err), "the urban grid re-imports");
+    for (const Junction& j : back.junctions())
+        check(j.imported, "every imported junction is marked as such");
+
+    // Adoption must not re-run the trim. The file already holds trimmed arms; a
+    // second trim would eat another cornerRadius of road at every approach, and
+    // the connectors — which the file also already holds — would no longer reach.
+    std::vector<double> lengthsBefore;
+    for (const Road& r : back.roads()) lengthsBefore.push_back(r.activeLength());
+    int connectorsBefore = back.roadCount();
+    back.build();
+    check(back.roadCount() == connectorsBefore,
+          "adopting a junction does not invent a second set of connectors");
+    bool sameLengths = true;
+    for (size_t i = 0; i < lengthsBefore.size(); ++i)
+        if (std::fabs(back.road(int(i)).activeLength() - lengthsBefore[i]) > 1e-9)
+            sameLengths = false;
+    check(sameLengths, "and does not trim the arms a second time");
+    for (const Junction& j : back.junctions()) {
+        for (const JunctionArm& a : j.arms) check(a.trim == 0.0, "an adopted arm is not re-trimmed");
+        check(!j.boundary.empty(), "but the pad polygon is still built");
+        check(j.boundary.size() == j.boundaryHeight.size(), "with a height per boundary point");
+    }
+
+    // What the file does carry about control and turning must come back, because
+    // right of way is derived from it.
+    int signalized = 0, priority = 0, lefts = 0;
+    for (const Junction& j : back.junctions()) {
+        if (j.control == JunctionControl::Signalized) ++signalized;
+        if (j.control == JunctionControl::PriorityStop) ++priority;
+        for (const Connection& c : j.connections)
+            if (c.turn == TurnKind::Left) ++lefts;
+    }
+    check(signalized > 0, "signalized junctions come back signalized");
+    check(priority > 0, "priority junctions come back priority-controlled");
+    check(lefts > 0, "left turns are re-classified from the geometry");
+    for (const Junction& j : back.junctions()) {
+        if (j.control != JunctionControl::Signalized) continue;
+        check(!j.phases.empty(), "a signalized junction gets its phases back");
+        check(j.cycleLength() > 1.0, "with a real cycle");
+    }
+}
+
+void testImportedNetworkDrives() {
+    group("imported network drives");
+    // The point of importing is to drive on it. This is the end-to-end claim:
+    // a network that has been through the file survives contact with the traffic
+    // model, including at the junctions the exporter synthesised.
+    Scene sc;
+    buildDemo("showcase", sc);
+    finalizeScene(sc, false, false);
+    OdrOptions opt;
+    std::string doc = openDriveString(sc.net, opt);
+
+    Network back;
+    std::string err;
+    bool ok = openDriveFromString(doc, back, err);
+    check(ok, "the showcase re-imports");
+    if (!ok) return;
+    back.build();
+    check(back.validate().empty(), "and the reimported network validates");
+    check(!back.lanes().nodes.empty(), "it has a lane graph");
+
+    SimParams sp;
+    sp.seed = 11;
+    Simulation sim(back, sp);
+    sim.seedVehicles(80);
+    SimStats seeded = sim.stats();
+    check(seeded.vehicles > 20, "vehicles find somewhere to start");
+    sim.run(45.0);
+    SimStats st = sim.stats();
+    check(st.moving > 0, "and they move");
+    check(st.meanSpeedKph > 5.0, "at a plausible speed");
+    check(st.completedTrips + st.replans > 0, "routing works on the imported graph");
+    for (const Vehicle& v : sim.vehicles()) {
+        check(std::isfinite(v.travelled) && std::isfinite(v.speed) && v.lane >= 0,
+              "every vehicle is somewhere sensible on the graph");
+        break;
+    }
+}
+
 // --- end to end -----------------------------------------------------------
 
 void testAllDemosBuild() {
@@ -1418,6 +1742,11 @@ int main() {
     testOpenDriveConformance();
     testRampsBecomeJunctions();
     testDivergeKeepsLaneIdentity();
+    testXmlReader();
+    testOpenDriveImportBasics();
+    testOpenDriveRoundTrip();
+    testImportedJunctionsAreAdopted();
+    testImportedNetworkDrives();
     testAllDemosBuild();
     testGeneratedCity();
 

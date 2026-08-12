@@ -294,7 +294,17 @@ int Network::splitRoad(int roadId, double s) {
 }
 
 void Network::build() {
-    for (Junction& j : junctions_) buildJunction(*this, j);
+    // An imported junction arrives with its arms already trimmed and its
+    // connectors already built; re-resolving it would trim twice and duplicate
+    // every connector. Adopt takes it as given and only derives what the file
+    // does not carry: the pad, the conflict table, priority and phases.
+    for (Junction& j : junctions_) {
+        if (j.imported) {
+            adoptJunction(*this, j);
+        } else {
+            buildJunction(*this, j);
+        }
+    }
     buildLaneGraph();
     index_.build(roads_);
 }

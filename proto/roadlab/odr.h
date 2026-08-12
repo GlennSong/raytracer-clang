@@ -48,9 +48,41 @@ bool writeOpenDrive(const Network& net, const std::string& path, std::string& er
 // The OpenDRIVE lane type for one of our strips, and the roadMark spelling for
 // one of our markings. Exposed because they are the only genuinely lossy part of
 // the mapping and worth being able to inspect.
-const char* odrLaneType(StripKind kind);
+// `dir` is the strip's travel direction; a Turn strip with dir 0 is a two-way
+// left-turn lane, which OpenDRIVE spells "bidirectional".
+const char* odrLaneType(StripKind kind, int dir = 1);
 const char* odrRoadMarkType(MarkStyle style);
 const char* odrRoadMarkColor(PaintColor color);
+
+// --- import ---------------------------------------------------------------
+
+// What the reader could and could not honour. Import is the half that meets data
+// nobody here wrote, so it reports rather than guesses silently.
+struct OdrImportReport {
+    std::string name;               // <header name>
+    int roads = 0;
+    int junctions = 0;
+    int laneSections = 0;
+    int lanes = 0;
+    int approximatedGeometry = 0;   // poly3 / paramPoly3, sampled into segments
+    int extraWidthRecords = 0;      // lanes with more than one <width>; first used
+    double maxGeometryDrift = 0;    // metres between a declared pose and the chained one
+    std::vector<std::string> notes;
+};
+
+// Read a .xodr into a Network. Junctions are marked `imported`, so build()
+// adopts them rather than re-resolving them: the file already trimmed the arms
+// and produced the connectors, and doing it again would duplicate both.
+bool readOpenDrive(const std::string& path, Network& out, std::string& error,
+                   OdrImportReport* report = nullptr);
+bool openDriveFromString(const std::string& doc, Network& out, std::string& error,
+                         OdrImportReport* report = nullptr);
+
+StripKind stripKindFromOdr(const std::string& laneType);
+SurfaceKind surfaceKindFromOdr(const std::string& material);
+JunctionControl junctionControlFromOdr(const std::string& name);
+MarkStyle markStyleFromOdr(const std::string& roadMarkType);
+PaintColor paintColorFromOdr(const std::string& roadMarkColor);
 
 }  // namespace roadlab
 

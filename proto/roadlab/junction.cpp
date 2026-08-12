@@ -109,6 +109,222 @@ Vec2 lineIntersect(Vec2 p, Vec2 dp, Vec2 q, Vec2 dq, bool& ok) {
 
 }  // namespace
 
+namespace {
+
+// The pad polygon, the conflict table, the right-of-way ranking and the signal
+// phases are the same work whether a junction was resolved from scratch or
+// adopted from a file, so they live here and both paths call them.
+void buildJunctionPad(Network& net, Junction& j, const std::vector<ArmGeom>& geom) {
+    // 3. Pad polygon. Arms sorted by outward bearing; between neighbours the
+    // corner is a rounded kerb return rather than a chamfer, so the footway
+    // wraps the corner without a notch.
+    std::vector<size_t> order(j.arms.size());
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::sort(order.begin(), order.end(),
+              [&](size_t a, size_t b) { return geom[a].outward < geom[b].outward; });
+
+    struct ArmCorners {
+        Vec2 first, second;   // in CCW order around the junction
+        double firstH, secondH;
+        Vec2 outward;
+    };
+    std::vector<ArmCorners> corners(order.size());
+    for (size_t oi = 0; oi < order.size(); ++oi) {
+        size_t i = order[oi];
+        const JunctionArm& a = j.arms[i];
+        const Road& r = net.road(a.road);
+        Vec2 pLeft = r.spine.toPlan(a.sContact, a.leftExtent);
+        Vec2 pRight = r.spine.toPlan(a.sContact, a.rightExtent);
+        // The two corners of an arm are at DIFFERENT heights whenever the road is
+        // banked or crowned. Taking them from the arm's own surface is what lets
+        // the pad meet a superelevated approach without a lip.
+        double hLeft = r.surfacePoint(a.sContact, a.leftExtent).y;
+        double hRight = r.surfacePoint(a.sContact, a.rightExtent).y;
+        Vec2 u = dirOf(geom[i].outward);
+        // Going counter-clockwise we meet the corner on the -perpLeft(u) side
+        // first. Which of the road's own edges that is depends on which end of
+        // the road the junction holds.
+        if (a.atEnd) {
+            corners[oi] = {pLeft, pRight, hLeft, hRight, u};
+        } else {
+            corners[oi] = {pRight, pLeft, hRight, hLeft, u};
+        }
+    }
+    for (size_t oi = 0; oi < corners.size(); ++oi) {
+        const ArmCorners& cur = corners[oi];
+        const ArmCorners& nxt = corners[(oi + 1) % corners.size()];
+        j.boundary.push_back(cur.first);
+        j.boundaryHeight.push_back(cur.firstH);
+        j.boundary.push_back(cur.second);
+        j.boundaryHeight.push_back(cur.secondH);
+        bool ok = false;
+        Vec2 c = lineIntersect(cur.second, cur.outward, nxt.first, nxt.outward, ok);
+        // A kerb return only makes sense if the two edges meet somewhere near
+        // the junction. A shallow pair of arms can put the intersection hundreds
+        // of metres away, which would drag the pad out into a spike.
+        double reach = 2.5 * (geom[order[oi]].halfWidth + j.cornerRadius) + 8.0;
+        if (ok && length(c - j.center) < reach) {
+            // Quadratic Bezier through the edge intersection: a real kerb return,
+            // with its height ramping between the two arms it joins.
+            for (int k = 1; k < 5; ++k) {
+                double u = double(k) / 5.0;
+                Vec2 p = cur.second * ((1 - u) * (1 - u)) + c * (2 * u * (1 - u)) +
+                         nxt.first * (u * u);
+                j.boundary.push_back(p);
+                j.boundaryHeight.push_back(lerp(cur.secondH, nxt.firstH, u));
+            }
+        }
+    }
+
+}
+
+void buildJunctionConflicts(Network& net, Junction& j) {
+    // 5. Conflict points. Sample every connector once, then intersect pairwise.
+    std::vector<std::vector<Vec2>> paths(j.connections.size());
+    std::vector<std::vector<double>> stations(j.connections.size());
+    for (size_t i = 0; i < j.connections.size(); ++i) {
+        const Road& r = net.road(j.connections[i].connectorRoad);
+        double len = r.spineLength();
+        int n = std::max(2, int(len / 1.0));
+        for (int k = 0; k <= n; ++k) {
+            double s = len * double(k) / double(n);
+            paths[i].push_back(r.spine.toPlan(s, 0));
+            stations[i].push_back(s);
+        }
+    }
+    for (size_t a = 0; a < j.connections.size(); ++a) {
+        for (size_t b = a + 1; b < j.connections.size(); ++b) {
+            bool sameFrom = j.connections[a].from == j.connections[b].from;
+            bool sameTo = j.connections[a].to == j.connections[b].to;
+            bool found = false;
+            for (size_t i = 0; i + 1 < paths[a].size() && !found; ++i) {
+                for (size_t k = 0; k + 1 < paths[b].size() && !found; ++k) {
+                    Vec2 p = paths[a][i], pd = paths[a][i + 1] - p;
+                    Vec2 q = paths[b][k], qd = paths[b][k + 1] - q;
+                    double den = cross(pd, qd);
+                    if (std::fabs(den) < 1e-9) continue;
+                    double u = cross(q - p, qd) / den;
+                    double v = cross(q - p, pd) / den;
+                    if (u < 0 || u > 1 || v < 0 || v > 1) continue;
+                    ConflictPoint cp;
+                    cp.connA = int(a);
+                    cp.connB = int(b);
+                    cp.sA = lerp(stations[a][i], stations[a][i + 1], u);
+                    cp.sB = lerp(stations[b][k], stations[b][k + 1], v);
+                    cp.angle = std::fabs(angleDiff(headingOf(pd), headingOf(qd)));
+                    cp.kind = sameTo ? ConflictKind::Merging
+                                     : (sameFrom ? ConflictKind::Diverging : ConflictKind::Crossing);
+                    j.conflicts.push_back(cp);
+                    found = true;
+                }
+            }
+            if (!found && sameTo) {
+                // Converging without crossing is still a merge: the two paths
+                // arrive at the same lane and have to be sequenced.
+                ConflictPoint cp;
+                cp.connA = int(a);
+                cp.connB = int(b);
+                cp.sA = net.road(j.connections[a].connectorRoad).spineLength();
+                cp.sB = net.road(j.connections[b].connectorRoad).spineLength();
+                cp.kind = ConflictKind::Merging;
+                j.conflicts.push_back(cp);
+            }
+        }
+    }
+
+}
+
+void resolvePriority(Network& net, Junction& j) {
+    // 6. Right of way.
+    double maxPriority = 0;
+    for (const JunctionArm& a : j.arms) maxPriority = std::max(maxPriority, a.priority);
+    for (Connection& c : j.connections) {
+        const JunctionArm& from = j.arms[size_t(c.fromArm)];
+        c.priority = from.priority;
+        switch (j.control) {
+            case JunctionControl::RoundaboutEntry:
+                // Circulating traffic is absolute. An arm on a ring road is
+                // recognised by the road's kind, not by a flag someone had to
+                // remember to set.
+                c.yields = net.road(from.road).kind != RoadKind::RoundaboutRing;
+                if (!c.yields) c.priority = maxPriority + 100.0;
+                break;
+            case JunctionControl::AllWayStop:
+                c.yields = true;
+                break;
+            case JunctionControl::Yield:
+            case JunctionControl::PriorityStop:
+                c.yields = from.priority < maxPriority - 1e-6;
+                break;
+            case JunctionControl::Merge:
+                c.yields = net.road(from.road).kind == RoadKind::Ramp;
+                break;
+            case JunctionControl::Signalized:
+            case JunctionControl::Uncontrolled:
+                c.yields = false;
+                break;
+        }
+        // Turning across opposing traffic always gives way, whatever the arm's
+        // rank says — a permissive left is a yield even on the major road.
+        if (c.turn == TurnKind::Left || c.turn == TurnKind::UTurn) c.yields = true;
+    }
+
+}
+
+void buildSignalPhases(Junction& j) {
+    // 7. Signal phases by colouring the crossing-conflict graph. The phases are
+    // DERIVED from the same conflict table the simulator arbitrates with, so a
+    // movement can never be green at the same time as one it would hit.
+    if (j.control == JunctionControl::Signalized && !j.connections.empty()) {
+        const size_t n = j.connections.size();
+        std::vector<std::vector<char>> adj(n, std::vector<char>(n, 0));
+        for (const ConflictPoint& cp : j.conflicts) {
+            if (cp.kind != ConflictKind::Crossing) continue;
+            adj[size_t(cp.connA)][size_t(cp.connB)] = 1;
+            adj[size_t(cp.connB)][size_t(cp.connA)] = 1;
+        }
+        // Opposing lefts do not cross each other but must not run with the
+        // through movement they oppose; the crossing table already says so.
+        std::vector<size_t> byDegree(n);
+        for (size_t i = 0; i < n; ++i) byDegree[i] = i;
+        std::sort(byDegree.begin(), byDegree.end(), [&](size_t a, size_t b) {
+            int da = 0, db = 0;
+            for (size_t k = 0; k < n; ++k) {
+                da += adj[a][k];
+                db += adj[b][k];
+            }
+            return da > db;
+        });
+        std::vector<int> colour(n, -1);
+        int maxColour = -1;
+        for (size_t idx : byDegree) {
+            std::vector<char> taken(n + 1, 0);
+            for (size_t k = 0; k < n; ++k)
+                if (adj[idx][k] && colour[k] >= 0) taken[size_t(colour[k])] = 1;
+            int c = 0;
+            while (c < int(n) && taken[size_t(c)]) ++c;
+            colour[idx] = c;
+            maxColour = std::max(maxColour, c);
+        }
+        j.phases.resize(size_t(maxColour + 1));
+        for (size_t i = 0; i < n; ++i) {
+            j.connections[i].signalGroup = colour[i];
+            j.phases[size_t(colour[i])].connections.push_back(int(i));
+        }
+        // Green time proportional to how much traffic the phase serves, with a
+        // floor that keeps a protected-left phase from being unusably short.
+        size_t busiest = 1;
+        for (const SignalPhase& p : j.phases) busiest = std::max(busiest, p.connections.size());
+        for (SignalPhase& p : j.phases) {
+            p.green = clampd(8.0 + 22.0 * double(p.connections.size()) / double(busiest), 8.0, 30.0);
+            p.yellow = 3.5;
+            p.allRed = 1.5;
+        }
+    }
+}
+
+}  // namespace
+
 void buildJunction(Network& net, Junction& j) {
     if (j.arms.empty()) return;
     j.connections.clear();
@@ -198,66 +414,7 @@ void buildJunction(Network& net, Junction& j) {
         geom[i].halfWidth = std::max(std::fabs(a.leftExtent), std::fabs(a.rightExtent));
     }
 
-    // 3. Pad polygon. Arms sorted by outward bearing; between neighbours the
-    // corner is a rounded kerb return rather than a chamfer, so the footway
-    // wraps the corner without a notch.
-    std::vector<size_t> order(j.arms.size());
-    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
-    std::sort(order.begin(), order.end(),
-              [&](size_t a, size_t b) { return geom[a].outward < geom[b].outward; });
-
-    struct ArmCorners {
-        Vec2 first, second;   // in CCW order around the junction
-        double firstH, secondH;
-        Vec2 outward;
-    };
-    std::vector<ArmCorners> corners(order.size());
-    for (size_t oi = 0; oi < order.size(); ++oi) {
-        size_t i = order[oi];
-        const JunctionArm& a = j.arms[i];
-        const Road& r = net.road(a.road);
-        Vec2 pLeft = r.spine.toPlan(a.sContact, a.leftExtent);
-        Vec2 pRight = r.spine.toPlan(a.sContact, a.rightExtent);
-        // The two corners of an arm are at DIFFERENT heights whenever the road is
-        // banked or crowned. Taking them from the arm's own surface is what lets
-        // the pad meet a superelevated approach without a lip.
-        double hLeft = r.surfacePoint(a.sContact, a.leftExtent).y;
-        double hRight = r.surfacePoint(a.sContact, a.rightExtent).y;
-        Vec2 u = dirOf(geom[i].outward);
-        // Going counter-clockwise we meet the corner on the -perpLeft(u) side
-        // first. Which of the road's own edges that is depends on which end of
-        // the road the junction holds.
-        if (a.atEnd) {
-            corners[oi] = {pLeft, pRight, hLeft, hRight, u};
-        } else {
-            corners[oi] = {pRight, pLeft, hRight, hLeft, u};
-        }
-    }
-    for (size_t oi = 0; oi < corners.size(); ++oi) {
-        const ArmCorners& cur = corners[oi];
-        const ArmCorners& nxt = corners[(oi + 1) % corners.size()];
-        j.boundary.push_back(cur.first);
-        j.boundaryHeight.push_back(cur.firstH);
-        j.boundary.push_back(cur.second);
-        j.boundaryHeight.push_back(cur.secondH);
-        bool ok = false;
-        Vec2 c = lineIntersect(cur.second, cur.outward, nxt.first, nxt.outward, ok);
-        // A kerb return only makes sense if the two edges meet somewhere near
-        // the junction. A shallow pair of arms can put the intersection hundreds
-        // of metres away, which would drag the pad out into a spike.
-        double reach = 2.5 * (geom[order[oi]].halfWidth + j.cornerRadius) + 8.0;
-        if (ok && length(c - j.center) < reach) {
-            // Quadratic Bezier through the edge intersection: a real kerb return,
-            // with its height ramping between the two arms it joins.
-            for (int k = 1; k < 5; ++k) {
-                double u = double(k) / 5.0;
-                Vec2 p = cur.second * ((1 - u) * (1 - u)) + c * (2 * u * (1 - u)) +
-                         nxt.first * (u * u);
-                j.boundary.push_back(p);
-                j.boundaryHeight.push_back(lerp(cur.secondH, nxt.firstH, u));
-            }
-        }
-    }
+    buildJunctionPad(net, j, geom);
 
     // 4. Connectors, one per turning movement.
     struct PendingConn {
@@ -382,142 +539,55 @@ void buildJunction(Network& net, Junction& j) {
         j.connections.push_back(pc.c);
     }
 
-    // 5. Conflict points. Sample every connector once, then intersect pairwise.
-    std::vector<std::vector<Vec2>> paths(j.connections.size());
-    std::vector<std::vector<double>> stations(j.connections.size());
-    for (size_t i = 0; i < j.connections.size(); ++i) {
-        const Road& r = net.road(j.connections[i].connectorRoad);
-        double len = r.spineLength();
-        int n = std::max(2, int(len / 1.0));
-        for (int k = 0; k <= n; ++k) {
-            double s = len * double(k) / double(n);
-            paths[i].push_back(r.spine.toPlan(s, 0));
-            stations[i].push_back(s);
-        }
-    }
-    for (size_t a = 0; a < j.connections.size(); ++a) {
-        for (size_t b = a + 1; b < j.connections.size(); ++b) {
-            bool sameFrom = j.connections[a].from == j.connections[b].from;
-            bool sameTo = j.connections[a].to == j.connections[b].to;
-            bool found = false;
-            for (size_t i = 0; i + 1 < paths[a].size() && !found; ++i) {
-                for (size_t k = 0; k + 1 < paths[b].size() && !found; ++k) {
-                    Vec2 p = paths[a][i], pd = paths[a][i + 1] - p;
-                    Vec2 q = paths[b][k], qd = paths[b][k + 1] - q;
-                    double den = cross(pd, qd);
-                    if (std::fabs(den) < 1e-9) continue;
-                    double u = cross(q - p, qd) / den;
-                    double v = cross(q - p, pd) / den;
-                    if (u < 0 || u > 1 || v < 0 || v > 1) continue;
-                    ConflictPoint cp;
-                    cp.connA = int(a);
-                    cp.connB = int(b);
-                    cp.sA = lerp(stations[a][i], stations[a][i + 1], u);
-                    cp.sB = lerp(stations[b][k], stations[b][k + 1], v);
-                    cp.angle = std::fabs(angleDiff(headingOf(pd), headingOf(qd)));
-                    cp.kind = sameTo ? ConflictKind::Merging
-                                     : (sameFrom ? ConflictKind::Diverging : ConflictKind::Crossing);
-                    j.conflicts.push_back(cp);
-                    found = true;
-                }
-            }
-            if (!found && sameTo) {
-                // Converging without crossing is still a merge: the two paths
-                // arrive at the same lane and have to be sequenced.
-                ConflictPoint cp;
-                cp.connA = int(a);
-                cp.connB = int(b);
-                cp.sA = net.road(j.connections[a].connectorRoad).spineLength();
-                cp.sB = net.road(j.connections[b].connectorRoad).spineLength();
-                cp.kind = ConflictKind::Merging;
-                j.conflicts.push_back(cp);
-            }
-        }
-    }
+    buildJunctionConflicts(net, j);
+    resolvePriority(net, j);
+    buildSignalPhases(j);
+}
 
-    // 6. Right of way.
-    double maxPriority = 0;
-    for (const JunctionArm& a : j.arms) maxPriority = std::max(maxPriority, a.priority);
+void adoptJunction(Network& net, Junction& j) {
+    if (j.arms.empty()) return;
+    j.conflicts.clear();
+    j.phases.clear();
+    j.boundary.clear();
+    j.boundaryHeight.clear();
+
+    // Measure the arms where they already are. The file trimmed them; trimming
+    // again would eat road that the connectors were built to reach.
+    std::vector<ArmGeom> geom(j.arms.size());
+    Vec2 centreAcc{0, 0};
+    for (size_t i = 0; i < j.arms.size(); ++i) {
+        JunctionArm& a = j.arms[i];
+        const Road& r = net.road(a.road);
+        double s = a.atEnd ? r.end() : r.begin();
+        Frame f = r.spine.frameAt(s);
+        a.sContact = s;
+        a.trim = 0;
+        a.contact = f.planPos;
+        a.headingIn = a.atEnd ? f.heading : wrapPi(f.heading + kPi);
+        a.leftExtent = r.xs.leftExtentAt(s);
+        a.rightExtent = r.xs.rightExtentAt(s);
+        a.priority = r.designSpeed * std::max(1, r.xs.sectionAt(s).laneCount());
+        geom[i].outward = wrapPi(a.headingIn + kPi);
+        geom[i].halfWidth = std::max(std::fabs(a.leftExtent), std::fabs(a.rightExtent));
+        centreAcc = centreAcc + f.planPos;
+    }
+    j.center = centreAcc * (1.0 / double(j.arms.size()));
+    double elevAcc = 0;
+    for (const JunctionArm& a : j.arms) elevAcc += net.road(a.road).surfacePoint(a.sContact, 0).y;
+    j.elevation = elevAcc / double(j.arms.size());
+
+    // The turn a movement makes is geometry, not something the file states, so
+    // it is derived here — and it has to be, because right of way keys off it.
     for (Connection& c : j.connections) {
-        const JunctionArm& from = j.arms[size_t(c.fromArm)];
-        c.priority = from.priority;
-        switch (j.control) {
-            case JunctionControl::RoundaboutEntry:
-                // Circulating traffic is absolute. An arm on a ring road is
-                // recognised by the road's kind, not by a flag someone had to
-                // remember to set.
-                c.yields = net.road(from.road).kind != RoadKind::RoundaboutRing;
-                if (!c.yields) c.priority = maxPriority + 100.0;
-                break;
-            case JunctionControl::AllWayStop:
-                c.yields = true;
-                break;
-            case JunctionControl::Yield:
-            case JunctionControl::PriorityStop:
-                c.yields = from.priority < maxPriority - 1e-6;
-                break;
-            case JunctionControl::Merge:
-                c.yields = net.road(from.road).kind == RoadKind::Ramp;
-                break;
-            case JunctionControl::Signalized:
-            case JunctionControl::Uncontrolled:
-                c.yields = false;
-                break;
-        }
-        // Turning across opposing traffic always gives way, whatever the arm's
-        // rank says — a permissive left is a yield even on the major road.
-        if (c.turn == TurnKind::Left || c.turn == TurnKind::UTurn) c.yields = true;
+        if (c.fromArm < 0 || c.toArm < 0) continue;
+        double headingOut = wrapPi(j.arms[size_t(c.toArm)].headingIn + kPi);
+        c.turn = classifyTurn(j.arms[size_t(c.fromArm)].headingIn, headingOut);
     }
 
-    // 7. Signal phases by colouring the crossing-conflict graph. The phases are
-    // DERIVED from the same conflict table the simulator arbitrates with, so a
-    // movement can never be green at the same time as one it would hit.
-    if (j.control == JunctionControl::Signalized && !j.connections.empty()) {
-        const size_t n = j.connections.size();
-        std::vector<std::vector<char>> adj(n, std::vector<char>(n, 0));
-        for (const ConflictPoint& cp : j.conflicts) {
-            if (cp.kind != ConflictKind::Crossing) continue;
-            adj[size_t(cp.connA)][size_t(cp.connB)] = 1;
-            adj[size_t(cp.connB)][size_t(cp.connA)] = 1;
-        }
-        // Opposing lefts do not cross each other but must not run with the
-        // through movement they oppose; the crossing table already says so.
-        std::vector<size_t> byDegree(n);
-        for (size_t i = 0; i < n; ++i) byDegree[i] = i;
-        std::sort(byDegree.begin(), byDegree.end(), [&](size_t a, size_t b) {
-            int da = 0, db = 0;
-            for (size_t k = 0; k < n; ++k) {
-                da += adj[a][k];
-                db += adj[b][k];
-            }
-            return da > db;
-        });
-        std::vector<int> colour(n, -1);
-        int maxColour = -1;
-        for (size_t idx : byDegree) {
-            std::vector<char> taken(n + 1, 0);
-            for (size_t k = 0; k < n; ++k)
-                if (adj[idx][k] && colour[k] >= 0) taken[size_t(colour[k])] = 1;
-            int c = 0;
-            while (c < int(n) && taken[size_t(c)]) ++c;
-            colour[idx] = c;
-            maxColour = std::max(maxColour, c);
-        }
-        j.phases.resize(size_t(maxColour + 1));
-        for (size_t i = 0; i < n; ++i) {
-            j.connections[i].signalGroup = colour[i];
-            j.phases[size_t(colour[i])].connections.push_back(int(i));
-        }
-        // Green time proportional to how much traffic the phase serves, with a
-        // floor that keeps a protected-left phase from being unusably short.
-        size_t busiest = 1;
-        for (const SignalPhase& p : j.phases) busiest = std::max(busiest, p.connections.size());
-        for (SignalPhase& p : j.phases) {
-            p.green = clampd(8.0 + 22.0 * double(p.connections.size()) / double(busiest), 8.0, 30.0);
-            p.yellow = 3.5;
-            p.allRed = 1.5;
-        }
-    }
+    buildJunctionPad(net, j, geom);
+    buildJunctionConflicts(net, j);
+    resolvePriority(net, j);
+    buildSignalPhases(j);
 }
 
 std::vector<Crosswalk> junctionCrosswalks(const Network& net, const Junction& j) {

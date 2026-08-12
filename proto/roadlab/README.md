@@ -12,7 +12,7 @@ window, so it builds and runs anywhere `make` does.
 
 ```bash
 make roadlab                      # build ./roadlab
-make roadlab-test                 # 3534 assertions, no framework
+make roadlab-test                 # 3747 assertions, no framework
 make roadlab-shots                # render every demo to out_roadlab/
 
 ./roadlab --demo showcase --view persp --out shot.png
@@ -22,6 +22,7 @@ make roadlab-shots                # render every demo to out_roadlab/
 ./roadlab --city --seed 3 --sim 60 --cars 200 --peds 60 --view top
 ./roadlab --demo interchange --debug strips     # false-colour the cross-section
 ./roadlab --demo interchange --xodr out.xodr    # export OpenDRIVE
+./roadlab --import out.xodr --view top --report # ...and read it back
 ```
 
 ---
@@ -293,6 +294,93 @@ road it names there, or must be a connecting road of the junction it names there
 That is the check that would have caught the first version of this exporter,
 which wrote a file whose ramps were unreachable.
 
+## OpenDRIVE import
+
+`--import town.xodr` reads a `.xodr` back into a `Network`. This is the half that
+meets data nobody here wrote, so it reports rather than guesses silently:
+`OdrImportReport` counts roads, junctions, lane sections and lanes, and carries
+notes for the things it had to approximate.
+
+Two pieces make it work:
+
+- **Anchored geometry.** Our spines chain: each primitive starts where the last
+  one ended. A file's records each declare their own `x/y/hdg`, and real files
+  disagree with the chain by millimetres to metres. `GeomPrim::anchored` keeps a
+  record's declared pose instead of chaining, so the imported reference line is
+  the file's, not a re-derivation of it — and the drift between the two is
+  measured and reported rather than silently absorbed.
+- **Adopted junctions.** An imported junction arrives with its arms already
+  trimmed and its connectors already built. Re-resolving it would trim a second
+  time and duplicate every connector, so `Junction::imported` routes `build()` to
+  `adoptJunction`, which measures the arms where they are and derives only what
+  the file does not carry: the pad polygon, the conflict table, priority and the
+  signal phases. Those four steps are shared with `buildJunction` rather than
+  reimplemented.
+
+A minimal XML reader (`rl_xml.h`, ~200 lines) sits underneath. `.xodr` uses a
+small, well-behaved subset — elements, attributes, self-closing tags, comments,
+five entities — and parsing that is cheaper than adding a dependency to a
+prototype meant to stay buildable with the STL alone.
+
+### What the format cannot carry, and what to do about it
+
+Three things matter to this model and have no slot in OpenDRIVE. Two of them fit
+existing elements once you look:
+
+- A lane's **material** goes in `<material surface=…>` and a kerb's **height** in
+  `<height inner= outer=…>`. Without those a re-imported network comes back as
+  flat asphalt, verges and all.
+- A **two-way left-turn lane** is `type="bidirectional"` — the standard has the
+  exact concept, and spelling it `"driving"` turns a TWLTL into two extra lanes
+  the simulator will happily drive down.
+- **Junction control** lives on the approaches, as `<signal>` elements — which is
+  also where it lives in the world. The `type` is the standard code so any reader
+  knows what the sign is; the `name` carries our own enum so a round trip does not
+  have to reverse-engineer control from sign codes.
+
+Only *ramp* and *circulatory carriageway* have nowhere to go, since OpenDRIVE has
+no concept of either; they use the format's sanctioned `<userData>` extension
+slot rather than being thrown away, because the difference decides who yields.
+
+### Round trip
+
+The first pass through the file legitimately changes the representation: a
+lane-continuation merge becomes a junction with connecting roads, because the
+format requires it. So the invariant worth asserting is not "identical after one
+pass" but **a fixed point** — and that is the stronger claim, because it says the
+reader and the writer agree on a canonical form. Every demo reaches it: export,
+import, export again, and the second document is byte-identical to the first.
+
+Alongside that the tests assert the physical claims: total centreline within
+0.5%, every sampled surface point back within 0.2 m in three dimensions (a
+plan-only query picks the wrong deck wherever one road runs over another),
+lane-metres within 1%, arms not re-trimmed, connectors not duplicated, control
+and turn classification recovered — and finally that traffic will drive on the
+result, including through the junctions the exporter synthesised.
+
+Structurally, five of the seven demos come back with an *identical* report. The
+other two are the ones with ramps, and they differ exactly by the junctions the
+format demanded.
+
+### What it found
+
+Pointing the importer at our own exporter's output surfaced a bug in
+`Spine::toST` — the world-to-`(s, t)` inverse — that had been there from the
+beginning. Its Newton step was `cur -= -f/fp` where it should have been
+`cur += -f/fp`: the iteration walked *away* from the foot of the perpendicular,
+doubling the seed's error every pass.
+
+It never failed loudly. An earlier fix had added a residual check that rejects an
+answer with a non-zero tangential component, which is exactly what a diverged
+Newton produces — so the inverse map did not return wrong answers, it returned
+*no* answers, on every query, and every caller took its fallback path. Terrain
+stopped conforming to roads, `Network::sample` never found anything. Fixing the
+sign took the test suite from 32 s to 4.6 s, because eight useless iterations per
+query were being run and then thrown away.
+
+The round trip caught it because it is the first test that asks the inverse map a
+question with a known right answer, across the whole network, and checks it.
+
 ## Performance
 
 Terrain generation was 95% of all runtime. Three fixes gave about 8x: the surface
@@ -304,7 +392,8 @@ rejects plus scratch reuse cut the per-junction work. The spine inverse uses a
 coarse-to-fine seed search rather than a flat scan.
 
 The urban demo's terrain went from 6.5 s to 1.2 s and the whole test suite from
-57 s to ~32 s. The route-reachability query is cached on a 0.4 s timer per
+57 s to ~32 s — and then to 4.6 s once the `toST` sign bug above was fixed and
+the inverse map stopped doing eight wasted Newton iterations per query. The route-reachability query is cached on a 0.4 s timer per
 vehicle — a driver does not re-ask the graph ten times a second either.
 
 ## Design lint
@@ -329,6 +418,7 @@ Every demo and every generated city seed passes it clean; the tests assert that.
 
 ```
 rl_math.h/.cpp     Vec2/Vec3, Poly3, noise, Gauss-Legendre. No engine deps.
+rl_xml.h/.cpp      a minimal XML reader, sized for .xodr and nothing more.
 spine.h/.cpp       line/arc/clothoid chains, elevation, superelevation,
                    (s,t,h) -> world and the inverse.
 profile.h/.cpp     strips, lane sections, presets, the transition solver.
@@ -341,22 +431,26 @@ tessellate.h/.cpp  dumb ribbons carrying (s,t); junction pads; sweeps.
 raster.h/.cpp      z-buffer rasteriser + PNG. Exists so you can look at it.
 props.h/.cpp       rule-driven lamps, signs, signals, furniture.
 sim.h/.cpp         IDM traffic, lane changes, junction arbitration, pedestrians.
+odr.h/.cpp         OpenDRIVE export (with the road plan) and import.
 scene.h/.cpp       JSON authoring, the demo set, the city generator.
 main.cpp           the CLI.
-tests.cpp          844 assertions, invariant-focused.
+tests.cpp          3747 assertions, invariant-focused.
 ```
 
 ## Known gaps
 
 Honest list of what a prototype this size does not do yet.
 
-- **No OpenDRIVE import.** Export works; reading real networks back in is the
-  highest-value next addition, because it is what would let the junction solver
-  be pointed at a real cloverleaf instead of at scenes I wrote myself.
+- **Import has only been fed our own exporter's output.** The round trip reaches
+  a fixed point on every demo, but the next real test is a third-party `.xodr`
+  from a cloverleaf someone else authored. `poly3`/`paramPoly3` geometry is
+  sampled into segments rather than represented exactly, and a lane with more
+  than one `<width>` record keeps only the first; both are counted and reported
+  rather than silently dropped.
+- **Only junction control is exported as `<signal>`.** The generated signs and
+  lamps are still props, not `<objects>`.
 - **Hatching and chevrons have no OpenDRIVE equivalent** and export as `none`.
   A faithful export would emit them as `<object>` surfaces.
-- **Signals, signs and objects are not exported.** They are generated as props,
-  and OpenDRIVE has `<signals>`/`<objects>` sections that could carry them.
 - **Very acute or self-intersecting pad outlines** fall back to a centroid fan.
   Ear clipping handles ordinary concave pads, but a pathological boundary from a
   near-parallel pair of arms is covered rather than solved.

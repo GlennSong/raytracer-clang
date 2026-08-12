@@ -29,6 +29,12 @@ struct GeomPrim {
     double hdg0 = 0;      // plan start heading
     double curv0 = 0;     // curvature at start (1/m, +ve = left turn)
     double curv1 = 0;     // curvature at end (== curv0 for Line/Arc)
+    // An anchored primitive keeps the pose it was given instead of inheriting the
+    // previous primitive's end. Authored roads chain (that is what makes them
+    // continuous by construction); IMPORTED ones carry their own absolute pose
+    // per geometry record, and chaining those would accumulate drift over a long
+    // road instead of reproducing the file.
+    bool anchored = false;
 };
 
 // A piecewise-cubic scalar function of s. Elevation, superelevation and lateral
@@ -81,6 +87,9 @@ public:
     void addLine(double length);
     void addArc(double length, double curvature);
     void addSpiral(double length, double curvStart, double curvEnd);
+    // Append a primitive that pins its own start pose rather than chaining.
+    void addAnchored(GeomKind kind, Vec2 p0, double heading, double length, double curvStart,
+                     double curvEnd);
 
     // Elevation: either flat, a constant grade, or a set of (s, height) knots
     // joined by Hermite cubics with continuous slope (real vertical curves).

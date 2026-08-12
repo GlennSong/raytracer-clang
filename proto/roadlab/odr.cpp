@@ -3,14 +3,18 @@
 #include <cstdio>
 #include <fstream>
 #include <map>
+#include "rl_xml.h"
 #include <sstream>
 
 namespace roadlab {
 
-const char* odrLaneType(StripKind kind) {
+const char* odrLaneType(StripKind kind, int dir) {
     switch (kind) {
-        case StripKind::Travel:
         case StripKind::Turn:
+            // A centre turn lane with no direction of its own is a TWLTL, and
+            // that is exactly what OpenDRIVE means by "bidirectional".
+            return dir == 0 ? "bidirectional" : "driving";
+        case StripKind::Travel:
             return "driving";
         case StripKind::Bus:
             return "bus";
@@ -118,6 +122,18 @@ struct OdrConnection {
     std::vector<std::pair<int, int>> laneLinks;
 };
 
+// One <signal> on an approach: what the arm faces as it enters the junction.
+struct OdrSignal {
+    int roadId = -1;
+    double s = 0;
+    double t = 0;
+    bool forward = true;   // orientation "+" (with s) or "-"
+    std::string name;
+    std::string type;
+    std::string subtype = "-1";
+    bool dynamic = false;
+};
+
 struct OdrJunctionOut {
     int id = -1;
     std::string name;
@@ -127,6 +143,7 @@ struct OdrJunctionOut {
 struct ExportPlan {
     std::vector<OdrRoad> roads;
     std::vector<OdrJunctionOut> junctions;
+    std::vector<OdrSignal> signals;
 
     OdrRoad* find(int id) {
         for (OdrRoad& r : roads)
@@ -134,6 +151,22 @@ struct ExportPlan {
         return nullptr;
     }
 };
+
+const char* roadKindName(RoadKind k) {
+    switch (k) {
+        case RoadKind::Normal: return "normal";
+        case RoadKind::Ramp: return "ramp";
+        case RoadKind::Connector: return "connector";
+        case RoadKind::RoundaboutRing: return "ring";
+    }
+    return "normal";
+}
+
+double maxArmPriority(const Junction& j) {
+    double m = 0;
+    for (const JunctionArm& a : j.arms) m = std::max(m, a.priority);
+    return m;
+}
 
 // How lanes pair up across a plain road link, matching what the lane graph does:
 // both sides are ordered right-to-left in the travel frame, so the pairing is a
@@ -294,6 +327,45 @@ ExportPlan buildPlan(const Network& net, const OdrOptions& opt) {
             j.conns.push_back(oc);
         }
         if (!j.conns.empty()) plan.junctions.push_back(j);
+
+        if (!opt.includeObjects) continue;
+        // How each approach is controlled. The `type` is the standard code, so
+        // any reader knows what the sign is; the `name` carries our exact enum
+        // so a round trip does not have to reverse-engineer it from the code.
+        for (const JunctionArm& arm : jn.arms) {
+            OdrRoad* ar = plan.find(arm.road);
+            if (!ar) continue;
+            OdrSignal sig;
+            sig.roadId = arm.road;
+            // Stop line: at the arm's contact, re-based into the exported window.
+            sig.s = clampd(arm.sContact - ar->s0, 0.0, ar->length());
+            // Beside the approach lanes, on the driver's right.
+            sig.t = arm.atEnd ? arm.rightExtent - 0.6 : -arm.leftExtent + 0.6;
+            sig.forward = arm.atEnd;
+            sig.name = std::string("roadlab:") + controlName(jn.control);
+            switch (jn.control) {
+                case JunctionControl::Signalized:
+                    sig.type = "1000001";   // OpenDRIVE-country traffic light
+                    sig.dynamic = true;
+                    break;
+                case JunctionControl::AllWayStop:
+                    sig.type = "206";
+                    break;
+                case JunctionControl::PriorityStop:
+                    // Only the minor arms actually carry a sign.
+                    sig.type = arm.priority < maxArmPriority(jn) - 1e-6 ? "206" : "306";
+                    break;
+                case JunctionControl::Yield:
+                case JunctionControl::RoundaboutEntry:
+                    sig.type = "205";
+                    break;
+                case JunctionControl::Merge:
+                case JunctionControl::Uncontrolled:
+                    sig.type = "";   // nothing stands there, but the name still says so
+                    break;
+            }
+            plan.signals.push_back(sig);
+        }
     }
 
     // Ramps. An ExtraLaneLink is one-to-one until it collides with an existing
@@ -496,7 +568,7 @@ void writePlanView(Writer& w, const Road& r, double begin, double end) {
 void writeLane(Writer& w, const OdrRoad& pr, const LaneSection& sec, const Strip& st, double clipS,
                bool firstSection, bool lastSection) {
     w.open("<lane " + w.attr("id", st.id) + " " +
-           w.attr("type", std::string(odrLaneType(st.kind))) + " " +
+           w.attr("type", std::string(odrLaneType(st.kind, st.dir))) + " " +
            w.attr("level", std::string("false")) + ">");
 
     // At the first and last lane sections OpenDRIVE reads <lane><link> as
@@ -534,9 +606,19 @@ void writeLane(Writer& w, const OdrRoad& pr, const LaneSection& sec, const Strip
                                          ? "decrease"
                                          : (m.crossableFromRight() ? "increase" : "none")))) +
            "/>");
+    // The surface material and the kerb height are ours, not OpenDRIVE's, but
+    // both have a slot in the schema that means the right thing, so they survive
+    // a round trip instead of coming back as flat asphalt.
+    w.line("<material " + w.attr("sOffset", 0.0) + " " +
+           w.attr("surface", std::string(surfaceName(st.surface))) + " " +
+           w.attr("friction", st.surface == SurfaceKind::Grass ? 0.4 : 0.8) + "/>");
     if (st.speedLimit > 0.5f) {
         w.line("<speed " + w.attr("sOffset", 0.0) + " " + w.attr("max", double(st.speedLimit)) +
                " " + w.attr("unit", std::string("km/h")) + "/>");
+    }
+    if (st.height > 0.001f) {
+        w.line("<height " + w.attr("sOffset", 0.0) + " " + w.attr("inner", double(st.height)) +
+               " " + w.attr("outer", double(st.height)) + "/>");
     }
     w.close("</lane>");
 }
@@ -653,6 +735,29 @@ std::string openDriveString(const Network& net, const OdrOptions& opt) {
         writeProfile(w, r.spine.superelevationConst(), pr.s0, pr.s1, "superelevation");
         w.close("</lateralProfile>");
         writeLanes(w, pr, r);
+        bool anySignal = false;
+        for (const OdrSignal& sg : plan.signals) {
+            if (sg.roadId != pr.id) continue;
+            if (!anySignal) w.open("<signals>");
+            anySignal = true;
+            w.line("<signal " + w.attr("s", sg.s) + " " + w.attr("t", sg.t) + " " +
+                   w.attr("id", int(&sg - plan.signals.data())) + " " + w.attr("name", sg.name) +
+                   " " + w.attr("dynamic", std::string(sg.dynamic ? "yes" : "no")) + " " +
+                   w.attr("orientation", std::string(sg.forward ? "+" : "-")) + " " +
+                   w.attr("zOffset", 2.2) + " " +
+                   w.attr("country", std::string("OpenDRIVE")) + " " + w.attr("type", sg.type) +
+                   " " + w.attr("subtype", sg.subtype) + " " +
+                   w.attr("hOffset", 0.0) + "/>");
+        }
+        if (anySignal) w.close("</signals>");
+        // A ramp and a circulatory carriageway are ordinary roads to OpenDRIVE,
+        // but the difference decides who yields to whom, so it goes in the
+        // format's sanctioned extension slot rather than being thrown away.
+        if (pr.junction < 0 && r.kind != RoadKind::Normal) {
+            w.open("<userData>");
+            w.line("<roadlab " + w.attr("kind", std::string(roadKindName(r.kind))) + "/>");
+            w.close("</userData>");
+        }
         w.close("</road>");
     }
 
@@ -686,6 +791,540 @@ bool writeOpenDrive(const Network& net, const std::string& path, std::string& er
     }
     out << openDriveString(net, opt);
     return true;
+}
+
+
+// --- import ---------------------------------------------------------------
+
+StripKind stripKindFromOdr(const std::string& t) {
+    if (t == "driving") return StripKind::Travel;
+    if (t == "bidirectional") return StripKind::Turn;
+    if (t == "bus" || t == "hov" || t == "taxi") return StripKind::Bus;
+    if (t == "biking") return StripKind::Bike;
+    if (t == "parking") return StripKind::Parking;
+    if (t == "shoulder" || t == "stop") return StripKind::Shoulder;
+    if (t == "median") return StripKind::Median;
+    if (t == "curb") return StripKind::Curb;
+    if (t == "border") return StripKind::Gutter;
+    if (t == "restricted") return StripKind::Verge;
+    if (t == "sidewalk" || t == "walking") return StripKind::Sidewalk;
+    // "none", "special1..3", "roadWorks", "entry", "exit", "offRamp", "onRamp",
+    // "connectingRamp" all end up somewhere reasonable rather than dropped.
+    if (t == "entry" || t == "exit" || t == "offRamp" || t == "onRamp" ||
+        t == "connectingRamp")
+        return StripKind::Travel;
+    return StripKind::Slope;
+}
+
+MarkStyle markStyleFromOdr(const std::string& t) {
+    if (t == "solid") return MarkStyle::Solid;
+    if (t == "broken") return MarkStyle::Dashed;
+    if (t == "solid solid") return MarkStyle::Double;
+    if (t == "solid broken") return MarkStyle::SolidDashed;
+    if (t == "broken solid") return MarkStyle::DashedSolid;
+    if (t == "broken broken") return MarkStyle::Dashed;
+    if (t == "botts dots") return MarkStyle::Botts;
+    return MarkStyle::None;
+}
+
+JunctionControl junctionControlFromOdr(const std::string& s) {
+    if (s == "yield") return JunctionControl::Yield;
+    if (s == "priority-stop") return JunctionControl::PriorityStop;
+    if (s == "all-way-stop") return JunctionControl::AllWayStop;
+    if (s == "signalized") return JunctionControl::Signalized;
+    if (s == "roundabout") return JunctionControl::RoundaboutEntry;
+    if (s == "merge") return JunctionControl::Merge;
+    return JunctionControl::Uncontrolled;
+}
+
+SurfaceKind surfaceKindFromOdr(const std::string& s) {
+    if (s == "concrete") return SurfaceKind::Concrete;
+    if (s == "gravel") return SurfaceKind::Gravel;
+    if (s == "dirt" || s == "soil") return SurfaceKind::Dirt;
+    if (s == "grass") return SurfaceKind::Grass;
+    if (s == "brick" || s == "cobble" || s == "pavingStone") return SurfaceKind::Brick;
+    if (s == "steel") return SurfaceKind::Steel;
+    return SurfaceKind::Asphalt;
+}
+
+// What a lane made of, when the file does not say. Files written by other tools
+// almost never carry <material>, and defaulting everything to asphalt turns
+// verges and medians into pavement.
+SurfaceKind defaultSurfaceFor(StripKind kind) {
+    switch (kind) {
+        case StripKind::Verge:
+        case StripKind::Slope:
+        case StripKind::Median:
+            return SurfaceKind::Grass;
+        case StripKind::Curb:
+        case StripKind::Gutter:
+        case StripKind::Sidewalk:
+        case StripKind::Barrier:
+        case StripKind::Apron:
+            return SurfaceKind::Concrete;
+        default:
+            return SurfaceKind::Asphalt;
+    }
+}
+
+PaintColor paintColorFromOdr(const std::string& c) {
+    if (c == "yellow") return PaintColor::Yellow;
+    if (c == "red") return PaintColor::Red;
+    if (c == "blue") return PaintColor::Blue;
+    if (c == "green") return PaintColor::Green;
+    return PaintColor::White;   // "standard" and "white"
+}
+
+namespace {
+
+Poly3 polyFrom(const XmlNode& n) {
+    return Poly3{n.attrD("a"), n.attrD("b"), n.attrD("c"), n.attrD("d")};
+}
+
+void readProfile(const XmlNode* parent, const char* element, Profile1D& out) {
+    out.clear();
+    if (!parent) return;
+    for (const XmlNode* e : parent->all(element)) out.add(e->attrD("s"), polyFrom(*e));
+}
+
+// poly3 and paramPoly3 have no primitive in this model. Rather than drop them or
+// pretend they are straight, sample the curve and emit a chain of ANCHORED short
+// segments: each carries its own absolute pose, so the approximation cannot drift
+// even over a long record.
+void approximateCurve(Spine& sp, const XmlNode& geom, const XmlNode& shape, bool parametric,
+                      OdrImportReport& rep) {
+    double x = geom.attrD("x"), y = geom.attrD("y"), hdg = geom.attrD("hdg");
+    double len = geom.attrD("length");
+    if (len <= 1e-6) return;
+    double c = std::cos(hdg), s = std::sin(hdg);
+
+    auto localAt = [&](double p, double& lu, double& lv) {
+        if (parametric) {
+            lu = shape.attrD("aU") + p * (shape.attrD("bU") +
+                                          p * (shape.attrD("cU") + p * shape.attrD("dU")));
+            lv = shape.attrD("aV") + p * (shape.attrD("bV") +
+                                          p * (shape.attrD("cV") + p * shape.attrD("dV")));
+        } else {
+            lu = p;
+            lv = shape.attrD("a") + p * (shape.attrD("b") +
+                                         p * (shape.attrD("c") + p * shape.attrD("d")));
+        }
+    };
+    // pRange="normalized" means the parameter runs 0..1; "arcLength" means 0..len.
+    bool normalized = parametric && shape.attrS("pRange", "normalized") != "arcLength";
+    double pMax = normalized ? 1.0 : len;
+
+    int steps = std::max(4, int(len / 1.0));
+    steps = std::min(steps, 2000);
+    Vec2 prev{x, y};
+    double prevP = 0;
+    for (int i = 1; i <= steps; ++i) {
+        double p = pMax * double(i) / double(steps);
+        double lu = 0, lv = 0;
+        localAt(p, lu, lv);
+        Vec2 world{x + c * lu - s * lv, y + s * lu + c * lv};
+        Vec2 d = world - prev;
+        double segLen = length(d);
+        if (segLen > 1e-7)
+            sp.addAnchored(GeomKind::Line, prev, headingOf(d), segLen, 0.0, 0.0);
+        prev = world;
+        prevP = p;
+    }
+    (void)prevP;
+    ++rep.approximatedGeometry;
+}
+
+}  // namespace
+
+bool openDriveFromString(const std::string& doc, Network& out, std::string& error,
+                         OdrImportReport* reportOut) {
+    XmlNode root;
+    if (!xmlParse(doc, root, error)) return false;
+    if (root.name != "OpenDRIVE") {
+        error = "not an OpenDRIVE document (root is <" + root.name + ">)";
+        return false;
+    }
+    OdrImportReport rep;
+    if (const XmlNode* hdr = root.child("header")) rep.name = hdr->attrS("name");
+
+    // What the approaches are controlled by, gathered while the roads are read
+    // and matched to junction arms afterwards.
+    struct ApproachSignal {
+        int road = -1;
+        double s = 0;
+        bool forward = true;
+        JunctionControl control = JunctionControl::Uncontrolled;
+        bool explicitControl = false;   // the file named it, rather than us inferring
+    };
+    std::vector<ApproachSignal> approaches;
+
+    // The file's ids need not be dense or zero-based, so build a mapping and
+    // remap every reference through it.
+    std::map<int, int> roadIdMap;
+    std::map<int, int> junctionIdMap;
+    std::vector<const XmlNode*> roadNodes = root.all("road");
+    std::vector<const XmlNode*> junctionNodes = root.all("junction");
+    for (size_t i = 0; i < roadNodes.size(); ++i) roadIdMap[roadNodes[i]->attrI("id", int(i))] = int(i);
+    for (size_t i = 0; i < junctionNodes.size(); ++i)
+        junctionIdMap[junctionNodes[i]->attrI("id", int(i))] = int(i);
+    auto mapRoad = [&](int fileId) {
+        auto it = roadIdMap.find(fileId);
+        return it == roadIdMap.end() ? -1 : it->second;
+    };
+    auto mapJunction = [&](int fileId) {
+        auto it = junctionIdMap.find(fileId);
+        return it == junctionIdMap.end() ? -1 : it->second;
+    };
+
+    for (const XmlNode* rn : roadNodes) {
+        Road r;
+        r.name = rn->attrS("name", "road");
+        int junctionFileId = rn->attrI("junction", -1);
+        r.junctionId = junctionFileId >= 0 ? mapJunction(junctionFileId) : -1;
+        r.kind = r.junctionId >= 0 ? RoadKind::Connector : RoadKind::Normal;
+        if (const XmlNode* ud = rn->child("userData")) {
+            if (const XmlNode* mine = ud->child("roadlab")) {
+                std::string k = mine->attrS("kind");
+                if (k == "ramp") r.kind = RoadKind::Ramp;
+                else if (k == "ring") r.kind = RoadKind::RoundaboutRing;
+                else if (k == "connector") r.kind = RoadKind::Connector;
+            }
+        }
+
+        // --- plan view ---
+        const XmlNode* pv = rn->child("planView");
+        Vec2 chained{0, 0};
+        double chainedHdg = 0;
+        bool first = true;
+        if (pv) {
+            for (const XmlNode* g : pv->all("geometry")) {
+                double gx = g->attrD("x"), gy = g->attrD("y"), ghdg = g->attrD("hdg");
+                double glen = g->attrD("length");
+                if (glen <= 1e-9) continue;
+                if (!first) {
+                    double drift = length(Vec2{gx, gy} - chained);
+                    rep.maxGeometryDrift = std::max(rep.maxGeometryDrift, drift);
+                }
+                first = false;
+                if (const XmlNode* line = g->child("line")) {
+                    (void)line;
+                    r.spine.addAnchored(GeomKind::Line, {gx, gy}, ghdg, glen, 0.0, 0.0);
+                } else if (const XmlNode* arc = g->child("arc")) {
+                    double k = arc->attrD("curvature");
+                    r.spine.addAnchored(std::fabs(k) < 1e-9 ? GeomKind::Line : GeomKind::Arc,
+                                        {gx, gy}, ghdg, glen, k, k);
+                } else if (const XmlNode* sp = g->child("spiral")) {
+                    r.spine.addAnchored(GeomKind::Spiral, {gx, gy}, ghdg, glen,
+                                        sp->attrD("curvStart"), sp->attrD("curvEnd"));
+                } else if (const XmlNode* pp = g->child("paramPoly3")) {
+                    approximateCurve(r.spine, *g, *pp, true, rep);
+                } else if (const XmlNode* p3 = g->child("poly3")) {
+                    approximateCurve(r.spine, *g, *p3, false, rep);
+                } else {
+                    r.spine.addAnchored(GeomKind::Line, {gx, gy}, ghdg, glen, 0.0, 0.0);
+                    ++rep.approximatedGeometry;
+                }
+                // Where this record ENDS, for the drift check on the next one.
+                r.spine.finalize();
+                Frame f = r.spine.frameAt(r.spine.length());
+                chained = f.planPos;
+                chainedHdg = f.heading;
+            }
+        }
+        (void)chainedHdg;
+        if (r.spine.prims().empty()) {
+            r.spine.setStart({0, 0}, 0.0);
+            r.spine.addLine(std::max(0.1, rn->attrD("length", 1.0)));
+        }
+        r.spine.setCrossfall(0.0);   // the file's own geometry already has it
+        readProfile(rn->child("elevationProfile"), "elevation", r.spine.elevation());
+        readProfile(rn->child("lateralProfile"), "superelevation", r.spine.superelevation());
+        r.spine.finalize();
+
+        // --- links ---
+        auto readLink = [&](const XmlNode* n, RoadLink& link) {
+            if (!n) return;
+            std::string type = n->attrS("elementType");
+            int id = n->attrI("elementId", -1);
+            if (type == "junction") {
+                int mapped = mapJunction(id);
+                if (mapped >= 0) link = RoadLink{LinkType::Junction, mapped, true, {}};
+            } else if (type == "road") {
+                int mapped = mapRoad(id);
+                if (mapped >= 0)
+                    link = RoadLink{LinkType::Road, mapped, n->attrS("contactPoint", "start") ==
+                                                                 "start", {}};
+            }
+        };
+        if (const XmlNode* lk = rn->child("link")) {
+            readLink(lk->child("predecessor"), r.pred);
+            readLink(lk->child("successor"), r.succ);
+        }
+        if (const XmlNode* ty = rn->child("type")) {
+            if (const XmlNode* sp = ty->child("speed")) {
+                double v = sp->attrD("max", 0.0);
+                std::string unit = sp->attrS("unit", "km/h");
+                if (unit == "m/s") v *= 3.6;
+                if (unit == "mph") v *= 1.609344;
+                if (v > 1.0) r.designSpeed = v;
+            }
+        }
+
+        // --- lanes ---
+        const XmlNode* lanes = rn->child("lanes");
+        if (lanes) {
+            readProfile(lanes, "laneOffset", r.xs.laneOffset);
+            for (const XmlNode* ls : lanes->all("laneSection")) {
+                LaneSection sec;
+                sec.s0 = ls->attrD("s");
+                auto readSide = [&](const char* sideName, std::vector<Strip>& stack) {
+                    const XmlNode* side = ls->child(sideName);
+                    if (!side) return;
+                    std::vector<const XmlNode*> ln = side->all("lane");
+                    // Our stacks run outward from the reference line; OpenDRIVE
+                    // lists left lanes outermost-first, so that side is reversed.
+                    if (std::string(sideName) == "left")
+                        std::reverse(ln.begin(), ln.end());
+                    for (const XmlNode* l : ln) {
+                        Strip st;
+                        st.id = l->attrI("id", 0);
+                        st.kind = stripKindFromOdr(l->attrS("type", "none"));
+                        std::vector<const XmlNode*> widths = l->all("width");
+                        if (widths.empty()) {
+                            st.width = Poly3::constant(0.0);
+                        } else {
+                            st.width = polyFrom(*widths.front());
+                            if (widths.size() > 1)
+                                rep.extraWidthRecords += int(widths.size()) - 1;
+                        }
+                        if (const XmlNode* rm = l->child("roadMark")) {
+                            st.outerMark.style = markStyleFromOdr(rm->attrS("type", "none"));
+                            st.outerMark.color = paintColorFromOdr(rm->attrS("color", "standard"));
+                            double w = rm->attrD("width", 0.12);
+                            if (w > 0.01) st.outerMark.width = float(w);
+                        }
+                        if (const XmlNode* sp = l->child("speed")) {
+                            double v = sp->attrD("max", 0.0);
+                            std::string unit = sp->attrS("unit", "km/h");
+                            if (unit == "m/s") v *= 3.6;
+                            if (unit == "mph") v *= 1.609344;
+                            if (v > 1.0) st.speedLimit = float(v);
+                        }
+                        // Direction is not stored: in right-hand traffic the
+                        // negative-id lanes run with s and the positive ones
+                        // against, which is this model's own convention too.
+                        bool drives = st.kind == StripKind::Travel || st.kind == StripKind::Bus;
+                        st.dir = drives ? (st.id < 0 ? int8_t(1) : int8_t(-1)) : int8_t(0);
+                        // A "bidirectional" lane belongs to neither direction; a
+                        // turn lane spelled "driving" belongs to its own side.
+                        if (st.kind == StripKind::Turn && l->attrS("type") != "bidirectional")
+                            st.dir = st.id < 0 ? int8_t(1) : int8_t(-1);
+                        if (st.kind == StripKind::Sidewalk) st.access = kAccessPed;
+                        st.surface = defaultSurfaceFor(st.kind);
+                        if (const XmlNode* mat = l->child("material"))
+                            st.surface = surfaceKindFromOdr(mat->attrS("surface", "asphalt"));
+                        if (st.kind == StripKind::Sidewalk || st.kind == StripKind::Curb)
+                            st.height = 0.15f;
+                        if (const XmlNode* h = l->child("height"))
+                            st.height = float(std::max(h->attrD("inner"), h->attrD("outer")));
+                        // At an interior boundary <link> names the neighbouring
+                        // lane section and finalize() will recompute it; at the
+                        // two outer boundaries it names the linked ROAD's lane,
+                        // which nothing else can recover.
+                        if (const XmlNode* lk = l->child("link")) {
+                            if (const XmlNode* p = lk->child("predecessor"))
+                                st.predecessor = p->attrI("id", kNoLane);
+                            if (const XmlNode* sc = lk->child("successor"))
+                                st.successor = sc->attrI("id", kNoLane);
+                        }
+                        stack.push_back(st);
+                        ++rep.lanes;
+                    }
+                };
+                readSide("right", sec.right);
+                readSide("left", sec.left);
+                if (const XmlNode* centre = ls->child("center")) {
+                    if (const XmlNode* cl = centre->child("lane")) {
+                        if (const XmlNode* rm = cl->child("roadMark")) {
+                            sec.centerMark.style = markStyleFromOdr(rm->attrS("type", "none"));
+                            sec.centerMark.color =
+                                paintColorFromOdr(rm->attrS("color", "standard"));
+                            double w = rm->attrD("width", 0.12);
+                            if (w > 0.01) sec.centerMark.width = float(w);
+                        }
+                    }
+                }
+                sec.assignIds();
+                r.xs.sections.push_back(sec);
+                ++rep.laneSections;
+            }
+        }
+        if (r.xs.sections.empty()) {
+            LaneSection sec = roadPreset("street2").section;
+            sec.s0 = 0;
+            r.xs.sections.push_back(sec);
+        }
+        r.xs.finalize(r.spine.length());
+
+        if (const XmlNode* sigs = rn->child("signals")) {
+            for (const XmlNode* sg : sigs->all("signal")) {
+                ApproachSignal as;
+                as.road = rep.roads;   // roads are appended in document order
+                as.s = sg->attrD("s");
+                as.forward = sg->attrS("orientation", "+") != "-";
+                std::string nm = sg->attrS("name");
+                std::string type = sg->attrS("type");
+                if (nm.rfind("roadlab:", 0) == 0) {
+                    as.control = junctionControlFromOdr(nm.substr(8));
+                    as.explicitControl = true;
+                } else if (type.rfind("1000", 0) == 0 || sg->attrS("dynamic", "no") == "yes") {
+                    as.control = JunctionControl::Signalized;   // a light of some country
+                } else if (type == "206") {
+                    as.control = JunctionControl::AllWayStop;
+                } else if (type == "205") {
+                    as.control = JunctionControl::Yield;
+                } else {
+                    continue;   // a speed-limit or warning sign says nothing about control
+                }
+                approaches.push_back(as);
+            }
+        }
+
+        out.addRoad(std::move(r));
+        ++rep.roads;
+    }
+
+    // --- junctions ---
+    for (const XmlNode* jn : junctionNodes) {
+        Junction j;
+        j.name = jn->attrS("name", "junction");
+        j.imported = true;
+        j.control = JunctionControl::Uncontrolled;
+        std::vector<std::pair<int, bool>> armSeen;   // (road, atEnd)
+        auto armIndex = [&](int road, bool atEnd) {
+            for (size_t i = 0; i < armSeen.size(); ++i)
+                if (armSeen[i].first == road && armSeen[i].second == atEnd) return int(i);
+            armSeen.push_back({road, atEnd});
+            JunctionArm arm;
+            arm.road = road;
+            arm.atEnd = atEnd;
+            j.arms.push_back(arm);
+            return int(armSeen.size()) - 1;
+        };
+
+        for (const XmlNode* cn : jn->all("connection")) {
+            int incoming = mapRoad(cn->attrI("incomingRoad", -1));
+            int connecting = mapRoad(cn->attrI("connectingRoad", -1));
+            if (incoming < 0 || connecting < 0) continue;
+            const Road& conn = out.road(connecting);
+            // Which end of each arm the junction holds comes from the CONNECTING
+            // road's own links, not from the arm's. The arm may reach the
+            // junction through an intermediate road (an exporter that carves
+            // stubs writes exactly that), in which case the arm's own link names
+            // the stub and says nothing about the junction; the connector always
+            // names both of its neighbours with a contactPoint.
+            int outgoing = -1;
+            bool incAtEnd = false, outAtEnd = false;
+            bool haveIncoming = false;
+            bool outIsConnSucc = true;   // which end of the connector faces out
+            for (const RoadLink* lk : {&conn.pred, &conn.succ}) {
+                if (lk->type != LinkType::Road || lk->id < 0) continue;
+                if (lk->id == incoming && !haveIncoming) {
+                    haveIncoming = true;
+                    incAtEnd = !lk->toStart;
+                } else {
+                    outgoing = lk->id;
+                    outAtEnd = !lk->toStart;
+                    outIsConnSucc = (lk == &conn.succ);
+                }
+            }
+            const Road& inc = out.road(incoming);
+            if (!haveIncoming) {
+                // The connector does not name the incoming road — fall back to
+                // whichever of its ends carries a junction link.
+                incAtEnd = inc.succ.type == LinkType::Junction || inc.pred.type != LinkType::Junction;
+            }
+            if (outgoing < 0) continue;
+
+            Connection c;
+            c.connectorRoad = connecting;
+            c.fromArm = armIndex(incoming, incAtEnd);
+            c.toArm = armIndex(outgoing, outAtEnd);
+            int fromLane = 0, toLane = 0;
+            for (const XmlNode* ll : cn->all("laneLink")) {
+                fromLane = ll->attrI("from", 0);
+                toLane = ll->attrI("to", 0);
+                break;   // one connector road carries one movement here
+            }
+            int incSection = inc.xs.sectionIndexAt(incAtEnd ? std::max(inc.begin(), inc.end() - 1e-3)
+                                                            : inc.begin() + 1e-3);
+            const Road& outRoad = out.road(outgoing);
+            int outSection = outRoad.xs.sectionIndexAt(
+                outAtEnd ? std::max(outRoad.begin(), outRoad.end() - 1e-3)
+                         : outRoad.begin() + 1e-3);
+            c.from = {incoming, incSection, fromLane};
+            // <laneLink to="..."> names a lane on the CONNECTING road, not on the
+            // outgoing one. Which lane the movement actually lands in is on that
+            // connector lane's own link, at whichever end faces outward.
+            int connLane = toLane;
+            int farLane = connLane;
+            {
+                double at = outIsConnSucc ? std::max(conn.begin(), conn.end() - 1e-3)
+                                          : conn.begin() + 1e-3;
+                int cs = conn.xs.sectionIndexAt(at);
+                const LaneSection& cse = conn.xs.sections[size_t(std::max(0, cs))];
+                const Strip* st = cse.strip(connLane);
+                if (st) {
+                    int far = outIsConnSucc ? st->successor : st->predecessor;
+                    if (far != kNoLane) farLane = far;
+                }
+            }
+            c.to = {outgoing, outSection, farLane};
+            j.connections.push_back(c);
+        }
+        if (j.arms.empty()) continue;
+        // How the junction is controlled comes from the signs standing on its
+        // approaches — which is where the information lives in OpenDRIVE, and
+        // also where it lives in the world.
+        for (const ApproachSignal& as : approaches) {
+            bool onAnArm = false;
+            for (const JunctionArm& arm : j.arms)
+                if (arm.road == as.road && arm.atEnd == as.forward) onAnArm = true;
+            if (!onAnArm) continue;
+            if (as.explicitControl) {
+                j.control = as.control;
+                break;
+            }
+            if (j.control == JunctionControl::Uncontrolled) j.control = as.control;
+        }
+        out.addJunction(j);
+        ++rep.junctions;
+    }
+
+    if (rep.approximatedGeometry > 0)
+        rep.notes.push_back(std::to_string(rep.approximatedGeometry) +
+                            " polynomial geometry record(s) sampled into segments");
+    if (rep.extraWidthRecords > 0)
+        rep.notes.push_back(std::to_string(rep.extraWidthRecords) +
+                            " extra <width> record(s) ignored; only the first per lane is used");
+    if (rep.maxGeometryDrift > 0.05)
+        rep.notes.push_back("geometry records disagree by up to " +
+                            std::to_string(rep.maxGeometryDrift) +
+                            " m; each is anchored to its own pose");
+    if (reportOut) *reportOut = rep;
+    return true;
+}
+
+bool readOpenDrive(const std::string& path, Network& out, std::string& error,
+                   OdrImportReport* report) {
+    std::ifstream in(path);
+    if (!in) {
+        error = "cannot open " + path;
+        return false;
+    }
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return openDriveFromString(ss.str(), out, error, report);
 }
 
 }  // namespace roadlab

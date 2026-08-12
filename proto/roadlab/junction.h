@@ -78,6 +78,12 @@ struct Junction {
     JunctionControl control = JunctionControl::Uncontrolled;
     double cornerRadius = 6.0;
     bool generateCrosswalks = true;
+    // An IMPORTED junction already has its connectors and its trimmed arms — the
+    // file resolved it. Resolving it again would trim the arms a second time and
+    // generate a duplicate set of connector roads, so build() adopts it instead:
+    // it measures what is there and derives the conflicts and phases, which the
+    // file does not carry.
+    bool imported = false;
 
     std::vector<JunctionArm> arms;
     std::vector<Connection> connections;
@@ -100,6 +106,11 @@ struct Junction {
 // road per turning movement, find the conflict points and — if signalised —
 // colour the conflict graph into phases.
 void buildJunction(Network& net, Junction& j);
+
+// Take an imported junction as given: measure its arms, build the pad polygon,
+// and derive the conflict table and signal phases from the connectors that
+// already exist. No trimming, no connector generation.
+void adoptJunction(Network& net, Junction& j);
 
 // Classify a movement from one arm to another by their headings.
 TurnKind classifyTurn(double headingInFrom, double headingOutTo);
