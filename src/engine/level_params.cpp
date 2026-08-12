@@ -180,6 +180,7 @@ void readLotGrowParams(const json& cityJson,
     lots.midRadius = cityJson.value("midtownRadius", 135.0);
     lots.plinth = cityJson.value("plinth", lots.plinth);   // base height above the pad
     lots.hubRadius = cityJson.value("hubRadius", lots.hubRadius);
+    lots.cityMaxStoreys = cityJson.value("maxStoreys", lots.cityMaxStoreys);
     // The Lot System (docs/lot-system-plan.md §15.3). One flag, read in the
     // SHARED reader so the editor and the game cannot grow different cities —
     // which is the mistake this function exists to prevent.

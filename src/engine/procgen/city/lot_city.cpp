@@ -178,6 +178,14 @@ void growLotSystemBlocks(const std::vector<Poly2>& blocks, std::size_t enclosedC
             // does: the recipe is asked for the smaller of the two.
             LotTags tags = lot.tags;
             tags.maxStoreys = std::min(tags.maxStoreys, static_cast<Real>(prog.maxStoreys));
+            // ...and by the SETTLEMENT's own ceiling, when the level declares
+            // one. See LotParams::cityMaxStoreys: the plate says what the
+            // footprint can carry and coreness says where in the city this is,
+            // but neither knows how big the city is, so a nine-block town grew
+            // metropolis towers at its centre.
+            if (params.cityMaxStoreys > 0)
+                tags.maxStoreys = std::min(tags.maxStoreys,
+                                           static_cast<Real>(params.cityMaxStoreys));
             // WEIGHTED, and hashed. This picked `prog.recipes[lotSeed % n]`:
             // uniform over the program's recipes, so LotRecipe::weight — which
             // is authored on all 37 of them and says a glass tower is rarer than

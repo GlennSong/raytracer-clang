@@ -111,6 +111,20 @@ struct LotParams {
     // nothing downstream changes — which is what makes it safe to flip per
     // level while the old path still ships.
     bool lotSystem = false;
+    // HOW BIG IS THIS SETTLEMENT? A storey ceiling for the whole city, 0 = the
+    // recipes' own ambition.
+    //
+    // Height had two governors and needed three. The PLATE says what a footprint
+    // can structurally carry (§17.2) and CORENESS says where in the city this lot
+    // sits — but nothing said how big the city IS, so a nine-block town built the
+    // same 42-storey tower at its centre that a metropolis would, because that is
+    // what the tower recipe's range tops out at. Coreness cannot fix it: at the
+    // core, coreness is 1 by definition.
+    //
+    // A settlement's tallest building tracks its size in the real world, and that
+    // is a fact about the level, not about any recipe — so the level declares it
+    // (citysim.maxStoreys) and every lot is capped by it.
+    int cityMaxStoreys = 0;
     // TERRAIN sampler (world y at x,z): buildings grow from their graded pad
     // plane (the ENTRANCE-side grade, so the front door sits level with the
     // sidewalk it faces), park/green pads drape per-vertex, and

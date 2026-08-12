@@ -862,8 +862,24 @@ BuiltBuilding buildFromRecipe(const LotRecipe& recipe,
     // the whole budget: a caller that also has a program should hand in the
     // smaller of the plate cap and the program's own ceiling.
     const int plateCap = std::max(1, static_cast<int>(tags.maxStoreys));
-    int storeys = rng.irange(recipe.minStoreys, recipe.maxStoreys);
+    // ...and by CORENESS, which is what makes a skyline a skyline. This drew the
+    // storey count from a flat irange over the recipe's whole range, so a tower
+    // on the edge of downtown was as tall as one on the middle of it and the
+    // result was two or three spikes wherever the dice landed, not a profile
+    // that rises to a centre. lot_city's own comment already claimed coreness
+    // "lets the skyline rise toward the centre rather than by dice" — it only
+    // ever weighted which PROGRAM was chosen, never how tall it was built.
+    //
+    // Squared, so the top of the range is reserved for the true core rather than
+    // handed to most of downtown. The jitter keeps a street from being a
+    // terrace of identical heights without letting one lot run away.
+    const Real core = std::max(Real(0), std::min(Real(1), tags.coreness));
+    const Real span = static_cast<Real>(recipe.maxStoreys - recipe.minStoreys);
+    const Real want = recipe.minStoreys + span * core * core;
+    const Real jitter = 1.0 + (rng.unit() - 0.5) * 0.22;
+    int storeys = static_cast<int>(std::lround(want * jitter));
     storeys = std::max(1, std::min({storeys, recipe.maxStoreys, plateCap}));
+    storeys = std::max(storeys, std::min(recipe.minStoreys, plateCap));
     out.storeys = storeys;
 
     // PLAN: fit a template into the envelope's OWN ORIENTED FRAME.
