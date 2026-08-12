@@ -3,7 +3,7 @@
 # module (shape_grammar.h supplies PartId/FacadeStyle, and that pulls the road
 # stack in transitively).
 set -e
-cd /home/user/raytracer-clang
+cd "$(dirname "$0")/.."
 CITY=src/engine/procgen/city
 PROC=src/engine/procgen
 NEW="$CITY/shape2.cpp $CITY/shape_ops.cpp $CITY/plan_grammar.cpp $CITY/mass_stack.cpp
@@ -27,5 +27,9 @@ src/engine/mesh_builder.cpp src/engine/ai/nav_graph.cpp
 src/rt_math.cpp src/curve.cpp src/log.cpp
 "
 # shellcheck disable=SC2086
-c++ -std=c++17 -O1 -isystem third_party -I. tests/main.cpp $TESTS $NEW $SRC -o "$OUT"
+# RT_NO_GPU_EROSION: erosion.cpp calls erodeGpu(), which lives in the Metal-only
+# erosion_gpu.mm — not in this link set. The header's own escape hatch swaps in
+# the CPU stubs instead of failing to link on a Mac (it is the plain Makefile's
+# flag too). Without it these tools build in a Linux container and nowhere else.
+c++ -std=c++17 -O1 -DRT_NO_GPU_EROSION -isystem third_party -I. tests/main.cpp $TESTS $NEW $SRC -o "$OUT"
 echo "built $OUT"

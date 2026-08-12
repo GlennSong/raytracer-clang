@@ -31,6 +31,9 @@ src/rt_math.cpp src/curve.cpp src/log.cpp
 "
 
 # shellcheck disable=SC2086
-c++ -std=c++17 -O2 -isystem third_party -I. tools/lot_lab.cpp $SRC \
+# RT_NO_GPU_EROSION: erosion.cpp calls erodeGpu(), whose Metal host file is not
+# in this link set — the header's escape hatch swaps in the CPU stubs rather
+# than failing to link on a Mac.
+c++ -std=c++17 -O2 -DRT_NO_GPU_EROSION -isystem third_party -I. tools/lot_lab.cpp $SRC \
     -o "${OUTBIN:-/tmp/lot_lab}"
 echo "built ${OUTBIN:-/tmp/lot_lab}"

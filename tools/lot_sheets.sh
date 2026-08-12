@@ -38,7 +38,10 @@ src/rt_math.cpp src/curve.cpp src/log.cpp
 # Both tools take the output directory from OUT and a seed as argv[1].
 for tool in lot_system_sheet lot_block_sheet lot_mesh_sheet; do
     # shellcheck disable=SC2086
-    c++ -std=c++17 -O1 -isystem third_party -I. "tools/$tool.cpp" $NEW $SRC \
+    # RT_NO_GPU_EROSION: erosion.cpp calls erodeGpu(), whose Metal host file is
+    # not in this link set — the header's escape hatch swaps in the CPU stubs
+    # rather than failing to link on a Mac.
+    c++ -std=c++17 -O1 -DRT_NO_GPU_EROSION -isystem third_party -I. "tools/$tool.cpp" $NEW $SRC \
         -o "$OUT/$tool"
     OUT="$OUT" "$OUT/$tool"
 done
