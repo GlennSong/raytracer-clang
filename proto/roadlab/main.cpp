@@ -12,6 +12,7 @@
 
 #include "diag.h"
 #include "odr.h"
+#include "paint_fixture.h"
 #include "scene.h"
 #include "sim.h"
 #include <cstdio>
@@ -32,6 +33,7 @@ struct Options {
     std::string dumpJson;
     std::string xodrPath;
     std::string importPath;
+    std::string paintFixture;
     bool city = false;
     bool metro = false;
     int width = 1600, height = 1000;
@@ -92,6 +94,7 @@ void usage() {
         "  --xodr <file.xodr>  export the network as OpenDRIVE\n"
         "  --import <f.xodr>   load an OpenDRIVE file as the scene\n"
         "  --fallbacks         census every silent-substitution path\n"
+        "  --paint-fixture <f> dump marking-evaluator cases for the WGSL comparison\n"
         "  --list              list presets and demos\n");
 }
 
@@ -303,6 +306,7 @@ int main(int argc, char** argv) {
         if (matchArg(i, argc, argv, "--dump", opt.dumpJson)) continue;
         if (matchArg(i, argc, argv, "--xodr", opt.xodrPath)) continue;
         if (matchArg(i, argc, argv, "--import", opt.importPath)) continue;
+        if (matchArg(i, argc, argv, "--paint-fixture", opt.paintFixture)) continue;
         if (matchNum(i, argc, argv, "--width", d)) { opt.width = int(d); continue; }
         if (matchNum(i, argc, argv, "--height", d)) { opt.height = int(d); continue; }
         if (matchNum(i, argc, argv, "--cars", d)) { opt.cars = int(d); continue; }
@@ -358,6 +362,21 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "unknown argument: %s\n", argv[i]);
         usage();
         return 1;
+    }
+
+    if (!opt.paintFixture.empty()) {
+        // The corpus tools/roadlab-wgsl-run.py replays on a GPU. Written from
+        // here rather than the test binary so it can be regenerated without a
+        // test run, and so the shipped evaluator is the one that answered.
+        PaintFixture fx = buildPaintFixture();
+        std::string err;
+        if (!writePaintFixture(fx, opt.paintFixture, err)) {
+            std::fprintf(stderr, "roadlab: %s\n", err.c_str());
+            return 1;
+        }
+        if (!opt.quiet)
+            std::printf("wrote %s (%zu cases)\n", opt.paintFixture.c_str(), fx.cases.size());
+        return 0;
     }
 
     if (opt.list) {

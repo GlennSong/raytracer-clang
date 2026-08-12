@@ -15,6 +15,8 @@ make roadlab                      # build ./roadlab
 make roadlab-test                 # 23300 assertions, no framework
 make roadlab-shots                # render every demo to out_roadlab/
 make roadlab-wgsl                 # regenerate rl_paint.wgsl from rl_paint.h
+make roadlab-wgsl-check           # + validate it with naga (cargo install naga-cli)
+make roadlab-wgsl-conformance     # run the WGSL and diff it against the C++
 
 ./roadlab --demo showcase --view persp --out shot.png
 ./roadlab --demo grades --view persp            # skewed junction, four grades
@@ -627,14 +629,74 @@ generator maps rather than translates, straight onto WGSL builtins), and
 `rlPaintColor` returns a small struct. Neither is worse in C++, and together they
 took the translator down to something that fits in a page and fails loudly.
 
-Two guards keep the pair honest. The generated file records an FNV-1a digest of
-its input, and the test suite recomputes it — a header edit nobody regenerated
-fails the build rather than shipping. And because a digest only proves the file
-was regenerated, not that regenerating produced anything, the same test walks the
-header for every `RL_FN` and `#define RL_*` and requires each in the WGSL, checks
-brace balance, and greps for C that survived translation. There is no WGSL
-validator in this repo (the same note is on `shaders/webgpu/water.wgsl`), so those
-structural checks stand in for a parser.
+Two guards keep the pair honest without any toolchain. The generated file records
+an FNV-1a digest of its input, and the test suite recomputes it — a header edit
+nobody regenerated fails the build rather than shipping. And because a digest
+only proves the file was regenerated, not that regenerating produced anything,
+the same test walks the header for every `RL_FN` and `#define RL_*` and requires
+each in the WGSL, checks brace balance, and greps for C that survived
+translation.
+
+### It parses, and it runs
+
+Both of those are structural. Two stronger checks are available headlessly, and
+neither needs a GPU:
+
+`make roadlab-wgsl-check` runs the output through **naga** — the WGSL front-end
+wgpu and Firefox use — and then asks it to lower the module to SPIR-V and MSL,
+because the backends enforce things the parser lets through. The subject is
+`rl_paint.wgsl` concatenated with `rl_paint_sampler.wgsl`, a hand-written
+companion that implements the paint_texture.h contract: the bindings, the texel
+arithmetic, and a fragment entry point. That is deliberate — validating the
+evaluator alone proves it type-checks, not that a fragment can reach it. naga is
+not vendored (`cargo install naga-cli`); without it the step says so and skips.
+
+`make roadlab-wgsl-conformance` goes further and **executes** the shader.
+`roadlab --paint-fixture` dumps 12,870 evaluator inputs with the CPU's answers —
+real cross-sections from every demo, plus synthetic rows covering the styles the
+demos never reach, across filter widths from 2 mm to 8 m — and a compute pipeline
+replays them. wgpu falls back to Vulkan on llvmpipe, so this runs on a machine
+with no graphics hardware at all.
+
+That is the check that earns the "one evaluator" claim, because a translation can
+be flawless WGSL and still paint a different road. It was tested by breaking it:
+swapping `dashOn` and `dashOff` in the struct moves the worst difference to 1.0,
+and changing a single constant from 0.55 to 0.56 moves it to 2.1e-2 — both far
+outside the gate.
+
+### What running it found
+
+95.05% of cases match bit for bit and the mean difference is 3.1e-8, but 18 cases
+disagreed by up to 2.7e-4 — all of them in the *periodic* styles (dashed, hatch,
+chevron), and the error grew with station: 6e-8 near a road's start, 2.7e-4 at
+s ≈ 386 m. Solid and double lines, which never wrap, were exact.
+
+The cause is `rlWrap`. Written `x - period * floor(x / period)`, the product is a
+number the size of `x` — 270 for that hatch — so rounding it costs an ulp *at
+that scale*, about 2.3e-5, and all of it lands in a result of magnitude 0.6.
+`fma` computes the product at full width and rounds once, at the scale of the
+answer. rlWrap now asks for it explicitly, which is both more accurate and the
+only portable way to say which expression is meant: whether a compiler contracts
+a multiply-and-subtract on its own is its business, and clang already did while
+the shader did not.
+
+What that does *not* fix is the software rasteriser. llvmpipe lowers `fma` to a
+multiply and an add — verified directly, it returns 0.60672 where the
+correctly-rounded fused answer is 0.60670626 — so on llvmpipe the two sides still
+evaluate different expressions and the 2.7e-4 remains. The runner probes for this
+and picks its tolerance accordingly (2e-6 where fma is fused, 1e-3 where it is
+lowered, saying which), rather than loosening the bound everywhere and hiding a
+real defect on real hardware. A separate guard requires ≥90% of the corpus to
+match bit for bit, which is what the tolerance cannot do: a systematic shift
+would sit under any bound loose enough for float noise, but it cannot leave most
+of the corpus exact.
+
+One thing this makes plain for the engine: `f32` cannot resolve a dash edge past
+a few kilometres — an ulp of 10 km is a millimetre — so a fragment should be
+handed a road-local station, not a world one.
+
+For what it is worth, naga also validates all eleven of the engine's existing
+`shaders/webgpu/*.wgsl` clean.
 
 ### What is left
 
@@ -758,6 +820,8 @@ rl_math.h/.cpp     Vec2/Vec3, Poly3, noise, Gauss-Legendre. No engine deps.
 rl_xml.h/.cpp      a minimal XML reader, sized for .xodr and nothing more.
 rl_paint.h         the marking evaluator, in a C++/MSL/GLSL subset. The GPU half.
 rl_paint.wgsl      generated from it by tools/roadlab-wgsl.py. Do not edit.
+rl_paint_sampler.wgsl  hand-written: the bindings and fetch for the profile texture.
+paint_fixture.h/.cpp   evaluator inputs + CPU answers, for the WGSL comparison.
 paint_bake.h/.cpp  cross-section -> the flat boundary array that shader reads.
 paint_texture.h/.cpp  that array as the two textures a fragment samples.
 diag.h/.cpp        the fallback census: counters for every quiet substitution.

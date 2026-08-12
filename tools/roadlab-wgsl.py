@@ -470,10 +470,78 @@ def build():
     return re.sub(r"\n{3,}", "\n\n", text)
 
 
+SAMPLER = os.path.join(ROOT, "proto", "roadlab", "rl_paint_sampler.wgsl")
+
+
+def validate():
+    """Run the generated WGSL through a real WGSL front-end.
+
+    naga is the one wgpu and Firefox use, so "it validates" means something. It
+    is not vendored — `cargo install naga-cli` — so this degrades to a stated
+    skip rather than a silent pass when it is absent.
+
+    Two subjects, because they check different things. rl_paint.wgsl alone
+    type-checks the evaluator. Concatenated with rl_paint_sampler.wgsl it also
+    checks the contract in paint_texture.h: the bindings, the texel arithmetic,
+    and passing a pointer-to-array into the evaluator from a fragment entry
+    point. And the SPIR-V backend is asked for output rather than just a parse,
+    because lowering enforces things the front-end lets through."""
+    import subprocess
+    import tempfile
+
+    naga = None
+    for candidate in ("naga", os.path.expanduser("~/.cargo/bin/naga")):
+        try:
+            v = subprocess.run([candidate, "--version"], capture_output=True, text=True)
+            if v.returncode == 0:
+                naga = candidate
+                version = v.stdout.strip()
+                break
+        except OSError:
+            continue
+    if naga is None:
+        print("naga not found — skipping WGSL validation "
+              "(`cargo install naga-cli` to enable it)")
+        return 0
+
+    with open(DST) as f:
+        evaluator = f.read()
+    with open(SAMPLER) as f:
+        sampler = f.read()
+
+    failed = False
+    with tempfile.TemporaryDirectory() as tmp:
+        subjects = [
+            ("rl_paint.wgsl", evaluator),
+            ("rl_paint.wgsl + rl_paint_sampler.wgsl", evaluator + sampler),
+        ]
+        for name, text in subjects:
+            path = os.path.join(tmp, "subject.wgsl")
+            with open(path, "w") as f:
+                f.write(text)
+            steps = [("validate", [naga, path])]
+            if "@fragment" in text:
+                # Only a module with an entry point can be lowered.
+                steps.append(("spirv", [naga, path, os.path.join(tmp, "out.spv")]))
+                steps.append(("msl", [naga, path, os.path.join(tmp, "out.metal")]))
+            for what, cmd in steps:
+                r = subprocess.run(cmd, capture_output=True, text=True)
+                if r.returncode != 0:
+                    failed = True
+                    sys.stderr.write("%s: %s FAILED\n%s%s\n"
+                                     % (name, what, r.stdout, r.stderr))
+                else:
+                    print("%s: %s ok" % (name, what))
+    print("validated with naga %s" % version)
+    return 1 if failed else 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true",
                     help="exit non-zero if the checked-in WGSL is stale")
+    ap.add_argument("--validate", action="store_true",
+                    help="run the WGSL through naga, if it is installed")
     args = ap.parse_args()
     try:
         text = build()
@@ -487,10 +555,12 @@ def main():
                 "proto/roadlab/rl_paint.wgsl is stale — run tools/roadlab-wgsl.py\n")
             return 1
         print("rl_paint.wgsl is up to date")
-        return 0
-    with open(DST, "w") as f:
-        f.write(text)
-    print("wrote %s (%d lines)" % (os.path.relpath(DST, ROOT), text.count("\n")))
+    else:
+        with open(DST, "w") as f:
+            f.write(text)
+        print("wrote %s (%d lines)" % (os.path.relpath(DST, ROOT), text.count("\n")))
+    if args.validate:
+        return validate()
     return 0
 
 

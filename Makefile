@@ -429,6 +429,7 @@ ROADLAB_LIB_SRCS = \
 	$(ROADLAB_DIR)/diag.cpp \
 	$(ROADLAB_DIR)/paint_bake.cpp \
 	$(ROADLAB_DIR)/paint_texture.cpp \
+	$(ROADLAB_DIR)/paint_fixture.cpp \
 	$(ROADLAB_DIR)/spine.cpp \
 	$(ROADLAB_DIR)/profile.cpp \
 	$(ROADLAB_DIR)/network.cpp \
@@ -448,10 +449,17 @@ ROADLAB_FLAGS = -std=c++17 -Wall -Wextra -Wpedantic -pthread -O2 \
 # WGSL is not stale, so they need to find them from any working directory.
 ROADLAB_TEST_FLAGS = $(ROADLAB_FLAGS) -DROADLAB_SRC_DIR='"$(abspath $(ROADLAB_DIR))"'
 
-roadlab: $(ROADLAB_LIB_SRCS) $(ROADLAB_DIR)/main.cpp Makefile
+# Headers are prerequisites too. These targets compile every .cpp in one
+# command and keep no object files, so there are no .d files to lean on the way
+# the engine build does — and a header-only change (rl_paint.h is entirely
+# header) would otherwise leave a stale binary that quietly disagrees with the
+# source. That is exactly the bug this file warns about at the top.
+ROADLAB_HDRS = $(wildcard $(ROADLAB_DIR)/*.h)
+
+roadlab: $(ROADLAB_LIB_SRCS) $(ROADLAB_DIR)/main.cpp $(ROADLAB_HDRS) Makefile
 	$(CXX) $(ROADLAB_FLAGS) -o $@ $(filter %.cpp,$^)
 
-roadlab_tests: $(ROADLAB_LIB_SRCS) $(ROADLAB_DIR)/tests.cpp Makefile
+roadlab_tests: $(ROADLAB_LIB_SRCS) $(ROADLAB_DIR)/tests.cpp $(ROADLAB_HDRS) Makefile
 	$(CXX) $(ROADLAB_TEST_FLAGS) -o $@ $(filter %.cpp,$^)
 
 roadlab-test: roadlab_tests
@@ -461,10 +469,22 @@ roadlab-test: roadlab_tests
 # cannot include the shared header verbatim. The test suite fails if the
 # checked-in file is stale, so this is how you fix that failure.
 roadlab-wgsl:
-	python3 tools/roadlab-wgsl.py
+	python3 tools/roadlab-wgsl.py --validate
 
+# Stale-check plus a real WGSL front-end. naga is not vendored (`cargo install
+# naga-cli`); without it the validation step says so and skips rather than
+# passing quietly.
 roadlab-wgsl-check:
-	python3 tools/roadlab-wgsl.py --check
+	python3 tools/roadlab-wgsl.py --check --validate
+
+# Validation says the WGSL parses; this says it COMPUTES the same road. Dumps a
+# corpus of evaluator inputs with the CPU's answers, then replays them through
+# the shader on a WebGPU device and diffs. wgpu falls back to Vulkan on llvmpipe,
+# so it needs no GPU: `pip install wgpu numpy`, plus mesa-vulkan-drivers.
+roadlab-wgsl-conformance: roadlab
+	@mkdir -p out_roadlab
+	./roadlab --paint-fixture out_roadlab/paint.fixture --quiet
+	python3 tools/roadlab-wgsl-run.py --fixture out_roadlab/paint.fixture
 
 # Every demo, top-down and in perspective, into out_roadlab/ — the quickest way
 # to see whether a change to the shader or the solvers broke something visible.
