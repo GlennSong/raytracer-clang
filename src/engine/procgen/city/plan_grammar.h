@@ -166,6 +166,22 @@ const char* planTemplateName(PlanTemplate t);
 // Every template, for tests and for the Lot Lab's sheets.
 std::vector<PlanTemplate> allPlanTemplates();
 
+// HOW OFTEN A SHAPE SHOULD EXIST IN A CITY, relative to a plain bar at 1.0.
+//
+// A recipe lists the templates that suit it, and that list was picked from
+// UNIFORMLY — so a wedge tower or a clover plate turned up as often as the
+// rectangle beside it, and an ordinary street came out looking like an
+// architecture competition. Real cities are overwhelmingly bars and Ls, and the
+// exceptions are what make them exceptional. Owner review: "Maybe you'd have 1-2
+// in a city, but that's it."
+//
+// This is a property of the SHAPE, not of any one recipe — a trapezoid is rare
+// everywhere. Recipe-level taste stays on LotRecipe::weight, a separate axis
+// that was authored on all 37 recipes and never read by anything. Both become
+// Lua data when the recipe surface lands (docs §17.8); the SELECTION is
+// substrate and stays here.
+Real planTemplateRarity(PlanTemplate t);
+
 }  // namespace engine
 
 #endif

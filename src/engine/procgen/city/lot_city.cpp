@@ -178,10 +178,28 @@ void growLotSystemBlocks(const std::vector<Poly2>& blocks, std::size_t enclosedC
             // does: the recipe is asked for the smaller of the two.
             LotTags tags = lot.tags;
             tags.maxStoreys = std::min(tags.maxStoreys, static_cast<Real>(prog.maxStoreys));
-            const LotRecipe* rec = mix.programs[lot.program].recipes.empty()
-                                       ? nullptr
-                                       : book.byName(prog.recipes[lotSeed %
-                                                                  prog.recipes.size()]);
+            // WEIGHTED, and hashed. This picked `prog.recipes[lotSeed % n]`:
+            // uniform over the program's recipes, so LotRecipe::weight — which
+            // is authored on all 37 of them and says a glass tower is rarer than
+            // a walk-up — was read by nothing at all. `%` on a raw seed is also
+            // a poor hash: lotSeed advances by a fixed stride per lot, so a
+            // block's recipes cycled in lockstep instead of varying.
+            const LotRecipe* rec = nullptr;
+            if (!prog.recipes.empty()) {
+                Real total = 0;
+                for (const std::string& name : prog.recipes)
+                    if (const LotRecipe* r = book.byName(name))
+                        total += std::max(Real(0), r->weight);
+                Rng pick(lotSeed ^ 0x5bf03635u);
+                Real r = pick.unit() * total;
+                for (const std::string& name : prog.recipes) {
+                    const LotRecipe* cand = book.byName(name);
+                    if (!cand) continue;
+                    rec = cand;                       // last valid, as the fallback
+                    r -= std::max(Real(0), cand->weight);
+                    if (r <= 0) break;
+                }
+            }
             if (!rec) continue;
 
             // A LONG ENVELOPE IS A ROW, NOT A LONG BUILDING. Sixty metres of

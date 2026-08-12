@@ -352,6 +352,43 @@ std::vector<PlanTemplate> allPlanTemplates() {
             PlanTemplate::CourtyardWings};
 }
 
+Real planTemplateRarity(PlanTemplate t) {
+    switch (t) {
+        // THE ORDINARY CITY. A street is bars and Ls; everything else is an
+        // event on it.
+        case PlanTemplate::Bar:              return 1.00;
+        case PlanTemplate::L:                return 0.70;
+        case PlanTemplate::U:                return 0.35;
+        case PlanTemplate::T:                return 0.30;
+        case PlanTemplate::Courtyard:        return 0.30;
+        case PlanTemplate::H:                return 0.22;
+        case PlanTemplate::BowFront:         return 0.20;
+        case PlanTemplate::CourtyardWings:   return 0.18;
+
+        // CORNER AND SITE responses: uncommon, but they exist because a site
+        // asked for them rather than because a die came up.
+        case PlanTemplate::ChamferedSquare:  return 0.16;
+        case PlanTemplate::CurvedCornerSlab: return 0.12;
+        case PlanTemplate::Flatiron:         return 0.10;
+        case PlanTemplate::AtriumRing:       return 0.10;
+        case PlanTemplate::SawtoothShed:     return 0.10;   // industrial only
+        case PlanTemplate::Cruciform:        return 0.08;
+
+        // LANDMARKS. One or two of these in a city is the whole point; a street
+        // of them is what the owner review called an architecture competition.
+        case PlanTemplate::Pinwheel:         return 0.05;
+        case PlanTemplate::Octagon:          return 0.04;
+        case PlanTemplate::Pentagon:         return 0.03;
+        case PlanTemplate::Hexagon:          return 0.03;
+        case PlanTemplate::CrossApse:        return 0.03;
+        case PlanTemplate::WedgeTower:       return 0.02;   // the trapezoid
+        case PlanTemplate::LobedTower:       return 0.02;   // the clover plate
+        case PlanTemplate::Trefoil:          return 0.02;
+        case PlanTemplate::RadialWings:      return 0.02;
+    }
+    return 1.0;
+}
+
 Shape2 regularPolygon(int sides, Real w, Real d, Real rotation) {
     sides = std::max(3, sides);
     // Inscribed in the frame, so an n-gon fills the same box a rectangle would

@@ -373,3 +373,43 @@ TEST_CASE(roof_plant_items_never_overlap) {
             CHECK(apart);
         }
 }
+
+// MEASURE DISTRIBUTIONS, NOT SAMPLES. A recipe lists the templates that suit it
+// and that list was picked from UNIFORMLY, so a recipe offering
+// {Bar, Octagon, ChamferedSquare, WedgeTower} built a trapezoid a quarter of the
+// time and a street came out looking like an architecture competition. No
+// single-building test can see that; only the shape of the population can.
+TEST_CASE(recipes_build_ordinary_shapes_and_rare_landmarks) {
+    static RecipeBook book = stockRecipes();
+    static PaletteLibrary palettes = stockPalettes();
+
+    int total = 0, exotic = 0, plain = 0;
+    for (std::uint32_t s = 1; s <= 400; ++s) {
+        const BuiltBuilding b = build("office_tower", 44, 40, 20, s);
+        if (b.surfaces.levels.empty()) continue;
+        ++total;
+        switch (b.plan) {
+            case PlanTemplate::WedgeTower:
+            case PlanTemplate::LobedTower:
+            case PlanTemplate::Trefoil:
+            case PlanTemplate::RadialWings:
+            case PlanTemplate::Pentagon:
+            case PlanTemplate::Hexagon:
+            case PlanTemplate::Octagon:
+                ++exotic;
+                break;
+            case PlanTemplate::Bar:
+            case PlanTemplate::L:
+                ++plain;
+                break;
+            default:
+                break;
+        }
+    }
+    CHECK(total > 300);
+    // The ordinary city dominates...
+    CHECK(plain * 2 > total);
+    // ...and the landmark silhouettes are a garnish, not the meal. Uniform
+    // selection over this recipe's list put them near a third.
+    CHECK(exotic * 8 < total);
+}

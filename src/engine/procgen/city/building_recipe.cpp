@@ -879,10 +879,26 @@ BuiltBuilding buildFromRecipe(const LotRecipe& recipe,
     const OBB2 box = orientedBoundingBox(envRing);
     const Real w = std::max(Real(4), box.half[0] * 2);
     const Real d = std::max(Real(4), box.half[1] * 2);
-    const PlanTemplate tmpl =
-        recipe.plans.empty()
-            ? PlanTemplate::Bar
-            : recipe.plans[rng.irange(0, static_cast<int>(recipe.plans.size()) - 1)];
+    // WEIGHTED, not uniform. The header has promised "a weighted choice of
+    // templates" all along while this picked with a flat irange, so a recipe
+    // listing {Bar, Octagon, ChamferedSquare, WedgeTower} built a trapezoid a
+    // quarter of the time. Rarity is a property of the shape (plan_grammar), so
+    // one table governs the whole city rather than 37 recipes each guessing.
+    PlanTemplate tmpl = PlanTemplate::Bar;
+    if (!recipe.plans.empty()) {
+        Real total = 0;
+        for (PlanTemplate t : recipe.plans) total += std::max(Real(0), planTemplateRarity(t));
+        if (total <= 0) {
+            tmpl = recipe.plans[0];
+        } else {
+            Real r = rng.unit() * total;
+            tmpl = recipe.plans.back();
+            for (PlanTemplate t : recipe.plans) {
+                r -= std::max(Real(0), planTemplateRarity(t));
+                if (r <= 0) { tmpl = t; break; }
+            }
+        }
+    }
     Shape2 tpl = planTemplate(tmpl, w, d, seed);
 
     // Local (0..w, 0..d) -> the envelope's oriented frame.
