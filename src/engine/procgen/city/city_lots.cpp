@@ -2392,11 +2392,19 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
         // colliders, the chunker and the HLOD never learn which pass ran.
         growLotSystemBlocks(blocks, enclosedCount, lp, &r.plan, &r.parts,
                             wantFlatParts ? &r.flatParts : nullptr, &r.lots);
+        // TRIANGLES, per building, out loud. "33 million for a city block is
+        // insane" was an owner observation the pass gave no way to check — the
+        // budget has to be visible where it is spent or it is nobody's problem.
+        std::size_t lod0 = 0, lod1 = 0;
+        for (const RenderMesh& p : r.parts) lod0 += p.indices.size() / 3;
+        for (const RenderMesh& p : r.flatParts) lod1 += p.indices.size() / 3;
         LOG_INFO << "[citylots] lot system: " << blocks.size() << " blocks ("
                  << enclosedCount << " enclosed, "
                  << (blocks.size() - enclosedCount) << " rim"
                  << (drawn ? ", graph drawn by the level" : "") << ") -> "
-                 << r.lots.size() << " lots";
+                 << r.lots.size() << " lots, " << lod0 << " tris ("
+                 << (r.lots.empty() ? 0 : lod0 / r.lots.size())
+                 << "/building), LOD1 " << lod1 << " tris";
         return r;
     }
     r.lots = growLotBuildings(blocks, lp, &r.plan, &r.parts, &rgSampled,

@@ -235,6 +235,15 @@ void growLotSystemBlocks(const std::vector<Poly2>& blocks, std::size_t enclosedC
                                   : Real(0);
 
                 LotMeshParams mp;
+
+                // The HLOD proxy is a separate mesh this pass never reads — the loader
+
+                // builds its own cell proxies from the LotBuilding boxes. Building one per
+
+                // building and dropping it is pure cost.
+
+                mp.proxy = false;
+
                 mp.seed = unitSeed;
                 mp.retail = rec->placeType == "shop";
                 mp.baseY = baseY;
