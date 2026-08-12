@@ -119,6 +119,13 @@ struct Strip {
     bool isLane() const;          // counts toward "how many lanes is this road"
 };
 
+// The shortest run a lane section may have. A section shorter than this carries
+// no lane-graph nodes, so leaving one in the list puts a hole in the middle of a
+// road: the lanes either side link to it instead of to each other, and traffic
+// cannot pass. Both the section list and the lane graph measure against this
+// same number — they are two halves of one rule, and they drifted apart once.
+constexpr double kMinLaneSectionRun = 0.25;
+
 struct LaneSection {
     double s0 = 0;
     double length = 0;            // filled in by CrossSection::finalize

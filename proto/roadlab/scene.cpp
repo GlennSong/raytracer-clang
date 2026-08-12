@@ -1,5 +1,7 @@
 #include "scene.h"
 
+#include <set>
+
 #include "sim.h"
 #include <cstdio>
 #include <fstream>
@@ -693,6 +695,418 @@ void generateCity(Scene& out, const CityParams& params) {
         off.outerHeight = 1.0;
         off.auxLength = 150.0;
         buildOffRamp(out.net, f, L * 0.30, off);
+    }
+}
+
+// --- the metro generator ----------------------------------------------------
+
+namespace {
+
+// A ramp splits its mainline, and the tail is another window over the SAME
+// spine keeping absolute stations — which is what makes several interchanges on
+// one carriageway tractable. Keep the pieces in order and the station a ramp was
+// planned at still identifies the piece it belongs on.
+struct Carriageway {
+    std::vector<int> pieces;
+
+    int at(const Network& net, double s) const {
+        for (int id : pieces) {
+            const Road& r = net.road(id);
+            if (s >= r.begin() - 1e-6 && s <= r.end() + 1e-6) return id;
+        }
+        return pieces.empty() ? -1 : pieces.back();
+    }
+    void split(int tail) {
+        if (tail >= 0) pieces.push_back(tail);
+    }
+};
+
+// Where on a carriageway a world point sits. Every piece is a window over the
+// same spine, so any piece answers for the whole of it.
+bool stationNear(const Network& net, const Carriageway& cw, Vec2 p, double& sOut, double& tOut) {
+    if (cw.pieces.empty()) return false;
+    double s = 0, t = 0;
+    if (!net.road(cw.pieces.front()).spine.toST(p, s, t)) return false;
+    sOut = s;
+    tOut = t;
+    return true;
+}
+
+}  // namespace
+
+void generateMetro(Scene& out, const MetroParams& p) {
+    out.name = "metro";
+    Rng rng(p.seed ? p.seed : 1);
+    const int nx = std::max(3, p.cols + 1);
+    const int nz = std::max(3, p.rows + 1);
+
+    // --- 1. An irregular lattice, warped smoothly ---------------------------
+    //
+    // Irregular spacing is what makes blocks different sizes; the warp is what
+    // makes the streets curve. Doing the warp with noise rather than per-node
+    // jitter keeps a street curving as one continuous line instead of wiggling
+    // between every pair of junctions.
+    std::vector<double> xs(size_t(nx), 0.0), zs(size_t(nz), 0.0);
+    double acc = 0;
+    for (int i = 0; i < nx; ++i) {
+        xs[size_t(i)] = acc;
+        acc += rng.range(p.minCell, p.maxCell);
+    }
+    acc = 0;
+    for (int k = 0; k < nz; ++k) {
+        zs[size_t(k)] = acc;
+        acc += rng.range(p.minCell, p.maxCell);
+    }
+    const double spanX = xs.back(), spanZ = zs.back();
+    for (double& v : xs) v -= spanX * 0.5;
+    for (double& v : zs) v -= spanZ * 0.5;
+
+    const double cell = 0.5 * (p.minCell + p.maxCell);
+    const double warpAmp = p.warp * cell;
+    double noiseOx = rng.range(-500, 500), noiseOz = rng.range(-500, 500);
+    auto warped = [&](int i, int k) {
+        double x = xs[size_t(i)], z = zs[size_t(k)];
+        double u = (x + noiseOx) / (cell * 5.2), v = (z + noiseOz) / (cell * 5.2);
+        double dx = fbm(u, v, 3) - 0.5;
+        double dz = fbm(u + 31.7, v - 12.3, 3) - 0.5;
+        // The rim is pinned so the street network keeps a clean outline for the
+        // bypass to be planned around.
+        double edgeFade = 1.0;
+        if (i == 0 || k == 0 || i == nx - 1 || k == nz - 1) edgeFade = 0.35;
+        return Vec2{x + dx * warpAmp * 2.0 * edgeFade, z + dz * warpAmp * 2.0 * edgeFade};
+    };
+    std::vector<std::vector<Vec2>> node(size_t(nx), std::vector<Vec2>(size_t(nz), Vec2{}));
+    for (int i = 0; i < nx; ++i)
+        for (int k = 0; k < nz; ++k) node[size_t(i)][size_t(k)] = warped(i, k);
+
+    // --- 2. Superblocks -----------------------------------------------------
+    //
+    // A rectangle of the lattice with its interior streets removed. Real cities
+    // are full of them and they are most of why block sizes vary by an order of
+    // magnitude rather than a little.
+    auto edgeKey = [&](int i0, int k0, bool horizontal) {
+        return (i0 * 1000 + k0) * 2 + (horizontal ? 1 : 0);
+    };
+    std::set<int> removed;
+    for (int n = 0; n < p.superblocks; ++n) {
+        int w = rng.rangeI(1, 2), h = rng.rangeI(1, 2);
+        if (nx - 1 - w < 1 || nz - 1 - h < 1) continue;
+        int i0 = rng.rangeI(1, nx - 2 - w), k0 = rng.rangeI(1, nz - 2 - h);
+        for (int i = i0; i <= i0 + w; ++i)
+            for (int k = k0; k <= k0 + h; ++k) {
+                // Interior edges only: the rectangle's own perimeter stays, so
+                // the superblock is enclosed rather than open.
+                if (i < i0 + w && k > k0 && k < k0 + h) removed.insert(edgeKey(i, k, true));
+                if (k < k0 + h && i > i0 && i < i0 + w) removed.insert(edgeKey(i, k, false));
+            }
+    }
+
+    // --- 3. Street hierarchy ------------------------------------------------
+    //
+    // "More multilane" is a question of which lines get promoted. Every third
+    // line is an arterial and the middle one of each axis is a divided
+    // boulevard, so the network has a real spine rather than one uniform grade
+    // of street.
+    const int midI = nx / 2, midK = nz / 2;
+    auto tierOf = [&](int line, int mid) {
+        if (line == mid) return 2;                   // divided boulevard
+        if (line % 3 == 0) return 1;                 // arterial
+        return 0;                                    // street or collector
+    };
+
+    struct Edge {
+        int road;
+        int i0, k0, i1, k1;
+    };
+    std::vector<Edge> edges;
+
+    auto addEdge = [&](int i0, int k0, int i1, int k1, bool horizontal) {
+        if (removed.count(edgeKey(i0, k0, horizontal))) return;
+        int tier = horizontal ? tierOf(k0, midK) : tierOf(i0, midI);
+        RoadDesc d;
+        char buf[64];
+        std::snprintf(buf, sizeof buf, "%s-%d-%d", horizontal ? "ew" : "ns", i0, k0);
+        d.name = buf;
+        switch (tier) {
+            case 2:
+                d.preset = rng.chance(0.35) ? "boulevard_twltl" : "arterial6_median";
+                d.designSpeed = 60;
+                d.cornerRadius = 220;
+                break;
+            case 1:
+                d.preset = "arterial4";
+                d.designSpeed = 55;
+                d.cornerRadius = 170;
+                break;
+            default:
+                // Collectors are still four lanes; they are what keeps a city
+                // from being all boulevards and all lanes-of-two.
+                if (rng.chance(0.30)) {
+                    d.preset = "collector4";
+                    d.designSpeed = 45;
+                } else {
+                    d.preset = p.parking && rng.chance(0.65) ? "street2_park" : "street2";
+                    d.designSpeed = 40;
+                }
+                d.cornerRadius = 95;
+                break;
+        }
+        Vec2 a = node[size_t(i0)][size_t(k0)];
+        Vec2 b = node[size_t(i1)][size_t(k1)];
+        if (rng.chance(p.curveChance)) {
+            // Bow the edge. Straight and curved streets in the same plan is the
+            // point — a network that is all curves reads as sloppy, and one that
+            // is all straight never exercises the geometry.
+            Vec2 mid = (a + b) * 0.5;
+            double bow = length(b - a) * p.curveBow * rng.range(-1.0, 1.0);
+            d.points = {a, mid + perpLeft(normalize(b - a)) * bow, b};
+        } else {
+            d.points = {a, b};
+        }
+        d.baseHeight = 0.0;
+        edges.push_back({buildRoad(out.net, d), i0, k0, i1, k1});
+    };
+
+    for (int k = 0; k < nz; ++k)
+        for (int i = 0; i + 1 < nx; ++i) addEdge(i, k, i + 1, k, true);
+    for (int i = 0; i < nx; ++i)
+        for (int k = 0; k + 1 < nz; ++k) addEdge(i, k, i, k + 1, false);
+
+    // --- 4. Radial arterials out to the ring --------------------------------
+    //
+    // Planned before the junction pass so a radial is just another arm at the
+    // rim node it leaves from, rather than something bolted on afterwards.
+    struct Radial {
+        int road = -1;
+        Vec2 outer{0, 0};
+        double outerHeading = 0;
+    };
+    std::vector<Radial> radials;
+
+    Vec2 gridLo{xs.front(), zs.front()}, gridHi{xs.back(), zs.back()};
+    Vec2 gridMid = (gridLo + gridHi) * 0.5;
+    // Standoff is measured from the half-DIAGONAL, not the half-width. Measured
+    // from the width, a ring clears the middle of each side by the full standoff
+    // and the corners by almost nothing — and a radial aimed at a corner then
+    // has no room to exist between the grid and the ring.
+    const double halfDiag = 0.5 * length(gridHi - gridLo);
+    const double ringBase = halfDiag + p.bypassStandoff;
+
+    if (p.bypass && p.interchanges > 0) {
+        for (int n = 0; n < p.interchanges; ++n) {
+            // Half a step offset, so no interchange lands on the ring's seam at
+            // bearing zero — the one place the carriageway cannot carry a ramp.
+            double ang = (2.0 * kPi * (double(n) + 0.5)) / p.interchanges +
+                         rng.range(-0.14, 0.14);
+            Vec2 dir{std::cos(ang), std::sin(ang)};
+
+            // The rim node furthest along this bearing is where the radial
+            // leaves the street network.
+            int bi = 0, bk = 0;
+            double best = -1e300;
+            for (int i = 0; i < nx; ++i) {
+                for (int k = 0; k < nz; ++k) {
+                    if (i != 0 && k != 0 && i != nx - 1 && k != nz - 1) continue;
+                    double score = dot(node[size_t(i)][size_t(k)] - gridMid, dir);
+                    if (score > best) {
+                        best = score;
+                        bi = i;
+                        bk = k;
+                    }
+                }
+            }
+            Vec2 start = node[size_t(bi)][size_t(bk)];
+            // Stop short of the ring: the ramps cover the last stretch.
+            double reach = std::max(ringBase, minRadiusForSpeed(110.0) * 1.06) - 130.0;
+            Vec2 target{gridMid.x + dir.x * reach, gridMid.y + dir.y * reach};
+            if (length(target - start) < 140.0) continue;
+
+            RoadDesc d;
+            char buf[64];
+            std::snprintf(buf, sizeof buf, "radial-%d", n);
+            d.name = buf;
+            d.preset = "arterial4";
+            d.designSpeed = 70;
+            d.cornerRadius = 240;
+            // Bow proportional to the run. A fixed offset on a short radial is a
+            // curve far below the minimum radius for 70 km/h, and the design lint
+            // is right to say so.
+            double run = length(target - start);
+            Vec2 mid = (start + target) * 0.5;
+            mid = mid + perpLeft(normalize(target - start)) * run * rng.range(-0.11, 0.11);
+            d.points = {start, mid, target};
+            int r = buildRoad(out.net, d);
+            edges.push_back({r, bi, bk, -1, -1});   // an arm at its inner end only
+
+            Radial rad;
+            rad.road = r;
+            const Road& rr = out.net.road(r);
+            Frame f = rr.spine.frameAt(rr.end());
+            rad.outer = f.planPos;
+            rad.outerHeading = f.heading;
+            radials.push_back(rad);
+        }
+    }
+
+    // --- 5. A junction per lattice node -------------------------------------
+    int rbI = p.roundabout ? rng.rangeI(1, nx - 2) : -1;
+    int rbK = p.roundabout ? rng.rangeI(1, nz - 2) : -1;
+
+    for (int i = 0; i < nx; ++i) {
+        for (int k = 0; k < nz; ++k) {
+            std::vector<std::pair<int, bool>> arms;
+            for (const Edge& e : edges) {
+                if (e.i0 == i && e.k0 == k) arms.push_back({e.road, false});
+                if (e.i1 == i && e.k1 == k) arms.push_back({e.road, true});
+            }
+            if (arms.size() < 2) continue;
+            char buf[64];
+            std::snprintf(buf, sizeof buf, "node-%d-%d", i, k);
+            if (i == rbI && k == rbK && arms.size() >= 3) {
+                RoundaboutDesc rd;
+                rd.name = buf;
+                rd.center = node[size_t(i)][size_t(k)];
+                rd.radius = 15.0;
+                rd.arms = arms;
+                buildRoundabout(out.net, rd);
+                continue;
+            }
+            int ti = tierOf(i, midI), tk = tierOf(k, midK);
+            JunctionControl ctl = JunctionControl::Uncontrolled;
+            if (ti > 0 && tk > 0) ctl = p.signals ? JunctionControl::Signalized
+                                                  : JunctionControl::AllWayStop;
+            else if (ti > 0 || tk > 0) ctl = JunctionControl::PriorityStop;
+            else if (arms.size() > 2) ctl = JunctionControl::AllWayStop;
+            buildIntersection(out.net, buf, arms, ctl, arms.size() > 3 ? 9.0 : 6.5);
+        }
+    }
+
+    if (!p.bypass) return;
+
+    // --- 6. The ring --------------------------------------------------------
+    //
+    // Two halves linked at both seams, which closes the loop without needing a
+    // road whose spine bites its own tail. Traffic can circulate the whole way.
+    // A circle rather than an ellipse, and built from ARCS rather than from a
+    // filleted polyline. A polyline's corner radius is what it can fit between
+    // adjacent points, so asking for a 560 m fillet on a polygon that only has
+    // room for 400 m silently gets 400 — and the design lint then correctly
+    // reports a motorway below its minimum radius. An arc spine simply is the
+    // radius it says it is.
+    //
+    // The ring is sized by the DESIGN SPEED first: a bypass below the minimum
+    // radius for 110 km/h is not a bypass. A small town therefore gets a ring
+    // standing further out, not a tighter one.
+    const double bypassSpeed = 110.0;
+    const double ringR = std::max(ringBase, minRadiusForSpeed(bypassSpeed) * 1.06);
+    RoadPreset ringPreset = roadPreset(p.bypassPreset);
+
+    // One closed carriageway rather than two halves: every seam is a place an
+    // interchange cannot go, so the fewer of them the better. Ramps split it
+    // into pieces as they are added, and the pieces stay windows over this one
+    // circular spine with absolute stations — which is what lets an interchange
+    // planned at a station still find its piece after the ones upstream of it
+    // have already cut the road up.
+    Carriageway ring;
+    {
+        Road r;
+        r.name = "bypass";
+        r.designSpeed = bypassSpeed;
+        r.allowsPedestrians = false;
+        r.spine = spineCircle(gridMid, ringR, true);
+        r.spine.setCrossfall(0.02);
+        r.spine.setFlatElevation(0.0);
+        r.spine.applySuperelevation(bypassSpeed);
+        r.spine.finalize();
+        LaneSection sec = ringPreset.section;
+        sec.s0 = 0;
+        sec.assignIds();
+        r.xs.sections.push_back(sec);
+        r.xs.finalize(r.spine.length());
+        ring.pieces.push_back(out.net.addRoad(std::move(r)));
+    }
+
+    // --- 7. Interchanges ----------------------------------------------------
+    //
+    // Each radial gets a diverge upstream of it and a merge downstream, and both
+    // ramps land on the radial's outer end, so the terminal is a real junction
+    // rather than two ramps stopping in a field.
+    struct Planned {
+        double s;
+        size_t radial;
+    };
+    std::vector<Planned> planned;
+    const double ringLen = out.net.road(ring.pieces.front()).spineLength();
+    for (size_t n = 0; n < radials.size(); ++n) {
+        double s = 0, t = 0;
+        if (!stationNear(out.net, ring, radials[n].outer, s, t)) continue;
+        // Clear of the seam, and with room for the ramps either side.
+        if (s < 260.0 || s > ringLen - 260.0) continue;
+        planned.push_back({s, n});
+    }
+    // Upstream first: each ramp splits the carriageway, and working along it in
+    // order keeps every later station on a piece that still exists.
+    std::sort(planned.begin(), planned.end(),
+              [](const Planned& a, const Planned& b) { return a.s < b.s; });
+
+    int rampCount = 0;
+    for (const Planned& pl : planned) {
+        const Radial& rad = radials[pl.radial];
+        // The terminal faces the city, so the off-ramp arrives pointing inward
+        // and the on-ramp leaves pointing back out.
+        double inward = wrapPi(rad.outerHeading + kPi);
+
+        RampDesc off;
+        off.name = "off-ramp";
+        off.preset = "ramp1";
+        off.outerPoint = rad.outer;
+        off.outerHeading = inward;
+        off.auxLength = 150.0;
+        off.designSpeed = 60;
+        int offRoad = -1, tailA = -1;
+        {
+            int on = ring.at(out.net, pl.s - 150.0);
+            if (on >= 0) offRoad = buildOffRamp(out.net, on, pl.s - 150.0, off, &tailA);
+            ring.split(tailA);
+        }
+
+        RampDesc onr;
+        onr.name = "on-ramp";
+        onr.preset = "ramp1";
+        onr.outerPoint = rad.outer;
+        onr.outerHeading = rad.outerHeading;
+        onr.auxLength = 170.0;
+        onr.designSpeed = 60;
+        int onRoad = -1, tailB = -1;
+        {
+            int on = ring.at(out.net, pl.s + 150.0);
+            if (on >= 0) onRoad = buildOnRamp(out.net, on, pl.s + 150.0, onr, &tailB);
+            ring.split(tailB);
+        }
+
+        std::vector<std::pair<int, bool>> arms;
+        arms.push_back({rad.road, true});
+        if (offRoad >= 0) arms.push_back({offRoad, true});     // arrives at its end
+        if (onRoad >= 0) arms.push_back({onRoad, false});      // leaves from its start
+        if (arms.size() >= 2) {
+            char buf[64];
+            std::snprintf(buf, sizeof buf, "terminal-%zu", pl.radial);
+            buildIntersection(out.net, buf, arms,
+                              p.signals ? JunctionControl::Signalized : JunctionControl::Yield,
+                              9.0);
+            ++rampCount;
+        }
+    }
+    (void)rampCount;
+
+    // Close the ring. Plain links, because a carriageway continuing into another
+    // carriageway is not a junction — nothing crosses.
+    // Close the loop. A plain link, because a carriageway continuing into
+    // itself is not a junction — nothing crosses.
+    if (ring.pieces.size() > 1) {
+        int from = ring.pieces.back(), to = ring.pieces.front();
+        out.net.road(from).succ = RoadLink{LinkType::Road, to, true, {}};
+        out.net.road(to).pred = RoadLink{LinkType::Road, from, false, {}};
     }
 }
 

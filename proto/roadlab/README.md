@@ -20,6 +20,7 @@ make roadlab-shots                # render every demo to out_roadlab/
 ./roadlab --demo lanes --view top --focus 90 4 220
 ./roadlab --scene proto/roadlab/scenes/example.json --report --lint
 ./roadlab --city --seed 3 --sim 60 --cars 200 --peds 60 --view top
+./roadlab --metro --seed 11 --view top --report --lint   # bypass + interchanges
 ./roadlab --demo interchange --debug strips     # false-colour the cross-section
 ./roadlab --demo interchange --xodr out.xodr    # export OpenDRIVE
 ./roadlab --import out.xodr --view top --report # ...and read it back
@@ -397,6 +398,78 @@ The urban demo's terrain went from 6.5 s to 1.2 s and the whole test suite from
 the inverse map stopped doing eight wasted Newton iterations per query. The route-reachability query is cached on a 0.4 s timer per
 vehicle — a driver does not re-ask the graph ten times a second either.
 
+## A metro, not a grid with a freeway next to it
+
+`--metro` generates the layout `--city` cannot: a freeway **bypass that wraps the
+city**, carrying an interchange per radial arterial, around a street network of
+genuinely different-sized blocks.
+
+The structural difference is which thing gets planned first. `--city` lays a grid
+and puts a freeway beside it. A bypass has to enclose the network, so the ring is
+sized first — and sized by its **design speed**, not by the city: a ring below the
+minimum radius for 110 km/h is not a bypass, so a small town gets a ring standing
+further out rather than a tighter one. Interchanges are then placed on it, and
+each one pulls a radial arterial inward until it meets the grid.
+
+Three things that took a correction each:
+
+- **The ring is arcs, not a filleted polyline.** A polyline's corner radius is
+  whatever fits between adjacent points, so asking for 560 m on a polygon with
+  room for 400 gets 400 — and the lint then correctly reports a motorway below
+  its minimum radius. Putting the vertices on the circumscribing polygon does not
+  save it either: the spiral transitions need more tangent than an exact fit
+  leaves. An arc spine simply is the radius it says it is.
+- **Standoff is measured from the half-diagonal.** Measured from the half-width,
+  the ring clears the middle of each side by the full standoff and the corners by
+  almost nothing, and a radial aimed at a corner has nowhere to exist.
+- **One closed carriageway, not two halves.** Every seam is a place a ramp cannot
+  go. Ramps split the ring as they are added, and the pieces stay windows over
+  one circular spine with absolute stations — which is what lets an interchange
+  planned at a station still find its piece after the ones upstream have already
+  cut the road up.
+
+Blocks vary because the cell spacing is irregular *and* because whole rectangles
+of interior street are removed to leave superblocks. Streets curve because the
+lattice is warped with smooth noise — coherently, so a street curves as one line
+instead of wiggling between junctions — with individual edges bowed on top and
+the rest left dead straight for contrast. Every third line is an arterial and the
+middle one of each axis is a divided boulevard, so roughly half the network is
+four lanes or more.
+
+A default metro is 655 roads, 37 km of centreline, 94 lane-km, 62 junctions and
+five interchanges, and it lints clean. It exports to 2.2 MB of OpenDRIVE, comes
+back with every metre intact, and reaches the same byte-identical fixed point the
+demos do — the ramps becoming the ten junctions the format requires.
+
+### What that exercise found
+
+Scale broke three things that the demos never did, all of the same family: **two
+places that had to agree about lanes, and did not.**
+
+- **Lane sections linked by ordinal.** `pairLanesAcross` had already been fixed to
+  pair by position at a road boundary; `linkSections`, which does the same job at
+  a *section* boundary inside one road, still matched by ordinal. Insert an
+  auxiliary lane mid-stack and every kind comparison from that point outward
+  mismatches, so every lane outboard of it links to nothing. Traffic cannot drive
+  past an on-ramp, and nothing reports it, because a lane whose successor is
+  `kNoLane` is the legitimate way to say "this lane ends here".
+- **Zero-length lane sections.** Replaying cross-section edits lands one edit's
+  end exactly on the next one's start. The section that results is never in force
+  anywhere, but the lanes either side link *to it* rather than to each other. The
+  threshold that dropped them and the threshold the lane graph used to decide a
+  section was worth a node had drifted apart — 1 mm against 0.25 m — so a 5 cm
+  section survived the first and failed the second. They are one constant now.
+- **A road window ending just past a section boundary.** Splitting for a ramp
+  lands wherever the merge geometry says, not on a section edge, which leaves a
+  sliver of the next section inside the window. The lane graph emits no nodes for
+  a sliver, so anything resolving "the section at this end" by station found a
+  section with nothing in it and linked nothing. `endSectionIndex` resolves to the
+  section that actually carries nodes, and `pairLanesAcross` now takes both the
+  lane ids and their positions from it — taking ids from one section and geometry
+  from another matched lanes that were never in the same stack.
+
+Together those took freeway-to-street connectivity from 1 seed in 8 to 7 in 9.
+
 ## The fallback census
 
 `--fallbacks` runs every demo and five generated cities with terrain, props,
@@ -532,6 +605,11 @@ tests.cpp          22694 assertions, invariant-focused.
 
 Honest list of what a prototype this size does not do yet.
 
+- **On some seeds there is no route from the street network back onto the
+  freeway.** The ring is sound in both directions and the inbound half works
+  everywhere, so the break is in the on-ramp's lane-level link into the mainline.
+  Two seeds in nine; the metro tests print it as a KNOWN GAP rather than assert
+  around it.
 - **Import has only been fed our own exporter's output.** The round trip reaches
   a fixed point on every demo, but the next real test is a third-party `.xodr`
   from a cloverleaf someone else authored. `poly3`/`paramPoly3` geometry is

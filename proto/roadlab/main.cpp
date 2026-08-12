@@ -33,6 +33,7 @@ struct Options {
     std::string xodrPath;
     std::string importPath;
     bool city = false;
+    bool metro = false;
     int width = 1600, height = 1000;
     int cars = 0, peds = 0;
     double simSeconds = 0;
@@ -71,6 +72,7 @@ void usage() {
         "  --demo <name>       one of: showcase lanes roundabout interchange urban tiers\n"
         "  --scene <file.json> load an authored scene\n"
         "  --city              generate a network procedurally\n"
+        "  --metro             generate a city wrapped by a freeway bypass\n"
         "  --seed <n>          generator / shading seed\n"
         "  --out <file.png>    output image (default roadlab.png)\n"
         "  --shots <dir>       render every demo into <dir>\n"
@@ -339,6 +341,7 @@ int main(int argc, char** argv) {
             continue;
         }
         if (std::strcmp(argv[i], "--city") == 0) { opt.city = true; continue; }
+        if (std::strcmp(argv[i], "--metro") == 0) { opt.metro = true; continue; }
         if (std::strcmp(argv[i], "--no-props") == 0) { opt.props = false; continue; }
         if (std::strcmp(argv[i], "--no-terrain") == 0) { opt.terrain = false; continue; }
         if (std::strcmp(argv[i], "--no-markings") == 0) { opt.markings = false; continue; }
@@ -398,6 +401,10 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "roadlab: %s\n", err.c_str());
                 return false;
             }
+        } else if (opt.metro) {
+            MetroParams mp;
+            mp.seed = opt.seed;
+            generateMetro(sc, mp);
         } else if (opt.city) {
             CityParams cp;
             cp.seed = opt.seed;

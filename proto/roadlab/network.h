@@ -292,6 +292,16 @@ struct EndLanes {
 };
 EndLanes endLanes(const Road& r, bool atEnd);
 
+// The lane section at one end of a road that actually carries lane-graph nodes.
+//
+// Not always the section the end station falls in. A road window can finish a
+// few centimetres past a lane-section boundary — splitting for a ramp lands
+// wherever the merge geometry says, not on a section edge — which leaves a
+// sliver of the next section inside the window. The lane graph emits no nodes
+// for a sliver that short, so anything that looks up "the section at this end"
+// by station finds a section with nothing in it and silently links nothing.
+int endSectionIndex(const Road& r, bool atEnd);
+
 // Pair lanes across a road boundary by WHERE THEY ARE, not by their ordinal.
 // Two lanes are the same lane when their centres coincide at the joint, which
 // stays true whatever the ordinals do — an auxiliary lane peeling off at a

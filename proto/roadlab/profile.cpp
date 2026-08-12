@@ -169,6 +169,26 @@ void CrossSection::finalize(double roadLength) {
     if (sections.empty()) return;
     std::sort(sections.begin(), sections.end(),
               [](const LaneSection& a, const LaneSection& b) { return a.s0 < b.s0; });
+
+    // Drop sections with no extent. Replaying cross-section edits routinely
+    // lands one edit's end exactly on the next one's start, which leaves a
+    // section that is never in force anywhere — and a section nothing can be
+    // driven through is a hole in the middle of the lane graph, because the
+    // lanes either side of it link to it rather than to each other. It is a
+    // silent hole, too: traffic simply cannot pass a taper, and the road still
+    // renders perfectly.
+    if (sections.size() > 1) {
+        std::vector<LaneSection> kept;
+        kept.reserve(sections.size());
+        for (size_t i = 0; i < sections.size(); ++i) {
+            double end = (i + 1 < sections.size()) ? sections[i + 1].s0 : roadLength;
+            if (end - sections[i].s0 < kMinLaneSectionRun) continue;
+            kept.push_back(sections[i]);
+        }
+        if (kept.empty()) kept.push_back(sections.back());
+        sections.swap(kept);
+    }
+
     sections.front().s0 = std::min(sections.front().s0, 0.0);
     for (size_t i = 0; i < sections.size(); ++i) {
         double end = (i + 1 < sections.size()) ? sections[i + 1].s0 : roadLength;
@@ -333,27 +353,56 @@ const Strip* CrossSection::stripAtT(double s, double t, int* laneId) const {
 }
 
 void CrossSection::linkSections() {
+    // Lanes continue across a section boundary by WHERE THEY ARE, not by their
+    // ordinal — the same rule pairLanesAcross applies at a road boundary, and for
+    // the same reason.
+    //
+    // Ordinal matching looks right until a strip is inserted in the middle of the
+    // stack, which is exactly what an auxiliary lane is: [travel travel travel
+    // shoulder] becomes [travel travel travel AUX shoulder], and from the
+    // insertion point on, every kind comparison mismatches. Every lane outboard
+    // of it then links to nothing, the lane graph is severed at the taper, and
+    // traffic cannot drive past an on-ramp. Nothing reports it: a lane whose
+    // successor is kNoLane is the legitimate way to say "this lane ends here", so
+    // the failure is indistinguishable from a lane drop.
     for (size_t i = 0; i + 1 < sections.size(); ++i) {
         LaneSection& a = sections[i];
         LaneSection& b = sections[i + 1];
-        // Match by ordinal within each side first; a lane that has no counterpart
-        // (because it tapered out) links to nothing, which is exactly the signal
-        // the simulator needs for "you must be out of this lane by its end".
-        auto link = [](std::vector<Strip>& sa, std::vector<Strip>& sb, int sign) {
-            for (size_t k = 0; k < sa.size(); ++k) {
-                if (k < sb.size() && sa[k].kind == sb[k].kind) {
-                    sa[k].successor = sign * (int(k) + 1);
-                    sb[k].predecessor = sign * (int(k) + 1);
-                } else {
-                    sa[k].successor = kNoLane;
+        const double s = b.s0;   // the shared station: both sides evaluate here
+
+        auto centreOf = [&](int sectionIdx, int laneId) { return laneCenterT(sectionIdx, laneId, s); };
+
+        auto link = [&](std::vector<Strip>& sa, std::vector<Strip>& sb) {
+            // A strip that has already tapered to nothing is not a candidate:
+            // its centre is meaningless and it must not capture a real lane.
+            const double kMinWidth = 0.15;
+            const double kTolerance = 1.0;   // metres between centres
+            std::vector<char> taken(sb.size(), 0);
+            for (Strip& x : sa) {
+                x.successor = kNoLane;
+                if (x.width.eval(s - a.s0) < kMinWidth) continue;
+                double tx = centreOf(int(i), x.id);
+                double best = kTolerance;
+                int bestK = -1;
+                for (size_t k = 0; k < sb.size(); ++k) {
+                    if (taken[k] || sb[k].kind != x.kind) continue;
+                    if (sb[k].width.eval(0.0) < kMinWidth) continue;
+                    double d = std::fabs(tx - centreOf(int(i + 1), sb[k].id));
+                    if (d < best) {
+                        best = d;
+                        bestK = int(k);
+                    }
                 }
+                if (bestK < 0) continue;
+                taken[size_t(bestK)] = 1;
+                x.successor = sb[size_t(bestK)].id;
+                sb[size_t(bestK)].predecessor = x.id;
             }
-            for (size_t k = 0; k < sb.size(); ++k) {
-                if (k >= sa.size() || sa[k].kind != sb[k].kind) sb[k].predecessor = kNoLane;
-            }
+            for (size_t k = 0; k < sb.size(); ++k)
+                if (!taken[k]) sb[k].predecessor = kNoLane;
         };
-        link(a.left, b.left, +1);
-        link(a.right, b.right, -1);
+        link(a.left, b.left);
+        link(a.right, b.right);
     }
 }
 
@@ -753,6 +802,13 @@ std::vector<Pairing> alignStrips(const std::vector<Strip>& A, const std::vector<
             at(i, j) = std::min(sub, std::min(del, ins));
         }
     }
+    // Where a run of identical strips gains or loses one the alignment is
+    // genuinely ambiguous, and the tie is resolved by preferring the diagonal:
+    // the surplus strip falls out at the INNER end of the run. That must stay
+    // consistent with where sectionWithLanesChanged inserts a new lane — the two
+    // are the add and the remove of the same lane, and if they disagree the
+    // carriageway translates sideways through the taper instead of widening,
+    // which silently unpicks the lane graph one lane per transition.
     std::vector<Pairing> out;
     size_t i = n, j = m;
     while (i > 0 || j > 0) {

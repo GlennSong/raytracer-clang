@@ -56,10 +56,23 @@ double Road::speedLimitOf(int laneId, double s) const {
 
 // --- end lanes ------------------------------------------------------------
 
+int endSectionIndex(const Road& r, bool atEnd) {
+    double s = atEnd ? r.end() : r.begin();
+    int si = r.xs.sectionIndexAt(atEnd ? std::max(r.begin(), s - 1e-3) : s + 1e-3);
+    while (si >= 0 && si < int(r.xs.sections.size())) {
+        const LaneSection& sec = r.xs.sections[size_t(si)];
+        double s0 = std::max(sec.s0, r.begin());
+        double s1 = std::min(sec.s0 + sec.length, r.end());
+        if (s1 - s0 >= kMinLaneSectionRun) return si;
+        si += atEnd ? -1 : +1;
+    }
+    return -1;
+}
+
 EndLanes endLanes(const Road& r, bool atEnd) {
     EndLanes out;
     double s = atEnd ? r.end() : r.begin();
-    int si = r.xs.sectionIndexAt(atEnd ? std::max(r.begin(), s - 1e-3) : s + 1e-3);
+    int si = endSectionIndex(r, atEnd);
     if (si < 0) return out;
     const LaneSection& sec = r.xs.sections[size_t(si)];
 
@@ -103,7 +116,18 @@ std::vector<std::pair<int, int>> pairLanesAcross(const Road& a, bool aAtEnd, con
     double sb = bAtStart ? b.begin() : b.end();
     EndLanes ea = endLanes(a, aAtEnd);
     EndLanes eb = endLanes(b, !bAtStart);
+    // Positions must come from the SAME section the ids came from. Road::
+    // laneCenterT resolves the section by station, which lands in the sliver
+    // whenever a road window ends just past a section boundary — so the ids
+    // would be one section's and the geometry another's, and the match is then
+    // between lanes that were never in the same stack.
+    int seca = endSectionIndex(a, aAtEnd);
+    int secb = endSectionIndex(b, !bAtStart);
     RL_CALLED("pairLanesAcross");
+    if (seca < 0 || secb < 0) {
+        RL_FALLBACK("pairLanesAcross miss (an end carries no lane section)");
+        return pairs;
+    }
     if (ea.incoming.empty() || eb.outgoing.empty()) {
         // Not a failure: linkRoadToRoad pairs BOTH directions of every link, and
         // a one-way road — every connector, every ramp — has no lanes to offer in
@@ -117,13 +141,13 @@ std::vector<std::pair<int, int>> pairLanesAcross(const Road& a, bool aAtEnd, con
     // sidesteps every sign question that raises.
     std::vector<char> used(eb.outgoing.size(), 0);
     for (int la : ea.incoming) {
-        Vec2 pa = a.planPoint(sa, a.laneCenterT(la, sa));
+        Vec2 pa = a.planPoint(sa, a.xs.laneCenterT(seca, la, sa));
         double best = tolerance;
         int bestIdx = -1;
         for (size_t k = 0; k < eb.outgoing.size(); ++k) {
             if (used[k]) continue;
             int lb = eb.outgoing[k];
-            Vec2 pb = b.planPoint(sb, b.laneCenterT(lb, sb));
+            Vec2 pb = b.planPoint(sb, b.xs.laneCenterT(secb, lb, sb));
             double d = length(pa - pb);
             if (d < best) {
                 best = d;
@@ -327,10 +351,12 @@ void Network::linkRoadToRoad(int roadA, bool aAtEnd, int roadB, bool bAtStart,
                              const std::vector<std::pair<int, int>>& overrides) {
     const Road& A = roads_[size_t(roadA)];
     const Road& B = roads_[size_t(roadB)];
-    double sa = aAtEnd ? A.end() : A.begin();
-    double sb = bAtStart ? B.begin() : B.end();
-    int seca = A.xs.sectionIndexAt(aAtEnd ? std::max(A.begin(), sa - 1e-3) : sa + 1e-3);
-    int secb = B.xs.sectionIndexAt(bAtStart ? sb + 1e-3 : std::max(B.begin(), sb - 1e-3));
+    // The section that carries nodes, not merely the one the end station lands
+    // in — see endSectionIndex. endLanes() resolves the same way, so the lane
+    // ids the pairing produces and the nodes looked up here are from one section.
+    int seca = endSectionIndex(A, aAtEnd);
+    int secb = endSectionIndex(B, !bAtStart);
+    if (seca < 0 || secb < 0) return;
 
     auto connect = [&](int laneA, int laneB) {
         int na = lanes_.find({roadA, seca, laneA});
@@ -367,7 +393,7 @@ void Network::buildLaneGraph() {
             const LaneSection& sec = r.xs.sections[si];
             double s0 = std::max(sec.s0, r.begin());
             double s1 = std::min(sec.s0 + sec.length, r.end());
-            if (s1 - s0 < 0.25) continue;
+            if (s1 - s0 < kMinLaneSectionRun) continue;
             auto emit = [&](const Strip& st) {
                 if (!st.isLane() || st.dir == 0) return;
                 LaneNode n;
