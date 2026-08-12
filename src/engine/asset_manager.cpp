@@ -1,5 +1,6 @@
 #include "asset_manager.h"
 #include "mesh_builder.h"
+#include "../log.h"
 #include "../profile.h"
 #include <cstdio>
 
@@ -35,6 +36,17 @@ MeshHandle AssetManager::acquireMesh(const RenderMesh& mesh, const std::string& 
         }
     }
     MeshHandle handle = uploader_.uploadMesh(mesh);
+    // A backend may REFUSE an upload — an empty mesh has no buffers to make
+    // (see MetalRenderer::uploadMesh). Don't record the null handle: every
+    // refused mesh would share the one record, so its refcount would count
+    // strangers and releaseMesh would free it out from under them. Say which
+    // asset it was; the key is the only thing here that names the producer.
+    if (!handle.valid()) {
+        LOG_WARN << "[assets] mesh '" << (key.empty() ? "<unkeyed>" : key)
+                 << "' was not uploaded (" << mesh.vertices.size() << " verts, "
+                 << mesh.indices.size() << " indices) — it will not draw";
+        return handle;
+    }
     MeshRecord rec;
     rec.handle = handle;
     rec.bounds = uploader_.getMeshBounds(handle);

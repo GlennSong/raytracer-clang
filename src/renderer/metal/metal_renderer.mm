@@ -20,6 +20,7 @@
 #import <ARKit/ARKit.h>
 #endif
 
+#include "../../log.h"
 #include "../../profile.h"
 #include "../../slot_map.h"
 #include "../../engine/asset_root.h"
@@ -1950,6 +1951,27 @@ void MetalRenderer::resize(int width, int height) {
 }
 
 MeshHandle MetalRenderer::uploadMesh(const RenderMesh& mesh) {
+    // AN EMPTY MESH HAS NO BUFFERS TO MAKE. newBufferWithBytes:length:0 returns
+    // NIL, not an empty buffer — so an empty RenderMesh used to upload as a
+    // GPUMesh with nil vertexBuffer, nil indexBuffer and indexCount 0. Nothing
+    // rejects that: every draw site checks `mesh` for null, never its buffers,
+    // and drawIndexedPrimitives with a nil index buffer does not draw nothing —
+    // it dereferences null inside AGX and takes the process down. Whichever pass
+    // happened to see the mesh first died (the probe bake, the shadow pass and
+    // the main pass were each observed), which made it read as a renderer bug
+    // rather than as one bad mesh.
+    //
+    // Refuse the upload and return the NULL handle: `meshes.get()` reports null
+    // for it, and every draw site already skips a handle that resolves to no
+    // mesh. Callers that legitimately produce nothing (a chunk with no
+    // triangles) get a handle that draws nothing, which is what they meant.
+    if (mesh.vertices.empty() || mesh.indices.empty()) {
+        LOG_WARN << "[metal] refusing to upload an empty mesh ("
+                 << mesh.vertices.size() << " verts, " << mesh.indices.size()
+                 << " indices) — drawing it would segfault the driver";
+        return MeshHandle{};
+    }
+
     GPUMesh gpuMesh;
     gpuMesh.materialIndex = mesh.materialIndex;
 

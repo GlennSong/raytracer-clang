@@ -717,8 +717,16 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
 
     // Stop bars + lane-turn arrows (R6c, plan 4e): one white PAINT mesh for
     // every signalled approach (buildRoadMarkings), one identity instance.
-    {
-        engine::RenderMesh paint = buildRoadMarkings();
+    // A city with NO SIGNALLED APPROACHES paints nothing: a road network small
+    // enough to warrant no signal anywhere (lot_lab logs "0 signals") builds an
+    // EMPTY mesh here. Registering the group anyway put an empty upload in an
+    // InstanceGroup that draws every frame — and an empty mesh has no GPU
+    // buffers, so the draw dereferenced null inside the Metal driver and took
+    // the process down. No markings, no group.
+    engine::RenderMesh paint = buildRoadMarkings();
+    if (paint.indices.empty()) {
+        LOG_INFO << "[citysim] road markings: none — no signalled approaches";
+    } else {
         MeshHandle mh{};
         if (assets) mh = assets->acquireMesh(paint, "city:roadmarks");
         roadMarkGroup_ = world.create();
