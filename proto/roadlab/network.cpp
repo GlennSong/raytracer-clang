@@ -94,6 +94,40 @@ EndLanes endLanes(const Road& r, bool atEnd) {
     return out;
 }
 
+std::vector<std::pair<int, int>> pairLanesAcross(const Road& a, bool aAtEnd, const Road& b,
+                                                 bool bAtStart, double tolerance) {
+    std::vector<std::pair<int, int>> pairs;
+    double sa = aAtEnd ? a.end() : a.begin();
+    double sb = bAtStart ? b.begin() : b.end();
+    EndLanes ea = endLanes(a, aAtEnd);
+    EndLanes eb = endLanes(b, !bAtStart);
+    if (ea.incoming.empty() || eb.outgoing.empty()) return pairs;
+
+    // Compare WORLD positions rather than t values: the two roads have different
+    // reference lines and possibly opposite senses, and matching in the plane
+    // sidesteps every sign question that raises.
+    std::vector<char> used(eb.outgoing.size(), 0);
+    for (int la : ea.incoming) {
+        Vec2 pa = a.planPoint(sa, a.laneCenterT(la, sa));
+        double best = tolerance;
+        int bestIdx = -1;
+        for (size_t k = 0; k < eb.outgoing.size(); ++k) {
+            if (used[k]) continue;
+            int lb = eb.outgoing[k];
+            Vec2 pb = b.planPoint(sb, b.laneCenterT(lb, sb));
+            double d = length(pa - pb);
+            if (d < best) {
+                best = d;
+                bestIdx = int(k);
+            }
+        }
+        if (bestIdx < 0) continue;   // this lane ends here
+        used[size_t(bestIdx)] = 1;
+        pairs.push_back({la, eb.outgoing[size_t(bestIdx)]});
+    }
+    return pairs;
+}
+
 // --- lane graph -----------------------------------------------------------
 
 int LaneGraph::find(const LaneRef& ref) const {
@@ -269,9 +303,6 @@ void Network::linkRoadToRoad(int roadA, bool aAtEnd, int roadB, bool bAtStart,
                              const std::vector<std::pair<int, int>>& overrides) {
     const Road& A = roads_[size_t(roadA)];
     const Road& B = roads_[size_t(roadB)];
-    EndLanes ea = endLanes(A, aAtEnd);
-    EndLanes eb = endLanes(B, !bAtStart ? true : false);
-
     double sa = aAtEnd ? A.end() : A.begin();
     double sb = bAtStart ? B.begin() : B.end();
     int seca = A.xs.sectionIndexAt(aAtEnd ? std::max(A.begin(), sa - 1e-3) : sa + 1e-3);
@@ -289,16 +320,14 @@ void Network::linkRoadToRoad(int roadA, bool aAtEnd, int roadB, bool bAtStart,
         for (const auto& pr : overrides) connect(pr.first, pr.second);
         return;
     }
-    // Default pairing: rightmost to rightmost. Lanes are already ordered
-    // right-to-left in the travel frame, so the pairing is a zip — and a lane
-    // that has no partner is a lane that ends, which the sim reads as a
-    // mandatory lane change rather than a dead end it discovers too late.
-    size_t n = std::min(ea.incoming.size(), eb.outgoing.size());
-    for (size_t i = 0; i < n; ++i) connect(ea.incoming[i], eb.outgoing[i]);
-    size_t m = std::min(eb.incoming.size(), ea.outgoing.size());
-    for (size_t i = 0; i < m; ++i) {
-        int nb = lanes_.find({roadB, secb, eb.incoming[i]});
-        int na = lanes_.find({roadA, seca, ea.outgoing[i]});
+    // Default pairing is by position, not ordinal: a lane that has no partner is
+    // a lane that ends, which the sim reads as a mandatory lane change rather
+    // than a dead end it discovers too late — but a lane that DOES continue must
+    // continue as itself, not as its neighbour.
+    for (const auto& pr : pairLanesAcross(A, aAtEnd, B, bAtStart)) connect(pr.first, pr.second);
+    for (const auto& pr : pairLanesAcross(B, !bAtStart, A, !aAtEnd)) {
+        int nb = lanes_.find({roadB, secb, pr.first});
+        int na = lanes_.find({roadA, seca, pr.second});
         if (na < 0 || nb < 0) continue;
         lanes_.nodes[size_t(nb)].successors.push_back(na);
         lanes_.nodes[size_t(na)].predecessors.push_back(nb);

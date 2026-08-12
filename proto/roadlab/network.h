@@ -292,6 +292,15 @@ struct EndLanes {
 };
 EndLanes endLanes(const Road& r, bool atEnd);
 
+// Pair lanes across a road boundary by WHERE THEY ARE, not by their ordinal.
+// Two lanes are the same lane when their centres coincide at the joint, which
+// stays true whatever the ordinals do — an auxiliary lane peeling off at a
+// diverge changes the count on one side without moving anything else, and an
+// ordinal zip would then shift every remaining lane one place sideways.
+// Returns (laneOnA, laneOnB) for traffic flowing A -> B.
+std::vector<std::pair<int, int>> pairLanesAcross(const Road& a, bool aAtEnd, const Road& b,
+                                                 bool bAtStart, double tolerance = 2.0);
+
 }  // namespace roadlab
 
 #endif

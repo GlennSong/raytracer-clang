@@ -12,7 +12,7 @@ window, so it builds and runs anywhere `make` does.
 
 ```bash
 make roadlab                      # build ./roadlab
-make roadlab-test                 # 2406 assertions, no framework
+make roadlab-test                 # 3534 assertions, no framework
 make roadlab-shots                # render every demo to out_roadlab/
 
 ./roadlab --demo showcase --view persp --out shot.png
@@ -88,6 +88,13 @@ That single idea covers most of what road systems normally special-case:
 
 Topology changes only at **lane section** boundaries; inside a section only
 widths vary. Continuous enough to render, discrete enough to reason about.
+
+**Lanes pair across a road boundary by where they physically are, not by
+ordinal.** Two lanes are the same lane when their centres coincide at the joint.
+That sounds pedantic until a deceleration lane peels off at a diverge: the lane
+count changes on one side, an ordinal zip shifts every remaining lane one place
+sideways, and the mistake is completely silent — in the lane graph *and* in the
+export. `pairLanesAcross()` is the single implementation both read.
 
 **Transitions between road types are solved, not authored.** `blendSection()`
 runs a Needleman–Wunsch alignment over the two strip-kind sequences: matched
@@ -264,6 +271,28 @@ curvature. Tests assert the geometry lengths sum to each road's declared length
 and that a trimmed arm's first geometry sits at the trim pose, not the original
 road start.
 
+### Ramps have to become junctions
+
+OpenDRIVE allows a road at most one predecessor and one successor, and requires a
+`<junction>` wherever the connection is **not one-to-one**. Internally a ramp is
+an `ExtraLaneLink` — one lane continuing into another, which is what a merge
+physically is and which avoids inventing a junction with no pad. But a diverge
+leaves the mainline with two successors, and that is exactly what the format
+forbids.
+
+So export builds a **plan** before it writes anything: a list of road windows in
+which merges and diverges have been replaced by a junction whose connecting roads
+are short **stubs** carved off the front or back of the branches. No new geometry
+is invented — a stub is another window over a spine that already exists, the same
+trick junction trimming and road splitting use. The interchange demo, which has no
+authored junctions at all, exports as two junctions and four stubs.
+
+A conformance test enumerates the whole document and asserts the invariant
+directly: for every road, everything that attaches to a given end must be the one
+road it names there, or must be a connecting road of the junction it names there.
+That is the check that would have caught the first version of this exporter,
+which wrote a file whose ramps were unreachable.
+
 ## Performance
 
 Terrain generation was 95% of all runtime. Three fixes gave about 8x: the surface
@@ -326,6 +355,8 @@ Honest list of what a prototype this size does not do yet.
   be pointed at a real cloverleaf instead of at scenes I wrote myself.
 - **Hatching and chevrons have no OpenDRIVE equivalent** and export as `none`.
   A faithful export would emit them as `<object>` surfaces.
+- **Signals, signs and objects are not exported.** They are generated as props,
+  and OpenDRIVE has `<signals>`/`<objects>` sections that could carry them.
 - **Very acute or self-intersecting pad outlines** fall back to a centroid fan.
   Ear clipping handles ordinary concave pads, but a pathological boundary from a
   near-parallel pair of arms is covered rather than solved.

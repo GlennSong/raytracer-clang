@@ -981,6 +981,54 @@ double attrAfter(const std::string& doc, const char* key, size_t from, size_t li
     return std::atof(doc.c_str() + at);
 }
 
+std::string attrStrAfter(const std::string& doc, const char* key, size_t from, size_t limit) {
+    std::string needle = std::string(key) + "=\"";
+    size_t at = doc.find(needle, from);
+    if (at == std::string::npos || at > limit) return "";
+    at += needle.size();
+    size_t end = doc.find('"', at);
+    return doc.substr(at, end - at);
+}
+
+struct OdrRoadInfo {
+    int id = -1, junction = -1;
+    std::string predType, succType, predCp, succCp;
+    int predId = -1, succId = -1;
+};
+
+// Minimal scan of the emitted document. Deliberately not a real parser — it only
+// needs the link topology, and keeping the test dependency-free matters more.
+std::vector<OdrRoadInfo> scanRoads(const std::string& doc) {
+    std::vector<OdrRoadInfo> out;
+    for (size_t at = doc.find("<road "); at != std::string::npos; at = doc.find("<road ", at + 1)) {
+        size_t headEnd = doc.find('>', at);
+        OdrRoadInfo ri;
+        ri.id = int(attrAfter(doc, "id", at, headEnd));
+        ri.junction = int(attrAfter(doc, "junction", at, headEnd));
+        size_t planView = doc.find("<planView>", at);
+        size_t linkStart = doc.find("<link>", at);
+        size_t linkEnd = doc.find("</link>", at);
+        if (linkStart != std::string::npos && linkStart < planView) {
+            size_t p = doc.find("<predecessor ", linkStart);
+            if (p != std::string::npos && p < linkEnd) {
+                size_t e = doc.find('>', p);
+                ri.predType = attrStrAfter(doc, "elementType", p, e);
+                ri.predId = int(attrAfter(doc, "elementId", p, e));
+                ri.predCp = attrStrAfter(doc, "contactPoint", p, e);
+            }
+            size_t q = doc.find("<successor ", linkStart);
+            if (q != std::string::npos && q < linkEnd) {
+                size_t e = doc.find('>', q);
+                ri.succType = attrStrAfter(doc, "elementType", q, e);
+                ri.succId = int(attrAfter(doc, "elementId", q, e));
+                ri.succCp = attrStrAfter(doc, "contactPoint", q, e);
+            }
+        }
+        out.push_back(ri);
+    }
+    return out;
+}
+
 }  // namespace
 
 void testPolyShift() {
@@ -1025,7 +1073,10 @@ void testOpenDriveExport() {
         size_t expected = 0;
         for (const Road& r : sc.net.roads())
             if (r.activeLength() >= 1e-3) ++expected;
-        check(roads == expected, "every road with length is exported");
+        // Plus the stub connecting roads synthesised for ramp merges and
+        // diverges — those are extra windows over existing geometry, not extra
+        // geometry, so the count is >= rather than ==.
+        check(roads >= expected, "every road with length is exported");
         check(planViews == roads, "every road has a plan view");
 
         // THE structural invariant: the geometry pieces of a road must add up to
@@ -1055,10 +1106,21 @@ void testOpenDriveExport() {
             size_t cEnd = doc.find('>', c);
             double incoming = attrAfter(doc, "incomingRoad", c, cEnd);
             double connecting = attrAfter(doc, "connectingRoad", c, cEnd);
-            check(incoming >= 0 && incoming < sc.net.roadCount(), "incomingRoad exists");
-            check(connecting >= 0 && connecting < sc.net.roadCount(), "connectingRoad exists");
-            check(sc.net.road(int(connecting)).junctionId >= 0,
-                  "the connecting road is marked as a junction connector");
+            // Both must exist IN THE FILE — a synthesised stub has an id beyond
+            // anything in the network, which is fine and is why this checks the
+            // document rather than the Network.
+            check(incoming >= 0, "incomingRoad is a real id");
+            std::string needle = "<road ";
+            bool sawIncoming = false, sawConnecting = false;
+            for (size_t rr = doc.find(needle); rr != std::string::npos;
+                 rr = doc.find(needle, rr + 1)) {
+                size_t rEnd = doc.find('>', rr);
+                double rid = attrAfter(doc, "id", rr, rEnd);
+                if (rid == incoming) sawIncoming = true;
+                if (rid == connecting) sawConnecting = true;
+            }
+            check(sawIncoming, "incomingRoad exists in the file");
+            check(sawConnecting, "connectingRoad exists in the file");
         }
     }
 }
@@ -1100,6 +1162,172 @@ void testOpenDriveClipping() {
         check(r.activeLength() < r.spineLength() - 0.5,
               "which is genuinely shorter than the spine");
     }
+}
+
+void testOpenDriveConformance() {
+    group("OpenDRIVE conformance");
+    // THE rule the format imposes and our internal model does not: a road may
+    // have at most ONE predecessor and ONE successor, and any connection that is
+    // not one-to-one has to go through a <junction>. Our ramps are lane links
+    // internally, so this is exactly where an export can quietly produce a file
+    // whose ramps are unreachable.
+    for (const std::string& name : demoNames()) {
+        Scene sc;
+        buildDemo(name, sc);
+        finalizeScene(sc, false, false);
+        std::string doc = openDriveString(sc.net);
+        std::vector<OdrRoadInfo> roads = scanRoads(doc);
+        check(!roads.empty(), (name + ": the export has roads").c_str());
+
+        auto byId = [&](int id) -> const OdrRoadInfo* {
+            for (const OdrRoadInfo& r : roads)
+                if (r.id == id) return &r;
+            return nullptr;
+        };
+
+        for (const OdrRoadInfo& a : roads) {
+            // Everyone who attaches to A's high-s end.
+            std::vector<int> endClaimers, startClaimers;
+            for (const OdrRoadInfo& b : roads) {
+                if (b.id == a.id) continue;
+                if (b.predType == "road" && b.predId == a.id) {
+                    (b.predCp == "end" ? endClaimers : startClaimers).push_back(b.id);
+                }
+                if (b.succType == "road" && b.succId == a.id) {
+                    (b.succCp == "end" ? endClaimers : startClaimers).push_back(b.id);
+                }
+            }
+            auto verify = [&](const std::vector<int>& claimers, const std::string& type, int id,
+                              const char* which) {
+                if (type == "junction") {
+                    // Everything attaching here must be a connecting road of that
+                    // junction; that is what makes the ambiguity legal.
+                    for (int c : claimers) {
+                        const OdrRoadInfo* cr = byId(c);
+                        check(cr && cr->junction == id,
+                              (name + ": a road attaching to a junction " + which +
+                               " is one of its connecting roads")
+                                  .c_str());
+                    }
+                    return;
+                }
+                if (type == "road") {
+                    for (int c : claimers)
+                        check(c == id, (name + ": road " + std::to_string(a.id) + " declares one " +
+                                        which + " but another road attaches there too")
+                                           .c_str());
+                    return;
+                }
+                // No link declared: nothing may attach.
+                check(claimers.empty(), (name + ": road " + std::to_string(a.id) +
+                                         " declares no " + which + " yet something attaches")
+                                            .c_str());
+            };
+            verify(endClaimers, a.succType, a.succId, "successor");
+            verify(startClaimers, a.predType, a.predId, "predecessor");
+        }
+
+        // Every connecting road must be marked with its junction and must link to
+        // the incoming road it serves.
+        size_t at = doc.find("<junction ");
+        while (at != std::string::npos) {
+            size_t headEnd = doc.find('>', at);
+            int jid = int(attrAfter(doc, "id", at, headEnd));
+            size_t jEnd = doc.find("</junction>", at);
+            for (size_t c = doc.find("<connection ", at); c != std::string::npos && c < jEnd;
+                 c = doc.find("<connection ", c + 1)) {
+                size_t cEnd = doc.find('>', c);
+                int incoming = int(attrAfter(doc, "incomingRoad", c, cEnd));
+                int connecting = int(attrAfter(doc, "connectingRoad", c, cEnd));
+                const OdrRoadInfo* cr = byId(connecting);
+                check(cr != nullptr, (name + ": the connecting road exists").c_str());
+                if (!cr) continue;
+                check(cr->junction == jid,
+                      (name + ": a connecting road is marked with its junction").c_str());
+                bool linksToIncoming = (cr->predType == "road" && cr->predId == incoming) ||
+                                       (cr->succType == "road" && cr->succId == incoming);
+                check(linksToIncoming,
+                      (name + ": a connecting road links back to its incoming road").c_str());
+                // At least one lane link, or the movement carries no traffic.
+                size_t ll = doc.find("<laneLink ", c);
+                check(ll != std::string::npos && ll < doc.find("</connection>", c),
+                      (name + ": a connection carries at least one lane link").c_str());
+            }
+            at = doc.find("<junction ", jEnd == std::string::npos ? at + 1 : jEnd);
+        }
+    }
+}
+
+void testRampsBecomeJunctions() {
+    group("ramp junctions");
+    Scene sc;
+    buildDemo("interchange", sc);
+    finalizeScene(sc, false, false);
+    check(sc.net.junctionCount() == 0, "the interchange has no authored junctions");
+    check(sc.net.extraLinks.size() == 2, "it has two ramp lane links");
+
+    std::string doc = openDriveString(sc.net);
+    int junctions = 0;
+    for (size_t at = doc.find("<junction "); at != std::string::npos;
+         at = doc.find("<junction ", at + 1))
+        ++junctions;
+    // A merge and a diverge, each of which is a not-one-to-one connection and so
+    // each of which the format requires to be a junction.
+    check(junctions == 2, "both ramps export as junctions");
+    check(doc.find("diverge-") != std::string::npos, "the off-ramp is a diverge junction");
+    check(doc.find("merge-") != std::string::npos, "the on-ramp is a merge junction");
+    check(doc.find(".stub") != std::string::npos, "connecting roads were carved as stubs");
+}
+
+void testDivergeKeepsLaneIdentity() {
+    group("diverge lane identity");
+    // A lane that continues through a diverge must continue as ITSELF. Pairing by
+    // ordinal instead of position shifts every remaining lane one place sideways
+    // the moment the deceleration lane peels off, which is silent and wrong in
+    // both the lane graph and the export.
+    Scene sc;
+    buildDemo("interchange", sc);
+    finalizeScene(sc, false, false);
+
+    int rampRoad = -1, mainRoad = -1;
+    for (const ExtraLaneLink& el : sc.net.extraLinks) {
+        if (sc.net.road(el.toRoad).kind == RoadKind::Ramp) {
+            rampRoad = el.toRoad;
+            mainRoad = el.fromRoad;
+        }
+    }
+    check(rampRoad >= 0 && mainRoad >= 0, "the diverge was found");
+    if (mainRoad < 0) return;
+
+    const Road& head = sc.net.road(mainRoad);
+    check(head.succ.type == LinkType::Road, "the mainline continues past the exit");
+    const Road& tail = sc.net.road(head.succ.id);
+
+    // The deceleration lane leaves with the ramp, so the mainline narrows.
+    int headLanes = head.xs.sectionAt(head.end() - 0.1).laneCount();
+    int tailLanes = tail.xs.sectionAt(tail.begin() + 0.1).laneCount();
+    check(tailLanes == headLanes - 1, "the mainline loses exactly the deceleration lane");
+
+    // And every continuing lane keeps its identity, which positional pairing
+    // guarantees and an ordinal zip does not.
+    for (const auto& pr : pairLanesAcross(head, true, tail, true)) {
+        check(pr.first == pr.second, "a lane continuing past the diverge stays the same lane");
+    }
+
+    // The same must hold in the lane graph the simulator drives.
+    const LaneGraph& lg = sc.net.lanes();
+    int checked = 0;
+    for (const LaneNode& n : lg.nodes) {
+        if (n.ref.road != mainRoad) continue;
+        for (int succ : n.successors) {
+            const LaneNode& t = lg.nodes[size_t(succ)];
+            if (t.ref.road != tail.id) continue;
+            check(t.ref.lane == n.ref.lane,
+                  "the lane graph continues a lane as itself across the diverge");
+            ++checked;
+        }
+    }
+    check(checked >= 3, "the through lanes really are linked in the graph");
 }
 
 // --- end to end -----------------------------------------------------------
@@ -1187,6 +1415,9 @@ int main() {
     testPolyShift();
     testOpenDriveExport();
     testOpenDriveClipping();
+    testOpenDriveConformance();
+    testRampsBecomeJunctions();
+    testDivergeKeepsLaneIdentity();
     testAllDemosBuild();
     testGeneratedCity();
 

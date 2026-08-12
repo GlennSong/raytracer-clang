@@ -354,8 +354,21 @@ int buildOffRamp(Network& net, int mainRoad, double sExit, const RampDesc& desc,
     }
     double divergeHeight = net.road(mainRoad).surfacePoint(sExit, 0).y;
 
+    // The deceleration lane exists only UPSTREAM of the exit: at the diverge it
+    // becomes the ramp. Splitting copies the whole profile to the tail, so the
+    // edit has to be dropped there or the mainline keeps a phantom lane for the
+    // rest of its length — which is exactly what it was doing.
+    size_t auxEdit = net.road(mainRoad).profileEdits.empty()
+                         ? 0
+                         : net.road(mainRoad).profileEdits.size() - 1;
     int tail = net.splitRoad(mainRoad, sExit);
     if (mainlineTail) *mainlineTail = tail;
+    if (tail >= 0) {
+        Road& t = net.road(tail);
+        if (auxEdit < t.profileEdits.size())
+            t.profileEdits.erase(t.profileEdits.begin() + long(auxEdit));
+        rebuildProfile(net, tail);
+    }
 
     int ramp = makeRampRoad(net, desc, divergePos, divergeHdg, divergeHeight, false);
     int rampLane = -1;
