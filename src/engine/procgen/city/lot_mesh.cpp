@@ -272,6 +272,40 @@ void emitPlantTube(RenderMesh& side, RenderMesh& lid, const Vec2& c, Real radius
     }
 }
 
+// THE ADAPTER. The shipping grammar's facade emitters append to a BuildingMesh
+// under their own part ids; this mesher accumulates into a PartAcc. That is the
+// only thing that stood between the two, and it is four lines — far less than a
+// second implementation of a porch, which is what the alternative was and what
+// the audit (docs §18) is a list of the consequences of.
+void drainInto(PartAcc& acc, BuildingMesh& scratch) {
+    for (RenderMesh& p : scratch.parts) {
+        if (p.indices.empty()) continue;
+        RenderMesh& dst = acc[static_cast<std::size_t>(
+            std::min<int>(p.materialIndex, static_cast<int>(PartId::Count) - 1))];
+        const uint32_t base = static_cast<uint32_t>(dst.vertices.size());
+        dst.vertices.insert(dst.vertices.end(), p.vertices.begin(), p.vertices.end());
+        for (uint32_t i : p.indices) dst.indices.push_back(base + i);
+    }
+    scratch.parts.clear();
+}
+
+// A box standing proud of a facade, in that face's own frame: [x0,x1] along the
+// wall, [y0,y1] up it, projecting `depth` outward. Quoins, pilasters, signs and
+// awning fascias are all this shape — which is why they are here and not four
+// near-identical emitters.
+void emitFaceBox(RenderMesh& mesh, const FaceRect& fr, Real x0, Real x1,
+                 Real y0, Real y1, Real depth, const Vec3& color) {
+    if (x1 <= x0 + 1e-4 || y1 <= y0 + 1e-4 || depth <= 1e-4) return;
+    const Vec3 out = fr.n * depth;
+    const Vec3 a = fr.at(x0, y0), b = fr.at(x1, y0);
+    const Vec3 c = fr.at(x1, y1), d = fr.at(x0, y1);
+    MeshBuilder::emitQuad(mesh, a + out, b + out, c + out, d + out, fr.n, color);
+    MeshBuilder::emitQuad(mesh, b, b + out, c + out, c, fr.h, color);
+    MeshBuilder::emitQuad(mesh, a + out, a, d, d + out, fr.h * -1, color);
+    MeshBuilder::emitQuad(mesh, d, c, c + out, d + out, fr.v, color);
+    MeshBuilder::emitQuad(mesh, a, a + out, b + out, b, fr.v * -1, color);
+}
+
 // Which levels belong to which tier's material set, and the fenestration style
 // that goes with it.
 const MaterialSet& setFor(const BuiltBuilding& b, int tier) {
@@ -514,6 +548,87 @@ BuildingMesh meshBuilding(const BuiltBuilding& b, const LotMeshParams& params) {
                                     std::max(Real(0.9), p.height), ms.wall,
                                     ms.wallColor, ms.trim, ms.trimColor, tol);
                     break;
+                case ElementKind::Sign:
+                case ElementKind::Awning:
+                case ElementKind::Quoin:
+                case ElementKind::Pilaster: {
+                    // A shopfront with no sign and no awning reads as a blank
+                    // ground floor, which is most of why retail streets looked
+                    // like offices. All four are a box proud of the facade;
+                    // only where and how deep differ.
+                    if (p.edge < 0) break;
+                    const Loop2& ring = L.plans[0].outer;
+                    if (p.edge >= static_cast<int>(ring.size())) break;
+                    const std::size_t e = static_cast<std::size_t>(p.edge);
+                    const FaceRect fr = faceRectFromEdge(ring.start(e), ring.end(e),
+                                                         y0, y1 - y0);
+                    if (fr.width < 1.2) break;
+                    const Real span = fr.width;
+                    if (p.kind == ElementKind::Quoin) {
+                        // Corner stones: a shallow rusticated strip at the START
+                        // of the edge, which is a plan corner by construction.
+                        const Real w = std::min(Real(0.55), span * 0.2);
+                        emitFaceBox(part(acc, ms.base), fr, 0, w, 0, fr.height,
+                                    0.09, ms.accentColor);
+                    } else if (p.kind == ElementKind::Pilaster) {
+                        const Real x = span * std::max(Real(0), std::min(Real(1), p.t0));
+                        const Real w = std::min(Real(0.5), span * 0.12);
+                        if (x + w > span) break;
+                        emitFaceBox(part(acc, ms.trim), fr, x, x + w, 0, fr.height,
+                                    0.08, ms.trimColor);
+                    } else if (p.kind == ElementKind::Sign) {
+                        // A fascia panel over the shopfront, not a billboard.
+                        const Real x0s = span * 0.25, x1s = span * 0.75;
+                        const Real hy = std::min(fr.height - 0.25, Real(3.0));
+                        if (hy < 0.9) break;
+                        emitFaceBox(part(acc, ms.accent), fr, x0s, x1s, hy - 0.65,
+                                    hy, 0.12, ms.trimColor * 0.75);
+                    } else {
+                        // Awning: a shallow canopy on the bay the recipe chose,
+                        // sloping down and out over the pavement.
+                        const Real x0a = span * std::max(Real(0), std::min(Real(1), p.t0));
+                        const Real x1a = span * std::max(Real(0), std::min(Real(1), p.t1));
+                        if (x1a <= x0a + 0.4) break;
+                        const Real hy = std::min(fr.height - 0.35, Real(2.7));
+                        if (hy < 1.2) break;
+                        const Real d = std::max(Real(0.8), p.depth);
+                        const Vec3 o = fr.n * d;
+                        const Vec3 a0 = fr.at(x0a, hy), b0 = fr.at(x1a, hy);
+                        const Vec3 a1 = a0 + o - fr.v * 0.45, b1 = b0 + o - fr.v * 0.45;
+                        RenderMesh& m = part(acc, ms.accent);
+                        const Vec3 up = normalize(cross(b0 - a0, a1 - a0));
+                        MeshBuilder::emitQuad(m, a0, b0, b1, a1, up * -1, ms.accentColor);
+                        MeshBuilder::emitQuad(m, a1, b1, b0, a0, up, ms.accentColor * 0.7);
+                    }
+                    break;
+                }
+                case ElementKind::Porch:
+                case ElementKind::Steps:
+                case ElementKind::Portico: {
+                    // Placed on the plan edge the recipe selected, in the same
+                    // FaceRect frame the shipping grammar uses — and drawn by
+                    // the SAME emitter. Nothing here reimplements a porch.
+                    if (p.edge < 0) break;
+                    const Loop2& ring = L.plans[0].outer;
+                    // The placement's edge index is flat across plans and holes;
+                    // only the first plan's outer edges carry a street facade.
+                    if (p.edge >= static_cast<int>(ring.size())) break;
+                    const std::size_t e = static_cast<std::size_t>(p.edge);
+                    const FaceRect fr = faceRectFromEdge(ring.start(e), ring.end(e),
+                                                         y0, y1 - y0);
+                    if (fr.width < 2.0) break;
+                    BuildingMesh scratch;
+                    if (p.kind == ElementKind::Porch)
+                        emitPorch(scratch, fr, ms.wallColor, ms.trimColor);
+                    else if (p.kind == ElementKind::Portico)
+                        emitPortico(scratch, fr, std::max(2, p.style), ms.trimColor);
+                    else
+                        emitEntranceSteps(scratch, fr, fr.width * 0.5,
+                                          std::min(fr.width - 0.6, Real(3.0)), 0.35,
+                                          1.1, ms.base, ms.accentColor);
+                    drainInto(acc, scratch);
+                    break;
+                }
                 case ElementKind::RoofDeck: {
                     // style 1 = a CHIMNEY, which is what addHouseDressing asks
                     // for and the single most-requested element the mesher could
@@ -658,6 +773,7 @@ BuildingMesh meshBuilding(const BuiltBuilding& b, const LotMeshParams& params) {
                     // it; the shipping grammar HAS emitters for most of these
                     // and they are the next thing to extract.
                     unbuiltKinds[static_cast<std::size_t>(p.kind)]++;
+                    out.unbuiltElements++;
                     break;
             }
         }

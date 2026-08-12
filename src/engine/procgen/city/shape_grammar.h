@@ -122,6 +122,12 @@ struct BuildingMesh {
     std::vector<AttachPoint> attaches;
     RenderMesh proxy;                  // coarse single-material mass (LOD/impostor bake)
     Real height = 0;
+    // How many element placements the mesher was asked for and could not draw.
+    // A registry that advertises what it cannot build is the failure documented
+    // in docs/lot-system-plan.md §18 — an entire rooftop kit went missing inside
+    // a `default: break`. Counting it here makes "the registry builds what it
+    // advertises" a test rather than a log line nobody reads.
+    int unbuiltElements = 0;
 
     // Merge all parts into one mesh (single-material preview / collision).
     RenderMesh merged() const;
@@ -294,6 +300,45 @@ void emitParapet(BuildingMesh& out, const Vec3& footOrigin, Real width, Real dep
 // Emit a quad (one facade panel / window / sign) from four corners + a normal.
 void emitQuad(RenderMesh& mesh, const Vec3& a, const Vec3& b, const Vec3& c,
               const Vec3& d, const Vec3& normal, const Vec3& color);
+
+// A rectangle on a building face: bottom-left corner + in-plane axes + outward
+// normal. Every facade-attached element below is placed in this frame, and it is
+// all they need — which is why it is here rather than private to the grammar:
+// any mesher holding a plan edge and a storey height can build one (see
+// `faceRectFromEdge`) and then call the SAME emitter, instead of writing a
+// second one. The audit in docs/lot-system-plan.md §18 is a list of what
+// happened when it could not.
+struct FaceRect {
+    Vec3 bl;            // bottom-left corner (world)
+    Vec3 h;             // unit horizontal axis
+    Vec3 v;             // unit vertical axis (== scope up)
+    Vec3 n;             // outward normal
+    Real width = 0;
+    Real height = 0;
+
+    Vec3 at(Real x, Real y) const { return bl + h * x + v * y; }
+};
+
+// The face of one plan edge, from `y0` up by `height`. Outward for a CCW ring is
+// the RIGHT of a -> b, the same convention the whole city speaks.
+FaceRect faceRectFromEdge(const Vec2& a, const Vec2& b, Real y0, Real height);
+
+// --- facade-attached elements, in that frame ------------------------------
+// Each appends to `out` under its own part ids. Colours are passed explicitly
+// rather than as a BuildingParams, so a caller that has a MaterialSet (the Lot
+// System) and one that has BuildingParams (the shape grammar) can both drive
+// them without either learning the other's parameter struct.
+
+// A flight of steps up to a platform, centred at `cx` along the face.
+void emitEntranceSteps(BuildingMesh& out, const FaceRect& fr, Real cx, Real w,
+                       Real platformH, Real platformD, PartId part,
+                       const Vec3& col);
+// A covered porch: platform, posts, rail and a shallow roof.
+void emitPorch(BuildingMesh& out, const FaceRect& fr, const Vec3& wallColor,
+               const Vec3& trimColor);
+// A columned portico with a pediment; `columns` is the column count.
+void emitPortico(BuildingMesh& out, const FaceRect& fr, int columns,
+                 const Vec3& col);
 // Offset a closed ring by `d` (positive = INWARD; the interior is left of a CCW
 // edge), MITRED: each output vertex is the intersection of its two offset edge
 // lines, with a miter limit that falls back to a bevel where a near-parallel

@@ -413,3 +413,31 @@ TEST_CASE(recipes_build_ordinary_shapes_and_rare_landmarks) {
     // selection over this recipe's list put them near a third.
     CHECK(exotic * 8 < total);
 }
+
+// THE REGISTRY MUST BUILD WHAT IT ADVERTISES. Fifteen of the nineteen declared
+// ElementKinds used to fall through `default: break`, so a recipe could ask for
+// a portico, a chimney or a shopfront sign and get nothing back with nothing to
+// say it had been dropped — which is how an entire rooftop kit stayed missing
+// across a pipeline (docs §18). Every stock recipe, at a size that exercises its
+// dressing: nothing may go unbuilt.
+TEST_CASE(every_element_a_stock_recipe_asks_for_is_built) {
+    static PaletteLibrary palettes = stockPalettes();
+    static RecipeBook book = stockRecipes();
+    int checked = 0, unbuilt = 0;
+    for (const LotRecipe& rec : book.recipes) {
+        for (std::uint32_t s = 1; s <= 6; ++s) {
+            Shape2 env = rectShape(0, 0, 46, 38);
+            for (Edge2& e : env.outer.edges) e.tag = EdgeTag::Side;
+            env.outer.edges[0].tag = EdgeTag::Street;
+            LotTags tags = measureLot(env, {}, StreetClass::Street, true, 0.8);
+            tags.maxStoreys = 14;
+            const BuiltBuilding b = buildFromRecipe(rec, env, tags, palettes, 3, s);
+            if (b.surfaces.levels.empty()) continue;
+            const BuildingMesh m = meshBuilding(b);
+            unbuilt += m.unbuiltElements;
+            ++checked;
+        }
+    }
+    CHECK(checked > 100);
+    CHECK(unbuilt == 0);
+}

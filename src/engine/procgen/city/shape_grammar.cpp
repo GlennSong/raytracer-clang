@@ -30,18 +30,8 @@ void setAxisComp(Vec3& v, int i, Real val) {
     if (i == 0) v.x = val; else if (i == 1) v.y = val; else v.z = val;
 }
 
-// A rectangle on a building face: bottom-left corner + in-plane axes + outward
-// normal. The facade subdivision works entirely in this 2D frame.
-struct FaceRect {
-    Vec3 bl;            // bottom-left corner (world)
-    Vec3 h;             // unit horizontal axis
-    Vec3 v;             // unit vertical axis (== scope up)
-    Vec3 n;             // outward normal
-    Real width = 0;
-    Real height = 0;
-
-    Vec3 at(Real x, Real y) const { return bl + h * x + v * y; }
-};
+// FaceRect now lives in the header: every mesher that has a plan edge and a
+// storey height can build one and reuse these emitters (audit §18.3).
 
 // The four vertical faces of a storey scope, outward-facing.
 FaceRect faceOf(const Scope& s, int side) {
@@ -1401,20 +1391,23 @@ Poly2 offsetPlan(const Poly2& poly, Real d) {
     return out;
 }
 
-namespace {
-
-// One plan edge as a facade rectangle: outward for CCW is the RIGHT of a->b.
-FaceRect planEdgeRect(const Poly2& pl, std::size_t i, Real y, Real h) {
-    Vec2 a = pl[i], b = pl[(i + 1) % pl.size()];
-    Vec2 d = normalize(b - a);
+FaceRect faceRectFromEdge(const Vec2& a, const Vec2& b, Real y0, Real height) {
+    const Vec2 d = normalize(b - a);
     FaceRect fr;
-    fr.bl = Vec3(a.x, y, a.y);
+    fr.bl = Vec3(a.x, y0, a.y);
     fr.h = Vec3(d.x, 0, d.y);
     fr.v = Vec3(0, 1, 0);
     fr.n = Vec3(d.y, 0, -d.x);
     fr.width = (b - a).length();
-    fr.height = h;
+    fr.height = height;
     return fr;
+}
+
+namespace {
+
+// One plan edge as a facade rectangle: outward for CCW is the RIGHT of a->b.
+FaceRect planEdgeRect(const Poly2& pl, std::size_t i, Real y, Real h) {
+    return faceRectFromEdge(pl[i], pl[(i + 1) % pl.size()], y, h);
 }
 
 // A horizontal SLAB filling the plan: triangulated top + underside, plus a
@@ -1566,7 +1559,13 @@ static void emitColumn(BuildingMesh& out, const Vec3& base, Real h, Real r,
 
 // ENTRANCE STEPS: a porch platform under the door with descending steps —
 // centred on `cx` along the face, growing outward from the wall plane.
-static void emitEntranceSteps(BuildingMesh& out, const FaceRect& fr, Real cx,
+}  // namespace
+
+// EXPORTED. These are placed in a FaceRect and nothing else, so any mesher
+// that can build one can call them — which is the whole point of the
+// extraction (docs §18.3). Left file-local, the Lot System had to either
+// reimplement them or go without, and it went without.
+void emitEntranceSteps(BuildingMesh& out, const FaceRect& fr, Real cx,
                               Real w, Real platformH, Real platformD,
                               PartId part, const Vec3& col) {
     const Vec3 up(0, 1, 0);
@@ -1588,8 +1587,8 @@ static void emitEntranceSteps(BuildingMesh& out, const FaceRect& fr, Real cx,
 
 // PORTICO: the columned porch — steps + platform, a colonnade, an
 // entablature beam and a triangular pediment. The classical civic front.
-static void emitPortico(BuildingMesh& out, const FaceRect& fr,
-                        const BuildingParams&, int nCols, const Vec3& col) {
+void emitPortico(BuildingMesh& out, const FaceRect& fr, int nCols,
+                 const Vec3& col) {
     const Vec3 up(0, 1, 0);
     nCols = std::max(2, nCols);
     const Real depth = std::min(Real(3.4), std::max(Real(2.2), fr.width * 0.16));
@@ -1632,6 +1631,8 @@ static void emitPortico(BuildingMesh& out, const FaceRect& fr,
 
 // ROTUNDA: drum + radial colonnade + entablature ring + dome + cupola — the
 // capitol crown, all lathe-and-array.
+namespace {
+
 static void emitRotunda(BuildingMesh& out, const Vec3& c, Real R, Real roofY,
                         const Vec3& r3, const Vec3& f3, const Vec3& wallCol,
                         const Vec3& trimCol) {
@@ -1701,17 +1702,23 @@ static void emitBalconyRun(BuildingMesh& out, const FaceRect& fr,
 
 // PORCH: the covered timber entrance — platform + steps, corner posts, and a
 // flat canopy with a fascia board — centred on the door (bungalow/craftsman).
-static void emitPorch(BuildingMesh& out, const FaceRect& fr,
-                      const BuildingParams& p) {
+}  // namespace
+
+// EXPORTED. These are placed in a FaceRect and nothing else, so any mesher
+// that can build one can call them — which is the whole point of the
+// extraction (docs §18.3). Left file-local, the Lot System had to either
+// reimplement them or go without, and it went without.
+void emitPorch(BuildingMesh& out, const FaceRect& fr, const Vec3& wallColor,
+               const Vec3& trimColor) {
     const Vec3 up(0, 1, 0);
     const Real w = std::min(fr.width - 0.8, Real(4.6));
     if (w < 2.2) return;
     const Real depth = 1.9, platH = 0.28;
     const Real roofY = std::min(fr.height - 0.3, Real(2.75));
     const Real cx = fr.width * 0.5;
-    const Vec3 wood = materialFor(PartId::Wood, p.wallColor).albedo;
+    const Vec3 wood = materialFor(PartId::Wood, wallColor).albedo;
     emitEntranceSteps(out, fr, cx, w, platH, depth, PartId::Concrete,
-                      p.trimColor * 0.9);
+                      trimColor * 0.9);
     const int posts = w > 3.6 ? 3 : 2;
     for (int i = 0; i < posts; ++i) {
         const Real x = cx - w * 0.5 + 0.12 + (w - 0.38) * (Real(i) / (posts - 1));
@@ -1721,12 +1728,14 @@ static void emitPorch(BuildingMesh& out, const FaceRect& fr,
     }
     emitBox(out, Scope{fr.at(cx - w * 0.5 - 0.25, roofY), {fr.h, up, fr.n},
                        Vec3(w + 0.5, 0.10, depth + 0.35)},
-            PartId::Roof, materialFor(PartId::Roof, p.wallColor).albedo);
+            PartId::Roof, materialFor(PartId::Roof, wallColor).albedo);
     emitBox(out, Scope{fr.at(cx - w * 0.5 - 0.25, roofY - 0.16) +
                            fr.n * (depth + 0.29),
                        {fr.h, up, fr.n}, Vec3(w + 0.5, 0.18, 0.06)},
             PartId::Wood, wood);
 }
+
+namespace {
 
 // OPEN PARKING DECK storey: a solid spandrel band below, an open air gap, a
 // thin top edge band, and slim piers per bay — plus a guard rail across the
@@ -2111,14 +2120,15 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     // The covered timber PORCH (bungalow/craftsman) — brings its own platform
     // and steps, so it replaces the classical entrance elements.
     if (full && params.porch) {
-        emitPorch(out, planEdgeRect(plan, entranceEdge, y, gh), params);
+        emitPorch(out, planEdgeRect(plan, entranceEdge, y, gh), params.wallColor,
+                  params.trimColor);
     } else
     // CLASSICAL entrance elements on the street face: a portico (colonnade +
     // entablature + pediment over porch steps) or bare entrance steps.
     if (full && (params.portico > 0 || params.entranceSteps)) {
         FaceRect efr = planEdgeRect(plan, entranceEdge, y, gh);
         if (params.portico > 0 && efr.width > 7.0)
-            emitPortico(out, efr, params, params.portico, params.trimColor);
+            emitPortico(out, efr, params.portico, params.trimColor);
         else
             emitEntranceSteps(out, efr, efr.width * 0.5,
                               std::min(efr.width * 0.5, Real(5.0)), 0.4, 1.4,
