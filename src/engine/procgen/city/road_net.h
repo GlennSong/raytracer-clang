@@ -86,8 +86,17 @@ struct RoadNet {
     Vec3   color{0.09, 0.09, 0.10};
     std::function<double(double, double)> heightAt;   // terrain drape (flat if unset)
     // Hubs the metro recipe grew this net around (with district kinds), so lot
-    // growth can zone polycentrically. Empty for hand-authored/district nets.
+    // growth can zone polycentrically. A hand-authored net can declare its own
+    // through road.city_hubs; empty means radial zoning off LotParams::center.
     std::vector<CityHub> cityHubs;
+    // Did a LEVEL draw this graph, node by node, or did a recipe grow it?
+    // The distinction is not cosmetic: block extraction synthesizes RIM blocks
+    // on the open side of every boundary road, which is right for a grown town
+    // (its edge has no enclosed faces and the outskirts should still build up)
+    // and wrong for a drawn one, where the author decided the extent and the
+    // faces they drew ARE the city. Set by roadNetFromJson; a generate recipe
+    // clears it, because the recipe owns the graph from that point on.
+    bool authored = false;
     // §10.6: freeway CORRIDOR plans the metro recipe routed hub-to-hub —
     // anchor polylines the loader builds as real corridors (alignment,
     // profile, interchanges). Never street edges.

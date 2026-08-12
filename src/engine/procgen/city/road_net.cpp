@@ -1769,9 +1769,13 @@ int roadNetNearestEdge(const RoadNet& net, const Vec2& p, double maxDist) {
 
 RoadNet roadNetFromJson(const json& j) {
     RoadNet net;
-    if (j.contains("nodes") && j["nodes"].is_array())
+    if (j.contains("nodes") && j["nodes"].is_array()) {
         for (const json& p : j["nodes"])
             net.nodes.push_back(Vec2(p.value("x", 0.0), p.value("z", 0.0)));
+        // The level drew this graph. See RoadNet::authored — it decides whether
+        // block extraction may invent rim blocks around the outside.
+        net.authored = !net.nodes.empty();
+    }
     if (j.contains("edges") && j["edges"].is_array())
         for (const json& e : j["edges"]) {
             double w = 0.0;
@@ -1843,6 +1847,22 @@ RoadNet roadNetFromJson(const json& j) {
     if (j.contains("color") && j["color"].is_array() && j["color"].size() == 3)
         net.color = Vec3(j["color"][0].get<double>(), j["color"][1].get<double>(),
                          j["color"][2].get<double>());
+    // DISTRICT HUBS on a HAND-AUTHORED net. Zoning reads LotParams::hubs, which
+    // the loader fills from the net's cityHubs — and only a metro RECIPE ever
+    // set those. So a road graph drawn by hand had no hubs at all, every block
+    // came back kind 2, and the whole city built one program: street after
+    // street of the same house. Authoring the graph is only half of authoring a
+    // city; this is the other half. `kind` indexes DistrictTag — 0 financial,
+    // 1 commercial, 2 residential, 3 old town, 4 industrial — and the kind-0 hub
+    // is also what the loader anchors coreness (and so the skyline) to.
+    if (j.contains("city_hubs") && j["city_hubs"].is_array())
+        for (const json& h : j["city_hubs"]) {
+            CityHub hub;
+            hub.pos = Vec2(h.value("x", 0.0), h.value("z", 0.0));
+            hub.kind = h.value("kind", 0);
+            hub.site = h.value("site", 0);
+            net.cityHubs.push_back(hub);
+        }
     return net;
 }
 
@@ -1891,6 +1911,16 @@ json roadNetToJson(const RoadNet& net) {
     j["markings"] = net.markings;
     j["crosswalks"] = net.crosswalks;
     j["color"] = json::array({net.color.x, net.color.y, net.color.z});
+    // Authored district hubs survive the round trip; a generated net's hubs are
+    // rebuilt by its recipe, so writing them would freeze a derived value into
+    // the document. Only hand-authored nets (no recipe to re-run) carry them.
+    if (!net.cityHubs.empty()) {
+        json hubs = json::array();
+        for (const CityHub& h : net.cityHubs)
+            hubs.push_back({{"x", h.pos.x}, {"z", h.pos.y},
+                            {"kind", h.kind}, {"site", h.site}});
+        j["city_hubs"] = std::move(hubs);
+    }
     return j;
 }
 
@@ -2054,6 +2084,9 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
     // mesh, a stale nodeElev would lift a street onto a phantom deck.
     net.freewayPlans.clear();
     net.cityHubs.clear();
+    // The recipe owns the graph from here: whatever nodes the document carried
+    // are about to be replaced, so this is no longer a drawn city (RoadNet::authored).
+    net.authored = false;
     net.siteFootprints.clear();
     net.specs.clear();
     net.edgeSpecs.clear();

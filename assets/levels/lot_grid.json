@@ -1,0 +1,372 @@
+{
+ "_comment": "THE LOT SYSTEM on a HAND-AUTHORED road graph. Where lot_lab.json grows its streets from a metro recipe, this level DRAWS them: road.nodes + road.edges are an explicit planar graph, so the nine blocks are a design decision and identical on every run. Two things follow that the generated lab could not give. First, each block is sized to a DISTRICT'S OWN GRAIN (blockGrainFor: residential wants ~88x72, downtown ~224x130, commercial ~136x92) \u2014 lot_lab's 220 m blocks are 48400 m2 against a residential maximum of 38016, so most of its faces were rejected as unreachable and the map came back nearly empty. Second, road.city_hubs zones the map by hand: a generated net leaves hubs behind for the zoner, an authored one had none, so every block came back residential and the whole city built one program. Non-uniform spacing is the point \u2014 a uniform grid gives one block size and therefore one building.",
+ "citysim": {
+  "buildLots": true,
+  "cars": 0,
+  "debugWidgets": false,
+  "detailDistance": 300,
+  "downtownRadius": 200,
+  "facadeDistance": 900,
+  "hubRadius": 320,
+  "lotSystem": true,
+  "midtownRadius": 400,
+  "pedestrians": 0,
+  "planOnly": false,
+  "plinth": 0.45,
+  "seed": 7,
+  "showPlan": false,
+  "sidewalk": 4.0,
+  "vehicles": "vehicles.lua",
+  "wander": false
+ },
+ "entities": [
+  {
+   "id": 2,
+   "name": "streets",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "road": {
+    "city_hubs": [
+     {
+      "kind": 0,
+      "x": 0.0,
+      "z": 0.0
+     },
+     {
+      "kind": 1,
+      "x": 180.0,
+      "z": 111.0
+     },
+     {
+      "kind": 2,
+      "x": -156.0,
+      "z": -101.0
+     }
+    ],
+    "color": [
+     0.09,
+     0.09,
+     0.1
+    ],
+    "corner_radius": 3.0,
+    "crosswalks": true,
+    "curb": 0.16,
+    "edge_classes": [
+     "local",
+     "local",
+     "local",
+     "arterial",
+     "arterial",
+     "arterial",
+     "arterial",
+     "arterial",
+     "arterial",
+     "local",
+     "local",
+     "local",
+     "local",
+     "local",
+     "local",
+     "arterial",
+     "arterial",
+     "arterial",
+     "arterial",
+     "arterial",
+     "arterial",
+     "local",
+     "local",
+     "local"
+    ],
+    "edges": [
+     [
+      0,
+      4,
+      12.0
+     ],
+     [
+      4,
+      8,
+      12.0
+     ],
+     [
+      8,
+      12,
+      12.0
+     ],
+     [
+      1,
+      5,
+      17.0
+     ],
+     [
+      5,
+      9,
+      17.0
+     ],
+     [
+      9,
+      13,
+      17.0
+     ],
+     [
+      2,
+      6,
+      17.0
+     ],
+     [
+      6,
+      10,
+      17.0
+     ],
+     [
+      10,
+      14,
+      17.0
+     ],
+     [
+      3,
+      7,
+      12.0
+     ],
+     [
+      7,
+      11,
+      12.0
+     ],
+     [
+      11,
+      15,
+      12.0
+     ],
+     [
+      0,
+      1,
+      12.0
+     ],
+     [
+      1,
+      2,
+      12.0
+     ],
+     [
+      2,
+      3,
+      12.0
+     ],
+     [
+      4,
+      5,
+      17.0
+     ],
+     [
+      5,
+      6,
+      17.0
+     ],
+     [
+      6,
+      7,
+      17.0
+     ],
+     [
+      8,
+      9,
+      17.0
+     ],
+     [
+      9,
+      10,
+      17.0
+     ],
+     [
+      10,
+      11,
+      17.0
+     ],
+     [
+      12,
+      13,
+      12.0
+     ],
+     [
+      13,
+      14,
+      12.0
+     ],
+     [
+      14,
+      15,
+      12.0
+     ]
+    ],
+    "lift": 0.08,
+    "markings": true,
+    "nodes": [
+     {
+      "x": -200.0,
+      "z": -137.0
+     },
+     {
+      "x": -200.0,
+      "z": -65.0
+     },
+     {
+      "x": -200.0,
+      "z": 65.0
+     },
+     {
+      "x": -200.0,
+      "z": 157.0
+     },
+     {
+      "x": -112.0,
+      "z": -137.0
+     },
+     {
+      "x": -112.0,
+      "z": -65.0
+     },
+     {
+      "x": -112.0,
+      "z": 65.0
+     },
+     {
+      "x": -112.0,
+      "z": 157.0
+     },
+     {
+      "x": 112.0,
+      "z": -137.0
+     },
+     {
+      "x": 112.0,
+      "z": -65.0
+     },
+     {
+      "x": 112.0,
+      "z": 65.0
+     },
+     {
+      "x": 112.0,
+      "z": 157.0
+     },
+     {
+      "x": 248.0,
+      "z": -137.0
+     },
+     {
+      "x": 248.0,
+      "z": -65.0
+     },
+     {
+      "x": 248.0,
+      "z": 65.0
+     },
+     {
+      "x": 248.0,
+      "z": 157.0
+     }
+    ],
+    "sidewalk": 3.5,
+    "width": 12.0
+   },
+   "shape": "road"
+  }
+ ],
+ "environment": {
+  "fog": {
+   "color": [
+    0.72,
+    0.79,
+    0.88
+   ],
+   "density": 0.0025,
+   "heightFalloff": 0.01
+  },
+  "skyColor": [
+   0.55,
+   0.68,
+   0.86
+  ]
+ },
+ "lighting": {
+  "ambientMultiplier": 0.6,
+  "exposure": 0.5,
+  "sun": {
+   "castsShadow": true,
+   "color": [
+    1.0,
+    0.96,
+    0.86
+   ],
+   "direction": [
+    0.42,
+    0.52,
+    -0.5
+   ],
+   "intensity": 8.0
+  }
+ },
+ "name": "Lot Grid",
+ "player": {
+  "collider": {
+   "halfHeight": 0.8,
+   "radius": 0.3,
+   "shape": "capsule"
+  },
+  "friction": 0.5,
+  "position": [
+   0,
+   2,
+   260
+  ]
+ },
+ "render": {
+  "maxFoliageInstances": 32768,
+  "maxInstances": 16384,
+  "maxShadowInstances": 49152
+ },
+ "terrain": {
+  "cdlod": {
+   "gridRes": 32,
+   "numLods": 6,
+   "worldHalf": 900
+  },
+  "erode": false,
+  "erodeDroplets": 120000,
+  "erodeRadius": 4,
+  "erodeRes": 800,
+  "erodeTalus": 1.0,
+  "erodeThermal": 14,
+  "heightScale": 6,
+  "material": {
+   "albedo": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "roughness": 1.0
+  },
+  "mountainAlongRange": true,
+  "mountainHeight": 0,
+  "mountainMaskHi": 0.4,
+  "mountainMaskLo": -0.1,
+  "mountainMaskScale": 0.001,
+  "mountainScale": 0.002,
+  "noiseScale": 0.0011,
+  "octaves": 6,
+  "rangeHeight": 0,
+  "rangeVariation": 0.7,
+  "rangeWidth": 300,
+  "resolution": 700,
+  "rockLine": 9999,
+  "seed": 23,
+  "size": 1400,
+  "snowLine": 9999,
+  "warp": 0.35
+ },
+ "version": 1
+}
