@@ -1,5 +1,7 @@
 #include "junction.h"
 
+#include "diag.h"
+
 #include <cstdio>
 
 namespace roadlab {
@@ -89,7 +91,14 @@ double stationAtRadius(const Road& r, bool atEnd, Vec2 center, double radius, do
         Vec2 p = r.spine.toPlan(s, 0);
         if (length(p - center) >= radius) break;
         double next = s + step;
-        if (std::fabs(next - s0) > limit) break;
+        if (std::fabs(next - s0) > limit) {
+            // The arm could not be pulled back far enough to clear the junction.
+            // This is the clamp that stopped a roundabout ring being eaten whole,
+            // so it firing is not automatically wrong — but it does mean the pad
+            // and the arm overlap more than the geometry wanted.
+            RL_FALLBACK("stationAtRadius hit the trim limit before clearing the junction");
+            break;
+        }
         if (next < r.begin() || next > r.end()) break;
         s = next;
     }
@@ -110,6 +119,63 @@ Vec2 lineIntersect(Vec2 p, Vec2 dp, Vec2 q, Vec2 dq, bool& ok) {
 }  // namespace
 
 namespace {
+
+bool polygonSelfIntersects(const std::vector<Vec2>& poly) {
+    const size_t n = poly.size();
+    if (n < 4) return false;
+    auto properlyCrosses = [](Vec2 p, Vec2 p2, Vec2 q, Vec2 q2) {
+        Vec2 r = p2 - p, s = q2 - q;
+        double d = cross(r, s);
+        if (std::fabs(d) < 1e-12) return false;   // parallel; touching is not crossing
+        double t = cross(q - p, s) / d;
+        double u = cross(q - p, r) / d;
+        return t > 1e-9 && t < 1 - 1e-9 && u > 1e-9 && u < 1 - 1e-9;
+    };
+    for (size_t i = 0; i < n; ++i) {
+        for (size_t k = i + 2; k < n; ++k) {
+            if (i == 0 && k == n - 1) continue;   // adjacent across the wrap
+            if (properlyCrosses(poly[i], poly[(i + 1) % n], poly[k], poly[(k + 1) % n]))
+                return true;
+        }
+    }
+    return false;
+}
+
+// Andrew's monotone chain, carrying each kept point's height with it so the pad
+// surface still meets its arms at their own elevations.
+void convexHullWithHeights(std::vector<Vec2>& poly, std::vector<double>& heights) {
+    const size_t n = poly.size();
+    if (n < 3 || heights.size() != n) return;
+    std::vector<size_t> order(n);
+    for (size_t i = 0; i < n; ++i) order[i] = i;
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return poly[a].x != poly[b].x ? poly[a].x < poly[b].x : poly[a].y < poly[b].y;
+    });
+    std::vector<size_t> hull(2 * n);
+    size_t k = 0;
+    for (size_t pass = 0; pass < 2; ++pass) {
+        size_t start = k;
+        for (size_t idx = 0; idx < n; ++idx) {
+            size_t i = pass == 0 ? order[idx] : order[n - 1 - idx];
+            while (k >= start + 2 &&
+                   cross(poly[hull[k - 1]] - poly[hull[k - 2]], poly[i] - poly[hull[k - 2]]) <= 0)
+                --k;
+            hull[k++] = i;
+        }
+        --k;   // the last point of each pass is the first of the next
+    }
+    if (k < 3) return;   // degenerate; leave the original alone
+    std::vector<Vec2> outPoly;
+    std::vector<double> outH;
+    outPoly.reserve(k);
+    outH.reserve(k);
+    for (size_t i = 0; i < k; ++i) {
+        outPoly.push_back(poly[hull[i]]);
+        outH.push_back(heights[hull[i]]);
+    }
+    poly.swap(outPoly);
+    heights.swap(outH);
+}
 
 // The pad polygon, the conflict table, the right-of-way ranking and the signal
 // phases are the same work whether a junction was resolved from scratch or
@@ -163,7 +229,25 @@ void buildJunctionPad(Network& net, Junction& j, const std::vector<ArmGeom>& geo
         // the junction. A shallow pair of arms can put the intersection hundreds
         // of metres away, which would drag the pad out into a spike.
         double reach = 2.5 * (geom[order[oi]].halfWidth + j.cornerRadius) + 8.0;
-        if (ok && length(c - j.center) < reach) {
+        bool nearEnough = ok && length(c - j.center) < reach;
+        // ...and it must stick OUT. Where the two arms are the halves of a street
+        // running straight through, their outward rays diverge and "where the
+        // edges meet" lands behind both of them, inside the pad. The distance
+        // test waves that through — the point is close, just on the wrong side —
+        // and the Bezier then dives inward across the far edge, leaving a
+        // self-intersecting outline that no ear-clipper can trianglulate.
+        //
+        // Comparing against the junction centre rather than against a winding
+        // convention keeps this true whichever way the boundary happens to run.
+        Vec2 chord = nxt.first - cur.second;
+        double sideOfC = cross(chord, c - cur.second);
+        double sideOfCentre = cross(chord, j.center - cur.second);
+        bool bulgesOutward = sideOfC * sideOfCentre < 0;
+        if (!nearEnough)
+            RL_FALLBACK("junction pad kerb return skipped (edges meet too far away)");
+        else if (!bulgesOutward)
+            RL_FALLBACK("junction pad kerb return skipped (corner would fold into the pad)");
+        if (nearEnough && bulgesOutward) {
             // Quadratic Bezier through the edge intersection: a real kerb return,
             // with its height ramping between the two arms it joins.
             for (int k = 1; k < 5; ++k) {
@@ -176,6 +260,22 @@ void buildJunctionPad(Network& net, Junction& j, const std::vector<ArmGeom>& geo
         }
     }
 
+    // The outline has to be a simple polygon. Everything downstream assumes it:
+    // ear clipping needs one, mean value coordinates are only defined on one, and
+    // the terrain conform tests point-in-polygon against it. Walking the arms in
+    // bearing order gives one for any ordinary junction — but not for a
+    // roundabout entry, where two arms are 19 m-wide slices of the SAME
+    // circulating carriageway taken 5 m apart. Their corner quads overlap almost
+    // exactly, and the outline zig-zags between them.
+    //
+    // Rather than special-case that shape, repair whatever comes out: the convex
+    // hull of the same points is always simple, always contains every arm, and
+    // for a junction pad — convex in all but pathological cases — is within a
+    // metre or two of the intended outline. Generous beats self-crossing.
+    if (polygonSelfIntersects(j.boundary)) {
+        RL_FALLBACK("junction pad outline self-intersected -> convex hull");
+        convexHullWithHeights(j.boundary, j.boundaryHeight);
+    }
 }
 
 void buildJunctionConflicts(Network& net, Junction& j) {
@@ -369,6 +469,20 @@ void buildJunction(Network& net, Junction& j) {
     for (const JunctionArm& a : j.arms) elevAcc += net.road(a.road).surfacePoint(a.sContact, 0).y;
     j.elevation = elevAcc / double(j.arms.size());
 
+    // A roundabout entry is not an open intersection and must not be trimmed like
+    // one. The circulating carriageway runs THROUGH, and an approach meets it at
+    // its outer edge — so the setback an approach needs is the ring's half-width,
+    // not a multiple of it. Applying the general formula pulled entries 45 m back
+    // from a ring they were supposed to touch, which left the pad reaching across
+    // the gap with a self-intersecting outline.
+    bool hasRing = false;
+    double ringHalfWidth = 0;
+    for (size_t i = 0; i < j.arms.size(); ++i) {
+        if (net.road(j.arms[i].road).kind != RoadKind::RoundaboutRing) continue;
+        hasRing = true;
+        ringHalfWidth = std::max(ringHalfWidth, geom[i].halfWidth);
+    }
+
     // 2. Trim. Each arm must be pulled back far enough that its edges clear
     // every other arm's edges; the controlling case is the most acute pair.
     for (size_t i = 0; i < j.arms.size(); ++i) {
@@ -383,10 +497,14 @@ void buildJunction(Network& net, Junction& j) {
             // running the acute-angle formula on it demands an absurd setback
             // (sin -> 0) that eats hundreds of metres of road.
             if (d > 120.0 * kDeg2Rad) continue;
+            if (std::sin(d) < 0.20) RL_FALLBACK("junction trim angle clamped (arms nearly parallel)");
             double sn = std::max(0.20, std::sin(d));
             need = std::max(need, geom[k].halfWidth / sn);
         }
+        if (need > 3.0 * widest + 6.0) RL_FALLBACK("junction trim setback capped");
         need = std::min(need, 3.0 * widest + 6.0);
+        if (hasRing && net.road(j.arms[i].road).kind != RoadKind::RoundaboutRing)
+            need = std::min(need, ringHalfWidth + 1.0);
         need += j.cornerRadius;
         const Road& r = net.road(j.arms[i].road);
         double limit = std::max(2.0, r.activeLength() * 0.45);

@@ -1,5 +1,7 @@
 #include "spine.h"
 
+#include "diag.h"
+
 #include <cassert>
 
 namespace roadlab {
@@ -305,7 +307,11 @@ Vec2 Spine::toPlan(double s, double t) const {
 }
 
 bool Spine::toST(Vec2 planPoint, double& s, double& t, double sTolerance) const {
-    if (samples_.empty()) return false;
+    RL_CALLED("Spine::toST");
+    if (samples_.empty()) {
+        RL_FALLBACK("Spine::toST no sample cache (spine not finalized)");
+        return false;
+    }
     // Coarse: nearest cached sample. Fine: Newton on d/ds |P - C(s)|^2 = 0, whose
     // derivative includes the curvature term so it converges inside tight arcs
     // too.
@@ -362,13 +368,27 @@ bool Spine::toST(Vec2 planPoint, double& s, double& t, double sTolerance) const 
     s = sc;
     t = dot(rel, perpLeft(tan)) - offset_.eval(sc);
 
+    // Two distinct reasons to refuse, and they must be counted apart. A point
+    // beyond either tip of the spine has no foot of perpendicular at all; the
+    // clamp above puts `sc` at the tip, so the residual is large and the residual
+    // test would catch it too — but as a MISS, not as a failure. Checking the
+    // range first on the unclamped station keeps the residual counter meaning
+    // only "Newton did not converge", which is the one that should be ~0% and is
+    // therefore the one worth watching.
+    if (!(cur >= -sTolerance && cur <= length_ + sTolerance)) {
+        RL_FALLBACK("Spine::toST miss (point is beyond the end of the spine)");
+        return false;
+    }
     // A genuine foot of perpendicular has NO tangential residual. Reporting `t`
     // without checking that is how a point fifty metres off the end of an arc
     // came back as "four metres from the centreline" — which is what punched
     // wedge-shaped holes in the terrain around every junction.
     double residual = dot(rel, tan);
-    if (std::fabs(residual) > 0.25) return false;
-    return cur >= -sTolerance && cur <= length_ + sTolerance;
+    if (std::fabs(residual) > 0.25) {
+        RL_FALLBACK("Spine::toST rejected (Newton did not converge)");
+        return false;
+    }
+    return true;
 }
 
 void Spine::planBounds(Vec2& lo, Vec2& hi) const {
@@ -582,6 +602,7 @@ Spine spineConnector(Vec2 p0, double hdg0, Vec2 p1, double hdg1) {
     // obviously-wrong-looking answer, which is what you want a bad input to
     // produce — not a silent four-kilometre arc.
     if (sp.length() > 5.0 * chord + 5.0) {
+        RL_FALLBACK("spineConnector degenerate biarc -> straight line");
         Spine flat;
         flat.setStart(p0, headingOf(normalize(p1 - p0)));
         flat.addLine(chord);

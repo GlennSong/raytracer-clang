@@ -8,6 +8,7 @@
 // hold, the "one source of truth" story is true; if they do not, it is a slogan.
 
 #include "builders.h"
+#include "diag.h"
 #include "junction.h"
 #include "network.h"
 #include "odr.h"
@@ -1654,6 +1655,192 @@ void testImportedNetworkDrives() {
     }
 }
 
+// --- the fallback census ----------------------------------------------------
+
+namespace {
+
+bool polygonSelfIntersects(const std::vector<Vec2>& poly) {
+    const size_t n = poly.size();
+    auto proper = [](Vec2 p, Vec2 p2, Vec2 q, Vec2 q2) {
+        Vec2 r = p2 - p, s = q2 - q;
+        double d = cross(r, s);
+        if (std::fabs(d) < 1e-12) return false;
+        double t = cross(q - p, s) / d, u = cross(q - p, r) / d;
+        return t > 1e-9 && t < 1 - 1e-9 && u > 1e-9 && u < 1 - 1e-9;
+    };
+    for (size_t i = 0; i < n; ++i)
+        for (size_t k = i + 2; k < n; ++k) {
+            if (i == 0 && k == n - 1) continue;
+            if (proper(poly[i], poly[(i + 1) % n], poly[k], poly[(k + 1) % n])) return true;
+        }
+    return false;
+}
+
+}  // namespace
+
+void testFallbackCensusPlumbing() {
+    group("fallback census");
+    resetFallbackCensus();
+    check(totalFallbacks() == 0, "the census starts empty");
+    RL_CALLED("test-routine");
+    RL_FALLBACK("test-routine gave up");
+    RL_FALLBACK("test-routine gave up");
+    check(fallbackCount("test-routine gave up") == 2, "a fallback counts each time it fires");
+    check(callCount("test-routine") == 1, "and calls are counted separately");
+    resetFallbackCensus();
+    check(fallbackCount("test-routine gave up") == 0, "reset clears the counts");
+    check(!fallbackCensus().empty(), "but keeps the sites registered, so a zero is reportable");
+}
+
+void testJunctionArmsMustMeet() {
+    group("junction arms meet");
+    // The lint that would have caught two shipped bugs: a junction whose arms
+    // stand far apart still trims, still builds a pad, and still looks like
+    // asphalt — it just spans a gap that is not a junction.
+    for (const std::string& name : demoNames()) {
+        Scene sc;
+        if (!buildDemo(name, sc)) continue;
+        finalizeScene(sc, false, false);
+        for (const Junction& j : sc.net.junctions()) {
+            double widest = 0;
+            for (const JunctionArm& a : j.arms)
+                widest = std::max(widest,
+                                  std::max(std::fabs(a.leftExtent), std::fabs(a.rightExtent)));
+            for (const JunctionArm& a : j.arms) {
+                check(length(a.contact - j.center) <= 4.0 * widest + 2.0 * j.cornerRadius + 20.0,
+                      (name + ": every junction arm reaches its junction").c_str());
+            }
+        }
+    }
+
+    // And the lint reports one that does not. Two roads that never come near
+    // each other, declared as a junction.
+    Network net;
+    RoadDesc a;
+    a.name = "west";
+    a.preset = "street2";
+    a.points = {{-400, 0}, {-200, 0}};
+    int ra = buildRoad(net, a);
+    RoadDesc b;
+    b.name = "far-north";
+    b.preset = "street2";
+    b.points = {{300, -200}, {300, 200}};
+    int rb = buildRoad(net, b);
+    buildIntersection(net, "impossible", {{ra, true}, {rb, false}},
+                      JunctionControl::Uncontrolled, 6.0);
+    net.build();
+    bool reported = false;
+    for (const std::string& msg : net.validate())
+        if (msg.find("do not meet") != std::string::npos) reported = true;
+    check(reported, "the lint reports a junction whose arms do not meet");
+}
+
+void testJunctionPadsAreSimplePolygons() {
+    group("junction pads");
+    // A pad outline that crosses itself cannot be triangulated, falls through to
+    // a centroid fan, and covers ground that is not pavement. The usual cause is
+    // a kerb return built between two arms that have no corner between them —
+    // the two halves of a street running straight through.
+    auto scan = [&](const Network& net, const std::string& tag) {
+        for (const Junction& j : net.junctions()) {
+            if (j.boundary.size() < 3) continue;
+            check(!polygonSelfIntersects(j.boundary),
+                  (tag + ": junction '" + j.name + "' has a simple pad outline").c_str());
+            resetFallbackCensus();
+            std::vector<std::array<uint32_t, 3>> tris = triangulatePolygon(j.boundary);
+            check(fallbackCount("triangulatePolygon no ear found -> centroid fan") == 0,
+                  (tag + ": junction '" + j.name + "' ear-clips without falling back").c_str());
+            check(!tris.empty(), (tag + ": junction '" + j.name + "' produced triangles").c_str());
+        }
+    };
+    for (const std::string& name : demoNames()) {
+        Scene sc;
+        if (!buildDemo(name, sc)) continue;
+        finalizeScene(sc, false, false);
+        scan(sc.net, name);
+    }
+    for (uint32_t seed : {1u, 2u, 3u, 4u, 5u}) {
+        Scene sc;
+        CityParams cp;
+        cp.seed = seed;
+        generateCity(sc, cp);
+        finalizeScene(sc, false, false);
+        scan(sc.net, "city-" + std::to_string(seed));
+    }
+    resetFallbackCensus();
+}
+
+void testInverseMapResolvesRealQueries() {
+    group("inverse map converges");
+    // `Spine::toST` spent the life of this prototype rejecting EVERY query,
+    // because a sign error made its Newton iteration diverge and a residual guard
+    // turned the diverged result into a refusal. Nothing failed loudly: terrain
+    // silently stopped conforming and Network::sample silently found nothing.
+    // The guard against a repeat is to ask it the question it must be able to
+    // answer — a point that is genuinely on a road — and count the refusals.
+    resetFallbackCensus();
+    long asked = 0;
+    for (const std::string& name : demoNames()) {
+        Scene sc;
+        if (!buildDemo(name, sc)) continue;
+        finalizeScene(sc, false, false);
+        for (const Road& r : sc.net.roads()) {
+            double len = r.activeLength();
+            if (len < 5.0) continue;
+            for (int k = 1; k < 10; ++k) {
+                double s = r.begin() + len * double(k) / 10.0;
+                for (double lat : {-1.5, 0.0, 2.0}) {
+                    double gs = 0, gt = 0;
+                    ++asked;
+                    bool got = r.spine.toST(r.spine.toPlan(s, lat), gs, gt);
+                    check(got, (name + ": a point on the road resolves to (s,t)").c_str());
+                    if (!got) continue;
+                    checkNear(gs, s, 0.05, "and recovers the station");
+                    checkNear(gt, lat, 0.05, "and recovers the lateral offset");
+                }
+            }
+        }
+    }
+    check(asked > 500, "the inverse map was asked a meaningful number of questions");
+    long diverged = fallbackCount("Spine::toST rejected (Newton did not converge)");
+    check(diverged == 0, "no on-road query fails to converge");
+    resetFallbackCensus();
+}
+
+void testMostDriversGetARoute() {
+    group("routing coverage");
+    // Routing that silently does not happen is worse than routing that fails
+    // loudly: the vehicles still drive, so nothing looks wrong. On a connected
+    // grid the large majority of drivers must actually get a plan.
+    Scene sc;
+    CityParams cp;
+    cp.seed = 4;
+    generateCity(sc, cp);
+    finalizeScene(sc, false, false);
+    SimParams sp;
+    sp.seed = 9;
+    Simulation sim(sc.net, sp);
+    sim.seedVehicles(150);
+    int routed = 0, total = 0;
+    for (const Vehicle& v : sim.vehicles()) {
+        if (!v.active) continue;
+        ++total;
+        if (!v.route.empty()) ++routed;
+    }
+    check(total > 50, "the city seeded a useful number of vehicles");
+    check(routed >= int(total * 0.85),
+          "at least 85% of drivers on a connected grid get a route");
+
+    // And a network with nowhere to go says so rather than pretending.
+    Scene lone;
+    buildDemo("tiers", lone);
+    finalizeScene(lone, false, false);
+    Simulation sim2(lone.net, sp);
+    sim2.seedVehicles(20);
+    for (const Vehicle& v : sim2.vehicles())
+        check(v.route.empty(), "isolated roads produce no route, honestly");
+}
+
 // --- end to end -----------------------------------------------------------
 
 void testAllDemosBuild() {
@@ -1747,6 +1934,11 @@ int main() {
     testOpenDriveRoundTrip();
     testImportedJunctionsAreAdopted();
     testImportedNetworkDrives();
+    testFallbackCensusPlumbing();
+    testJunctionArmsMustMeet();
+    testJunctionPadsAreSimplePolygons();
+    testInverseMapResolvesRealQueries();
+    testMostDriversGetARoute();
     testAllDemosBuild();
     testGeneratedCity();
 

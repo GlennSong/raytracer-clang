@@ -1,5 +1,7 @@
 #include "network.h"
 
+#include "diag.h"
+
 #include "junction.h"
 #include <cstdio>
 #include <map>
@@ -101,7 +103,14 @@ std::vector<std::pair<int, int>> pairLanesAcross(const Road& a, bool aAtEnd, con
     double sb = bAtStart ? b.begin() : b.end();
     EndLanes ea = endLanes(a, aAtEnd);
     EndLanes eb = endLanes(b, !bAtStart);
-    if (ea.incoming.empty() || eb.outgoing.empty()) return pairs;
+    RL_CALLED("pairLanesAcross");
+    if (ea.incoming.empty() || eb.outgoing.empty()) {
+        // Not a failure: linkRoadToRoad pairs BOTH directions of every link, and
+        // a one-way road — every connector, every ramp — has no lanes to offer in
+        // one of them. Counted so the number is visible rather than assumed.
+        RL_FALLBACK("pairLanesAcross miss (one side is one-way against this direction)");
+        return pairs;
+    }
 
     // Compare WORLD positions rather than t values: the two roads have different
     // reference lines and possibly opposite senses, and matching in the plane
@@ -121,7 +130,12 @@ std::vector<std::pair<int, int>> pairLanesAcross(const Road& a, bool aAtEnd, con
                 bestIdx = int(k);
             }
         }
-        if (bestIdx < 0) continue;   // this lane ends here
+        if (bestIdx < 0) {
+            // Either a genuine lane drop, or two carriageways that do not line up
+            // as well as the author thought. The count separates those.
+            RL_FALLBACK("pairLanesAcross lane found no partner within tolerance");
+            continue;
+        }
         used[size_t(bestIdx)] = 1;
         pairs.push_back({la, eb.outgoing[size_t(bestIdx)]});
     }
@@ -719,11 +733,39 @@ std::vector<std::string> Network::validate() const {
                           j.id, j.name.c_str());
             out.push_back(buf);
         }
+
+        // The arms of a junction have to actually meet. Declaring one whose arms
+        // stand a hundred metres apart is an authoring slip — a mistyped split
+        // station, a road moved without moving the junction — and it is nearly
+        // invisible downstream: trimming still runs, a pad is still built, and
+        // the result is a plausible-looking asphalt sheet spanning the gap with a
+        // self-intersecting outline. Two demos shipped with exactly this bug.
+        //
+        // The budget is generous on purpose. A wide skewed junction legitimately
+        // puts its contacts well apart, so this only catches arms that are not
+        // plausibly the same place.
+        double widest = 0;
+        for (const JunctionArm& a : j.arms)
+            widest = std::max(widest, std::max(std::fabs(a.leftExtent), std::fabs(a.rightExtent)));
+        double budget = 4.0 * widest + 2.0 * j.cornerRadius + 20.0;
+        for (const JunctionArm& a : j.arms) {
+            double d = length(a.contact - j.center);
+            if (d <= budget) continue;
+            std::snprintf(buf, sizeof buf,
+                          "junction %d (%s): arm on road %d (%s) contacts %.0f m from the "
+                          "junction centre, past the %.0f m the geometry allows — the arms do "
+                          "not meet",
+                          j.id, j.name.c_str(), a.road, roads_[size_t(a.road)].name.c_str(), d,
+                          budget);
+            out.push_back(buf);
+            break;   // one report per junction is enough to find it
+        }
     }
     return out;
 }
 
 bool Network::sample(Vec2 planPoint, RoadHit& hit, double maxDistance) const {
+    RL_CALLED("Network::sample");
     bool found = false;
     double best = 1e300;
     // The index narrows this to the handful of roads that could possibly matter;
@@ -766,6 +808,7 @@ bool Network::sample(Vec2 planPoint, RoadHit& hit, double maxDistance) const {
             found = true;
         }
     }
+    if (!found) RL_FALLBACK("Network::sample miss (no road under the point)");
     return found;
 }
 

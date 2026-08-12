@@ -426,6 +426,7 @@ ROADLAB_DIR = proto/roadlab
 ROADLAB_LIB_SRCS = \
 	$(ROADLAB_DIR)/rl_math.cpp \
 	$(ROADLAB_DIR)/rl_xml.cpp \
+	$(ROADLAB_DIR)/diag.cpp \
 	$(ROADLAB_DIR)/spine.cpp \
 	$(ROADLAB_DIR)/profile.cpp \
 	$(ROADLAB_DIR)/network.cpp \

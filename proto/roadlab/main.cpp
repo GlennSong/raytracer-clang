@@ -10,6 +10,7 @@
 //   roadlab --shots out/            (renders the whole demo set)
 //   roadlab --import town.xodr --view top --report
 
+#include "diag.h"
 #include "odr.h"
 #include "scene.h"
 #include "sim.h"
@@ -39,6 +40,7 @@ struct Options {
     int debugMode = 0;
     bool props = true, terrain = true, markings = true, decals = true;
     bool report = false, lint = false, list = false, quiet = false;
+    bool census = false;
     uint32_t seed = 7;
     int threads = 0;
     double camX = 0, camY = 0, camZ = 0, camDist = 0;
@@ -87,6 +89,7 @@ void usage() {
         "  --dump <file.json>  write a summary of the built network\n"
         "  --xodr <file.xodr>  export the network as OpenDRIVE\n"
         "  --import <f.xodr>   load an OpenDRIVE file as the scene\n"
+        "  --fallbacks         census every silent-substitution path\n"
         "  --list              list presets and demos\n");
 }
 
@@ -154,6 +157,88 @@ void printReport(const Scene& sc, const Simulation* sim) {
                     st.offRoute, st.pedestrians, st.pedsCrossing, st.pedsWaiting,
                     st.crossingsMade, st.meanPedWait, st.parkedCars);
     }
+}
+
+// Exercise everything the system can do, then print how often each routine had
+// to substitute a lesser answer. A rate of 0% means the guard is either dead or
+// genuinely never needed; 100% means the routine does not work and nobody
+// noticed, which is exactly what `Spine::toST` looked like for months.
+void runFallbackCensus() {
+    resetFallbackCensus();
+
+    for (const std::string& name : demoNames()) {
+        Scene sc;
+        if (!buildDemo(name, sc)) continue;
+        finalizeScene(sc, true, true);   // terrain and props both hammer toST
+        SimParams sp;
+        sp.seed = 3;
+        Simulation sim(sc.net, sp);
+        sim.seedParking(0.5);
+        sim.seedVehicles(120);
+        sim.seedPedestrians(40);
+        sim.run(60.0);
+
+        // The inverse map, asked the one question with a known right answer.
+        for (const Road& r : sc.net.roads()) {
+            double len = r.activeLength();
+            if (len < 5.0) continue;
+            for (int k = 1; k < 12; ++k) {
+                double s = r.begin() + len * double(k) / 12.0;
+                double gs = 0, gt = 0;
+                r.spine.toST(r.spine.toPlan(s, 1.2), gs, gt);
+            }
+        }
+
+        OdrOptions oo;
+        oo.name = name;
+        std::string doc = openDriveString(sc.net, oo);
+        Network back;
+        std::string err;
+        if (openDriveFromString(doc, back, err)) back.build();
+    }
+
+    for (uint32_t seed : {1u, 2u, 3u, 4u, 5u}) {
+        Scene sc;
+        CityParams cp;
+        cp.seed = seed;
+        generateCity(sc, cp);
+        finalizeScene(sc, true, true);
+        SimParams sp;
+        sp.seed = seed;
+        Simulation sim(sc.net, sp);
+        sim.seedVehicles(200);
+        sim.seedPedestrians(80);
+        sim.run(45.0);
+    }
+
+    std::vector<FallbackCount> fb = fallbackCensus();
+    std::vector<FallbackCount> calls = callCensus();
+    auto callsFor = [&](const std::string& site) -> long {
+        // A fallback is named "<Routine> <what went wrong>"; the call counter is
+        // registered under the routine alone.
+        for (const FallbackCount& c : calls)
+            if (site.rfind(c.site, 0) == 0) return c.count;
+        return -1;
+    };
+
+    std::printf("\n=== fallback census ===\n");
+    std::printf("%-62s %10s %10s %7s\n", "site", "fired", "of calls", "rate");
+    long total = 0;
+    for (const FallbackCount& f : fb) {
+        long n = callsFor(f.site);
+        char rate[16] = "     -";
+        if (n > 0) std::snprintf(rate, sizeof rate, "%6.2f%%", 100.0 * double(f.count) / double(n));
+        std::printf("%-62s %10ld %10s %7s\n", f.site.c_str(), f.count,
+                    n >= 0 ? std::to_string(n).c_str() : "-", rate);
+        total += f.count;
+    }
+    std::printf("%-62s %10ld\n", "TOTAL", total);
+    std::printf(
+        "\nOnly sites that fired at least once appear: a counter registers itself the\n"
+        "first time it is hit, so a guard that never fires is absent rather than zero.\n"
+        "Tests assert the must-stay-zero ones by name, where an absent site reads as 0.\n"
+        "\nA 100%% rate is a routine that does not work and nobody noticed. That is not\n"
+        "hypothetical: Spine::toST sat at 100%% for the life of this prototype.\n");
 }
 
 Camera makeCamera(const Scene& sc, const Options& opt) {
@@ -261,6 +346,7 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--report") == 0) { opt.report = true; continue; }
         if (std::strcmp(argv[i], "--lint") == 0) { opt.lint = true; continue; }
         if (std::strcmp(argv[i], "--list") == 0) { opt.list = true; continue; }
+        if (std::strcmp(argv[i], "--fallbacks") == 0) { opt.census = true; continue; }
         if (std::strcmp(argv[i], "--quiet") == 0) { opt.quiet = true; continue; }
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             usage();
@@ -379,6 +465,11 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "roadlab: %s\n", err.c_str());
         }
     };
+
+    if (opt.census) {
+        runFallbackCensus();
+        return 0;
+    }
 
     if (!opt.shotsDir.empty()) {
         for (const std::string& demo : demoNames()) {

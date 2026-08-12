@@ -12,7 +12,7 @@ window, so it builds and runs anywhere `make` does.
 
 ```bash
 make roadlab                      # build ./roadlab
-make roadlab-test                 # 3747 assertions, no framework
+make roadlab-test                 # 22694 assertions, no framework
 make roadlab-shots                # render every demo to out_roadlab/
 
 ./roadlab --demo showcase --view persp --out shot.png
@@ -23,6 +23,7 @@ make roadlab-shots                # render every demo to out_roadlab/
 ./roadlab --demo interchange --debug strips     # false-colour the cross-section
 ./roadlab --demo interchange --xodr out.xodr    # export OpenDRIVE
 ./roadlab --import out.xodr --view top --report # ...and read it back
+./roadlab --fallbacks                           # census every quiet substitution
 ```
 
 ---
@@ -396,6 +397,95 @@ The urban demo's terrain went from 6.5 s to 1.2 s and the whole test suite from
 the inverse map stopped doing eight wasted Newton iterations per query. The route-reachability query is cached on a 0.4 s timer per
 vehicle — a driver does not re-ask the graph ten times a second either.
 
+## The fallback census
+
+`--fallbacks` runs every demo and five generated cities with terrain, props,
+traffic and a full OpenDRIVE round trip, then prints how often each routine had
+to substitute a lesser answer — next to how many times it was called.
+
+The reason to build this is the `toST` bug above. It was invisible for the life
+of the prototype not because it was subtle but because **a fallback firing looks
+exactly like a fallback not being needed**. The routine returned "no answer" on
+100% of queries; every caller took its documented fallback path; nothing failed.
+A counter would have shown it on day one.
+
+So every place the system quietly settles for less now increments something:
+
+```
+site                                                        fired   of calls    rate
+Spine::toST miss (point is beyond the end of the spine)   1895747    4696770  40.36%
+Network::sample miss (no road under the point)             958482    1073449  89.29%
+Spine::toST rejected (Newton did not converge)                2431    4696770   0.05%
+planRoute nothing past the floor -> shortest available          652       4556  14.31%
+planRoute no reachable destination at all                      1321       4556  28.99%
+pairLanesAcross miss (one-way against this direction)           349        771  45.27%
+pairLanesAcross lane found no partner within tolerance          112        771  14.53%
+junction pad kerb return skipped (would fold into the pad)      510          -       -
+stationAtRadius hit the trim limit                               48          -       -
+junction pad outline self-intersected -> convex hull              8          -       -
+```
+
+Reading it is the whole point, and most of the work was making the numbers mean
+something. Two counters were lying at first: the residual guard in `toST` was
+absorbing every "point is past the end of the road" query, so neither the
+convergence number nor the miss number said what its name claimed. Checking the
+station range before the residual splits them, and the convergence rate drops to
+0.05% — all of which turn out to be points near the centre of curvature of an
+8.6 m kerb-return arc, where the projection is genuinely ambiguous. Likewise
+`pairLanesAcross` looked alarming at 45% until it was clear that `linkRoadToRoad`
+pairs *both* directions of every link and every connector is one-way: a correct
+negative, now named as a miss rather than a fallback.
+
+### What it found
+
+**A demo whose junction arms stood 120 m apart.** `showcase` split high-street at
+a hand-typed `s = 300`, which lands at x = -120, while the road it crosses is at
+x = 5. The junction still trimmed, still built a pad, still rendered as asphalt —
+a 365 m² sheet spanning the gap, with an outline that doubled back on itself and
+fell through to a centroid fan. The demo had shipped like that. The split station
+is now *projected* from the crossing point, which cannot drift when either road
+is re-authored, and `validate()` grew the rule that catches the general case: an
+arm whose contact is further from the junction centre than the geometry can
+account for means the arms do not meet.
+
+**Kerb returns folding into the pad.** Between the two halves of a street running
+straight through a junction there is no corner, but the construction still asked
+where the two arms' outward edges intersect — and for diverging rays that lands
+*behind* both of them, inside the pad. The distance test waved it through (the
+point is close, just on the wrong side) and the Bézier then dived inward across
+the far edge. Three junctions across the city seeds had self-intersecting
+outlines because of it. A kerb return now also has to bulge away from the
+junction centre.
+
+**Roundabout entries trimmed 45 m short of the ring.** The general setback
+formula is driven by the widest arm, and a circulating carriageway is wide, so an
+approach got pulled back as if it were meeting a large open intersection. The
+ring runs *through* a roundabout and an approach meets it at its outer edge, so
+that setback is now the ring's half-width.
+
+**Routing silently off for 38% of traffic.** `planRoute` requires a destination
+at least 45% of the furthest reachable travel time away; when nothing qualified
+it returned no route at all, and the vehicle drove unrouted forever. Nobody
+notices, because unrouted vehicles still drive. Falling back to the furthest
+*available* destination instead of to nothing took the miss rate on a connected
+grid from 21% to 9%. What remains is honest — lanes that genuinely run off the
+edge of the map, and the `tiers` demo, which has no junctions and therefore
+nowhere to go.
+
+The pad outline is now guaranteed simple by construction: if one still manages to
+cross itself, the convex hull of the same points replaces it (carrying the
+per-vertex heights), because everything downstream — ear clipping, mean value
+coordinates, the terrain point-in-polygon test — is only defined on a simple
+polygon. That fires 8 times across the whole corpus and the centroid fan is now
+dead code.
+
+### The tool's own blind spot
+
+A counter registers itself the first time it is hit, so a guard that never fires
+is *absent* from the table rather than showing a zero — which is the one reading
+the census cannot give you directly. Tests close that: they assert the
+must-stay-zero sites by name, where an unregistered site correctly reads as 0.
+
 ## Design lint
 
 `--lint` runs the checks that make authoring safe (`Network::validate`):
@@ -419,6 +509,7 @@ Every demo and every generated city seed passes it clean; the tests assert that.
 ```
 rl_math.h/.cpp     Vec2/Vec3, Poly3, noise, Gauss-Legendre. No engine deps.
 rl_xml.h/.cpp      a minimal XML reader, sized for .xodr and nothing more.
+diag.h/.cpp        the fallback census: counters for every quiet substitution.
 spine.h/.cpp       line/arc/clothoid chains, elevation, superelevation,
                    (s,t,h) -> world and the inverse.
 profile.h/.cpp     strips, lane sections, presets, the transition solver.
@@ -434,7 +525,7 @@ sim.h/.cpp         IDM traffic, lane changes, junction arbitration, pedestrians.
 odr.h/.cpp         OpenDRIVE export (with the road plan) and import.
 scene.h/.cpp       JSON authoring, the demo set, the city generator.
 main.cpp           the CLI.
-tests.cpp          3747 assertions, invariant-focused.
+tests.cpp          22694 assertions, invariant-focused.
 ```
 
 ## Known gaps
@@ -451,9 +542,10 @@ Honest list of what a prototype this size does not do yet.
   lamps are still props, not `<objects>`.
 - **Hatching and chevrons have no OpenDRIVE equivalent** and export as `none`.
   A faithful export would emit them as `<object>` surfaces.
-- **Very acute or self-intersecting pad outlines** fall back to a centroid fan.
-  Ear clipping handles ordinary concave pads, but a pathological boundary from a
-  near-parallel pair of arms is covered rather than solved.
+- **A self-intersecting pad outline is repaired with a convex hull**, not solved.
+  It fires 8 times across every demo and city seed — all roundabout entries,
+  where two arms are wide slices of the same circulating carriageway — and the
+  hull is within a metre or two of the intended shape, but it is a repair.
 - **Strip heights do not blend through a transition.** A cross-section change
   that also changes a kerb height steps rather than ramps.
 - **No LOD, no tiling, no streaming.** The shader's distance-fade is the only LOD

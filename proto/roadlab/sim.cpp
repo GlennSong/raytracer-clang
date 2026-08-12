@@ -1,5 +1,7 @@
 #include "sim.h"
 
+#include "diag.h"
+
 #include <algorithm>
 #include <queue>
 
@@ -426,7 +428,11 @@ bool Simulation::blockedByJunction(const Vehicle& v, double& distance) const {
 std::vector<int> Simulation::planRoute(int fromNode) {
     const std::vector<LaneNode>& nodes = net_.lanes().nodes;
     std::vector<int> path;
-    if (fromNode < 0 || size_t(fromNode) >= nodes.size()) return path;
+    RL_CALLED("planRoute");
+    if (fromNode < 0 || size_t(fromNode) >= nodes.size()) {
+        RL_FALLBACK("planRoute called with no start node");
+        return path;
+    }
 
     // Dijkstra by travel TIME, not distance: a driver routing by distance would
     // happily take a residential street over the parallel arterial.
@@ -459,15 +465,45 @@ std::vector<int> Simulation::planRoute(int fromNode) {
 
     // Pick a destination among the genuinely-far reachable lanes, so trips are
     // long enough to require real lane planning.
+    // A destination has to be somewhere a trip can legitimately end, and far
+    // enough away that the trip needs planning.
+    auto usableDestination = [&](size_t i) {
+        if (dist[i] > 1e299) return false;
+        if (nodes[i].junctionId >= 0) return false;   // don't end inside a junction
+        return nodes[i].length >= 15.0;
+    };
+
     std::vector<int> candidates;
     double floorTime = std::max(15.0, furthest * 0.45);
     for (size_t i = 0; i < nodes.size(); ++i) {
-        if (dist[i] > 1e299 || dist[i] < floorTime) continue;
-        if (nodes[i].junctionId >= 0) continue;   // don't end inside a junction
-        if (nodes[i].length < 15.0) continue;
+        if (!usableDestination(i) || dist[i] < floorTime) continue;
         candidates.push_back(int(i));
     }
-    if (candidates.empty()) return path;
+    if (candidates.empty()) {
+        // Nothing far enough. That used to mean no route at all, which quietly
+        // switched routing OFF for 38% of all traffic: a vehicle starting on a
+        // lane that runs off the edge of the map, or into a short cul-de-sac, has
+        // nowhere 45% of the way to "furthest" because furthest is itself tiny.
+        // Those drivers still have somewhere to go — just not far — and a short
+        // route is a much better model of them than none.
+        double best = -1;
+        int bestNode = -1;
+        for (size_t i = 0; i < nodes.size(); ++i) {
+            if (!usableDestination(i)) continue;
+            if (dist[i] > best) {
+                best = dist[i];
+                bestNode = int(i);
+            }
+        }
+        if (bestNode < 0 || bestNode == fromNode) {
+            // Genuinely nowhere to go: an isolated road with no successors, which
+            // is what the `tiers` demo is by construction.
+            RL_FALLBACK("planRoute no reachable destination at all -> vehicle drives unrouted");
+            return path;
+        }
+        RL_FALLBACK("planRoute nothing past the distance floor -> shortest available trip");
+        candidates.push_back(bestNode);
+    }
     int dest = candidates[size_t(rng_.rangeI(0, int(candidates.size()) - 1))];
     for (int n = dest; n >= 0; n = prev[size_t(n)]) path.push_back(n);
     std::reverse(path.begin(), path.end());
@@ -726,6 +762,7 @@ void Simulation::respawn(Vehicle& v) {
         }
     }
     if (lane < 0) {
+        RL_FALLBACK("respawn found no empty start lane -> vehicle retired");
         v.active = false;
         return;
     }

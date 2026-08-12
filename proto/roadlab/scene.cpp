@@ -516,7 +516,16 @@ void demoShowcase(Scene& sc) {
     south.designSpeed = 50;
     int sr = buildRoad(sc.net, south);
 
-    int hsTail = sc.net.splitRoad(hs, 300.0);
+    // Split high-street where the north-south pair actually crosses it, not at a
+    // guessed station. A hand-typed 300.0 here put the split at x = -120 while
+    // the crossing is at x = 5, so the junction's four arms stood 120 m apart:
+    // the pad spanned the gap, its outline doubled back on itself, and ear
+    // clipping fell through to a centroid fan. Projecting the crossing point onto
+    // the spine cannot drift when either road is re-authored.
+    Vec2 crossing = (Vec2{0, -80} + Vec2{10, -40}) * 0.5;
+    double sCross = 0, tCross = 0;
+    if (!sc.net.road(hs).spine.toST(crossing, sCross, tCross)) sCross = 300.0;
+    int hsTail = sc.net.splitRoad(hs, sCross);
     buildIntersection(sc.net, "crossroads",
                       {{hs, true}, {hsTail, false}, {nr, true}, {sr, false}},
                       JunctionControl::Signalized, 8.0);

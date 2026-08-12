@@ -1,5 +1,7 @@
 #include "tessellate.h"
 
+#include "diag.h"
+
 #include "structure.h"
 
 namespace roadlab {
@@ -97,13 +99,29 @@ double polygonArea2(const std::vector<Vec2>& poly) {
     return a;
 }
 
-bool pointInTriangle(Vec2 p, Vec2 a, Vec2 b, Vec2 c) {
-    double d1 = cross(b - a, p - a);
-    double d2 = cross(c - b, p - b);
-    double d3 = cross(a - c, p - c);
-    bool neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
-    bool pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
-    return !(neg && pos);
+// Is `p` STRICTLY inside triangle abc, by more than `tol` metres?
+//
+// Strictly matters. This is the veto in ear clipping, and a junction pad's
+// boundary is mostly kerb-return samples: long runs of nearly-collinear points.
+// Every candidate ear along such a run is a thin sliver with the neighbouring
+// samples sitting on its edges, so an inclusive test — one that counts "on the
+// boundary" as inside — vetoes every ear in turn and the whole polygon falls
+// through to a centroid fan. A fan across a concave outline covers area that is
+// not pavement.
+//
+// The cross products are turned into distances by dividing by the edge length,
+// so the tolerance is in metres and does not change meaning with the size of the
+// triangle.
+bool pointInTriangle(Vec2 p, Vec2 a, Vec2 b, Vec2 c, double tol = 1e-6) {
+    auto sideDistance = [&](Vec2 from, Vec2 to, Vec2 q) {
+        Vec2 e = to - from;
+        double len = length(e);
+        return len < 1e-12 ? 0.0 : cross(e, q - from) / len;
+    };
+    double d1 = sideDistance(a, b, p);
+    double d2 = sideDistance(b, c, p);
+    double d3 = sideDistance(c, a, p);
+    return (d1 > tol && d2 > tol && d3 > tol) || (d1 < -tol && d2 < -tol && d3 < -tol);
 }
 
 }  // namespace
@@ -140,6 +158,7 @@ std::vector<std::array<uint32_t, 3>> triangulatePolygon(const std::vector<Vec2>&
         if (!clipped) {
             // Self-intersecting or otherwise pathological: fall back to a fan so
             // the pad is still covered rather than missing.
+            RL_FALLBACK("triangulatePolygon no ear found -> centroid fan");
             out.clear();
             for (size_t i = 1; i + 1 < n; ++i)
                 out.push_back({uint32_t(0), uint32_t(i), uint32_t(i + 1)});
@@ -151,9 +170,13 @@ std::vector<std::array<uint32_t, 3>> triangulatePolygon(const std::vector<Vec2>&
 }
 
 bool meanValueCoords(const std::vector<Vec2>& poly, Vec2 p, std::vector<double>& weights) {
+    RL_CALLED("meanValueCoords");
     const size_t n = poly.size();
     weights.assign(n, 0.0);
-    if (n < 3) return false;
+    if (n < 3) {
+        RL_FALLBACK("meanValueCoords polygon has fewer than three vertices");
+        return false;
+    }
 
     // Scratch is kept alive: this is called per terrain vertex per junction, and
     // two heap allocations per call dominated everything else.
@@ -188,7 +211,10 @@ bool meanValueCoords(const std::vector<Vec2>& poly, Vec2 p, std::vector<double>&
         size_t k = (i + 1) % n;
         Vec2 a = poly[i] - p, b = poly[k] - p;
         double den = dist[i] * dist[k] + dot(a, b);
-        if (std::fabs(den) < 1e-12) return false;   // p lies on the line, outside
+        if (std::fabs(den) < 1e-12) {
+            RL_FALLBACK("meanValueCoords point is collinear with an edge, outside it");
+            return false;
+        }
         tanHalf[i] = cross(a, b) / den;
     }
     double sum = 0;
@@ -197,7 +223,10 @@ bool meanValueCoords(const std::vector<Vec2>& poly, Vec2 p, std::vector<double>&
         weights[i] = (tanHalf[prev] + tanHalf[i]) / dist[i];
         sum += weights[i];
     }
-    if (std::fabs(sum) < 1e-12) return false;
+    if (std::fabs(sum) < 1e-12) {
+        RL_FALLBACK("meanValueCoords weights summed to zero");
+        return false;
+    }
     for (double& w : weights) w /= sum;
     return true;
 }
@@ -207,6 +236,7 @@ double junctionElevationAt(const Network& net, const Junction& j, Vec2 planPoint
     const std::vector<double>& hb = j.boundaryHeight;
     if (poly.size() < 3 || hb.size() != poly.size()) {
         // No usable boundary: fall back to the arms.
+        RL_FALLBACK("junctionElevationAt no pad boundary -> inverse-square of arms");
         double num = 0, den = 0;
         for (const JunctionArm& a : j.arms) {
             double y = net.road(a.road).surfacePoint(a.sContact, 0).y;
