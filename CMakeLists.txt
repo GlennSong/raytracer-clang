@@ -97,6 +97,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/building_recipe.cpp
     src/engine/procgen/city/lot_fixtures.cpp
     src/engine/procgen/city/parcel_block.cpp
+    src/engine/procgen/city/roof_plant.cpp
     src/engine/procgen/city/lot_mesh.cpp
     src/engine/procgen/city/lot_city.cpp
     src/engine/procgen/city/shape_grammar.cpp

@@ -3,6 +3,8 @@
 #include "../src/engine/procgen/city/lot_mesh.h"
 #include "../src/engine/procgen/city/lot_city.h"
 #include "../src/engine/procgen/city/material_set.h"
+#include "../src/engine/procgen/city/roof_plant.h"
+#include "../src/engine/procgen/city/rng.h"
 
 #include <algorithm>
 #include <cmath>
@@ -69,6 +71,14 @@ TEST_CASE(lotmesh_walls_face_outward) {
     const Shape2& foot = b.surfaces.levels[0].plans[0];
     const Vec2 c = centroid(foot);
 
+    // The SHELL only. A parapet is roof furniture standing above the top plate,
+    // and a real one has an inside — an upstand with an outer face, an inner
+    // face and a coping over both. (It used to be swept with zero projection,
+    // which collapsed to a single-sided sheet with no inside at all, so this
+    // test could once assume nothing faced inward.) Everything below the roof
+    // line is shell, and shell walls face out.
+    const Real roofY = b.surfaces.levels.back().y1;
+
     int out = 0, in = 0;
     for (const RenderMesh& p : m.parts) {
         // Walls only: the reveals of a window face along the wall, and a slab
@@ -77,6 +87,7 @@ TEST_CASE(lotmesh_walls_face_outward) {
         for (std::size_t i = 0; i + 2 < p.indices.size(); i += 3) {
             const Vertex& v = p.vertices[p.indices[i]];
             if (std::fabs(v.normal.y) > 0.5) continue;
+            if (v.position.y > roofY - 1e-3) continue;   // parapet, not shell
             const Vec3 mid = (v.position + p.vertices[p.indices[i + 1]].position +
                               p.vertices[p.indices[i + 2]].position) * (1.0 / 3.0);
             const Vec2 away(mid.x - c.x, mid.z - c.y);
@@ -86,8 +97,46 @@ TEST_CASE(lotmesh_walls_face_outward) {
         }
     }
     CHECK(out > 100);
-    // A plain slab has no courtyard, so nothing legitimately faces inward.
+    // No courtyard on a plain slab, and the parapet is excluded above, so every
+    // remaining wall faces the world.
     CHECK(in == 0);
+}
+
+// A PARAPET IS A WALL, NOT A RIBBON. It was swept as a band with zero
+// projection, which made its top and soffit quads degenerate and left a
+// single-sided sheet: no thickness, no top, and you could see through the roof
+// edge from inside. Worse, the sweep offset each SEGMENT along its own normal,
+// so at every corner the two neighbours moved apart and never met — the roof
+// lip visibly gave up at each corner. Both are gone only while the ring is
+// built from a mitred offset (shape_grammar's offsetPlan) with real thickness.
+TEST_CASE(lotmesh_parapet_is_solid_and_closed) {
+    const BuiltBuilding b = build("apartment_slab", 26, 16, 8);
+    const BuildingMesh m = meshBuilding(b);
+    const Shape2& foot = b.surfaces.levels[0].plans[0];
+    const Vec2 c = centroid(foot);
+    const Real roofY = b.surfaces.levels.back().y1;
+
+    int outward = 0, inward = 0, capUp = 0;
+    for (const RenderMesh& p : m.parts)
+        for (std::size_t i = 0; i + 2 < p.indices.size(); i += 3) {
+            const Vertex& v = p.vertices[p.indices[i]];
+            if (v.position.y < roofY - 1e-3) continue;      // shell, not parapet
+            if (v.normal.y > 0.5) { ++capUp; continue; }    // coping top
+            if (std::fabs(v.normal.y) > 0.5) continue;
+            const Vec3 mid = (v.position + p.vertices[p.indices[i + 1]].position +
+                              p.vertices[p.indices[i + 2]].position) * (1.0 / 3.0);
+            const Vec2 away(mid.x - c.x, mid.z - c.y);
+            if (away.lengthSquared() < 1e-6) continue;
+            const Vec2 n(v.normal.x, v.normal.z);
+            (dot(n, normalize(away)) > 0 ? outward : inward)++;
+        }
+
+    // An upstand has BOTH faces: outside to the street, inside to the roof.
+    CHECK(outward > 0);
+    CHECK(inward > 0);
+    // ...and something horizontal closes the top. A zero-thickness sweep had
+    // nothing here, which is what "the corners aren't closed" looked like.
+    CHECK(capUp > 0);
 }
 
 // A courtyard is a real hole, and its walls face INTO the court. This is the
@@ -117,6 +166,47 @@ TEST_CASE(lotmesh_a_courtyard_is_a_hole_with_inward_walls) {
             if (dot(Vec2(v.normal.x, v.normal.z), normalize(away)) < -0.5) ++inward;
         }
     CHECK(inward > 0);
+}
+
+// A COURT IS A PLACE, NOT AN ABSENCE. Its walls were emitted as one blank band
+// per level: no windows, and no floor, so the court was a shaft you saw the sky
+// through from below and the terrain through from above. The grids were always
+// built for hole edges (facade_plan's surfacesFor) and the resolver always
+// placed Openings on them — the mesher was addressing the wrong index and threw
+// both away.
+TEST_CASE(lotmesh_a_courtyard_is_glazed_and_floored) {
+    BuiltBuilding b;
+    for (std::uint32_t s = 1; s < 40 && b.surfaces.levels.empty(); ++s) {
+        BuiltBuilding t = build("office_block", 40, 36, 8, s);
+        if (!t.surfaces.levels.empty() && !t.surfaces.levels[0].plans.empty() &&
+            !t.surfaces.levels[0].plans[0].holes.empty())
+            b = t;
+    }
+    if (b.surfaces.levels.empty()) return;   // no courtyard drawn at this size
+    const BuildingMesh m = meshBuilding(b);
+    const Shape2& foot = b.surfaces.levels[0].plans[0];
+    // A point inside the court, so "in the court" is a containment test rather
+    // than a distance guess.
+    const Loop2& hole = foot.holes[0];
+    Vec2 hc(0, 0);
+    for (std::size_t i = 0; i < hole.size(); ++i) hc = hc + hole.start(i);
+    hc = hc * (Real(1) / static_cast<Real>(hole.size()));
+    const Real courtR = (hole.start(0) - hc).length();
+
+    int courtGlass = 0, courtFloor = 0;
+    for (const RenderMesh& p : m.parts)
+        for (std::size_t i = 0; i + 2 < p.indices.size(); i += 3) {
+            const Vertex& v = p.vertices[p.indices[i]];
+            const Vec3 mid = (v.position + p.vertices[p.indices[i + 1]].position +
+                              p.vertices[p.indices[i + 2]].position) * (1.0 / 3.0);
+            if ((Vec2(mid.x, mid.z) - hc).length() > courtR * 1.2) continue;
+            if (p.materialIndex == static_cast<int>(PartId::Glass)) ++courtGlass;
+            if (p.materialIndex == static_cast<int>(PartId::Path) &&
+                v.normal.y > 0.5)
+                ++courtFloor;
+        }
+    CHECK(courtGlass > 0);   // the court is looked into, not walled blank
+    CHECK(courtFloor > 0);   // and it has ground
 }
 
 // The distance LODs have to be dramatically cheaper or they are not LODs, and
@@ -210,7 +300,8 @@ TEST_CASE(lotmesh_city_pass_fills_the_same_outputs) {
     LotPlanDebug debug;
     std::vector<RenderMesh> parts, flat;
     std::vector<LotBuilding> lots;
-    growLotSystemBlocks(blocks, lp, &debug, &parts, &flat, &lots);
+    // Every block here is a real face, so all of them are enclosed.
+    growLotSystemBlocks(blocks, blocks.size(), lp, &debug, &parts, &flat, &lots);
 
     CHECK(parts.size() == static_cast<std::size_t>(PartId::Count));
     for (std::size_t i = 0; i < parts.size(); ++i)
@@ -237,5 +328,48 @@ TEST_CASE(lotmesh_city_pass_fills_the_same_outputs) {
         if (l.type != "green") {
             CHECK(l.plan.size() >= 3);
             CHECK(l.height > 1.0);
+        }
+}
+
+// A FLAT ROOF IS NOT EMPTY. The shipping grammar has carried a rooftop kit for a
+// long time — stair overrun, water tank, air handling, arranged so no two pieces
+// overlap — and the Lot System's mesher never picked any of it up: 15 of the 19
+// declared ElementKinds fell through `default: break`. A bare roof is most of why
+// these buildings read as extruded boxes (docs §18.2).
+TEST_CASE(lotmesh_a_roof_carries_plant) {
+    const BuiltBuilding b = build("office_block", 40, 36, 10);
+    const BuildingMesh m = meshBuilding(b);
+    const Real roofY = b.surfaces.levels.back().y1;
+
+    int plantTris = 0;
+    for (const RenderMesh& p : m.parts) {
+        const bool plantPart = p.materialIndex == static_cast<int>(PartId::Utility) ||
+                               p.materialIndex == static_cast<int>(PartId::Fan) ||
+                               p.materialIndex == static_cast<int>(PartId::Wood);
+        if (!plantPart) continue;
+        for (std::size_t i = 0; i + 2 < p.indices.size(); i += 3)
+            if (p.vertices[p.indices[i]].position.y > roofY - 1e-3) ++plantTris;
+    }
+    CHECK(plantTris > 0);
+}
+
+// The arrangement is SHARED with the shipping grammar (roof_plant.h) rather than
+// reimplemented, and its whole job is that two units never occupy one spot — the
+// reported bug was a water tower standing inside an HVAC unit. Every item gets
+// its own cell, so no two seats overlap.
+TEST_CASE(roof_plant_items_never_overlap) {
+    Rng rng(7u);
+    const Poly2 roof = {Vec2(0, 0), Vec2(30, 0), Vec2(30, 24), Vec2(0, 24)};
+    const std::vector<RoofPlantItem> items =
+        planRoofPlant(&roof, Vec2(0, 0), Vec2(1, 0), Vec2(0, 1), 30, 24, 12, false,
+                      [&rng] { return rng.unit(); });
+    CHECK(items.size() >= 2);
+    for (std::size_t i = 0; i < items.size(); ++i)
+        for (std::size_t j = i + 1; j < items.size(); ++j) {
+            const RoofPlantItem& a = items[i];
+            const RoofPlantItem& c = items[j];
+            const bool apart = a.u + a.w <= c.u + 1e-6 || c.u + c.w <= a.u + 1e-6 ||
+                               a.v + a.d <= c.v + 1e-6 || c.v + c.d <= a.v + 1e-6;
+            CHECK(apart);
         }
 }

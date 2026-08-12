@@ -294,6 +294,18 @@ void emitParapet(BuildingMesh& out, const Vec3& footOrigin, Real width, Real dep
 // Emit a quad (one facade panel / window / sign) from four corners + a normal.
 void emitQuad(RenderMesh& mesh, const Vec3& a, const Vec3& b, const Vec3& c,
               const Vec3& d, const Vec3& normal, const Vec3& color);
+// Offset a closed ring by `d` (positive = INWARD; the interior is left of a CCW
+// edge), MITRED: each output vertex is the intersection of its two offset edge
+// lines, with a miter limit that falls back to a bevel where a near-parallel
+// joint would otherwise throw a spike (the "haywire tower top").
+//
+// Vertex-COUNT PRESERVING — out[i] corresponds to in[i] — which is what lets a
+// caller walk the two rings in parallel to build a band. A general polygon
+// offsetter (shape_ops' offsetShape) may split or merge the ring and cannot be
+// walked that way. Exposed because the alternative is a second mitre, and both
+// building pipelines need this one: a swept band that offsets each segment
+// along its OWN normal leaves an open wedge at every corner.
+Poly2 offsetPlan(const Poly2& poly, Real d);
 // Split a scope along a local axis (0=right,1=up,2=forward) into child scopes of
 // the given sizes; a negative size means "repeat to fill" with |size| as target.
 std::vector<Scope> splitScope(const Scope& s, int axis,

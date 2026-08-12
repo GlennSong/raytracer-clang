@@ -1,9 +1,12 @@
 #include "lot_mesh.h"
 
 #include "shape_ops.h"
+#include "roof_plant.h"      // the shared rooftop arrangement (audit §18.3)
+#include "shape_grammar.h"   // offsetPlan — the ONE mitred ring offset (audit §18.3)
 #include "../../mesh_builder.h"
 #include "triangulate.h"
 #include "rng.h"
+#include "../../../log.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -129,34 +132,143 @@ void emitSlab(RenderMesh& mesh, const Shape2& region, Real y, bool up,
     }
 }
 
-// A projecting band swept around a loop — a cornice, a base course, a parapet.
-// Three quads per edge: the fascia, the top and the soffit, so it reads as a
-// real moulding from above and below rather than as a painted line.
+// A vertical face swept around a closed ring, facing AWAY FROM `reference` — the
+// ring paired with it (a band's other edge, a parapet's other side).
+//
+// Taking the direction from the pairing rather than from the winding is the
+// point. "Outward is the right of a CCW edge" is only true in one orientation
+// convention, and the ring here has been through tessellate() and offsetPlan()
+// (which normalizes its own copy), so its winding is not the caller's to assume
+// — getting it backwards silently turns every base course inside out. Two
+// mitred rings, on the other hand, always know which of them is outside.
+void emitRingFace(RenderMesh& mesh, const Poly2& ring, const Poly2& reference,
+                  Real y0, Real y1, const Vec3& color) {
+    const std::size_t n = ring.size();
+    if (reference.size() != n) return;
+    for (std::size_t i = 0; i < n; ++i) {
+        const std::size_t j = (i + 1) % n;
+        const Vec2& a = ring[i];
+        const Vec2& b = ring[j];
+        Vec2 d = b - a;
+        if (d.length() < 1e-6) continue;
+        const Vec2 mid = (a + b) * Real(0.5);
+        const Vec2 ref = (reference[i] + reference[j]) * Real(0.5);
+        Vec2 nrm = mid - ref;
+        if (nrm.length() < 1e-9) {                  // degenerate pairing
+            d = normalize(d);
+            nrm = Vec2(d.y, -d.x);
+        }
+        nrm = normalize(nrm);
+        MeshBuilder::emitQuad(mesh, at3(a, y0), at3(b, y0), at3(b, y1), at3(a, y1),
+                              Vec3(nrm.x, 0, nrm.y), color);
+    }
+}
+
+// The flat annulus between two rings that share a vertex count — the top of a
+// parapet, the soffit of a cornice. This is what closes a corner: the two rings
+// are MITRED, so o[i]..i[i] meet exactly.
+void emitRingCap(RenderMesh& mesh, const Poly2& o, const Poly2& in, Real y,
+                 bool up, const Vec3& color) {
+    if (o.size() != in.size()) return;
+    const std::size_t n = o.size();
+    for (std::size_t i = 0; i < n; ++i) {
+        const std::size_t j = (i + 1) % n;
+        MeshBuilder::emitQuad(mesh, at3(o[i], y), at3(o[j], y), at3(in[j], y),
+                              at3(in[i], y), Vec3(0, up ? 1 : -1, 0), color);
+    }
+}
+
+// A projecting band swept around a loop — a cornice or a base course.
+//
+// This used to offset every SEGMENT along its own normal, which is not an offset
+// ring: at a corner the two neighbouring segments move in different directions
+// and never meet, leaving an open wedge at every corner of every moulding. It
+// reads exactly like the mesher giving up half way round. Offset the tessellated
+// ring properly instead (shape_grammar's `offsetPlan`, mitred and
+// vertex-count-preserving, which is why the two rings can be walked in
+// parallel), then the band is two faces and two caps between rings that close.
 void emitSweptBand(PartAcc& acc, const Loop2& loop, Real y, Real height,
                    Real project, PartId id, const Vec3& color, Real chordTol) {
-    if (loop.size() < 3 || height <= 1e-4) return;
+    if (loop.size() < 3 || height <= 1e-4 || project <= 1e-4) return;
+    Poly2 inner = tessellate(loop, chordTol);
+    if (inner.size() < 3) return;
+    // offsetPlan normalizes its own copy's winding, so both rings must be put in
+    // ITS convention or the index correspondence the caps rely on is reversed.
+    ensureCCW(inner);
+    const Poly2 outer = offsetPlan(inner, -project);   // d < 0 grows outward
+    if (outer.size() != inner.size()) return;
     RenderMesh& mesh = part(acc, id);
-    const std::size_t n = loop.size();
-    for (std::size_t i = 0; i < n; ++i) {
-        const Vec2 a = loop.start(i), b = loop.end(i);
-        const Real bulge = loop.bulge(i);
-        const int steps = arcSteps(a, b, bulge, 1.0, chordTol);
-        Vec2 prev = a;
-        for (int s = 1; s <= steps; ++s) {
-            const Vec2 cur = arcPoint(a, b, bulge, static_cast<Real>(s) / steps);
-            const Vec3 n3 = outward3(prev, cur);
-            const Vec2 off(n3.x * project, n3.z * project);
-            const Vec2 p0 = prev + off, p1 = cur + off;
-            MeshBuilder::emitQuad(mesh, at3(p0, y), at3(p1, y), at3(p1, y + height),
-                                  at3(p0, y + height), n3, color);           // fascia
-            MeshBuilder::emitQuad(mesh, at3(prev, y + height), at3(cur, y + height),
-                                  at3(p1, y + height), at3(p0, y + height),
-                                  Vec3(0, 1, 0), color);                     // top
-            if (project > 1e-4)
-                MeshBuilder::emitQuad(mesh, at3(prev, y), at3(cur, y), at3(p1, y),
-                                      at3(p0, y), Vec3(0, -1, 0), color);    // soffit
-            prev = cur;
-        }
+    emitRingFace(mesh, outer, inner, y, y + height, color);       // fascia
+    emitRingCap(mesh, outer, inner, y + height, true, color);     // top
+    emitRingCap(mesh, outer, inner, y, false, color);             // soffit
+}
+
+// A PARAPET is a wall, not a ribbon: an upstand with an inner and an outer face
+// and a coping that oversails both. Sweeping it as a zero-projection band gave a
+// single-sided sheet with no thickness, no top and no inside — visible as a roof
+// edge you can see straight through. Mirrors the shipping pipeline's
+// `emitPlanParapet`, which already had this right (audit §18.2).
+void emitParapetRing(PartAcc& acc, const Loop2& loop, Real roofY, Real height,
+                     PartId wallId, const Vec3& wallColor, PartId copingId,
+                     const Vec3& copingColor, Real chordTol) {
+    if (loop.size() < 3 || height <= 1e-4) return;
+    const Real th = 0.24;    // upstand thickness
+    const Real lip = 0.05;   // coping oversail, inboard and outboard
+    const Real ch = 0.09;    // coping height
+    Poly2 O = tessellate(loop, chordTol);              // upstand outer: on the plan line
+    if (O.size() < 3) return;
+    ensureCCW(O);   // offsetPlan normalizes its copy; the rings must agree
+
+    const Poly2 I  = offsetPlan(O, th);                // upstand inner
+    const Poly2 Oc = offsetPlan(O, -lip);              // coping outer
+    const Poly2 Ic = offsetPlan(O, th + lip);          // coping inner
+    if (I.size() != O.size() || Oc.size() != O.size() || Ic.size() != O.size())
+        return;
+    const Real top = roofY + height;
+    RenderMesh& wall = part(acc, wallId);
+    emitRingFace(wall, O, I, roofY, top, wallColor);   // outer: away from the inside
+    emitRingFace(wall, I, O, roofY, top, wallColor);   // inner: away from the street
+    RenderMesh& cop = part(acc, copingId);
+    emitRingFace(cop, Oc, Ic, top, top + ch, copingColor);
+    emitRingFace(cop, Ic, Oc, top, top + ch, copingColor);
+    emitRingCap(cop, Oc, Ic, top + ch, true, copingColor);   // coping top
+    emitRingCap(cop, Oc, Ic, top, false, copingColor);       // and its underside
+}
+
+// An axis-aligned-in-its-own-frame box, six faces, seated on the roof.
+void emitPlantBox(RenderMesh& mesh, const Vec2& o, const Vec2& u, const Vec2& v,
+                  Real w, Real d, Real y0, Real y1, const Vec3& color) {
+    const Vec2 c[4] = {o, o + u * w, o + u * w + v * d, o + v * d};
+    for (int i = 0; i < 4; ++i) {
+        const Vec2& a = c[i];
+        const Vec2& b = c[(i + 1) % 4];
+        Vec2 dd = b - a;
+        if (dd.length() < 1e-6) continue;
+        dd = normalize(dd);
+        const Vec2 nrm(dd.y, -dd.x);
+        MeshBuilder::emitQuad(mesh, at3(a, y0), at3(b, y0), at3(b, y1), at3(a, y1),
+                              Vec3(nrm.x, 0, nrm.y), color);
+    }
+    MeshBuilder::emitQuad(mesh, at3(c[0], y1), at3(c[1], y1), at3(c[2], y1),
+                          at3(c[3], y1), Vec3(0, 1, 0), color);
+}
+
+// A vertical tube + its lid — water tanks and fan cowls.
+void emitPlantTube(RenderMesh& side, RenderMesh& lid, const Vec2& c, Real radius,
+                   Real y0, Real y1, int segments, const Vec3& sideCol,
+                   const Vec3& lidCol) {
+    const Real tau = 6.28318530717958647692;
+    for (int i = 0; i < segments; ++i) {
+        const Real a0 = tau * i / segments, a1 = tau * (i + 1) / segments;
+        const Vec2 p0(c.x + std::cos(a0) * radius, c.y + std::sin(a0) * radius);
+        const Vec2 p1(c.x + std::cos(a1) * radius, c.y + std::sin(a1) * radius);
+        Vec2 n = (p0 + p1) * Real(0.5) - c;
+        if (n.length() < 1e-9) continue;
+        n = normalize(n);
+        MeshBuilder::emitQuad(side, at3(p0, y0), at3(p1, y0), at3(p1, y1),
+                              at3(p0, y1), Vec3(n.x, 0, n.y), sideCol);
+        MeshBuilder::emitQuad(lid, at3(c, y1), at3(p0, y1), at3(p1, y1), at3(c, y1),
+                              Vec3(0, 1, 0), lidCol);
     }
 }
 
@@ -187,6 +299,9 @@ BuildingMesh meshBuilding(const BuiltBuilding& b, const LotMeshParams& params) {
 
     const Real tol = std::max(Real(0.02), params.chordTol);
     Real top = params.baseY;
+    // Tally of element kinds the recipe asked for and this mesher cannot draw,
+    // reported once per building rather than swallowed per placement.
+    std::array<int, static_cast<std::size_t>(ElementKind::RoofPlant) + 1> unbuiltKinds{};
 
     // Which level index starts each tier, so "floor 0" means the ground floor of
     // its own tier — the same convention resolveElements uses.
@@ -208,15 +323,21 @@ BuildingMesh meshBuilding(const BuiltBuilding& b, const LotMeshParams& params) {
             (L.tier < static_cast<int>(tierStart.size()) ? tierStart[L.tier] : 0);
         const bool ground = (li == 0);
 
-        for (std::size_t pi = 0; pi < L.plans.size(); ++pi) {
-            const Shape2& plan = L.plans[pi];
-            if (plan.outer.size() < 3) continue;
+        // ONE FLAT EDGE INDEX per level, walking plans then holes in exactly the
+        // order surfacesFor built the bay grids and tagOfEdge reads the tags. It
+        // is also the index resolveElements stamps into ElementPlacement::edge.
+        // The wall loop used the per-plan `e` and guarded with `pi == 0`, which
+        // meant every plan after the first, and EVERY COURTYARD, was addressing
+        // the wrong grid or none at all.
+        std::size_t gridIdx = 0;
 
-            // --- walls ------------------------------------------------------
-            for (std::size_t e = 0; e < plan.outer.size(); ++e) {
-                const Vec2 a = plan.outer.start(e), c = plan.outer.end(e);
-                const Real bulge = plan.outer.bulge(e);
-                const EdgeTag tag = plan.outer.edges[e].tag;
+        // One wall, fenestrated or not. A courtyard wall is the same wall facing
+        // the other way: its grid was always built (facade_plan.cpp), its tag is
+        // Court, and the resolver already places Openings on it. Court walls used
+        // to be a blank band per level instead, which is why a courtyard read as
+        // an empty shaft rather than as somewhere a building looks into.
+        auto emitWall = [&](const Vec2& a, const Vec2& c, Real bulge, EdgeTag tag,
+                            std::size_t gi, bool faceOut) {
                 const Vec3 wallCol = ms.wallColor;
 
                 // A party wall is blank BY CONSTRUCTION — the payoff of tagging
@@ -226,8 +347,8 @@ BuildingMesh meshBuilding(const BuiltBuilding& b, const LotMeshParams& params) {
                     roleForTag(tag, floorInTier, params.retail && ground);
                 const bool wantGlass =
                     params.detail == FacadeDetail::Full && role != WallRole::Blank &&
-                    pi == 0 && e < S.grids[li].size() &&
-                    fenestrated(b.placements, static_cast<int>(li), static_cast<int>(e));
+                    gi < S.grids[li].size() &&
+                    fenestrated(b.placements, static_cast<int>(li), static_cast<int>(gi));
 
                 RenderMesh& wall = part(acc, ms.wall);
                 if (!wantGlass) {
@@ -238,19 +359,19 @@ BuildingMesh meshBuilding(const BuiltBuilding& b, const LotMeshParams& params) {
                         // the same place, so the swap is invisible.
                         const Real h = y1 - y0;
                         const Real sill = y0 + h * 0.30, head = y0 + h * 0.82;
-                        emitBand(wall, a, c, bulge, 0, 1, y0, sill, wallCol, tol);
-                        emitBand(wall, a, c, bulge, 0, 1, head, y1, wallCol, tol);
+                        emitBand(wall, a, c, bulge, 0, 1, y0, sill, wallCol, tol, faceOut);
+                        emitBand(wall, a, c, bulge, 0, 1, head, y1, wallCol, tol, faceOut);
                         emitBand(part(acc, PartId::Glass), a, c, bulge, 0, 1,
-                                 sill, head, Vec3(0.42, 0.52, 0.60), tol);
+                                 sill, head, Vec3(0.42, 0.52, 0.60), tol, faceOut);
                     } else {
-                        emitBand(wall, a, c, bulge, 0, 1, y0, y1, wallCol, tol);
+                        emitBand(wall, a, c, bulge, 0, 1, y0, y1, wallCol, tol, faceOut);
                     }
-                    continue;
+                    return;
                 }
 
                 // Punched: the openings for this wall, on this floor.
                 const std::vector<Opening> holes =
-                    fenestrate(S.grids[li][e], role, ms.window, floorInTier,
+                    fenestrate(S.grids[li][gi], role, ms.window, floorInTier,
                                ground && tag == EdgeTag::Street);
                 Real cursor = 0;
                 for (const Opening& o : holes) {
@@ -261,14 +382,15 @@ BuildingMesh meshBuilding(const BuiltBuilding& b, const LotMeshParams& params) {
                     if (o1 <= o0 + 1e-5 || head <= sill + 1e-5) continue;
                     // The pier before the opening, then the spandrel under it
                     // and the lintel over it.
-                    emitBand(wall, a, c, bulge, cursor, o0, y0, y1, wallCol, tol);
-                    emitBand(wall, a, c, bulge, o0, o1, y0, sill, wallCol, tol);
-                    emitBand(wall, a, c, bulge, o0, o1, head, y1, wallCol, tol);
+                    emitBand(wall, a, c, bulge, cursor, o0, y0, y1, wallCol, tol, faceOut);
+                    emitBand(wall, a, c, bulge, o0, o1, y0, sill, wallCol, tol, faceOut);
+                    emitBand(wall, a, c, bulge, o0, o1, head, y1, wallCol, tol, faceOut);
                     // The glass, set back in its reveal so the wall reads as
                     // having thickness.
                     const Vec2 g0 = arcPoint(a, c, bulge, o0);
                     const Vec2 g1 = arcPoint(a, c, bulge, o1);
-                    const Vec3 n3 = outward3(g0, g1);
+                    Vec3 n3 = outward3(g0, g1);
+                    if (!faceOut) n3 = Vec3(-n3.x, -n3.y, -n3.z);
                     const Vec2 back(-n3.x * params.reveal, -n3.z * params.reveal);
                     const bool door = o.kind == OpeningKind::Door;
                     RenderMesh& glass =
@@ -294,17 +416,31 @@ BuildingMesh meshBuilding(const BuiltBuilding& b, const LotMeshParams& params) {
                                           Vec3(0, -1, 0), ms.trimColor);
                     cursor = o1;
                 }
-                emitBand(wall, a, c, bulge, cursor, 1, y0, y1, wallCol, tol);
+                emitBand(wall, a, c, bulge, cursor, 1, y0, y1, wallCol, tol, faceOut);
+        };
+
+        for (std::size_t pi = 0; pi < L.plans.size(); ++pi) {
+            const Shape2& plan = L.plans[pi];
+            if (plan.outer.size() < 3) {
+                // Still consume this plan's indices, or every later plan and
+                // hole reads someone else's grid.
+                gridIdx += plan.outer.size();
+                for (const Loop2& h : plan.holes) gridIdx += h.size();
+                continue;
             }
 
+            // --- walls ------------------------------------------------------
+            for (std::size_t e = 0; e < plan.outer.size(); ++e, ++gridIdx)
+                emitWall(plan.outer.start(e), plan.outer.end(e), plan.outer.bulge(e),
+                         plan.outer.edges[e].tag, gridIdx, true);
+
             // --- court walls ------------------------------------------------
-            // A hole in the plan is a real courtyard, and its walls face INWARD.
-            for (const Loop2& h : plan.holes) {
-                RenderMesh& wall = part(acc, ms.wall);
-                for (std::size_t e = 0; e < h.size(); ++e)
-                    emitBand(wall, h.start(e), h.end(e), h.bulge(e), 0, 1, y0, y1,
-                             ms.wallColor, tol, false);
-            }
+            // A hole in the plan is a real courtyard: the same wall, looked at
+            // from the inside, with the same windows the street facade gets.
+            for (const Loop2& h : plan.holes)
+                for (std::size_t e = 0; e < h.size(); ++e, ++gridIdx)
+                    emitWall(h.start(e), h.end(e), h.bulge(e), h.edges[e].tag,
+                             gridIdx, false);
 
             // --- slabs ------------------------------------------------------
             // The part of this plate that nothing above covers is a roof or a
@@ -331,6 +467,23 @@ BuildingMesh meshBuilding(const BuiltBuilding& b, const LotMeshParams& params) {
             for (const Shape2& s : soffit)
                 emitSlab(base, s, y0, false,
                          li == 0 ? ms.accentColor : ms.wallColor, tol);
+
+            // --- the court FLOOR --------------------------------------------
+            // A courtyard is a hole in every plate of the stack, so without this
+            // it is a shaft you see the sky through from below and the terrain
+            // through from above — an absence rather than a place. The ground
+            // floor's holes get a paved plate, laid at the same level the
+            // building's own ground sits on.
+            if (li == 0)
+                for (const Loop2& h : plan.holes) {
+                    if (h.size() < 3) continue;
+                    Shape2 court;
+                    court.outer = h;
+                    orient(court);
+                    if (area(court) < 1.0) continue;
+                    emitSlab(part(acc, PartId::Path), court, y0, true,
+                             ms.accentColor, tol);
+                }
         }
     }
 
@@ -357,10 +510,85 @@ BuildingMesh meshBuilding(const BuiltBuilding& b, const LotMeshParams& params) {
                                   ms.accentColor, tol);
                     break;
                 case ElementKind::Parapet:
-                    emitSweptBand(acc, L.plans[0].outer, y1,
-                                  std::max(Real(0.9), p.height), 0.0, ms.wall,
-                                  ms.wallColor, tol);
+                    emitParapetRing(acc, L.plans[0].outer, y1,
+                                    std::max(Real(0.9), p.height), ms.wall,
+                                    ms.wallColor, ms.trim, ms.trimColor, tol);
                     break;
+                case ElementKind::RoofPlant: {
+                    // A flat roof is not empty: the stair overrun, the tank and
+                    // the air handling are what stop a building reading as an
+                    // extruded box. The ARRANGEMENT comes from the shared
+                    // planner (roof_plant.h) that the shipping grammar also
+                    // uses, so the two pipelines cannot drift about how a roof
+                    // is laid out; only the drawing below is ours.
+                    const Poly2 ring = tessellate(L.plans[0].outer, 0.25);
+                    if (ring.size() < 3) break;
+                    const OBB2 box = orientedBoundingBox(ring);
+                    const Vec2 u = box.axis[0], v = box.axis[1];
+                    const Real bw = box.half[0] * 2, bd = box.half[1] * 2;
+                    const Vec2 origin = box.center - u * box.half[0] - v * box.half[1];
+                    Rng rng(params.seed ^ 0x9E3779B9u);
+                    // style 1 = a SEALED facade (a glass curtain-wall tower),
+                    // which the planner reads as "no timber water tank". The
+                    // recipe declares that; the mesher does not infer it from
+                    // window widths, which would be a guess dressed as a rule.
+                    const std::vector<RoofPlantItem> plant = planRoofPlant(
+                        &ring, origin, u, v, bw, bd,
+                        static_cast<int>(S.levels.size()), p.style == 1,
+                        [&rng] { return rng.unit(); });
+                    for (const RoofPlantItem& it : plant) {
+                        const Vec2 o = origin + u * it.u + v * it.v;
+                        const Vec2 c = o + u * (it.w * 0.5) + v * (it.d * 0.5);
+                        switch (it.kind) {
+                            case RoofPlantItem::Kind::Access: {
+                                const Real h = 3.0;
+                                emitPlantBox(part(acc, ms.trim), o, u, v, it.w, it.d,
+                                             y1, y1 + h, ms.trimColor * 0.85);
+                                // The capped lid slab that reads as a roof over
+                                // the overrun rather than an open shaft.
+                                emitPlantBox(part(acc, ms.trim),
+                                             o - u * 0.15 - v * 0.15, u, v,
+                                             it.w + 0.3, it.d + 0.3, y1 + h,
+                                             y1 + h + 0.14, ms.trimColor * 0.6);
+                                break;
+                            }
+                            case RoofPlantItem::Kind::WaterTank: {
+                                const Real tr = std::max(Real(0.9),
+                                                         (std::min(it.w, it.d) - 1.0) * 0.5);
+                                const Real legH = 2.0, th = 3.0;
+                                const Vec3 woodCol(0.42, 0.31, 0.22);
+                                for (int lx = -1; lx <= 1; lx += 2)
+                                    for (int lz = -1; lz <= 1; lz += 2) {
+                                        const Vec2 lc = c + u * (lx * tr * 0.7) +
+                                                        v * (lz * tr * 0.7);
+                                        emitPlantBox(part(acc, PartId::Wood),
+                                                     lc - u * 0.08 - v * 0.08, u, v,
+                                                     0.16, 0.16, y1, y1 + legH,
+                                                     woodCol * 0.85);
+                                    }
+                                emitPlantTube(part(acc, PartId::Wood),
+                                              part(acc, PartId::Wood), c, tr,
+                                              y1 + legH, y1 + legH + th, 14,
+                                              woodCol, woodCol * 1.05);
+                                break;
+                            }
+                            case RoofPlantItem::Kind::Hvac: {
+                                const Real ah = 1.8;
+                                const Vec3 casing(0.55, 0.57, 0.60);
+                                emitPlantBox(part(acc, PartId::Utility), o, u, v,
+                                             it.w, it.d, y1, y1 + ah, casing);
+                                const Real frad =
+                                    std::min(Real(0.6), std::min(it.w, it.d) * 0.22);
+                                emitPlantTube(part(acc, PartId::Utility),
+                                              part(acc, PartId::Fan), c, frad,
+                                              y1 + ah, y1 + ah + 0.22, 12,
+                                              casing * 0.9, Vec3(0.16, 0.17, 0.18));
+                                break;
+                            }
+                        }
+                    }
+                    break;
+                }
                 case ElementKind::Balcony: {
                     // A tray on one bay: floor, front and two returns.
                     if (p.edge < 0 || p.edge >= static_cast<int>(L.plans[0].outer.size()))
@@ -383,11 +611,32 @@ BuildingMesh meshBuilding(const BuiltBuilding& b, const LotMeshParams& params) {
                                           at3(q0 + off, fy + 1.05), n3, ms.accentColor);
                     break;
                 }
+                case ElementKind::Opening:
+                    // Handled, but not here: an Opening placement is the
+                    // recipe's PERMISSION to fenestrate a wall, read by
+                    // `fenestrated()` while the wall is built. Not a gap.
+                    break;
                 default:
-                    break;   // porches, steeples, signs: their own emitters, later
+                    // NOT SILENTLY. Fifteen of the nineteen declared kinds fell
+                    // through here, so a recipe could ask for a portico, a
+                    // steeple or a shopfront sign and get nothing back with
+                    // nothing to say it was dropped — which is how a whole roof
+                    // kit stayed lost across a pipeline (docs §18). A registry
+                    // that advertises what it cannot build must at least admit
+                    // it; the shipping grammar HAS emitters for most of these
+                    // and they are the next thing to extract.
+                    unbuiltKinds[static_cast<std::size_t>(p.kind)]++;
+                    break;
             }
         }
     }
+
+    for (std::size_t k = 0; k < unbuiltKinds.size(); ++k)
+        if (unbuiltKinds[k])
+            LOG_WARN << "[lotmesh] " << unbuiltKinds[k] << " x "
+                     << elementKindName(static_cast<ElementKind>(k))
+                     << " requested by the recipe but this mesher has no emitter "
+                        "for it — the element is silently missing from the building";
 
     flatten(acc, out);
     out.height = top - params.baseY;

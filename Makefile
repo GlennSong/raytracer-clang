@@ -78,6 +78,7 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/building_recipe.cpp \
 	$(SRC_DIR)/engine/procgen/city/lot_fixtures.cpp \
 	$(SRC_DIR)/engine/procgen/city/parcel_block.cpp \
+	$(SRC_DIR)/engine/procgen/city/roof_plant.cpp \
 	$(SRC_DIR)/engine/procgen/city/lot_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/city/lot_city.cpp \
 	$(SRC_DIR)/engine/procgen/city/shape_grammar.cpp \
@@ -318,6 +319,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/building_recipe.cpp \
 	$(SRC_DIR)/engine/procgen/city/lot_fixtures.cpp \
 	$(SRC_DIR)/engine/procgen/city/parcel_block.cpp \
+	$(SRC_DIR)/engine/procgen/city/roof_plant.cpp \
 	$(SRC_DIR)/engine/procgen/city/lot_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/city/lot_city.cpp \
 	$(SRC_DIR)/engine/procgen/city/shape_grammar.cpp \

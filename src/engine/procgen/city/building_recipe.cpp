@@ -50,6 +50,7 @@ void addHouseDressing(ElementRegistry& r, bool porch, bool chimney) {
         ElementSpec c;
         c.kind = ElementKind::RoofDeck;
         c.on.tier = ElementSelector::kTopTier;
+        c.on.topFloorOnly = true;   // a crown, not a per-storey band
         c.on.bays = ElementSelector::Bays::None;
         c.style = 1;                       // chimney variant
         c.weight = 0.8;
@@ -62,6 +63,7 @@ void addMasonryDressing(ElementRegistry& r, bool quoins, bool baseCourse) {
     ElementSpec cor;
     cor.kind = ElementKind::Cornice;
     cor.on.tier = ElementSelector::kTopTier;
+    cor.on.topFloorOnly = true;   // a crown, not a per-storey band
     cor.on.bays = ElementSelector::Bays::None;
     r.add(cor);
     if (baseCourse) {
@@ -110,17 +112,33 @@ void addBalconies(ElementRegistry& r, int fromFloor, Real depth,
     r.add(b);
 }
 
-void addTowerCrown(ElementRegistry& r) {
+// `sealed` marks a glass curtain-wall tower: it gets the same plant as anything
+// else except the timber water tank, which belongs on a masonry walk-up and
+// nowhere near a sealed facade. Declared here rather than inferred in the mesher.
+void addTowerCrown(ElementRegistry& r, bool sealed = false) {
     ElementSpec p;
     p.kind = ElementKind::Parapet;
     p.on.tier = ElementSelector::kTopTier;
+    p.on.topFloorOnly = true;   // a crown, not a per-storey band
     p.on.bays = ElementSelector::Bays::None;
     r.add(p);
     ElementSpec d;
     d.kind = ElementKind::RoofDeck;
     d.on.tier = ElementSelector::kTopTier;
+    d.on.topFloorOnly = true;   // a crown, not a per-storey band
     d.on.bays = ElementSelector::Bays::None;
     r.add(d);
+    // A FLAT ROOF IS NOT EMPTY. The stair overrun, the tank and the air handling
+    // are most of what makes a top read as a building rather than an extruded
+    // box — and they are the single biggest thing the Lot System dropped when it
+    // stopped going through the shipping grammar (docs §18.2).
+    ElementSpec plant;
+    plant.kind = ElementKind::RoofPlant;
+    plant.on.tier = ElementSelector::kTopTier;
+    plant.on.topFloorOnly = true;
+    plant.on.bays = ElementSelector::Bays::None;
+    plant.style = sealed ? 1 : 0;
+    r.add(plant);
 }
 
 void addPortico(ElementRegistry& r, int columns) {
@@ -478,7 +496,7 @@ RecipeBook stockRecipes() {
             .weight(1.2);
         addWindows(r.r.elements);
         addRetailGround(r.r.elements);
-        addTowerCrown(r.r.elements);
+        addTowerCrown(r.r.elements, true);   // sealed glass facade: no water tank
         add(r.done());
     }
     {

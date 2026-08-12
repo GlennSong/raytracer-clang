@@ -1,5 +1,7 @@
 #include "shape_grammar.h"
 
+#include "roof_plant.h"   // the shared rooftop arrangement (one planner, both meshers)
+
 #include "road_mesh.h"            // triangulatePolygon (floorplan roof/slab fill)
 #include "../surface_maps.h"      // surfaceWorldTileSize (shingle slope UVs)
 #include "../../mesh_builder.h"
@@ -1026,15 +1028,8 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
     // element seated by box coordinates alone can hang over the notch (device:
     // "a giant block that doesn't fit properly with the rooftop"). When the
     // caller passes the top plan, every element proves its corners are ON it.
-    auto onRoof = [&](const Vec3& o, Real w2, Real d2) {
-        if (!topPlan) return true;
-        for (int cx = 0; cx <= 1; ++cx)
-            for (int cz = 0; cz <= 1; ++cz) {
-                Vec3 q = o + r * (w2 * cx) + f * (d2 * cz);
-                if (!pointInPolygon(*topPlan, Vec2(q.x, q.z))) return false;
-            }
-        return true;
-    };
+    // (The on-the-roof corner test moved into planRoofPlant with the rest of the
+    // arrangement — it is a seating decision, not geometry.)
     // ROOF PLANT subgrammar (device: "what is that gray block supposed to
     // represent? ... it would help if it had some definition"). The old mute
     // penthouse box is two readable pieces of equipment now:
@@ -1051,61 +1046,15 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
     // lots) carves the parapet-inset rect into cells, and every piece of
     // equipment gets its OWN cell — roof access exactly 1, water tanks 1-2,
     // HVAC units 1-4 by roof size. Items centre in their cell with jitter.
-    struct RoofItem { int kind; Real w, d, minW, minD; };   // 0 access, 1 tank, 2 hvac
-    struct RoofCell { Real u, v, w, d; };
-    const Real inset = 0.7;                                 // parapet clearance
-    const Real uw = width - 2 * inset, ud = depth - 2 * inset;
-    if (uw < 3.5 || ud < 3.5) return;
-    const Real roofArea = uw * ud;
-
-    std::vector<RoofItem> items;
-    if (p.floors >= 4 && width > 5 && depth > 5) {          // roof access: always 1
-        const Real bw = std::min(std::max(width * 0.28, Real(3.0)), Real(5.0));
-        const Real bd = std::min(std::max(depth * 0.24, Real(2.4)), Real(3.8));
-        items.push_back({0, bw, bd, Real(2.4), Real(2.0)});
-    }
-    if (p.floors >= 3 && p.floors <= 20 && !p.curtainWall && width > 4 &&
-        depth > 4 && rng.unit() < 0.65) {                   // water tanks: 1-2
-        const int nTank = (roofArea > 170.0 && rng.unit() < 0.35) ? 2 : 1;
-        for (int i = 0; i < nTank; ++i) {
-            const Real tr = std::min(rng.range(1.2, 1.7),
-                                     std::min(width, depth) * 0.22);
-            items.push_back({1, 2 * tr + 1.0, 2 * tr + 1.0, Real(2.4), Real(2.4)});
-        }
-    }
-    if (p.floors >= 4 && width > 6 && depth > 5 && rng.unit() < 0.85) {
-        // HVAC units: 1-4 based on the size of the roof
-        const int nHvac =
-            std::max(1, std::min(4, static_cast<int>(roofArea / 70.0)));
-        for (int i = 0; i < nHvac; ++i) {
-            const Real aw = std::min(std::max(width * 0.26, Real(2.6)), Real(5.2));
-            const Real ad = std::min(std::max(depth * 0.20, Real(2.0)), Real(3.2));
-            items.push_back({2, aw, ad, Real(2.2), Real(1.8)});
-        }
-    }
+    // The arrangement itself lives in roof_plant.h, because the Lot System's
+    // mesher needs the same one and a second copy of it is how the two
+    // pipelines drift. This file still owns the GEOMETRY below; the planner owns
+    // what a roof carries and where each piece sits.
+    const std::vector<RoofPlantItem> items =
+        planRoofPlant(topPlan, Vec2(footOrigin.x, footOrigin.z),
+                      Vec2(r.x, r.z), Vec2(f.x, f.z), width, depth, p.floors,
+                      p.curtainWall, [&rng] { return rng.unit(); });
     if (items.empty()) return;
-
-    std::vector<RoofCell> cells{{inset, inset, uw, ud}};
-    while (cells.size() < items.size()) {
-        std::size_t bi = 0;                                 // split the biggest cell
-        for (std::size_t i = 1; i < cells.size(); ++i)
-            if (cells[i].w * cells[i].d > cells[bi].w * cells[bi].d) bi = i;
-        RoofCell c = cells[bi];
-        if (std::max(c.w, c.d) < 4.5) break;                // roof full: extras skipped
-        const Real t = rng.range(0.4, 0.6);
-        RoofCell a = c, b = c;
-        if (c.w >= c.d) { a.w = c.w * t; b.u = c.u + a.w; b.w = c.w - a.w; }
-        else            { a.d = c.d * t; b.v = c.v + a.d; b.d = c.d - a.d; }
-        cells[bi] = a;
-        cells.push_back(b);
-    }
-    // Biggest item takes the biggest cell.
-    std::sort(items.begin(), items.end(), [](const RoofItem& a, const RoofItem& b) {
-        return a.w * a.d > b.w * b.d;
-    });
-    std::sort(cells.begin(), cells.end(), [](const RoofCell& a, const RoofCell& b) {
-        return a.w * a.d > b.w * b.d;
-    });
 
     // --- emitters (verbatim geometry from the old placement code, seated at a
     // planned cell instead of a rejection-sampled spot) ---
@@ -1190,24 +1139,11 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
         emitDisc(out, tc, tr, tankBase + th, 14, PartId::Wood, woodCol * 1.05, true);
     };
 
-    const std::size_t nPlace = std::min(items.size(), cells.size());
-    for (std::size_t i = 0; i < nPlace; ++i) {
-        const RoofItem& it = items[i];
-        const RoofCell& c = cells[i];
-        const Real clear = 0.5;
-        const Real w2 = std::min(it.w, c.w - clear);
-        const Real d2 = std::min(it.d, c.d - clear);
-        if (w2 < it.minW || d2 < it.minD) continue;         // cell too small: skip
-        bool placed = false;
-        for (int attempt = 0; attempt < 4 && !placed; ++attempt) {
-            const Real u = c.u + (c.w - w2) * rng.range(0.2, 0.8);
-            const Real v = c.v + (c.d - d2) * rng.range(0.2, 0.8);
-            Vec3 po = footOrigin + r * u + f * v;
-            if (!onRoof(po, w2, d2)) continue;              // L-plan notch: jitter again
-            if (it.kind == 0) emitAccess(u, v, w2, d2);
-            else if (it.kind == 1) emitTank(u, v, w2, d2);
-            else emitHvac(u, v, w2, d2);
-            placed = true;
+    for (const RoofPlantItem& it : items) {
+        switch (it.kind) {
+            case RoofPlantItem::Kind::Access:    emitAccess(it.u, it.v, it.w, it.d); break;
+            case RoofPlantItem::Kind::WaterTank: emitTank(it.u, it.v, it.w, it.d);   break;
+            case RoofPlantItem::Kind::Hvac:      emitHvac(it.u, it.v, it.w, it.d);   break;
         }
     }
 }
@@ -1426,11 +1362,14 @@ RenderMesh BuildingMesh::merged() const {
 
 // --- Floorplan buildings (building-grammar-plan.md P3) ----------------------
 
-namespace {
-
 // Offset a CCW plan polygon: d > 0 shrinks (inset), d < 0 grows (outset) — the
 // swept-cornice / setback-tier primitive. Same line-intersection construction
 // as polygon.h's inset, without its d > 0 guard (cornices need the outset).
+//
+// EXPORTED (declared in shape_grammar.h) rather than file-local, because the Lot
+// System's mesher needs exactly this mitre and the alternative was a second copy
+// of it — which is how its swept bands ended up offsetting each segment along
+// its own normal and leaving every corner open. See the audit, §18.3.
 Poly2 offsetPlan(const Poly2& poly, Real d) {
     const std::size_t n = poly.size();
     if (n < 3 || d == 0) return poly;
@@ -1461,6 +1400,8 @@ Poly2 offsetPlan(const Poly2& poly, Real d) {
     }
     return out;
 }
+
+namespace {
 
 // One plan edge as a facade rectangle: outward for CCW is the RIGHT of a->b.
 FaceRect planEdgeRect(const Poly2& pl, std::size_t i, Real y, Real h) {

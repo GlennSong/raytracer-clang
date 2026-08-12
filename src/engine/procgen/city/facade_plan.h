@@ -100,6 +100,13 @@ enum class ElementKind : uint8_t {
     Opening, Balcony, Cornice, Quoin, Pilaster, BaseCourse, Awning, Portico,
     Porch, Steps, BayWindow, Parapet, Steeple, Spire, Dome, RoofDeck, Sign,
     Planter, Lamp,
+    // "This roof carries plant" — the stair/lift overrun, the water tank, the
+    // air handling. ONE kind, not three: which pieces a given roof gets and how
+    // they are arranged so they never overlap is a design with its own rules
+    // (roof_plant.h), and a recipe asking for "a bulkhead here, a tank there"
+    // would be re-deciding in data what the planner decides properly. The
+    // recipe says whether the building has plant at all; the planner says what.
+    RoofPlant,
 };
 
 const char* elementKindName(ElementKind k);
@@ -115,6 +122,15 @@ struct ElementSelector {
 
     // Floor axis: [floorMin, floorMax], inclusive; -1 = unbounded.
     int floorMin = -1, floorMax = -1;
+
+    // CROWN elements — a parapet, a roof deck, the cornice that finishes a
+    // tier — belong on the tier's LAST level, not on every level in it. The
+    // tier axis below cannot say that: a 24-storey tower is one tier, so
+    // `tier = kTopTier` matched all 24 levels and grew 24 parapets, one per
+    // storey. They were invisible only while a parapet was swept as a
+    // zero-thickness sheet with no inside; giving it real thickness put a wall
+    // through every floor. Twenty-four times the geometry, too.
+    bool topFloorOnly = false;
 
     // Bay axis.
     enum class Bays : uint8_t { All, Centre, Ends, Alternate, Boundaries, None };

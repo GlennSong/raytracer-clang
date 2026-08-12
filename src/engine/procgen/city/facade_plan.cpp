@@ -215,6 +215,7 @@ const char* elementKindName(ElementKind k) {
         case ElementKind::Sign:       return "sign";
         case ElementKind::Planter:    return "planter";
         case ElementKind::Lamp:       return "lamp";
+        case ElementKind::RoofPlant:  return "roof-plant";
     }
     return "?";
 }
@@ -307,6 +308,12 @@ std::vector<ElementPlacement> resolveElements(const ElementRegistry& reg,
             (i == 0 || surfaces.levels[i - 1].tier != t))
             tierStart[t] = static_cast<int>(i);
     }
+    // ...and the LAST level of each tier, which is where a crown belongs.
+    std::vector<int> tierLast(surfaces.topTier + 2, -1);
+    for (std::size_t i = 0; i < surfaces.levels.size(); ++i) {
+        const int t = surfaces.levels[i].tier;
+        if (t + 1 < static_cast<int>(tierLast.size())) tierLast[t] = static_cast<int>(i);
+    }
 
     for (std::size_t si = 0; si < reg.elements.size(); ++si) {
         const ElementSpec& spec = reg.elements[si];
@@ -317,6 +324,10 @@ std::vector<ElementPlacement> resolveElements(const ElementRegistry& reg,
                 (lv.tier < static_cast<int>(tierStart.size()) ? tierStart[lv.tier] : 0);
             if (!spec.on.matchesTier(lv.tier, surfaces.topTier)) continue;
             if (!spec.on.matchesFloor(floorInTier)) continue;
+            if (spec.on.topFloorOnly &&
+                (lv.tier >= static_cast<int>(tierLast.size()) ||
+                 tierLast[lv.tier] != static_cast<int>(li)))
+                continue;   // a crown sits on the tier's last level, not on each
             const std::vector<BayGrid>& grids = surfaces.grids[li];
 
             for (int e = 0; e < static_cast<int>(grids.size()); ++e) {
