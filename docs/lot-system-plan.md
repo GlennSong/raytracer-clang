@@ -1340,3 +1340,29 @@ already followed:
 Do NOT reimplement these in `lot_mesh`. That is the mistake this whole section
 documents, and it is how the parapet ended up as a zero-thickness ribbon beside a
 working `emitPlanParapet`.
+
+### 18.5 The Lua surface: what landed and what §17.8 still owes
+
+The **tunable numbers** are data now (`assets/scripts/city_book.lua`, read
+through the seam `style_book.lua` already used): `plan_rarity` governs how often
+a shape exists in a city, `recipe_weight` overrides any recipe's weight. Both
+sparse and optional, so a level without a book is unchanged. The *selection*
+stays in C++, which is where AGENTS.md puts algorithms.
+
+That is the half of §17.8 that stops taste being a rebuild. The other half — the
+op vocabulary — is untouched and is the larger piece:
+
+| namespace | wraps | state |
+| --- | --- | --- |
+| `pen.*`, `plan.*` | `plan_grammar` / `shape_ops` | not bound |
+| `stack.*` | `mass_stack` | not bound |
+| `fen.*` | `facade_plan::fenestrate` | not bound |
+| `elements.*` | the element registry | not bound |
+| `lot.*` | read-only `LotTags` (§17.3) | not bound |
+| `palette.*` | `material_set` | not bound |
+
+Until those exist, the 37 recipes and 23 templates stay in C++ builder calls.
+Moving them is the point of the vocabulary, not a separate job: a recipe is only
+worth expressing in Lua once the ops it composes are callable from there. The
+gate for that move is in the plan — a recipe that moves must produce the same
+building, so snapshot triangle counts and plan areas before and after.
