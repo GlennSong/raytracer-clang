@@ -576,4 +576,54 @@ ParcelledBlock parcelBlock(const Shape2& block, ProgramSet& programs,
     return out;
 }
 
+std::vector<Shape2> terraceEnvelope(const Shape2& envelope, Real unitWidth) {
+    std::vector<Shape2> out;
+    if (envelope.outer.size() < 3 || unitWidth <= 0.5) {
+        out.push_back(envelope);
+        return out;
+    }
+    const Poly2 ring = tessellate(envelope.outer, 0.2);
+    if (ring.size() < 3) {
+        out.push_back(envelope);
+        return out;
+    }
+    const OBB2 box = orientedBoundingBox(ring);
+    // Terrace across the LONG axis. Splitting the short one would make a row of
+    // slivers front to back rather than a row of houses side by side.
+    const int longAxis = box.half[0] >= box.half[1] ? 0 : 1;
+    const Real frontage = box.half[longAxis] * 2;
+    // Round to a whole number of units, so a frontage worth 2.4 of them becomes
+    // two comfortable houses rather than two and a scrap.
+    int units = static_cast<int>(std::lround(frontage / unitWidth));
+    units = std::max(1, std::min(units, 16));   // a guard, not a tuning knob
+    if (units <= 1) {
+        out.push_back(envelope);
+        return out;
+    }
+    const Vec2 along = box.axis[longAxis];
+    const Vec2 cutDir(-along.y, along.x);
+    const Real step = frontage / units;
+    Shape2 rest = envelope;
+    for (int i = 1; i < units; ++i) {
+        const Vec2 at = box.center + along * (-frontage * Real(0.5) + step * i);
+        std::vector<Shape2> a, b;
+        splitShape(rest, at, cutDir, a, b);
+        // An empty side means the remainder no longer reaches this station (a
+        // concave envelope, an L that has run out of arm) — keep the rest whole
+        // rather than cutting it into pieces nothing can be built on.
+        if (a.empty() || b.empty()) break;
+        for (const Shape2& s : a)
+            if (area(s) > 1.0) out.push_back(s);
+        Shape2 next;
+        Real bestArea = 0;
+        for (const Shape2& s : b)
+            if (area(s) > bestArea) { bestArea = area(s); next = s; }
+        if (bestArea <= 1.0) break;
+        rest = next;
+    }
+    if (area(rest) > 1.0) out.push_back(rest);
+    if (out.empty()) out.push_back(envelope);
+    return out;
+}
+
 }  // namespace engine

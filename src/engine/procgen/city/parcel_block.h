@@ -28,7 +28,13 @@ namespace engine {
 // counters — their absence is the point, not an oversight.
 
 struct BlockParcelParams {
-    Real roadMargin = 2.0;     // verge between the carriageway and the first lot
+    // Inset from THE SHAPE HANDED IN to the first lot. Measure it against
+    // whatever the caller passes: a block face straight off extractBlocks is a
+    // road CENTRELINE, so it needs a half-carriageway + sidewalk + verge (~11 m,
+    // LotParams::roadMargin); an already-inset buildable interior needs only the
+    // verge, which is what this default is. Reading it as "the verge" and
+    // handing in a centreline face puts buildings in the road — that shipped.
+    Real roadMargin = 2.0;
     Real minLotArea = 55.0;    // below this nothing is worth cutting
     Real partyMaxFront = 9.0;  // narrower than this and the side walls are PARTY
     int maxDepth = 7;          // recursion guard
@@ -110,6 +116,20 @@ ParcelledBlock parcelBlock(const Shape2& block, ProgramSet& programs,
 // The far edge is the rear, the rest are sides — promoted to PARTY on a lot too
 // narrow to leave a gap between neighbours.
 void tagLotEdges(Shape2& lot, const Shape2& reference, Real partyMaxFront);
+
+// TERRACE THE ENVELOPE. A long buildable envelope is not a long building — a
+// 60 m street frontage is a ROW of houses everywhere in the world, not one
+// 60 m house. Cut it into units of roughly `unitWidth` across its long axis and
+// let the architect build each one, so the party walls the lot tagger already
+// talks about (`partyMaxFront`, LotTags::neighbours) finally have masses either
+// side of them.
+//
+// `unitWidth` is the program's OWN declared unit size (LotProgram::targetWidth),
+// not a constant: a cottage row and an office plate terrace at their own grain
+// from the same rule, which is the difference between a heuristic and a tuned
+// number. Returns the envelope unchanged when it is already about one unit
+// wide, so the common case costs nothing.
+std::vector<Shape2> terraceEnvelope(const Shape2& envelope, Real unitWidth);
 
 }  // namespace engine
 

@@ -70,7 +70,8 @@ ProgramSet programsForDistrict(int kind) {
     }
 }
 
-void growLotSystemBlocks(const std::vector<Poly2>& blocks, const LotParams& params,
+void growLotSystemBlocks(const std::vector<Poly2>& blocks, std::size_t enclosedCount,
+                         const LotParams& params,
                          LotPlanDebug* debug, std::vector<RenderMesh>* outParts,
                          std::vector<RenderMesh>* outFlatParts,
                          std::vector<LotBuilding>* outLots) {
@@ -123,13 +124,29 @@ void growLotSystemBlocks(const std::vector<Poly2>& blocks, const LotParams& para
         const Real coreness =
             std::max(Real(0), std::min(Real(1), 1.0 - dist / std::max(params.midRadius *
                                                                      2.2, Real(1))));
-        // A rim block (kind 4, or one the caller synthesized outside the grid)
-        // has no far-side street, which is what admits the campus-scale
-        // programs.
-        const bool enclosed = kind != 4;
+        // Enclosed means "streets on every side", which is a fact about the
+        // BLOCK, not about the district it sits in. Reading it off the district
+        // kind (`kind != 4`) meant a rim strip next to a residential hub was
+        // treated as an enclosed block and parcelled at house grain, so
+        // unconstrained ground never got the campus-scale programs it exists
+        // for. The caller knows which blocks came out of extractBlocks.
+        const bool enclosed = bi < enclosedCount;
 
         BlockParcelParams pp;
-        pp.roadMargin = std::max(Real(0.5), params.roadMargin - 8.0);
+        // A BLOCK FACE IS A ROAD CENTRELINE, not a kerb. extractBlocks walks the
+        // road graph, so the face runs down the middle of the carriageway, and
+        // the buildable interior starts a half-carriageway plus its sidewalk in
+        // from it — which is exactly what LotParams::roadMargin measures
+        // (city_lots.h:69) and exactly what the shipping pass insets by before
+        // it parcels (city_lots.cpp:1223).
+        //
+        // This used to subtract a flat 8 m, converting to the parceller's own
+        // margin — a different quantity (parcel_block.h: the verge PAST the
+        // kerb, default 2 m). The result was a 3 m inset from the centre of a
+        // 12 m road, so the first lot began inside the carriageway and its
+        // building stood in the street. Pass the distance the block face
+        // actually needs and let the two pipelines agree on it.
+        pp.roadMargin = std::max(Real(0.5), params.roadMargin);
         const std::uint32_t seed =
             params.seed * 2654435761u + static_cast<std::uint32_t>(bi) * 40503u + 7u;
         ParcelledBlock pb = parcelBlock(block, mix, pp, enclosed, coreness,
@@ -167,52 +184,73 @@ void growLotSystemBlocks(const std::vector<Poly2>& blocks, const LotParams& para
                                                                   prog.recipes.size()]);
             if (!rec) continue;
 
-            BuiltBuilding bb = buildFromRecipe(*rec, envelope->parts[0], tags,
-                                               palettes, seed, lotSeed);
-            if (bb.surfaces.levels.empty()) continue;
+            // A LONG ENVELOPE IS A ROW, NOT A LONG BUILDING. Sixty metres of
+            // frontage is a terrace everywhere in the world; building it as one
+            // mass gives the sixty-metre house nobody lives in. Cut it at the
+            // program's OWN declared unit width, so a cottage row and an office
+            // plate each terrace at their own grain from one rule.
+            const std::vector<Shape2> units =
+                terraceEnvelope(envelope->parts[0], prog.targetWidth());
 
-            const Real baseY =
-                params.ground ? params.ground(centroid(envelope->parts[0]).x,
-                                              centroid(envelope->parts[0]).y)
-                              : Real(0);
+            for (std::size_t ui = 0; ui < units.size(); ++ui) {
+                const Shape2& unit = units[ui];
+                if (area(unit) < 20.0) continue;
+                // Each unit is its own building: its own seed, so a terrace is a
+                // row of related houses rather than one house stamped N times.
+                const std::uint32_t unitSeed =
+                    lotSeed + static_cast<std::uint32_t>(ui) * 2654435761u;
 
-            LotMeshParams mp;
-            mp.seed = lotSeed;
-            mp.retail = rec->placeType == "shop";
-            mp.baseY = baseY;
-            if (outParts) {
-                BuildingMesh full = meshBuilding(bb, mp);
-                SiteFurnishing furn = furnishSite(site, prog, lotSeed);
-                meshSiteInto(full, site, furn, baseY);
-                mergeParts(*outParts, full, Vec2(0, 0), 0);
-            }
-            if (outFlatParts) {
-                LotMeshParams fp = mp;
-                fp.detail = FacadeDetail::Flat;
-                fp.proxy = false;
-                mergeParts(*outFlatParts, meshBuilding(bb, fp), Vec2(0, 0), 0);
-            }
+                BuiltBuilding bb =
+                    buildFromRecipe(*rec, unit, tags, palettes, seed, unitSeed);
+                if (bb.surfaces.levels.empty()) continue;
 
-            if (outLots) {
-                // The collider/HLOD record. The PLAN polygon is the real
-                // footprint, so a courtyard or an L keeps its shape instead of
-                // spilling onto the sidewalk as a box would.
-                LotBuilding lb;
-                const Shape2& foot = bb.surfaces.levels[0].plans[0];
-                lb.plan = tessellate(foot.outer, 0.25);
-                lb.site = centroid(foot);
-                Vec2 lo, hi;
-                bounds(foot, lo, hi);
-                lb.width = hi.x - lo.x;
-                lb.depth = hi.y - lo.y;
-                lb.height = bb.surfaces.levels.back().y1;
-                lb.yaw = 0;
-                lb.type = placeTypeFor(rec->placeType);
-                lb.recipe = rec->name;
-                lb.baseY = baseY;
-                lb.groundY = baseY;
-                lb.color = bb.materials.forTier(0).wallColor;
-                outLots->push_back(std::move(lb));
+                const Real baseY =
+                    params.ground ? params.ground(centroid(unit).x, centroid(unit).y)
+                                  : Real(0);
+
+                LotMeshParams mp;
+                mp.seed = unitSeed;
+                mp.retail = rec->placeType == "shop";
+                mp.baseY = baseY;
+                if (outParts) {
+                    BuildingMesh full = meshBuilding(bb, mp);
+                    // The SITE is the lot's, not the unit's — furnish it once,
+                    // with the first unit, or a terrace gets N copies of the
+                    // same front path stacked on each other.
+                    if (ui == 0) {
+                        SiteFurnishing furn = furnishSite(site, prog, lotSeed);
+                        meshSiteInto(full, site, furn, baseY);
+                    }
+                    mergeParts(*outParts, full, Vec2(0, 0), 0);
+                }
+                if (outFlatParts) {
+                    LotMeshParams fp = mp;
+                    fp.detail = FacadeDetail::Flat;
+                    fp.proxy = false;
+                    mergeParts(*outFlatParts, meshBuilding(bb, fp), Vec2(0, 0), 0);
+                }
+
+                if (outLots) {
+                    // The collider/HLOD record. The PLAN polygon is the real
+                    // footprint, so a courtyard or an L keeps its shape instead
+                    // of spilling onto the sidewalk as a box would.
+                    LotBuilding lb;
+                    const Shape2& foot = bb.surfaces.levels[0].plans[0];
+                    lb.plan = tessellate(foot.outer, 0.25);
+                    lb.site = centroid(foot);
+                    Vec2 lo, hi;
+                    bounds(foot, lo, hi);
+                    lb.width = hi.x - lo.x;
+                    lb.depth = hi.y - lo.y;
+                    lb.height = bb.surfaces.levels.back().y1;
+                    lb.yaw = 0;
+                    lb.type = placeTypeFor(rec->placeType);
+                    lb.recipe = rec->name;
+                    lb.baseY = baseY;
+                    lb.groundY = baseY;
+                    lb.color = bb.materials.forTier(0).wallColor;
+                    outLots->push_back(std::move(lb));
+                }
             }
         }
 

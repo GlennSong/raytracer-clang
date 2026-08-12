@@ -21,7 +21,15 @@ namespace engine {
 // buildFromRecipe -> meshBuilding. The district's program mix comes from the
 // nearest hub's kind, exactly as the road grain does, so "what this land is
 // for" is answered once and the streets and the buildings agree about it.
-void growLotSystemBlocks(const std::vector<Poly2>& blocks, const LotParams& params,
+// `enclosedCount`: how many leading entries of `blocks` are real graph FACES,
+// bounded by streets on every side. Anything past it is a synthesized rim strip,
+// open on its far side — and open ground is what admits the campus-scale
+// programs (university, office park, big-box, works), because their parcels are
+// larger than any enclosed block can offer. Whether a block is enclosed is a
+// GEOMETRIC fact; deriving it from the district kind instead meant a rim strip
+// beside a residential hub was parcelled at house grain.
+void growLotSystemBlocks(const std::vector<Poly2>& blocks, std::size_t enclosedCount,
+                         const LotParams& params,
                          LotPlanDebug* debug, std::vector<RenderMesh>* outParts,
                          std::vector<RenderMesh>* outFlatParts,
                          std::vector<LotBuilding>* outLots);

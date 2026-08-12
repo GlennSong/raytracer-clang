@@ -499,3 +499,44 @@ TEST_CASE(parcel_block_grain_follows_the_programs) {
     // A block face carries several lots, so it reads as a block.
     CHECK(down.length >= down.depth);
 }
+
+// A LONG ENVELOPE IS A ROW OF BUILDINGS, NOT ONE LONG BUILDING. Sixty metres of
+// frontage built as a single mass is the sixty-metre house nobody lives in — the
+// shape the city kept producing because the architect took the whole buildable
+// envelope as one plate. The rule has to be expressed against the PROGRAM's own
+// unit width, or it is a tuned constant that only suits one district.
+TEST_CASE(parcel_terrace_splits_a_long_envelope_at_the_program_grain) {
+    const Shape2 wide = rectShape(0, 0, 60, 12);
+
+    // Eight-metre units: a terrace of about eight houses.
+    const std::vector<Shape2> row = terraceEnvelope(wide, 8.0);
+    CHECK(row.size() >= 6);
+    Real total = 0;
+    for (const Shape2& u : row) {
+        total += area(u);
+        Vec2 lo, hi;
+        bounds(u, lo, hi);
+        // Every unit is a plausible dwelling, not a slab and not a sliver.
+        CHECK(hi.x - lo.x < 16.0);
+        CHECK(area(u) > 20.0);
+    }
+    // The row covers the envelope: terracing divides land, it does not lose it.
+    CHECK(std::fabs(total - area(wide)) < area(wide) * 0.02);
+
+    // The SAME envelope at a plate program's grain stays one building — the rule
+    // scales with the program instead of imposing a house-sized world on it.
+    CHECK(terraceEnvelope(wide, 55.0).size() == 1);
+
+    // A square lot is already one unit wide and must be left alone.
+    CHECK(terraceEnvelope(rectShape(0, 0, 10, 11), 9.0).size() == 1);
+
+    // And the cut runs across the LONG axis: splitting the short one would make
+    // a row of slivers front to back rather than houses side by side.
+    const std::vector<Shape2> deep = terraceEnvelope(rectShape(0, 0, 12, 60), 8.0);
+    CHECK(deep.size() >= 6);
+    for (const Shape2& u : deep) {
+        Vec2 lo, hi;
+        bounds(u, lo, hi);
+        CHECK(hi.y - lo.y < 16.0);
+    }
+}

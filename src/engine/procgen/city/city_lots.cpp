@@ -2348,10 +2348,24 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
                  << " mainline-proxy segments (no routed ROW)";
     }
     std::vector<Poly2> blocks = extractBlocks(rg);
-    // Rim blocks: the town edge has no enclosed faces — synthesize rectangles
-    // on the boundary roads' open sides so the outskirts build up too.
-    std::vector<Poly2> rim = edgeBlocks(rg, blocks, edgeParams);
-    blocks.insert(blocks.end(), rim.begin(), rim.end());
+    const std::size_t faceCount = blocks.size();
+    // Rim blocks: a GROWN town's edge has no enclosed faces, so synthesize
+    // rectangles on the boundary roads' open sides and the outskirts build up
+    // too. A DRAWN graph is different in kind — the author chose the extent, and
+    // the faces they drew are the city. Inventing strips around it produced
+    // blocks with no street between them (9 drawn blocks came back as 31), which
+    // reads exactly like the road network failing to carve the map.
+    const bool drawn = std::any_of(nets.begin(), nets.end(),
+                                   [](const RoadNet& n) { return n.authored; });
+    if (!drawn) {
+        std::vector<Poly2> rim = edgeBlocks(rg, blocks, edgeParams);
+        blocks.insert(blocks.end(), rim.begin(), rim.end());
+    }
+    // Which blocks are real graph FACES (bounded by streets on every side) and
+    // which are synthesized rim strips, open on their far side. That is a
+    // geometric fact about the block, and the programs a block can host depend
+    // on it — see the `enclosed` argument to parcelBlock.
+    const std::size_t enclosedCount = faceCount;
     // Per-hub-cluster landmark quotas (8km-city P3): the loader forwards hubs
     // as {pos, kind} only, so recover each hub's SITE id (0 = the primary
     // city, 1+ = satellite towns) from the nets' own cityHubs by position —
@@ -2376,9 +2390,12 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
     if (lp.lotSystem) {
         // The new pipeline, block for block. Same outputs, so the loader, the
         // colliders, the chunker and the HLOD never learn which pass ran.
-        growLotSystemBlocks(blocks, lp, &r.plan, &r.parts,
+        growLotSystemBlocks(blocks, enclosedCount, lp, &r.plan, &r.parts,
                             wantFlatParts ? &r.flatParts : nullptr, &r.lots);
-        LOG_INFO << "[citylots] lot system: " << blocks.size() << " blocks -> "
+        LOG_INFO << "[citylots] lot system: " << blocks.size() << " blocks ("
+                 << enclosedCount << " enclosed, "
+                 << (blocks.size() - enclosedCount) << " rim"
+                 << (drawn ? ", graph drawn by the level" : "") << ") -> "
                  << r.lots.size() << " lots";
         return r;
     }
