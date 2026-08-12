@@ -1217,3 +1217,96 @@ picks a recipe, never a per-storey behaviour:
 Mixing `profiled` and `staged` inside one band is what produces drift; the
 discipline is a per-band property and the validator rejects a band that sets
 both a loft target and an incompatible profile.
+
+---
+
+## 18. What the previous generation already did (audit)
+
+Written after the first rendered frames, because the rooftop kit was found *by
+accident* and that is not a search strategy. The question this section answers is
+the one that should have been asked before `lot_mesh` was written: **what does the
+shipping city pipeline already do, and which of it did the Lot System drop?**
+
+### 18.1 The structural finding
+
+`shape_grammar.h` exports seven symbols: `facadeColor`, `growBuilding`,
+`growPlanBuilding`, `emitBox`, `emitShell`, `emitParapet` (the box form) and
+`emitQuad`. Everything else in that 2 000-line file is `static`.
+
+So the old pipeline is **one entry point, not a vocabulary**. `emitPlanParapet`,
+`emitCrown`, `emitPortico`, `emitSteeple`, `emitRotunda`, `emitBayFront`,
+`emitPorch`, `emitSawtoothRoof`, `emitCurtainWall`, `emitFlaredRoof`,
+`growCylinder`, `growPagoda`, `emitParkingDeckRect`, `emitBalconyRun` and
+`emitEntranceSteps` are all file-local. A new mesher **could not** have reused
+them without extracting them first.
+
+That reframes the migration. It is not "copy the roof code across" — it is
+*promote the old emitters into a shared registry so both meshers call one
+implementation*. Anything less produces a third copy, which is what
+`AGENTS.md`'s single-source-of-truth rule exists to prevent.
+
+### 18.2 The ledger
+
+| capability | old | new | status |
+| --- | --- | --- | --- |
+| parapet + coping | `emitPlanParapet:1509` — upstand with inner *and* outer faces, oversailing coping, top and underside caps, mitred via `offsetPlan` | `emitSweptBand` with `project = 0` | **REGRESSED** — zero thickness, no coping, no mitre |
+| rooftop kit: access bulkhead, water tanks, louvred HVAC, fan discs, **plus the cell partition that stops them overlapping** | `emitCrown:1020` | — | **DROPPED** |
+| portico / entrance steps / columns | `emitPortico:1650`, `emitEntranceSteps:1628`, `emitColumn:1609` | `ElementKind::Portico/Steps` declared | **DECLARED, UNBUILT** (`default: break`) |
+| porch | `emitPorch:1763` | `ElementKind::Porch` declared | **DECLARED, UNBUILT** |
+| bay window | `emitBayFront:1962` | `ElementKind::BayWindow` declared | **DECLARED, UNBUILT** |
+| steeple / spire | `emitSteeple:1914`, `emitSpireCrown:1822` | `ElementKind::Steeple/Spire` declared | **DECLARED, UNBUILT** |
+| rotunda / dome | `emitRotunda:1694` | `ElementKind::Dome` declared | **DECLARED, UNBUILT** |
+| balcony | `emitBalconyRun:1734` — a run across bays | single-bay tray | **PARTIAL** |
+| sawtooth roof | `emitSawtoothRoof:1857` | `SawtoothShed` is a *plan* template; the roof stays flat | **PARTIAL** |
+| flared / pagoda roof, cylinder mass | `emitFlaredRoof:933`, `growCylinder:885`, `growPagoda:961` | — | **DROPPED** |
+| parking-deck facade | `emitParkingDeckRect:1794` | a `parking` recipe exists; its facade does not | **DROPPED** |
+| prop instancing | `CityInstanceGroup` (`city.h:98`) | `lot_city` fills none | **DROPPED** |
+| lot fixtures | — | `LotFixtures` is built and never consumed | **UNWIRED** |
+| oriented collider | oriented box | `lb.yaw` always 0 | **REGRESSED** (the exact prism collider compensates) |
+| multi-mass collider | — | records `levels[0].plans[0]` only | **PARTIAL** |
+
+Of 19 declared `ElementKind`s, `lot_mesh` builds **four** — Cornice, BaseCourse,
+Parapet, Balcony — plus `Opening` as a permission flag. The registry advertises
+fifteen features it cannot build.
+
+### 18.3 What this changes
+
+1. **Phase 2 is an extraction, not a port.** Promote the file-local emitters into
+   the element registry; both meshers then call one implementation.
+2. **Do not hand-fix `emitSweptBand`'s mitre.** `emitPlanParapet` already solves
+   it correctly on `offsetPlan`; the new side has `offsetShape`
+   (`shape_ops.h:77`). Reuse an offsetter, do not write a third.
+3. **The registry must not advertise what it cannot build.** Every `ElementKind`
+   either gets an emitter or is deleted, so `default: break` stops being a place
+   features go to disappear silently.
+4. **Instancing is a budget item, not a feature request.** The old path sends
+   props through `CityInstanceGroup`; the new one merges everything into
+   per-`PartId` meshes. That belongs in the triangle-budget work, with numbers.
+
+### 18.4 Status after the first migration pass
+
+The rooftop kit is across. Its **arrangement** — what a roof carries and how the
+pieces are placed so none overlaps — now lives in `roof_plant.h` and is called by
+both `shape_grammar`'s `emitCrown` and the Lot System's mesher, so there is one
+design and two drawings rather than two designs. The move preserves the RNG call
+sequence exactly (`Rng::range(a,b)` is `a + (b-a)*unit()`, so a `unit()` callback
+is equivalent), which is why it changed no building that already existed.
+
+`offsetPlan` was extracted the same way: it was file-local in an anonymous
+namespace, which is precisely why the Lot System grew its own broken mitre.
+
+**Still unbuilt**, now reported at build time instead of vanishing into
+`default: break` (counts from one `make test` run):
+
+| kind | asked for | note |
+| --- | --- | --- |
+| `RoofDeck` | 60 | includes the **chimney** variant — every recipe that asks for one gets nothing |
+| `Steps` | 27 | `emitEntranceSteps` exists in shape_grammar |
+| `Quoin` | 21 | — |
+| `Porch` | 20 | `emitPorch` exists |
+| `Sign` / `Awning` | 18 each | shopfronts read as blank ground floors without them |
+| `Portico` | 7 | `emitPortico` exists |
+| `Pilaster` | 7 | — |
+
+Five of the seven already have working emitters in `shape_grammar.cpp`, file-local.
+The extraction pattern is established; this is the list it should be applied to.
