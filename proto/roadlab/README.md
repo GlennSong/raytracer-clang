@@ -12,7 +12,7 @@ window, so it builds and runs anywhere `make` does.
 
 ```bash
 make roadlab                      # build ./roadlab
-make roadlab-test                 # 23300 assertions, no framework
+make roadlab-test                 # 23345 assertions, no framework
 make roadlab-shots                # render every demo to out_roadlab/
 make roadlab-wgsl                 # regenerate rl_paint.wgsl from rl_paint.h
 make roadlab-wgsl-check           # + validate it with naga (cargo install naga-cli)
@@ -28,6 +28,7 @@ make roadlab-wgsl-conformance     # run the WGSL and diff it against the C++
 ./roadlab --demo interchange --xodr out.xodr    # export OpenDRIVE
 ./roadlab --import out.xodr --view top --report # ...and read it back
 ./roadlab --fallbacks                           # census every quiet substitution
+./roadlab --demo grades --view persp --terrain-amp 20   # real relief, real earthworks
 ```
 
 ---
@@ -502,6 +503,79 @@ continuing anything — so a successor-only search reports that no exit is
 reachable from any freeway. That says more about the search than the road. The
 reachability check now follows lane changes, and with the alignment fixed the
 same measurement returns 10 of 10.
+
+## Earthworks: the ground meets the road on a batter
+
+The prototype always conformed the terrain to the roads, but it did it with a
+**fixed-width feather** — a smoothstep from the road's edge height out to natural
+ground over a constant number of metres. That is the wrong shape, and the reason
+is worth stating plainly: a fixed width makes the slope depend on how deep the
+earthwork happens to be. A 20 cm difference becomes a lazy ramp; a 4 m difference
+becomes a wall. Measured on the demos as shipped, the ground beside a road
+reached **76 degrees**, and with real relief **83 degrees**.
+
+The worst case was not even the deep ones. It was a road **END**: the conform
+tested `s` against the road's window and gave up outside it, so where a road
+simply stopped, the ground fell from the carriageway to natural ground in half a
+metre. The inverse map reports a miss for a point off the end of a spine — there
+is no perpendicular foot — and that miss was read as "this road is irrelevant
+here".
+
+What the engine does instead (ADR-0075, `TerrainFlatten::Falloff::DaylightBatter`)
+is run a real earthwork: a slope at an **authored gradient** that continues until
+it reaches natural ground, where it *daylights*. That idea is what came across.
+
+Each road and junction pad claims a **band** of heights at a query point: at
+distance `d` from its footprint the ground may be as high as `yEdge + cut·d` and
+as low as `yEdge − fill·d`. At `d = 0` the band collapses to the road's own
+surface, which is what makes the ground meet the kerb exactly. Far away it
+constrains nothing. The ground is then the natural height clamped into the band.
+
+Bands **combine by intersection**, not by the weighted average the old code used,
+and that is the substantive change. An average of two surfaces is a third surface
+that is neither, and its gradient is unbounded; an intersection of two batters is
+a batter. Defaults are 1:1 for a cut (undisturbed material stands steeper) and
+1:2 for a fill.
+
+Two details carry most of the improvement:
+
+**Distance is to the footprint, not across the road.** Clamping the station into
+the road's window and the offset into its cross-section gives the nearest point
+of a 2D region, which has ends as well as sides. The end cliff disappears without
+a special case — walking off the end of a road now measures **0.56** against a
+1.00 batter, where it used to measure **8.17**.
+
+**Where the earthwork cannot daylight, that is a retaining wall.** Three
+situations qualify: two roads at different levels closer together than their
+batters can reconcile; a batter that hits its reach before it meets ground; and
+an **abutment**, where the approach embankment claims the ground and the deck
+beside it does not. roadlab does not build walls, so a step remains — and each is
+counted in the fallback census rather than smoothed away, because a silently
+smoothed wall is a lie about the geometry.
+
+The test asserts the property rather than a picture: walking outward from every
+road edge in every demo at three terrain amplitudes, no ground is steeper than
+its authored batter *or* the hillside it sits on, whichever is greater — and
+that the bound moves when the batter is re-authored, so it cannot pass by the
+terrain simply being flat. Demos with no structures hold that strictly.
+
+### What is still unresolved
+
+Demos that carry roads on structures still show a bounded step near the abutment
+— worst **2.05** against a 1.00 batter, on a handful of samples in `interchange`,
+`tiers` and `showcase`. The vicinity of the carrier transition is marked, but the
+boundary between "embankment claims the ground" and "deck does not" is not yet
+solved, only fenced. It is asserted at 2.5 so a regression is visible.
+
+## The roundabout's aprons
+
+The arms of the `roundabout` demo stopped 26 m from the ring's reference line
+while the ring's outer edge is about 9 m out — so the junction had to bridge a
+17 m gap, and every "entry" rendered as a plain of tarmac with the give-way line
+somewhere in the middle of it. The stand-off is now derived from the ring's own
+cross-section rather than typed, leaving the few metres the kerb return needs.
+Worth noting the failure mode: the lint was clean throughout, because a junction
+that spans a large gap is not invalid — just wrong.
 
 ## Getting the markings onto a GPU
 

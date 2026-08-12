@@ -40,6 +40,7 @@ struct Options {
     int cars = 0, peds = 0;
     double simSeconds = 0;
     double wear = -1, grime = -1;
+    double terrainAmp = -1, terrainFreq = -1;
     int debugMode = 0;
     bool props = true, terrain = true, markings = true, decals = true;
     bool report = false, lint = false, list = false, quiet = false;
@@ -94,6 +95,8 @@ void usage() {
         "  --xodr <file.xodr>  export the network as OpenDRIVE\n"
         "  --import <f.xodr>   load an OpenDRIVE file as the scene\n"
         "  --fallbacks         census every silent-substitution path\n"
+        "  --terrain-amp <m>   terrain relief amplitude (default per demo, 1.5-5 m)\n"
+        "  --terrain-wave <m>  terrain feature wavelength in metres\n"
         "  --paint-fixture <f> dump marking-evaluator cases for the WGSL comparison\n"
         "  --list              list presets and demos\n");
 }
@@ -314,6 +317,8 @@ int main(int argc, char** argv) {
         if (matchNum(i, argc, argv, "--sim", d)) { opt.simSeconds = d; continue; }
         if (matchNum(i, argc, argv, "--wear", d)) { opt.wear = d; continue; }
         if (matchNum(i, argc, argv, "--grime", d)) { opt.grime = d; continue; }
+        if (matchNum(i, argc, argv, "--terrain-amp", d)) { opt.terrainAmp = d; continue; }
+        if (matchNum(i, argc, argv, "--terrain-wave", d)) { opt.terrainFreq = 1.0 / std::max(1.0, d); continue; }
         if (matchNum(i, argc, argv, "--seed", d)) { opt.seed = uint32_t(d); continue; }
         if (matchNum(i, argc, argv, "--threads", d)) { opt.threads = int(d); continue; }
         if (std::strcmp(argv[i], "--cam") == 0 && i + 3 < argc) {
@@ -432,6 +437,11 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "roadlab: unknown demo '%s'\n", demo.c_str());
             return false;
         }
+        // AFTER the builders, not before: every demo sets its own terrain
+        // amplitude, so an override applied up front is silently discarded.
+        if (opt.terrainAmp >= 0) sc.terrain.amplitude = opt.terrainAmp;
+        if (opt.terrainFreq > 0) sc.terrain.frequency = opt.terrainFreq;
+
         finalizeScene(sc, opt.terrain, opt.props);
         return true;
     };

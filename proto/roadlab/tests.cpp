@@ -2250,6 +2250,162 @@ void testProfileTextureIsWhatTheShaderWouldSample() {
     }
 }
 
+// --- earthworks -------------------------------------------------------------
+
+void testEarthworksRunOnTheirBatter() {
+    group("earthworks");
+    // The ground meets a road at the road's edge and then runs away from it on a
+    // slope with an AUTHORED gradient, until it reaches natural ground. The
+    // property that makes it an earthwork rather than a feather is that the
+    // gradient does not depend on how deep the earthwork is.
+    //
+    // Before this existed the conform was a fixed-width smoothstep, so the slope
+    // was the height difference divided by a constant: measured at 76 degrees on
+    // the demos as shipped and 83 degrees with real relief. The worst case was a
+    // road END, where the influence stopped dead and the ground fell from the
+    // carriageway to natural ground in half a metre.
+    for (const std::string& name : demoNames()) {
+        for (double amp : {6.0, 20.0, 45.0}) {
+            Scene sc;
+            if (!buildDemo(name, sc)) continue;
+            sc.terrain.amplitude = amp;
+            sc.terrain.frequency = 1.0 / 200.0;
+            finalizeScene(sc, false, false);
+            const TerrainParams& tp = sc.terrain;
+
+            double worst = 0;
+            long sampled = 0, steep = 0, walls = 0;
+            for (const Road& r : sc.net.roads()) {
+                if (r.kind == RoadKind::Connector) continue;
+                double len = r.activeLength();
+                if (len < 20.0) continue;
+                for (int k = 0; k <= 10; ++k) {
+                    double s = r.begin() + len * double(k) / 10.0;
+                    if (carrierAt(r, s) != CarrierKind::AtGrade) continue;
+                    for (int side = 0; side < 2; ++side) {
+                        double edgeT = side == 0 ? r.xs.leftExtentAt(s) : r.xs.rightExtentAt(s);
+                        Vec3 e0 = r.surfacePoint(s, edgeT);
+                        Vec3 e1 = r.surfacePoint(s, edgeT + (side == 0 ? 0.01 : -0.01));
+                        Vec2 out = normalize(Vec2{e1.x - e0.x, e1.z - e0.z});
+                        // Walk out past where any batter could still be running.
+                        for (int m = 1; m <= 34; ++m) {
+                            Vec2 q{e0.x + out.x * 1.3 * m, e0.z + out.y * 1.3 * m};
+                            // Skip retaining-wall sites. Two roads at different
+                            // levels closer together than their batters can
+                            // reconcile leave a real step, and calling that a
+                            // failed batter would be blaming the earthwork for a
+                            // geometry decision. terrainConflictAt names them, so
+                            // the bound below can be strict rather than a
+                            // percentage — a percentage would also have passed
+                            // while a genuine batter bug produced the same rate.
+                            if (terrainConflictAt(sc.net, tp, q.x, q.y) ||
+                                terrainConflictAt(sc.net, tp, q.x + 0.5, q.y) ||
+                                terrainConflictAt(sc.net, tp, q.x - 0.5, q.y) ||
+                                terrainConflictAt(sc.net, tp, q.x, q.y + 0.5) ||
+                                terrainConflictAt(sc.net, tp, q.x, q.y - 0.5)) {
+                                ++walls;
+                                continue;
+                            }
+                            // The bound is the batter OR the natural ground,
+                            // whichever is steeper. An earthwork is not allowed
+                            // to invent a slope; it is perfectly allowed to leave
+                            // a mountainside alone, and at these amplitudes the
+                            // mountainside is steeper than 1:1 on its own. Only
+                            // measuring against the batter would score the
+                            // terrain's own relief as an earthwork failure.
+                            double nat = 0;
+                            double h0 = terrainBaseHeight(tp, q.x, q.y);
+                            for (int e = 0; e < 4; ++e) {
+                                double ex = e == 0 ? 0.5 : (e == 1 ? -0.5 : 0.0);
+                                double ez = e == 2 ? 0.5 : (e == 3 ? -0.5 : 0.0);
+                                nat = std::max(nat, std::fabs(terrainBaseHeight(tp, q.x + ex,
+                                                                                q.y + ez) - h0) / 0.5);
+                            }
+                            double allowed = std::max(tp.cutBatter * 1.35, nat * 1.1) + 0.05;
+                            double sl = terrainSlopeAt(sc.net, tp, q, 0.5);
+                            ++sampled;
+                            worst = std::max(worst, sl);
+                            if (sl > allowed) ++steep;
+                        }
+                    }
+                }
+            }
+            check(sampled > 200, (name + ": there was ground beside the roads to walk").c_str());
+            // Where a road is carried on a structure the earthwork still has an
+            // unsolved boundary: the approach embankment claims the ground and
+            // the deck does not, so a step survives just outside the abutment
+            // vicinity this marks. It is bounded and localised — worst measured
+            // 2.05 against a 1.00 batter, on a handful of samples in the three
+            // multi-level demos — but it is not resolved, so it is stated rather
+            // than absorbed into a loose global bound.
+            bool hasStructures = false;
+            for (const Road& rr : sc.net.roads())
+                if (!rr.structures.empty()) hasStructures = true;
+            if (hasStructures) {
+                check(worst <= 2.5,
+                      (name + ": steps near a structure stay bounded").c_str());
+            } else {
+                check(steep == 0,
+                      (name + ": no ground is steeper than its batter or the hillside").c_str());
+            }
+            if (walls > 0 && amp == 20.0)
+                std::printf("  note: %-11s amp %.0f: worst batter %.2f (authored %.2f), "
+                            "%ld of %ld samples are retaining-wall sites\n",
+                            name.c_str(), amp, worst, tp.cutBatter, walls, walls + sampled);
+        }
+    }
+
+    // The gradient is authored, so changing it must change the ground. A test
+    // that only bounds the slope would pass just as well if the batter were
+    // ignored and the terrain were flat.
+    Scene sc;
+    buildDemo("grades", sc);
+    sc.terrain.amplitude = 30.0;
+    Scene gentle = sc, steep = sc;
+    gentle.terrain.cutBatter = 0.25;
+    gentle.terrain.fillBatter = 0.2;
+    steep.terrain.cutBatter = 2.0;
+    steep.terrain.fillBatter = 1.5;
+    finalizeScene(gentle, false, false);
+    finalizeScene(steep, false, false);
+    const Road& r = gentle.net.roads().front();
+    double s = r.begin() + r.activeLength() * 0.5;
+    double edgeT = r.xs.leftExtentAt(s);
+    Vec3 e0 = r.surfacePoint(s, edgeT);
+    Vec3 e1 = r.surfacePoint(s, edgeT + 0.01);
+    Vec2 out = normalize(Vec2{e1.x - e0.x, e1.z - e0.z});
+    double gentleMax = 0, steepMax = 0;
+    for (int m = 1; m <= 50; ++m) {
+        Vec2 q{e0.x + out.x * 0.75 * m, e0.z + out.y * 0.75 * m};
+        gentleMax = std::max(gentleMax, terrainSlopeAt(gentle.net, gentle.terrain, q, 0.5));
+        steepMax = std::max(steepMax, terrainSlopeAt(steep.net, steep.terrain, q, 0.5));
+    }
+    check(steepMax > gentleMax * 1.5,
+          "a steeper authored batter really does cut a steeper slope");
+    check(gentleMax < 0.5, "and a gentle one stays gentle");
+
+    // A road END is the case that used to be a cliff: the conform stopped at the
+    // road's window, so the ground fell to natural in one sample. The earthwork
+    // now measures distance to the road's FOOTPRINT, which has ends as well as
+    // sides, so it runs out past the end the same way it runs out sideways.
+    Scene ends;
+    buildDemo("lanes", ends);
+    ends.terrain.amplitude = 30.0;
+    finalizeScene(ends, false, false);
+    const Road& re = ends.net.roads().front();
+    Frame f = re.spine.frameAt(re.end());
+    Vec2 ahead = dirOf(f.heading);
+    double worstEnd = 0;
+    for (int m = 0; m <= 50; ++m) {
+        Vec2 q{f.planPos.x + ahead.x * 0.75 * m, f.planPos.y + ahead.y * 0.75 * m};
+        worstEnd = std::max(worstEnd, terrainSlopeAt(ends.net, ends.terrain, q, 0.5));
+    }
+    check(worstEnd <= ends.terrain.cutBatter * 1.35 + 0.05,
+          "the earthwork runs out past a road's END, not off a cliff");
+    std::printf("  note: worst slope walking off a road end %.2f (batter %.2f)\n", worstEnd,
+                ends.terrain.cutBatter);
+}
+
 // --- the generated WGSL -----------------------------------------------------
 
 namespace {
@@ -2722,6 +2878,7 @@ int main() {
     testBakedBoundariesMatchTheCrossSection();
     testSeamSmearIsMillimetresWide();
     testProfileTextureIsWhatTheShaderWouldSample();
+    testEarthworksRunOnTheirBatter();
     testGeneratedWgslTracksTheHeader();
     testMetroGenerator();
     testMetroSurvivesOpenDrive();

@@ -1,5 +1,7 @@
 #include "structure.h"
 
+#include "diag.h"
+
 namespace roadlab {
 
 StructureSpan bridgeSpan(double s0, double s1, double pierSpacing, double clearance) {
@@ -255,11 +257,59 @@ double polygonDistance(const std::vector<Vec2>& poly, Vec2 q) {
 
 }  // namespace
 
-double terrainHeightAt(const Network& net, const TerrainParams& p, double x, double z) {
+// One earthwork's claim on the ground at a query point: the band of heights the
+// ground is allowed to take there.
+//
+// A road at edge height `yEdge`, `d` metres away, permits the ground to be as
+// high as `yEdge + cut*d` (any higher and the cut batter would be steeper than
+// its gradient) and as low as `yEdge - fill*d`. At d = 0 the band collapses to
+// the road's own surface, which is what makes the ground meet the kerb exactly.
+// Far away the band is wide enough to constrain nothing.
+//
+// Bands COMBINE BY INTERSECTION rather than by a weighted average. That is the
+// whole reason this replaced the old blend: an average of two surfaces is a
+// third surface that is neither, and its gradient is unbounded, whereas an
+// intersection of two batters is a batter. Where two claims genuinely conflict
+// — two roads at different heights closer together than their batters can
+// resolve — the nearer one wins, and the census counts it, because that is a
+// retaining wall in the real world and roadlab has no walls.
+struct Band {
+    double lo = -1e300, hi = 1e300;
+    bool any = false;
+};
+
+namespace {
+
+void addClaim(Band& band, double yEdge, double d, const TerrainParams& p,
+              double& nearest, double& nearestY) {
+    double run = std::min(std::max(d, 0.0), p.batterReach);
+    double lo = yEdge - p.fillBatter * run;
+    double hi = yEdge + p.cutBatter * run;
+    if (d < nearest) {
+        nearest = d;
+        nearestY = yEdge;
+    }
+    band.lo = std::max(band.lo, lo);
+    band.hi = std::min(band.hi, hi);
+    band.any = true;
+}
+
+}  // namespace
+
+static double terrainHeightImpl(const Network& net, const TerrainParams& p, double x,
+                                double z, bool* conflicted) {
+    if (conflicted) *conflicted = false;
     double base = terrainBaseHeight(p, x, z);
     if (!p.enabled) return base;
     Vec2 plan{x, z};
-    double bestWeight = 0.0, hsum = 0.0, wsum = 0.0;
+    Band band;
+    double nearest = 1e300, nearestY = base;
+    // Nothing beyond this can constrain anything: past the reach every band is
+    // wider than the terrain's own relief.
+    const double kReach = p.batterReach;
+    // How far past the reach to keep looking, only so an undaylighted batter can
+    // be RECOGNISED as one. Nothing out here claims the ground.
+    const double kSearchMargin = 30.0;
 
     // Junction pads conform too. They are road surface as much as a carriageway
     // is; leaving them out left a cliff of unconformed ground around every
@@ -276,49 +326,113 @@ double terrainHeightAt(const Network& net, const TerrainParams& p, double x, dou
             hi.x = std::max(hi.x, q.x);
             hi.y = std::max(hi.y, q.y);
         }
-        if (x < lo.x - p.slopeWidth || x > hi.x + p.slopeWidth || z < lo.y - p.slopeWidth ||
-            z > hi.y + p.slopeWidth)
+        if (x < lo.x - kReach || x > hi.x + kReach || z < lo.y - kReach || z > hi.y + kReach)
             continue;
         double d = polygonDistance(j.boundary, plan);
-        if (d > p.slopeWidth) continue;
-        double w = d <= 0 ? 1.0 : 1.0 - smoothstepd(0.0, p.slopeWidth, d);
-        // Weighted accumulation, not a winner-takes-all pick. Choosing the single
-        // strongest influence makes the height field jump wherever the winner
-        // changes, and a jump in a height field is a cliff — which is exactly
-        // what turned the ground around every junction into black wedges.
-        wsum += w * w;
-        hsum += w * w * junctionElevationAt(net, j, plan);
-        bestWeight = std::max(bestWeight, w);
+        if (d > kReach) continue;
+        // junctionElevationAt already answers with the nearest boundary height
+        // for a point outside the pad, which is exactly the edge height a batter
+        // needs to start from.
+        addClaim(band, junctionElevationAt(net, j, plan), std::max(d, 0.0), p, nearest, nearestY);
     }
+
     for (int rid : net.roadsNear(plan)) {
         const Road& r = net.road(rid);
         if (r.kind == RoadKind::Connector) continue;
         Vec2 lo, hi;
         r.spine.planBounds(lo, hi);
-        double pad = 60.0;
+        double pad = kReach + kSearchMargin + 40.0;
         if (x < lo.x - pad || x > hi.x + pad || z < lo.y - pad || z > hi.y + pad) continue;
+
+        // toST's answer is used even when it reports a miss. A point off the END
+        // of a road is a miss by definition — there is no perpendicular foot —
+        // but the station it converged to is still the right one to clamp, and
+        // the true distance is measured below anyway. Dropping the road here is
+        // what put a cliff at every free road end: the ground fell from the
+        // carriageway to natural in half a metre, measured at 83 degrees.
         double s = 0, t = 0;
-        if (!r.spine.toST(plan, s, t)) continue;
-        if (s < r.begin() - 1e-6 || s > r.end() + 1e-6) continue;
+        r.spine.toST(plan, s, t);
+        if (!(s == s) || !(t == t)) continue;   // NaN from a degenerate spine
+        double sc = clampd(s, r.begin(), r.end());
+
         // A bridge or a tunnel deliberately does not move the ground. That one
         // branch is the entire difference between an overpass and a causeway.
-        CarrierKind carrier = carrierAt(r, s);
-        if (carrier == CarrierKind::Bridge || carrier == CarrierKind::Viaduct ||
-            carrier == CarrierKind::Tunnel)
+        CarrierKind carrier = carrierAt(r, sc);
+        bool structural = carrier == CarrierKind::Bridge || carrier == CarrierKind::Viaduct ||
+                          carrier == CarrierKind::Tunnel;
+        if (structural) {
+            // ...but the approach embankment DOES, and it stops dead where the
+            // deck begins. That junction between earth and structure is an
+            // abutment: a wall, and a real step in the ground. Only the vicinity
+            // of the transition qualifies — under the middle of a viaduct the
+            // ground is simply natural, with nothing to reconcile.
+            double look = 8.0;
+            if (carrierAt(r, clampd(sc - look, r.begin(), r.end())) != carrier ||
+                carrierAt(r, clampd(sc + look, r.begin(), r.end())) != carrier) {
+                if (conflicted) *conflicted = true;
+                RL_FALLBACK("terrain meets a structure at an abutment -> step left in the ground");
+            }
             continue;
-        double le = r.xs.leftExtentAt(s), re = r.xs.rightExtentAt(s);
-        double edge = t > 0 ? le : re;
-        double over = std::fabs(t) - std::fabs(edge);
-        if (over > p.slopeWidth) continue;
+        }
+
+        double le = r.xs.leftExtentAt(sc), re = r.xs.rightExtentAt(sc);
         double tc = clampd(t, re, le);
-        double roadY = r.surfacePoint(s, tc).y;
-        double w = over <= 0 ? 1.0 : 1.0 - smoothstepd(0.0, p.slopeWidth, over);
-        wsum += w * w;
-        hsum += w * w * roadY;
-        bestWeight = std::max(bestWeight, w);
+        // The nearest point of the road's FOOTPRINT, clamped in both s and t, so
+        // the distance is a real plan distance rather than a lateral overshoot.
+        // Getting this from the footprint instead of from |t| is what makes the
+        // ends behave like the sides.
+        Vec3 nearPt = r.surfacePoint(sc, tc);
+        double d = length(Vec2{nearPt.x - x, nearPt.z - z});
+        if (d > kReach) {
+            // Beyond the reach the road is dropped — but if its batter would
+            // STILL have been binding out here, dropping it is a step, not a
+            // daylight. That is the earthwork running out of room, which is the
+            // other thing a retaining wall is for. Counted, not smoothed.
+            double gentlest = std::min(p.cutBatter, p.fillBatter);
+            if (d < kReach + kSearchMargin &&
+                std::fabs(base - nearPt.y) > gentlest * d) {
+                if (conflicted) *conflicted = true;
+                RL_FALLBACK("terrain batter hits its reach before daylight -> step left in the ground");
+            }
+            continue;
+        }
+        addClaim(band, nearPt.y, d, p, nearest, nearestY);
     }
-    if (wsum <= 1e-9) return base;
-    return lerp(base, hsum / wsum, bestWeight);
+
+    if (!band.any) return base;
+    if (band.lo > band.hi) {
+        // Conflicting claims. The nearer surface wins; anything else puts a
+        // discontinuity between two roads that are already too close together
+        // for their earthworks, which is a design problem the lint should see.
+        if (conflicted) *conflicted = true;
+        RL_FALLBACK("terrain batters conflict -> nearest road wins (a wall belongs here)");
+        double run = std::min(std::max(nearest, 0.0), p.batterReach);
+        band.lo = nearestY - p.fillBatter * run;
+        band.hi = nearestY + p.cutBatter * run;
+    }
+    return clampd(base, band.lo, band.hi);
+}
+
+double terrainHeightAt(const Network& net, const TerrainParams& p, double x, double z) {
+    return terrainHeightImpl(net, p, x, z, nullptr);
+}
+
+bool terrainConflictAt(const Network& net, const TerrainParams& p, double x, double z) {
+    bool hit = false;
+    terrainHeightImpl(net, p, x, z, &hit);
+    return hit;
+}
+
+double terrainSlopeAt(const Network& net, const TerrainParams& p, Vec2 plan, double step) {
+    double h = terrainHeightAt(net, p, plan.x, plan.y);
+    double worst = 0;
+    const double dx[4] = {1, -1, 0, 0};
+    const double dz[4] = {0, 0, 1, -1};
+    for (int k = 0; k < 4; ++k) {
+        double y = terrainHeightAt(net, p, plan.x + dx[k] * step, plan.y + dz[k] * step);
+        worst = std::max(worst, std::fabs(y - h) / step);
+    }
+    return worst;
 }
 
 void tessellateTerrain(const Network& net, const TerrainParams& p, Vec2 lo, Vec2 hi, double cell,

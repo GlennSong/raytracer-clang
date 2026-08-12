@@ -101,7 +101,9 @@ bool loadSceneJson(const std::string& path, Scene& out, std::string& error) {
         out.terrain.amplitude = t.value("amplitude", 6.0);
         out.terrain.frequency = t.value("frequency", 1.0 / 260.0);
         out.terrain.seed = uint32_t(t.value("seed", 5));
-        out.terrain.slopeWidth = t.value("slopeWidth", 8.0);
+        out.terrain.cutBatter = t.value("cutBatter", 1.0);
+        out.terrain.fillBatter = t.value("fillBatter", 0.5);
+        out.terrain.batterReach = t.value("batterReach", 45.0);
     }
     if (j.contains("shade")) {
         const json& s = j["shade"];
@@ -308,12 +310,22 @@ void demoRoundabout(Scene& sc) {
     Vec2 centre{0, 0};
     double R = 20.0;
     double approach = 150.0;
+    // Where an approach STOPS matters more than it looks. The junction bridges
+    // whatever gap is left between the arm's end and the ring, so a generous
+    // stand-off does not read as caution — it reads as a tarmac plain with an
+    // entry somewhere in the middle of it. This was 26 m past the reference
+    // line: the ring's outer edge is about 9 m out, so every "entry" was a 17 m
+    // apron. Derive it from the ring instead, and leave only the few metres the
+    // kerb return actually needs.
+    LaneSection ringSec = roadPreset("roundabout2").section;
+    double ringOuter = 0.5 * ringSec.totalWidthAt(0.0);
+    double armEnd = R + ringOuter + 4.0;
     std::vector<std::pair<int, bool>> arms;
     const char* names[4] = {"north", "east", "south", "west"};
     for (int i = 0; i < 4; ++i) {
         double a = kPi * 0.5 * i + 0.12;
         Vec2 outer{centre.x + std::cos(a) * (R + approach), centre.y + std::sin(a) * (R + approach)};
-        Vec2 inner{centre.x + std::cos(a) * (R + 26.0), centre.y + std::sin(a) * (R + 26.0)};
+        Vec2 inner{centre.x + std::cos(a) * armEnd, centre.y + std::sin(a) * armEnd};
         RoadDesc d;
         d.name = names[i];
         d.preset = "collector4";
