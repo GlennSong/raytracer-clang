@@ -229,8 +229,18 @@ TEST_CASE(shape2_fit_arcs_inverts_tessellation) {
     // vertex: a semicircle on the top edge leaves TANGENT to the side wall, so
     // there is no corner there to find, and a fit that invented one would be
     // reporting a feature the shape does not have.)
-    CHECK(near(refit.start(0).x, 0, 1e-6) && near(refit.start(0).y, 0, 1e-6));
-    CHECK(near(refit.bulge(0), 0.3, 1e-3));
+    //
+    // Found by its corner, not by its index: the walk starts at the SHARPEST
+    // corner so the seam lands where the shape already has one, and here that is
+    // (40, 0) — where the bow meets the right wall at 123 degrees — not the
+    // origin. Which edge ends up first is an artefact of that choice; that the
+    // bow comes back on its own chord with its own bulge is the property.
+    int bowEdge = -1;
+    for (std::size_t i = 0; i < refit.size(); ++i)
+        if (near(refit.start(i).x, 0, 1e-6) && near(refit.start(i).y, 0, 1e-6))
+            bowEdge = static_cast<int>(i);
+    CHECK(bowEdge >= 0);
+    if (bowEdge >= 0) CHECK(near(refit.bulge(bowEdge), 0.3, 1e-3));
     // Two SUBSTANTIAL curves, counted above the whisker of bulge a straight
     // run picks up where it leaves tangent to one of them.
     int arcs = 0;

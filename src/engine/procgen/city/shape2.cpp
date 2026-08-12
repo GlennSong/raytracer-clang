@@ -394,7 +394,24 @@ Loop2 fitArcs(const Loop2& loop, Real tol, Real minEdge) {
     };
     for (std::size_t i = 0; i < nEdges; ++i) {
         const ArcGeom g = arcGeom(loop.start(i), loop.end(i), loop.bulge(i));
-        int steps = 1;
+        // A STRAIGHT EDGE STILL NEEDS A MIDPOINT. The span fitter builds its arc
+        // candidate from three samples — the ends and the middle — and then
+        // scores it against the samples in between, so a span holding only three
+        // scores a residual of ZERO by construction and the fit will believe
+        // anything. A straight edge that contributed just its start point made
+        // exactly that situation at every corner: the span from one wall onto
+        // the next held the two ends and the corner, a circle through them
+        // scored 0 against any tolerance, and two perpendicular walls came back
+        // as an arc whose endpoints are nearly diametric — a bulge of exactly
+        // tan(pi/4) = 1, a semicircle where the building has a corner. Measured
+        // on a 40x24 plate with one bowed wall: 33% too much area and a corner
+        // gone. A plain rectangle escaped only because the n < 8 guard below
+        // returns before any of this runs.
+        //
+        // One extra sample per straight edge is enough. A false arc across a
+        // corner now has to pass through a point in the middle of each wall,
+        // which it cannot, while a real arc is unaffected.
+        int steps = g.straight ? 2 : 1;
         if (!g.straight && g.radius > 1e-6) {
             const Real ratio =
                 std::max(Real(-1), std::min(Real(1), 1.0 - sampleTol / g.radius));
