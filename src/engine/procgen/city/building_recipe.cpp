@@ -122,12 +122,12 @@ void addTowerCrown(ElementRegistry& r, bool sealed = false) {
     p.on.topFloorOnly = true;   // a crown, not a per-storey band
     p.on.bays = ElementSelector::Bays::None;
     r.add(p);
-    ElementSpec d;
-    d.kind = ElementKind::RoofDeck;
-    d.on.tier = ElementSelector::kTopTier;
-    d.on.topFloorOnly = true;   // a crown, not a per-storey band
-    d.on.bays = ElementSelector::Bays::None;
-    r.add(d);
+    // (No plain RoofDeck here. A tower already has a parapet crowning it, and a
+    // "deck" with no access, no furniture and no railing is a request for
+    // nothing — it was the single most-requested element the mesher could not
+    // build, purely because it was asked for and never meant anything. The
+    // registry should not advertise what nobody intends to draw; what actually
+    // belongs on these roofs is the plant below.)
     // A FLAT ROOF IS NOT EMPTY. The stair overrun, the tank and the air handling
     // are most of what makes a top read as a building rather than an extruded
     // box — and they are the single biggest thing the Lot System dropped when it

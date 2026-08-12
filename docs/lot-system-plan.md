@@ -1308,5 +1308,35 @@ namespace, which is precisely why the Lot System grew its own broken mitre.
 | `Portico` | 7 | `emitPortico` exists |
 | `Pilaster` | 7 | — |
 
-Five of the seven already have working emitters in `shape_grammar.cpp`, file-local.
-The extraction pattern is established; this is the list it should be applied to.
+`RoofDeck` is now closed out, both ways the plan allows. Its **chimney** variant
+(style 1, which `addHouseDressing` asks for) is built — a house without one reads
+as a box with a lid, and it is the only thing standing on most residential roofs.
+The plain deck was **deleted from the registry** instead: a tower already has a
+parapet crowning it, and a "deck" with no access, furniture or railing is a
+request for nothing. It topped the unbuilt list purely because it was asked for
+without ever meaning anything.
+
+What remains, and what it will cost:
+
+| kind | asked for | existing emitter |
+| --- | --- | --- |
+| `Steps` | 27 | `emitEntranceSteps:1628` — takes FaceRect + PartId + colour, **directly reusable** |
+| `Porch` | 21 | `emitPorch:1763` — needs `BuildingParams`, but only for `wallColor`/`trimColor` |
+| `Sign` / `Awning` | 19 each | shopfronts read as blank ground floors without them |
+| `Quoin` | 19 | — |
+| `Portico` / `Pilaster` | 6 each | `emitPortico:1650`, `emitColumn:1609` |
+
+**The extraction recipe**, which is the same one `offsetPlan` and the roof planner
+already followed:
+
+1. Export `FaceRect` and `planEdgeRect` from `shape_grammar.h` — a plan edge plus
+   a height is all these emitters need, and `lot_mesh` has both.
+2. Refactor each emitter off `BuildingParams` onto the two or three colours it
+   actually reads. `emitPorch` uses exactly `wallColor` and `trimColor`.
+3. Adapt at the sink: the old emitters append to a `BuildingMesh` while `lot_mesh`
+   accumulates into a `PartAcc`, so emit into a scratch `BuildingMesh` and merge
+   its parts. One adapter serves all of them.
+
+Do NOT reimplement these in `lot_mesh`. That is the mistake this whole section
+documents, and it is how the parapet ended up as a zero-thickness ribbon beside a
+working `emitPlanParapet`.

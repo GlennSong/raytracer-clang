@@ -514,6 +514,38 @@ BuildingMesh meshBuilding(const BuiltBuilding& b, const LotMeshParams& params) {
                                     std::max(Real(0.9), p.height), ms.wall,
                                     ms.wallColor, ms.trim, ms.trimColor, tol);
                     break;
+                case ElementKind::RoofDeck: {
+                    // style 1 = a CHIMNEY, which is what addHouseDressing asks
+                    // for and the single most-requested element the mesher could
+                    // not build. A house without one reads as a box with a lid;
+                    // it is also the only thing standing on most residential
+                    // roofs, since roof plant is for buildings with lifts.
+                    if (p.style != 1) break;
+                    const Poly2 ring = tessellate(L.plans[0].outer, 0.3);
+                    if (ring.size() < 3) break;
+                    const OBB2 box = orientedBoundingBox(ring);
+                    // Seated off-centre along the ridge, on the plan — a stack
+                    // through the middle of the roof is where nobody builds one.
+                    Rng cr(params.seed ^ 0x7f4a7c15u);
+                    const int longAxis = box.half[0] >= box.half[1] ? 0 : 1;
+                    const Vec2 along = box.axis[longAxis];
+                    const Vec2 across = box.axis[1 - longAxis];
+                    const Real w = std::min(Real(0.9), box.half[1 - longAxis] * 0.5);
+                    if (w < 0.25) break;
+                    const Vec2 c = box.center +
+                                   along * (box.half[longAxis] * cr.range(-0.55, 0.55));
+                    if (!pointInPolygon(ring, c)) break;
+                    const Real h = cr.range(1.1, 1.8);
+                    const Vec2 o = c - along * (w * 0.5) - across * (w * 0.5);
+                    emitPlantBox(part(acc, ms.base), o, along, across, w, w, y1,
+                                 y1 + h, ms.accentColor * 0.8);
+                    // The cap: a thin oversailing slab, which is what makes a
+                    // stack read as a chimney rather than as a post.
+                    emitPlantBox(part(acc, ms.trim), o - along * 0.08 - across * 0.08,
+                                 along, across, w + 0.16, w + 0.16, y1 + h,
+                                 y1 + h + 0.12, ms.trimColor * 0.7);
+                    break;
+                }
                 case ElementKind::RoofPlant: {
                     // A flat roof is not empty: the stair overrun, the tank and
                     // the air handling are what stop a building reading as an
