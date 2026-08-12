@@ -19,18 +19,18 @@ uint32_t hash2i(int x, int y, uint32_t seed) {
 
 }  // namespace
 
-Field2 fieldConstant(double value) {
+TexField2 fieldConstant(double value) {
     return [value](double, double) { return value; };
 }
 
-Field2 fieldNoise(uint32_t seed, double scale) {
+TexField2 fieldNoise(uint32_t seed, double scale) {
     auto n = std::make_shared<Noise>(seed);
     return [n, scale](double u, double v) {
         return clamp01(n->noise2(u * scale, v * scale) * 0.5 + 0.5);
     };
 }
 
-Field2 fieldFbm(uint32_t seed, double scale, int octaves) {
+TexField2 fieldFbm(uint32_t seed, double scale, int octaves) {
     auto n = std::make_shared<Noise>(seed);
     int oc = std::max(1, octaves);
     return [n, scale, oc](double u, double v) {
@@ -38,7 +38,7 @@ Field2 fieldFbm(uint32_t seed, double scale, int octaves) {
     };
 }
 
-Field2 fieldChecker(double cols, double rows) {
+TexField2 fieldChecker(double cols, double rows) {
     return [cols, rows](double u, double v) {
         int cx = static_cast<int>(std::floor(u * cols));
         int cy = static_cast<int>(std::floor(v * rows));
@@ -46,7 +46,7 @@ Field2 fieldChecker(double cols, double rows) {
     };
 }
 
-Field2 fieldBrick(double cols, double rows, double mortar, double variation,
+TexField2 fieldBrick(double cols, double rows, double mortar, double variation,
                   uint32_t seed) {
     double half = mortar * 0.5;
     return [=](double u, double v) -> double {
@@ -65,33 +65,33 @@ Field2 fieldBrick(double cols, double rows, double mortar, double variation,
     };
 }
 
-Field2 fieldGradientY() {
+TexField2 fieldGradientY() {
     return [](double, double v) { return v; };
 }
 
-Field2 fieldAdd(Field2 a, Field2 b) {
+TexField2 fieldAdd(TexField2 a, TexField2 b) {
     return [a, b](double u, double v) { return a(u, v) + b(u, v); };
 }
-Field2 fieldMul(Field2 a, Field2 b) {
+TexField2 fieldMul(TexField2 a, TexField2 b) {
     return [a, b](double u, double v) { return a(u, v) * b(u, v); };
 }
-Field2 fieldMix(Field2 a, Field2 b, double t) {
+TexField2 fieldMix(TexField2 a, TexField2 b, double t) {
     return [a, b, t](double u, double v) {
         double x = a(u, v), y = b(u, v);
         return x + (y - x) * t;
     };
 }
-Field2 fieldScaleBias(Field2 a, double scale, double bias) {
+TexField2 fieldScaleBias(TexField2 a, double scale, double bias) {
     return [a, scale, bias](double u, double v) { return a(u, v) * scale + bias; };
 }
-Field2 fieldClamp(Field2 a, double lo, double hi) {
+TexField2 fieldClamp(TexField2 a, double lo, double hi) {
     return [a, lo, hi](double u, double v) {
         double x = a(u, v);
         return x < lo ? lo : (x > hi ? hi : x);
     };
 }
 
-TextureData bakeFieldGray(const Field2& f, int size) {
+TextureData bakeFieldGray(const TexField2& f, int size) {
     size = std::max(1, size);
     TextureData td;
     td.width = size; td.height = size; td.channels = 3;
@@ -107,7 +107,7 @@ TextureData bakeFieldGray(const Field2& f, int size) {
     return td;
 }
 
-TextureData bakeFieldColor(const Field2& mask, const Vec3& a, const Vec3& b,
+TextureData bakeFieldColor(const TexField2& mask, const Vec3& a, const Vec3& b,
                            int size) {
     size = std::max(1, size);
     TextureData td;
@@ -130,7 +130,7 @@ TextureData bakeFieldColor(const Field2& mask, const Vec3& a, const Vec3& b,
     return td;
 }
 
-TextureData bakeFieldNormal(const Field2& height, double strength, int size) {
+TextureData bakeFieldNormal(const TexField2& height, double strength, int size) {
     size = std::max(1, size);
     TextureData td;
     td.width = size; td.height = size; td.channels = 3;

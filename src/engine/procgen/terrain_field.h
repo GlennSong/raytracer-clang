@@ -13,7 +13,7 @@ struct ErosionParams;    // erosion.h
 struct TerrainFlatten;   // terrain.h
 
 // A world-space heightfield over (x, z) — the compositional substrate for
-// procedural terrain (ADR-0043 extended to terrain). The 2.5D sibling of Field2:
+// procedural terrain (ADR-0043 extended to terrain). The 2.5D sibling of TexField2:
 // a heightfield is a function, so primitives are closures and combinators wrap
 // them. This is what lets terrain be *built from primitives* (fbm + ridged ridges
 // + domain warp + terraces) rather than only requested as a preset

@@ -77,6 +77,16 @@ void growLotSystemBlocks(const std::vector<Poly2>& blocks, std::size_t enclosedC
                          std::vector<LotBuilding>* outLots) {
     PaletteLibrary palettes = stockPalettes();
     RecipeBook book = stockRecipes();
+    // The level's book overrides the compiled-in weights. Unknown names are
+    // reported rather than ignored: a typo in a data file that silently does
+    // nothing is the worst kind of tuning bug.
+    {
+        std::vector<std::string> unknown;
+        params.tuning.apply(book, &unknown);
+        for (const std::string& n : unknown)
+            LOG_WARN << "[citybook] recipe_weight names '" << n
+                     << "', which is not a recipe in the book";
+    }
 
     if (outParts && outParts->size() < static_cast<std::size_t>(PartId::Count)) {
         outParts->resize(static_cast<std::size_t>(PartId::Count));
@@ -227,7 +237,8 @@ void growLotSystemBlocks(const std::vector<Poly2>& blocks, std::size_t enclosedC
                     lotSeed + static_cast<std::uint32_t>(ui) * 2654435761u;
 
                 BuiltBuilding bb =
-                    buildFromRecipe(*rec, unit, tags, palettes, seed, unitSeed);
+                    buildFromRecipe(*rec, unit, tags, palettes, seed, unitSeed,
+                                    &params.tuning);
                 if (bb.surfaces.levels.empty()) continue;
 
                 const Real baseY =

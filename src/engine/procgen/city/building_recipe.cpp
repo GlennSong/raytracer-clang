@@ -848,10 +848,28 @@ int RecipeBook::pick(const LotProgram& program, int storeysAvailable,
 // Assembly
 // ---------------------------------------------------------------------------
 
+Real RecipeTuning::rarityFor(PlanTemplate t) const {
+    if (!planRarity.empty()) {
+        const auto it = planRarity.find(planTemplateName(t));
+        if (it != planRarity.end()) return std::max(Real(0), it->second);
+    }
+    return planTemplateRarity(t);
+}
+
+void RecipeTuning::apply(RecipeBook& book, std::vector<std::string>* unknown) const {
+    for (const auto& kv : recipeWeight) {
+        bool found = false;
+        for (LotRecipe& r : book.recipes)
+            if (r.name == kv.first) { r.weight = std::max(Real(0), kv.second); found = true; }
+        if (!found && unknown) unknown->push_back(kv.first);
+    }
+}
+
 BuiltBuilding buildFromRecipe(const LotRecipe& recipe,
                               const Shape2& envelope, const LotTags& tags,
                               const PaletteLibrary& palettes,
-                              std::uint32_t districtSeed, std::uint32_t seed) {
+                              std::uint32_t districtSeed, std::uint32_t seed,
+                              const RecipeTuning* tuning) {
     BuiltBuilding out;
     out.recipeName = recipe.name;
     if (envelope.outer.size() < 3) return out;
@@ -903,14 +921,17 @@ BuiltBuilding buildFromRecipe(const LotRecipe& recipe,
     PlanTemplate tmpl = PlanTemplate::Bar;
     if (!recipe.plans.empty()) {
         Real total = 0;
-        for (PlanTemplate t : recipe.plans) total += std::max(Real(0), planTemplateRarity(t));
+        auto rarity = [&](PlanTemplate t) {
+            return tuning ? tuning->rarityFor(t) : planTemplateRarity(t);
+        };
+        for (PlanTemplate t : recipe.plans) total += std::max(Real(0), rarity(t));
         if (total <= 0) {
             tmpl = recipe.plans[0];
         } else {
             Real r = rng.unit() * total;
             tmpl = recipe.plans.back();
             for (PlanTemplate t : recipe.plans) {
-                r -= std::max(Real(0), planTemplateRarity(t));
+                r -= std::max(Real(0), rarity(t));
                 if (r <= 0) { tmpl = t; break; }
             }
         }

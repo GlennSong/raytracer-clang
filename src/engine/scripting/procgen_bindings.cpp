@@ -13,6 +13,7 @@
 #include "../procgen/terrain.h"
 #include "../procgen/scatter.h"
 #include "../procgen/city/shape_grammar.h"
+#include "../procgen/city/building_recipe.h"   // RecipeTuning (the city book)
 #include "../procgen/city/street_kit.h"
 #include "../procgen/city/road_network.h"
 #include "../procgen/city/road_mesh.h"
@@ -527,6 +528,35 @@ makeStyleBook(ScriptVM& vm, const std::string& code, std::string* error) {
         if (lua_istable(L2, -1)) p = readBuildingParamsOnto(L2, -1, p);
         lua_pop(L2, 2);
     };
+}
+
+RecipeTuning makeCityBook(ScriptVM& vm, const std::string& code,
+                          std::string* error) {
+    RecipeTuning t;
+    if (!vm.doString(code, error)) return t;
+    lua_State* L = luaState(vm);
+    lua_getglobal(L, "city_book");
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        if (error) *error = "city_book.lua did not set a `city_book` table";
+        return t;
+    }
+    auto readSection = [&](const char* field, std::map<std::string, Real>& into) {
+        lua_getfield(L, -1, field);
+        if (lua_istable(L, -1)) {
+            lua_pushnil(L);
+            while (lua_next(L, -2)) {                  // key, value
+                if (lua_type(L, -2) == LUA_TSTRING && lua_isnumber(L, -1))
+                    into[lua_tostring(L, -2)] = static_cast<Real>(lua_tonumber(L, -1));
+                lua_pop(L, 1);                          // pop value, keep key
+            }
+        }
+        lua_pop(L, 1);
+    };
+    readSection("recipe_weight", t.recipeWeight);
+    readSection("plan_rarity", t.planRarity);
+    lua_pop(L, 1);
+    return t;
 }
 
 namespace {
@@ -1321,16 +1351,16 @@ constexpr const char* kFieldMt = "engine.procgen.Field";
 constexpr const char* kImageMt = "engine.procgen.Image";
 using ImagePtr = std::shared_ptr<TextureData>;
 
-void pushField(lua_State* L, Field2 f) {
-    void* mem = lua_newuserdatauv(L, sizeof(Field2), 0);
-    new (mem) Field2(std::move(f));
+void pushField(lua_State* L, TexField2 f) {
+    void* mem = lua_newuserdatauv(L, sizeof(TexField2), 0);
+    new (mem) TexField2(std::move(f));
     luaL_setmetatable(L, kFieldMt);
 }
-Field2& checkField(lua_State* L, int idx) {
-    return *static_cast<Field2*>(luaL_checkudata(L, idx, kFieldMt));
+TexField2& checkField(lua_State* L, int idx) {
+    return *static_cast<TexField2*>(luaL_checkudata(L, idx, kFieldMt));
 }
 int fieldGc(lua_State* L) {
-    static_cast<Field2*>(lua_touserdata(L, 1))->~Field2();
+    static_cast<TexField2*>(lua_touserdata(L, 1))->~TexField2();
     return 0;
 }
 void pushImage(lua_State* L, ImagePtr img) {
@@ -1400,7 +1430,7 @@ int l_tex_bake_gray(lua_State* L) {
 }
 // texture.bake_color(mask, colorA, colorB, size) -> Image (albedo map).
 int l_tex_bake_color(lua_State* L) {
-    Field2& mask = checkField(L, 1);
+    TexField2& mask = checkField(L, 1);
     Vec3 a = checkVec3(L, 2), b = checkVec3(L, 3);
     int size = static_cast<int>(luaL_optinteger(L, 4, 256));
     pushImage(L, std::make_shared<TextureData>(bakeFieldColor(mask, a, b, size)));
@@ -1408,7 +1438,7 @@ int l_tex_bake_color(lua_State* L) {
 }
 // texture.bake_normal(height, strength, size) -> Image (tangent-space normal).
 int l_tex_bake_normal(lua_State* L) {
-    Field2& h = checkField(L, 1);
+    TexField2& h = checkField(L, 1);
     double strength = luaL_optnumber(L, 2, 1.0);
     int size = static_cast<int>(luaL_optinteger(L, 3, 256));
     pushImage(L, std::make_shared<TextureData>(bakeFieldNormal(h, strength, size)));

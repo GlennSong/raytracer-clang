@@ -7,6 +7,7 @@
 #include "material_set.h"
 #include "plan_grammar.h"
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -140,10 +141,33 @@ struct BuiltBuilding {
 // program should pass min(plate cap, program.maxStoreys), because the
 // program's declared range binds as much as the plate does.
 // Deterministic for `seed`.
+// THE TUNABLE NUMBERS, AS DATA (docs/lot-system-plan.md §17.8, AGENTS.md's
+// Procgen Authoring rule: "Lua owns the recipes ... and every tunable number").
+//
+// How often a shape or a recipe should turn up is taste, and taste does not
+// belong in a switch statement — "the gherkin is too common" should be a line in
+// a data file, not a rebuild. The SELECTION stays in C++ because it is an
+// algorithm; these are the numbers it reads.
+//
+// Empty means "use the compiled-in defaults", so a level with no book behaves
+// exactly as before.
+struct RecipeTuning {
+    std::map<std::string, Real> recipeWeight;   // by LotRecipe::name
+    std::map<std::string, Real> planRarity;     // by planTemplateName()
+
+    // The rarity for a template, falling back to planTemplateRarity().
+    Real rarityFor(PlanTemplate t) const;
+    // Overwrite the book's weights in place. Names that match nothing are
+    // reported by the caller rather than ignored — a typo in a data file that
+    // silently does nothing is the worst kind.
+    void apply(RecipeBook& book, std::vector<std::string>* unknown = nullptr) const;
+};
+
 BuiltBuilding buildFromRecipe(const LotRecipe& recipe,
                               const Shape2& envelope, const LotTags& tags,
                               const PaletteLibrary& palettes,
-                              std::uint32_t districtSeed, std::uint32_t seed);
+                              std::uint32_t districtSeed, std::uint32_t seed,
+                              const RecipeTuning* tuning = nullptr);
 
 }  // namespace engine
 

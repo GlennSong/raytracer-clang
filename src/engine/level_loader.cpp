@@ -1989,6 +1989,27 @@ static GrownLots growCityLots(const std::vector<engine::RoadNet>& nets,
                 LOG_WARN << "style_book.lua: " << err;
         }
     }
+    // THE CITY BOOK: the Lot System's tunable numbers as data (§17.8). Its own
+    // VM, because a book that fails to parse must not take the style book with
+    // it. Absent = the compiled-in defaults.
+    {
+        std::string cb = loadScriptCode("city_book.lua", levelDir);
+        if (const std::string p2 = resolveScriptPath("city_book.lua", levelDir); !p2.empty())
+            g_loadedScriptFiles.push_back(p2);
+        if (!cb.empty()) {
+            ScriptVM cityVm;
+            openProcgenLibrary(cityVm);
+            std::string err;
+            engine::RecipeTuning t = engine::makeCityBook(cityVm, cb, &err);
+            if (!err.empty()) LOG_WARN << "city_book.lua: " << err;
+            if (!t.recipeWeight.empty() || !t.planRarity.empty()) {
+                LOG_INFO << "[citybook] " << t.recipeWeight.size()
+                         << " recipe weights, " << t.planRarity.size()
+                         << " plan rarities from city_book.lua";
+                lp.tuning = std::move(t);
+            }
+        }
+    }
 #else
     (void)levelDir;
 #endif

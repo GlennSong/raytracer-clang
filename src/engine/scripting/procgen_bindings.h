@@ -11,6 +11,10 @@
 
 namespace engine {
 
+// Returned by value from makeCityBook below; the definition lives in
+// procgen/city/building_recipe.h, which this header deliberately does not pull in.
+struct RecipeTuning;
+
 class ScriptVM;
 struct RenderMesh;
 struct TextureData;
@@ -84,6 +88,21 @@ void openProcgenLibrary(ScriptVM& vm);
 struct BuildingParams;
 std::function<void(const std::string& recipe, BuildingParams&)>
 makeStyleBook(ScriptVM& vm, const std::string& code, std::string* error = nullptr);
+
+// THE CITY BOOK — the Lot System's tunable numbers as Lua data (§17.8, and
+// AGENTS.md's rule that Lua owns "every tunable number"). The script sets a
+// `city_book` table:
+//
+//   city_book = {
+//     recipe_weight = { glass_tower = 0.4, cottage = 3.0 },
+//     plan_rarity   = { wedge_tower = 0.01, bar = 1.0 },
+//   }
+//
+// Both sections are optional and sparse — anything unmentioned keeps its
+// compiled-in value, so a book stays short and a level without one is unchanged.
+// Names are LotRecipe::name and planTemplateName().
+RecipeTuning makeCityBook(ScriptVM& vm, const std::string& code,
+                          std::string* error = nullptr);
 
 // Run a procgen script that `return`s a mesh (typically from `polygonize`) and
 // hand back the result. Returns false (with `error` filled, if non-null) when

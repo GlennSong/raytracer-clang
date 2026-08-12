@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_CITY_LOTS_H
 
 #include "polygon.h"        // Poly2, Vec2
+#include "building_recipe.h"   // RecipeTuning (the city book)
 #include "shape_grammar.h"  // BuildingParams (the style-book hook's target)
 #include "../../../rt_math.h"   // Vec3
 #include "../../../renderer/renderer.h"   // RenderMesh (the grown building geometry)
@@ -141,6 +142,12 @@ struct LotParams {
     // hot-reloadable). Empty = the built-in looks. Row units get
     // "rowhouse_unit". Overrides must stay deterministic (pure data).
     std::function<void(const std::string& recipe, BuildingParams&)> styleHook;
+    // THE CITY BOOK: the Lot System's tunable numbers, from Lua
+    // (assets/scripts/city_book.lua). Empty = the compiled-in defaults, so a
+    // level without one is unchanged. This is the half of §17.8 that makes
+    // "the gherkin is too common" a data edit instead of a rebuild; the
+    // selection algorithms stay in C++, which is where AGENTS.md puts them.
+    RecipeTuning tuning;
 };
 
 // The intermediate planning geometry, exposed for debug visualization: the block

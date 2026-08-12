@@ -19,10 +19,10 @@ uint8_t at(const TextureData& t, int x, int y, int c) {
 TEST_CASE(texture_field_brick_built_from_primitives) {
     // ADR-0043: a brick texture is *composed from primitives* (a brick lattice ×
     // fbm grit), not requested as a preset. The mask reads as bricks + mortar.
-    Field2 brick = fieldBrick(/*cols*/6, /*rows*/12, /*mortar*/0.12,
+    TexField2 brick = fieldBrick(/*cols*/6, /*rows*/12, /*mortar*/0.12,
                               /*variation*/0.4, /*seed*/7);
-    Field2 grit = fieldScaleBias(fieldFbm(7, 8.0, 4), 0.25, 0.75);   // ~[0.75,1]
-    Field2 albedoMask = fieldMul(brick, grit);
+    TexField2 grit = fieldScaleBias(fieldFbm(7, 8.0, 4), 0.25, 0.75);   // ~[0.75,1]
+    TexField2 albedoMask = fieldMul(brick, grit);
 
     TextureData gray = bakeFieldGray(brick, 128);
     CHECK(gray.width == 128 && gray.channels == 3);
@@ -51,15 +51,15 @@ TEST_CASE(texture_field_brick_built_from_primitives) {
 }
 
 TEST_CASE(texture_field_is_deterministic_and_combinators_work) {
-    Field2 a = fieldFbm(3, 5.0, 4);
+    TexField2 a = fieldFbm(3, 5.0, 4);
     CHECK_APPROX(bakeFieldGray(a, 32).pixels[0],
                  bakeFieldGray(fieldFbm(3, 5.0, 4), 32).pixels[0], 0);  // deterministic
 
     // mix(0,1, 0.5) == 0.5; clamp bounds; scale_bias maps.
-    Field2 half = fieldMix(fieldConstant(0.0), fieldConstant(1.0), 0.5);
+    TexField2 half = fieldMix(fieldConstant(0.0), fieldConstant(1.0), 0.5);
     CHECK_APPROX(half(0.3, 0.7), 0.5, 1e-9);
-    Field2 cl = fieldClamp(fieldConstant(2.0), 0.0, 1.0);
+    TexField2 cl = fieldClamp(fieldConstant(2.0), 0.0, 1.0);
     CHECK_APPROX(cl(0, 0), 1.0, 1e-9);
-    Field2 sb = fieldScaleBias(fieldConstant(0.5), 2.0, 0.1);
+    TexField2 sb = fieldScaleBias(fieldConstant(0.5), 2.0, 0.1);
     CHECK_APPROX(sb(0, 0), 1.1, 1e-9);
 }

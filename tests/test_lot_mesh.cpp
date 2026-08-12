@@ -441,3 +441,58 @@ TEST_CASE(every_element_a_stock_recipe_asks_for_is_built) {
     CHECK(checked > 100);
     CHECK(unbuilt == 0);
 }
+
+// TUNING IS DATA, AND DATA HAS TO BITE. A book that parses but changes nothing
+// is worse than no book: it looks like a knob and is a decoration. The rarity
+// table drives the template draw, so forcing one shape's rarity to zero must
+// make it stop appearing, and forcing another's up must make it dominate.
+TEST_CASE(city_book_rarities_actually_drive_the_template_choice) {
+    static PaletteLibrary palettes = stockPalettes();
+    static RecipeBook book = stockRecipes();
+    const LotRecipe* rec = book.byName("office_tower");
+    CHECK(rec != nullptr);
+    if (!rec) return;
+
+    auto countBars = [&](const RecipeTuning* t) {
+        int bars = 0, n = 0;
+        for (std::uint32_t s = 1; s <= 120; ++s) {
+            Shape2 env = rectShape(0, 0, 44, 40);
+            for (Edge2& e : env.outer.edges) e.tag = EdgeTag::Side;
+            env.outer.edges[0].tag = EdgeTag::Street;
+            LotTags tags = measureLot(env, {}, StreetClass::Street, true, 0.8);
+            tags.maxStoreys = 18;
+            const BuiltBuilding b =
+                buildFromRecipe(*rec, env, tags, palettes, 3, s, t);
+            if (b.surfaces.levels.empty()) continue;
+            ++n;
+            if (b.plan == PlanTemplate::Bar) ++bars;
+        }
+        CHECK(n > 90);
+        return bars;
+    };
+
+    const int stock = countBars(nullptr);
+
+    // Ban the bar outright: the recipe's other templates must take every draw.
+    RecipeTuning noBars;
+    noBars.planRarity["bar"] = 0.0;
+    CHECK(countBars(&noBars) == 0);
+
+    // ...and make it overwhelming: it must take nearly all of them.
+    RecipeTuning allBars;
+    allBars.planRarity["bar"] = 1000.0;
+    CHECK(countBars(&allBars) > stock);
+
+    // The weight table reaches the book, and a name that matches nothing is
+    // REPORTED rather than silently doing nothing.
+    RecipeBook copy = stockRecipes();
+    RecipeTuning w;
+    w.recipeWeight["glass_tower"] = 0.125;
+    w.recipeWeight["no_such_recipe"] = 1.0;
+    std::vector<std::string> unknown;
+    w.apply(copy, &unknown);
+    const LotRecipe* tuned = copy.byName("glass_tower");
+    CHECK(tuned != nullptr);
+    if (tuned) CHECK(std::fabs(tuned->weight - 0.125) < 1e-9);
+    CHECK(unknown.size() == 1);
+}
