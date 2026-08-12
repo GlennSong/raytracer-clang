@@ -1,5 +1,7 @@
 #include "surface.h"
 
+#include "paint_bake.h"
+
 #include "junction.h"
 #include <cstring>
 
@@ -518,101 +520,19 @@ SurfaceSample shadeRoadSurface(const Road& road, const RoadPaint* paint, double 
     if (hatch > 0) accumulate(hatch, paintAlbedo(PaintColor::White));
 
     // --- lane markings ----------------------------------------------------
+    //
+    // Delegated to rl_paint.h, which is the same source the GPU backends compile.
+    // Keeping a second implementation here is how the CPU reference and the
+    // shader drift apart, and drift is invisible: both look like roads.
     if (params.markings) {
-        static thread_local std::vector<Boundary> bounds;
-        road.xs.boundariesAt(s, bounds);
-        for (size_t i = 0; i < bounds.size(); ++i) {
-            const Boundary& b = bounds[i];
-            const Marking& mk = b.mark;
-            if (mk.style == MarkStyle::None) continue;
-            double dt = t - b.t;
-            // Cheap reject: nothing is wider than a metre from its boundary.
-            if (std::fabs(dt) > 1.0 + fw) continue;
-
-            double w = std::max(0.06, double(mk.width));
-            // Anti-shimmer: never draw a stripe thinner than the filter, and
-            // scale its contribution so the average brightness is preserved.
-            double effW = std::max(w, fw * 1.6);
-            double energy = w / effW;
-
-            auto stripe = [&](double centre) {
-                return coverage(std::fabs(dt - centre) - effW * 0.5, fw);
-            };
-            auto dashGate = [&]() {
-                double on = std::max(0.2, double(mk.dashOn));
-                double period = on + std::max(0.2, double(mk.dashOff));
-                double u = std::fmod(std::fmod(s, period) + period, period);
-                double d = std::max(-u, u - on);
-                double c = coverage(d, fw);
-                // Below the resolution of the dash pattern, fall back to its duty
-                // cycle instead of aliasing between dash and gap.
-                double blend = saturate(fw / (on * 0.7));
-                return lerp(c, on / period, blend);
-            };
-
-            double cov = 0.0;
-            switch (mk.style) {
-                case MarkStyle::Solid:
-                    cov = stripe(0.0);
-                    break;
-                case MarkStyle::Dashed:
-                    cov = stripe(0.0) * dashGate();
-                    break;
-                case MarkStyle::WideDashed: {
-                    double on = 0.6, period = 1.8;
-                    double u = std::fmod(std::fmod(s, period) + period, period);
-                    double g = coverage(std::max(-u, u - on), fw);
-                    g = lerp(g, on / period, saturate(fw / (on * 0.7)));
-                    cov = coverage(std::fabs(dt) - std::max(0.20, fw * 1.6) * 0.5, fw) * g;
-                    break;
-                }
-                case MarkStyle::Double: {
-                    double off = (mk.gap + w) * 0.5;
-                    cov = std::max(stripe(-off), stripe(off));
-                    break;
-                }
-                case MarkStyle::SolidDashed: {
-                    double off = (mk.gap + w) * 0.5;
-                    cov = std::max(stripe(-off), stripe(off) * dashGate());
-                    break;
-                }
-                case MarkStyle::DashedSolid: {
-                    double off = (mk.gap + w) * 0.5;
-                    cov = std::max(stripe(-off) * dashGate(), stripe(off));
-                    break;
-                }
-                case MarkStyle::Botts: {
-                    double pitch = 1.2;
-                    double u = std::fmod(std::fmod(s, pitch) + pitch, pitch) - pitch * 0.5;
-                    cov = coverage(length(Vec2{dt, u}) - 0.055, fw);
-                    break;
-                }
-                case MarkStyle::Hatch:
-                case MarkStyle::Chevron: {
-                    // Fill outward to the next boundary.
-                    double far = b.t + (b.t >= 0 ? 3.0 : -3.0);
-                    if (b.t >= 0 && i + 1 < bounds.size()) far = bounds[i + 1].t;
-                    if (b.t < 0 && i > 0) far = bounds[i - 1].t;
-                    double lo = std::min(b.t, far), hi = std::max(b.t, far);
-                    if (t < lo || t > hi) break;
-                    double d = std::fmod(std::fmod((s + t) * 0.7071, 1.4) + 1.4, 1.4) - 0.7;
-                    cov = coverage(std::fabs(d) - 0.07, fw);
-                    break;
-                }
-                default:
-                    break;
-            }
-            if (cov <= 1e-4) continue;
-            cov *= energy;
-            // Wear: blotchy erosion, worst in the wheel paths.
-            double wearAmt = clampd(params.wear + double(mk.wear), 0.0, 1.0);
-            if (wearAmt > 0.001) {
-                double mask = fbm(s * 0.7 + 31.0, (t + 5.0) * 2.5, 3);
-                double erode = saturate((wearAmt * (0.55 + 0.9 * wheel) - mask + 0.35) * 2.2);
-                cov *= (1.0 - 0.95 * erode);
-            }
-            accumulate(cov, paintAlbedo(mk.color));
-        }
+        RlBoundary baked[kMaxBakedBoundaries];
+        int n = bakeBoundaries(road, s, baked, kMaxBakedBoundaries);
+        // Wear's blotch mask is an input rather than something rl_paint computes,
+        // so each backend can spend the value noise it already ships.
+        float wearMask = float(fbm(s * 0.7 + 31.0, (t + 5.0) * 2.5, 3));
+        RlPaint p = rlEvaluateMarkings(baked, n, float(s), float(t), float(fw),
+                                       float(params.wear), wearMask, float(wheel));
+        if (p.coverage > 1e-4f) accumulate(p.coverage, Vec3{p.r, p.g, p.b});
     }
 
     // --- glyph decals -----------------------------------------------------

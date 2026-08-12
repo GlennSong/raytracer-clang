@@ -500,6 +500,75 @@ reachable from any freeway. That says more about the search than the road. The
 reachability check now follows lane changes, and with the alignment fixed the
 same measurement returns 10 of 10.
 
+## Getting the markings onto a GPU
+
+The engine already shades roads this way. `shaders/metal/surface_road.metal`
+paints centrelines, edge lines, dividers and crosswalks analytically in the
+fragment shader from a road-local UV, under `Surface::RoadMarkings` (ADR-0044),
+with a `shaderMarkings` flag in `road_mesh.h`. So this is not a renderer rewrite;
+it is an upgrade to both halves of a seam that exists.
+
+What changes is one line — `road_mesh.cpp:1441`:
+
+```cpp
+gU[gi(i,j)] = 2.0 + lateral / std::max(0.5, hw);   // 1 left, 2 centre, 3 right
+```
+
+The engine's lateral coordinate is **normalised by half-width**. Markings sit at
+fractions of the road, so they stretch when it widens, and a lane that appears
+cannot be expressed. Here `t` is metres.
+
+`rl_paint.h` is the half that has to run on a GPU, in a subset that compiles as
+C++, MSL and GLSL unchanged (WGSL differs enough to need generating). Three
+constraints shape it, all from the GPU side: no containers, so boundaries arrive
+as a flat fixed-size array something else filled in; no noise, so wear's blotch
+mask is an input and each backend spends the value noise it already ships; and
+float, not double. `surface.cpp` now calls it, so there is one implementation
+rather than a reference and a port that drift.
+
+The important thing this de-risks: the expensive part of a road shader is the
+asphalt, not the paint. The engine already has `surfAsphalt`/`vnoise2` and
+already affords it. Only the markings need porting, and they are a handful of
+`abs()` and `smoothstep()` per boundary.
+
+### Two things the bake had to be measured for
+
+`paint_bake.h` turns a cross-section into that flat array. Testing it against the
+exact cross-section — which is the whole reason to build it before touching a
+shader — produced two results that changed the design.
+
+**A ring is required on both sides of every lane-section boundary.** Slot *k* of
+the baked array is only the same physical boundary at both ends of a step if the
+boundary *set* is unchanged, and it changes discontinuously at a section seam: a
+lane appears and every slot outboard of it shifts one place. Interpolating across
+that blends two unrelated boundaries. Measured on the `lanes` demo it dragged
+paint **0.78 m** sideways; with a ring pair straddling each seam the worst error
+over a 2 m step is **8 mm**, against a 100–150 mm stripe. That is now a stated
+requirement on whatever meshes the road.
+
+**Bake only the painted boundaries.** A full cross-section runs to **17**
+boundaries once kerbs, gutters, verges and slopes are counted, but never more
+than **nine** carry paint. Baking all 17 is 136 floats per station, which settles
+the vertex-attribute question against itself; nine is 18 RGBA texels, which is
+nothing. So the recommendation is a **profile texture**, not vertex attributes —
+a conclusion measured rather than guessed, and the opposite of where I started.
+Filtering also broke the hatch styles, which fill outward to their neighbour and
+so needed a boundary the shader would no longer be given; the fill extent is now
+resolved at bake time and travels in a field the area styles do not otherwise
+use, which removes the shader's only dependence on array ordering.
+
+Tests assert the invariants a GPU port depends on: coverage never rises as the
+filter widens (no shimmer), a dashed line averages to its duty cycle and stops
+varying with `s` once sub-pixel (no crawl), the painted boundaries fit the fixed
+record, and interpolated paint matches exact paint across every demo.
+
+### What is left
+
+Writing the Metal entry point that calls `rlEvaluateMarkings`, the profile-texture
+upload, and measuring the frame cost — which needs the viewer, so it needs a
+machine with a GPU. The frame ledger (ADR-0077, `RT_FRAME_STATS=<csv>`,
+`tools/frame-report.py`) is already the harness for it.
+
 ## The fallback census
 
 `--fallbacks` runs every demo and five generated cities with terrain, props,
@@ -612,6 +681,8 @@ Every demo and every generated city seed passes it clean; the tests assert that.
 ```
 rl_math.h/.cpp     Vec2/Vec3, Poly3, noise, Gauss-Legendre. No engine deps.
 rl_xml.h/.cpp      a minimal XML reader, sized for .xodr and nothing more.
+rl_paint.h         the marking evaluator, in a C++/MSL/GLSL subset. The GPU half.
+paint_bake.h/.cpp  cross-section -> the flat boundary array that shader reads.
 diag.h/.cpp        the fallback census: counters for every quiet substitution.
 spine.h/.cpp       line/arc/clothoid chains, elevation, superelevation,
                    (s,t,h) -> world and the inverse.

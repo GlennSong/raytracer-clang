@@ -9,6 +9,7 @@
 
 #include "builders.h"
 #include "diag.h"
+#include "paint_bake.h"
 #include "junction.h"
 #include "network.h"
 #include "odr.h"
@@ -1841,6 +1842,174 @@ void testMostDriversGetARoute() {
         check(v.route.empty(), "isolated roads produce no route, honestly");
 }
 
+// --- the portable marking evaluator -----------------------------------------
+
+void testPaintEvaluatorIsPortable() {
+    group("paint evaluator");
+    // rl_paint.h is the half of the surface shader that has to run on a GPU, so
+    // it is written in a subset with no containers, no doubles and no noise. The
+    // risk of a subset is that it drifts from what it replaced, so these are the
+    // properties the CPU reference had and the port must keep.
+    RlBoundary b[4];
+    for (RlBoundary& x : b) x = RlBoundary{};
+    b[0].t = -3.6f;
+    b[0].style = float(RL_MARK_SOLID);
+    b[0].width = 0.15f;
+    b[0].color = float(RL_PAINT_WHITE);
+    b[1].t = 0.0f;
+    b[1].style = float(RL_MARK_DOUBLE);
+    b[1].width = 0.12f;
+    b[1].gap = 0.12f;
+    b[1].color = float(RL_PAINT_YELLOW);
+
+    const float fw = 0.01f;
+    RlPaint on = rlEvaluateMarkings(b, 2, 10.0f, -3.6f, fw, 0.0f, 1.0f, 0.0f);
+    check(on.coverage > 0.9f, "a solid line is opaque on its own boundary");
+    RlPaint off = rlEvaluateMarkings(b, 2, 10.0f, -3.0f, fw, 0.0f, 1.0f, 0.0f);
+    check(off.coverage < 1e-3, "and absent half a metre away");
+
+    // The double yellow is TWO stripes with a gap: the centre of the pair is
+    // unpainted. Getting this wrong yields one fat line and looks almost right.
+    RlPaint centre = rlEvaluateMarkings(b, 2, 10.0f, 0.0f, fw, 0.0f, 1.0f, 0.0f);
+    RlPaint limb = rlEvaluateMarkings(b, 2, 10.0f, 0.12f, fw, 0.0f, 1.0f, 0.0f);
+    check(centre.coverage < 0.2f, "the gap between a double yellow's stripes is clear");
+    check(limb.coverage > 0.9f, "and each stripe is painted");
+    check(limb.g > limb.b, "yellow paint is yellow");
+
+    // Energy preservation is what stops a receding lane line sparkling: as the
+    // filter grows past the stripe width, coverage falls off smoothly rather
+    // than flickering between 0 and 1.
+    double prev = 1.0;
+    bool monotone = true;
+    for (float filter : {0.02f, 0.05f, 0.1f, 0.2f, 0.4f, 0.8f}) {
+        RlPaint p = rlEvaluateMarkings(b, 2, 10.0f, -3.6f, filter, 0.0f, 1.0f, 0.0f);
+        if (p.coverage > prev + 1e-4) monotone = false;
+        prev = p.coverage;
+    }
+    check(monotone, "coverage never rises as the filter widens (no shimmer)");
+    check(prev < 0.6, "and a far-away stripe fades rather than staying solid");
+
+    // A dashed line must average to its duty cycle along s, or a dashed road
+    // reads as a different brightness from a solid one at distance.
+    RlBoundary d[1];
+    d[0] = RlBoundary{};
+    d[0].t = 0.0f;
+    d[0].style = float(RL_MARK_DASHED);
+    d[0].width = 0.15f;
+    d[0].dashOn = 3.0f;
+    d[0].dashOff = 9.0f;
+    double sum = 0;
+    const int kSamples = 4000;
+    for (int i = 0; i < kSamples; ++i) {
+        float s = float(i) * (60.0f / kSamples);
+        sum += rlEvaluateMarkings(d, 1, s, 0.0f, 0.005f, 0.0f, 1.0f, 0.0f).coverage;
+    }
+    checkNear(sum / kSamples, 3.0 / 12.0, 0.02, "a dashed line averages to its duty cycle");
+
+    // Far field: once the dashes are sub-pixel the stripe must stop flickering
+    // and settle. Its value is the duty cycle times how much of the pixel a
+    // 0.15 m stripe occupies laterally under a 6 m filter — energy preservation
+    // applies in both dimensions, which is the whole point of it.
+    double lo = 1.0, hi = 0.0;
+    for (int i = 0; i < 200; ++i) {
+        float s = 3.1f * float(i);
+        double c = rlEvaluateMarkings(d, 1, s, 0.0f, 6.0f, 0.0f, 1.0f, 0.0f).coverage;
+        lo = std::min(lo, c);
+        hi = std::max(hi, c);
+    }
+    check(hi - lo < 1e-6, "a sub-pixel dashed line stops varying with s — no crawl");
+    checkNear(hi, (3.0 / 12.0) * (0.15 / (6.0 * 1.6)), 1e-4,
+              "and settles at duty times the stripe's share of the pixel");
+
+    check(rlEvaluateMarkings(b, 0, 1.0f, 0.0f, fw, 0.0f, 1.0f, 0.0f).coverage == 0.0f,
+          "no boundaries paints nothing");
+}
+
+void testBakedBoundariesMatchTheCrossSection() {
+    group("boundary bake");
+    // The GPU cannot walk a cross-section, so boundaries get baked at intervals
+    // and interpolated — by vertex attributes today, a profile texture later.
+    // This is the question that decides whether that works: does the
+    // interpolated array reproduce the exact one, everywhere it matters?
+    for (const std::string& name : demoNames()) {
+        Scene sc;
+        if (!buildDemo(name, sc)) continue;
+        finalizeScene(sc, false, false);
+
+        double worstOffset = 0;
+        long compared = 0, countMismatch = 0;
+        double worstCoverage = 0;
+        for (const Road& r : sc.net.roads()) {
+            if (r.activeLength() < 8.0) continue;
+            // 2 m is the ring spacing the road tessellator already uses, so this
+            // is the real interpolation the mesh would give, not a flattering one.
+            BoundaryStrip strip = bakeBoundaryStrip(r, 2.0);
+            for (int k = 1; k < 40; ++k) {
+                double s = r.begin() + r.activeLength() * double(k) / 40.0;
+                RlBoundary exact[kMaxBakedBoundaries];
+                RlBoundary lerped[kMaxBakedBoundaries];
+                int ne = bakeBoundaries(r, s, exact, kMaxBakedBoundaries);
+                int nl = strip.sampleInterpolated(s, lerped, kMaxBakedBoundaries);
+                ++compared;
+                if (ne != nl) {
+                    ++countMismatch;
+                    continue;   // a lane opening inside this step; offsets below
+                }
+                for (int i = 0; i < ne; ++i)
+                    worstOffset = std::max(worstOffset,
+                                           std::fabs(double(exact[i].t) - double(lerped[i].t)));
+
+                // What actually matters is the paint, not the offsets: compare
+                // the evaluator's output driven by each.
+                double le = r.xs.leftExtentAt(s), re = r.xs.rightExtentAt(s);
+                for (int j = 0; j <= 24; ++j) {
+                    double t = re + (le - re) * double(j) / 24.0;
+                    RlPaint pe = rlEvaluateMarkings(exact, ne, float(s), float(t), 0.03f, 0.0f,
+                                                    1.0f, 0.0f);
+                    RlPaint pl = rlEvaluateMarkings(lerped, nl, float(s), float(t), 0.03f, 0.0f,
+                                                    1.0f, 0.0f);
+                    worstCoverage =
+                        std::max(worstCoverage, std::fabs(double(pe.coverage) - double(pl.coverage)));
+                }
+            }
+        }
+        // The cap is what makes a fixed-size GPU record possible at all, so it
+        // is an invariant, not a hope. Overflowing it truncates the far end of
+        // the array and shifts every slot past the cut.
+        std::vector<Boundary> all;
+        int worstPainted = 0;
+        for (const Road& r : sc.net.roads()) {
+            double len = r.activeLength();
+            if (len < 1.0) continue;
+            for (int k = 0; k <= 20; ++k) {
+                r.xs.boundariesAt(r.begin() + len * double(k) / 20.0, all);
+                int painted = 0;
+                for (const Boundary& x : all)
+                    if (x.mark.style != MarkStyle::None) ++painted;
+                worstPainted = std::max(worstPainted, painted);
+            }
+        }
+        check(worstPainted <= kMaxBakedBoundaries,
+              (name + ": painted boundaries fit the shader's fixed record").c_str());
+
+        check(compared > 100, (name + ": there were stations to compare").c_str());
+        // Boundary offsets are cubics in s; over a 2 m step a straight line
+        // through them is accurate to well under a paint width (0.10-0.15 m).
+        check(worstOffset < 0.05,
+              (name + ": interpolated boundary offsets stay within 50 mm").c_str());
+        // A handful of steps straddle a lane appearing or ending, where the
+        // count legitimately changes mid-step. It has to be rare, or the mesh
+        // needs a ring at every section boundary.
+        check(countMismatch < compared / 8,
+              (name + ": few steps straddle a lane-count change").c_str());
+        check(worstCoverage < 0.5,
+              (name + ": interpolated paint matches the exact paint").c_str());
+        if (worstOffset > 0.01 || worstCoverage > 0.1)
+            std::printf("  note: %-11s worst offset %.3f m, worst coverage delta %.2f\\n",
+                        name.c_str(), worstOffset, worstCoverage);
+    }
+}
+
 // --- the metro generator ----------------------------------------------------
 
 namespace {
@@ -2179,6 +2348,8 @@ int main() {
     testJunctionPadsAreSimplePolygons();
     testInverseMapResolvesRealQueries();
     testMostDriversGetARoute();
+    testPaintEvaluatorIsPortable();
+    testBakedBoundariesMatchTheCrossSection();
     testMetroGenerator();
     testMetroSurvivesOpenDrive();
     testAllDemosBuild();
