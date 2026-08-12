@@ -41,3 +41,4 @@ build-visionos-dev/
 /roadlab
 /roadlab_tests
 /out_roadlab/
+tools/__pycache__/

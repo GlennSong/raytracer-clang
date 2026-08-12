@@ -35,7 +35,7 @@ namespace roadlab {
 // difference matters — 17 records is 136 floats per station, which settles the
 // vertex-attribute question against itself and points at a profile texture; 9 is
 // 18 RGBA texels, which is nothing.
-constexpr int kMaxBakedBoundaries = 12;
+constexpr int kMaxBakedBoundaries = RL_MAX_BOUNDS;
 
 float markStyleCode(MarkStyle style);
 float paintColorCode(PaintColor color);

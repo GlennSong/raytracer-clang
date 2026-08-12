@@ -12,8 +12,9 @@ window, so it builds and runs anywhere `make` does.
 
 ```bash
 make roadlab                      # build ./roadlab
-make roadlab-test                 # 22694 assertions, no framework
+make roadlab-test                 # 23300 assertions, no framework
 make roadlab-shots                # render every demo to out_roadlab/
+make roadlab-wgsl                 # regenerate rl_paint.wgsl from rl_paint.h
 
 ./roadlab --demo showcase --view persp --out shot.png
 ./roadlab --demo grades --view persp            # skewed junction, four grades
@@ -519,11 +520,11 @@ fractions of the road, so they stretch when it widens, and a lane that appears
 cannot be expressed. Here `t` is metres.
 
 `rl_paint.h` is the half that has to run on a GPU, in a subset that compiles as
-C++, MSL and GLSL unchanged (WGSL differs enough to need generating). Three
-constraints shape it, all from the GPU side: no containers, so boundaries arrive
-as a flat fixed-size array something else filled in; no noise, so wear's blotch
-mask is an input and each backend spends the value noise it already ships; and
-float, not double. `surface.cpp` now calls it, so there is one implementation
+C++, MSL and GLSL unchanged, and that `tools/roadlab-wgsl.py` translates to WGSL.
+Three constraints shape it, all from the GPU side: no containers, so boundaries
+arrive as a flat fixed-size array something else filled in; no noise, so wear's
+blotch mask is an input and each backend spends the value noise it already ships;
+and float, not double. `surface.cpp` now calls it, so there is one implementation
 rather than a reference and a port that drift.
 
 The important thing this de-risks: the expensive part of a road shader is the
@@ -562,11 +563,85 @@ filter widens (no shimmer), a dashed line averages to its duty cycle and stops
 varying with `s` once sub-pixel (no crawl), the painted boundaries fit the fixed
 record, and interpolated paint matches exact paint across every demo.
 
+### The profile texture
+
+`paint_texture.h` is where the fragment actually gets its array. Two textures,
+addressed by one interpolated scalar:
+
+| | width | rows | sampler | holds |
+|---|---|---|---|---|
+| profile | 4 texels | one per mesh ring | **linear** for texels 0–2, **nearest** for texel 3 | twelve lateral offsets, then a style row index |
+| styles | 24 texels | one per **distinct** style set | **nearest** | style, width, gap, colour, dash pattern, wear |
+
+The split is the design. `t` is the one field continuous in `s`, so it is the one
+field a linear filter should touch; a blend of two style codes is not a third
+style, it is a number that selects a branch at random.
+
+The indirection through `styleRow` is what makes it scale. Style, width, dash and
+colour change only at lane-section seams, so a row-per-station style table stores
+the same 96 floats over and over. Deduplicating across the network collapses it
+by the ratio of stations to distinct cross-sections: on the `urban` demo **3218
+station rows fold to three style sets**, and the atlas drops from 1357.6 KiB to
+**202.2 KiB**. Extrapolated to 500 km of road at the mesher's 2 m ring spacing
+that is ~16 MiB, or half that as RGBA16F — a texture that scales with the number
+of road *types*, not with kilometres.
+
+Rows are not uniformly spaced, so a fragment cannot compute its row from `s`. The
+mesher emits one ring per row and writes the row index into a vertex channel; the
+rasteriser interpolates it. That is the same trick `road_mesh.cpp` already uses
+for its road-local U, and it is why the seam ring pair matters twice over — it
+keeps slot numbering stable across a step *and* gives the mesh somewhere to put
+the discontinuity.
+
+It does not remove that discontinuity; nothing can. So the confinement is
+measured rather than assumed: across the 12 interior seams in the demos, the
+widest band where interpolated paint disagrees with the cross-section is
+**0.90 mm**, inside the 1 mm ring pair. Building the texture also exposed two
+bugs in the strip it reads from — a slot live at one end of a step and padding at
+the other was interpolating its offset from zero, sweeping a marking out from the
+middle of the road, and `sampleInterpolated` was blending fields that a sampler
+pair cannot blend.
+
+### WGSL is generated, not shared
+
+Metal and GLSL include `rl_paint.h` verbatim. WGSL cannot: `float x` is
+`x : f32`, `T f(a)` is `fn f(a) -> T`, struct members are comma-separated, and a
+pointer parameter needs an address space. So `tools/roadlab-wgsl.py` translates
+it, and `rl_paint.wgsl` is checked in.
+
+The generator's most important property is that it **refuses** anything outside
+the subset rather than guessing — a guess would emit WGSL that compiles and
+shades the road differently from the CPU, which is precisely the failure the
+shared-source exercise exists to prevent:
+
+```
+$ tools/roadlab-wgsl.py
+rl_paint.h:202 refuses translation (ternary — use rlMax/rlMin or an if)
+    float energy = w > 0.0f ? w / effW : 1.0f;
+```
+
+Making that refusal cheap meant shrinking the shared subset instead of growing
+the translator. `rl_paint.h` now has no ternaries and no pointer out-parameters:
+every comparison goes through `rlMax`/`rlMin` (the only two functions the
+generator maps rather than translates, straight onto WGSL builtins), and
+`rlPaintColor` returns a small struct. Neither is worse in C++, and together they
+took the translator down to something that fits in a page and fails loudly.
+
+Two guards keep the pair honest. The generated file records an FNV-1a digest of
+its input, and the test suite recomputes it — a header edit nobody regenerated
+fails the build rather than shipping. And because a digest only proves the file
+was regenerated, not that regenerating produced anything, the same test walks the
+header for every `RL_FN` and `#define RL_*` and requires each in the WGSL, checks
+brace balance, and greps for C that survived translation. There is no WGSL
+validator in this repo (the same note is on `shaders/webgpu/water.wgsl`), so those
+structural checks stand in for a parser.
+
 ### What is left
 
-Writing the Metal entry point that calls `rlEvaluateMarkings`, the profile-texture
-upload, and measuring the frame cost — which needs the viewer, so it needs a
-machine with a GPU. The frame ledger (ADR-0077, `RT_FRAME_STATS=<csv>`,
+The Metal entry point that calls `rlEvaluateMarkings`, uploading the two
+textures, the bake from a roadlab `Network` to the engine's road mesh, and
+measuring the frame cost — all of which need the viewer, so they need a machine
+with a GPU. The frame ledger (ADR-0077, `RT_FRAME_STATS=<csv>`,
 `tools/frame-report.py`) is already the harness for it.
 
 ## The fallback census
@@ -682,7 +757,9 @@ Every demo and every generated city seed passes it clean; the tests assert that.
 rl_math.h/.cpp     Vec2/Vec3, Poly3, noise, Gauss-Legendre. No engine deps.
 rl_xml.h/.cpp      a minimal XML reader, sized for .xodr and nothing more.
 rl_paint.h         the marking evaluator, in a C++/MSL/GLSL subset. The GPU half.
+rl_paint.wgsl      generated from it by tools/roadlab-wgsl.py. Do not edit.
 paint_bake.h/.cpp  cross-section -> the flat boundary array that shader reads.
+paint_texture.h/.cpp  that array as the two textures a fragment samples.
 diag.h/.cpp        the fallback census: counters for every quiet substitution.
 spine.h/.cpp       line/arc/clothoid chains, elevation, superelevation,
                    (s,t,h) -> world and the inverse.

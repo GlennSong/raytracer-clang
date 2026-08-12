@@ -26,6 +26,8 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cctype>
+#include <cstdint>
 #include <string>
 
 using namespace roadlab;
@@ -2248,6 +2250,136 @@ void testProfileTextureIsWhatTheShaderWouldSample() {
     }
 }
 
+// --- the generated WGSL -----------------------------------------------------
+
+namespace {
+
+std::string readFile(const std::string& path) {
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return std::string();
+    std::string out;
+    char buf[4096];
+    size_t got;
+    while ((got = std::fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, got);
+    std::fclose(f);
+    return out;
+}
+
+// FNV-1a, 64-bit. Matches tools/roadlab-wgsl.py byte for byte; see the comment
+// there for why it is not SHA.
+std::string fnv1a64(const std::string& data) {
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (unsigned char c : data) {
+        h ^= uint64_t(c);
+        h *= 0x100000001b3ull;
+    }
+    char buf[17];
+    std::snprintf(buf, sizeof(buf), "%016llx", (unsigned long long)h);
+    return std::string(buf);
+}
+
+}  // namespace
+
+void testGeneratedWgslTracksTheHeader() {
+    group("generated WGSL");
+    // Four backends, one evaluator. Metal and GLSL include rl_paint.h; WGSL
+    // cannot, so it is generated. That generated file is the one place the
+    // "single implementation" claim can quietly become false — a header edit
+    // that nobody regenerated ships a shader that paints a different road, and
+    // nothing in a C++ build would notice.
+    const std::string dir = ROADLAB_SRC_DIR;
+    std::string header = readFile(dir + "/rl_paint.h");
+    std::string wgsl = readFile(dir + "/rl_paint.wgsl");
+    check(!header.empty(), "rl_paint.h is readable");
+    check(!wgsl.empty(), "rl_paint.wgsl exists — run `make roadlab-wgsl`");
+    if (header.empty() || wgsl.empty()) return;
+
+    const std::string marker = "// rl_paint.h digest: ";
+    size_t at = wgsl.find(marker);
+    check(at != std::string::npos, "the generated WGSL records the digest of its input");
+    if (at == std::string::npos) return;
+    std::string recorded = wgsl.substr(at + marker.size(), 16);
+    check(recorded == fnv1a64(header),
+          "rl_paint.wgsl was generated from the CURRENT rl_paint.h "
+          "(if this fails, run `make roadlab-wgsl`)");
+
+    // Every function and constant in the header has to have come across. This
+    // is what catches a generator that silently drops something rather than
+    // refusing it — the digest only proves the file was regenerated, not that
+    // regenerating produced anything.
+    size_t pos = 0;
+    int fns = 0, consts = 0;
+    while ((pos = header.find("RL_FN ", pos)) != std::string::npos) {
+        // Only a definition, which starts a line. The macro's own `#define
+        // RL_FN inline` also contains the token, and following it to the next
+        // '(' lands in whatever comment comes next.
+        if (pos != 0 && header[pos - 1] != '\n') {
+            pos += 6;
+            continue;
+        }
+        size_t paren = header.find('(', pos);
+        if (paren == std::string::npos) break;
+        size_t nameEnd = paren;
+        while (nameEnd > pos && (header[nameEnd - 1] == ' ')) --nameEnd;
+        size_t nameStart = nameEnd;
+        while (nameStart > pos && (std::isalnum((unsigned char)header[nameStart - 1]) ||
+                                   header[nameStart - 1] == '_'))
+            --nameStart;
+        std::string name = header.substr(nameStart, nameEnd - nameStart);
+        ++fns;
+        check(wgsl.find("fn " + name + "(") != std::string::npos,
+              ("the WGSL defines " + name).c_str());
+        pos = paren;
+    }
+    check(fns >= 6, "the header still has the functions this test expects to find");
+
+    pos = 0;
+    while ((pos = header.find("#define RL_", pos)) != std::string::npos) {
+        size_t nameStart = pos + 8;
+        size_t nameEnd = header.find(' ', nameStart);
+        std::string name = header.substr(nameStart, nameEnd - nameStart);
+        pos = nameEnd;
+        // RL_BUF and RL_FN are C and GLSL plumbing with no WGSL counterpart.
+        if (name == "RL_BUF" || name == "RL_FN") continue;
+        ++consts;
+        check(wgsl.find("const " + name + " :") != std::string::npos,
+              ("the WGSL defines " + name).c_str());
+    }
+    check(consts >= 15, "the marking and colour codes all crossed over");
+
+    // No validator ships with this repo (the same note is on shaders/webgpu/
+    // water.wgsl), so the structural checks a parser would do are done here.
+    long braces = 0;
+    bool balanced = true;
+    for (char c : wgsl) {
+        if (c == '{') ++braces;
+        if (c == '}' && --braces < 0) balanced = false;
+    }
+    check(balanced && braces == 0, "the generated WGSL has balanced braces");
+
+    // C that survived translation. A stray `float` or `;` inside a struct is
+    // not a subtle bug — it simply will not compile — but the failure would
+    // land on whoever next touches the WebGPU backend rather than here.
+    const char* leftovers[] = {"float ", "RL_FN", "RL_BUF", " ? ", "->r", "&out"};
+    for (const char* bad : leftovers) {
+        // Skip the generated file's own prose: only code lines matter.
+        bool found = false;
+        size_t line = 0;
+        while (line < wgsl.size()) {
+            size_t eol = wgsl.find('\n', line);
+            if (eol == std::string::npos) eol = wgsl.size();
+            std::string text = wgsl.substr(line, eol - line);
+            size_t comment = text.find("//");
+            if (comment != std::string::npos) text = text.substr(0, comment);
+            if (text.find(bad) != std::string::npos) found = true;
+            line = eol + 1;
+        }
+        check(!found, (std::string("no C leftover \"") + bad + "\" in the WGSL").c_str());
+    }
+    check(wgsl.find("ptr<function, array<RlBoundary, RL_MAX_BOUNDS>>") != std::string::npos,
+          "the boundary array crossed over as a function-address-space pointer");
+}
+
 // --- the metro generator ----------------------------------------------------
 
 namespace {
@@ -2590,6 +2722,7 @@ int main() {
     testBakedBoundariesMatchTheCrossSection();
     testSeamSmearIsMillimetresWide();
     testProfileTextureIsWhatTheShaderWouldSample();
+    testGeneratedWgslTracksTheHeader();
     testMetroGenerator();
     testMetroSurvivesOpenDrive();
     testAllDemosBuild();

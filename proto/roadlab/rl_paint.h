@@ -31,16 +31,20 @@
 // at all. Here `t` is metres.
 //
 // WGSL is the one backend this cannot be shared with verbatim — different struct
-// and function syntax — so it needs generating from this file rather than
-// including it. Metal and GLSL take it as-is with the two macros below.
+// and function syntax — so it is GENERATED from this file by
+// tools/roadlab-wgsl.py, and tests.cpp fails if the two drift. Metal and GLSL
+// take it as-is with the two macros below.
+//
+// Writing for that generator is why this file has no ternaries and no pointer
+// out-parameters: both translate badly, and the alternatives (rlMax/rlMin, and
+// returning a small struct) are no worse in C++. Shrinking the shared subset was
+// cheaper than growing the translator, and it is the reason the translator can
+// refuse anything it does not recognise instead of guessing.
 
 // Address space for the boundary array. Metal wants `device const` or
 // `constant`; C++ and GLSL want nothing.
 #ifndef RL_BUF
 #define RL_BUF const
-#endif
-#ifndef RL_INOUT
-#define RL_INOUT
 #endif
 // Function linkage. C++ needs `inline` in a header or every translation unit
 // that includes it defines the symbol again; GLSL has no such keyword and Metal
@@ -52,6 +56,12 @@
 #    define RL_FN
 #  endif
 #endif
+
+// How many painted boundaries a station carries. Fixed because a GPU record has
+// to be, and 12 because the widest cross-section in the demos paints nine. This
+// is the array length WGSL needs and the cap paint_bake.h enforces — one number,
+// so they cannot disagree.
+#define RL_MAX_BOUNDS 12
 
 // Marking styles. Kept as an int rather than an enum so the value can travel
 // through a float texture channel without a cast that varies by language.
@@ -93,47 +103,65 @@ struct RlPaint {
     float b;
 };
 
+struct RlRgb {
+    float r;
+    float g;
+    float b;
+};
+
+// --- primitives -------------------------------------------------------------
+//
+// The only two functions the WGSL generator does not translate: it emits
+// `max`/`min` for them and checks they are still here under these names. Every
+// comparison in this file goes through them, which is what keeps the rest
+// ternary-free.
+
+RL_FN float rlMax(float a, float b) { return a > b ? a : b; }
+RL_FN float rlMin(float a, float b) { return a < b ? a : b; }
+
 // --- helpers ----------------------------------------------------------------
+
+RL_FN float rlSaturate(float x) { return rlMin(rlMax(x, 0.0f), 1.0f); }
 
 // Analytic coverage of a signed distance under a filter of width `fw`: the
 // fraction of the pixel the shape covers. This is what makes a 100 mm stripe
 // legible at 200 m without a mip chain.
 RL_FN float rlCoverage(float d, float fw) {
-    float h = 0.5f * (fw > 1e-6f ? fw : 1e-6f);
-    float x = (h - d) / (2.0f * h);
-    return x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x);
+    float h = 0.5f * rlMax(fw, 1e-6f);
+    return rlSaturate((h - d) / (2.0f * h));
 }
 
-RL_FN float rlSaturate(float x) { return x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x); }
-
+// x mod period, never negative. The expression is already in [0, period) in
+// exact arithmetic; the clamp is for the float edge where floor() rounds the
+// wrong way and hands back a value a few ulp below zero.
 RL_FN float rlWrap(float x, float period) {
-    float u = x - period * floor(x / period);
-    return u < 0.0f ? u + period : u;
+    return rlMax(x - period * floor(x / period), 0.0f);
 }
 
-RL_FN void rlPaintColor(float idx, RL_INOUT float* r, RL_INOUT float* g, RL_INOUT float* b) {
+RL_FN struct RlRgb rlPaintColor(float idx) {
+    struct RlRgb c;
+    c.r = 0.16f; c.g = 0.46f; c.b = 0.26f;   // green, the last band
     if (idx < 0.5f) {          // white
-        *r = 0.86f; *g = 0.86f; *b = 0.84f;
+        c.r = 0.86f; c.g = 0.86f; c.b = 0.84f;
     } else if (idx < 1.5f) {   // yellow
-        *r = 0.83f; *g = 0.68f; *b = 0.16f;
+        c.r = 0.83f; c.g = 0.68f; c.b = 0.16f;
     } else if (idx < 2.5f) {   // red
-        *r = 0.62f; *g = 0.16f; *b = 0.14f;
+        c.r = 0.62f; c.g = 0.16f; c.b = 0.14f;
     } else if (idx < 3.5f) {   // blue
-        *r = 0.18f; *g = 0.30f; *b = 0.62f;
-    } else {                   // green
-        *r = 0.16f; *g = 0.46f; *b = 0.26f;
+        c.r = 0.18f; c.g = 0.30f; c.b = 0.62f;
     }
+    return c;
 }
 
 // Dash duty with an anti-alias fallback. Below the resolution of the pattern the
 // stripe fades to its duty cycle rather than aliasing between dash and gap —
 // which is what stops a dashed line crawling as the camera pulls back.
 RL_FN float rlDashGate(float s, float on, float off, float fw) {
-    float onLen = on > 0.2f ? on : 0.2f;
-    float offLen = off > 0.2f ? off : 0.2f;
+    float onLen = rlMax(on, 0.2f);
+    float offLen = rlMax(off, 0.2f);
     float period = onLen + offLen;
     float u = rlWrap(s, period);
-    float d = (-u) > (u - onLen) ? (-u) : (u - onLen);
+    float d = rlMax(-u, u - onLen);
     float c = rlCoverage(d, fw);
     float blend = rlSaturate(fw / (onLen * 0.7f));
     return c + (onLen / period - c) * blend;
@@ -166,11 +194,11 @@ RL_FN struct RlPaint rlEvaluateMarkings(RL_BUF struct RlBoundary* bounds, int co
         // fragments reject every marking on the road in one compare each.
         if (dt > 1.0f + fw || dt < -(1.0f + fw)) continue;
 
-        float w = bounds[i].width > 0.06f ? bounds[i].width : 0.06f;
+        float w = rlMax(bounds[i].width, 0.06f);
         // Anti-shimmer: never draw a stripe thinner than the filter, and scale
         // its contribution so average brightness is preserved. Without this a
         // receding lane line sparkles instead of fading.
-        float effW = w > fw * 1.6f ? w : fw * 1.6f;
+        float effW = rlMax(w, fw * 1.6f);
         float energy = w / effW;
 
         float off = (bounds[i].gap + w) * 0.5f;
@@ -184,23 +212,23 @@ RL_FN struct RlPaint rlEvaluateMarkings(RL_BUF struct RlBoundary* bounds, int co
         } else if (style < 3.5f) {             // DOUBLE
             float a = rlCoverage(fabs(dt + off) - effW * 0.5f, fw);
             float b = rlCoverage(fabs(dt - off) - effW * 0.5f, fw);
-            cov = a > b ? a : b;
+            cov = rlMax(a, b);
         } else if (style < 4.5f) {             // SOLID_DASHED
             float a = rlCoverage(fabs(dt + off) - effW * 0.5f, fw);
             float b = rlCoverage(fabs(dt - off) - effW * 0.5f, fw) * dash;
-            cov = a > b ? a : b;
+            cov = rlMax(a, b);
         } else if (style < 5.5f) {             // DASHED_SOLID
             float a = rlCoverage(fabs(dt + off) - effW * 0.5f, fw) * dash;
             float b = rlCoverage(fabs(dt - off) - effW * 0.5f, fw);
-            cov = a > b ? a : b;
+            cov = rlMax(a, b);
         } else if (style < 6.5f) {             // WIDE_DASHED (ramp extension)
             float on = 0.6f;
             float period = 1.8f;
             float u = rlWrap(s, period);
-            float d = (-u) > (u - on) ? (-u) : (u - on);
+            float d = rlMax(-u, u - on);
             float g = rlCoverage(d, fw);
             g = g + (on / period - g) * rlSaturate(fw / (on * 0.7f));
-            float wide = 0.20f > fw * 1.6f ? 0.20f : fw * 1.6f;
+            float wide = rlMax(0.20f, fw * 1.6f);
             cov = rlCoverage(fabs(dt) - wide * 0.5f, fw) * g;
         } else if (style < 7.5f) {             // BOTTS
             float pitch = 1.2f;
@@ -212,8 +240,8 @@ RL_FN struct RlPaint rlEvaluateMarkings(RL_BUF struct RlBoundary* bounds, int co
             // see unpainted boundaries; the shader is only given painted ones)
             // and travels in `gap`, which the area styles do not otherwise use.
             float far = bounds[i].gap;
-            float lo = bt < far ? bt : far;
-            float hi = bt < far ? far : bt;
+            float lo = rlMin(bt, far);
+            float hi = rlMax(bt, far);
             if (t >= lo && t <= hi) {
                 float d = rlWrap((s + t) * 0.7071f, 1.4f) - 0.7f;
                 cov = rlCoverage(fabs(d) - 0.07f, fw);
@@ -230,10 +258,13 @@ RL_FN struct RlPaint rlEvaluateMarkings(RL_BUF struct RlBoundary* bounds, int co
         }
 
         // Painted over painted keeps the newest colour; coverage saturates.
-        float nc = out.coverage + cov;
-        if (nc > 1.0f) nc = 1.0f;
-        if (cov > out.coverage * 0.5f) rlPaintColor(bounds[i].color, &out.r, &out.g, &out.b);
-        out.coverage = nc;
+        if (cov > out.coverage * 0.5f) {
+            struct RlRgb c = rlPaintColor(bounds[i].color);
+            out.r = c.r;
+            out.g = c.g;
+            out.b = c.b;
+        }
+        out.coverage = rlMin(out.coverage + cov, 1.0f);
     }
     return out;
 }

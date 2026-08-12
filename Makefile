@@ -444,15 +444,27 @@ ROADLAB_LIB_SRCS = \
 	$(ROADLAB_DIR)/scene.cpp
 ROADLAB_FLAGS = -std=c++17 -Wall -Wextra -Wpedantic -pthread -O2 \
 	-isystem third_party -isystem third_party/tinygltf
+# The tests read rl_paint.h and rl_paint.wgsl off disk to check the generated
+# WGSL is not stale, so they need to find them from any working directory.
+ROADLAB_TEST_FLAGS = $(ROADLAB_FLAGS) -DROADLAB_SRC_DIR='"$(abspath $(ROADLAB_DIR))"'
 
 roadlab: $(ROADLAB_LIB_SRCS) $(ROADLAB_DIR)/main.cpp Makefile
 	$(CXX) $(ROADLAB_FLAGS) -o $@ $(filter %.cpp,$^)
 
 roadlab_tests: $(ROADLAB_LIB_SRCS) $(ROADLAB_DIR)/tests.cpp Makefile
-	$(CXX) $(ROADLAB_FLAGS) -o $@ $(filter %.cpp,$^)
+	$(CXX) $(ROADLAB_TEST_FLAGS) -o $@ $(filter %.cpp,$^)
 
 roadlab-test: roadlab_tests
 	./roadlab_tests
+
+# rl_paint.wgsl is generated from rl_paint.h — WGSL is the one backend that
+# cannot include the shared header verbatim. The test suite fails if the
+# checked-in file is stale, so this is how you fix that failure.
+roadlab-wgsl:
+	python3 tools/roadlab-wgsl.py
+
+roadlab-wgsl-check:
+	python3 tools/roadlab-wgsl.py --check
 
 # Every demo, top-down and in perspective, into out_roadlab/ — the quickest way
 # to see whether a change to the shader or the solvers broke something visible.
