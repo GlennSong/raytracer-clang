@@ -113,6 +113,36 @@ BoundaryStrip bakeBoundaryStrip(const Road& road, double step) {
         }
         bakeBoundaries(road, at[i], row, kMaxBakedBoundaries);
     }
+
+    // Hold the offset across dead slots.
+    //
+    // A slot that is dead at one end of a step and live at the other is a lane
+    // appearing or ending inside it. The dead end's `t` is whatever the padding
+    // left there — zero, the reference line — so interpolating it sweeps the
+    // marking from the middle of the road out to its real position over the
+    // length of the step. Copying the nearest live offset into the dead slot
+    // makes that interpolation a no-op instead.
+    //
+    // This is not cosmetic. The profile texture (paint_texture.h) hands the
+    // offset axis to the hardware's linear filter, which cannot be taught about
+    // liveness; the only way the filter can be trusted is if a dead slot already
+    // holds a harmless value. Fixing it here fixes it for both paths at once.
+    const int stride = kMaxBakedBoundaries;
+    for (int k = 0; k < stride; ++k) {
+        float held = 0.0f;
+        bool have = false;
+        for (size_t i = 0; i < at.size(); ++i) {
+            RlBoundary& b = strip.rows[i * size_t(stride) + size_t(k)];
+            if (b.style > -0.5f) { held = b.t; have = true; }
+            else if (have) b.t = held;
+        }
+        have = false;
+        for (size_t i = at.size(); i-- > 0;) {
+            RlBoundary& b = strip.rows[i * size_t(stride) + size_t(k)];
+            if (b.style > -0.5f) { held = b.t; have = true; }
+            else if (have) b.t = held;
+        }
+    }
     return strip;
 }
 
@@ -129,17 +159,23 @@ int BoundaryStrip::sampleInterpolated(double s, RlBoundary* out, int maxCount) c
 
     const RlBoundary* a = &rows[lo * size_t(stride)];
     const RlBoundary* b = &rows[hi * size_t(stride)];
+    // Offsets blend; everything else takes the nearer row whole.
+    //
+    // Only `t` is continuous in s. Style, width and colour are piecewise
+    // constant — they change at lane-section seams and nowhere else — and a
+    // blend between two of them is not a third style, it is a number that means
+    // nothing. Both ends of an ordinary step sit in the same section and agree,
+    // so nearest is exact there; the only steps where the two differ are the
+    // 2 mm ones straddling a seam.
+    //
+    // Nearest is also what a GPU can do without help: one sampler set to linear
+    // for the offset texture, one set to nearest for the style texture. Anything
+    // cleverer here would be a CPU path the shader could not follow.
+    const RlBoundary* near = u < 0.5 ? a : b;
     int n = 0;
     for (int k = 0; k < stride && n < maxCount; ++k) {
-        // A boundary that exists at one end and not the other is a lane
-        // appearing or ending inside this step. Interpolating its offset from a
-        // zero would drag paint across the carriageway, so the slot takes the
-        // end that has it and only its POSITION is blended.
-        bool liveA = a[k].style > -0.5f;
-        bool liveB = b[k].style > -0.5f;
-        if (!liveA && !liveB) continue;
-        const RlBoundary& src = (u < 0.5 && liveA) || !liveB ? a[k] : b[k];
-        RlBoundary r = src;
+        if (near[k].style < -0.5f) continue;   // padding: this slot has no boundary
+        RlBoundary r = near[k];
         r.t = float(lerp(double(a[k].t), double(b[k].t), u));
         out[n++] = r;
     }

@@ -428,6 +428,7 @@ ROADLAB_LIB_SRCS = \
 	$(ROADLAB_DIR)/rl_xml.cpp \
 	$(ROADLAB_DIR)/diag.cpp \
 	$(ROADLAB_DIR)/paint_bake.cpp \
+	$(ROADLAB_DIR)/paint_texture.cpp \
 	$(ROADLAB_DIR)/spine.cpp \
 	$(ROADLAB_DIR)/profile.cpp \
 	$(ROADLAB_DIR)/network.cpp \

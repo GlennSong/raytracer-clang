@@ -10,6 +10,7 @@
 #include "builders.h"
 #include "diag.h"
 #include "paint_bake.h"
+#include "paint_texture.h"
 #include "junction.h"
 #include "network.h"
 #include "odr.h"
@@ -1925,6 +1926,20 @@ void testPaintEvaluatorIsPortable() {
           "no boundaries paints nothing");
 }
 
+namespace {
+
+// Inside the ring pair straddling a lane-section boundary. bakeBoundaryStrip
+// puts rings at sec.s0 +/- 1 mm; the half-millimetre of slack is for stations
+// that land bit-for-bit on a seam, which happens more often than it sounds
+// because seams tend to be derived from round fractions of a road's length.
+bool nearASeam(const Road& r, double s) {
+    for (const LaneSection& sec : r.xs.sections)
+        if (std::fabs(s - sec.s0) < 1.5e-3) return true;
+    return false;
+}
+
+}  // namespace
+
 void testBakedBoundariesMatchTheCrossSection() {
     group("boundary bake");
     // The GPU cannot walk a cross-section, so boundaries get baked at intervals
@@ -1946,6 +1961,12 @@ void testBakedBoundariesMatchTheCrossSection() {
             BoundaryStrip strip = bakeBoundaryStrip(r, 2.0);
             for (int k = 1; k < 40; ++k) {
                 double s = r.begin() + r.activeLength() * double(k) / 40.0;
+                // Skip the seam windows. Between the two rings straddling a
+                // lane-section boundary the cross-section changes by a whole
+                // lane, and no interpolation is meaningful across it — the
+                // question there is how WIDE that window is, which is measured
+                // on its own below rather than averaged into this figure.
+                if (nearASeam(r, s)) continue;
                 RlBoundary exact[kMaxBakedBoundaries];
                 RlBoundary lerped[kMaxBakedBoundaries];
                 int ne = bakeBoundaries(r, s, exact, kMaxBakedBoundaries);
@@ -2005,8 +2026,225 @@ void testBakedBoundariesMatchTheCrossSection() {
         check(worstCoverage < 0.5,
               (name + ": interpolated paint matches the exact paint").c_str());
         if (worstOffset > 0.01 || worstCoverage > 0.1)
-            std::printf("  note: %-11s worst offset %.3f m, worst coverage delta %.2f\\n",
+            std::printf("  note: %-11s worst offset %.3f m, worst coverage delta %.2f\n",
                         name.c_str(), worstOffset, worstCoverage);
+    }
+}
+
+void testSeamSmearIsMillimetresWide() {
+    group("seam smear");
+    // The one place interpolation cannot be right.
+    //
+    // At a lane-section boundary the cross-section changes discontinuously — a
+    // lane appears, and the boundary in slot k is a different piece of the road
+    // on each side. bakeBoundaryStrip lands a ring 1 mm either side so that no
+    // ordinary step straddles it, which does not remove the discontinuity; it
+    // confines it. This measures the confinement, because "confined" is a claim
+    // and 1.7 m of misplaced paint is what it costs if the claim is wrong.
+    double worstWindow = 0;
+    long seams = 0;
+    std::string worstAt;
+    for (const std::string& name : demoNames()) {
+        Scene sc;
+        if (!buildDemo(name, sc)) continue;
+        finalizeScene(sc, false, false);
+        for (const Road& r : sc.net.roads()) {
+            if (r.activeLength() < 8.0) continue;
+            BoundaryStrip strip = bakeBoundaryStrip(r, 2.0);
+            for (const LaneSection& sec : r.xs.sections) {
+                if (sec.s0 <= r.begin() + 0.05 || sec.s0 >= r.end() - 0.05) continue;
+                ++seams;
+                // Walk outward until the interpolated profile agrees with the
+                // exact one again. 0.05 m is a third of a stripe width — below
+                // that a disagreement cannot move a marking off itself.
+                double window = 0;
+                for (int sign = -1; sign <= 1; sign += 2) {
+                    for (int i = 1; i <= 200; ++i) {
+                        double d = double(i) * 1e-4;   // 0.1 mm steps out to 20 mm
+                        double s = sec.s0 + double(sign) * d;
+                        if (s <= r.begin() || s >= r.end()) break;
+                        RlBoundary exact[kMaxBakedBoundaries], lerped[kMaxBakedBoundaries];
+                        int ne = bakeBoundaries(r, s, exact, kMaxBakedBoundaries);
+                        int nl = strip.sampleInterpolated(s, lerped, kMaxBakedBoundaries);
+                        bool bad = ne != nl;
+                        for (int j = 0; !bad && j < ne; ++j)
+                            if (std::fabs(double(exact[j].t) - double(lerped[j].t)) > 0.05 ||
+                                exact[j].style != lerped[j].style)
+                                bad = true;
+                        if (bad) window = std::max(window, d);
+                    }
+                }
+                if (window > worstWindow) {
+                    worstWindow = window;
+                    worstAt = name;
+                }
+            }
+        }
+    }
+    check(seams >= 10, "there are lane-section seams across the demos to measure");
+    // The ring pair is at +/-1 mm, so 1 mm either side is the floor. Anything
+    // beyond about 2 mm means a step is straddling a seam somewhere — a ring
+    // that did not get placed, or a section list the bake did not see.
+    check(worstWindow <= 2.0e-3,
+          "paint is misplaced only within the 1 mm ring pair around a seam");
+    std::printf("  note: %ld seams, widest disagreement %.2f mm (%s)\n", seams,
+                worstWindow * 1000.0, worstAt.c_str());
+}
+
+void testProfileTextureIsWhatTheShaderWouldSample() {
+    group("profile texture");
+    // paint_texture.h claims a fragment can reconstruct the cross-section from
+    // two texture fetches and one interpolated scalar. Three things have to hold
+    // for that to be true, and none of them is obvious:
+    //
+    //   1. The row coordinate the mesher writes into a vertex is exactly the row
+    //      the bake put there — otherwise every ring samples its neighbour.
+    //   2. Splitting the record across a linear texture, a nearest one and a
+    //      deduplicated style table loses nothing against the single
+    //      interpolated array it replaces.
+    //   3. The result still paints the road the cross-section describes.
+    size_t worstAtlas = 0;
+    std::string worstName;
+    for (const std::string& name : demoNames()) {
+        Scene sc;
+        if (!buildDemo(name, sc)) continue;
+        finalizeScene(sc, false, false);
+
+        PaintAtlas atlas = bakePaintAtlas(sc.net, 2.0);
+        if (atlas.bytes() > worstAtlas) {
+            worstAtlas = atlas.bytes();
+            worstName = name;
+        }
+        check(atlas.rows > 0, (name + ": the atlas has rows").c_str());
+        check(atlas.profileTex.size() == size_t(atlas.rows) * size_t(atlas.profileWidth()) * 4,
+              (name + ": the profile texture is exactly rows x width").c_str());
+        check(atlas.styleTex.size() == size_t(atlas.styleRows) * size_t(atlas.styleWidth()) * 4,
+              (name + ": the style texture is exactly styleRows x width").c_str());
+        // The indirection only pays if the table really is small. If a
+        // deduplicated style row appeared per station the layout would be
+        // strictly worse than the one it replaced — an extra fetch for nothing.
+        check(atlas.styleRows < atlas.rows,
+              (name + ": distinct style sets are fewer than stations").c_str());
+
+        double worstT = 0, worstCoverage = 0;
+        long countMismatch = 0, compared = 0, styleMismatch = 0;
+        const std::vector<Road>& roads = sc.net.roads();
+        for (size_t ri = 0; ri < roads.size(); ++ri) {
+            const Road& r = roads[ri];
+            const PaintProfile& prof = atlas.profiles[ri];
+            if (r.activeLength() < 8.0) continue;
+
+            // (1) The ring contract. Ring i of the mesh sits at stations[i] and
+            // writes rowBase + i; if rowCoord disagrees the mesh and the texture
+            // are off by a row and every marking lands on the wrong ring.
+            bool ringsLineUp = true;
+            for (int i = 0; i < prof.rows(); ++i)
+                if (std::fabs(prof.rowCoord(prof.stations[size_t(i)]) -
+                              double(prof.rowBase + i)) > 1e-6)
+                    ringsLineUp = false;
+            check(ringsLineUp, (name + ": every ring's row coordinate is its own row").c_str());
+
+            BoundaryStrip strip = bakeBoundaryStrip(r, 2.0);
+            for (int k = 1; k < 40; ++k) {
+                double s = r.begin() + r.activeLength() * double(k) / 40.0;
+                RlBoundary viaStrip[kMaxBakedBoundaries];
+                RlBoundary viaTex[kMaxBakedBoundaries];
+                RlBoundary exact[kMaxBakedBoundaries];
+                int ns = strip.sampleInterpolated(s, viaStrip, kMaxBakedBoundaries);
+                int nt = atlas.sample(int(ri), prof.rowCoord(s), viaTex, kMaxBakedBoundaries);
+                int ne = bakeBoundaries(r, s, exact, kMaxBakedBoundaries);
+                ++compared;
+
+                // (2) The split is lossless. Not "close" — the two paths read
+                // the same numbers, so any difference is a packing bug.
+                if (ns != nt) {
+                    ++countMismatch;
+                } else {
+                    for (int i = 0; i < ns; ++i) {
+                        worstT = std::max(worstT, std::fabs(double(viaStrip[i].t) -
+                                                            double(viaTex[i].t)));
+                        if (viaStrip[i].style != viaTex[i].style ||
+                            viaStrip[i].width != viaTex[i].width ||
+                            viaStrip[i].gap != viaTex[i].gap ||
+                            viaStrip[i].color != viaTex[i].color ||
+                            viaStrip[i].dashOn != viaTex[i].dashOn ||
+                            viaStrip[i].dashOff != viaTex[i].dashOff ||
+                            viaStrip[i].wear != viaTex[i].wear)
+                            ++styleMismatch;
+                    }
+                }
+
+                // (3) End to end, against the cross-section rather than against
+                // the intermediate.
+                if (ne == nt) {
+                    double le = r.xs.leftExtentAt(s), re = r.xs.rightExtentAt(s);
+                    for (int j = 0; j <= 24; ++j) {
+                        double t = re + (le - re) * double(j) / 24.0;
+                        RlPaint pe = rlEvaluateMarkings(exact, ne, float(s), float(t), 0.03f,
+                                                        0.0f, 1.0f, 0.0f);
+                        RlPaint pt = rlEvaluateMarkings(viaTex, nt, float(s), float(t), 0.03f,
+                                                        0.0f, 1.0f, 0.0f);
+                        worstCoverage = std::max(worstCoverage,
+                                                 std::fabs(double(pe.coverage) -
+                                                           double(pt.coverage)));
+                    }
+                }
+            }
+        }
+        check(compared > 100, (name + ": there were stations to sample").c_str());
+        check(countMismatch == 0,
+              (name + ": the texture yields the same boundary count as the strip").c_str());
+        check(styleMismatch == 0,
+              (name + ": and the same style, width, dash and colour, bit for bit").c_str());
+        check(worstT < 1e-5,
+              (name + ": and the same lateral offsets to float precision").c_str());
+        check(worstCoverage < 0.5,
+              (name + ": paint sampled from the texture matches the cross-section").c_str());
+    }
+
+    // Numbers worth knowing before anyone uploads this: the whole atlas for the
+    // biggest demo at the mesher's own ring spacing, and how hard the style
+    // table folded, which is what decides whether this scales to a city.
+    {
+        Scene sc;
+        buildDemo(worstName, sc);
+        finalizeScene(sc, false, false);
+        PaintAtlas atlas = bakePaintAtlas(sc.net, 2.0);
+        std::printf("  note: largest paint atlas %s, %.1f KiB (RGBA32F; halves as RGBA16F) "
+                    "- %d rows, %d distinct style sets (%.0fx fold)\n",
+                    worstName.c_str(), double(worstAtlas) / 1024.0, atlas.rows, atlas.styleRows,
+                    double(atlas.rows) / double(std::max(1, atlas.styleRows)));
+    }
+
+    // Nearest along the style axis is the reason a seam works at all. Just
+    // inside a lane section the style must be that section's, not a blend with
+    // its neighbour's — and a blend would be silent, because a style code
+    // halfway between Dashed and Double still selects a branch.
+    Scene sc;
+    if (buildDemo("lanes", sc)) {
+        finalizeScene(sc, false, false);
+        PaintAtlas atlas = bakePaintAtlas(sc.net, 2.0);
+        long checkedSeams = 0, wrongStyle = 0;
+        const std::vector<Road>& roads = sc.net.roads();
+        for (size_t ri = 0; ri < roads.size(); ++ri) {
+            const Road& r = roads[ri];
+            const PaintProfile& prof = atlas.profiles[ri];
+            for (const LaneSection& sec : r.xs.sections) {
+                for (double d : {0.05, -0.05}) {
+                    double s = sec.s0 + d;
+                    if (s <= r.begin() + 1e-6 || s >= r.end() - 1e-6) continue;
+                    RlBoundary tex[kMaxBakedBoundaries], exact[kMaxBakedBoundaries];
+                    int nt = atlas.sample(int(ri), prof.rowCoord(s), tex, kMaxBakedBoundaries);
+                    int ne = bakeBoundaries(r, s, exact, kMaxBakedBoundaries);
+                    ++checkedSeams;
+                    if (nt != ne) { ++wrongStyle; continue; }
+                    for (int i = 0; i < ne; ++i)
+                        if (tex[i].style != exact[i].style) ++wrongStyle;
+                }
+            }
+        }
+        check(checkedSeams > 0, "the lanes demo has lane-section seams to test");
+        check(wrongStyle == 0, "50 mm from a seam the style is the section's own, unblended");
     }
 }
 
@@ -2350,6 +2588,8 @@ int main() {
     testMostDriversGetARoute();
     testPaintEvaluatorIsPortable();
     testBakedBoundariesMatchTheCrossSection();
+    testSeamSmearIsMillimetresWide();
+    testProfileTextureIsWhatTheShaderWouldSample();
     testMetroGenerator();
     testMetroSurvivesOpenDrive();
     testAllDemosBuild();
