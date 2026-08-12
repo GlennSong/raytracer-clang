@@ -1845,29 +1845,51 @@ void testMostDriversGetARoute() {
 
 namespace {
 
-// Can traffic get from `fromRoad` to `toRoad` over the lane graph at all? The
-// question the whole interchange machinery exists to answer, and a bounded-depth
-// helper is not enough for it — a trip from the ring to a downtown street is
-// dozens of connectors long.
-bool reachableOverLanes(const Network& net, int fromRoad, int toRoad) {
+// Which roads can be reached from `fromRoad` over the lane graph, and which can
+// reach it. One traversal each, rather than one per candidate.
+//
+// Both follow lane CHANGES as well as successors, because a driver leaving a
+// freeway reaches the exit lane by changing into it. A deceleration lane has no
+// predecessor by construction — it grows out of the carriageway rather than
+// continuing anything — so a search over successors alone reports that no exit
+// is reachable from any freeway, which says more about the search than the road.
+void reachabilityFrom(const Network& net, int fromRoad, std::vector<char>& roadsReached,
+                      bool reverse) {
     const LaneGraph& lg = net.lanes();
-    std::vector<char> seen(lg.nodes.size(), 0);
+    const size_t n = lg.nodes.size();
+    std::vector<std::vector<int>> edges(n);
+    for (size_t i = 0; i < n; ++i) {
+        const LaneNode& u = lg.nodes[i];
+        auto add = [&](int v) {
+            if (v < 0 || size_t(v) >= n) return;
+            if (reverse) {
+                edges[size_t(v)].push_back(int(i));
+            } else {
+                edges[i].push_back(v);
+            }
+        };
+        for (int v : u.successors) add(v);
+        if (u.leftCrossable) add(u.leftNeighbor);
+        if (u.rightCrossable) add(u.rightNeighbor);
+    }
+
+    std::vector<char> seen(n, 0);
     std::vector<int> queue;
-    for (size_t i = 0; i < lg.nodes.size(); ++i) {
+    for (size_t i = 0; i < n; ++i) {
         if (lg.nodes[i].ref.road != fromRoad) continue;
         seen[i] = 1;
         queue.push_back(int(i));
     }
     for (size_t head = 0; head < queue.size(); ++head) {
-        const LaneNode& n = lg.nodes[size_t(queue[head])];
-        if (n.ref.road == toRoad) return true;
-        for (int nx : n.successors) {
-            if (seen[size_t(nx)]) continue;
-            seen[size_t(nx)] = 1;
-            queue.push_back(nx);
+        for (int v : edges[size_t(queue[head])]) {
+            if (seen[size_t(v)]) continue;
+            seen[size_t(v)] = 1;
+            queue.push_back(v);
         }
     }
-    return false;
+    roadsReached.assign(size_t(net.roadCount()), 0);
+    for (size_t i = 0; i < n; ++i)
+        if (seen[i]) roadsReached[size_t(lg.nodes[i].ref.road)] = 1;
 }
 
 }  // namespace
@@ -1934,31 +1956,32 @@ void testMetroGenerator() {
               (tag + "each interchange has an on-ramp and an off-ramp").c_str());
 
         // The point of the ramps: the freeway and the city streets are one
-        // network, not two drawings that happen to touch.
-        int aStreet = -1;
+        // network, not two drawings that happen to touch. Asserted for EVERY
+        // street, in BOTH directions — one reachable street would pass while the
+        // rest of the city was stranded, and reaching the ring's head piece is
+        // not the same question as reaching the freeway.
+        std::vector<char> isRing(size_t(sc.net.roadCount()), 0);
+        for (int id : ringPieces) isRing[size_t(id)] = 1;
+        std::vector<int> streets;
         for (const Road& r : sc.net.roads()) {
             if (r.kind != RoadKind::Normal) continue;
             if (r.name.rfind("ew-", 0) != 0 && r.name.rfind("ns-", 0) != 0) continue;
-            if (r.activeLength() > 60.0) {
-                aStreet = r.id;
-                break;
-            }
+            if (r.activeLength() > 60.0) streets.push_back(r.id);
         }
-        check(aStreet >= 0, (tag + "there are city streets").c_str());
-        if (aStreet >= 0) {
-            check(reachableOverLanes(sc.net, ringPieces.front(), aStreet),
-                  (tag + "you can drive off the freeway onto a city street").c_str());
-            // KNOWN GAP. The return leg — street, radial, terminal junction,
-            // on-ramp, freeway — is severed on some seeds. The ring itself is
-            // sound in both directions and the inbound half works everywhere, so
-            // the break is in the on-ramp's lane-level link into the mainline,
-            // not in the ring or the terminals. Reported rather than asserted,
-            // because it is a real defect and pretending otherwise by weakening
-            // the claim would hide it.
-            if (!reachableOverLanes(sc.net, aStreet, ringPieces.front()))
-                std::printf("  KNOWN GAP: %sno route from the street network back onto "
-                            "the freeway\n", tag.c_str());
+        check(streets.size() > 40, (tag + "there are city streets to reach").c_str());
+        std::vector<char> fromRing, toRing;
+        reachabilityFrom(sc.net, ringPieces.front(), fromRing, false);
+        reachabilityFrom(sc.net, ringPieces.front(), toRing, true);
+        int offFreeway = 0, ontoFreeway = 0;
+        for (int id : streets) {
+            if (fromRing[size_t(id)]) ++offFreeway;
+            if (toRing[size_t(id)]) ++ontoFreeway;
         }
+        (void)isRing;
+        check(offFreeway == int(streets.size()),
+              (tag + "every city street is reachable from the freeway").c_str());
+        check(ontoFreeway == int(streets.size()),
+              (tag + "and every city street can reach the freeway").c_str());
 
         // Multilane. A city of nothing but two-lane streets would satisfy every
         // other assertion here.

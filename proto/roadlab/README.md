@@ -468,7 +468,37 @@ places that had to agree about lanes, and did not.**
   lane ids and their positions from it — taking ids from one section and geometry
   from another matched lanes that were never in the same stack.
 
-Together those took freeway-to-street connectivity from 1 seed in 8 to 7 in 9.
+Two more turned up in the same place, and finished the job:
+
+- **The taper and the steady state disagreed about which lane was new.**
+  `sectionWithLanesChanged` adds an auxiliary lane at the OUTER edge of the
+  travel run; the Needleman–Wunsch alignment that builds the transition between
+  the two sections resolves the tie — which of four Travel strips is the surplus
+  one — at the INNER end, arbitrarily. So the taper introduced a lane the steady
+  section did not have in that slot: the through lanes shifted one place, the new
+  lane inherited their traffic, and one real lane was starved at every
+  transition. On a ring with five interchanges that is the whole carriageway. The
+  alignment now re-pairs each same-kind run from its inner end so the surplus
+  falls out at the outer end, matching where the lane was actually added.
+- **The ramp's lane-level link resolved its sections by station.** The same
+  sliver problem as above, in the one code path that had not been fixed: an
+  on-ramp that renders perfectly and that no vehicle can ever use to join the
+  mainline.
+
+Together the five took freeway-to-street connectivity from 1 seed in 8 to **10 of
+10, in both directions, for every street** — asserted per street rather than
+sampled, because one reachable street passes while the rest of the city is
+stranded.
+
+There is a lesson in how long that took. Twice I "fixed" the alignment tie and
+measured it as catastrophically worse, and reverted. Both times the measurement
+was wrong, not the fix: the search followed lane successors only, and a driver
+reaches an exit lane by **changing into it**. A deceleration lane has no
+predecessor by construction — it grows out of the carriageway rather than
+continuing anything — so a successor-only search reports that no exit is
+reachable from any freeway. That says more about the search than the road. The
+reachability check now follows lane changes, and with the alignment fixed the
+same measurement returns 10 of 10.
 
 ## The fallback census
 
@@ -605,11 +635,6 @@ tests.cpp          22694 assertions, invariant-focused.
 
 Honest list of what a prototype this size does not do yet.
 
-- **On some seeds there is no route from the street network back onto the
-  freeway.** The ring is sound in both directions and the inbound half works
-  everywhere, so the break is in the on-ramp's lane-level link into the mainline.
-  Two seeds in nine; the metro tests print it as a KNOWN GAP rather than assert
-  around it.
 - **Import has only been fed our own exporter's output.** The round trip reaches
   a fixed point on every demo, but the next real test is a third-party `.xodr`
   from a cloverleaf someone else authored. `poly3`/`paramPoly3` geometry is

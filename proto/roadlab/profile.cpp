@@ -802,13 +802,6 @@ std::vector<Pairing> alignStrips(const std::vector<Strip>& A, const std::vector<
             at(i, j) = std::min(sub, std::min(del, ins));
         }
     }
-    // Where a run of identical strips gains or loses one the alignment is
-    // genuinely ambiguous, and the tie is resolved by preferring the diagonal:
-    // the surplus strip falls out at the INNER end of the run. That must stay
-    // consistent with where sectionWithLanesChanged inserts a new lane — the two
-    // are the add and the remove of the same lane, and if they disagree the
-    // carriageway translates sideways through the taper instead of widening,
-    // which silently unpicks the lane graph one lane per transition.
     std::vector<Pairing> out;
     size_t i = n, j = m;
     while (i > 0 || j > 0) {
@@ -827,7 +820,43 @@ std::vector<Pairing> alignStrips(const std::vector<Strip>& A, const std::vector<
         }
     }
     std::reverse(out.begin(), out.end());
-    return out;
+
+    // Within a run of identical kinds the alignment is ambiguous — which of four
+    // Travel strips is the surplus one — and Needleman-Wunsch resolves it
+    // arbitrarily, at the INNER end. sectionWithLanesChanged adds and removes a
+    // lane at the OUTER end. Those are the transition and the steady state of
+    // the same change, and when they disagree the taper introduces a lane the
+    // steady section does not have in that slot: the through lanes shift one
+    // place, the new lane inherits the traffic and the real lane is starved.
+    // Re-pair each same-kind run from its inner end so the surplus falls out at
+    // the outer end, matching where the lane was actually added.
+    std::vector<Pairing> byRun;
+    byRun.reserve(out.size());
+    size_t p = 0;
+    while (p < out.size()) {
+        StripKind kind = out[p].ia >= 0 ? A[size_t(out[p].ia)].kind : B[size_t(out[p].ib)].kind;
+        size_t q = p;
+        while (q < out.size()) {
+            if (out[q].ia >= 0 && A[size_t(out[q].ia)].kind != kind) break;
+            if (out[q].ib >= 0 && B[size_t(out[q].ib)].kind != kind) break;
+            ++q;
+        }
+        // A pairing that substitutes one kind for another belongs to neither
+        // run and matches nothing here — the scan breaks on it immediately, so
+        // without this the run is empty and `p` never advances.
+        if (q == p) q = p + 1;
+        std::vector<int> as, bs;
+        for (size_t r = p; r < q; ++r) {
+            if (out[r].ia >= 0) as.push_back(out[r].ia);
+            if (out[r].ib >= 0) bs.push_back(out[r].ib);
+        }
+        size_t paired = std::min(as.size(), bs.size());
+        for (size_t r = 0; r < paired; ++r) byRun.push_back({as[r], bs[r]});
+        for (size_t r = paired; r < as.size(); ++r) byRun.push_back({as[r], -1});
+        for (size_t r = paired; r < bs.size(); ++r) byRun.push_back({-1, bs[r]});
+        p = q;
+    }
+    return byRun;
 }
 
 void blendStack(const std::vector<Strip>& A, double dsA, const std::vector<Strip>& B,

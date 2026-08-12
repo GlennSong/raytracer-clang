@@ -507,13 +507,19 @@ void Network::buildLaneGraph() {
         if (el.fromRoad < 0 || el.toRoad < 0) continue;
         const Road& A = roads_[size_t(el.fromRoad)];
         const Road& B = roads_[size_t(el.toRoad)];
-        double sa = el.fromAtEnd ? A.end() : A.begin();
-        double sb = el.toAtStart ? B.begin() : B.end();
-        int seca = A.xs.sectionIndexAt(el.fromAtEnd ? std::max(A.begin(), sa - 1e-3) : sa + 1e-3);
-        int secb = B.xs.sectionIndexAt(el.toAtStart ? sb + 1e-3 : std::max(B.begin(), sb - 1e-3));
-        int na = lanes_.find({el.fromRoad, seca, el.fromLane});
-        int nb = lanes_.find({el.toRoad, secb, el.toLane});
-        if (na < 0 || nb < 0) continue;
+        // Resolve to the section that carries nodes, exactly as the road-to-road
+        // linking does. Resolving by station instead finds the sliver a ramp
+        // split leaves behind, which has no nodes, and the link is then dropped
+        // by the `continue` below — an on-ramp that renders perfectly and that
+        // no vehicle can ever use to join the mainline.
+        int seca = endSectionIndex(A, el.fromAtEnd);
+        int secb = endSectionIndex(B, !el.toAtStart);
+        int na = seca >= 0 ? lanes_.find({el.fromRoad, seca, el.fromLane}) : -1;
+        int nb = secb >= 0 ? lanes_.find({el.toRoad, secb, el.toLane}) : -1;
+        if (na < 0 || nb < 0) {
+            RL_FALLBACK("extra lane link dropped (no node at one end)");
+            continue;
+        }
         lanes_.nodes[size_t(na)].successors.push_back(nb);
         lanes_.nodes[size_t(nb)].predecessors.push_back(na);
     }
