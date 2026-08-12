@@ -1483,6 +1483,17 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
         sampDesc.mipFilter = MTLSamplerMipFilterLinear;
         sampDesc.sAddressMode = MTLSamplerAddressModeRepeat;
         sampDesc.tAddressMode = MTLSamplerAddressModeRepeat;
+        // ANISOTROPIC. This defaulted to 1, so every tiled material in the world
+        // was sampled as if it were being viewed head-on. At a grazing angle —
+        // which is most of a city: road surfaces, roof slabs, ground paving, a
+        // long wall down a street — an isotropic sample has to pick one mip for
+        // both axes, and it blurs along the near axis while it aliases along the
+        // far one. That is the moire that crawls across distant roofs.
+        //
+        // 8 is the usual sweet spot: the cost is per-sample and only paid where
+        // the footprint is actually stretched, and it is by far the cheapest
+        // image-quality gain available to a scene made of tiled surfaces.
+        sampDesc.maxAnisotropy = 8;
         impl->linearWrapSampler = [impl->device newSamplerStateWithDescriptor:sampDesc];
     }
 
