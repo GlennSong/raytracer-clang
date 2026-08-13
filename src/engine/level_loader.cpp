@@ -11,6 +11,7 @@
 #include "asset_manager.h"
 #include "procgen/terrain.h"
 #include "procgen/city/city.h"
+#include "procgen/roadlab_bridge.h"
 #include "procgen/city/city_lots.h"  // grow buildings on the road net's blocks (ADR-0066)
 #include "procgen/city/road_net.h"
 #include "procgen/city/road_semantics.h"   // editor-authored roads (shape:"road")
@@ -486,6 +487,54 @@ static bool cityIsOnTerrain(const json& ent) {
 // before the terrain mesh is built.
 static CityModel cityModelFromEntity(const json& ent, const json& root) {
     return generateCity(readCityParams(ent, root));
+}
+
+// roadlab (proto/roadlab/README.md): the clean-room parametric road prototype,
+// regenerated at load like shape:"city" and spawned as Renderables. Reached
+// through one adapter so the prototype stays isolated and deletable.
+static void loadRoadlabEntity(const json& ent, World& world, Renderer& renderer,
+                              AssetManager& assets, int index) {
+    const json rb = ent.contains("roadlab") ? ent["roadlab"] : json::object();
+    roadlab_bridge::Recipe recipe;
+    recipe.generator = rb.value("generator", std::string("showcase"));
+    recipe.seed = rb.value("seed", 7u);
+    recipe.terrainAmp = rb.value("terrainAmp", -1.0);
+    recipe.terrainWave = rb.value("terrainWave", -1.0);
+    recipe.terrain = rb.value("terrain", true);
+    recipe.props = rb.value("props", true);
+
+    roadlab_bridge::Baked baked;
+    std::string err;
+    if (!roadlab_bridge::build(recipe, baked, err)) {
+        LOG_WARN << err;
+        return;
+    }
+
+    // Carries its recipe so the entity survives a save-then-load in the editor,
+    // exactly as the city does — without it the roads vanish the instant Play
+    // reloads the level.
+    spawnDocumentEntity(ent, "roadlab", rb.dump(), world);
+
+    const std::string key = "roadlab:" + std::to_string(index);
+    auto spawn = [&](const RenderMesh& mesh, const char* tag, float roughness) {
+        if (mesh.vertices.empty()) return;
+        Entity e = world.create();
+        Transform t;                       // roadlab geometry is already world-space
+        world.add<Transform>(e, t);
+        world.add<PrevTransform>(e, PrevTransform{t});
+        Renderable r;
+        r.material.albedo = Vec3(1, 1, 1);   // hue carried in vertex colour
+        r.material.metallic = 0.0f;
+        r.material.roughness = roughness;
+        r.mesh = assets.acquireMesh(mesh, key + ":" + tag);
+        world.add<Renderable>(e, r);
+    };
+    spawn(baked.roadSurface, "road", 0.9f);
+    spawn(baked.junctionPads, "pads", 0.9f);
+    spawn(baked.flat, "flat", 1.0f);
+    (void)renderer;
+    LOG_INFO << "roadlab '" << recipe.generator << "': " << baked.roads << " roads, "
+             << baked.junctions << " junctions, " << baked.buildMs << " ms";
 }
 
 static void loadCityEntity(const json& ent, const json& root, World& world,
@@ -1006,6 +1055,10 @@ static void loadEntities(const json& entities, const json& root, World& world,
         if (ent.value("shape", std::string()) == "city") {
             const CityModel* pre = (&ent == cityEnt) ? cityModel : nullptr;
             loadCityEntity(ent, root, world, renderer, assets, cityIndex++, pre);
+            continue;
+        }
+        if (ent.value("shape", std::string()) == "roadlab") {
+            loadRoadlabEntity(ent, world, renderer, assets, cityIndex++);
             continue;
         }
 
