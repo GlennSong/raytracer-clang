@@ -116,6 +116,25 @@ Shape2 largestOf(std::vector<Shape2> v) {
     return std::move(v[best]);
 }
 
+// --- Stack userdata (MassStack: plans stacked into tiers) ---
+
+constexpr const char* kStackMt = "engine.procgen.Stack";
+
+void pushStack(lua_State* L, MassStack st) {
+    void* mem = lua_newuserdatauv(L, sizeof(MassStack), 0);
+    new (mem) MassStack(std::move(st));
+    luaL_setmetatable(L, kStackMt);
+}
+
+MassStack& checkStack(lua_State* L, int idx) {
+    return *static_cast<MassStack*>(luaL_checkudata(L, idx, kStackMt));
+}
+
+int stackGc(lua_State* L) {
+    static_cast<MassStack*>(lua_touserdata(L, 1))->~MassStack();
+    return 0;
+}
+
 // --- LSystem userdata (the grammar; ADR-0021 Phase B.1) ---
 
 constexpr const char* kLSystemMt = "engine.procgen.LSystem";
@@ -674,6 +693,139 @@ int l_plan_ok(lua_State* L) {
     lua_pushboolean(L, ok ? 1 : 0);
     return 1;
 }
+
+// --- stack.* : plans become a building (mass_stack) -------------------------
+//
+// The plan doc's own warning (§17.10) is the shape of this surface: PROFILE is
+// what a mass BECOMES on the way up, LOFT is what it MORPHS INTO, and conflating
+// them is how a system ends up twisting everything. They are separate verbs here
+// because they are separate ideas.
+
+ProfileKind profileFromName(lua_State* L, const char* name) {
+    const std::string n = name ? name : "constant";
+    if (n == "constant") return ProfileKind::Constant;
+    if (n == "taper")    return ProfileKind::Taper;    // pyramid, obelisk
+    if (n == "swell")    return ProfileKind::Swell;    // the gherkin
+    if (n == "waist")    return ProfileKind::Waist;
+    luaL_error(L, "stack.band: unknown profile '%s'", n.c_str());
+    return ProfileKind::Constant;
+}
+
+// stack.of{ plan = <Plan>, bands = { {storeys=, height=, profile=, to=,
+//           support=, overhang=} ... } } -> Stack
+int l_stack_of(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_getfield(L, 1, "plan");
+    Shape2 base = checkPlan(L, -1);
+    lua_pop(L, 1);
+
+    MassStack st;
+    st.base.plan = base;
+    lua_getfield(L, 1, "bands");
+    if (!lua_istable(L, -1)) return luaL_error(L, "stack.of: needs a `bands` list");
+    const lua_Integer n = luaL_len(L, -1);
+    for (lua_Integer bi = 1; bi <= n; ++bi) {
+        lua_geti(L, -1, bi);
+        if (!lua_istable(L, -1)) { lua_pop(L, 1); continue; }
+        Tier t;
+        // A band's own plan, or the base plan carried up.
+        lua_getfield(L, -1, "plan");
+        t.plans.push_back(lua_isnoneornil(L, -1) ? base : checkPlan(L, -1));
+        lua_pop(L, 1);
+        Storey sy;
+        sy.height = static_cast<Real>(optField(L, -1, "height", 3.4));
+        sy.count = std::max(1, static_cast<int>(optField(L, -1, "storeys", 1.0)));
+        t.storeys.push_back(sy);
+        lua_getfield(L, -1, "profile");
+        if (lua_isstring(L, -1)) t.profile = profileFromName(L, lua_tostring(L, -1));
+        lua_pop(L, 1);
+        t.profileTo = static_cast<Real>(optField(L, -1, "to", 1.0));
+        t.support.minSupport = static_cast<Real>(optField(L, -1, "support", 1.0));
+        t.support.maxOverhang = static_cast<Real>(optField(L, -1, "overhang", 0.0));
+        t.materialSet = static_cast<int>(optField(L, -1, "material", 0.0));
+        st.tiers.push_back(std::move(t));
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    if (st.tiers.empty()) return luaL_error(L, "stack.of: `bands` was empty");
+    pushStack(L, std::move(st));
+    return 1;
+}
+
+int l_stack_height(lua_State* L) {
+    lua_pushnumber(L, static_cast<double>(checkStack(L, 1).height()));
+    return 1;
+}
+
+int l_stack_levels(lua_State* L) {
+    lua_pushinteger(L, static_cast<lua_Integer>(checkStack(L, 1).levelCount()));
+    return 1;
+}
+
+// stack.plan_at(stack, level) -> Plan : the plate a given floor actually gets,
+// AFTER profile, loft and the support rule have had their say. A recipe that
+// cannot see this is guessing about its own building.
+int l_stack_plan_at(lua_State* L) {
+    MassStack& st = checkStack(L, 1);
+    const int want = static_cast<int>(luaL_checkinteger(L, 2));
+    const std::vector<Level> levels = expandLevels(st);
+    if (want < 0 || want >= static_cast<int>(levels.size()) ||
+        levels[want].plans.empty())
+        return luaL_error(L, "stack.plan_at: level %d is outside the stack", want);
+    pushPlan(L, levels[want].plans[0]);
+    return 1;
+}
+
+const luaL_Reg kStackLib[] = {
+    {"of", l_stack_of},
+    {"height", l_stack_height},
+    {"levels", l_stack_levels},
+    {"plan_at", l_stack_plan_at},
+    {nullptr, nullptr},
+};
+
+// --- lot.* : READ-ONLY site facts (§17.3) ----------------------------------
+//
+// How a recipe adapts to where it stands. Read-only on purpose: a recipe that
+// could write its own frontage would be deciding the site rather than
+// responding to it.
+int l_lot_measure(lua_State* L) {
+    Shape2& sh = checkPlan(L, 1);
+    const bool enclosed = lua_isnoneornil(L, 2) ? true : lua_toboolean(L, 2) != 0;
+    const Real coreness = static_cast<Real>(luaL_optnumber(L, 3, 0.0));
+    const LotTags t = measureLot(sh, {}, StreetClass::Street, enclosed, coreness);
+    lua_createtable(L, 0, 10);
+    auto num = [&](const char* k, double v) {
+        lua_pushnumber(L, v); lua_setfield(L, -2, k);
+    };
+    num("area", static_cast<double>(t.area));
+    num("width", static_cast<double>(t.inscribedW));
+    num("depth", static_cast<double>(t.inscribedD));
+    num("frontage", static_cast<double>(t.frontWidth));
+    num("lane", static_cast<double>(t.laneWidth));
+    num("max_storeys", static_cast<double>(t.maxStoreys));
+    num("coreness", static_cast<double>(t.coreness));
+    num("slope", static_cast<double>(t.slope));
+    num("frontages", t.frontages);
+    lua_pushboolean(L, t.enclosed ? 1 : 0);
+    lua_setfield(L, -2, "enclosed");
+    return 1;
+}
+
+// The one height model above the tables (§17.2), so a script asking "how tall
+// can this plate go" gets the engine's answer rather than its own guess.
+int l_lot_max_storeys(lua_State* L) {
+    const Real shortSide = static_cast<Real>(luaL_checknumber(L, 1));
+    const Real plate = static_cast<Real>(luaL_checknumber(L, 2));
+    lua_pushnumber(L, static_cast<double>(maxStoreysFor(shortSide, plate)));
+    return 1;
+}
+
+const luaL_Reg kLotLib[] = {
+    {"measure", l_lot_measure},
+    {"max_storeys", l_lot_max_storeys},
+    {nullptr, nullptr},
+};
 
 const luaL_Reg kPlanLib[] = {
     {"rect", l_plan_rect},
@@ -2947,6 +3099,7 @@ void openProcgenLibrary(ScriptVM& vm) {
     registerMetatable(L, kSdfMt, sdfGc);
     registerMetatable(L, kMeshMt, meshGc);
     registerMetatable(L, kPlanMt, planGc);
+    registerMetatable(L, kStackMt, stackGc);
 
     // The LSystem metatable also carries an __index method table (rule/expand),
     // so a script writes `sys:rule(...)` / `sys:expand(...)`.
@@ -3137,6 +3290,10 @@ void openProcgenLibrary(ScriptVM& vm) {
     // builder the engine uses, never a fork of it.
     luaL_newlib(L, kPlanLib);
     lua_setglobal(L, "plan");
+    luaL_newlib(L, kStackLib);
+    lua_setglobal(L, "stack");
+    luaL_newlib(L, kLotLib);
+    lua_setglobal(L, "lot");
 
     static const luaL_Reg kFurnitureFns[] = {
         {"lamp", l_furniture_lamp},

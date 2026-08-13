@@ -1356,10 +1356,10 @@ op vocabulary — is untouched and is the larger piece:
 | --- | --- | --- |
 | `plan.*` | `shape2` / `shape_ops` / `plan_grammar` | **bound** — rect, polygon, template (by name), offset, unite, subtract, intersect, area, edges, holes, points, ok |
 | `pen.*` | the turtle over the same ops | not bound |
-| `stack.*` | `mass_stack` | not bound |
+| `stack.*` | `mass_stack` | **bound** — of{bands}, height, levels, plan_at |
+| `lot.*` | read-only `LotTags` (§17.3) | **bound** — measure, max_storeys |
 | `fen.*` | `facade_plan::fenestrate` | not bound |
 | `elements.*` | the element registry | not bound |
-| `lot.*` | read-only `LotTags` (§17.3) | not bound |
 | `palette.*` | `material_set` | not bound |
 
 A Shape2 crosses as a `Plan` userdatum, so a courtyard stays a region with a real

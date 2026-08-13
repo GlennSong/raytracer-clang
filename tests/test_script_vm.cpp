@@ -838,3 +838,64 @@ TEST_CASE(procgen_plan_ops_wrap_the_city_kernel) {
     // failure mode this whole exercise exists to stamp out.
     CHECK(!vm.doString("plan.template('no_such_plan', 10, 10)", &err));
 }
+
+// stack.* and lot.*: the massing verbs and the site facts a recipe adapts to.
+//
+// §17.10's warning is the shape of the stack surface — PROFILE is what a mass
+// becomes on the way up, LOFT is what it morphs into, and conflating them is how
+// a system ends up twisting everything. They are separate here because they are
+// separate ideas, and the test pins that a profile actually bites.
+TEST_CASE(procgen_stack_and_lot_expose_the_massing_model) {
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::string err;
+    auto num = [&vm](const char* name) {
+        double v = 0;
+        return vm.getGlobalNumber(name, v) ? v : -1e30;
+    };
+
+    // A podium + shaft: heights and level counts have to be arithmetic, not a
+    // guess, or a recipe cannot reason about its own building.
+    CHECK(vm.doString(R"LUA(
+        local base = plan.rect(40, 30)
+        local s = stack.of{ plan = base, bands = {
+            { storeys = 2,  height = 5.0 },
+            { storeys = 10, height = 3.5 },
+        }}
+        h = stack.height(s)
+        n = stack.levels(s)
+        ground_area = plan.area(stack.plan_at(s, 0))
+    )LUA", &err));
+    CHECK(std::fabs(num("h") - (2 * 5.0 + 10 * 3.5)) < 1e-6);
+    CHECK(num("n") == 12);
+    CHECK(std::fabs(num("ground_area") - 1200.0) < 1.0);
+
+    // A TAPER narrows on the way up: the top plate must be smaller than the
+    // bottom one. Without this the profile is a field nobody reads.
+    CHECK(vm.doString(R"LUA(
+        local s = stack.of{ plan = plan.rect(40, 30), bands = {
+            { storeys = 10, height = 3.5, profile = "taper", to = 0.5 },
+        }}
+        bottom = plan.area(stack.plan_at(s, 0))
+        top    = plan.area(stack.plan_at(s, 9))
+    )LUA", &err));
+    CHECK(num("top") < num("bottom") * 0.75);
+
+    // An unknown profile raises rather than silently building a prism.
+    CHECK(!vm.doString(
+        "stack.of{ plan = plan.rect(10,10), bands = {{profile='wobble'}} }", &err));
+
+    // lot.* answers the site questions a recipe adapts to, and max_storeys is
+    // the ONE height model above the tables (§17.2) rather than a local guess.
+    CHECK(vm.doString(R"LUA(
+        local t = lot.measure(plan.rect(30, 22), true, 0.5)
+        lot_area  = t.area
+        lot_w     = t.width
+        lot_core  = t.coreness
+        plate_cap = lot.max_storeys(22, 660)
+    )LUA", &err));
+    CHECK(std::fabs(num("lot_area") - 660.0) < 1.0);
+    CHECK(num("lot_w") > 15.0);
+    CHECK(std::fabs(num("lot_core") - 0.5) < 1e-6);
+    CHECK(num("plate_cap") > 1.0);
+}
