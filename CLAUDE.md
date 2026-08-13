@@ -52,6 +52,11 @@ See `docs/ROADMAP.md` for the multi-tier development plan (foundation → 3D
 infrastructure → content pipeline → procedural generation). Architecture
 decisions live in `docs/decisions.md`.
 
+`docs/knowledge-retention-plan.md` is queued work on the harness itself: turning
+the engine rules and decision records into gates that fail, because several of
+them were written down, read, and violated anyway. Worth reading before adding a
+subsystem that overlaps an existing one.
+
 ## Key Conventions
 
 - C++17, clang++, standard library only — no external deps
