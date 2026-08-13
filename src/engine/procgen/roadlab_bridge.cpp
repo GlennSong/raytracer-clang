@@ -1,4 +1,4 @@
-#include "engine/procgen/roadlab_bridge.h"
+#include "roadlab_bridge.h"
 
 // Explicit paths: src/scene.h and src/engine/.../tessellate would otherwise
 // shadow these, since -Isrc precedes -Iproto/roadlab. roadlab's own headers

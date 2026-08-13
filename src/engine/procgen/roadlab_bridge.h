@@ -16,7 +16,7 @@
 // serialised: the generator runs in 5 ms and the format that would carry its
 // output between two halves of one program would be pure overhead.
 
-#include "renderer/renderer.h"
+#include "../../renderer/renderer.h"   // RenderMesh, Vertex
 
 #include <string>
 #include <vector>
