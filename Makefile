@@ -222,7 +222,11 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_city_lots.cpp \
 	$(TEST_DIR)/test_alignment.cpp \
 	$(TEST_DIR)/test_surface_field.cpp \
-	$(TEST_DIR)/test_architect.cpp
+	$(TEST_DIR)/test_architect.cpp \
+	$(TEST_DIR)/test_lot_road_clearance.cpp
+# tests/test_levels_playable.cpp is CMake-only: it drives the real LevelLoader,
+# and level_loader.cpp (plus a Renderer to hand it) is not in this build's
+# source list. `ctest` is the gate CI runs; this one stays the Jolt-free subset.
 TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/job_system.cpp \
 	$(SRC_DIR)/log.cpp \
@@ -327,6 +331,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/apps/citysim/city_spectate.cpp \
 	$(SRC_DIR)/apps/citysim/city_meshes.cpp \
 	$(SRC_DIR)/engine/script_assets.cpp \
+	$(SRC_DIR)/engine/asset_root.cpp \
 	$(SRC_DIR)/engine/scripting/script_vm.cpp \
 	$(SRC_DIR)/engine/scripting/script_modules.cpp \
 	$(SRC_DIR)/engine/scripting/procgen_bindings.cpp \
