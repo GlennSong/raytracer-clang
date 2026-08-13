@@ -25,14 +25,17 @@ local function build()
   local hills = terrain.fbm{ seed = seed, freq = 0.012, amp = 18, octaves = 5 }
   local land  = terrain.warp(hills, terrain.fbm{ seed = 2, freq = 0.02, amp = 1 }, 28)
 
+  -- Ground, roads and buildings are all rendered AND collided from the same
+  -- triangles (AGENTS.md § Playable Scenes, "collidable by default"): what you
+  -- see is exactly what you stand on, so footing follows every contour.
   local m = model.new()
-  m:add(terrain.mesh(land, { size = 460, resolution = 220, color = {0.33, 0.40, 0.26} }))
+  m:add_solid(terrain.mesh(land, { size = 460, resolution = 220, color = {0.33, 0.40, 0.26} }))
 
   local lay = city.layout{ extent = 170, cell_size = 64, jitter = 0.10, seed = seed }
 
   -- Roads: a connected surface with junction geometry (ribbons trimmed back to
   -- the curb corners, intersection pads filling the gaps), draped on the terrain.
-  m:add(city.road_mesh(lay, { height = land, lift = 0.5, color = {0.08, 0.08, 0.09},
+  m:add_solid(city.road_mesh(lay, { height = land, lift = 0.5, color = {0.08, 0.08, 0.09},
     sidewalk = 2.4, curb = 0.16, markings = true, mark_width = 0.18, crosswalks = true }))
 
   -- A building per block, seated on the ground: sample the footprint corners,
@@ -51,8 +54,8 @@ local function build()
     end
     local baseY = hi
     -- Foundation plinth from below the low corner up to the building floor.
-    m:add(scope{ origin = { cx - hw, lo - 1.0, cz - hd },
-                 size = { fw, (baseY - lo) + 1.0, fd } }:box{0.32, 0.32, 0.34})
+    m:add_solid(scope{ origin = { cx - hw, lo - 1.0, cz - hd },
+                       size = { fw, (baseY - lo) + 1.0, fd } }:box{0.32, 0.32, 0.34})
 
     local r = math.sqrt(cx * cx + cz * cz)
     local floors
@@ -65,7 +68,7 @@ local function build()
       ground_retail = true, walkable_ground = true,
       seed = math.floor(cx * 7 + cz) % 100000,
     }
-    m:add(mesh.translate(bld, { cx, baseY, cz }))
+    m:add_solid(mesh.translate(bld, { cx, baseY, cz }))
   end
 
   -- Lamps along the verges, each seated at its terrain height.
@@ -85,7 +88,8 @@ local function build()
       end
     end
   end
-  m:add_instances(lamp, places)
+  m:add_instances(lamp, places,
+    { collide = { shape = "capsule", radius = 0.3, height = 5 } })
 
   return m
 end

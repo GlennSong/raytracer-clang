@@ -11,7 +11,9 @@ local land  = terrain.warp(hills:add(mtns:scale(0.5)),
 local carved = terrain.erode(land, { size = 400, resolution = 384,
                                       droplets = 90000, talus = 1.0, seed = 5 })
 
+-- Rendered AND collided from the same triangles — the carved surface is what the
+-- player stands on (AGENTS.md § Playable Scenes, "collidable by default").
 local m = model.new()
-m:add(terrain.mesh(carved, { size = 400, resolution = 256,
-                             color = {0.34, 0.42, 0.26} }))
+m:add_solid(terrain.mesh(carved, { size = 400, resolution = 256,
+                                   color = {0.34, 0.42, 0.26} }))
 return m

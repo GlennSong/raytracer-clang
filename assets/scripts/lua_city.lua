@@ -23,8 +23,9 @@ local function build()
   local lay = city.layout{ extent = 170, cell_size = 64, jitter = 0.12, seed = seed }
   local m = model.new()
 
-  -- Ground plane.
-  m:add(scope{ origin = {-260, -0.3, -260}, size = {520, 0.3, 520} }:box{0.27, 0.30, 0.25})
+  -- Ground plane. Solid: the player stands on it (AGENTS.md § Playable Scenes,
+  -- "collidable by default" — a ground plane you fall through is not a scene).
+  m:add_solid(scope{ origin = {-260, -0.3, -260}, size = {520, 0.3, 520} }:box{0.27, 0.30, 0.25})
 
   -- Roads: a dark asphalt quad per edge, merged into one part.
   local roads = {}
@@ -64,7 +65,7 @@ local function build()
       setback_every = 2.5,
       seed = math.floor(cx * 7 + cz) % 100000,
     }
-    m:add(mesh.translate(b, { cx, 0, cz }))
+    m:add_solid(mesh.translate(b, { cx, 0, cz }))   -- you walk into a building
   end
 
   -- Instanced street lamps along both verges of each road.
@@ -82,7 +83,10 @@ local function build()
       places[#places + 1] = { pos = { mx - nx * off, 0, mz - nz * off } }
     end
   end
-  m:add_instances(lamp, places)
+  -- A thin vertical capsule around each pole — you walk into a lamp post, not
+  -- through it (the same collider city.lua gives its lamps).
+  m:add_instances(lamp, places,
+    { collide = { shape = "capsule", radius = 0.3, height = 5 } })
 
   return m
 end
