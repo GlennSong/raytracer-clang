@@ -516,7 +516,8 @@ static void loadRoadlabEntity(const json& ent, World& world, Renderer& renderer,
     spawnDocumentEntity(ent, "roadlab", rb.dump(), world);
 
     const std::string key = "roadlab:" + std::to_string(index);
-    auto spawn = [&](const RenderMesh& mesh, const char* tag, float roughness) {
+    auto spawn = [&](const RenderMesh& mesh, const char* tag, float roughness,
+                     double friction) {
         if (mesh.vertices.empty()) return;
         Entity e = world.create();
         Transform t;                       // roadlab geometry is already world-space
@@ -528,10 +529,19 @@ static void loadRoadlabEntity(const json& ent, World& world, Renderer& renderer,
         r.material.roughness = roughness;
         r.mesh = assets.acquireMesh(mesh, key + ":" + tag);
         world.add<Renderable>(e, r);
+        // Collidable in the SAME place the geometry is made — the rule
+        // test_levels_playable.cpp exists to enforce, and which this missed on
+        // its first run: the roads drew and the player fell through them.
+        MeshCollider mc;
+        mc.vertices.reserve(mesh.vertices.size());
+        for (const Vertex& v : mesh.vertices) mc.vertices.push_back(v.position);
+        mc.indices = mesh.indices;
+        mc.friction = friction;
+        world.add<MeshCollider>(e, mc);
     };
-    spawn(baked.roadSurface, "road", 0.9f);
-    spawn(baked.junctionPads, "pads", 0.9f);
-    spawn(baked.flat, "flat", 1.0f);
+    spawn(baked.roadSurface, "road", 0.9f, 0.85);
+    spawn(baked.junctionPads, "pads", 0.9f, 0.85);
+    spawn(baked.flat, "flat", 1.0f, 0.90);
     (void)renderer;
     LOG_INFO << "roadlab '" << recipe.generator << "': " << baked.roads << " roads, "
              << baked.junctions << " junctions, " << baked.buildMs << " ms";
