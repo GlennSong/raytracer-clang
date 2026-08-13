@@ -39,12 +39,22 @@ set_source_files_properties(src/engine/physics/jolt_job_adapter.cpp
 # ADR-0001) and Jolt-coupled systems (hosts that enable physics add them).
 # ============================================================
 
-# roadlab's own translation units, minus its CLI and test mains. Globbed rather
-# than listed because the prototype is still churning and a stale list would fail
-# at link time with a missing symbol rather than at configure time with a missing
-# file — the worse of the two.
+# roadlab's own translation units, minus the three the engine has no use for.
+# Globbed rather than listed because the prototype is still churning and a stale
+# list would fail at link time with a missing symbol rather than at configure
+# time with a missing file — the worse of the two.
+#
+#   main/tests  its CLI and test mains.
+#   raster      its software rasterizer and PNG writer. The engine has a real
+#               renderer; this exists so the prototype can produce images with
+#               no GPU. It is also the only roadlab TU that needs stb_image_write
+#               (which lives under third_party/tinygltf, not on engine_core's
+#               path), so dropping it is both correct and what unbreaks the
+#               build. Nothing reachable from the bridge calls into it —
+#               raster.h is declarations only, and scene.h includes it for the
+#               Camera types the CLI passes around.
 file(GLOB ROADLAB_SOURCES ${CMAKE_SOURCE_DIR}/proto/roadlab/*.cpp)
-list(FILTER ROADLAB_SOURCES EXCLUDE REGEX "/(main|tests)\\.cpp$")
+list(FILTER ROADLAB_SOURCES EXCLUDE REGEX "/(main|tests|raster)\\.cpp$")
 
 add_library(engine_core STATIC
     src/rt_math.cpp
