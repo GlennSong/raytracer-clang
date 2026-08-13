@@ -47,6 +47,10 @@ namespace {
 constexpr const char* kSdfMt = "engine.procgen.Sdf";
 constexpr const char* kMeshMt = "engine.procgen.Mesh";
 constexpr const char* kHeightMt = "engine.procgen.Height";   // hoisted: used by city.grow above its old defn
+// THE PLAN userdata: a Shape2 — a region with holes and TRUE ARCS, which is what
+// makes it worth passing to Lua rather than a point ring. A recipe that receives
+// a polyline has already lost the thing the kernel exists to preserve.
+constexpr const char* kPlanMt = "engine.procgen.Plan";
 
 using MeshPtr = std::shared_ptr<RenderMesh>;
 
@@ -82,6 +86,34 @@ int meshGc(lua_State* L) {
 
 RenderMesh& checkMesh(lua_State* L, int idx) {
     return **static_cast<MeshPtr*>(luaL_checkudata(L, idx, kMeshMt));
+}
+
+// --- Plan userdata (Shape2: the Lot System's 2-D kernel) ---
+
+void pushPlan(lua_State* L, Shape2 sh) {
+    void* mem = lua_newuserdatauv(L, sizeof(Shape2), 0);
+    new (mem) Shape2(std::move(sh));
+    luaL_setmetatable(L, kPlanMt);
+}
+
+Shape2& checkPlan(lua_State* L, int idx) {
+    return *static_cast<Shape2*>(luaL_checkudata(L, idx, kPlanMt));
+}
+
+int planGc(lua_State* L) {
+    static_cast<Shape2*>(lua_touserdata(L, 1))->~Shape2();
+    return 0;
+}
+
+// The largest piece of a boolean result. The ops return a SET (a subtract can
+// split a plan in two); a recipe almost always means "the building", and the one
+// that wants the pieces can ask for them with plan.pieces.
+Shape2 largestOf(std::vector<Shape2> v) {
+    if (v.empty()) return Shape2{};
+    std::size_t best = 0;
+    for (std::size_t i = 1; i < v.size(); ++i)
+        if (area(v[i]) > area(v[best])) best = i;
+    return std::move(v[best]);
 }
 
 // --- LSystem userdata (the grammar; ADR-0021 Phase B.1) ---
@@ -529,6 +561,137 @@ makeStyleBook(ScriptVM& vm, const std::string& code, std::string* error) {
         lua_pop(L2, 2);
     };
 }
+
+namespace {
+
+// --- plan.* : the 2-D op vocabulary (docs/lot-system-plan.md §17.8) ---------
+//
+// Every one of these WRAPS the same C++ builder the engine uses — shape2 /
+// shape_ops / plan_grammar — rather than reimplementing it in Lua. That is
+// AGENTS.md's single-source-of-truth rule, and the reason it exists is in this
+// module's own history: the Lot System could not reach the shipping grammar's
+// emitters, so it grew its own, and they were worse (docs §18).
+
+int l_plan_rect(lua_State* L) {
+    const Real w = static_cast<Real>(luaL_checknumber(L, 1));
+    const Real d = static_cast<Real>(luaL_checknumber(L, 2));
+    pushPlan(L, rectShape(0, 0, w, d));
+    return 1;
+}
+
+int l_plan_polygon(lua_State* L) {
+    const int sides = static_cast<int>(luaL_checkinteger(L, 1));
+    const Real w = static_cast<Real>(luaL_checknumber(L, 2));
+    const Real d = static_cast<Real>(luaL_optnumber(L, 3, w));
+    if (sides < 3) return luaL_error(L, "plan.polygon: needs >= 3 sides");
+    Shape2 sh;
+    sh.outer = regularPolygon(sides, w, d).outer;
+    pushPlan(L, std::move(sh));
+    return 1;
+}
+
+// plan.template("courtyard", w, d, seed) — the named templates, by name, so a
+// recipe reads as a recipe.
+int l_plan_template(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    const Real w = static_cast<Real>(luaL_checknumber(L, 2));
+    const Real d = static_cast<Real>(luaL_checknumber(L, 3));
+    const std::uint32_t seed =
+        static_cast<std::uint32_t>(luaL_optinteger(L, 4, 1));
+    for (PlanTemplate t : allPlanTemplates())
+        if (std::string(planTemplateName(t)) == name) {
+            pushPlan(L, planTemplate(t, w, d, seed));
+            return 1;
+        }
+    return luaL_error(L, "plan.template: no template named '%s'", name);
+}
+
+int l_plan_offset(lua_State* L) {
+    Shape2& a = checkPlan(L, 1);
+    const Real d = static_cast<Real>(luaL_checknumber(L, 2));
+    pushPlan(L, largestOf(offsetShape(a, d)));
+    return 1;
+}
+
+int l_plan_unite(lua_State* L) {
+    Shape2& a = checkPlan(L, 1);
+    Shape2& b = checkPlan(L, 2);
+    pushPlan(L, largestOf(shapeBool({a}, {b}, BoolOp::Unite)));
+    return 1;
+}
+
+int l_plan_subtract(lua_State* L) {
+    Shape2& a = checkPlan(L, 1);
+    Shape2& b = checkPlan(L, 2);
+    pushPlan(L, largestOf(shapeBool({a}, {b}, BoolOp::Subtract)));
+    return 1;
+}
+
+int l_plan_intersect(lua_State* L) {
+    Shape2& a = checkPlan(L, 1);
+    Shape2& b = checkPlan(L, 2);
+    pushPlan(L, largestOf(shapeBool({a}, {b}, BoolOp::Intersect)));
+    return 1;
+}
+
+int l_plan_area(lua_State* L) {
+    lua_pushnumber(L, static_cast<double>(area(checkPlan(L, 1))));
+    return 1;
+}
+
+int l_plan_edges(lua_State* L) {
+    lua_pushinteger(L, static_cast<lua_Integer>(checkPlan(L, 1).outer.size()));
+    return 1;
+}
+
+int l_plan_holes(lua_State* L) {
+    lua_pushinteger(L, static_cast<lua_Integer>(checkPlan(L, 1).holes.size()));
+    return 1;
+}
+
+// plan.points(shape, tol) -> { {x=,z=}, ... } : the tessellated outer ring, for
+// a script that wants to look at the geometry rather than pass it on.
+int l_plan_points(lua_State* L) {
+    Shape2& a = checkPlan(L, 1);
+    const Real tol = static_cast<Real>(luaL_optnumber(L, 2, 0.05));
+    const Poly2 ring = tessellate(a.outer, tol);
+    lua_createtable(L, static_cast<int>(ring.size()), 0);
+    for (std::size_t i = 0; i < ring.size(); ++i) {
+        lua_createtable(L, 0, 2);
+        lua_pushnumber(L, static_cast<double>(ring[i].x)); lua_setfield(L, -2, "x");
+        lua_pushnumber(L, static_cast<double>(ring[i].y)); lua_setfield(L, -2, "z");
+        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    return 1;
+}
+
+// plan.ok(shape) -> bool, reason : the SAME validator the architect runs before
+// it will accept a plan (min wall, min angle). A recipe that computes its own
+// massing has to be able to ask the question the engine will ask.
+int l_plan_ok(lua_State* L) {
+    PlanQuality q;
+    const bool ok = q.ok(checkPlan(L, 1));
+    lua_pushboolean(L, ok ? 1 : 0);
+    return 1;
+}
+
+const luaL_Reg kPlanLib[] = {
+    {"rect", l_plan_rect},
+    {"polygon", l_plan_polygon},
+    {"template", l_plan_template},
+    {"offset", l_plan_offset},
+    {"unite", l_plan_unite},
+    {"subtract", l_plan_subtract},
+    {"intersect", l_plan_intersect},
+    {"area", l_plan_area},
+    {"edges", l_plan_edges},
+    {"holes", l_plan_holes},
+    {"points", l_plan_points},
+    {"ok", l_plan_ok},
+    {nullptr, nullptr},
+};
+
+}  // namespace
 
 RecipeTuning makeCityBook(ScriptVM& vm, const std::string& code,
                           std::string* error) {
@@ -2783,6 +2946,7 @@ void openProcgenLibrary(ScriptVM& vm) {
 
     registerMetatable(L, kSdfMt, sdfGc);
     registerMetatable(L, kMeshMt, meshGc);
+    registerMetatable(L, kPlanMt, planGc);
 
     // The LSystem metatable also carries an __index method table (rule/expand),
     // so a script writes `sys:rule(...)` / `sys:expand(...)`.
@@ -2967,6 +3131,12 @@ void openProcgenLibrary(ScriptVM& vm) {
     };
     luaL_newlib(L, kBuildingFns);
     lua_setglobal(L, "building");
+
+    // plan.* — the 2-D op vocabulary (§17.8). First of the substrate namespaces
+    // a Lua recipe composes a building from; each entry wraps the same C++
+    // builder the engine uses, never a fork of it.
+    luaL_newlib(L, kPlanLib);
+    lua_setglobal(L, "plan");
 
     static const luaL_Reg kFurnitureFns[] = {
         {"lamp", l_furniture_lamp},

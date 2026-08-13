@@ -1354,14 +1354,22 @@ op vocabulary — is untouched and is the larger piece:
 
 | namespace | wraps | state |
 | --- | --- | --- |
-| `pen.*`, `plan.*` | `plan_grammar` / `shape_ops` | not bound |
+| `plan.*` | `shape2` / `shape_ops` / `plan_grammar` | **bound** — rect, polygon, template (by name), offset, unite, subtract, intersect, area, edges, holes, points, ok |
+| `pen.*` | the turtle over the same ops | not bound |
 | `stack.*` | `mass_stack` | not bound |
 | `fen.*` | `facade_plan::fenestrate` | not bound |
 | `elements.*` | the element registry | not bound |
 | `lot.*` | read-only `LotTags` (§17.3) | not bound |
 | `palette.*` | `material_set` | not bound |
 
-Until those exist, the 37 recipes and 23 templates stay in C++ builder calls.
+A Shape2 crosses as a `Plan` userdatum, so a courtyard stays a region with a real
+hole and a bow-front keeps its arc — a recipe handed a point ring would already
+have lost what the kernel exists to preserve. `plan.ok` exposes the SAME
+validator the architect runs, so a script computing its own massing can ask the
+question the engine is about to ask. An unknown template name is an error, not a
+silent fallback to a box.
+
+Until the rest exist, the 37 recipes and 23 templates stay in C++ builder calls.
 Moving them is the point of the vocabulary, not a separate job: a recipe is only
 worth expressing in Lua once the ops it composes are callable from there. The
 gate for that move is in the plan — a recipe that moves must produce the same

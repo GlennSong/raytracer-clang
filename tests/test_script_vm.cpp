@@ -779,3 +779,62 @@ TEST_CASE(procgen_scatter_returns_frames) {
     CHECK(vm.getGlobalBool("ok", ok));
     CHECK(ok);
 }
+
+// THE PLAN OP VOCABULARY (docs/lot-system-plan.md §17.8). AGENTS.md's Procgen
+// Authoring rule requires that everything the engine can generate be authorable
+// from Lua over a bound C++ substrate — and that a binding wrap the SAME builder
+// the engine uses, never a fork. The Lot System had no surface at all, which is
+// why every gap in it turned into a C++ patch (docs §18).
+//
+// Checked against arithmetic the C++ side must agree with, so the test fails if
+// a binding ever grows its own geometry instead of calling through.
+TEST_CASE(procgen_plan_ops_wrap_the_city_kernel) {
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::string err;
+    auto num = [&vm](const char* name) {
+        double v = 0;
+        return vm.getGlobalNumber(name, v) ? v : -1e30;
+    };
+
+    // A rectangle is its area, and an offset shrinks it by a known ring.
+    CHECK(vm.doString(R"LUA(
+        local r = plan.rect(40, 20)
+        area_rect  = plan.area(r)
+        edges_rect = plan.edges(r)
+        inner      = plan.area(plan.offset(r, -2))
+    )LUA", &err));
+    CHECK(std::fabs(num("area_rect") - 800.0) < 1e-6);
+    CHECK(num("edges_rect") == 4);
+    // Inset 2 m all round: 36 x 16.
+    CHECK(std::fabs(num("inner") - 576.0) < 1.0);
+
+    // Booleans: subtracting a middle bite leaves a real HOLE, which is the thing
+    // a point-ring surface could not have represented.
+    CHECK(vm.doString(R"LUA(
+        local outer = plan.rect(40, 30)
+        local bite  = plan.offset(outer, -8)
+        local court = plan.subtract(outer, bite)
+        holes = plan.holes(court)
+        court_area = plan.area(court)
+    )LUA", &err));
+    CHECK(num("holes") == 1);
+    // 40x30 minus the 24x14 court.
+    CHECK(std::fabs(num("court_area") - (1200.0 - 336.0)) < 8.0);
+
+    // The named templates are reachable BY NAME, and arcs survive: a bow-front
+    // tessellates to far more points than its four edges.
+    CHECK(vm.doString(R"LUA(
+        local b = plan.template("bow-front", 30, 18, 7)
+        tmpl_edges = plan.edges(b)
+        tmpl_pts   = #plan.points(b, 0.02)
+        tmpl_ok    = plan.ok(b) and 1 or 0
+    )LUA", &err));
+    CHECK(num("tmpl_edges") >= 4);
+    CHECK(num("tmpl_pts") > num("tmpl_edges"));
+    CHECK(num("tmpl_ok") == 1);
+
+    // An unknown template is an ERROR, not a silent fallback to a box — the
+    // failure mode this whole exercise exists to stamp out.
+    CHECK(!vm.doString("plan.template('no_such_plan', 10, 10)", &err));
+}
