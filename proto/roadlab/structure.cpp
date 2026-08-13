@@ -363,10 +363,35 @@ static double terrainHeightImpl(const Network& net, const TerrainParams& p, doub
             continue;
         double d = polygonDistance(j.boundary, plan);
         if (d > kReach) continue;
-        // junctionElevationAt already answers with the nearest boundary height
-        // for a point outside the pad, which is exactly the edge height a batter
-        // needs to start from.
-        addClaim(band, junctionElevationAt(net, j, plan), std::max(d, 0.0), p, nearest, nearestY);
+        // OUTSIDE the pad, take the nearest boundary height directly instead of
+        // asking junctionElevationAt — it answers the same thing out here, but by
+        // way of mean value coordinates over the whole refined boundary, which is
+        // quadratic in a polygon that can run to hundreds of points.
+        //
+        // This is the whole cost of the terrain conform. Widening a junction's
+        // influence from a 13 m feather to a 75 m batter reach did not add 6x the
+        // work, it added 6x the AREA over which every nearby pad ran an MVC solve
+        // per terrain vertex: 25 s for the metro district.
+        double edgeY;
+        if (d <= 0.0) {
+            edgeY = junctionElevationAt(net, j, plan);
+        } else {
+            double best = 1e300;
+            edgeY = 0.0;
+            for (size_t bi = 0, bk = j.boundary.size() - 1; bi < j.boundary.size(); bk = bi++) {
+                Vec2 a = j.boundary[bk], b = j.boundary[bi];
+                Vec2 ab = b - a, aq = plan - a;
+                double h = clampd(dot(aq, ab) / std::max(1e-9, dot(ab, ab)), 0.0, 1.0);
+                double dist = lengthSq(aq - ab * h);
+                if (dist < best) {
+                    best = dist;
+                    edgeY = lerp(j.boundaryHeight.empty() ? 0.0 : j.boundaryHeight[bk],
+                                 j.boundaryHeight.empty() ? 0.0 : j.boundaryHeight[bi], h);
+                }
+            }
+            if (j.boundaryHeight.empty()) edgeY = junctionElevationAt(net, j, plan);
+        }
+        addClaim(band, edgeY, std::max(d, 0.0), p, nearest, nearestY);
     }
 
     for (int rid : net.roadsNear(plan)) {
@@ -374,7 +399,10 @@ static double terrainHeightImpl(const Network& net, const TerrainParams& p, doub
         if (r.kind == RoadKind::Connector) continue;
         Vec2 lo, hi;
         r.spine.planBounds(lo, hi);
-        double pad = kReach + kSearchMargin + 40.0;
+        // Only as wide as anything can actually reach. The old 40 m of slack
+        // on top let far-away roads through to the Newton solve below, which
+        // is the expensive part.
+        double pad = kReach + kSearchMargin;
         if (x < lo.x - pad || x > hi.x + pad || z < lo.y - pad || z > hi.y + pad) continue;
 
         // toST's answer is used even when it reports a miss. A point off the END
@@ -390,9 +418,17 @@ static double terrainHeightImpl(const Network& net, const TerrainParams& p, doub
 
         // A bridge or a tunnel deliberately does not move the ground. That one
         // branch is the entire difference between an overpass and a causeway.
-        CarrierKind carrier = carrierAt(r, sc);
-        bool structural = carrier == CarrierKind::Bridge || carrier == CarrierKind::Viaduct ||
-                          carrier == CarrierKind::Tunnel;
+        // A road with no spans is at grade for its whole length, which is most
+        // of them. Saying so up front skips three carrier lookups and a
+        // surfacePoint per road per terrain vertex — and this runs per terrain
+        // vertex per candidate road, so "per road per vertex" is the only unit
+        // that matters here.
+        CarrierKind carrier = CarrierKind::AtGrade;
+        bool structural = false;
+        if (!r.structures.empty()) {
+            carrier = carrierAt(r, sc);
+            structural = carrier == CarrierKind::Bridge || carrier == CarrierKind::Viaduct ||
+                         carrier == CarrierKind::Tunnel;
 
         // An ABUTMENT is where earth meets structure: the approach embankment
         // carries the ground at deck level and the deck itself carries nothing,
@@ -407,13 +443,15 @@ static double terrainHeightImpl(const Network& net, const TerrainParams& p, doub
         // the structural side, which missed the point entirely: the face is
         // BETWEEN the two, so a sample on the embankment side measures across it
         // just as much as one on the deck side does.
-        double look = 8.0;
-        if (carrierAt(r, clampd(sc - look, r.begin(), r.end())) != carrier ||
-            carrierAt(r, clampd(sc + look, r.begin(), r.end())) != carrier) {
-            double deckY = r.surfacePoint(sc, 0).y;
-            if (std::fabs(deckY - base) > 1.0) {
-                if (conflicted) *conflicted = true;
-                RL_FALLBACK("terrain meets a structure at an abutment -> a wall face, not a batter");
+            double look = 8.0;
+            if (carrierAt(r, clampd(sc - look, r.begin(), r.end())) != carrier ||
+                carrierAt(r, clampd(sc + look, r.begin(), r.end())) != carrier) {
+                double deckY = r.surfacePoint(sc, 0).y;
+                if (std::fabs(deckY - base) > 1.0) {
+                    if (conflicted) *conflicted = true;
+                    RL_FALLBACK(
+                        "terrain meets a structure at an abutment -> a wall face, not a batter");
+                }
             }
         }
         if (structural) continue;
