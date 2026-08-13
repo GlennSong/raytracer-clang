@@ -149,6 +149,19 @@ int penGc(lua_State* L) {
     return 0;
 }
 
+// --- Dressing userdata (ElementRegistry: a building's whole dressing) ---
+
+constexpr const char* kDressMt = "engine.procgen.Dressing";
+
+ElementRegistry& checkDressing(lua_State* L, int idx) {
+    return *static_cast<ElementRegistry*>(luaL_checkudata(L, idx, kDressMt));
+}
+
+int dressGc(lua_State* L) {
+    static_cast<ElementRegistry*>(lua_touserdata(L, 1))->~ElementRegistry();
+    return 0;
+}
+
 // --- LSystem userdata (the grammar; ADR-0021 Phase B.1) ---
 
 constexpr const char* kLSystemMt = "engine.procgen.LSystem";
@@ -1043,6 +1056,117 @@ const luaL_Reg kPenMethods[] = {
 
 const luaL_Reg kPenLib[] = {
     {"new", l_pen_new},
+    {nullptr, nullptr},
+};
+
+// --- elements.* : the dressing registry (facade_plan) -----------------------
+//
+// This is what replaced eighteen booleans: adding a feature is appending a ROW,
+// not adding a field and a branch. Exposing it to Lua is the point of the
+// registry — a treatment becomes a data edit rather than a rebuild.
+//
+// Two rules, both learned the hard way and both enforced here rather than
+// discovered later:
+//   * an unknown kind RAISES. A registry that accepts anything and draws some of
+//     it is how fifteen of nineteen kinds went missing inside a `default: break`
+//     (docs §18).
+//   * a crown says so. `top_floor_only` is the difference between a parapet and
+//     a parapet on every storey, which shipped.
+
+ElementKind elementKindFromName(lua_State* L, const char* name) {
+    const std::string n = name ? name : "";
+    for (int i = 0; i <= static_cast<int>(ElementKind::RoofPlant); ++i) {
+        const auto k = static_cast<ElementKind>(i);
+        if (n == elementKindName(k)) return k;
+    }
+    luaL_error(L, "elements.add: no element kind named '%s'", n.c_str());
+    return ElementKind::Opening;
+}
+
+int l_elements_new(lua_State* L) {
+    void* mem = lua_newuserdatauv(L, sizeof(ElementRegistry), 0);
+    new (mem) ElementRegistry();
+    luaL_setmetatable(L, kDressMt);
+    return 1;
+}
+
+// elements.add(dressing, { kind=, tag=, floor_min=, floor_max=, bays=,
+//                          top_floor_only=, depth=, height=, style=, weight= })
+int l_elements_add(lua_State* L) {
+    ElementRegistry& reg = checkDressing(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    ElementSpec e;
+    lua_getfield(L, 2, "kind");
+    e.kind = elementKindFromName(L, luaL_checkstring(L, -1));
+    lua_pop(L, 1);
+
+    lua_getfield(L, 2, "tag");
+    if (lua_isstring(L, -1)) {
+        const std::string t = lua_tostring(L, -1);
+        e.on.anyTag = false;
+        if      (t == "street") e.on.tag = EdgeTag::Street;
+        else if (t == "side")   e.on.tag = EdgeTag::Side;
+        else if (t == "rear")   e.on.tag = EdgeTag::Rear;
+        else if (t == "party")  e.on.tag = EdgeTag::Party;
+        else if (t == "court")  e.on.tag = EdgeTag::Court;
+        else { lua_pop(L, 1); return luaL_error(L, "elements.add: unknown tag '%s'", t.c_str()); }
+    }
+    lua_pop(L, 1);
+
+    lua_getfield(L, 2, "bays");
+    if (lua_isstring(L, -1)) {
+        const std::string b = lua_tostring(L, -1);
+        if      (b == "all")        e.on.bays = ElementSelector::Bays::All;
+        else if (b == "centre")     e.on.bays = ElementSelector::Bays::Centre;
+        else if (b == "ends")       e.on.bays = ElementSelector::Bays::Ends;
+        else if (b == "alternate")  e.on.bays = ElementSelector::Bays::Alternate;
+        else if (b == "boundaries") e.on.bays = ElementSelector::Bays::Boundaries;
+        else if (b == "none")       e.on.bays = ElementSelector::Bays::None;
+        else { lua_pop(L, 1); return luaL_error(L, "elements.add: unknown bays '%s'", b.c_str()); }
+    }
+    lua_pop(L, 1);
+
+    e.on.floorMin = static_cast<int>(optField(L, 2, "floor_min", -1.0));
+    e.on.floorMax = static_cast<int>(optField(L, 2, "floor_max", -1.0));
+    lua_getfield(L, 2, "top_floor_only");
+    e.on.topFloorOnly = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "top_tier");
+    if (lua_toboolean(L, -1)) e.on.tier = ElementSelector::kTopTier;
+    lua_pop(L, 1);
+
+    e.depth  = static_cast<Real>(optField(L, 2, "depth", 0.0));
+    e.height = static_cast<Real>(optField(L, 2, "height", 0.0));
+    e.width  = static_cast<Real>(optField(L, 2, "width", 0.0));
+    e.style  = static_cast<int>(optField(L, 2, "style", 0.0));
+    e.weight = static_cast<Real>(optField(L, 2, "weight", 1.0));
+    reg.add(std::move(e));
+    lua_settop(L, 1);
+    return 1;                     // chainable
+}
+
+int l_elements_count(lua_State* L) {
+    lua_pushinteger(L,
+        static_cast<lua_Integer>(checkDressing(L, 1).elements.size()));
+    return 1;
+}
+
+// Every kind the registry knows, so a script can discover the vocabulary rather
+// than guess at it — and so this list can never drift from the enum.
+int l_elements_kinds(lua_State* L) {
+    lua_createtable(L, static_cast<int>(ElementKind::RoofPlant) + 1, 0);
+    for (int i = 0; i <= static_cast<int>(ElementKind::RoofPlant); ++i) {
+        lua_pushstring(L, elementKindName(static_cast<ElementKind>(i)));
+        lua_seti(L, -2, i + 1);
+    }
+    return 1;
+}
+
+const luaL_Reg kElementsLib[] = {
+    {"new", l_elements_new},
+    {"add", l_elements_add},
+    {"count", l_elements_count},
+    {"kinds", l_elements_kinds},
     {nullptr, nullptr},
 };
 
@@ -3322,6 +3446,7 @@ void openProcgenLibrary(ScriptVM& vm) {
     // The pen carries METHODS, so its metatable needs an __index table as well
     // as the __gc every wrapped value gets.
     registerMetatable(L, kPenMt, penGc);
+    registerMetatable(L, kDressMt, dressGc);
     luaL_getmetatable(L, kPenMt);
     luaL_newlib(L, kPenMethods);
     lua_setfield(L, -2, "__index");
@@ -3526,6 +3651,8 @@ void openProcgenLibrary(ScriptVM& vm) {
     lua_setglobal(L, "palette");
     luaL_newlib(L, kPenLib);
     lua_setglobal(L, "pen");
+    luaL_newlib(L, kElementsLib);
+    lua_setglobal(L, "elements");
 
     static const luaL_Reg kFurnitureFns[] = {
         {"lamp", l_furniture_lamp},

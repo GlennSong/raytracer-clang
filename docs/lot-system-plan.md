@@ -1359,7 +1359,7 @@ op vocabulary — is untouched and is the larger piece:
 | `stack.*` | `mass_stack` | **bound** — of{bands}, height, levels, plan_at |
 | `lot.*` | read-only `LotTags` (§17.3) | **bound** — measure, max_storeys |
 | `fen.*` | `facade_plan::fenestrate` | **bound** — bays, openings |
-| `elements.*` | the element registry | not bound |
+| `elements.*` | `facade_plan::ElementRegistry` | **bound** — new, add, count, kinds |
 | `palette.*` | `material_set` | **bound** — pick (by character) |
 
 A Shape2 crosses as a `Plan` userdatum, so a courtyard stays a region with a real
@@ -1369,8 +1369,18 @@ validator the architect runs, so a script computing its own massing can ask the
 question the engine is about to ask. An unknown template name is an error, not a
 silent fallback to a box.
 
-Until the rest exist, the 37 recipes and 23 templates stay in C++ builder calls.
-Moving them is the point of the vocabulary, not a separate job: a recipe is only
-worth expressing in Lua once the ops it composes are callable from there. The
-gate for that move is in the plan — a recipe that moves must produce the same
-building, so snapshot triangle counts and plan areas before and after.
+**All seven are bound.** A recipe is now expressible in Lua: `pen`/`plan` draw
+the plate, `stack` raises it, `fen` glazes it, `elements` dresses it, `palette`
+clads it, and `lot` is what it all adapts to. Every one wraps the C++ builder the
+engine already uses — none is a second implementation, which is the rule this
+module is the cautionary tale for.
+
+Every surface raises on an unknown name rather than falling back: an unknown
+template, profile, strategy, character, element kind or edge tag is an error.
+Silent fallback is the failure mode §18 is a list of.
+
+WHAT REMAINS is the move itself: the 37 recipes and 23 templates are still C++
+builder calls. That is now a migration rather than a blocked one, and its gate is
+unchanged — a recipe that moves must produce the SAME building, so snapshot
+triangle counts and plan areas before and after. Do them a few at a time against
+that check; `lotmesh_*` and the sheet tools already give the before.

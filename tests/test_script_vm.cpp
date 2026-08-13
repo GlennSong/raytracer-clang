@@ -1007,3 +1007,43 @@ TEST_CASE(procgen_pen_walks_a_plan) {
     )LUA", &err));
     CHECK(num("here_x") > 9.0);
 }
+
+// elements.*: the dressing registry, which is what replaced eighteen booleans —
+// adding a feature is appending a ROW. Exposing it is the point of having a
+// registry at all: a treatment becomes a data edit rather than a rebuild.
+TEST_CASE(procgen_elements_registry_is_authorable) {
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::string err;
+    auto num = [&vm](const char* name) {
+        double v = 0;
+        return vm.getGlobalNumber(name, v) ? v : -1e30;
+    };
+
+    CHECK(vm.doString(R"LUA(
+        local d = elements.new()
+        elements.add(d, { kind = "opening" })
+        elements.add(d, { kind = "porch", tag = "street",
+                          floor_max = 0, bays = "centre", depth = 2.0 })
+        elements.add(d, { kind = "parapet", top_tier = true,
+                          top_floor_only = true, bays = "none" })
+        rows = elements.count(d)
+        kinds_n = #elements.kinds()
+        -- the vocabulary is discoverable rather than guessed at
+        has_roof_plant = 0
+        for _, k in ipairs(elements.kinds()) do
+            if k == "roof-plant" then has_roof_plant = 1 end
+        end
+    )LUA", &err));
+    CHECK(num("rows") == 3);
+    CHECK(num("kinds_n") >= 19);
+    CHECK(num("has_roof_plant") == 1);
+
+    // An unknown kind RAISES. A registry that accepts anything and draws some of
+    // it is exactly how fifteen of nineteen kinds went missing inside a
+    // `default: break`.
+    CHECK(!vm.doString(
+        "elements.add(elements.new(), { kind = 'gargoyle' })", &err));
+    CHECK(!vm.doString(
+        "elements.add(elements.new(), { kind = 'porch', tag = 'roof' })", &err));
+}
