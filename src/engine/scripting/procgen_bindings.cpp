@@ -136,6 +136,19 @@ int stackGc(lua_State* L) {
     return 0;
 }
 
+// --- Pen userdata (shape2's 2-D turtle) ---
+
+constexpr const char* kPenMt = "engine.procgen.Pen";
+
+Pen& checkPen(lua_State* L, int idx) {
+    return *static_cast<Pen*>(luaL_checkudata(L, idx, kPenMt));
+}
+
+int penGc(lua_State* L) {
+    static_cast<Pen*>(lua_touserdata(L, 1))->~Pen();
+    return 0;
+}
+
 // --- LSystem userdata (the grammar; ADR-0021 Phase B.1) ---
 
 constexpr const char* kLSystemMt = "engine.procgen.LSystem";
@@ -950,6 +963,86 @@ int l_palette_pick(lua_State* L) {
 
 const luaL_Reg kPaletteLib[] = {
     {"pick", l_palette_pick},
+    {nullptr, nullptr},
+};
+
+// --- pen.* : the 2-D turtle (shape2's Pen) ----------------------------------
+//
+// §3.4: both an ABSOLUTE path API and a RELATIVE turtle API, because floorplans
+// want both — a facade is a turtle walk, a boolean cut is absolute. Every method
+// returns the pen, so a path reads as one sentence:
+//
+//   pen.new():move_to(0,0):forward(18):turn(90):forward(12):sweep(6,180):close()
+//
+// This is the C++ Pen, not a Lua reimplementation of one: the arcs it lays are
+// the same true arcs the kernel carries, which is the whole reason the plan
+// vocabulary is worth having.
+
+int l_pen_new(lua_State* L) {
+    void* mem = lua_newuserdatauv(L, sizeof(Pen), 0);
+    new (mem) Pen();
+    luaL_setmetatable(L, kPenMt);
+    return 1;
+}
+
+// Each verb returns the pen itself (stack index 1) so calls chain.
+int l_pen_move_to(lua_State* L) {
+    checkPen(L, 1).moveTo(static_cast<Real>(luaL_checknumber(L, 2)),
+                          static_cast<Real>(luaL_checknumber(L, 3)));
+    lua_settop(L, 1);
+    return 1;
+}
+int l_pen_line_to(lua_State* L) {
+    checkPen(L, 1).lineTo(static_cast<Real>(luaL_checknumber(L, 2)),
+                          static_cast<Real>(luaL_checknumber(L, 3)));
+    lua_settop(L, 1);
+    return 1;
+}
+int l_pen_arc_to(lua_State* L) {
+    checkPen(L, 1).arcTo(static_cast<Real>(luaL_checknumber(L, 2)),
+                         static_cast<Real>(luaL_checknumber(L, 3)),
+                         static_cast<Real>(luaL_checknumber(L, 4)));
+    lua_settop(L, 1);
+    return 1;
+}
+int l_pen_forward(lua_State* L) {
+    checkPen(L, 1).forward(static_cast<Real>(luaL_checknumber(L, 2)));
+    lua_settop(L, 1);
+    return 1;
+}
+int l_pen_turn(lua_State* L) {
+    checkPen(L, 1).turn(static_cast<Real>(luaL_checknumber(L, 2)));
+    lua_settop(L, 1);
+    return 1;
+}
+int l_pen_sweep(lua_State* L) {
+    checkPen(L, 1).sweep(static_cast<Real>(luaL_checknumber(L, 2)),
+                         static_cast<Real>(luaL_checknumber(L, 3)));
+    lua_settop(L, 1);
+    return 1;
+}
+int l_pen_close(lua_State* L) {
+    pushPlan(L, checkPen(L, 1).close());
+    return 1;
+}
+int l_pen_position(lua_State* L) {
+    const Vec2 p = checkPen(L, 1).position();
+    lua_createtable(L, 0, 2);
+    lua_pushnumber(L, static_cast<double>(p.x)); lua_setfield(L, -2, "x");
+    lua_pushnumber(L, static_cast<double>(p.y)); lua_setfield(L, -2, "z");
+    return 1;
+}
+
+const luaL_Reg kPenMethods[] = {
+    {"move_to", l_pen_move_to}, {"line_to", l_pen_line_to},
+    {"arc_to", l_pen_arc_to},   {"forward", l_pen_forward},
+    {"turn", l_pen_turn},       {"sweep", l_pen_sweep},
+    {"close", l_pen_close},     {"position", l_pen_position},
+    {nullptr, nullptr},
+};
+
+const luaL_Reg kPenLib[] = {
+    {"new", l_pen_new},
     {nullptr, nullptr},
 };
 
@@ -3226,6 +3319,13 @@ void openProcgenLibrary(ScriptVM& vm) {
     registerMetatable(L, kMeshMt, meshGc);
     registerMetatable(L, kPlanMt, planGc);
     registerMetatable(L, kStackMt, stackGc);
+    // The pen carries METHODS, so its metatable needs an __index table as well
+    // as the __gc every wrapped value gets.
+    registerMetatable(L, kPenMt, penGc);
+    luaL_getmetatable(L, kPenMt);
+    luaL_newlib(L, kPenMethods);
+    lua_setfield(L, -2, "__index");
+    lua_pop(L, 1);
 
     // The LSystem metatable also carries an __index method table (rule/expand),
     // so a script writes `sys:rule(...)` / `sys:expand(...)`.
@@ -3424,6 +3524,8 @@ void openProcgenLibrary(ScriptVM& vm) {
     lua_setglobal(L, "fen");
     luaL_newlib(L, kPaletteLib);
     lua_setglobal(L, "palette");
+    luaL_newlib(L, kPenLib);
+    lua_setglobal(L, "pen");
 
     static const luaL_Reg kFurnitureFns[] = {
         {"lamp", l_furniture_lamp},

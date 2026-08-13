@@ -959,3 +959,51 @@ TEST_CASE(procgen_fen_and_palette_wrap_the_facade_model) {
 
     CHECK(!vm.doString("palette.pick{ character = 'baroque' }", &err));
 }
+
+// pen.*: the 2-D turtle (§3.4), bound to shape2's own Pen rather than
+// reimplemented in Lua — the arcs it lays are the true arcs the kernel carries,
+// which is the entire reason the plan vocabulary is worth having.
+TEST_CASE(procgen_pen_walks_a_plan) {
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::string err;
+    auto num = [&vm](const char* name) {
+        double v = 0;
+        return vm.getGlobalNumber(name, v) ? v : -1e30;
+    };
+
+    // A turtle walk of four right angles is a rectangle, and its area is
+    // arithmetic — so a pen that drifted would be caught here rather than by eye.
+    CHECK(vm.doString(R"LUA(
+        local p = pen.new():move_to(0, 0)
+                           :forward(20):turn(90)
+                           :forward(12):turn(90)
+                           :forward(20):turn(90)
+                           :forward(12)
+        walk_area  = plan.area(p:close())
+        walk_edges = plan.edges(p:close())
+    )LUA", &err));
+    CHECK(std::fabs(num("walk_area") - 240.0) < 1e-3);
+    CHECK(num("walk_edges") == 4);
+
+    // A SWEEP lays a real arc, not a fan of chords: the edge count stays low
+    // while the tessellated ring is much denser. That is the property a point
+    // ring could never have had.
+    CHECK(vm.doString(R"LUA(
+        local p = pen.new():move_to(0, 0):forward(20):sweep(6, 180):forward(20)
+        local s = p:close()
+        arc_edges = plan.edges(s)
+        arc_pts   = #plan.points(s, 0.02)
+    )LUA", &err));
+    CHECK(num("arc_edges") <= 6);
+    CHECK(num("arc_pts") > 20);
+
+    // Absolute and relative mix, which is the point of having both: a facade is
+    // a walk, a cut is absolute.
+    CHECK(vm.doString(R"LUA(
+        local p = pen.new():move_to(0, 0):line_to(10, 0):forward(8)
+        here = p:position()
+        here_x, here_z = here.x, here.z
+    )LUA", &err));
+    CHECK(num("here_x") > 9.0);
+}

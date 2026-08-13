@@ -1355,7 +1355,7 @@ op vocabulary — is untouched and is the larger piece:
 | namespace | wraps | state |
 | --- | --- | --- |
 | `plan.*` | `shape2` / `shape_ops` / `plan_grammar` | **bound** — rect, polygon, template (by name), offset, unite, subtract, intersect, area, edges, holes, points, ok |
-| `pen.*` | the turtle over the same ops | not bound |
+| `pen.*` | `shape2::Pen` | **bound** — new, move_to, line_to, arc_to, forward, turn, sweep, close, position |
 | `stack.*` | `mass_stack` | **bound** — of{bands}, height, levels, plan_at |
 | `lot.*` | read-only `LotTags` (§17.3) | **bound** — measure, max_storeys |
 | `fen.*` | `facade_plan::fenestrate` | **bound** — bays, openings |
