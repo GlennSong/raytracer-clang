@@ -20,6 +20,7 @@
 #include <sstream>
 #include <nlohmann/json.hpp>
 #include <fstream>
+#include "engine/procgen/roadlab_bridge.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "engine/scripting/script_vm.h"
 #include "engine/scripting/procgen_bindings.h"
@@ -773,6 +774,48 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         if (ent.value("shape", std::string()) == "city") {
             if (&ent == cityEnt) bakeCityModel(cityModel, scene);     // pre-generated
             else bakeCityModel(generateCityModel(ent, root), scene);  // flat city
+            continue;
+        }
+        // roadlab (proto/roadlab/README.md): the clean-room parametric road
+        // prototype, regenerated at load. Same contract as shape:"city" — the
+        // recipe names a generator and a seed, the model is rebuilt rather than
+        // loaded, and nothing is serialised. Reached through one adapter so the
+        // prototype stays isolated and deletable.
+        if (ent.value("shape", std::string()) == "roadlab") {
+            const json rb = ent.contains("roadlab") ? ent["roadlab"] : json::object();
+            roadlab_bridge::Recipe recipe;
+            recipe.generator = rb.value("generator", std::string("showcase"));
+            recipe.seed = rb.value("seed", 7u);
+            recipe.terrainAmp = rb.value("terrainAmp", -1.0);
+            recipe.terrainWave = rb.value("terrainWave", -1.0);
+            recipe.terrain = rb.value("terrain", true);
+            recipe.props = rb.value("props", true);
+            roadlab_bridge::Baked baked;
+            std::string err;
+            if (!roadlab_bridge::build(recipe, baked, err)) {
+                LOG_WARN << err;
+                continue;
+            }
+            using S = RenderMaterial::Surface;
+            SurfaceTexCache texCache;
+            auto bakePart = [&](const RenderMesh& mesh, float rough, S surface) {
+                if (mesh.vertices.empty()) return;
+                Material mat = Material::pbr(Vec3(1, 1, 1), 0.0f, rough);
+                if (surface != S::None)
+                    bindSurfaceTextures(mat, surface, scene, 1337u, 256, &texCache);
+                addMeshAsTriangles(mesh, parseVec3(ent.value("position", json())),
+                                   Quat::identity(),
+                                   Vec3(1, 1, 1), scene.addMaterial(mat), scene);
+            };
+            // Road surface and pads take the procedural asphalt set; everything
+            // else — terrain, structures, props — already carries the colour
+            // roadlab's own shader gave it, so it bakes as vertex colour.
+            bakePart(baked.roadSurface, 0.9f, S::Asphalt);
+            bakePart(baked.junctionPads, 0.9f, S::Asphalt);
+            bakePart(baked.flat, 1.0f, S::None);
+            LOG_INFO << "roadlab '" << recipe.generator << "': " << baked.roads
+                     << " roads, " << baked.junctions << " junctions, "
+                     << baked.buildMs << " ms";
             continue;
         }
         // Editor-authored road (shape:"road", ADR-0049): the same RoadNet the

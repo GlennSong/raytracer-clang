@@ -38,6 +38,14 @@ set_source_files_properties(src/engine/physics/jolt_job_adapter.cpp
 # Excluded on purpose: window/render *backends* (each host brings its own,
 # ADR-0001) and Jolt-coupled systems (hosts that enable physics add them).
 # ============================================================
+
+# roadlab's own translation units, minus its CLI and test mains. Globbed rather
+# than listed because the prototype is still churning and a stale list would fail
+# at link time with a missing symbol rather than at configure time with a missing
+# file — the worse of the two.
+file(GLOB ROADLAB_SOURCES ${CMAKE_SOURCE_DIR}/proto/roadlab/*.cpp)
+list(FILTER ROADLAB_SOURCES EXCLUDE REGEX "/(main|tests)\\.cpp$")
+
 add_library(engine_core STATIC
     src/rt_math.cpp
     src/curve.cpp
@@ -84,6 +92,11 @@ add_library(engine_core STATIC
     src/engine/procgen/planet.cpp
     src/engine/procgen/atmosphere.cpp
     src/engine/procgen/scatter.cpp
+    # roadlab (proto/roadlab/README.md) reached through ONE adapter, so the
+    # prototype stays deletable: two files and one `shape` branch. It is pure
+    # STL plus the vendored json/stb headers, so it adds no dependency.
+    src/engine/procgen/roadlab_bridge.cpp
+    ${ROADLAB_SOURCES}
     src/engine/procgen/sdf.cpp
     src/engine/procgen/city/polygon.cpp
     src/engine/procgen/city/shape_grammar.cpp
