@@ -19,7 +19,7 @@ void finalizeScene(Scene& scene, bool withTerrain, bool withProps) {
     scene.paint.junctions.assign(size_t(scene.net.junctionCount()), {});
 
     scene.mesh = Mesh{};
-    tessellateNetwork(scene.net, scene.mesh, scene.tess, true);
+    tessellateNetwork(scene.net, scene.mesh, scene.tess, true, &scene.terrain);
 
     if (withTerrain && scene.terrain.enabled) {
         Vec2 lo, hi;

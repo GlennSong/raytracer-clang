@@ -83,7 +83,8 @@ std::vector<Vec2> parapetProfile(double tEdge, double height, double inward) {
 
 }  // namespace
 
-void tessellateStructures(const Network& net, const Road& road, Mesh& out) {
+void tessellateStructures(const Network& net, const Road& road, Mesh& out,
+                          const TerrainParams& terrain) {
     if (road.kind == RoadKind::Connector) return;
 
     // --- barriers the cross-section itself asks for -----------------------
@@ -160,7 +161,11 @@ void tessellateStructures(const Network& net, const Road& road, Mesh& out) {
                     Frame f = road.spine.frameAt(s);
                     double deckY = road.surfacePoint(s, 0).y - sp.deckThickness;
                     bool abutment = (i == 0 || i == bays);
-                    double groundY = terrainBaseHeight(TerrainParams{}, f.planPos.x, f.planPos.y);
+                    // The CONFORMED ground, and the scene's terrain rather than a
+                    // default-constructed one. Both were wrong: a footing was sized
+                    // against whatever height the default noise happened to give,
+                    // so raising a scene's relief left its piers hanging.
+                    double groundY = terrainHeightAt(net, terrain, f.planPos.x, f.planPos.y);
                     // Never build a pier that would stand in another road; the
                     // clearance lint reports the ones that cannot be avoided.
                     RoadHit hit;
@@ -181,7 +186,7 @@ void tessellateStructures(const Network& net, const Road& road, Mesh& out) {
                             Vec2 nrm = perpLeft(dirOf(f.heading));
                             double toff = 0.5 * (tL + tR) + frac * std::fabs(tL - tR);
                             Vec2 p = f.planPos + nrm * toff;
-                            double gy = terrainBaseHeight(TerrainParams{}, p.x, p.y);
+                            double gy = terrainHeightAt(net, terrain, p.x, p.y);
                             emitCylinder(out, worldOf(p, gy), 0.75, deckY - gy - 0.4, 12,
                                          kConcreteDark, 0.85);
                             emitBox(out, worldOf(p, deckY - 0.2), {1.0, 0.2, 1.0}, f.heading,
@@ -360,20 +365,30 @@ static double terrainHeightImpl(const Network& net, const TerrainParams& p, doub
         CarrierKind carrier = carrierAt(r, sc);
         bool structural = carrier == CarrierKind::Bridge || carrier == CarrierKind::Viaduct ||
                           carrier == CarrierKind::Tunnel;
-        if (structural) {
-            // ...but the approach embankment DOES, and it stops dead where the
-            // deck begins. That junction between earth and structure is an
-            // abutment: a wall, and a real step in the ground. Only the vicinity
-            // of the transition qualifies — under the middle of a viaduct the
-            // ground is simply natural, with nothing to reconcile.
-            double look = 8.0;
-            if (carrierAt(r, clampd(sc - look, r.begin(), r.end())) != carrier ||
-                carrierAt(r, clampd(sc + look, r.begin(), r.end())) != carrier) {
+
+        // An ABUTMENT is where earth meets structure: the approach embankment
+        // carries the ground at deck level and the deck itself carries nothing,
+        // so the ground has a vertical face between them. roadlab models that as
+        // a wall abutment and already builds the concrete for it
+        // (tessellateStructures emits an abutment box at each end of a span), so
+        // the step is correct rather than missing — but it is a step, and code
+        // that measures ground gradients has to be able to tell it apart from a
+        // batter that has gone wrong.
+        //
+        // Marked on BOTH sides of the transition. The first version only marked
+        // the structural side, which missed the point entirely: the face is
+        // BETWEEN the two, so a sample on the embankment side measures across it
+        // just as much as one on the deck side does.
+        double look = 8.0;
+        if (carrierAt(r, clampd(sc - look, r.begin(), r.end())) != carrier ||
+            carrierAt(r, clampd(sc + look, r.begin(), r.end())) != carrier) {
+            double deckY = r.surfacePoint(sc, 0).y;
+            if (std::fabs(deckY - base) > 1.0) {
                 if (conflicted) *conflicted = true;
-                RL_FALLBACK("terrain meets a structure at an abutment -> step left in the ground");
+                RL_FALLBACK("terrain meets a structure at an abutment -> a wall face, not a batter");
             }
-            continue;
         }
+        if (structural) continue;
 
         double le = r.xs.leftExtentAt(sc), re = r.xs.rightExtentAt(sc);
         double tc = clampd(t, re, le);

@@ -98,8 +98,14 @@ std::vector<std::array<uint32_t, 3>> triangulatePolygon(const std::vector<Vec2>&
 bool meanValueCoords(const std::vector<Vec2>& poly, Vec2 p, std::vector<double>& weights);
 
 // Everything at once, including structures (structure.h) if `withStructures`.
+struct TerrainParams;   // structure.h; forward-declared to keep the include one-way
+
+// `terrain` is what piers and abutments stand on. Optional only because the
+// callers that ask for no structures do not need it; passing nullptr while
+// asking for structures puts every footing on the DEFAULT terrain rather than
+// the scene's, which is a quiet way to have bridges float.
 void tessellateNetwork(const Network& net, Mesh& out, const TessParams& p = {},
-                       bool withStructures = true);
+                       bool withStructures = true, const TerrainParams* terrain = nullptr);
 
 // --- helper geometry (structures, props) ----------------------------------
 

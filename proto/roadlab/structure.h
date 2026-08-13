@@ -30,7 +30,8 @@ CarrierKind carrierAt(const Road& r, double s);
 
 // Deck, parapets, piers, abutments, bores and portals for one road, plus the
 // swept barriers its cross-section calls for anywhere along its length.
-void tessellateStructures(const Network& net, const Road& road, Mesh& out);
+void tessellateStructures(const Network& net, const Road& road, Mesh& out,
+                          const TerrainParams& terrain);
 
 // --- terrain --------------------------------------------------------------
 

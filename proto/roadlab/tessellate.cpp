@@ -356,11 +356,14 @@ void tessellateJunction(const Network& net, const Junction& j, Mesh& out, double
         if (lengthSq(accum[i]) > 1e-18) out.verts[vid[i]].normal = normalize(accum[i]);
 }
 
-void tessellateNetwork(const Network& net, Mesh& out, const TessParams& p, bool withStructures) {
+void tessellateNetwork(const Network& net, Mesh& out, const TessParams& p,
+                       bool withStructures, const TerrainParams* terrain) {
     for (const Road& r : net.roads()) tessellateRoad(r, out, p);
     for (const Junction& j : net.junctions()) tessellateJunction(net, j, out);
     if (withStructures) {
-        for (const Road& r : net.roads()) tessellateStructures(net, r, out);
+        TerrainParams fallback;
+        const TerrainParams& tp = terrain ? *terrain : fallback;
+        for (const Road& r : net.roads()) tessellateStructures(net, r, out, tp);
     }
 }
 

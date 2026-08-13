@@ -559,13 +559,38 @@ its authored batter *or* the hillside it sits on, whichever is greater — and
 that the bound moves when the batter is re-authored, so it cannot pass by the
 terrain simply being flat. Demos with no structures hold that strictly.
 
-### What is still unresolved
+### Abutments, and what footings stand on
 
-Demos that carry roads on structures still show a bounded step near the abutment
-— worst **2.05** against a 1.00 batter, on a handful of samples in `interchange`,
-`tiers` and `showcase`. The vicinity of the carrier transition is marked, but the
-boundary between "embankment claims the ground" and "deck does not" is not yet
-solved, only fenced. It is asserted at 2.5 so a regression is visible.
+An **abutment** is where earth meets structure: the approach embankment carries
+the ground at deck level, the deck itself carries nothing, and between them is a
+vertical face. roadlab already builds the concrete for that (`tessellateStructures`
+emits an abutment box at each end of a span), so the step is correct rather than
+missing — but code that measures ground gradients has to tell it apart from a
+batter that has gone wrong. It is marked on **both** sides of the transition; the
+first attempt marked only the structural side, which missed the point entirely,
+since the face is *between* the two and a sample on the embankment side measures
+across it just as much as one on the deck side.
+
+Fixing that turned up a separate bug worth naming: piers and abutments sized
+their footings against a **default-constructed** `TerrainParams`, not the scene's
+— and against the raw noise rather than the conformed ground. So raising a
+scene's relief left its bridges standing on whatever height the default noise
+happened to give. They now stand on `terrainHeightAt` with the scene's own
+terrain, which is also the right surface: under a deck the ground is natural,
+because the deck does not claim it.
+
+A bounded residual remains: worst **2.05** against a 1.00 batter, a handful of
+samples where two roads at different levels sit at the edge of a tall
+embankment. Asserted at 2.5 so a regression is visible.
+
+### The terrain grid cannot draw a wall
+
+Where the earthwork legitimately steps — an abutment face — the ground is drawn
+by a uniform grid whose cell is a few metres, so a 4.5 m step becomes a
+**staircase** of grid cells rather than a face. It is a mesh-resolution problem,
+not an earthwork one: the heights are right and the test agrees, but the surface
+sampling them cannot represent a discontinuity. The fix is an adaptive grid that
+refines near roads and across wall sites; it is not done.
 
 ## The roundabout's aprons
 
