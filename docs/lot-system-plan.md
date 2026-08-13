@@ -1358,9 +1358,9 @@ op vocabulary — is untouched and is the larger piece:
 | `pen.*` | the turtle over the same ops | not bound |
 | `stack.*` | `mass_stack` | **bound** — of{bands}, height, levels, plan_at |
 | `lot.*` | read-only `LotTags` (§17.3) | **bound** — measure, max_storeys |
-| `fen.*` | `facade_plan::fenestrate` | not bound |
+| `fen.*` | `facade_plan::fenestrate` | **bound** — bays, openings |
 | `elements.*` | the element registry | not bound |
-| `palette.*` | `material_set` | not bound |
+| `palette.*` | `material_set` | **bound** — pick (by character) |
 
 A Shape2 crosses as a `Plan` userdatum, so a courtyard stays a region with a real
 hole and a bow-front keeps its arc — a recipe handed a point ring would already

@@ -899,3 +899,63 @@ TEST_CASE(procgen_stack_and_lot_expose_the_massing_model) {
     CHECK(std::fabs(num("lot_core") - 0.5) < 1e-6);
     CHECK(num("plate_cap") > 1.0);
 }
+
+// fen.* and palette.*: the dressing half of the vocabulary.
+//
+// fen wraps the SAME `fenestrate` the mesher punches from. That matters more
+// than it looks: both detail levels read this one blueprint, which is what keeps
+// windows in the same place when the LOD swaps. A Lua surface that computed its
+// own openings would break that, silently, at a distance nobody tests at.
+TEST_CASE(procgen_fen_and_palette_wrap_the_facade_model) {
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::string err;
+    auto num = [&vm](const char* name) {
+        double v = 0;
+        return vm.getGlobalNumber(name, v) ? v : -1e30;
+    };
+
+    // Bays divide a wall: a 24 m wall at ~4 m wants about six of them, and the
+    // widths must actually tile the wall rather than approximately.
+    CHECK(vm.doString(R"LUA(
+        local g = fen.bays(24, 4)
+        bay_count = g.count
+        bay_span  = g.count * g.width
+    )LUA", &err));
+    CHECK(num("bay_count") >= 5);
+    CHECK(num("bay_count") <= 7);
+    CHECK(std::fabs(num("bay_span") - 24.0) < 0.5);
+
+    // A BLANK wall has no openings and a storefront has more than a plain one —
+    // "not every wall needs all the windows" is the axis this exists for.
+    CHECK(vm.doString(R"LUA(
+        blank_n  = #fen.openings{ length = 20, strategy = "blank" }
+        plain_n  = #fen.openings{ length = 20, strategy = "regular" }
+        shop_n   = #fen.openings{ length = 20, strategy = "storefront", floor = 0 }
+        -- the entrance request has to actually produce a door
+        local ops = fen.openings{ length = 20, strategy = "storefront",
+                                  floor = 0, entrance = true }
+        doors = 0
+        for _, o in ipairs(ops) do if o.kind == "door" then doors = doors + 1 end end
+    )LUA", &err));
+    CHECK(num("blank_n") == 0);
+    CHECK(num("plain_n") > 0);
+    CHECK(num("shop_n") > 0);
+    CHECK(num("doors") >= 1);
+
+    CHECK(!vm.doString("fen.openings{ length = 10, strategy = 'sparkly' }", &err));
+
+    // palette: a recipe names a CHARACTER and the district picks a coherent
+    // family. It does not name hex colours, which is why a street reads as one
+    // place with variation rather than as a colour wheel.
+    CHECK(vm.doString(R"LUA(
+        local a = palette.pick{ character = "downtown", storeys = 30, district_seed = 4 }
+        local b = palette.pick{ character = "suburban", storeys = 2,  district_seed = 4 }
+        same_name = (a.name == b.name) and 1 or 0
+        has_wall  = (a.wall and #a.wall == 3) and 1 or 0
+    )LUA", &err));
+    CHECK(num("has_wall") == 1);
+    CHECK(num("same_name") == 0);   // a tower is not dressed as a bungalow
+
+    CHECK(!vm.doString("palette.pick{ character = 'baroque' }", &err));
+}

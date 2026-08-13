@@ -32,6 +32,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cctype>
 #include <cmath>
 #include <memory>
 #include <new>
@@ -824,6 +825,131 @@ int l_lot_max_storeys(lua_State* L) {
 const luaL_Reg kLotLib[] = {
     {"measure", l_lot_measure},
     {"max_storeys", l_lot_max_storeys},
+    {nullptr, nullptr},
+};
+
+// --- fen.* : how a wall is glazed (facade_plan) -----------------------------
+//
+// The bay grid and the opening list, from the SAME `fenestrate` the mesher
+// punches from. Two detail levels read this one blueprint, which is what keeps
+// the windows in the same place when the LOD swaps; a Lua surface that computed
+// its own openings would break that silently.
+
+WallRole roleFromName(lua_State* L, const char* name) {
+    const std::string n = name ? name : "regular";
+    if (n == "blank")      return WallRole::Blank;
+    if (n == "sparse")     return WallRole::Sparse;
+    if (n == "regular")    return WallRole::Regular;
+    if (n == "storefront") return WallRole::Storefront;
+    if (n == "curtain")    return WallRole::Curtain;
+    luaL_error(L, "fen.openings: unknown strategy '%s'", n.c_str());
+    return WallRole::Regular;
+}
+
+// fen.bays(wallLength, preferredBay) -> { count=, width= }
+int l_fen_bays(lua_State* L) {
+    const Real len = static_cast<Real>(luaL_checknumber(L, 1));
+    const Real pref = static_cast<Real>(luaL_optnumber(L, 2, 3.4));
+    const BayGrid g = bayGridFor(len, pref);
+    lua_createtable(L, 0, 2);
+    lua_pushinteger(L, g.bays);           lua_setfield(L, -2, "count");
+    lua_pushnumber(L, static_cast<double>(g.bayWidth)); lua_setfield(L, -2, "width");
+    return 1;
+}
+
+// fen.openings{ length=, bay=, strategy=, floor=, entrance= }
+//   -> { {t0=,t1=,sill=,head=,kind="window"|"door"}, ... }
+int l_fen_openings(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    const Real len = static_cast<Real>(optField(L, 1, "length", 12.0));
+    const Real pref = static_cast<Real>(optField(L, 1, "bay", 3.4));
+    const int floor = static_cast<int>(optField(L, 1, "floor", 0.0));
+    lua_getfield(L, 1, "entrance");
+    const bool entrance = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "strategy");
+    const WallRole role =
+        roleFromName(L, lua_isstring(L, -1) ? lua_tostring(L, -1) : "regular");
+    lua_pop(L, 1);
+
+    FenestrationStyle style;
+    style.preferredBay = pref;
+    const BayGrid grid = bayGridFor(len, pref);
+    const std::vector<Opening> ops = fenestrate(grid, role, style, floor, entrance);
+    lua_createtable(L, static_cast<int>(ops.size()), 0);
+    for (std::size_t k = 0; k < ops.size(); ++k) {
+        const Opening& o = ops[k];
+        lua_createtable(L, 0, 5);
+        lua_pushnumber(L, static_cast<double>(o.t0));   lua_setfield(L, -2, "t0");
+        lua_pushnumber(L, static_cast<double>(o.t1));   lua_setfield(L, -2, "t1");
+        lua_pushnumber(L, static_cast<double>(o.sill)); lua_setfield(L, -2, "sill");
+        lua_pushnumber(L, static_cast<double>(o.head)); lua_setfield(L, -2, "head");
+        lua_pushstring(L, o.kind == OpeningKind::Door ? "door" : "window");
+        lua_setfield(L, -2, "kind");
+        lua_seti(L, -2, static_cast<lua_Integer>(k + 1));
+    }
+    return 1;
+}
+
+const luaL_Reg kFenLib[] = {
+    {"bays", l_fen_bays},
+    {"openings", l_fen_openings},
+    {nullptr, nullptr},
+};
+
+// --- palette.* : material sets, by character (material_set) -----------------
+//
+// A recipe declares the CHARACTER it wants dressed in and lets the district pick
+// a coherent family; it does not name hex colours. That separation is why a
+// street reads as one place with variation rather than as a colour wheel.
+
+// Matched through characterName() rather than a hand-written table, so the Lua
+// vocabulary cannot drift from the enum when a character is added.
+Character characterFromName(lua_State* L, const char* name) {
+    const std::string n = name ? name : "commercial";
+    for (int i = 0; i <= static_cast<int>(Character::RunDown); ++i) {
+        const auto c = static_cast<Character>(i);
+        std::string cn = characterName(c);
+        for (char& ch : cn) ch = static_cast<char>(std::tolower(ch));
+        if (cn == n) return c;
+    }
+    luaL_error(L, "palette.pick: unknown character '%s'", n.c_str());
+    return Character::Commercial;
+}
+
+// palette.pick{ character=, storeys=, district_seed=, seed= }
+//   -> { name=, wall={r,g,b}, trim={r,g,b} }
+int l_palette_pick(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_getfield(L, 1, "character");
+    const Character c =
+        characterFromName(L, lua_isstring(L, -1) ? lua_tostring(L, -1) : "commercial");
+    lua_pop(L, 1);
+    const int storeys = static_cast<int>(optField(L, 1, "storeys", 4.0));
+    const auto ds = static_cast<std::uint32_t>(optField(L, 1, "district_seed", 1.0));
+    const auto bs = static_cast<std::uint32_t>(optField(L, 1, "seed", 1.0));
+
+    static const PaletteLibrary lib = stockPalettes();
+    const int idx = lib.pick(c, Era::Modern, storeys, ds, bs);
+    if (idx < 0 || idx >= static_cast<int>(lib.sets.size()))
+        return luaL_error(L, "palette.pick: nothing in the library fits");
+    const MaterialSet& m = lib.sets[idx];
+    lua_createtable(L, 0, 3);
+    lua_pushstring(L, m.name.c_str()); lua_setfield(L, -2, "name");
+    auto colour = [&](const char* k, const Vec3& v) {
+        lua_createtable(L, 3, 0);
+        lua_pushnumber(L, v.x); lua_seti(L, -2, 1);
+        lua_pushnumber(L, v.y); lua_seti(L, -2, 2);
+        lua_pushnumber(L, v.z); lua_seti(L, -2, 3);
+        lua_setfield(L, -2, k);
+    };
+    colour("wall", m.wallColor);
+    colour("trim", m.trimColor);
+    return 1;
+}
+
+const luaL_Reg kPaletteLib[] = {
+    {"pick", l_palette_pick},
     {nullptr, nullptr},
 };
 
@@ -3294,6 +3420,10 @@ void openProcgenLibrary(ScriptVM& vm) {
     lua_setglobal(L, "stack");
     luaL_newlib(L, kLotLib);
     lua_setglobal(L, "lot");
+    luaL_newlib(L, kFenLib);
+    lua_setglobal(L, "fen");
+    luaL_newlib(L, kPaletteLib);
+    lua_setglobal(L, "palette");
 
     static const luaL_Reg kFurnitureFns[] = {
         {"lamp", l_furniture_lamp},
