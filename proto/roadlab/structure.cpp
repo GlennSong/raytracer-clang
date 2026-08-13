@@ -174,11 +174,39 @@ void tessellateStructures(const Network& net, const Road& road, Mesh& out,
                     double h = deckY - groundY;
                     if (h < 0.5) continue;
                     if (abutment) {
+                        // Abutment plus WING WALLS.
+                        //
+                        // The approach embankment behind an abutment is as wide
+                        // as its own fill batter, not as wide as the deck: fill
+                        // rising h metres at a 1:2 slope spreads 2h either side.
+                        // A wall only the width of the deck leaves those
+                        // shoulders standing as open earth faces — and a height
+                        // field cannot draw a vertical face at any resolution, so
+                        // the terrain grid rendered them as staircases of cells.
+                        // Widening the wall to the fill's real footprint is what
+                        // covers them, and it is also what a real abutment does.
                         Vec2 nrm = perpLeft(dirOf(f.heading));
-                        Vec3 centre = worldOf(f.planPos + nrm * (0.5 * (tL + tR)),
-                                              groundY + h * 0.5);
-                        emitBox(out, centre, {1.1, h * 0.5, std::fabs(tL - tR) * 0.5 + 0.3},
-                                f.heading, kConcreteDark, 0.9);
+                        double deckHalf = std::fabs(tL - tR) * 0.5;
+                        double fillRun = h / std::max(0.2, terrain.fillBatter);
+                        // Capped: past a point the fill has daylighted and there
+                        // is nothing left to retain, and an unbounded wing wall
+                        // on a tall embankment would read as a dam.
+                        double wingHalf = deckHalf + clampd(fillRun, 0.0, 14.0);
+                        double centreT = 0.5 * (tL + tR);
+                        // The wall has to reach the LOWEST ground it spans, or it
+                        // floats over the very shoulders it exists to retain.
+                        double lowest = groundY;
+                        for (int w = -4; w <= 4; ++w) {
+                            Vec2 q = f.planPos + nrm * (centreT + 0.25 * w * wingHalf * 2.0);
+                            lowest = std::min(lowest, terrainHeightAt(net, terrain, q.x, q.y));
+                        }
+                        double wallH = deckY - lowest;
+                        if (wallH > 0.5) {
+                            Vec3 centre = worldOf(f.planPos + nrm * centreT,
+                                                  lowest + wallH * 0.5);
+                            emitBox(out, centre, {1.1, wallH * 0.5, wingHalf}, f.heading,
+                                    kConcreteDark, 0.9);
+                        }
                     } else {
                         // A pier per carriageway half reads better than one wide
                         // wall and is what a real viaduct does.

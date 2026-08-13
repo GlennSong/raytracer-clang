@@ -583,14 +583,31 @@ A bounded residual remains: worst **2.05** against a 1.00 batter, a handful of
 samples where two roads at different levels sit at the edge of a tall
 embankment. Asserted at 2.5 so a regression is visible.
 
-### The terrain grid cannot draw a wall
+### Wing walls, and the staircase that was not what it looked like
 
-Where the earthwork legitimately steps — an abutment face — the ground is drawn
-by a uniform grid whose cell is a few metres, so a 4.5 m step becomes a
-**staircase** of grid cells rather than a face. It is a mesh-resolution problem,
-not an earthwork one: the heights are right and the test agrees, but the surface
-sampling them cannot represent a discontinuity. The fix is an adaptive grid that
-refines near roads and across wall sites; it is not done.
+A height field cannot draw a vertical face at *any* resolution, so refining the
+terrain grid was never going to fix an abutment. The other half of the engine's
+model is the answer: **emit the wall**. roadlab already built an abutment box,
+but only as wide as the deck — and the embankment behind an abutment is as wide
+as its own fill batter, since fill rising `h` at 1:2 spreads `2h` either side.
+Those shoulders were left standing as open earth faces. The abutment is now a
+wall plus wing walls, sized from the fill's real footprint and dropped to the
+lowest ground it spans, because a wall that floats over the shoulders it exists
+to retain is worse than no wall.
+
+That fixed the abutment faces and left a second family of staircases running
+*along* elevated roads, which turned out to be something else entirely. The
+terrain grid drops any cell whose four corners all fall on a carriageway — the
+road surface is already there, and two surfaces at one height shimmer. But the
+hole that leaves has a boundary made of **cell edges**, so a road crossing the
+grid diagonally cuts a jagged edge, and it is that edge being shaded.
+
+Confirmed rather than reasoned: disabling the skip makes every staircase vanish
+(and the terrain immediately fights the roads for the same pixels, which is why
+the skip exists). The real fix is to clip the terrain to the road's actual
+boundary rather than to whole cells — a constrained triangulation against the
+carriageway outline, the same job the junction pad already does with ear
+clipping. Not done, and now diagnosed precisely enough to be worth doing.
 
 ## The roundabout's aprons
 
