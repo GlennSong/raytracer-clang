@@ -13,6 +13,8 @@ local land  = terrain.warp(hills:add(mtns:scale(0.5)),
 local mesh = terrain.mesh(land, { size = 400, resolution = 220,
                                   color = {0.34, 0.42, 0.26} })
 
+-- The terrain is the ground you walk on, so it is rendered AND collided from the
+-- same triangles (AGENTS.md § Playable Scenes, "collidable by default").
 local m = model.new()
-m:add(mesh)
+m:add_solid(mesh)
 return m

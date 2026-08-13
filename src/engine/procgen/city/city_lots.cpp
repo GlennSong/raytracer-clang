@@ -1198,12 +1198,30 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     const Real ppDepthScale = p.parcelLotDepth > 0
         ? p.parcelLotDepth / stockPP.lotDepth : Real(1);
     const Real ppMinArea = p.parcelMinArea > 0 ? p.parcelMinArea : p.minLotArea;
+    int blocksAllCarriageway = 0;
     for (std::size_t bi = 0; bi < blocks.size(); ++bi) {
         const Poly2& block = blocks[bi];
         if (block.size() < 3) continue;
         // Pull in from the road edge to the buildable interior (road + sidewalk).
         Poly2 foot = inset(block, p.roadMargin);
-        if (foot.size() < 3 || area(foot) < p.minLotArea * 1.5) continue;
+        if (foot.size() < 3) continue;
+        // ...then push clear of the SAMPLED ribbons, because that inset alone is
+        // measured against the wrong road twice over:
+        //   - p.roadMargin is ONE scalar, derived from a nominal road half-width
+        //     (level_params.cpp), so it is short for anything wider than that;
+        //   - the faces were walked over the CONTROL CHORDS (extractBlocks needs a
+        //     planar graph), while the asphalt is meshed from the sampled spline,
+        //     and a curvy road bows off its chord — see growLotBuildingsOnNets.
+        // Where those bite, the "buildable" interior reaches into the carriageway
+        // and its lots are cut and then thrown away downstream as rejClear, so the
+        // symptom is missing density rather than a building in the road.
+        // Same helper the park pads use: per-edge width-aware, and it subdivides
+        // long edges first so a bowing road still moves a long block edge.
+        // Gate: tests/test_lot_road_clearance.cpp
+        //       lot_block_interiors_clear_every_carriageway_on_a_mixed_width_net
+        foot = pushPolyClearOfRoads(foot);
+        if (foot.size() < 3) { ++blocksAllCarriageway; continue; }
+        if (area(foot) < p.minLotArea * 1.5) continue;
         dbg->blocks.push_back(foot);
 
         BlockInfo bf;
@@ -2088,6 +2106,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             else if (lb.recipe == "court_green") ++nCourt;
             else if (lb.type != "park") ++nBuilt;
         }
+        // The trailing "blocks all carriageway" is not a silent drop: it counts
+        // faces whose interior was mostly roadway after the clear-push. A number
+        // climbing there means the road graph is eating its own blocks — a road
+        // bug, not a lot-tuning one.
         LOG_INFO << "[citylots] " << dbg->blocks.size() << " blocks -> "
                  << dbg->lots.size() << " lots, " << nBuilt << " built, "
                  << nGreen << " green, " << nCourt << " courts | rej: chance "
@@ -2095,7 +2117,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                  << ", aspect " << dbg->rejAspect << ", fill " << dbg->rejFill
                  << ", plan " << dbg->rejPlan << ", clear " << dbg->rejClear
                  << ", box " << dbg->rejBox << ", frontage "
-                 << dbg->rejFrontage;
+                 << dbg->rejFrontage << " | " << blocksAllCarriageway
+                 << " blocks all carriageway";
     }
     return out;
 }

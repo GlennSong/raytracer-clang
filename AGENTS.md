@@ -163,17 +163,28 @@ recompiling, and lets one generative vocabulary serve every procgen project.
 This is a game engine: a level is a world you move through, not a diorama you fly
 over. Every scene you build is playable by construction.
 
+> **These two bullets are gates, not advice.** `tests/test_levels_playable.cpp`
+> (ctest target `level_tests`) loads every `assets/levels/*.json` through the real
+> `LevelLoader` and fails on a violation. Break one and the build goes red — which
+> is the only reason to believe a rule survives. See
+> `docs/knowledge-retention-plan.md` for why this file grew teeth.
+
 - **Collidable by default.** Anything an actor can stand on, walk into, or drive on
   gets a collider in the *same* recipe that makes its geometry — never bolted on
   later. Terrain and road surfaces take an exact triangle collider
-  (`m:collide(mesh, {friction=…})`); props/instances take a primitive
+  (`m:collide(mesh, {friction=…})`, or `m:add_solid(mesh)` to render and collide the
+  same triangles in one call); props/instances take a primitive
   (`collide={shape=…}`). A bare centerline or floating decal has nothing to collide
   with: collision becomes real only when the *body* (real width/thickness) is built,
   so build the body and its collider together.
+  *Gate:* `every_shipped_level_has_a_collider`.
 - **Always a player start.** Every playable level has a player. The loader spawns a
   default one (drop-in from above onto the collidable ground) when a level has no
   `"player"` block, but an authored scene SHOULD place the spawn deliberately — on
   the surface, over buildable ground, near the content — not leave it to the default.
+  *Gates:* `every_shipped_level_has_exactly_one_player`,
+  `every_shipped_level_has_collidable_ground_under_the_spawn` — the second one
+  catches a spawn buried inside geometry, not just one over a hole.
 - **Recoverable.** Pressing **R** respawns the player at its spawn (`PlayerSystem`).
   Treat that as a safety net, not a substitute for a sane spawn and solid ground.
 - **Verify from inside the world.** A scene that only looks right from an overhead

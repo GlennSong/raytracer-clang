@@ -590,6 +590,7 @@ add_executable(run_tests
     tests/test_surface_field.cpp
     tests/test_architect.cpp
     tests/test_erosion_gpu.cpp
+    tests/test_lot_road_clearance.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
@@ -615,6 +616,33 @@ if(RT_ENABLE_AUDIO AND NOT EMSCRIPTEN)
 endif()
 enable_testing()
 add_test(NAME unit_tests COMMAND run_tests)
+
+# ============================================================
+# Content gate: every SHIPPED level is playable (AGENTS.md § Playable Scenes)
+# ============================================================
+# Its own binary, and its own ctest entry, because it is a different KIND of
+# test: it runs the real procgen for all ~54 levels in assets/levels, which
+# costs minutes where the unit suite costs seconds. Folding it into run_tests
+# would make the fast loop slow enough that people stop running it — and a gate
+# nobody runs is the failure this whole file guards against. CI runs `ctest`,
+# so it is gated there either way.
+add_executable(level_tests
+    tests/main.cpp
+    tests/test_levels_playable.cpp
+    # Drives the real LevelLoader, which needs a Renderer. NullRenderer
+    # satisfies Renderer::create() without a GPU (exactly one create() is linked
+    # per target, and this target links no backend).
+    src/renderer/null_renderer.cpp
+    ${CORE_SOURCES}
+)
+target_compile_options(level_tests PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(level_tests PRIVATE citysim engine_core)
+# Reads assets/levels + assets/scripts from the source tree, like the game does.
+target_compile_definitions(level_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+add_test(NAME level_tests COMMAND level_tests)
+# Loading every shipped city is minutes of procgen; the default 1500s ctest
+# timeout is generous but not obviously enough on a cold CI runner.
+set_tests_properties(level_tests PROPERTIES TIMEOUT 1800)
 
 # ============================================================
 # Headless demos (tools/): small programs that show the engine systems in
