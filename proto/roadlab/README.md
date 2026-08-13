@@ -814,6 +814,44 @@ handed a road-local station, not a world one.
 For what it is worth, naga also validates all eleven of the engine's existing
 `shaders/webgpu/*.wgsl` clean.
 
+### Is any of this shaped like a runtime asset?
+
+Measured on the `metro` generator — a 1.9 x 1.9 km district, 655 roads, 62
+junctions:
+
+| | |
+|---|---|
+| road surface | 122k verts, 118k tris |
+| junction pads | 47k verts, 86k tris |
+| terrain, structures, props | 228k verts, 330k tris |
+| geometry at a 32-byte packed vertex | 12.1 MB verts + 6.1 MB indices |
+| paint atlas | 1.2 MB RGBA32F, 0.6 MB as RGBA16F |
+| lane graph | 1054 nodes, 1329 edges, ~55 KiB |
+
+204k triangles for the road network over 3.6 km² is not a problem for anything
+modern, and the paint and lane data are rounding errors. What does not scale is
+that it is **one** mesh and **one** atlas for the whole network: there is no
+tiling, no streaming, and the in-memory `Vertex` is doubles — 112 bytes against
+the 32 a runtime wants — so a packing step has to exist and does not.
+
+**LOD, though, is free**, which was not obvious and is now measured. The profile
+texture is addressed by a row coordinate the mesh writes per ring, so the worry
+was that a coarser mesh writing fewer of them would renumber the rows and slide
+the paint. It does not: `rowCoord` is a function of the station, so a ring at `s`
+carries the same row whatever its neighbours do. Sampling as though the mesh had
+rings every 8, 16 and 32 m — sixteen times the bake's own spacing — reproduces
+the exact cross-section to **0.000 m**.
+
+With one condition, and it is one the mesher already has to meet: **an LOD may
+drop rings anywhere except across a lane-section seam.** The row coordinate is
+affine in `s` only between consecutive rings, and a seam contributes a ring
+*pair* spanning 2 mm — a whole row index spent on no distance — so a span that
+swallows one interpolates into the wrong rows entirely. Not every seam is
+dangerous (plenty measure 0.00 m, where the boundary set happens not to change),
+but the worst measured is **5.00 m**, which is a lane and a half. The test
+asserts both halves, because a rule nobody can demonstrate breaking is a rule
+nobody will keep.
+
 ### What is left
 
 The Metal entry point that calls `rlEvaluateMarkings`, uploading the two

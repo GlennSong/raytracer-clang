@@ -2406,6 +2406,122 @@ void testEarthworksRunOnTheirBatter() {
                 ends.terrain.cutBatter);
 }
 
+void testPaintSurvivesLod() {
+    group("paint under LOD");
+    // The question a realtime engine asks of this design: can the mesh get
+    // cheaper with distance without the paint going wrong?
+    //
+    // It is not obvious that it can. The profile texture is addressed by a ROW
+    // coordinate the mesher writes per ring, so a coarser mesh writes fewer of
+    // them — and if the row index depended on the ring COUNT, dropping rings
+    // would renumber every row and slide the paint along the road. It does not:
+    // rowCoord is a function of the station, so a ring at s carries the same row
+    // whatever its neighbours do, and a longer span between rings just means the
+    // hardware interpolates further. This measures that rather than trusting it.
+    //
+    // What it costs is accuracy, because the offsets are cubics in s being
+    // sampled by a straight line. That number is the useful output: it says how
+    // far an LOD can go before a lane line visibly wanders.
+    for (const std::string& name : {std::string("lanes"), std::string("interchange")}) {
+        Scene sc;
+        if (!buildDemo(name, sc)) continue;
+        finalizeScene(sc, false, false);
+        PaintAtlas atlas = bakePaintAtlas(sc.net, 2.0);
+        const std::vector<Road>& roads = sc.net.roads();
+        double anySeamError = 0, anyCleanError = 0;
+
+        for (double lod : {2.0, 8.0, 16.0, 32.0}) {
+            double worstT = 0, worstCov = 0, worstSeam = 0;
+            long compared = 0, seamSpans = 0;
+            for (size_t ri = 0; ri < roads.size(); ++ri) {
+                const Road& r = roads[ri];
+                const PaintProfile& prof = atlas.profiles[ri];
+                if (r.activeLength() < 40.0) continue;
+                // A coarser mesh: rings every `lod` metres, and the fragment's
+                // row coordinate interpolated linearly between them exactly as a
+                // rasteriser would.
+                for (double s0 = r.begin(); s0 + lod < r.end(); s0 += lod) {
+                    double s1 = s0 + lod;
+                    // Skip any span CONTAINING a seam, not just one whose ends
+                    // land on it: the row coordinate is only affine in s between
+                    // consecutive rings, and a seam contributes a ring PAIR over
+                    // 2 mm, so a span that swallows one spends a whole row index
+                    // on no distance at all.
+                    bool spansSeam = false;
+                    for (const LaneSection& sec : r.xs.sections)
+                        if (sec.s0 > s0 - 1e-3 && sec.s0 < s1 + 1e-3) spansSeam = true;
+                    double row0 = prof.rowCoord(s0), row1 = prof.rowCoord(s1);
+                    for (int k = 1; k < 4; ++k) {
+                        double u = double(k) / 4.0;
+                        double s = s0 + (s1 - s0) * u;
+                        if (nearASeam(r, s)) continue;
+                        RlBoundary lodB[kMaxBakedBoundaries], exact[kMaxBakedBoundaries];
+                        int nl = atlas.sample(int(ri), row0 + (row1 - row0) * u, lodB,
+                                              kMaxBakedBoundaries);
+                        int ne = bakeBoundaries(r, s, exact, kMaxBakedBoundaries);
+                        if (nl != ne) continue;
+                        double off = 0;
+                        for (int i = 0; i < ne; ++i)
+                            off = std::max(off, std::fabs(double(exact[i].t) - double(lodB[i].t)));
+                        if (spansSeam) {
+                            ++seamSpans;
+                            worstSeam = std::max(worstSeam, off);
+                            continue;
+                        }
+                        ++compared;
+                        worstT = std::max(worstT, off);
+                        double le = r.xs.leftExtentAt(s), re = r.xs.rightExtentAt(s);
+                        for (int j = 0; j <= 12; ++j) {
+                            double t = re + (le - re) * double(j) / 12.0;
+                            // The filter widens with distance, which is the whole
+                            // reason a coarse LOD is acceptable: compare at a
+                            // filter width that matches the range the LOD is for.
+                            float fw = float(0.02 * lod);
+                            RlPaint pe = rlEvaluateMarkings(exact, ne, float(s), float(t), fw,
+                                                            0.0f, 1.0f, 0.0f);
+                            RlPaint pl = rlEvaluateMarkings(lodB, nl, float(s), float(t), fw,
+                                                            0.0f, 1.0f, 0.0f);
+                            worstCov = std::max(worstCov, std::fabs(double(pe.coverage) -
+                                                                    double(pl.coverage)));
+                        }
+                    }
+                }
+            }
+            check(compared > 50, (name + ": there were LOD spans to compare").c_str());
+            // Not "close enough" — EXACT to a couple of centimetres at every
+            // spacing tried, up to sixteen times the bake's own. The offsets are
+            // cubics in s and a straight line through them is a poor
+            // approximation in principle; in practice a lane boundary is very
+            // nearly straight over 30 m, which is why LOD costs nothing here.
+            check(worstT < 0.05,
+                  (name + ": paint holds at ring spacings up to 32 m").c_str());
+            std::printf("  note: %-11s rings every %4.0f m: offsets within %.3f m, "
+                        "coverage within %.2f (%ld spans; %ld spans over a seam, "
+                        "worst %.2f m)\n",
+                        name.c_str(), lod, worstT, worstCov, compared, seamSpans, worstSeam);
+            anySeamError = std::max(anySeamError, worstSeam);
+            anyCleanError = std::max(anyCleanError, worstT);
+        }
+
+        // The other half: the seam ring rule is LOAD-BEARING, not decorative.
+        // The row coordinate is affine in s only BETWEEN consecutive rings, and a
+        // seam contributes a ring pair spanning 2 mm — a whole row index spent on
+        // no distance — so a span that swallows one interpolates into the wrong
+        // rows entirely.
+        //
+        // Not every seam is dangerous, which is why this is stated as a maximum
+        // rather than per-span: a section split where the boundary set happens to
+        // be unchanged costs nothing, and plenty measure 0.00 m. It only takes
+        // one that does matter, and the worst here is a whole lane and a half.
+        check(anySeamError > 1.0,
+              (name + ": swallowing a seam can misplace paint by metres").c_str());
+        check(anyCleanError < 0.05,
+              (name + ": while honouring seams keeps every LOD exact").c_str());
+        std::printf("  note: %-11s worst offset  %.3f m honouring seams, %.2f m across one\n",
+                    name.c_str(), anyCleanError, anySeamError);
+    }
+}
+
 // --- the generated WGSL -----------------------------------------------------
 
 namespace {
@@ -2879,6 +2995,7 @@ int main() {
     testSeamSmearIsMillimetresWide();
     testProfileTextureIsWhatTheShaderWouldSample();
     testEarthworksRunOnTheirBatter();
+    testPaintSurvivesLod();
     testGeneratedWgslTracksTheHeader();
     testMetroGenerator();
     testMetroSurvivesOpenDrive();
