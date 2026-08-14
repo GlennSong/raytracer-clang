@@ -471,6 +471,27 @@ LaneSection sectionFromLaneOutward(const Road& m, double s, int laneId, int side
     return out;
 }
 
+// Where a cross-section offset is actually DRAWN, in plan.
+//
+// toPlan lays `t` out flat; toWorld lays it along the BANKED frame and adds the
+// crown, whose height then leans with the bank too. On a 110 km/h carriageway at
+// 6% those two disagree by 12.4 * (1 - cos(atan 0.06)) = 22 mm of foreshortening
+// plus 0.248 m of crown leaned over by the same angle = 15 mm, and a ramp
+// positioned with the first while both surfaces are drawn with the second sits
+// 37 mm off its own mainline — a hairline crack running the length of the merge,
+// which is exactly what it was. Everything anchors to what is drawn.
+//
+// Also reports the offset in the mainline's PLAN frame, which is the number the
+// offset-arc curvature in solveRunIn needs — the drawn edge is a curve parallel
+// to the spine at that plan distance, not at `t`.
+Vec2 drawnEdge(const Road& m, double s, double t, double& height, double& planOffset) {
+    Vec3 p = m.surfacePoint(s, t);
+    height = p.y;
+    double ps = 0, pt = 0;
+    planOffset = m.spine.toST({p.x, p.z}, ps, pt) ? pt : t;
+    return {p.x, p.z};
+}
+
 // Which side of `main` the ramp's far end lies on. See RampDesc::side.
 int rampSide(const Road& main, const RampDesc& desc) {
     if (desc.side != 0) return desc.side < 0 ? -1 : +1;
@@ -797,11 +818,11 @@ int buildOnRamp(Network& net, int mainRoad, double sMerge, const RampDesc& desc,
         const Road& m = net.road(mainRoad);
         double refT = 0;
         terminal = sectionFromLaneOutward(m, sFull, auxLane, side, refT);
-        mergePos = m.planPoint(sFull, refT);
+        double refPlan = refT;
+        mergePos = drawnEdge(m, sFull, refT, mergeHeight, refPlan);
         mergeHdg = m.spine.frameAt(sFull).heading;
-        mergeHeight = m.surfacePoint(sFull, refT).y;
-        runIn = solveRunIn(m, sFull, refT, mergePos, mergeHdg,
-                           parallelRun, desc.outerPoint, false);
+        runIn = solveRunIn(m, sFull, refPlan, mergePos, mergeHdg, parallelRun,
+                           desc.outerPoint, false);
     }
     int ramp =
         makeRampRoad(net, desc, side, mergePos, mergeHdg, mergeHeight, true, &terminal, &runIn);
@@ -863,11 +884,11 @@ int buildOffRamp(Network& net, int mainRoad, double sExit, const RampDesc& desc,
         double s = clampd(sExit, sFull + 1.0, m.end() - 1.0);
         double refT = 0;
         terminal = sectionFromLaneOutward(m, s, auxLane, side, refT);
-        divergePos = m.planPoint(s, refT);
+        double refPlan = refT;
+        divergePos = drawnEdge(m, s, refT, divergeHeight, refPlan);
         divergeHdg = m.spine.frameAt(s).heading;
-        divergeHeight = m.surfacePoint(s, refT).y;
-        runOut = solveRunIn(m, s, refT, divergePos, divergeHdg,
-                            parallelRun, desc.outerPoint, true);
+        runOut = solveRunIn(m, s, refPlan, divergePos, divergeHdg, parallelRun,
+                            desc.outerPoint, true);
         sExit = s;
     }
 

@@ -2379,6 +2379,102 @@ void testRoadSurfacesDoNotOverlap() {
     }
 }
 
+void testRampsAbutTheirMainline() {
+    group("no crack at a merge");
+    // Two surfaces that meet either MEET or are visibly apart. What they may not
+    // do is miss by a hairline.
+    //
+    // A ramp's reference line is placed on the mainline's lane edge and then both
+    // are drawn — and toPlan lays a lateral offset out flat while toWorld lays it
+    // along the banked frame and leans the crown over with it. On a 110 km/h
+    // carriageway at 6% those differ by 37 mm at the outside lane, so the ramp
+    // sat 37 mm off the freeway for the whole length of the merge: a crack you
+    // can see from the driver's seat and that no cross-section check can find,
+    // because the cross-sections agree exactly. This measures the DRAWN edges.
+    //
+    // The measure is the CLOSEST the two ever come. A gore legitimately opens
+    // from nothing to metres, so no distance band can separate "opening" from
+    // "offset" — but a ramp that abuts its mainline touches it somewhere, and a
+    // ramp that is uniformly 37 mm out never does. The minimum is zero or it is
+    // the bug.
+    for (const std::string& name : corpusNames()) {
+        Scene sc;
+        if (!buildCorpus(name, sc)) continue;
+        finalizeScene(sc, false, false);
+
+        double worst = 0;
+        long ramps = 0, cracked = 0;
+        std::string worstAt;
+        for (const Road& r : sc.net.roads()) {
+            if (r.kind != RoadKind::Ramp) continue;
+            double len = r.activeLength();
+            if (len < 20.0) continue;
+            // Which end is the gore, and therefore which way the parallel
+            // stretch runs. The lane link says it: an entrance hands its lane on
+            // at the ramp's END, an exit takes one at its START.
+            bool linked = false, entering = false;
+            for (const ExtraLaneLink& el : sc.net.extraLinks) {
+                if (el.fromRoad == r.id) { linked = true; entering = true; }
+                else if (el.toRoad == r.id) { linked = true; entering = false; }
+            }
+            if (!linked) continue;
+            double nose = entering ? r.end() : r.begin();
+            double inward = entering ? -1.0 : 1.0;
+
+            // The mainline PIECE the ramp runs alongside, found 10 m inside the
+            // parallel stretch. Not the piece the link names: a split puts the
+            // nose on a boundary, and the link points at the far side of it,
+            // whose outer edge is a whole auxiliary lane further out.
+            const Road* m = nullptr;
+            {
+                Vec3 probe = r.surfacePoint(nose + inward * 10.0, 0.0);
+                for (const Road& o : sc.net.roads()) {
+                    if (o.id == r.id || o.kind == RoadKind::Ramp) continue;
+                    if (o.kind == RoadKind::Connector) continue;
+                    double os = 0, ot = 0;
+                    if (!o.spine.toST({probe.x, probe.z}, os, ot)) continue;
+                    if (os < o.begin() + 1e-6 || os > o.end() - 1e-6) continue;
+                    if (std::fabs(ot) > 40.0) continue;
+                    m = &o;
+                    break;
+                }
+            }
+            if (!m) continue;
+            double closest = 1e9;
+            for (int k = 0; k <= 120; ++k) {
+                double s = nose + inward * 60.0 * double(k) / 120.0;
+                if (s < r.begin() || s > r.end()) continue;
+                Vec3 ref = r.surfacePoint(s, 0.0);
+                double ms = 0, mt = 0;
+                if (!m->spine.toST({ref.x, ref.z}, ms, mt)) continue;
+                if (ms < m->begin() - 1e-6 || ms > m->end() + 1e-6) continue;
+                // LATERAL separation, in the mainline's own plan frame. Point
+                // distance would fold in the along-track slack of the projection
+                // and read a few millimetres of it as a crack.
+                double edgeT = pavedExtentAt(*m, ms, mt >= 0 ? +1 : -1);
+                Vec3 edge = m->surfacePoint(ms, edgeT);
+                double es = 0, et = 0;
+                if (!m->spine.toST({edge.x, edge.z}, es, et)) continue;
+                closest = std::min(closest, std::fabs(mt - et));
+            }
+            if (closest > 1e8) continue;
+            std::string against = m->name;
+            ++ramps;
+            if (closest > 0.002) {
+                ++cracked;
+                if (closest > worst) {
+                    worst = closest;
+                    worstAt = r.name + " on " + against;
+                }
+            }
+        }
+        check(cracked == 0, (name + ": every ramp reaches its mainline").c_str());
+        if (cracked)
+            std::printf("  note: %-11s %ld of %ld ramps never touch, worst %.1f mm [%s]\n",
+                        name.c_str(), cracked, ramps, worst * 1000.0, worstAt.c_str());
+    }
+}
+
 void testEveryCorpusSceneLints() {
     group("design lint over the whole corpus");
     // validate() knows about minimum radius, taper rate, grade, and vertical
@@ -3141,6 +3237,7 @@ int main() {
     testSeamSmearIsMillimetresWide();
     testProfileTextureIsWhatTheShaderWouldSample();
     testRoadSurfacesDoNotOverlap();
+    testRampsAbutTheirMainline();
     testEveryCorpusSceneLints();
     testEarthworksRunOnTheirBatter();
     testPaintSurvivesLod();
