@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "environment": { "skyColor": [0.55, 0.68, 0.86] },
+  "entities": [
+    {
+      "name": "merge",
+      "shape": "roadlab",
+      "position": [0, 0, 0],
+      "roadlab": {
+        "generator": "showcase",
+        "seed": 3,
+        "terrain": false,
+        "props": false
+      }
+    }
+  ],
+  "player": {
+    "position": [275.3, 2.8, 292.8],
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.8 },
+    "friction": 0.5
+  },
+  "lighting": { "sun": { "direction": [0.45, 0.55, -0.5] } }
+}
