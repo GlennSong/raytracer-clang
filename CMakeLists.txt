@@ -125,6 +125,7 @@ add_library(engine_core STATIC
     src/engine/xr/xr_gestures.cpp
     src/engine/xr/xr_touch.cpp
     src/engine/xr/xr_palette.cpp
+    src/engine/xr/xr_grasp.cpp
     src/engine/script_assets.cpp
     src/engine/script_watch.cpp
     src/engine/level_loader.cpp

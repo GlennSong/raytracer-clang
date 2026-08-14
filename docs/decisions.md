@@ -5781,6 +5781,76 @@ real room.
 
 ---
 
+## ADR-0079 — The XR interaction stack: spring-grip holds, grip + hand memory, and the hook/hold split
+**Status:** Accepted · **Date:** 2026-08-14
+
+**Context.** The sandbox's first grab loop (pinch → SetMotionType kinematic →
+moveKinematic carry → release with fitted velocities) worked but could never
+feel like holding: a kinematic carry ignores collision (the held crate ghosts
+through the table), release quality depends on a throw estimator, only a pinch
+can grab, and only one hand can hold a thing. The user's ask — Boneworks-grade
+holding: grab in any orientation, natural fist grips, turn an object in the
+hand, toss it hand-to-hand, work a mechanism on a held object — plus an
+explicit architecture question: is this a reusable XR system or sandbox code?
+
+**Decision.** It is a named, platform-neutral XR INTERACTION STACK, layered
+exactly like the rest of the engine's seams:
+
+- **Pure cores** in `engine/xr/` — `xr_gestures` (pinch, palm pose, pose
+  history, adaptive filter, bone capsules), `xr_touch` (oriented nearest-point
+  queries), `xr_palette` (spawn-palette FSM), and now `xr_grasp` (grip memory,
+  hand memory, placement alignment). No SDK or physics types; every threshold
+  that defines how grabbing FEELS is host-tested from synthetic streams
+  (`tests/test_xr_grasp.cpp`), because tuning must not need a headset.
+- **Physics primitives** in `PhysicsWorld` — object layers (`Hand` collides
+  with dynamic bodies only; `Grip` collides with nothing), a constraint
+  registry (`addGripSpring`/`addHinge`/`addSlider`/`removeConstraint`, vehicle
+  slot idiom), and contact persistence (`activeContacts` — "is this fingertip
+  still on it?"), covered by Jolt-backed cases in the physics suite.
+- **The system** (`HandInteractionSystem`) composes them; any backend that
+  fills `XrState` (visionOS today, OpenXR/Quest/Android XR later) gets the
+  whole stack unchanged.
+
+The grasp design splits HOOK from HOLD. The hook decision is finger-shaped:
+pinch near the oriented surface, or CLOSURE — two-plus fingertip capsules
+touching with opposed contact normals (`XrGripMemory::opposed`, the "held on
+each side" condition), which is what lets a fist take a pillar with no pinch
+and a moving object be CAUGHT the frame fingers close around it. The hold is
+deliberately not per-finger springs (sticky single-finger touches,
+underdetermined orientation): it is ONE 6-DOF spring between a per-hand
+kinematic grip anchor and the object, created at the current relative pose
+with bounded motor force/torque. The object STAYS DYNAMIC — it collides while
+carried, drags along real tables, presses stacks gently, and leaves with its
+true momentum, which deletes the throw estimator and the carry-pose render
+special case (held objects interpolate like everything else). Each hand hooks
+its own spring, so two-hand holds and hand-to-hand tosses fall out; the
+closure path has no cooldowns, so regripping ("turn it around in my hand") is
+continuous unhook→hook.
+
+Two memories make it robust: GRIP memory stores hook-time fingertip anchors
+in object-local space (release = live tips drifting off them past hysteresis,
+sustained 150ms; tracking dropout reads as closed, never as "let go"), and
+HAND memory snapshots the grip frame per frame so a dropout mid-throw COASTS
+on the fitted velocity (~150ms budget, decayed, least-squares fit) and
+reacquire blends back instead of teleporting. Placement assist
+(`xrAlignToSupport`) never fights the grip by construction: while held it
+only draws a ghost; the snap applies at release, and only under 0.25 m/s —
+a deliberate set-down. Articulated items (chest lid on a hinge, bolt on a
+slider with soft ends) are two hookable bodies + one limit constraint.
+
+**Consequences.** Grabbing became a physics behaviour instead of a pose
+override, so everything downstream simplifies: no motion-type switching, no
+velocity handoff, no held-object special cases. The cost is constraint
+bookkeeping (springs must be removed on release/recycle/stop — the registry
+wakes both bodies on removal, or slept partners float) and closure scanning,
+bounded by the object cap and the contact map. Force limits (250 N / 15 Nm)
+are the safety valve: a wedged object stretches its spring rather than
+exploding the solver. Not in scope yet: per-finger visual hand posing around
+the held shape, and surface-store-aware placement (the assist currently
+supports aligned box tops and a downward ray).
+
+---
+
 *Add a new ADR when a decision is hard to reverse, affects multiple modules, or
 trades off something a future maintainer would question. Keep the register
 current as interim seams are paid down.*

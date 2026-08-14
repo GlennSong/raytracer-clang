@@ -260,6 +260,7 @@ struct RenderSettingsView: View {
     @State private var showNormals = false
     @State private var arShadows = true
     @State private var depthView = false
+    @State private var placeAssist = true
     @State private var saved = false
 
     var body: some View {
@@ -304,6 +305,10 @@ struct RenderSettingsView: View {
                     Toggle("Depth view", isOn: $depthView)
                         .onChange(of: depthView) { _, v in
                             rt_vision_set_pref_bool("xr.depthView", v ? 1 : 0)
+                        }
+                    Toggle("Placement assist", isOn: $placeAssist)
+                        .onChange(of: placeAssist) { _, v in
+                            rt_vision_set_pref_bool("xr.placeAssist", v ? 1 : 0)
                         }
                 }
                 Section("Look") {
@@ -384,6 +389,7 @@ struct RenderSettingsView: View {
         showNormals = rt_vision_get_pref_bool("xr.showNormals", 0) != 0
         arShadows = rt_vision_get_pref_bool("xr.shadows", 1) != 0
         depthView = rt_vision_get_pref_bool("xr.depthView", 0) != 0
+        placeAssist = rt_vision_get_pref_bool("xr.placeAssist", 1) != 0
     }
 }
 

@@ -127,6 +127,32 @@ follow the provider conventions this file already uses, but were authored
 where visionOS code cannot compile. Check spellings against the SDK's ARKit
 headers on first build; every uncertain symbol is confined to that one block.
 
+## The AR sandbox and the XR interaction stack (ADR-0079)
+
+The "AR sandbox" scene (`sandbox_state.cpp`, mixed immersion) is the proving
+ground for the engine's XR INTERACTION STACK — which is deliberately NOT in
+this directory. Pure cores live in `engine/xr/` (`xr_gestures`, `xr_touch`,
+`xr_palette`, `xr_grasp` — host-tested, no SDK types), physics primitives in
+`PhysicsWorld` (Hand/Grip layers, grip-spring/hinge/slider constraints,
+`activeContacts`), and `HandInteractionSystem` composes them. This backend
+only fills `XrState` (hand skeletons queried at PREDICTED presentation time —
+the `query_anchors_at_timestamp` call is a VERIFY symbol with a
+`get_latest_anchors` fallback); an OpenXR backend would reuse everything else
+unchanged.
+
+Holding is one 6-DOF spring per hand (hook by pinch near the oriented
+surface, or by CLOSURE — fingertips on opposing sides); the held object stays
+dynamic. Releases are pinch-open or grip-memory opening; a gentle release
+(< 0.25 m/s) near a support takes the placement-assist ghost's pose (pref
+`xr.placeAssist`). Tracking dropouts coast on `XrHandMemory` for ~150ms.
+
+Device checks for a grasp build: hook logs say
+`[xr] hook R crate (closure, 3 contacts)`; a crate grabbed upside down hangs
+as grabbed and DRAGS along the real table while carried; a fist (no pinch)
+takes a pillar; opening the hand mid-swing throws with real momentum; the
+chest's lid hinges while the chest is held in the other hand; the bolt slides
+6cm and springs back; a toss between hands logs `[xr] toss L->R crate`.
+
 ## Building
 
 Simulator (no signing, no account needed):

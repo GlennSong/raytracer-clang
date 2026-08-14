@@ -20,6 +20,11 @@ enum class BodyMotion { Static, Kinematic, Dynamic };
 using PhysicsBodyId = uint32_t;
 constexpr PhysicsBodyId INVALID_PHYSICS_BODY = 0xFFFFFFFFu;
 
+// A two-body constraint (grip spring, hinge, slider) owned by the world.
+// Slot-index id, never recycled — same idiom as VehicleId.
+using ConstraintId = uint32_t;
+constexpr ConstraintId INVALID_CONSTRAINT = 0xFFFFFFFFu;
+
 // Opaque handle to a virtual character controller (an index into the world's
 // character list). Distinct from PhysicsBodyId — a CharacterVirtual is a
 // kinematic collide-and-slide proxy, not a simulated rigid body, so it can step
@@ -86,13 +91,51 @@ public:
     // from the wrist (XrPoseHistory::angularVelocity).
     void setAngularVelocity(PhysicsBodyId id, const Vec3& velocity);
 
-    // Switch a live body between Dynamic and Kinematic (a grab takes an
-    // object kinematic, the release hands it back) without recreating it —
-    // the id stays stable for the object's lifetime. Both motions live on
-    // the same object layer, so no layer bookkeeping; converting to/from
+    // Switch a live body between Dynamic and Kinematic without recreating
+    // it — the id stays stable for the object's lifetime. Both motions live
+    // on the same object layer, so no layer bookkeeping; converting to/from
     // Static is NOT supported here (that changes layers — create the body
     // with the right motion instead).
     void setMotionType(PhysicsBodyId id, BodyMotion motion);
+
+    // --- XR interaction primitives (the grasp stack) ---
+
+    // Collision role of a live body. Hand = the hand's bone capsules: shove
+    // dynamic bodies, pass through static geometry (the real hand already
+    // stops on the real table). Grip = a per-hand constraint anchor that
+    // collides with NOTHING — it exists to be one end of a grip spring.
+    enum class BodyLayer { Default, Hand, Grip };
+    void setBodyLayer(PhysicsBodyId id, BodyLayer layer);
+
+    // The hold: one 6-DOF spring between a (kinematic, Grip-layer) anchor
+    // body and a dynamic object, created AT THE CURRENT RELATIVE POSE — the
+    // grab keeps whatever orientation the hand took it in. All six axes are
+    // held by position motors with spring response (frequency/damping) and
+    // BOUNDED force/torque: the held object stays dynamic, collides while
+    // carried, presses with finite force, and leaves with true momentum on
+    // removeConstraint. No unhook velocity handoff needed.
+    ConstraintId addGripSpring(PhysicsBodyId grip, PhysicsBodyId object,
+                               Real frequency = 20.0, Real damping = 1.0,
+                               Real maxForce = 250.0, Real maxTorque = 15.0);
+
+    // Articulated objects: hinge (lid) and slider (bolt) between two live
+    // bodies, anchored at a world-space pivot/axis, with travel limits.
+    // springFrequency > 0 adds soft limit springs (a lid that eases shut,
+    // a bolt with detent-like ends); 0 = hard stops.
+    ConstraintId addHinge(PhysicsBodyId a, PhysicsBodyId b,
+                          const Vec3& worldPivot, const Vec3& worldAxis,
+                          Real minAngle, Real maxAngle,
+                          Real springFrequency = 0.0);
+    ConstraintId addSlider(PhysicsBodyId a, PhysicsBodyId b,
+                           const Vec3& worldPoint, const Vec3& worldAxis,
+                           Real minDistance, Real maxDistance,
+                           Real springFrequency = 0.0);
+    void removeConstraint(ConstraintId id);
+
+    // Current touches involving `body` (persisted contacts included — the
+    // grasp stack's "is the fingertip still on it?"). Each returned event
+    // has bodyA == body and the normal pointing AWAY from it.
+    void activeContacts(PhysicsBodyId body, std::vector<ContactEvent>& out);
 
     // Drive a KINEMATIC body toward a target pose over `dt` (Jolt MoveKinematic):
     // the body moves with the velocity needed to arrive, so it pushes dynamic

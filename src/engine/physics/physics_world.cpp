@@ -24,6 +24,10 @@
 #include <Jolt/Physics/Vehicle/WheeledVehicleController.h>
 #include <Jolt/Physics/Vehicle/VehicleCollisionTester.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
+#include <Jolt/Physics/Body/BodyLockMulti.h>
+#include <Jolt/Physics/Constraints/SixDOFConstraint.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <Jolt/RegisterTypes.h>
 
 #include <algorithm>
@@ -31,6 +35,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
+#include <unordered_map>
 
 namespace engine {
 
@@ -38,12 +43,20 @@ JPH_SUPPRESS_WARNINGS
 
 namespace {
 
-// Two object layers (and a 1:1 broadphase mapping) is the standard minimal
-// setup: static vs moving, so the broadphase never rebuilds the static tree.
+// Object layers. NON_MOVING vs MOVING is the standard minimal setup (the
+// broadphase never rebuilds the static tree); HAND and GRIP serve the XR
+// interaction stack: HAND is the hand's bone capsules — they shove dynamic
+// objects but pass through static geometry (the user's real hand already
+// stops on the real table; colliders grinding there was pure waste) — and
+// GRIP is the per-hand constraint anchor, which collides with NOTHING (it
+// exists only to be one end of a grip spring). Both map onto the MOVING
+// broadphase layer, so the broadphase setup is unchanged.
 namespace Layers {
 static constexpr JPH::ObjectLayer NON_MOVING = 0;
 static constexpr JPH::ObjectLayer MOVING = 1;
-static constexpr JPH::ObjectLayer NUM_LAYERS = 2;
+static constexpr JPH::ObjectLayer HAND = 2;
+static constexpr JPH::ObjectLayer GRIP = 3;
+static constexpr JPH::ObjectLayer NUM_LAYERS = 4;
 }
 
 namespace BroadPhaseLayers {
@@ -55,9 +68,13 @@ static constexpr JPH::uint NUM_LAYERS(2);
 class ObjectLayerPairFilterImpl final : public JPH::ObjectLayerPairFilter {
 public:
     bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
+        // Must stay symmetric: ShouldCollide(a,b) == ShouldCollide(b,a).
         switch (a) {
             case Layers::NON_MOVING: return b == Layers::MOVING;
-            case Layers::MOVING: return true;
+            case Layers::MOVING:
+                return b != Layers::GRIP;   // moving hits everything but grips
+            case Layers::HAND: return b == Layers::MOVING;
+            case Layers::GRIP: return false;
             default: return false;
         }
     }
@@ -68,6 +85,8 @@ public:
     BPLayerInterfaceImpl() {
         mapping[Layers::NON_MOVING] = BroadPhaseLayers::NON_MOVING;
         mapping[Layers::MOVING] = BroadPhaseLayers::MOVING;
+        mapping[Layers::HAND] = BroadPhaseLayers::MOVING;
+        mapping[Layers::GRIP] = BroadPhaseLayers::MOVING;
     }
     JPH::uint GetNumBroadPhaseLayers() const override {
         return BroadPhaseLayers::NUM_LAYERS;
@@ -91,6 +110,8 @@ public:
         switch (layer) {
             case Layers::NON_MOVING: return bp == BroadPhaseLayers::MOVING;
             case Layers::MOVING: return true;
+            case Layers::HAND: return bp == BroadPhaseLayers::MOVING;
+            case Layers::GRIP: return false;
             default: return false;
         }
     }
@@ -160,11 +181,13 @@ constexpr JPH::uint MAX_CONTACT_CONSTRAINTS = 10240;
 
 }  // namespace
 
-// Records every NEW contact Jolt reports (ADR-0071). OnContactAdded fires on
-// physics worker threads during PhysicsSystem::Update, so the buffer is
-// mutex-guarded; drain() hands the batch to the main thread after the step.
-// Only added contacts are recorded — persisted (resting) contacts don't
-// refire, so the stream is edge-triggered impacts, not per-step spam.
+// Records every NEW contact Jolt reports (ADR-0071), and — for the XR
+// grasp stack — maintains the set of CURRENTLY TOUCHING pairs. The added
+// stream stays edge-triggered impacts (persisted contacts don't refire into
+// it); the touching map is updated on added/persisted and pruned on removed,
+// so "is fingertip X still on object Y, and pressing which way?" is
+// answerable any time. All hooks fire on physics worker threads during
+// PhysicsSystem::Update, so both structures are mutex-guarded.
 class ContactCollector final : public JPH::ContactListener {
 public:
     void OnContactAdded(const JPH::Body& body1, const JPH::Body& body2,
@@ -180,8 +203,35 @@ public:
         event.position = fromJolt(point);
         event.normal = fromJolt(JPH::RVec3(manifold.mWorldSpaceNormal));
         event.approachSpeed = std::fabs(relVel.Dot(manifold.mWorldSpaceNormal));
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            events.push_back(event);
+            touching[pairKey(event.bodyA, event.bodyB)] = event;
+        }
+    }
+
+    void OnContactPersisted(const JPH::Body& body1, const JPH::Body& body2,
+                            const JPH::ContactManifold& manifold,
+                            JPH::ContactSettings&) override {
+        // Refresh the touching entry's point/normal (the bodies may have
+        // rolled), but do NOT emit an event — resting is not an impact.
+        ContactEvent event;
+        event.bodyA = body1.GetID().GetIndexAndSequenceNumber();
+        event.bodyB = body2.GetID().GetIndexAndSequenceNumber();
+        event.position = fromJolt(manifold.GetWorldSpaceContactPointOn1(0));
+        event.normal = fromJolt(JPH::RVec3(manifold.mWorldSpaceNormal));
+        event.approachSpeed = 0;
         std::lock_guard<std::mutex> lock(mutex);
-        events.push_back(event);
+        touching[pairKey(event.bodyA, event.bodyB)] = event;
+    }
+
+    void OnContactRemoved(const JPH::SubShapeIDPair& pair) override {
+        const PhysicsBodyId a =
+            pair.GetBody1ID().GetIndexAndSequenceNumber();
+        const PhysicsBodyId b =
+            pair.GetBody2ID().GetIndexAndSequenceNumber();
+        std::lock_guard<std::mutex> lock(mutex);
+        touching.erase(pairKey(a, b));
     }
 
     std::vector<ContactEvent> drain() {
@@ -191,9 +241,42 @@ public:
         return out;
     }
 
+    // Current touches involving `body`. The event's bodyA is rewritten to be
+    // the QUERIED body and the normal flipped to point AWAY from it, so the
+    // caller never has to care which side Jolt put it on.
+    void activeContacts(PhysicsBodyId body, std::vector<ContactEvent>& out) {
+        std::lock_guard<std::mutex> lock(mutex);
+        for (const auto& [key, event] : touching) {
+            if (event.bodyA != body && event.bodyB != body) continue;
+            ContactEvent oriented = event;
+            if (event.bodyB == body) {
+                oriented.bodyA = event.bodyB;
+                oriented.bodyB = event.bodyA;
+                oriented.normal = event.normal * -1.0;
+            }
+            out.push_back(oriented);
+        }
+    }
+
+    void forgetBody(PhysicsBodyId body) {
+        std::lock_guard<std::mutex> lock(mutex);
+        for (auto it = touching.begin(); it != touching.end();) {
+            if (it->second.bodyA == body || it->second.bodyB == body)
+                it = touching.erase(it);
+            else
+                ++it;
+        }
+    }
+
 private:
+    static uint64_t pairKey(PhysicsBodyId a, PhysicsBodyId b) {
+        if (a > b) std::swap(a, b);
+        return (static_cast<uint64_t>(a) << 32) | b;
+    }
+
     std::mutex mutex;
     std::vector<ContactEvent> events;
+    std::unordered_map<uint64_t, ContactEvent> touching;
 };
 
 struct PhysicsWorld::Impl {
@@ -227,6 +310,12 @@ struct PhysicsWorld::Impl {
         int wheels = 0;
     };
     std::vector<Vehicle> vehicles;
+
+    // Generic two-body constraints (grip springs, hinges, sliders — the XR
+    // grasp stack + articulated objects). Same never-compacted slot idiom
+    // as vehicles: the ConstraintId is the index, removeConstraint releases
+    // the ref and the slot stays dead.
+    std::vector<JPH::Ref<JPH::Constraint>> constraints;
 
     JPH::BodyInterface& bodies() { return physicsSystem.GetBodyInterface(); }
     const JPH::BodyInterface& bodies() const {
@@ -369,6 +458,8 @@ PhysicsBodyId PhysicsWorld::addMesh(const std::vector<Vec3>& vertices,
 
 void PhysicsWorld::removeBody(PhysicsBodyId id) {
     if (!impl || id == INVALID_PHYSICS_BODY) return;
+    // Callers must removeConstraint anything attached to this body first.
+    impl->contacts.forgetBody(id);   // no stale "still touching" entries
     JPH::BodyID bid(id);
     impl->bodies().RemoveBody(bid);
     impl->bodies().DestroyBody(bid);
@@ -389,6 +480,165 @@ void PhysicsWorld::setMotionType(PhysicsBodyId id, BodyMotion motion) {
     if (motion == BodyMotion::Static) return;   // layer change — unsupported
     impl->bodies().SetMotionType(JPH::BodyID(id), toMotionType(motion),
                                  JPH::EActivation::Activate);
+}
+
+void PhysicsWorld::setBodyLayer(PhysicsBodyId id, BodyLayer layer) {
+    if (!impl || id == INVALID_PHYSICS_BODY) return;
+    JPH::ObjectLayer target = Layers::MOVING;
+    if (layer == BodyLayer::Hand) target = Layers::HAND;
+    else if (layer == BodyLayer::Grip) target = Layers::GRIP;
+    impl->bodies().SetObjectLayer(JPH::BodyID(id), target);
+}
+
+// Store a created two-body constraint in the slot registry (vehicle idiom:
+// index = id, never compacted). Member-adjacent macro-free helper isn't
+// possible at namespace scope (Impl is private), so each add* inlines it.
+#define RT_STORE_CONSTRAINT(constraintExpr)                                  \
+    do {                                                                     \
+        JPH::TwoBodyConstraint* stored_ = (constraintExpr);                  \
+        if (!stored_) return INVALID_CONSTRAINT;                             \
+        impl->physicsSystem.AddConstraint(stored_);                          \
+        impl->constraints.emplace_back(stored_);                             \
+        return static_cast<ConstraintId>(impl->constraints.size() - 1);      \
+    } while (0)
+
+ConstraintId PhysicsWorld::addGripSpring(PhysicsBodyId grip,
+                                         PhysicsBodyId object,
+                                         Real frequency, Real damping,
+                                         Real maxForce, Real maxTorque) {
+    if (!impl || grip == INVALID_PHYSICS_BODY ||
+        object == INVALID_PHYSICS_BODY)
+        return INVALID_CONSTRAINT;
+
+    const JPH::BodyID ids[2] = {JPH::BodyID(grip), JPH::BodyID(object)};
+    // A long-resting object is asleep; hooking it must take effect NOW, not
+    // on the next incidental contact. (Before the body lock below — the
+    // locking BodyInterface on a locked body would deadlock.)
+    impl->bodies().ActivateBody(ids[1]);
+    JPH::BodyLockMultiWrite lock(impl->physicsSystem.GetBodyLockInterface(),
+                                 ids, 2);
+    JPH::Body* gripBody = lock.GetBody(0);
+    JPH::Body* objectBody = lock.GetBody(1);
+    if (!gripBody || !objectBody) return INVALID_CONSTRAINT;
+
+    // Constraint frames at the GRIP body's pose, world space: the current
+    // relative pose becomes the rest pose, so target position zero / target
+    // orientation identity means "stay exactly as grabbed".
+    JPH::SixDOFConstraintSettings settings;
+    settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+    settings.mPosition1 = settings.mPosition2 = gripBody->GetPosition();
+    for (int axis = 0; axis < JPH::SixDOFConstraintSettings::EAxis::Num;
+         axis++) {
+        const bool rotation =
+            axis >= JPH::SixDOFConstraintSettings::EAxis::RotationX;
+        JPH::MotorSettings& motor = settings.mMotorSettings[axis];
+        motor.mSpringSettings = JPH::SpringSettings(
+            JPH::ESpringMode::FrequencyAndDamping,
+            static_cast<float>(frequency), static_cast<float>(damping));
+        // BOUNDED effort is the whole point: a wedged object makes the
+        // spring stretch, never the solver explode.
+        if (rotation) {
+            motor.SetTorqueLimit(static_cast<float>(maxTorque));
+        } else {
+            motor.SetForceLimit(static_cast<float>(maxForce));
+        }
+    }
+
+    JPH::SixDOFConstraint* constraint = static_cast<JPH::SixDOFConstraint*>(
+        settings.Create(*gripBody, *objectBody));
+    if (!constraint) return INVALID_CONSTRAINT;
+    for (int axis = 0; axis < JPH::SixDOFConstraintSettings::EAxis::Num;
+         axis++) {
+        constraint->SetMotorState(
+            static_cast<JPH::SixDOFConstraintSettings::EAxis>(axis),
+            JPH::EMotorState::Position);
+    }
+    constraint->SetTargetPositionCS(JPH::Vec3::sZero());
+    constraint->SetTargetOrientationCS(JPH::Quat::sIdentity());
+    RT_STORE_CONSTRAINT(constraint);
+}
+
+ConstraintId PhysicsWorld::addHinge(PhysicsBodyId a, PhysicsBodyId b,
+                                    const Vec3& worldPivot,
+                                    const Vec3& worldAxis, Real minAngle,
+                                    Real maxAngle, Real springFrequency) {
+    if (!impl || a == INVALID_PHYSICS_BODY || b == INVALID_PHYSICS_BODY)
+        return INVALID_CONSTRAINT;
+    const JPH::BodyID ids[2] = {JPH::BodyID(a), JPH::BodyID(b)};
+    JPH::BodyLockMultiWrite lock(impl->physicsSystem.GetBodyLockInterface(),
+                                 ids, 2);
+    if (!lock.GetBody(0) || !lock.GetBody(1)) return INVALID_CONSTRAINT;
+
+    JPH::HingeConstraintSettings settings;
+    settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+    settings.mPoint1 = settings.mPoint2 = toJolt(worldPivot);
+    const JPH::Vec3 axis = toJolt(worldAxis).Normalized();
+    settings.mHingeAxis1 = settings.mHingeAxis2 = axis;
+    const JPH::Vec3 normal = axis.GetNormalizedPerpendicular();
+    settings.mNormalAxis1 = settings.mNormalAxis2 = normal;
+    settings.mLimitsMin = static_cast<float>(minAngle);
+    settings.mLimitsMax = static_cast<float>(maxAngle);
+    if (springFrequency > 0) {
+        settings.mLimitsSpringSettings = JPH::SpringSettings(
+            JPH::ESpringMode::FrequencyAndDamping,
+            static_cast<float>(springFrequency), 1.0f);
+    }
+    RT_STORE_CONSTRAINT(static_cast<JPH::TwoBodyConstraint*>(
+        settings.Create(*lock.GetBody(0), *lock.GetBody(1))));
+}
+
+ConstraintId PhysicsWorld::addSlider(PhysicsBodyId a, PhysicsBodyId b,
+                                     const Vec3& worldPoint,
+                                     const Vec3& worldAxis, Real minDistance,
+                                     Real maxDistance, Real springFrequency) {
+    if (!impl || a == INVALID_PHYSICS_BODY || b == INVALID_PHYSICS_BODY)
+        return INVALID_CONSTRAINT;
+    const JPH::BodyID ids[2] = {JPH::BodyID(a), JPH::BodyID(b)};
+    JPH::BodyLockMultiWrite lock(impl->physicsSystem.GetBodyLockInterface(),
+                                 ids, 2);
+    if (!lock.GetBody(0) || !lock.GetBody(1)) return INVALID_CONSTRAINT;
+
+    JPH::SliderConstraintSettings settings;
+    settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+    settings.mPoint1 = settings.mPoint2 = toJolt(worldPoint);
+    settings.SetSliderAxis(toJolt(worldAxis).Normalized());
+    settings.mLimitsMin = static_cast<float>(minDistance);
+    settings.mLimitsMax = static_cast<float>(maxDistance);
+    if (springFrequency > 0) {
+        settings.mLimitsSpringSettings = JPH::SpringSettings(
+            JPH::ESpringMode::FrequencyAndDamping,
+            static_cast<float>(springFrequency), 1.0f);
+    }
+    RT_STORE_CONSTRAINT(static_cast<JPH::TwoBodyConstraint*>(
+        settings.Create(*lock.GetBody(0), *lock.GetBody(1))));
+}
+
+#undef RT_STORE_CONSTRAINT
+
+void PhysicsWorld::removeConstraint(ConstraintId id) {
+    if (!impl || id == INVALID_CONSTRAINT ||
+        id >= impl->constraints.size() || !impl->constraints[id])
+        return;
+    // WAKE both bodies first: an object held perfectly still long enough
+    // falls asleep, and a sleeping body ignores the constraint vanishing —
+    // it would hang in the air after release (caught by
+    // grip_spring_holds_object_at_grabbed_offset).
+    // Every constraint this registry stores is two-body by construction
+    // (grip/hinge/slider), and Jolt builds without RTTI — static_cast.
+    auto* two = static_cast<JPH::TwoBodyConstraint*>(
+        impl->constraints[id].GetPtr());
+    if (two->GetBody1())
+        impl->bodies().ActivateBody(two->GetBody1()->GetID());
+    if (two->GetBody2())
+        impl->bodies().ActivateBody(two->GetBody2()->GetID());
+    impl->physicsSystem.RemoveConstraint(impl->constraints[id]);
+    impl->constraints[id] = nullptr;
+}
+
+void PhysicsWorld::activeContacts(PhysicsBodyId body,
+                                  std::vector<ContactEvent>& out) {
+    if (!impl || body == INVALID_PHYSICS_BODY) return;
+    impl->contacts.activeContacts(body, out);
 }
 
 Vec3 PhysicsWorld::getLinearVelocity(PhysicsBodyId id) const {

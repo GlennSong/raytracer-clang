@@ -3,6 +3,7 @@
 #include "../src/engine/physics/physics_world.h"
 #include "../src/job_system.h"
 #include <vector>
+#include <cstdio>
 
 using namespace engine;  // namespace migration (ADR-0015)
 
@@ -459,4 +460,156 @@ TEST_CASE(physics_resting_contact_does_not_respam_events) {
     step(world, 60);
     // Resting on the floor is a persisted contact — no new ContactEvents.
     CHECK(world.drainContactEvents().empty());
+}
+
+// --- XR grasp primitives: grip springs, joints, layers, contacts ----------
+
+TEST_CASE(grip_spring_holds_object_at_grabbed_offset) {
+    PhysicsWorld world;
+    world.initialize();
+    addFloor(world);
+    // Grip anchor (kinematic, no collisions) 20cm above a dynamic crate:
+    // hook, then move the grip — the crate must follow, keeping the offset.
+    PhysicsBodyId grip = world.addSphere(0.01, Vec3(0, 1.2, 0),
+                                         Quat::identity(),
+                                         BodyMotion::Kinematic);
+    world.setBodyLayer(grip, PhysicsWorld::BodyLayer::Grip);
+    PhysicsBodyId crate = world.addBox(Vec3(0.075, 0.075, 0.075),
+                                       Vec3(0, 1.0, 0), Quat::identity(),
+                                       BodyMotion::Dynamic, 0.0, 0.7);
+    const ConstraintId spring = world.addGripSpring(grip, crate);
+    CHECK(spring != INVALID_CONSTRAINT);
+
+    // Carry sideways a metre over a second, then HOLD (kinematic bodies
+    // keep their last moveKinematic velocity, so the hold must keep
+    // commanding the rest position).
+    for (int i = 0; i <= 60; i++) {
+        world.moveKinematic(grip, Vec3(i / 60.0, 1.2, 0), Quat::identity(),
+                            1.0 / 60.0);
+        world.update(1.0 / 60.0);
+    }
+    for (int i = 0; i < 30; i++) {
+        world.moveKinematic(grip, Vec3(1.0, 1.2, 0), Quat::identity(),
+                            1.0 / 60.0);
+        world.update(1.0 / 60.0);
+    }
+    const Vec3 p = world.bodyPosition(crate);
+    CHECK(std::abs(p.x - 1.0) < 0.05);        // followed the carry
+    CHECK(std::abs(p.y - 1.0) < 0.05);        // kept the 20cm-below offset
+
+    // Unhook: the crate is dynamic and simply falls to the floor.
+    world.removeConstraint(spring);
+    step(world, 120);
+    CHECK(world.bodyPosition(crate).y < 0.2);
+    world.shutdown();
+}
+
+TEST_CASE(hinge_respects_limits) {
+    PhysicsWorld world;
+    world.initialize();
+    // A static base and a dynamic lid hinged at the base's edge; gravity
+    // swings the lid down but the 0..110deg limits stop it.
+    PhysicsBodyId base = world.addBox(Vec3(0.1, 0.02, 0.1), Vec3(0, 1, 0),
+                                      Quat::identity(), BodyMotion::Static);
+    PhysicsBodyId lid = world.addBox(Vec3(0.1, 0.01, 0.1), Vec3(0, 1.03, 0.2),
+                                     Quat::identity(), BodyMotion::Dynamic);
+    const ConstraintId hinge = world.addHinge(
+        base, lid, Vec3(0, 1.03, 0.1), Vec3(1, 0, 0), 0.0, 110.0 * PI / 180.0);
+    CHECK(hinge != INVALID_CONSTRAINT);
+    step(world, 240);
+    // The lid hangs at a limit rather than spinning free: it stays within
+    // its travel circle around the pivot (radius ~0.1 + slop).
+    const Vec3 p = world.bodyPosition(lid);
+    const Vec3 pivot(0, 1.03, 0.1);
+    CHECK((p - pivot).length() < 0.16);
+    world.shutdown();
+}
+
+TEST_CASE(slider_stays_within_travel) {
+    PhysicsWorld world;
+    world.initialize();
+    PhysicsBodyId base = world.addBox(Vec3(0.1, 0.02, 0.02), Vec3(0, 1, 0),
+                                      Quat::identity(), BodyMotion::Static);
+    PhysicsBodyId bolt = world.addBox(Vec3(0.02, 0.02, 0.02), Vec3(0, 1.05, 0),
+                                      Quat::identity(), BodyMotion::Dynamic);
+    // Vertical slider, 0..6cm of travel: gravity pulls the bolt to the low
+    // stop; a kick upward may not exceed the high stop.
+    const ConstraintId slider = world.addSlider(
+        base, bolt, Vec3(0, 1.05, 0), Vec3(0, 1, 0), -0.03, 0.03);
+    CHECK(slider != INVALID_CONSTRAINT);
+    step(world, 120);
+    CHECK(world.bodyPosition(bolt).y > 1.05 - 0.05);   // held by low stop
+    world.setLinearVelocity(bolt, Vec3(0, 3.0, 0));
+    step(world, 30);
+    CHECK(world.bodyPosition(bolt).y < 1.05 + 0.05);   // capped by high stop
+    world.shutdown();
+}
+
+TEST_CASE(hand_layer_ignores_static_hits_dynamic) {
+    PhysicsWorld world;
+    world.initialize();
+    addMeshFloor(world);
+    // A kinematic "fingertip" on the HAND layer sweeps down THROUGH the
+    // static mesh floor (no grinding on the real room)...
+    PhysicsBodyId tip = world.addSphere(0.012, Vec3(0, 0.5, 0),
+                                        Quat::identity(),
+                                        BodyMotion::Kinematic);
+    world.setBodyLayer(tip, PhysicsWorld::BodyLayer::Hand);
+    for (int i = 0; i <= 60; i++) {
+        world.moveKinematic(tip, Vec3(0, 0.5 - i / 60.0, 0),
+                            Quat::identity(), 1.0 / 60.0);
+        world.update(1.0 / 60.0);
+    }
+    CHECK(world.bodyPosition(tip).y < -0.4);   // passed the floor unimpeded
+
+    // ...but the same layer SHOVES a dynamic crate.
+    PhysicsBodyId crate = world.addBox(Vec3(0.075, 0.075, 0.075),
+                                       Vec3(2, 0.075, 0), Quat::identity(),
+                                       BodyMotion::Dynamic, 0.0, 0.3);
+    world.teleport(tip, Vec3(1.7, 0.075, 0), Quat::identity());
+    for (int i = 0; i <= 30; i++) {
+        world.moveKinematic(tip, Vec3(1.7 + 0.4 * i / 30.0, 0.075, 0),
+                            Quat::identity(), 1.0 / 60.0);
+        world.update(1.0 / 60.0);
+    }
+    CHECK(world.bodyPosition(crate).x > 2.02);   // got pushed
+    world.shutdown();
+}
+
+TEST_CASE(active_contacts_track_touch_and_orient_the_normal) {
+    PhysicsWorld world;
+    world.initialize();
+    addFloor(world);
+    PhysicsBodyId crate = world.addBox(Vec3(0.075, 0.075, 0.075),
+                                       Vec3(0, 0.5, 0), Quat::identity(),
+                                       BodyMotion::Dynamic, 0.0, 0.7);
+    // Fall (~0.3s) + a short rest — but NOT long enough for the island to
+    // SLEEP: Jolt drops sleeping pairs from the contact cache, so
+    // activeContacts covers awake bodies (the grasp stack's hands are
+    // kinematic and keep everything they touch awake — the caveat never
+    // bites there).
+    step(world, 40);
+
+    // Resting contact must be VISIBLE (persisted, not just the add edge),
+    // with the normal pointing AWAY from the queried body: query the crate
+    // and the floor pushes up at it -> normal.y < 0 from the crate's view?
+    // No — away from the crate means toward the floor: normal points from
+    // the crate outward through the contact, i.e. DOWN.
+    std::vector<ContactEvent> touches;
+    world.activeContacts(crate, touches);
+    CHECK(!touches.empty());
+    bool foundFloorTouch = false;
+    for (const ContactEvent& t : touches) {
+        CHECK(t.bodyA == crate);
+        if (t.normal.y < -0.9) foundFloorTouch = true;
+    }
+    CHECK(foundFloorTouch);
+
+    // Lift the crate away: the touch entry must clear.
+    world.teleport(crate, Vec3(0, 2, 0), Quat::identity());
+    step(world, 5);
+    touches.clear();
+    world.activeContacts(crate, touches);
+    CHECK(touches.empty());
+    world.shutdown();
 }

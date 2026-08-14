@@ -149,6 +149,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_xr_gestures.cpp \
 	$(TEST_DIR)/test_xr_touch.cpp \
 	$(TEST_DIR)/test_xr_palette.cpp \
+	$(TEST_DIR)/test_xr_grasp.cpp \
 	$(TEST_DIR)/test_fall_respawn.cpp \
 	$(TEST_DIR)/test_day_night.cpp \
 	$(TEST_DIR)/test_cube_faces.cpp \
@@ -337,6 +338,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/xr/xr_gestures.cpp \
 	$(SRC_DIR)/engine/xr/xr_touch.cpp \
 	$(SRC_DIR)/engine/xr/xr_palette.cpp \
+	$(SRC_DIR)/engine/xr/xr_grasp.cpp \
 	$(SRC_DIR)/engine/scripting/script_vm.cpp \
 	$(SRC_DIR)/engine/scripting/script_modules.cpp \
 	$(SRC_DIR)/engine/scripting/procgen_bindings.cpp \
