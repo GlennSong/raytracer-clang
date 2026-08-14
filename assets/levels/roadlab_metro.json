@@ -19,16 +19,16 @@
       "roadlab": {
         "generator": "metro",
         "seed": 3,
-        "terrain": true,
+        "terrain": false,
         "props": true
       }
     }
   ],
   "player": {
     "position": [
-      -434.0,
+      -317.0,
       2.0,
-      -536.0
+      -537.0
     ],
     "collider": {
       "shape": "capsule",

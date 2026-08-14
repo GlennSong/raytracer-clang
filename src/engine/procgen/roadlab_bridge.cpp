@@ -25,7 +25,22 @@ engine::Vec3 toEngine(const roadlab::Vec3& v) {
 // tessellator never mixes materials within a triangle, and the invariant is
 // worth stating because a silent mix would show up as one stray asphalt tri in
 // the middle of a field.
-void split(const roadlab::Mesh& src, Baked& out) {
+// Which roads are CONNECTORS — the per-turning-movement curves a junction
+// generates. roadlab draws them as full road ribbons lying on the junction pad,
+// which its own software rasterizer tolerates but a depth buffer does not: two
+// coplanar opaque surfaces tear against each other, and a four-arm junction has
+// twelve of them stacked on one pad. The pad is the junction's visible surface;
+// the connectors are its topology, and the lane graph still has them.
+std::vector<char> connectorRoads(const roadlab::Network& net) {
+    std::vector<char> isConn(size_t(net.roadCount()), 0);
+    for (const roadlab::Road& r : net.roads())
+        if (r.kind == roadlab::RoadKind::Connector && r.id >= 0 &&
+            size_t(r.id) < isConn.size())
+            isConn[size_t(r.id)] = 1;
+    return isConn;
+}
+
+void split(const roadlab::Mesh& src, Baked& out, const std::vector<char>& isConn) {
     struct Bucket {
         engine::RenderMesh* mesh;
         std::vector<int> remap;
@@ -34,7 +49,11 @@ void split(const roadlab::Mesh& src, Baked& out) {
     for (Bucket& b : buckets) b.remap.assign(src.verts.size(), -1);
 
     for (size_t i = 0; i + 2 < src.indices.size(); i += 3) {
-        int kind = static_cast<int>(src.verts[src.indices[i]].material);
+        const roadlab::Vertex& first = src.verts[src.indices[i]];
+        if (first.road >= 0 && size_t(first.road) < isConn.size() &&
+            isConn[size_t(first.road)])
+            continue;
+        int kind = static_cast<int>(first.material);
         if (kind < 0 || kind > 2) kind = 2;
         Bucket& b = buckets[kind];
         for (int k = 0; k < 3; ++k) {
@@ -87,7 +106,7 @@ bool build(const Recipe& recipe, Baked& out, std::string& error) {
     if (recipe.terrainWave > 0) sc.terrain.frequency = 1.0 / recipe.terrainWave;
 
     roadlab::finalizeScene(sc, recipe.terrain, recipe.props);
-    split(sc.mesh, out);
+    split(sc.mesh, out, connectorRoads(sc.net));
     out.roads = sc.net.roadCount();
     out.junctions = sc.net.junctionCount();
     out.buildMs = std::chrono::duration<double, std::milli>(
