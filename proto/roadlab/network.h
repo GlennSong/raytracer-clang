@@ -94,7 +94,11 @@ struct Road {
     // so "drop a lane at 150 m" and "add a turn bay at 400 m" compose instead of
     // the second silently undoing the first.
     struct ProfileEdit {
-        enum class Kind : uint8_t { Lanes, TurnBay, Twltl, Auxiliary };
+        // GoreShoulder is the DOWNSTREAM half of a gore, and it is an edit in its
+        // own right rather than a flag because it lands on a different road: an
+        // exit splits the mainline, and the piece that needs its shoulder out of
+        // the ramp's way is the tail, which does not carry the auxiliary edit.
+        enum class Kind : uint8_t { Lanes, TurnBay, Twltl, Auxiliary, GoreShoulder };
         Kind kind = Kind::Lanes;
         double s = 0;
         double runLength = -1;   // < 0 = to the end of the road
@@ -114,6 +118,12 @@ struct Road {
         // a time and would otherwise report the mainline's share of a gore as a
         // 1:4 kink that nobody experiences.
         bool mergeNose = false;
+        // How long the retracted shoulder is HELD, beyond the taper that
+        // retracts it: the stretch over which the ramp is already running
+        // alongside at the lane's edge rather than still converging on it. See
+        // solveRunIn — a taper that only reaches zero AT the nose leaves the
+        // shoulder under the ramp for the whole parallel run.
+        double goreHold = 0;
     };
     std::vector<ProfileEdit> profileEdits;
 

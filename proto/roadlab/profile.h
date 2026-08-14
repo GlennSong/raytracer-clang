@@ -249,7 +249,8 @@ private:
 // speed-derived taper. Returns the section list to hand to a ProfileTimeline.
 LaneSection sectionWithLanesChanged(const LaneSection& base, int side, int delta,
                                     double laneWidth = 3.6);
-// The same section with its outermost Shoulder narrowed to nothing.
+// The same section with its outermost Shoulder — and the earthwork outboard of
+// it — narrowed to nothing.
 //
 // What a gore actually does. An auxiliary lane is inserted INBOARD of the
 // shoulder, so a ramp converging from outside has to cross the shoulder to reach
@@ -258,6 +259,14 @@ LaneSection sectionWithLanesChanged(const LaneSection& base, int side, int delta
 // narrows to zero ahead of the nose, the ramp's own pavement occupies that
 // ground, and the shoulder reappears outboard of the new lane. That is what the
 // paint on a real gore is drawn around.
+//
+// The batter goes with it. A Slope runs from the road's outer edge out to
+// natural ground, so leaving one behind while the shoulder it started from is
+// gone puts the earthwork UNDER the ramp and then out the far side of it — a
+// band of hillside crossing a carriageway, and a hard 3.5 m step in it at the
+// nose where the shoulder comes back. Whichever surface is outermost owns the
+// batter, and through a gore that is the ramp; sectionFromLaneOutward is where
+// it picks it up.
 LaneSection sectionWithShoulderRetracted(const LaneSection& base, int side);
 // Insert a turn bay: a Turn strip on `side` that exists only near a junction.
 LaneSection sectionWithTurnBay(const LaneSection& base, int side, double width = 3.3);

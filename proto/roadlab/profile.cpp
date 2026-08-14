@@ -999,11 +999,15 @@ LaneSection sectionWithLanesChanged(const LaneSection& base, int side, int delta
 LaneSection sectionWithShoulderRetracted(const LaneSection& base, int side) {
     LaneSection out = base;
     std::vector<Strip>& stack = side >= 0 ? out.left : out.right;
-    for (size_t i = stack.size(); i-- > 0;) {
-        if (stack[i].kind != StripKind::Shoulder) continue;
-        stack[i].width = Poly3::constant(0.0);
-        break;
-    }
+    size_t shoulder = stack.size();
+    for (size_t i = stack.size(); i-- > 0;)
+        if (stack[i].kind == StripKind::Shoulder) {
+            shoulder = i;
+            break;
+        }
+    // The shoulder AND everything outboard of it: the earthwork bands that ran
+    // from its edge belong to whatever now occupies that ground.
+    for (size_t i = shoulder; i < stack.size(); ++i) stack[i].width = Poly3::constant(0.0);
     return out;
 }
 

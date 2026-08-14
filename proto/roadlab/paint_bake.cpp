@@ -89,9 +89,25 @@ BoundaryStrip bakeBoundaryStrip(const Road& road, double step) {
     at.push_back(s1);
     const double kSeam = 1e-3;
     for (const LaneSection& sec : road.xs.sections) {
-        if (sec.s0 <= s0 + kSeam || sec.s0 >= s1 - kSeam) continue;
-        at.push_back(sec.s0 - kSeam);
-        at.push_back(sec.s0 + kSeam);
+        if (sec.s0 > s0 + kSeam && sec.s0 < s1 - kSeam) {
+            at.push_back(sec.s0 - kSeam);
+            at.push_back(sec.s0 + kSeam);
+        }
+        // A short section needs rings of its own, not just the pair at its ends.
+        //
+        // The seam pair keeps a step from STRADDLING a discontinuity; it says
+        // nothing about resolving what happens between two of them. Widths are
+        // cubics, and a gore nose is a section a metre or two long over which a
+        // lane goes from nothing to full width — linear interpolation between
+        // its two edges is 6 cm out near the ends, which is more than a stripe
+        // is wide. Subdividing by the section rather than by the road is what
+        // makes the strip's error a property of the geometry instead of a
+        // property of how short someone made a taper.
+        double inner0 = std::max(s0, sec.s0) + kSeam;
+        double inner1 = std::min(s1, sec.s0 + sec.length) - kSeam;
+        double span = inner1 - inner0;
+        if (span <= 0 || span >= step) continue;   // the regular grid already covers it
+        for (int k = 1; k < 4; ++k) at.push_back(inner0 + span * double(k) * 0.25);
     }
     std::sort(at.begin(), at.end());
     at.erase(std::unique(at.begin(), at.end(),

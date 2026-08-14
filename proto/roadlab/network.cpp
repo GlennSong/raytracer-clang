@@ -599,6 +599,13 @@ std::vector<std::string> Network::validate() const {
         // Taper rate: a lane whose width changes faster than 1:15 reads as a
         // kink and drives like one.
         for (const LaneSection& sec : r.xs.sections) {
+            // Only what this road actually IS. A cross-section is built over the
+            // whole spine, but a road is the window it occupies — splitting is
+            // how ramps work, and every piece carries the full timeline. A
+            // section outside the window belongs to a sibling piece, which is
+            // judged on its own, and reporting it here says the same thing about
+            // the same metre of asphalt once per piece that shares the spine.
+            if (sec.s0 + sec.length < r.begin() - 1e-6 || sec.s0 > r.end() + 1e-6) continue;
             // A sliver section carries no useful taper information; the geometry
             // lint below would report a meaningless 1:0 rate for it.
             if (sec.length < 2.0) continue;
@@ -609,13 +616,6 @@ std::vector<std::string> Network::validate() const {
             bool atNose = false;
             for (const Road::ProfileEdit& e : r.profileEdits)
                 if (e.mergeNose && std::fabs(e.s - sec.s0) < 2.0) atNose = true;
-            // ...and the same exemption has to survive a round trip through
-            // OpenDRIVE, which stores geometry rather than authoring: the edits
-            // are gone on the far side. What remains is the topology, and it says
-            // the same thing — a lane that materialises hard against a junction
-            // was handed over by whatever connects through it. Deriving the
-            // exemption from what is actually there, rather than from a flag,
-            // means the built network and the imported one are judged alike.
             // ...and the same exemption has to survive a round trip through
             // OpenDRIVE, which stores geometry rather than authoring: the edits
             // are gone on the far side, and the export has split the merge into

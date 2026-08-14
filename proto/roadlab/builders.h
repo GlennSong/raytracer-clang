@@ -102,7 +102,7 @@ enum class RampEntry : uint8_t { Parallel, Taper };
 // cross-section, and the mesher needs somewhere to put the ring pair. One metre
 // is below anything the eye resolves at road scale and keeps every downstream
 // invariant (lane-section seams, the marking bake's ring rule) intact.
-constexpr double kGoreNoseTaper = 4.0;
+constexpr double kGoreNoseTaper = 1.0;
 
 struct RampDesc {
     std::string name = "ramp";
@@ -112,7 +112,13 @@ struct RampDesc {
     double outerHeight = 0;
     double auxLength = 180.0;    // parallel length of the auxiliary lane
     double designSpeed = 60.0;
-    int side = -1;               // which side of the mainline (-1 = right)
+    // Which side of the mainline the ramp is on. 0 DERIVES it from outerPoint,
+    // which is the only answer that cannot be wrong: the ramp is on whichever
+    // side its far end is. Authoring it was how the metro generator ended up
+    // running every ramp diagonally across its own bypass — the ring circulates
+    // counter-clockwise, so its interchanges are on the left, and the default
+    // said right. -1 and +1 still override.
+    int side = 0;
     RampEntry entry = RampEntry::Parallel;
 };
 

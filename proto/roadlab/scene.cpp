@@ -205,7 +205,7 @@ bool loadSceneJson(const std::string& path, Scene& out, std::string& error) {
             d.outerHeight = rp.value("fromHeight", 0.0);
             d.auxLength = rp.value("auxLength", 180.0);
             d.designSpeed = rp.value("designSpeed", 60.0);
-            d.side = rp.value("side", -1);
+            d.side = rp.value("side", 0);   // 0 = derive; see RampDesc::side
             if (pass == 0)
                 buildOnRamp(out.net, main, rp.value("s", 0.0), d);
             else
@@ -378,7 +378,7 @@ void demoInterchange(Scene& sc) {
     // run ~100 m ahead of it, so the merge point moves downstream to leave the
     // ramp the same run from its outer end. Authoring it any closer just makes
     // the ramp's curve tighter until the minimum-radius lint objects.
-    buildOnRamp(sc.net, f, 820.0, on, &mainTail);
+    buildOnRamp(sc.net, f, 880.0, on, &mainTail);
 
     RampDesc off;
     off.name = "off-ramp";
@@ -689,28 +689,55 @@ void generateCity(Scene& out, const CityParams& params) {
         RoadDesc fw;
         fw.name = "freeway";
         fw.preset = "freeway3";
-        fw.points = {{x0, z - 40}, {(x0 + x1) * 0.5, z}, {x1, z - 30}};
+        // Stationed EAST to WEST, so the city — which is to the north — is on
+        // the carriageway whose lanes run with the stations. A ramp serves one
+        // direction, and the one it can be built for is that one; see
+        // laneRunsWithStations.
+        fw.points = {{x1, z - 30}, {(x0 + x1) * 0.5, z}, {x0, z - 40}};
         fw.cornerRadius = 800;
         fw.designSpeed = 110;
         int f = buildRoad(out.net, fw);
         double L = out.net.road(f).spineLength();
-        if (params.overpass) makeOverpass(out.net, f, L * 0.42, L * 0.5, 8.5, 210.0, 30.0);
+        if (params.overpass) makeOverpass(out.net, f, L * 0.50, L * 0.58, 8.5, 210.0, 30.0);
+
+        // The stations come from where the ramps actually are, not from
+        // fractions of the length: the freeway's extent is a function of
+        // blocksX, and a fraction that lands well for six blocks lands in the
+        // wrong county for twelve.
+        auto abeam = [&](Vec2 p) {
+            double s = 0, t = 0;
+            if (!out.net.road(f).spine.toST(p, s, t)) return L * 0.5;
+            return s;
+        };
+
+        // ...and the terminal HEADING comes from the chord the ramp has to
+        // cover, for the same reason. A ramp that ends in a field can point
+        // anywhere; authoring a bearing that happened to suit one block size
+        // asks the biarc for a 17 m radius at another.
+        auto chordHeading = [&](Vec2 outer, double sGore) {
+            Vec2 gore = out.net.road(f).planPoint(sGore, 0);
+            return std::atan2(outer.y - gore.y, outer.x - gore.x);
+        };
 
         RampDesc on;
         on.name = "on-ramp";
         on.outerPoint = {originX + B * 0.9, originZ - B * 0.42};
-        on.outerHeading = -80 * kDeg2Rad;
         on.outerHeight = 1.0;
         on.auxLength = 190.0;
-        buildOnRamp(out.net, f, L * 0.74, on);
+        double sOn = clampd(abeam(on.outerPoint) + 260.0, 60.0, L - 60.0);
+        // The entrance runs TOWARD the gore, so its heading is the chord
+        // reversed.
+        on.outerHeading = wrapPi(chordHeading(on.outerPoint, sOn) + kPi);
+        buildOnRamp(out.net, f, sOn, on);
 
         RampDesc off;
         off.name = "off-ramp";
         off.outerPoint = {originX + B * (params.blocksX - 0.5), originZ - B * 0.42};
-        off.outerHeading = 82 * kDeg2Rad;
         off.outerHeight = 1.0;
         off.auxLength = 150.0;
-        buildOffRamp(out.net, f, L * 0.30, off);
+        double sOff = clampd(abeam(off.outerPoint) - 260.0, 60.0, L - 60.0);
+        off.outerHeading = chordHeading(off.outerPoint, sOff);
+        buildOffRamp(out.net, f, sOff, off);
     }
 }
 
@@ -1029,7 +1056,13 @@ void generateMetro(Scene& out, const MetroParams& p) {
         r.name = "bypass";
         r.designSpeed = bypassSpeed;
         r.allowsPedestrians = false;
-        r.spine = spineCircle(gridMid, ringR, true);
+        // CLOCKWISE. The interchanges are on the inside — that is where the
+        // radials are — and a ramp serves one carriageway, the one whose lanes
+        // run the way the ring's stations do. On a counter-clockwise ring the
+        // inside is the opposing carriageway, so every ramp was being built onto
+        // lanes travelling the other way: correct pavement, and a lane graph in
+        // which no city street could be reached from the freeway.
+        r.spine = spineCircle(gridMid, ringR, false);
         r.spine.setCrossfall(0.02);
         r.spine.setFlatElevation(0.0);
         r.spine.applySuperelevation(bypassSpeed);

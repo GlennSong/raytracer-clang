@@ -2273,6 +2273,37 @@ double pavedExtentAt(const Road& r, double s, int side) {
 
 }  // namespace
 
+// The full corpus: the demos AND the two generators.
+//
+// The gates below used to iterate demoNames() alone, and that gap is the whole
+// reason this exists. Every geometry defect the demos were clean of shipped in
+// the metro generator anyway — ramps crossing their own carriageway, three
+// roundabout rings drawn on top of each other — because the generators are what
+// the engine actually loads and nothing measured them. A corpus that does not
+// contain what ships is a corpus that certifies the wrong thing.
+std::vector<std::string> corpusNames() {
+    std::vector<std::string> names = demoNames();
+    names.push_back("metro");
+    names.push_back("city");
+    return names;
+}
+
+bool buildCorpus(const std::string& name, Scene& sc) {
+    if (name == "metro") {
+        MetroParams mp;
+        mp.seed = 7;
+        generateMetro(sc, mp);
+        return true;
+    }
+    if (name == "city") {
+        CityParams cp;
+        cp.seed = 3;
+        generateCity(sc, cp);
+        return true;
+    }
+    return buildDemo(name, sc);
+}
+
 void testRoadSurfacesDoNotOverlap() {
     group("no overlapping pavement");
     // One surface owns each piece of ground. In a 3D world two carriageways
@@ -2287,9 +2318,9 @@ void testRoadSurfacesDoNotOverlap() {
     // another one. Interior in `s` as well as `t`, because splitRoad partitions
     // one spine into abutting windows whose end stations are shared by
     // construction.
-    for (const std::string& name : demoNames()) {
+    for (const std::string& name : corpusNames()) {
         Scene sc;
-        if (!buildDemo(name, sc)) continue;
+        if (!buildCorpus(name, sc)) continue;
         finalizeScene(sc, false, false);
 
         long probes = 0, bad = 0;
@@ -2337,11 +2368,33 @@ void testRoadSurfacesDoNotOverlap() {
         // Two samples out of ~1700 still touch at the gore, where the ramp's
         // pavement and the auxiliary lane's meet across a 1 m nose taper. That is
         // a real residual and it is bounded here rather than rounded away.
-        check(bad <= 2, (name + ": pavement does not overlap other pavement").c_str());
-        check(worst < 2.0, (name + ": and any residual is under a lane width").c_str());
+        // Zero, not a small budget. The threshold is already half a metre of
+        // shared interior, which nothing that merely abuts can reach, so a
+        // tolerance here would only ever be room for a defect to hide in.
+        check(bad == 0, (name + ": pavement does not overlap other pavement").c_str());
+        check(worst < 0.01, (name + ": and no residual at all").c_str());
         if (bad > 0)
             std::printf("  note: %-11s %ld of %ld probes overlap, worst %.2f m [%s]\n",
                         name.c_str(), bad, probes, worst, worstAt.c_str());
+    }
+}
+
+void testEveryCorpusSceneLints() {
+    group("design lint over the whole corpus");
+    // validate() knows about minimum radius, taper rate, grade, and vertical
+    // clearance, and every one of those is a thing a generator can get wrong
+    // without any test noticing — the demos were clean while the metro
+    // generator shipped ramps below their minimum radius. Running the lint the
+    // scene authoring tool would run, over everything that ships, costs one
+    // pass and closes that gap.
+    for (const std::string& name : corpusNames()) {
+        Scene sc;
+        if (!buildCorpus(name, sc)) continue;
+        finalizeScene(sc, false, false);
+        std::vector<std::string> issues = sc.net.validate();
+        check(issues.empty(), (name + ": passes the design lint").c_str());
+        for (size_t i = 0; i < issues.size() && i < 6; ++i)
+            std::printf("  note: %s\n", issues[i].c_str());
     }
 }
 
@@ -3088,6 +3141,7 @@ int main() {
     testSeamSmearIsMillimetresWide();
     testProfileTextureIsWhatTheShaderWouldSample();
     testRoadSurfacesDoNotOverlap();
+    testEveryCorpusSceneLints();
     testEarthworksRunOnTheirBatter();
     testPaintSurvivesLod();
     testGeneratedWgslTracksTheHeader();

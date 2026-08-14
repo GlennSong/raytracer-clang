@@ -1,5 +1,7 @@
 #include "builders.h"
 
+#include "diag.h"
+
 #include <cstdio>
 
 namespace roadlab {
@@ -72,8 +74,25 @@ void buildRoundabout(Network& net, const RoundaboutDesc& desc) {
     for (const auto& a : desc.arms) {
         const Road& r = net.road(a.first);
         double s = a.second ? r.end() : r.begin();
-        Vec2 p = r.spine.toPlan(s, 0);
-        arms.push_back({a.first, a.second, std::atan2(p.y - desc.center.y, p.x - desc.center.x)});
+        // Measured a little way BACK along the arm, not at its endpoint.
+        //
+        // A roundabout dropped onto a lattice node has arms that end exactly at
+        // the node, and the node is the roundabout's centre — so asking atan2
+        // for the bearing of the endpoint asks it for the bearing of the zero
+        // vector, and every arm answers zero. Equal bearings make every gap a
+        // zero sweep, which spineArc widens to a full turn: the metro generator
+        // was drawing three complete rings stacked on each other, plus arms
+        // running through the middle of all three. Standing off by a couple of
+        // radii asks the question the ordering actually cares about — which
+        // direction does this arm come from — and is unchanged for an arm that
+        // already stops clear of the centre.
+        double back = std::max(desc.radius * 2.0, 10.0);
+        double sBack = a.second ? std::max(r.begin(), s - back) : std::min(r.end(), s + back);
+        Vec2 d = r.spine.toPlan(sBack, 0) - desc.center;
+        double bearing = length(d) > 1e-3
+                             ? std::atan2(d.y, d.x)
+                             : wrapPi(r.spine.frameAt(s).heading + (a.second ? kPi : 0.0));
+        arms.push_back({a.first, a.second, bearing});
     }
     std::sort(arms.begin(), arms.end(),
               [](const ArmInfo& a, const ArmInfo& b) { return a.bearing < b.bearing; });
@@ -133,6 +152,15 @@ LaneSection baseSectionOf(const Road& r) {
     return s;
 }
 
+// How long a mainline runs without its outer shoulder either side of a gore
+// nose. Both halves use it, because both halves are the same fact seen from
+// different ends: the shoulder is missing for as long as the ramp is close
+// enough to be standing on it. Floored well above the shoulder's own taper
+// requirement so the restoration never reads as a kink to the width lint.
+double goreShoulderRun(const Road& r) {
+    return clampd(taperLength(3.0, r.designSpeed), 45.0, 120.0);
+}
+
 }  // namespace
 
 void rebuildProfile(Network& net, int roadId) {
@@ -145,10 +173,92 @@ void rebuildProfile(Network& net, int roadId) {
 
     ProfileTimeline tl;
     LaneSection current = base;
-    tl.at(0.0, current);
     double len = r.spineLength();
 
-    for (const Road::ProfileEdit& e : edits) {
+    // The opening key is always the UNMODIFIED base. Every edit below is a
+    // transition away from it and back, including the ones that land on the
+    // road's own first station: the timeline covers the whole spine while a road
+    // is only a window over it, so a gore at the window's start still has spine
+    // to taper in over, upstream of anything anyone sees.
+    //
+    // Rewriting this key instead is a trap. baseSectionOf reads section 0 back as
+    // the base the NEXT rebuild replays onto, and splitRoad copies the result to
+    // every downstream piece — so one exit gore whose nose fell on a road
+    // boundary retracted the shoulder for the rest of the ring, permanently, and
+    // the earthwork with it.
+    tl.at(0.0, current);
+
+    // Where the outer shoulder is ABSENT, as merged intervals rather than as one
+    // taper per gore.
+    //
+    // Each gore wants the shoulder gone over a hold and tapered at its far end,
+    // and the taper is 120 m at motorway speed. Two interchanges 300 m apart
+    // therefore ask for 350 m of shoulder work in 300 m of road, and
+    // ProfileTimeline — correctly — refuses to let transitions overlap, so the
+    // second one is pushed downstream until it is doing nothing where it matters
+    // and the shoulder is back at full width under the next ramp.
+    //
+    // The answer is not a shorter taper. It is that between an exit and the
+    // entrance behind it there is no shoulder to restore: that stretch is a
+    // collector-distributor, and its outer edge belongs to the ramps the whole
+    // way. Merging the intervals says exactly that, and leaves the taper alone.
+    struct Gore {
+        int side = -1;
+        double s0 = 0, s1 = 0;
+        bool startsAtNose = false;   // a ramp took the shoulder here, instantly
+        bool endsAtNose = false;     // the auxiliary lane's own key restores it
+        size_t startEdit = 0, endEdit = 0;
+    };
+    const double goreRun = goreShoulderRun(r);
+    std::vector<Gore> gores;
+    for (size_t i = 0; i < edits.size(); ++i) {
+        const Road::ProfileEdit& e = edits[i];
+        if (e.kind == Road::ProfileEdit::Kind::GoreShoulder)
+            gores.push_back({e.side, e.s, e.s + e.goreHold, true, false, i, i});
+        else if (e.kind == Road::ProfileEdit::Kind::Auxiliary && e.mergeNose)
+            gores.push_back({e.side, e.s - e.goreHold, e.s, false, true, i, i});
+    }
+    std::sort(gores.begin(), gores.end(),
+              [](const Gore& a, const Gore& b) { return a.s0 < b.s0; });
+    std::vector<Gore> windows;
+    for (const Gore& g : gores) {
+        // Merge unless there is room to bring the shoulder back and take it away
+        // again in between.
+        if (!windows.empty() && windows.back().side == g.side &&
+            g.s0 - windows.back().s1 < 2.0 * goreRun) {
+            windows.back().s1 = std::max(windows.back().s1, g.s1);
+            windows.back().endsAtNose = g.endsAtNose;
+            windows.back().endEdit = g.endEdit;
+            continue;
+        }
+        windows.push_back(g);
+    }
+
+    // Any key landing inside a window is emitted without its outer shoulder.
+    auto emit = [&](double s, LaneSection sec, double transition) {
+        for (const Gore& w : windows)
+            if (s >= w.s0 - 1e-6 && s < w.s1 - 1e-6)
+                sec = sectionWithShoulderRetracted(sec, w.side);
+        tl.at(s, sec, transition);
+    };
+
+    for (size_t i = 0; i < edits.size(); ++i) {
+        const Road::ProfileEdit& e = edits[i];
+        // A window's own boundary keys are emitted by the edit that owns them,
+        // so they see the same running section that edit does.
+        for (const Gore& w : windows) {
+            if (w.startEdit == i) {
+                // A gore that starts at an exit nose has no run-in: the ramp
+                // leaves carrying the shoulder, so it is gone from that station.
+                double in = w.startsAtNose ? 1.0 : goreRun;
+                double from = clampd(w.s0 - in, 1e-3, std::max(1.0, len - in - 2.0));
+                tl.at(from, sectionWithShoulderRetracted(current, w.side), in);
+            }
+            if (w.endEdit == i && !w.endsAtNose)
+                tl.at(std::min(len - 1.0, w.s1), current, goreRun);
+        }
+        if (e.kind == Road::ProfileEdit::Kind::GoreShoulder) continue;
+
         LaneSection next = current;
         double taper = e.taper;
         switch (e.kind) {
@@ -156,15 +266,6 @@ void rebuildProfile(Network& net, int roadId) {
             case Road::ProfileEdit::Kind::Auxiliary:
                 next = sectionWithLanesChanged(current, e.side, e.delta);
                 if (taper < 0) taper = taperLength(3.6 * std::fabs(double(e.delta)), r.designSpeed);
-                if (e.kind == Road::ProfileEdit::Kind::Auxiliary && e.mergeNose) {
-                    // Vacate the shoulder ahead of the nose. See
-                    // sectionWithShoulderRetracted: this is the one edit that
-                    // lets a ramp reach an auxiliary lane without driving over
-                    // the shoulder, because the shoulder is no longer there.
-                    double gore = clampd(taperLength(3.0, r.designSpeed), 30.0, 120.0);
-                    double from = clampd(e.s - gore, 1.0, std::max(2.0, e.s - 5.0));
-                    tl.at(from, sectionWithShoulderRetracted(current, e.side), gore);
-                }
                 break;
             case Road::ProfileEdit::Kind::TurnBay:
                 next = sectionWithTurnBay(current, e.side, e.width);
@@ -174,13 +275,15 @@ void rebuildProfile(Network& net, int roadId) {
                 next = sectionWithTwltl(current, e.width);
                 if (taper < 0) taper = taperLength(e.width, r.designSpeed) * 0.5;
                 break;
+            case Road::ProfileEdit::Kind::GoreShoulder:
+                break;   // handled above
         }
         double start = clampd(e.s, 1.0, std::max(2.0, len - 2.0));
-        tl.at(start, next, taper);
+        emit(start, next, taper);
         if (e.runLength > 0) {
             double out = e.taperEnd >= 0 ? e.taperEnd : taper;
             double back = clampd(start + taper + e.runLength, start + taper + 1.0, len - 1.0);
-            tl.at(back, current, out);
+            emit(back, current, out);
         } else {
             current = next;
         }
@@ -241,10 +344,21 @@ namespace {
 // while it is at full width, and the station where it reaches it.
 int addAuxiliaryLane(Network& net, int roadId, double sStart, double runLength, int side,
                      bool taperOut, double& sFull, double taperIn = -1, double taperOutLen = -1,
-                     bool mergeNose = false) {
+                     bool mergeNose = false, double goreHold = 0) {
     Road& r = net.road(roadId);
     double taper = taperIn >= 0 ? taperIn : taperLength(3.6, r.designSpeed);
     sStart = clampd(sStart, 1.0, std::max(2.0, r.spineLength() - taper - 5.0));
+    auto laneCount = [&](double s) {
+        int si = r.xs.sectionIndexAt(s);
+        const std::vector<Strip>& stack =
+            side >= 0 ? r.xs.sections[size_t(si)].left : r.xs.sections[size_t(si)].right;
+        int n = 0;
+        for (const Strip& st : stack)
+            if (st.isLane()) ++n;
+        return n;
+    };
+    int before = laneCount(sStart);
+
     Road::ProfileEdit e;
     e.kind = Road::ProfileEdit::Kind::Auxiliary;
     e.s = sStart;
@@ -253,65 +367,54 @@ int addAuxiliaryLane(Network& net, int roadId, double sStart, double runLength, 
     e.taper = taper;
     e.taperEnd = taperOutLen;
     e.mergeNose = mergeNose;
+    e.goreHold = goreHold;
     e.runLength = taperOut ? runLength : -1;
     r.profileEdits.push_back(e);
     rebuildProfile(net, roadId);
-    sFull = sStart + taper;
-    // The auxiliary lane is the outermost lane of the widened stack.
-    int sec = r.xs.sectionIndexAt(sFull + 0.5);
-    const std::vector<Strip>& stack =
-        side >= 0 ? r.xs.sections[size_t(sec)].left : r.xs.sections[size_t(sec)].right;
+
+    // Where the lane ACTUALLY reaches full width, read back off the profile
+    // rather than assumed to be sStart + taper.
+    //
+    // ProfileTimeline serialises transitions that would otherwise overlap, so an
+    // interchange packed behind another one gets its whole gore pushed
+    // downstream — 60 m, in the metro generator, where an exit's shoulder
+    // restoration ran into the next entrance's retraction. A ramp aimed at the
+    // arithmetic then ends 60 m short of its own nose and 3.6 m inside the
+    // outside lane, which is exactly the artefact this was. The profile is the
+    // authority on what the profile did.
+    sFull = -1;
     int laneId = 0;
-    for (const Strip& st : stack)
-        if (st.isLane()) laneId = st.id;
-    return laneId;
-}
-
-// The paved extent of a cross-section on one side, stopping before the
-// earthwork: a Slope is a cut/fill batter running out to terrain, not a surface
-// anything drives on, and a ramp crossing one is a grading question rather than
-// two carriageways drawn on the same ground.
-double pavedExtentAt(const Road& r, double s, int side) {
-    int si = r.xs.sectionIndexAt(s);
-    const LaneSection& sec = r.xs.sections[size_t(si)];
-    const std::vector<Strip>& stack = side >= 0 ? sec.left : sec.right;
-    double t = 0;
-    for (const Strip& x : stack) {
-        if (x.kind == StripKind::Slope || x.kind == StripKind::Verge) break;
-        t += x.width.eval(s - sec.s0);
-    }
-    return side >= 0 ? t : -t;
-}
-
-// The gore nose SOLVED rather than chosen: the mainline station at which the
-// ramp's pavement first reaches the mainline's.
-//
-// Choosing it cannot work, and the two ways of guessing fail in opposite
-// directions. Put the nose early and the auxiliary lane grows out to meet the
-// ramp, but the ramp's endpoint moves upstream with it and its curve tightens
-// until it trips the minimum-radius lint. Put it late and the ramp has room but
-// arrives before the pavement does, and drives through the shoulder to get
-// there. The station where the two surfaces actually touch is neither guess —
-// it is a property of the geometry, so it gets measured.
-double solveGoreNose(const Road& ramp, const Road& main, int side, double fallback) {
-    double len = ramp.activeLength();
-    if (len < 5.0) return fallback;
-    double best = fallback;
-    for (int k = 0; k <= 120; ++k) {
-        double rs = ramp.begin() + len * double(k) / 120.0;
-        // The ramp's inner edge — the one facing the mainline.
-        double innerT = side >= 0 ? pavedExtentAt(ramp, rs, -1) : pavedExtentAt(ramp, rs, +1);
-        Vec3 p = ramp.surfacePoint(rs, innerT);
-        double ms = 0, mt = 0;
-        if (!main.spine.toST({p.x, p.z}, ms, mt)) continue;
-        if (ms < main.begin() || ms > main.end()) continue;
-        double edge = pavedExtentAt(main, ms, mt >= 0 ? +1 : -1);
-        if (std::fabs(mt) <= std::fabs(edge)) {   // inside the mainline's pavement
-            best = std::min(best, ms);
-            break;                                 // the FIRST touch, going downstream
+    for (const LaneSection& sec : r.xs.sections) {
+        if (sec.s0 < sStart - 1e-6) continue;
+        const std::vector<Strip>& stack = side >= 0 ? sec.left : sec.right;
+        int n = 0, last = 0;
+        double w = 0;
+        for (const Strip& st : stack)
+            if (st.isLane()) {
+                ++n;
+                last = st.id;
+                w = st.width.eval(0.0);
+            }
+        // The taper-in section also carries the extra lane, at zero width where
+        // it starts; the one we want is where it is already there.
+        if (n > before && w > 3.0) {
+            sFull = sec.s0;
+            laneId = last;
+            break;
         }
     }
-    return best;
+    if (sFull < 0) {
+        // Fall back to the arithmetic rather than to nothing: a ramp that cannot
+        // find its lane is a ramp that does not get built, which is a worse
+        // failure than one built where the taper says.
+        sFull = clampd(sStart + taper, 0.0, r.spineLength());
+        int si = r.xs.sectionIndexAt(sFull + 0.5);
+        const std::vector<Strip>& stack =
+            side >= 0 ? r.xs.sections[size_t(si)].left : r.xs.sections[size_t(si)].right;
+        for (const Strip& st : stack)
+            if (st.isLane()) laneId = st.id;
+    }
+    return laneId;
 }
 
 // The mainline's cross-section from `laneId` OUTWARD, as a section in its own
@@ -347,12 +450,15 @@ LaneSection sectionFromLaneOutward(const Road& m, double s, int laneId, int side
     for (const Strip& st : stack) {
         if (st.id == laneId) reached = true;
         if (!reached) continue;
-        // Stop at the earthwork. A Slope is a cut/fill batter running out to
-        // terrain, not pavement — the mainline's own batter continues past the
-        // nose and the ramp does not need a second copy of it. Taking the whole
-        // outward stack put a 5 m batter on the ramp, which is the entire
-        // difference between its right extent reading 6.6 m and 11.6 m.
-        if (st.kind == StripKind::Slope || st.kind == StripKind::Verge) break;
+        // The earthwork comes too, and only because the mainline gives it up.
+        //
+        // A Slope runs from the outermost pavement out to natural ground. Through
+        // a gore the outermost pavement is the RAMP's, and the mainline's batter
+        // is retracted along with the shoulder it started from (see
+        // sectionWithShoulderRetracted) precisely so it is not drawn under the
+        // ramp. Something still has to carry the ground away from the edge, and
+        // taking the mainline's own band means the two agree exactly where they
+        // meet at the nose instead of stepping 3.5 m sideways.
         Strip copy = st;
         copy.width = Poly3::constant(st.width.eval(s - src.s0));
         (side >= 0 ? out.left : out.right).push_back(copy);
@@ -365,20 +471,201 @@ LaneSection sectionFromLaneOutward(const Road& m, double s, int laneId, int side
     return out;
 }
 
-int makeRampRoad(Network& net, const RampDesc& desc, Vec2 innerPoint, double innerHeading,
-                 double innerHeight, bool rampLeadsIn,
-                 const LaneSection* terminal = nullptr) {
+// Which side of `main` the ramp's far end lies on. See RampDesc::side.
+int rampSide(const Road& main, const RampDesc& desc) {
+    if (desc.side != 0) return desc.side < 0 ? -1 : +1;
+    double s = 0, t = 0;
+    if (!main.spine.toST(desc.outerPoint, s, t)) return -1;
+    return t >= 0 ? +1 : -1;
+}
+
+// A ramp preset, laid out for the side of the mainline it is actually on.
+//
+// makeRamp puts the reference line on the ramp's LEFT, because that is where a
+// one-way carriageway's yellow line belongs. A ramp on the mainline's left has
+// its reference line — the mainline lane's inner edge — on its RIGHT instead, so
+// the whole section mirrors. Swapping the two stacks reverses the boundary
+// sequence, which is exactly what a mirror does to geometry; paint is not
+// symmetric under it, so the reference line's marking trades places with the
+// outermost lane's. (True for a one-way carriageway only, which is all a ramp
+// ever is — on a two-way section the centre line stays put under a mirror.)
+LaneSection rampSectionFor(const RoadPreset& preset, int side) {
+    LaneSection sec = preset.section;
+    sec.s0 = 0;
+    if (side < 0) {
+        sec.assignIds();
+        return sec;
+    }
+    std::swap(sec.left, sec.right);
+    Strip* outermostLane = nullptr;
+    for (Strip& st : sec.left)
+        if (st.isLane()) outermostLane = &st;
+    if (outermostLane) std::swap(sec.centerMark, outermostLane->outerMark);
+    sec.assignIds();
+    return sec;
+}
+
+// The stretch at the gore end of a ramp over which it is simply RUNNING
+// ALONGSIDE the mainline rather than still converging on it.
+//
+// A biarc hits both end poses exactly, and arriving exactly is not the same as
+// arriving well: tangent continuity at a single point says nothing about the
+// metres before it, and the biarc's last arc is free to be as tight as it needs.
+// On a short interchange that means the ramp crosses the outside lane at a
+// shallow angle and straightens out on top of it — 3 m inside the freeway for
+// the last 40 m, which is exactly what the metro generator was drawing after the
+// nose itself had been fixed.
+//
+// A real entrance has a stretch where the two carriageways are simply parallel;
+// the gore is the END of that stretch, not the whole manoeuvre. So the parallel
+// stretch is built FIRST, backwards from the nose, as an offset of the
+// mainline's own curve — the offset of a curve with curvature k at lateral t has
+// curvature k/(1 - k·t), which is exact for the straight and circular mainlines
+// this system actually builds — and the biarc is then only asked to reach the
+// far end of it.
+struct RampRunIn {
+    Vec2 pos{0, 0};
+    double heading = 0;
+    double length = 0;      // along the RAMP
+    double curvature = 0;
+};
+
+RampRunIn solveRunIn(const Road& main, double sNose, double refT, Vec2 nosePos, double noseHdg,
+                     double want, Vec2 outerPoint, bool downstream) {
+    RampRunIn out;
+    out.pos = nosePos;
+    out.heading = noseHdg;
+    double kMain = main.spine.curvatureAt(sNose);
+    double scale = 1.0 - kMain * refT;
+    if (scale < 0.2) return out;                    // refT past the curve's own centre
+    out.curvature = kMain / scale;
+    double dir = downstream ? 1.0 : -1.0;
+    // The parallel stretch comes out of the ramp's total run, and what is left is
+    // what the biarc has to turn in. Take a fixed share rather than a fixed
+    // length: a short ramp that gives up 60 m to run alongside is a short ramp
+    // with a 25 m radius in it, which the design lint is right to reject.
+    want = std::min(want, 0.22 * length(nosePos - outerPoint));
+    // Shorten rather than give up if the biarc would be left with no room: a
+    // ramp whose whole length is parallel has nowhere left to turn.
+    for (double run = want; run >= 15.0; run *= 0.5) {
+        double L = run * scale;
+        double hEnd = noseHdg + dir * out.curvature * L;
+        Vec2 pEnd;
+        if (std::fabs(out.curvature) < 1e-9) {
+            pEnd = {nosePos.x + dir * L * std::cos(noseHdg),
+                    nosePos.y + dir * L * std::sin(noseHdg)};
+        } else {
+            double R = 1.0 / out.curvature;
+            Vec2 c{nosePos.x - R * std::sin(noseHdg), nosePos.y + R * std::cos(noseHdg)};
+            pEnd = {c.x + R * std::sin(hEnd), c.y - R * std::cos(hEnd)};
+        }
+        if (length(pEnd - outerPoint) < 60.0) continue;
+        out.pos = pEnd;
+        out.heading = hEnd;
+        out.length = L;
+        return out;
+    }
+    return out;
+}
+
+// The ramp's PLAN geometry, on its own, before anything is committed to the
+// network — so it can be measured against the mainline first. See fitGoreHold.
+Spine rampSpine(const RampDesc& desc, Vec2 innerPoint, double innerHeading, bool rampLeadsIn,
+                const RampRunIn& in) {
+    Spine sp;
+    if (rampLeadsIn) {
+        sp = spineConnector(desc.outerPoint, desc.outerHeading,
+                            in.length > 0 ? in.pos : innerPoint,
+                            in.length > 0 ? in.heading : innerHeading);
+        if (in.length > 0) {
+            sp.addArc(in.length, in.curvature);
+            sp.finalize();
+        }
+    } else if (in.length > 0) {
+        // Mirror image: the parallel stretch is at the START of an exit ramp, so
+        // the arc is laid first and the biarc leaves from its far end.
+        sp.setStart(innerPoint, innerHeading);
+        sp.addArc(in.length, in.curvature);
+        Spine away = spineConnector(in.pos, in.heading, desc.outerPoint, desc.outerHeading);
+        for (const GeomPrim& g : away.prims()) sp.addArc(g.length, g.curv0);
+        sp.finalize();
+    } else {
+        sp = spineConnector(innerPoint, innerHeading, desc.outerPoint, desc.outerHeading);
+    }
+    return sp;
+}
+
+// How far back from the nose the mainline has to go without its outer shoulder.
+//
+// Not a constant, and not the length of the parallel stretch either: a biarc
+// whose last arc is nearly as flat as the mainline runs alongside for far longer
+// than the stretch that was asked for — 160 m in the interchange demo, against a
+// 63 m parallel run — and every metre of that has the mainline's shoulder under
+// the ramp's lane. Two coplanar asphalt surfaces at the same height is the one
+// thing a depth buffer cannot draw. So the window is MEASURED off the ramp's own
+// plan geometry, which is why rampSpine exists separately from the road.
+double fitGoreHold(const Road& main, const Spine& ramp, int side, double sNose, double refT,
+                   double shoulderWidth, bool downstream) {
+    double outward = double(side >= 0 ? 1 : -1);
+    double edge = refT + outward * shoulderWidth;
+    double hold = 0;
+    double len = ramp.length();
+    for (int k = 0; k <= 80; ++k) {
+        double s = len * double(k) / 80.0;
+        double os = 0, ot = 0;
+        if (!main.spine.toST(ramp.toPlan(s, 0), os, ot)) continue;
+        double along = downstream ? os - sNose : sNose - os;
+        if (along < -10.0 || along > 500.0) continue;      // wrapped, or far away
+        if (outward * (ot - edge) > 0.3) continue;         // clear of the pavement
+        hold = std::max(hold, along);
+    }
+    return clampd(hold, 0.0, 400.0);
+}
+
+// The outermost shoulder's width on one side, which is what a gore has to
+// vacate.
+double outerShoulderWidth(const Road& r, double s, int side) {
+    int si = r.xs.sectionIndexAt(s);
+    const LaneSection& sec = r.xs.sections[size_t(si)];
+    const std::vector<Strip>& stack = side >= 0 ? sec.left : sec.right;
+    double w = 0;
+    for (const Strip& st : stack)
+        if (st.kind == StripKind::Shoulder) w = st.width.eval(s - sec.s0);
+    return w;
+}
+
+// A ramp can only feed a lane that travels the way the mainline's stations run.
+//
+// On a two-way carriageway the far side runs the other way, so a ramp on it is
+// the same construction with s reversed: the deceleration lane grows toward
+// LOWER stations, the split's downstream piece is the one before the nose, and
+// the lane link's ends swap. None of that is expressed here yet, and building it
+// anyway produces a ramp that renders correctly and that the lane graph cannot
+// route through — which is exactly what it did, silently, the first time the
+// side was derived rather than assumed. Refuse instead, loudly enough for the
+// fallback census and the generator's own reachability test to see it.
+bool laneRunsWithStations(const Road& r, int laneId, double s) {
+    int si = r.xs.sectionIndexAt(s);
+    const LaneSection& sec = r.xs.sections[size_t(si)];
+    const Strip* st = sec.strip(laneId);
+    return st && st->dir > 0;
+}
+
+int makeRampRoad(Network& net, const RampDesc& desc, int side, Vec2 innerPoint,
+                 double innerHeading, double innerHeight, bool rampLeadsIn,
+                 const LaneSection* terminal = nullptr, const RampRunIn* runIn = nullptr) {
     Road r;
     r.name = desc.name;
     r.kind = RoadKind::Ramp;
     RoadPreset preset = roadPreset(desc.preset);
     r.designSpeed = desc.designSpeed > 0 ? desc.designSpeed : preset.designSpeedKph;
     r.allowsPedestrians = false;
+    RampRunIn none;
+    const RampRunIn& in = runIn ? *runIn : none;
+    r.spine = rampSpine(desc, innerPoint, innerHeading, rampLeadsIn, in);
     if (rampLeadsIn) {
-        r.spine = spineConnector(desc.outerPoint, desc.outerHeading, innerPoint, innerHeading);
         r.spine.setElevationKnots({{0.0, desc.outerHeight}, {r.spine.length(), innerHeight}});
     } else {
-        r.spine = spineConnector(innerPoint, innerHeading, desc.outerPoint, desc.outerHeading);
         r.spine.setElevationKnots({{0.0, innerHeight}, {r.spine.length(), desc.outerHeight}});
     }
     r.spine.setCrossfall(0.02);
@@ -396,9 +683,7 @@ int makeRampRoad(Network& net, const RampDesc& desc, Vec2 innerPoint, double inn
         r.spine.applySuperelevation(r.designSpeed, 0.07);
         r.spine.finalize();
     }
-    LaneSection sec = preset.section;
-    sec.s0 = 0;
-    sec.assignIds();
+    LaneSection sec = rampSectionFor(preset, side);
     if (terminal) {
         // Morph into the mainline's own slice over the approach to the nose, so
         // the ramp arrives as the lane it becomes rather than as a wider road
@@ -407,14 +692,21 @@ int makeRampRoad(Network& net, const RampDesc& desc, Vec2 innerPoint, double inn
         // unmatched ones taper away, and the inner shoulder and barrier are
         // unmatched by construction.
         double len = r.spine.length();
-        double blend = clampd(len * 0.45, 20.0, 90.0);
+        // The blend has to be COMPLETE before the parallel stretch starts. The
+        // strips it drops are the ramp's inner shoulder and barrier, which sit
+        // between the ramp's reference line and the mainline's centre — still
+        // tapering them away while the ramp runs alongside puts a metre and a
+        // half of concrete in the outside lane.
+        double parallel = std::max(0.0, in.length);
+        double room = std::max(2.0, len - parallel);
+        double blend = clampd(std::min(len * 0.45, room - 1.0), 20.0, 90.0);
         ProfileTimeline tl;
         if (rampLeadsIn) {
             tl.at(0.0, sec);
-            tl.at(std::max(1.0, len - blend), *terminal, blend);
+            tl.at(std::max(1.0, room - blend), *terminal, blend);
         } else {
             tl.at(0.0, *terminal);
-            tl.at(std::min(len - 1.0, blend), sec, blend);
+            tl.at(clampd(parallel, 1.0, len - 2.0), sec, blend);
         }
         r.xs = tl.build(len, r.designSpeed);
     } else {
@@ -437,6 +729,7 @@ int buildOnRamp(Network& net, int mainRoad, double sMerge, const RampDesc& desc,
     // The old code did neither — it tapered IN over 150 m and then flew the ramp
     // across the carriageway to the far end of that taper, which is why the ramp
     // ran up to 11 m inside the freeway with a concrete barrier attached.
+    int side = rampSide(net.road(mainRoad), desc);
     double outTaper = taperLength(3.6, net.road(mainRoad).designSpeed);
     double inTaper = desc.entry == RampEntry::Parallel ? kGoreNoseTaper : outTaper;
 
@@ -449,10 +742,47 @@ int buildOnRamp(Network& net, int mainRoad, double sMerge, const RampDesc& desc,
     double sNose = sMerge;
 
     double sFull = 0;
-    int auxLane = addAuxiliaryLane(net, mainRoad, sNose, desc.auxLength, desc.side, true, sFull,
-                                   inTaper, outTaper,
-                                   desc.entry == RampEntry::Parallel);
-    if (auxLane == 0) return -1;
+    double parallelRun = clampd(desc.auxLength * 0.35, 40.0, 80.0);
+    // Two passes. The first lays the auxiliary lane to find out where the lane's
+    // inner edge actually is; the ramp's plan geometry follows from that, and how
+    // far back the mainline has to vacate its shoulder follows from the ramp. The
+    // second lays it again knowing the answer. Nothing is committed to the
+    // network in between — rampSpine is plan geometry, not a road — so this is
+    // two evaluations of the same construction, not a build and a repair.
+    int auxLane = 0;
+    double hold = parallelRun;
+    for (int pass = 0; pass < 2; ++pass) {
+        if (pass == 1) {
+            net.road(mainRoad).profileEdits.pop_back();
+            // Replay without it, or the second pass reads the FIRST pass's lane
+            // count as the baseline and never sees a lane appear.
+            rebuildProfile(net, mainRoad);
+        }
+        auxLane = addAuxiliaryLane(net, mainRoad, sNose, desc.auxLength, side, true, sFull,
+                                   inTaper, outTaper, desc.entry == RampEntry::Parallel, hold);
+        if (auxLane == 0) return -1;
+        if (!laneRunsWithStations(net.road(mainRoad), auxLane, sFull)) {
+            RL_FALLBACK("on-ramp onto a lane running against the mainline's stations");
+            Road& m = net.road(mainRoad);
+            m.profileEdits.pop_back();
+            rebuildProfile(net, mainRoad);
+            return -1;
+        }
+        if (pass == 1) break;
+        const Road& m = net.road(mainRoad);
+        double refT = 0;
+        LaneSection probe = sectionFromLaneOutward(m, sFull, auxLane, side, refT);
+        (void)probe;
+        Vec2 pos = m.planPoint(sFull, refT);
+        double hdg = m.spine.frameAt(sFull).heading;
+        RampRunIn guess = solveRunIn(m, sFull, refT, pos, hdg, parallelRun, desc.outerPoint,
+                                     false);
+        Spine plan = rampSpine(desc, pos, hdg, true, guess);
+        hold = std::max(parallelRun,
+                        fitGoreHold(m, plan, side, sFull, refT,
+                                    outerShoulderWidth(m, std::max(0.0, sNose - 5.0), side),
+                                    false));
+    }
 
     // The pose the ramp must arrive at, taken from the auxiliary lane's own
     // geometry: its inner edge, the mainline's heading, and the SURFACE height
@@ -462,26 +792,30 @@ int buildOnRamp(Network& net, int mainRoad, double sMerge, const RampDesc& desc,
     Vec2 mergePos;
     double mergeHdg = 0, mergeHeight = 0;
     LaneSection terminal;
+    RampRunIn runIn;
     {
         const Road& m = net.road(mainRoad);
         double refT = 0;
-        terminal = sectionFromLaneOutward(m, sFull, auxLane, desc.side, refT);
+        terminal = sectionFromLaneOutward(m, sFull, auxLane, side, refT);
         mergePos = m.planPoint(sFull, refT);
         mergeHdg = m.spine.frameAt(sFull).heading;
         mergeHeight = m.surfacePoint(sFull, refT).y;
+        runIn = solveRunIn(m, sFull, refT, mergePos, mergeHdg,
+                           parallelRun, desc.outerPoint, false);
     }
-
-    int ramp = makeRampRoad(net, desc, mergePos, mergeHdg, mergeHeight, true, &terminal);
+    int ramp =
+        makeRampRoad(net, desc, side, mergePos, mergeHdg, mergeHeight, true, &terminal, &runIn);
 
     int tail = net.splitRoad(mainRoad, sFull);
     if (mainlineTail) *mainlineTail = tail;
-    // The ramp's single lane; ramp presets put it on the right of the reference
-    // line so it is lane -1.
-    int rampLane = -1;
+    // The ramp's single lane. It sits on whichever side of the ramp's own
+    // reference line the mainline is NOT — see rampSectionFor.
+    int rampLane = 0;
     {
         const Road& rr = net.road(ramp);
         int sec = rr.xs.sectionIndexAt(rr.end() - 1e-3);
-        for (const Strip& st : rr.xs.sections[size_t(sec)].right)
+        const LaneSection& ls = rr.xs.sections[size_t(sec)];
+        for (const Strip& st : side >= 0 ? ls.left : ls.right)
             if (st.isLane()) rampLane = st.id;
     }
     ExtraLaneLink link;
@@ -497,22 +831,45 @@ int buildOnRamp(Network& net, int mainRoad, double sMerge, const RampDesc& desc,
 
 int buildOffRamp(Network& net, int mainRoad, double sExit, const RampDesc& desc,
                  int* mainlineTail) {
+    int side = rampSide(net.road(mainRoad), desc);
     double decel = std::max(60.0, desc.auxLength);
     double taper = taperLength(3.6, net.road(mainRoad).designSpeed);
     double sStart = std::max(2.0, sExit - decel - taper);
     double sFull = 0;
-    int auxLane = addAuxiliaryLane(net, mainRoad, sStart, decel, desc.side, false, sFull);
+    double parallelRun = clampd(decel * 0.35, 40.0, 80.0);
+    int auxLane = addAuxiliaryLane(net, mainRoad, sStart, decel, side, false, sFull);
     if (auxLane == 0) return -1;
+    if (!laneRunsWithStations(net.road(mainRoad), auxLane, sFull)) {
+        RL_FALLBACK("off-ramp from a lane running against the mainline's stations");
+        Road& m = net.road(mainRoad);
+        m.profileEdits.pop_back();
+        rebuildProfile(net, mainRoad);
+        return -1;
+    }
 
+    // The pose the ramp leaves from, taken from the deceleration lane's own
+    // geometry rather than from its centreline: the inner edge, the mainline's
+    // heading, and the surface height THERE. Aiming a ramp at a lane's centre
+    // buries half its width in the carriageway before it has turned at all, and
+    // taking the centreline height puts a lip across the nose on any
+    // superelevated curve. Same three corrections as the entrance; the exit was
+    // deferred at the time and shipped in the metro generator with all three.
     Vec2 divergePos;
-    double divergeHdg = 0;
+    double divergeHdg = 0, divergeHeight = 0;
+    LaneSection terminal;
+    RampRunIn runOut;
     {
         const Road& m = net.road(mainRoad);
         double s = clampd(sExit, sFull + 1.0, m.end() - 1.0);
-        if (!m.lanePose(auxLane, s, divergePos, divergeHdg)) return -1;
+        double refT = 0;
+        terminal = sectionFromLaneOutward(m, s, auxLane, side, refT);
+        divergePos = m.planPoint(s, refT);
+        divergeHdg = m.spine.frameAt(s).heading;
+        divergeHeight = m.surfacePoint(s, refT).y;
+        runOut = solveRunIn(m, s, refT, divergePos, divergeHdg,
+                            parallelRun, desc.outerPoint, true);
         sExit = s;
     }
-    double divergeHeight = net.road(mainRoad).surfacePoint(sExit, 0).y;
 
     // The deceleration lane exists only UPSTREAM of the exit: at the diverge it
     // becomes the ramp. Splitting copies the whole profile to the tail, so the
@@ -527,15 +884,26 @@ int buildOffRamp(Network& net, int mainRoad, double sExit, const RampDesc& desc,
         Road& t = net.road(tail);
         if (auxEdit < t.profileEdits.size())
             t.profileEdits.erase(t.profileEdits.begin() + long(auxEdit));
+        // The tail begins AT the nose, and the shoulder it would otherwise begin
+        // with is the strip the ramp is still standing on. Give it back once the
+        // ramp has curved clear.
+        Road::ProfileEdit gore;
+        gore.kind = Road::ProfileEdit::Kind::GoreShoulder;
+        gore.s = sExit;
+        gore.side = side;
+        gore.goreHold = parallelRun;
+        t.profileEdits.push_back(gore);
         rebuildProfile(net, tail);
     }
 
-    int ramp = makeRampRoad(net, desc, divergePos, divergeHdg, divergeHeight, false);
-    int rampLane = -1;
+    int ramp = makeRampRoad(net, desc, side, divergePos, divergeHdg, divergeHeight, false,
+                            &terminal, &runOut);
+    int rampLane = 0;
     {
         const Road& rr = net.road(ramp);
         int sec = rr.xs.sectionIndexAt(rr.begin() + 1e-3);
-        for (const Strip& st : rr.xs.sections[size_t(sec)].right)
+        const LaneSection& ls = rr.xs.sections[size_t(sec)];
+        for (const Strip& st : side >= 0 ? ls.left : ls.right)
             if (st.isLane()) rampLane = st.id;
     }
     ExtraLaneLink link;

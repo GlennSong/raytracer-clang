@@ -15,7 +15,7 @@
     }
   ],
   "player": {
-    "position": [275.3, 2.8, 292.8],
+    "position": [277.2, 1.2, 258.8],
     "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.8 },
     "friction": 0.5
   },
