@@ -142,6 +142,20 @@ XrAlignedPose xrAlignToSupport(const Vec3& halfExtent, const Vec3& position,
 // solver, exposed for tests).
 Quat xrNearestAxisAligned(const Quat& q);
 
+// --- Closure probe --------------------------------------------------------
+//
+// Which fingertips are ON the shape (within `reach` of its oriented
+// surface), as grip points whose normals press toward the surface. This is
+// the HOOK detector — deliberately predictive, not contact-driven: the
+// finger capsules are kinematic (infinitely strong), so by the time two of
+// them have PENETRATED far enough to raise opposed contact events, the
+// squeeze has already ejected the object ("it shoots away"). Proximity
+// fires while the fingers merely surround it. A tip inside the shape counts
+// (distance 0) and presses toward the centre.
+std::vector<XrGripPoint> xrProbeGrip(
+    const std::vector<std::pair<int, Vec3>>& tips, const Vec3& halfExtent,
+    bool sphere, const Vec3& position, const Quat& orientation, Real reach);
+
 }  // namespace engine
 
 #endif  // ENGINE_XR_GRASP_H

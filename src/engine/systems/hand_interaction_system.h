@@ -34,9 +34,14 @@ class PhysicsSystem;
 //   carried, presses stacks with bounded force, and leaves with its true
 //   momentum when the spring is removed — no velocity handoff, no throw
 //   estimator. Hooked by pinch near the object's oriented surface
-//   (xr_touch) OR by CLOSURE: two-plus fingertip capsules touching with
-//   opposed contact normals (XrGripMemory::opposed — "held on each side"),
-//   which is how a natural fist grip takes a pillar without any pinch.
+//   (xr_touch) OR by CLOSURE: two-plus fingertips ON the shape (proximity
+//   probe, xrProbeGrip — predictive, because contact events fire only
+//   after the kinematic squeeze has ejected the object) with opposed press
+//   directions (XrGripMemory::opposed — "held on each side"), which is how
+//   a natural fist grip takes a pillar without any pinch. While held the
+//   object rides the HELD layer (no hand-capsule collision — infinitely
+//   strong fingers squeezing a held object shoot it away), restored only
+//   once the fingers have cleared it.
 //   Closure release is opening-based: live fingertips drifting off their
 //   remembered object-local anchors (grip memory) past hysteresis. Each
 //   hand hooks its own spring, so both hands can hold one object, and a
@@ -171,6 +176,10 @@ private:
     int lastUnhookHand_ = -1;
     Real lastUnhookTime_ = -10;
 
+    // Released shapes still on the HELD layer, waiting for the fingers to
+    // clear before hand collision is restored (see applyHeldLayer).
+    std::vector<Pick> layerClear_;
+
     Vec3 handWorld(FrameContext& ctx, const Vec3& originPoint) const;
     Quat handOrientation(const XrHand& hand) const;
     bool makeRoom();
@@ -185,14 +194,22 @@ private:
     // excluded; the OTHER hand's hold is fair game — that's two-hand carry).
     Pick nearestGrabbable(int h, const Vec3& p, Real maxSurfaceDistance) const;
 
-    // Fingertip capsule body -> tip joint id (or -1) for hand `h`.
-    int tipJointForBody(int h, PhysicsBodyId body) const;
-    // Current contacts of `body` made by hand `h`'s fingertip capsules, as
-    // grip points (normals pressing INTO the object).
-    void fingertipContacts(int h, PhysicsBodyId body,
-                           std::vector<XrGripPoint>& out);
     void liveFingertips(FrameContext& ctx, int h,
                         std::vector<std::pair<int, Vec3>>& out) const;
+    // Fingertips of hand `h` within `reach` of the shape's oriented
+    // surface, as grip points (xrProbeGrip — predictive, not contact-based:
+    // kinematic fingers that must penetrate to raise contacts have already
+    // ejected the object by then).
+    std::vector<XrGripPoint> probeShape(FrameContext& ctx, int h,
+                                        const Pick& pick, Real reach) const;
+    // While any spring holds a body it rides the HELD layer (no collision
+    // with hand capsules — a kinematic finger squeeze is infinitely strong
+    // and ejects it). The layer is restored only once every fingertip has
+    // CLEARED the shape; restoring while fingers still overlap would eject
+    // it at release instead.
+    void applyHeldLayer(const Pick& pick);
+    void releaseHeldLayer(int releasingHand, const Pick& pick);
+    void settleHeldLayers(FrameContext& ctx);
 
     void hook(FrameContext& ctx, int h, const Pick& pick, bool pinchHold,
               const std::vector<XrGripPoint>& contacts);

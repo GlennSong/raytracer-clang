@@ -44,19 +44,23 @@ JPH_SUPPRESS_WARNINGS
 namespace {
 
 // Object layers. NON_MOVING vs MOVING is the standard minimal setup (the
-// broadphase never rebuilds the static tree); HAND and GRIP serve the XR
-// interaction stack: HAND is the hand's bone capsules — they shove dynamic
-// objects but pass through static geometry (the user's real hand already
-// stops on the real table; colliders grinding there was pure waste) — and
-// GRIP is the per-hand constraint anchor, which collides with NOTHING (it
-// exists only to be one end of a grip spring). Both map onto the MOVING
+// broadphase never rebuilds the static tree); HAND, GRIP and HELD serve the
+// XR interaction stack: HAND is the hand's bone capsules — they shove
+// dynamic objects but pass through static geometry (the user's real hand
+// already stops on the real table; colliders grinding there was pure waste)
+// — GRIP is the per-hand constraint anchor, which collides with NOTHING (it
+// exists only to be one end of a grip spring), and HELD is a spring-held
+// object: it collides like MOVING except against HAND, because kinematic
+// finger capsules squeezing a held object are infinitely strong and eject
+// it (the device symptom: "it shoots away"). All map onto the MOVING
 // broadphase layer, so the broadphase setup is unchanged.
 namespace Layers {
 static constexpr JPH::ObjectLayer NON_MOVING = 0;
 static constexpr JPH::ObjectLayer MOVING = 1;
 static constexpr JPH::ObjectLayer HAND = 2;
 static constexpr JPH::ObjectLayer GRIP = 3;
-static constexpr JPH::ObjectLayer NUM_LAYERS = 4;
+static constexpr JPH::ObjectLayer HELD = 4;
+static constexpr JPH::ObjectLayer NUM_LAYERS = 5;
 }
 
 namespace BroadPhaseLayers {
@@ -70,11 +74,16 @@ public:
     bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
         // Must stay symmetric: ShouldCollide(a,b) == ShouldCollide(b,a).
         switch (a) {
-            case Layers::NON_MOVING: return b == Layers::MOVING;
+            case Layers::NON_MOVING:
+                return b == Layers::MOVING || b == Layers::HELD;
             case Layers::MOVING:
                 return b != Layers::GRIP;   // moving hits everything but grips
-            case Layers::HAND: return b == Layers::MOVING;
+            case Layers::HAND:
+                return b == Layers::MOVING;   // NOT HELD: no squeeze ejection
             case Layers::GRIP: return false;
+            case Layers::HELD:
+                return b == Layers::NON_MOVING || b == Layers::MOVING ||
+                       b == Layers::HELD;
             default: return false;
         }
     }
@@ -87,6 +96,7 @@ public:
         mapping[Layers::MOVING] = BroadPhaseLayers::MOVING;
         mapping[Layers::HAND] = BroadPhaseLayers::MOVING;
         mapping[Layers::GRIP] = BroadPhaseLayers::MOVING;
+        mapping[Layers::HELD] = BroadPhaseLayers::MOVING;
     }
     JPH::uint GetNumBroadPhaseLayers() const override {
         return BroadPhaseLayers::NUM_LAYERS;
@@ -112,6 +122,7 @@ public:
             case Layers::MOVING: return true;
             case Layers::HAND: return bp == BroadPhaseLayers::MOVING;
             case Layers::GRIP: return false;
+            case Layers::HELD: return true;
             default: return false;
         }
     }
@@ -487,7 +498,11 @@ void PhysicsWorld::setBodyLayer(PhysicsBodyId id, BodyLayer layer) {
     JPH::ObjectLayer target = Layers::MOVING;
     if (layer == BodyLayer::Hand) target = Layers::HAND;
     else if (layer == BodyLayer::Grip) target = Layers::GRIP;
+    else if (layer == BodyLayer::Held) target = Layers::HELD;
     impl->bodies().SetObjectLayer(JPH::BodyID(id), target);
+    // A layer change alters who can push whom RIGHT NOW (e.g. a released
+    // object regaining hand collision while fingers still overlap it).
+    impl->bodies().ActivateBody(JPH::BodyID(id));
 }
 
 // Store a created two-body constraint in the slot registry (vehicle idiom:

@@ -576,6 +576,51 @@ TEST_CASE(hand_layer_ignores_static_hits_dynamic) {
     world.shutdown();
 }
 
+TEST_CASE(held_layer_ignores_hands_but_rests_on_the_world) {
+    PhysicsWorld world;
+    world.initialize();
+    addFloor(world);
+    // A dynamic crate resting on the floor, switched to the HELD layer (the
+    // spring-held state): a HAND fingertip sweeping straight through it
+    // must NOT move it — the kinematic squeeze that ejected held objects.
+    PhysicsBodyId crate = world.addBox(Vec3(0.075, 0.075, 0.075),
+                                       Vec3(0, 0.075, 0), Quat::identity(),
+                                       BodyMotion::Dynamic, 0.0, 0.7);
+    world.setBodyLayer(crate, PhysicsWorld::BodyLayer::Held);
+    PhysicsBodyId tip = world.addSphere(0.012, Vec3(-0.3, 0.075, 0),
+                                        Quat::identity(),
+                                        BodyMotion::Kinematic);
+    world.setBodyLayer(tip, PhysicsWorld::BodyLayer::Hand);
+    for (int i = 0; i <= 40; i++) {
+        world.moveKinematic(tip, Vec3(-0.3 + 0.6 * i / 40.0, 0.075, 0),
+                            Quat::identity(), 1.0 / 60.0);
+        world.update(1.0 / 60.0);
+    }
+    CHECK(std::fabs(world.bodyPosition(crate).x) < 0.01);   // undisturbed
+    // ...while still resting on the STATIC floor (not falling through) and
+    // still hit by a DYNAMIC ball.
+    CHECK(world.bodyPosition(crate).y > 0.05);
+    PhysicsBodyId ball = world.addSphere(0.05, Vec3(-0.4, 0.075, 0),
+                                         Quat::identity(),
+                                         BodyMotion::Dynamic, 0.0, 0.2);
+    world.setLinearVelocity(ball, Vec3(3, 0, 0));
+    step(world, 30);
+    CHECK(world.bodyPosition(crate).x > 0.02);   // the ball moved it
+
+    // Restoring Default brings hand collision back.
+    world.setBodyLayer(crate, PhysicsWorld::BodyLayer::Default);
+    const Real beforeX = world.bodyPosition(crate).x;
+    world.teleport(tip, Vec3(beforeX - 0.3, 0.075, 0), Quat::identity());
+    for (int i = 0; i <= 40; i++) {
+        world.moveKinematic(
+            tip, Vec3(beforeX - 0.3 + 0.6 * i / 40.0, 0.075, 0),
+            Quat::identity(), 1.0 / 60.0);
+        world.update(1.0 / 60.0);
+    }
+    CHECK(world.bodyPosition(crate).x > beforeX + 0.02);
+    world.shutdown();
+}
+
 TEST_CASE(active_contacts_track_touch_and_orient_the_normal) {
     PhysicsWorld world;
     world.initialize();

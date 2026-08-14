@@ -30,6 +30,12 @@ constexpr Real kOpenDwell = 0.15;
 constexpr Real kGentleRelease = 0.25;
 // The other hand hooking the same object within this window logs as a toss.
 constexpr Real kTossWindow = 0.75;
+// Closure hook: fingertip JOINTS this close to the surface count as "on it"
+// — just past the capsule radius (9-11mm), so the hook fires at first touch,
+// BEFORE the kinematic squeeze that would eject the object.
+constexpr Real kClosureReach = 0.014;
+// Looser probe for seeding a pinch-hook's grip memory.
+constexpr Real kPinchSeedReach = 0.03;
 
 constexpr XrHandJointId kTipJoints[] = {
     XR_JOINT_THUMB_TIP, XR_JOINT_INDEX_TIP, XR_JOINT_MIDDLE_TIP,
@@ -161,31 +167,64 @@ HandInteractionSystem::Pick HandInteractionSystem::nearestGrabbable(
     return best;
 }
 
-int HandInteractionSystem::tipJointForBody(int h, PhysicsBodyId body) const {
-    for (const HandBone& bone : handBones_[h]) {
-        if (bone.body != body) continue;
-        for (const XrHandJointId tip : kTipJoints)
-            if (bone.jointB == tip) return bone.jointB;
-        return -1;
-    }
-    return -1;
+std::vector<XrGripPoint> HandInteractionSystem::probeShape(
+    FrameContext& ctx, int h, const Pick& pick, Real reach) const {
+    std::vector<std::pair<int, Vec3>> tips;
+    liveFingertips(ctx, h, tips);
+    const PhysicsBodyId body = shapeBody(pick);
+    return xrProbeGrip(tips, shapeHalfExtent(pick), shapeIsSphere(pick),
+                       physics_->physicsWorld().bodyPosition(body),
+                       physics_->physicsWorld().bodyOrientation(body), reach);
 }
 
-void HandInteractionSystem::fingertipContacts(int h, PhysicsBodyId body,
-                                              std::vector<XrGripPoint>& out) {
-    out.clear();
-    std::vector<ContactEvent> events;
-    physics_->physicsWorld().activeContacts(body, events);
-    for (const ContactEvent& e : events) {
-        const int joint = tipJointForBody(h, e.bodyB);
-        if (joint < 0) continue;
-        XrGripPoint c;
-        c.id = joint;
-        c.point = e.position;
-        // activeContacts orients the normal AWAY from the queried object;
-        // a grip point's normal presses INTO it.
-        c.normal = e.normal * -1.0;
-        out.push_back(c);
+void HandInteractionSystem::applyHeldLayer(const Pick& pick) {
+    physics_->physicsWorld().setBodyLayer(shapeBody(pick),
+                                          PhysicsWorld::BodyLayer::Held);
+    for (size_t i = 0; i < layerClear_.size(); i++) {
+        if (layerClear_[i].obj == pick.obj &&
+            layerClear_[i].sub == pick.sub) {
+            layerClear_.erase(layerClear_.begin() + i);
+            break;
+        }
+    }
+}
+
+void HandInteractionSystem::releaseHeldLayer(int releasingHand,
+                                             const Pick& pick) {
+    // Still spring-held by the other hand? The layer stays.
+    const int other = 1 - releasingHand;
+    if (hold_[other].active() && hold_[other].pick.obj == pick.obj &&
+        hold_[other].pick.sub == pick.sub)
+        return;
+    layerClear_.push_back(pick);
+}
+
+void HandInteractionSystem::settleHeldLayers(FrameContext& ctx) {
+    // Restore hand collision on released shapes once every fingertip has
+    // cleared them (untracked hands have parked capsules — they can't
+    // squeeze anything, so they don't hold the restore up).
+    constexpr Real kClearance = 0.025;
+    for (size_t i = 0; i < layerClear_.size();) {
+        const Pick& pick = layerClear_[i];
+        bool clear = true;
+        for (int h = 0; h < 2 && clear; h++) {
+            if (!handActive_[h]) continue;
+            std::vector<std::pair<int, Vec3>> tips;
+            liveFingertips(ctx, h, tips);
+            for (const auto& tip : tips) {
+                if (shapeSurfaceDistance(pick, tip.second) < kClearance) {
+                    clear = false;
+                    break;
+                }
+            }
+        }
+        if (clear) {
+            physics_->physicsWorld().setBodyLayer(
+                shapeBody(pick), PhysicsWorld::BodyLayer::Default);
+            layerClear_.erase(layerClear_.begin() + i);
+        } else {
+            i++;
+        }
     }
 }
 
@@ -234,6 +273,14 @@ bool HandInteractionSystem::makeRoom() {
         for (int h = 0; h < 2; h++)   // reindex held slots past the hole
             if (hold_[h].active() && hold_[h].pick.obj > static_cast<int>(i))
                 hold_[h].pick.obj--;
+        for (size_t k = 0; k < layerClear_.size();) {   // and pending clears
+            if (layerClear_[k].obj == static_cast<int>(i)) {
+                layerClear_.erase(layerClear_.begin() + k);   // body removed
+                continue;
+            }
+            if (layerClear_[k].obj > static_cast<int>(i)) layerClear_[k].obj--;
+            k++;
+        }
         lastUnhookObj_ = -1;
         return true;
     }
@@ -254,6 +301,7 @@ void HandInteractionSystem::hook(FrameContext& ctx, int h, const Pick& pick,
     hold.spring = spring;
     hold.pinchHold = pinchHold;
     hold.openSince = -1;
+    applyHeldLayer(pick);
 
     // Grip memory: the touching fingertips, object-local. A pinch that
     // landed with no capsule contacts yet remembers the thumb and index
@@ -319,6 +367,7 @@ void HandInteractionSystem::unhook(FrameContext& ctx, int h) {
     lastUnhookObj_ = hold.pick.obj;
     lastUnhookHand_ = h;
     lastUnhookTime_ = timeSeconds_;
+    releaseHeldLayer(h, hold.pick);
     hold = Hold{};
     consumePinchUntil_ = timeSeconds_ + 0.4;
 }
@@ -563,7 +612,6 @@ void HandInteractionSystem::updatePalette(FrameContext& ctx) {
 void HandInteractionSystem::updateGrips(FrameContext& ctx) {
     const Real moveDt = std::max(ctx.frameDelta, 1.0 / 240.0);
     std::vector<std::pair<int, Vec3>> tips;
-    std::vector<XrGripPoint> contacts;
 
     for (int h = 0; h < 2; h++) {
         const XrHand& hand = ctx.xr.hands[h];
@@ -634,34 +682,33 @@ void HandInteractionSystem::updateGrips(FrameContext& ctx) {
         if (pinch_[h].began() && timeSeconds_ >= consumePinchUntil_) {
             const Pick pick = nearestGrabbable(h, rawP, kGrabSurfaceReach);
             if (pick.valid()) {
-                fingertipContacts(h, shapeBody(pick), contacts);
-                hook(ctx, h, pick, /*pinchHold=*/true, contacts);
+                hook(ctx, h, pick, /*pinchHold=*/true,
+                     probeShape(ctx, h, pick, kPinchSeedReach));
                 consumePinchUntil_ = timeSeconds_ + 0.4;
                 continue;
             }
         }
 
-        // Hook, path 2 — CLOSURE: two-plus of this hand's fingertip
-        // capsules touching a shape with opposed press directions ("held on
-        // each side"). No pinch, no cooldown — this is how a fist wraps a
-        // pillar, and how a catch takes a flying object the moment the
-        // fingers close around it.
+        // Hook, path 2 — CLOSURE: two-plus fingertips ON a shape (proximity
+        // probe, deliberately predictive — see xrProbeGrip) with opposed
+        // press directions ("held on each side"). No pinch, no cooldown —
+        // this is how a fist wraps a pillar, and how a catch takes a flying
+        // object the moment the fingers close around it.
         for (size_t i = 0; i < objects_.size() && !hold_[h].active(); i++) {
             const int idx = static_cast<int>(i);
             Pick candidates[2] = {{idx, false}, {idx, true}};
             const int n = objects_[i].subBody != INVALID_PHYSICS_BODY ? 2 : 1;
             for (int c = 0; c < n; c++) {
-                fingertipContacts(h, shapeBody(candidates[c]), contacts);
-                if (contacts.size() < 2) continue;
+                const std::vector<XrGripPoint> points =
+                    probeShape(ctx, h, candidates[c], kClosureReach);
+                if (points.size() < 2) continue;
                 XrGripMemory probe;
-                probe.capture(
-                    contacts,
-                    physics_->physicsWorld().bodyPosition(
-                        shapeBody(candidates[c])),
-                    physics_->physicsWorld().bodyOrientation(
-                        shapeBody(candidates[c])));
+                const PhysicsBodyId body = shapeBody(candidates[c]);
+                probe.capture(points,
+                              physics_->physicsWorld().bodyPosition(body),
+                              physics_->physicsWorld().bodyOrientation(body));
                 if (!probe.opposed()) continue;
-                hook(ctx, h, candidates[c], /*pinchHold=*/false, contacts);
+                hook(ctx, h, candidates[c], /*pinchHold=*/false, points);
                 break;
             }
         }
@@ -681,6 +728,7 @@ void HandInteractionSystem::update(FrameContext& ctx) {
     // Grips BEFORE the palette: a pinch that lands near an existing object
     // means "pick that up", even with the palette open.
     updateGrips(ctx);
+    settleHeldLayers(ctx);
     updatePalette(ctx);
 
     // While hands are interacting, the SYSTEM gaze+pinch must not also fire
@@ -861,6 +909,7 @@ void HandInteractionSystem::onStop(FrameContext& ctx) {
         }
     }
     objects_.clear();
+    layerClear_.clear();
     handActive_[0] = handActive_[1] = false;
     lastUnhookObj_ = -1;
     palette_ = XrPalette(paletteConfig(kItemCount));

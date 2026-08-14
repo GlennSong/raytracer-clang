@@ -5849,6 +5849,23 @@ exploding the solver. Not in scope yet: per-finger visual hand posing around
 the held shape, and surface-store-aware placement (the assist currently
 supports aligned box tops and a downward ray).
 
+**Amendment (2026-08-14, first device test).** Contact-driven closure was
+wrong on device: the finger capsules are KINEMATIC — infinitely strong — so
+two of them squeezing an object from opposing sides eject it in the same
+physics steps that raise the opposed contact events the hook was waiting
+for ("it shoots away"; two hands made it worse). Two changes, same
+principle — the hand must never be able to out-muscle the world:
+(1) the hook decision is now PREDICTIVE — `xrProbeGrip` (pure, host-tested)
+finds fingertips within ~14mm of the oriented surface (just past the
+capsule radius, i.e. first touch) and the opposed test runs on those press
+directions, so the hook fires before any squeeze develops; `activeContacts`
+remains in PhysicsWorld for other consumers. (2) a spring-held object rides
+a new HELD layer — like Default but with hand-capsule collision OFF — so
+closing fingers can never fight the spring; on release the layer is
+restored only after every fingertip has cleared the shape by ~25mm,
+because restoring while fingers still overlap reintroduces the ejection at
+exactly the moment of a regrip.
+
 ---
 
 *Add a new ADR when a decision is hard to reverse, affects multiple modules, or

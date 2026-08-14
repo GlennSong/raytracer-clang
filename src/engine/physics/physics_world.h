@@ -104,7 +104,10 @@ public:
     // dynamic bodies, pass through static geometry (the real hand already
     // stops on the real table). Grip = a per-hand constraint anchor that
     // collides with NOTHING — it exists to be one end of a grip spring.
-    enum class BodyLayer { Default, Hand, Grip };
+    // Held = a spring-held object: collides like Default EXCEPT against
+    // Hand, because kinematic finger capsules squeezing a held object are
+    // infinitely strong and eject it. Changing layers wakes the body.
+    enum class BodyLayer { Default, Hand, Grip, Held };
     void setBodyLayer(PhysicsBodyId id, BodyLayer layer);
 
     // The hold: one 6-DOF spring between a (kinematic, Grip-layer) anchor

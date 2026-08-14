@@ -198,6 +198,70 @@ TEST_CASE(grasp_hand_memory_unavailable_until_first_track) {
     CHECK(nearVec(mem.position(), Vec3(1, 2, 3), 1e-12));
 }
 
+// --- Closure probe --------------------------------------------------------
+
+TEST_CASE(grasp_probe_finds_wrapping_tips_with_opposed_press) {
+    // A 15cm crate at the origin; thumb joint 12mm off the -X face, index
+    // 12mm off the +X face (the capsule radius is ~10mm, so this is "just
+    // touching"), middle finger far away.
+    const Vec3 he(0.075, 0.075, 0.075);
+    const std::vector<std::pair<int, Vec3>> tips = {
+        {1, Vec3(-0.087, 0, 0)}, {2, Vec3(0.087, 0.01, 0)},
+        {3, Vec3(0.3, 0.3, 0.3)}};
+    const auto points = xrProbeGrip(tips, he, false, Vec3(0, 0, 0),
+                                    Quat::identity(), 0.014);
+    CHECK(points.size() == 2);
+    XrGripMemory grip;
+    grip.capture(points, Vec3(0, 0, 0), Quat::identity());
+    CHECK(grip.opposed());
+
+    // Same two tips hovering off the SAME face: found, but never opposed —
+    // resting an open hand against a crate is not a grab.
+    const std::vector<std::pair<int, Vec3>> sameSide = {
+        {1, Vec3(-0.085, 0.02, 0)}, {2, Vec3(-0.085, -0.02, 0)}};
+    const auto flat = xrProbeGrip(sameSide, he, false, Vec3(0, 0, 0),
+                                  Quat::identity(), 0.014);
+    CHECK(flat.size() == 2);
+    grip.capture(flat, Vec3(0, 0, 0), Quat::identity());
+    CHECK(!grip.opposed());
+
+    // Out of reach: nothing.
+    CHECK(xrProbeGrip({{1, Vec3(0.12, 0, 0)}}, he, false, Vec3(0, 0, 0),
+                      Quat::identity(), 0.014)
+              .empty());
+}
+
+TEST_CASE(grasp_probe_follows_orientation_and_handles_inside_tips) {
+    // The crate rotated 45 deg about Y: tips that wrap its ROTATED faces
+    // oppose; the probe must work in the oriented frame, not the AABB.
+    const Vec3 he(0.075, 0.075, 0.075);
+    const Quat q = Quat::fromAxisAngle(Vec3(0, 1, 0), PI / 4);
+    const Vec3 faceDir = q.rotate(Vec3(1, 0, 0));
+    const std::vector<std::pair<int, Vec3>> tips = {
+        {1, faceDir * -0.085}, {2, faceDir * 0.085}};
+    const auto points =
+        xrProbeGrip(tips, he, false, Vec3(0, 0, 0), q, 0.014);
+    CHECK(points.size() == 2);
+    XrGripMemory grip;
+    grip.capture(points, Vec3(0, 0, 0), q);
+    CHECK(grip.opposed());
+
+    // A tip already INSIDE the shape (fast fingers penetrate between
+    // frames) still yields a grip point, pressing toward the centre.
+    const auto inside = xrProbeGrip({{1, Vec3(0.05, 0, 0)}}, he, false,
+                                    Vec3(0, 0, 0), Quat::identity(), 0.014);
+    CHECK(inside.size() == 1);
+    CHECK(inside[0].normal.x < -0.99);
+
+    // Sphere: two tips across the ball oppose.
+    const auto ball = xrProbeGrip(
+        {{1, Vec3(-0.085, 0, 0)}, {2, Vec3(0.085, 0, 0)}}, Vec3(0.075, 0, 0),
+        true, Vec3(0, 0, 0), Quat::identity(), 0.014);
+    CHECK(ball.size() == 2);
+    grip.capture(ball, Vec3(0, 0, 0), Quat::identity());
+    CHECK(grip.opposed());
+}
+
 // --- Placement assist -----------------------------------------------------
 
 TEST_CASE(grasp_nearest_axis_aligned_snaps_and_stays_right_handed) {

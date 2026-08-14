@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "xr_touch.h"
+
 namespace engine {
 
 // --- XrGripMemory ---------------------------------------------------------
@@ -247,6 +249,27 @@ XrAlignedPose xrAlignToSupport(const Vec3& halfExtent, const Vec3& position,
     out.valid = true;
     out.position = target;
     out.orientation = snapped;
+    return out;
+}
+
+std::vector<XrGripPoint> xrProbeGrip(
+    const std::vector<std::pair<int, Vec3>>& tips, const Vec3& halfExtent,
+    bool sphere, const Vec3& position, const Quat& orientation, Real reach) {
+    std::vector<XrGripPoint> out;
+    for (const auto& tip : tips) {
+        const Vec3 onSurface =
+            sphere ? xrNearestPointOnSphere(halfExtent.x, position, tip.second)
+                   : xrNearestPointOnBox(halfExtent, position, orientation,
+                                         tip.second);
+        if ((onSurface - tip.second).length() > reach) continue;
+        // Press direction: toward the surface point, or toward the centre
+        // for a tip already inside (nearest point == the tip itself).
+        Vec3 press = onSurface - tip.second;
+        if (press.length() < 1e-6) press = position - tip.second;
+        if (press.length() < 1e-6) continue;   // tip AT the centre — no info
+        out.push_back(
+            {tip.first, onSurface, press * (1.0 / press.length())});
+    }
     return out;
 }
 
