@@ -996,6 +996,17 @@ LaneSection sectionWithLanesChanged(const LaneSection& base, int side, int delta
     return out;
 }
 
+LaneSection sectionWithShoulderRetracted(const LaneSection& base, int side) {
+    LaneSection out = base;
+    std::vector<Strip>& stack = side >= 0 ? out.left : out.right;
+    for (size_t i = stack.size(); i-- > 0;) {
+        if (stack[i].kind != StripKind::Shoulder) continue;
+        stack[i].width = Poly3::constant(0.0);
+        break;
+    }
+    return out;
+}
+
 LaneSection sectionWithTurnBay(const LaneSection& base, int side, double width) {
     LaneSection out = base;
     std::vector<Strip>& stack = side >= 0 ? out.left : out.right;

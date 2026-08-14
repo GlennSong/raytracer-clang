@@ -249,6 +249,16 @@ private:
 // speed-derived taper. Returns the section list to hand to a ProfileTimeline.
 LaneSection sectionWithLanesChanged(const LaneSection& base, int side, int delta,
                                     double laneWidth = 3.6);
+// The same section with its outermost Shoulder narrowed to nothing.
+//
+// What a gore actually does. An auxiliary lane is inserted INBOARD of the
+// shoulder, so a ramp converging from outside has to cross the shoulder to reach
+// it — there is no station at which the two pavements simply meet, and no choice
+// of taper length avoids that. The shoulder has to get out of the way: it
+// narrows to zero ahead of the nose, the ramp's own pavement occupies that
+// ground, and the shoulder reappears outboard of the new lane. That is what the
+// paint on a real gore is drawn around.
+LaneSection sectionWithShoulderRetracted(const LaneSection& base, int side);
 // Insert a turn bay: a Turn strip on `side` that exists only near a junction.
 LaneSection sectionWithTurnBay(const LaneSection& base, int side, double width = 3.3);
 // Swap the median for a two-way left-turn lane.

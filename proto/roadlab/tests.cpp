@@ -2252,6 +2252,99 @@ void testProfileTextureIsWhatTheShaderWouldSample() {
 
 // --- earthworks -------------------------------------------------------------
 
+
+namespace {
+
+// The PAVED extent: out to the last strip you could drive or stand on, stopping
+// before the earthwork. A Slope is a cut/fill batter running out to terrain, and
+// a ramp passing over one is a grading problem, not two roads drawn on top of
+// each other — conflating them hides the defect that matters.
+double pavedExtentAt(const Road& r, double s, int side) {
+    int si = r.xs.sectionIndexAt(s);
+    const LaneSection& sec = r.xs.sections[size_t(si)];
+    const std::vector<Strip>& stack = side >= 0 ? sec.left : sec.right;
+    double t = 0;
+    for (const Strip& x : stack) {
+        if (x.kind == StripKind::Slope || x.kind == StripKind::Verge) break;
+        t += x.width.eval(s - sec.s0);
+    }
+    return side >= 0 ? t : -t;
+}
+
+}  // namespace
+
+void testRoadSurfacesDoNotOverlap() {
+    group("no overlapping pavement");
+    // One surface owns each piece of ground. In a 3D world two carriageways
+    // drawn on the same square metre is not a subtle artefact — it is z-fighting
+    // in the best case and a ramp visibly buried in a freeway in the worst, which
+    // is exactly what this found: the on-ramp's pavement ran up to 11 m inside
+    // the mainline with a concrete barrier riding along its edge.
+    //
+    // The metric is shared INTERIOR, not shared edges. Surfaces that abut touch
+    // along a boundary by design — that is what a correct merge IS — and a test
+    // that flagged it could not tell a good join from a road driving through
+    // another one. Interior in `s` as well as `t`, because splitRoad partitions
+    // one spine into abutting windows whose end stations are shared by
+    // construction.
+    for (const std::string& name : demoNames()) {
+        Scene sc;
+        if (!buildDemo(name, sc)) continue;
+        finalizeScene(sc, false, false);
+
+        long probes = 0, bad = 0;
+        double worst = 0;
+        std::string worstAt;
+        const double kEnd = 1.0;
+        for (const Road& r : sc.net.roads()) {
+            if (r.kind == RoadKind::Connector) continue;
+            double len = r.activeLength();
+            if (len < 2 * kEnd + 2) continue;
+            for (int k = 0; k <= 60; ++k) {
+                double s = r.begin() + kEnd + (len - 2 * kEnd) * double(k) / 60.0;
+                if (carrierAt(r, s) != CarrierKind::AtGrade) continue;
+                double le = pavedExtentAt(r, s, +1), re = pavedExtentAt(r, s, -1);
+                for (int j = 1; j <= 5; ++j) {
+                    double t = re + (le - re) * double(j) / 6.0;
+                    Vec3 e = r.surfacePoint(s, t);
+                    ++probes;
+                    for (const Road& o : sc.net.roads()) {
+                        if (o.id == r.id || o.kind == RoadKind::Connector) continue;
+                        double os = 0, ot = 0;
+                        if (!o.spine.toST({e.x, e.z}, os, ot)) continue;
+                        if (os < o.begin() + kEnd || os > o.end() - kEnd) continue;
+                        if (carrierAt(o, os) != CarrierKind::AtGrade) continue;
+                        double ole = pavedExtentAt(o, os, +1), ore = pavedExtentAt(o, os, -1);
+                        if (ot > ole || ot < ore) continue;
+                        // A grade separation is two surfaces at different heights
+                        // sharing a plan position, which is the whole point of an
+                        // overpass.
+                        if (std::fabs(o.surfacePoint(os, ot).y - e.y) > 1.0) continue;
+                        double depth = std::min(ole - ot, ot - ore);
+                        if (depth > 0.5) {
+                            ++bad;
+                            if (depth > worst) {
+                                worst = depth;
+                                worstAt = r.name + " in " + o.name;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        check(probes > 300, (name + ": there was pavement to probe").c_str());
+        // Two samples out of ~1700 still touch at the gore, where the ramp's
+        // pavement and the auxiliary lane's meet across a 1 m nose taper. That is
+        // a real residual and it is bounded here rather than rounded away.
+        check(bad <= 2, (name + ": pavement does not overlap other pavement").c_str());
+        check(worst < 2.0, (name + ": and any residual is under a lane width").c_str());
+        if (bad > 0)
+            std::printf("  note: %-11s %ld of %ld probes overlap, worst %.2f m [%s]\n",
+                        name.c_str(), bad, probes, worst, worstAt.c_str());
+    }
+}
+
 void testEarthworksRunOnTheirBatter() {
     group("earthworks");
     // The ground meets a road at the road's edge and then runs away from it on a
@@ -2994,6 +3087,7 @@ int main() {
     testBakedBoundariesMatchTheCrossSection();
     testSeamSmearIsMillimetresWide();
     testProfileTextureIsWhatTheShaderWouldSample();
+    testRoadSurfacesDoNotOverlap();
     testEarthworksRunOnTheirBatter();
     testPaintSurvivesLod();
     testGeneratedWgslTracksTheHeader();

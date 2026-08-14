@@ -374,7 +374,11 @@ void demoInterchange(Scene& sc) {
     on.outerHeight = 1.5;
     on.auxLength = 200.0;
     int mainTail = -1;
-    buildOnRamp(sc.net, f, 720.0, on, &mainTail);
+    // The station is the GORE NOSE now, not the start of a taper that used to
+    // run ~100 m ahead of it, so the merge point moves downstream to leave the
+    // ramp the same run from its outer end. Authoring it any closer just makes
+    // the ramp's curve tighter until the minimum-radius lint objects.
+    buildOnRamp(sc.net, f, 820.0, on, &mainTail);
 
     RampDesc off;
     off.name = "off-ramp";
@@ -561,7 +565,7 @@ void demoShowcase(Scene& sc) {
     on.outerHeading = 118 * kDeg2Rad;
     on.outerHeight = 1.0;
     on.auxLength = 190.0;
-    buildOnRamp(sc.net, f, 760.0, on);
+    buildOnRamp(sc.net, f, 860.0, on);   // the gore nose; see demoInterchange
 }
 
 }  // namespace

@@ -86,6 +86,24 @@ void applyTwltl(Network& net, int roadId);
 
 // --- ramps ----------------------------------------------------------------
 
+// How a ramp joins its mainline. Both are standard; they differ in which piece
+// of geometry does the merging, and roadlab can express either because a
+// merge is a width function, not a special case.
+//
+//   Parallel  an auxiliary lane at FULL width from the gore nose, running the
+//             acceleration length before tapering out. The ramp delivers a whole
+//             lane. Standard at freeway speeds.
+//   Taper     no auxiliary lane; the ramp's own lane narrows into the mainline.
+//             Shorter and simpler, and what a rural entrance looks like.
+enum class RampEntry : uint8_t { Parallel, Taper };
+
+// How long the auxiliary lane takes to reach full width at a parallel-type gore
+// nose. Not zero: a lane that appears with no transition at all is a step in the
+// cross-section, and the mesher needs somewhere to put the ring pair. One metre
+// is below anything the eye resolves at road scale and keeps every downstream
+// invariant (lane-section seams, the marking bake's ring rule) intact.
+constexpr double kGoreNoseTaper = 4.0;
+
 struct RampDesc {
     std::string name = "ramp";
     std::string preset = "ramp1";
@@ -95,6 +113,7 @@ struct RampDesc {
     double auxLength = 180.0;    // parallel length of the auxiliary lane
     double designSpeed = 60.0;
     int side = -1;               // which side of the mainline (-1 = right)
+    RampEntry entry = RampEntry::Parallel;
 };
 
 // Grows an auxiliary lane on the mainline, splits it at the merge point, and

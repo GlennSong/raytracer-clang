@@ -99,10 +99,21 @@ struct Road {
         double s = 0;
         double runLength = -1;   // < 0 = to the end of the road
         double taper = -1;       // < 0 = solve it
+        // The taper on the way BACK OUT, when runLength ends the edit. Separate
+        // because a parallel-type freeway entrance is asymmetric: the auxiliary
+        // lane exists at full width from the gore nose — that is where the ramp's
+        // own lane becomes it — and only tapers on the downstream end.
+        double taperEnd = -1;    // < 0 = same as `taper`
         int side = -1;
         int delta = -1;
         double width = 3.3;
         bool atEnd = true;       // TurnBay: which side of `s` the bay sits on
+        // This edit is a MERGE NOSE, not a taper: the lane it adds is delivered
+        // by a ramp whose pavement is already there, so the combined surface a
+        // driver sees does not narrow. The taper lint only looks at one road at
+        // a time and would otherwise report the mainline's share of a gore as a
+        // 1:4 kink that nobody experiences.
+        bool mergeNose = false;
     };
     std::vector<ProfileEdit> profileEdits;
 

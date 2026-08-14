@@ -602,6 +602,35 @@ std::vector<std::string> Network::validate() const {
             // A sliver section carries no useful taper information; the geometry
             // lint below would report a meaningless 1:0 rate for it.
             if (sec.length < 2.0) continue;
+            // A gore nose is exempt: see ProfileEdit::mergeNose. The lane is
+            // handed over by a ramp rather than tapered out of nothing, so the
+            // surface a driver sees does not narrow even though this one road's
+            // share of it does.
+            bool atNose = false;
+            for (const Road::ProfileEdit& e : r.profileEdits)
+                if (e.mergeNose && std::fabs(e.s - sec.s0) < 2.0) atNose = true;
+            // ...and the same exemption has to survive a round trip through
+            // OpenDRIVE, which stores geometry rather than authoring: the edits
+            // are gone on the far side. What remains is the topology, and it says
+            // the same thing — a lane that materialises hard against a junction
+            // was handed over by whatever connects through it. Deriving the
+            // exemption from what is actually there, rather than from a flag,
+            // means the built network and the imported one are judged alike.
+            // ...and the same exemption has to survive a round trip through
+            // OpenDRIVE, which stores geometry rather than authoring: the edits
+            // are gone on the far side, and the export has split the merge into
+            // stub roads whose links read as plain road-to-road.
+            //
+            // What survives is the SHAPE, and a gore has a distinctive one: a
+            // lane that is born at zero width and is at full width a few metres
+            // later, right where the road ends and hands it on. Nothing else in
+            // the system looks like that — a real lane drop also reaches zero,
+            // but over the hundred-plus metres the lint is asking for, which is
+            // what the length bound separates.
+            bool goreShaped = sec.length < 25.0 &&
+                              (std::fabs(sec.s0 - r.begin()) < 1e-3 ||
+                               std::fabs(sec.s0 + sec.length - r.end()) < 1e-3);
+            if (atNose || goreShaped) continue;
             for (const std::vector<Strip>* stack : {&sec.left, &sec.right}) {
                 for (const Strip& st : *stack) {
                     double w0 = st.width.eval(0), w1 = st.width.eval(sec.length);
