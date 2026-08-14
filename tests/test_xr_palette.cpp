@@ -151,3 +151,30 @@ TEST_CASE(palette_left_right_symmetry) {
     palette.update(in, 0.1);
     CHECK(palette.hoverItem() == 1);
 }
+
+TEST_CASE(palette_wraps_into_centred_rows_past_max_per_row) {
+    // 9 items, 5 per row: rows of 5 and 4, each centred on its own count,
+    // offset across the palm. 5 items stay a single centred row (the layout
+    // every earlier test pins).
+    XrPalette::Config c;
+    c.itemCount = 9;
+    XrPalette palette(c);
+    const XrPalmPose palm = palmAt(0.0);
+
+    // Row 0 spans slots 0..4 along fingers at across-offset -rowSpacing/2.
+    const Vec3 s0 = palette.slotPosition(palm, 0);
+    const Vec3 s4 = palette.slotPosition(palm, 4);
+    CHECK(std::abs((s4 - s0).z - (-4 * c.slotSpacing)) < 1e-9);
+    const Vec3 mid0 = palette.slotPosition(palm, 2);
+    CHECK(std::abs(mid0.z - palm.position.z) < 1e-9);   // centred row
+
+    // Row 1 (4 items) sits one rowSpacing across from row 0 and is centred
+    // on ITS count: slots 5..8 straddle the palm centre.
+    const Vec3 s5 = palette.slotPosition(palm, 5);
+    const Vec3 s8 = palette.slotPosition(palm, 8);
+    const Vec3 acrossDelta = s5 - s0;
+    CHECK(std::abs(dot(acrossDelta, palm.across) - c.rowSpacing) < 1e-9);
+    CHECK(std::abs((s5.z + s8.z) * 0.5 - palm.position.z) < 1e-9);
+    // Every slot floats the same lift above the palm.
+    CHECK(std::abs(s8.y - (palm.position.y + c.lift)) < 1e-9);
+}

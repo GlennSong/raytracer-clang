@@ -12,6 +12,8 @@
 #ifndef ENGINE_XR_PALETTE_H
 #define ENGINE_XR_PALETTE_H
 
+#include <algorithm>
+
 #include "../../rt_math.h"
 #include "xr_gestures.h"
 
@@ -27,6 +29,8 @@ public:
         Real showAngle = 0.7;        // rad from +Y to OPEN (tight)
         Real keepAngle = 1.3;        // rad to STAY open (loose) — hysteresis
         Real lingerSeconds = 0.6;    // grace after the palm dips
+        int maxPerRow = 5;           // wrap into rows past this (across palm)
+        Real rowSpacing = 0.085;     // metres between row centres
     };
 
     XrPalette() = default;   // itemCount 0: valid, shows nothing
@@ -47,12 +51,21 @@ public:
     bool hiddenEdge() const { return hiddenEdge_; }
     bool hoverChanged() const { return hoverChanged_; }
 
-    // The row runs along palm.fingers — wrist toward fingertips, i.e. along
-    // the forearm (device feedback: across the palm read as sideways).
+    // Rows run along palm.fingers — wrist toward fingertips, i.e. along
+    // the forearm (device feedback: across the palm read as sideways) —
+    // wrapping onto extra rows across the palm past maxPerRow, each row
+    // centred on its own item count.
     Vec3 slotPosition(const XrPalmPose& palm, int slot) const {
+        const int rows =
+            (config_.itemCount + config_.maxPerRow - 1) / config_.maxPerRow;
+        const int row = slot / config_.maxPerRow;
+        const int col = slot % config_.maxPerRow;
+        const int inRow = std::min(config_.maxPerRow,
+                                   config_.itemCount - row * config_.maxPerRow);
         return palm.position + palm.normal * config_.lift +
-               palm.fingers * ((slot - (config_.itemCount - 1) * 0.5) *
-                               config_.slotSpacing);
+               palm.fingers *
+                   ((col - (inRow - 1) * 0.5) * config_.slotSpacing) +
+               palm.across * ((row - (rows - 1) * 0.5) * config_.rowSpacing);
     }
 
 private:

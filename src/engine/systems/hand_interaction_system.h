@@ -131,13 +131,16 @@ private:
         bool pinchHold = false;
         XrGripMemory grip;
         Real openSince = -1;
+        Real lastOpening = 0;   // latest opening() — drives the anchor-dot
+                                // release feedback (gold -> red)
         bool active() const { return spring != INVALID_CONSTRAINT; }
     };
 
     PhysicsSystem* physics_ = nullptr;
     std::vector<SandboxObject> objects_;
-    MeshHandle itemMeshes_[8];
-    MeshHandle subMeshes_[8];
+    MeshHandle itemMeshes_[12];
+    MeshHandle subMeshes_[12];
+    MeshHandle shadowMesh_;   // unit slab for the held-object drop shadow
 
     XrPinchTracker pinch_[2];
     Hold hold_[2];
@@ -178,7 +181,11 @@ private:
 
     // Released shapes still on the HELD layer, waiting for the fingers to
     // clear before hand collision is restored (see applyHeldLayer).
-    std::vector<Pick> layerClear_;
+    struct PendingClear {
+        Pick pick;
+        Real since = 0;
+    };
+    std::vector<PendingClear> layerClear_;
 
     Vec3 handWorld(FrameContext& ctx, const Vec3& originPoint) const;
     Quat handOrientation(const XrHand& hand) const;

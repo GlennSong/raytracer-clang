@@ -23,8 +23,16 @@ constexpr size_t kMaxObjects = 32;
 constexpr Real kPalmRadius = 0.035;
 constexpr Real kGripAnchorRadius = 0.015;
 // Closure release: opening past XrGripMemory::kReleaseOpening must persist
-// this long — a single noisy frame must not drop the object.
-constexpr Real kOpenDwell = 0.15;
+// this long — a single noisy frame must not drop the object. Short, because
+// during a toss every extra ms of hold lets the spring drag the object back
+// down with the decelerating hand ("sticky"; device round two). A DECISIVE
+// open (1.5x the threshold) releases the same frame.
+constexpr Real kOpenDwell = 0.05;
+// Anti-restick: after a release the object separates from the hand while
+// the fingers are still near it for a few frames; closure must not re-hook
+// a shape that is RECEDING from the grip faster than this (a toss leaving,
+// not a regrip). Catches are unaffected — a caught object approaches.
+constexpr Real kRecedeSpeed = 0.25;
 // A release slower than this is a deliberate set-down: eligible for the
 // placement-assist snap. Anything faster is a throw/drop — untouched.
 constexpr Real kGentleRelease = 0.25;
@@ -84,6 +92,19 @@ const HandInteractionSystem::ItemDef HandInteractionSystem::kItems[] = {
      JointKind::Slider, Vec3(0.028, 0.018, 0.03), Vec3(0.85, 0.30, 0.20),
      Vec3(-0.03, 0.046, 0), Vec3(-0.03, 0.046, 0), Vec3(1, 0, 0),
      0.0, 0.06, 6.0},
+    // Crank: a post with a paddle on a FREE hinge (full-turn limits),
+    // mounted beside the post so the sweep clears it — grab the paddle end
+    // and spin it like a propeller.
+    {"crank", Vec3(0.03, 0.10, 0.03), Vec3(0.40, 0.42, 0.48), false,
+     JointKind::Hinge, Vec3(0.10, 0.015, 0.02), Vec3(0.90, 0.60, 0.15),
+     Vec3(0, 0.10, 0.054), Vec3(0, 0.10, 0.054), Vec3(0, 0, 1),
+     -PI, PI, 0.0},
+    // Seesaw: a plank balanced on a small base, tilting +/-26 degrees —
+    // press one end down (finger or a dropped crate) and the other rises.
+    {"seesaw", Vec3(0.04, 0.03, 0.04), Vec3(0.35, 0.30, 0.28), false,
+     JointKind::Hinge, Vec3(0.14, 0.012, 0.03), Vec3(0.75, 0.68, 0.35),
+     Vec3(0, 0.045, 0), Vec3(0, 0.045, 0), Vec3(0, 0, 1),
+     -0.45, 0.45, 0.0},
 };
 const int HandInteractionSystem::kItemCount =
     static_cast<int>(sizeof(HandInteractionSystem::kItems) /
@@ -181,8 +202,8 @@ void HandInteractionSystem::applyHeldLayer(const Pick& pick) {
     physics_->physicsWorld().setBodyLayer(shapeBody(pick),
                                           PhysicsWorld::BodyLayer::Held);
     for (size_t i = 0; i < layerClear_.size(); i++) {
-        if (layerClear_[i].obj == pick.obj &&
-            layerClear_[i].sub == pick.sub) {
+        if (layerClear_[i].pick.obj == pick.obj &&
+            layerClear_[i].pick.sub == pick.sub) {
             layerClear_.erase(layerClear_.begin() + i);
             break;
         }
@@ -196,25 +217,34 @@ void HandInteractionSystem::releaseHeldLayer(int releasingHand,
     if (hold_[other].active() && hold_[other].pick.obj == pick.obj &&
         hold_[other].pick.sub == pick.sub)
         return;
-    layerClear_.push_back(pick);
+    layerClear_.push_back({pick, static_cast<Real>(timeSeconds_)});
 }
 
 void HandInteractionSystem::settleHeldLayers(FrameContext& ctx) {
     // Restore hand collision on released shapes once every fingertip has
     // cleared them (untracked hands have parked capsules — they can't
-    // squeeze anything, so they don't hold the restore up).
-    constexpr Real kClearance = 0.025;
+    // squeeze anything, so they don't hold the restore up). The clearance
+    // is just past the capsule radius — only actual OVERLAP ejects — and a
+    // timeout backstops it: holding the chest keeps fingers permanently
+    // near its released lid, and a lid the hand can never touch again is
+    // worse than one brief nudge (device round two: "can't use the back of
+    // my palm to close that lidded box").
+    constexpr Real kClearance = 0.012;
+    constexpr Real kClearTimeout = 1.0;
     for (size_t i = 0; i < layerClear_.size();) {
-        const Pick& pick = layerClear_[i];
-        bool clear = true;
-        for (int h = 0; h < 2 && clear; h++) {
-            if (!handActive_[h]) continue;
-            std::vector<std::pair<int, Vec3>> tips;
-            liveFingertips(ctx, h, tips);
-            for (const auto& tip : tips) {
-                if (shapeSurfaceDistance(pick, tip.second) < kClearance) {
-                    clear = false;
-                    break;
+        const Pick& pick = layerClear_[i].pick;
+        bool clear = timeSeconds_ - layerClear_[i].since > kClearTimeout;
+        if (!clear) {
+            clear = true;
+            for (int h = 0; h < 2 && clear; h++) {
+                if (!handActive_[h]) continue;
+                std::vector<std::pair<int, Vec3>> tips;
+                liveFingertips(ctx, h, tips);
+                for (const auto& tip : tips) {
+                    if (shapeSurfaceDistance(pick, tip.second) < kClearance) {
+                        clear = false;
+                        break;
+                    }
                 }
             }
         }
@@ -274,11 +304,12 @@ bool HandInteractionSystem::makeRoom() {
             if (hold_[h].active() && hold_[h].pick.obj > static_cast<int>(i))
                 hold_[h].pick.obj--;
         for (size_t k = 0; k < layerClear_.size();) {   // and pending clears
-            if (layerClear_[k].obj == static_cast<int>(i)) {
+            if (layerClear_[k].pick.obj == static_cast<int>(i)) {
                 layerClear_.erase(layerClear_.begin() + k);   // body removed
                 continue;
             }
-            if (layerClear_[k].obj > static_cast<int>(i)) layerClear_[k].obj--;
+            if (layerClear_[k].pick.obj > static_cast<int>(i))
+                layerClear_[k].pick.obj--;
             k++;
         }
         lastUnhookObj_ = -1;
@@ -656,15 +687,22 @@ void HandInteractionSystem::updateGrips(FrameContext& ctx) {
                 if (pinch_[h].released()) unhook(ctx, h);
             } else {
                 // Closure release: live fingertips off their remembered
-                // anchors past hysteresis, sustained. Untracked tips are
-                // skipped and no-data reads as closed (opening() contract),
-                // so a dropout mid-hold coasts instead of dropping.
+                // anchors past hysteresis. A brief dwell filters single
+                // noisy frames, but a DECISIVE open (1.5x) releases the
+                // same frame — a toss must let go at the apex, not 150ms
+                // after (the spring drags the object back down with the
+                // decelerating hand otherwise). Untracked tips are skipped
+                // and no-data reads as closed (opening() contract), so a
+                // dropout mid-hold coasts instead of dropping.
                 const PhysicsBodyId body = shapeBody(hold.pick);
                 liveFingertips(ctx, h, tips);
                 const Real open = hold.grip.opening(
                     tips, physics_->physicsWorld().bodyPosition(body),
                     physics_->physicsWorld().bodyOrientation(body));
-                if (open > XrGripMemory::kReleaseOpening) {
+                hold.lastOpening = open;
+                if (open > XrGripMemory::kReleaseOpening * 1.5) {
+                    unhook(ctx, h);
+                } else if (open > XrGripMemory::kReleaseOpening) {
                     if (hold.openSince < 0) hold.openSince = timeSeconds_;
                     else if (timeSeconds_ - hold.openSince > kOpenDwell)
                         unhook(ctx, h);
@@ -704,10 +742,23 @@ void HandInteractionSystem::updateGrips(FrameContext& ctx) {
                 if (points.size() < 2) continue;
                 XrGripMemory probe;
                 const PhysicsBodyId body = shapeBody(candidates[c]);
-                probe.capture(points,
-                              physics_->physicsWorld().bodyPosition(body),
+                const Vec3 objP = physics_->physicsWorld().bodyPosition(body);
+                probe.capture(points, objP,
                               physics_->physicsWorld().bodyOrientation(body));
                 if (!probe.opposed()) continue;
+                // Anti-restick: a just-tossed object still passes near the
+                // opening fingers for a few frames — never re-hook a shape
+                // RECEDING from the grip (an approaching one is a catch, a
+                // resting one is a regrip; both still hook).
+                const Vec3 away = objP - carry_[h].position();
+                if (away.length() > 1e-6) {
+                    const Vec3 rel =
+                        physics_->physicsWorld().getLinearVelocity(body) -
+                        physics_->physicsWorld().getLinearVelocity(
+                            gripBody_[h]);
+                    if (dot(rel, away * (1.0 / away.length())) > kRecedeSpeed)
+                        continue;
+                }
                 hook(ctx, h, candidates[c], /*pinchHold=*/false, points);
                 break;
             }
@@ -792,30 +843,65 @@ void HandInteractionSystem::render(FrameContext& ctx) {
     }
 
     for (int h = 0; h < 2; h++) {
-        // Holding: the remembered grip anchors as contact dots, and the
-        // placement-assist ghost when a gentle release would snap.
+        // Holding: the remembered grip anchors as contact dots — heating
+        // from gold toward red as the opening approaches release, so
+        // letting go is legible — the placement-assist ghost, and a
+        // straight-down DROP SHADOW under the held shape (the depth cue for
+        // where it will land).
         if (hold_[h].active()) {
             const Hold& hold = hold_[h];
             const PhysicsBodyId body = shapeBody(hold.pick);
             const Vec3 objP = physics_->physicsWorld().bodyPosition(body);
             const Quat objQ = physics_->physicsWorld().bodyOrientation(body);
+            const Real heat = hold.pinchHold
+                ? 0.0
+                : std::min(Real(1),
+                           hold.lastOpening / XrGripMemory::kReleaseOpening);
+            const Vec3 anchorColor =
+                Vec3(1.0, 0.85 - 0.65 * heat, 0.3 - 0.25 * heat);
             for (size_t i = 0; i < hold.grip.contactCount(); i++)
                 ctx.debug.sphere(hold.grip.worldAnchor(i, objP, objQ), 0.006,
-                                 Vec3(1.0, 0.85, 0.3), 0, 8);
+                                 anchorColor, 0, 8);
             if (placeAssist_ && !hold.pick.sub && !shapeIsSphere(hold.pick)) {
                 const XrAlignedPose target = placementTarget(hold.pick);
                 if (target.valid)
                     ctx.debug.box(target.position, shapeHalfExtent(hold.pick),
                                   target.orientation, Vec3(0.4, 0.8, 1.0));
             }
+
+            Vec3 hit;
+            if (physics_->physicsWorld().castRay(objP, Vec3(0, -2.5, 0),
+                                                 hit)) {
+                if (!shadowMesh_.valid())
+                    shadowMesh_ = ctx.renderer.uploadMesh(
+                        MeshBuilder::box(Vec3(1.0, 0.004, 1.0)));
+                const Vec3 he = shapeHalfExtent(hold.pick);
+                const Mat4 m = objQ.toMat4();
+                auto ext = [&](int row) {
+                    return std::fabs(m.m[row][0]) * he.x +
+                           std::fabs(m.m[row][1]) * he.y +
+                           std::fabs(m.m[row][2]) * he.z;
+                };
+                RenderMaterial shadow;
+                shadow.albedo = Vec3(0.02, 0.02, 0.02);
+                shadow.metallic = 0.0f;
+                shadow.roughness = 1.0f;
+                shadow.flags = RenderMaterial::FLAG_STIPPLE;
+                ctx.renderer.drawMesh(
+                    shadowMesh_,
+                    Mat4::translate(hit.x, hit.y + 0.003, hit.z) *
+                        Mat4::scale(2.0 * ext(0), 1.0, 2.0 * ext(2)),
+                    shadow);
+            }
             continue;
         }
 
-        // Reaching: the candidate shows an ORIENTED wire box that turns
-        // green in grab range, and the thumb and index tips project onto
-        // its surface — dot on the surface, faint ruler line from fingertip
-        // to dot. That projection is the depth cue that says how far the
-        // fingers are from touching.
+        // Reaching: the candidate shows an ORIENTED wire box — white far,
+        // green in pinch range, BRIGHT green the moment a fist closure
+        // would take it — and every fingertip near the surface projects a
+        // dot that turns green as that finger arrives on it (thumb + index
+        // keep their ruler lines). This is the "how am I grabbing it"
+        // readout: two green dots on opposite sides = it's yours.
         if (!pinch_[h].tracking()) continue;
         const Vec3 at = handWorld(ctx, pinch_[h].pinchPoint());
         const Pick pick = nearestGrabbable(h, at, kApproachRange);
@@ -823,23 +909,46 @@ void HandInteractionSystem::render(FrameContext& ctx) {
         const Real surface = shapeSurfaceDistance(pick, at);
         const Real glow = 1.0 - surface / kApproachRange;
         const bool inReach = surface < kGrabSurfaceReach;
+
+        bool closureReady = false;
+        {
+            const std::vector<XrGripPoint> points =
+                probeShape(ctx, h, pick, kClosureReach);
+            if (points.size() >= 2) {
+                XrGripMemory probe;
+                probe.capture(points,
+                              physics_->physicsWorld().bodyPosition(
+                                  shapeBody(pick)),
+                              physics_->physicsWorld().bodyOrientation(
+                                  shapeBody(pick)));
+                closureReady = probe.opposed();
+            }
+        }
         const Vec3 color =
-            (inReach ? Vec3(0.2, 1.0, 0.4) : Vec3(1.0, 1.0, 1.0)) *
-            (0.35 + 0.65 * glow);
+            closureReady
+                ? Vec3(0.3, 1.0, 0.5) * 1.4
+                : (inReach ? Vec3(0.2, 1.0, 0.4) : Vec3(1.0, 1.0, 1.0)) *
+                      (0.35 + 0.65 * glow);
         const PhysicsBodyId body = shapeBody(pick);
         ctx.debug.box(physics_->physicsWorld().bodyPosition(body),
                       shapeHalfExtent(pick) * 1.08,
                       physics_->physicsWorld().bodyOrientation(body), color);
 
         const XrHand& hand = ctx.xr.hands[h];
-        const XrHandJointId tips[2] = {XR_JOINT_THUMB_TIP,
-                                       XR_JOINT_INDEX_TIP};
-        for (const XrHandJointId tip : tips) {
+        for (const XrHandJointId tip : kTipJoints) {
             if (!hand.joints[tip].tracked) continue;
             const Vec3 tipWorld = handWorld(ctx, xrJointPosition(hand, tip));
             const Vec3 onSurface = shapeNearestPoint(pick, tipWorld);
-            ctx.debug.sphere(onSurface, 0.008, color, 0, 8);
-            ctx.debug.line(tipWorld, onSurface, color * 0.5);
+            const Real d = (onSurface - tipWorld).length();
+            if (d > 0.15) continue;
+            // White approaching, green ON the surface (closure distance).
+            const Real on =
+                1.0 - std::min(Real(1), std::max(Real(0),
+                                                 (d - kClosureReach) / 0.10));
+            const Vec3 tipColor = Vec3(1.0 - 0.7 * on, 1.0, 1.0 - 0.5 * on);
+            ctx.debug.sphere(onSurface, 0.006 + 0.003 * on, tipColor, 0, 8);
+            if (tip == XR_JOINT_THUMB_TIP || tip == XR_JOINT_INDEX_TIP)
+                ctx.debug.line(tipWorld, onSurface, tipColor * 0.5);
         }
     }
 
@@ -924,6 +1033,10 @@ void HandInteractionSystem::onStop(FrameContext& ctx) {
             ctx.renderer.removeMesh(mesh);
             mesh = MeshHandle{};
         }
+    }
+    if (shadowMesh_.valid()) {
+        ctx.renderer.removeMesh(shadowMesh_);
+        shadowMesh_ = MeshHandle{};
     }
 }
 
