@@ -469,8 +469,17 @@ void XrSurfaceSystem::render(FrameContext& ctx) {
                 ctx.xr.originBase, scale, entry.originFromAnchor);
             ctx.renderer.drawMesh(unpackMesh(entry.meshToken), world,
                                   occluder);
+            // Catchers only on genuinely HORIZONTAL planes (anchor +Y near
+            // world up): a catcher near-parallel to the noon sun fails the
+            // shadow test at grazing angles and renders its WHOLE plane as
+            // a dithered ghost — the "outlines with surfaces off" report.
+            // Class alone was not enough: rooms grow dozens of Unknown
+            // planes, many vertical-ish.
+            const Vec3 planeUp = normalize(Vec3(
+                entry.originFromAnchor.m[0][1], entry.originFromAnchor.m[1][1],
+                entry.originFromAnchor.m[2][1]));
             if (shadowsEnabled_ && entry.cls != XrSurfaceClass::Mesh &&
-                sandboxShowsClass(entry.cls))
+                sandboxShowsClass(entry.cls) && planeUp.y > 0.85)
                 ctx.renderer.drawMesh(unpackMesh(entry.meshToken), world,
                                       catcher);
         }
