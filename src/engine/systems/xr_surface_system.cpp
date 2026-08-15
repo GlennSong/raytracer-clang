@@ -100,8 +100,12 @@ XrSurfaceLedger::MeshOps XrSurfaceSystem::meshOps(FrameContext& ctx) {
 }
 
 void XrSurfaceSystem::onStart(FrameContext&) {
+    // Surface drawing is OFF by default (device feedback: the tinted fills
+    // read as clutter once grabbing worked — the room itself is the visual).
+    // RT_XR_SURFACES=1 shows them at boot; the settings toggle flips them
+    // live. Ingest/colliders/occlusion/shadows are never gated by this.
     const char* env = std::getenv("RT_XR_SURFACES");
-    visibleDefault_ = !(env && env[0] == '0');
+    visibleDefault_ = env && env[0] == '1';
     visible_ = visibleDefault_;
 }
 

@@ -93,7 +93,9 @@ anchors). Callbacks land on a serial queue, geometry is copied out (it does
 not outlive the callback) into `engine::XrSurfaceUpdate`s and pushed through
 `XrSurfaceStore`; `XrSurfaceSystem` drains, bookkeeps via the host-tested
 `XrSurfaceLedger`, and draws — chunks as classification-tinted meshes, planes
-as outlines. `RT_XR_SURFACES=0` hides the drawing (ingest continues).
+as outlines. The drawing is OFF by default (`RT_XR_SURFACES=1` shows it at
+boot, or the settings toggle live); ingest, colliders, occlusion and shadow
+catching always run regardless.
 
 Read health from the census line, not the render:
 `[xr] surfaces: total=… floor=1 wall=3 … tris=… markers=… floorY=-0.02m` —

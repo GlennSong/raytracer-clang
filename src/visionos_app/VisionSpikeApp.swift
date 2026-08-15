@@ -255,7 +255,7 @@ struct RenderSettingsView: View {
     @State private var contrast = Self.defaults.contrast
     @State private var saturation = Self.defaults.saturation
     @State private var tonemap = Self.defaults.tonemap
-    @State private var showSurfaces = true
+    @State private var showSurfaces = false
     @State private var surfaceOpacity = 0.5
     @State private var showNormals = false
     @State private var arShadows = true
@@ -384,7 +384,7 @@ struct RenderSettingsView: View {
         contrast = rt_vision_get_pref_double("grade.contrast", d.contrast)
         saturation = rt_vision_get_pref_double("grade.saturation", d.saturation)
         tonemap = rt_vision_get_pref_double("tonemap.op", d.tonemap)
-        showSurfaces = rt_vision_get_pref_bool("xr.showSurfaces", 1) != 0
+        showSurfaces = rt_vision_get_pref_bool("xr.showSurfaces", 0) != 0
         surfaceOpacity = rt_vision_get_pref_double("xr.surfaceOpacity", 0.5)
         showNormals = rt_vision_get_pref_bool("xr.showNormals", 0) != 0
         arShadows = rt_vision_get_pref_bool("xr.shadows", 1) != 0

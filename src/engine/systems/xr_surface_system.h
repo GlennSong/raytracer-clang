@@ -26,8 +26,10 @@ class PhysicsSystem;
 // into the periodic `[xr] surfaces:` log line — the readout that lets surface
 // mapping be verified from a console instead of by eye.
 //
-// Visibility: RT_XR_SURFACES=0 in the environment disables drawing (data is
-// still ingested, so flipping it back on shows the full room, not a restart).
+// Visibility: surface drawing is OFF by default (the room itself is the
+// visual once interaction works); RT_XR_SURFACES=1 shows it at boot and the
+// xr.showSurfaces pref flips it live. Data is always ingested, so turning it
+// on shows the full room, not a restart.
 //
 // Placement demo: a QUICK pinch while gazing at a detected plane within reach
 // (~3 real metres) drops a 10 cm marker cube on it — and CONSUMES the pinch,
@@ -107,8 +109,8 @@ private:
     DropSpawner dropSpawner_;
     MeshHandle markerMesh_;
     uint64_t frame_ = 0;
-    bool visible_ = true;
-    bool visibleDefault_ = true;
+    bool visible_ = false;         // surface drawing (pref; default off)
+    bool visibleDefault_ = false;
     bool fillSurfaces_ = true;
     Real surfaceOpacity_ = 0.5;    // sandbox fill strength (pref)
     bool showNormals_ = false;     // normal tick lines (pref)
