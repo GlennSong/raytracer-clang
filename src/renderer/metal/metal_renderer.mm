@@ -352,11 +352,15 @@ struct CompositorSurface final : PresentationSurface {
                                         // then fail and no frame presents
     ar_world_tracking_provider_t worldTracking = nullptr;
     ar_hand_tracking_provider_t handTracking = nullptr;
-    // False the moment the OS pauses/stops the providers (headset off,
-    // Digital Crown, app backgrounding). Anchor and hand queries against a
-    // non-running provider log OS errors every frame and have crashed
-    // session teardown — every query site gates on this.
-    std::atomic<bool> providersRunning{false};
+    // Whether THIS frame's acquire got a device anchor. Ground truth for
+    // "are the providers running": when the OS pauses them (headset off,
+    // Crown press, teardown) every anchor query fails, and beginFrame must
+    // stop issuing its own predict/hand queries (they error per frame and
+    // have crashed teardown). Deliberately NOT derived from the provider
+    // state-change callback — its per-provider identity contract is
+    // unverifiable from here, and a wrong read of it gated anchoring off
+    // permanently (device: every drawable dropped as unanchored).
+    bool lastAcquireAnchored = false;
     ar_plane_detection_provider_t planeDetection = nullptr;
     ar_scene_reconstruction_provider_t sceneReconstruction = nullptr;
     // Handlers run on this SERIAL queue so events keep arrival order — the
@@ -396,18 +400,9 @@ struct CompositorSurface final : PresentationSurface {
         ar_session_set_data_provider_state_change_handler(
             arSession, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
             ^(ar_data_providers_t, ar_data_provider_state_t newState,
-              ar_error_t error, ar_data_provider_t provider) {
+              ar_error_t error, ar_data_provider_t) {
                 NSLog(@"[vision] AR provider state -> %d%s", (int)newState,
                       newState == ar_data_provider_state_running ? " (running)" : "");
-                // World tracking is the one whose queries every frame makes;
-                // its state gates them (headset off / Crown press pauses all
-                // providers — querying a paused one errors per frame and has
-                // crashed teardown).
-                if (provider == this->worldTracking) {
-                    this->providersRunning.store(
-                        newState == ar_data_provider_state_running,
-                        std::memory_order_relaxed);
-                }
                 if (error) {
                     CFErrorRef cf = ar_error_copy_cf_error(error);
                     NSLog(@"[vision] AR provider ERROR: %@", (__bridge NSError*)cf);
@@ -582,14 +577,6 @@ struct CompositorSurface final : PresentationSurface {
         // frame stale at display time, which reads as the world swimming
         // against head motion. Every drawable needs its anchor; an unanchored
         // one is silently never displayed on device.
-        // Providers paused (headset off, Crown press, teardown): no anchor
-        // is queryable, and asking logs an OS error per frame. Present the
-        // drawables unanchored (the compositor drops them — correct while
-        // the layer winds down) and gate the XR state off.
-        if (!providersRunning.load(std::memory_order_relaxed)) {
-            trackedPoseValid = false;
-            return true;
-        }
         for (size_t d = 0; d < count; d++) {
             cp_drawable_t dr = cp_drawable_array_get_drawable(drawables, d);
             cp_frame_timing_t finalTiming = cp_drawable_get_frame_timing(dr);
@@ -626,6 +613,7 @@ struct CompositorSurface final : PresentationSurface {
                     trackedViewWidth = (int)tex0.width;
                     trackedViewHeight = (int)tex0.height;
                     trackedPoseValid = true;
+                    lastAcquireAnchored = true;
                     if (anchorFails > 0 || !anchorEverSucceeded) {
                         NSLog(@"[vision] device anchor OK (after %d failures)", anchorFails);
                         anchorEverSucceeded = true;
@@ -633,6 +621,7 @@ struct CompositorSurface final : PresentationSurface {
                     }
                 }
             } else if (dr == drawable) {
+                lastAcquireAnchored = false;
                 if ((anchorFails++ % 90) == 0)
                     NSLog(@"[vision] device anchor query FAILED (%d so far)", anchorFails);
             }
@@ -906,8 +895,12 @@ struct CompositorXrBackend final : engine::XrBackend {
 
     bool beginFrame(engine::XrState& out) override {
         out.active = false;
+        // lastAcquireAnchored is the providers-running signal: when the OS
+        // pauses them (headset off, Crown, teardown), every anchor query
+        // fails — issuing MORE queries here would error per frame and has
+        // crashed teardown. The engine sees XR inactive and parks.
         if (!surface || !surface->worldTracking || !surface->trackedPoseValid ||
-            !surface->providersRunning.load(std::memory_order_relaxed))
+            !surface->lastAcquireAnchored)
             return false;
 
         // Predict roughly a frame ahead; if the query misses (tracking
