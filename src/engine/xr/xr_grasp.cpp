@@ -43,14 +43,19 @@ bool XrGripMemory::opposed(Real maxPairDot) const {
 Real XrGripMemory::opening(
     const std::vector<std::pair<int, Vec3>>& liveWorldTips,
     const Vec3& objectPosition, const Quat& objectOrientation) const {
+    const Quat inv = objectOrientation.conjugate();
     Real sum = 0;
     int matched = 0;
     for (const Anchor& a : anchors_) {
         for (const auto& tip : liveWorldTips) {
             if (tip.first != a.id) continue;
-            const Vec3 anchorWorld =
-                objectPosition + objectOrientation.rotate(a.localPoint);
-            sum += (tip.second - anchorWorld).length();
+            const Vec3 localTip = inv.rotate(tip.second - objectPosition);
+            // Outward-only: localNormal presses INTO the object, so drift
+            // along its negation is the finger lifting off. Sinking deeper
+            // and sliding along the surface clamp to zero.
+            const Real outward =
+                -dot(localTip - a.localPoint, a.localNormal);
+            sum += std::max(Real(0), outward);
             matched++;
             break;
         }

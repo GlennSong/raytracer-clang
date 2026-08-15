@@ -43,10 +43,15 @@ public:
     // two same-side touches never satisfy it.
     bool opposed(Real maxPairDot = -0.3) const;
 
-    // Mean distance of live fingertips from their remembered anchors, given
-    // the object's CURRENT pose. Matched by id; unmatched (untracked) tips
-    // are skipped. No matches -> 0 (no information must not read as
-    // "opened" — a dropout mid-hold would drop the object).
+    // Mean OUTWARD drift of live fingertips off their remembered anchors,
+    // given the object's CURRENT pose: only motion along the remembered
+    // press direction (away from the object) counts, clamped at zero per
+    // tip. Direction matters — while held, hand-object collision is off,
+    // so fingers SINK INTO the shape; raw anchor distance read that as
+    // "opened" and the hold oscillated (device log: unhook v=0.02 / hook
+    // closure, once a second). Sinking and surface sliding are not letting
+    // go. Matched by id; unmatched (untracked) tips are skipped. No
+    // matches -> 0 (a dropout mid-hold must not drop the object).
     Real opening(const std::vector<std::pair<int, Vec3>>& liveWorldTips,
                  const Vec3& objectPosition,
                  const Quat& objectOrientation) const;

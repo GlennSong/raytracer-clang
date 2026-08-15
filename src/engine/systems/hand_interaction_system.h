@@ -180,10 +180,13 @@ private:
     Real lastUnhookTime_ = -10;
 
     // Per-hand: the shape this hand released last, so closure leaves it
-    // alone for a beat (kRehookDelay) instead of re-grabbing a departing
-    // throw whose relative velocity is still ~0.
+    // alone for a beat instead of re-grabbing a departing throw whose
+    // relative velocity is still ~0. The block is graduated at unhook
+    // time: a fast release (a throw, whose follow-through keeps the hand
+    // ON the object's path) blocks much longer than a gentle one (a
+    // regrip, which should re-hook almost immediately).
     Pick recentUnhook_[2];
-    Real recentUnhookAt_[2] = {-10, -10};
+    Real rehookBlockUntil_[2] = {-10, -10};
 
     // Released shapes still on the HELD layer, waiting for the fingers to
     // clear before hand collision is restored (see applyHeldLayer).

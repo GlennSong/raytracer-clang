@@ -104,6 +104,20 @@ TEST_CASE(grasp_opening_measures_tip_drift_not_object_motion) {
     // dropout mid-hold must not drop the object.
     CHECK(grip.opening({{9, Vec3(5, 5, 5)}}, p0, q0) == 0.0);
     CHECK(grip.opening({}, p0, q0) == 0.0);
+
+    // Fingers SINKING INTO the object (hand collision is off while held —
+    // this is the resting state of a fist grip): NOT opening. Raw anchor
+    // distance called this "opened" and the hold oscillated on device.
+    CHECK(grip.opening({{1, Vec3(-0.02, 1, 0)}, {2, Vec3(0.02, 1, 0)}}, p0,
+                       q0) == 0.0);
+    // Sliding ALONG the surface (regripping, object turning in hand):
+    // lateral drift is not letting go either.
+    CHECK(grip.opening({{1, Vec3(-0.05, 1, 0.04)}, {2, Vec3(0.05, 1, -0.04)}},
+                       p0, q0) == 0.0);
+    // One finger lifts off, one stays: the mean reports half the lift.
+    const Real half = grip.opening(
+        {{1, Vec3(-0.09, 1, 0)}, {2, Vec3(0.05, 1, 0)}}, p0, q0);
+    CHECK(std::fabs(half - 0.02) < 1e-9);
 }
 
 // --- Hand memory ----------------------------------------------------------

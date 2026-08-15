@@ -36,9 +36,13 @@ constexpr Real kRecedeSpeed = 0.25;
 // ...and a hand that just let go of a shape leaves it alone briefly — the
 // frame after a throw the relative velocity is still ~0 (the spring had
 // just been tracking), so the recede guard alone can't catch it. Same hand
-// + same shape only: hand-to-hand tosses and throw-up-and-catch (the ball
-// is gone and back ~0.5s later) never notice.
+// + same shape only: hand-to-hand tosses never notice. GRADUATED: after a
+// fast release the block is long, because a throw's follow-through keeps
+// the hand moving WITH the object (device log: ball left at 3.59 m/s and
+// closure re-caught it mid-flight, killing the toss); after a gentle one
+// it is short so in-hand regrips feel continuous.
 constexpr Real kRehookDelay = 0.12;
+constexpr Real kRehookDelayThrown = 0.45;
 // Throw restore: hand-tracked releases fire LATE (finger extension lags
 // real fingers at speed; fast swings drop tracking outright), so by
 // release the arm — and the spring-held object — has decelerated. If the
@@ -432,7 +436,9 @@ void HandInteractionSystem::unhook(FrameContext& ctx, int h) {
     lastUnhookHand_ = h;
     lastUnhookTime_ = timeSeconds_;
     recentUnhook_[h] = hold.pick;
-    recentUnhookAt_[h] = timeSeconds_;
+    rehookBlockUntil_[h] =
+        timeSeconds_ +
+        (v.length() > kThrowRestoreFloor ? kRehookDelayThrown : kRehookDelay);
     releaseHeldLayer(h, hold.pick);
     hold = Hold{};
     consumePinchUntil_ = timeSeconds_ + 0.4;
@@ -795,7 +801,7 @@ void HandInteractionSystem::updateGrips(FrameContext& ctx) {
             for (int c = 0; c < n; c++) {
                 if (recentUnhook_[h].obj == candidates[c].obj &&
                     recentUnhook_[h].sub == candidates[c].sub &&
-                    timeSeconds_ - recentUnhookAt_[h] < kRehookDelay)
+                    timeSeconds_ < rehookBlockUntil_[h])
                     continue;   // just let go of this — let it leave
                 const std::vector<XrGripPoint> points =
                     probeShape(ctx, h, candidates[c], kClosureReach);
@@ -1082,7 +1088,7 @@ void HandInteractionSystem::onStop(FrameContext& ctx) {
     handActive_[0] = handActive_[1] = false;
     lastUnhookObj_ = -1;
     recentUnhook_[0] = recentUnhook_[1] = Pick{};
-    recentUnhookAt_[0] = recentUnhookAt_[1] = -10;
+    rehookBlockUntil_[0] = rehookBlockUntil_[1] = -10;
     palette_ = XrPalette(paletteConfig(kItemCount));
     for (auto& mesh : itemMeshes_) {
         if (mesh.valid()) {
