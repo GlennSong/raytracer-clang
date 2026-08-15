@@ -119,6 +119,8 @@ void PhysicsSystem::publishContacts(World& world, EventBus& events) {
 
     for (const ContactEvent& contact : contacts) {
         Collision collision;
+        collision.bodyA = contact.bodyA;
+        collision.bodyB = contact.bodyB;
         auto a = byBody.find(contact.bodyA);
         auto b = byBody.find(contact.bodyB);
         if (a != byBody.end()) collision.a = a->second;

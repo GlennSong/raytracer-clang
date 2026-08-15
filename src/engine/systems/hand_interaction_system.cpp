@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "../../log.h"
+#include "../audio/audio_engine.h"   // PlaySound (event payload only)
 #include "../mesh_builder.h"
 #include "../xr/xr_touch.h"
 #include "physics_system.h"
@@ -57,6 +58,18 @@ constexpr Real kDropoutThrowSpeed = 1.0;
 // Fingers EXTENDING fast is release intent — fire early (at 60% of the
 // opening threshold) instead of waiting for the full drift.
 constexpr Real kOpeningVelRelease = 0.5;
+// Gravity gun: trigger travel past this is a squeeze (total travel 14mm).
+constexpr Real kTriggerPress = 0.009;
+// Trigger edges are ignored this long after the gun is hooked — grabbing
+// naturally wraps a finger over the trigger.
+constexpr Real kTriggerArmDelay = 0.35;
+constexpr Real kTractorRange = 3.5;      // beam reach
+constexpr Real kTractorHoldAhead = 0.33; // hold point ahead of the muzzle
+constexpr Real kLaunchSpeed = 9.0;
+// A beam stretched past this for a sustained moment lets go (the target is
+// wedged, or the pull lost the fight with the world).
+constexpr Real kTractorMaxStretch = 1.0;
+constexpr Real kTractorStretchTime = 0.6;
 // A release slower than this is a deliberate set-down: eligible for the
 // placement-assist snap. Anything faster is a throw/drop — untouched.
 constexpr Real kGentleRelease = 0.25;
@@ -94,41 +107,54 @@ XrPalette::Config paletteConfig(int itemCount) {
 // limit spring snap it back.
 const HandInteractionSystem::ItemDef HandInteractionSystem::kItems[] = {
     {"crate", Vec3(0.075, 0.075, 0.075), Vec3(0.80, 0.52, 0.25), false,
-     JointKind::None, Vec3(), Vec3(), Vec3(), Vec3(), Vec3(1, 0, 0), 0, 0, 0},
+     JointKind::None, Vec3(), Vec3(), Vec3(), Vec3(), Vec3(1, 0, 0),
+     0, 0, 0, 0, true, false},
     {"ball", Vec3(0.075, 0.075, 0.075), Vec3(0.20, 0.55, 0.95), true,
-     JointKind::None, Vec3(), Vec3(), Vec3(), Vec3(), Vec3(1, 0, 0), 0, 0, 0},
+     JointKind::None, Vec3(), Vec3(), Vec3(), Vec3(), Vec3(1, 0, 0),
+     0, 0, 0, 0, true, false},
     {"slab", Vec3(0.15, 0.025, 0.10), Vec3(0.55, 0.55, 0.60), false,
-     JointKind::None, Vec3(), Vec3(), Vec3(), Vec3(), Vec3(1, 0, 0), 0, 0, 0},
+     JointKind::None, Vec3(), Vec3(), Vec3(), Vec3(), Vec3(1, 0, 0),
+     0, 0, 0, 0, true, false},
     {"pillar", Vec3(0.04, 0.18, 0.04), Vec3(0.85, 0.82, 0.70), false,
-     JointKind::None, Vec3(), Vec3(), Vec3(), Vec3(), Vec3(1, 0, 0), 0, 0, 0},
+     JointKind::None, Vec3(), Vec3(), Vec3(), Vec3(), Vec3(1, 0, 0),
+     0, 0, 0, 0, true, false},
     {"wedge", Vec3(0.10, 0.05, 0.075), Vec3(0.30, 0.75, 0.40), false,
-     JointKind::None, Vec3(), Vec3(), Vec3(), Vec3(), Vec3(1, 0, 0), 0, 0, 0},
+     JointKind::None, Vec3(), Vec3(), Vec3(), Vec3(), Vec3(1, 0, 0),
+     0, 0, 0, 0, true, false},
     // Chest: crate + lid hinged along the top back edge, 0..110 degrees,
     // soft stops. The 3mm gap keeps the resting lid off the chest's top
     // face so friction never fights the hinge.
     {"chest", Vec3(0.09, 0.05, 0.065), Vec3(0.55, 0.35, 0.18), false,
      JointKind::Hinge, Vec3(0.09, 0.012, 0.065), Vec3(0.70, 0.48, 0.26),
      Vec3(0, 0.065, 0), Vec3(0, 0.053, -0.065), Vec3(1, 0, 0),
-     0.0, 1.92, 2.0},
+     0.0, 1.92, 2.0, 0, true, false},
     // Bolt: base + knob on a 6cm slider with soft detent ends — the
     // rack-the-slide interaction.
     {"bolt", Vec3(0.09, 0.025, 0.03), Vec3(0.45, 0.47, 0.52), false,
      JointKind::Slider, Vec3(0.028, 0.018, 0.03), Vec3(0.85, 0.30, 0.20),
      Vec3(-0.03, 0.046, 0), Vec3(-0.03, 0.046, 0), Vec3(1, 0, 0),
-     0.0, 0.06, 6.0},
+     0.0, 0.06, 6.0, 0, true, false},
     // Crank: a post with a paddle on a FREE hinge (full-turn limits),
     // mounted beside the post so the sweep clears it — grab the paddle end
     // and spin it like a propeller.
     {"crank", Vec3(0.03, 0.10, 0.03), Vec3(0.40, 0.42, 0.48), false,
      JointKind::Hinge, Vec3(0.10, 0.015, 0.02), Vec3(0.90, 0.60, 0.15),
      Vec3(0, 0.10, 0.054), Vec3(0, 0.10, 0.054), Vec3(0, 0, 1),
-     -PI, PI, 0.0},
+     -PI, PI, 0.0, 0, true, false},
     // Seesaw: a plank balanced on a small base, tilting +/-26 degrees —
     // press one end down (finger or a dropped crate) and the other rises.
     {"seesaw", Vec3(0.04, 0.03, 0.04), Vec3(0.35, 0.30, 0.28), false,
      JointKind::Hinge, Vec3(0.14, 0.012, 0.03), Vec3(0.75, 0.68, 0.35),
      Vec3(0, 0.045, 0), Vec3(0, 0.045, 0), Vec3(0, 0, 1),
-     -0.45, 0.45, 0.0},
+     -0.45, 0.45, 0.0, 0, true, false},
+    // The physics gun. Barrel along local +X; the TRIGGER is a real slider
+    // under the body (axis -X: squeezing back is positive travel) with a
+    // bounded return motor — an index finger overpowers it, release snaps
+    // it home. subGrabbable=false: hands hold the gun, not its trigger.
+    {"gravgun", Vec3(0.10, 0.03, 0.022), Vec3(0.90, 0.45, 0.10), false,
+     JointKind::Slider, Vec3(0.007, 0.012, 0.005), Vec3(0.15, 0.15, 0.17),
+     Vec3(0.01, -0.045, 0), Vec3(0.01, -0.045, 0), Vec3(-1, 0, 0),
+     0.0, 0.014, 0.0, 8.0, false, true},
 };
 const int HandInteractionSystem::kItemCount =
     static_cast<int>(sizeof(HandInteractionSystem::kItems) /
@@ -136,6 +162,38 @@ const int HandInteractionSystem::kItemCount =
 
 HandInteractionSystem::HandInteractionSystem(PhysicsSystem* physics)
     : physics_(physics), palette_(paletteConfig(kItemCount)) {}
+
+void HandInteractionSystem::onStart(FrameContext& ctx) {
+    // Impact audio: this system owns the body bookkeeping (which id is a
+    // fingertip, which is a crate), so it is the one that can turn raw
+    // Collision events into sensible cues — knocks scale with speed, hand
+    // pats are quieter, resting contact stays silent. Cues are enqueued
+    // (deferred dispatch), and rate-limited so a settling stack doesn't
+    // machine-gun.
+    events_ = &ctx.events;
+    collisionSub_ = ctx.events.subscribe<Collision>([this](
+                                                        const Collision& hit) {
+        const Pick pa = shapeForBody(hit.bodyA);
+        const Pick pb = shapeForBody(hit.bodyB);
+        if (!pa.valid() && !pb.valid()) return;   // no sandbox shape involved
+        const bool hand = isHandBody(hit.bodyA) || isHandBody(hit.bodyB);
+        if (hit.speed < (hand ? 0.8 : 0.5)) return;
+        if (timeSeconds_ - lastCueAt_ < 0.04) return;
+        lastCueAt_ = timeSeconds_;
+        const uint32_t salt = hit.bodyA * 31u + hit.bodyB;
+        const Real severity = std::min(hit.speed / 5.0, 1.0);
+        PlaySound cue;
+        cue.clip = "sfx/knock" + std::to_string(salt & 3u);
+        cue.spatial = true;
+        cue.position = hit.position;
+        cue.range = 10.0;
+        cue.volume = static_cast<float>((hand ? 0.5 : 1.0) *
+                                        (0.25 + 0.75 * severity));
+        cue.pitch = static_cast<float>(0.9 + 0.3 * severity +
+                                       0.05 * (salt % 4u));
+        events_->enqueue(cue);
+    });
+}
 
 Vec3 HandInteractionSystem::handWorld(FrameContext& ctx,
                                       const Vec3& originPoint) const {
@@ -200,7 +258,10 @@ HandInteractionSystem::Pick HandInteractionSystem::nearestGrabbable(
         if (hold_[h].active() && hold_[h].pick.obj == idx)
             continue;   // this hand already holds part of it
         Pick candidates[2] = {{idx, false}, {idx, true}};
-        const int n = objects_[i].subBody != INVALID_PHYSICS_BODY ? 2 : 1;
+        const int n = objects_[i].subBody != INVALID_PHYSICS_BODY &&
+                              kItems[objects_[i].item].subGrabbable
+                          ? 2
+                          : 1;
         for (int c = 0; c < n; c++) {
             const Real d = shapeSurfaceDistance(candidates[c], p);
             if (d < bestD) {
@@ -317,6 +378,9 @@ bool HandInteractionSystem::makeRoom() {
     if (objects_.size() < kMaxObjects) return true;
     for (size_t i = 0; i < objects_.size(); i++) {
         if (isHeld(static_cast<int>(i))) continue;
+        if (tractor_.active() && (tractor_.gun == static_cast<int>(i) ||
+                                  tractor_.target == static_cast<int>(i)))
+            continue;   // never recycle the live beam's ends
         SandboxObject& obj = objects_[i];
         if (obj.jointId != INVALID_CONSTRAINT)
             physics_->physicsWorld().removeConstraint(obj.jointId);
@@ -342,6 +406,10 @@ bool HandInteractionSystem::makeRoom() {
             else if (recentUnhook_[h].obj > static_cast<int>(i))
                 recentUnhook_[h].obj--;
         }
+        if (tractor_.active()) {   // beam ends are skipped above; reindex
+            if (tractor_.gun > static_cast<int>(i)) tractor_.gun--;
+            if (tractor_.target > static_cast<int>(i)) tractor_.target--;
+        }
         lastUnhookObj_ = -1;
         return true;
     }
@@ -357,12 +425,27 @@ void HandInteractionSystem::hook(FrameContext& ctx, int h, const Pick& pick,
         physics_->physicsWorld().addGripSpring(gripBody_[h], body);
     if (spring == INVALID_CONSTRAINT) return;
 
+    // A hand taking the tractored object takes it FROM the beam.
+    if (tractor_.active() && !pick.sub && tractor_.target == pick.obj)
+        releaseTractor(ctx, /*launch=*/false);
+
     Hold& hold = hold_[h];
     hold.pick = pick;
     hold.spring = spring;
     hold.pinchHold = pinchHold;
+    hold.hookedAt = timeSeconds_;
     hold.openSince = -1;
     applyHeldLayer(pick);
+
+    // Grab tick: soft, bright, at the object.
+    PlaySound cue;
+    cue.clip = "sfx/knock2";
+    cue.spatial = true;
+    cue.position = physics_->physicsWorld().bodyPosition(shapeBody(pick));
+    cue.range = 6.0;
+    cue.volume = 0.18f;
+    cue.pitch = 1.7f;
+    ctx.events.enqueue(cue);
 
     // Grip memory: the touching fingertips, object-local. A pinch that
     // landed with no capsule contacts yet remembers the thumb and index
@@ -525,7 +608,7 @@ void HandInteractionSystem::spawnIntoHand(FrameContext& ctx, int item,
                           def.maxLimit, def.jointSpring)
                     : physics_->physicsWorld().addSlider(
                           obj.body, obj.subBody, pivot, axis, def.minLimit,
-                          def.maxLimit, def.jointSpring);
+                          def.maxLimit, def.jointSpring, def.jointReturn);
         }
         obj.subPosPrev = obj.subPosCurr = subAt;
         obj.subQuatPrev = obj.subQuatCurr = q;
@@ -536,6 +619,180 @@ void HandInteractionSystem::spawnIntoHand(FrameContext& ctx, int item,
     LOG_INFO("[xr] spawned %s into %s hand (%zu objects)", def.name,
              hand == 0 ? "left" : "right", objects_.size());
     hook(ctx, hand, Pick{idx, false}, /*pinchHold=*/true, {});
+}
+
+bool HandInteractionSystem::isHandBody(PhysicsBodyId body) const {
+    if (body == INVALID_PHYSICS_BODY) return false;
+    for (int h = 0; h < 2; h++) {
+        if (body == palmBody_[h] || body == gripBody_[h]) return true;
+        for (const HandBone& bone : handBones_[h])
+            if (bone.body == body) return true;
+    }
+    return body == muzzleAnchor_;
+}
+
+HandInteractionSystem::Pick HandInteractionSystem::shapeForBody(
+    PhysicsBodyId body) const {
+    if (body != INVALID_PHYSICS_BODY) {
+        for (size_t i = 0; i < objects_.size(); i++) {
+            if (objects_[i].body == body)
+                return Pick{static_cast<int>(i), false};
+            if (objects_[i].subBody == body)
+                return Pick{static_cast<int>(i), true};
+        }
+    }
+    return Pick{};
+}
+
+void HandInteractionSystem::gunFrame(int gunIdx, Vec3& muzzle,
+                                     Vec3& dir) const {
+    const SandboxObject& gun = objects_[gunIdx];
+    const Vec3 p = physics_->physicsWorld().bodyPosition(gun.body);
+    const Quat q = physics_->physicsWorld().bodyOrientation(gun.body);
+    dir = q.rotate(Vec3(1, 0, 0));   // barrel along local +X
+    muzzle = p + dir * (kItems[gun.item].halfExtent.x + 0.01);
+}
+
+// What the barrel points at: nearest free MAIN body inside a widening
+// corridor along the beam (no occlusion test — it's a toy, and the beam
+// draws what it picked).
+int HandInteractionSystem::tractorPick(int gunIdx) const {
+    Vec3 muzzle, dir;
+    gunFrame(gunIdx, muzzle, dir);
+    int best = -1;
+    Real bestAlong = kTractorRange;
+    for (size_t i = 0; i < objects_.size(); i++) {
+        const int idx = static_cast<int>(i);
+        if (idx == gunIdx || isHeld(idx)) continue;
+        const Vec3 v =
+            physics_->physicsWorld().bodyPosition(objects_[i].body) - muzzle;
+        const Real along = dot(v, dir);
+        if (along < 0.15 || along > bestAlong) continue;
+        const Vec3 he = kItems[objects_[i].item].halfExtent;
+        const Real radius =
+            std::max(he.x, std::max(he.y, he.z)) + 0.06;
+        if ((v - dir * along).length() > radius) continue;
+        best = idx;
+        bestAlong = along;
+    }
+    return best;
+}
+
+void HandInteractionSystem::releaseTractor(FrameContext& ctx, bool launch) {
+    if (!tractor_.active()) return;
+    const SandboxObject& target = objects_[tractor_.target];
+    physics_->physicsWorld().removeConstraint(tractor_.spring);
+    if (launch) {
+        Vec3 muzzle, dir;
+        gunFrame(tractor_.gun, muzzle, dir);
+        physics_->physicsWorld().setLinearVelocity(target.body,
+                                                   dir * kLaunchSpeed);
+        PlaySound cue;
+        cue.clip = "sfx/punt";
+        cue.spatial = true;
+        cue.position = muzzle;
+        cue.range = 15.0;
+        cue.volume = 0.8f;
+        cue.pitch = 0.8f;
+        ctx.events.enqueue(cue);
+        LOG_INFO("[xr] gravgun launch %s at %.1fm/s",
+                 kItems[target.item].name, kLaunchSpeed);
+    } else {
+        LOG_INFO("[xr] gravgun drop %s", kItems[target.item].name);
+    }
+    layerClear_.push_back(
+        {Pick{tractor_.target, false}, static_cast<Real>(timeSeconds_)});
+    tractor_ = Tractor{};
+}
+
+void HandInteractionSystem::updateGravityGuns(FrameContext& ctx) {
+    const Real moveDt = std::max(ctx.frameDelta, 1.0 / 240.0);
+    for (size_t i = 0; i < objects_.size(); i++) {
+        SandboxObject& gun = objects_[i];
+        if (!kItems[gun.item].gravityGun ||
+            gun.jointId == INVALID_CONSTRAINT)
+            continue;
+        const int idx = static_cast<int>(i);
+        const bool pressed =
+            physics_->physicsWorld().constraintPosition(gun.jointId) >
+            kTriggerPress;
+        const bool rising = pressed && !gun.triggerPressed;
+        gun.triggerPressed = pressed;
+        if (!rising) continue;
+
+        // Grabbing the gun wraps a finger over the trigger — arm after.
+        bool armed = true;
+        for (int h = 0; h < 2; h++) {
+            if (hold_[h].active() && hold_[h].pick.obj == idx &&
+                timeSeconds_ - hold_[h].hookedAt < kTriggerArmDelay)
+                armed = false;
+        }
+        if (!armed) continue;
+
+        if (tractor_.active()) {
+            // Any gun's trigger launches the active beam (there is one).
+            if (tractor_.gun == idx) releaseTractor(ctx, /*launch=*/true);
+            continue;
+        }
+
+        const int target = tractorPick(idx);
+        if (target < 0) continue;
+        if (muzzleAnchor_ == INVALID_PHYSICS_BODY) {
+            muzzleAnchor_ = physics_->physicsWorld().addSphere(
+                0.01, Vec3(0, -50, 0), Quat::identity(),
+                BodyMotion::Kinematic);
+            if (muzzleAnchor_ == INVALID_PHYSICS_BODY) continue;
+            physics_->physicsWorld().setBodyLayer(
+                muzzleAnchor_, PhysicsWorld::BodyLayer::Grip);
+        }
+        Vec3 muzzle, dir;
+        gunFrame(idx, muzzle, dir);
+        physics_->physicsWorld().teleport(muzzleAnchor_,
+                                          muzzle + dir * kTractorHoldAhead,
+                                          Quat::identity());
+        tractor_.spring = physics_->physicsWorld().addTractorSpring(
+            muzzleAnchor_, objects_[target].body);
+        if (tractor_.spring == INVALID_CONSTRAINT) continue;
+        tractor_.gun = idx;
+        tractor_.target = target;
+        tractor_.stretchedSince = -1;
+        applyHeldLayer(Pick{target, false});
+        PlaySound cue;
+        cue.clip = "sfx/knock1";
+        cue.spatial = true;
+        cue.position =
+            physics_->physicsWorld().bodyPosition(objects_[target].body);
+        cue.range = 10.0;
+        cue.volume = 0.35f;
+        cue.pitch = 1.5f;
+        ctx.events.enqueue(cue);
+        LOG_INFO("[xr] gravgun grab %s (%.2fm)", kItems[objects_[target].item].name,
+                 (physics_->physicsWorld().bodyPosition(objects_[target].body) -
+                  muzzle)
+                     .length());
+    }
+
+    if (tractor_.active()) {
+        Vec3 muzzle, dir;
+        gunFrame(tractor_.gun, muzzle, dir);
+        const Vec3 holdPoint = muzzle + dir * kTractorHoldAhead;
+        physics_->physicsWorld().moveKinematic(muzzleAnchor_, holdPoint,
+                                               Quat::identity(), moveDt);
+        const Real stretch =
+            (physics_->physicsWorld().bodyPosition(
+                 objects_[tractor_.target].body) -
+             holdPoint)
+                .length();
+        if (stretch > kTractorMaxStretch) {
+            if (tractor_.stretchedSince < 0)
+                tractor_.stretchedSince = timeSeconds_;
+            else if (timeSeconds_ - tractor_.stretchedSince >
+                     kTractorStretchTime)
+                releaseTractor(ctx, /*launch=*/false);
+        } else {
+            tractor_.stretchedSince = -1;
+        }
+    }
 }
 
 void HandInteractionSystem::updateHandPresence(FrameContext& ctx) {
@@ -797,7 +1054,10 @@ void HandInteractionSystem::updateGrips(FrameContext& ctx) {
         for (size_t i = 0; i < objects_.size() && !hold_[h].active(); i++) {
             const int idx = static_cast<int>(i);
             Pick candidates[2] = {{idx, false}, {idx, true}};
-            const int n = objects_[i].subBody != INVALID_PHYSICS_BODY ? 2 : 1;
+            const int n = objects_[i].subBody != INVALID_PHYSICS_BODY &&
+                                  kItems[objects_[i].item].subGrabbable
+                              ? 2
+                              : 1;
             for (int c = 0; c < n; c++) {
                 if (recentUnhook_[h].obj == candidates[c].obj &&
                     recentUnhook_[h].sub == candidates[c].sub &&
@@ -845,6 +1105,7 @@ void HandInteractionSystem::update(FrameContext& ctx) {
     // Grips BEFORE the palette: a pinch that lands near an existing object
     // means "pick that up", even with the palette open.
     updateGrips(ctx);
+    updateGravityGuns(ctx);
     settleHeldLayers(ctx);
     updatePalette(ctx);
 
@@ -1018,6 +1279,47 @@ void HandInteractionSystem::render(FrameContext& ctx) {
         }
     }
 
+    // Gravity-gun beam: while a gun is held, a faint aim line to what the
+    // barrel would take (with its box highlighted); a bright beam while the
+    // tractor is live.
+    for (int h = 0; h < 2; h++) {
+        if (!hold_[h].active() || hold_[h].pick.sub) continue;
+        const int gunIdx = hold_[h].pick.obj;
+        if (!kItems[objects_[gunIdx].item].gravityGun) continue;
+        Vec3 muzzle, dir;
+        gunFrame(gunIdx, muzzle, dir);
+        if (tractor_.active() && tractor_.gun == gunIdx) {
+            const Vec3 target = physics_->physicsWorld().bodyPosition(
+                objects_[tractor_.target].body);
+            ctx.debug.line(muzzle, target, Vec3(1.0, 0.6, 0.15));
+            ctx.debug.box(target,
+                          kItems[objects_[tractor_.target].item].halfExtent *
+                              1.10,
+                          physics_->physicsWorld().bodyOrientation(
+                              objects_[tractor_.target].body),
+                          Vec3(1.0, 0.6, 0.15));
+        } else {
+            const int candidate = tractorPick(gunIdx);
+            const Real reach =
+                candidate >= 0
+                    ? (physics_->physicsWorld().bodyPosition(
+                           objects_[candidate].body) -
+                       muzzle)
+                          .length()
+                    : kTractorRange;
+            ctx.debug.line(muzzle, muzzle + dir * reach,
+                           Vec3(0.55, 0.35, 0.10));
+            if (candidate >= 0)
+                ctx.debug.box(
+                    physics_->physicsWorld().bodyPosition(
+                        objects_[candidate].body),
+                    kItems[objects_[candidate].item].halfExtent * 1.06,
+                    physics_->physicsWorld().bodyOrientation(
+                        objects_[candidate].body),
+                    Vec3(0.9, 0.6, 0.25));
+        }
+    }
+
     // The palette: item previews spinning above the anchor palm, hover ring
     // under the hovered one.
     const int anchor = palette_.anchorHand();
@@ -1057,7 +1359,20 @@ void HandInteractionSystem::render(FrameContext& ctx) {
 }
 
 void HandInteractionSystem::onStop(FrameContext& ctx) {
+    if (events_) {
+        ctx.events.unsubscribe(collisionSub_);
+        collisionSub_ = EventBus::INVALID_SUBSCRIPTION;
+        events_ = nullptr;
+    }
     if (physics_) {
+        if (tractor_.active()) {
+            physics_->physicsWorld().removeConstraint(tractor_.spring);
+            tractor_ = Tractor{};
+        }
+        if (muzzleAnchor_ != INVALID_PHYSICS_BODY) {
+            physics_->physicsWorld().removeBody(muzzleAnchor_);
+            muzzleAnchor_ = INVALID_PHYSICS_BODY;
+        }
         for (int h = 0; h < 2; h++) {
             if (hold_[h].active())
                 physics_->physicsWorld().removeConstraint(hold_[h].spring);

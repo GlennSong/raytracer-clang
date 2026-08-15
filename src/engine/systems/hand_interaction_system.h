@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "../event_bus.h"
 #include "../physics/physics_world.h"   // PhysicsBodyId, ConstraintId
 #include "../system.h"
 #include "../xr/xr_gestures.h"
@@ -62,6 +63,19 @@ class PhysicsSystem;
 //   or slider (bolt): grab either body with either hand; pulling the
 //   sub-body works the joint.
 //
+//   PHYSICS GUN — the "gravgun" item IS the physical-hands answer to a
+//   tool: grab it naturally (any orientation), and its trigger is a REAL
+//   slider your index finger pushes (return motor snaps it home). Squeeze
+//   once: a soft tractor spring pulls whatever the barrel points at to a
+//   hold point floating ahead of the muzzle (rotation free — it dangles).
+//   Squeeze again: launch along the barrel. Beam and candidate highlight
+//   draw while a gun is held; an over-stretched beam lets go.
+//
+//   AUDIO — physics Collision events involving sandbox shapes become
+//   spatial PlaySound cues (procedural sfx::impact variants; the state
+//   registers the clips): knocks scale with impact speed, hand pats are
+//   quieter, the gun launch thumps.
+//
 //   RENDERING — every object (held included — it's dynamic) draws at
 //   fixed-step poses interpolated by ctx.interpolation (the RenderSystem
 //   contract; raw Jolt poses stair-step 60Hz physics onto a 90Hz display).
@@ -72,6 +86,7 @@ class HandInteractionSystem : public System {
 public:
     explicit HandInteractionSystem(PhysicsSystem* physics);
 
+    void onStart(FrameContext& ctx) override;
     void update(FrameContext& ctx) override;
     void fixedUpdate(FrameContext& ctx) override;
     void render(FrameContext& ctx) override;
@@ -97,6 +112,9 @@ private:
         Real minLimit = 0;     // radians (hinge) / metres (slider)
         Real maxLimit = 0;
         Real jointSpring = 0;  // soft-limit frequency, 0 = hard stops
+        Real jointReturn = 0;  // slider return-motor frequency (trigger)
+        bool subGrabbable = true;   // false: the sub is a control, not cargo
+        bool gravityGun = false;    // this item is the physics gun
     };
     static const ItemDef kItems[];
     static const int kItemCount;
@@ -109,6 +127,7 @@ private:
         int item = 0;
         PhysicsBodyId subBody = INVALID_PHYSICS_BODY;   // articulated items
         ConstraintId jointId = INVALID_CONSTRAINT;
+        bool triggerPressed = false;   // gravity gun: last trigger state
         Vec3 posPrev, posCurr; // fixed-step snapshots (render interpolation)
         Quat quatPrev, quatCurr;
         Vec3 subPosPrev, subPosCurr;
@@ -130,6 +149,7 @@ private:
         ConstraintId spring = INVALID_CONSTRAINT;
         bool pinchHold = false;
         XrGripMemory grip;
+        Real hookedAt = 0;
         Real openSince = -1;
         Real lastOpening = 0;   // latest opening() — drives the anchor-dot
                                 // release feedback (gold -> red)
@@ -196,6 +216,25 @@ private:
     };
     std::vector<PendingClear> layerClear_;
 
+    // The gravity-gun tractor: one active beam — a kinematic muzzle anchor
+    // (GRIP layer, collides with nothing) driven to a hold point ahead of
+    // the gun, plus a soft pull-to-anchor spring on the target.
+    struct Tractor {
+        int gun = -1;      // objects_ index of the gravgun
+        int target = -1;   // objects_ index of the pulled object
+        ConstraintId spring = INVALID_CONSTRAINT;
+        Real stretchedSince = -1;
+        bool active() const { return spring != INVALID_CONSTRAINT; }
+    };
+    Tractor tractor_;
+    PhysicsBodyId muzzleAnchor_ = INVALID_PHYSICS_BODY;
+
+    // Impact audio: Collision events involving sandbox shapes become
+    // spatial PlaySound cues (rate-limited; hand pats quieter).
+    EventBus* events_ = nullptr;
+    EventBus::SubscriptionId collisionSub_ = EventBus::INVALID_SUBSCRIPTION;
+    Real lastCueAt_ = -1;
+
     Vec3 handWorld(FrameContext& ctx, const Vec3& originPoint) const;
     Quat handOrientation(const XrHand& hand) const;
     bool makeRoom();
@@ -231,6 +270,13 @@ private:
               const std::vector<XrGripPoint>& contacts);
     void unhook(FrameContext& ctx, int h);
     XrAlignedPose placementTarget(const Pick& pick) const;
+
+    bool isHandBody(PhysicsBodyId body) const;
+    Pick shapeForBody(PhysicsBodyId body) const;
+    void gunFrame(int gunIdx, Vec3& muzzle, Vec3& dir) const;
+    int tractorPick(int gunIdx) const;
+    void updateGravityGuns(FrameContext& ctx);
+    void releaseTractor(FrameContext& ctx, bool launch);
 
     void updateHandPresence(FrameContext& ctx);
     void updatePalette(FrameContext& ctx);

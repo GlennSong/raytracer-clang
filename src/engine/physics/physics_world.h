@@ -121,6 +121,15 @@ public:
                                Real frequency = 20.0, Real damping = 1.0,
                                Real maxForce = 250.0, Real maxTorque = 15.0);
 
+    // The tractor beam: a soft linear-only spring that PULLS the object's
+    // centre to the anchor body's position (unlike addGripSpring, which
+    // preserves the hook-time relative pose). Rotation stays free — a
+    // tractored crate dangles and spins, which is the gravity-gun feel.
+    // Bounded force: a wedged object stretches the beam, never the solver.
+    ConstraintId addTractorSpring(PhysicsBodyId anchor, PhysicsBodyId object,
+                                  Real frequency = 4.0, Real damping = 1.0,
+                                  Real maxForce = 80.0);
+
     // Articulated objects: hinge (lid) and slider (bolt) between two live
     // bodies, anchored at a world-space pivot/axis, with travel limits.
     // springFrequency > 0 adds soft limit springs (a lid that eases shut,
@@ -129,11 +138,21 @@ public:
                           const Vec3& worldPivot, const Vec3& worldAxis,
                           Real minAngle, Real maxAngle,
                           Real springFrequency = 0.0);
+    // returnFrequency > 0 adds a position motor that pulls the slider back
+    // to minDistance with BOUNDED force (returnForce) — a trigger's return
+    // spring: a finger easily overpowers it, release snaps it home.
     ConstraintId addSlider(PhysicsBodyId a, PhysicsBodyId b,
                            const Vec3& worldPoint, const Vec3& worldAxis,
                            Real minDistance, Real maxDistance,
-                           Real springFrequency = 0.0);
+                           Real springFrequency = 0.0,
+                           Real returnFrequency = 0.0,
+                           Real returnForce = 10.0);
     void removeConstraint(ConstraintId id);
+
+    // Current joint coordinate of a hinge (radians) or slider (metres)
+    // constraint — how far the lid is open, how far the trigger is pulled.
+    // 0 for other constraint kinds or invalid ids.
+    Real constraintPosition(ConstraintId id) const;
 
     // Current touches involving `body` (persisted contacts included — the
     // grasp stack's "is the fingertip still on it?"). Each returned event

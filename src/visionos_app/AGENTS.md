@@ -282,9 +282,10 @@ Treat "it works in the simulator" as necessary, never sufficient.
 - The bundle is READ-ONLY. Assets resolve through `engine::assetPath` against
   the bundle root (`engine/asset_root.h`); anything the engine writes —
   `settings.json` — must go to the Documents directory instead.
-- Audio runs on the NULL backend deliberately. Opening a real device deadlocks
-  AURemoteIO unless an AVAudioSession is configured and activated first, and
-  CoreAudio then aborts the process on its RPC timeout, so the usual
+- Audio opens the REAL backend only after `vision_spike.mm` configures and
+  activates an AVAudioSession (VERIFY on first build); if either call fails it
+  stays on the null backend. Never open a device without the session: AURemoteIO
+  deadlocks and CoreAudio aborts the process on its RPC timeout, so the usual
   open-failed fallback never runs.
 - The CompositorServices frame protocol still has no mid-frame escape once
   `start_submission` is called — but on visionOS 26 an EMPTY drawable array

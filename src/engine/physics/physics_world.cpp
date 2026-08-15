@@ -573,6 +573,52 @@ ConstraintId PhysicsWorld::addGripSpring(PhysicsBodyId grip,
     RT_STORE_CONSTRAINT(constraint);
 }
 
+ConstraintId PhysicsWorld::addTractorSpring(PhysicsBodyId anchor,
+                                            PhysicsBodyId object,
+                                            Real frequency, Real damping,
+                                            Real maxForce) {
+    if (!impl || anchor == INVALID_PHYSICS_BODY ||
+        object == INVALID_PHYSICS_BODY)
+        return INVALID_CONSTRAINT;
+
+    const JPH::BodyID ids[2] = {JPH::BodyID(anchor), JPH::BodyID(object)};
+    impl->bodies().ActivateBody(ids[1]);   // pre-lock, like addGripSpring
+    JPH::BodyLockMultiWrite lock(impl->physicsSystem.GetBodyLockInterface(),
+                                 ids, 2);
+    JPH::Body* anchorBody = lock.GetBody(0);
+    JPH::Body* objectBody = lock.GetBody(1);
+    if (!anchorBody || !objectBody) return INVALID_CONSTRAINT;
+
+    // Attachment frames at each body's OWN position (unlike the grip
+    // spring's shared frame): the motors driving their displacement to zero
+    // therefore PULL the object's centre onto the anchor. Translation only —
+    // rotation stays free for the dangling gravity-gun feel.
+    JPH::SixDOFConstraintSettings settings;
+    settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+    settings.mPosition1 = anchorBody->GetPosition();
+    settings.mPosition2 = objectBody->GetPosition();
+    for (int axis = JPH::SixDOFConstraintSettings::EAxis::TranslationX;
+         axis <= JPH::SixDOFConstraintSettings::EAxis::TranslationZ; axis++) {
+        JPH::MotorSettings& motor = settings.mMotorSettings[axis];
+        motor.mSpringSettings = JPH::SpringSettings(
+            JPH::ESpringMode::FrequencyAndDamping,
+            static_cast<float>(frequency), static_cast<float>(damping));
+        motor.SetForceLimit(static_cast<float>(maxForce));
+    }
+
+    JPH::SixDOFConstraint* constraint = static_cast<JPH::SixDOFConstraint*>(
+        settings.Create(*anchorBody, *objectBody));
+    if (!constraint) return INVALID_CONSTRAINT;
+    for (int axis = JPH::SixDOFConstraintSettings::EAxis::TranslationX;
+         axis <= JPH::SixDOFConstraintSettings::EAxis::TranslationZ; axis++) {
+        constraint->SetMotorState(
+            static_cast<JPH::SixDOFConstraintSettings::EAxis>(axis),
+            JPH::EMotorState::Position);
+    }
+    constraint->SetTargetPositionCS(JPH::Vec3::sZero());
+    RT_STORE_CONSTRAINT(constraint);
+}
+
 ConstraintId PhysicsWorld::addHinge(PhysicsBodyId a, PhysicsBodyId b,
                                     const Vec3& worldPivot,
                                     const Vec3& worldAxis, Real minAngle,
@@ -605,7 +651,8 @@ ConstraintId PhysicsWorld::addHinge(PhysicsBodyId a, PhysicsBodyId b,
 ConstraintId PhysicsWorld::addSlider(PhysicsBodyId a, PhysicsBodyId b,
                                      const Vec3& worldPoint,
                                      const Vec3& worldAxis, Real minDistance,
-                                     Real maxDistance, Real springFrequency) {
+                                     Real maxDistance, Real springFrequency,
+                                     Real returnFrequency, Real returnForce) {
     if (!impl || a == INVALID_PHYSICS_BODY || b == INVALID_PHYSICS_BODY)
         return INVALID_CONSTRAINT;
     const JPH::BodyID ids[2] = {JPH::BodyID(a), JPH::BodyID(b)};
@@ -624,8 +671,24 @@ ConstraintId PhysicsWorld::addSlider(PhysicsBodyId a, PhysicsBodyId b,
             JPH::ESpringMode::FrequencyAndDamping,
             static_cast<float>(springFrequency), 1.0f);
     }
-    RT_STORE_CONSTRAINT(static_cast<JPH::TwoBodyConstraint*>(
-        settings.Create(*lock.GetBody(0), *lock.GetBody(1))));
+    if (returnFrequency > 0) {
+        // Trigger return: a bounded position motor toward minDistance — a
+        // finger (kinematic, infinitely strong) overpowers it trivially,
+        // and it snaps the slider home on release.
+        settings.mMotorSettings.mSpringSettings = JPH::SpringSettings(
+            JPH::ESpringMode::FrequencyAndDamping,
+            static_cast<float>(returnFrequency), 1.0f);
+        settings.mMotorSettings.SetForceLimit(
+            static_cast<float>(returnForce));
+    }
+    JPH::SliderConstraint* constraint = static_cast<JPH::SliderConstraint*>(
+        settings.Create(*lock.GetBody(0), *lock.GetBody(1)));
+    if (!constraint) return INVALID_CONSTRAINT;
+    if (returnFrequency > 0) {
+        constraint->SetMotorState(JPH::EMotorState::Position);
+        constraint->SetTargetPosition(static_cast<float>(minDistance));
+    }
+    RT_STORE_CONSTRAINT(constraint);
 }
 
 #undef RT_STORE_CONSTRAINT
@@ -648,6 +711,22 @@ void PhysicsWorld::removeConstraint(ConstraintId id) {
         impl->bodies().ActivateBody(two->GetBody2()->GetID());
     impl->physicsSystem.RemoveConstraint(impl->constraints[id]);
     impl->constraints[id] = nullptr;
+}
+
+Real PhysicsWorld::constraintPosition(ConstraintId id) const {
+    if (!impl || id == INVALID_CONSTRAINT ||
+        id >= impl->constraints.size() || !impl->constraints[id])
+        return 0;
+    // Jolt builds without RTTI; GetSubType names the concrete kind.
+    JPH::Constraint* c = impl->constraints[id].GetPtr();
+    switch (c->GetSubType()) {
+        case JPH::EConstraintSubType::Hinge:
+            return static_cast<JPH::HingeConstraint*>(c)->GetCurrentAngle();
+        case JPH::EConstraintSubType::Slider:
+            return static_cast<JPH::SliderConstraint*>(c)->GetCurrentPosition();
+        default:
+            return 0;
+    }
 }
 
 void PhysicsWorld::activeContacts(PhysicsBodyId body,

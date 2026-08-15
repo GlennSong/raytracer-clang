@@ -40,6 +40,7 @@
 #import "vision_spike.h"
 
 #import <ARKit/ARKit.h>
+#import <AVFAudio/AVFAudio.h>   // AVAudioSession (real audio backend)
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <simd/simd.h>
@@ -222,15 +223,32 @@ std::unique_ptr<engine::Application> bootEngine(cp_layer_renderer_t layerRendere
 
     // Size is nominal — the compositor decides the real per-eye dimensions. It
     // only has to be non-zero so nothing divides by it.
-    // Null audio, deliberately. Opening a real device on visionOS deadlocks
-    // AURemoteIO unless the app has configured and activated an AVAudioSession
-    // first — CoreAudio then aborts the process on its RPC timeout ("Initialize:
-    // RPC timeout. Apparently deadlocked."), which is a HANG, so Auto's
-    // open-failed fallback never gets a chance to run. Sounds still "play" into
-    // the null backend, so gameplay that waits on audio does not stall. Doing
-    // the AVAudioSession setup properly is its own piece of work.
+    // REAL audio needs an AVAudioSession configured and ACTIVATED before the
+    // device opens — without it AURemoteIO deadlocks and CoreAudio aborts the
+    // process on its RPC timeout ("Initialize: RPC timeout. Apparently
+    // deadlocked."), a HANG the Auto fallback never survives. So: session
+    // first, and only use the real backend when BOTH calls succeed; any
+    // failure keeps the old null backend (silent but time-advancing).
+    // VERIFY: AVAudioSession category/activation on visionOS 26 (AVFAudio;
+    // linked via miniaudio's AVFoundation dependency). If the device build
+    // still hangs in AudioEngine::initialize, force Null here again.
+    bool audioSessionReady = false;
+    {
+        NSError* audioError = nil;
+        AVAudioSession* session = [AVAudioSession sharedInstance];
+        if ([session setCategory:AVAudioSessionCategoryAmbient
+                           error:&audioError] &&
+            [session setActive:YES error:&audioError]) {
+            audioSessionReady = true;
+            NSLog(@"[vision] AVAudioSession active — real audio backend");
+        } else {
+            NSLog(@"[vision] AVAudioSession failed (%@) — null audio backend",
+                  audioError);
+        }
+    }
     engine::Application::Config cfg{1024, 1024, "Raytracer visionOS", settingsPath};
-    cfg.audio = engine::AudioBackendMode::Null;
+    cfg.audio = audioSessionReady ? engine::AudioBackendMode::Auto
+                                  : engine::AudioBackendMode::Null;
     if (!app->initialize(cfg, std::move(window))) {
         NSLog(@"[vision] FATAL: Application::initialize failed");
         return nullptr;

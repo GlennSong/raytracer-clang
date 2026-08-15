@@ -621,6 +621,75 @@ TEST_CASE(held_layer_ignores_hands_but_rests_on_the_world) {
     world.shutdown();
 }
 
+TEST_CASE(tractor_spring_pulls_object_to_the_anchor) {
+    PhysicsWorld world;
+    world.initialize();
+    // A kinematic anchor floating at head height (GRIP layer — collides
+    // with nothing) and a crate 1.2m away: the tractor spring must PULL
+    // the crate's centre to the anchor (unlike the grip spring, which
+    // preserves the hook-time offset), holding it against gravity.
+    PhysicsBodyId anchor = world.addSphere(0.01, Vec3(0, 1.5, 0),
+                                           Quat::identity(),
+                                           BodyMotion::Kinematic);
+    world.setBodyLayer(anchor, PhysicsWorld::BodyLayer::Grip);
+    PhysicsBodyId crate = world.addBox(Vec3(0.075, 0.075, 0.075),
+                                       Vec3(1.2, 1.5, 0), Quat::identity(),
+                                       BodyMotion::Dynamic, 0.0, 0.5);
+    ConstraintId beam = world.addTractorSpring(anchor, crate);
+    CHECK(beam != INVALID_CONSTRAINT);
+    for (int i = 0; i < 240; i++) {
+        world.moveKinematic(anchor, Vec3(0, 1.5, 0), Quat::identity(),
+                            1.0 / 60.0);
+        world.update(1.0 / 60.0);
+    }
+    CHECK((world.bodyPosition(crate) - Vec3(0, 1.5, 0)).length() < 0.15);
+
+    // Release: the crate falls free.
+    world.removeConstraint(beam);
+    step(world, 60);
+    CHECK(world.bodyPosition(crate).y < 0.5);
+    world.shutdown();
+}
+
+TEST_CASE(slider_return_motor_snaps_home_and_reports_position) {
+    PhysicsWorld world;
+    world.initialize();
+    world.setGravity(Vec3(0, 0, 0));   // isolate the motor from gravity
+    // A trigger: kinematic base, dynamic knob on a 14mm slider whose
+    // bounded return motor rests it at 0. constraintPosition is the
+    // squeeze readout.
+    PhysicsBodyId base = world.addBox(Vec3(0.05, 0.05, 0.05), Vec3(0, 1, 0),
+                                      Quat::identity(),
+                                      BodyMotion::Kinematic);
+    PhysicsBodyId knob = world.addBox(Vec3(0.008, 0.012, 0.006),
+                                      Vec3(0.06, 1, 0), Quat::identity(),
+                                      BodyMotion::Dynamic);
+    ConstraintId slider = world.addSlider(base, knob, Vec3(0.06, 1, 0),
+                                          Vec3(1, 0, 0), 0.0, 0.014,
+                                          /*springFrequency=*/0.0,
+                                          /*returnFrequency=*/8.0);
+    CHECK(slider != INVALID_CONSTRAINT);
+    step(world, 30);
+    CHECK(std::fabs(world.constraintPosition(slider)) < 0.002);  // at rest
+
+    // "Squeeze": push the knob along +X against the return motor — like a
+    // finger, the push re-asserts every step (a single free shove is
+    // damped out within one step by the motor, which is exactly why a
+    // waving gun never false-fires). Position reads the travel, capped by
+    // the 14mm limit.
+    for (int i = 0; i < 6; i++) {
+        world.setLinearVelocity(knob, Vec3(1.0, 0, 0));
+        world.update(1.0 / 60.0);
+    }
+    CHECK(world.constraintPosition(slider) > 0.009);
+    CHECK(world.constraintPosition(slider) < 0.016);
+
+    // Let go: the return motor snaps it home.
+    step(world, 60);
+    CHECK(std::fabs(world.constraintPosition(slider)) < 0.002);
+    world.shutdown();
+}
+
 TEST_CASE(active_contacts_track_touch_and_orient_the_normal) {
     PhysicsWorld world;
     world.initialize();

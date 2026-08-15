@@ -16,6 +16,11 @@ class JobSystem;   // our shared thread pool (src/job_system.h)
 // damage — without knowing physics exists.
 struct Collision {
     Entity a, b;
+    // The raw body handles, always set — consumers that own non-ECS bodies
+    // (the XR sandbox's objects and hand capsules) classify impacts by
+    // these when a/b are invalid.
+    PhysicsBodyId bodyA = INVALID_PHYSICS_BODY;
+    PhysicsBodyId bodyB = INVALID_PHYSICS_BODY;
     Vec3 position;   // world-space contact point
     Vec3 normal;
     Real speed = 0;  // closing speed along the normal (m/s) — severity

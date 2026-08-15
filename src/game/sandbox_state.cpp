@@ -8,12 +8,51 @@
 #include "../engine/systems/render_system.h"
 #include "../engine/systems/debug_draw_system.h"
 #include "../engine/systems/audio_system.h"
+#include "../engine/audio/sfx.h"
 #ifdef RT_ENABLE_PHYSICS
 #include "../engine/systems/physics_system.h"
 #endif
 #include "../log.h"
 
 using namespace engine;
+
+namespace {
+
+// The sandbox's sound content (the arena pattern, ADR-0071): synthesize the
+// procedural clips and register them by name. HandInteractionSystem turns
+// Collision events into the cues — it owns the body bookkeeping (which id
+// is a fingertip, which a crate), so the classification lives there and
+// only the clip data lives here. Registered after AudioSystem exists;
+// resolved lazily on the first cue.
+class SandboxSoundSystem : public System {
+public:
+    explicit SandboxSoundSystem(AudioSystem& audioSystem)
+        : audioSystem_(audioSystem) {}
+
+    void onStart(FrameContext& ctx) override {
+        if (!ctx.audio.ready()) return;
+        const uint32_t rate = ctx.audio.sampleRate();
+        // Four knock variants so repeated impacts don't machine-gun; the
+        // salt in the cue picks one.
+        const uint32_t seeds[4] = {3, 11, 17, 23};
+        for (int i = 0; i < 4; i++) {
+            auto knock = sfx::impact(rate, seeds[i]);
+            audioSystem_.registerClip(
+                "sfx/knock" + std::to_string(i),
+                ctx.audio.createClip(knock.data(), knock.size(), 1, rate));
+        }
+        // The gravity gun's launch thump (played pitched down).
+        auto punt = sfx::gunshot(rate, 7);
+        audioSystem_.registerClip(
+            "sfx/punt",
+            ctx.audio.createClip(punt.data(), punt.size(), 1, rate));
+    }
+
+private:
+    AudioSystem& audioSystem_;
+};
+
+}  // namespace
 
 SandboxState::SandboxState(Window& window, Renderer& renderer)
     : PlayingState(window), renderer_(renderer) {
@@ -41,7 +80,8 @@ SandboxState::SandboxState(Window& window, Renderer& renderer)
     addSystem<XrCameraSystem>();
     addSystem<RenderSystem>();
     addSystem<DebugDrawSystem>();
-    addSystem<AudioSystem>();
+    auto& audioSystem = addSystem<AudioSystem>();
+    addSystem<SandboxSoundSystem>(audioSystem);
 }
 
 void SandboxState::onEnter(FrameContext& ctx) {
