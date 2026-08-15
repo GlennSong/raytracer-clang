@@ -179,6 +179,12 @@ private:
     int lastUnhookHand_ = -1;
     Real lastUnhookTime_ = -10;
 
+    // Per-hand: the shape this hand released last, so closure leaves it
+    // alone for a beat (kRehookDelay) instead of re-grabbing a departing
+    // throw whose relative velocity is still ~0.
+    Pick recentUnhook_[2];
+    Real recentUnhookAt_[2] = {-10, -10};
+
     // Released shapes still on the HELD layer, waiting for the fingers to
     // clear before hand collision is restored (see applyHeldLayer).
     struct PendingClear {

@@ -121,6 +121,27 @@ void XrHandMemory::feed(bool tracked, const Vec3& position,
     // Past the budget: freeze in place until reacquired.
 }
 
+Vec3 XrHandMemory::peakVelocity(Real window) const {
+    if (count_ < 3) return Vec3(0, 0, 0);
+    const Snap& newest = ring_[(head_ + kRing - 1) % kRing];
+    Vec3 best(0, 0, 0);
+    Real bestSq = 0;
+    for (size_t k = 2; k < count_; ++k) {
+        const Snap& older = ring_[(head_ + kRing - 1 - k) % kRing];
+        const Snap& span = ring_[(head_ + kRing - 1 - (k - 2)) % kRing];
+        if (newest.t - older.t > window) break;
+        const Real dt = span.t - older.t;
+        if (dt < 1e-4) continue;
+        const Vec3 v = (span.p - older.p) / dt;
+        const Real m = dot(v, v);
+        if (m > bestSq) {
+            bestSq = m;
+            best = v;
+        }
+    }
+    return best;
+}
+
 Vec3 XrHandMemory::fitVelocity() const {
     // Least-squares slope of the ring's recent positions over time (the
     // XrPoseHistory rationale: one noisy endpoint frame must not fling the

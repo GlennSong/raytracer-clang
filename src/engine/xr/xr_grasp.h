@@ -94,6 +94,16 @@ public:
     const Vec3& position() const { return position_; }
     const Quat& orientation() const { return orientation_; }
 
+    // The fastest short-span velocity in the snapshot ring within `window`
+    // of the newest TRACKED sample (two-step spans, so one noisy frame
+    // can't fake a spike). This is the throw-restore signal: hand-tracked
+    // releases always fire LATE — finger extension lags real fingers under
+    // fast motion, and fast swings drop tracking outright — so by release
+    // time the arm has decelerated and the spring-held object with it. The
+    // peak is what the throw actually was. Coasting adds no samples, so
+    // after a mid-throw dropout this still reports the motion at loss.
+    Vec3 peakVelocity(Real window) const;
+
 private:
     XrHandMemoryConfig config_;
     // Snapshot ring for the velocity fit (least-squares, same rationale as

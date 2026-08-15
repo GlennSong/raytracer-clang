@@ -187,6 +187,50 @@ TEST_CASE(grasp_hand_memory_blends_on_reacquire) {
     CHECK(nearVec(mem.position(), target, 1e-6));
 }
 
+TEST_CASE(grasp_hand_memory_peak_velocity_survives_the_decel) {
+    // A throw: the hand ramps up to ~2 m/s, flicks, then decelerates hard
+    // before the (late) release fires. The fitted "current" velocity at
+    // release is a fraction of the throw; peakVelocity must still report
+    // the flick — that is the velocity the object should leave with.
+    XrHandMemory mem;
+    const Real dt = 1.0 / 90.0;
+    Real t = 0;
+    Real x = 0;
+    auto feedAtSpeed = [&](Real speed, int frames) {
+        for (int i = 0; i < frames; i++) {
+            mem.feed(true, Vec3(x, 1, 0), Quat::identity(), t);
+            t += dt;
+            x += speed * dt;
+        }
+    };
+    feedAtSpeed(0.5, 4);
+    feedAtSpeed(2.0, 4);    // the flick
+    feedAtSpeed(0.2, 4);    // decelerating, release fires somewhere here
+
+    const Vec3 peak = mem.peakVelocity(0.15);
+    CHECK(peak.x > 1.5);           // the flick, not the decel
+    CHECK(peak.x < 2.3);
+    CHECK(std::fabs(peak.y) < 0.2);
+
+    // Outside the window the flick ages out: keep decelerating and the
+    // peak follows the recent motion instead of an old swing.
+    feedAtSpeed(0.2, 14);
+    CHECK(mem.peakVelocity(0.15).x < 0.5);
+
+    // A dropout adds no samples: the peak at loss is preserved — the
+    // mid-throw-dropout release reads the throw, not zero.
+    XrHandMemory lost;
+    t = 0;
+    x = 0;
+    for (int i = 0; i < 6; i++) {
+        lost.feed(true, Vec3(x, 1, 0), Quat::identity(), t);
+        t += dt;
+        x += 2.0 * dt;
+    }
+    lost.feed(false, Vec3(0, 0, 0), Quat::identity(), t);
+    CHECK(lost.peakVelocity(0.15).x > 1.5);
+}
+
 TEST_CASE(grasp_hand_memory_unavailable_until_first_track) {
     XrHandMemory mem;
     CHECK(!mem.available());

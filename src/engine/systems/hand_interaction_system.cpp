@@ -33,6 +33,26 @@ constexpr Real kOpenDwell = 0.05;
 // a shape that is RECEDING from the grip faster than this (a toss leaving,
 // not a regrip). Catches are unaffected — a caught object approaches.
 constexpr Real kRecedeSpeed = 0.25;
+// ...and a hand that just let go of a shape leaves it alone briefly — the
+// frame after a throw the relative velocity is still ~0 (the spring had
+// just been tracking), so the recede guard alone can't catch it. Same hand
+// + same shape only: hand-to-hand tosses and throw-up-and-catch (the ball
+// is gone and back ~0.5s later) never notice.
+constexpr Real kRehookDelay = 0.12;
+// Throw restore: hand-tracked releases fire LATE (finger extension lags
+// real fingers at speed; fast swings drop tracking outright), so by
+// release the arm — and the spring-held object — has decelerated. If the
+// hand's PEAK recent speed beats the object's at release, the peak is what
+// the throw actually was: restore it. Set-downs (peak below the floor) are
+// untouched, so the placement assist still sees them.
+constexpr Real kThrowRestoreFloor = 0.7;
+// A tracking dropout while the grip moved faster than this is a throw
+// losing its hand mid-swing: release NOW with the peak, instead of
+// coasting the hold through the throw and dragging the object back down.
+constexpr Real kDropoutThrowSpeed = 1.0;
+// Fingers EXTENDING fast is release intent — fire early (at 60% of the
+// opening threshold) instead of waiting for the full drift.
+constexpr Real kOpeningVelRelease = 0.5;
 // A release slower than this is a deliberate set-down: eligible for the
 // placement-assist snap. Anything faster is a throw/drop — untouched.
 constexpr Real kGentleRelease = 0.25;
@@ -312,6 +332,12 @@ bool HandInteractionSystem::makeRoom() {
                 layerClear_[k].pick.obj--;
             k++;
         }
+        for (int h = 0; h < 2; h++) {
+            if (recentUnhook_[h].obj == static_cast<int>(i))
+                recentUnhook_[h] = Pick{};
+            else if (recentUnhook_[h].obj > static_cast<int>(i))
+                recentUnhook_[h].obj--;
+        }
         lastUnhookObj_ = -1;
         return true;
     }
@@ -375,10 +401,17 @@ void HandInteractionSystem::unhook(FrameContext& ctx, int h) {
     const PhysicsBodyId body = shapeBody(hold.pick);
     physics_->physicsWorld().removeConstraint(hold.spring);
 
-    // The object is dynamic and keeps its true momentum — nothing to hand
-    // off. A GENTLE release near a support takes the placement-assist snap
-    // (the ghost the user was shown); throws and drops are untouched.
-    const Vec3 v = physics_->physicsWorld().getLinearVelocity(body);
+    // The object keeps its momentum — but a hand-tracked release fires
+    // LATE, after the arm decelerated, so a throw's true speed is the
+    // hand's recent PEAK, not the object's current velocity. Restore it
+    // when it beats what the object has (set-downs stay below the floor
+    // and keep their gentle velocity for the placement assist).
+    Vec3 v = physics_->physicsWorld().getLinearVelocity(body);
+    const Vec3 peak = handMemory_[h].peakVelocity(0.15);
+    if (peak.length() > kThrowRestoreFloor && peak.length() > v.length()) {
+        physics_->physicsWorld().setLinearVelocity(body, peak);
+        v = peak;
+    }
     bool placed = false;
     if (placeAssist_ && !hold.pick.sub && !shapeIsSphere(hold.pick) &&
         v.length() < kGentleRelease) {
@@ -398,6 +431,8 @@ void HandInteractionSystem::unhook(FrameContext& ctx, int h) {
     lastUnhookObj_ = hold.pick.obj;
     lastUnhookHand_ = h;
     lastUnhookTime_ = timeSeconds_;
+    recentUnhook_[h] = hold.pick;
+    recentUnhookAt_[h] = timeSeconds_;
     releaseHeldLayer(h, hold.pick);
     hold = Hold{};
     consumePinchUntil_ = timeSeconds_ + 0.4;
@@ -658,8 +693,19 @@ void HandInteractionSystem::updateGrips(FrameContext& ctx) {
             rawP = handWorld(ctx, pinch_[h].pinchPoint());
             rawQ = handOrientation(hand);
         }
+        const bool wasCoasting = handMemory_[h].coasting();
         handMemory_[h].feed(tracked, rawP, rawQ, timeSeconds_);
         if (!handMemory_[h].available()) continue;
+
+        // A dropout at speed while holding is a throw losing its hand
+        // mid-swing (fast motion is exactly when tracking drops): release
+        // NOW — unhook restores the peak velocity — instead of coasting
+        // the hold through the throw and dragging the object back down
+        // with the reacquired, already-decelerated hand.
+        if (!wasCoasting && handMemory_[h].coasting() && hold_[h].active() &&
+            handMemory_[h].peakVelocity(0.15).length() > kDropoutThrowSpeed) {
+            unhook(ctx, h);
+        }
 
         if (gripBody_[h] == INVALID_PHYSICS_BODY) {
             gripBody_[h] = physics_->physicsWorld().addSphere(
@@ -699,8 +745,18 @@ void HandInteractionSystem::updateGrips(FrameContext& ctx) {
                 const Real open = hold.grip.opening(
                     tips, physics_->physicsWorld().bodyPosition(body),
                     physics_->physicsWorld().bodyOrientation(body));
+                // Fingers EXTENDING fast is release intent (opening rate,
+                // not just magnitude) — reported finger poses lag real
+                // fingers at speed, so waiting for the full drift releases
+                // after the throw is over.
+                const Real openVel =
+                    ctx.frameDelta > 1e-4
+                        ? (open - hold.lastOpening) / ctx.frameDelta
+                        : 0.0;
                 hold.lastOpening = open;
-                if (open > XrGripMemory::kReleaseOpening * 1.5) {
+                if (open > XrGripMemory::kReleaseOpening * 1.5 ||
+                    (open > XrGripMemory::kReleaseOpening * 0.6 &&
+                     openVel > kOpeningVelRelease)) {
                     unhook(ctx, h);
                 } else if (open > XrGripMemory::kReleaseOpening) {
                     if (hold.openSince < 0) hold.openSince = timeSeconds_;
@@ -737,6 +793,10 @@ void HandInteractionSystem::updateGrips(FrameContext& ctx) {
             Pick candidates[2] = {{idx, false}, {idx, true}};
             const int n = objects_[i].subBody != INVALID_PHYSICS_BODY ? 2 : 1;
             for (int c = 0; c < n; c++) {
+                if (recentUnhook_[h].obj == candidates[c].obj &&
+                    recentUnhook_[h].sub == candidates[c].sub &&
+                    timeSeconds_ - recentUnhookAt_[h] < kRehookDelay)
+                    continue;   // just let go of this — let it leave
                 const std::vector<XrGripPoint> points =
                     probeShape(ctx, h, candidates[c], kClosureReach);
                 if (points.size() < 2) continue;
@@ -1021,6 +1081,8 @@ void HandInteractionSystem::onStop(FrameContext& ctx) {
     layerClear_.clear();
     handActive_[0] = handActive_[1] = false;
     lastUnhookObj_ = -1;
+    recentUnhook_[0] = recentUnhook_[1] = Pick{};
+    recentUnhookAt_[0] = recentUnhookAt_[1] = -10;
     palette_ = XrPalette(paletteConfig(kItemCount));
     for (auto& mesh : itemMeshes_) {
         if (mesh.valid()) {
