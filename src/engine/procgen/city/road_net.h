@@ -45,8 +45,15 @@ struct RoadNet {
     double width = 10.0;                        // default carriageway width (m) — widen control
     // Optional per-edge width override (parallel to `edges`; <= 0 or missing = use the
     // default `width`). Lets a road taper or a slip road run narrower than its trunk.
-    // DEPRECATED by specs/edgeSpecs (roads-v2): kept during the transition; removed
-    // with the old mesher at the cleanup stage.
+    //
+    // NOT deprecated, despite what this comment said until 2026-08-15. `specs`/
+    // `edgeSpecs` were meant to supersede it, but they are only populated on the
+    // `"metro"` path (`road_net.cpp`: `if (kind == "metro" && ...)`); district-kind
+    // levels are specless. So `roadNetEdgeWidth()` — which reads THIS field — is the
+    // one width every consumer agrees on: the lattice mesher, nav lane spacing, lot
+    // road clearance (`pushPolyClearOfRoads`) and parking bands all resolve through
+    // it. See the "width agreement crux" note in road_net.cpp. Removing it requires
+    // giving every generation kind a spec table first.
     std::vector<double> edgeWidths;
     // Roads-v2 band model: the net's spec table + a per-edge index into it
     // (parallel to `edges`; -1/missing = legacy, synthesized from width/sidewalk).

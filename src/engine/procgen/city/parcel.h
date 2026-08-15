@@ -39,9 +39,16 @@ struct ParcelParams {
     // whose walk yields nothing falls back to OBB bisection.
     Real frontWidth = 16;   // target lot width along the street (m)
     Real lotDepth   = 28;   // lot depth inward from the street (m)
-    Real courtMinArea = 400; // small-court threshold (currently informational:
-                             // every interior remainder >= ~40 m² is emitted as
-                             // a court so block cores never render as bare dirt)
+    // DEAD FIELD — nothing reads it. `parcelFrontage` emits the interior remainder
+    // as a court whenever its area >= 40 m² (a hard-coded literal), so block cores
+    // never render as bare dirt regardless of what this says.
+    //
+    // It is not merely unused, it is a FALSE KNOB: the level schema plumbs
+    // `citysim.parcel.courtMinArea` through LevelParams -> LotParams::
+    // parcelCourtMinArea -> here (city_lots.cpp), so an author can set it, see it
+    // arrive, and get no effect. Either wire it into the 40 m² gate or delete the
+    // whole chain — don't leave it half-connected.
+    Real courtMinArea = 400;
     uint32_t seed = 0;
 };
 
