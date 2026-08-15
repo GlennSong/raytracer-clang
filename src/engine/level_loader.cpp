@@ -516,8 +516,8 @@ static void loadRoadlabEntity(const json& ent, World& world, Renderer& renderer,
     spawnDocumentEntity(ent, "roadlab", rb.dump(), world);
 
     const std::string key = "roadlab:" + std::to_string(index);
-    auto spawn = [&](const RenderMesh& mesh, const char* tag, float roughness,
-                     double friction) {
+    auto spawn = [&](const RenderMesh& mesh, const char* tag, float roughness, double friction,
+                     RenderMaterial::Surface surface) {
         if (mesh.vertices.empty()) return;
         Entity e = world.create();
         Transform t;                       // roadlab geometry is already world-space
@@ -527,6 +527,12 @@ static void loadRoadlabEntity(const json& ent, World& world, Renderer& renderer,
         r.material.albedo = Vec3(1, 1, 1);   // hue carried in vertex colour
         r.material.metallic = 0.0f;
         r.material.roughness = roughness;
+        // Asphalt grain on everything you drive on. It tiles from the WORLD-planar
+        // UV, not the mesh's, so it costs nothing here — the road-local (t, s) in
+        // u/v stays untouched and available for the marking shader that has not
+        // landed yet (see the header). Without it the carriageway is flat vertex
+        // colour, which reads as grey plastic at any distance.
+        r.material.setSurface(surface);
         r.mesh = assets.acquireMesh(mesh, key + ":" + tag);
         world.add<Renderable>(e, r);
         // Collidable in the SAME place the geometry is made — the rule
@@ -539,9 +545,10 @@ static void loadRoadlabEntity(const json& ent, World& world, Renderer& renderer,
         mc.friction = friction;
         world.add<MeshCollider>(e, mc);
     };
-    spawn(baked.roadSurface, "road", 0.9f, 0.85);
-    spawn(baked.junctionPads, "pads", 0.9f, 0.85);
-    spawn(baked.flat, "flat", 1.0f, 0.90);
+    spawn(baked.roadSurface, "road", 0.9f, 0.85, RenderMaterial::Surface::Asphalt);
+    spawn(baked.junctionPads, "pads", 0.9f, 0.85, RenderMaterial::Surface::Asphalt);
+    // Terrain, structures and props: vertex colour, each its own material.
+    spawn(baked.flat, "flat", 1.0f, 0.90, RenderMaterial::Surface::None);
     (void)renderer;
     LOG_INFO << "roadlab '" << recipe.generator << "': " << baked.roads << " roads, "
              << baked.junctions << " junctions, " << baked.buildMs << " ms";
