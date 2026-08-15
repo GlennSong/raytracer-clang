@@ -406,6 +406,20 @@ void XrSurfaceSystem::update(FrameContext& ctx) {
     visible_ = ctx.settings.getBool("xr.showSurfaces", visibleDefault_);
     surfaceOpacity_ = ctx.settings.getDouble("xr.surfaceOpacity", 0.5);
     showNormals_ = ctx.settings.getBool("xr.showNormals", false);
+    // One log line whenever the display state CHANGES (and once at start):
+    // "why am I seeing surface shapes" must be answerable from the console
+    // — a saved settings.json can override the compile-time defaults, and
+    // that mismatch cost a device round.
+    const int displayState = (visible_ ? 1 : 0) | (showNormals_ ? 2 : 0) |
+                             (ctx.settings.getBool("xr.shadows", true) ? 4 : 0);
+    if (displayState != loggedDisplayState_ ||
+        std::fabs(surfaceOpacity_ - loggedOpacity_) > 0.005) {
+        loggedDisplayState_ = displayState;
+        loggedOpacity_ = surfaceOpacity_;
+        LOG_INFO("[xr] surfaces display: show=%d opacity=%.2f shadows=%d normals=%d",
+                 visible_ ? 1 : 0, surfaceOpacity_,
+                 (displayState & 4) ? 1 : 0, showNormals_ ? 1 : 0);
+    }
     shadowsEnabled_ = ctx.settings.getBool("xr.shadows", true);
     if (!fillSurfaces_) {
         // Depth view (sandbox): the composite's depth debug mode over the

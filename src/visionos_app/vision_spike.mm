@@ -271,6 +271,29 @@ std::unique_ptr<engine::Application> bootEngine(cp_layer_renderer_t layerRendere
             app->settings().setDouble(key, value);
         for (const auto& [key, value] : gPrefsBool)
             app->settings().setBool(key, value);
+
+        // ...and the REVERSE for the AR prefs: seed the panel's pref map
+        // from the loaded settings so rt_vision_get_pref_* reports what the
+        // ENGINE will actually do. Without this a value saved to
+        // settings.json in an earlier session drives the engine while the
+        // panel's toggle shows its compile-time default — the device
+        // symptom: "surfaces are off but I still see gray shapes/outlines"
+        // (a saved xr.showSurfaces=true from before the default flipped).
+        // Keys the panel already set this session win.
+        auto seedBool = [&](const char* key, bool fallback) {
+            if (!gPrefsBool.count(key))
+                gPrefsBool[key] = app->settings().getBool(key, fallback);
+        };
+        auto seedDouble = [&](const char* key, double fallback) {
+            if (!gPrefsDouble.count(key))
+                gPrefsDouble[key] = app->settings().getDouble(key, fallback);
+        };
+        seedBool("xr.showSurfaces", false);
+        seedBool("xr.showNormals", false);
+        seedBool("xr.shadows", true);
+        seedBool("xr.depthView", false);
+        seedBool("xr.placeAssist", true);
+        seedDouble("xr.surfaceOpacity", 0.5);
     }
     // No editor on this platform, so the usual play/edit factory pair collapses
     // to just play; ArenaState's "back to editor" factory is intentionally null.

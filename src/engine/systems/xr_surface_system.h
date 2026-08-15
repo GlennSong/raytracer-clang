@@ -111,6 +111,8 @@ private:
     uint64_t frame_ = 0;
     bool visible_ = false;         // surface drawing (pref; default off)
     bool visibleDefault_ = false;
+    int loggedDisplayState_ = -1;  // display-state change log (see update)
+    Real loggedOpacity_ = -1;
     bool fillSurfaces_ = true;
     Real surfaceOpacity_ = 0.5;    // sandbox fill strength (pref)
     bool showNormals_ = false;     // normal tick lines (pref)
