@@ -21,7 +21,7 @@ namespace engine {
 // A node that violates EITHER is PROMOTED to a roundabout: the dimensionless super-node
 // is given extent — replaced by a ring of attach nodes (one per arm) joined by sampled
 // ring arcs. Every node that survives is then degree <= 3 (two ring neighbours + one
-// spoke), which the analytic junction pad (buildRoadMesh) already handles cleanly.
+// spoke), which the lattice junction pad already handles cleanly.
 //
 // Pure + headless. Degree-2 nodes (through-roads, curve samples) and dead ends are never
 // touched. A 4-way grid crossing (degree 4, healthy angles) is left as a flat patch.

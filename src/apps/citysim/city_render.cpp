@@ -698,7 +698,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         g.drawClass = engine::DrawClass::GroundPaint;
         for (const CitySim::ParkingBay& b : sim_.parkingBays()) {
             // Bay paint is PAINT: it rides at the road mesher's own stripe
-            // lift (RoadMeshParams::markLift, 2 cm), not a hand-picked 5 cm —
+            // lift (kRoadMarkLift, 2 cm), not a hand-picked 5 cm —
             // which read as a slab hovering over the asphalt.
             // ...and on the DECK, not on the terrain beside it (#25): a bay on
             // a graded or lifted street had its outline painted at raw ground

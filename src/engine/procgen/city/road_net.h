@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_ENGINE_PROCGEN_CITY_ROAD_NET_H
 #define RAYTRACER_ENGINE_PROCGEN_CITY_ROAD_NET_H
 
-#include "road_mesh.h"          // RoadMeshParams, buildRoadMesh, RenderMesh
+#include "road_mesh.h"          // UnionSpine, strokeRibbon, roadProfile, RenderMesh
 #include "road_spec.h"          // RoadSpec band model (roads-v2 Part 1)
 #include "road_network.h"       // RoadGraph (constrainedNetGraph return type)
 #include "structure_set.h"      // StructureSet, StructureParams (buildRoadWalls)
@@ -17,7 +17,7 @@ namespace engine {
 // joined by edges, plus the look (width, sidewalk, markings, ...). The editable
 // counterpart to the procedural city.road_mesh — promoted to a first-class entity
 // so the inspector can WIDEN it and the viewport can DRAG its nodes, regenerating
-// the carriageway live through buildRoadMesh (a fast pure function, no SDF grid).
+// the carriageway live through buildRoadNetLattice (the one road mesher).
 // `heightAt` drapes it on the level terrain; it is set on load, not serialized.
 struct RoadNet {
     std::vector<Vec2> nodes;
@@ -106,7 +106,7 @@ struct RoadNet {
     std::vector<Footprint> siteFootprints;
 };
 
-// Build the road surface for `net` (its graph fed to buildRoadMesh with the look).
+// Build the road surface for `net` (its graph swept by buildRoadNetLattice).
 RenderMesh buildRoadNetMesh(const RoadNet& net);
 
 // Swept-lattice street mesher (street-lattice-plan.md, stage 3): sweep each chain

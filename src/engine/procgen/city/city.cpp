@@ -384,9 +384,8 @@ CityModel generateCity(const CityParams& cp) {
 
     // Roads as ONE junction-aware surface (ADR-0044/0048). Rather than a full-width
     // ribbon per edge (which stacks and z-fights where streets cross) or a uniform
-    // dense SDF grid (which spends polygons everywhere), buildRoadMesh trims each
-    // ribbon back to the curb corner, fills only the intersection with a pad, runs a
-    // simple strip between junctions (split only where the terrain bends), and draws
+    // dense SDF grid (which spends polygons everywhere), the swept lattice builds
+    // carriageway bodies between junctions and a Coons pad at each one, and draws
     // the lane markings + crosswalks on the trimmed span — so the markings stop at the
     // intersection and a crossing lands exactly at each junction mouth. The block
     // aprons remain the sidewalks, so the carriageway carries no sidewalk band here.
@@ -496,7 +495,7 @@ CityModel generateCity(const CityParams& cp) {
             Real len = toNode.length();
             if (len < 2 * crossSet + 3.0) continue;  // arm too short to mark
             Vec2 d = toNode / len;                   // approach direction
-            // The crosswalk itself is drawn by buildRoadMesh at the junction mouth;
+            // The crosswalk itself is drawn by the lattice at the junction mouth;
             // here we add a stop bar just behind it, draped on the road surface (so it
             // isn't buried where the grade rises away from the node).
             Vec2 sbCenter = node - d * (crossSet + 1.6);
