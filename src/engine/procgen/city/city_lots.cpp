@@ -1308,6 +1308,28 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             }
         }
         std::vector<Lot> lots = subdivideBlock(foot, bf.pp);
+        // RT_PARCEL_DEBUG: the per-block view the [citylots] summary cannot give.
+        // The summary says how many lots a city produced; this says which blocks
+        // produced them, at what district grain, on what shape of interior — which
+        // is the difference between "the parcel grain is wrong" and "the blocks are
+        // the wrong size", two diagnoses that look identical in the totals. Note
+        // `edges`: a block arrives as the road graph's face with the roads' spline
+        // samples still in it (living_city: 27 edges on a 77x28 m block), so an
+        // "edge" here is a polyline segment, not a street frontage.
+        if (std::getenv("RT_PARCEL_DEBUG")) {
+            int courts = 0, tiny = 0;
+            for (const Lot& l : lots) {
+                if (l.court) ++courts;
+                else if (area(l.footprint) < bf.pp.minArea) ++tiny;
+            }
+            const OBB2 fb2 = orientedBoundingBox(foot);
+            std::fprintf(stderr,
+                         "[parcel] %-11s area=%7.0f obb=%5.1fx%5.1f edges=%2zu "
+                         "fw=%4.1f ld=%4.1f -> %2zu lots (%d court, %d tiny)\n",
+                         districtName(bf.tag), area(foot), 2 * fb2.half[0],
+                         2 * fb2.half[1], foot.size(), bf.pp.frontWidth,
+                         bf.pp.lotDepth, lots.size(), courts, tiny);
+        }
         for (const Lot& lot : lots) dbg->lots.push_back(lot.footprint);
         binfos.push_back(bf);
         for (std::size_t li = 0; li < lots.size(); ++li) {
