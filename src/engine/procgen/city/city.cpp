@@ -4,6 +4,7 @@
 #include "district.h"     // buildDistrict: the real road-network tech (ADR-0066)
 #include "street_kit.h"
 #include "road_mesh.h"
+#include "road_net.h"     // buildRoadNetLattice — the ONE road mesher
 #include "../tree.h"
 #include "../../mesh_builder.h"
 #include <algorithm>
@@ -421,18 +422,19 @@ CityModel generateCity(const CityParams& cp) {
         return bestY;
     };
 
-    RoadMeshParams rmp;
-    rmp.heightAt = [&](double x, double z) { return roadGradeAt(x, z); };
-    rmp.lift = roadThickness;
-    rmp.color = asphaltCol;
-    rmp.minSetback = roadW * 0.5 + 0.5;     // pad clears the curb corners
-    rmp.cornerRadius = 3.0;                  // rounded kerb returns at intersections
-    rmp.sidewalkWidth = 0.0;                // the block aprons are the sidewalks
-    rmp.laneMarkings = true;
-    rmp.laneWidth = 3.6; rmp.markWidth = 0.18; rmp.markLift = 0.04;
-    rmp.laneColor = white; rmp.centerColor = yellow;
-    rmp.crosswalks = true; rmp.crosswalkColor = white;
-    appendMesh(model.roads, buildRoadMesh(graph, rmp));
+    // ONE MESHER: the swept lattice (road_net.cpp § "ONE MESHER") — the same
+    // builder every level road goes through. This pipeline used to call the
+    // analytic `buildRoadMesh`, which the street path had already retired, so
+    // `city.json` rendered roads with code nothing else shipped.
+    //
+    // The lattice owns carriageway/curb/marking appearance per road class, so the
+    // old per-call colour and lane-marking knobs are gone. `sidewalkWidth = 0`
+    // is preserved: this pipeline's block aprons ARE the sidewalks.
+    appendMesh(model.roads,
+               buildRoadNetLattice(graph,
+                                   [&](Real x, Real z) { return roadGradeAt(x, z); },
+                                   nullptr, /*sidewalkWidth=*/0.0,
+                                   /*curbHeight=*/0.15, /*crosswalks=*/true));
 
     // Cut the terrain to the carriageway grade under each road so the ground meets
     // the road surface instead of poking through it.

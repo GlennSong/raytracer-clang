@@ -1741,10 +1741,24 @@ int l_terrain_preset(lua_State* L) {
     return 1;
 }
 
-// city.road_mesh(layout, { height=HeightField, lift=, color={r,g,b} }) -> mesh.
-// Builds a connected road *surface* from a layout table (the one city.layout
-// returns, or one a recipe edited — added spine edges/nodes), with trimmed
-// ribbons + junction pads (road_mesh.h). `height` drapes it on terrain.
+// city.road_mesh(layout, { height=HeightField, sidewalk=, curb=, crosswalks= })
+//   -> mesh. Builds a connected road *surface* from a layout table (the one
+// city.layout returns, or one a recipe edited — added spine edges/nodes).
+//
+// ONE MESHER: this routes through `buildRoadNetLattice`, the same builder every
+// level road uses (road_net.cpp § "ONE MESHER"). It previously wrapped
+// `buildRoadMesh`, an analytic mesher the engine path had already retired — so a
+// Lua scene rendered roads with code that no longer shipped, which is exactly the
+// fork ADR-0042 forbids ("a Lua binding MUST wrap the SAME C++ builder the engine
+// uses, never a fork of its geometry").
+//
+// Honoured keys: `height` (drapes on terrain; absent = flat), `sidewalk`, `curb`,
+// `crosswalks`. The lattice owns carriageway/curb/marking appearance per road
+// class, so the old per-call colour and marking knobs (color, sidewalk_color,
+// curb_color, lane_color, markings, lane_width, plaza, corner_radius, …) no
+// longer apply and are not read — set the road class on the edge instead.
+// `lift` is likewise gone: the engine path never passed one either (the lattice
+// stands its slab proud of the ground itself).
 int l_city_road_mesh(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     RoadGraph g;
@@ -1773,36 +1787,23 @@ int l_city_road_mesh(lua_State* L) {
     }
     lua_pop(L, 1);
 
-    RoadMeshParams rp;
+    double sidewalkW = 3.0, curbH = 0.15;
+    bool crosswalks = true;
+    std::function<Real(Real, Real)> heightAt;
     if (lua_istable(L, 2)) {
-        rp.lift = optField(L, 2, "lift", rp.lift);
-        rp.minSetback = optField(L, 2, "min_setback", rp.minSetback);
-        rp.color = optVec3Field(L, 2, "color", rp.color);
-        rp.sidewalkWidth = optField(L, 2, "sidewalk", rp.sidewalkWidth);
-        rp.curbHeight = optField(L, 2, "curb", rp.curbHeight);
-        rp.sidewalkColor = optVec3Field(L, 2, "sidewalk_color", rp.sidewalkColor);
-        rp.curbColor = optVec3Field(L, 2, "curb_color", rp.curbColor);
-        rp.laneMarkings = optBoolField(L, 2, "markings", rp.laneMarkings);
-        rp.laneWidth = optField(L, 2, "lane_width", rp.laneWidth);
-        rp.markWidth = optField(L, 2, "mark_width", rp.markWidth);
-        rp.laneColor = optVec3Field(L, 2, "lane_color", rp.laneColor);
-        rp.centerColor = optVec3Field(L, 2, "center_color", rp.centerColor);
-        rp.crosswalks = optBoolField(L, 2, "crosswalks", rp.crosswalks);
-        rp.crosswalkColor = optVec3Field(L, 2, "crosswalk_color", rp.crosswalkColor);
-        rp.conformTol = optField(L, 2, "conform_tol", rp.conformTol);
-        rp.conformStep = optField(L, 2, "conform_step", rp.conformStep);
-        rp.plazaRadius = optField(L, 2, "plaza", rp.plazaRadius);
-        rp.plazaMinArms = static_cast<int>(optField(L, 2, "plaza_min_arms", rp.plazaMinArms));
-        rp.hairpinDeflection = optField(L, 2, "hairpin_deflection", rp.hairpinDeflection);
-        rp.cornerRadius = optField(L, 2, "corner_radius", rp.cornerRadius);
+        sidewalkW  = optField(L, 2, "sidewalk", sidewalkW);
+        curbH      = optField(L, 2, "curb", curbH);
+        crosswalks = optBoolField(L, 2, "crosswalks", crosswalks);
         lua_getfield(L, 2, "height");
         if (auto* hf = static_cast<HeightField*>(luaL_testudata(L, -1, kHeightMt))) {
             HeightField h = *hf;
-            rp.heightAt = [h](double x, double z) { return h(x, z); };
+            heightAt = [h](Real x, Real z) { return static_cast<Real>(h(x, z)); };
         }
         lua_pop(L, 1);
     }
-    pushMesh(L, std::make_shared<RenderMesh>(buildRoadMesh(g, rp)));
+    pushMesh(L, std::make_shared<RenderMesh>(
+                    buildRoadNetLattice(g, heightAt, nullptr, sidewalkW, curbH,
+                                        crosswalks)));
     return 1;
 }
 

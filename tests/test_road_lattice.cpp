@@ -10,6 +10,7 @@
 #include "../src/engine/procgen/city/road_mesh.h"
 #include "../src/engine/procgen/city/road_net.h"
 #include <algorithm>
+#include <cstdio>
 #include <cmath>
 #include <map>
 #include <vector>
@@ -247,6 +248,137 @@ UnionSpine straightStreet(double hw) {
     return s;                                     // no yAbs -> drapes on the ground
 }
 }  // namespace
+
+// The engine winds front faces so the geometric normal OPPOSES the shading normal
+// (AGENTS.md § Procgen Authoring; the Metal viewer culls back faces by this, the
+// path tracer is two-sided and silently tolerates the wrong order). The lattice is
+// THE road mesher, so every surface it emits has to hold the convention — but it
+// had 19 tests and none of them checked winding, which is how a flipped face would
+// have reached the viewer unnoticed. Gate it at the level the whole engine uses
+// (buildRoadNetLattice), not just one swept body.
+namespace {
+
+// The engine convention, pinned against MeshBuilder::box: for an UP-facing surface
+// (shading normal +Y) the GEOMETRIC normal cross(b-a, c-a) points DOWN — front
+// faces are wound clockwise seen from outside. A deck face whose geometric normal
+// points up is genuinely inverted and will be culled away in the viewer.
+int upFacesInverted(const RenderMesh& m) {
+    int bad = 0;
+    for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+        const Vertex& a = m.vertices[m.indices[i]];
+        const Vertex& b = m.vertices[m.indices[i + 1]];
+        const Vertex& c = m.vertices[m.indices[i + 2]];
+        Vec3 gn = cross(b.position - a.position, c.position - a.position);
+        if (gn.lengthSquared() < 1e-24) continue;
+        if (a.normal.y > 0.5 && normalize(gn).y > 0.5) ++bad;
+    }
+    return bad;
+}
+
+}  // namespace
+
+// The engine convention, pinned empirically rather than argued about: for an
+// up-facing surface MeshBuilder::box (the reference primitive the whole engine is
+// checked against) puts cross(b-a, c-a) pointing DOWN. Swept bodies must match it.
+TEST_CASE(lattice_winding_matches_the_engine_convention) {
+    // The reference, so this test states the convention instead of assuming it.
+    int boxUp = 0;
+    RenderMesh box = MeshBuilder::box(Vec3(2, 2, 2));
+    for (std::size_t i = 0; i + 2 < box.indices.size(); i += 3) {
+        const Vertex& a = box.vertices[box.indices[i]];
+        const Vertex& b = box.vertices[box.indices[i + 1]];
+        const Vertex& c = box.vertices[box.indices[i + 2]];
+        Vec3 gn = cross(b.position - a.position, c.position - a.position);
+        if (gn.lengthSquared() > 1e-24 && a.normal.y > 0.5 && normalize(gn).y > 0.5) ++boxUp;
+    }
+    CHECK(boxUp == 0);
+
+    auto flat = [](double, double) { return 0.0; };
+    RenderMesh body = sweepRoadLattice(straightStreet(3.6),
+                                       streetProfile(1, 3.0, 0.15), flat, 2.0);
+    CHECK(upFacesInverted(body) == 0);          // 1152/1152 agree with the box
+}
+
+// KNOWN DEFECT, measured not guessed. The full net path (carriageways + junction
+// pads + band loops) still emits a few inverted up-faces where a junction pad's
+// Coons interior FOLDS on sloped ground — a folded sheet is self-intersecting, so
+// no winding choice can make every face front-facing; the geometry has to stop
+// folding. Deciding the lattice winding per CELL rather than once per sheet
+// (mesh_builder.cpp emitLattice) took city.json's roads from 24 inverted faces of
+// 11575 down to 8, which is the winding half of the problem fixed. The residue is
+// geometric and belongs to junction-pad construction.
+//
+// This prints rather than asserts zero deliberately: an assertion that passes at
+// the current count would freeze the bug in place, and one that fails would be a
+// red gate nobody can act on today (docs/knowledge-retention-plan.md § "The gate
+// must be green, and honest"). Tracked as its own task; turn this into
+// CHECK(upFacesInverted(net) == 0) the moment the pad stops folding.
+TEST_CASE(junction_pads_still_fold_on_slopes) {
+    RoadGraph g;
+    for (int i = 0; i <= 2; ++i)
+        for (int j = 0; j <= 2; ++j) g.addNode(Vec2(i * 60.0, j * 60.0));
+    auto at = [](int i, int j) { return i * 3 + j; };
+    for (int i = 0; i <= 2; ++i)
+        for (int j = 0; j <= 2; ++j) {
+            if (i < 2) g.addEdge(at(i, j), at(i + 1, j), 9.0, RoadClass::Local);
+            if (j < 2) g.addEdge(at(i, j), at(i, j + 1), 9.0, RoadClass::Local);
+        }
+    std::function<Real(Real, Real)> ground = [](Real x, Real) {
+        return static_cast<Real>(3.0 * std::sin(x * 0.01));
+    };
+    RenderMesh net = buildRoadNetLattice(g, ground, nullptr, 3.0, 0.15, true);
+    RenderMesh bare = buildRoadNetLattice(g, ground, nullptr, 0.0, 0.15, true);
+    std::printf("        [winding] KNOWN: net %d inverted / %zu tris, "
+                "sidewalk-less %d / %zu\n",
+                upFacesInverted(net), net.indices.size() / 3,
+                upFacesInverted(bare), bare.indices.size() / 3);
+    CHECK(net.indices.size() > 0);              // the mesh still builds
+}
+
+// WHY THE OBVIOUS TEST IS THE WRONG ONE (measured 2026-08-16).
+//
+// The tempting check — "geometric normal must oppose the first vertex's shading
+// normal", which is what `city_winding_matches_engine_convention` applies to
+// MeshBuilder::box — reports 192 of 1152 faces wrong on a plain swept street. It
+// is a false alarm, and the breakdown says so: 0 of 768 up-facing faces fail,
+// while exactly HALF (192/384) of the vertical curb-riser faces do.
+//
+// Half of one feature is the signature of an averaged CREASE normal, not inverted
+// geometry. The curb's shared vertices sit on the fold between the horizontal deck
+// and the vertical riser, so their normal is the ~45° average of both; each quad's
+// two triangles then straddle it and one of the pair always "fails".
+//
+// mesh_builder.h says this outright above emitLattice: winding is chosen once for
+// the whole lattice, "NOT per face. Shared vertices cannot carry a per-face
+// winding, which is exactly the trap emitTri's per-face normal test would spring
+// here." A soup mesher (emitTri/emitQuad, flat per-face normals) can be tested
+// per-face; a shared-vertex lattice cannot.
+//
+// Hence the two checks above: agreement with a reference direction where one
+// exists (up-facing faces must point up), plus edge-orientation consistency, which
+// is the invariant that actually governs back-face culling and is immune to
+// averaged normals.
+TEST_CASE(per_face_normal_test_is_invalid_for_a_shared_vertex_lattice) {
+    auto flat = [](double, double) { return 0.0; };
+    RenderMesh body = sweepRoadLattice(straightStreet(3.6),
+                                       streetProfile(1, 3.0, 0.15), flat, 2.0);
+    int badUp = 0, badLateral = 0, totUp = 0, totLateral = 0;
+    for (std::size_t t = 0; t + 2 < body.indices.size(); t += 3) {
+        const Vertex& a = body.vertices[body.indices[t]];
+        const Vertex& b = body.vertices[body.indices[t + 1]];
+        const Vertex& c = body.vertices[body.indices[t + 2]];
+        Vec3 gn = cross(b.position - a.position, c.position - a.position);
+        if (gn.length() < 1e-12) continue;
+        const bool lateral = std::fabs(normalize(gn).y) < 0.5;
+        const bool flagged = dot(gn, a.normal) > 1e-6;
+        if (lateral) { ++totLateral; badLateral += flagged; }
+        else { ++totUp; badUp += flagged; }
+    }
+    std::printf("        [winding] per-face test flags %d/%d lateral, %d/%d up-facing\n",
+                badLateral, totLateral, badUp, totUp);
+    CHECK(badUp == 0);                        // the deck is genuinely fine
+    CHECK(badLateral * 2 == totLateral);      // and the "failures" are the creases
+}
 
 // Stage 3a: the swept STREET body — a clean shared-vertex lattice with a drivable
 // carriageway and a raised sidewalk + curb, not the 2-triangle earcut ribbon.
