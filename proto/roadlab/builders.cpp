@@ -513,6 +513,23 @@ int rampSide(const Road& main, const RampDesc& desc) {
 LaneSection rampSectionFor(const RoadPreset& preset, int side) {
     LaneSection sec = preset.section;
     sec.s0 = 0;
+    // No barrier on the side it merges into.
+    //
+    // makeRamp gives a ramp a jersey barrier on BOTH edges, which is right for a
+    // ramp on a viaduct and wrong for every ramp built here: these merge, and
+    // what separates an entrance from the carriageway it is joining is a gore
+    // area, not 0.85 m of concrete. Left in, it reads from the driver's seat as a
+    // walled chute running the length of the approach — which is what an on-ramp
+    // looked like, and what no geometric check could object to, because the
+    // barrier tapers with the blend and never actually reaches the carriageway.
+    // It is a design error, not a defect, and only a picture shows it.
+    {
+        std::vector<Strip>& inner = side >= 0 ? sec.left : sec.right;
+        std::vector<Strip>& outer = side >= 0 ? sec.right : sec.left;
+        (void)inner;
+        for (size_t i = outer.size(); i-- > 0;)
+            if (outer[i].kind == StripKind::Barrier) outer.erase(outer.begin() + long(i));
+    }
     if (side < 0) {
         sec.assignIds();
         return sec;
@@ -674,7 +691,8 @@ bool laneRunsWithStations(const Road& r, int laneId, double s) {
 
 int makeRampRoad(Network& net, const RampDesc& desc, int side, Vec2 innerPoint,
                  double innerHeading, double innerHeight, bool rampLeadsIn,
-                 const LaneSection* terminal = nullptr, const RampRunIn* runIn = nullptr) {
+                 const LaneSection* terminal = nullptr, const RampRunIn* runIn = nullptr,
+                 double alongside = 0.0) {
     Road r;
     r.name = desc.name;
     r.kind = RoadKind::Ramp;
@@ -713,12 +731,15 @@ int makeRampRoad(Network& net, const RampDesc& desc, int side, Vec2 innerPoint,
         // unmatched ones taper away, and the inner shoulder and barrier are
         // unmatched by construction.
         double len = r.spine.length();
-        // The blend has to be COMPLETE before the parallel stretch starts. The
-        // strips it drops are the ramp's inner shoulder and barrier, which sit
-        // between the ramp's reference line and the mainline's centre — still
-        // tapering them away while the ramp runs alongside puts a metre and a
-        // half of concrete in the outside lane.
-        double parallel = std::max(0.0, in.length);
+        // The blend completes by the time the ramp comes ALONGSIDE, not at the
+        // parallel stretch, which is shorter.
+        //
+        // `alongside` is the measured window — how far back the ramp is within
+        // reach of the mainline at all — and it is the same number the mainline's
+        // shoulder retraction uses. Using it here is what makes the two agree:
+        // the mainline gives up its shoulder and batter over that window, and the
+        // ramp has to be carrying them over the same one.
+        double parallel = std::max({0.0, in.length, alongside});
         double room = std::max(2.0, len - parallel);
         double blend = clampd(std::min(len * 0.45, room - 1.0), 20.0, 90.0);
         ProfileTimeline tl;
@@ -824,8 +845,8 @@ int buildOnRamp(Network& net, int mainRoad, double sMerge, const RampDesc& desc,
         runIn = solveRunIn(m, sFull, refPlan, mergePos, mergeHdg, parallelRun,
                            desc.outerPoint, false);
     }
-    int ramp =
-        makeRampRoad(net, desc, side, mergePos, mergeHdg, mergeHeight, true, &terminal, &runIn);
+    int ramp = makeRampRoad(net, desc, side, mergePos, mergeHdg, mergeHeight, true, &terminal,
+                            &runIn, hold);
 
     int tail = net.splitRoad(mainRoad, sFull);
     if (mainlineTail) *mainlineTail = tail;
@@ -889,6 +910,13 @@ int buildOffRamp(Network& net, int mainRoad, double sExit, const RampDesc& desc,
         divergeHdg = m.spine.frameAt(s).heading;
         runOut = solveRunIn(m, s, refPlan, divergePos, divergeHdg, parallelRun,
                             desc.outerPoint, true);
+        // How far downstream the ramp stays within reach — the exit's half of
+        // what buildOnRamp measures in its second pass. The plan geometry is
+        // enough; nothing is committed to the network yet.
+        Spine plan = rampSpine(desc, divergePos, divergeHdg, false, runOut);
+        parallelRun = std::max(parallelRun,
+                               fitGoreHold(m, plan, side, s, refPlan,
+                                           outerShoulderWidth(m, s, side), true));
         sExit = s;
     }
 
@@ -918,7 +946,7 @@ int buildOffRamp(Network& net, int mainRoad, double sExit, const RampDesc& desc,
     }
 
     int ramp = makeRampRoad(net, desc, side, divergePos, divergeHdg, divergeHeight, false,
-                            &terminal, &runOut);
+                            &terminal, &runOut, parallelRun);
     int rampLane = 0;
     {
         const Road& rr = net.road(ramp);
