@@ -154,9 +154,9 @@ designed order above is the *intent*; this table is the *implementation*.
 | --- | --- | --- | --- |
 | 1 | Terrain | `terrain.{h,cpp}`; buildability via `buildability.cpp:classifyLand` | ✅ — but the buildability gate is **metro-only**; the district kind never calls it |
 | 2 | Regional hubs | `metro.cpp` hotspots → `CityHub` | ✅ metro only |
-| 3–5 | Freeway, corridor, ramp landings | `alignment.cpp`, `corridor_plan.cpp`, `corridor_mesh.cpp`, `corridor_bake.cpp` | ✅ metro only — **dead on the district path** |
-| 6 / 6b | City sizing, coarse zoning | `metro.cpp` sites + `CityHub::kind` | ✅ metro only |
-| 7 | Street growth (two-tier) | `metro.cpp:buildMetro` (colonization) + `patch_fabric.cpp` (fill) — *or* `district.cpp:buildDistrict` (arterial cuts + recursive OBB bisection) | ⚠️ Partial. The district kind is template-only, not two-tier. `tensorRoads`/`radialRoads`/`gridRoads` exist and are tested but have **no production caller** |
+| 3–5 | Freeway, corridor, ramp landings | `alignment.cpp`, `corridor_plan.cpp`, `corridor_mesh.cpp`, `corridor_bake.cpp` | ✅ built — on the `metro` and `shape:"corridor"` paths (inactive for `district`) |
+| 6 / 6b | City sizing, coarse zoning | `metro.cpp` sites + `CityHub::kind` | ✅ metro path |
+| 7 | Street growth (two-tier) | `metro.cpp:buildMetro` (colonization) + `patch_fabric.cpp` (fill) — *or* `district.cpp:buildDistrict` (arterial cuts + recursive OBB bisection) | ⚠️ Partial. The district kind is template-only, not two-tier. `tensorRoads`/`radialRoads`/`gridRoads` are built and reachable from Lua via `city.layout` (`twin_cities.lua` ships both radial and tensor) but are **not wired to any `generate.kind`** |
 | 8 | Block demarcation | `road_network.cpp:extractBlocks` (half-edge DCEL) + `city_lots.cpp:edgeBlocks` (ribbon/rim blocks) | ✅ both clauses built |
 | 9 | **District refinement** | — | ❌ **Not built.** `DistrictMap::tagAt` zones off radial rings and hub distance, so a zone boundary can land mid-block instead of at an avenue |
 | 10 | Lot subdivision (frontage-first) | `parcel.cpp:subdivideBlock` — boundary walk, mitred corners, court remainder; OBB bisection survives only as the zero-lot fallback | ✅ built. Gated by `ring_parceler_fronts_every_lot_on_any_polygon`, `every_built_lot_touches_a_road` |
