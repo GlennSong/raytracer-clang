@@ -1912,117 +1912,6 @@ std::vector<UnionSpine> readSpinesArg(lua_State* L, int tbl) {
     return readUnionSpines(L, tbl);
 }
 
-// city.roadbed{ spines={...} | layout=city.layout{...}, cell=, sidewalk=, curb=, lift=,
-//   grain=, height=, road_color=, sidewalk_color=, curb_color= } -> one draped roadbed
-//   mesh: merged carriageway + raised sidewalk + curb, seated on `height` (ADR-0048).
-int l_city_roadbed(lua_State* L) {
-    luaL_checktype(L, 1, LUA_TTABLE);
-    std::vector<UnionSpine> spines = readSpinesArg(L, 1);
-    RoadbedParams rp;
-    rp.cell = optField(L, 1, "cell", rp.cell);
-    rp.sidewalkWidth = optField(L, 1, "sidewalk", rp.sidewalkWidth);
-    rp.curbHeight = optField(L, 1, "curb", rp.curbHeight);
-    rp.lift = optField(L, 1, "lift", rp.lift);
-    rp.grain = optField(L, 1, "grain", rp.grain);
-    rp.roadColor = optVec3Field(L, 1, "road_color", rp.roadColor);
-    rp.sidewalkColor = optVec3Field(L, 1, "sidewalk_color", rp.sidewalkColor);
-    rp.curbColor = optVec3Field(L, 1, "curb_color", rp.curbColor);
-    lua_getfield(L, 1, "height");
-    if (auto* hf = static_cast<HeightField*>(luaL_testudata(L, -1, kHeightMt))) {
-        HeightField h = *hf;
-        rp.heightAt = [h](double x, double z) { return h(x, z); };
-    }
-    lua_pop(L, 1);
-    pushMesh(L, std::make_shared<RenderMesh>(unionRoadbed(spines, rp)));
-    return 1;
-}
-
-// Build a RoadGraph from a `layout` field (a city.layout result), preserving node
-// adjacency so chains/markings can be traced.
-RoadGraph readLayoutGraph(lua_State* L, int tbl) {
-    RoadGraph g;
-    lua_getfield(L, tbl, "layout");
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); return g; }
-    int li = lua_gettop(L);
-    lua_getfield(L, li, "nodes");
-    if (lua_istable(L, -1)) {
-        lua_Integer nn = luaL_len(L, -1);
-        for (lua_Integer i = 1; i <= nn; ++i) {
-            lua_geti(L, -1, i);
-            RoadNode node; node.pos = Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0));
-            g.nodes.push_back(node); lua_pop(L, 1);
-        }
-    }
-    lua_pop(L, 1);
-    lua_getfield(L, li, "edges");
-    if (lua_istable(L, -1)) {
-        lua_Integer ne = luaL_len(L, -1);
-        for (lua_Integer i = 1; i <= ne; ++i) {
-            lua_geti(L, -1, i);
-            int a = static_cast<int>(optField(L, -1, "a", 0)) - 1;
-            int b = static_cast<int>(optField(L, -1, "b", 0)) - 1;
-            double w = optField(L, -1, "width", 8.0);
-            lua_pop(L, 1);
-            if (a >= 0 && b >= 0 && a < static_cast<int>(g.nodes.size()) &&
-                b < static_cast<int>(g.nodes.size()) && a != b)
-                g.edges.push_back(RoadEdge{a, b, static_cast<Real>(w)});
-        }
-    }
-    lua_pop(L, 1);
-    lua_pop(L, 1);                                          // layout
-    return g;
-}
-
-// city.lane_markings{ layout=city.layout{...}, mark_width=, trim=, lift=, dash=, gap=,
-//   color=, height= } -> a centerline stripe mesh, broken at junctions and draped on
-//   the road surface (ADR-0048). Add it as its own solid over the roadbed.
-int l_city_lane_markings(lua_State* L) {
-    luaL_checktype(L, 1, LUA_TTABLE);
-    RoadGraph g = readLayoutGraph(L, 1);
-    LaneMarkParams mp;
-    mp.markWidth = optField(L, 1, "mark_width", mp.markWidth);
-    mp.trim = optField(L, 1, "trim", mp.trim);
-    mp.lift = optField(L, 1, "lift", mp.lift);
-    mp.dashLength = optField(L, 1, "dash", mp.dashLength);
-    mp.dashGap = optField(L, 1, "gap", mp.dashGap);
-    mp.color = optVec3Field(L, 1, "color", mp.color);
-    lua_getfield(L, 1, "height");
-    if (auto* hf = static_cast<HeightField*>(luaL_testudata(L, -1, kHeightMt))) {
-        HeightField h = *hf;
-        mp.heightAt = [h](double x, double z) { return h(x, z); };
-    }
-    lua_pop(L, 1);
-    pushMesh(L, std::make_shared<RenderMesh>(laneMarkings(g, mp)));
-    return 1;
-}
-
-// city.union{ spines={ {points={{x,z}...}, width=, closed=}, ... }, cell=, y=,
-//   color= } -> ONE non-overlapping mesh: the union of the stroked spines, merged at
-//   every crossing (ADR-0048). `cell` is the grid resolution (smaller = crisper).
-int l_city_union(lua_State* L) {
-    luaL_checktype(L, 1, LUA_TTABLE);
-    std::vector<UnionSpine> spines = readSpinesArg(L, 1);
-    double cell = optField(L, 1, "cell", 1.5);
-    double y = optField(L, 1, "y", 0.0);
-    Vec3 color = optVec3Field(L, 1, "color", Vec3(0.10, 0.10, 0.11));
-    pushMesh(L, std::make_shared<RenderMesh>(unionRibbons(spines, cell, y, color)));
-    return 1;
-}
-
-// city.weld{ spines={...} | layout=..., y=, color= } -> one POLYGONAL welded road surface
-// (the unified join engine, unified-road-plan): exact ribbon outlines boolean-unioned and
-// triangulated. Sharp, light, UV-ready — the successor to both city.union (SDF) and the
-// analytic road mesh. (Holes are skipped until the hole-aware triangulator lands.)
-int l_city_weld(lua_State* L) {
-    luaL_checktype(L, 1, LUA_TTABLE);
-    std::vector<UnionSpine> spines = readSpinesArg(L, 1);
-    double y = optField(L, 1, "y", 0.06);
-    Vec3 color = optVec3Field(L, 1, "color", Vec3(0.10, 0.10, 0.11));
-    double radius = optField(L, 1, "corner_radius", 0.0);
-    pushMesh(L, std::make_shared<RenderMesh>(weldRibbons(spines, y, color, radius)));
-    return 1;
-}
-
 // city.solid{ spines={...} | layout=..., y=, thickness=, corner_radius=, color=, side_color=,
 //   bottom_color=, max_grade=, height=(heightfield) } -> the welded outline EXTRUDED into a
 //   closed slab with real thickness (deck + walls + underside), riding a smoothed grade-limited
@@ -2143,94 +2032,6 @@ int l_city_resolve(lua_State* L) {
         lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
     }
     lua_setfield(L, -2, "nodes");
-    return 1;
-}
-
-// city.deck{ points={{x,z}...}, width=, heights={...} (per point) | height= (constant),
-//   thickness=, color=, side_color=, piers=(bool), pier_at={i...}, pier_spacing=,
-//   pier_depth=, pier_color= } -> a bridge-deck slab riding the per-point heights
-//   (ADR-0054), optionally on abutment piers. The grade-SEPARATED counterpart to city.union
-//   (one level): a road can ramp up onto a deck and another can pass beneath it.
-int l_city_deck(lua_State* L) {
-    luaL_checktype(L, 1, LUA_TTABLE);
-    std::vector<Vec2> pts;
-    lua_getfield(L, 1, "points");
-    luaL_checktype(L, -1, LUA_TTABLE);
-    lua_Integer np = luaL_len(L, -1);
-    for (lua_Integer i = 1; i <= np; ++i) {
-        lua_geti(L, -1, i);
-        pts.push_back(Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0)));
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);                                       // points
-    std::vector<double> heights;
-    lua_getfield(L, 1, "heights");
-    if (lua_istable(L, -1)) {
-        lua_Integer nh = luaL_len(L, -1);
-        for (lua_Integer i = 1; i <= nh; ++i) {
-            lua_geti(L, -1, i); heights.push_back(lua_tonumber(L, -1)); lua_pop(L, 1);
-        }
-    }
-    lua_pop(L, 1);                                       // heights
-    if (heights.size() != pts.size())
-        heights.assign(pts.size(), optField(L, 1, "height", 0.0));
-    double width = optField(L, 1, "width", 8.0);
-    // Optional per-point full width (a tapering deck — the merge/diverge gore, ADR-0053).
-    std::vector<double> halfW;
-    lua_getfield(L, 1, "widths");
-    if (lua_istable(L, -1)) {
-        lua_Integer nw = luaL_len(L, -1);
-        for (lua_Integer i = 1; i <= nw; ++i) { lua_geti(L, -1, i); halfW.push_back(lua_tonumber(L, -1) * 0.5); lua_pop(L, 1); }
-    }
-    lua_pop(L, 1);                                       // widths
-    if (halfW.size() != pts.size()) halfW.assign(pts.size(), width * 0.5);
-    double nominalHW = 0.0;                              // widest point — for markings lane count
-    for (double h : halfW) nominalHW = std::max(nominalHW, h);
-    double thk = optField(L, 1, "thickness", 0.6);
-    Vec3 color = optVec3Field(L, 1, "color", Vec3(0.09, 0.09, 0.10));
-    Vec3 sideColor = optVec3Field(L, 1, "side_color", Vec3(0.30, 0.30, 0.32));
-    RenderMesh mesh = bridgeDeck(pts, heights, halfW, color, thk, sideColor);
-    auto merge = [&](const RenderMesh& src) {
-        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-        mesh.vertices.insert(mesh.vertices.end(), src.vertices.begin(), src.vertices.end());
-        for (uint32_t idx : src.indices) mesh.indices.push_back(base + idx);
-    };
-
-    if (optBoolField(L, 1, "piers", false)) {
-        std::vector<int> at;
-        lua_getfield(L, 1, "pier_at");
-        if (lua_istable(L, -1)) {
-            lua_Integer na = luaL_len(L, -1);
-            for (lua_Integer i = 1; i <= na; ++i) {
-                lua_geti(L, -1, i); at.push_back(static_cast<int>(lua_tointeger(L, -1)) - 1); lua_pop(L, 1);
-            }
-        }
-        lua_pop(L, 1);                                   // pier_at
-        if (at.empty()) {                                // auto: regular spacing where elevated
-            double spacing = optField(L, 1, "pier_spacing", 40.0), acc = spacing;
-            for (int i = 0; i < static_cast<int>(pts.size()); ++i) {
-                if (i > 0) acc += (pts[i] - pts[i - 1]).length();
-                if (heights[i] > 1.5 && acc >= spacing) { at.push_back(i); acc = 0; }
-            }
-        }
-        double depth = optField(L, 1, "pier_depth", 3.0);
-        Vec3 pcol = optVec3Field(L, 1, "pier_color", Vec3(0.34, 0.34, 0.36));
-        merge(bridgePiers(pts, heights, at, width, depth, thk, pcol));
-    }
-    if (optBoolField(L, 1, "barriers", false)) {
-        double bh = optField(L, 1, "barrier_height", 0.9);
-        Vec3 bcol = optVec3Field(L, 1, "barrier_color", Vec3(0.55, 0.55, 0.57));
-        merge(deckBarriers(pts, heights, halfW, bh, bcol));
-    }
-    if (optBoolField(L, 1, "markings", false)) {
-        DeckMarkParams mp;
-        mp.laneWidth = optField(L, 1, "lane_width", mp.laneWidth);
-        mp.center = optBoolField(L, 1, "center", mp.center);
-        mp.laneColor = optVec3Field(L, 1, "lane_color", mp.laneColor);
-        mp.centerColor = optVec3Field(L, 1, "center_color", mp.centerColor);
-        merge(deckMarkings(pts, heights, nominalHW, mp));
-    }
-    pushMesh(L, std::make_shared<RenderMesh>(std::move(mesh)));
     return 1;
 }
 
@@ -2954,18 +2755,19 @@ void openProcgenLibrary(ScriptVM& vm) {
     luaL_newlib(L, kModelFns);
     lua_setglobal(L, "model");
 
+    // Retired with the old meshers (roads-v2 cleanup): `union`, `weld` and
+    // `roadbed` wrapped the ribbon-union / SDF roadbed the engine path had already
+    // dropped — `solid` does the same job through the lattice, and takes the same
+    // spines-or-layout argument. `lane_markings` and `deck` wrapped the analytic
+    // marking and bridge kits; the lattice paints markings per road class and
+    // builds its own layered bridges. No shipped script used any of the four.
     static const luaL_Reg kCityFns[] = {
         {"layout", l_city_layout},
         {"lots", l_city_lots},
         {"road_mesh", l_city_road_mesh},
         {"stroke", l_city_stroke},
-        {"union", l_city_union},
-        {"weld", l_city_weld},
         {"solid", l_city_solid},
         {"resolve", l_city_resolve},
-        {"deck", l_city_deck},
-        {"roadbed", l_city_roadbed},
-        {"lane_markings", l_city_lane_markings},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kCityFns);

@@ -5,6 +5,7 @@
 #include "../src/engine/procgen/city/parcel.h"
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/city/road_mesh.h"
+#include "../src/engine/procgen/city/road_net.h"   // buildRoadNetLattice (the ONE mesher)
 #include "../src/engine/procgen/city/city.h"
 #include "../src/engine/procgen/city/city_lots.h"   // LotBuilding, appendLotMassBox
 #include "../src/engine/mesh_builder.h"
@@ -14,32 +15,6 @@
 #include <set>
 
 using namespace engine;  // namespace migration (ADR-0015)
-
-TEST_CASE(road_mesh_builds_junctions_and_ribbons) {
-    // ADR-0044: the road surface trims ribbons back at junctions and fills the
-    // gap with a pad, so a 4-way crossing produces real geometry (not overlap).
-    RoadGraph g;
-    int c = g.addNode(Vec2(0, 0));
-    int e = g.addNode(Vec2(40, 0)), w = g.addNode(Vec2(-40, 0));
-    int n = g.addNode(Vec2(0, 40)), s = g.addNode(Vec2(0, -40));
-    g.addEdge(c, e, 10); g.addEdge(c, w, 10);
-    g.addEdge(c, n, 10); g.addEdge(c, s, 10);
-
-    RoadMeshParams p;
-    RenderMesh m = buildRoadMesh(g, p);
-    CHECK(!m.vertices.empty());
-    CHECK(m.indices.size() % 3 == 0);
-    // The degree-4 hub adds a junction pad (8 ring verts -> 8 fan triangles) on
-    // top of the four ribbons, so there is real intersection geometry.
-    CHECK(m.indices.size() / 3 >= 8u + 4u * 2u);
-
-    // No road geometry strays beyond the arms' reach (sanity on the trim).
-    double maxR = 0;
-    for (const Vertex& v : m.vertices)
-        maxR = std::max(maxR, std::sqrt(double(v.position.x * v.position.x +
-                                             v.position.z * v.position.z)));
-    CHECK(maxR <= 41.0);
-}
 
 namespace {
 bool triContainsXZ(const RenderMesh& m, std::size_t i, double px, double pz) {
@@ -154,7 +129,7 @@ TEST_CASE(stroke_network_intersection_is_a_clean_junction) {
     g.addEdge(a, b, 10); g.addEdge(c, d, 10);
     RoadGraph pg = planarize(g);
     CHECK(pg.nodes.size() == 5u);                       // the crossing inserted a node
-    RenderMesh m = buildRoadMesh(pg, RoadMeshParams{});
+    RenderMesh m = buildRoadNetLattice(pg, nullptr, nullptr, 0.0, 0.15, false);
     CHECK(meshCoversXZ(m, 2.0, 2.0));                   // the intersection is filled
     // Nothing strays past an arm end (length 40) plus its half-width (5) — the far
     // ribbon corner sits at sqrt(40^2+5^2) ~ 40.3, so bound by the arm reach + width.
@@ -163,198 +138,6 @@ TEST_CASE(stroke_network_intersection_is_a_clean_junction) {
         worst = std::max(worst, std::sqrt(double(v.position.x*v.position.x +
                                                  v.position.z*v.position.z)));
     CHECK(worst <= 40.0 + 5.0 + 1e-3);
-}
-
-TEST_CASE(union_ribbons_merges_crossing_without_overlap) {
-    // ADR-0048: two perpendicular strips. The union is non-overlapping by
-    // construction (disjoint grid cells), so its SUMMED triangle area is the true
-    // union area — it covers the crossing, yet is strictly less than the two strokes'
-    // summed area, which double-counts the overlap.
-    UnionSpine h; h.halfWidth = 5; h.points = { {-50,0}, {50,0} };
-    UnionSpine v; v.halfWidth = 5; v.points = { {0,-50}, {0,50} };
-    Vec3 c(0.1, 0.1, 0.1);
-    RenderMesh u = unionRibbons({ h, v }, 0.5, 0.0, c);
-    CHECK(meshCoversXZ(u, 1.0, 1.0));        // the crossing is filled
-    CHECK(meshCoversXZ(u, 40.0, 0.3));       // one arm
-    CHECK(meshCoversXZ(u, 0.3, 40.0));       // the other arm
-    CHECK(!meshCoversXZ(u, 40.0, 40.0));     // the empty quadrant stays empty
-
-    // Method-consistent non-overlap proof: union-of-both < (union-of-each summed),
-    // by the crossing overlap that was MERGED rather than double-counted. The bodies
-    // overlap in a ~10x10 = ~100 square at the centre.
-    double uBoth = meshAreaXZ(u);
-    double uH = meshAreaXZ(unionRibbons({ h }, 0.5, 0.0, c));
-    double uV = meshAreaXZ(unionRibbons({ v }, 0.5, 0.0, c));
-    double overlap = (uH + uV) - uBoth;
-    CHECK(overlap > 80.0);                   // the crossing was merged (~100)
-    CHECK(overlap < 130.0);                  // and it's only the crossing, nothing more
-}
-
-TEST_CASE(union_ribbons_keeps_a_ring_hole) {
-    // A closed ring unions to an annulus: the centre stays uncovered.
-    std::vector<Vec2> circ;
-    const double R = 30.0;
-    for (int i = 0; i < 48; ++i) {
-        double t = 2.0 * 3.14159265 * i / 48;
-        circ.push_back(Vec2(R*std::cos(t), R*std::sin(t)));
-    }
-    UnionSpine ring; ring.halfWidth = 5; ring.closed = true; ring.points = circ;
-    RenderMesh u = unionRibbons({ ring }, 0.6, 0.0, Vec3(0.1,0.1,0.1));
-    CHECK(!u.vertices.empty());
-    CHECK(!meshCoversXZ(u, 0.0, 0.0));       // hole preserved
-    CHECK(meshCoversXZ(u, R, 0.3));          // ring covered
-}
-
-TEST_CASE(union_roadbed_adds_a_sidewalk_band_and_drapes) {
-    // ADR-0048: a straight road. The roadbed covers the carriageway, a sidewalk band
-    // just outside it (0 <= sdf < sidewalkWidth), nothing past it; and with a height
-    // field every vertex is seated on the terrain.
-    UnionSpine s; s.halfWidth = 5; s.points = { {-40,0}, {40,0} };
-    RoadbedParams p; p.cell = 0.5; p.sidewalkWidth = 2.0; p.curbHeight = 0.2; p.lift = 0.05;
-    p.heightAt = [](double x, double) { return 0.01 * x; };     // a gentle ramp
-    RenderMesh m = unionRoadbed({ s }, p);
-    CHECK(meshCoversXZ(m, 0.0, 0.0));        // carriageway (sdf = -5)
-    CHECK(meshCoversXZ(m, 0.0, 6.0));        // sidewalk band (dist 6 -> sdf 1)
-    CHECK(!meshCoversXZ(m, 0.0, 8.0));       // beyond the sidewalk (sdf 3 > 2)
-
-    // Draped: every vertex sits on terrain(=0.01x over ~[-47,47]) + lift (+curb on the
-    // walk), so the y-range is the terrain range, not a flat plane.
-    double minY = 1e9, maxY = -1e9;
-    for (const Vertex& v : m.vertices) {
-        minY = std::min(minY, static_cast<double>(v.position.y));
-        maxY = std::max(maxY, static_cast<double>(v.position.y));
-    }
-    CHECK(minY > -0.6);
-    CHECK(maxY < 0.8);
-    CHECK(maxY - minY > 0.5);                // it follows the ramp, not flat
-}
-
-TEST_CASE(union_roadbed_from_graph_converts_edges) {
-    // ADR-0048: the RoadGraph overload turns each edge into a spine, so a generated
-    // network (an X crossing here) roadbeds into one merged surface covering the join.
-    RoadGraph g;
-    int a = g.addNode(Vec2(-30,0)), b = g.addNode(Vec2(30,0));
-    int c = g.addNode(Vec2(0,-30)), d = g.addNode(Vec2(0,30));
-    g.addEdge(a, b, 10); g.addEdge(c, d, 10);
-    CHECK(graphToSpines(g).size() == 2u);                // one spine per edge
-    RoadbedParams p; p.cell = 0.6; p.sidewalkWidth = 2.0;
-    RenderMesh m = unionRoadbed(g, p);
-    CHECK(!m.vertices.empty());
-    CHECK(meshCoversXZ(m, 1.0, 1.0));                    // the crossing is merged
-    CHECK(meshCoversXZ(m, 25.0, 0.3));                   // an arm
-}
-
-TEST_CASE(road_mesh_hairpin_builds_a_turning_pad) {
-    // ADR-0048: a sharp degree-2 reversal (legs nearly parallel = ~160-degree
-    // deflection) can't be a simple bend — the widened ribbon folds. With hairpin
-    // handling on, the apex is built as a junction-style turning pad, so it pulls the
-    // ribbons back and emits more geometry than the plain folded bend.
-    RoadGraph g;
-    int A = g.addNode(Vec2(60, 6)), V = g.addNode(Vec2(0, 0)), B = g.addNode(Vec2(60, -6));
-    g.addEdge(A, V, 10); g.addEdge(V, B, 10);
-
-    RoadMeshParams plain;                       // hairpinDeflection = 0 -> simple bend
-    RenderMesh mb = buildRoadMesh(g, plain);
-    RoadMeshParams pad; pad.hairpinDeflection = 1.0;   // ~57deg+; this 160deg turn qualifies
-    RenderMesh mp = buildRoadMesh(g, pad);
-
-    CHECK(mp.indices.size() % 3 == 0);
-    CHECK(!mp.vertices.empty());
-    // The pad path is distinct from the simple bend: it pulls both ribbons back (a
-    // setback) and fans a turning bulb, so the geometry differs from the folded bend.
-    CHECK(mp.indices.size() != mb.indices.size());
-}
-
-TEST_CASE(road_mesh_sidewalks_raise_a_kerb) {
-    // ADR-0044 cross-section: sidewalks add a raised skirt — a slab top standing
-    // `curb` above the carriageway and an outer face dropping to the ground.
-    RoadGraph g;
-    int c = g.addNode(Vec2(0, 0));
-    int e = g.addNode(Vec2(40, 0)), w = g.addNode(Vec2(-40, 0));
-    int n = g.addNode(Vec2(0, 40)), s = g.addNode(Vec2(0, -40));
-    g.addEdge(c, e, 10); g.addEdge(c, w, 10);
-    g.addEdge(c, n, 10); g.addEdge(c, s, 10);
-
-    RoadMeshParams flat;                       // no sidewalks (default width 0)
-    RenderMesh bare = buildRoadMesh(g, flat);
-
-    RoadMeshParams p;
-    p.sidewalkWidth = 2.5;
-    p.curbHeight = 0.15;
-    RenderMesh m = buildRoadMesh(g, p);
-
-    CHECK(m.indices.size() > bare.indices.size());   // the skirt added geometry
-
-    // Flat ground (no heightAt): the road sits at `lift`, slab tops a curb above
-    // it, and the outer face drops to ground (y = 0, below the road).
-    double minY = 1e9, maxY = -1e9;
-    for (const Vertex& v : m.vertices) {
-        minY = std::min(minY, double(v.position.y));
-        maxY = std::max(maxY, double(v.position.y));
-    }
-    CHECK_APPROX(maxY, flat.lift + p.curbHeight, 1e-6);   // raised exactly one curb
-    CHECK(minY < flat.lift - 0.1);                        // outer face dropped to ground
-}
-
-TEST_CASE(road_mesh_plaza_opens_a_hub) {
-    // ADR-0044: a many-armed hub with a plaza trims every arm back to the plaza
-    // radius, so the junction fills a clean disc instead of a cramped fan.
-    const double TAU = 6.283185307179586;
-    RoadGraph g;
-    int c = g.addNode(Vec2(0, 0));
-    const int arms = 8;
-    for (int i = 0; i < arms; ++i) {
-        double a = TAU * i / arms;
-        int e = g.addNode(Vec2(std::cos(a) * 60.0, std::sin(a) * 60.0));
-        g.addEdge(c, e, 10);
-    }
-    // The plaza's signature is the cleared gap around the centre: the pad fans
-    // from the node out to the trim radius, and the ribbons only start there, so
-    // the nearest road vertex to the hub sits at ~plazaRadius (bigger than the
-    // tight natural trim).
-    auto hubGap = [](const RenderMesh& m) {
-        double minR = 1e9;
-        for (const Vertex& v : m.vertices) {
-            double d = std::sqrt(double(v.position.x * v.position.x +
-                                        v.position.z * v.position.z));
-            if (d > 1.0) minR = std::min(minR, d);   // skip the pad-centre fan apex
-        }
-        return minR;
-    };
-    RoadMeshParams plain;
-    RoadMeshParams p;
-    p.plazaRadius = 20.0;
-    p.plazaMinArms = 6;
-    CHECK(hubGap(buildRoadMesh(g, p)) > 15.0);          // pad opened to the plaza
-    CHECK(hubGap(buildRoadMesh(g, p)) > hubGap(buildRoadMesh(g, plain)));
-}
-
-TEST_CASE(road_mesh_lane_markings_paint_lines) {
-    // ADR-0044: a marked carriageway carries a double-yellow centreline, dashed
-    // white dividers, and solid edge lines, raised just above the asphalt — and
-    // the lane count grows with the road width.
-    RoadGraph g;
-    int a = g.addNode(Vec2(-50, 0)), b = g.addNode(Vec2(50, 0));
-    g.addEdge(a, b, 14);                       // wide enough for dividers each side
-
-    RoadMeshParams plain;
-    RenderMesh bare = buildRoadMesh(g, plain);
-
-    RoadMeshParams p;
-    p.laneMarkings = true;
-    RenderMesh m = buildRoadMesh(g, p);
-    CHECK(m.indices.size() > bare.indices.size());   // stripes added geometry
-
-    bool sawYellow = false, sawWhite = false;
-    double maxY = -1e9;
-    for (const Vertex& v : m.vertices) {
-        maxY = std::max(maxY, double(v.position.y));
-        if (v.color.x > 0.7 && v.color.y > 0.6 && v.color.z < 0.3) sawYellow = true;
-        if (v.color.x > 0.8 && v.color.y > 0.8 && v.color.z > 0.78) sawWhite = true;
-    }
-    CHECK(sawYellow);                                 // double-yellow centreline
-    CHECK(sawWhite);                                  // edge lines + dividers
-    CHECK_APPROX(maxY, plain.lift + p.markLift, 1e-6);  // stripes sit a hair proud
 }
 
 TEST_CASE(radial_roads_make_rings_and_spokes) {
