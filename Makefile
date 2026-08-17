@@ -164,6 +164,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_city.cpp \
 	$(TEST_DIR)/test_building_lod.cpp \
 	$(TEST_DIR)/test_road_net.cpp \
+	$(TEST_DIR)/test_road_graph_order.cpp \
 	$(TEST_DIR)/test_road_rules.cpp \
 	$(TEST_DIR)/test_road_weld.cpp \
 	$(TEST_DIR)/test_curb_return.cpp \

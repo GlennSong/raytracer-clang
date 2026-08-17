@@ -517,6 +517,7 @@ add_executable(run_tests
     tests/test_road_crossings.cpp
     tests/test_building_lod.cpp
     tests/test_road_net.cpp
+    tests/test_road_graph_order.cpp
     tests/test_road_rules.cpp
     tests/test_road_weld.cpp
     tests/test_junction_surface.cpp

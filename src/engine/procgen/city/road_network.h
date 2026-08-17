@@ -65,6 +65,12 @@ struct RoadNode {
     // classifyRoadGraph runs; appended defaulted member — every existing
     // brace-init keeps working.
     JunctionKind kind = JunctionKind::Auto;
+    // Spline shape (ADR-0049, was RoadNet::tangents): the through-direction at
+    // this knot. Zero = auto — Catmull-Rom on a through-road, straight into a
+    // junction or dead end. Editing one overrides the auto for that knot, which
+    // is how a road is shaped by dragging its handles. Appended, like `kind`, so
+    // positional brace-init keeps working.
+    Vec2 tangent{0, 0};
 };
 // `layer` is the grade-separation level (ADR-0051): 0 = ground. Two edges that cross in XY
 // are the same intersection only when they share a layer; different layers pass over/under
@@ -105,6 +111,13 @@ struct RoadEdge {
     // table. Everything that places a parked car reads these two numbers.
     Real parkOffset = 0;
     Real parkWidth = 0;
+    // Roads-v2 S3 (was RoadNet::edgeBaked): this edge was BAKED from a corridor
+    // solve. The corridor draws, carves and navigates itself, so street passes
+    // skip these — and block extraction must never treat one as a block
+    // boundary. An AUTHORED freeway-class edge keeps false and meshes normally.
+    // Appended so positional brace-init ({a, b, width, klass, layer}) keeps
+    // working — road_network.cpp and road_net.cpp both rely on that.
+    bool baked = false;
 };
 
 struct RoadGraph {
