@@ -994,7 +994,90 @@ void recipeMixedUse(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     out.placeType = "shop";
     out.name = "mixed_use";
 }
+
+// ---- THE RECIPE REGISTRY (archetype book, architect.h) ---------------------
+// Every recipe body above, by the out.name string it stamps — the same
+// vocabulary the style book keys on. The archetype book resolves Lua names
+// against this ONCE at load; index order is arbitrary but stable in a build.
+// A new recipe joins the book's vocabulary by taking a row here — nothing
+// else. (The rolled ladders in architectPick and the landmark planner keep
+// calling the functions directly; this table is the NAME surface.)
+struct NamedRecipe {
+    const char* name;
+    void (*fn)(BuildingRecipe&, Hash&, RecipeCtx&);
+};
+const NamedRecipe kRecipeRegistry[] = {
+    {"glass_tower", recipeGlassTower},
+    {"office_slab", recipeOfficeSlab},
+    {"commercial_block", recipeCommercialBlock},
+    {"civic_hall", recipeCivicHall},
+    {"civic_midtown", recipeCivicMidtown},
+    {"brick_shop", recipeBrickShop},
+    {"office_midrise", recipeOfficeMidrise},
+    {"walkup_homes", recipeWalkupHomes},
+    {"oldtown_house", recipeOldTownHouse},
+    {"metal_shed", recipeMetalShed},
+    {"industrial_office", recipeIndustrialOffice},
+    {"yard_house", recipeYardHouse},
+    {"apartments", recipeApartments},
+    {"corner_shop", recipeCornerShop},
+    {"pocket_park", recipePocketPark},
+    {"plaza", recipePlaza},
+    {"hotel", recipeHotel},
+    {"art_deco_tower", recipeArtDecoTower},
+    {"stepped_tower", recipeSteppedTower},
+    {"drum_tower", recipeDrumTower},
+    {"podium_tower", recipePodiumTower},
+    {"parking_garage", recipeParkingGarage},
+    {"pagoda_tower", recipePagodaTower},
+    {"condo_tower", recipeCondoTower},
+    {"terrace_condo", recipeTerraceCondo},
+    {"loft_block", recipeLoftConversion},
+    {"cinema", recipeCinema},
+    {"bank", recipeBank},
+    {"strip_mall", recipeStripMall},
+    {"supermarket", recipeSupermarket},
+    {"office_park", recipeOfficePark},
+    {"modern_house", recipeModernHouse},
+    {"bungalow", recipeBungalow},
+    {"craftsman_house", recipeCraftsman},
+    {"cottage", recipeCottage},
+    {"villa", recipeVilla},
+    {"ranch_house", recipeRanchHouse},
+    {"garden_condo", recipeGardenCondo},
+    {"oldtown_grand", recipeOldTownGrand},
+    {"oldtown_cafe", recipeOldTownCafe},
+    {"factory", recipeFactory},
+    {"brick_warehouse", recipeBrickWarehouse},
+    {"school", recipeSchool},
+    {"hospital", recipeHospital},
+    {"courthouse", recipeCourthouse},
+    {"police", recipePolice},
+    {"fire_station", recipeFire},
+    {"market_hall", recipeMarketHall},
+    {"capitol", recipeCapitol},
+    {"university", recipeUniversity},
+    {"church", recipeChurch},
+    {"library", recipeLibrary},
+    {"museum", recipeMuseum},
+    {"rowhouses", recipeRowhouses},
+    {"duplex", recipeDuplex},
+    {"mixed_use", recipeMixedUse},
+};
+constexpr int kRecipeRegistryCount =
+    static_cast<int>(sizeof(kRecipeRegistry) / sizeof(kRecipeRegistry[0]));
 }  // namespace
+
+int architectRecipeIndex(const std::string& name) {
+    for (int i = 0; i < kRecipeRegistryCount; ++i)
+        if (name == kRecipeRegistry[i].name) return i;
+    return -1;
+}
+int architectRecipeCount() { return kRecipeRegistryCount; }
+const char* architectRecipeName(int index) {
+    return index >= 0 && index < kRecipeRegistryCount ? kRecipeRegistry[index].name
+                                                      : nullptr;
+}
 
 const char* districtName(DistrictTag t) {
     switch (t) {
@@ -1060,7 +1143,8 @@ DistrictTag DistrictMap::tagAt(const Vec2& p) const {
 }
 
 BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
-                             uint32_t seed, Real coreness) {
+                             uint32_t seed, Real coreness,
+                             const ArchetypeBook* book) {
     // Decorrelate the caller's seed before drawing: xorshift's first outputs
     // stay correlated across sequential seeds, which would skew the tables'
     // branch weights for neighbouring lots.
@@ -1074,6 +1158,20 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
     cx.coreness = coreness;
     cx.roomy = shortSide > 16.0;
     const Real roll = rng.unit();
+
+    // A Lua-authored ARCHETYPE BOOK replaces this district's weight ladder.
+    // Same single roll, drawn above in the same stream position, so a book
+    // carrying the ladder's own weights reproduces the city bit-for-bit;
+    // the recipe BODY then draws from the same stream either way.
+    if (book && !book->tables[static_cast<std::size_t>(tag)].empty()) {
+        const auto& tbl = book->tables[static_cast<std::size_t>(tag)];
+        int ri = tbl.back().second;        // roll at/above the last threshold
+        for (const auto& [thr, idx] : tbl)
+            if (roll < thr) { ri = idx; break; }
+        kRecipeRegistry[ri].fn(out, rng, cx);
+        capFloors(out.params, shortSide, cx.slender);
+        return out;
+    }
 
     // The district ARCHETYPE TABLES: weighted picks over the named recipes.
     switch (tag) {

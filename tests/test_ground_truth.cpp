@@ -81,15 +81,17 @@ TEST_CASE(block_grading_leaves_no_pits_between_roads) {
     // A closed ring of streets around a naturally-low interior — the exact
     // corral geometry from the drive. Conform carves the roads; the block
     // grade must lift/blend the interior to the boundary plane.
-    RoadNet net;
-    net.width = 8.0;
-    net.sidewalk = 2.0;
-    net.autoRoundabout = false;
-    net.heightAt = hills;
-    net.nodes = { Vec2(-60, -60), Vec2(60, -60), Vec2(60, 60), Vec2(-60, 60) };
-    net.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 0 } };
+    RoadEntity net;
+    net.look.defaultWidth = 8.0;
+    net.look.sidewalk = 2.0;
+    net.look.autoRoundabout = false;
+    const RoadGroundFn ground = hills;
+    net.graph.nodes = { RoadNode{Vec2(-60, -60)}, RoadNode{Vec2(60, -60)},
+                        RoadNode{Vec2(60, 60)},   RoadNode{Vec2(-60, 60)} };
+    net.graph.edges = { RoadEdge{ 0, 1, 8.0 }, RoadEdge{ 1, 2, 8.0 },
+                        RoadEdge{ 2, 3, 8.0 }, RoadEdge{ 3, 0, 8.0 } };
 
-    std::vector<TerrainFlatten> flatten = roadNetConformRegions(net);
+    std::vector<TerrainFlatten> flatten = roadNetConformRegions(net, ground);
     // The block: the ring interior, inset off the road (as the lot plan's
     // blocks are).
     // The grade polygon OVERLAPS the road conform band on purpose: the
@@ -139,8 +141,8 @@ TEST_CASE(block_grading_leaves_no_pits_between_roads) {
     for (double t = -50; t <= 50; t += 5.0) {
         // north edge road runs z=-60; sample the block-side sidewalk outer line
         const double deckY = finalGround(t, -60.0);
-        const double insideY = finalGround(t, -60.0 + net.width * 0.5 +
-                                                  net.sidewalk + 1.0);
+        const double insideY = finalGround(t, -60.0 + net.look.defaultWidth * 0.5 +
+                                                  net.look.sidewalk + 1.0);
         worstRiser = std::max(worstRiser, deckY + 0.15 - insideY);
     }
     std::printf("[pit] worstRiser=%.2f\n", worstRiser);
@@ -156,15 +158,15 @@ TEST_CASE(metro_blocks_reach_city_scale_and_aspect) {
     // produce that. The generator now cuts each district face with an
     // ANISOTROPIC cell (short axis ~lot depth, long axis city-scale), so
     // long blocks exist at all.
-    RoadNet net;
-    net.width = 11.0;
-    net.autoRoundabout = false;
+    RoadEntity net;
+    net.look.defaultWidth = 11.0;
+    net.look.autoRoundabout = false;
     nlohmann::json gen = { { "kind", "metro" },    { "radius", 700 },
                            { "hotspots", 5 },      { "block_size", 150 },
                            { "seed", 11 },         { "freeways", false },
                            { "min_road_len", 24 }, { "terrain_aware", false } };
-    applyGenerateRecipe(net, gen);
-    RoadGraph g = navRoadGraph(net);
+    applyGenerateRecipe(net, gen, nullptr);
+    RoadGraph g = navRoadGraph(net, nullptr);
     std::vector<Poly2> blocks = extractBlocks(g, 400.0);
     CHECK(blocks.size() > 30u);
 
@@ -192,21 +194,21 @@ TEST_CASE(park_pads_and_fences_stay_out_of_carriageways) {
     // the street including fences... park fences sunk into the road." Every
     // park/green pad vertex must clear every sampled road ribbon — the same
     // protection buildings always had.
-    RoadNet net;
-    net.width = 13.0;   // arterial width: the case the old 4 m assumption broke
-    net.autoRoundabout = false;
+    RoadEntity net;
+    net.look.defaultWidth = 13.0;   // arterial width: the case the old 4 m assumption broke
+    net.look.autoRoundabout = false;
     nlohmann::json gen = { { "kind", "metro" },    { "radius", 600 },
                            { "hotspots", 4 },      { "block_size", 130 },
                            { "seed", 21 },         { "freeways", false },
                            { "min_road_len", 24 }, { "terrain_aware", false } };
-    applyGenerateRecipe(net, gen);
-    RoadGraph rg = navRoadGraph(net);
+    applyGenerateRecipe(net, gen, nullptr);
+    RoadGraph rg = navRoadGraph(net, nullptr);
 
     LotParams lp;
     lp.seed = 7;
     lp.roadMargin = 8.0;
     NetLotResult grown =
-        growLotBuildingsOnNets({ net }, lp, EdgeBlockParams{}, 5.0, &rg);
+        growLotBuildingsOnNets({ net }, lp, EdgeBlockParams{}, 5.0, nullptr, &rg);
     int parks = 0, violations = 0;
     for (const LotBuilding& lb : grown.lots) {
         if (lb.type != "park" && lb.type != "green") continue;
@@ -239,17 +241,17 @@ TEST_CASE(retaining_walls_front_deep_cut_faces) {
         (void)x;   // a steep ridge north of the road line
         return z > 0 ? std::min(24.0, z * 0.8) : 0.0;
     };
-    RoadNet net;
-    net.width = 8.0;
-    net.sidewalk = 2.0;
-    net.autoRoundabout = false;
-    net.heightAt = ridge;
-    net.nodes = { Vec2(-120, 6), Vec2(120, 6) };   // hugs the ridge foot
-    net.edges = { { 0, 1 } };
+    RoadEntity net;
+    net.look.defaultWidth = 8.0;
+    net.look.sidewalk = 2.0;
+    net.look.autoRoundabout = false;
+    const RoadGroundFn ground = ridge;
+    net.graph.nodes = { RoadNode{Vec2(-120, 6)}, RoadNode{Vec2(120, 6)} };   // hugs the ridge foot
+    net.graph.edges = { RoadEdge{ 0, 1, 8.0 } };
 
     StructureParams p;
     p.minWall = 3.5;
-    StructureSet ws = buildRoadWalls(net, p);
+    StructureSet ws = buildRoadWalls(net, ground, p);
     std::printf("[walls] segments=%zu\n", ws.walls.size());
     CHECK(!ws.walls.empty());          // the deep cut face gets its wall
     CHECK(!ws.mesh.vertices.empty());
@@ -271,9 +273,8 @@ TEST_CASE(retaining_walls_front_deep_cut_faces) {
     CHECK(worstTopGap < 1.5);   // top tracks the hill line (grade-limited deck)
 
     // Control: a flat site grows no walls at all.
-    RoadNet flat = net;
-    flat.heightAt = [](double, double) { return 2.0; };
-    CHECK(buildRoadWalls(flat, p).walls.empty());
+    const RoadGroundFn flatGround = [](double, double) { return 2.0; };
+    CHECK(buildRoadWalls(net, flatGround, p).walls.empty());
 }
 
 #include "../src/engine/procgen/city/corridor_plan.h"
@@ -285,35 +286,32 @@ TEST_CASE(retaining_walls_front_deep_cut_faces) {
 // street to reach them ("orphaned houses along the freeway"). The freeway
 // ROW stays a keep-out band, not frontage.
 TEST_CASE(no_lots_front_the_freeway_only) {
-    RoadNet net;
-    net.width = 12.0;
-    net.sidewalk = 2.5;
-    net.autoRoundabout = false;
-    net.heightAt = [](double, double) { return 0.0; };
+    RoadEntity net;
+    net.look.defaultWidth = 12.0;
+    net.look.sidewalk = 2.5;
+    net.look.autoRoundabout = false;
+    const RoadGroundFn ground = [](double, double) { return 0.0; };
     nlohmann::json gen = { { "kind", "metro" },     { "radius", 650 },
                            { "hotspots", 4 },        { "block_size", 120 },
                            { "seed", 12 },           { "freeways", true },
                            { "corridor_freeways", true },
                            { "min_road_len", 24 },   { "terrain_aware", false } };
-    applyGenerateRecipe(net, gen);
-    CHECK(!net.freewayPlans.empty());
-    const int baked = rebakeNetCorridors(net, 520.0);
+    applyGenerateRecipe(net, gen, ground);
+    CHECK(!net.plan.freewayPlans.empty());
+    const int baked = rebakeNetCorridors(net, 520.0, ground);
     CHECK(baked > 0);
 
     // The STREET subgraph (what a walker/car can actually reach) and the
     // freeway ROW (the corridor's own edges), split by class off the net.
     RoadGraph streets, freeway;
-    for (std::size_t ei = 0; ei < net.edges.size(); ++ei) {
-        const auto& e = net.edges[ei];
-        const bool bakedE = ei < net.edgeBaked.size() && net.edgeBaked[ei];
-        const RoadClass k = ei < net.edgeClasses.size() ? net.edgeClasses[ei]
-                                                        : RoadClass::Local;
+    for (const RoadEdge& e : net.graph.edges) {
+        const RoadClass k = e.klass;
         RoadGraph& dst =
-            (bakedE || k == RoadClass::Freeway || k == RoadClass::Ramp) ? freeway
-                                                                        : streets;
+            (e.baked || k == RoadClass::Freeway || k == RoadClass::Ramp) ? freeway
+                                                                         : streets;
         const int b = static_cast<int>(dst.nodes.size());
-        dst.nodes.push_back({ net.nodes[e[0]] });
-        dst.nodes.push_back({ net.nodes[e[1]] });
+        dst.nodes.push_back({ net.graph.nodes[e.a].pos });
+        dst.nodes.push_back({ net.graph.nodes[e.b].pos });
         dst.edges.push_back(RoadEdge{ b, b + 1, 8, k, 0 });
     }
     CHECK(!freeway.edges.empty());
@@ -330,12 +328,12 @@ TEST_CASE(no_lots_front_the_freeway_only) {
         return best;
     };
 
-    RoadGraph rowGraph = engine::navRoadGraph(net);
+    RoadGraph rowGraph = engine::navRoadGraph(net, ground);
     LotParams lp;
     lp.seed = 5;
     lp.roadMargin = 8.0;
     NetLotResult grown =
-        growLotBuildingsOnNets({ net }, lp, EdgeBlockParams{}, 5.0, &rowGraph);
+        growLotBuildingsOnNets({ net }, lp, EdgeBlockParams{}, 5.0, ground, &rowGraph);
 
     int lots = 0, orphans = 0;
     for (const LotBuilding& lb : grown.lots) {

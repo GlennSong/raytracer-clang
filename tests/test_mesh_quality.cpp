@@ -48,21 +48,25 @@ double aspect(const Vec3& a, const Vec3& b, const Vec3& c) {
     return longest / std::max(1e-9, minAlt);
 }
 
-RoadNet gridCity(int n, double spacing) {
-    RoadNet g;
+RoadEntity gridCity(int n, double spacing) {
+    RoadEntity g;
     for (int i = 0; i < n; ++i)
-        for (int j = 0; j < n; ++j) g.nodes.push_back(Vec2(i * spacing, j * spacing));
+        for (int j = 0; j < n; ++j)
+            g.graph.nodes.push_back(RoadNode{Vec2(i * spacing, j * spacing)});
     auto id = [&](int i, int j) { return i * n + j; };
     for (int i = 0; i < n; ++i)
         for (int j = 0; j < n; ++j) {
-            if (i + 1 < n) g.edges.push_back({ id(i, j), id(i + 1, j) });
-            if (j + 1 < n) g.edges.push_back({ id(i, j), id(i, j + 1) });
+            if (i + 1 < n)
+                g.graph.edges.push_back(RoadEdge{ id(i, j), id(i + 1, j), 10.0 });
+            if (j + 1 < n)
+                g.graph.edges.push_back(RoadEdge{ id(i, j), id(i, j + 1), 10.0 });
         }
-    g.heightAt = [](Real x, Real z) {
-        return 1.5 * std::sin(x * 0.02) + 1.2 * std::cos(z * 0.017);
-    };
     return g;
 }
+
+const RoadGroundFn gridGround = [](double x, double z) {
+    return 1.5 * std::sin(x * 0.02) + 1.2 * std::cos(z * 0.017);
+};
 
 }  // namespace
 
@@ -70,7 +74,7 @@ RoadNet gridCity(int n, double spacing) {
 // the apex of a huge number of faces — the "triangles emitting from a single
 // point" you can see on the asphalt.
 TEST_CASE(road_mesh_is_ribbons_not_fans) {
-    RenderMesh m = buildRoadNetMesh(gridCity(4, 90.0));
+    RenderMesh m = buildRoadNetMesh(gridCity(4, 90.0), gridGround);
     CHECK(triangleCount(m) > 0);
     // BASELINE 2026-07-17: on HILLS (not the flat checkWeld fixtures) the union
     // sheet emits zero-area triangles. The swept lattice has none by construction.
@@ -110,7 +114,7 @@ TEST_CASE(road_mesh_is_ribbons_not_fans) {
 // And they should be well-SHAPED. A sliver spanning the road is what chords
 // across the profile and rips at junctions.
 TEST_CASE(road_mesh_has_no_slivers) {
-    RenderMesh m = buildRoadNetMesh(gridCity(4, 90.0));
+    RenderMesh m = buildRoadNetMesh(gridCity(4, 90.0), gridGround);
     int bad = 0, total = 0;
     double worst = 0;
     for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {

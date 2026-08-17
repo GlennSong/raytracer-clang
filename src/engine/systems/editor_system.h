@@ -20,7 +20,7 @@ class Renderer;
 // owns the data + regen; the shell owns only the handle drawing and mouse picking.
 //   roadNodeHandles  -> a world position per control node (seated on the road), so
 //                       the viewport can draw a draggable handle at each.
-//   moveRoadNode     -> drop a node at a new world XZ: updates the RoadNet, rebuilds
+//   moveRoadNode     -> drop a node at a new world XZ: updates the RoadEntity, rebuilds
 //                       the carriageway mesh, and keeps the saved recipe in sync.
 std::vector<Vec3> roadNodeHandles(World& world, Entity e);
 bool moveRoadNode(World& world, Entity e, int node, const Vec3& worldPos, Renderer& renderer);
@@ -162,7 +162,7 @@ private:
     PathEditTool pathTool;
     std::unique_ptr<RoadHandleSource> roadSource;
     Entity pathEditEntity;
-    struct RoadNet* pathRoadNet = nullptr;
+    struct RoadEntity* pathRoadNet = nullptr;
     bool pathWasDragging = false;
     bool gizmoBusy = false;     // ImGuizmo hovered/dragging (blocks picking)
     bool gizmoWasUsing = false; // drag-edge detection for undo recording

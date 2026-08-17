@@ -166,16 +166,16 @@ OverlapKinds classifyOverlaps(const RenderMesh& m, const std::vector<std::size_t
 // synthetic single-edge graphs are too clean to show the soup. Diagnostic first
 // (prints the real counts); the CHECKs document the target the fixes must hit.
 TEST_CASE(real_generated_graph_surface_is_clean) {
-    RoadNet net;
-    net.heightAt = kHills;
+    RoadEntity net;
+    const RoadGroundFn ground = kHills;    // the level terrain the net drapes on
     nlohmann::json gen;
     gen["kind"] = "metro"; gen["radius"] = 240.0; gen["seed"] = 5;
     gen["block_size"] = 72.0; gen["street_width"] = 7.0; gen["artery_width"] = 13.0;
     gen["hotspots"] = 5; gen["terrain_aware"] = false;
-    applyGenerateRecipe(net, gen);
-    RoadGraph g = roadNetConstrainedGraph(net);
+    applyGenerateRecipe(net, gen, ground);
+    RoadGraph g = roadNetConstrainedGraph(net, ground);
     std::vector<std::size_t> chainEnds;
-    RenderMesh m = buildRoadNetLattice(g, net.heightAt, &chainEnds);
+    RenderMesh m = buildRoadNetLattice(g, kHills, &chainEnds);
     CHECK(!m.vertices.empty());
 
     // Scan against the CARVED ground — the terrain the viewer actually renders.
@@ -183,7 +183,7 @@ TEST_CASE(real_generated_graph_surface_is_clean) {
     // carves terrain to the same profiles via roadNetConformRegions; comparing
     // against RAW ground scored that agreement as "under terrain" (and, before
     // the profile ride, scored real burial as clean — blind both ways).
-    const std::vector<TerrainFlatten> carve = roadNetConformRegions(net);
+    const std::vector<TerrainFlatten> carve = roadNetConformRegions(net, ground);
     const Ground kCarved = [&, carve](Real x, Real z) {
         return (Real)applyFlatten(carve, x, z, kHills(x, z));
     };

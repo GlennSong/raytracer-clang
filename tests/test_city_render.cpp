@@ -23,22 +23,31 @@ namespace {
 
 // A square loop of road: every node routes to every other (degree-2 corners, so
 // no junction signals — good for the plain car/ped bake tests).
-RoadNet squareLoop() {
-    RoadNet net;
-    net.nodes = { Vec2(0, 0), Vec2(40, 0), Vec2(40, 40), Vec2(0, 40) };
-    net.edges = { {0, 1}, {1, 2}, {2, 3}, {3, 0} };
-    net.width = 10.0;
-    net.sidewalk = 2.5;
+RoadEntity squareLoop() {
+    RoadEntity net;
+    net.look.defaultWidth = 10.0;
+    net.look.sidewalk = 2.5;
+    net.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(40, 0)},
+                        RoadNode{Vec2(40, 40)}, RoadNode{Vec2(0, 40)} };
+    net.graph.addEdge(0, 1, net.look.defaultWidth);
+    net.graph.addEdge(1, 2, net.look.defaultWidth);
+    net.graph.addEdge(2, 3, net.look.defaultWidth);
+    net.graph.addEdge(3, 0, net.look.defaultWidth);
     return net;
 }
 
 // A plus/cross: the centre node has degree 4, so it becomes a signalled junction.
-RoadNet crossRoads() {
-    RoadNet net;
-    net.nodes = { Vec2(0, 0), Vec2(60, 0), Vec2(-60, 0), Vec2(0, 60), Vec2(0, -60) };
-    net.edges = { {0, 1}, {0, 2}, {0, 3}, {0, 4} };
-    net.width = 10.0;
-    net.sidewalk = 2.5;
+RoadEntity crossRoads() {
+    RoadEntity net;
+    net.look.defaultWidth = 10.0;
+    net.look.sidewalk = 2.5;
+    net.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(60, 0)},
+                        RoadNode{Vec2(-60, 0)}, RoadNode{Vec2(0, 60)},
+                        RoadNode{Vec2(0, -60)} };
+    net.graph.addEdge(0, 1, net.look.defaultWidth);
+    net.graph.addEdge(0, 2, net.look.defaultWidth);
+    net.graph.addEdge(0, 3, net.look.defaultWidth);
+    net.graph.addEdge(0, 4, net.look.defaultWidth);
     return net;
 }
 
@@ -84,7 +93,7 @@ std::size_t carTotal(World& world, const CityRenderSystem& city) {
 
 TEST_CASE(city_render_builds_from_roadnet) {
     World world;
-    world.add<RoadNet>(world.create(), squareLoop());
+    world.add<RoadEntity>(world.create(), squareLoop());
 
     CityRenderParams p = cityParams();
     p.cars = 8;
@@ -110,7 +119,7 @@ TEST_CASE(city_render_builds_from_roadnet) {
 
 TEST_CASE(city_render_debug_widgets) {
     World world;
-    world.add<RoadNet>(world.create(), squareLoop());
+    world.add<RoadEntity>(world.create(), squareLoop());
 
     CityRenderParams p = cityParams();
     p.cars = 5;
@@ -143,7 +152,7 @@ TEST_CASE(debug_widgets_ring_the_real_car_when_cars_are_external) {
     // a ring around the ghost is an empty circle on the ground. Drivers with no
     // reported car draw no ring; pedestrian rings are unaffected.
     World world;
-    world.add<RoadNet>(world.create(), squareLoop());
+    world.add<RoadEntity>(world.create(), squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 4;
     p.pedestrians = 3;
@@ -205,7 +214,7 @@ TEST_CASE(external_peds_stop_the_instanced_bake_and_ring_real_walkers) {
     // must not bake instanced ped boxes (they'd draw twice), and a ped's debug
     // ring follows the bridge-reported REAL body — unreported walkers draw none.
     World world;
-    world.add<RoadNet>(world.create(), squareLoop());
+    world.add<RoadEntity>(world.create(), squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 2;
     p.pedestrians = 3;
@@ -258,7 +267,7 @@ TEST_CASE(commandeered_car_leaves_the_instanced_fleet) {
     // the sim releases its agent and the instanced fleet must drop that car (the
     // real Vehicle takes its visual place). Widgets drop it too.
     World world;
-    world.add<RoadNet>(world.create(), squareLoop());
+    world.add<RoadEntity>(world.create(), squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 5;
     p.pedestrians = 0;
@@ -274,7 +283,7 @@ TEST_CASE(commandeered_car_leaves_the_instanced_fleet) {
 
 TEST_CASE(city_render_car_colliders_scale_with_the_fleet) {
     World world;
-    world.add<RoadNet>(world.create(), squareLoop());
+    world.add<RoadEntity>(world.create(), squareLoop());
     CityRenderSystem city(cityParams());
     CHECK(city.build(world, nullptr));
 
@@ -305,7 +314,7 @@ TEST_CASE(city_render_build_fails_without_roads) {
 
 TEST_CASE(city_render_agents_move_when_stepped) {
     World world;
-    world.add<RoadNet>(world.create(), squareLoop());
+    world.add<RoadEntity>(world.create(), squareLoop());
 
     CityRenderParams p = cityParams();
     p.cars = 12;
@@ -341,7 +350,7 @@ TEST_CASE(city_render_agents_move_when_stepped) {
 
 TEST_CASE(city_render_signals_light_up_and_change_state) {
     World world;
-    world.add<RoadNet>(world.create(), crossRoads());
+    world.add<RoadEntity>(world.create(), crossRoads());
 
     CityRenderParams p = cityParams();
     p.cars = 6;
@@ -389,7 +398,7 @@ TEST_CASE(car_headlights_track_the_night_clock) {
     StubUploader up;
     AssetManager assets(up);
     World world;
-    world.add<RoadNet>(world.create(), squareLoop());
+    world.add<RoadEntity>(world.create(), squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 6;
     p.pedestrians = 0;
@@ -417,7 +426,7 @@ TEST_CASE(car_brake_lights_come_on_when_holding) {
     StubUploader up;
     AssetManager assets(up);
     World world;
-    world.add<RoadNet>(world.create(), crossRoads());   // signalled junction
+    world.add<RoadEntity>(world.create(), crossRoads());   // signalled junction
     CityRenderParams p = cityParams();
     p.cars = 8;
     p.pedestrians = 0;
@@ -436,7 +445,7 @@ TEST_CASE(car_turn_signals_flash_on_turns) {
     StubUploader up;
     AssetManager assets(up);
     World world;
-    world.add<RoadNet>(world.create(), crossRoads());
+    world.add<RoadEntity>(world.create(), crossRoads());
     CityRenderParams p = cityParams();
     p.cars = 8;
     p.pedestrians = 0;
@@ -457,7 +466,7 @@ TEST_CASE(externally_owned_cars_draw_no_lamps) {
     // ADR-0062: a car owned by the vehicle bridge isn't drawn here, so it lights no
     // lamps here either (its real Vehicle owns them) — even at night.
     World world;
-    world.add<RoadNet>(world.create(), squareLoop());
+    world.add<RoadEntity>(world.create(), squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 5;
     p.pedestrians = 0;
@@ -491,14 +500,19 @@ static double segDist(Vec2 p, Vec2 a, Vec2 b) {
 TEST_CASE(signal_poles_stand_outside_the_carriageway) {
     // A WIDE cross: a fixed pole setback would land inside the carriageway ("in
     // the middle of the road"). Each pole must sit beyond the kerb of every road.
-    RoadNet net;
-    net.nodes = { Vec2(0, 0), Vec2(80, 0), Vec2(-80, 0), Vec2(0, 80), Vec2(0, -80) };
-    net.edges = { {0, 1}, {0, 2}, {0, 3}, {0, 4} };
-    net.width = 16.0;   // half-width 8 — a fixed ~6.6 m setback would be INSIDE
-    net.sidewalk = 2.5;
+    RoadEntity net;
+    net.look.defaultWidth = 16.0;   // half-width 8 — a fixed ~6.6 m setback would be INSIDE
+    net.look.sidewalk = 2.5;
+    net.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(80, 0)},
+                        RoadNode{Vec2(-80, 0)}, RoadNode{Vec2(0, 80)},
+                        RoadNode{Vec2(0, -80)} };
+    net.graph.addEdge(0, 1, net.look.defaultWidth);
+    net.graph.addEdge(0, 2, net.look.defaultWidth);
+    net.graph.addEdge(0, 3, net.look.defaultWidth);
+    net.graph.addEdge(0, 4, net.look.defaultWidth);
 
     World world;
-    world.add<RoadNet>(world.create(), net);
+    world.add<RoadEntity>(world.create(), net);
     CityRenderSystem city(cityParams());
     CHECK(city.build(world, nullptr));
 
@@ -518,7 +532,7 @@ TEST_CASE(signal_poles_stand_outside_the_carriageway) {
 
 TEST_CASE(crosswalks_sit_at_junction_mouths) {
     World world;
-    world.add<RoadNet>(world.create(), crossRoads());   // 4-arm cross, width 10
+    world.add<RoadEntity>(world.create(), crossRoads());   // 4-arm cross, width 10
     CityRenderSystem city(cityParams());
     CHECK(city.build(world, nullptr));
 
@@ -551,7 +565,7 @@ TEST_CASE(level_citysim_config_overrides_build_params) {
     // entity) decides the population — the agent lab runs 1 car + 1 walker while
     // grown.json keeps the default bustle. The entity must beat the constructor.
     World world;
-    world.add<RoadNet>(world.create(), squareLoop());
+    world.add<RoadEntity>(world.create(), squareLoop());
     CitySimConfig cfg;
     cfg.cars = 1;
     cfg.pedestrians = 1;
@@ -576,15 +590,22 @@ TEST_CASE(agent_lab_theta_circuit_is_navigable) {
     // geometry here and pin what the lab depends on: both junctions carry
     // signals, every node routes to every other, and a lone driver + walker
     // actually get moving on it.
-    RoadNet net;
-    net.nodes = { Vec2(-60, -40), Vec2(60, -40), Vec2(60, 40), Vec2(-60, 40),
-                  Vec2(-60, 0), Vec2(60, 0) };
-    net.edges = { {0, 1}, {1, 5}, {5, 2}, {2, 3}, {3, 4}, {4, 0}, {4, 5} };
-    net.width = 7.0;
-    net.sidewalk = 1.8;
+    RoadEntity net;
+    net.look.defaultWidth = 7.0;
+    net.look.sidewalk = 1.8;
+    net.graph.nodes = { RoadNode{Vec2(-60, -40)}, RoadNode{Vec2(60, -40)},
+                        RoadNode{Vec2(60, 40)}, RoadNode{Vec2(-60, 40)},
+                        RoadNode{Vec2(-60, 0)}, RoadNode{Vec2(60, 0)} };
+    net.graph.addEdge(0, 1, net.look.defaultWidth);
+    net.graph.addEdge(1, 5, net.look.defaultWidth);
+    net.graph.addEdge(5, 2, net.look.defaultWidth);
+    net.graph.addEdge(2, 3, net.look.defaultWidth);
+    net.graph.addEdge(3, 4, net.look.defaultWidth);
+    net.graph.addEdge(4, 0, net.look.defaultWidth);
+    net.graph.addEdge(4, 5, net.look.defaultWidth);
 
     World world;
-    world.add<RoadNet>(world.create(), net);
+    world.add<RoadEntity>(world.create(), net);
     CitySimConfig cfg;
     cfg.cars = 1;
     cfg.pedestrians = 1;
@@ -664,7 +685,7 @@ TEST_CASE(debug_navgraph_and_vision_cones_draw_with_the_hud) {
     // per junction node, baked once at build) and the VISION CONES (one wedge per
     // moving agent, in its mode's group).
     World world;
-    world.add<RoadNet>(world.create(), crossRoads());
+    world.add<RoadEntity>(world.create(), crossRoads());
     CityRenderParams p = cityParams();
     p.cars = 4;
     p.pedestrians = 3;
@@ -680,7 +701,7 @@ TEST_CASE(debug_navgraph_and_vision_cones_draw_with_the_hud) {
     CHECK(groupCount(world, city.navLinkGroup()) == lanes);
     InstanceGroup* strips = world.get<InstanceGroup>(city.navLinkGroup());
     CHECK(strips != nullptr);
-    const double lift = crossRoads().lift;   // strips ride the net's own lift
+    const double lift = crossRoads().look.lift;   // strips ride the net's own lift
     for (const Mat4& m : strips->transforms)
         CHECK(std::fabs(m.m[1][3] - (lift + 0.04)) < 1e-6);   // road lift + 0.04
     // One ring per junction node (the cross has exactly one).
@@ -712,7 +733,7 @@ TEST_CASE(debug_navgraph_and_vision_cones_draw_with_the_hud) {
 
 TEST_CASE(debug_navgraph_and_cones_vanish_when_the_hud_is_off) {
     World world;
-    world.add<RoadNet>(world.create(), crossRoads());
+    world.add<RoadEntity>(world.create(), crossRoads());
     CityRenderParams p = cityParams();
     p.cars = 4;
     p.pedestrians = 3;
@@ -809,14 +830,15 @@ TEST_CASE(car_pose_probe_no_vibration_on_jagged_ground) {
     // tilt low-pass must bound the per-tick swing while still letting the
     // body take real slopes.
     World world;
-    RoadNet net = squareLoop();
+    RoadEntity net = squareLoop();
     // Jagged drape: coarse steps (quantised terrain) over a gentle slope.
-    net.heightAt = [](double x, double z) {
+    // (Roads no longer store a terrain sampler; it goes to build() below.)
+    const RoadGroundFn ground = [](double x, double z) {
         const double slope = 0.03 * x + 0.02 * z;
         const double steps = 0.22 * (std::floor(x / 2.0) + std::floor(z / 2.0));
         return slope + std::fmod(std::fabs(steps), 0.44);
     };
-    world.add<RoadNet>(world.create(), net);
+    world.add<RoadEntity>(world.create(), net);
 
     CityRenderParams params = cityParams();
     params.cars = 4;
@@ -824,7 +846,7 @@ TEST_CASE(car_pose_probe_no_vibration_on_jagged_ground) {
     params.seed = 3;
     params.wander = true;
     CityRenderSystem city(params);
-    CHECK(city.build(world, nullptr));
+    CHECK(city.build(world, nullptr, ground));
     for (int i = 0; i < 80; ++i) city.step(world, 0.1);   // warm up: cars rolling
 
     // Track every car instance's up-vector across steps (instances keep bake
@@ -859,8 +881,8 @@ TEST_CASE(density_population_scales_with_the_graph) {
     // Roads-v2.1 4c: cars = -1 / pedestrians = -1 ask for DENSITY population —
     // counts derived from lane-km / sidewalk-km, so a bigger city gets more
     // traffic from the same recipe, and explicit counts stay overrides.
-    auto build = [](RoadNet net, int cars, Real perLaneKm, World& world) {
-        world.add<RoadNet>(world.create(), std::move(net));
+    auto build = [](RoadEntity net, int cars, Real perLaneKm, World& world) {
+        world.add<RoadEntity>(world.create(), std::move(net));
         CityRenderParams p = cityParams();
         p.cars = cars;
         p.pedestrians = -1;
@@ -877,18 +899,20 @@ TEST_CASE(density_population_scales_with_the_graph) {
         return std::make_pair(drivers, peds);
     };
     auto grid = []() {
-        RoadNet net;
+        RoadEntity net;
+        net.look.defaultWidth = 10.0;
+        net.look.sidewalk = 2.5;
         const int N = 4;
         for (int j = 0; j < N; ++j)
             for (int i = 0; i < N; ++i)
-                net.nodes.push_back(Vec2(i * 80.0, j * 80.0));
+                net.graph.nodes.push_back(RoadNode{Vec2(i * 80.0, j * 80.0)});
         for (int j = 0; j < N; ++j)
             for (int i = 0; i < N; ++i) {
-                if (i + 1 < N) net.edges.push_back({ j * N + i, j * N + i + 1 });
-                if (j + 1 < N) net.edges.push_back({ j * N + i, (j + 1) * N + i });
+                if (i + 1 < N)
+                    net.graph.addEdge(j * N + i, j * N + i + 1, net.look.defaultWidth);
+                if (j + 1 < N)
+                    net.graph.addEdge(j * N + i, (j + 1) * N + i, net.look.defaultWidth);
             }
-        net.width = 10.0;
-        net.sidewalk = 2.5;
         return net;
     };
 
@@ -910,7 +934,7 @@ TEST_CASE(road_markings_stay_inside_the_carriageway) {
     // R6c (plan 4e): every SIGNALLED approach carries a stop bar and one
     // arrow per lane, and no paint vertex ever leaves the carriageway.
     World world;
-    world.add<RoadNet>(world.create(), crossRoads());   // signalled 4-way
+    world.add<RoadEntity>(world.create(), crossRoads());   // signalled 4-way
     CityRenderParams params = cityParams();
     params.cars = 0;
     params.pedestrians = 0;
@@ -985,8 +1009,8 @@ TEST_CASE(city_sim_rate_default_is_every_step) {
     // localHz 0 must reproduce the historical tick exactly — every existing
     // level and gate depends on it.
     World a, b;
-    a.add<RoadNet>(a.create(), squareLoop());
-    b.add<RoadNet>(b.create(), squareLoop());
+    a.add<RoadEntity>(a.create(), squareLoop());
+    b.add<RoadEntity>(b.create(), squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 6; p.pedestrians = 0; p.seed = 5;
     p.wander = true;              // drive continuously (no schedule window)
@@ -1009,8 +1033,8 @@ TEST_CASE(city_sim_rate_30hz_covers_the_same_ground) {
     // Half the ticks, twice the dt: the fleet must travel a comparable
     // distance (coarser integration, not slower traffic).
     World a, b;
-    a.add<RoadNet>(a.create(), squareLoop());
-    b.add<RoadNet>(b.create(), squareLoop());
+    a.add<RoadEntity>(a.create(), squareLoop());
+    b.add<RoadEntity>(b.create(), squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 8; p.pedestrians = 0; p.seed = 5;
     p.wander = true;              // drive continuously (no schedule window)
@@ -1034,7 +1058,7 @@ TEST_CASE(city_sim_rate_poses_keep_moving_between_ticks) {
     // baked poses must still advance (extrapolated along heading), or cars
     // freeze for a step and then teleport.
     World world;
-    world.add<RoadNet>(world.create(), squareLoop());
+    world.add<RoadEntity>(world.create(), squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 8; p.pedestrians = 0; p.seed = 5;
     p.wander = true;              // drive continuously (no schedule window)
@@ -1086,12 +1110,16 @@ TEST_CASE(city_sim_far_tier_refreshes_on_a_clock_not_a_tick_count) {
         // A loop big enough that traffic actually LEAVES the bubble (promote
         // 500 m / demote 620 m) — on a 40 m fixture everything stays K and the
         // gate would prove nothing.
-        RoadNet big;
-        big.nodes = { Vec2(0, 0), Vec2(1600, 0), Vec2(1600, 1600), Vec2(0, 1600) };
-        big.edges = { {0, 1}, {1, 2}, {2, 3}, {3, 0} };
-        big.width = 10.0;
-        big.sidewalk = 2.5;
-        world.add<RoadNet>(world.create(), big);
+        RoadEntity big;
+        big.look.defaultWidth = 10.0;
+        big.look.sidewalk = 2.5;
+        big.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(1600, 0)},
+                            RoadNode{Vec2(1600, 1600)}, RoadNode{Vec2(0, 1600)} };
+        big.graph.addEdge(0, 1, big.look.defaultWidth);
+        big.graph.addEdge(1, 2, big.look.defaultWidth);
+        big.graph.addEdge(2, 3, big.look.defaultWidth);
+        big.graph.addEdge(3, 0, big.look.defaultWidth);
+        world.add<RoadEntity>(world.create(), big);
         CityRenderParams p = cityParams();
         p.cars = 60; p.pedestrians = 0; p.seed = 5;
         p.wander = true;
@@ -1144,7 +1172,7 @@ TEST_CASE(fleet_bridge_holds_a_promotable_body_per_variant) {
     AssetManager assets(up);
 
     World world;
-    world.add<RoadNet>(world.create(), squareLoop());
+    world.add<RoadEntity>(world.create(), squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 8;
     p.pedestrians = 0;
@@ -1246,7 +1274,7 @@ TEST_CASE(fleet_length_comes_from_the_asset_not_from_cpp) {
     AssetManager assets(up);
 
     World world;
-    world.add<RoadNet>(world.create(), squareLoop());
+    world.add<RoadEntity>(world.create(), squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 10;               // more drivers than slots: the mapping must wrap
     p.pedestrians = 0;
@@ -1286,7 +1314,7 @@ TEST_CASE(fleet_bridge_reports_no_promotable_body_without_a_script) {
     AssetManager assets(up);
 
     World world;
-    world.add<RoadNet>(world.create(), squareLoop());
+    world.add<RoadEntity>(world.create(), squareLoop());
     CityRenderParams p;                // deliberately NO vehicle catalogue
     p.cars = 4;
     p.pedestrians = 0;

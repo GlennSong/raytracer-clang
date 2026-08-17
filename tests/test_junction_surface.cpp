@@ -23,16 +23,20 @@ using namespace engine;
 namespace {
 
 // A 4-way cross on ROLLING terrain — the metropolis case (streets drape hills).
-RoadNet hillyCross() {
-    RoadNet n;
-    n.nodes = { Vec2(0, 0), Vec2(-60, 0), Vec2(60, 0), Vec2(0, -60), Vec2(0, 60) };
-    n.edges = { {0, 1}, {0, 2}, {0, 3}, {0, 4} };
-    // Gentle hills: ~1.5 m of relief across the junction, like real terrain.
-    n.heightAt = [](Real x, Real z) {
-        return 1.5 * std::sin(x * 0.02) + 1.2 * std::cos(z * 0.017);
-    };
+RoadEntity hillyCross() {
+    RoadEntity n;
+    n.graph.nodes = { RoadNode{Vec2(0, 0)},   RoadNode{Vec2(-60, 0)},
+                      RoadNode{Vec2(60, 0)},  RoadNode{Vec2(0, -60)},
+                      RoadNode{Vec2(0, 60)} };
+    n.graph.edges = { RoadEdge{ 0, 1, 10.0 }, RoadEdge{ 0, 2, 10.0 },
+                      RoadEdge{ 0, 3, 10.0 }, RoadEdge{ 0, 4, 10.0 } };
     return n;
 }
+
+// Gentle hills: ~1.5 m of relief across the junction, like real terrain.
+const RoadGroundFn hillyGround = [](double x, double z) {
+    return 1.5 * std::sin(x * 0.02) + 1.2 * std::cos(z * 0.017);
+};
 
 // tan(tilt) of a triangle's true geometry.
 double faceGrade(const Vec3& a, const Vec3& b, const Vec3& c) {
@@ -48,7 +52,7 @@ double faceGrade(const Vec3& a, const Vec3& b, const Vec3& c) {
 // road drapes onto it, so the junction pad should be about that gentle too.
 // Anything steep in the PAD is the mesher's, not the terrain's.
 TEST_CASE(weld_junction_pad_is_drivable_on_hills) {
-    RenderMesh m = buildRoadNetMesh(hillyCross());
+    RenderMesh m = buildRoadNetMesh(hillyCross(), hillyGround);
     CHECK(!m.vertices.empty());
 
     int steep = 0, near = 0;

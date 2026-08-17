@@ -491,17 +491,18 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
     if (root.contains("terrain")) {
         std::vector<TerrainFlatten> allFlatten;
         allFlatten.insert(allFlatten.end(), scriptFlatten.begin(), scriptFlatten.end());
-        std::vector<RoadNet> lotNets;
+        std::vector<RoadEntity> lotNets;
         if (levelGround)
             for (const auto& ent : root.value("entities", json::array())) {
                 if (ent.value("shape", std::string()) != "road") continue;
                 const json roadBlock =
                     ent.contains("road") ? ent["road"] : json::object();
-                RoadNet net = roadNetFromJson(roadBlock);
-                net.heightAt = levelGround;   // BEFORE generate: terrain-aware recipes (metro) gate on it
+                RoadEntity net = roadNetFromJson(roadBlock);
+                // levelGround (natural) gates terrain-aware recipes (metro).
                 if (roadBlock.contains("generate"))
-                    applyGenerateRecipe(net, roadBlock["generate"]);
-                std::vector<TerrainFlatten> r = roadNetConformRegions(net);
+                    applyGenerateRecipe(net, roadBlock["generate"], levelGround);
+                std::vector<TerrainFlatten> r =
+                    roadNetConformRegions(net, levelGround);
                 allFlatten.insert(allFlatten.end(), r.begin(), r.end());
                 lotNets.push_back(std::move(net));
             }
@@ -527,11 +528,11 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             // level_loader's growCityLots exactly. Without them the editor
             // preview grows a DIFFERENT city than the game: no districts past
             // the radial rings, and coreness 0 everywhere, which means no towers.
-            for (const engine::RoadNet& n : lotNets)
-                for (const engine::CityHub& h : n.cityHubs)
+            for (const engine::RoadEntity& n : lotNets)
+                for (const engine::CityHub& h : n.plan.cityHubs)
                     lp.hubs.push_back({h.pos, h.kind});
-            for (const engine::RoadNet& n : lotNets)
-                for (const engine::CityHub& h : n.cityHubs) {
+            for (const engine::RoadEntity& n : lotNets)
+                for (const engine::CityHub& h : n.plan.cityHubs) {
                     if (lp.center.x == 0 && lp.center.y == 0) lp.center = h.pos;
                     if (h.kind == 0) {
                         lp.center = h.pos;
@@ -553,9 +554,27 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                     if (hook) lp.styleHook = std::move(hook);
                 }
             }
+            // ARCHETYPE BOOK — same all-or-nothing contract as the viewer's
+            // loader (level_loader.cpp); a rejected book LOG_ERRORs and the
+            // compiled ladders stand, so both hosts grow the SAME city.
+            {
+                std::string ab = loadScriptCode("archetype_book.lua", levelDir);
+                if (!ab.empty()) {
+                    ScriptVM vm;   // the book is pure data once parsed
+                    openProcgenLibrary(vm);
+                    std::string err;
+                    engine::ArchetypeBook book =
+                        engine::makeArchetypeBook(vm, ab, &err);
+                    if (!err.empty())
+                        LOG_ERROR << "archetype_book.lua REJECTED "
+                                     "(all-or-nothing): " << err;
+                    else
+                        lp.archetypeBook = std::move(book);
+                }
+            }
 #endif
             engine::NetLotResult lots = engine::growLotBuildingsOnNets(
-                lotNets, lp, ep, cs.value("sidewalk", 4.0) + 0.6);
+                lotNets, lp, ep, cs.value("sidewalk", 4.0) + 0.6, levelGround);
             // Building pads: flat graded ground under every footprint.
             for (const engine::LotBuilding& lb : lots.lots) {
                 if (lb.type == "park" || lb.type == "green" ||
@@ -693,23 +712,24 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             addTree(ent, scene);
             continue;
         }
-        // Editor-authored road (shape:"road", ADR-0049): the same RoadNet the
+        // Editor-authored road (shape:"road", ADR-0049): the same RoadEntity the
         // editor edits, baked to the carriageway and draped on the level terrain.
         if (ent.value("shape", std::string()) == "road") {
             const json roadBlock = ent.contains("road") ? ent["road"] : json::object();
-            RoadNet net = roadNetFromJson(roadBlock);
-            if (levelGround) net.heightAt = levelGround;   // BEFORE generate: metro gates on terrain
+            RoadEntity net = roadNetFromJson(roadBlock);
             // A generated network (ADR-0056 "generate" recipe — grown.json's whole
             // city) has no authored nodes: grow it exactly like the level loader
             // does, or the offline render shows bare ground where the city is.
+            // levelGround (natural) gates the metro's terrain-aware layout and
+            // drapes the mesh.
             if (roadBlock.contains("generate"))
-                applyGenerateRecipe(net, roadBlock["generate"]);
+                applyGenerateRecipe(net, roadBlock["generate"], levelGround);
             Material rm = Material::pbr(Vec3(1, 1, 1), 0.0, 0.93);
-            if (net.markings)   // lane paint via the RoadMarkings surface, not geometry
+            if (net.look.markings)   // lane paint via the RoadMarkings surface, not geometry
                 rm.surface = static_cast<int>(RenderMaterial::Surface::RoadMarkings);
             int mi = scene.addMaterial(rm);
-            addMeshAsTriangles(buildRoadNetMesh(net), Vec3(), Quat::identity(),
-                               Vec3(1, 1, 1), mi, scene);
+            addMeshAsTriangles(buildRoadNetMesh(net, levelGround), Vec3(),
+                               Quat::identity(), Vec3(1, 1, 1), mi, scene);
             continue;
         }
         static const char* SUPPORTED[] = {"sphere", "box", "plane", "cylinder",

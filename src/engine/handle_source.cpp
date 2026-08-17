@@ -1,6 +1,6 @@
 #include "handle_source.h"
 
-#include "procgen/city/road_net.h"   // RoadNet + its edit ops
+#include "procgen/city/road_net.h"   // RoadEntity + its edit ops
 
 namespace engine {
 
@@ -31,20 +31,24 @@ std::vector<std::pair<Vec3, Vec3>> CurveHandleSource::previewSegments() const {
     return segs;
 }
 
-// --- RoadNet -----------------------------------------------------------------
+// --- RoadEntity -----------------------------------------------------------------
 namespace {
-Vec3 roadHandlePos(const RoadNet& net, const Vec2& p) {
-    double y = (net.heightAt ? net.heightAt(p.x, p.y) : 0.0) + net.lift + 0.1;
+Vec3 roadHandlePos(const RoadEntity& road,
+                   const std::function<double(double, double)>& ground,
+                   const Vec2& p) {
+    double y = (ground ? ground(p.x, p.y) : 0.0) + road.look.lift + 0.1;
     return Vec3(p.x, y, p.y);                       // road is an XZ network; y from terrain
 }
 }  // namespace
 
 std::vector<EditHandle> RoadHandleSource::handles() const {
     std::vector<EditHandle> out;
-    for (int i = 0; i < static_cast<int>(net->nodes.size()); ++i) {
-        out.push_back({roadHandlePos(*net, net->nodes[i]), HandleKind::Knot, i});
+    const RoadGraph& g = net->graph;
+    for (int i = 0; i < static_cast<int>(g.nodes.size()); ++i) {
+        out.push_back({roadHandlePos(*net, ground, g.nodes[i].pos), HandleKind::Knot, i});
         Vec2 t = roadNetTangentAt(*net, i);         // every road is a spline: one tangent handle per node
-        out.push_back({roadHandlePos(*net, net->nodes[i] + t), HandleKind::TangentOut, i});
+        out.push_back({roadHandlePos(*net, ground, g.nodes[i].pos + t),
+                       HandleKind::TangentOut, i});
     }
     return out;
 }
@@ -54,18 +58,19 @@ void RoadHandleSource::moveHandle(const EditHandle& h, const Vec3& worldPos) {
     if (h.kind == HandleKind::Knot) {
         roadNetMoveNode(*net, h.index, xz);
     } else if (h.kind == HandleKind::TangentOut) {
-        if (h.index >= 0 && h.index < static_cast<int>(net->nodes.size()))
-            roadNetSetTangent(*net, h.index, xz - net->nodes[h.index]);
+        if (h.index >= 0 && h.index < static_cast<int>(net->graph.nodes.size()))
+            roadNetSetTangent(*net, h.index, xz - net->graph.nodes[h.index].pos);
     }
 }
 
 std::vector<std::pair<Vec3, Vec3>> RoadHandleSource::previewSegments() const {
     std::vector<std::pair<Vec3, Vec3>> segs;
-    const int n = static_cast<int>(net->nodes.size());
-    for (const std::array<int, 2>& e : net->edges) {
-        if (e[0] < 0 || e[1] < 0 || e[0] >= n || e[1] >= n) continue;
-        segs.push_back({roadHandlePos(*net, net->nodes[e[0]]),
-                        roadHandlePos(*net, net->nodes[e[1]])});
+    const RoadGraph& g = net->graph;
+    const int n = static_cast<int>(g.nodes.size());
+    for (const RoadEdge& e : g.edges) {
+        if (e.a < 0 || e.b < 0 || e.a >= n || e.b >= n) continue;
+        segs.push_back({roadHandlePos(*net, ground, g.nodes[e.a].pos),
+                        roadHandlePos(*net, ground, g.nodes[e.b].pos)});
     }
     return segs;
 }

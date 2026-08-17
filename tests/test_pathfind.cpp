@@ -82,16 +82,23 @@ TEST_CASE(pathfind_walkers_need_sidewalk_bands) {
     // sidewalk bands (a country road through the block), and a longer L-shaped
     // pair of ordinary streets with sidewalks. Cars take the short cut; a
     // pedestrian must go around.
-    engine::RoadNet net;
-    net.nodes = { engine::Vec2(0, 0), engine::Vec2(100, 0), engine::Vec2(0, 90),
-                  engine::Vec2(100, 90) };
-    net.edges = { { 0, 1 },            // direct: dirt (no sidewalk band)
-                  { 0, 2 }, { 2, 3 }, { 3, 1 } };   // around: local streets
-    net.width = 7.0;
-    net.specs = { engine::roadSpecPreset("dirt"),
-                  engine::roadSpecPreset("local") };
-    net.edgeSpecs = { 0, 1, 1, 1 };
-    NavGraph nav = buildNavGraph(engine::navRoadGraph(net));
+    engine::RoadEntity net;
+    net.look.defaultWidth = 7.0;
+    net.graph.nodes = { engine::RoadNode{engine::Vec2(0, 0)},
+                        engine::RoadNode{engine::Vec2(100, 0)},
+                        engine::RoadNode{engine::Vec2(0, 90)},
+                        engine::RoadNode{engine::Vec2(100, 90)} };
+    net.graph.addEdge(0, 1, 7.0);      // direct: dirt (no sidewalk band)
+    net.graph.addEdge(0, 2, 7.0);      // around: local streets
+    net.graph.addEdge(2, 3, 7.0);
+    net.graph.addEdge(3, 1, 7.0);
+    net.graph.specs = { engine::roadSpecPreset("dirt"),
+                        engine::roadSpecPreset("local") };
+    net.graph.edges[0].spec = 0;
+    net.graph.edges[1].spec = 1;
+    net.graph.edges[2].spec = 1;
+    net.graph.edges[3].spec = 1;
+    NavGraph nav = buildNavGraph(engine::navRoadGraph(net, nullptr));
 
     const int s = nav.nearestNode(engine::Vec2(0, 0));
     const int g = nav.nearestNode(engine::Vec2(100, 0));
@@ -112,19 +119,24 @@ TEST_CASE(pathfind_walkers_never_route_the_authored_freeway) {
     // the DATA level here: the freeway3 spec has no Sidewalk band, so the
     // edge is unwalkable BEFORE the class rule even looks, and an on-foot
     // route between its endpoints goes around on the streets.
-    engine::RoadNet net;
-    net.nodes = { engine::Vec2(0, 0), engine::Vec2(200, 0), engine::Vec2(0, 80),
-                  engine::Vec2(200, 80) };
-    net.edges = { { 0, 1 },            // direct: freeway carriageway
-                  { 0, 2 }, { 2, 3 }, { 3, 1 } };   // around: local streets
-    net.width = 8.0;
-    net.edgeClasses = { engine::RoadClass::Freeway, engine::RoadClass::Local,
-                        engine::RoadClass::Local, engine::RoadClass::Local };
-    net.specs = { engine::roadSpecPreset("freeway3"),
-                  engine::roadSpecPreset("local") };
-    net.edgeSpecs = { 0, 1, 1, 1 };
+    engine::RoadEntity net;
+    net.look.defaultWidth = 8.0;
+    net.graph.nodes = { engine::RoadNode{engine::Vec2(0, 0)},
+                        engine::RoadNode{engine::Vec2(200, 0)},
+                        engine::RoadNode{engine::Vec2(0, 80)},
+                        engine::RoadNode{engine::Vec2(200, 80)} };
+    net.graph.addEdge(0, 1, 8.0, engine::RoadClass::Freeway);   // direct: freeway carriageway
+    net.graph.addEdge(0, 2, 8.0, engine::RoadClass::Local);     // around: local streets
+    net.graph.addEdge(2, 3, 8.0, engine::RoadClass::Local);
+    net.graph.addEdge(3, 1, 8.0, engine::RoadClass::Local);
+    net.graph.specs = { engine::roadSpecPreset("freeway3"),
+                        engine::roadSpecPreset("local") };
+    net.graph.edges[0].spec = 0;
+    net.graph.edges[1].spec = 1;
+    net.graph.edges[2].spec = 1;
+    net.graph.edges[3].spec = 1;
 
-    engine::RoadGraph rg = engine::navRoadGraph(net);
+    engine::RoadGraph rg = engine::navRoadGraph(net, nullptr);
     bool sawFreewayUnwalkable = false;
     for (const engine::RoadEdge& re : rg.edges)
         if (re.klass == engine::RoadClass::Freeway) {

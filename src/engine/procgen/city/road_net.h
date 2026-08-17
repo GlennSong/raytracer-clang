@@ -3,103 +3,55 @@
 
 #include "road_mesh.h"          // UnionSpine, strokeRibbon, roadProfile, RenderMesh
 #include "road_spec.h"          // RoadSpec band model (roads-v2 Part 1)
-#include "road_network.h"       // RoadGraph (constrainedNetGraph return type)
+#include "road_network.h"       // RoadGraph — the ONE road graph
 #include "structure_set.h"      // StructureSet, StructureParams (buildRoadWalls)
 #include "metro.h"              // CityHub (polycentric zoning handoff)
 #include <nlohmann/json.hpp>
-#include <array>
 #include <functional>
+#include <string>
 #include <vector>
 
 namespace engine {
 
-// An editor-authored road network (ADR-0049): a small graph of control nodes
-// joined by edges, plus the look (width, sidewalk, markings, ...). The editable
-// counterpart to the procedural city.road_mesh — promoted to a first-class entity
-// so the inspector can WIDEN it and the viewport can DRAG its nodes, regenerating
-// the carriageway live through buildRoadNetLattice (the one road mesher).
-// `heightAt` drapes it on the level terrain; it is set on load, not serialized.
-struct RoadNet {
-    std::vector<Vec2> nodes;
-    std::vector<std::array<int, 2>> edges;     // node-index pairs (0-based)
-    // Spline shape (ADR-0049): EVERY edge is a Catmull-Rom spline, sampled as a Hermite cubic through
-    // its endpoints' tangents — a straight road is just the collinear case, which the sampler collapses
-    // back to a single segment. `tangents` is one through-direction per node (parallel to `nodes`); a
-    // zero (or missing) tangent is auto — Catmull-Rom on a through-road, straight into a junction/
-    // dead-end. Editing a tangent overrides the auto for that knot, so any road is shapeable by
-    // dragging its handles.
-    std::vector<Vec2> tangents;
-    // Optional per-node ABSOLUTE deck elevation (parallel to `nodes`; NaN or
-    // missing = at-grade, drape on terrain). A finite value authors an ELEVATED
-    // road: the node rides at that world Y and the ONE welder meshes it as a deck
-    // (UnionSpine.yAbs) — the same welder that meshes streets, no separate bridge
-    // mesher. Interior spline samples interpolate between two authored endpoints;
-    // a chain with any at-grade node drapes (welder needs a homogeneous chain).
-    std::vector<double> nodeElev;
-    // Semantic-layer HINTS (roads-v2.2 #17): JunctionKind per node (parallel
-    // to `nodes`; short/missing = Auto). bakeCorridorIntoNet stamps its gores
-    // and landings here — the bake KNOWS which side of the interchange it
-    // built; classifyRoadGraph honours a hint at degree >= 3 and derives the
-    // rest. Not serialized: the bake re-stamps on every load/regen.
-    std::vector<uint8_t> nodeKinds;
-    double width = 10.0;                        // default carriageway width (m) — widen control
-    // Optional per-edge width override (parallel to `edges`; <= 0 or missing = use the
-    // default `width`). Lets a road taper or a slip road run narrower than its trunk.
-    //
-    // NOT deprecated, despite what this comment said until 2026-08-15. `specs`/
-    // `edgeSpecs` were meant to supersede it, but they are only populated on the
-    // `"metro"` path (`road_net.cpp`: `if (kind == "metro" && ...)`); district-kind
-    // levels are specless. So `roadNetEdgeWidth()` — which reads THIS field — is the
-    // one width every consumer agrees on: the lattice mesher, nav lane spacing, lot
-    // road clearance (`pushPolyClearOfRoads`) and parking bands all resolve through
-    // it. See the "width agreement crux" note in road_net.cpp.
-    //
-    // The real fix is not removal but STORAGE: this and the seven other parallel
-    // arrays below cost 54 defensive .size() guards across five files, plus the
-    // roadNetEdgeWidth() accessor that exists only because this one may be short
-    // or absent. Holding a std::vector<RoadEdge> — the struct RoadGraph already
-    // uses — collapses all of that, with the JSON wire format left parallel so no
-    // saved level changes. See docs/city-pipeline.md § "RoadGraph vs RoadNet".
-    std::vector<double> edgeWidths;
-    // Roads-v2 band model: the net's spec table + a per-edge index into it
-    // (parallel to `edges`; -1/missing = legacy, synthesized from width/sidewalk).
-    std::vector<RoadSpec> specs;
-    std::vector<int> edgeSpecs;
-    // Roads-v2 S3: 1 = this edge was BAKED from a corridor solve (the corridor
-    // still draws/carves/navigates itself, so street passes skip these). An
-    // AUTHORED freeway-class edge (edge_classes in JSON — weld_freeway_lab)
-    // keeps 0 and is meshed by the street path as before.
-    std::vector<uint8_t> edgeBaked;
-    // Optional per-edge grade-separation layer (parallel to `edges`; 0 or missing = ground,
-    // ADR-0051). An edge on a higher layer than one it crosses is a bridge: it is lifted onto
-    // a deck that clears the lower road (clearanceProfile) instead of forming an intersection.
-    std::vector<int> edgeLayers;
-    // Optional per-edge road CLASS (parallel to `edges`; missing/short = Local).
-    // The generator writes the arterial/collector/local class its recipe grew so
-    // the mesher, markings, and nav can vary by class instead of treating every
-    // surface edge as a bare Local — the first step of the graph unification
-    // (road-unification-plan P1). Hand-authored/edited edges default to Local.
-    std::vector<RoadClass> edgeClasses;
-    double sidewalk = 3.5;                      // raised sidewalk width per verge (m)
-                                                // (device: "sidewalks should be wider")
-    double curb = 0.16;                         // curb height (m)
-    double cornerRadius = 3.0;                  // rounded kerb-return radius (m)
-    double lift = 0.08;                         // raise above the ground (m) — just
-                                                // enough to clear z-fighting; the road
-                                                // should hug the ground (device feedback)
+// The road entity (ADR-0049, unified per docs/road-graph-unification-plan.md):
+// ONE topology (`RoadGraph` — the same struct every generator returns and the
+// mesher consumes), split from the two things that used to be welded onto it:
+// how it is DRAWN (`RoadLook`) and what the generator KNEW (`RoadPlan`).
+//
+// The old `RoadNet` held topology as eight parallel arrays with fallback
+// semantics (a short `edgeWidths` meant "use the default width"), which cost 54
+// defensive size() guards across five files. Those fallbacks are now resolved
+// ONCE at construction — `RoadEdge::width` is always the real width, `klass`/
+// `layer`/`spec`/`baked` always present — and the JSON wire format keeps the
+// parallel shape only inside roadNetFromJson/roadNetToJson, so no saved level
+// changes. The terrain sampler (`heightAt`) is no longer stored on the entity
+// at all: it is one load's ephemeral state, so every reader takes it as a
+// parameter, exactly like buildRoadNetLattice always did.
+
+// ---- presentation: how the road is drawn, not what it is -------------------
+struct RoadLook {
+    double defaultWidth = 10.0;   // seeds RoadEdge::width where unspecified ("widen" control)
+    double sidewalk = 3.5;        // raised sidewalk width per verge (m)
+                                  // (device: "sidewalks should be wider")
+    double curb = 0.16;           // curb height (m)
+    double cornerRadius = 3.0;    // rounded kerb-return radius (m)
+    double lift = 0.08;           // raise above the ground (m) — just enough to
+                                  // clear z-fighting; the road should hug the
+                                  // ground (device feedback)
     bool   markings = true;
     bool   crosswalks = true;
     // Junction policy (ADR-0075 P0): may the constraints pass PROMOTE a busy or
     // over-acute node to a roundabout ring? Generated nets (metro/district)
     // planarize + cap degree instead and set this false; the mesh and terrain-
-    // conform passes must honour it, or they silently re-promote roundabouts the
-    // generator never intended (buildRoadNetMesh + constrainedNetGraph used to
-    // re-run applyConstraints with default rules). Hand-authored nets keep true.
+    // conform passes must honour it. Hand-authored roads keep true.
     bool   autoRoundabout = true;
     Vec3   color{0.09, 0.09, 0.10};
-    std::function<double(double, double)> heightAt;   // terrain drape (flat if unset)
+};
+
+// ---- provenance: what the generator knew, for downstream passes ------------
+struct RoadPlan {
     // Hubs the metro recipe grew this net around (with district kinds), so lot
-    // growth can zone polycentrically. Empty for hand-authored/district nets.
+    // growth can zone polycentrically. Empty for hand-authored/district roads.
     std::vector<CityHub> cityHubs;
     // §10.6: freeway CORRIDOR plans the metro recipe routed hub-to-hub —
     // anchor polylines the loader builds as real corridors (alignment,
@@ -112,19 +64,46 @@ struct RoadNet {
     std::vector<Footprint> siteFootprints;
 };
 
-// Build the road surface for `net` (its graph swept by buildRoadNetLattice).
-RenderMesh buildRoadNetMesh(const RoadNet& net);
+// ---- the editable road entity/component (replaces RoadNet) -----------------
+// Notes carried over from the parallel-array era, still true of the graph form:
+//  * EVERY edge is a Catmull-Rom spline sampled as a Hermite cubic through its
+//    endpoints' tangents (`RoadNode::tangent`; zero = auto). A straight road is
+//    the collinear case, which the sampler collapses back to one segment.
+//  * `RoadNode::elevAbsolute` authors an ELEVATED road: the node rides at that
+//    world Y and the ONE welder meshes it as a deck (UnionSpine.yAbs) — no
+//    separate bridge mesher. false = at-grade, drape on terrain.
+//  * `RoadNode::kind` is a semantic-layer HINT (roads-v2.2 #17): the corridor
+//    bake stamps its gores and landings (it KNOWS which side of the interchange
+//    it built); classifyRoadGraph honours a hint at degree >= 3. Not
+//    serialized: the bake re-stamps on every load/regen.
+//  * `RoadEdge::baked` marks an edge BAKED from a corridor solve (street passes
+//    skip it); an AUTHORED freeway-class edge keeps false and meshes normally.
+//  * `RoadEdge::spec` indexes `graph.specs` (-1 = legacy: synthesized from the
+//    edge width + look. Only the `"metro"` path populates specs; district
+//    levels are specless and MUST keep working through the -1 synthesis).
+struct RoadEntity {
+    RoadGraph graph;
+    RoadLook  look;
+    RoadPlan  plan;
+};
+
+// The terrain sampler roads drape on. One load's state — never stored, never
+// serialized; pass what the loader (or the editor's conform pass) knows.
+using RoadGroundFn = std::function<double(double, double)>;
+
+// Build the road surface for `road` (its graph swept by buildRoadNetLattice).
+// `heightAt` drapes it on the level terrain (null = flat).
+RenderMesh buildRoadNetMesh(const RoadEntity& road, const RoadGroundFn& heightAt);
 
 // Swept-lattice street mesher (street-lattice-plan.md, stage 3): sweep each chain
 // as a lattice body trimmed to the junction boundary, and fill each deg>=3 node
 // with a Coons junction patch that shares the bodies' mouth rings — so the
 // surface is quads with interior vertices (conforms to terrain) and junctions
-// interpolate height (no medial-axis step). Not yet the buildRoadNetMesh default;
-// proven on its own first. `heightAt` drapes the streets (null = flat).
-// `chainTriEndsOut` (optional, diagnostics): index-buffer position after each
-// swept chain BODY, in order; back() is where bodies end and junction PADS
-// begin. The surface-scan tests use it to classify which surfaces stack
-// (same-chain self-fold / cross-chain / body-pad / pad-pad).
+// interpolate height (no medial-axis step). `heightAt` drapes the streets
+// (null = flat). `chainTriEndsOut` (optional, diagnostics): index-buffer
+// position after each swept chain BODY, in order; back() is where bodies end
+// and junction PADS begin. The surface-scan tests use it to classify which
+// surfaces stack (same-chain self-fold / cross-chain / body-pad / pad-pad).
 RenderMesh buildRoadNetLattice(const RoadGraph& g,
                                const std::function<Real(Real, Real)>& heightAt,
                                std::vector<std::size_t>* chainTriEndsOut = nullptr,
@@ -134,93 +113,107 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
 // The sampled + constrained road graph the mesher builds from: every edge sampled
 // to a fine polyline (a curved road becomes a chain of short straight edges; a
 // straight run collapses back to one), with the local roundabout constraints
-// applied — exactly the geometry the carriageway is meshed over. Exposed so
-// runtime consumers (the navigation graph, ADR-0059) route on the SAME centrelines
-// the asphalt is drawn on. (Wraps the file-local builder; defined in road_net.cpp.)
-RoadGraph navRoadGraph(const RoadNet& net);
+// applied — exactly the geometry the carriageway is meshed over. Runtime
+// consumers (the navigation graph, ADR-0059) route on the SAME centrelines the
+// asphalt is drawn on. This is real work (spline sampling + constraints +
+// semantic classification), not a representation change — the entity's control
+// graph is already a RoadGraph.
+RoadGraph navRoadGraph(const RoadEntity& road, const RoadGroundFn& heightAt);
 
-// The full sampled graph INCLUDING baked corridor edges — what the unified
-// mesher (roads-v2.1 R1) and the bake-fidelity tests build from.
-RoadGraph roadNetFullGraph(const RoadNet& net);
+// The full sampled+constrained graph, baked corridor edges INCLUDED — what the
+// unified mesher (roads-v2.1 R1) and the bake-fidelity tests build from.
+// (Since roads-v2.1 2e navRoadGraph keeps baked edges too; the two names are
+// kept for their distinct call-site intents.)
+RoadGraph roadNetFullGraph(const RoadEntity& road, const RoadGroundFn& heightAt);
 
 // Diagnostic accessors: the mesher's exact constrained graph + weld-chain
 // decomposition, so instruments (RT_POKE_REPORT) measure the deck the mesh
 // actually rides — not a near-miss reconstruction.
-RoadGraph roadNetConstrainedGraph(const RoadNet& net);
+RoadGraph roadNetConstrainedGraph(const RoadEntity& road, const RoadGroundFn& heightAt);
 std::vector<UnionSpine> roadNetWeldSpines(const RoadGraph& g);
 
 // The terrain cut/fill footprints that grade the ground to this road (ADR-0044 corridor
-// conforming). Traces the net's chains, gives each a smoothed, grade-limited vertical
-// profile (roadProfile, over `net.heightAt`), and emits a flatten ramp per segment at the
+// conforming). Traces the graph's chains, gives each a smoothed, grade-limited vertical
+// profile (roadProfile, over `heightAt`), and emits a flatten ramp per segment at the
 // profile, half-width = carriageway + `shoulder`, feathered over `falloff`. The loader
 // folds these into the level terrain before it builds, so the ground meets the road and no
-// terrain pokes through. Empty if `net.heightAt` is unset (a flat road needs no carving).
-std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& net, double shoulder = 1.5,
+// terrain pokes through. Empty if `heightAt` is null (a flat road needs no carving).
+std::vector<TerrainFlatten> roadNetConformRegions(const RoadEntity& road,
+                                                  const RoadGroundFn& heightAt,
+                                                  double shoulder = 1.5,
                                                   double falloff = 8.0, double maxGrade = 0.10);
 
-// Retaining / fill walls for a road net whose `heightAt` is the NATURAL (pre-carve)
+// Retaining / fill walls for a road whose `heightAt` is the NATURAL (pre-carve)
 // ground (ADR-0075 Phase 1). Reuses the SAME spine + grade-limited profile as
 // roadNetConformRegions, so a wall stands exactly where the terrain batter clamps
 // at `p.reach` — capping the residual step a steep cut/fill can't daylight, never
 // double-counting it. The 3-D grade-break geometry the 2.5-D ground defers to a
-// StructureSet. Empty on flat ground or when `net.heightAt` is unset.
-StructureSet buildRoadWalls(const RoadNet& net, const StructureParams& p = {});
+// StructureSet. Empty on flat ground or when `heightAt` is null.
+StructureSet buildRoadWalls(const RoadEntity& road, const RoadGroundFn& heightAt,
+                            const StructureParams& p = {});
 
-// --- editor edit ops (each leaves the net ready for buildRoadNetMesh) ----------
-// Set the default carriageway width (the inspector "Width" control — "widen a road").
-void roadNetSetWidth(RoadNet& net, double width);
-// The SPEC of edge `ei`: its entry in the net's spec table when assigned, else a
-// legacy synthesis from width/sidewalk/curb — so every edge answers the band
-// model even before its level is migrated (roads-v2 compat shim).
-RoadSpec roadNetEdgeSpec(const RoadNet& net, int ei);
-// Roads-v2 S3b: the net with baked corridor edges (Freeway/Ramp) removed —
+// --- editor edit ops (each leaves the road ready for buildRoadNetMesh) ---------
+// The SPEC of edge `ei`: its entry in the graph's spec table when assigned, else
+// a legacy synthesis from the edge's (always-resolved) width + the look's
+// sidewalk/curb — so every edge answers the band model even before its level is
+// migrated (roads-v2 compat shim).
+RoadSpec roadNetEdgeSpec(const RoadEntity& road, int ei);
+// Roads-v2 S3b: the road with baked corridor edges (Freeway/Ramp) removed —
 // what the street mesher/conform/nav consume while the corridor still draws
 // itself. Nodes are preserved so indices stay stable.
-RoadNet roadNetStreetsOnly(const RoadNet& net);
-// Width of edge `ei` (its per-edge override if set, else the default `width`).
-double roadNetEdgeWidth(const RoadNet& net, int ei);
-// Override edge `ei`'s width (the viewport per-edge widen). w <= 0 reverts to default.
-bool roadNetSetEdgeWidth(RoadNet& net, int ei, double w);
+RoadEntity roadNetStreetsOnly(const RoadEntity& road);
+// Override edge `ei`'s width (the viewport per-edge widen). w <= 0 reverts to
+// the look's default width. False if out of range.
+bool roadNetSetEdgeWidth(RoadEntity& road, int ei, double w);
 // Move control node `i` to `pos` (the viewport node drag). False if out of range.
-bool roadNetMoveNode(RoadNet& net, int i, const Vec2& pos);
+bool roadNetMoveNode(RoadEntity& road, int i, const Vec2& pos);
 // Set node `i`'s tangent (the viewport tangent-handle drag). A zero tangent reverts
 // the knot to auto (Catmull-Rom). False if out of range.
-bool roadNetSetTangent(RoadNet& net, int i, const Vec2& tangent);
+bool roadNetSetTangent(RoadEntity& road, int i, const Vec2& tangent);
 // Node `i`'s effective tangent (the stored override, or the auto Catmull-Rom/chord
 // the curve actually uses) — what the viewport seeds the tangent handle from.
-Vec2 roadNetTangentAt(const RoadNet& net, int i);
+Vec2 roadNetTangentAt(const RoadEntity& road, int i);
 
 // --- topology edits: the viewport's add / split / delete (ADR-0049) -----------
 // Append a control node at `pos`; returns its index.
-int  roadNetAddNode(RoadNet& net, const Vec2& pos);
+int  roadNetAddNode(RoadEntity& road, const Vec2& pos);
 // Connect nodes a and b. Ignored (returns false) if invalid, equal, or already joined.
-bool roadNetAddEdge(RoadNet& net, int a, int b);
+bool roadNetAddEdge(RoadEntity& road, int a, int b);
 // Append a node at `pos` joined to `from` — grow a road from an end. -1 if `from` bad.
-int  roadNetExtend(RoadNet& net, int from, const Vec2& pos);
+int  roadNetExtend(RoadEntity& road, int from, const Vec2& pos);
 // Insert a node at `pos` into edge `edgeIndex`, splitting it in two; returns the new
 // node index (the "click a road to add a point" op). -1 if the edge index is bad.
-int  roadNetSplitEdge(RoadNet& net, int edgeIndex, const Vec2& pos);
+int  roadNetSplitEdge(RoadEntity& road, int edgeIndex, const Vec2& pos);
 // Delete node `i` and its incident edges, reindexing the rest. False if out of range.
-bool roadNetDeleteNode(RoadNet& net, int i);
+bool roadNetDeleteNode(RoadEntity& road, int i);
 // The edge nearest `p` within `maxDist` (chord distance), or -1 — for viewport edge
 // picking (which road segment did the user click to split?).
-int  roadNetNearestEdge(const RoadNet& net, const Vec2& p, double maxDist);
+int  roadNetNearestEdge(const RoadEntity& road, const Vec2& p, double maxDist);
 
 // --- level I/O: the `road` block of a shape:"road" entity ----------------------
-RoadNet roadNetFromJson(const nlohmann::json& j);
-nlohmann::json roadNetToJson(const RoadNet& net);
+// The wire format is UNCHANGED (parallel arrays, sparse overrides): these two
+// functions are the ONLY code that still knows that shape — they transpose on
+// the way in (resolving every fallback: a missing/zero edge width becomes the
+// default width, a short class array becomes Local, a null node_elev becomes
+// at-grade) and reconstruct the sparse form on the way out.
+RoadEntity roadNetFromJson(const nlohmann::json& j);
+nlohmann::json roadNetToJson(const RoadEntity& road);
 
-// Build a generated road's graph from a "generate" recipe block (district kind): runs buildDistrict,
-// caps junction degree to <=4, planarizes, and fills net.nodes/edges/edgeWidths — leaving the look
-// params and heightAt untouched. Shared by the loader (initial build) and the editor (regenerate
-// from the tuning panel). No-op if `generate` isn't a recipe object. (road-network-v2-plan T2.1)
-void applyGenerateRecipe(RoadNet& net, const nlohmann::json& generate);
+// Build a generated road's graph from a "generate" recipe block (district kind): runs
+// buildDistrict, caps junction degree to <=4, planarizes, and assigns the result to
+// road.graph — leaving the look untouched. `heightAt` gates terrain-aware metro layout
+// (buildability); pass what the loader knows (null = not terrain-aware). Shared by the
+// loader (initial build) and the editor (regenerate from the tuning panel). No-op if
+// `generate` isn't a recipe object. (road-network-v2-plan T2.1)
+void applyGenerateRecipe(RoadEntity& road, const nlohmann::json& generate,
+                         const RoadGroundFn& heightAt);
 
-// The JSON to SAVE for an (edited) road, given its current recipe and live net: a GENERATED road
-// keeps its "generate" block with only the look refreshed from `net` (never baking the nodes — that
-// lost the recipe, the grown.json "save changed" bug); a hand-authored road serialises the net in
-// full. The editor's regenerate writes this back to SourceSpec.recipe. (road-network-v2-plan T2.1)
-nlohmann::json roadRecipeForSave(const std::string& currentRecipe, const RoadNet& net);
+// The JSON to SAVE for an (edited) road, given its current recipe and live graph: a
+// GENERATED road keeps its "generate" block with only the look refreshed (never baking the
+// nodes — that lost the recipe, the grown.json "save changed" bug); a hand-authored road
+// serialises the graph in full. The editor's regenerate writes this back to
+// SourceSpec.recipe. (road-network-v2-plan T2.1)
+nlohmann::json roadRecipeForSave(const std::string& currentRecipe, const RoadEntity& road);
 
 }  // namespace engine
 

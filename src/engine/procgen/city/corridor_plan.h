@@ -21,7 +21,7 @@
 // for ONE net — the editor's recipe-Regenerate entry point.
 
 #include "alignment.h"     // CorridorDef
-#include "road_net.h"      // RoadNet
+#include "road_net.h"      // RoadEntity
 
 #include <functional>
 #include <utility>
@@ -58,7 +58,7 @@ std::vector<PlannedCorridor> planCorridorRoutes(
 
 // §10.6: cut street edges that cross a LOW span of any corridor (under-side
 // clearance below the ~5 m highway standard). Mutates the nets' edge lists.
-void cutStreetsUnderCorridors(const std::vector<RoadNet*>& nets,
+void cutStreetsUnderCorridors(const std::vector<RoadEntity*>& nets,
                               const std::vector<CorridorDef>& defs,
                               const std::function<Real(Real, Real)>& ground);
 
@@ -68,14 +68,16 @@ void cutStreetsUnderCorridors(const std::vector<RoadNet*>& nets,
 // exit, the (net index, node index) street anchor it landed on ({-1,-1} =
 // dropped or no anchor).
 std::vector<std::pair<int, int>> resolveCorridorLandings(
-    CorridorDef& def, const std::vector<RoadNet*>& nets,
+    CorridorDef& def, const std::vector<RoadEntity*>& nets,
     const std::function<Real(Real, Real)>& ground);
 
 // The editor's recipe-Regenerate: re-run plan -> cut -> land -> author -> bake
-// for one freshly regenerated net, using its own freewayPlans / nodes /
-// heightAt. Returns the number of corridors baked (0 if the net has no plans
-// or no ground sampler).
-int rebakeNetCorridors(RoadNet& net, Real interchangeSpacing);
+// for one freshly regenerated road, using its own plan.freewayPlans + graph.
+// `heightAt` is the level terrain (the corridors route and audit against it).
+// Returns the number of corridors baked (0 if the road has no plans or no
+// ground sampler).
+int rebakeNetCorridors(RoadEntity& road, Real interchangeSpacing,
+                       const RoadGroundFn& heightAt);
 
 }  // namespace engine
 

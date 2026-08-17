@@ -145,26 +145,30 @@ TEST_CASE(clearance_hugs_ground_when_unconstrained) {
 #include "../src/engine/procgen/city/road_net.h"
 #include <nlohmann/json.hpp>
 
-// edge_layers survives a JSON round-trip.
+// edge layers survive a JSON round-trip.
 TEST_CASE(road_net_edge_layers_roundtrip) {
-    RoadNet net;
-    net.nodes = { Vec2(-100, 0), Vec2(100, 0), Vec2(0, -100), Vec2(0, 100) };
-    net.edges = { {0, 1}, {2, 3} };
-    net.edgeLayers = { 0, 1 };
-    RoadNet back = roadNetFromJson(roadNetToJson(net));
-    CHECK(back.edgeLayers.size() == 2);
-    CHECK(back.edgeLayers[0] == 0);
-    CHECK(back.edgeLayers[1] == 1);
+    RoadEntity net;
+    net.graph.nodes = { RoadNode{Vec2(-100, 0)}, RoadNode{Vec2(100, 0)},
+                        RoadNode{Vec2(0, -100)}, RoadNode{Vec2(0, 100)} };
+    net.graph.addEdge(0, 1, net.look.defaultWidth);
+    net.graph.addEdge(2, 3, net.look.defaultWidth);
+    net.graph.edges[1].layer = 1;
+    RoadEntity back = roadNetFromJson(roadNetToJson(net));
+    CHECK(back.graph.edges.size() == 2);
+    CHECK(back.graph.edges[0].layer == 0);
+    CHECK(back.graph.edges[1].layer == 1);
 }
 
 // A ground road crossed by a layer-1 road builds a deck that rises well above grade.
 TEST_CASE(layered_net_lifts_a_bridge_deck) {
-    RoadNet net;
-    net.nodes = { Vec2(-130, 0), Vec2(130, 0), Vec2(0, -130), Vec2(0, 130) };
-    net.edges = { {0, 1}, {2, 3} };
-    net.edgeLayers = { 0, 1 };
-    net.width = 14.0; net.markings = false; net.crosswalks = false;
-    RenderMesh m = buildRoadNetMesh(net);
+    RoadEntity net;
+    net.look.defaultWidth = 14.0; net.look.markings = false; net.look.crosswalks = false;
+    net.graph.nodes = { RoadNode{Vec2(-130, 0)}, RoadNode{Vec2(130, 0)},
+                        RoadNode{Vec2(0, -130)}, RoadNode{Vec2(0, 130)} };
+    net.graph.addEdge(0, 1, net.look.defaultWidth);
+    net.graph.addEdge(2, 3, net.look.defaultWidth);
+    net.graph.edges[1].layer = 1;
+    RenderMesh m = buildRoadNetMesh(net, nullptr);
     CHECK(!m.vertices.empty());
     double maxY = -1e30;
     for (const Vertex& v : m.vertices) maxY = std::max(maxY, (double)v.position.y);
@@ -173,12 +177,13 @@ TEST_CASE(layered_net_lifts_a_bridge_deck) {
 
 // With both roads on layer 0 they intersect at grade — no lifted deck.
 TEST_CASE(same_layer_net_stays_flat) {
-    RoadNet net;
-    net.nodes = { Vec2(-130, 0), Vec2(130, 0), Vec2(0, -130), Vec2(0, 130) };
-    net.edges = { {0, 1}, {2, 3} };
-    net.edgeLayers = { 0, 0 };
-    net.width = 14.0;
-    RenderMesh m = buildRoadNetMesh(net);
+    RoadEntity net;
+    net.look.defaultWidth = 14.0;
+    net.graph.nodes = { RoadNode{Vec2(-130, 0)}, RoadNode{Vec2(130, 0)},
+                        RoadNode{Vec2(0, -130)}, RoadNode{Vec2(0, 130)} };
+    net.graph.addEdge(0, 1, net.look.defaultWidth);      // both edges on layer 0
+    net.graph.addEdge(2, 3, net.look.defaultWidth);
+    RenderMesh m = buildRoadNetMesh(net, nullptr);
     double maxY = -1e30;
     for (const Vertex& v : m.vertices) maxY = std::max(maxY, (double)v.position.y);
     CHECK(maxY < 2.0);     // everything sits near grade
@@ -231,24 +236,22 @@ TEST_CASE(grid_stays_connected_under_a_viaduct) {
     CHECK(gradeSeparationCount(g) == 3);         // the highway flies over 3 cross-streets
 }
 
-// The same network as an editable RoadNet meshes with a lifted viaduct over the grid.
+// The same network as an editable RoadEntity meshes with a lifted viaduct over the grid.
 TEST_CASE(grid_overpass_net_lifts_a_viaduct) {
-    RoadNet net;
+    RoadEntity net;
+    net.look.defaultWidth = 13.0; net.look.markings = true;
     double xs[3] = { -80, 0, 80 }, zs[3] = { -80, 0, 80 };
     int id[3][3], k = 0;
-    for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) { net.nodes.push_back(Vec2(xs[i], zs[j])); id[i][j] = k++; }
-    std::vector<int> layers;
+    for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) { net.graph.nodes.push_back(RoadNode{Vec2(xs[i], zs[j])}); id[i][j] = k++; }
     for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) {
-        if (j < 2) { net.edges.push_back({ id[i][j], id[i][j + 1] }); layers.push_back(0); }
-        if (i < 2) { net.edges.push_back({ id[i][j], id[i + 1][j] }); layers.push_back(0); }
+        if (j < 2) net.graph.addEdge(id[i][j], id[i][j + 1], net.look.defaultWidth);
+        if (i < 2) net.graph.addEdge(id[i][j], id[i + 1][j], net.look.defaultWidth);
     }
-    int h0 = (int)net.nodes.size(); net.nodes.push_back(Vec2(-150, 40));
-    int h1 = (int)net.nodes.size(); net.nodes.push_back(Vec2(150, 40));
-    net.edges.push_back({ h0, h1 }); layers.push_back(1);
-    net.edgeWidths.assign(net.edges.size(), 0.0); net.edgeWidths.back() = 24.0;
-    net.edgeLayers = layers;
-    net.width = 13.0; net.markings = true;
-    RenderMesh m = buildRoadNetMesh(net);
+    int h0 = (int)net.graph.nodes.size(); net.graph.nodes.push_back(RoadNode{Vec2(-150, 40)});
+    int h1 = (int)net.graph.nodes.size(); net.graph.nodes.push_back(RoadNode{Vec2(150, 40)});
+    net.graph.addEdge(h0, h1, 24.0);                // the wide viaduct...
+    net.graph.edges.back().layer = 1;               // ...on layer 1
+    RenderMesh m = buildRoadNetMesh(net, nullptr);
     CHECK(!m.vertices.empty());
     double maxY = -1e30;
     for (const Vertex& v : m.vertices) maxY = std::max(maxY, (double)v.position.y);
@@ -258,12 +261,14 @@ TEST_CASE(grid_overpass_net_lifts_a_viaduct) {
 // Regression: a crossing that lands exactly on a bridge sample vertex (a 300 m straight, so
 // the midpoint sample sits on the crossing) is still detected and lifted.
 TEST_CASE(bridge_crossing_on_a_vertex_still_lifts) {
-    RoadNet net;
-    net.nodes = { Vec2(-150, 0), Vec2(150, 0), Vec2(0, -150), Vec2(0, 150) };
-    net.edges = { {0, 1}, {2, 3} };
-    net.edgeLayers = { 0, 1 };
-    net.width = 16.0; net.markings = false;
-    RenderMesh m = buildRoadNetMesh(net);
+    RoadEntity net;
+    net.look.defaultWidth = 16.0; net.look.markings = false;
+    net.graph.nodes = { RoadNode{Vec2(-150, 0)}, RoadNode{Vec2(150, 0)},
+                        RoadNode{Vec2(0, -150)}, RoadNode{Vec2(0, 150)} };
+    net.graph.addEdge(0, 1, net.look.defaultWidth);
+    net.graph.addEdge(2, 3, net.look.defaultWidth);
+    net.graph.edges[1].layer = 1;
+    RenderMesh m = buildRoadNetMesh(net, nullptr);
     double maxY = -1e30;
     for (const Vertex& v : m.vertices) maxY = std::max(maxY, (double)v.position.y);
     CHECK(maxY > 4.0);

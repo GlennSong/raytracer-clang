@@ -1,6 +1,7 @@
 #ifndef RAYTRACER_ENGINE_PROCGEN_CITY_CITY_LOTS_H
 #define RAYTRACER_ENGINE_PROCGEN_CITY_CITY_LOTS_H
 
+#include "architect.h"      // ArchetypeBook (the Lua-authored selection layer)
 #include "polygon.h"        // Poly2, Vec2
 #include "shape_grammar.h"  // BuildingParams (the style-book hook's target)
 #include "../../../rt_math.h"   // Vec3
@@ -112,6 +113,15 @@ struct LotParams {
     Real parcelFrontWidth = -1;     // stock 16 (ParcelParams::frontWidth)
     Real parcelLotDepth = -1;       // stock 28 (ParcelParams::lotDepth)
     Real parcelCourtMinArea = -1;   // stock 400 (ParcelParams::courtMinArea)
+    // Stage-10 ALLEYS (courts-with-alleys round): when a block's parcelled lots
+    // sit beyond the frontage reach (rim-block outer rows, deep interiors), cut
+    // ONE service alley along the block's long axis so that land gains legal
+    // frontage instead of going green. `citysim.alleys` / `citysim.alleyWidth`.
+    bool alleys = true;
+    // Pavement width (m). 2.8 = 2 x lotSetback: centred on the rows' shared
+    // boundary, the lane's edges land exactly where building walls already
+    // stop, so cutting it never shrinks an existing row.
+    Real alleyWidth = 2.8;
     uint32_t seed = 1;
     // TERRAIN sampler (world y at x,z): buildings grow from their graded pad
     // plane (the ENTRANCE-side grade, so the front door sits level with the
@@ -129,6 +139,11 @@ struct LotParams {
     // hot-reloadable). Empty = the built-in looks. Row units get
     // "rowhouse_unit". Overrides must stay deterministic (pure data).
     std::function<void(const std::string& recipe, BuildingParams&)> styleHook;
+    // ARCHETYPE BOOK (architect.h): the Lua-authored SELECTION layer — per-
+    // district recipe weights, resolved to registry indices at load
+    // (makeArchetypeBook). Empty = the architect's compiled ladders. The
+    // style book restyles what stands; this book decides WHAT stands.
+    ArchetypeBook archetypeBook;
 };
 
 // The intermediate planning geometry, exposed for debug visualization: the block
@@ -137,6 +152,8 @@ struct LotParams {
 struct LotPlanDebug {
     std::vector<Poly2> blocks;   // buildable block interiors (inset from the roads)
     std::vector<Poly2> lots;     // every parcelled lot
+    // Stage-10 alleys cut this build: centreline segments (plan view + tests).
+    std::vector<std::pair<Vec2, Vec2>> alleys;
     // Why lots did NOT build (each one became a green) — the density tuning
     // dials. A "small town" city is usually one of these counters running hot.
     int rejChance = 0;   // lost the occupancy roll (plaza / gap)
@@ -202,7 +219,7 @@ std::vector<Poly2> edgeBlocks(const RoadGraph& roads,
 // city: combines every net into one planar graph, extracts the enclosed blocks,
 // synthesizes rim blocks on the open sides, and grows the lot buildings against
 // the SAMPLED centrelines (road clearance).
-struct RoadNet;   // road_net.h
+struct RoadEntity;   // road_net.h
 struct NetLotResult {
     std::vector<LotBuilding> lots;
     LotPlanDebug plan;               // blocks + lots, for debug overlays
@@ -219,10 +236,11 @@ struct NetLotResult {
 // `wantFlatParts`: also grow every building's LOD1 twin into `flatParts`
 // (city-render-perf R2). Off by default so the offline tracer and diagnostics
 // don't pay for a detail tier they never draw.
-NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
+NetLotResult growLotBuildingsOnNets(const std::vector<RoadEntity>& nets,
                                     const LotParams& params,
                                     const EdgeBlockParams& edgeParams,
                                     Real roadClearance,
+                                    const std::function<double(double, double)>& ground = nullptr,
                                     const RoadGraph* freewayROW = nullptr,
                                     bool wantFlatParts = false);
 

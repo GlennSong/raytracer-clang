@@ -299,30 +299,26 @@ TEST_CASE(lattice_winding_matches_the_engine_convention) {
     CHECK(upFacesInverted(body) == 0);          // 1152/1152 agree with the box
 }
 
-// KNOWN DEFECT — and the isolation below CORRECTS an earlier diagnosis, so read
-// the numbers before trusting any story about it.
-//
-// It was recorded as "junction pads fold on sloped ground": a Coons interior that
-// self-intersects, where no winding choice can help. That was wrong. The isolation
-// at the end of this test runs two graphs on FLAT ground with no junction pad at
-// all — the middle node of the bent one is degree 2 — and gets:
+// FIXED (2026-08-17) — and the isolation below is what CORRECTED the earlier
+// diagnosis, so the history stays: it was recorded as "junction pads fold on
+// sloped ground". Wrong. The isolation runs two graphs on FLAT ground with no
+// junction pad at all — the middle node of the bent one is degree 2 — and got
 //
 //     straight  0 inverted of 264
 //     bent      2 inverted of 276
 //
-// Slope is not involved and neither is the pad. The inversions appear at a BEND,
-// which puts the defect in the swept body's MITRE, not in junction-pad
-// construction. Reproducing it needs three nodes and no terrain.
+// Slope was not involved and neither was the pad: the inversions appeared at a
+// BEND, in the swept body's MITRE. The mechanism: at a kink the mitre ring's
+// INSIDE point sits hw*tan(halfAngle) BACK along both legs, and any fill ring
+// inside that reach is overrun by it — the inside edge doubles back and the
+// cell between them folds. The fix (road_lattice.cpp sampleRings): the fill
+// SKIPS the fold reach around each kink vertex, so the lattice spans from the
+// last clear ring straight to the mitre ring and the inside edge stays
+// monotone. (Per-CELL winding in emitLattice had earlier taken city.json from
+// 24 inverted of 11575 to 8; this removes the residue.)
 //
-// Deciding the lattice winding per CELL rather than once per sheet
-// (mesh_builder.cpp emitLattice) took city.json's roads from 24 inverted faces of
-// 11575 down to 8; these are the residue.
-//
-// This prints rather than asserts zero deliberately: an assertion that passes at
-// the current count would freeze the bug in place, and one that fails would be a
-// red gate nobody can act on today (docs/knowledge-retention-plan.md § "The gate
-// must be green, and honest"). Turn it into CHECK(upFacesInverted(...) == 0) once
-// the mitre is fixed.
+// The print became the assertion this comment always promised: zero inverted
+// up-faces, on the isolates AND on the full sloped net with junction pads.
 TEST_CASE(swept_body_inverts_a_few_faces_at_bends) {
     RoadGraph g;
     for (int i = 0; i <= 2; ++i)
@@ -354,11 +350,15 @@ TEST_CASE(swept_body_inverts_a_few_faces_at_bends) {
     std::printf("        [winding] ISOLATE: straight %d/%zu, bent %d/%zu\n",
                 upFacesInverted(ms), ms.indices.size() / 3,
                 upFacesInverted(mb), mb.indices.size() / 3);
-    std::printf("        [winding] KNOWN: net %d inverted / %zu tris, "
+    std::printf("        [winding] net %d inverted / %zu tris, "
                 "sidewalk-less %d / %zu\n",
                 upFacesInverted(net), net.indices.size() / 3,
                 upFacesInverted(bare), bare.indices.size() / 3);
     CHECK(net.indices.size() > 0);              // the mesh still builds
+    CHECK(upFacesInverted(ms) == 0);            // straight body: clean
+    CHECK(upFacesInverted(mb) == 0);            // THE RATCHET: the bend too
+    CHECK(upFacesInverted(net) == 0);           // and the full sloped net
+    CHECK(upFacesInverted(bare) == 0);          // with or without sidewalks
 }
 
 // WHY THE OBVIOUS TEST IS THE WRONG ONE (measured 2026-08-16).

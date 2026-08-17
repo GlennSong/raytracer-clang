@@ -18,7 +18,7 @@ namespace engine {
 // WRITE side the corridor writer + block grader push edits into.
 //
 // The three historically interchangeable closures — HeightSampler
-// (buildability.h), HeightField (terrain_field.h), and RoadNet::heightAt — are
+// (buildability.h), HeightField (terrain_field.h), and RoadEntity::heightAt — are
 // this field's interchange form; `sampler()` hands one out for APIs that still
 // take a bare closure. Ground is single-valued (2.5-D) by design: multi-valued
 // structures (retaining walls, bridges, tunnels) are a separate StructureSet
@@ -72,7 +72,7 @@ public:
     Vec3 normal(double x, double z, double eps = 0.5) const;
 
     // A HeightField closure over this field, for APIs that take a bare sampler
-    // (RoadNet::heightAt, LotParams::ground, buildability). Captures `this`, so
+    // (RoadEntity::heightAt, LotParams::ground, buildability). Captures `this`, so
     // the closure is valid only while this SurfaceField lives — the same
     // lifetime contract the engine's existing terrain closures already rely on
     // (they capture a stably-owned recipe). Rebuild the index before handing one

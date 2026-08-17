@@ -59,40 +59,40 @@ anchor) fork. The fix is to hoist those, not to rewrite.
 
 They share a word and nothing else.
 
-### `RoadGraph` vs `RoadNet` — the split is real, the storage is not
+### `RoadGraph` and `RoadEntity` — ONE topology (unified 2026-08-17)
 
-Two road types, and people keep asking which is canonical. Both are, for different
-jobs, and the boundary is worth stating rather than re-deriving:
+The old two-type split (`RoadGraph` + a parallel-array `RoadNet`) is gone —
+`docs/road-graph-unification-plan.md` steps 3–6 landed. What ships now:
 
-- **`RoadNet`** (`road_net.h`) is the AUTHORED / PERSISTED form. It round-trips
-  through JSON (`roadNetFromJson` / `roadNetToJson`), it is what the editor drags
-  and widens, and it carries things a graph has no business holding: the look
-  (width, sidewalk, curb, markings, colour), the terrain closure `heightAt`, and
-  generator provenance (`cityHubs`, `freewayPlans`, `siteFootprints`).
-- **`RoadGraph`** (`road_network.h`) is the GEOMETRIC working form —
-  `RoadNode`/`RoadEdge` structs with their attributes inline. Everything that
-  computes reads this: `planarize`, `applyConstraints`, `extractBlocks`, the
-  lattice mesher, the nav graph.
+- **`RoadGraph`** (`road_network.h`) is the ONE topology: `RoadNode` /
+  `RoadEdge` structs with every attribute inline and ALWAYS RESOLVED —
+  `RoadEdge::width` is never 0/"use the default", classes/layers/specs/baked
+  are always present — plus the roads-v2 `specs` band table. Everything reads
+  and writes this: the generators, `planarize`, `applyConstraints`,
+  `extractBlocks`, the lattice mesher, the nav graph, the corridor bake, and
+  the editor's node/tangent/widen ops.
+- **`RoadEntity`** (`road_net.h`) is the editable component:
+  `{ RoadGraph graph; RoadLook look; RoadPlan plan; }`. `RoadLook` is how the
+  road is drawn (default width, sidewalk, curb, markings, colour, junction
+  policy); `RoadPlan` is what the generator knew (`cityHubs`, `freewayPlans`,
+  `siteFootprints`). The `heightAt` terrain closure is NOT stored anywhere —
+  it is one load's state, so every reader takes it as a parameter (pass what
+  the loader or the editor's conform pass knows).
 
-The traffic is almost entirely one-directional. Net → graph happens at ~29 call
-sites (`netGraph`, `navRoadGraph`, `constrainedNetGraph`); graph → net happens
-**once**, in `applyGenerateRecipe`, when a generated network becomes an entity. So
-`RoadNet` is a persistence-and-look wrapper around a graph, not a rival model.
+The JSON wire format did NOT change: `roadNetFromJson` / `roadNetToJson` are
+the only code that still knows the parallel-array shape — they resolve every
+fallback on the way in (a missing/zero edge width becomes the look's default,
+a short class array becomes Local, a null `node_elev` becomes at-grade) and
+reconstruct the sparse form on the way out. No saved level moved.
 
-**Verdict (2026-08-16): keep both, fix `RoadNet`'s storage.** Merging them is
-wrong — the look fields and the `heightAt` closure genuinely do not belong on a
-geometric graph. But `RoadNet` stores its topology as EIGHT PARALLEL ARRAYS
-(`edges`, `tangents`, `nodeElev`, `nodeKinds`, `edgeWidths`, `edgeSpecs`,
-`edgeBaked`, `edgeLayers`, `edgeClasses`), any of which may be short or missing,
-and the codebase pays for it: **54 defensive `.size()` guards across five files**,
-plus a dedicated `roadNetEdgeWidth(net, ei)` accessor that exists only because
-`edgeWidths` might not be there.
-
-The fix is to give `RoadNet` a `std::vector<RoadEdge>` — the same struct
-`RoadGraph` already uses — while keeping its look and provenance fields. The JSON
-wire format stays parallel-array, so no saved level changes; only the in-memory
-representation does. That collapses the guards and the accessor, and makes the
-net→graph conversion a copy rather than a re-assembly.
+What the unification deleted: the eight parallel arrays and their fallback
+semantics, the 54 defensive `.size()` guards they cost across five files, the
+`roadNetEdgeWidth` accessor, and the `netGraph`/`constrainedNetGraph`
+transposition layer. `navRoadGraph(road, ground)` survives because it does
+real work — spline sampling + constraints + semantic classification — not a
+representation change. `applyGenerateRecipe` is now an assignment: the
+generator's graph BECOMES `entity.graph`, same node/edge order (the
+determinism gate `tests/test_road_graph_order.cpp` pins exactly this).
 
 ## The order
 
@@ -192,7 +192,7 @@ designed order above is the *intent*; this table is the *implementation*.
 | 7 | Street growth (two-tier) | `metro.cpp:buildMetro` (colonization) + `patch_fabric.cpp` (fill) — *or* `district.cpp:buildDistrict` (arterial cuts + recursive OBB bisection) | ⚠️ Partial. The district kind is template-only, not two-tier. `tensorRoads`/`radialRoads`/`gridRoads` are built and reachable from Lua via `city.layout` (`twin_cities.lua` ships both radial and tensor) but are **not wired to any `generate.kind`** |
 | 8 | Block demarcation | `road_network.cpp:extractBlocks` (half-edge DCEL) + `city_lots.cpp:edgeBlocks` (ribbon/rim blocks) | ✅ both clauses built |
 | 9 | **District refinement** | — | ❌ **Not built.** `DistrictMap::tagAt` zones off radial rings and hub distance, so a zone boundary can land mid-block instead of at an avenue |
-| 10 | Lot subdivision (frontage-first) | `parcel.cpp:subdivideBlock` — boundary walk, mitred corners, court remainder; OBB bisection survives only as the zero-lot fallback | ✅ built. Gated by `ring_parceler_fronts_every_lot_on_any_polygon`, `every_built_lot_touches_a_road` |
+| 10 | Lot subdivision (frontage-first) | `parcel.cpp:subdivideBlock` — boundary walk, mitred corners, court remainder; OBB bisection survives only as the zero-lot fallback. **Alleys (2026-08-17)**: blocks whose parcelled lots fail the 14 m frontage reach get one service lane cut into the lot pipeline's clearance graph (`RoadClass::Alley` + a draped Path strip), so orphaned rows (rim-block outer rows, measured) gain legal frontage — `citysim.alleys`/`alleyWidth` | ✅ built, both halves. Gated by `ring_parceler_fronts_every_lot_on_any_polygon`, `every_built_lot_touches_a_road`, `alleys_recover_frontage_orphaned_rim_rows` |
 | 11 | **Lot realization (the site)** | `sculptYard`, `sculptPark`, `sculptPlaza`, `sculptUnderPad` | ⚠️ **The main gap.** Yards/parks/plazas exist; paved forecourts, driveways, parking aprons and per-district ground surfaces do not — so most lots read as raw terrain between sidewalk and wall |
 | 12 | Street decoration | `street_furniture.cpp:planStreetFurniture` off the nav graph; protos in `street_kit.cpp` | ✅ signals, lamps |
 
@@ -202,7 +202,7 @@ Stages not in the original list but load-bearing in practice:
 | --- | --- |
 | Road inset before parcelling | `inset(block, roadMargin)` where `roadMargin = 4.0 + sidewalk`, **then** `pushPolyClearOfRoads` (per-edge, width-aware). See b167c1d — the scalar alone under-insets wide arterials, and faces are walked over control *chords* while asphalt is meshed from the *warped spline* |
 | Grading cascade | terrain → road (`roadNetConformRegions`) → block (`block_grade.cpp:gradeBlocks`, plane-fit) → pad (`makeFlattenPad`). Blocks are dilated 4.5 m first so the road conform and block grade overlap |
-| Recipe selection | `architect.cpp:architectPick` — one rng roll against a weighted per-district table; seed decorrelated first so neighbouring lots don't skew |
+| Recipe selection | `architect.cpp:architectPick` — one rng roll against a weighted per-district table; seed decorrelated first so neighbouring lots don't skew. **Lua-authorable (2026-08-17)**: `archetype_book.lua` replaces a district's weights (`makeArchetypeBook`, resolved once at load against `kRecipeRegistry` — same recipe names as the style book; all-or-nothing hard-error on any invalid entry; identity weights reproduce the city bit-for-bit; landmark lots ignore it). The 56 recipe BODIES and `tagAt` zoning stay C++ deliberately |
 | Landmark placement | `architect.cpp:planLandmarks` — own pass, quotas **per hub cluster**, deterministic best-lot scoring. Gated by `landmarks_are_planned_not_rolled` |
 | Massing → geometry | Eight `Massing` values dispatched by inline `if` chains inside the ~1200-line `growLotBuildings`; geometry from `shape_grammar.cpp:growPlanBuilding` / `growBuilding` |
 | Into the scene | Parts merged per `PartId` district-wide → `chunkMeshByCell` (250 m) → one `Renderable` per cell × part; **one** `MeshCollider` of extruded plan prisms for the whole district; HLOD via `appendLotMassBox` |

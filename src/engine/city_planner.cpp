@@ -11,12 +11,34 @@
 #include <nlohmann/json.hpp>
 #include <chrono>
 #include <cmath>
+#include <memory>
 
 namespace engine {
 
 namespace {
 
 using nlohmann::json;
+
+// The NATURAL terrain sampler for the planner's regen + overlays (roads no
+// longer store one, unification step 3): derived from the level's CDLOD config
+// with the road carve stripped (flatten = baseFlatten), the same "natural
+// ground" the editor's conform pass measures against. Null when the level has
+// no CDLOD terrain — the schematic overlays then sit at y=0, as before.
+RoadGroundFn worldNaturalGround(World* world) {
+    RoadGroundFn fn;
+    if (!world) return fn;
+    world->each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) {
+        if (fn) return;
+        auto tp = std::make_shared<TerrainParams>(c.params);
+        tp->flatten = c.baseFlatten;
+        rebuildFlattenIndex(*tp);
+        auto noise = std::make_shared<Noise>(c.seed);
+        fn = [tp, noise](double x, double z) {
+            return terrainHeight(*tp, *noise, x, z);
+        };
+    });
+    return fn;
+}
 
 // District-kind palette, matched to tools/diagnostics/road_map_svg.cpp
 // (kDistrictTint): Financial / Commercial / Residential / Old Town /
@@ -78,19 +100,20 @@ void appendRing(RenderMesh& into, const Vec2& c, double r, double halfW,
 
 // Junction-to-junction span count: walk chains through degree-2 curve nodes
 // (the metric the metro span audits use — tests/test_metro_sites.cpp).
-int junctionSpanCount(const RoadNet& net) {
-    const int n = static_cast<int>(net.nodes.size());
+int junctionSpanCount(const RoadEntity& net) {
+    const RoadGraph& g = net.graph;
+    const int n = static_cast<int>(g.nodes.size());
     std::vector<int> deg(n, 0);
     std::vector<std::vector<std::pair<int, int>>> nbr(n);
-    for (int ei = 0; ei < static_cast<int>(net.edges.size()); ++ei) {
-        int a = net.edges[ei][0], b = net.edges[ei][1];
+    for (int ei = 0; ei < static_cast<int>(g.edges.size()); ++ei) {
+        int a = g.edges[ei].a, b = g.edges[ei].b;
         if (a < 0 || b < 0 || a >= n || b >= n) continue;
         ++deg[a];
         ++deg[b];
         nbr[a].push_back({b, ei});
         nbr[b].push_back({a, ei});
     }
-    std::vector<char> walked(net.edges.size(), 0);
+    std::vector<char> walked(g.edges.size(), 0);
     int spans = 0;
     for (int start = 0; start < n; ++start) {
         if (deg[start] == 2) continue;   // chain interiors don't start spans
@@ -134,8 +157,8 @@ void CityPlanner::detach() { attach(nullptr, nullptr, nullptr, nullptr); }
 Entity CityPlanner::roadEntity() {
     Entity found;
     if (!world_) return found;
-    world_->each<RoadNet, SourceSpec>(
-        [&](Entity e, RoadNet&, SourceSpec& spec) {
+    world_->each<RoadEntity, SourceSpec>(
+        [&](Entity e, RoadEntity&, SourceSpec& spec) {
             if (found.valid()) return;
             json recipe = json::parse(spec.recipe, nullptr, false);
             if (recipe.is_object() && recipe.contains("generate"))
@@ -156,7 +179,7 @@ CityPlannerStats CityPlanner::applyRecipe(const std::string& generateJson) {
     CityPlannerStats stats;
     Entity e = roadEntity();
     if (!e.valid()) return stats;
-    RoadNet* net = world_->get<RoadNet>(e);
+    RoadEntity* net = world_->get<RoadEntity>(e);
     SourceSpec* spec = world_->get<SourceSpec>(e);
     json gen = json::parse(generateJson, nullptr, false);
     if (!net || !spec || !gen.is_object()) return stats;
@@ -168,13 +191,14 @@ CityPlannerStats CityPlanner::applyRecipe(const std::string& generateJson) {
     recipe["generate"] = gen;
 
     const auto t0 = std::chrono::steady_clock::now();
+    const RoadGroundFn ground = worldNaturalGround(world_);
     // GRAPH-ONLY regen (never buildRoadNetMesh here — that is [Bake]'s job).
-    applyGenerateRecipe(*net, gen);
+    applyGenerateRecipe(*net, gen, ground);
     // A metro that grew freeway plans gets them re-baked into the fresh graph
     // (same as the tuning panel's Regenerate) — otherwise the corridor and its
     // ramps silently vanish from the editable graph.
-    if (const int baked =
-            rebakeNetCorridors(*net, gen.value("interchange_spacing", 700.0)))
+    if (const int baked = rebakeNetCorridors(
+            *net, gen.value("interchange_spacing", 700.0), ground))
         LOG_INFO << "[planner] regenerate: " << baked
                  << " corridor(s) re-baked into the graph";
     stats.regenMs =
@@ -186,10 +210,10 @@ CityPlannerStats CityPlanner::applyRecipe(const std::string& generateJson) {
     // refreshes only the look from the net — never bakes the nodes).
     spec->recipe = roadRecipeForSave(recipe.dump(), *net).dump();
 
-    stats.nodes = static_cast<int>(net->nodes.size());
-    stats.edges = static_cast<int>(net->edges.size());
+    stats.nodes = static_cast<int>(net->graph.nodes.size());
+    stats.edges = static_cast<int>(net->graph.edges.size());
     stats.spans = junctionSpanCount(*net);
-    stats.hubs = static_cast<int>(net->cityHubs.size());
+    stats.hubs = static_cast<int>(net->plan.cityHubs.size());
     stats.ok = true;
 
     // NOTE: the road's RENDERED carriageway (Renderable.mesh) is deliberately
@@ -202,11 +226,11 @@ CityPlannerStats CityPlanner::applyRecipe(const std::string& generateJson) {
 bool CityPlanner::bakeMesh() {
     Entity e = roadEntity();
     if (!e.valid() || !assets_) return false;
-    RoadNet* net = world_->get<RoadNet>(e);
+    RoadEntity* net = world_->get<RoadEntity>(e);
     Renderable* r = world_->get<Renderable>(e);
     if (!net || !r) return false;
 
-    RenderMesh mesh = buildRoadNetMesh(*net);
+    RenderMesh mesh = buildRoadNetMesh(*net, worldNaturalGround(world_));
     if (mesh.vertices.empty()) return false;
     // Route the bake through the AssetManager (not renderer.uploadMesh, whose
     // per-regenerate use leaks — editor_system.cpp regenerateRoad TECH_DEBT):
@@ -239,23 +263,15 @@ CityPlanner::Layer* CityPlanner::layerByName(const std::string& name) {
 bool CityPlanner::clearRoads() {
     Entity e = roadEntity();
     if (!e.valid()) return false;
-    RoadNet* net = world_->get<RoadNet>(e);
+    RoadEntity* net = world_->get<RoadEntity>(e);
     if (!net) return false;
     // Same hygiene set a regenerate clears, plus the graph itself.
-    net->nodes.clear();
-    net->edges.clear();
-    net->tangents.clear();
-    net->nodeElev.clear();
-    net->nodeKinds.clear();
-    net->edgeWidths.clear();
-    net->specs.clear();
-    net->edgeSpecs.clear();
-    net->edgeBaked.clear();
-    net->edgeLayers.clear();
-    net->edgeClasses.clear();
-    net->cityHubs.clear();
-    net->freewayPlans.clear();
-    net->siteFootprints.clear();
+    net->graph.nodes.clear();
+    net->graph.edges.clear();
+    net->graph.specs.clear();
+    net->plan.cityHubs.clear();
+    net->plan.freewayPlans.clear();
+    net->plan.siteFootprints.clear();
     // Release the baked carriageway (the release half of bakeMesh's swap) so
     // the terrain is genuinely bare — leak-free by the same path.
     if (Renderable* r = world_->get<Renderable>(e)) {
@@ -315,19 +331,20 @@ void CityPlanner::rebuildOverlays() {
     if (!world_ || !assets_) return;   // headless host: stats-only planner
     Entity e = roadEntity();
     if (!e.valid()) return;
-    RoadNet* net = world_->get<RoadNet>(e);
+    RoadEntity* net = world_->get<RoadEntity>(e);
     if (!net) return;
     ++rev_;   // fresh acquireMesh keys for this rebuild
 
+    const RoadGroundFn groundFn = worldNaturalGround(world_);
     auto ground = [&](const Vec2& p) -> double {
-        return net->heightAt ? net->heightAt(p.x, p.y) : 0.0;
+        return groundFn ? groundFn(p.x, p.y) : 0.0;
     };
 
     // --- footprint: per-site polygon outline + rim gates --------------------
     // Warm sand ribbon so the land contract reads apart from the road tiers;
     // gates as small discs (connector gates darker + larger).
     RenderMesh fpMesh;
-    for (const Footprint& sf : net->siteFootprints) {
+    for (const Footprint& sf : net->plan.siteFootprints) {
         if (sf.polygon.size() < 3) continue;
         std::vector<Vec2> ring = sf.polygon;
         double y = 0.0;
@@ -347,7 +364,7 @@ void CityPlanner::rebuildOverlays() {
 
     // --- hubs: kind-coloured discs + a dark outline ring --------------------
     RenderMesh hubMesh;
-    for (const CityHub& h : net->cityHubs) {
+    for (const CityHub& h : net->plan.cityHubs) {
         const Vec3 tint = kHubTint[std::min(std::max(h.kind, 0), 4)];
         const double r = (h.site == 0) ? 48.0 : 34.0;
         const double y = ground(h.pos) + 2.2;
@@ -360,46 +377,42 @@ void CityPlanner::rebuildOverlays() {
     // per call, and an edge (a colonization step / curve sample) is short
     // against the terrain, so per-edge draping reads clean in the plan views.
     RenderMesh roadMesh;
-    for (std::size_t ei = 0; ei < net->edges.size(); ++ei) {
-        const int a = net->edges[ei][0], b = net->edges[ei][1];
-        if (a < 0 || b < 0 || a >= static_cast<int>(net->nodes.size()) ||
-            b >= static_cast<int>(net->nodes.size()))
+    const RoadGraph& g = net->graph;
+    for (const RoadEdge& e2 : g.edges) {
+        const int a = e2.a, b = e2.b;
+        if (a < 0 || b < 0 || a >= static_cast<int>(g.nodes.size()) ||
+            b >= static_cast<int>(g.nodes.size()))
             continue;
-        const RoadClass k = (ei < net->edgeClasses.size())
-                                ? net->edgeClasses[ei]
-                                : RoadClass::Local;
-        const Vec2 pa = net->nodes[a], pb = net->nodes[b];
+        const Vec2 pa = g.nodes[a].pos, pb = g.nodes[b].pos;
         const double y = std::max(ground(pa), ground(pb)) + 1.8;
         MeshBuilder::append(roadMesh,
-                            strokeRibbon({pa, pb}, {classHalfWidth(k)}, y,
-                                         classColor(k)));
+                            strokeRibbon({pa, pb}, {classHalfWidth(e2.klass)}, y,
+                                         classColor(e2.klass)));
     }
 
     // --- junction nodes: small rings, arterial-tier vs local-tier tint ------
-    std::vector<int> deg(net->nodes.size(), 0);
-    std::vector<int> minK(net->nodes.size(), 99);
-    for (std::size_t ei = 0; ei < net->edges.size(); ++ei) {
-        const int a = net->edges[ei][0], b = net->edges[ei][1];
-        if (a < 0 || b < 0 || a >= static_cast<int>(net->nodes.size()) ||
-            b >= static_cast<int>(net->nodes.size()))
+    std::vector<int> deg(g.nodes.size(), 0);
+    std::vector<int> minK(g.nodes.size(), 99);
+    for (const RoadEdge& e2 : g.edges) {
+        const int a = e2.a, b = e2.b;
+        if (a < 0 || b < 0 || a >= static_cast<int>(g.nodes.size()) ||
+            b >= static_cast<int>(g.nodes.size()))
             continue;
-        const int k = (ei < net->edgeClasses.size())
-                          ? static_cast<int>(net->edgeClasses[ei])
-                          : static_cast<int>(RoadClass::Local);
+        const int k = static_cast<int>(e2.klass);
         ++deg[a];
         ++deg[b];
         minK[a] = std::min(minK[a], k);
         minK[b] = std::min(minK[b], k);
     }
     RenderMesh nodeMesh;
-    for (std::size_t i = 0; i < net->nodes.size(); ++i) {
+    for (std::size_t i = 0; i < g.nodes.size(); ++i) {
         if (deg[i] < 3) continue;   // junctions, not curve samples
         const bool arterialTier =
             minK[i] <= static_cast<int>(RoadClass::Collector);
         const Vec3 tint = arterialTier ? Vec3(0.702, 0.271, 0.184)    // #b3452f
                                        : Vec3(0.184, 0.435, 0.702);   // #2f6fb3
-        appendRing(nodeMesh, net->nodes[i], arterialTier ? 7.0 : 5.0, 1.4,
-                   ground(net->nodes[i]) + 2.0, tint);
+        appendRing(nodeMesh, g.nodes[i].pos, arterialTier ? 7.0 : 5.0, 1.4,
+                   ground(g.nodes[i].pos) + 2.0, tint);
     }
 
     publishLayer(footprint_, fpMesh, "footprint");
@@ -423,7 +436,7 @@ void CityPlanner::cameraPreset(int preset) {
     double radius = 700.0;
     bool framed = false;
     Entity e = roadEntity();
-    RoadNet* net = e.valid() ? world_->get<RoadNet>(e) : nullptr;
+    RoadEntity* net = e.valid() ? world_->get<RoadEntity>(e) : nullptr;
     if (e.valid()) {
         json gen = json::parse(recipe(), nullptr, false);
         if (gen.is_object()) {
@@ -439,19 +452,20 @@ void CityPlanner::cameraPreset(int preset) {
             }
         }
     }
-    if (!framed && net && !net->nodes.empty()) {
-        Vec2 lo = net->nodes[0], hi = net->nodes[0];
-        for (const Vec2& p : net->nodes) {
-            lo.x = std::min(lo.x, p.x); lo.y = std::min(lo.y, p.y);
-            hi.x = std::max(hi.x, p.x); hi.y = std::max(hi.y, p.y);
+    if (!framed && net && !net->graph.nodes.empty()) {
+        Vec2 lo = net->graph.nodes[0].pos, hi = net->graph.nodes[0].pos;
+        for (const RoadNode& nd : net->graph.nodes) {
+            lo.x = std::min(lo.x, nd.pos.x); lo.y = std::min(lo.y, nd.pos.y);
+            hi.x = std::max(hi.x, nd.pos.x); hi.y = std::max(hi.y, nd.pos.y);
         }
         center = (lo + hi) * 0.5;
         radius = std::max(1.0, 0.5 * (hi - lo).length());
     }
 
+    const RoadGroundFn planGround = worldNaturalGround(world_);
     OrbitCameraController& orbit = cameras_->orbitController();
     orbit.target = Vec3(
-        center.x, net && net->heightAt ? net->heightAt(center.x, center.y) : 0.0,
+        center.x, planGround ? planGround(center.x, center.y) : 0.0,
         center.y);
     orbit.distance = std::max(50.0, 2.0 * radius);
     // Orbit pitch convention here: POSITIVE pitch raises the eye above the

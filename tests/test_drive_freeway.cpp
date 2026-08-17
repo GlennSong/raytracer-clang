@@ -63,16 +63,17 @@ RenderMesh sweptCorridor(const CorridorDef& c, std::vector<RampPath>& rampsOut) 
     auto ground = [](Real, Real) -> Real { return 0.0; };
     CorridorAuthoring au = corridorAuthor(c, ground, 3.0);
     rampsOut = au.rampPaths;
-    RoadNet net;
-    net.width = 8.0;
-    net.autoRoundabout = false;
+    RoadEntity net;
+    net.look.defaultWidth = 8.0;
+    net.look.autoRoundabout = false;
     // Streets through both ramp targets so the landings graft onto real
     // street nodes, exactly like a loaded level.
-    net.nodes = { Vec2(-40, -150), Vec2(60, -150), Vec2(150, -150),
-                  Vec2(280, -150) };
-    net.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 } };
-    bakeCorridorIntoNet(net, c, au.rampPaths);
-    return buildRoadNetMesh(net);
+    net.graph.nodes = { RoadNode{Vec2(-40, -150)}, RoadNode{Vec2(60, -150)},
+                        RoadNode{Vec2(150, -150)}, RoadNode{Vec2(280, -150)} };
+    net.graph.edges = { RoadEdge{ 0, 1, 8.0 }, RoadEdge{ 1, 2, 8.0 },
+                        RoadEdge{ 2, 3, 8.0 } };
+    bakeCorridorIntoNet(net, c, au.rampPaths, {}, nullptr);
+    return buildRoadNetMesh(net, nullptr);
 }
 
 }  // namespace

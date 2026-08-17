@@ -44,7 +44,7 @@ using engine::InstanceGroup;
 using engine::RoadGraph;
 using engine::RoadNode;
 using engine::RoadEdge;
-using engine::RoadNet;
+using engine::RoadEntity;
 using engine::MeshHandle;
 using engine::MeshBuilder;
 
@@ -130,7 +130,8 @@ bool CityRenderSystem::agentWorldPose(int agentId, Vec3& outPos,
     return true;
 }
 
-bool CityRenderSystem::build(World& world, AssetManager* assets) {
+bool CityRenderSystem::build(World& world, AssetManager* assets,
+                             std::function<double(double, double)> ground) {
     // Level-authored settings (ADR-0063): a CitySimConfig entity — the level's
     // top-level "citysim" block — overrides the constructor params, so each level
     // picks its own population, seed, clock rate, reliability, and whether the
@@ -157,13 +158,13 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
         authoredPlaces_ = c.places;   // level-authored destinations (ADR-0066)
     });
 
-    // Merge every RoadNet's constrained graph into one combined graph (a level
+    // Merge every RoadEntity's constrained graph into one combined graph (a level
     // with several road entities yields one city). Matches TrafficSystem.
     RoadGraph combined;
-    heightAt_ = nullptr;
+    heightAt_ = std::move(ground);   // caller-supplied sampler (test worlds)
     roadLift_ = 0.0;
-    world.each<RoadNet>([&](Entity, RoadNet& net) {
-        RoadGraph g = navRoadGraph(net);
+    world.each<RoadEntity>([&](Entity, RoadEntity& net) {
+        RoadGraph g = navRoadGraph(net, heightAt_);
         int base = static_cast<int>(combined.nodes.size());
         for (const RoadNode& n : g.nodes) combined.nodes.push_back(n);
         for (RoadEdge e : g.edges) {
@@ -171,19 +172,15 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
             e.b += base;
             combined.edges.push_back(e);
         }
-        if (!heightAt_ && net.heightAt) heightAt_ = net.heightAt;
-        roadLift_ = std::max(roadLift_, static_cast<Real>(net.lift));
+        roadLift_ = std::max(roadLift_, static_cast<Real>(net.look.lift));
     });
-    // THE GROUND THIS BRIDGE STANDS THINGS ON (#25). A pre-pass RoadNet keeps
-    // its NATURAL, pre-carve `heightAt` on purpose — the mesher has to re-derive
-    // the identical road profile from it, and re-deriving over already-carved
-    // ground diverges. But everything THIS bridge places sits on the finished
-    // road: parked cars, painted bay outlines, crosswalk decals, at-grade
-    // traffic. Reading the natural sampler put them on the raw hillside instead
-    // — cars sunk into a cut, hovering over a fill, "at all kinds of different
-    // heights". The level's CDLOD terrain config already folds every road's
-    // cut/fill footprint into `params.flatten`, so sampling THAT is sampling the
-    // road surface. Test worlds with no terrain keep the RoadNet sampler.
+    // THE GROUND THIS BRIDGE STANDS THINGS ON (#25). Everything this bridge
+    // places sits on the finished road: parked cars, painted bay outlines,
+    // crosswalk decals, at-grade traffic. The level's CDLOD terrain config
+    // already folds every road's cut/fill footprint into `params.flatten`, so
+    // sampling THAT is sampling the road surface (the natural pre-carve
+    // sampler put them on the raw hillside — cars sunk into a cut, hovering
+    // over a fill). Test worlds with no terrain keep the caller's sampler.
     world.each<engine::TerrainLodConfig>([&](Entity, engine::TerrainLodConfig& c) {
         auto params = std::make_shared<engine::TerrainParams>(c.params);
         auto noise = std::make_shared<engine::Noise>(c.seed);
@@ -193,8 +190,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets) {
     });
     // §10: the LEVEL owns the one road graph — streets + corridor chains
     // welded at load (LevelRoadGraph). When present it replaces the private
-    // RoadNet merge above wholesale; the merge remains only so loader-less
-    // test worlds (bare RoadNet components) still drive.
+    // RoadEntity merge above wholesale; the merge remains only so loader-less
+    // test worlds (bare RoadEntity components) still drive.
     world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph& g) {
         if (!g.graph.edges.empty()) combined = g.graph;
     });

@@ -48,10 +48,11 @@ TEST_CASE(curve_handle_source_drags_update_the_curve) {
 }
 
 TEST_CASE(road_handle_source_exposes_knots_and_tangents) {
-    RoadNet net;
-    net.nodes = { Vec2(-20, 0), Vec2(0, 0), Vec2(20, 0) };
-    net.edges = { {0, 1}, {1, 2} };
-    RoadHandleSource src(net);
+    RoadEntity net;
+    net.graph.nodes = { RoadNode{Vec2(-20, 0)}, RoadNode{Vec2(0, 0)}, RoadNode{Vec2(20, 0)} };
+    net.graph.addEdge(0, 1, net.look.defaultWidth);
+    net.graph.addEdge(1, 2, net.look.defaultWidth);
+    RoadHandleSource src(net, nullptr);
     CHECK(countKind(src.handles(), HandleKind::Knot) == 3);
     CHECK(countKind(src.handles(), HandleKind::TangentOut) == 3);   // every road is a spline: a tangent/node
     CHECK(static_cast<int>(src.previewSegments().size()) == 2);     // one per edge
@@ -59,17 +60,17 @@ TEST_CASE(road_handle_source_exposes_knots_and_tangents) {
 }
 
 TEST_CASE(road_handle_source_drags_update_the_road) {
-    RoadNet net;
-    net.nodes = { Vec2(-20, 0), Vec2(0, 0), Vec2(20, 0) };
-    net.edges = { {0, 1}, {1, 2} };
-    RoadHandleSource src(net);
+    RoadEntity net;
+    net.graph.nodes = { RoadNode{Vec2(-20, 0)}, RoadNode{Vec2(0, 0)}, RoadNode{Vec2(20, 0)} };
+    net.graph.addEdge(0, 1, net.look.defaultWidth);
+    net.graph.addEdge(1, 2, net.look.defaultWidth);
+    RoadHandleSource src(net, nullptr);
     // Move node 1 (a Knot) — only X/Z matter; the handle Y is the road surface.
     src.moveHandle(firstOf(src.handles(), HandleKind::Knot, 1), Vec3(2, 99, 8));
-    CHECK_APPROX(net.nodes[1].x, 2.0, 1e-9);
-    CHECK_APPROX(net.nodes[1].y, 8.0, 1e-9);     // Vec2.y is world Z
+    CHECK_APPROX(net.graph.nodes[1].pos.x, 2.0, 1e-9);
+    CHECK_APPROX(net.graph.nodes[1].pos.y, 8.0, 1e-9);   // Vec2.y is world Z
     // Drag a tangent handle -> sets that node's through-tangent.
     src.moveHandle(firstOf(src.handles(), HandleKind::TangentOut, 1), Vec3(2 + 6, 99, 8 + 4));
-    CHECK(net.tangents.size() >= 2);
-    CHECK_APPROX(net.tangents[1].x, 6.0, 1e-9);
-    CHECK_APPROX(net.tangents[1].y, 4.0, 1e-9);
+    CHECK_APPROX(net.graph.nodes[1].tangent.x, 6.0, 1e-9);
+    CHECK_APPROX(net.graph.nodes[1].tangent.y, 4.0, 1e-9);
 }

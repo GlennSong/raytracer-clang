@@ -64,7 +64,7 @@ int runCityPlannerQtTests() {
     failures = 0;
 
     // A generated road entity, built the way the loader builds one: the
-    // recipe rides SourceSpec, the RoadNet starts empty (the planner's
+    // recipe rides SourceSpec, the RoadEntity starts empty (the planner's
     // regenerate fills it — the graph-only path under test).
     World world;
     json gen = {
@@ -81,10 +81,10 @@ int runCityPlannerQtTests() {
     roadBlock["generate"] = gen;
     spec.recipe = roadBlock.dump();
     world.add<SourceSpec>(road, spec);
-    RoadNet net;
-    net.width = 10.0;
-    net.autoRoundabout = false;
-    world.add<RoadNet>(road, net);
+    RoadEntity net;
+    net.look.defaultWidth = 10.0;
+    net.look.autoRoundabout = false;
+    world.add<RoadEntity>(road, net);
     world.add<Renderable>(road);
 
     EditorBridge bridge;
@@ -102,7 +102,7 @@ int runCityPlannerQtTests() {
     REQUIRE(parsed.is_object());
     REQUIRE(parsed.value("seed", 0) == 11);
 
-    // --- graph-only regenerate: sane stats, RoadNet + SourceSpec updated ----
+    // --- graph-only regenerate: sane stats, RoadEntity + SourceSpec updated ----
     parsed["seed"] = 12;
     CityPlannerStats stats = bridge.plannerApplyRecipe(parsed.dump());
     REQUIRE(stats.ok);
@@ -113,9 +113,9 @@ int runCityPlannerQtTests() {
     REQUIRE(stats.hubs >= 1);   // metro recipes grow cityHubs
     REQUIRE(stats.regenMs >= 0.0);
 
-    RoadNet* live = world.get<RoadNet>(road);
-    REQUIRE(live && static_cast<int>(live->nodes.size()) == stats.nodes);
-    REQUIRE(live && static_cast<int>(live->edges.size()) == stats.edges);
+    RoadEntity* live = world.get<RoadEntity>(road);
+    REQUIRE(live && static_cast<int>(live->graph.nodes.size()) == stats.nodes);
+    REQUIRE(live && static_cast<int>(live->graph.edges.size()) == stats.edges);
 
     json saved = json::parse(world.get<SourceSpec>(road)->recipe, nullptr, false);
     REQUIRE(saved.is_object() && saved.contains("generate"));
@@ -158,10 +158,10 @@ int runCityPlannerQtTests() {
     fpGen["skeleton"] = "footprint";
     CityPlannerStats fpStats = bridge.plannerApplyRecipe(fpGen.dump());
     REQUIRE(fpStats.ok);
-    RoadNet* fpNet = world.get<RoadNet>(road);
-    REQUIRE(fpNet && fpNet->siteFootprints.size() == 1);
-    if (fpNet && !fpNet->siteFootprints.empty()) {
-        const Footprint& sf = fpNet->siteFootprints[0];
+    RoadEntity* fpNet = world.get<RoadEntity>(road);
+    REQUIRE(fpNet && fpNet->plan.siteFootprints.size() == 1);
+    if (fpNet && !fpNet->plan.siteFootprints.empty()) {
+        const Footprint& sf = fpNet->plan.siteFootprints[0];
         REQUIRE(sf.polygon.size() >= 12);
         REQUIRE(sf.gates.size() >= 3);   // max(3, perimeter/gate_spacing)
     }
@@ -173,8 +173,8 @@ int runCityPlannerQtTests() {
 
     // --- clear: bare terrain, recipe preserved (P8-B) -----------------------
     REQUIRE(bridge.plannerClearRoads());
-    REQUIRE(fpNet->nodes.empty() && fpNet->edges.empty());
-    REQUIRE(fpNet->siteFootprints.empty());
+    REQUIRE(fpNet->graph.nodes.empty() && fpNet->graph.edges.empty());
+    REQUIRE(fpNet->plan.siteFootprints.empty());
     REQUIRE(!world.get<Renderable>(road)->mesh.valid());   // bake released
     REQUIRE(visibleGroups(world) == 0);
     json keptRecipe = json::parse(bridge.plannerRecipe(), nullptr, false);
@@ -247,10 +247,10 @@ int runCityPlannerQtTests() {
     roadBlock2["generate"] = gen2;
     spec2.recipe = roadBlock2.dump();
     world2.add<SourceSpec>(road2, spec2);
-    RoadNet net2;
-    net2.width = 10.0;
-    net2.autoRoundabout = false;
-    world2.add<RoadNet>(road2, net2);
+    RoadEntity net2;
+    net2.look.defaultWidth = 10.0;
+    net2.look.autoRoundabout = false;
+    world2.add<RoadEntity>(road2, net2);
     world2.add<Renderable>(road2);
     EditorSystem editor2(cameras, "planner_test2.json", nullptr, &bridge);
     bridge.attach(&world2, &editor2, "planner_test2.json");
@@ -262,7 +262,7 @@ int runCityPlannerQtTests() {
         regen->click();
         json after2 = json::parse(bridge.plannerRecipe(), nullptr, false);
         REQUIRE(after2.is_object() && after2.value("seed", 0) == 21);
-        REQUIRE(world2.get<RoadNet>(road2)->nodes.size() > 10);
+        REQUIRE(world2.get<RoadEntity>(road2)->graph.nodes.size() > 10);
     }
 
     // Observer/detached: planner API goes inert, panel grays out.

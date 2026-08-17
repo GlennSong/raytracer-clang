@@ -79,7 +79,7 @@ public:
     // pitch 35.264), 2 = Free (fly, perspective).
     void cameraPreset(int preset);
 
-    // The road entity the planner drives: the first RoadNet whose SourceSpec
+    // The road entity the planner drives: the first RoadEntity whose SourceSpec
     // recipe carries a "generate" block.
     Entity roadEntity();
 

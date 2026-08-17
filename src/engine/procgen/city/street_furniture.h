@@ -43,7 +43,7 @@ struct StreetFurniturePlan {
 // (same criterion SignalController uses, so sim phases and placed poles agree
 // one-to-one), lamps marching along each link's right sidewalk — two-way roads
 // get both sides for free, one direction per side. `ground` is the road
-// surface height (a RoadNet's heightAt), so every base sits on the deck.
+// surface height (a RoadEntity's heightAt), so every base sits on the deck.
 StreetFurniturePlan planStreetFurniture(
     const NavGraph& nav, const std::function<Real(Real, Real)>& ground,
     const StreetFurnitureParams& params = {});

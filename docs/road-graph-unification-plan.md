@@ -1,7 +1,35 @@
 # One road graph — unification proposal
 
-**Status:** APPROVED, stowed. Steps 1–2 landed (`ae4e396`); steps 3–6 are a
-single uninterrupted session's work — see "Measured cost" before starting.
+**Status:** DONE (2026-08-17). Steps 1–2 landed in `ae4e396`; steps 3–6 landed
+in one uninterrupted session, as budgeted. `RoadNet` is deleted; the tree
+compiles against `RoadEntity { RoadGraph graph; RoadLook look; RoadPlan plan; }`
+with widths/classes/layers/specs/baked always resolved on the edge, `heightAt`
+a function parameter, and the parallel arrays confined to
+`roadNetFromJson`/`roadNetToJson` (wire format unchanged — no level moved).
+
+Gates at completion: the order hashes below are UNCHANGED (district
+`11690313017498955230`, metro `7979088897799340174`, same node/edge counts);
+full ctest 4/4 suites, 1166/1166 cases; `make test` 997/997; and
+`living_city`'s `[citylots]` line reproduces the city-lots-v2 baseline exactly
+(`COVER 15070 m² of 30976 m² (48.6%)`, frontage 13, greens 27).
+
+Notes for the record, where reality differed from the sketch below:
+- `navRoadGraph` kept its spline-sampling core (the file-local `netGraph`
+  became `sampleNetGraph`, reading resolved fields); `roadNetFullGraph` /
+  `roadNetConstrainedGraph` remain as names for the same constrained pass.
+- `applyGenerateRecipe`'s assignment NORMALIZES: the parallel-array era kept
+  only `{pos, a, b, width, klass, layer}` and dropped generator side-state
+  (elevations, kinds, tangents, specs, baked) — the assignment reproduces that
+  truncation, or stale state would silently change the city.
+- The inspector's Width control keeps its "edges at the default follow the
+  default" semantics at EDIT time: `describeProperties` snapshots the old
+  default and re-stamps matching edges (properties.cpp), since the read-side
+  fallback that used to provide this no longer exists.
+- World-side consumers derive ground instead of reading it off the entity:
+  the editor's `roadRegenGround` (natural for generated roads, carved for
+  hand-authored — mirroring the loader), the planner's `worldNaturalGround`,
+  and the citysim bridge's optional `build(world, assets, ground)` parameter
+  for loader-less test worlds.
 
 ## Why
 

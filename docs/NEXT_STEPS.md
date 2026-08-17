@@ -19,34 +19,66 @@ buildable land**. Map of the whole thing in `docs/city-pipeline.md`.
 
 ### The four open items
 
-**1. Courts with alleys** — *the one with visible payoff.* `city-pipeline.md`
-stage 10 promises "leftover interior becomes a shared court with an alley or
-walking path connecting out". The court half exists; the **alley half does not**,
-so nothing reaches it. This became the binding constraint when the margin change
-reclaimed 6 724 m² of block interior: `rejFrontage` went 1 → 13 and greens 7 → 27,
-because the new land is mid-block and further than 14 m from a road surface, and
-the frontage gate is right to refuse it. Cut alley edges into deep blocks so
-interior lots gain frontage. Metric: the `COVER` field in the `[citylots]` line —
-`living_city` is 15 070 m² built of 30 976 m² buildable (48.6%).
+**1. Courts with alleys** — **DONE (2026-08-17)**, and measurement overturned
+the diagnosis AGAIN before a line was written: the orphaned land is not deep
+enclosed-block interior (facing rows meet on every living_city block — zero
+courts, zero unparcelled cores). It is the **rim blocks' outer rows** — rim
+rectangles front a road on ONE side, so their second row sits 15–21 m out,
+just past the 14 m gate. The fix is still the stage-10 alley, aimed by parcel
+results instead of geometry: for each block whose parcelled lots FAIL the
+reach, one service lane is cut along the block's long axis through the failing
+rows' front line — into the lot pipeline's CLEARANCE graph (`RoadClass::Alley`,
+never meshed as carriageway) plus a draped `PartId::Path` pavement strip. The
+lane is 2.8 m = 2 × lotSetback, centred on the rows' shared boundary, so it
+costs the existing rows NOTHING (a 5 m lane with 0.7 m clearance measurably
+LOST coverage before this was tuned — 48.6% → 47.3%). Knobs: `citysim.alleys`
+/ `alleyWidth` (real ones, per the `courtMinArea` lesson). Result on
+`living_city`: **COVER 48.6% → 50.4%** (15 070 → 15 643 m²), built 70 → 80,
+greens 27 → 8, `rejFrontage` 13 → **0** — stage 10's acceptance ("every lot
+fronts a street, or the interior explicitly connects out") now holds. Gate:
+`tests/test_lot_road_clearance.cpp alleys_recover_frontage_orphaned_rim_rows`,
+a can-fail pair (alleys off must SHOW the orphaned rows; on must clear them
+and gain buildings — off 20 rejected/20 built, on 0 rejected/40 built).
 
-**2. Road-graph unification** — `docs/road-graph-unification-plan.md`, APPROVED,
-steps 1–2 landed. Steps 3–6 need **one uninterrupted session**: measured 600+ edits,
-and the parallel arrays carry *fallback* semantics (a short `edgeWidths` means "use
-`net.width`"), so a find-and-replace corrupts **silently** — the order gate hashes
-ordering, not widths. Do not pre-create `RoadLook`/`RoadPlan`/`RoadEntity` as unused
-types ahead of the move.
+**2. Road-graph unification** — ~~steps 3–6~~ **DONE (2026-08-17)**, in the one
+uninterrupted session the plan demanded. `RoadNet` and its eight parallel arrays
+are deleted; the tree runs on `RoadEntity { graph, look, plan }` with every edge
+field resolved at construction, `heightAt` passed as a parameter, and the wire
+format confined (unchanged) to `roadNetFromJson`/`roadNetToJson`. Gates: order
+hashes identical (district `11690313017498955230`, metro `7979088897799340174`),
+ctest 1166/1166, `make test` 997/997, and `living_city`'s `[citylots]` COVER
+line reproduces this round's baseline byte-for-byte. Completion notes (where
+reality differed from the sketch) are at the top of
+`docs/road-graph-unification-plan.md`.
 
-**3. Expose the architect to Lua** — wants its own design pass. Three layers:
-zoning (`tagAt`, ~60 lines), selection (5 if/else weight ladders — **this is the
-layer worth exposing**), and 56 recipe bodies. The bodies are not data: they branch
-on `coreness`/`roomy` and feed back `cx.slender`. Porting them is what the abandoned
-branch attempted and it failed. Also: a Lua table naming an unknown recipe must
-hard-error, not skip — see the `courtMinArea` false-knob in `parcel.h`.
+**3. Expose the architect to Lua** — **DONE (2026-08-17)**, scoped exactly as
+the design pass concluded: the SELECTION layer only. `archetype_book.lua` sets
+per-district `{recipe, weight}` tables keyed by the same `out.name` strings the
+style book uses; `makeArchetypeBook` resolves it ONCE at load against a new
+56-entry registry (`architect.cpp kRecipeRegistry`) into cumulative tables —
+zero per-lot Lua, and integer weights normalize to the compiled ladders' exact
+`k/100` doubles, so an identity-weight book reproduces every city BIT-FOR-BIT
+(gated: `archetype_book_identity_weights_reproduce_the_ladders`, 2000
+comparisons including floors + body seed). The bodies stay C++ (the failed
+branch's lesson); zoning stays C++; landmark lots ignore the book (placed by
+quota, never rolled — which is why an all-`glass_tower` financial book changes
+nothing on living_city: its financial lots are ALL landmark picks; skew
+residential and built drops 80 → 64, the end-to-end proof). The hard-error
+contract is total and tested (`archetype_book_hard_errors_never_skip`): an
+unknown recipe/district, a weight ≤ 0, or an empty table REJECTS the whole
+book with the offender named — never half a book, never a silent skip. Ships
+as `assets/scripts/archetype_book.lua.example` (compiled weights verbatim,
+rename to activate); both loaders wired.
 
-**4. Inverted faces at swept-body bends** — 2 of 276, tiny repro, no terrain
-needed. Filed as "junction pads fold on slopes"; **that diagnosis was wrong**.
-Isolation on flat ground with no pad: straight 0/264, bent 2/276. It is the
-**mitre**. See `tests/test_road_lattice.cpp swept_body_inverts_a_few_faces_at_bends`.
+**4. Inverted faces at swept-body bends** — **DONE (2026-08-17)**. The
+corrected diagnosis (the mitre, not the pads) held, and the mechanism was: at
+a kink the mitre ring's INSIDE point sits `hw·tan(halfAngle)` back along both
+legs, and fill rings inside that reach get overrun — the inside edge doubles
+back and the cell folds. Fix in `road_lattice.cpp sampleRings`: the fill skips
+the fold reach around each kink, so the lattice spans straight to the mitre
+ring and the inside edge stays monotone. Zero inversions everywhere now —
+bent isolate 2/276 → 0/260, the full sloped net 0/1608 — and the test is the
+promised ratchet: `CHECK(upFacesInverted(...) == 0)` on all four meshes.
 
 ### How to measure, so the next round does not repeat this one's mistakes
 

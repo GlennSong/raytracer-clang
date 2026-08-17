@@ -1,6 +1,6 @@
 // THE ORDER GATE for the road-graph unification (docs/road-graph-unification-plan.md).
 //
-// The refactor moves RoadNet's eight parallel arrays into std::vector<RoadEdge>,
+// The refactor moves RoadEntity's eight parallel arrays into std::vector<RoadEdge>,
 // and the one way that can go quietly wrong is REORDERING. Generators seed their
 // rng off node and edge indices, and every downstream pass — lot rng streams, the
 // architect's per-lot seed, landmark scoring — rides on that ordering. Shuffle it

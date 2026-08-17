@@ -31,20 +31,22 @@ namespace {
 
 // 4x4 junction grid, 80 m pitch: the interior nodes are degree-4 signalled
 // crossings, enough network for two dozen wandering drivers.
-RoadNet cityGrid() {
-    RoadNet net;
+RoadEntity cityGrid() {
+    RoadEntity net;
+    net.look.defaultWidth = 10.0;
+    net.look.sidewalk = 2.5;
     const int N = 4;
     const Real pitch = 80;
     for (int j = 0; j < N; ++j)
         for (int i = 0; i < N; ++i)
-            net.nodes.push_back(Vec2(i * pitch, j * pitch));
+            net.graph.nodes.push_back(RoadNode{Vec2(i * pitch, j * pitch)});
     for (int j = 0; j < N; ++j)
         for (int i = 0; i < N; ++i) {
-            if (i + 1 < N) net.edges.push_back({ j * N + i, j * N + i + 1 });
-            if (j + 1 < N) net.edges.push_back({ j * N + i, (j + 1) * N + i });
+            if (i + 1 < N)
+                net.graph.addEdge(j * N + i, j * N + i + 1, net.look.defaultWidth);
+            if (j + 1 < N)
+                net.graph.addEdge(j * N + i, (j + 1) * N + i, net.look.defaultWidth);
         }
-    net.width = 10.0;
-    net.sidewalk = 2.5;
     return net;
 }
 
@@ -75,7 +77,7 @@ Real upDot(const Quat& q) { return q.rotate(Vec3(0, 1, 0)).y; }
 
 TEST_CASE(city_phys_tier_soak) {
     World world;
-    world.add<RoadNet>(world.create(), cityGrid());
+    world.add<RoadEntity>(world.create(), cityGrid());
 
     CityRenderParams params;
     params.cars = 24;
@@ -204,7 +206,7 @@ TEST_CASE(city_phys_tier_soak) {
 // far cars always account for every driver, and walking away releases all.
 TEST_CASE(city_phys_tier_with_tiering) {
     World world;
-    world.add<RoadNet>(world.create(), cityGrid());
+    world.add<RoadEntity>(world.create(), cityGrid());
 
     CityRenderParams params;
     params.cars = 24;
@@ -286,7 +288,7 @@ TEST_CASE(city_phys_tier_with_tiering) {
 // and then physically walks the player into one to prove it blocks.
 TEST_CASE(city_every_drawn_car_is_solid) {
     World world;
-    world.add<RoadNet>(world.create(), cityGrid());
+    world.add<RoadEntity>(world.create(), cityGrid());
 
     CityRenderParams params;
     params.cars = 24;

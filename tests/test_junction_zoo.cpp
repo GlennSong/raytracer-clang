@@ -8,7 +8,7 @@
 //     (open ribbon ends read as unfinished geometry at T-junctions);
 //   CROSS DRIVES — every arm-to-arm path through the junction drives clean
 //     (holes/steps/blocked = 0), not just the arms individually.
-// The fixtures run the REAL pipeline: RoadNet -> buildRoadNetMesh.
+// The fixtures run the REAL pipeline: RoadEntity -> buildRoadNetMesh.
 #include "test_framework.h"
 #include "drive_probe.h"
 
@@ -25,13 +25,14 @@ using namespace engine;
 
 namespace {
 
-RoadNet baseNet() {
-    RoadNet net;
-    net.width = 8.0;
-    net.sidewalk = 2.0;
-    net.curb = 0.15;
-    net.autoRoundabout = false;
-    net.heightAt = [](double, double) { return 0.0; };
+const RoadGroundFn flatGround = [](double, double) { return 0.0; };
+
+RoadEntity baseNet() {
+    RoadEntity net;
+    net.look.defaultWidth = 8.0;
+    net.look.sidewalk = 2.0;
+    net.look.curb = 0.15;
+    net.look.autoRoundabout = false;
     return net;
 }
 
@@ -127,16 +128,16 @@ int openCurbEnds(const RenderMesh& m, const Vec2& c, double radius) {
 }
 
 // Drive every ordered arm pair straight through the junction.
-int badCrossDrives(const RenderMesh& m, const RoadNet& net, int node,
+int badCrossDrives(const RenderMesh& m, const RoadEntity& net, int node,
                    double reach) {
-    const Vec2 c = net.nodes[node];
+    const Vec2 c = net.graph.nodes[node].pos;
     std::vector<Vec2> arms;
-    for (const auto& e : net.edges) {
+    for (const auto& e : net.graph.edges) {
         int other = -1;
-        if (e[0] == node) other = e[1];
-        if (e[1] == node) other = e[0];
+        if (e.a == node) other = e.b;
+        if (e.b == node) other = e.a;
         if (other < 0) continue;
-        Vec2 d = net.nodes[other] - c;
+        Vec2 d = net.graph.nodes[other].pos - c;
         const double l = d.length();
         if (l > 1e-6) arms.push_back(d * (1.0 / l));
     }
@@ -161,12 +162,13 @@ int badCrossDrives(const RenderMesh& m, const RoadNet& net, int node,
     return bad;
 }
 
-void checkJunction(const char* tag, RoadNet& net, int node, double radius) {
-    RenderMesh m = buildRoadNetMesh(net);
+void checkJunction(const char* tag, RoadEntity& net, int node, double radius,
+                   const RoadGroundFn& ground = flatGround) {
+    RenderMesh m = buildRoadNetMesh(net, ground);
     CHECK(!m.vertices.empty());
-    const int stacked = stackedCells(m, net.nodes[node], radius);
+    const int stacked = stackedCells(m, net.graph.nodes[node].pos, radius);
     const int badDrives = badCrossDrives(m, net, node, radius);
-    const int curbOpen = openCurbEnds(m, net.nodes[node], radius);
+    const int curbOpen = openCurbEnds(m, net.graph.nodes[node].pos, radius);
     std::printf("[zoo] %s: stacked=%d badDrives=%d curbOpen=%d\n", tag,
                 stacked, badDrives, curbOpen);
     CHECK(stacked == 0);
@@ -177,55 +179,69 @@ void checkJunction(const char* tag, RoadNet& net, int node, double radius) {
 }  // namespace
 
 TEST_CASE(zoo_orthogonal_four_way) {
-    RoadNet net = baseNet();
-    net.nodes = { Vec2(0, 0), Vec2(80, 0), Vec2(-80, 0), Vec2(0, 80), Vec2(0, -80) };
-    net.edges = { { 0, 1 }, { 0, 2 }, { 0, 3 }, { 0, 4 } };
+    RoadEntity net = baseNet();
+    net.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(80, 0)},
+                        RoadNode{Vec2(-80, 0)}, RoadNode{Vec2(0, 80)},
+                        RoadNode{Vec2(0, -80)} };
+    net.graph.edges = { RoadEdge{ 0, 1, 8.0 }, RoadEdge{ 0, 2, 8.0 },
+                        RoadEdge{ 0, 3, 8.0 }, RoadEdge{ 0, 4, 8.0 } };
     checkJunction("ortho4", net, 0, 22.0);
 }
 
 TEST_CASE(zoo_acute_four_way) {
     // Glenn's A1 find: "a 4-way where two roads merge at a sharp acute angle
     // and one of the roads remains a flat ribbon... It floats above it."
-    RoadNet net = baseNet();
-    net.nodes = { Vec2(0, 0), Vec2(80, 0), Vec2(-80, 0),
-                  Vec2(76, 26),            // ~19 deg off the +x arm: acute pair
-                  Vec2(0, -80) };
-    net.edges = { { 0, 1 }, { 0, 2 }, { 0, 3 }, { 0, 4 } };
+    RoadEntity net = baseNet();
+    net.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(80, 0)},
+                        RoadNode{Vec2(-80, 0)},
+                        RoadNode{Vec2(76, 26)},  // ~19 deg off the +x arm: acute pair
+                        RoadNode{Vec2(0, -80)} };
+    net.graph.edges = { RoadEdge{ 0, 1, 8.0 }, RoadEdge{ 0, 2, 8.0 },
+                        RoadEdge{ 0, 3, 8.0 }, RoadEdge{ 0, 4, 8.0 } };
     checkJunction("acute4", net, 0, 24.0);
 }
 
 TEST_CASE(zoo_tee) {
-    RoadNet net = baseNet();
-    net.nodes = { Vec2(0, 0), Vec2(80, 0), Vec2(-80, 0), Vec2(0, 80) };
-    net.edges = { { 0, 1 }, { 0, 2 }, { 0, 3 } };
+    RoadEntity net = baseNet();
+    net.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(80, 0)},
+                        RoadNode{Vec2(-80, 0)}, RoadNode{Vec2(0, 80)} };
+    net.graph.edges = { RoadEdge{ 0, 1, 8.0 }, RoadEdge{ 0, 2, 8.0 },
+                        RoadEdge{ 0, 3, 8.0 } };
     checkJunction("tee", net, 0, 20.0);
 }
 
 TEST_CASE(zoo_skew_tee_mixed_widths) {
     // A2's curb failures showed at Ts with unequal arms: a wide arterial met
     // by a narrow local at a slant.
-    RoadNet net = baseNet();
-    net.nodes = { Vec2(0, 0), Vec2(90, 0), Vec2(-90, 0), Vec2(34, 74) };
-    net.edges = { { 0, 1 }, { 0, 2 }, { 0, 3 } };
-    net.edgeWidths = { 13.0, 13.0, 7.0 };
+    RoadEntity net = baseNet();
+    net.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(90, 0)},
+                        RoadNode{Vec2(-90, 0)}, RoadNode{Vec2(34, 74)} };
+    net.graph.edges = { RoadEdge{ 0, 1, 13.0 }, RoadEdge{ 0, 2, 13.0 },
+                        RoadEdge{ 0, 3, 7.0 } };
     checkJunction("skewT", net, 0, 22.0);
 }
 
 TEST_CASE(zoo_five_arm) {
-    RoadNet net = baseNet();
-    net.nodes = { Vec2(0, 0),  Vec2(80, 6),  Vec2(-78, -14), Vec2(18, 80),
-                  Vec2(-30, 74), Vec2(24, -78) };
-    net.edges = { { 0, 1 }, { 0, 2 }, { 0, 3 }, { 0, 4 }, { 0, 5 } };
+    RoadEntity net = baseNet();
+    net.graph.nodes = { RoadNode{Vec2(0, 0)},   RoadNode{Vec2(80, 6)},
+                        RoadNode{Vec2(-78, -14)}, RoadNode{Vec2(18, 80)},
+                        RoadNode{Vec2(-30, 74)},  RoadNode{Vec2(24, -78)} };
+    net.graph.edges = { RoadEdge{ 0, 1, 8.0 }, RoadEdge{ 0, 2, 8.0 },
+                        RoadEdge{ 0, 3, 8.0 }, RoadEdge{ 0, 4, 8.0 },
+                        RoadEdge{ 0, 5, 8.0 } };
     checkJunction("five", net, 0, 24.0);
 }
 
 TEST_CASE(zoo_short_arm_pair) {
     // Two junctions closer than their combined radii: the S4 compound-pad
     // case, now under the stacked-surface lens.
-    RoadNet net = baseNet();
-    net.nodes = { Vec2(0, 0),  Vec2(18, 0),   // the too-close pair
-                  Vec2(-80, 0), Vec2(98, 0), Vec2(0, 80), Vec2(18, -80) };
-    net.edges = { { 0, 2 }, { 0, 1 }, { 1, 3 }, { 0, 4 }, { 1, 5 } };
+    RoadEntity net = baseNet();
+    net.graph.nodes = { RoadNode{Vec2(0, 0)},  RoadNode{Vec2(18, 0)},   // the too-close pair
+                        RoadNode{Vec2(-80, 0)}, RoadNode{Vec2(98, 0)},
+                        RoadNode{Vec2(0, 80)},  RoadNode{Vec2(18, -80)} };
+    net.graph.edges = { RoadEdge{ 0, 2, 8.0 }, RoadEdge{ 0, 1, 8.0 },
+                        RoadEdge{ 1, 3, 8.0 }, RoadEdge{ 0, 4, 8.0 },
+                        RoadEdge{ 1, 5, 8.0 } };
     checkJunction("shortpair", net, 0, 30.0);
 }
 
@@ -234,10 +250,11 @@ TEST_CASE(zoo_ramp_landing) {
     // mouth (no curbing a ramp shut) — and the gap's CUT ENDS must be capped
     // (A2: "the ribbon sometimes doesn't have a side to give it an enclosed
     // shape appearance").
-    RoadNet net = baseNet();
-    net.nodes = { Vec2(-40, -150), Vec2(60, -150), Vec2(150, -150),
-                  Vec2(280, -150) };
-    net.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 } };
+    RoadEntity net = baseNet();
+    net.graph.nodes = { RoadNode{Vec2(-40, -150)}, RoadNode{Vec2(60, -150)},
+                        RoadNode{Vec2(150, -150)}, RoadNode{Vec2(280, -150)} };
+    net.graph.edges = { RoadEdge{ 0, 1, 8.0 }, RoadEdge{ 1, 2, 8.0 },
+                        RoadEdge{ 2, 3, 8.0 } };
     CorridorDef def;
     def.horizontal = Alignment::fromPolyline({ Vec2(-100, 0), Vec2(500, 0) },
                                              300.0, 20.0);
@@ -254,18 +271,20 @@ TEST_CASE(zoo_ramp_landing) {
         corridorAuthor(def, [](Real, Real) { return Real(0); }, 3.0);
     CHECK(!au.rampPaths.empty());
     CHECK(!au.rampPaths[0].pts.empty());
-    bakeCorridorIntoNet(net, def, au.rampPaths);
+    bakeCorridorIntoNet(net, def, au.rampPaths, {}, flatGround);
     checkJunction("landing", net, 2, 22.0);
 }
 
 TEST_CASE(zoo_tee_on_hills) {
     // The flat zoo hides everything terrain touches (the standing lesson):
     // the same T on rolling ground.
-    RoadNet net = baseNet();
-    net.heightAt = [](double x, double z) {
+    RoadEntity net = baseNet();
+    const RoadGroundFn hills = [](double x, double z) {
         return 2.5 * std::sin(x * 0.045) + 1.8 * std::cos(z * 0.06);
     };
-    net.nodes = { Vec2(0, 0), Vec2(80, 0), Vec2(-80, 0), Vec2(0, 80) };
-    net.edges = { { 0, 1 }, { 0, 2 }, { 0, 3 } };
-    checkJunction("hillT", net, 0, 20.0);
+    net.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(80, 0)},
+                        RoadNode{Vec2(-80, 0)}, RoadNode{Vec2(0, 80)} };
+    net.graph.edges = { RoadEdge{ 0, 1, 8.0 }, RoadEdge{ 0, 2, 8.0 },
+                        RoadEdge{ 0, 3, 8.0 } };
+    checkJunction("hillT", net, 0, 20.0, hills);
 }

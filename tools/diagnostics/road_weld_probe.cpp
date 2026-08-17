@@ -164,11 +164,11 @@ static std::vector<std::vector<std::pair<int,double>>> adjacency(const RoadGraph
 }
 
 // ---- arena: synthetic junctions -------------------------------------------
-static RoadNet star(int arms, double firstGap, double width) {
+static RoadEntity star(int arms, double firstGap, double width) {
     // one centre node + `arms` spokes; the first two spokes are `firstGap` apart,
     // the rest spread evenly around the remaining circle.
-    RoadNet net; net.width = width; net.sidewalk = 3.5;
-    net.nodes.push_back(Vec2(0, 0));
+    RoadEntity net; net.look.defaultWidth = width; net.look.sidewalk = 3.5;
+    net.graph.nodes.push_back(RoadNode{Vec2(0, 0)});
     std::vector<double> bear;
     bear.push_back(0.0);
     bear.push_back(firstGap * TAU_PI / 180.0);
@@ -176,8 +176,8 @@ static RoadNet star(int arms, double firstGap, double width) {
     for (int k = 2; k < arms; ++k) bear.push_back(bear[1] + rest * (k - 1) / (arms - 1));
     for (int k = 0; k < arms; ++k) {
         double a = bear[k];
-        net.nodes.push_back(Vec2(std::cos(a), std::sin(a)) * 60.0);
-        net.edges.push_back({0, k + 1});
+        net.graph.nodes.push_back(RoadNode{Vec2(std::cos(a), std::sin(a)) * 60.0});
+        net.graph.addEdge(0, k + 1, width);
     }
     return net;
 }
@@ -192,9 +192,9 @@ static void runArena() {
     for (double deg : {30.0, 45.0, 60.0, 90.0}) cases.push_back({4, deg});          // + / X
     for (double deg : {45.0, 60.0}) cases.push_back({5, deg});
     for (const Case& c : cases) {
-        RoadNet net = star(c.arms, c.gap, 7.0);
-        RenderMesh mesh = buildRoadNetMesh(net);
-        RoadGraph g = navRoadGraph(net);
+        RoadEntity net = star(c.arms, c.gap, 7.0);
+        RenderMesh mesh = buildRoadNetMesh(net, nullptr);
+        RoadGraph g = navRoadGraph(net, nullptr);
         auto adj = adjacency(g);
         std::vector<Tri> tris = topTris(mesh);
         // the centre node is the one nearest origin with degree == arms
@@ -205,7 +205,7 @@ static void runArena() {
                 if (d < bd) { bd = d; best = v; }
             }
         if (best < 0) { printf("%-6d %-10.0f  (no junction formed)\n", c.arms, c.gap); continue; }
-        JunctionInfo J = measure(g, best, adj, tris, net.sidewalk);
+        JunctionInfo J = measure(g, best, adj, tris, net.look.sidewalk);
         const char* verdict = J.gapFrac > 0.06 ? "GAP" : (J.gapFrac > 0.02 ? "marginal" : "ok");
         printf("%-6d %-10.1f %-9.3f %-8.2f %-8d %-7s\n",
                c.arms, J.minAngleDeg, J.gapFrac, J.gapArea, J.unionLoops, verdict);
@@ -214,14 +214,14 @@ static void runArena() {
 
 // ---- city: sweep the living_city net --------------------------------------
 static void runCity() {
-    RoadNet net; net.width = 7.0; net.sidewalk = 3.5; net.curb = 0.16;
-    net.cornerRadius = 3.0; net.lift = 0.08;
+    RoadEntity net; net.look.defaultWidth = 7.0; net.look.sidewalk = 3.5; net.look.curb = 0.16;
+    net.look.cornerRadius = 3.0; net.look.lift = 0.08;
     nlohmann::json gen = {
         {"kind","district"},{"radius",170},{"arterials",3},{"artery_width",13},
         {"street_width",7},{"block_size",82},{"curviness",0.22},{"seed",5}};
-    applyGenerateRecipe(net, gen);
-    RenderMesh mesh = buildRoadNetMesh(net);
-    RoadGraph g = navRoadGraph(net);
+    applyGenerateRecipe(net, gen, nullptr);
+    RenderMesh mesh = buildRoadNetMesh(net, nullptr);
+    RoadGraph g = navRoadGraph(net, nullptr);
     auto adj = adjacency(g);
     std::vector<Tri> tris = topTris(mesh);
     printf("# CITY — living_city junctions. %zu graph nodes, %zu top-tris.\n",
@@ -229,7 +229,7 @@ static void runCity() {
     std::vector<JunctionInfo> js;
     for (int v = 0; v < (int)g.nodes.size(); ++v) {
         if ((int)adj[v].size() < 3) continue;
-        js.push_back(measure(g, v, adj, tris, net.sidewalk));
+        js.push_back(measure(g, v, adj, tris, net.look.sidewalk));
     }
     std::sort(js.begin(), js.end(), [](const JunctionInfo& a, const JunctionInfo& b){
         return a.gapArea > b.gapArea; });
@@ -287,14 +287,14 @@ static void runCity() {
 // road centrelines, and mark grid cells the deck fails to cover in red — the
 // ground truth for whether a reported gap is real mesh uncoverage.
 static void runFocus(double cx, double cz, double half) {
-    RoadNet net; net.width = 7.0; net.sidewalk = 3.5; net.curb = 0.16;
-    net.cornerRadius = 3.0; net.lift = 0.08;
+    RoadEntity net; net.look.defaultWidth = 7.0; net.look.sidewalk = 3.5; net.look.curb = 0.16;
+    net.look.cornerRadius = 3.0; net.look.lift = 0.08;
     nlohmann::json gen = {
         {"kind","district"},{"radius",170},{"arterials",3},{"artery_width",13},
         {"street_width",7},{"block_size",82},{"curviness",0.22},{"seed",5}};
-    applyGenerateRecipe(net, gen);
-    RenderMesh mesh = buildRoadNetMesh(net);
-    RoadGraph g = navRoadGraph(net);
+    applyGenerateRecipe(net, gen, nullptr);
+    RenderMesh mesh = buildRoadNetMesh(net, nullptr);
+    RoadGraph g = navRoadGraph(net, nullptr);
     std::vector<Tri> tris = topTris(mesh);
     const char* out = getenv("SVG") ? getenv("SVG") : "/dev/stdout";
     FILE* f = fopen(out, "w");

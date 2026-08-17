@@ -779,3 +779,122 @@ TEST_CASE(procgen_scatter_returns_frames) {
     CHECK(vm.getGlobalBool("ok", ok));
     CHECK(ok);
 }
+
+// --- the ARCHETYPE BOOK (the architect's SELECTION layer as data) ---
+
+// A book carrying the compiled ladders' own weights must reproduce the
+// architect's picks BIT-FOR-BIT: same roll, same cumulative thresholds
+// (integer weights normalize to the ladders' exact k/100 doubles), same
+// recipe body drawing from the same rng position. This is the identity gate
+// that lets a level ship a book without regenerating its city.
+TEST_CASE(archetype_book_identity_weights_reproduce_the_ladders) {
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::string err;
+    const std::string code = R"lua(
+archetype_book = {
+  financial = {
+    {"glass_tower", 26}, {"podium_tower", 12}, {"office_slab", 17},
+    {"art_deco_tower", 9}, {"stepped_tower", 9}, {"drum_tower", 7},
+    {"commercial_block", 9}, {"parking_garage", 4.5}, {"plaza", 3.5},
+    {"civic_hall", 3},
+  },
+  commercial = {
+    {"pocket_park", 4}, {"plaza", 3}, {"brick_shop", 18}, {"mixed_use", 13},
+    {"office_midrise", 8}, {"podium_tower", 3}, {"condo_tower", 6},
+    {"terrace_condo", 6}, {"loft_block", 6}, {"hotel", 6}, {"bank", 5},
+    {"cinema", 4}, {"strip_mall", 4}, {"supermarket", 4}, {"office_park", 3},
+    {"pagoda_tower", 2}, {"civic_midtown", 3}, {"walkup_homes", 2},
+  },
+  oldtown = { {"oldtown_house", 62}, {"oldtown_cafe", 20}, {"oldtown_grand", 18} },
+  industrial = {
+    {"metal_shed", 45}, {"factory", 25}, {"brick_warehouse", 15},
+    {"industrial_office", 15},
+  },
+  residential = {
+    {"pocket_park", 7}, {"yard_house", 18}, {"modern_house", 6},
+    {"bungalow", 7}, {"craftsman_house", 7}, {"cottage", 6}, {"villa", 6},
+    {"ranch_house", 7}, {"duplex", 8}, {"rowhouses", 12}, {"garden_condo", 5},
+    {"apartments", 7}, {"corner_shop", 4},
+  },
+}
+)lua";
+    ArchetypeBook book = makeArchetypeBook(vm, code, &err);
+    CHECK(err.empty());
+    CHECK(!book.empty());
+    for (int t = 0; t < 5; ++t)
+        CHECK(!book.tables[static_cast<std::size_t>(t)].empty());
+
+    int compared = 0;
+    for (int t = 0; t < 5; ++t) {
+        const DistrictTag tag = static_cast<DistrictTag>(t);
+        for (uint32_t seed = 1; seed <= 400; ++seed) {
+            const Real shortSide = 8.0 + (seed % 17);      // spans roomy both ways
+            const Real area = 180.0 + (seed % 900);
+            const Real coreness = (seed % 11) / 10.0;
+            BuildingRecipe a = architectPick(tag, shortSide, area, seed, coreness);
+            BuildingRecipe b =
+                architectPick(tag, shortSide, area, seed, coreness, &book);
+            CHECK(a.name == b.name);
+            CHECK(a.params.floors == b.params.floors);   // the body drew the
+            CHECK(a.params.seed == b.params.seed);       // same stream
+            ++compared;
+        }
+    }
+    CHECK(compared == 2000);
+}
+
+// The courtMinArea rule: a book with ANY invalid entry is rejected WHOLE, with
+// the offender named — an author can never set a knob and silently get
+// nothing. (The false-knob failure mode this guards against shipped once
+// already: parcel.h courtMinArea.)
+TEST_CASE(archetype_book_hard_errors_never_skip) {
+    auto tryBook = [](const std::string& code, const char* mustMention) {
+        ScriptVM vm;
+        openProcgenLibrary(vm);
+        std::string err;
+        ArchetypeBook book = makeArchetypeBook(vm, code, &err);
+        CHECK(!err.empty());
+        CHECK(book.empty());   // all-or-nothing: no half-applied book
+        if (mustMention) CHECK(err.find(mustMention) != std::string::npos);
+    };
+    // Unknown recipe name — the typo must be IN the error.
+    tryBook("archetype_book = { financial = { {\"glass_towr\", 26} } }",
+            "glass_towr");
+    // Unknown district key ("residental" must not silently no-op).
+    tryBook("archetype_book = { residental = { {\"cottage\", 1} } }",
+            "residental");
+    // Non-positive weight.
+    tryBook("archetype_book = { oldtown = { {\"oldtown_cafe\", 0} } }",
+            "oldtown_cafe");
+    // Empty district table.
+    tryBook("archetype_book = { industrial = {} }", "industrial");
+    // No table at all.
+    tryBook("not_a_book = 1", "archetype_book");
+}
+
+// The knob actually turns (the can-fail half): an all-glass-tower financial
+// district must pick glass_tower on EVERY financial lot, while an untouched
+// district keeps its ladder.
+TEST_CASE(archetype_book_reweights_the_city) {
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::string err;
+    ArchetypeBook book = makeArchetypeBook(
+        vm, "archetype_book = { financial = { {\"glass_tower\", 1} } }", &err);
+    CHECK(err.empty());
+    CHECK(!book.empty());
+    int glass = 0, defaultMatches = 0;
+    for (uint32_t seed = 1; seed <= 200; ++seed) {
+        BuildingRecipe b =
+            architectPick(DistrictTag::Financial, 18.0, 500.0, seed, 0.5, &book);
+        if (b.name == "glass_tower") ++glass;
+        // Residential is absent from the book: identical to the ladder.
+        BuildingRecipe r0 = architectPick(DistrictTag::Residential, 12, 300, seed);
+        BuildingRecipe r1 =
+            architectPick(DistrictTag::Residential, 12, 300, seed, 0, &book);
+        if (r0.name == r1.name) ++defaultMatches;
+    }
+    CHECK(glass == 200);
+    CHECK(defaultMatches == 200);
+}
