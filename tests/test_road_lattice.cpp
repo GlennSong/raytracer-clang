@@ -299,21 +299,31 @@ TEST_CASE(lattice_winding_matches_the_engine_convention) {
     CHECK(upFacesInverted(body) == 0);          // 1152/1152 agree with the box
 }
 
-// KNOWN DEFECT, measured not guessed. The full net path (carriageways + junction
-// pads + band loops) still emits a few inverted up-faces where a junction pad's
-// Coons interior FOLDS on sloped ground — a folded sheet is self-intersecting, so
-// no winding choice can make every face front-facing; the geometry has to stop
-// folding. Deciding the lattice winding per CELL rather than once per sheet
+// KNOWN DEFECT — and the isolation below CORRECTS an earlier diagnosis, so read
+// the numbers before trusting any story about it.
+//
+// It was recorded as "junction pads fold on sloped ground": a Coons interior that
+// self-intersects, where no winding choice can help. That was wrong. The isolation
+// at the end of this test runs two graphs on FLAT ground with no junction pad at
+// all — the middle node of the bent one is degree 2 — and gets:
+//
+//     straight  0 inverted of 264
+//     bent      2 inverted of 276
+//
+// Slope is not involved and neither is the pad. The inversions appear at a BEND,
+// which puts the defect in the swept body's MITRE, not in junction-pad
+// construction. Reproducing it needs three nodes and no terrain.
+//
+// Deciding the lattice winding per CELL rather than once per sheet
 // (mesh_builder.cpp emitLattice) took city.json's roads from 24 inverted faces of
-// 11575 down to 8, which is the winding half of the problem fixed. The residue is
-// geometric and belongs to junction-pad construction.
+// 11575 down to 8; these are the residue.
 //
 // This prints rather than asserts zero deliberately: an assertion that passes at
 // the current count would freeze the bug in place, and one that fails would be a
 // red gate nobody can act on today (docs/knowledge-retention-plan.md § "The gate
-// must be green, and honest"). Tracked as its own task; turn this into
-// CHECK(upFacesInverted(net) == 0) the moment the pad stops folding.
-TEST_CASE(junction_pads_still_fold_on_slopes) {
+// must be green, and honest"). Turn it into CHECK(upFacesInverted(...) == 0) once
+// the mitre is fixed.
+TEST_CASE(swept_body_inverts_a_few_faces_at_bends) {
     RoadGraph g;
     for (int i = 0; i <= 2; ++i)
         for (int j = 0; j <= 2; ++j) g.addNode(Vec2(i * 60.0, j * 60.0));
@@ -328,6 +338,22 @@ TEST_CASE(junction_pads_still_fold_on_slopes) {
     };
     RenderMesh net = buildRoadNetLattice(g, ground, nullptr, 3.0, 0.15, true);
     RenderMesh bare = buildRoadNetLattice(g, ground, nullptr, 0.0, 0.15, true);
+
+    // Isolate the cause. A STRAIGHT chain with no junction pad at all, flat, then
+    // the same with a right-angle bend. If the bend is where the inversions
+    // appear, the defect is in the swept body's mitre and not in the Coons pad.
+    RoadGraph straight;
+    straight.addNode(Vec2(0, 0)); straight.addNode(Vec2(120, 0));
+    straight.addEdge(0, 1, 9.0, RoadClass::Local);
+    RoadGraph bent;
+    bent.addNode(Vec2(0, 0)); bent.addNode(Vec2(60, 0)); bent.addNode(Vec2(60, 60));
+    bent.addEdge(0, 1, 9.0, RoadClass::Local);
+    bent.addEdge(1, 2, 9.0, RoadClass::Local);
+    RenderMesh ms = buildRoadNetLattice(straight, nullptr, nullptr, 3.0, 0.15, false);
+    RenderMesh mb = buildRoadNetLattice(bent, nullptr, nullptr, 3.0, 0.15, false);
+    std::printf("        [winding] ISOLATE: straight %d/%zu, bent %d/%zu\n",
+                upFacesInverted(ms), ms.indices.size() / 3,
+                upFacesInverted(mb), mb.indices.size() / 3);
     std::printf("        [winding] KNOWN: net %d inverted / %zu tris, "
                 "sidewalk-less %d / %zu\n",
                 upFacesInverted(net), net.indices.size() / 3,
