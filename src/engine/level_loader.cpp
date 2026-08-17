@@ -1969,6 +1969,7 @@ struct GrownLots {
     std::vector<engine::LotBuilding> lots;
     engine::LotPlanDebug plan;           // blocks + lots, for the debug overlay
     std::vector<RenderMesh> parts;       // grown geometry merged by PartId
+    std::vector<RenderMesh> flatParts;   // the LOD1 twin (city-render-perf R2)
     bool grown = false;
 };
 
@@ -2036,11 +2037,16 @@ static GrownLots growCityLots(const std::vector<engine::RoadNet>& nets,
     // Buildings keep clear of the SAMPLED road corridors by sidewalk + a
     // margin, so nothing overhangs the concrete or pokes into the street.
     const double roadClear = cs.value("sidewalk", 4.0) + 0.6;
-    engine::NetLotResult r =
-        engine::growLotBuildingsOnNets(nets, lp, ep, roadClear, freewayROW);
+    // The middle-LOD tier is grown only when the level opts in with
+    // "facadeDistance" (R2) — the offline tracer and two-tier levels skip it.
+    const bool wantFlat = cs.value("facadeDistance", 0.0) >
+                          cs.value("detailDistance", 700.0);
+    engine::NetLotResult r = engine::growLotBuildingsOnNets(
+        nets, lp, ep, roadClear, freewayROW, wantFlat);
     g.lots = std::move(r.lots);
     g.plan = std::move(r.plan);
     g.parts = std::move(r.parts);
+    g.flatParts = std::move(r.flatParts);
     g.grown = true;
     return g;
 }
@@ -3350,49 +3356,73 @@ bool LevelLoader::load(const std::string& path,
                 // it each cell's MASS-BOX proxy takes over (baked below from
                 // the lots' oriented boxes). 0 disables the swap.
                 const double detailDistance = cs.value("detailDistance", 700.0);
-                for (std::size_t pi = 0; pi < lotParts.size(); ++pi) {
-                    RenderMesh& pm = lotParts[pi];
-                    if (pm.vertices.empty()) continue;
-                    Renderable proto;
-                    proto.renderLayer = engine::LayerBuildings;   // debug layer toggle
-                    proto.material = materialFor(static_cast<PartId>(pi),
-                                                 Vec3(0.80, 0.78, 0.75));
-                    const Surface surf = proto.material.surface();
-                    if (surf != Surface::None) {
-                        // FanTop/VentGrille/RoofShingle bake their own UVs in
-                        // the grammar (centred disc / plate-fitted / slope-
-                        // fitted) — a world-planar re-UV would break them.
-                        if (!surfaceBakesOwnUVs(surf))
-                            applyWorldPlanarUVs(pm, 1.0 / surfaceWorldTileSize(surf));
-                        bindSurfaceMaps(proto.material,
-                                        bakeSurfaceTextures(renderer, surf, lotTex));
+                // R2 (city-render-perf): the optional MIDDLE tier. When
+                // facadeDistance > detailDistance, full facades stop at
+                // detailDistance, the FLAT LOD1 facades carry the ring out to
+                // facadeDistance, and the mass boxes take over past that.
+                // Absent (0), everything behaves exactly as before.
+                const double facadeDistance = cs.value("facadeDistance", 0.0);
+                const bool threeTier =
+                    facadeDistance > detailDistance && detailDistance > 0 &&
+                    !grown.flatParts.empty();
+                // One spawner for both tiers, so material binding and chunking
+                // cannot diverge between LOD0 and LOD1.
+                auto spawnPartChunks = [&](std::vector<RenderMesh>& partsVec,
+                                           double minDist, double drawDist,
+                                           bool scaleSmallParts) {
+                    for (std::size_t pi = 0; pi < partsVec.size(); ++pi) {
+                        RenderMesh& pm = partsVec[pi];
+                        if (pm.vertices.empty()) continue;
+                        Renderable proto;
+                        proto.renderLayer = engine::LayerBuildings;   // debug layer toggle
+                        proto.material = materialFor(static_cast<PartId>(pi),
+                                                     Vec3(0.80, 0.78, 0.75));
+                        const Surface surf = proto.material.surface();
+                        if (surf != Surface::None) {
+                            // FanTop/VentGrille/RoofShingle bake their own UVs in
+                            // the grammar (centred disc / plate-fitted / slope-
+                            // fitted) — a world-planar re-UV would break them.
+                            if (!surfaceBakesOwnUVs(surf))
+                                applyWorldPlanarUVs(pm, 1.0 / surfaceWorldTileSize(surf));
+                            bindSurfaceMaps(proto.material,
+                                            bakeSurfaceTextures(renderer, surf, lotTex));
+                        }
+                        // MID TIER: small dressing (HVAC, tanks, trim, doors,
+                        // hedges) is subpixel long before the shell swaps to its
+                        // proxy — cull those parts earlier so the far half of the
+                        // detail ring draws bare shells. Superseded in three-tier
+                        // mode, where EVERY part swaps to LOD1 together at
+                        // detailDistance (a clean lockstep swap beats a ring of
+                        // buildings missing their trim).
+                        double ddScale = 1.0;
+                        if (scaleSmallParts) {
+                            switch (static_cast<PartId>(pi)) {
+                                case PartId::Vent: case PartId::Utility: case PartId::Fan:
+                                case PartId::Wood: case PartId::Detail: case PartId::Trim:
+                                case PartId::Door: case PartId::Foliage: case PartId::Path:
+                                    ddScale = 0.55; break;
+                                default: break;
+                            }
+                        }
+                        for (RenderMesh& chunk : chunkMeshByCell(pm, renderCell)) {
+                            if (chunk.vertices.empty()) continue;
+                            Renderable r = proto;
+                            if (drawDist > 0) r.drawDistance = drawDist * ddScale;
+                            r.minDistance = minDist;
+                            r.drawClass = engine::DrawClass::Structure;
+                            r.mesh = assets.acquireMesh(chunk, "");   // world-space, unkeyed
+                            Entity e = world.create();
+                            Transform t;   // identity — the mesh sits in world space
+                            world.add<Transform>(e, t);
+                            world.add<PrevTransform>(e, PrevTransform{t});
+                            world.add<Renderable>(e, r);
+                        }
                     }
-                    // MID TIER: small dressing (HVAC, tanks, trim, doors,
-                    // hedges) is subpixel long before the shell swaps to its
-                    // proxy — cull those parts earlier so the far half of the
-                    // detail ring draws bare shells. Invisible at range, and
-                    // it thins exactly the draws that dominate part counts.
-                    double ddScale = 1.0;
-                    switch (static_cast<PartId>(pi)) {
-                        case PartId::Vent: case PartId::Utility: case PartId::Fan:
-                        case PartId::Wood: case PartId::Detail: case PartId::Trim:
-                        case PartId::Door: case PartId::Foliage: case PartId::Path:
-                            ddScale = 0.55; break;
-                        default: break;
-                    }
-                    for (RenderMesh& chunk : chunkMeshByCell(pm, renderCell)) {
-                        if (chunk.vertices.empty()) continue;
-                        Renderable r = proto;
-                        if (detailDistance > 0) r.drawDistance = detailDistance * ddScale;
-                        r.drawClass = engine::DrawClass::Structure;
-                        r.mesh = assets.acquireMesh(chunk, "");   // world-space, unkeyed
-                        Entity e = world.create();
-                        Transform t;   // identity — the mesh sits in world space
-                        world.add<Transform>(e, t);
-                        world.add<PrevTransform>(e, PrevTransform{t});
-                        world.add<Renderable>(e, r);
-                    }
-                }
+                };
+                spawnPartChunks(lotParts, 0.0, detailDistance, !threeTier);
+                if (threeTier)
+                    spawnPartChunks(grown.flatParts, detailDistance,
+                                    facadeDistance, false);
             }
             // HLOD PROXIES (P1.2): one mass-box mesh per render cell, baked
             // from the lots' oriented boxes in their own colours — a distant
@@ -3400,7 +3430,8 @@ bool LevelLoader::load(const std::string& path,
             // for a fraction of the triangles. Drawn only PAST detailDistance.
             if (cs.value("detailDistance", 700.0) > 0) {
                 const double cell = cs.value("renderCell", 250.0);
-                const double dd = cs.value("detailDistance", 700.0);
+                const double fd = cs.value("facadeDistance", 0.0);
+                const double dd = std::max(cs.value("detailDistance", 700.0), fd);
                 std::map<std::pair<int, int>, RenderMesh> proxies;
                 for (const engine::LotBuilding& lb : grown.lots) {
                     if (lb.height < 1.5 || lb.pad.size() >= 3) continue;   // parks/greens: skip

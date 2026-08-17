@@ -894,7 +894,8 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
 std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                           const LotParams& p, LotPlanDebug* debug,
                                           std::vector<RenderMesh>* outParts,
-                                          const RoadGraph* roads, Real roadClearance) {
+                                          const RoadGraph* roads, Real roadClearance,
+                                          std::vector<RenderMesh>* outFlatParts) {
     std::vector<LotBuilding> out;
     // The plan counters always run (the build-end density line below reads
     // them); `debug` just decides whether the caller sees them too.
@@ -1171,6 +1172,22 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         for (std::size_t i = 0; i < outParts->size(); ++i)
             (*outParts)[i].materialIndex = static_cast<int>(i);
     }
+    if (outFlatParts) {
+        outFlatParts->assign(static_cast<std::size_t>(PartId::Count), RenderMesh{});
+        for (std::size_t i = 0; i < outFlatParts->size(); ++i)
+            (*outFlatParts)[i].materialIndex = static_cast<int>(i);
+    }
+    // Merge one grown building's parts into a PartId-indexed set (the same
+    // fold the LOD0 path does inline below — shared so the flat set cannot
+    // diverge on indexing).
+    auto mergeParts = [](std::vector<RenderMesh>* dst, const BuildingMesh& bm) {
+        if (!dst) return;
+        for (const RenderMesh& part : bm.parts) {
+            const int mi = part.materialIndex;
+            if (mi >= 0 && mi < static_cast<int>(dst->size()))
+                MeshBuilder::append((*dst)[mi], part);
+        }
+    };
     // ---- PASS A: parcel every block and COLLECT the viable lots ------------
     // The landmark planner (pass B) needs to see the whole city before any lot
     // builds — a courthouse goes on the BEST financial lot, not the first one.
@@ -1903,13 +1920,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         upar.faceDir = bp.faceDir;
                         if (p.styleHook) p.styleHook("rowhouse_unit", upar);
                         BuildingMesh um = growPlanBuilding(up4, upar, stripBase);
-                        if (outParts)
-                            for (const RenderMesh& part : um.parts) {
-                                const int mi = part.materialIndex;
-                                if (mi >= 0 &&
-                                    mi < static_cast<int>(outParts->size()))
-                                    MeshBuilder::append((*outParts)[mi], part);
-                            }
+                        mergeParts(outParts, um);
+                        if (outFlatParts)
+                            mergeParts(outFlatParts,
+                                       growPlanBuilding(up4, upar, stripBase,
+                                                        FacadeDetail::Flat));
                         b.height = std::max(b.height, um.height);
                     }
                     b.site = sb.center;
@@ -1950,6 +1965,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             }
 
             BuildingMesh bm;
+            BuildingMesh bmFlat;   // the LOD1 twin, same massing decisions (R2)
             // On terrain the building rises from its graded pad plane (plus the
             // plinth reveal); every walk-up entrance earns steps to the door —
             // porticos and bay-door fronts already bring their own.
@@ -2062,6 +2078,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             }
             if (planOk) {
                 bm = growPlanBuilding(plan, bp, b.baseY);
+                if (outFlatParts)
+                    bmFlat = growPlanBuilding(plan, bp, b.baseY,
+                                              FacadeDetail::Flat);
                 OBB2 pb = orientedBoundingBox(plan);
                 b.site = pb.center;
                 b.width = 2 * pb.half[0];
@@ -2087,6 +2106,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 b.depth = scope.size.z;
                 b.yaw = std::atan2(scope.axis[0].z, scope.axis[0].x);
                 bm = growBuilding(scope, bp);
+                if (outFlatParts)
+                    bmFlat = growBuilding(scope, bp, FacadeDetail::Flat);
                 // The box scope IS the plan here (shrunk-fit inside the lot).
                 Vec2 r2(scope.axis[0].x, scope.axis[0].z);
                 Vec2 f2(scope.axis[2].x, scope.axis[2].z);
@@ -2096,12 +2117,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                           o2 + f2 * scope.size.z};
             }
             if (bm.parts.empty()) continue;
-            if (outParts)
-                for (const RenderMesh& part : bm.parts) {
-                    const int mi = part.materialIndex;
-                    if (mi >= 0 && mi < static_cast<int>(outParts->size()))
-                        MeshBuilder::append((*outParts)[mi], part);
-                }
+            mergeParts(outParts, bm);
+            mergeParts(outFlatParts, bmFlat);
             b.height = bm.height > 0 ? bm.height : 8.0;
             emitFoundation(b.plan, b.groundY, b.baseY);
             // A yarded house earns its LANDSCAPING: front walk to the street,
@@ -2306,7 +2323,8 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
                                     const LotParams& params,
                                     const EdgeBlockParams& edgeParams,
                                     Real roadClearance,
-                                    const RoadGraph* freewayROW) {
+                                    const RoadGraph* freewayROW,
+                                    bool wantFlatParts) {
     NetLotResult r;
     // One combined raw planar graph across every net (the sampled navRoadGraph
     // loses faces, so the block extraction uses the nets' own nodes/edges) —
@@ -2416,7 +2434,8 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
         }
     }
     r.lots = growLotBuildings(blocks, lp, &r.plan, &r.parts, &rgSampled,
-                              roadClearance);
+                              roadClearance,
+                              wantFlatParts ? &r.flatParts : nullptr);
     return r;
 }
 

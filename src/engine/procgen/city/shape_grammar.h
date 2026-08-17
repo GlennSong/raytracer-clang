@@ -238,8 +238,20 @@ struct BuildingParams {
     uint32_t seed = 0;
 };
 
+// Facade DETAIL level (city-render-perf R2): the same grammar, two emissions.
+// Full is today's facades — reveals, frames, muntins, sills, cornices, trim.
+// Flat is the middle LOD: one quad per wall, one flat pane per opening, roof
+// planes and parapet kept for the silhouette, every ornament element skipped.
+// The two levels consume the SAME facade layout (the splitter decides bay and
+// opening placement once), so they can never disagree about where a window or
+// the door is — the first in-engine step of the blueprint model
+// (lot-system-plan §15.2). Cylinder and Pagoda shapes currently emit Full at
+// both levels (they are already lean; their flat pass is a later follow-up).
+enum class FacadeDetail : uint8_t { Full, Flat };
+
 // Grow a building into `scope` (ADR-0038 §2). Deterministic for `params.seed`.
-BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params);
+BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params,
+                          FacadeDetail detail = FacadeDetail::Full);
 
 // Grow a FLOORPLAN building (building-grammar-plan.md P3): the massing is a
 // closed polygon — the lot's own shape, an L/T/U composition, a flatiron
@@ -252,7 +264,8 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params);
 // the base/shaft/capital stack — with a swept cornice at every transition.
 // Winding is normalized internally; deterministic for `params.seed`.
 BuildingMesh growPlanBuilding(const Poly2& plan, const BuildingParams& params,
-                              Real baseY = 0.0);
+                              Real baseY = 0.0,
+                              FacadeDetail detail = FacadeDetail::Full);
 
 // The default material for a part class (PBR; ADR-0017/0032). Recipes may override.
 RenderMaterial materialFor(PartId id, const Vec3& wallColor);
