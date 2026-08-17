@@ -447,7 +447,8 @@ ROADLAB_LIB_SRCS = \
 	$(ROADLAB_DIR)/props.cpp \
 	$(ROADLAB_DIR)/sim.cpp \
 	$(ROADLAB_DIR)/odr.cpp \
-	$(ROADLAB_DIR)/scene.cpp
+	$(ROADLAB_DIR)/scene.cpp \
+	$(ROADLAB_DIR)/webexport.cpp
 ROADLAB_FLAGS = -std=c++17 -Wall -Wextra -Wpedantic -pthread -O2 \
 	-isystem third_party -isystem third_party/tinygltf
 # The tests read rl_paint.h and rl_paint.wgsl off disk to check the generated
@@ -490,6 +491,47 @@ roadlab-wgsl-conformance: roadlab
 	@mkdir -p out_roadlab
 	./roadlab --paint-fixture out_roadlab/paint.fixture --quiet
 	python3 tools/roadlab-wgsl-run.py --fixture out_roadlab/paint.fixture
+
+# The other half of the same contract. The evaluator above is handed its
+# boundaries; this runs the fetch that has to produce them out of two textures,
+# with a linear filter on one axis and a nearest index on the other. Every scene,
+# because the interesting rows are the style-row seams and a demo with one
+# cross-section has none.
+ROADLAB_WEB_SCENES := showcase lanes roundabout interchange urban tiers
+roadlab-sampler-conformance: roadlab
+	@mkdir -p out_roadlab/web
+	@set -e; for s in $(ROADLAB_WEB_SCENES); do \
+		./roadlab --demo $$s --web out_roadlab/web/$$s --quiet; \
+		python3 tools/roadlab-sampler-run.py --prefix out_roadlab/web/$$s; \
+	done
+	./roadlab --city --seed 3 --web out_roadlab/web/city --quiet
+	python3 tools/roadlab-sampler-run.py --prefix out_roadlab/web/city
+	./roadlab --metro --seed 3 --web out_roadlab/web/metro --quiet
+	python3 tools/roadlab-sampler-run.py --prefix out_roadlab/web/metro
+
+# The scenes, the shaders and the page in one servable directory. WebGPU needs a
+# secure context, so serve it — file:// will not do:
+#
+#   make roadlab-web && (cd out_roadlab/web && python3 -m http.server)
+#   open http://localhost:8000/roadlab-paint.html?scene=metro
+roadlab-web: roadlab
+	@mkdir -p out_roadlab/web
+	@set -e; for s in $(ROADLAB_WEB_SCENES); do \
+		./roadlab --demo $$s --web out_roadlab/web/$$s --quiet; done
+	./roadlab --city --seed 3 --web out_roadlab/web/city --quiet
+	./roadlab --metro --seed 3 --web out_roadlab/web/metro --quiet
+	cp $(ROADLAB_DIR)/rl_paint.wgsl $(ROADLAB_DIR)/rl_paint_sampler.wgsl \
+		$(ROADLAB_DIR)/rl_paint_view.wgsl web/roadlab-paint.html out_roadlab/web/
+	@echo "serve out_roadlab/web over HTTP, then open roadlab-paint.html?scene=metro"
+
+# The same pipeline the page runs, headless, into a PNG — and the frame time with
+# the evaluator live against the frame time without it. That difference is the
+# only honest answer to "does this work in realtime".
+roadlab-web-render: roadlab
+	@mkdir -p out_roadlab/web
+	./roadlab --demo showcase --web out_roadlab/web/showcase --quiet
+	python3 tools/roadlab-web-render.py --prefix out_roadlab/web/showcase \
+		--out out_roadlab/web/showcase.png --zoom 0.14 --pitch 11 --yaw 100
 
 # Every demo, top-down and in perspective, into out_roadlab/ — the quickest way
 # to see whether a change to the shader or the solvers broke something visible.

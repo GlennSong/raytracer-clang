@@ -78,6 +78,19 @@ int PaintAtlas::sample(int roadIndex, double row, RlBoundary* out, int maxCount)
     return count;
 }
 
+std::vector<float> PaintAtlas::profileImage() const {
+    const size_t stride = size_t(kProfileTexelsPerRow) * 4;
+    std::vector<float> img(size_t(imageWidth()) * size_t(imageHeight()) * 4, 0.0f);
+    for (int r = 0; r < rows; ++r) {
+        size_t x = size_t(r % kRowsPerTile) * stride;
+        size_t y = size_t(r / kRowsPerTile);
+        float* dst = &img[y * size_t(imageWidth()) * 4 + x];
+        const float* src = &profileTex[size_t(r) * stride];
+        for (size_t i = 0; i < stride; ++i) dst[i] = src[i];
+    }
+    return img;
+}
+
 namespace {
 
 // Build one road's rows and fold its style sets into the shared table.

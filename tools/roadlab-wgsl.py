@@ -471,6 +471,7 @@ def build():
 
 
 SAMPLER = os.path.join(ROOT, "proto", "roadlab", "rl_paint_sampler.wgsl")
+VIEW = os.path.join(ROOT, "proto", "roadlab", "rl_paint_view.wgsl")
 
 
 def validate():
@@ -480,12 +481,18 @@ def validate():
     is not vendored — `cargo install naga-cli` — so this degrades to a stated
     skip rather than a silent pass when it is absent.
 
-    Two subjects, because they check different things. rl_paint.wgsl alone
+    Three subjects, because they check different things. rl_paint.wgsl alone
     type-checks the evaluator. Concatenated with rl_paint_sampler.wgsl it also
     checks the contract in paint_texture.h: the bindings, the texel arithmetic,
     and passing a pointer-to-array into the evaluator from a fragment entry
-    point. And the SPIR-V backend is asked for output rather than just a parse,
-    because lowering enforces things the front-end lets through."""
+    point. Add rl_paint_view.wgsl and it is the whole draw, exactly as
+    web/roadlab-paint.html and tools/roadlab-web-render.py concatenate it. And
+    the SPIR-V backend is asked for output rather than just a parse, because
+    lowering enforces things the front-end lets through.
+
+    What this does NOT catch is WGSL's uniformity rules, which naga is lenient
+    about and Tint is not: a dpdx inside a non-uniform branch passed every step
+    here and was rejected by Chrome. Validation is a floor, not a browser."""
     import subprocess
     import tempfile
 
@@ -508,12 +515,15 @@ def validate():
         evaluator = f.read()
     with open(SAMPLER) as f:
         sampler = f.read()
+    with open(VIEW) as f:
+        view = f.read()
 
     failed = False
     with tempfile.TemporaryDirectory() as tmp:
         subjects = [
             ("rl_paint.wgsl", evaluator),
             ("rl_paint.wgsl + rl_paint_sampler.wgsl", evaluator + sampler),
+            ("+ rl_paint_view.wgsl (the whole draw)", evaluator + sampler + view),
         ]
         for name, text in subjects:
             path = os.path.join(tmp, "subject.wgsl")

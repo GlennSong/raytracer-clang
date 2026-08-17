@@ -852,13 +852,88 @@ but the worst measured is **5.00 m**, which is a lane and a half. The test
 asserts both halves, because a rule nobody can demonstrate breaking is a rule
 nobody will keep.
 
+### It draws
+
+The last claim standing was the one about frames, and it needed a GPU drawing
+triangles rather than a compute pass grinding a corpus. The engine cannot host
+the shader yet — `RenderMaterial` has five texture slots and all five are taken,
+and the vertex format has nowhere to put the atlas row — so the prototype
+answers it without the engine, the same way it answers everything else.
+
+`roadlab --web <prefix>` writes the mesh, the two atlas textures and a manifest.
+`web/roadlab-paint.html` draws it in a browser and
+`tools/roadlab-web-render.py` draws the identical pipeline headlessly into a
+PNG. Both concatenate the same three files — `rl_paint.wgsl` generated from the
+header, `rl_paint_sampler.wgsl` for the fetch, `rl_paint_view.wgsl` for the
+draw — so the one nobody is looking at cannot quietly drift.
+
+```
+make roadlab-web-render          # headless: a PNG and the two frame times
+make roadlab-sampler-conformance # rlFetchBoundaries vs PaintAtlas::sample
+make roadlab-web                 # a servable directory with every scene
+```
+
+Both timing paths render the frame twice, once with the evaluator live and once
+with it branched out, changing nothing else. On the software adapters available
+here that difference is **+8% to +24%** of the frame; the absolute milliseconds
+are a software rasteriser's and mean nothing, but both modes rasterise the same
+triangles and differ only in the fragment branch, so the ratio is the part that
+survives the move to hardware.
+
+### What running it drew out
+
+Four things, none of which the existing gates could have found, because a
+correct evaluator handed correct boundaries proves nothing about how a fragment
+reaches them.
+
+**The fetch had never executed.** `rlFetchBoundaries` — the half that reads the
+boundaries out of two textures — was only ever parsed, because the conformance
+corpus hands the shader its boundaries in a storage buffer. It now has its own
+fixture: `<prefix>.samples.json`, CPU answers at deliberately fractional rows
+plus rows straddling every style-row seam. Across all eight scenes, 10,711
+boundaries, every field is **bit-identical** to `PaintAtlas::sample`.
+
+**A hardware linear sampler was the wrong tool, twice.** It was there because
+the offsets want blending between rings. But a sampler addresses in normalised
+coordinates, and that round trip costs about `row * 6e-8` of row, landing in the
+offset multiplied by the *difference* between the two rings — 0.27 mm on `lanes`
+at row 458 of 645, and the term grows with the atlas. And `float32-filterable`
+is an **optional** WebGPU feature, so a filtered RGBA32F shader does not run at
+all on devices that lack it. Two `textureLoad`s and an explicit `mix` cost one
+extra fetch and fix both, and are bit-exact against the CPU.
+
+**The atlas did not fit in a texture.** A row per station ring is fine at the
+demos' 1730 rows and fatal at metro's **19786** — past the 16384 the test device
+allows, and more than twice the 8192 core WebGPU guarantees. It was a validation
+error at upload, in a place no test was looking. The rows now tile 64 wide, so
+19786 rows is a 256x310 texture, and the growth goes into a dimension with room.
+This is only possible *because* the fetch blends by hand: a hardware filter
+blends horizontal neighbours too, and a horizontal neighbour here is a different
+station or a different road. `testTheAtlasFitsInATexture` checks both dimensions
+against the guaranteed limit rather than the local device's, and checks the
+tiling is a permutation rather than just the right shape.
+
+**naga and Tint disagree about legal WGSL.** `rl_paint_view.wgsl` called `dpdx`
+inside `if (row >= 0.0 && paintOn)`. naga accepted it; Chrome rejected it,
+correctly — derivative builtins must sit in uniform control flow or a quad's
+neighbour differences are taken against a value that was never written. It only
+showed up in a browser, which is the argument for having opened one.
+
+Two smaller ones worth recording. The atlas row was declared
+`@interpolate(linear)`, which in WGSL means *noperspective*, while the station
+one location up was perspective-correct: the paint would have slid along the
+road with distance. And the page's first frame-time readout was a
+`requestAnimationFrame` interval, which measures the compositor's pacing rather
+than the GPU — vsync-capped, both modes read 16.7 ms, and on a software adapter
+it reported the evaluator as **negative**. It now uses GPU timestamp queries and
+says so plainly when the browser will not provide them.
+
 ### What is left
 
-The Metal entry point that calls `rlEvaluateMarkings`, uploading the two
-textures, the bake from a roadlab `Network` to the engine's road mesh, and
-measuring the frame cost — all of which need the viewer, so they need a machine
-with a GPU. The frame ledger (ADR-0077, `RT_FRAME_STATS=<csv>`,
-`tools/frame-report.py`) is already the harness for it.
+The Metal entry point, the bake from a roadlab `Network` to the engine's road
+mesh, and a frame number from real hardware. The two blockers are concrete and
+now demonstrated rather than asserted: a sixth texture binding for the atlas
+pair, and a vertex channel for the atlas row.
 
 ## The fallback census
 

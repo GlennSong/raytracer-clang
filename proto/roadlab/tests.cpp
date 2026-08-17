@@ -2642,6 +2642,50 @@ void testEveryCorpusSceneLints() {
     }
 }
 
+void testTheAtlasFitsInATexture() {
+    group("the paint atlas fits in a texture");
+    // A row per station ring is a number that grows with kilometres of road, and
+    // a texture dimension is a number that does not grow at all. The demos hid
+    // this — 1730 rows is nothing — and the metro scene did not: 19786 rows,
+    // past the 16384 the test device allows and more than twice the 8192 that
+    // core WebGPU guarantees. It was a GPU validation error at upload, which is
+    // a place no test was looking.
+    //
+    // So the atlas tiles, and this checks both dimensions of the tiled image
+    // against the guaranteed limit rather than whatever the local device
+    // happens to permit.
+    const int kWebGpuMaxTextureDim = 8192;
+    for (const std::string& name : corpusNames()) {
+        Scene sc;
+        if (!buildCorpus(name, sc)) continue;
+        finalizeScene(sc, false, false);
+        PaintAtlas atlas = bakePaintAtlas(sc.net, 2.0);
+
+        check(atlas.imageWidth() <= kWebGpuMaxTextureDim &&
+                  atlas.imageHeight() <= kWebGpuMaxTextureDim,
+              (name + ": the tiled profile texture fits 8192 on a side").c_str());
+
+        // Tiling is only correct if it is a permutation: every logical row has
+        // to land somewhere, unchanged, and be findable by the addressing the
+        // shader uses. Checking the shape alone would pass a bake that dropped
+        // every second row.
+        std::vector<float> img = atlas.profileImage();
+        check(img.size() == size_t(atlas.imageWidth()) * size_t(atlas.imageHeight()) * 4,
+              (name + ": the tiled image is exactly its stated size").c_str());
+        const size_t stride = size_t(kProfileTexelsPerRow) * 4;
+        long moved = 0;
+        for (int r = 0; r < atlas.rows; ++r) {
+            size_t x = size_t(r % kRowsPerTile) * stride;
+            size_t y = size_t(r / kRowsPerTile);
+            const float* dst = &img[y * size_t(atlas.imageWidth()) * 4 + x];
+            const float* src = &atlas.profileTex[size_t(r) * stride];
+            for (size_t i = 0; i < stride; ++i)
+                if (dst[i] != src[i]) ++moved;
+        }
+        check(moved == 0, (name + ": every atlas row survives the tiling").c_str());
+    }
+}
+
 void testEarthworksRunOnTheirBatter() {
     group("earthworks");
     // The ground meets a road at the road's edge and then runs away from it on a
@@ -3397,6 +3441,7 @@ int main() {
     testRampsDoNotEncroach();
     testEveryMergeHasAGore();
     testEveryCorpusSceneLints();
+    testTheAtlasFitsInATexture();
     testEarthworksRunOnTheirBatter();
     testPaintSurvivesLod();
     testGeneratedWgslTracksTheHeader();

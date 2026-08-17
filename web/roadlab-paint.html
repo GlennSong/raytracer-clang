@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<!--
+  roadlab's road markings, evaluated per fragment on a real GPU.
+
+  This page exists to answer one question that no amount of CPU testing could:
+  what does the analytic marking evaluator cost in a frame. roadlab's own
+  renderer is a software rasteriser — the right tool for a still, and unable to
+  say anything about milliseconds. The engine cannot host the shader yet either
+  (RenderMaterial has five texture slots and all five are taken, and the vertex
+  format has nowhere to put the atlas row), so the prototype answers it itself.
+
+  Nothing here is engine code. It loads what `roadlab --web <prefix>` exported
+  and runs proto/roadlab/*.wgsl verbatim — the same three files the headless
+  conformance harnesses run, concatenated in the same order.
+
+    make roadlab-web && cd out_roadlab/web && python3 -m http.server
+    open http://localhost:8000/roadlab-paint.html?scene=metro
+
+  WebGPU needs a secure context, so localhost or https — file:// will not work.
+
+  Press M to toggle the markings. The frame time either side of that is the
+  whole point of the page: the difference is the evaluator, measured.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>roadlab — analytic road markings on the GPU</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0f14; overflow: hidden;
+    font-family: system-ui, -apple-system, sans-serif; color: #cfe6f5; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+  #hud { position: fixed; top: 12px; left: 12px; padding: 10px 13px;
+    background: rgba(6,12,18,.78); border: 1px solid #ffffff22; border-radius: 9px;
+    font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre; pointer-events: none; }
+  #hud b { color: #7fd7ff; font-weight: 600; }
+  #hud .warn { color: #ffca7a; }
+  #help { position: fixed; bottom: 12px; left: 12px; font-size: 12px; color: #7f96a8; }
+  #err { position: fixed; inset: 0; display: none; place-content: center; padding: 3rem;
+    text-align: center; color: #ff9a9a; font-size: 15px; line-height: 1.7; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">loading…</div>
+<div id="help">drag orbit · wheel zoom · shift-drag pan · <b>M</b> markings on/off</div>
+<div id="err"></div>
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const scene = new URLSearchParams(location.search).get("scene") || "showcase";
+const SHADERS = ["rl_paint.wgsl", "rl_paint_sampler.wgsl", "rl_paint_view.wgsl"];
+const VERTEX_BYTES = 12 * 4;          // webexport.h kWebVertexFloats
+
+const fail = (msg) => { $("err").style.display = "grid"; $("err").textContent = msg;
+                        $("hud").style.display = "none"; throw new Error(msg); };
+
+// --- maths ------------------------------------------------------------------
+// Column-major, the order a WGSL mat4x4 expects. w comes out as the distance
+// along the view direction and must be POSITIVE in front of the camera; get
+// that sign wrong and the scene sits behind the near plane, the frame is pure
+// clear colour, and the frame time looks wonderful.
+function viewProj(eye, at, fovY, aspect, near, far) {
+  const sub = (a, b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+  const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+  const nrm = (a) => { const m = Math.hypot(...a) || 1; return [a[0]/m, a[1]/m, a[2]/m]; };
+  const crs = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+  const f = nrm(sub(at, eye)), s = nrm(crs(f, [0, 1, 0])), u = crs(s, f);
+  const g = 1 / Math.tan(fovY / 2), a = g / aspect;
+  const b = far / (near - far), c = near * far / (near - far);
+  return new Float32Array([
+    a*s[0], u[0]*g, -f[0]*b, f[0],
+    a*s[1], u[1]*g, -f[1]*b, f[1],
+    a*s[2], u[2]*g, -f[2]*b, f[2],
+    -a*dot(s, eye), -g*dot(u, eye), dot(f, eye)*b + c, -dot(f, eye),
+  ]);
+}
+
+// --- load -------------------------------------------------------------------
+async function boot() {
+  if (!navigator.gpu) fail("This browser has no WebGPU.\n\nChrome 113+, Edge 113+, or " +
+                           "Safari 18+ / Firefox with WebGPU enabled.");
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+  if (!adapter) fail("No WebGPU adapter. A GPU is present but the browser would not give " +
+                     "one up — often a blocklisted driver.");
+  // float32-filterable is deliberately NOT requested: the fetch loads texels and
+  // blends them itself, so the optional feature stays optional. timestamp-query
+  // is requested when offered, because without it there is no honest frame
+  // number on this page at all — see the timing block below.
+  const canTime = adapter.features.has("timestamp-query");
+  const device = await adapter.requestDevice(
+    canTime ? { requiredFeatures: ["timestamp-query"] } : {});
+  device.lost.then((info) => fail("The GPU device was lost: " + info.message));
+
+  const grab = async (url, how) => {
+    const r = await fetch(url);
+    if (!r.ok) fail(`Cannot load ${url} (HTTP ${r.status}).\n\n` +
+                    `Run \`make roadlab-web\` and serve out_roadlab/web over HTTP.`);
+    return how === "json" ? r.json() : how === "text" ? r.text() : r.arrayBuffer();
+  };
+
+  const [man, bin, ...src] = await Promise.all([
+    grab(`${scene}.json`, "json"),
+    grab(`${scene}.bin`, "bin"),
+    ...SHADERS.map((s) => grab(s, "text")),
+  ]);
+
+  const limit = device.limits.maxTextureDimension2D;
+  if (man.profileTexWidth > limit || man.profileTexHeight > limit)
+    fail(`This scene's paint atlas is ${man.profileTexWidth}x${man.profileTexHeight}, ` +
+         `past this device's ${limit} texture limit.`);
+
+  const module = device.createShaderModule({ code: src.join("\n") });
+  const info = await module.getCompilationInfo();
+  for (const m of info.messages)
+    if (m.type === "error") fail(`WGSL: ${m.lineNum}:${m.linePos} ${m.message}`);
+
+  // --- buffers and textures
+  const slice = (off, len) => bin.slice(off, off + len);
+  const mkBuf = (data, usage) => {
+    // Mapped-at-creation avoids a staging copy of what is often several MB.
+    const b = device.createBuffer({ size: (data.byteLength + 3) & ~3, usage,
+                                    mappedAtCreation: true });
+    new Uint8Array(b.getMappedRange()).set(new Uint8Array(data));
+    b.unmap();
+    return b;
+  };
+  const U = GPUBufferUsage;
+  const vbuf = mkBuf(slice(man.vertexOffset, man.vertexCount * VERTEX_BYTES), U.VERTEX);
+  const ibuf = mkBuf(slice(man.indexOffset, man.indexCount * 4), U.INDEX);
+  const ubuf = device.createBuffer({ size: 96, usage: U.UNIFORM | U.COPY_DST });
+
+  const mkTex = (off, w, h) => {
+    const t = device.createTexture({ size: [w, h], format: "rgba32float",
+                                     usage: GPUTextureUsage.TEXTURE_BINDING |
+                                            GPUTextureUsage.COPY_DST });
+    device.queue.writeTexture({ texture: t }, slice(off, w * h * 16),
+                              { bytesPerRow: w * 16, rowsPerImage: h }, [w, h]);
+    return t;
+  };
+  const profTex = mkTex(man.profileOffset, man.profileTexWidth, man.profileTexHeight);
+  const styleTex = mkTex(man.styleOffset, man.styleWidth, man.styleRows);
+
+  const fmt = navigator.gpu.getPreferredCanvasFormat();
+  const canvas = $("c");
+  const ctx = canvas.getContext("webgpu");
+  ctx.configure({ device, format: fmt, alphaMode: "opaque" });
+
+  const pipeline = device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "rlViewVertex", buffers: [{
+      arrayStride: VERTEX_BYTES,
+      attributes: [
+        { format: "float32x3", offset: 0,  shaderLocation: 0 },   // pos
+        { format: "float32x3", offset: 12, shaderLocation: 1 },   // normal
+        { format: "float32x3", offset: 24, shaderLocation: 2 },   // s, t, atlas row
+        { format: "float32x3", offset: 36, shaderLocation: 3 },   // colour
+      ]}]},
+    fragment: { module, entryPoint: "rlViewFragment", targets: [{ format: fmt }] },
+    primitive: { topology: "triangle-list", cullMode: "none" },
+    depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" },
+  });
+  const g0 = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0),
+    entries: [{ binding: 0, resource: { buffer: ubuf } }] });
+  const g1 = device.createBindGroup({ layout: pipeline.getBindGroupLayout(1),
+    entries: [{ binding: 0, resource: profTex.createView() },
+              { binding: 1, resource: styleTex.createView() }] });
+
+  // --- camera
+  const lo = man.bounds.lo, hi = man.bounds.hi;
+  const mid = [0, 1, 2].map((i) => (lo[i] + hi[i]) / 2);
+  const diag = Math.hypot(hi[0]-lo[0], hi[1]-lo[1], hi[2]-lo[2]);
+  const cam = { yaw: 0.6, pitch: 0.32, dist: diag * 0.5, at: mid.slice() };
+  let paint = true, depthTex = null, depthSize = [0, 0];
+
+  const eyeOf = () => [
+    cam.at[0] + cam.dist * Math.cos(cam.pitch) * Math.cos(cam.yaw),
+    cam.at[1] + cam.dist * Math.sin(cam.pitch),
+    cam.at[2] + cam.dist * Math.cos(cam.pitch) * Math.sin(cam.yaw)];
+
+  let drag = null;
+  canvas.addEventListener("pointerdown", (e) => {
+    canvas.setPointerCapture(e.pointerId);
+    drag = { x: e.clientX, y: e.clientY, pan: e.shiftKey || e.button === 2 };
+  });
+  canvas.addEventListener("pointerup", () => { drag = null; });
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  canvas.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    drag.x = e.clientX; drag.y = e.clientY;
+    if (drag.pan) {
+      // Pan in the ground plane, scaled by distance so the world keeps up with
+      // the cursor at any zoom.
+      const k = cam.dist * 0.0016;
+      cam.at[0] += (dx * Math.sin(cam.yaw) - dy * Math.cos(cam.yaw)) * k;
+      cam.at[2] += (-dx * Math.cos(cam.yaw) - dy * Math.sin(cam.yaw)) * k;
+    } else {
+      cam.yaw += dx * 0.006;
+      cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch + dy * 0.005));
+    }
+  });
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    cam.dist = Math.max(diag * 0.004, Math.min(diag * 2.5,
+                                               cam.dist * Math.exp(e.deltaY * 0.0012)));
+  }, { passive: false });
+  // --- timing
+  //
+  // What this page is FOR is the frame number, so it is worth saying what the
+  // number is. Wall clock between requestAnimationFrame callbacks measures the
+  // compositor's pacing, not the GPU: vsync-capped at 60 Hz, both modes read
+  // 16.7 ms and the difference between them reads zero no matter what the
+  // evaluator costs. Measured that way on a software adapter it even came out
+  // NEGATIVE, which is how this got noticed.
+  //
+  // So: GPU timestamps around the render pass, which measure the pass and
+  // nothing else. Where the browser will not give them up the page says so
+  // rather than printing a compositor interval and calling it a frame time.
+  const timing = { on: null, off: null, samples: { on: 0, off: 0 } };
+  let querySet = null, resolveBuf = null, readBuf = null, mapping = false;
+  if (canTime) {
+    querySet = device.createQuerySet({ type: "timestamp", count: 2 });
+    resolveBuf = device.createBuffer({ size: 16,
+      usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+    readBuf = device.createBuffer({ size: 16,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  }
+  // A rolling mean, and it RESTARTS on every toggle: the first frames after a
+  // switch carry pipeline and cache warm-up that belongs to neither mode, and
+  // letting them decay out of a running average is how a 30-frame mean at 5 fps
+  // ends up reporting the previous mode.
+  const WARMUP = 8;
+  let skip = WARMUP;
+  addEventListener("keydown", (e) => {
+    if (e.key !== "m" && e.key !== "M") return;
+    paint = !paint;
+    skip = WARMUP;
+    const k = paint ? "on" : "off";
+    timing[k] = null;
+    timing.samples[k] = 0;
+  });
+
+  const atlasKiB = ((man.profileTexWidth * man.profileTexHeight +
+                     man.styleWidth * man.styleRows) * 16) / 1024;
+
+  function frame() {
+    const w = Math.max(1, Math.round(canvas.clientWidth * devicePixelRatio));
+    const h = Math.max(1, Math.round(canvas.clientHeight * devicePixelRatio));
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    if (depthSize[0] !== w || depthSize[1] !== h) {
+      if (depthTex) depthTex.destroy();
+      depthTex = device.createTexture({ size: [w, h], format: "depth24plus",
+                                        usage: GPUTextureUsage.RENDER_ATTACHMENT });
+      depthSize = [w, h];
+    }
+
+    const eye = eyeOf();
+    const u = new Float32Array(24);
+    u.set(viewProj(eye, cam.at, Math.PI / 4, w / h, Math.max(diag * 0.001, 0.4), diag * 4), 0);
+    u.set([-0.4, 0.82, 0.4, 0], 16);                    // direction to the sun
+    u.set([paint ? 1 : 0, 0.25, 0, 0], 20);             // markings on, road wear
+    device.queue.writeBuffer(ubuf, 0, u);
+
+    const enc = device.createCommandEncoder();
+    const desc = {
+      colorAttachments: [{ view: ctx.getCurrentTexture().createView(),
+        loadOp: "clear", storeOp: "store", clearValue: { r: .44, g: .55, b: .68, a: 1 } }],
+      depthStencilAttachment: { view: depthTex.createView(), depthLoadOp: "clear",
+        depthStoreOp: "store", depthClearValue: 1 },
+    };
+    // Only when the read-back from the previous sample has landed: a buffer
+    // cannot be written while it is mapped, and queueing a resolve into one that
+    // is would throw every frame.
+    const timeThis = canTime && !mapping && skip <= 0;
+    if (timeThis)
+      desc.timestampWrites = { querySet, beginningOfPassWriteIndex: 0,
+                               endOfPassWriteIndex: 1 };
+    const pass = enc.beginRenderPass(desc);
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, g0);
+    pass.setBindGroup(1, g1);
+    pass.setVertexBuffer(0, vbuf);
+    pass.setIndexBuffer(ibuf, "uint32");
+    pass.drawIndexed(man.indexCount);
+    pass.end();
+    if (timeThis) {
+      enc.resolveQuerySet(querySet, 0, 2, resolveBuf, 0);
+      enc.copyBufferToBuffer(resolveBuf, 0, readBuf, 0, 16);
+    }
+    device.queue.submit([enc.finish()]);
+    if (skip > 0) skip--;
+
+    if (timeThis) {
+      mapping = true;
+      const key = paint ? "on" : "off";
+      readBuf.mapAsync(GPUMapMode.READ).then(() => {
+        const t = new BigUint64Array(readBuf.getMappedRange().slice(0));
+        readBuf.unmap();
+        mapping = false;
+        const ms = Number(t[1] - t[0]) / 1e6;
+        // Chrome quantises timestamps, so a pass can resolve to exactly zero;
+        // averaging those in would drag the mean toward a number the GPU never
+        // spent.
+        if (ms <= 0) return;
+        timing[key] = timing[key] === null ? ms : timing[key] + (ms - timing[key]) / 30;
+        timing.samples[key]++;
+      }).catch(() => { mapping = false; });
+    }
+
+    const { on, off } = timing;
+    const settled = (k) => timing.samples[k] >= 10;
+    const cost = !canTime ? "needs timestamp-query"
+      : on !== null && off !== null && settled("on") && settled("off")
+        ? `${on - off >= 0 ? "+" : ""}${(on - off).toFixed(2)} ms  ` +
+          `(${(100 * (on / off - 1)).toFixed(0)}%)`
+        : "press M, then wait";
+    const nowMs = timing[paint ? "on" : "off"];
+    $("hud").innerHTML =
+      `<b>${man.scene}</b>  ${w}x${h}\n` +
+      `${(man.vertexCount / 1000).toFixed(0)}k verts   ` +
+      `${(man.indexCount / 3000).toFixed(0)}k tris\n` +
+      `atlas ${man.profileRows} rows -> ` +
+      `${man.profileTexWidth}x${man.profileTexHeight}   ${atlasKiB.toFixed(0)} KiB\n` +
+      `\n` +
+      `markings   <b>${paint ? "ON" : "OFF"}</b>\n` +
+      (canTime
+        ? `gpu pass   ${nowMs === null ? "  --" : nowMs.toFixed(2)} ms\n`
+        : `<span class="warn">gpu pass   unavailable\n` +
+          `           (this browser withholds timestamp-query;\n` +
+          `            a frame interval here would be vsync, not work)</span>\n`) +
+      `evaluator  ${cost}\n` +
+      `\n<span class="warn">no marking texture anywhere in this pipeline</span>`;
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+boot().catch((e) => { if ($("err").style.display !== "grid") fail(String(e)); });
+</script>
+</body>
+</html>

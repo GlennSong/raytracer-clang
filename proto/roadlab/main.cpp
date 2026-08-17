@@ -14,6 +14,7 @@
 #include "odr.h"
 #include "paint_fixture.h"
 #include "scene.h"
+#include "webexport.h"
 #include "sim.h"
 #include <cstdio>
 #include <cstring>
@@ -34,6 +35,7 @@ struct Options {
     std::string xodrPath;
     std::string importPath;
     std::string paintFixture;
+    std::string webExport;
     bool city = false;
     bool metro = false;
     int width = 1600, height = 1000;
@@ -98,6 +100,7 @@ void usage() {
         "  --terrain-amp <m>   terrain relief amplitude (default per demo, 1.5-5 m)\n"
         "  --terrain-wave <m>  terrain feature wavelength in metres\n"
         "  --paint-fixture <f> dump marking-evaluator cases for the WGSL comparison\n"
+        "  --web <prefix>      mesh + paint atlas for the WebGPU viewer\n"
         "  --list              list presets and demos\n");
 }
 
@@ -310,6 +313,7 @@ int main(int argc, char** argv) {
         if (matchArg(i, argc, argv, "--xodr", opt.xodrPath)) continue;
         if (matchArg(i, argc, argv, "--import", opt.importPath)) continue;
         if (matchArg(i, argc, argv, "--paint-fixture", opt.paintFixture)) continue;
+        if (matchArg(i, argc, argv, "--web", opt.webExport)) continue;
         if (matchNum(i, argc, argv, "--width", d)) { opt.width = int(d); continue; }
         if (matchNum(i, argc, argv, "--height", d)) { opt.height = int(d); continue; }
         if (matchNum(i, argc, argv, "--cars", d)) { opt.cars = int(d); continue; }
@@ -446,7 +450,31 @@ int main(int argc, char** argv) {
         return true;
     };
 
+    // Before the render, and it returns: the web export wants the mesh, not a
+    // picture of it, and rasterising 1.6 MP per scene to throw away is the
+    // difference between a conformance target that runs in seconds and one
+    // nobody runs.
+    auto exportWeb = [&](const Scene& sc) {
+        std::string err;
+        WebExportStats st;
+        if (!writeWebExport(sc, opt.webExport, st, err)) {
+            std::fprintf(stderr, "roadlab: %s\n", err.c_str());
+            return;
+        }
+        if (opt.quiet) return;
+        std::printf("wrote %s.bin + .json (%zu verts, %zu indices, "
+                    "%d profile rows, %d style rows, %.1f KiB)\n"
+                    "wrote %s.samples.json (%zu fetch cases, %zu at a style-row seam)\n",
+                    opt.webExport.c_str(), st.vertices, st.indices, st.profileRows,
+                    st.styleRows, double(st.binBytes) / 1024.0, opt.webExport.c_str(),
+                    st.sampleCases, st.seamCases);
+    };
+
     auto renderOne = [&](Scene& sc, const std::string& path) {
+        if (!opt.webExport.empty()) {
+            exportWeb(sc);
+            return;
+        }
         Mesh renderMesh = sc.mesh;
         Simulation sim(sc.net, [&] {
             SimParams sp;
