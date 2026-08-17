@@ -1621,7 +1621,23 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             b.width = w;
             b.depth = d;
             b.yaw = std::atan2(obb.axis[0].y, obb.axis[0].x);
-            const DistrictTag tag = districts.tagAt(b.site);
+            // A DISTRICT ENDS AT A STREET (city-pipeline.md stage 9, "district
+            // refinement"). This used to re-derive the tag per LOT from the lot's
+            // own centroid, while the block above already resolved one at its
+            // centroid — so the two disagreed wherever a zone boundary crossed a
+            // block. `tagAt` is a continuous function of position (radial rings,
+            // or distance to the nearest hub); nothing in it knows where the
+            // streets are, so the boundary fell mid-block and one row of a
+            // commercial block built houses while the row opposite built shops.
+            // Worse, it was incoherent with the block's own decisions: the parcel
+            // GRAIN, setback and buildChance all come from `bf.tag`, so a block
+            // could be cut into 13x30 m retail slots and then have cottages placed
+            // on them.
+            //
+            // Take the block's tag. Block faces are road-graph faces, so their
+            // edges ARE streets by construction — zoning boundaries now land on
+            // them, and every lot in a block agrees with the grain it was cut at.
+            const DistrictTag tag = blockTag;
             // Coreness peaks the skyline: 1 at the city centre, 0 at the
             // financial district's rim — the architect grows the skyscraper
             // cluster from it. sqrt widens the peak so the cluster is a
