@@ -23,7 +23,8 @@ ctest --test-dir build                      # runs unit + physics tests
 
 The viewer target builds only where GLFW is found (e.g. macOS); physics
 (`-DRT_ENABLE_PHYSICS=ON`, default) is cross-platform and builds/tests headless.
-Add `-DRT_ENABLE_IMGUI=ON` to enable the Dear ImGui debug overlay. The Lua
+The Dear ImGui debug overlay (`-DRT_ENABLE_IMGUI=ON`, default) is toggled
+in-app with the tilde/grave key. The Lua
 scripting layer (`-DRT_ENABLE_SCRIPTING=ON`, default) is pure C — cross-platform,
 builds/tests headless — sealed behind `ScriptVM` (ADR-0023); the procgen binding
 surface is covered by `tests/test_script_vm.cpp`. Audio

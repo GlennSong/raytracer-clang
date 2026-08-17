@@ -1,5 +1,71 @@
 # Session Handoff — Next Steps
 
+## Round: city-lots-v2 (2026-08-16) — what is OPEN
+
+Branch `claude/city-lots-v2`, pushed. Read this section first; everything below it
+predates the round and is kept for history — in particular it still describes the
+`shape:"city"` pipeline, **which no longer exists**.
+
+### What closed (so you do not redo it)
+
+One city pipeline (`shape:"city"` / `generateCity` deleted, 1895 lines; `city.json`
+and `city_arena.json` migrated to `road` + `citysim.buildLots`). One road mesher
+(the analytic, SDF-union and weld families retired; everything through
+`buildRoadNetLattice`, including the Lua verbs, which had been building roads with
+code the engine had already dropped). Flat-facade middle LOD salvaged. Stage-9
+zoning — a district ends at a street — with a gate that was watched failing before
+it was committed green. `roadMargin`'s redundant road-half term dropped: **+28%
+buildable land**. Map of the whole thing in `docs/city-pipeline.md`.
+
+### The four open items
+
+**1. Courts with alleys** — *the one with visible payoff.* `city-pipeline.md`
+stage 10 promises "leftover interior becomes a shared court with an alley or
+walking path connecting out". The court half exists; the **alley half does not**,
+so nothing reaches it. This became the binding constraint when the margin change
+reclaimed 6 724 m² of block interior: `rejFrontage` went 1 → 13 and greens 7 → 27,
+because the new land is mid-block and further than 14 m from a road surface, and
+the frontage gate is right to refuse it. Cut alley edges into deep blocks so
+interior lots gain frontage. Metric: the `COVER` field in the `[citylots]` line —
+`living_city` is 15 070 m² built of 30 976 m² buildable (48.6%).
+
+**2. Road-graph unification** — `docs/road-graph-unification-plan.md`, APPROVED,
+steps 1–2 landed. Steps 3–6 need **one uninterrupted session**: measured 600+ edits,
+and the parallel arrays carry *fallback* semantics (a short `edgeWidths` means "use
+`net.width`"), so a find-and-replace corrupts **silently** — the order gate hashes
+ordering, not widths. Do not pre-create `RoadLook`/`RoadPlan`/`RoadEntity` as unused
+types ahead of the move.
+
+**3. Expose the architect to Lua** — wants its own design pass. Three layers:
+zoning (`tagAt`, ~60 lines), selection (5 if/else weight ladders — **this is the
+layer worth exposing**), and 56 recipe bodies. The bodies are not data: they branch
+on `coreness`/`roomy` and feed back `cx.slender`. Porting them is what the abandoned
+branch attempted and it failed. Also: a Lua table naming an unknown recipe must
+hard-error, not skip — see the `courtMinArea` false-knob in `parcel.h`.
+
+**4. Inverted faces at swept-body bends** — 2 of 276, tiny repro, no terrain
+needed. Filed as "junction pads fold on slopes"; **that diagnosis was wrong**.
+Isolation on flat ground with no pad: straight 0/264, bent 2/276. It is the
+**mitre**. See `tests/test_road_lattice.cpp swept_body_inverts_a_few_faces_at_bends`.
+
+### How to measure, so the next round does not repeat this one's mistakes
+
+Two confident diagnoses were overturned by measurement here. "Blocks are ~20%
+covered" was eyeballed off an aerial — they are ~60% covered, and the city reads
+empty because roads and margins take ~73% of the footprint. "Junction pads fold on
+slopes" survived until the variables were isolated.
+
+- `[citylots]` now reports **`COVER <built> m² of <buildable> m² (%)`**. Use
+  coverage, not lot counts: a change that raises the count while shrinking every
+  lot moves the count up and the look down.
+- `RT_PARCEL_DEBUG=1` gives the per-block table (district, area, OBB, edge count,
+  grain, lots) — the view the summary cannot give.
+- `editor_app` is the acceptance gate. `RT_FRAME_DUMP` works against `viewer` only,
+  so a viewer capture is a development aid, never verification.
+
+---
+
+
 Where development stands after the property-layer follow-on session (June
 2026), and what to do next. Written as a starting brief for a fresh working
 session.

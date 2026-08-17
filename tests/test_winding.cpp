@@ -127,15 +127,16 @@ TEST_CASE(winding_city_geometry_faces_out) {
         checkSolid(bm.parts[i], "building part");
     checkSolid(bm.proxy, "building proxy");
 
-    GridRoadParams grp;
-    grp.extent = 180;
-    grp.cellSize = 70;
-    grp.seed = 2;
-    RoadGraph g = planarize(gridRoads(grp));
-    RoadMeshParams rmp;
-    rmp.color = Vec3(0.08, 0.08, 0.09);
-    checkSolid(buildRoadMesh(g, rmp), "buildRoadMesh");
-
+    // Roads are NOT checked here any more. buildRoadMesh is gone (roads-v2: the
+    // swept lattice is the one mesher), and `checkSolid` is a per-face test against
+    // each face's own vertex normals — valid for soup meshes like these, but it
+    // false-positives on a shared-vertex lattice, where a crease vertex carries the
+    // average of the two faces it folds between (it flags exactly half the curb
+    // risers on a plain street and none of the deck). Road winding is gated in
+    // tests/test_road_lattice.cpp: `lattice_winding_matches_the_engine_convention`
+    // pins it against MeshBuilder::box, and
+    // `per_face_normal_test_is_invalid_for_a_shared_vertex_lattice` records why
+    // this check cannot live here.
     checkSolid(streetLamp(), "streetLamp");
     checkSolid(trafficSignalProto(), "trafficSignalProto");
 }

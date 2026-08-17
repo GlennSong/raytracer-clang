@@ -1,55 +1,115 @@
 {
-  "version": 1,
-  "environment": {
-    "skyColor": [0.52, 0.66, 0.86],
-    "fog": { "density": 0.0014, "color": [0.62, 0.71, 0.84] }
-  },
-  "terrain": {
-    "seed": 21,
-    "heightScale": 9,
-    "noiseScale": 0.004,
-    "octaves": 5,
-    "warp": 0.2,
-    "mountainHeight": 200,
-    "mountainScale": 0.0017,
-    "mountainMaskScale": 0.0009,
-    "mountainMaskLo": -0.05,
-    "mountainMaskHi": 0.38,
-    "rangeSpine": [[-700, -470], [-100, -540], [500, -500], [1100, -430]],
-    "rangeWidth": 420,
-    "rangeHeight": 260,
-    "rangeVariation": 0.6,
-    "cdlod": {
-      "worldHalf": 2048,
-      "numLods": 7,
-      "gridRes": 32,
-      "rangeFactor": 2.5
-    },
-    "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 }
-  },
   "entities": [
     {
-      "name": "cities",
-      "shape": "script",
       "file": "twin_cities.lua",
-      "onTerrain": true,
-      "seed": 5
+      "id": 1,
+      "name": "cities",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "seed": 5,
+      "shape": "script"
     }
   ],
-  "player": {
-    "position": [-150, 40, -30],
-    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
-    "friction": 0.5
+  "environment": {
+    "fog": {
+      "color": [
+        0.62,
+        0.71,
+        0.84
+      ],
+      "density": 0.0014
+    },
+    "skyColor": [
+      0.52,
+      0.66,
+      0.86
+    ]
   },
   "lighting": {
-    "sun": {
-      "direction": [0.55, 0.42, -0.35],
-      "color": [1.0, 0.95, 0.82],
-      "intensity": 9.0,
-      "castsShadow": true
-    },
-    "shadow": { "distance": 700, "cascades": 4, "normalBias": 0.15 },
+    "ambientMultiplier": 0.5,
     "exposure": 0.5,
-    "ambientMultiplier": 0.5
-  }
+    "shadow": {
+      "cascades": 4,
+      "distance": 700,
+      "normalBias": 0.15
+    },
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1.0,
+        0.95,
+        0.82
+      ],
+      "direction": [
+        0.55,
+        0.42,
+        -0.35
+      ],
+      "intensity": 9.0
+    }
+  },
+  "player": {
+    "collider": {
+      "halfHeight": 0.4,
+      "radius": 0.3,
+      "shape": "capsule"
+    },
+    "friction": 0.5,
+    "position": [
+      -150.0,
+      40.0,
+      -30.0
+    ]
+  },
+  "terrain": {
+    "cdlod": {
+      "gridRes": 32,
+      "numLods": 7,
+      "rangeFactor": 2.5,
+      "worldHalf": 2048
+    },
+    "heightScale": 9,
+    "material": {
+      "albedo": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roughness": 1.0
+    },
+    "mountainHeight": 200,
+    "mountainMaskHi": 0.38,
+    "mountainMaskLo": -0.05,
+    "mountainMaskScale": 0.0009,
+    "mountainScale": 0.0017,
+    "noiseScale": 0.004,
+    "octaves": 5,
+    "rangeHeight": 260,
+    "rangeSpine": [
+      [
+        -700,
+        -470
+      ],
+      [
+        -100,
+        -540
+      ],
+      [
+        500,
+        -500
+      ],
+      [
+        1100,
+        -430
+      ]
+    ],
+    "rangeVariation": 0.6,
+    "rangeWidth": 420,
+    "seed": 21,
+    "warp": 0.2
+  },
+  "version": 1
 }

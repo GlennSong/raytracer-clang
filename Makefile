@@ -90,7 +90,6 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/water_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/city/buildability.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_crossings.cpp \
-	$(SRC_DIR)/engine/procgen/city/city.cpp \
 	$(SRC_DIR)/engine/procgen/city/architect.cpp \
 	$(SRC_DIR)/engine/procgen/city/city_lots.cpp \
 	$(SRC_DIR)/engine/procgen/city/surface_field.cpp \
@@ -163,7 +162,9 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_sdf.cpp \
 	$(TEST_DIR)/test_curve.cpp \
 	$(TEST_DIR)/test_city.cpp \
+	$(TEST_DIR)/test_building_lod.cpp \
 	$(TEST_DIR)/test_road_net.cpp \
+	$(TEST_DIR)/test_road_graph_order.cpp \
 	$(TEST_DIR)/test_road_rules.cpp \
 	$(TEST_DIR)/test_road_weld.cpp \
 	$(TEST_DIR)/test_curb_return.cpp \
@@ -218,7 +219,6 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_screen_project.cpp \
 	$(TEST_DIR)/test_relationships.cpp \
 	$(TEST_DIR)/test_ped_graph.cpp \
-	$(TEST_DIR)/test_city_generated.cpp \
 	$(TEST_DIR)/test_city_lots.cpp \
 	$(TEST_DIR)/test_alignment.cpp \
 	$(TEST_DIR)/test_surface_field.cpp \
@@ -309,7 +309,6 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/water_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/city/buildability.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_crossings.cpp \
-	$(SRC_DIR)/engine/procgen/city/city.cpp \
 	$(SRC_DIR)/engine/procgen/city/architect.cpp \
 	$(SRC_DIR)/engine/procgen/city/city_lots.cpp \
 	$(SRC_DIR)/engine/procgen/city/surface_field.cpp \

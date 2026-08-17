@@ -2291,8 +2291,18 @@ ground-bounce ambient.
 ---
 
 ## ADR-0038 — City generation: a split/shape grammar over a road→block→parcel pipeline, as a world recipe
-**Status:** Accepted — Phases 0–3 **implemented**, including the **City Arena**
-(the city draped on terrain with street/park trees, `assets/levels/city_arena.json`):
+**Status:** Accepted, **superseded in implementation** (2026-08-16). The decisions
+below still hold — the split/shape grammar, the road→block→parcel→building
+pipeline, Tier A+B scope — but the `shape:"city"` entity and its `generateCity` /
+`CityModel` implementation are GONE. That was a second, thinner generator (no
+architect, no landmarks, box colliders); `city.json` and `city_arena.json` now
+build through `shape:"road"` + `citysim.buildLots` like every other city level,
+and `city_lots.cpp:growLotBuildingsOnNets` is the one pipeline. Read §3's
+"recursive OBB split" as historical too: parcelling is frontage-first boundary
+walking now, with OBB bisection only as the zero-lot fallback. See
+`docs/city-pipeline.md`. Originally: Phases 0–3 **implemented**, including the
+**City Arena** (the city draped on terrain with street/park trees,
+`assets/levels/city_arena.json`):
 the headless generation pipeline under `src/engine/procgen/city/`, Lua `building.*`
 authoring, offline-tracer `shape:"city"` render, and the HLOD proxy; covered by
 `tests/test_city.cpp` + `tests/test_script_vm.cpp`. The Metal viewer render,

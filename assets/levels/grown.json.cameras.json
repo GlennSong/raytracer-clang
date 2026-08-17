@@ -1,4 +1,31 @@
-{ "cameras": [
-  { "name": "Overview", "position": [0, 140, 260], "forward": [0, -0.474, -0.880],
-    "lens": { "focalLength": 35, "sensorHeight": 24, "fStop": 0, "focusDistance": 280.0 } }
-] }
+{
+  "cameras": [
+    {
+      "forward": [
+        0.0,
+        -0.4742191398756327,
+        -0.8804068419632001
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 35.0,
+        "focusDistance": 280.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
+      "name": "Overview",
+      "position": [
+        0.0,
+        140.0,
+        260.0
+      ],
+      "show_gizmo": true
+    }
+  ],
+  "version": 1
+}

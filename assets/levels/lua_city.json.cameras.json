@@ -1,16 +1,57 @@
 {
   "cameras": [
     {
+      "forward": [
+        -0.5570169892772632,
+        -0.3710113160177104,
+        -0.7430226625368165
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 32.0,
+        "focusDistance": 250.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
       "name": "Aerial",
-      "position": [150, 110, 200],
-      "forward": [-0.557, -0.371, -0.743],
-      "lens": { "focalLength": 32, "sensorHeight": 24, "fStop": 0, "focusDistance": 250 }
+      "position": [
+        150.0,
+        110.0,
+        200.0
+      ],
+      "show_gizmo": true
     },
     {
+      "forward": [
+        -0.17935547833621826,
+        -0.11957031889081221,
+        -0.9764909376082996
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 36.0,
+        "focusDistance": 120.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
       "name": "Street",
-      "position": [40, 8, 150],
-      "forward": [-0.18, -0.12, -0.98],
-      "lens": { "focalLength": 36, "sensorHeight": 24, "fStop": 0, "focusDistance": 120 }
+      "position": [
+        40.0,
+        8.0,
+        150.0
+      ],
+      "show_gizmo": true
     }
-  ]
+  ],
+  "version": 1
 }

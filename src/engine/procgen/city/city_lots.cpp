@@ -894,7 +894,8 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
 std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                           const LotParams& p, LotPlanDebug* debug,
                                           std::vector<RenderMesh>* outParts,
-                                          const RoadGraph* roads, Real roadClearance) {
+                                          const RoadGraph* roads, Real roadClearance,
+                                          std::vector<RenderMesh>* outFlatParts) {
     std::vector<LotBuilding> out;
     // The plan counters always run (the build-end density line below reads
     // them); `debug` just decides whether the caller sees them too.
@@ -1171,6 +1172,22 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         for (std::size_t i = 0; i < outParts->size(); ++i)
             (*outParts)[i].materialIndex = static_cast<int>(i);
     }
+    if (outFlatParts) {
+        outFlatParts->assign(static_cast<std::size_t>(PartId::Count), RenderMesh{});
+        for (std::size_t i = 0; i < outFlatParts->size(); ++i)
+            (*outFlatParts)[i].materialIndex = static_cast<int>(i);
+    }
+    // Merge one grown building's parts into a PartId-indexed set (the same
+    // fold the LOD0 path does inline below — shared so the flat set cannot
+    // diverge on indexing).
+    auto mergeParts = [](std::vector<RenderMesh>* dst, const BuildingMesh& bm) {
+        if (!dst) return;
+        for (const RenderMesh& part : bm.parts) {
+            const int mi = part.materialIndex;
+            if (mi >= 0 && mi < static_cast<int>(dst->size()))
+                MeshBuilder::append((*dst)[mi], part);
+        }
+    };
     // ---- PASS A: parcel every block and COLLECT the viable lots ------------
     // The landmark planner (pass B) needs to see the whole city before any lot
     // builds — a courthouse goes on the BEST financial lot, not the first one.
@@ -1308,6 +1325,28 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             }
         }
         std::vector<Lot> lots = subdivideBlock(foot, bf.pp);
+        // RT_PARCEL_DEBUG: the per-block view the [citylots] summary cannot give.
+        // The summary says how many lots a city produced; this says which blocks
+        // produced them, at what district grain, on what shape of interior — which
+        // is the difference between "the parcel grain is wrong" and "the blocks are
+        // the wrong size", two diagnoses that look identical in the totals. Note
+        // `edges`: a block arrives as the road graph's face with the roads' spline
+        // samples still in it (living_city: 27 edges on a 77x28 m block), so an
+        // "edge" here is a polyline segment, not a street frontage.
+        if (std::getenv("RT_PARCEL_DEBUG")) {
+            int courts = 0, tiny = 0;
+            for (const Lot& l : lots) {
+                if (l.court) ++courts;
+                else if (area(l.footprint) < bf.pp.minArea) ++tiny;
+            }
+            const OBB2 fb2 = orientedBoundingBox(foot);
+            std::fprintf(stderr,
+                         "[parcel] %-11s area=%7.0f obb=%5.1fx%5.1f edges=%2zu "
+                         "fw=%4.1f ld=%4.1f -> %2zu lots (%d court, %d tiny)\n",
+                         districtName(bf.tag), area(foot), 2 * fb2.half[0],
+                         2 * fb2.half[1], foot.size(), bf.pp.frontWidth,
+                         bf.pp.lotDepth, lots.size(), courts, tiny);
+        }
         for (const Lot& lot : lots) dbg->lots.push_back(lot.footprint);
         binfos.push_back(bf);
         for (std::size_t li = 0; li < lots.size(); ++li) {
@@ -1582,7 +1621,23 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             b.width = w;
             b.depth = d;
             b.yaw = std::atan2(obb.axis[0].y, obb.axis[0].x);
-            const DistrictTag tag = districts.tagAt(b.site);
+            // A DISTRICT ENDS AT A STREET (city-pipeline.md stage 9, "district
+            // refinement"). This used to re-derive the tag per LOT from the lot's
+            // own centroid, while the block above already resolved one at its
+            // centroid — so the two disagreed wherever a zone boundary crossed a
+            // block. `tagAt` is a continuous function of position (radial rings,
+            // or distance to the nearest hub); nothing in it knows where the
+            // streets are, so the boundary fell mid-block and one row of a
+            // commercial block built houses while the row opposite built shops.
+            // Worse, it was incoherent with the block's own decisions: the parcel
+            // GRAIN, setback and buildChance all come from `bf.tag`, so a block
+            // could be cut into 13x30 m retail slots and then have cottages placed
+            // on them.
+            //
+            // Take the block's tag. Block faces are road-graph faces, so their
+            // edges ARE streets by construction — zoning boundaries now land on
+            // them, and every lot in a block agrees with the grain it was cut at.
+            const DistrictTag tag = blockTag;
             // Coreness peaks the skyline: 1 at the city centre, 0 at the
             // financial district's rim — the architect grows the skyscraper
             // cluster from it. sqrt widens the peak so the cluster is a
@@ -1602,6 +1657,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                     coreness);
             b.type = rec.placeType;
             b.recipe = rec.name;
+            b.block = cand.block;
+            b.district = districtName(tag);
             b.color = colorFor(b.type);
             if (rec.massing == BuildingRecipe::Massing::Park) {
                 b.height = 0.18;  // low green pad — stays UNDER the road deck
@@ -1881,13 +1938,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         upar.faceDir = bp.faceDir;
                         if (p.styleHook) p.styleHook("rowhouse_unit", upar);
                         BuildingMesh um = growPlanBuilding(up4, upar, stripBase);
-                        if (outParts)
-                            for (const RenderMesh& part : um.parts) {
-                                const int mi = part.materialIndex;
-                                if (mi >= 0 &&
-                                    mi < static_cast<int>(outParts->size()))
-                                    MeshBuilder::append((*outParts)[mi], part);
-                            }
+                        mergeParts(outParts, um);
+                        if (outFlatParts)
+                            mergeParts(outFlatParts,
+                                       growPlanBuilding(up4, upar, stripBase,
+                                                        FacadeDetail::Flat));
                         b.height = std::max(b.height, um.height);
                     }
                     b.site = sb.center;
@@ -1928,6 +1983,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             }
 
             BuildingMesh bm;
+            BuildingMesh bmFlat;   // the LOD1 twin, same massing decisions (R2)
             // On terrain the building rises from its graded pad plane (plus the
             // plinth reveal); every walk-up entrance earns steps to the door —
             // porticos and bay-door fronts already bring their own.
@@ -2040,6 +2096,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             }
             if (planOk) {
                 bm = growPlanBuilding(plan, bp, b.baseY);
+                if (outFlatParts)
+                    bmFlat = growPlanBuilding(plan, bp, b.baseY,
+                                              FacadeDetail::Flat);
                 OBB2 pb = orientedBoundingBox(plan);
                 b.site = pb.center;
                 b.width = 2 * pb.half[0];
@@ -2065,6 +2124,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 b.depth = scope.size.z;
                 b.yaw = std::atan2(scope.axis[0].z, scope.axis[0].x);
                 bm = growBuilding(scope, bp);
+                if (outFlatParts)
+                    bmFlat = growBuilding(scope, bp, FacadeDetail::Flat);
                 // The box scope IS the plan here (shrunk-fit inside the lot).
                 Vec2 r2(scope.axis[0].x, scope.axis[0].z);
                 Vec2 f2(scope.axis[2].x, scope.axis[2].z);
@@ -2074,12 +2135,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                           o2 + f2 * scope.size.z};
             }
             if (bm.parts.empty()) continue;
-            if (outParts)
-                for (const RenderMesh& part : bm.parts) {
-                    const int mi = part.materialIndex;
-                    if (mi >= 0 && mi < static_cast<int>(outParts->size()))
-                        MeshBuilder::append((*outParts)[mi], part);
-                }
+            mergeParts(outParts, bm);
+            mergeParts(outFlatParts, bmFlat);
             b.height = bm.height > 0 ? bm.height : 8.0;
             emitFoundation(b.plan, b.groundY, b.baseY);
             // A yarded house earns its LANDSCAPING: front walk to the street,
@@ -2110,9 +2167,25 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         // faces whose interior was mostly roadway after the clear-push. A number
         // climbing there means the road graph is eating its own blocks — a road
         // bug, not a lot-tuning one.
+        // COVERAGE, not just counts. "The blocks look empty" is a statement about
+        // FOOTPRINT AREA, and the two come apart: a round that raised the lot count
+        // while shrinking every lot moves this number the wrong way, and one that
+        // built the same number of bigger buildings moves it the right way. Counts
+        // alone sent us chasing the parcel grain twice (see commit d5db9a7).
+        double builtArea = 0, blockArea = 0;
+        for (const LotBuilding& lb : out)
+            if (lb.type != "park" && lb.recipe != "court_green" &&
+                lb.plan.size() >= 3)
+                builtArea += std::fabs(area(lb.plan));
+        for (const Poly2& b2 : dbg->blocks) blockArea += std::fabs(area(b2));
+        const double coverPct =
+            blockArea > 1.0 ? 100.0 * builtArea / blockArea : 0.0;
         LOG_INFO << "[citylots] " << dbg->blocks.size() << " blocks -> "
                  << dbg->lots.size() << " lots, " << nBuilt << " built, "
-                 << nGreen << " green, " << nCourt << " courts | rej: chance "
+                 << nGreen << " green, " << nCourt << " courts | COVER "
+                 << static_cast<int>(builtArea) << " m2 of "
+                 << static_cast<int>(blockArea) << " m2 buildable ("
+                 << (static_cast<int>(coverPct * 10) / 10.0) << "%) | rej: chance "
                  << dbg->rejChance << ", sliver " << dbg->rejSliver
                  << ", aspect " << dbg->rejAspect << ", fill " << dbg->rejFill
                  << ", plan " << dbg->rejPlan << ", clear " << dbg->rejClear
@@ -2268,7 +2341,8 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
                                     const LotParams& params,
                                     const EdgeBlockParams& edgeParams,
                                     Real roadClearance,
-                                    const RoadGraph* freewayROW) {
+                                    const RoadGraph* freewayROW,
+                                    bool wantFlatParts) {
     NetLotResult r;
     // One combined raw planar graph across every net (the sampled navRoadGraph
     // loses faces, so the block extraction uses the nets' own nodes/edges) —
@@ -2378,7 +2452,8 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
         }
     }
     r.lots = growLotBuildings(blocks, lp, &r.plan, &r.parts, &rgSampled,
-                              roadClearance);
+                              roadClearance,
+                              wantFlatParts ? &r.flatParts : nullptr);
     return r;
 }
 

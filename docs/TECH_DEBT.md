@@ -4,6 +4,87 @@ Small-but-real problems parked deliberately while bigger systems land. Add
 items with enough context that future-us can pick one up cold; delete items
 when fixed (git history is the archive).
 
+## City procgen — dead-code audit (2026-08-15)
+
+Commissioned before deleting anything, on the theory that ~60 files in
+`src/engine/procgen/city/` held a lot of abandoned code. **The theory was mostly
+wrong, and the way it was wrong is the useful part.**
+
+An audit that traces only the *engine* path for one level concludes that most of
+the city module is dead. That conclusion is an artifact of the method. Two things
+keep code alive that a single-level engine trace cannot see:
+
+1. **The Lua binding surface (ADR-0042).** `procgen_bindings.cpp` exposes the
+   road/mesh vocabulary to scripts. Code with no C++ caller is often reachable —
+   and *required to be reachable* — from Lua. Deleting it breaks the engine rule.
+2. **The other generation kinds.** `living_city` uses `"district"`, but that is
+   the minority path (2 levels). **`"metro"` is the dominant one — 10 levels,
+   including `piedmont` and `metropolis`.** Anything "dead on the district path"
+   may be load-bearing for the flagship scenes.
+
+Level census, for reference:
+
+| path | levels |
+| --- | --- |
+| `road:metro` | 10 — coast_city, freeway_lab, hillcity, metro_hills, metropolis, metropolis_roads, metropolis_sky, piedmont, piedmont_mini, piedmont_roads |
+| `road:district` | 2 — grown, living_city |
+| ~~`shape:city`~~ | *retired 2026-08-16; city + city_arena migrated to `road`* |
+| `shape:corridor` | 2 — freeway_lab, freeway_variants |
+| `citysim.buildLots` | 7 — coast_city, hillcity, living_city, metro_hills, metropolis, metropolis_sky, piedmont |
+
+### Verdicts
+
+**Not dead — alive via Lua. Do not delete.**
+
+| Code | Reached by |
+| --- | --- |
+| `tensorRoads`, `radialRoads`, `gridRoads`, `pruneSteepEdges`, `connectComponents` | `city.layout` (`procgen_bindings.cpp:1145`). **`twin_cities.lua` ships both `pattern="radial"` and `pattern="tensor"`**, so the tensor field is live content, not theory. `city.layout` is the most-used verb in the script corpus (7 call sites). |
+| `road_mesh.cpp` weld/union family — `unionRibbons`, `weldRibbons`, `unionRoadbed`, `bridgeDeck`, `deckBarriers`, `deckMarkings`, `laneMarkings`, `buildRoadMesh` | All bound (`city.union`, `city.weld`, `city.roadbed`, `city.deck`, `city.lane_markings`, `city.road_mesh`). |
+| `road_crossings.cpp:resolveCrossings` | `city.resolve` — used twice in shipped scripts. |
+| `metro.cpp`, `patch_fabric.cpp`, `city_footprint.cpp`, `arterial_skeleton.cpp`, `buildability.cpp` | The `"metro"` kind — the majority path. |
+| `corridor_mesh/plan/bake.cpp`, `alignment.cpp` | `shape:"corridor"` levels + metro freeway plans. |
+
+*Caveat worth tracking separately:* several of those Lua verbs are **bound but
+unused by any shipped script** (`city.union`, `city.weld`, `city.stroke`,
+`city.deck`, `city.lane_markings`). That is untested surface area, not dead code —
+the honest fix is a script that exercises them, not deletion.
+
+**Genuinely dead — safe to delete, nothing to salvage.**
+
+| Code | Notes |
+| --- | --- |
+| `BuildingParams::wallThickness` | Declared at `shape_grammar.h:162`, defaulted `0.3`, **never read anywhere**. The only true zero-value item in the audit. |
+
+**Dead, but carrying knowledge worth keeping.**
+
+| Code | What it knows | Recommendation |
+| --- | --- | --- |
+| `surface_field.h` — `SurfaceField` (no production caller; tests only) | The **one-ground-oracle** design from ADR-0075. It unifies the three historically interchangeable height closures (`HeightSampler`, `HeightField`, `RoadNet::heightAt`), owns the cut/fill edit stack with a spatial index, and encodes a genuinely good invariant: *a stale index is a perf bug, never a correctness one* (queries fall back to the linear fold). Today `level_loader` does this by hand — accumulating `TerrainFlatten` vectors, calling `rebuildFlattenIndex` manually, passing bare closures. | **Wire it, don't cut it.** This is unbuilt-but-wanted infrastructure. Adopting it would delete hand-rolled folding from the loader and give the grading cascade one owner. |
+| `DistrictNet::blocks` (computed by `buildDistrict`, discarded by `applyGenerateRecipe`; only `city.cpp` consumes it) | The generator knows its own sector faces *before* warp/prune move every node. Discarding is currently correct — the post-warp graph is the truth. | **Keep, revisit under stage-9 work.** Zoning-follows-streets (task #5) may want the generator's own sector identity, which `extractBlocks` cannot recover. |
+
+**Duplication — real, but each needs a decision, not a delete.**
+
+| Item | Reality |
+| --- | --- |
+| ~~**Two city pipelines**~~ | **RESOLVED 2026-08-16.** `city.json`/`city_arena.json` migrated onto `road` + `citysim.buildLots`; `city.{h,cpp}`, both host bake paths and the `CityModel`→`RoadNet` nav bridge deleted. The building-winding gate was ported to `growLotBuildings` first, so retiring the generator did not take the only test for inside-out facades with it. |
+| `level_scene.cpp` re-implements `growCityLots` | **Narrower than first reported.** The JSON half is genuinely shared (`readLotGrowParams`); only the road-net-derived half — hub list + coreness anchor — is duplicated, with a comment explaining that the editor otherwise grows a *different* city (no districts, coreness 0, no towers). Still a fork risk; the fix is to hoist those ~12 lines, not to rewrite. |
+| `emitCornice` (box path) vs `sweptCornice` (plan path) | Two lambdas in different functions carrying the same tier table `{0.10,0.16},{0.24,0.18},{0.34,0.08}`. One emits boxes, one emits plan slabs — so they cannot merge outright, but the table should be one shared constant. |
+
+**Not dead code — a real gap.**
+
+- **`VentGrille`, `UtilityPanel`, `FanTop` have no case in `shaders/metal/surfaces.metal`** (13 cases, ids 1–13; these are 14–16). They work only through the CPU bake, so a material carrying one of those ids *without* bound maps renders untextured. Either add the analytic cases or document the three as bake-only.
+- Relatedly: `applySurface` only runs when no albedo map is bound
+  (`lighting_surface.metal:88`), and the lot pipeline always binds baked maps — so
+  **city buildings never execute the analytic shader at all**. The `Surface` id
+  survives as provenance. Worth deciding whether the analytic path is still wanted.
+
+### Method note
+
+The first pass of this audit called ~9 modules dead. Checking each against the Lua
+bindings and the non-`district` generation kinds cut that to **one** field. Before
+deleting anything in `procgen/city/`, grep `procgen_bindings.cpp` and check the
+level census above — a C++-caller search alone will lie to you.
+
 ## Rendering / performance
 
 **Open follow-ups (rough priority — detail in the notes below):**

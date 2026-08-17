@@ -1,28 +1,109 @@
 {
   "cameras": [
     {
+      "forward": [
+        -0.6222441255753678,
+        -0.30108586721388764,
+        -0.7226060813133303
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 32.0,
+        "focusDistance": 270.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
       "name": "Arena",
-      "position": [185, 78, 205],
-      "forward": [-0.62, -0.30, -0.72],
-      "lens": { "focalLength": 32, "sensorHeight": 24, "fStop": 0, "focusDistance": 270 }
+      "position": [
+        185.0,
+        78.0,
+        205.0
+      ],
+      "show_gizmo": true
     },
     {
+      "forward": [
+        -0.11997600719760085,
+        -0.15996800959680113,
+        -0.9798040587804069
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 38.0,
+        "focusDistance": 200.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
       "name": "Approach",
-      "position": [40, 26, 215],
-      "forward": [-0.12, -0.16, -0.98],
-      "lens": { "focalLength": 38, "sensorHeight": 24, "fStop": 0, "focusDistance": 200 }
+      "position": [
+        40.0,
+        26.0,
+        215.0
+      ],
+      "show_gizmo": true
     },
     {
+      "forward": [
+        -0.5488212999484517,
+        -0.32929277996907125,
+        0.7683498199278324
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 40.0,
+        "focusDistance": 150.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
       "name": "OldTown",
-      "position": [150, 46, -150],
-      "forward": [-0.55, -0.33, 0.77],
-      "lens": { "focalLength": 40, "sensorHeight": 24, "fStop": 0, "focusDistance": 150 }
+      "position": [
+        150.0,
+        46.0,
+        -150.0
+      ],
+      "show_gizmo": true
     },
     {
+      "forward": [
+        -0.6912800532450316,
+        -0.21038958142240105,
+        -0.6912800532450308
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 34.0,
+        "focusDistance": 28.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
       "name": "Intersection",
-      "position": [26, 8, 42],
-      "forward": [-0.69, -0.21, -0.69],
-      "lens": { "focalLength": 34, "sensorHeight": 24, "fStop": 0, "focusDistance": 28 }
+      "position": [
+        26.0,
+        8.0,
+        42.0
+      ],
+      "show_gizmo": true
     }
-  ]
+  ],
+  "version": 1
 }

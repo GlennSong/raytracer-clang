@@ -645,12 +645,36 @@ void MeshBuilder::emitLattice(RenderMesh& mesh, const LatticeSpec& spec) {
     auto emit = [&](uint32_t x, uint32_t y, uint32_t z) {
         if (area2(x, y, z) > 1e-14) mesh.indices.insert(mesh.indices.end(), {x, y, z});
     };
+    // The global choice above is the DEFAULT, not the verdict. It reads one cell,
+    // which is right for a surface with a consistent handedness (a swept body, a
+    // banked deck) but wrong where the sheet FOLDS: a Coons junction pad on sloped
+    // ground can reverse its own orientation partway across, and one choice then
+    // leaves the folded cells inverted — they cull away in the viewer. Measured on
+    // a 3x3 street grid over a sine grade: 24 of 11575 road faces.
+    //
+    // So decide per CELL from that cell's own four corner normals, and fall back to
+    // the global choice only when the corners give no usable hint. This is not the
+    // per-face normal test the header warns against — that one compares a face to a
+    // single shared (averaged) vertex normal and false-positives on every crease.
+    // Here the comparison is a whole cell against the sum of its own corners, which
+    // is exactly the test the global pass already performs, just not thrown away
+    // after the first hit. A consistently-wound sheet gets the identical result.
     for (int i = 0; i + 1 < R; ++i) {
         for (int j = 0; j + 1 < P; ++j) {
             const uint32_t a = at(i, j), b = at(i, j + 1),
                            c = at(i + 1, j), d = at(i + 1, j + 1);
-            if (!flip) { emit(a, b, d); emit(a, d, c); }
-            else       { emit(a, d, b); emit(a, c, d); }
+            bool cellFlip = flip;
+            const Vec3 gn = cross(pos(i + 1, j + 1) - pos(i, j),
+                                  pos(i, j + 1) - pos(i, j));
+            if (gn.lengthSquared() > 1e-12) {
+                const Vec3 sn = spec.verts[i * P + j].normal +
+                                spec.verts[i * P + j + 1].normal +
+                                spec.verts[(i + 1) * P + j].normal +
+                                spec.verts[(i + 1) * P + j + 1].normal;
+                if (sn.lengthSquared() > 1e-12) cellFlip = dot(gn, sn) < 0.0;
+            }
+            if (!cellFlip) { emit(a, b, d); emit(a, d, c); }
+            else           { emit(a, d, b); emit(a, c, d); }
         }
     }
 }

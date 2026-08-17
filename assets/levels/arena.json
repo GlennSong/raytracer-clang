@@ -1,225 +1,874 @@
 {
-  "version": 1,
-  "environment": {
-    "skyColor": [0.05, 0.05, 0.08],
-    "hdr": "../env/tree_lined_driveway_1k.hdr"
-  },
   "entities": [
     {
-      "shape": "box",
-      "size": [50, 2, 50],
-      "position": [0, -1, 0],
+      "id": 1,
       "material": {
-        "albedo": [0.7, 0.7, 0.7],
-        "roughness": 0.8,
-        "flags": ["checkerboard"]
+        "albedo": [
+          0.7,
+          0.7,
+          0.7
+        ],
+        "checkerboard": true,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 0.800000011920929
       },
-      "physics": { "motion": "static", "friction": 0.5 }
-    },
-    {
+      "physics": {
+        "friction": 0.5,
+        "motion": "static",
+        "restitution": 0.0
+      },
+      "position": [
+        0.0,
+        -1.0,
+        0.0
+      ],
       "shape": "box",
-      "size": [50, 4, 1],
-      "position": [0, 2, -25],
-      "material": { "albedo": [0.6, 0.6, 0.65], "roughness": 0.7 },
-      "physics": { "motion": "static", "friction": 0.5 }
+      "size": [
+        50.0,
+        2.0,
+        50.0
+      ]
     },
     {
+      "id": 2,
+      "material": {
+        "albedo": [
+          0.6,
+          0.6,
+          0.65
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 0.699999988079071
+      },
+      "physics": {
+        "friction": 0.5,
+        "motion": "static",
+        "restitution": 0.0
+      },
+      "position": [
+        0.0,
+        2.0,
+        -25.0
+      ],
       "shape": "box",
-      "size": [50, 4, 1],
-      "position": [0, 2, 25],
-      "material": { "albedo": [0.6, 0.6, 0.65], "roughness": 0.7 },
-      "physics": { "motion": "static", "friction": 0.5 }
+      "size": [
+        50.0,
+        4.0,
+        1.0
+      ]
     },
     {
+      "id": 3,
+      "material": {
+        "albedo": [
+          0.6,
+          0.6,
+          0.65
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 0.699999988079071
+      },
+      "physics": {
+        "friction": 0.5,
+        "motion": "static",
+        "restitution": 0.0
+      },
+      "position": [
+        0.0,
+        2.0,
+        25.0
+      ],
       "shape": "box",
-      "size": [1, 4, 50],
-      "position": [-25, 2, 0],
-      "material": { "albedo": [0.6, 0.6, 0.65], "roughness": 0.7 },
-      "physics": { "motion": "static", "friction": 0.5 }
+      "size": [
+        50.0,
+        4.0,
+        1.0
+      ]
     },
     {
+      "id": 4,
+      "material": {
+        "albedo": [
+          0.6,
+          0.6,
+          0.65
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 0.699999988079071
+      },
+      "physics": {
+        "friction": 0.5,
+        "motion": "static",
+        "restitution": 0.0
+      },
+      "position": [
+        -25.0,
+        2.0,
+        0.0
+      ],
       "shape": "box",
-      "size": [1, 4, 50],
-      "position": [25, 2, 0],
-      "material": { "albedo": [0.6, 0.6, 0.65], "roughness": 0.7 },
-      "physics": { "motion": "static", "friction": 0.5 }
+      "size": [
+        1.0,
+        4.0,
+        50.0
+      ]
     },
     {
+      "id": 5,
+      "material": {
+        "albedo": [
+          0.6,
+          0.6,
+          0.65
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 0.699999988079071
+      },
+      "physics": {
+        "friction": 0.5,
+        "motion": "static",
+        "restitution": 0.0
+      },
+      "position": [
+        25.0,
+        2.0,
+        0.0
+      ],
       "shape": "box",
-      "size": [6, 0.5, 4],
-      "position": [-10, 0.8, -10],
-      "orientation": { "axis": [1, 0, 0], "angleDeg": 15 },
-      "material": { "albedo": [0.5, 0.35, 0.2], "roughness": 0.6 },
-      "physics": { "motion": "static", "friction": 0.5 }
+      "size": [
+        1.0,
+        4.0,
+        50.0
+      ]
     },
     {
+      "id": 6,
+      "material": {
+        "albedo": [
+          0.5,
+          0.35,
+          0.2
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 0.6000000238418579
+      },
+      "orientation": {
+        "angleDeg": 14.999999999999929,
+        "axis": [
+          1.0000000000000049,
+          0.0,
+          0.0
+        ]
+      },
+      "physics": {
+        "friction": 0.5,
+        "motion": "static",
+        "restitution": 0.0
+      },
+      "position": [
+        -10.0,
+        0.8,
+        -10.0
+      ],
       "shape": "box",
-      "size": [6, 0.5, 4],
-      "position": [10, 0.8, 10],
-      "orientation": { "axis": [1, 0, 0], "angleDeg": -15 },
-      "material": { "albedo": [0.5, 0.35, 0.2], "roughness": 0.6 },
-      "physics": { "motion": "static", "friction": 0.5 }
+      "size": [
+        6.0,
+        0.5,
+        4.0
+      ]
     },
     {
+      "id": 7,
+      "material": {
+        "albedo": [
+          0.5,
+          0.35,
+          0.2
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 0.6000000238418579
+      },
+      "orientation": {
+        "angleDeg": 14.999999999999929,
+        "axis": [
+          -1.0000000000000049,
+          -0.0,
+          -0.0
+        ]
+      },
+      "physics": {
+        "friction": 0.5,
+        "motion": "static",
+        "restitution": 0.0
+      },
+      "position": [
+        10.0,
+        0.8,
+        10.0
+      ],
       "shape": "box",
-      "size": [2, 4, 2],
-      "position": [-6, 2, 5],
-      "material": { "albedo": [0.3, 0.3, 0.7], "roughness": 0.5 },
-      "physics": { "motion": "static", "friction": 0.5 }
+      "size": [
+        6.0,
+        0.5,
+        4.0
+      ]
     },
     {
+      "id": 8,
+      "material": {
+        "albedo": [
+          0.3,
+          0.3,
+          0.7
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 0.5
+      },
+      "physics": {
+        "friction": 0.5,
+        "motion": "static",
+        "restitution": 0.0
+      },
+      "position": [
+        -6.0,
+        2.0,
+        5.0
+      ],
       "shape": "box",
-      "size": [2, 4, 2],
-      "position": [6, 2, -5],
-      "material": { "albedo": [0.3, 0.3, 0.7], "roughness": 0.5 },
-      "physics": { "motion": "static", "friction": 0.5 }
+      "size": [
+        2.0,
+        4.0,
+        2.0
+      ]
     },
     {
+      "id": 9,
+      "material": {
+        "albedo": [
+          0.3,
+          0.3,
+          0.7
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 0.5
+      },
+      "physics": {
+        "friction": 0.5,
+        "motion": "static",
+        "restitution": 0.0
+      },
+      "position": [
+        6.0,
+        2.0,
+        -5.0
+      ],
       "shape": "box",
-      "size": [4, 2, 1],
-      "position": [0, 1, -8],
-      "material": { "albedo": [0.3, 0.3, 0.7], "roughness": 0.5 },
-      "physics": { "motion": "static", "friction": 0.5 }
+      "size": [
+        2.0,
+        4.0,
+        2.0
+      ]
     },
     {
+      "id": 10,
+      "material": {
+        "albedo": [
+          0.3,
+          0.3,
+          0.7
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 0.5
+      },
+      "physics": {
+        "friction": 0.5,
+        "motion": "static",
+        "restitution": 0.0
+      },
+      "position": [
+        0.0,
+        1.0,
+        -8.0
+      ],
+      "shape": "box",
+      "size": [
+        4.0,
+        2.0,
+        1.0
+      ]
+    },
+    {
+      "id": 11,
+      "material": {
+        "albedo": [
+          0.9,
+          0.2,
+          0.2
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 0.30000001192092896
+      },
+      "physics": {
+        "friction": 0.3,
+        "motion": "dynamic",
+        "restitution": 0.5
+      },
+      "position": [
+        -5.0,
+        1.5,
+        -3.0
+      ],
       "shape": "sphere",
-      "size": [1, 1, 1],
-      "position": [-5, 1.5, -3],
-      "material": { "albedo": [0.9, 0.2, 0.2], "roughness": 0.3 },
-      "physics": { "motion": "dynamic", "friction": 0.3, "restitution": 0.5 }
+      "size": [
+        1.0,
+        1.0,
+        1.0
+      ]
     },
     {
+      "id": 12,
+      "material": {
+        "albedo": [
+          0.2,
+          0.7,
+          0.2
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 0.30000001192092896
+      },
+      "physics": {
+        "friction": 0.3,
+        "motion": "dynamic",
+        "restitution": 0.5
+      },
+      "position": [
+        5.0,
+        1.5,
+        3.0
+      ],
       "shape": "sphere",
-      "size": [1, 1, 1],
-      "position": [5, 1.5, 3],
-      "material": { "albedo": [0.2, 0.7, 0.2], "roughness": 0.3 },
-      "physics": { "motion": "dynamic", "friction": 0.3, "restitution": 0.5 }
+      "size": [
+        1.0,
+        1.0,
+        1.0
+      ]
     },
     {
+      "id": 13,
+      "material": {
+        "albedo": [
+          0.2,
+          0.3,
+          0.9
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 0.30000001192092896
+      },
+      "physics": {
+        "friction": 0.3,
+        "motion": "dynamic",
+        "restitution": 0.5
+      },
+      "position": [
+        -3.0,
+        1.5,
+        8.0
+      ],
       "shape": "sphere",
-      "size": [1, 1, 1],
-      "position": [-3, 1.5, 8],
-      "material": { "albedo": [0.2, 0.3, 0.9], "roughness": 0.3 },
-      "physics": { "motion": "dynamic", "friction": 0.3, "restitution": 0.5 }
+      "size": [
+        1.0,
+        1.0,
+        1.0
+      ]
     },
     {
+      "id": 14,
+      "material": {
+        "albedo": [
+          0.9,
+          0.8,
+          0.1
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 0.30000001192092896
+      },
+      "physics": {
+        "friction": 0.3,
+        "motion": "dynamic",
+        "restitution": 0.5
+      },
+      "position": [
+        8.0,
+        1.5,
+        -8.0
+      ],
       "shape": "sphere",
-      "size": [1, 1, 1],
-      "position": [8, 1.5, -8],
-      "material": { "albedo": [0.9, 0.8, 0.1], "roughness": 0.3 },
-      "physics": { "motion": "dynamic", "friction": 0.3, "restitution": 0.5 }
+      "size": [
+        1.0,
+        1.0,
+        1.0
+      ]
     },
     {
+      "id": 15,
+      "material": {
+        "albedo": [
+          0.8,
+          0.4,
+          0.1
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.20000000298023224,
+        "opacity": 1.0,
+        "roughness": 0.4000000059604645
+      },
+      "physics": {
+        "friction": 0.5,
+        "motion": "static",
+        "restitution": 0.0
+      },
+      "position": [
+        12.0,
+        1.5,
+        0.0
+      ],
       "shape": "cone",
-      "size": [1.5, 3, 1],
-      "position": [12, 1.5, 0],
-      "material": { "albedo": [0.8, 0.4, 0.1], "roughness": 0.4, "metallic": 0.2 },
-      "physics": { "motion": "static", "friction": 0.5 }
+      "size": [
+        1.5,
+        3.0,
+        1.0
+      ]
     },
     {
+      "id": 16,
+      "material": {
+        "albedo": [
+          0.9,
+          0.1,
+          0.6
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.800000011920929,
+        "opacity": 1.0,
+        "roughness": 0.20000000298023224
+      },
+      "orientation": {
+        "angleDeg": 90.0,
+        "axis": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      },
+      "physics": {
+        "friction": 0.5,
+        "motion": "static",
+        "restitution": 0.0
+      },
+      "position": [
+        -12.0,
+        2.0,
+        0.0
+      ],
       "shape": "torus",
-      "size": [2, 0.4, 1],
-      "position": [-12, 2, 0],
-      "orientation": { "axis": [1, 0, 0], "angleDeg": 90 },
-      "material": { "albedo": [0.9, 0.1, 0.6], "roughness": 0.2, "metallic": 0.8 },
-      "physics": { "motion": "static", "friction": 0.5 }
+      "size": [
+        2.0,
+        0.4,
+        1.0
+      ]
     },
     {
+      "id": 17,
+      "material": {
+        "albedo": [
+          0.2,
+          0.6,
+          0.4
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 0.5
+      },
+      "physics": {
+        "friction": 0.6,
+        "motion": "static",
+        "restitution": 0.0
+      },
+      "position": [
+        0.0,
+        0.0,
+        15.0
+      ],
       "shape": "wedge",
-      "size": [4, 2, 3],
-      "position": [0, 0, 15],
-      "material": { "albedo": [0.2, 0.6, 0.4], "roughness": 0.5 },
-      "physics": { "motion": "static", "friction": 0.6 }
+      "size": [
+        4.0,
+        2.0,
+        3.0
+      ]
     },
     {
+      "id": 18,
+      "material": {
+        "albedo": [
+          0.3,
+          0.7,
+          0.9
+        ],
+        "checkerboard": false,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "metallic": 0.6000000238418579,
+        "opacity": 1.0,
+        "roughness": 0.25
+      },
+      "physics": {
+        "friction": 0.3,
+        "motion": "dynamic",
+        "restitution": 0.4
+      },
+      "position": [
+        -8.0,
+        2.0,
+        -12.0
+      ],
       "shape": "capsule",
-      "size": [0.8, 2, 1],
-      "position": [-8, 2, -12],
-      "material": { "albedo": [0.3, 0.7, 0.9], "roughness": 0.25, "metallic": 0.6 },
-      "physics": { "motion": "dynamic", "friction": 0.3, "restitution": 0.4 }
+      "size": [
+        0.8,
+        2.0,
+        1.0
+      ]
     },
     {
-      "mesh": "../models/DamagedHelmet.glb",
-      "position": [0, 3, -3],
-      "scale": [1.5, 1.5, 1.5],
-      "physics": { "motion": "static" }
-    },
-    {
+      "id": 19,
       "name": "oak",
-      "shape": "tree",
-      "position": [-15, 0, -8],
-      "tree": {
-        "seed": 7,
-        "iterations": 6,
-        "trunkLength": 1.7,
-        "branchAngle": 35,
-        "angleJitter": 16,
-        "radiusScale": 1.4,
-        "barkColor": [0.32, 0.23, 0.15],
-        "leafColor": [0.20, 0.46, 0.14]
+      "physics": {
+        "friction": 0.8,
+        "motion": "static",
+        "restitution": 0.0
       },
-      "physics": { "motion": "static", "friction": 0.8 }
+      "position": [
+        -15.0,
+        0.0,
+        -8.0
+      ],
+      "shape": "tree",
+      "tree": {
+        "angleJitter": 16,
+        "barkColor": [
+          0.32,
+          0.23,
+          0.15
+        ],
+        "branchAngle": 35,
+        "iterations": 6,
+        "leafColor": [
+          0.2,
+          0.46,
+          0.14
+        ],
+        "radiusScale": 1.4,
+        "seed": 7,
+        "trunkLength": 1.7
+      }
     },
     {
+      "id": 20,
       "name": "birch",
-      "shape": "tree",
-      "position": [16, 0, 9],
-      "tree": {
-        "seed": 23,
-        "iterations": 6,
-        "trunkLength": 1.9,
-        "branchAngle": 28,
-        "angleJitter": 12,
-        "branchesPerNode": 2,
-        "radiusScale": 1.1,
-        "barkColor": [0.78, 0.76, 0.70],
-        "leafColor": [0.40, 0.55, 0.18]
+      "physics": {
+        "friction": 0.8,
+        "motion": "static",
+        "restitution": 0.0
       },
-      "physics": { "motion": "static", "friction": 0.8 }
+      "position": [
+        16.0,
+        0.0,
+        9.0
+      ],
+      "shape": "tree",
+      "tree": {
+        "angleJitter": 12,
+        "barkColor": [
+          0.78,
+          0.76,
+          0.7
+        ],
+        "branchAngle": 28,
+        "branchesPerNode": 2,
+        "iterations": 6,
+        "leafColor": [
+          0.4,
+          0.55,
+          0.18
+        ],
+        "radiusScale": 1.1,
+        "seed": 23,
+        "trunkLength": 1.9
+      }
     }
   ],
-  "player": {
-    "position": [0, 1, 5],
-    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
-    "friction": 0.5
+  "environment": {
+    "hdr": "../env/tree_lined_driveway_1k.hdr",
+    "skyColor": [
+      0.05,
+      0.05,
+      0.08
+    ]
   },
-  "vehicles": [
-    { "recipe": "sedan", "position": [6, 0.8, 0], "yaw": 0, "seed": 1 },
-    { "script": "return vehicle.hatchback(seed, {color={0.15,0.45,0.75}})",
-      "position": [10, 0.8, 4], "yaw": 30, "seed": 2 }
-  ],
   "lighting": {
-    "sun": {
-      "direction": [0.5, 0.7, -0.4],
-      "color": [1.0, 0.93, 0.80],
-      "intensity": 9.5,
-      "castsShadow": true
-    },
+    "ambientMultiplier": 0.45,
+    "exposure": 0.35,
     "pointLights": [
-      { "position": [0, 12, 0],     "color": [1.0, 0.95, 0.9], "intensity": 450, "range": 30 },
-      { "position": [-15, 8, -15],  "color": [0.4, 0.5, 1.0],  "intensity": 240, "range": 25 },
-      { "position": [15, 8, 15],    "color": [1.0, 0.7, 0.3],  "intensity": 240, "range": 25 }
+      {
+        "color": [
+          1.0,
+          0.95,
+          0.9
+        ],
+        "intensity": 450,
+        "position": [
+          0,
+          12,
+          0
+        ],
+        "range": 30
+      },
+      {
+        "color": [
+          0.4,
+          0.5,
+          1.0
+        ],
+        "intensity": 240,
+        "position": [
+          -15,
+          8,
+          -15
+        ],
+        "range": 25
+      },
+      {
+        "color": [
+          1.0,
+          0.7,
+          0.3
+        ],
+        "intensity": 240,
+        "position": [
+          15,
+          8,
+          15
+        ],
+        "range": 25
+      }
     ],
     "spotLights": [
       {
-        "position": [0, 10, 0],
-        "direction": [0, -1, 0],
-        "color": [1.0, 0.9, 0.8],
-        "intensity": 520,
-        "range": 20,
+        "color": [
+          1.0,
+          0.9,
+          0.8
+        ],
+        "direction": [
+          0,
+          -1,
+          0
+        ],
         "innerConeAngle": 0.3,
-        "outerConeAngle": 0.5
+        "intensity": 520,
+        "outerConeAngle": 0.5,
+        "position": [
+          0,
+          10,
+          0
+        ],
+        "range": 20
       }
     ],
-    "exposure": 0.35,
-    "ambientMultiplier": 0.45
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1.0,
+        0.93,
+        0.8
+      ],
+      "direction": [
+        0.5,
+        0.7,
+        -0.4
+      ],
+      "intensity": 9.5
+    }
+  },
+  "player": {
+    "collider": {
+      "halfHeight": 0.4,
+      "radius": 0.3,
+      "shape": "capsule"
+    },
+    "friction": 0.5,
+    "position": [
+      0.0,
+      1.0,
+      5.0
+    ]
   },
   "reflectionProbes": [
     {
-      "position": [0, 3, 0],
-      "radius": 35,
-      "boxMin": [-25, -1, -25],
-      "boxMax": [25, 10, 25]
+      "boxMax": [
+        25,
+        10,
+        25
+      ],
+      "boxMin": [
+        -25,
+        -1,
+        -25
+      ],
+      "position": [
+        0,
+        3,
+        0
+      ],
+      "radius": 35
     }
-  ]
+  ],
+  "vehicles": [
+    {
+      "position": [
+        6,
+        0.8,
+        0
+      ],
+      "recipe": "sedan",
+      "seed": 1,
+      "yaw": 0
+    },
+    {
+      "position": [
+        10,
+        0.8,
+        4
+      ],
+      "script": "return vehicle.hatchback(seed, {color={0.15,0.45,0.75}})",
+      "seed": 2,
+      "yaw": 30
+    }
+  ],
+  "version": 1
 }

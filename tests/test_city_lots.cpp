@@ -8,6 +8,9 @@
 #include "../src/engine/procgen/city/metro.h"
 #include "../src/engine/procgen/city/road_constraints.h"
 
+#include <map>
+#include <string>
+
 using namespace engine;
 
 // Living City, ADR-0066: buildings grown on the road network's blocks. The pass
@@ -727,4 +730,84 @@ TEST_CASE(ring_parceler_fronts_every_lot_on_any_polygon) {
         // Deterministic for the seed.
         CHECK(lots.size() == subdivideBlock(*block, pp).size());
     }
+}
+
+// WINDING — carried over from `city_winding_matches_engine_convention`, which
+// asserted this against the retired shape:"city" generator and would otherwise
+// have been deleted with it. The engine winds front faces so the geometric normal
+// OPPOSES the shading normal (AGENTS.md § Procgen Authoring); the Metal viewer
+// culls back faces by it, and the offline tracer is two-sided, so an inside-out
+// building is invisible in one renderer and fine in the other. That makes this
+// the only place a flipped facade gets caught.
+//
+// Per-face against the face's own vertex normal is valid HERE and not for roads:
+// the grammar emits through emitTri/emitQuad with flat per-face normals, whereas
+// the road lattice shares vertices and averages them across creases (see
+// tests/test_road_lattice.cpp per_face_normal_test_is_invalid_for_a_shared_vertex_lattice).
+TEST_CASE(lot_building_parts_wind_to_the_engine_convention) {
+    LotParams p;
+    p.center = {0, 0};
+    p.seed = 11;
+    std::vector<RenderMesh> parts;
+    std::vector<LotBuilding> b = growLotBuildings(squareBlocks(), p, nullptr, &parts);
+    CHECK(!b.empty());
+
+    std::size_t checked = 0;
+    int wrong = 0;
+    for (const RenderMesh& m : parts) {
+        for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+            const Vertex& v0 = m.vertices[m.indices[i]];
+            const Vertex& v1 = m.vertices[m.indices[i + 1]];
+            const Vertex& v2 = m.vertices[m.indices[i + 2]];
+            const Vec3 gn = cross(v1.position - v0.position,
+                                  v2.position - v0.position);
+            if (gn.lengthSquared() < 1e-24) continue;
+            ++checked;
+            if (dot(gn, v0.normal) > 1e-6) ++wrong;
+        }
+    }
+    CHECK(checked > 500);   // the merged district is real geometry, not a stub
+    CHECK(wrong == 0);
+}
+
+// ONE BLOCK, ONE DISTRICT — the gate for city-pipeline.md stage 9.
+//
+// Zoning boundaries are supposed to land on STREETS. A block face is bounded by
+// streets by construction, so the test of "a district ends at an avenue, not
+// mid-block" is simply: every building in a block agrees on its district.
+//
+// It used not to. PASS A resolves a tag per block (which sets the parcel GRAIN,
+// setback and buildChance) and PASS C used to re-derive one per LOT from the
+// lot's own centroid (which sets the building RECIPE). DistrictMap::tagAt is a
+// continuous function of position with no knowledge of where the streets are, so
+// wherever a boundary crossed a block the two disagreed — one row of a commercial
+// block built houses while the row opposite built shops, on lots that had all been
+// cut into 13x30 m retail slots by the block's own decision.
+//
+// This fails if anyone reintroduces a per-lot tagAt lookup.
+TEST_CASE(one_block_builds_one_district) {
+    LotParams p;
+    p.center = {0, 0};
+    p.seed = 9;
+    // Put the district boundaries INSIDE the block field rather than outside it:
+    // with a small core the rings cut across blocks, which is precisely the
+    // condition the old per-lot lookup got wrong. A test whose boundaries all
+    // fall in empty space would pass either way.
+    p.innerRadius = 70;
+    p.midRadius = 130;
+    std::vector<RenderMesh> parts;
+    std::vector<LotBuilding> b = growLotBuildings(squareBlocks(), p, nullptr, &parts);
+    CHECK(!b.empty());
+
+    std::map<int, std::string> districtOfBlock;
+    int checked = 0, disagreements = 0;
+    for (const LotBuilding& lb : b) {
+        if (lb.block < 0 || lb.district.empty()) continue;   // parks/greens/courts
+        ++checked;
+        auto it = districtOfBlock.find(lb.block);
+        if (it == districtOfBlock.end()) districtOfBlock.emplace(lb.block, lb.district);
+        else if (it->second != lb.district) ++disagreements;
+    }
+    CHECK(checked > 10);            // real buildings, not a degenerate pass
+    CHECK(disagreements == 0);
 }

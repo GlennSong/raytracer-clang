@@ -1,61 +1,83 @@
 {
   "cameras": [
     {
+      "forward": [
+        -0.5214621438781427,
+        -0.42118096236311525,
+        -0.7420807432112032
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 30.0,
+        "focusDistance": 280.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
       "name": "City",
       "position": [
-        170,
-        110,
-        230
+        170.0,
+        110.0,
+        230.0
       ],
-      "forward": [
-        -0.52,
-        -0.42,
-        -0.74
-      ],
-      "lens": {
-        "focalLength": 30,
-        "sensorHeight": 24,
-        "fStop": 0,
-        "focusDistance": 280.0
-      }
+      "show_gizmo": true
     },
     {
+      "forward": [
+        -0.5484119048844308,
+        -0.11965350652023946,
+        -0.8276034200983229
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 32.0,
+        "focusDistance": 60.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
       "name": "Street",
       "position": [
-        40,
-        8,
-        60
+        40.0,
+        8.0,
+        60.0
       ],
-      "forward": [
-        -0.55,
-        -0.12,
-        -0.83
-      ],
-      "lens": {
-        "focalLength": 32,
-        "sensorHeight": 24,
-        "fStop": 0,
-        "focusDistance": 60.0
-      }
+      "show_gizmo": true
     },
     {
-      "name": "Top",
-      "position": [
-        0,
-        420,
-        40
-      ],
       "forward": [
-        0,
-        -0.995,
-        -0.1
+        0.0,
+        -0.9949875627331983,
+        -0.09999875002343721
       ],
       "lens": {
-        "focalLength": 30,
-        "sensorHeight": 24,
-        "fStop": 0,
-        "focusDistance": 420.0
-      }
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 30.0,
+        "focusDistance": 420.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
+      "name": "Top",
+      "position": [
+        0.0,
+        420.0,
+        40.0
+      ],
+      "show_gizmo": true
     }
-  ]
+  ],
+  "version": 1
 }

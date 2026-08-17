@@ -1,50 +1,105 @@
 {
-  "version": 1,
-  "environment": {
-    "skyColor": [0.55, 0.68, 0.86]
-  },
-  "terrain": {
-    "seed": 21,
-    "size": 560,
-    "resolution": 260,
-    "heightScale": 24,
-    "noiseScale": 0.015,
-    "octaves": 5,
-    "warp": 0.3,
-    "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 }
+  "_comment": "Migrated off shape:\"city\" onto road + citysim.buildLots. onTerrain is implicit (the terrain block), and so is scatterTrees — the lot pipeline plants its own greens/parks.",
+  "citysim": {
+    "buildChance": 0.92,
+    "buildLots": true,
+    "cars": 0,
+    "downtownRadius": 82,
+    "midtownRadius": 180,
+    "pedestrians": 0,
+    "seed": 11,
+    "sidewalk": 4.0
   },
   "entities": [
     {
-      "name": "the_city",
-      "shape": "city",
-      "position": [0, 0, 0],
-      "city": {
-        "onTerrain": true,
-        "extent": 200,
-        "cellSize": 80,
-        "roadJitter": 0.12,
-        "downtownRadius": 82,
-        "midtownRadius": 180,
-        "parkFraction": 0.1,
-        "buildChance": 0.92,
-        "scatterTrees": true,
-        "seed": 11
-      }
+      "id": 1,
+      "name": "streets",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "road": {
+        "color": [
+          0.09,
+          0.09,
+          0.1
+        ],
+        "corner_radius": 3.0,
+        "crosswalks": true,
+        "curb": 0.16,
+        "generate": {
+          "arterials": 3,
+          "artery_width": 13,
+          "block_size": 80,
+          "jitter": 0.12,
+          "kind": "district",
+          "radius": 200,
+          "seed": 11,
+          "street_width": 8
+        },
+        "lift": 0.08,
+        "markings": true,
+        "sidewalk": 3.5,
+        "width": 8.0
+      },
+      "shape": "road"
     }
   ],
-  "player": {
-    "position": [0, 4, 200],
-    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.8 },
-    "friction": 0.5
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
   },
   "lighting": {
-    "sun": {
-      "direction": [0.42, 0.52, -0.5],
-      "color": [1.0, 0.96, 0.86],
-      "intensity": 8.0,
-      "castsShadow": true
-    },
+    "ambientMultiplier": 0.6,
     "exposure": 0.5,
-    "ambientMultiplier": 0.6
-  }
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1.0,
+        0.96,
+        0.86
+      ],
+      "direction": [
+        0.42,
+        0.52,
+        -0.5
+      ],
+      "intensity": 8.0
+    }
+  },
+  "player": {
+    "collider": {
+      "halfHeight": 0.8,
+      "radius": 0.3,
+      "shape": "capsule"
+    },
+    "friction": 0.5,
+    "position": [
+      0.0,
+      4.0,
+      200.0
+    ]
+  },
+  "terrain": {
+    "heightScale": 24,
+    "material": {
+      "albedo": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roughness": 1.0
+    },
+    "noiseScale": 0.015,
+    "octaves": 5,
+    "resolution": 260,
+    "seed": 21,
+    "size": 560,
+    "warp": 0.3
+  },
+  "version": 1
 }

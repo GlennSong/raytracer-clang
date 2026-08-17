@@ -1,10 +1,31 @@
 {
   "cameras": [
     {
+      "forward": [
+        -0.5492276837878809,
+        -0.23236555852564186,
+        -0.8027173839976719
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 34.0,
+        "focusDistance": 240.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
       "name": "Aerial",
-      "position": [155, 70, 205],
-      "forward": [-0.52, -0.22, -0.76],
-      "lens": { "focalLength": 34, "sensorHeight": 24, "fStop": 0, "focusDistance": 240 }
+      "position": [
+        155.0,
+        70.0,
+        205.0
+      ],
+      "show_gizmo": true
     }
-  ]
+  ],
+  "version": 1
 }

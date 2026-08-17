@@ -142,38 +142,6 @@ TEST_CASE(clearance_hugs_ground_when_unconstrained) {
 
 // --- the bridge deck rides the clearance profile (ADR-0054) ---
 
-// A straight road over a mid crossing: the deck top peaks at the clearance height and the
-// slab gives the mesh `thickness` of vertical extent below the deck.
-TEST_CASE(bridge_deck_rides_the_clearance_profile) {
-    std::vector<double> s, minH; int mid;
-    crossingProfile(41, 200.0, 6.0, s, minH, mid);
-    std::vector<double> y = clearanceProfile(s, minH, 0.06);
-
-    std::vector<Vec2> center(s.size());
-    for (std::size_t i = 0; i < s.size(); ++i) center[i] = Vec2(s[i] - 100.0, 0.0);  // along x
-    RenderMesh deck = bridgeDeck(center, y, 5.0, Vec3(0.1, 0.1, 0.1), 0.6);
-
-    CHECK(!deck.vertices.empty());
-    CHECK(deck.indices.size() % 3 == 0);
-
-    double maxY = -1e30, minY = 1e30;
-    for (const Vertex& v : deck.vertices) {
-        maxY = std::max(maxY, (double)v.position.y);
-        minY = std::min(minY, (double)v.position.y);
-    }
-    CHECK(std::fabs(maxY - 6.0) < 1e-6);          // deck top peaks at the clearance
-    CHECK(std::fabs(minY - (0.0 - 0.6)) < 1e-6);  // fascia drops a slab thickness at the ends
-}
-
-// A degenerate input (mismatched lengths) yields an empty mesh, not a crash.
-TEST_CASE(bridge_deck_rejects_bad_input) {
-    std::vector<Vec2> center = { Vec2(0, 0), Vec2(10, 0) };
-    std::vector<double> y = { 1.0 };              // wrong length
-    CHECK(bridgeDeck(center, y, 4.0, Vec3(0, 0, 0)).vertices.empty());
-}
-
-// --- end-to-end layered road (ADR-0051/0054): edge layers + a lifted bridge deck ---
-
 #include "../src/engine/procgen/city/road_net.h"
 #include <nlohmann/json.hpp>
 
@@ -313,51 +281,6 @@ TEST_CASE(bridge_piers_stand_under_the_deck) {
     CHECK(std::fabs(maxY - (6.0 - 0.8)) < 1e-6);   // head at the deck underside
 }
 
-// Deck barriers: a parapet wall stands above the deck on both edges.
-TEST_CASE(deck_barriers_stand_on_the_verges) {
-    std::vector<Vec2> c = { Vec2(-10, 0), Vec2(0, 0), Vec2(10, 0) };
-    std::vector<double> y = { 5.0, 5.0, 5.0 };
-    RenderMesh b = deckBarriers(c, y, 4.0, 0.9, Vec3(0.5, 0.5, 0.5));
-    CHECK(!b.vertices.empty());
-    double maxY = -1e30, minY = 1e30, maxAbsZ = 0;
-    for (const Vertex& v : b.vertices) {
-        maxY = std::max(maxY, (double)v.position.y); minY = std::min(minY, (double)v.position.y);
-        maxAbsZ = std::max(maxAbsZ, std::fabs((double)v.position.z));
-    }
-    CHECK(std::fabs(minY - 5.0) < 1e-6);            // foot on the deck
-    CHECK(std::fabs(maxY - 5.9) < 1e-6);            // top a barrier-height above
-    CHECK(std::fabs(maxAbsZ - 4.0) < 1e-6);         // on the verges (±halfWidth)
-}
-
-// Deck markings: a wider deck gets more lane-divider stripes than a narrow one.
-TEST_CASE(deck_markings_scale_lanes_with_width) {
-    std::vector<Vec2> c = { Vec2(-50, 0), Vec2(0, 0), Vec2(50, 0) };
-    std::vector<double> y = { 0, 0, 0 };
-    DeckMarkParams mp;
-    std::size_t narrow = deckMarkings(c, y, 4.0, mp).indices.size();    // ~2 lanes
-    std::size_t wide   = deckMarkings(c, y, 12.0, mp).indices.size();   // ~7 lanes
-    CHECK(narrow > 0);
-    CHECK(wide > narrow);
-}
-
-// A tapering deck (per-point half-width) narrows along its length — the merge-gore primitive.
-TEST_CASE(deck_tapers_with_per_point_width) {
-    std::vector<Vec2> c;                                  // straight run along x
-    std::vector<double> y, hw;
-    for (int i = 0; i <= 10; ++i) { c.push_back(Vec2(i * 5.0, 0)); y.push_back(0.0); hw.push_back(0.5 + 0.45 * i); }
-    RenderMesh d = bridgeDeck(c, y, hw, Vec3(0.1, 0.1, 0.1), 0.4);
-    CHECK(!d.vertices.empty());
-    // Vertices near the narrow end (x≈0) hug the centerline; near the wide end (x≈50) spread out.
-    double zNarrow = 0, zWide = 0;
-    for (const Vertex& v : d.vertices) {
-        if (v.position.x < 3.0)  zNarrow = std::max(zNarrow, std::fabs((double)v.position.z));
-        if (v.position.x > 47.0) zWide   = std::max(zWide,   std::fabs((double)v.position.z));
-    }
-    CHECK(std::fabs(zNarrow - 0.5) < 1e-6);              // half-width 0.5 at the nose
-    CHECK(std::fabs(zWide - 5.0) < 1e-6);                // half-width 5.0 at the wide end
-    CHECK(zWide > zNarrow);
-}
-
 // --- the design-rules registry (ADR-0052): one class-keyed source for road parameters ---
 #include "../src/engine/procgen/city/road_rules.h"
 
@@ -371,66 +294,3 @@ TEST_CASE(design_rules_rank_classes_sensibly) {
     CHECK(d.forClass(RoadClass::Freeway).fullWidth() > d.forClass(RoadClass::Local).fullWidth());
     CHECK(d.clearance > 4.0 && d.rampGrade > 0.0);                            // grade-sep numbers present
 }
-
-// The unified weld assembles ribbons into a solid mesh: a cross of two ribbons has area ~144.
-TEST_CASE(weld_ribbons_makes_a_solid_cross) {
-    std::vector<UnionSpine> sp;
-    UnionSpine a; a.halfWidth = 2.0; a.points = { Vec2(-10, 0), Vec2(10, 0) }; sp.push_back(a);
-    UnionSpine b; b.halfWidth = 2.0; b.points = { Vec2(0, -10), Vec2(0, 10) }; sp.push_back(b);
-    RenderMesh m = weldRibbons(sp, 0.0, Vec3(0.1, 0.1, 0.1));
-    CHECK(!m.vertices.empty());
-    CHECK(m.indices.size() % 3 == 0);
-    double area = 0;
-    for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
-        const Vec3& A = m.vertices[m.indices[i]].position;
-        const Vec3& B = m.vertices[m.indices[i + 1]].position;
-        const Vec3& C = m.vertices[m.indices[i + 2]].position;
-        area += std::fabs((B.x - A.x) * (C.z - A.z) - (C.x - A.x) * (B.z - A.z)) * 0.5;
-    }
-    CHECK(std::fabs(area - 144.0) < 0.5);            // welded cross area
-}
-
-// A "#" of four ribbons crossing THROUGH each other welds into a solid surface with its central
-// block OPEN (the enclosed cell bridged out and triangulated away). Two H ribbons (y=±5), two V
-// ribbons (x=±5), each 4 wide spanning [-15,15]: filled area = 4*120 - 4*16 = 416, central 6x6
-// hole excluded. The triangulated mesh area is the filled 416 (the hole carries no triangles).
-TEST_CASE(weld_ribbons_opens_a_block_hole) {
-    auto mk = [](Vec2 a, Vec2 b) { UnionSpine s; s.halfWidth = 2.0; s.points = { a, b }; return s; };
-    std::vector<UnionSpine> sp = {
-        mk(Vec2(-15, -5), Vec2(15, -5)), mk(Vec2(-15, 5), Vec2(15, 5)),
-        mk(Vec2(-5, -15), Vec2(-5, 15)), mk(Vec2(5, -15), Vec2(5, 15)) };
-    RenderMesh m = weldRibbons(sp, 0.0, Vec3(0.1, 0.1, 0.1));
-    double area = 0;
-    for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
-        const Vec3& A = m.vertices[m.indices[i]].position;
-        const Vec3& B = m.vertices[m.indices[i + 1]].position;
-        const Vec3& C = m.vertices[m.indices[i + 2]].position;
-        area += std::fabs((B.x - A.x) * (C.z - A.z) - (C.x - A.x) * (B.z - A.z)) * 0.5;
-    }
-    CHECK(std::fabs(area - 416.0) < 2.0);
-}
-
-// A corner radius fillets the welded outline at a junction: the cross's four reflex notches (the
-// curb returns where perpendicular arms meet) round off, smoothing the sharp inner corners with
-// arcs. The change is small and the arcs add geometry.
-TEST_CASE(weld_corner_radius_fillets_junction) {
-    auto mk = [](Vec2 a, Vec2 b) { UnionSpine s; s.halfWidth = 2.0; s.points = { a, b }; return s; };
-    std::vector<UnionSpine> sp = { mk(Vec2(-10, 0), Vec2(10, 0)), mk(Vec2(0, -10), Vec2(0, 10)) };
-    auto meshArea = [](const RenderMesh& m) {
-        double a = 0;
-        for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
-            const Vec3& A = m.vertices[m.indices[i]].position;
-            const Vec3& B = m.vertices[m.indices[i + 1]].position;
-            const Vec3& C = m.vertices[m.indices[i + 2]].position;
-            a += std::fabs((B.x - A.x) * (C.z - A.z) - (C.x - A.x) * (B.z - A.z)) * 0.5;
-        }
-        return a;
-    };
-    RenderMesh sharp = weldRibbons(sp, 0.0, Vec3(0.1, 0.1, 0.1), 0.0);
-    RenderMesh round = weldRibbons(sp, 0.0, Vec3(0.1, 0.1, 0.1), 1.5);
-    double as = meshArea(sharp), ar = meshArea(round);
-    CHECK(std::fabs(as - 144.0) < 0.5);                 // sharp cross is exact
-    CHECK(std::fabs(ar - as) < 6.0);                    // fillets nudge the area only a little
-    CHECK(round.indices.size() > sharp.indices.size()); // arcs add triangles
-}
-

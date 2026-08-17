@@ -11,10 +11,15 @@
 -- "metal"|"glass"|"painted"|"wood"|"darkbrick"|"sandstone"), wall_color =
 -- {r,g,b}, trim_color, window_head ("flat"|"segmental"|"round"), window_hood
 -- ("none"|"band"|"arch"), lights_x, lights_y, quoins, sill,
--- roof ("flat"|"gable"|"hip"|"sawtooth"), roof_pitch, parapet, awning,
+-- roof ("flat"|"gable"|"hip"|"sawtooth"), roof_pitch, parapet,
 -- pilasters, portico (column count), entrance_steps, dome, ground_bays,
 -- side_bays, balconies, porch, chimney, spire, steeple, parking_decks,
 -- floor_height, ground_height, bay_width ...
+--
+-- NOT settable from here (live BuildingParams fields with no Lua reader in
+-- readBuildingParamsOnto): awning, base_course, string_course, face_dir,
+-- wall_thickness, window frame_color. An entry naming one of these is silently
+-- ignored — add the reader in procgen_bindings.cpp before advertising it.
 --
 -- Recipe names: glass_tower, office_slab, commercial_block, civic_hall,
 -- civic_midtown, brick_shop, mixed_use, office_midrise, hotel, walkup_homes,

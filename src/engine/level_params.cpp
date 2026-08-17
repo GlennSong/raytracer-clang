@@ -106,50 +106,6 @@ TreeParams readTreeParams(const json& ent, uint32_t& seedOut) {
     return tp;
 }
 
-CityParams readCityParams(const json& ent, const json& root) {
-    CityParams cp;
-    Vec3 pos = parseVec3(ent.value("position", json()));
-    cp.center = {pos.x, pos.z};
-    cp.baseY = pos.y;
-    bool onTerrain = false;
-    if (ent.contains("city")) {
-        const auto& j = ent["city"];
-        cp.extent         = j.value("extent", cp.extent);
-        cp.cellSize       = j.value("cellSize", cp.cellSize);
-        cp.roadJitter     = j.value("roadJitter", cp.roadJitter);
-        cp.sidewalk       = j.value("sidewalk", cp.sidewalk);
-        cp.downtownRadius = j.value("downtownRadius", cp.downtownRadius);
-        cp.midtownRadius  = j.value("midtownRadius", cp.midtownRadius);
-        cp.parkFraction   = j.value("parkFraction", cp.parkFraction);
-        cp.buildChance    = j.value("buildChance", cp.buildChance);
-        cp.scatterTrees   = j.value("scatterTrees", cp.scatterTrees);
-        cp.seed           = j.value("seed", cp.seed);
-        onTerrain         = j.value("onTerrain", false);
-        // District road tech (ADR-0066): real arterials + irregular streets whose
-        // blocks feed the lot/building pipeline, instead of the regular grid.
-        cp.districtRoads  = j.value("districtRoads", cp.districtRoads);
-        cp.arterials      = j.value("arterials", cp.arterials);
-        cp.blockSizeMin   = j.value("blockSizeMin", cp.blockSizeMin);
-        cp.blockSizeMax   = j.value("blockSizeMax", cp.blockSizeMax);
-        cp.arteryWidth    = j.value("arteryWidth", cp.arteryWidth);
-        cp.streetWidth    = j.value("streetWidth", cp.streetWidth);
-        cp.irregular      = j.value("irregular", cp.irregular);
-    }
-    // Drape onto the level's terrain (ADR-0038 §6). The shared_ptrs keep the
-    // params/noise alive for the sampler closure the model may hold; it reads
-    // the *base* terrain (no flatten) so the city decides its grades from
-    // natural ground and its flatten footprints then cut the mesh.
-    if (onTerrain && root.contains("terrain")) {
-        auto tp = std::make_shared<TerrainParams>(readTerrainParams(root["terrain"]));
-        auto noise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
-        Real base = cp.baseY;
-        cp.groundAt = [tp, noise, base](const Vec2& p) {
-            return base + terrainHeight(*tp, *noise, p.x, p.y);
-        };
-    }
-    return cp;
-}
-
 std::shared_ptr<const std::function<double(double, double)>>
 readErodedBase(const json& root) {
     if (!root.contains("terrain") || !root["terrain"].value("erode", false))
@@ -175,7 +131,26 @@ void readLotGrowParams(const json& cityJson,
     edges.margin = 4.0 + cityJson.value("sidewalk", 4.0);
     lots.seed = cityJson.value("seed", 1u) ^ 0x10c5u;
     lots.buildChance = cityJson.value("buildChance", 0.9);
-    lots.roadMargin = 4.0 + cityJson.value("sidewalk", 4.0);   // road half + sidewalk
+    // ROAD MARGIN — sidewalk only, no road-half term (measured 2026-08-16).
+    //
+    // This used to be `4.0 + sidewalk`, where the 4.0 stood in for a road's half
+    // width. That was a guess at ONE road's half width (an 8 m street), applied
+    // uniformly — too little for a 17 m arterial, too much for everything narrow —
+    // and it is now redundant: `pushPolyClearOfRoads` (added in b167c1d) pushes
+    // every block vertex clear of every carriageway using that edge's OWN width,
+    // per edge, against the sampled centreline. The scalar cannot do better than a
+    // guess and the per-edge pass cannot do worse than exact, so the guess only
+    // costs buildable area.
+    //
+    // It costs a lot of it: block interiors totalled 24 252 m² inside a ~90 000 m²
+    // city on living_city, and buildings already covered 60.5% of that interior.
+    // The city reads empty because ~73% of it is road and margin, not because the
+    // blocks are under-built.
+    //
+    // Gate: tests/test_lot_road_clearance.cpp
+    //       lot_block_interiors_clear_every_carriageway_on_a_mixed_width_net
+    // fails if this lets a block interior reach into a carriageway.
+    lots.roadMargin = cityJson.value("sidewalk", 4.0);
     lots.innerRadius = cityJson.value("downtownRadius", 55.0);
     lots.midRadius = cityJson.value("midtownRadius", 135.0);
     lots.plinth = cityJson.value("plinth", lots.plinth);   // base height above the pad

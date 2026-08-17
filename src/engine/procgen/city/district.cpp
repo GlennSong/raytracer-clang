@@ -1,6 +1,8 @@
 #include "district.h"
 
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 namespace engine {
 namespace {
@@ -40,17 +42,30 @@ bool cutSpan(const Poly2& poly, const Vec2& pt, const Vec2& dir, Vec2& a, Vec2& 
 // Recursively bisect a face along its long OBB axis until block-sized; record each cut as a street.
 void subdivideStreets(const Poly2& poly, double minSize, double maxSize, double jitter,
                       Rng& rng, std::vector<std::vector<Vec2>>& streets,
-                      std::vector<Poly2>& blocks, int depth) {
+                      std::vector<Poly2>& blocks, int depth,
+                      const Vec2& center, double coreScale, double coreRadius) {
     double ar = area(poly);
     if (poly.size() < 3 || depth > 22) { if (ar >= 1.0) blocks.push_back(poly); return; }
     OBB2 obb = orientedBoundingBox(poly);
     int la = obb.longAxis();
     double longHalf = obb.half[la], shortHalf = obb.half[1 - la];
+    // Grade the target size toward the core, evaluated at THIS face's centre, so a
+    // block stops subdividing sooner downtown and keeps going out on the fringe.
+    // `minSize`/`maxSize` stay the BASE values — each recursion re-evaluates the
+    // grade at its own centre, so a face drifting outward relaxes as it goes.
+    double localMin = minSize, localMax = maxSize;
+    if (coreScale != 1.0 && coreRadius > 0.0) {
+        const double r = (obb.center - center).length();
+        const double t = std::max(0.0, std::min(1.0, 1.0 - r / coreRadius));
+        const double s = 1.0 + (coreScale - 1.0) * t * t;   // ease in, so the core
+        localMin *= s;                                      // is a plateau not a spike
+        localMax *= s;
+    }
     // Keep bisecting the long axis until the block's long side is within maxSize. Stop early if a
     // split would push a child under minSize (longHalf is each child's long-axis extent), or the
     // block is already thinner than minSize (splitting the long axis can't fix a sub-min short
     // side). So blocks land in [minSize, maxSize] except where the footprint is itself sub-min.
-    if (longHalf * 2.0 <= maxSize || longHalf < minSize || shortHalf * 2.0 < minSize) {
+    if (longHalf * 2.0 <= localMax || longHalf < localMin || shortHalf * 2.0 < localMin) {
         blocks.push_back(poly);
         return;
     }
@@ -62,8 +77,10 @@ void subdivideStreets(const Poly2& poly, double minSize, double maxSize, double 
     if (left.size() < 3 || right.size() < 3) { blocks.push_back(poly); return; }
     Vec2 a, b;
     if (cutSpan(poly, sp, cutDir, a, b)) streets.push_back({a, b});
-    subdivideStreets(left, minSize, maxSize, jitter, rng, streets, blocks, depth + 1);
-    subdivideStreets(right, minSize, maxSize, jitter, rng, streets, blocks, depth + 1);
+    subdivideStreets(left, minSize, maxSize, jitter, rng, streets, blocks, depth + 1,
+                     center, coreScale, coreRadius);
+    subdivideStreets(right, minSize, maxSize, jitter, rng, streets, blocks, depth + 1,
+                     center, coreScale, coreRadius);
 }
 
 }  // namespace
@@ -106,8 +123,16 @@ DistrictNet buildDistrict(const DistrictParams& p) {
 
     // 3. Subdivide each sector into a grid of blocks (edges in [blockSizeMin, blockSizeMax]); the
     //    cuts are local streets.
+    if (std::getenv("RT_PARCEL_DEBUG"))
+        std::fprintf(stderr, "[district] faces=%zu coreScale=%.2f coreRadius=%.1f "
+                     "blockMin=%.1f blockMax=%.1f center=(%.0f,%.0f)\n",
+                     faces.size(), p.coreBlockScale,
+                     p.coreRadius > 0 ? p.coreRadius : p.radius * 0.45,
+                     p.blockSizeMin, p.blockSizeMax, p.center.x, p.center.y);
     for (const Poly2& f : faces)
-        subdivideStreets(f, p.blockSizeMin, p.blockSizeMax, p.jitter, rng, streets, d.blocks, 0);
+        subdivideStreets(f, p.blockSizeMin, p.blockSizeMax, p.jitter, rng, streets,
+                         d.blocks, 0, p.center, p.coreBlockScale,
+                         p.coreRadius > 0 ? p.coreRadius : p.radius * 0.45);
 
     // 4. Assemble ONE graph and planarize: split every crossing/T into shared nodes so the
     //    arterials and street grid become a single connected network (no orphan segments).

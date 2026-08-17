@@ -1,7 +1,7 @@
 #ifndef RAYTRACER_ENGINE_PROCGEN_CITY_ROAD_NET_H
 #define RAYTRACER_ENGINE_PROCGEN_CITY_ROAD_NET_H
 
-#include "road_mesh.h"          // RoadMeshParams, buildRoadMesh, RenderMesh
+#include "road_mesh.h"          // UnionSpine, strokeRibbon, roadProfile, RenderMesh
 #include "road_spec.h"          // RoadSpec band model (roads-v2 Part 1)
 #include "road_network.h"       // RoadGraph (constrainedNetGraph return type)
 #include "structure_set.h"      // StructureSet, StructureParams (buildRoadWalls)
@@ -17,7 +17,7 @@ namespace engine {
 // joined by edges, plus the look (width, sidewalk, markings, ...). The editable
 // counterpart to the procedural city.road_mesh — promoted to a first-class entity
 // so the inspector can WIDEN it and the viewport can DRAG its nodes, regenerating
-// the carriageway live through buildRoadMesh (a fast pure function, no SDF grid).
+// the carriageway live through buildRoadNetLattice (the one road mesher).
 // `heightAt` drapes it on the level terrain; it is set on load, not serialized.
 struct RoadNet {
     std::vector<Vec2> nodes;
@@ -45,8 +45,21 @@ struct RoadNet {
     double width = 10.0;                        // default carriageway width (m) — widen control
     // Optional per-edge width override (parallel to `edges`; <= 0 or missing = use the
     // default `width`). Lets a road taper or a slip road run narrower than its trunk.
-    // DEPRECATED by specs/edgeSpecs (roads-v2): kept during the transition; removed
-    // with the old mesher at the cleanup stage.
+    //
+    // NOT deprecated, despite what this comment said until 2026-08-15. `specs`/
+    // `edgeSpecs` were meant to supersede it, but they are only populated on the
+    // `"metro"` path (`road_net.cpp`: `if (kind == "metro" && ...)`); district-kind
+    // levels are specless. So `roadNetEdgeWidth()` — which reads THIS field — is the
+    // one width every consumer agrees on: the lattice mesher, nav lane spacing, lot
+    // road clearance (`pushPolyClearOfRoads`) and parking bands all resolve through
+    // it. See the "width agreement crux" note in road_net.cpp.
+    //
+    // The real fix is not removal but STORAGE: this and the seven other parallel
+    // arrays below cost 54 defensive .size() guards across five files, plus the
+    // roadNetEdgeWidth() accessor that exists only because this one may be short
+    // or absent. Holding a std::vector<RoadEdge> — the struct RoadGraph already
+    // uses — collapses all of that, with the JSON wire format left parallel so no
+    // saved level changes. See docs/city-pipeline.md § "RoadGraph vs RoadNet".
     std::vector<double> edgeWidths;
     // Roads-v2 band model: the net's spec table + a per-edge index into it
     // (parallel to `edges`; -1/missing = legacy, synthesized from width/sidewalk).
@@ -99,7 +112,7 @@ struct RoadNet {
     std::vector<Footprint> siteFootprints;
 };
 
-// Build the road surface for `net` (its graph fed to buildRoadMesh with the look).
+// Build the road surface for `net` (its graph swept by buildRoadNetLattice).
 RenderMesh buildRoadNetMesh(const RoadNet& net);
 
 // Swept-lattice street mesher (street-lattice-plan.md, stage 3): sweep each chain

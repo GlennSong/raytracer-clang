@@ -5,6 +5,26 @@ doc answers two questions: **how do procedural cities actually get built**, and
 **which of the big ideas are possible now vs. need planning**. It exists because
 the idea space exploded productively — this organizes it so we build deliberately.
 
+> ## ⚠ Status corrections (audited from source 2026-08-15)
+>
+> The triage tables below have drifted. Verified against the code on
+> `claude/city-lots-v2` (main @ 258369d):
+>
+> | Listed below as | Actually |
+> | --- | --- |
+> | Tensor-field / agent road generation — "**B. Near-term**, needs a design pass" | **Built, tested, and shipping.** `tensorRoads` lives in `road_network.cpp`, covered by `tensor_roads_blend_radial_core_into_grid_rim` and `tensor_roads_are_deterministic`, and is reachable from Lua as `city.layout{pattern="tensor"}` — **`assets/scripts/twin_cities.lua` builds one city radial and one tensor.** What it is *not* is wired to a `generate.kind`: `applyGenerateRecipe` only dispatches `"district"` and `"metro"`, so a level's `road.generate` block cannot ask for a tensor field. That is the actual gap. `radialRoads`/`gridRoads` are in the same state. |
+> | Procedural textures — "**B. Near-term**" | **Built.** `surface_maps.cpp` bakes albedo/normal/mr/ao/height per surface with world-scaled UVs, plus an analytic Metal library in `shaders/metal/surfaces*.metal`. Caveat: the analytic path only runs when no albedo map is bound (`lighting_surface.metal:88`), so **city buildings always use the CPU bake** and never the analytic shader. |
+> | Parking lots & garages — "**A. Possible now**" | Partly built. `parking_garage` is a live Financial recipe and `roadSpecStreetParking` models kerbside bays — but the bands are applied **only** on the `"metro"` path, so district-kind levels fall back to legacy synthesis. Parking *aprons* on lots are still missing. |
+> | Designed parks — "**A. Possible now**" | **Built** — `sculptPark` (paths, benches, fences, planting, `treeSpots`, `fenceSegs` colliders) and `sculptPlaza` (paver podium, stairs, fountain, planters). |
+> | Block "landscaping" phase — "**A. Possible now**" | Partly built — the architect already decides park/plaza/building per lot, and whole-block parks fire at 10 % on small Commercial/Residential blocks. What's missing is the *site* layer (stage 11 in `city-pipeline.md`): forecourts, driveways, per-district ground surfaces. |
+> | More architectural styles — "**A. Possible now**" | The style **hook** is live: `assets/scripts/style_book.lua` overlays `BuildingParams` onto any recipe by name, wired through `LotParams::styleHook`. It currently has exactly **one** active entry (`capitol`). The mechanism is done; the content isn't. |
+>
+> Also stale: **ADR-0038** still describes lot subdivision as "recursive OBB
+> split". That was superseded — `parcel.cpp` is frontage-first boundary walking,
+> and OBB bisection survives only as the fallback when the walk emits zero lots.
+>
+> For the as-built stage-by-stage map, see `docs/city-pipeline.md` § "As built".
+
 ---
 
 ## 1. How a city gets built procedurally (the playbook)

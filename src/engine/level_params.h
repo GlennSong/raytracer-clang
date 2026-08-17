@@ -12,7 +12,6 @@
 
 #include "procgen/terrain.h"          // TerrainParams
 #include "procgen/tree.h"             // TreeParams
-#include "procgen/city/city.h"        // CityParams
 #include "procgen/city/city_lots.h"   // LotParams, EdgeBlockParams
 #include "procgen/city/water_mesh.h"  // WaterMeshParams
 
@@ -55,12 +54,6 @@ TerrainParams readTerrainParams(const nlohmann::json& t);
 // A shape:"tree" entity's "tree" block (hero L-system tree). `seedOut`
 // receives the block's seed (0 when absent).
 TreeParams readTreeParams(const nlohmann::json& ent, uint32_t& seedOut);
-
-// A shape:"city" entity: position -> center/baseY, the "city" block's fields,
-// and — when onTerrain and the level has a "terrain" block — the groundAt
-// sampler closure that drapes the city on that terrain (ADR-0038 §6; the
-// shared_ptrs keep params/noise alive for the closure).
-CityParams readCityParams(const nlohmann::json& ent, const nlohmann::json& root);
 
 // Baked erosion (opt-in via terrain.erode): bake ONCE and share the sampler
 // across every consumer — ground, roads, lots — so they all conform to the
