@@ -1,6 +1,7 @@
 # One road graph — unification proposal
 
-**Status:** proposal, pending sign-off. No code yet.
+**Status:** APPROVED, stowed. Steps 1–2 landed (`ae4e396`); steps 3–6 are a
+single uninterrupted session's work — see "Measured cost" before starting.
 
 ## Why
 
@@ -134,14 +135,64 @@ question that comes with storing a closure.
   of their content changes; they are shaped around the new graph automatically
   because they never touched the C++ type.
 
+## Measured cost — read this before starting
+
+The "~29 call sites" figure elsewhere counts CONVERSIONS (`netGraph`,
+`navRoadGraph`, `constrainedNetGraph`). The migration's real surface is FIELD
+touches, and it is an order of magnitude bigger:
+
+| field | touches on `net` alone |
+| --- | --- |
+| `net.edges` | 78 |
+| `net.nodes` | 72 |
+| `net.edgeWidths` | 41 |
+| `net.edgeClasses` | 35 |
+| `net.edgeSpecs` | 27 |
+| `net.edgeLayers` | 27 |
+| `net.tangents` | 26 |
+| `net.nodeElev` | 23 |
+| `net.edgeBaked` | 21 |
+| `net.nodeKinds` | 12 |
+
+Plus other variable names, across `road_net.cpp` (311 field references),
+`corridor_plan.cpp` (76), `corridor_bake.cpp` (68), `level_loader.cpp` (52), and
+further sites in the editor, citysim, `city_lots.cpp` and `city_planner.cpp`.
+Realistically 600+ individual edits.
+
+### Why a find-and-replace will corrupt this
+
+The parallel arrays carry **fallback semantics, not just data**:
+
+```cpp
+double roadNetEdgeWidth(const RoadNet& net, int ei) {
+    if (ei >= 0 && ei < (int)net.edgeWidths.size() && net.edgeWidths[ei] > 0.0)
+        return net.edgeWidths[ei];
+    return net.width;                 // short OR zero => the net default
+}
+```
+
+A short or zero entry *means something*. So the migration has to resolve those
+fallbacks at every **construction** site, not merely rewrite readers. Blindly
+rewriting `net.edgeWidths[i]` → `net.graph.edges[i].width` changes behaviour
+wherever an array was short — and changes it **silently**, because the order gate
+below hashes ordering, not widths. That per-site judgement is the actual work.
+
+There is no safe midpoint: the tree compiles against the arrays or against the
+graph, nothing in between. Budget one uninterrupted run.
+
 ## Migration order
 
-1. Add `RoadNode::tangent` and the missing `RoadEdge` fields (`baked`) to
-   `RoadGraph`; leave `RoadNet` alone. Nothing breaks.
-2. Pin determinism: a test that hashes node/edge order for a district and a metro
-   seed, so step 4 cannot silently reshuffle a city.
-3. Introduce `RoadLook` / `RoadPlan` / `RoadEntity`; make `RoadNet` an alias that
-   still compiles.
+1. ~~Add `RoadNode::tangent` and `RoadEdge::baked` to `RoadGraph`.~~ **DONE**
+   (`ae4e396`). Both APPENDED — inserting `baked` after `width` broke three
+   positional brace-inits and landed a `RoadClass` in a `bool`.
+2. ~~Pin determinism.~~ **DONE** — `tests/test_road_graph_order.cpp`, including a
+   permutation test so the gate cannot pass by ignoring order. Expected hashes:
+   district `11690313017498955230`, metro `7979088897799340174`. If these move
+   during steps 4–6, the ordering broke, not the geometry.
+3. Introduce `RoadLook` / `RoadPlan` / `RoadEntity` **as part of the same step
+   that moves call sites** — do NOT land them unused ahead of time. Unused types
+   waiting for a consumer is the aspirational-infrastructure pattern already
+   flagged against `SurfaceField` in `docs/TECH_DEBT.md`.
 4. Move the ~29 `net → graph` call sites to read `entity.graph` directly. The
    compiler enumerates them — the same method that worked for retiring the second
    city pipeline.
