@@ -1,8 +1,57 @@
 {
   "cameras": [
-    { "name": "Top", "position": [0, 150, 30], "forward": [0.0, -0.98, -0.2],
-      "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 150 } },
-    { "name": "Street", "position": [-70, 14, 40], "forward": [0.55, -0.28, -0.78],
-      "lens": { "focalLength": 34, "sensorHeight": 24, "fStop": 0, "focusDistance": 90 } }
-  ]
+    {
+      "forward": [
+        0.0,
+        -0.9798040587804068,
+        -0.19996001199600125
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 30.0,
+        "focusDistance": 150.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
+      "name": "Top",
+      "position": [
+        0.0,
+        150.0,
+        30.0
+      ],
+      "show_gizmo": true
+    },
+    {
+      "forward": [
+        0.5529663261072517,
+        -0.2815101296546009,
+        -0.7842067897521026
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 34.0,
+        "focusDistance": 90.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
+      "name": "Street",
+      "position": [
+        -70.0,
+        14.0,
+        40.0
+      ],
+      "show_gizmo": true
+    }
+  ],
+  "version": 1
 }

@@ -188,7 +188,18 @@ endif()
 
 # Dear ImGui (ADR-0011): core + ImGuizmo compile inside engine_core (the
 # panels/gizmos live there); platform backends (GLFW/Metal) attach per host.
-option(RT_ENABLE_IMGUI "Build with the Dear ImGui debug UI" OFF)
+#
+# ON by default (2026-08-16), matching RT_ENABLE_SCRIPTING/AUDIO/PHYSICS. It was
+# opt-in, which meant the obvious `cmake -S . -B build` produced an editor whose
+# debug overlay was silently absent: backtick still pushes DebugOverlayState (the
+# handler is in Application::runFrame, so the editor routes it fine), the state
+# just draws nothing, because every ImGui call site is behind #ifdef
+# RT_ENABLE_IMGUI. Nothing errors, so it reads as a broken keybinding rather than
+# a missing build flag — which cost real time more than once.
+#
+# The usual reason to gate a submodule feature does not apply: the branch below
+# already runs `git submodule update --init` when third_party/imgui is missing.
+option(RT_ENABLE_IMGUI "Build with the Dear ImGui debug UI" ON)
 if(RT_ENABLE_IMGUI)
     set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/third_party/imgui)
     if(NOT EXISTS ${IMGUI_DIR}/imgui.cpp)

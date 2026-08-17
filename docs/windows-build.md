@@ -46,8 +46,9 @@ ctest --test-dir build          # unit + physics tests
 ```
 
 The compiler is cached, so the `-DCMAKE_*_COMPILER` flags are only needed when
-creating or wiping `build/`. Add `-DRT_ENABLE_IMGUI=ON` for the Dear ImGui debug
-overlay (toggle in-app with the tilde/grave key).
+creating or wiping `build/`. The Dear ImGui debug overlay
+(`-DRT_ENABLE_IMGUI=ON`, default) toggles in-app with the tilde/grave key; pass
+`-DRT_ENABLE_IMGUI=OFF` to leave it out.
 
 Configure messages confirm what's wired up:
 `Vulkan found — building the viewer with the Vulkan backend`,

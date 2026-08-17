@@ -1,8 +1,31 @@
-{ "cameras": [
-  { "name": "Aerial", "position": [-50, 400, 430], "forward": [0.0, -0.73, -0.68],
-    "lens": { "focalLength": 20, "sensorHeight": 24, "fStop": 0, "focusDistance": 460 } },
-  { "name": "Radial", "position": [-285, 115, 200], "forward": [0.0, -0.55, -0.83],
-    "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 190 } },
-  { "name": "Tensor", "position": [185, 120, 270], "forward": [0.0, -0.52, -0.85],
-    "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 200 } }
-] }
+{
+  "cameras": [
+    {
+      "forward": [
+        0.0,
+        -0.019996001199600138,
+        -0.999800059980007
+      ],
+      "lens": {
+        "chromaticAberration": 0.0,
+        "fStop": 0.0,
+        "far": 8000.0,
+        "focalLength": 50.0,
+        "focusDistance": 6.0,
+        "k1": 0.0,
+        "k2": 0.0,
+        "near": 0.1,
+        "sensorHeight": 24.0,
+        "vignette": 0.0
+      },
+      "name": "Helmet",
+      "position": [
+        0.0,
+        3.1,
+        3.0
+      ],
+      "show_gizmo": true
+    }
+  ],
+  "version": 1
+}
