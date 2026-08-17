@@ -20,6 +20,15 @@ std::vector<float> gunshot(uint32_t sampleRate = 48000, uint32_t seed = 1);
 // machine-gunned.
 std::vector<float> impact(uint32_t sampleRate = 48000, uint32_t seed = 1);
 
+// A car horn: the classic two-note dyad with brassy harmonics, as ONE steady
+// loop-clean period (~0.25 s) — every partial completes an integer number of
+// cycles in the buffer BY CONSTRUCTION, so a looping voice can hold the honk
+// for as long as the key is down with no seam. The caller shapes attack and
+// release with voice volume (see VehicleSystem's horn); baking an envelope in
+// would make it repeat every loop. Seeds pick slightly different horn pitches,
+// so not every car honks the same note.
+std::vector<float> horn(uint32_t sampleRate = 48000, uint32_t seed = 1);
+
 }  // namespace sfx
 }  // namespace engine
 

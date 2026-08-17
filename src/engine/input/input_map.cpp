@@ -135,6 +135,73 @@ void InputMap::clearBindings() {
     axes.clear();
 }
 
+namespace {
+
+// Display names for the non-key source spaces (keys use keyCodeName).
+const char* mouseButtonName(int index) {
+    switch (static_cast<MouseButton>(index)) {
+        case MouseButton::Left: return "Mouse Left";
+        case MouseButton::Right: return "Mouse Right";
+        case MouseButton::Middle: return "Mouse Middle";
+    }
+    return "Mouse ?";
+}
+
+const char* gamepadButtonName(int index) {
+    static const char* names[] = {
+        "Pad A", "Pad B", "Pad X", "Pad Y",
+        "Pad LeftBumper", "Pad RightBumper",
+        "Pad Back", "Pad Start", "Pad Guide",
+        "Pad L3", "Pad R3",
+        "Pad DpadUp", "Pad DpadRight", "Pad DpadDown", "Pad DpadLeft",
+    };
+    return (index >= 0 && index < static_cast<int>(GAMEPAD_BUTTON_COUNT))
+               ? names[index]
+               : "Pad ?";
+}
+
+const char* gamepadAxisName(int index) {
+    static const char* names[] = {
+        "Pad LeftX", "Pad LeftY", "Pad RightX", "Pad RightY",
+        "Pad LeftTrigger", "Pad RightTrigger",
+    };
+    return (index >= 0 && index < static_cast<int>(GAMEPAD_AXIS_COUNT))
+               ? names[index]
+               : "Pad ?";
+}
+
+// Decode an encoded button/digital source back to a display name.
+std::string sourceName(int encoded) {
+    if (encoded >= XR_BUTTON_BASE) return "XR Pinch";
+    if (encoded >= GAMEPAD_BUTTON_BASE)
+        return gamepadButtonName(encoded - GAMEPAD_BUTTON_BASE);
+    if (encoded >= MOUSE_SOURCE_BASE)
+        return mouseButtonName(encoded - MOUSE_SOURCE_BASE);
+    return keyCodeName(static_cast<KeyCode>(encoded));
+}
+
+}  // namespace
+
+std::vector<InputMap::BindingDesc> InputMap::listBindings() const {
+    std::vector<BindingDesc> out;
+    for (const auto& entry : buttons)
+        for (int source : entry.second)
+            out.push_back({entry.first, sourceName(source), false, 0.0});
+    for (const auto& entry : axes)
+        for (const AxisContribution& c : entry.second)
+            out.push_back({entry.first,
+                           c.kind == AxisContribution::Kind::Digital
+                               ? sourceName(c.source)
+                               : gamepadAxisName(c.source),
+                           true, c.scale});
+    std::sort(out.begin(), out.end(),
+              [](const BindingDesc& a, const BindingDesc& b) {
+                  if (a.input != b.input) return a.input < b.input;
+                  return a.action < b.action;
+              });
+    return out;
+}
+
 void InputMap::beginFrame() {
     pressedSources.clear();
     releasedSources.clear();

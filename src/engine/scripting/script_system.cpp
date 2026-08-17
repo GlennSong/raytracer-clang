@@ -76,6 +76,17 @@ void ScriptSystem::setServices(InputMap* input, const CameraState* camera,
 
 void ScriptSystem::update(FrameContext& ctx) {
     setServices(&ctx.actions, &ctx.view.camera, &ctx.assets, &ctx.events);
+    // First person = the player's own eyes: not the on-foot shoulder rig
+    // (PlayerSystem's V toggle, published via Settings) and not seated in a
+    // vehicle (the chase camera). The gun script gates its viewmodel and fire
+    // on this — a first-person viewmodel makes no sense floating beside a
+    // third-person camera.
+    bool inVehicle = false;
+    ctx.world.each<ControlledBy>([&](Entity e, ControlledBy&) {
+        if (ctx.world.has<InVehicle>(e)) inVehicle = true;
+    });
+    setFirstPersonView(!ctx.settings.getBool("playerThirdPerson", false) &&
+                       !inVehicle);
     tick(ctx.world, ctx.frameDelta);
 }
 
@@ -90,6 +101,7 @@ void ScriptSystem::tick(World& world, double dt) {
     gctx.camera = camera_;
     gctx.spawns = &spawns;
     gctx.events = events_;
+    gctx.firstPersonView = firstPersonView_;
     setGameplayContext(vm_, &gctx);
 
     // Mutating ScriptBehaviour's own fields (refs/flags) is allowed inside each;

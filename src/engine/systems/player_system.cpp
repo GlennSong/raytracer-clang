@@ -157,7 +157,11 @@ void PlayerSystem::update(FrameContext& ctx) {
             // direction passes through unchanged.
             teleportAlong(ctx.xr.originBase + ctx.xr.gazeOrigin, ctx.xr.gazeDir);
         }
-    } else if (ctx.actions.pressed("player_teleport")) {
+    } else if (ctx.actions.pressed("player_teleport") &&
+               !(ctx.world.alive(playerEntity) &&
+                 ctx.world.has<InVehicle>(playerEntity))) {
+        // T shares a key with vehicle_flip; while driving, T means "flip the
+        // car upright", not "teleport the (stowed) walker down the camera ray".
         teleportAlong(camera.eye, camera.forward());
     }
 

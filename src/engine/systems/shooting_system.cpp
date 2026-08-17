@@ -116,8 +116,18 @@ void ShootingSystem::spawnBullet(FrameContext& ctx) {
 }
 
 void ShootingSystem::update(FrameContext& ctx) {
+    // FIRST PERSON ONLY — the same gate the Lua gun applies: a camera-glued
+    // viewmodel makes no sense from a vehicle chase camera or the on-foot
+    // shoulder rig, so outside first person the gun stows and holds fire.
+    bool inVehicle = false;
+    ctx.world.each<ControlledBy>([&](Entity e, ControlledBy&) {
+        if (ctx.world.has<InVehicle>(e)) inVehicle = true;
+    });
+    const bool firstPerson =
+        !ctx.settings.getBool("playerThirdPerson", false) && !inVehicle;
+
     // Fire on press — but not when the click was aimed at a debug panel.
-    if (ctx.actions.pressed("fire") && !ctx.input.uiWantsMouse &&
+    if (firstPerson && ctx.actions.pressed("fire") && !ctx.input.uiWantsMouse &&
         bulletCount < maxBullets) {
         spawnBullet(ctx);
     }
@@ -128,6 +138,11 @@ void ShootingSystem::update(FrameContext& ctx) {
         auto* prev = ctx.world.get<PrevTransform>(gunEntity);
         if (t) {
             if (prev) prev->value = *t;
+            if (!firstPerson) {   // stowed out of sight, like the Lua viewmodel
+                t->position = Vec3(0, -100000, 0);
+                if (prev) prev->value = *t;
+                return;
+            }
             // Gun barrel points forward, offset to the right and slightly down
             Vec3 gunPos = camera.eye
                 + camera.forward() * 0.35

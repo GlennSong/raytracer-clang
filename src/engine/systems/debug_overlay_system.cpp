@@ -266,6 +266,55 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
             ctx.renderer.wireframeColor = Vec3(wc[0], wc[1], wc[2]);
     }
 
+    // Every live binding, key-centric ("what does Space do?"), because keys
+    // quietly accumulating meanings across systems is exactly how Space ended
+    // up as both the brake pedal and pause. A key feeding more than one action
+    // is painted yellow — visible the moment a new binding collides.
+    if (ImGui::CollapsingHeader("Controls")) {
+        const std::vector<InputMap::BindingDesc> rows = ctx.actions.listBindings();
+        if (ImGui::BeginTable("controls", 2,
+                              ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableSetupColumn("Input");
+            ImGui::TableSetupColumn("Action(s)");
+            ImGui::TableHeadersRow();
+            // listBindings sorts by input, so one table row per input is a
+            // single pass: gather the run, join the action names.
+            for (size_t i = 0; i < rows.size();) {
+                size_t j = i;
+                std::string actions;
+                while (j < rows.size() && rows[j].input == rows[i].input) {
+                    if (!actions.empty()) actions += ",  ";
+                    actions += rows[j].action;
+                    if (rows[j].isAxis)
+                        actions += rows[j].scale >= 0 ? "(+)" : "(-)";
+                    ++j;
+                }
+                // Same key driving several AXIS scales (W = cam_forward AND
+                // drive_throttle) is a design choice; several BUTTON actions on
+                // one key is the collision worth flagging.
+                int buttonActions = 0;
+                for (size_t k = i; k < j; ++k)
+                    if (!rows[k].isAxis) ++buttonActions;
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                if (buttonActions > 1)
+                    ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.25f, 1.0f), "%s",
+                                       rows[i].input.c_str());
+                else
+                    ImGui::TextUnformatted(rows[i].input.c_str());
+                ImGui::TableSetColumnIndex(1);
+                if (buttonActions > 1)
+                    ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.25f, 1.0f), "%s",
+                                       actions.c_str());
+                else
+                    ImGui::TextUnformatted(actions.c_str());
+                i = j;
+            }
+            ImGui::EndTable();
+        }
+        ImGui::TextDisabled("yellow = one key, several button actions");
+    }
+
     if (ImGui::CollapsingHeader("Lighting")) {
         auto& lit = ctx.view.lighting;
         ImGui::SliderFloat("Sun Intensity", &lit.sun.intensity, 0.0f, 20.0f);

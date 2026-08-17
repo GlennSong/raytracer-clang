@@ -1320,10 +1320,13 @@ void CityRenderSystem::syncCarLamps(World& world) {
         if (markers.empty()) continue;
 
         // A lane change signals the side it moves toward (device); the
-        // route-bend indicator covers junction turns as before.
+        // route-bend indicator covers junction turns as before. Lane offsets
+        // grow along (d.y, -d.x) — the +x side when heading +z, which is the
+        // car's physical LEFT (see carTurnSide) — so a higher lane index is a
+        // LEFT drift.
         int turnDir = carTurnDir(a);
         if (std::fabs(Real(a.lane) - a.laneF) > 0.12)
-            turnDir = (Real(a.lane) > a.laneF) ? 1 : -1;
+            turnDir = (Real(a.lane) > a.laneF) ? -1 : 1;
         CarLamps lamps = carLampState(a.state, a.speed, prev, sim_.timeOfDay(),
                                       turnDir);
         if (!lamps.head && !lamps.brake && !lamps.left && !lamps.right) continue;
@@ -1727,14 +1730,17 @@ void CityRenderSystem::step(World& world, Real dt) {
 
 void CityRenderSystem::onStart(engine::FrameContext& ctx) {
     ctx.actions.bindButton("agent_widgets", engine::KeyCode::J);   // toggle debug widgets
-    ctx.actions.bindButton("plan_widgets", engine::KeyCode::L);    // toggle block/lot plan
+    // Semicolon, not L: L is the car's headlight toggle (VehicleSystem), and
+    // switching lights used to flash the whole block/lot plan on with it.
+    ctx.actions.bindButton("plan_widgets", engine::KeyCode::Semicolon);
 }
 
 void CityRenderSystem::update(engine::FrameContext& ctx) {
     // Per-frame so the key edge is never missed by the fixed-step tick.
     if (ctx.actions.pressed("agent_widgets")) debugWidgets_ = !debugWidgets_;
-    // L flips the city-plan layer (blocks + lots) — and switches the master on
-    // when it was off, so the key works standalone on web (no ImGui panel there).
+    // Semicolon flips the city-plan layer (blocks + lots) — and switches the
+    // master on when it was off, so the key works standalone on web (no ImGui
+    // panel there).
     if (ctx.actions.pressed("plan_widgets")) {
         showPlan_ = !showPlan_;
         if (showPlan_) debugWidgets_ = true;

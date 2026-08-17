@@ -281,6 +281,11 @@ TEST_CASE(car_lamp_attaches_are_named_and_legal) {
         if (!head && !tail) continue;
         CHECK((head ? a.normal.z > 0 : a.normal.z < 0));
         CHECK(a.position.z * (head ? 1 : -1) > 0);
+        // Side tags are PHYSICAL: with forward +Z / up +Y (right-handed), the
+        // car's left is +X (lab-measured steer chirality, driver_control.h).
+        // These were once swapped, which blinked the right indicator on a left
+        // turn in the player's car.
+        CHECK((a.tag.back() == 'l' ? a.position.x > 0 : a.position.x < 0));
     }
 }
 

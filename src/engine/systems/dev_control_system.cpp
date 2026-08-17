@@ -17,7 +17,11 @@ struct ActionBinding {
 
 const ActionBinding DEV_ACTIONS[] = {
     {"quit", KeyCode::Escape},
-    {"pause", KeyCode::Space},
+    // Enter, not Space: Space is the car's BRAKE pedal (VehicleSystem), and
+    // pausing the whole sim every time the player braked was the collision that
+    // prompted the Controls section in the debug overlay. Override with
+    // bind.pause in settings if Enter doesn't suit.
+    {"pause", KeyCode::Enter},
     {"sim_slower", KeyCode::Comma},
     {"sim_faster", KeyCode::Period},
     {"sim_reset", KeyCode::Num0},
@@ -42,11 +46,15 @@ void DevControlSystem::onStart(FrameContext& ctx) {
               << "  Left-drag=orbit, Right-drag=pan, Scroll=zoom\n"
               << "  WASD=move, QE=up/down, Shift=fast\n"
               << "  Up/Down=exposure, Esc=quit\n"
-              << "  Space=pause, ','/'.'=slower/faster sim, 0=reset speed\n"
+              << "  Enter=pause, ','/'.'=slower/faster sim, 0=reset speed\n"
               << "  P=toggle perspective/orthographic camera\n"
               << "  F=detach/attach freecam (mouse looks, WASD/QE fly)\n"
               << "  C=place camera here, V/B=cycle viewports, X=editor view\n"
-              << "  (keys configurable via bind.<action> in settings)\n";
+              << "  On foot: V first/third person, R respawn, T teleport, 1/2 gun away/out\n"
+              << "  Car: G in/out, W/S gas/reverse, A/D steer, Space=BRAKE,\n"
+              << "       Ctrl=handbrake, H=horn, T=flip upright, L=lights\n"
+              << "  (` debug overlay -> Controls lists every live binding;\n"
+              << "   keys configurable via bind.<action> in settings)\n";
 }
 
 void DevControlSystem::update(FrameContext& ctx) {

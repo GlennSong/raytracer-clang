@@ -78,6 +78,129 @@ TEST_CASE(driving_lab_full_throttle_envelope) {
     CHECK(v8 > 20.0);
 }
 
+// The COMMANDEERED car's collision proportions (city_vehicles configFromBody +
+// the fleet's wheel_layout): the chassis is the FULL body box, and the fleet
+// parks each wheel's resting centre ONE RADIUS above that box's floor — so the
+// collision floor rested exactly ON the road. Zero clearance is the kerb bug's
+// mechanism: the bumper's collision corner reaches the 0.15 m kerb face ~0.9 m
+// before the front wheels do, and the car stops dead. The lab's tuned `sedan()`
+// above has an artificially high floor and climbs kerbs under any tester, which
+// is exactly how the bug shipped unseen.
+PhysicsWorld::VehicleConfig bodyBoxSedan() {
+    PhysicsWorld::VehicleConfig c;
+    c.chassisHalfExtent = Vec3(0.91, 0.725, 2.295);   // 1.82 x 1.45 x 4.59 m
+    c.mass = 900.0 + 4.59 * 1.82 * 180.0;             // configFromBody's rule
+    c.comOffsetY = -0.45;
+    c.engineTorque = 650.0;
+    c.brakeTorque = 1600.0;
+    c.maxSteerDegrees = 32.0;
+    // configFromBody's short-travel arcade suspension, attach lifted so the
+    // wheel rests where the fleet drew it: one radius above the box floor.
+    auto wheel = [&](Real x, Real z, bool steered) {
+        PhysicsWorld::VehicleWheel w;
+        const Real restCentreY = -0.725 + 0.31;
+        w.position = Vec3(x, restCentreY + (0.15 - 0.075), z);
+        w.suspensionMin = 0.05;
+        w.suspensionMax = 0.15;
+        w.radius = 0.31;          // 0.62 m wheel diameter
+        w.width = 0.24;
+        w.steered = steered;
+        w.handBrake = !steered;
+        return w;
+    };
+    const Real frontZ = 2.295 - 0.90, rearZ = -(2.295 - 1.00);
+    c.wheels = { wheel(0.78, frontZ, true), wheel(-0.78, frontZ, true),
+                 wheel(0.78, rearZ, false), wheel(-0.78, rearZ, false) };
+    return c;
+}
+
+// One kerb world: road at y=0, a sidewalk slab whose kerb face is at z=20 with
+// its top at y=0.15 (the city's road_lattice kerb height). Returns final z.
+Real driveAtKerb(const PhysicsWorld::VehicleConfig& cfg, Real* yOnRoad,
+                 Real* yOnSlab, Real* minUp) {
+    PhysicsWorld world;
+    world.initialize();
+    world.addBox(Vec3(200, 1, 200), Vec3(0, -1, 0), Quat::identity(),
+                 BodyMotion::Static);
+    world.addBox(Vec3(50, 0.075, 50), Vec3(0, 0.075, 70), Quat::identity(),
+                 BodyMotion::Static);
+    world.optimizeBroadPhase();
+    PhysicsWorld::VehicleId car =
+        world.addVehicle(cfg, Vec3(0, 1.0, 0), Quat::identity());
+    if (car == PhysicsWorld::INVALID_VEHICLE) return -1.0;
+    for (int i = 0; i < 60 * 10; ++i) {
+        world.setVehicleInput(car, 0.5, 0.0, 0.0, 0.0);   // city pace, not a ram
+        world.update(1.0 / 60.0);
+        const Vec3 p = world.vehiclePosition(car);
+        if (p.z > 5.0 && p.z < 15.0 && yOnRoad) *yOnRoad = p.y;
+        if (p.z > 40.0 && p.z < 100.0 && yOnSlab) *yOnSlab = p.y;
+        if (p.z > 5.0 && minUp)
+            *minUp = std::min(*minUp, upDot(world.vehicleOrientation(car)));
+    }
+    const Real endZ = world.vehiclePosition(car).z;
+    world.shutdown();
+    return endZ;
+}
+
+// KERB CLIMB (car-controls round): drive the body-box sedan at a sidewalk kerb
+// and get ON it. Two fixes make this pass: the collision box's underside is
+// raised by VehicleConfig::floorClearance (so the nose no longer rams the
+// face), and the cast-cylinder wheel tester sees the step edge a ray down from
+// the hub could not. Gate in Glenn's terms: the car mounts the kerb, keeps
+// driving on the sidewalk, and doesn't flip doing it.
+TEST_CASE(driving_lab_climbs_a_kerb) {
+    Real yOnRoad = 0, yOnSlab = 0, minUp = 1.0;
+    const Real endZ = driveAtKerb(bodyBoxSedan(), &yOnRoad, &yOnSlab, &minUp);
+    std::printf("[lab] kerb: end z=%.1f road y=%.3f slab y=%.3f minUp=%.2f\n",
+                endZ, yOnRoad, yOnSlab, minUp);
+    CHECK(endZ > 30.0);                   // past the face and still driving
+    CHECK(yOnSlab - yOnRoad > 0.10);      // rode a kerb height higher up there
+    CHECK(minUp > 0.86);                  // mounted it, didn't launch or roll
+}
+
+// The CONTROL for the gate above: the same sedan with the floor clearance
+// carved to zero (the pre-fix collision box) must STALL at the kerb — its nose
+// hits the face before the wheels reach it. If this ever starts passing, the
+// kerb test above has gone vacuous (it no longer exercises the mechanism), the
+// way a high-floored lab config once did.
+TEST_CASE(driving_lab_kerb_stops_the_uncarved_box) {
+    PhysicsWorld::VehicleConfig cfg = bodyBoxSedan();
+    cfg.floorClearance = 0.0;
+    const Real endZ = driveAtKerb(cfg, nullptr, nullptr, nullptr);
+    std::printf("[lab] kerb control (no clearance): end z=%.1f\n", endZ);
+    CHECK(endZ > 0.0);       // the drive ran at all
+    CHECK(endZ < 30.0);      // ...and the kerb face stopped it, as it once did
+}
+
+// ...and a WALL is still a wall: the kerb fix must not let the car crawl up
+// anything with a face taller than its wheels. A 1 m parapet stops the sedan —
+// the raised collision floor (~0.3 m) is still well under the wall top.
+TEST_CASE(driving_lab_wall_still_stops) {
+    PhysicsWorld world;
+    world.initialize();
+    world.addBox(Vec3(200, 1, 200), Vec3(0, -1, 0), Quat::identity(),
+                 BodyMotion::Static);
+    const Real wallZ = 30.0;   // near face of a 1 m tall, 2 m thick wall
+    world.addBox(Vec3(50, 0.5, 1), Vec3(0, 0.5, wallZ + 1.0), Quat::identity(),
+                 BodyMotion::Static);
+    world.optimizeBroadPhase();
+    PhysicsWorld::VehicleId car =
+        world.addVehicle(bodyBoxSedan(), Vec3(0, 1.0, 0), Quat::identity());
+    Real yOnRoad = 0;   // settled ride height, for a relative climb check
+    for (int i = 0; i < 60 * 10; ++i) {
+        world.setVehicleInput(car, 0.5, 0.0, 0.0, 0.0);
+        world.update(1.0 / 60.0);
+        const Vec3 p = world.vehiclePosition(car);
+        if (p.z > 5.0 && p.z < 15.0) yOnRoad = p.y;
+    }
+    const Vec3 pEnd = world.vehiclePosition(car);
+    std::printf("[lab] wall: end z=%.1f y=%.3f (road y=%.3f)\n", pEnd.z, pEnd.y,
+                yOnRoad);
+    CHECK(pEnd.z < wallZ);                // stopped at the wall, not on it
+    CHECK(pEnd.y - yOnRoad < 0.3);        // and didn't ride up its face
+    world.shutdown();
+}
+
 TEST_CASE(driving_lab_straight_stop_at_the_bar) {
     PhysicsWorld world;
     world.initialize();

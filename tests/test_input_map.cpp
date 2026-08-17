@@ -2,6 +2,8 @@
 
 #include "../src/engine/input/input_map.h"
 
+#include <cmath>
+
 using namespace engine;  // namespace migration (ADR-0015)
 
 namespace {
@@ -271,4 +273,48 @@ TEST_CASE(input_bind_by_name) {
     axisMap.beginFrame();
     axisMap.processEvent(keyDown(KeyCode::Up));
     CHECK_APPROX(axisMap.axis("throttle"), 1.0, EPS);
+}
+
+TEST_CASE(input_list_bindings_names_every_source_sorted_by_input) {
+    // The debug overlay's Controls table reads this: one row per
+    // (action, input) pair, inputs decoded to display names, sorted by input
+    // so a key bound to several actions lands on adjacent rows.
+    InputMap map;
+    map.bindButton("drive_brake", KeyCode::Space);
+    map.bindButton("pause", KeyCode::Space);          // a deliberate collision
+    map.bindButton("fire", MouseButton::Left);
+    map.bindButton("drive_brake", GamepadButton::B);
+    map.bindAxis("drive_throttle", KeyCode::W, 1.0);
+    map.bindAxis("drive_throttle", KeyCode::S, -1.0);
+    map.bindAxis("drive_steer", GamepadAxis::LeftX, 1.0);
+
+    std::vector<InputMap::BindingDesc> rows = map.listBindings();
+    CHECK(rows.size() == 7u);
+    for (size_t i = 1; i < rows.size(); i++)
+        CHECK(rows[i - 1].input <= rows[i].input);      // sorted by input name
+
+    auto has = [&](const char* action, const char* input, bool isAxis,
+                   Real scale) {
+        for (const auto& r : rows)
+            if (r.action == action && r.input == input && r.isAxis == isAxis &&
+                std::fabs(r.scale - scale) < 1e-9)
+                return true;
+        return false;
+    };
+    CHECK(has("drive_brake", "Space", false, 0.0));
+    CHECK(has("pause", "Space", false, 0.0));           // the collision is visible
+    CHECK(has("fire", "Mouse Left", false, 0.0));
+    CHECK(has("drive_brake", "Pad B", false, 0.0));
+    CHECK(has("drive_throttle", "W", true, 1.0));
+    CHECK(has("drive_throttle", "S", true, -1.0));
+    CHECK(has("drive_steer", "Pad LeftX", true, 1.0));
+
+    // The two Space rows are adjacent — the property the overlay's
+    // collision-highlight pass depends on.
+    for (size_t i = 0; i < rows.size(); i++)
+        if (rows[i].input == "Space") {
+            CHECK(i + 1 < rows.size());
+            CHECK(rows[i + 1].input == "Space");
+            break;
+        }
 }

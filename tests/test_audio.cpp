@@ -391,6 +391,36 @@ TEST_CASE(sfx_generators_produce_bounded_deterministic_pcm) {
     CHECK(energy / shotA.size() > 0.005);   // audible, not near-silence
 }
 
+TEST_CASE(sfx_horn_is_loop_clean_and_seed_pitched) {
+    auto a = sfx::horn(48000, 5);
+    auto b = sfx::horn(48000, 5);
+    auto c = sfx::horn(48000, 6);
+    CHECK(!a.empty());
+    CHECK(a == b);                 // deterministic
+    CHECK(a != c);                 // seeds pick different horn pitches
+    double energy = 0;
+    for (float f : a) {
+        CHECK(std::fabs(f) <= 1.0f);
+        energy += std::fabs(f);
+    }
+    CHECK(energy / a.size() > 0.1);   // a steady tone, not a transient
+    // LOOP-CLEAN (the horn's contract): the buffer is one exact period, so the
+    // wrap seam a looping voice plays — last sample back to the first — is just
+    // another sample step, no bigger than the steepest step inside the buffer.
+    // The first sample is the period's zero phase (sines starting at 0).
+    auto seamIsClean = [](const std::vector<float>& f) {
+        float maxStep = 0.0f;
+        for (size_t i = 1; i < f.size(); i++)
+            maxStep = std::max(maxStep, std::fabs(f[i] - f[i - 1]));
+        return std::fabs(f.front() - f.back()) <= maxStep * 1.5f + 1e-4f;
+    };
+    CHECK(std::fabs(a.front()) < 0.01f);
+    CHECK(seamIsClean(a));
+    // Odd sample rates (44.1k) must be loop-clean too — the cycle counts are
+    // quantized to the buffer, not to a nominal duration.
+    CHECK(seamIsClean(sfx::horn(44100, 5)));
+}
+
 TEST_CASE(audio_system_registered_procedural_clip_plays_by_name) {
     AudioEngine audio;
     audio.initialize(AudioBackendMode::Manual);

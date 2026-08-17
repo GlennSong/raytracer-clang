@@ -1,6 +1,7 @@
 #include "vehicle_system.h"
 
 #include "../vehicle_lamps.h"
+#include "../audio/sfx.h"
 #include "../procgen/vehicle/occupant.h"
 
 #include "../components.h"
@@ -10,6 +11,7 @@
 #include "camera_system.h"
 #include "../../log.h"
 
+#include <algorithm>
 #include <vector>
 
 #ifdef RT_ENABLE_SCRIPTING
@@ -37,7 +39,10 @@ void VehicleSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindAxis("drive_steer", KeyCode::A, -1.0);
     ctx.actions.bindAxis("drive_steer", GamepadAxis::LeftX, 1.0);
 
+    // THE brake pedal (S stays plain reverse throttle — Glenn's call). B is
+    // the conventional pad brake, like Y for get-in/out below.
     ctx.actions.bindButton("drive_brake", KeyCode::Space);
+    ctx.actions.bindButton("drive_brake", GamepadButton::B);
     ctx.actions.bindButton("drive_handbrake", KeyCode::LeftControl);
 
     ctx.actions.bindButton("enter_vehicle", KeyCode::G);
@@ -51,6 +56,9 @@ void VehicleSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("vehicle_flip", KeyCode::T);
     // Toggle the head/taillights.
     ctx.actions.bindButton("vehicle_lights", KeyCode::L);
+    // The horn: held, like a real one (L3 is the pad convention).
+    ctx.actions.bindButton("vehicle_horn", KeyCode::H);
+    ctx.actions.bindButton("vehicle_horn", GamepadButton::LeftThumb);
     // Debug: spawn a fresh car in front of the player (always on solid ground,
     // since the player is standing on a collider).
     ctx.actions.bindButton("spawn_vehicle", KeyCode::N);
@@ -172,7 +180,8 @@ void VehicleSystem::createVehicles(FrameContext& ctx) {
                                                   : Vec3(0.85, 0.06, 0.05));
         } else {
             // No marker data (hand-built or legacy body): fall back to corners so
-            // every car still has lamps.
+            // every car still has lamps. The car's LEFT is +X (forward +Z, up +Y,
+            // right-handed — the lab-measured convention car_mesh.cpp documents).
             const Vec3& hx = v->config.chassisHalfExtent;
             const Real lx = hx.x - 0.30, ly = -hx.y * 0.15;
             for (int i = 0; i < 4; ++i) {
@@ -181,7 +190,7 @@ void VehicleSystem::createVehicles(FrameContext& ctx) {
                 Vehicle::Lamp lamp;
                 lamp.front = front;
                 lamp.left = left;
-                lamp.local = Vec3(left ? -lx : lx, ly,
+                lamp.local = Vec3(left ? lx : -lx, ly,
                                   front ? hx.z + 0.05 : -hx.z - 0.05);
                 lamp.entity = makeLens(front ? Vec3(1.0, 0.97, 0.82)
                                              : Vec3(0.85, 0.06, 0.05));
@@ -219,7 +228,9 @@ void VehicleSystem::driveVehicles(FrameContext& ctx) {
         if (v.vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
         DriverInput in;
         if (v.driver.valid()) {
-            // The player is seated: host input drives it.
+            // The player is seated: host input drives it. S is plain reverse
+            // throttle (Glenn's call — "S can stay reverse for now"); the
+            // BRAKE is its own pedal: Space (Ctrl = handbrake).
             in.throttle = throttle;
             in.steer = steer;
             in.brake = brake;
@@ -347,10 +358,12 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
                     // The recipe's own hip point when it has one — the occupant
                     // mesh's origin IS its hip, so this lines the two up exactly
                     // instead of guessing an offset off the chassis box.
+                    // Fallback seat on the car's LEFT (+X): left-hand drive,
+                    // like the interior recipe's driverOnLeft default.
                     const Vec3 seat =
                         v.hasDriverSeat
                             ? v.driverSeat
-                            : Vec3(-hx.x * 0.35, hx.y * 0.15, -hx.z * 0.05);
+                            : Vec3(hx.x * 0.35, hx.y * 0.15, -hx.z * 0.05);
                     if (occupied)
                         dt->position = t.position + t.orientation.rotate(seat);
                     else
@@ -449,6 +462,57 @@ void VehicleSystem::update(FrameContext& ctx) {
 
     // Debug: drop a fresh car in front of the player.
     if (ctx.actions.pressed("spawn_vehicle")) spawnInFront(ctx);
+
+    updateHorn(ctx);
+}
+
+void VehicleSystem::updateHorn(FrameContext& ctx) {
+    if (!ctx.audio.ready()) return;
+
+    // The car the player is driving (the horn is the seated player's voice —
+    // parked cars and AI traffic don't honk from this path).
+    Entity car;
+    ctx.world.each<ControlledBy, InVehicle>(
+        [&](Entity, ControlledBy&, InVehicle& iv) {
+            if (!car.valid()) car = iv.vehicle;
+        });
+    const bool driving = car.valid() && ctx.world.alive(car) &&
+                         ctx.world.has<Transform>(car);
+    const bool wantHorn = driving && ctx.actions.held("vehicle_horn");
+
+    if (wantHorn && !hornVoice.valid()) {
+        if (!hornClip.valid()) {
+            // Procedural, synthesized once (ADR-0071 — no sound file): a
+            // loop-clean period sfx::horn documents, held by a looping voice.
+            std::vector<float> pcm = sfx::horn(ctx.audio.sampleRate(), 1);
+            hornClip = ctx.audio.createClip(pcm.data(), pcm.size(), 1,
+                                            ctx.audio.sampleRate());
+        }
+        if (hornClip.valid()) {
+            AudioPlayParams params;
+            params.loop = true;
+            params.volume = 0.0f;   // ramped in below — no click on press
+            hornVoice = ctx.audio.playAt(
+                hornClip, ctx.world.get<Transform>(car)->position, 60.0, params);
+        }
+    }
+    if (!hornVoice.valid()) return;
+
+    // Attack ~30 ms, release ~90 ms: an exponential ramp toward the target, so
+    // both edges of the honk are clickless; the voice stops once inaudible.
+    const float target = wantHorn ? 0.9f : 0.0f;
+    const float rate = wantHorn ? 33.0f : 11.0f;
+    hornGain += (target - hornGain) *
+                std::min(1.0f, rate * static_cast<float>(ctx.frameDelta));
+    if (!wantHorn && hornGain < 0.01f) {
+        ctx.audio.stop(hornVoice);
+        hornVoice = AudioVoiceHandle{};
+        hornGain = 0.0f;
+        return;
+    }
+    ctx.audio.setVoiceVolume(hornVoice, hornGain);
+    if (driving)   // honk rides along with the car
+        ctx.audio.setVoicePosition(hornVoice, ctx.world.get<Transform>(car)->position);
 }
 
 void VehicleSystem::fixedUpdate(FrameContext& ctx) {

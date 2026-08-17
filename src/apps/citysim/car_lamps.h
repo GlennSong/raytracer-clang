@@ -54,15 +54,19 @@ inline CarLamps carLampState(Agent::State state, Real speed, Real prevSpeed,
 }
 
 // The SIDE a car turns as its path bends from `fromDir` into `toDir` (both unit XZ
-// travel directions): -1 left, +1 right, 0 straight/undetermined. The sim's right
-// vector is (d.y, -d.x) (see city_render signalSite), so a bend TOWARD the right
-// yields a negative cross product — this maps that to +1. Pure geometry, so the
-// renderer feeds it consecutive route-leg directions (nav.direction).
+// travel directions): -1 left, +1 right, 0 straight/undetermined. PHYSICAL side,
+// in the world's right-handed frame: facing +z, the right hand points toward -x
+// (the driving lab's steer-sign probe measured "+steer turns toward -x", and
+// +steer is the right turn — see driver_control.h). A bend toward -x from +z
+// gives a POSITIVE cross product, so cross > 0 maps to +1. This used to be
+// mirrored ("the sim's right is (d.y, -d.x)"), which cancelled against the
+// then-swapped lamp marker tags; both are now physical, so the pair of flips
+// that kept city signals looking right is gone rather than doubled.
 inline int carTurnSide(engine::Vec2 fromDir, engine::Vec2 toDir,
                        Real minBend = 0.02) {
     const Real cross = fromDir.x * toDir.y - fromDir.y * toDir.x;
-    if (cross < -minBend) return +1;   // toDir swings toward the right vector
-    if (cross > minBend) return -1;    // ...toward the left
+    if (cross > minBend) return +1;    // toDir swings toward the right (-x side)
+    if (cross < -minBend) return -1;   // ...toward the left (+x side)
     return 0;
 }
 

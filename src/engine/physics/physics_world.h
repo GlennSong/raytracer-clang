@@ -127,9 +127,8 @@ public:
     // A physics-driven car: a dynamic box chassis with raycast wheels, suspension,
     // steering, engine + brakes — Jolt's WheeledVehicleController, tuned arcade-
     // forgiving by the caller's VehicleConfig. All Jolt-free here; the constraint
-    // lives in the .cpp. NOTE: this code is written against the documented Jolt
-    // v5.5.0 vehicle API but is UNVERIFIED in this environment (the Jolt submodule
-    // can't be fetched here) — compile and tune on a submodule build.
+    // lives in the .cpp. Exercised headlessly against the vendored Jolt by
+    // tests/test_driving_lab.cpp — drive those gates when tuning.
 
     // One wheel, positioned relative to the chassis origin (chassis-local metres).
     struct VehicleWheel {
@@ -156,6 +155,15 @@ public:
         Real friction = 1.0;           // chassis material friction
         Real comOffsetY = -0.4;        // centre-of-mass offset below the chassis centre (m);
                                        // lower = harder to roll in corners (anti-tip)
+        // Metres carved off the UNDERSIDE of the collision box (the visual body
+        // is untouched). The specs use the full BODY box as the chassis, and the
+        // fleet layout parks each wheel one radius above that box's floor — so a
+        // commandeered car's collision floor rested exactly ON the road, and a
+        // 0.15 m kerb face was a wall its bumper corner hit before the wheels
+        // could climb: the car stopped dead at kerbs. 0.22 lifts the collision
+        // floor to bumper-lip height, comfortably over the city's 0.15 kerbs,
+        // while a real wall still hits the box (see driving_lab kerb/wall gates).
+        Real floorClearance = 0.22;
         std::vector<VehicleWheel> wheels;
     };
 

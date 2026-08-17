@@ -18,7 +18,12 @@ using namespace engine;
 namespace {
 
 // Kinematic bicycle: positive steer turns RIGHT (matching setVehicleInput's
-// `right` convention); yaw rate = v / wheelbase * tan(wheelAngle).
+// `right` convention); yaw rate = v / wheelbase * tan(wheelAngle). Right is the
+// PHYSICAL side: facing (x,z)=(0,1), the right hand points toward -x (the
+// driving lab's measured "+steer turns toward -x"), so right = (-fwd.y, fwd.x).
+// The old (fwd.y, -fwd.x) here was the mirrored belief, matched to a mirrored
+// steer sign in computeDriverInput — two flips that cancelled in this harness
+// but would have steered a real Jolt car AWAY from its lane.
 struct BikeCar {
     Vec2 pos{0, 0};
     Vec2 fwd{0, 1};
@@ -29,7 +34,7 @@ struct BikeCar {
         speed = std::max(Real(0), std::min(Real(30), speed + accel * dt));
         Real wheel = in.steer * 0.55;                     // rad, + = right
         Real yaw = speed / 2.8 * std::tan(wheel) * dt;    // turned this tick
-        Vec2 right(fwd.y, -fwd.x);
+        Vec2 right(-fwd.y, fwd.x);
         Real ca = std::cos(yaw), sa = std::sin(yaw);
         fwd = Vec2(fwd.x * ca + right.x * sa, fwd.y * ca + right.y * sa);
         Real l = std::sqrt(fwd.x * fwd.x + fwd.y * fwd.y);

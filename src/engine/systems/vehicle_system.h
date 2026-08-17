@@ -16,9 +16,8 @@ class CameraSystem;
 // player (suppressing on-foot movement via the InVehicle tag) and switch the view
 // to the chase camera; press again to get out.
 //
-// UNVERIFIED submodule-gated path: the create/drive/writeback calls go through
-// the Jolt vehicle wrapper, which can't be compiled in this environment. Build
-// and tune on a machine with the Jolt submodule.
+// The create/drive/writeback calls go through the Jolt vehicle wrapper
+// (PhysicsWorld), whose behaviour is gated headlessly by tests/test_driving_lab.cpp.
 class VehicleSystem : public System {
 public:
     VehicleSystem(PhysicsSystem& physics, CameraSystem& cameras)
@@ -34,6 +33,7 @@ private:
     void writeBack(FrameContext& ctx);
     void handleEnterExit(FrameContext& ctx);
     void spawnInFront(FrameContext& ctx);   // debug: drop a car ahead of the player
+    void updateHorn(FrameContext& ctx);     // hold-to-honk (H / L3) while driving
 
     PhysicsSystem& physicsSys;
     CameraSystem& cameras;
@@ -42,6 +42,11 @@ private:
     MeshHandle driverMesh;          // shared driver capsule
     Real enterRadius = 4.0;          // how close the player must be to board (m)
     int spawnCount_ = 0;             // debug-spawn seed counter
+    // Horn: one looping procedural voice (sfx::horn) held while the key is
+    // down, volume-ramped so press/release don't click.
+    AudioClipHandle hornClip;
+    AudioVoiceHandle hornVoice;
+    float hornGain = 0.0f;
 };
 
 }  // namespace engine

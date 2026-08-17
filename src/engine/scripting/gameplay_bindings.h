@@ -54,6 +54,11 @@ struct GameplayContext {
     // Sound cues (ADR-0069/0071): sound.play enqueues a PlaySound on the bus,
     // delivered at the frame's queued dispatch — deferred, like spawns.
     EventBus* events = nullptr;
+    // camera.first_person(): is the view the player's own eyes? False in the
+    // on-foot shoulder rig and in a vehicle's chase camera — the gun script
+    // stows its viewmodel and holds fire on that. Defaults true so headless
+    // ticks (tests) behave as before.
+    bool firstPersonView = true;
 };
 
 // The gameplay (effectful) binding surface (ADR-0024): the API a ScriptBehaviour
@@ -63,6 +68,7 @@ struct GameplayContext {
 //   entity.set_yaw(e, radians) / look_along(e, fwd[, up]) / snap_prev(e)
 //   input.pressed(name) / held(name) / axis(name)        -- bound actions
 //   camera.eye() / forward() / right()                   -- the active view
+//   camera.first_person()                                -- eyes, not a rig?
 //   spawn.block{position=, velocity=, size=, restitution=, friction=,
 //               color=, emission=}                       -- a dynamic physics cube
 //   spawn.model{mesh=, position=, color=, metallic=, roughness=, script=}

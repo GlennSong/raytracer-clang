@@ -35,6 +35,12 @@ public:
     void setServices(InputMap* input, const CameraState* camera,
                      AssetManager* assets, EventBus* events = nullptr);
 
+    // View mode for camera.first_person(): true when the view is the player's
+    // own eyes (on foot, not the V shoulder rig, not a vehicle chase camera).
+    // update() derives it each frame from Settings + InVehicle; tests and
+    // headless ticks keep the default (true) unless they set it.
+    void setFirstPersonView(bool firstPerson) { firstPersonView_ = firstPerson; }
+
     // Headless-testable core: run start/update for every ScriptBehaviour in
     // `world`, advancing by `dt`, then apply any deferred spawns. update()
     // forwards to this (like PhysicsSystem).
@@ -46,6 +52,7 @@ private:
     const CameraState* camera_ = nullptr;
     AssetManager* assets_ = nullptr;
     EventBus* events_ = nullptr;
+    bool firstPersonView_ = true;
 };
 
 }  // namespace engine

@@ -67,6 +67,20 @@ public:
     bool released(const std::string& action) const;  // went up this frame
     Real axis(const std::string& name) const;        // summed, clamped [-1, 1]
 
+    // One row per (action, physical input) pair — the whole live keymap, for
+    // the debug overlay's Controls table. `input` is a display name ("Space",
+    // "Pad B", "Mouse Left", "Pad LeftX"); axes carry their per-input scale so
+    // the table can show W(+)/S(-). Sorted by input then action, so every
+    // multi-action key sits on adjacent rows (that adjacency is how the
+    // overlay spots binding collisions).
+    struct BindingDesc {
+        std::string action;
+        std::string input;
+        bool isAxis = false;
+        Real scale = 0;    // axis contributions only; 0 for buttons
+    };
+    std::vector<BindingDesc> listBindings() const;
+
 private:
     // An axis contribution is either a digital source (held → +scale) or an
     // analog gamepad axis (+scale * value).

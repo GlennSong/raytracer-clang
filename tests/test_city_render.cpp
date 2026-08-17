@@ -1226,12 +1226,14 @@ TEST_CASE(promoted_lamp_mapping_reads_names_not_positions) {
     // The mapping itself, on hand-written markers: prefix picks the end, the
     // trailing l/r picks the indicator side, driver_seat is extracted rather
     // than lit, and anything else is ignored.
+    // Marker x-signs follow the physical chirality: the car's left ('_l') is
+    // +X with forward +Z (see car_mesh.cpp's lamp block).
     std::vector<CityRenderSystem::LampMarker> markers = {
-        {"headlight_l", Vec3(-0.7, -0.1, 2.0)},
-        {"headlight_r", Vec3(0.7, -0.1, 2.0)},
-        {"taillight_l", Vec3(-0.7, -0.1, -2.0)},
-        {"taillight_r", Vec3(0.7, -0.1, -2.0)},
-        {"driver_seat", Vec3(-0.35, 0.1, 0.2)},
+        {"headlight_l", Vec3(0.7, -0.1, 2.0)},
+        {"headlight_r", Vec3(-0.7, -0.1, 2.0)},
+        {"taillight_l", Vec3(0.7, -0.1, -2.0)},
+        {"taillight_r", Vec3(-0.7, -0.1, -2.0)},
+        {"driver_seat", Vec3(0.35, 0.1, 0.2)},
         {"badge", Vec3(0, 0, 2.1)},
     };
     Vec3 seat(0, 0, 0);
@@ -1239,7 +1241,7 @@ TEST_CASE(promoted_lamp_mapping_reads_names_not_positions) {
     std::vector<PromotedLamp> lamps = promotedLamps(markers, &seat, &hasSeat);
     CHECK(lamps.size() == 4u);        // the badge is not a lamp
     CHECK(hasSeat);
-    CHECK(std::fabs(seat.x + 0.35) < 1e-9);
+    CHECK(std::fabs(seat.x - 0.35) < 1e-9);
     CHECK(lamps[0].front && lamps[0].left);
     CHECK(lamps[1].front && !lamps[1].left);
     CHECK(!lamps[2].front && lamps[2].left);

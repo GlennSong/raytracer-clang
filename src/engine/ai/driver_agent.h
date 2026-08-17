@@ -73,12 +73,16 @@ inline DriverInput computeDriverInput(const DriverState& s, const DriverCommand&
         if (dot > 1) dot = 1; else if (dot < -1) dot = -1;
         align = dot;
         Real ang = std::acos(dot);                       // unsigned error [0, pi]
-        // cross = f x d: > 0 means the desired heading is to the car's LEFT (the
-        // right vector of (fx,fy) is (fy,-fx), so dot(d,right) = -cross), so we
-        // steer negative (left). Aiming right (cross < 0) steers positive.
+        // cross = f x d: > 0 means the desired heading is to the car's RIGHT.
+        // Physical chirality, lab-measured (driver_control.h's steer-sign
+        // probe): facing +z the right hand points toward -x, and a target at
+        // (-1, 0) from f = (0, 1) gives cross = +1 — so cross-positive steers
+        // positive (setVehicleInput's `right`). This sign used to be mirrored;
+        // it never showed because nothing spawns an AgentDriver yet — the live
+        // possession tier drives through driver_control.h instead.
         Real cross = f.x * d.y - f.y * d.x;
         Real signedAng = (cross >= 0) ? ang : -ang;
-        Real steer = -signedAng * t.steerGain;
+        Real steer = signedAng * t.steerGain;
         in.steer = steer < -1 ? -1 : (steer > 1 ? 1 : steer);
     }
 

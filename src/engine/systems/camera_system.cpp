@@ -40,7 +40,9 @@ void CameraSystem::registerBindings(InputMap& actions) const {
 
     // Placed-camera viewports (docs/virtual-camera-plan.md, Phase 1).
     actions.bindButton("cam_place", KeyCode::C);
-    actions.bindButton("cam_place", GamepadButton::Y);
+    // Pad X, not Y: Y is the conventional get-in/out-of-car button
+    // (VehicleSystem's enter_vehicle), and one press was doing both.
+    actions.bindButton("cam_place", GamepadButton::X);
     actions.bindButton("cam_cycle_next", KeyCode::V);
     actions.bindButton("cam_cycle_next", GamepadButton::DpadRight);
     actions.bindButton("cam_cycle_prev", KeyCode::B);

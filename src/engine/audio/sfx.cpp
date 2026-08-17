@@ -73,5 +73,40 @@ std::vector<float> impact(uint32_t sampleRate, uint32_t seed) {
     return frames;
 }
 
+std::vector<float> horn(uint32_t sampleRate, uint32_t seed) {
+    // One exact period. Loop-cleanliness comes from quantizing every partial to
+    // an integer cycle count over `count` samples — the nominal frequencies are
+    // then only approximated (by well under 2 Hz at 0.25 s), which no ear
+    // notices, but the wrap seam is mathematically continuous at any rate.
+    const auto count = static_cast<size_t>(sampleRate / 4);   // ~0.25 s
+    std::vector<float> frames(count);
+
+    // The dyad: real dual-trumpet horns sit around a 400/500 Hz pair (roughly a
+    // major third). The seed shifts the whole horn a step so different presses
+    // of the same street don't sound cloned from one car.
+    const double bases[][2] = {{370.0, 466.0}, {392.0, 494.0},
+                               {415.0, 523.0}, {440.0, 554.0}};
+    const double* base = bases[seed % 4];
+
+    // Brassy voice per note: falling harmonic series, odd partials favoured.
+    const double gains[5] = {1.0, 0.55, 0.40, 0.18, 0.10};
+
+    for (size_t i = 0; i < count; i++) {
+        const double phase01 = static_cast<double>(i) / count;   // one period
+        double v = 0.0;
+        for (int note = 0; note < 2; note++) {
+            const double cyclesBase = base[note] * 0.25;   // cycles per period
+            for (int h = 0; h < 5; h++) {
+                const double cycles = std::round(cyclesBase * (h + 1));
+                v += gains[h] * std::sin(TWO_PI * cycles * phase01);
+            }
+        }
+        // Soft clip: the flattened peaks are the honk's bite.
+        frames[i] = static_cast<float>(std::tanh(1.6 * 0.28 * v));
+    }
+    normalize(frames, 0.85f);
+    return frames;
+}
+
 }  // namespace sfx
 }  // namespace engine

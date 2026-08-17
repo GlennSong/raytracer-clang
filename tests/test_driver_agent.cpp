@@ -26,14 +26,16 @@ TEST_CASE(driver_throttles_toward_target_speed_when_aligned) {
 }
 
 TEST_CASE(driver_steers_right_toward_a_heading_on_its_right) {
-    // Facing +Z; the car's right is +X. A desired heading of +X must steer +
-    // (right), matching PhysicsWorld::setVehicleInput's `right` sign.
-    DriverInput in = computeDriverInput(facing(Vec2(0, 1), 5.0), want(Vec2(1, 0), 5.0));
+    // Facing +Z; the car's right is -X — the lab-measured chirality ("+steer
+    // turns toward -x", driver_control.h). A desired heading of -X must steer +
+    // (right), matching PhysicsWorld::setVehicleInput's `right` sign. These two
+    // used to pin the mirrored belief (right = +X), which Jolt refutes.
+    DriverInput in = computeDriverInput(facing(Vec2(0, 1), 5.0), want(Vec2(-1, 0), 5.0));
     CHECK(in.steer > 0.0);
 }
 
 TEST_CASE(driver_steers_left_toward_a_heading_on_its_left) {
-    DriverInput in = computeDriverInput(facing(Vec2(0, 1), 5.0), want(Vec2(-1, 0), 5.0));
+    DriverInput in = computeDriverInput(facing(Vec2(0, 1), 5.0), want(Vec2(1, 0), 5.0));
     CHECK(in.steer < 0.0);
 }
 

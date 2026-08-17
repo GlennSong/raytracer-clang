@@ -16,6 +16,7 @@
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
+#include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Body/AllowedDOFs.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/PhysicsSettings.h>
@@ -546,10 +547,9 @@ void PhysicsWorld::setCharacterPosition(CharacterId id, const Vec3& position) {
 }
 
 // --- Wheeled vehicle (ADR-0059) --------------------------------------------
-// UNVERIFIED: written against the documented Jolt v5.5.0 vehicle API; the Jolt
-// submodule can't be fetched in this environment, so this has NOT been compiled.
-// Likely tuning/rename touch-ups on a real build (member names on WheelSettingsWV
-// / VehicleEngineSettings, the collision-tester ctor signature).
+// Compiled against the vendored Jolt submodule and exercised headlessly by
+// tests/test_driving_lab.cpp (launch envelope, lane hold, kerb climb + its
+// no-clearance control, wall stop) — drive the gates there before tuning here.
 
 PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
                                                  const Vec3& position,
@@ -557,15 +557,27 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
     if (!impl) return INVALID_VEHICLE;
 
     // Chassis: a dynamic box, mass overridden, sleeping disabled so the controller
-    // keeps stepping. (Lowering the centre of mass via an OffsetCenterOfMassShape
-    // is the usual anti-roll tweak — left as a tuning follow-up.)
-    JPH::BoxShapeSettings shapeSettings(toJolt(cfg.chassisHalfExtent));
+    // keeps stepping. The COLLISION box is the config box minus a slice off the
+    // underside (floorClearance): the specs pass the full body box, whose floor
+    // rides at kerb height and rammed every kerb face nose-first. The slice is
+    // carved by shrinking the half-height and shifting the box UP within the
+    // body frame, so the roof stays where the spec put it and the wheels (whose
+    // attach points are body-frame) are unaffected.
+    const float carve = std::min(static_cast<float>(cfg.floorClearance),
+                                 static_cast<float>(cfg.chassisHalfExtent.y));
+    JPH::Vec3 half = toJolt(cfg.chassisHalfExtent);
+    half.SetY(half.GetY() - carve * 0.5f);
+    JPH::BoxShapeSettings shapeSettings(half);
     JPH::ShapeSettings::ShapeResult shapeRes = shapeSettings.Create();
     if (shapeRes.HasError()) return INVALID_VEHICLE;
+    JPH::RotatedTranslatedShapeSettings floorSettings(
+        JPH::Vec3(0, carve * 0.5f, 0), JPH::Quat::sIdentity(), shapeRes.Get());
+    JPH::ShapeSettings::ShapeResult floorRes = floorSettings.Create();
+    if (floorRes.HasError()) return INVALID_VEHICLE;
     // Lower the centre of mass below the chassis centre so the car resists rolling
     // in corners (the classic anti-tip tweak).
     JPH::OffsetCenterOfMassShapeSettings comSettings(
-        JPH::Vec3(0, static_cast<float>(cfg.comOffsetY), 0), shapeRes.Get());
+        JPH::Vec3(0, static_cast<float>(cfg.comOffsetY), 0), floorRes.Get());
     JPH::ShapeSettings::ShapeResult bodyShapeRes = comSettings.Create();
     if (bodyShapeRes.HasError()) return INVALID_VEHICLE;
 
@@ -627,10 +639,14 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
     vs.mController = controller;
 
     JPH::VehicleConstraint* constraint = new JPH::VehicleConstraint(*chassis, vs);
-    // Raycast wheels against the moving layer's ground. (CastCylinder is the
-    // higher-fidelity alternative if wheels clip kerbs.)
+    // Cast the wheel's actual CYLINDER, not a single ray. A ray only samples
+    // straight down from the hub, so a kerb's vertical face was invisible to
+    // the suspension and the chassis just rammed it — the "car stops dead at a
+    // kerb" bug. The cylinder cast sees the step's edge, rides the contact up,
+    // and the car mounts kerb-height steps; walls still read as walls because
+    // their contact normal is horizontal (and the chassis box still collides).
     constraint->SetVehicleCollisionTester(
-        new JPH::VehicleCollisionTesterRay(Layers::MOVING));
+        new JPH::VehicleCollisionTesterCastCylinder(Layers::MOVING));
     impl->physicsSystem.AddConstraint(constraint);
     impl->physicsSystem.AddStepListener(constraint);
 

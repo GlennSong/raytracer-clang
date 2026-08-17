@@ -111,17 +111,22 @@ TEST_CASE(car_lamps_night_turn_combines_head_and_signal) {
 }
 
 TEST_CASE(car_turn_side_geometry) {
+    // PHYSICAL sides, in the world's right-handed frame: facing +Z the right
+    // hand points toward -X (lab-measured — "+steer turns toward -x",
+    // driver_control.h). These used to pin the mirrored convention, which
+    // cancelled against lamp marker tags that were swapped the same way.
     // Straight through: no side.
     CHECK(carTurnSide(Vec2(0, 1), Vec2(0, 1)) == 0);
     CHECK(carTurnSide(Vec2(1, 0), Vec2(1, 0)) == 0);
-    // A right turn: travelling +Z then swinging to +X (the sim's right vector).
-    CHECK(carTurnSide(Vec2(0, 1), Vec2(1, 0)) == +1);
-    // A left turn: +Z swinging to -X.
-    CHECK(carTurnSide(Vec2(0, 1), Vec2(-1, 0)) == -1);
-    // Consistent from another heading: travelling +X, turning toward -Z is a right.
-    CHECK(carTurnSide(Vec2(1, 0), Vec2(0, -1)) == +1);
-    // And +X turning toward +Z is a left.
-    CHECK(carTurnSide(Vec2(1, 0), Vec2(0, 1)) == -1);
+    // A right turn: travelling +Z then swinging to -X.
+    CHECK(carTurnSide(Vec2(0, 1), Vec2(-1, 0)) == +1);
+    // A left turn: +Z swinging to +X.
+    CHECK(carTurnSide(Vec2(0, 1), Vec2(1, 0)) == -1);
+    // Consistent from another heading: travelling +X, turning toward +Z is a right
+    // (facing +X, the right hand points toward +Z: X cross Y = Z, so forward x up = +Z).
+    CHECK(carTurnSide(Vec2(1, 0), Vec2(0, 1)) == +1);
+    // And +X turning toward -Z is a left.
+    CHECK(carTurnSide(Vec2(1, 0), Vec2(0, -1)) == -1);
 }
 
 TEST_CASE(car_turn_side_ignores_tiny_bends) {
@@ -130,6 +135,6 @@ TEST_CASE(car_turn_side_ignores_tiny_bends) {
     CHECK(carTurnSide(Vec2(0, 1), Vec2(0.01, 0.9999)) == 0);
     CHECK(carTurnSide(Vec2(0, 1), Vec2(-0.01, 0.9999)) == 0);
     // But a clear bend past the threshold registers.
-    CHECK(carTurnSide(Vec2(0, 1), Vec2(0.3, 0.95)) == +1);
-    CHECK(carTurnSide(Vec2(0, 1), Vec2(-0.3, 0.95)) == -1);
+    CHECK(carTurnSide(Vec2(0, 1), Vec2(-0.3, 0.95)) == +1);
+    CHECK(carTurnSide(Vec2(0, 1), Vec2(0.3, 0.95)) == -1);
 }

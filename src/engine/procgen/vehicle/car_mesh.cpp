@@ -720,9 +720,16 @@ CarMesh buildCarMesh(const CarParams& p) {
     // be at the tip and slightly proud — the only free knob is HOW proud. 15 mm
     // read as "sticking out"; this leaves ~5 mm, a flush lens.
     constexpr Real kLampProud = 0.005;   // metres the lens stands off the cap
+    // SIDE NAMES ARE PHYSICAL. With the car's forward +Z and up +Y in this
+    // right-handed world, the driver's LEFT is +X — measured, not derived: the
+    // driving lab's steer-sign probe pinned "+steer turns toward -x" (see
+    // citysim/driver_control.h), and +steer is the RIGHT turn. These tags used
+    // to be swapped (+X tagged "_r"), which made the player's car blink its
+    // right indicator while steering left; citysim masked the same swap with a
+    // mirrored turn-side convention (two flips cancelling — see carTurnSide).
     for (int side = 0; side < 2; ++side) {
         const Real sx = side == 0 ? Real(1) : Real(-1);
-        const char* tag = side == 0 ? "_r" : "_l";
+        const char* tag = side == 0 ? "_l" : "_r";
         struct End { int station; Real dir; Vec3 tint; const char* name; };
         const End ends[2] = {
             {0, Real(1), Vec3(1.0, 0.97, 0.82), "headlight"},

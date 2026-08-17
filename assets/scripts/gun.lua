@@ -33,12 +33,21 @@ end
 -- Slot 1 = bare hands (gun stowed out of sight), slot 2 = gun drawn. The viewmodel tracks the slot
 -- itself (it can't be hidden via the API, so it stows far below the world when holstered). The main
 -- script tracks the same slot keys independently to gate firing — both start on slot 1.
+--
+-- FIRST PERSON ONLY (camera.first_person()): a viewmodel is the first-person
+-- hand — in a vehicle's chase camera or the on-foot shoulder rig it would just
+-- float beside the player. Slot presses are ignored outside first person (you
+-- can't draw the gun while driving), and the drawn/holstered state survives the
+-- ride: step out of the car and the gun is back in your hand.
 local FOLLOW = [[
 local G = { equipped = false }
 function G:update(e, dt)
-    if input.pressed("slot_2") then self.equipped = true end
-    if input.pressed("slot_1") then self.equipped = false end
-    if not self.equipped then                       -- holstered: stow out of sight
+    local fp = camera.first_person()
+    if fp then
+        if input.pressed("slot_2") then self.equipped = true end
+        if input.pressed("slot_1") then self.equipped = false end
+    end
+    if not (self.equipped and fp) then              -- holstered: stow out of sight
         entity.set_position(e, { 0.0, -100000.0, 0.0 })
         entity.snap_prev(e)
         return
@@ -69,9 +78,14 @@ function M:start(e)
 end
 
 function M:update(e, dt)
-    if input.pressed("slot_2") then self.equipped = true end
-    if input.pressed("slot_1") then self.equipped = false end
-    if not self.equipped then return end       -- bare hands: nothing to fire
+    -- Same first-person gate as the viewmodel (see FOLLOW): no drawing or
+    -- firing from the driver's seat or the shoulder rig.
+    local fp = camera.first_person()
+    if fp then
+        if input.pressed("slot_2") then self.equipped = true end
+        if input.pressed("slot_1") then self.equipped = false end
+    end
+    if not (self.equipped and fp) then return end   -- bare hands / third person
     if self.fired >= MAX then return end
     if not input.pressed("fire") then return end
 
