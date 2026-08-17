@@ -59,6 +59,41 @@ anchor) fork. The fix is to hoist those, not to rewrite.
 
 They share a word and nothing else.
 
+### `RoadGraph` vs `RoadNet` — the split is real, the storage is not
+
+Two road types, and people keep asking which is canonical. Both are, for different
+jobs, and the boundary is worth stating rather than re-deriving:
+
+- **`RoadNet`** (`road_net.h`) is the AUTHORED / PERSISTED form. It round-trips
+  through JSON (`roadNetFromJson` / `roadNetToJson`), it is what the editor drags
+  and widens, and it carries things a graph has no business holding: the look
+  (width, sidewalk, curb, markings, colour), the terrain closure `heightAt`, and
+  generator provenance (`cityHubs`, `freewayPlans`, `siteFootprints`).
+- **`RoadGraph`** (`road_network.h`) is the GEOMETRIC working form —
+  `RoadNode`/`RoadEdge` structs with their attributes inline. Everything that
+  computes reads this: `planarize`, `applyConstraints`, `extractBlocks`, the
+  lattice mesher, the nav graph.
+
+The traffic is almost entirely one-directional. Net → graph happens at ~29 call
+sites (`netGraph`, `navRoadGraph`, `constrainedNetGraph`); graph → net happens
+**once**, in `applyGenerateRecipe`, when a generated network becomes an entity. So
+`RoadNet` is a persistence-and-look wrapper around a graph, not a rival model.
+
+**Verdict (2026-08-16): keep both, fix `RoadNet`'s storage.** Merging them is
+wrong — the look fields and the `heightAt` closure genuinely do not belong on a
+geometric graph. But `RoadNet` stores its topology as EIGHT PARALLEL ARRAYS
+(`edges`, `tangents`, `nodeElev`, `nodeKinds`, `edgeWidths`, `edgeSpecs`,
+`edgeBaked`, `edgeLayers`, `edgeClasses`), any of which may be short or missing,
+and the codebase pays for it: **54 defensive `.size()` guards across five files**,
+plus a dedicated `roadNetEdgeWidth(net, ei)` accessor that exists only because
+`edgeWidths` might not be there.
+
+The fix is to give `RoadNet` a `std::vector<RoadEdge>` — the same struct
+`RoadGraph` already uses — while keeping its look and provenance fields. The JSON
+wire format stays parallel-array, so no saved level changes; only the in-memory
+representation does. That collapses the guards and the accessor, and makes the
+net→graph conversion a copy rather than a re-assembly.
+
 ## The order
 
 **1. Terrain.** Heightfield + erosion + coastline/mountains. Derive the

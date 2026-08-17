@@ -52,8 +52,14 @@ struct RoadNet {
     // levels are specless. So `roadNetEdgeWidth()` — which reads THIS field — is the
     // one width every consumer agrees on: the lattice mesher, nav lane spacing, lot
     // road clearance (`pushPolyClearOfRoads`) and parking bands all resolve through
-    // it. See the "width agreement crux" note in road_net.cpp. Removing it requires
-    // giving every generation kind a spec table first.
+    // it. See the "width agreement crux" note in road_net.cpp.
+    //
+    // The real fix is not removal but STORAGE: this and the seven other parallel
+    // arrays below cost 54 defensive .size() guards across five files, plus the
+    // roadNetEdgeWidth() accessor that exists only because this one may be short
+    // or absent. Holding a std::vector<RoadEdge> — the struct RoadGraph already
+    // uses — collapses all of that, with the JSON wire format left parallel so no
+    // saved level changes. See docs/city-pipeline.md § "RoadGraph vs RoadNet".
     std::vector<double> edgeWidths;
     // Roads-v2 band model: the net's spec table + a per-edge index into it
     // (parallel to `edges`; -1/missing = legacy, synthesized from width/sidewalk).
