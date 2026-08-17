@@ -314,7 +314,10 @@ async function boot() {
       : on !== null && off !== null && settled("on") && settled("off")
         ? `${on - off >= 0 ? "+" : ""}${(on - off).toFixed(2)} ms  ` +
           `(${(100 * (on / off - 1)).toFixed(0)}%)`
-        : "press M, then wait";
+        // Say how far along it is. A bare "wait" on a slow adapter, where a mode
+        // needs seconds to gather ten samples, is indistinguishable from stuck.
+        : `press M — on ${Math.min(timing.samples.on, 10)}/10, ` +
+          `off ${Math.min(timing.samples.off, 10)}/10`;
     const nowMs = timing[paint ? "on" : "off"];
     $("hud").innerHTML =
       `<b>${man.scene}</b>  ${w}x${h}\n` +

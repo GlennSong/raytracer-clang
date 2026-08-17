@@ -107,8 +107,10 @@ SRCS = \
 	$(SRC_DIR)/engine/scripting/procgen_bindings.cpp \
 	$(SRC_DIR)/engine/scripting/script_modules.cpp \
 	$(SRC_DIR)/engine/script_assets.cpp \
+	$(SRC_DIR)/engine/asset_root.cpp \
 	$(SRC_DIR)/engine/ai/nav_graph.cpp \
-	$(SRC_DIR)/engine/ai/pathfind.cpp
+	$(SRC_DIR)/engine/ai/pathfind.cpp \
+	$(ROADLAB_BRIDGE_SRC)
 OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
 # Unit tests. Header-only core (math, Handle/SlotMap, SparseSet) plus the few
@@ -350,7 +352,9 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/curve.cpp \
 	$(SRC_DIR)/image.cpp \
 	$(SRC_DIR)/path_tracer.cpp \
-	$(SRC_DIR)/rt_math.cpp
+	$(SRC_DIR)/rt_math.cpp \
+	$(ROADLAB_BRIDGE_SRC) \
+	$(ROADLAB_ENGINE_SRCS)
 TEST_TARGET = run_tests
 
 .PHONY: all release test planet_preview health clean
@@ -361,14 +365,41 @@ all: $(TARGET)
 release: CXXFLAGS += $(RELEASE_FLAGS)
 release: $(TARGET)
 
+# --- roadlab, as reached from level_scene ------------------------------------
+#
+# level_scene.cpp calls roadlab_bridge::build for shape:"roadlab" entities, so
+# EVERYTHING that links level_scene needs the bridge and the prototype TUs it
+# reaches. CMake has done this since the bridge landed; these two Makefile
+# targets — the offline tracer and the unit tests — did not, and both failed to
+# link with an undefined roadlab_bridge::build. `make test` was red for four
+# days, which is four days of a gate that could not have caught anything.
+#
+# Globbed, and main/tests/raster excluded, for the reasons CMakeLists.txt gives
+# beside the same two lines: the prototype churns, and raster.cpp is the one TU
+# that needs stb_image_write (under third_party/tinygltf, not on these targets'
+# include path). Nothing the bridge reaches calls into it.
+ROADLAB_DIR = proto/roadlab
+ROADLAB_BRIDGE_SRC = $(SRC_DIR)/engine/procgen/roadlab_bridge.cpp
+ROADLAB_ENGINE_SRCS = $(filter-out $(ROADLAB_DIR)/main.cpp $(ROADLAB_DIR)/tests.cpp \
+                                   $(ROADLAB_DIR)/raster.cpp, \
+                                   $(wildcard $(ROADLAB_DIR)/*.cpp))
+ROADLAB_ENGINE_OBJS = $(patsubst $(ROADLAB_DIR)/%.cpp,$(BUILD_DIR)/roadlab/%.o, \
+                                 $(ROADLAB_ENGINE_SRCS))
+
 # The raytracer links Lua + scripting; the flag propagates to its prerequisite
 # objects (so level_scene.o compiles its shape:"script" path), but not to the
 # separately-compiled test target.
 $(TARGET): CXXFLAGS += $(SCRIPT_FLAGS)
-$(TARGET): $(OBJS) $(LUA_OBJS)
+$(TARGET): $(OBJS) $(ROADLAB_ENGINE_OBJS) $(LUA_OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+# Its own prefix so proto/roadlab/scene.cpp and src/scene.cpp do not collide on
+# build/scene.o — which they would, silently, whichever built last winning.
+$(BUILD_DIR)/roadlab/%.o: $(ROADLAB_DIR)/%.cpp | $(BUILD_DIR)
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
@@ -427,7 +458,10 @@ planet_preview: $(PLANET_PREVIEW_SRCS)
 # and the engine includes nothing from it, so it can be replaced or deleted
 # without touching the game. Headless: renders to PNG, so it builds anywhere.
 # Depends only on the STL plus nlohmann/json and the bundled stb_image_write.
-ROADLAB_DIR = proto/roadlab
+#
+# ROADLAB_DIR is set further up, beside the engine targets that also link these
+# sources — a rule's prerequisites are expanded where the rule is READ, so it has
+# to exist before the first one that mentions it.
 ROADLAB_LIB_SRCS = \
 	$(ROADLAB_DIR)/rl_math.cpp \
 	$(ROADLAB_DIR)/rl_xml.cpp \

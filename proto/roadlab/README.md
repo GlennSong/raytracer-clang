@@ -12,11 +12,14 @@ window, so it builds and runs anywhere `make` does.
 
 ```bash
 make roadlab                      # build ./roadlab
-make roadlab-test                 # 23345 assertions, no framework
+make roadlab-test                 # 23450 assertions, no framework
 make roadlab-shots                # render every demo to out_roadlab/
 make roadlab-wgsl                 # regenerate rl_paint.wgsl from rl_paint.h
 make roadlab-wgsl-check           # + validate it with naga (cargo install naga-cli)
 make roadlab-wgsl-conformance     # run the WGSL and diff it against the C++
+make roadlab-sampler-conformance  # run the texture fetch and diff it against the C++
+make roadlab-web-render           # draw a scene on a GPU: a PNG and two frame times
+make roadlab-web                  # every scene + the shaders + the page, servable
 
 ./roadlab --demo showcase --view persp --out shot.png
 ./roadlab --demo grades --view persp            # skewed junction, four grades
@@ -1050,6 +1053,7 @@ rl_xml.h/.cpp      a minimal XML reader, sized for .xodr and nothing more.
 rl_paint.h         the marking evaluator, in a C++/MSL/GLSL subset. The GPU half.
 rl_paint.wgsl      generated from it by tools/roadlab-wgsl.py. Do not edit.
 rl_paint_sampler.wgsl  hand-written: the bindings and fetch for the profile texture.
+rl_paint_view.wgsl     hand-written: the vertex/fragment stages that draw a scene.
 paint_fixture.h/.cpp   evaluator inputs + CPU answers, for the WGSL comparison.
 paint_bake.h/.cpp  cross-section -> the flat boundary array that shader reads.
 paint_texture.h/.cpp  that array as the two textures a fragment samples.
@@ -1067,9 +1071,10 @@ raster.h/.cpp      z-buffer rasteriser + PNG. Exists so you can look at it.
 props.h/.cpp       rule-driven lamps, signs, signals, furniture.
 sim.h/.cpp         IDM traffic, lane changes, junction arbitration, pedestrians.
 odr.h/.cpp         OpenDRIVE export (with the road plan) and import.
+webexport.h/.cpp   mesh + atlas + manifest + a fetch fixture, for the GPU path.
 scene.h/.cpp       JSON authoring, the demo set, the city generator.
 main.cpp           the CLI.
-tests.cpp          22694 assertions, invariant-focused.
+tests.cpp          23450 assertions, invariant-focused.
 ```
 
 ## Known gaps
