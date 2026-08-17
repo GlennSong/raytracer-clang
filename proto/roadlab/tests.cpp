@@ -2547,6 +2547,82 @@ void testRampsDoNotEncroach() {
     }
 }
 
+void testEveryMergeHasAGore() {
+    group("a merge has a gore");
+    // A gore is what makes a merge legible, and it is PAINT.
+    //
+    // With the geometry exact — continuous pavement, edge lines that meet, no
+    // overlap anywhere — the join still read as an anonymous fork in the asphalt,
+    // because two edge lines converging to a knife point is not what a driver
+    // recognises. What they recognise is the neutral area: a wedge, outlined and
+    // chevroned, narrowing until there is none left and the two lanes are simply
+    // side by side.
+    //
+    // So it is asserted like any other invariant. The wedge must open to
+    // something worth seeing, it must close at the nose, and it must carry the
+    // area marking — a Median strip nobody painted would just be wider asphalt.
+    for (const std::string& name : corpusNames()) {
+        Scene sc;
+        if (!buildCorpus(name, sc)) continue;
+        finalizeScene(sc, false, false);
+
+        long ramps = 0, withGore = 0;
+        for (const Road& r : sc.net.roads()) {
+            if (r.kind != RoadKind::Ramp) continue;
+            bool linked = false, entering = false;
+            for (const ExtraLaneLink& el : sc.net.extraLinks) {
+                if (el.fromRoad == r.id) { linked = true; entering = true; }
+                else if (el.toRoad == r.id) { linked = true; entering = false; }
+            }
+            if (!linked || r.activeLength() < 20.0) continue;
+            ++ramps;
+
+            double nose = entering ? r.end() : r.begin();
+            // The gore is the strip against the reference line, on the side the
+            // ramp's own stack grows from.
+            auto goreAt = [&](double s, bool& painted) {
+                painted = false;
+                int si = r.xs.sectionIndexAt(s);
+                const LaneSection& sec = r.xs.sections[size_t(si)];
+                for (const std::vector<Strip>* st : {&sec.right, &sec.left}) {
+                    if (st->empty()) continue;
+                    const Strip& first = st->front();
+                    if (first.kind != StripKind::Median) continue;
+                    painted = first.outerMark.style == MarkStyle::Chevron ||
+                              first.outerMark.style == MarkStyle::Hatch;
+                    return first.width.eval(s - sec.s0);
+                }
+                return 0.0;
+            };
+
+            double widest = 0;
+            bool anyPainted = false;
+            double len = r.activeLength();
+            for (int k = 0; k <= 100; ++k) {
+                double s = r.begin() + len * double(k) / 100.0;
+                bool painted = false;
+                double w = goreAt(s, painted);
+                if (w > widest) widest = w;
+                if (painted && w > 0.5) anyPainted = true;
+            }
+            bool closedAtNose = false;
+            {
+                double s = clampd(entering ? nose - 0.5 : nose + 0.5, r.begin(), r.end());
+                bool painted = false;
+                closedAtNose = goreAt(s, painted) < 0.25;
+            }
+            if (widest >= 2.0 && anyPainted && closedAtNose) ++withGore;
+            else
+                std::printf("  note: %-11s %s: widest %.2f m, painted %d, closed at nose %d\n",
+                            name.c_str(), r.name.c_str(), widest, int(anyPainted),
+                            int(closedAtNose));
+        }
+        if (ramps == 0) continue;
+        check(withGore == ramps,
+              (name + ": every merging ramp has a painted gore that closes at the nose").c_str());
+    }
+}
+
 void testEveryCorpusSceneLints() {
     group("design lint over the whole corpus");
     // validate() knows about minimum radius, taper rate, grade, and vertical
@@ -3319,6 +3395,7 @@ int main() {
     testRoadSurfacesDoNotOverlap();
     testRampsAbutTheirMainline();
     testRampsDoNotEncroach();
+    testEveryMergeHasAGore();
     testEveryCorpusSceneLints();
     testEarthworksRunOnTheirBatter();
     testPaintSurvivesLod();

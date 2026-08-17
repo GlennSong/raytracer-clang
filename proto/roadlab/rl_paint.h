@@ -211,7 +211,17 @@ RL_FN struct RlPaint rlEvaluateMarkings(RL_BUF struct RlBoundary* bounds, int co
         float dt = t - bt;
         // Nothing is painted more than a metre from its own boundary, so most
         // fragments reject every marking on the road in one compare each.
-        if (dt > 1.0f + fw || dt < -(1.0f + fw)) continue;
+        //
+        // Except an AREA, which is painted all the way to its far edge — and the
+        // reject fired first, so a three-metre gore drew its outline and then one
+        // metre of chevrons before stopping in mid-air. The area styles carry
+        // that far edge in `gap`, so they can say how far they reach; every other
+        // style keeps the one-metre bound and the single compare.
+        // Branchless because the generator binds a local once: `let`, not `var`.
+        // isArea is 1 for HATCH/CHEVRON and 0 for everything else.
+        float isArea = rlSaturate((style - 7.5f) * 1000.0f);
+        float reach = 1.0f + isArea * fabs(bounds[i].gap - bt);
+        if (dt > reach + fw || dt < -(reach + fw)) continue;
 
         float w = rlMax(bounds[i].width, 0.06f);
         // Anti-shimmer: never draw a stripe thinner than the filter, and scale
@@ -261,9 +271,27 @@ RL_FN struct RlPaint rlEvaluateMarkings(RL_BUF struct RlBoundary* bounds, int co
             float far = bounds[i].gap;
             float lo = rlMin(bt, far);
             float hi = rlMax(bt, far);
+            // The area is OUTLINED as well as filled. A painted neutral area on
+            // a real road is bounded by a solid line on both sides — that outline
+            // is most of what makes it read as a gore rather than as scuffed
+            // asphalt — and the far side is the neighbouring strip's own
+            // boundary, so this edge is the one that has to draw it.
+            cov = rlCoverage(fabs(dt) - effW * 0.5f, fw);
             if (t >= lo && t <= hi) {
-                float d = rlWrap((s + t) * 0.7071f, 1.4f) - 0.7f;
-                cov = rlCoverage(fabs(d) - 0.07f, fw);
+                float fill = 0.0f;
+                if (style < 8.5f) {            // HATCH: 45 degree diagonals
+                    float d = rlWrap((s + t) * 0.7071f, 1.4f) - 0.7f;
+                    fill = rlCoverage(fabs(d) - 0.07f, fw);
+                } else {                       // CHEVRON: V's pointing back up-road
+                    // Folding the lateral coordinate about the area's centreline
+                    // turns the same diagonal family into arrowheads, which is
+                    // what a gore carries — a driver reads the direction, not
+                    // just the hatching.
+                    float mid = (lo + hi) * 0.5f;
+                    float d = rlWrap((s + fabs(t - mid)) * 0.7071f, 2.0f) - 1.0f;
+                    fill = rlCoverage(fabs(d) - 0.09f, fw);
+                }
+                cov = rlMax(cov, fill);
             }
         }
 

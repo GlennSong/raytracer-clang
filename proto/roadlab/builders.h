@@ -104,6 +104,12 @@ enum class RampEntry : uint8_t { Parallel, Taper };
 // invariant (lane-section seams, the marking bake's ring rule) intact.
 constexpr double kGoreNoseTaper = 1.0;
 
+// How wide the painted gore is where the ramp first comes alongside. It closes
+// to nothing at the nose, so this is the widest the neutral area ever gets;
+// 3 m over the ~60 m the two run alongside is about a 1:20 taper, which is what
+// the wedge on a real parallel entrance looks like.
+constexpr double kGoreAreaWidth = 3.0;
+
 struct RampDesc {
     std::string name = "ramp";
     std::string preset = "ramp1";

@@ -3,7 +3,7 @@
 // suite, so a header edit that nobody regenerated fails the build rather
 // than shipping a shader that shades the road differently from the CPU.
 //
-// rl_paint.h digest: b93238d94313f56d
+// rl_paint.h digest: 9a94d08d8e00acc4
 //
 // Sampler contract (paint_texture.h): the caller fills a
 // var<function> array<RlBoundary, RL_MAX_BOUNDS> from the profile and style
@@ -162,7 +162,17 @@ fn rlEvaluateMarkings(bounds : ptr<function, array<RlBoundary, RL_MAX_BOUNDS>>, 
     let dt = t - bt;
     // Nothing is painted more than a metre from its own boundary, so most
     // fragments reject every marking on the road in one compare each.
-    if (dt > 1.0 + fw || dt < -(1.0 + fw)) { continue; }
+    //
+    // Except an AREA, which is painted all the way to its far edge — and the
+    // reject fired first, so a three-metre gore drew its outline and then one
+    // metre of chevrons before stopping in mid-air. The area styles carry
+    // that far edge in `gap`, so they can say how far they reach; every other
+    // style keeps the one-metre bound and the single compare.
+    // Branchless because the generator binds a local once: `let`, not `var`.
+    // isArea is 1 for HATCH/CHEVRON and 0 for everything else.
+    let isArea = rlSaturate((style - 7.5) * 1000.0);
+    let reach = 1.0 + isArea * abs((*bounds)[i].gap - bt);
+    if (dt > reach + fw || dt < -(reach + fw)) { continue; }
 
     let w = rlMax((*bounds)[i].width, 0.06);
     // Anti-shimmer: never draw a stripe thinner than the filter, and scale
@@ -212,9 +222,27 @@ fn rlEvaluateMarkings(bounds : ptr<function, array<RlBoundary, RL_MAX_BOUNDS>>, 
       let far = (*bounds)[i].gap;
       let lo = rlMin(bt, far);
       let hi = rlMax(bt, far);
+      // The area is OUTLINED as well as filled. A painted neutral area on
+      // a real road is bounded by a solid line on both sides — that outline
+      // is most of what makes it read as a gore rather than as scuffed
+      // asphalt — and the far side is the neighbouring strip's own
+      // boundary, so this edge is the one that has to draw it.
+      cov = rlCoverage(abs(dt) - effW * 0.5, fw);
       if (t >= lo && t <= hi) {
-        let d = rlWrap((s + t) * 0.7071, 1.4) - 0.7;
-        cov = rlCoverage(abs(d) - 0.07, fw);
+        var fill = 0.0;
+        if (style < 8.5) {  // HATCH: 45 degree diagonals
+          let d = rlWrap((s + t) * 0.7071, 1.4) - 0.7;
+          fill = rlCoverage(abs(d) - 0.07, fw);
+        } else {  // CHEVRON: V's pointing back up-road
+          // Folding the lateral coordinate about the area's centreline
+          // turns the same diagonal family into arrowheads, which is
+          // what a gore carries — a driver reads the direction, not
+          // just the hatching.
+          let mid = (lo + hi) * 0.5;
+          let d = rlWrap((s + abs(t - mid)) * 0.7071, 2.0) - 1.0;
+          fill = rlCoverage(abs(d) - 0.09, fw);
+        }
+        cov = rlMax(cov, fill);
       }
     }
 

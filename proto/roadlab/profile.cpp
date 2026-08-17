@@ -62,6 +62,14 @@ Marking markDouble(PaintColor c) {
 }
 
 Marking markEdge() { return markSolid(PaintColor::White, 0.15f); }
+Marking markChevron(PaintColor c) {
+    Marking m;
+    m.style = MarkStyle::Chevron;
+    m.color = c;
+    m.width = 0.15f;   // the outline; the fill spans the strip
+    return m;
+}
+
 Marking markNone() { return Marking{}; }
 
 // --- strips ---------------------------------------------------------------
@@ -992,6 +1000,21 @@ LaneSection sectionWithLanesChanged(const LaneSection& base, int side, int delta
         }
         if (newLast >= 0) stack[size_t(newLast)].outerMark = edge;
     }
+    out.assignIds();
+    return out;
+}
+
+LaneSection sectionWithGore(const LaneSection& base, int side, double width) {
+    LaneSection out = base;
+    std::vector<Strip>& stack = side >= 0 ? out.left : out.right;
+    Strip g;
+    g.kind = StripKind::Median;
+    g.surface = SurfaceKind::Asphalt;
+    g.width = Poly3::constant(width);
+    g.dir = 0;
+    g.access = 0;
+    g.outerMark = markChevron();
+    stack.insert(stack.begin(), g);
     out.assignIds();
     return out;
 }

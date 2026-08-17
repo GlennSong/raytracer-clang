@@ -52,9 +52,17 @@ int bakeBoundaries(const Road& road, double s, RlBoundary* out, int maxCount) {
         if (m.style == MarkStyle::None) continue;
         if (n >= maxCount) break;
         if (m.style == MarkStyle::Hatch || m.style == MarkStyle::Chevron) {
-            double far = b.t + (b.t >= 0 ? 3.0 : -3.0);
-            if (b.t >= 0 && bi + 1 < scratch.size()) far = scratch[bi + 1].t;
-            if (b.t < 0 && bi > 0) far = scratch[bi - 1].t;
+            // An area style fills the strip that OWNS it — the one inboard of
+            // this boundary, since a Marking hangs on its strip's OUTER edge.
+            // boundariesAt runs most-negative t to most-positive, so "inboard"
+            // is the next entry up on the right of the reference line and the
+            // previous one on the left. (It used to fill the other way, away
+            // from the reference line, which describes the NEIGHBOUR's area
+            // rather than your own: a gore strip asking for chevrons got them
+            // painted across the lane beside it.)
+            double far = b.t + (b.t >= 0 ? -3.0 : 3.0);
+            if (b.t >= 0 && bi > 0) far = scratch[bi - 1].t;
+            if (b.t < 0 && bi + 1 < scratch.size()) far = scratch[bi + 1].t;
             out[n].gap = float(far);
         }
         out[n].t = float(b.t);

@@ -742,13 +742,25 @@ int makeRampRoad(Network& net, const RampDesc& desc, int side, Vec2 innerPoint,
         double parallel = std::max({0.0, in.length, alongside});
         double room = std::max(2.0, len - parallel);
         double blend = clampd(std::min(len * 0.45, room - 1.0), 20.0, 90.0);
+        // Three states, not two, and the middle one is the gore.
+        //
+        // The ramp reaches the mainline's own slice PLUS a painted wedge by the
+        // time it comes alongside, and the wedge then closes to nothing at the
+        // nose. That is what a parallel entrance is: not a lane that appears out
+        // of a point, but a neutral area that narrows until there is none left
+        // and the two lanes are simply side by side. Without it the two edge
+        // lines converge to a knife point on bare asphalt and the join does not
+        // read as a merge at all, however exact the surface is.
+        LaneSection gore = sectionWithGore(*terminal, side, kGoreAreaWidth);
         ProfileTimeline tl;
         if (rampLeadsIn) {
             tl.at(0.0, sec);
-            tl.at(std::max(1.0, room - blend), *terminal, blend);
+            tl.at(std::max(1.0, room - blend), gore, blend);
+            tl.at(room, *terminal, parallel);
         } else {
             tl.at(0.0, *terminal);
-            tl.at(clampd(parallel, 1.0, len - 2.0), sec, blend);
+            tl.at(1e-3, gore, parallel);
+            tl.at(clampd(parallel + 1.0, 2.0, len - 2.0), sec, blend);
         }
         r.xs = tl.build(len, r.designSpeed);
     } else {

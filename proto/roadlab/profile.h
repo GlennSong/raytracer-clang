@@ -78,6 +78,10 @@ Marking markDashed(PaintColor c = PaintColor::White, float on = 3.0f, float off 
 Marking markDouble(PaintColor c = PaintColor::Yellow);
 Marking markEdge();          // the solid white edge line at the shoulder
 Marking markNone();
+// A painted neutral area — the gore between a ramp and the carriageway it is
+// joining. The style is an AREA: it fills the strip that carries it and outlines
+// it, so the strip's width is the area's width and needs no second parameter.
+Marking markChevron(PaintColor c = PaintColor::White);
 
 enum : uint32_t {
     kAccessCar = 1u << 0,
@@ -249,6 +253,17 @@ private:
 // speed-derived taper. Returns the section list to hand to a ProfileTimeline.
 LaneSection sectionWithLanesChanged(const LaneSection& base, int side, int delta,
                                     double laneWidth = 3.6);
+// The same section with a GORE inserted against the reference line on `side`:
+// the painted wedge that separates a ramp from the carriageway it is merging
+// into, until the two become one surface at the nose.
+//
+// It is a Median strip — separation is exactly what it does, and Median is
+// already neither drivable nor a lane — carrying a Chevron marking, and it sits
+// innermost because the ramp's reference line IS the mainline's lane edge. Its
+// width tapers to nothing at the nose, which is the whole shape of a gore: the
+// blend machinery does that for free once there are two sections to go between.
+LaneSection sectionWithGore(const LaneSection& base, int side, double width);
+
 // The same section with its outermost Shoulder — and the earthwork outboard of
 // it — narrowed to nothing.
 //
