@@ -62,11 +62,40 @@ std::vector<Ring> sampleRings(const UnionSpine& spine, double ringStep,
         const int R = std::max(1, static_cast<int>(std::ceil(total / std::max(0.25, ringStep))));
         for (int k = 0; k <= R; ++k) stations.push_back(total * k / R);
     } else {
+        // MITRE FOLD REACH (the "2 inverted of 276" defect, test_road_lattice
+        // swept_body_inverts_a_few_faces_at_bends): at a kink vertex the mitre
+        // ring's INSIDE point sits hw*tan(halfAngle) BACK along both legs. Any
+        // fill ring inside that reach is overrun by it — the inside-edge
+        // polyline doubles back and the lattice cell between them folds (the
+        // inverted faces). So the fill SKIPS the fold reach around each kink:
+        // the cell then spans from the last clear ring straight to the mitre
+        // ring, and the inside edge stays monotone. The reach is bounded by
+        // the same clamp the miter scale uses (cos >= 0.5 -> tan <= sqrt(3)).
+        std::vector<double> reach(n, 0.0);
+        for (std::size_t v = 1; v + 1 < n; ++v) {
+            const Vec2 dIn = spine.points[v] - spine.points[v - 1];
+            const Vec2 dOut = spine.points[v + 1] - spine.points[v];
+            if (dIn.lengthSquared() < 1e-12 || dOut.lengthSquared() < 1e-12) continue;
+            const double c = dot(normalize(dIn), normalize(dOut));
+            if (c > 0.999) continue;                       // straight: no fold
+            // halfAngle between the mitre plane and either leg: cos(half) =
+            // sqrt((1+c)/2); tan(half) = sqrt((1-c)/(1+c)), clamped as above.
+            const double tanHalf =
+                std::sqrt(std::max(0.0, (1.0 - c) / std::max(0.25, 1.0 + c)));
+            const double hwHere = hasW ? spine.hw[v] : spine.halfWidth;
+            reach[v] = std::min(1.7320508, tanHalf) * hwHere + 0.3;
+        }
         double cum = 0;
         stations.push_back(0.0);
         for (std::size_t i = 0; i + 1 < n; ++i) {
             const int fill = std::max(1, static_cast<int>(std::ceil(segLen[i] / std::max(0.25, ringStep))));
-            for (int k = 1; k <= fill; ++k) stations.push_back(cum + segLen[i] * k / fill);
+            for (int k = 1; k < fill; ++k) {
+                const double along = segLen[i] * k / fill;
+                if (along < reach[i]) continue;                 // in the start kink's fold
+                if (segLen[i] - along < reach[i + 1]) continue; // in the end kink's fold
+                stations.push_back(cum + along);
+            }
+            stations.push_back(cum + segLen[i]);                // the vertex ring itself
             cum += segLen[i];
         }
     }
