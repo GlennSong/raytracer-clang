@@ -112,7 +112,6 @@ add_library(engine_core STATIC
     src/engine/procgen/city/road_offset.cpp
     src/engine/procgen/city/district.cpp
     src/engine/procgen/city/road_crossings.cpp
-    src/engine/procgen/city/city.cpp
     src/engine/procgen/city/architect.cpp
     src/engine/procgen/city/city_lots.cpp
     src/engine/procgen/city/surface_field.cpp
@@ -572,7 +571,6 @@ add_executable(run_tests
     tests/test_screen_project.cpp
     tests/test_relationships.cpp
     tests/test_ped_graph.cpp
-    tests/test_city_generated.cpp
     tests/test_tier_v.cpp
     tests/test_city_lots.cpp
     tests/test_alignment.cpp

@@ -27,28 +27,26 @@ Two design invariants that hold the whole thing together:
   block interior becomes a reachable court (plaza/park + alley), never a
   landlocked building.
 
-## Two pipelines exist (read this before touching anything)
+## One city pipeline (as of 2026-08-16)
 
-The single most confusing fact about the city code, and the one most likely to
-send a rewrite down the wrong path: **there are two complete, parallel city
-building pipelines.** They share only `buildDistrict` and `extractBlocks`.
+There used to be two, and it was the most confusing fact about this code. A
+second generator — `shape:"city"` / `city.cpp:generateCity` — built `city.json`
+and `city_arena.json` with its own zoning (`paramsForDistrict`), its own massing
+(`growBuilding` on box scopes), per-building box colliders, and no architect, no
+style book, no landmarks, no plazas or rowhouses. It shared only `buildDistrict`
+and `extractBlocks` with the real one.
 
-| | **Pipeline A — `shape:"city"`** | **Pipeline B — `shape:"road"` + `citysim.buildLots`** |
-| --- | --- | --- |
-| Entry | `city.cpp:generateCity` | `city_lots.cpp:growLotBuildingsOnNets` |
-| Levels | `city.json`, `city_arena.json` | `living_city.json`, `coast_city.json`, the metro levels |
-| Buildings | `growBuilding` on box scopes only | `growPlanBuilding` — the lot polygon *is* the floorplan |
-| Zoning | `paramsForDistrict` | the architect (`architectPick`) |
-| Colliders | per-building box | one merged mesh of plan prisms |
-| Landmarks, plazas, rowhouses, podium towers | none | yes |
+Both levels were migrated onto `shape:"road"` + `citysim.buildLots` and the
+generator deleted, along with its two host bake paths (`level_loader.cpp` and the
+offline tracer's `level_scene.cpp`) and its `CityModel`->`RoadNet` nav bridge.
 
-**Pipeline B is the live one** — everything in this document describes it.
-Pipeline A never sees the architect, the style book, landmarks, or any non-box
-massing. Retiring A is tracked work.
+**The live pipeline is `city_lots.cpp:growLotBuildingsOnNets`** — everything below
+describes it.
 
-A third copy exists: `level_scene.cpp` (the offline tracer's loader)
-re-implements `growCityLots`, with a comment admitting it "mirrors level_loader's
-growCityLots exactly" — so a change to one silently forks the two renderers.
+One duplication remains: `level_scene.cpp` re-implements `growCityLots` for the
+offline tracer. It is narrower than it looks — the JSON half is shared through
+`readLotGrowParams`, and only the ~12 road-net-derived lines (hub list, coreness
+anchor) fork. The fix is to hoist those, not to rewrite.
 
 ### Two "district"s that mean different things
 

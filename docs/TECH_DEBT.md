@@ -28,7 +28,7 @@ Level census, for reference:
 | --- | --- |
 | `road:metro` | 10 — coast_city, freeway_lab, hillcity, metro_hills, metropolis, metropolis_roads, metropolis_sky, piedmont, piedmont_mini, piedmont_roads |
 | `road:district` | 2 — grown, living_city |
-| `shape:city` (legacy pipeline) | 2 — city, city_arena |
+| ~~`shape:city`~~ | *retired 2026-08-16; city + city_arena migrated to `road`* |
 | `shape:corridor` | 2 — freeway_lab, freeway_variants |
 | `citysim.buildLots` | 7 — coast_city, hillcity, living_city, metro_hills, metropolis, metropolis_sky, piedmont |
 
@@ -39,7 +39,7 @@ Level census, for reference:
 | Code | Reached by |
 | --- | --- |
 | `tensorRoads`, `radialRoads`, `gridRoads`, `pruneSteepEdges`, `connectComponents` | `city.layout` (`procgen_bindings.cpp:1145`). **`twin_cities.lua` ships both `pattern="radial"` and `pattern="tensor"`**, so the tensor field is live content, not theory. `city.layout` is the most-used verb in the script corpus (7 call sites). |
-| `road_mesh.cpp` weld/union family — `unionRibbons`, `weldRibbons`, `unionRoadbed`, `bridgeDeck`, `deckBarriers`, `deckMarkings`, `laneMarkings`, `buildRoadMesh` | All bound (`city.union`, `city.weld`, `city.roadbed`, `city.deck`, `city.lane_markings`, `city.road_mesh`). `buildRoadMesh` also drives the `shape:"city"` pipeline. |
+| `road_mesh.cpp` weld/union family — `unionRibbons`, `weldRibbons`, `unionRoadbed`, `bridgeDeck`, `deckBarriers`, `deckMarkings`, `laneMarkings`, `buildRoadMesh` | All bound (`city.union`, `city.weld`, `city.roadbed`, `city.deck`, `city.lane_markings`, `city.road_mesh`). |
 | `road_crossings.cpp:resolveCrossings` | `city.resolve` — used twice in shipped scripts. |
 | `metro.cpp`, `patch_fabric.cpp`, `city_footprint.cpp`, `arterial_skeleton.cpp`, `buildability.cpp` | The `"metro"` kind — the majority path. |
 | `corridor_mesh/plan/bake.cpp`, `alignment.cpp` | `shape:"corridor"` levels + metro freeway plans. |
@@ -66,7 +66,7 @@ the honest fix is a script that exercises them, not deletion.
 
 | Item | Reality |
 | --- | --- |
-| **Two city pipelines** — `city.cpp:generateCity` vs `city_lots.cpp` | The big one. Only 2 levels (`city.json`, `city_arena.json`) are on the legacy pipeline. Tracked as its own task. |
+| ~~**Two city pipelines**~~ | **RESOLVED 2026-08-16.** `city.json`/`city_arena.json` migrated onto `road` + `citysim.buildLots`; `city.{h,cpp}`, both host bake paths and the `CityModel`→`RoadNet` nav bridge deleted. The building-winding gate was ported to `growLotBuildings` first, so retiring the generator did not take the only test for inside-out facades with it. |
 | `level_scene.cpp` re-implements `growCityLots` | **Narrower than first reported.** The JSON half is genuinely shared (`readLotGrowParams`); only the road-net-derived half — hub list + coreness anchor — is duplicated, with a comment explaining that the editor otherwise grows a *different* city (no districts, coreness 0, no towers). Still a fork risk; the fix is to hoist those ~12 lines, not to rewrite. |
 | `emitCornice` (box path) vs `sweptCornice` (plan path) | Two lambdas in different functions carrying the same tier table `{0.10,0.16},{0.24,0.18},{0.34,0.08}`. One emits boxes, one emits plan slabs — so they cannot merge outright, but the table should be one shared constant. |
 

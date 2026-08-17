@@ -6,7 +6,6 @@
 #include "engine/procgen/tree.h"
 #include "engine/procgen/surface_maps.h"
 #include "engine/model_importer.h"
-#include "engine/procgen/city/city.h"
 #include "engine/procgen/city/city_lots.h"   // living-city lots (offline parity)
 #include "engine/procgen/city/road_net.h"
 #include "engine/procgen/noise.h"
@@ -288,28 +287,6 @@ void addTree(const json& ent, Scene& scene) {
     }
 }
 
-// A procedural city (shape:"city", ADR-0038): regenerate the same CityModel the
-// engine does and bake it. Each material part uses a white albedo so the baked
-// per-vertex color shows (the tree convention); the material carries only
-// metallic/roughness, so glass reads reflective. The whole city is placed at the
-// entity position (its XZ centre, baseY = position.y).
-// Build the CityModel from an entity recipe, draping onto the level terrain when
-// the recipe asks for it. Split from the baking step so the loader can pull the
-// model's terrain cut/fill footprints (model.flatten) out and feed them into the
-// terrain mesh *before* it's built (the terrain has to know where the city
-// levels it). isCity()/onTerrain let the loader decide whether to pre-generate.
-bool cityIsOnTerrain(const json& ent) {
-    return ent.value("shape", std::string()) == "city" && ent.contains("city") &&
-           ent["city"].value("onTerrain", false);
-}
-
-CityModel generateCityModel(const json& ent, const json& root) {
-    // readCityParams parses the FULL field set (district roads included — this
-    // importer's old local parse had drifted and silently dropped them) and
-    // builds the groundAt drape closure when the city is on terrain.
-    return generateCity(readCityParams(ent, root));
-}
-
 int addCpuImage(Scene& scene, const CpuImage& img) {
     if (!img.valid()) return -1;
     Texture t;
@@ -348,46 +325,6 @@ void addGltfModel(const json& ent, const std::string& levelDir, Scene& scene) {
         ++meshCount;
     }
     LOG_INFO << "glTF model " << meshPath << ": " << meshCount << " mesh(es)";
-}
-
-void bakeCityModel(const CityModel& m, Scene& scene) {
-    using S = RenderMaterial::Surface;
-    SurfaceTexCache texCache;   // one bake per surface, shared across the city
-    auto bake = [&](const RenderMesh& mesh, float metallic, float roughness,
-                    S surface) {
-        if (mesh.vertices.empty()) return;
-        Material mat = Material::pbr(Vec3(1, 1, 1), metallic, roughness);
-        if (surface != S::None)   // bake + bind the procedural PBR texture set
-            bindSurfaceTextures(mat, surface, scene, 1337u, 256, &texCache);
-        int mi = scene.addMaterial(mat);
-        addMeshAsTriangles(mesh, Vec3(), Quat::identity(), Vec3(1, 1, 1), mi, scene);
-    };
-    for (const RenderMesh& part : m.parts) {
-        RenderMaterial rm = materialFor(static_cast<PartId>(part.materialIndex), Vec3(1, 1, 1));
-        bake(part, rm.metallic, rm.roughness, rm.surface());
-    }
-    bake(m.roads, 0.0f, 0.9f, S::Asphalt);
-    bake(m.pavement, 0.0f, 0.95f, S::Pavement);   // sidewalk slabs
-    bake(m.ground, 0.0f, 1.0f, S::None);
-    bake(m.props, 0.0f, 0.85f, S::None);          // lamps, signals, tree pits
-
-    // Instanced props (ADR-0041): each group is one BLAS proto + N placements.
-    for (const CityInstanceGroup& g : m.instanceGroups) {
-        if (g.proto.indices.empty() || g.transforms.empty()) continue;
-        Material mat = Material::pbr(Vec3(1, 1, 1), g.metallic, g.roughness);
-        if (g.alphaFoliage) {                     // alpha-cut leaf cards
-            TextureData leaf = leafTexture(128);
-            Texture tex;
-            tex.width = leaf.width; tex.height = leaf.height;
-            tex.channels = leaf.channels; tex.pixels = std::move(leaf.pixels);
-            mat.alphaTex = scene.addTexture(std::move(tex));
-        }
-        int mi = scene.addMaterial(mat);
-        int proto = scene.addProto(meshProtoTriangles(g.proto, mi));
-        for (const Mat4& xf : g.transforms) scene.addInstance(proto, xf);
-    }
-    LOG_INFO << "City: " << m.buildings.size() << " buildings, " << m.blockCount
-             << " blocks, " << m.treeCount << " trees";
 }
 
 }  // namespace
@@ -468,18 +405,6 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
     // ground meets the carriageways instead of poking through. Pre-generate the
     // first such city here; the entity loop reuses the cached model (keyed by
     // pointer) so it isn't generated twice.
-    const json* cityEnt = nullptr;
-    CityModel cityModel;
-    std::vector<TerrainFlatten> cityFlatten;
-    for (const auto& ent : root.value("entities", json::array())) {
-        if (cityIsOnTerrain(ent)) {
-            cityEnt = &ent;
-            cityModel = generateCityModel(ent, root);
-            cityFlatten = cityModel.flatten;
-            break;
-        }
-    }
-
     // Named material library: the top-level "materials" table, parsed once so
     // entities can reference shared materials by name (ADR-0039).
     MaterialTable materials = buildMaterialTable(root, scene);
@@ -564,7 +489,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
     // offline ground buries the draped roads — device: "the road is being
     // buried by the terrain").
     if (root.contains("terrain")) {
-        std::vector<TerrainFlatten> allFlatten = cityFlatten;
+        std::vector<TerrainFlatten> allFlatten;
         allFlatten.insert(allFlatten.end(), scriptFlatten.begin(), scriptFlatten.end());
         std::vector<RoadNet> lotNets;
         if (levelGround)
@@ -766,13 +691,6 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         // Hero parametric tree: bark + alpha-cut leaf cards (matches the viewer).
         if (ent.value("shape", std::string()) == "tree") {
             addTree(ent, scene);
-            continue;
-        }
-        // Procedural city (ADR-0038): roads + buildings baked from the recipe,
-        // optionally draped on the level's terrain (the City Arena).
-        if (ent.value("shape", std::string()) == "city") {
-            if (&ent == cityEnt) bakeCityModel(cityModel, scene);     // pre-generated
-            else bakeCityModel(generateCityModel(ent, root), scene);  // flat city
             continue;
         }
         // Editor-authored road (shape:"road", ADR-0049): the same RoadNet the
