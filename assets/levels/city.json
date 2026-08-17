@@ -1,38 +1,104 @@
 {
   "version": 1,
   "environment": {
-    "skyColor": [0.55, 0.68, 0.86]
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
   },
   "entities": [
     {
+      "id": 1,
       "name": "downtown",
-      "shape": "city",
-      "position": [0, 0, 0],
-      "city": {
-        "extent": 150,
-        "cellSize": 78,
-        "roadJitter": 0.14,
-        "downtownRadius": 70,
-        "midtownRadius": 150,
-        "parkFraction": 0.08,
-        "buildChance": 0.92,
-        "seed": 7
+      "shape": "road",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "road": {
+        "generate": {
+          "kind": "district",
+          "radius": 150,
+          "arterials": 3,
+          "artery_width": 13,
+          "street_width": 8,
+          "block_size": 78,
+          "jitter": 0.14,
+          "seed": 7
+        },
+        "width": 8.0,
+        "sidewalk": 3.5,
+        "curb": 0.16,
+        "corner_radius": 3.0,
+        "lift": 0.08,
+        "markings": true,
+        "crosswalks": true,
+        "color": [
+          0.09,
+          0.09,
+          0.1
+        ]
       }
     }
   ],
   "player": {
-    "position": [0, 2, 180],
-    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.8 },
+    "position": [
+      0,
+      2,
+      180
+    ],
+    "collider": {
+      "shape": "capsule",
+      "radius": 0.3,
+      "halfHeight": 0.8
+    },
     "friction": 0.5
   },
   "lighting": {
     "sun": {
-      "direction": [0.45, 0.55, -0.5],
-      "color": [1.0, 0.95, 0.85],
+      "direction": [
+        0.45,
+        0.55,
+        -0.5
+      ],
+      "color": [
+        1.0,
+        0.95,
+        0.85
+      ],
       "intensity": 8.5,
       "castsShadow": true
     },
     "exposure": 0.5,
     "ambientMultiplier": 0.6
+  },
+  "_comment": "Migrated off shape:\"city\" (city.cpp:generateCity) onto the road + citysim.buildLots pipeline every other city level uses. parkFraction has no direct equivalent \u2014 parks come from the architect's pocket_park weights; roadJitter maps to the district recipe's own jitter.",
+  "terrain": {
+    "seed": 7,
+    "size": 460,
+    "resolution": 200,
+    "heightScale": 0.0,
+    "noiseScale": 0.01,
+    "octaves": 1,
+    "material": {
+      "albedo": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roughness": 1.0
+    }
+  },
+  "citysim": {
+    "buildLots": true,
+    "sidewalk": 4.0,
+    "downtownRadius": 70,
+    "midtownRadius": 150,
+    "buildChance": 0.92,
+    "seed": 7,
+    "cars": 0,
+    "pedestrians": 0
   }
 }
