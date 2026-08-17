@@ -554,6 +554,24 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                     if (hook) lp.styleHook = std::move(hook);
                 }
             }
+            // ARCHETYPE BOOK — same all-or-nothing contract as the viewer's
+            // loader (level_loader.cpp); a rejected book LOG_ERRORs and the
+            // compiled ladders stand, so both hosts grow the SAME city.
+            {
+                std::string ab = loadScriptCode("archetype_book.lua", levelDir);
+                if (!ab.empty()) {
+                    ScriptVM vm;   // the book is pure data once parsed
+                    openProcgenLibrary(vm);
+                    std::string err;
+                    engine::ArchetypeBook book =
+                        engine::makeArchetypeBook(vm, ab, &err);
+                    if (!err.empty())
+                        LOG_ERROR << "archetype_book.lua REJECTED "
+                                     "(all-or-nothing): " << err;
+                    else
+                        lp.archetypeBook = std::move(book);
+                }
+            }
 #endif
             engine::NetLotResult lots = engine::growLotBuildingsOnNets(
                 lotNets, lp, ep, cs.value("sidewalk", 4.0) + 0.6, levelGround);

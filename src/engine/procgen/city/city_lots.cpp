@@ -1815,7 +1815,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     : architectPick(tag, shortSide, area(site),
                                     mix(pp.seed,
                                         static_cast<uint32_t>(li) * 7u + 3u),
-                                    coreness);
+                                    coreness,
+                                    p.archetypeBook.empty() ? nullptr
+                                                            : &p.archetypeBook);
             b.type = rec.placeType;
             b.recipe = rec.name;
             b.block = cand.block;

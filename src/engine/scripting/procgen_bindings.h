@@ -8,6 +8,7 @@
 
 #include "../../rt_math.h"   // Vec3
 #include "../procgen/terrain_field.h"   // HeightField
+#include "../procgen/city/architect.h"  // ArchetypeBook (makeArchetypeBook)
 
 namespace engine {
 
@@ -84,6 +85,23 @@ void openProcgenLibrary(ScriptVM& vm);
 struct BuildingParams;
 std::function<void(const std::string& recipe, BuildingParams&)>
 makeStyleBook(ScriptVM& vm, const std::string& code, std::string* error = nullptr);
+
+// ARCHETYPE BOOK (the architect's SELECTION layer as data, architect.h): run
+// `code` — a chunk that sets a global table
+//     archetype_book = {
+//         financial = { {"glass_tower", 26}, {"plaza", 3.5}, ... },
+//         residential = { ... },   -- keys: districtName() strings
+//     }
+// — and resolve it against the recipe registry into per-district cumulative
+// tables. Weights are relative (normalized per district); a district absent
+// from the book keeps its compiled-in ladder.
+//
+// ALL-OR-NOTHING (the courtMinArea false-knob rule): an unknown district key,
+// an unknown recipe name, a non-positive weight, or an empty district table
+// REJECTS the whole book — `error` names the offender, the return is empty,
+// and the caller must surface the error loudly, never apply half a book.
+ArchetypeBook makeArchetypeBook(ScriptVM& vm, const std::string& code,
+                                std::string* error = nullptr);
 
 // Run a procgen script that `return`s a mesh (typically from `polygonize`) and
 // hand back the result. Returns false (with `error` filled, if non-null) when

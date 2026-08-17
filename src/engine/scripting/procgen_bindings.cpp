@@ -529,6 +529,90 @@ makeStyleBook(ScriptVM& vm, const std::string& code, std::string* error) {
     };
 }
 
+ArchetypeBook makeArchetypeBook(ScriptVM& vm, const std::string& code,
+                                std::string* error) {
+    ArchetypeBook book;
+    if (!vm.doString(code, error)) return ArchetypeBook{};
+    lua_State* L = luaState(vm);
+    const int base = lua_gettop(L);
+    auto fail = [&](const std::string& msg) {
+        if (error) *error = msg;
+        lua_settop(L, base);      // error paths sit at varying stack depths
+        return ArchetypeBook{};   // all-or-nothing: never half a book
+    };
+    lua_getglobal(L, "archetype_book");
+    if (!lua_istable(L, -1))
+        return fail("archetype_book.lua did not set an `archetype_book` table");
+    // Walk the book's keys; each must be a districtName() string. An unknown
+    // key is a REJECTION, not a skip — "residental" must not silently no-op.
+    lua_pushnil(L);
+    while (lua_next(L, -2) != 0) {
+        if (lua_type(L, -2) != LUA_TSTRING)
+            return fail("archetype_book: district keys must be strings");
+        const std::string dname = lua_tostring(L, -2);
+        int tag = -1;
+        for (int t = 0; t < 5; ++t)
+            if (dname == districtName(static_cast<DistrictTag>(t))) tag = t;
+        if (tag < 0)
+            return fail("archetype_book: unknown district '" + dname +
+                        "' (financial/commercial/residential/oldtown/industrial)");
+        if (!lua_istable(L, -1))
+            return fail("archetype_book." + dname + ": expected a list of "
+                        "{\"recipe\", weight} pairs");
+        // The district's entries: {name, weight} pairs, resolved to registry
+        // indices; weights normalized into ascending cumulative thresholds.
+        std::vector<std::pair<int, double>> entries;
+        const lua_Integer n = luaL_len(L, -1);
+        for (lua_Integer i = 1; i <= n; ++i) {
+            lua_geti(L, -1, i);
+            if (!lua_istable(L, -1))
+                return fail("archetype_book." + dname + "[" +
+                            std::to_string(i) + "]: expected {\"recipe\", weight}");
+            lua_geti(L, -1, 1);
+            lua_geti(L, -2, 2);
+            const char* rname = lua_tostring(L, -2);
+            const bool isNum = lua_isnumber(L, -1) != 0;
+            const double w = isNum ? lua_tonumber(L, -1) : 0.0;
+            if (!rname || !isNum)
+                return fail("archetype_book." + dname + "[" +
+                            std::to_string(i) + "]: expected {\"recipe\", weight}");
+            const int ri = architectRecipeIndex(rname);
+            if (ri < 0)
+                return fail("archetype_book." + dname + ": unknown recipe '" +
+                            std::string(rname) +
+                            "' — see architect.cpp kRecipeRegistry for "
+                            "the vocabulary");
+            if (!(w > 0.0))
+                return fail("archetype_book." + dname + ": weight for '" +
+                            std::string(rname) + "' must be > 0");
+            entries.push_back({ri, w});
+            lua_pop(L, 3);
+        }
+        if (entries.empty())
+            return fail("archetype_book." + dname + ": empty table — omit the "
+                        "district to keep its compiled ladder");
+        // Cumulative thresholds as runningSum/total: for k/100-style weights
+        // this reproduces the compiled ladders' literals to the exact double,
+        // which is what makes a default-weight book bit-identical.
+        double total = 0;
+        for (const auto& e : entries) total += e.second;
+        auto& tbl = book.tables[static_cast<std::size_t>(tag)];
+        double run = 0;
+        for (const auto& e : entries) {
+            run += e.second;
+            tbl.push_back({static_cast<Real>(run / total), e.first});
+        }
+        tbl.back().first = Real(1);   // guard the float tail: the last entry
+                                      // owns everything up to roll = 1
+        lua_pop(L, 1);   // value; key stays for lua_next
+    }
+    lua_pop(L, 1);       // the book table
+    if (book.empty())
+        return fail("archetype_book: no districts — delete the file or add a "
+                    "district table");
+    return book;
+}
+
 namespace {
 
 // mesh.lathe{profile={{r,y},...}, segments=16} -> mesh : revolve a 2D profile

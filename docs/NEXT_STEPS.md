@@ -51,12 +51,24 @@ line reproduces this round's baseline byte-for-byte. Completion notes (where
 reality differed from the sketch) are at the top of
 `docs/road-graph-unification-plan.md`.
 
-**3. Expose the architect to Lua** — wants its own design pass. Three layers:
-zoning (`tagAt`, ~60 lines), selection (5 if/else weight ladders — **this is the
-layer worth exposing**), and 56 recipe bodies. The bodies are not data: they branch
-on `coreness`/`roomy` and feed back `cx.slender`. Porting them is what the abandoned
-branch attempted and it failed. Also: a Lua table naming an unknown recipe must
-hard-error, not skip — see the `courtMinArea` false-knob in `parcel.h`.
+**3. Expose the architect to Lua** — **DONE (2026-08-17)**, scoped exactly as
+the design pass concluded: the SELECTION layer only. `archetype_book.lua` sets
+per-district `{recipe, weight}` tables keyed by the same `out.name` strings the
+style book uses; `makeArchetypeBook` resolves it ONCE at load against a new
+56-entry registry (`architect.cpp kRecipeRegistry`) into cumulative tables —
+zero per-lot Lua, and integer weights normalize to the compiled ladders' exact
+`k/100` doubles, so an identity-weight book reproduces every city BIT-FOR-BIT
+(gated: `archetype_book_identity_weights_reproduce_the_ladders`, 2000
+comparisons including floors + body seed). The bodies stay C++ (the failed
+branch's lesson); zoning stays C++; landmark lots ignore the book (placed by
+quota, never rolled — which is why an all-`glass_tower` financial book changes
+nothing on living_city: its financial lots are ALL landmark picks; skew
+residential and built drops 80 → 64, the end-to-end proof). The hard-error
+contract is total and tested (`archetype_book_hard_errors_never_skip`): an
+unknown recipe/district, a weight ≤ 0, or an empty table REJECTS the whole
+book with the offender named — never half a book, never a silent skip. Ships
+as `assets/scripts/archetype_book.lua.example` (compiled weights verbatim,
+rename to activate); both loaders wired.
 
 **4. Inverted faces at swept-body bends** — **DONE (2026-08-17)**. The
 corrected diagnosis (the mitre, not the pads) held, and the mechanism was: at

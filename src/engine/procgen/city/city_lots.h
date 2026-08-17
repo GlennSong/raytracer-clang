@@ -1,6 +1,7 @@
 #ifndef RAYTRACER_ENGINE_PROCGEN_CITY_CITY_LOTS_H
 #define RAYTRACER_ENGINE_PROCGEN_CITY_CITY_LOTS_H
 
+#include "architect.h"      // ArchetypeBook (the Lua-authored selection layer)
 #include "polygon.h"        // Poly2, Vec2
 #include "shape_grammar.h"  // BuildingParams (the style-book hook's target)
 #include "../../../rt_math.h"   // Vec3
@@ -138,6 +139,11 @@ struct LotParams {
     // hot-reloadable). Empty = the built-in looks. Row units get
     // "rowhouse_unit". Overrides must stay deterministic (pure data).
     std::function<void(const std::string& recipe, BuildingParams&)> styleHook;
+    // ARCHETYPE BOOK (architect.h): the Lua-authored SELECTION layer — per-
+    // district recipe weights, resolved to registry indices at load
+    // (makeArchetypeBook). Empty = the architect's compiled ladders. The
+    // style book restyles what stands; this book decides WHAT stands.
+    ArchetypeBook archetypeBook;
 };
 
 // The intermediate planning geometry, exposed for debug visualization: the block

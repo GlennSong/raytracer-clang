@@ -1821,6 +1821,28 @@ static GrownLots growCityLots(const std::vector<engine::RoadEntity>& nets,
                 LOG_WARN << "style_book.lua: " << err;
         }
     }
+    // The ARCHETYPE BOOK (the architect's Lua SELECTION layer): per-district
+    // recipe weights from assets/scripts/archetype_book.lua, resolved to
+    // plain data here — no Lua survives into the grow. ALL-OR-NOTHING: a
+    // book with any invalid entry is REJECTED with LOG_ERROR (never half
+    // applied, never silently skipped — the courtMinArea false-knob rule).
+    {
+        std::string ab = loadScriptCode("archetype_book.lua", levelDir);
+        if (const std::string p = resolveScriptPath("archetype_book.lua", levelDir);
+            !p.empty())
+            g_loadedScriptFiles.push_back(p);
+        if (!ab.empty()) {
+            ScriptVM vm;   // the book is pure data once parsed
+            openProcgenLibrary(vm);
+            std::string err;
+            engine::ArchetypeBook book = engine::makeArchetypeBook(vm, ab, &err);
+            if (!err.empty())
+                LOG_ERROR << "archetype_book.lua REJECTED (all-or-nothing): "
+                          << err;
+            else
+                lp.archetypeBook = std::move(book);
+        }
+    }
 #else
     (void)levelDir;
 #endif
