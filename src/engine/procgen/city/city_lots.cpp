@@ -2132,9 +2132,25 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         // faces whose interior was mostly roadway after the clear-push. A number
         // climbing there means the road graph is eating its own blocks — a road
         // bug, not a lot-tuning one.
+        // COVERAGE, not just counts. "The blocks look empty" is a statement about
+        // FOOTPRINT AREA, and the two come apart: a round that raised the lot count
+        // while shrinking every lot moves this number the wrong way, and one that
+        // built the same number of bigger buildings moves it the right way. Counts
+        // alone sent us chasing the parcel grain twice (see commit d5db9a7).
+        double builtArea = 0, blockArea = 0;
+        for (const LotBuilding& lb : out)
+            if (lb.type != "park" && lb.recipe != "court_green" &&
+                lb.plan.size() >= 3)
+                builtArea += std::fabs(area(lb.plan));
+        for (const Poly2& b2 : dbg->blocks) blockArea += std::fabs(area(b2));
+        const double coverPct =
+            blockArea > 1.0 ? 100.0 * builtArea / blockArea : 0.0;
         LOG_INFO << "[citylots] " << dbg->blocks.size() << " blocks -> "
                  << dbg->lots.size() << " lots, " << nBuilt << " built, "
-                 << nGreen << " green, " << nCourt << " courts | rej: chance "
+                 << nGreen << " green, " << nCourt << " courts | COVER "
+                 << static_cast<int>(builtArea) << " m2 of "
+                 << static_cast<int>(blockArea) << " m2 buildable ("
+                 << (static_cast<int>(coverPct * 10) / 10.0) << "%) | rej: chance "
                  << dbg->rejChance << ", sliver " << dbg->rejSliver
                  << ", aspect " << dbg->rejAspect << ", fill " << dbg->rejFill
                  << ", plan " << dbg->rejPlan << ", clear " << dbg->rejClear

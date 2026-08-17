@@ -174,7 +174,24 @@ Stages not in the original list but load-bearing in practice:
 | Massing → geometry | Eight `Massing` values dispatched by inline `if` chains inside the ~1200-line `growLotBuildings`; geometry from `shape_grammar.cpp:growPlanBuilding` / `growBuilding` |
 | Into the scene | Parts merged per `PartId` district-wide → `chunkMeshByCell` (250 m) → one `Renderable` per cell × part; **one** `MeshCollider` of extruded plan prisms for the whole district; HLOD via `appendLotMassBox` |
 
-### Known composition problem: blocks render mostly empty
+### Blocks are NOT under-built — the city is mostly not blocks
+
+> **Correction (2026-08-16).** An earlier revision of this section, written from a
+> top-down capture, said blocks were "~20% covered" and blamed the parcel grain.
+> That was eyeballing, and it was wrong. `growLotBuildings` now reports coverage
+> directly, and on `living_city` buildings cover **60.5% of the buildable block
+> interior** (14,683 m² of 24,252 m²) — a normal, even dense, city block.
+>
+> What the aerial actually shows is that the blocks total 24,252 m² inside a city
+> footprint of roughly 90,000 m². **~73% of the city is roads, road margins and
+> leftover terrain, not blocks at all.** So the lever is the road network and the
+> margins — not the parceller, and not the lot grain.
+>
+> Two rounds of tuning were spent on the wrong target before this was measured
+> (commit d5db9a7 for the parcel theories, and the block-size knob below). The
+> per-block probe is `RT_PARCEL_DEBUG=1`.
+
+### Older analysis: why block *interiors* lose area
 
 Not a bug list — how the current parameters compose. `growLotBuildings` prints a
 full `[citylots]` diagnostic every load. **Read that line first**, because it

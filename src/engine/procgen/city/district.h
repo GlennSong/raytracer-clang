@@ -24,6 +24,18 @@ struct DistrictParams {
     double jitter = 0.16;      // street-position randomization (fraction of extent)
     double arteryWidth = 6;    // carriageway width tagged on arterial edges
     double streetWidth = 3;    // carriageway width tagged on local edges
+    // DOWNTOWN BLOCKS ARE BIGGER. A uniform blockSize gives the core the same
+    // grain as the outskirts, which is backwards: a financial district is built of
+    // few large plates (one tower per block), a residential fringe of many small
+    // ones. It also starves the lot parceler — the architect's financial grain is
+    // 42x48 m plates, and on an 82 m block whose interior is ~43 m across after the
+    // road margin that is larger than the whole block, so the block yields ONE lot
+    // (measured on living_city, see RT_PARCEL_DEBUG).
+    //
+    // `coreBlockScale` multiplies blockSizeMin/Max at the centre and eases to 1.0
+    // at `coreRadius`. 1.0 = the old uniform behaviour.
+    double coreBlockScale = 1.0;
+    double coreRadius = 0.0;   // 0 = derive as radius * 0.45
     std::uint32_t seed = 1;
 };
 

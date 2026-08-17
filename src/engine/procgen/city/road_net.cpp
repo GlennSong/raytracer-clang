@@ -2182,6 +2182,11 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         dp.seed         = g.value("seed", 1u);
         dp.arteryWidth  = g.value("artery_width", net.width * 1.6);
         dp.streetWidth  = g.value("street_width", net.width);
+        // Downtown blocks are bigger (see DistrictParams): `core_block_scale`
+        // multiplies the block size at the centre and eases out to 1.0 at
+        // `core_radius` (default: 45% of the footprint). 1.0 = uniform, as before.
+        dp.coreBlockScale = g.value("core_block_scale", 1.0);
+        dp.coreRadius     = g.value("core_radius", 0.0);
         base = buildDistrict(dp).graph;
     }
     double curviness = g.value("curviness", 0.0);    // 0 = straight grid; >0 sweeps streets into curves
