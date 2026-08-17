@@ -80,25 +80,27 @@ TEST_CASE(cross_section_ramp) {
 // (generator -> planarize/capDegree/cleanup -> netGraph), not collapse every
 // surface edge to Local. Regression for the netGraph RoadClass::Local hardcode.
 TEST_CASE(generated_net_carries_classes) {
-    RoadNet net;
+    RoadEntity net;
     nlohmann::json recipe = {
         {"kind", "district"}, {"radius", 160.0}, {"arterials", 3},
         {"block_size", 40.0}, {"seed", 3},
     };
-    applyGenerateRecipe(net, recipe);
-    CHECK(!net.edges.empty());
-    // the district generator distinguishes arterials from local streets.
-    CHECK(net.edgeClasses.size() == net.edges.size());   // parallel array kept in sync
+    applyGenerateRecipe(net, recipe, nullptr);
+    CHECK(!net.graph.edges.empty());
+    // the district generator distinguishes arterials from local streets — and
+    // every edge came out of generation RESOLVED (the invariant the parallel
+    // class/width arrays used to need a size check for).
     int arterials = 0, locals = 0;
-    for (RoadClass c : net.edgeClasses) {
-        if (c == RoadClass::Arterial) ++arterials;
-        if (c == RoadClass::Local) ++locals;
+    for (const RoadEdge& e : net.graph.edges) {
+        CHECK(e.width > 0.0);                             // widths resolved, never 0
+        if (e.klass == RoadClass::Arterial) ++arterials;
+        if (e.klass == RoadClass::Local) ++locals;
     }
     CHECK(arterials > 0);                                 // arterials survived the pipeline
     CHECK(locals > 0);                                    // and so did local streets
 
     // And the class reaches the meshing graph (netGraph no longer hardcodes Local).
-    const RoadGraph g = navRoadGraph(net);
+    const RoadGraph g = navRoadGraph(net, nullptr);
     int nonLocal = 0;
     for (const RoadEdge& e : g.edges) if (e.klass != RoadClass::Local) ++nonLocal;
     CHECK(nonLocal > 0);

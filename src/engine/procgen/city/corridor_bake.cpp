@@ -10,63 +10,55 @@ namespace engine {
 
 namespace {
 
-// Find-or-add a named preset in the net's spec table.
-int ensureSpec(RoadNet& net, const std::string& preset) {
-    for (int i = 0; i < static_cast<int>(net.specs.size()); ++i)
-        if (net.specs[i].name == preset) return i;
-    net.specs.push_back(roadSpecPreset(preset));
-    return static_cast<int>(net.specs.size()) - 1;
+// Find-or-add a named preset in the graph's spec table.
+int ensureSpec(RoadEntity& road, const std::string& preset) {
+    for (int i = 0; i < static_cast<int>(road.graph.specs.size()); ++i)
+        if (road.graph.specs[i].name == preset) return i;
+    road.graph.specs.push_back(roadSpecPreset(preset));
+    return static_cast<int>(road.graph.specs.size()) - 1;
 }
 
-// Pad every parallel-to-edges array to the current edge count, then push one
-// entry for a new edge. Baking must never leave the arrays ragged — a short
-// parallel array silently means "default" for every edge past its end.
-void pushEdge(RoadNet& net, int a, int b, double width, RoadClass klass,
+// Append a baked corridor edge. Every field rides on the ONE RoadEdge — no
+// parallel arrays to pad, nothing that can go ragged.
+void pushEdge(RoadEntity& road, int a, int b, double width, RoadClass klass,
               int layer, int spec) {
-    const std::size_t n = net.edges.size();
-    net.edgeWidths.resize(n, 0.0);
-    net.edgeLayers.resize(n, 0);
-    net.edgeClasses.resize(n, RoadClass::Local);
-    net.edgeSpecs.resize(n, -1);
-    net.edgeBaked.resize(n, 0);
-    net.edges.push_back({ a, b });
-    net.edgeWidths.push_back(width);
-    net.edgeLayers.push_back(layer);
-    net.edgeClasses.push_back(klass);
-    net.edgeSpecs.push_back(spec);
-    net.edgeBaked.push_back(1);        // street passes skip; corridor draws itself
+    RoadEdge e;
+    e.a = a; e.b = b;
+    e.width = static_cast<Real>(width);
+    e.klass = klass;
+    e.layer = layer;
+    e.spec = spec;
+    e.baked = true;                    // street passes skip; corridor draws itself
+    road.graph.edges.push_back(e);
 }
 
-// Add a node with an (optionally absolute) deck height. nodeElev is parallel
-// to nodes; NaN = at grade (drape).
-int pushNode(RoadNet& net, const Vec2& p, double elev) {
-    const std::size_t n = net.nodes.size();
-    net.nodeElev.resize(n, std::numeric_limits<double>::quiet_NaN());
-    net.nodes.push_back(p);
-    net.nodeElev.push_back(elev);
-    return static_cast<int>(net.nodes.size()) - 1;
+// Add a node with an (optionally absolute) deck height. NaN = at grade (drape).
+int pushNode(RoadEntity& road, const Vec2& p, double elev) {
+    RoadNode n;
+    n.pos = p;
+    if (std::isfinite(elev)) {
+        n.elev = static_cast<Real>(elev);
+        n.elevAbsolute = true;
+    }
+    road.graph.nodes.push_back(n);
+    return static_cast<int>(road.graph.nodes.size()) - 1;
 }
 
-// Stamp a semantic-layer hint (#17) on a net node: the bake KNOWS which
-// node is a gore (and whether the ramp joins or leaves) and which street
-// node is a landing — geometry alone cannot tell a Merge from a mirrored
-// Diverge. classifyRoadGraph honours these at degree >= 3.
-void stampKind(RoadNet& net, int ni, JunctionKind k) {
+// Stamp a semantic-layer hint (#17) on a node: the bake KNOWS which node is a
+// gore (and whether the ramp joins or leaves) and which street node is a
+// landing — geometry alone cannot tell a Merge from a mirrored Diverge.
+// classifyRoadGraph honours these at degree >= 3.
+void stampKind(RoadEntity& road, int ni, JunctionKind k) {
     if (ni < 0) return;
-    if (net.nodeKinds.size() < net.nodes.size())
-        net.nodeKinds.resize(net.nodes.size(),
-                             static_cast<uint8_t>(JunctionKind::Auto));
-    net.nodeKinds[ni] = static_cast<uint8_t>(k);
+    road.graph.nodes[ni].kind = k;
 }
 
-// Store an authored tangent for a baked node (parallel array padded). The
-// magnitude follows the Catmull-Rom convention netGraph's Hermite uses
-// (~half the span between neighbouring nodes), so sparse nodes reproduce
-// the solved curve instead of chording it.
-void setTangent(RoadNet& net, int ni, const Vec2& t) {
-    if (net.tangents.size() < net.nodes.size())
-        net.tangents.resize(net.nodes.size(), Vec2(0, 0));
-    net.tangents[ni] = t;
+// Store an authored tangent for a baked node. The magnitude follows the
+// Catmull-Rom convention the sampler's Hermite uses (~half the span between
+// neighbouring nodes), so sparse nodes reproduce the solved curve instead of
+// chording it.
+void setTangent(RoadEntity& road, int ni, const Vec2& t) {
+    road.graph.nodes[ni].tangent = t;
 }
 
 }  // namespace
@@ -74,22 +66,22 @@ void setTangent(RoadNet& net, int ni, const Vec2& t) {
 // The bake-time PLANARITY audit (#18): does any edge in [e0, end) cross an
 // EARLIER edge in XZ — sharing no endpoint position — with less than
 // `clearance` metres of vertical gap at the crossing? Node Y = authored
-// nodeElev where finite, else terrain (net.heightAt). This is the check the
+// elevation where absolute, else terrain (`heightAt`). This is the check the
 // planner's §12 guard never did: it tested the straight gore->target CHORD,
 // never the authored clothoid the ramp actually drives.
-bool chainCrossesNet(const RoadNet& net, std::size_t e0, double clearance) {
+bool chainCrossesNet(const RoadEntity& road, std::size_t e0, double clearance,
+                     const RoadGroundFn& heightAt) {
+    const RoadGraph& g = road.graph;
     auto nodeY = [&](int v) {
-        if (v < static_cast<int>(net.nodeElev.size()) &&
-            std::isfinite(net.nodeElev[v]))
-            return net.nodeElev[v];
-        return net.heightAt ? net.heightAt(net.nodes[v].x, net.nodes[v].y) : 0.0;
+        if (g.nodes[v].elevAbsolute) return static_cast<double>(g.nodes[v].elev);
+        return heightAt ? heightAt(g.nodes[v].pos.x, g.nodes[v].pos.y) : 0.0;
     };
-    for (std::size_t i = e0; i < net.edges.size(); ++i) {
-        const Vec2 p = net.nodes[net.edges[i][0]];
-        const Vec2 q = net.nodes[net.edges[i][1]];
+    for (std::size_t i = e0; i < g.edges.size(); ++i) {
+        const Vec2 p = g.nodes[g.edges[i].a].pos;
+        const Vec2 q = g.nodes[g.edges[i].b].pos;
         for (std::size_t j = 0; j < e0; ++j) {
-            const Vec2 r = net.nodes[net.edges[j][0]];
-            const Vec2 s2 = net.nodes[net.edges[j][1]];
+            const Vec2 r = g.nodes[g.edges[j].a].pos;
+            const Vec2 s2 = g.nodes[g.edges[j].b].pos;
             // Shared endpoint (by position): adjacency, not a crossing.
             const double tol2 = 1.0;
             if ((p - r).lengthSquared() < tol2 || (p - s2).lengthSquared() < tol2 ||
@@ -102,10 +94,10 @@ bool chainCrossesNet(const RoadNet& net, std::size_t e0, double clearance) {
             const double t = (pr.x * d2.y - pr.y * d2.x) / den;
             const double u = (pr.x * d1.y - pr.y * d1.x) / den;
             if (t <= 0.02 || t >= 0.98 || u <= 0.02 || u >= 0.98) continue;
-            const double ya = nodeY(net.edges[i][0]) +
-                              (nodeY(net.edges[i][1]) - nodeY(net.edges[i][0])) * t;
-            const double yb = nodeY(net.edges[j][0]) +
-                              (nodeY(net.edges[j][1]) - nodeY(net.edges[j][0])) * u;
+            const double ya = nodeY(g.edges[i].a) +
+                              (nodeY(g.edges[i].b) - nodeY(g.edges[i].a)) * t;
+            const double yb = nodeY(g.edges[j].a) +
+                              (nodeY(g.edges[j].b) - nodeY(g.edges[j].a)) * u;
             if (std::fabs(ya - yb) < clearance) {
                 LOG_ERROR << "[bake] ramp chain crosses an existing road at ("
                           << (p + d1 * t).x << ", " << (p + d1 * t).y
@@ -118,25 +110,26 @@ bool chainCrossesNet(const RoadNet& net, std::size_t e0, double clearance) {
     return false;
 }
 
-std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
+std::vector<int> bakeCorridorIntoNet(RoadEntity& road, const CorridorDef& def,
                                      const std::vector<RampPath>& rampPaths,
-                                     const CorridorBakeParams& params) {
+                                     const CorridorBakeParams& params,
+                                     const RoadGroundFn& heightAt) {
     std::vector<int> mainline;
     const Real L = def.horizontal.length();
     if (L < 1.0) return mainline;
-    const int streetNodes = static_cast<int>(net.nodes.size());
-    const std::size_t firstMainlineEdge = net.edges.size();
+    const int streetNodes = static_cast<int>(road.graph.nodes.size());
+    const std::size_t firstMainlineEdge = road.graph.edges.size();
 
     // The SAMPLED existing net (#18): streets are Catmull-Rom curves in the
     // derived graph — a chord-level test misses a ramp slicing through a
     // street's BOW (the metro audit caught exactly that at dY = 0). The
     // authored ramp polylines are tested against these curve segments; the
     // net grows corridor-by-corridor, so earlier corridors are included.
-    const RoadGraph sampled = navRoadGraph(net);
+    const RoadGraph sampled = navRoadGraph(road, heightAt);
     auto sampledY = [&](int v) {
         const RoadNode& nd = sampled.nodes[v];
         if (nd.elevAbsolute) return static_cast<double>(nd.elev);
-        return (net.heightAt ? net.heightAt(nd.pos.x, nd.pos.y) : 0.0) +
+        return (heightAt ? heightAt(nd.pos.x, nd.pos.y) : 0.0) +
                static_cast<double>(nd.elev);
     };
     // Does the authored polyline cross a sampled segment at like height,
@@ -174,10 +167,10 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
         return false;
     };
 
-    const int fwySpec = ensureSpec(net, "freeway3");
-    const int rampSpec = ensureSpec(net, "ramp1");
-    const double fwyWidth = net.specs[fwySpec].carriagewayWidth();
-    const double rampWidth = net.specs[rampSpec].carriagewayWidth();
+    const int fwySpec = ensureSpec(road, "freeway3");
+    const int rampSpec = ensureSpec(road, "ramp1");
+    const double fwyWidth = road.graph.specs[fwySpec].carriagewayWidth();
+    const double rampWidth = road.graph.specs[rampSpec].carriagewayWidth();
 
     // --- Mainline stations: 0, L, every gore (exactly — the gore must BE a
     // node so the ramp can attach by id), and even fill at ~mainlineStep.
@@ -211,17 +204,17 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
         const double s = filled[fi];
         const Vec2 p = def.horizontal.pos(static_cast<Real>(s));
         const double y = def.vertical.elevation(static_cast<Real>(s));
-        const int ni = pushNode(net, p, y);
+        const int ni = pushNode(road, p, y);
         Vec2 tan = def.horizontal.tangent(static_cast<Real>(s));
         const double tl = tan.length();
         if (tl > 1e-9) {
             const double prevS = fi > 0 ? filled[fi - 1] : s;
             const double nextS = fi + 1 < filled.size() ? filled[fi + 1] : s;
             const double span = std::max(1.0, (nextS - prevS) * 0.5);
-            setTangent(net, ni, tan * (span / tl));
+            setTangent(road, ni, tan * (span / tl));
         }
         if (!mainline.empty())
-            pushEdge(net, mainline.back(), ni, fwyWidth, RoadClass::Freeway,
+            pushEdge(road, mainline.back(), ni, fwyWidth, RoadClass::Freeway,
                      /*layer=*/1, fwySpec);
         mainline.push_back(ni);
     }
@@ -233,10 +226,10 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
     // like height. The mainline is the backbone — rolling it back would
     // orphan the whole interchange — so this WARNS loudly instead of
     // dropping: an authoring error the level must fix.
-    if (chainCrossesNet(net, static_cast<std::size_t>(streetNodes) == 0
-                                 ? 0
-                                 : firstMainlineEdge,
-                        4.5)) {
+    if (chainCrossesNet(road, static_cast<std::size_t>(streetNodes) == 0
+                                  ? 0
+                                  : firstMainlineEdge,
+                        4.5, heightAt)) {
         LOG_ERROR << "[bake] freeway MAINLINE crosses a surface road at like "
                      "height — check the corridor's vertical profile";
     }
@@ -249,18 +242,17 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
         double best = 1e18;
         const Vec2 gp = def.horizontal.pos(static_cast<Real>(gores[xi]));
         for (int ni : mainline) {
-            const double d = (net.nodes[ni] - gp).lengthSquared();
+            const double d = (road.graph.nodes[ni].pos - gp).lengthSquared();
             if (d < best) { best = d; gore = ni; }
         }
         if (gore < 0 || best > 1.0) continue;      // must be exact, not near
         if (rampPathCrosses(rampPaths[xi].pts)) continue;   // #18: author-curve audit
-        // Snapshot every parallel array: if this ramp's authored chain turns
-        // out to CROSS the net (#18), the whole chain rolls back and the
-        // gore/landing kinds are never stamped.
-        const std::size_t snapNodes = net.nodes.size();
-        const std::size_t snapEdges = net.edges.size();
-        const std::size_t snapTang = net.tangents.size();
-        const std::size_t snapKinds = net.nodeKinds.size();
+        // Snapshot the graph: if this ramp's authored chain turns out to CROSS
+        // the net (#18), the whole chain rolls back and the gore/landing kinds
+        // are never stamped. Two resizes — tangents, kinds and elevations live
+        // ON the nodes now, so they roll back with them.
+        const std::size_t snapNodes = road.graph.nodes.size();
+        const std::size_t snapEdges = road.graph.edges.size();
 
         // 2a RIBBON EXTRACTION: drop the gore band (junction surface, owned
         // by the 2c gore treatment) and orient the walk GORE -> LANDING. An
@@ -338,16 +330,16 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
         for (std::size_t ki = 0; ki < keep.size(); ++ki) {
             const std::size_t k = keep[ki];
             const Vec2 q(rp[k].x, rp[k].z);
-            const int ni = pushNode(net, q, rp[k].y);   // rides authored heights
+            const int ni = pushNode(road, q, rp[k].y);   // rides authored heights
             // Tangent: authored direction, Catmull-Rom magnitude (half the
             // arc span between the neighbouring KEPT nodes).
             const double prevA = ki > 0 ? arc[keep[ki - 1]] : arc[k];
             const double nextA = ki + 1 < keep.size() ? arc[keep[ki + 1]] : arc[k];
             const Vec2 dir = authoredDir(k);
             if (!(dir.x == 0.0 && dir.y == 0.0))
-                setTangent(net, ni, dir * std::max(1.0, (nextA - prevA) * 0.5));
+                setTangent(road, ni, dir * std::max(1.0, (nextA - prevA) * 0.5));
             if (ni != prev)
-                pushEdge(net, prev, ni, rampWidth, RoadClass::Ramp, /*layer=*/0, rampSpec);
+                pushEdge(road, prev, ni, rampWidth, RoadClass::Ramp, /*layer=*/0, rampSpec);
             prev = ni;
         }
         // LANDING GRAFT: the ribbon's authored end stays a real node (the
@@ -360,11 +352,11 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
             int snap = -1;
             double sd = params.landingSnap * params.landingSnap;
             for (int v = 0; v < streetNodes; ++v) {
-                const double d = (net.nodes[v] - end).lengthSquared();
+                const double d = (road.graph.nodes[v].pos - end).lengthSquared();
                 if (d < sd) { sd = d; snap = v; }
             }
             if (snap >= 0 && snap != prev)
-                pushEdge(net, prev, snap, rampWidth, RoadClass::Ramp, /*layer=*/0,
+                pushEdge(road, prev, snap, rampWidth, RoadClass::Ramp, /*layer=*/0,
                          rampSpec);
             landing = snap;
         }
@@ -373,27 +365,16 @@ std::vector<int> bakeCorridorIntoNet(RoadNet& net, const CorridorDef& def,
         // already in the net (streets + mainline + earlier ramps). On a
         // violation the chain rolls back whole — a criss-crossed ramp never
         // enters the graph.
-        if (chainCrossesNet(net, snapEdges, 4.5)) {
-            net.nodes.resize(snapNodes);
-            net.nodeElev.resize(std::min(net.nodeElev.size(), snapNodes));
-            net.edges.resize(snapEdges);
-            net.edgeWidths.resize(std::min(net.edgeWidths.size(), snapEdges));
-            net.edgeLayers.resize(std::min(net.edgeLayers.size(), snapEdges));
-            net.edgeClasses.resize(std::min(net.edgeClasses.size(), snapEdges));
-            net.edgeSpecs.resize(std::min(net.edgeSpecs.size(), snapEdges));
-            net.edgeBaked.resize(std::min(net.edgeBaked.size(), snapEdges));
-            net.tangents.resize(snapTang);
-            net.nodeKinds.resize(std::min(net.nodeKinds.size(), snapKinds));
+        if (chainCrossesNet(road, snapEdges, 4.5, heightAt)) {
+            road.graph.nodes.resize(snapNodes);
+            road.graph.edges.resize(snapEdges);
             continue;
         }
-        stampKind(net, gore,
+        stampKind(road, gore,
                   def.exits[xi].onRamp ? JunctionKind::Merge
                                        : JunctionKind::Diverge);
-        if (landing >= 0) stampKind(net, landing, JunctionKind::Landing);
+        if (landing >= 0) stampKind(road, landing, JunctionKind::Landing);
     }
-    // Tangent array stays parallel even if the last pushes were snaps.
-    if (net.tangents.size() < net.nodes.size())
-        net.tangents.resize(net.nodes.size(), Vec2(0, 0));
     return mainline;
 }
 

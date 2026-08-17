@@ -14,27 +14,29 @@ using namespace mesh_invariants;
 namespace {
 
 // A degree-N junction: a centre node at the origin with `dirs` arms radiating to
-// `armLen`. edgeWidths/edgeClasses parallel the arms (empty = default).
-RoadNet junction(const std::vector<Vec2>& dirs, double armLen,
+// `armLen`. `widths`/`classes` parallel the arms (missing/zero = the look's
+// default) — resolved onto each edge at construction, as the graph requires.
+RoadEntity junction(const std::vector<Vec2>& dirs, double armLen,
                  std::vector<double> widths = {},
                  std::vector<RoadClass> classes = {}) {
-    RoadNet n;
-    n.nodes.push_back(Vec2(0, 0));                 // centre = node 0
+    RoadEntity n;
+    n.graph.nodes.push_back(RoadNode{Vec2(0, 0)});   // centre = node 0
     for (std::size_t i = 0; i < dirs.size(); ++i) {
         Vec2 d = dirs[i];
         double l = d.length();
         Vec2 u = l > 1e-9 ? d * (1.0 / l) : Vec2(1, 0);
-        n.nodes.push_back(u * armLen);
-        n.edges.push_back({0, static_cast<int>(i + 1)});
+        n.graph.nodes.push_back(RoadNode{u * armLen});
+        const double w = (i < widths.size() && widths[i] > 0.0) ? widths[i]
+                                                                : n.look.defaultWidth;
+        const RoadClass k = i < classes.size() ? classes[i] : RoadClass::Local;
+        n.graph.addEdge(0, static_cast<int>(i + 1), w, k);
     }
-    n.edgeWidths = std::move(widths);
-    n.edgeClasses = std::move(classes);
     return n;
 }
 
 // Assert the universal weld invariants on a fixture's meshed output.
-void checkWeld(const RoadNet& net, const char* /*label*/) {
-    RenderMesh m = buildRoadNetMesh(net);
+void checkWeld(const RoadEntity& net, const char* /*label*/) {
+    RenderMesh m = buildRoadNetMesh(net, nullptr);
     CHECK(triangleCount(m) > 0);                   // something was welded
     CHECK(!hasNonFinite(m));                       // no NaN/Inf blow-up
     CHECK(indicesInRange(m));                      // every index is real
@@ -54,9 +56,9 @@ void checkWeld(const RoadNet& net, const char* /*label*/) {
 
 // A — a straight through road (degree-2, one chain).
 TEST_CASE(weld_straight_chain_is_clean) {
-    RoadNet n;
-    n.nodes = { Vec2(-40, 0), Vec2(40, 0) };
-    n.edges = { {0, 1} };
+    RoadEntity n;
+    n.graph.nodes = { RoadNode{Vec2(-40, 0)}, RoadNode{Vec2(40, 0)} };
+    n.graph.addEdge(0, 1, n.look.defaultWidth);
     checkWeld(n, "straight");
 }
 
@@ -79,7 +81,7 @@ TEST_CASE(weld_skewed_cross_is_clean) {
 // E — WIDE meets NARROW: a wide arterial through-road crossed by a narrow local.
 // The mixed-width junction that drove the crosswalk-jut; assert its weld is clean.
 TEST_CASE(weld_wide_meets_narrow_is_clean) {
-    RoadNet n = junction({Vec2(-1, 0), Vec2(1, 0), Vec2(0, 1)}, 40.0,
+    RoadEntity n = junction({Vec2(-1, 0), Vec2(1, 0), Vec2(0, 1)}, 40.0,
                          /*widths*/ {13.0, 13.0, 7.0},
                          /*classes*/ {RoadClass::Arterial, RoadClass::Arterial,
                                       RoadClass::Local});
@@ -145,18 +147,21 @@ TEST_CASE(weld_authored_and_draped_spines_coexist) {
     for (double h : profs[1]) CHECK(std::fabs(h - (2.5 + 0.06)) < 1e-6);  // street: drape+topY
 }
 
-// K — the WHOLE authoring path: a RoadNet with per-node absolute elevation
+// K — the WHOLE authoring path: a RoadEntity with per-node absolute elevation
 // (nodeElev) is meshed by buildRoadNetMesh — the SAME entry point streets use —
 // into an elevated deck. Proves an author (or a future corridor publisher) can
 // express a 3-D road as graph data and the one welder builds it; no separate
 // bridge mesher, no layer>0 bail.
 TEST_CASE(road_net_meshes_an_authored_elevated_span) {
-    RoadNet n;
-    n.nodes = { Vec2(-40, 0), Vec2(40, 0) };
-    n.edges = { {0, 1} };
-    n.nodeElev = { 9.0, 9.0 };                     // both ends at +9 -> elevated span
-    n.heightAt = [](double, double) { return -12.0; };   // ground far below
-    RenderMesh m = buildRoadNetMesh(n);
+    RoadEntity n;
+    n.graph.nodes = { RoadNode{Vec2(-40, 0)}, RoadNode{Vec2(40, 0)} };
+    for (RoadNode& nd : n.graph.nodes) {           // both ends at +9 -> elevated span
+        nd.elev = 9.0;
+        nd.elevAbsolute = true;
+    }
+    n.graph.addEdge(0, 1, n.look.defaultWidth);
+    const RoadGroundFn ground = [](double, double) { return -12.0; };   // ground far below
+    RenderMesh m = buildRoadNetMesh(n, ground);
     CHECK(triangleCount(m) > 0);
     CHECK(!hasNonFinite(m));
     CHECK(indicesInRange(m));
@@ -174,15 +179,22 @@ TEST_CASE(road_net_meshes_an_authored_elevated_span) {
 // weld gaining a freeway feature that used to live only in corridor_mesh.
 TEST_CASE(weld_freeway_deck_gets_barriers) {
     auto makeNet = [](RoadClass k) {
-        RoadNet n;
-        for (int i = 0; i <= 8; ++i) n.nodes.push_back(Vec2(-140 + i * 35, 0));
-        n.nodeElev = { 0, 3, 7, 9, 9, 9, 7, 3, 0 };    // elevated span, +9 in the middle
-        for (int i = 0; i < 8; ++i) { n.edges.push_back({i, i + 1}); n.edgeClasses.push_back(k); }
-        n.width = 22.0; n.sidewalk = 0.0; n.markings = true; n.autoRoundabout = false;
+        RoadEntity n;
+        n.look.defaultWidth = 22.0; n.look.sidewalk = 0.0;
+        n.look.markings = true; n.look.autoRoundabout = false;
+        const double elev[9] = { 0, 3, 7, 9, 9, 9, 7, 3, 0 };  // elevated span, +9 in the middle
+        for (int i = 0; i <= 8; ++i) {
+            RoadNode nd;
+            nd.pos = Vec2(-140 + i * 35, 0);
+            nd.elev = elev[i];
+            nd.elevAbsolute = true;
+            n.graph.nodes.push_back(nd);
+        }
+        for (int i = 0; i < 8; ++i) n.graph.addEdge(i, i + 1, n.look.defaultWidth, k);
         return n;
     };
-    RenderMesh fw = buildRoadNetMesh(makeNet(RoadClass::Freeway));
-    RenderMesh st = buildRoadNetMesh(makeNet(RoadClass::Local));
+    RenderMesh fw = buildRoadNetMesh(makeNet(RoadClass::Freeway), nullptr);
+    RenderMesh st = buildRoadNetMesh(makeNet(RoadClass::Local), nullptr);
     CHECK(!hasNonFinite(fw));
     CHECK(degenerateTriangles(fw) == 0);
     double fwMinY, fwMaxY, stMinY, stMaxY;
@@ -293,11 +305,11 @@ TEST_CASE(variable_ribbon_outline_flares) {
 // L — a NaN/short nodeElev leaves the road at grade: authoring is opt-in and
 // per-node, so an ordinary street with no elevation drapes exactly as before.
 TEST_CASE(road_net_without_node_elev_stays_at_grade) {
-    RoadNet n;
-    n.nodes = { Vec2(-40, 0), Vec2(40, 0) };
-    n.edges = { {0, 1} };
-    n.heightAt = [](double, double) { return 3.0; };
-    RenderMesh m = buildRoadNetMesh(n);
+    RoadEntity n;
+    n.graph.nodes = { RoadNode{Vec2(-40, 0)}, RoadNode{Vec2(40, 0)} };
+    n.graph.addEdge(0, 1, n.look.defaultWidth);
+    const RoadGroundFn ground = [](double, double) { return 3.0; };
+    RenderMesh m = buildRoadNetMesh(n, ground);
     double minY, maxY;
     bboxY(m, minY, maxY);
     CHECK(maxY < 4.0);                             // near the 3.0 ground (+ lift), not lifted
@@ -406,14 +418,19 @@ TEST_CASE(gradesep_piers_straddle_the_street) {
 // R — end-to-end through buildRoadNetMesh: an authored elevated E-W road and a
 // SEPARATE at-grade N-S street (no shared node) grade-separate at their crossing.
 TEST_CASE(gradesep_end_to_end_via_road_net) {
-    const double NaN = std::numeric_limits<double>::quiet_NaN();
-    RoadNet n;
-    n.nodes = { Vec2(-40, 0), Vec2(0, 0), Vec2(40, 0),   // E-W: 0,1,2 (deck at +9)
-                Vec2(0, -40), Vec2(0, 40) };             // N-S: 3,4 (at grade)
-    n.edges = { {0, 1}, {1, 2}, {3, 4} };
-    n.nodeElev = { 9.0, 9.0, 9.0, NaN, NaN };
-    n.heightAt = [](double, double) { return 0.0; };
-    RenderMesh m = buildRoadNetMesh(n);
+    RoadEntity n;
+    n.graph.nodes = { RoadNode{Vec2(-40, 0)}, RoadNode{Vec2(0, 0)},
+                      RoadNode{Vec2(40, 0)},             // E-W: 0,1,2 (deck at +9)
+                      RoadNode{Vec2(0, -40)}, RoadNode{Vec2(0, 40)} };  // N-S: 3,4 (at grade)
+    for (int i = 0; i < 3; ++i) {
+        n.graph.nodes[i].elev = 9.0;
+        n.graph.nodes[i].elevAbsolute = true;
+    }
+    n.graph.addEdge(0, 1, n.look.defaultWidth);
+    n.graph.addEdge(1, 2, n.look.defaultWidth);
+    n.graph.addEdge(3, 4, n.look.defaultWidth);
+    const RoadGroundFn ground = [](double, double) { return 0.0; };
+    RenderMesh m = buildRoadNetMesh(n, ground);
     CHECK(!hasNonFinite(m));
     CHECK(degenerateTriangles(m) == 0);
     bool grade = false, deck = false;
@@ -429,16 +446,25 @@ TEST_CASE(gradesep_end_to_end_via_road_net) {
 // feet to ground (welding the cross street) while the crest stays a viaduct that
 // grade-separates from the flown-over street.
 TEST_CASE(gradesep_ramp_foot_welds_crest_separates) {
-    const double NaN = std::numeric_limits<double>::quiet_NaN();
-    RoadNet n;
-    n.nodes = {
-        Vec2(-150, 0), Vec2(-80, 0), Vec2(80, 0), Vec2(150, 0),   // 0..3: E-W 0->9->9->0
-        Vec2(-150, -40), Vec2(-150, 40),                          // 4,5: cross street at west foot
-        Vec2(0, -50), Vec2(0, 50) };                              // 6,7: street under the crest
-    n.edges = { {0,1}, {1,2}, {2,3}, {4,0}, {0,5}, {6,7} };
-    n.nodeElev = { 0.0, 9.0, 9.0, 0.0, NaN, NaN, NaN, NaN };
-    n.heightAt = [](double, double) { return 0.0; };
-    RenderMesh m = buildRoadNetMesh(n);
+    RoadEntity n;
+    n.graph.nodes = {
+        RoadNode{Vec2(-150, 0)}, RoadNode{Vec2(-80, 0)},
+        RoadNode{Vec2(80, 0)}, RoadNode{Vec2(150, 0)},           // 0..3: E-W 0->9->9->0
+        RoadNode{Vec2(-150, -40)}, RoadNode{Vec2(-150, 40)},     // 4,5: cross street at west foot
+        RoadNode{Vec2(0, -50)}, RoadNode{Vec2(0, 50)} };         // 6,7: street under the crest
+    const double elev[4] = { 0.0, 9.0, 9.0, 0.0 };               // nodes 4..7 stay at-grade
+    for (int i = 0; i < 4; ++i) {
+        n.graph.nodes[i].elev = elev[i];
+        n.graph.nodes[i].elevAbsolute = true;
+    }
+    n.graph.addEdge(0, 1, n.look.defaultWidth);
+    n.graph.addEdge(1, 2, n.look.defaultWidth);
+    n.graph.addEdge(2, 3, n.look.defaultWidth);
+    n.graph.addEdge(4, 0, n.look.defaultWidth);
+    n.graph.addEdge(0, 5, n.look.defaultWidth);
+    n.graph.addEdge(6, 7, n.look.defaultWidth);
+    const RoadGroundFn ground = [](double, double) { return 0.0; };
+    RenderMesh m = buildRoadNetMesh(n, ground);
     CHECK(!hasNonFinite(m));
     CHECK(degenerateTriangles(m) == 0);
     // Crest over the flown-over street (x=0): deck aloft + street at grade, clear between.

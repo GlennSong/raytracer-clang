@@ -25,7 +25,7 @@ using namespace citysim;
 namespace {
 
 // The shipping piedmont skeleton, headless.
-RoadNet piedmontNet() {
+RoadEntity piedmontNet() {
     MetroParams p;
     p.seed = 7;
     p.skeleton = "footprint";
@@ -38,10 +38,15 @@ RoadNet piedmontNet() {
     city.hotspots = 9; city.blockSize = 220;
     p.sites = {city};
     RoadGraph g = buildMetro(p, nullptr);
-    RoadNet net;
-    for (const RoadNode& n : g.nodes) net.nodes.push_back(n.pos);
-    for (const RoadEdge& e : g.edges) net.edges.push_back({e.a, e.b});
-    net.width = 12.0; net.sidewalk = 3.5;
+    RoadEntity net;
+    net.look.defaultWidth = 12.0;
+    net.look.sidewalk = 3.5;
+    // Deliberately copies ONLY topology (positions + endpoint pairs): every
+    // edge is resolved to the default width, Local, at grade — as before.
+    for (const RoadNode& n : g.nodes) net.graph.nodes.push_back(RoadNode{n.pos});
+    for (const RoadEdge& e : g.edges)
+        net.graph.edges.push_back(RoadEdge{
+            e.a, e.b, static_cast<Real>(net.look.defaultWidth), RoadClass::Local, 0});
     return net;
 }
 
@@ -50,9 +55,9 @@ struct Census { int active = 0, far = 0, moving = 0; double cpuMs = 0;
                 std::vector<Sample> trail; };
 
 // Step `simSeconds` of SIMULATED time and report the tier split at the end.
-Census run(Real localHz, Real simSeconds, const RoadNet& net) {
+Census run(Real localHz, Real simSeconds, const RoadEntity& net) {
     World world;
-    world.add<RoadNet>(world.create(), net);
+    world.add<RoadEntity>(world.create(), net);
     CityRenderParams p;
     p.cars = 3000; p.pedestrians = 1800; p.seed = 7;
     p.tieredAgents = true;
@@ -94,7 +99,7 @@ Census run(Real localHz, Real simSeconds, const RoadNet& net) {
 }  // namespace
 
 TEST_CASE(sim_rate_ab_tier_split_is_rate_independent) {
-    const RoadNet net = piedmontNet();
+    const RoadEntity net = piedmontNet();
     const Real simSeconds = 96.0;   // 8.5 -> ~13.3 sim hours (midday)
     Census a = run(0.0, simSeconds, net);     // 60 Hz (every step)
     Census b = run(30.0, simSeconds, net);    // 30 Hz

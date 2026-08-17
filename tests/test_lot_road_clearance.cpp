@@ -45,18 +45,17 @@ constexpr double ARTERIAL_WIDTH = 17.0;
 
 // A generated metro whose edges alternate street / arterial, so a narrow and a
 // wide road meet at essentially every junction and share block frontage.
-RoadNet mixedWidthMetro() {
-    RoadNet net;
-    net.width = STREET_WIDTH;
-    net.autoRoundabout = false;
+RoadEntity mixedWidthMetro() {
+    RoadEntity net;
+    net.look.defaultWidth = STREET_WIDTH;
+    net.look.autoRoundabout = false;
     nlohmann::json gen = { { "kind", "metro" },    { "radius", 600 },
                            { "hotspots", 4 },      { "block_size", 130 },
                            { "seed", 21 },         { "freeways", false },
                            { "min_road_len", 24 }, { "terrain_aware", false } };
-    applyGenerateRecipe(net, gen);
-    net.edgeWidths.assign(net.edges.size(), STREET_WIDTH);
-    for (std::size_t i = 1; i < net.edgeWidths.size(); i += 2)
-        net.edgeWidths[i] = ARTERIAL_WIDTH;
+    applyGenerateRecipe(net, gen, nullptr);
+    for (std::size_t i = 0; i < net.graph.edges.size(); ++i)
+        net.graph.edges[i].width = (i % 2 == 1) ? ARTERIAL_WIDTH : STREET_WIDTH;
     return net;
 }
 
@@ -74,8 +73,8 @@ double distanceToSegment(const Vec2& p, const Vec2& a, const Vec2& b) {
 // The gate. Every vertex of every grown building PLAN stays out of every
 // carriageway: at least edge_width/2 from that edge's centreline.
 TEST_CASE(lot_buildings_clear_every_carriageway_on_a_mixed_width_net) {
-    RoadNet net = mixedWidthMetro();
-    RoadGraph rg = navRoadGraph(net);
+    RoadEntity net = mixedWidthMetro();
+    RoadGraph rg = navRoadGraph(net, nullptr);
 
     // The setup must actually be mixed — otherwise a change to the generator
     // could quietly make this a uniform-width net again and the case would pass
@@ -103,7 +102,7 @@ TEST_CASE(lot_buildings_clear_every_carriageway_on_a_mixed_width_net) {
     // test and the loader cannot disagree.
     const Real roadClear = cityJson.value("sidewalk", 4.0) + 0.6;
 
-    NetLotResult grown = growLotBuildingsOnNets({ net }, lp, ep, roadClear, &rg);
+    NetLotResult grown = growLotBuildingsOnNets({ net }, lp, ep, roadClear, nullptr, &rg);
     CHECK(!grown.lots.empty());
 
     int built = 0, intruding = 0;
@@ -163,8 +162,8 @@ TEST_CASE(lot_buildings_clear_every_carriageway_on_a_mixed_width_net) {
 //
 // This gate is written BEFORE the fix, which is what the plan asks for.
 TEST_CASE(lot_block_interiors_clear_every_carriageway_on_a_mixed_width_net) {
-    RoadNet net = mixedWidthMetro();
-    RoadGraph rg = navRoadGraph(net);
+    RoadEntity net = mixedWidthMetro();
+    RoadGraph rg = navRoadGraph(net, nullptr);
 
     nlohmann::json cityJson = { { "seed", 21 }, { "sidewalk", 4.0 },
                                 { "buildChance", 0.9 } };
@@ -173,7 +172,7 @@ TEST_CASE(lot_block_interiors_clear_every_carriageway_on_a_mixed_width_net) {
     readLotGrowParams(cityJson, ep, lp);
     const Real roadClear = cityJson.value("sidewalk", 4.0) + 0.6;
 
-    NetLotResult grown = growLotBuildingsOnNets({ net }, lp, ep, roadClear, &rg);
+    NetLotResult grown = growLotBuildingsOnNets({ net }, lp, ep, roadClear, nullptr, &rg);
     CHECK(!grown.plan.blocks.empty());
 
     int intruding = 0;

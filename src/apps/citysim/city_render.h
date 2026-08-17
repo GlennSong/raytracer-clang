@@ -15,7 +15,7 @@
 namespace citysim {
 
 // The ECS render bridge for the agent-based city simulation (ADR-0060 Phase 6).
-// It builds a NavGraph from the level's RoadNet entities, runs a deterministic
+// It builds a NavGraph from the level's RoadEntity entities, runs a deterministic
 // CitySim of driver+pedestrian agents over it, and bakes their poses into
 // InstanceGroups so RenderSystem draws the whole city as a few instanced
 // batches: one for cars, one for pedestrians, and one per signal state (red /
@@ -181,11 +181,15 @@ public:
     }
 
     // --- testable core (no FrameContext) -----------------------------------
-    // Build the NavGraph from every RoadNet in `world`, seed the CitySim, and
+    // Build the NavGraph from every RoadEntity in `world`, seed the CitySim, and
     // create the instance-group entities. `assets` may be null (tests): then the
     // groups carry a null MeshHandle and only the transforms are populated.
     // No-op (returns false) if the world holds no navigable roads.
-    bool build(engine::World& world, engine::AssetManager* assets);
+    // `ground` (optional) is the terrain sampler for worlds WITHOUT a CDLOD
+    // terrain config — loader-less test worlds on a slope pass theirs here
+    // (roads no longer store one); a level's TerrainLodConfig still wins.
+    bool build(engine::World& world, engine::AssetManager* assets,
+               std::function<double(double, double)> ground = nullptr);
 
     // Advance the sim by `dt` seconds and re-bake every InstanceGroup.
     void step(engine::World& world, Real dt);

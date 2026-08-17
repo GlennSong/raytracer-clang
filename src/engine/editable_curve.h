@@ -26,7 +26,7 @@ struct CurveKnot {
 // A 3D cubic-Bezier path: the shared, editable spline behind the road editor and
 // (next) animation paths (ADR-0050). Knots carry handle POINTS; an Auto knot derives
 // its handles from its neighbours on the fly, so evaluation is always correct without
-// a separate bake. Distinct from the road's RoadNet (a branching GRAPH); this is one
+// a separate bake. Distinct from the road's RoadEntity (a branching GRAPH); this is one
 // continuous path, the unit an animation follows and the tool manipulates.
 struct EditableCurve {
     std::vector<CurveKnot> knots;

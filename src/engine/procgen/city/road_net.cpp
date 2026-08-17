@@ -21,15 +21,15 @@
 
 namespace engine {
 
-// The curvature cap must clear the WIDEST ribbon in the net, not the default
+// The curvature cap must clear the WIDEST ribbon in the road, not the default
 // width: the metro recipe writes 13 m arterials beside 7 m streets, and a bend
 // with radius between the two folds the arterial's band over itself (the
 // "side of the road raised up vertically" flap). Half-width + sidewalk + margin
-// of the widest edge.
-static double netMinTurnRadius(const RoadNet& net) {
-    double maxW = net.width;
-    for (double w : net.edgeWidths) if (w > 0) maxW = std::max(maxW, w);
-    return maxW * 0.5 + net.sidewalk + 0.5;
+// of the widest edge. (Widths are always resolved now, so this is a plain max.)
+static double netMinTurnRadius(const RoadEntity& road) {
+    double maxW = road.look.defaultWidth;
+    for (const RoadEdge& e : road.graph.edges) maxW = std::max(maxW, static_cast<double>(e.width));
+    return maxW * 0.5 + road.look.sidewalk + 0.5;
 }
 
 
@@ -39,12 +39,14 @@ namespace {
 
 bool isZero(const Vec2& v) { return v.x == 0.0 && v.y == 0.0; }
 
-// Valid, non-degenerate edges as index pairs.
-std::vector<std::array<int, 2>> validEdges(const RoadNet& net) {
-    std::vector<std::array<int, 2>> out;
-    const int n = static_cast<int>(net.nodes.size());
-    for (const std::array<int, 2>& e : net.edges)
-        if (e[0] >= 0 && e[1] >= 0 && e[0] < n && e[1] < n && e[0] != e[1]) out.push_back(e);
+// Valid, non-degenerate edge indices of a control graph.
+std::vector<int> validEdgeIndices(const RoadGraph& g) {
+    std::vector<int> out;
+    const int n = static_cast<int>(g.nodes.size());
+    for (int ei = 0; ei < static_cast<int>(g.edges.size()); ++ei) {
+        const RoadEdge& e = g.edges[ei];
+        if (e.a >= 0 && e.b >= 0 && e.a < n && e.b < n && e.a != e.b) out.push_back(ei);
+    }
     return out;
 }
 
@@ -53,40 +55,27 @@ std::vector<std::array<int, 2>> validEdges(const RoadNet& net) {
 // a junction/dead-end). The sampler is ADAPTIVE — an edge that doesn't actually bend collapses back to
 // a single segment, so the grid's straight runs don't densify and clog the junction meshes. The
 // original nodes keep their indices (so junction degree is preserved); curve samples append.
-RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
-    const int n = static_cast<int>(net.nodes.size());
-    auto P = [&](int i) { return net.nodes[i]; };
-    // Valid edge indices, and each edge's width (its override or the default).
-    std::vector<int> ev;
-    for (int ei = 0; ei < static_cast<int>(net.edges.size()); ++ei) {
-        const std::array<int, 2>& e = net.edges[ei];
-        if (e[0] >= 0 && e[1] >= 0 && e[0] < n && e[1] < n && e[0] != e[1]) ev.push_back(ei);
-    }
-    auto ewidth = [&](int ei) {
-        return static_cast<Real>(
-            (ei < static_cast<int>(net.edgeWidths.size()) && net.edgeWidths[ei] > 0.0)
-                ? net.edgeWidths[ei] : net.width);
-    };
-    auto elayer = [&](int ei) {
-        return (ei < static_cast<int>(net.edgeLayers.size())) ? net.edgeLayers[ei] : 0;
-    };
-    auto espec = [&](int ei) {
-        return (ei < static_cast<int>(net.edgeSpecs.size())) ? net.edgeSpecs[ei] : -1;
-    };
+// This is the real work navRoadGraph is kept for (spline sampling, not a
+// representation change): the entity's CONTROL graph in, the fine SAMPLED graph out.
+RoadGraph sampleNetGraph(const RoadEntity& road, double minTurnRadius = 0.0) {
+    const RoadGraph& cg = road.graph;
+    const int n = static_cast<int>(cg.nodes.size());
+    auto P = [&](int i) { return cg.nodes[i].pos; };
+    const std::vector<int> ev = validEdgeIndices(cg);
     // S8 walk permission from the BAND MODEL: an edge is walkable iff its
     // resolved spec carries a Sidewalk band on either side. The legacy shim
-    // synthesizes sidewalks from net.sidewalk for ordinary streets, so nets
+    // synthesizes sidewalks from look.sidewalk for ordinary streets, so roads
     // without specs keep pedestrians; freeway3/ramp1/dirt presets have no
     // Sidewalk band and correctly shut walkers out at the DATA level.
     auto ewalk = [&](int ei) {
-        const RoadSpec sp = roadNetEdgeSpec(net, ei);
+        const RoadSpec sp = roadNetEdgeSpec(road, ei);
         return sp.hasSidewalk(-1) || sp.hasSidewalk(1);
     };
     // Kerbside PARKING band, resolved here so nav/sim never need the spec table.
     // Right-hand side (+1): a two-way street is symmetric, so one number serves
     // both directed links.
     auto epark = [&](int ei, Real& off, Real& w) {
-        const RoadSpec sp = roadNetEdgeSpec(net, ei);
+        const RoadSpec sp = roadNetEdgeSpec(road, ei);
         double o = 0, bw = 0;
         if (roadSpecParkingBand(sp, +1, o, bw)) {
             off = static_cast<Real>(o);
@@ -95,37 +84,27 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
             off = 0; w = 0;
         }
     };
-    auto eclass = [&](int ei) {
-        return (ei < static_cast<int>(net.edgeClasses.size())) ? net.edgeClasses[ei]
-                                                               : RoadClass::Local;
-    };
-    // Optional per-node ABSOLUTE deck Y (authored elevated roads). Finite = the
-    // node rides at that world Y; the weld carries it as UnionSpine.yAbs.
-    auto nhasElev = [&](int i) {
-        return i < static_cast<int>(net.nodeElev.size()) && std::isfinite(net.nodeElev[i]);
-    };
 
     RoadGraph g;
     g.nodes.resize(n);
     for (int i = 0; i < n; ++i) {
-        g.nodes[i].pos = net.nodes[i];
-        if (nhasElev(i)) { g.nodes[i].elev = static_cast<Real>(net.nodeElev[i]);
-                           g.nodes[i].elevAbsolute = true; }
+        g.nodes[i].pos = cg.nodes[i].pos;
+        // Authored ABSOLUTE deck Y (elevated roads): the node rides at that
+        // world Y; the weld carries it as UnionSpine.yAbs.
+        if (cg.nodes[i].elevAbsolute) { g.nodes[i].elev = cg.nodes[i].elev;
+                                        g.nodes[i].elevAbsolute = true; }
         // Semantic hints ride onto the ORIGINAL control nodes (0..n-1);
         // appended curve samples stay Auto for classifyRoadGraph.
-        if (i < static_cast<int>(net.nodeKinds.size()))
-            g.nodes[i].kind = static_cast<JunctionKind>(net.nodeKinds[i]);
+        g.nodes[i].kind = cg.nodes[i].kind;
     }
 
     // Per-node neighbours (for degree + the Catmull-Rom "other" neighbour).
     std::vector<std::vector<int>> nbr(n);
     for (int ei : ev) {
-        const std::array<int, 2>& e = net.edges[ei];
-        nbr[e[0]].push_back(e[1]); nbr[e[1]].push_back(e[0]);
+        const RoadEdge& e = cg.edges[ei];
+        nbr[e.a].push_back(e.b); nbr[e.b].push_back(e.a);
     }
-    auto stored = [&](int i) {
-        return (i < static_cast<int>(net.tangents.size())) ? net.tangents[i] : Vec2(0, 0);
-    };
+    auto stored = [&](int i) { return cg.nodes[i].tangent; };
     auto otherNbr = [&](int v, int notThis) {
         for (int u : nbr[v]) if (u != notThis) return u;
         return notThis;
@@ -152,9 +131,9 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
     };
 
     for (int ei : ev) {
-        const std::array<int, 2>& e = net.edges[ei];
-        int a = e[0], b = e[1];
-        Real w = ewidth(ei);
+        const RoadEdge& e = cg.edges[ei];
+        int a = e.a, b = e.b;
+        Real w = e.width;
         Vec2 m0 = outTan(a, b), m1 = inTan(b, a);
         double len = (P(b) - P(a)).length();
         int segs = std::max(4, static_cast<int>(std::ceil(len / 5.0)));
@@ -162,7 +141,7 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
         // ribbon can't fold on an over-tight bend. Endpoints — the shared junction nodes —
         // are preserved, so the graph stays stitched.
         std::vector<Vec2> poly = fairHermite(P(a), m0, P(b), m1, segs, minTurnRadius);
-        int lay = elayer(ei);
+        int lay = e.layer;
         // Adaptive tessellation: an edge that never leaves its chord (a straight run — the grid's
         // junction-to-junction edges, whose tangents ARE the chord) collapses back to ONE segment.
         // Densifying straight edges into len/5 collinear samples was the real cause of the overlap and
@@ -184,16 +163,16 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
             if (maxDev < 0.06) poly = {P(a), P(b)};
         }
 
-        RoadClass kls = eclass(ei);
+        RoadClass kls = e.klass;
         // Elevated span: interior samples ride the authored deck, interpolated by
         // arc-length between the two authored endpoints. Only when BOTH ends are
         // authored — a span with an at-grade end drapes (a homogeneous chain is
         // what the weld's yAbs path needs; a mixed one falls back to the ground).
-        const bool elevSpan = nhasElev(a) && nhasElev(b);
+        const bool elevSpan = cg.nodes[a].elevAbsolute && cg.nodes[b].elevAbsolute;
         double ea = 0.0, eb = 0.0;
         std::vector<double> arc;
         if (elevSpan) {
-            ea = net.nodeElev[a]; eb = net.nodeElev[b];
+            ea = cg.nodes[a].elev; eb = cg.nodes[b].elev;
             arc.assign(poly.size(), 0.0);
             for (std::size_t s = 1; s < poly.size(); ++s)
                 arc[s] = arc[s - 1] + (poly[s] - poly[s - 1]).length();
@@ -211,18 +190,21 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
             }
             g.nodes.push_back(nd);
             RoadEdge ge{prev, idx, w, kls, lay};
-            ge.spec = espec(ei);                 // roads-v2: band model rides the graph
+            ge.spec = e.spec;                    // roads-v2: band model rides the graph
             ge.walkable = ewalk(ei);
             ge.parkOffset = parkOff; ge.parkWidth = parkW;
             g.edges.push_back(ge);
             prev = idx;
         }
         RoadEdge geLast{prev, b, w, kls, lay};
-        geLast.spec = espec(ei);
+        geLast.spec = e.spec;
         geLast.walkable = ewalk(ei);
         geLast.parkOffset = parkOff; geLast.parkWidth = parkW;
         g.edges.push_back(geLast);               // last -> shared node b
     }
+    // The sampled graph carries the spec table too, so a consumer holding only
+    // the sampled graph can still resolve RoadEdge::spec through it.
+    g.specs = cg.specs;
     return g;
 }
 
@@ -233,52 +215,43 @@ RoadGraph netGraph(const RoadNet& net, double minTurnRadius = 0.0) {
 // corridor still draws/carves/navigates itself until S4-S6 unify. Without this
 // a baked net double-meshes, double-carves, and double-counts nav edges (the
 // corridor's carriageway chains are merged into LevelRoadGraph separately).
-// Also keeps the curvature cap honest: netMinTurnRadius scans edgeWidths, and
-// a 27 m freeway width would inflate every street's minimum turn radius.
+// Also keeps the curvature cap honest: netMinTurnRadius scans the edge widths,
+// and a 27 m freeway width would inflate every street's minimum turn radius.
 // Nodes are kept (indices stay stable); orphaned nodes emit no geometry.
 // Profile slope limit (rise/run) for chain-height smoothing — the value the
 // deleted weld used (WeldSolidParams::maxGrade); mesh and terrain carve both
 // grade to it, so they stay in agreement.
 static constexpr double kRoadMaxGrade = 0.08;
 
-RoadNet roadNetStreetsOnly(const RoadNet& net) {
+RoadEntity roadNetStreetsOnly(const RoadEntity& road) {
     bool any = false;
-    for (uint8_t b : net.edgeBaked)
-        if (b) { any = true; break; }
-    if (!any) return net;
-    RoadNet out = net;
-    out.edges.clear(); out.edgeWidths.clear(); out.edgeLayers.clear();
-    out.edgeClasses.clear(); out.edgeSpecs.clear(); out.edgeBaked.clear();
-    auto at = [](const auto& v, std::size_t i, auto dflt) {
-        return i < v.size() ? v[i] : dflt;
-    };
-    for (std::size_t ei = 0; ei < net.edges.size(); ++ei) {
-        if (at(net.edgeBaked, ei, uint8_t(0))) continue;   // baked: corridor's own
-        out.edges.push_back(net.edges[ei]);
-        out.edgeWidths.push_back(at(net.edgeWidths, ei, 0.0));
-        out.edgeLayers.push_back(at(net.edgeLayers, ei, 0));
-        out.edgeClasses.push_back(at(net.edgeClasses, ei, RoadClass::Local));
-        out.edgeSpecs.push_back(at(net.edgeSpecs, ei, -1));
-        out.edgeBaked.push_back(0);
+    for (const RoadEdge& e : road.graph.edges)
+        if (e.baked) { any = true; break; }
+    if (!any) return road;
+    RoadEntity out = road;
+    out.graph.edges.clear();
+    for (const RoadEdge& e : road.graph.edges) {
+        if (e.baked) continue;                     // baked: corridor's own
+        out.graph.edges.push_back(e);
     }
     return out;
 }
 
 namespace {
 
-// The graph the mesher AND the terrain-conform both build from: the sampled net graph put
+// The graph the mesher AND the terrain-conform both build from: the sampled graph put
 // through the local-constraints pass (ADR-0052), so a promoted roundabout is reflected
 // identically in the carriageway and in the ground it grades. One source keeps them in sync.
-RoadGraph constrainedNetGraph(const RoadNet& net) {
+RoadGraph constrainedGraph(const RoadEntity& road, const RoadGroundFn& heightAt) {
     // Roads-v2.1 2e: baked corridor edges stay IN — nav routes the freeway
     // natively from the graph now that the corridor renderer is gone. Only
     // the terrain conform still strips them (roadNetConformRegions):
     // corridorAuthor's engineered flatten owns the corridor's carve.
-    double minR = netMinTurnRadius(net);
+    double minR = netMinTurnRadius(road);
     RoadRules rules;
-    rules.autoRoundabout = net.autoRoundabout;   // honour the net's policy (ADR-0075 P0)
-    RoadGraph g = applyConstraints(netGraph(net, minR), rules);
-    classifyRoadGraph(g, net.heightAt);   // semantic layer (#17): kinds + access
+    rules.autoRoundabout = road.look.autoRoundabout;   // honour the policy (ADR-0075 P0)
+    RoadGraph g = applyConstraints(sampleNetGraph(road, minR), rules);
+    classifyRoadGraph(g, heightAt);   // semantic layer (#17): kinds + access
     return g;
 }
 
@@ -286,18 +259,16 @@ RoadGraph constrainedNetGraph(const RoadNet& net) {
 
 // Public accessor (ADR-0059): hand runtime consumers the same sampled+constrained
 // graph the mesher uses, without exposing the file-local builder above.
-RoadGraph navRoadGraph(const RoadNet& net) { return constrainedNetGraph(net); }
+RoadGraph navRoadGraph(const RoadEntity& road, const RoadGroundFn& heightAt) {
+    return constrainedGraph(road, heightAt);
+}
 
 // The FULL sampled+constrained graph, baked corridor edges INCLUDED — the
 // graph the unified mesher builds from (roads-v2.1 R1) and the surface the
-// bake-fidelity gates measure against. constrainedNetGraph strips baked
-// edges for the street-only passes; this is the whole road system.
-RoadGraph roadNetFullGraph(const RoadNet& net) {
-    RoadRules rules;
-    rules.autoRoundabout = net.autoRoundabout;
-    RoadGraph g = applyConstraints(netGraph(net, netMinTurnRadius(net)), rules);
-    classifyRoadGraph(g, net.heightAt);   // semantic layer (#17)
-    return g;
+// bake-fidelity gates measure against. (Identical to navRoadGraph since 2e;
+// both names kept for their distinct call-site intents.)
+RoadGraph roadNetFullGraph(const RoadEntity& road, const RoadGroundFn& heightAt) {
+    return constrainedGraph(road, heightAt);
 }
 
 // One UnionSpine per CHAIN (a maximal degree-2 run between junctions/dead-ends), carrying that
@@ -1260,22 +1231,21 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
     return out;
 }
 
-RenderMesh buildRoadNetMesh(const RoadNet& netIn) {
+RenderMesh buildRoadNetMesh(const RoadEntity& road, const RoadGroundFn& heightAt) {
     // Roads-v2.1 2e: the ONE mesher builds EVERYTHING, baked corridor edges
     // included — the corridor renderer is gone. (Conform still strips baked
     // edges: corridorAuthor's engineered flatten owns that carve.)
-    const RoadNet& net = netIn;
     // Cap centerline curvature so neither the carriageway nor the sidewalk outer rail can
     // fold: keep the turn radius above the widest offset (half-width + sidewalk) + margin.
-    double minR = netMinTurnRadius(net);
-    RoadGraph raw = netGraph(net, minR);
+    double minR = netMinTurnRadius(road);
+    RoadGraph raw = sampleNetGraph(road, minR);
     // Does the local-constraints pass (ADR-0052) promote any node to a roundabout?
-    // Honour the net's junction policy (ADR-0075 P0): a generated net set
+    // Honour the junction policy (ADR-0075 P0): a generated road set
     // autoRoundabout=false, so we must NOT probe/promote with default rules here
     // (that re-promoted roundabouts the generator disabled).
     RoadRules rules;
-    rules.autoRoundabout = net.autoRoundabout;
-    RoadGraph g = applyConstraints(raw, rules);   // promoted graph (= constrainedNetGraph)
+    rules.autoRoundabout = road.look.autoRoundabout;
+    RoadGraph g = applyConstraints(raw, rules);   // promoted graph (= the constrained graph)
 
     // Grade separations (ADR-0051/0054): an edge on a higher layer is an overpass.
     // Instead of a separate bridge mesher, STAMP an absolute deck elevation onto
@@ -1289,8 +1259,8 @@ RenderMesh buildRoadNetMesh(const RoadNet& netIn) {
         if (maxLayer > 0) {
             const DesignRules& dr = defaultDesign();
             const double clearance = dr.clearance, deckThk = dr.deckThickness,
-                         rampGrade = dr.rampGrade, groundSurf = net.lift;
-            auto groundFn = [&](const Vec2& q) { return net.heightAt ? net.heightAt(q.x, q.y) : 0.0; };
+                         rampGrade = dr.rampGrade, groundSurf = road.look.lift;
+            auto groundFn = [&](const Vec2& q) { return heightAt ? heightAt(q.x, q.y) : 0.0; };
             const int N = static_cast<int>(g.nodes.size());
             std::vector<std::vector<int>> incL(N);
             for (int L = 1; L <= maxLayer; ++L) {
@@ -1361,15 +1331,15 @@ RenderMesh buildRoadNetMesh(const RoadNet& netIn) {
 
     // Semantic layer (#17): classify AFTER the layer-elevation stamping so
     // access bits see the final elevAbsolute truth.
-    classifyRoadGraph(g, net.heightAt);
+    classifyRoadGraph(g, heightAt);
 
     // ONE MESHER (roads-v2 S6): every street net goes through the swept
     // lattice — carriageway bodies, junction pads, curb/sidewalk band loops,
     // and per-class structure (freeway kit, ramp decks, layered bridges).
     // The union weld (weldSolid), the SDF grid and the analytic fallback are
     // deleted from this path; the lattice IS the road mesher.
-    RenderMesh rm = buildRoadNetLattice(g, net.heightAt, nullptr, net.sidewalk,
-                                        net.curb, net.crosswalks);
+    RenderMesh rm = buildRoadNetLattice(g, heightAt, nullptr, road.look.sidewalk,
+                                        road.look.curb, road.look.crosswalks);
     // Bounds + NaN audit: one NaN vertex poisons the bounding sphere and the
     // whole road entity frustum-culls to nothing, silently.
     std::size_t nans = 0;
@@ -1399,16 +1369,18 @@ RenderMesh buildRoadNetMesh(const RoadNet& netIn) {
     return rm;
 }
 
-std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& netIn, double shoulder,
+std::vector<TerrainFlatten> roadNetConformRegions(const RoadEntity& roadIn,
+                                                  const RoadGroundFn& heightAt,
+                                                  double shoulder,
                                                   double falloff, double maxGrade) {
     RT_PROFILE_ZONE_NAMED("roadNetConformRegions");
     // 2e: the conform is the ONE consumer that still strips baked corridor
     // edges — corridorAuthor's engineered flatten (at-grade windows only,
     // viaducts fly) owns that carve; carving the baked chains here too would
     // double-grade the interchange ground.
-    const RoadNet net = roadNetStreetsOnly(netIn);
+    const RoadEntity road = roadNetStreetsOnly(roadIn);
     std::vector<TerrainFlatten> out;
-    if (!net.heightAt) return out;                       // flat road: nothing to carve
+    if (!heightAt) return out;                           // flat road: nothing to carve
     // Mirror the DECK's own profile computation EXACTLY — the same constrained
     // graph, the same weldChainSpines decomposition (curve-sampled points,
     // per-chain widths), the same roadProfile smoothing at the weld's grade —
@@ -1416,7 +1388,7 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& netIn, double s
     // independently-densified profile diverged by metres on slopes: the
     // grade-limited deck cut through hills the carve never lowered (device:
     // "the road is being buried by the terrain — it's not conforming").
-    RoadGraph g = constrainedNetGraph(net);              // grade to the roundabout, not the raw spokes
+    RoadGraph g = constrainedGraph(road, heightAt);      // grade to the roundabout, not the raw spokes
     (void)maxGrade;   // superseded: the carve must use the deck's own grade
     std::vector<UnionSpine> spines = weldChainSpines(g);
     if (std::getenv("RT_POKE_SITE")) {
@@ -1433,8 +1405,8 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& netIn, double s
     // only minOverlapping left the higher deck floating up to 2.6 m above the
     // ground it never lowered (road_poke_probe metropolis, 8.4% verts >1 m).
     std::vector<std::vector<double>> profiles =
-        weldChainProfiles(spines, net.heightAt, 0.0, kRoadMaxGrade,
-                          net.sidewalk + 4.0);
+        weldChainProfiles(spines, heightAt, 0.0, kRoadMaxGrade,
+                          road.look.sidewalk + 4.0);
     for (std::size_t si = 0; si < spines.size(); ++si) {
         const UnionSpine& sp = spines[si];
         if (profiles[si].size() < 2) continue;
@@ -1458,7 +1430,7 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& netIn, double s
         // curb skirt reach slightly beyond the band, and the flatten's full
         // strength must cover them before its falloff starts.
         std::vector<TerrainFlatten> r = roadConformRegions(
-            sp.points, profile, sp.halfWidth + net.sidewalk + 2.0, shoulder,
+            sp.points, profile, sp.halfWidth + road.look.sidewalk + 2.0, shoulder,
             falloff);
         for (TerrainFlatten& f : r) f.owner = static_cast<int>(si);
         // NOTE (ADR-0075): the DaylightBatter earthwork was tried here and REGRESSED
@@ -1510,7 +1482,7 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& netIn, double s
             const Vec2 C = g.nodes[v].pos;
             // Cover the weld disc + the sidewalk wrap + the same margin the
             // chain footprints use, so the pad's full apron sits on graded ground.
-            const double r = jw[v] * 0.5 * 1.02 + net.sidewalk + 2.0;
+            const double r = jw[v] * 0.5 * 1.02 + road.look.sidewalk + 2.0;
             // The deck's local plane: sampled along the steepest deck direction
             // through the node (8-direction probe), carved 0.22 m under like the
             // chains so the deck stays proud of the interpolating terrain grid.
@@ -1537,7 +1509,8 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadNet& netIn, double s
     return out;
 }
 
-StructureSet buildRoadWalls(const RoadNet& netIn, const StructureParams& p) {
+StructureSet buildRoadWalls(const RoadEntity& roadIn, const RoadGroundFn& heightAt,
+                            const StructureParams& p) {
     StructureSet set;
     // CO-DESIGNED with the SMOOTHSTEP conform (roads-v2.1 R6a; the old
     // version priced walls off the DaylightBatter reach the conform no
@@ -1548,13 +1521,13 @@ StructureSet buildRoadWalls(const RoadNet& netIn, const StructureParams& p) {
     // ground at the feather's END, fronting the steep face — the terrain
     // still smoothsteps behind it, hidden. Shallow cuts (drop <= minWall)
     // keep their grass; fills stay open embankments (they read as slopes).
-    const RoadNet net = roadNetStreetsOnly(netIn);   // corridor flies; no walls
-    if (!net.heightAt) return set;                   // flat road: no walls
-    RoadGraph g = constrainedNetGraph(net);
+    const RoadEntity road = roadNetStreetsOnly(roadIn);   // corridor flies; no walls
+    if (!heightAt) return set;                            // flat road: no walls
+    RoadGraph g = constrainedGraph(road, heightAt);
     std::vector<UnionSpine> spines = weldChainSpines(g);
     std::vector<std::vector<double>> profiles =
-        weldChainProfiles(spines, net.heightAt, 0.0, kRoadMaxGrade,
-                          net.sidewalk + 4.0);
+        weldChainProfiles(spines, heightAt, 0.0, kRoadMaxGrade,
+                          road.look.sidewalk + 4.0);
     const double falloff = 8.0;   // roadNetConformRegions' feather span
 
     for (std::size_t si = 0; si < spines.size(); ++si) {
@@ -1562,7 +1535,7 @@ StructureSet buildRoadWalls(const RoadNet& netIn, const StructureParams& p) {
         const int n = static_cast<int>(sp.points.size());
         if (static_cast<int>(profiles[si].size()) != n || n < 2) continue;
         if (!sp.yAbs.empty()) continue;   // authored elevated: piers, not walls
-        const double flatHalf = sp.halfWidth + net.sidewalk + 2.0;   // graded corridor
+        const double flatHalf = sp.halfWidth + road.look.sidewalk + 2.0;   // graded corridor
         const double wallLat = flatHalf + 0.6;    // just outside the graded ground
         // DENSIFIED stations (~6 m): the spine's own points can span a whole
         // straight edge, and a single wall quad would chord an undulating
@@ -1590,7 +1563,7 @@ StructureSet buildRoadWalls(const RoadNet& netIn, const StructureParams& p) {
             Vec2 at = pts[k] + nrm * (static_cast<double>(side) * wallLat);
             Vec2 end =
                 pts[k] + nrm * (static_cast<double>(side) * (flatHalf + falloff));
-            const double naturalEnd = net.heightAt(end.x, end.y);
+            const double naturalEnd = heightAt(end.x, end.y);
             const double drop = naturalEnd - deck[k];   // cut face height
             topOut = Vec3(at.x, deck[k] + std::max(0.0, drop), at.y);
             dropOut = std::max(0.0, drop);
@@ -1614,151 +1587,122 @@ StructureSet buildRoadWalls(const RoadNet& netIn, const StructureParams& p) {
     return set;
 }
 
-void roadNetSetWidth(RoadNet& net, double width) {
-    net.width = std::max(0.5, width);
-}
-
-RoadSpec roadNetEdgeSpec(const RoadNet& net, int ei) {
-    if (ei >= 0 && ei < static_cast<int>(net.edgeSpecs.size())) {
-        const int si = net.edgeSpecs[ei];
-        if (si >= 0 && si < static_cast<int>(net.specs.size())) return net.specs[si];
+RoadSpec roadNetEdgeSpec(const RoadEntity& road, int ei) {
+    const RoadGraph& g = road.graph;
+    if (ei >= 0 && ei < static_cast<int>(g.edges.size())) {
+        const int si = g.edges[ei].spec;
+        if (si >= 0 && si < static_cast<int>(g.specs.size())) return g.specs[si];
+        return roadSpecFromLegacy(g.edges[ei].width, /*oneWay=*/false,
+                                  road.look.sidewalk, road.look.curb);
     }
-    return roadSpecFromLegacy(roadNetEdgeWidth(net, ei), /*oneWay=*/false,
-                              net.sidewalk, net.curb);
+    return roadSpecFromLegacy(road.look.defaultWidth, /*oneWay=*/false,
+                              road.look.sidewalk, road.look.curb);
 }
 
-double roadNetEdgeWidth(const RoadNet& net, int ei) {
-    if (ei >= 0 && ei < static_cast<int>(net.edgeWidths.size()) && net.edgeWidths[ei] > 0.0)
-        return net.edgeWidths[ei];
-    return net.width;
-}
-
-bool roadNetSetEdgeWidth(RoadNet& net, int ei, double w) {
-    if (ei < 0 || ei >= static_cast<int>(net.edges.size())) return false;
-    if (static_cast<int>(net.edgeWidths.size()) < static_cast<int>(net.edges.size()))
-        net.edgeWidths.resize(net.edges.size(), 0.0);
-    net.edgeWidths[ei] = (w > 0.0) ? w : 0.0;          // <= 0 reverts to the default width
+bool roadNetSetEdgeWidth(RoadEntity& road, int ei, double w) {
+    if (ei < 0 || ei >= static_cast<int>(road.graph.edges.size())) return false;
+    // <= 0 reverts to the look's default width (widths are always resolved).
+    road.graph.edges[ei].width =
+        static_cast<Real>((w > 0.0) ? w : road.look.defaultWidth);
     return true;
 }
 
-bool roadNetMoveNode(RoadNet& net, int i, const Vec2& pos) {
-    if (i < 0 || i >= static_cast<int>(net.nodes.size())) return false;
-    net.nodes[i] = pos;
+bool roadNetMoveNode(RoadEntity& road, int i, const Vec2& pos) {
+    if (i < 0 || i >= static_cast<int>(road.graph.nodes.size())) return false;
+    road.graph.nodes[i].pos = pos;
     return true;
 }
 
-bool roadNetSetTangent(RoadNet& net, int i, const Vec2& tangent) {
-    if (i < 0 || i >= static_cast<int>(net.nodes.size())) return false;
-    if (static_cast<int>(net.tangents.size()) < static_cast<int>(net.nodes.size()))
-        net.tangents.resize(net.nodes.size(), Vec2(0, 0));
-    net.tangents[i] = tangent;
+bool roadNetSetTangent(RoadEntity& road, int i, const Vec2& tangent) {
+    if (i < 0 || i >= static_cast<int>(road.graph.nodes.size())) return false;
+    road.graph.nodes[i].tangent = tangent;
     return true;
 }
 
-Vec2 roadNetTangentAt(const RoadNet& net, int i) {
-    const int n = static_cast<int>(net.nodes.size());
+Vec2 roadNetTangentAt(const RoadEntity& road, int i) {
+    const RoadGraph& g = road.graph;
+    const int n = static_cast<int>(g.nodes.size());
     if (i < 0 || i >= n) return Vec2(0, 0);
-    if (i < static_cast<int>(net.tangents.size()) && !isZero(net.tangents[i]))
-        return net.tangents[i];
+    if (!isZero(g.nodes[i].tangent)) return g.nodes[i].tangent;
     // Auto: Catmull-Rom on a degree-2 through-road, chord at an end, else zero.
     std::vector<int> nb;
-    for (const std::array<int, 2>& e : validEdges(net)) {
-        if (e[0] == i) nb.push_back(e[1]);
-        if (e[1] == i) nb.push_back(e[0]);
+    for (int ei : validEdgeIndices(g)) {
+        const RoadEdge& e = g.edges[ei];
+        if (e.a == i) nb.push_back(e.b);
+        if (e.b == i) nb.push_back(e.a);
     }
-    if (nb.size() == 2) return (net.nodes[nb[1]] - net.nodes[nb[0]]) * 0.5;
-    if (nb.size() == 1) return (net.nodes[nb[0]] - net.nodes[i]) * 0.5;
+    if (nb.size() == 2) return (g.nodes[nb[1]].pos - g.nodes[nb[0]].pos) * 0.5;
+    if (nb.size() == 1) return (g.nodes[nb[0]].pos - g.nodes[i].pos) * 0.5;
     return Vec2(0, 0);
 }
 
-int roadNetAddNode(RoadNet& net, const Vec2& pos) {
-    net.nodes.push_back(pos);                 // tangents stays shorter -> the new node is auto
-    return static_cast<int>(net.nodes.size()) - 1;
+int roadNetAddNode(RoadEntity& road, const Vec2& pos) {
+    road.graph.nodes.push_back(RoadNode{pos});   // zero tangent -> the new node is auto
+    return static_cast<int>(road.graph.nodes.size()) - 1;
 }
 
-bool roadNetAddEdge(RoadNet& net, int a, int b) {
-    const int n = static_cast<int>(net.nodes.size());
+bool roadNetAddEdge(RoadEntity& road, int a, int b) {
+    RoadGraph& g = road.graph;
+    const int n = static_cast<int>(g.nodes.size());
     if (a < 0 || b < 0 || a >= n || b >= n || a == b) return false;
-    for (const std::array<int, 2>& e : net.edges)
-        if ((e[0] == a && e[1] == b) || (e[0] == b && e[1] == a)) return false;   // already joined
-    net.edges.push_back({a, b});
-    if (!net.edgeWidths.empty()) net.edgeWidths.push_back(0.0);   // default width
-    if (!net.edgeClasses.empty()) net.edgeClasses.push_back(RoadClass::Local);
+    for (const RoadEdge& e : g.edges)
+        if ((e.a == a && e.b == b) || (e.a == b && e.b == a)) return false;   // already joined
+    RoadEdge e;
+    e.a = a; e.b = b;
+    e.width = static_cast<Real>(road.look.defaultWidth);
+    g.edges.push_back(e);
     return true;
 }
 
-int roadNetExtend(RoadNet& net, int from, const Vec2& pos) {
-    if (from < 0 || from >= static_cast<int>(net.nodes.size())) return -1;
-    int ni = roadNetAddNode(net, pos);
-    roadNetAddEdge(net, from, ni);
+int roadNetExtend(RoadEntity& road, int from, const Vec2& pos) {
+    if (from < 0 || from >= static_cast<int>(road.graph.nodes.size())) return -1;
+    int ni = roadNetAddNode(road, pos);
+    roadNetAddEdge(road, from, ni);
     return ni;
 }
 
-int roadNetSplitEdge(RoadNet& net, int edgeIndex, const Vec2& pos) {
-    if (edgeIndex < 0 || edgeIndex >= static_cast<int>(net.edges.size())) return -1;
-    int a = net.edges[edgeIndex][0], b = net.edges[edgeIndex][1];
-    int ni = roadNetAddNode(net, pos);
-    net.edges[edgeIndex] = {a, ni};           // a -> new
-    net.edges.push_back({ni, b});             // new -> b
-    if (!net.edgeWidths.empty())              // both halves inherit the split edge's width
-        net.edgeWidths.push_back(edgeIndex < static_cast<int>(net.edgeWidths.size())
-                                     ? net.edgeWidths[edgeIndex] : 0.0);
-    if (!net.edgeClasses.empty())             // ...and its class
-        net.edgeClasses.push_back(edgeIndex < static_cast<int>(net.edgeClasses.size())
-                                      ? net.edgeClasses[edgeIndex] : RoadClass::Local);
+int roadNetSplitEdge(RoadEntity& road, int edgeIndex, const Vec2& pos) {
+    RoadGraph& g = road.graph;
+    if (edgeIndex < 0 || edgeIndex >= static_cast<int>(g.edges.size())) return -1;
+    int ni = roadNetAddNode(road, pos);
+    // Both halves inherit the split edge's width/class/spec/layer wholesale —
+    // the copy carries every field, which is the whole point of the one graph.
+    RoadEdge second = g.edges[edgeIndex];
+    const int b = second.b;
+    g.edges[edgeIndex].b = ni;                // a -> new
+    second.a = ni; second.b = b;              // new -> b
+    g.edges.push_back(second);
     return ni;
 }
 
-bool roadNetDeleteNode(RoadNet& net, int i) {
-    const int n = static_cast<int>(net.nodes.size());
+bool roadNetDeleteNode(RoadEntity& road, int i) {
+    RoadGraph& g = road.graph;
+    const int n = static_cast<int>(g.nodes.size());
     if (i < 0 || i >= n) return false;
-    std::vector<std::array<int, 2>> kept;
-    std::vector<double> keptW;
-    std::vector<RoadClass> keptC;
-    std::vector<int> keptS, keptL;
-    std::vector<uint8_t> keptB;
-    const bool hasW = !net.edgeWidths.empty();
-    const bool hasC = !net.edgeClasses.empty();
-    const bool hasS = !net.edgeSpecs.empty();
-    const bool hasB = !net.edgeBaked.empty();
-    const bool hasL = !net.edgeLayers.empty();
-    auto pick = [&](const auto& v, int ei, auto def) {
-        return ei < static_cast<int>(v.size()) ? v[ei] : def;
-    };
-    for (int ei = 0; ei < static_cast<int>(net.edges.size()); ++ei) {
-        const std::array<int, 2>& e = net.edges[ei];
-        if (e[0] == i || e[1] == i) continue;                 // drop incident edges
-        kept.push_back({ e[0] > i ? e[0] - 1 : e[0], e[1] > i ? e[1] - 1 : e[1] });
-        if (hasW) keptW.push_back(pick(net.edgeWidths, ei, 0.0));
-        if (hasC) keptC.push_back(pick(net.edgeClasses, ei, RoadClass::Local));
-        if (hasS) keptS.push_back(pick(net.edgeSpecs, ei, -1));
-        if (hasB) keptB.push_back(pick(net.edgeBaked, ei, uint8_t(0)));
-        if (hasL) keptL.push_back(pick(net.edgeLayers, ei, 0));
+    // Edge fields travel WITH their edge, so the delete cannot desync them
+    // (review S4b: the parallel arrays once shifted out of order here).
+    std::vector<RoadEdge> kept;
+    for (const RoadEdge& e : g.edges) {
+        if (e.a == i || e.b == i) continue;                   // drop incident edges
+        RoadEdge o = e;
+        if (o.a > i) --o.a;
+        if (o.b > i) --o.b;
+        kept.push_back(o);
     }
-    net.edges = std::move(kept);
-    if (hasW) net.edgeWidths = std::move(keptW);              // stay parallel to edges
-    if (hasC) net.edgeClasses = std::move(keptC);
-    if (hasS) net.edgeSpecs = std::move(keptS);   // review S4b: were desynced —
-    if (hasB) net.edgeBaked = std::move(keptB);   // a delete shifted indices but
-    if (hasL) net.edgeLayers = std::move(keptL);  // these stayed at old order
-    net.nodes.erase(net.nodes.begin() + i);
-    if (i < static_cast<int>(net.tangents.size()))
-        net.tangents.erase(net.tangents.begin() + i);          // keep tangents parallel
-    if (i < static_cast<int>(net.nodeElev.size()))
-        net.nodeElev.erase(net.nodeElev.begin() + i);          // and elevations
-    if (i < static_cast<int>(net.nodeKinds.size()))
-        net.nodeKinds.erase(net.nodeKinds.begin() + i);        // and semantic hints
+    g.edges = std::move(kept);
+    g.nodes.erase(g.nodes.begin() + i);
     return true;
 }
 
-int roadNetNearestEdge(const RoadNet& net, const Vec2& p, double maxDist) {
+int roadNetNearestEdge(const RoadEntity& road, const Vec2& p, double maxDist) {
+    const RoadGraph& g = road.graph;
     int best = -1;
     double bestD2 = maxDist * maxDist;
-    for (int ei = 0; ei < static_cast<int>(net.edges.size()); ++ei) {
-        int a = net.edges[ei][0], b = net.edges[ei][1];
-        if (a < 0 || b < 0 || a >= static_cast<int>(net.nodes.size())
-            || b >= static_cast<int>(net.nodes.size())) continue;
-        Vec2 A = net.nodes[a], B = net.nodes[b], ab = B - A;
+    for (int ei = 0; ei < static_cast<int>(g.edges.size()); ++ei) {
+        const RoadEdge& e = g.edges[ei];
+        if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(g.nodes.size())
+            || e.b >= static_cast<int>(g.nodes.size())) continue;
+        Vec2 A = g.nodes[e.a].pos, B = g.nodes[e.b].pos, ab = B - A;
         double len2 = ab.lengthSquared();
         double t = len2 > 1e-9 ? std::max(0.0, std::min(1.0, dot(p - A, ab) / len2)) : 0.0;
         double d2 = (p - (A + ab * t)).lengthSquared();
@@ -1767,37 +1711,54 @@ int roadNetNearestEdge(const RoadNet& net, const Vec2& p, double maxDist) {
     return best;
 }
 
-RoadNet roadNetFromJson(const json& j) {
-    RoadNet net;
+// --- level I/O -----------------------------------------------------------------
+// THE ONLY CODE THAT STILL KNOWS THE PARALLEL-ARRAY SHAPE (unification step 6).
+// The wire format is unchanged — sparse per-edge overrides, short arrays meaning
+// "default" — and every fallback is resolved HERE, on the way in, so nothing
+// downstream ever guards a size again.
+
+RoadEntity roadNetFromJson(const json& j) {
+    RoadEntity road;
+    // The look first: the default width seeds every edge that carries no override.
+    road.look.defaultWidth = j.value("width", road.look.defaultWidth);
+    road.look.sidewalk = j.value("sidewalk", road.look.sidewalk);
+    road.look.curb = j.value("curb", road.look.curb);
+    road.look.cornerRadius = j.value("corner_radius", road.look.cornerRadius);
+    road.look.lift = j.value("lift", road.look.lift);
+    road.look.markings = j.value("markings", road.look.markings);
+    road.look.crosswalks = j.value("crosswalks", road.look.crosswalks);
+    road.look.autoRoundabout = j.value("auto_roundabout", road.look.autoRoundabout);
+    if (j.contains("color") && j["color"].is_array() && j["color"].size() == 3)
+        road.look.color = Vec3(j["color"][0].get<double>(), j["color"][1].get<double>(),
+                               j["color"][2].get<double>());
+
+    RoadGraph& g = road.graph;
     if (j.contains("nodes") && j["nodes"].is_array())
         for (const json& p : j["nodes"])
-            net.nodes.push_back(Vec2(p.value("x", 0.0), p.value("z", 0.0)));
+            g.nodes.push_back(RoadNode{Vec2(p.value("x", 0.0), p.value("z", 0.0))});
     if (j.contains("edges") && j["edges"].is_array())
         for (const json& e : j["edges"]) {
             double w = 0.0;
+            RoadEdge ge;
             if (e.is_array() && e.size() >= 2) {
-                net.edges.push_back({e[0].get<int>(), e[1].get<int>()});
+                ge.a = e[0].get<int>(); ge.b = e[1].get<int>();
                 if (e.size() >= 3) w = e[2].get<double>();        // [a, b, width]
             } else if (e.is_object()) {
-                net.edges.push_back({e.value("a", 0), e.value("b", 0)});
+                ge.a = e.value("a", 0); ge.b = e.value("b", 0);
                 w = e.value("width", 0.0);
             } else {
                 continue;
             }
-            if (w > 0.0) {                                        // a per-edge override
-                if (net.edgeWidths.size() < net.edges.size())
-                    net.edgeWidths.resize(net.edges.size(), 0.0);
-                net.edgeWidths.back() = w;
-            }
+            // Resolve the width fallback at construction: override, else default.
+            ge.width = static_cast<Real>(w > 0.0 ? w : road.look.defaultWidth);
+            g.edges.push_back(ge);
         }
     if (j.contains("edge_layers") && j["edge_layers"].is_array()) {
-        net.edgeLayers.assign(net.edges.size(), 0);
         const json& el = j["edge_layers"];
-        for (std::size_t i = 0; i < el.size() && i < net.edgeLayers.size(); ++i)
-            net.edgeLayers[i] = el[i].get<int>();
+        for (std::size_t i = 0; i < el.size() && i < g.edges.size(); ++i)
+            g.edges[i].layer = el[i].get<int>();
     }
     if (j.contains("edge_classes") && j["edge_classes"].is_array()) {
-        net.edgeClasses.assign(net.edges.size(), RoadClass::Local);
         const json& ec = j["edge_classes"];
         auto parseClass = [](const std::string& s) {
             if (s == "freeway")   return RoadClass::Freeway;
@@ -1806,91 +1767,88 @@ RoadNet roadNetFromJson(const json& j) {
             if (s == "ramp")      return RoadClass::Ramp;
             return RoadClass::Local;
         };
-        for (std::size_t i = 0; i < ec.size() && i < net.edgeClasses.size(); ++i)
-            net.edgeClasses[i] = parseClass(ec[i].get<std::string>());
+        for (std::size_t i = 0; i < ec.size() && i < g.edges.size(); ++i)
+            g.edges[i].klass = parseClass(ec[i].get<std::string>());
     }
-    if (j.contains("tangents") && j["tangents"].is_array())
-        for (const json& t : j["tangents"]) {
+    if (j.contains("tangents") && j["tangents"].is_array()) {
+        const json& ts = j["tangents"];
+        for (std::size_t i = 0; i < ts.size() && i < g.nodes.size(); ++i) {
+            const json& t = ts[i];
             if (t.is_array() && t.size() >= 2)
-                net.tangents.push_back(Vec2(t[0].get<double>(), t[1].get<double>()));
+                g.nodes[i].tangent = Vec2(t[0].get<double>(), t[1].get<double>());
             else if (t.is_object())
-                net.tangents.push_back(Vec2(t.value("x", 0.0), t.value("z", 0.0)));
+                g.nodes[i].tangent = Vec2(t.value("x", 0.0), t.value("z", 0.0));
         }
-    // Per-node absolute deck Y (elevated roads). Parallel to nodes; a null (or a
-    // non-number) entry means at-grade, stored as NaN so netGraph drapes it.
+    }
+    // Per-node absolute deck Y (elevated roads). A null (or non-number) entry
+    // means at-grade — resolved straight to elevAbsolute=false (drape).
     if (j.contains("node_elev") && j["node_elev"].is_array()) {
         const json& ne = j["node_elev"];
-        net.nodeElev.assign(net.nodes.size(),
-                            std::numeric_limits<double>::quiet_NaN());
-        for (std::size_t i = 0; i < ne.size() && i < net.nodeElev.size(); ++i)
-            if (ne[i].is_number()) net.nodeElev[i] = ne[i].get<double>();
+        for (std::size_t i = 0; i < ne.size() && i < g.nodes.size(); ++i)
+            if (ne[i].is_number()) {
+                g.nodes[i].elev = static_cast<Real>(ne[i].get<double>());
+                g.nodes[i].elevAbsolute = true;
+            }
     }
-    net.width = j.value("width", net.width);
-    net.sidewalk = j.value("sidewalk", net.sidewalk);
-    net.curb = j.value("curb", net.curb);
-    net.cornerRadius = j.value("corner_radius", net.cornerRadius);
-    net.lift = j.value("lift", net.lift);
-    net.markings = j.value("markings", net.markings);
-    net.crosswalks = j.value("crosswalks", net.crosswalks);
-    net.autoRoundabout = j.value("auto_roundabout", net.autoRoundabout);
     // Roads-v2 band model: a spec table + per-edge indices. Either a preset
     // name ("freeway3") or an object with a "bands" array per entry.
     if (j.contains("specs") && j["specs"].is_array())
-        for (const auto& js : j["specs"]) net.specs.push_back(roadSpecFromJson(js));
-    if (j.contains("edge_specs") && j["edge_specs"].is_array())
-        for (const auto& je : j["edge_specs"])
-            net.edgeSpecs.push_back(je.is_number_integer() ? je.get<int>() : -1);
-    if (j.contains("color") && j["color"].is_array() && j["color"].size() == 3)
-        net.color = Vec3(j["color"][0].get<double>(), j["color"][1].get<double>(),
-                         j["color"][2].get<double>());
-    return net;
+        for (const auto& js : j["specs"]) g.specs.push_back(roadSpecFromJson(js));
+    if (j.contains("edge_specs") && j["edge_specs"].is_array()) {
+        const json& es = j["edge_specs"];
+        for (std::size_t i = 0; i < es.size() && i < g.edges.size(); ++i)
+            g.edges[i].spec = es[i].is_number_integer() ? es[i].get<int>() : -1;
+    }
+    return road;
 }
 
-json roadNetToJson(const RoadNet& net) {
+json roadNetToJson(const RoadEntity& road) {
+    const RoadGraph& g = road.graph;
     json j;
     json nodes = json::array();
-    for (const Vec2& p : net.nodes) nodes.push_back({{"x", p.x}, {"z", p.y}});
+    for (const RoadNode& p : g.nodes) nodes.push_back({{"x", p.pos.x}, {"z", p.pos.y}});
     j["nodes"] = std::move(nodes);
     json edges = json::array();
-    for (int i = 0; i < static_cast<int>(net.edges.size()); ++i) {
-        const std::array<int, 2>& e = net.edges[i];
-        double w = (i < static_cast<int>(net.edgeWidths.size())) ? net.edgeWidths[i] : 0.0;
-        if (w > 0.0) edges.push_back(json::array({e[0], e[1], w}));    // [a, b, width]
-        else         edges.push_back(json::array({e[0], e[1]}));
+    for (const RoadEdge& e : g.edges) {
+        // Reconstruct the sparse form: only a width that differs from the look's
+        // default is an override worth writing ([a, b, width]).
+        const double w = e.width;
+        if (w != road.look.defaultWidth) edges.push_back(json::array({e.a, e.b, w}));
+        else                             edges.push_back(json::array({e.a, e.b}));
     }
     j["edges"] = std::move(edges);
     bool anyLayer = false;
-    for (int l : net.edgeLayers) if (l != 0) { anyLayer = true; break; }
+    for (const RoadEdge& e : g.edges) if (e.layer != 0) { anyLayer = true; break; }
     if (anyLayer) {
         json layers = json::array();
-        for (int i = 0; i < static_cast<int>(net.edges.size()); ++i)
-            layers.push_back(i < static_cast<int>(net.edgeLayers.size()) ? net.edgeLayers[i] : 0);
+        for (const RoadEdge& e : g.edges) layers.push_back(e.layer);
         j["edge_layers"] = std::move(layers);
     }
-    if (!net.tangents.empty()) {
+    bool anyTan = false;
+    for (const RoadNode& n : g.nodes) if (!isZero(n.tangent)) { anyTan = true; break; }
+    if (anyTan) {
         json tans = json::array();
-        for (const Vec2& t : net.tangents) tans.push_back(json::array({t.x, t.y}));
+        for (const RoadNode& n : g.nodes)
+            tans.push_back(json::array({n.tangent.x, n.tangent.y}));
         j["tangents"] = std::move(tans);
     }
     bool anyElev = false;
-    for (double e : net.nodeElev) if (std::isfinite(e)) { anyElev = true; break; }
+    for (const RoadNode& n : g.nodes) if (n.elevAbsolute) { anyElev = true; break; }
     if (anyElev) {
         json elev = json::array();
-        for (std::size_t i = 0; i < net.nodes.size(); ++i)
-            if (i < net.nodeElev.size() && std::isfinite(net.nodeElev[i]))
-                elev.push_back(net.nodeElev[i]);
-            else
-                elev.push_back(nullptr);           // at-grade node
+        for (const RoadNode& n : g.nodes)
+            if (n.elevAbsolute) elev.push_back(static_cast<double>(n.elev));
+            else                elev.push_back(nullptr);           // at-grade node
         j["node_elev"] = std::move(elev);
     }
-    j["width"] = net.width;
-    j["sidewalk"] = net.sidewalk;
-    j["curb"] = net.curb;
-    j["corner_radius"] = net.cornerRadius;
-    j["lift"] = net.lift;
-    j["markings"] = net.markings;
-    j["crosswalks"] = net.crosswalks;
-    j["color"] = json::array({net.color.x, net.color.y, net.color.z});
+    j["width"] = road.look.defaultWidth;
+    j["sidewalk"] = road.look.sidewalk;
+    j["curb"] = road.look.curb;
+    j["corner_radius"] = road.look.cornerRadius;
+    j["lift"] = road.look.lift;
+    j["markings"] = road.look.markings;
+    j["crosswalks"] = road.look.crosswalks;
+    j["color"] = json::array({road.look.color.x, road.look.color.y, road.look.color.z});
     return j;
 }
 
@@ -2040,27 +1998,24 @@ static RoadGraph pruneAcuteArms(const RoadGraph& in, double hardMin) {
     return out;
 }
 
-void applyGenerateRecipe(RoadNet& net, const json& g) {
+void applyGenerateRecipe(RoadEntity& road, const json& g, const RoadGroundFn& heightAt) {
     RT_PROFILE_ZONE_NAMED("applyGenerateRecipe");
     if (!g.is_object()) return;
     // Pick the generator. "district" (default) subdivides one footprint; "metro"
     // grows organic arterials between hotspots and fills the blocks between them.
     // Both hand a raw RoadGraph to the SHARED junction-policy tail below.
     const std::string kind = g.value("kind", std::string("district"));
-    // A regenerate must leave a CLEAN net: buildMetro APPENDS freeway plans and
-    // hubs (they would accumulate across regenerates), and the S2/S3 parallel
-    // arrays (specs, baked flags, node elevations) describe the OLD graph — a
-    // stale edgeBaked entry would silently drop a fresh street edge from the
-    // mesh, a stale nodeElev would lift a street onto a phantom deck.
-    net.freewayPlans.clear();
-    net.cityHubs.clear();
-    net.siteFootprints.clear();
-    net.specs.clear();
-    net.edgeSpecs.clear();
-    net.edgeBaked.clear();
-    net.nodeElev.clear();
-    net.nodeKinds.clear();   // stale baked hints would land on fresh grid nodes
-    net.tangents.clear();
+    // A regenerate must leave a CLEAN road: buildMetro APPENDS freeway plans and
+    // hubs (they would accumulate across regenerates), and stale spec/baked/
+    // elevation state describes the OLD graph — a stale baked flag would
+    // silently drop a fresh street edge from the mesh, a stale elevation would
+    // lift a street onto a phantom deck. The graph assignment below replaces
+    // nodes/edges wholesale (with per-field normalization), so only the plan
+    // and the spec table need explicit clearing here.
+    road.plan.freewayPlans.clear();
+    road.plan.cityHubs.clear();
+    road.plan.siteFootprints.clear();
+    road.graph.specs.clear();
     RoadGraph base;
     if (kind == "metro") {
         MetroParams mp;
@@ -2071,8 +2026,8 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         mp.radius      = g.value("radius", 700.0);
         mp.hotspots    = g.value("hotspots", 6);
         mp.blockSize   = g.value("block_size", 70.0);
-        mp.arteryWidth = g.value("artery_width", net.width * 1.6);
-        mp.streetWidth = g.value("street_width", net.width);
+        mp.arteryWidth = g.value("artery_width", road.look.defaultWidth * 1.6);
+        mp.streetWidth = g.value("street_width", road.look.defaultWidth);
         mp.ringRoad    = g.value("ring_road", false);
         mp.seed        = g.value("seed", 5u);
         // Metropolis tier: freeway backbone + collector streets. Defaults on for
@@ -2144,13 +2099,13 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
                 mp.sites.push_back(ms);
             }
         }
-        mp.outHubs = &net.cityHubs;   // polycentric zoning reads these (city_lots)
-        mp.outFootprints = &net.siteFootprints;   // planner overlay + hand-edit
+        mp.outHubs = &road.plan.cityHubs;   // polycentric zoning reads these (city_lots)
+        mp.outFootprints = &road.plan.siteFootprints;   // planner overlay + hand-edit
         // Terrain-aware layout: when the road is draped on terrain, gate the city
         // on buildability so it hugs buildable land and avoids water / steep
         // mountain instead of marching over them. Opt out with terrain_aware:false.
-        if (net.heightAt && g.value("terrain_aware", true)) {
-            mp.ground = net.heightAt;
+        if (heightAt && g.value("terrain_aware", true)) {
+            mp.ground = heightAt;
             mp.build.maxSlope  = g.value("max_slope", 0.32);
             mp.build.seaLevel  = g.value("sea_level", -1e30);
             mp.build.beachRise = g.value("beach_rise", 2.5);
@@ -2165,7 +2120,7 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
                     if (line.size() >= 2) mp.build.rivers.push_back(std::move(line));
                 }
         }
-        base = buildMetro(mp, &net.freewayPlans);
+        base = buildMetro(mp, &road.plan.freewayPlans);
     } else {
         DistrictParams dp;
         if (g.contains("center")) {
@@ -2180,8 +2135,8 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         dp.irregular    = g.value("irregular", 0.22);
         dp.jitter       = g.value("jitter", 0.16);
         dp.seed         = g.value("seed", 1u);
-        dp.arteryWidth  = g.value("artery_width", net.width * 1.6);
-        dp.streetWidth  = g.value("street_width", net.width);
+        dp.arteryWidth  = g.value("artery_width", road.look.defaultWidth * 1.6);
+        dp.streetWidth  = g.value("street_width", road.look.defaultWidth);
         // Downtown blocks are bigger (see DistrictParams): `core_block_scale`
         // multiplies the block size at the centre and eases out to 1.0 at
         // `core_radius` (default: 45% of the footprint). 1.0 = uniform, as before.
@@ -2339,17 +2294,27 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
         // itself. Relax such through-nodes toward their chord until drivable.
         cg = relaxSharpBends(cg);
     }
-    // Carry the generator's junction policy onto the net so the mesh + conform
+    // Carry the generator's junction policy onto the look so the mesh + conform
     // passes don't re-promote roundabouts it deliberately disabled (ADR-0075 P0).
-    net.autoRoundabout = rules.autoRoundabout;
-    net.nodes.clear(); net.edges.clear(); net.edgeWidths.clear();
-    net.edgeClasses.clear(); net.edgeLayers.clear();
-    for (const RoadNode& n : cg.nodes) net.nodes.push_back(n.pos);
+    road.look.autoRoundabout = rules.autoRoundabout;
+    // The generator's graph BECOMES the entity's graph — same node and edge
+    // ORDER (the determinism gate, test_road_graph_order, rides on this).
+    // NORMALIZED, not copied raw: the parallel-array era kept only
+    // {pos, a, b, width, klass, layer} and dropped every other field
+    // (elevations, kinds, tangents, specs, baked flags) — reproduce that
+    // truncation exactly, or stale generator side-state changes the city.
+    road.graph.nodes.clear();
+    road.graph.edges.clear();
+    road.graph.nodes.reserve(cg.nodes.size());
+    for (const RoadNode& n : cg.nodes) road.graph.nodes.push_back(RoadNode{n.pos});
+    road.graph.edges.reserve(cg.edges.size());
     for (const RoadEdge& e : cg.edges) {
-        net.edges.push_back({e.a, e.b});
-        net.edgeWidths.push_back(e.width);          // arterials wider than local streets
-        net.edgeClasses.push_back(e.klass);         // carry the grown class (P1 unification)
-        net.edgeLayers.push_back(e.layer);          // and its grade-separation tier
+        RoadEdge oe;
+        oe.a = e.a; oe.b = e.b;
+        oe.width = e.width;          // arterials wider than local streets
+        oe.klass = e.klass;          // carry the grown class (P1 unification)
+        oe.layer = e.layer;          // and its grade-separation tier
+        road.graph.edges.push_back(oe);
     }
     // --- REAL CROSS-SECTIONS FOR GENERATED STREETS (the parking round) -------
     // Glenn: "the road doesn't really have any clearance for parking — it's half
@@ -2361,26 +2326,25 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
     // PARKING | curb | sidewalk — and the bays are placed FROM it.
     //
     // WIDTH AGREEMENT (the correctness crux): lots (city_lots' roadSurfaceDist /
-    // pushPolyClearOfRoads), nav lane spacing and the mesher all read
-    // roadNetEdgeWidth / RoadEdge::width. roadSpecStreetParking carves its bands
-    // out of the width it is GIVEN, and we write carriagewayWidth() straight back
-    // into edgeWidths — so the drawn road can never grow wider than the width
-    // buildings keep clear of. A road too narrow to carry parking gets a spec
-    // with no Parking band (and, again, its exact original width).
+    // pushPolyClearOfRoads), nav lane spacing and the mesher all read the ONE
+    // RoadEdge::width. roadSpecStreetParking carves its bands out of the width
+    // it is GIVEN, and we write carriagewayWidth() straight back into the edge
+    // — so the drawn road can never grow wider than the width buildings keep
+    // clear of. A road too narrow to carry parking gets a spec with no Parking
+    // band (and, again, its exact original width).
     // Arterials/boulevards/freeways/ramps are left specless: today's look.
     if (kind == "metro" && g.value("street_parking", true)) {
         const double parkW = g.value("parking_width", 2.5);
         const double minLane = g.value("min_lane_width", 3.2);
-        net.specs.clear();
-        net.edgeSpecs.assign(net.edges.size(), -1);
+        road.graph.specs.clear();
         // One spec per distinct (class, width) — a handful of entries, not one
         // per edge, so the table stays inspectable and JSON-friendly.
         std::vector<std::pair<RoadClass, double>> key;
-        for (std::size_t ei = 0; ei < net.edges.size(); ++ei) {
-            const RoadClass k = net.edgeClasses[ei];
+        for (RoadEdge& e : road.graph.edges) {
+            const RoadClass k = e.klass;
             if (k != RoadClass::Local && k != RoadClass::Collector) continue;
-            if (net.edgeLayers[ei] != 0) continue;   // a deck/bridge has no frontage
-            const double w = net.edgeWidths[ei];
+            if (e.layer != 0) continue;              // a deck/bridge has no frontage
+            const double w = e.width;
             int si = -1;
             for (std::size_t t = 0; t < key.size(); ++t)
                 if (key[t].first == k && std::fabs(key[t].second - w) < 1e-9) {
@@ -2390,14 +2354,15 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
             if (si < 0) {
                 si = static_cast<int>(key.size());
                 key.push_back({k, w});
-                net.specs.push_back(roadSpecStreetParking(
+                road.graph.specs.push_back(roadSpecStreetParking(
                     w, std::max(1, lanesForClass(k, /*perDirection=*/true)),
-                    net.sidewalk, net.curb > 0.0 ? 0.25 : 0.0, parkW, minLane));
+                    road.look.sidewalk, road.look.curb > 0.0 ? 0.25 : 0.0, parkW,
+                    minLane));
             }
-            net.edgeSpecs[ei] = si;
+            e.spec = si;
             // Re-assert the ONE width every consumer reads. Equal by
             // construction; written back so it can never silently drift.
-            net.edgeWidths[ei] = net.specs[si].carriagewayWidth();
+            e.width = static_cast<Real>(road.graph.specs[si].carriagewayWidth());
         }
     }
 }
@@ -2406,16 +2371,18 @@ void applyGenerateRecipe(RoadNet& net, const json& g) {
 // EXACT chain decomposition + constrained graph the mesher builds from — a
 // near-miss decomposition gave it deck heights that drifted from the real road
 // on hills and poisoned the LOD0 numbers (plan P3.2 round 6).
-RoadGraph roadNetConstrainedGraph(const RoadNet& net) { return constrainedNetGraph(net); }
+RoadGraph roadNetConstrainedGraph(const RoadEntity& road, const RoadGroundFn& heightAt) {
+    return constrainedGraph(road, heightAt);
+}
 std::vector<UnionSpine> roadNetWeldSpines(const RoadGraph& g) { return weldChainSpines(g); }
 
-json roadRecipeForSave(const std::string& currentRecipe, const RoadNet& net) {
+json roadRecipeForSave(const std::string& currentRecipe, const RoadEntity& road) {
     json recipe = json::parse(currentRecipe, nullptr, false);
     if (!recipe.is_object() || !recipe.contains("generate"))
-        return roadNetToJson(net);                  // hand-authored: the net IS the saved form
-    // Generated road: keep the "generate" block and refresh only the look from the net — never bake
+        return roadNetToJson(road);                 // hand-authored: the graph IS the saved form
+    // Generated road: keep the "generate" block and refresh only the look — never bake
     // the nodes (baking froze the city and lost the recipe, the grown.json "save changed" bug).
-    json look = roadNetToJson(net);
+    json look = roadNetToJson(road);
     for (const char* k : {"nodes", "edges", "edge_layers", "tangents"}) look.erase(k);
     look["generate"] = recipe["generate"];
     return look;

@@ -364,7 +364,7 @@ std::vector<PlannedCorridor> planCorridorRoutes(
 
 // §10.6: streets may pass UNDER a viaduct, never THROUGH an at-grade corridor
 // — cut street edges that cross a low span of any corridor.
-void cutStreetsUnderCorridors(const std::vector<RoadNet*>& nets,
+void cutStreetsUnderCorridors(const std::vector<RoadEntity*>& nets,
                               const std::vector<CorridorDef>& defs,
                               const std::function<Real(Real, Real)>& ground) {
     if (!ground || defs.empty()) return;
@@ -388,26 +388,15 @@ void cutStreetsUnderCorridors(const std::vector<RoadNet*>& nets,
         }
     }
     int cut = 0;
-    for (RoadNet* netp : nets) {
-        RoadNet& net = *netp;
-        std::vector<std::array<int, 2>> keptE;
-        std::vector<double> keptW;
-        std::vector<int> keptL;
-        std::vector<RoadClass> keptC;
-        std::vector<int> keptS;
-        std::vector<uint8_t> keptB;
-        const bool hasW = !net.edgeWidths.empty();
-        const bool hasL = !net.edgeLayers.empty();
-        const bool hasC = !net.edgeClasses.empty();
-        const bool hasS = !net.edgeSpecs.empty();
-        const bool hasB = !net.edgeBaked.empty();
-        for (std::size_t ei = 0; ei < net.edges.size(); ++ei) {
-            const auto& ed = net.edges[ei];
+    for (RoadEntity* netp : nets) {
+        RoadGraph& g = netp->graph;
+        std::vector<RoadEdge> kept;
+        for (const RoadEdge& ed : g.edges) {
             bool blocked = false;
-            if (ed[0] >= 0 && ed[1] >= 0 &&
-                ed[0] < static_cast<int>(net.nodes.size()) &&
-                ed[1] < static_cast<int>(net.nodes.size())) {
-                const Vec2 A = net.nodes[ed[0]], B = net.nodes[ed[1]];
+            if (ed.a >= 0 && ed.b >= 0 &&
+                ed.a < static_cast<int>(g.nodes.size()) &&
+                ed.b < static_cast<int>(g.nodes.size())) {
+                const Vec2 A = g.nodes[ed.a].pos, B = g.nodes[ed.b].pos;
                 for (int k = 0; k <= 8 && !blocked; ++k) {
                     const Vec2 q = A + (B - A) * (k / 8.0);
                     for (const CorSample& sm2 : cs) {
@@ -420,29 +409,9 @@ void cutStreetsUnderCorridors(const std::vector<RoadNet*>& nets,
                 }
             }
             if (blocked) { ++cut; continue; }
-            keptE.push_back(ed);
-            if (hasW)
-                keptW.push_back(ei < net.edgeWidths.size()
-                                    ? net.edgeWidths[ei] : 0.0);
-            if (hasL)
-                keptL.push_back(ei < net.edgeLayers.size()
-                                    ? net.edgeLayers[ei] : 0);
-            if (hasC)
-                keptC.push_back(ei < net.edgeClasses.size()
-                                    ? net.edgeClasses[ei] : RoadClass::Local);
-            if (hasS)
-                keptS.push_back(ei < net.edgeSpecs.size()
-                                    ? net.edgeSpecs[ei] : -1);
-            if (hasB)
-                keptB.push_back(ei < net.edgeBaked.size()
-                                    ? net.edgeBaked[ei] : 0);
+            kept.push_back(ed);   // every per-edge field rides along
         }
-        net.edges.swap(keptE);
-        if (hasW) net.edgeWidths.swap(keptW);
-        if (hasL) net.edgeLayers.swap(keptL);
-        if (hasC) net.edgeClasses.swap(keptC);
-        if (hasS) net.edgeSpecs.swap(keptS);
-        if (hasB) net.edgeBaked.swap(keptB);
+        g.edges.swap(kept);
     }
     if (cut) LOG_INFO << "[corridor] cut " << cut
                       << " street edges crossing at-grade spans";
@@ -458,20 +427,20 @@ void cutStreetsUnderCorridors(const std::vector<RoadNet*>& nets,
 // landing must be a node the street net can grow a junction STUB from. The
 // return records (net, node) per exit.
 std::vector<std::pair<int, int>> resolveCorridorLandings(
-    CorridorDef& def, const std::vector<RoadNet*>& nets,
+    CorridorDef& def, const std::vector<RoadEntity*>& nets,
     const std::function<Real(Real, Real)>& ground) {
     struct StreetAnchor { int net; int node; Vec2 pos; int degree; };
     std::vector<StreetAnchor> anchors;
     for (std::size_t ni = 0; ni < nets.size(); ++ni) {
-        const RoadNet& net = *nets[ni];
-        std::vector<int> deg(net.nodes.size(), 0);
-        for (const auto& ed : net.edges) {
-            if (ed[0] >= 0 && ed[0] < static_cast<int>(deg.size())) ++deg[ed[0]];
-            if (ed[1] >= 0 && ed[1] < static_cast<int>(deg.size())) ++deg[ed[1]];
+        const RoadGraph& g = nets[ni]->graph;
+        std::vector<int> deg(g.nodes.size(), 0);
+        for (const RoadEdge& ed : g.edges) {
+            if (ed.a >= 0 && ed.a < static_cast<int>(deg.size())) ++deg[ed.a];
+            if (ed.b >= 0 && ed.b < static_cast<int>(deg.size())) ++deg[ed.b];
         }
-        for (std::size_t k = 0; k < net.nodes.size(); ++k)
+        for (std::size_t k = 0; k < g.nodes.size(); ++k)
             anchors.push_back({static_cast<int>(ni), static_cast<int>(k),
-                               net.nodes[k], deg[k]});
+                               g.nodes[k].pos, deg[k]});
     }
     std::vector<std::pair<int, int>> rampAnchors(def.exits.size(), {-1, -1});
     std::vector<Vec2> used;
@@ -562,14 +531,14 @@ std::vector<std::pair<int, int>> resolveCorridorLandings(
             int bNet = -1, bEdge = -1;
             Vec2 bProj;
             for (std::size_t ni = 0; ni < nets.size(); ++ni) {
-                const RoadNet& net = *nets[ni];
-                for (std::size_t ei = 0; ei < net.edges.size(); ++ei) {
-                    const auto& ed = net.edges[ei];
-                    if (ed[0] < 0 || ed[1] < 0 ||
-                        ed[0] >= (int)net.nodes.size() ||
-                        ed[1] >= (int)net.nodes.size()) continue;
-                    const Vec2 A = net.nodes[ed[0]];
-                    const Vec2 B = net.nodes[ed[1]];
+                const RoadGraph& g2 = nets[ni]->graph;
+                for (std::size_t ei = 0; ei < g2.edges.size(); ++ei) {
+                    const RoadEdge& ed = g2.edges[ei];
+                    if (ed.a < 0 || ed.b < 0 ||
+                        ed.a >= (int)g2.nodes.size() ||
+                        ed.b >= (int)g2.nodes.size()) continue;
+                    const Vec2 A = g2.nodes[ed.a].pos;
+                    const Vec2 B = g2.nodes[ed.b].pos;
                     const Vec2 AB = B - A;
                     const Real l2 = AB.lengthSquared();
                     if (l2 < 400.0) continue;   // skip short stubs
@@ -590,42 +559,18 @@ std::vector<std::pair<int, int>> resolveCorridorLandings(
                 }
             }
             if (bNet >= 0) {
-                RoadNet& net = *nets[bNet];
-                if (net.tangents.size() < net.nodes.size())
-                    net.tangents.resize(net.nodes.size(), Vec2(0, 0));
-                if (net.edgeWidths.size() < net.edges.size())
-                    net.edgeWidths.resize(net.edges.size(), 0.0);
-                if (net.edgeLayers.size() < net.edges.size())
-                    net.edgeLayers.resize(net.edges.size(), 0);
-                if (!net.edgeClasses.empty() &&
-                    net.edgeClasses.size() < net.edges.size())
-                    net.edgeClasses.resize(net.edges.size(), RoadClass::Local);
-                if (!net.edgeSpecs.empty() &&
-                    net.edgeSpecs.size() < net.edges.size())
-                    net.edgeSpecs.resize(net.edges.size(), -1);
-                if (!net.edgeBaked.empty() &&
-                    net.edgeBaked.size() < net.edges.size())
-                    net.edgeBaked.resize(net.edges.size(), 0);
-                const std::array<int, 2> ab = net.edges[bEdge];
-                const double ew = net.edgeWidths[bEdge];
-                const int el = net.edgeLayers[bEdge];
-                const RoadClass ek = (bEdge < (int)net.edgeClasses.size())
-                                         ? net.edgeClasses[bEdge]
-                                         : RoadClass::Local;
-                const int N = (int)net.nodes.size();
-                net.nodes.push_back(bProj);
-                net.tangents.push_back(Vec2(0, 0));
-                net.edges[bEdge] = {ab[0], N};    // (a -> new)
-                net.edges.push_back({N, ab[1]});  // (new -> b)
-                net.edgeWidths.push_back(ew);
-                net.edgeLayers.push_back(el);
-                if (!net.edgeClasses.empty())
-                    net.edgeClasses.push_back(ek);   // both halves keep the class
-                if (!net.edgeSpecs.empty())
-                    net.edgeSpecs.push_back(
-                        bEdge < (int)net.edgeSpecs.size() ? net.edgeSpecs[bEdge]
-                                                          : -1);
-                if (!net.edgeBaked.empty()) net.edgeBaked.push_back(0);
+                RoadGraph& g = nets[bNet]->graph;
+                // Split the street edge at the projection: both halves keep
+                // the original's width/class/spec/layer (the copy carries
+                // every field); the new T node is a plain auto-tangent knot.
+                const int N = (int)g.nodes.size();
+                g.nodes.push_back(RoadNode{bProj});
+                RoadEdge second = g.edges[bEdge];
+                const int oldB = second.b;
+                g.edges[bEdge].b = N;             // (a -> new)
+                second.a = N; second.b = oldB;    // (new -> b)
+                second.baked = false;             // the street halves stay street
+                g.edges.push_back(second);
                 rampAnchors[xi] = {bNet, N};
                 e.target = bProj;
                 found = true;   // the final else records `used`
@@ -675,30 +620,32 @@ std::vector<std::pair<int, int>> resolveCorridorLandings(
     return rampAnchors;
 }
 
-int rebakeNetCorridors(RoadNet& net, Real interchangeSpacing) {
-    if (!net.heightAt || net.freewayPlans.empty()) return 0;
+int rebakeNetCorridors(RoadEntity& road, Real interchangeSpacing,
+                       const RoadGroundFn& heightAt) {
+    if (!heightAt || road.plan.freewayPlans.empty()) return 0;
     const std::function<Real(Real, Real)> ground =
-        [h = net.heightAt](Real x, Real z) { return h(x, z); };
+        [h = heightAt](Real x, Real z) { return h(x, z); };
     std::vector<CorridorRouteInput> routes;
-    for (const std::vector<Vec2>& plan : net.freewayPlans) {
+    for (const std::vector<Vec2>& plan : road.plan.freewayPlans) {
         if (plan.size() < 2) continue;
         routes.push_back({plan, interchangeSpacing, 0});
     }
     if (routes.empty()) return 0;
     std::vector<CorridorStreetAnchor> anchors;
     {
-        std::vector<int> deg(net.nodes.size(), 0);
-        for (const auto& ed : net.edges) {
-            if (ed[0] >= 0 && ed[0] < static_cast<int>(deg.size())) ++deg[ed[0]];
-            if (ed[1] >= 0 && ed[1] < static_cast<int>(deg.size())) ++deg[ed[1]];
+        const RoadGraph& g = road.graph;
+        std::vector<int> deg(g.nodes.size(), 0);
+        for (const RoadEdge& ed : g.edges) {
+            if (ed.a >= 0 && ed.a < static_cast<int>(deg.size())) ++deg[ed.a];
+            if (ed.b >= 0 && ed.b < static_cast<int>(deg.size())) ++deg[ed.b];
         }
-        for (std::size_t k = 0; k < net.nodes.size(); ++k)
-            anchors.push_back({net.nodes[k], deg[k]});
+        for (std::size_t k = 0; k < g.nodes.size(); ++k)
+            anchors.push_back({g.nodes[k].pos, deg[k]});
     }
     std::vector<PlannedCorridor> planned =
         planCorridorRoutes(routes, anchors, ground);
     if (planned.empty()) return 0;
-    const std::vector<RoadNet*> nets{&net};
+    const std::vector<RoadEntity*> nets{&road};
     {
         std::vector<CorridorDef> defs;
         defs.reserve(planned.size());
@@ -709,7 +656,7 @@ int rebakeNetCorridors(RoadNet& net, Real interchangeSpacing) {
     for (PlannedCorridor& pc : planned) {
         resolveCorridorLandings(pc.def, nets, ground);
         const CorridorAuthoring au = corridorAuthor(pc.def, ground, 3.0);
-        bakeCorridorIntoNet(net, pc.def, au.rampPaths);
+        bakeCorridorIntoNet(road, pc.def, au.rampPaths, {}, heightAt);
         ++baked;
         LOG_INFO << "[bake] regenerate: corridor re-baked (+"
                  << pc.def.exits.size() << " exits planned)";

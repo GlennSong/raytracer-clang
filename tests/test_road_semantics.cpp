@@ -75,13 +75,14 @@ TEST_CASE(semantics_bake_stamps_gores_and_landings) {
     // The exact test_freeway_graph fixture: streets under the corridor, one
     // EXIT at s=400 and one ON-RAMP at s=300 — both gore flavours + both
     // landings in one net.
-    RoadNet net;
-    net.nodes = { Vec2(60, -120),  Vec2(200, -120), Vec2(340, -120),
-                  Vec2(460, -120), Vec2(600, -120), Vec2(740, -120) };
-    net.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 4 }, { 4, 5 } };
-    net.width = 8.0;
-    net.autoRoundabout = false;
-    net.heightAt = [](double, double) { return 0.0; };
+    RoadEntity net;
+    net.look.defaultWidth = 8.0;
+    net.look.autoRoundabout = false;
+    net.graph.nodes = { RoadNode{Vec2(60, -120)},  RoadNode{Vec2(200, -120)},
+                        RoadNode{Vec2(340, -120)}, RoadNode{Vec2(460, -120)},
+                        RoadNode{Vec2(600, -120)}, RoadNode{Vec2(740, -120)} };
+    for (int i = 0; i < 5; ++i) net.graph.addEdge(i, i + 1, net.look.defaultWidth);
+    const RoadGroundFn ground = [](double, double) { return 0.0; };
 
     CorridorDef def;
     def.horizontal =
@@ -104,10 +105,10 @@ TEST_CASE(semantics_bake_stamps_gores_and_landings) {
     def.exits.push_back(on);
 
     CorridorAuthoring au = corridorAuthor(def, [](Real, Real) { return 0.0; });
-    std::vector<int> mainline = bakeCorridorIntoNet(net, def, au.rampPaths);
+    std::vector<int> mainline = bakeCorridorIntoNet(net, def, au.rampPaths, {}, ground);
     CHECK(!mainline.empty());
 
-    RoadGraph g = roadNetFullGraph(net);
+    RoadGraph g = roadNetFullGraph(net, ground);
     int merges = 0, diverges = 0, landings = 0;
     for (const RoadNode& n : g.nodes) {
         if (n.kind == JunctionKind::Merge) ++merges;
@@ -131,8 +132,8 @@ TEST_CASE(semantics_bake_stamps_gores_and_landings) {
     // STREETS-ONLY re-derivation: the ramp edges are stripped, so a hinted
     // landing must DEGRADE to what its remaining street arms are (here the
     // straight street run: a through node, not a junction).
-    const RoadNet so = roadNetStreetsOnly(net);
-    RoadGraph gs = navRoadGraph(so);
+    const RoadEntity so = roadNetStreetsOnly(net);
+    RoadGraph gs = navRoadGraph(so, ground);
     for (const RoadNode& n : gs.nodes) {
         CHECK(n.kind != JunctionKind::Merge);
         CHECK(n.kind != JunctionKind::Diverge);
@@ -199,14 +200,15 @@ TEST_CASE(semantics_audit_rejects_crossing_ramps) {
     // cross the earlier exit's chain at like height. The second chain must
     // roll back — same edge count as a one-exit bake, and no Landing stamp
     // for the dropped ramp's target.
-    auto bakeWith = [](bool addCrosser) {
-        RoadNet net;
-        net.nodes = { Vec2(60, -120),  Vec2(200, -120), Vec2(340, -120),
-                      Vec2(460, -120), Vec2(600, -120), Vec2(740, -120) };
-        net.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 4 }, { 4, 5 } };
-        net.width = 8.0;
-        net.autoRoundabout = false;
-        net.heightAt = [](double, double) { return 0.0; };
+    const RoadGroundFn ground = [](double, double) { return 0.0; };  // the flat level terrain
+    auto bakeWith = [&ground](bool addCrosser) {
+        RoadEntity net;
+        net.look.defaultWidth = 8.0;
+        net.look.autoRoundabout = false;
+        net.graph.nodes = { RoadNode{Vec2(60, -120)},  RoadNode{Vec2(200, -120)},
+                            RoadNode{Vec2(340, -120)}, RoadNode{Vec2(460, -120)},
+                            RoadNode{Vec2(600, -120)}, RoadNode{Vec2(740, -120)} };
+        for (int i = 0; i < 5; ++i) net.graph.addEdge(i, i + 1, net.look.defaultWidth);
         CorridorDef def;
         def.horizontal = Alignment::fromPolyline(
             { Vec2(-100, 0), Vec2(800, 0) }, 300.0, 20.0);
@@ -232,18 +234,18 @@ TEST_CASE(semantics_audit_rejects_crossing_ramps) {
         }
         CorridorAuthoring au =
             corridorAuthor(def, [](Real, Real) { return 0.0; });
-        bakeCorridorIntoNet(net, def, au.rampPaths);
+        bakeCorridorIntoNet(net, def, au.rampPaths, {}, ground);
         return net;
     };
-    RoadNet one = bakeWith(false);
-    RoadNet two = bakeWith(true);
+    RoadEntity one = bakeWith(false);
+    RoadEntity two = bakeWith(true);
     // Either the AUTHOR already refused the overlapping second ramp, or the
     // bake audit dropped it — both are acceptance; what must never happen is
     // both chains in the net with a crossing.
-    RoadGraph gb = roadNetFullGraph(two);
-    CHECK(auditRoadGraph(gb, two.heightAt).empty());
-    std::printf("[sem] oneExit edges=%zu twoExit edges=%zu\n", one.edges.size(),
-                two.edges.size());
+    RoadGraph gb = roadNetFullGraph(two, ground);
+    CHECK(auditRoadGraph(gb, ground).empty());
+    std::printf("[sem] oneExit edges=%zu twoExit edges=%zu\n",
+                one.graph.edges.size(), two.graph.edges.size());
 }
 
 // S3 STYLING GATE (#21): the road MESH must carry no zebra crossing paint at
@@ -267,15 +269,16 @@ int zebraVertsNear(const engine::RenderMesh& m, const Vec2& c, double radius) {
 TEST_CASE(semantics_no_zebra_at_gores_or_landings) {
     // Positive control: a plain street 4-way paints a zebra on each approach.
     {
-        RoadNet cross;
-        cross.width = 10.0;
-        cross.sidewalk = 2.5;
-        cross.crosswalks = true;
-        cross.autoRoundabout = false;
-        cross.nodes = { Vec2(0, 0), Vec2(70, 0), Vec2(-70, 0), Vec2(0, 70),
-                        Vec2(0, -70) };
-        cross.edges = { { 0, 1 }, { 0, 2 }, { 0, 3 }, { 0, 4 } };
-        RenderMesh m = buildRoadNetMesh(cross);
+        RoadEntity cross;
+        cross.look.defaultWidth = 10.0;
+        cross.look.sidewalk = 2.5;
+        cross.look.crosswalks = true;
+        cross.look.autoRoundabout = false;
+        cross.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(70, 0)},
+                              RoadNode{Vec2(-70, 0)}, RoadNode{Vec2(0, 70)},
+                              RoadNode{Vec2(0, -70)} };
+        for (int i = 1; i <= 4; ++i) cross.graph.addEdge(0, i, cross.look.defaultWidth);
+        RenderMesh m = buildRoadNetMesh(cross, nullptr);
         std::printf("[sem] plain 4-way zebra verts = %d\n",
                     zebraVertsNear(m, Vec2(0, 0), 24.0));
         CHECK(zebraVertsNear(m, Vec2(0, 0), 24.0) > 0);
@@ -284,15 +287,16 @@ TEST_CASE(semantics_no_zebra_at_gores_or_landings) {
     // The corridor fixture: streets under an elevated freeway with an exit
     // (Diverge) at s=400 and an on-ramp (Merge) at s=300, landing on the
     // street. NO zebra anywhere near a gore or a landing node.
-    RoadNet net;
-    net.nodes = { Vec2(60, -120),  Vec2(200, -120), Vec2(340, -120),
-                  Vec2(460, -120), Vec2(600, -120), Vec2(740, -120) };
-    net.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 4 }, { 4, 5 } };
-    net.width = 8.0;
-    net.sidewalk = 2.5;
-    net.crosswalks = true;
-    net.autoRoundabout = false;
-    net.heightAt = [](double, double) { return 0.0; };
+    RoadEntity net;
+    net.look.defaultWidth = 8.0;
+    net.look.sidewalk = 2.5;
+    net.look.crosswalks = true;
+    net.look.autoRoundabout = false;
+    net.graph.nodes = { RoadNode{Vec2(60, -120)},  RoadNode{Vec2(200, -120)},
+                        RoadNode{Vec2(340, -120)}, RoadNode{Vec2(460, -120)},
+                        RoadNode{Vec2(600, -120)}, RoadNode{Vec2(740, -120)} };
+    for (int i = 0; i < 5; ++i) net.graph.addEdge(i, i + 1, net.look.defaultWidth);
+    const RoadGroundFn ground = [](double, double) { return 0.0; };
     CorridorDef def;
     def.horizontal =
         Alignment::fromPolyline({ Vec2(-100, 0), Vec2(800, 0) }, 300.0, 20.0);
@@ -313,10 +317,10 @@ TEST_CASE(semantics_no_zebra_at_gores_or_landings) {
     on.targetY = 0.0;
     def.exits.push_back(on);
     CorridorAuthoring au = corridorAuthor(def, [](Real, Real) { return 0.0; });
-    bakeCorridorIntoNet(net, def, au.rampPaths);
+    bakeCorridorIntoNet(net, def, au.rampPaths, {}, ground);
 
-    RenderMesh m = buildRoadNetMesh(net);
-    RoadGraph g = roadNetFullGraph(net);
+    RenderMesh m = buildRoadNetMesh(net, ground);
+    RoadGraph g = roadNetFullGraph(net, ground);
     int checked = 0;
     for (const RoadNode& nd : g.nodes) {
         if (nd.kind != JunctionKind::Landing && !isGore(nd.kind)) continue;
@@ -342,31 +346,32 @@ TEST_CASE(semantics_approach_sheds_its_sidewalk_on_the_climb) {
     // LANDING must shed that band on the grade — "the sidewalk floats as it
     // elevates, not attached to the road's side." Node 4 is degree 3 (two
     // streets + a ramp) so it classifies as a Landing.
-    RoadNet net;
-    net.width = 9.0;
-    net.sidewalk = 2.5;
-    net.autoRoundabout = false;
-    net.heightAt = [](double, double) { return 0.0; };
-    net.nodes = { Vec2(0, 0),   Vec2(40, 0),  Vec2(80, 0),
-                  Vec2(110, 0), Vec2(125, 0), Vec2(165, 0) };
-    net.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 4 }, { 4, 5 } };
+    RoadEntity net;
+    net.look.defaultWidth = 9.0;
+    net.look.sidewalk = 2.5;
+    net.look.autoRoundabout = false;
+    const RoadGroundFn ground = [](double, double) { return 0.0; };
+    net.graph.nodes = { RoadNode{Vec2(0, 0)},   RoadNode{Vec2(40, 0)},
+                        RoadNode{Vec2(80, 0)},  RoadNode{Vec2(110, 0)},
+                        RoadNode{Vec2(125, 0)}, RoadNode{Vec2(165, 0)} };
+    for (int i = 0; i < 5; ++i) net.graph.addEdge(i, i + 1, net.look.defaultWidth);
     // Climb to 1.3 m at the landing over the last flat run (grade ~9%).
-    net.nodeElev = { std::nan(""), std::nan(""), std::nan(""),
-                     0.4, 1.3, std::nan("") };
-    net.nodes.push_back(Vec2(190, 45));   // ramp leaves the landing
-    net.nodeElev.push_back(6.0);
-    net.edges.push_back({ 4, 6 });
-    net.edgeClasses.resize(net.edges.size(), RoadClass::Local);
-    net.edgeClasses[5] = RoadClass::Ramp;   // edge {4,6}
+    net.graph.nodes[3].elev = 0.4; net.graph.nodes[3].elevAbsolute = true;
+    net.graph.nodes[4].elev = 1.3; net.graph.nodes[4].elevAbsolute = true;
+    RoadNode rampEnd{Vec2(190, 45)};      // ramp leaves the landing
+    rampEnd.elev = 6.0;
+    rampEnd.elevAbsolute = true;
+    net.graph.nodes.push_back(rampEnd);
+    net.graph.addEdge(4, 6, net.look.defaultWidth, RoadClass::Ramp);   // edge {4,6}
 
-    RoadGraph g = roadNetFullGraph(net);
+    RoadGraph g = roadNetFullGraph(net, ground);
     Vec2 landingPos;
     bool sawLanding = false;
     for (const RoadNode& n : g.nodes)
         if (n.kind == JunctionKind::Landing) { sawLanding = true; landingPos = n.pos; }
     CHECK(sawLanding);   // node 4: street + street + ramp
 
-    RenderMesh m = buildRoadNetMesh(net);
+    RenderMesh m = buildRoadNetMesh(net, ground);
     // Sidewalk band verts (negative-u) within 40 m of the landing that have
     // climbed above 0.5 m: the floating approach sidewalk.
     int bandHigh = 0;
@@ -390,12 +395,10 @@ TEST_CASE(semantics_approach_sheds_its_sidewalk_on_the_climb) {
     // Control: the SAME street with the ramp removed (node 4 an ordinary
     // through point, not a Landing) keeps its climbing sidewalk — we only
     // shed the band at approaches, never on a plain street that rises.
-    RoadNet flat = net;
-    flat.edges.pop_back();   // drop the ramp
-    flat.edgeClasses.pop_back();
-    flat.nodes.pop_back();
-    flat.nodeElev.pop_back();
-    RenderMesh mf = buildRoadNetMesh(flat);
+    RoadEntity flat = net;
+    flat.graph.edges.pop_back();   // drop the ramp (class travels with the edge)
+    flat.graph.nodes.pop_back();   // and its far node (elev travels with the node)
+    RenderMesh mf = buildRoadNetMesh(flat, ground);
     double flatMaxY = 0;
     for (const Vertex& v : mf.vertices)
         if (v.u < -0.01) flatMaxY = std::max(flatMaxY, (double)v.position.y);
@@ -410,24 +413,21 @@ TEST_CASE(semantics_approach_sheds_its_sidewalk_on_the_climb) {
 // strips the ramp — a stale Landing hint on a plain street point would drive
 // phantom sidewalk trimming and cluster mis-promotion.
 TEST_CASE(semantics_mid_street_landing_degrades_without_its_ramp) {
-    RoadNet net;
-    net.width = 8.0;
-    net.autoRoundabout = false;
-    net.heightAt = [](double, double) { return 0.0; };
+    RoadEntity net;
+    net.look.defaultWidth = 8.0;
+    net.look.autoRoundabout = false;
+    const RoadGroundFn ground = [](double, double) { return 0.0; };
     // A straight street; node 2 is interior (collinear neighbours).
-    net.nodes = { Vec2(0, 0), Vec2(60, 0), Vec2(120, 0), Vec2(180, 0) };
-    net.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 } };
-    net.nodes.push_back(Vec2(140, 60));   // a BAKED ramp leaves node 2
-    net.edges.push_back({ 2, 4 });
-    net.edgeClasses.resize(net.edges.size(), RoadClass::Local);
-    net.edgeClasses.back() = RoadClass::Ramp;
-    net.edgeBaked.resize(net.edges.size(), 0);
-    net.edgeBaked.back() = 1;   // baked -> roadNetStreetsOnly strips it
-    net.nodeKinds.resize(net.nodes.size(), (uint8_t)JunctionKind::Auto);
-    net.nodeKinds[2] = (uint8_t)JunctionKind::Landing;   // the bake's hint
+    net.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(60, 0)},
+                        RoadNode{Vec2(120, 0)}, RoadNode{Vec2(180, 0)} };
+    for (int i = 0; i < 3; ++i) net.graph.addEdge(i, i + 1, net.look.defaultWidth);
+    net.graph.nodes.push_back(RoadNode{Vec2(140, 60)});   // a BAKED ramp leaves node 2
+    net.graph.addEdge(2, 4, net.look.defaultWidth, RoadClass::Ramp);
+    net.graph.edges.back().baked = true;   // baked -> roadNetStreetsOnly strips it
+    net.graph.nodes[2].kind = JunctionKind::Landing;   // the bake's hint
 
     // Full graph: node 2 is a real Landing (ramp present).
-    RoadGraph full = navRoadGraph(net);
+    RoadGraph full = navRoadGraph(net, ground);
     int fullLandings = 0;
     for (const RoadNode& n : full.nodes)
         if (n.kind == JunctionKind::Landing) ++fullLandings;
@@ -435,55 +435,68 @@ TEST_CASE(semantics_mid_street_landing_degrades_without_its_ramp) {
 
     // Streets-only: the ramp is gone, so node 2 is a plain through node — NOT
     // a Landing (the stale hint must not survive).
-    RoadGraph so = navRoadGraph(roadNetStreetsOnly(net));
+    RoadGraph so = navRoadGraph(roadNetStreetsOnly(net), ground);
     for (const RoadNode& n : so.nodes)
         CHECK(n.kind != JunctionKind::Landing);
 }
 
-// [2]: applyGenerateRecipe must clear nodeKinds — a stale baked hint would
-// otherwise land on an arbitrary node of the freshly generated grid.
+// [2]: applyGenerateRecipe must not leave stale node-kind hints — a leftover
+// baked hint would otherwise land on an arbitrary node of the fresh grid.
 TEST_CASE(semantics_regenerate_clears_stale_node_hints) {
-    RoadNet net;
-    // Simulate a net that carried a baked corridor: leftover hints.
-    net.nodeKinds = { (uint8_t)JunctionKind::Merge, (uint8_t)JunctionKind::Landing,
-                      (uint8_t)JunctionKind::Diverge };
+    RoadEntity net;
+    // Simulate a net that carried a baked corridor: leftover hints on its nodes.
+    net.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(50, 0)},
+                        RoadNode{Vec2(100, 0)} };
+    net.graph.nodes[0].kind = JunctionKind::Merge;
+    net.graph.nodes[1].kind = JunctionKind::Landing;
+    net.graph.nodes[2].kind = JunctionKind::Diverge;
     nlohmann::json gen = { { "kind", "metro" }, { "radius", 300 },
                            { "hotspots", 3 },   { "block_size", 120 },
                            { "seed", 4 },       { "freeways", false } };
-    applyGenerateRecipe(net, gen);
-    CHECK(net.nodeKinds.empty());   // wiped before the fresh grid is built
+    applyGenerateRecipe(net, gen, nullptr);
+    // The regenerated graph replaced the hinted nodes wholesale: no stale
+    // gore/landing hint may survive on any node of the fresh grid.
+    for (const RoadNode& n : net.graph.nodes) {
+        CHECK(!isGore(n.kind));
+        CHECK(n.kind != JunctionKind::Landing);
+    }
 
     // And the derived graph carries no phantom gores/landings.
-    RoadGraph g = navRoadGraph(net);
+    RoadGraph g = navRoadGraph(net, nullptr);
     for (const RoadNode& n : g.nodes) {
         CHECK(!isGore(n.kind));
         CHECK(n.kind != JunctionKind::Landing);
     }
 }
 
-// [4]: roadNetDeleteNode must keep edgeSpecs/edgeBaked/edgeLayers parallel to
-// edges — a delete shifts edge indices, and a desynced per-edge array bakes
-// the wrong cross-section onto surviving edges.
+// [4]: roadNetDeleteNode must keep per-edge fields (spec/baked/layer/class)
+// with their edge — a delete shifts edge indices, and a desync bakes the
+// wrong cross-section onto surviving edges. The fields now LIVE on RoadEdge,
+// so the invariant is that each surviving edge keeps its own values.
 TEST_CASE(semantics_delete_node_keeps_edge_arrays_parallel) {
-    RoadNet net;
-    net.nodes = { Vec2(0, 0), Vec2(50, 0), Vec2(100, 0), Vec2(150, 0) };
-    net.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 } };
-    net.edgeClasses = { RoadClass::Local, RoadClass::Arterial, RoadClass::Local };
-    net.edgeSpecs = { 10, 20, 30 };
-    net.edgeBaked = { 0, 1, 0 };
-    net.edgeLayers = { 0, 2, 0 };
+    RoadEntity net;
+    net.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(50, 0)},
+                        RoadNode{Vec2(100, 0)}, RoadNode{Vec2(150, 0)} };
+    net.graph.addEdge(0, 1, net.look.defaultWidth, RoadClass::Local);
+    net.graph.addEdge(1, 2, net.look.defaultWidth, RoadClass::Arterial);
+    net.graph.addEdge(2, 3, net.look.defaultWidth, RoadClass::Local);
+    net.graph.edges[0].spec = 10;
+    net.graph.edges[1].spec = 20; net.graph.edges[1].baked = true; net.graph.edges[1].layer = 2;
+    net.graph.edges[2].spec = 30;
     // Delete node 0 -> drops edge {0,1}; edges {1,2},{2,3} survive and shift.
     CHECK(roadNetDeleteNode(net, 0));
-    CHECK(net.edges.size() == 2);
-    CHECK(net.edgeSpecs.size() == 2);
-    CHECK(net.edgeBaked.size() == 2);
-    CHECK(net.edgeLayers.size() == 2);
-    // The surviving arterial edge (was index 1) kept its spec 20 / baked 1 /
+    CHECK(net.graph.edges.size() == 2);
+    // The surviving arterial edge (was index 1) kept its spec 20 / baked /
     // layer 2 — not a shifted-in neighbour's value.
-    CHECK(net.edgeClasses[0] == RoadClass::Arterial);
-    CHECK(net.edgeSpecs[0] == 20);
-    CHECK(net.edgeBaked[0] == 1);
-    CHECK(net.edgeLayers[0] == 2);
+    CHECK(net.graph.edges[0].klass == RoadClass::Arterial);
+    CHECK(net.graph.edges[0].spec == 20);
+    CHECK(net.graph.edges[0].baked == true);
+    CHECK(net.graph.edges[0].layer == 2);
+    // And its neighbour (was index 2) kept its own values too.
+    CHECK(net.graph.edges[1].klass == RoadClass::Local);
+    CHECK(net.graph.edges[1].spec == 30);
+    CHECK(!net.graph.edges[1].baked);
+    CHECK(net.graph.edges[1].layer == 0);
 }
 
 // [1] Review S4b: the audit's spatial hash must register every cell a
@@ -533,33 +546,36 @@ TEST_CASE(semantics_zebra_survives_at_the_intersection_end_of_an_approach) {
     // from node 0's side and the far end is the intersection... simplest:
     // one street chain from a Landing (node 1) to an Intersection (node 0),
     // climbing toward the landing.
-    RoadNet net;
-    net.width = 10.0;
-    net.sidewalk = 2.5;
-    net.crosswalks = true;
-    net.autoRoundabout = false;
-    net.heightAt = [](double, double) { return 0.0; };
+    RoadEntity net;
+    net.look.defaultWidth = 10.0;
+    net.look.sidewalk = 2.5;
+    net.look.crosswalks = true;
+    net.look.autoRoundabout = false;
+    const RoadGroundFn ground = [](double, double) { return 0.0; };
     // Node 0: 4-way intersection. Node 4: ramp landing reached by a climbing
     // street from node 0's east arm.
-    net.nodes = { Vec2(0, 0),    Vec2(0, 70),  Vec2(0, -70), Vec2(-70, 0),
-                  Vec2(60, 0),   Vec2(120, 0) };
-    net.edges = { { 0, 1 }, { 0, 2 }, { 0, 3 }, { 0, 4 }, { 4, 5 } };
-    net.nodeElev = { std::nan(""), std::nan(""), std::nan(""), std::nan(""),
-                     0.6, 1.4 };   // climb east to the landing at node 4
-    net.nodes.push_back(Vec2(150, 45));   // ramp leaves node 4
-    net.nodeElev.push_back(6.0);
-    net.edges.push_back({ 4, 6 });
-    net.edgeClasses.resize(net.edges.size(), RoadClass::Local);
-    net.edgeClasses.back() = RoadClass::Ramp;
+    net.graph.nodes = { RoadNode{Vec2(0, 0)},   RoadNode{Vec2(0, 70)},
+                        RoadNode{Vec2(0, -70)}, RoadNode{Vec2(-70, 0)},
+                        RoadNode{Vec2(60, 0)},  RoadNode{Vec2(120, 0)} };
+    for (int i = 1; i <= 4; ++i) net.graph.addEdge(0, i, net.look.defaultWidth);
+    net.graph.addEdge(4, 5, net.look.defaultWidth);
+    // Climb east to the landing at node 4.
+    net.graph.nodes[4].elev = 0.6; net.graph.nodes[4].elevAbsolute = true;
+    net.graph.nodes[5].elev = 1.4; net.graph.nodes[5].elevAbsolute = true;
+    RoadNode rampEnd{Vec2(150, 45)};      // ramp leaves node 4
+    rampEnd.elev = 6.0;
+    rampEnd.elevAbsolute = true;
+    net.graph.nodes.push_back(rampEnd);
+    net.graph.addEdge(4, 6, net.look.defaultWidth, RoadClass::Ramp);
 
-    RoadGraph g = roadNetFullGraph(net);
+    RoadGraph g = roadNetFullGraph(net, ground);
     CHECK(g.nodes[0].kind == JunctionKind::Intersection);
     bool landing = false;
     for (const RoadNode& n : g.nodes)
         if (n.kind == JunctionKind::Landing) landing = true;
     CHECK(landing);
 
-    RenderMesh m = buildRoadNetMesh(net);
+    RenderMesh m = buildRoadNetMesh(net, ground);
     // Zebra verts on each of node 0's four approaches — the intersection must
     // still paint them despite one arm being an approach to a landing.
     int zebra = 0;

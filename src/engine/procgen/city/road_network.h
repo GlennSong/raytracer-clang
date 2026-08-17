@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_ROAD_NETWORK_H
 
 #include "polygon.h"
+#include "road_spec.h"          // RoadSpec — the band table RoadEdge::spec indexes
 #include "../terrain_field.h"   // HeightField — terrain-aware routing/pruning (ADR-0046)
 #include <cstdint>
 #include <vector>
@@ -123,6 +124,11 @@ struct RoadEdge {
 struct RoadGraph {
     std::vector<RoadNode> nodes;
     std::vector<RoadEdge> edges;
+    // Roads-v2 band table (road-graph-unification step 3): RoadEdge::spec
+    // indexes into this. Empty for most graphs — only the metro street-parking
+    // pass and baked corridors populate it; spec = -1 means "legacy, synthesize
+    // a section from the edge width + the owning look's sidewalk/curb".
+    std::vector<RoadSpec> specs;
 
     // Add a node, snapping to an existing one within `tol` (keeps the graph clean).
     int addNode(const Vec2& p, Real tol = 0.5);

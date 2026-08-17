@@ -106,16 +106,16 @@ TEST_CASE(constraints_radius_grows_with_spokes) {
 
 // End to end: the editable road with a busy hub now meshes without blowing up.
 TEST_CASE(constraints_editable_hub_meshes) {
-    RoadNet net;
-    net.nodes.push_back(Vec2(0, 0));
+    RoadEntity net;
+    net.look.defaultWidth = 12.0;
+    net.graph.nodes.push_back(RoadNode{Vec2(0, 0)});
     const int spokes = 9;
     for (int i = 0; i < spokes; ++i) {
         double a = (2.0 * M_PI * i) / spokes;
-        net.nodes.push_back(Vec2(std::cos(a) * 70.0, std::sin(a) * 70.0));
-        net.edges.push_back({0, static_cast<int>(net.nodes.size()) - 1});
+        net.graph.nodes.push_back(RoadNode{Vec2(std::cos(a) * 70.0, std::sin(a) * 70.0)});
+        net.graph.addEdge(0, static_cast<int>(net.graph.nodes.size()) - 1, 12.0);
     }
-    net.width = 12.0;
-    RenderMesh m = buildRoadNetMesh(net);
+    RenderMesh m = buildRoadNetMesh(net, nullptr);
     CHECK(!m.vertices.empty());
     CHECK(m.indices.size() % 3 == 0);
     // The roundabout opens a real island: no road geometry sits at the hub centre.
@@ -129,17 +129,17 @@ TEST_CASE(constraints_editable_hub_meshes) {
 // centre (the island) is left untouched — no conform footprint runs through the origin,
 // where the raw spokes would otherwise all converge.
 TEST_CASE(constraints_conform_clears_the_island) {
-    RoadNet net;
-    net.nodes.push_back(Vec2(0, 0));
+    RoadEntity net;
+    net.look.defaultWidth = 12.0;
+    net.graph.nodes.push_back(RoadNode{Vec2(0, 0)});
     const int spokes = 8;
     for (int i = 0; i < spokes; ++i) {
         double a = (2.0 * M_PI * i) / spokes;
-        net.nodes.push_back(Vec2(std::cos(a) * 70.0, std::sin(a) * 70.0));
-        net.edges.push_back({0, static_cast<int>(net.nodes.size()) - 1});
+        net.graph.nodes.push_back(RoadNode{Vec2(std::cos(a) * 70.0, std::sin(a) * 70.0)});
+        net.graph.addEdge(0, static_cast<int>(net.graph.nodes.size()) - 1, 12.0);
     }
-    net.width = 12.0;
-    net.heightAt = [](double x, double z) { return 0.05 * x + 0.02 * z; };   // gentle slope
-    std::vector<TerrainFlatten> regions = roadNetConformRegions(net);
+    const RoadGroundFn slope = [](double x, double z) { return 0.05 * x + 0.02 * z; };
+    std::vector<TerrainFlatten> regions = roadNetConformRegions(net, slope);
     CHECK(!regions.empty());
     double nearest = 1e30;
     for (const TerrainFlatten& f : regions)
@@ -208,37 +208,39 @@ TEST_CASE(district_blocks_respect_size_bracket) {
 // degree-capped network (no auto-roundabout) that meshes. The loader and the editor's regenerate
 // (the tuning panel) share this one path. (road-network-v2-plan T2.1)
 TEST_CASE(generate_recipe_builds_capped_net) {
-    RoadNet net;
+    RoadEntity net;
     nlohmann::json g = {{"radius", 120}, {"arterials", 3}, {"block_size_max", 30},
                         {"block_size_min", 16}, {"seed", 4}};
-    applyGenerateRecipe(net, g);
-    CHECK(!net.nodes.empty());
-    CHECK(net.edges.size() == net.edgeWidths.size());
-    std::vector<int> deg(net.nodes.size(), 0);
-    for (const std::array<int, 2>& e : net.edges) { ++deg[e[0]]; ++deg[e[1]]; }
+    applyGenerateRecipe(net, g, nullptr);
+    CHECK(!net.graph.nodes.empty());
+    // Widths are RESOLVED at construction now: every generated edge carries one.
+    for (const RoadEdge& e : net.graph.edges) CHECK(e.width > 0.0);
+    std::vector<int> deg(net.graph.nodes.size(), 0);
+    for (const RoadEdge& e : net.graph.edges) { ++deg[e.a]; ++deg[e.b]; }
     int mx = 0; for (int d : deg) mx = std::max(mx, d);
     CHECK(mx <= RoadRules{}.maxDegree);          // capped: no junction over 4 arms, even post-planarize
-    RenderMesh m = buildRoadNetMesh(net);
+    RenderMesh m = buildRoadNetMesh(net, nullptr);
     CHECK(!m.vertices.empty());                  // and it meshes
 }
 
 // A generated road's recipe survives an edit: roadRecipeForSave keeps the "generate" block (refreshes
 // only the look) instead of baking the nodes — the grown.json "save should be the same" fix. (T2.1)
 TEST_CASE(generated_road_recipe_survives_edit) {
-    RoadNet net;
+    RoadEntity net;
     nlohmann::json gen = {{"radius", 110}, {"arterials", 2}, {"seed", 3}};
-    applyGenerateRecipe(net, gen);                      // net now holds the baked nodes/edges
-    CHECK(!net.nodes.empty());
+    applyGenerateRecipe(net, gen, nullptr);             // net now holds the baked graph
+    CHECK(!net.graph.nodes.empty());
     std::string recipe = nlohmann::json{{"generate", gen}, {"width", 7}, {"curved", true}}.dump();
-    net.width = 9.0;                                    // simulate a Width edit in the inspector
+    net.look.defaultWidth = 9.0;                        // simulate a Width edit in the inspector
     nlohmann::json saved = roadRecipeForSave(recipe, net);
     CHECK(saved.contains("generate"));                 // recipe preserved...
     CHECK(!saved.contains("nodes"));                   // ...NOT baked into geometry
     CHECK(saved["generate"]["radius"] == 110);         // the generate block is intact
     CHECK(saved["width"] == 9.0);                       // the look edit is captured
 
-    RoadNet hand;                                      // a hand-authored road still bakes (the net IS source)
-    hand.nodes = {Vec2(0, 0), Vec2(10, 0)}; hand.edges = {{0, 1}};
+    RoadEntity hand;                                    // a hand-authored road still bakes (the graph IS source)
+    hand.graph.nodes = {RoadNode{Vec2(0, 0)}, RoadNode{Vec2(10, 0)}};
+    hand.graph.addEdge(0, 1, hand.look.defaultWidth);
     nlohmann::json handSaved = roadRecipeForSave("{}", hand);
     CHECK(handSaved.contains("nodes"));
 }
@@ -304,19 +306,19 @@ TEST_CASE(short_edge_lengthens_when_merge_would_overcrowd) {
 // generated district comes out shorter than min_road_len (default 14 m), and the
 // degree cap still holds afterwards.
 TEST_CASE(generate_recipe_enforces_min_road_length) {
-    RoadNet net;
-    net.width = 7;
+    RoadEntity net;
+    net.look.defaultWidth = 7;
     nlohmann::json gen = {{"radius", 170.0}, {"arterials", 3}, {"artery_width", 13.0},
                           {"street_width", 7.0}, {"block_size", 82.0}, {"seed", 5}};
-    applyGenerateRecipe(net, gen);                       // straight version (no warp samples)
-    CHECK(!net.edges.empty());
-    int n = static_cast<int>(net.nodes.size());
+    applyGenerateRecipe(net, gen, nullptr);              // straight version (no warp samples)
+    CHECK(!net.graph.edges.empty());
+    int n = static_cast<int>(net.graph.nodes.size());
     std::vector<int> deg(n, 0);
-    for (const auto& e : net.edges) { ++deg[e[0]]; ++deg[e[1]]; }
-    for (const auto& e : net.edges) {
-        Real len = (net.nodes[e[0]] - net.nodes[e[1]]).length();
+    for (const RoadEdge& e : net.graph.edges) { ++deg[e.a]; ++deg[e.b]; }
+    for (const RoadEdge& e : net.graph.edges) {
+        Real len = (net.graph.nodes[e.a].pos - net.graph.nodes[e.b].pos).length();
         // Only junction-to-junction stubs matter (curve/warp samples are degree-2).
-        if (deg[e[0]] >= 3 && deg[e[1]] >= 3) CHECK(len >= 13.0);
+        if (deg[e.a] >= 3 && deg[e.b] >= 3) CHECK(len >= 13.0);
     }
     for (int v = 0; v < n; ++v) CHECK(deg[v] <= 4);
 }
@@ -344,18 +346,19 @@ TEST_CASE(sharp_through_bends_are_relaxed) {
 // The generate recipe applies the bend limit: no degree-2 node in a generated
 // district turns sharper than ~52 degrees, so the welded carriageway never folds.
 TEST_CASE(generate_recipe_has_no_hairpin_bends) {
-    RoadNet net;
-    net.width = 7;
+    RoadEntity net;
+    net.look.defaultWidth = 7;
     nlohmann::json gen = {{"radius", 170.0}, {"arterials", 3}, {"artery_width", 13.0},
                           {"street_width", 7.0}, {"block_size", 82.0},
                           {"curviness", 0.22}, {"seed", 5}};
-    applyGenerateRecipe(net, gen);
-    const int n = static_cast<int>(net.nodes.size());
+    applyGenerateRecipe(net, gen, nullptr);
+    const int n = static_cast<int>(net.graph.nodes.size());
     std::vector<std::vector<int>> adj(n);
-    for (const auto& e : net.edges) { adj[e[0]].push_back(e[1]); adj[e[1]].push_back(e[0]); }
+    for (const RoadEdge& e : net.graph.edges) { adj[e.a].push_back(e.b); adj[e.b].push_back(e.a); }
     for (int v = 0; v < n; ++v) {
         if (adj[v].size() != 2) continue;
-        Vec2 a = net.nodes[adj[v][0]], m = net.nodes[v], b = net.nodes[adj[v][1]];
+        Vec2 a = net.graph.nodes[adj[v][0]].pos, m = net.graph.nodes[v].pos,
+             b = net.graph.nodes[adj[v][1]].pos;
         if ((m - a).length() < 1e-6 || (b - m).length() < 1e-6) continue;
         Vec2 d0 = normalize(m - a), d1 = normalize(b - m);
         CHECK(dot(d0, d1) >= std::cos(0.95));   // limit + slack

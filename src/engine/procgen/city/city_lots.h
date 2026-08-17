@@ -202,7 +202,7 @@ std::vector<Poly2> edgeBlocks(const RoadGraph& roads,
 // city: combines every net into one planar graph, extracts the enclosed blocks,
 // synthesizes rim blocks on the open sides, and grows the lot buildings against
 // the SAMPLED centrelines (road clearance).
-struct RoadNet;   // road_net.h
+struct RoadEntity;   // road_net.h
 struct NetLotResult {
     std::vector<LotBuilding> lots;
     LotPlanDebug plan;               // blocks + lots, for debug overlays
@@ -219,10 +219,11 @@ struct NetLotResult {
 // `wantFlatParts`: also grow every building's LOD1 twin into `flatParts`
 // (city-render-perf R2). Off by default so the offline tracer and diagnostics
 // don't pay for a detail tier they never draw.
-NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
+NetLotResult growLotBuildingsOnNets(const std::vector<RoadEntity>& nets,
                                     const LotParams& params,
                                     const EdgeBlockParams& edgeParams,
                                     Real roadClearance,
+                                    const std::function<double(double, double)>& ground = nullptr,
                                     const RoadGraph* freewayROW = nullptr,
                                     bool wantFlatParts = false);
 

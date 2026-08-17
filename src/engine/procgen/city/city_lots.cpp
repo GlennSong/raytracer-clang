@@ -1,7 +1,7 @@
 #include "city_lots.h"
 
 #include "parcel.h"          // subdivideBlock, Lot, ParcelParams
-#include "road_net.h"        // RoadNet + navRoadGraph (growLotBuildingsOnNets)
+#include "road_net.h"        // RoadEntity + navRoadGraph (growLotBuildingsOnNets)
 #include "road_network.h"    // RoadGraph (edge blocks walk its chains)
 #include "architect.h"       // DistrictMap + archetype tables (the architect pass)
 #include "shape_grammar.h"   // scopeFromFootprint, growBuilding — REAL buildings
@@ -2337,10 +2337,11 @@ std::vector<Poly2> edgeBlocks(const RoadGraph& roads,
     return out;
 }
 
-NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
+NetLotResult growLotBuildingsOnNets(const std::vector<RoadEntity>& nets,
                                     const LotParams& params,
                                     const EdgeBlockParams& edgeParams,
                                     Real roadClearance,
+                                    const RoadGroundFn& ground,
                                     const RoadGraph* freewayROW,
                                     bool wantFlatParts) {
     NetLotResult r;
@@ -2350,10 +2351,10 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
     // a curvy road bows off its control chords) with real per-edge widths, for
     // the building road-clearance check.
     RoadGraph rg, rgSampled;
-    for (const RoadNet& net : nets) {
+    for (const RoadEntity& net : nets) {
         const int base = static_cast<int>(rg.nodes.size());
-        for (const Vec2& n : net.nodes) rg.nodes.push_back({n});
-        for (std::size_t ei = 0; ei < net.edges.size(); ++ei) {
+        for (const RoadNode& n : net.graph.nodes) rg.nodes.push_back({n.pos});
+        for (const RoadEdge& e : net.graph.edges) {
             // #19 (semantic layer S6): block faces and rim-rectangle lots
             // derive from the WALKABLE STREET subgraph only. A baked corridor
             // edge (freeway/ramp) must never be a block boundary or a lot
@@ -2361,20 +2362,13 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
             // to reach them (Glenn's "orphaned houses along the elevated
             // freeway"). The freeway ROW stays a keep-out band via rgSampled/
             // freewayROW below; it is simply not FRONTAGE.
-            const bool baked =
-                ei < net.edgeBaked.size() && net.edgeBaked[ei] != 0;
-            const RoadClass ek = ei < net.edgeClasses.size()
-                                     ? net.edgeClasses[ei]
-                                     : RoadClass::Local;
-            if (baked || ek == RoadClass::Freeway || ek == RoadClass::Ramp)
+            if (e.baked || e.klass == RoadClass::Freeway ||
+                e.klass == RoadClass::Ramp)
                 continue;   // corridor edge: not a block/lot source
-            const auto& e = net.edges[ei];
-            const float w = static_cast<float>(
-                roadNetEdgeWidth(net, static_cast<int>(ei)));
-            rg.edges.push_back(RoadEdge{base + e[0], base + e[1], w,
+            rg.edges.push_back(RoadEdge{base + e.a, base + e.b, e.width,
                                         RoadClass::Local, 0});
         }
-        RoadGraph s = navRoadGraph(net);
+        RoadGraph s = navRoadGraph(net, ground);
         const int sBase = static_cast<int>(rgSampled.nodes.size());
         for (const auto& n : s.nodes) rgSampled.nodes.push_back(n);
         for (const auto& e : s.edges)
@@ -2409,8 +2403,8 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
         // FALLBACK: the mainline centreline proxy (net.freewayPlans) — used when
         // no corridor was routed (e.g. a level that authors only freewayPlans).
         const float kFreewayKeepWidth = 34.0f;   // deck + shoulders + a shy margin
-        for (const RoadNet& net : nets) {
-            for (const std::vector<Vec2>& plan : net.freewayPlans) {
+        for (const RoadEntity& net : nets) {
+            for (const std::vector<Vec2>& plan : net.plan.freewayPlans) {
                 for (std::size_t i = 0; i + 1 < plan.size(); ++i) {
                     const int a = static_cast<int>(rgSampled.nodes.size());
                     rgSampled.nodes.push_back({plan[i]});
@@ -2440,8 +2434,8 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadNet>& nets,
         lp.hubClusters.assign(lp.hubs.size(), 0);
         for (std::size_t i = 0; i < lp.hubs.size(); ++i) {
             bool found = false;
-            for (const RoadNet& net : nets) {
-                for (const CityHub& h : net.cityHubs)
+            for (const RoadEntity& net : nets) {
+                for (const CityHub& h : net.plan.cityHubs)
                     if ((h.pos - lp.hubs[i].first).lengthSquared() < 1e-6) {
                         lp.hubClusters[i] = h.site;
                         found = true;

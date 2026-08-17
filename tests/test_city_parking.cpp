@@ -157,28 +157,27 @@ TEST_CASE(parking_bays_live_inside_the_road_s_parking_band) {
             "block_size": 180, "density": 0.6, "kind_bias": "oldtown" }
         ]
     })");
-    RoadNet net;
-    net.width = 12.0;
-    net.sidewalk = 3.5;
-    net.curb = 0.16;
-    applyGenerateRecipe(net, recipe);
-    CHECK(!net.edges.empty());
-    CHECK(!net.specs.empty());
+    RoadEntity net;
+    net.look.defaultWidth = 12.0;
+    net.look.sidewalk = 3.5;
+    net.look.curb = 0.16;
+    applyGenerateRecipe(net, recipe, nullptr);   // no heightAt here (flat)
+    CHECK(!net.graph.edges.empty());
+    CHECK(!net.graph.specs.empty());
 
     // (B) ONE source of truth for width: every edge that got a spec carries that
-    // spec's carriageway width, which is what roadNetEdgeWidth hands the mesher,
+    // spec's carriageway width, which is what RoadEdge::width hands the mesher,
     // the lot clearance pass and the nav graph.
     int specced = 0, withPark = 0;
-    for (std::size_t ei = 0; ei < net.edges.size(); ++ei) {
-        const int si = net.edgeSpecs[ei];
-        const RoadClass k = net.edgeClasses[ei];
+    for (std::size_t ei = 0; ei < net.graph.edges.size(); ++ei) {
+        const int si = net.graph.edges[ei].spec;
+        const RoadClass k = net.graph.edges[ei].klass;
         // Arterials and boulevards keep today's look: no spec, no parking band.
         if (k != RoadClass::Local && k != RoadClass::Collector) CHECK(si < 0);
         if (si < 0) continue;
         ++specced;
-        const RoadSpec& s = net.specs[si];
-        CHECK_APPROX(roadNetEdgeWidth(net, static_cast<int>(ei)),
-                     s.carriagewayWidth(), 1e-9);
+        const RoadSpec& s = net.graph.specs[si];
+        CHECK_APPROX(net.graph.edges[ei].width, s.carriagewayWidth(), 1e-9);
         CHECK_APPROX(roadNetEdgeSpec(net, static_cast<int>(ei)).carriagewayWidth(),
                      s.carriagewayWidth(), 1e-9);
         double off = 0, bw = 0;
@@ -195,22 +194,25 @@ TEST_CASE(parking_bays_live_inside_the_road_s_parking_band) {
         doc["generate"] = recipe;
         const nlohmann::json saved = roadRecipeForSave(doc.dump(), net);
         CHECK(saved.contains("generate"));
-        RoadNet again = roadNetFromJson(saved);
-        applyGenerateRecipe(again, saved["generate"]);
-        CHECK(again.specs.size() == net.specs.size());
-        CHECK(again.edgeSpecs == net.edgeSpecs);
-        CHECK(again.edgeWidths == net.edgeWidths);
-        for (std::size_t i = 0; i < net.specs.size(); ++i)
-            CHECK_APPROX(again.specs[i].carriagewayWidth(),
-                         net.specs[i].carriagewayWidth(), 1e-9);
+        RoadEntity again = roadNetFromJson(saved);
+        applyGenerateRecipe(again, saved["generate"], nullptr);
+        CHECK(again.graph.specs.size() == net.graph.specs.size());
+        CHECK(again.graph.edges.size() == net.graph.edges.size());
+        for (std::size_t i = 0; i < net.graph.edges.size(); ++i) {
+            CHECK(again.graph.edges[i].spec == net.graph.edges[i].spec);
+            CHECK(again.graph.edges[i].width == net.graph.edges[i].width);
+        }
+        for (std::size_t i = 0; i < net.graph.specs.size(); ++i)
+            CHECK_APPROX(again.graph.specs[i].carriagewayWidth(),
+                         net.graph.specs[i].carriagewayWidth(), 1e-9);
     }
 
-    NavGraph nav = buildNavGraph(navRoadGraph(net));
+    NavGraph nav = buildNavGraph(navRoadGraph(net, nullptr));
     CitySim sim;
     sim.build(nav, 0, 0, 5);
     const auto& bays = sim.parkingBays();
     std::printf("[parking] generated: %d specced edges, %zu specs, %zu bays\n",
-                specced, net.specs.size(), bays.size());
+                specced, net.graph.specs.size(), bays.size());
     CHECK(bays.size() >= 40u);   // the streets really are parked-along
 
     Real widestCar = 0;

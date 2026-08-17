@@ -93,20 +93,23 @@ RoadGraph buildPiedmontGraph() {
     return g;
 }
 
-RoadNet netFromGraph(const RoadGraph& g) {
-    RoadNet net;
-    net.width = 11.0;
-    net.autoRoundabout = false;
-    net.nodes.reserve(g.nodes.size());
-    for (const RoadNode& n : g.nodes) net.nodes.push_back(n.pos);
-    net.edges.reserve(g.edges.size());
+RoadEntity netFromGraph(const RoadGraph& g) {
+    RoadEntity net;
+    net.look.defaultWidth = 11.0;
+    net.look.autoRoundabout = false;
+    net.graph.nodes.reserve(g.nodes.size());
+    for (const RoadNode& n : g.nodes) net.graph.nodes.push_back(RoadNode{n.pos});
+    net.graph.edges.reserve(g.edges.size());
     for (const RoadEdge& e : g.edges) {
-        net.edges.push_back({e.a, e.b});
-        net.edgeWidths.push_back(e.width);
-        net.edgeLayers.push_back(e.layer);
-        net.edgeClasses.push_back(e.klass);
-        net.edgeSpecs.push_back(-1);
-        net.edgeBaked.push_back(0);
+        RoadEdge ne;
+        ne.a = e.a;
+        ne.b = e.b;
+        ne.width = e.width > 0 ? e.width : net.look.defaultWidth;
+        ne.klass = e.klass;
+        ne.layer = e.layer;
+        ne.spec = -1;
+        ne.baked = false;
+        net.graph.edges.push_back(ne);
     }
     return net;
 }
@@ -115,15 +118,15 @@ RoadNet netFromGraph(const RoadGraph& g) {
 
 TEST_CASE(city_to_towns_are_drivable_on_the_real_mesh) {
     RoadGraph g = buildPiedmontGraph();
-    RoadNet net = netFromGraph(g);
-    const RenderMesh mesh = buildRoadNetMesh(net);
+    RoadEntity net = netFromGraph(g);
+    const RenderMesh mesh = buildRoadNetMesh(net, nullptr);
     CHECK(mesh.vertices.size() > 10000u);
 
     // Nav from the SPLINE-SAMPLED derived graph — the same one the loader
     // hands the citysim (navRoadGraph). Nav links interpolate straight lines;
     // on the raw graph a 120m chord across a curved chain leaves the swept
     // ribbon entirely (measured: 25 "holes" that were really corner-cutting).
-    NavGraph nav = buildNavGraph(navRoadGraph(net));
+    NavGraph nav = buildNavGraph(navRoadGraph(net, nullptr));
 
     const Vec2 city(900, 900);
     const Vec2 towns[2] = {Vec2(3050, 400), Vec2(300, 3050)};

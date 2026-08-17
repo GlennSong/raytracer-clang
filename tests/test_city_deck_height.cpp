@@ -4,7 +4,7 @@
 //
 // The city render bridge places a lot of things ON the road: parked cars, the
 // painted outlines of their bays, crosswalk decals, and at-grade traffic. It
-// used to take their height from the RoadNet's own `heightAt` sampler — which,
+// used to take their height from the RoadEntity's own `heightAt` sampler — which,
 // for a road the level graded its terrain to, is deliberately the NATURAL,
 // pre-carve ground. On a hill that is the bare hillside, metres away from the
 // asphalt the mesher actually built, so parked cars sank into cuts and hovered
@@ -45,15 +45,20 @@ namespace {
 // sidewalk. The Parking BAND is what makes a road park-able (the old "Local and
 // >= 9 m wide" heuristic is gone), so the fixture resolves one exactly the way a
 // generated street does — same as tests/test_city_parking.cpp.
-RoadNet slopedCross() {
-    RoadNet net;
-    net.nodes = { Vec2(0, 0), Vec2(0, 140), Vec2(0, -140), Vec2(140, 0),
-                  Vec2(-140, 0) };
-    net.edges = { {0, 1}, {0, 2}, {0, 3}, {0, 4} };
-    net.specs = { roadSpecStreetParking(12.0, 1, 3.5, 0.25) };
-    net.edgeSpecs.assign(net.edges.size(), 0);
-    net.width = net.specs[0].carriagewayWidth();
-    net.sidewalk = 2.5;
+RoadEntity slopedCross() {
+    RoadEntity net;
+    net.graph.specs = { roadSpecStreetParking(12.0, 1, 3.5, 0.25) };
+    net.look.defaultWidth = net.graph.specs[0].carriagewayWidth();
+    net.look.sidewalk = 2.5;
+    net.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(0, 140)},
+                        RoadNode{Vec2(0, -140)}, RoadNode{Vec2(140, 0)},
+                        RoadNode{Vec2(-140, 0)} };
+    for (int arm = 1; arm <= 4; ++arm) {
+        RoadEdge e{0, arm, static_cast<Real>(net.look.defaultWidth),
+                   RoadClass::Local, 0};
+        e.spec = 0;
+        net.graph.edges.push_back(e);
+    }
     return net;
 }
 
@@ -108,18 +113,19 @@ TEST_CASE(parked_cars_and_bay_paint_sit_on_the_road_deck) {
             return terrainHeight(*naturalCopy, *naturalNoise, x, z);
         };
 
-    RoadNet net = slopedCross();
-    net.heightAt = naturalGround;   // the loader leaves the NATURAL sampler here
+    RoadEntity net = slopedCross();
+    // (Roads no longer store a sampler: the NATURAL ground the loader knows is
+    // passed to every consumer below, exactly as the loader now does.)
 
     // 2. Carve the terrain to the road, exactly as the level loader does.
     TerrainParams carved = natural;
-    carved.flatten = roadNetConformRegions(net);
+    carved.flatten = roadNetConformRegions(net, naturalGround);
     CHECK(!carved.flatten.empty());
     rebuildFlattenIndex(carved);
 
     // 3. A world holding the road and the carved CDLOD terrain config.
     World world;
-    world.add<RoadNet>(world.create(), net);
+    world.add<RoadEntity>(world.create(), net);
     TerrainLodConfig lod;
     lod.params = carved;
     lod.seed = 7u;
@@ -134,7 +140,10 @@ TEST_CASE(parked_cars_and_bay_paint_sit_on_the_road_deck) {
     CityRenderSystem city(p);
     StubUploader uploader;
     engine::AssetManager assets(uploader);
-    CHECK(city.build(world, &assets));
+    // The NATURAL sampler goes to build the way the loader hands it on (the
+    // constrained graph is built over it); the carved TerrainLodConfig above
+    // still wins for everything the bridge PLACES (#25).
+    CHECK(city.build(world, &assets, naturalGround));
     // A PARKED car is a SimVehicle whose driver has left it — not a bay flag —
     // so the fixture has to run until somebody actually parks. Drivers rest on
     // arrival, which on this cross takes a few in-world minutes.
@@ -147,7 +156,7 @@ TEST_CASE(parked_cars_and_bay_paint_sit_on_the_road_deck) {
     CHECK(parkedSeen > 0);
 
     // 4. The road mesh: the surface a player actually stands on.
-    const RenderMesh roadMesh = buildRoadNetMesh(net);
+    const RenderMesh roadMesh = buildRoadNetMesh(net, naturalGround);
     CHECK(!roadMesh.vertices.empty());
 
     // How far the natural sampler is from the deck at these bays — the size of
@@ -218,7 +227,7 @@ TEST_CASE(parked_cars_and_bay_paint_sit_on_the_road_deck) {
     // The fixture must actually be hilly enough to expose the bug: if the raw
     // ground and the deck agree everywhere, this test proves nothing.
     CHECK(worstNaturalError > 0.5);
-    // The road slab stands `net.lift` (8 cm) proud of the carved ground, so the
+    // The road slab stands `net.look.lift` (8 cm) proud of the carved ground, so the
     // bridge's placements land within roughly that of the mesh surface.
     CHECK(worstPaint < 0.30);
     CHECK(carsChecked > 0);    // the scenery arm must not pass vacuously

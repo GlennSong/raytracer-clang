@@ -226,18 +226,18 @@ TEST_CASE(flatten_priority_pad_beats_block_grade) {
 // StructureSet walls (ADR-0075 Phase 1b): a steep sidehill cut that can't daylight
 // within reach gets a retaining wall; flat ground gets none.
 TEST_CASE(road_walls_only_where_cuts_are_steep) {
-    RoadNet net;
-    net.nodes = {Vec2(0, -100), Vec2(0, 100)};
-    net.edges = {{0, 1}};
-    net.width = 12.0; net.sidewalk = 3.5;
+    RoadEntity net;
+    net.look.defaultWidth = 12.0; net.look.sidewalk = 3.5;
+    net.graph.nodes = {RoadNode{Vec2(0, -100)}, RoadNode{Vec2(0, 100)}};
+    net.graph.addEdge(0, 1, 12.0);
 
-    net.heightAt = [](double, double) { return 5.0; };   // flat: batter daylights at once
-    StructureSet flat = buildRoadWalls(net);
+    const RoadGroundFn flatGround = [](double, double) { return 5.0; };   // flat: batter daylights at once
+    StructureSet flat = buildRoadWalls(net, flatGround);
     CHECK(flat.walls.empty());
     CHECK(flat.mesh.vertices.empty());
 
-    net.heightAt = [](double x, double) { return 2.0 * x; };  // steep sidehill (grade 2.0)
-    StructureSet steep = buildRoadWalls(net);
+    const RoadGroundFn steepGround = [](double x, double) { return 2.0 * x; };  // steep sidehill (grade 2.0)
+    StructureSet steep = buildRoadWalls(net, steepGround);
     CHECK(!steep.walls.empty());
     CHECK(!steep.mesh.vertices.empty());
     CHECK(steep.mesh.indices.size() % 3 == 0);
@@ -256,23 +256,28 @@ TEST_CASE(road_walls_only_where_cuts_are_steep) {
 // the net asks for it — the generator's autoRoundabout=false must survive into
 // constrainedNetGraph (it used to be overridden by default rules).
 TEST_CASE(net_autoroundabout_policy_is_honoured) {
-    RoadNet star;
-    star.nodes = {Vec2(0, 0), Vec2(30, 0), Vec2(9, 28), Vec2(-24, 17),
-                  Vec2(-24, -17), Vec2(9, -28)};
-    star.edges = {{0, 1}, {0, 2}, {0, 3}, {0, 4}, {0, 5}};  // centre is degree 5
-    star.width = 10.0;
-    star.sidewalk = 2.5;
+    RoadEntity star;
+    star.look.defaultWidth = 10.0;
+    star.look.sidewalk = 2.5;
+    star.graph.nodes = {RoadNode{Vec2(0, 0)}, RoadNode{Vec2(30, 0)}, RoadNode{Vec2(9, 28)},
+                        RoadNode{Vec2(-24, 17)}, RoadNode{Vec2(-24, -17)}, RoadNode{Vec2(9, -28)}};
+    star.graph.addEdge(0, 1, 10.0);  // centre is degree 5
+    star.graph.addEdge(0, 2, 10.0);
+    star.graph.addEdge(0, 3, 10.0);
+    star.graph.addEdge(0, 4, 10.0);
+    star.graph.addEdge(0, 5, 10.0);
 
     // navRoadGraph wraps constrainedNetGraph — the shared mesh+conform graph pass.
     // With autoRoundabout on, the degree-5 centre is promoted to a ring.
-    RoadGraph rawish = navRoadGraph([&] { RoadNet n = star; n.autoRoundabout = true; return n; }());
+    RoadGraph rawish = navRoadGraph(
+        [&] { RoadEntity n = star; n.look.autoRoundabout = true; return n; }(), nullptr);
     CHECK(maxDegree(rawish) <= 4);   // promoted: every survivor is degree <= 3 (ring) or <= 4
 
-    star.autoRoundabout = false;
-    RoadGraph kept = navRoadGraph(star);
+    star.look.autoRoundabout = false;
+    RoadGraph kept = navRoadGraph(star, nullptr);
     CHECK(maxDegree(kept) >= 5);     // NOT promoted: the busy centre survives intact
 
     // And the mesher runs on the unpromoted net without crashing.
-    RenderMesh m = buildRoadNetMesh(star);
+    RenderMesh m = buildRoadNetMesh(star, nullptr);
     CHECK(!m.vertices.empty());
 }

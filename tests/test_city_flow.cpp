@@ -317,12 +317,19 @@ TEST_CASE(wander_trips_chain_without_teleporting) {
     // read as the car "jumping backwards in time, then shooting forward". Track
     // every per-tick displacement, including across the rest frame between
     // trips, and bound it near honest motion (speed*dt + the corner-cut arc).
-    RoadNet netTheta;
-    netTheta.nodes = { Vec2(-60, -40), Vec2(60, -40), Vec2(60, 40), Vec2(-60, 40),
-                       Vec2(-60, 0), Vec2(60, 0) };
-    netTheta.edges = { {0, 1}, {1, 5}, {5, 2}, {2, 3}, {3, 4}, {4, 0}, {4, 5} };
-    netTheta.width = 7.0;
-    NavGraph nav = buildNavGraph(navRoadGraph(netTheta));
+    RoadEntity netTheta;
+    netTheta.look.defaultWidth = 7.0;
+    netTheta.graph.nodes = { RoadNode{Vec2(-60, -40)}, RoadNode{Vec2(60, -40)},
+                             RoadNode{Vec2(60, 40)}, RoadNode{Vec2(-60, 40)},
+                             RoadNode{Vec2(-60, 0)}, RoadNode{Vec2(60, 0)} };
+    netTheta.graph.addEdge(0, 1, netTheta.look.defaultWidth);
+    netTheta.graph.addEdge(1, 5, netTheta.look.defaultWidth);
+    netTheta.graph.addEdge(5, 2, netTheta.look.defaultWidth);
+    netTheta.graph.addEdge(2, 3, netTheta.look.defaultWidth);
+    netTheta.graph.addEdge(3, 4, netTheta.look.defaultWidth);
+    netTheta.graph.addEdge(4, 0, netTheta.look.defaultWidth);
+    netTheta.graph.addEdge(4, 5, netTheta.look.defaultWidth);
+    NavGraph nav = buildNavGraph(navRoadGraph(netTheta, nullptr));
     CitySim sim;
     sim.build(nav, 4, 0, 7);
     sim.setWander(true);

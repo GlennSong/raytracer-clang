@@ -176,30 +176,62 @@ Vec3 defaultShapeSize(const std::string& shape) {
     return Vec3(1, 1, 1);   // box, wedge
 }
 
-// Rebuild an editable road's carriageway from its RoadNet and keep the saved recipe in sync, after a
+// The terrain sampler a road's regen drapes on (roads no longer store one —
+// road-graph-unification step 3). Mirrors the loader's assignment: a GENERATED
+// road (recipe carries "generate") meshes over the NATURAL ground — the same
+// sampler its conform profile was computed against — while a hand-authored
+// road drapes on the CARVED terrain. Null when the level has no CDLOD terrain
+// (a flat level's roads mesh flat, as before).
+RoadGroundFn roadRegenGround(World& world, Entity e) {
+    TerrainLodConfig* cfg = nullptr;
+    world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) { if (!cfg) cfg = &c; });
+    if (!cfg) return nullptr;
+    bool generated = false;
+    if (SourceSpec* spec = world.get<SourceSpec>(e)) {
+        nlohmann::json r = nlohmann::json::parse(spec->recipe, nullptr, false);
+        generated = r.is_object() && r.contains("generate");
+    }
+    auto tp = std::make_shared<TerrainParams>(cfg->params);
+    if (generated) {
+        tp->flatten = cfg->baseFlatten;   // natural: the non-road grading only
+        rebuildFlattenIndex(*tp);
+    }
+    auto noise = std::make_shared<Noise>(cfg->seed);
+    return [tp, noise](double x, double z) {
+        return terrainHeight(*tp, *noise, x, z);
+    };
+}
+
+// Rebuild an editable road's carriageway from its RoadEntity and keep the saved recipe in sync, after a
 // property edit or a node drag (ADR-0049). A generated road keeps its recipe — roadRecipeForSave
 // preserves the "generate" block instead of baking the nodes (road-network-v2-plan T2.1).
-void regenerateRoad(World& world, Entity e, Renderer& renderer) {
-    RoadNet* net = world.get<RoadNet>(e);
+void regenerateRoad(World& world, Entity e, Renderer& renderer,
+                    const RoadGroundFn& ground) {
+    RoadEntity* net = world.get<RoadEntity>(e);
     if (!net) return;
     if (Renderable* r = world.get<Renderable>(e)) {
-        RenderMesh mesh = buildRoadNetMesh(*net);
+        RenderMesh mesh = buildRoadNetMesh(*net, ground);
         if (!mesh.vertices.empty()) r->mesh = renderer.uploadMesh(mesh);
     }
     if (SourceSpec* spec = world.get<SourceSpec>(e))
         spec->recipe = roadRecipeForSave(spec->recipe, *net).dump();
 }
 
+void regenerateRoad(World& world, Entity e, Renderer& renderer) {
+    regenerateRoad(world, e, renderer, roadRegenGround(world, e));
+}
+
 // Rebuild a generated road from its (edited) generate recipe — the tuning panel's Regenerate. Re-runs
 // buildDistrict from the updated params (which the caller has written into spec.recipe), re-meshes,
 // and keeps the recipe a generate recipe. No-op for a hand-authored road. (road-network-v2-plan T2.3)
 void regenerateRoadFromRecipe(World& world, Entity e, Renderer& renderer) {
-    RoadNet* net = world.get<RoadNet>(e);
+    RoadEntity* net = world.get<RoadEntity>(e);
     SourceSpec* spec = net ? world.get<SourceSpec>(e) : nullptr;
     if (!spec) return;
     nlohmann::json recipe = nlohmann::json::parse(spec->recipe, nullptr, false);
     if (!recipe.is_object() || !recipe.contains("generate")) return;
-    applyGenerateRecipe(*net, recipe["generate"]);
+    const RoadGroundFn ground = roadRegenGround(world, e);
+    applyGenerateRecipe(*net, recipe["generate"], ground);
     // Roads-v2 S3: a metro that grew freeway plans gets them RE-BAKED into the
     // fresh graph (the same plan -> land -> author -> bake pipeline the loader
     // runs) — without this, Regenerate on a baked level silently dropped the
@@ -207,11 +239,11 @@ void regenerateRoadFromRecipe(World& world, Entity e, Renderer& renderer) {
     // deck entities are load-time and stay stale until reload (like terrain,
     // lots and signals do on a regen); the GRAPH stays whole and editable.
     if (const int baked = rebakeNetCorridors(
-            *net, recipe["generate"].value("interchange_spacing", 700.0)))
+            *net, recipe["generate"].value("interchange_spacing", 700.0), ground))
         LOG_INFO << "[bake] regenerate: " << baked
                  << " corridor(s) re-baked into the editable graph";
     if (Renderable* r = world.get<Renderable>(e)) {
-        RenderMesh mesh = buildRoadNetMesh(*net);
+        RenderMesh mesh = buildRoadNetMesh(*net, ground);
         if (!mesh.vertices.empty()) r->mesh = renderer.uploadMesh(mesh);
     }
     spec->recipe = roadRecipeForSave(spec->recipe, *net).dump();
@@ -244,9 +276,8 @@ void EditorSystem::conformTerrainToRoads(FrameContext& ctx) {
 
     // Fresh cut/fill footprints from every road, measured on the natural ground.
     std::vector<TerrainFlatten> roads;
-    ctx.world.each<RoadNet>([&](Entity, RoadNet& net) {
-        net.heightAt = natural;
-        std::vector<TerrainFlatten> r = roadNetConformRegions(net);
+    ctx.world.each<RoadEntity>([&](Entity, RoadEntity& net) {
+        std::vector<TerrainFlatten> r = roadNetConformRegions(net, natural);
         roads.insert(roads.end(), r.begin(), r.end());
     });
 
@@ -263,9 +294,8 @@ void EditorSystem::conformTerrainToRoads(FrameContext& ctx) {
         [carvedParams, noise](double x, double z) {
             return terrainHeight(carvedParams, *noise, x, z);
         };
-    ctx.world.each<RoadNet>([&](Entity e, RoadNet& net) {
-        net.heightAt = carved;
-        regenerateRoad(ctx.world, e, ctx.renderer);
+    ctx.world.each<RoadEntity>([&](Entity e, RoadEntity&) {
+        regenerateRoad(ctx.world, e, ctx.renderer, carved);
     });
     LOG_INFO << "Conformed terrain to " << roads.size() << " road footprint(s)";
 }
@@ -484,9 +514,9 @@ void EditorSystem::pickAtCursor(FrameContext& ctx) {
 // (no ImGui) — the matching draw lives in drawPathHandles().
 bool EditorSystem::updatePathEdit(FrameContext& ctx, bool click) {
     if (std::getenv("RT_SELECT_ROAD") &&
-        (!ctx.world.alive(selected) || !ctx.world.get<RoadNet>(selected)))
-        ctx.world.each<RoadNet>([&](Entity e, RoadNet&) { selected = e; });   // headless handle capture
-    RoadNet* net = ctx.world.alive(selected) ? ctx.world.get<RoadNet>(selected) : nullptr;
+        (!ctx.world.alive(selected) || !ctx.world.get<RoadEntity>(selected)))
+        ctx.world.each<RoadEntity>([&](Entity e, RoadEntity&) { selected = e; });   // headless handle capture
+    RoadEntity* net = ctx.world.alive(selected) ? ctx.world.get<RoadEntity>(selected) : nullptr;
     if (!net) {
         if (pathTool.bound()) pathTool.bind(nullptr);
         roadSource.reset();
@@ -498,7 +528,8 @@ bool EditorSystem::updatePathEdit(FrameContext& ctx, bool click) {
     // (Re)seat the handle source when the road — or its storage slot — changes, but never
     // mid-drag: the world isn't structurally mutated while dragging, so the pointer holds.
     if (!pathTool.dragging() && (!(pathEditEntity == selected) || pathRoadNet != net)) {
-        roadSource = std::make_unique<RoadHandleSource>(*net);
+        roadSource = std::make_unique<RoadHandleSource>(
+            *net, roadRegenGround(ctx.world, selected));
         pathTool.bind(roadSource.get());
         pathEditEntity = selected;
         pathRoadNet = net;
@@ -903,15 +934,17 @@ void EditorSystem::drawInspector(FrameContext& ctx) {
     // Road Generation (road-network-v2-plan T2.2/T2.3): for a GENERATED road, sliders over the
     // district recipe with a LIVE regenerate, so you can watch the network rebuild as you tune it.
     // First in the inspector — it's the primary control for a generated city.
-    if (RoadNet* rnet = ctx.world.get<RoadNet>(selected))
+    if (RoadEntity* rnet = ctx.world.get<RoadEntity>(selected))
         if (SourceSpec* rspec = ctx.world.get<SourceSpec>(selected)) {
             nlohmann::json recipe = nlohmann::json::parse(rspec->recipe, nullptr, false);
             if (recipe.is_object() && recipe.contains("generate") && recipe["generate"].is_object()) {
                 ImGui::SeparatorText("Road Generation");
                 nlohmann::json& g = recipe["generate"];
                 const bool metro = g.value("kind", std::string("district")) == "metro";
-                float arteryW = static_cast<float>(g.value("artery_width", rnet->width * 1.6));
-                float streetW = static_cast<float>(g.value("street_width", rnet->width));
+                float arteryW = static_cast<float>(
+                    g.value("artery_width", rnet->look.defaultWidth * 1.6));
+                float streetW = static_cast<float>(
+                    g.value("street_width", rnet->look.defaultWidth));
                 int   seed    = static_cast<int>(g.value("seed", 1u));
                 bool  changed = false;
 
@@ -1276,23 +1309,25 @@ void EditorSystem::drawCameraFrustums(FrameContext&) const {}
 // --- Road sub-object editing (ADR-0049) ------------------------------------
 std::vector<Vec3> roadNodeHandles(World& world, Entity e) {
     std::vector<Vec3> handles;
-    RoadNet* net = world.get<RoadNet>(e);
+    RoadEntity* net = world.get<RoadEntity>(e);
     if (!net) return handles;
-    handles.reserve(net->nodes.size());
-    for (int i = 0; i < static_cast<int>(net->nodes.size()); ++i) {
-        const Vec2& n = net->nodes[i];
-        // An authored ELEVATED node (nodeElev, an absolute world Y) puts its
+    const RoadGroundFn ground = roadRegenGround(world, e);
+    const RoadGraph& g = net->graph;
+    handles.reserve(g.nodes.size());
+    for (const RoadNode& n : g.nodes) {
+        // An authored ELEVATED node (an absolute world Y) puts its
         // drag-handle ON the deck, not on the ground beneath the viaduct.
-        double y = (i < static_cast<int>(net->nodeElev.size()) && std::isfinite(net->nodeElev[i]))
-                       ? net->nodeElev[i] + 0.05
-                       : (net->heightAt ? net->heightAt(n.x, n.y) : 0.0) + net->lift + 0.05;
-        handles.push_back(Vec3(n.x, y, n.y));
+        double y = n.elevAbsolute
+                       ? n.elev + 0.05
+                       : (ground ? ground(n.pos.x, n.pos.y) : 0.0) +
+                             net->look.lift + 0.05;
+        handles.push_back(Vec3(n.pos.x, y, n.pos.y));
     }
     return handles;
 }
 
 bool moveRoadNode(World& world, Entity e, int node, const Vec3& worldPos, Renderer& renderer) {
-    RoadNet* net = world.get<RoadNet>(e);
+    RoadEntity* net = world.get<RoadEntity>(e);
     if (!net || !roadNetMoveNode(*net, node, Vec2(worldPos.x, worldPos.z))) return false;
     regenerateRoad(world, e, renderer);
     return true;
@@ -1300,43 +1335,45 @@ bool moveRoadNode(World& world, Entity e, int node, const Vec3& worldPos, Render
 
 std::vector<Vec3> roadTangentHandles(World& world, Entity e) {
     std::vector<Vec3> handles;
-    RoadNet* net = world.get<RoadNet>(e);
+    RoadEntity* net = world.get<RoadEntity>(e);
     if (!net) return handles;
-    handles.reserve(net->nodes.size());
-    for (int i = 0; i < static_cast<int>(net->nodes.size()); ++i) {
-        Vec2 h = net->nodes[i] + roadNetTangentAt(*net, i);   // node + tangent vector
-        double y = (i < static_cast<int>(net->nodeElev.size()) && std::isfinite(net->nodeElev[i]))
-                       ? net->nodeElev[i] + 0.05
-                       : (net->heightAt ? net->heightAt(h.x, h.y) : 0.0) + net->lift + 0.05;
+    const RoadGroundFn ground = roadRegenGround(world, e);
+    const RoadGraph& g = net->graph;
+    handles.reserve(g.nodes.size());
+    for (int i = 0; i < static_cast<int>(g.nodes.size()); ++i) {
+        Vec2 h = g.nodes[i].pos + roadNetTangentAt(*net, i);   // node + tangent vector
+        double y = g.nodes[i].elevAbsolute
+                       ? g.nodes[i].elev + 0.05
+                       : (ground ? ground(h.x, h.y) : 0.0) + net->look.lift + 0.05;
         handles.push_back(Vec3(h.x, y, h.y));
     }
     return handles;
 }
 
 bool moveRoadTangent(World& world, Entity e, int node, const Vec3& worldPos, Renderer& renderer) {
-    RoadNet* net = world.get<RoadNet>(e);
-    if (!net || node < 0 || node >= static_cast<int>(net->nodes.size())) return false;
-    Vec2 tangent = Vec2(worldPos.x, worldPos.z) - net->nodes[node];   // handle - node
+    RoadEntity* net = world.get<RoadEntity>(e);
+    if (!net || node < 0 || node >= static_cast<int>(net->graph.nodes.size())) return false;
+    Vec2 tangent = Vec2(worldPos.x, worldPos.z) - net->graph.nodes[node].pos;   // handle - node
     if (!roadNetSetTangent(*net, node, tangent)) return false;
     regenerateRoad(world, e, renderer);
     return true;
 }
 
 int nearestRoadEdge(World& world, Entity e, const Vec3& worldPos, double maxDist) {
-    RoadNet* net = world.get<RoadNet>(e);
+    RoadEntity* net = world.get<RoadEntity>(e);
     if (!net) return -1;
     return roadNetNearestEdge(*net, Vec2(worldPos.x, worldPos.z), maxDist);
 }
 
 bool setRoadEdgeWidth(World& world, Entity e, int edge, double width, Renderer& renderer) {
-    RoadNet* net = world.get<RoadNet>(e);
+    RoadEntity* net = world.get<RoadEntity>(e);
     if (!net || !roadNetSetEdgeWidth(*net, edge, width)) return false;
     regenerateRoad(world, e, renderer);
     return true;
 }
 
 int splitRoadEdge(World& world, Entity e, int edge, const Vec3& worldPos, Renderer& renderer) {
-    RoadNet* net = world.get<RoadNet>(e);
+    RoadEntity* net = world.get<RoadEntity>(e);
     if (!net) return -1;
     int ni = roadNetSplitEdge(*net, edge, Vec2(worldPos.x, worldPos.z));
     if (ni >= 0) regenerateRoad(world, e, renderer);
@@ -1344,7 +1381,7 @@ int splitRoadEdge(World& world, Entity e, int edge, const Vec3& worldPos, Render
 }
 
 int extendRoad(World& world, Entity e, int fromNode, const Vec3& worldPos, Renderer& renderer) {
-    RoadNet* net = world.get<RoadNet>(e);
+    RoadEntity* net = world.get<RoadEntity>(e);
     if (!net) return -1;
     int ni = roadNetExtend(*net, fromNode, Vec2(worldPos.x, worldPos.z));
     if (ni >= 0) regenerateRoad(world, e, renderer);
@@ -1352,7 +1389,7 @@ int extendRoad(World& world, Entity e, int fromNode, const Vec3& worldPos, Rende
 }
 
 bool deleteRoadNode(World& world, Entity e, int node, Renderer& renderer) {
-    RoadNet* net = world.get<RoadNet>(e);
+    RoadEntity* net = world.get<RoadEntity>(e);
     if (!net || !roadNetDeleteNode(*net, node)) return false;
     regenerateRoad(world, e, renderer);
     return true;

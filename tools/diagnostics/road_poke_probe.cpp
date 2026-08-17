@@ -60,15 +60,16 @@ int main(int argc, char** argv) {
         bakeErodedTerrain(tp, noise, tp.size, 800, ep);
     }
     auto natural = [&](double x, double z){ return terrainHeight(tp, noise, x, z); };
+    const std::function<double(double, double)> ground = natural;
 
-    RoadNet net; net.width = 7.0; net.sidewalk = 3.5; net.curb = 0.16;
-    net.cornerRadius = 3.0; net.lift = 0.08;
-    net.heightAt = natural;   // BEFORE generate: the metro recipe gates on terrain
-    applyGenerateRecipe(net, gen);
+    RoadEntity net; net.look.defaultWidth = 7.0; net.look.sidewalk = 3.5; net.look.curb = 0.16;
+    net.look.cornerRadius = 3.0; net.look.lift = 0.08;
+    // ground is passed BEFORE generate: the metro recipe gates on terrain
+    applyGenerateRecipe(net, gen, ground);
 
     // conform -> carved terrain (exact)
     TerrainParams carved = tp;
-    carved.flatten = roadNetConformRegions(net);
+    carved.flatten = roadNetConformRegions(net, ground);
     auto carvedH = [&](double x, double z){ return terrainHeight(carved, noise, x, z); };
     // CDLOD-sampled carved terrain: approximate the device by sampling the same
     // carved field with the half-cell FLATTEN DILATION coarse tiles use.
@@ -76,8 +77,8 @@ int main(int argc, char** argv) {
     double dilate = argc > 1 ? atof(argv[1]) : 0.0;   // 0 = exact; try 1.0-3.0 for coarse LOD
     auto cdlodH = [&](double x, double z){ return terrainHeight(carved, noise, x, z, dilate); };
 
-    RenderMesh mesh = buildRoadNetMesh(net);
-    RoadGraph g = navRoadGraph(net);
+    RenderMesh mesh = buildRoadNetMesh(net, ground);
+    RoadGraph g = navRoadGraph(net, ground);
     std::vector<int> deg(g.nodes.size(), 0);
     for (const RoadEdge& e : g.edges) { ++deg[e.a]; ++deg[e.b]; }
     auto nearestJunction = [&](double x, double z){
@@ -95,7 +96,7 @@ int main(int argc, char** argv) {
     int proudIn = 0, proudOut = 0, proudOutDumped = 0;
     struct Site { double proud, x, z; };
     std::vector<Site> worstSites;
-    std::vector<UnionSpine> cSpines = graphToSpines(navRoadGraph(net));
+    std::vector<UnionSpine> cSpines = roadNetWeldSpines(navRoadGraph(net, ground));
     // buckets by distance to junction
     int bJ[3] = {0,0,0}, bJn[3] = {0,0,0};   // <8m, 8-20m, >20m : poke count / total
     // buckets by cross-slope (natural gradient magnitude)

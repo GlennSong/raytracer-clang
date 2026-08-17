@@ -12,7 +12,7 @@ void registerEngineComponents(ComponentRegistry& registry) {
     // An editor-authored road: its look is editable here (Width is the widen
     // control); its nodes are dragged in the viewport. The editor wires onEdited
     // to regenerate the carriageway mesh from these fields.
-    registry.add<RoadNet>("Road");
+    registry.add<RoadEntity>("Road");
     // Renderable's editable surface is its material; mesh handles are runtime.
     registry.addWithAccessor<Renderable>(
         "Material", [](Renderable& r, PropertyVisitor& v) {

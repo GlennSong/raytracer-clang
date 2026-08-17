@@ -91,19 +91,32 @@ void describeProperties(Velocity& vel, PropertyVisitor& v) {
     v.field(FieldMeta("Angular").id("angular").increment(0.1), vel.angular);
 }
 
-void describeProperties(RoadNet& r, PropertyVisitor& v) {
+void describeProperties(RoadEntity& r, PropertyVisitor& v) {
     // The editable look of a road. "Width" is the widen control; the node
     // positions are dragged in the viewport, not typed here. An edit to any of
     // these fires the editor's regen hook (buildRoadNetMesh -> re-upload).
-    v.field(FieldMeta("Width").id("width").range(2.0, 60.0).increment(0.5).units("m"), r.width);
-    v.field(FieldMeta("Sidewalk").id("sidewalk").range(0.0, 12.0).increment(0.25).units("m"), r.sidewalk);
-    v.field(FieldMeta("Curb").id("curb").range(0.0, 0.6).increment(0.02).units("m"), r.curb);
+    //
+    // Widths are RESOLVED on the graph now (unification rule 1), so "edges at
+    // the default follow the default" is enforced at the EDIT, not by a read
+    // fallback: snapshot the default before the visitor may write it, and
+    // re-stamp every edge that sat at the old default. An edge widened by
+    // hand (or by a generator) keeps its own width, exactly as before.
+    const double widthBefore = r.look.defaultWidth;
+    v.field(FieldMeta("Width").id("width").range(2.0, 60.0).increment(0.5).units("m"),
+            r.look.defaultWidth);
+    if (r.look.defaultWidth != widthBefore)
+        for (RoadEdge& e : r.graph.edges)
+            if (static_cast<double>(e.width) == widthBefore)
+                e.width = static_cast<Real>(r.look.defaultWidth);
+    v.field(FieldMeta("Sidewalk").id("sidewalk").range(0.0, 12.0).increment(0.25).units("m"),
+            r.look.sidewalk);
+    v.field(FieldMeta("Curb").id("curb").range(0.0, 0.6).increment(0.02).units("m"), r.look.curb);
     v.field(FieldMeta("Corner Radius").id("corner_radius").range(0.0, 20.0).increment(0.5).units("m"),
-            r.cornerRadius);
-    v.field(FieldMeta("Lift").id("lift").range(0.0, 2.0).increment(0.05).units("m"), r.lift);
-    v.field(FieldMeta("Markings").id("markings"), r.markings);
-    v.field(FieldMeta("Crosswalks").id("crosswalks"), r.crosswalks);
-    v.field(FieldMeta("Color").id("color").asColor(), r.color);
+            r.look.cornerRadius);
+    v.field(FieldMeta("Lift").id("lift").range(0.0, 2.0).increment(0.05).units("m"), r.look.lift);
+    v.field(FieldMeta("Markings").id("markings"), r.look.markings);
+    v.field(FieldMeta("Crosswalks").id("crosswalks"), r.look.crosswalks);
+    v.field(FieldMeta("Color").id("color").asColor(), r.look.color);
 }
 
 }  // namespace engine

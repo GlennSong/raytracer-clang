@@ -70,10 +70,11 @@ TEST_CASE(path_tool_drags_a_curve_knot_on_the_screen_plane) {
 }
 
 TEST_CASE(path_tool_drags_a_road_node_on_the_ground) {
-    RoadNet net;
-    net.nodes = { Vec2(-20, 0), Vec2(0, 0), Vec2(20, 0) };
-    net.edges = { {0, 1}, {1, 2} };
-    RoadHandleSource src(net);
+    RoadEntity net;
+    net.graph.nodes = { RoadNode{Vec2(-20, 0)}, RoadNode{Vec2(0, 0)}, RoadNode{Vec2(20, 0)} };
+    net.graph.addEdge(0, 1, net.look.defaultWidth);
+    net.graph.addEdge(1, 2, net.look.defaultWidth);
+    RoadHandleSource src(net, nullptr);
     PathEditTool tool;
     int regens = 0;
     tool.onEdit([&] { ++regens; });   // editor rebuilds the mesh here
@@ -85,16 +86,17 @@ TEST_CASE(path_tool_drags_a_road_node_on_the_ground) {
     // Drag node 1 to world (6, *, 9); the ground plane fixes Y, only X/Z move.
     tool.drag(downThrough(Vec3(6, node1.y, 9)), LOOK_DOWN);
     CHECK(tool.endDrag());
-    CHECK_APPROX(net.nodes[1].x, 6.0, 1e-6);
-    CHECK_APPROX(net.nodes[1].y, 9.0, 1e-6);             // Vec2.y is world Z
+    CHECK_APPROX(net.graph.nodes[1].pos.x, 6.0, 1e-6);
+    CHECK_APPROX(net.graph.nodes[1].pos.y, 9.0, 1e-6);   // Vec2.y is world Z
     CHECK(regens == 1);
 }
 
 TEST_CASE(path_tool_hover_tracks_the_handle_under_the_ray) {
-    RoadNet net;
-    net.nodes = { Vec2(-20, 0), Vec2(0, 0), Vec2(20, 0) };
-    net.edges = { {0, 1}, {1, 2} };
-    RoadHandleSource src(net);
+    RoadEntity net;
+    net.graph.nodes = { RoadNode{Vec2(-20, 0)}, RoadNode{Vec2(0, 0)}, RoadNode{Vec2(20, 0)} };
+    net.graph.addEdge(0, 1, net.look.defaultWidth);
+    net.graph.addEdge(1, 2, net.look.defaultWidth);
+    RoadHandleSource src(net, nullptr);
     PathEditTool tool;
     tool.bind(&src);
 
@@ -110,10 +112,11 @@ TEST_CASE(path_tool_hover_tracks_the_handle_under_the_ray) {
 }
 
 TEST_CASE(path_tool_grab_selects_the_node_and_hides_hover_while_dragging) {
-    RoadNet net;
-    net.nodes = { Vec2(-20, 0), Vec2(0, 0), Vec2(20, 0) };
-    net.edges = { {0, 1}, {1, 2} };
-    RoadHandleSource src(net);
+    RoadEntity net;
+    net.graph.nodes = { RoadNode{Vec2(-20, 0)}, RoadNode{Vec2(0, 0)}, RoadNode{Vec2(20, 0)} };
+    net.graph.addEdge(0, 1, net.look.defaultWidth);
+    net.graph.addEdge(1, 2, net.look.defaultWidth);
+    RoadHandleSource src(net, nullptr);
     PathEditTool tool;
     tool.bind(&src);
     CHECK(tool.selectedNode() == -1);
@@ -133,10 +136,10 @@ TEST_CASE(path_tool_grab_selects_the_node_and_hides_hover_while_dragging) {
 }
 
 TEST_CASE(path_tool_plane_override_and_clear) {
-    RoadNet net;
-    net.nodes = { Vec2(0, 0), Vec2(10, 0) };
-    net.edges = { {0, 1} };
-    RoadHandleSource src(net);
+    RoadEntity net;
+    net.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(10, 0)} };
+    net.graph.addEdge(0, 1, net.look.defaultWidth);
+    RoadHandleSource src(net, nullptr);
     PathEditTool tool;
     tool.bind(&src);
     CHECK(tool.activePlane() == DragPlane::Ground);      // source default

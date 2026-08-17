@@ -163,20 +163,20 @@ int main(int argc, char** argv) {
     }
     if (gen.is_null()) { std::fprintf(stderr, "no generated road entity\n"); return 1; }
 
-    RoadNet net;
-    net.width = roadWidth;
-    net.autoRoundabout = false;
-    applyGenerateRecipe(net, gen);
-    std::printf("[map] net: %zu nodes, %zu edges, %zu hubs\n", net.nodes.size(),
-                net.edges.size(), net.cityHubs.size());
+    RoadEntity net;
+    net.look.defaultWidth = roadWidth;
+    net.look.autoRoundabout = false;
+    applyGenerateRecipe(net, gen, nullptr);
+    std::printf("[map] net: %zu nodes, %zu edges, %zu hubs\n", net.graph.nodes.size(),
+                net.graph.edges.size(), net.plan.cityHubs.size());
 
     // Spline-sampled graph: curves rendered as the engine drives them.
-    RoadGraph g = navRoadGraph(net);
+    RoadGraph g = navRoadGraph(net, nullptr);
     std::vector<Chain> chains = chainsOf(g);
 
     // Spawn hint: the junction nearest the primary hub (player + parked car
     // authoring after a regen — the downtown crossing moves with the recipe).
-    if (!net.cityHubs.empty()) {
+    if (!net.plan.cityHubs.empty()) {
         std::vector<int> deg(g.nodes.size(), 0);
         for (const RoadEdge& e : g.edges) {
             ++deg[e.a];
@@ -187,7 +187,7 @@ int main(int argc, char** argv) {
         for (std::size_t n = 0; n < g.nodes.size(); ++n) {
             if (deg[n] < 3) continue;
             const double d =
-                (g.nodes[n].pos - net.cityHubs[0].pos).length();
+                (g.nodes[n].pos - net.plan.cityHubs[0].pos).length();
             if (d < bd) {
                 bd = d;
                 best = static_cast<int>(n);
@@ -197,7 +197,7 @@ int main(int argc, char** argv) {
             std::printf("[map] spawn hint: downtown junction (%.0f, %.0f), "
                         "hub0 (%.0f, %.0f)\n",
                         g.nodes[best].pos.x, g.nodes[best].pos.y,
-                        net.cityHubs[0].pos.x, net.cityHubs[0].pos.y);
+                        net.plan.cityHubs[0].pos.x, net.plan.cityHubs[0].pos.y);
     }
 
     const json& cs = level.value("citysim", json::object());
@@ -229,7 +229,7 @@ int main(int argc, char** argv) {
     LotParams lp;
     lp.seed = gen.value("seed", 7u);
     lp.plinth = cs.value("plinth", 0.15);
-    NetLotResult lots = growLotBuildingsOnNets({net}, lp, EdgeBlockParams{}, 2.0);
+    NetLotResult lots = growLotBuildingsOnNets({net}, lp, EdgeBlockParams{}, 2.0, nullptr);
     std::printf("[map] blocks %zu, lot outlines %zu, buildings %zu\n",
                 lots.plan.blocks.size(), lots.plan.lots.size(), lots.lots.size());
 
@@ -254,7 +254,7 @@ int main(int argc, char** argv) {
     // districts — tinted discs + names at hubs.
     if (!trafficOnly) {
     svg << "<g id=\"districts\" opacity=\"0.35\">\n";
-    for (const CityHub& h : net.cityHubs) {
+    for (const CityHub& h : net.plan.cityHubs) {
         int k = std::clamp(h.kind, 0, 4);
         double r = h.site == 0 ? 340.0 : 260.0;
         svg << "<circle cx=\"" << h.pos.x << "\" cy=\"" << h.pos.y << "\" r=\""
@@ -262,7 +262,7 @@ int main(int argc, char** argv) {
     }
     svg << "</g>\n<g id=\"district-names\" font-family=\"sans-serif\""
            " font-size=\"64\" fill=\"#5b616b\" text-anchor=\"middle\">\n";
-    for (const CityHub& h : net.cityHubs) {
+    for (const CityHub& h : net.plan.cityHubs) {
         int k = std::clamp(h.kind, 0, 4);
         svg << "<text x=\"" << h.pos.x << "\" y=\"" << h.pos.y - 20 << "\">"
             << kDistrictNames[k] << "</text>\n";
@@ -417,7 +417,7 @@ int main(int argc, char** argv) {
 
     // hotspots.
     svg << "<g id=\"hotspots\">\n";
-    for (const CityHub& h : net.cityHubs)
+    for (const CityHub& h : net.plan.cityHubs)
         svg << "<circle cx=\"" << h.pos.x << "\" cy=\"" << h.pos.y
             << "\" r=\"18\" fill=\"none\" stroke=\"#333a45\""
                " stroke-width=\"5\"/>\n";

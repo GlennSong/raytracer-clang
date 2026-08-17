@@ -29,12 +29,16 @@ the frontage gate is right to refuse it. Cut alley edges into deep blocks so
 interior lots gain frontage. Metric: the `COVER` field in the `[citylots]` line —
 `living_city` is 15 070 m² built of 30 976 m² buildable (48.6%).
 
-**2. Road-graph unification** — `docs/road-graph-unification-plan.md`, APPROVED,
-steps 1–2 landed. Steps 3–6 need **one uninterrupted session**: measured 600+ edits,
-and the parallel arrays carry *fallback* semantics (a short `edgeWidths` means "use
-`net.width`"), so a find-and-replace corrupts **silently** — the order gate hashes
-ordering, not widths. Do not pre-create `RoadLook`/`RoadPlan`/`RoadEntity` as unused
-types ahead of the move.
+**2. Road-graph unification** — ~~steps 3–6~~ **DONE (2026-08-17)**, in the one
+uninterrupted session the plan demanded. `RoadNet` and its eight parallel arrays
+are deleted; the tree runs on `RoadEntity { graph, look, plan }` with every edge
+field resolved at construction, `heightAt` passed as a parameter, and the wire
+format confined (unchanged) to `roadNetFromJson`/`roadNetToJson`. Gates: order
+hashes identical (district `11690313017498955230`, metro `7979088897799340174`),
+ctest 1166/1166, `make test` 997/997, and `living_city`'s `[citylots]` COVER
+line reproduces this round's baseline byte-for-byte. Completion notes (where
+reality differed from the sketch) are at the top of
+`docs/road-graph-unification-plan.md`.
 
 **3. Expose the architect to Lua** — wants its own design pass. Three layers:
 zoning (`tagAt`, ~60 lines), selection (5 if/else weight ladders — **this is the

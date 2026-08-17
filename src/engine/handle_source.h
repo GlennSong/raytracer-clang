@@ -3,12 +3,13 @@
 
 #include "curve_edit.h"        // DragPlane (+ Vec3 via rt_math)
 #include "editable_curve.h"
+#include <functional>
 #include <utility>
 #include <vector>
 
 namespace engine {
 
-struct RoadNet;   // src/engine/procgen/city/road_net.h
+struct RoadEntity;   // src/engine/procgen/city/road_net.h
 
 enum class HandleKind { Knot, TangentIn, TangentOut };
 
@@ -19,7 +20,7 @@ struct EditHandle {
 };
 
 // The seam the path-edit tool talks to (ADR-0050): a thing with draggable handles.
-// One tool, many sources — an EditableCurve (animation paths), a RoadNet (the road
+// One tool, many sources — an EditableCurve (animation paths), a RoadEntity (the road
 // editor), or anything else with control points. Pure data: no World/Renderer here,
 // so it's unit-testable; the editor regenerates whatever a moveHandle mutated.
 class HandleSource {
@@ -47,17 +48,21 @@ private:
     EditableCurve* curve;
 };
 
-// Drive a RoadNet: a node handle plus one through-tangent handle per node (every road is a
-// spline), on the ground plane, seated on the road surface via heightAt.
+// Drive a RoadEntity: a node handle plus one through-tangent handle per node (every road is a
+// spline), on the ground plane, seated on the road surface via the level's terrain
+// sampler (`ground` — the entity no longer stores one; pass what the editor knows,
+// null = flat).
 class RoadHandleSource : public HandleSource {
 public:
-    explicit RoadHandleSource(RoadNet& n) : net(&n) {}
+    RoadHandleSource(RoadEntity& n, std::function<double(double, double)> ground)
+        : net(&n), ground(std::move(ground)) {}
     std::vector<EditHandle> handles() const override;
     void moveHandle(const EditHandle& h, const Vec3& worldPos) override;
     std::vector<std::pair<Vec3, Vec3>> previewSegments() const override;
     DragPlane defaultPlane() const override { return DragPlane::Ground; }
 private:
-    RoadNet* net;
+    RoadEntity* net;
+    std::function<double(double, double)> ground;
 };
 
 }  // namespace engine
