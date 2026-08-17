@@ -131,7 +131,26 @@ void readLotGrowParams(const json& cityJson,
     edges.margin = 4.0 + cityJson.value("sidewalk", 4.0);
     lots.seed = cityJson.value("seed", 1u) ^ 0x10c5u;
     lots.buildChance = cityJson.value("buildChance", 0.9);
-    lots.roadMargin = 4.0 + cityJson.value("sidewalk", 4.0);   // road half + sidewalk
+    // ROAD MARGIN — sidewalk only, no road-half term (measured 2026-08-16).
+    //
+    // This used to be `4.0 + sidewalk`, where the 4.0 stood in for a road's half
+    // width. That was a guess at ONE road's half width (an 8 m street), applied
+    // uniformly — too little for a 17 m arterial, too much for everything narrow —
+    // and it is now redundant: `pushPolyClearOfRoads` (added in b167c1d) pushes
+    // every block vertex clear of every carriageway using that edge's OWN width,
+    // per edge, against the sampled centreline. The scalar cannot do better than a
+    // guess and the per-edge pass cannot do worse than exact, so the guess only
+    // costs buildable area.
+    //
+    // It costs a lot of it: block interiors totalled 24 252 m² inside a ~90 000 m²
+    // city on living_city, and buildings already covered 60.5% of that interior.
+    // The city reads empty because ~73% of it is road and margin, not because the
+    // blocks are under-built.
+    //
+    // Gate: tests/test_lot_road_clearance.cpp
+    //       lot_block_interiors_clear_every_carriageway_on_a_mixed_width_net
+    // fails if this lets a block interior reach into a carriageway.
+    lots.roadMargin = cityJson.value("sidewalk", 4.0);
     lots.innerRadius = cityJson.value("downtownRadius", 55.0);
     lots.midRadius = cityJson.value("midtownRadius", 135.0);
     lots.plinth = cityJson.value("plinth", lots.plinth);   // base height above the pad
