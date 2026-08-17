@@ -112,6 +112,15 @@ struct LotParams {
     Real parcelFrontWidth = -1;     // stock 16 (ParcelParams::frontWidth)
     Real parcelLotDepth = -1;       // stock 28 (ParcelParams::lotDepth)
     Real parcelCourtMinArea = -1;   // stock 400 (ParcelParams::courtMinArea)
+    // Stage-10 ALLEYS (courts-with-alleys round): when a block's parcelled lots
+    // sit beyond the frontage reach (rim-block outer rows, deep interiors), cut
+    // ONE service alley along the block's long axis so that land gains legal
+    // frontage instead of going green. `citysim.alleys` / `citysim.alleyWidth`.
+    bool alleys = true;
+    // Pavement width (m). 2.8 = 2 x lotSetback: centred on the rows' shared
+    // boundary, the lane's edges land exactly where building walls already
+    // stop, so cutting it never shrinks an existing row.
+    Real alleyWidth = 2.8;
     uint32_t seed = 1;
     // TERRAIN sampler (world y at x,z): buildings grow from their graded pad
     // plane (the ENTRANCE-side grade, so the front door sits level with the
@@ -137,6 +146,8 @@ struct LotParams {
 struct LotPlanDebug {
     std::vector<Poly2> blocks;   // buildable block interiors (inset from the roads)
     std::vector<Poly2> lots;     // every parcelled lot
+    // Stage-10 alleys cut this build: centreline segments (plan view + tests).
+    std::vector<std::pair<Vec2, Vec2>> alleys;
     // Why lots did NOT build (each one became a green) — the density tuning
     // dials. A "small town" city is usually one of these counters running hot.
     int rejChance = 0;   // lost the occupancy roll (plaza / gap)

@@ -176,6 +176,11 @@ void readLotGrowParams(const json& cityJson,
         lots.parcelLotDepth = pj.value("lotDepth", lots.parcelLotDepth);
         lots.parcelCourtMinArea = pj.value("courtMinArea", lots.parcelCourtMinArea);
     }
+    // Stage-10 alleys (courts-with-alleys round): service lanes cut into blocks
+    // whose parcelled lots would otherwise fail the frontage gate. On by
+    // default; a level can opt out ("alleys": false) or retune the pavement.
+    lots.alleys = cityJson.value("alleys", lots.alleys);
+    lots.alleyWidth = cityJson.value("alleyWidth", lots.alleyWidth);
 }
 
 WaterMeshParams readWaterParams(const json& w) {

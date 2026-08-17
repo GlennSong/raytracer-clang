@@ -204,3 +204,63 @@ TEST_CASE(lot_block_interiors_clear_every_carriageway_on_a_mixed_width_net) {
                 static_cast<double>(lp.roadMargin), grown.plan.rejClear);
     CHECK(intruding == 0);
 }
+
+// STAGE-10 ALLEYS (courts-with-alleys round). The frontage gate refuses any
+// lot whose whole footprint sits beyond 14 m of a street surface — and on rim
+// blocks deeper than one lot row, the OUTER row is exactly such land: real,
+// parcelled, correctly shaped, and orphaned. Stage 10's contract says that
+// land "connects out" by an alley. This is the can-fail pair for the alley
+// pass: the same city grown with alleys OFF must show the orphaned rows (the
+// gate rejecting them), and grown with alleys ON must show zero frontage
+// rejections, at least one lane cut, and more built lots — not fewer, which
+// is what an over-fat lane does by shrinking the rows it serves (measured:
+// a 5 m lane with 0.7 m clearance COST coverage on living_city).
+TEST_CASE(alleys_recover_frontage_orphaned_rim_rows) {
+    // One straight road far from the downtown rings (residential grain), with
+    // rim blocks deep enough that the parcel walk lays TWO rows — the outer
+    // one beyond frontage reach. All knobs go through readLotGrowParams, the
+    // same derivation the loaders use.
+    RoadEntity net;
+    net.look.defaultWidth = 10.0;
+    net.graph.nodes.push_back(RoadNode{Vec2(300, 260)});
+    net.graph.nodes.push_back(RoadNode{Vec2(560, 260)});
+    net.graph.addEdge(0, 1, 10.0);
+    RoadGraph rg = navRoadGraph(net, nullptr);
+
+    nlohmann::json cityJson = { { "seed", 9 },
+                                { "sidewalk", 4.0 },
+                                { "buildChance", 1.0 },
+                                { "edgeBlockDepth", 56.0 } };
+    EdgeBlockParams ep;
+    LotParams lp;
+    readLotGrowParams(cityJson, ep, lp);
+    const Real roadClear = cityJson.value("sidewalk", 4.0) + 0.6;
+
+    auto countBuilt = [](const NetLotResult& r) {
+        int n = 0;
+        for (const LotBuilding& b : r.lots)
+            if (b.type != "green" && b.type != "park") ++n;
+        return n;
+    };
+
+    LotParams lpOff = lp;
+    lpOff.alleys = false;
+    NetLotResult without =
+        growLotBuildingsOnNets({ net }, lpOff, ep, roadClear, nullptr, &rg);
+    // The can-fail half: the orphaned outer rows must EXIST, or this whole
+    // test proves nothing (a change to the rim depth or the parcel walk that
+    // stops producing them should be seen here, not silently absorbed).
+    CHECK(without.plan.rejFrontage >= 1);
+    CHECK(without.plan.alleys.empty());
+
+    NetLotResult with2 =
+        growLotBuildingsOnNets({ net }, lp, ep, roadClear, nullptr, &rg);
+    std::printf("    [alleys] off: rejFrontage=%d built=%d | on: rejFrontage=%d "
+                "built=%d lanes=%zu\n",
+                without.plan.rejFrontage, countBuilt(without),
+                with2.plan.rejFrontage, countBuilt(with2),
+                with2.plan.alleys.size());
+    CHECK(with2.plan.rejFrontage == 0);          // every orphan gained frontage
+    CHECK(with2.plan.alleys.size() >= 1);        // by an actual lane, not a loophole
+    CHECK(countBuilt(with2) > countBuilt(without));   // and the city GAINED buildings
+}
