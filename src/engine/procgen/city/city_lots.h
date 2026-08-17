@@ -32,6 +32,15 @@ struct LotBuilding {
     std::string type;       // "home" | "shop" | "office" | "civic" | "park"
                             // | "green" (an UNBUILT lot — the caller plants
                             //   grass + trees on it; not a routable place)
+    // Which BLOCK this came from, and the district that block resolved to.
+    // Both are set on real buildings (PASS C); parks/greens/courts leave block
+    // at -1. They exist so the one-block-one-district invariant is TESTABLE:
+    // zoning boundaries are supposed to land on streets, and a block face is
+    // bounded by streets, so every building in a block must share a district.
+    // Without the block id that invariant can only be checked by
+    // point-in-polygon against LotPlanDebug, which no test should have to do.
+    int block = -1;
+    std::string district;   // districtName(tag) — "financial", "oldtown", ...
     std::string recipe;     // the architect RECIPE that built it ("school",
                             // "glass_tower", "fire_station", ...) — debug/UI
     Real baseY = 0;         // world Y the building grows from (terrain-sampled

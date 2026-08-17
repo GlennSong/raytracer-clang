@@ -1657,6 +1657,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                     coreness);
             b.type = rec.placeType;
             b.recipe = rec.name;
+            b.block = cand.block;
+            b.district = districtName(tag);
             b.color = colorFor(b.type);
             if (rec.massing == BuildingRecipe::Massing::Park) {
                 b.height = 0.18;  // low green pad — stays UNDER the road deck
