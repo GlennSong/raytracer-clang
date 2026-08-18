@@ -116,6 +116,22 @@ void DayNightSystem::update(FrameContext& ctx) {
             cycle.paused = setHold > 0.5;   // "artistic hold", not the sim clock
             cs.setDouble("daynight.setPaused", -1.0);
         }
+        // `set clouds.<knob> <v>` then `clouds.apply 1`: re-read the cloud
+        // deck live (coverage/density/scale/wind/enabled are otherwise
+        // state-entry-only, which made "why is the sky so heavy" answerable
+        // only by a reload).
+        if (cs.getDouble("clouds.apply", 0.0) > 0.5) {
+            cs.setDouble("clouds.apply", 0.0);
+            cloudsEnabled = cs.getBool("clouds.enabled", cloudsEnabled);
+            cloudCoverage =
+                static_cast<float>(cs.getDouble("clouds.coverage", cloudCoverage));
+            cloudDensity =
+                static_cast<float>(cs.getDouble("clouds.density", cloudDensity));
+            cloudScale =
+                static_cast<float>(cs.getDouble("clouds.scale", cloudScale));
+            cloudWindSpeed = static_cast<float>(
+                cs.getDouble("clouds.windSpeed", cloudWindSpeed));
+        }
     }
 
     // Pushing current state into the view every frame (cheap) keeps panel

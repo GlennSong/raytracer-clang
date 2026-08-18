@@ -268,9 +268,20 @@ void CityPossessSystem::driveTo(engine::FrameContext& ctx, engine::Real x,
     } else {
         route = engine::findRouteBetween(nav, pos2, Vec2(x, z));
     }
-    if (!route.valid() && path.empty()) {
-        state_ = PossessState::NoRoute;
-        return;
+    if (!route.valid()) {
+        // Dead-end entry: the heading-matched link can point into a stub (the
+        // corniche's seaward end did — the car drove 8 m and declared
+        // "arrived"). Fall back to nearest-node routing; the follower's
+        // windowed snap tolerates a start slightly behind the car. If THAT
+        // fails too, the destination is genuinely unroutable — say so rather
+        // than fake a mini-drive to the stub's end.
+        route = engine::findRouteBetween(nav, pos2, Vec2(x, z));
+        if (!route.valid()) {
+            state_ = PossessState::NoRoute;
+            return;
+        }
+        path.clear();
+        pathSpeeds_.clear();
     }
     if (route.valid()) {
         for (std::size_t leg = 0; leg < route.links.size(); ++leg) {
