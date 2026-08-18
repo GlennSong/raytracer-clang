@@ -3,6 +3,8 @@
 
 #include "../../log.h"
 
+#include <cmath>
+
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>
 #endif
@@ -97,6 +99,25 @@ void DayNightSystem::update(FrameContext& ctx) {
     double tod = ws.getDouble("daynight.timeOfDay", cycle.timeOfDay);
     if (tod != webLastTimeOfDay_) { cycle.timeOfDay = tod; webLastTimeOfDay_ = tod; }
 #endif
+    // Control channel one-shots (ADR-0078): `daynight <hour>` / `daynight
+    // hold|run` write these; consume-and-clear (the citysim.* idiom) so the
+    // ImGui panel and the cycle's own animation stay the owners between
+    // pokes. Unlike the web block above this does NOT re-read the persistent
+    // keys every frame — that would stomp live panel edits natively.
+    {
+        auto& cs = ctx.settings;
+        const double setTod = cs.getDouble("daynight.set", -1.0);
+        if (setTod >= 0.0) {
+            cycle.timeOfDay = std::fmod(setTod, 24.0);
+            cs.setDouble("daynight.set", -1.0);
+        }
+        const double setHold = cs.getDouble("daynight.setPaused", -1.0);
+        if (setHold >= 0.0) {
+            cycle.paused = setHold > 0.5;   // "artistic hold", not the sim clock
+            cs.setDouble("daynight.setPaused", -1.0);
+        }
+    }
+
     // Pushing current state into the view every frame (cheap) keeps panel
     // Level policy (DayNightConfig): a level that authors a static sun turns
     // the cycle off — the same yield rule as a bound HDR environment. Seeds

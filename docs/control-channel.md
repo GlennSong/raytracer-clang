@@ -14,6 +14,12 @@ so Claude Code sessions get these as first-class tools.
 | "Toggle the plan overlay" | `overlay` | citysim layers: play mode only |
 | "Freeze traffic for a shot" | `sim pause` / `resume` / `step` | viewer |
 | "Regrow the city" | `reload` | viewer |
+| "Make it golden hour" | `time_of_day` (set hour / hold the cycle) | viewer |
+| "Is the sun low yet?" | `sun` (elevation/intensity probe) | viewer |
+| "Crank SSAO / grade / shadows" | `render_params` (set + apply live) | viewer |
+| "Any settings knob" | `settings_kv` get/set/save | viewer |
+| "Show me the AO buffer" | `debug_view` (+ wireframe) | viewer |
+| "Where's the frame time going?" | `ledger` summary / CSV capture | viewer |
 
 ## The socket
 
@@ -31,6 +37,17 @@ shot <path.png>                            # arms; the file lands next frame
 overlay <ui|hud|debug|master|agents|cones|nav|plan> <on|off>
 sim <pause|resume|step|speed> [value]
 reload
+set <key> <value...>              # any Settings key (generic escape hatch)
+get <key>
+daynight <hour0-24>|hold|run      # one-shots DayNightSystem consumes; work
+                                  # while the sim clock is paused
+sun?                              # sunY / intensity / dark — numeric probe
+render <apply|save>               # push ssao./ssr./shadow./bloom./tonemap.op/
+                                  # grade./hud.show settings into the renderer
+                                  # (the visionOS panel's static mapping);
+                                  # save also persists settings.json
+view <0-8> [wire0-2]              # debug views (AO/SSR/depth/...) + wireframe
+ledger <start <csv>|stop|summary> # ADR-0077 frame ledger, remotely
 ```
 
 Try it by hand against a running viewer:
@@ -49,7 +66,10 @@ land within a frame; `shot` files land a frame later — poll for the file.
 `.mcp.json`. Claude Code spawns it automatically at session start (first use
 asks for approval once). Tools: `viewer_status`, `launch_viewer`,
 `set_camera`, `get_camera`, `screenshot`, `overlay`, `sim`, `reload`,
-`planner_stats`.
+`planner_stats`, `time_of_day`, `sun`, `settings_kv`, `render_params`,
+`debug_view`, `ledger`, and `viewer_command` (raw protocol line — the escape
+hatch that makes engine verbs usable before the shim relearns them at the
+next session restart).
 
 Instances: every tool takes an optional `instance` (socket basename
 substring); default is the newest live viewer — which is how an agent attaches

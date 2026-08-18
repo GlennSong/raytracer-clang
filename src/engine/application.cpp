@@ -1,5 +1,6 @@
 #include "application.h"
 #include "states/debug_overlay_state.h"
+#include "systems/debug_overlay_system.h"   // static settings<->renderer mapping (control `render`)
 #include "../log.h"
 #include "../profile.h"
 #include <algorithm>
@@ -599,8 +600,152 @@ std::string Application::handleControlCommand(const std::string& line) {
         return "ok reloading";
     }
 
+    // --- Tier 2 (device: "how deep can the controls go?"): everything that
+    // is already a Settings key or a public Renderer field. `set`/`get` are
+    // the generic escape hatch — every settings-driven knob, current and
+    // future, is reachable without another verb. The typed verbs below are
+    // the ones that need more than a bare settings write.
+
+    if (cmd.name == "set") {
+        if (cmd.args.size() < 2) return "err usage: set <key> <value...>";
+        // Re-join: values may carry spaces (paths). Stored as a string —
+        // Settings coerces on read, so numeric/bool consumers still work.
+        std::string value = cmd.args[1];
+        for (size_t i = 2; i < cmd.args.size(); ++i) value += " " + cmd.args[i];
+        settingsStore.setString(cmd.args[0], value);
+        return "ok set " + cmd.args[0];
+    }
+
+    if (cmd.name == "get") {
+        if (cmd.args.empty()) return "err usage: get <key>";
+        const std::string v = settingsStore.getString(cmd.args[0], "");
+        return v.empty() ? "ok (unset)" : "ok " + v;
+    }
+
+    if (cmd.name == "daynight") {
+        // One-shots consumed by DayNightSystem::update — they work while the
+        // sim clock is paused (update still runs), which is exactly the
+        // "freeze golden hour, keep framing" workflow.
+        if (cmd.args.empty()) return "err usage: daynight <hour0-24>|hold|run";
+        if (cmd.args[0] == "hold") {
+            settingsStore.setDouble("daynight.setPaused", 1.0);
+            return "ok cycle held";
+        }
+        if (cmd.args[0] == "run") {
+            settingsStore.setDouble("daynight.setPaused", 0.0);
+            return "ok cycle running";
+        }
+        double hour;
+        if (!num(cmd.args[0], hour) || hour < 0.0 || hour >= 24.0)
+            return "err usage: daynight <hour0-24>|hold|run";
+        settingsStore.setDouble("daynight.set", hour);
+        return "ok time staged";
+    }
+
+    if (cmd.name == "sun") {
+        // Direct sun set — the ImGui Lighting panel's slider, remotely. This
+        // is the golden-hour knob for levels that author a STATIC sun (no
+        // day/night cycle to steer, e.g. metropolis_sky in edit mode); with a
+        // live cycle the next applyLighting overwrites it — use `daynight`.
+        // Sky disc follows the sun so the scattering sky agrees with shadows;
+        // an optional colour is what actually makes an hour GOLDEN (direction
+        // alone reads as grey daylight from a warm-white authored sun).
+        double v[7] = {0, 0, 0, -1, -1, -1, -1};
+        if (cmd.args.size() < 3 || !num(cmd.args[0], v[0]) ||
+            !num(cmd.args[1], v[1]) || !num(cmd.args[2], v[2]))
+            return "err usage: sun <x> <y> <z> [intensity] [r g b] "
+                   "(direction TOWARD sun)";
+        for (size_t i = 3; i < cmd.args.size() && i < 7; ++i)
+            num(cmd.args[i], v[i]);
+        Vec3 dir(v[0], v[1], v[2]);
+        const Real len = dir.length();
+        if (len < 1e-6) return "err zero sun direction";
+        dir = dir * (1.0 / len);
+        auto& lit = view.lighting;
+        lit.sun.direction = dir;
+        lit.sky.sunDirection = dir;
+        if (v[3] > 0) lit.sun.intensity = static_cast<float>(v[3]);
+        if (v[4] >= 0 && v[5] >= 0 && v[6] >= 0) {
+            const Vec3 col(v[4], v[5], v[6]);
+            lit.sun.color = col;
+            lit.sky.sunColor = col;
+        }
+        return "ok sun set";
+    }
+
+    if (cmd.name == "sun?") {
+        // The lit truth, for numeric light probes (find golden hour without
+        // eyeballing screenshots): sun elevation, intensity, and whether the
+        // vehicle-lamp dusk rule considers it dark.
+        const auto& sun = view.lighting.sun;
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "ok sunY=%.3f intensity=%.2f dark=%d",
+                      sun.direction.y, sun.intensity,
+                      sun.direction.y < 0.06 ? 1 : 0);
+        return buf;
+    }
+
+    if (cmd.name == "render") {
+        // The ImGui panel's knob families (ssao.*, ssr.*, shadow.*, bloom.*,
+        // tonemap.op, grade.*, hud.show) ride the EXISTING static
+        // settings<->renderer mapping the visionOS panel uses. Flow: `set
+        // ssao.radius 1.2` ... then `render apply`.
+        if (cmd.args.empty()) return "err usage: render apply|save";
+        if (cmd.args[0] == "apply") {
+            DebugOverlaySystem::loadSettings(settingsStore, *rendererPtr);
+            return "ok applied";
+        }
+        if (cmd.args[0] == "save") {
+            DebugOverlaySystem::saveSettings(settingsStore, *rendererPtr);
+            settingsStore.save("settings.json");
+            return "ok saved";
+        }
+        return "err usage: render apply|save";
+    }
+
+    if (cmd.name == "view") {
+        // Debug view + wireframe are plain public renderer ints (the
+        // RT_DEBUG_VIEW / RT_WIREFRAME env knobs, now runtime).
+        double v;
+        if (cmd.args.empty() || !num(cmd.args[0], v) || v < 0 || v > 8)
+            return "err usage: view <0-8> [wire0-2]  (0=normal 1=AO 2=SSR "
+                   "3=depth 4=normals 5=shadow 6=albedo 7=facing 8=cascades)";
+        rendererPtr->debugView = static_cast<int>(v);
+        if (cmd.args.size() > 1 && num(cmd.args[1], v))
+            rendererPtr->wireframe = std::clamp(static_cast<int>(v), 0, 2);
+        return "ok view";
+    }
+
+    if (cmd.name == "ledger") {
+        // The always-on frame ledger (ADR-0077), remotely: capture to CSV for
+        // tools/frame-report.py, or a one-line summary right now.
+        if (cmd.args.empty()) return "err usage: ledger start <csv>|stop|summary";
+        if (cmd.args[0] == "start") {
+            if (cmd.args.size() < 2) return "err usage: ledger start <csv>";
+            frameStats.startCapture(cmd.args[1], "control-channel capture");
+            return "ok capturing " + cmd.args[1];
+        }
+        if (cmd.args[0] == "stop") {
+            frameStats.stopCapture();
+            return "ok capture stopped";
+        }
+        if (cmd.args[0] == "summary") {
+            FrameStats::Summary s = frameStats.summarize();
+            char buf[200];
+            std::snprintf(buf, sizeof(buf),
+                          "ok frame avg=%.2fms p95=%.2fms max=%.2fms "
+                          "update=%.2f fixed=%.2f render=%.2f wait=%.2f",
+                          s.avgTotalMs, s.p95TotalMs, s.maxTotalMs,
+                          s.avgUpdateMs, s.avgFixedMs, s.avgRenderMs,
+                          s.avgWaitMs);
+            return buf;
+        }
+        return "err usage: ledger start <csv>|stop|summary";
+    }
+
     return "err unknown command: " + cmd.name +
-           " (ping|info|camera|camera?|shot|overlay|sim|reload)";
+           " (ping|info|camera|camera?|shot|overlay|sim|reload|set|get|"
+           "daynight|sun?|render|view|ledger)";
 }
 
 }  // namespace engine

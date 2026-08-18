@@ -148,6 +148,53 @@ def tool_sim(args):
 def tool_reload(args):
     return send_command("reload", args.get("instance"))
 
+def tool_time_of_day(args):
+    if "hold" in args:
+        return send_command(f"daynight {'hold' if args['hold'] else 'run'}",
+                            args.get("instance"))
+    return send_command(f"daynight {args['hour']}", args.get("instance"))
+
+def tool_sun(args):
+    return send_command("sun?", args.get("instance"))
+
+def tool_settings_kv(args):
+    a = args["action"]
+    if a == "set":
+        return send_command(f"set {args['key']} {args['value']}",
+                            args.get("instance"))
+    if a == "get":
+        return send_command(f"get {args['key']}", args.get("instance"))
+    return send_command("render save", args.get("instance"))   # a == "save"
+
+def tool_render_params(args):
+    # Convenience: write any given ssao./ssr./shadow./bloom./tonemap./grade.
+    # keys, then apply them through the engine's settings->renderer mapping.
+    inst = args.get("instance")
+    for k, v in (args.get("params") or {}).items():
+        send_command(f"set {k} {v}", inst)
+    return send_command("render apply", inst)
+
+def tool_debug_view(args):
+    views = ["normal", "ao", "ssr", "depth", "normals", "shadow", "albedo",
+             "facing", "cascades"]
+    idx = views.index(args["view"]) if args["view"] in views else 0
+    cmd = f"view {idx}"
+    if "wireframe" in args:
+        cmd += f" {int(args['wireframe'])}"
+    return send_command(cmd, args.get("instance"))
+
+def tool_ledger(args):
+    a = args["action"]
+    if a == "start":
+        path = args.get("path") or f"/tmp/viewer-ledger-{int(time.time())}.csv"
+        return send_command(f"ledger start {path}", args.get("instance"))
+    return send_command(f"ledger {a}", args.get("instance"))
+
+def tool_viewer_command(args):
+    # Escape hatch: raw protocol line, so a newly grown engine verb is usable
+    # before this shim (which only reloads on session restart) learns it.
+    return send_command(args["command"], args.get("instance"))
+
 def tool_planner_stats(args):
     path = _resolve(args.get("instance"))
     info = send_command("info", args.get("instance"))
@@ -199,6 +246,40 @@ TOOLS = [
     ("planner_stats", "Road-graph and city-lots numbers (COVER, rejections, "
      "corridor routing) scraped from the instance's captured log.",
      {"instance": STR}, [], tool_planner_stats),
+    ("time_of_day", "Set the day/night cycle: hour 0-24 (17.5-18.5 ~ golden "
+     "hour, 12 noon), or hold/release the cycle (hold freezes the LIGHT while "
+     "the sim keeps running — traffic moves, sun stays put).",
+     {"hour": NUM, "hold": {"type": "boolean"}, "instance": STR}, [],
+     tool_time_of_day),
+    ("sun", "Probe the live sun: elevation (sunY), intensity, and whether "
+     "headlights consider it dark. Numeric golden-hour hunting without "
+     "eyeballing screenshots (golden ~ sunY 0.05-0.25).",
+     {"instance": STR}, [], tool_sun),
+    ("settings_kv", "Generic engine Settings access: get/set any key "
+     "(daynight.speed, clouds.coverage, cameraGrounded, ...), or save all "
+     "settings to settings.json. Renderer keys (ssao.*, ssr.*, shadow.*, "
+     "grade.*) need render_params to take effect.",
+     {"action": {"type": "string", "enum": ["get", "set", "save"]},
+      "key": STR, "value": STR, "instance": STR}, ["action"], tool_settings_kv),
+    ("render_params", "Set renderer post/quality knobs and apply them live: "
+     "pass {\"ssao.radius\": 1.2, \"grade.saturation\": 1.1, ...} — the "
+     "families the debug panel owns (ssao.*, ssr.*, shadow.*, bloom.*, "
+     "tonemap.op, grade.*, hud.show).",
+     {"params": {"type": "object"}, "instance": STR}, [], tool_render_params),
+    ("debug_view", "Switch the renderer's debug view (normal/ao/ssr/depth/"
+     "normals/shadow/albedo/facing/cascades) and optionally wireframe "
+     "(0 off, 1 wire, 2 overlay).",
+     {"view": {"type": "string",
+               "enum": ["normal", "ao", "ssr", "depth", "normals", "shadow",
+                        "albedo", "facing", "cascades"]},
+      "wireframe": NUM, "instance": STR}, ["view"], tool_debug_view),
+    ("ledger", "Frame-time ledger (ADR-0077): start capturing to CSV (for "
+     "tools/frame-report.py), stop, or get a one-line avg/p95/max summary.",
+     {"action": {"type": "string", "enum": ["start", "stop", "summary"]},
+      "path": STR, "instance": STR}, ["action"], tool_ledger),
+    ("viewer_command", "Raw control-channel line (see docs/control-channel.md)"
+     " — escape hatch for engine verbs newer than this tool list.",
+     {"command": STR, "instance": STR}, ["command"], tool_viewer_command),
 ]
 
 
