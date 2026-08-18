@@ -57,6 +57,12 @@ private:
     WeatherCycle weather;
     bool weatherActive = false;
 
+    // The level's authored volumetric deck, captured on first sight: the
+    // artistic knobs write ABSOLUTE values derived from this base each frame
+    // (a relative per-frame mutation would compound).
+    VolumetricCloudParams cloudBase_;
+    bool cloudBaseCaptured_ = false;
+
 #ifdef __EMSCRIPTEN__
     // Last time-of-day the web panel pushed through settings; lets update()
     // distinguish a fresh slider drag (jump there) from the cycle's own

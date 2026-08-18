@@ -3,6 +3,7 @@
 
 #include "../../log.h"
 
+#include <algorithm>
 #include <cmath>
 
 #ifdef RT_ENABLE_IMGUI
@@ -245,6 +246,37 @@ void DayNightSystem::applyClouds(FrameContext& ctx) {
     sky.cloudDensity  = cloudDensity;
     sky.cloudScale    = cloudScale;
     sky.cloudTime     = static_cast<float>(cloudPhase);
+
+    // The VOLUMETRIC deck (cinematic sky) reads lighting.volumetricClouds, not
+    // sky.cloud* — the renderer retires the 2D overlay while it is active, so
+    // until this block every knob above was DEAD in volumetric levels (the
+    // weather round's storm never arrived; measured live, `weather?`=storm
+    // over a fair sky). Semantics differ: the deck's density is EXTINCTION
+    // PER METRE (0.05 is the hand-tuned value; 0.55 saturated the march in
+    // one step — see renderer.h), so the 0-1 artistic knob maps into a narrow
+    // physical band around that tuning. The level's authored params are
+    // captured once and SEED the knobs (authored look wins at boot; the
+    // knobs, clouds.apply, and weather move it live from there).
+    auto& vc = ctx.view.lighting.volumetricClouds;
+    if (vc.enabled) {
+        if (!cloudBaseCaptured_) {
+            cloudBase_ = vc;
+            cloudBaseCaptured_ = true;
+            cloudCoverage = vc.coverage;
+            cloudDensity = std::clamp((vc.density - 0.02f) / 0.065f, 0.0f, 1.0f);
+            cloudScale = 1.2f;      // identity vs the authored noise frequency
+            sky.cloudCoverage = cloudCoverage;
+            sky.cloudDensity = cloudDensity;
+            sky.cloudScale = cloudScale;
+        }
+        vc.coverage = cloudCoverage;
+        vc.density = 0.02f + 0.065f * cloudDensity;
+        // Bigger artistic scale = bigger cells = LOWER noise frequency,
+        // anchored to the level's authored value at the 1.2 identity point.
+        vc.noiseScale =
+            cloudBase_.noiseScale * (1.2f / std::max(cloudScale, 0.3f));
+        vc.wind = cloudBase_.wind * cloudWindSpeed;
+    }
 }
 
 void DayNightSystem::render(FrameContext& ctx) {
