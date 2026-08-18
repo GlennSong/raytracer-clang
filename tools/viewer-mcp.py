@@ -157,6 +157,11 @@ def tool_time_of_day(args):
 def tool_sun(args):
     return send_command("sun?", args.get("instance"))
 
+def tool_weather(args):
+    if "state" not in args:
+        return send_command("weather?", args.get("instance"))
+    return send_command(f"weather {args['state']}", args.get("instance"))
+
 def tool_settings_kv(args):
     a = args["action"]
     if a == "set":
@@ -278,6 +283,14 @@ TOOLS = [
      "headlights consider it dark. Numeric golden-hour hunting without "
      "eyeballing screenshots (golden ~ sunY 0.05-0.25).",
      {"instance": STR}, [], tool_sun),
+    ("weather", "Set the sky's weather state over the volumetric deck: clear, "
+     "fair, overcast, or storm (eased in over ~2 min like a front arriving — "
+     "the sun dims with the deck), 'auto' for a seeded slow walk between "
+     "neighboring states, 'off' to hand the cloud knobs back. Omit state to "
+     "query.",
+     {"state": {"type": "string",
+                "enum": ["clear", "fair", "overcast", "storm", "auto", "off"]},
+      "instance": STR}, [], tool_weather),
     ("settings_kv", "Generic engine Settings access: get/set any key "
      "(daynight.speed, clouds.coverage, cameraGrounded, ...), or save all "
      "settings to settings.json. Renderer keys (ssao.*, ssr.*, shadow.*, "

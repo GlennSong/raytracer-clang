@@ -24,6 +24,19 @@ void DayNightSystem::onStart(FrameContext& ctx) {
     cloudScale     = static_cast<float>(s.getDouble("clouds.scale", cloudScale));
     cloudWindSpeed = static_cast<float>(s.getDouble("clouds.windSpeed", cloudWindSpeed));
 
+    // Weather state survives the session (yesterday's storm resumes AS a
+    // storm — snap, don't fade in from the boot deck).
+    const std::string ws = s.getString("weather.state", "");
+    if (!ws.empty() && ws != "off") {
+        WeatherKind kind;
+        if (weatherKindFromName(ws, kind)) {
+            weatherActive = true;
+            weather.state = kind;
+            weather.autoMode = s.getBool("weather.auto", false);
+            weather.snap();
+        }
+    }
+
     // Same level-policy gate as update(): a DayNightConfig with enabled=false
     // means the level's authored sun is the truth — without this, the settings
     // state restored above stomped it once here and the update() gate then
@@ -65,6 +78,10 @@ void DayNightSystem::onStop(FrameContext& ctx) {
     s.setDouble("clouds.scale", cloudScale);
     s.setDouble("clouds.windSpeed", cloudWindSpeed);
 
+    s.setString("weather.state",
+                weatherActive ? weatherKindName(weather.state) : "off");
+    s.setBool("weather.auto", weather.autoMode);
+
     s.save("settings.json");
 }
 
@@ -82,6 +99,24 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
     // artistic "hold this time of day while the game runs" control.)
     if (enabled && !hdrEnvironmentActive(ctx)) cycle.advance(ctx.clock.fixedStep());
     if (cloudsEnabled) cloudPhase += ctx.clock.fixedStep() * cloudWindSpeed;
+
+    // Weather: the auto walk rides the CYCLE's clock (cycle.speed is a day
+    // fraction per second, so hours = dt * speed * 24) and holds with the
+    // cycle's artistic pause; the EASING keeps running regardless, so an
+    // in-flight front always finishes arriving. While active, weather owns
+    // the cloud knobs — the ImGui sliders and clouds.apply rule again after
+    // `weather off`.
+    if (weatherActive) {
+        const double dt = ctx.clock.fixedStep();
+        if (!cycle.paused)
+            weather.advanceAuto(dt * cycle.speed * 24.0,
+                                static_cast<uint32_t>(
+                                    ctx.settings.getDouble("weather.seed", 7.0)));
+        weather.ease(dt);
+        cloudCoverage = weather.coverage;
+        cloudDensity  = weather.density;
+        cloudScale    = weather.scale;
+    }
 }
 
 void DayNightSystem::update(FrameContext& ctx) {
@@ -108,9 +143,35 @@ void DayNightSystem::update(FrameContext& ctx) {
         auto& cs = ctx.settings;
         const double setTod = cs.getDouble("daynight.set", -1.0);
         if (setTod >= 0.0) {
-            cycle.timeOfDay = std::fmod(setTod, 24.0);
+            // HOURS on the wire, FRACTION in the cycle (0.5 = noon). The first
+            // cut dropped hours straight in; the sun trig wraps modulo one DAY
+            // FRACTION, so `daynight 12` landed on 12 mod 1 = midnight-and-
+            // three-quarters — sunset. Every "golden hour" was found by eye,
+            // one wrong number away.
+            cycle.timeOfDay = std::fmod(setTod, 24.0) / 24.0;
             cs.setDouble("daynight.set", -1.0);
         }
+        // Weather one-shot: `weather clear|fair|overcast|storm|auto|off`.
+        const std::string setWeather = cs.getString("weather.set", "");
+        if (!setWeather.empty()) {
+            cs.setString("weather.set", "");
+            WeatherKind kind;
+            if (setWeather == "off") {
+                weatherActive = false;
+            } else if (setWeather == "auto") {
+                weatherActive = true;
+                weather.autoMode = true;
+            } else if (weatherKindFromName(setWeather, kind)) {
+                weatherActive = true;
+                weather.autoMode = false;
+                weather.state = kind;
+            }
+        }
+        cs.setString("weather.status",
+                     weatherActive
+                         ? std::string(weatherKindName(weather.state)) +
+                               (weather.autoMode ? " (auto)" : "")
+                         : "off");
         const double setHold = cs.getDouble("daynight.setPaused", -1.0);
         if (setHold >= 0.0) {
             cycle.paused = setHold > 0.5;   // "artistic hold", not the sim clock
@@ -160,7 +221,10 @@ void DayNightSystem::applyLighting(FrameContext& ctx) {
 
     lit.sun.direction = st.sunDirection;
     lit.sun.color     = st.sunColor;
-    lit.sun.intensity = st.sunIntensity;
+    // Weather dims the sun (overcast halves it, storm guts it) — dead flat
+    // shadows are what sell a heavy deck as WEATHER rather than a weird sky.
+    lit.sun.intensity =
+        st.sunIntensity * (weatherActive ? weather.sunScale : 1.0f);
 
     lit.sky.sunDirection     = st.sunDirection;
     lit.sky.sunColor         = st.sunColor;

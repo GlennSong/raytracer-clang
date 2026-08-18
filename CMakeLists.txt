@@ -458,6 +458,7 @@ add_executable(run_tests
     tests/test_world.cpp
     tests/test_clock.cpp
     tests/test_control_channel.cpp
+    tests/test_weather_cycle.cpp
     tests/test_frame_stats.cpp
     tests/test_event_bus.cpp
     tests/test_debug_draw.cpp

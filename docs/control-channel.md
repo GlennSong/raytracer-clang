@@ -42,6 +42,13 @@ set <key> <value...>              # any Settings key (generic escape hatch)
 get <key>
 daynight <hour0-24>|hold|run      # one-shots DayNightSystem consumes; work
                                   # while the sim clock is paused
+weather <clear|fair|overcast|storm|auto|off>
+                                  # sky states over the volumetric deck
+                                  # (weather_cycle.h): eased in like a front
+                                  # (~2 min), sun dims with the deck; auto =
+                                  # seeded neighbor walk every 4 in-world
+                                  # hours; off returns the knobs to the panel
+weather?                          # current state ("storm (auto)" / "off")
 sun?                              # sunY / intensity / dark — numeric probe
 render <apply|save>               # push ssao./ssr./shadow./bloom./tonemap.op/
                                   # grade./hud.show settings into the renderer

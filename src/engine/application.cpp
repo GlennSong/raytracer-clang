@@ -642,6 +642,22 @@ std::string Application::handleControlCommand(const std::string& line) {
         return "ok time staged";
     }
 
+    if (cmd.name == "weather") {
+        // Weather states over the volumetric deck (weather_cycle.h); consumed
+        // by DayNightSystem. `auto` starts the seeded neighbor walk; `off`
+        // hands the cloud knobs back to the panel/clouds.apply.
+        if (cmd.args.empty()) return "err usage: weather clear|fair|overcast|storm|auto|off";
+        const std::string& w = cmd.args[0];
+        if (w != "clear" && w != "fair" && w != "overcast" && w != "storm" &&
+            w != "auto" && w != "off")
+            return "err usage: weather clear|fair|overcast|storm|auto|off";
+        settingsStore.setString("weather.set", w);
+        return "ok weather staged";
+    }
+    if (cmd.name == "weather?") {
+        return "ok " + settingsStore.getString("weather.status", "off");
+    }
+
     if (cmd.name == "sun") {
         // Direct sun set — the ImGui Lighting panel's slider, remotely. This
         // is the golden-hour knob for levels that author a STATIC sun (no
