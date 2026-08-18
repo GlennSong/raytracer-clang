@@ -2,6 +2,8 @@
 #include "states/debug_overlay_state.h"
 #include "../log.h"
 #include "../profile.h"
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
@@ -231,6 +233,11 @@ void Application::runFrame() {
                      pendingCapturePath.c_str());
         pendingCapturePath.clear();
     }
+    // Control channel (ADR-0078): apply externally staged commands HERE, at
+    // the top of the frame on the main thread — the one place Settings,
+    // Renderer, SimClock, the overlay stack, and transitionRequest are all
+    // legally touchable (the socket thread only buffers; ADR-0072 staging).
+    pumpControlChannel();
     debugLines.update(frameDelta);   // age timed debug shapes (ADR-0067)
 
     // Headset pose for this frame, BEFORE any system updates: camera writers
@@ -257,14 +264,7 @@ void Application::runFrame() {
             if (event.type == EventType::KeyPressed
                 && event.key == KeyCode::GraveAccent
                 && !event.repeat) {
-                if (debugOverlayActive) {
-                    stateStack.popState();
-                    debugOverlayActive = false;
-                } else {
-                    stateStack.pushState(
-                        std::make_unique<DebugOverlayState>(*window));
-                    debugOverlayActive = true;
-                }
+                setDebugOverlay(!debugOverlayActive);
             } else {
                 stateStack.onEvent(event, ctx);
             }
@@ -438,6 +438,7 @@ void Application::runFrame() {
 }
 
 void Application::end() {
+    controlChannel.shutdown();   // stop the socket thread before states die
     {
         FrameContext ctx = makeContext();
         stateStack.onStop(ctx);
@@ -465,6 +466,141 @@ void Application::run() {
     begin();
     while (running()) runFrame();
     end();
+}
+
+// --- control channel (ADR-0078) ---------------------------------------------
+
+bool Application::enableControlChannel(
+    std::function<std::unique_ptr<AppState>()> reloadFactory) {
+    // RT_CONTROL=0 is the kill-switch; anything else (including unset) is on —
+    // the channel is a dev tool's front door, and "Glenn's already-open viewer
+    // is attachable" only works if attachability is the default.
+    if (const char* env = std::getenv("RT_CONTROL"))
+        if (env[0] == '0') return false;
+    controlReloadFactory = std::move(reloadFactory);
+    return controlChannel.initialize(ControlBackendMode::Socket);
+}
+
+void Application::pumpControlChannel() {
+    ++frameCounter;
+    controlChannel.drain(
+        [this](const std::string& line) { return handleControlCommand(line); });
+}
+
+void Application::setDebugOverlay(bool on) {
+    if (on == debugOverlayActive) return;
+    if (on) {
+        stateStack.pushState(std::make_unique<DebugOverlayState>(*window));
+        debugOverlayActive = true;
+    } else {
+        stateStack.popState();
+        debugOverlayActive = false;
+    }
+}
+
+std::string Application::handleControlCommand(const std::string& line) {
+    const ControlCommand cmd = parseControlCommand(line);
+    auto num = [](const std::string& s, double& out) {
+        try { out = std::stod(s); return true; } catch (...) { return false; }
+    };
+
+    if (cmd.name == "ping") return "ok pong";
+
+    if (cmd.name == "info") {
+        char buf[512];
+        std::snprintf(buf, sizeof(buf),
+                      "ok level=%s frame=%llu paused=%d overlay=%d hud=%d ui=%d",
+                      settingsStore.getString("levelPath", "?").c_str(),
+                      static_cast<unsigned long long>(frameCounter),
+                      clock.paused() ? 1 : 0, debugOverlayActive ? 1 : 0,
+                      rendererPtr->showHud ? 1 : 0,
+                      rendererPtr->uiHidden ? 1 : 0);
+        return buf;
+    }
+
+    if (cmd.name == "camera") {
+        // Staged as Settings + a one-shot apply flag; CameraSystem consumes it
+        // next update (the citysim.* idiom), seeds the fly pose, and detaches
+        // so the pose wins even in play mode.
+        double v[5];
+        if (cmd.args.size() < 5 || !num(cmd.args[0], v[0]) ||
+            !num(cmd.args[1], v[1]) || !num(cmd.args[2], v[2]) ||
+            !num(cmd.args[3], v[3]) || !num(cmd.args[4], v[4]))
+            return "err usage: camera <x> <y> <z> <pitchDeg> <yawDeg>";
+        settingsStore.setDouble("flyEyeX", v[0]);
+        settingsStore.setDouble("flyEyeY", v[1]);
+        settingsStore.setDouble("flyEyeZ", v[2]);
+        settingsStore.setDouble("flyPitch", v[3]);
+        settingsStore.setDouble("flyYaw", v[4]);
+        settingsStore.setDouble("cameraApply", 1.0);
+        return "ok camera staged";
+    }
+
+    if (cmd.name == "camera?") {
+        const CameraState& c = view.camera;
+        Vec3 fwd = c.target - c.position;
+        const Real len = fwd.length();
+        if (len > 1e-9) fwd = fwd * (1.0 / len);
+        constexpr Real kRadToDeg = 57.29577951308232;
+        char buf[256];
+        std::snprintf(buf, sizeof(buf),
+                      "ok eye=%.2f,%.2f,%.2f pitch=%.2f yaw=%.2f",
+                      c.position.x, c.position.y, c.position.z,
+                      std::asin(std::clamp(fwd.y, Real(-1), Real(1))) * kRadToDeg,
+                      std::atan2(fwd.x, -fwd.z) * kRadToDeg);
+        return buf;
+    }
+
+    if (cmd.name == "shot") {
+        if (cmd.args.empty()) return "err usage: shot <path.png>";
+        // Fires on the next composited frame; the caller polls for the file
+        // (the MCP shim does). Replying "written" would stall the frame.
+        return rendererPtr->requestFrameDump(cmd.args[0])
+                   ? "ok armed " + cmd.args[0]
+                   : "err this backend cannot capture frames";
+    }
+
+    if (cmd.name == "overlay") {
+        if (cmd.args.size() < 2) return "err usage: overlay <name> <on|off>";
+        const std::string& what = cmd.args[0];
+        const bool on = cmd.args[1] == "on" || cmd.args[1] == "1";
+        if (what == "hud") { rendererPtr->showHud = on; return "ok hud"; }
+        if (what == "ui") { rendererPtr->uiHidden = !on; return "ok ui"; }
+        if (what == "debug") { setDebugOverlay(on); return "ok debug"; }
+        // The citysim one-shot keys (city_render consumes and resets them) —
+        // exactly what the web build's rt_web_city writes.
+        if (what == "master" || what == "agents" || what == "cones" ||
+            what == "nav" || what == "plan") {
+            settingsStore.setDouble("citysim." + what, on ? 1.0 : 0.0);
+            return "ok " + what;
+        }
+        return "err unknown overlay (hud|ui|debug|master|agents|cones|nav|plan)";
+    }
+
+    if (cmd.name == "sim") {
+        if (cmd.args.empty()) return "err usage: sim pause|resume|step|speed <x>";
+        const std::string& what = cmd.args[0];
+        if (what == "pause") { clock.setPaused(true); return "ok paused"; }
+        if (what == "resume") { clock.setPaused(false); return "ok resumed"; }
+        if (what == "step") { clock.requestStep(); return "ok stepped"; }
+        if (what == "speed") {
+            double s;
+            if (cmd.args.size() < 2 || !num(cmd.args[1], s) || s <= 0.0)
+                return "err usage: sim speed <multiplier>";
+            clock.setTimeScale(s);
+            return "ok speed";
+        }
+        return "err unknown sim action";
+    }
+
+    if (cmd.name == "reload") {
+        if (!controlReloadFactory) return "err no reload factory registered";
+        requestState(controlReloadFactory());
+        return "ok reloading";
+    }
+
+    return "err unknown command: " + cmd.name +
+           " (ping|info|camera|camera?|shot|overlay|sim|reload)";
 }
 
 }  // namespace engine

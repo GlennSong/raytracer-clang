@@ -63,6 +63,15 @@ int main(int argc, char** argv) {
     };
 
     app.settings().setString("cameraMode", "fly");
+
+    // Control channel (ADR-0078): the socket tools/viewer-mcp.py (or nc)
+    // drives — on by default so an already-open viewer is always attachable;
+    // RT_CONTROL=0 turns it off. `reload` rebuilds the mode we booted into.
+    app.enableControlChannel([&app, startInPlay, &makePlay, &makeEditor]() {
+        (void)app;
+        return startInPlay ? makePlay() : makeEditor();
+    });
+
     app.pushState(startInPlay ? makePlay() : makeEditor());
 
     app.run();

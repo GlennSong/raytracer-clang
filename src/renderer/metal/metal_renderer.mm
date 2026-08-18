@@ -952,6 +952,10 @@ struct MetalRenderer::Impl {
     // settle) — eyes on the renderer without window capture permissions.
     const char* frameDumpPath = nullptr;
     int frameDumpCounter = 0;
+    // Runtime one-shots (requestFrameDump, the control channel's `shot`):
+    // owned path, fires on the NEXT frame — the caller already framed and
+    // settled. Distinct from the env path so both idioms keep their timing.
+    std::string runtimeDumpPath;
 
     // Cached once per frame from surface->colorTarget(), so the composite, lens
     // and frame-dump stages agree on the target even though they run apart.
@@ -1055,10 +1059,13 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     layerSurface->layer = [CAMetalLayer layer];
     layerSurface->layer.device = impl->device;
     layerSurface->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-    // framebufferOnly drawables can't be blitted from; relax it only when a
-    // frame dump was requested (RT_FRAME_DUMP=<path.png>).
+    // framebufferOnly drawables can't be blitted from, and the bit is fixed at
+    // init — but frame capture is no longer an env-armed special case: the
+    // control channel's `shot` (ADR-0078) can ask for a dump at ANY frame.
+    // Keep it relaxed on macOS; the cost is a lost display-optimization hint,
+    // and these are dev tools whose screenshot path is a first-class workflow.
     impl->frameDumpPath = std::getenv("RT_FRAME_DUMP");
-    layerSurface->layer.framebufferOnly = impl->frameDumpPath ? NO : YES;
+    layerSurface->layer.framebufferOnly = NO;
     layerSurface->layer.contentsScale =
         nsWindow ? nsWindow.backingScaleFactor : 2.0;   // retina default
 
@@ -1074,6 +1081,7 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
     // platform-specific rendering difference.
     //   1=AO 2=SSR 3=depth 4=normals 5=shadow 6=albedo 7=facing 8=cascades
     impl->frameDumpPath = std::getenv("RT_FRAME_DUMP");
+    uiHidden = std::getenv("RT_HIDE_UI") != nullptr;
     if (const char* w = std::getenv("RT_WIREFRAME")) wireframe = std::atoi(w);
     if (const char* d = std::getenv("RT_DEBUG_VIEW")) debugView = std::atoi(d);
     // PER-PASS GATES, from the environment. These already existed as ImGui
@@ -4976,9 +4984,17 @@ void MetalRenderer::endFrame() {
 #ifdef RT_ENABLE_IMGUI
         if (impl->imguiInitialized && viewPass == 0) {
             ImGui::Render();
-            ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(),
-                                           impl->currentCommandBuffer,
-                                           uiEncoder);
+            // uiHidden (seeded from RT_HIDE_UI at init, runtime-toggled by the
+            // control channel's `overlay ui off`): finalize the ImGui frame
+            // but composite none of it — a screenshot wants the scene, not
+            // the panels. Render() still runs because NewFrame()/Render()
+            // pair per frame; only the draw is skipped, so every panel
+            // (editor toolbar, debug overlay, city panel) vanishes without
+            // each opting in.
+            if (!uiHidden)
+                ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(),
+                                               impl->currentCommandBuffer,
+                                               uiEncoder);
         }
 #endif
 
@@ -5029,10 +5045,18 @@ void MetalRenderer::endFrame() {
     }
     }  // --- end per-view render loop ---
 
-    // Headless frame capture (RT_FRAME_DUMP) — copy the composited drawable
-    // before present, then write it out once the GPU finishes.
+    // Headless frame capture — copy the composited drawable before present,
+    // then write it out once the GPU finishes. Two arms, different timing:
+    // RT_FRAME_DUMP waits for frame 90 (probes baked, physics settled);
+    // requestFrameDump (the control channel's `shot`) fires on the NEXT frame
+    // because its caller already framed the camera and settled the scene.
     id<MTLTexture> dumpStaging = nil;
-    bool dumpThisFrame = impl->frameDumpPath && ++impl->frameDumpCounter == 90;
+    std::string dumpToPath;
+    if (impl->frameDumpPath && ++impl->frameDumpCounter == 90)
+        dumpToPath = impl->frameDumpPath;
+    else if (!impl->runtimeDumpPath.empty())
+        dumpToPath.swap(impl->runtimeDumpPath);
+    const bool dumpThisFrame = !dumpToPath.empty();
     if (dumpThisFrame) {
         id<MTLTexture> drawableTex = impl->currentColorTarget;
         MTLTextureDescriptor* d = [MTLTextureDescriptor
@@ -5107,10 +5131,19 @@ void MetalRenderer::endFrame() {
                   mipmapLevel:0];
         for (size_t i = 0; i < pixels.size(); i += 4)
             std::swap(pixels[i], pixels[i + 2]);   // BGRA → RGBA
-        stbi_write_png(impl->frameDumpPath, w, h, 4, pixels.data(), w * 4);
-        NSLog(@"[FRAME DUMP] wrote %s (%dx%d)", impl->frameDumpPath, w, h);
-        impl->frameDumpPath = nullptr;
+        stbi_write_png(dumpToPath.c_str(), w, h, 4, pixels.data(), w * 4);
+        NSLog(@"[FRAME DUMP] wrote %s (%dx%d)", dumpToPath.c_str(), w, h);
+        if (impl->frameDumpPath && dumpToPath == impl->frameDumpPath)
+            impl->frameDumpPath = nullptr;   // env arm is one-shot, as before
     }
+}
+
+bool MetalRenderer::requestFrameDump(const std::string& path) {
+    // Fires on the next endFrame (see the dump arm there). Last request wins
+    // if two arrive within a frame — the control channel is serial, so in
+    // practice this doesn't happen.
+    impl->runtimeDumpPath = path;
+    return true;
 }
 
 void MetalRenderer::initDebugUi(void* /*windowHandle*/) {

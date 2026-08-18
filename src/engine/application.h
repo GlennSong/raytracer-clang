@@ -6,6 +6,7 @@
 #include "world.h"
 #include "xr/xr_backend.h"
 #include "clock.h"
+#include "control/control_channel.h"
 #include "frame_stats.h"
 #include "pass_cost.h"
 #include "asset_manager.h"
@@ -91,7 +92,19 @@ public:
     // read summarize()/lastFrame() here; any host may start a CSV capture.
     FrameStats& stats() { return frameStats; }
 
+    // The control channel (ADR-0078): a local socket the MCP server / nc can
+    // drive — camera, screenshots, overlays, sim clock, reload. The host that
+    // wants it calls this once before run(); `reloadFactory` rebuilds the
+    // current mode's state for the `reload` command (only the host holds the
+    // state ctor args, same reason requestState exists). RT_CONTROL=0 is the
+    // kill-switch. Returns false when the socket could not start.
+    bool enableControlChannel(
+        std::function<std::unique_ptr<AppState>()> reloadFactory);
+
 private:
+    void pumpControlChannel();
+    std::string handleControlCommand(const std::string& line);
+    void setDebugOverlay(bool on);   // the grave key's push/pop, callable
     void reconcileFramebuffer();
     void renderFrame();
     FrameContext makeContext();
@@ -150,6 +163,9 @@ private:
     RenderView view;
     StateStack stateStack;
     bool debugOverlayActive = false;
+    ControlChannel controlChannel;   // ADR-0078; inert unless the host enables
+    std::function<std::unique_ptr<AppState>()> controlReloadFactory;
+    uint64_t frameCounter = 0;       // monotonic, for the channel's `info`
 
     std::string settingsFile;
     int framebufferWidth = 0;

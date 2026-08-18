@@ -35,6 +35,7 @@ public:
                                uint32_t foliage) override;
     float lastGpuFrameMs() const override;
     bool setPresentSync(bool enabled) override;
+    bool requestFrameDump(const std::string& path) override;
 
     void beginFrame() override;
     void setCamera(const CameraState& camera) override;

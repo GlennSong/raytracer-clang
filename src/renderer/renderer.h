@@ -581,6 +581,15 @@ public:
     // unreliable rather than report noise.
     virtual bool setPresentSync(bool /*enabled*/) { return false; }
 
+    // One-shot frame capture at RUNTIME (the control channel's `shot`): write
+    // the next composited frame to `path` as PNG. The RT_FRAME_DUMP env path
+    // keeps its settle-first frame-90 behavior; this fires on the very next
+    // frame — the caller has already framed the camera and waited out any
+    // bake. Returns false when the backend can't capture (only Metal can
+    // today), so callers can report "unsupported" instead of hanging on a
+    // file that will never appear.
+    virtual bool requestFrameDump(const std::string& /*path*/) { return false; }
+
     virtual void beginFrame() = 0;
     virtual void setCamera(const CameraState& camera) = 0;
 
@@ -733,6 +742,13 @@ public:
 
     // Compact stats HUD visible during gameplay
     bool showHud = false;
+
+    // Hide ALL ImGui panels (editor toolbar, debug overlay, city panel) —
+    // screenshots want the scene, not the chrome. Seeded from RT_HIDE_UI at
+    // init; the control channel's `overlay ui off` flips it at runtime. The
+    // ImGui frame still runs (NewFrame/Render pair per frame); only the
+    // composite is skipped, so no panel has to opt in.
+    bool uiHidden = false;
 
     // Frame rate cap (0 = uncapped, otherwise target FPS like 30 or 60)
     int targetFps = 0;

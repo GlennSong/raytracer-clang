@@ -121,6 +121,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_sparse_set.cpp \
 	$(TEST_DIR)/test_world.cpp \
 	$(TEST_DIR)/test_clock.cpp \
+	$(TEST_DIR)/test_control_channel.cpp \
 	$(TEST_DIR)/test_frame_stats.cpp \
 	$(TEST_DIR)/test_event_bus.cpp \
 	$(TEST_DIR)/test_debug_draw.cpp \
@@ -241,6 +242,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/world.cpp \
 	$(SRC_DIR)/engine/components.cpp \
 	$(SRC_DIR)/engine/clock.cpp \
+	$(SRC_DIR)/engine/control/control_channel.cpp \
 	$(SRC_DIR)/engine/input/input_map.cpp \
 	$(SRC_DIR)/engine/input/player_input.cpp \
 	$(SRC_DIR)/engine/camera/orbit_camera_controller.cpp \

@@ -132,6 +132,24 @@ void CameraSystem::update(FrameContext& ctx) {
     fly.farPlane = viewFar;
     follow.farPlane = viewFar;
 
+    // Control-channel camera (ADR-0078), a one-shot Settings handoff (the
+    // citysim.* idiom): consume the flag, seed the fly pose from the staged
+    // flyEye*/flyPitch/flyYaw, and DETACH — a detached freecam wins over the
+    // player pin (PlayerSystem early-outs on !positionLocked), so a staged
+    // shot frames correctly in play mode too. Consumed before the follow
+    // early-return below so a command sent while driving isn't lost.
+    if (ctx.settings.getDouble("cameraApply", 0.0) > 0.5) {
+        ctx.settings.setDouble("cameraApply", 0.0);
+        fly.eye = Vec3(ctx.settings.getDouble("flyEyeX", fly.eye.x),
+                       ctx.settings.getDouble("flyEyeY", fly.eye.y),
+                       ctx.settings.getDouble("flyEyeZ", fly.eye.z));
+        fly.pitch = ctx.settings.getDouble("flyPitch", fly.pitch);
+        fly.yaw = ctx.settings.getDouble("flyYaw", fly.yaw);
+        fly.positionLocked = false;
+        setActiveController(true);   // the fly camera, not orbit
+        activeCamera = Entity{};     // a placed camera would override the pose
+    }
+
     // Chase camera (ADR-0059): while following a vehicle, the view tracks it and
     // the editor controllers / placed cameras are bypassed. A dead target (the
     // car was destroyed) drops the follow back to the normal view.

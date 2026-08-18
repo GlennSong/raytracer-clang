@@ -5663,6 +5663,61 @@ contexts, which remain the answer for interleaved CPU/GPU timelines.
 
 ---
 
+## ADR-0078 — a control channel: the viewer answers a socket so agents can look
+**Status:** Accepted · **Date:** 2026-08-17
+
+**Context.** Visual iteration (roads, lots, lighting) ran through a relaunch
+loop: patch `settings.json` for a camera, start the viewer, wait for the bake,
+scrape one `RT_FRAME_DUMP` frame at ~90, kill. A minute per glance, no overlay
+toggles, and a running viewer — including the one a human already has open —
+was unreachable. Glenn asked for an MCP so an agent can drive the viewer
+before taking screenshots. The web build had already grown the exact command
+vocabulary as an `extern "C"` surface (`rt_web_*`: write Settings keys, poke
+public Renderer fields, drive `simClock()`, `requestState()`), proving the
+seams exist; they only lacked a local transport.
+
+**Decision.** `ControlChannel` (`engine/control/`), sealed the ADR-0012 way —
+no socket type in the header. A unix socket at
+`/tmp/raytracer-viewer-<pid>.sock` (0600, newest client wins, unlinked on
+shutdown) speaks a line protocol: `ping/info`, `camera` (staged as Settings +
+a one-shot `cameraApply` the CameraSystem consumes — the `citysim.*` idiom —
+detaching the freecam so the pose wins in play mode), `camera?`, `shot` (a new
+defaulted-virtual `Renderer::requestFrameDump` that fires on the next frame),
+`overlay` (ImGui composite gate `uiHidden`, `showHud`, the backtick overlay,
+and the citysim one-shot keys), `sim` (the already-drivable SimClock), and
+`reload` (a host-registered state factory through `requestState`). Threading
+is the ADR-0072 staging pattern: the socket thread only buffers lines under a
+mutex; `Application::runFrame` drains them top-of-frame on the main thread,
+where Settings/Renderer/clock/state-stack are legally touchable. Backend modes
+mirror `AudioBackendMode`: `Disabled` / `Socket` / `Manual` (tests push lines
+and read replies — deterministic, no socket in CI). The viewer enables Socket
+by default (`RT_CONTROL=0` opts out) so an already-open instance is always
+attachable. `tools/viewer-mcp.py` (stdlib-only, per the tools/ rule) fronts
+the socket as an MCP server registered in `.mcp.json`, and captures launched
+viewers' logs so `planner_stats` can answer with the `[citylots]`/`[roadgraph]`
+lines without any engine-side stats plumbing.
+
+**Alternatives considered.**
+- Extending EditorBridge: it is same-thread by construction (the Qt shell and
+  `runFrame` interleave on one event loop) — a socket thread breaks its core
+  invariant, and it is a WRITE surface; this channel is read-and-look.
+- MCP directly in the engine (C++ JSON-RPC on stdio): couples the engine to a
+  protocol that is still moving, and stdout already belongs to logs.
+- Per-tool env vars and relaunches (status quo): no attach, no runtime
+  toggles, a minute per look.
+
+**Consequences / tech debt.** The channel is deliberately read-and-look: no
+world edits (EditorBridge stays the one write path), no input injection, no
+entity queries; Windows is `Disabled`. citysim overlays only answer in play
+mode (the system that consumes the keys lives in ArenaState). `shot` replies
+"armed", not "written" — callers poll for the file (the MCP shim does).
+**Revisit trigger:** the first need for a WRITE operation over the channel, or
+a second external-control consumer (the Qt shell wanting sockets) — either
+means merging this transport with the EditorBridge design rather than growing
+a rival API.
+
+---
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "viewer": {
+      "command": "python3",
+      "args": ["tools/viewer-mcp.py"]
+    }
+  }
+}

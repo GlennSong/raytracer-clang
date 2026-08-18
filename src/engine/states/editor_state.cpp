@@ -51,6 +51,10 @@ void EditorState::onEnter(FrameContext& ctx) {
     ctx.settings.setBool("cameraFreeLook", false);
     ctx.settings.setBool("cameraDetachEnabled", false);   // F = frame selected
     ctx.settings.setString("cameraStorePath", levelFile + ".cameras.json");
+    // The control channel's `info` (and the camera panel's offline render)
+    // read this; ArenaState already sets it, and the editor not setting it
+    // left `info` reporting whatever level the LAST play session saved.
+    ctx.settings.setString("levelPath", levelFile);
 
     reloadDocument(ctx);
     PlayingState::onEnter(ctx);
