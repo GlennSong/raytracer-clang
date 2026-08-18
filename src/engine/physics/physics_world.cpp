@@ -242,12 +242,21 @@ bool PhysicsWorld::initialize(engine::JobSystem* jobSystem) {
     if (impl) return true;
     globalAcquire();   // registers Jolt's allocator, needed before the job pool
     impl = std::make_unique<Impl>();
+    // 4x Jolt's sample constant: cMaxPhysicsJobs (2048) sizes a demo scene,
+    // and one metro-scale Update's job graph blew through it — the free list
+    // came up empty at slot ~2047 and the adapter shipped a wild Job*
+    // (the 0x27ff0 crash trio). Slots are ~128 bytes; 8192 is a megabyte of
+    // insurance against a corruption class. Exhaustion within ONE Update
+    // cannot be waited out (its barrier only releases refs at WaitForJobs),
+    // so headroom is the fix and the adapter's retry loop is the backstop
+    // for cross-frame transients only.
+    constexpr JPH::uint kMaxJobs = JPH::cMaxPhysicsJobs * 4;
     if (jobSystem) {
         impl->jobSystem = std::make_unique<JoltJobAdapter>(
-            *jobSystem, JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers);
+            *jobSystem, kMaxJobs, JPH::cMaxPhysicsBarriers);
     } else {
         impl->jobSystem =
-            std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
+            std::make_unique<JPH::JobSystemSingleThreaded>(kMaxJobs);
     }
     impl->physicsSystem.Init(MAX_BODIES, 0, MAX_BODY_PAIRS, MAX_CONTACT_CONSTRAINTS,
                              impl->broadPhaseLayers, impl->objectVsBroadPhase,

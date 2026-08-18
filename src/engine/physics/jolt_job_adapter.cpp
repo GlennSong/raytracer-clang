@@ -1,6 +1,10 @@
 #include "jolt_job_adapter.h"
 
 #include "../../job_system.h"
+#include "../../log.h"
+
+#include <chrono>
+#include <thread>
 
 namespace engine {
 
@@ -27,11 +31,38 @@ int JoltJobAdapter::GetMaxConcurrency() const {
 JPH::JobSystem::JobHandle JoltJobAdapter::CreateJob(const char* inName,
         JPH::ColorArg inColor, const JobFunction& inJobFunction,
         JPH::uint32 inNumDependencies) {
-    // Mirror JobSystemSingleThreaded::CreateJob: allocate the job, wrap it in a
-    // handle that holds a reference, and queue it now if nothing blocks it.
-    JPH::uint32 index =
-        jobs.ConstructObject(inName, inColor, this, inJobFunction, inNumDependencies);
-    JPH_ASSERT(index != AvailableJobs::cInvalidObjectIndex);
+    // Allocate the job, wrap it in a handle that holds a reference, and queue
+    // it now if nothing blocks it. The free list CAN come up empty: the whole
+    // 2048 budget in flight at once during a SimClock catch-up burst, plus a
+    // transient window where finished jobs sit between Execute() and the
+    // worker's Release(). The first cut guarded that with JPH_ASSERT only —
+    // compiled out in release, so `Get(cInvalidObjectIndex)` shipped a WILD
+    // Job* that crashed at 0x27ff0 three times in one evening (twice in
+    // CreateJob's construct, once later in sRemoveDependencies through the
+    // returned handle). Jolt's own JobSystemThreadPool wraps this exact case
+    // in a wait-and-retry loop ("No jobs available!"); mirror it. Retrying is
+    // correct, not merely safe: slots free as soon as workers finish Release,
+    // which needs no cooperation from this thread.
+    // CAVEAT on the retry: it only helps when a slot can actually free — the
+    // cross-frame transient where finished jobs sit between Execute() and a
+    // worker's Release(). Exhaustion INSIDE one Update's graph cannot be
+    // waited out (the barrier holds every job's ref until WaitForJobs, which
+    // the creating thread hasn't reached), which is why maxJobs carries 4x
+    // headroom at the construction site — the retry is a backstop, and the
+    // escalating WARN below is how a mis-sized pool announces itself as a
+    // diagnosable stall instead of memory corruption.
+    JPH::uint32 index;
+    for (int attempt = 0;; ++attempt) {
+        index = jobs.ConstructObject(inName, inColor, this, inJobFunction,
+                                     inNumDependencies);
+        if (index != AvailableJobs::cInvalidObjectIndex) break;
+        if (attempt == 0)
+            LOG_WARN << "JoltJobAdapter: job pool exhausted; waiting for a slot";
+        else if (attempt == 1000)   // ~100 ms of spinning: this is not transient
+            LOG_ERROR << "JoltJobAdapter: pool exhausted >100ms — one physics "
+                         "step needs more jobs than maxJobs; raise it";
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
     Job* job = &jobs.Get(index);
 
     JobHandle handle(job);

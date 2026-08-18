@@ -561,3 +561,51 @@ TEST_CASE(agent_driver_tracks_a_lane_on_real_physics_and_stops_at_its_end) {
     CHECK(std::fabs(endPos.x) < 2.0);  // and on the line, not beside it
     world.shutdown();
 }
+
+// --- JoltJobAdapter under exhaustion (the 0x27ff0 crash class) --------------
+// Three live crashes shared one address: the adapter's job free list came up
+// empty (whole budget in flight during a SimClock catch-up burst) and the
+// assert-only guard let Get(cInvalidObjectIndex) ship a wild Job*. CreateJob
+// now waits for a slot, Jolt-thread-pool style. This hammer drives a TINY pool
+// (32 slots) with 40x that many jobs from Jolt's own barrier machinery — the
+// pre-fix adapter dies here in seconds; the fix makes exhaustion mean
+// "briefly wait", never "wild pointer".
+#include "../src/engine/physics/jolt_job_adapter.h"
+#include <atomic>
+#include <chrono>
+#include <thread>
+
+TEST_CASE(jolt_job_adapter_survives_transient_pool_exhaustion) {
+    // The RUNTIME pattern, miniaturized: PhysicsSystem::Update runs one
+    // barrier per step, back to back — and WaitForJobs returns when jobs have
+    // EXECUTED, while their Release() (which frees the slot) happens a beat
+    // later on a worker. So the next step's CreateJob burst races a free list
+    // that is transiently short — with a step-burst frame running 8 barriers
+    // in a row, transiently EMPTY. 500 rounds at 24 jobs against a 32-slot
+    // pool makes that window a certainty many times over; the pre-fix adapter
+    // ships a wild Job* out of one of these rounds, the fixed one briefly
+    // waits and completes every job. (True intra-barrier exhaustion is NOT
+    // retryable by design — the construction site carries 4x headroom for
+    // that; see jolt_job_adapter.cpp.)
+    engine::JobSystem pool(4);
+    {
+        JoltJobAdapter adapter(pool, /*maxJobs=*/32, /*maxBarriers=*/4);
+        std::atomic<int> executed{0};
+        constexpr int kRounds = 500;
+        constexpr int kJobsPerRound = 24;
+        for (int r = 0; r < kRounds; ++r) {
+            JPH::JobSystem::Barrier* barrier = adapter.CreateBarrier();
+            for (int i = 0; i < kJobsPerRound; ++i) {
+                JPH::JobSystem::JobHandle handle = adapter.CreateJob(
+                    "hammer", JPH::Color::sWhite,
+                    [&executed] {
+                        executed.fetch_add(1, std::memory_order_relaxed);
+                    });
+                barrier->AddJob(handle);
+            }
+            adapter.WaitForJobs(barrier);
+            adapter.DestroyBarrier(barrier);
+        }
+        CHECK(executed.load() == kRounds * kJobsPerRound);
+    }   // ~JoltJobAdapter drains its outstanding count before the pool dies
+}
