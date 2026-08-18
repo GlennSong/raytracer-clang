@@ -524,6 +524,23 @@ public:
         agents_[agentIndex].tethered = false;
     }
 
+    // Send an agent to a world position (possession, ADR-0079): route from
+    // where they are to the nearest node and walk/drive there — startTrip with
+    // snapped endpoints, in the same public index-based idiom as the tether
+    // setters. Returns false when out of range or the destination doesn't
+    // route (the agent keeps its current plan).
+    bool sendAgentTo(int agentIndex, engine::Vec2 dest) {
+        if (!nav_ || agentIndex < 0 ||
+            agentIndex >= static_cast<int>(agents_.size()))
+            return false;
+        Agent& a = agents_[agentIndex];
+        const int from = nav_->nearestNode(a.pos);
+        const int to = nav_->nearestNode(dest);
+        if (from < 0 || to < 0 || from == to) return false;
+        startTrip(a, from, to, /*fromRest=*/!a.moving);
+        return a.route.valid();
+    }
+
     // Sample agent `agentIndex`'s current route as a polyline of lane-centre
     // (driver) / sidewalk (pedestrian) points, ~`step` metres apart — the pursuit
     // path the ADR-0062 bridge follows from the car's real pose. Empty when the

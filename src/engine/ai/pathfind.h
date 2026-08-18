@@ -32,6 +32,29 @@ Route findRoute(const NavGraph& graph, int startNode, int goalNode,
 
 // Convenience: snap world points to their nearest nodes, then route.
 Route findRouteBetween(const NavGraph& graph, const Vec2& start, const Vec2& goal);
+// Same, on foot (skips Freeway/Ramp links) — walkers snap and route too.
+Route findRouteBetweenOnFoot(const NavGraph& graph, const Vec2& start,
+                             const Vec2& goal);
+
+// Sample a route into a followable polyline (LaneFollower::setPath input):
+// lane centres for a car, the sidewalk offset for a walker. Points are at most
+// `step` metres apart along each link, and consecutive links share their
+// junction point once (no duplicates — LaneFollower drops them anyway, but the
+// arc lengths stay honest). This is the sampler CitySim::lanePath performs
+// agent-keyed and test_piedmont_drive open-codes; possession needed it pure.
+std::vector<Vec2> routePolyline(const NavGraph& graph, const Route& route,
+                                Real step = 3.0, bool sidewalk = false,
+                                int lane = 0);
+
+// The same polyline plus a parallel per-point cruise speed — classSpeed of the
+// link each point lies on (walk callers pass their own pace instead). The two
+// vectors are index-aligned so a follower can look up the local limit at its
+// current segment.
+std::vector<Vec2> routePolylineWithSpeeds(const NavGraph& graph,
+                                          const Route& route,
+                                          std::vector<Real>& outSpeeds,
+                                          Real step = 3.0,
+                                          bool sidewalk = false, int lane = 0);
 
 }  // namespace engine
 

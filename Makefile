@@ -214,6 +214,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_agent_goals.cpp \
 	$(TEST_DIR)/test_vehicle_body.cpp \
 	$(TEST_DIR)/test_car_lamps.cpp \
+	$(TEST_DIR)/test_city_possess.cpp \
 	$(TEST_DIR)/test_city_flow.cpp \
 	$(TEST_DIR)/test_city_spectate.cpp \
 	$(TEST_DIR)/test_places.cpp \

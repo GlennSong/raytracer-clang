@@ -568,6 +568,7 @@ add_executable(run_tests
     tests/test_city_parking.cpp
     tests/test_city_deck_height.cpp
     tests/test_car_lamps.cpp
+    tests/test_city_possess.cpp
     tests/test_city_flow.cpp
     tests/test_city_spectate.cpp
     tests/test_places.cpp
@@ -742,6 +743,7 @@ if(RT_ENABLE_PHYSICS)
         src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0062)
         src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
         src/apps/citysim/city_player_body.cpp  # player renders as a person in third person (ADR-0064)
+        src/apps/citysim/city_possess.cpp   # the control channel's avatar (ADR-0079)
     )
 
     # Links citysim + engine_core (which provide world/components/event_bus/

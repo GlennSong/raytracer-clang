@@ -1,6 +1,7 @@
 #include "pathfind.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <queue>
 
@@ -98,6 +99,45 @@ Route findRoute(const NavGraph& graph, int startNode, int goalNode,
 
 Route findRouteBetween(const NavGraph& graph, const Vec2& start, const Vec2& goal) {
     return findRoute(graph, graph.nearestNode(start), graph.nearestNode(goal));
+}
+
+Route findRouteBetweenOnFoot(const NavGraph& graph, const Vec2& start,
+                             const Vec2& goal) {
+    return findRoute(graph, graph.nearestNode(start), graph.nearestNode(goal),
+                     /*onFoot=*/true);
+}
+
+std::vector<Vec2> routePolyline(const NavGraph& graph, const Route& route,
+                                Real step, bool sidewalk, int lane) {
+    std::vector<Real> speeds;
+    return routePolylineWithSpeeds(graph, route, speeds, step, sidewalk, lane);
+}
+
+std::vector<Vec2> routePolylineWithSpeeds(const NavGraph& graph,
+                                          const Route& route,
+                                          std::vector<Real>& outSpeeds,
+                                          Real step, bool sidewalk, int lane) {
+    std::vector<Vec2> pts;
+    outSpeeds.clear();
+    if (step <= 0) step = 3.0;
+    for (std::size_t leg = 0; leg < route.links.size(); ++leg) {
+        const int li = route.links[leg];
+        if (li < 0 || li >= static_cast<int>(graph.links.size())) continue;
+        const NavLink& link = graph.links[li];
+        const Real speed = classSpeed(link.klass);
+        const int segs =
+            std::max(1, static_cast<int>(std::ceil(link.length / step)));
+        // The first link contributes its start point; later links skip t=0 —
+        // it IS the previous link's end (the shared junction node).
+        const int first = (leg == 0) ? 0 : 1;
+        for (int s = first; s <= segs; ++s) {
+            const Real t = static_cast<Real>(s) / segs;
+            pts.push_back(sidewalk ? graph.sidewalkPoint(li, t)
+                                   : graph.laneCenter(li, lane, t));
+            outSpeeds.push_back(speed);
+        }
+    }
+    return pts;
 }
 
 }  // namespace engine

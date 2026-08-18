@@ -156,3 +156,54 @@ TEST_CASE(pathfind_walkers_never_route_the_authored_freeway) {
     }
     CHECK(ped.length(nav) > 350.0);    // around the block, not down the deck
 }
+
+// --- routePolyline (possession round, ADR-0079) ------------------------------
+// The pure sampler that turns a Route into LaneFollower input: lane centres
+// for cars, sidewalk offsets for walkers, per-point class speeds alongside.
+
+TEST_CASE(pathfind_route_polyline_is_dense_and_reaches_both_ends) {
+    NavGraph nav = buildNavGraph(diamond());
+    Route r = findRoute(nav, 0, 1);
+    CHECK(r.valid());
+
+    std::vector<Vec2> pts = routePolyline(nav, r, 3.0);
+    CHECK(pts.size() >= 2u);
+    // Starts near S(0,0) and ends near G(20,0) — lane offset keeps it within a
+    // couple of lane widths of the node, never somewhere else on the map.
+    auto near = [](const Vec2& a, Real x, Real y, Real tol) {
+        const Real dx = a.x - x, dy = a.y - y;
+        return dx * dx + dy * dy <= tol * tol;
+    };
+    CHECK(near(pts.front(), 0, 0, 8.0));
+    CHECK(near(pts.back(), 20, 0, 8.0));
+    // Dense: consecutive points at most ~step apart (lane-offset kinks at the
+    // junction add a little; 1.5x bounds it).
+    for (std::size_t i = 1; i < pts.size(); ++i) {
+        const Real dx = pts[i].x - pts[i - 1].x, dy = pts[i].y - pts[i - 1].y;
+        CHECK(std::sqrt(dx * dx + dy * dy) <= 4.5 + 1e-9);
+    }
+}
+
+TEST_CASE(pathfind_route_polyline_speeds_track_link_class) {
+    NavGraph nav = buildNavGraph(diamond());
+    Route r = findRoute(nav, 0, 1);   // prefers the arterial arm
+    std::vector<Real> speeds;
+    std::vector<Vec2> pts = routePolylineWithSpeeds(nav, r, speeds);
+    CHECK(pts.size() == speeds.size());
+    for (Real s : speeds) CHECK(std::fabs(s - classSpeed(RoadClass::Arterial)) < 1e-9);
+}
+
+TEST_CASE(pathfind_route_polyline_sidewalk_offsets_off_the_centreline) {
+    NavGraph nav = buildNavGraph(diamond());
+    Route r = findRoute(nav, 0, 1);
+    std::vector<Vec2> lane = routePolyline(nav, r, 3.0, /*sidewalk=*/false);
+    std::vector<Vec2> walk = routePolyline(nav, r, 3.0, /*sidewalk=*/true);
+    CHECK(lane.size() == walk.size());
+    // The sidewalk offset puts every sample clear of the lane centre — a
+    // walker polyline that coincided with the carriageway would march the
+    // pedestrian down the middle of the road.
+    for (std::size_t i = 0; i < lane.size(); ++i) {
+        const Real dx = lane[i].x - walk[i].x, dy = lane[i].y - walk[i].y;
+        CHECK(dx * dx + dy * dy > 1.0);
+    }
+}

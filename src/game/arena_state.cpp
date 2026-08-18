@@ -17,6 +17,7 @@
 #include "../apps/citysim/city_vehicles.h"
 #include "../apps/citysim/city_walkers.h"
 #include "../apps/citysim/city_player_body.h"
+#include "../apps/citysim/city_possess.h"
 #endif
 #include "../engine/systems/vehicle_system.h"
 #include "../engine/systems/render_system.h"
@@ -168,6 +169,11 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // over the on-foot shoulder camera, walk cycle shared with the crowd. After
     // PlayerSystem (line 60) so the capsule pose it reads is already this tick's.
     addSystem<citysim::CityPlayerBodySystem>();
+    // The control channel's avatar (ADR-0079): consumes possess.cmd one-shots,
+    // produces AgentDriver commands. AFTER CityWalkerSystem (commandeered
+    // pedestrians already have bodies), BEFORE VehicleSystem (same-tick command
+    // consumption) — and after PlayerSystem, so its chase-camera write wins.
+    addSystem<citysim::CityPossessSystem>(citySys, physSys);
     addSystem<VehicleSystem>(physSys, camSys);   // drives real cars: player + promoted
 #else
     // physics-off build: no collider/vehicle/walker bridges; the spectate camera

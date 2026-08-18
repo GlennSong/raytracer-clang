@@ -460,3 +460,104 @@ TEST_CASE(physics_resting_contact_does_not_respam_events) {
     // Resting on the floor is a persisted contact — no new ContactEvents.
     CHECK(world.drainContactEvents().empty());
 }
+
+// --- AgentDriver drives real Jolt (possession round, ADR-0079) ---------------
+// The missing integration: computeDriverInput was harness-tested against a
+// kinematic bicycle model only, and its steering sign shipped MIRRORED without
+// anything noticing (nothing spawned an AgentDriver). This closes the loop the
+// possession system depends on: route polyline -> LaneFollower -> pursuit ->
+// computeDriverInput -> setVehicleInput -> Jolt, on a real vehicle.
+
+#include "../src/engine/ai/lane_follow.h"
+
+namespace {
+
+PhysicsWorld::VehicleConfig sedanConfig() {
+    PhysicsWorld::VehicleConfig cfg;
+    cfg.chassisHalfExtent = Vec3(0.9, 0.65, 2.1);
+    cfg.mass = 1500.0;
+    cfg.maxSteerDegrees = 32.0;
+    cfg.engineTorque = 650.0;
+    cfg.brakeTorque = 1600.0;
+    cfg.handBrakeTorque = 4200.0;
+    const Real axleY = -0.35, halfTrack = 0.80, axleZ = 1.35, r = 0.31;
+    for (int i = 0; i < 4; ++i) {
+        PhysicsWorld::VehicleWheel w;
+        const bool front = i < 2;
+        w.position = Vec3(i % 2 ? -halfTrack : halfTrack, axleY,
+                          front ? axleZ : -axleZ);
+        w.radius = r;
+        w.width = 0.22;
+        w.suspensionMin = 0.05;
+        w.suspensionMax = 0.25;
+        w.steered = front;
+        w.driven = true;
+        w.handBrake = !front;
+        cfg.wheels.push_back(w);
+    }
+    return cfg;
+}
+
+}  // namespace
+
+TEST_CASE(agent_driver_tracks_a_lane_on_real_physics_and_stops_at_its_end) {
+    PhysicsWorld world;
+    world.initialize();
+    // The stock 50 m test floor ends mid-route (first run: the car tracked the
+    // lane, crossed z=50, and "arrived" in free fall at y=-231). The lane is
+    // 100 m, so the ground must outlast it.
+    world.addBox(Vec3(30, 1, 120), Vec3(0, -1, 50), Quat::identity(),
+                 BodyMotion::Static);
+
+    // Face +Z at the origin; the lane runs straight down +Z for 100 m.
+    PhysicsWorld::VehicleId car =
+        world.addVehicle(sedanConfig(), Vec3(0, 1.0, 0), Quat::identity());
+    CHECK(car != PhysicsWorld::INVALID_VEHICLE);
+
+    LaneFollower lf;
+    {
+        std::vector<Vec2> path;
+        for (int z = 0; z <= 100; z += 5)
+            path.push_back(Vec2(0, static_cast<Real>(z)));
+        lf.setPath(path);
+    }
+
+    Real worstLateral = 0;
+    bool reachedEnd = false;
+    for (int i = 0; i < 60 * 45 && !reachedEnd; ++i) {
+        const Vec3 pos = world.vehiclePosition(car);
+        const Quat q = world.vehicleOrientation(car);
+        const Vec3 fwd3 = q.rotate(Vec3(0, 0, 1));
+        const Vec3 vel = world.vehicleVelocity(car);
+
+        const Vec2 pos2(pos.x, pos.z);
+        const Real lateral = lf.update(pos2);
+        // Ignore the first settle second (suspension drop); after that the
+        // car must hold the lane. 2 m is a full lane-width miss.
+        if (i > 60) worstLateral = std::max(worstLateral, std::fabs(lateral));
+
+        DriverState s;
+        s.forward = Vec2(fwd3.x, fwd3.z);
+        s.speed = vel.x * fwd3.x + vel.y * fwd3.y + vel.z * fwd3.z;
+        const DriverCommand cmd = pursuitCommand(
+            lf, pos2, /*desiredSpeed=*/10.0, pursuitLookahead(s.speed));
+        const DriverInput in = computeDriverInput(s, cmd);
+        world.setVehicleInput(car, in.throttle, in.steer, in.brake,
+                              in.handBrake);
+        world.update(1.0 / 60.0);
+
+        if (lf.remaining() < 1.5 && std::fabs(s.speed) < 0.5) reachedEnd = true;
+    }
+
+    const Vec3 endPos = world.vehiclePosition(car);
+    // Probe print (house style): the trajectory summary that explains any
+    // failure without rerunning under a debugger.
+    std::printf("    [agentdrive] end=(%.1f, %.1f, %.1f) worstLat=%.2f "
+                "reached=%d\n",
+                endPos.x, endPos.y, endPos.z, worstLateral, reachedEnd ? 1 : 0);
+    CHECK(reachedEnd);                 // covered the 100 m and came to rest
+    CHECK(worstLateral < 2.0);         // held the lane the whole way
+    CHECK(endPos.z > 92.0);            // stopped AT the end, not short of it
+    CHECK(std::fabs(endPos.x) < 2.0);  // and on the line, not beside it
+    world.shutdown();
+}

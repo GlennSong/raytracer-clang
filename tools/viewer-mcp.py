@@ -195,6 +195,29 @@ def tool_viewer_command(args):
     # before this shim (which only reloads on session restart) learns it.
     return send_command(args["command"], args.get("instance"))
 
+def tool_possess(args):
+    cmd = f"possess {args['kind']}"
+    if "x" in args and "z" in args:
+        cmd += f" {args['x']} {args['z']}"
+    return send_command(cmd, args.get("instance"))
+
+def tool_drive_to(args):
+    return send_command(f"drive_to {args['x']} {args['z']}",
+                        args.get("instance"))
+
+def tool_walk_to(args):
+    return send_command(f"walk_to {args['x']} {args['z']}",
+                        args.get("instance"))
+
+def tool_possess_status(args):
+    return send_command("possess?", args.get("instance"))
+
+def tool_possess_stop(args):
+    return send_command("possess_stop", args.get("instance"))
+
+def tool_possess_release(args):
+    return send_command("release", args.get("instance"))
+
 def tool_planner_stats(args):
     path = _resolve(args.get("instance"))
     info = send_command("info", args.get("instance"))
@@ -280,6 +303,26 @@ TOOLS = [
     ("viewer_command", "Raw control-channel line (see docs/control-channel.md)"
      " — escape hatch for engine verbs newer than this tool list.",
      {"command": STR, "instance": STR}, ["command"], tool_viewer_command),
+    ("possess", "Take an in-world avatar (PLAY mode on a city level): 'car' "
+     "spawns a signal-red AI sedan (at x,z or ahead of the camera, aligned "
+     "with the road); 'walker' commandeers the nearest pedestrian. The chase "
+     "camera follows it. Then drive_to/walk_to command it.",
+     {"kind": {"type": "string", "enum": ["car", "walker"]},
+      "x": NUM, "z": NUM, "instance": STR}, ["kind"], tool_possess),
+    ("drive_to", "Route the possessed car along the road network to world "
+     "(x,z) and drive there — pursuit steering, yields behind traffic. Poll "
+     "possess_status for driving/arrived/stuck/no-route.",
+     {"x": NUM, "z": NUM, "instance": STR}, ["x", "z"], tool_drive_to),
+    ("walk_to", "Route the possessed walker along sidewalks to world (x,z).",
+     {"x": NUM, "z": NUM, "instance": STR}, ["x", "z"], tool_walk_to),
+    ("possess_status", "The avatar's state line: kind, "
+     "driving/walking/arrived/stuck/no-route, position, speed, metres "
+     "remaining.", {"instance": STR}, [], tool_possess_status),
+    ("possess_stop", "Brake to a halt / stand still, keep the possession.",
+     {"instance": STR}, [], tool_possess_stop),
+    ("possess_release", "Detach brain and camera; a possessed car stays "
+     "parked in the world, a walker resumes their simulated life.",
+     {"instance": STR}, [], tool_possess_release),
 ]
 
 

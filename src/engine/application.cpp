@@ -743,9 +743,46 @@ std::string Application::handleControlCommand(const std::string& line) {
         return "err usage: ledger start <csv>|stop|summary";
     }
 
+    // --- Possession (ADR-0079): transient play acts ----------------------
+    // Application stays city-free (engine_core charter): these verbs only
+    // stage the possess.cmd one-shot string; CityPossessSystem (registered by
+    // city-running states) consumes it and rewrites possess.status every
+    // frame. In a state without that system the status key answers "none".
+    if (cmd.name == "possess") {
+        if (cmd.args.empty() ||
+            (cmd.args[0] != "car" && cmd.args[0] != "walker"))
+            return "err usage: possess <car|walker> [x z]";
+        std::string staged = cmd.args[0];
+        for (size_t i = 1; i < cmd.args.size() && i < 3; ++i)
+            staged += " " + cmd.args[i];
+        settingsStore.setString("possess.cmd", staged);
+        return "ok staged (poll possess?)";
+    }
+    if (cmd.name == "drive_to" || cmd.name == "walk_to") {
+        double x, z;
+        if (cmd.args.size() < 2 || !num(cmd.args[0], x) || !num(cmd.args[1], z))
+            return "err usage: " + cmd.name + " <x> <z>";
+        settingsStore.setString(
+            "possess.cmd",
+            (cmd.name == "drive_to" ? "driveto " : "walkto ") + cmd.args[0] +
+                " " + cmd.args[1]);
+        return "ok staged (poll possess?)";
+    }
+    if (cmd.name == "possess_stop") {
+        settingsStore.setString("possess.cmd", "stop");
+        return "ok staged";
+    }
+    if (cmd.name == "release") {
+        settingsStore.setString("possess.cmd", "release");
+        return "ok staged";
+    }
+    if (cmd.name == "possess?")
+        return "ok " + settingsStore.getString("possess.status", "none");
+
     return "err unknown command: " + cmd.name +
            " (ping|info|camera|camera?|shot|overlay|sim|reload|set|get|"
-           "daynight|sun?|render|view|ledger)";
+           "daynight|sun?|render|view|ledger|possess|drive_to|walk_to|"
+           "possess_stop|release|possess?)";
 }
 
 }  // namespace engine

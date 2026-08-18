@@ -5686,7 +5686,10 @@ defaulted-virtual `Renderer::requestFrameDump` that fires on the next frame),
 `overlay` (ImGui composite gate `uiHidden`, `showHud`, the backtick overlay,
 and the citysim one-shot keys), `sim` (the already-drivable SimClock), and
 `reload` (a host-registered state factory through `requestState`). Threading
-is the ADR-0072 staging pattern: the socket thread only buffers lines under a
+is the physics contact-listener staging pattern (PhysicsWorld's mutex-buffered
+contact events, drained on the main thread — this text originally miscited it
+as "ADR-0072", which is the animation skeleton): the socket thread only
+buffers lines under a
 mutex; `Application::runFrame` drains them top-of-frame on the main thread,
 where Settings/Renderer/clock/state-stack are legally touchable. Backend modes
 mirror `AudioBackendMode`: `Disabled` / `Socket` / `Manual` (tests push lines
@@ -5715,6 +5718,62 @@ mode (the system that consumes the keys lives in ArenaState). `shot` replies
 a second external-control consumer (the Qt shell wanting sockets) — either
 means merging this transport with the EditorBridge design rather than growing
 a rival API.
+
+---
+
+## ADR-0079 — possession: transient play acts over the channel, and the write line
+
+**Status:** Accepted · **Date:** 2026-08-17
+
+**Context.** ADR-0078 chartered the control channel read-and-look and named
+its own revisit trigger: "the first need for a WRITE operation over the
+channel." That need arrived the same day — Glenn asked for an in-world avatar
+an agent can command ("move around the city like a player"). Raw realtime
+control is impossible for an agent whose perception-action loop is seconds
+and stills, but the engine's own architecture already holds the answer:
+ADR-0062 made every car one object driven through one seam (`DriverInput`
+from the seated player OR an `AgentDriver` brain), and the full
+pursuit/sensing stack (`LaneFollower`, `pursuitCommand`, `senseAlongPath`,
+`followSpeed`, `StuckDetector`) has sat in engine/ai, harness-tested, with
+zero producers since the possession-tier retirement — `AgentDriver` was
+consumed by VehicleSystem and written by nobody.
+
+**Decision.** Split channel writes into two classes rather than merging with
+EditorBridge:
+- **Document writes** stay the EditorBridge's monopoly, unchanged. The
+  channel may never create or modify anything carrying (or eligible for) a
+  `SourceSpec`; runtime spawns are never saved, by construction.
+- **Transient play acts** are now allowed: what the debug keys (N/T/H) can
+  do — spawn, possess, command. `CityPossessSystem` (apps/citysim) consumes a
+  `possess.cmd` one-shot (the citysim.* idiom keeps Application city-free per
+  the engine_core charter) and is the first `AgentDriver` producer: it spawns
+  a signal-red sedan on the nearest lane (or commandeers a sim pedestrian via
+  `CitySim::sendAgentTo`), routes with `findRoute` + per-link sim lane
+  spacing, drives through pursuit + traffic sensing, follows with its own
+  late-registered chase rig (the spectate precedent), and rewrites
+  `possess.status` every frame. Stuck is a REPORT with a brake-hold/retry
+  loop, never a mode that stops the brain.
+
+**Alternatives considered.**
+- Merging into EditorBridge now (0078's stated trigger): the bridge is
+  same-thread-by-construction and document-centric; possession needs neither,
+  and the document/transient split keeps both charters crisp.
+- Raw input injection: open-loop WASD at seconds of latency is drunk driving
+  by postcard; intent commands let the 60 Hz half live in-engine.
+
+**Consequences / tech debt.** Possession is play-mode-only (edit mode has no
+NavGraph/physics; status says so). The possessed car ignores traffic signals
+(sensing prevents rear-ends; junctions are polite-ish by luck). Walker
+possession redirects a live sim agent — its schedule resumes on release. The
+five live-drive defects that shaped v1 are pinned in the code comments
+(wall-route entry, phantom default-width lane, frozen-brain stuck gate,
+oncoming-sibling lane, ghost-pose walkers) — the Jolt drive-integration test
+(`agent_driver_tracks_a_lane_on_real_physics_and_stops_at_its_end`) holds the
+controller↔physics loop that would have caught the mirrored steering sign
+months earlier. **Revisit trigger:** the first need for a DOCUMENT write over
+the channel (that one does mean the EditorBridge merge), or a second
+possession consumer (gameplay AI wanting the same driver — then the drive
+loop moves from CityPossessSystem into engine/ai as a shared component).
 
 ---
 
