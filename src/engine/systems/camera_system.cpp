@@ -158,11 +158,19 @@ void CameraSystem::update(FrameContext& ctx) {
         followTarget = Entity{};
     if (followTarget.valid()) {
         const Transform& t = *ctx.world.get<Transform>(followTarget);
+        // INTERPOLATED pose, not the raw fixed-step Transform: renderables draw
+        // at lerp(prev, t, alpha) (render_system), so a camera targeting the
+        // raw pose advances in ~23 cm physics-step quanta at speed while the
+        // world glides — measured 23% frame-to-frame speed variance on a
+        // constant-speed chase ("the frame seems to stutter a lot").
+        Transform pose = t;
+        if (const PrevTransform* prev = ctx.world.get<PrevTransform>(followTarget))
+            pose = lerp(prev->value, t, ctx.interpolation);
         // Heading about Y in the FlyCamera yaw convention (yaw 0 looks down -Z):
         // forward = orientation * +Z, then yaw = atan2(fx, -fz).
-        Vec3 fwd = t.orientation.rotate(Vec3(0, 0, 1));
+        Vec3 fwd = pose.orientation.rotate(Vec3(0, 0, 1));
         Real yawDeg = radiansToDegrees(std::atan2(fwd.x, -fwd.z));
-        follow.setTarget(t.position, yawDeg);
+        follow.setTarget(pose.position, yawDeg);
         follow.update(gatherInput(ctx), ctx.frameDelta);
         ctx.view.camera = follow.cameraState(aspect);
         ctx.view.activeCameraEntity = Entity{};

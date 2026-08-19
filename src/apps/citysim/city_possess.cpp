@@ -449,8 +449,15 @@ void CityPossessSystem::updateCamera(engine::FrameContext& ctx) {
     if (car_.valid() && ctx.world.alive(car_)) {
         const engine::Transform* t = ctx.world.get<engine::Transform>(car_);
         if (!t) return;
-        worldPos = t->position;
-        const Vec3 f = t->orientation.rotate(Vec3(0, 0, 1));
+        // Interpolated pose (same alpha idiom as CameraSystem's chase rig):
+        // targeting the raw fixed-step Transform makes the camera advance in
+        // physics-step quanta while the rendered world glides between them.
+        engine::Transform pose = *t;
+        if (const engine::PrevTransform* prev =
+                ctx.world.get<engine::PrevTransform>(car_))
+            pose = engine::lerp(prev->value, *t, ctx.interpolation);
+        worldPos = pose.position;
+        const Vec3 f = pose.orientation.rotate(Vec3(0, 0, 1));
         yawDeg = engine::radiansToDegrees(std::atan2(f.x, -f.z));
     } else if (walkerAgent_ >= 0) {
         Vec2 heading;
