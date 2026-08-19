@@ -1,5 +1,6 @@
 #include "editor_state.h"
 
+#include "editor_home_view.h"
 #include "../../renderer/window.h"
 #include "../level_loader.h"
 #include "../asset_manager.h"
@@ -51,6 +52,24 @@ void EditorState::onEnter(FrameContext& ctx) {
     ctx.settings.setBool("cameraFreeLook", false);
     ctx.settings.setBool("cameraDetachEnabled", false);   // F = frame selected
     ctx.settings.setString("cameraStorePath", levelFile + ".cameras.json");
+
+    // Editor startup / level switch: snap the fly camera to the HOME view (an
+    // aerial framing of the origin) instead of wherever settings.json says the
+    // last session wandered. Same-level re-entry — the Esc-out-of-a-playtest
+    // round trip — keeps the pose (see EditorHomeViewPolicy). The write lands
+    // BEFORE PlayingState::onEnter below, so CameraSystem::onStart seeds from
+    // it like any other settings-driven pose.
+    static EditorHomeViewPolicy sHomeView;   // process-lifetime; states aren't
+    if (sHomeView.shouldReset(levelFile)) {
+        ctx.settings.setDouble("flyEyeX", kEditorHomeEyeX);
+        ctx.settings.setDouble("flyEyeY", kEditorHomeEyeY);
+        ctx.settings.setDouble("flyEyeZ", kEditorHomeEyeZ);
+        ctx.settings.setDouble("flyYaw", kEditorHomeYawDeg);
+        ctx.settings.setDouble("flyPitch", kEditorHomePitchDeg);
+        // A persisted top-down ortho would make the home view read as a map;
+        // home is always the perspective framing.
+        ctx.settings.setBool("flyOrtho", false);
+    }
     // The control channel's `info` (and the camera panel's offline render)
     // read this; ArenaState already sets it, and the editor not setting it
     // left `info` reporting whatever level the LAST play session saved.
