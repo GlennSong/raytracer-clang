@@ -275,9 +275,14 @@ struct ShadowConfig {
 // terms — the knob that makes shadows read under an HDR sky, whose energy
 // otherwise arrives entirely through the unshadowed ambient path.
 struct ShadowArtistic {
-    float strength = 1.0f;
-    Vec3 tint{0, 0, 0};
-    float ambientStrength = 0.5f;
+    // Defaults follow the ADR's own prescription ("a deep blue reads richer
+    // than black"): the original strength 1.0 -> pure-black tint with HALF
+    // the ambient also occluded made every unlit facade read as a void
+    // (device: "shadows on buildings are straight up black"). Levels can
+    // still author lighting.shadows.{strength, ambientStrength, tint}.
+    float strength = 0.95f;
+    Vec3 tint{0.09f, 0.11f, 0.17f};   // deep cool blue, not black
+    float ambientStrength = 0.25f;    // shadow trims, not halves, the fill
 };
 
 // Procedural sky parameters (ADR-0016). Drive the analytic skybox and, via the

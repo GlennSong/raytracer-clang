@@ -236,10 +236,19 @@ void DayNightSystem::applyLighting(FrameContext& ctx) {
     // whole daytime pipeline runs, ~200x dimmer and blue.
     lit.sun.direction = st.lightDirection;
     lit.sun.color     = st.lightColor;
-    // Weather dims the light (overcast halves it, storm guts it) — dead flat
-    // shadows are what sell a heavy deck as WEATHER rather than a weird sky.
-    lit.sun.intensity =
-        st.lightIntensity * (weatherActive ? weather.sunScale : 1.0f);
+    // AUTHORED values are the truth; the cycle is a day-SHAPE multiplier
+    // (captured lazily, normalized against the curve's noon anchors). The
+    // raw curve used to replace them — metro's sun 8.0 / ambient 0.6 ran at
+    // 5.0 / 0.34, which is most of "the daytime lighting seems really harsh".
+    if (baseSunIntensity_ < 0.0f) baseSunIntensity_ = lit.sun.intensity;
+    if (baseAmbient_ < 0.0f) baseAmbient_ = lit.ambientMultiplier;
+    if (!shadowCaptured_) { baseShadow_ = lit.shadowArtistic; shadowCaptured_ = true; }
+    // Weather dims the light (overcast halves it, storm guts it) — and raises
+    // the ambient fill + softens shadows below: an overcast sky is a giant
+    // diffuser, not a dimmer switch.
+    lit.sun.intensity = baseSunIntensity_ *
+                        (st.lightIntensity / kCycleNoonSunIntensity) *
+                        (weatherActive ? weather.sunScale : 1.0f);
     // Dusk predicates (vehicle lamps, street lights) key on the SUN's truth,
     // not the active light — the moon rising must not read as daylight.
     lit.solarElevation = st.solarElevation;
@@ -251,7 +260,17 @@ void DayNightSystem::applyLighting(FrameContext& ctx) {
     lit.sky.horizonColor     = st.horizonColor;
     lit.sky.groundColor      = st.groundColor;
 
-    lit.ambientMultiplier = st.ambient;
+    lit.ambientMultiplier = baseAmbient_ * (st.ambient / kCycleNoonAmbient) *
+                            (weatherActive ? weather.ambientScale : 1.0f);
+    // Shadow response follows the weather: soften toward shadowless as the
+    // deck closes (direct light under full overcast is barely directional).
+    {
+        const float soften = weatherActive ? weather.shadowSoften : 0.0f;
+        lit.shadowArtistic = baseShadow_;
+        lit.shadowArtistic.strength = baseShadow_.strength * (1.0f - soften);
+        lit.shadowArtistic.ambientStrength =
+            baseShadow_.ambientStrength * (1.0f - soften);
+    }
 
     // Night exposure adaptation (see header): scale the authored exposure as
     // the sun sinks. Captured lazily so it reads the level's value after load;

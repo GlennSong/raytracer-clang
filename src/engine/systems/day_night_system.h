@@ -65,6 +65,12 @@ private:
     // is what adapted eyes actually see. -1 = not captured yet.
     float baseExposure_ = -1.0f;
     static constexpr float kNightAdapt = 6.0f;   // midnight exposure multiplier
+    // The level's AUTHORED lighting, captured lazily like baseExposure_: the
+    // cycle multiplies a day-shape onto these instead of replacing them.
+    float baseSunIntensity_ = -1.0f;
+    float baseAmbient_ = -1.0f;
+    ShadowArtistic baseShadow_;
+    bool shadowCaptured_ = false;
 
     // NightGlow pass (WS3): scales tagged emissive materials on the dusk ramp
     // every frame (skipped while the ramp is unchanged). -1 forces the first

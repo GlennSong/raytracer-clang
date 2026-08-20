@@ -9,6 +9,14 @@ namespace engine {
 // Consumed by the renderer's procedural sky (ADR-0016) and the scene's
 // directional sun light, so the sky and the shading that lights the world stay
 // locked together as the cycle advances.
+// The curve's NOON anchors — what sunIntensity/ambient evaluate to at full
+// day. DayNightSystem NORMALIZES against these so the cycle acts as a
+// day-shape MULTIPLIER on the level's AUTHORED sun/ambient instead of
+// replacing them (metro authors sun 8.0 + ambient 0.6; the raw curve values
+// 5.0 + 0.34 silently overrode both — "certain values are being ignored").
+constexpr float kCycleNoonSunIntensity = 5.0f;
+constexpr float kCycleNoonAmbient = 0.34f;
+
 struct DayNightState {
     Vec3  sunDirection;     // normalized, toward the sun (world space)
     Vec3  sunColor;         // directional-light + sky-disc tint (linear)

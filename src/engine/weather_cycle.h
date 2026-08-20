@@ -30,16 +30,23 @@ struct WeatherTargets {
     float density;    // optical thickness (Beer term) — dark bases at 1.0
     float scale;      // noise domain scale — bigger cells for heavy decks
     float sunScale;   // multiplier on the sun's intensity (kills shadows too)
+    // An overcast sky is a giant diffuser: LESS direct light, MORE ambient,
+    // and shadows nearly gone. Dimming only the sun (the first cut) kept
+    // clear-sky contrast at lower brightness — "the lighting under the
+    // clouds is still very harsh". ambientScale raises the fill; shadowSoften
+    // fades the artistic shadow response toward shadowless.
+    float ambientScale;   // multiplier on the level's ambient fill
+    float shadowSoften;   // 0 = authored shadows, 1 = fully diffuse (no shadow)
 };
 
 inline WeatherTargets weatherTargets(WeatherKind k) {
     switch (k) {
-        case WeatherKind::Clear:    return {0.08f, 0.30f, 0.90f, 1.00f};
-        case WeatherKind::Overcast: return {0.80f, 0.60f, 1.90f, 0.55f};
-        case WeatherKind::Storm:    return {0.92f, 1.00f, 1.60f, 0.28f};
+        case WeatherKind::Clear:    return {0.08f, 0.30f, 0.90f, 1.00f, 1.00f, 0.00f};
+        case WeatherKind::Overcast: return {0.80f, 0.60f, 1.90f, 0.55f, 1.35f, 0.60f};
+        case WeatherKind::Storm:    return {0.92f, 1.00f, 1.60f, 0.28f, 1.45f, 0.85f};
         case WeatherKind::Fair:     break;
     }
-    return {0.32f, 0.45f, 1.10f, 1.00f};   // Fair — the everyday sky
+    return {0.32f, 0.45f, 1.10f, 1.00f, 1.05f, 0.08f};   // Fair — the everyday sky
 }
 
 inline const char* weatherKindName(WeatherKind k) {
@@ -78,6 +85,8 @@ struct WeatherCycle {
     float density  = 0.45f;
     float scale    = 1.10f;
     float sunScale = 1.00f;
+    float ambientScale = 1.05f;
+    float shadowSoften = 0.08f;
 
     bool autoMode = false;
     double sinceStepHours = 0.0;   // in-world hours since the last auto roll
@@ -96,6 +105,8 @@ struct WeatherCycle {
         density  += (t.density  - density)  * a;
         scale    += (t.scale    - scale)    * a;
         sunScale += (t.sunScale - sunScale) * a;
+        ambientScale += (t.ambientScale - ambientScale) * a;
+        shadowSoften += (t.shadowSoften - shadowSoften) * a;
     }
 
     // Jump straight to the state's targets (state restore at level start —
@@ -106,6 +117,8 @@ struct WeatherCycle {
         density  = t.density;
         scale    = t.scale;
         sunScale = t.sunScale;
+        ambientScale = t.ambientScale;
+        shadowSoften = t.shadowSoften;
     }
 
     // Advance the auto clock by in-world hours. At each kAutoHours boundary:
