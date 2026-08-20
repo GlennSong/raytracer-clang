@@ -209,7 +209,8 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
                 const double rp = roadPlaneNear(*params.flattenIndex, params.flatten,
                                                 x, z, static_cast<double>(step) * 1.6);
                 if (rp < 1e29 &&
-                    !padPlaneAbove(*params.flattenIndex, params.flatten, x, z, rp))
+                    !padPlaneAbove(*params.flattenIndex, params.flatten, x, z, rp,
+                               flattenDilate))
                     y = std::min(y, rp);
             }
             H[static_cast<size_t>(j) * n + i] = static_cast<float>(y);

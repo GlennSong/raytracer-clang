@@ -186,6 +186,12 @@ struct BuildingParams {
     // World XZ direction toward the street, so the entrance is placed on the face
     // that points at the road (not into an alley/courtyard). Default +Z.
     Vec3  faceDir{0, 0, 1};
+    // How far BELOW the storey base the ground sits at the entrance (m) —
+    // the lot layer samples it (the grammar stays terrain-free) and the
+    // entrance steps extend down to meet it, so the stoop lands on real
+    // ground instead of hovering at the plinth (floorplan-conformance
+    // round; Glenn's foundation-block design). 0 = flat ground.
+    Real  entranceDropBelow = 0;
     bool  baseCourse = true;     // a wider, darker plinth — the foundation/base
     bool  stringCourse = true;   // an oversailing cornice band atop the ground floor
     bool  pilasters = false;     // vertical piers framing each bay (run full height)

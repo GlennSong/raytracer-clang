@@ -1776,11 +1776,13 @@ struct GrownLots {
 // `ground` grades the lot pads; `netGround` is what the roads themselves drape
 // on (the pre-pass nets use the NATURAL terrain — the same sampler their
 // conform profiles were computed against), for the sampled clearance graph.
-static GrownLots growCityLots(const std::vector<engine::RoadEntity>& nets,
-                              const json& cs, const std::string& levelDir,
-                              const HeightField& ground,
-                              const HeightField& netGround,
-                              const engine::RoadGraph* freewayROW = nullptr) {
+static GrownLots growCityLots(
+    const std::vector<engine::RoadEntity>& nets, const json& cs,
+    const std::string& levelDir, const HeightField& ground,
+    const HeightField& netGround,
+    const engine::RoadGraph* freewayROW = nullptr,
+    std::function<std::function<engine::Real(engine::Real, engine::Real)>(
+        const std::vector<engine::TerrainFlatten>&)> groundWith = nullptr) {
     RT_PROFILE_ZONE_NAMED("growCityLots");
     GrownLots g;
     // Edge blocks (device feedback): the town RIM has no enclosed faces —
@@ -1811,6 +1813,7 @@ static GrownLots growCityLots(const std::vector<engine::RoadEntity>& nets,
     // TERRAIN: buildings grow from their graded pad plane, park/green pads
     // drape per-vertex (city-on-terrain; roads conform separately via
     // the level ground sampler + the flatten ramps the loader carves).
+    lp.groundWith = std::move(groundWith);
     if (ground)
         lp.ground = [&ground](engine::Real x, engine::Real z) {
             return static_cast<engine::Real>(ground(x, z));
@@ -2328,8 +2331,21 @@ bool LevelLoader::load(const std::string& path,
             HeightField lotGround = [lotTp, lotNoise](double x, double z) {
                 return terrainHeight(*lotTp, *lotNoise, x, z);
             };
+            // Priority-correct rebind hook for the in-pass block grades
+            // (LotParams::groundWith): fold extras into the SAME region list
+            // as the roads so priorities resolve as the final terrain will.
+            auto lotGroundWith = [lotTp, lotNoise](
+                                     const std::vector<TerrainFlatten>& extra) {
+                auto tp = std::make_shared<TerrainParams>(*lotTp);
+                tp->flatten.insert(tp->flatten.end(), extra.begin(),
+                                   extra.end());
+                rebuildFlattenIndex(*tp);
+                return [tp, lotNoise](Real x, Real z) {
+                    return terrainHeight(*tp, *lotNoise, x, z);
+                };
+            };
             preLots = growCityLots(preNets, root["citysim"], levelDir, lotGround,
-                                   levelGround, freewayROWp);
+                                   levelGround, freewayROWp, lotGroundWith);
             // BLOCK GRADING CASCADE (ADR-0075 P2, re-enabled roads-v2.1 R4):
             // the old attempt extracted faces from the GRAPH (none on a
             // tree-like terrain-gated metro); the LOT PLAN's own block
@@ -2385,6 +2401,13 @@ bool LevelLoader::load(const std::string& path,
                     poly.push_back(Vec3(g.x, 0, g.y));
                 }
                 TerrainFlatten f = makeFlattenPad(std::move(poly), lb.groundY, 5.0);
+                // Pads OUTRANK roads (kPadFlattenPriority, terrain.h): the
+                // road conform half-width overlaps the first metres of
+                // building depth, and priority is a hard override — below
+                // roads, every frontage facade stood on the ROAD's plane
+                // ("the middle is surrounded by terrain but the front edge
+                // is not"). Pads can never reach the carriageway (roadClear).
+                f.priority = kPadFlattenPriority;
                 terrainParams.flatten.push_back(f);
                 baseFlatten.push_back(std::move(f));   // non-road grading
             }
@@ -2657,7 +2680,7 @@ bool LevelLoader::load(const std::string& path,
                                         // every priority-1 region covering q (dilated):
                                         for (std::size_t ri = 0; ri < tpFull.flatten.size(); ++ri) {
                                             const TerrainFlatten& r = tpFull.flatten[ri];
-                                            if (r.priority < 1 || r.polygon.size() < 3) continue;
+                                            if (r.priority != kRoadFlattenPriority || r.polygon.size() < 3) continue;
                                             if (q.x < r.minX - dil || q.x > r.maxX + dil ||
                                                 q.y < r.minZ - dil || q.y > r.maxZ + dil) continue;
                                             auto inPoly = [&](double px, double pz) {
@@ -3294,8 +3317,25 @@ bool LevelLoader::load(const std::string& path,
                     // of the window grid, and every roof deck is near-charcoal
                     // — sides bake that window duty cycle in, the cap takes
                     // the roof material's tone.
+                    // The distant tier's foundation reach: min ground along
+                    // the plan perimeter (the same carved+dilated sampler
+                    // placement uses), bedded in — so the far building can't
+                    // hover where its LOD0 twin stands on concrete.
+                    Real boxBottom = std::numeric_limits<Real>::quiet_NaN();
+                    if (entityGround && lb.plan.size() >= 3) {
+                        double lo = 1e30;
+                        for (std::size_t pi = 0; pi < lb.plan.size(); ++pi) {
+                            const engine::Vec2& a2 = lb.plan[pi];
+                            const engine::Vec2& b2 =
+                                lb.plan[(pi + 1) % lb.plan.size()];
+                            lo = std::min(lo, entityGround(a2.x, a2.y));
+                            const engine::Vec2 m2 = (a2 + b2) * 0.5;
+                            lo = std::min(lo, entityGround(m2.x, m2.y));
+                        }
+                        boxBottom = static_cast<Real>(lo - 0.5);
+                    }
                     engine::appendLotMassBox(pmesh, lb, lb.color * 0.84,
-                                             Vec3(0.20, 0.20, 0.22));
+                                             Vec3(0.20, 0.20, 0.22), boxBottom);
                 }
                 for (auto& [key, pmesh] : proxies) {
                     if (pmesh.vertices.empty()) continue;

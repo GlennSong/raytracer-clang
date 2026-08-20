@@ -289,7 +289,7 @@ double roadPlaneNear(const FlattenGrid& grid, const std::vector<TerrainFlatten>&
                      double x, double z, double reach) {
     double best = 1e30;
     auto consider = [&](const TerrainFlatten& r) {
-        if (r.priority < 1 || r.polygon.size() < 3) return;
+        if (r.priority != kRoadFlattenPriority || r.polygon.size() < 3) return;
         if (x < r.minX - reach || x > r.maxX + reach ||
             z < r.minZ - reach || z > r.maxZ + reach)
             return;
@@ -316,12 +316,18 @@ double roadPlaneNear(const FlattenGrid& grid, const std::vector<TerrainFlatten>&
 }
 
 bool padPlaneAbove(const FlattenGrid& grid, const std::vector<TerrainFlatten>& regions,
-                   double x, double z, double planeCut) {
+                   double x, double z, double planeCut, double dilate) {
     bool found = false;
     auto consider = [&](const TerrainFlatten& r) {
-        if (found || r.priority >= 1 || r.polygon.size() < 3) return;
-        if (x < r.minX || x > r.maxX || z < r.minZ || z > r.maxZ) return;
-        if (r.planeY(x, z) > planeCut && pointInFootprint(r.polygon, x, z)) found = true;
+        if (found || r.priority == kRoadFlattenPriority || r.polygon.size() < 3)
+            return;
+        if (x < r.minX - dilate || x > r.maxX + dilate ||
+            z < r.minZ - dilate || z > r.maxZ + dilate)
+            return;
+        if (r.planeY(x, z) > planeCut &&
+            (pointInFootprint(r.polygon, x, z) ||
+             (dilate > 0.0 && distanceToFootprint(r.polygon, x, z) <= dilate)))
+            found = true;
     };
     if (grid.empty()) {
         for (const TerrainFlatten& r : regions) consider(r);

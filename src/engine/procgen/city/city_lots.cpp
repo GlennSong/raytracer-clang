@@ -1133,23 +1133,40 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     auto padPlaneFor = [&](const Poly2& pl, const Vec2& face) -> Real {
         if (!p.ground || pl.empty()) return 0;
         const Vec2 c = centroid(pl);
-        Real tExit = -1;
+        // The FRONT EDGE, not one point (floorplan-conformance round): the
+        // old single sample 2 m past the entrance sat on the centroid ray
+        // only — on a street sloping ALONG the frontage the front corners
+        // deviated by slope x halfFrontage (up to metres), and whichever
+        // corner drew the short straw hovered. The pad anchors to the MIN
+        // across the whole front edge: no front corner may hover; the uphill
+        // corner cuts in (a retaining edge — standard hillside practice),
+        // and the entrance rise stays small by construction, which is what
+        // keeps the entry steps short and the tall foundation faces on the
+        // sides/back.
         if (face.length() > Real(1e-6)) {
             const Vec2 f = normalize(face);
             const std::size_t n = pl.size();
+            // The plan edge most aligned with the entrance direction (its
+            // outward right-normal vs `face`), i.e. the frontage edge.
+            Real bestDot = Real(0.2);   // demand rough agreement
+            std::size_t bestI = n;
             for (std::size_t i = 0; i < n; ++i) {
-                const Vec2& a = pl[i];
-                const Vec2& b = pl[(i + 1) % n];
-                const Vec2 e = b - a;
-                const Real den = cross(f, e);
-                if (std::fabs(den) < Real(1e-9)) continue;
-                const Real t = cross(a - c, e) / den;       // along the ray
-                const Real u = cross(a - c, f) / den;       // along the edge
-                if (t > 0 && u >= 0 && u <= 1) tExit = std::max(tExit, t);
+                const Vec2 e = pl[(i + 1) % n] - pl[i];
+                const Real l = e.length();
+                if (l < Real(1e-6)) continue;
+                const Vec2 rn(e.y / l, -e.x / l);   // outward for CCW plans
+                const Real d = dot(rn, f);
+                if (d > bestDot) { bestDot = d; bestI = i; }
             }
-            if (tExit > 0) {
-                const Vec2 E = c + f * (tExit + Real(2.0));
-                return p.ground(E.x, E.y);
+            if (bestI < n) {
+                const Vec2& a = pl[bestI];
+                const Vec2& b = pl[(bestI + 1) % n];
+                Real lo = Real(1e30);
+                for (Real t : {Real(0.0), Real(0.5), Real(1.0)}) {
+                    const Vec2 q = a + (b - a) * t + f * Real(2.0);
+                    lo = std::min(lo, p.ground(q.x, q.y));
+                }
+                return lo;
             }
         }
         Real sum = 0;
@@ -1160,10 +1177,15 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // FOUNDATION course (device: "there should be some kind of a base for the
     // building and steps to get up to the front door"). Host-tunable.
     const Real plinth = p.ground ? std::max(Real(0), p.plinth) : Real(0);
-    // The foundation course: the plan outset slightly, extruded from below the
-    // pad up to the wall base — a concrete band that grounds the massing and
-    // hides the terrain seam. Emitted into the Concrete part like any other
-    // grammar element.
+    // The FOUNDATION BLOCK (Glenn's design — the daylight/stem-wall
+    // foundation of real hillside construction): the plan outset slightly,
+    // extruded as a solid concrete body from the wall base DOWN past the
+    // terrain under every perimeter vertex. The grammar stays terrain-free;
+    // this lot layer owns both plan and ground, so it pours the concrete the
+    // building stands on. Emitted into EVERY tier that draws the building —
+    // LOD0 and, when grown, the LOD1 flat twin — because a foundation that
+    // exists only up close is a building that floats at a distance (the
+    // census's mechanism 4).
     auto emitFoundation = [&](const Poly2& plIn, Real planeY, Real topY) {
         if (!outParts || plIn.size() < 3 || !p.ground) return;
         Poly2 pl = plIn;
@@ -1191,34 +1213,47 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             const Real cosH = std::max(Real(0.35), dot(mm, n1));
             o[i] = b + mm * (Real(0.14) / cosH);
         }
-        RenderMesh& m = (*outParts)[static_cast<std::size_t>(PartId::Concrete)];
         const Vec3 col(1, 1, 1);   // Concrete's surface maps carry the look
-        // The skirt bottom DRAPES: each ring vertex drops to the terrain
-        // sampled under it, minus a bed-in margin — a fixed planeY-0.6 left
-        // the ring hanging in air wherever the downhill side fell more than
-        // 0.6 m below the pad (the falloff apron does exactly that on hills).
+        // The block's bottom DRAPES + BEDS: each ring vertex drops past the
+        // terrain sampled under it (0.5 m bed-in) — and also past a mid-edge
+        // sample, so a dip BETWEEN two vertices can't open daylight under a
+        // long wall (the census walks the perimeter at 1 m; the block must
+        // beat it everywhere, and sampling only corners lost mid-edge sag).
         std::vector<Real> bot(nv);
         for (std::size_t i = 0; i < nv; ++i) {
-            const Real g = p.ground(o[i].x, o[i].y);
-            bot[i] = std::min(planeY, g) - Real(0.4);
-        }
-        for (std::size_t i = 0; i < nv; ++i) {
             const std::size_t j = (i + 1) % nv;
-            Vec2 e = o[j] - o[i];
-            if (e.length() < Real(1e-9)) continue;
-            Vec2 n = normalize(Vec2(e.y, -e.x));
-            MeshBuilder::emitQuad(m, Vec3(o[i].x, bot[i], o[i].y),
-                                  Vec3(o[j].x, bot[j], o[j].y),
-                                  Vec3(o[j].x, topY, o[j].y),
-                                  Vec3(o[i].x, topY, o[i].y),
-                                  Vec3(n.x, 0, n.y), col);
-            // The exposed ledge between the foundation's outer lip and the wall.
-            MeshBuilder::emitQuad(m, Vec3(o[i].x, topY, o[i].y),
-                                  Vec3(o[j].x, topY, o[j].y),
-                                  Vec3(pl[j].x, topY, pl[j].y),
-                                  Vec3(pl[i].x, topY, pl[i].y),
-                                  Vec3(0, 1, 0), col);
+            const Vec2 mid = (o[i] + o[j]) * Real(0.5);
+            Real g = std::min(p.ground(o[i].x, o[i].y),
+                              p.ground(mid.x, mid.y));
+            g = std::min(g, p.ground(o[j].x, o[j].y));
+            bot[i] = std::min(planeY, g) - Real(0.5);
         }
+        // Every edge's bottom uses the LOWER of its two ends, so adjacent
+        // side quads always share their bottom corner (watertight sides).
+        auto emitInto = [&](std::vector<RenderMesh>* parts) {
+            if (!parts) return;
+            RenderMesh& m = (*parts)[static_cast<std::size_t>(PartId::Concrete)];
+            for (std::size_t i = 0; i < nv; ++i) {
+                const std::size_t j = (i + 1) % nv;
+                Vec2 e = o[j] - o[i];
+                if (e.length() < Real(1e-9)) continue;
+                Vec2 n = normalize(Vec2(e.y, -e.x));
+                const Real eb = std::min(bot[i], bot[j]);
+                MeshBuilder::emitQuad(m, Vec3(o[i].x, eb, o[i].y),
+                                      Vec3(o[j].x, eb, o[j].y),
+                                      Vec3(o[j].x, topY, o[j].y),
+                                      Vec3(o[i].x, topY, o[i].y),
+                                      Vec3(n.x, 0, n.y), col);
+                // The exposed ledge between the block's outer lip and the wall.
+                MeshBuilder::emitQuad(m, Vec3(o[i].x, topY, o[i].y),
+                                      Vec3(o[j].x, topY, o[j].y),
+                                      Vec3(pl[j].x, topY, pl[j].y),
+                                      Vec3(pl[i].x, topY, pl[i].y),
+                                      Vec3(0, 1, 0), col);
+            }
+        };
+        emitInto(outParts);
+        emitInto(outFlatParts);   // the LOD1 twin stands on the same concrete
     };
     if (outParts) {
         outParts->assign(static_cast<std::size_t>(PartId::Count), RenderMesh{});
@@ -1588,11 +1623,27 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         }
         *outGrade = gradeBlocks(gradePolys, p.ground);
         if (!outGrade->empty()) {
-            auto base = p.ground;
-            auto flat = std::make_shared<std::vector<TerrainFlatten>>(*outGrade);
-            p.ground = [base, flat](Real x, Real z) {
-                return applyFlatten(*flat, x, z, base(x, z));
-            };
+            if (p.groundWith) {
+                // PRIORITY-CORRECT rebind (floorplan-conformance round): the
+                // host rebuilds the sampler with the grades folded into ONE
+                // region set next to the roads, so road-vs-grade priority
+                // resolves the way the final terrain will. The old wrapper
+                // (applyFlatten(grades) over the road-carved base) let the
+                // grade plane override the road deck inside its +4.5 m
+                // overlap — padPlaneFor and the foundation drape then read a
+                // surface the mesh never shows, exactly at the frontage.
+                p.ground = p.groundWith(*outGrade);
+            } else {
+                // Legacy composition for hosts without the hook (flat levels,
+                // old callers): correct only where grades and roads don't
+                // overlap.
+                auto base = p.ground;
+                auto flat =
+                    std::make_shared<std::vector<TerrainFlatten>>(*outGrade);
+                p.ground = [base, flat](Real x, Real z) {
+                    return applyFlatten(*flat, x, z, base(x, z));
+                };
+            }
         }
     }
 
@@ -2238,6 +2289,37 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                     Vec2(bp.faceDir.x, bp.faceDir.z));
             b.baseY = p.ground ? b.groundY + plinth
                                : baseYFor(planOk ? plan : site);
+            // Entrance steps meet the REAL ground (Glenn's foundation-block
+            // design): sample the ground at the entrance-edge middle, 2 m
+            // out, and hand the grammar the drop from the storey base down
+            // to it — the stoop grows the extra steps. F3's min-front-edge
+            // anchoring keeps this small by construction; the clamp stops a
+            // pathological sample from growing a staircase tower.
+            if (p.ground) {
+                const Poly2& epl = planOk ? plan : site;
+                const Vec2 f2(bp.faceDir.x, bp.faceDir.z);
+                Real eg = b.groundY;
+                if (f2.length() > Real(1e-6) && epl.size() >= 3) {
+                    const Vec2 fn = normalize(f2);
+                    Real bestDot = Real(0.2);
+                    std::size_t bi = epl.size();
+                    for (std::size_t ei = 0; ei < epl.size(); ++ei) {
+                        const Vec2 e = epl[(ei + 1) % epl.size()] - epl[ei];
+                        const Real l = e.length();
+                        if (l < Real(1e-6)) continue;
+                        const Real d = dot(Vec2(e.y / l, -e.x / l), fn);
+                        if (d > bestDot) { bestDot = d; bi = ei; }
+                    }
+                    if (bi < epl.size()) {
+                        const Vec2 mid =
+                            (epl[bi] + epl[(bi + 1) % epl.size()]) * Real(0.5) +
+                            fn * Real(2.0);
+                        eg = p.ground(mid.x, mid.y);
+                    }
+                }
+                bp.entranceDropBelow =
+                    std::clamp(b.baseY - eg, Real(0), Real(2.4));
+            }
             // PLAZA massing (device: "a building structure without the
             // building"): the fitted plan becomes a raised paver podium —
             // graded + flattened like any building pad (type "civic", so the
@@ -2702,12 +2784,20 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadEntity>& nets,
 }
 
 void appendLotMassBox(RenderMesh& out, const LotBuilding& lot,
-                      const Vec3& sideColor, const Vec3& roofColor) {
+                      const Vec3& sideColor, const Vec3& roofColor,
+                      Real bottomY) {
     const Real hw = lot.width * 0.5, hd = lot.depth * 0.5;
     const Vec3 ax(std::cos(lot.yaw), 0, std::sin(lot.yaw));
     const Vec3 az(-std::sin(lot.yaw), 0, std::cos(lot.yaw));
-    const Vec3 base(lot.site.x, lot.baseY, lot.site.y);
-    const Vec3 top = base + Vec3(0, lot.height, 0);
+    // The distant tier IS the building past detailDistance, so it carries its
+    // own foundation reach: walls start at bottomY (min perimeter ground -
+    // bed-in, computed by the host) instead of baseY. NAN/unset = legacy
+    // baseY (flat levels).
+    const Real wallBase = std::isfinite(bottomY)
+                              ? std::min(bottomY, lot.baseY)
+                              : lot.baseY;
+    const Vec3 base(lot.site.x, wallBase, lot.site.y);
+    const Vec3 top(lot.site.x, lot.baseY + lot.height, lot.site.y);
     // Corners run CCW in XZ: (-,-) -> (+,-) -> (+,+) -> (-,+).
     const Vec3 c[4] = {ax * -hw + az * -hd, ax * hw + az * -hd,
                        ax * hw + az * hd, ax * -hw + az * hd};

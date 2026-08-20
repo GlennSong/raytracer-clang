@@ -9,6 +9,7 @@
 #include "../../../renderer/renderer.h"   // RenderMesh (the grown building geometry)
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -142,6 +143,14 @@ struct LotParams {
     // hillside neighbourhoods that the skirt drape had just made viable —
     // Glenn: "the buildings are gone, which seems incorrect".)
     Real maxPadRelief = 8.0;
+    // Host hook (floorplan-conformance round): rebuild the ground sampler
+    // with EXTRA flatten regions folded in priority-correctly (one region
+    // set, one applyFlatten). The in-pass block-grade fold uses this so
+    // road-vs-grade priority during growth matches the final terrain; the
+    // legacy wrapper composition (grades applied OVER the road-carved base)
+    // inverted it inside the +4.5 m grade/road overlap. Null = legacy.
+    std::function<std::function<Real(Real, Real)>(
+        const std::vector<TerrainFlatten>&)> groundWith;
     // STYLE BOOK hook (the Lua data layer): called with every recipe's NAME
     // so the host can overlay look overrides (cladding, windows, colours)
     // from assets/scripts/style_book.lua. The architect decides WHAT + WHERE
@@ -269,7 +278,8 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadEntity>& nets,
 // and a chunk becomes a handful of these — so its normals decide how the whole
 // skyline shades. Appends to `out` (one mesh per render cell).
 void appendLotMassBox(RenderMesh& out, const LotBuilding& lot,
-                      const Vec3& sideColor, const Vec3& roofColor);
+                      const Vec3& sideColor, const Vec3& roofColor,
+                      Real bottomY = std::numeric_limits<Real>::quiet_NaN());
 
 }  // namespace engine
 

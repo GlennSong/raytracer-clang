@@ -124,6 +124,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_control_channel.cpp \
 	$(TEST_DIR)/test_weather_cycle.cpp \
 	$(TEST_DIR)/test_editor_home_view.cpp \
+	$(TEST_DIR)/test_lot_conformance.cpp \
 	$(TEST_DIR)/test_frame_stats.cpp \
 	$(TEST_DIR)/test_event_bus.cpp \
 	$(TEST_DIR)/test_debug_draw.cpp \

@@ -47,7 +47,7 @@ struct TerrainFlatten {
     // inside its footprint — a building pad stays flat over the tilted block it
     // sits on, and a block still grades to its streets. Equal priority everywhere
     // reproduces the original lowest-plane-wins behaviour exactly.
-    int priority = 0;
+    int priority = 0;   // see kRoadFlattenPriority / kPadFlattenPriority
     int owner = -1;   // diagnostic: which chain/pad emitted this region (RT_POKE_SITE)
     double planeY(double x, double z) const { return c + dx * x + dz * z; }
 };
@@ -99,20 +99,34 @@ double applyFlatten(const FlattenGrid& grid, const std::vector<TerrainFlatten>& 
 bool flattenCovers(const FlattenGrid& grid, const std::vector<TerrainFlatten>& regions,
                    double x, double z, double dilate);
 
-// Lowest ROAD plane (priority >= 1 regions) within `reach` of (x,z); +1e30 when
-// none. Fix A of the frontage-seam plan: terrain grid corners near a corridor
-// clamp to this so an adjacent lot pad's higher plane can't tilt a triangle
-// across the sidewalk (RT_POKE_REPORT: all hard pokes were pad-owned corners).
+// The flatten priority ladder, NAMED (floorplan-conformance round): grades
+// -1, generic/script 0, ROADS 1, BUILDING PADS 2. Pads above roads is what
+// seats a frontage building on its own pad — the road conform region
+// overlaps the first metres of building depth (its half-width includes
+// sidewalk + margins), and priority is a hard override, so with pads below
+// roads every frontage facade stood on the road's plane, not its pad
+// ("the middle is surrounded by terrain but the front edge is not").
+// Roads still own everything pads don't cover; pads can never reach the
+// carriageway by construction (roadClear).
+constexpr int kRoadFlattenPriority = 1;
+constexpr int kPadFlattenPriority = 2;
+
+// Lowest ROAD plane (priority == kRoadFlattenPriority, exactly — pads now
+// rank higher and must NOT be misread as roads) within `reach` of (x,z);
+// +1e30 when none. Fix A of the frontage-seam plan: terrain grid corners
+// near a corridor clamp to this so an adjacent lot pad's higher plane can't
+// tilt a triangle across the sidewalk.
 double roadPlaneNear(const FlattenGrid& grid, const std::vector<TerrainFlatten>& regions,
                      double x, double z, double reach);
 
-// Is (x,z) strictly INSIDE a non-road region (priority < 1, e.g. a building
-// pad) whose plane sits above `planeCut`? The LOD corner clamp exempts such
-// corners: a frontage pad keeps its grade instead of being dragged down to
-// the road plane (device: houses floated above the clamped bank, steps in
-// mid-air). The pad<->road seam is the retaining-wall cascade's job.
+// Is (x,z) inside (or within `dilate` of) a NON-road region (a building pad,
+// a block grade) whose plane sits above `planeCut`? The LOD corner clamp
+// exempts such corners: a frontage pad keeps its grade instead of being
+// dragged down to the road plane. `dilate` must MATCH the height query's
+// flatten dilate — the old 0 made the clamp reach further than the pad's
+// protection exactly in the frontage strip.
 bool padPlaneAbove(const FlattenGrid& grid, const std::vector<TerrainFlatten>& regions,
-                   double x, double z, double planeCut);
+                   double x, double z, double planeCut, double dilate = 0.0);
 
 // Heightfield terrain (ROADMAP 4 Phase B.2) — the first generator combining the
 // noise field (3.7) and the mesh builder (3.3). Deterministic for a given Noise,

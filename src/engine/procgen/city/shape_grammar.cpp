@@ -1667,20 +1667,26 @@ static void emitColumn(BuildingMesh& out, const Vec3& base, Real h, Real r,
 // centred on `cx` along the face, growing outward from the wall plane.
 static void emitEntranceSteps(BuildingMesh& out, const FaceRect& fr, Real cx,
                               Real w, Real platformH, Real platformD,
-                              PartId part, const Vec3& col) {
+                              PartId part, const Vec3& col,
+                              Real dropBelow = 0) {
     const Vec3 up(0, 1, 0);
-    const int n = std::max(1, static_cast<int>(platformH / 0.16));
-    const Real rise = platformH / n, run = 0.34;
-    Vec3 o = fr.at(cx - w * 0.5, 0);
+    // `dropBelow` extends the run below the storey base to the REAL ground
+    // at the entrance (lot layer's sample): the whole stoop grows taller and
+    // gains steps, instead of the old fixed platform hovering when the
+    // ground fell away (device: "floating steps that aren't reachable").
+    const Real total = platformH + std::max(Real(0), dropBelow);
+    const int n = std::max(1, static_cast<int>(total / 0.16));
+    const Real rise = total / n, run = 0.34;
+    Vec3 o = fr.at(cx - w * 0.5, 0) - up * std::max(Real(0), dropBelow);
     // The platform itself (its top hides the door's lowest strip — the
     // threshold reads at platform height).
-    emitBox(out, Scope{o, {fr.h, up, fr.n}, Vec3(w, platformH, platformD)},
+    emitBox(out, Scope{o, {fr.h, up, fr.n}, Vec3(w, total, platformD)},
             part, col);
     // Steps descend outward: box i tops out one rise lower than the last.
     for (int i = 0; i + 1 < n; ++i) {
-        Vec3 so = fr.at(cx - w * 0.5, 0) + fr.n * (platformD + i * run);
+        Vec3 so = o + fr.n * (platformD + i * run);
         emitBox(out, Scope{so, {fr.h, up, fr.n},
-                           Vec3(w, platformH - rise * (i + 1), run)},
+                           Vec3(w, total - rise * (i + 1), run)},
                 part, col);
     }
 }
@@ -1688,7 +1694,7 @@ static void emitEntranceSteps(BuildingMesh& out, const FaceRect& fr, Real cx,
 // PORTICO: the columned porch — steps + platform, a colonnade, an
 // entablature beam and a triangular pediment. The classical civic front.
 static void emitPortico(BuildingMesh& out, const FaceRect& fr,
-                        const BuildingParams&, int nCols, const Vec3& col) {
+                        const BuildingParams& bp, int nCols, const Vec3& col) {
     const Vec3 up(0, 1, 0);
     nCols = std::max(2, nCols);
     const Real depth = std::min(Real(3.4), std::max(Real(2.2), fr.width * 0.16));
@@ -1699,7 +1705,8 @@ static void emitPortico(BuildingMesh& out, const FaceRect& fr,
     if (colH < 2.0) return;
     // Porch platform + steps across the whole colonnade span.
     emitEntranceSteps(out, fr, fr.width * 0.5, span + 1.2, platformH,
-                      depth + 0.4, PartId::Concrete, col * 0.92);
+                      depth + 0.4, PartId::Concrete, col * 0.92,
+                      bp.entranceDropBelow);
     // The colonnade (a linear ARRAY of lathe columns).
     const Real r = std::min(Real(0.30), 0.02 * colH + 0.16);
     for (int i = 0; i < nCols; ++i) {
@@ -1810,7 +1817,7 @@ static void emitPorch(BuildingMesh& out, const FaceRect& fr,
     const Real cx = fr.width * 0.5;
     const Vec3 wood = materialFor(PartId::Wood, p.wallColor).albedo;
     emitEntranceSteps(out, fr, cx, w, platH, depth, PartId::Concrete,
-                      p.trimColor * 0.9);
+                      p.trimColor * 0.9, p.entranceDropBelow);
     const int posts = w > 3.6 ? 3 : 2;
     for (int i = 0; i < posts; ++i) {
         const Real x = cx - w * 0.5 + 0.12 + (w - 0.38) * (Real(i) / (posts - 1));
@@ -2221,7 +2228,8 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         else
             emitEntranceSteps(out, efr, efr.width * 0.5,
                               std::min(efr.width * 0.5, Real(5.0)), 0.4, 1.4,
-                              PartId::Concrete, params.trimColor * 0.92);
+                              PartId::Concrete, params.trimColor * 0.92,
+                              params.entranceDropBelow);
     }
     emitPlanSlab(out, plan, y + 0.05, 0.1, PartId::Ground,
                  materialFor(PartId::Ground, wallColor).albedo);

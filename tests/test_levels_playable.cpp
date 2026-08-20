@@ -19,6 +19,8 @@
 
 #include "test_framework.h"
 
+#include <nlohmann/json.hpp>
+
 #include "../src/engine/asset_manager.h"
 #include "../src/engine/components.h"
 #include "../src/engine/level_loader.h"
@@ -31,6 +33,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <fstream>
 #include <cstdio>
 #include <filesystem>
 #include <memory>
@@ -38,6 +41,7 @@
 #include <vector>
 
 using namespace engine;
+using json = nlohmann::json;
 
 namespace {
 
@@ -165,6 +169,18 @@ struct LevelFacts {
     std::string groundSource;  // what answered the probe, for the failure message
     double loadSeconds = 0;
 
+    // FLOORPLAN CONFORMANCE CENSUS (device: "prove that the entire floorplan
+    // of the building is conformed to the surface"): walked along every
+    // building prism's perimeter against the mesh-equivalent ground (leaf
+    // dilate + FIX-A clamp replay). Burial = ground swallowing a wall above
+    // its plinth; gap = ground falling below the pad by more than the
+    // foundation block's guaranteed reach (drape bound + bed-in).
+    int censusLots = 0;
+    int censusBurials = 0;
+    int censusGaps = 0;
+    double censusWorst = 0;    // metres, worst |deviation|
+    double censusWorstX = 0, censusWorstZ = 0;
+
     // --- the two conditions under which the rule does not apply -------------
     // Neither is an allowlist of level names. Both are properties of the level
     // itself, so a level cannot drift into an exemption: turn gravity back on,
@@ -255,6 +271,82 @@ LevelFacts inspect(const std::string& name) {
             }
         });
     }
+    // --- the census ---------------------------------------------------------
+    world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& cfg) {
+        world.each<CityPlanDebug>([&](Entity, CityPlanDebug& plan) {
+            if (plan.prisms.empty()) return;
+            Noise noise(cfg.seed);
+            const double leafSize =
+                (2.0 * cfg.worldHalf) /
+                static_cast<double>(1 << (cfg.numLods - 1));
+            const double leafStep = leafSize / std::max(1, cfg.gridRes);
+            const double dilate = leafStep * 1.45;
+            auto meshGround = [&](double x, double z) {
+                double y = terrainHeight(cfg.params, noise, x, z, dilate);
+                if (cfg.params.flattenIndex) {
+                    const double rp =
+                        roadPlaneNear(*cfg.params.flattenIndex,
+                                      cfg.params.flatten, x, z, leafStep * 1.6);
+                    if (rp < 1e29 &&
+                        !padPlaneAbove(*cfg.params.flattenIndex,
+                                       cfg.params.flatten, x, z, rp, dilate))
+                        y = std::min(y, rp);
+                }
+                return y;
+            };
+            // plinth from the level JSON (the prism base = baseY - 0.5).
+            double plinth = 0.15;
+            {
+                std::ifstream jf(levelsDir() + "/" + name);
+                if (jf) {
+                    json root = json::parse(jf, nullptr, false);
+                    if (root.is_object() && root.contains("citysim"))
+                        plinth = root["citysim"].value("plinth", 0.15);
+                }
+            }
+            for (const auto& prism : plan.prisms) {
+                if (prism.plan.size() < 3) continue;
+                ++f.censusLots;
+                const double baseY = prism.y0 + 0.5;
+                const double groundY = baseY - plinth;
+                bool buried = false, gapped = false;
+                for (std::size_t i = 0; i < prism.plan.size(); ++i) {
+                    const Vec2& a = prism.plan[i];
+                    const Vec2& b = prism.plan[(i + 1) % prism.plan.size()];
+                    const int steps = std::max(
+                        1, static_cast<int>(std::ceil((b - a).length())));
+                    for (int st = 0; st <= steps; ++st) {
+                        const Vec2 q =
+                            a + (b - a) * (static_cast<double>(st) / steps);
+                        const double g = meshGround(q.x, q.y);
+                        const double burial = g - baseY;
+                        // The foundation block drapes to min perimeter ground
+                        // - 0.5; anything deeper than the relief gate + drape
+                        // means the field diverged from what growth saw.
+                        const double gap = (groundY - g) - 9.0;
+                        if (burial > 0.55) {
+                            buried = true;
+                            if (burial > f.censusWorst) {
+                                f.censusWorst = burial;
+                                f.censusWorstX = q.x;
+                                f.censusWorstZ = q.y;
+                            }
+                        }
+                        if (gap > 0) {
+                            gapped = true;
+                            if (gap > f.censusWorst) {
+                                f.censusWorst = gap;
+                                f.censusWorstX = q.x;
+                                f.censusWorstZ = q.y;
+                            }
+                        }
+                    }
+                }
+                if (buried) ++f.censusBurials;
+                if (gapped) ++f.censusGaps;
+            }
+        });
+    });
     return f;
 }
 
@@ -327,4 +419,26 @@ TEST_CASE(every_shipped_level_has_collidable_ground_under_the_spawn) {
         }
         CHECK(f.groundUnderSpawn);
     }
+}
+
+
+// THE GATE (floorplan-conformance round): every building's floorplan meets
+// the drawn ground — no wall buried past its plinth, no daylight beyond the
+// foundation's reach — on every level that grows buildings on terrain.
+TEST_CASE(level_census_every_floorplan_conforms_to_the_drawn_ground) {
+    int lotLevels = 0;
+    for (const LevelFacts& f : allLevels()) {
+        if (f.censusLots == 0) continue;
+        ++lotLevels;
+        if (f.censusBurials || f.censusGaps)
+            std::printf(
+                "    [census] %s: lots=%d burials=%d gaps=%d worst=%.2f m at "
+                "(%.1f, %.1f)\n",
+                f.name.c_str(), f.censusLots, f.censusBurials, f.censusGaps,
+                f.censusWorst, f.censusWorstX, f.censusWorstZ);
+        CHECK(f.censusBurials == 0);
+        CHECK(f.censusGaps == 0);
+    }
+    std::printf("    [census] %d levels carry lot buildings\n", lotLevels);
+    CHECK(lotLevels >= 5);
 }
