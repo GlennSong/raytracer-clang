@@ -25,6 +25,11 @@ struct SignalSpot {
 };
 
 struct StreetFurnitureParams {
+    // Sidewalk band width (RoadLook::sidewalk): the junction PAD spans
+    // verge-to-verge, i.e. carriageway half-width + THIS, so a pole placed
+    // without it stands on the pad's asphalt — the "stoplight in the middle
+    // of the road". The kerb-corner pole must back off past the pad mouth.
+    Real sidewalkWidth = 3.5;
     Real lampSpacing = 34.0;       // metres between lamps along one direction
     Real lampVerge = 1.2;          // beyond the kerb, matching ped verge
     Real maxLampRoadWidth = 16.0;  // no lamps on freeway-width carriageways

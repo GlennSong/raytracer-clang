@@ -70,8 +70,15 @@ StreetFurniturePlan planStreetFurniture(
             crossHalf = std::max(crossHalf, nav.links[ol].width * 0.5);
         Real spread = L.to < static_cast<int>(nav.nodeSpread.size())
                           ? nav.nodeSpread[L.to] : Real(0);
-        Vec2 corner = node - d * (crossHalf + spread + p.curbGap) +
-                      right * (thisHalf + p.curbGap);
+        // ON the kerb, not in the box: the drawn junction pad fills the disc
+        // out to (crossHalf + sidewalk), so the back-off must clear THAT — the
+        // old (crossHalf + curbGap) planted the pole ~a sidewalk-width inside
+        // the asphalt. Laterally the pole hugs the kerb on the sidewalk band;
+        // the street_kit mast arm (4.2 m) then reaches over the near lane,
+        // which is the whole point of the arm.
+        Vec2 corner =
+            node - d * (crossHalf + p.sidewalkWidth + spread + p.curbGap) +
+            right * (thisHalf + p.curbGap);
         SignalSpot s;
         s.base = Vec3(corner.x, gy(corner.x, corner.y) + L.layer * kLayerLift,
                       corner.y);

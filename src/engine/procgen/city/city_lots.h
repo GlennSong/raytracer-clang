@@ -4,6 +4,7 @@
 #include "architect.h"      // ArchetypeBook (the Lua-authored selection layer)
 #include "polygon.h"        // Poly2, Vec2
 #include "shape_grammar.h"  // BuildingParams (the style-book hook's target)
+#include "../terrain.h"      // TerrainFlatten (block grades computed in-pass)
 #include "../../../rt_math.h"   // Vec3
 #include "../../../renderer/renderer.h"   // RenderMesh (the grown building geometry)
 #include <cstdint>
@@ -194,7 +195,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                           std::vector<RenderMesh>* outParts = nullptr,
                                           const RoadGraph* roads = nullptr,
                                           Real roadClearance = 0.0,
-                                          std::vector<RenderMesh>* outFlatParts = nullptr);
+                                          std::vector<RenderMesh>* outFlatParts = nullptr,
+                                          std::vector<TerrainFlatten>* outGrade = nullptr);
 
 // EDGE blocks (ADR-0066, device feedback): only fully ENCLOSED faces become city
 // blocks, which leaves the town rim bare. Synthesize rectangular blocks on the
@@ -225,6 +227,13 @@ struct NetLotResult {
     LotPlanDebug plan;               // blocks + lots, for debug overlays
     std::vector<RenderMesh> parts;   // grown geometry merged by PartId
     std::vector<RenderMesh> flatParts;   // the LOD1 twin of `parts` (R2)
+    // Block grades/terraces, computed BETWEEN parcelling and building growth
+    // so every building's pad plane is sampled off the TERRACED ground it
+    // will actually stand on (the old order graded after the buildings were
+    // meshed — pads froze pre-terrace heights and hillside houses sat metres
+    // under the bands: "buried to the eaves"). The host stamps these into the
+    // terrain INSTEAD of re-deriving them.
+    std::vector<TerrainFlatten> gradeFlatten;
 };
 // `freewayROW` (optional): the ACTUAL freeway right-of-way — the corridor's
 // dual carriageways (RoadClass::Freeway) and its ramps (RoadClass::Ramp), in

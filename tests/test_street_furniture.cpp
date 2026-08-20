@@ -72,3 +72,36 @@ TEST_CASE(no_signal_poles_at_uncontrolled_tees) {
         planStreetFurniture(nav, [](Real, Real) { return Real(0); }, {});
     CHECK(plan.signals.empty());
 }
+
+TEST_CASE(signal_poles_stand_clear_of_the_junction_pad) {
+    // Glenn: "stoplights are placed out in the middle of the road." The drawn
+    // junction pad fills the disc out to (widest half-width + sidewalk), so a
+    // kerb pole must back off past THAT along its approach — the old formula
+    // used only the carriageway half-width and stood every pole a
+    // sidewalk-width deep in the asphalt. The mast arm, not the pole, reaches
+    // over the road.
+    NavGraph nav = crossWithCollinearStub();
+    StreetFurnitureParams fp;
+    fp.sidewalkWidth = 3.5;
+    StreetFurniturePlan plan =
+        planStreetFurniture(nav, [](Real, Real) { return Real(0); }, fp);
+    CHECK(!plan.signals.empty());
+    for (const SignalSpot& s : plan.signals) {
+        const NavLink& L = nav.links[s.link];
+        const Vec2 node = nav.nodes[L.to];
+        Real crossHalf = L.width * 0.5;
+        for (int ol : nav.outLinks[L.to])
+            crossHalf = std::max(crossHalf, nav.links[ol].width * 0.5);
+        const Real padRadius = crossHalf + fp.sidewalkWidth;
+        // The pole's distance from the junction node must clear the pad disc.
+        const Vec2 base(s.base.x, s.base.z);
+        CHECK((base - node).length() > padRadius);
+        // ...while staying kerb-adjacent laterally: within the sidewalk band
+        // beside its own carriageway, not wandering into the block.
+        const Vec2 d = nav.direction(s.link);
+        const Vec2 right(d.y, -d.x);
+        const Real lateral = dot(base - node, right);
+        CHECK(lateral > L.width * 0.5 - 1e-6);
+        CHECK(lateral < L.width * 0.5 + fp.sidewalkWidth + fp.curbGap + 1e-6);
+    }
+}

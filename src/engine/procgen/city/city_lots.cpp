@@ -7,6 +7,7 @@
 #include "shape_grammar.h"   // scopeFromFootprint, growBuilding — REAL buildings
 #include "road_mesh.h"       // triangulatePolygon (lot-shaped park pads)
 #include "street_kit.h"      // streetLamp (plaza lamp posts)
+#include "block_grade.h"     // gradeBlocks (in-pass block terracing)
 #include "../../../log.h"    // plaza site report (find them on the map)
 #include "../../mesh_builder.h"   // MeshBuilder::append (merge parts by PartId)
 #include <algorithm>
@@ -583,7 +584,7 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
                  std::vector<RenderMesh>* outParts, const RoadGraph* roads) {
     if (!outParts || planIn.size() < 3) return;
     Poly2 plan = planIn;
-    if (area(plan) < 0) std::reverse(plan.begin(), plan.end());   // CCW
+    ensureCCW(plan);   // area() is |signedArea| — the old `area()<0` guard was dead
     Hash rng(mix(seed, 0x9A7A5EEDu));
     auto gy = [&](const Vec2& v) { return ground ? ground(v.x, v.y) : Real(0); };
     const Real slabY = b.groundY + 0.35;          // podium reveal over the pad
@@ -893,10 +894,14 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
 }  // namespace
 
 std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
-                                          const LotParams& p, LotPlanDebug* debug,
+                                          const LotParams& pIn, LotPlanDebug* debug,
                                           std::vector<RenderMesh>* outParts,
                                           const RoadGraph* roads, Real roadClearance,
-                                          std::vector<RenderMesh>* outFlatParts) {
+                                          std::vector<RenderMesh>* outFlatParts,
+                                          std::vector<TerrainFlatten>* outGrade) {
+    // Mutable copy: after PASS A the ground sampler is wrapped with the block
+    // grades (see the grading step below), so PASS B/C grow on terraced ground.
+    LotParams p = pIn;
     std::vector<LotBuilding> out;
     // The plan counters always run (the build-end density line below reads
     // them); `debug` just decides whether the caller sees them too.
@@ -1162,7 +1167,13 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     auto emitFoundation = [&](const Poly2& plIn, Real planeY, Real topY) {
         if (!outParts || plIn.size() < 3 || !p.ground) return;
         Poly2 pl = plIn;
-        if (area(pl) < 0) std::reverse(pl.begin(), pl.end());   // CCW: right normal = outward
+        // ensureCCW, NOT `if (area(pl) < 0) reverse`: area() is |signedArea|,
+        // so that guard can never fire — and roughly half the plan sources
+        // (box fallback, rowhouse strips, courtyard carves) arrive CW. A CW
+        // plan INSETS the ring under the walls with inward normals, which the
+        // backface-culling viewer draws as a see-through hole (Glenn: "the
+        // skirt is very broken looking with inverse normal faces").
+        ensureCCW(pl);
         const std::size_t nv = pl.size();
         Poly2 o(nv);
         for (std::size_t i = 0; i < nv; ++i) {
@@ -1182,14 +1193,22 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         }
         RenderMesh& m = (*outParts)[static_cast<std::size_t>(PartId::Concrete)];
         const Vec3 col(1, 1, 1);   // Concrete's surface maps carry the look
-        const Real botY = planeY - Real(0.6);   // skirt below the graded pad
+        // The skirt bottom DRAPES: each ring vertex drops to the terrain
+        // sampled under it, minus a bed-in margin — a fixed planeY-0.6 left
+        // the ring hanging in air wherever the downhill side fell more than
+        // 0.6 m below the pad (the falloff apron does exactly that on hills).
+        std::vector<Real> bot(nv);
+        for (std::size_t i = 0; i < nv; ++i) {
+            const Real g = p.ground(o[i].x, o[i].y);
+            bot[i] = std::min(planeY, g) - Real(0.4);
+        }
         for (std::size_t i = 0; i < nv; ++i) {
             const std::size_t j = (i + 1) % nv;
             Vec2 e = o[j] - o[i];
             if (e.length() < Real(1e-9)) continue;
             Vec2 n = normalize(Vec2(e.y, -e.x));
-            MeshBuilder::emitQuad(m, Vec3(o[i].x, botY, o[i].y),
-                                  Vec3(o[j].x, botY, o[j].y),
+            MeshBuilder::emitQuad(m, Vec3(o[i].x, bot[i], o[i].y),
+                                  Vec3(o[j].x, bot[j], o[j].y),
                                   Vec3(o[j].x, topY, o[j].y),
                                   Vec3(o[i].x, topY, o[i].y),
                                   Vec3(n.x, 0, n.y), col);
@@ -1222,6 +1241,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 MeshBuilder::append((*dst)[mi], part);
         }
     };
+    // Block footprints kept for the in-pass grading step below (dbg->blocks
+    // is the debug overlay's copy; grading must not depend on debug wiring).
+    std::vector<Poly2> blockFoots;
+
     // ---- PASS A: parcel every block and COLLECT the viable lots ------------
     // The landmark planner (pass B) needs to see the whole city before any lot
     // builds — a courthouse goes on the BEST financial lot, not the first one.
@@ -1275,6 +1298,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         if (foot.size() < 3) { ++blocksAllCarriageway; continue; }
         if (area(foot) < p.minLotArea * 1.5) continue;
         dbg->blocks.push_back(foot);
+        blockFoots.push_back(foot);
 
         BlockInfo bf;
         bf.pp.seed = mix(static_cast<uint32_t>(bi), p.seed);
@@ -1531,6 +1555,44 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         Vec3(0, 1, 0), Vec3(0.46, 0.455, 0.44));
                 }
             }
+        }
+    }
+
+    // ---- GRADE between parcelling and growth (buried-buildings fix) --------
+    // Fit the block planes/terraces NOW and wrap the ground sampler with them,
+    // so PASS B/C — pad planes (padPlaneFor), plinths, skirts, park drapes on
+    // real buildings — all sample the TERRACED ground the terrain will show.
+    // The old order graded after buildings were meshed: pads froze pre-terrace
+    // heights, and a house in a band the grade later raised sat buried to its
+    // eaves. The host consumes outGrade instead of re-deriving (identical
+    // input would give an identical fit, but one derivation is one truth).
+    if (p.ground && outGrade && !blockFoots.empty()) {
+        std::vector<Poly2> gradePolys;
+        gradePolys.reserve(blockFoots.size());
+        for (const Poly2& b2 : blockFoots) {
+            Vec2 c(0, 0);
+            for (const Vec2& v : b2) c = c + v;
+            c = c * (Real(1) / b2.size());
+            Poly2 grown;
+            grown.reserve(b2.size());
+            for (const Vec2& v : b2) {
+                const Vec2 d = v - c;
+                const Real l = d.length();
+                // +4.5 m so the grade overlaps the road conform band (the
+                // road's higher priority wins inside its own footprint) —
+                // the level_loader idiom, moved here with the derivation.
+                grown.push_back(l > Real(1e-6) ? c + d * ((l + Real(4.5)) / l)
+                                               : v);
+            }
+            gradePolys.push_back(std::move(grown));
+        }
+        *outGrade = gradeBlocks(gradePolys, p.ground);
+        if (!outGrade->empty()) {
+            auto base = p.ground;
+            auto flat = std::make_shared<std::vector<TerrainFlatten>>(*outGrade);
+            p.ground = [base, flat](Real x, Real z) {
+                return applyFlatten(*flat, x, z, base(x, z));
+            };
         }
     }
 
@@ -1997,7 +2059,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                    C + v * (hv - dpt) + u * (s0 + w),
                                    C + v * (hv - dpt) + u * s0,
                                    C + v * hv + u * s0, C + v * hv - u * hu};
-                        if (area(cand) < 0) std::reverse(cand.begin(), cand.end());
+                        ensureCCW(cand);   // area() is |signedArea| — old guard was dead
                         // The court rect is the plan's OBB — on a not-quite-
                         // rect plan its corners can poke past the cleared
                         // polygon, so re-check them against the roads.
@@ -2611,7 +2673,8 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadEntity>& nets,
     }
     r.lots = growLotBuildings(blocks, lp, &r.plan, &r.parts, &rgSampled,
                               roadClearance,
-                              wantFlatParts ? &r.flatParts : nullptr);
+                              wantFlatParts ? &r.flatParts : nullptr,
+                              &r.gradeFlatten);
     return r;
 }
 

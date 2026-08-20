@@ -37,8 +37,9 @@ inline Vec2 normalize(const Vec2& v) {
     Real len = v.length();
     return len > 0 ? v / len : v;
 }
-// Left normal (rotate +90°): for a CCW polygon edge this points outward... see
-// inset(), which uses the inward direction explicitly.
+// Left normal (rotate +90°): for a CCW polygon edge this points INWARD (the
+// right normal (e.y, -e.x) is the outward one — what every skirt/step emitter
+// uses); see inset(), which wants the inward direction explicitly.
 inline Vec2 perp(const Vec2& v) { return {-v.y, v.x}; }
 inline Real distance(const Vec2& a, const Vec2& b) { return (a - b).length(); }
 inline Vec2 lerp(const Vec2& a, const Vec2& b, Real t) { return a + (b - a) * t; }

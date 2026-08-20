@@ -1203,7 +1203,8 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                            Renderer& renderer, AssetManager& assets,
                            const std::string& levelDir,
                            const std::string& tag = "veg",
-                           const std::vector<engine::LotBuilding>* lots = nullptr) {
+                           const std::vector<engine::LotBuilding>* lots = nullptr,
+                           double placeDilate = 0.0) {
     RT_PROFILE_ZONE_NAMED("loadVegetation");
     if (!veg.contains("species") || !veg["species"].is_array()) return;
 
@@ -1453,6 +1454,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     if (variantList.empty()) return;
 
     ScatterParams scatter;
+    scatter.placeDilate      = placeDilate;   // sample the mesh's own surface
     scatter.regionSize       = veg.value("region", 70.0f);
     scatter.count            = veg.value("count", 80);
     scatter.maxSlopeDeg      = veg.value("maxSlopeDeg", 40.0f);
@@ -1527,8 +1529,10 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                                mnz + uni(prng) * (mxz - mnz));
                 if (!engine::pointInPolygon(lb.pad, q)) continue;
                 Placement pl;
-                pl.position = Vec3(q.x, terrainHeight(terrain, terrainNoise, q.x, q.y) + 0.1,
-                                   q.y);   // the ground under its OWN feet
+                pl.position = Vec3(
+                    q.x,
+                    terrainHeight(terrain, terrainNoise, q.x, q.y, placeDilate) + 0.1,
+                    q.y);   // the ground under its OWN feet (mesh-matched dilate)
                 pl.yaw = static_cast<float>(uni(prng) * 6.2831853);
                 pl.scale = static_cast<float>(0.55 + 0.35 * uni(prng));
                 placements.push_back(pl);
@@ -1619,7 +1623,8 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                     mm.m[0][3] += off.x;
                     mm.m[2][3] += off.y;
                     const double gy = terrainHeight(terrain, terrainNoise,
-                                                    mm.m[0][3], mm.m[2][3]);
+                                                    mm.m[0][3], mm.m[2][3],
+                                                    placeDilate);
                     mm.m[1][3] = gy - 0.33 * sy * variantList[si].trunkHeight;
                     const int cx2 = (int)std::floor(mm.m[0][3] / vegCell);
                     const int cz2 = (int)std::floor(mm.m[2][3] / vegCell);
@@ -1630,7 +1635,10 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                 const double s = 0.85 + 0.3 * unit(3);
                 for (int r = 0; r < 3; ++r)
                     for (int c = 0; c < 3; ++c) m.m[r][c] *= s;
-                m.m[1][3] -= 0.35;   // root the trunk below grade
+                m.m[1][3] -= 0.12;   // bed the root ball just below grade
+                // (was -0.35: tuned when placement sampled a DIFFERENT surface
+                // than the mesh — with the dilate-matched sample that much
+                // bedding buried every trunk on flat ground)
             }
             const int cx = static_cast<int>(std::floor(m.m[0][3] / vegCell));
             const int cz = static_cast<int>(std::floor(m.m[2][3] / vegCell));
@@ -1761,6 +1769,7 @@ struct GrownLots {
     engine::LotPlanDebug plan;           // blocks + lots, for the debug overlay
     std::vector<RenderMesh> parts;       // grown geometry merged by PartId
     std::vector<RenderMesh> flatParts;   // the LOD1 twin (city-render-perf R2)
+    std::vector<engine::TerrainFlatten> gradeFlatten;   // in-pass block grades
     bool grown = false;
 };
 
@@ -1864,6 +1873,7 @@ static GrownLots growCityLots(const std::vector<engine::RoadEntity>& nets,
     g.plan = std::move(r.plan);
     g.parts = std::move(r.parts);
     g.flatParts = std::move(r.flatParts);
+    g.gradeFlatten = std::move(r.gradeFlatten);
     g.grown = true;
     return g;
 }
@@ -2331,39 +2341,49 @@ bool LevelLoader::load(const std::string& path,
             // to the plane of its road-carved boundary. Kills three drive
             // findings at once: corralled pits, the sidewalk-outer-face
             // wall, and buildings floating off sloped interiors.
-            if (!preLots.plan.blocks.empty()) {
-                std::vector<engine::Poly2> gradePolys;
-                gradePolys.reserve(preLots.plan.blocks.size());
-                for (const engine::Poly2& b2 : preLots.plan.blocks) {
-                    if (b2.size() < 3) continue;
-                    engine::Vec2 c(0, 0);
-                    for (const engine::Vec2& v : b2) c = c + v;
-                    c = c * (1.0 / b2.size());
-                    engine::Poly2 grown;
-                    grown.reserve(b2.size());
-                    for (const engine::Vec2& v : b2) {
-                        engine::Vec2 d = v - c;
-                        const double l = d.length();
-                        grown.push_back(l > 1e-6 ? c + d * ((l + 4.5) / l) : v);
-                    }
-                    gradePolys.push_back(std::move(grown));
-                }
-                std::vector<TerrainFlatten> blockGrades = engine::gradeBlocks(
-                    gradePolys, lotGround);
+            // The grades were computed INSIDE the lot grower, between
+            // parcelling and building growth, so every pad plane sampled the
+            // terraced ground (the buried-buildings fix) — consume that one
+            // derivation instead of re-fitting here.
+            if (!preLots.gradeFlatten.empty()) {
+                const std::vector<TerrainFlatten>& blockGrades =
+                    preLots.gradeFlatten;
                 LOG_INFO << "[grade] " << blockGrades.size()
                          << " block planes/terraces from "
-                         << gradePolys.size() << " blocks";
+                         << preLots.plan.blocks.size() << " blocks";
                 terrainParams.flatten.insert(terrainParams.flatten.end(),
                                              blockGrades.begin(),
                                              blockGrades.end());
+                // ...and into the NON-ROAD base too: the editor's Conform
+                // Terrain action rebuilds flatten = baseFlatten + fresh roads,
+                // and block grades missing from the base meant one press of G
+                // silently reverted every block plane/terrace to raw noise
+                // under the buildings.
+                baseFlatten.insert(baseFlatten.end(), blockGrades.begin(),
+                                   blockGrades.end());
             }
             for (const engine::LotBuilding& lb : preLots.lots) {
                 if (lb.type == "park" || lb.type == "green" ||
                     lb.plan.size() < 3) continue;
+                // The pad footprint is the plan DILATED by an apron: the
+                // foundation ring (0.14 m proud) and the entrance steps
+                // (1.7-3.8 m out) live just OUTSIDE the plan, where an exact
+                // footprint left them over the falloff slope — or over ground
+                // the road clamp had pulled DOWN (padPlaneAbove misses by the
+                // same margin). The apron puts flat pad under all of it.
+                constexpr double kPadApron = 2.2;
+                engine::Vec2 c2(0, 0);
+                for (const engine::Vec2& v : lb.plan) c2 = c2 + v;
+                c2 = c2 * (1.0 / lb.plan.size());
                 std::vector<Vec3> poly;
                 poly.reserve(lb.plan.size());
-                for (const engine::Vec2& v : lb.plan)
-                    poly.push_back(Vec3(v.x, 0, v.y));
+                for (const engine::Vec2& v : lb.plan) {
+                    engine::Vec2 d = v - c2;
+                    const double l = d.length();
+                    const engine::Vec2 g =
+                        l > 1e-6 ? c2 + d * ((l + kPadApron) / l) : v;
+                    poly.push_back(Vec3(g.x, 0, g.y));
+                }
                 TerrainFlatten f = makeFlattenPad(std::move(poly), lb.groundY, 5.0);
                 terrainParams.flatten.push_back(f);
                 baseFlatten.push_back(std::move(f));   // non-road grading
@@ -2454,21 +2474,38 @@ bool LevelLoader::load(const std::string& path,
         }
         // Entities (roads especially) drape on the CARVED terrain, so a road sits exactly
         // on its graded profile instead of the raw ground it no longer matches.
+        //
+        // PLACEMENT SAMPLES THE MESH'S SURFACE, not the raw field: the CDLOD
+        // mesher grows every flatten footprint by its per-node step*1.45
+        // (terrain_lod.cpp) — sampling with dilate 0 planted trees and poles on
+        // a surface up to metres away from the one actually drawn near any
+        // road/pad/grade edge (Glenn: "trees and stop lights float off the
+        // ground, especially on hilly areas"). Match the LEAF step's dilate —
+        // the finest mesh and the collider both use it, so what stands on this
+        // sample stands on what the player sees and drives on. (Coarse-LOD
+        // tiles dilate wider still; that residual is a far-field-only drift.)
+        double placeDilate = 0.0;
+        world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) {
+            const double leafSize =
+                (2.0 * c.worldHalf) / static_cast<double>(1 << (c.numLods - 1));
+            placeDilate = (leafSize / std::max(1, c.gridRes)) * 1.45;
+        });
         auto carvedTp = std::make_shared<TerrainParams>(terrainParams);
         auto carvedNoise = std::make_shared<Noise>(terrainSeed);
-        entityGround = [carvedTp, carvedNoise](double x, double z) {
-            return terrainHeight(*carvedTp, *carvedNoise, x, z);
+        entityGround = [carvedTp, carvedNoise, placeDilate](double x, double z) {
+            return terrainHeight(*carvedTp, *carvedNoise, x, z, placeDilate);
         };
         if (root.contains("vegetation"))
             loadVegetation(root["vegetation"], terrainParams, terrainNoise, world,
                            renderer, assets, levelDir, "veg",
-                           preLots.grown ? &preLots.lots : nullptr);
+                           preLots.grown ? &preLots.lots : nullptr, placeDilate);
         // A second, denser pass for ground cover (grass/flowers). Same scatter
         // generator with its own params — typically a low maxSlopeDeg so it lands
         // on the gentle, green ground (terrainColor reads steep slopes as rock).
         if (root.contains("foliage"))
             loadVegetation(root["foliage"], terrainParams, terrainNoise, world,
-                           renderer, assets, levelDir, "foliage");
+                           renderer, assets, levelDir, "foliage", nullptr,
+                           placeDilate);
     }
 
     if (root.contains("entities"))
@@ -3318,12 +3355,28 @@ bool LevelLoader::load(const std::string& path,
         world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph& g) {
             if (combined.nodes.empty()) combined = g.graph;
         });
-        if (levelGround)
+        // The CARVED sampler, not levelGround: furniture grounded against the
+        // NATURAL field floated over road fills and sank into cuts on every
+        // graded hillside — poles must stand on the same surface the road and
+        // sidewalk were draped on (entityGround also carries the mesh-matching
+        // leaf dilate).
+        if (entityGround)
+            furnGround = [g = entityGround](Real x, Real z) { return g(x, z); };
+        else if (levelGround)
             furnGround = [g = levelGround](Real x, Real z) { return g(x, z); };
         if (!combined.edges.empty()) {
             const engine::NavGraph nav = engine::buildNavGraph(combined);
             const engine::StreetFurniturePlan fplan =
-                engine::planStreetFurniture(nav, furnGround);
+                [&] {
+                    engine::StreetFurnitureParams fp;
+                    world.each<engine::RoadEntity>(
+                        [&](Entity, engine::RoadEntity& net) {
+                            fp.sidewalkWidth = std::max(
+                                fp.sidewalkWidth,
+                                static_cast<Real>(net.look.sidewalk));
+                        });
+                    return engine::planStreetFurniture(nav, furnGround, fp);
+                }();
             engine::StreetFurniture sf;
             sf.navLinkCount = nav.linkCount();
             sf.lampHeads = fplan.lampHeads;

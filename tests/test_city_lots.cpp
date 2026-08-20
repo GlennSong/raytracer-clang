@@ -811,3 +811,22 @@ TEST_CASE(one_block_builds_one_district) {
     CHECK(checked > 10);            // real buildings, not a degenerate pass
     CHECK(disagreements == 0);
 }
+
+TEST_CASE(polygon_area_is_absolute_so_ccw_guards_must_use_ensureCCW) {
+    // The defect behind "the skirt is very broken looking with inverse normal
+    // faces": area() returns |signedArea|, so the idiom
+    // `if (area(poly) < 0) reverse` is DEAD CODE — a clockwise plan sailed
+    // through and every right-normal offset downstream flipped inward. This
+    // pins the semantics so the next such guard reaches for ensureCCW.
+    Poly2 cw = {Vec2(0, 0), Vec2(0, 10), Vec2(10, 10), Vec2(10, 0)};
+    CHECK(signedArea(cw) < 0);        // clockwise
+    CHECK(area(cw) > 0);              // |area| — the guard's condition is dead
+    Poly2 fixedPoly = cw;
+    ensureCCW(fixedPoly);
+    CHECK(signedArea(fixedPoly) > 0); // ensureCCW actually reverses
+    // And a CCW polygon passes through untouched.
+    Poly2 ccw = fixedPoly;
+    ensureCCW(ccw);
+    CHECK(signedArea(ccw) > 0);
+    CHECK(ccw[0].x == fixedPoly[0].x && ccw[0].y == fixedPoly[0].y);
+}

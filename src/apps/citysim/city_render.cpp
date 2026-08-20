@@ -173,6 +173,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             combined.edges.push_back(e);
         }
         roadLift_ = std::max(roadLift_, static_cast<Real>(net.look.lift));
+        sidewalk_ = std::max(sidewalk_, static_cast<Real>(net.look.sidewalk));
     });
     // THE GROUND THIS BRIDGE STANDS THINGS ON (#25). Everything this bridge
     // places sits on the finished road: parked cars, painted bay outlines,
@@ -1237,7 +1238,11 @@ CityRenderSystem::SignalSite CityRenderSystem::signalSite(int link) const {
         crossHalf = std::max(crossHalf, nav_.links[ol].width * 0.5);
     Real spread = toNode < static_cast<int>(nav_.nodeSpread.size())
                       ? nav_.nodeSpread[toNode] : 0.0;
-    Vec2 corner = node - d * (crossHalf + spread + kCurbGap) +
+    // Back off past the junction PAD (it spans to crossHalf + sidewalk), then
+    // hug the kerb laterally — the mast arm reaches over the near lane. The
+    // old back-off ignored the sidewalk band and stood the pole on the pad's
+    // asphalt (Glenn: "stoplights are placed out in the middle of the road").
+    Vec2 corner = node - d * (crossHalf + sidewalk_ + spread + kCurbGap) +
                   right * (thisHalf + kCurbGap);
     Real baseY = groundAt(corner.x, corner.y) +
                  nav_.links[link].layer * kLayerClearance;

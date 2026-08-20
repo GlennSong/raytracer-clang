@@ -442,6 +442,10 @@ private:
     std::vector<engine::Vec2> crosswalkCenters_;   // one per junction approach (centre of band)
     std::function<double(double, double)> heightAt_;   // terrain drape (may be null)
     Real roadLift_ = 0.0;
+    // Sidewalk band width from the widest net look — signalSite's kerb
+    // back-off must clear the junction pad, which spans out to
+    // carriageway/2 + THIS (mirrors StreetFurnitureParams::sidewalkWidth).
+    Real sidewalk_ = 3.5;
     bool built_ = false;
     bool debugWidgets_ = false;   // master runtime toggle (init from params; J flips it)
     // Per-layer refinements of debugWidgets_ (ADR-0066 panel): when the master is

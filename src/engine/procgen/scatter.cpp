@@ -60,15 +60,18 @@ std::vector<Placement> scatterOnTerrain(const ScatterParams& params,
             scale = scaleDist(gen);
         }
 
-        double h = terrainHeight(terrain, terrainNoise, x, z);
+        // Sample with the mesher's dilate so the placement sits on the SAME
+        // surface the terrain mesh will show (see ScatterParams::placeDilate).
+        const double pd = params.placeDilate;
+        double h = terrainHeight(terrain, terrainNoise, x, z, pd);
         if (h < params.minHeight || h > params.maxHeight) continue;
 
         // Surface slope from a finite-difference gradient of the height field;
         // the up-component of the normal is cos(slope).
-        double hx = (terrainHeight(terrain, terrainNoise, x + eps, z) -
-                     terrainHeight(terrain, terrainNoise, x - eps, z)) / (2.0 * eps);
-        double hz = (terrainHeight(terrain, terrainNoise, x, z + eps) -
-                     terrainHeight(terrain, terrainNoise, x, z - eps)) / (2.0 * eps);
+        double hx = (terrainHeight(terrain, terrainNoise, x + eps, z, pd) -
+                     terrainHeight(terrain, terrainNoise, x - eps, z, pd)) / (2.0 * eps);
+        double hz = (terrainHeight(terrain, terrainNoise, x, z + eps, pd) -
+                     terrainHeight(terrain, terrainNoise, x, z - eps, pd)) / (2.0 * eps);
         Vec3 normal = normalize(Vec3(-hx, 1.0, -hz));
         if (normal.y < minSlopeCos) continue;   // too steep
 

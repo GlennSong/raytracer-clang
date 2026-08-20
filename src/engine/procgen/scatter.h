@@ -17,6 +17,11 @@ namespace engine {
 struct ScatterParams {
     float regionSize = 200.0f;       // square region centered on the origin (XZ)
     int   count = 1000;              // candidate placements attempted
+    // Flatten dilation used when sampling the ground — pass the terrain
+    // mesher's LEAF dilate (step*1.45) so a placement sees the same surface
+    // the rendered/collidable mesh shows. Sampling with 0 while the mesh
+    // dilates is why trees floated or sank near every flatten edge.
+    double placeDilate = 0.0;
     float minScale = 0.8f;
     float maxScale = 1.2f;
     float maxSlopeDeg = 30.0f;       // reject ground steeper than this
