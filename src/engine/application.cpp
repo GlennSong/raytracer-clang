@@ -544,11 +544,15 @@ std::string Application::handleControlCommand(const std::string& line) {
         if (len > 1e-9) fwd = fwd * (1.0 / len);
         constexpr Real kRadToDeg = 57.29577951308232;
         char buf[256];
+        // frame= stamps the reply with SERVER time: judder measurements divide
+        // eye deltas by frame-count deltas, not by client wall clock — socket
+        // round-trip jitter was masquerading as 39% camera noise.
         std::snprintf(buf, sizeof(buf),
-                      "ok eye=%.2f,%.2f,%.2f pitch=%.2f yaw=%.2f",
+                      "ok eye=%.2f,%.2f,%.2f pitch=%.2f yaw=%.2f frame=%llu",
                       c.position.x, c.position.y, c.position.z,
                       std::asin(std::clamp(fwd.y, Real(-1), Real(1))) * kRadToDeg,
-                      std::atan2(fwd.x, -fwd.z) * kRadToDeg);
+                      std::atan2(fwd.x, -fwd.z) * kRadToDeg,
+                      static_cast<unsigned long long>(frameCounter));
         return buf;
     }
 

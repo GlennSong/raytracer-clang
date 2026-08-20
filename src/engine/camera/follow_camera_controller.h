@@ -50,20 +50,59 @@ public:
     void applyShoulderPreset();
 
     // Feed the tracked pose. `headingDegrees` uses the FlyCamera yaw convention.
+    // The first pose snaps (nothing to glide from), a disabled spring
+    // (smoothTime <= 0) tracks exactly, and a teleport-sized jump snaps right
+    // here — so a caller that never ticks update() (retarget + immediate
+    // cameraState) still cuts to the new pose instead of framing stale ground.
     void setTarget(const Vec3& position, Real headingDegrees) {
         targetPos = position;
         targetYaw = headingDegrees;
+        const Vec3 jump = position - smoothedPos;
+        const bool teleport =
+            (jump.x * jump.x + jump.y * jump.y + jump.z * jump.z) >
+            snapDistance * snapDistance;
+        if (!hasPose || teleport) {
+            smoothedPos = position;
+            smoothedYaw = headingDegrees;
+        }
+        if (posSmoothTime <= 0.0) smoothedPos = position;
+        if (yawSmoothTime <= 0.0) smoothedYaw = headingDegrees;
+        hasPose = true;
     }
+
+    // SPRING (Glenn: "maybe we need to put it on a spring?"): the rig follows a
+    // critically-damped smoothed copy of the target pose, not the raw feed. The
+    // raw feed is quantized by the fixed physics step AND phase-lagged a frame
+    // (camera writers run in the Update phase, renderables interpolate in the
+    // render phase), so a stiff camera judders at speed no matter how good the
+    // feed is — the spring low-passes all of it into a small, steady trail.
+    // Critically damped = no overshoot; a car pulling away doesn't bounce the
+    // camera. 0 disables (tests want exactness; editor rigs never move fast).
+    Real posSmoothTime = 0.12;   // seconds to close ~63% of a position error
+    Real yawSmoothTime = 0.22;   // heading eases slower — reads as cinematic
+    // A target jump past this snaps instead of gliding (enter/exit, respawn,
+    // spectate retarget — a camera sweeping across the city is worse than a cut).
+    Real snapDistance = 6.0;
 
     void update(const CameraInput& input, Real dt) override;
     CameraState cameraState(float aspect) const override;
 
-    // The unit direction the camera looks (target heading + orbit, with pitch).
+    // The unit direction the camera looks (smoothed heading + orbit, pitch).
     Vec3 forward() const;
+
+    // The smoothed pose the rig actually frames (tests + debug overlays).
+    const Vec3& followedPos() const { return smoothedPos; }
+    Real followedYaw() const { return smoothedYaw; }
 
 private:
     static constexpr Real PITCH_MIN = -80.0;
     static constexpr Real PITCH_MAX = 60.0;
+
+    Vec3 smoothedPos{0, 0, 0};
+    Vec3 posVelocity{0, 0, 0};
+    Real smoothedYaw = 0.0;
+    Real yawVelocity = 0.0;
+    bool hasPose = false;   // first setTarget/update pair snaps
 };
 
 }  // namespace engine
