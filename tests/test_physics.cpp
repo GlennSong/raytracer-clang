@@ -195,6 +195,102 @@ TEST_CASE(character_blocked_by_tall_wall) {
     world.shutdown();
 }
 
+TEST_CASE(character_jump_leaves_the_ground_and_lands_again) {
+    // The integration that code-reading cannot settle: moveCharacter OWNS the
+    // vertical axis and zeroes it on the ground, so a jump only works because
+    // it is staged and consumed inside that same step (and releases the
+    // stick-to-floor that smooths kerbs). Prove the capsule actually rises.
+    PhysicsWorld world;
+    world.initialize();
+    addFloor(world);
+    CharacterId c = world.addCharacter(0.4, 0.3, Vec3(0, 2.0, 0));
+    world.optimizeBroadPhase();
+
+    walk(world, c, Vec3(), 180);   // settle
+    const Real rest = world.characterPosition(c).y;
+    CHECK(world.characterGroundState(c) == GroundState::OnGround);
+
+    CHECK(world.jumpCharacter(c, 4.3));
+    Real peak = rest;
+    for (int i = 0; i < 60; i++) {
+        world.moveCharacter(c, Vec3(), 1.0 / 60.0);
+        peak = std::max(peak, world.characterPosition(c).y);
+    }
+    CHECK(peak > rest + 0.5);   // a real leap, not a twitch
+
+    walk(world, c, Vec3(), 240);   // and it comes back down
+    CHECK_APPROX(world.characterPosition(c).y, rest, 0.12);
+    CHECK(world.characterGroundState(c) == GroundState::OnGround);
+    world.shutdown();
+}
+
+TEST_CASE(character_cannot_jump_in_mid_air) {
+    // The grounded gate lives in the physics seam, so no caller can get
+    // "am I allowed to jump" wrong — and nobody can double-jump.
+    PhysicsWorld world;
+    world.initialize();
+    addFloor(world);
+    CharacterId c = world.addCharacter(0.4, 0.3, Vec3(0, 2.0, 0));
+    world.optimizeBroadPhase();
+    walk(world, c, Vec3(), 180);
+
+    CHECK(world.jumpCharacter(c, 4.3));
+    walk(world, c, Vec3(), 12);   // now airborne
+    CHECK(world.characterGroundState(c) != GroundState::OnGround);
+    CHECK(!world.jumpCharacter(c, 4.3));   // refused mid-flight
+    world.shutdown();
+}
+
+TEST_CASE(character_crouch_shrinks_but_keeps_its_feet_planted) {
+    PhysicsWorld world;
+    world.initialize();
+    addFloor(world);
+    CharacterId c = world.addCharacter(0.4, 0.3, Vec3(0, 2.0, 0));
+    world.optimizeBroadPhase();
+    walk(world, c, Vec3(), 180);
+
+    const Real standCentre = world.characterPosition(c).y;
+    const Real feetBefore = standCentre - (0.4 + 0.3);
+    CHECK(world.setCharacterHeight(c, 0.14, 0.3));
+    const Real crouchCentre = world.characterPosition(c).y;
+    const Real feetAfter = crouchCentre - (0.14 + 0.3);
+    // The centre drops; the SOLES stay put (a crouch settles, it does not
+    // sink into the floor or hop up off it).
+    CHECK(crouchCentre < standCentre - 0.2);
+    CHECK_APPROX(feetAfter, feetBefore, 0.05);
+
+    walk(world, c, Vec3(), 60);   // stays standing on the floor, crouched
+    CHECK(world.characterGroundState(c) == GroundState::OnGround);
+    CHECK(world.setCharacterHeight(c, 0.4, 0.3));   // clear overhead: stands
+    CHECK_APPROX(world.characterPosition(c).y, standCentre, 0.12);
+    world.shutdown();
+}
+
+TEST_CASE(character_cannot_stand_up_under_a_ledge) {
+    // The payoff of doing crouch as a real capsule swap: the fit test refuses
+    // to stand where there is no headroom, so a crouched player under a ledge
+    // stays crouched instead of popping through it.
+    PhysicsWorld world;
+    world.initialize();
+    addFloor(world);
+    CharacterId c = world.addCharacter(0.4, 0.3, Vec3(0, 2.0, 0));
+    world.optimizeBroadPhase();
+    walk(world, c, Vec3(), 180);
+    CHECK(world.setCharacterHeight(c, 0.14, 0.3));   // crouch first
+    walk(world, c, Vec3(), 30);
+
+    // A slab just above the crouched head: the crouched capsule (0.88 m tall)
+    // fits under it, the standing one (1.4 m) does not.
+    world.addBox(Vec3(4, 0.1, 4), Vec3(0, 1.05, 0), Quat::identity(),
+                 BodyMotion::Static);
+    world.optimizeBroadPhase();
+
+    const Real crouchY = world.characterPosition(c).y;
+    CHECK(!world.setCharacterHeight(c, 0.4, 0.3));           // refused
+    CHECK_APPROX(world.characterPosition(c).y, crouchY, 0.02);   // and unmoved
+    world.shutdown();
+}
+
 TEST_CASE(character_invalid_handle_is_safe) {
     PhysicsWorld world;
     world.initialize();

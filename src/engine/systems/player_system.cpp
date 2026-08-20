@@ -27,6 +27,13 @@ void PlayerSystem::onStart(FrameContext& ctx) {
     // First <-> third person on foot. V is also CameraSystem's viewport-cycle
     // key; see the placed-camera guard in update().
     ctx.actions.bindButton("player_camera_toggle", KeyCode::V);
+    // JUMP and CROUCH. Both keys are shared with driving actions (Space is the
+    // brake, LeftControl the handbrake) — the same context gating T already
+    // uses: these fire only on foot, those only while seated. The debug
+    // overlay's Controls table paints such keys yellow, which is honest.
+    ctx.actions.bindButton("player_jump", KeyCode::Space);
+    ctx.actions.bindButton("player_jump", GamepadButton::A);
+    ctx.actions.bindButton("player_crouch", KeyCode::LeftControl);
 }
 
 void PlayerSystem::fixedUpdate(FrameContext& ctx) {
@@ -49,6 +56,45 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
             // camera, not the player — otherwise WASD would walk the player while
             // you fly. Pass zero intent so the character still settles under
             // gravity but holds its ground.
+            // CROUCH (held). The standing capsule is whatever the level
+            // authored; capture it once and derive the crouched one, so a
+            // level with a taller player crouches proportionally.
+            if (!standCaptured) {
+                standHalfHeight = cc.halfHeight;
+                standRadius = cc.radius;
+                standCaptured = true;
+            }
+            const bool wantCrouch =
+                camera.positionLocked && ctx.actions.held("player_crouch");
+            if (wantCrouch != crouched) {
+                const Real targetHalf =
+                    wantCrouch ? standHalfHeight * kCrouchHalfScale
+                               : standHalfHeight;
+                // Standing up can FAIL (a ledge overhead) — the physics fit
+                // test is the authority, so the player stays crouched instead
+                // of popping through the ceiling.
+                if (physicsSys.physicsWorld().setCharacterHeight(
+                        cc.characterId, targetHalf, standRadius)) {
+                    crouched = wantCrouch;
+                    // Publish the live capsule: the third-person body mesh is
+                    // scaled from it (apps/citysim/city_player_body), so the
+                    // drawn person shrinks with the collider instead of
+                    // floating over a crouched capsule.
+                    cc.halfHeight = targetHalf;
+                    t.position = physicsSys.physicsWorld().characterPosition(
+                        cc.characterId);
+                }
+            }
+
+            // JUMP: one press, one leap. Refused mid-air and while crouched by
+            // the physics gate (grounded-only) and the crouch check here.
+            if (jumpRequested) {
+                jumpRequested = false;
+                if (camera.positionLocked && !crouched)
+                    physicsSys.physicsWorld().jumpCharacter(cc.characterId,
+                                                            kJumpSpeed);
+            }
+
             Vec3 desired;
             if (camera.positionLocked) {
                 Real forward = ctx.actions.axis("cam_forward");
@@ -62,7 +108,8 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
                 Vec3 moveDir = camForward * forward + camRight * right;
                 Real len = moveDir.length();
                 if (len > 1.0) moveDir = moveDir / len;
-                desired = moveDir * moveSpeed;
+                desired = moveDir * moveSpeed *
+                          (crouched ? kCrouchSpeedScale : Real(1));
             }
 
             physicsSys.physicsWorld().moveCharacter(cc.characterId, desired, dt);
@@ -179,6 +226,15 @@ void PlayerSystem::update(FrameContext& ctx) {
     // viewports (CameraSystem's cam_cycle_next): while any placed SceneCamera
     // exists the key keeps that meaning and this toggle stands down, so one
     // press never does two things.
+    // Stage the jump on the frame's press edge; fixedUpdate consumes it once
+    // (see player_system.h — reading the edge there would double-jump on a
+    // catch-up frame that runs two steps).
+    // ...but NOT while seated: Space is the brake in a car, and staging a
+    // jump on every brake press would fire it the moment the player got out.
+    if (ctx.actions.pressed("player_jump") &&
+        !(ctx.world.alive(playerEntity) && ctx.world.has<InVehicle>(playerEntity)))
+        jumpRequested = true;
+
     if (ctx.actions.pressed("player_camera_toggle")) {
         bool placedCameras = false;
         ctx.world.each<SceneCamera>([&](Entity, SceneCamera&) { placedCameras = true; });
@@ -208,7 +264,16 @@ void PlayerSystem::update(FrameContext& ctx) {
     // The eye stays pinned in BOTH modes: the fly controller is the heading
     // (and other eye readers — the gun script — keep working), and switching
     // back to first person is seamless.
-    camera.eye = t->position + Vec3(0, eyeHeight, 0);
+    // Crouched, the eye rides the shorter capsule: the Transform is the
+    // capsule CENTRE, which the resize already lowered, so the offset above
+    // it has to shrink by the same ratio or the view would float above a
+    // crouched head.
+    const Real eyeScale =
+        crouched && standCaptured
+            ? (standHalfHeight * kCrouchHalfScale + standRadius) /
+                  std::max(Real(1e-3), standHalfHeight + standRadius)
+            : Real(1);
+    camera.eye = t->position + Vec3(0, eyeHeight * eyeScale, 0);
 
     // A placed SceneCamera owns the view this frame; keep the eye pinned above
     // so returning to first person is seamless, but don't write over it.

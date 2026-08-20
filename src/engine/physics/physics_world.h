@@ -112,6 +112,18 @@ public:
     // velocity (y is ignored — gravity and ground-sticking are applied here), dt
     // the step length. Call once per fixed update.
     void moveCharacter(CharacterId id, const Vec3& velocity, Real dt);
+    // JUMP. moveCharacter owns the vertical axis (and zeroes it on the
+    // ground), so a jump cannot be a velocity the caller passes in — it is
+    // staged here and consumed by the next moveCharacter, which also releases
+    // the ground-stick for that step so the leap isn't sucked back down.
+    // Refused (returns false) unless the character is on the ground: no
+    // mid-air jumps, no double jumps, without the caller tracking state.
+    bool jumpCharacter(CharacterId id, Real speed);
+    // Resize the capsule (crouch / stand), keeping the FEET planted rather
+    // than the centre — a crouch settles down, it doesn't sink into the floor.
+    // Returns false when the new capsule would not fit where the character is
+    // standing, which is what keeps a crouched player under a ledge crouched.
+    bool setCharacterHeight(CharacterId id, Real halfHeight, Real radius);
     Vec3 characterPosition(CharacterId id) const;
 
     // Cast a ray against every body (static + dynamic). Returns true on hit

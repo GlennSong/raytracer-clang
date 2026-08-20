@@ -80,6 +80,26 @@ private:
     Entity playerEntity;
     Real moveSpeed = 6.0;
     Real eyeHeight = 0.7;
+    // Jump: staged on the PER-FRAME press edge and consumed by one fixed step.
+    // Reading the edge in fixedUpdate directly would fire twice whenever a
+    // frame runs two steps (a catch-up burst), which is a double-height jump.
+    bool jumpRequested = false;
+    // Crouch: a held state, so it is level-triggered in fixedUpdate. The
+    // STANDING capsule is captured on first sight (it is level-authored, not
+    // ours to assume) and the crouched one derived from it; standing back up
+    // can be REFUSED by the physics fit test, which is what keeps a player
+    // under a ledge crouched instead of teleporting through it.
+    bool crouched = false;
+    bool standCaptured = false;
+    Real standHalfHeight = 0.4;
+    Real standRadius = 0.3;
+    // ~0.95 m apex under the default gravity — clears a kerb and a bollard,
+    // not a wall.
+    static constexpr Real kJumpSpeed = 4.3;
+    // Crouched capsule as a fraction of the standing half-height (the radius
+    // is unchanged — shoulders don't narrow), and the pace penalty.
+    static constexpr Real kCrouchHalfScale = 0.35;
+    static constexpr Real kCrouchSpeedScale = 0.4;
     // Snap the character back to spawn (shared by the automatic safety net and
     // the manual R key; both must reset the fall tracker the same way).
     void respawn(CharacterId characterId, bool manual);

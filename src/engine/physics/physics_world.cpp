@@ -216,6 +216,11 @@ struct PhysicsWorld::Impl {
     struct Character {
         JPH::Ref<JPH::CharacterVirtual> controller;
         float stepHeight = 0.4f;
+        // Staged by jumpCharacter, consumed by the next moveCharacter (which
+        // owns the vertical axis). 0 = not jumping this step.
+        float pendingJump = 0.0f;
+        float halfHeight = 0.9f;   // current capsule, for feet-anchored resizes
+        float radius = 0.3f;
     };
     std::vector<Character> characters;
 
@@ -451,6 +456,8 @@ CharacterId PhysicsWorld::addCharacter(Real halfHeight, Real radius,
 
     Impl::Character ch;
     ch.stepHeight = static_cast<float>(stepHeight);
+    ch.halfHeight = static_cast<float>(halfHeight);
+    ch.radius = static_cast<float>(radius);
     ch.controller = new JPH::CharacterVirtual(settings, toJoltR(position),
                                               JPH::Quat::sIdentity(),
                                               &impl->physicsSystem);
@@ -475,8 +482,16 @@ void PhysicsWorld::moveCharacter(CharacterId id, const Vec3& velocity, Real dt) 
 
     // On flat ground, hold vertical velocity at zero so it doesn't accumulate;
     // otherwise carry it and integrate gravity so the character falls/settles.
+    // A jump staged since the last step wins the vertical axis outright — it
+    // must survive the on-ground zeroing below, because the character is by
+    // definition still on the ground at the instant it launches.
+    const float jump = impl->characters[id].pendingJump;
+    impl->characters[id].pendingJump = 0.0f;
+
     JPH::Vec3 newVel;
-    if (ch->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround) {
+    if (jump > 0.0f) {
+        newVel = desired + up * jump;
+    } else if (ch->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround) {
         newVel = desired;
     } else {
         newVel = desired + up * current.Dot(up);
@@ -487,9 +502,12 @@ void PhysicsWorld::moveCharacter(CharacterId id, const Vec3& velocity, Real dt) 
     JPH::CharacterVirtual::ExtendedUpdateSettings settings;
     settings.mWalkStairsStepUp = up * impl->characters[id].stepHeight;
     // Step down by at least the step-up height so descending a curb keeps the
-    // character grounded instead of briefly going airborne each step.
+    // character grounded instead of briefly going airborne each step — but
+    // NOT on the step that launches a jump, or the same stick-to-floor that
+    // smooths curbs would pull the leap straight back onto the pavement.
     settings.mStickToFloorStepDown =
-        -up * std::max(impl->characters[id].stepHeight, 0.5f);
+        jump > 0.0f ? JPH::Vec3::sZero()
+                    : -up * std::max(impl->characters[id].stepHeight, 0.5f);
 
     ch->ExtendedUpdate(static_cast<float>(dt), impl->physicsSystem.GetGravity(),
                        settings,
@@ -497,6 +515,61 @@ void PhysicsWorld::moveCharacter(CharacterId id, const Vec3& velocity, Real dt) 
                            Layers::MOVING),
                        impl->physicsSystem.GetDefaultLayerFilter(Layers::MOVING),
                        {}, {}, impl->tempAllocator);
+}
+
+bool PhysicsWorld::jumpCharacter(CharacterId id, Real speed) {
+    if (!impl || id >= impl->characters.size()) return false;
+    JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr();
+    if (!ch || speed <= 0.0) return false;
+    // Grounded only: the ground state is the whole gate, so no caller has to
+    // track "am I allowed to jump" (and none can get it wrong).
+    if (ch->GetGroundState() != JPH::CharacterBase::EGroundState::OnGround)
+        return false;
+    impl->characters[id].pendingJump = static_cast<float>(speed);
+    return true;
+}
+
+bool PhysicsWorld::setCharacterHeight(CharacterId id, Real halfHeight,
+                                      Real radius) {
+    if (!impl || id >= impl->characters.size()) return false;
+    Impl::Character& rec = impl->characters[id];
+    JPH::CharacterVirtual* ch = rec.controller.GetPtr();
+    if (!ch || halfHeight <= 0.0 || radius <= 0.0) return false;
+    const auto newHalf = static_cast<float>(halfHeight);
+    const auto newRadius = static_cast<float>(radius);
+    if (std::fabs(newHalf - rec.halfHeight) < 1e-4f &&
+        std::fabs(newRadius - rec.radius) < 1e-4f)
+        return true;   // already that shape
+
+    JPH::CapsuleShapeSettings shapeSettings(newHalf, newRadius);
+    JPH::ShapeSettings::ShapeResult result = shapeSettings.Create();
+    if (result.HasError()) return false;
+
+    // FEET-ANCHORED: the capsule centre moves by the half-height delta so the
+    // soles stay put — a crouch settles down instead of sinking, and standing
+    // grows out of the top of the head. The position moves BEFORE the fit
+    // test, so standing is tested where the taller capsule would actually be.
+    const float deltaY = (newHalf + newRadius) - (rec.halfHeight + rec.radius);
+    const JPH::RVec3 oldPos = ch->GetPosition();
+    ch->SetPosition(oldPos + JPH::RVec3(0, deltaY, 0));
+
+    // The fit test is the whole point, so the tolerance must be a real
+    // number, not FLT_MAX (which skips the check): a resting character always
+    // penetrates the floor slightly, so allow the solver's own slop and no
+    // more — Jolt's own crouch sample uses exactly this bound.
+    const float fitSlop =
+        1.5f * impl->physicsSystem.GetPhysicsSettings().mPenetrationSlop;
+    if (!ch->SetShape(result.Get(), fitSlop,
+                      impl->physicsSystem.GetDefaultBroadPhaseLayerFilter(
+                          Layers::MOVING),
+                      impl->physicsSystem.GetDefaultLayerFilter(Layers::MOVING),
+                      {}, {}, impl->tempAllocator)) {
+        ch->SetPosition(oldPos);   // no room overhead — stay as we were
+        return false;
+    }
+    rec.halfHeight = newHalf;
+    rec.radius = newRadius;
+    return true;
 }
 
 Vec3 PhysicsWorld::characterPosition(CharacterId id) const {
