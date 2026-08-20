@@ -1765,6 +1765,43 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
     pull("citysim.cones", showVisionCones_);
     pull("citysim.nav", showNavGraph_);
     pull("citysim.plan", showPlan_);
+
+    // Ground probe (channel `ground? x z`, the seam-diagnosis tool): answer
+    // with the carved field, the lifted groundAt, and the nearest nav link's
+    // deck height at the projected point — the numbers that separate "the
+    // terrain is wrong" from "the road is wrong" from "the pad is wrong".
+    {
+        const std::string q = ctx.settings.getString("ground.query", "");
+        if (!q.empty()) {
+            ctx.settings.setString("ground.query", "");
+            double qx = 0, qz = 0;
+            if (std::sscanf(q.c_str(), "%lf %lf", &qx, &qz) == 2) {
+                char buf[256];
+                const double carved = heightAt_ ? heightAt_(qx, qz) : 0.0;
+                double deckY = -1e30;
+                int li = nav_.nearestLink(engine::Vec2(qx, qz));
+                if (li >= 0) {
+                    const engine::NavLink& L = nav_.links[li];
+                    const engine::Vec2 a = nav_.nodes[L.from], b = nav_.nodes[L.to];
+                    const engine::Vec2 ab(b.x - a.x, b.y - a.y);
+                    const double len2 = ab.x * ab.x + ab.y * ab.y;
+                    double t = len2 > 1e-9
+                                   ? std::clamp(((qx - a.x) * ab.x +
+                                                 (qz - a.y) * ab.y) / len2,
+                                                0.0, 1.0)
+                                   : 0.0;
+                    deckY = deckYAt(li, static_cast<engine::Real>(t),
+                                    engine::Vec2(qx, qz));
+                }
+                std::snprintf(buf, sizeof buf,
+                              "%.1f %.1f carved=%.2f lifted=%.2f deckY=%.2f link=%d",
+                              qx, qz, carved, carved + roadLift_, deckY, li);
+                ctx.settings.setString("ground.result", buf);
+            } else {
+                ctx.settings.setString("ground.result", "err parse: " + q);
+            }
+        }
+    }
 }
 
 #ifdef RT_ENABLE_IMGUI

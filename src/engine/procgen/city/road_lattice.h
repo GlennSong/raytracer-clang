@@ -181,7 +181,8 @@ RoadProfile carriagewayProfile(int lanesPerSide);
 RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
                                  const std::function<double(double, double)>& edgeHeight,
                                  double sidewalkWidth, double curbHeight,
-                                 const std::vector<std::pair<Vec2, Vec2>>* mouthGaps = nullptr);
+                                 const std::vector<std::pair<Vec2, Vec2>>* mouthGaps = nullptr,
+                                 const std::function<double(double, double)>* terrain = nullptr);
 
 // Support piers under the ELEVATED spans of a chain (yAbs riding above the
 // ground): a column every ~24 m of raised run, ground to soffit. The same

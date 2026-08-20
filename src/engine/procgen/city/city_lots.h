@@ -133,6 +133,15 @@ struct LotParams {
     // graded pad, on a concrete foundation course — the knob for "how tall the
     // base is" (device feedback). Ignored on flat ground.
     Real plinth = 0.15;
+    // Max ground rise/fall across a lot's footprint before it is HILLSIDE
+    // rather than a buildable parcel (goes green). Two storeys-ish: with the
+    // draping foundation skirt, a moderate-relief lot reads as a stepped
+    // hillside house (the downhill face grows a real foundation wall), so the
+    // gate only catches TRUE brinks — the island shelf's 10-60 m drops where
+    // no pad plane can be honest. (First cut was 4.0; it deleted whole
+    // hillside neighbourhoods that the skirt drape had just made viable —
+    // Glenn: "the buildings are gone, which seems incorrect".)
+    Real maxPadRelief = 8.0;
     // STYLE BOOK hook (the Lua data layer): called with every recipe's NAME
     // so the host can overlay look overrides (cladding, windows, colours)
     // from assets/scripts/style_book.lua. The architect decides WHAT + WHERE
@@ -166,6 +175,7 @@ struct LotPlanDebug {
     int rejClear = 0;    // no inset of the plan cleared the road corridors
     int rejBox = 0;      // box fallback rejected (fill / shrink-fit too small)
     int rejFrontage = 0; // whole footprint too far from any road surface
+    int rejRelief = 0;   // ground range across the lot exceeds maxPadRelief
 };
 
 // One building per viable lot across every block. Deterministic in seed.

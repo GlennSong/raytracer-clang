@@ -833,10 +833,23 @@ std::string Application::handleControlCommand(const std::string& line) {
     if (cmd.name == "possess?")
         return "ok " + settingsStore.getString("possess.status", "none");
 
+    // Ground probe (the planting/seam diagnosis tool): `ground? x z` stages a
+    // query CityRenderSystem answers next frame (carved field, road lift, and
+    // the nearest nav link's deck height at that point). Poll until the reply
+    // echoes your coordinates — the same ask-again idiom as possess?.
+    if (cmd.name == "ground?") {
+        if (cmd.args.size() >= 2) {
+            settingsStore.setString("ground.query",
+                                    cmd.args[0] + " " + cmd.args[1]);
+            return "ok staged (poll `ground?` with no args)";
+        }
+        return "ok " + settingsStore.getString("ground.result", "none");
+    }
+
     return "err unknown command: " + cmd.name +
            " (ping|info|camera|camera?|shot|overlay|sim|reload|set|get|"
            "daynight|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
-           "possess|drive_to|walk_to|possess_stop|release|possess?)";
+           "possess|drive_to|walk_to|possess_stop|release|possess?|ground?)";
 }
 
 }  // namespace engine

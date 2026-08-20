@@ -1209,7 +1209,8 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
         }
         MeshBuilder::append(out, sweepCurbSidewalkBand(
             loops, [&](double x, double z) { return bandHeights.sample(x, z); },
-            sidewalkWidth, curbHeight, bandGaps.empty() ? nullptr : &bandGaps));
+            sidewalkWidth, curbHeight, bandGaps.empty() ? nullptr : &bandGaps,
+            heightAt ? &heightAt : nullptr));   // outer skirt drapes to terrain
     }
     if (std::getenv("RT_LATTICE_DEBUG")) {
         int degen = 0;

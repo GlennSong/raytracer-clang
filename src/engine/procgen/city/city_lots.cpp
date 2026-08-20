@@ -1741,6 +1741,28 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 emitGreen(); continue;   // plaza / gap (landmarks always build)
             }
 
+            // RELIEF gate (device: buildings "floating off the ground" on the
+            // island brink): a lot whose ground falls away more than a storey
+            // across its footprint cannot be seated by a single pad — the pad
+            // plane leaves one side hovering and the other buried, and the
+            // grade skirt becomes a cliff-sized wall. Such land is HILLSIDE,
+            // not a parcel: it goes green. Sampled at the footprint corners +
+            // centroid on the same ground the pad plane would use.
+            if (p.ground) {
+                Real lo = 1e30, hi = -1e30;
+                auto sampleG = [&](const Vec2& v) {
+                    const Real g = p.ground(v.x, v.y);
+                    lo = std::min(lo, g);
+                    hi = std::max(hi, g);
+                };
+                for (const Vec2& v : lot.footprint) sampleG(v);
+                sampleG(centroid(lot.footprint));
+                if (hi - lo > p.maxPadRelief) {
+                    dbg->rejRelief++;
+                    emitGreen(); continue;
+                }
+            }
+
             // Building set back from its own lot lines (district-tuned).
             Poly2 site = inset(lot.footprint, lotSetback);
             if (site.size() < 3 || area(site) < 30) site = lot.footprint;
@@ -2415,7 +2437,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                  << ", aspect " << dbg->rejAspect << ", fill " << dbg->rejFill
                  << ", plan " << dbg->rejPlan << ", clear " << dbg->rejClear
                  << ", box " << dbg->rejBox << ", frontage "
-                 << dbg->rejFrontage << " | alleys " << dbg->alleys.size()
+                 << dbg->rejFrontage << ", relief " << dbg->rejRelief
+                 << " | alleys " << dbg->alleys.size()
                  << " | " << blocksAllCarriageway
                  << " blocks all carriageway";
     }

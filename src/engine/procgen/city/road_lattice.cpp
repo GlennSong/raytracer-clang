@@ -1013,7 +1013,8 @@ RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& co
 RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
                                  const std::function<double(double, double)>& edgeHeight,
                                  double sidewalkWidth, double curbHeight,
-                                 const std::vector<std::pair<Vec2, Vec2>>* mouthGaps) {
+                                 const std::vector<std::pair<Vec2, Vec2>>* mouthGaps,
+                                 const std::function<double(double, double)>* terrain) {
     RenderMesh mesh;
     if (sidewalkWidth <= 0.0) return mesh;
     const Vec3 walkColor(0.62, 0.62, 0.60);
@@ -1026,6 +1027,17 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
     };
     auto P3 = [&](const Vec2& v, double dh) {
         return Vec3(v.x, edgeHeight(v.x, v.y) + dh, v.y);
+    };
+    // Outer-face BOTTOM verts drape to the terrain, not a fixed drop: the band
+    // rides the ROAD's grade, and where the ground falls away beside it (the
+    // island brink, a cut bank) a fixed 0.35 m skirt left the sidewalk as a
+    // floating wafer over a cliff ("really tall and irregular sidewalks").
+    // min() keeps the flat-ground case identical and only ever extends DOWN.
+    auto P3bot = [&](const Vec2& v) {
+        double y = edgeHeight(v.x, v.y) - drop;
+        if (terrain && *terrain)
+            y = std::min(y, (*terrain)(v.x, v.y) - 0.3);
+        return Vec3(v.x, y, v.y);
     };
     for (const Poly2& loop : loops) {
         const int m = static_cast<int>(loop.size());
@@ -1083,7 +1095,7 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
         }
         auto capAt = [&](int v, const Vec2& outerPt, const Vec2& along) {
             const Vec3 iB = P3(loop[v], 0), iT = P3(loop[v], curbHeight);
-            const Vec3 oT = P3(outerPt, curbHeight), oB = P3(outerPt, -drop);
+            const Vec3 oT = P3(outerPt, curbHeight), oB = P3bot(outerPt);
             MeshBuilder::emitQuad(mesh, iB, iT, oT, oB,
                                   Vec3(along.x, 0, along.y), curbColor);
             // A beveled corner has TWO outer points; the neighbour's face may
@@ -1092,9 +1104,9 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
             if (oc[v].bevel &&
                 (oc[v].prevPt - oc[v].nextPt).lengthSquared() > 1e-12) {
                 const Vec3 pT = P3(oc[v].prevPt, curbHeight);
-                const Vec3 pB = P3(oc[v].prevPt, -drop);
+                const Vec3 pB = P3bot(oc[v].prevPt);
                 const Vec3 nT = P3(oc[v].nextPt, curbHeight);
-                const Vec3 nB = P3(oc[v].nextPt, -drop);
+                const Vec3 nB = P3bot(oc[v].nextPt);
                 MeshBuilder::emitQuad(mesh, pT, nT, nB, pB,
                                       Vec3(along.x, 0, along.y), curbColor);
             }
@@ -1128,7 +1140,7 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
             const Vec3 aT = P3(a, curbHeight), bT = P3(b, curbHeight);
             const Vec3 aR = P3(a, 0), bR = P3(b, 0);
             const Vec3 aoT = P3(ao, curbHeight), boT = P3(bo, curbHeight);
-            const Vec3 aoB = P3(ao, -drop), boB = P3(bo, -drop);
+            const Vec3 aoB = P3bot(ao), boB = P3bot(bo);
             MeshBuilder::emitQuad(mesh, aR, bR, bT, aT, eo3 * -1.0, curbColor);  // curb lip
             const float ua = static_cast<float>(-sArc[i]);
             const float ub = static_cast<float>(-sArc[i + 1]);
@@ -1147,8 +1159,8 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
                 const Vec2 bev = oc[j].nextPt - oc[j].prevPt;
                 if (bev.length() > 1e-9) {
                     const Vec2 bn = rnorm(bev);
-                    const Vec3 p0B = P3(oc[j].prevPt, -drop);
-                    const Vec3 p1B = P3(oc[j].nextPt, -drop);
+                    const Vec3 p0B = P3bot(oc[j].prevPt);
+                    const Vec3 p1B = P3bot(oc[j].nextPt);
                     MeshBuilder::emitQuad(mesh, p0T, p1T, p1B, p0B,
                                           Vec3(bn.x, 0, bn.y), curbColor);
                 }
