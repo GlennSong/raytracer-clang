@@ -321,6 +321,7 @@ add_library(citysim STATIC
     src/apps/citysim/city_sim.cpp
     src/apps/citysim/city_render.cpp
     src/apps/citysim/city_spectate.cpp   # spectate camera: cycle + follow NPCs (headless-safe)
+    src/apps/citysim/city_traffic_audio.cpp   # ambient traffic engine note (voice pool)
     src/apps/citysim/city_meshes.cpp
 )
 target_compile_options(citysim PRIVATE -Wall -Wextra -Wpedantic)
@@ -460,6 +461,7 @@ add_executable(run_tests
     tests/test_control_channel.cpp
     tests/test_weather_cycle.cpp
     tests/test_editor_home_view.cpp
+    tests/test_vehicle_audio.cpp
     tests/test_lot_conformance.cpp
     tests/test_frame_stats.cpp
     tests/test_event_bus.cpp

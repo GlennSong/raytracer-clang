@@ -29,6 +29,19 @@ std::vector<float> impact(uint32_t sampleRate = 48000, uint32_t seed = 1);
 // so not every car honks the same note.
 std::vector<float> horn(uint32_t sampleRate = 48000, uint32_t seed = 1);
 
+// A running engine, as ONE steady loop-clean period at a REFERENCE firing
+// rate (kEngineRefHz below). It is never played at 1.0 for long: the caller
+// holds a looping voice and shifts its PITCH with revs (engine/vehicle_audio.h
+// turns speed into that multiplier), which is how a single sample covers idle
+// through redline. Like the horn, bake no envelope — the loop would repeat it.
+// Seeds vary the rasp partials so two cars in one street aren't clones.
+std::vector<float> engine(uint32_t sampleRate = 48000, uint32_t seed = 1);
+
+// The firing rate the clip is baked at: pitch 1.0 sounds like this many
+// combustion events per second (~1700 rpm on a four-cylinder four-stroke, two
+// firings per revolution). Callers multiply it; the mapping core owns the band.
+constexpr double kEngineRefHz = 56.0;
+
 }  // namespace sfx
 }  // namespace engine
 

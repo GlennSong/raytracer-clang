@@ -421,6 +421,125 @@ TEST_CASE(sfx_horn_is_loop_clean_and_seed_pitched) {
     CHECK(seamIsClean(sfx::horn(44100, 5)));
 }
 
+TEST_CASE(sfx_engine_is_loop_clean_and_seed_textured) {
+    auto a = sfx::engine(48000, 3);
+    auto b = sfx::engine(48000, 3);
+    auto c = sfx::engine(48000, 4);
+    CHECK(!a.empty());
+    CHECK(a == b);                 // deterministic
+    CHECK(a != c);                 // seeds vary the rasp texture
+    double energy = 0;
+    for (float f : a) {
+        CHECK(std::fabs(f) <= 1.0f);
+        energy += std::fabs(f);
+    }
+    CHECK(energy / a.size() > 0.1);   // a steady running engine, not a blip
+    // LOOP-CLEAN, the horn's contract (a held voice loops this forever): every
+    // partial is an integer number of cycles over the buffer, so the wrap seam
+    // is no steeper than the steepest step inside it — at any sample rate.
+    auto seamIsClean = [](const std::vector<float>& f) {
+        float maxStep = 0.0f;
+        for (size_t i = 1; i < f.size(); i++)
+            maxStep = std::max(maxStep, std::fabs(f[i] - f[i - 1]));
+        return std::fabs(f.front() - f.back()) <= maxStep * 1.5f + 1e-4f;
+    };
+    CHECK(seamIsClean(a));
+    CHECK(seamIsClean(sfx::engine(44100, 3)));
+}
+
+TEST_CASE(sfx_engine_pulses_and_varies_instead_of_humming) {
+    // Device: "it just sounds like a constant hum." A stack of steady sines
+    // IS a hum; an engine is a train of combustion pulses, no two alike. Both
+    // properties are measurable on the buffer.
+    auto pcm = sfx::engine(48000, 1);
+    const size_t firings = 42;              // kEngineRefHz * 0.75 s
+    const size_t span = pcm.size() / firings;
+    CHECK(span > 100);
+
+    std::vector<double> perFiring(firings, 0.0);
+    double headSum = 0, tailSum = 0;
+    for (size_t f = 0; f < firings; f++) {
+        double energy = 0;
+        for (size_t i = 0; i < span; i++) {
+            const double s = pcm[f * span + i];
+            energy += s * s;
+            if (i < span / 8) headSum += std::fabs(s);
+            if (i >= span - span / 8) tailSum += std::fabs(s);
+        }
+        perFiring[f] = std::sqrt(energy / static_cast<double>(span));
+    }
+
+    // PULSE SHAPE: each firing is loud at its start and has blown down by its
+    // end — the puff. A drone would have head ~= tail.
+    CHECK(headSum > tailSum * 1.25);
+
+    // CYCLE-TO-CYCLE VARIATION: no two firings are the same size, so the loop
+    // never settles into an audible pattern.
+    double lo = 1e9, hi = 0, mean = 0;
+    for (double e : perFiring) {
+        lo = std::min(lo, e);
+        hi = std::max(hi, e);
+        mean += e;
+    }
+    mean /= static_cast<double>(firings);
+    CHECK(mean > 0.01);                    // audible
+    CHECK((hi - lo) / mean > 0.25);        // genuinely uneven, not a metronome
+}
+
+TEST_CASE(engine_note_runs_continuously_and_revs_through_the_mixer) {
+    // The END-TO-END claim the unit maths cannot make: a held, looping engine
+    // voice actually SOUNDS — continuously, with no silent gap at the loop
+    // seam — and pitching it up (revs) speeds the waveform up. Manual mode
+    // pumps the real mixer, so this is the audible path, not a stand-in.
+    AudioEngine audio;
+    CHECK(audio.initialize(AudioBackendMode::Manual));
+    std::vector<float> pcm = sfx::engine(audio.sampleRate(), 1);
+    AudioClipHandle clip =
+        audio.createClip(pcm.data(), pcm.size(), 1, audio.sampleRate());
+    CHECK(clip.valid());
+
+    AudioPlayParams params;
+    params.loop = true;
+    params.volume = 0.9f;
+    params.pitch = 1.0f;
+    AudioVoiceHandle voice = audio.play(clip, params);
+    CHECK(voice.valid());
+
+    // Pump ~3 clip lengths (well past several loop wraps) in blocks, and
+    // require every block to carry sound: a seam that dropped out or a voice
+    // that stopped at the end of the sample would show as a silent block.
+    const uint64_t block = pcm.size() / 4;
+    std::vector<float> out(block * 2);   // stereo interleaved
+    auto blockEnergy = [&]() {
+        std::fill(out.begin(), out.end(), 0.0f);
+        audio.readFrames(out.data(), block);
+        double e = 0;
+        for (float f : out) e += std::fabs(f);
+        return e / out.size();
+    };
+    auto zeroCrossings = [&]() {
+        int crossings = 0;
+        for (size_t i = 2; i < out.size(); i += 2)   // left channel only
+            if ((out[i - 2] < 0.0f) != (out[i] < 0.0f)) crossings++;
+        return crossings;
+    };
+    for (int i = 0; i < 12; i++) CHECK(blockEnergy() > 0.01);
+    CHECK(audio.isPlaying(voice));
+
+    // Revving: the same voice at a higher playback rate crosses zero more
+    // often in the same window — the note went up.
+    blockEnergy();
+    const int idleCrossings = zeroCrossings();
+    audio.setVoicePitch(voice, 2.2f);
+    blockEnergy();
+    const int revvedCrossings = zeroCrossings();
+    CHECK(revvedCrossings > idleCrossings);
+
+    audio.stop(voice);
+    CHECK(!audio.isPlaying(voice));
+    audio.shutdown();
+}
+
 TEST_CASE(audio_system_registered_procedural_clip_plays_by_name) {
     AudioEngine audio;
     audio.initialize(AudioBackendMode::Manual);

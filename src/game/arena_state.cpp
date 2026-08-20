@@ -12,6 +12,7 @@
 #include "../engine/systems/terrain_lod_system.h"
 #include "../apps/citysim/city_render.h"
 #include "../apps/citysim/city_spectate.h"
+#include "../apps/citysim/city_traffic_audio.h"
 #ifdef RT_ENABLE_PHYSICS
 #include "../apps/citysim/city_physics.h"
 #include "../apps/citysim/city_vehicles.h"
@@ -152,6 +153,12 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // poses + drives ctx.view.camera only — no physics — so it sits OUTSIDE the
     // Jolt block, after CameraSystem/PlayerSystem so its override wins the frame.
     addSystem<citysim::CitySpectateSystem>(citySys);
+    // Ambient traffic's engine note (the citysim adapter over
+    // engine::engineSoundFor — VehicleSystem voices the physical cars against
+    // the same core). Reads agent poses + drives voices only, so it sits
+    // outside the Jolt block: a physics-off build still has a city that sounds
+    // like one.
+    addSystem<citysim::CityTrafficAudioSystem>(citySys);
 #ifdef RT_ENABLE_PHYSICS
     // Motion authority per regime (ADR-0062 rethink): AMBIENT traffic is moved by
     // ONE authority — the CitySim planner — drawn instanced and collided via
