@@ -695,13 +695,17 @@ std::string Application::handleControlCommand(const std::string& line) {
 
     if (cmd.name == "sun?") {
         // The lit truth, for numeric light probes (find golden hour without
-        // eyeballing screenshots): sun elevation, intensity, and whether the
-        // vehicle-lamp dusk rule considers it dark.
-        const auto& sun = view.lighting.sun;
-        char buf[160];
-        std::snprintf(buf, sizeof(buf), "ok sunY=%.3f intensity=%.2f dark=%d",
-                      sun.direction.y, sun.intensity,
-                      sun.direction.y < 0.06 ? 1 : 0);
+        // eyeballing screenshots). sunY is the SOLAR elevation — at night the
+        // active light in slot 0 is the moon (WS2), so lightY/intensity
+        // describe what's lighting the world while sunY/dark keep the solar
+        // truth the lamp predicates use.
+        const auto& lit = view.lighting;
+        char buf[200];
+        std::snprintf(buf, sizeof(buf),
+                      "ok sunY=%.3f lightY=%.3f intensity=%.3f dark=%d",
+                      lit.solarElevation, lit.sun.direction.y,
+                      lit.sun.intensity,
+                      lit.solarElevation < 0.06 ? 1 : 0);
         return buf;
     }
 

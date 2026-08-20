@@ -58,12 +58,27 @@ TEST_CASE(vehicle_lamps_indicators_need_a_turn) {
     CHECK(!straight.right);
 }
 
-// Darkness comes from the SUN, not a clock, so a level with a fixed sun behaves
-// correctly instead of waiting on a simulated clock it never advances.
-TEST_CASE(vehicle_lamps_darkness_from_sun_elevation) {
-    CHECK(!lampsDark(Vec3(0.3, 0.9, 0.2)));    // sun high
-    CHECK(lampsDark(Vec3(0.9, -0.1, 0.2)));    // below the horizon
-    CHECK(lampsDark(Vec3(0.9, 0.0, 0.2)));     // on the horizon counts as dusk
+// Darkness comes from the SUN's elevation, not a clock — and not the active
+// light slot, which carries the MOON at night (WS2): a level with a fixed sun
+// behaves correctly, and moonrise never reads as daylight.
+TEST_CASE(vehicle_lamps_darkness_from_solar_elevation) {
+    CHECK(!lampsDark(0.9));     // sun high
+    CHECK(lampsDark(-0.1));     // below the horizon
+    CHECK(lampsDark(0.0));      // on the horizon counts as dusk
+}
+
+// The shared dusk ramp: daylight 0, deep dusk 1, smooth in between — street
+// lamps and window glow fade in on the same boundary the headlights use.
+TEST_CASE(vehicle_lamps_dusk_ramp_fades_around_the_headlight_boundary) {
+    CHECK_APPROX(duskRamp(0.5), 0.0, 1e-9);      // day: fully off
+    CHECK_APPROX(duskRamp(-0.2), 1.0, 1e-9);     // night: fully on
+    const Real mid = duskRamp(kLampDuskSunY - 0.05);
+    CHECK(mid > 0.2);
+    CHECK(mid < 0.8);
+    // Monotonic as the sun sinks.
+    CHECK(duskRamp(0.06) <= duskRamp(0.02));
+    CHECK(duskRamp(0.02) <= duskRamp(-0.02));
+    CHECK(duskRamp(-0.02) <= duskRamp(-0.06));
 }
 
 TEST_CASE(vehicle_lamps_blink_is_periodic_and_even) {

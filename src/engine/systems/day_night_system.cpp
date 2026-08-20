@@ -18,6 +18,8 @@ void DayNightSystem::onStart(FrameContext& ctx) {
     cycle.timeOfDay = s.getDouble("daynight.timeOfDay", cycle.timeOfDay);
     cycle.speed     = s.getDouble("daynight.speed", cycle.speed);
     cycle.paused    = s.getBool("daynight.paused", cycle.paused);
+    // 1 = full moon (moonlit-realistic nights), 0 = new moon (true dark).
+    cycle.moonPhase = s.getDouble("daynight.moonPhase", cycle.moonPhase);
 
     cloudsEnabled  = s.getBool("clouds.enabled", cloudsEnabled);
     cloudCoverage  = static_cast<float>(s.getDouble("clouds.coverage", cloudCoverage));
@@ -72,6 +74,7 @@ void DayNightSystem::onStop(FrameContext& ctx) {
     s.setDouble("daynight.timeOfDay", cycle.timeOfDay);
     s.setDouble("daynight.speed", cycle.speed);
     s.setBool("daynight.paused", cycle.paused);
+    s.setDouble("daynight.moonPhase", cycle.moonPhase);
 
     s.setBool("clouds.enabled", cloudsEnabled);
     s.setDouble("clouds.coverage", cloudCoverage);
@@ -151,6 +154,11 @@ void DayNightSystem::update(FrameContext& ctx) {
             // one wrong number away.
             cycle.timeOfDay = std::fmod(setTod, 24.0) / 24.0;
             cs.setDouble("daynight.set", -1.0);
+            // Asking for an hour IS asking for the cycle's lighting: a level
+            // that booted with the cycle off (static authored sun) would
+            // otherwise consume the time and change nothing — the papercut
+            // that ate the first moonlit-midnight attempt.
+            enabled = true;
         }
         // Weather one-shot: `weather clear|fair|overcast|storm|auto|off`.
         const std::string setWeather = cs.getString("weather.set", "");
@@ -220,21 +228,37 @@ void DayNightSystem::applyLighting(FrameContext& ctx) {
     DayNightState st = cycle.evaluate();
     auto& lit = ctx.view.lighting;
 
-    lit.sun.direction = st.sunDirection;
-    lit.sun.color     = st.sunColor;
-    // Weather dims the sun (overcast halves it, storm guts it) — dead flat
+    // The ACTIVE light drives slot 0 — sun by day, MOON by night (WS2). The
+    // scattering sky, its IBL bake, shadows, and the aerial haze all follow
+    // this one light, which is exactly what makes a moonlit night work: the
+    // whole daytime pipeline runs, ~200x dimmer and blue.
+    lit.sun.direction = st.lightDirection;
+    lit.sun.color     = st.lightColor;
+    // Weather dims the light (overcast halves it, storm guts it) — dead flat
     // shadows are what sell a heavy deck as WEATHER rather than a weird sky.
     lit.sun.intensity =
-        st.sunIntensity * (weatherActive ? weather.sunScale : 1.0f);
+        st.lightIntensity * (weatherActive ? weather.sunScale : 1.0f);
+    // Dusk predicates (vehicle lamps, street lights) key on the SUN's truth,
+    // not the active light — the moon rising must not read as daylight.
+    lit.solarElevation = st.solarElevation;
 
-    lit.sky.sunDirection     = st.sunDirection;
-    lit.sky.sunColor         = st.sunColor;
+    lit.sky.sunDirection     = st.lightDirection;
+    lit.sky.sunColor         = st.lightColor;
     lit.sky.sunDiscIntensity = st.skyDiscIntensity;
     lit.sky.zenithColor      = st.zenithColor;
     lit.sky.horizonColor     = st.horizonColor;
     lit.sky.groundColor      = st.groundColor;
 
     lit.ambientMultiplier = st.ambient;
+
+    // Night exposure adaptation (see header): scale the authored exposure as
+    // the sun sinks. Captured lazily so it reads the level's value after load;
+    // the mix keeps daytime EXACTLY the authored exposure.
+    if (baseExposure_ < 0.0f) baseExposure_ = lit.exposure;
+    const float dayF = static_cast<float>(
+        std::min(1.0, std::max(0.0, (st.solarElevation + 0.10) / 0.30)));
+    const float dayEase = dayF * dayF * (3.0f - 2.0f * dayF);
+    lit.exposure = baseExposure_ * (1.0f + (kNightAdapt - 1.0f) * (1.0f - dayEase));
 }
 
 // Cloud parameters are independent of the day/night toggle; the shader shades

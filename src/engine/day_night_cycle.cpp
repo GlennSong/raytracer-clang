@@ -24,7 +24,8 @@ void DayNightCycle::advance(double dt) {
     timeOfDay -= std::floor(timeOfDay);  // wrap into [0, 1)
 }
 
-DayNightState DayNightCycle::evaluateAt(double timeOfDay, double axisTilt) {
+DayNightState DayNightCycle::evaluateAt(double timeOfDay, double axisTilt,
+                                        double moonPhase) {
     const double TWO_PI = 6.283185307179586;
 
     // Sun arc. angle: 0 at sunrise (east, on the horizon), +pi/2 at noon
@@ -70,7 +71,41 @@ DayNightState DayNightCycle::evaluateAt(double timeOfDay, double axisTilt) {
     s.zenithColor      = zenith;
     s.horizonColor     = horizon;
     s.groundColor      = ground;
-    s.ambient          = static_cast<float>(mix(0.04, 0.34, day));
+    // Night floor raised from 0.04 (WS2): the multiplier now scales a MOONLIT
+    // sky's irradiance instead of a black one, so the old near-zero floor
+    // would crush the very light the moon just paid for. Day value unchanged.
+    s.ambient          = static_cast<float>(mix(0.28, 0.34, day));
+
+    // --- the moon -----------------------------------------------------------
+    // Opposite the sun's orbit (high at midnight), crossing on the other side
+    // of the tilt so moonlit shadows don't retrace the sun's exactly. True
+    // moonlight is ~1/400000 of sunlight; games that read as "moonlit" sit
+    // near 1/50 with adapted exposure (Glenn picked moonlit-realistic:
+    // terrain and roads readable, lamps still matter). Measured on the metro
+    // skyline: 1/200 lit the CLOUDS beautifully (in-scatter accumulates along
+    // the whole ray) while the ground's single diffuse bounce stayed black —
+    // with night exposure adaptation x6, 1/50 puts the ground near 12% of its
+    // daytime tonemapped level: dim blue shapes, readable roads.
+    Vec3 moonDir = normalize(Vec3(-std::cos(angle), -std::sin(angle),
+                                  -axisTilt));
+    const Vec3 moonColor(0.62, 0.72, 0.95);
+    double moonUp = smoothstep(-0.10, 0.20, moonDir.y);
+    // The moon waits for true twilight (sun a few degrees down), not golden
+    // hour — this keeps sunset light sun-owned AND makes the slot-0 handoff
+    // dim by construction (both lights near-black at the crossover).
+    double nightGate = smoothstep(0.02, 0.15, -elev);
+    double moonI = (5.0 / 50.0) * moonPhase * nightGate * moonUp;
+
+    s.solarElevation = static_cast<float>(elev);
+    if (s.sunIntensity >= moonI) {
+        s.lightDirection = sunDir;
+        s.lightColor     = sunColor;
+        s.lightIntensity = s.sunIntensity;
+    } else {
+        s.lightDirection = moonDir;
+        s.lightColor     = moonColor;
+        s.lightIntensity = static_cast<float>(moonI);
+    }
     return s;
 }
 

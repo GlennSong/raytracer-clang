@@ -938,6 +938,11 @@ static void loadLighting(const json& lighting, RenderView& view) {
         l.sun.color      = parseVec3(sun["color"], l.sun.color);
         l.sun.intensity  = sun.value("intensity", l.sun.intensity);
         l.sun.castsShadow = sun.value("castsShadow", true);
+        // Static-sun truth for the dusk predicates: a level authored at dusk
+        // must read as dusk. The day/night cycle overwrites this per frame
+        // when enabled (and may hang the MOON in slot 0, which is why the
+        // predicates read this and never sun.direction).
+        l.solarElevation = static_cast<float>(l.sun.direction.y);
     }
 
     if (lighting.contains("pointLights")) {

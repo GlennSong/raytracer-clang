@@ -374,6 +374,11 @@ struct FogParams {
 
 struct SceneLighting {
     DirectionalLight sun;
+    // The SUN's elevation truth even when `sun` (slot 0) carries the moon at
+    // night (WS2): dusk predicates — vehicle lamps, street lights — key on
+    // this, or the moon rising would read as daylight and switch them off.
+    // A static-sun level never writes it; the default matches "sun is up".
+    float solarElevation = 1.0f;
     std::vector<PointLight> pointLights;
     std::vector<SpotLight> spotLights;
     ShadowConfig shadow;

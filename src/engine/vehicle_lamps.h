@@ -68,9 +68,25 @@ inline VehicleLamps vehicleLampState(LampMotion motion, Real speed, Real prevSpe
     return lamps;
 }
 
-// Is it dark enough for headlights, from the direction TOWARD the sun?
-inline bool lampsDark(const Vec3& sunDirection) {
-    return sunDirection.y < kLampDuskSunY;
+// Is it dark enough for headlights, from the SUN's elevation (the y of the
+// direction toward the sun)? Takes the scalar, not the light direction: at
+// night the active light in slot 0 is the MOON (WS2), whose elevation must
+// never gate the lamps — callers pass lighting.solarElevation.
+inline bool lampsDark(Real solarElevation) {
+    return solarElevation < kLampDuskSunY;
+}
+
+// A smooth 0..1 dusk ramp around the same boundary, for lights that should
+// fade in rather than pop (street lamps, window glow): 0 in daylight, 1 once
+// the sun is a few degrees under. Shares kLampDuskSunY so every night light
+// in the world agrees on when evening starts.
+inline Real duskRamp(Real solarElevation) {
+    const Real hi = kLampDuskSunY;          // fully off above this
+    const Real lo = kLampDuskSunY - 0.10;   // fully on below this
+    Real t = (hi - solarElevation) / (hi - lo);
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+    return t * t * (3.0 - 2.0 * t);
 }
 
 // Blink phase, shared so the player's indicators and the city's flash together.

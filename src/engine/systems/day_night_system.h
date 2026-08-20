@@ -57,6 +57,15 @@ private:
     WeatherCycle weather;
     bool weatherActive = false;
 
+    // Night exposure adaptation (WS2): the eye the renderer doesn't have. A
+    // moonlit world is readable because pupils dilate — without adaptation the
+    // physically-scaled moon lights the sky but the ground tonemaps to black.
+    // The level's authored exposure is captured at start and scaled up as the
+    // sun sinks (smooth, keyed on solar elevation); lamps brightening with it
+    // is what adapted eyes actually see. -1 = not captured yet.
+    float baseExposure_ = -1.0f;
+    static constexpr float kNightAdapt = 6.0f;   // midnight exposure multiplier
+
     // The level's authored volumetric deck, captured on first sight: the
     // artistic knobs write ABSOLUTE values derived from this base each frame
     // (a relative per-frame mutation would compound).

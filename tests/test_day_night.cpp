@@ -2,6 +2,8 @@
 
 #include "../src/engine/day_night_cycle.h"
 
+#include <algorithm>
+
 using namespace engine;
 
 namespace {
@@ -26,6 +28,45 @@ TEST_CASE(day_night_midnight_sun_below_horizon) {
     // Night: directional sun and the visible disc are extinguished.
     CHECK_APPROX(s.sunIntensity, 0.0, 1e-6);
     CHECK_APPROX(s.skyDiscIntensity, 0.0, 1e-6);
+}
+
+// WS2 ("night is way too dark"): midnight is MOONLIT, not unlit. The active
+// light hands off to the moon — overhead at midnight, cool, ~200x dimmer than
+// the noon sun — while the solar truth stays below the horizon for the lamp
+// predicates.
+TEST_CASE(day_night_midnight_is_moonlit) {
+    DayNightState s = DayNightCycle::evaluateAt(0.0, NO_TILT);
+    CHECK(s.solarElevation < -0.9f);            // the sun's truth: deep night
+    CHECK_APPROX(s.lightDirection.y, 1.0, 1e-6);  // full moon overhead
+    CHECK(s.lightIntensity > 0.05f);            // lit — readable with adaptation
+    CHECK(s.lightIntensity < 0.3f);             // but unmistakably night
+    CHECK(s.lightColor.z > s.lightColor.x);     // cool blue moonlight
+    // New moon: the intensity scales away, nights can still be truly dark.
+    DayNightState newMoon = DayNightCycle::evaluateAt(0.0, NO_TILT, 0.0);
+    CHECK_APPROX(newMoon.lightIntensity, 0.0, 1e-6);
+}
+
+TEST_CASE(day_night_noon_active_light_is_the_sun) {
+    DayNightState s = DayNightCycle::evaluateAt(0.5, NO_TILT);
+    CHECK_APPROX(s.lightDirection.y, 1.0, 1e-6);
+    CHECK_APPROX(s.lightIntensity, s.sunIntensity, 1e-6);
+    CHECK(s.solarElevation > 0.9f);
+}
+
+TEST_CASE(day_night_handoff_is_seamless_because_both_lights_are_dim) {
+    // Scan dusk: wherever the active light switches sun->moon, both sides of
+    // the switch are near-black, so the sky bake never visibly pops.
+    float maxSwitchIntensity = 0.0f;
+    Vec3 prevDir = DayNightCycle::evaluateAt(0.70, NO_TILT).lightDirection;
+    for (int i = 1; i <= 40; ++i) {
+        double t = 0.70 + 0.10 * (i / 40.0);   // sunset window
+        DayNightState s = DayNightCycle::evaluateAt(t, NO_TILT);
+        const bool switched = (prevDir - s.lightDirection).length() > 1.0;
+        if (switched)
+            maxSwitchIntensity = std::max(maxSwitchIntensity, s.lightIntensity);
+        prevDir = s.lightDirection;
+    }
+    CHECK(maxSwitchIntensity < 0.06f);
 }
 
 TEST_CASE(day_night_sunrise_sunset_on_horizon) {

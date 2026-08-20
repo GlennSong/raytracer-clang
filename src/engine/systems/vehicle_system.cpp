@@ -329,7 +329,8 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
                 braking ? LampMotion::Holding
                         : (v.turnSignal != 0 ? LampMotion::Turning : LampMotion::Rolling);
             const VehicleLamps lit = vehicleLampState(
-                motion, v.speed, v.prevSpeed, lampsDark(ctx.view.lighting.sun.direction),
+                motion, v.speed, v.prevSpeed,
+                lampsDark(ctx.view.lighting.solarElevation),
                 v.turnSignal, v.lightsOn);
             const bool blink = lampBlinkOn(ctx.clock.simulatedTime());
 

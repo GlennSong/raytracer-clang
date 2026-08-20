@@ -18,6 +18,21 @@ struct DayNightState {
     Vec3  horizonColor;     // sky at the horizon
     Vec3  groundColor;      // below-horizon tint
     float ambient;          // ambient multiplier (cool + low at night)
+
+    // The ACTIVE light — what the renderer should drive the sky and shading
+    // with. Sun by day; the MOON by night (WS2, "night is way too dark"): a
+    // moonlit sky is a blue-shifted day sky a few hundred times dimmer, so
+    // driving the same scattering pipeline with a dim cool moon buys sky,
+    // IBL ambient, and aerial haze at night for free. The handoff is a hard
+    // switch at the intensity crossover — both lights are near-black there,
+    // so nothing visibly pops (the sky bake re-keys on direction+intensity).
+    Vec3  lightDirection;   // normalized, toward the active light
+    Vec3  lightColor;
+    float lightIntensity;
+    // The sun's TRUTH regardless of which light is active: dusk predicates
+    // (vehicle lamps, street lights) must key on solar elevation, or the
+    // moon rising would read as daylight and switch every lamp off.
+    float solarElevation;
 };
 
 // Maps a normalized time-of-day to a sun arc and a graded sky/light palette.
@@ -29,15 +44,22 @@ public:
     double timeOfDay = 0.35;   // start mid-morning
     double speed     = 0.02;   // fraction of a full day per second (~50s/day)
     double axisTilt  = 0.35;   // sun-arc tilt out of the east-up plane
+    // 0 = new moon (nights stay truly dark), 1 = full moon (the default —
+    // moonlit-realistic nights). Scales the moon's intensity only; the disc
+    // rendering for visible phases is deferred.
+    double moonPhase = 1.0;
     bool   paused    = false;
 
     // Advance time by dt seconds (no-op when paused), wrapping into [0, 1).
     void advance(double dt);
 
-    DayNightState evaluate() const { return evaluateAt(timeOfDay, axisTilt); }
+    DayNightState evaluate() const {
+        return evaluateAt(timeOfDay, axisTilt, moonPhase);
+    }
 
     // Stateless evaluation, exposed for testing and reuse.
-    static DayNightState evaluateAt(double timeOfDay, double axisTilt);
+    static DayNightState evaluateAt(double timeOfDay, double axisTilt,
+                                    double moonPhase = 1.0);
 };
 
 }  // namespace engine
