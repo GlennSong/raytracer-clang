@@ -1,0 +1,263 @@
+{
+ "citysim": {
+  "buildChance": 0.9,
+  "buildLots": true,
+  "cars": -1,
+  "debugWidgets": false,
+  "detailDistance": 950,
+  "downtownRadius": 160,
+  "hoursPerSecond": 0.05,
+  "hubRadius": 240,
+  "midtownRadius": 340,
+  "pedestrians": -1,
+  "perceptionReliability": 1.0,
+  "plinth": 0.45,
+  "seed": 9,
+  "sidewalk": 5.0,
+  "vehicles": "vehicles.lua",
+  "wander": false
+ },
+ "entities": [
+  {
+   "id": 2,
+   "name": "streets",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "road": {
+    "color": [
+     0.09,
+     0.09,
+     0.1
+    ],
+    "corner_radius": 3.0,
+    "crosswalks": true,
+    "curb": 0.16,
+    "generate": {
+     "ambient_per_500": 40,
+     "artery_width": 17,
+     "beach_rise": 2.5,
+     "block_size": 180,
+     "collector_width": 13,
+     "corridor_freeways": true,
+     "corridor_spacing": 200,
+     "curviness": 0.2,
+     "district_len": 900,
+     "fabric": "mix",
+     "fabric_core_len": 100,
+     "freeway_width": 22,
+     "gate_spacing": 900,
+     "hotspots": 9,
+     "influence": 700,
+     "interchange_spacing": 700,
+     "kill_radius": 260,
+     "kind": "metro",
+     "loop_max": 1100,
+     "loop_min": 450,
+     "max_slope": 0.32,
+     "merge_radius": 170,
+     "min_block_edge": 120,
+     "min_road_clearance": 0.9,
+     "min_road_len": 30,
+     "radius": 1075,
+     "sea_level": -5.0,
+     "seed": 9,
+     "seg_length": 100,
+     "skeleton": "footprint",
+     "street_width": 12.0
+    },
+    "lift": 0.08,
+    "markings": true,
+    "sidewalk": 3.5,
+    "width": 7.0
+   },
+   "shape": "road"
+  }
+ ],
+ "environment": {
+  "clouds": {
+   "bottom": 900,
+   "coverage": 0.38,
+   "density": 0.05,
+   "lightSteps": 6,
+   "steps": 40,
+   "top": 1600,
+   "wind": 14,
+   "noiseScale": 0.0007
+  },
+  "fog": {
+   "color": [
+    0.7,
+    0.78,
+    0.88
+   ],
+   "density": 0.0011,
+   "heightFalloff": 0.016
+  },
+  "sky": {
+   "aerial": 4.0,
+   "model": "scattering",
+   "turbidity": 2.0
+  },
+  "skyColor": [
+   0.55,
+   0.68,
+   0.86
+  ]
+ },
+ "lighting": {
+  "ambientMultiplier": 0.6,
+  "exposure": 0.5,
+  "sun": {
+   "castsShadow": true,
+   "color": [
+    1.0,
+    0.96,
+    0.86
+   ],
+   "direction": [
+    0.42,
+    0.52,
+    -0.5
+   ],
+   "intensity": 8.0
+  }
+ },
+ "name": "metropolis_sky",
+ "player": {
+  "collider": {
+   "halfHeight": 0.8,
+   "radius": 0.3,
+   "shape": "capsule"
+  },
+  "friction": 0.5,
+  "position": [
+   0.0,
+   1.2,
+   150.0
+  ]
+ },
+ "terrain": {
+  "_comment": "Metropolis-scale coastal shelf (2.6 km): domain-warped fbm + eroded western range, tiltX ramps east into the sea. The 2 km metro (radius 1000) fills the shelf between the foothills and the shoreline.",
+  "cdlod": {
+   "worldHalf": 1380
+  },
+  "erode": true,
+  "erodeDroplets": 500000,
+  "erodeRadius": 4,
+  "erodeRes": 800,
+  "erodeTalus": 1.0,
+  "erodeThermal": 14,
+  "heightScale": 13,
+  "material": {
+   "albedo": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "roughness": 1.0
+  },
+  "mountainAlongRange": true,
+  "mountainHeight": 180,
+  "mountainMaskHi": 0.4,
+  "mountainMaskLo": -0.1,
+  "mountainMaskScale": 0.001,
+  "mountainScale": 0.002,
+  "noiseScale": 0.0026,
+  "octaves": 6,
+  "rangeHeight": 260,
+  "rangeSpine": [
+   [
+    -1180,
+    -900
+   ],
+   [
+    -1120,
+    -300
+   ],
+   [
+    -1180,
+    300
+   ],
+   [
+    -1120,
+    900
+   ]
+  ],
+  "rangeVariation": 0.6,
+  "rangeWidth": 300,
+  "resolution": 900,
+  "rockLine": 90,
+  "seed": 11,
+  "size": 2760,
+  "snowLine": 230,
+  "tiltX": -0.045,
+  "warp": 0.35
+ },
+ "vegetation": {
+  "clearMargin": 4.0,
+  "clusterCount": 90,
+  "clusterRadius": 28,
+  "count": 22000,
+  "densityScale": 0.004,
+  "densityThreshold": -0.35,
+  "drawDistance": 1100,
+  "maxHeight": 150,
+  "maxScale": 1.4,
+  "maxSlopeDeg": 40,
+  "minHeight": 2.0,
+  "minScale": 0.7,
+  "region": 1300,
+  "seed": 31,
+  "spacingFactor": 0.75,
+  "species": [
+   {
+    "collide": true,
+    "kind": "script",
+    "script": "return flora.scatter_tree(seed, {species='pine'})",
+    "variants": 3
+   },
+   {
+    "collide": true,
+    "kind": "script",
+    "script": "return flora.scatter_tree(seed, {species='oak'})",
+    "variants": 2
+   },
+   {
+    "cuts": 4,
+    "faceted": true,
+    "kind": "rock",
+    "lumpScale": 0.45,
+    "lumps": 5,
+    "material": {
+     "albedo": [
+      0.26,
+      0.25,
+      0.24
+     ],
+     "roughness": 1.0
+    },
+    "sdfResolution": 18,
+    "skin": "sdf",
+    "smoothness": 0.22,
+    "variants": 3
+   }
+  ]
+ },
+ "version": 1,
+ "water": {
+  "cell": 12,
+  "color": [
+   0.012,
+   0.05,
+   0.08
+  ],
+  "foamBand": 40,
+  "opacity": 0.82,
+  "region": 1900,
+  "roughness": 0.04,
+  "seaLevel": -5.0
+ }
+}

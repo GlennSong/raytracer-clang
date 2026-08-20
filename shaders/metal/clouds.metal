@@ -31,6 +31,28 @@ static float cl_layerHeight(float3 p, constant CloudUniforms& u) {
     return clamp((h - u.layer.x) / max(1e-4, u.layer.y - u.layer.x), 0.0, 1.0);
 }
 
+// The WEATHER MAP (WS4, "dense repeating pattern... sparser looking sky"):
+// a kilometres-scale coverage field over the deck. Without it, coverage is
+// one global threshold and the whole sky is a uniform billow field — the base
+// texture tiles every 4/noiseScale metres, so the horizon showed 8+ copies of
+// the same pattern. The field reuses the base texture's perlin-worley R at a
+// scale ~140x larger than the billows: its features span ~10 km (formations
+// and true gaps) and its tile period (~40 km) sits beyond the march distance,
+// so no repetition is visible at all. Pinned to the noiseScale knob so
+// formations scale WITH the puffs.
+static float cl_weather(float2 xz, constant CloudUniforms& u,
+                        texture3d<float> baseNoise) {
+    float2 q = xz * (u.params.z * 0.035);
+    // Fixed mid-slice: the field must not swim as the ray climbs the slab.
+    return baseNoise.sample(cl_noiseSamp, float3(q.x, 0.37, q.y)).r;
+}
+
+// Coverage after the weather map: fair skies carve banks with real gaps,
+// storm coverage saturates the field into a full deck.
+static float cl_localCoverage(float weather, constant CloudUniforms& u) {
+    return clamp(u.params.x * (0.30 + 1.4 * weather), 0.0, 1.0);
+}
+
 static float cl_density(float3 p, constant CloudUniforms& u,
                         texture3d<float> baseNoise, texture3d<float> detailNoise) {
     float hf = cl_layerHeight(p, u);
@@ -45,9 +67,10 @@ static float cl_density(float3 p, constant CloudUniforms& u,
     float4 nse = baseNoise.sample(cl_noiseSamp, q * 0.25);
     float lowFbm = nse.g * 0.625 + nse.b * 0.25 + nse.a * 0.125;
     float base = clamp(cl_remap(nse.r, lowFbm - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);
-    // Coverage knob: unchanged semantics — 1-coverage is the threshold, the
-    // remainder renormalised — so level JSON keeps meaning what it meant.
-    float d = clamp((base - (1.0 - u.params.x)) / max(1e-3, u.params.x), 0.0, 1.0);
+    // Coverage: the authored knob modulated by the weather field at THIS
+    // column — threshold + renormalise semantics unchanged per-locale.
+    float cov = cl_localCoverage(cl_weather(p.xz, u, baseNoise), u);
+    float d = clamp((base - (1.0 - cov)) / max(1e-3, cov), 0.0, 1.0);
     // Edge erosion: subtract high-frequency worley scaled by (1 - d), so
     // interiors stay solid and edges wisp away (the standard erode trick).
     float3 det = detailNoise.sample(cl_noiseSamp, q * 2.0).rgb;
@@ -144,6 +167,22 @@ fragment float4 fragmentClouds(CloudsOut in [[stage_in]],
     t1 = min(t1, tScene);
     if (t1 <= t0) return CLEAR;
 
+    // EMPTY-RAY EARLY-OUT (WS4): probe the weather field along the slab span
+    // before paying for the march. A clear/fair sky is now MOSTLY gaps by
+    // design — without this, every empty pixel still ran the full march
+    // (40 steps x 2 fetches), which is why a sparse sky cost as much as a
+    // storm. Three probes across the interval; if the field is dry at all of
+    // them, there is nothing to march through.
+    {
+        float covA = cl_localCoverage(
+            cl_weather((camPos + dir * t0).xz, u, baseNoise), u);
+        float covB = cl_localCoverage(
+            cl_weather((camPos + dir * mix(t0, t1, 0.5)).xz, u, baseNoise), u);
+        float covC = cl_localCoverage(
+            cl_weather((camPos + dir * t1).xz, u, baseNoise), u);
+        if (max(covA, max(covB, covC)) < 0.02) return CLEAR;
+    }
+
     int viewSteps = int(u.march.x);
     int lightSteps = int(u.march.y);
     float ds = (t1 - t0) / float(max(2, viewSteps));
@@ -158,10 +197,20 @@ fragment float4 fragmentClouds(CloudsOut in [[stage_in]],
     float3 scattered = float3(0.0);
     float3 sunLight = u.sunColor.rgb * u.sunColor.w;
 
-    for (int i = 0; i < viewSteps; i++) {
-        float3 p = camPos + dir * (t0 + ds * (float(i) + jitter));
+    // ZERO-RUN STRETCH: after a few consecutive empty samples the step grows,
+    // so rays crossing gaps between banks skip the emptiness cheaply; any hit
+    // resets to the honest step. `t` replaces the i*ds grid.
+    float t = t0 + ds * jitter;
+    int dryRun = 0;
+    for (int i = 0; i < viewSteps && t < t1; i++) {
+        float stepLen = ds * (dryRun >= 4 ? 1.6 : 1.0);
+        float3 p = camPos + dir * t;
+        t += stepLen;
         float density = cl_density(p, u, baseNoise, detailNoise);
-        if (density > 0.001) {
+        if (density <= 0.001) {
+            dryRun += 1;
+        } else {
+            dryRun = 0;
             // SUN MARCH over a FIXED SHORT SPAN, not the whole slab. This used
             // to step (top - bottom) per sample — the full 700 m — from
             // wherever the sample sat, so lightOD reached ~64 and exp(-64) is
@@ -176,7 +225,7 @@ fragment float4 fragmentClouds(CloudsOut in [[stage_in]],
                 lightOD += cl_density(lp, u, baseNoise, detailNoise) * lds;
             }
             float beer = exp(-lightOD);
-            float powder = 1.0 - exp(-2.0 * density * ds);
+            float powder = 1.0 - exp(-2.0 * density * stepLen);
             // Ambient grades with height in the layer: bases sit in their own
             // shadow, tops face the open sky — gives the deck its underside.
             float hf = cl_layerHeight(p, u);
@@ -191,7 +240,7 @@ fragment float4 fragmentClouds(CloudsOut in [[stage_in]],
             // the error grew with ds, which is precisely the horizon white wall
             // that `horizonFade` below was invented to hide.
             float3 lum = sunLight * beer * phase * powder + ambient;
-            float stepT = exp(-density * ds);
+            float stepT = exp(-density * stepLen);
             scattered += transmittance * lum * (1.0 - stepT);
             transmittance *= stepT;
             if (transmittance < 0.01) break;
@@ -211,6 +260,17 @@ fragment float4 fragmentClouds(CloudsOut in [[stage_in]],
     // VISUAL GATE: this needs to be LOOKED at, not measured. Clouds should read
     // white and solid with no per-pixel sparkle, and the deck should continue
     // to the horizon rather than dissolving into blue.
+    //
+    // ...continue to the horizon and then END SOFTLY (WS4): the march clamps
+    // at farDistance, so the deck used to stop on a crisp RING where the slab
+    // entry crossed it (~1.7 degrees above the horizon at bottom 900 / far
+    // 30000). Fade the contribution over the last quarter of the range so
+    // clouds dissolve into the aerial haze the sky already paints there. This
+    // is not the retired whole-deck fade: it keys on the ENTRY distance and
+    // touches only the final approach to the clamp.
+    float ringFade = 1.0 - smoothstep(0.75 * u.march.w, u.march.w, t0);
+    scattered *= ringFade;
+    transmittance = mix(1.0, transmittance, ringFade);
     return float4(scattered, transmittance);
 }
 

@@ -950,7 +950,8 @@
    "density": 0.05,
    "wind": 14,
    "steps": 40,
-   "lightSteps": 6
+   "lightSteps": 6,
+   "noiseScale": 0.0007
   }
  },
  "lighting": {
