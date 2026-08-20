@@ -3497,6 +3497,10 @@ bool LevelLoader::load(const std::string& path,
     //                         active).
     view.lighting.skyScattering = SkyScatteringParams{};
     view.lighting.volumetricClouds = VolumetricCloudParams{};
+    // Fog too: it was the one environment block with no reset, so a level
+    // without an "environment.fog" object inherited the previous level's haze
+    // for the rest of the session.
+    view.lighting.fog = FogParams{};
     if (root.contains("environment") && root["environment"].is_object()) {
         const auto& env = root["environment"];
         if (env.contains("sky") && env["sky"].is_object()) {

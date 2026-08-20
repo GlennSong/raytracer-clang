@@ -50,6 +50,13 @@ weather <clear|fair|overcast|storm|auto|off>
                                   # hours; off returns the knobs to the panel
 weather?                          # current state ("storm (auto)" / "off")
 sun?                              # sunY / intensity / dark — numeric probe
+fog <density> [heightFalloff] [r g b]
+                                  # live atmosphere tuning on the level's
+                                  # lighting (like `sun`, nothing persists —
+                                  # bake keepers into the level JSON); on
+                                  # scattering-sky levels the haze fades toward
+                                  # the real sky color (sunset/night correct)
+fog?                              # enabled / density / heightFalloff / color
 render <apply|save>               # push ssao./ssr./shadow./bloom./tonemap.op/
                                   # grade./hud.show settings into the renderer
                                   # (the visionOS panel's static mapping);

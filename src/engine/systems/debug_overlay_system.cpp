@@ -356,6 +356,10 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
         auto& fog = lit.fog;
         ImGui::Checkbox("Enabled##fog", &fog.enabled);
         ImGui::SliderFloat("Density##fog", &fog.density, 0.0f, 0.02f, "%.5f");
+        // >0 = low-lying haze a high camera looks down through (exp height
+        // profile); 0 = uniform distance fog.
+        ImGui::SliderFloat("Height falloff##fog", &fog.heightFalloff, 0.0f,
+                           0.05f, "%.4f");
         float fogCol[3] = {static_cast<float>(fog.color.x),
                            static_cast<float>(fog.color.y),
                            static_cast<float>(fog.color.z)};

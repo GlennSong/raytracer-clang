@@ -201,14 +201,14 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
     // depth uses the closed-form integral of exp(-b*y) along the ray — low-lying
     // haze a high camera looks down THROUGH, not a distance white-out.
     if (lightData.skyModel > 0.5) {
-        // Scattering sky (cinematic-sky): physically-based aerial perspective
-        // replaces the exp fog. Per-channel Rayleigh + Mie optical depth along
-        // the ray (closed-form integral of the exponential height profiles,
-        // flat-world — exact at these distances), then the surface fades toward
-        // the sky radiance in the view direction, sampled from the sky-baked
-        // prefiltered environment cube (mip 1 softens the sun disc into a
-        // forward glow). Distant terrain thus dissolves into exactly the sky it
-        // occludes: bluer away from the sun, warmer toward it.
+        // Scattering sky (cinematic-sky): physically-based aerial perspective.
+        // Per-channel Rayleigh + Mie optical depth along the ray (closed-form
+        // integral of the exponential height profiles, flat-world — exact at
+        // these distances), then the surface fades toward the sky radiance in
+        // the view direction, sampled from the sky-baked prefiltered
+        // environment cube (mip 1 softens the sun disc into a forward glow).
+        // Distant terrain thus dissolves into exactly the sky it occludes:
+        // bluer away from the sun, warmer toward it.
         float dist = length(geom.worldPosition - camera.cameraPosition);
         float3 rd = (geom.worldPosition - camera.cameraPosition) / max(dist, 1e-4);
         float bR = 1.0 / max(lightData.skyRayleighH, 1.0);
@@ -221,6 +221,26 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
                                        : dist);
         float3 tau = (lightData.skyRayleighBeta * max(odR, 0.0)
                     + lightData.skyMieBeta * max(odM, 0.0)) * lightData.skyAerial;
+        // AUTHORED FOG RIDES ON TOP (the P5 regression, docs/city-render-perf
+        // R3: "the haze is off in practice"): aerial perspective at city
+        // turbidity fades a 900 m ray 5-14% where the levels' authored exp fog
+        // gave 63% — so P5's "aerial replaces fog" zeroed the atmosphere Glenn
+        // tuned. The exp/height optical depth now ADDS to tau, and the fade
+        // target is the sky the surface occludes (not the fixed fogColor), so
+        // the haze stays color-correct at sunset and under the moon.
+        if (lightData.fogDensity > 0.0) {
+            float odF;
+            if (lightData.fogHeightFalloff > 0.0) {
+                float b = lightData.fogHeightFalloff;
+                odF = lightData.fogDensity * exp(-b * camera.cameraPosition.y) *
+                      (fabs(rd.y) > 1e-4
+                           ? (1.0 - exp(-b * rd.y * dist)) / (b * rd.y)
+                           : dist);
+            } else {
+                odF = lightData.fogDensity * dist;
+            }
+            tau += float3(max(odF, 0.0));
+        }
         float3 tr = exp(-tau);
         float3 inscatter = (env.mode == 1)
             ? prefilteredEnv.sample(envSampler, rd, level(1.0)).rgb

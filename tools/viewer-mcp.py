@@ -162,6 +162,16 @@ def tool_weather(args):
         return send_command("weather?", args.get("instance"))
     return send_command(f"weather {args['state']}", args.get("instance"))
 
+def tool_fog(args):
+    if "density" not in args:
+        return send_command("fog?", args.get("instance"))
+    parts = [f"fog {args['density']}"]
+    if "heightFalloff" in args:
+        parts.append(str(args["heightFalloff"]))
+        if "color" in args and len(args["color"]) == 3:
+            parts.append(" ".join(str(c) for c in args["color"]))
+    return send_command(" ".join(parts), args.get("instance"))
+
 def tool_settings_kv(args):
     a = args["action"]
     if a == "set":
@@ -291,6 +301,15 @@ TOOLS = [
      {"state": {"type": "string",
                 "enum": ["clear", "fair", "overcast", "storm", "auto", "off"]},
       "instance": STR}, [], tool_weather),
+    ("fog", "Set or query the level's atmospheric fog, live: density "
+     "(~0.0004 subtle valley haze .. 0.0025 moody), optional heightFalloff "
+     "(>0 = low-lying haze you look down through, ~0.01-0.02) and color "
+     "[r,g,b]. On scattering-sky levels the haze fades toward the actual sky "
+     "color, so it stays correct at sunset/night. Omit density to query. "
+     "Level-owned: bake keepers into the level JSON.",
+     {"density": NUM, "heightFalloff": NUM,
+      "color": {"type": "array", "items": {"type": "number"}},
+      "instance": STR}, [], tool_fog),
     ("settings_kv", "Generic engine Settings access: get/set any key "
      "(daynight.speed, clouds.coverage, cameraGrounded, ...), or save all "
      "settings to settings.json. Renderer keys (ssao.*, ssr.*, shadow.*, "

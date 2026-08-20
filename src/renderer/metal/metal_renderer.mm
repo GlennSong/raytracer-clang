@@ -3362,8 +3362,11 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
                        / 100.0f) * 100.0f;
         lu.skyCamHeight = impl->skyCamHeightQ;
         lu.skySunDiscCos = std::cos(sp.sunAngularRadius);
-        lu.fogDensity = 0.0f;            // aerial perspective replaces exp fog
-        lu.fogHeightFalloff = 0.0f;
+        // Authored fog is NOT zeroed here anymore. P5 did ("aerial perspective
+        // replaces exp fog"), but aerial at city turbidity is 5-14% where the
+        // authored haze was 63% — every scattering-sky level silently lost its
+        // atmosphere (docs/city-render-perf R3). The lit shader now adds the
+        // fog optical depth to the aerial tau and fades toward the sky color.
     }
 
     // Volumetric clouds (cinematic-sky): the slab retires the 2D FBM overlay

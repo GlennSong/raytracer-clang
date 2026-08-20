@@ -705,6 +705,36 @@ std::string Application::handleControlCommand(const std::string& line) {
         return buf;
     }
 
+    if (cmd.name == "fog") {
+        // The atmosphere tuning knob (WS: "turn fog back on and help me tune
+        // it"): density [heightFalloff] [r g b], live on the level's lighting.
+        // Like `sun`, this edits the LEVEL-OWNED lighting — nothing persists;
+        // bake the values you like into the level JSON.
+        double v[5] = {-1, -1, -1, -1, -1};
+        if (cmd.args.empty() || !num(cmd.args[0], v[0]) || v[0] < 0)
+            return "err usage: fog <density> [heightFalloff] [r g b]";
+        for (size_t i = 1; i < cmd.args.size() && i < 5; ++i)
+            num(cmd.args[i], v[i]);
+        auto& fog = view.lighting.fog;
+        fog.enabled = v[0] > 0.0;
+        fog.density = static_cast<float>(v[0]);
+        if (v[1] >= 0) fog.heightFalloff = static_cast<float>(v[1]);
+        if (v[2] >= 0 && v[3] >= 0 && v[4] >= 0)
+            fog.color = Vec3(v[2], v[3], v[4]);
+        return "ok fog set";
+    }
+
+    if (cmd.name == "fog?") {
+        const auto& fog = view.lighting.fog;
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+                      "ok enabled=%d density=%.5f heightFalloff=%.4f "
+                      "color=%.2f,%.2f,%.2f",
+                      fog.enabled ? 1 : 0, fog.density, fog.heightFalloff,
+                      fog.color.x, fog.color.y, fog.color.z);
+        return buf;
+    }
+
     if (cmd.name == "render") {
         // The ImGui panel's knob families (ssao.*, ssr.*, shadow.*, bloom.*,
         // tonemap.op, grade.*, hud.show) ride the EXISTING static
@@ -801,8 +831,8 @@ std::string Application::handleControlCommand(const std::string& line) {
 
     return "err unknown command: " + cmd.name +
            " (ping|info|camera|camera?|shot|overlay|sim|reload|set|get|"
-           "daynight|sun?|render|view|ledger|possess|drive_to|walk_to|"
-           "possess_stop|release|possess?)";
+           "daynight|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
+           "possess|drive_to|walk_to|possess_stop|release|possess?)";
 }
 
 }  // namespace engine
