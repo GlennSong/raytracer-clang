@@ -346,7 +346,10 @@ struct VolumetricCloudParams {
     // (metropolis_sky.json already authored 0.05 by hand; this makes the
     // default agree with the one level that had been tuned.)
     float density = 0.05f;       // extinction scale inside the slab
-    float noiseScale = 0.0011f;  // base noise frequency (1/m)
+    // 0.0007: base tile 5.7 km, largest Perlin cell ~1.4 km (WS4 — was 0.0011,
+    // cell ~900 m: "popcorn" cumulus and 8+ visible tile repeats at the
+    // horizon; the weather map kills the repeats, this makes the puffs read).
+    float noiseScale = 0.0007f;  // base noise frequency (1/m)
     float wind = 12.0f;
     int   steps = 40;            // view-march steps (perf/quality)
     int   lightSteps = 6;        // sun-march steps per lit sample
@@ -379,6 +382,11 @@ struct SceneLighting {
     // this, or the moon rising would read as daylight and switch them off.
     // A static-sun level never writes it; the default matches "sun is up".
     float solarElevation = 1.0f;
+    // Transient headlight cones (WS3): VehicleSystem clears and refills this
+    // every fixed step for lit vehicles nearest the camera (player first);
+    // RenderSystem merges them into the frame's lights ON A COPY, like the
+    // street lamps, so authored spot lights are never displaced. Never saved.
+    std::vector<SpotLight> vehicleSpots;
     std::vector<PointLight> pointLights;
     std::vector<SpotLight> spotLights;
     ShadowConfig shadow;

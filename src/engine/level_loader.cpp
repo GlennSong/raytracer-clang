@@ -3222,6 +3222,14 @@ bool LevelLoader::load(const std::string& path,
                             world.add<Transform>(e, t);
                             world.add<PrevTransform>(e, PrevTransform{t});
                             world.add<Renderable>(e, r);
+                            // The lit-window part (WS3): warm interior glow,
+                            // raised after dusk by the day/night NightGlow pass
+                            // — dark at noon by construction (emission starts
+                            // 0; the material equals Glass by day).
+                            if (static_cast<PartId>(pi) == PartId::GlassLit)
+                                world.add<engine::NightGlow>(
+                                    e, engine::NightGlow{
+                                           Vec3(1.0, 0.72, 0.38) * 1.3});
                         }
                     }
                 };
@@ -3389,13 +3397,19 @@ bool LevelLoader::load(const std::string& path,
                     InstanceGroup glow;
                     glow.mesh = glowMesh;
                     glow.material.albedo = Vec3(0.25, 0.21, 0.12);
-                    glow.material.emission = Vec3(1.0, 0.85, 0.55) * 1.6;
+                    // Emission starts DARK: lamps glowed 24/7 before (WS3).
+                    // The NightGlow tag hands the full emission to the
+                    // day/night pass, which scales it on the shared dusk ramp.
+                    glow.material.emission = Vec3(0, 0, 0);
                     glow.material.roughness = 0.4f;
                     glow.transforms = std::move(transforms);
                     glow.drawDistance = 650.0;
                     glow.drawClass = engine::DrawClass::Effect;
                     groupBounds(glow, lp.height + 1.0);
-                    world.add<InstanceGroup>(world.create(), glow);
+                    Entity glowE = world.create();
+                    world.add<InstanceGroup>(glowE, glow);
+                    world.add<engine::NightGlow>(
+                        glowE, engine::NightGlow{Vec3(1.0, 0.85, 0.55) * 1.6});
                 }
             }
             LOG_INFO << "[furniture] " << sf.signalPoles.size() << " signals, "

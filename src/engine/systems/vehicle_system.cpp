@@ -260,6 +260,16 @@ void VehicleSystem::driveVehicles(FrameContext& ctx) {
 
 void VehicleSystem::writeBack(FrameContext& ctx) {
     PhysicsWorld& pw = physicsSys.physicsWorld();
+    // Headlight cones (WS3): collect candidate SpotLight pairs from every
+    // vehicle whose headlights are lit this step, then keep the nearest few
+    // under the shared 32-light budget (player-driven car always first).
+    // Staged into lighting.vehicleSpots; RenderSystem merges on a copy.
+    struct ConeCand {
+        Real priority;   // 0 = player (wins), else camera distance
+        SpotLight left, right;
+    };
+    std::vector<ConeCand> cones;
+    const Vec3 camPos = ctx.view.camera.position;
     ctx.world.each<Transform, PrevTransform, Vehicle>(
         [&](Entity e, Transform& t, PrevTransform& prev, Vehicle& v) {
             if (v.vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
@@ -347,6 +357,34 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
                 r->material.emission = e;
             }
 
+            // Headlight CONES (WS3, the ADR-0065 deferred row): lit headlights
+            // cast real SpotLights on the road, not just glowing lenses. Beam
+            // from each front lamp housing, pitched down ~8 deg so the pool
+            // lands ahead of the bumper. Unshadowed (sun-only shadow maps) —
+            // cones leak through walls; accepted v1, noted in the debt row.
+            if (lit.head) {
+                ConeCand cand;
+                cand.priority = v.driver.valid()
+                                    ? Real(0)
+                                    : (t.position - camPos).length();
+                const Vec3 fwd = t.orientation.rotate(Vec3(0, 0, 1));
+                const Vec3 beamDir = normalize(fwd + Vec3(0, -0.14, 0));
+                const Vec3 warm(1.0, 0.95, 0.82);
+                int frontSeen = 0;
+                for (const Vehicle::Lamp& lamp : v.lamps) {
+                    if (!lamp.front) continue;
+                    const Vec3 at =
+                        t.position + t.orientation.rotate(lamp.local) +
+                        fwd * 0.25;
+                    SpotLight beam(at, beamDir, warm, /*intensity=*/22.0f,
+                                   /*inner=*/0.32f, /*outer=*/0.55f);
+                    beam.range = 45.0f;
+                    (frontSeen == 0 ? cand.left : cand.right) = beam;
+                    if (++frontSeen == 2) break;
+                }
+                if (frontSeen == 2) cones.push_back(std::move(cand));
+            }
+
             // Driver capsule: in the seat when occupied — by a seated PLAYER or by
             // an AI brain (AgentDriver) — stowed far below otherwise. Seeing the
             // capsule is the proof that an agent is IN the car, not that the car
@@ -380,6 +418,24 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
                     pt->position = t.position;
             }
         });
+
+    // Publish the nearest headlight cones (player first: priority 0). Three
+    // vehicles' worth = 6 spot slots — with the sun/moon, 14 street lamps and
+    // authored lights that stays comfortably inside the 32-light array.
+    auto& spots = ctx.view.lighting.vehicleSpots;
+    spots.clear();
+    constexpr size_t kMaxConeVehicles = 3;
+    if (cones.size() > kMaxConeVehicles) {
+        std::nth_element(cones.begin(), cones.begin() + kMaxConeVehicles,
+                         cones.end(), [](const ConeCand& a, const ConeCand& b) {
+                             return a.priority < b.priority;
+                         });
+        cones.resize(kMaxConeVehicles);
+    }
+    for (const ConeCand& c : cones) {
+        spots.push_back(c.left);
+        spots.push_back(c.right);
+    }
 }
 
 void VehicleSystem::handleEnterExit(FrameContext& ctx) {

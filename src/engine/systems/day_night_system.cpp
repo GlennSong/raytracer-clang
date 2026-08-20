@@ -1,5 +1,6 @@
 #include "day_night_system.h"
 #include "../components.h"
+#include "../vehicle_lamps.h"   // duskRamp: night glow shares the lamp boundary
 
 #include "../../log.h"
 
@@ -220,6 +221,7 @@ void DayNightSystem::update(FrameContext& ctx) {
     // edits live even while the simulation is paused.
     if (enabled && levelEnabled && !hdrEnvironmentActive(ctx)) applyLighting(ctx);
     applyClouds(ctx);
+    applyNightGlow(ctx);   // even with the cycle off: static dusk levels glow
 }
 
 // Push the current cycle state into both the procedural sky colors and the
@@ -259,6 +261,26 @@ void DayNightSystem::applyLighting(FrameContext& ctx) {
         std::min(1.0, std::max(0.0, (st.solarElevation + 0.10) / 0.30)));
     const float dayEase = dayF * dayF * (3.0f - 2.0f * dayF);
     lit.exposure = baseExposure_ * (1.0f + (kNightAdapt - 1.0f) * (1.0f - dayEase));
+}
+
+// NIGHT GLOW (WS3): everything the loader tagged — street-lamp glow shells,
+// lit building windows — fades in on the shared dusk ramp, so every light in
+// the city agrees with the headlights on when evening starts. Runs even when
+// the CYCLE is off: a static level authored at dusk still glows, because
+// solarElevation carries the authored sun's truth. Emission-only writes — no
+// structural mutation inside each() (ADR-0006).
+void DayNightSystem::applyNightGlow(FrameContext& ctx) {
+    const Real ramp = duskRamp(ctx.view.lighting.solarElevation);
+    if (ramp == lastGlowRamp_) return;   // emission writes only on change
+    lastGlowRamp_ = ramp;
+    ctx.world.each<NightGlow, Renderable>(
+        [&](Entity, NightGlow& glow, Renderable& r) {
+            r.material.emission = glow.fullEmission * ramp;
+        });
+    ctx.world.each<NightGlow, InstanceGroup>(
+        [&](Entity, NightGlow& glow, InstanceGroup& g) {
+            g.material.emission = glow.fullEmission * ramp;
+        });
 }
 
 // Cloud parameters are independent of the day/night toggle; the shader shades

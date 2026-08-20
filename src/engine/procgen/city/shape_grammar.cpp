@@ -104,10 +104,33 @@ Vec3 facadeColor(FacadeStyle style, uint32_t seed) {
     }
 }
 
+// Deterministic per-opening night-light coin flip (WS3): hash the opening's
+// QUANTIZED world position, so the full, flat (LOD1) and curtain-wall emitters
+// all agree on which windows glow — an LOD swap never flickers a window on or
+// off — and rebuilds of the same city light the same homes. ~1/3 lit: enough
+// that every block reads inhabited, sparse enough to stay night.
+bool litWindow(const Vec3& worldPos) {
+    const int32_t qx = static_cast<int32_t>(std::floor(worldPos.x * 2.0));
+    const int32_t qy = static_cast<int32_t>(std::floor(worldPos.y * 2.0));
+    const int32_t qz = static_cast<int32_t>(std::floor(worldPos.z * 2.0));
+    uint32_t h = static_cast<uint32_t>(qx) * 0x8da6b343u ^
+                 static_cast<uint32_t>(qy) * 0xd8163841u ^
+                 static_cast<uint32_t>(qz) * 0xcb1ab31fu;
+    h ^= h >> 13;
+    h *= 0x9e3779b1u;
+    h ^= h >> 16;
+    return (h & 0xffu) < 85;   // ~exactly 1/3
+}
+
 RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
     RenderMaterial m;
     switch (id) {
         case PartId::Glass:
+            m.albedo = {0.18, 0.27, 0.34}; m.metallic = 0.9f; m.roughness = 0.08f; break;
+        case PartId::GlassLit:
+            // Indistinguishable from Glass by DAY — the lit third of the
+            // windows must not read as a checkerboard at noon. Night is the
+            // loader's NightGlow tag raising emission, not this material.
             m.albedo = {0.18, 0.27, 0.34}; m.metallic = 0.9f; m.roughness = 0.08f; break;
         case PartId::Trim:
             m.albedo = wallColor * 0.55; m.metallic = 0.0f; m.roughness = 0.7f; break;
@@ -351,7 +374,7 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
                          FacadeDetail detail = FacadeDetail::Full) {
     Real fh = fr.height, W = fr.width;
     if (W < 0.5 || fh < 0.5) return;
-    RenderMesh glass, mull;
+    RenderMesh glass, glassLit, mull;
     Vec3 glassCol = materialFor(PartId::Glass, wallColor).albedo;
     Vec3 spandrelCol = glassCol * 0.45;          // opaque shadow-box band
     Vec3 mullCol(0.34, 0.36, 0.40);              // steel mullions
@@ -365,12 +388,18 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
     emitQuad(glass, fr.at(0, 0) + gin, fr.at(W, 0) + gin,
              fr.at(W, spandrelH) + gin, fr.at(0, spandrelH) + gin,
              fr.n, spandrelCol);                 // spandrel (floor-slab band)
-    emitQuad(glass, fr.at(0, spandrelH) + gin, fr.at(W, spandrelH) + gin,
+    // Vision glass: offices light per STOREY-FACE at night — a third of the
+    // tower's floors glow, chosen by the same position hash as the punched
+    // windows (LOD-stable). The spandrel band stays dark.
+    RenderMesh& vision =
+        litWindow(fr.at(0, spandrelH)) ? glassLit : glass;
+    emitQuad(vision, fr.at(0, spandrelH) + gin, fr.at(W, spandrelH) + gin,
              fr.at(W, fh) + gin, fr.at(0, fh) + gin, fr.n, glassCol);   // vision glass
     // FLAT (LOD1): the spandrel band + vision pane carry the curtain-wall read
     // at distance; the solid mullion lattice is the expensive half — skip it.
     if (detail == FacadeDetail::Flat) {
         appendToPart(out, PartId::Glass, glass);
+        appendToPart(out, PartId::GlassLit, glassLit);
         return;
     }
 
@@ -405,6 +434,7 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
         bar(0, t0, W, t1, false);
     }
     appendToPart(out, PartId::Glass, glass);
+    appendToPart(out, PartId::GlassLit, glassLit);
     appendToPart(out, PartId::Detail, mull);     // mullions read as metal detail
 }
 void emitCurtainWall(BuildingMesh& out, const Scope& storey, int side,
@@ -495,20 +525,25 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
 // of ~40; the wall is 2 instead of ~10 per bay.
 static void emitFlatFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
                                const BuildingParams& p, const Vec3& wallColor) {
-    RenderMesh wall, glass, door;
+    RenderMesh wall, glass, glassLit, door;
     emitQuad(wall, fr.at(0, 0), fr.at(fr.width, 0),
              fr.at(fr.width, fr.height), fr.at(0, fr.height), fr.n, wallColor);
     const Vec3 proud = fr.n * 0.02;
     const Vec3 gcol = materialFor(PartId::Glass, wallColor).albedo;
     const Vec3 dcol = materialFor(PartId::Door, wallColor).albedo;
     for (const BayOpening& o : facadeLayout(fr, mode, p).open) {
-        RenderMesh& dst = o.entrance ? door : glass;
+        // Same anchor as the full emitter's pane (fr.at(wx0, sill)), so a
+        // window keeps its lit/dark choice across the LOD swap.
+        RenderMesh& dst =
+            o.entrance ? door
+                       : (litWindow(fr.at(o.wx0, o.sill)) ? glassLit : glass);
         emitQuad(dst, fr.at(o.wx0, o.sill) + proud, fr.at(o.wx1, o.sill) + proud,
                  fr.at(o.wx1, o.head) + proud, fr.at(o.wx0, o.head) + proud,
                  fr.n, o.entrance ? dcol : gcol);
     }
     appendToPart(out, p.wallPart, wall);
     appendToPart(out, PartId::Glass, glass);
+    appendToPart(out, PartId::GlassLit, glassLit);
     appendToPart(out, PartId::Door, door);
 }
 
@@ -517,7 +552,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
     // Accumulate into locals, then append once each — never hold a part reference
     // across a partMesh() that could reallocate out.parts.
     // surround = sill/hood trim courses; frame = window frames + muntin lights.
-    RenderMesh wall, glass, door, surround, frame;
+    RenderMesh wall, glass, glassLit, door, surround, frame;
 
     // The splitter's decisions come from the SHARED layout (see facadeLayout):
     // this function only decides how much detail to draw them with.
@@ -730,12 +765,16 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             }
 
             // GLASS: the full opening behind the frame — a rectangle to the
-            // springline plus (for an arch) a lunette fan to the arc.
-            emitQuad(glass, oBL + in, oBR + in, oTR + in, oTL + in, fr.n, gcol);
+            // springline plus (for an arch) a lunette fan to the arc. A third
+            // of the panes route to GlassLit (litWindow — same anchor the flat
+            // emitter hashes, so LOD swaps keep the same homes lit).
+            RenderMesh& pane =
+                litWindow(fr.at(wx0, openSill)) ? glassLit : glass;
+            emitQuad(pane, oBL + in, oBR + in, oTR + in, oTL + in, fr.n, gcol);
             if (rise > 0) {
                 Vec3 S = fr.at(cx, ysp) + in;
                 for (int k = 0; k < NARC; ++k)
-                    MeshBuilder::emitTri(glass, S, fr.at(arc[k].x, arc[k].y) + in,
+                    MeshBuilder::emitTri(pane, S, fr.at(arc[k].x, arc[k].y) + in,
                                          fr.at(arc[k + 1].x, arc[k + 1].y) + in,
                                          fr.n, gcol);
             }
@@ -825,6 +864,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
     // brick/concrete/stucco/metal, or the flat Wall).
     appendToPart(out, p.wallPart, wall);
     appendToPart(out, PartId::Glass, glass);
+    appendToPart(out, PartId::GlassLit, glassLit);
     appendToPart(out, PartId::Door, door);
     appendToPart(out, PartId::Trim, surround);
     appendToPart(out, PartId::Detail, frame);   // frames/muntins read as joinery

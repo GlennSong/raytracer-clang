@@ -1,5 +1,6 @@
 #include "render_system.h"
 #include "../components.h"
+#include "../vehicle_lamps.h"   // duskRamp: street lights share the headlight boundary
 #include "../../profile.h"
 
 #include <algorithm>
@@ -70,34 +71,57 @@ void RenderSystem::render(FrameContext& ctx) {
     // street lights"): the loader's StreetFurniture carries every bulb
     // position; each frame the nearest few join the light list on a COPY, so
     // level-authored point lights are never displaced or accumulated into.
+    // NIGHT-GATED (WS3): the dusk ramp fades them in as the sun sinks — they
+    // ran 24/7 before, invisible against daylight and stealing 14 of the 32
+    // light slots at noon for nothing.
     {
+        const Real dusk = duskRamp(ctx.view.lighting.solarElevation);
         bool lit = false;
         SceneLighting withLamps;
-        ctx.world.each<StreetFurniture>([&](Entity, StreetFurniture& f) {
-            if (f.lampHeads.empty() || lit) return;
-            const Vec3 eye = ctx.view.camera.position;
-            constexpr int kMaxLampLights = 14;      // leave room for authored lights
-            const Real maxDist2 = 160.0 * 160.0;    // beyond this a bulb is subpixel
-            std::vector<std::pair<Real, const Vec3*>> nearBulbs;
-            for (const Vec3& h : f.lampHeads) {
-                const Real d2 = (h - eye).lengthSquared();
-                if (d2 < maxDist2) nearBulbs.emplace_back(d2, &h);
-            }
-            if (nearBulbs.empty()) return;
-            if (static_cast<int>(nearBulbs.size()) > kMaxLampLights) {
-                std::nth_element(nearBulbs.begin(),
-                                 nearBulbs.begin() + kMaxLampLights, nearBulbs.end(),
-                                 [](const auto& a, const auto& b) {
-                                     return a.first < b.first;
-                                 });
-                nearBulbs.resize(kMaxLampLights);
-            }
-            withLamps = ctx.view.lighting;
-            for (const auto& [d2, h] : nearBulbs)
-                withLamps.pointLights.push_back(PointLight(
-                    *h - Vec3(0, 0.35, 0), Vec3(1.0, 0.82, 0.55), 30.0f));
-            lit = true;
-        });
+        // Headlight cones staged by VehicleSystem merge on the same copy —
+        // they exist whenever headlights are lit (dusk by the shared ramp, or
+        // the player's manual L toggle at noon).
+        const auto& coneSpots = ctx.view.lighting.vehicleSpots;
+        if (dusk > 0.01) {
+            ctx.world.each<StreetFurniture>([&](Entity, StreetFurniture& f) {
+                if (f.lampHeads.empty() || lit) return;
+                const Vec3 eye = ctx.view.camera.position;
+                constexpr int kMaxLampLights = 14;  // room for authored + headlights
+                const Real maxDist2 = 160.0 * 160.0;   // beyond this a bulb is subpixel
+                std::vector<std::pair<Real, const Vec3*>> nearBulbs;
+                for (const Vec3& h : f.lampHeads) {
+                    const Real d2 = (h - eye).lengthSquared();
+                    if (d2 < maxDist2) nearBulbs.emplace_back(d2, &h);
+                }
+                if (nearBulbs.empty()) return;
+                if (static_cast<int>(nearBulbs.size()) > kMaxLampLights) {
+                    std::nth_element(nearBulbs.begin(),
+                                     nearBulbs.begin() + kMaxLampLights,
+                                     nearBulbs.end(),
+                                     [](const auto& a, const auto& b) {
+                                         return a.first < b.first;
+                                     });
+                    nearBulbs.resize(kMaxLampLights);
+                }
+                withLamps = ctx.view.lighting;
+                // Range 30 (default 25 was tuned against daylight where the
+                // pool was invisible); intensity rides the dusk ramp so lamps
+                // warm up through twilight instead of popping.
+                for (const auto& [d2, h] : nearBulbs) {
+                    PointLight lamp(*h - Vec3(0, 0.35, 0),
+                                    Vec3(1.0, 0.82, 0.55),
+                                    30.0f * static_cast<float>(dusk));
+                    lamp.range = 30.0f;
+                    withLamps.pointLights.push_back(lamp);
+                }
+                lit = true;
+            });
+        }
+        if (!coneSpots.empty()) {
+            if (!lit) { withLamps = ctx.view.lighting; lit = true; }
+            for (const SpotLight& s : coneSpots)
+                withLamps.spotLights.push_back(s);
+        }
         ctx.renderer.setLights(lit ? withLamps : ctx.view.lighting);
     }
 

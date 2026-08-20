@@ -53,8 +53,18 @@ enum class PartId : uint8_t {
     Utility, // HVAC service panels (UtilityPanel surface, short faces)
     Fan,     // HVAC fan cowl top (FanTop surface, centred disc UVs)
     Shingle, // pitched roof slopes (RoofShingle surface, slope-fitted UVs)
+    GlassLit,// the ~1/3 of window panes that light up at night (WS3): same
+             // material as Glass by day; the loader tags these chunks with
+             // NightGlow and the day/night cycle raises their emission after
+             // dusk. Chosen per opening by a position hash (litWindow), so the
+             // SAME windows glow at every LOD and across rebuilds.
     Count    // KEEP LAST: materialIndexFor is the ordinal; arrays size by Count
 };
+
+// Deterministic per-opening night-light choice, shared by every facade
+// emitter (full, flat, curtain wall) so LOD transitions never flicker a
+// window on or off: quantized world position in, stable coin-flip out.
+bool litWindow(const Vec3& worldPos);
 
 // Facade material style (the "different facades like brick or concrete" axis).
 // At the merged-model scale, style varies the wall *colour* per building (carried

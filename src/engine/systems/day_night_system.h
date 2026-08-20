@@ -66,6 +66,12 @@ private:
     float baseExposure_ = -1.0f;
     static constexpr float kNightAdapt = 6.0f;   // midnight exposure multiplier
 
+    // NightGlow pass (WS3): scales tagged emissive materials on the dusk ramp
+    // every frame (skipped while the ramp is unchanged). -1 forces the first
+    // application even at noon (spawn emission is 0 anyway).
+    void applyNightGlow(FrameContext& ctx);
+    Real lastGlowRamp_ = -1.0;
+
     // The level's authored volumetric deck, captured on first sight: the
     // artistic knobs write ABSOLUTE values derived from this base each frame
     // (a relative per-frame mutation would compound).

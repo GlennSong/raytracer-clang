@@ -312,3 +312,27 @@ TEST_CASE(parks_are_sculpted_with_paths_and_tree_spots) {
         CHECK(lots[i].treeSpots.size() == lots2[i].treeSpots.size());
     }
 }
+
+// WS3 lit windows: the per-opening night-light choice is a pure position
+// hash — deterministic (LOD emitters and rebuilds agree on which homes glow)
+// and roughly a third lit (inhabited, still night).
+TEST_CASE(lit_window_choice_is_deterministic_and_about_a_third) {
+    int lit = 0, n = 0;
+    for (int x = 0; x < 40; ++x)
+        for (int y = 0; y < 10; ++y)
+            for (int z = 0; z < 25; ++z) {
+                const Vec3 p(x * 1.7, y * 2.9, z * 2.3);
+                const bool a = litWindow(p);
+                CHECK(a == litWindow(p));   // stable
+                lit += a ? 1 : 0;
+                ++n;
+            }
+    const double frac = static_cast<double>(lit) / n;
+    CHECK(frac > 0.25);
+    CHECK(frac < 0.42);
+    // Sub-quantum jitter maps to the same cell: the full emitter's pane anchor
+    // and the flat emitter's (identical in exact arithmetic, but computed via
+    // different expressions) can differ by float noise without flipping a
+    // window's choice.
+    CHECK(litWindow(Vec3(10.0, 5.0, 3.0)) == litWindow(Vec3(10.01, 5.01, 3.01)));
+}

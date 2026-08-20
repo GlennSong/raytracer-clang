@@ -391,6 +391,16 @@ struct AgentDriver {
     int agentId = -1;           // brain handle (CitySim agent index); -1 = none
 };
 
+// Night-gated emission (WS3, "street lights, building window lights"): a
+// DayNightSystem pass scales this entity's Renderable (or InstanceGroup)
+// material emission from black at noon to `fullEmission` at night, on the
+// SAME dusk ramp the headlights and street-lamp point lights use — every
+// light in the city agrees on when evening starts. Runtime-only (the loader
+// tags lamp glow shells and lit-window chunks; never saved).
+struct NightGlow {
+    Vec3 fullEmission{1.0, 0.85, 0.55};
+};
+
 // Level-authored city-simulation settings (ADR-0063): a top-level "citysim"
 // block in the level JSON becomes one entity carrying this, and the city render
 // bridge reads it at build. Lets a level choose its own population — the agent
