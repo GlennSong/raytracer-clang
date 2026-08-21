@@ -1,5 +1,7 @@
 #include "street_furniture.h"
 
+#include <unordered_map>
+
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -91,24 +93,71 @@ StreetFurniturePlan planStreetFurniture(
     // directed link per direction, so both sides light up and the pattern
     // alternates naturally. Freeway-width carriageways have no sidewalk to
     // stand on; junction mouths are left to the signal poles.
+    // LAMPS every `lampSpacing` metres of KERB — measured along the street,
+    // NOT per graph link. A nav link is a tessellation segment: on this city
+    // they average 6.7 m, and the old per-link rule ("one lamp at the middle
+    // of any link longer than 0.6 * spacing") therefore threw away 7120 of
+    // 7288 links and lit only the rare long straight. That is why the city
+    // was dark. Sampling each kerb finely and enforcing the spacing with a
+    // grid gives even lighting whatever the tessellation does.
+    //
+    // The spacing test is DIRECTION AWARE: the two kerbs of a two-way street
+    // are only a carriageway apart (12-17 m, inside the spacing), so a plain
+    // radius test would let one side suppress the other and light every
+    // street down one side only. Lamps facing opposite ways are different
+    // kerbs and never suppress each other.
+    struct PlacedLamp { Vec2 at; Vec2 dir; };
+    std::unordered_map<long long, std::vector<PlacedLamp>> grid;
+    const Real cell = std::max(Real(1), p.lampSpacing);
+    auto cellKey = [](int cx, int cz) {
+        return static_cast<long long>(cx) * 73856093LL ^
+               static_cast<long long>(cz) * 19349663LL;
+    };
+    auto tooClose = [&](Vec2 v, Vec2 d) {
+        const int cx = static_cast<int>(std::floor(v.x / cell));
+        const int cz = static_cast<int>(std::floor(v.y / cell));
+        for (int dz = -1; dz <= 1; ++dz)
+            for (int dx = -1; dx <= 1; ++dx) {
+                auto it = grid.find(cellKey(cx + dx, cz + dz));
+                if (it == grid.end()) continue;
+                for (const PlacedLamp& q : it->second)
+                    if (dot(q.dir, d) > 0 &&
+                        (q.at - v).length() < p.lampSpacing * Real(0.85))
+                        return true;
+            }
+        return false;
+    };
+
     for (int li = 0; li < nav.linkCount(); ++li) {
         const NavLink& L = nav.links[li];
         if (L.klass == RoadClass::Freeway || L.klass == RoadClass::Ramp)
-            continue;   // §10: corridor lighting is its own pass, not lamps
+            continue;   // corridor lighting is its own pass, not lamps
         if (L.width > p.maxLampRoadWidth) continue;
-        Vec2 a = nav.nodes[L.from], b = nav.nodes[L.to];
+        const Vec2 a = nav.nodes[L.from], b = nav.nodes[L.to];
         const Real len = (b - a).length();
-        if (len < p.lampSpacing * 0.6) continue;
-        const int n = std::max(1, static_cast<int>(std::floor(len / p.lampSpacing)));
-        for (int k = 0; k < n; ++k) {
-            const Real t = (k + 0.5) / n;
-            Vec2 sp = nav.sidewalkPoint(li, t, p.lampVerge);
-            if ((sp - nav.nodes[L.to]).length() < p.junctionClear ||
-                (sp - nav.nodes[L.from]).length() < p.junctionClear)
-                continue;
+        if (len < Real(0.5)) continue;
+        const Vec2 dir = (b - a) * (Real(1) / len);
+        // Sample finely along the segment; the grid decides what survives.
+        const int steps = std::max(1, static_cast<int>(std::ceil(len / Real(2.5))));
+        for (int k = 0; k <= steps; ++k) {
+            const Real t = static_cast<Real>(k) / steps;
+            const Vec2 sp = nav.sidewalkPoint(li, t, p.lampVerge);
+            // Clear of real JUNCTIONS only — a nav node is usually just a
+            // curve vertex, and treating those as junctions blanked the
+            // curved avenues that make up most of this city.
+            const bool nearJunction =
+                (nav.isJunction(L.to) &&
+                 (sp - nav.nodes[L.to]).length() < p.junctionClear) ||
+                (nav.isJunction(L.from) &&
+                 (sp - nav.nodes[L.from]).length() < p.junctionClear);
+            if (nearJunction) continue;
+            if (tooClose(sp, dir)) continue;
             const Real y = gy(sp.x, sp.y) + L.layer * kLayerLift;
             out.lampBases.push_back(Vec3(sp.x, y, sp.y));
             out.lampHeads.push_back(Vec3(sp.x, y + p.lampHeight, sp.y));
+            const int cx = static_cast<int>(std::floor(sp.x / cell));
+            const int cz = static_cast<int>(std::floor(sp.y / cell));
+            grid[cellKey(cx, cz)].push_back({sp, dir});
         }
     }
     return out;

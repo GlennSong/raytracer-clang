@@ -86,7 +86,12 @@ void RenderSystem::render(FrameContext& ctx) {
             ctx.world.each<StreetFurniture>([&](Entity, StreetFurniture& f) {
                 if (f.lampHeads.empty() || lit) return;
                 const Vec3 eye = ctx.view.camera.position;
-                constexpr int kMaxLampLights = 14;  // room for authored + headlights
+                // 20 of the 32 slots: more lamps only brighten the street if
+                // more of them are REAL lights, and 14 ran out within half a
+                // block. Leaves the sun/moon, 6 headlight cones and authored
+                // lights room (the renderer loops every light per fragment,
+                // so this is the honest cost knob for night).
+                constexpr int kMaxLampLights = 20;
                 const Real maxDist2 = 160.0 * 160.0;   // beyond this a bulb is subpixel
                 std::vector<std::pair<Real, const Vec3*>> nearBulbs;
                 for (const Vec3& h : f.lampHeads) {
@@ -104,14 +109,15 @@ void RenderSystem::render(FrameContext& ctx) {
                     nearBulbs.resize(kMaxLampLights);
                 }
                 withLamps = ctx.view.lighting;
-                // Range 30 (default 25 was tuned against daylight where the
-                // pool was invisible); intensity rides the dusk ramp so lamps
+                // Range 34 against 26 m spacing, so consecutive pools MEET —
+                // at 30/34 they fell short and the pavement went dark between
+                // every pair of lamps. Intensity rides the dusk ramp so lamps
                 // warm up through twilight instead of popping.
                 for (const auto& [d2, h] : nearBulbs) {
                     PointLight lamp(*h - Vec3(0, 0.35, 0),
                                     Vec3(1.0, 0.82, 0.55),
-                                    30.0f * static_cast<float>(dusk));
-                    lamp.range = 30.0f;
+                                    48.0f * static_cast<float>(dusk));
+                    lamp.range = 34.0f;
                     withLamps.pointLights.push_back(lamp);
                 }
                 lit = true;

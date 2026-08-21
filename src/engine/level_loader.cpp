@@ -3502,7 +3502,7 @@ bool LevelLoader::load(const std::string& path,
                     Entity glowE = world.create();
                     world.add<InstanceGroup>(glowE, glow);
                     world.add<engine::NightGlow>(
-                        glowE, engine::NightGlow{Vec3(1.0, 0.85, 0.55) * 1.6});
+                        glowE, engine::NightGlow{Vec3(1.0, 0.85, 0.55) * 4.5});
                 }
             }
             LOG_INFO << "[furniture] " << sf.signalPoles.size() << " signals, "

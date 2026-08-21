@@ -30,12 +30,23 @@ struct StreetFurnitureParams {
     // without it stands on the pad's asphalt — the "stoplight in the middle
     // of the road". The kerb-corner pole must back off past the pad mouth.
     Real sidewalkWidth = 3.5;
-    Real lampSpacing = 34.0;       // metres between lamps along one direction
+    // 26 m between lamps: close enough that the 34 m pools OVERLAP rather
+    // than leaving a dark gap between every pair (device: "it's pretty dark
+    // in the city at night").
+    Real lampSpacing = 26.0;       // metres between lamps along one direction
     Real lampVerge = 1.2;          // beyond the kerb, matching ped verge
-    Real maxLampRoadWidth = 16.0;  // no lamps on freeway-width carriageways
+    // The gate that left every ARTERIAL dark. Its comment said "no lamps on
+    // freeway-width carriageways", but freeways and ramps are already
+    // excluded by road CLASS above — so all this actually did was reject
+    // arterials, whose carriageway is 17 m in the metro recipe against this
+    // 16 m bar. The main roads of the city had no street lighting at all.
+    // Kept as a real guard for anything genuinely wider than a city street.
+    Real maxLampRoadWidth = 26.0;
     Real curbGap = 0.8;            // pole stands this far beyond the kerb
     Real lampHeight = 4.6;         // = street_kit LampParams.height (head Y)
-    Real junctionClear = 12.0;     // no lamps this close to a junction corner
+    // 10 m, not 12: junction corners are exactly where a pedestrian wants
+    // light. Still clear of the signal poles, which stand ~9.6 m out.
+    Real junctionClear = 10.0;     // no lamps this close to a junction corner
 };
 
 struct StreetFurniturePlan {
