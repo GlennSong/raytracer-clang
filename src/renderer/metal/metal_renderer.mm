@@ -774,7 +774,27 @@ struct MetalRenderer::Impl {
 
     CameraUniforms cameraUniforms;
     LightUniforms lightUniforms;
-    id<MTLBuffer> lightBuffer;
+    // LIGHT UNIFORMS ARE RING-BUFFERED. This was ONE buffer that setLights
+    // memcpy'd every frame with no frames-in-flight tracking of any kind —
+    // and Metal lets the CPU run ahead, so that memcpy landed in the exact
+    // buffer the GPU was still reading for the PREVIOUS frame's shading. The
+    // tiles it had already shaded kept the old lights, the rest got the new
+    // ones, and the tear showed up as transient screen-aligned rectangles of
+    // differently-lit scene (device: "I see that for a frame and then it
+    // disappears... parts of the screen can't update fast enough").
+    //
+    // It only ever showed at NIGHT because that is the only time the array
+    // CHANGES per frame: by day the list is just the sun, so a torn read is
+    // byte-identical to a clean one. Street lamps made it visible, they did
+    // not cause it — the race has been here as long as this buffer has.
+    //
+    // Three deep matches the drawable queue: nextDrawable blocks once three
+    // are in flight, so the CPU can never be more than three frames ahead of
+    // the GPU and can never land on a buffer still being read.
+    static constexpr int kLightRing = 3;
+    id<MTLBuffer> lightRing[kLightRing];
+    int lightRingIndex = 0;
+    id<MTLBuffer> lightBufferCurrent() const { return lightRing[lightRingIndex]; }
 
     // Skybox
     id<MTLRenderPipelineState> skyboxPipeline;
@@ -1704,9 +1724,11 @@ bool MetalRenderer::initialize(void* windowHandle, int width, int height) {
                                      options:MTLResourceStorageModeShared];
     }
 
-    // Light uniform buffer (exceeds setBytes 4KB limit with 32 lights)
-    impl->lightBuffer = [impl->device newBufferWithLength:sizeof(LightUniforms)
-                                                  options:MTLResourceStorageModeShared];
+    // Light uniform buffers (exceed the setBytes 4KB limit with 32 lights), one
+    // per frame in flight — see Impl::lightRing for why a single one tears.
+    for (int i = 0; i < Impl::kLightRing; ++i)
+        impl->lightRing[i] = [impl->device newBufferWithLength:sizeof(LightUniforms)
+                                                       options:MTLResourceStorageModeShared];
 
     // Shadow map: a depth-texture array, one slice per shadow cascade.
     {
@@ -2726,7 +2748,7 @@ void MetalRenderer::Impl::updateSkyResources() {
         id<MTLRenderCommandEncoder> enc = [cmd renderCommandEncoderWithDescriptor:rp];
         [enc setRenderPipelineState:skyCubeBakePipeline];
         [enc setVertexBytes:&cam length:sizeof(cam) atIndex:1];
-        [enc setFragmentBuffer:lightBuffer offset:0 atIndex:4];
+        [enc setFragmentBuffer:lightBufferCurrent() offset:0 atIndex:4];
         [enc setFragmentTexture:skyViewLUT atIndex:0];
         [enc setFragmentTexture:skyTransmittanceLUT atIndex:1];
         [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
@@ -3375,7 +3397,10 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
     impl->cloudsActive = lighting.volumetricClouds.enabled && volumetricCloudsEnabled;
     impl->skyCloudsEnabled = sky.cloudsEnabled && !impl->cloudsActive;
 
-    memcpy([impl->lightBuffer contents], &lu, sizeof(LightUniforms));
+    // Advance the ring BEFORE writing: never touch the buffer the in-flight
+    // frames were bound to. setLights is called once per frame (RenderSystem).
+    impl->lightRingIndex = (impl->lightRingIndex + 1) % Impl::kLightRing;
+    memcpy([impl->lightBufferCurrent() contents], &lu, sizeof(LightUniforms));
 }
 
 void MetalRenderer::setAtmosphere(const AtmosphereRenderParams& atmosphere) {
@@ -3550,7 +3575,7 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                     [enc setRenderPipelineState:impl->skyboxPipeline];
                     [enc setDepthStencilState:impl->skyboxDepthState];
                     [enc setVertexBytes:&faceCam length:sizeof(CameraUniforms) atIndex:1];
-                    [enc setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
+                    [enc setFragmentBuffer:impl->lightBufferCurrent() offset:0 atIndex:4];
                     // cloudsEnabled = 0: clouds are never baked into probes.
                     // The scattering sky's baked cube stands in for a captured
                     // HDR here, so probes reflect the same sky the screen shows.
@@ -3607,7 +3632,7 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                     [enc setVertexBytes:&modelU length:sizeof(ModelUniforms) atIndex:2];
                     [enc setFragmentBytes:&faceCam length:sizeof(CameraUniforms) atIndex:1];
                     [enc setFragmentBytes:&matU length:sizeof(MaterialUniforms) atIndex:3];
-                    [enc setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
+                    [enc setFragmentBuffer:impl->lightBufferCurrent() offset:0 atIndex:4];
                     [enc setFragmentTexture:impl->defaultWhiteTexture atIndex:3];
                     [enc setFragmentTexture:impl->defaultWhiteTexture atIndex:4];
                     [enc setFragmentTexture:impl->defaultWhiteTexture atIndex:5];
@@ -4006,7 +4031,7 @@ void MetalRenderer::endFrame() {
         [impl->currentEncoder setDepthStencilState:impl->skyboxDepthState];
         [impl->currentEncoder setVertexBytes:&impl->cameraUniforms
                                       length:sizeof(CameraUniforms) atIndex:1];
-        [impl->currentEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
+        [impl->currentEncoder setFragmentBuffer:impl->lightBufferCurrent() offset:0 atIndex:4];
         id<MTLTexture> envCube = environmentMapEnabled ? impl->environmentCubemap : nil;
         // Scattering sky (cinematic-sky): the skybox samples the sky-view LUT
         // directly (crisper than the 512 cube, and refreshed every bake). The
@@ -4118,7 +4143,7 @@ void MetalRenderer::endFrame() {
                                         length:sizeof(CameraUniforms) atIndex:1];
         [impl->currentEncoder setFragmentBytes:&matUniforms
                                         length:sizeof(MaterialUniforms) atIndex:3];
-        [impl->currentEncoder setFragmentBuffer:impl->lightBuffer
+        [impl->currentEncoder setFragmentBuffer:impl->lightBufferCurrent()
                                         offset:0 atIndex:4];
 
         [impl->currentEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
@@ -4219,7 +4244,7 @@ void MetalRenderer::endFrame() {
                                             length:sizeof(CameraUniforms) atIndex:1];
             // LightUniforms exceeds the 4KB setBytes limit (32 lights + sky) —
             // bind the persistent light buffer, as the single-draw path does.
-            [impl->currentEncoder setFragmentBuffer:impl->lightBuffer
+            [impl->currentEncoder setFragmentBuffer:impl->lightBufferCurrent()
                                              offset:0 atIndex:4];
 
             bindMaterialTextures(drawCalls[batchStart].material,
@@ -4315,7 +4340,7 @@ void MetalRenderer::endFrame() {
                                            offset:b.offset * sizeof(GPUInstanceData) atIndex:2];
             [impl->currentEncoder setFragmentBytes:&impl->cameraUniforms
                                             length:sizeof(CameraUniforms) atIndex:1];
-            [impl->currentEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
+            [impl->currentEncoder setFragmentBuffer:impl->lightBufferCurrent() offset:0 atIndex:4];
             bindMaterialTextures(b.material, computeTextureFlags(b.material));
             [impl->currentEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                                              indexCount:b.mesh->indexCount
@@ -4384,7 +4409,7 @@ void MetalRenderer::endFrame() {
                                             length:sizeof(CameraUniforms) atIndex:1];
             [impl->currentEncoder setFragmentBytes:&matU
                                             length:sizeof(MaterialUniforms) atIndex:3];
-            [impl->currentEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
+            [impl->currentEncoder setFragmentBuffer:impl->lightBufferCurrent() offset:0 atIndex:4];
             [impl->currentEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                                              indexCount:mesh->indexCount
                                               indexType:MTLIndexTypeUInt32
@@ -4944,7 +4969,7 @@ void MetalRenderer::endFrame() {
                                length:sizeof(compositeParams) atIndex:1];
         // Sky pixels pass the scene image through (the skybox pass drew the
         // real environment); lightData is still bound for exposure.
-        [compEncoder setFragmentBuffer:impl->lightBuffer offset:0 atIndex:4];
+        [compEncoder setFragmentBuffer:impl->lightBufferCurrent() offset:0 atIndex:4];
         [compEncoder setFragmentSamplerState:impl->linearClampSampler atIndex:0];
         [compEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 
