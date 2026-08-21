@@ -105,6 +105,18 @@ full and deterministic, keeps the opening set, keeps curtain-wall banding,
 and the lots pipeline emits the twin on request. Still owed: an on-device
 before/after (`RT_DUMP_DRAWS=1` + frame ledger).
 
+The metropolis family (`metropolis.json`, `metropolis_sky.json`,
+`metro_v2_test.json`, `hillcity.json`, `metropolis_roads.json`) shipped
+`detailDistance: 950` with no `facadeDistance` — i.e. two-tier, opted out of R2
+by omission — and now ships `detailDistance: 300, facadeDistance: 950`. The 950
+is deliberate: HLOD starts at `max(detailDistance, facadeDistance)`, so the mass
+boxes take over at exactly the same distance they always did and the only change
+is that 300-950 m is now flat facades instead of full grammar. `level_tests`
+confirms the tier engages (entity counts rise with the LOD1 chunks: metropolis
+2988 -> 3368, hillcity 2292 -> 2575, metro_v2_test 5341 -> 5824);
+`metropolis_roads.json` is unchanged at 47 entities because it sets
+`buildLots: false`.
+
 ### R3 — turn the haze back on, value-matched
 
 Raise fog toward the 0.002–0.003 band on city levels and tint the LOD2 mass
