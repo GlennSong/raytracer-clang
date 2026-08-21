@@ -72,7 +72,15 @@ void surfaceReliefRoad(float3 worldPos, thread float3& normal, thread float& rou
                  + 0.3 * vnoise2(rx * 37.0 + 2.3, rz * 37.0) - b0;
         float bz = vnoise2(rx * 2.6, rz * 2.6 + 0.4) + 0.5 * vnoise2(rx * 11.0, rz * 11.0 + 1.7)
                  + 0.3 * vnoise2(rx * 37.0, rz * 37.0 + 2.3) - b0;
-        normal = normalize(normal + float3(-bx, 0.0, -bz) * 0.6);
+        // 0.35, not 0.6. This tilt was tuned under the SUN — a distant light
+        // whose direction barely changes across a street, where a hard tilt
+        // reads as welcome grain. Street lamps are the first CLOSE, LOW lights
+        // this world has had: 4 m up and metres away, their direction sweeps
+        // rapidly and rakes the surface, so the same tilt turns into blotchy
+        // patches under every pool (device: "weird blocky glitches... it's
+        // gotta be the lights"). Softer keeps the asphalt reading bumpy by day
+        // without the night mottling.
+        normal = normalize(normal + float3(-bx, 0.0, -bz) * 0.35);
         float spk = vnoise2(rx * 23.0, rz * 23.0);
         rough = clamp(rough + (spk - 0.5) * 0.25, 0.55, 1.0);
 }
