@@ -108,15 +108,38 @@ void RenderSystem::render(FrameContext& ctx) {
                                      });
                     nearBulbs.resize(kMaxLampLights);
                 }
+                // FADE AT THE BOUNDARY. The set is a hard "nearest N within
+                // R" pick, so driving made lamps SNAP to full intensity the
+                // moment they entered it and vanish when they left — the
+                // "lights ahead turn on and it doesn't look seamless". Fade
+                // each lamp out toward whichever boundary it will cross
+                // first: the radius, or (when the count cap is binding) the
+                // distance of the farthest lamp currently selected, which is
+                // the edge that actually moves as the camera drives.
+                Real cutoff = 160.0;
+                if (static_cast<int>(nearBulbs.size()) >= kMaxLampLights) {
+                    Real farthest = 0;
+                    for (const auto& [d2, h] : nearBulbs)
+                        farthest = std::max(farthest, d2);
+                    cutoff = std::min(cutoff, std::sqrt(farthest));
+                }
                 withLamps = ctx.view.lighting;
                 // Range 34 against 26 m spacing, so consecutive pools MEET —
                 // at 30/34 they fell short and the pavement went dark between
                 // every pair of lamps. Intensity rides the dusk ramp so lamps
                 // warm up through twilight instead of popping.
                 for (const auto& [d2, h] : nearBulbs) {
+                    // 1 at the near end, easing to 0 across the last quarter
+                    // of the reach, so a lamp joins and leaves the set
+                    // invisibly instead of popping.
+                    const Real d = std::sqrt(d2);
+                    const Real edge = std::max(Real(1), cutoff);
+                    Real fade = (edge - d) / (0.25 * edge);
+                    fade = std::min(Real(1), std::max(Real(0), fade));
+                    fade = fade * fade * (3.0 - 2.0 * fade);   // smoothstep
                     PointLight lamp(*h - Vec3(0, 0.35, 0),
                                     Vec3(1.0, 0.82, 0.55),
-                                    48.0f * static_cast<float>(dusk));
+                                    48.0f * static_cast<float>(dusk * fade));
                     lamp.range = 34.0f;
                     withLamps.pointLights.push_back(lamp);
                 }

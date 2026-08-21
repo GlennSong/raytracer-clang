@@ -44,6 +44,18 @@ inline engine::LampMotion cityLampMotion(Agent::State state) {
     return engine::LampMotion::Rolling;
 }
 
+// SOLAR darkness, the renderer's truth. The clock-driven overload below is the
+// SIM's own vocabulary and stays for headless tests, but nothing syncs the
+// citysim clock to the day/night cycle — they are two independent clocks — so
+// using it to light traffic meant ambient cars kept their headlights OFF all
+// night while the player's car (which keys off the sun) had its on. One sky,
+// one answer: the renderer passes the sun's own elevation truth.
+inline CarLamps carLampStateSolar(Agent::State state, Real speed, Real prevSpeed,
+                                  bool dark, int turnDir) {
+    return engine::vehicleLampState(cityLampMotion(state), speed, prevSpeed, dark,
+                                    turnDir);
+}
+
 // The lamp state for one car this step. `turnDir`: -1 = turning left, +1 = turning
 // right, 0 = none (the route bend, via carTurnSide). `prevSpeed` is last step's
 // speed so a hard deceleration lights the brakes.

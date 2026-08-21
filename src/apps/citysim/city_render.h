@@ -464,6 +464,16 @@ private:
     std::vector<engine::AuthoredPlace> authoredPlaces_;
     PlaceMap places_;
     bool showPlaces_ = true;         // draw place markers + labels (ImGui overlay)
+    // The SUN's elevation, staged each frame from the render view so the bake
+    // (which runs without a FrameContext) can light traffic on the same truth
+    // the player's car and the street lamps use. Defaults to daylight.
+    Real solarElevation_ = 1.0;
+    // Whether a render view has actually staged the sun. Headless sims, the
+    // offline tracer and any host without the lighting pipeline never do, and
+    // there the SIM CLOCK remains the only truth there is — so the clock stays
+    // the documented fallback rather than every such context driving in the
+    // dark with its headlights off.
+    bool solarStaged_ = false;
     bool carsExternallyOwned_ = false;   // ADR-0062: a CityVehicleSystem owns the cars
     bool pedsExternallyOwned_ = false;   // ADR-0062: a CityWalkerSystem owns the peds
     std::vector<ExternalAgentPose> externalCarPoses_;   // real car poses for widgets

@@ -1332,8 +1332,15 @@ void CityRenderSystem::syncCarLamps(World& world) {
         int turnDir = carTurnDir(a);
         if (std::fabs(Real(a.lane) - a.laneF) > 0.12)
             turnDir = (Real(a.lane) > a.laneF) ? -1 : 1;
-        CarLamps lamps = carLampState(a.state, a.speed, prev, sim_.timeOfDay(),
-                                      turnDir);
+        // Darkness from the SUN where a render view has staged one (the
+        // viewer), else from the sim's own clock (headless/offline). The two
+        // clocks are NOT synced, which is why traffic used to keep its
+        // headlights off all night while the player's car had them on.
+        const bool dark = solarStaged_
+                              ? solarElevation_ < engine::kLampDuskSunY
+                              : cityIsDark(sim_.timeOfDay());
+        CarLamps lamps =
+            carLampStateSolar(a.state, a.speed, prev, dark, turnDir);
         if (!lamps.head && !lamps.brake && !lamps.left && !lamps.right) continue;
 
         // SAME POSE SOURCE AS THE BODY. A physically-possessed agent draws its
@@ -1741,6 +1748,9 @@ void CityRenderSystem::onStart(engine::FrameContext& ctx) {
 }
 
 void CityRenderSystem::update(engine::FrameContext& ctx) {
+    // Stage the sun for the bake's car lamps (see solarElevation_).
+    solarElevation_ = ctx.view.lighting.solarElevation;
+    solarStaged_ = true;
     // Per-frame so the key edge is never missed by the fixed-step tick.
     if (ctx.actions.pressed("agent_widgets")) debugWidgets_ = !debugWidgets_;
     // Semicolon flips the city-plan layer (blocks + lots) — and switches the
