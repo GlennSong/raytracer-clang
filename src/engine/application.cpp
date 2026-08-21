@@ -572,6 +572,14 @@ std::string Application::handleControlCommand(const std::string& line) {
         if (what == "hud") { rendererPtr->showHud = on; return "ok hud"; }
         if (what == "ui") { rendererPtr->uiHidden = !on; return "ok ui"; }
         if (what == "debug") { setDebugOverlay(on); return "ok debug"; }
+        // Street-lamp POINT LIGHTS, live. The lamps' emissive heads stay lit
+        // either way — this toggles only whether they illuminate the world,
+        // which is the A/B that says whether a night artifact is the lights
+        // or something the lights merely reveal. RenderSystem reads it.
+        if (what == "lamplights") {
+            settingsStore.setBool("lamps.lights", on);
+            return "ok lamplights";
+        }
         // The citysim one-shot keys (city_render consumes and resets them) —
         // exactly what the web build's rt_web_city writes.
         if (what == "master" || what == "agents" || what == "cones" ||

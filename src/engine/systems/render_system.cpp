@@ -75,7 +75,11 @@ void RenderSystem::render(FrameContext& ctx) {
     // ran 24/7 before, invisible against daylight and stealing 14 of the 32
     // light slots at noon for nothing.
     {
-        const Real dusk = duskRamp(ctx.view.lighting.solarElevation);
+        // `overlay lamplights off` kills the lamp POINT LIGHTS while leaving
+        // their emissive heads lit — the live A/B for night artifacts.
+        const bool lampLightsOn = ctx.settings.getBool("lamps.lights", true);
+        const Real dusk =
+            lampLightsOn ? duskRamp(ctx.view.lighting.solarElevation) : Real(0);
         bool lit = false;
         SceneLighting withLamps;
         // Headlight cones staged by VehicleSystem merge on the same copy —
