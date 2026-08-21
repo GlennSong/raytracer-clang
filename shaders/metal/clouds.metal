@@ -26,6 +26,36 @@ static float cl_remap(float x, float a, float b, float c, float d) {
     return c + (x - a) / max(b - a, 1e-5) * (d - c);
 }
 
+// The march's start-offset dither, STRATIFIED FOR THE 2x2 UPSAMPLE. The cloud
+// pass runs at half resolution and is resolved by a 4-tap bilateral filter, so
+// the four half-res texels feeding one full-res pixel are the only samples
+// available to average. An ordered 2x2 pattern gives those four texels four
+// DISTINCT offsets spanning [0,1) — a proper stratified estimate that the
+// upsample cancels almost exactly. White noise (the original sin-hash) clumps,
+// and interleaved gradient noise is tuned for a wider filter footprint; both
+// leave residue the eye reads as weave. The tiny IGN term breaks the residual
+// grid where the deck is thin, without unstratifying the four taps.
+static float cl_dither(float2 pixel) {
+    int2 c = int2(pixel) & 1;
+    // Bayer 2x2 order {0, 2, 3, 1} / 4, sample-centred by an eighth.
+    const float kOrder[4] = {0.0, 0.5, 0.75, 0.25};
+    float bayer = kOrder[c.y * 2 + c.x] + 0.125;
+    return bayer;
+}
+
+// INTERLEAVED GRADIENT NOISE (Jimenez) — the march's start-offset dither.
+// A `fract(sin(dot(p, ...)))` hash was here, and white noise is the wrong
+// tool: its samples clump, so at half resolution the bilateral upsample
+// averages uneven neighbourhoods and the deck reads as SPARKLE rather than
+// as a smooth surface. IGN is built to be locally well-distributed — every
+// small neighbourhood carries a near-uniform spread of offsets — which is
+// exactly what a 2x2 upsample needs to cancel the dither instead of blotching
+// it. Same cost, and it also degrades gracefully where the deck is dense.
+static float cl_ign(float2 pixel) {
+    return fract(52.9829189 *
+                 fract(dot(pixel, float2(0.06711056, 0.00583715))));
+}
+
 static float cl_layerHeight(float3 p, constant CloudUniforms& u) {
     float h = (u.layer.w < 0.5) ? p.y : (length(p - u.planetCenter.xyz) - u.layer.z);
     return clamp((h - u.layer.x) / max(1e-4, u.layer.y - u.layer.x), 0.0, 1.0);
@@ -53,8 +83,16 @@ static float cl_localCoverage(float weather, constant CloudUniforms& u) {
     return clamp(u.params.x * (0.30 + 1.4 * weather), 0.0, 1.0);
 }
 
+// `detailFade` scales the high-frequency erosion (1 = full, 0 = shape only).
+// The detail texture's finest worley cells are ~90 m across at the shipped
+// noiseScale, so a march step longer than about half that samples them below
+// Nyquist and turns cauliflower into per-pixel confetti — the speckle over
+// every distant bank. The march passes the fade its CURRENT step earns, so
+// near clouds keep their crisp edges and far ones lose the aliasing, not the
+// silhouette (the base shape, sampled at 8x lower frequency, is untouched).
 static float cl_density(float3 p, constant CloudUniforms& u,
-                        texture3d<float> baseNoise, texture3d<float> detailNoise) {
+                        texture3d<float> baseNoise, texture3d<float> detailNoise,
+                        float detailFade = 1.0) {
     float hf = cl_layerHeight(p, u);
     if (hf <= 0.0 || hf >= 1.0) return 0.0;
     float profile = smoothstep(0.0, 0.15, hf) * smoothstep(1.0, 0.55, hf);
@@ -75,7 +113,7 @@ static float cl_density(float3 p, constant CloudUniforms& u,
     // interiors stay solid and edges wisp away (the standard erode trick).
     float3 det = detailNoise.sample(cl_noiseSamp, q * 2.0).rgb;
     float detailFbm = det.r * 0.625 + det.g * 0.25 + det.b * 0.125;
-    d = clamp(d - detailFbm * u.detail.x * (1.0 - d), 0.0, 1.0);
+    d = clamp(d - detailFbm * u.detail.x * detailFade * (1.0 - d), 0.0, 1.0);
     return d * profile * u.params.y;
 }
 
@@ -185,13 +223,49 @@ fragment float4 fragmentClouds(CloudsOut in [[stage_in]],
 
     int viewSteps = int(u.march.x);
     int lightSteps = int(u.march.y);
-    float ds = (t1 - t0) / float(max(2, viewSteps));
+    // TWO STEP SIZES, because one cannot serve both jobs. The budget step
+    // (interval / viewSteps) is what the march can afford across the whole
+    // traversal; the FINE step is what actually resolves a cloud. They only
+    // agree overhead: at 8 degrees of elevation the slab traversal is 5 km and
+    // the budget step is 126 m, at 3 degrees it is 334 m — against billows
+    // ~200-900 m across. A bank then got a handful of samples, and the dither
+    // decided WHICH features each pixel happened to hit, which is the noisy
+    // weave over every mid-distance deck. The fine step is tied to the layer's
+    // own thickness instead of to how far the ray happens to travel, so a
+    // cloud is sampled like a cloud from any angle.
+    float budgetStep = (t1 - t0) / float(max(2, viewSteps));
+    float slabThick = max(1.0, u.layer.y - u.layer.x);
+    // slab/12: the near-field step, tuned BY LOOKING. slab/9 was tried and
+    // reverted — it measured the same cost at street level and put visible
+    // slice layering back into every bank, which is the artifact this whole
+    // change exists to remove. Sampling finer than the layer's own thickness
+    // is what makes a march read as a volume instead of as a stack of plates.
+    float dsNear = min(budgetStep, slabThick / 12.0);
+    // ...and the fine step GROWS WITH DISTANCE inside the loop. A cloud two
+    // kilometres away covers a handful of half-res pixels, so resolving it at
+    // the near-field step buys detail no pixel can show while paying full
+    // march cost — a closed storm deck ran 24 ms that way. Scaling the step
+    // with the pixel footprint is the same trade the mip pyramid makes.
+    float ds = dsNear;
     float mu = dot(dir, sunDir);
     float phase = cl_phaseHG(mu, u.march.z);
 
-    // Per-pixel start jitter hides the banding a fixed step grid produces at
-    // these step counts; the bilateral upsample averages it away.
-    float jitter = fract(sin(dot(in.position.xy, float2(12.9898, 78.233))) * 43758.5453);
+    // Per-pixel start jitter breaks up the shells of constant t that a fixed
+    // step grid samples — without it the march paints those shells onto the
+    // deck as stripes wherever a bank's face lies tangent to one, which is
+    // the banding "going up the cloud". IGN, not a sin-hash: see cl_ign.
+    float jitter = cl_dither(in.position.xy);
+    // A second, decorrelated offset for the sun march. Sharing one jitter
+    // would lock the shadow slices to the view slices and re-draw the same
+    // stripes in the lighting. Golden-ratio rotation is the cheap decorrelator.
+    float lightJitter = fract(cl_ign(in.position.xy) + 0.5);
+    // How much high-frequency erosion this ray can afford (see cl_density).
+    // The detail texture's finest cells are 1/(16*noiseScale) metres; keep
+    // full detail while the step resolves them and fade out past Nyquist.
+    float detailCell = 1.0 / max(1e-6, 16.0 * u.params.z);
+    float detailFade = 1.0 - smoothstep(0.35 * detailCell, 1.1 * detailCell, ds);
+    // Fine steps resolve detail again, so this now mostly stays near 1 — it
+    // remains the guard for levels that author a coarse budget or a huge slab.
 
     float transmittance = 1.0;
     float3 scattered = float3(0.0);
@@ -203,14 +277,57 @@ fragment float4 fragmentClouds(CloudsOut in [[stage_in]],
     float t = t0 + ds * jitter;
     int dryRun = 0;
     for (int i = 0; i < viewSteps && t < t1; i++) {
-        float stepLen = ds * (dryRun >= 4 ? 1.6 : 1.0);
+        // Empty space is crossed with a GEOMETRICALLY growing stride (the
+        // fine step is far too small to reach the horizon within the budget),
+        // while anything that touches cloud integrates at the fine step. This
+        // is the standard empty-space-skipping shape: cheap where there is
+        // nothing, honest where there is something.
+        const bool stretched = dryRun >= 3;
+        float stepLen =
+            stretched ? min(ds * (1.0 + float(dryRun)), max(budgetStep, ds * 12.0))
+                      : ds;
         float3 p = camPos + dir * t;
-        t += stepLen;
-        float density = cl_density(p, u, baseNoise, detailNoise);
+        // DETAIL FALLS AWAY WITH DISTANCE — the standard treatment (Nubis /
+        // Decima, Frostbite): a bank 15 km out compresses its erosion detail
+        // into a couple of pixels, and detail finer than a pixel cannot
+        // resolve, it can only alias. That aliasing is what reads as "just
+        // noise" on the horizon. Near clouds keep every wisp; far ones keep
+        // only their SHAPE, which is what the eye actually reads at that
+        // distance anyway. (The step-size fade above is the same idea keyed
+        // on the march; this one is keyed on the pixel footprint.)
+        float farFade = 1.0 - smoothstep(3500.0, 14000.0, t);
+        float density = cl_density(p, u, baseNoise, detailNoise,
+                                   detailFade * farFade);
         if (density <= 0.001) {
             dryRun += 1;
+            t += stepLen;
+        } else if (stretched && i < viewSteps - 8) {
+            // ENTRY REFINEMENT. A stretched step just found cloud, so the bank's
+            // face lies anywhere in the stride behind this sample —
+            // integrating from here would start the cloud up to a step late and
+            // stamp that error along the whole face as a stair. Drop back to the
+            // last known-empty sample and re-enter at the honest step. Costs one
+            // sample per bank entered, and terminates: after the rewind at least
+            // four honest steps must pass before the stretch can arm again.
+            //
+            // The budget guard (i < viewSteps - 8) is what stops this from
+            // eating the step budget in a field of wisps. A ray that runs out
+            // of steps mid-cloud stops integrating and leaves SKY showing
+            // through — thin blue cuts that trace where an earlier bank spent
+            // the budget, which is exactly the "cutaway lines" artifact.
+            // Refining is worth a lot (denying it entirely puts slice layering
+            // back into every wispy bank), so it is spent freely until the
+            // budget is nearly gone and only then traded away.
+            dryRun = 0;
+            t = max(t0, t - stepLen);
         } else {
             dryRun = 0;
+            // Out of refinement budget: integrate, but never a stretched
+            // stride's worth — a search step treated as a uniform slab paints
+            // a plate hundreds of metres thick through the bank.
+            float integrateLen = min(stepLen, ds);
+            t += integrateLen;
+            stepLen = integrateLen;
             // SUN MARCH over a FIXED SHORT SPAN, not the whole slab. This used
             // to step (top - bottom) per sample — the full 700 m — from
             // wherever the sample sat, so lightOD reached ~64 and exp(-64) is
@@ -220,9 +337,20 @@ fragment float4 fragmentClouds(CloudsOut in [[stage_in]],
             float lightSpan = min(slab, 240.0);
             float lds = lightSpan / float(max(1, lightSteps));
             float lightOD = 0.0;
+            // The sun march is the dominant cost of a closed deck, but it can
+            // only be cut where the cut cannot be SEEN. Reducing the step
+            // count past a distance threshold was tried and reverted: it
+            // changes the shadow estimate across a shell of constant t, and
+            // that shell draws a hard seam across the sky. The saturation bail
+            // below is safe for the opposite reason — it fires only where the
+            // sample is already in full shadow, so it changes no pixel.
             for (int j = 0; j < lightSteps; j++) {
-                float3 lp = p + sunDir * (lds * (float(j) + 0.5));
-                lightOD += cl_density(lp, u, baseNoise, detailNoise) * lds;
+                float3 lp = p + sunDir * (lds * (float(j) + lightJitter));
+                // The shadow march is coarse (a few steps over 240 m), so it
+                // gets the same Nyquist treatment as the view ray — undithered
+                // detail here only adds noise to the shading, never shape.
+                lightOD += cl_density(lp, u, baseNoise, detailNoise,
+                                      detailFade * farFade * 0.5) * lds;
             }
             float beer = exp(-lightOD);
             float powder = 1.0 - exp(-2.0 * density * stepLen);
@@ -268,6 +396,16 @@ fragment float4 fragmentClouds(CloudsOut in [[stage_in]],
     // clouds dissolve into the aerial haze the sky already paints there. This
     // is not the retired whole-deck fade: it keys on the ENTRY distance and
     // touches only the final approach to the clamp.
+    // Distant clouds sit behind kilometres of atmosphere: they lose contrast
+    // toward the sky, which is both physically right and the other half of
+    // why a far deck stops reading as noise — aliasing that survives the
+    // detail fade is washed out with the contrast. The scene's own aerial
+    // perspective does this for terrain; the cloud overlay composites after
+    // it, so the deck needs its own.
+    float aerial = smoothstep(5000.0, 0.85 * u.march.w, t0) * 0.7;
+    scattered = mix(scattered, u.skyAmbient.rgb * 1.15, aerial);
+    transmittance = mix(transmittance, 1.0, aerial * 0.35);
+
     float ringFade = 1.0 - smoothstep(0.75 * u.march.w, u.march.w, t0);
     scattered *= ringFade;
     transmittance = mix(1.0, transmittance, ringFade);
@@ -289,7 +427,6 @@ float4 cloudOverlaySample(float2 uv, texture2d<float> cloudTex,
     float d0 = depthTex.read(min(uint2(uv * fullSize), fullMax));
 
     float2 pos = uv * cSize - 0.5;
-    float2 f = fract(pos);
     int2 base = int2(floor(pos));
     float4 acc = float4(0.0);
     float wSum = 0.0;
@@ -298,9 +435,15 @@ float4 cloudOverlaySample(float2 uv, texture2d<float> cloudTex,
             int2 c = clamp(base + int2(i, j), int2(0), int2(cSize) - 1);
             float2 cuv = (float2(c) + 0.5) / cSize;
             float dd = depthTex.read(min(uint2(cuv * fullSize), fullMax));
-            float bw = (i != 0 ? f.x : 1.0 - f.x) * (j != 0 ? f.y : 1.0 - f.y);
-            float w = bw * bilateralDepthWeight(d0, dd, camera.nearPlane,
-                                                camera.farPlane, 0.10) + 1e-5;
+            // EQUAL weights, not bilinear. The march dithers its start offset
+            // with a 2x2 ordered pattern, and any aligned 2x2 window covers
+            // each of those four phases exactly once — so a box average
+            // cancels the dither exactly, while bilinear weights (0.75/0.25 at
+            // half res) leave a weighted remainder, which is the stipple that
+            // survived every change to the dither itself. The depth term stays:
+            // it is what stops the deck bleeding across a silhouette.
+            float w = bilateralDepthWeight(d0, dd, camera.nearPlane,
+                                           camera.farPlane, 0.10) + 1e-5;
             acc += cloudTex.read(uint2(c)) * w;
             wSum += w;
         }

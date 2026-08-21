@@ -82,7 +82,7 @@
    "coverage": 0.38,
    "density": 0.05,
    "lightSteps": 6,
-   "steps": 40,
+   "steps": 96,
    "top": 1600,
    "wind": 14,
    "noiseScale": 0.0007
