@@ -427,6 +427,7 @@ float4 cloudOverlaySample(float2 uv, texture2d<float> cloudTex,
     float d0 = depthTex.read(min(uint2(uv * fullSize), fullMax));
 
     float2 pos = uv * cSize - 0.5;
+    float2 f = fract(pos);
     int2 base = int2(floor(pos));
     float4 acc = float4(0.0);
     float wSum = 0.0;
@@ -435,14 +436,26 @@ float4 cloudOverlaySample(float2 uv, texture2d<float> cloudTex,
             int2 c = clamp(base + int2(i, j), int2(0), int2(cSize) - 1);
             float2 cuv = (float2(c) + 0.5) / cSize;
             float dd = depthTex.read(min(uint2(cuv * fullSize), fullMax));
-            // EQUAL weights, not bilinear. The march dithers its start offset
-            // with a 2x2 ordered pattern, and any aligned 2x2 window covers
-            // each of those four phases exactly once — so a box average
-            // cancels the dither exactly, while bilinear weights (0.75/0.25 at
-            // half res) leave a weighted remainder, which is the stipple that
-            // survived every change to the dither itself. The depth term stays:
-            // it is what stops the deck bleeding across a silhouette.
-            float w = bilateralDepthWeight(d0, dd, camera.nearPlane,
+            // The weight is a BLEND of the bilinear weight and a flat 0.25.
+            //
+            // Pure bilinear leaves a weighted remainder of the march's 2x2
+            // dither (the stipple). Pure EQUAL weights cancel that dither
+            // exactly — and were tried, and were much worse: with flat
+            // weights every full-res pixel inside the same half-res 2x2
+            // window resolves to the IDENTICAL value, so the upsample paints
+            // a hard 2x2 grid locked to the screen. Screen-aligned blocking
+            // is far more objectionable than a faint stipple, and it is
+            // exactly what it looks like — "the fragment shader gets jacked
+            // up because the glitches are aligned with the screen and not the
+            // scene."
+            //
+            // Any blend with a bilinear term varies per pixel, so the blocks
+            // cannot form; leaning it toward flat still cancels most of the
+            // dither. The depth term stays: it stops the deck bleeding across
+            // a silhouette.
+            float bw = (i != 0 ? f.x : 1.0 - f.x) * (j != 0 ? f.y : 1.0 - f.y);
+            float w = mix(0.25, bw, 0.5) *
+                      bilateralDepthWeight(d0, dd, camera.nearPlane,
                                            camera.farPlane, 0.10) + 1e-5;
             acc += cloudTex.read(uint2(c)) * w;
             wSum += w;
