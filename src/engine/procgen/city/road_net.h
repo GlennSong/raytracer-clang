@@ -93,7 +93,23 @@ using RoadGroundFn = std::function<double(double, double)>;
 
 // Build the road surface for `road` (its graph swept by buildRoadNetLattice).
 // `heightAt` drapes it on the level terrain (null = flat).
-RenderMesh buildRoadNetMesh(const RoadEntity& road, const RoadGroundFn& heightAt);
+// Diagnostic capture of the curb/sidewalk BAND's inputs (roads-v2 S5). The band
+// is not a per-junction object — it is swept along the closed boundary loops of
+// the whole asphalt union — so a probe cannot reconstruct it from the graph
+// without re-implementing the mesher (which would then measure ITSELF, not the
+// road). Filled only when a caller asks; costs nothing otherwise. Same contract
+// as `chainTriEndsOut`: diagnostics read the mesher's own working state.
+struct CurbBandAudit {
+    std::vector<Poly2> loops;                          // boundary loops, post snap/de-spike
+    std::vector<std::pair<Vec2, Vec2>> mouthGaps;      // where the band is suppressed
+    std::vector<Vec2>  junctions;                      // deg >= 3 node positions
+    std::vector<int>   junctionDegree;                 // parallel to `junctions`
+    double sidewalkWidth = 0.0;
+    double curbHeight = 0.0;
+};
+
+RenderMesh buildRoadNetMesh(const RoadEntity& road, const RoadGroundFn& heightAt,
+                            CurbBandAudit* auditOut = nullptr);
 
 // Swept-lattice street mesher (street-lattice-plan.md, stage 3): sweep each chain
 // as a lattice body trimmed to the junction boundary, and fill each deg>=3 node
@@ -108,7 +124,11 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
                                const std::function<Real(Real, Real)>& heightAt,
                                std::vector<std::size_t>* chainTriEndsOut = nullptr,
                                double sidewalkWidth = 3.0, double curbHeight = 0.15,
-                               bool crosswalks = true);
+                               bool crosswalks = true, CurbBandAudit* auditOut = nullptr,
+                               // 0 = the old radius-less quadratic corner. The real
+                               // value arrives from RoadLook::cornerRadius via
+                               // buildRoadNetMesh; hand-built graphs keep the old shape.
+                               double cornerRadius = 0.0);
 
 // The sampled + constrained road graph the mesher builds from: every edge sampled
 // to a fine polyline (a curved road becomes a chain of short straight edges; a

@@ -56,3 +56,28 @@ cross-slope.
 /tmp/road_poke 0       # exact carved terrain
 /tmp/road_poke 2.0     # coarse-LOD approximation (half-cell flatten dilation)
 ```
+
+## curb_weld_probe — curb/sidewalk band quality
+
+Grows a shipped level's road network the way the loader does, meshes it with the
+real mesher, and measures the band the mesher ACTUALLY emitted at every junction:
+is the kerb return **rounded**, is the band **single** (never covering ground
+twice), is it **continuous** beside the asphalt (a HOLE — no band at all — counted apart
+from a NARROWING, a band under half width), and how far does it **reach** from
+the kerb line. Note `reach` over-reads at every corner by 1/cos(half-angle): a
+band genuinely reaches 1.41x its width at the apex of a right angle. Use it to
+spot runaways, not as a width measure. Reads the mesher's own working
+state through `CurbBandAudit` rather than rebuilding the loops, so it measures
+the road and not a copy of the algorithm. Findings carry world (x, z).
+
+Built by CMake (not the manual line above):
+
+```sh
+cmake --build build --target curb_weld_probe
+./build/curb_weld_probe assets/levels/metro_v2_test.json --top 20 --csv /tmp/curb.csv
+./build/curb_weld_probe --arena                     # synthetic stars, no level
+./build/curb_weld_probe assets/levels/metro_v2_test.json \
+    --focus 137.88 205.30 30 --svg /tmp/curb.svg    # white-box dump of one junction
+```
+
+Findings and the diagnosis: `docs/curb-weld-analysis.md`.

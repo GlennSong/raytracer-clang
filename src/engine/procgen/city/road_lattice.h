@@ -157,10 +157,17 @@ struct JunctionRail {
 // curb/sidewalk union consumes (the nudge makes pad and body ribbons OVERLAP
 // slightly instead of sharing exactly-collinear edges, polygonUnion's one
 // documented weak case).
+// `cornerRadius`: the authored kerb-return radius (RoadLook::cornerRadius). The
+// corner between two arms is a TRUE circular arc of this radius, tangent to both
+// verges — not a shape that merely falls out of where the mouths landed. The
+// asphalt boundary is what carries it, so the curb/sidewalk band (which is swept
+// along the boundary of the asphalt union) inherits the rounding and cannot come
+// away from the road edge. 0 keeps the old quadratic-Bezier corner.
 RenderMesh junctionPatch(std::vector<JunctionArm> arms,
                          float mu = 2.0f, const Vec3& color = Vec3(0.10, 0.10, 0.11),
                          std::vector<Vec3>* footprintOut = nullptr,
-                         const std::vector<JunctionRail>* rails = nullptr);
+                         const std::vector<JunctionRail>* rails = nullptr,
+                         double cornerRadius = 0.0);
 
 // Carriageway-only street cross-section (roads-v2 S5 OWNERSHIP: asphalt =
 // bodies + pads; curb + sidewalk belong to the closed band below). Columns are

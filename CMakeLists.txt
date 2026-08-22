@@ -659,6 +659,15 @@ if(RT_BUILD_DEMOS)
     target_compile_options(pose_demo PRIVATE -Wall -Wextra)
     target_link_libraries(pose_demo PRIVATE engine_core)
 
+    # Curb-weld diagnostic: measures the curb/sidewalk band the real mesher
+    # emitted, at every junction of a shipped level (rounding / overlap /
+    # continuity). Device report: "overlapping curbs ... not properly
+    # dovetailed and rounded".
+    add_executable(curb_weld_probe tools/diagnostics/curb_weld_probe.cpp ${CORE_SOURCES})
+    target_include_directories(curb_weld_probe PRIVATE src)
+    target_compile_options(curb_weld_probe PRIVATE -Wall -Wextra)
+    target_link_libraries(curb_weld_probe PRIVATE engine_core)
+
     # Rigid vs CPU-skinned bend, side by side (character-posing-plan P2).
     add_executable(skin_demo tools/skin_demo.cpp ${CORE_SOURCES})
     target_include_directories(skin_demo PRIVATE src)

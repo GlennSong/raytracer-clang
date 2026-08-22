@@ -2,6 +2,7 @@
 
 #include "../../mesh_builder.h"      // MeshBuilder::emitLattice
 #include "triangulate.h"           // junction pad ear-clip (roads-v2)
+#include "road_mesh.h"             // curbReturnFillet (the authored kerb return)
 #include <unordered_map>
 #include <algorithm>
 #include <cmath>
@@ -577,7 +578,7 @@ RenderMesh junctionPadEarcut(const std::vector<Vec3>& loop, float mu, const Vec3
 
 RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& color,
                          std::vector<Vec3>* footprintOut,
-                         const std::vector<JunctionRail>* rails) {
+                         const std::vector<JunctionRail>* rails, double cornerRadius) {
     RenderMesh mesh;
     const int N = static_cast<int>(arms.size());
     if (N <= 2) return mesh;                          // body runs straight through
@@ -675,6 +676,25 @@ RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& co
             // across the pad and self-intersect the loop — earcut then spins
             // its recovery passes (the 14-minute city hang). Straight chord.
             if ((hit - (a2 + b2) * 0.5).length() < 0.75 * chord) { c2 = hit; arc = true; }
+        }
+        // AUTHORED RADIUS (docs/curb-weld-analysis.md, fix 5): a true circular
+        // fillet of `cornerRadius`, tangent to both verges, run straight out to
+        // its tangent points from each mouth. The quadratic below has no radius
+        // at all — its shape falls out of wherever the mouths happened to land
+        // (measured ~4.7 m against an authored 3.0), which is why
+        // RoadLook::cornerRadius has never done anything.
+        if (arc && cornerRadius > 0.0) {
+            const double room = std::min((c2 - a2).length(), (c2 - b2).length());
+            const std::vector<Vec2> fil =
+                curbReturnFillet(c2, normalize(a2 - c2), normalize(b2 - c2),
+                                 cornerRadius, room);
+            if (fil.size() >= 2) {
+                for (std::size_t k = 0; k < fil.size(); ++k) {
+                    const double t = static_cast<double>(k) / (fil.size() - 1);
+                    push(Vec3(fil[k].x, a3.y + (b3.y - a3.y) * t, fil[k].y), -1);
+                }
+                continue;
+            }
         }
         const int nArc = arc ? std::max(2, std::min(10, static_cast<int>(chord / 1.5))) : 1;
         for (int k = 1; k < nArc; ++k) {
@@ -1039,10 +1059,29 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
             y = std::min(y, (*terrain)(v.x, v.y) - 0.3);
         return Vec3(v.x, y, v.y);
     };
+    static int dbgOpens = 0, dbgPinch = 0, dbgClamped = 0, dbgQuad = 0, dbgFold = 0;
+    static double dbgSweepMax = 0;
     for (const Poly2& loop : loops) {
         const int m = static_cast<int>(loop.size());
         if (m < 3) continue;
-        struct Corner { Vec2 prevPt, nextPt; bool bevel; };
+        // The outer edge of the band at each kerb vertex. `arc` is the run of
+        // outer points there: one for a mitre, several for a rounded join.
+        // front() serves the INCOMING edge, back() the outgoing one.
+        struct Corner {
+            std::vector<Vec2> arc;
+            Vec2   dir{0, 0};        // bisector, for a single-point mitre
+            double dist = 0.0;       // how far along it — shrinkable by the trim
+            bool   mitre = false;
+            const Vec2& prevPt() const { return arc.front(); }
+            const Vec2& nextPt() const { return arc.back(); }
+            bool fan() const { return arc.size() > 1; }
+        };
+        // How far past `sidewalkWidth` a mitre may reach before it is cut back.
+        // 2.0 keeps an exact right-angle corner (which needs sqrt(2) = 1.41) and
+        // an exact 60-degree corner (2.0) — sharper than that, a real kerb is
+        // rounded off, not extended to a needle. The OLD bound was the
+        // max(0.2, cosH) clamp = 5x, wide enough to cross a carriageway.
+        const double kMitreLimit = 2.0;
         std::vector<Corner> oc(m);
         for (int i = 0; i < m; ++i) {
             const Vec2 e0 = loop[i] - loop[(i + m - 1) % m];
@@ -1052,20 +1091,102 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
             const double bl = bis.length();
             const Vec2 mm = bl < 1e-9 ? n1 : bis * (1.0 / bl);
             const double cosH = dot(mm, n1);
-            // A LEFT turn OPENS the band (fan/bevel closes the gap); a RIGHT
-            // turn PINCHES it (edges meet at the offset lines' intersection).
+            // A LEFT turn OPENS the band (the offsets diverge — the corner has
+            // to be filled); a RIGHT turn PINCHES it (the offsets converge and
+            // meet at the offset lines' intersection).
             const bool opens = (e0.x * e1.y - e0.y * e1.x) > 0.0;
-            if (!opens) {
-                const Vec2 q = loop[i] + mm * (sidewalkWidth / std::max(0.2, cosH));
-                oc[i] = { q, q, false };
-            } else if (cosH >= 0.5) {
-                const Vec2 q = loop[i] + mm * (sidewalkWidth / cosH);
-                oc[i] = { q, q, false };
+            // MITRE FIRST, ROUND ONLY WHEN IT RUNS AWAY. The offset lines
+            // really do meet at sidewalkWidth/cosH along the bisector, and that
+            // point is the CORRECT outer corner — a 3.5 m band around a
+            // right-angle corner genuinely reaches 4.95 m at the apex. Rounding
+            // a corner that the mitre already handles only pulls the band in and
+            // leaves ground beside the kerb bare (measured: 284 m of bare kerb
+            // became 531 m when every opening corner was rounded). So the arc is
+            // the FALLBACK for the runaway case the old max(0.2, cosH) clamp
+            // used to answer with a 5x spike.
+            const double mitre = sidewalkWidth / std::max(cosH, 1e-6);
+            if (opens && mitre > sidewalkWidth * kMitreLimit) {
+                // ARC JOIN (docs/curb-weld-analysis.md): sweep the outer edge
+                // around the vertex on a circle of the band's own width, so the
+                // corner is ROUNDED and the band is exactly `sidewalkWidth`
+                // wide through it. The old code put a mitre point here (1/cosH,
+                // unbounded) or a one-triangle bevel, both of which reach
+                // further than the band is wide for no reason — the offsets
+                // diverge here, so there is nothing to intersect.
+                const double a0 = std::atan2(n0.y, n0.x);
+                double sweep = std::atan2(n1.y, n1.x) - a0;
+                while (sweep < 0.0) sweep += 2.0 * PI;
+                while (sweep > 2.0 * PI) sweep -= 2.0 * PI;
+                const int steps = std::max(1, static_cast<int>(
+                                                  std::ceil(sweep / (12.0 * PI / 180.0))));
+                ++dbgOpens;
+                dbgSweepMax = std::max(dbgSweepMax, sweep * 180.0 / PI);
+                oc[i].arc.reserve(steps + 1);
+                for (int k = 0; k <= steps; ++k) {
+                    const double a = a0 + sweep * (static_cast<double>(k) / steps);
+                    oc[i].arc.push_back(loop[i] +
+                                        Vec2(std::cos(a), std::sin(a)) * sidewalkWidth);
+                }
             } else {
-                oc[i] = { loop[i] + n0 * sidewalkWidth,
-                          loop[i] + n1 * sidewalkWidth, true };
+                // PINCH (or the A/B's mitre-only mode): the offset lines meet, and their intersection
+                // (sidewalkWidth / cosH along the bisector) is the correct outer
+                // point — a band around a right-angle corner genuinely reaches
+                // 1.41x its width at the apex. Only the RUNAWAY case is wrong,
+                // so bound it and let the corner cut across instead.
+                ++dbgPinch;
+                if (mitre > sidewalkWidth * kMitreLimit) ++dbgClamped;
+                const double d = std::min(mitre, sidewalkWidth * kMitreLimit);
+                oc[i].dir = mm;
+                oc[i].dist = d;
+                oc[i].mitre = true;
+                oc[i].arc.push_back(loop[i] + mm * d);
             }
         }
+        // TRIM (the second half of polygon offsetting). A quad is valid only
+        // while its outer edge still runs the same way as its kerb edge; once a
+        // corner's offset reaches further than the neighbouring kerb segment is
+        // long, the outer edge reverses and the slab folds back over itself.
+        // Deleting the folded quad trades stacked sidewalk for BARE ground
+        // (measured: 1 987 -> 1 277 m2 of overlap, but 284 -> 937 m of bare
+        // kerb). Pulling the corner in instead keeps the band continuous and
+        // narrows it exactly where the geometry cannot support full width —
+        // which is what a kerb does in real life. Relaxation, because the two
+        // ends of an edge share their corners with their other neighbours.
+        const double kTrimFloor = 0.35;
+        for (int pass = 0; pass < 24; ++pass) {
+            bool shrank = false;
+            for (int i = 0; i < m; ++i) {
+                const int j = (i + 1) % m;
+                const Vec2 e = loop[j] - loop[i];
+                if (e.lengthSquared() < 1e-12) continue;
+                const Vec2 ao = oc[i].nextPt(), bo = oc[j].prevPt();
+                if (dot(bo - ao, e) > 0.05 * e.lengthSquared()) continue;   // still valid
+                // Pull whichever end reaches further, and pull it EXACTLY as far
+                // as the constraint needs — a blind fraction over-trims, which
+                // shows up as a band that is needlessly narrow for metres either
+                // side of the corner. dot(bo - ao, e) = |e|^2 + dj*dot(uj,e)
+                // - di*dot(ui,e), so each end has a closed-form bound.
+                const double e2 = e.lengthSquared();
+                const bool takeI = oc[i].dist >= oc[j].dist;
+                Corner& big = takeI ? oc[i] : oc[j];
+                if (!big.mitre || big.dist <= sidewalkWidth * kTrimFloor) continue;
+                const double di = oc[i].dist, dj = oc[j].dist;
+                const double ui_e = dot(oc[i].dir, e), uj_e = dot(oc[j].dir, e);
+                double want = big.dist;
+                if (takeI && ui_e > 1e-9)
+                    want = (0.95 * e2 + dj * uj_e) / ui_e;
+                else if (!takeI && uj_e < -1e-9)
+                    want = (di * ui_e - 0.95 * e2) / uj_e;
+                else
+                    want = big.dist * 0.75;         // degenerate: fall back
+                want = std::min(want * 0.99, big.dist * 0.99);
+                big.dist = std::max(want, sidewalkWidth * kTrimFloor);
+                big.arc[0] = loop[takeI ? i : j] + big.dir * big.dist;
+                shrank = true;
+            }
+            if (!shrank) break;
+        }
+
         // Arc length -> negative-u slab UV: the shader scores sidewalk joints
         // PERPENDICULAR to the curb, following its curvature, and negative u
         // keeps the band inside the existing "mu < 0.98 = sidewalk" gate.
@@ -1101,13 +1222,12 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
             // A beveled corner has TWO outer points; the neighbour's face may
             // end at the other one — wall the bevel span too or its rim stays
             // open (the last landing census hit).
-            if (oc[v].bevel &&
-                (oc[v].prevPt - oc[v].nextPt).lengthSquared() > 1e-12) {
-                const Vec3 pT = P3(oc[v].prevPt, curbHeight);
-                const Vec3 pB = P3bot(oc[v].prevPt);
-                const Vec3 nT = P3(oc[v].nextPt, curbHeight);
-                const Vec3 nB = P3bot(oc[v].nextPt);
-                MeshBuilder::emitQuad(mesh, pT, nT, nB, pB,
+            for (std::size_t k = 0; k + 1 < oc[v].arc.size(); ++k) {
+                const Vec2& p0 = oc[v].arc[k];
+                const Vec2& p1 = oc[v].arc[k + 1];
+                if ((p0 - p1).lengthSquared() <= 1e-12) continue;
+                MeshBuilder::emitQuad(mesh, P3(p0, curbHeight), P3(p1, curbHeight),
+                                      P3bot(p1), P3bot(p0),
                                       Vec3(along.x, 0, along.y), curbColor);
             }
         };
@@ -1125,20 +1245,30 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
                 if (emitSeg[prev]) {   // band ends here: cap faces the gap
                     Vec2 t = loop[i] - loop[prev];
                     const double tl = t.length();
-                    if (tl > 1e-9) capAt(i, oc[i].prevPt, t * (1.0 / tl));
+                    if (tl > 1e-9) capAt(i, oc[i].prevPt(), t * (1.0 / tl));
                 }
                 if (emitSeg[j]) {      // band resumes at j: cap faces back
                     Vec2 t = loop[j] - loop[(j + 1) % m];
                     const double tl = t.length();
-                    if (tl > 1e-9) capAt(j, oc[j].nextPt, t * (1.0 / tl));
+                    if (tl > 1e-9) capAt(j, oc[j].nextPt(), t * (1.0 / tl));
                 }
                 continue;
             }
-            const Vec2 ao = oc[i].nextPt, bo = oc[j].prevPt;
+            const Vec2 ao = oc[i].nextPt(), bo = oc[j].prevPt();
             const Vec2 rn = rnorm(b - a);
             const Vec3 eo3(rn.x, 0, rn.y);   // outward, per edge
             const Vec3 aT = P3(a, curbHeight), bT = P3(b, curbHeight);
             const Vec3 aR = P3(a, 0), bR = P3(b, 0);
+            ++dbgQuad;
+            // A band quad runs a -> b along the kerb and ao -> bo along the outer
+            // edge; wound this way both of its triangles have NEGATIVE area in
+            // plan, and a POSITIVE one means the quad turned inside out — the
+            // slab doubling back over its neighbour, which is the stacked
+            // sidewalk the device sees. The trim above unfolds them at the
+            // source, so this is now a counter, not a filter: DELETING a folded
+            // quad only trades stacked sidewalk for bare ground (measured on
+            // metro_v2: overlap 884 -> 628 m2, but holes 106 -> 633 m).
+            if (cross(b - a, bo - a) > -1e-9 || cross(bo - a, ao - a) > -1e-9) ++dbgFold;
             const Vec3 aoT = P3(ao, curbHeight), boT = P3(bo, curbHeight);
             const Vec3 aoB = P3bot(ao), boB = P3bot(bo);
             MeshBuilder::emitQuad(mesh, aR, bR, bT, aT, eo3 * -1.0, curbColor);  // curb lip
@@ -1148,25 +1278,31 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
                                    ua, 0.0f, ub, 0.0f, ub, 1.0f);                // slab top
             MeshBuilder::emitTriUV(mesh, aT, boT, aoT, Vec3(0, 1, 0), walkColor,
                                    ua, 0.0f, ub, 1.0f, ua, 1.0f);
-            MeshBuilder::emitQuad(mesh, aoT, boT, boB, aoB, eo3, curbColor);     // outer face
-            if (oc[j].bevel) {
-                // Fan closing the band around an opening corner + its outer face.
+            MeshBuilder::emitQuad(mesh, aoT, boT, boB, aoB, eo3, curbColor);      // outer face
+            if (oc[j].fan()) {
+                // Fan the band around an opening corner, one triangle per arc
+                // segment, and wall the arc's outer face to match — a rounded
+                // kerb return instead of the old single-triangle bevel.
                 const Vec3 jT = P3(b, curbHeight);
-                const Vec3 p0T = P3(oc[j].prevPt, curbHeight);
-                const Vec3 p1T = P3(oc[j].nextPt, curbHeight);
-                MeshBuilder::emitTriUV(mesh, jT, p0T, p1T, Vec3(0, 1, 0), walkColor,
-                                       ub, 0.0f, ub, 1.0f, ub, 1.0f);
-                const Vec2 bev = oc[j].nextPt - oc[j].prevPt;
-                if (bev.length() > 1e-9) {
-                    const Vec2 bn = rnorm(bev);
-                    const Vec3 p0B = P3bot(oc[j].prevPt);
-                    const Vec3 p1B = P3bot(oc[j].nextPt);
-                    MeshBuilder::emitQuad(mesh, p0T, p1T, p1B, p0B,
+                for (std::size_t k = 0; k + 1 < oc[j].arc.size(); ++k) {
+                    const Vec2& q0 = oc[j].arc[k];
+                    const Vec2& q1 = oc[j].arc[k + 1];
+                    if ((q0 - q1).lengthSquared() <= 1e-12) continue;
+                    const Vec3 q0T = P3(q0, curbHeight), q1T = P3(q1, curbHeight);
+                    MeshBuilder::emitTriUV(mesh, jT, q0T, q1T, Vec3(0, 1, 0), walkColor,
+                                           ub, 0.0f, ub, 1.0f, ub, 1.0f);
+                    const Vec2 bn = rnorm(q1 - q0);
+                    MeshBuilder::emitQuad(mesh, q0T, q1T, P3bot(q1), P3bot(q0),
                                           Vec3(bn.x, 0, bn.y), curbColor);
                 }
             }
         }
     }
+    if (std::getenv("RT_BAND_DEBUG"))
+        std::fprintf(stderr,
+                     "[band] corners: opens(arc)=%d pinch=%d clamped=%d maxSweep=%.1f deg"
+                     " | quads=%d folded=%d\n",
+                     dbgOpens, dbgPinch, dbgClamped, dbgSweepMax, dbgQuad, dbgFold);
     return mesh;
 }
 

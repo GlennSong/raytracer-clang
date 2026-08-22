@@ -455,7 +455,8 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
                                const std::function<Real(Real, Real)>& heightAt,
                                std::vector<std::size_t>* chainTriEndsOut,
                                double sidewalkWidth, double curbHeight,
-                               bool crosswalks) {
+                               bool crosswalks, CurbBandAudit* auditOut,
+                               double cornerRadius) {
     // Semantic self-heal (#17): tests and tools hand this hand-built graphs
     // that never went through a producer — classify so kind-gated styling
     // behaves identically for them. Classified inputs pass through untouched
@@ -1119,10 +1120,24 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
         else if (na == 4) ++nCoons;
         else ++nFan;
         std::vector<Vec3> padFootprint;
+        // The authored kerb return is only APPLIED where it is geometrically
+        // possible. The curb/sidewalk band is an INWARD offset of this corner
+        // (the sidewalk sits on the concave side of a kerb return), and a curve
+        // cannot be offset inward by more than its own radius: with a 3.5 m walk
+        // around a 3.0 m return the band's outer edge is degenerate before it is
+        // drawn. Measured on metro_v2 (docs/curb-weld-analysis.md): rounding at
+        // r=3.0 with a 3.5 m walk took folded band quads 462 -> 832 and stacked
+        // band 884 -> 1084 m2, while the SAME rounding with a 2.0 m walk costs
+        // almost nothing (464 folds, 254 m2). So round when the radius can carry
+        // the walk, and keep the old corner when it cannot.
+        const double padCorner =
+            (std::getenv("RT_KERB_RETURN") && cornerRadius > sidewalkWidth * 1.05)
+                ? cornerRadius : 0.0;
         RenderMesh pad = junctionPatch(arms[v], 2.0f, Vec3(0.10, 0.10, 0.11),
                                        &padFootprint,
                                        nodeRails.count(v) ? &nodeRails[v]
-                                                          : nullptr);
+                                                          : nullptr,
+                                       padCorner);
         // 2c: an ELEVATED pad (a gore on the deck) closes its bottom — a
         // mirrored down-facing belly at deck thickness plus a rim skirt, so
         // the viaduct has structure under the junction fill too, not a
@@ -1181,15 +1196,25 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
     if (!bandRibbons.empty()) {
         std::vector<Poly2> loops;
         for (Poly2& L : polygonUnion(bandRibbons)) {
-            // snap-round + de-spike (1 cm) so band quads never fold on a
-            // hairline vertex the union left behind
+            // snap-round + de-spur so band quads never fold on a hairline
+            // vertex the union left behind.
+            //
+            // MERGE TOLERANCE > SNAP QUANTUM (docs/curb-weld-analysis.md). The
+            // old pair — snap to 1 cm, then merge closer than 0.5 cm — cannot
+            // converge: two union vertices a hair apart land on ADJACENT grid
+            // points, exactly 1 cm apart, which is above the merge threshold, so
+            // the snap MANUFACTURES the hairline pairs the merge exists to
+            // remove. The kerb then reverses across a 1 cm edge and the band's
+            // mitre blows that reversal out to metres. 2 cm clears the 1.41 cm
+            // grid diagonal, so no adjacent-grid-point pair can survive; real
+            // kerb detail is metres, never centimetres.
+            const double kSnap = 0.01, kMerge = 0.02;
             Poly2 c;
             for (const Vec2& p : L) {
-                const Vec2 q(std::round(p.x * 100.0) / 100.0,
-                             std::round(p.y * 100.0) / 100.0);
-                if (c.empty() || (q - c.back()).length() > 0.005) c.push_back(q);
+                const Vec2 q(std::round(p.x / kSnap) * kSnap, std::round(p.y / kSnap) * kSnap);
+                if (c.empty() || (q - c.back()).length() > kMerge) c.push_back(q);
             }
-            if (c.size() >= 2 && (c.front() - c.back()).length() <= 0.005) c.pop_back();
+            while (c.size() >= 2 && (c.front() - c.back()).length() <= kMerge) c.pop_back();
             bool changed = true;
             while (changed && c.size() > 3) {
                 changed = false;
@@ -1198,7 +1223,24 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
                     const Vec2 e0 = c[i] - c[(i + nn2 - 1) % nn2];
                     const Vec2 e1 = c[(i + 1) % nn2] - c[i];
                     const double l0 = e0.length(), l1 = e1.length();
-                    if (l0 < 1e-9 || l1 < 1e-9 || dot(e0, e1) / (l0 * l1) < -0.985) {
+                    if (l0 < 1e-9 || l1 < 1e-9) { c.erase(c.begin() + i); changed = true; break; }
+                    const double cosT = dot(e0, e1) / (l0 * l1);
+                    // A SPUR is a shape, not an angle: the kerb goes out and comes
+                    // straight back, enclosing nothing. The old test fired only
+                    // past ~170 deg (cosT < -0.985) — but the reversals that
+                    // wreck the band measure 90-166 deg and sailed through. Judge
+                    // the sliver instead: a reversal that encloses under 0.05 m2,
+                    // or reverses across a sub-decimetre edge, is a union
+                    // artifact. A LEGITIMATE sharp corner (an acute Y arriving at
+                    // 30 deg) reverses just as hard but spans metres, so its
+                    // triangle is ~1 m2 and it is kept.
+                    const double sliver = 0.5 * std::fabs(cross(e0, e1));
+                    // A sub-decimetre edge is noise at ANY angle: real kerb
+                    // detail — an arc segment, a mouth, a corner — is metres.
+                    // (Gating this on the angle too left a band of 90-120 deg
+                    // reversals alive, 155 of them on metro_v2.)
+                    if (cosT < -0.985 || std::min(l0, l1) < 0.10 ||
+                        (cosT < -0.5 && sliver < 0.05)) {
                         c.erase(c.begin() + i);
                         changed = true;
                         break;
@@ -1206,6 +1248,17 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
                 }
             }
             if (c.size() >= 3) loops.push_back(std::move(c));
+        }
+        if (auditOut) {
+            auditOut->loops = loops;
+            auditOut->mouthGaps = bandGaps;
+            auditOut->sidewalkWidth = sidewalkWidth;
+            auditOut->curbHeight = curbHeight;
+            for (int v = 0; v < N; ++v)
+                if (deg[v] >= 3) {
+                    auditOut->junctions.push_back(g.nodes[v].pos);
+                    auditOut->junctionDegree.push_back(deg[v]);
+                }
         }
         MeshBuilder::append(out, sweepCurbSidewalkBand(
             loops, [&](double x, double z) { return bandHeights.sample(x, z); },
@@ -1232,7 +1285,8 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
     return out;
 }
 
-RenderMesh buildRoadNetMesh(const RoadEntity& road, const RoadGroundFn& heightAt) {
+RenderMesh buildRoadNetMesh(const RoadEntity& road, const RoadGroundFn& heightAt,
+                            CurbBandAudit* auditOut) {
     // Roads-v2.1 2e: the ONE mesher builds EVERYTHING, baked corridor edges
     // included — the corridor renderer is gone. (Conform still strips baked
     // edges: corridorAuthor's engineered flatten owns that carve.)
@@ -1340,7 +1394,8 @@ RenderMesh buildRoadNetMesh(const RoadEntity& road, const RoadGroundFn& heightAt
     // The union weld (weldSolid), the SDF grid and the analytic fallback are
     // deleted from this path; the lattice IS the road mesher.
     RenderMesh rm = buildRoadNetLattice(g, heightAt, nullptr, road.look.sidewalk,
-                                        road.look.curb, road.look.crosswalks);
+                                        road.look.curb, road.look.crosswalks, auditOut,
+                                        road.look.cornerRadius);
     // Bounds + NaN audit: one NaN vertex poisons the bounding sphere and the
     // whole road entity frustum-culls to nothing, silently.
     std::size_t nans = 0;
