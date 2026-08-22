@@ -346,26 +346,74 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     // band, and the bay centre is that band's centre. No heuristic left.
     bays_.clear();
     baysOnLink_.assign(graph.linkCount(), {});
+    // BAYS RIDE THE CHAIN, NOT THE SEGMENT. A NavLink is one SAMPLED piece of a
+    // road, and the sampler collapses a straight run to a single long segment
+    // while a CURVED one shatters into short ones. Gating each segment on 40 m
+    // therefore parked straight streets and silently refused every curved one:
+    // measured on the metro parking recipe, 826 links, 240 of them carrying a
+    // parking band but under 40 m, and just TWO long enough to park on — those
+    // two produced every bay in the city. Add any curvature and the whole city's
+    // kerbside parking vanished.
+    //
+    // A chain is what the 22 m junction setback was always about: junction to
+    // junction, through the degree-2 curve samples between them. Bays are laid
+    // along the chain's arc length and then mapped back onto whichever segment
+    // holds each station, so a curved street parks exactly like a straight one
+    // of the same length. The parking BAND stays a per-segment gate — the spec
+    // can change along a chain.
+    std::vector<int> nextOf(graph.linkCount(), -1);
+    std::vector<char> hasPrev(graph.linkCount(), 0), seen(graph.linkCount(), 0);
     for (int li = 0; li < graph.linkCount(); ++li) {
-        const engine::NavLink& L = graph.links[li];
-        if (L.parkWidth <= 0.0) continue;        // no Parking band => no bays
-        if (L.layer != 0 || L.elevAbsolute) continue;
-        // Semantic layer (#17/S7): bays only on FRONTAGE edges — never on a
-        // ramp APPROACH (a street climbing to a landing has no frontage, so
-        // no curbside parking on the on-ramp feeder).
-        if (!(L.access & engine::road_access::kFrontage)) continue;
-        if (L.length < 40.0) continue;
-        const engine::Vec2 dir = graph.direction(li);
-        const engine::Vec2 right(dir.y, -dir.x);
-        const Real off = L.parkOffset;   // centre of the kerbside Parking band
-        // 22 m junction setback: a physical car exits a corner with ~1 m of
-        // lateral error that decays over the first ~15 m — bays any closer
-        // took sideswipes from the possession tier's real bodies.
-        for (Real st = 22.0; st + 22.0 < L.length; st += 7.0) {
+        const int n = graph.links[li].to;
+        if (n < 0 || n >= graph.nodeCount()) continue;
+        if (graph.junction[n]) continue;              // a real intersection ends it
+        int cont = -1, count = 0;
+        for (int lo : graph.outLinks[n]) {
+            if (graph.links[lo].to == graph.links[li].from) continue;   // the U-turn back
+            ++count;
+            cont = lo;
+        }
+        if (count == 1 && cont != li) { nextOf[li] = cont; hasPrev[cont] = 1; }
+    }
+    // RT_PARK_DEBUG=1: why a street ended up with no kerbside parking. Each gate
+    // counted separately, because "0 bays" on its own says nothing about which
+    // one rejected it.
+    int dbgChains = 0, dbgShortChain = 0, dbgNoBand = 0, dbgLayer = 0,
+        dbgNoFrontage = 0, dbgPlaced = 0;
+    auto layChain = [&](int first) {
+        std::vector<int> chain;
+        for (int li = first; li != -1 && !seen[li]; li = nextOf[li]) {
+            seen[li] = 1;
+            chain.push_back(li);
+        }
+        if (chain.empty()) return;
+        ++dbgChains;
+        Real total = 0;
+        for (int li : chain) total += graph.links[li].length;
+        if (total < 44.0) { ++dbgShortChain; return; }   // no room once both ends are set back
+        std::size_t ci = 0;
+        Real base = 0;
+        for (Real st = 22.0; st + 22.0 < total; st += 7.0) {
+            while (ci + 1 < chain.size() && base + graph.links[chain[ci]].length <= st) {
+                base += graph.links[chain[ci]].length;
+                ++ci;
+            }
+            const int li = chain[ci];
+            const engine::NavLink& L = graph.links[li];
+            if (L.parkWidth <= 0.0) { ++dbgNoBand; continue; }   // no Parking band here
+            if (L.layer != 0 || L.elevAbsolute) { ++dbgLayer; continue; }
+            // Semantic layer (#17/S7): bays only on FRONTAGE edges — never on a
+            // ramp APPROACH (a street climbing to a landing has no frontage, so
+            // no curbside parking on the on-ramp feeder).
+            if (!(L.access & engine::road_access::kFrontage)) { ++dbgNoFrontage; continue; }
+            if (L.length < 1e-3) continue;
+            const engine::Vec2 dir = graph.direction(li);
+            const engine::Vec2 right(dir.y, -dir.x);
+            const Real local = std::min(L.length, std::max(Real(0), st - base));
             ParkingBay b;
             b.link = li;
-            b.station = st;
-            b.pos = graph.pointOnLink(li, st / L.length) + right * off;
+            b.station = local;
+            b.pos = graph.pointOnLink(li, local / L.length) + right * L.parkOffset;
             b.heading = dir;
             b.width = L.parkWidth;
             // EVERY BAY IS BORN FREE. This used to seed ~55% of them with
@@ -379,8 +427,21 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
             b.occupant = -1;
             baysOnLink_[li].push_back(static_cast<int>(bays_.size()));
             bays_.push_back(b);
+            ++dbgPlaced;
         }
-    }
+    };
+    for (int li = 0; li < graph.linkCount(); ++li)
+        if (!hasPrev[li]) layChain(li);
+    // A ring with no junction on it has no start; every link claims a
+    // predecessor. Seed the leftovers so a roundabout or a loop road still parks.
+    for (int li = 0; li < graph.linkCount(); ++li)
+        if (!seen[li]) layChain(li);
+    if (std::getenv("RT_PARK_DEBUG"))
+        std::fprintf(stderr,
+                     "[park] links=%d chains=%d  short-chain=%d  no-band=%d  "
+                     "layer=%d  no-frontage=%d  bays=%zu\n",
+                     graph.linkCount(), dbgChains, dbgShortChain, dbgNoBand, dbgLayer,
+                     dbgNoFrontage, bays_.size());
     bayNarrowed_.assign(graph.linkCount(), 0);
     for (int li = 0; li < graph.linkCount(); ++li)
         if (!baysOnLink_[li].empty()) bayNarrowed_[li] = 1;

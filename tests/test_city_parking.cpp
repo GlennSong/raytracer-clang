@@ -46,7 +46,57 @@ NavGraph wideCross() {
     return buildNavGraph(g);
 }
 
+// ONE street, `segs` segments long, optionally bent onto a circular arc of
+// `radius` (0 = dead straight). Dead ends at both ends, so the whole thing is a
+// single chain — which is the unit bays are laid along.
+NavGraph oneStreet(double len, int segs, double radius) {
+    const RoadSpec spec = roadSpecStreetParking(12.0, 1, 3.5, 0.25);
+    double off = 0, w = 0;
+    roadSpecParkingBand(spec, +1, off, w);
+    RoadGraph g;
+    for (int i = 0; i <= segs; ++i) {
+        if (radius > 0.0) {
+            const double t = (len / radius) * i / segs;    // arc length = r * theta
+            g.nodes.push_back({ Vec2(radius * std::sin(t), radius * (1 - std::cos(t))) });
+        } else {
+            g.nodes.push_back({ Vec2(len * i / segs, 0) });
+        }
+    }
+    for (int i = 0; i < segs; ++i) {
+        RoadEdge e{ i, i + 1, static_cast<Real>(spec.carriagewayWidth()),
+                    RoadClass::Local, 0 };
+        e.parkOffset = static_cast<Real>(off);
+        e.parkWidth = static_cast<Real>(w);
+        g.edges.push_back(e);
+    }
+    return buildNavGraph(g);
+}
+
 }  // namespace
+
+// A CURVED street parks like a straight one of the same length. Bays used to be
+// laid per sampled SEGMENT, gated at 40 m — and the sampler collapses a straight
+// run to one long segment while shattering a curve into short ones, so a bend
+// silently deleted a street's parking. Measured on the generated metro net: 240
+// links carried a parking band and were under 40 m, while just TWO were long
+// enough to park on. Bays ride the junction-to-junction CHAIN now, so the same
+// 160 m of street parks the same whether it is drawn straight or bent.
+TEST_CASE(a_curved_street_parks_like_a_straight_one) {
+    NavGraph straight = oneStreet(160.0, 1, 0.0);      // one long segment
+    NavGraph curved = oneStreet(160.0, 16, 90.0);      // the same street, bent
+    CitySim s1, s2;
+    s1.build(straight, 0, 0, 5);
+    s2.build(curved, 0, 0, 5);
+    const std::size_t nStraight = s1.parkingBays().size();
+    const std::size_t nCurved = s2.parkingBays().size();
+    std::printf("[parking] straight %zu bays, curved %zu bays\n", nStraight, nCurved);
+    CHECK(nStraight > 0);
+    CHECK(nCurved > 0);
+    // Same arc length, so the same bays — the polyline is a hair shorter than
+    // the true arc, which can cost at most one station per direction.
+    CHECK(nStraight >= nCurved);
+    CHECK(nStraight - nCurved <= 2);
+}
 
 TEST_CASE(parking_bays_stay_clear_of_junction_mouths) {
     NavGraph nav = wideCross();
