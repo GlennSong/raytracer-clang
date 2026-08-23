@@ -215,10 +215,15 @@ static float3 scatteringSkyRadiance(float3 dir, texture2d<float> skyViewLut,
 // into reflection probes (a screen/SSR visual only). Overlaid by the skybox and
 // composite passes on top of the day/night sky from sampleEnvironment().
 
+// Lattice hash over the float BITS (see hash21 in common.metal): the old
+// fract(p*123.34) mangle loses all sub-unit precision once the drift term
+// grows the coordinates past ~1e5 — a long session turned the cloud field
+// into angular slabs. Bit-identical to the Vulkan sky.frag copy.
 float cloudHash(float2 p) {
-    p = fract(p * float2(123.34, 345.45));
-    p += dot(p, p + 34.345);
-    return fract(p.x * p.y);
+    uint h = as_type<uint>(p.x) * 0x85EBCA6Bu ^ as_type<uint>(p.y) * 0xC2B2AE35u;
+    h = (h ^ (h >> 13)) * 0x27D4EB2Du;
+    h ^= h >> 15;
+    return float(h >> 8) * (1.0 / 16777216.0);
 }
 
 float cloudNoise(float2 p) {
@@ -250,7 +255,9 @@ float3 applyClouds(float3 baseSky, float3 dir, device const LightUniforms& env) 
     // Planar projection of the dome onto a cloud plane: directions near the
     // horizon stretch (parallax), overhead compresses. Drift the field over time.
     float2 uv = dir.xz / (dir.y + 0.10);
-    float2 wind = float2(env.skyCloudTime * 0.02, env.skyCloudTime * 0.012);
+    // Wrapped drift — unbounded time quantizes the noise interpolant; one
+    // pattern jump every ~38 days of drift is the whole cost (mirrors sky.frag).
+    float2 wind = fmod(float2(env.skyCloudTime * 0.02, env.skyCloudTime * 0.012), 65536.0);
     float n = cloudFbm(uv * env.skyCloudScale + wind);
 
     // Coverage threshold → soft cloud mask, faded near the horizon.

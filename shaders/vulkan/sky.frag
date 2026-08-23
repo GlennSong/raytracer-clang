@@ -59,10 +59,16 @@ vec3 sampleEnvironment(vec3 dir) {
     return col;
 }
 
+// Lattice hash over the float BITS (see hash21 in mesh.frag / common.metal):
+// the old fract(p*123.34) mangle loses all sub-unit precision once the drift
+// term grows the coordinates past ~1e5 — a long session turned the cloud field
+// into angular slabs. Inputs here are integral lattice coords, exact in a
+// float's 24-bit mantissa far beyond any wrapped drift.
 float cloudHash(vec2 p) {
-    p = fract(p * vec2(123.34, 345.45));
-    p += dot(p, p + 34.345);
-    return fract(p.x * p.y);
+    uint h = floatBitsToUint(p.x) * 0x85EBCA6Bu ^ floatBitsToUint(p.y) * 0xC2B2AE35u;
+    h = (h ^ (h >> 13)) * 0x27D4EB2Du;
+    h ^= h >> 15;
+    return float(h >> 8) * (1.0 / 16777216.0);
 }
 float cloudNoise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
@@ -81,7 +87,10 @@ float cloudFbm(vec2 p) {
 vec3 applyClouds(vec3 baseSky, vec3 dir) {
     if (dir.y <= 0.02) return baseSky;
     vec2 uv = dir.xz / (dir.y + 0.10);
-    vec2 wind = vec2(g.skyCloud.w * 0.02, g.skyCloud.w * 0.012);
+    // Wrapped drift: unbounded time pushes the noise-lattice interpolant into
+    // float quantization (the hash is magnitude-proof, fract(p) is not). One
+    // pattern jump every ~38 days of drift is the whole cost.
+    vec2 wind = mod(vec2(g.skyCloud.w * 0.02, g.skyCloud.w * 0.012), 65536.0);
     float n = cloudFbm(uv * g.skyCloud.z + wind);
     float cov = g.skyCloud.x;
     float mask = smoothstep(cov, cov + 0.20, n) * g.skyCloud.y;

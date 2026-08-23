@@ -709,12 +709,18 @@ void main() {
         outColor = vec4(tint, 1.0);
     } else {
         vec3 color = direct + ambient + emission;
-        // Aerial-perspective fog (ports lighting.metal): lerp toward fog color by
-        // 1-exp(-density*dist) in scene-linear space, before the composite tonemap.
+        // Aerial-perspective fog. The fade target is the SKY the surface
+        // occludes, not the authored fog colour — the P5 fog-restoration
+        // semantics (metal 6d20e85): on Metal the metro runs the scattering
+        // sky, whose aerial path uses fog.rgb only as optical depth and
+        // inscatters the live sky, so haze stays colour-correct at sunset and
+        // under the moon. Vulkan faded toward the fixed fog.rgb, which turned
+        // night distances WHITE. fog.rgb keeps its density-only role here.
         if (g.fog.w > 0.0) {
-            float dist = length(inWorldPos - g.cameraPosition.xyz);
+            vec3 rd = (inWorldPos - g.cameraPosition.xyz);
+            float dist = length(rd);
             float f = 1.0 - exp(-g.fog.w * dist);
-            color = mix(color, g.fog.rgb, f);
+            color = mix(color, sampleEnvironment(rd / max(dist, 1e-4)), f);
         }
         // Opacity (float bits in the spare push slot) → output alpha for the
         // transparent blend pass; ignored by the opaque pipeline (blend off).
