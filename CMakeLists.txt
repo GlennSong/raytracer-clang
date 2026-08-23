@@ -668,6 +668,22 @@ if(RT_BUILD_DEMOS)
     target_compile_options(curb_weld_probe PRIVATE -Wall -Wextra)
     target_link_libraries(curb_weld_probe PRIVATE engine_core)
 
+    # Junction-geometry census: the PLANNING-phase view of acute angles —
+    # tightest gaps, realign feasibility, bend radii, and a dry run of the
+    # resolution ladder. Device: sharp junctions are a sight-line and
+    # vehicle-handling problem, so the gate belongs on the graph.
+    add_executable(junction_angle_probe tools/diagnostics/junction_angle_probe.cpp ${CORE_SOURCES})
+    target_include_directories(junction_angle_probe PRIVATE src)
+    target_compile_options(junction_angle_probe PRIVATE -Wall -Wextra)
+    target_link_libraries(junction_angle_probe PRIVATE engine_core)
+
+    # The city as a layered SVG map, straight from the real pipeline — the
+    # look-at-it loop for road-rule work without opening the engine.
+    add_executable(road_map_svg tools/diagnostics/road_map_svg.cpp ${CORE_SOURCES})
+    target_include_directories(road_map_svg PRIVATE src)
+    target_compile_options(road_map_svg PRIVATE -Wall -Wextra)
+    target_link_libraries(road_map_svg PRIVATE citysim engine_core)
+
     # Rigid vs CPU-skinned bend, side by side (character-posing-plan P2).
     add_executable(skin_demo tools/skin_demo.cpp ${CORE_SOURCES})
     target_include_directories(skin_demo PRIVATE src)

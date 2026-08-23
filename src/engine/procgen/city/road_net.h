@@ -104,6 +104,10 @@ struct CurbBandAudit {
     std::vector<std::pair<Vec2, Vec2>> mouthGaps;      // where the band is suppressed
     std::vector<Vec2>  junctions;                      // deg >= 3 node positions
     std::vector<int>   junctionDegree;                 // parallel to `junctions`
+    // Smallest angle (deg) between ADJACENT arms at each junction, from the
+    // mesher's own arm directions — the number that says whether a junction is
+    // a clean cross or a needle. -1 where the mesher built no arms for a node.
+    std::vector<double> junctionMinAngle;
     double sidewalkWidth = 0.0;
     double curbHeight = 0.0;
 };

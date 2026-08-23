@@ -136,15 +136,28 @@ int main(int argc, char** argv) {
     if (argc < 3) {
         std::fprintf(stderr,
                      "usage: road_map_svg <level.json> <out.svg> [--traffic]\n"
+                     "                     [--rule key=value ...]\n"
                      "  --traffic  drop the lot/district layers and draw a clean\n"
                      "             TRAFFIC map: recessive roads under a car-density\n"
-                     "             choropleth + one dot per driver.\n");
+                     "             choropleth + one dot per driver.\n"
+                     "  --acute D  ring every junction whose tightest arm pair\n"
+                     "             is under D degrees, labelled with the angle.\n"
+                     "  --rule     override one key of the level's own \"generate\"\n"
+                     "             block before the recipe runs, e.g.\n"
+                     "               --rule min_arm_angle_deg=60 --rule seed=9\n"
+                     "             Repeatable. This is the A/B loop for road-rule\n"
+                     "             work: change a rule, regenerate, LOOK at the\n"
+                     "             city, without opening the engine.\n");
         return 1;
     }
     // The traffic view answers "where do the cars start?", so the city itself
     // becomes context: magnitude over space needs a quiet base or the ramp has
     // nothing to read against.
     const bool trafficOnly = argc > 3 && std::string(argv[3]) == "--traffic";
+    // --acute <deg>: ring every junction whose tightest arm pair is under this.
+    double markAcute = 0.0;
+    for (int i = 3; i < argc - 1; ++i)
+        if (std::string(argv[i]) == "--acute") markAcute = std::atof(argv[i + 1]);
     std::ifstream in(argv[1]);
     if (!in) { std::fprintf(stderr, "cannot open %s\n", argv[1]); return 1; }
     json level = json::parse(in, nullptr, false);
@@ -162,6 +175,26 @@ int main(int argc, char** argv) {
         break;
     }
     if (gen.is_null()) { std::fprintf(stderr, "no generated road entity\n"); return 1; }
+
+    // --rule key=value: patch the recipe before it runs. Numbers land as
+    // numbers, "true"/"false" as bools, anything else as a string, so a rule of
+    // any type can be swept without editing the level.
+    for (int i = 3; i < argc; ++i) {
+        if (std::string(argv[i]) != "--rule" || i + 1 >= argc) continue;
+        const std::string kv = argv[++i];
+        const std::size_t eq = kv.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string k = kv.substr(0, eq), v = kv.substr(eq + 1);
+        if (v == "true" || v == "false") gen[k] = (v == "true");
+        else {
+            try {
+                std::size_t used = 0;
+                const double num = std::stod(v, &used);
+                if (used == v.size()) gen[k] = num; else gen[k] = v;
+            } catch (...) { gen[k] = v; }
+        }
+        std::printf("[map] rule override: %s = %s\n", k.c_str(), v.c_str());
+    }
 
     RoadEntity net;
     net.look.defaultWidth = roadWidth;
@@ -328,6 +361,46 @@ int main(int argc, char** argv) {
             << "\" fill=\"" << (arterial ? "#b3452f" : "#2f6fb3") << "\"/>\n";
     }
     svg << "</g>\n";
+
+    // ACUTE JUNCTIONS — every crossing whose TIGHTEST pair of arms is under
+    // `markAcute` degrees, ringed and labelled with the angle. A sharp junction
+    // is a sight-line and vehicle-handling problem before it is anything else,
+    // and on a plan this size the eye cannot tell 55 degrees from 70 — nor can
+    // it tell an acute JUNCTION from a thin wedge BLOCK between two roads that
+    // merely converge slowly. This layer settles which is which.
+    if (markAcute > 0.0) {
+        svg << "<g id=\"acute\" fill=\"none\">\n";
+        int marked = 0;
+        for (std::size_t i = 0; i < g.nodes.size(); ++i) {
+            if (deg[i] < 3) continue;
+            std::vector<double> ang;
+            for (const auto& e : g.edges) {
+                int far = -1;
+                if (e.a == static_cast<int>(i)) far = e.b;
+                else if (e.b == static_cast<int>(i)) far = e.a;
+                if (far < 0) continue;
+                const Vec2 d = g.nodes[far].pos - g.nodes[i].pos;
+                if (d.lengthSquared() > 1e-12) ang.push_back(std::atan2(d.y, d.x));
+            }
+            if (ang.size() < 3) continue;
+            std::sort(ang.begin(), ang.end());
+            double tightest = 360.0;
+            for (std::size_t k = 0; k < ang.size(); ++k) {
+                double gap = ang[(k + 1) % ang.size()] - ang[k];
+                if (gap <= 0) gap += 2.0 * 3.14159265358979323846;
+                tightest = std::min(tightest, gap * 180.0 / 3.14159265358979323846);
+            }
+            if (tightest >= markAcute) continue;
+            ++marked;
+            svg << "<circle cx=\"" << g.nodes[i].pos.x << "\" cy=\"" << g.nodes[i].pos.y
+                << "\" r=\"40\" stroke=\"#c1121f\" stroke-width=\"6\"/>\n";
+            svg << "<text x=\"" << g.nodes[i].pos.x + 48 << "\" y=\"" << g.nodes[i].pos.y
+                << "\" font-family=\"sans-serif\" font-size=\"44\" fill=\"#c1121f\">"
+                << static_cast<int>(tightest + 0.5) << "</text>\n";
+        }
+        svg << "</g>\n";
+        std::printf("[map] acute layer: %d junctions under %.0f deg\n", marked, markAcute);
+    }
 
     // TRAFFIC DENSITY — cars per 150 m cell (about a downtown block, and the
     // scale the render/sim bubble cares about). Magnitude over space, so it is a

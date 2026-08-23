@@ -123,6 +123,29 @@ RoadGraph consolidateJunctionSpans(
 RoadGraph dissolveAcuteArms(const RoadGraph& graph, Real minDot = 0.85,
                             int maxDetourSpans = 3);
 
+// REALIGN an acute junction by bending its approaches (docs/curb-weld-analysis.md).
+//
+// Two arms leaving a node closer than `minAngle` are a sight-line problem and a
+// handling problem before they are ever a paving problem: you cannot see around
+// the corner, and you cannot take the turn at speed. Real practice fixes that in
+// the LAYOUT — the approach is realigned to meet nearer square, with a straight
+// run into the junction — not by paving cleverly around the angle.
+//
+// This is that move. For each offending pair the arms' departure bearings are
+// pushed apart until every gap clears `minAngle`, and the change is realised by
+// inserting a BEND NODE `runIn` metres along the arm and rotating only that
+// stub. The far node never moves, so every block face hanging off it keeps its
+// corners — which is the difference from `deAcute` (road_net.cpp), whose
+// far-node rotation deformed the faces and is why the metro recipe skipped the
+// district cleanup entirely.
+//
+// Junctions that cannot be opened (degree * minAngle > 2*pi — arithmetically
+// impossible) are left alone for the next rung of the ladder: a roundabout, a
+// stagger, or dissolveAcuteArms. Elevated nodes and baked corridor edges are
+// never touched. Pure + headless; deterministic in node then arm order.
+RoadGraph realignAcuteJunctions(const RoadGraph& graph, Real minAngle,
+                                Real runIn = 18.0, int passes = 4);
+
 // Corner-cut degree-2 vertices whose deflection exceeds maxTurn: delete the
 // vertex and chord its neighbours. Strictly bend-reducing (terminates),
 // face-preserving, junction-pinned — the backstop for bends relaxSharpBends

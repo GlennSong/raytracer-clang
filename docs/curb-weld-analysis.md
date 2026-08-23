@@ -273,10 +273,20 @@ Two things remain, and neither is reachable from a per-loop corner rule:
   short that a 3.5 m band cannot exist there at all; the trim floor (35% of the
   band width) stops before it deletes the sidewalk. Lowering the floor to 15%
   was measured and is worse overall (overlap 884 → 1 038 m²).
-* **The remaining 884 m² is largely CROSS-LOOP**: one block's band reaching into
-  the next block's. No per-loop offset rule can see that; it needs the bands
-  unioned against each other, or the kerb lines to stop producing needle
-  corners in the first place.
+* **Where the remaining 884 m² actually is** — measured, after this was first
+  guessed at (wrongly) as cross-loop:
+
+  | stacked band is... | area | share |
+  |---|---|---|
+  | two different loops (block vs block) | 0.2 m² | **0%** |
+  | one loop closing on itself (a wedge) | 151.2 m² | 17% |
+  | a single corner folding locally | 732.5 m² | **83%** |
+
+  Blocks do not collide with each other at all — the streets between them are
+  wider than two sidewalks. The wedge share rises with acuteness (26% of the
+  fold in the 30-45° bucket against 3% at square junctions), so wedges are
+  real and are an acute phenomenon, but even at acute junctions the local
+  corner fold is three quarters of it.
 
 ## Fix 5 — wiring the authored corner radius, and what it taught
 
@@ -323,6 +333,101 @@ came from a device request ("sidewalks should be wider"); it is also what drives
 most of the remaining fold. Narrowing to ~2.0–2.5 m improves the band roughly
 4× on its own, with or without kerb returns, and is what would let the corner
 radius finally be turned on.
+
+## What happens at acute angles
+
+The probe now carries each junction's **smallest angle between adjacent arms**,
+taken from the mesher's own arm directions (`CurbBandAudit::junctionMinAngle`),
+and buckets every metric by it. Before that it could only see acute failures in
+the synthetic arena; on a real level it had no notion of approach angle at all.
+
+`metro_v2_test`, after the four fixes:
+
+| smallest approach angle | junctions | stacked band | per junction | kerb with no band |
+|---|---|---|---|---|
+| 30–45° (acute) | 15 | 68.3 m² | 4.55 m² | 1.41% |
+| 45–60° | 56 | 333.1 m² | 5.95 m² | 1.68% |
+| 60–75° | 88 | 412.1 m² | 4.68 m² | 0.39% |
+| **75–105° (square)** | 54 | 70.4 m² | **1.30 m²** | **0.00%** |
+| > 105° | 3 | 0.0 m² | 0.00 m² | 0.00% |
+
+**Everything under 75° folds 3.5–4.6× worse than a square junction, and holes
+appear only below 75°.** No junction on this level is under 30° — the generator
+already spreads those (`road_net.cpp`, "Spread acute junctions so the mesher's
+corners stay weldable") — so the needle case shows up only in `--arena`, where
+three arms 30° apart is the worst case on the board (29.4 m² against 0.9 for the
+same star at 90°).
+
+Three mechanisms, all sharpening as the angle closes:
+
+1. **The corner gets no arc at all.** `junctionPatch` builds its kerb return
+   around the intersection of the two verge lines, but bails to a straight
+   CHORD when that intersection sits farther than 0.75 × the chord — the
+   near-parallel guard, which exists because sweeping a control point out there
+   drags the corner across the pad. Measured on metro_v2: **arc = 590, chord =
+   161, so 21% of junction corners are unrounded by construction**, and they are
+   the acute ones. That is the "cut off, not rounded" look directly.
+2. **The band has to turn through 180° − approach in the room two converging
+   verges leave it.** On the concave side that is an inward offset at a radius
+   the corner cannot supply, which is the same impossibility as the
+   cornerRadius finding above — and it is why the trim's floor (35% of band
+   width) stops before it can unfold the corner.
+3. **Short kerb edges.** Acute corners produce the shortest segments in the
+   loop, and a quad folds exactly when the outer offset outreaches its kerb
+   edge. The 462 quads that still fold are concentrated here.
+
+The fix for (1) is a real fillet at acute corners rather than a chord — which is
+`curbReturnFillet` again, this time with the radius bounded by the wedge instead
+of by the authored value. (2) and (3) both say the same thing the width table
+says: a 3.5 m band cannot survive a sharp corner, whatever the corner does.
+
+## The planner side: acute junctions
+
+Straightening the city was pursued on its own merits — device: "the sight lines
+are important and also taking sharp turns around acute angles means your car
+will tip over" — not as a curb fix. It is worth being explicit that it is NOT a
+curb fix, because the correlation is misleading:
+
+* Before the width clamp, junction angle looked causal: square junctions folded
+  1.3 m² of sidewalk each against 4.7-11 m² for acute ones.
+* Forcing junctions square made the fold WORSE (884 -> 1286 m²). Realigned
+  junctions folded ~11.6 m² each against 4.68 for untouched junctions at the
+  same angle — the curved approach, not the angle.
+* After the width clamp the angle dependence is gone: 0.65 m² at 30-45°,
+  0.57 m² at 60-75°, 0.06 m² at 75-105°. A sharp junction now folds less
+  sidewalk than a square one did before.
+
+`realignAcuteJunctions` (road_constraints.cpp) opens a tight pair by BENDING the
+approach — a bend node inserted `realign_run_in` metres along the arm, rotating
+only that stub, far node pinned so every block face keeps its corners. That is
+what a designer does to a skewed junction, and it is the metro-safe form of the
+older `deAcute`, whose far-node rotation deformed the faces and is why the metro
+recipe skipped the district cleanup entirely.
+
+Measured on metro_v2 (`min_arm_angle_deg` 60, `realign_run_in` 60):
+junctions under 60° fall from 69 to 7, bends under a 30 m radius stay at 2
+against the untouched city's 1. Higher floors do not work: at 75° a fifth of
+junctions still cannot reach it and hairpins jump to 32, because a road bent
+afterwards has only its run-in to turn in. Past 70° the turn has to be built in
+when the road is GROWN, not added later.
+
+### The cull is scale-dependent — measured the hard way
+
+`dissolveAcuteArms` deletes the redundant twin of a near-parallel pair. Raising
+its threshold from 32° to 45° and combining it with the bend is excellent on a
+city: **zero** junctions under 60° in every ring including the rim, and the
+tightest curve anywhere IMPROVES on the untouched city (28.9 m -> 32.7 m), for
+five junctions. The cull removes exactly the twins that were forcing the bend
+into hairpins.
+
+The same 45° on a SMALL net destroys it. On the 250 m test site in
+`tests/test_city_parking.cpp`, 45° leaves **0 Local/Collector edges** — no
+specs, no parking, no frontage. A small net's few streets are near-parallel to
+each other by construction, and the cull cascades.
+
+So `dissolve_acute_deg` defaults to 32 and a city-scale level opts in to 45 per
+recipe, once someone has measured it on that level. A threshold that is right at
+one scale and fatal at another does not belong in a default.
 
 ## Reproducing
 

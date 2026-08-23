@@ -375,6 +375,198 @@ RoadGraph mergeShortEdges(const RoadGraph& in, Real minLen, int maxDegree) {
     return out;
 }
 
+namespace {
+// Do segments (a,b) and (c,d) PROPERLY cross? Shared endpoints do not count —
+// two arms leaving one node touch there by construction.
+bool segsCross(const Vec2& a, const Vec2& b, const Vec2& c, const Vec2& d) {
+    auto side = [](const Vec2& p, const Vec2& q, const Vec2& r) {
+        const double v = cross(q - p, r - p);
+        return v > 1e-9 ? 1 : (v < -1e-9 ? -1 : 0);
+    };
+    const int d1 = side(a, b, c), d2 = side(a, b, d);
+    const int d3 = side(c, d, a), d4 = side(c, d, b);
+    return d1 * d2 < 0 && d3 * d4 < 0;
+}
+}  // namespace
+
+RoadGraph realignAcuteJunctions(const RoadGraph& in, Real minAngle, Real runIn, int passes) {
+    const double kTwoPi = 6.283185307179586;
+    RoadGraph g = in;
+    if (minAngle <= 0.0) return g;
+    int dbgTight = 0, dbgApplied = 0, dbgBlocked = 0, dbgInfeasible = 0, dbgBaked = 0;
+    // Bend nodes this pass inserted, so a later pass ROTATES the one it already
+    // made instead of stacking a second one behind it (which would kink the
+    // approach and never converge).
+    std::vector<char> isBend(g.nodes.size(), 0);
+
+    for (int pass = 0; pass < passes; ++pass) {
+        const int N = static_cast<int>(g.nodes.size());
+        isBend.resize(N, 0);
+        std::vector<std::vector<std::pair<int, int>>> nbr(N);   // (far, edge)
+        for (int ei = 0; ei < static_cast<int>(g.edges.size()); ++ei) {
+            const RoadEdge& e = g.edges[ei];
+            if (e.a == e.b) continue;
+            nbr[e.a].push_back({e.b, ei});
+            nbr[e.b].push_back({e.a, ei});
+        }
+        bool changed = false;
+
+        for (int v = 0; v < N; ++v) {
+            const int d = static_cast<int>(nbr[v].size());
+            if (d < 3) continue;
+            if (g.nodes[v].elevAbsolute) continue;          // a deck node: not ours to move
+            // Arithmetically impossible to open: leave it for the next rung.
+            if (d * static_cast<double>(minAngle) > kTwoPi) { ++dbgInfeasible; continue; }
+
+            struct Arm { double ang; int far; int edge; };
+            std::vector<Arm> arms;
+            arms.reserve(d);
+            bool baked = false;
+            for (const auto& fe : nbr[v]) {
+                if (g.edges[fe.second].baked) { baked = true; break; }
+                const Vec2 dv = g.nodes[fe.first].pos - g.nodes[v].pos;
+                if (dv.lengthSquared() < 1e-12) continue;
+                arms.push_back({std::atan2((double)dv.y, (double)dv.x), fe.first, fe.second});
+            }
+            if (baked || static_cast<int>(arms.size()) < 3) { ++dbgBaked; continue; }
+            std::sort(arms.begin(), arms.end(),
+                      [](const Arm& a, const Arm& b) { return a.ang < b.ang; });
+
+            const int n = static_cast<int>(arms.size());
+            std::vector<double> want(n);
+            for (int k = 0; k < n; ++k) want[k] = arms[k].ang;
+            // Push neighbouring bearings apart until every gap clears minAngle.
+            // Local and iterative (the file's contract: adjust, never solve).
+            bool tight = false;
+            for (int it = 0; it < 16; ++it) {
+                bool any = false;
+                for (int k = 0; k < n; ++k) {
+                    const int k1 = (k + 1) % n;
+                    double gap = want[k1] - want[k];
+                    if (k1 == 0) gap += kTwoPi;
+                    // Aim a hair PAST the target: relaxing to exactly minAngle
+                    // leaves a junction sitting on the line, and the dead-band
+                    // below then skips the 1-degree correction it needs — which
+                    // is why the first cut stalled with 52 junctions parked
+                    // between 56 and 60 degrees.
+                    const double aim = minAngle * 1.03;
+                    if (gap >= aim) continue;
+                    const double push = (aim - gap) * 0.5;
+                    want[k] -= push;
+                    want[k1] += push;
+                    any = true;
+                    tight = true;
+                }
+                if (!any) break;
+            }
+            if (!tight) continue;
+            ++dbgTight;
+
+            for (int k = 0; k < n; ++k) {
+                double delta = want[k] - arms[k].ang;
+                while (delta > kTwoPi * 0.5) delta -= kTwoPi;
+                while (delta < -kTwoPi * 0.5) delta += kTwoPi;
+                if (std::fabs(delta) < 0.006) continue;      // under ~0.35 deg: noise
+                const Vec2 dir(std::cos(want[k]), std::sin(want[k]));
+                const Vec2 V = g.nodes[v].pos;
+                const int far = arms[k].far;
+                // STALE INCIDENCE GUARD. `nbr` is built once per pass, but the
+                // graph is mutated as we walk it: if a junction earlier in this
+                // pass already bent the arm we share with it, this edge no
+                // longer joins (v, far) and rewiring it again welds two bend
+                // stubs together — measured as 7 pairs of roads lying on top of
+                // each other. Re-check the edge before touching it; the next
+                // pass will see the fresh topology and finish the job.
+                {
+                    const RoadEdge& cur = g.edges[arms[k].edge];
+                    if (!((cur.a == v && cur.b == far) || (cur.a == far && cur.b == v)))
+                        continue;
+                }
+                const double elen = (g.nodes[far].pos - V).length();
+                if (elen < 1e-6) continue;
+
+                // VALIDATE BEFORE APPLYING. A bend that swings across a
+                // neighbouring street is worse than the angle it fixes: the
+                // planarize behind this pass would node the crossing into a
+                // brand-new junction at whatever angle the accident made — the
+                // first attempt at this manufactured junctions at 15 deg, below
+                // anything the generator had produced. Construct, test, and
+                // leave the junction for the next rung if the bend will not fit.
+                // A bend splits the arm's first edge, so keep both pieces real
+                // roads rather than slivers — but no more than that. An earlier
+                // version refused any arm under ~67 m on the theory that short
+                // pieces were what killed kerbside parking; the real cause was
+                // curvature shattering a chain into sub-40 m nav links, fixed
+                // where it belonged (bays ride the chain now). The over-strict
+                // guard was left behind, and it cost real compliance: 45
+                // junctions under 60 degrees instead of 7.
+                const double L = std::max(4.0, std::min<double>(runIn, elen * 0.4));
+                if (L < 6.0 || elen - L < 10.0) continue;
+                const Vec2 B = V + dir * L;
+                const Vec2 F = g.nodes[far].pos;
+                bool blocked = false;
+                for (int ei = 0; ei < static_cast<int>(g.edges.size()) && !blocked; ++ei) {
+                    const RoadEdge& e = g.edges[ei];
+                    if (ei == arms[k].edge || e.a == e.b) continue;
+                    if (e.a == v || e.b == v || e.a == far || e.b == far) continue;
+                    const Vec2 p = g.nodes[e.a].pos, q = g.nodes[e.b].pos;
+                    const double lo = std::min(V.x, F.x) - 2.0, hi = std::max(V.x, F.x) + 2.0;
+                    const double lo2 = std::min(V.y, F.y) - 2.0, hi2 = std::max(V.y, F.y) + 2.0;
+                    if (std::max(p.x, q.x) < lo || std::min(p.x, q.x) > hi ||
+                        std::max(p.y, q.y) < lo2 || std::min(p.y, q.y) > hi2) continue;
+                    if (segsCross(V, B, p, q) || segsCross(B, F, p, q)) blocked = true;
+                }
+                if (blocked) { ++dbgBlocked; continue; }
+
+                if (isBend[far] && static_cast<int>(nbr[far].size()) == 2) {
+                    // Our own bend node from an earlier pass: swing it, keeping
+                    // its distance, so the approach re-aims without new nodes.
+                    g.nodes[far].pos = V + dir * elen;
+                } else {
+                    // A bend must not overshoot the arm it is bending: cap it
+                    // well inside the first edge, and keep a real run-in.
+                    const int b = static_cast<int>(g.nodes.size());
+                    RoadNode bn;
+                    bn.pos = B;
+                    bn.elev = g.nodes[v].elev;
+                    // AUTHOR THE TANGENT so the run-in is genuinely STRAIGHT.
+                    // With an auto (Catmull-Rom) knot the spline starts bending
+                    // the moment it leaves the junction, which is both wrong for
+                    // a road — real practice is a straight approach, then the
+                    // curve — and expensive here: the sampler collapses a
+                    // straight edge to ONE segment but shatters a curved one,
+                    // and the nav layer makes a link per segment. Curving the
+                    // approach put every kerbside link under the 40 m parking
+                    // threshold and silently deleted the city's parking (346
+                    // banded links, 0 bays). Tangent along the approach keeps
+                    // v->B straight; the bend then lives in B->far.
+                    bn.tangent = dir;
+                    g.nodes.push_back(bn);
+                    isBend.push_back(1);
+                    // Re-point the existing edge onto the bend, then carry the
+                    // SAME edge attributes (width, class, spec, one-way, access)
+                    // through to the far node — a fresh RoadEdge would drop them.
+                    RoadEdge rest = g.edges[arms[k].edge];
+                    RoadEdge& first = g.edges[arms[k].edge];
+                    if (first.a == v) first.b = b; else first.a = b;
+                    if (rest.a == v) { rest.a = b; rest.b = far; }
+                    else             { rest.a = far; rest.b = b; }
+                    g.edges.push_back(rest);
+                }
+                changed = true;
+                ++dbgApplied;
+            }
+        }
+        if (!changed) break;
+    }
+    if (std::getenv("RT_REALIGN_DEBUG"))
+        std::fprintf(stderr,
+                     "[realign] tight-junctions=%d arms-bent=%d blocked=%d "
+                     "infeasible=%d baked/elev=%d\n",
+                     dbgTight, dbgApplied, dbgBlocked, dbgInfeasible, dbgBaked);
+    return g;
+}
+
 RoadGraph dissolveAcuteArms(const RoadGraph& in, Real minDot, int maxDetourSpans) {
     // Two near-parallel arms leaving one junction enclose a sliver wedge the
     // mesher's acute-pair trim can only partially cover — the piedmont drive

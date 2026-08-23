@@ -61,6 +61,12 @@ struct Tri {
     double minx, minz, maxx, maxz;
     bool walkTop;          // sidewalk slab top (up-facing, walk colour)
     bool curbFace;         // the kerb lip (walk-adjacent, near-vertical)
+    // WHICH kerb this piece of band belongs to. Two slabs stacked on the same
+    // ground mean something different depending on where they came from: two
+    // BLOCKS colliding, one block's wedge closing on itself, or a single corner
+    // folding. Only the second is what an acute junction does.
+    int loop = -1;
+    int vidx = -1;
 };
 
 // STRICT interior: a sample sitting exactly on a shared edge would otherwise be
@@ -158,6 +164,66 @@ struct TriGrid {
         std::sort(out.begin(), out.end());
         out.erase(std::unique(out.begin(), out.end()), out.end());
         return out;
+    }
+};
+
+// Kerb segments, tagged with the loop and vertex they came from — so a band
+// triangle can be traced back to the kerb that produced it.
+struct KerbIndex {
+    double cell = 6.0;
+    struct Seg { Vec2 a, b; int loop, vidx; };
+    std::unordered_map<long long, std::vector<Seg>> buckets;
+    std::vector<int> loopSize;
+
+    static long long key(int cx, int cz) {
+        return (static_cast<long long>(cx) << 32) ^ (static_cast<long long>(cz) & 0xffffffffLL);
+    }
+    void build(const std::vector<Poly2>& loops) {
+        loopSize.assign(loops.size(), 0);
+        for (std::size_t li = 0; li < loops.size(); ++li) {
+            const Poly2& L = loops[li];
+            loopSize[li] = static_cast<int>(L.size());
+            for (std::size_t i = 0; i < L.size(); ++i) {
+                const Seg sg{L[i], L[(i + 1) % L.size()], static_cast<int>(li),
+                             static_cast<int>(i)};
+                const double lo_x = std::min(sg.a.x, sg.b.x), hi_x = std::max(sg.a.x, sg.b.x);
+                const double lo_z = std::min(sg.a.y, sg.b.y), hi_z = std::max(sg.a.y, sg.b.y);
+                for (int cx = (int)std::floor(lo_x / cell); cx <= (int)std::floor(hi_x / cell); ++cx)
+                    for (int cz = (int)std::floor(lo_z / cell); cz <= (int)std::floor(hi_z / cell); ++cz)
+                        buckets[key(cx, cz)].push_back(sg);
+            }
+        }
+    }
+    // Nearest kerb segment to p, as (loop, vertex, distance).
+    void nearest(const Vec2& p, int& loop, int& vidx, double& dist) const {
+        loop = -1; vidx = -1; dist = 1e30;
+        for (int ring = 0; ring <= 4 && dist > ring * cell; ++ring) {
+            const int cx0 = (int)std::floor(p.x / cell), cz0 = (int)std::floor(p.y / cell);
+            for (int cx = cx0 - ring; cx <= cx0 + ring; ++cx)
+                for (int cz = cz0 - ring; cz <= cz0 + ring; ++cz) {
+                    if (ring > 0 && std::abs(cx - cx0) != ring && std::abs(cz - cz0) != ring) continue;
+                    auto it = buckets.find(key(cx, cz));
+                    if (it == buckets.end()) continue;
+                    for (const Seg& sg : it->second) {
+                        const Vec2 ab = sg.b - sg.a;
+                        const double l2 = ab.lengthSquared();
+                        double t = l2 > 1e-12 ? dot(p - sg.a, ab) / l2 : 0.0;
+                        t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                        const double d = (sg.a + ab * t - p).length();
+                        if (d < dist) { dist = d; loop = sg.loop; vidx = sg.vidx; }
+                    }
+                }
+        }
+    }
+    // Cyclic vertex gap along one loop — how far apart two pieces of band are
+    // ALONG the kerb, which is what separates a wedge closing on itself from a
+    // single corner folding.
+    int gap(int loop, int va, int vb) const {
+        if (loop < 0 || loop >= static_cast<int>(loopSize.size())) return 0;
+        const int n = loopSize[loop];
+        if (n <= 0) return 0;
+        const int d = std::abs(va - vb);
+        return std::min(d, n - d);
     }
 };
 
@@ -297,6 +363,10 @@ struct JunctionReport {
     double narrowLen = 0;        // ...with a band under half the nominal width
     double minWidth = 1e9;
     double detachedLen = 0;      // kerb metres with no asphalt on the road side
+    double minAngle = -1;        // smallest gap between adjacent arms (deg)
+    double ovlCross = 0;         // two different loops (blocks) colliding
+    double ovlWedge = 0;         // one loop closing on itself (an acute wedge)
+    double ovlCorner = 0;        // a single corner folding locally
     // spikes
     double maxReach = 0;         // farthest a band vertex sits from the kerb line
     Vec2   reachAt{0, 0};
@@ -409,6 +479,7 @@ int main(int argc, char** argv) {
     double focusR = 30.0;
     double cornerOverride = -1.0;   // >= 0 overrides look.cornerRadius
     double walkOverride = -1.0;     // >= 0 overrides look.sidewalk
+    double minArm = -1.0;           // >= 0 overrides the recipe's min_arm_angle_deg
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--focus" && i + 3 < argc) {
@@ -422,6 +493,7 @@ int main(int argc, char** argv) {
         else if (a == "--csv" && i + 1 < argc) csvPath = argv[++i];
         else if (a == "--corner" && i + 1 < argc) cornerOverride = std::atof(argv[++i]);
         else if (a == "--sidewalk" && i + 1 < argc) walkOverride = std::atof(argv[++i]);
+        else if (a == "--minarm" && i + 1 < argc) minArm = std::atof(argv[++i]);
         else if (a == "--arena") { runArena(); return 0; }
         else if (a.size() && a[0] != '-') levelPath = a;
     }
@@ -438,8 +510,11 @@ int main(int argc, char** argv) {
     if (roadBlock.is_null()) { std::fprintf(stderr, "no road entity in %s\n", levelPath.c_str()); return 1; }
 
     RoadEntity net = roadNetFromJson(roadBlock);
-    if (roadBlock.contains("generate"))
-        applyGenerateRecipe(net, roadBlock["generate"], nullptr);   // flat: XZ topology is height-free
+    if (roadBlock.contains("generate")) {
+        json gen = roadBlock["generate"];
+        if (minArm >= 0.0) gen["min_arm_angle_deg"] = minArm;   // A/B the planner's angle floor
+        applyGenerateRecipe(net, gen, nullptr);   // flat: XZ topology is height-free
+    }
 
     if (cornerOverride >= 0.0) net.look.cornerRadius = cornerOverride;
     if (walkOverride >= 0.0) net.look.sidewalk = walkOverride;
@@ -452,6 +527,19 @@ int main(int argc, char** argv) {
     std::vector<Tri> road = asphaltTris(mesh);
     TriGrid roadGrid;
     roadGrid.build(road);
+
+    // Trace each band triangle back to the kerb that produced it: two of its
+    // vertices sit ON the kerb line, so the nearest tagged segment is its owner.
+    KerbIndex kerbIndex;
+    kerbIndex.build(audit.loops);
+    for (Tri& t : tris) {
+        double best = 1e30;
+        for (const Vec2& v : {t.a, t.b, t.c}) {
+            int lp, vi; double d;
+            kerbIndex.nearest(v, lp, vi, d);
+            if (d < best) { best = d; t.loop = lp; t.vidx = vi; }
+        }
+    }
 
     std::size_t nWalk = 0, nCurb = 0;
     for (const Tri& t : tris) { nWalk += t.walkTop; nCurb += t.curbFace; }
@@ -656,6 +744,7 @@ int main(int argc, char** argv) {
         JunctionReport R;
         R.pos = audit.junctions[ji];
         R.degree = audit.junctionDegree[ji];
+        R.minAngle = ji < audit.junctionMinAngle.size() ? audit.junctionMinAngle[ji] : -1.0;
 
         // -- rounding, on the CLEANED kerb line: what the corner geometry would
         //    read as if the hairline spurs were not in the way.
@@ -686,19 +775,36 @@ int main(int argc, char** argv) {
                 if ((p - R.pos).length() > discR) continue;
                 int stack = 0;
                 double ylo = 1e30, yhi = -1e30;
+                std::vector<std::pair<int, int>> owners;   // (loop, vertex)
                 for (int ti : cand) {
                     const Tri& t = tris[ti];
                     if (!t.walkTop) continue;
                     if (p.x < t.minx || p.x > t.maxx || p.y < t.minz || p.y > t.maxz) continue;
                     if (!inTri(p, t.a, t.b, t.c)) continue;
                     ++stack;
+                    owners.push_back({t.loop, t.vidx});
                     const double y = (t.ya + t.yb + t.yc) / 3.0;
                     ylo = std::min(ylo, y); yhi = std::max(yhi, y);
                 }
                 if (stack >= 2) {
-                    R.overlapArea += raster * raster;
+                    const double cellArea = raster * raster;
+                    R.overlapArea += cellArea;
                     R.maxStack = std::max(R.maxStack, stack);
                     R.overlapDropM = std::max(R.overlapDropM, yhi - ylo);
+                    // Which KIND of collision is this?
+                    bool cross = false;
+                    int widestGap = 0;
+                    for (std::size_t x = 0; x < owners.size(); ++x)
+                        for (std::size_t y = x + 1; y < owners.size(); ++y) {
+                            if (owners[x].first != owners[y].first) { cross = true; continue; }
+                            widestGap = std::max(widestGap,
+                                                 kerbIndex.gap(owners[x].first,
+                                                               owners[x].second,
+                                                               owners[y].second));
+                        }
+                    if (cross) R.ovlCross += cellArea;
+                    else if (widestGap > 4) R.ovlWedge += cellArea;
+                    else R.ovlCorner += cellArea;
                 }
             }
         }
@@ -822,6 +928,21 @@ int main(int argc, char** argv) {
                         (double)gs.first.x, (double)gs.first.y,
                         (double)gs.second.x, (double)gs.second.y);
     }
+    {
+        double cross = 0, wedge = 0, corner = 0;
+        for (const JunctionReport& R : reps) {
+            cross += R.ovlCross; wedge += R.ovlWedge; corner += R.ovlCorner;
+        }
+        const double tot = std::max(1e-9, cross + wedge + corner);
+        std::printf("\n## WHAT IS STACKED ON WHAT\n");
+        std::printf("  two different loops (block vs block)  : %7.1f m2  (%.0f%%)\n",
+                    cross, 100.0 * cross / tot);
+        std::printf("  one loop closing on itself (a wedge)  : %7.1f m2  (%.0f%%)\n",
+                    wedge, 100.0 * wedge / tot);
+        std::printf("  a single corner folding locally       : %7.1f m2  (%.0f%%)\n",
+                    corner, 100.0 * corner / tot);
+    }
+
     std::printf("\n## SPURS vs GEOMETRY\n");
     std::printf("  hairline spurs (< 5 cm edge, kerb reverses > 90 deg) : %d over %zu loops"
                 " (worst turn %.1f deg)\n", spurs, audit.loops.size(), spurWorstTurn);
@@ -851,6 +972,44 @@ int main(int argc, char** argv) {
                             b == 9 ? "<- the de-spike filter cuts at ~170 deg" : "");
     }
 
+    // BY APPROACH ANGLE. A kerb return between two arms 30 degrees apart is a
+    // different problem from one at a clean cross: the band has to turn through
+    // 150 degrees in the space the two verges leave it. Bucketing says whether
+    // the residue is concentrated there or spread evenly.
+    {
+        struct Bucket { const char* name; double lo, hi; int n = 0; double ovl = 0,
+                        hole = 0, narrow = 0, kerb = 0; int mitred = 0;
+                        double cross = 0, wedge = 0, corner = 0; };
+        Bucket buckets[] = {
+            {"< 30 deg (needle)", 0, 30}, {"30-45 deg (acute)", 30, 45},
+            {"45-60 deg", 45, 60},        {"60-75 deg", 60, 75},
+            {"75-105 deg (square)", 75, 105}, {"> 105 deg", 105, 361},
+        };
+        int unknown = 0;
+        for (const JunctionReport& R : reps) {
+            if (R.minAngle < 0) { ++unknown; continue; }
+            for (Bucket& b : buckets)
+                if (R.minAngle >= b.lo && R.minAngle < b.hi) {
+                    ++b.n; b.ovl += R.overlapArea; b.hole += R.holeLen;
+                    b.narrow += R.narrowLen; b.kerb += R.kerbLen;
+                    b.cross += R.ovlCross; b.wedge += R.ovlWedge; b.corner += R.ovlCorner;
+                    if (R.sharpCorners > 0) ++b.mitred;
+                    break;
+                }
+        }
+        std::printf("\n## BY SMALLEST APPROACH ANGLE (the acute question)\n");
+        std::printf("  %-20s %-5s %-11s %-11s %-8s %-8s %-8s\n",
+                    "bucket", "n", "stacked m2", "per junction", "cross", "wedge", "corner");
+        for (const Bucket& b : buckets) {
+            if (!b.n) continue;
+            const double bt = std::max(1e-9, b.cross + b.wedge + b.corner);
+            std::printf("  %-20s %-5d %-11.1f %-11.2f %-7.0f%% %-7.0f%% %-7.0f%%\n",
+                        b.name, b.n, b.ovl, b.ovl / b.n,
+                        100.0 * b.cross / bt, 100.0 * b.wedge / bt, 100.0 * b.corner / bt);
+        }
+        if (unknown) std::printf("  (%d junctions had no arm directions)\n", unknown);
+    }
+
     std::sort(reps.begin(), reps.end(),
               [](const JunctionReport& a, const JunctionReport& b) { return a.score() > b.score(); });
 
@@ -859,17 +1018,18 @@ int main(int argc, char** argv) {
                 "x", "z", "deg", "corners", "sharp", "worstTurn", "reach", "ovl", "stack", "gap");
     for (int i = 0; i < topN && i < static_cast<int>(reps.size()); ++i) {
         const JunctionReport& R = reps[i];
-        std::printf("%-10.2f %-10.2f %-4d %-7d %-6d %-9.1f %-7.2f %-6.1f %-7d %-7.1f\n",
-                    R.pos.x, R.pos.y, R.degree, R.corners, R.sharpCorners, R.worstVertTurnDeg,
-                    R.maxReach, R.overlapArea, R.maxStack, R.holeLen);
+        std::printf("%-10.2f %-10.2f %-4d %-7.1f %-7d %-6d %-9.1f %-7.2f %-6.1f %-7.1f\n",
+                    R.pos.x, R.pos.y, R.degree, R.minAngle, R.corners, R.sharpCorners,
+                    R.worstVertTurnDeg, R.maxReach, R.overlapArea, R.holeLen);
     }
 
     if (!csvPath.empty()) {
         std::ofstream out(csvPath);
-        out << "x,z,degree,corners,sharpCorners,worstVertTurnDeg,minEffRadius,"
+        out << "x,z,degree,minAngle,corners,sharpCorners,worstVertTurnDeg,minEffRadius,"
                "overlapArea,maxStack,overlapDropM,holeLen,narrowLen,maxReach\n";
         for (const JunctionReport& R : reps)
-            out << R.pos.x << ',' << R.pos.y << ',' << R.degree << ',' << R.corners << ','
+            out << R.pos.x << ',' << R.pos.y << ',' << R.degree << ',' << R.minAngle << ','
+                << R.corners << ','
                 << R.sharpCorners << ',' << R.worstVertTurnDeg << ','
                 << (R.minEffRadius > 1e8 ? -1.0 : R.minEffRadius) << ',' << R.overlapArea << ','
                 << R.maxStack << ',' << R.overlapDropM << ',' << R.holeLen << ','

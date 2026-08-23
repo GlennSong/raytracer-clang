@@ -677,6 +677,16 @@ RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& co
             // its recovery passes (the 14-minute city hang). Straight chord.
             if ((hit - (a2 + b2) * 0.5).length() < 0.75 * chord) { c2 = hit; arc = true; }
         }
+        // How often does a corner get NO arc at all? The bail above is the
+        // near-parallel guard: an acute pair's verge lines meet far away, and
+        // sweeping a control point out there would drag the corner across the
+        // pad. The corner then falls back to a straight CHORD — which is
+        // exactly the unrounded, cut-off corner an acute junction shows.
+        static int dbgArc = 0, dbgChord = 0;
+        (arc ? dbgArc : dbgChord)++;
+        if (std::getenv("RT_PAD_DEBUG"))
+            std::fprintf(stderr, "[pad] corners: arc=%d chord=%d (%.0f%% unrounded)\n",
+                         dbgArc, dbgChord, 100.0 * dbgChord / std::max(1, dbgArc + dbgChord));
         // AUTHORED RADIUS (docs/curb-weld-analysis.md, fix 5): a true circular
         // fillet of `cornerRadius`, tangent to both verges, run straight out to
         // its tangent points from each mouth. The quadratic below has no radius
@@ -1030,6 +1040,83 @@ RenderMesh junctionPatch(std::vector<JunctionArm> arms, float mu, const Vec3& co
 // RIGHT normal (outward from the asphalt for CCW outers AND CW holes), with
 // the corner logic proven in the old weld: gentle corners miter, sharp OPENING
 // corners bevel with a fan, PINCHING corners meet at the true intersection.
+namespace {
+// LOCAL FEATURE SIZE — how much room the band actually has at a point.
+//
+// The band used to demand its full width everywhere, which is impossible
+// wherever two stretches of kerb come close: a sharp corner, or a wedge between
+// two streets narrowing to a point. Both sides ask for 3.5 m across a gap of 2,
+// and the slabs lie on top of each other. Measured on metro_v2 that was 87-90%
+// of all remaining stacked sidewalk, at EVERY junction angle — square junctions
+// included, which is why straightening the city does not fix it.
+//
+// The classic remedy is to offset by no more than the local feature size: the
+// radius of the largest circle that fits inside the boundary, tangent at p. For
+// a boundary point p with inward (band-side) normal n, a point q on any other
+// part of the boundary bounds that radius at
+//
+//     r = |q - p|^2 / (2 * dot(n, q - p))          (only where dot > 0)
+//
+// and the smallest r over all q is the answer. Two properties make it the right
+// tool rather than a distance hack: a point further along the SAME gently curving
+// kerb sits nearly tangential (dot ~ 0), so it yields a huge r and never clamps a
+// normal street; and a point directly across a narrow wedge at distance d yields
+// r = d/2 exactly, which is the width each side may have.
+//
+// Only q within 2*width can matter — r >= |q-p|/2 always — so the search is a
+// small local one, not a sweep over the city.
+struct KerbField {
+    double cell = 8.0;
+    std::unordered_map<long long, std::vector<std::pair<Vec2, Vec2>>> buckets;
+
+    static long long key(int cx, int cz) {
+        return (static_cast<long long>(cx) << 32) ^ (static_cast<long long>(cz) & 0xffffffffLL);
+    }
+    void build(const std::vector<Poly2>& loops) {
+        for (const Poly2& L : loops)
+            for (std::size_t i = 0; i < L.size(); ++i) {
+                const Vec2 a = L[i], b = L[(i + 1) % L.size()];
+                const int x0 = (int)std::floor(std::min(a.x, b.x) / cell);
+                const int x1 = (int)std::floor(std::max(a.x, b.x) / cell);
+                const int z0 = (int)std::floor(std::min(a.y, b.y) / cell);
+                const int z1 = (int)std::floor(std::max(a.y, b.y) / cell);
+                for (int cx = x0; cx <= x1; ++cx)
+                    for (int cz = z0; cz <= z1; ++cz)
+                        buckets[key(cx, cz)].push_back({a, b});
+            }
+    }
+    // The widest band that fits at `p`, whose band-side normal is `n`, capped at
+    // `want`. Segments incident to p need no special case: their nearest point IS
+    // p, so dot(n, q - p) is zero and they drop out of the minimum by themselves.
+    double widthAt(const Vec2& p, const Vec2& n, double want) const {
+        double best = want;
+        const double reach = want * 2.0;
+        const int cx0 = (int)std::floor((p.x - reach) / cell);
+        const int cx1 = (int)std::floor((p.x + reach) / cell);
+        const int cz0 = (int)std::floor((p.y - reach) / cell);
+        const int cz1 = (int)std::floor((p.y + reach) / cell);
+        for (int cx = cx0; cx <= cx1; ++cx)
+            for (int cz = cz0; cz <= cz1; ++cz) {
+                auto it = buckets.find(key(cx, cz));
+                if (it == buckets.end()) continue;
+                for (const auto& sg : it->second) {
+                    const Vec2 ab = sg.second - sg.first;
+                    const double l2 = ab.lengthSquared();
+                    double t = l2 > 1e-12 ? dot(p - sg.first, ab) / l2 : 0.0;
+                    t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                    const Vec2 dq = sg.first + ab * t - p;
+                    const double d2 = dq.lengthSquared();
+                    if (d2 < 1e-8 || d2 > reach * reach) continue;
+                    const double dn = dot(n, dq);
+                    if (dn <= 1e-6) continue;              // behind, or tangential
+                    best = std::min(best, d2 / (2.0 * dn));
+                }
+            }
+        return best;
+    }
+};
+}  // namespace
+
 RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
                                  const std::function<double(double, double)>& edgeHeight,
                                  double sidewalkWidth, double curbHeight,
@@ -1061,6 +1148,8 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
     };
     static int dbgOpens = 0, dbgPinch = 0, dbgClamped = 0, dbgQuad = 0, dbgFold = 0;
     static double dbgSweepMax = 0;
+    KerbField kerbField;
+    kerbField.build(loops);
     for (const Poly2& loop : loops) {
         const int m = static_cast<int>(loop.size());
         if (m < 3) continue;
@@ -1082,6 +1171,16 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
         // rounded off, not extended to a needle. The OLD bound was the
         // max(0.2, cosH) clamp = 5x, wide enough to cross a carriageway.
         const double kMitreLimit = 2.0;
+        // How wide the band may be at each kerb vertex (see KerbField).
+        std::vector<double> wv(m, sidewalkWidth);
+        for (int i = 0; i < m; ++i) {
+            const Vec2 e0 = loop[i] - loop[(i + m - 1) % m];
+            const Vec2 e1 = loop[(i + 1) % m] - loop[i];
+            const Vec2 bis = rnorm(e0) + rnorm(e1);
+            const double bl = bis.length();
+            if (bl < 1e-9) continue;
+            wv[i] = kerbField.widthAt(loop[i], bis * (1.0 / bl), sidewalkWidth);
+        }
         std::vector<Corner> oc(m);
         for (int i = 0; i < m; ++i) {
             const Vec2 e0 = loop[i] - loop[(i + m - 1) % m];
@@ -1091,6 +1190,7 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
             const double bl = bis.length();
             const Vec2 mm = bl < 1e-9 ? n1 : bis * (1.0 / bl);
             const double cosH = dot(mm, n1);
+            const double wHere = wv[i];
             // A LEFT turn OPENS the band (the offsets diverge — the corner has
             // to be filled); a RIGHT turn PINCHES it (the offsets converge and
             // meet at the offset lines' intersection).
@@ -1104,8 +1204,8 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
             // became 531 m when every opening corner was rounded). So the arc is
             // the FALLBACK for the runaway case the old max(0.2, cosH) clamp
             // used to answer with a 5x spike.
-            const double mitre = sidewalkWidth / std::max(cosH, 1e-6);
-            if (opens && mitre > sidewalkWidth * kMitreLimit) {
+            const double mitre = wHere / std::max(cosH, 1e-6);
+            if (opens && mitre > wHere * kMitreLimit) {
                 // ARC JOIN (docs/curb-weld-analysis.md): sweep the outer edge
                 // around the vertex on a circle of the band's own width, so the
                 // corner is ROUNDED and the band is exactly `sidewalkWidth`
@@ -1135,7 +1235,7 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
                 // so bound it and let the corner cut across instead.
                 ++dbgPinch;
                 if (mitre > sidewalkWidth * kMitreLimit) ++dbgClamped;
-                const double d = std::min(mitre, sidewalkWidth * kMitreLimit);
+                const double d = std::min(mitre, wHere * kMitreLimit);
                 oc[i].dir = mm;
                 oc[i].dist = d;
                 oc[i].mitre = true;
@@ -1169,7 +1269,8 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
                 const double e2 = e.lengthSquared();
                 const bool takeI = oc[i].dist >= oc[j].dist;
                 Corner& big = takeI ? oc[i] : oc[j];
-                if (!big.mitre || big.dist <= sidewalkWidth * kTrimFloor) continue;
+                const double bigWant = wv[takeI ? i : j];
+                if (!big.mitre || big.dist <= bigWant * kTrimFloor) continue;
                 const double di = oc[i].dist, dj = oc[j].dist;
                 const double ui_e = dot(oc[i].dir, e), uj_e = dot(oc[j].dir, e);
                 double want = big.dist;
@@ -1180,7 +1281,7 @@ RenderMesh sweepCurbSidewalkBand(const std::vector<Poly2>& loops,
                 else
                     want = big.dist * 0.75;         // degenerate: fall back
                 want = std::min(want * 0.99, big.dist * 0.99);
-                big.dist = std::max(want, sidewalkWidth * kTrimFloor);
+                big.dist = std::max(want, bigWant * kTrimFloor);
                 big.arc[0] = loop[takeI ? i : j] + big.dir * big.dist;
                 shrank = true;
             }

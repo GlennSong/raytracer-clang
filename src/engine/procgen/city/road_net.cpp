@@ -1258,6 +1258,23 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
                 if (deg[v] >= 3) {
                     auditOut->junctions.push_back(g.nodes[v].pos);
                     auditOut->junctionDegree.push_back(deg[v]);
+                    // Smallest gap between adjacent arms, from the SAME arm
+                    // directions the pad was built from.
+                    double minGap = -1.0;
+                    if (arms[v].size() >= 2) {
+                        std::vector<double> ang;
+                        ang.reserve(arms[v].size());
+                        for (const JunctionArm& A : arms[v])
+                            ang.push_back(std::atan2(A.dir.y, A.dir.x));
+                        std::sort(ang.begin(), ang.end());
+                        minGap = 360.0;
+                        for (std::size_t k = 0; k < ang.size(); ++k) {
+                            double d = ang[(k + 1) % ang.size()] - ang[k];
+                            if (k + 1 == ang.size()) d += 2.0 * PI;
+                            minGap = std::min(minGap, d * 180.0 / PI);
+                        }
+                    }
+                    auditOut->junctionMinAngle.push_back(minGap);
                 }
         }
         MeshBuilder::append(out, sweepCurbSidewalkBand(
@@ -2319,12 +2336,60 @@ void applyGenerateRecipe(RoadEntity& road, const json& g, const RoadGroundFn& he
                     return inCore ? std::min(minBlockEdge, coreLen * 0.95)
                                   : minBlockEdge;
                 };
-                for (int round = 0; round < 2; ++round) {
+                // REALIGN acute junctions (docs/curb-weld-analysis.md). Device:
+                // "the sight lines are important and also taking sharp turns
+                // around acute angles means your car will tip over. So it's a
+                // no-go from a design point of view." dissolveAcuteArms above
+                // only reaches pairs under ~32 deg, and answers by DELETING an
+                // arm — which is why the measured floor was 35 deg with a third
+                // of junctions still under 60. This opens the 32-60 band the way
+                // a designer does: bend the approach, pin the far node, keep a
+                // straight run in. It runs INSIDE the round loop, before
+                // planarize and relaxSharpBends, so a bend that grazes another
+                // street gets noded and any kink it leaves gets eased in the
+                // same round. 0 opts a level out.
+                const double minArmDeg = g.value("min_arm_angle_deg", 60.0);
+                const double minArmRad = minArmDeg * 3.14159265358979323846 / 180.0;
+                // How far out the bend sits. This is the whole quality knob:
+                // the same realignment at 26 m put 56 through-nodes under a 30 m
+                // turn radius (a hairpin mid-block — the tipping problem moved
+                // rather than solved), at 40 m that fell to 8, and at 60 m to 2,
+                // which is the untouched city's own figure. Capped at 40% of the
+                // first edge, so a short arm still gets a proportionate bend.
+                const double runIn = g.value("realign_run_in", 60.0);
+                // CULL threshold, and it is SCALE-DEPENDENT — which is why the
+                // default is the conservative one. At 45 deg a city-scale net
+                // (metro_v2, 1075 m radius) loses five junctions and in exchange
+                // every ring including the rim clears 60 deg, with the tightest
+                // curve anywhere IMPROVING on the untouched city (28.9 -> 32.7 m).
+                // The same 45 deg on a 250 m test site strips the street fabric
+                // to nothing: measured, 0 Local/Collector edges survive, so the
+                // city has no parking, no frontage and no blocks. A small net's
+                // few streets are near-parallel to each other by construction.
+                // So: 32 here, and a big level opts in per recipe once someone
+                // has measured it on that level.
+                const double dissolveRad = g.value("dissolve_acute_deg", 32.0) *
+                                           3.14159265358979323846 / 180.0;
+                for (int round = 0; round < 3; ++round) {
                     cg = dropParallelEdges(cg);
-                    cg = dissolveAcuteArms(cg, 0.85, 3);
+                    // CULL: drop the redundant twin of a near-parallel pair when
+                    // the far end stays reachable. 0.85 = cos(32 deg) — the
+                    // measured floor of the untouched city, which is exactly what
+                    // this threshold was setting. Exposed so the cull and the
+                    // bend can be traded off against each other with numbers.
+                    cg = dissolveAcuteArms(cg, std::cos(dissolveRad), 3);
                     cg = consolidateJunctionSpans(cg, spanFloor, rules.maxDegree);
                     cg = capDegree(planarize(cg, 1.0), rules);
                     cg = mergeShortEdges(cg, minLen, rules.maxDegree);
+                    cg = relaxSharpBends(cg, 0.5, 64);
+                }
+                // LAST, not inside the loop: consolidation and span-merging move
+                // junctions, so a realignment done before them is partly undone
+                // by them (measured: every round re-found ~110 tight junctions).
+                // Bends are validated against crossings, so nothing downstream
+                // needs to re-node them.
+                if (minArmDeg > 0.0) {
+                    cg = realignAcuteJunctions(cg, minArmRad, runIn, 6);
                     cg = relaxSharpBends(cg, 0.5, 64);
                 }
             }
