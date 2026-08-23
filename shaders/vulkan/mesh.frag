@@ -612,13 +612,23 @@ void main() {
     }
 
     uint rawFlags = pc.surfaceFlags.y;
-    if ((rawFlags & 1u) != 0u) albedo = applyCheckerboard(albedo, inWorldPos);
-    uint surfaceId = pc.surfaceFlags.x;
-    if (surfaceId != 0u)
-        albedo = applySurface(surfaceId, albedo, inWorldPos, N, inTexcoord, g.wind1.w);
+    // Both the checkerboard and the procedural surface yield to a BAKED albedo
+    // map (texFlags bit 0): a textured material keeps its surface id only as
+    // save/load provenance, and the texture drives the look. The port had
+    // dropped Metal's !(tf & 1u) gate, so baked-facade buildings (brick from
+    // surface_maps.cpp) got the ANALYTIC brick multiplied on top — the wormy
+    // contour interference seen on device. Mirrors lighting_surface.metal.
+    if ((texFlags & 1u) == 0u) {
+        if ((rawFlags & 1u) != 0u) albedo = applyCheckerboard(albedo, inWorldPos);
+        uint surfaceId = pc.surfaceFlags.x;
+        if (surfaceId != 0u)
+            albedo = applySurface(surfaceId, albedo, inWorldPos, N, inTexcoord, g.wind1.w);
+    }
     // Procedural relief for surfaces with no baked normal/roughness map (road,
     // terrain, water); mirrors the applySurfaceRelief seam in surfaces.metal.
-    applySurfaceRelief(surfaceId, inWorldPos, inTexcoord, g.wind1.w,
+    // (Runs regardless of the albedo gate above, exactly like Metal — the
+    // relief ids never carry baked maps.)
+    applySurfaceRelief(pc.surfaceFlags.x, inWorldPos, inTexcoord, g.wind1.w,
                        g.cameraPosition.xyz, N, roughness);
 
     vec3 V = normalize(g.cameraPosition.xyz - inWorldPos);
