@@ -110,7 +110,13 @@ CameraInput CameraSystem::gatherInput(FrameContext& ctx) const {
     bool mouseLook = !ctx.input.uiWantsMouse &&
         (flyActive ? (fly.positionLocked || freeLook || ctx.input.mouseRightDown)
                    : ctx.input.mouseLeftDown);
-    Real mouseYaw = mouseLook ? -ctx.input.mouseDeltaX * mouseSensitivity : 0.0;
+    // Yaw sign is per MODE: first-person fly look FOLLOWS the mouse (right =
+    // turn right, matching the gamepad stick's un-negated convention below),
+    // while the edit orbit keeps its grab-the-world drag (drag right = world
+    // right = camera orbits left). They shared the orbit sign, so freecam
+    // steered backwards — unnoticed while edit orbit was the daily driver.
+    Real yawSign = flyActive ? 1.0 : -1.0;
+    Real mouseYaw = mouseLook ? yawSign * ctx.input.mouseDeltaX * mouseSensitivity : 0.0;
     Real mousePitch = mouseLook ? -ctx.input.mouseDeltaY * mouseSensitivity : 0.0;
 
     Real stick = stickLookSpeed * ctx.frameDelta;
