@@ -286,7 +286,51 @@ vec3 surfRoadMarkings(vec3 base, float mu, float mv, float wu, float wv) {
     c = mix(c, vec3(0.90, 0.90, 0.88), cwEdge * bars * step(1.05, mu));
     return c;
 }
-vec3 applySurface(uint id, vec3 base, vec3 worldPos, vec3 n, vec2 meshUV) {
+// Natural ground (Surface::TerrainGround, id 13): the biome colour is baked in
+// the vertex colour (grass/rock/sand/snow/sea floor); add fine albedo GRAIN so
+// it isn't a flat wash. Normal micro-relief + roughness live in
+// surfaceReliefTerrain below, like the road. Ported from surface_terrain.metal.
+vec3 surfTerrain(vec3 base, vec3 worldPos) {
+    float gr = fbm2(worldPos.x * 0.5, worldPos.z * 0.5) * 0.6 +
+               fbm2(worldPos.x * 2.1, worldPos.z * 2.1) * 0.4;   // ~[0,1]
+    return base * (0.90 + 0.18 * gr);
+}
+
+// Water (Surface::Water, id 12): depth-graded ocean colour + shoreline foam.
+// meshUV.x = baked water depth (m), meshUV.y = baked distance to land (m).
+// Colour only — the animated wave normals live in surfaceReliefWater below.
+// Ported from surface_water.metal; `time` is g.wind1.w (seconds).
+vec3 surfWater(vec3 base, float depth, float shore, vec3 worldPos, float time) {
+    vec3 deep    = base;
+    vec3 mid     = base * 2.0 + vec3(0.010, 0.045, 0.050);   // green-blue
+    vec3 shallow = base * 3.0 + vec3(0.030, 0.130, 0.120);   // teal shallows
+    float t = clamp(depth / 30.0, 0.0, 1.0);
+    vec3 c = t < 0.5 ? mix(shallow, mid, t * 2.0) : mix(mid, deep, (t - 0.5) * 2.0);
+    // Two-scale mottling, each drifting at its own rate (slow macro banding +
+    // finer chop shading — a fixed single octave read as repetitive texture).
+    float m1 = fbm2(worldPos.x * 0.011 + time * 0.006, worldPos.z * 0.011 - time * 0.002);
+    float m2 = fbm2(worldPos.x * 0.055 - time * 0.010, worldPos.z * 0.055 + time * 0.004);
+    c *= 0.88 + 0.12 * m1 + 0.07 * m2;
+    // Sparse whitecap flecks in open water, advecting with the wind.
+    float cap = fbm2(worldPos.x * 0.09 + time * 0.05, worldPos.z * 0.09 - time * 0.03) *
+                (0.55 + 0.45 * fbm2(worldPos.x * 0.021 - time * 0.013, worldPos.z * 0.021));
+    float capMask = smoothstep(0.60, 0.78, cap) * clamp(depth / 8.0, 0.0, 1.0) * 0.30;
+    c = mix(c, vec3(0.85, 0.92, 0.95), capMask);
+    // Lapping shoreline foam: a narrow washing edge plus patchy streaks.
+    float band = 6.0 + 4.5 * fbm2(worldPos.x * 0.05, worldPos.z * 0.05) +
+                 2.5 * sin(time * 0.8 + 6.2831853 * fbm2(worldPos.x * 0.02, worldPos.z * 0.02));
+    if (shore > 0.001 && shore < band) {
+        float u = 1.0 - shore / band;
+        float pattern = fbm2(worldPos.x * 0.35 + time * 0.22, worldPos.z * 0.35 - time * 0.13);
+        pattern *= pattern;                      // patchy streaks, not a wash
+        float f = u * u * (0.20 + 0.60 * pattern);
+        f += smoothstep(0.85, 1.0, u) * 0.30;    // bright washing edge
+        c = mix(c, vec3(0.92, 0.96, 0.98), clamp(f, 0.0, 1.0));
+    }
+    return c;
+}
+
+vec3 applySurface(uint id, vec3 base, vec3 worldPos, vec3 n, vec2 meshUV, float time) {
     vec2 uv = surfUV(worldPos, n);
     vec3 c;
     switch (id) {
@@ -301,6 +345,8 @@ vec3 applySurface(uint id, vec3 base, vec3 worldPos, vec3 n, vec2 meshUV) {
         case 9u:  c = surfCobble(base, uv.x, uv.y); break;
         case 10u: c = surfWood(base, uv.x, uv.y); break;
         case 11u: c = surfRoadMarkings(base, meshUV.x, meshUV.y, uv.x, uv.y); break;
+        case 12u: c = surfWater(base, meshUV.x, meshUV.y, worldPos, time); break;
+        case 13u: c = surfTerrain(base, worldPos); break;
         default:  return base;
     }
     return clamp(c, 0.0, 1.0);
@@ -310,6 +356,121 @@ vec3 applyCheckerboard(vec3 albedo, vec3 worldPos) {
     int cz = int(floor(worldPos.z));
     bool dark = ((cx + cz) & 1) != 0;
     return dark ? albedo * 0.3 : albedo;
+}
+
+// ---- procedural surface relief (ported from surfaces.metal) ----------------
+// Normal/roughness perturbation for the surfaces that carry no baked normal or
+// roughness map (road, terrain, water). Runs AFTER the normal-map sample, so it
+// perturbs whatever normal that produced — road and terrain add to it, water
+// replaces it outright.
+
+// Road micro-relief. The 0.35 tilt (not 0.6) is deliberate: the harder tilt was
+// tuned under the SUN, but street lamps are close, low lights whose direction
+// rakes the surface — the old tilt turned their pools into blotchy patches.
+// Ported from surface_road.metal (metal c5fe504).
+void surfaceReliefRoad(vec3 worldPos, inout vec3 normal, inout float rough) {
+    float rx = worldPos.x, rz = worldPos.z;
+    float b0 = vnoise2(rx * 2.6, rz * 2.6) + 0.5 * vnoise2(rx * 11.0, rz * 11.0)
+             + 0.3 * vnoise2(rx * 37.0, rz * 37.0);
+    float bx = vnoise2(rx * 2.6 + 0.4, rz * 2.6) + 0.5 * vnoise2(rx * 11.0 + 1.7, rz * 11.0)
+             + 0.3 * vnoise2(rx * 37.0 + 2.3, rz * 37.0) - b0;
+    float bz = vnoise2(rx * 2.6, rz * 2.6 + 0.4) + 0.5 * vnoise2(rx * 11.0, rz * 11.0 + 1.7)
+             + 0.3 * vnoise2(rx * 37.0, rz * 37.0 + 2.3) - b0;
+    normal = normalize(normal + vec3(-bx, 0.0, -bz) * 0.35);
+    float spk = vnoise2(rx * 23.0, rz * 23.0);
+    rough = clamp(rough + (spk - 0.5) * 0.25, 0.55, 1.0);
+}
+
+// Natural ground micro-relief: slope-scaled normal perturbation (steep rock
+// tilts hard, flat sand/grass stays gentle) + roughness variation (rock rough,
+// high flat snow a touch glossier). Ported from surface_terrain.metal.
+void surfaceReliefTerrain(vec3 worldPos, inout vec3 normal, inout float rough) {
+    float wx = worldPos.x, wz = worldPos.z;
+    float slope = clamp(1.0 - normal.y, 0.0, 1.0);
+    float amp = 0.28 + 0.65 * slope;                 // steeper => more relief
+    float g0 = vnoise2(wx * 1.7, wz * 1.7) + 0.5 * vnoise2(wx * 5.3, wz * 5.3)
+             + 0.3 * vnoise2(wx * 15.0, wz * 15.0);
+    float gx = vnoise2(wx * 1.7 + 0.4, wz * 1.7) + 0.5 * vnoise2(wx * 5.3 + 1.7, wz * 5.3)
+             + 0.3 * vnoise2(wx * 15.0 + 2.3, wz * 15.0) - g0;
+    float gz = vnoise2(wx * 1.7, wz * 1.7 + 0.4) + 0.5 * vnoise2(wx * 5.3, wz * 5.3 + 1.7)
+             + 0.3 * vnoise2(wx * 15.0, wz * 15.0 + 2.3) - g0;
+    normal = normalize(normal + vec3(-gx, 0.0, -gz) * amp);
+    float snowy = clamp((worldPos.y - 80.0) / 30.0, 0.0, 1.0) * (1.0 - slope);
+    rough = clamp(mix(0.93, 0.72, snowy) + (vnoise2(wx * 11.0, wz * 11.0) - 0.5) * 0.14,
+                  0.55, 1.0);
+}
+
+// Ocean waves: an animated multi-scale wave normal — two swells at offset
+// headings + two chop trains, analytic slopes, amplitude-modulated by slow
+// noise patches, plus a distance-faded micro-ripple. Crest sharpening + a
+// roughness lift near crests structure the sun glint. Ported from
+// surface_water.metal.
+void surfaceReliefWater(vec3 worldPos, vec2 meshUV, float time, vec3 cameraPos,
+                        inout vec3 normal, inout float rough) {
+    float wx = worldPos.x, wz = worldPos.z;
+    float wt = time;
+    vec2 P = vec2(wx, wz);
+    // Shallows damp the swell so the waterline doesn't wobble the beach.
+    float depthFade = 0.15 + 0.85 * clamp(meshUV.x / 6.0, 0.0, 1.0);
+    float slopeX = 0.0, slopeZ = 0.0, crest = 0.0;
+    const vec3 trainDirLen[4] = vec3[4](   // dir.x, dir.z, wavelength (m)
+        vec3( 0.980,  0.199, 58.0),
+        vec3( 0.845,  0.535, 47.0),
+        vec3( 0.827, -0.562, 21.0),
+        vec3( 0.399,  0.917,  8.5));
+    const float trainAmp[4]   = float[4](0.115, 0.100, 0.075, 0.080);
+    const float trainSpeed[4] = float[4](6.5, 5.8, 3.8, 2.1);
+    // Each train fades once its wavelength drops toward the pixel footprint —
+    // otherwise the short chop aliases into a corduroy grating at distance.
+    float dist = length(cameraPos - worldPos);
+    const float trainFade[4] = float[4](0.00035, 0.00045, 0.0012, 0.0035);
+    for (int i = 0; i < 4; ++i) {
+        float fade = exp(-dist * trainFade[i]);
+        if (fade < 0.02) continue;
+        vec2 d = trainDirLen[i].xy;
+        float k = 6.2831853 / trainDirLen[i].z;
+        // slow amplitude patches: wave GROUPS, not an infinite even train
+        float ampPatch = 0.45 + 0.55 * vnoise2(wx * 0.013 + float(i) * 7.31,
+                                            wz * 0.013 - float(i) * 3.17);
+        // low-frequency phase warp bends the crest lines so no train reads as
+        // a ruled grating stretching to the horizon (short trains bend more)
+        float warpF = 0.008 + 0.014 * float(i);
+        float warp = (2.8 + 1.6 * float(i)) * vnoise2(wx * warpF - float(i) * 5.7,
+                                                      wz * warpF + float(i) * 2.9);
+        float ph = dot(P, d) * k - wt * trainSpeed[i] * k + warp;
+        float s = sin(ph), cph = cos(ph);
+        float w = trainAmp[i] * ampPatch * fade;
+        float slope = w * cph * (0.55 + 0.45 * (s * 0.5 + 0.5));  // sharpened crests
+        slopeX += d.x * slope;
+        slopeZ += d.y * slope;
+        crest += w * (s * 0.5 + 0.5);
+    }
+    // Micro-ripple: two advected octaves, faded by camera distance so the
+    // horizon stays calm instead of shimmering with sub-pixel noise.
+    float lodFade = exp(-dist * 0.004);
+    if (lodFade > 0.02) {
+        float g0 = vnoise2(wx * 1.6 + wt * 0.50, wz * 1.6 + wt * 0.23) +
+                   0.5 * vnoise2(wx * 4.7 - wt * 0.40, wz * 4.7 + wt * 0.31);
+        float gx = vnoise2(wx * 1.6 + 0.30 + wt * 0.50, wz * 1.6 + wt * 0.23) +
+                   0.5 * vnoise2(wx * 4.7 + 0.30 - wt * 0.40, wz * 4.7 + wt * 0.31) - g0;
+        float gz = vnoise2(wx * 1.6 + wt * 0.50, wz * 1.6 + 0.30 + wt * 0.23) +
+                   0.5 * vnoise2(wx * 4.7 - wt * 0.40, wz * 4.7 + 0.30 + wt * 0.31) - g0;
+        slopeX += gx * 0.45 * lodFade;
+        slopeZ += gz * 0.45 * lodFade;
+    }
+    normal = normalize(vec3(-slopeX * depthFade, 1.0, -slopeZ * depthFade));
+    // Sea-state roughness: glassy troughs, scuffed crests.
+    rough = clamp(rough + smoothstep(0.10, 0.30, crest) * 0.10, 0.02, 0.30);
+}
+
+// The three ids are mutually exclusive; mirrors the applySurfaceRelief
+// dispatcher in surfaces.metal.
+void applySurfaceRelief(uint id, vec3 worldPos, vec2 meshUV, float time,
+                        vec3 cameraPos, inout vec3 normal, inout float rough) {
+    if (id == 11u)      surfaceReliefRoad(worldPos, normal, rough);
+    else if (id == 13u) surfaceReliefTerrain(worldPos, normal, rough);
+    else if (id == 12u) surfaceReliefWater(worldPos, meshUV, time, cameraPos,
+                                           normal, rough);
 }
 
 // ---- cascaded shadows (ported from shadows.metal) --------------------------
@@ -441,26 +602,12 @@ void main() {
     uint rawFlags = pc.surfaceFlags.y;
     if ((rawFlags & 1u) != 0u) albedo = applyCheckerboard(albedo, inWorldPos);
     uint surfaceId = pc.surfaceFlags.x;
-    if (surfaceId != 0u) albedo = applySurface(surfaceId, albedo, inWorldPos, N, inTexcoord);
-    // Road micro-relief (device: roads "don't look like a PBR texture"): the road
-    // carries no baked normal/roughness maps (its mesh UV is road-local paint
-    // space), so perturb the normal and vary the roughness procedurally from the
-    // same world-planar noise the asphalt albedo tiles by. Mirrors WGSL/Metal.
-    if (surfaceId == 11u) {
-        float rx = inWorldPos.x, rz = inWorldPos.z;
-        // Three octaves: metre-scale undulation, decimetre patching, and a
-        // near-aggregate grain — summed finite differences tilt the normal hard
-        // enough to read as bumpy asphalt (device: "no sense of bumpiness").
-        float b0 = vnoise2(rx * 2.6, rz * 2.6) + 0.5 * vnoise2(rx * 11.0, rz * 11.0)
-                 + 0.3 * vnoise2(rx * 37.0, rz * 37.0);
-        float bx = vnoise2(rx * 2.6 + 0.4, rz * 2.6) + 0.5 * vnoise2(rx * 11.0 + 1.7, rz * 11.0)
-                 + 0.3 * vnoise2(rx * 37.0 + 2.3, rz * 37.0) - b0;
-        float bz = vnoise2(rx * 2.6, rz * 2.6 + 0.4) + 0.5 * vnoise2(rx * 11.0, rz * 11.0 + 1.7)
-                 + 0.3 * vnoise2(rx * 37.0, rz * 37.0 + 2.3) - b0;
-        N = normalize(N + vec3(-bx, 0.0, -bz) * 0.6);
-        float spk = vnoise2(rx * 23.0, rz * 23.0);
-        roughness = clamp(roughness + (spk - 0.5) * 0.25, 0.55, 1.0);
-    }
+    if (surfaceId != 0u)
+        albedo = applySurface(surfaceId, albedo, inWorldPos, N, inTexcoord, g.wind1.w);
+    // Procedural relief for surfaces with no baked normal/roughness map (road,
+    // terrain, water); mirrors the applySurfaceRelief seam in surfaces.metal.
+    applySurfaceRelief(surfaceId, inWorldPos, inTexcoord, g.wind1.w,
+                       g.cameraPosition.xyz, N, roughness);
 
     vec3 V = normalize(g.cameraPosition.xyz - inWorldPos);
     vec3 f0 = mix(vec3(0.04), albedo, metallic);

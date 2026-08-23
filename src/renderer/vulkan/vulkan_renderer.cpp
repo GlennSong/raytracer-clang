@@ -26,12 +26,17 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <limits>
 #include <optional>
 #include <set>
 #include <string>
+
+// PNG output for frame capture (declarations only; the stb implementation is
+// compiled once with the importer's vendored copy — same as the Metal backend).
+#include "../../../third_party/tinygltf/stb_image_write.h"
 #include <vector>
 
 #ifndef RT_VULKAN_SHADER_DIR
@@ -301,6 +306,22 @@ struct VulkanRenderer::Impl {
     VkDeviceMemory depthMemory = VK_NULL_HANDLE;
     VkImageView depthView = VK_NULL_HANDLE;
 
+    // Headless frame capture (the Renderer::requestFrameDump seam; the Metal
+    // backend holds the reference semantics). Two arms, different timing:
+    // RT_FRAME_DUMP waits for frame 90 (probes baked, physics settled);
+    // requestFrameDump (the control channel's `shot`) fires on the next frame.
+    // The armed frame's command buffer copies the composited swapchain image
+    // into the host-visible capture buffer; drawFrame then fences and writes
+    // the PNG (a one-shot stall, matching Metal's waitUntilCompleted).
+    const char* frameDumpPath = std::getenv("RT_FRAME_DUMP");
+    int frameDumpCounter = 0;
+    std::string runtimeDumpPath;    // armed by requestFrameDump, fires next frame
+    std::string dumpInFlightPath;   // armed for the frame being recorded
+    bool captureSupported = false;  // swapchain built with TRANSFER_SRC
+    VkBuffer captureBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory captureMemory = VK_NULL_HANDLE;
+    VkDeviceSize captureCapacity = 0;
+
     // Offscreen HDR scene target (Phase 5): geometry + sky render here in linear
     // HDR; the composite pass tonemaps it into the swapchain. Single target,
     // matching the existing single shared depth buffer (frames-in-flight aliasing
@@ -523,6 +544,7 @@ struct VulkanRenderer::Impl {
     bool createSwapchain();
     bool createImageViews();
     bool createDepthResources();
+    bool ensureCaptureBuffer(VkDeviceSize size);
     bool createHdrResources();
     bool createRenderPass();
     bool createCompositeRenderPass();
@@ -812,7 +834,11 @@ bool VulkanRenderer::Impl::createSwapchain() {
     info.imageColorSpace = chosen.colorSpace;
     info.imageExtent = extent;
     info.imageArrayLayers = 1;
+    // COLOR_ATTACHMENT to render; TRANSFER_SRC (where the surface offers it —
+    // effectively everywhere) so frame capture can copy the composited image.
     info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    captureSupported = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+    if (captureSupported) info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     uint32_t families[2] = {graphicsFamily, presentFamily};
     if (graphicsFamily != presentFamily) {
         info.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
@@ -855,6 +881,44 @@ bool VulkanRenderer::Impl::createImageViews() {
             return false;
         }
     }
+    return true;
+}
+
+// Host-visible readback buffer for frame capture, grown on demand. Torn down
+// with the swapchain so a resize re-sizes it naturally on the next capture.
+bool VulkanRenderer::Impl::ensureCaptureBuffer(VkDeviceSize size) {
+    if (captureBuffer != VK_NULL_HANDLE && captureCapacity >= size) return true;
+    if (captureBuffer) vkDestroyBuffer(device, captureBuffer, nullptr);
+    if (captureMemory) vkFreeMemory(device, captureMemory, nullptr);
+    captureBuffer = VK_NULL_HANDLE;
+    captureMemory = VK_NULL_HANDLE;
+    captureCapacity = 0;
+
+    VkBufferCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    info.size = size;
+    info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(device, &info, nullptr, &captureBuffer) != VK_SUCCESS) {
+        captureBuffer = VK_NULL_HANDLE;
+        return false;
+    }
+    VkMemoryRequirements req;
+    vkGetBufferMemoryRequirements(device, captureBuffer, &req);
+    VkMemoryAllocateInfo alloc{};
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = findMemoryType(
+        req.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(device, &alloc, nullptr, &captureMemory) != VK_SUCCESS) {
+        vkDestroyBuffer(device, captureBuffer, nullptr);
+        captureBuffer = VK_NULL_HANDLE;
+        captureMemory = VK_NULL_HANDLE;
+        return false;
+    }
+    vkBindBufferMemory(device, captureBuffer, captureMemory, 0);
+    captureCapacity = size;
     return true;
 }
 
@@ -993,10 +1057,21 @@ bool VulkanRenderer::Impl::createRenderPass() {
     subpass.pDepthStencilAttachment = &depthRef;
 
     std::array<VkSubpassDependency, 2> deps{};
+    // Incoming edge: with two frames in flight the HDR/normal/depth targets are
+    // SHARED across frames, so frame N+1's loadOp clears must wait until frame
+    // N's post passes (SSAO/SSR/composite — FRAGMENT_SHADER) have finished
+    // sampling them, and until N's own attachment writes (COLOR_ATTACHMENT +
+    // EARLY/LATE fragment tests) retire. The post-target passes (bloom/AO/SSR/
+    // DOF) already carry this FRAGMENT_SHADER edge; the scene pass predates the
+    // idiom and raced — geometry vanished view-dependently as N+1's clear
+    // clobbered depth mid-read. WAR only, so no srcAccessMask is needed
+    // (contents are discarded via initialLayout UNDEFINED).
     deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
     deps[0].dstSubpass = 0;
     deps[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                           VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+                           VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                           VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     deps[0].srcAccessMask = 0;
@@ -3717,6 +3792,11 @@ void VulkanRenderer::Impl::cleanupSwapchain() {
     framebuffers.clear();
     for (VkImageView view : swapchainImageViews) if (view) vkDestroyImageView(device, view, nullptr);
     swapchainImageViews.clear();
+    if (captureBuffer) vkDestroyBuffer(device, captureBuffer, nullptr);
+    if (captureMemory) vkFreeMemory(device, captureMemory, nullptr);
+    captureBuffer = VK_NULL_HANDLE;
+    captureMemory = VK_NULL_HANDLE;
+    captureCapacity = 0;
     if (swapchain) { vkDestroySwapchainKHR(device, swapchain, nullptr); swapchain = VK_NULL_HANDLE; }
 }
 
@@ -3946,6 +4026,46 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
 #endif
     vkCmdEndRenderPass(cmd);
 
+    // Frame capture (armed this frame): copy the composited swapchain image
+    // into the host-visible capture buffer — the same post-composite,
+    // pre-present point where the Metal backend blits its drawable.
+    if (!dumpInFlightPath.empty()) {
+        const VkDeviceSize need =
+            VkDeviceSize(swapchainExtent.width) * swapchainExtent.height * 4;
+        if (!captureSupported || !ensureCaptureBuffer(need)) {
+            LOG_ERROR("[vulkan] frame capture unavailable (no TRANSFER_SRC swapchain)");
+            dumpInFlightPath.clear();
+        } else {
+            VkImageMemoryBarrier toSrc{};
+            toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            toSrc.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            toSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toSrc.image = swapchainImages[imageIndex];
+            toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            toSrc.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
+                                 0, nullptr, 1, &toSrc);
+            VkBufferImageCopy region{};
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageExtent = {swapchainExtent.width, swapchainExtent.height, 1};
+            vkCmdCopyImageToBuffer(cmd, swapchainImages[imageIndex],
+                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   captureBuffer, 1, &region);
+            VkImageMemoryBarrier toPresent = toSrc;
+            toPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            toPresent.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            toPresent.dstAccessMask = 0;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr,
+                                 0, nullptr, 1, &toPresent);
+        }
+    }
+
     vkEndCommandBuffer(cmd);
 }
 
@@ -3973,6 +4093,13 @@ void VulkanRenderer::Impl::drawFrame() {
     if (imagesInFlight[imageIndex] != VK_NULL_HANDLE)
         vkWaitForFences(device, 1, &imagesInFlight[imageIndex], VK_TRUE, UINT64_MAX);
     imagesInFlight[imageIndex] = inFlightFences[currentFrame];
+
+    // Frame-dump arming (see the capture members): env arm waits for frame 90,
+    // the control channel's `shot` fires on the next frame. Last request wins.
+    if (frameDumpPath && ++frameDumpCounter == 90)
+        dumpInFlightPath = frameDumpPath;
+    else if (!runtimeDumpPath.empty())
+        dumpInFlightPath.swap(runtimeDumpPath);
 
     VkCommandBuffer cmd = commandBuffers[currentFrame];
     vkResetCommandBuffer(cmd, 0);
@@ -4008,6 +4135,31 @@ void VulkanRenderer::Impl::drawFrame() {
     else if (result != VK_SUCCESS)
         LOG_ERROR("[vulkan] vkQueuePresentKHR failed (%d)", static_cast<int>(result));
 
+    // A capture was recorded into this frame: wait for the GPU and write the
+    // PNG now. One-shot stall by design (presentation is already queued),
+    // mirroring the Metal backend's waitUntilCompleted on dump frames.
+    if (!dumpInFlightPath.empty()) {
+        vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+        const int w = static_cast<int>(swapchainExtent.width);
+        const int h = static_cast<int>(swapchainExtent.height);
+        void* mapped = nullptr;
+        if (vkMapMemory(device, captureMemory, 0, VK_WHOLE_SIZE, 0, &mapped) ==
+            VK_SUCCESS) {
+            std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4);
+            std::memcpy(pixels.data(), mapped, pixels.size());
+            vkUnmapMemory(device, captureMemory);
+            const bool bgra = swapchainFormat == VK_FORMAT_B8G8R8A8_UNORM ||
+                              swapchainFormat == VK_FORMAT_B8G8R8A8_SRGB;
+            for (size_t i = 0; i < pixels.size(); i += 4) {
+                if (bgra) std::swap(pixels[i], pixels[i + 2]);   // BGRA -> RGBA
+                pixels[i + 3] = 255;   // compositor alpha is meaningless in a PNG
+            }
+            stbi_write_png(dumpInFlightPath.c_str(), w, h, 4, pixels.data(), w * 4);
+            LOG_INFO("[FRAME DUMP] wrote %s (%dx%d)", dumpInFlightPath.c_str(), w, h);
+        }
+        dumpInFlightPath.clear();
+    }
+
     currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
@@ -4018,6 +4170,14 @@ VulkanRenderer::VulkanRenderer() : impl(std::make_unique<Impl>()) {}
 VulkanRenderer::~VulkanRenderer() { shutdown(); }
 
 void VulkanRenderer::setWindow(Window* window) { impl->window = window; }
+
+bool VulkanRenderer::requestFrameDump(const std::string& path) {
+    // Fires on the next drawFrame (see the dump arm there); last request wins —
+    // the control channel is serial, so in practice this doesn't happen.
+    if (!impl->captureSupported) return false;
+    impl->runtimeDumpPath = path;
+    return true;
+}
 
 bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
     impl->width = width;

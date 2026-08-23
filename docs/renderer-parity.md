@@ -47,7 +47,7 @@ in `src/renderer/vulkan/` and what has been confirmed on the Windows/RTX 3060.
 | Texture maps: albedo / MR / AO / emissive | ✅ | ✅ | glTF MR convention. |
 | Normal mapping (TBN) | ✅ | ✅ | Vulkan `mesh.vert` passes world tangent; `mesh.frag` builds the TBN and perturbs N on texFlags bit 2 (ported from `lighting.metal`). |
 | Per-vertex tint | ✅ | ✅ | |
-| Analytic procedural surface library | ✅ | ✅ | Ported byte-for-byte from the Metal library, which since 2026-07-29 is one module per material: `surfaces_facade.metal` (the ten tiling patterns) + `surface_{road,water,terrain}.metal` (each holding that material's albedo **and** its normal/roughness relief) + `surfaces.metal` (the `applySurface` / `applySurfaceRelief` dispatchers). The primitives they build on (`hash21`/`vnoise2`/`fbm2`/`tile1`/`surfUV`) stay in `common.metal`. |
+| Analytic procedural surface library | ✅ | ⚠️ | 2026-08-23: the Vulkan port had drifted — `surfTerrain` (13), `surfWater` (12) and the whole `applySurfaceRelief` layer (road/terrain/water normal+roughness) were missing from `mesh.frag`, and the road tilt still used the pre-c5fe504 0.6. All ported to current Metal; water albedo+waves device-verified (RTX 3080), terrain grain/relief and the 0.35 road tilt await a Metal-side A/B (same-pose `shot` captures both backends now). Originally ported byte-for-byte from the Metal library, which since 2026-07-29 is one module per material: `surfaces_facade.metal` (the ten tiling patterns) + `surface_{road,water,terrain}.metal` (each holding that material's albedo **and** its normal/roughness relief) + `surfaces.metal` (the `applySurface` / `applySurfaceRelief` dispatchers). The primitives they build on (`hash21`/`vnoise2`/`fbm2`/`tile1`/`surfUV`) stay in `common.metal`. |
 | Directional / point / spot lights | ✅ | ✅ | ADR-0017 physical units. |
 | Fog | ✅ | ✅ | Aerial-perspective fog in `mesh.frag` (1-exp(-density·dist) toward fog color), params via the globals UBO `fog` field. Ported from `lighting.metal`. |
 | Transparency / alpha blending | ✅ | 🟡 | Material `opacity < 1` routes to a blended pipeline (src-alpha/one-minus, no depth write, normal G-buffer masked), drawn back-to-front after opaque. Unverified on device. |
@@ -94,7 +94,8 @@ in `src/renderer/vulkan/` and what has been confirmed on the Windows/RTX 3060.
 ### Debug & tooling
 | Feature | Metal | Vulkan | Notes |
 | --- | --- | --- | --- |
-| Debug views (AO/SSR/depth/normals/shadow/albedo/facing/cascades) | ✅ | 🟡 | Full set implemented; albedo/depth fixes recent, unverified. |
+| Debug views (AO/SSR/depth/normals/shadow/albedo/facing/cascades) | ✅ | 🟡 | Full set implemented; albedo/depth fixes recent, unverified (2026-08-23: albedo view showed near-camera CDLOD terrain black on device — suspect, see log). |
+| Headless frame capture (`shot` / RT_FRAME_DUMP) | ✅ | ✅ | Vulkan `requestFrameDump` lands 2026-08-23: swapchain built with TRANSFER_SRC, armed frame copies the composited image to a host buffer, fence + `stbi_write_png` — same two arms and semantics as Metal. Device-verified (RTX 3080). This was the missing parity *instrument*: without it only Metal could be screenshot-compared. |
 | Wireframe (modes 1 & 2) | ✅ | ✅ | LINE-mode pipeline; device-verified. |
 | Dear ImGui overlay | ✅ | ✅ | Vulkan backend (1.92 API) device-verified. |
 | Editor viewport (hosted window) | ✅ | ✅ | Vulkan surface from the Qt viewport; device-verified on Windows. |
@@ -118,6 +119,24 @@ Dated record of what was confirmed on real hardware, so 🟡→✅ flips are aud
   Clarified (not bugs): brick/checkerboard "speed lines" are procedural-surface
   aliasing (shared with Metal); DOF needs the camera panel + a low f-stop
   (f/8 gives sub-pixel CoC).
+- **2026-08-23 (Linux / RTX 3080, first Linux device pass):** Vulkan frame
+  capture implemented + verified (`shot` via the control channel; arena and
+  metro captures). Scene-pass `deps[0]` gained explicit `FRAGMENT_SHADER` +
+  `LATE_FRAGMENT_TESTS` in `srcStageMask` — matching the post passes' explicit
+  style, but on scrutiny this is documentation, not a fix: a `srcStageMask`
+  scope includes all logically EARLIER stages, so `COLOR_ATTACHMENT_OUTPUT`
+  already covered the prior frame's fragment-shader reads. Machine-checked on
+  device: sync validation (`validate_sync` + `syncval_submit_time_validation`,
+  VVL 1.4.341) reports ZERO hazards on arena, both pre- and post-change — the
+  frames-in-flight sharing of the scene targets is correctly ordered, and the
+  "shared depth target" debt note is softer than feared. The view-dependent
+  vanishing-geometry report is therefore STILL UNDIAGNOSED — it is not an
+  attachment race. Surface library gaps ported (see the
+  matrix row): water albedo + wave relief confirmed on device; terrain grain
+  unconfirmed — inside the city the visible ground is citysim lot fill, not
+  CDLOD terrain, so judge terrain against Metal same-pose captures. Albedo
+  debug view showed near CDLOD terrain black at close range — untrusted as an
+  instrument until re-checked.
 - **Pending device check (Vulkan):** transparency; shadow tint; HDR equirect IBL (4b) + BRDF
   LUT; debug views (albedo/depth); depth of field (with a low f-stop); SSR
   binary-search refinement.

@@ -44,6 +44,10 @@ public:
                      float morphStart, float morphEnd) override;
     void endFrame() override;
 
+    // Headless frame capture: arm a one-shot PNG of the next composited frame
+    // (the control channel's `shot`). Same seam as the Metal backend.
+    bool requestFrameDump(const std::string& path) override;
+
     // Dear ImGui (ADR-0011). No-ops unless RT_ENABLE_IMGUI is defined.
     void initDebugUi(void* windowHandle) override;
     void shutdownDebugUi() override;
