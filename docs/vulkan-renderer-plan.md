@@ -219,8 +219,11 @@ platform-native handles (HWND on Windows; X11 `Display*` + window XID via Qt's
 `QX11Application` native interface) and hands them to
 `src/editor_app/vulkan_viewport.cpp`, which owns the Vulkan + Win32/Xlib surface
 headers — deliberately a separate TU because Xlib's macros (`None`, `Status`,
-`Bool`) collide with Qt. Win32 + Xlib are implemented; Wayland falls back with a
-clear log (run under `QT_QPA_PLATFORM=xcb`, i.e. Xwayland). CMake: a shared
+`Bool`) collide with Qt. Win32 + Xlib are implemented; on a Wayland session the
+shell selects the `xcb` plugin itself before `QApplication` (Xwayland gives the
+Xlib path its `Display*`), falling back with a clear log when there is no X
+display or no xcb plugin. An explicit `QT_QPA_PLATFORM`/`-platform` still wins.
+CMake: a shared
 `rt_build_vulkan_shaders()` function builds one `vulkan_shaders` target for both
 the viewer and the editor; `editor_app` links the Vulkan backend +
 `vulkan_viewport.cpp` on non-Apple when `find_package(Vulkan)` succeeds, else

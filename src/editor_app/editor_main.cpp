@@ -54,6 +54,7 @@
 #include <QInputDialog>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLibraryInfo>
 #include <QListWidget>
 #include <QMainWindow>
 #include <QMenu>
@@ -581,9 +582,44 @@ void showCloudPanel(QWidget& parent, engine::Application& app) {
     panel->show();
 }
 
+// The Vulkan viewport's surface path is Xlib-only (vulkan_viewport.cpp): Qt's
+// Wayland plugin hands us no Display*, so on a Wayland session the viewport
+// comes up blank behind "no Xlib display for the Vulkan surface". Xwayland
+// backs the same session, so default to the xcb plugin when one is reachable.
+// An explicit QT_QPA_PLATFORM or -platform still wins.
+#if defined(RT_EDITOR_VK_X11)
+void preferXcbForVulkanViewport(int argc, char** argv) {
+    if (qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) return;
+    for (int i = 1; i < argc; i++)
+        if (std::strcmp(argv[i], "-platform") == 0) return;
+    if (!qEnvironmentVariableIsSet("WAYLAND_DISPLAY")) return;
+    if (!qEnvironmentVariableIsSet("DISPLAY")) {
+        LOG_WARN << "[editor] Wayland session with no X display — the Vulkan "
+                    "viewport needs Xwayland and will not render";
+        return;
+    }
+    // Only force the switch if the plugin is actually installed: naming a
+    // missing platform plugin makes Qt abort at startup, which would be worse
+    // than the blank viewport we're trying to avoid.
+    if (!QFileInfo::exists(QLibraryInfo::path(QLibraryInfo::PluginsPath) +
+                           "/platforms/libqxcb.so")) {
+        LOG_WARN << "[editor] Wayland session and no xcb platform plugin — the "
+                    "Vulkan viewport will not render";
+        return;
+    }
+    qputenv("QT_QPA_PLATFORM", "xcb");
+    LOG_INFO << "[editor] Wayland session: selecting the xcb platform plugin so "
+                "the Vulkan viewport gets an X11 surface";
+}
+#endif
+
 }  // namespace
 
 int main(int argc, char** argv) {
+#if defined(RT_EDITOR_VK_X11)
+    // Must precede QApplication: Qt reads QT_QPA_PLATFORM at construction.
+    preferXcbForVulkanViewport(argc, argv);
+#endif
     QApplication qtApp(argc, argv);
 
     std::string levelPath = "assets/levels/arena.json";
