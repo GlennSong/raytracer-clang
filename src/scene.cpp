@@ -1,5 +1,7 @@
 #include "scene.h"
 
+#include <cstdint>
+#include <cstring>
 #include <algorithm>
 
 namespace engine {
@@ -82,9 +84,17 @@ Vec3 applyCheckerboard(const Vec3& albedo, const Vec3& worldPos) {
 // tracer previews exactly what the Metal viewer draws. All take a base albedo
 // (the material/vertex colour) and return the patterned albedo. See material.h
 // Surface ids.
-double surfHash(double a, double b) {   // == common.metal hash21
-    double s = std::sin(a * 12.9898 + b * 78.233) * 43758.5453;
-    return s - std::floor(s);
+double surfHash(double a, double b) {   // == common.metal hash21, bit-exact
+    // Float-bits hash (see common.metal): the doubles narrow to float first so
+    // the CPU preview hashes the SAME bit patterns the GPU does.
+    float fa = static_cast<float>(a), fb = static_cast<float>(b);
+    uint32_t ba, bb;
+    std::memcpy(&ba, &fa, 4);
+    std::memcpy(&bb, &fb, 4);
+    uint32_t h = ba * 0x85EBCA6Bu ^ bb * 0xC2B2AE35u;
+    h = (h ^ (h >> 13)) * 0x27D4EB2Du;
+    h ^= h >> 15;
+    return static_cast<double>(h >> 8) * (1.0 / 16777216.0);
 }
 double surfTile(double x, double m) { return x - m * std::floor(x / m); }  // [0,m)
 double surfStep(double e0, double e1, double x) {

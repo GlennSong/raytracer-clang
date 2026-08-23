@@ -66,8 +66,18 @@ float3 applyCheckerboard(float3 albedo, float3 worldPos) {
 // after this file and depend on these primitives.
 constant float SURF_PI = 3.14159265;
 
+// Lattice hash. The classic fract(sin(x)*43758) collapses once |x| outgrows
+// float phase precision (~1e5) — routine here, where world-planar coords feed
+// octaves like worldPos*37 before the *12.9898 — turning road grain and brick
+// shading into BLOCKS on device. Hash the raw float BITS instead (xxhash-style
+// avalanche): exact at any magnitude, and bit-identical across CPU / Metal /
+// Vulkan (IEEE-754), so every backend now agrees per-brick. Pattern layouts
+// reshuffle once relative to the old sin hash; statistics are unchanged.
 float hash21(float a, float b) {
-    return fract(sin(a * 12.9898 + b * 78.233) * 43758.5453);
+    uint h = as_type<uint>(a) * 0x85EBCA6Bu ^ as_type<uint>(b) * 0xC2B2AE35u;
+    h = (h ^ (h >> 13)) * 0x27D4EB2Du;
+    h ^= h >> 15;
+    return float(h >> 8) * (1.0 / 16777216.0);
 }
 float vnoise2(float x, float y) {
     float xi = floor(x), yi = floor(y), xf = x - xi, yf = y - yi;
