@@ -87,6 +87,7 @@ in `src/renderer/vulkan/` and what has been confirmed on the Windows/RTX 3060.
 | Feature | Metal | Vulkan | Notes |
 | --- | --- | --- | --- |
 | Instanced rendering (correctness) | ✅ | ⚠️ | Vulkan renders via the CPU `drawMesh` fallback — visually correct but no GPU batching (perf, not a visual gap). |
+| Per-draw material sets at scale | — | ✅ | 2026-08-23: the per-frame material descriptor pool was CAPPED at 2048 sets and silently SKIPPED every draw past it — at metro scale (~6k visible draws) whole buildings, the beach, the ocean and terrain nodes vanished view-dependently as the frustum-visible set crossed the cap. Now a grow-on-demand pool chain (2048-set links, appended on exhaustion, whole chain reset per frame); a draw drops only on true OOM, logged. Metal has no equivalent quota (encoder-bound textures), which is why the failure mode was invisible on the reference. Device-verified: the same metro pose went from a brown void to beach+ocean+full city; zero pool warnings over a full run. |
 | Vegetation wind sway | ✅ | ✅ | `mesh.vert` applies the FLAG_WIND sway (height-weighted, phase-offset; same constants as Metal) from the model base, so the per-instance fallback sways. |
 | CDLOD terrain morph | ✅ | ✅ | `drawTerrain` override + `terrain.vert` morph each vertex toward its coarser-LOD position (tangent slot) over the [start,end] camera-distance band. Device-verified (stable after the reverse-Z fix). |
 | Mipmaps | ✅ | ✅ | `createImageRGBA8` generates the full chain via a blit downsample; sampler already mip-aware (LINEAR, unclamped LOD). |
@@ -147,7 +148,11 @@ Dated record of what was confirmed on real hardware, so 🟡→✅ flips are aud
   made the divergence fatal. Fixed with the back-culled pipeline variant +
   FLAG_TWO_SIDED routing (see the matrix row); before/after verified at the
   same pose. The earlier sync-race theory for this symptom is retracted (see
-  the 1st-pass entry — sync-val clean).
+  the 1st-pass entry — sync-val clean). SECOND mechanism found the same day
+  behind the same symptom: the 2048-set material pool cap silently skipping
+  draws (see the new Geometry-paths row) — the reporter's "faces/buildings/
+  terrain still disappear by angle" after the culling fix was this, not
+  winding. Both fixes verified at the reporter's exact camera pose.
 - **Pending device check (Vulkan):** transparency; shadow tint; HDR equirect IBL (4b) + BRDF
   LUT; debug views (albedo/depth); depth of field (with a low f-stop); SSR
   binary-search refinement.

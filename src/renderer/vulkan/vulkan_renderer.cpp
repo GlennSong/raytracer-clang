@@ -498,7 +498,14 @@ struct VulkanRenderer::Impl {
     // Material textures (set 1): a per-frame transient descriptor pool reset each
     // frame, so each draw gets a fresh set with no cross-frame lifetime issues.
     VkDescriptorSetLayout materialSetLayout = VK_NULL_HANDLE;
-    std::array<VkDescriptorPool, MAX_FRAMES_IN_FLIGHT> materialPools{};
+    // Material-set pools are a GROW-ON-DEMAND chain per frame in flight: a
+    // metro-scale view can exceed any fixed per-frame set count, and the old
+    // single pool silently SKIPPED every draw past its cap — buildings and
+    // terrain nodes vanished with the camera angle as the visible set shifted.
+    // On exhaustion another pool (same size) is appended; the whole chain is
+    // reset each frame, so memory is bounded by the peak frame ever seen.
+    std::array<std::vector<VkDescriptorPool>, MAX_FRAMES_IN_FLIGHT> materialPools{};
+    size_t materialPoolActive = 0;   // index into the current frame's chain
     VkSampler textureSampler = VK_NULL_HANDLE;
     GpuTexture defaultTexture;   // 1x1 white, stands in for absent maps
     bool materialPoolExhaustedWarned = false;
@@ -546,6 +553,7 @@ struct VulkanRenderer::Impl {
     bool createImageViews();
     bool createDepthResources();
     bool ensureCaptureBuffer(VkDeviceSize size);
+    bool createMaterialPool(VkDescriptorPool* out);
     bool createHdrResources();
     bool createRenderPass();
     bool createCompositeRenderPass();
@@ -881,6 +889,24 @@ bool VulkanRenderer::Impl::createImageViews() {
             LOG_ERROR("[vulkan] vkCreateImageView failed");
             return false;
         }
+    }
+    return true;
+}
+
+// One link of a frame's material-descriptor-pool chain (see materialPools).
+bool VulkanRenderer::Impl::createMaterialPool(VkDescriptorPool* out) {
+    constexpr uint32_t MAX_MATERIAL_SETS = 2048;   // sets per chain link
+    VkDescriptorPoolSize size{};
+    size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    size.descriptorCount = MAX_MATERIAL_SETS * 5;
+    VkDescriptorPoolCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    info.poolSizeCount = 1;
+    info.pPoolSizes = &size;
+    info.maxSets = MAX_MATERIAL_SETS;
+    if (vkCreateDescriptorPool(device, &info, nullptr, out) != VK_SUCCESS) {
+        LOG_ERROR("[vulkan] material descriptor pool creation failed");
+        return false;
     }
     return true;
 }
@@ -3446,20 +3472,12 @@ bool VulkanRenderer::Impl::createMaterialResources() {
         return false;
     }
 
+    // Chunk size of one pool in the per-frame chain (see materialPools).
     constexpr uint32_t MAX_MATERIAL_SETS = 2048;
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        VkDescriptorPoolSize size{};
-        size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        size.descriptorCount = MAX_MATERIAL_SETS * 5;
-        VkDescriptorPoolCreateInfo info{};
-        info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        info.poolSizeCount = 1;
-        info.pPoolSizes = &size;
-        info.maxSets = MAX_MATERIAL_SETS;
-        if (vkCreateDescriptorPool(device, &info, nullptr, &materialPools[i]) != VK_SUCCESS) {
-            LOG_ERROR("[vulkan] material descriptor pool creation failed");
-            return false;
-        }
+        VkDescriptorPool pool = VK_NULL_HANDLE;
+        if (!createMaterialPool(&pool)) return false;
+        materialPools[i].push_back(pool);
     }
 
     VkSamplerCreateInfo sampler{};
@@ -3926,12 +3944,32 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
                 VkDescriptorSet matSet = VK_NULL_HANDLE;
                 VkDescriptorSetAllocateInfo dsa{};
                 dsa.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-                dsa.descriptorPool = materialPools[currentFrame];
                 dsa.descriptorSetCount = 1;
                 dsa.pSetLayouts = &materialSetLayout;
-                if (vkAllocateDescriptorSets(device, &dsa, &matSet) != VK_SUCCESS) {
+                // Walk the frame's pool chain, growing it when every link is
+                // full. A draw is dropped only if pool CREATION fails (OOM) —
+                // never because a fixed cap was reached (the old behaviour,
+                // which vanished buildings/terrain view-dependently at metro
+                // scale as the visible set crossed the cap).
+                auto& chain = materialPools[currentFrame];
+                for (;;) {
+                    dsa.descriptorPool = chain[materialPoolActive];
+                    if (vkAllocateDescriptorSets(device, &dsa, &matSet) == VK_SUCCESS)
+                        break;
+                    if (materialPoolActive + 1 < chain.size()) {
+                        ++materialPoolActive;
+                        continue;
+                    }
+                    VkDescriptorPool grown = VK_NULL_HANDLE;
+                    if (!createMaterialPool(&grown)) break;   // true OOM: drop draw
+                    chain.push_back(grown);
+                    ++materialPoolActive;
+                    LOG_INFO("[vulkan] material pool chain grew to %zu links (frame %u)",
+                             chain.size(), currentFrame);
+                }
+                if (matSet == VK_NULL_HANDLE) {
                     if (!materialPoolExhaustedWarned) {
-                        LOG_WARN("[vulkan] material descriptor pool exhausted; some draws skipped this frame");
+                        LOG_WARN("[vulkan] material pool allocation failed; draws dropped");
                         materialPoolExhaustedWarned = true;
                     }
                     continue;
@@ -4093,7 +4131,9 @@ void VulkanRenderer::Impl::drawFrame() {
     vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
 
     // This frame's prior submission is done: recycle its transient material sets.
-    vkResetDescriptorPool(device, materialPools[currentFrame], 0);
+    for (VkDescriptorPool pool : materialPools[currentFrame])
+        vkResetDescriptorPool(device, pool, 0);
+    materialPoolActive = 0;
     materialPoolExhaustedWarned = false;
 
     uint32_t imageIndex = 0;
@@ -4266,8 +4306,11 @@ void VulkanRenderer::shutdown() {
     impl->brdfLutImage = VK_NULL_HANDLE;
     impl->brdfLutMemory = VK_NULL_HANDLE;
     if (impl->textureSampler) vkDestroySampler(impl->device, impl->textureSampler, nullptr);
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
-        if (impl->materialPools[i]) vkDestroyDescriptorPool(impl->device, impl->materialPools[i], nullptr);
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        for (VkDescriptorPool pool : impl->materialPools[i])
+            if (pool) vkDestroyDescriptorPool(impl->device, pool, nullptr);
+        impl->materialPools[i].clear();
+    }
     if (impl->materialSetLayout)
         vkDestroyDescriptorSetLayout(impl->device, impl->materialSetLayout, nullptr);
     impl->textureSampler = VK_NULL_HANDLE;
