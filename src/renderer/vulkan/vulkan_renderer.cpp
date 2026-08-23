@@ -484,7 +484,8 @@ struct VulkanRenderer::Impl {
     std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> globalsMemory{};
     std::array<void*, MAX_FRAMES_IN_FLIGHT> globalsMapped{};
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-    VkPipeline meshPipeline = VK_NULL_HANDLE;
+    VkPipeline meshPipeline = VK_NULL_HANDLE;          // two-sided (FLAG_TWO_SIDED batches)
+    VkPipeline meshPipelineCulled = VK_NULL_HANDLE;    // back-face culled (the default)
     VkPipeline wirePipeline = VK_NULL_HANDLE;          // VK_POLYGON_MODE_LINE debug view
     VkPipeline transparentPipeline = VK_NULL_HANDLE;   // alpha blend, no depth write
     VkPipeline overlayPipeline = VK_NULL_HANDLE;       // FLAG_OVERLAY: no depth test/write, on top
@@ -2869,19 +2870,17 @@ bool VulkanRenderer::Impl::createPipeline() {
     VkPipelineRasterizationStateCreateInfo raster{};
     raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     raster.polygonMode = VK_POLYGON_MODE_FILL;
-    // Phase 1: cull nothing so the first mesh is visible regardless of winding.
-    // Phase 2 enables VK_CULL_MODE_BACK_BIT once front-face winding is verified
-    // on device (engine winds front faces clockwise; with the clip-space Y-flip
-    // that should map to VK_FRONT_FACE_CLOCKWISE — confirm then enable).
-    //
-    // NOTE for Phase 2: RenderMaterial::FLAG_TWO_SIDED must survive that switch.
-    // Everything is implicitly two-sided while culling is off, so meshes that
-    // NEED both faces (glass panes, foliage cards) look correct here today and
-    // would silently lose a face the moment back-face culling is turned on.
-    // Metal honours the flag by setting cull mode per batch in issuePass; do the
-    // same here — either a second pipeline with VK_CULL_MODE_NONE selected per
-    // batch, or dynamic state (VK_DYNAMIC_STATE_CULL_MODE, core in 1.3).
-    raster.cullMode = VK_CULL_MODE_NONE;
+    // Phase 2 (2026-08-23, verified on device via the facing debug view): the
+    // default is BACK-face culling, matching the Metal scene pass; batches whose
+    // material carries FLAG_TWO_SIDED draw both faces through the unculled
+    // two-sided variant, mirroring Metal's per-batch setCullMode in issuePass.
+    // Rendering everything two-sided was not just perf debt — coplanar front/
+    // back geometry (the flat-facade middle LOD, thin vehicle shells) self-
+    // z-fights when both faces rasterize, dissolving view-dependently at
+    // distance on the metro-scale levels. Metal never saw it because it culls.
+    // API 1.0, so a second pipeline (not VK_DYNAMIC_STATE_CULL_MODE, core 1.3)
+    // — consistent with the existing opaque/transparent/terrain/wire variants.
+    raster.cullMode = VK_CULL_MODE_NONE;   // this base pipeline = two-sided
     raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
     raster.lineWidth = 1.0f;
 
@@ -2929,9 +2928,16 @@ bool VulkanRenderer::Impl::createPipeline() {
     info.subpass = 0;
 
     VkResult result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &meshPipeline);
+    // Back-face-culled variant — the default path for opaque batches (see the
+    // cull-mode comment above). Same state but cullMode; created while the
+    // shader modules are still alive.
+    raster.cullMode = VK_CULL_MODE_BACK_BIT;
+    VkResult resultCulled = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr,
+                                                      &meshPipelineCulled);
+    raster.cullMode = VK_CULL_MODE_NONE;   // wire + transparent stay two-sided
     vkDestroyShaderModule(device, vert, nullptr);
     vkDestroyShaderModule(device, frag, nullptr);
-    if (result != VK_SUCCESS) {
+    if (result != VK_SUCCESS || resultCulled != VK_SUCCESS) {
         LOG_ERROR("[vulkan] vkCreateGraphicsPipelines failed");
         return false;
     }
@@ -2991,6 +2997,9 @@ bool VulkanRenderer::Impl::createPipeline() {
     if (!cvert || !cfrag) return false;
     stages[0].module = cvert;
     stages[1].module = cfrag;
+    // Terrain is never two-sided: cull back faces like Metal's scene-pass
+    // encoder default (heightfield undersides are Metal-invisible too).
+    raster.cullMode = VK_CULL_MODE_BACK_BIT;
     depthStencil.depthWriteEnable = VK_TRUE;
     blendAttachments[0].blendEnable = VK_FALSE;
     blendAttachments[0].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -3962,7 +3971,16 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     if (wireframeFrame == 1) {
         recordGeometry(allItems, wirePipeline, /*wire=*/true, /*countStats=*/true);
     } else {
-        recordGeometry(opaque, meshPipeline, /*wire=*/false, /*countStats=*/true);
+        // FLAG_TWO_SIDED selects the unculled variant per batch (Metal parity:
+        // issuePass sets encoder cull mode per batch; here it picks the pipeline).
+        std::vector<const DrawItem*> opaqueCulled, opaqueTwoSided;
+        opaqueCulled.reserve(opaque.size());
+        for (const DrawItem* it : opaque)
+            ((it->push.surfaceFlags[1] & RenderMaterial::FLAG_TWO_SIDED) ? opaqueTwoSided
+                                                                         : opaqueCulled)
+                .push_back(it);
+        recordGeometry(opaqueCulled, meshPipelineCulled, /*wire=*/false, /*countStats=*/true);
+        recordGeometry(opaqueTwoSided, meshPipeline, /*wire=*/false, /*countStats=*/true);
         recordGeometry(terrainItems, terrainPipeline, /*wire=*/false, /*countStats=*/true);
         recordGeometry(transparent, transparentPipeline, /*wire=*/false, /*countStats=*/true);
         // Debug gizmos on top, after everything, with depth off (ADR-0061).
@@ -4281,6 +4299,7 @@ void VulkanRenderer::shutdown() {
     impl->skyPipeline = VK_NULL_HANDLE;
     impl->skyPipelineLayout = VK_NULL_HANDLE;
     if (impl->meshPipeline) vkDestroyPipeline(impl->device, impl->meshPipeline, nullptr);
+    if (impl->meshPipelineCulled) vkDestroyPipeline(impl->device, impl->meshPipelineCulled, nullptr);
     if (impl->wirePipeline) vkDestroyPipeline(impl->device, impl->wirePipeline, nullptr);
     impl->wirePipeline = VK_NULL_HANDLE;
     if (impl->transparentPipeline) vkDestroyPipeline(impl->device, impl->transparentPipeline, nullptr);
@@ -4299,6 +4318,7 @@ void VulkanRenderer::shutdown() {
         if (impl->globalsMemory[i]) vkFreeMemory(impl->device, impl->globalsMemory[i], nullptr);
     }
     impl->meshPipeline = VK_NULL_HANDLE;
+    impl->meshPipelineCulled = VK_NULL_HANDLE;
     impl->pipelineLayout = VK_NULL_HANDLE;
     impl->descriptorPool = VK_NULL_HANDLE;
     impl->descriptorSetLayout = VK_NULL_HANDLE;

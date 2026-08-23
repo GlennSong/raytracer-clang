@@ -90,6 +90,7 @@ in `src/renderer/vulkan/` and what has been confirmed on the Windows/RTX 3060.
 | Vegetation wind sway | ✅ | ✅ | `mesh.vert` applies the FLAG_WIND sway (height-weighted, phase-offset; same constants as Metal) from the model base, so the per-instance fallback sways. |
 | CDLOD terrain morph | ✅ | ✅ | `drawTerrain` override + `terrain.vert` morph each vertex toward its coarser-LOD position (tangent slot) over the [start,end] camera-distance band. Device-verified (stable after the reverse-Z fix). |
 | Mipmaps | ✅ | ✅ | `createImageRGBA8` generates the full chain via a blit downsample; sampler already mip-aware (LINEAR, unclamped LOD). |
+| Back-face culling + FLAG_TWO_SIDED | ✅ | ✅ | 2026-08-23: Vulkan rendered EVERYTHING two-sided (the "Phase 1: cull nothing" deferral) — harmless until the flat-facade middle LOD (823986c) shipped coplanar front/back geometry that self-z-fights when both faces rasterize: buildings/vehicles dissolved view-dependently at distance on metro-scale levels (the "disappearing geometry" report). Metal never saw it (culls Back per batch, FLAG_TWO_SIDED opts out). Vulkan now mirrors that via a back-culled opaque pipeline variant (API 1.0, so a variant rather than dynamic cull state); terrain culls Back unconditionally like Metal's encoder default. Device-verified A/B at the reporter's exact camera pose. |
 
 ### Debug & tooling
 | Feature | Metal | Vulkan | Notes |
@@ -137,6 +138,16 @@ Dated record of what was confirmed on real hardware, so 🟡→✅ flips are aud
   CDLOD terrain, so judge terrain against Metal same-pose captures. Albedo
   debug view showed near CDLOD terrain black at close range — untrusted as an
   instrument until re-checked.
+- **2026-08-23 (Linux / RTX 3080, 2nd pass — the vanishing-geometry hunt):**
+  Reproduced live via the new capture seam at the reporter's held camera pose.
+  The facing debug view showed far flat-facade-LOD towers striped front/back —
+  coplanar self-z-fighting — and geometry losing depth entirely (sky ground
+  colour showing through). Root cause: Vulkan drew everything two-sided while
+  Metal culls back faces; the flat-facade middle LOD (823986c, Metal-authored)
+  made the divergence fatal. Fixed with the back-culled pipeline variant +
+  FLAG_TWO_SIDED routing (see the matrix row); before/after verified at the
+  same pose. The earlier sync-race theory for this symptom is retracted (see
+  the 1st-pass entry — sync-val clean).
 - **Pending device check (Vulkan):** transparency; shadow tint; HDR equirect IBL (4b) + BRDF
   LUT; debug views (albedo/depth); depth of field (with a low f-stop); SSR
   binary-search refinement.
