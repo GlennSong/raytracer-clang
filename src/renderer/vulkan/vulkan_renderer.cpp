@@ -37,6 +37,11 @@
 // PNG output for frame capture (declarations only; the stb implementation is
 // compiled once with the importer's vendored copy — same as the Metal backend).
 #include "../../../third_party/tinygltf/stb_image_write.h"
+
+// Tileable Perlin-Worley 3D noise bake for the volumetric clouds — the SAME
+// CPU header the Metal backend uses (pure C++, disk-cached in cache/clouds/),
+// so both backends march identical noise fields.
+#include "../metal/cloud_noise.h"
 #include <vector>
 
 #ifndef RT_VULKAN_SHADER_DIR
@@ -109,6 +114,21 @@ struct GlobalsUBO {
     float    shadowTint[4];          // rgb artistic shadow tint, w ambientStrength
     float    wind1[4];               // xyz wind direction, w wind time (seconds)
     float    wind2[4];               // x frequency, y height, z amplitude (FLAG_WIND)
+};
+
+// Volumetric-cloud uniforms (mirrors shader_types.h CloudUniforms; every
+// member is vec4-aligned so the plain-float layout IS the std140 layout).
+struct CloudUniformsGPU {
+    float invViewProjection[16];
+    float cameraPosition[4];
+    float sunDirection[4];
+    float sunColor[4];        // rgb, w intensity
+    float skyAmbient[4];      // rgb ambient, w time
+    float planetCenter[4];
+    float layer[4];           // x bottom, y top, z planetRadius, w domainMode
+    float params[4];          // x coverage, y densityScale, z noiseScale, w wind
+    float march[4];           // x viewSteps, y lightSteps, z phaseG, w farDistance
+    float detail[4];          // x detailStrength, yzw unused
 };
 
 // Per-draw push constants for the forward pass (120 <= 128 B).
@@ -321,6 +341,42 @@ struct VulkanRenderer::Impl {
     VkBuffer captureBuffer = VK_NULL_HANDLE;
     VkDeviceMemory captureMemory = VK_NULL_HANDLE;
     VkDeviceSize captureCapacity = 0;
+
+    // Volumetric clouds (port of the Metal cinematic-sky wiring): a half-res
+    // march into an RGBA16F overlay (rgb = in-scattered light, a =
+    // transmittance) + a full-res bilateral composite onto the HDR scene with
+    // One + SrcAlpha blending, BEFORE the post chain so SSR/bloom/DOF see the
+    // clouded scene. The 3D Perlin-Worley noise set is the shared CPU bake.
+    VkRenderPass cloudRenderPass = VK_NULL_HANDLE;           // half-res march
+    VkRenderPass cloudCompositeRenderPass = VK_NULL_HANDLE;  // HDR load+blend
+    VkFramebuffer cloudFramebuffer = VK_NULL_HANDLE;
+    VkFramebuffer cloudCompositeFramebuffer = VK_NULL_HANDLE;
+    VkImage cloudImage = VK_NULL_HANDLE;
+    VkDeviceMemory cloudMemory = VK_NULL_HANDLE;
+    VkImageView cloudView = VK_NULL_HANDLE;
+    VkExtent2D cloudExtent{0, 0};
+    VkImage cloudBaseImage = VK_NULL_HANDLE;                 // 128^3 RGBA8
+    VkDeviceMemory cloudBaseMemory = VK_NULL_HANDLE;
+    VkImageView cloudBaseView = VK_NULL_HANDLE;
+    VkImage cloudDetailImage = VK_NULL_HANDLE;               // 32^3 RGBA8
+    VkDeviceMemory cloudDetailMemory = VK_NULL_HANDLE;
+    VkImageView cloudDetailView = VK_NULL_HANDLE;
+    VkDescriptorSetLayout cloudMarchSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout cloudCompositeSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool cloudPool = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> cloudMarchSets{};
+    VkDescriptorSet cloudCompositeSet = VK_NULL_HANDLE;
+    VkPipelineLayout cloudMarchPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline cloudMarchPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout cloudCompositePipelineLayout = VK_NULL_HANDLE;
+    VkPipeline cloudCompositePipeline = VK_NULL_HANDLE;
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> cloudUboBuffers{};
+    std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> cloudUboMemory{};
+    std::array<void*, MAX_FRAMES_IN_FLIGHT> cloudUboMapped{};
+    VolumetricCloudParams cloudParams;   // level opt-in, copied in setLights
+    bool cloudsActive = false;
+    bool cloudsAnnounced = false;
+    int cloudStepsFrame = 0;   // endFrame mirror of Renderer::cloudStepsOverride
 
     // Offscreen HDR scene target (Phase 5): geometry + sky render here in linear
     // HDR; the composite pass tonemaps it into the swapchain. Single target,
@@ -571,6 +627,9 @@ struct VulkanRenderer::Impl {
     void updateSsrDescriptors();
     void recordSsr(VkCommandBuffer cmd);
     bool createDofResources();
+    bool createCloudResources();
+    bool createImage3DRGBA8(uint32_t n, const uint8_t* rgba, VkImage& image,
+                            VkDeviceMemory& memory, VkImageView& view);
     void updateDofDescriptors();
     void recordDof(VkCommandBuffer cmd);
     bool createColorTarget(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags usage,
@@ -908,6 +967,435 @@ bool VulkanRenderer::Impl::createMaterialPool(VkDescriptorPool* out) {
         LOG_ERROR("[vulkan] material descriptor pool creation failed");
         return false;
     }
+    return true;
+}
+
+// Tileable 3D RGBA8 texture upload (the cloud noise set): staging copy +
+// layout transitions, single mip — linear REPEAT filtering does the octave
+// smoothing (textureSampler), exactly like the Metal make3D.
+bool VulkanRenderer::Impl::createImage3DRGBA8(uint32_t n, const uint8_t* rgba,
+                                              VkImage& image, VkDeviceMemory& memory,
+                                              VkImageView& view) {
+    VkDeviceSize size = VkDeviceSize(n) * n * n * 4;
+    VkBuffer staging = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+    if (!createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                      staging, stagingMem))
+        return false;
+    void* mapped = nullptr;
+    vkMapMemory(device, stagingMem, 0, size, 0, &mapped);
+    std::memcpy(mapped, rgba, static_cast<size_t>(size));
+    vkUnmapMemory(device, stagingMem);
+
+    VkImageCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ci.imageType = VK_IMAGE_TYPE_3D;
+    ci.extent = {n, n, n};
+    ci.mipLevels = 1;
+    ci.arrayLayers = 1;
+    ci.format = VK_FORMAT_R8G8B8A8_UNORM;
+    ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    ci.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    ci.samples = VK_SAMPLE_COUNT_1_BIT;
+    ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    bool ok = vkCreateImage(device, &ci, nullptr, &image) == VK_SUCCESS;
+    if (ok) {
+        VkMemoryRequirements req;
+        vkGetImageMemoryRequirements(device, image, &req);
+        VkMemoryAllocateInfo alloc{};
+        alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        alloc.allocationSize = req.size;
+        alloc.memoryTypeIndex = findMemoryType(req.memoryTypeBits,
+                                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        ok = vkAllocateMemory(device, &alloc, nullptr, &memory) == VK_SUCCESS;
+        if (ok) vkBindImageMemory(device, image, memory, 0);
+    }
+    if (ok) {
+        VkCommandBufferAllocateInfo cba{};
+        cba.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cba.commandPool = commandPool;
+        cba.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cba.commandBufferCount = 1;
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        vkAllocateCommandBuffers(device, &cba, &cmd);
+        VkCommandBufferBeginInfo begin{};
+        begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &begin);
+        transitionImageLayout(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED,
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {n, n, n};
+        vkCmdCopyBufferToImage(cmd, staging, image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        transitionImageLayout(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        vkEndCommandBuffer(cmd);
+        VkSubmitInfo submit{};
+        submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit.commandBufferCount = 1;
+        submit.pCommandBuffers = &cmd;
+        vkQueueSubmit(graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+        vkQueueWaitIdle(graphicsQueue);
+        vkFreeCommandBuffers(device, commandPool, 1, &cmd);
+
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = image;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_3D;
+        vi.format = VK_FORMAT_R8G8B8A8_UNORM;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        ok = vkCreateImageView(device, &vi, nullptr, &view) == VK_SUCCESS;
+    }
+    vkDestroyBuffer(device, staging, nullptr);
+    vkFreeMemory(device, stagingMem, nullptr);
+    if (!ok) LOG_ERROR("[vulkan] 3D noise texture creation failed");
+    return ok;
+}
+
+// Volumetric-cloud resources. Once-only: render passes, layouts, pipelines,
+// the noise set, the per-frame uniform ring. Every call (init + resize): the
+// half-res target, both framebuffers, and the descriptor writes (depth/HDR
+// views are recreated with the swapchain).
+bool VulkanRenderer::Impl::createCloudResources() {
+    if (cloudRenderPass == VK_NULL_HANDLE) {
+        // March pass: one RGBA16F attachment, fullscreen overwrite, sampled after.
+        VkAttachmentDescription color{};
+        color.format = kHdrFormat;
+        color.samples = VK_SAMPLE_COUNT_1_BIT;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkAttachmentReference ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &ref;
+        std::array<VkSubpassDependency, 2> deps{};
+        deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        deps[0].dstSubpass = 0;
+        deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        deps[1].srcSubpass = 0;
+        deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        VkRenderPassCreateInfo rp{};
+        rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        rp.attachmentCount = 1;
+        rp.pAttachments = &color;
+        rp.subpassCount = 1;
+        rp.pSubpasses = &subpass;
+        rp.dependencyCount = static_cast<uint32_t>(deps.size());
+        rp.pDependencies = deps.data();
+        if (vkCreateRenderPass(device, &rp, nullptr, &cloudRenderPass) != VK_SUCCESS)
+            return false;
+
+        // Composite pass: LOAD the HDR scene and blend the overlay onto it
+        // (the pipeline's One + SrcAlpha state does the math), leaving it
+        // SHADER_READ for the post chain.
+        VkAttachmentDescription hdr{};
+        hdr.format = kHdrFormat;
+        hdr.samples = VK_SAMPLE_COUNT_1_BIT;
+        hdr.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        hdr.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        hdr.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        hdr.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        hdr.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        hdr.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkAttachmentReference href{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription hsub{};
+        hsub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        hsub.colorAttachmentCount = 1;
+        hsub.pColorAttachments = &href;
+        std::array<VkSubpassDependency, 2> hdeps{};
+        hdeps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        hdeps[0].dstSubpass = 0;
+        hdeps[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        hdeps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        hdeps[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        hdeps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        hdeps[1].srcSubpass = 0;
+        hdeps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        hdeps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        hdeps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        hdeps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        hdeps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        VkRenderPassCreateInfo hrp{};
+        hrp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        hrp.attachmentCount = 1;
+        hrp.pAttachments = &hdr;
+        hrp.subpassCount = 1;
+        hrp.pSubpasses = &hsub;
+        hrp.dependencyCount = static_cast<uint32_t>(hdeps.size());
+        hrp.pDependencies = hdeps.data();
+        if (vkCreateRenderPass(device, &hrp, nullptr, &cloudCompositeRenderPass) != VK_SUCCESS)
+            return false;
+
+        // Set layouts: march = UBO + depth + base + detail; composite = cloud + depth.
+        std::array<VkDescriptorSetLayoutBinding, 4> mb{};
+        mb[0].binding = 0;
+        mb[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        mb[0].descriptorCount = 1;
+        mb[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        for (uint32_t i = 1; i < 4; ++i) {
+            mb[i].binding = i;
+            mb[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            mb[i].descriptorCount = 1;
+            mb[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo ml{};
+        ml.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        ml.bindingCount = static_cast<uint32_t>(mb.size());
+        ml.pBindings = mb.data();
+        if (vkCreateDescriptorSetLayout(device, &ml, nullptr, &cloudMarchSetLayout) != VK_SUCCESS)
+            return false;
+        std::array<VkDescriptorSetLayoutBinding, 2> cb{};
+        for (uint32_t i = 0; i < 2; ++i) {
+            cb[i].binding = i;
+            cb[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            cb[i].descriptorCount = 1;
+            cb[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo cl{};
+        cl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        cl.bindingCount = static_cast<uint32_t>(cb.size());
+        cl.pBindings = cb.data();
+        if (vkCreateDescriptorSetLayout(device, &cl, nullptr, &cloudCompositeSetLayout) != VK_SUCCESS)
+            return false;
+
+        std::array<VkDescriptorPoolSize, 2> sizes{
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                 3 * MAX_FRAMES_IN_FLIGHT + 2},
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_FRAMES_IN_FLIGHT}};
+        VkDescriptorPoolCreateInfo pp{};
+        pp.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pp.poolSizeCount = static_cast<uint32_t>(sizes.size());
+        pp.pPoolSizes = sizes.data();
+        pp.maxSets = MAX_FRAMES_IN_FLIGHT + 1;
+        if (vkCreateDescriptorPool(device, &pp, nullptr, &cloudPool) != VK_SUCCESS) return false;
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+            VkDescriptorSetAllocateInfo a{};
+            a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            a.descriptorPool = cloudPool;
+            a.descriptorSetCount = 1;
+            a.pSetLayouts = &cloudMarchSetLayout;
+            if (vkAllocateDescriptorSets(device, &a, &cloudMarchSets[i]) != VK_SUCCESS)
+                return false;
+        }
+        VkDescriptorSetAllocateInfo a{};
+        a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        a.descriptorPool = cloudPool;
+        a.descriptorSetCount = 1;
+        a.pSetLayouts = &cloudCompositeSetLayout;
+        if (vkAllocateDescriptorSets(device, &a, &cloudCompositeSet) != VK_SUCCESS) return false;
+
+        // Per-frame uniform ring (the mapped-write pattern of globalsBuffers).
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+            if (!createBuffer(sizeof(CloudUniformsGPU), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                              cloudUboBuffers[i], cloudUboMemory[i]))
+                return false;
+            vkMapMemory(device, cloudUboMemory[i], 0, sizeof(CloudUniformsGPU), 0,
+                        &cloudUboMapped[i]);
+        }
+
+        // The shared noise bake (deterministic, disk-cached in cache/clouds/).
+        cloudnoise::NoiseSet nz = cloudnoise::generateOrLoad();
+        if (!createImage3DRGBA8(static_cast<uint32_t>(nz.baseSize), nz.base.data(),
+                                cloudBaseImage, cloudBaseMemory, cloudBaseView) ||
+            !createImage3DRGBA8(static_cast<uint32_t>(nz.detailSize), nz.detail.data(),
+                                cloudDetailImage, cloudDetailMemory, cloudDetailView))
+            return false;
+
+        // March pipeline: fullscreen triangle, no blend, half-res target.
+        auto makeFullscreen = [&](const char* fragName, VkPipelineLayout layout,
+                                  VkRenderPass pass,
+                                  const VkPipelineColorBlendAttachmentState& ba,
+                                  VkPipeline* out) -> bool {
+            VkShaderModule vert =
+                loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/composite.vert.spv");
+            VkShaderModule frag =
+                loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/" + fragName);
+            if (!vert || !frag) return false;
+            VkPipelineShaderStageCreateInfo stages[2]{};
+            stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+            stages[0].module = vert;
+            stages[0].pName = "main";
+            stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+            stages[1].module = frag;
+            stages[1].pName = "main";
+            VkPipelineVertexInputStateCreateInfo vi{};
+            vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            VkPipelineInputAssemblyStateCreateInfo ia{};
+            ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+            ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            VkPipelineViewportStateCreateInfo vp{};
+            vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+            vp.viewportCount = 1;
+            vp.scissorCount = 1;
+            VkPipelineRasterizationStateCreateInfo raster{};
+            raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+            raster.polygonMode = VK_POLYGON_MODE_FILL;
+            raster.cullMode = VK_CULL_MODE_NONE;
+            raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+            raster.lineWidth = 1.0f;
+            VkPipelineMultisampleStateCreateInfo msaa{};
+            msaa.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+            msaa.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+            VkPipelineDepthStencilStateCreateInfo dss{};
+            dss.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+            VkPipelineColorBlendStateCreateInfo blend{};
+            blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+            blend.attachmentCount = 1;
+            blend.pAttachments = &ba;
+            std::array<VkDynamicState, 2> dyn{VK_DYNAMIC_STATE_VIEWPORT,
+                                              VK_DYNAMIC_STATE_SCISSOR};
+            VkPipelineDynamicStateCreateInfo dynamic{};
+            dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+            dynamic.dynamicStateCount = static_cast<uint32_t>(dyn.size());
+            dynamic.pDynamicStates = dyn.data();
+            VkGraphicsPipelineCreateInfo gp{};
+            gp.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+            gp.stageCount = 2;
+            gp.pStages = stages;
+            gp.pVertexInputState = &vi;
+            gp.pInputAssemblyState = &ia;
+            gp.pViewportState = &vp;
+            gp.pRasterizationState = &raster;
+            gp.pMultisampleState = &msaa;
+            gp.pDepthStencilState = &dss;
+            gp.pColorBlendState = &blend;
+            gp.pDynamicState = &dynamic;
+            gp.layout = layout;
+            gp.renderPass = pass;
+            gp.subpass = 0;
+            VkResult r = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gp, nullptr, out);
+            vkDestroyShaderModule(device, vert, nullptr);
+            vkDestroyShaderModule(device, frag, nullptr);
+            return r == VK_SUCCESS;
+        };
+
+        VkPipelineLayoutCreateInfo mpl{};
+        mpl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        mpl.setLayoutCount = 1;
+        mpl.pSetLayouts = &cloudMarchSetLayout;
+        if (vkCreatePipelineLayout(device, &mpl, nullptr, &cloudMarchPipelineLayout) != VK_SUCCESS)
+            return false;
+        VkPipelineColorBlendAttachmentState marchBA{};
+        marchBA.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                 VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        if (!makeFullscreen("clouds.frag.spv", cloudMarchPipelineLayout, cloudRenderPass,
+                            marchBA, &cloudMarchPipeline)) {
+            LOG_ERROR("[vulkan] cloud march pipeline creation failed");
+            return false;
+        }
+
+        VkPushConstantRange cpr{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 2 * sizeof(float)};
+        VkPipelineLayoutCreateInfo cpl{};
+        cpl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        cpl.setLayoutCount = 1;
+        cpl.pSetLayouts = &cloudCompositeSetLayout;
+        cpl.pushConstantRangeCount = 1;
+        cpl.pPushConstantRanges = &cpr;
+        if (vkCreatePipelineLayout(device, &cpl, nullptr, &cloudCompositePipelineLayout) !=
+            VK_SUCCESS)
+            return false;
+        // dest * transmittance + scattered (premultiplied overlay); alpha masked.
+        VkPipelineColorBlendAttachmentState compBA{};
+        compBA.blendEnable = VK_TRUE;
+        compBA.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        compBA.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        compBA.colorBlendOp = VK_BLEND_OP_ADD;
+        compBA.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        compBA.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        compBA.alphaBlendOp = VK_BLEND_OP_ADD;
+        compBA.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                VK_COLOR_COMPONENT_B_BIT;
+        if (!makeFullscreen("clouds_composite.frag.spv", cloudCompositePipelineLayout,
+                            cloudCompositeRenderPass, compBA, &cloudCompositePipeline)) {
+            LOG_ERROR("[vulkan] cloud composite pipeline creation failed");
+            return false;
+        }
+    }
+
+    // Size-dependent: the half-res march target + both framebuffers.
+    cloudExtent = {std::max(1u, swapchainExtent.width / 2),
+                   std::max(1u, swapchainExtent.height / 2)};
+    if (!createColorTarget(cloudExtent.width, cloudExtent.height, kHdrFormat,
+                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                           cloudImage, cloudMemory, cloudView))
+        return false;
+    VkFramebufferCreateInfo fb{};
+    fb.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fb.renderPass = cloudRenderPass;
+    fb.attachmentCount = 1;
+    fb.pAttachments = &cloudView;
+    fb.width = cloudExtent.width;
+    fb.height = cloudExtent.height;
+    fb.layers = 1;
+    if (vkCreateFramebuffer(device, &fb, nullptr, &cloudFramebuffer) != VK_SUCCESS) return false;
+    fb.renderPass = cloudCompositeRenderPass;
+    fb.pAttachments = &hdrView;
+    fb.width = swapchainExtent.width;
+    fb.height = swapchainExtent.height;
+    if (vkCreateFramebuffer(device, &fb, nullptr, &cloudCompositeFramebuffer) != VK_SUCCESS)
+        return false;
+
+    // Descriptor writes (depth + HDR views were just recreated). Noise uses the
+    // mip-aware REPEAT sampler; depth + the overlay use the CLAMP composite one.
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VkDescriptorBufferInfo ubo{cloudUboBuffers[i], 0, sizeof(CloudUniformsGPU)};
+        std::array<VkDescriptorImageInfo, 3> imgs{};
+        imgs[0] = {compositeSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+        imgs[1] = {textureSampler, cloudBaseView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        imgs[2] = {textureSampler, cloudDetailView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        std::array<VkWriteDescriptorSet, 4> writes{};
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = cloudMarchSets[i];
+        writes[0].dstBinding = 0;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[0].descriptorCount = 1;
+        writes[0].pBufferInfo = &ubo;
+        for (uint32_t k = 0; k < 3; ++k) {
+            writes[k + 1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[k + 1].dstSet = cloudMarchSets[i];
+            writes[k + 1].dstBinding = k + 1;
+            writes[k + 1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[k + 1].descriptorCount = 1;
+            writes[k + 1].pImageInfo = &imgs[k];
+        }
+        vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(),
+                               0, nullptr);
+    }
+    std::array<VkDescriptorImageInfo, 2> cimgs{};
+    cimgs[0] = {compositeSampler, cloudView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    cimgs[1] = {compositeSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+    std::array<VkWriteDescriptorSet, 2> cw{};
+    for (uint32_t k = 0; k < 2; ++k) {
+        cw[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        cw[k].dstSet = cloudCompositeSet;
+        cw[k].dstBinding = k;
+        cw[k].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        cw[k].descriptorCount = 1;
+        cw[k].pImageInfo = &cimgs[k];
+    }
+    vkUpdateDescriptorSets(device, static_cast<uint32_t>(cw.size()), cw.data(), 0, nullptr);
     return true;
 }
 
@@ -3771,6 +4259,16 @@ void VulkanRenderer::Impl::cleanupSwapchain() {
     ssrView = VK_NULL_HANDLE;
     ssrImage = VK_NULL_HANDLE;
     ssrMemory = VK_NULL_HANDLE;
+    if (cloudFramebuffer) vkDestroyFramebuffer(device, cloudFramebuffer, nullptr);
+    if (cloudCompositeFramebuffer) vkDestroyFramebuffer(device, cloudCompositeFramebuffer, nullptr);
+    if (cloudView) vkDestroyImageView(device, cloudView, nullptr);
+    if (cloudImage) vkDestroyImage(device, cloudImage, nullptr);
+    if (cloudMemory) vkFreeMemory(device, cloudMemory, nullptr);
+    cloudFramebuffer = VK_NULL_HANDLE;
+    cloudCompositeFramebuffer = VK_NULL_HANDLE;
+    cloudView = VK_NULL_HANDLE;
+    cloudImage = VK_NULL_HANDLE;
+    cloudMemory = VK_NULL_HANDLE;
     if (dofFramebuffer) vkDestroyFramebuffer(device, dofFramebuffer, nullptr);
     if (dofView) vkDestroyImageView(device, dofView, nullptr);
     if (dofImage) vkDestroyImage(device, dofImage, nullptr);
@@ -3839,7 +4337,7 @@ bool VulkanRenderer::Impl::recreateSwapchain() {
     if (!createSwapchain() || !createImageViews() || !createDepthResources() ||
         !createHdrResources() || !createSceneFramebuffer() || !createFramebuffers() ||
         !createBloomResources() || !createSsaoResources() || !createSsrResources() ||
-        !createDofResources())
+        !createDofResources() || !createCloudResources())
         return false;
     updateCompositeDescriptor();   // HDR + bloom + AO + SSR + DOF views were recreated
 
@@ -4029,6 +4527,50 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
 
     vkCmdEndRenderPass(cmd);
 
+    // Volumetric clouds (port of the Metal cinematic-sky wiring): half-res
+    // march, then the bilateral composite onto the HDR scene — BEFORE the post
+    // chain so SSR/bloom/DOF all see the clouded scene.
+    if (cloudsActive && cloudMarchPipeline && cloudCompositePipeline && cloudFramebuffer) {
+        VkRenderPassBeginInfo mrp{};
+        mrp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        mrp.renderPass = cloudRenderPass;
+        mrp.framebuffer = cloudFramebuffer;
+        mrp.renderArea.extent = cloudExtent;
+        vkCmdBeginRenderPass(cmd, &mrp, VK_SUBPASS_CONTENTS_INLINE);
+        VkViewport cvp{0.0f, 0.0f, static_cast<float>(cloudExtent.width),
+                       static_cast<float>(cloudExtent.height), 0.0f, 1.0f};
+        VkRect2D csc{{0, 0}, cloudExtent};
+        vkCmdSetViewport(cmd, 0, 1, &cvp);
+        vkCmdSetScissor(cmd, 0, 1, &csc);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, cloudMarchPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                cloudMarchPipelineLayout, 0, 1,
+                                &cloudMarchSets[currentFrame], 0, nullptr);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdEndRenderPass(cmd);
+
+        VkRenderPassBeginInfo crp2{};
+        crp2.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        crp2.renderPass = cloudCompositeRenderPass;
+        crp2.framebuffer = cloudCompositeFramebuffer;
+        crp2.renderArea.extent = swapchainExtent;
+        vkCmdBeginRenderPass(cmd, &crp2, VK_SUBPASS_CONTENTS_INLINE);
+        VkViewport fvp{0.0f, 0.0f, static_cast<float>(swapchainExtent.width),
+                       static_cast<float>(swapchainExtent.height), 0.0f, 1.0f};
+        VkRect2D fsc{{0, 0}, swapchainExtent};
+        vkCmdSetViewport(cmd, 0, 1, &fvp);
+        vkCmdSetScissor(cmd, 0, 1, &fsc);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, cloudCompositePipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                cloudCompositePipelineLayout, 0, 1,
+                                &cloudCompositeSet, 0, nullptr);
+        float nearFar[2] = {camNear, camFar};
+        vkCmdPushConstants(cmd, cloudCompositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(nearFar), nearFar);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdEndRenderPass(cmd);
+    }
+
     // Bloom + SSAO read the scene outputs (always run so their views stay
     // sampleable; composite gates whether they're applied).
     recordBloom(cmd);
@@ -4148,6 +4690,44 @@ void VulkanRenderer::Impl::drawFrame() {
     // Upload this frame's globals into its persistently mapped UBO.
     std::memcpy(globalsMapped[currentFrame], &cpuGlobals, sizeof(GlobalsUBO));
 
+    // Volumetric-cloud uniforms (mirrors the Metal endFrame CloudUniforms fill;
+    // the scattering-sky sun-transmittance tint is Metal-only until that sky is
+    // ported, so the sun reaches the deck untinted here).
+    if (cloudsActive && cloudUboMapped[currentFrame]) {
+        const VolumetricCloudParams& cp = cloudParams;
+        CloudUniformsGPU cu{};
+        std::memcpy(cu.invViewProjection, cpuGlobals.invViewProjection,
+                    sizeof(cu.invViewProjection));
+        std::memcpy(cu.cameraPosition, cpuGlobals.cameraPosition, sizeof(cu.cameraPosition));
+        if (cpuGlobals.counts[0] > 0) {   // sun = light 0, like Metal
+            std::memcpy(cu.sunDirection, cpuGlobals.lights[0].directionInner,
+                        3 * sizeof(float));
+            std::memcpy(cu.sunColor, cpuGlobals.lights[0].colorOuter, 3 * sizeof(float));
+            cu.sunColor[3] = cpuGlobals.lights[0].positionIntensity[3];
+        } else {
+            std::memcpy(cu.sunDirection, cpuGlobals.skySunDir, 3 * sizeof(float));
+            std::memcpy(cu.sunColor, cpuGlobals.skySunColor, 3 * sizeof(float));
+            cu.sunColor[3] = 1.0f;
+        }
+        for (int k = 0; k < 3; ++k)   // sky zenith/horizon mix reaching interiors
+            cu.skyAmbient[k] = (cpuGlobals.skyZenith[k] + cpuGlobals.skyHorizon[k]) *
+                               0.5f * cp.ambient;
+        cu.skyAmbient[3] = cpuGlobals.wind1[3];   // windTime drives the drift
+        cu.layer[0] = cp.bottom;
+        cu.layer[1] = cp.top;    // z planetRadius, w domainMode stay 0 (SLAB)
+        int steps = cloudStepsFrame > 0 ? cloudStepsFrame : cp.steps;
+        cu.params[0] = cp.coverage;
+        cu.params[1] = cp.density;
+        cu.params[2] = cp.noiseScale;
+        cu.params[3] = cp.wind;
+        cu.march[0] = static_cast<float>(std::max(steps, 2));
+        cu.march[1] = static_cast<float>(std::max(cp.lightSteps, 1));
+        cu.march[2] = cp.phaseG;
+        cu.march[3] = cp.farDistance;
+        cu.detail[0] = cp.detailStrength;
+        std::memcpy(cloudUboMapped[currentFrame], &cu, sizeof(cu));
+    }
+
     if (imagesInFlight[imageIndex] != VK_NULL_HANDLE)
         vkWaitForFences(device, 1, &imagesInFlight[imageIndex], VK_TRUE, UINT64_MAX);
     imagesInFlight[imageIndex] = inFlightFences[currentFrame];
@@ -4265,7 +4845,7 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
               impl->createBloomResources() &&
               impl->createSsaoResources() &&
               impl->createSsrResources() &&
-              impl->createDofResources() &&
+              impl->createDofResources() && impl->createCloudResources() &&
               impl->createCompositeResources() &&
               impl->createShadowPipeline() &&
               impl->createPipeline() &&
@@ -4428,6 +5008,51 @@ void VulkanRenderer::shutdown() {
     impl->ssaoBlurSetLayout = VK_NULL_HANDLE;
     impl->gbufferSampler = VK_NULL_HANDLE;
     impl->ssaoRenderPass = VK_NULL_HANDLE;
+
+    // Volumetric-cloud resources (size-independent parts).
+    if (impl->cloudMarchPipeline) vkDestroyPipeline(impl->device, impl->cloudMarchPipeline, nullptr);
+    if (impl->cloudMarchPipelineLayout)
+        vkDestroyPipelineLayout(impl->device, impl->cloudMarchPipelineLayout, nullptr);
+    if (impl->cloudCompositePipeline)
+        vkDestroyPipeline(impl->device, impl->cloudCompositePipeline, nullptr);
+    if (impl->cloudCompositePipelineLayout)
+        vkDestroyPipelineLayout(impl->device, impl->cloudCompositePipelineLayout, nullptr);
+    if (impl->cloudPool) vkDestroyDescriptorPool(impl->device, impl->cloudPool, nullptr);
+    if (impl->cloudMarchSetLayout)
+        vkDestroyDescriptorSetLayout(impl->device, impl->cloudMarchSetLayout, nullptr);
+    if (impl->cloudCompositeSetLayout)
+        vkDestroyDescriptorSetLayout(impl->device, impl->cloudCompositeSetLayout, nullptr);
+    if (impl->cloudRenderPass) vkDestroyRenderPass(impl->device, impl->cloudRenderPass, nullptr);
+    if (impl->cloudCompositeRenderPass)
+        vkDestroyRenderPass(impl->device, impl->cloudCompositeRenderPass, nullptr);
+    if (impl->cloudBaseView) vkDestroyImageView(impl->device, impl->cloudBaseView, nullptr);
+    if (impl->cloudBaseImage) vkDestroyImage(impl->device, impl->cloudBaseImage, nullptr);
+    if (impl->cloudBaseMemory) vkFreeMemory(impl->device, impl->cloudBaseMemory, nullptr);
+    if (impl->cloudDetailView) vkDestroyImageView(impl->device, impl->cloudDetailView, nullptr);
+    if (impl->cloudDetailImage) vkDestroyImage(impl->device, impl->cloudDetailImage, nullptr);
+    if (impl->cloudDetailMemory) vkFreeMemory(impl->device, impl->cloudDetailMemory, nullptr);
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        if (impl->cloudUboBuffers[i]) vkDestroyBuffer(impl->device, impl->cloudUboBuffers[i], nullptr);
+        if (impl->cloudUboMemory[i]) vkFreeMemory(impl->device, impl->cloudUboMemory[i], nullptr);
+        impl->cloudUboBuffers[i] = VK_NULL_HANDLE;
+        impl->cloudUboMemory[i] = VK_NULL_HANDLE;
+        impl->cloudUboMapped[i] = nullptr;
+    }
+    impl->cloudMarchPipeline = VK_NULL_HANDLE;
+    impl->cloudMarchPipelineLayout = VK_NULL_HANDLE;
+    impl->cloudCompositePipeline = VK_NULL_HANDLE;
+    impl->cloudCompositePipelineLayout = VK_NULL_HANDLE;
+    impl->cloudPool = VK_NULL_HANDLE;
+    impl->cloudMarchSetLayout = VK_NULL_HANDLE;
+    impl->cloudCompositeSetLayout = VK_NULL_HANDLE;
+    impl->cloudRenderPass = VK_NULL_HANDLE;
+    impl->cloudCompositeRenderPass = VK_NULL_HANDLE;
+    impl->cloudBaseView = VK_NULL_HANDLE;
+    impl->cloudBaseImage = VK_NULL_HANDLE;
+    impl->cloudBaseMemory = VK_NULL_HANDLE;
+    impl->cloudDetailView = VK_NULL_HANDLE;
+    impl->cloudDetailImage = VK_NULL_HANDLE;
+    impl->cloudDetailMemory = VK_NULL_HANDLE;
 
     // Bloom resources (size-independent; the targets/framebuffers go via cleanupSwapchain).
     if (impl->bloomPipeline) vkDestroyPipeline(impl->device, impl->bloomPipeline, nullptr);
@@ -4788,6 +5413,20 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
     impl->cpuGlobals.skyCloud[0] = sky.cloudCoverage;
     impl->cpuGlobals.skyCloud[1] = sky.cloudsEnabled ? sky.cloudDensity : 0.0f;
     impl->cpuGlobals.skyCloud[2] = sky.cloudScale;
+    // Volumetric clouds (cinematic-sky): the slab retires the 2D FBM overlay
+    // while active — mirrors the Metal setLights.
+    static const bool noClouds = std::getenv("RT_NO_CLOUDS") != nullptr;
+    impl->cloudParams = lighting.volumetricClouds;
+    impl->cloudsActive = lighting.volumetricClouds.enabled && volumetricCloudsEnabled &&
+                         !noClouds && impl->cloudMarchPipeline != VK_NULL_HANDLE;
+    if (impl->cloudsActive) impl->cpuGlobals.skyCloud[1] = 0.0f;
+    if (!impl->cloudsAnnounced) {
+        impl->cloudsAnnounced = true;
+        LOG_INFO("[clouds] volumetric=%d (opt-in=%d pipeline=%d) — 2D FBM overlay %s",
+                 impl->cloudsActive ? 1 : 0, lighting.volumetricClouds.enabled ? 1 : 0,
+                 impl->cloudMarchPipeline != VK_NULL_HANDLE ? 1 : 0,
+                 impl->cloudsActive ? "off" : (sky.cloudsEnabled ? "ON" : "off"));
+    }
     impl->cpuGlobals.skyCloud[3] = sky.cloudTime;
     // envMode: 1 = HDR equirect (when bound and the live toggle is on), else 0 = procedural.
     impl->cpuGlobals.counts[2] = (impl->envBound && environmentMapEnabled) ? 1 : 0;
@@ -4990,6 +5629,7 @@ void VulkanRenderer::endFrame() {
     impl->ssrThickness = ssrParams.thickness;
     impl->ssrMaxRoughness = ssrParams.maxRoughness;
     impl->ssrBlendStrength = ssrParams.blendStrength;
+    impl->cloudStepsFrame = cloudStepsOverride;
     impl->lensEnabledFrame = lensEffectsEnabled;
     impl->debugViewFrame = debugView;
     // Carry the debug-view selector into the globals UBO (the unused counts.w) so
