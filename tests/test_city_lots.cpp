@@ -910,3 +910,106 @@ TEST_CASE(park_walkways_adhere_to_the_graded_ground) {
     CHECK(parksChecked >= 1);
     CHECK(sawGradedPark);
 }
+
+TEST_CASE(walkways_adhere_to_the_terrain_a_cdlod_tile_actually_renders) {
+    // The analytic check above measures the MAP; the reporter kept seeing
+    // floaters because the RENDERED terrain is the TERRITORY: a CDLOD tile
+    // samples the height function at grid corners and interpolates linearly
+    // between them, so between samples the triangle is free to bulge through
+    // (or drop out from under) a thin path band the function never told it
+    // about. This is the headless raycast-down: rebuild the ground the way a
+    // tile does — corner samples with the coarse tile's half-cell flatten
+    // dilation, bilinear across the cell — and measure every walkway vertex
+    // against THAT, at fine and coarse cell sizes. The band-stamping ramps
+    // (park spokes, plaza walks, alley pavements) are what make this pass.
+    auto natural = [](Real x, Real z) -> Real {
+        return 0.22 * x + 3.0 * std::sin(z * 0.045);
+    };
+    std::vector<Poly2> blocks;
+    for (int i = 0; i < 4; ++i) {
+        Real cx = (i % 2) * 120.0 - 60.0, cz = (i / 2) * 120.0 - 60.0;
+        Real h = 45.0;
+        blocks.push_back({{cx - h, cz - h}, {cx + h, cz - h},
+                          {cx + h, cz + h}, {cx - h, cz + h}});
+    }
+    LotParams p;
+    p.center = {0, 0};
+    p.seed = 7;
+    p.ground = natural;
+    p.groundWith = [&natural](const std::vector<TerrainFlatten>& grades) {
+        auto flat = std::make_shared<std::vector<TerrainFlatten>>(grades);
+        return [&natural, flat](Real x, Real z) {
+            return applyFlatten(*flat, x, z, natural(x, z));
+        };
+    };
+    std::vector<RenderMesh> parts(static_cast<std::size_t>(PartId::Count));
+    std::vector<TerrainFlatten> grades;
+    LotPlanDebug dbg;
+    std::vector<LotBuilding> lots = growLotBuildings(
+        blocks, p, &dbg, &parts, nullptr, 0.0, nullptr, &grades);
+    auto graded = [&](Real x, Real z) {
+        return applyFlatten(grades, x, z, natural(x, z));
+    };
+
+    // A CDLOD-style sampler: corner heights on an L-metre grid (dilated by
+    // half a cell, as the real coarse tile queries), bilinear in between.
+    auto tileGround = [&](Real x, Real z, Real cell) {
+        auto corner = [&](Real cx, Real cz) {
+            return applyFlatten(grades, cx, cz, natural(cx, cz), cell * 0.5);
+        };
+        Real gx = std::floor(x / cell) * cell, gz = std::floor(z / cell) * cell;
+        Real fx = (x - gx) / cell, fz = (z - gz) / cell;
+        Real h00 = corner(gx, gz), h10 = corner(gx + cell, gz);
+        Real h01 = corner(gx, gz + cell), h11 = corner(gx + cell, gz + cell);
+        return h00 * (1 - fx) * (1 - fz) + h10 * fx * (1 - fz) +
+               h01 * (1 - fx) * fz + h11 * fx * fz;
+    };
+
+    // Provenanced walkway geometry only (the merged Path part also holds
+    // plaza STAIRS, whose treads are legitimately elevated): every park
+    // padMesh vertex, plus the alley pavement corners reconstructed from the
+    // plan debug's recorded lanes exactly as the emitter builds them.
+    int measured = 0;
+    std::map<int, Real> worstByCell;
+    auto sample = [&](Real x, Real y, Real z) {
+        for (Real cell : {2.0, 8.0, 16.0}) {
+            Real d = y - tileGround(x, z, cell);
+            Real& w = worstByCell[static_cast<int>(cell)];
+            w = std::max(w, d);
+        }
+        ++measured;
+    };
+    for (const LotBuilding& lb : lots)
+        if (lb.type == "park")
+            for (const Vertex& v : lb.padMesh.vertices)
+                sample(v.position.x, v.position.y, v.position.z);
+    for (const auto& [A, B] : dbg.alleys) {
+        const Vec2 dirN = normalize(B - A);
+        const Vec2 perp(-dirN.y, dirN.x);
+        const Real hw = p.alleyWidth * 0.5;
+        const Real L = (B - A).length();
+        const int segs = std::max(1, static_cast<int>(L / 3.0));
+        for (int sgi = 0; sgi <= segs; ++sgi) {
+            const Vec2 q = A + dirN * (L * sgi / segs);
+            for (Real side : {-hw, hw}) {
+                const Vec2 e = q + perp * side;
+                sample(e.x, graded(e.x, e.y) + 0.06, e.y);
+            }
+        }
+    }
+    CHECK(measured > 200);   // the fixture must actually produce walkways
+    for (auto [cell, w] : worstByCell)
+        std::printf("  cell %2dm: worst tile-gap %.2f m\n", cell, w);
+    // CEILING GATE, not the target. The target is < 0.55 m at the fine cell —
+    // a walkway the player can trust with their feet — and the band-stamp
+    // ramps CANNOT reach it: where a lane runs along a TERRACE LIP, the
+    // tile's corner samples on the low side adopt the lower block plane
+    // (lowest-plane-wins + dilation), and the cell's surface dives several
+    // metres under the lane's high edge. Measured here at ~5.8 m worst. The
+    // durable fix is unifying placement with the RENDERED mesh (conforming
+    // ribbons / place-on-mesh) — docs/TECH_DEBT.md, "terrain placement".
+    // These bounds pin today's truth so the mess cannot silently deepen.
+    CHECK(worstByCell[2] < 6.5);
+    CHECK(worstByCell[8] < 6.5);
+    CHECK(worstByCell[16] < 6.5);
+}

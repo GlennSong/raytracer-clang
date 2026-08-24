@@ -754,3 +754,45 @@ are refused now.
   where true sRGB has a linear toe that pure 2.2 does not. A linear-output AgX
   fit would remove the approximation. Only visible with `tonemapOperator = 1` on
   visionOS.
+
+## Terrain placement: the map vs the territory (2026-08-23)
+
+Every "floating object" report in this project's history — buried buildings,
+floating park paths, floating alley pavements, walkways with one edge on the
+ground — is ONE bug class with three faces. The engine keeps two independent
+representations of the ground:
+
+1. **The analytic function** `terrainHeight(params, noise, x, z)` — noise +
+   erosion + an ever-growing flatten list (road carves, pads, block grades,
+   walkway ramps). Every PLACEMENT samples this.
+2. **The rendered/collided mesh** — CDLOD tiles that sample that function at
+   grid corners (spacing grows with LOD) and interpolate linearly between.
+   Everything STANDS on this.
+
+They agree only where someone forces them to. The three faces:
+
+- **Ordering**: the function keeps changing during the bake (each pass appends
+  flattens). Anything placed against an earlier version is stale. The
+  buried-buildings fix, the deferred parks, and the deferred alleys are all
+  this face; each sculptor has re-discovered it independently because nothing
+  enforces "the ground is final now".
+- **Sampling**: a tile only touches the function at its corners; a 2 m band
+  is invisible to an 8 m cell unless its flatten is stamped (and dilated for
+  coarse queries). The walkway band-stamp ramps close this face.
+- **Plane conflicts**: flattens blend by falloff and priority; where a band
+  runs along a TERRACE LIP the tile's low-side corners legitimately adopt the
+  lower plane and the cell's surface dives under the band's high edge.
+  Measured by `walkways_adhere_to_the_terrain_a_cdlod_tile_actually_renders`
+  at ~5.8 m worst on a 22% fixture slope. NO flatten arrangement fixes this —
+  both planes are "correct".
+
+The durable fix is to stop placing against the map: either (a) a hard
+FREEZE POINT after which the ground oracle is immutable and furnishing
+queries the FINAL function (kills the ordering face by construction — an
+assert, not a convention), plus (b) MESH-CONFORMING ribbons: walkways emit
+with vertices at every terrain-grid crossing, heights read from the tile's
+own interpolation (kills sampling + plane conflicts — the ribbon IS the
+rendered surface, offset a few centimetres), or (c) full place-on-mesh:
+build terrain first, raycast placements down onto the built mesh. The tile
+test above carries the target (< 0.55 m fine-cell) as its documented goal
+and pins today's ceiling so the class cannot silently deepen.
