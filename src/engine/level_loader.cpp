@@ -2515,17 +2515,27 @@ bool LevelLoader::load(const std::string& path,
             for (const auto& ent : root["entities"]) {
                 if (ent.value("shape", std::string()) != "walkway") continue;
                 const json wb = ent.contains("walkway") ? ent["walkway"] : json::object();
-                if (!wb.contains("a") || !wb.contains("b")) continue;
-                const Vec2 A(wb["a"][0].get<double>(), wb["a"][1].get<double>());
-                const Vec2 B(wb["b"][0].get<double>(), wb["b"][1].get<double>());
+                // Either a single span {a, b} or a polyline {points: [[x,z]..]}.
+                std::vector<Vec2> pts;
+                if (wb.contains("points"))
+                    for (const auto& q : wb["points"])
+                        if (q.is_array() && q.size() >= 2)
+                            pts.emplace_back(q[0].get<double>(), q[1].get<double>());
+                if (pts.size() < 2 && wb.contains("a") && wb.contains("b")) {
+                    pts = {Vec2(wb["a"][0].get<double>(), wb["a"][1].get<double>()),
+                           Vec2(wb["b"][0].get<double>(), wb["b"][1].get<double>())};
+                }
+                if (pts.size() < 2) continue;
                 const double hw = wb.value("width", 2.0) * 0.5;
+                const Vec3 pave(0.62, 0.61, 0.58);
+                for (std::size_t pi = 0; pi + 1 < pts.size(); ++pi) {
+                const Vec2 A = pts[pi], B = pts[pi + 1];
                 const Vec2 d = B - A;
                 const double L = d.length();
                 if (L < 1.0) continue;
                 const Vec2 dir = d * (1.0 / L);
                 const Vec2 perp(-dir.y, dir.x);
                 const int segs = std::max(1, static_cast<int>(L / std::min(3.0, cell)));
-                const Vec3 pave(0.62, 0.61, 0.58);
                 for (int si = 0; si < segs; ++si) {
                     const Vec2 q0 = A + dir * (L * si / segs);
                     const Vec2 q1 = A + dir * (L * (si + 1) / segs);
@@ -2538,6 +2548,7 @@ bool LevelLoader::load(const std::string& path,
                         Vec3(r1.x, tileGy(r1.x, r1.y) + 0.05, r1.y),
                         Vec3(l1.x, tileGy(l1.x, l1.y) + 0.05, l1.y),
                         Vec3(0, 1, 0), pave);
+                }
                 }
             }
             if (!walks.vertices.empty()) {

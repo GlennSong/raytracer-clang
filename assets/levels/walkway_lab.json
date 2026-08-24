@@ -1,10 +1,10 @@
 {
  "name": "walkway_lab",
- "_comment": "The height-stack lab (walkway-lab round): a pure 22% slope with the stack's record types staged SIDE BY SIDE along Z, one claim per stage, judged with RT_GROUND_PROBES=1 posts (base at the analytic height — buried/floating posts localize any mesh disagreement instantly). S0 z<-65: bare slope. S1 z~-50: one PAD. S2 z~-15: one RAMP climbing the hill. S3 z~15: the PRIORITY LADDER (pad 2 inside road 1 inside grade -1). S4 z~45: the TERRACE LIP (two adjacent grade planes 5 m apart). S5a z~70: a walkway riding S2-style graded ground (must sit flush). S5b z~95: a walkway CROSSING an S4-style lip (the known-impossible flat band; must stair or reroute when lip-aware routing lands).",
+ "_comment": "The height-stack lab (walkway-lab round): a pure 22% slope with the stack's record types staged SIDE BY SIDE along Z, one claim per stage, judged with RT_GROUND_PROBES=1 posts (base at the analytic height \u2014 buried/floating posts localize any mesh disagreement instantly). S0 z<-65: bare slope. S1 z~-50: one PAD. S2 z~-15: one RAMP climbing the hill. S3 z~15: the PRIORITY LADDER (pad 2 inside road 1 inside grade -1). S4 z~45: the TERRACE LIP (two adjacent grade planes 5 m apart). S5a z~70: a walkway riding S2-style graded ground (must sit flush). S5b z~95: a walkway CROSSING an S4-style lip (the known-impossible flat band; must stair or reroute when lip-aware routing lands).",
  "version": 1,
  "terrain": {
   "cdlod": {
-   "worldHalf": 128,
+   "worldHalf": 256,
    "numLods": 4,
    "gridRes": 32
   },
@@ -231,6 +231,174 @@
     "y": 1.0,
     "falloff": 3.0,
     "priority": -1
+   },
+   {
+    "type": "pad",
+    "poly": [
+     [
+      -35,
+      112
+     ],
+     [
+      35,
+      112
+     ],
+     [
+      35,
+      140
+     ],
+     [
+      -35,
+      140
+     ]
+    ],
+    "y": -3.0,
+    "falloff": 5.0,
+    "priority": -1
+   },
+   {
+    "type": "ramp",
+    "a": [
+     -45,
+     126
+    ],
+    "b": [
+     45,
+     126
+    ],
+    "ya": -6.0,
+    "yb": 6.0,
+    "halfWidth": 4.5,
+    "falloff": 3.0,
+    "priority": 1
+   },
+   {
+    "type": "pad",
+    "poly": [
+     [
+      -9,
+      119
+     ],
+     [
+      9,
+      119
+     ],
+     [
+      9,
+      133
+     ],
+     [
+      -9,
+      133
+     ]
+    ],
+    "y": 2.0,
+    "falloff": 3.0,
+    "priority": 2
+   },
+   {
+    "type": "ramp",
+    "a": [
+     -50,
+     160
+    ],
+    "b": [
+     50,
+     160
+    ],
+    "ya": -8.0,
+    "yb": 8.0,
+    "halfWidth": 4.0,
+    "falloff": 3.5,
+    "priority": 1
+   },
+   {
+    "type": "ramp",
+    "a": [
+     0,
+     142
+    ],
+    "b": [
+     0,
+     178
+    ],
+    "ya": -1.0,
+    "yb": -1.0,
+    "halfWidth": 4.0,
+    "falloff": 3.5,
+    "priority": 1
+   },
+   {
+    "type": "pad",
+    "poly": [
+     [
+      -40,
+      188
+     ],
+     [
+      40,
+      188
+     ],
+     [
+      40,
+      214
+     ],
+     [
+      -40,
+      214
+     ]
+    ],
+    "y": -5.0,
+    "falloff": 4.0,
+    "priority": -1
+   },
+   {
+    "type": "pad",
+    "poly": [
+     [
+      -26,
+      192
+     ],
+     [
+      26,
+      192
+     ],
+     [
+      26,
+      210
+     ],
+     [
+      -26,
+      210
+     ]
+    ],
+    "y": -1.0,
+    "falloff": 3.0,
+    "priority": 0
+   },
+   {
+    "type": "pad",
+    "poly": [
+     [
+      -12,
+      196
+     ],
+     [
+      12,
+      196
+     ],
+     [
+      12,
+      206
+     ],
+     [
+      -12,
+      206
+     ]
+    ],
+    "y": 3.0,
+    "falloff": 2.5,
+    "priority": 2
    }
   ]
  },
@@ -265,6 +433,60 @@
      96
     ],
     "width": 2.4
+   }
+  },
+  {
+   "id": 3,
+   "name": "gauntlet",
+   "shape": "walkway",
+   "walkway": {
+    "width": 2.4,
+    "points": [
+     [
+      -20,
+      -85
+     ],
+     [
+      8,
+      -50
+     ],
+     [
+      -14,
+      -15
+     ],
+     [
+      16,
+      16
+     ],
+     [
+      -10,
+      46
+     ],
+     [
+      14,
+      70
+     ],
+     [
+      -16,
+      96
+     ],
+     [
+      4,
+      126
+     ],
+     [
+      -8,
+      160
+     ],
+     [
+      0,
+      201
+     ],
+     [
+      0,
+      212
+     ]
+    ]
    }
   }
  ],
