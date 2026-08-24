@@ -1309,6 +1309,15 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         ? p.parcelLotDepth / stockPP.lotDepth : Real(1);
     const Real ppMinArea = p.parcelMinArea > 0 ? p.parcelMinArea : p.minLotArea;
     int blocksAllCarriageway = 0;
+    // Parks/greens are SCULPTED LATE (after the grade rebind below) so their
+    // paths and furniture sample the TERRACED ground the terrain will show —
+    // sculpting during parcelling sampled the pre-grade hillside, and the
+    // walking paths floated over the block-graded terraces (device:
+    // "walkways float ... as part of plazas and parks"). The entries only
+    // reserve the lot and record the seed; the sculpt runs post-rebind.
+    struct DeferredPark { std::size_t lot; uint32_t seed; };
+    std::vector<DeferredPark> deferredParks;
+
     for (std::size_t bi = 0; bi < blocks.size(); ++bi) {
         const Poly2& block = blocks[bi];
         if (block.size() < 3) continue;
@@ -1412,9 +1421,14 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 if (g.pad.empty()) continue;   // road-locked block: no square
                 // The city square is DESIGNED: plaza, paths, fountain,
                 // benches, hedges, tree spots (not a bare green pad).
-                sculptPark(g, g.pad, g.height, p.ground,
-                           mix(bf.pp.seed, 0xB10C2u), outParts);
+                // Sculpted AFTER the grade rebind below (deferredParks) —
+                // parks sampled the pre-terrace hillside here, so their
+                // walking paths floated over the block-graded ground the
+                // terrain actually shows (device: "walkways float ... as
+                // part of plazas and parks"). Same ordering fix the pads
+                // got in the buried-buildings round.
                 out.push_back(std::move(g));
+                deferredParks.push_back({out.size() - 1, mix(bf.pp.seed, 0xB10C2u)});
                 continue;
             }
         }
@@ -1464,10 +1478,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 g.color = colorFor("park");
                 g.pad = pushPolyClearOfRoads(lots[li].footprint);
                 if (g.pad.empty()) continue;
-                sculptPark(g, g.pad, g.height, p.ground,
-                           mix(bf.pp.seed, 0xC0947u + static_cast<uint32_t>(li)),
-                           outParts);
+                // Deferred like the city square above: sculpt on the graded
+                // ground, not the pre-terrace hill.
                 out.push_back(std::move(g));
+                deferredParks.push_back(
+                    {out.size() - 1,
+                     mix(bf.pp.seed, 0xC0947u + static_cast<uint32_t>(li))});
                 continue;
             }
             if (area(lots[li].footprint) < bf.pp.minArea) continue;
@@ -1645,6 +1661,14 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 };
             }
         }
+    }
+
+    // Deferred park sculpting (see the parcelling loop): now that p.ground is
+    // the grade-aware sampler, parks drape their plazas, paths and furniture
+    // on the same terraced ground the terrain will show.
+    for (const DeferredPark& dp : deferredParks) {
+        LotBuilding& g = out[dp.lot];
+        sculptPark(g, g.pad, g.height, p.ground, dp.seed, outParts);
     }
 
     // ---- PASS B: the LANDMARK planner (architect, per hub cluster) ----------
