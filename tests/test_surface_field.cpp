@@ -281,3 +281,50 @@ TEST_CASE(net_autoroundabout_policy_is_honoured) {
     RenderMesh m = buildRoadNetMesh(star, nullptr);
     CHECK(!m.vertices.empty());
 }
+
+
+// The overlap CONTRACT, pinned directly (it was only exercised indirectly
+// through block grading): the priority ladder is a hard override — grades -1,
+// generic 0, roads 1, building pads 2 — and among equal priorities the LOWEST
+// plane wins (the junction rule). Dilation grows footprints for coarse-LOD
+// queries: a point outside a narrow band adopts the band's plane once the
+// query dilation reaches it. These are the rules every conform consumer
+// (CDLOD tiles, lot pads, walkway ramps, vegetation keep-out) builds on.
+TEST_CASE(flatten_priority_ladder_and_dilation_contract) {
+    auto square = [](double cx, double cz, double h) {
+        return std::vector<Vec3>{{cx - h, 0, cz - h}, {cx + h, 0, cz - h},
+                                 {cx + h, 0, cz + h}, {cx - h, 0, cz + h}};
+    };
+    const double base = 20.0;
+
+    // Nested overlap: block grade (-1, plane 2) under a road (1, plane 5)
+    // under a building pad (2, plane 10).
+    std::vector<TerrainFlatten> r;
+    r.push_back(makeFlattenPad(square(0, 0, 40), 2.0, 4.0));   // grade
+    r.back().priority = -1;
+    r.push_back(makeFlattenPad(square(0, 0, 20), 5.0, 4.0));   // road
+    r.back().priority = 1;
+    r.push_back(makeFlattenPad(square(0, 0, 8), 10.0, 4.0));   // pad
+    r.back().priority = 2;
+    CHECK_APPROX(applyFlatten(r, 0, 0, base), 10.0, 1e-9);     // pad wins inside all
+    CHECK_APPROX(applyFlatten(r, 14, 0, base), 5.0, 1e-9);     // road wins past the pad
+    CHECK_APPROX(applyFlatten(r, 30, 0, base), 2.0, 1e-9);     // grade owns the rest
+
+    // Equal priority: the LOWEST plane wins.
+    std::vector<TerrainFlatten> eq;
+    eq.push_back(makeFlattenPad(square(0, 0, 10), 7.0, 4.0));
+    eq.push_back(makeFlattenPad(square(0, 0, 10), 4.0, 4.0));
+    CHECK_APPROX(applyFlatten(eq, 0, 0, base), 4.0, 1e-9);
+
+    // Dilation: a 2 m-wide ramp band; a point 2.5 m off its edge sees natural
+    // ground at dilate 0 and the band's plane once dilation reaches it.
+    std::vector<TerrainFlatten> band;
+    band.push_back(makeFlattenRamp(Vec3(-30, 0, 0), Vec3(30, 0, 0), 6.0, 6.0,
+                                   1.0, 0.75));
+    const double off = applyFlatten(band, 0.0, 3.5, base, 0.0);
+    CHECK(std::fabs(off - base) < 1e-9);                       // untouched
+    CHECK_APPROX(applyFlatten(band, 0.0, 3.5, base, 4.0), 6.0, 1e-9);
+    FlattenGrid g2 = buildFlattenGrid(band);
+    CHECK(!flattenCovers(g2, band, 0.0, 3.5, 0.0));
+    CHECK(flattenCovers(g2, band, 0.0, 3.5, 4.0));
+}
