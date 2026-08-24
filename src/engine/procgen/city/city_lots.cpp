@@ -73,7 +73,8 @@ void appendKit(const BuildingMesh& kit, std::vector<RenderMesh>* outParts) {
 // the bake reads as-is in both the viewer and the offline tracer).
 void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
                 const std::function<Real(Real, Real)>& ground, uint32_t seed,
-                std::vector<RenderMesh>* outParts) {
+                std::vector<RenderMesh>* outParts,
+                std::vector<TerrainFlatten>* outFlatten = nullptr) {
     const Vec3 grass(0.30, 0.50, 0.26);
     const Vec3 pathCol(0.72, 0.68, 0.60);        // decomposed granite
     auto gy = [&](const Vec2& v) { return ground ? ground(v.x, v.y) : Real(0); };
@@ -142,6 +143,18 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
             const Vec3 L1(q1.x - perp.x * hw, gy(q1 - perp * hw) + py, q1.y - perp.y * hw);
             const Vec3 R1(q1.x + perp.x * hw, gy(q1 + perp * hw) + py, q1.y + perp.y * hw);
             MeshBuilder::emitQuad(m, L0, R0, R1, L1, Vec3(0, 1, 0), pathCol);
+            // The path STAMPS its band into the terrain flatten set: the mesh
+            // samples the analytic ground at its corners, but the RENDERED
+            // CDLOD tile is free to disagree between samples — coarse LODs
+            // bulged natural ground through (or dropped it out from under)
+            // the thin ribbon, which is where the surviving "floating
+            // walkway" sightings lived after the grade-ordering fix. A ramp
+            // per segment grades every LOD to the path's own plane — the
+            // same anti-straddle answer road corridors use.
+            if (outFlatten)
+                outFlatten->push_back(makeFlattenRamp(
+                    Vec3(q0.x, 0, q0.y), Vec3(q1.x, 0, q1.y),
+                    gy(q0) + py - 0.05, gy(q1) + py - 0.05, hw + 0.6, 2.5));
             // Curb skirts: the path is a slab with thickness — its long edges
             // drop below the lawn so a terrain dip never leaves it hovering
             // (device: "the walkway is floating").
@@ -581,7 +594,8 @@ void sculptYard(LotBuilding& b, const Poly2& lotPoly, const Poly2& house,
 // beds that each CLAIM their footprint on the flat deck.
 void sculptPlaza(LotBuilding& b, const Poly2& planIn,
                  const std::function<Real(Real, Real)>& ground, uint32_t seed,
-                 std::vector<RenderMesh>* outParts, const RoadGraph* roads) {
+                 std::vector<RenderMesh>* outParts, const RoadGraph* roads,
+                 std::vector<TerrainFlatten>* outFlatten = nullptr) {
     if (!outParts || planIn.size() < 3) return;
     Poly2 plan = planIn;
     ensureCCW(plan);   // area() is |signedArea| — the old `area()<0` guard was dead
@@ -717,6 +731,12 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
                 const Vec3 L1(q1.x - perp.x * hw, gy(q1 - perp * hw) + e1, q1.y - perp.y * hw);
                 const Vec3 R1(q1.x + perp.x * hw, gy(q1 + perp * hw) + e1, q1.y + perp.y * hw);
                 MeshBuilder::emitQuad(walk, L0, R0, R1, L1, up, white);
+                // Same flatten stamp as the park spokes (see sculptPark): the
+                // rendered terrain must agree with the ribbon at EVERY LOD.
+                if (outFlatten)
+                    outFlatten->push_back(makeFlattenRamp(
+                        Vec3(q0.x, 0, q0.y), Vec3(q1.x, 0, q1.y),
+                        gy(q0) + 0.03, gy(q1) + 0.03, hw + 0.6, 2.5));
                 const Vec3 drop3(0, -0.45, 0);
                 const Vec3 pL(-perp.x, 0, -perp.y), pR(perp.x, 0, perp.y);
                 MeshBuilder::emitQuad(walk, L0 + drop3, L1 + drop3, L1, L0, pL, white);
@@ -1668,7 +1688,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // on the same terraced ground the terrain will show.
     for (const DeferredPark& dp : deferredParks) {
         LotBuilding& g = out[dp.lot];
-        sculptPark(g, g.pad, g.height, p.ground, dp.seed, outParts);
+        sculptPark(g, g.pad, g.height, p.ground, dp.seed, outParts, outGrade);
     }
 
     // ---- PASS B: the LANDMARK planner (architect, per hub cluster) ----------
@@ -2361,7 +2381,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 b.height = 0.35;             // the podium IS the massing
                 sculptPlaza(b, plan, p.ground,
                             mix(pp.seed, static_cast<uint32_t>(li) * 31u + 17u),
-                            outParts, roads);
+                            outParts, roads, outGrade);
                 LOG_INFO << "[plaza] at (" << b.site.x << ", " << b.site.y
                          << ") area " << static_cast<int>(area(plan)) << " m2";
                 out.push_back(std::move(b));
