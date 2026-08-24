@@ -1337,6 +1337,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // reserve the lot and record the seed; the sculpt runs post-rebind.
     struct DeferredPark { std::size_t lot; uint32_t seed; };
     std::vector<DeferredPark> deferredParks;
+    struct DeferredAlley { Vec2 a, b; };
+    std::vector<DeferredAlley> deferredAlleys;
 
     for (std::size_t bi = 0; bi < blocks.size(); ++bi) {
         const Poly2& block = blocks[bi];
@@ -1599,33 +1601,14 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             ae.klass = RoadClass::Alley;
             alleyGraph.edges.push_back(ae);
             dbg->alleys.push_back({A, B});
-            // The PAVEMENT: a draped ribbon into the Path part (the same idiom
-            // as the yards' front walks), asphalt-grey so it reads as a
-            // service lane between the rows, not a garden path.
-            if (outParts) {
-                RenderMesh& path =
-                    (*outParts)[static_cast<std::size_t>(PartId::Path)];
-                auto gy = [&](const Vec2& v) {
-                    return p.ground ? p.ground(v.x, v.y) : Real(0);
-                };
-                const Vec2 dirN = normalize(B - A);
-                const Vec2 perp(-dirN.y, dirN.x);
-                const Real hw = p.alleyWidth * Real(0.5);
-                const Real L = (B - A).length();
-                const int segs = std::max(1, static_cast<int>(L / 3.0));
-                for (int s = 0; s < segs; ++s) {
-                    const Vec2 q0 = A + dirN * (L * s / segs);
-                    const Vec2 q1 = A + dirN * (L * (s + 1) / segs);
-                    const Real y0 = gy(q0) + Real(0.06);
-                    const Real y1 = gy(q1) + Real(0.06);
-                    MeshBuilder::emitQuad(
-                        path, Vec3(q0.x - perp.x * hw, y0, q0.y - perp.y * hw),
-                        Vec3(q0.x + perp.x * hw, y0, q0.y + perp.y * hw),
-                        Vec3(q1.x + perp.x * hw, y1, q1.y + perp.y * hw),
-                        Vec3(q1.x - perp.x * hw, y1, q1.y - perp.y * hw),
-                        Vec3(0, 1, 0), Vec3(0.46, 0.455, 0.44));
-                }
-            }
+            // The PAVEMENT is emitted LATE (deferredAlleys, after the grade
+            // rebind): the inline emit sampled the pre-terrace ground — the
+            // same ordering bug the parks had — and stamped no flatten, so
+            // the ribbon floated over graded hillsides and coarse-LOD tiles
+            // bulged through it (device: "floating walkways", round 3 — the
+            // scored hillside ribbons were ALLEY pavements between rows
+            // whose houses the relief gate had rejected).
+            deferredAlleys.push_back({A, B});
         }
     }
 
@@ -1689,6 +1672,44 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     for (const DeferredPark& dp : deferredParks) {
         LotBuilding& g = out[dp.lot];
         sculptPark(g, g.pad, g.height, p.ground, dp.seed, outParts, outGrade);
+    }
+    // Deferred alley pavements: draped on the SAME terraced ground as the
+    // parks, and each segment stamps its band into the flatten set so the
+    // rendered terrain agrees at every LOD (see the sculptPark spoke ramps).
+    if (outParts && !deferredAlleys.empty()) {
+        RenderMesh& path = (*outParts)[static_cast<std::size_t>(PartId::Path)];
+        auto gy = [&](const Vec2& v) {
+            return p.ground ? p.ground(v.x, v.y) : Real(0);
+        };
+        for (const DeferredAlley& da : deferredAlleys) {
+            const Vec2 dirN = normalize(da.b - da.a);
+            const Vec2 perp(-dirN.y, dirN.x);
+            const Real hw = p.alleyWidth * Real(0.5);
+            const Real L = (da.b - da.a).length();
+            const int segs = std::max(1, static_cast<int>(L / 3.0));
+            for (int sgi = 0; sgi < segs; ++sgi) {
+                const Vec2 q0 = da.a + dirN * (L * sgi / segs);
+                const Vec2 q1 = da.a + dirN * (L * (sgi + 1) / segs);
+                // Lateral samples too: an alley crossing a cross-slope BANKS
+                // with it instead of hanging its downhill edge in the air.
+                const Real y0L = gy(q0 - perp * hw) + Real(0.06);
+                const Real y0R = gy(q0 + perp * hw) + Real(0.06);
+                const Real y1L = gy(q1 - perp * hw) + Real(0.06);
+                const Real y1R = gy(q1 + perp * hw) + Real(0.06);
+                MeshBuilder::emitQuad(
+                    path,
+                    Vec3(q0.x - perp.x * hw, y0L, q0.y - perp.y * hw),
+                    Vec3(q0.x + perp.x * hw, y0R, q0.y + perp.y * hw),
+                    Vec3(q1.x + perp.x * hw, y1R, q1.y + perp.y * hw),
+                    Vec3(q1.x - perp.x * hw, y1L, q1.y - perp.y * hw),
+                    Vec3(0, 1, 0), Vec3(0.42, 0.41, 0.40));
+                if (outGrade)
+                    outGrade->push_back(makeFlattenRamp(
+                        Vec3(q0.x, 0, q0.y), Vec3(q1.x, 0, q1.y),
+                        (y0L + y0R) * Real(0.5) - Real(0.05),
+                        (y1L + y1R) * Real(0.5) - Real(0.05), hw + 0.6, 2.5));
+            }
+        }
     }
 
     // ---- PASS B: the LANDMARK planner (architect, per hub cluster) ----------
