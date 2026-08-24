@@ -33,6 +33,23 @@ struct LevelLoader {
     // computed name. Paths are as resolved, so the watcher stats the same file
     // the loader opened.
     static const std::vector<std::string>& lastLoadedScriptFiles();
+
+    // Verdict of the last RT_GROUND_PROBES pass (empty when the env is
+    // unset): every probe compares the analytic terrainHeight against the
+    // finest rendered tile's own bilinear interpolation — the surface the
+    // player stands on. This exists so a test can assert the agreement on a
+    // SHIPPED level through the real load path instead of re-deriving the
+    // measurement (see lastLoadedScriptFiles for the precedent, and
+    // test_levels_playable.cpp for why mirrors are forbidden there).
+    struct GroundProbeReport {
+        int total = 0;        // probes planted
+        int flush = 0;        // |delta| <= 0.3 m
+        int nearMiss = 0;     // 0.3 < |delta| <= 1 m
+        int off = 0;          // |delta| > 1 m (cliff seams, dilation smear)
+        double worst = 0.0;   // signed metres, function minus tile
+        double worstX = 0.0, worstZ = 0.0;
+    };
+    static const GroundProbeReport& lastGroundProbeReport();
 };
 
 }  // namespace engine

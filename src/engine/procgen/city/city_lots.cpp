@@ -74,7 +74,8 @@ void appendKit(const BuildingMesh& kit, std::vector<RenderMesh>* outParts) {
 void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
                 const std::function<Real(Real, Real)>& ground, uint32_t seed,
                 std::vector<RenderMesh>* outParts,
-                std::vector<TerrainFlatten>* outFlatten = nullptr) {
+                std::vector<TerrainFlatten>* outFlatten = nullptr,
+                Real meshCell = 3.0) {
     const Vec3 grass(0.30, 0.50, 0.26);
     const Vec3 pathCol(0.72, 0.68, 0.60);        // decomposed granite
     auto gy = [&](const Vec2& v) { return ground ? ground(v.x, v.y) : Real(0); };
@@ -134,7 +135,15 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
         Vec2 p0 = c + dir * (r0 * 0.85);
         Vec2 perp(-dir.y, dir.x);
         const Real hw = 0.8;                     // path half-width
-        const int segs = std::max(1, static_cast<int>((len - r0 * 0.85) / 3.0));
+        // Segment length tied to the RENDERED terrain cell (walkway-lab
+        // round, device: "the walkway itself needs more geometry so it can
+        // conform"): the tile is piecewise-bilinear per cell, so a strip can
+        // only follow it if it has a joint inside every cell it crosses. A
+        // fixed 3 m span bridged the bends of metro's 2.7 m cells.
+        const Real segLen =
+            std::min(Real(3.0), std::max(Real(1.2), meshCell * Real(0.75)));
+        const int segs =
+            std::max(1, static_cast<int>((len - r0 * 0.85) / segLen));
         for (int s = 0; s < segs; ++s) {
             Vec2 q0 = p0 + dir * ((len - r0 * 0.85) * s / segs);
             Vec2 q1 = p0 + dir * ((len - r0 * 0.85) * (s + 1) / segs);
@@ -595,7 +604,8 @@ void sculptYard(LotBuilding& b, const Poly2& lotPoly, const Poly2& house,
 void sculptPlaza(LotBuilding& b, const Poly2& planIn,
                  const std::function<Real(Real, Real)>& ground, uint32_t seed,
                  std::vector<RenderMesh>* outParts, const RoadGraph* roads,
-                 std::vector<TerrainFlatten>* outFlatten = nullptr) {
+                 std::vector<TerrainFlatten>* outFlatten = nullptr,
+                 Real meshCell = 3.0) {
     if (!outParts || planIn.size() < 3) return;
     Poly2 plan = planIn;
     ensureCCW(plan);   // area() is |signedArea| — the old `area()<0` guard was dead
@@ -721,7 +731,10 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
             Vec2 dir = (curb - mo.foot) * (1.0 / len);
             Vec2 perp(-dir.y, dir.x);
             const Real hw = 1.0;
-            const int segs = std::max(1, static_cast<int>(len / 3.0));
+            // Cell-tied joints, same rule as the park spokes.
+            const Real segLen =
+                std::min(Real(3.0), std::max(Real(1.2), meshCell * Real(0.75)));
+            const int segs = std::max(1, static_cast<int>(len / segLen));
             for (int s = 0; s < segs; ++s) {
                 Vec2 q0 = mo.foot + dir * (len * s / segs);
                 Vec2 q1 = mo.foot + dir * (len * (s + 1) / segs);
@@ -1706,7 +1719,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // on the same terraced ground the terrain will show.
     for (const DeferredPark& dp : deferredParks) {
         LotBuilding& g = out[dp.lot];
-        sculptPark(g, g.pad, g.height, meshGround, dp.seed, outParts, outGrade);
+        sculptPark(g, g.pad, g.height, meshGround, dp.seed, outParts, outGrade,
+                   p.groundMeshCell > 0.5 ? p.groundMeshCell : Real(3.0));
     }
     // Deferred alley pavements: draped on the SAME terraced ground as the
     // parks, and each segment stamps its band into the flatten set so the
@@ -1721,7 +1735,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             const Vec2 perp(-dirN.y, dirN.x);
             const Real hw = p.alleyWidth * Real(0.5);
             const Real L = (da.b - da.a).length();
-            const int segs = std::max(1, static_cast<int>(L / 3.0));
+            const Real segLen = p.groundMeshCell > 0.5
+                                    ? std::min(Real(3.0), std::max(Real(1.2),
+                                          p.groundMeshCell * Real(0.75)))
+                                    : Real(3.0);
+            const int segs = std::max(1, static_cast<int>(L / segLen));
             for (int sgi = 0; sgi < segs; ++sgi) {
                 const Vec2 q0 = da.a + dirN * (L * sgi / segs);
                 const Vec2 q1 = da.a + dirN * (L * (sgi + 1) / segs);
@@ -1876,7 +1894,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         u.pad = lot.footprint;   // deliberately IN the ROW
                         u.color = Vec3(0.30, 0.50, 0.26);
                         if (kind == 0) {         // landscaped open space, no canopy
-                            sculptPark(u, u.pad, u.height, p.ground, s, outParts);
+                            sculptPark(u, u.pad, u.height, meshGround, s, outParts,
+                                       nullptr,
+                                       p.groundMeshCell > 0.5 ? p.groundMeshCell : Real(3.0));
                             u.treeSpots.clear();
                         } else {                 // paved parking / utility yard
                             sculptUnderPad(u, u.pad, p.ground, s, /*utility=*/kind == 2);
@@ -2063,9 +2083,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                   // lift so park edges tuck below the asphalt
                 b.pad = pushPolyClearOfRoads(lot.footprint);
                 if (b.pad.empty()) continue;   // road-locked sliver: no park
-                sculptPark(b, b.pad, b.height, p.ground,
+                sculptPark(b, b.pad, b.height, meshGround,
                            mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u),
-                           outParts);
+                           outParts, nullptr,
+                           p.groundMeshCell > 0.5 ? p.groundMeshCell : Real(3.0));
                 out.push_back(std::move(b));
                 continue;
             }
@@ -2437,7 +2458,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 b.height = 0.35;             // the podium IS the massing
                 sculptPlaza(b, plan, meshGround,
                             mix(pp.seed, static_cast<uint32_t>(li) * 31u + 17u),
-                            outParts, roads, outGrade);
+                            outParts, roads, outGrade,
+                            p.groundMeshCell > 0.5 ? p.groundMeshCell : Real(3.0));
                 LOG_INFO << "[plaza] at (" << b.site.x << ", " << b.site.y
                          << ") area " << static_cast<int>(area(plan)) << " m2";
                 out.push_back(std::move(b));

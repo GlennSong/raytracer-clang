@@ -809,3 +809,21 @@ must treat grade steps as obstacles — route spokes/lanes around lips, or
 emit stair runs where crossing is intended (sculptPlaza's podium stairs
 are the in-codebase pattern). Until then the tile gate pins the ceiling
 and prints the worst offender's source and position.
+
+### Addendum (2026-08-24): the instrument measures, the metro is gated
+
+Two moves this round. (1) `RT_GROUND_PROBES=1` is now SELF-MEASURING: every
+post scores the analytic height against the finest tile's own bilinear
+interpolation, wears the verdict (green flush / orange <=1 m / red beyond),
+and the loader logs the histogram + worst offender. Metro at adoption:
+9409 probes, 95.5% flush, worst 10.5 m at (-948.75, -57.5) — a thin seam
+along the freeway bench cuts, dilation smearing a cut edge across one cell.
+`metro_ground_probes_adhere_between_the_seams` (level_tests) asserts that
+histogram through the real loader, so the flush floor cannot silently sink.
+(2) Walkway strips are tessellated to the RENDERED CELL (segment length
+0.75x groundMeshCell, park spokes / plaza walks / alleys): a strip can only
+follow a piecewise-bilinear tile if it has a joint inside every cell it
+crosses. Fine-cell worst in the tile gate fell 6.5 -> 2.28 m; the coarse
+16 m figure grew to 11.74 m by the same move (hugging the real ground means
+diverging from a distant tile that smears cliff notches) — far-LOD only,
+bounded by the gate, shrinks when lip-aware routing lands.

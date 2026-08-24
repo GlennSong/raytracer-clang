@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>   // setenv (the marker test)
 #include <cmath>
 #include <fstream>
 #include <cstdio>
@@ -441,4 +442,40 @@ TEST_CASE(level_census_every_floorplan_conforms_to_the_drawn_ground) {
     }
     std::printf("    [census] %d levels carry lot buildings\n", lotLevels);
     CHECK(lotLevels >= 5);
+}
+
+// THE MARKER TEST (ground-probes round, device: "if we place these markers in
+// metro_v2_test they should all adhere to the ground — is there some way we
+// could do that as a test?"): RT_GROUND_PROBES plants a post at every ~29 m
+// grid point whose base is the analytic terrainHeight, and the loader scores
+// each one against the finest rendered tile's own bilinear interpolation —
+// the surface the player stands on. This case flips the env on, loads the
+// shipped metro through the REAL loader, and asserts the histogram the run
+// prints. Measured at adoption: 9409 probes, 95.5% flush, worst 10.5 m — the
+// off probes are a thin seam along freeway bench cuts, where dilation smears
+// the cut edge across one cell (docs/TECH_DEBT.md, "map vs the territory").
+// The bounds hold that seam where it is; the flush floor rises if placement
+// ever regresses to reading a stale surface again.
+TEST_CASE(metro_ground_probes_adhere_between_the_seams) {
+    setenv("RT_GROUND_PROBES", "1", 1);
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const bool loaded =
+        LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+                          view, assets, /*editorMode=*/false);
+    unsetenv("RT_GROUND_PROBES");   // never leaks into the census cases
+    CHECK(loaded);
+    if (!loaded) return;
+
+    const LevelLoader::GroundProbeReport& r = LevelLoader::lastGroundProbeReport();
+    std::printf("    [probes] %d planted: %d flush, %d near, %d off; "
+                "worst %.2f m at (%.1f, %.1f)\n",
+                r.total, r.flush, r.nearMiss, r.off, r.worst, r.worstX, r.worstZ);
+    CHECK(r.total > 5000);                          // the fixture must bite
+    CHECK(r.flush >= r.total * 94 / 100);           // adherence is the norm
+    CHECK(r.off <= r.total * 3 / 100);              // seams stay seams
+    CHECK(std::fabs(r.worst) < 20.0);               // bounded by bench depth
 }

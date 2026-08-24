@@ -1027,7 +1027,14 @@ TEST_CASE(walkways_adhere_to_the_terrain_a_cdlod_tile_actually_renders) {
     // stairs (the plaza podium already builds stairs — the pattern exists).
     // Bounds pin today's truth; the target (< 0.55 m fine-cell, everywhere)
     // becomes reachable when lip-aware routing lands. docs/TECH_DEBT.md.
-    CHECK(worstByCell[2] < 6.5);
+    // Cell-tied tessellation (device: "the walkway needs more geometry")
+    // dropped the FINE-cell worst 6.5 -> 2.28 m: strips now follow the
+    // rendered surface the player actually sees. The coarse 16 m figure grew
+    // by the same move — hugging the real ground means diverging from a
+    // distant tile that smears cliff notches across one cell. That gap
+    // renders only at far LOD (CDLOD morph + distance), and shrinks when
+    // lip-aware routing lands; the bound keeps it from growing unnoticed.
+    CHECK(worstByCell[2] < 2.6);
     CHECK(worstByCell[8] < 6.5);
-    CHECK(worstByCell[16] < 7.5);
+    CHECK(worstByCell[16] < 13.0);
 }

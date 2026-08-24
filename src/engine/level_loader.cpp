@@ -1887,11 +1887,17 @@ const std::vector<std::string>& LevelLoader::lastLoadedScriptFiles() {
     return g_loadedScriptFiles;
 }
 
+static LevelLoader::GroundProbeReport g_groundProbeReport;
+const LevelLoader::GroundProbeReport& LevelLoader::lastGroundProbeReport() {
+    return g_groundProbeReport;
+}
+
 bool LevelLoader::load(const std::string& path,
                        World& world, Renderer& renderer, RenderView& view,
                        AssetManager& assets, bool editorMode) {
     RT_PROFILE_ZONE_NAMED("levelLoad");
     g_loadedScriptFiles.clear();
+    g_groundProbeReport = {};
     std::ifstream file(path);
     if (!file.is_open()) {
         LOG_ERROR << "Failed to open level file: " << path;
@@ -2455,12 +2461,41 @@ bool LevelLoader::load(const std::string& path,
                                     ? root["terrain"]["cdlod"].value("worldHalf", 1024.0)
                                     : 200.0;
             const double step = std::max(4.0, half * 2.0 / 96.0);
+            // Self-measuring probes: each post also computes its delta against
+            // the FINEST tile's interpolation (the surface the player stands
+            // on) and wears the verdict — green flush, orange within a metre,
+            // red beyond. The loader logs the histogram + worst offender, so
+            // any level launch with probes prints a numeric adherence verdict.
+            const double pcell = lotMeshCell > 0.5 ? lotMeshCell : 2.0;
+            auto probeTile = [&](double x, double z) {
+                auto corner = [&](double cx, double cz) {
+                    return terrainHeight(terrainParams, terrainNoise, cx, cz,
+                                         pcell * 1.45);
+                };
+                const double gx = std::floor(x / pcell) * pcell;
+                const double gz = std::floor(z / pcell) * pcell;
+                const double fx = (x - gx) / pcell, fz = (z - gz) / pcell;
+                return corner(gx, gz) * (1 - fx) * (1 - fz) +
+                       corner(gx + pcell, gz) * fx * (1 - fz) +
+                       corner(gx, gz + pcell) * (1 - fx) * fz +
+                       corner(gx + pcell, gz + pcell) * fx * fz;
+            };
+            int nOk = 0, nNear = 0, nOff = 0;
+            double worstD = 0, worstX = 0, worstZ = 0;
             RenderMesh probes;
             for (double px = -half; px <= half; px += step)
                 for (double pz = -half; pz <= half; pz += step) {
                     const double h = terrainHeight(terrainParams, terrainNoise, px, pz);
+                    const double d = h - probeTile(px, pz);
+                    if (std::fabs(d) > std::fabs(worstD)) {
+                        worstD = d; worstX = px; worstZ = pz;
+                    }
+                    Vec3 verdictC;
+                    if (std::fabs(d) <= 0.3) { verdictC = Vec3(0.15, 0.7, 0.2); ++nOk; }
+                    else if (std::fabs(d) <= 1.0) { verdictC = Vec3(0.95, 0.6, 0.1); ++nNear; }
+                    else { verdictC = Vec3(0.85, 0.12, 0.10); ++nOff; }
                     const Real s2 = 0.12, tall = 1.1;
-                    const Vec3 red(0.85, 0.12, 0.10), white(0.92, 0.92, 0.9);
+                    const Vec3 red = verdictC, white(0.92, 0.92, 0.9);
                     // base half red (the judgment zone), top half white — four
                     // side quads per band (tops skipped; you read the BASE).
                     auto band = [&](Real y0, Real y1, const Vec3& c) {
@@ -2485,8 +2520,13 @@ bool LevelLoader::load(const std::string& path,
                 pr.material.roughness = 0.9f;
                 pr.mesh = assets.acquireMesh(probes, "ground_probes");
                 world.add<Renderable>(pe, pr);
+                g_groundProbeReport = {nOk + nNear + nOff, nOk, nNear, nOff,
+                                       worstD, worstX, worstZ};
                 LOG_INFO << "[probes] " << probes.vertices.size() / 32
-                         << " ground probes planted";
+                         << " ground probes planted: " << nOk << " flush (<=0.3m), "
+                         << nNear << " near (<=1m), " << nOff
+                         << " off (>1m); worst " << worstD << " m at (" << worstX
+                         << ", " << worstZ << ")";
             }
         }
 
