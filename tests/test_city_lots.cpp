@@ -7,6 +7,7 @@
 #include "../src/engine/procgen/city/shape_grammar.h"   // PartId (surfaced walls)
 #include "../src/engine/procgen/city/metro.h"
 #include "../src/engine/procgen/city/road_constraints.h"
+#include "../src/engine/procgen/terrain.h"   // applyFlatten (park-adherence test)
 
 #include <map>
 #include <string>
@@ -829,4 +830,83 @@ TEST_CASE(polygon_area_is_absolute_so_ccw_guards_must_use_ensureCCW) {
     ensureCCW(ccw);
     CHECK(signedArea(ccw) > 0);
     CHECK(ccw[0].x == fixedPoly[0].x && ccw[0].y == fixedPoly[0].y);
+}
+
+TEST_CASE(park_walkways_adhere_to_the_graded_ground) {
+    // Device report ("floating walkways ... exist on their own as part of
+    // plazas and parks"): parks sculpted during parcelling sampled the
+    // PRE-terrace hillside; the block-grading cascade then re-shaped the
+    // ground beneath them, and every walking path floated by the grade delta.
+    // This pins the ordering fix as a GATE: on a real slope, every vertex of
+    // a park's padMesh (plaza fan + path spokes + their skirts) must hug the
+    // FINAL graded ground — the same sampler the terrain build consumes.
+    auto natural = [](Real x, Real z) -> Real {
+        return 0.22 * x + 3.0 * std::sin(z * 0.045);   // hillside + undulation
+    };
+
+    // Small residential-ring blocks (area < 2600) are eligible for the
+    // whole-block park roll; big central blocks parcel courts. Between the
+    // two, a handful of seeds always yields sculpted parks.
+    std::vector<Poly2> blocks;
+    for (int i = 0; i < 4; ++i) {
+        Real cx = (i % 2) * 120.0 - 60.0, cz = (i / 2) * 120.0 - 60.0;
+        Real h = 45.0;
+        blocks.push_back({{cx - h, cz - h}, {cx + h, cz - h},
+                          {cx + h, cz + h}, {cx - h, cz + h}});
+    }
+    for (int i = 0; i < 6; ++i) {
+        Real cx = 240.0 + (i % 3) * 100.0, cz = (i / 3) * 100.0 - 50.0;
+        Real h = 23.0;   // 46 m block, ~2100 m2
+        blocks.push_back({{cx - h, cz - h}, {cx + h, cz - h},
+                          {cx + h, cz + h}, {cx - h, cz + h}});
+    }
+
+    int parksChecked = 0;
+    bool sawGradedPark = false;
+    for (uint32_t seed = 1; seed <= 60 && parksChecked < 3; ++seed) {
+        LotParams p;
+        p.center = {0, 0};
+        p.seed = seed;
+        p.ground = natural;
+        // The loader's priority-correct rebind hook: fold the block grades
+        // into the sampler exactly the way the final terrain will.
+        p.groundWith = [&natural](const std::vector<TerrainFlatten>& grades) {
+            auto flat = std::make_shared<std::vector<TerrainFlatten>>(grades);
+            return [&natural, flat](Real x, Real z) {
+                return applyFlatten(*flat, x, z, natural(x, z));
+            };
+        };
+        std::vector<RenderMesh> parts;
+        std::vector<TerrainFlatten> grades;
+        std::vector<LotBuilding> lots = growLotBuildings(
+            blocks, p, nullptr, &parts, nullptr, 0.0, nullptr, &grades);
+        auto finalGround = [&](Real x, Real z) {
+            return applyFlatten(grades, x, z, natural(x, z));
+        };
+        for (const LotBuilding& lb : lots) {
+            if (lb.type != "park" || lb.padMesh.vertices.empty()) continue;
+            ++parksChecked;
+            Real worstLow = 0.0, worstHigh = 0.0, maxGrade = 0.0;
+            for (const Vertex& v : lb.padMesh.vertices) {
+                const Real g = finalGround(v.position.x, v.position.z);
+                const Real d = v.position.y - g;
+                worstLow = std::min(worstLow, d);
+                worstHigh = std::max(worstHigh, d);
+                maxGrade = std::max(maxGrade,
+                                    std::abs(g - natural(v.position.x, v.position.z)));
+            }
+            if (maxGrade > 0.3) sawGradedPark = true;
+            // Below: the 0.45 m curb skirt is the deepest authored drop.
+            // Above: plaza podium (0.25) + path float (0.03) is the highest.
+            CHECK(worstLow > -0.75);
+            CHECK(worstHigh < 0.90);
+            if (!(worstLow > -0.75) || !(worstHigh < 0.90))
+                std::printf("  park '%s' seed %u: d in [%.2f, %.2f] (grade %.2f)\n",
+                            lb.recipe.c_str(), seed, worstLow, worstHigh, maxGrade);
+        }
+    }
+    // The fixture must BITE: sculpted parks exist, and at least one sits on
+    // ground the block grade actually moved (else adherence is vacuous).
+    CHECK(parksChecked >= 1);
+    CHECK(sawGradedPark);
 }
