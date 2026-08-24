@@ -1651,7 +1651,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 // grade plane override the road deck inside its +4.5 m
                 // overlap — padPlaneFor and the foundation drape then read a
                 // surface the mesh never shows, exactly at the frontage.
-                p.ground = p.groundWith(*outGrade);
+                auto dilated = p.groundWith(*outGrade);
+                p.groundDilatedFn = dilated;
+                p.ground = [dilated](Real x, Real z) { return dilated(x, z, Real(0)); };
             } else {
                 // Legacy composition for hosts without the hook (flat levels,
                 // old callers): correct only where grades and roads don't
@@ -1666,12 +1668,45 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         }
     }
 
+    // MESH-CONFORMING ground for everything that must visually SIT on the
+    // terrain: corner samples on the finest rendered CDLOD grid, bilinear
+    // across the cell — the tile's own interpolation. The analytic sampler is
+    // exact between grid points where the mesh is not; walkways placed by it
+    // floated over every cell the mesh cut differently (measured 5.8 m worst
+    // at terrace lips by the tile-fidelity gate). Sculptors keep calling a
+    // plain ground fn; the fn they get IS the mesh's surface.
+    std::function<Real(Real, Real)> meshGround = p.ground;
+    if (p.ground && p.groundMeshCell > 0.5) {
+        const Real cell = p.groundMeshCell;
+        // The tile's own corner query: terrain_lod samples terrainHeight with
+        // flattenDilate = step * 1.45, so a corner near a narrow band or a
+        // terrace lip resolves to the SAME plane the rendered mesh shows.
+        // Without the dilation the conforming sampler still diverged by whole
+        // planes exactly at lips (the 5.8 m tile-gate measurement).
+        const Real dil = cell * Real(1.45);
+        auto corner = p.groundDilatedFn
+                          ? std::function<Real(Real, Real)>(
+                                [f = p.groundDilatedFn, dil](Real x, Real z) {
+                                    return f(x, z, dil);
+                                })
+                          : p.ground;   // legacy hosts: best effort, undilated
+        meshGround = [corner, cell](Real x, Real z) -> Real {
+            const Real gx = std::floor(x / cell) * cell;
+            const Real gz = std::floor(z / cell) * cell;
+            const Real fx = (x - gx) / cell, fz = (z - gz) / cell;
+            const Real h00 = corner(gx, gz), h10 = corner(gx + cell, gz);
+            const Real h01 = corner(gx, gz + cell), h11 = corner(gx + cell, gz + cell);
+            return h00 * (1 - fx) * (1 - fz) + h10 * fx * (1 - fz) +
+                   h01 * (1 - fx) * fz + h11 * fx * fz;
+        };
+    }
+
     // Deferred park sculpting (see the parcelling loop): now that p.ground is
     // the grade-aware sampler, parks drape their plazas, paths and furniture
     // on the same terraced ground the terrain will show.
     for (const DeferredPark& dp : deferredParks) {
         LotBuilding& g = out[dp.lot];
-        sculptPark(g, g.pad, g.height, p.ground, dp.seed, outParts, outGrade);
+        sculptPark(g, g.pad, g.height, meshGround, dp.seed, outParts, outGrade);
     }
     // Deferred alley pavements: draped on the SAME terraced ground as the
     // parks, and each segment stamps its band into the flatten set so the
@@ -1679,7 +1714,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     if (outParts && !deferredAlleys.empty()) {
         RenderMesh& path = (*outParts)[static_cast<std::size_t>(PartId::Path)];
         auto gy = [&](const Vec2& v) {
-            return p.ground ? p.ground(v.x, v.y) : Real(0);
+            return meshGround ? meshGround(v.x, v.y) : Real(0);
         };
         for (const DeferredAlley& da : deferredAlleys) {
             const Vec2 dirN = normalize(da.b - da.a);
@@ -2400,7 +2435,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 b.yaw = std::atan2(pb.axis[0].y, pb.axis[0].x);
                 b.baseY = p.ground ? b.groundY : baseYFor(plan);   // no plinth
                 b.height = 0.35;             // the podium IS the massing
-                sculptPlaza(b, plan, p.ground,
+                sculptPlaza(b, plan, meshGround,
                             mix(pp.seed, static_cast<uint32_t>(li) * 31u + 17u),
                             outParts, roads, outGrade);
                 LOG_INFO << "[plaza] at (" << b.site.x << ", " << b.site.y

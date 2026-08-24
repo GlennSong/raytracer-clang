@@ -796,3 +796,16 @@ rendered surface, offset a few centimetres), or (c) full place-on-mesh:
 build terrain first, raycast placements down onto the built mesh. The tile
 test above carries the target (< 0.55 m fine-cell) as its documented goal
 and pins today's ceiling so the class cannot silently deepen.
+
+### Addendum (same day): what the tile gate localized
+
+With walkways conforming to the tile's own dilated bilinear sampler
+(LotParams::groundMeshCell + the dilate-aware groundWith hook,
+terrain_lod's step*1.45), the residual floaters localize to paths CROSSING
+TERRACE LIPS: adjacent block-grade planes differ by metres inside one
+cell, the rendered mesh is a cliff there, and no draping can lay a flat
+band on a cliff. The fix is ROUTING, not sampling: the walkway generators
+must treat grade steps as obstacles — route spokes/lanes around lips, or
+emit stair runs where crossing is intended (sculptPlaza's podium stairs
+are the in-codebase pattern). Until then the tile gate pins the ceiling
+and prints the worst offender's source and position.

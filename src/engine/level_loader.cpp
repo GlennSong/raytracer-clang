@@ -1781,8 +1781,9 @@ static GrownLots growCityLots(
     const std::string& levelDir, const HeightField& ground,
     const HeightField& netGround,
     const engine::RoadGraph* freewayROW = nullptr,
-    std::function<std::function<engine::Real(engine::Real, engine::Real)>(
-        const std::vector<engine::TerrainFlatten>&)> groundWith = nullptr) {
+    std::function<std::function<engine::Real(engine::Real, engine::Real, engine::Real)>(
+        const std::vector<engine::TerrainFlatten>&)> groundWith = nullptr,
+    double groundMeshCell = 0.0) {
     RT_PROFILE_ZONE_NAMED("growCityLots");
     GrownLots g;
     // Edge blocks (device feedback): the town RIM has no enclosed faces —
@@ -1814,6 +1815,7 @@ static GrownLots growCityLots(
     // drape per-vertex (city-on-terrain; roads conform separately via
     // the level ground sampler + the flatten ramps the loader carves).
     lp.groundWith = std::move(groundWith);
+    lp.groundMeshCell = static_cast<engine::Real>(groundMeshCell);
     if (ground)
         lp.ground = [&ground](engine::Real x, engine::Real z) {
             return static_cast<engine::Real>(ground(x, z));
@@ -1945,6 +1947,10 @@ bool LevelLoader::load(const std::string& path,
     // on-terrain script recipe (the `ground` global) so a Lua city drapes on and
     // conforms the CDLOD terrain — the script sibling of the C++ city's groundAt.
     HeightField levelGround;
+    // Finest rendered CDLOD cell (leaf node / gridRes) — the walkway sculptors
+    // sample ground through the tile's own interpolation on this grid so
+    // ribbons sit on the MESH, not on the analytic function between samples.
+    double lotMeshCell = 0.0;
     if (root.contains("terrain")) {
         auto tp = std::make_shared<TerrainParams>(readTerrainParams(root["terrain"]));
         tp->erodedBase = sharedEroded;   // roads/lots conform to the ERODED surface
@@ -1952,6 +1958,16 @@ bool LevelLoader::load(const std::string& path,
         levelGround = [tp, noise](double x, double z) {
             return terrainHeight(*tp, *noise, x, z);
         };
+        const json& tj = root["terrain"];
+        if (tj.contains("cdlod")) {
+            const json& cj = tj["cdlod"];
+            const double worldHalf =
+                cj.is_object() ? cj.value("worldHalf", 1024.0) : 1024.0;
+            const int numLods = cj.is_object() ? cj.value("numLods", 6) : 6;
+            const int gridRes = cj.is_object() ? cj.value("gridRes", 32) : 32;
+            lotMeshCell = (worldHalf * 2.0 / double(1 << (numLods - 1))) /
+                          std::max(1, gridRes);
+        }
     }
 
     // Pre-pass: run on-terrain recipes BEFORE the terrain so their cut/fill
@@ -2340,12 +2356,16 @@ bool LevelLoader::load(const std::string& path,
                 tp->flatten.insert(tp->flatten.end(), extra.begin(),
                                    extra.end());
                 rebuildFlattenIndex(*tp);
-                return [tp, lotNoise](Real x, Real z) {
-                    return terrainHeight(*tp, *lotNoise, x, z);
+                // Dilate-aware (third arg): the mesh-conforming walkway
+                // sampler reproduces a CDLOD corner query exactly.
+                return [tp, lotNoise](Real x, Real z, Real dilate) {
+                    return terrainHeight(*tp, *lotNoise, x, z,
+                                         static_cast<double>(dilate));
                 };
             };
             preLots = growCityLots(preNets, root["citysim"], levelDir, lotGround,
-                                   levelGround, freewayROWp, lotGroundWith);
+                                   levelGround, freewayROWp, lotGroundWith,
+                                   lotMeshCell);
             // BLOCK GRADING CASCADE (ADR-0075 P2, re-enabled roads-v2.1 R4):
             // the old attempt extracted faces from the GRAPH (none on a
             // tree-like terrain-gated metro); the LOT PLAN's own block
@@ -2921,7 +2941,8 @@ bool LevelLoader::load(const std::string& path,
                 std::vector<engine::RoadEntity> nets;
                 world.each<engine::RoadEntity>(
                     [&](Entity, engine::RoadEntity& net) { nets.push_back(net); });
-                grown = growCityLots(nets, cs, levelDir, entityGround, entityGround, freewayROWp);
+                grown = growCityLots(nets, cs, levelDir, entityGround, entityGround, freewayROWp,
+                                     nullptr, lotMeshCell);
             }
             if (!grown.plan.blocks.empty() || !grown.plan.lots.empty()) {
                 engine::CityPlanDebug dbg;
@@ -2941,7 +2962,8 @@ bool LevelLoader::load(const std::string& path,
                 std::vector<engine::RoadEntity> nets;
                 world.each<engine::RoadEntity>(
                     [&](Entity, engine::RoadEntity& net) { nets.push_back(net); });
-                grown = growCityLots(nets, cs, levelDir, entityGround, entityGround, freewayROWp);
+                grown = growCityLots(nets, cs, levelDir, entityGround, entityGround, freewayROWp,
+                                     nullptr, lotMeshCell);
             }
             engine::LotPlanDebug& plan = grown.plan;   // debug overlay (below)
             // The buildings' geometry, merged by shape-grammar PartId across the

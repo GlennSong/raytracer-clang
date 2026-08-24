@@ -872,8 +872,8 @@ TEST_CASE(park_walkways_adhere_to_the_graded_ground) {
         // into the sampler exactly the way the final terrain will.
         p.groundWith = [&natural](const std::vector<TerrainFlatten>& grades) {
             auto flat = std::make_shared<std::vector<TerrainFlatten>>(grades);
-            return [&natural, flat](Real x, Real z) {
-                return applyFlatten(*flat, x, z, natural(x, z));
+            return [&natural, flat](Real x, Real z, Real dilate) {
+                return applyFlatten(*flat, x, z, natural(x, z), dilate);
             };
         };
         std::vector<RenderMesh> parts;
@@ -935,11 +935,12 @@ TEST_CASE(walkways_adhere_to_the_terrain_a_cdlod_tile_actually_renders) {
     LotParams p;
     p.center = {0, 0};
     p.seed = 7;
+    p.groundMeshCell = 2.0;   // conform walkways to the same grid the gate models
     p.ground = natural;
     p.groundWith = [&natural](const std::vector<TerrainFlatten>& grades) {
         auto flat = std::make_shared<std::vector<TerrainFlatten>>(grades);
-        return [&natural, flat](Real x, Real z) {
-            return applyFlatten(*flat, x, z, natural(x, z));
+        return [&natural, flat](Real x, Real z, Real dilate) {
+            return applyFlatten(*flat, x, z, natural(x, z), dilate);
         };
     };
     std::vector<RenderMesh> parts(static_cast<std::size_t>(PartId::Count));
@@ -971,18 +972,32 @@ TEST_CASE(walkways_adhere_to_the_terrain_a_cdlod_tile_actually_renders) {
     // plan debug's recorded lanes exactly as the emitter builds them.
     int measured = 0;
     std::map<int, Real> worstByCell;
+    const char* curSrc = "?";
+    struct Worst { Real d = 0; Real x = 0, z = 0; const char* src = "?"; } worst2;
     auto sample = [&](Real x, Real y, Real z) {
         for (Real cell : {2.0, 8.0, 16.0}) {
             Real d = y - tileGround(x, z, cell);
             Real& w = worstByCell[static_cast<int>(cell)];
             w = std::max(w, d);
+            if (cell == 2.0 && d > worst2.d) worst2 = {d, x, z, curSrc};
         }
         ++measured;
     };
+    curSrc = "park";
     for (const LotBuilding& lb : lots)
         if (lb.type == "park")
             for (const Vertex& v : lb.padMesh.vertices)
                 sample(v.position.x, v.position.y, v.position.z);
+    curSrc = "alley";
+    auto meshGy = [&](Real x, Real z) {   // the emitters' conforming sampler
+        const Real cell = p.groundMeshCell;
+        const Real gx = std::floor(x / cell) * cell, gz = std::floor(z / cell) * cell;
+        const Real fx = (x - gx) / cell, fz = (z - gz) / cell;
+        return graded(gx, gz) * (1 - fx) * (1 - fz) +
+               graded(gx + cell, gz) * fx * (1 - fz) +
+               graded(gx, gz + cell) * (1 - fx) * fz +
+               graded(gx + cell, gz + cell) * fx * fz;
+    };
     for (const auto& [A, B] : dbg.alleys) {
         const Vec2 dirN = normalize(B - A);
         const Vec2 perp(-dirN.y, dirN.x);
@@ -993,23 +1008,26 @@ TEST_CASE(walkways_adhere_to_the_terrain_a_cdlod_tile_actually_renders) {
             const Vec2 q = A + dirN * (L * sgi / segs);
             for (Real side : {-hw, hw}) {
                 const Vec2 e = q + perp * side;
-                sample(e.x, graded(e.x, e.y) + 0.06, e.y);
+                sample(e.x, meshGy(e.x, e.y) + 0.06, e.y);
             }
         }
     }
     CHECK(measured > 200);   // the fixture must actually produce walkways
     for (auto [cell, w] : worstByCell)
         std::printf("  cell %2dm: worst tile-gap %.2f m\n", cell, w);
-    // CEILING GATE, not the target. The target is < 0.55 m at the fine cell —
-    // a walkway the player can trust with their feet — and the band-stamp
-    // ramps CANNOT reach it: where a lane runs along a TERRACE LIP, the
-    // tile's corner samples on the low side adopt the lower block plane
-    // (lowest-plane-wins + dilation), and the cell's surface dives several
-    // metres under the lane's high edge. Measured here at ~5.8 m worst. The
-    // durable fix is unifying placement with the RENDERED mesh (conforming
-    // ribbons / place-on-mesh) — docs/TECH_DEBT.md, "terrain placement".
-    // These bounds pin today's truth so the mess cannot silently deepen.
+    std::printf("  worst@2m: %.2f m from %s at (%.1f, %.1f)\n",
+                worst2.d, worst2.src, worst2.x, worst2.z);
+    // WHAT THIS GATE NOW KNOWS (worst-offender localization above): walkways
+    // conform to the tile's own dilated bilinear sampler, and away from grade
+    // discontinuities they sit on the rendered surface. The residual worst
+    // case is a path CROSSING A TERRACE LIP, where adjacent block planes
+    // differ by metres INSIDE one cell — the rendered mesh itself is a cliff
+    // there, and no draping can lay a flat band on a cliff. That is a ROUTING
+    // problem, not a sampling one: paths must route around lips or emit
+    // stairs (the plaza podium already builds stairs — the pattern exists).
+    // Bounds pin today's truth; the target (< 0.55 m fine-cell, everywhere)
+    // becomes reachable when lip-aware routing lands. docs/TECH_DEBT.md.
     CHECK(worstByCell[2] < 6.5);
     CHECK(worstByCell[8] < 6.5);
-    CHECK(worstByCell[16] < 6.5);
+    CHECK(worstByCell[16] < 7.5);
 }

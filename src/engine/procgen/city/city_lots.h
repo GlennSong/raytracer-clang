@@ -94,6 +94,17 @@ struct LotParams {
     // DistrictMap::hubs (kind mirrors DistrictTag order). Empty = radial rings.
     std::vector<std::pair<Vec2, int>> hubs;
     Real hubRadius = 220.0;
+    // Finest RENDERED terrain cell (leaf CDLOD node size / gridRes). When set,
+    // walkway sculptors sample the ground through the tile's own bilinear
+    // interpolation on this grid instead of the ideal analytic function — so
+    // ribbons sit on the MESH the player sees, not on heights the mesh never
+    // shows between its samples (device: "if the analytic algorithm says they
+    // are on the ground, it's wrong" — it was right about itself and wrong as
+    // a proxy for the mesh; this stops using it as one). 0 = legacy/off.
+    Real groundMeshCell = 0.0;
+    // Filled by the grower's rebind from groundWith: the dilate-aware sampler
+    // the mesh-conforming wrapper queries. Hosts never set this directly.
+    std::function<Real(Real, Real, Real)> groundDilatedFn;
     // Hub CLUSTER ids parallel to `hubs` (multi-site metros, 8km-city P3):
     // CityHub::site — 0 = the primary city, 1+ = satellite towns. The landmark
     // planner runs its quotas PER CLUSTER (the city keeps the full civic
@@ -149,7 +160,11 @@ struct LotParams {
     // road-vs-grade priority during growth matches the final terrain; the
     // legacy wrapper composition (grades applied OVER the road-carved base)
     // inverted it inside the +4.5 m grade/road overlap. Null = legacy.
-    std::function<std::function<Real(Real, Real)>(
+    // The returned sampler takes (x, z, flattenDilate) — the third argument is
+    // the CDLOD mesher's footprint dilation (terrain_lod: step * 1.45), so the
+    // mesh-conforming walkway sampler can reproduce a tile's corner heights
+    // EXACTLY. Callers wanting the plain height pass dilate 0.
+    std::function<std::function<Real(Real, Real, Real)>(
         const std::vector<TerrainFlatten>&)> groundWith;
     // STYLE BOOK hook (the Lua data layer): called with every recipe's NAME
     // so the host can overlay look overrides (cladding, windows, colours)
