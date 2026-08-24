@@ -45,6 +45,38 @@ TerrainParams readTerrainParams(const json& t) {
     p.mountainAlongRange = t.value("mountainAlongRange", p.mountainAlongRange);
     p.tiltX = t.value("tiltX", p.tiltX);
     p.tiltZ = t.value("tiltZ", p.tiltZ);
+    // AUTHORED flatten records (walkway-lab round): the height stack's record
+    // types, written directly in the level instead of arriving only via the
+    // road/lot passes — so an isolated scene can stage pads, ramps, and
+    // priority overlaps one at a time and prove each against the mesh.
+    //   {"type":"pad","poly":[[x,z],...],"y":H,"falloff":F,"priority":P}
+    //   {"type":"ramp","a":[x,z],"b":[x,z],"ya":H,"yb":H,
+    //    "halfWidth":W,"falloff":F,"priority":P}
+    if (t.contains("flatten") && t["flatten"].is_array()) {
+        for (const auto& f : t["flatten"]) {
+            const std::string kind = f.value("type", std::string("pad"));
+            TerrainFlatten r;
+            if (kind == "ramp") {
+                const auto& a = f["a"];
+                const auto& b = f["b"];
+                r = makeFlattenRamp(
+                    Vec3(a[0].get<double>(), 0, a[1].get<double>()),
+                    Vec3(b[0].get<double>(), 0, b[1].get<double>()),
+                    f.value("ya", 0.0), f.value("yb", 0.0),
+                    f.value("halfWidth", 4.0), f.value("falloff", 6.0));
+            } else {
+                std::vector<Vec3> poly;
+                for (const auto& v : f.value("poly", json::array()))
+                    if (v.is_array() && v.size() >= 2)
+                        poly.push_back(Vec3(v[0].get<double>(), 0, v[1].get<double>()));
+                if (poly.size() < 3) continue;
+                r = makeFlattenPad(std::move(poly), f.value("y", 0.0),
+                                   f.value("falloff", 6.0));
+            }
+            r.priority = f.value("priority", 0);
+            p.flatten.push_back(std::move(r));
+        }
+    }
     p.seaLevel = t.value("seaLevel", p.seaLevel);   // loaders may override from the water block
     p.snowLine = t.value("snowLine", p.snowLine);   // colour-band scaling
     p.rockLine = t.value("rockLine", p.rockLine);

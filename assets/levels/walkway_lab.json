@@ -1,0 +1,303 @@
+{
+ "name": "walkway_lab",
+ "_comment": "The height-stack lab (walkway-lab round): a pure 22% slope with the stack's record types staged SIDE BY SIDE along Z, one claim per stage, judged with RT_GROUND_PROBES=1 posts (base at the analytic height — buried/floating posts localize any mesh disagreement instantly). S0 z<-65: bare slope. S1 z~-50: one PAD. S2 z~-15: one RAMP climbing the hill. S3 z~15: the PRIORITY LADDER (pad 2 inside road 1 inside grade -1). S4 z~45: the TERRACE LIP (two adjacent grade planes 5 m apart). S5a z~70: a walkway riding S2-style graded ground (must sit flush). S5b z~95: a walkway CROSSING an S4-style lip (the known-impossible flat band; must stair or reroute when lip-aware routing lands).",
+ "version": 1,
+ "terrain": {
+  "cdlod": {
+   "worldHalf": 128,
+   "numLods": 4,
+   "gridRes": 32
+  },
+  "heightScale": 0,
+  "tiltX": 0.22,
+  "material": {
+   "albedo": [
+    0.55,
+    0.62,
+    0.45
+   ],
+   "roughness": 1.0
+  },
+  "flatten": [
+   {
+    "type": "pad",
+    "poly": [
+     [
+      -12,
+      -58
+     ],
+     [
+      12,
+      -58
+     ],
+     [
+      12,
+      -42
+     ],
+     [
+      -12,
+      -42
+     ]
+    ],
+    "y": 0.0,
+    "falloff": 4.0
+   },
+   {
+    "type": "ramp",
+    "a": [
+     -60,
+     -15
+    ],
+    "b": [
+     60,
+     -15
+    ],
+    "ya": -8.0,
+    "yb": 8.0,
+    "halfWidth": 5.0,
+    "falloff": 4.0
+   },
+   {
+    "type": "pad",
+    "poly": [
+     [
+      -30,
+      2
+     ],
+     [
+      30,
+      2
+     ],
+     [
+      30,
+      30
+     ],
+     [
+      -30,
+      30
+     ]
+    ],
+    "y": -2.0,
+    "falloff": 5.0,
+    "priority": -1
+   },
+   {
+    "type": "ramp",
+    "a": [
+     -40,
+     16
+    ],
+    "b": [
+     40,
+     16
+    ],
+    "ya": -5.0,
+    "yb": 5.0,
+    "halfWidth": 4.0,
+    "falloff": 3.0,
+    "priority": 1
+   },
+   {
+    "type": "pad",
+    "poly": [
+     [
+      -8,
+      10
+     ],
+     [
+      8,
+      10
+     ],
+     [
+      8,
+      22
+     ],
+     [
+      -8,
+      22
+     ]
+    ],
+    "y": 3.0,
+    "falloff": 3.0,
+    "priority": 2
+   },
+   {
+    "type": "pad",
+    "poly": [
+     [
+      -45,
+      38
+     ],
+     [
+      0,
+      38
+     ],
+     [
+      0,
+      54
+     ],
+     [
+      -45,
+      54
+     ]
+    ],
+    "y": -4.0,
+    "falloff": 3.0,
+    "priority": -1
+   },
+   {
+    "type": "pad",
+    "poly": [
+     [
+      0,
+      38
+     ],
+     [
+      45,
+      38
+     ],
+     [
+      45,
+      54
+     ],
+     [
+      0,
+      54
+     ]
+    ],
+    "y": 1.0,
+    "falloff": 3.0,
+    "priority": -1
+   },
+   {
+    "type": "ramp",
+    "a": [
+     -60,
+     70
+    ],
+    "b": [
+     60,
+     70
+    ],
+    "ya": -9.0,
+    "yb": 9.0,
+    "halfWidth": 5.0,
+    "falloff": 4.0
+   },
+   {
+    "type": "pad",
+    "poly": [
+     [
+      -45,
+      88
+     ],
+     [
+      0,
+      88
+     ],
+     [
+      0,
+      104
+     ],
+     [
+      -45,
+      104
+     ]
+    ],
+    "y": -4.0,
+    "falloff": 3.0,
+    "priority": -1
+   },
+   {
+    "type": "pad",
+    "poly": [
+     [
+      0,
+      88
+     ],
+     [
+      45,
+      88
+     ],
+     [
+      45,
+      104
+     ],
+     [
+      0,
+      104
+     ]
+    ],
+    "y": 1.0,
+    "falloff": 3.0,
+    "priority": -1
+   }
+  ]
+ },
+ "entities": [
+  {
+   "id": 1,
+   "name": "walk_s5a_on_ramp",
+   "shape": "walkway",
+   "walkway": {
+    "a": [
+     -55,
+     70
+    ],
+    "b": [
+     55,
+     70
+    ],
+    "width": 2.4
+   }
+  },
+  {
+   "id": 2,
+   "name": "walk_s5b_across_lip",
+   "shape": "walkway",
+   "walkway": {
+    "a": [
+     -40,
+     96
+    ],
+    "b": [
+     40,
+     96
+    ],
+    "width": 2.4
+   }
+  }
+ ],
+ "environment": {
+  "skyColor": [
+   0.62,
+   0.72,
+   0.85
+  ]
+ },
+ "lighting": {
+  "ambientMultiplier": 0.75,
+  "exposure": 0.6,
+  "sun": {
+   "castsShadow": true,
+   "color": [
+    1.0,
+    0.97,
+    0.9
+   ],
+   "direction": [
+    0.5,
+    0.62,
+    -0.4
+   ],
+   "intensity": 7.0
+  }
+ },
+ "player": {
+  "position": [
+   -30.0,
+   2.0,
+   -90.0
+  ]
+ }
+}

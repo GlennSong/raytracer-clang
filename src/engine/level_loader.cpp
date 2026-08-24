@@ -2327,7 +2327,12 @@ bool LevelLoader::load(const std::string& path,
     if (root.contains("terrain")) {
         TerrainParams terrainParams = readTerrainParams(root["terrain"]);
         terrainParams.erodedBase = sharedEroded;   // eroded base for mesh + carve + drape
-        terrainParams.flatten.assign(scriptFlatten.begin(), scriptFlatten.end());
+        // APPEND the script pre-pass records — assign() here silently wiped any
+        // level-AUTHORED terrain.flatten records (walkway-lab round; the lab's
+        // probe field caught it: perfect function/mesh agreement on a slope
+        // with no stages in it).
+        terrainParams.flatten.insert(terrainParams.flatten.end(),
+                                     scriptFlatten.begin(), scriptFlatten.end());
         std::vector<TerrainFlatten> baseFlatten = terrainParams.flatten;   // non-road grading
         terrainParams.flatten.insert(terrainParams.flatten.end(),
                                      roadFlatten.begin(), roadFlatten.end());   // carve to roads
@@ -2438,6 +2443,115 @@ bool LevelLoader::load(const std::string& path,
         // copies below reuse it.
         rebuildFlattenIndex(terrainParams);
         loadTerrain(terrainParams, terrainNoise, root["terrain"], world, assets);
+
+        // GROUND PROBES (RT_GROUND_PROBES=1, walkway-lab instrument): a grid of
+        // thin posts whose BASE sits exactly at terrainHeight — the analytic
+        // claim, planted in the world. Mesh above the claim = post half-buried;
+        // mesh below = post floats. Disagreement is visible at a glance and its
+        // direction names the culprit. Emitted from the FINAL params (every
+        // flatten in), the same field the CDLOD mesher samples.
+        if (std::getenv("RT_GROUND_PROBES")) {
+            const double half = root["terrain"].contains("cdlod")
+                                    ? root["terrain"]["cdlod"].value("worldHalf", 1024.0)
+                                    : 200.0;
+            const double step = std::max(4.0, half * 2.0 / 96.0);
+            RenderMesh probes;
+            for (double px = -half; px <= half; px += step)
+                for (double pz = -half; pz <= half; pz += step) {
+                    const double h = terrainHeight(terrainParams, terrainNoise, px, pz);
+                    const Real s2 = 0.12, tall = 1.1;
+                    const Vec3 red(0.85, 0.12, 0.10), white(0.92, 0.92, 0.9);
+                    // base half red (the judgment zone), top half white — four
+                    // side quads per band (tops skipped; you read the BASE).
+                    auto band = [&](Real y0, Real y1, const Vec3& c) {
+                        const Vec3 p00(px - s2, y0, pz - s2), p10(px + s2, y0, pz - s2);
+                        const Vec3 p11(px + s2, y0, pz + s2), p01(px - s2, y0, pz + s2);
+                        const Vec3 q00(px - s2, y1, pz - s2), q10(px + s2, y1, pz - s2);
+                        const Vec3 q11(px + s2, y1, pz + s2), q01(px - s2, y1, pz + s2);
+                        MeshBuilder::emitQuad(probes, p00, p10, q10, q00, Vec3(0, 0, -1), c);
+                        MeshBuilder::emitQuad(probes, p10, p11, q11, q10, Vec3(1, 0, 0), c);
+                        MeshBuilder::emitQuad(probes, p11, p01, q01, q11, Vec3(0, 0, 1), c);
+                        MeshBuilder::emitQuad(probes, p01, p00, q00, q01, Vec3(-1, 0, 0), c);
+                    };
+                    band(h, h + tall * 0.5, red);
+                    band(h + tall * 0.5, h + tall, white);
+                }
+            if (!probes.vertices.empty()) {
+                Entity pe = world.create();
+                world.add<Transform>(pe, Transform{});
+                world.add<PrevTransform>(pe, PrevTransform{Transform{}});
+                Renderable pr;
+                pr.material.albedo = Vec3(1, 1, 1);
+                pr.material.roughness = 0.9f;
+                pr.mesh = assets.acquireMesh(probes, "ground_probes");
+                world.add<Renderable>(pe, pr);
+                LOG_INFO << "[probes] " << probes.vertices.size() / 32
+                         << " ground probes planted";
+            }
+        }
+
+        // AUTHORED WALKWAYS (walkway-lab): {"shape":"walkway","walkway":
+        // {"a":[x,z],"b":[x,z],"width":W}} — a paved band that is a PURE
+        // READER of the final ground, emitted here (after every flatten) and
+        // sampled through the tile's own interpolation (finest cell, the
+        // mesher's step*1.45 dilation) so it sits on the RENDERED mesh
+        // wherever the mesh is continuous. The lab's S5 stages ride this.
+        if (root.contains("entities")) {
+            RenderMesh walks;
+            const double cell = lotMeshCell > 0.5 ? lotMeshCell : 2.0;
+            auto tileGy = [&](double x, double z) {
+                auto corner = [&](double cx, double cz) {
+                    return terrainHeight(terrainParams, terrainNoise, cx, cz,
+                                         cell * 1.45);
+                };
+                const double gx = std::floor(x / cell) * cell;
+                const double gz = std::floor(z / cell) * cell;
+                const double fx = (x - gx) / cell, fz = (z - gz) / cell;
+                return corner(gx, gz) * (1 - fx) * (1 - fz) +
+                       corner(gx + cell, gz) * fx * (1 - fz) +
+                       corner(gx, gz + cell) * (1 - fx) * fz +
+                       corner(gx + cell, gz + cell) * fx * fz;
+            };
+            for (const auto& ent : root["entities"]) {
+                if (ent.value("shape", std::string()) != "walkway") continue;
+                const json wb = ent.contains("walkway") ? ent["walkway"] : json::object();
+                if (!wb.contains("a") || !wb.contains("b")) continue;
+                const Vec2 A(wb["a"][0].get<double>(), wb["a"][1].get<double>());
+                const Vec2 B(wb["b"][0].get<double>(), wb["b"][1].get<double>());
+                const double hw = wb.value("width", 2.0) * 0.5;
+                const Vec2 d = B - A;
+                const double L = d.length();
+                if (L < 1.0) continue;
+                const Vec2 dir = d * (1.0 / L);
+                const Vec2 perp(-dir.y, dir.x);
+                const int segs = std::max(1, static_cast<int>(L / std::min(3.0, cell)));
+                const Vec3 pave(0.62, 0.61, 0.58);
+                for (int si = 0; si < segs; ++si) {
+                    const Vec2 q0 = A + dir * (L * si / segs);
+                    const Vec2 q1 = A + dir * (L * (si + 1) / segs);
+                    const Vec2 l0 = q0 - perp * hw, r0 = q0 + perp * hw;
+                    const Vec2 l1 = q1 - perp * hw, r1 = q1 + perp * hw;
+                    MeshBuilder::emitQuad(
+                        walks,
+                        Vec3(l0.x, tileGy(l0.x, l0.y) + 0.05, l0.y),
+                        Vec3(r0.x, tileGy(r0.x, r0.y) + 0.05, r0.y),
+                        Vec3(r1.x, tileGy(r1.x, r1.y) + 0.05, r1.y),
+                        Vec3(l1.x, tileGy(l1.x, l1.y) + 0.05, l1.y),
+                        Vec3(0, 1, 0), pave);
+                }
+            }
+            if (!walks.vertices.empty()) {
+                Entity we2 = world.create();
+                world.add<Transform>(we2, Transform{});
+                world.add<PrevTransform>(we2, PrevTransform{Transform{}});
+                Renderable wr2;
+                wr2.material.albedo = Vec3(1, 1, 1);
+                wr2.material.roughness = 0.92f;
+                wr2.mesh = assets.acquireMesh(walks, "lab_walkways");
+                world.add<Renderable>(we2, wr2);
+                LOG_INFO << "[walkway-lab] authored walkway bands emitted";
+            }
+        }
         // Hand the CDLOD config its non-road base so the editor's re-conform action can
         // rebuild flatten = base + fresh roads without double-applying or leaving ghosts.
         world.each<TerrainLodConfig>(
