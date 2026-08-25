@@ -46,7 +46,59 @@ NavGraph tee() {
     return buildNavGraph(g);
 }
 
+// A 4-way whose east arm has a neighbour leaving at only 30 degrees — the
+// metro's organic grid is full of these. Approaching from the east, the pole's
+// kerb-corner sits between the east arm and that acute neighbour.
+NavGraph acuteCross() {
+    RoadGraph g;
+    g.nodes = { {Vec2(0, 0)},
+                {Vec2(0, 60)}, {Vec2(0, -60)}, {Vec2(60, 0)},
+                {Vec2(52, 30)} };                   // 30 degrees off the east arm
+    g.edges = {
+        RoadEdge{0, 1, 12, RoadClass::Local, 0},
+        RoadEdge{0, 2, 12, RoadClass::Local, 0},
+        RoadEdge{0, 3, 12, RoadClass::Local, 0},
+        RoadEdge{0, 4, 12, RoadClass::Local, 0},
+    };
+    return buildNavGraph(g);
+}
+
 }  // namespace
+
+TEST_CASE(signal_poles_clear_every_arm_at_an_acute_corner) {
+    // Metro device report: "stoplights show up in the middle of the street and
+    // not on the corners" — every offender stood between two arms meeting at
+    // an acute angle, inside the NEIGHBOUR's carriageway. A pole must clear
+    // every arm at its node by (half-width + curbGap), not just its own.
+    NavGraph nav = acuteCross();
+    StreetFurnitureParams fp;
+    StreetFurniturePlan plan =
+        planStreetFurniture(nav, [](Real, Real) { return Real(0); }, fp);
+    CHECK(plan.signals.size() == 4);
+    int acuteChecked = 0;
+    for (const SignalSpot& s : plan.signals) {
+        const NavLink& L = nav.links[s.link];
+        const Vec2 node = nav.nodes[L.to];
+        const Vec2 base(s.base.x, s.base.z);
+        for (int li = 0; li < nav.linkCount(); ++li) {
+            const NavLink& K = nav.links[li];
+            if (K.from != L.to) continue;              // arms leave the node
+            const Vec2 e = nav.direction(li);
+            const Vec2 q = base - node;
+            const Real along = dot(q, e);
+            if (along <= 0) continue;                  // behind the node
+            const Real perp = std::fabs(e.x * q.y - e.y * q.x);
+            CHECK(perp >= K.width * 0.5 + fp.curbGap - 1e-6);
+            if (li != s.link) ++acuteChecked;
+        }
+        // Still kerb-adjacent on its own arm.
+        const Vec2 d = nav.direction(s.link);
+        const Vec2 right(d.y, -d.x);
+        const Real lateral = dot(base - node, right);
+        CHECK(std::fabs(lateral - (L.width * 0.5 + fp.curbGap)) < 1e-6);
+    }
+    CHECK(acuteChecked > 0);   // the fixture must exercise a neighbour
+}
 
 TEST_CASE(signal_poles_dedupe_collinear_approaches) {
     NavGraph nav = crossWithCollinearStub();

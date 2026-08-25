@@ -60,6 +60,18 @@ StreetFurniturePlan planStreetFurniture(
             armBest.emplace(key, li);
         }
     }
+    // Every ARM at every node — outward unit direction + carriageway half —
+    // from ALL links (an inbound-only one-way arm is not in outLinks).
+    struct Arm { Vec2 dir; Real half; };
+    std::vector<std::vector<Arm>> armsAt(nav.nodes.size());
+    for (int li = 0; li < nav.linkCount(); ++li) {
+        const NavLink& K = nav.links[li];
+        const Vec2 kd = nav.direction(li);
+        if (K.from >= 0 && K.from < static_cast<int>(armsAt.size()))
+            armsAt[K.from].push_back({kd, K.width * Real(0.5)});
+        if (K.to >= 0 && K.to < static_cast<int>(armsAt.size()))
+            armsAt[K.to].push_back({Vec2(-kd.x, -kd.y), K.width * Real(0.5)});
+    }
     for (const auto& kv : armBest) {
         const int li = kv.second;
         const NavLink& L = nav.links[li];
@@ -78,9 +90,43 @@ StreetFurniturePlan planStreetFurniture(
         // the asphalt. Laterally the pole hugs the kerb on the sidewalk band;
         // the street_kit mast arm (4.2 m) then reaches over the near lane,
         // which is the whole point of the arm.
-        Vec2 corner =
-            node - d * (crossHalf + p.sidewalkWidth + spread + p.curbGap) +
-            right * (thisHalf + p.curbGap);
+        const Real w = thisHalf + p.curbGap;
+        Real t = crossHalf + p.sidewalkWidth + spread + p.curbGap;
+        // ACUTE-CORNER CLEARANCE (device, metro: "stoplights show up in the
+        // middle of the street and not on the corners"). The back-off above
+        // assumes a right-angle cross: it clears the pad DISC and hugs the
+        // pole's OWN kerb, but says nothing about the NEIGHBOURING arm. Where
+        // two arms meet at an acute angle the neighbour's carriageway sweeps
+        // through the "corner" — at 60 degrees the pole stood ~5.5 m from
+        // its centreline, inside a 6 m half-width, squarely on the pad. The
+        // kerb corner of an acute block is FURTHER back along the approach
+        // (the same reason road_net's acute-pair trim extends a body until
+        // its centreline clears the sibling's ribbon), so: walk the pole back
+        // along its own kerb line until it clears EVERY arm at the node by
+        // (that arm's half + curbGap). Per arm the clearance |a t + b| < h is
+        // one interval in t; raising t past one arm's interval can land in
+        // another's, so iterate to a fixed point (a few passes suffice).
+        const std::vector<Arm>& arms = armsAt[L.to];
+        for (int pass = 0; pass < 4; ++pass) {
+            Real tNext = t;
+            for (const Arm& arm : arms) {
+                // P(t) - node = (-d) t + right w; perp to arm = a t + b.
+                const Real a = arm.dir.x * (-d.y) - arm.dir.y * (-d.x);
+                const Real b = (arm.dir.x * right.y - arm.dir.y * right.x) * w;
+                const Real h = arm.half + p.curbGap;
+                if (std::fabs(a) < 1e-6) continue;   // own / opposite arm
+                const Real along = arm.dir.x * (-d.x * t + right.x * w) +
+                                   arm.dir.y * (-d.y * t + right.y * w);
+                if (along <= 0) continue;            // behind the node
+                if (std::fabs(a * t + b) >= h) continue;
+                const Real root = -b / a, halfBad = h / std::fabs(a);
+                tNext = std::max(tNext, root + halfBad);
+            }
+            if (tNext <= t + 1e-9) break;
+            t = std::min(tNext, Real(30.0));         // a fork this sharp is a
+                                                     // gore, not a corner
+        }
+        Vec2 corner = node - d * t + right * w;
         SignalSpot s;
         s.base = Vec3(corner.x, gy(corner.x, corner.y) + L.layer * kLayerLift,
                       corner.y);

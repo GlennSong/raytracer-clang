@@ -28,7 +28,10 @@ struct StreetFurnitureParams {
     // Sidewalk band width (RoadLook::sidewalk): the junction PAD spans
     // verge-to-verge, i.e. carriageway half-width + THIS, so a pole placed
     // without it stands on the pad's asphalt — the "stoplight in the middle
-    // of the road". The kerb-corner pole must back off past the pad mouth.
+    // of the road". The kerb-corner pole must back off past the pad mouth —
+    // and, at an ACUTE corner, further still, until it clears the
+    // neighbouring arm's carriageway too (the metro's organic grid put a
+    // pole inside the neighbour's ribbon at every corner under ~75 degrees).
     Real sidewalkWidth = 3.5;
     // 26 m between lamps: close enough that the 34 m pools OVERLAP rather
     // than leaving a dark gap between every pair (device: "it's pretty dark

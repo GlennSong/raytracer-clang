@@ -26,6 +26,7 @@
 #include "../src/engine/level_loader.h"
 #include "../src/engine/mesh_uploader.h"
 #include "../src/engine/procgen/terrain.h"
+#include "../src/engine/procgen/city/road_net.h"   // RoadEntity (signal census)
 #include "../src/engine/system.h"
 #include "../src/engine/world.h"
 #include "../src/renderer/renderer.h"
@@ -479,3 +480,146 @@ TEST_CASE(metro_ground_probes_adhere_between_the_seams) {
     CHECK(r.off <= r.total * 3 / 100);              // seams stay seams
     CHECK(std::fabs(r.worst) < 20.0);               // bounded by bench depth
 }
+
+// THE SIGNAL CENSUS (device: "why do stoplights show up in the middle of the
+// street and not on the corners?"). planStreetFurniture backs each pole off
+// its nav node by (widest half-width + sidewalk + knot spread + curbGap), and
+// test_street_furniture proves that clears the pad disc on a synthetic cross.
+// This case asks the SHIPPED metro instead: for every pole the loader planted,
+// is its foot inside any drawn junction pad or carriageway ribbon? The pad
+// model here is the mesher's own (road_net.cpp buildRoadNetLattice): disc
+// radius rad[node] = max incident (width/2 + look.sidewalk), and two junctions
+// whose connecting chain is shorter than rad[a]+rad[b]+0.25 fuse into ONE
+// compound pad that also owns the asphalt between them. The nav graph fuses
+// only within NavBuildParams::junctionMergeRadius (7 m) — so a pole planned
+// for the connector of a mesher-merged pair stands in the pad's middle.
+TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const bool loaded =
+        LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+                          view, assets, /*editorMode=*/false);
+    CHECK(loaded);
+    if (!loaded) return;
+
+    Real sidewalk = 0;
+    world.each<engine::RoadEntity>([&](Entity, engine::RoadEntity& net) {
+        sidewalk = std::max(sidewalk, static_cast<Real>(net.look.sidewalk));
+    });
+    const RoadGraph* graph = nullptr;
+    world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph& g) {
+        if (!graph) graph = &g.graph;
+    });
+    const StreetFurniture* sf = nullptr;
+    world.each<engine::StreetFurniture>([&](Entity, engine::StreetFurniture& f) {
+        if (!sf) sf = &f;
+    });
+    CHECK(graph != nullptr);
+    CHECK(sf != nullptr);
+    if (!graph || !sf) return;
+    const RoadGraph& g = *graph;
+    const int N = static_cast<int>(g.nodes.size());
+
+    // The mesher's junction model.
+    std::vector<int> deg(N, 0);
+    std::vector<double> rad(N, 0.0);
+    std::vector<std::vector<int>> adj(N);
+    for (std::size_t ei = 0; ei < g.edges.size(); ++ei) {
+        const RoadEdge& e = g.edges[ei];
+        if (e.a < 0 || e.b < 0 || e.a >= N || e.b >= N) continue;
+        ++deg[e.a]; ++deg[e.b];
+        adj[e.a].push_back(static_cast<int>(ei));
+        adj[e.b].push_back(static_cast<int>(ei));
+        const double r = e.width * 0.5 + sidewalk;
+        rad[e.a] = std::max(rad[e.a], r);
+        rad[e.b] = std::max(rad[e.b], r);
+    }
+    // Chains between junction nodes (walk through degree-2 curve samples);
+    // pairs shorter than rad[a]+rad[b]+0.25 are one COMPOUND pad.
+    struct Pair { int a, b; double len; };
+    std::vector<Pair> compound;
+    for (int v = 0; v < N; ++v) {
+        if (deg[v] < 3) continue;
+        for (int ei : adj[v]) {
+            int prev = v;
+            const RoadEdge* e = &g.edges[ei];
+            int cur = e->a == v ? e->b : e->a;
+            double len = (g.nodes[cur].pos - g.nodes[v].pos).length();
+            int guard = 0;
+            while (deg[cur] == 2 && guard++ < 10000) {
+                int nextEdge = -1;
+                for (int ej : adj[cur]) {
+                    const RoadEdge& f = g.edges[ej];
+                    const int other = f.a == cur ? f.b : f.a;
+                    if (other != prev) { nextEdge = ej; break; }
+                }
+                if (nextEdge < 0) break;
+                const RoadEdge& f = g.edges[nextEdge];
+                const int nxt = f.a == cur ? f.b : f.a;
+                len += (g.nodes[nxt].pos - g.nodes[cur].pos).length();
+                prev = cur; cur = nxt;
+            }
+            if (deg[cur] >= 3 && cur > v && len <= rad[v] + rad[cur] + 0.25)
+                compound.push_back({v, cur, len});
+        }
+    }
+
+    auto distSeg = [](const Vec2& p, const Vec2& a, const Vec2& b) {
+        const Vec2 ab = b - a;
+        const double l2 = ab.lengthSquared();
+        double t = l2 > 1e-12 ? dot(p - a, ab) / l2 : 0.0;
+        t = t < 0 ? 0 : (t > 1 ? 1 : t);
+        return (a + ab * t - p).length();
+    };
+
+    int total = 0, inPad = 0, inCompound = 0, inBody = 0;
+    double worst = 0; Vec2 worstAt(0, 0); const char* worstKind = "";
+    int printed = 0;
+    for (const StreetFurniture::Signal& s : sf->signalPoles) {
+        ++total;
+        const Vec2 p(s.base.x, s.base.z);
+        // (1) inside a junction's own pad disc
+        double padDepth = 0;   // how far INSIDE (positive = in the asphalt)
+        for (int v = 0; v < N; ++v) {
+            if (deg[v] < 3) continue;
+            padDepth = std::max(padDepth, rad[v] - (g.nodes[v].pos - p).length());
+        }
+        // (2) inside the asphalt a compound pad owns between its members
+        double compDepth = 0;
+        for (const Pair& c : compound)
+            compDepth = std::max(compDepth,
+                                 std::min(rad[c.a], rad[c.b]) -
+                                     distSeg(p, g.nodes[c.a].pos, g.nodes[c.b].pos));
+        // (3) inside a body ribbon (carriageway only — the sidewalk band is
+        //     exactly where a pole belongs)
+        double bodyDepth = 0;
+        for (const RoadEdge& e : g.edges) {
+            if (e.a < 0 || e.b < 0 || e.a >= N || e.b >= N) continue;
+            bodyDepth = std::max(bodyDepth,
+                                 e.width * 0.5 - distSeg(p, g.nodes[e.a].pos, g.nodes[e.b].pos));
+        }
+        const char* kind = nullptr;
+        double depth = 0;
+        if (padDepth > 0.05) { kind = "pad"; depth = padDepth; ++inPad; }
+        else if (compDepth > 0.05) { kind = "compound"; depth = compDepth; ++inCompound; }
+        else if (bodyDepth > 0.05) { kind = "carriageway"; depth = bodyDepth; ++inBody; }
+        if (kind) {
+            if (depth > worst) { worst = depth; worstAt = p; worstKind = kind; }
+            if (printed < 8) {
+                ++printed;
+                std::printf("    pole at (%.1f, %.1f): %.2f m inside %s\n",
+                            p.x, p.y, depth, kind);
+            }
+        }
+    }
+    std::printf("    [signals] %d poles: %d in a pad disc, %d in compound asphalt, "
+                "%d in a carriageway; %zu compound pairs; worst %.2f m (%s) at (%.1f, %.1f)\n",
+                total, inPad, inCompound, inBody, compound.size(), worst, worstKind,
+                worstAt.x, worstAt.y);
+    CHECK(total > 50);                                 // the fixture must bite
+    CHECK(inPad + inCompound + inBody == 0);           // every pole on a kerb
+}
+
