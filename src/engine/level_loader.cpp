@@ -47,6 +47,7 @@
 #include "../log.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
+#include <iomanip>
 #include <map>
 #include <memory>
 #include <unordered_map>
@@ -1883,6 +1884,98 @@ static GrownLots growCityLots(
     return g;
 }
 
+// RT_FURNITURE_SVG=<path>: a street map of the unified road graph with every
+// planted pole — the same instrument idea as RT_GROUND_PROBES, for "where did
+// the furniture land?" questions (device: "an svg map of all the city streets
+// and where the planted stoplights and light posts are"). World XZ maps to
+// SVG XY with y = z, so the page reads like the viewer's top-down framing
+// (screen-up = -Z); 1 SVG unit = 1 metre, so a road's stroke IS its width.
+static void writeFurnitureSvg(const std::string& path, const engine::RoadGraph& g,
+                              const engine::StreetFurniturePlan& plan) {
+    if (g.nodes.empty()) return;
+    double minX = 1e30, minZ = 1e30, maxX = -1e30, maxZ = -1e30;
+    for (const engine::RoadNode& n : g.nodes) {
+        minX = std::min(minX, static_cast<double>(n.pos.x));
+        maxX = std::max(maxX, static_cast<double>(n.pos.x));
+        minZ = std::min(minZ, static_cast<double>(n.pos.y));
+        maxZ = std::max(maxZ, static_cast<double>(n.pos.y));
+    }
+    const double pad = 60.0;
+    minX -= pad; minZ -= pad; maxX += pad; maxZ += pad;
+    const double w = maxX - minX, h = maxZ - minZ;
+    std::ofstream out(path);
+    if (!out) {
+        LOG_ERROR << "[furniture] cannot write svg map: " << path;
+        return;
+    }
+    out << std::fixed << std::setprecision(1);
+    out << "<svg xmlns='http://www.w3.org/2000/svg' viewBox='" << minX << " " << minZ
+        << " " << w << " " << h << "' width='" << w << "' height='" << h << "'>\n";
+    out << "<rect x='" << minX << "' y='" << minZ << "' width='" << w << "' height='"
+        << h << "' fill='#f4f1ea'/>\n";
+    auto classColor = [](engine::RoadClass k) {
+        switch (k) {
+            case engine::RoadClass::Freeway:   return "#1f1f1f";
+            case engine::RoadClass::Ramp:      return "#3d3d3d";
+            case engine::RoadClass::Arterial:  return "#5a5a5a";
+            case engine::RoadClass::Collector: return "#7c7c7c";
+            case engine::RoadClass::Local:     return "#a3a3a3";
+            case engine::RoadClass::Alley:     return "#c9c4b8";
+        }
+        return "#a3a3a3";
+    };
+    // Streets: one stroke per edge, width = carriageway, colour = class.
+    // Narrow classes draw last so a local street stays visible where it
+    // meets an arterial.
+    out << "<g stroke-linecap='round' fill='none'>\n";
+    const engine::RoadClass order[] = {
+        engine::RoadClass::Freeway, engine::RoadClass::Ramp, engine::RoadClass::Arterial,
+        engine::RoadClass::Collector, engine::RoadClass::Local, engine::RoadClass::Alley};
+    const int N = static_cast<int>(g.nodes.size());
+    for (engine::RoadClass k : order) {
+        for (const engine::RoadEdge& e : g.edges) {
+            if (e.klass != k || e.a < 0 || e.b < 0 || e.a >= N || e.b >= N) continue;
+            out << "<line x1='" << g.nodes[e.a].pos.x << "' y1='" << g.nodes[e.a].pos.y
+                << "' x2='" << g.nodes[e.b].pos.x << "' y2='" << g.nodes[e.b].pos.y
+                << "' stroke='" << classColor(k) << "' stroke-width='" << e.width
+                << "'/>\n";
+        }
+    }
+    out << "</g>\n";
+    // Lamp posts: amber dots at the pole feet.
+    out << "<g fill='#f2a20c' stroke='none'>\n";
+    for (const Vec3& b : plan.lampBases)
+        out << "<circle cx='" << b.x << "' cy='" << b.z << "' r='1.3'/>\n";
+    out << "</g>\n";
+    // Signal poles: red dot at the foot, a tick toward the traffic the head
+    // faces (so a pole on the wrong corner reads immediately).
+    out << "<g stroke='#d62828' stroke-width='0.9' fill='#d62828'>\n";
+    for (const engine::SignalSpot& s : plan.signals) {
+        out << "<circle cx='" << s.base.x << "' cy='" << s.base.z << "' r='2.2'/>\n";
+        out << "<line x1='" << s.base.x << "' y1='" << s.base.z << "' x2='"
+            << s.base.x + s.face.x * 6.0 << "' y2='" << s.base.z + s.face.z * 6.0
+            << "'/>\n";
+    }
+    out << "</g>\n";
+    // Legend + 200 m scale bar, top-left.
+    const double lx = minX + 20, ly = minZ + 30;
+    out << "<g font-family='sans-serif' font-size='22' fill='#222'>\n";
+    out << "<text x='" << lx << "' y='" << ly << "'>streets by class (stroke = width) \xc2\xb7 "
+        << g.edges.size() << " edges</text>\n";
+    out << "<circle cx='" << lx + 8 << "' cy='" << ly + 30 << "' r='4' fill='#d62828'/>"
+        << "<text x='" << lx + 20 << "' y='" << ly + 37 << "'>signal pole (tick = faces traffic) \xc2\xb7 "
+        << plan.signals.size() << "</text>\n";
+    out << "<circle cx='" << lx + 8 << "' cy='" << ly + 60 << "' r='3' fill='#f2a20c'/>"
+        << "<text x='" << lx + 20 << "' y='" << ly + 67 << "'>lamp post \xc2\xb7 "
+        << plan.lampBases.size() << "</text>\n";
+    out << "<line x1='" << lx << "' y1='" << ly + 92 << "' x2='" << lx + 200 << "' y2='"
+        << ly + 92 << "' stroke='#222' stroke-width='3'/>"
+        << "<text x='" << lx << "' y='" << ly + 118 << "'>200 m</text>\n";
+    out << "</g>\n</svg>\n";
+    LOG_INFO << "[furniture] svg map: " << path << " (" << g.edges.size() << " edges, "
+             << plan.signals.size() << " signals, " << plan.lampBases.size() << " lamps)";
+}
+
 const std::vector<std::string>& LevelLoader::lastLoadedScriptFiles() {
     return g_loadedScriptFiles;
 }
@@ -3609,6 +3702,8 @@ bool LevelLoader::load(const std::string& path,
             sf.lampHeads = fplan.lampHeads;
             for (const engine::SignalSpot& s : fplan.signals)
                 sf.signalPoles.push_back({s.base, s.face, s.link});
+            if (const char* svgPath = std::getenv("RT_FURNITURE_SVG"))
+                writeFurnitureSvg(svgPath, combined, fplan);
 
             auto groupBounds = [&](InstanceGroup& g, Real meshReach) {
                 if (g.transforms.empty()) return;
