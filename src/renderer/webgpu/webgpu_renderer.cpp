@@ -106,6 +106,8 @@ struct GpuGlobals {
     float    cascadeSplit[4];     // far view-space depth of cascades 0..3
     float    shadowParams[4];     // x enabled, y depthBias, z normalBias, w pcfTexels
     float    postParams[4];       // x exposure, y tonemapOp, z contrast, w saturation
+    float    skyMoonDir[4];       // xyz toward the moon, w disc radiance (0 = down)
+    float    skyMoonSun[4];       // xyz TRUE sun direction (lights the disc), w lit fraction
     GpuLight lights[32];
 };
 
@@ -596,6 +598,9 @@ public:
         const ProceduralSky& sky = lighting.sky;
         Vec3 sd = normalize(sky.sunDirection);
         set4(globals_.skySunDir, (float)sd.x, (float)sd.y, (float)sd.z, sky.sunDiscIntensity);
+        Vec3 md = normalize(sky.moonDirection), ts = normalize(sky.sunTrueDirection);
+        set4(globals_.skyMoonDir, (float)md.x, (float)md.y, (float)md.z, sky.moonDiscIntensity);
+        set4(globals_.skyMoonSun, (float)ts.x, (float)ts.y, (float)ts.z, sky.moonIllumination);
         // skySunColor.w doubles as the env mode: >0.5 = sample the bound HDR
         // equirect for the sky + IBL, else the analytic procedural sky.
         set4(globals_.skySunColor, (float)sky.sunColor.x, (float)sky.sunColor.y,

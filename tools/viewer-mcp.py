@@ -149,6 +149,10 @@ def tool_reload(args):
     return send_command("reload", args.get("instance"))
 
 def tool_time_of_day(args):
+    if "day_of_year" in args:
+        return send_command(f"daynight day {args['day_of_year']}", args.get("instance"))
+    if "moon_age" in args:
+        return send_command(f"daynight moon {args['moon_age']}", args.get("instance"))
     if "day_minutes" in args:
         return send_command(f"daynight minutes {args['day_minutes']}",
                             args.get("instance"))
@@ -293,9 +297,13 @@ TOOLS = [
     ("time_of_day", "Set the day/night cycle: hour 0-24 (17.5-18.5 ~ golden "
      "hour, 12 noon), hold/release the cycle (hold freezes the LIGHT while "
      "the sim keeps running — traffic moves, sun stays put), or day_minutes = "
-     "real minutes per full loop (default 30; 0 freezes the sun).",
+     "real minutes per full loop (default 30; 0 freezes the sun); day_of_year "
+     "1-365 sets the calendar (season + moon phase); moon_age holds the moon "
+     "at an age in days (0 new, 7.4 first quarter, 14.8 full, 22.1 last "
+     "quarter) or 'auto' to follow the calendar.",
      {"hour": NUM, "hold": {"type": "boolean"}, "day_minutes": NUM,
-      "instance": STR}, [], tool_time_of_day),
+      "day_of_year": NUM, "moon_age": STR, "instance": STR}, [],
+     tool_time_of_day),
     ("clock", "Read the world clock: sky hour, loop length (real minutes), "
      "today's sunrise/sunset and daylight fraction, solar elevation, and the "
      "citysim's own hour beside it (equal when a cycle is staged — one "

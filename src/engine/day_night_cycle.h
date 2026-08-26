@@ -17,6 +17,10 @@ namespace engine {
 constexpr float kCycleNoonSunIntensity = 5.0f;
 constexpr float kCycleNoonAmbient = 0.34f;
 
+// THE MONTH (device: "give the moon phases — I guess we introduce concepts of
+// a month"): one synodic month, new moon to new moon.
+constexpr double kSynodicMonthDays = 29.530589;
+
 struct DayNightState {
     Vec3  sunDirection;     // normalized, toward the sun (world space)
     Vec3  sunColor;         // directional-light + sky-disc tint (linear)
@@ -41,6 +45,15 @@ struct DayNightState {
     // (vehicle lamps, street lights) must key on solar elevation, or the
     // moon rising would read as daylight and switch every lamp off.
     float solarElevation;
+
+    // THE MOON, as a body: where it is, how much of its face the sun lights,
+    // and how bright its disc should be drawn (0 below the horizon). The sky
+    // shader lights the disc as a sphere from `sunDirection`, so the crescent
+    // faces the sun by construction.
+    Vec3  moonDirection;    // normalized, toward the moon
+    float moonAgeDays;      // 0 = new, kSynodicMonthDays/2 = full
+    float moonIllumination; // lit fraction of the disc, 0..1
+    float moonDiscIntensity;
 };
 
 // Maps a normalized time-of-day to a sun arc and a graded sky/light palette.
@@ -59,6 +72,13 @@ struct DayNightState {
 // Engine frame: +x east, +y up, and the noon sun leans toward +z (the old
 // tilt leaned +z too, so every level's shadows keep falling the way they
 // did). +z is therefore SOUTH here.
+//
+// THE CALENDAR: the day of year turns when the clock wraps midnight (a year
+// counter keeps the day count continuous across New Year), and the MOON
+// rides it — its age since the last new moon sets both its lit fraction and
+// WHERE it is: elongation from the sun along the ecliptic, so a new moon
+// travels with the sun (invisible, up by day), a first quarter sets at
+// midnight, a full moon rises at sunset and is up all night.
 class DayNightCycle {
 public:
     double timeOfDay = 0.35;   // start mid-morning
@@ -70,10 +90,13 @@ public:
     double dayMinutes = 30.0;
     double latitudeDeg = 40.0;   // observer latitude (°N; negative = south)
     int    dayOfYear = 172;      // 1..365; 172 = June 21 (longest day north)
-    // 0 = new moon (nights stay truly dark), 1 = full moon (the default —
-    // moonlit-realistic nights). Scales the moon's intensity only; the disc
-    // rendering for visible phases is deferred.
-    double moonPhase = 1.0;
+    int    year = 0;             // turns with the calendar; keeps the moon continuous
+    // The day of year (in year 0) of a new moon the month is counted from.
+    // 18 = January 18, 2026's new moon.
+    double newMoonDay = 18.0;
+    // Artistic hold on the moon's AGE in days (>= 0); < 0 = follow the
+    // calendar. Replaces the old 0..1 `moonPhase` brightness scalar.
+    double moonLock = -1.0;
     bool   paused    = false;
 
     // Day fraction per real second — derived, never stored (two knobs for
@@ -81,12 +104,23 @@ public:
     // number was the truth).
     double speed() const { return dayMinutes > 0.0 ? 1.0 / (dayMinutes * 60.0) : 0.0; }
     double declinationDeg() const { return declinationForDay(dayOfYear); }
+    // Ecliptic longitude of the sun for the day (0 at the March equinox).
+    double solarLongitudeDeg() const { return solarLongitudeForDay(dayOfYear); }
 
-    // Advance time by dt seconds (no-op when paused), wrapping into [0, 1).
+    // Days since the calendar's origin (year 0, January 1, midnight),
+    // fractional: continuous across midnight and New Year.
+    double absoluteDay() const { return year * 365.0 + (dayOfYear - 1) + timeOfDay; }
+    // Days since the last new moon, [0, kSynodicMonthDays).
+    double moonAgeDays() const;
+    double moonIllumination() const { return illuminationForAge(moonAgeDays()); }
+
+    // Advance time by dt seconds (no-op when paused), wrapping into [0, 1)
+    // and turning the calendar for every midnight crossed.
     void advance(double dt);
 
     DayNightState evaluate() const {
-        return evaluateAt(timeOfDay, latitudeDeg, declinationDeg(), moonPhase);
+        return evaluateAt(timeOfDay, latitudeDeg, declinationDeg(), moonAgeDays(),
+                          solarLongitudeDeg());
     }
     // Where the arc crosses the horizon TODAY, as hours [0, 24). A polar day
     // reports 0 / 24; a polar night 12 / 12.
@@ -95,19 +129,27 @@ public:
     // Fraction of the loop the sun is above the horizon (0.5 = equinox).
     double daylightFraction() const { return daylightFractionFor(latitudeDeg, declinationDeg()); }
 
-    // Stateless evaluation, exposed for testing and reuse.
+    // Stateless evaluation, exposed for testing and reuse. moonAgeDays
+    // defaults to a full moon; solarLongitudeDeg (for the moon's declination)
+    // is derived from the declination when left at the sentinel.
     static DayNightState evaluateAt(double timeOfDay, double latitudeDeg,
                                     double declinationDeg = 0.0,
-                                    double moonPhase = 1.0);
+                                    double moonAgeDays = kSynodicMonthDays * 0.5,
+                                    double solarLongitudeDeg = 1e9);
     // Solar declination for a day of the year (Cooper's approximation:
     // ±23.44° at the solstices, 0 at the equinoxes, within ~1° all year).
     static double declinationForDay(int dayOfYear);
+    static double solarLongitudeForDay(int dayOfYear);
     // Half the day arc in radians: acos(-tan(lat) tan(dec)), clamped to
     // [0, π] for polar night/day.
     static double halfDayArc(double latitudeDeg, double declinationDeg);
     static double daylightFractionFor(double latitudeDeg, double declinationDeg);
     static double sunriseHourFor(double latitudeDeg, double declinationDeg);
     static double sunsetHourFor(double latitudeDeg, double declinationDeg);
+    // Lit fraction of the disc for an age: (1 - cos(elongation)) / 2.
+    static double illuminationForAge(double ageDays);
+    // "New", "Waxing crescent", "First quarter", ... "Waning crescent".
+    static const char* phaseName(double ageDays);
 };
 
 }  // namespace engine

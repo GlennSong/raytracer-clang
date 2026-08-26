@@ -3685,6 +3685,7 @@ bool LevelLoader::load(const std::string& path,
         dc.speed = dn.value("speed", dc.speed);   // legacy days/sec
         dc.latitude = dn.value("latitude", dc.latitude);
         dc.dayOfYear = dn.value("dayOfYear", dc.dayOfYear);
+        dc.newMoonDay = dn.value("newMoonDay", dc.newMoonDay);
         world.add<DayNightConfig>(world.create(), dc);
     }
 

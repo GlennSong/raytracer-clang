@@ -460,6 +460,7 @@ struct DayNightConfig {
     float speed = -1.0f;
     float latitude = -1000.0f; // degrees north; < -90 = keep the default
     int dayOfYear = -1;        // 1..365 (season); < 1 = keep the default
+    float newMoonDay = -1.0f;  // day of year of a new moon (the month); < 0 = default
 };
 
 struct CitySimConfig {

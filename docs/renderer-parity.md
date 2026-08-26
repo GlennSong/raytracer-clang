@@ -64,6 +64,7 @@ in `src/renderer/vulkan/` and what has been confirmed on the Windows/RTX 3060.
 | Feature | Metal | Vulkan | Notes |
 | --- | --- | --- | --- |
 | Procedural sky + day/night + FBM clouds | ✅ | ✅ | `sky.frag`; part of the verified arena render. |
+| Moon disc with phases (the month) | 🟡 | ✅ | 2026-08-26: `moonDisc` — a sphere disc lit from the TRUE sun (`skyMoonDir`/`skyMoonSun` globals), crescent/quarter/full by construction, earthshine floor, glow ∝ lit fraction. Vulkan device-run on the metro (reference); `environment.metal` (both the procedural and scattering paths) and `mesh.wgsl` mirror it, uncompiled here. |
 | HDR equirectangular environment | ✅ | 🟡 | Vulkan samples the equirect directly (`uploadTextureHDR`); unverified. |
 | IBL: irradiance + GGX-prefilter + BRDF LUT | ✅ | ⚠️ | **BRDF LUT done** (🟡, baked split-sum at set 0 binding 3, used by `mesh.frag`). Irradiance + GGX-prefilter still use the analytic sky/equirect approximation — the baked prefiltered + irradiance cubes are the next IBL stage. |
 | Reflection probes (parallax) | ✅ | ❌ | `setReflectionProbes` is a no-op in Vulkan. **Parity gap.** |

@@ -27,6 +27,8 @@ struct Globals {
   cascadeSplit   : vec4<f32>,      // far view-space depth of cascades 0..3
   shadowParams   : vec4<f32>,      // x enabled, y depthBias, z normalBias, w pcfTexels
   postParams     : vec4<f32>,      // x exposure, y tonemapOp, z contrast, w saturation
+  skyMoonDir     : vec4<f32>,      // xyz toward the moon, w disc radiance (0 = down)
+  skyMoonSun     : vec4<f32>,      // xyz TRUE sun direction (lights the disc), w lit fraction
   lights         : array<Light, 32>,
 };
 struct DrawData {
@@ -207,6 +209,35 @@ fn distanceAttenuation(dist : f32, range : f32) -> f32 {
   let window = clamp(1.0 - ratio2 * ratio2, 0.0, 1.0);
   return window * window / max(dist * dist, 1e-4);
 }
+// The moon (the month): a sphere disc lit from the TRUE sun — mirrors
+// moonDisc in shaders/vulkan/sky.frag (the verified reference).
+const MOON_RADIUS : f32 = 0.026;
+fn moonDisc(dir : vec3<f32>) -> vec3<f32> {
+  let I = g.skyMoonDir.w;
+  if (I <= 0.0) { return vec3<f32>(0.0); }
+  let m = normalize(g.skyMoonDir.xyz);
+  let sun = normalize(g.skyMoonSun.xyz);
+  let illum = g.skyMoonSun.w;
+  let cosM = dot(dir, m);
+  let moonTint = vec3<f32>(0.86, 0.88, 0.95);
+  var col = moonTint * pow(max(cosM, 0.0), 300.0) * 0.08 * I * illum;
+  let cosR = cos(MOON_RADIUS);
+  if (cosM < cosR - 0.0004) { return col; }
+  var ref = vec3<f32>(0.0, 1.0, 0.0);
+  if (abs(m.y) >= 0.98) { ref = vec3<f32>(1.0, 0.0, 0.0); }
+  let right = normalize(cross(m, ref));
+  let up = cross(right, m);
+  let off = dir - m * cosM;
+  let uv = vec2<f32>(dot(off, right), dot(off, up)) / sin(MOON_RADIUS);
+  let r2 = dot(uv, uv);
+  let edge = 1.0 - smoothstep(0.92, 1.02, sqrt(r2));
+  let w = sqrt(max(1.0 - r2, 0.0));
+  let n = right * uv.x + up * uv.y - m * w;
+  let lit = max(dot(n, sun), 0.0);
+  col += moonTint * I * (lit + 0.012) * edge;
+  return col;
+}
+
 // Procedural-sky environment (no clouds — never baked into IBL). Ported from
 // environment.metal sampleEnvironment; an analytic stand-in for baked irradiance.
 fn sampleEnvironment(dir : vec3<f32>) -> vec3<f32> {
@@ -221,6 +252,7 @@ fn sampleEnvironment(dir : vec3<f32>) -> vec3<f32> {
   col += sc * pow(sunDot, 256.0) * 8.0 * disc;
   col += sc * pow(sunDot, 32.0) * 1.0 * disc;
   col += sc * pow(sunDot, 4.0) * 0.15 * disc;
+  col += moonDisc(dir);
   return col;
 }
 

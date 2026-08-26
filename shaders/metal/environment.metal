@@ -10,6 +10,36 @@ float3 sampleEquirect(texture2d<float> envMap, sampler s, float3 dir) {
     return envMap.sample(s, float2(u, v)).rgb;
 }
 
+// THE MOON (the month): a sphere disc lit from the TRUE sun, so the terminator
+// falls where the phase says — a thin crescent hugging the sun's side, a half
+// at the quarters, a full face opposite the sun. Mirrors moonDisc in
+// shaders/vulkan/sky.frag (the verified reference); zero below the horizon.
+constant float kMoonRadius = 0.026;    // radians (~1.5 deg: ~3x real, so the phase reads)
+static float3 moonDisc(float3 dir, device const LightUniforms& env) {
+    float I = env.skyMoonIntensity;
+    if (I <= 0.0) return float3(0.0);
+    float3 m = normalize(env.skyMoonDir);
+    float3 sun = normalize(env.skyMoonSun);
+    float illum = env.skyMoonIllum;
+    float cosM = dot(dir, m);
+    const float3 moonTint = float3(0.86, 0.88, 0.95);
+    float3 col = moonTint * pow(max(cosM, 0.0), 300.0) * 0.08 * I * illum;
+    float cosR = cos(kMoonRadius);
+    if (cosM < cosR - 0.0004) return col;
+    float3 ref = fabs(m.y) < 0.98 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+    float3 right = normalize(cross(m, ref));
+    float3 up = cross(right, m);
+    float3 off = dir - m * cosM;
+    float2 uv = float2(dot(off, right), dot(off, up)) / sin(kMoonRadius);
+    float r2 = dot(uv, uv);
+    float edge = 1.0 - smoothstep(0.92, 1.02, sqrt(r2));
+    float w = sqrt(max(1.0 - r2, 0.0));
+    float3 n = right * uv.x + up * uv.y - m * w;
+    float lit = max(dot(n, sun), 0.0);
+    col += moonTint * I * (lit + 0.012) * edge;
+    return col;
+}
+
 // Procedural sky environment. Colors and the sun arc come from `env` (the day/
 // night state baked into LightUniforms), so dawn→day→dusk→night grade smoothly
 // and the disc fades out as the sun sets. The shader only interpolates; the
@@ -39,6 +69,7 @@ float3 sampleEnvironment(float3 dir, device const LightUniforms& env) {
     // Subtle atmospheric scattering near horizon, tinted by the sun
     float horizonGlow = pow(1.0 - abs(dir.y), 8.0);
     col += sc * horizonGlow * 0.1 * disc;
+    col += moonDisc(dir, env);
 
     return col;
 }
@@ -204,6 +235,7 @@ static float3 scatteringSkyRadiance(float3 dir, texture2d<float> skyViewLut,
         col += env.skySunColor * env.skySunIntensity * t *
                (core * 2.0 + skirt * 0.35);
     }
+    col += moonDisc(dir, env);   // the moon over the scattering sky too
     // Half-float ceiling: the disc + aureole can sum past 65504 and the HDR
     // target folds the overflow into a BLACK sun (measured: a dark disc at
     // the sun's spot). Clamp comfortably under the format's edge.

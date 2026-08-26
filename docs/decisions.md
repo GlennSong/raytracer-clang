@@ -860,6 +860,14 @@ ship. AGENTS.md is updated to state the refined rule.
   held sky holds the sim clock, and sleepers are re-rated across rate changes
   (`city_clock_follows_the_sky_in_lockstep`,
   `sleepers_wake_on_their_hour_whatever_the_rate_did`).
+  *The month (same day):* the day of year turns when the clock wraps (a year
+  counter keeps the count continuous) and the moon is a body of its own —
+  age since a new-moon epoch → lit fraction, brightness (∝ lit²), and
+  position (hour angle lags the sun by the elongation; declination from the
+  ecliptic), so phases have the right rise/set times. Every sky shader draws
+  the disc as a sphere lit from the TRUE sun (`skyMoonDir`/`skyMoonSun` in
+  the globals; `moonDisc` in sky.frag, environment.metal, mesh.wgsl —
+  Vulkan verified live, Metal/WebGPU mirrored, unverified).
 - Procedural **clouds — first pass** (step 3): an FBM noise layer painted on the
   sky dome (`applyClouds`/`cloudFbm` in `phong.metal`), drifted over time and
   shaded against the active sun (sunlit tops, dark night silhouettes, warm at

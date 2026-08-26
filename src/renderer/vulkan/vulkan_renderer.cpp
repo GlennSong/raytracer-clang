@@ -114,6 +114,12 @@ struct GlobalsUBO {
     float    shadowTint[4];          // rgb artistic shadow tint, w ambientStrength
     float    wind1[4];               // xyz wind direction, w wind time (seconds)
     float    wind2[4];               // x frequency, y height, z amplitude (FLAG_WIND)
+    // The moon (the month): xyz toward the moon, w disc radiance scale (0 =
+    // below the horizon); xyz the TRUE sun direction the disc is lit from
+    // (skySunDir carries the active light — the moon itself at night), w
+    // lit fraction. Read by sky.frag only.
+    float    skyMoonDir[4];
+    float    skyMoonSun[4];
 };
 
 // Volumetric-cloud uniforms (mirrors shader_types.h CloudUniforms; every
@@ -5406,6 +5412,8 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
         d[2] = static_cast<float>(v.z); d[3] = w;
     };
     set3(impl->cpuGlobals.skySunDir, sd, sky.sunDiscIntensity);
+    set3(impl->cpuGlobals.skyMoonDir, normalize(sky.moonDirection), sky.moonDiscIntensity);
+    set3(impl->cpuGlobals.skyMoonSun, normalize(sky.sunTrueDirection), sky.moonIllumination);
     set3(impl->cpuGlobals.skySunColor, sky.sunColor, 0.0f);
     set3(impl->cpuGlobals.skyZenith, sky.zenithColor, 0.0f);
     set3(impl->cpuGlobals.skyHorizon, sky.horizonColor, 0.0f);

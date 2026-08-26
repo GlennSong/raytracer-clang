@@ -49,6 +49,10 @@ daynight <hour0-24>|hold|run      # one-shots DayNightSystem consumes; work
 daynight minutes <n>              # loop length in REAL minutes (default 30;
                                   # 0 freezes the sun); the citysim's clock
                                   # follows the cycle's hour and rate
+daynight day <1-365>              # the calendar day: season + moon phase
+daynight moon <age-days>|auto     # hold the moon's age (0 new, 7.4 first
+                                  # quarter, 14.8 full, 22.1 last quarter) or
+                                  # let the calendar drive it
 daynight?                         # the clock as numbers: hour, dayMinutes,
                                   # today's sunrise/sunset, daylight fraction,
                                   # sunY, and the citysim's own hour (sim=)

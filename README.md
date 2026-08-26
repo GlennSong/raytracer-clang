@@ -220,7 +220,13 @@ day-of-year declination, so a summer day at 40° N is 14.8 h of light and
 9.2 h of dark. One full loop takes `dayMinutes` real minutes (default 30 —
 about 18.5 lit, 11.5 dark); the citysim's schedules run on the same clock,
 in lockstep — jumping the hour re-opens the city at that hour, holding the
-sun holds the city's clock.
+sun holds the city's clock. The calendar turns at midnight and the MOON
+rides it: its age since the last new moon (`newMoonDay`, default Jan 18)
+sets its phase, its brightness, and where it is — a new moon travels with
+the sun, a first quarter sets at midnight, a full moon rises at sunset —
+and the sky draws the disc lit from the true sun, so the crescent faces the
+right way. `daynight day <1-365>` and `daynight moon <age|auto>` on the
+socket; the panel reads the phase.
 A level authors it in its JSON: `"dayNight": {"timeOfDay": 0.35,
 "dayMinutes": 30, "latitude": 40, "dayOfYear": 172}` (`"enabled": false`
 pins the level's static sun). Live: the Debug panel's *Day / Night*

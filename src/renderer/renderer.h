@@ -296,6 +296,14 @@ struct ProceduralSky {
     Vec3  zenithColor{0.25, 0.45, 0.85};
     Vec3  horizonColor{0.6, 0.75, 0.9};
     Vec3  groundColor{0.35, 0.3, 0.25};
+    // THE MOON (the month): a phase-lit sphere disc. The shader shades it
+    // from `sunTrueDirection` — the SUN, not `sunDirection`, which carries
+    // the active light (the moon itself at night) — so the crescent faces the
+    // sun by construction. moonDiscIntensity 0 = below the horizon / none.
+    Vec3  moonDirection{0.0, -1.0, 0.0};
+    Vec3  sunTrueDirection{0.4, 0.8, -0.3};
+    float moonDiscIntensity = 0.0f;
+    float moonIllumination = 1.0f;    // lit fraction (glow scale)
 
     // Procedural FBM clouds (ADR-0016 step 3). A sky-dome visual overlay, never
     // baked into reflection probes. cloudTime is the drift phase in seconds.

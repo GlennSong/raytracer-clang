@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 using namespace engine;
 
@@ -240,16 +241,110 @@ TEST_CASE(day_night_equator_equinox_is_the_symmetric_arc) {
     CHECK_APPROX(rise.sunDirection.z, 0.0, 1e-6);
 }
 
-TEST_CASE(day_night_moon_is_up_exactly_when_the_sun_is_down) {
-    // The antipode: through a long summer night the moon is above the
-    // horizon precisely while the sun is below it, so the night light never
-    // switches off early or lingers into the morning.
+// THE MONTH (device: "give the moon phases — I guess we introduce concepts
+// of a month"). The calendar turns when the clock wraps, a year counter keeps
+// the day count continuous, and the moon's age since the last new moon comes
+// off that count: new moons return every 29.53 days, with a full moon half
+// way between.
+TEST_CASE(day_night_calendar_turns_when_the_clock_wraps) {
+    DayNightCycle c;
+    c.dayMinutes = 1.0 / 60.0;   // a one-second day
+    c.dayOfYear = 365;
+    c.timeOfDay = 0.9;
+    const double before = c.absoluteDay();
+    c.advance(0.2);              // through midnight and New Year
+    CHECK(c.dayOfYear == 1);
+    CHECK(c.year == 1);
+    CHECK_APPROX(c.timeOfDay, 0.1, 1e-9);
+    CHECK_APPROX(c.absoluteDay() - before, 0.2, 1e-9);   // continuous
+    c.advance(3.5);              // three more days and a half
+    CHECK(c.dayOfYear == 4);
+    CHECK_APPROX(c.timeOfDay, 0.6, 1e-9);
+}
+
+TEST_CASE(day_night_new_moon_returns_every_synodic_month) {
+    DayNightCycle c;
+    c.year = 0;
+    c.dayOfYear = 18;            // the default epoch: a new moon
+    c.timeOfDay = 0.0;
+    CHECK_APPROX(c.moonAgeDays(), 0.0, 1e-9);
+    CHECK_APPROX(c.moonIllumination(), 0.0, 1e-9);
+    c.dayOfYear = 18 + 15;       // ~half a month on: near full
+    CHECK(c.moonIllumination() > 0.99);
+    CHECK(std::string(DayNightCycle::phaseName(c.moonAgeDays())) == "Full");
+    c.dayOfYear = 18 + 7;        // first quarter: half lit
+    CHECK_APPROX(c.moonIllumination(), 0.5, 0.06);
+    CHECK(std::string(DayNightCycle::phaseName(c.moonAgeDays())) == "First quarter");
+    c.dayOfYear = 18 + 22;       // last quarter
+    CHECK(std::string(DayNightCycle::phaseName(c.moonAgeDays())) == "Last quarter");
+    // A whole month later it is new again — and across New Year too.
+    c.dayOfYear = 18; c.timeOfDay = 0.0;
+    const double month = kSynodicMonthDays;
+    c.timeOfDay = std::fmod(month, 1.0); c.dayOfYear = 18 + static_cast<int>(month);
+    CHECK_APPROX(c.moonAgeDays(), 0.0, 1e-6);
+    c.year = 1; c.dayOfYear = 18; c.timeOfDay = 0.0;
+    const double ageNextYear = c.moonAgeDays();
+    CHECK_APPROX(ageNextYear, std::fmod(365.0, month), 1e-6);   // 11.1 d, not 0
+    // The artistic hold pins the age whatever the calendar says.
+    c.moonLock = month * 0.5;
+    CHECK_APPROX(c.moonAgeDays(), month * 0.5, 1e-9);
+}
+
+TEST_CASE(day_night_moon_rides_the_month_across_the_sky) {
+    const double full = kSynodicMonthDays * 0.5, quarter = kSynodicMonthDays * 0.25;
+    // NEW: the moon travels with the sun (never more than a few degrees off).
+    for (int i = 0; i < 24; ++i) {
+        DayNightState s = DayNightCycle::evaluateAt(i / 24.0, EQUATOR, EQUINOX, 0.0);
+        CHECK(dot(s.moonDirection, s.sunDirection) > 0.99);
+        CHECK_APPROX(s.moonIllumination, 0.0, 1e-9);
+    }
+    // FULL: the sun's opposite — up all night, down all day.
+    for (int i = 0; i < 24; ++i) {
+        DayNightState s = DayNightCycle::evaluateAt(i / 24.0, EQUATOR, EQUINOX, full);
+        CHECK(dot(s.moonDirection, s.sunDirection) < -0.99);
+        CHECK(s.moonIllumination > 0.999);
+    }
+    // FIRST QUARTER: transits at 18:00 (on the meridian — at an equinox it
+    // rides the ecliptic's solstice point, declination +23.4, so from the
+    // equator it culminates at 66.6 deg, not overhead), sets at midnight;
+    // half lit.
+    DayNightState q18 = DayNightCycle::evaluateAt(0.75, EQUATOR, EQUINOX, quarter);
+    CHECK(std::fabs(q18.moonDirection.x) < 1e-6);   // on the meridian
+    CHECK(q18.moonDirection.y > 0.9);
+    DayNightState q0 = DayNightCycle::evaluateAt(0.0, EQUATOR, EQUINOX, quarter);
+    CHECK(std::fabs(q0.moonDirection.y) < 0.02);
+    CHECK_APPROX(q0.moonIllumination, 0.5, 1e-6);
+    // LAST QUARTER: rises at midnight, transits at 06:00.
+    DayNightState l6 = DayNightCycle::evaluateAt(0.25, EQUATOR, EQUINOX, 3.0 * quarter);
+    CHECK(std::fabs(l6.moonDirection.x) < 1e-6);
+    CHECK(l6.moonDirection.y > 0.9);
+    // The disc is drawn only above the horizon.
+    CHECK(q18.moonDiscIntensity > 1.0f);
+    DayNightState q6 = DayNightCycle::evaluateAt(0.25, EQUATOR, EQUINOX, quarter);
+    CHECK(q6.moonDirection.y < -0.9);
+    CHECK_APPROX(q6.moonDiscIntensity, 0.0, 1e-6);
+}
+
+TEST_CASE(day_night_moonlight_follows_the_phase) {
+    // Midnight at the equator: the full moon lights the night; a quarter
+    // moon has set and lights nothing; a new moon is with the sun.
+    const double full = kSynodicMonthDays * 0.5;
+    DayNightState f = DayNightCycle::evaluateAt(0.0, EQUATOR, EQUINOX, full);
+    CHECK(f.lightIntensity > 0.05f);
+    CHECK_APPROX(f.lightDirection.y, 1.0, 1e-6);
+    DayNightState n = DayNightCycle::evaluateAt(0.0, EQUATOR, EQUINOX, 0.0);
+    CHECK_APPROX(n.lightIntensity, 0.0, 1e-6);
+    // A waxing gibbous at 21:00 (up, three quarters lit) is dimmer than full.
+    DayNightState g = DayNightCycle::evaluateAt(21.0 / 24.0, EQUATOR, EQUINOX, full * 0.75);
+    CHECK(g.moonDirection.y > 0.5);
+    CHECK(g.lightIntensity > 0.0f);
+    CHECK(g.lightIntensity < f.lightIntensity);
+    // The full moon is up exactly when the sun is down, through a long
+    // summer night at 40 N, so the night light never quits early.
     for (int m = 0; m < 24 * 60; m += 7) {
         const double t = (m + 0.5) / (24.0 * 60.0);
-        DayNightState s = DayNightCycle::evaluateAt(t, 40.0, 23.44);
-        const bool sunUp = s.solarElevation > 0.0f;
-        const bool moonIsActive = s.lightDirection.y > 0.0f && s.solarElevation < -0.15f;
-        if (s.solarElevation < -0.15f) CHECK(moonIsActive);
-        if (sunUp) CHECK_APPROX(s.lightDirection.y, s.sunDirection.y, 1e-6);
+        DayNightState s = DayNightCycle::evaluateAt(t, 40.0, 23.44, full, 90.0);
+        if (s.solarElevation < -0.15f) CHECK(s.lightDirection.y > 0.0f);
+        if (s.solarElevation > 0.0f) CHECK_APPROX(s.lightDirection.y, s.sunDirection.y, 1e-6);
     }
 }

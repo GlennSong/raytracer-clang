@@ -25,9 +25,12 @@ void DayNightSystem::onStart(FrameContext& ctx) {
     cycle.latitudeDeg = s.getDouble("daynight.latitude", cycle.latitudeDeg);
     cycle.dayOfYear   = static_cast<int>(
         s.getDouble("daynight.dayOfYear", cycle.dayOfYear));
+    cycle.year        = static_cast<int>(s.getDouble("daynight.year", cycle.year));
     cycle.paused    = s.getBool("daynight.paused", cycle.paused);
-    // 1 = full moon (moonlit-realistic nights), 0 = new moon (true dark).
-    cycle.moonPhase = s.getDouble("daynight.moonPhase", cycle.moonPhase);
+    // The moon follows the calendar (the month); a lock (age in days) is an
+    // artistic hold. The old "daynight.moonPhase" brightness scalar is not
+    // read — its persisted 1.0 would have pinned every night to a full moon.
+    cycle.moonLock = s.getDouble("daynight.moonLock", cycle.moonLock);
 
     cloudsEnabled  = s.getBool("clouds.enabled", cloudsEnabled);
     cloudCoverage  = static_cast<float>(s.getDouble("clouds.coverage", cloudCoverage));
@@ -73,6 +76,8 @@ void DayNightSystem::onStart(FrameContext& ctx) {
              << " dayOfYear=" << cycle.dayOfYear
              << " sunrise=" << cycle.sunriseHour()
              << " sunset=" << cycle.sunsetHour()
+             << " moonAge=" << cycle.moonAgeDays()
+             << " (" << DayNightCycle::phaseName(cycle.moonAgeDays()) << ")"
              << " hdrActive=" << hdrEnvironmentActive(ctx);
 
     if (enabled && levelEnabled && !hdrEnvironmentActive(ctx)) applyLighting(ctx);
@@ -86,8 +91,9 @@ void DayNightSystem::onStop(FrameContext& ctx) {
     s.setDouble("daynight.dayMinutes", cycle.dayMinutes);
     s.setDouble("daynight.latitude", cycle.latitudeDeg);
     s.setDouble("daynight.dayOfYear", cycle.dayOfYear);
+    s.setDouble("daynight.year", cycle.year);
     s.setBool("daynight.paused", cycle.paused);
-    s.setDouble("daynight.moonPhase", cycle.moonPhase);
+    s.setDouble("daynight.moonLock", cycle.moonLock);
 
     s.setBool("clouds.enabled", cloudsEnabled);
     s.setDouble("clouds.coverage", cloudCoverage);
@@ -110,17 +116,23 @@ void DayNightSystem::seedFromConfig(const DayNightConfig& c) {
     else if (c.speed > 0.0f) cycle.dayMinutes = 1.0 / (c.speed * 60.0);   // legacy days/sec
     if (c.latitude >= -90.0f) cycle.latitudeDeg = c.latitude;
     if (c.dayOfYear >= 1) cycle.dayOfYear = c.dayOfYear;
+    if (c.newMoonDay >= 0.0f) cycle.newMoonDay = c.newMoonDay;
 }
 
 void DayNightSystem::publishStatus(FrameContext& ctx, bool active) {
-    char buf[256];
+    char buf[384];
+    const DayNightState st = cycle.evaluate();
     std::snprintf(buf, sizeof(buf),
                   "hour=%.4f tod=%.6f dayMinutes=%.2f sunrise=%.3f sunset=%.3f "
-                  "daylight=%.3f latitude=%.1f dayOfYear=%d sunY=%.3f paused=%d "
-                  "active=%d",
+                  "daylight=%.3f latitude=%.1f dayOfYear=%d year=%d sunY=%.3f "
+                  "moonAge=%.2f moonIllum=%.3f moonY=%.3f moonX=%.3f moonZ=%.3f "
+                  "moonDisc=%.2f phase=%s paused=%d active=%d",
                   cycle.timeOfDay * 24.0, cycle.timeOfDay, cycle.dayMinutes,
                   cycle.sunriseHour(), cycle.sunsetHour(), cycle.daylightFraction(),
-                  cycle.latitudeDeg, cycle.dayOfYear, ctx.view.lighting.solarElevation,
+                  cycle.latitudeDeg, cycle.dayOfYear, cycle.year,
+                  ctx.view.lighting.solarElevation, st.moonAgeDays, st.moonIllumination,
+                  st.moonDirection.y, st.moonDirection.x, st.moonDirection.z,
+                  st.moonDiscIntensity, DayNightCycle::phaseName(st.moonAgeDays),
                   cycle.paused ? 1 : 0, active ? 1 : 0);
     ctx.settings.setString("daynight.status", buf);
 }
@@ -228,6 +240,21 @@ void DayNightSystem::update(FrameContext& ctx) {
             cycle.dayMinutes = setMinutes;
             cs.setDouble("daynight.setMinutes", -1.0);
         }
+        // `daynight day <1-365>`: the calendar day (season + moon follow).
+        const double setDay = cs.getDouble("daynight.setDay", -1.0);
+        if (setDay >= 1.0) {
+            cycle.dayOfYear = static_cast<int>(setDay);
+            cs.setDouble("daynight.setDay", -1.0);
+            enabled = true;
+        }
+        // `daynight moon <age-days>|auto`: hold the moon's age, or free it.
+        // -2 = auto (the calendar), since -1 is the consumed sentinel.
+        const double setMoon = cs.getDouble("daynight.setMoon", -1.0);
+        if (setMoon >= 0.0 || setMoon <= -2.0) {
+            cycle.moonLock = setMoon >= 0.0 ? setMoon : -1.0;
+            cs.setDouble("daynight.setMoon", -1.0);
+            enabled = true;
+        }
         // `set clouds.<knob> <v>` then `clouds.apply 1`: re-read the cloud
         // deck live (coverage/density/scale/wind/enabled are otherwise
         // state-entry-only, which made "why is the sky so heavy" answerable
@@ -308,6 +335,11 @@ void DayNightSystem::applyLighting(FrameContext& ctx) {
     lit.sky.sunDirection     = st.lightDirection;
     lit.sky.sunColor         = st.lightColor;
     lit.sky.sunDiscIntensity = st.skyDiscIntensity;
+    // The moon as a drawn body (the month): lit by the TRUE sun.
+    lit.sky.moonDirection     = st.moonDirection;
+    lit.sky.sunTrueDirection  = st.sunDirection;
+    lit.sky.moonDiscIntensity = st.moonDiscIntensity;
+    lit.sky.moonIllumination  = st.moonIllumination;
     lit.sky.zenithColor      = st.zenithColor;
     lit.sky.horizonColor     = st.horizonColor;
     lit.sky.groundColor      = st.groundColor;
@@ -432,6 +464,27 @@ void DayNightSystem::render(FrameContext& ctx) {
         if (ImGui::SliderInt("Day of year", &doy, 1, 365)) {
             cycle.dayOfYear = doy;
             if (enabled) applyLighting(ctx);
+        }
+        // The month: the moon's age from the calendar, or a held age.
+        {
+            const double age = cycle.moonAgeDays();
+            ImGui::Text("Moon: %s, %.0f%% lit, age %.1f d (year %d)",
+                        DayNightCycle::phaseName(age), cycle.moonIllumination() * 100.0,
+                        age, cycle.year);
+            bool locked = cycle.moonLock >= 0.0;
+            if (ImGui::Checkbox("Hold moon##moonlock", &locked)) {
+                cycle.moonLock = locked ? age : -1.0;
+                if (enabled) applyLighting(ctx);
+            }
+            if (locked) {
+                ImGui::SameLine();
+                float held = static_cast<float>(cycle.moonLock);
+                if (ImGui::SliderFloat("Age (days)##moonlock", &held, 0.0f,
+                                       static_cast<float>(kSynodicMonthDays), "%.1f")) {
+                    cycle.moonLock = held;
+                    if (enabled) applyLighting(ctx);
+                }
+            }
         }
         // Readout: 24h clock derived from time-of-day (0.0 == midnight), and
         // today's horizon crossings so the day/night asymmetry is legible.

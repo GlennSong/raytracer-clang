@@ -904,5 +904,13 @@ accounting moved to an unwrapped clock) so a sleeper wakes on its own hour
 whatever the loop did. Gates: `city_clock_follows_the_sky_in_lockstep`,
 `sleepers_wake_on_their_hour_whatever_the_rate_did`.
 
-Still open: `moonPhase` is a scalar (no visible phases); the moon is the
-sun's exact antipode (real moons rise ~50 min later each night).
+The month (same day, "give the moon phases — I guess we introduce concepts
+of a month"): the calendar turns at midnight (`dayOfYear` + `year`), the
+moon's age comes off a new-moon epoch (`newMoonDay`), and it is a body of
+its own — elongation sets its hour angle (rising ~50 min later each night,
+as outside) and ecliptic declination, lit fraction sets its brightness
+(∝ lit²) — with a phase-lit sphere disc in every sky shader. `moonPhase`
+(a 0..1 brightness scalar, persisted as 1.0) is gone; `moonLock` holds an
+age for art. Open: the lunar orbit's 5° tilt and the ~50-min/day drift of
+moonrise from the sun's are approximations of the same formula (no
+eclipses); Metal/WebGPU disc code is mirrored, not run.

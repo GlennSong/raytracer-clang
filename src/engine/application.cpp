@@ -639,7 +639,28 @@ std::string Application::handleControlCommand(const std::string& line) {
         // sim clock is paused (update still runs), which is exactly the
         // "freeze golden hour, keep framing" workflow.
         if (cmd.args.empty())
-            return "err usage: daynight <hour0-24>|hold|run|minutes <n>";
+            return "err usage: daynight <hour0-24>|hold|run|minutes <n>|day <1-365>|moon <age|auto>";
+        if (cmd.args[0] == "day") {
+            // The calendar day: season and the moon's phase follow it.
+            double d;
+            if (cmd.args.size() < 2 || !num(cmd.args[1], d) || d < 1.0 || d > 365.0)
+                return "err usage: daynight day <1-365>";
+            settingsStore.setDouble("daynight.setDay", d);
+            return "ok calendar day staged";
+        }
+        if (cmd.args[0] == "moon") {
+            // Hold the moon at an age in days (0 new, 14.77 full), or `auto`.
+            if (cmd.args.size() < 2) return "err usage: daynight moon <age-days|auto>";
+            double age;
+            if (cmd.args[1] == "auto") {
+                settingsStore.setDouble("daynight.setMoon", -2.0);
+                return "ok moon follows the calendar";
+            }
+            if (!num(cmd.args[1], age) || age < 0.0)
+                return "err usage: daynight moon <age-days|auto>";
+            settingsStore.setDouble("daynight.setMoon", age);
+            return "ok moon age staged";
+        }
         if (cmd.args[0] == "minutes") {
             // The loop length in real minutes (0 freezes the sun).
             double m;
@@ -658,7 +679,7 @@ std::string Application::handleControlCommand(const std::string& line) {
         }
         double hour;
         if (!num(cmd.args[0], hour) || hour < 0.0 || hour >= 24.0)
-            return "err usage: daynight <hour0-24>|hold|run|minutes <n>";
+            return "err usage: daynight <hour0-24>|hold|run|minutes <n>|day <1-365>|moon <age|auto>";
         settingsStore.setDouble("daynight.set", hour);
         return "ok time staged";
     }

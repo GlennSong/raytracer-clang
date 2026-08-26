@@ -158,6 +158,11 @@ struct LightUniforms {
     float skyAtmosRadius;      // atmosphere top radius (m)
     float skyCamHeight;        // camera height above ground the LUT was built at (m)
     float skySunDiscCos;       // cos of the sun's angular radius (disc cutoff)
+    // The moon (the month): a phase-lit sphere disc. skyMoonSun is the TRUE
+    // sun direction the disc is lit from (skySunDir carries the active light
+    // — the moon itself at night); skyMoonIntensity 0 = below the horizon.
+    simd_float3 skyMoonDir;    float skyMoonIntensity;
+    simd_float3 skyMoonSun;    float skyMoonIllum;
 };
 
 // Sky LUT bake (cinematic-sky phase): parameters for the transmittance +
