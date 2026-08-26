@@ -2042,12 +2042,35 @@ void CityRenderSystem::render(engine::FrameContext& ctx) {
 #endif
 }
 
-void CityRenderSystem::adoptWorldClock(const engine::FrameContext& ctx) {
+void CityRenderSystem::adoptWorldClock(engine::FrameContext& ctx) {
     const auto& lit = ctx.view.lighting;
     if (lit.clockHours < 0.0f) return;                       // no cycle staged
-    if (worldClockHour_ < 0.0) worldClockHour_ = lit.clockHours;   // opening hour, once
-    worldClockRate_ = lit.clockHoursPerSecond;
-    if (built_) params_.hoursPerSecond = worldClockRate_;
+    // A jump's re-seed is drawn by this frame's last fixed step (the bake
+    // cadence below); nothing to force here.
+    setWorldClock(lit.clockHours, lit.clockHoursPerSecond);
+}
+
+bool CityRenderSystem::setWorldClock(Real hour, Real hoursPerSecond) {
+    if (hour < 0.0) return false;
+    worldClockRate_ = hoursPerSecond;
+    if (!built_) {                     // build() opens the day at this hour
+        worldClockHour_ = hour;
+        return false;
+    }
+    params_.hoursPerSecond = hoursPerSecond;
+    // Equal rates never drift (sky and sim advance per fixed step), so a gap
+    // beyond a few in-world minutes — or half a second of clock, at silly
+    // rates — IS a sky jump.
+    Real gap = std::fabs(hour - sim_.clockHours());
+    if (gap > 12.0) gap = 24.0 - gap;
+    const Real tolerance = std::max(Real(0.05), hoursPerSecond * Real(0.5));
+    if (gap <= tolerance) return false;
+    LOG_INFO << "[citysim] clock jump: sky " << hour << " h, sim "
+             << sim_.clockHours() << " h — re-seeding the population at "
+             << hour << " h";
+    sim_.setHoursPerSecond(hoursPerSecond);
+    sim_.seedFromSchedule(hour);
+    return true;
 }
 
 void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {

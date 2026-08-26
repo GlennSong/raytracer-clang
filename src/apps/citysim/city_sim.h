@@ -121,7 +121,9 @@ struct Agent {
     // until its own day says otherwise, so instead of re-reading the clock every
     // tick it names the sim-second it next needs thinking about and drops out of
     // the active list entirely until then. `wakeAt` < 0 means awake; `sleptAt`
-    // is when it went under, so the dwell clock can be caught up on waking.
+    // is the UNWRAPPED in-world hour it went under (clockTotalHours), so the
+    // dwell clock is caught up exactly on waking whatever the rate did
+    // meanwhile — the sky's loop can be retuned or held under a sleeper.
     //
     // This is why the schedule had to be fixed first: a population that all
     // departs in the same 90 minutes has almost nobody asleep at any moment.
@@ -768,6 +770,14 @@ private:
     Real hoursPerSecond_ = 0.05;
     int sleeping_ = 0;   // agents skipped this step by the scheduled wake
     Real clockHours_ = 6.0;
+    // The clock UNWRAPPED (never reset): the time base for dwell accounting
+    // across sleeps, immune to rate changes and holds. heldSeconds_ counts
+    // sim-seconds spent at rate 0 so sleepers' wake times can be shifted
+    // past a hold on release (rerateSleep).
+    Real clockTotalHours_ = 0;
+    Real heldSeconds_ = 0;
+    Real lastLiveRate_ = 0;   // the rate sleepers' wake times were last valid at
+    void rerateSleep(Real newRate);
     Real simSeconds_ = 0;   // seconds since build — the time base memory decays on
     Real thinkPeriod_ = 0.35;   // reactive re-decide cadence (s), staggered per agent
     bool wander_ = false;       // lab mode: perpetual random trips, no schedule

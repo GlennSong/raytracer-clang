@@ -41,7 +41,11 @@ reload
 set <key> <value...>              # any Settings key (generic escape hatch)
 get <key>
 daynight <hour0-24>|hold|run      # one-shots DayNightSystem consumes; work
-                                  # while the sim clock is paused
+                                  # while the sim clock is paused. LOCKSTEP:
+                                  # an hour jump re-opens the city at that
+                                  # hour (population re-placed from its
+                                  # schedules); hold holds the city's clock
+                                  # too (traffic keeps moving)
 daynight minutes <n>              # loop length in REAL minutes (default 30;
                                   # 0 freezes the sun); the citysim's clock
                                   # follows the cycle's hour and rate

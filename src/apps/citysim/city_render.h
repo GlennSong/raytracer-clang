@@ -194,6 +194,17 @@ public:
     // Advance the sim by `dt` seconds and re-bake every InstanceGroup.
     void step(engine::World& world, Real dt);
 
+    // THE WORLD CLOCK — lockstep with the day/night cycle (device: "I'd like
+    // to keep the simulation in lock step with day night"). Before build: the
+    // hour the city opens at. After: the rate its schedules run at, and a
+    // JUMP — the sky landed more than a few in-world minutes from the sim's
+    // clock — re-places the whole population from its schedules at the new
+    // hour, exactly as the level opens (`daynight 22` IS "open the city at
+    // 22:00"; promoted/possessed cars are skipped, as at build). Rate 0 (a
+    // held sky) holds the clock while the city keeps moving. Returns true
+    // when the population was re-seeded (the host re-bakes the groups).
+    bool setWorldClock(Real hour, Real hoursPerSecond);
+
     bool built() const { return built_; }
     const CitySim& sim() const { return sim_; }
     // R5 physical tier (roads-v2.1): agents whose RENDER truth is a Jolt
@@ -479,14 +490,14 @@ private:
     // the documented fallback rather than every such context driving in the
     // dark with its headlights off.
     bool solarStaged_ = false;
-    // THE WORLD CLOCK from a staged day/night cycle (lighting.clockHours):
-    // the hour is taken ONCE, before build, so the city opens under the sky
-    // it sees; the rate is refreshed every step (a live `daynight minutes`
-    // edit re-rates the commuters too). -1 / 0 until a cycle is staged; the
-    // level's own citysim clock stands where none ever is.
+    // THE WORLD CLOCK from a staged day/night cycle (lighting.clockHours),
+    // via setWorldClock: the latest sky hour before build is where the city
+    // opens; after build the rate is refreshed every step and a jump
+    // re-seeds. -1 / 0 until a cycle is staged; the level's own citysim
+    // clock stands where none ever is.
     Real worldClockHour_ = -1.0;
     Real worldClockRate_ = 0.0;
-    void adoptWorldClock(const engine::FrameContext& ctx);
+    void adoptWorldClock(engine::FrameContext& ctx);
     bool carsExternallyOwned_ = false;   // ADR-0062: a CityVehicleSystem owns the cars
     bool pedsExternallyOwned_ = false;   // ADR-0062: a CityWalkerSystem owns the peds
     std::vector<ExternalAgentPose> externalCarPoses_;   // real car poses for widgets

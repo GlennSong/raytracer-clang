@@ -261,6 +261,7 @@ void DayNightSystem::update(FrameContext& ctx) {
     // edits live even while the simulation is paused.
     const bool active = enabled && levelEnabled && !hdrEnvironmentActive(ctx);
     if (active) applyLighting(ctx);
+    else ctx.view.lighting.clockHours = -1.0f;   // no clock staged: the sim keeps its own
     publishStatus(ctx, active);
     applyClouds(ctx);
     applyNightGlow(ctx);   // even with the cycle off: static dusk levels glow
@@ -297,11 +298,12 @@ void DayNightSystem::applyLighting(FrameContext& ctx) {
     // THE WORLD CLOCK (one clock, not two): the citysim bridge opens its day
     // at this hour and runs its schedules at this rate, so rush hour happens
     // under a morning sky and a 30-minute day is 30 minutes for the commuters
-    // too. Rate stays published through an artistic hold — the held sun is
-    // a lighting choice, the city keeps living (its clock drifts from the
-    // sky until `run`; documented).
+    // too — in LOCKSTEP: a `daynight <hour>` jump re-opens the city at that
+    // hour, and a held sun (rate 0 here) holds the city's clock while the
+    // traffic keeps moving (CityRenderSystem::setWorldClock).
     lit.clockHours = static_cast<float>(cycle.timeOfDay * 24.0);
-    lit.clockHoursPerSecond = static_cast<float>(cycle.speed() * 24.0);
+    lit.clockHoursPerSecond =
+        static_cast<float>(cycle.paused ? 0.0 : cycle.speed() * 24.0);
 
     lit.sky.sunDirection     = st.lightDirection;
     lit.sky.sunColor         = st.lightColor;

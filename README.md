@@ -218,7 +218,9 @@ length. Full verb list in `docs/control-channel.md`.
 The sun is real geometry (`src/engine/day_night_cycle.h`): latitude plus a
 day-of-year declination, so a summer day at 40° N is 14.8 h of light and
 9.2 h of dark. One full loop takes `dayMinutes` real minutes (default 30 —
-about 18.5 lit, 11.5 dark); the citysim's schedules run on the same clock.
+about 18.5 lit, 11.5 dark); the citysim's schedules run on the same clock,
+in lockstep — jumping the hour re-opens the city at that hour, holding the
+sun holds the city's clock.
 A level authors it in its JSON: `"dayNight": {"timeOfDay": 0.35,
 "dayMinutes": 30, "latitude": 40, "dayOfYear": 172}` (`"enabled": false`
 pins the level's static sun). Live: the Debug panel's *Day / Night*

@@ -856,6 +856,10 @@ ship. AGENTS.md is updated to state the refined rule.
   (static-sun levels, HDR, headless). Measured, not asserted: `daynight?` on
   the control channel reports both clocks; `tests/test_day_night.cpp` steps
   30 real minutes at 60 Hz back to the start and censuses the lit minutes.
+  Lockstep (same day): a sky jump re-seeds the population at the new hour, a
+  held sky holds the sim clock, and sleepers are re-rated across rate changes
+  (`city_clock_follows_the_sky_in_lockstep`,
+  `sleepers_wake_on_their_hour_whatever_the_rate_did`).
 - Procedural **clouds — first pass** (step 3): an FBM noise layer painted on the
   sky dome (`applyClouds`/`cloudFbm` in `phong.metal`), drifted over time and
   shaded against the active sun (sunlit tops, dark night silhouettes, warm at

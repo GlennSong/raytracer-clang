@@ -1330,3 +1330,60 @@ TEST_CASE(fleet_bridge_reports_no_promotable_body_without_a_script) {
     CHECK(city.carWheels(0).empty());
 }
 
+// LOCKSTEP WITH THE SKY (device: "I'd like to keep the simulation in lock
+// step with day night"). The city opens at the sky's hour, runs at the sky's
+// rate, follows a sky JUMP by re-placing everyone from their schedules at the
+// new hour, and holds its clock while the sky is held.
+TEST_CASE(city_clock_follows_the_sky_in_lockstep) {
+    StubUploader up;
+    AssetManager assets(up);
+    World world;
+    world.add<RoadEntity>(world.create(), squareLoop());
+    CityRenderParams p = cityParams();
+    p.cars = 12;
+    p.pedestrians = 8;
+    p.hoursPerSecond = 0.05;   // the level's own clock: overridden by the sky's
+    p.startHour = 10.5;
+    CityRenderSystem city(p);
+    CHECK(!city.setWorldClock(6.0, 3.0));       // staged before build: opens here
+    CHECK(city.build(world, &assets));
+    CHECK_APPROX(city.sim().timeOfDay(), 6.0, 1e-6);
+    for (int i = 0; i < 10; ++i) city.step(world, 0.1);   // 1 s at 3 h/s
+    CHECK_APPROX(city.sim().timeOfDay(), 9.0, 1e-6);       // the sky's rate, not 0.05
+
+    // A JUMP: the sky goes to 22:00. The sim re-seeds at 22:00 and every
+    // resting AI agent is where its own schedule puts it at that hour. At a
+    // LIVABLE rate: at 3 h/s a one-minute commute is 180 in-world hours and
+    // the whole city is "in flight" all day (the first cut checked 0 agents).
+    CHECK(city.setWorldClock(22.0, 0.005));
+    CHECK_APPROX(city.sim().timeOfDay(), 22.0, 1e-6);
+    int checked = 0, agree = 0;
+    for (const Agent& a : city.sim().agents()) {
+        if (a.playerControlled || a.released || a.home == a.work) continue;
+        const CitySim::Snapshot s = city.sim().scheduleSnapshot(a, 22.0);
+        Agent::Activity want;
+        if (s.where == CitySim::Snapshot::Where::AtHome) want = Agent::Activity::AtHome;
+        else if (s.where == CitySim::Snapshot::Where::AtWork) want = Agent::Activity::AtWork;
+        else continue;   // in flight: placed a measured distance along the trip
+        ++checked;
+        if (a.activity == want) ++agree;
+    }
+    std::printf("    [lockstep] %d/%d resting agents where 22:00 puts them\n",
+                agree, checked);
+    CHECK(checked > 0);
+    CHECK(agree == checked);
+    // Drift inside the tolerance is not a jump (no re-seed churn).
+    CHECK(!city.setWorldClock(22.01, 0.005));
+    CHECK_APPROX(city.sim().timeOfDay(), 22.0, 1e-6);
+
+    // A HELD sky: rate 0 holds the clock; the sim itself keeps running.
+    CHECK(!city.setWorldClock(22.0, 0.0));
+    const Real before = city.sim().seconds();
+    for (int i = 0; i < 10; ++i) city.step(world, 0.1);
+    CHECK_APPROX(city.sim().timeOfDay(), 22.0, 1e-6);
+    CHECK(city.sim().seconds() > before);
+    // Released: it runs again at the sky's rate from where it was held.
+    CHECK(!city.setWorldClock(22.0, 3.0));
+    for (int i = 0; i < 10; ++i) city.step(world, 0.1);
+    CHECK_APPROX(city.sim().timeOfDay(), 1.0, 1e-6);   // 22 + 3 wraps
+}

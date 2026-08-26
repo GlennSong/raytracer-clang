@@ -6,6 +6,7 @@
 #include "../src/apps/citysim/places.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 using namespace engine;
@@ -459,4 +460,50 @@ TEST_CASE(seeding_respects_the_levels_clock_rate) {
     CHECK(slow < population / 4);
     // ...and the rate genuinely matters, so this cannot pass by accident.
     CHECK(fast > slow);
+}
+
+// A RATE CHANGE UNDER SLEEPING AGENTS (lockstep with the sky: `daynight
+// minutes` retunes the loop, `hold` stops it, `run` releases it). Wake times
+// are sim-seconds derived at the OLD rate; the sleeper must still wake on its
+// own in-world HOUR — slowed ten times, held, then run ten times faster.
+TEST_CASE(sleepers_wake_on_their_hour_whatever_the_rate_did) {
+    NavGraph nav = cityNav();
+    CitySim sim;
+    sim.build(nav, 200, 100, 5);
+    for (int i = 0; i < 6000 && sim.sleepingAgents() == 0; ++i) sim.step(0.1, 0.05);
+    CHECK(sim.sleepingAgents() > 0);
+
+    // A sleeper due between half an hour and a day from now.
+    int idx = -1;
+    Real dueHour = -1;
+    for (std::size_t i = 0; i < sim.agents().size(); ++i) {
+        const Agent& a = sim.agents()[i];
+        if (a.wakeAt < 0 || a.wakeAt <= sim.seconds()) continue;
+        const Real hoursUntil = (a.wakeAt - sim.seconds()) * 0.05;
+        if (hoursUntil < 0.5 || hoursUntil > 20.0) continue;
+        idx = static_cast<int>(i);
+        dueHour = std::fmod(sim.timeOfDay() + hoursUntil, Real(24));
+        break;
+    }
+    CHECK(idx >= 0);
+    if (idx < 0) return;
+    const Real sleptAt0 = sim.agents()[idx].sleptAt;
+
+    for (int i = 0; i < 50; ++i) sim.step(0.1, 0.005);   // ten times slower
+    for (int i = 0; i < 50; ++i) sim.step(0.1, 0.0);     // held
+    CHECK(sim.agents()[idx].wakeAt >= 0);                 // still under
+    CHECK(sim.agents()[idx].sleptAt == sleptAt0);
+    // Released ten times faster: 0.05 h per tick, so within two ticks.
+    Real wokeAt = -1;
+    for (int i = 0; i < 100000 && wokeAt < 0; ++i) {
+        sim.step(0.1, 0.5);
+        const Agent& a = sim.agents()[idx];
+        if (a.wakeAt < 0 || a.sleptAt != sleptAt0) wokeAt = sim.timeOfDay();
+    }
+    CHECK(wokeAt >= 0);
+    Real diff = std::fabs(wokeAt - dueHour);
+    if (diff > 12.0) diff = 24.0 - diff;
+    std::printf("    [rerate] due %.3f h, woke %.3f h (|diff| %.3f h)\n",
+                dueHour, wokeAt, diff);
+    CHECK(diff < 0.15);
 }

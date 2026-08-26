@@ -1213,7 +1213,7 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
     // WAKING. While asleep the agent was skipped entirely, so its dwell clock
     // stopped with it — catch it up before anything reads it.
     if (a.wakeAt >= 0) {
-        a.goalHours += (simSeconds_ - a.sleptAt) * hoursPerSecond_;
+        a.goalHours += clockTotalHours_ - a.sleptAt;   // exact across rate changes
         a.wakeAt = -1;
     }
     const GoalTable& t = goalsFor(a.archetype);
@@ -1271,8 +1271,32 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
     }
     // A stranded agent (work == home) with no dwell waits forever — and that is
     // the cheapest agent in the city, which is exactly right.
-    a.sleptAt = simSeconds_;
+    a.sleptAt = clockTotalHours_;
     a.wakeAt = simSeconds_ + hoursUntil / hoursPerSecond_;
+}
+
+// THE CLOCK'S RATE CHANGED UNDER SLEEPING AGENTS (lockstep with the sky: the
+// day/night loop was retuned, held, or released, and city_render hands the
+// cycle's rate to every step). Wake times are sim-SECONDS derived from
+// hours-until at the OLD rate, so the remaining wait is rescaled; a hold
+// (rate 0) keeps sleepers under (the active-list gate) and the held seconds
+// are handed back on release — an agent wakes on its own HOUR whatever the
+// sky did in between (`sleepers_wake_on_their_hour_whatever_the_rate_did`).
+void CitySim::rerateSleep(Real newRate) {
+    if (newRate == hoursPerSecond_) return;
+    if (newRate <= 0) return;   // entering a hold: the active-list gate keeps them under
+    // The rate the wake times were computed at: the running rate, or — after
+    // a hold — the last live one (a hold's seconds are handed back below, and
+    // a hold that also retuned the loop rescales from THAT rate, not from 0:
+    // the first cut only shifted, and a sleeper woke 6.4 hours late).
+    const Real from = hoursPerSecond_ > 0 ? hoursPerSecond_ : lastLiveRate_;
+    const Real k = from > 0 ? from / newRate : Real(1);
+    for (Agent& a : agents_) {
+        if (a.wakeAt < 0) continue;
+        const Real remaining = (a.wakeAt - simSeconds_) + heldSeconds_;
+        a.wakeAt = simSeconds_ + std::max(Real(0), remaining) * k;
+    }
+    heldSeconds_ = 0;
 }
 
 // Re-seat every agent onto the (new) tables: the first state wearing the
@@ -2536,7 +2560,9 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // Record the rate BEFORE tierPass: waking a dormant agent reconstructs it
     // through scheduleSnapshot, which converts commute seconds into a share of
     // the day and so needs the CURRENT rate, not last step's.
+    rerateSleep(hoursPerSecond);
     hoursPerSecond_ = hoursPerSecond;
+    if (hoursPerSecond > 0) lastLiveRate_ = hoursPerSecond;
     // P4.2: the tier bubble — demote K agents past the outer ring, promote V
     // agents inside the inner one (each with a catch-up tick, so the handoff
     // pose is the exact lane pose). BEFORE the clock advances: a promoted
@@ -2559,13 +2585,20 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     for (std::size_t i = 0; i < agents_.size(); ++i) {
         const Agent& a = agents_[i];
         if (a.far()) continue;
-        if (a.wakeAt >= 0 && simSeconds_ < a.wakeAt) { ++sleeping_; continue; }
+        // A held clock (rate 0) keeps sleepers under: nothing on their
+        // schedule can come due while the day stands still.
+        if (a.wakeAt >= 0 && (hoursPerSecond_ <= 0 || simSeconds_ < a.wakeAt)) {
+            ++sleeping_;
+            continue;
+        }
         active_.push_back(static_cast<int>(i));
     }
 
     clockHours_ += dt * hoursPerSecond;
     clockHours_ = std::fmod(clockHours_, 24.0);
     if (clockHours_ < 0) clockHours_ += 24.0;
+    clockTotalHours_ += dt * hoursPerSecond;
+    if (hoursPerSecond <= 0) heldSeconds_ += dt;
     simSeconds_ += dt;   // memory's time base: sightings age and fade against this
     signals_.update(dt);
 

@@ -894,9 +894,15 @@ minute-by-minute census); `SceneLighting` carries `clockHours` +
 `clockHoursPerSecond` and the citysim bridge adopts them at build and every
 step. `daynight?` reports both clocks; `daynight minutes <n>` retunes live.
 
-Still open: `daynight <hour>` jumps the SKY only — the citysim keeps its
-clock (re-seeding the population at the new hour is the honest fix, and it
-teleports everyone); an artistic `hold` lets the sim clock drift from the
-held sun until `run`; `moonPhase` is still a scalar (no visible phases);
-the moon is the sun's exact antipode (real moons rise ~50 min later each
-night).
+Lockstep (same day, "I'd like to keep the simulation in lock step with day
+night"): a `daynight <hour>` jump now re-seeds the population from its
+schedules at the new hour (`CityRenderSystem::setWorldClock`; promoted and
+possessed cars are skipped, as at build), a held sky publishes rate 0 and
+the sim's clock holds while traffic keeps moving, and sleeping agents' wake
+times are re-rated on every rate change (`CitySim::rerateSleep`; dwell
+accounting moved to an unwrapped clock) so a sleeper wakes on its own hour
+whatever the loop did. Gates: `city_clock_follows_the_sky_in_lockstep`,
+`sleepers_wake_on_their_hour_whatever_the_rate_did`.
+
+Still open: `moonPhase` is a scalar (no visible phases); the moon is the
+sun's exact antipode (real moons rise ~50 min later each night).
