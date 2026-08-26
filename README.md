@@ -210,7 +210,19 @@ magick metro.svg -resize 2400x2400 metro.png     # ImageMagick; any SVG viewer w
 ```
 The viewer also opens a control socket (`/tmp/raytracer-viewer-<pid>.sock`,
 path in the log) for scripted captures: `camera x y z pitch yaw` and
-`shot <png-path>` via `nc -U`.
+`shot <png-path>` via `nc -U`; `daynight?` reads the world clock (hour, loop
+length, today's sunrise/sunset) and `daynight minutes <n>` sets the loop
+length. Full verb list in `docs/control-channel.md`.
+
+### Day / night
+The sun is real geometry (`src/engine/day_night_cycle.h`): latitude plus a
+day-of-year declination, so a summer day at 40° N is 14.8 h of light and
+9.2 h of dark. One full loop takes `dayMinutes` real minutes (default 30 —
+about 18.5 lit, 11.5 dark); the citysim's schedules run on the same clock.
+A level authors it in its JSON: `"dayNight": {"timeOfDay": 0.35,
+"dayMinutes": 30, "latitude": 40, "dayOfYear": 172}` (`"enabled": false`
+pins the level's static sun). Live: the Debug panel's *Day / Night*
+header, or `daynight minutes 10` on the control socket.
 
 ---
 

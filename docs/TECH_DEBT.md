@@ -871,3 +871,32 @@ Still open: walkers on sidewalk links now stand at deck height (16 cm
 under the sidewalk top, was 30 cm) — the band's curb height belongs in
 their placement; sim wheels are still baked into the body (no spin/steer),
 which the per-wheel instancing the player's car uses would cure.
+
+### Addendum 2026-08-26 (evening): the day/night loop in real minutes
+
+Device: "the day/night cycle zips by really fast ... 10 min day, 10 min
+night? ... base it more on a real world cadence ... a day-night loop over
+30 min". Three findings, one class — a rate with no unit anybody could
+read: `DayNightCycle::speed = 0.02` days per second is a 50-second day, and
+the same bare number was restated by the settings file, the level JSON, the
+web slider and the ImGui slider, so a stale `daynight.speed` in
+`settings.json` (0.0 on this machine) silently overrode whatever the code
+said. Second: the sun arc was a fixed-tilt circle, 12 h up / 12 h down at
+any setting. Third: the citysim ran its OWN clock (`hoursPerSecond` 0.05,
+an 8-minute day) — the code even says "the two clocks are NOT synced" —
+so rush hour fell at any hour of the light.
+
+Fix: `dayMinutes` (default 30) is the only rate knob and `speed()` is
+derived; the sun is the standard solar model (latitude 40° N, day 172 →
+sunrise 04:35, sunset 19:25, 14.8 h of daylight; `sunriseHour()` /
+`sunsetHour()` / `daylightFraction()` are analytic and unit-tested against a
+minute-by-minute census); `SceneLighting` carries `clockHours` +
+`clockHoursPerSecond` and the citysim bridge adopts them at build and every
+step. `daynight?` reports both clocks; `daynight minutes <n>` retunes live.
+
+Still open: `daynight <hour>` jumps the SKY only — the citysim keeps its
+clock (re-seeding the population at the new hour is the honest fix, and it
+teleports everyone); an artistic `hold` lets the sim clock drift from the
+held sun until `run`; `moonPhase` is still a scalar (no visible phases);
+the moon is the sun's exact antipode (real moons rise ~50 min later each
+night).

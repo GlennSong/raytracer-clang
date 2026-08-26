@@ -840,6 +840,22 @@ ship. AGENTS.md is updated to state the refined rule.
   verification pending* (Linux can't compile the backend); the time-of-day curve
   is covered by `tests/test_day_night.cpp`. A full analytic atmosphere
   (Preetham/Hosek–Wilkie) remains a possible refinement.
+  *Addendum 2026-08-26 — the loop is authored in real minutes, the sun is
+  real geometry, and there is one world clock.* The 0.02 days-per-second
+  default was a 50-second day ("the day/night cycle zips by really fast");
+  `DayNightCycle::dayMinutes` (default 30) is now the only rate knob —
+  `speed()` is derived, never stored, and the persisted `daynight.speed`
+  key is no longer read (a stale value would have silently restored the
+  50-second day). The arc is the standard solar model (latitude + day-of-year
+  declination; defaults 40° N, June 21 → 14.8 h of daylight) instead of a
+  fixed-tilt circle that was always 12 h/12 h — "more daylight than night",
+  as outside. `DayNightSystem` stages the hour and rate beside the sun
+  (`SceneLighting::clockHours`/`clockHoursPerSecond`) and the citysim bridge
+  opens its day at that hour and runs its schedules at that rate; the level's
+  own `citysim.hoursPerSecond`/`startHour` rule only where no cycle is staged
+  (static-sun levels, HDR, headless). Measured, not asserted: `daynight?` on
+  the control channel reports both clocks; `tests/test_day_night.cpp` steps
+  30 real minutes at 60 Hz back to the start and censuses the lit minutes.
 - Procedural **clouds — first pass** (step 3): an FBM noise layer painted on the
   sky dome (`applyClouds`/`cloudFbm` in `phong.metal`), drifted over time and
   shaded against the active sun (sunlit tops, dark night silhouettes, warm at

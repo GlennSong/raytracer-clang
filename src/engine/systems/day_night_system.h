@@ -11,6 +11,8 @@
 
 namespace engine {
 
+struct DayNightConfig;
+
 // Advances a DayNightCycle on SIMULATION time and writes its state into the
 // RenderView's lighting: the procedural sky (skybox + IBL) and the directional
 // sun light stay locked to one time-of-day, so shadows and shading track the
@@ -18,7 +20,8 @@ namespace engine {
 // pause, slow-mo, and single-step with the clock like everything simulated;
 // the panel's edits still apply instantly while paused (update pushes the
 // current state into the view every frame). Settings persist
-// time/speed/enabled; ImGui exposes them under "Day / Night" in debug mode.
+// time/dayMinutes/latitude/dayOfYear/enabled; ImGui exposes them under
+// "Day / Night" in debug mode.
 class DayNightSystem : public System {
 public:
     void onStart(FrameContext& ctx) override;
@@ -34,7 +37,12 @@ private:
     // True when an HDR environment is bound — it owns the lighting, so the cycle
     // must not drive the sun/sky/ambient (see definition in the .cpp).
     bool hdrEnvironmentActive(FrameContext& ctx) const;
-    bool configSeeded_ = false;   // DayNightConfig time/speed applied once
+    bool configSeeded_ = false;   // DayNightConfig seeds applied once
+    void seedFromConfig(const DayNightConfig& c);
+    // `daynight?` on the control channel reads the clock as numbers from
+    // settings ("daynight.status", the weather.status idiom) — the loop's
+    // rate is MEASURED, not trusted: two reads a real minute apart.
+    void publishStatus(FrameContext& ctx, bool active);
 
     DayNightCycle cycle;
     bool enabled = true;   // when off, the level's static sun/sky is left alone

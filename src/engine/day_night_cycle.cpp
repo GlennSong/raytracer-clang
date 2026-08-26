@@ -1,10 +1,15 @@
 #include "day_night_cycle.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace engine {
 
 namespace {
+
+constexpr double kPi = 3.14159265358979323846;
+constexpr double kTwoPi = 2.0 * kPi;
+constexpr double kDeg = kPi / 180.0;
 
 // Hermite smoothstep, clamped — the standard 0→1 ease used throughout.
 double smoothstep(double edge0, double edge1, double x) {
@@ -20,18 +25,50 @@ double mix(double a, double b, double t) { return a + (b - a) * t; }
 
 void DayNightCycle::advance(double dt) {
     if (paused) return;
-    timeOfDay += speed * dt;
+    timeOfDay += speed() * dt;
     timeOfDay -= std::floor(timeOfDay);  // wrap into [0, 1)
 }
 
-DayNightState DayNightCycle::evaluateAt(double timeOfDay, double axisTilt,
-                                        double moonPhase) {
-    const double TWO_PI = 6.283185307179586;
+double DayNightCycle::declinationForDay(int dayOfYear) {
+    // Cooper (1969): δ = 23.44° · sin(2π (284 + N) / 365).
+    const int n = std::clamp(dayOfYear, 1, 365);
+    return 23.44 * std::sin(kTwoPi * (284.0 + n) / 365.0);
+}
 
-    // Sun arc. angle: 0 at sunrise (east, on the horizon), +pi/2 at noon
-    // (overhead), +pi at sunset (west). y < 0 is night (sun below horizon).
-    double angle = (timeOfDay - 0.25) * TWO_PI;
-    Vec3 sunDir = normalize(Vec3(std::cos(angle), std::sin(angle), axisTilt));
+double DayNightCycle::halfDayArc(double latitudeDeg, double declinationDeg) {
+    // cos H0 = -tan φ tan δ; beyond ±1 the sun never sets / never rises.
+    const double c = -std::tan(latitudeDeg * kDeg) * std::tan(declinationDeg * kDeg);
+    return std::acos(std::clamp(c, -1.0, 1.0));
+}
+
+double DayNightCycle::daylightFractionFor(double latitudeDeg, double declinationDeg) {
+    return halfDayArc(latitudeDeg, declinationDeg) / kPi;
+}
+
+double DayNightCycle::sunriseHourFor(double latitudeDeg, double declinationDeg) {
+    return 12.0 - 12.0 * daylightFractionFor(latitudeDeg, declinationDeg);
+}
+
+double DayNightCycle::sunsetHourFor(double latitudeDeg, double declinationDeg) {
+    return 12.0 + 12.0 * daylightFractionFor(latitudeDeg, declinationDeg);
+}
+
+DayNightState DayNightCycle::evaluateAt(double timeOfDay, double latitudeDeg,
+                                        double declinationDeg, double moonPhase) {
+    // Sun position from the solar model. Hour angle H: 0 at local noon,
+    // negative through the morning (sun in the east), +π at midnight.
+    //   up    = sin φ sin δ + cos φ cos δ cos H
+    //   east  = -cos δ sin H
+    //   north = cos φ sin δ - sin φ cos δ cos H
+    // Engine z points SOUTH (see the header), so z = -north: at noon in the
+    // northern hemisphere the sun leans toward +z, as the old tilt did.
+    const double H = (timeOfDay - 0.5) * kTwoPi;
+    const double sp = std::sin(latitudeDeg * kDeg), cp = std::cos(latitudeDeg * kDeg);
+    const double sd = std::sin(declinationDeg * kDeg), cd = std::cos(declinationDeg * kDeg);
+    const double up = sp * sd + cp * cd * std::cos(H);
+    const double east = -cd * std::sin(H);
+    const double north = cp * sd - sp * cd * std::cos(H);
+    Vec3 sunDir = normalize(Vec3(east, up, -north));
     double elev = sunDir.y;  // -1 (deepest night) .. 1 (highest noon)
 
     // Blend weights. day: night→day. dusk: warm band hugging the horizon, gated
@@ -77,8 +114,8 @@ DayNightState DayNightCycle::evaluateAt(double timeOfDay, double axisTilt,
     s.ambient          = static_cast<float>(mix(0.28, 0.34, day));
 
     // --- the moon -----------------------------------------------------------
-    // Opposite the sun's orbit (high at midnight), crossing on the other side
-    // of the tilt so moonlit shadows don't retrace the sun's exactly. True
+    // The sun's antipode: highest at midnight, up whenever the sun is down
+    // (a long summer night's moon is up for its 9 hours, no more). True
     // moonlight is ~1/400000 of sunlight; games that read as "moonlit" sit
     // near 1/50 with adapted exposure (Glenn picked moonlit-realistic:
     // terrain and roads readable, lamps still matter). Measured on the metro
@@ -86,8 +123,7 @@ DayNightState DayNightCycle::evaluateAt(double timeOfDay, double axisTilt,
     // the whole ray) while the ground's single diffuse bounce stayed black —
     // with night exposure adaptation x6, 1/50 puts the ground near 12% of its
     // daytime tonemapped level: dim blue shapes, readable roads.
-    Vec3 moonDir = normalize(Vec3(-std::cos(angle), -std::sin(angle),
-                                  -axisTilt));
+    Vec3 moonDir = Vec3(-sunDir.x, -sunDir.y, -sunDir.z);
     const Vec3 moonColor(0.62, 0.72, 0.95);
     double moonUp = smoothstep(-0.10, 0.20, moonDir.y);
     // The moon waits for true twilight (sun a few degrees down), not golden

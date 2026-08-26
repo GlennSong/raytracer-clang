@@ -387,6 +387,13 @@ struct SceneLighting {
     // this, or the moon rising would read as daylight and switch them off.
     // A static-sun level never writes it; the default matches "sun is up".
     float solarElevation = 1.0f;
+    // THE WORLD CLOCK, staged by DayNightSystem beside the sun: in-world hour
+    // [0,24) and in-world hours per real second. The citysim bridge opens its
+    // day at this hour and runs its schedules at this rate (one clock — rush
+    // hour under a morning sky), keeping its own authored clock only where
+    // no cycle is staged. -1 = none staged.
+    float clockHours = -1.0f;
+    float clockHoursPerSecond = 0.0f;
     // Transient headlight cones (WS3): VehicleSystem clears and refills this
     // every fixed step for lit vehicles nearest the camera (player first);
     // RenderSystem merges them into the frame's lights ON A COPY, like the

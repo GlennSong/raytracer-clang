@@ -403,6 +403,22 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // (persistent) mode is settled; before the warm-up so day one runs on places.
     sim_.assignPlaces(places_, nav_);
 
+    // ONE CLOCK. A staged day/night cycle owns the world's hour and rate:
+    // the sim opens at the sky's hour and its schedules run at the sky's
+    // pace, so a 30-minute day is 30 minutes for the commuters too. The two
+    // clocks used to be unrelated — an 8-minute sim day under a 50-second
+    // sky, rush hour at any hour of the light. The level's authored
+    // citysim.hoursPerSecond/startHour still rule where no cycle is staged:
+    // static-sun levels, HDR environments, headless hosts and the tests.
+    if (worldClockHour_ >= 0.0) {
+        LOG_INFO << "[citysim] clock follows the day/night cycle: opens at "
+                 << worldClockHour_ << " h, " << worldClockRate_
+                 << " h/s (level authored " << params_.startHour << " h, "
+                 << params_.hoursPerSecond << " h/s)";
+        params_.startHour = worldClockHour_;
+        params_.hoursPerSecond = worldClockRate_;
+    }
+
     // IS THERE ENOUGH DAY TO LIVE IN? Agents move at true metres per second
     // while the clock runs at hoursPerSecond, so a journey costs
     // (distance / speed) * hoursPerSecond * 3600 times more of the day than it
@@ -1761,6 +1777,9 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
     // Stage the sun for the bake's car lamps (see solarElevation_).
     solarElevation_ = ctx.view.lighting.solarElevation;
     solarStaged_ = true;
+    // The sim's own hour, for `daynight?` on the control channel: with a
+    // staged cycle it must read the same as the sky's (one clock).
+    ctx.settings.setDouble("citysim.hour", built_ ? sim_.clockHours() : -1.0);
     // Per-frame so the key edge is never missed by the fixed-step tick.
     if (ctx.actions.pressed("agent_widgets")) debugWidgets_ = !debugWidgets_;
     // Semicolon flips the city-plan layer (blocks + lots) — and switches the
@@ -2023,7 +2042,16 @@ void CityRenderSystem::render(engine::FrameContext& ctx) {
 #endif
 }
 
+void CityRenderSystem::adoptWorldClock(const engine::FrameContext& ctx) {
+    const auto& lit = ctx.view.lighting;
+    if (lit.clockHours < 0.0f) return;                       // no cycle staged
+    if (worldClockHour_ < 0.0) worldClockHour_ = lit.clockHours;   // opening hour, once
+    worldClockRate_ = lit.clockHoursPerSecond;
+    if (built_) params_.hoursPerSecond = worldClockRate_;
+}
+
 void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
+    adoptWorldClock(ctx);   // see worldClockHour_: the sky's clock is the city's
     if (!built_) {
         build(ctx.world, &ctx.assets);   // lazy: retry until the level's roads exist
         return;

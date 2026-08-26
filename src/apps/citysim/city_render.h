@@ -479,6 +479,14 @@ private:
     // the documented fallback rather than every such context driving in the
     // dark with its headlights off.
     bool solarStaged_ = false;
+    // THE WORLD CLOCK from a staged day/night cycle (lighting.clockHours):
+    // the hour is taken ONCE, before build, so the city opens under the sky
+    // it sees; the rate is refreshed every step (a live `daynight minutes`
+    // edit re-rates the commuters too). -1 / 0 until a cycle is staged; the
+    // level's own citysim clock stands where none ever is.
+    Real worldClockHour_ = -1.0;
+    Real worldClockRate_ = 0.0;
+    void adoptWorldClock(const engine::FrameContext& ctx);
     bool carsExternallyOwned_ = false;   // ADR-0062: a CityVehicleSystem owns the cars
     bool pedsExternallyOwned_ = false;   // ADR-0062: a CityWalkerSystem owns the peds
     std::vector<ExternalAgentPose> externalCarPoses_;   // real car poses for widgets

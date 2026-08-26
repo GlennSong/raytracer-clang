@@ -638,7 +638,16 @@ std::string Application::handleControlCommand(const std::string& line) {
         // One-shots consumed by DayNightSystem::update — they work while the
         // sim clock is paused (update still runs), which is exactly the
         // "freeze golden hour, keep framing" workflow.
-        if (cmd.args.empty()) return "err usage: daynight <hour0-24>|hold|run";
+        if (cmd.args.empty())
+            return "err usage: daynight <hour0-24>|hold|run|minutes <n>";
+        if (cmd.args[0] == "minutes") {
+            // The loop length in real minutes (0 freezes the sun).
+            double m;
+            if (cmd.args.size() < 2 || !num(cmd.args[1], m) || m < 0.0)
+                return "err usage: daynight minutes <real-minutes-per-day>";
+            settingsStore.setDouble("daynight.setMinutes", m);
+            return "ok day length staged";
+        }
         if (cmd.args[0] == "hold") {
             settingsStore.setDouble("daynight.setPaused", 1.0);
             return "ok cycle held";
@@ -649,9 +658,19 @@ std::string Application::handleControlCommand(const std::string& line) {
         }
         double hour;
         if (!num(cmd.args[0], hour) || hour < 0.0 || hour >= 24.0)
-            return "err usage: daynight <hour0-24>|hold|run";
+            return "err usage: daynight <hour0-24>|hold|run|minutes <n>";
         settingsStore.setDouble("daynight.set", hour);
         return "ok time staged";
+    }
+    if (cmd.name == "daynight?") {
+        // The clock as numbers (DayNightSystem::publishStatus): the sky's
+        // hour, the loop length, today's sunrise/sunset, and the citysim's
+        // own hour beside it — with a staged cycle the two must agree (one
+        // clock). Two reads a real minute apart MEASURE the loop's rate.
+        char buf[48];
+        std::snprintf(buf, sizeof(buf), " sim=%.4f",
+                      settingsStore.getDouble("citysim.hour", -1.0));
+        return "ok " + settingsStore.getString("daynight.status", "no cycle") + buf;
     }
 
     if (cmd.name == "weather") {
@@ -856,7 +875,7 @@ std::string Application::handleControlCommand(const std::string& line) {
 
     return "err unknown command: " + cmd.name +
            " (ping|info|camera|camera?|shot|overlay|sim|reload|set|get|"
-           "daynight|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
+           "daynight|daynight?|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
            "possess|drive_to|walk_to|possess_stop|release|possess?|ground?)";
 }
 

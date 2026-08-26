@@ -112,12 +112,13 @@ EMSCRIPTEN_KEEPALIVE void rt_web_play(int play) {
 
 // Day/night + world controls from the page (the web build has no ImGui). These
 // write settings keys that DayNightSystem re-reads each frame (editor + play).
-// id: 0=timeOfDay [0,1] 1=speed (days/sec) 2=paused(0/1) 3=cycle enabled(0/1).
+// id: 0=timeOfDay [0,1] 1=day length (real minutes per loop; 0 = frozen)
+// 2=paused(0/1) 3=cycle enabled(0/1).
 EMSCRIPTEN_KEEPALIVE void rt_web_env(int id, float v) {
     Settings& s = g_app.settings();
     switch (id) {
         case 0: s.setDouble("daynight.timeOfDay", v); break;
-        case 1: s.setDouble("daynight.speed", v); break;
+        case 1: s.setDouble("daynight.dayMinutes", v); break;
         case 2: s.setBool("daynight.paused", v != 0.0f); break;
         case 3: s.setBool("daynight.enabled", v != 0.0f); break;
         default: break;

@@ -42,6 +42,13 @@ set <key> <value...>              # any Settings key (generic escape hatch)
 get <key>
 daynight <hour0-24>|hold|run      # one-shots DayNightSystem consumes; work
                                   # while the sim clock is paused
+daynight minutes <n>              # loop length in REAL minutes (default 30;
+                                  # 0 freezes the sun); the citysim's clock
+                                  # follows the cycle's hour and rate
+daynight?                         # the clock as numbers: hour, dayMinutes,
+                                  # today's sunrise/sunset, daylight fraction,
+                                  # sunY, and the citysim's own hour (sim=)
+                                  # — equal when a cycle is staged
 weather <clear|fair|overcast|storm|auto|off>
                                   # sky states over the volumetric deck
                                   # (weather_cycle.h): eased in like a front
@@ -96,7 +103,8 @@ land within a frame; `shot` files land a frame later — poll for the file.
 `.mcp.json`. Claude Code spawns it automatically at session start (first use
 asks for approval once). Tools: `viewer_status`, `launch_viewer`,
 `set_camera`, `get_camera`, `screenshot`, `overlay`, `sim`, `reload`,
-`planner_stats`, `time_of_day`, `sun`, `settings_kv`, `render_params`,
+`planner_stats`, `time_of_day` (hour / hold / `day_minutes`), `clock`
+(`daynight?`), `sun`, `settings_kv`, `render_params`,
 `debug_view`, `ledger`, and `viewer_command` (raw protocol line — the escape
 hatch that makes engine verbs usable before the shim relearns them at the
 next session restart).

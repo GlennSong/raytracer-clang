@@ -149,6 +149,9 @@ def tool_reload(args):
     return send_command("reload", args.get("instance"))
 
 def tool_time_of_day(args):
+    if "day_minutes" in args:
+        return send_command(f"daynight minutes {args['day_minutes']}",
+                            args.get("instance"))
     if "hold" in args:
         return send_command(f"daynight {'hold' if args['hold'] else 'run'}",
                             args.get("instance"))
@@ -156,6 +159,9 @@ def tool_time_of_day(args):
 
 def tool_sun(args):
     return send_command("sun?", args.get("instance"))
+
+def tool_clock(args):
+    return send_command("daynight?", args.get("instance"))
 
 def tool_weather(args):
     if "state" not in args:
@@ -285,10 +291,16 @@ TOOLS = [
      "corridor routing) scraped from the instance's captured log.",
      {"instance": STR}, [], tool_planner_stats),
     ("time_of_day", "Set the day/night cycle: hour 0-24 (17.5-18.5 ~ golden "
-     "hour, 12 noon), or hold/release the cycle (hold freezes the LIGHT while "
-     "the sim keeps running — traffic moves, sun stays put).",
-     {"hour": NUM, "hold": {"type": "boolean"}, "instance": STR}, [],
-     tool_time_of_day),
+     "hour, 12 noon), hold/release the cycle (hold freezes the LIGHT while "
+     "the sim keeps running — traffic moves, sun stays put), or day_minutes = "
+     "real minutes per full loop (default 30; 0 freezes the sun).",
+     {"hour": NUM, "hold": {"type": "boolean"}, "day_minutes": NUM,
+      "instance": STR}, [], tool_time_of_day),
+    ("clock", "Read the world clock: sky hour, loop length (real minutes), "
+     "today's sunrise/sunset and daylight fraction, solar elevation, and the "
+     "citysim's own hour beside it (equal when a cycle is staged — one "
+     "clock). Two reads a minute apart measure the loop's rate.",
+     {"instance": STR}, [], tool_clock),
     ("sun", "Probe the live sun: elevation (sunY), intensity, and whether "
      "headlights consider it dark. Numeric golden-hour hunting without "
      "eyeballing screenshots (golden ~ sunY 0.05-0.25).",

@@ -453,7 +453,13 @@ struct AuthoredPlace {
 struct DayNightConfig {
     bool enabled = true;
     float timeOfDay = -1.0f;   // [0,1) start; <0 = keep the cycle's default
-    float speed = -1.0f;       // cycle speed; <0 = keep default
+    // Loop length in REAL MINUTES (the authored knob since the 30-minute
+    // day); <0 = keep the default. `speed` (days per second) is the legacy
+    // spelling, honoured only when dayMinutes is absent.
+    float dayMinutes = -1.0f;
+    float speed = -1.0f;
+    float latitude = -1000.0f; // degrees north; < -90 = keep the default
+    int dayOfYear = -1;        // 1..365 (season); < 1 = keep the default
 };
 
 struct CitySimConfig {

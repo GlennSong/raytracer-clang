@@ -3673,13 +3673,18 @@ bool LevelLoader::load(const std::string& path,
     // Day/night policy (device: "the scene loads bright but everything gets
     // dark when the level starts" — the cycle was overwriting the authored
     // sun + ambient every frame). "dayNight": {"enabled": false} pins the
-    // level's static lighting; {"timeOfDay": .., "speed": ..} seeds the cycle.
+    // level's static lighting; {"timeOfDay": .., "dayMinutes": ..,
+    // "latitude": .., "dayOfYear": ..} seeds the cycle (real minutes per
+    // loop, and where/when on Earth the sun's arc is drawn for).
     if (root.contains("dayNight") && root["dayNight"].is_object()) {
         const auto& dn = root["dayNight"];
         DayNightConfig dc;
         dc.enabled = dn.value("enabled", dc.enabled);
         dc.timeOfDay = dn.value("timeOfDay", dc.timeOfDay);
-        dc.speed = dn.value("speed", dc.speed);
+        dc.dayMinutes = dn.value("dayMinutes", dc.dayMinutes);
+        dc.speed = dn.value("speed", dc.speed);   // legacy days/sec
+        dc.latitude = dn.value("latitude", dc.latitude);
+        dc.dayOfYear = dn.value("dayOfYear", dc.dayOfYear);
         world.add<DayNightConfig>(world.create(), dc);
     }
 

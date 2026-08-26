@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>
@@ -17,7 +18,13 @@ void DayNightSystem::onStart(FrameContext& ctx) {
     auto& s = ctx.settings;
     enabled         = s.getBool("daynight.enabled", enabled);
     cycle.timeOfDay = s.getDouble("daynight.timeOfDay", cycle.timeOfDay);
-    cycle.speed     = s.getDouble("daynight.speed", cycle.speed);
+    // The loop length in REAL MINUTES. The retired "daynight.speed" key is
+    // deliberately NOT read: a stale 0.02 (or 0.0) persisted in settings.json
+    // would silently restore the 50-second day this replaced.
+    cycle.dayMinutes  = s.getDouble("daynight.dayMinutes", cycle.dayMinutes);
+    cycle.latitudeDeg = s.getDouble("daynight.latitude", cycle.latitudeDeg);
+    cycle.dayOfYear   = static_cast<int>(
+        s.getDouble("daynight.dayOfYear", cycle.dayOfYear));
     cycle.paused    = s.getBool("daynight.paused", cycle.paused);
     // 1 = full moon (moonlit-realistic nights), 0 = new moon (true dark).
     cycle.moonPhase = s.getDouble("daynight.moonPhase", cycle.moonPhase);
@@ -49,8 +56,7 @@ void DayNightSystem::onStart(FrameContext& ctx) {
     ctx.world.each<DayNightConfig>([&](Entity, DayNightConfig& c) {
         levelEnabled = c.enabled;
         if (!configSeeded_) {
-            if (c.timeOfDay >= 0.0f) cycle.timeOfDay = c.timeOfDay;
-            if (c.speed >= 0.0f) cycle.speed = c.speed;
+            seedFromConfig(c);
             configSeeded_ = true;
         }
     });
@@ -62,7 +68,11 @@ void DayNightSystem::onStart(FrameContext& ctx) {
              << " levelEnabled=" << levelEnabled
              << " timeOfDay=" << cycle.timeOfDay
              << " paused=" << cycle.paused
-             << " speed=" << cycle.speed
+             << " dayMinutes=" << cycle.dayMinutes
+             << " latitude=" << cycle.latitudeDeg
+             << " dayOfYear=" << cycle.dayOfYear
+             << " sunrise=" << cycle.sunriseHour()
+             << " sunset=" << cycle.sunsetHour()
              << " hdrActive=" << hdrEnvironmentActive(ctx);
 
     if (enabled && levelEnabled && !hdrEnvironmentActive(ctx)) applyLighting(ctx);
@@ -73,7 +83,9 @@ void DayNightSystem::onStop(FrameContext& ctx) {
     auto& s = ctx.settings;
     s.setBool("daynight.enabled", enabled);
     s.setDouble("daynight.timeOfDay", cycle.timeOfDay);
-    s.setDouble("daynight.speed", cycle.speed);
+    s.setDouble("daynight.dayMinutes", cycle.dayMinutes);
+    s.setDouble("daynight.latitude", cycle.latitudeDeg);
+    s.setDouble("daynight.dayOfYear", cycle.dayOfYear);
     s.setBool("daynight.paused", cycle.paused);
     s.setDouble("daynight.moonPhase", cycle.moonPhase);
 
@@ -88,6 +100,29 @@ void DayNightSystem::onStop(FrameContext& ctx) {
     s.setBool("weather.auto", weather.autoMode);
 
     s.save("settings.json");
+}
+
+// Level seeds (DayNightConfig): a level that authors its own day. Applied
+// once; the settings-persisted values stand where the level says nothing.
+void DayNightSystem::seedFromConfig(const DayNightConfig& c) {
+    if (c.timeOfDay >= 0.0f) cycle.timeOfDay = c.timeOfDay;
+    if (c.dayMinutes >= 0.0f) cycle.dayMinutes = c.dayMinutes;
+    else if (c.speed > 0.0f) cycle.dayMinutes = 1.0 / (c.speed * 60.0);   // legacy days/sec
+    if (c.latitude >= -90.0f) cycle.latitudeDeg = c.latitude;
+    if (c.dayOfYear >= 1) cycle.dayOfYear = c.dayOfYear;
+}
+
+void DayNightSystem::publishStatus(FrameContext& ctx, bool active) {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+                  "hour=%.4f tod=%.6f dayMinutes=%.2f sunrise=%.3f sunset=%.3f "
+                  "daylight=%.3f latitude=%.1f dayOfYear=%d sunY=%.3f paused=%d "
+                  "active=%d",
+                  cycle.timeOfDay * 24.0, cycle.timeOfDay, cycle.dayMinutes,
+                  cycle.sunriseHour(), cycle.sunsetHour(), cycle.daylightFraction(),
+                  cycle.latitudeDeg, cycle.dayOfYear, ctx.view.lighting.solarElevation,
+                  cycle.paused ? 1 : 0, active ? 1 : 0);
+    ctx.settings.setString("daynight.status", buf);
 }
 
 // A bound HDR environment owns the sun/sky/ambient (its sun is baked into the
@@ -114,7 +149,7 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
     if (weatherActive) {
         const double dt = ctx.clock.fixedStep();
         if (!cycle.paused)
-            weather.advanceAuto(dt * cycle.speed * 24.0,
+            weather.advanceAuto(dt * cycle.speed() * 24.0,
                                 static_cast<uint32_t>(
                                     ctx.settings.getDouble("weather.seed", 7.0)));
         weather.ease(dt);
@@ -134,7 +169,7 @@ void DayNightSystem::update(FrameContext& ctx) {
     // a non-zero Speed keep animating between drags instead of being pinned.
     auto& ws = ctx.settings;
     enabled      = ws.getBool("daynight.enabled", enabled);
-    cycle.speed  = ws.getDouble("daynight.speed", cycle.speed);
+    cycle.dayMinutes = ws.getDouble("daynight.dayMinutes", cycle.dayMinutes);
     cycle.paused = ws.getBool("daynight.paused", cycle.paused);
     double tod = ws.getDouble("daynight.timeOfDay", cycle.timeOfDay);
     if (tod != webLastTimeOfDay_) { cycle.timeOfDay = tod; webLastTimeOfDay_ = tod; }
@@ -187,6 +222,12 @@ void DayNightSystem::update(FrameContext& ctx) {
             cycle.paused = setHold > 0.5;   // "artistic hold", not the sim clock
             cs.setDouble("daynight.setPaused", -1.0);
         }
+        // `daynight minutes <n>`: the loop length, live (0 freezes the sun).
+        const double setMinutes = cs.getDouble("daynight.setMinutes", -1.0);
+        if (setMinutes >= 0.0) {
+            cycle.dayMinutes = setMinutes;
+            cs.setDouble("daynight.setMinutes", -1.0);
+        }
         // `set clouds.<knob> <v>` then `clouds.apply 1`: re-read the cloud
         // deck live (coverage/density/scale/wind/enabled are otherwise
         // state-entry-only, which made "why is the sky so heavy" answerable
@@ -213,13 +254,14 @@ void DayNightSystem::update(FrameContext& ctx) {
     ctx.world.each<DayNightConfig>([&](Entity, DayNightConfig& c) {
         levelEnabled = c.enabled;
         if (!configSeeded_) {
-            if (c.timeOfDay >= 0.0f) cycle.timeOfDay = c.timeOfDay;
-            if (c.speed >= 0.0f) cycle.speed = c.speed;
+            seedFromConfig(c);
             configSeeded_ = true;
         }
     });
     // edits live even while the simulation is paused.
-    if (enabled && levelEnabled && !hdrEnvironmentActive(ctx)) applyLighting(ctx);
+    const bool active = enabled && levelEnabled && !hdrEnvironmentActive(ctx);
+    if (active) applyLighting(ctx);
+    publishStatus(ctx, active);
     applyClouds(ctx);
     applyNightGlow(ctx);   // even with the cycle off: static dusk levels glow
 }
@@ -252,6 +294,14 @@ void DayNightSystem::applyLighting(FrameContext& ctx) {
     // Dusk predicates (vehicle lamps, street lights) key on the SUN's truth,
     // not the active light — the moon rising must not read as daylight.
     lit.solarElevation = st.solarElevation;
+    // THE WORLD CLOCK (one clock, not two): the citysim bridge opens its day
+    // at this hour and runs its schedules at this rate, so rush hour happens
+    // under a morning sky and a 30-minute day is 30 minutes for the commuters
+    // too. Rate stays published through an artistic hold — the held sun is
+    // a lighting choice, the city keeps living (its clock drifts from the
+    // sky until `run`; documented).
+    lit.clockHours = static_cast<float>(cycle.timeOfDay * 24.0);
+    lit.clockHoursPerSecond = static_cast<float>(cycle.speed() * 24.0);
 
     lit.sky.sunDirection     = st.lightDirection;
     lit.sky.sunColor         = st.lightColor;
@@ -366,13 +416,35 @@ void DayNightSystem::render(FrameContext& ctx) {
         }
         ImGui::SameLine();
         ImGui::Checkbox("Pause", &cycle.paused);
-        float speed = static_cast<float>(cycle.speed);
-        if (ImGui::SliderFloat("Speed (days/sec)", &speed, 0.0f, 0.2f, "%.3f")) {
-            cycle.speed = speed;
+        float minutes = static_cast<float>(cycle.dayMinutes);
+        if (ImGui::SliderFloat("Day length (real min)", &minutes, 0.0f, 120.0f,
+                               "%.1f", ImGuiSliderFlags_Logarithmic)) {
+            cycle.dayMinutes = minutes;
         }
-        // Readout: 24h clock derived from time-of-day (0.0 == midnight).
-        int totalMin = static_cast<int>(cycle.timeOfDay * 24.0 * 60.0) % (24 * 60);
-        ImGui::Text("Clock: %02d:%02d", totalMin / 60, totalMin % 60);
+        float lat = static_cast<float>(cycle.latitudeDeg);
+        if (ImGui::SliderFloat("Latitude (deg N)", &lat, -66.0f, 66.0f, "%.1f")) {
+            cycle.latitudeDeg = lat;
+            if (enabled) applyLighting(ctx);
+        }
+        int doy = cycle.dayOfYear;
+        if (ImGui::SliderInt("Day of year", &doy, 1, 365)) {
+            cycle.dayOfYear = doy;
+            if (enabled) applyLighting(ctx);
+        }
+        // Readout: 24h clock derived from time-of-day (0.0 == midnight), and
+        // today's horizon crossings so the day/night asymmetry is legible.
+        auto hm = [](double hours, int& h, int& m) {
+            const int total = static_cast<int>(hours * 60.0) % (24 * 60);
+            h = total / 60;
+            m = total % 60;
+        };
+        int ch, cm, rh, rm, sh, sm;
+        hm(cycle.timeOfDay * 24.0, ch, cm);
+        hm(cycle.sunriseHour(), rh, rm);
+        hm(cycle.sunsetHour(), sh, sm);
+        ImGui::Text("Clock: %02d:%02d   sunrise %02d:%02d  sunset %02d:%02d  "
+                    "(%.0f%% daylight)",
+                    ch, cm, rh, rm, sh, sm, cycle.daylightFraction() * 100.0);
         ImGui::EndDisabled();
     }
 
