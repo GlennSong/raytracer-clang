@@ -1891,6 +1891,7 @@ static GrownLots growCityLots(
 // SVG XY with y = z, so the page reads like the viewer's top-down framing
 // (screen-up = -Z); 1 SVG unit = 1 metre, so a road's stroke IS its width.
 static void writeFurnitureSvg(const std::string& path, const engine::RoadGraph& g,
+                              const engine::NavGraph& nav,
                               const engine::StreetFurniturePlan& plan) {
     if (g.nodes.empty()) return;
     double minX = 1e30, minZ = 1e30, maxX = -1e30, maxZ = -1e30;
@@ -1942,6 +1943,24 @@ static void writeFurnitureSvg(const std::string& path, const engine::RoadGraph& 
         }
     }
     out << "</g>\n";
+    // The NAV graph the furniture was planned on, over the drawn streets: thin
+    // cyan links, a ring at every junction node. Where cyan leaves the grey,
+    // the planner and the mesher disagree about where the street is — the
+    // knot-merge (NavBuildParams::junctionMergeRadius) moves junction nodes,
+    // and a pole planned off a moved link can stand in the drawn asphalt.
+    out << "<g stroke='#0aa2c7' stroke-width='0.6' fill='none' opacity='0.9'>\n";
+    for (int li = 0; li < nav.linkCount(); ++li) {
+        const engine::NavLink& L = nav.links[li];
+        if (L.from < 0 || L.to < 0 || L.from >= static_cast<int>(nav.nodes.size()) ||
+            L.to >= static_cast<int>(nav.nodes.size())) continue;
+        out << "<line x1='" << nav.nodes[L.from].x << "' y1='" << nav.nodes[L.from].y
+            << "' x2='" << nav.nodes[L.to].x << "' y2='" << nav.nodes[L.to].y << "'/>\n";
+    }
+    for (std::size_t ni = 0; ni < nav.nodes.size(); ++ni)
+        if (nav.isJunction(static_cast<int>(ni)))
+            out << "<circle cx='" << nav.nodes[ni].x << "' cy='" << nav.nodes[ni].y
+                << "' r='2.5'/>\n";
+    out << "</g>\n";
     // Lamp posts: amber dots at the pole feet.
     out << "<g fill='#f2a20c' stroke='none'>\n";
     for (const Vec3& b : plan.lampBases)
@@ -1965,12 +1984,15 @@ static void writeFurnitureSvg(const std::string& path, const engine::RoadGraph& 
     out << "<circle cx='" << lx + 8 << "' cy='" << ly + 30 << "' r='4' fill='#d62828'/>"
         << "<text x='" << lx + 20 << "' y='" << ly + 37 << "'>signal pole (tick = faces traffic) \xc2\xb7 "
         << plan.signals.size() << "</text>\n";
+    out << "<line x1='" << lx << "' y1='" << ly + 82 << "' x2='" << lx + 16 << "' y2='"
+        << ly + 82 << "' stroke='#0aa2c7' stroke-width='2'/>"
+        << "<text x='" << lx + 20 << "' y='" << ly + 89 << "'>nav link / junction node (what the poles were planned on)</text>\n";
     out << "<circle cx='" << lx + 8 << "' cy='" << ly + 60 << "' r='3' fill='#f2a20c'/>"
         << "<text x='" << lx + 20 << "' y='" << ly + 67 << "'>lamp post \xc2\xb7 "
         << plan.lampBases.size() << "</text>\n";
-    out << "<line x1='" << lx << "' y1='" << ly + 92 << "' x2='" << lx + 200 << "' y2='"
-        << ly + 92 << "' stroke='#222' stroke-width='3'/>"
-        << "<text x='" << lx << "' y='" << ly + 118 << "'>200 m</text>\n";
+    out << "<line x1='" << lx << "' y1='" << ly + 112 << "' x2='" << lx + 200 << "' y2='"
+        << ly + 112 << "' stroke='#222' stroke-width='3'/>"
+        << "<text x='" << lx << "' y='" << ly + 138 << "'>200 m</text>\n";
     out << "</g>\n</svg>\n";
     LOG_INFO << "[furniture] svg map: " << path << " (" << g.edges.size() << " edges, "
              << plan.signals.size() << " signals, " << plan.lampBases.size() << " lamps)";
@@ -3703,7 +3725,7 @@ bool LevelLoader::load(const std::string& path,
             for (const engine::SignalSpot& s : fplan.signals)
                 sf.signalPoles.push_back({s.base, s.face, s.link});
             if (const char* svgPath = std::getenv("RT_FURNITURE_SVG"))
-                writeFurnitureSvg(svgPath, combined, fplan);
+                writeFurnitureSvg(svgPath, combined, nav, fplan);
 
             auto groupBounds = [&](InstanceGroup& g, Real meshReach) {
                 if (g.transforms.empty()) return;

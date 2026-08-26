@@ -174,6 +174,47 @@ StreetFurniturePlan planStreetFurniture(
         return false;
     };
 
+    // EVERY carriageway, hashed, so a candidate can ask "am I inside ANY
+    // road's ribbon?" (device, metro map: "some of the street lights are
+    // actually sitting right in the middle of the road"). The junction-clear
+    // radius below is measured from the NODE; at a T or an acute corner the
+    // neighbouring arm's carriageway reaches past that radius, and a kerb
+    // lamp of one street stood in the middle of the other — 75 of the
+    // metro's 1739 lamps, the worst 5.8 m inside a 12 m road. The rule the
+    // signal poles already obey (9176f6a) applied to lamps: clear every
+    // link's half-width by curbGap. A lamp's OWN link passes trivially
+    // (it stands lampVerge > curbGap beyond that kerb).
+    const Real lcell = 20.0;   // >= widest half-width + curbGap, so 3x3 covers
+    std::unordered_map<long long, std::vector<int>> linkGrid;
+    for (int li = 0; li < nav.linkCount(); ++li) {
+        const NavLink& K = nav.links[li];
+        const Vec2 a = nav.nodes[K.from], b = nav.nodes[K.to];
+        const int x0 = static_cast<int>(std::floor(std::min(a.x, b.x) / lcell)) - 1;
+        const int x1 = static_cast<int>(std::floor(std::max(a.x, b.x) / lcell)) + 1;
+        const int z0 = static_cast<int>(std::floor(std::min(a.y, b.y) / lcell)) - 1;
+        const int z1 = static_cast<int>(std::floor(std::max(a.y, b.y) / lcell)) + 1;
+        for (int cz = z0; cz <= z1; ++cz)
+            for (int cx = x0; cx <= x1; ++cx)
+                linkGrid[cellKey(cx, cz)].push_back(li);
+    }
+    auto insideAnyCarriageway = [&](const Vec2& v) {
+        const int cx = static_cast<int>(std::floor(v.x / lcell));
+        const int cz = static_cast<int>(std::floor(v.y / lcell));
+        auto it = linkGrid.find(cellKey(cx, cz));
+        if (it == linkGrid.end()) return false;
+        for (int li : it->second) {
+            const NavLink& K = nav.links[li];
+            const Vec2 a = nav.nodes[K.from], b = nav.nodes[K.to];
+            const Vec2 ab = b - a;
+            const Real l2 = ab.lengthSquared();
+            Real t = l2 > 1e-12 ? dot(v - a, ab) / l2 : Real(0);
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            if ((a + ab * t - v).length() < K.width * Real(0.5) + p.curbGap)
+                return true;
+        }
+        return false;
+    };
+
     for (int li = 0; li < nav.linkCount(); ++li) {
         const NavLink& L = nav.links[li];
         if (L.klass == RoadClass::Freeway || L.klass == RoadClass::Ramp)
@@ -197,6 +238,7 @@ StreetFurniturePlan planStreetFurniture(
                 (nav.isJunction(L.from) &&
                  (sp - nav.nodes[L.from]).length() < p.junctionClear);
             if (nearJunction) continue;
+            if (insideAnyCarriageway(sp)) continue;
             if (tooClose(sp, dir)) continue;
             const Real y = gy(sp.x, sp.y) + L.layer * kLayerLift;
             out.lampBases.push_back(Vec3(sp.x, y, sp.y));

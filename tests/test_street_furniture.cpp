@@ -100,6 +100,34 @@ TEST_CASE(signal_poles_clear_every_arm_at_an_acute_corner) {
     CHECK(acuteChecked > 0);   // the fixture must exercise a neighbour
 }
 
+TEST_CASE(lamps_never_stand_in_another_streets_carriageway) {
+    // Metro map (device): "some of the street lights are actually sitting
+    // right in the middle of the road". Lamps cleared junctions by a radius
+    // around the NODE; at an acute corner the neighbouring arm's carriageway
+    // reaches past it. On this fixture the east arm's right-kerb lamps at
+    // 10..24 m from the node sit inside the 30-degree arm's 12 m ribbon.
+    NavGraph nav = acuteCross();
+    StreetFurnitureParams fp;
+    StreetFurniturePlan plan =
+        planStreetFurniture(nav, [](Real, Real) { return Real(0); }, fp);
+    CHECK(!plan.lampBases.empty());
+    int checked = 0;
+    for (const Vec3& b : plan.lampBases) {
+        const Vec2 v(b.x, b.z);
+        for (int li = 0; li < nav.linkCount(); ++li) {
+            const NavLink& K = nav.links[li];
+            const Vec2 a = nav.nodes[K.from], e = nav.nodes[K.to];
+            const Vec2 ab = e - a;
+            Real t = dot(v - a, ab) / ab.lengthSquared();
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            const Real d = (a + ab * t - v).length();
+            CHECK(d >= K.width * 0.5 + fp.curbGap - 1e-6);
+            ++checked;
+        }
+    }
+    CHECK(checked > 0);
+}
+
 TEST_CASE(signal_poles_dedupe_collinear_approaches) {
     NavGraph nav = crossWithCollinearStub();
     StreetFurniturePlan plan =

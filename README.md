@@ -197,7 +197,7 @@ the log (`[probes]`, `[furniture]` lines) or open the file it wrote.
 
 | Variable | What it does |
 | --- | --- |
-| `RT_FURNITURE_SVG=<path>` | Writes an SVG **street map with every planted pole**: one stroke per road edge at its real carriageway width (1 unit = 1 m), coloured by road class (freeway darkest → alley lightest); red dots at signal-pole feet with a tick toward the traffic the head faces; amber dots at lamp posts; legend with counts and a 200 m scale bar. `y` = world Z, so it reads like the viewer's top-down view. |
+| `RT_FURNITURE_SVG=<path>` | Writes an SVG **street map with every planted pole**: one stroke per road edge at its real carriageway width (1 unit = 1 m), coloured by road class (freeway darkest → alley lightest); red dots at signal-pole feet with a tick toward the traffic the head faces; amber dots at lamp posts; the nav graph the poles were planned on in thin cyan (links + a ring per junction node — where cyan leaves the grey, planner and mesher disagree); legend with counts and a 200 m scale bar. `y` = world Z, so it reads like the viewer's top-down view. |
 | `RT_GROUND_PROBES=1` | Plants a post every ~1/96 of the world on the analytic terrain height and scores each against the rendered tile's own interpolation — green flush (≤ 0.3 m), orange (≤ 1 m), red beyond — and logs the histogram plus the worst offender's coordinates. The "does the mesh agree with the function?" test for any level. |
 | `RT_NO_ROADS=1`, `RT_NO_BUILDINGS=1`, `RT_NO_CLOUDS=1` | Layer gates: skip that generator/pass so a symptom can be attributed to one layer. |
 | `RT_DUMP_DRAWS=1` | Per-frame draw audit (batches, culls, material sets) on the Vulkan backend. |

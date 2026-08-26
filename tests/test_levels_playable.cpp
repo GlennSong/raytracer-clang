@@ -621,5 +621,32 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
                 worstAt.x, worstAt.y);
     CHECK(total > 50);                                 // the fixture must bite
     CHECK(inPad + inCompound + inBody == 0);           // every pole on a kerb
+
+    // LAMPS, same question (device, metro map: "some of the street lights are
+    // actually sitting right in the middle of the road"): every lamp foot
+    // against every carriageway ribbon. Measured at adoption: 75 of 1739
+    // inside, worst 5.84 m inside a 12 m road — kerb lamps of one street
+    // planted where the neighbouring street's ribbon reaches past the
+    // node-radius junction clear.
+    int lampTotal = 0, lampInBody = 0;
+    double lampWorst = 0; Vec2 lampWorstAt(0, 0);
+    for (const Vec3& h : sf->lampHeads) {
+        ++lampTotal;
+        const Vec2 q(h.x, h.z);
+        double depth = 0;
+        for (const RoadEdge& e : g.edges) {
+            if (e.a < 0 || e.b < 0 || e.a >= N || e.b >= N) continue;
+            depth = std::max(depth,
+                             e.width * 0.5 - distSeg(q, g.nodes[e.a].pos, g.nodes[e.b].pos));
+        }
+        if (depth > 0.05) {
+            ++lampInBody;
+            if (depth > lampWorst) { lampWorst = depth; lampWorstAt = q; }
+        }
+    }
+    std::printf("    [lamps] %d lamps: %d inside a carriageway; worst %.2f m at (%.1f, %.1f)\n",
+                lampTotal, lampInBody, lampWorst, lampWorstAt.x, lampWorstAt.y);
+    CHECK(lampTotal > 500);
+    CHECK(lampInBody == 0);
 }
 
