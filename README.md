@@ -190,6 +190,28 @@ ctest --test-dir build          # unit + physics tests
 The `viewer` target builds only where GLFW is found. A Qt6 install additionally
 enables the `editor_app` target.
 
+### Debug instruments (environment variables)
+Every build carries a few load-time instruments for "where did the generator
+put things?" questions. Set the variable, launch the viewer on a level, read
+the log (`[probes]`, `[furniture]` lines) or open the file it wrote.
+
+| Variable | What it does |
+| --- | --- |
+| `RT_FURNITURE_SVG=<path>` | Writes an SVG **street map with every planted pole**: one stroke per road edge at its real carriageway width (1 unit = 1 m), coloured by road class (freeway darkest → alley lightest); red dots at signal-pole feet with a tick toward the traffic the head faces; amber dots at lamp posts; legend with counts and a 200 m scale bar. `y` = world Z, so it reads like the viewer's top-down view. |
+| `RT_GROUND_PROBES=1` | Plants a post every ~1/96 of the world on the analytic terrain height and scores each against the rendered tile's own interpolation — green flush (≤ 0.3 m), orange (≤ 1 m), red beyond — and logs the histogram plus the worst offender's coordinates. The "does the mesh agree with the function?" test for any level. |
+| `RT_NO_ROADS=1`, `RT_NO_BUILDINGS=1`, `RT_NO_CLOUDS=1` | Layer gates: skip that generator/pass so a symptom can be attributed to one layer. |
+| `RT_DUMP_DRAWS=1` | Per-frame draw audit (batches, culls, material sets) on the Vulkan backend. |
+| `RT_FRAME_STATS=<csv>` | Always-on frame ledger capture; render it with `tools/frame-report.py` (see `docs/profiling.md`). |
+
+Example — the metro's street map, plus a PNG preview:
+```bash
+RT_FURNITURE_SVG=metro.svg ./build/viewer --edit assets/levels/metro_v2_test.json
+magick metro.svg -resize 2400x2400 metro.png     # ImageMagick; any SVG viewer works too
+```
+The viewer also opens a control socket (`/tmp/raytracer-viewer-<pid>.sock`,
+path in the log) for scripted captures: `camera x y z pitch yaw` and
+`shot <png-path>` via `nc -U`.
+
 ---
 
 ## Project layout
