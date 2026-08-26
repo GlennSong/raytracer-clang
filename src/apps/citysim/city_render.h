@@ -442,6 +442,11 @@ private:
     std::vector<engine::Vec2> crosswalkCenters_;   // one per junction approach (centre of band)
     std::function<double(double, double)> heightAt_;   // terrain drape (may be null)
     Real roadLift_ = 0.0;
+    // The decks the level's road meshes rode (RoadDeck components, copied at
+    // build): groundAt answers from these wherever a road passes, so every
+    // placed car/paint/lens stands on the drawn asphalt rather than on the
+    // terrain carved 0.22 m under it.
+    std::vector<engine::RoadDeckField> decks_;
     // Sidewalk band width from the widest net look — signalSite's kerb
     // back-off must clear the junction pad, which spans out to
     // carriageway/2 + THIS (mirrors StreetFurnitureParams::sidewalkWidth).

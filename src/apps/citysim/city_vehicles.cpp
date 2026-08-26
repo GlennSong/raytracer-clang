@@ -39,10 +39,10 @@ constexpr Real kCommandeerRadius = 4.0;   // same reach as VehicleSystem's enter
 // The stock 0.20/0.45 travel drops a wheel 0.375 m. That is what jacked every
 // commandeered car into the air and made the tall ones feel top-heavy — the CoG
 // rises with the body. Real cars move a fraction of that.
-constexpr Real kSuspensionMin = 0.05;
-constexpr Real kSuspensionMax = 0.15;
-constexpr Real kStaticDeflection = 0.075;   // at VehicleWheel's 1.5 Hz default
-constexpr Real kSuspensionRestDrop = kSuspensionMax - kStaticDeflection;
+// (The rule itself lives in PhysicsWorld so the drivable spec shares it.)
+constexpr Real kSuspensionMin = PhysicsWorld::kStreetSuspensionMin;
+constexpr Real kSuspensionMax = PhysicsWorld::kStreetSuspensionMax;
+constexpr Real kSuspensionRestDrop = PhysicsWorld::kStreetSuspensionRestDrop;
 
 // A Jolt vehicle config sized to a fleet body — a 4WD arcade car like the
 // player's sedan, scaled up for a van/box-truck. Front wheels steer; all four

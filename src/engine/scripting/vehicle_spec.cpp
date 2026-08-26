@@ -142,8 +142,18 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
             int wi = lua_gettop(L);
             if (lua_istable(L, wi)) {
                 PhysicsWorld::VehicleWheel w;
-                w.position = Vec3(numField(L, wi, "x", 0), numField(L, wi, "y", 0),
+                // The spec publishes the wheel's DRAWN resting centre
+                // (vehicles.lua: axleY = -H/2 + r, the same datum the fleet
+                // bakes its wheels at). Lift the attach point by the settle
+                // and use the street travel — the rule configFromBody applies
+                // to a commandeered car — so the player's car rests exactly
+                // where it is drawn instead of 0.30 m above it.
+                w.position = Vec3(numField(L, wi, "x", 0),
+                                  numField(L, wi, "y", 0) +
+                                      PhysicsWorld::kStreetSuspensionRestDrop,
                                   numField(L, wi, "z", 0));
+                w.suspensionMin = PhysicsWorld::kStreetSuspensionMin;
+                w.suspensionMax = PhysicsWorld::kStreetSuspensionMax;
                 w.radius = numField(L, wi, "radius", wheelRadius);
                 w.width = numField(L, wi, "width", wheelWidth);
                 w.steered = boolField(L, wi, "steered", false);

@@ -8,6 +8,7 @@
 #include "physics/physics_world.h"
 #include "procgen/city/polygon.h"   // Poly2 (city-plan debug outlines, ADR-0066)
 #include "procgen/city/road_network.h"   // RoadGraph (ExtraNavGraph, plan §8 P8.4)
+#include "procgen/city/road_mesh.h"      // RoadDeckField (RoadDeck)
 #include "procgen/terrain.h"
 #include "world.h"
 #include <cstdint>
@@ -521,6 +522,14 @@ struct CitySimConfig {
 // (Supersedes the P8.4 ExtraNavGraph bolt-on, which only the sim could see.)
 struct LevelRoadGraph {
     RoadGraph graph;
+};
+
+// The DECK a road entity's mesh actually rode (RoadDeckField), stored by the
+// loader beside the Renderable. Everything placed ON a road — sim cars, parked
+// cars, bay paint, signal lenses and poles — samples this, not the terrain
+// the mesher carved 0.22 m under it.
+struct RoadDeck {
+    RoadDeckField field;
 };
 
 struct StreetFurniture {

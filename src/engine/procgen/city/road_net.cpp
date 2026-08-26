@@ -456,7 +456,8 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
                                std::vector<std::size_t>* chainTriEndsOut,
                                double sidewalkWidth, double curbHeight,
                                bool crosswalks, CurbBandAudit* auditOut,
-                               double cornerRadius) {
+                               double cornerRadius,
+                               RoadDeckField* deckOut) {
     // Semantic self-heal (#17): tests and tools hand this hand-built graphs
     // that never went through a producer — classify so kind-gated styling
     // behaves identically for them. Classified inputs pass through untouched
@@ -565,6 +566,10 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
             }
         }
     }
+    // THE DECK, exported (RoadDeckField): these chains' yAbs ARE the heights
+    // every body ring below is swept at, so a consumer sampling them stands on
+    // the drawn asphalt by construction.
+    if (deckOut) deckOut->spines = chains;
     // S4: junction pairs closer than their combined radii merge into ONE
     // COMPOUND pad. trimSpine clamps its trims at 45% of the chain, so S1 kept
     // a squeezed sub-metre body with BOTH pads stacked over it — the measured
@@ -1175,6 +1180,17 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
                 MeshBuilder::append(out, skirt);
             }
         }
+        // The pad's drivable faces join the deck field (RoadDeckField::pads);
+        // an elevated pad's bottom closure faces down and is skipped.
+        if (deckOut) {
+            for (std::size_t ti = 0; ti + 2 < pad.indices.size(); ti += 3) {
+                const Vec3& a = pad.vertices[pad.indices[ti]].position;
+                const Vec3& b = pad.vertices[pad.indices[ti + 1]].position;
+                const Vec3& c = pad.vertices[pad.indices[ti + 2]].position;
+                if (pad.vertices[pad.indices[ti]].normal.y <= 0.0) continue;
+                deckOut->pads.push_back({a, b, c});
+            }
+        }
         MeshBuilder::append(out, pad);
         // Only a street INTERSECTION's pad joins the sidewalk band union
         // (#21). A Landing/gore pad has a ramp arm; joining it wrapped the
@@ -1303,7 +1319,7 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
 }
 
 RenderMesh buildRoadNetMesh(const RoadEntity& road, const RoadGroundFn& heightAt,
-                            CurbBandAudit* auditOut) {
+                            CurbBandAudit* auditOut, RoadDeckField* deckOut) {
     // Roads-v2.1 2e: the ONE mesher builds EVERYTHING, baked corridor edges
     // included — the corridor renderer is gone. (Conform still strips baked
     // edges: corridorAuthor's engineered flatten owns that carve.)
@@ -1412,7 +1428,9 @@ RenderMesh buildRoadNetMesh(const RoadEntity& road, const RoadGroundFn& heightAt
     // deleted from this path; the lattice IS the road mesher.
     RenderMesh rm = buildRoadNetLattice(g, heightAt, nullptr, road.look.sidewalk,
                                         road.look.curb, road.look.crosswalks, auditOut,
-                                        road.look.cornerRadius);
+                                        road.look.cornerRadius,
+                                        deckOut);
+    if (deckOut) deckOut->buildIndex();
     // Bounds + NaN audit: one NaN vertex poisons the bounding sphere and the
     // whole road entity frustum-culls to nothing, silently.
     std::size_t nans = 0;
@@ -1440,6 +1458,97 @@ RenderMesh buildRoadNetMesh(const RoadEntity& road, const RoadGroundFn& heightAt
         }
     }
     return rm;
+}
+
+// ---- RoadDeckField ------------------------------------------------------------
+void RoadDeckField::buildIndex() {
+    cells_.clear();
+    padCells_.clear();
+    auto key = [](int cx, int cz) {
+        return (static_cast<long long>(cx) << 32) ^
+               (static_cast<long long>(cz) & 0xffffffffLL);
+    };
+    for (int ti = 0; ti < static_cast<int>(pads.size()); ++ti) {
+        const Tri& t = pads[ti];
+        const double x0 = std::min({t.a.x, t.b.x, t.c.x}), x1 = std::max({t.a.x, t.b.x, t.c.x});
+        const double z0 = std::min({t.a.z, t.b.z, t.c.z}), z1 = std::max({t.a.z, t.b.z, t.c.z});
+        for (int cz = static_cast<int>(std::floor(z0 / cell_)); cz <= static_cast<int>(std::floor(z1 / cell_)); ++cz)
+            for (int cx = static_cast<int>(std::floor(x0 / cell_)); cx <= static_cast<int>(std::floor(x1 / cell_)); ++cx)
+                padCells_[key(cx, cz)].push_back(ti);
+    }
+    for (int si = 0; si < static_cast<int>(spines.size()); ++si) {
+        const UnionSpine& sp = spines[si];
+        if (sp.yAbs.size() != sp.points.size()) continue;   // no deck: skip
+        for (int i = 0; i + 1 < static_cast<int>(sp.points.size()); ++i) {
+            const Vec2& a = sp.points[i];
+            const Vec2& b = sp.points[i + 1];
+            const int x0 = static_cast<int>(std::floor(std::min(a.x, b.x) / cell_)) - 1;
+            const int x1 = static_cast<int>(std::floor(std::max(a.x, b.x) / cell_)) + 1;
+            const int z0 = static_cast<int>(std::floor(std::min(a.y, b.y) / cell_)) - 1;
+            const int z1 = static_cast<int>(std::floor(std::max(a.y, b.y) / cell_)) + 1;
+            for (int cz = z0; cz <= z1; ++cz)
+                for (int cx = x0; cx <= x1; ++cx)
+                    cells_[key(cx, cz)].push_back({si, i});
+        }
+    }
+}
+
+bool RoadDeckField::heightAt(double x, double z, double margin, double* outY) const {
+    const long long k = (static_cast<long long>(static_cast<int>(std::floor(x / cell_))) << 32) ^
+                        (static_cast<long long>(static_cast<int>(std::floor(z / cell_))) & 0xffffffffLL);
+    // Pads first: inside a pad the drawn triangle IS the surface.
+    if (auto pit = padCells_.find(k); pit != padCells_.end()) {
+        bool found = false;
+        double best = -1e30;
+        for (int ti : pit->second) {
+            const Tri& t = pads[ti];
+            const double d1 = (x - t.b.x) * (t.a.z - t.b.z) - (t.a.x - t.b.x) * (z - t.b.z);
+            const double d2 = (x - t.c.x) * (t.b.z - t.c.z) - (t.b.x - t.c.x) * (z - t.c.z);
+            const double d3 = (x - t.a.x) * (t.c.z - t.a.z) - (t.c.x - t.a.x) * (z - t.a.z);
+            const bool neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+            const bool pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+            if (neg && pos) continue;
+            const double den = (t.b.z - t.c.z) * (t.a.x - t.c.x) + (t.c.x - t.b.x) * (t.a.z - t.c.z);
+            if (std::fabs(den) < 1e-12) continue;
+            const double w0 = ((t.b.z - t.c.z) * (x - t.c.x) + (t.c.x - t.b.x) * (z - t.c.z)) / den;
+            const double w1 = ((t.c.z - t.a.z) * (x - t.c.x) + (t.a.x - t.c.x) * (z - t.c.z)) / den;
+            const double y = w0 * t.a.y + w1 * t.b.y + (1.0 - w0 - w1) * t.c.y;
+            if (!found || y > best) { best = y; found = true; }   // stacked pads: the top
+        }
+        if (found) { *outY = best; return true; }
+    }
+    auto it = cells_.find(k);
+    if (it == cells_.end()) return false;
+    const Vec2 q(x, z);
+    double bestD = 1e30, bestY = 0.0;
+    for (const Seg& sg : it->second) {
+        const UnionSpine& sp = spines[sg.spine];
+        const Vec2& a = sp.points[sg.i];
+        const Vec2& b = sp.points[sg.i + 1];
+        const Vec2 ab = b - a;
+        const double L2 = ab.lengthSquared();
+        double t = L2 < 1e-12 ? 0.0 : dot(q - a, ab) / L2;
+        t = t < 0 ? 0 : (t > 1 ? 1 : t);
+        const double d = (a + ab * t - q).length();
+        const double hw = sp.hw.size() == sp.points.size()
+                              ? sp.hw[sg.i] + (sp.hw[sg.i + 1] - sp.hw[sg.i]) * t
+                              : sp.halfWidth;
+        if (d > hw + margin || d >= bestD) continue;
+        bestD = d;
+        bestY = sp.yAbs[sg.i] + (sp.yAbs[sg.i + 1] - sp.yAbs[sg.i]) * t;
+        // Superelevation: the lattice banks the deck by signedLateral *
+        // crossSlope, lateral measured along `left` = fwd rotated +90 in XZ
+        // (road_lattice.cpp, rings[i].left), + rising to the left.
+        if (sp.crossSlope.size() == sp.points.size() && L2 > 1e-12) {
+            const double cs = sp.crossSlope[sg.i] + (sp.crossSlope[sg.i + 1] - sp.crossSlope[sg.i]) * t;
+            const Vec2 fwd = ab * (1.0 / std::sqrt(L2));
+            const Vec2 left(-fwd.y, fwd.x);
+            bestY += dot(q - a, left) * cs;
+        }
+    }
+    if (bestD > 1e29) return false;
+    *outY = bestY;
+    return true;
 }
 
 std::vector<TerrainFlatten> roadNetConformRegions(const RoadEntity& roadIn,

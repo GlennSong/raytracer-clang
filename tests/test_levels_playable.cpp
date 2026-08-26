@@ -27,6 +27,7 @@
 #include "../src/engine/mesh_uploader.h"
 #include "../src/engine/procgen/terrain.h"
 #include "../src/engine/procgen/city/road_net.h"   // RoadEntity (signal census)
+#include "../src/apps/citysim/city_render.h"        // CityRenderSystem (traffic census)
 #include "../src/engine/system.h"
 #include "../src/engine/world.h"
 #include "../src/renderer/renderer.h"
@@ -36,10 +37,12 @@
 #include <cstdlib>   // setenv (the marker test)
 #include <cmath>
 #include <fstream>
+#include <functional>
 #include <cstdio>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 using namespace engine;
@@ -648,5 +651,209 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
                 lampTotal, lampInBody, lampWorst, lampWorstAt.x, lampWorstAt.y);
     CHECK(lampTotal > 500);
     CHECK(lampInBody == 0);
+}
+
+// THE TRAFFIC CENSUS (device: "the simulated cars ... sometimes they are below
+// the road ... the cars should appear above the road ... come up with some
+// tests to ensure the vehicles are on the road properly"). Loads the shipped
+// metro through the real loader, stands up the citysim bridge exactly as the
+// game does (default params, CitySimConfig from the level), drives the sim for
+// a while, and compares every drawn DRIVEN car's wheel-bottom against the
+// COLLIDER surface under it — the road mesh the player's own car drives on.
+// Measured at adoption on the deck fixture: cars 0.62 m under the deck on
+// average (the bridge placed them on the terrain, which the mesher carves
+// 0.22 m under the deck, minus a vestigial 0.08 lift, plus the carve's own
+// hillside error); after RoadDeck: within 3 cm.
+namespace {
+// Collider triangles bucketed by XZ cell so a probe touches a few dozen
+// triangles, not the city's millions.
+struct ColliderGrid {
+    struct Tri { Vec3 a, b, c; };
+    std::vector<Tri> tris;
+    std::unordered_map<long long, std::vector<int>> cells;
+    static constexpr double kCell = 12.0;
+    static long long key(int cx, int cz) {
+        return (static_cast<long long>(cx) << 32) ^ (static_cast<long long>(cz) & 0xffffffffLL);
+    }
+    void add(const MeshCollider& mc) {
+        for (std::size_t i = 0; i + 2 < mc.indices.size(); i += 3) {
+            Tri t{mc.vertices[mc.indices[i]], mc.vertices[mc.indices[i + 1]],
+                  mc.vertices[mc.indices[i + 2]]};
+            const int id = static_cast<int>(tris.size());
+            tris.push_back(t);
+            const double x0 = std::min({t.a.x, t.b.x, t.c.x}), x1 = std::max({t.a.x, t.b.x, t.c.x});
+            const double z0 = std::min({t.a.z, t.b.z, t.c.z}), z1 = std::max({t.a.z, t.b.z, t.c.z});
+            for (int cz = static_cast<int>(std::floor(z0 / kCell)); cz <= static_cast<int>(std::floor(z1 / kCell)); ++cz)
+                for (int cx = static_cast<int>(std::floor(x0 / kCell)); cx <= static_cast<int>(std::floor(x1 / kCell)); ++cx)
+                    cells[key(cx, cz)].push_back(id);
+        }
+    }
+    // Every collider surface under (x, z), for the offender listing.
+    std::vector<double> surfacesAt(double x, double z) const {
+        std::vector<double> out;
+        auto it = cells.find(key(static_cast<int>(std::floor(x / kCell)),
+                                 static_cast<int>(std::floor(z / kCell))));
+        if (it == cells.end()) return out;
+        for (int id : it->second) {
+            const Tri& t = tris[id];
+            if (!pointInTriangleXZ(x, z, t.a, t.b, t.c)) continue;
+            const double den = (t.b.z - t.c.z) * (t.a.x - t.c.x) + (t.c.x - t.b.x) * (t.a.z - t.c.z);
+            if (std::fabs(den) < 1e-12) continue;
+            const double w0 = ((t.b.z - t.c.z) * (x - t.c.x) + (t.c.x - t.b.x) * (z - t.c.z)) / den;
+            const double w1 = ((t.c.z - t.a.z) * (x - t.c.x) + (t.a.x - t.c.x) * (z - t.c.z)) / den;
+            out.push_back(w0 * t.a.y + w1 * t.b.y + (1.0 - w0 - w1) * t.c.y);
+        }
+        std::sort(out.begin(), out.end());
+        return out;
+    }
+    // Highest collider surface under (x, z) that is not above `ceiling`.
+    bool surfaceAt(double x, double z, double ceiling, double& top) const {
+        auto it = cells.find(key(static_cast<int>(std::floor(x / kCell)),
+                                 static_cast<int>(std::floor(z / kCell))));
+        if (it == cells.end()) return false;
+        bool found = false;
+        for (int id : it->second) {
+            const Tri& t = tris[id];
+            if (!pointInTriangleXZ(x, z, t.a, t.b, t.c)) continue;
+            const double den = (t.b.z - t.c.z) * (t.a.x - t.c.x) + (t.c.x - t.b.x) * (t.a.z - t.c.z);
+            if (std::fabs(den) < 1e-12) continue;
+            const double w0 = ((t.b.z - t.c.z) * (x - t.c.x) + (t.c.x - t.b.x) * (z - t.c.z)) / den;
+            const double w1 = ((t.c.z - t.a.z) * (x - t.c.x) + (t.a.x - t.c.x) * (z - t.c.z)) / den;
+            const double y = w0 * t.a.y + w1 * t.b.y + (1.0 - w0 - w1) * t.c.y;
+            if (y > ceiling) continue;
+            if (!found || y > top) { top = y; found = true; }
+        }
+        return found;
+    }
+};
+}  // namespace
+
+TEST_CASE(metro_traffic_drives_on_the_road_deck) {
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const bool loaded =
+        LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+                          view, assets, /*editorMode=*/false);
+    CHECK(loaded);
+    if (!loaded) return;
+
+    ColliderGrid grid;
+    world.each<MeshCollider>([&](Entity, MeshCollider& mc) { grid.add(mc); });
+    CHECK(!grid.tris.empty());
+
+    citysim::CityRenderSystem city;
+    CHECK(city.build(world, &assets, nullptr));
+    const std::vector<Vec3> he = city.carGroupHalfExtents();
+
+    int checked = 0, seen = 0, noSurface = 0;
+    double sum = 0, lo = 1e9, hi = -1e9;
+    Vec2 worstAt(0, 0);
+    double worst = 0;
+    // Offender context: what the bridge could have used at that spot.
+    std::vector<const engine::RoadDeckField*> decks;
+    world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { decks.push_back(&d.field); });
+    std::function<double(double, double)> terrain;
+    world.each<engine::TerrainLodConfig>([&](Entity, engine::TerrainLodConfig& c) {
+        auto params = std::make_shared<engine::TerrainParams>(c.params);
+        auto noise = std::make_shared<engine::Noise>(c.seed);
+        terrain = [params, noise](double x, double z) {
+            return engine::terrainHeight(*params, *noise, x, z);
+        };
+    });
+    struct Offender { double d, x, z, y, surface, deck, terr; int link; double linkHalf; int layer; double speed; int padHits; };
+    std::vector<Offender> offenders;
+    std::size_t padTris = 0;
+    for (const engine::RoadDeckField* f : decks) padTris += f->pads.size();
+    std::printf("    [traffic] decks=%zu pad triangles=%zu\n", decks.size(), padTris);
+    auto sample = [&]() {
+        const auto& ids = city.carAgentIds();
+        for (std::size_t v = 0; v < city.carGroups().size(); ++v) {
+            InstanceGroup* g = world.get<InstanceGroup>(city.carGroups()[v]);
+            if (!g || v >= ids.size()) continue;
+            for (std::size_t i = 0; i < g->transforms.size() && i < ids[v].size(); ++i) {
+                if (ids[v][i] < 0) continue;                 // parked scenery
+                // MOVING traffic only: a driver resting at a destination may
+                // have pulled off the carriageway (a dead end, a place's
+                // entrance) — that is a different question from "cars drive
+                // on the road".
+                const auto& agents = city.sim().agents();
+                const int aid = ids[v][i];
+                if (aid >= static_cast<int>(agents.size()) || agents[aid].speed < 1.0) continue;
+                ++seen;
+                const Mat4& m = g->transforms[i];
+                const double x = m.m[0][3], y = m.m[1][3], z = m.m[2][3];
+                const double bottom = y - (v < he.size() ? he[v].y : 0.65);
+                double top;
+                // The surface the car is ON: the highest collider under its
+                // origin (a bridge deck over a street resolves to the deck).
+                if (!grid.surfaceAt(x, z, y, top)) { ++noSurface; continue; }
+                const double d = bottom - top;
+                ++checked;
+                sum += d;
+                lo = std::min(lo, d);
+                hi = std::max(hi, d);
+                if (std::fabs(d) > worst) { worst = std::fabs(d); worstAt = Vec2(x, z); }
+                if (std::fabs(d) > 0.25) {
+                    double deckY = std::nan("");
+                    for (const engine::RoadDeckField* f : decks) {
+                        double yy;
+                        if (f->heightAt(x, z, 4.5, &yy)) { deckY = yy; break; }
+                    }
+                    const int link = city.nav().nearestLink(Vec2(x, z));
+                    int padHits = 0;
+                    for (const engine::RoadDeckField* f : decks)
+                        for (const auto& t : f->pads)
+                            if (x >= std::min({t.a.x, t.b.x, t.c.x}) - 0.01 && x <= std::max({t.a.x, t.b.x, t.c.x}) + 0.01 &&
+                                z >= std::min({t.a.z, t.b.z, t.c.z}) - 0.01 && z <= std::max({t.a.z, t.b.z, t.c.z}) + 0.01)
+                                ++padHits;
+                    offenders.push_back({d, x, z, y, top, deckY,
+                                         terrain ? terrain(x, z) : std::nan(""), link,
+                                         link >= 0 ? city.nav().links[link].width * 0.5 : 0.0,
+                                         link >= 0 ? city.nav().links[link].layer : -1,
+                                         agents[aid].speed, padHits});
+                }
+            }
+        }
+    };
+    for (int i = 0; i < 600; ++i) {                       // 60 s of city time
+        city.step(world, 0.1);
+        if (i % 20 == 0) sample();
+    }
+    std::printf("    [traffic] %d samples (%d seen, %d off any collider): wheel-bottom minus "
+                "surface mean=%.3fm min=%.3fm max=%.3fm worst=%.3fm at (%.1f, %.1f)\n",
+                checked, seen, noSurface, checked ? sum / checked : 0.0, lo, hi, worst,
+                worstAt.x, worstAt.y);
+    std::sort(offenders.begin(), offenders.end(),
+              [](const Offender& a, const Offender& b) { return std::fabs(a.d) > std::fabs(b.d); });
+    std::printf("    [traffic] %zu samples off by > 0.25 m; worst distinct spots:\n", offenders.size());
+    std::vector<std::pair<int, int>> shown;
+    int printed = 0;
+    for (const Offender& o : offenders) {
+        const std::pair<int, int> cellKey{static_cast<int>(std::floor(o.x / 3.0)),
+                                          static_cast<int>(std::floor(o.z / 3.0))};
+        if (std::find(shown.begin(), shown.end(), cellKey) != shown.end()) continue;
+        shown.push_back(cellKey);
+        std::printf("      d=%+.2f at (%.1f, %.1f) y=%.2f surface=%.2f deck=%.2f terrain+0.22=%.2f "
+                    "link=%d half=%.1f layer=%d speed=%.1f padTrisOver=%d surfaces:",
+                    o.d, o.x, o.z, o.y, o.surface, o.deck, o.terr + 0.22, o.link, o.linkHalf,
+                    o.layer, o.speed, o.padHits);
+        for (double h : grid.surfacesAt(o.x, o.z)) std::printf(" %.2f", h);
+        std::printf("\n");
+        if (++printed >= 10) break;
+    }
+    // Measured at adoption (RoadDeck + pads, moving cars only): 2562 samples,
+    // mean 0.000 m, max +0.012 m, min -0.269 m — ONE sample, at
+    // (-899.9, 106.6) on the western foothill, where a second collider
+    // surface stands 0.26 m above the deck under a driving car (three stacked
+    // surfaces there: 44.43 / 44.83 deck / 45.09). That is a road-side
+    // geometry question, not a placement one; the bound holds it at its
+    // current size and the mean/max bounds keep placement honest.
+    CHECK(checked > 200);                                  // the fixture must bite
+    CHECK(lo > -0.30);                                     // never IN the road
+    CHECK(hi < 0.10);                                      // never hovering
+    CHECK(std::fabs(checked ? sum / checked : 0.0) < 0.03);   // no systematic term
 }
 

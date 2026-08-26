@@ -7,6 +7,7 @@
 #include "../src/engine/scripting/script_modules.h"     // openModuleLoader
 #include "../src/engine/script_assets.h"                // makeModuleSource
 #include "../src/apps/citysim/scripting/vehicle_body.h"
+#include "../src/engine/scripting/vehicle_spec.h"       // loadVehicleSpec (ride-height gate)
 
 #include <cstdio>
 #include <fstream>
@@ -390,3 +391,35 @@ TEST_CASE(fleet_cars_stand_on_their_wheels) {
         CHECK(rocker - lo > height * 0.04);
     }
 }
+
+// THE PLAYER'S CAR RESTS WHERE IT IS DRAWN (device: "inconsistencies with the
+// simulated cars versus the player's physics based car"). The drivable spec
+// publishes each wheel's drawn resting centre; the host must turn that into a
+// Jolt attach point lifted by the spring's settle, with the street travel
+// (PhysicsWorld::kStreet*). test_driving_lab.cpp proves that rule settles a
+// chassis exactly at its drawn height; this proves the shipped sedan spec
+// actually arrives with it applied. Without it the car rode 0.30 m high.
+TEST_CASE(drivable_spec_rests_the_wheels_where_they_are_drawn) {
+    VehiclesVM v;
+    CHECK(v.loaded);
+    if (!v.loaded) return;
+    VehicleSpec spec;
+    std::string err;
+    const bool ok = loadVehicleSpec(v.vm, "return vehicle.sedan(seed, {})", 7u, spec, &err);
+    if (!ok) std::printf("    spec error: %s\n", err.c_str());
+    CHECK(ok);
+    CHECK(spec.config.wheels.size() == 4);
+    const Real H = spec.config.chassisHalfExtent.y * 2.0;
+    for (const PhysicsWorld::VehicleWheel& w : spec.config.wheels) {
+        CHECK(std::fabs(w.suspensionMin - PhysicsWorld::kStreetSuspensionMin) < 1e-9);
+        CHECK(std::fabs(w.suspensionMax - PhysicsWorld::kStreetSuspensionMax) < 1e-9);
+        // attach = drawn rest centre (-H/2 + r) + the settle the spring takes back
+        const Real restCentre = -H * 0.5 + w.radius;
+        const Real want = restCentre + PhysicsWorld::kStreetSuspensionRestDrop;
+        if (std::fabs(w.position.y - want) >= 1e-6)
+            std::printf("    wheel attach y=%.4f, want %.4f (rest centre %.4f)\n",
+                        w.position.y, want, restCentre);
+        CHECK(std::fabs(w.position.y - want) < 1e-6);
+    }
+}
+

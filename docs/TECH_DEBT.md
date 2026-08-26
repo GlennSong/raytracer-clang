@@ -827,3 +827,47 @@ crosses. Fine-cell worst in the tile gate fell 6.5 -> 2.28 m; the coarse
 16 m figure grew to 11.74 m by the same move (hugging the real ground means
 diverging from a distant tile that smears cliff notches) — far-LOD only,
 bounded by the gate, shrinks when lip-aware routing lands.
+
+### Addendum (2026-08-26): cars were placed on the map too — RoadDeck
+
+The same seam under the traffic (device: "sometimes they are below the
+road ... the wheels of the car are crunched into the body"). The mesher
+carves the terrain 0.22 m UNDER the drivable profile on purpose (the deck
+must stay proud of the interpolating grid) and draws the deck AT the
+profile; the citysim bridge placed every car on the carved analytic
+terrain plus a vestigial 0.08 "lift" — 0.14 m into the asphalt everywhere,
+and 0.62 m on the deck fixture's hill, where overlapping road ramps pull
+the carved field further down. Fix: `buildRoadNetMesh` exports the deck
+it rode (`RoadDeckField`, the final chain profiles, spatially hashed); the
+loader stores it as a `RoadDeck` component beside the road and plants
+street furniture on it; the bridge's `groundAt` answers from it wherever a
+road passes. Fixture: paint and parked cars 0.000 m, driven cars within
+3 cm (was 0.62 m mean). Gates: the deck test's new DRIVEN arm (sampled
+while the cars move — at the end of a run every driver has pulled off at
+a dead end), and `metro_traffic_drives_on_the_road_deck` (level_tests:
+every drawn driver vs the road COLLIDER under it, through the real loader).
+Metro at adoption: 2562 moving-car samples, mean 0.000 m, max +0.012 m; one
+sample at -0.27 m where a T-junction mouth on the foothill stacks three road
+surfaces 0.26 m apart (a junction-geometry residue, bounded by the gate).
+Two things the first metro run taught: junction PADS are chordal fills
+between their mouths while the chain profile curves (up to ±0.8 m on the
+hill) — so the deck field carries the pad triangles themselves; and drivers
+resting at a destination pull off the carriageway, so the gate samples
+MOVING cars.
+
+Two sibling defects fixed alongside, because "look like the player's car":
+the wheel arch was a sill-based half-ellipse capped at 0.42 H and
+quantised down the anchor ladder (~0.37 H) while a sedan's tyre crown
+sits at 0.428 H — the arch is now a circle around the axle (r + 10 cm),
+cut by cell centre, with the arch row at crown + 5 cm and vertical
+wheel-well walls (`car_wheel_crown_is_not_behind_bodywork`); and the
+drivable spec published its wheels as Jolt attach points with the stock
+0.20/0.45 travel, parking the player's car ~0.30 m too high — the
+street-car suspension rule now lives in PhysicsWorld and both the spec and
+a commandeered car apply it (`drivable_spec_rests_the_wheels_where_they_
+are_drawn`).
+
+Still open: walkers on sidewalk links now stand at deck height (16 cm
+under the sidewalk top, was 30 cm) — the band's curb height belongs in
+their placement; sim wheels are still baked into the body (no spin/steer),
+which the per-wheel instancing the player's car uses would cure.

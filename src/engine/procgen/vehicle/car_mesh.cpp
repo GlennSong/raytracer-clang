@@ -149,6 +149,26 @@ CarMesh buildCarMesh(const CarParams& p) {
     // being approximated by whichever cells happen to straddle it.
     const Real frontAxleZ01 = (L * Real(0.5) - p.frontOverhang) / L;
     const Real rearAxleZ01 = -(L * Real(0.5) - p.rearOverhang) / L;
+    // The arch opening follows the WHEEL, not a fixed fraction of the body. A
+    // wheel resting at the ground datum (y = -H/2) has its crown at
+    // wheelDiameter/H — a sedan's 0.62/1.45 = 0.428 already cleared the old
+    // archTop of 0.42, and the anchor ladder then quantised the cut lower
+    // still (~0.37 H), leaving ~8 cm of tyre behind bodywork (device: "the
+    // wheels of the car are crunched into the body"). Open to the crown plus
+    // the clearance a turning tyre needs, in both axes.
+    // Two heights: the ROW the aperture closes on (crown + 5 cm — the reveal
+    // strip along it tilts ~2 cm down with the flank's curvature) and the
+    // arc's PEAK (crown + 10 cm). A cell is cut only when its top edge is
+    // under the ellipse, and the central cells sit a little off the axle, so
+    // the peak must stand above the row by more than the ellipse's droop
+    // there — else the row is never reached and the tyre stays covered.
+    const Real kArchClearance = Real(0.10);
+    const Real kArchRowLift = Real(0.05);
+    const Real archTop01 =
+        std::max(p.archTop, (p.wheelDiameter + kArchClearance) / H);
+    const Real archRow01 = (p.wheelDiameter + kArchRowLift) / H;
+    const Real archHalfSpan01 =
+        std::max(p.archHalfSpan, (p.wheelDiameter * Real(0.5) + kArchClearance) / L);
 
     std::vector<Real> st = p.stations;
     for (Real az : {frontAxleZ01, rearAxleZ01}) {
@@ -159,7 +179,7 @@ CarMesh buildCarMesh(const CarParams& p) {
         for (int k = 0; k <= p.archSegments; ++k) {
             const Real t = static_cast<Real>(k) / p.archSegments;
             const Real u = std::cos(t * Real(3.14159265358979));
-            st.push_back(az + p.archHalfSpan * u);
+            st.push_back(az + archHalfSpan01 * u);
         }
     }
     // Every APERTURE EDGE is a station too. A cell is classified by its midpoint,
@@ -256,12 +276,27 @@ CarMesh buildCarMesh(const CarParams& p) {
         const Real yLo = cy01 - vTop * ry01;
         const Real yHi = cy01 + vTop * ry01;
         const Real eps = std::max((yHi - yLo) * Real(0.02), Real(1e-4));
-        const Real yBelt = std::min(std::max(beltAt(z01), yLo + eps), yHi - eps);
+        // Over a wheel arch the belt must clear the arch row (crown + lift):
+        // the belt dips over the front fender on a sedan, and clamping the
+        // arch row under it capped the opening below the tyre's crown. There
+        // is no greenhouse over a fender, so lifting the belt there costs
+        // nothing visible.
+        Real beltHere = beltAt(z01);
+        for (Real axle : {frontAxleZ01, rearAxleZ01})
+            if (std::fabs(z01 - axle) * L < p.wheelDiameter * Real(0.5) + kArchClearance)
+                beltHere = std::max(beltHere, archRow01 + eps * Real(2));
+        const Real yBelt = std::min(std::max(beltHere, yLo + eps), yHi - eps);
         const Real yRail = std::min(std::max(roof01 - p.railDrop, yBelt + eps), yHi - eps);
         Real anchorY[kSideAnchorCount];
         anchorY[kAnchorSill] = yLo;
         anchorY[kAnchorArchLow] = yLo + (yBelt - yLo) * Real(0.34);
-        anchorY[kAnchorLowerMid] = yLo + (yBelt - yLo) * Real(0.67);
+        // The lower-mid row sits AT the arch crown (clamped inside the band):
+        // a cell is cut only when its TOP edge is under the ellipse, so the
+        // opening can reach exactly this row and no higher — placing the row
+        // at the crown makes the aperture top the wheel's clearance line
+        // instead of whatever 0.67 of the sill-to-belt band happened to be.
+        anchorY[kAnchorLowerMid] =
+            std::min(std::max(archRow01, anchorY[kAnchorArchLow] + eps), yBelt - eps);
         anchorY[kAnchorBelt] = yBelt;
         anchorY[kAnchorGlassMid] = (yBelt + yRail) * Real(0.5);
         anchorY[kAnchorRail] = yRail;
@@ -323,18 +358,29 @@ CarMesh buildCarMesh(const CarParams& p) {
     // closing down to the sill at either end, rather than a flat ceiling across
     // a flat z-window. The old rule was a rectangle in both axes, so the opening
     // was square no matter how round the wheel in it was.
+    // A real arch is a CIRCLE around the axle, not a half-ellipse from the
+    // sill: at wheel-centre height a sill-based ellipse is already closing in
+    // while the tyre is at its widest. Radius = wheel radius + clearance,
+    // centred on the resting wheel centre (r above the ground datum).
+    const Real archR01 = (p.wheelDiameter * Real(0.5) + kArchClearance) / H;   // in y01
+    const Real wheelCy01 = (p.wheelDiameter * Real(0.5)) / H;
     auto archTopAt = [&](Real zc) {
         Real best = 0;
         for (Real axle : {frontAxleZ01, rearAxleZ01}) {
-            const Real d = std::fabs(zc - axle) / p.archHalfSpan;
-            if (d >= Real(1)) continue;
-            best = std::max(best, p.archTop * std::sqrt(Real(1) - d * d));
+            const Real dz = std::fabs(zc - axle) * L;                     // metres
+            const Real rr = p.wheelDiameter * Real(0.5) + kArchClearance;
+            if (dz >= rr) continue;
+            best = std::max(best, wheelCy01 + archR01 * std::sqrt(Real(1) - (dz / rr) * (dz / rr)));
         }
-        return best;
+        return std::min(best, archTop01);
     };
-    auto isArch = [&](Real zc, Run run, Real maxY01) {
+    // A cell is an arch cell when its CENTRE is under the arc. Testing the top
+    // corner quantised the opening down to whole ladder rows and left the
+    // crown covered; the centre test keeps the boundary within half a cell
+    // of the arc, and the pocket logic below closes whatever shape results.
+    auto isArch = [&](Real zc, Run run, Real meanY01) {
         if (run != Run::Side) return false;
-        return maxY01 <= archTopAt(zc);
+        return meanY01 <= archTopAt(zc);
     };
 
     // --- classify every cell up front ---------------------------------------
@@ -367,7 +413,7 @@ CarMesh buildCarMesh(const CarParams& p) {
             const Real zRaked = zc + hAbove * dloTan / L;
             if (isGlass(zRaked, run, midU, prof[j].anchor, prof[j2].anchor))
                 cell[static_cast<std::size_t>(i) * K + j] = kGlassCell;
-            else if (isArch(zc, run, maxY01))
+            else if (isArch(zc, run, meanY01))
                 cell[static_cast<std::size_t>(i) * K + j] = kArchCell;
         }
     }
@@ -393,6 +439,13 @@ CarMesh buildCarMesh(const CarParams& p) {
                           : Vec3(0, 1, 0);
             const Vec3 fromCentre(ring[idx].x, ring[idx].y - centreY[i], 0);
             if (dot(n2, fromCentre) < 0) n2 = n2 * Real(-1);
+            // The ARCH band's inner skin is the wheel well, and a wheel well
+            // has VERTICAL walls: offset those vertices straight inward. Along
+            // the flank's curved normal the reveal strip at the top of the
+            // opening tilted ~2 cm down and clipped the tyre crown wherever a
+            // low hood already capped the arch row (a sedan's front fender).
+            if (prof[j].run == Run::Side && prof[j].anchor <= kAnchorLowerMid)
+                n2 = Vec3(ring[idx].x >= 0 ? Real(1) : Real(-1), 0, 0);
             inner[idx] = ring[idx] - n2 * p.shellThickness;
         }
     }

@@ -76,7 +76,13 @@ local function from_class(class_name, seed, opts)
   -- 3 cm larger than the arches drawn for them.
   local r = c.wheel_diameter * 0.5
   local halfTrack = c.track * 0.5
-  local axleY = -d.height * 0.5 + r + c.h156
+  -- The wheel's DRAWN resting centre: one radius above the ground datum
+  -- (y = -height/2), the same place the fleet bakes its wheels. The host
+  -- (vehicle_spec.cpp) lifts the Jolt attach point by the spring's settle,
+  -- so publishing the attach point here (the old "+ h156") double-counted
+  -- the ride height and parked the player's car ~0.30 m in the air with its
+  -- wheels dangling under the arches.
+  local axleY = -d.height * 0.5 + r
   local frontZ = d.length * 0.5 - d.front_overhang
   local rearZ = -(d.length * 0.5 - d.rear_overhang)
 

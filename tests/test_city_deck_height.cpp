@@ -130,6 +130,16 @@ TEST_CASE(parked_cars_and_bay_paint_sit_on_the_road_deck) {
     lod.params = carved;
     lod.seed = 7u;
     world.add<TerrainLodConfig>(world.create(), lod);
+    // 4. The road mesh: the surface a player actually stands on — and the DECK
+    // it rode, stored exactly as the loader stores it (RoadDeck). Built before
+    // the run so the DRIVEN cars can be measured while they are driving (at
+    // the end of the run every driver has reached a dead-end tip and pulled
+    // off the carriageway to wait — off the mesh, nothing to measure).
+    RoadDeckField deck;
+    const RenderMesh roadMesh = buildRoadNetMesh(net, naturalGround, nullptr, &deck);
+    CHECK(!roadMesh.vertices.empty());
+    CHECK(!deck.empty());
+    world.add<RoadDeck>(world.create(), RoadDeck{deck});
 
     CityRenderParams p;
     p.cars = 6;
@@ -147,17 +157,43 @@ TEST_CASE(parked_cars_and_bay_paint_sit_on_the_road_deck) {
     // A PARKED car is a SimVehicle whose driver has left it — not a bay flag —
     // so the fixture has to run until somebody actually parks. Drivers rest on
     // arrival, which on this cross takes a few in-world minutes.
+    const std::vector<Vec3> he = city.carGroupHalfExtents();
+
+    // 7 (accumulated below). Signed bottom-minus-deck for every drawn driver
+    // that is ON the mesh, sampled every 25 steps: a sink and a hover cannot
+    // cancel, the mean is the systematic term, the spread is the noise.
+    double drivenWorst = 0, drivenSum = 0, drivenMin = 1e9, drivenMax = -1e9;
+    int drivenChecked = 0, drivenSeen = 0, drivenNoDeck = 0;
+    auto sampleDriven = [&]() {
+        const auto& idsNow = city.carAgentIds();
+        for (std::size_t v = 0; v < city.carGroups().size(); ++v) {
+            InstanceGroup* g = world.get<InstanceGroup>(city.carGroups()[v]);
+            if (!g || v >= idsNow.size()) continue;
+            for (std::size_t i = 0; i < g->transforms.size() && i < idsNow[v].size(); ++i) {
+                if (idsNow[v][i] < 0) continue;          // parked: arm 6 below
+                ++drivenSeen;
+                const Mat4& m = g->transforms[i];
+                const double deck = meshDeckAt(roadMesh, m.m[0][3], m.m[2][3]);
+                if (std::isnan(deck)) { ++drivenNoDeck; continue; }
+                ++drivenChecked;
+                const double bottom = m.m[1][3] - (v < he.size() ? he[v].y : 0.65);
+                const double d = bottom - deck;
+                drivenSum += d;
+                drivenMin = std::min(drivenMin, d);
+                drivenMax = std::max(drivenMax, d);
+                drivenWorst = std::max(drivenWorst, std::fabs(d));
+            }
+        }
+    };
+
     int parkedSeen = 0;
     for (int i = 0; i < 6000 && parkedSeen == 0; ++i) {
         city.step(world, 0.1);
+        if (i % 25 == 0) sampleDriven();
         for (const SimVehicle& sv : city.sim().vehicles())
             if (sv.driver < 0) { ++parkedSeen; break; }
     }
     CHECK(parkedSeen > 0);
-
-    // 4. The road mesh: the surface a player actually stands on.
-    const RenderMesh roadMesh = buildRoadNetMesh(net, naturalGround);
-    CHECK(!roadMesh.vertices.empty());
 
     // How far the natural sampler is from the deck at these bays — the size of
     // the error the bridge used to inherit. Reported so a future flattening of
@@ -200,7 +236,6 @@ TEST_CASE(parked_cars_and_bay_paint_sit_on_the_road_deck) {
     // agent index.
     double worstCar = 0;
     int carsChecked = 0;
-    const std::vector<Vec3> he = city.carGroupHalfExtents();
     const auto& ids = city.carAgentIds();
     for (std::size_t v = 0; v < city.carGroups().size(); ++v) {
         InstanceGroup* g = world.get<InstanceGroup>(city.carGroups()[v]);
@@ -220,16 +255,31 @@ TEST_CASE(parked_cars_and_bay_paint_sit_on_the_road_deck) {
         }
     }
 
+    const double drivenMean = drivenChecked ? drivenSum / drivenChecked : 0.0;
+
     std::printf("    [deck] bays=%d naturalVsDeck=%.2fm worstPaint=%.3fm "
                 "cars=%d worstCar=%.3fm\n",
                 sampled, worstNaturalError, worstPaint, carsChecked, worstCar);
+    std::printf("    [deck] driven=%d (seen %d, off-mesh %d) bottom-deck mean=%.3fm "
+                "min=%.3fm max=%.3fm worst=%.3fm\n",
+                drivenChecked, drivenSeen, drivenNoDeck, drivenMean, drivenMin,
+                drivenMax, drivenWorst);
 
     // The fixture must actually be hilly enough to expose the bug: if the raw
     // ground and the deck agree everywhere, this test proves nothing.
     CHECK(worstNaturalError > 0.5);
-    // The road slab stands `net.look.lift` (8 cm) proud of the carved ground, so the
-    // bridge's placements land within roughly that of the mesh surface.
-    CHECK(worstPaint < 0.30);
+    // Paint and parked cars are placed from the RoadDeck the mesh rode, so
+    // they land ON the mesh surface (measured 0.000 m). The old 0.30 m bound
+    // was sized to tolerate the 0.14 m sink this gate never noticed — the
+    // terrain is carved 0.22 m under the deck and the bridge added a
+    // vestigial 0.08 "lift" — and it must not be widened again.
+    CHECK(worstPaint < 0.05);
     CHECK(carsChecked > 0);    // the scenery arm must not pass vacuously
-    CHECK(worstCar < 0.30);
+    CHECK(worstCar < 0.05);
+    // The driven arm: cars must not be IN the road. Bound both ways, tight:
+    // a tyre is 0.31 m, so a 0.05 m sink is a visible flat spot and a 0.05 m
+    // hover a visible shadow gap.
+    CHECK(drivenChecked > 0);
+    CHECK(drivenMin > -0.05);
+    CHECK(drivenMax < 0.12);
 }

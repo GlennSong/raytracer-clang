@@ -143,6 +143,24 @@ public:
     // tests/test_driving_lab.cpp — drive those gates when tuning.
 
     // One wheel, positioned relative to the chassis origin (chassis-local metres).
+    // THE STREET-CAR SUSPENSION RULE, shared by every path that builds a car
+    // from a drawn body (the drivable spec in vehicle_spec.cpp, a commandeered
+    // fleet car in city_vehicles.cpp). `VehicleWheel::position` is the
+    // ATTACHMENT point; Jolt hangs the wheel below it by the spring's settle,
+    // which for these values is clamp(max - staticDeflection, min, max) =
+    // 0.075 m, mass-independent (tests/test_driving_lab.cpp measures it). A
+    // spec that publishes the DRAWN resting centre must therefore lift the
+    // attach point by that drop, or the chassis parks the drop too high —
+    // with the stock 0.20/0.45 travel that was 0.375 m: the player's car rode
+    // jacked up with its wheels dangling while the sim's cars sat on the road
+    // (device: "inconsistencies with the simulated cars versus the player's
+    // physics based car").
+    static constexpr Real kStreetSuspensionMin = 0.05;
+    static constexpr Real kStreetSuspensionMax = 0.15;
+    static constexpr Real kStreetStaticDeflection = 0.075;   // at the 1.5 Hz default
+    static constexpr Real kStreetSuspensionRestDrop =
+        kStreetSuspensionMax - kStreetStaticDeflection;
+
     struct VehicleWheel {
         Vec3 position{0, 0, 0};        // attachment point (chassis-local)
         Real radius = 0.35;

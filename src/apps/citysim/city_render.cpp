@@ -77,6 +77,13 @@ void refreshBounds(InstanceGroup* g) {
 }  // namespace
 
 Real CityRenderSystem::groundAt(Real x, Real z) const {
+    // ON a road: the deck the mesher drew (RoadDeck). The terrain under a road
+    // is carved 0.22 m below the profile on purpose; sampling it put every
+    // car's wheels inside the asphalt (device: "below the road").
+    for (const engine::RoadDeckField& f : decks_) {
+        double y;
+        if (f.heightAt(x, z, sidewalk_ + 1.0, &y)) return static_cast<Real>(y);
+    }
     return (heightAt_ ? heightAt_(x, z) : 0.0) + roadLift_;
 }
 
@@ -175,6 +182,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         roadLift_ = std::max(roadLift_, static_cast<Real>(net.look.lift));
         sidewalk_ = std::max(sidewalk_, static_cast<Real>(net.look.sidewalk));
     });
+    decks_.clear();
+    world.each<engine::RoadDeck>(
+        [&](Entity, engine::RoadDeck& d) { decks_.push_back(d.field); });
     // THE GROUND THIS BRIDGE STANDS THINGS ON (#25). Everything this bridge
     // places sits on the finished road: parked cars, painted bay outlines,
     // crosswalk decals, at-grade traffic. The level's CDLOD terrain config

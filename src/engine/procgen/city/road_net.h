@@ -112,8 +112,11 @@ struct CurbBandAudit {
     double curbHeight = 0.0;
 };
 
+// `deckOut` (optional) receives the DECK the mesh rode — see RoadDeckField —
+// indexed and ready to query; the loader stores it beside the road entity.
 RenderMesh buildRoadNetMesh(const RoadEntity& road, const RoadGroundFn& heightAt,
-                            CurbBandAudit* auditOut = nullptr);
+                            CurbBandAudit* auditOut = nullptr,
+                            RoadDeckField* deckOut = nullptr);
 
 // Swept-lattice street mesher (street-lattice-plan.md, stage 3): sweep each chain
 // as a lattice body trimmed to the junction boundary, and fill each deg>=3 node
@@ -132,7 +135,9 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
                                // 0 = the old radius-less quadratic corner. The real
                                // value arrives from RoadLook::cornerRadius via
                                // buildRoadNetMesh; hand-built graphs keep the old shape.
-                               double cornerRadius = 0.0);
+                               double cornerRadius = 0.0,
+                               // The deck: final chains (yAbs) + pad triangles.
+                               RoadDeckField* deckOut = nullptr);
 
 // The sampled + constrained road graph the mesher builds from: every edge sampled
 // to a fine polyline (a curved road becomes a chain of short straight edges; a

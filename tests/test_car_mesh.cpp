@@ -555,4 +555,106 @@ TEST_CASE(car_lamp_lenses_are_closed) {
 // passes on the rectangle it is supposed to catch. Verify arches by looking:
 // tools/car_shots.sh, the `side` and `kerb` frames.
 
+// THE WHEEL FITS THE ARCH (device: "the wheels of the car are crunched into
+// the body"). A wheel of `wheelDiameter` resting at the ground datum has its
+// crown at y01 = wheelDiameter / height — above the old fixed archTop (0.42)
+// for a sedan, and the anchor ladder quantised the cut lower still. Probe the
+// opening the way the eye does: rays from OUTSIDE the car, aimed inward, at
+// points on the tyre's upper arc (radius + 2 cm). Where the arch is open the
+// ray passes the outer skin and hits the wheel well behind it; where bodywork
+// covers the tyre the first hit IS the outer skin. Both a sedan and a
+// tall-wheeled proportion (jeep-like: 0.74 m wheel, 1.75 m body) must pass.
+namespace {
+bool rayHitsTriangle(const Vec3& o, const Vec3& d, const Vec3& a, const Vec3& b,
+                     const Vec3& c, Real& tOut) {
+    const Vec3 e1 = b - a, e2 = c - a;
+    const Vec3 pv = cross(d, e2);
+    const Real det = dot(e1, pv);
+    if (std::fabs(det) < 1e-9) return false;
+    const Real inv = Real(1) / det;
+    const Vec3 tv = o - a;
+    const Real u = dot(tv, pv) * inv;
+    if (u < 0 || u > 1) return false;
+    const Vec3 qv = cross(tv, e1);
+    const Real v = dot(d, qv) * inv;
+    if (v < 0 || u + v > 1) return false;
+    const Real t = dot(e2, qv) * inv;
+    if (t <= 1e-6) return false;
+    tOut = t;
+    return true;
+}
+// First hit distance along the ray, or -1.
+Real firstHit(const RenderMesh& m, const Vec3& o, const Vec3& d) {
+    Real best = -1;
+    for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+        Real t;
+        if (rayHitsTriangle(o, d, m.vertices[m.indices[i]].position,
+                            m.vertices[m.indices[i + 1]].position,
+                            m.vertices[m.indices[i + 2]].position, t))
+            if (best < 0 || t < best) best = t;
+    }
+    return best;
+}
+int coveredCrownSamples(const CarParams& p) {
+    const CarMesh car = buildCarMesh(p);
+    const RenderMesh& body = car.parts[static_cast<int>(CarPart::Body)];
+    const Real r = p.wheelDiameter * Real(0.5);
+    const Real cy = -p.height * Real(0.5) + r;          // wheel centre (rests on datum)
+    // One centimetre over the tyre: a sedan's front fender line sits only
+    // ~4 cm above the crown (hood height at the axle is the body's own
+    // proportion), and the arch row is capped by it; what the gate demands is
+    // that no bodywork stands between the eye and the tyre itself.
+    const Real probeR = r + Real(0.01);
+    const Real frontZ = p.length * Real(0.5) - p.frontOverhang;
+    const Real rearZ = -(p.length * Real(0.5) - p.rearOverhang);
+    int covered = 0;
+    for (Real az : {frontZ, rearZ}) {
+        // The CROWN region, 45..135 degrees: the fender lip legitimately
+        // skirts the tyre lower down, as on a real car.
+        for (int k = 2; k <= 6; ++k) {
+            const Real phi = Real(3.14159265358979) * static_cast<Real>(k) / 8;
+            const Real y = cy + probeR * std::sin(phi);
+            const Real z = az + probeR * std::cos(phi);
+            for (Real side : {Real(1), Real(-1)}) {
+                const Vec3 o(side * (p.width * Real(0.5) + Real(1)), y, z);
+                const Vec3 d(-side, 0, 0);
+                const Real t = firstHit(body, o, d);
+                if (t < 0) continue;                          // no skin at all here
+                const Real hitX = std::fabs(o.x + d.x * t);
+                // The outer skin at this station: the widest body vertex nearby.
+                // Ring vertices exist only at stations, so take the widest
+                // vertex within a third of a metre along z — the flank is
+                // straight enough over that span.
+                Real outer = 0;
+                for (const Vertex& v : body.vertices)
+                    if (std::fabs(v.position.z - z) < Real(0.35) &&
+                        std::fabs(v.position.y - y) < Real(0.25))
+                        outer = std::max(outer, std::fabs(v.position.x));
+                // Open: the first hit is the wheel well, one shell thickness in.
+                if (hitX > outer - p.shellThickness * Real(0.5)) {   // first hit IS the skin
+                    ++covered;
+                    std::printf("      covered: axle z=%.2f phi=%d side=%+.0f y=%.3f (y01 %.3f) hitX=%.3f outer=%.3f\n",
+                                az, k * 180 / 8, side, y, (y + p.height * Real(0.5)) / p.height, hitX, outer);
+                }
+            }
+        }
+    }
+    return covered;
+}
+}  // namespace
+
+TEST_CASE(car_wheel_crown_is_not_behind_bodywork) {
+    CarParams sedan = defaultSedanParams();
+    const int sedanCovered = coveredCrownSamples(sedan);
+    std::printf("    [arch] sedan: %d/20 crown probes covered by bodywork\n", sedanCovered);
+    CHECK(sedanCovered == 0);
+
+    CarParams tall = defaultSedanParams();
+    tall.height = 1.75;
+    tall.wheelDiameter = 0.74;
+    tall.length = 4.4;
+    const int tallCovered = coveredCrownSamples(tall);
+    std::printf("    [arch] tall-wheeled: %d/20 crown probes covered by bodywork\n", tallCovered);
+    CHECK(tallCovered == 0);
+}
 

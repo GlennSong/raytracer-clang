@@ -376,10 +376,13 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     r.material.roughness = 0.93f;
     if (net.look.markings)                           // lane paint via the surface shader
         r.material.setSurface(RenderMaterial::Surface::RoadMarkings);
-    RenderMesh mesh = buildRoadNetMesh(net, drapeGround);
+    RoadDeckField deck;
+    RenderMesh mesh = buildRoadNetMesh(net, drapeGround, nullptr, &deck);
     if (!mesh.vertices.empty())
         r.mesh = assets.acquireMesh(mesh, "road:" + std::to_string(index));
     world.add<Renderable>(e, r);
+    // The deck the mesh rode, for everything that must stand ON it (RoadDeck).
+    if (!deck.empty()) world.add<RoadDeck>(e, RoadDeck{std::move(deck)});
 
     // Static collision from the carriageway geometry (ADR-0059): without this a
     // road has no collider of its own — ground roads borrow the terrain's, but an
@@ -3706,6 +3709,30 @@ bool LevelLoader::load(const std::string& path,
             furnGround = [g = entityGround](Real x, Real z) { return g(x, z); };
         else if (levelGround)
             furnGround = [g = levelGround](Real x, Real z) { return g(x, z); };
+        // ...and on the DECK where there is one: the carved sampler sits 0.22 m
+        // under the drawn asphalt (road_net.cpp, "Carve a step BELOW"), and a
+        // pole planted there stood with its foot inside the sidewalk band. The
+        // band rides the deck + curb, which is where a kerb pole's foot goes.
+        {
+            auto decks = std::make_shared<std::vector<engine::RoadDeckField>>();
+            Real curb = 0, margin = 0;
+            world.each<engine::RoadDeck>(
+                [&](Entity, engine::RoadDeck& d) { decks->push_back(d.field); });
+            world.each<engine::RoadEntity>([&](Entity, engine::RoadEntity& net) {
+                curb = std::max(curb, static_cast<Real>(net.look.curb));
+                margin = std::max(margin, static_cast<Real>(net.look.sidewalk) + 2.0);
+            });
+            if (!decks->empty() && furnGround) {
+                auto base = furnGround;
+                furnGround = [base, decks, curb, margin](Real x, Real z) {
+                    for (const engine::RoadDeckField& f : *decks) {
+                        double y;
+                        if (f.heightAt(x, z, margin, &y)) return static_cast<Real>(y) + curb;
+                    }
+                    return base(x, z);
+                };
+            }
+        }
         if (!combined.edges.empty()) {
             const engine::NavGraph nav = engine::buildNavGraph(combined);
             const engine::StreetFurniturePlan fplan =

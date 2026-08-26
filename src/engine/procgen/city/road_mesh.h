@@ -7,6 +7,7 @@
 #include "../../../rt_math.h"             // Vec3
 #include <array>
 #include <functional>
+#include <unordered_map>
 
 namespace engine {
 
@@ -138,6 +139,43 @@ struct UnionSpine {
     std::vector<double> crossSlope;
 };
 // (WeldSolidParams / weldSolid deleted — roads-v2 S6, one mesher.)
+
+// THE DECK THE MESHER DREW, as a queryable field. The lattice rides each
+// chain's reconciled, grade-limited profile (`yAbs` below); the terrain is
+// carved 0.22 m UNDER that profile on purpose so the deck stays proud of the
+// interpolating grid (road_net.cpp, "Carve a step BELOW"). Anything placed on
+// a road by sampling the terrain therefore sat 0.22 m (minus a vestigial
+// 0.08 "lift") inside the asphalt — every sim car, parked car, painted bay
+// and signal lens (device: "the simulated cars ... sometimes they are below
+// the road"). This field is the road surface itself, exported by
+// buildRoadNetMesh from the very chains it swept, so a consumer that asks it
+// stands where the mesh is by construction.
+struct RoadDeckField {
+    std::vector<UnionSpine> spines;   // yAbs filled: the per-point deck Y the lattice rode
+    // JUNCTION PADS, as the drawn triangles (upward faces only). A pad is an
+    // earcut of its boundary loop with heights only at the loop — a chordal
+    // surface between the mouths — while the chain profile through the node
+    // curves; on a steep hill the two differ by the sagitta at the pad's
+    // edge (metro traffic census: +0.83 m hover on a crest, -0.67 m sink in a
+    // sag). Inside a pad the field answers from these, not the profile.
+    struct Tri { Vec3 a, b, c; };
+    std::vector<Tri> pads;
+    // Deck Y at (x, z): the pad triangle under it if any, else the nearest
+    // spine's lerped profile when that spine's centreline passes within
+    // (half-width + margin). False off every road — the caller falls back
+    // to its terrain.
+    bool heightAt(double x, double z, double margin, double* outY) const;
+    // Spatial hash of pad triangles and spine segments; buildRoadNetMesh
+    // calls it after filling both (call again after editing by hand).
+    void buildIndex();
+    bool empty() const { return spines.empty() && pads.empty(); }
+
+private:
+    struct Seg { int spine; int i; };        // spine segment (i, i+1)
+    std::unordered_map<long long, std::vector<Seg>> cells_;
+    std::unordered_map<long long, std::vector<int>> padCells_;
+    double cell_ = 24.0;   // >= widest half-width + sidewalk + margin: 3x3 covers
+};
 
 
 // The deck's smoothed per-spine profiles, junction-RECONCILED (chains sharing
