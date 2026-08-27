@@ -212,11 +212,17 @@ RT_CITY_SVG=walks.svg RT_CITY_SVG_LAYERS=roads,curbs,sidewalks,furniture ./build
 magick metro.svg -resize 2400x2400 metro.png     # ImageMagick; any SVG viewer works too
 ```
 **Teleport** (play mode, Debug → Teleport under the tilde overlay): the viewpoint as one
-pasteable line — `x y z pitch yaw` (metres, degrees, yaw 0 = north) — with
-copy buttons; a paste box that takes that line, `x y z`, or just `x z` (you
+pasteable line — `x y z pitch yaw` (metres, degrees, yaw 0 = north) — in a
+selectable field (click, Ctrl+A, Ctrl+C) with copy buttons beside it (a plain
+label cannot be selected, which reads as "copy does nothing"; `clip <text>` /
+`clip?` on the socket check the OS clipboard bridge from outside); a paste
+box that takes that line, `x y z`, or just `x z` (you
 land on the ground) and moves the player (physics character, camera
 re-attached) or only the fly camera; named bookmarks kept in settings; and
-the city map's sidewalk-on-asphalt places with Go buttons. The socket
+the city map's sidewalk-on-asphalt places with Go buttons; and a *Third
+person* checkbox (V on foot toggles it too, unless the level has placed
+cameras — then V cycles those; the mode persists in `settings.json` as
+`playerThirdPerson`). The socket
 speaks the same line: `where?` prints it, `teleport <line>` goes there — so
 a location travels between you, the panel and a Claude session by paste.
 

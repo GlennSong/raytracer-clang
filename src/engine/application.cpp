@@ -1,4 +1,7 @@
 #include "components.h"                 // CityMap (citymap)
+#ifdef RT_ENABLE_IMGUI
+#include <imgui.h>                       // clip/clip?: the debug UI clipboard from the socket
+#endif
 #include "procgen/city/city_svg.h"     // the layered city map
 #include "application.h"
 #include "states/debug_overlay_state.h"
@@ -708,6 +711,34 @@ std::string Application::handleControlCommand(const std::string& line) {
         settingsStore.setDouble("daynight.set", hour);
         return "ok time staged";
     }
+    if (cmd.name == "clip" || cmd.name == "clip?") {
+        // The debug UI's clipboard, from outside: `clip <text>` sets it,
+        // `clip?` reads it — the way to tell "ImGui's copy does nothing"
+        // from "the window manager's clipboard bridge is not there".
+#ifdef RT_ENABLE_IMGUI
+        if (ImGui::GetCurrentContext() == nullptr) return "err no debug UI context";
+        if (cmd.name == "clip?") {
+            const char* t = ImGui::GetClipboardText();
+            return std::string("ok ") + (t && *t ? t : "(empty)");
+        }
+        if (cmd.args.empty()) return "err usage: clip <text>";
+        std::string text = cmd.args[0];
+        for (size_t i = 1; i < cmd.args.size(); ++i) text += " " + cmd.args[i];
+        ImGui::SetClipboardText(text.c_str());
+        return "ok clipboard set";
+#else
+        return "err built without the debug UI";
+#endif
+    }
+    if (cmd.name == "person") {
+        // On-foot camera: first or third person (the V key, explicit and
+        // guard-free). Consumed by PlayerSystem; persisted as playerThirdPerson.
+        if (cmd.args.empty() || (cmd.args[0] != "first" && cmd.args[0] != "third" && cmd.args[0] != "toggle"))
+            return "err usage: person first|third|toggle";
+        settingsStore.setDouble("player.setThirdPerson",
+                                cmd.args[0] == "toggle" ? 2.0 : (cmd.args[0] == "third" ? 1.0 : 0.0));
+        return "ok person staged";
+    }
     if (cmd.name == "teleport") {
         // Move the PLAYER (the camera when there is none): "x y z [pitch yaw]"
         // or "x z" (on the ground) — the Teleport panel's paste format, so a
@@ -965,7 +996,7 @@ std::string Application::handleControlCommand(const std::string& line) {
 
     return "err unknown command: " + cmd.name +
            " (ping|info|camera|camera?|shot|overlay|sim|reload|set|get|"
-           "daynight|daynight?|citymap|teleport|teleport?|where?|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
+           "daynight|daynight?|citymap|teleport|teleport?|where?|person|clip|clip?|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
            "possess|drive_to|walk_to|possess_stop|release|possess?|ground?)";
 }
 

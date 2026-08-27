@@ -235,6 +235,21 @@ void PlayerSystem::update(FrameContext& ctx) {
         !(ctx.world.alive(playerEntity) && ctx.world.has<InVehicle>(playerEntity)))
         jumpRequested = true;
 
+    // The one-shot beside the V key (device: "how do I switch between third
+    // and first person?"): `person first|third|toggle` on the socket and the
+    // Teleport panel's checkbox write player.setThirdPerson (1/0; 2 =
+    // toggle), consumed here — no placed-camera guard, it is explicit.
+    {
+        const double want = ctx.settings.getDouble("player.setThirdPerson", -1.0);
+        if (want >= 0.0) {
+            ctx.settings.setDouble("player.setThirdPerson", -1.0);
+            thirdPerson = want >= 1.5 ? !thirdPerson : (want > 0.5);
+            ctx.settings.setBool("playerThirdPerson", thirdPerson);
+            LOG_INFO << "On-foot camera: "
+                     << (thirdPerson ? "third person (over the shoulder)" : "first person")
+                     << " (set)";
+        }
+    }
     if (ctx.actions.pressed("player_camera_toggle")) {
         bool placedCameras = false;
         ctx.world.each<SceneCamera>([&](Entity, SceneCamera&) { placedCameras = true; });
@@ -246,6 +261,9 @@ void PlayerSystem::update(FrameContext& ctx) {
             LOG_INFO << "On-foot camera: "
                      << (thirdPerson ? "third person (over the shoulder)"
                                      : "first person");
+        } else {
+            LOG_INFO << "On-foot camera: V cycles the level's placed cameras here — "
+                        "use `person first|third` (socket) or Debug > Teleport";
         }
     }
 

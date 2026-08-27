@@ -158,25 +158,61 @@ void TeleportSystem::update(FrameContext& ctx) {
     }
 }
 
+#ifdef RT_ENABLE_IMGUI
+// Every Copy button goes through here so the terminal says whether the click
+// registered and what ImGui handed the OS (device: "the buttons don't copy" —
+// the log splits "the click never fired" from "the clipboard bridge is dead").
+static void copyToClipboard(const char* text) {
+    ImGui::SetClipboardText(text);
+    const char* back = ImGui::GetClipboardText();
+    LOG_INFO << "[teleport] clipboard <- \"" << text << "\" (read back: "
+             << (back && *back ? (std::string(back) == text ? "same" : "DIFFERENT") : "EMPTY") << ")";
+}
+#endif
+
 void TeleportSystem::render(FrameContext& ctx) {
 #ifdef RT_ENABLE_IMGUI
     if (ImGui::GetCurrentContext() == nullptr) return;
     if (!ctx.debugOverlayActive) return;
     ImGui::Begin("Debug");
+    // `set teleport.open 1` (socket) unfolds the section once — a probe can
+    // shoot the panel; a header cannot be clicked from outside.
+    if (ctx.settings.getDouble("teleport.open", 0.0) > 0.5) {
+        ctx.settings.setDouble("teleport.open", 0.0);
+        ImGui::SetNextItemOpen(true);
+    }
     if (ImGui::CollapsingHeader("Teleport")) {
         const TeleportPose here = poseHere(ctx);
         const std::string pose = formatTeleportPose(here.position, here.pitch, here.yaw);
         ImGui::TextDisabled("pose = x y z pitch yaw (metres, degrees; yaw 0 = north/-z)");
-        ImGui::Text("Here: %s", pose.c_str());
-        if (ImGui::Button("Copy pose")) ImGui::SetClipboardText(pose.c_str());
+        // A READ-ONLY text field, not a label: plain ImGui::Text cannot be
+        // selected, so "copy the coordinates out of imgui" needs a field —
+        // click, Ctrl+A, Ctrl+C works even where the Copy buttons' OS
+        // clipboard bridge does not.
+        {
+            char hereBuf[128];
+            std::snprintf(hereBuf, sizeof(hereBuf), "%s", pose.c_str());
+            ImGui::SetNextItemWidth(360.0f);
+            ImGui::InputText("##here", hereBuf, sizeof(hereBuf), ImGuiInputTextFlags_ReadOnly);
+            ImGui::SameLine();
+            ImGui::TextDisabled("(select + Ctrl+C)");
+        }
+        {
+            bool third = ctx.settings.getBool("playerThirdPerson", false);
+            if (ImGui::Checkbox("Third person (V on foot)", &third))
+                ctx.settings.setDouble("player.setThirdPerson", third ? 1.0 : 0.0);
+            ImGui::SameLine();
+            ImGui::TextDisabled("persisted in settings.json as playerThirdPerson");
+        }
+        if (ImGui::Button("Copy pose")) copyToClipboard(pose.c_str());
         ImGui::SameLine();
         if (ImGui::Button("Copy xyz")) {
             char b[96];
             std::snprintf(b, sizeof(b), "%.2f %.2f %.2f", here.position.x, here.position.y, here.position.z);
-            ImGui::SetClipboardText(b);
+            copyToClipboard(b);
         }
         ImGui::SameLine();
-        if (ImGui::Button("Copy `teleport` cmd")) ImGui::SetClipboardText(("teleport " + pose).c_str());
+        if (ImGui::Button("Copy `teleport` cmd")) copyToClipboard(("teleport " + pose).c_str());
 
         ImGui::Separator();
         ImGui::InputTextWithHint("##paste", "paste: x y z [pitch yaw]  or  x z (on the ground)",
@@ -185,6 +221,8 @@ void TeleportSystem::render(FrameContext& ctx) {
         if (ImGui::Button("Paste")) {
             const char* clip = ImGui::GetClipboardText();
             if (clip) std::snprintf(pasteBuf_, sizeof(pasteBuf_), "%s", clip);
+            LOG_INFO << "[teleport] clipboard -> \"" << (clip ? clip : "") << "\""
+                     << (clip && *clip ? "" : " (EMPTY: nothing on the OS clipboard, or the bridge is dead)");
         }
         TeleportPose target;
         const int n = parseTeleportPose(pasteBuf_, target);
@@ -221,7 +259,7 @@ void TeleportSystem::render(FrameContext& ctx) {
             }
             ImGui::SameLine();
             if (ImGui::SmallButton("Copy"))
-                ImGui::SetClipboardText(formatTeleportPose(b.position, b.pitch, b.yaw).c_str());
+                copyToClipboard(formatTeleportPose(b.position, b.pitch, b.yaw).c_str());
             ImGui::SameLine();
             const bool del = ImGui::SmallButton("x");
             ImGui::SameLine();
@@ -250,11 +288,15 @@ void TeleportSystem::render(FrameContext& ctx) {
                     if (ImGui::SmallButton("Copy")) {
                         char b[64];
                         std::snprintf(b, sizeof(b), "%.1f %.1f", c.pos.x, c.pos.y);
-                        ImGui::SetClipboardText(b);
+                        copyToClipboard(b);
                     }
                     ImGui::SameLine();
-                    ImGui::Text("#%d  %.1f m deep  (%.0f, %.0f)  %d m span", idx, c.depth, c.pos.x, c.pos.y,
-                                static_cast<int>(c.spanMetres));
+                    char row[96];
+                    std::snprintf(row, sizeof(row), "%.1f %.1f", c.pos.x, c.pos.y);
+                    ImGui::SetNextItemWidth(130.0f);
+                    ImGui::InputText("##xz", row, sizeof(row), ImGuiInputTextFlags_ReadOnly);
+                    ImGui::SameLine();
+                    ImGui::Text("#%d  %.1f m deep  %d m span", idx, c.depth, static_cast<int>(c.spanMetres));
                     ImGui::PopID();
                     if (++idx > 40) { ImGui::TextDisabled("... and more in the SVG"); break; }
                 }

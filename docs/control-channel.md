@@ -67,6 +67,10 @@ teleport <x y z [pitch yaw] | x z> # move the PLAYER (camera when none) to a
                                   # pose; "x z" stands on the ground. The
                                   # Debug > Teleport panel's paste format.
 teleport?                         # the last teleport's result
+clip <text> / clip?               # set / read the debug UI's clipboard (is the
+                                  # OS clipboard bridge alive?)
+person first|third|toggle         # on-foot camera (the V key, guard-free);
+                                  # persisted as playerThirdPerson
 where?                            # the viewpoint as "x y z pitch yaw"
 citymap <path.svg> [layers|all]   # the layered city map from the running level
                                   # (roads,curbs,sidewalks,gaps,nav,furniture,

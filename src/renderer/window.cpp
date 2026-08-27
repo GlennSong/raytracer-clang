@@ -383,6 +383,19 @@ GlfwWindow::~GlfwWindow() {
 
 bool GlfwWindow::initialize(int width, int height, const std::string& title) {
     if (!glfwInit()) return false;
+#ifdef GLFW_PLATFORM_WAYLAND
+    // Which backend GLFW picked matters for the clipboard: under XWayland an
+    // X11 app's copy reaches Wayland apps only while it holds focus (flaky);
+    // native Wayland copies reliably. Say which one this window is.
+    {
+        const int platform = glfwGetPlatform();
+        LOG_INFO << "GLFW " << glfwGetVersionString() << " platform: "
+                 << (platform == GLFW_PLATFORM_WAYLAND ? "wayland"
+                     : platform == GLFW_PLATFORM_X11   ? "x11 (XWayland if the session is Wayland)"
+                     : platform == GLFW_PLATFORM_COCOA ? "cocoa"
+                     : platform == GLFW_PLATFORM_WIN32 ? "win32" : "other");
+    }
+#endif
 
     // Emscripten's GLFW shim doesn't implement the gamepad-mapping API; the web
     // build skips loading the SDL controller DB (browser gamepads come mapped).
