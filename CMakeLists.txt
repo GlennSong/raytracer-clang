@@ -89,6 +89,7 @@ add_library(engine_core STATIC
     src/engine/procgen/sdf.cpp
     src/engine/procgen/city/polygon.cpp
     src/engine/procgen/city/shape_grammar.cpp
+    src/engine/procgen/city/city_svg.cpp
     src/engine/procgen/city/parcel.cpp
     src/engine/procgen/city/patch_fabric.cpp
     src/engine/procgen/city/city_footprint.cpp
@@ -491,6 +492,7 @@ add_executable(run_tests
     tests/test_sky_chart.cpp
     tests/test_terrain_horizon.cpp
     tests/test_tracer_sky.cpp
+    tests/test_city_svg.cpp
     tests/test_cube_faces.cpp
     tests/test_path_tracer.cpp
     tests/test_asset_manager.cpp

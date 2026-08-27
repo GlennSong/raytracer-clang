@@ -13,6 +13,7 @@
 #include "world.h"
 #include <cstdint>
 #include <string>
+#include <memory>
 #include <vector>
 
 namespace engine {
@@ -427,8 +428,29 @@ struct CityPlanDebug {
     struct Prism {
         Poly2 plan;      // world-XZ footprint (the collider's side walls)
         Real y0 = 0, y1 = 0;   // world base/top of the extrusion
+        std::string district;  // the block's district ("financial", ...) — the city map's tint
+        std::string type;      // "home" | "shop" | "office" | "civic" | ...
     };
     std::vector<Prism> prisms;
+};
+
+// The road mesher's curb/sidewalk BAND outlines for one road entity — its own
+// CurbBandAudit, kept so the city map (RT_CITY_SVG, `citymap`) draws the
+// sidewalks that were BUILT: closed loops around every asphalt union, the band
+// riding each loop's right normal outward by sidewalkWidth; mouthGaps where
+// the band is suppressed. A few thousand points per city.
+struct RoadBandDebug {
+    std::vector<Poly2> loops;
+    std::vector<std::pair<Vec2, Vec2>> mouthGaps;
+    Real sidewalkWidth = 3.5;
+};
+
+// THE CITY MAP's data (procgen/city/city_svg.h), assembled by the loader after
+// the streets, lots, furniture and scatter exist, so the map can be written
+// at any time from the running viewer (`citymap <path> [layers]`).
+struct CityMapData;
+struct CityMap {
+    std::shared_ptr<CityMapData> data;
 };
 
 struct AuthoredPlace {

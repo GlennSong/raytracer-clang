@@ -197,16 +197,18 @@ the log (`[probes]`, `[furniture]` lines) or open the file it wrote.
 
 | Variable | What it does |
 | --- | --- |
-| `RT_FURNITURE_SVG=<path>` | Writes an SVG **street map with every planted pole**: one stroke per road edge at its real carriageway width (1 unit = 1 m), coloured by road class (freeway darkest → alley lightest); red dots at signal-pole feet with a tick toward the traffic the head faces; amber dots at lamp posts; the nav graph the poles were planned on in thin cyan (links + a ring per junction node — where cyan leaves the grey, planner and mesher disagree); legend with counts and a 200 m scale bar. `y` = world Z, so it reads like the viewer's top-down view. |
+| `RT_CITY_SVG=<path>` | Writes the **layered city map**: everything the generators built, one `<g id="layer-…">` each — streets by class (stroke = carriageway width), the mesher's own **curb loops and sidewalk band** (from its audit, so the sidewalks drawn are the ones built), band gaps at non-street mouths, the nav graph (thin cyan; where cyan leaves the grey, planner and mesher disagree), signal poles (red, tick = facing) and lamps (amber), planted objects (trees green, furniture purple), blocks, lots, building plan polygons, districts (lots tinted by district, hub rings + labels), places, a legend with counts and a 200 m bar. `RT_CITY_SVG_LAYERS=roads,sidewalks,furniture` draws only those; opened in a browser, every legend row toggles its layer. Also live from the socket: `citymap <path> [layers]`, MCP `city_map`. 1 unit = 1 m, `y` = world Z. |
+| `RT_FURNITURE_SVG=<path>` | The furniture-centric preset of the map above (streets + nav + poles). |
 | `RT_SKY_SVG=<path>` | Writes the day's **sky chart**: the sun's and moon's altitude/azimuth arcs with hour ticks, sunrise/sunset and moonrise/moonset on the rim, both bodies at the current hour, a phase glyph and legend — in the street map's orientation (east right, south down; rim = horizon, centre = zenith). Also live via `daynight chart <path>` on the control socket, and as the in-game *Sky HUD* (Debug → Day / Night: a compass strip with ☀/☾ at their bearings relative to the camera, plus the chart). |
 | `RT_GROUND_PROBES=1` | Plants a post every ~1/96 of the world on the analytic terrain height and scores each against the rendered tile's own interpolation — green flush (≤ 0.3 m), orange (≤ 1 m), red beyond — and logs the histogram plus the worst offender's coordinates. The "does the mesh agree with the function?" test for any level. |
 | `RT_NO_ROADS=1`, `RT_NO_BUILDINGS=1`, `RT_NO_CLOUDS=1` | Layer gates: skip that generator/pass so a symptom can be attributed to one layer. |
 | `RT_DUMP_DRAWS=1` | Per-frame draw audit (batches, culls, material sets) on the Vulkan backend. |
 | `RT_FRAME_STATS=<csv>` | Always-on frame ledger capture; render it with `tools/frame-report.py` (see `docs/profiling.md`). |
 
-Example — the metro's street map, plus a PNG preview:
+Example — the metro's city map, plus a PNG preview:
 ```bash
-RT_FURNITURE_SVG=metro.svg ./build/viewer --edit assets/levels/metro_v2_test.json
+RT_CITY_SVG=metro.svg ./build/viewer --edit assets/levels/metro_v2_test.json
+RT_CITY_SVG=walks.svg RT_CITY_SVG_LAYERS=roads,curbs,sidewalks,furniture ./build/viewer ...
 magick metro.svg -resize 2400x2400 metro.png     # ImageMagick; any SVG viewer works too
 ```
 The viewer also opens a control socket (`/tmp/raytracer-viewer-<pid>.sock`,

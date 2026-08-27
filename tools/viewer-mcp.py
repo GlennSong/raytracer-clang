@@ -170,6 +170,11 @@ def tool_clock(args):
 def tool_sky_chart(args):
     return send_command(f"daynight chart {args['path']}", args.get("instance"))
 
+def tool_city_map(args):
+    cmd = f"citymap {args['path']}"
+    if args.get("layers"): cmd += f" {args['layers']}"
+    return send_command(cmd, args.get("instance"))
+
 def tool_weather(args):
     if "state" not in args:
         return send_command("weather?", args.get("instance"))
@@ -317,6 +322,14 @@ TOOLS = [
      "moonset on the rim, both bodies now, a phase glyph and legend — in the "
      "street map's orientation (east right, south down).",
      {"path": STR, "instance": STR}, ["path"], tool_sky_chart),
+    ("city_map", "Write the LAYERED CITY MAP as SVG from the running level: "
+     "streets by class, the mesher's curb loops and sidewalk band, band gaps, "
+     "the nav graph, signal/lamp poles, planted objects (trees, furniture), "
+     "blocks, lots, building plans, districts (hub rings + tints), places, "
+     "legend. `layers` = comma list to draw only those (roads,curbs,sidewalks,"
+     "gaps,nav,furniture,objects,blocks,lots,buildings,districts,places,"
+     "legend) or 'all'; every layer is also click-toggleable in the file.",
+     {"path": STR, "layers": STR, "instance": STR}, ["path"], tool_city_map),
     ("sun", "Probe the live sun: elevation (sunY), intensity, and whether "
      "headlights consider it dark. Numeric golden-hour hunting without "
      "eyeballing screenshots (golden ~ sunY 0.05-0.25).",

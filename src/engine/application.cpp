@@ -1,3 +1,5 @@
+#include "components.h"                 // CityMap (citymap)
+#include "procgen/city/city_svg.h"     // the layered city map
 #include "application.h"
 #include "states/debug_overlay_state.h"
 #include "systems/debug_overlay_system.h"   // static settings<->renderer mapping (control `render`)
@@ -706,6 +708,19 @@ std::string Application::handleControlCommand(const std::string& line) {
         settingsStore.setDouble("daynight.set", hour);
         return "ok time staged";
     }
+    if (cmd.name == "citymap") {
+        // The layered city map, from the running level (city_svg.h):
+        // `citymap <path.svg> [roads,sidewalks,furniture,...|all]`.
+        if (cmd.args.empty()) return "err usage: citymap <path.svg> [layer,layer,...|all]";
+        const CityMap* map = nullptr;
+        worldState.each<CityMap>([&](Entity, CityMap& m) { if (!map) map = &m; });
+        if (!map || !map->data) return "err no city map on this level (no roads?)";
+        const CityMapLayers layers =
+            cmd.args.size() > 1 ? CityMapLayers::fromList(cmd.args[1]) : CityMapLayers();
+        return writeCityMapSvg(cmd.args[0], *map->data, layers)
+                   ? "ok city map written (" + layers.toList() + ")"
+                   : "err cannot write " + cmd.args[0];
+    }
     if (cmd.name == "daynight?") {
         // The clock as numbers (DayNightSystem::publishStatus): the sky's
         // hour, the loop length, today's sunrise/sunset, and the citysim's
@@ -919,7 +934,7 @@ std::string Application::handleControlCommand(const std::string& line) {
 
     return "err unknown command: " + cmd.name +
            " (ping|info|camera|camera?|shot|overlay|sim|reload|set|get|"
-           "daynight|daynight?|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
+           "daynight|daynight?|citymap|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
            "possess|drive_to|walk_to|possess_stop|release|possess?|ground?)";
 }
 

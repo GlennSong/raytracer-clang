@@ -17,6 +17,8 @@
 #include "procgen/city/corridor_plan.h"   // S3b: bake solved corridors into the net
 #include "procgen/city/block_grade.h" // grade blocks to their streets (ADR-0075 P2)
 #include "procgen/city/road_network.h" // extractBlocks (block grading)
+#include "procgen/city/city_svg.h"
+#include "procgen/city/architect.h"   // districtName (city map hub labels)
 #include "procgen/city/district.h"   // generated road districts (shape:"road" with "generate")
 #include "procgen/city/road_constraints.h"   // applyConstraints — bake roundabouts into the graph
 #include "procgen/city/road_mesh.h"   // triangulatePolygon (building prism colliders)
@@ -377,7 +379,17 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     if (net.look.markings)                           // lane paint via the surface shader
         r.material.setSurface(RenderMaterial::Surface::RoadMarkings);
     RoadDeckField deck;
-    RenderMesh mesh = buildRoadNetMesh(net, drapeGround, nullptr, &deck);
+    // The mesher's own curb band outlines ride along for the city map: the
+    // sidewalks drawn are the sidewalks built (a few thousand points).
+    engine::CurbBandAudit bandAudit;
+    RenderMesh mesh = buildRoadNetMesh(net, drapeGround, &bandAudit, &deck);
+    if (!bandAudit.loops.empty()) {
+        engine::RoadBandDebug band;
+        band.loops = std::move(bandAudit.loops);
+        band.mouthGaps = std::move(bandAudit.mouthGaps);
+        band.sidewalkWidth = bandAudit.sidewalkWidth > 0 ? bandAudit.sidewalkWidth : net.look.sidewalk;
+        world.add<engine::RoadBandDebug>(e, std::move(band));
+    }
     if (!mesh.vertices.empty())
         r.mesh = assets.acquireMesh(mesh, "road:" + std::to_string(index));
     world.add<Renderable>(e, r);
@@ -1887,118 +1899,52 @@ static GrownLots growCityLots(
     return g;
 }
 
-// RT_FURNITURE_SVG=<path>: a street map of the unified road graph with every
-// planted pole — the same instrument idea as RT_GROUND_PROBES, for "where did
-// the furniture land?" questions (device: "an svg map of all the city streets
-// and where the planted stoplights and light posts are"). World XZ maps to
-// SVG XY with y = z, so the page reads like the viewer's top-down framing
-// (screen-up = -Z); 1 SVG unit = 1 metre, so a road's stroke IS its width.
-static void writeFurnitureSvg(const std::string& path, const engine::RoadGraph& g,
-                              const engine::NavGraph& nav,
-                              const engine::StreetFurniturePlan& plan) {
-    if (g.nodes.empty()) return;
-    double minX = 1e30, minZ = 1e30, maxX = -1e30, maxZ = -1e30;
-    for (const engine::RoadNode& n : g.nodes) {
-        minX = std::min(minX, static_cast<double>(n.pos.x));
-        maxX = std::max(maxX, static_cast<double>(n.pos.x));
-        minZ = std::min(minZ, static_cast<double>(n.pos.y));
-        maxZ = std::max(maxZ, static_cast<double>(n.pos.y));
-    }
-    const double pad = 60.0;
-    minX -= pad; minZ -= pad; maxX += pad; maxZ += pad;
-    const double w = maxX - minX, h = maxZ - minZ;
-    std::ofstream out(path);
-    if (!out) {
-        LOG_ERROR << "[furniture] cannot write svg map: " << path;
-        return;
-    }
-    out << std::fixed << std::setprecision(1);
-    out << "<svg xmlns='http://www.w3.org/2000/svg' viewBox='" << minX << " " << minZ
-        << " " << w << " " << h << "' width='" << w << "' height='" << h << "'>\n";
-    out << "<rect x='" << minX << "' y='" << minZ << "' width='" << w << "' height='"
-        << h << "' fill='#f4f1ea'/>\n";
-    auto classColor = [](engine::RoadClass k) {
-        switch (k) {
-            case engine::RoadClass::Freeway:   return "#1f1f1f";
-            case engine::RoadClass::Ramp:      return "#3d3d3d";
-            case engine::RoadClass::Arterial:  return "#5a5a5a";
-            case engine::RoadClass::Collector: return "#7c7c7c";
-            case engine::RoadClass::Local:     return "#a3a3a3";
-            case engine::RoadClass::Alley:     return "#c9c4b8";
+// THE CITY MAP (procgen/city/city_svg.h): everything the generators built,
+// layered. Assembled here once the streets, lots, furniture plan and scatter
+// exist; stored on the world (CityMap) so the viewer can write it any time
+// (`citymap <path> [layers]`), and written at load for RT_CITY_SVG (all
+// layers, or RT_CITY_SVG_LAYERS=roads,sidewalks,...) and RT_FURNITURE_SVG
+// (the furniture-centric preset).
+static std::shared_ptr<engine::CityMapData> assembleCityMap(
+        World& world, const engine::RoadGraph& combined, const engine::NavGraph& nav,
+        const engine::StreetFurniturePlan& plan, double hubRadius) {
+    auto m = std::make_shared<engine::CityMapData>();
+    m->roads = combined;
+    m->nav = nav;
+    m->furniture = plan;
+    m->hubRadius = hubRadius;
+    world.each<engine::RoadEntity>([&](Entity, engine::RoadEntity& net) {
+        for (const engine::CityHub& h : net.plan.cityHubs) {
+            engine::CityMapData::Hub hub;
+            hub.pos = h.pos;
+            hub.kind = h.kind;
+            hub.name = engine::districtName(static_cast<engine::DistrictTag>(h.kind));
+            m->hubs.push_back(hub);
         }
-        return "#a3a3a3";
-    };
-    // Streets: one stroke per edge, width = carriageway, colour = class.
-    // Narrow classes draw last so a local street stays visible where it
-    // meets an arterial.
-    out << "<g stroke-linecap='round' fill='none'>\n";
-    const engine::RoadClass order[] = {
-        engine::RoadClass::Freeway, engine::RoadClass::Ramp, engine::RoadClass::Arterial,
-        engine::RoadClass::Collector, engine::RoadClass::Local, engine::RoadClass::Alley};
-    const int N = static_cast<int>(g.nodes.size());
-    for (engine::RoadClass k : order) {
-        for (const engine::RoadEdge& e : g.edges) {
-            if (e.klass != k || e.a < 0 || e.b < 0 || e.a >= N || e.b >= N) continue;
-            out << "<line x1='" << g.nodes[e.a].pos.x << "' y1='" << g.nodes[e.a].pos.y
-                << "' x2='" << g.nodes[e.b].pos.x << "' y2='" << g.nodes[e.b].pos.y
-                << "' stroke='" << classColor(k) << "' stroke-width='" << e.width
-                << "'/>\n";
-        }
-    }
-    out << "</g>\n";
-    // The NAV graph the furniture was planned on, over the drawn streets: thin
-    // cyan links, a ring at every junction node. Where cyan leaves the grey,
-    // the planner and the mesher disagree about where the street is — the
-    // knot-merge (NavBuildParams::junctionMergeRadius) moves junction nodes,
-    // and a pole planned off a moved link can stand in the drawn asphalt.
-    out << "<g stroke='#0aa2c7' stroke-width='0.6' fill='none' opacity='0.9'>\n";
-    for (int li = 0; li < nav.linkCount(); ++li) {
-        const engine::NavLink& L = nav.links[li];
-        if (L.from < 0 || L.to < 0 || L.from >= static_cast<int>(nav.nodes.size()) ||
-            L.to >= static_cast<int>(nav.nodes.size())) continue;
-        out << "<line x1='" << nav.nodes[L.from].x << "' y1='" << nav.nodes[L.from].y
-            << "' x2='" << nav.nodes[L.to].x << "' y2='" << nav.nodes[L.to].y << "'/>\n";
-    }
-    for (std::size_t ni = 0; ni < nav.nodes.size(); ++ni)
-        if (nav.isJunction(static_cast<int>(ni)))
-            out << "<circle cx='" << nav.nodes[ni].x << "' cy='" << nav.nodes[ni].y
-                << "' r='2.5'/>\n";
-    out << "</g>\n";
-    // Lamp posts: amber dots at the pole feet.
-    out << "<g fill='#f2a20c' stroke='none'>\n";
-    for (const Vec3& b : plan.lampBases)
-        out << "<circle cx='" << b.x << "' cy='" << b.z << "' r='1.3'/>\n";
-    out << "</g>\n";
-    // Signal poles: red dot at the foot, a tick toward the traffic the head
-    // faces (so a pole on the wrong corner reads immediately).
-    out << "<g stroke='#d62828' stroke-width='0.9' fill='#d62828'>\n";
-    for (const engine::SignalSpot& s : plan.signals) {
-        out << "<circle cx='" << s.base.x << "' cy='" << s.base.z << "' r='2.2'/>\n";
-        out << "<line x1='" << s.base.x << "' y1='" << s.base.z << "' x2='"
-            << s.base.x + s.face.x * 6.0 << "' y2='" << s.base.z + s.face.z * 6.0
-            << "'/>\n";
-    }
-    out << "</g>\n";
-    // Legend + 200 m scale bar, top-left.
-    const double lx = minX + 20, ly = minZ + 30;
-    out << "<g font-family='sans-serif' font-size='22' fill='#222'>\n";
-    out << "<text x='" << lx << "' y='" << ly << "'>streets by class (stroke = width) \xc2\xb7 "
-        << g.edges.size() << " edges</text>\n";
-    out << "<circle cx='" << lx + 8 << "' cy='" << ly + 30 << "' r='4' fill='#d62828'/>"
-        << "<text x='" << lx + 20 << "' y='" << ly + 37 << "'>signal pole (tick = faces traffic) \xc2\xb7 "
-        << plan.signals.size() << "</text>\n";
-    out << "<line x1='" << lx << "' y1='" << ly + 82 << "' x2='" << lx + 16 << "' y2='"
-        << ly + 82 << "' stroke='#0aa2c7' stroke-width='2'/>"
-        << "<text x='" << lx + 20 << "' y='" << ly + 89 << "'>nav link / junction node (what the poles were planned on)</text>\n";
-    out << "<circle cx='" << lx + 8 << "' cy='" << ly + 60 << "' r='3' fill='#f2a20c'/>"
-        << "<text x='" << lx + 20 << "' y='" << ly + 67 << "'>lamp post \xc2\xb7 "
-        << plan.lampBases.size() << "</text>\n";
-    out << "<line x1='" << lx << "' y1='" << ly + 112 << "' x2='" << lx + 200 << "' y2='"
-        << ly + 112 << "' stroke='#222' stroke-width='3'/>"
-        << "<text x='" << lx << "' y='" << ly + 138 << "'>200 m</text>\n";
-    out << "</g>\n</svg>\n";
-    LOG_INFO << "[furniture] svg map: " << path << " (" << g.edges.size() << " edges, "
-             << plan.signals.size() << " signals, " << plan.lampBases.size() << " lamps)";
+    });
+    world.each<engine::RoadBandDebug>([&](Entity, engine::RoadBandDebug& b) {
+        m->curbLoops.insert(m->curbLoops.end(), b.loops.begin(), b.loops.end());
+        m->mouthGaps.insert(m->mouthGaps.end(), b.mouthGaps.begin(), b.mouthGaps.end());
+        m->sidewalkWidth = std::max(m->sidewalkWidth, static_cast<double>(b.sidewalkWidth));
+    });
+    world.each<engine::CityPlanDebug>([&](Entity, engine::CityPlanDebug& d) {
+        m->blocks.insert(m->blocks.end(), d.blocks.begin(), d.blocks.end());
+        m->lots.insert(m->lots.end(), d.lots.begin(), d.lots.end());
+        for (const engine::CityPlanDebug::Prism& pr : d.prisms)
+            m->buildings.push_back({pr.plan, pr.district, pr.type});
+    });
+    world.each<engine::AuthoredPlace>([&](Entity, engine::AuthoredPlace& p) {
+        m->places.push_back({engine::Vec2(p.x, p.z), p.type, p.name});
+    });
+    world.each<engine::InstanceGroup>([&](Entity, engine::InstanceGroup& g) {
+        engine::CityMapData::ObjectKind kind;
+        if (g.drawClass == engine::DrawClass::Scenery) kind = engine::CityMapData::ObjectKind::Scenery;
+        else if (g.drawClass == engine::DrawClass::Furniture) kind = engine::CityMapData::ObjectKind::Furniture;
+        else return;
+        for (const Mat4& t : g.transforms)
+            m->objects.push_back({engine::Vec2(t.m[0][3], t.m[2][3]), kind});
+    });
+    return m;
 }
 
 const std::vector<std::string>& LevelLoader::lastLoadedScriptFiles() {
@@ -3366,7 +3312,7 @@ bool LevelLoader::load(const std::string& path,
                                                    {rb, rb + 1, rb + 2});
                     }
                     // Record the exact prism for the collider debug layer.
-                    colliderPrisms.push_back({lb.plan, base, top});
+                    colliderPrisms.push_back({lb.plan, base, top, lb.district, lb.type});
                 }
                 // Tag it as a place the agents can route to. An unbuilt GREEN is
                 // scenery, not a schedule destination — no place tag.
@@ -3759,8 +3705,20 @@ bool LevelLoader::load(const std::string& path,
             sf.lampHeads = fplan.lampHeads;
             for (const engine::SignalSpot& s : fplan.signals)
                 sf.signalPoles.push_back({s.base, s.face, s.link});
-            if (const char* svgPath = std::getenv("RT_FURNITURE_SVG"))
-                writeFurnitureSvg(svgPath, combined, nav, fplan);
+            {
+                const double hubRadius =
+                    root.contains("citysim") && root["citysim"].is_object()
+                        ? root["citysim"].value("hubRadius", 220.0) : 220.0;
+                engine::CityMap map{assembleCityMap(world, combined, nav, fplan, hubRadius)};
+                if (const char* svgPath = std::getenv("RT_CITY_SVG")) {
+                    const char* sel = std::getenv("RT_CITY_SVG_LAYERS");
+                    engine::writeCityMapSvg(svgPath, *map.data,
+                                            engine::CityMapLayers::fromList(sel ? sel : "all"));
+                }
+                if (const char* svgPath = std::getenv("RT_FURNITURE_SVG"))
+                    engine::writeCityMapSvg(svgPath, *map.data, engine::furnitureMapLayers());
+                world.add<engine::CityMap>(world.create(), std::move(map));
+            }
 
             auto groupBounds = [&](InstanceGroup& g, Real meshReach) {
                 if (g.transforms.empty()) return;
