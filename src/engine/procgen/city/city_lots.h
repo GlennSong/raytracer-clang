@@ -285,7 +285,12 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadEntity>& nets,
                                     Real roadClearance,
                                     const std::function<double(double, double)>& ground = nullptr,
                                     const RoadGraph* freewayROW = nullptr,
-                                    bool wantFlatParts = false);
+                                    bool wantFlatParts = false,
+                                    bool wantParts = true);
+// `wantParts` false: grow the plan and the lots but no building GEOMETRY at
+// all (`parts` stays empty). The loader's plan-only levels want outlines and
+// were paying for every facade of an 8 km metro (piedmont_roads: 25+ min,
+// 5 GB) to throw the meshes away.
 
 // The HLOD mass box for one lot (metropolis-scale-plan P1.2): the building's
 // oriented box, ground to roof, four walls + a roof cap. This is what the DISTANT

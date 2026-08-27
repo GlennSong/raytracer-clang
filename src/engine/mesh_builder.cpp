@@ -1,5 +1,6 @@
 #include "mesh_builder.h"
 #include "../renderer/cube_faces.h"   // cubeFaceDirection — the cubemap convention
+#include <algorithm>
 #include <cmath>
 #include <map>
 
@@ -435,10 +436,21 @@ RenderMesh MeshBuilder::capsule(float radius, float height, int stacks, int slic
 // Procgen-grade assembly ops (ROADMAP 3.3)
 // ---------------------------------------------------------------------------
 
+// reserve(size + n) on every append is an exact fit: it defeats the vector's
+// geometric growth, so a city appended one building at a time copies the
+// whole buffer per building — O(n^2). piedmont_roads (an 8 km metro) spent
+// 25+ minutes and 3.8 GB in here. Grow by doubling instead.
+template <typename T>
+static void growFor(std::vector<T>& v, std::size_t extra) {
+    const std::size_t need = v.size() + extra;
+    if (need > v.capacity()) v.reserve(std::max(need, v.capacity() * 2));
+}
+
 void MeshBuilder::append(RenderMesh& dst, const RenderMesh& src) {
     const uint32_t base = static_cast<uint32_t>(dst.vertices.size());
+    growFor(dst.vertices, src.vertices.size());
     dst.vertices.insert(dst.vertices.end(), src.vertices.begin(), src.vertices.end());
-    dst.indices.reserve(dst.indices.size() + src.indices.size());
+    growFor(dst.indices, src.indices.size());
     for (uint32_t idx : src.indices) dst.indices.push_back(base + idx);
 }
 
@@ -446,7 +458,7 @@ void MeshBuilder::appendTransformed(RenderMesh& dst, const RenderMesh& src,
                                     const Mat4& xform) {
     const uint32_t base = static_cast<uint32_t>(dst.vertices.size());
     const Mat4 normalMatrix = xform.inverse().transpose();
-    dst.vertices.reserve(dst.vertices.size() + src.vertices.size());
+    growFor(dst.vertices, src.vertices.size());
     for (const Vertex& v : src.vertices) {
         Vertex out = v;
         out.position = xform.transformPoint(v.position);
@@ -454,7 +466,7 @@ void MeshBuilder::appendTransformed(RenderMesh& dst, const RenderMesh& src,
         out.tangent = normalize(xform.transformDirection(v.tangent));
         dst.vertices.push_back(out);
     }
-    dst.indices.reserve(dst.indices.size() + src.indices.size());
+    growFor(dst.indices, src.indices.size());
     for (uint32_t idx : src.indices) dst.indices.push_back(base + idx);
 }
 

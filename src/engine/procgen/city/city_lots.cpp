@@ -2796,7 +2796,8 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadEntity>& nets,
                                     Real roadClearance,
                                     const RoadGroundFn& ground,
                                     const RoadGraph* freewayROW,
-                                    bool wantFlatParts) {
+                                    bool wantFlatParts,
+                                    bool wantParts) {
     NetLotResult r;
     // One combined raw planar graph across every net (the sampled navRoadGraph
     // loses faces, so the block extraction uses the nets' own nodes/edges) —
@@ -2898,9 +2899,9 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadEntity>& nets,
             }
         }
     }
-    r.lots = growLotBuildings(blocks, lp, &r.plan, &r.parts, &rgSampled,
+    r.lots = growLotBuildings(blocks, lp, &r.plan, wantParts ? &r.parts : nullptr, &rgSampled,
                               roadClearance,
-                              wantFlatParts ? &r.flatParts : nullptr,
+                              (wantParts && wantFlatParts) ? &r.flatParts : nullptr,
                               &r.gradeFlatten);
     return r;
 }

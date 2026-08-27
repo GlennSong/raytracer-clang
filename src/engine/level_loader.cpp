@@ -1888,8 +1888,12 @@ static GrownLots growCityLots(
     // "facadeDistance" (R2) — the offline tracer and two-tier levels skip it.
     const bool wantFlat = cs.value("facadeDistance", 0.0) >
                           cs.value("detailDistance", 700.0);
+    // PLAN-ONLY (outlines, no buildings): grow the plan without a single
+    // building mesh — the loader publishes the block/lot outlines and drops
+    // everything else, so growing 8 km of facades first is pure waste.
+    const bool planOnly = !cs.value("buildLots", false) && cs.value("planOnly", false);
     engine::NetLotResult r = engine::growLotBuildingsOnNets(
-        nets, lp, ep, roadClear, netGround, freewayROW, wantFlat);
+        nets, lp, ep, roadClear, netGround, freewayROW, wantFlat, !planOnly);
     g.lots = std::move(r.lots);
     g.plan = std::move(r.plan);
     g.parts = std::move(r.parts);
