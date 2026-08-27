@@ -170,6 +170,15 @@ def tool_clock(args):
 def tool_sky_chart(args):
     return send_command(f"daynight chart {args['path']}", args.get("instance"))
 
+def tool_teleport(args):
+    r = send_command(f"teleport {args['pose']}", args.get("instance"))
+    if "staged" not in r: return r
+    time.sleep(0.4)
+    return send_command("teleport?", args.get("instance"))
+
+def tool_where(args):
+    return send_command("where?", args.get("instance"))
+
 def tool_city_map(args):
     cmd = f"citymap {args['path']}"
     if args.get("layers"): cmd += f" {args['layers']}"
@@ -322,6 +331,13 @@ TOOLS = [
      "moonset on the rim, both bodies now, a phase glyph and legend — in the "
      "street map's orientation (east right, south down).",
      {"path": STR, "instance": STR}, ["path"], tool_sky_chart),
+    ("teleport", "Move the PLAYER (or the camera when there is no player) to a "
+     "pose: 'x y z [pitch yaw]' or 'x z' (on the ground). The same format the "
+     "Debug > Teleport panel copies and pastes, and `where` prints — so a "
+     "location the user pastes here can be jumped to, and one found here can "
+     "be handed back.", {"pose": STR, "instance": STR}, ["pose"], tool_teleport),
+    ("where", "The current viewpoint as 'x y z pitch yaw' (paste it into the "
+     "Teleport panel or back into `teleport`).", {"instance": STR}, [], tool_where),
     ("city_map", "Write the LAYERED CITY MAP as SVG from the running level: "
      "streets by class, the mesher's curb loops and sidewalk band, band gaps, "
      "the nav graph, signal/lamp poles, planted objects (trees, furniture), "

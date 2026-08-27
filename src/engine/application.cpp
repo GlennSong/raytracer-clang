@@ -708,6 +708,35 @@ std::string Application::handleControlCommand(const std::string& line) {
         settingsStore.setDouble("daynight.set", hour);
         return "ok time staged";
     }
+    if (cmd.name == "teleport") {
+        // Move the PLAYER (the camera when there is none): "x y z [pitch yaw]"
+        // or "x z" (on the ground) — the Teleport panel's paste format, so a
+        // location goes between the panel, the log and a session by paste.
+        // Consumed by TeleportSystem::update; `teleport?` reads the result.
+        if (cmd.args.empty()) return "err usage: teleport <x y z [pitch yaw] | x z>";
+        std::string pose = cmd.args[0];
+        for (size_t i = 1; i < cmd.args.size(); ++i) pose += " " + cmd.args[i];
+        settingsStore.setString("teleport.result", "");
+        settingsStore.setString("teleport.request", pose);
+        return "ok teleport staged (poll `teleport?`)";
+    }
+    if (cmd.name == "teleport?") {
+        const std::string r = settingsStore.getString("teleport.result", "");
+        return r.empty() ? "ok (pending)" : "ok " + r;
+    }
+    if (cmd.name == "where?") {
+        // The viewpoint in the paste format: x y z pitch yaw.
+        const CameraState& c = view.camera;
+        Vec3 fwd = c.target - c.position;
+        const Real len = fwd.length();
+        if (len > 1e-9) fwd = fwd * (1.0 / len);
+        constexpr Real kRadToDeg = 57.29577951308232;
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "ok %.2f %.2f %.2f %.2f %.2f", c.position.x, c.position.y,
+                      c.position.z, std::asin(std::clamp(fwd.y, Real(-1), Real(1))) * kRadToDeg,
+                      std::atan2(fwd.x, -fwd.z) * kRadToDeg);
+        return buf;
+    }
     if (cmd.name == "citymap") {
         // The layered city map, from the running level (city_svg.h):
         // `citymap <path.svg> [roads,sidewalks,furniture,...|all]`.
@@ -936,7 +965,7 @@ std::string Application::handleControlCommand(const std::string& line) {
 
     return "err unknown command: " + cmd.name +
            " (ping|info|camera|camera?|shot|overlay|sim|reload|set|get|"
-           "daynight|daynight?|citymap|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
+           "daynight|daynight?|citymap|teleport|teleport?|where?|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
            "possess|drive_to|walk_to|possess_stop|release|possess?|ground?)";
 }
 

@@ -3719,6 +3719,12 @@ bool LevelLoader::load(const std::string& path,
                 }
                 if (const char* svgPath = std::getenv("RT_FURNITURE_SVG"))
                     engine::writeCityMapSvg(svgPath, *map.data, engine::furnitureMapLayers(), decks);
+                // The census itself, for the Teleport panel's place list.
+                map.conflicts = std::make_shared<const std::vector<engine::SidewalkCrossing>>(
+                    engine::findSidewalkRoadCrossings(*map.data, decks));
+                if (!map.conflicts->empty())
+                    LOG_INFO << "[citymap] " << map.conflicts->size()
+                             << " sidewalk-on-asphalt places (Debug > Teleport lists them)";
                 world.add<engine::CityMap>(world.create(), std::move(map));
             }
 

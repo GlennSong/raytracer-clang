@@ -163,6 +163,7 @@ add_library(engine_core STATIC
     src/engine/systems/debug_overlay_system.cpp
     src/engine/systems/planet_lab_system.cpp
     src/engine/systems/day_night_system.cpp
+    src/engine/systems/teleport_pose.cpp
     src/engine/systems/terrain_lod_system.cpp
     # NOTE: the agent-based city simulation (ADR-0060…0066) is NOT here. It is an
     # APPLICATION of the engine, built as its own `citysim` static library below
@@ -493,6 +494,7 @@ add_executable(run_tests
     tests/test_terrain_horizon.cpp
     tests/test_tracer_sky.cpp
     tests/test_city_svg.cpp
+    tests/test_teleport.cpp
     tests/test_cube_faces.cpp
     tests/test_path_tracer.cpp
     tests/test_asset_manager.cpp
@@ -774,6 +776,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp
         src/engine/systems/player_system.cpp
+        src/engine/systems/teleport_system.cpp
         src/engine/systems/shooting_system.cpp
         src/engine/systems/vehicle_system.cpp
         src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars (needs Jolt)

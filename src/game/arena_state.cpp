@@ -9,6 +9,7 @@
 #include "../engine/systems/camera_system.h"
 #include "../engine/systems/motion_system.h"
 #include "../engine/systems/day_night_system.h"
+#include "../engine/systems/teleport_system.h"
 #include "../engine/systems/terrain_lod_system.h"
 #include "../apps/citysim/city_render.h"
 #include "../apps/citysim/city_spectate.h"
@@ -134,6 +135,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
 #ifdef RT_ENABLE_PHYSICS
     auto& physSys = addSystem<PhysicsSystem>();
     addSystem<PlayerSystem>(camSys.flyController(), physSys);
+    addSystem<TeleportSystem>(camSys.flyController(), &physSys);   // Debug > Teleport, `teleport`
 #ifdef RT_ENABLE_SCRIPTING
     // The shooting gun is now a Lua ScriptBehaviour on the player (ADR-0024);
     // ScriptSystem drives it. The script is attached in onEnter, once the player

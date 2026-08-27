@@ -449,8 +449,12 @@ struct RoadBandDebug {
 // the streets, lots, furniture and scatter exist, so the map can be written
 // at any time from the running viewer (`citymap <path> [layers]`).
 struct CityMapData;
+struct SidewalkCrossing;
 struct CityMap {
     std::shared_ptr<CityMapData> data;
+    // The sidewalk-on-asphalt census (city_svg.h), computed at load so the
+    // Teleport panel can list the places with Go buttons.
+    std::shared_ptr<const std::vector<SidewalkCrossing>> conflicts;
 };
 
 struct AuthoredPlace {
