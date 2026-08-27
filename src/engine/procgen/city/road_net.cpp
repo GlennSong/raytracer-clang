@@ -1493,6 +1493,55 @@ void RoadDeckField::buildIndex() {
     }
 }
 
+double RoadDeckField::depthInside(double x, double z, int* spineOut) const {
+    if (spineOut) *spineOut = -1;
+    const long long k = (static_cast<long long>(static_cast<int>(std::floor(x / cell_))) << 32) ^
+                        (static_cast<long long>(static_cast<int>(std::floor(z / cell_))) & 0xffffffffLL);
+    double depth = 0.0;
+    if (auto pit = padCells_.find(k); pit != padCells_.end()) {
+        for (int ti : pit->second) {
+            const Tri& t = pads[ti];
+            const double d1 = (x - t.b.x) * (t.a.z - t.b.z) - (t.a.x - t.b.x) * (z - t.b.z);
+            const double d2 = (x - t.c.x) * (t.b.z - t.c.z) - (t.b.x - t.c.x) * (z - t.c.z);
+            const double d3 = (x - t.a.x) * (t.c.z - t.a.z) - (t.c.x - t.a.x) * (z - t.a.z);
+            const bool neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+            const bool pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+            if (neg && pos) continue;
+            auto edgeDist = [&](const Vec3& p, const Vec3& q) {
+                const double ex = q.x - p.x, ez = q.z - p.z;
+                const double l2 = ex * ex + ez * ez;
+                double u = l2 < 1e-12 ? 0.0 : ((x - p.x) * ex + (z - p.z) * ez) / l2;
+                u = u < 0 ? 0 : (u > 1 ? 1 : u);
+                const double dx = p.x + ex * u - x, dz = p.z + ez * u - z;
+                return std::sqrt(dx * dx + dz * dz);
+            };
+            depth = std::max(depth, std::min({edgeDist(t.a, t.b), edgeDist(t.b, t.c), edgeDist(t.c, t.a)}));
+        }
+    }
+    auto it = cells_.find(k);
+    if (it == cells_.end()) return depth;
+    const Vec2 q(x, z);
+    for (const Seg& sg : it->second) {
+        const UnionSpine& sp = spines[sg.spine];
+        const Vec2& a = sp.points[sg.i];
+        const Vec2& b = sp.points[sg.i + 1];
+        const Vec2 ab = b - a;
+        const double L2 = ab.lengthSquared();
+        if (L2 < 1e-12) continue;
+        const double t = dot(q - a, ab) / L2;
+        if (t < 0.0 || t > 1.0) continue;   // past an end: a cap, not the carriageway
+        const double d = (a + ab * t - q).length();
+        const double hw = sp.hw.size() == sp.points.size()
+                              ? sp.hw[sg.i] + (sp.hw[sg.i + 1] - sp.hw[sg.i]) * t
+                              : sp.halfWidth;
+        if (hw - d > depth) {
+            depth = hw - d;
+            if (spineOut) *spineOut = sg.spine;
+        }
+    }
+    return depth;
+}
+
 bool RoadDeckField::heightAt(double x, double z, double margin, double* outY) const {
     const long long k = (static_cast<long long>(static_cast<int>(std::floor(x / cell_))) << 32) ^
                         (static_cast<long long>(static_cast<int>(std::floor(z / cell_))) & 0xffffffffLL);

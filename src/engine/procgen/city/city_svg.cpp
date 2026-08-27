@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <unordered_map>
 
 namespace engine {
 
@@ -14,8 +15,8 @@ namespace {
 
 const char* kLayerNames[] = {"roads", "curbs", "sidewalks", "gaps", "nav", "furniture",
                              "objects", "blocks", "lots", "buildings", "districts",
-                             "places", "legend"};
-constexpr int kLayerCount = 13;
+                             "places", "conflicts", "legend"};
+constexpr int kLayerCount = 14;
 
 bool* layerFlag(CityMapLayers& L, int i) {
     switch (i) {
@@ -23,6 +24,7 @@ bool* layerFlag(CityMapLayers& L, int i) {
         case 3: return &L.gaps;      case 4: return &L.nav;      case 5: return &L.furniture;
         case 6: return &L.objects;   case 7: return &L.blocks;   case 8: return &L.lots;
         case 9: return &L.buildings; case 10: return &L.districts; case 11: return &L.places;
+        case 12: return &L.conflicts;
         default: return &L.legend;
     }
 }
@@ -139,8 +141,147 @@ std::vector<Poly2> sidewalkBandCentrelines(const std::vector<Poly2>& curbLoops,
     return out;
 }
 
+std::vector<SidewalkCrossing> findSidewalkRoadCrossings(
+    const CityMapData& data, const std::vector<const RoadDeckField*>& decks,
+    double tolerance, double mergeRadius) {
+    std::vector<SidewalkCrossing> out;
+    const RoadGraph& g = data.roads;
+    const int N = static_cast<int>(g.nodes.size());
+    if (decks.empty() || data.curbLoops.empty()) return out;
+    // A spatial hash of the graph edges, only to LABEL a hit with its road.
+    const double cell = 32.0;
+    std::unordered_map<long long, std::vector<int>> cells;
+    auto key = [](int cx, int cz) {
+        return (static_cast<long long>(cx) << 32) ^ (static_cast<long long>(cz) & 0xffffffffLL);
+    };
+    auto cellOf = [&](double v) { return static_cast<int>(std::floor(v / cell)); };
+    for (int ei = 0; ei < static_cast<int>(g.edges.size()); ++ei) {
+        const RoadEdge& e = g.edges[ei];
+        if (e.a < 0 || e.b < 0 || e.a >= N || e.b >= N) continue;
+        const Vec2& A = g.nodes[e.a].pos;
+        const Vec2& B = g.nodes[e.b].pos;
+        const double hw = e.width;
+        for (int cz = cellOf(std::min(A.y, B.y) - hw); cz <= cellOf(std::max(A.y, B.y) + hw); ++cz)
+            for (int cx = cellOf(std::min(A.x, B.x) - hw); cx <= cellOf(std::max(A.x, B.x) + hw); ++cx)
+                cells[key(cx, cz)].push_back(ei);
+    }
+    auto segDist = [](const Vec2& p, const Vec2& a, const Vec2& b) {
+        const Vec2 ab = b - a;
+        const double l2 = ab.lengthSquared();
+        double t = l2 > 1e-12 ? dot(p - a, ab) / l2 : 0.0;
+        t = std::max(0.0, std::min(1.0, t));
+        return (a + ab * t - p).length();
+    };
+    auto nearestEdge = [&](const Vec2& p) {
+        int best = -1;
+        double bestD = 1e30;
+        auto it = cells.find(key(cellOf(p.x), cellOf(p.y)));
+        if (it == cells.end()) return best;
+        for (int ei : it->second) {
+            const double d = segDist(p, g.nodes[g.edges[ei].a].pos, g.nodes[g.edges[ei].b].pos);
+            if (d < bestD) { bestD = d; best = ei; }
+        }
+        return best;
+    };
+    // Every band centreline, sampled each metre, against every deck.
+    struct Hit { Vec2 pos; double depth; RoadClass klass; double width; };
+    std::vector<Hit> hits;
+    for (const Poly2& band : sidewalkBandCentrelines(data.curbLoops, data.sidewalkWidth)) {
+        const std::size_t n = band.size();
+        for (std::size_t i = 0; i < n; ++i) {
+            const Vec2& a = band[i];
+            const Vec2& b = band[(i + 1) % n];
+            const double len = (b - a).length();
+            const int steps = std::max(1, static_cast<int>(len));
+            for (int k = 0; k < steps; ++k) {
+                const Vec2 p = a + (b - a) * (static_cast<double>(k) / steps);
+                double depth = 0.0;
+                RoadClass klass = RoadClass::Local;
+                double width = 0.0;
+                for (const RoadDeckField* d : decks) {
+                    if (!d) continue;
+                    int spine = -1;
+                    const double dd = d->depthInside(p.x, p.y, &spine);
+                    if (dd > depth) {
+                        depth = dd;
+                        if (spine >= 0 && spine < static_cast<int>(d->spines.size())) {
+                            klass = d->spines[spine].klass;
+                            width = d->spines[spine].halfWidth * 2.0;
+                        }
+                    }
+                }
+                depth -= tolerance;
+                if (depth > 0.0) hits.push_back({p, depth, klass, width});
+            }
+        }
+    }
+    // Cluster into places (greedy, around the deepest hit).
+    std::vector<char> used(hits.size(), 0);
+    for (std::size_t i = 0; i < hits.size(); ++i) {
+        if (used[i]) continue;
+        SidewalkCrossing c;
+        c.pos = hits[i].pos;
+        c.depth = hits[i].depth;
+        c.deckClass = hits[i].klass;
+        c.deckWidth = hits[i].width;
+        double minX = 1e30, maxX = -1e30, minZ = 1e30, maxZ = -1e30;
+        for (std::size_t j = i; j < hits.size(); ++j) {
+            if (used[j] || (hits[j].pos - hits[i].pos).length() > mergeRadius) continue;
+            used[j] = 1;
+            ++c.samples;
+            if (hits[j].depth > c.depth) {
+                c.depth = hits[j].depth; c.pos = hits[j].pos;
+                c.deckClass = hits[j].klass; c.deckWidth = hits[j].width;
+            }
+            minX = std::min(minX, hits[j].pos.x); maxX = std::max(maxX, hits[j].pos.x);
+            minZ = std::min(minZ, hits[j].pos.y); maxZ = std::max(maxZ, hits[j].pos.y);
+        }
+        c.spanMetres = std::hypot(maxX - minX, maxZ - minZ);
+        c.edge = nearestEdge(c.pos);
+        if (c.edge >= 0) { c.klass = g.edges[c.edge].klass; c.width = g.edges[c.edge].width; }
+        out.push_back(c);
+    }
+    // Dead-end stubs: degree from the edges, nearest degree-1 node per place.
+    std::vector<int> degree(N, 0);
+    for (const RoadEdge& e : g.edges)
+        if (e.a >= 0 && e.b >= 0 && e.a < N && e.b < N) { ++degree[e.a]; ++degree[e.b]; }
+    for (SidewalkCrossing& c : out) {
+        double best = 25.0, nearest = 15.0;
+        int nearestNode = -1;
+        for (int v = 0; v < N; ++v) {
+            const double d = (g.nodes[v].pos - c.pos).length();
+            if (degree[v] == 1 && d < best) { best = d; c.deadEndDist = d; }
+            if (d < nearest) { nearest = d; c.nodeDist = d; c.nodeDegree = degree[v]; nearestNode = v; }
+        }
+        if (nearestNode >= 0) {
+            for (int v = 0; v < N; ++v) {
+                if ((g.nodes[v].pos - g.nodes[nearestNode].pos).length() > 2.0) continue;
+                ++c.coincident;
+                if (!c.coincidentDegrees.empty()) c.coincidentDegrees += "+";
+                c.coincidentDegrees += std::to_string(degree[v]);
+            }
+        }
+    }
+    std::sort(out.begin(), out.end(),
+              [](const SidewalkCrossing& a, const SidewalkCrossing& b) { return a.depth > b.depth; });
+    return out;
+}
+
+const char* roadClassName(RoadClass k) {
+    switch (k) {
+        case RoadClass::Freeway:   return "freeway";
+        case RoadClass::Ramp:      return "ramp";
+        case RoadClass::Arterial:  return "arterial";
+        case RoadClass::Collector: return "collector";
+        case RoadClass::Local:     return "local";
+        case RoadClass::Alley:     return "alley";
+    }
+    return "?";
+}
+
 bool writeCityMapSvg(const std::string& path, const CityMapData& data,
-                     const CityMapLayers& layers) {
+                     const CityMapLayers& layers,
+                     const std::vector<const RoadDeckField*>& decks) {
     const RoadGraph& g = data.roads;
     double minX = 1e30, minZ = 1e30, maxX = -1e30, maxZ = -1e30;
     auto grow = [&](double x, double z) {
@@ -327,6 +468,44 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
         out << "</g>\n</g>\n";
         ++drawn;
     }
+    // --- conflicts: the sidewalk band inside a carriageway ---------------------------
+    std::vector<SidewalkCrossing> crossings;
+    if (layers.conflicts) {
+        crossings = findSidewalkRoadCrossings(data, decks);
+        out << "<g id='layer-conflicts' stroke='#ff1744' stroke-width='1.6' fill='#ff1744' font-size='14' font-weight='bold'>\n";
+        int n = 1;
+        for (const SidewalkCrossing& c : crossings) {
+            const double r = 5.0;
+            out << "<line x1='" << c.pos.x - r << "' y1='" << c.pos.y - r << "' x2='" << c.pos.x + r
+                << "' y2='" << c.pos.y + r << "'/><line x1='" << c.pos.x - r << "' y1='" << c.pos.y + r
+                << "' x2='" << c.pos.x + r << "' y2='" << c.pos.y - r << "'/>\n";
+            out << "<circle cx='" << c.pos.x << "' cy='" << c.pos.y << "' r='" << r + 3
+                << "' fill='none'/>\n";
+            out << "<text x='" << c.pos.x + r + 4 << "' y='" << c.pos.y - 2 << "' stroke='none'>#" << n
+                << " " << std::setprecision(1) << c.depth << " m into " << roadClassName(c.klass)
+                << (c.deadEndDist >= 0 ? " (stub end " : "") << (c.deadEndDist >= 0 ? std::to_string(static_cast<int>(c.deadEndDist)) + " m away)" : "")
+                << "</text>\n";
+            ++n;
+        }
+        out << "</g>\n";
+        ++drawn;
+        // The census, deepest first (the first ten in the log; all in the map).
+        if (decks.empty())
+            LOG_WARN << "[citymap] conflicts layer: no road decks given — nothing measured";
+        LOG_INFO << "[citymap] sidewalk band on built asphalt at " << crossings.size() << " places"
+                 << " (" << decks.size() << " decks, tolerance 0.5 m)";
+        for (std::size_t i = 0; i < crossings.size() && i < 10; ++i) {
+            const SidewalkCrossing& c = crossings[i];
+            LOG_INFO << "[citymap]   #" << i + 1 << " (" << c.pos.x << ", " << c.pos.y << ") "
+                     << c.depth << " m onto the deck near a " << c.width << " m " << roadClassName(c.klass)
+                     << " (edge " << c.edge << "), on the built " << c.deckWidth << " m "
+                     << roadClassName(c.deckClass) << " chain; "
+                     << (c.nodeDegree >= 0 ? "nearest node degree " + std::to_string(c.nodeDegree) + " at " + std::to_string(c.nodeDist).substr(0, 4) + " m (" + std::to_string(c.coincident) + " nodes within 2 m: degrees " + c.coincidentDegrees + "); " : "no node within 15 m; ")
+                     << c.samples << " samples over " << c.spanMetres << " m"
+                     << (c.deadEndDist >= 0 ? " — a dead-end stub " : "")
+                     << (c.deadEndDist >= 0 ? std::to_string(c.deadEndDist).substr(0, 4) + " m away" : "");
+        }
+    }
     if (layers.places) {
         out << "<g id='layer-places' font-size='12' fill='#1b5e20'>\n";
         for (const CityMapData::Place& p : data.places) {
@@ -390,6 +569,9 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
                   std::to_string(nLamps) + " lamps (amber)");
         entry(layers.places, "layer-places", sw("#1b5e20", "none", 8),
               "places (" + std::to_string(data.places.size()) + ")");
+        entry(layers.conflicts, "layer-conflicts", sw("none", "#ff1744", 8),
+              "CONFLICTS: sidewalk band on built asphalt (" + std::to_string(crossings.size()) +
+                  " places, deepest first" + (decks.empty() ? "; no decks measured" : "") + ")");
         const double sy = ly + 30 * row + 10;
         out << "<line x1='" << lx << "' y1='" << sy << "' x2='" << lx + 200 << "' y2='" << sy
             << "' stroke='#222' stroke-width='4'/><text x='" << lx + 210 << "' y='" << sy + 8 << "'>200 m</text>\n";

@@ -66,7 +66,9 @@ daynight moon <age-days>|auto     # hold the moon's age (0 new, 7.4 first
 citymap <path.svg> [layers|all]   # the layered city map from the running level
                                   # (roads,curbs,sidewalks,gaps,nav,furniture,
                                   # objects,blocks,lots,buildings,districts,
-                                  # places,legend); every layer click-toggles
+                                  # places,conflicts,legend); every layer
+                                  # click-toggles; conflicts = the sidewalk
+                                  # band inside a carriageway, logged as a census
 daynight?                         # the clock as numbers: hour, dayMinutes,
                                   # today's sunrise/sunset, daylight fraction,
                                   # sunY, and the citysim's own hour (sim=)

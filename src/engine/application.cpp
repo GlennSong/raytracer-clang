@@ -717,7 +717,9 @@ std::string Application::handleControlCommand(const std::string& line) {
         if (!map || !map->data) return "err no city map on this level (no roads?)";
         const CityMapLayers layers =
             cmd.args.size() > 1 ? CityMapLayers::fromList(cmd.args[1]) : CityMapLayers();
-        return writeCityMapSvg(cmd.args[0], *map->data, layers)
+        std::vector<const RoadDeckField*> decks;
+        worldState.each<RoadDeck>([&](Entity, RoadDeck& d) { decks.push_back(&d.field); });
+        return writeCityMapSvg(cmd.args[0], *map->data, layers, decks)
                    ? "ok city map written (" + layers.toList() + ")"
                    : "err cannot write " + cmd.args[0];
     }

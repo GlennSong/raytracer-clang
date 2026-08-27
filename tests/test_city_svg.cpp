@@ -2,6 +2,7 @@
 
 #include "../src/engine/procgen/city/city_svg.h"
 #include "../src/engine/procgen/city/road_network.h"
+#include "../src/engine/procgen/city/road_net.h"   // buildRoadNetMesh: a real deck for the census
 #include "../src/engine/ai/nav_graph.h"
 
 #include <cmath>
@@ -62,7 +63,7 @@ TEST_CASE(city_map_draws_every_layer_as_its_own_group) {
     std::remove(path.c_str());
     int n = 0;
     const char* const* names = CityMapLayers::names(&n);
-    CHECK(n == 13);
+    CHECK(n == 14);
     for (int i = 0; i < n; ++i)
         CHECK(svg.find("id='layer-" + std::string(names[i]) + "'") != std::string::npos);
     CHECK(svg.find("toggleLayer(") != std::string::npos);            // the in-file switches
@@ -118,4 +119,72 @@ TEST_CASE(city_map_sidewalk_band_hugs_the_curb_from_outside) {
         const double d = std::min({p.x - 5.0, 195.0 - p.x, p.y - 5.0, 195.0 - p.y});
         CHECK_APPROX(d, half, 1e-6);
     }
+}
+
+// WHERE THE SIDEWALK CUTS ACROSS A ROAD, measured against the BUILT deck: the
+// mesher's own band around its own asphalt has no cuts (its curb loops are
+// the asphalt's outline); a stray band loop through the middle of a street
+// is found, on that street, ~4 m deep; a loop wrapping a dead end's cap is
+// not a cut (the deck ends where the ribbon ends). Straight roads on
+// purpose: the mesher SMOOTHS a closed 4-node loop into a rounded curve
+// (the first fixture's "south street" ran 13 m off its graph edge).
+TEST_CASE(city_map_finds_the_sidewalk_on_the_built_asphalt) {
+    RoadEntity net;
+    net.look.defaultWidth = 10.0;
+    net.look.sidewalk = 3.5;
+    net.graph.nodes = {RoadNode{Vec2(0, 0)}, RoadNode{Vec2(200, 0)}, RoadNode{Vec2(400, 0)},
+                       RoadNode{Vec2(200, 200)}, RoadNode{Vec2(300, 0)}};
+    net.graph.addEdge(0, 1, 10.0);   // a straight east-west street ...
+    net.graph.addEdge(1, 4, 10.0);
+    net.graph.addEdge(4, 2, 10.0);   // ... ending in a dead end at x = 400
+    net.graph.addEdge(1, 3, 10.0);   // a T arm north
+    CurbBandAudit audit;
+    RoadDeckField deck;
+    buildRoadNetMesh(net, nullptr, &audit, &deck);
+    CHECK(!audit.loops.empty());
+    CHECK(!deck.empty());
+    CityMapData m;
+    m.roads = net.graph;
+    m.curbLoops = audit.loops;
+    m.sidewalkWidth = audit.sidewalkWidth > 0 ? audit.sidewalkWidth : 3.5;
+    const std::vector<const RoadDeckField*> decks{&deck};
+    std::vector<SidewalkCrossing> clean = findSidewalkRoadCrossings(m, decks);
+    std::printf("    [conflicts] the mesher's own band: %zu place(s) on its own asphalt\n", clean.size());
+    CHECK(clean.empty());
+    // The deck itself: the street's centre 5 m deep, its verge outside, and
+    // past the dead end's cap nothing.
+    CHECK_APPROX(deck.depthInside(100.0, 0.0), 5.0, 0.6);
+    CHECK_APPROX(deck.depthInside(100.0, -7.0), 0.0, 1e-9);
+    CHECK_APPROX(deck.depthInside(405.0, 0.0), 0.0, 1e-9);
+    // A stray band loop straight through the south street.
+    m.curbLoops.push_back({Vec2(90, -30), Vec2(110, -30), Vec2(110, 30), Vec2(90, 30)});
+    std::vector<SidewalkCrossing> hits = findSidewalkRoadCrossings(m, decks);
+    std::printf("    [conflicts] with a stray loop: %zu place(s); first at (%.1f, %.1f) %.2f m onto the deck near a %.0f m road\n",
+                hits.size(), hits.empty() ? 0.0 : hits[0].pos.x, hits.empty() ? 0.0 : hits[0].pos.y,
+                hits.empty() ? 0.0 : hits[0].depth, hits.empty() ? 0.0 : hits[0].width);
+    CHECK(hits.size() >= 1);
+    if (!hits.empty()) {
+        CHECK(std::fabs(hits[0].pos.y) < 6.0);
+        CHECK(hits[0].pos.x > 85.0 && hits[0].pos.x < 115.0);
+        CHECK(hits[0].depth > 3.0);
+        CHECK_APPROX(hits[0].width, 10.0, 1e-9);
+    }
+    // A loop hugging the street's END (a cul-de-sac cap): not a cut.
+    m.curbLoops.pop_back();
+    m.curbLoops.push_back({Vec2(404, -8), Vec2(412, -8), Vec2(412, 8), Vec2(404, 8)});
+    CHECK(findSidewalkRoadCrossings(m, decks).empty());
+    // Drawn: the conflicts layer carries the X and its caption; without decks it says so.
+    m.curbLoops.pop_back();
+    m.curbLoops.push_back({Vec2(90, -30), Vec2(110, -30), Vec2(110, 30), Vec2(90, 30)});
+    const std::string path = "city_map_test3.svg";
+    CHECK(writeCityMapSvg(path, m, CityMapLayers::fromList("roads,sidewalks,conflicts,legend"), decks));
+    const std::string svg = readAll(path);
+    std::remove(path.c_str());
+    CHECK(svg.find("id='layer-conflicts'") != std::string::npos);
+    CHECK(svg.find("m into local") != std::string::npos);
+    CHECK(svg.find("CONFLICTS: sidewalk band on built asphalt (") != std::string::npos);
+    CHECK(writeCityMapSvg(path, m, CityMapLayers::fromList("conflicts")));
+    const std::string none = readAll(path);
+    std::remove(path.c_str());
+    CHECK(none.find("<line") == std::string::npos);   // nothing measured, nothing drawn
 }

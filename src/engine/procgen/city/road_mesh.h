@@ -165,6 +165,13 @@ struct RoadDeckField {
     // (half-width + margin). False off every road — the caller falls back
     // to its terrain.
     bool heightAt(double x, double z, double margin, double* outY) const;
+    // How far INSIDE the built asphalt (x, z) lies, in metres: the distance in
+    // from the nearest spine's edge — interior segments only, so a point past
+    // a chain's end (a cul-de-sac cap) is outside — or, inside a junction
+    // pad, the distance to that triangle's nearest edge (a lower bound).
+    // 0 = not on the deck. The city map's "sidewalk cuts across the road"
+    // census measures the band against THIS, not the graph.
+    double depthInside(double x, double z, int* spineOut = nullptr) const;   // spineOut: -1 = a pad
     // Spatial hash of pad triangles and spine segments; buildRoadNetMesh
     // calls it after filling both (call again after editing by hand).
     void buildIndex();

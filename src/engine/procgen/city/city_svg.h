@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_CITY_SVG_H
 
 #include "road_network.h"
+#include "road_mesh.h"   // RoadDeckField: the built asphalt the conflicts census measures against
 #include "polygon.h"
 #include "street_furniture.h"
 #include "../../ai/nav_graph.h"
@@ -53,7 +54,7 @@ struct CityMapData {
 struct CityMapLayers {
     bool roads = true, curbs = true, sidewalks = true, gaps = true, nav = true,
          furniture = true, objects = true, blocks = true, lots = true, buildings = true,
-         districts = true, places = true, legend = true;
+         districts = true, places = true, conflicts = true, legend = true;
     // "roads,sidewalks,furniture" → only those (unknown names are ignored,
     // reported by the writer's log line); "all" or "" → everything.
     static CityMapLayers fromList(const std::string& csv);
@@ -71,8 +72,48 @@ CityMapLayers furnitureMapLayers();
 std::vector<Poly2> sidewalkBandCentrelines(const std::vector<Poly2>& curbLoops,
                                            double sidewalkWidth);
 
+// WHERE THE SIDEWALK CUTS ACROSS A ROAD (device: "can you find places where
+// the sidewalk cuts across the road?"). The band centreline, sampled every
+// metre, is measured against the BUILT asphalt — each road's RoadDeckField
+// (the spines and junction pads its mesh rode; RoadDeckField::depthInside)
+// — not the graph: the first cut measured graph edges and reported every
+// cul-de-sac cap and every road whose graph edge ran on past its ribbon.
+// A sample deeper than `tolerance` inside a deck is a hit; hits cluster
+// into places within `mergeRadius`, deepest first. Drawn as the
+// `conflicts` layer (red X + number) and logged as a census.
+struct SidewalkCrossing {
+    Vec2 pos;              // the deepest sample of the cluster
+    int edge = -1;         // the nearest road edge (a label, from the graph)
+    RoadClass klass = RoadClass::Local;
+    double width = 0;      // that edge's carriageway width
+    double depth = 0;      // metres inside the built asphalt
+    int samples = 0;       // band samples in the cluster
+    double spanMetres = 0; // extent of the cluster along the band
+    // The nearest degree-1 graph node within 25 m (-1 = none): a stub whose
+    // end lies inside another road's asphalt is a T the graph never joined.
+    double deadEndDist = -1;
+    // The BUILT chain the band lies on (the deck spine): its class and width,
+    // and the nearest graph node within 15 m with its degree (a T the graph
+    // knows has degree 3 there; a stub abutting another road does not).
+    RoadClass deckClass = RoadClass::Local;
+    double deckWidth = 0;
+    int nodeDegree = -1;
+    double nodeDist = -1;
+    // COINCIDENT nodes: how many graph nodes sit within 2 m of the nearest
+    // one, with their degrees — a T recorded as a bend plus a dead end (two
+    // nodes where one belongs) is the shape the top metro places have.
+    int coincident = 0;
+    std::string coincidentDegrees;
+};
+std::vector<SidewalkCrossing> findSidewalkRoadCrossings(
+    const CityMapData& data, const std::vector<const RoadDeckField*>& decks,
+    double tolerance = 0.5, double mergeRadius = 15.0);
+
+// `decks`: the RoadDeck fields of the level's roads (empty = the conflicts
+// layer is drawn empty and says so).
 bool writeCityMapSvg(const std::string& path, const CityMapData& data,
-                     const CityMapLayers& layers);
+                     const CityMapLayers& layers,
+                     const std::vector<const RoadDeckField*>& decks = {});
 
 }  // namespace engine
 

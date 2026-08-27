@@ -3710,13 +3710,15 @@ bool LevelLoader::load(const std::string& path,
                     root.contains("citysim") && root["citysim"].is_object()
                         ? root["citysim"].value("hubRadius", 220.0) : 220.0;
                 engine::CityMap map{assembleCityMap(world, combined, nav, fplan, hubRadius)};
+                std::vector<const engine::RoadDeckField*> decks;
+                world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { decks.push_back(&d.field); });
                 if (const char* svgPath = std::getenv("RT_CITY_SVG")) {
                     const char* sel = std::getenv("RT_CITY_SVG_LAYERS");
                     engine::writeCityMapSvg(svgPath, *map.data,
-                                            engine::CityMapLayers::fromList(sel ? sel : "all"));
+                                            engine::CityMapLayers::fromList(sel ? sel : "all"), decks);
                 }
                 if (const char* svgPath = std::getenv("RT_FURNITURE_SVG"))
-                    engine::writeCityMapSvg(svgPath, *map.data, engine::furnitureMapLayers());
+                    engine::writeCityMapSvg(svgPath, *map.data, engine::furnitureMapLayers(), decks);
                 world.add<engine::CityMap>(world.create(), std::move(map));
             }
 
