@@ -65,6 +65,13 @@ enum class PartId : uint8_t {
 // emitter (full, flat, curtain wall) so LOD transitions never flicker a
 // window on or off: quantized world position in, stable coin-flip out.
 bool litWindow(const Vec3& worldPos);
+// Curtain-wall towers light per BAY, not per storey-face (device: "the way
+// it's lit up row by row is odd"): each mullion bay flips its own coin
+// against a per-STOREY occupancy — some floors busy, some nearly dark, the
+// way an office tower reads at night. Both hash quantized world positions,
+// so every LOD agrees and rebuilds light the same offices.
+Real  litStoreyOccupancy(const Vec3& storeyAnchor);   // 0.12 .. 0.62
+bool  litOfficeBay(const Vec3& bayAnchor, Real occupancy);
 
 // Facade material style (the "different facades like brick or concrete" axis).
 // At the merged-model scale, style varies the wall *colour* per building (carried

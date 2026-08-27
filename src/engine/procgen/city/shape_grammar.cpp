@@ -109,7 +109,7 @@ Vec3 facadeColor(FacadeStyle style, uint32_t seed) {
 // all agree on which windows glow — an LOD swap never flickers a window on or
 // off — and rebuilds of the same city light the same homes. ~1/3 lit: enough
 // that every block reads inhabited, sparse enough to stay night.
-bool litWindow(const Vec3& worldPos) {
+static uint32_t positionHash(const Vec3& worldPos) {
     const int32_t qx = static_cast<int32_t>(std::floor(worldPos.x * 2.0));
     const int32_t qy = static_cast<int32_t>(std::floor(worldPos.y * 2.0));
     const int32_t qz = static_cast<int32_t>(std::floor(worldPos.z * 2.0));
@@ -119,7 +119,22 @@ bool litWindow(const Vec3& worldPos) {
     h ^= h >> 13;
     h *= 0x9e3779b1u;
     h ^= h >> 16;
-    return (h & 0xffu) < 85;   // ~exactly 1/3
+    return h;
+}
+
+bool litWindow(const Vec3& worldPos) {
+    return (positionHash(worldPos) & 0xffu) < 85;   // ~exactly 1/3
+}
+
+Real litStoreyOccupancy(const Vec3& storeyAnchor) {
+    // A different byte of the same hash than litWindow reads, so a storey's
+    // occupancy and its first bay's coin are independent.
+    const uint32_t h = (positionHash(storeyAnchor) >> 8) & 0xffffu;
+    return 0.12 + 0.50 * (h / 65535.0);
+}
+
+bool litOfficeBay(const Vec3& bayAnchor, Real occupancy) {
+    return (positionHash(bayAnchor) & 0xffu) / 255.0 < occupancy;
 }
 
 RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
@@ -388,13 +403,24 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
     emitQuad(glass, fr.at(0, 0) + gin, fr.at(W, 0) + gin,
              fr.at(W, spandrelH) + gin, fr.at(0, spandrelH) + gin,
              fr.n, spandrelCol);                 // spandrel (floor-slab band)
-    // Vision glass: offices light per STOREY-FACE at night — a third of the
-    // tower's floors glow, chosen by the same position hash as the punched
-    // windows (LOD-stable). The spandrel band stays dark.
-    RenderMesh& vision =
-        litWindow(fr.at(0, spandrelH)) ? glassLit : glass;
-    emitQuad(vision, fr.at(0, spandrelH) + gin, fr.at(W, spandrelH) + gin,
-             fr.at(W, fh) + gin, fr.at(0, fh) + gin, fr.n, glassCol);   // vision glass
+    // Vision glass, per BAY (device: "the way it's lit up row by row is
+    // odd"). One pane per mullion bay — the same grid the lattice below
+    // draws, so a lit cell sits inside a real frame — each lit or dark by the
+    // position hash at its own centre, against a per-STOREY occupancy that
+    // makes some floors busy and others nearly dark. The first cut lit the
+    // whole storey-face from one hash at x = 0: every lit floor was a
+    // full-width band (`curtain_wall_lights_vary_within_a_storey`). The
+    // spandrel band stays dark. Flat (LOD1) runs this same loop, so the two
+    // detail levels light the same offices.
+    const int bays = std::max(1, static_cast<int>(std::lround(W / 1.6)));
+    const Real occupancy = litStoreyOccupancy(fr.at(0, spandrelH));
+    for (int b = 0; b < bays; ++b) {
+        const Real x0 = W * b / bays, x1 = W * (b + 1) / bays;
+        RenderMesh& vision =
+            litOfficeBay(fr.at((x0 + x1) * 0.5, spandrelH), occupancy) ? glassLit : glass;
+        emitQuad(vision, fr.at(x0, spandrelH) + gin, fr.at(x1, spandrelH) + gin,
+                 fr.at(x1, fh) + gin, fr.at(x0, fh) + gin, fr.n, glassCol);
+    }
     // FLAT (LOD1): the spandrel band + vision pane carry the curtain-wall read
     // at distance; the solid mullion lattice is the expensive half — skip it.
     if (detail == FacadeDetail::Flat) {
@@ -424,8 +450,7 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
                      fr.at(a1, b0) + gin, fr.at(a0, b0) + gin, fr.v * -1, mullCol);
         }
     };
-    int bays = std::max(1, static_cast<int>(std::lround(W / 1.6)));
-    for (int b = 0; b <= bays; ++b) {            // vertical mullions
+    for (int b = 0; b <= bays; ++b) {            // vertical mullions (the pane grid)
         Real x = std::min(std::max(b * W / bays, mw * 0.5), W - mw * 0.5);
         bar(x - mw * 0.5, 0, x + mw * 0.5, fh, true);
     }

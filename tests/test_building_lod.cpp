@@ -7,6 +7,12 @@
 #include "../src/engine/procgen/city/city_lots.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <map>
+#include <tuple>
+
 using namespace engine;
 
 namespace {
@@ -93,4 +99,58 @@ TEST_CASE(lot_growth_emits_the_flat_tier_on_request) {
     CHECK(flatParts.size() == fullParts.size());
     for (std::size_t i = 0; i < flatParts.size(); ++i)
         CHECK(flatParts[i].materialIndex == static_cast<int>(i));
+}
+
+// THE LIT WINDOWS VARY WITHIN A STOREY (device: "the way it's lit up row by
+// row is odd"). Curtain walls used to light a whole storey-face from one
+// hash at x = 0, so every lit floor was a full-width band. Each mullion bay
+// now decides for itself against a per-storey occupancy: most storey-faces
+// are MIXED (some panes lit, some dark), none are uniform bands by rule, and
+// the lit share stays a minority so the tower still reads as night.
+TEST_CASE(curtain_wall_lights_vary_within_a_storey) {
+    const Poly2 plan{{0, 0}, {24, 0}, {24, 20}, {0, 20}};
+    BuildingParams p = midriseParams();
+    p.floors = 14;
+    p.curtainWall = true;
+    const BuildingMesh full = growPlanBuilding(plan, p);
+    // Vision panes: upper-storey glass quads taller than a spandrel band
+    // (emitQuad writes four consecutive vertices per pane).
+    std::map<std::tuple<int, int, int>, std::pair<int, int>> faces;   // lit, dark
+    auto scan = [&](const RenderMesh* m, bool lit) {
+        if (!m) return;
+        for (std::size_t i = 0; i + 3 < m->vertices.size(); i += 4) {
+            Real y0 = 1e9, y1 = -1e9;
+            for (int k = 0; k < 4; ++k) {
+                y0 = std::min(y0, m->vertices[i + k].position.y);
+                y1 = std::max(y1, m->vertices[i + k].position.y);
+            }
+            const Real h = y1 - y0;
+            if (y0 < 7.0 || h < 1.2 || h > 3.6) continue;
+            const Vec3& n = m->vertices[i].normal;
+            auto key = std::make_tuple(static_cast<int>(std::lround(y0 * 10.0)),
+                                       static_cast<int>(std::lround(n.x * 10.0)),
+                                       static_cast<int>(std::lround(n.z * 10.0)));
+            if (lit) ++faces[key].first; else ++faces[key].second;
+        }
+    };
+    scan(part(full, PartId::GlassLit), true);
+    scan(part(full, PartId::Glass), false);
+    int total = 0, mixed = 0, allLit = 0, allDark = 0, lit = 0, panes = 0;
+    for (const auto& kv : faces) {
+        const int l = kv.second.first, d = kv.second.second;
+        if (l + d < 4) continue;   // narrow faces cannot show variety
+        ++total;
+        lit += l;
+        panes += l + d;
+        if (l > 0 && d > 0) ++mixed;
+        else if (l > 0) ++allLit;
+        else ++allDark;
+    }
+    std::printf("    [tower] %d storey-faces: %d mixed, %d all lit, %d all dark; %d/%d panes lit\n",
+                total, mixed, allLit, allDark, lit, panes);
+    CHECK(total >= 20);
+    CHECK(mixed * 10 >= total * 6);          // was 0 of them: bands only
+    CHECK(allLit == 0);                       // no floor is a solid bar of light
+    CHECK(lit * 10 > panes * 1);              // inhabited...
+    CHECK(lit * 10 < panes * 6);              // ...but still night
 }
