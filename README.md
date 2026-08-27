@@ -232,7 +232,12 @@ a procedural field on the celestial sphere (the equatorial frame rotated by
 sidereal time), so they wheel about a pole that stands due north at
 altitude = latitude, slide with the season, and carry a Milky Way band on
 the real galactic plane; a bright moon washes the faint ones and clouds
-cover them. Panel: *Stars* / *Milky Way*.
+cover them. Light pollution is a place: inside the city's footprint (its
+road graph's bounds) the sky carries a warm glow toward downtown and only
+the brighter stars show; `pollutionFalloff` metres past the edge (default
+1500) the sky is dark and the Milky Way is out. Panel: *Stars* / *Milky
+Way* / *Light pollution*; level JSON `dayNight.lightPollution` (0..1,
+default 0.7) and `dayNight.pollutionFalloff`.
 A level authors it in its JSON: `"dayNight": {"timeOfDay": 0.35,
 "dayMinutes": 30, "latitude": 40, "dayOfYear": 172}` (`"enabled": false`
 pins the level's static sun). Live: the Debug panel's *Day / Night*

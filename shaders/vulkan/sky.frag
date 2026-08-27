@@ -37,6 +37,7 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  skyCelY;
     vec4  skyCelZ;
     vec4  skyStars;        // x visibility (0 by day), y Milky Way strength
+    vec4  skyCity;         // xy unit XZ toward the city, z light pollution (0..1)
 } g;
 
 layout(set = 0, binding = 2) uniform sampler2D envEquirect;   // HDR env (counts.z==1)
@@ -110,7 +111,9 @@ vec3 starField(vec3 dir) {
     const float R = 34.0;                                   // lattice cells ~1.7 deg
     vec3 base = floor(dc * R);
     const vec3 galPole = vec3(-0.8676, -0.1981, 0.4560);   // RA 192.9, Dec 27.1
-    float band = exp(-pow(dot(dc, galPole) / 0.16, 2.0)) * g.skyStars.y;
+    // LIGHT POLLUTION: the Milky Way is the first thing a city sky loses.
+    float pollution = clamp(g.skyCity.z, 0.0, 1.0);
+    float band = exp(-pow(dot(dc, galPole) / 0.16, 2.0)) * g.skyStars.y * (1.0 - pollution);
     vec3 col = vec3(0.0);
     for (int k = -1; k <= 1; ++k)
     for (int j = -1; j <= 1; ++j)
@@ -124,21 +127,38 @@ vec3 starField(vec3 dir) {
         float r3 = float(h2 >> 16) / 65535.0;
         uint h3 = starHash(uvec3(h2, 29u, 31u));
         float r4 = float(h3 & 0xffffu) / 65535.0;
-        if (r0 > 0.14 + 0.30 * band) continue;             // no star here
+        if (r0 > 0.16 + 0.32 * band) continue;             // no star here
         vec3 q = c + vec3(r1, r2, r4);
         float ql = length(q);
         if (abs(ql - R) > 0.9) continue;                    // off the sphere's shell
         vec3 sd = q / ql;
         float ang = length(cross(dc, sd));                  // ~ the angle
-        float mag = pow(r3, 3.0);                           // many faint, few bright
-        float sigma = 0.0010 + 0.0009 * mag;                // ~1 px at 60 deg / 760 px
-        float I = exp(-ang * ang / (2.0 * sigma * sigma)) * (0.08 + 1.5 * mag);
+        float mag = pow(r3, 4.0);                           // many faint, very few bright
+        float sigma = 0.0007 + 0.0007 * mag;                // sub-pixel to ~1 px
+        float I = exp(-ang * ang / (2.0 * sigma * sigma)) * (0.10 + 2.0 * mag);
+        // A city sky keeps only its brighter stars: the faint end fades with
+        // the pollution (downtown: a few dozen stars; a dark site: thousands).
+        I *= mix(1.0, smoothstep(0.03, 0.30, mag), pollution);
         vec3 tint = mix(vec3(0.78, 0.85, 1.0), vec3(1.0, 0.86, 0.70), r1 * r1);
         col += tint * I;
     }
     col += vec3(0.30, 0.34, 0.46) * 0.03 * band;            // the Milky Way glow
     float horizon = smoothstep(-0.02, 0.18, dir.y);         // extinction low down
     return col * gate * horizon;
+}
+
+// LIGHT POLLUTION's sky glow: a warm dome hugging the horizon, brightest
+// toward the city, only once the sun disc is gone (skySunDir.w is 0 at
+// night — the moon in slot 0 carries no disc).
+vec3 skyGlow(vec3 dir) {
+    float pollution = clamp(g.skyCity.z, 0.0, 1.0);
+    float night = 1.0 - g.skySunDir.w;
+    if (pollution <= 0.001 || night <= 0.001) return vec3(0.0);
+    vec2 h = dir.xz;
+    float hl = length(h);
+    float toward = hl > 1e-4 ? max(dot(h / hl, g.skyCity.xy), 0.0) : 0.0;
+    float low = pow(clamp(1.0 - dir.y, 0.0, 1.0), 10.0);
+    return vec3(1.0, 0.72, 0.45) * 0.06 * pollution * night * low * (0.35 + 0.65 * toward);
 }
 
 vec3 sampleEnvironment(vec3 dir) {
@@ -157,6 +177,7 @@ vec3 sampleEnvironment(vec3 dir) {
     float horizonGlow = pow(1.0 - abs(dir.y), 8.0);
     col += sc * horizonGlow * 0.1 * disc;
     col += starField(dir);   // under the moon: its glow sits over the field
+    col += skyGlow(dir);
     col += moonDisc(dir);
     return col;
 }

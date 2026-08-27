@@ -33,6 +33,7 @@ struct Globals {
   skyCelY        : vec4<f32>,
   skyCelZ        : vec4<f32>,
   skyStars       : vec4<f32>,      // x visibility, y Milky Way strength
+  skyCity        : vec4<f32>,      // xy unit XZ toward the city, z light pollution
   lights         : array<Light, 32>,
 };
 struct DrawData {
@@ -228,7 +229,8 @@ fn starField(dir : vec3<f32>) -> vec3<f32> {
   let R = 34.0;
   let base = floor(dc * R);
   let galPole = vec3<f32>(-0.8676, -0.1981, 0.4560);
-  let band = exp(-pow(dot(dc, galPole) / 0.16, 2.0)) * g.skyStars.y;
+  let pollution = clamp(g.skyCity.z, 0.0, 1.0);
+  let band = exp(-pow(dot(dc, galPole) / 0.16, 2.0)) * g.skyStars.y * (1.0 - pollution);
   var col = vec3<f32>(0.0);
   for (var k = -1; k <= 1; k++) {
     for (var j = -1; j <= 1; j++) {
@@ -242,15 +244,16 @@ fn starField(dir : vec3<f32>) -> vec3<f32> {
         let r3 = f32(h2 >> 16u) / 65535.0;
         let h3 = starHash(vec3<u32>(h2, 29u, 31u));
         let r4 = f32(h3 & 0xffffu) / 65535.0;
-        if (r0 > 0.14 + 0.30 * band) { continue; }
+        if (r0 > 0.16 + 0.32 * band) { continue; }
         let q = c + vec3<f32>(r1, r2, r4);
         let ql = length(q);
         if (abs(ql - R) > 0.9) { continue; }
         let sd = q / ql;
         let ang = length(cross(dc, sd));
-        let mag = pow(r3, 3.0);
-        let sigma = 0.0010 + 0.0009 * mag;
-        let I = exp(-ang * ang / (2.0 * sigma * sigma)) * (0.08 + 1.5 * mag);
+        let mag = pow(r3, 4.0);
+        let sigma = 0.0007 + 0.0007 * mag;
+        var I = exp(-ang * ang / (2.0 * sigma * sigma)) * (0.10 + 2.0 * mag);
+        I *= mix(1.0, smoothstep(0.03, 0.30, mag), pollution);
         let tint = mix(vec3<f32>(0.78, 0.85, 1.0), vec3<f32>(1.0, 0.86, 0.70), r1 * r1);
         col += tint * I;
       }
@@ -259,6 +262,19 @@ fn starField(dir : vec3<f32>) -> vec3<f32> {
   col += vec3<f32>(0.30, 0.34, 0.46) * 0.03 * band;
   let horizon = smoothstep(-0.02, 0.18, dir.y);
   return col * gate * horizon;
+}
+
+// Light pollution's sky glow — mirrors skyGlow in shaders/vulkan/sky.frag.
+fn skyGlow(dir : vec3<f32>) -> vec3<f32> {
+  let pollution = clamp(g.skyCity.z, 0.0, 1.0);
+  let night = 1.0 - g.skySunDir.w;
+  if (pollution <= 0.001 || night <= 0.001) { return vec3<f32>(0.0); }
+  let h = dir.xz;
+  let hl = length(h);
+  var toward = 0.0;
+  if (hl > 1e-4) { toward = max(dot(h / hl, g.skyCity.xy), 0.0); }
+  let low = pow(clamp(1.0 - dir.y, 0.0, 1.0), 10.0);
+  return vec3<f32>(1.0, 0.72, 0.45) * 0.06 * pollution * night * low * (0.35 + 0.65 * toward);
 }
 
 // The moon (the month): a sphere disc lit from the TRUE sun — mirrors
@@ -305,6 +321,7 @@ fn sampleEnvironment(dir : vec3<f32>) -> vec3<f32> {
   col += sc * pow(sunDot, 32.0) * 1.0 * disc;
   col += sc * pow(sunDot, 4.0) * 0.15 * disc;
   col += starField(dir);
+  col += skyGlow(dir);
   col += moonDisc(dir);
   return col;
 }

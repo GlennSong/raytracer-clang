@@ -1,5 +1,6 @@
 #include "day_night_system.h"
 #include "../components.h"
+#include "../procgen/city/road_net.h"   // RoadEntity: the city's footprint (light pollution)
 #include "../vehicle_lamps.h"   // duskRamp: night glow shares the lamp boundary
 
 #include "../../log.h"
@@ -35,6 +36,7 @@ void DayNightSystem::onStart(FrameContext& ctx) {
     skyHud_ = s.getBool("daynight.hud", skyHud_);
     stars_ = s.getBool("daynight.stars", stars_);
     milkyWay_ = static_cast<float>(s.getDouble("daynight.milkyWay", milkyWay_));
+    lightPollution_ = static_cast<float>(s.getDouble("daynight.lightPollution", lightPollution_));
 
     cloudsEnabled  = s.getBool("clouds.enabled", cloudsEnabled);
     cloudCoverage  = static_cast<float>(s.getDouble("clouds.coverage", cloudCoverage));
@@ -115,6 +117,7 @@ void DayNightSystem::onStop(FrameContext& ctx) {
     s.setBool("daynight.hud", skyHud_);
     s.setBool("daynight.stars", stars_);
     s.setDouble("daynight.milkyWay", milkyWay_);
+    s.setDouble("daynight.lightPollution", lightPollution_);
 
     s.setBool("clouds.enabled", cloudsEnabled);
     s.setDouble("clouds.coverage", cloudCoverage);
@@ -138,6 +141,36 @@ void DayNightSystem::seedFromConfig(const DayNightConfig& c) {
     if (c.latitude >= -90.0f) cycle.latitudeDeg = c.latitude;
     if (c.dayOfYear >= 1) cycle.dayOfYear = c.dayOfYear;
     if (c.newMoonDay >= 0.0f) cycle.newMoonDay = c.newMoonDay;
+    if (c.lightPollution >= 0.0f) lightPollution_ = c.lightPollution;
+    if (c.pollutionFalloff >= 0.0f) pollutionFalloff_ = c.pollutionFalloff;
+}
+
+// The city's footprint: the bounding circle of every road graph's nodes.
+// Found once (roads are level data); a level with no roads has no city and
+// no pollution anywhere.
+void DayNightSystem::findCityBounds(FrameContext& ctx) {
+    if (cityBoundsKnown_) return;
+    double minX = 1e30, minZ = 1e30, maxX = -1e30, maxZ = -1e30;
+    bool any = false;
+    ctx.world.each<RoadEntity>([&](Entity, RoadEntity& r) {
+        for (const RoadNode& n : r.graph.nodes) {
+            minX = std::min(minX, static_cast<double>(n.pos.x));
+            maxX = std::max(maxX, static_cast<double>(n.pos.x));
+            minZ = std::min(minZ, static_cast<double>(n.pos.y));
+            maxZ = std::max(maxZ, static_cast<double>(n.pos.y));
+            any = true;
+        }
+    });
+    if (!any) return;
+    cityCentreX_ = (minX + maxX) * 0.5;
+    cityCentreZ_ = (minZ + maxZ) * 0.5;
+    // The bounding box's half-diagonal overstates a round city; 0.8 of it is
+    // where the last streets actually are.
+    cityRadius_ = 0.8 * std::hypot((maxX - minX) * 0.5, (maxZ - minZ) * 0.5);
+    cityBoundsKnown_ = true;
+    LOG_INFO << "[sky] city footprint for light pollution: centre (" << cityCentreX_ << ", "
+             << cityCentreZ_ << ") radius " << cityRadius_ << " m, downtown glow "
+             << lightPollution_ << ", dark sky " << pollutionFalloff_ << " m out";
 }
 
 void DayNightSystem::publishStatus(FrameContext& ctx, bool active) {
@@ -147,13 +180,14 @@ void DayNightSystem::publishStatus(FrameContext& ctx, bool active) {
                   "hour=%.4f tod=%.6f dayMinutes=%.2f sunrise=%.3f sunset=%.3f "
                   "daylight=%.3f latitude=%.1f dayOfYear=%d year=%d sunY=%.3f "
                   "moonAge=%.2f moonIllum=%.3f moonY=%.3f moonX=%.3f moonZ=%.3f "
-                  "moonDisc=%.2f stars=%.3f phase=%s paused=%d active=%d",
+                  "moonDisc=%.2f stars=%.3f pollution=%.2f phase=%s paused=%d active=%d",
                   cycle.timeOfDay * 24.0, cycle.timeOfDay, cycle.dayMinutes,
                   cycle.sunriseHour(), cycle.sunsetHour(), cycle.daylightFraction(),
                   cycle.latitudeDeg, cycle.dayOfYear, cycle.year,
                   ctx.view.lighting.solarElevation, st.moonAgeDays, st.moonIllumination,
                   st.moonDirection.y, st.moonDirection.x, st.moonDirection.z,
                   st.moonDiscIntensity, stars_ ? st.starVisibility : 0.0f,
+                  ctx.view.lighting.sky.lightPollution,
                   DayNightCycle::phaseName(st.moonAgeDays),
                   cycle.paused ? 1 : 0, active ? 1 : 0);
     ctx.settings.setString("daynight.status", buf);
@@ -380,6 +414,19 @@ void DayNightSystem::applyLighting(FrameContext& ctx) {
     lit.sky.celestialZ = st.celestialZ;
     lit.sky.starVisibility = stars_ ? st.starVisibility : 0.0f;
     lit.sky.milkyWay = milkyWay_;
+    // Light pollution at the camera: downtown glow inside the city's
+    // footprint, a dark sky pollutionFalloff_ metres past its edge.
+    findCityBounds(ctx);
+    if (cityBoundsKnown_) {
+        const Vec3 cam = ctx.view.camera.position;
+        const double dx = cityCentreX_ - cam.x, dz = cityCentreZ_ - cam.z;
+        const double dist = std::hypot(dx, dz);
+        lit.sky.lightPollution = static_cast<float>(DayNightCycle::lightPollutionFor(
+            dist - cityRadius_, lightPollution_, pollutionFalloff_));
+        lit.sky.cityDirection = dist > 1.0 ? Vec3(dx / dist, 0.0, dz / dist) : Vec3(0.0, 0.0, 1.0);
+    } else {
+        lit.sky.lightPollution = 0.0f;
+    }
     lit.sky.zenithColor      = st.zenithColor;
     lit.sky.horizonColor     = st.horizonColor;
     lit.sky.groundColor      = st.groundColor;
@@ -629,6 +676,11 @@ void DayNightSystem::render(FrameContext& ctx) {
         if (ImGui::SliderFloat("Milky Way##stars", &milkyWay_, 0.0f, 2.0f, "%.2f")) {
             if (enabled) applyLighting(ctx);
         }
+        if (ImGui::SliderFloat("Light pollution (downtown)##stars", &lightPollution_, 0.0f, 1.0f, "%.2f")) {
+            if (enabled) applyLighting(ctx);
+        }
+        ImGui::Text("Pollution here: %.2f (dark sky %.0f m past the city edge)",
+                    ctx.view.lighting.sky.lightPollution, pollutionFalloff_);
         // The month: the moon's age from the calendar, or a held age.
         {
             const double age = cycle.moonAgeDays();

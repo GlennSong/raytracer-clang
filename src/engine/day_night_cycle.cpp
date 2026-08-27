@@ -98,6 +98,11 @@ double DayNightCycle::illuminationForAge(double ageDays) {
     return 0.5 * (1.0 - std::cos(elongation));
 }
 
+double DayNightCycle::lightPollutionFor(double distanceOutside, double strength, double falloff) {
+    if (falloff <= 0.0) return distanceOutside <= 0.0 ? strength : 0.0;
+    return strength * (1.0 - smoothstep(0.0, falloff, distanceOutside));
+}
+
 const char* DayNightCycle::phaseName(double ageDays) {
     const double f = ageDays / kSynodicMonthDays;   // 0 new .. 0.5 full .. 1 new
     if (f < 0.0625 || f >= 0.9375) return "New";

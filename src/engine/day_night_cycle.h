@@ -160,6 +160,10 @@ public:
     static double illuminationForAge(double ageDays);
     // "New", "Waxing crescent", "First quarter", ... "Waning crescent".
     static const char* phaseName(double ageDays);
+    // LIGHT POLLUTION at a viewpoint `distanceOutside` metres past the city's
+    // edge (<= 0 inside): `strength` downtown, fading to 0 over `falloff`.
+    // Drives the sky glow, the faint-star cut and the Milky Way's absence.
+    static double lightPollutionFor(double distanceOutside, double strength, double falloff);
 };
 
 }  // namespace engine

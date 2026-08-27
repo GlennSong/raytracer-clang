@@ -112,6 +112,7 @@ struct GpuGlobals {
     float    skyCelY[4];
     float    skyCelZ[4];
     float    skyStars[4];         // x visibility, y Milky Way strength
+    float    skyCity[4];          // xy unit XZ toward the city, z light pollution
     GpuLight lights[32];
 };
 
@@ -609,6 +610,7 @@ public:
         set4(globals_.skyCelY, (float)sky.celestialY.x, (float)sky.celestialY.y, (float)sky.celestialY.z, 0.0f);
         set4(globals_.skyCelZ, (float)sky.celestialZ.x, (float)sky.celestialZ.y, (float)sky.celestialZ.z, 0.0f);
         set4(globals_.skyStars, sky.starVisibility, sky.milkyWay, 0.0f, 0.0f);
+        set4(globals_.skyCity, (float)sky.cityDirection.x, (float)sky.cityDirection.z, sky.lightPollution, 0.0f);
         // skySunColor.w doubles as the env mode: >0.5 = sample the bound HDR
         // equirect for the sky + IBL, else the analytic procedural sky.
         set4(globals_.skySunColor, (float)sky.sunColor.x, (float)sky.sunColor.y,

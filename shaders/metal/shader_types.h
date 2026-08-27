@@ -168,6 +168,7 @@ struct LightUniforms {
     simd_float3 skyCelX;       float skyStarGate;
     simd_float3 skyCelY;       float skyMilkyWay;
     simd_float3 skyCelZ;       float _skp4;
+    simd_float4 skyCity;       // xy unit XZ toward the city, z light pollution (0..1)
 };
 
 // Sky LUT bake (cinematic-sky phase): parameters for the transmittance +

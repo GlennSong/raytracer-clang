@@ -311,6 +311,10 @@ struct ProceduralSky {
     Vec3  celestialZ{0.0, 1.0, 0.0};
     float starVisibility = 0.0f;
     float milkyWay = 1.0f;
+    // LIGHT POLLUTION at the camera (0 = a dark-sky site, 1 = downtown): a
+    // warm sky glow toward the city, the faint stars gone, no Milky Way.
+    float lightPollution = 0.0f;
+    Vec3  cityDirection{0.0, 0.0, 1.0};   // unit XZ direction toward the city
 
     // Procedural FBM clouds (ADR-0016 step 3). A sky-dome visual overlay, never
     // baked into reflection probes. cloudTime is the drift phase in seconds.

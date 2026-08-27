@@ -3686,6 +3686,8 @@ bool LevelLoader::load(const std::string& path,
         dc.latitude = dn.value("latitude", dc.latitude);
         dc.dayOfYear = dn.value("dayOfYear", dc.dayOfYear);
         dc.newMoonDay = dn.value("newMoonDay", dc.newMoonDay);
+        dc.lightPollution = dn.value("lightPollution", dc.lightPollution);
+        dc.pollutionFalloff = dn.value("pollutionFalloff", dc.pollutionFalloff);
         world.add<DayNightConfig>(world.create(), dc);
     }
 

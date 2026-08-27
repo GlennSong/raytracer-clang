@@ -126,6 +126,7 @@ struct GlobalsUBO {
     float    skyCelY[4];
     float    skyCelZ[4];
     float    skyStars[4];
+    float    skyCity[4];             // x,y unit XZ toward the city, z light pollution
 };
 
 // Volumetric-cloud uniforms (mirrors shader_types.h CloudUniforms; every
@@ -5427,6 +5428,10 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
     impl->cpuGlobals.skyStars[1] = sky.milkyWay;
     impl->cpuGlobals.skyStars[2] = 0.0f;
     impl->cpuGlobals.skyStars[3] = 0.0f;
+    impl->cpuGlobals.skyCity[0] = static_cast<float>(sky.cityDirection.x);
+    impl->cpuGlobals.skyCity[1] = static_cast<float>(sky.cityDirection.z);
+    impl->cpuGlobals.skyCity[2] = sky.lightPollution;
+    impl->cpuGlobals.skyCity[3] = 0.0f;
     set3(impl->cpuGlobals.skySunColor, sky.sunColor, 0.0f);
     set3(impl->cpuGlobals.skyZenith, sky.zenithColor, 0.0f);
     set3(impl->cpuGlobals.skyHorizon, sky.horizonColor, 0.0f);

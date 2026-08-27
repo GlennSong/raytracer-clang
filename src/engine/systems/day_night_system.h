@@ -52,6 +52,14 @@ private:
     // The star field (persisted daynight.stars / daynight.milkyWay).
     bool  stars_ = true;
     float milkyWay_ = 1.0f;
+    // LIGHT POLLUTION (device: "what if you're away from the city?"): the
+    // city's footprint (its road graph's bounds, found once) and how far past
+    // it the sky goes dark. Evaluated at the camera every frame.
+    float lightPollution_ = 0.7f;
+    float pollutionFalloff_ = 1500.0f;
+    bool  cityBoundsKnown_ = false;
+    double cityCentreX_ = 0.0, cityCentreZ_ = 0.0, cityRadius_ = 0.0;
+    void findCityBounds(FrameContext& ctx);
     SkyChart hudChart_;
     long hudChartKey_ = -1;   // (day, year, lock, latitude) the cached chart is for
     void drawSkyHud(FrameContext& ctx);

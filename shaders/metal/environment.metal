@@ -55,7 +55,8 @@ static float3 starField(float3 dir, device const LightUniforms& env) {
     const float R = 34.0;
     float3 base = floor(dc * R);
     const float3 galPole = float3(-0.8676, -0.1981, 0.4560);
-    float band = exp(-pow(dot(dc, galPole) / 0.16, 2.0)) * env.skyMilkyWay;
+    float pollution = saturate(env.skyCity.z);
+    float band = exp(-pow(dot(dc, galPole) / 0.16, 2.0)) * env.skyMilkyWay * (1.0 - pollution);
     float3 col = float3(0.0);
     for (int k = -1; k <= 1; ++k)
     for (int j = -1; j <= 1; ++j)
@@ -69,21 +70,34 @@ static float3 starField(float3 dir, device const LightUniforms& env) {
         float r3 = float(h2 >> 16) / 65535.0;
         uint h3 = starHash(uint3(h2, 29u, 31u));
         float r4 = float(h3 & 0xffffu) / 65535.0;
-        if (r0 > 0.14 + 0.30 * band) continue;
+        if (r0 > 0.16 + 0.32 * band) continue;
         float3 q = c + float3(r1, r2, r4);
         float ql = length(q);
         if (fabs(ql - R) > 0.9) continue;
         float3 sd = q / ql;
         float ang = length(cross(dc, sd));
-        float mag = pow(r3, 3.0);
-        float sigma = 0.0010 + 0.0009 * mag;
-        float I = exp(-ang * ang / (2.0 * sigma * sigma)) * (0.08 + 1.5 * mag);
+        float mag = pow(r3, 4.0);
+        float sigma = 0.0007 + 0.0007 * mag;
+        float I = exp(-ang * ang / (2.0 * sigma * sigma)) * (0.10 + 2.0 * mag);
+        I *= mix(1.0, smoothstep(0.03, 0.30, mag), pollution);
         float3 tint = mix(float3(0.78, 0.85, 1.0), float3(1.0, 0.86, 0.70), r1 * r1);
         col += tint * I;
     }
     col += float3(0.30, 0.34, 0.46) * 0.03 * band;
     float horizon = smoothstep(-0.02, 0.18, dir.y);
     return col * gate * horizon;
+}
+
+// Light pollution's sky glow — mirrors skyGlow in shaders/vulkan/sky.frag.
+static float3 skyGlow(float3 dir, device const LightUniforms& env) {
+    float pollution = saturate(env.skyCity.z);
+    float night = 1.0 - env.skySunIntensity;
+    if (pollution <= 0.001 || night <= 0.001) return float3(0.0);
+    float2 h = dir.xz;
+    float hl = length(h);
+    float toward = hl > 1e-4 ? max(dot(h / hl, env.skyCity.xy), 0.0) : 0.0;
+    float low = pow(saturate(1.0 - dir.y), 10.0);
+    return float3(1.0, 0.72, 0.45) * 0.06 * pollution * night * low * (0.35 + 0.65 * toward);
 }
 
 // Procedural sky environment. Colors and the sun arc come from `env` (the day/
@@ -116,6 +130,7 @@ float3 sampleEnvironment(float3 dir, device const LightUniforms& env) {
     float horizonGlow = pow(1.0 - abs(dir.y), 8.0);
     col += sc * horizonGlow * 0.1 * disc;
     col += starField(dir, env);
+    col += skyGlow(dir, env);
     col += moonDisc(dir, env);
 
     return col;
@@ -282,7 +297,8 @@ static float3 scatteringSkyRadiance(float3 dir, texture2d<float> skyViewLut,
         col += env.skySunColor * env.skySunIntensity * t *
                (core * 2.0 + skirt * 0.35);
     }
-    col += starField(dir, env);  // the stars and the moon over the scattering sky too
+    col += starField(dir, env);  // the stars, the city glow and the moon over the scattering sky too
+    col += skyGlow(dir, env);
     col += moonDisc(dir, env);
     // Half-float ceiling: the disc + aureole can sum past 65504 and the HDR
     // target folds the overflow into a BLACK sun (measured: a dark disc at

@@ -398,3 +398,17 @@ TEST_CASE(day_night_stars_show_at_night_and_the_moon_washes_them) {
     CHECK(dusk > 0.0f);
     CHECK(dusk < 1.0f);
 }
+
+// LIGHT POLLUTION (device: "there's light pollution from the city, but what
+// if you're away from the city?"): downtown glow inside the footprint, a
+// dark sky a falloff past its edge, and a smooth road between.
+TEST_CASE(day_night_light_pollution_fades_with_distance_from_the_city) {
+    CHECK_APPROX(DayNightCycle::lightPollutionFor(-500.0, 0.7, 1500.0), 0.7, 1e-9);   // downtown
+    CHECK_APPROX(DayNightCycle::lightPollutionFor(0.0, 0.7, 1500.0), 0.7, 1e-9);      // the edge
+    const double half = DayNightCycle::lightPollutionFor(750.0, 0.7, 1500.0);
+    CHECK(half > 0.2);
+    CHECK(half < 0.5);
+    CHECK_APPROX(DayNightCycle::lightPollutionFor(1500.0, 0.7, 1500.0), 0.0, 1e-9);   // dark sky
+    CHECK_APPROX(DayNightCycle::lightPollutionFor(9000.0, 0.7, 1500.0), 0.0, 1e-9);
+    CHECK_APPROX(DayNightCycle::lightPollutionFor(100.0, 0.0, 1500.0), 0.0, 1e-9);    // a dark level
+}

@@ -3347,6 +3347,9 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
     lu.skyStarGate = sky.starVisibility;
     lu.skyMilkyWay = sky.milkyWay;
     lu._skp4 = 0;
+    lu.skyCity = simd_make_float4(static_cast<float>(sky.cityDirection.x),
+                                  static_cast<float>(sky.cityDirection.z),
+                                  sky.lightPollution, 0.0f);
     lu.skySunColor = toSimd3(sky.sunColor);
     lu.skyZenith = toSimd3(sky.zenithColor);
     lu.skyHorizon = toSimd3(sky.horizonColor);

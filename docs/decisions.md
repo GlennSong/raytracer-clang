@@ -888,6 +888,12 @@ ship. AGENTS.md is updated to state the refined rule.
   constellations). Gates:
   `day_night_stars_wheel_about_a_pole_at_the_latitude`,
   `day_night_stars_show_at_night_and_the_moon_washes_them`.
+  *Light pollution:* evaluated at the camera from the city's footprint (the
+  road graphs' bounding circle) — `lightPollutionFor(distanceOutside,
+  strength, falloff)` — and sent as `skyCity` (direction + strength): a warm
+  horizon glow toward downtown, the faint end of the star field cut, the
+  Milky Way scaled by (1 − pollution). Stars themselves are sub-pixel to
+  ~1 px with a steeper (r⁴) brightness law.
 - Procedural **clouds — first pass** (step 3): an FBM noise layer painted on the
   sky dome (`applyClouds`/`cloudFbm` in `phong.metal`), drifted over time and
   shaded against the active sun (sunlit tops, dark night silhouettes, warm at
