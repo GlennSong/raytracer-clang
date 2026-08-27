@@ -293,6 +293,10 @@ struct ProceduralSky {
     Vec3  sunDirection{0.4, 0.8, -0.3};   // toward the sun (world space)
     Vec3  sunColor{1.0, 0.95, 0.8};       // sun disc / glow tint
     float sunDiscIntensity = 1.0f;        // disc brightness scale (0 at night)
+    // The WIDE aureole + horizon glow, separately: a ridge between the
+    // camera and the sun zeroes the disc but only softens this (terrain
+    // horizon shadows). Equal to sunDiscIntensity when nothing is in the way.
+    float sunGlowIntensity = 1.0f;
     Vec3  zenithColor{0.25, 0.45, 0.85};
     Vec3  horizonColor{0.6, 0.75, 0.9};
     Vec3  groundColor{0.35, 0.3, 0.25};
@@ -598,6 +602,15 @@ public:
     // skybox and (via the reflection-probe bake) image-based lighting — see
     // ADR-0016. An invalid handle restores the procedural sky. No-op by default.
     virtual void setEnvironmentMap(TextureHandle /*equirect*/) {}
+    // TERRAIN HORIZON (mountain shadows at landscape scale, see
+    // engine/procgen/terrain_horizon.h): an R8 texture of sin(horizon
+    // elevation) toward the slot-0 light over the square world
+    // [originX, originX + extent) x [originZ, originZ + extent), encoded
+    // encodeLo..encodeHi. The lit pass shadows fragments whose light sits
+    // below it. An invalid handle switches it off. No-op by default.
+    virtual void setTerrainHorizon(TextureHandle /*map*/, float /*originX*/,
+                                   float /*originZ*/, float /*extent*/,
+                                   float /*encodeLo*/, float /*encodeHi*/) {}
     virtual RenderStats getRenderStats() const = 0;
 
     // Per-frame instance buffer capacities (general/shadow/foliage). A big level

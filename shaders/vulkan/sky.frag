@@ -20,8 +20,8 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  cascadeSplit;
     ivec4 counts;
     vec4  shadowParams;
-    vec4  skySunDir;       // xyz dir, w disc intensity
-    vec4  skySunColor;
+    vec4  skySunDir;       // xyz dir, w disc intensity (0 behind a ridge)
+    vec4  skySunColor;     // rgb, w the WIDE aureole (softened behind a ridge)
     vec4  skyZenith;
     vec4  skyHorizon;
     vec4  skyGround;
@@ -169,13 +169,14 @@ vec3 sampleEnvironment(vec3 dir) {
     vec3 col = mix(lowerHaze, sky, horizonBlend);
 
     float disc = g.skySunDir.w;
+    float glow = g.skySunColor.w;   // the wide twilight glow: survives a ridge, softened
     vec3 sc = g.skySunColor.rgb;
     float sunDot = max(dot(dir, g.skySunDir.xyz), 0.0);
     col += sc * pow(sunDot, 256.0) * 8.0 * disc;
     col += sc * pow(sunDot, 32.0) * 1.0 * disc;
-    col += sc * pow(sunDot, 4.0) * 0.15 * disc;
+    col += sc * pow(sunDot, 4.0) * 0.15 * glow;
     float horizonGlow = pow(1.0 - abs(dir.y), 8.0);
-    col += sc * horizonGlow * 0.1 * disc;
+    col += sc * horizonGlow * 0.1 * glow;
     col += starField(dir);   // under the moon: its glow sits over the field
     col += skyGlow(dir);
     col += moonDisc(dir);

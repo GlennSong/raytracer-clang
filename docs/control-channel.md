@@ -50,6 +50,7 @@ daynight minutes <n>              # loop length in REAL minutes (default 30;
                                   # 0 freezes the sun); the citysim's clock
                                   # follows the cycle's hour and rate
 daynight day <1-365>              # the calendar day: season + moon phase
+daynight terrain on|off           # terrain horizon shadows (mountains) on/off
 daynight hud on|off               # the sky HUD (compass + chart). Shows with the
                                   # debug overlay — but stage it (and `camera`)
                                   # BEFORE `overlay debug on`: the overlay is a

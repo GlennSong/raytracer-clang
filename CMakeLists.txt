@@ -68,6 +68,7 @@ add_library(engine_core STATIC
     src/engine/asset_manager.cpp
     src/engine/procgen/noise.cpp
     src/engine/procgen/terrain.cpp
+    src/engine/procgen/terrain_horizon.cpp
     src/engine/procgen/terrain_lod.cpp
     src/engine/procgen/lsystem.cpp
     src/engine/procgen/skeleton.cpp
@@ -488,6 +489,7 @@ add_executable(run_tests
     tests/test_frustum.cpp
     tests/test_day_night.cpp
     tests/test_sky_chart.cpp
+    tests/test_terrain_horizon.cpp
     tests/test_cube_faces.cpp
     tests/test_path_tracer.cpp
     tests/test_asset_manager.cpp

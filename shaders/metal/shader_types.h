@@ -123,7 +123,7 @@ struct LightUniforms {
     // Procedural sky (ADR-0016, day/night). Written from `SceneLighting::sky`
     // in setLights(); the skybox, composite, and IBL-fallback paths read it.
     simd_float3 skySunDir;   float skySunIntensity;  // disc brightness, 0 at night
-    simd_float3 skySunColor; float _skp0;
+    simd_float3 skySunColor; float skySunGlow;   // w: the WIDE aureole (softened behind a ridge)
     simd_float3 skyZenith;   float _skp1;
     simd_float3 skyHorizon;  float _skp2;
     simd_float3 skyGround;   float _skp3;

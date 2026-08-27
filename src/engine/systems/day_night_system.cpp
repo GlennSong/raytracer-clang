@@ -1,6 +1,8 @@
 #include "day_night_system.h"
 #include "../components.h"
 #include "../procgen/city/road_net.h"   // RoadEntity: the city's footprint (light pollution)
+#include "../procgen/noise.h"
+#include "../procgen/terrain.h"          // terrainHeight: the horizon raster
 #include "../vehicle_lamps.h"   // duskRamp: night glow shares the lamp boundary
 
 #include "../../log.h"
@@ -37,6 +39,7 @@ void DayNightSystem::onStart(FrameContext& ctx) {
     stars_ = s.getBool("daynight.stars", stars_);
     milkyWay_ = static_cast<float>(s.getDouble("daynight.milkyWay", milkyWay_));
     lightPollution_ = static_cast<float>(s.getDouble("daynight.lightPollution", lightPollution_));
+    terrainShadows_ = s.getBool("daynight.terrainShadows", terrainShadows_);
 
     cloudsEnabled  = s.getBool("clouds.enabled", cloudsEnabled);
     cloudCoverage  = static_cast<float>(s.getDouble("clouds.coverage", cloudCoverage));
@@ -86,11 +89,99 @@ void DayNightSystem::onStart(FrameContext& ctx) {
              << " (" << DayNightCycle::phaseName(cycle.moonAgeDays()) << ")"
              << " hdrActive=" << hdrEnvironmentActive(ctx);
 
+    buildHeightRaster(ctx);
     if (enabled && levelEnabled && !hdrEnvironmentActive(ctx)) applyLighting(ctx);
     applyClouds(ctx);
     // RT_SKY_SVG=<path>: the day's sky chart at boot (the load-time
     // instrument idiom, beside RT_FURNITURE_SVG).
     if (const char* svg = std::getenv("RT_SKY_SVG")) writeSkyChart(svg);
+}
+
+// The terrain's height field on a 256 x 256 raster over the world square —
+// the analytic field the CDLOD tiles are built from, so the horizon is the
+// horizon of what is drawn. ~65k samples once at start.
+void DayNightSystem::buildHeightRaster(FrameContext& ctx) {
+    raster_ = HeightRaster{};
+    const TerrainLodConfig* cfg = nullptr;
+    ctx.world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) {
+        if (!cfg) cfg = &c;
+    });
+    if (!cfg) return;
+    const TerrainParams params = cfg->params;
+    const Noise noise(cfg->seed);
+    const double half = cfg->worldHalf;
+    raster_ = rasterizeHeights(
+        [&](double x, double z) { return terrainHeight(params, noise, x, z); },
+        -half, -half, 2.0 * half, 256);
+    double lo = 1e30, hi = -1e30;
+    for (float h : raster_.height) { lo = std::min(lo, static_cast<double>(h)); hi = std::max(hi, static_cast<double>(h)); }
+    LOG_INFO << "[sky] terrain horizon raster: " << raster_.size << "^2 over " << 2.0 * half
+             << " m, heights " << lo << " .. " << hi << " m";
+}
+
+// Re-march the horizon toward the active light when it has moved > 2 deg,
+// upload it, and read the camera's own texel for the disc.
+void DayNightSystem::refreshHorizon(FrameContext& ctx, const DayNightState& st) {
+    auto& lit = ctx.view.lighting;
+    if (!terrainShadows_ || raster_.empty()) {
+        if (horizonTexValid_) {
+            ctx.renderer.setTerrainHorizon(TextureHandle{}, 0, 0, 0, 0, 0);
+            ctx.renderer.removeTexture(horizonTex_);
+            horizonTexValid_ = false;
+            horizonAzimuth_ = 1e9;
+        }
+        ridgeAtCamera_ = -1.0f;
+        lightBehindRidge_ = 0.0f;
+        return;
+    }
+    const Vec3 L = st.lightDirection;
+    const double az = skyBearingDeg(L);
+    // Stale when never marched, or when the light has swung > 2 deg (the
+    // first cut wrapped the delta through 360 with the "never" sentinel
+    // still in it and came out negative: the map was never built at all —
+    // `daynight?` reported ridge=-0.100, the encoding floor, everywhere).
+    bool stale = horizonAzimuth_ > 720.0;
+    if (!stale) {
+        double dAz = std::fabs(az - horizonAzimuth_);
+        if (dAz > 180.0) dAz = 360.0 - dAz;
+        stale = dAz > 2.0;
+    }
+    if (stale) {
+        std::function<void(int, const std::function<void(int)>&)> par =
+            [&](int rows, const std::function<void(int)>& body) {
+                ctx.jobs.parallelFor(0, static_cast<std::size_t>(rows),
+                                     [&](std::size_t z) { body(static_cast<int>(z)); });
+            };
+        horizon_ = computeHorizonMap(raster_, az, 4000.0, 2.0, &par);
+        TextureHandle fresh = ctx.renderer.uploadTexture(
+            horizon_.size, horizon_.size, 1, horizon_.sinElevation.data());
+        ctx.renderer.setTerrainHorizon(fresh, static_cast<float>(horizon_.originX),
+                                       static_cast<float>(horizon_.originZ),
+                                       static_cast<float>(horizon_.extent),
+                                       static_cast<float>(HorizonMap::kEncodeLo),
+                                       static_cast<float>(HorizonMap::kEncodeHi));
+        if (horizonTexValid_) ctx.renderer.removeTexture(horizonTex_);
+        horizonTex_ = fresh;
+        horizonTexValid_ = true;
+        horizonAzimuth_ = az;
+    }
+    // The camera's texel: is the light behind the ridge from HERE? Then the
+    // disc (and the bloom it feeds) is gone, whichever body slot 0 carries.
+    const Vec3 cam = ctx.view.camera.position;
+    ridgeAtCamera_ = static_cast<float>(horizon_.sinElevationAt(cam.x, cam.z));
+    const double behind = 1.0 - std::clamp((L.y - (ridgeAtCamera_ - 0.01)) / 0.04, 0.0, 1.0);
+    lightBehindRidge_ = static_cast<float>(behind);
+    // The disc and its tight aureole (what the bloom feeds on) go with the
+    // ridge; the WIDE twilight glow only softens — forward scatter along the
+    // line of sight is real sky, not the sun, and stays after a mountain
+    // sunset (so the sky still says where the sun went, without a halo).
+    const bool sunActive = dot(st.lightDirection, st.sunDirection) > 0.999;
+    if (sunActive) {
+        lit.sky.sunDiscIntensity *= static_cast<float>(1.0 - behind);
+        lit.sky.sunGlowIntensity *= static_cast<float>(1.0 - 0.6 * behind);
+    } else {
+        lit.sky.moonDiscIntensity *= static_cast<float>(1.0 - behind);
+    }
 }
 
 void DayNightSystem::writeSkyChart(const std::string& path) {
@@ -118,6 +209,7 @@ void DayNightSystem::onStop(FrameContext& ctx) {
     s.setBool("daynight.stars", stars_);
     s.setDouble("daynight.milkyWay", milkyWay_);
     s.setDouble("daynight.lightPollution", lightPollution_);
+    s.setBool("daynight.terrainShadows", terrainShadows_);
 
     s.setBool("clouds.enabled", cloudsEnabled);
     s.setDouble("clouds.coverage", cloudCoverage);
@@ -180,14 +272,14 @@ void DayNightSystem::publishStatus(FrameContext& ctx, bool active) {
                   "hour=%.4f tod=%.6f dayMinutes=%.2f sunrise=%.3f sunset=%.3f "
                   "daylight=%.3f latitude=%.1f dayOfYear=%d year=%d sunY=%.3f "
                   "moonAge=%.2f moonIllum=%.3f moonY=%.3f moonX=%.3f moonZ=%.3f "
-                  "moonDisc=%.2f stars=%.3f pollution=%.2f phase=%s paused=%d active=%d",
+                  "moonDisc=%.2f stars=%.3f pollution=%.2f ridge=%.3f behind=%.2f phase=%s paused=%d active=%d",
                   cycle.timeOfDay * 24.0, cycle.timeOfDay, cycle.dayMinutes,
                   cycle.sunriseHour(), cycle.sunsetHour(), cycle.daylightFraction(),
                   cycle.latitudeDeg, cycle.dayOfYear, cycle.year,
                   ctx.view.lighting.solarElevation, st.moonAgeDays, st.moonIllumination,
                   st.moonDirection.y, st.moonDirection.x, st.moonDirection.z,
                   st.moonDiscIntensity, stars_ ? st.starVisibility : 0.0f,
-                  ctx.view.lighting.sky.lightPollution,
+                  ctx.view.lighting.sky.lightPollution, ridgeAtCamera_, lightBehindRidge_,
                   DayNightCycle::phaseName(st.moonAgeDays),
                   cycle.paused ? 1 : 0, active ? 1 : 0);
     ctx.settings.setString("daynight.status", buf);
@@ -303,6 +395,12 @@ void DayNightSystem::update(FrameContext& ctx) {
             cs.setDouble("daynight.setDay", -1.0);
             enabled = true;
         }
+        // `daynight terrain on|off`: the terrain horizon shadows.
+        const double setTerrain = cs.getDouble("daynight.setTerrain", -1.0);
+        if (setTerrain >= 0.0) {
+            terrainShadows_ = setTerrain > 0.5;
+            cs.setDouble("daynight.setTerrain", -1.0);
+        }
         // `daynight hud on|off`: the sky HUD.
         const double setHud = cs.getDouble("daynight.setHud", -1.0);
         if (setHud >= 0.0) {
@@ -403,6 +501,7 @@ void DayNightSystem::applyLighting(FrameContext& ctx) {
     lit.sky.sunDirection     = st.lightDirection;
     lit.sky.sunColor         = st.lightColor;
     lit.sky.sunDiscIntensity = st.skyDiscIntensity;
+    lit.sky.sunGlowIntensity = st.skyDiscIntensity;   // the wide aureole; a ridge softens it
     // The moon as a drawn body (the month): lit by the TRUE sun.
     lit.sky.moonDirection     = st.moonDirection;
     lit.sky.sunTrueDirection  = st.sunDirection;
@@ -414,6 +513,7 @@ void DayNightSystem::applyLighting(FrameContext& ctx) {
     lit.sky.celestialZ = st.celestialZ;
     lit.sky.starVisibility = stars_ ? st.starVisibility : 0.0f;
     lit.sky.milkyWay = milkyWay_;
+    refreshHorizon(ctx, st);
     // Light pollution at the camera: downtown glow inside the city's
     // footprint, a dark sky pollutionFalloff_ metres past its edge.
     findCityBounds(ctx);
@@ -681,6 +781,13 @@ void DayNightSystem::render(FrameContext& ctx) {
         }
         ImGui::Text("Pollution here: %.2f (dark sky %.0f m past the city edge)",
                     ctx.view.lighting.sky.lightPollution, pollutionFalloff_);
+        if (ImGui::Checkbox("Terrain shadows (horizon map)##horizon", &terrainShadows_)) {
+            if (enabled) applyLighting(ctx);
+        }
+        if (terrainShadows_ && !raster_.empty())
+            ImGui::Text("Ridge toward the light here: sin %.3f (%.1f deg); light behind it %.0f%%",
+                        ridgeAtCamera_, std::asin(std::clamp(ridgeAtCamera_, -1.0f, 1.0f)) * 57.2958f,
+                        lightBehindRidge_ * 100.0f);
         // The month: the moon's age from the calendar, or a held age.
         {
             const double age = cycle.moonAgeDays();

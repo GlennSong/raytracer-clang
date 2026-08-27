@@ -5,6 +5,7 @@
 #include "../day_night_cycle.h"
 #include "../sky_chart.h"
 #include "../weather_cycle.h"
+#include "../procgen/terrain_horizon.h"
 
 #ifdef __EMSCRIPTEN__
 #include <limits>
@@ -60,6 +61,24 @@ private:
     bool  cityBoundsKnown_ = false;
     double cityCentreX_ = 0.0, cityCentreZ_ = 0.0, cityRadius_ = 0.0;
     void findCityBounds(FrameContext& ctx);
+
+    // TERRAIN HORIZON SHADOWS (device: "when the sun set behind the
+    // mountains ... I thought I might start seeing more darkness right
+    // away, or at least some shadow casting from the mountain"). The height
+    // raster is built once from the level's terrain; the horizon map toward
+    // the active light is re-marched whenever it has moved a couple of
+    // degrees (a few ms across the job pool) and uploaded; the camera's
+    // own texel tells whether the disc is behind the ridge.
+    bool terrainShadows_ = true;
+    HeightRaster raster_;
+    HorizonMap horizon_;
+    TextureHandle horizonTex_;
+    bool horizonTexValid_ = false;
+    double horizonAzimuth_ = 1e9;
+    float ridgeAtCamera_ = -1.0f;   // sin(horizon elevation) toward the light, at the camera
+    float lightBehindRidge_ = 0.0f;
+    void buildHeightRaster(FrameContext& ctx);
+    void refreshHorizon(FrameContext& ctx, const DayNightState& st);
     SkyChart hudChart_;
     long hudChartKey_ = -1;   // (day, year, lock, latitude) the cached chart is for
     void drawSkyHud(FrameContext& ctx);

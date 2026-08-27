@@ -122,13 +122,14 @@ float3 sampleEnvironment(float3 dir, device const LightUniforms& env) {
     float disc = env.skySunIntensity;
     float3 sc = env.skySunColor;
     float sunDot = max(dot(dir, env.skySunDir), 0.0);
+    float glow = env.skySunGlow;                    // the wide glow survives a ridge
     col += sc * pow(sunDot, 256.0) * 8.0  * disc;   // bright disc
     col += sc * pow(sunDot, 32.0)  * 1.0  * disc;   // inner glow
-    col += sc * pow(sunDot, 4.0)   * 0.15 * disc;   // outer halo
+    col += sc * pow(sunDot, 4.0)   * 0.15 * glow;   // outer halo
 
     // Subtle atmospheric scattering near horizon, tinted by the sun
     float horizonGlow = pow(1.0 - abs(dir.y), 8.0);
-    col += sc * horizonGlow * 0.1 * disc;
+    col += sc * horizonGlow * 0.1 * glow;
     col += starField(dir, env);
     col += skyGlow(dir, env);
     col += moonDisc(dir, env);

@@ -3354,7 +3354,8 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
     lu.skyZenith = toSimd3(sky.zenithColor);
     lu.skyHorizon = toSimd3(sky.horizonColor);
     lu.skyGround = toSimd3(sky.groundColor);
-    lu._skp0 = lu._skp1 = lu._skp2 = lu._skp3 = 0;
+    lu.skySunGlow = sky.sunGlowIntensity;
+    lu._skp1 = lu._skp2 = lu._skp3 = 0;
     lu.skyCloudCoverage = sky.cloudCoverage;
     lu.skyCloudDensity = sky.cloudDensity;
     lu.skyCloudScale = sky.cloudScale;

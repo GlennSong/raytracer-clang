@@ -38,11 +38,21 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  shadowTint;         // rgb artistic shadow tint, w ambientStrength
     vec4  wind1;              // xyz wind dir, w time (used by mesh.vert)
     vec4  wind2;              // x frequency, y height, z amplitude
+    vec4  skyMoonDir;         // (sky.frag's members, declared to reach the tail)
+    vec4  skyMoonSun;
+    vec4  skyCelX;
+    vec4  skyCelY;
+    vec4  skyCelZ;
+    vec4  skyStars;
+    vec4  skyCity;
+    vec4  terrainHorizon;     // xy world origin, z 1/extent, w enabled
+    vec4  terrainHorizon2;    // x encodeLo, y encodeHi - encodeLo
 } g;
 
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
 layout(set = 0, binding = 2) uniform sampler2D envEquirect;   // HDR env (counts.z==1)
 layout(set = 0, binding = 3) uniform sampler2D brdfLut;       // split-sum BRDF LUT
+layout(set = 0, binding = 4) uniform sampler2D terrainHorizonMap;   // mountain shadows
 
 const float ENV_PI = 3.14159265359;
 vec3 sampleEquirect(vec3 dir) {
@@ -506,6 +516,19 @@ float sampleCascade(int slice, vec3 worldPos, vec3 N) {
     return s / 9.0;
 }
 
+// TERRAIN HORIZON: mountain shadows at landscape scale (see
+// engine/procgen/terrain_horizon.h). sin(horizon elevation) toward the
+// slot-0 light over the world square; the light below it is behind the
+// ridge. A soft edge of ~1.4 deg so the shadow line does not shimmer as
+// the sun moves; outside the map, nothing is known and nothing shadows.
+float terrainShadow(vec3 worldPos, vec3 L) {
+    if (g.terrainHorizon.w < 0.5) return 1.0;
+    vec2 uv = (worldPos.xz - g.terrainHorizon.xy) * g.terrainHorizon.z;
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 1.0;
+    float h = g.terrainHorizon2.x + g.terrainHorizon2.y * texture(terrainHorizonMap, uv).r;
+    return smoothstep(h - 0.012, h + 0.012, L.y);
+}
+
 float computeShadow(vec3 worldPos, vec3 N, float viewDepth) {
     int count = g.counts.y;
     if (count <= 0) return 1.0;
@@ -641,6 +664,10 @@ void main() {
         float viewDepth = -(g.view * vec4(inWorldPos, 1.0)).z;
         sunVis = computeShadow(inWorldPos, N, viewDepth);
     }
+    // The mountains' shadow rides the same visibility (light 0 = the sun by
+    // day, the moon by night; the horizon map was marched toward it).
+    if (g.counts.x > 0)
+        sunVis *= terrainShadow(inWorldPos, normalize(g.lights[0].directionInner.xyz));
     float strength = g.shadowParams.w;
     float sunShadow = mix(1.0, sunVis, strength);   // scalar form for the shadow debug view (5)
     // Artistic shadow tint (ADR-0017): occluded direct light + ambient lerp toward

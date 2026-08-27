@@ -237,7 +237,14 @@ road graph's bounds) the sky carries a warm glow toward downtown and only
 the brighter stars show; `pollutionFalloff` metres past the edge (default
 1500) the sky is dark and the Milky Way is out. Panel: *Stars* / *Milky
 Way* / *Light pollution*; level JSON `dayNight.lightPollution` (0..1,
-default 0.7) and `dayNight.pollutionFalloff`.
+default 0.7) and `dayNight.pollutionFalloff`. Mountains cast shadows at
+landscape scale through a **terrain horizon map** (`src/engine/procgen/
+terrain_horizon.h`): the terrain's height field on a 256² raster, marched
+toward the sun (or the moon at night) into "how high is the ridge from
+here"; the lit pass shadows anything whose light sits below it, and the
+sun disc + its bloom vanish the moment the sun drops behind the ridge from
+where you stand (`daynight?` reports `ridge=`/`behind=`). Panel: *Terrain
+shadows*. Vulkan; the per-fragment map is not yet bound on Metal/WebGPU.
 A level authors it in its JSON: `"dayNight": {"timeOfDay": 0.35,
 "dayMinutes": 30, "latitude": 40, "dayOfYear": 172}` (`"enabled": false`
 pins the level's static sun). Live: the Debug panel's *Day / Night*

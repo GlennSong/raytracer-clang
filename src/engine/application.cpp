@@ -640,6 +640,13 @@ std::string Application::handleControlCommand(const std::string& line) {
         // "freeze golden hour, keep framing" workflow.
         if (cmd.args.empty())
             return "err usage: daynight <hour0-24>|hold|run|minutes <n>|day <1-365>|moon <age|auto>";
+        if (cmd.args[0] == "terrain") {
+            // Terrain horizon shadows on/off (the before/after switch).
+            if (cmd.args.size() < 2 || (cmd.args[1] != "on" && cmd.args[1] != "off"))
+                return "err usage: daynight terrain on|off";
+            settingsStore.setDouble("daynight.setTerrain", cmd.args[1] == "on" ? 1.0 : 0.0);
+            return "ok terrain shadows staged";
+        }
         if (cmd.args[0] == "hud") {
             // The sky HUD (compass strip + polar chart), debug overlay only.
             if (cmd.args.size() < 2 || (cmd.args[1] != "on" && cmd.args[1] != "off"))
@@ -707,7 +714,7 @@ std::string Application::handleControlCommand(const std::string& line) {
         char buf[48];
         std::snprintf(buf, sizeof(buf), " sim=%.4f",
                       settingsStore.getDouble("citysim.hour", -1.0));
-        return "ok " + settingsStore.getString("daynight.status", "no cycle") + buf;
+        return "ok " + settingsStore.getString("daynight.status", "no cycle") + buf;   // incl. ridge=/behind=
     }
 
     if (cmd.name == "weather") {

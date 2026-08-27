@@ -894,6 +894,18 @@ ship. AGENTS.md is updated to state the refined rule.
   horizon glow toward downtown, the faint end of the star field cut, the
   Milky Way scaled by (1 − pollution). Stars themselves are sub-pixel to
   ~1 px with a steeper (r⁴) brightness law.
+  *Terrain horizon shadows (same day):* the cascades reach 150 m, pull back
+  only `radius + 50 m` toward the sun, and the terrain is not a shadow
+  caster — so no mountain ever shadowed the city. `engine/procgen/
+  terrain_horizon.*` rasters the analytic terrain (256²) once and marches
+  a horizon map toward the slot-0 light whenever it moves > 2° (job-pool
+  rows, ~ms): sin(horizon elevation) per texel, R8, via the new
+  `Renderer::setTerrainHorizon` seam (Vulkan binds it at set 0 binding 4;
+  `mesh.frag` multiplies the cascade visibility by `terrainShadow`). The
+  camera's own texel scales the disc — the sun's bloom dies when it drops
+  behind the ridge from where you stand. Gates in
+  `tests/test_terrain_horizon.cpp` (a synthetic wall: horizon toward it,
+  none away; encode round trip; the shadow predicate).
 - Procedural **clouds — first pass** (step 3): an FBM noise layer painted on the
   sky dome (`applyClouds`/`cloudFbm` in `phong.metal`), drifted over time and
   shaded against the active sun (sunlit tops, dark night silhouettes, warm at

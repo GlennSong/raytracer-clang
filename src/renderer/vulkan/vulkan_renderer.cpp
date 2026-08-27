@@ -127,6 +127,10 @@ struct GlobalsUBO {
     float    skyCelZ[4];
     float    skyStars[4];
     float    skyCity[4];             // x,y unit XZ toward the city, z light pollution
+    // Terrain horizon map (set 0 binding 4): xy world origin, z 1/extent,
+    // w enabled; then x encodeLo, y (encodeHi - encodeLo). mesh.frag only.
+    float    terrainHorizon[4];
+    float    terrainHorizon2[4];
 };
 
 // Volumetric-cloud uniforms (mirrors shader_types.h CloudUniforms; every
@@ -524,6 +528,11 @@ struct VulkanRenderer::Impl {
     VkSampler envSampler = VK_NULL_HANDLE;   // linear, wrap-u/clamp-v, mipped
     VkImageView envView = VK_NULL_HANDLE;     // current equirect (or default)
     bool envBound = false;
+    // Terrain horizon map (set 0 binding 4; sampled with the clamp/linear
+    // BRDF LUT sampler). Default texture when none is bound; the UBO's
+    // enabled flag gates the lookup, so the default's content never matters.
+    VkImageView horizonView = VK_NULL_HANDLE;
+    void updateGlobalHorizonDescriptor();
 
     // Split-sum BRDF integration LUT (set 0 binding 3), baked once at init.
     VkImage brdfLutImage = VK_NULL_HANDLE;
@@ -3022,7 +3031,7 @@ bool VulkanRenderer::Impl::createSyncObjects() {
 }
 
 bool VulkanRenderer::Impl::createDescriptorSetLayout() {
-    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
     bindings[0].binding = 0;   // global UBO
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -3039,6 +3048,10 @@ bool VulkanRenderer::Impl::createDescriptorSetLayout() {
     bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[3].descriptorCount = 1;
     bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[4].binding = 4;   // terrain horizon map (mountain shadows)
+    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[4].descriptorCount = 1;
+    bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     info.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -3065,8 +3078,8 @@ bool VulkanRenderer::Impl::createDescriptorPool() {
     std::array<VkDescriptorPoolSize, 2> sizes{};
     sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     sizes[0].descriptorCount = MAX_FRAMES_IN_FLIGHT;
-    sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map + env + BRDF LUT
-    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 3;
+    sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map + env + BRDF LUT + horizon
+    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 4;
     VkDescriptorPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     info.poolSizeCount = static_cast<uint32_t>(sizes.size());
@@ -3101,7 +3114,17 @@ bool VulkanRenderer::Impl::createDescriptorSets() {
         lut.sampler = brdfLutSampler;
         lut.imageView = brdfLutView;
         lut.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        std::array<VkWriteDescriptorSet, 3> writes{};
+        VkDescriptorImageInfo horizon{};
+        horizon.sampler = brdfLutSampler;          // clamp + linear, like the LUT
+        horizon.imageView = defaultTexture.view;   // gated off by the UBO flag
+        horizon.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        std::array<VkWriteDescriptorSet, 4> writes{};
+        writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[3].dstSet = descriptorSets[i];
+        writes[3].dstBinding = 4;   // terrain horizon map
+        writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[3].descriptorCount = 1;
+        writes[3].pImageInfo = &horizon;
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = descriptorSets[i];
         writes[0].dstBinding = 0;
@@ -3154,6 +3177,25 @@ void VulkanRenderer::Impl::updateGlobalEnvDescriptor() {
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.dstSet = descriptorSets[i];
         write.dstBinding = 2;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.descriptorCount = 1;
+        write.pImageInfo = &img;
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    }
+}
+
+void VulkanRenderer::Impl::updateGlobalHorizonDescriptor() {
+    VkImageView view = horizonView ? horizonView : defaultTexture.view;
+    if (!view) return;
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VkDescriptorImageInfo img{};
+        img.sampler = brdfLutSampler;
+        img.imageView = view;
+        img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = descriptorSets[i];
+        write.dstBinding = 4;
         write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         write.descriptorCount = 1;
         write.pImageInfo = &img;
@@ -5311,6 +5353,23 @@ void VulkanRenderer::setEnvironmentMap(TextureHandle equirect) {
     impl->updateGlobalEnvDescriptor();
 }
 
+void VulkanRenderer::setTerrainHorizon(TextureHandle map, float originX, float originZ,
+                                       float extent, float encodeLo, float encodeHi) {
+    GpuTexture* t = impl->textures.get(map);
+    if (impl->device) vkDeviceWaitIdle(impl->device);   // descriptor in-use safety
+    const bool on = t && t->view && extent > 0.0f;
+    impl->horizonView = on ? t->view : VK_NULL_HANDLE;
+    impl->cpuGlobals.terrainHorizon[0] = originX;
+    impl->cpuGlobals.terrainHorizon[1] = originZ;
+    impl->cpuGlobals.terrainHorizon[2] = on ? 1.0f / extent : 0.0f;
+    impl->cpuGlobals.terrainHorizon[3] = on ? 1.0f : 0.0f;
+    impl->cpuGlobals.terrainHorizon2[0] = encodeLo;
+    impl->cpuGlobals.terrainHorizon2[1] = encodeHi - encodeLo;
+    impl->cpuGlobals.terrainHorizon2[2] = 0.0f;
+    impl->cpuGlobals.terrainHorizon2[3] = 0.0f;
+    impl->updateGlobalHorizonDescriptor();
+}
+
 void VulkanRenderer::removeTexture(TextureHandle handle) {
     GpuTexture* t = impl->textures.get(handle);
     if (!t) return;
@@ -5432,7 +5491,7 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
     impl->cpuGlobals.skyCity[1] = static_cast<float>(sky.cityDirection.z);
     impl->cpuGlobals.skyCity[2] = sky.lightPollution;
     impl->cpuGlobals.skyCity[3] = 0.0f;
-    set3(impl->cpuGlobals.skySunColor, sky.sunColor, 0.0f);
+    set3(impl->cpuGlobals.skySunColor, sky.sunColor, sky.sunGlowIntensity);   // w: wide glow
     set3(impl->cpuGlobals.skyZenith, sky.zenithColor, 0.0f);
     set3(impl->cpuGlobals.skyHorizon, sky.horizonColor, 0.0f);
     set3(impl->cpuGlobals.skyGround, sky.groundColor, 0.0f);

@@ -32,6 +32,8 @@ public:
     TextureHandle uploadTextureHDR(int width, int height, int channels,
                                    const float* data) override;
     void setEnvironmentMap(TextureHandle equirect) override;
+    void setTerrainHorizon(TextureHandle map, float originX, float originZ, float extent,
+                           float encodeLo, float encodeHi) override;
     void removeTexture(TextureHandle handle) override;
     RenderStats getRenderStats() const override;
 
