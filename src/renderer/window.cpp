@@ -21,6 +21,12 @@
 #ifdef RT_ENABLE_IMGUI
 #include "imgui.h"
 #include "backends/imgui_impl_glfw.h"
+#if defined(__linux__)
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <unistd.h>
+#endif
 #endif
 
 // Native window-handle access is the one genuinely per-platform piece of the
@@ -594,6 +600,9 @@ void GlfwWindow::pollEvents() {
     impl->input.uiWantsMouse =
         ImGui::GetIO().WantCaptureMouse &&
         glfwGetInputMode(impl->window, GLFW_CURSOR) != GLFW_CURSOR_DISABLED;
+    // A focused text field (WantTextInput, not the broader WantCaptureKeyboard:
+    // clicking a checkbox must not mute WASD) turns key presses into text.
+    impl->input.uiWantsKeyboard = ImGui::GetIO().WantTextInput;
 #endif
 }
 
@@ -674,6 +683,41 @@ void GlfwWindow::setDrawCallback(std::function<void()> callback) {
     impl->drawCallback = std::move(callback);
 }
 
+#if defined(RT_ENABLE_IMGUI) && defined(__linux__)
+// The debug UI's clipboard on Wayland. KWin honours a client's
+// wl_data_device.set_selection only while that client holds KEYBOARD focus;
+// otherwise the request is dropped and the copy goes into the void — GLFW
+// never hears back (device: every Copy in the overlay "did nothing", and a
+// paste still produced a wl-copy string from hours earlier; a socket `clip`
+// from a viewer launched while the user was typing elsewhere failed the
+// same way, while one launched to an idle desktop succeeded). wl-copy and
+// wl-paste speak the data-control protocol clipboard managers use, which
+// has no focus rule. When they are on PATH under Wayland, the UI's clipboard
+// goes through them; GLFW's own bridge stays for X11/macOS/Windows.
+static std::string g_wlPasteBuffer;
+static bool wlClipboardAvailable() {
+    if (!std::getenv("WAYLAND_DISPLAY")) return false;
+    return access("/usr/bin/wl-copy", X_OK) == 0 && access("/usr/bin/wl-paste", X_OK) == 0;
+}
+static void wlSetClipboardText(ImGuiContext*, const char* text) {
+    // wl-copy forks a child that serves the selection and returns at once.
+    FILE* p = popen("wl-copy", "w");
+    if (!p) { LOG_WARN << "clipboard: wl-copy could not start"; return; }
+    std::fputs(text ? text : "", p);
+    if (const int rc = pclose(p); rc != 0) LOG_WARN << "clipboard: wl-copy exited " << rc;
+}
+static const char* wlGetClipboardText(ImGuiContext*) {
+    g_wlPasteBuffer.clear();
+    FILE* p = popen("wl-paste --no-newline 2>/dev/null", "r");
+    if (!p) return nullptr;
+    char buf[4096];
+    std::size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), p)) > 0) g_wlPasteBuffer.append(buf, n);
+    pclose(p);
+    return g_wlPasteBuffer.c_str();
+}
+#endif
+
 // Debug-UI GLFW backend (ADR-0011). The ImGui platform backend lives here, the
 // one file that owns the GLFWwindow*. No-op without ImGui.
 void GlfwWindow::initDebugUi() {
@@ -682,6 +726,16 @@ void GlfwWindow::initDebugUi() {
     // InitForOther is the right entry point for a non-GL/Vulkan (Metal) backend;
     // true installs ImGui's GLFW input callbacks, chained to ours.
     ImGui_ImplGlfw_InitForOther(impl->window, true);
+#if defined(__linux__)
+    if (wlClipboardAvailable()) {
+        ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+        pio.Platform_SetClipboardTextFn = wlSetClipboardText;
+        pio.Platform_GetClipboardTextFn = wlGetClipboardText;
+        LOG_INFO << "Debug UI clipboard: wl-copy/wl-paste (no keyboard-focus rule)";
+    } else {
+        LOG_INFO << "Debug UI clipboard: GLFW";
+    }
+#endif
 #endif
 }
 

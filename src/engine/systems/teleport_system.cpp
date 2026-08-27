@@ -162,17 +162,33 @@ void TeleportSystem::update(FrameContext& ctx) {
 // Every Copy button goes through here so the terminal says whether the click
 // registered and what ImGui handed the OS (device: "the buttons don't copy" —
 // the log splits "the click never fired" from "the clipboard bridge is dead").
+static std::string g_pendingCopy;
+static int g_pendingCopyFrames = 0;
 static void copyToClipboard(const char* text) {
     ImGui::SetClipboardText(text);
     const char* back = ImGui::GetClipboardText();
-    LOG_INFO << "[teleport] clipboard <- \"" << text << "\" (read back: "
-             << (back && *back ? (std::string(back) == text ? "same" : "DIFFERENT") : "EMPTY") << ")";
+    LOG_INFO << "[teleport] clipboard <- \"" << text << "\" (read back now: "
+             << (back && *back ? (std::string(back) == text ? "same" : "DIFFERENT") : "EMPTY")
+             << "; window focus " << (ImGui::GetIO().AppFocusLost ? "LOST" : "held") << ")";
+    // The compositor answers LATER: a Wayland set_selection it refuses comes
+    // back as a cancel a frame or two on, and only then does a read show the
+    // old text again. So read once more after a few frames.
+    g_pendingCopy = text;
+    g_pendingCopyFrames = 3;
 }
 #endif
 
 void TeleportSystem::render(FrameContext& ctx) {
 #ifdef RT_ENABLE_IMGUI
     if (ImGui::GetCurrentContext() == nullptr) return;
+    if (g_pendingCopyFrames > 0 && --g_pendingCopyFrames == 0) {
+        const char* back = ImGui::GetClipboardText();
+        const bool same = back && g_pendingCopy == back;
+        LOG_INFO << "[teleport] clipboard 3 frames later: "
+                 << (same ? "same — the compositor kept the copy"
+                          : "DIFFERENT — the compositor refused the copy (a Wayland client "
+                            "without keyboard focus cannot set the selection)");
+    }
     if (!ctx.debugOverlayActive) return;
     ImGui::Begin("Debug");
     // `set teleport.open 1` (socket) unfolds the section once — a probe can

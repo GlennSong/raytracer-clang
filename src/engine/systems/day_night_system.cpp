@@ -8,6 +8,7 @@
 #include "../../log.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -152,7 +153,12 @@ void DayNightSystem::refreshHorizon(FrameContext& ctx, const DayNightState& st) 
                 ctx.jobs.parallelFor(0, static_cast<std::size_t>(rows),
                                      [&](std::size_t z) { body(static_cast<int>(z)); });
             };
+        const auto tMarch0 = std::chrono::steady_clock::now();
         horizon_ = computeHorizonMap(raster_, az, 4000.0, 2.0, &par);
+        const double marchMs = std::chrono::duration<double, std::milli>(
+                                   std::chrono::steady_clock::now() - tMarch0).count();
+        LOG_INFO << "[sky] terrain horizon re-marched at az " << static_cast<int>(az)
+                 << " deg in " << static_cast<int>(marchMs) << " ms (on the frame)";
         TextureHandle fresh = ctx.renderer.uploadTexture(
             horizon_.size, horizon_.size, 1, horizon_.sinElevation.data());
         ctx.renderer.setTerrainHorizon(fresh, static_cast<float>(horizon_.originX),

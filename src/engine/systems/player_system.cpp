@@ -14,7 +14,12 @@ void PlayerSystem::onStart(FrameContext& ctx) {
     // captures instead of the spawn point.
     camera.positionLocked = !ctx.settings.getBool("cameraStartDetached", false);
     shoulder.applyShoulderPreset();
-    thirdPerson = ctx.settings.getBool("playerThirdPerson", false);
+    // Boot in FIRST person (device: "we should start default as first
+    // person"). The flag is published for the body/script/shooting systems
+    // and stays a live setting within the session, but the persisted value
+    // no longer decides the boot camera.
+    thirdPerson = false;
+    ctx.settings.setBool("playerThirdPerson", false);
     ctx.actions.bindButton("player_respawn", KeyCode::R);   // fell off the level? snap back to spawn
     // FAST TRAVEL (device: "click somewhere and immediately jump there and
     // continue play"): T teleports the player to the surface point under the

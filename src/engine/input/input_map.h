@@ -56,6 +56,12 @@ public:
     // --- Per-frame lifecycle (driven by Application) ---
     void beginFrame();                      // clears this frame's pressed/released
     void processEvent(const Event& event);  // keyboard/mouse held + edge state
+    // While a UI text field owns the keyboard, key presses are TEXT, not
+    // actions: a comma typed into the Teleport paste box halved the sim
+    // speed (sim_slower) and the setting persisted — "the player and the
+    // car move sluggish". Releases still clear held state.
+    void setTextInputCaptured(bool captured);
+    bool textInputCaptured() const { return textCaptured; }
     // Polled gamepad snapshot for this map's assigned device. Derives button
     // edges by diffing against the previous frame and stores deadzoned axis
     // values. Pass a disconnected state to clear (e.g. on unassign).
@@ -103,6 +109,7 @@ private:
 
     std::unordered_set<int> heldSources;
     std::unordered_set<int> pressedSources;
+    bool textCaptured = false;   // setTextInputCaptured: a UI text field owns the keys
     std::unordered_set<int> releasedSources;
 
     std::array<bool, GAMEPAD_BUTTON_COUNT> prevGamepadButtons{};

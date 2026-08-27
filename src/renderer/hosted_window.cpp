@@ -178,6 +178,7 @@ void HostedWindow::newDebugUiFrame() {
         io.AddMouseWheelEvent(0.0f, static_cast<float>(input.scrollDelta));
 
     input.uiWantsMouse = io.WantCaptureMouse;
+    input.uiWantsKeyboard = io.WantTextInput;
 #endif
 }
 

@@ -207,11 +207,21 @@ void InputMap::beginFrame() {
     releasedSources.clear();
 }
 
+void InputMap::setTextInputCaptured(bool captured) {
+    if (captured && !textCaptured) {
+        // Keys held when the field took focus would otherwise stick down
+        // (their releases arrive, but as text-field input in the user's mind).
+        heldSources.clear();
+    }
+    textCaptured = captured;
+}
+
 void InputMap::processEvent(const Event& event) {
     switch (event.type) {
         case EventType::KeyPressed:
             // A held key repeats; only the initial press is an edge.
             if (event.repeat) break;
+            if (textCaptured) break;   // typed into a text field, not an action
             heldSources.insert(encodeKey(event.key));
             pressedSources.insert(encodeKey(event.key));
             break;

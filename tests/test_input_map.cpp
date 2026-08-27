@@ -83,6 +83,37 @@ TEST_CASE(input_key_repeat_is_not_an_edge) {
     CHECK(map.held("fire"));
 }
 
+// Device: "the player moves sluggish now and so does the car" — a ',' typed
+// into the Teleport paste box reached sim_slower (halving the sim speed, and
+// the value persisted). While a UI text field owns the keyboard, presses are
+// text; releases still clear held state so nothing sticks down afterwards.
+TEST_CASE(input_text_field_owns_the_keys) {
+    InputMap map;
+    map.bindButton("sim_slower", KeyCode::Comma);
+    map.bindButton("forward", KeyCode::W);
+
+    // W held when the field takes focus: it must not stay held underneath.
+    map.beginFrame();
+    map.processEvent(keyDown(KeyCode::W));
+    CHECK(map.held("forward"));
+    map.setTextInputCaptured(true);
+    CHECK(!map.held("forward"));
+
+    // Typing a comma into the field is not an action.
+    map.beginFrame();
+    map.processEvent(keyDown(KeyCode::Comma));
+    CHECK(!map.pressed("sim_slower"));
+    CHECK(!map.held("sim_slower"));
+    map.processEvent(keyUp(KeyCode::Comma));
+    CHECK(!map.pressed("sim_slower"));
+
+    // Focus leaves the field: the same key is an action again.
+    map.setTextInputCaptured(false);
+    map.beginFrame();
+    map.processEvent(keyDown(KeyCode::Comma));
+    CHECK(map.pressed("sim_slower"));
+}
+
 TEST_CASE(input_multiple_sources_one_action) {
     InputMap map;
     map.bindButton("select", KeyCode::Enter);

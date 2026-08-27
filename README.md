@@ -221,8 +221,10 @@ land on the ground) and moves the player (physics character, camera
 re-attached) or only the fly camera; named bookmarks kept in settings; and
 the city map's sidewalk-on-asphalt places with Go buttons; and a *Third
 person* checkbox (V on foot toggles it too, unless the level has placed
-cameras — then V cycles those; the mode persists in `settings.json` as
-`playerThirdPerson`). The socket
+cameras — then V cycles those; every boot starts in first person). Keys
+typed into any overlay text field are text, never game actions — a `,` in
+the paste box used to halve the sim speed via `sim_slower`, and the speed
+used to persist across boots; it no longer does. The socket
 speaks the same line: `where?` prints it, `teleport <line>` goes there — so
 a location travels between you, the panel and a Claude session by paste.
 

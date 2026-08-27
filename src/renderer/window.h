@@ -26,13 +26,17 @@ struct InputState {
     // a panel. Mouse-driven camera/gameplay input should yield (always false
     // without RT_ENABLE_IMGUI).
     bool uiWantsMouse;
+    // True while a debug-UI text field has focus (ImGui WantTextInput): key
+    // presses are text, and the input map must not turn them into actions.
+    bool uiWantsKeyboard;
 
     InputState()
         : mouseX(0), mouseY(0), mouseDeltaX(0), mouseDeltaY(0),
           scrollDelta(0), mouseLeftDown(false), mouseRightDown(false),
           keyW(false), keyA(false), keyS(false), keyD(false),
           keyQ(false), keyE(false), keyShift(false),
-          keyUp(false), keyDown(false), uiWantsMouse(false) {}
+          keyUp(false), keyDown(false), uiWantsMouse(false),
+          uiWantsKeyboard(false) {}
 };
 
 // The windowing/input seam — now an interface (editor-app plan, Phase A1).

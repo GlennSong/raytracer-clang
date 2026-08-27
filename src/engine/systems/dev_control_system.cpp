@@ -1,4 +1,5 @@
 #include "dev_control_system.h"
+#include "../../log.h"
 
 #include <algorithm>
 #include <iostream>
@@ -30,7 +31,14 @@ const ActionBinding DEV_ACTIONS[] = {
 }  // namespace
 
 void DevControlSystem::onStart(FrameContext& ctx) {
-    simSpeed = ctx.settings.getDouble("timeScale", 1.0);
+    // The sim speed is a SESSION knob. It used to persist as "timeScale", so
+    // one stray ',' (sim_slower) made every later boot run at half speed —
+    // "the player moves sluggish now and so does the car". Boot at 1.0.
+    simSpeed = 1.0;
+    if (ctx.settings.getDouble("timeScale", 1.0) != 1.0)
+        LOG_INFO << "Ignoring persisted timeScale=" << ctx.settings.getDouble("timeScale", 1.0)
+                 << " — the sim speed no longer survives a restart";
+    ctx.settings.setDouble("timeScale", 1.0);
 
     for (const ActionBinding& binding : DEV_ACTIONS) {
         std::string overrideKey = ctx.settings.getString(
@@ -71,14 +79,16 @@ void DevControlSystem::update(FrameContext& ctx) {
         simSpeed = 1.0;
         ctx.clock.setPaused(false);
     }
+    if (simSpeed != ctx.clock.timeScale())
+        LOG_INFO << "Sim speed x" << simSpeed << " (',' slower, '.' faster, 0 = real time)";
 
     // Pause lives on the clock itself (shared with the editor shell's Pause
     // button); this system owns only the speed.
     ctx.clock.setTimeScale(simSpeed);
 }
 
-void DevControlSystem::onStop(FrameContext& ctx) {
-    ctx.settings.setDouble("timeScale", simSpeed);
+void DevControlSystem::onStop(FrameContext&) {
+    // Deliberately not persisted: see onStart.
 }
 
 }  // namespace engine

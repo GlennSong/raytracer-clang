@@ -261,6 +261,10 @@ void Application::runFrame() {
         FrameContext ctx = makeContext();
         inputMap.beginFrame();
         playerInputs.beginFrame();
+        // A focused debug-UI text field owns the keys this frame: what is
+        // typed there is text, never an action (a ',' in the Teleport paste
+        // box was halving the sim speed).
+        inputMap.setTextInputCaptured(window->getInput().uiWantsKeyboard);
         for (const Event& event : window->getEvents()) {
             inputMap.processEvent(event);
             playerInputs.routeEvent(event);
