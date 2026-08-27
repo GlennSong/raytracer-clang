@@ -50,6 +50,15 @@ daynight minutes <n>              # loop length in REAL minutes (default 30;
                                   # 0 freezes the sun); the citysim's clock
                                   # follows the cycle's hour and rate
 daynight day <1-365>              # the calendar day: season + moon phase
+daynight hud on|off               # the sky HUD (compass + chart). Shows with the
+                                  # debug overlay — but stage it (and `camera`)
+                                  # BEFORE `overlay debug on`: the overlay is a
+                                  # pushed state that pauses the game state's
+                                  # update beneath it, which is what consumes
+                                  # every one-shot here
+daynight chart <path.svg>         # the day's sky chart: sun + moon arcs with
+                                  # hour ticks, rise/set marks, both bodies
+                                  # now (street-map orientation)
 daynight moon <age-days>|auto     # hold the moon's age (0 new, 7.4 first
                                   # quarter, 14.8 full, 22.1 last quarter) or
                                   # let the calendar drive it
@@ -111,8 +120,9 @@ land within a frame; `shot` files land a frame later — poll for the file.
 `.mcp.json`. Claude Code spawns it automatically at session start (first use
 asks for approval once). Tools: `viewer_status`, `launch_viewer`,
 `set_camera`, `get_camera`, `screenshot`, `overlay`, `sim`, `reload`,
-`planner_stats`, `time_of_day` (hour / hold / `day_minutes`), `clock`
-(`daynight?`), `sun`, `settings_kv`, `render_params`,
+`planner_stats`, `time_of_day` (hour / hold / `day_minutes` / `day_of_year`
+/ `moon_age`), `clock` (`daynight?`), `sky_chart`, `sun`, `settings_kv`,
+`render_params`,
 `debug_view`, `ledger`, and `viewer_command` (raw protocol line — the escape
 hatch that makes engine verbs usable before the shim relearns them at the
 next session restart).

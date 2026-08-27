@@ -136,6 +136,7 @@ add_library(engine_core STATIC
     src/engine/imgui_properties.cpp
     src/engine/undo_stack.cpp
     src/engine/day_night_cycle.cpp
+    src/engine/sky_chart.cpp
     src/engine/input/input_map.cpp
     src/engine/input/player_input.cpp
     src/engine/camera/orbit_camera_controller.cpp
@@ -486,6 +487,7 @@ add_executable(run_tests
     tests/test_job_system.cpp
     tests/test_frustum.cpp
     tests/test_day_night.cpp
+    tests/test_sky_chart.cpp
     tests/test_cube_faces.cpp
     tests/test_path_tracer.cpp
     tests/test_asset_manager.cpp

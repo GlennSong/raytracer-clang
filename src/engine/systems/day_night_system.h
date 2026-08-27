@@ -3,6 +3,7 @@
 
 #include "../system.h"
 #include "../day_night_cycle.h"
+#include "../sky_chart.h"
 #include "../weather_cycle.h"
 
 #ifdef __EMSCRIPTEN__
@@ -43,6 +44,15 @@ private:
     // settings ("daynight.status", the weather.status idiom) — the loop's
     // rate is MEASURED, not trusted: two reads a real minute apart.
     void publishStatus(FrameContext& ctx, bool active);
+    // THE SKY HUD (device: "sun and moon positions in the sky"): a compass
+    // strip with sun/moon markers at their bearings relative to the camera,
+    // and the day's polar chart (sky_chart.h) — the same numbers the SVG
+    // instrument draws. Debug-overlay only; persisted as daynight.hud.
+    bool skyHud_ = false;
+    SkyChart hudChart_;
+    long hudChartKey_ = -1;   // (day, year, lock, latitude) the cached chart is for
+    void drawSkyHud(FrameContext& ctx);
+    void writeSkyChart(const std::string& path);
 
     DayNightCycle cycle;
     bool enabled = true;   // when off, the level's static sun/sky is left alone

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>
@@ -31,6 +32,7 @@ void DayNightSystem::onStart(FrameContext& ctx) {
     // artistic hold. The old "daynight.moonPhase" brightness scalar is not
     // read — its persisted 1.0 would have pinned every night to a full moon.
     cycle.moonLock = s.getDouble("daynight.moonLock", cycle.moonLock);
+    skyHud_ = s.getBool("daynight.hud", skyHud_);
 
     cloudsEnabled  = s.getBool("clouds.enabled", cloudsEnabled);
     cloudCoverage  = static_cast<float>(s.getDouble("clouds.coverage", cloudCoverage));
@@ -82,6 +84,20 @@ void DayNightSystem::onStart(FrameContext& ctx) {
 
     if (enabled && levelEnabled && !hdrEnvironmentActive(ctx)) applyLighting(ctx);
     applyClouds(ctx);
+    // RT_SKY_SVG=<path>: the day's sky chart at boot (the load-time
+    // instrument idiom, beside RT_FURNITURE_SVG).
+    if (const char* svg = std::getenv("RT_SKY_SVG")) writeSkyChart(svg);
+}
+
+void DayNightSystem::writeSkyChart(const std::string& path) {
+    const SkyChart chart = buildSkyChart(cycle);
+    if (writeSkyChartSvg(chart, path))
+        LOG_INFO << "[sky] chart written: " << path << " (day " << chart.dayOfYear
+                 << ", sun rise " << chart.sunriseHour << " set " << chart.sunsetHour
+                 << ", moon " << chart.moonPhase << " rise " << chart.moonriseHour
+                 << " set " << chart.moonsetHour << ")";
+    else
+        LOG_ERROR << "[sky] cannot write chart: " << path;
 }
 
 void DayNightSystem::onStop(FrameContext& ctx) {
@@ -94,6 +110,7 @@ void DayNightSystem::onStop(FrameContext& ctx) {
     s.setDouble("daynight.year", cycle.year);
     s.setBool("daynight.paused", cycle.paused);
     s.setDouble("daynight.moonLock", cycle.moonLock);
+    s.setBool("daynight.hud", skyHud_);
 
     s.setBool("clouds.enabled", cloudsEnabled);
     s.setDouble("clouds.coverage", cloudCoverage);
@@ -246,6 +263,18 @@ void DayNightSystem::update(FrameContext& ctx) {
             cycle.dayOfYear = static_cast<int>(setDay);
             cs.setDouble("daynight.setDay", -1.0);
             enabled = true;
+        }
+        // `daynight hud on|off`: the sky HUD.
+        const double setHud = cs.getDouble("daynight.setHud", -1.0);
+        if (setHud >= 0.0) {
+            skyHud_ = setHud > 0.5;
+            cs.setDouble("daynight.setHud", -1.0);
+        }
+        // `daynight chart <path>`: write the day's sky chart now.
+        const std::string chartPath = cs.getString("daynight.chart", "");
+        if (!chartPath.empty()) {
+            cs.setString("daynight.chart", "");
+            writeSkyChart(chartPath);
         }
         // `daynight moon <age-days>|auto`: hold the moon's age, or free it.
         // -2 = auto (the calendar), since -1 is the consumed sentinel.
@@ -428,6 +457,122 @@ void DayNightSystem::applyClouds(FrameContext& ctx) {
     }
 }
 
+#ifdef RT_ENABLE_IMGUI
+// The compass strip + polar chart. Bearings are compass bearings (north =
+// -z); the strip is centred on the camera's heading so "the sun is 40 deg to
+// your right" reads directly. Chart samples are cached per day (the cycle's
+// hour changes every frame; the day's arcs do not).
+void DayNightSystem::drawSkyHud(FrameContext& ctx) {
+    const long key = cycle.dayOfYear + 1000L * cycle.year +
+                     static_cast<long>(cycle.moonLock * 10.0) * 1000000L +
+                     static_cast<long>(cycle.latitudeDeg * 10.0) * 100000000L;
+    if (key != hudChartKey_) {
+        hudChart_ = buildSkyChart(cycle, 10);
+        hudChartKey_ = key;
+    }
+    const DayNightState st = cycle.evaluate();
+    const double sunBearing = skyBearingDeg(st.sunDirection);
+    const double moonBearing = skyBearingDeg(st.moonDirection);
+    const bool sunUp = st.sunDirection.y > 0.0, moonUp = st.moonDirection.y > 0.0;
+    // Camera heading from the render view's look-at.
+    const Vec3 fwd = ctx.view.camera.target - ctx.view.camera.position;
+    const double camBearing = skyBearingDeg(normalize(Vec3(fwd.x, 0.0, fwd.z)));
+
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + 8.0f),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.45f);
+    ImGui::Begin("Sky", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImU32 cText = IM_COL32(200, 211, 234, 255), cDim = IM_COL32(93, 111, 149, 255);
+    const ImU32 cSun = IM_COL32(255, 209, 102, 255), cMoon = IM_COL32(232, 236, 255, 255);
+    const ImU32 cSunArc = IM_COL32(255, 179, 71, 255), cMoonArc = IM_COL32(170, 182, 224, 255);
+
+    // --- compass strip: 360 deg across, camera heading at the centre ----------
+    {
+        const float w = 440.0f, h = 30.0f;
+        const ImVec2 p0 = ImGui::GetCursorScreenPos();
+        ImGui::Dummy(ImVec2(w, h));
+        const float cxs = p0.x + w * 0.5f, base = p0.y + 20.0f;
+        dl->AddLine(ImVec2(p0.x, base), ImVec2(p0.x + w, base), cDim, 1.0f);
+        auto xOf = [&](double bearing) {
+            double rel = std::fmod(bearing - camBearing + 540.0, 360.0) - 180.0;   // -180..180
+            return cxs + static_cast<float>(rel / 180.0) * (w * 0.5f);
+        };
+        for (int b = 0; b < 360; b += 30) {
+            const float x = xOf(b);
+            const bool cardinal = b % 90 == 0;
+            dl->AddLine(ImVec2(x, base - (cardinal ? 8.0f : 4.0f)), ImVec2(x, base), cDim, 1.0f);
+            if (cardinal) {
+                const char* n = b == 0 ? "N" : b == 90 ? "E" : b == 180 ? "S" : "W";
+                dl->AddText(ImVec2(x - 4.0f, base - 22.0f), cText, n);
+            }
+        }
+        // The camera's own heading marker.
+        dl->AddTriangleFilled(ImVec2(cxs, base + 2.0f), ImVec2(cxs - 5.0f, base + 9.0f),
+                              ImVec2(cxs + 5.0f, base + 9.0f), cText);
+        // Sun and moon at their bearings; hollow when below the horizon.
+        const float sx = xOf(sunBearing), mx = xOf(moonBearing);
+        if (sunUp) dl->AddCircleFilled(ImVec2(sx, base - 3.0f), 6.0f, cSun);
+        else dl->AddCircle(ImVec2(sx, base - 3.0f), 6.0f, cSun, 0, 1.5f);
+        if (moonUp) dl->AddCircleFilled(ImVec2(mx, base - 3.0f), 4.5f, cMoon);
+        else dl->AddCircle(ImVec2(mx, base - 3.0f), 4.5f, cMoon, 0, 1.5f);
+    }
+    // --- the polar chart: the day's arcs, the bodies now --------------------------
+    {
+        const float R = 72.0f;
+        const ImVec2 p0 = ImGui::GetCursorScreenPos();
+        ImGui::Dummy(ImVec2(R * 2.0f + 40.0f, R * 2.0f + 30.0f));
+        const ImVec2 c(p0.x + R + 20.0f, p0.y + R + 14.0f);
+        auto at = [&](const Vec3& d) {
+            const ChartPoint q = skyChartPoint(d);
+            return ImVec2(c.x + static_cast<float>(q.x) * R, c.y + static_cast<float>(q.y) * R);
+        };
+        dl->AddCircleFilled(c, R, IM_COL32(22, 32, 58, 200));
+        dl->AddCircle(c, R, IM_COL32(138, 160, 200, 255), 0, 1.5f);
+        dl->AddCircle(c, R * (2.0f / 3.0f), cDim, 0, 1.0f);
+        dl->AddCircle(c, R / 3.0f, cDim, 0, 1.0f);
+        dl->AddText(ImVec2(c.x - 4.0f, c.y - R - 14.0f), cText, "N");
+        dl->AddText(ImVec2(c.x + R + 4.0f, c.y - 7.0f), cText, "E");
+        dl->AddText(ImVec2(c.x - 4.0f, c.y + R + 1.0f), cText, "S");
+        dl->AddText(ImVec2(c.x - R - 12.0f, c.y - 7.0f), cText, "W");
+        auto arc = [&](const std::vector<SkyChartSample>& s, ImU32 col, float th) {
+            ImVec2 prev;
+            bool have = false;
+            for (const SkyChartSample& q : s) {
+                if (!q.up) { have = false; continue; }
+                const ImVec2 v = at(q.dir);
+                if (have) dl->AddLine(prev, v, col, th);
+                prev = v;
+                have = true;
+            }
+        };
+        arc(hudChart_.moon, cMoonArc, 1.5f);
+        arc(hudChart_.sun, cSunArc, 2.5f);
+        auto body = [&](const Vec3& d, bool up, float r, ImU32 col) {
+            Vec3 dd = d;
+            if (!up) {
+                const double b = skyBearingDeg(d) * 3.14159265358979323846 / 180.0;
+                dd = Vec3(std::sin(b), 0.0, -std::cos(b));
+            }
+            if (up) dl->AddCircleFilled(at(dd), r, col);
+            else dl->AddCircle(at(dd), r, col, 0, 1.5f);
+        };
+        body(st.moonDirection, moonUp, 4.0f, cMoon);
+        body(st.sunDirection, sunUp, 5.5f, cSun);
+    }
+    ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.4f, 1.0f), "sun  %s alt %+.0f  az %03.0f",
+                       sunUp ? "up  " : "down", skyAltitudeDeg(st.sunDirection), sunBearing);
+    ImGui::TextColored(ImVec4(0.91f, 0.93f, 1.0f, 1.0f), "moon %s alt %+.0f  az %03.0f  %s %.0f%%",
+                       moonUp ? "up  " : "down", skyAltitudeDeg(st.moonDirection), moonBearing,
+                       DayNightCycle::phaseName(st.moonAgeDays), st.moonIllumination * 100.0f);
+    ImGui::End();
+}
+#endif
+
 void DayNightSystem::render(FrameContext& ctx) {
 #ifdef RT_ENABLE_IMGUI
     if (ImGui::GetCurrentContext() == nullptr) return;
@@ -435,8 +580,10 @@ void DayNightSystem::render(FrameContext& ctx) {
     // headers used to land in ImGui's implicit fallback window, which is why
     // they floated over plain play.
     if (!ctx.debugOverlayActive) return;
+    if (skyHud_) drawSkyHud(ctx);
     ImGui::Begin("Debug");
     if (ImGui::CollapsingHeader("Day / Night")) {
+        ImGui::Checkbox("Sky HUD (compass + chart)", &skyHud_);
         bool hdrActive = hdrEnvironmentActive(ctx);
         if (hdrActive) {
             ImGui::TextDisabled("HDR environment active - cycle overridden");

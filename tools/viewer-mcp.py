@@ -167,6 +167,9 @@ def tool_sun(args):
 def tool_clock(args):
     return send_command("daynight?", args.get("instance"))
 
+def tool_sky_chart(args):
+    return send_command(f"daynight chart {args['path']}", args.get("instance"))
+
 def tool_weather(args):
     if "state" not in args:
         return send_command("weather?", args.get("instance"))
@@ -309,6 +312,11 @@ TOOLS = [
      "citysim's own hour beside it (equal when a cycle is staged — one "
      "clock). Two reads a minute apart measure the loop's rate.",
      {"instance": STR}, [], tool_clock),
+    ("sky_chart", "Write the day's SKY CHART as SVG: the sun's and moon's "
+     "altitude/azimuth arcs with hour ticks, sunrise/sunset and moonrise/"
+     "moonset on the rim, both bodies now, a phase glyph and legend — in the "
+     "street map's orientation (east right, south down).",
+     {"path": STR, "instance": STR}, ["path"], tool_sky_chart),
     ("sun", "Probe the live sun: elevation (sunY), intensity, and whether "
      "headlights consider it dark. Numeric golden-hour hunting without "
      "eyeballing screenshots (golden ~ sunY 0.05-0.25).",

@@ -640,6 +640,22 @@ std::string Application::handleControlCommand(const std::string& line) {
         // "freeze golden hour, keep framing" workflow.
         if (cmd.args.empty())
             return "err usage: daynight <hour0-24>|hold|run|minutes <n>|day <1-365>|moon <age|auto>";
+        if (cmd.args[0] == "hud") {
+            // The sky HUD (compass strip + polar chart), debug overlay only.
+            if (cmd.args.size() < 2 || (cmd.args[1] != "on" && cmd.args[1] != "off"))
+                return "err usage: daynight hud on|off";
+            settingsStore.setDouble("daynight.setHud", cmd.args[1] == "on" ? 1.0 : 0.0);
+            return "ok sky hud staged";
+        }
+        if (cmd.args[0] == "chart") {
+            // The day's sky chart as SVG: sun and moon arcs with hour ticks,
+            // rise/set marks, both bodies now (sky_chart.h).
+            if (cmd.args.size() < 2) return "err usage: daynight chart <path.svg>";
+            std::string path = cmd.args[1];
+            for (size_t i = 2; i < cmd.args.size(); ++i) path += " " + cmd.args[i];
+            settingsStore.setString("daynight.chart", path);
+            return "ok chart staged";
+        }
         if (cmd.args[0] == "day") {
             // The calendar day: season and the moon's phase follow it.
             double d;

@@ -868,6 +868,15 @@ ship. AGENTS.md is updated to state the refined rule.
   the disc as a sphere lit from the TRUE sun (`skyMoonDir`/`skyMoonSun` in
   the globals; `moonDisc` in sky.frag, environment.metal, mesh.wgsl —
   Vulkan verified live, Metal/WebGPU mirrored, unverified).
+  *Positions (same day):* `src/engine/sky_chart.*` turns one day of the cycle
+  into altitude/azimuth samples, horizon crossings and the bodies now; the
+  SVG instrument (`RT_SKY_SVG`, `daynight chart <path>`, MCP `sky_chart`)
+  draws it in the street map's orientation, and the in-game *Sky HUD* draws
+  a compass strip (☀/☾ at their bearings relative to the camera) plus the
+  same polar chart. Gates in `tests/test_sky_chart.cpp` hold the sun's peak
+  and sunrise bearing to the analytic values and the moon's rise/set to its
+  phase. An ephemeris gate against published tables is deferred until a
+  level is authored for a real place and date.
 - Procedural **clouds — first pass** (step 3): an FBM noise layer painted on the
   sky dome (`applyClouds`/`cloudFbm` in `phong.metal`), drifted over time and
   shaded against the active sun (sunlit tops, dark night silhouettes, warm at
