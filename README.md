@@ -245,6 +245,15 @@ here"; the lit pass shadows anything whose light sits below it, and the
 sun disc + its bloom vanish the moment the sun drops behind the ridge from
 where you stand (`daynight?` reports `ridge=`/`behind=`). Panel: *Terrain
 shadows*. Vulkan; the per-fragment map is not yet bound on Metal/WebGPU.
+
+The offline tracer renders the same moment: `./raytracer --level <level>
+--hour 19.1 --eye X Y Z --look X Y Z` lights the level from the cycle (the
+sun by day, the moon by night, as a day-shape on the authored intensity)
+and makes ray misses the cycle's sky — a CPU port of the viewer's: the
+dusk/night palette, the moon disc, the same star field (same hash, same
+lattice), `--pollution` glow; `--day`, `--latitude`, `--moon AGE|auto`.
+Mountain shadows and the disc behind a ridge need nothing there — shadow
+rays hit the terrain.
 A level authors it in its JSON: `"dayNight": {"timeOfDay": 0.35,
 "dayMinutes": 30, "latitude": 40, "dayOfYear": 172}` (`"enabled": false`
 pins the level's static sun). Live: the Debug panel's *Day / Night*

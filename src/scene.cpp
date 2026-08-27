@@ -1,5 +1,6 @@
 #include "scene.h"
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <algorithm>
@@ -402,7 +403,122 @@ void EnvironmentMap::suppressSunDisc() {
     }
 }
 
+namespace {
+double sstep(double e0, double e1, double x) {
+    double t = (x - e0) / (e1 - e0);
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+    return t * t * (3.0 - 2.0 * t);
+}
+Vec3 crossV(const Vec3& a, const Vec3& b) {
+    return Vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
+}
+uint32_t starHash(uint32_t x, uint32_t y, uint32_t z) {
+    uint32_t h = x * 0x8da6b343u ^ y * 0xd8163841u ^ z * 0xcb1ab31fu;
+    h ^= h >> 13; h *= 0x9e3779b1u; h ^= h >> 16;
+    return h;
+}
+}  // namespace
+
+// Line-for-line with sky.frag (sampleEnvironment + starField + skyGlow +
+// moonDisc), so an offline frame and a viewer frame at the same hour agree
+// on the sky — the same hash, the same lattice, the same star.
+Vec3 EnvironmentLight::proceduralRadiance(const Vec3& dir) const {
+    const DayNightState& s = night;
+    const double skyBlend = std::max(std::min(dir.y, 1.0), 0.0);
+    Vec3 sky = lerp(s.horizonColor, s.zenithColor, std::pow(skyBlend, 0.5));
+    Vec3 lowerHaze = lerp(s.horizonColor, s.groundColor, sstep(0.0, -0.4, dir.y));
+    Vec3 col = lerp(lowerHaze, sky, sstep(-0.05, 0.05, dir.y));
+
+    // The sun's WIDE glow only; the disc and tight aureole are the light.
+    const double glow = s.skyDiscIntensity;
+    const Vec3 sc = s.lightColor;
+    const double sunDot = std::max(dot(dir, s.lightDirection), 0.0);
+    col = col + sc * (std::pow(sunDot, 4.0) * 0.15 * glow);
+    col = col + sc * (std::pow(1.0 - std::fabs(dir.y), 8.0) * 0.1 * glow);
+
+    // Stars on the celestial sphere (see sky.frag starField).
+    const double gate = stars ? s.starVisibility : 0.0;
+    const double pollution = std::max(std::min(lightPollution, 1.0), 0.0);
+    if (gate > 0.001 && dir.y >= -0.02) {
+        const Vec3 dc(dot(dir, s.celestialX), dot(dir, s.celestialY), dot(dir, s.celestialZ));
+        const double R = 34.0;
+        const Vec3 base(std::floor(dc.x * R), std::floor(dc.y * R), std::floor(dc.z * R));
+        const Vec3 galPole(-0.8676, -0.1981, 0.4560);
+        const double band = std::exp(-std::pow(dot(dc, galPole) / 0.16, 2.0)) * milkyWay *
+                            (1.0 - pollution);
+        Vec3 sum(0, 0, 0);
+        for (int k = -1; k <= 1; ++k)
+            for (int j = -1; j <= 1; ++j)
+                for (int i = -1; i <= 1; ++i) {
+                    const Vec3 c(base.x + i, base.y + j, base.z + k);
+                    const uint32_t h = starHash(static_cast<uint32_t>(static_cast<int>(c.x) + 512),
+                                                static_cast<uint32_t>(static_cast<int>(c.y) + 512),
+                                                static_cast<uint32_t>(static_cast<int>(c.z) + 512));
+                    const double r0 = (h & 0xffffu) / 65535.0;
+                    const double r1 = (h >> 16) / 65535.0;
+                    const uint32_t h2 = starHash(h, 19u, 23u);
+                    const double r2 = (h2 & 0xffffu) / 65535.0;
+                    const double r3 = (h2 >> 16) / 65535.0;
+                    const uint32_t h3 = starHash(h2, 29u, 31u);
+                    const double r4 = (h3 & 0xffffu) / 65535.0;
+                    if (r0 > 0.16 + 0.32 * band) continue;
+                    const Vec3 q(c.x + r1, c.y + r2, c.z + r4);
+                    const double ql = q.length();
+                    if (std::fabs(ql - R) > 0.9) continue;
+                    const Vec3 sd = q * (1.0 / ql);
+                    const double ang = crossV(dc, sd).length();
+                    const double mag = std::pow(r3, 4.0);
+                    const double sigma = 0.0007 + 0.0007 * mag;
+                    double I = std::exp(-ang * ang / (2.0 * sigma * sigma)) * (0.10 + 2.0 * mag);
+                    I *= 1.0 + (sstep(0.03, 0.30, mag) - 1.0) * pollution;
+                    const Vec3 tint = lerp(Vec3(0.78, 0.85, 1.0), Vec3(1.0, 0.86, 0.70), r1 * r1);
+                    sum = sum + tint * I;
+                }
+        sum = sum + Vec3(0.30, 0.34, 0.46) * (0.03 * band);
+        col = col + sum * (gate * sstep(-0.02, 0.18, dir.y));
+    }
+
+    // Light pollution's sky glow (skyGlow).
+    const double nightness = 1.0 - s.skyDiscIntensity;
+    if (pollution > 0.001 && nightness > 0.001) {
+        const double hl = std::sqrt(dir.x * dir.x + dir.z * dir.z);
+        const double toward = hl > 1e-4 ? std::max((dir.x * cityDirection.x + dir.z * cityDirection.z) / hl, 0.0) : 0.0;
+        const double low = std::pow(std::max(std::min(1.0 - dir.y, 1.0), 0.0), 10.0);
+        col = col + Vec3(1.0, 0.72, 0.45) * (0.06 * pollution * nightness * low * (0.35 + 0.65 * toward));
+    }
+
+    // The moon: a sphere disc lit from the true sun (moonDisc).
+    const double I = s.moonDiscIntensity;
+    if (I > 0.0) {
+        const Vec3 m = normalize(s.moonDirection);
+        const Vec3 sun = normalize(s.sunDirection);
+        const double illum = s.moonIllumination;
+        const double cosM = dot(dir, m);
+        const Vec3 moonTint(0.86, 0.88, 0.95);
+        col = col + moonTint * (std::pow(std::max(cosM, 0.0), 300.0) * 0.08 * I * illum);
+        const double kMoonRadius = 0.026;
+        const double cosR = std::cos(kMoonRadius);
+        if (cosM >= cosR - 0.0004) {
+            const Vec3 ref = std::fabs(m.y) < 0.98 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+            const Vec3 right = normalize(crossV(m, ref));
+            const Vec3 up = crossV(right, m);
+            const Vec3 off = dir - m * cosM;
+            const double u = dot(off, right) / std::sin(kMoonRadius);
+            const double v = dot(off, up) / std::sin(kMoonRadius);
+            const double r2 = u * u + v * v;
+            const double edge = 1.0 - sstep(0.92, 1.02, std::sqrt(r2));
+            const double w = std::sqrt(std::max(1.0 - r2, 0.0));
+            const Vec3 n = right * u + up * v - m * w;
+            const double lit = std::max(dot(n, sun), 0.0);
+            col = col + moonTint * (I * (lit + 0.012) * edge);
+        }
+    }
+    return col;
+}
+
 Vec3 EnvironmentLight::radiance(const Vec3& unitDir) const {
+    if (procedural) return proceduralRadiance(unitDir) * skyIntensity;
     if (map.valid()) return map.sample(unitDir) * skyIntensity;
     // Gradient sky fallback: horizon -> zenith above, horizon color below
     // (ground-bounce stand-in).

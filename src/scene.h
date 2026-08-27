@@ -6,6 +6,7 @@
 #include "material.h"
 #include "kdtree.h"
 #include "instance.h"
+#include "engine/day_night_cycle.h"
 #include <vector>
 #include <limits>
 #include <cstdint>
@@ -60,7 +61,23 @@ struct EnvironmentLight {
     double skyIntensity = 1.0;
     EnvironmentMap map;   // when valid, replaces the gradient
 
+    // THE CYCLE'S SKY (device: "what about the ray tracer?"). When a render
+    // asks for an hour (--hour), the miss shader is the viewer's procedural
+    // sky at that moment: the day/night palette, the sun's wide twilight
+    // glow, the moon disc lit by the true sun, the star field on the
+    // celestial sphere, the city's light-pollution glow — a CPU port of
+    // shaders/vulkan/sky.frag's sampleEnvironment MINUS the sun disc: the sun
+    // is an explicit SceneLight here, sampled with shadow rays, so the sky
+    // must not carry it twice. Takes precedence over the map and gradient.
+    bool procedural = false;
+    DayNightState night;
+    double lightPollution = 0.0;
+    Vec3 cityDirection{0.0, 0.0, 1.0};   // unit XZ toward the city
+    bool stars = true;
+    double milkyWay = 1.0;
+
     Vec3 radiance(const Vec3& unitDir) const;
+    Vec3 proceduralRadiance(const Vec3& unitDir) const;
 };
 
 // A CPU image whose alpha channel drives alpha-cut foliage. Row-major,

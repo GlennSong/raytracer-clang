@@ -2,6 +2,7 @@
 #define RAYTRACER_LEVEL_SCENE_H
 
 #include "scene.h"
+#include "engine/day_night_cycle.h"
 #include "lens_params.h"
 #include "engine/procgen/proc_model.h"
 #include <string>
@@ -25,6 +26,15 @@ struct LevelScene {
     static bool load(const std::string& levelPath, Scene& scene,
                      std::string* outHdrPath = nullptr);
 };
+
+// THE HOUR (device: "what about the ray tracer?"): light a loaded level from
+// the day/night cycle at `cycle`'s moment instead of its authored static sun
+// — the viewer's rule (the cycle is a day-shape multiplier on the authored
+// sun intensity; the active light is the sun by day, the moon by night) —
+// and make the miss shader the cycle's procedural sky (moon, stars,
+// light-pollution glow). Returns the moment's state (for exposure).
+DayNightState applyDayNight(Scene& scene, const DayNightCycle& cycle,
+                            double lightPollution);
 
 // Bake a composable procedural model (ADR-0042) into the path-tracer Scene: each
 // part becomes world-space triangles, each instance group a shared BLAS proto

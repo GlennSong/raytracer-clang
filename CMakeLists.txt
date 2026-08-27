@@ -490,6 +490,7 @@ add_executable(run_tests
     tests/test_day_night.cpp
     tests/test_sky_chart.cpp
     tests/test_terrain_horizon.cpp
+    tests/test_tracer_sky.cpp
     tests/test_cube_faces.cpp
     tests/test_path_tracer.cpp
     tests/test_asset_manager.cpp

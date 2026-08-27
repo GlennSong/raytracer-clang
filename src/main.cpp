@@ -9,6 +9,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -91,6 +92,16 @@ struct CliOptions {
     double worldUnitsPerMeter = 0.0;   // 0 = mode default (1 level, 100 Cornell)
     LensParams lens;
     bool showHelp = false;
+    // The hour (--hour): light from the day/night cycle instead of the
+    // authored sun. -1 = the level as authored.
+    double hour = -1.0;
+    int    day = -1;             // day of year; -1 = the cycle's default (172)
+    double latitude = 1e9;       // degrees N; 1e9 = default (40)
+    double moon = -1.0;          // moon age in days; -1 = follow the calendar
+    double pollution = 0.0;      // light pollution 0..1 (a city sky glow)
+    bool   exposureGiven = false;
+    bool   hasEye = false, hasLook = false;
+    Vec3   eye, look;
 };
 
 CliOptions parseCli(int argc, char** argv) {
@@ -110,7 +121,16 @@ CliOptions parseCli(int argc, char** argv) {
         else if (flag == "--progress") opt.progressFile = argv[++i];
         else if (flag == "--size")     IMAGE_SIZE = std::max(16, atoi(argv[++i]));
         else if (flag == "--spp")      SAMPLES_PER_PIXEL = std::max(1, atoi(argv[++i]));
-        else if (flag == "--exposure") EXPOSURE = next(i);
+        else if (flag == "--exposure") { EXPOSURE = next(i); opt.exposureGiven = true; }
+        else if (flag == "--hour")     opt.hour = next(i);
+        else if (flag == "--day")      opt.day = atoi(argv[++i]);
+        else if (flag == "--latitude") opt.latitude = next(i);
+        else if (flag == "--moon")     { std::string m = argv[++i]; opt.moon = (m == "auto") ? -1.0 : std::atof(m.c_str()); }
+        else if (flag == "--pollution") opt.pollution = next(i);
+        // Three reads, sequenced: argument evaluation order is unspecified,
+        // so Vec3(next(i), next(i), next(i)) lands the components permuted.
+        else if (flag == "--eye")      { double x = next(i); double y = next(i); double z = next(i); opt.eye = Vec3(x, y, z); opt.hasEye = true; }
+        else if (flag == "--look")     { double x = next(i); double y = next(i); double z = next(i); opt.look = Vec3(x, y, z); opt.hasLook = true; }
         else if (flag == "--fstop")    opt.lens.fStop = next(i);
         else if (flag == "--focal")    opt.lens.focalLength = next(i);
         else if (flag == "--focus")    opt.lens.focusDistance = next(i);
@@ -133,6 +153,13 @@ void printUsage() {
         "  --progress <file> write render %% (0-100) to <file> for a host to poll\n"
         "  --size N          image size (default 512)\n"
         "  --spp N           samples per pixel (default 128)\n"
+        "  --hour H          light the level from the day/night cycle at hour H (0-24):\n"
+        "                    the sun (or the moon at night), the dusk/night sky, stars,\n"
+        "                    the moon disc; --day N (1-365), --latitude L, --moon AGE|auto,\n"
+        "                    --pollution P (0-1 city sky glow). Night exposure adapts x6\n"
+        "                    unless --exposure is given.\n"
+        "  --eye X Y Z       camera position (skips the level's camera sidecar);\n"
+        "  --look X Y Z      point the camera at (default: -z from the eye)\n"
         "  --exposure E      linear brightness scale (default 1; HDR-lit levels\n"
         "                    read dark offline — try 2-4)\n"
         "Lens (Cornell mode; level cameras carry their own lens):\n"
@@ -222,14 +249,39 @@ int main(int argc, char** argv) {
             }
         }
 
-        SidecarCamera cam;
-        if (!loadSidecarCamera(opt.level, opt.cameraName, cam)) return 1;
-        lookFrom = cam.position;
-        lookAt = cam.position + cam.forward;
-        lens = cam.lens;                       // the placed camera's lens wins
-        fovDegrees = lens.verticalFovDegrees();
-        if (scale <= 0.0) scale = 1.0;         // levels are meter-scale
-        std::cerr << "Rendering \"" << cam.name << "\" in " << opt.level << "\n";
+        // THE HOUR: the cycle replaces the authored sun and the sky.
+        if (opt.hour >= 0.0) {
+            DayNightCycle cycle;
+            cycle.timeOfDay = std::fmod(opt.hour, 24.0) / 24.0;
+            if (opt.day > 0) cycle.dayOfYear = opt.day;
+            if (opt.latitude < 1e8) cycle.latitudeDeg = opt.latitude;
+            if (opt.moon >= 0.0) cycle.moonLock = opt.moon;
+            const DayNightState st = applyDayNight(scene, cycle, std::max(opt.pollution, 0.0));
+            if (!opt.exposureGiven) {
+                // The viewer's night adaptation (DayNightSystem::kNightAdapt).
+                double f = (st.solarElevation + 0.10) / 0.30;
+                f = std::max(0.0, std::min(1.0, f));
+                const double ease = f * f * (3.0 - 2.0 * f);
+                EXPOSURE *= 1.0 + 5.0 * (1.0 - ease);
+            }
+        }
+
+        if (opt.hasEye) {
+            lookFrom = opt.eye;
+            lookAt = opt.hasLook ? opt.look : opt.eye + Vec3(0, 0, -1);
+            fovDegrees = lens.verticalFovDegrees();
+            if (scale <= 0.0) scale = 1.0;
+            std::cerr << "Rendering from --eye in " << opt.level << "\n";
+        } else {
+            SidecarCamera cam;
+            if (!loadSidecarCamera(opt.level, opt.cameraName, cam)) return 1;
+            lookFrom = cam.position;
+            lookAt = cam.position + cam.forward;
+            lens = cam.lens;                       // the placed camera's lens wins
+            fovDegrees = lens.verticalFovDegrees();
+            if (scale <= 0.0) scale = 1.0;         // levels are meter-scale
+            std::cerr << "Rendering \"" << cam.name << "\" in " << opt.level << "\n";
+        }
     } else {
         std::cerr << "Building scene...\n";
         scene = buildCornellBox();

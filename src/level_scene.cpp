@@ -916,3 +916,43 @@ bool loadSidecarCamera(const std::string& levelPath, const std::string& name,
 }
 
 }  // namespace engine
+
+namespace engine {
+
+DayNightState applyDayNight(Scene& scene, const DayNightCycle& cycle, double lightPollution) {
+    const DayNightState st = cycle.evaluate();
+    // The authored sun's intensity is the truth the cycle shapes (the viewer
+    // normalizes against the curve's noon anchor the same way).
+    double authored = 4.0;
+    std::vector<SceneLight> kept;
+    for (const SceneLight& l : scene.lights) {
+        if (l.type == SceneLight::Type::Directional) authored = l.intensity;
+        else kept.push_back(l);
+    }
+    scene.lights = std::move(kept);
+    if (st.lightIntensity > 1e-4f) {
+        SceneLight l;
+        l.type = SceneLight::Type::Directional;
+        l.direction = st.lightDirection;
+        l.color = st.lightColor;
+        l.intensity = authored * (st.lightIntensity / kCycleNoonSunIntensity);
+        scene.lights.push_back(l);
+    }
+    scene.environment.enabled = true;
+    scene.environment.procedural = true;
+    scene.environment.night = st;
+    scene.environment.lightPollution = std::max(lightPollution, 0.0);
+    // The haze takes the moment's horizon colour (the viewer fades its fog
+    // toward the sky): an authored daylight-blue fog over a night render
+    // would wash the city in a bright mist.
+    if (scene.fog.enabled) scene.fog.color = st.horizonColor;
+    LOG_INFO << "Day/night at " << cycle.timeOfDay * 24.0 << " h: sun elevation "
+             << st.solarElevation << ", light "
+             << (st.lightIntensity > 1e-4f ? (dot(st.lightDirection, st.sunDirection) > 0.999 ? "sun" : "moon") : "none")
+             << " x" << st.lightIntensity / kCycleNoonSunIntensity << ", moon "
+             << DayNightCycle::phaseName(st.moonAgeDays) << " (" << st.moonIllumination * 100.0f
+             << "% lit), stars " << st.starVisibility << ", pollution " << lightPollution;
+    return st;
+}
+
+}  // namespace engine

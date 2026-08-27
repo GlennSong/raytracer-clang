@@ -53,6 +53,7 @@ SRCS = \
 	$(SRC_DIR)/engine/model_importer.cpp \
 	$(SRC_DIR)/engine/procgen/noise.cpp \
 	$(SRC_DIR)/engine/procgen/terrain.cpp \
+	$(SRC_DIR)/engine/day_night_cycle.cpp \
 	$(SRC_DIR)/engine/procgen/terrain_lod.cpp \
 	$(SRC_DIR)/engine/procgen/sdf.cpp \
 	$(SRC_DIR)/engine/procgen/lsystem.cpp \

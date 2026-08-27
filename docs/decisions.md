@@ -906,6 +906,18 @@ ship. AGENTS.md is updated to state the refined rule.
   behind the ridge from where you stand. Gates in
   `tests/test_terrain_horizon.cpp` (a synthetic wall: horizon toward it,
   none away; encode round trip; the shadow predicate).
+  *The offline tracer (same day):* `--hour` (with `--day`, `--latitude`,
+  `--moon`, `--pollution`, and `--eye/--look` for levels without a camera
+  sidecar) runs `applyDayNight`: the authored directional sun is replaced by
+  the cycle's active light (sun by day, moon by night, intensity = authored
+  × the curve's day-shape, as the viewer does) and `EnvironmentLight`
+  gains a `procedural` mode — a CPU port of `sampleEnvironment` minus the
+  sun disc (the sun is an explicit light, sampled with shadow rays): palette,
+  wide twilight glow, moon disc, the SAME star field (same hash, same
+  lattice), pollution glow. Mountain shadows and the disc behind a ridge
+  are free there — shadow rays hit the regenerated terrain. Night exposure
+  adapts ×6 unless `--exposure` is given. Gates in
+  `tests/test_tracer_sky.cpp`.
 - Procedural **clouds — first pass** (step 3): an FBM noise layer painted on the
   sky dome (`applyClouds`/`cloudFbm` in `phong.metal`), drifted over time and
   shaded against the active sun (sunlit tops, dark night silhouettes, warm at
