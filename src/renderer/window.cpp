@@ -21,12 +21,12 @@
 #ifdef RT_ENABLE_IMGUI
 #include "imgui.h"
 #include "backends/imgui_impl_glfw.h"
+#endif
 #if defined(__linux__)
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <unistd.h>
-#endif
 #endif
 
 // Native window-handle access is the one genuinely per-platform piece of the
@@ -388,6 +388,23 @@ GlfwWindow::~GlfwWindow() {
 }
 
 bool GlfwWindow::initialize(int width, int height, const std::string& title) {
+#if defined(__linux__)
+    // A shell that predates the desktop (tmux, a service, an editor's
+    // integrated terminal launched under X) may lack WAYLAND_DISPLAY while
+    // the compositor's socket is right there. GLFW would then fall back to
+    // X11 under XWayland — where this session cannot even bridge the
+    // clipboard (an X client reads "CLIPBOARD selection doesn't exist"),
+    // so every Copy in the overlay died on the way out. Point at the socket.
+    if (!std::getenv("WAYLAND_DISPLAY")) {
+        std::string dir = std::getenv("XDG_RUNTIME_DIR") ? std::getenv("XDG_RUNTIME_DIR")
+                                                         : "/run/user/" + std::to_string(getuid());
+        if (access((dir + "/wayland-0").c_str(), R_OK | W_OK) == 0) {
+            setenv("WAYLAND_DISPLAY", "wayland-0", 1);
+            LOG_INFO << "WAYLAND_DISPLAY was unset; found " << dir
+                     << "/wayland-0 — using the Wayland platform";
+        }
+    }
+#endif
     if (!glfwInit()) return false;
 #ifdef GLFW_PLATFORM_WAYLAND
     // Which backend GLFW picked matters for the clipboard: under XWayland an
