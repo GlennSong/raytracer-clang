@@ -227,7 +227,12 @@ sets its phase, its brightness, and where it is — a new moon travels with
 the sun, a first quarter sets at midnight, a full moon rises at sunset —
 and the sky draws the disc lit from the true sun, so the crescent faces the
 right way. `daynight day <1-365>` and `daynight moon <age|auto>` on the
-socket; the panel reads the phase.
+socket; the panel reads the phase. Stars come out once the sun is well down:
+a procedural field on the celestial sphere (the equatorial frame rotated by
+sidereal time), so they wheel about a pole that stands due north at
+altitude = latitude, slide with the season, and carry a Milky Way band on
+the real galactic plane; a bright moon washes the faint ones and clouds
+cover them. Panel: *Stars* / *Milky Way*.
 A level authors it in its JSON: `"dayNight": {"timeOfDay": 0.35,
 "dayMinutes": 30, "latitude": 40, "dayOfYear": 172}` (`"enabled": false`
 pins the level's static sun). Live: the Debug panel's *Day / Night*

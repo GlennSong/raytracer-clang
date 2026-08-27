@@ -33,6 +33,10 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  wind2;
     vec4  skyMoonDir;      // xyz toward the moon, w disc radiance (0 = down)
     vec4  skyMoonSun;      // xyz TRUE sun direction (lights the disc), w lit fraction
+    vec4  skyCelX;         // the celestial frame in local space (stars)
+    vec4  skyCelY;
+    vec4  skyCelZ;
+    vec4  skyStars;        // x visibility (0 by day), y Milky Way strength
 } g;
 
 layout(set = 0, binding = 2) uniform sampler2D envEquirect;   // HDR env (counts.z==1)
@@ -82,6 +86,61 @@ vec3 moonDisc(vec3 dir) {
     return col;
 }
 
+
+// THE STARS: a procedural field on the CELESTIAL sphere. skyCel{X,Y,Z} are
+// the equatorial axes in local space, rotated by sidereal time (CPU), so
+// dotting a view direction with them gives its (RA, Dec): the field wheels
+// about the pole with the hour and slides with the season. Stars live on a
+// 3-D LATTICE around the sphere — one candidate per voxel, jittered, kept
+// only within the shell the sphere passes through, 27-neighbour lookup —
+// which has no seams (the first cut hashed cube-map faces and stars on a
+// face edge were cut in half). Power-law brightness, blue-white to warm
+// tint; the Milky Way (galactic pole in equatorial coordinates) raises the
+// density and adds a faint glow. Gated by skyStars.x (0 by day, washed by a
+// bright moon), dimmed toward the horizon. Clouds overlay afterwards.
+uint starHash(uvec3 v) {
+    uint h = v.x * 0x8da6b343u ^ v.y * 0xd8163841u ^ v.z * 0xcb1ab31fu;
+    h ^= h >> 13; h *= 0x9e3779b1u; h ^= h >> 16;
+    return h;
+}
+vec3 starField(vec3 dir) {
+    float gate = g.skyStars.x;
+    if (gate <= 0.001 || dir.y < -0.02) return vec3(0.0);
+    vec3 dc = vec3(dot(dir, g.skyCelX.xyz), dot(dir, g.skyCelY.xyz), dot(dir, g.skyCelZ.xyz));
+    const float R = 34.0;                                   // lattice cells ~1.7 deg
+    vec3 base = floor(dc * R);
+    const vec3 galPole = vec3(-0.8676, -0.1981, 0.4560);   // RA 192.9, Dec 27.1
+    float band = exp(-pow(dot(dc, galPole) / 0.16, 2.0)) * g.skyStars.y;
+    vec3 col = vec3(0.0);
+    for (int k = -1; k <= 1; ++k)
+    for (int j = -1; j <= 1; ++j)
+    for (int i = -1; i <= 1; ++i) {
+        vec3 c = base + vec3(float(i), float(j), float(k));
+        uint h = starHash(uvec3(uint(int(c.x) + 512), uint(int(c.y) + 512), uint(int(c.z) + 512)));
+        float r0 = float(h & 0xffffu) / 65535.0;
+        float r1 = float(h >> 16) / 65535.0;
+        uint h2 = starHash(uvec3(h, 19u, 23u));
+        float r2 = float(h2 & 0xffffu) / 65535.0;
+        float r3 = float(h2 >> 16) / 65535.0;
+        uint h3 = starHash(uvec3(h2, 29u, 31u));
+        float r4 = float(h3 & 0xffffu) / 65535.0;
+        if (r0 > 0.14 + 0.30 * band) continue;             // no star here
+        vec3 q = c + vec3(r1, r2, r4);
+        float ql = length(q);
+        if (abs(ql - R) > 0.9) continue;                    // off the sphere's shell
+        vec3 sd = q / ql;
+        float ang = length(cross(dc, sd));                  // ~ the angle
+        float mag = pow(r3, 3.0);                           // many faint, few bright
+        float sigma = 0.0010 + 0.0009 * mag;                // ~1 px at 60 deg / 760 px
+        float I = exp(-ang * ang / (2.0 * sigma * sigma)) * (0.08 + 1.5 * mag);
+        vec3 tint = mix(vec3(0.78, 0.85, 1.0), vec3(1.0, 0.86, 0.70), r1 * r1);
+        col += tint * I;
+    }
+    col += vec3(0.30, 0.34, 0.46) * 0.03 * band;            // the Milky Way glow
+    float horizon = smoothstep(-0.02, 0.18, dir.y);         // extinction low down
+    return col * gate * horizon;
+}
+
 vec3 sampleEnvironment(vec3 dir) {
     float skyBlend = clamp(dir.y, 0.0, 1.0);
     vec3 sky = mix(g.skyHorizon.rgb, g.skyZenith.rgb, pow(skyBlend, 0.5));
@@ -97,6 +156,7 @@ vec3 sampleEnvironment(vec3 dir) {
     col += sc * pow(sunDot, 4.0) * 0.15 * disc;
     float horizonGlow = pow(1.0 - abs(dir.y), 8.0);
     col += sc * horizonGlow * 0.1 * disc;
+    col += starField(dir);   // under the moon: its glow sits over the field
     col += moonDisc(dir);
     return col;
 }

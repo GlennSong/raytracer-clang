@@ -29,6 +29,10 @@ struct Globals {
   postParams     : vec4<f32>,      // x exposure, y tonemapOp, z contrast, w saturation
   skyMoonDir     : vec4<f32>,      // xyz toward the moon, w disc radiance (0 = down)
   skyMoonSun     : vec4<f32>,      // xyz TRUE sun direction (lights the disc), w lit fraction
+  skyCelX        : vec4<f32>,      // the celestial frame in local space (stars)
+  skyCelY        : vec4<f32>,
+  skyCelZ        : vec4<f32>,
+  skyStars       : vec4<f32>,      // x visibility, y Milky Way strength
   lights         : array<Light, 32>,
 };
 struct DrawData {
@@ -209,6 +213,54 @@ fn distanceAttenuation(dist : f32, range : f32) -> f32 {
   let window = clamp(1.0 - ratio2 * ratio2, 0.0, 1.0);
   return window * window / max(dist * dist, 1e-4);
 }
+
+// The stars: a procedural field on the celestial sphere — mirrors starField in
+// shaders/vulkan/sky.frag (the verified reference; comments there).
+fn starHash(v : vec3<u32>) -> u32 {
+  var h = v.x * 0x8da6b343u ^ v.y * 0xd8163841u ^ v.z * 0xcb1ab31fu;
+  h ^= h >> 13u; h *= 0x9e3779b1u; h ^= h >> 16u;
+  return h;
+}
+fn starField(dir : vec3<f32>) -> vec3<f32> {
+  let gate = g.skyStars.x;
+  if (gate <= 0.001 || dir.y < -0.02) { return vec3<f32>(0.0); }
+  let dc = vec3<f32>(dot(dir, g.skyCelX.xyz), dot(dir, g.skyCelY.xyz), dot(dir, g.skyCelZ.xyz));
+  let R = 34.0;
+  let base = floor(dc * R);
+  let galPole = vec3<f32>(-0.8676, -0.1981, 0.4560);
+  let band = exp(-pow(dot(dc, galPole) / 0.16, 2.0)) * g.skyStars.y;
+  var col = vec3<f32>(0.0);
+  for (var k = -1; k <= 1; k++) {
+    for (var j = -1; j <= 1; j++) {
+      for (var i = -1; i <= 1; i++) {
+        let c = base + vec3<f32>(f32(i), f32(j), f32(k));
+        let h = starHash(vec3<u32>(u32(i32(c.x) + 512), u32(i32(c.y) + 512), u32(i32(c.z) + 512)));
+        let r0 = f32(h & 0xffffu) / 65535.0;
+        let r1 = f32(h >> 16u) / 65535.0;
+        let h2 = starHash(vec3<u32>(h, 19u, 23u));
+        let r2 = f32(h2 & 0xffffu) / 65535.0;
+        let r3 = f32(h2 >> 16u) / 65535.0;
+        let h3 = starHash(vec3<u32>(h2, 29u, 31u));
+        let r4 = f32(h3 & 0xffffu) / 65535.0;
+        if (r0 > 0.14 + 0.30 * band) { continue; }
+        let q = c + vec3<f32>(r1, r2, r4);
+        let ql = length(q);
+        if (abs(ql - R) > 0.9) { continue; }
+        let sd = q / ql;
+        let ang = length(cross(dc, sd));
+        let mag = pow(r3, 3.0);
+        let sigma = 0.0010 + 0.0009 * mag;
+        let I = exp(-ang * ang / (2.0 * sigma * sigma)) * (0.08 + 1.5 * mag);
+        let tint = mix(vec3<f32>(0.78, 0.85, 1.0), vec3<f32>(1.0, 0.86, 0.70), r1 * r1);
+        col += tint * I;
+      }
+    }
+  }
+  col += vec3<f32>(0.30, 0.34, 0.46) * 0.03 * band;
+  let horizon = smoothstep(-0.02, 0.18, dir.y);
+  return col * gate * horizon;
+}
+
 // The moon (the month): a sphere disc lit from the TRUE sun — mirrors
 // moonDisc in shaders/vulkan/sky.frag (the verified reference).
 const MOON_RADIUS : f32 = 0.026;
@@ -252,6 +304,7 @@ fn sampleEnvironment(dir : vec3<f32>) -> vec3<f32> {
   col += sc * pow(sunDot, 256.0) * 8.0 * disc;
   col += sc * pow(sunDot, 32.0) * 1.0 * disc;
   col += sc * pow(sunDot, 4.0) * 0.15 * disc;
+  col += starField(dir);
   col += moonDisc(dir);
   return col;
 }

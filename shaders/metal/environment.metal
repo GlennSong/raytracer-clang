@@ -40,6 +40,52 @@ static float3 moonDisc(float3 dir, device const LightUniforms& env) {
     return col;
 }
 
+
+// THE STARS: a procedural field on the celestial sphere — mirrors starField
+// in shaders/vulkan/sky.frag (the verified reference; comments there).
+static uint starHash(uint3 v) {
+    uint h = v.x * 0x8da6b343u ^ v.y * 0xd8163841u ^ v.z * 0xcb1ab31fu;
+    h ^= h >> 13; h *= 0x9e3779b1u; h ^= h >> 16;
+    return h;
+}
+static float3 starField(float3 dir, device const LightUniforms& env) {
+    float gate = env.skyStarGate;
+    if (gate <= 0.001 || dir.y < -0.02) return float3(0.0);
+    float3 dc = float3(dot(dir, env.skyCelX), dot(dir, env.skyCelY), dot(dir, env.skyCelZ));
+    const float R = 34.0;
+    float3 base = floor(dc * R);
+    const float3 galPole = float3(-0.8676, -0.1981, 0.4560);
+    float band = exp(-pow(dot(dc, galPole) / 0.16, 2.0)) * env.skyMilkyWay;
+    float3 col = float3(0.0);
+    for (int k = -1; k <= 1; ++k)
+    for (int j = -1; j <= 1; ++j)
+    for (int i = -1; i <= 1; ++i) {
+        float3 c = base + float3(float(i), float(j), float(k));
+        uint h = starHash(uint3(uint(int(c.x) + 512), uint(int(c.y) + 512), uint(int(c.z) + 512)));
+        float r0 = float(h & 0xffffu) / 65535.0;
+        float r1 = float(h >> 16) / 65535.0;
+        uint h2 = starHash(uint3(h, 19u, 23u));
+        float r2 = float(h2 & 0xffffu) / 65535.0;
+        float r3 = float(h2 >> 16) / 65535.0;
+        uint h3 = starHash(uint3(h2, 29u, 31u));
+        float r4 = float(h3 & 0xffffu) / 65535.0;
+        if (r0 > 0.14 + 0.30 * band) continue;
+        float3 q = c + float3(r1, r2, r4);
+        float ql = length(q);
+        if (fabs(ql - R) > 0.9) continue;
+        float3 sd = q / ql;
+        float ang = length(cross(dc, sd));
+        float mag = pow(r3, 3.0);
+        float sigma = 0.0010 + 0.0009 * mag;
+        float I = exp(-ang * ang / (2.0 * sigma * sigma)) * (0.08 + 1.5 * mag);
+        float3 tint = mix(float3(0.78, 0.85, 1.0), float3(1.0, 0.86, 0.70), r1 * r1);
+        col += tint * I;
+    }
+    col += float3(0.30, 0.34, 0.46) * 0.03 * band;
+    float horizon = smoothstep(-0.02, 0.18, dir.y);
+    return col * gate * horizon;
+}
+
 // Procedural sky environment. Colors and the sun arc come from `env` (the day/
 // night state baked into LightUniforms), so dawn→day→dusk→night grade smoothly
 // and the disc fades out as the sun sets. The shader only interpolates; the
@@ -69,6 +115,7 @@ float3 sampleEnvironment(float3 dir, device const LightUniforms& env) {
     // Subtle atmospheric scattering near horizon, tinted by the sun
     float horizonGlow = pow(1.0 - abs(dir.y), 8.0);
     col += sc * horizonGlow * 0.1 * disc;
+    col += starField(dir, env);
     col += moonDisc(dir, env);
 
     return col;
@@ -235,7 +282,8 @@ static float3 scatteringSkyRadiance(float3 dir, texture2d<float> skyViewLut,
         col += env.skySunColor * env.skySunIntensity * t *
                (core * 2.0 + skirt * 0.35);
     }
-    col += moonDisc(dir, env);   // the moon over the scattering sky too
+    col += starField(dir, env);  // the stars and the moon over the scattering sky too
+    col += moonDisc(dir, env);
     // Half-float ceiling: the disc + aureole can sum past 65504 and the HDR
     // target folds the overflow into a BLACK sun (measured: a dark disc at
     // the sun's spot). Clamp comfortably under the format's edge.

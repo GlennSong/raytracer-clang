@@ -49,6 +49,9 @@ private:
     // and the day's polar chart (sky_chart.h) — the same numbers the SVG
     // instrument draws. Debug-overlay only; persisted as daynight.hud.
     bool skyHud_ = false;
+    // The star field (persisted daynight.stars / daynight.milkyWay).
+    bool  stars_ = true;
+    float milkyWay_ = 1.0f;
     SkyChart hudChart_;
     long hudChartKey_ = -1;   // (day, year, lock, latitude) the cached chart is for
     void drawSkyHud(FrameContext& ctx);

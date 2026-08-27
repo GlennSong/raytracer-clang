@@ -304,6 +304,13 @@ struct ProceduralSky {
     Vec3  sunTrueDirection{0.4, 0.8, -0.3};
     float moonDiscIntensity = 0.0f;
     float moonIllumination = 1.0f;    // lit fraction (glow scale)
+    // THE STARS: the celestial frame (see DayNightState) and the field's
+    // visibility (0 = none drawn). milkyWay scales the band's density + glow.
+    Vec3  celestialX{1.0, 0.0, 0.0};
+    Vec3  celestialY{0.0, 0.0, -1.0};
+    Vec3  celestialZ{0.0, 1.0, 0.0};
+    float starVisibility = 0.0f;
+    float milkyWay = 1.0f;
 
     // Procedural FBM clouds (ADR-0016 step 3). A sky-dome visual overlay, never
     // baked into reflection probes. cloudTime is the drift phase in seconds.

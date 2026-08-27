@@ -120,6 +120,12 @@ struct GlobalsUBO {
     // lit fraction. Read by sky.frag only.
     float    skyMoonDir[4];
     float    skyMoonSun[4];
+    // The stars: the celestial frame in local space (xyz each), and
+    // skyStars = (visibility, milky-way strength, 0, 0). sky.frag only.
+    float    skyCelX[4];
+    float    skyCelY[4];
+    float    skyCelZ[4];
+    float    skyStars[4];
 };
 
 // Volumetric-cloud uniforms (mirrors shader_types.h CloudUniforms; every
@@ -5414,6 +5420,13 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
     set3(impl->cpuGlobals.skySunDir, sd, sky.sunDiscIntensity);
     set3(impl->cpuGlobals.skyMoonDir, normalize(sky.moonDirection), sky.moonDiscIntensity);
     set3(impl->cpuGlobals.skyMoonSun, normalize(sky.sunTrueDirection), sky.moonIllumination);
+    set3(impl->cpuGlobals.skyCelX, sky.celestialX, 0.0f);
+    set3(impl->cpuGlobals.skyCelY, sky.celestialY, 0.0f);
+    set3(impl->cpuGlobals.skyCelZ, sky.celestialZ, 0.0f);
+    impl->cpuGlobals.skyStars[0] = sky.starVisibility;
+    impl->cpuGlobals.skyStars[1] = sky.milkyWay;
+    impl->cpuGlobals.skyStars[2] = 0.0f;
+    impl->cpuGlobals.skyStars[3] = 0.0f;
     set3(impl->cpuGlobals.skySunColor, sky.sunColor, 0.0f);
     set3(impl->cpuGlobals.skyZenith, sky.zenithColor, 0.0f);
     set3(impl->cpuGlobals.skyHorizon, sky.horizonColor, 0.0f);

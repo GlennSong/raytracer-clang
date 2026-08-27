@@ -203,6 +203,20 @@ DayNightState DayNightCycle::evaluateAt(double timeOfDay, double latitudeDeg,
     s.moonDiscIntensity = static_cast<float>(
         4.0 * smoothstep(-0.02, 0.05, moonDir.y) * (0.25 + 0.75 * nightness));
 
+    // --- the stars ----------------------------------------------------------
+    // Local sidereal time = the sun's hour angle + its right ascension (taken
+    // as the ecliptic longitude; the obliquity correction is under 2.5°).
+    // bodyDirection is a rotation, so the three axes are orthonormal and a
+    // star at (α, δ) sits at cosδ cosα X + cosδ sinα Y + sinδ Z.
+    const double lst = H + sunLon * kDeg;
+    s.celestialX = bodyDirection(lst, 0.0, latitudeDeg);
+    s.celestialY = bodyDirection(lst - kPi * 0.5, 0.0, latitudeDeg);
+    s.celestialZ = bodyDirection(0.0, 90.0, latitudeDeg);
+    // Out once the sun is well down (astronomical-ish twilight at -0.18),
+    // and a bright moon washes the field — a full moon costs half the stars.
+    const double starGate = smoothstep(-0.02, -0.18, elev);
+    s.starVisibility = static_cast<float>(starGate * (1.0 - 0.5 * moonUp * illum * illum));
+
     s.solarElevation = static_cast<float>(elev);
     if (s.sunIntensity >= moonI) {
         s.lightDirection = sunDir;

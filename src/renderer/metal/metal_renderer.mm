@@ -3341,6 +3341,12 @@ void MetalRenderer::setLights(const SceneLighting& lighting) {
     lu.skyMoonIntensity = sky.moonDiscIntensity;
     lu.skyMoonSun = toSimd3(normalize(sky.sunTrueDirection));
     lu.skyMoonIllum = sky.moonIllumination;
+    lu.skyCelX = toSimd3(sky.celestialX);
+    lu.skyCelY = toSimd3(sky.celestialY);
+    lu.skyCelZ = toSimd3(sky.celestialZ);
+    lu.skyStarGate = sky.starVisibility;
+    lu.skyMilkyWay = sky.milkyWay;
+    lu._skp4 = 0;
     lu.skySunColor = toSimd3(sky.sunColor);
     lu.skyZenith = toSimd3(sky.zenithColor);
     lu.skyHorizon = toSimd3(sky.horizonColor);

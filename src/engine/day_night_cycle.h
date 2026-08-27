@@ -54,6 +54,16 @@ struct DayNightState {
     float moonAgeDays;      // 0 = new, kSynodicMonthDays/2 = full
     float moonIllumination; // lit fraction of the disc, 0..1
     float moonDiscIntensity;
+
+    // THE STARS: the celestial (equatorial) frame in local space, rotated by
+    // local sidereal time — X toward RA 0 / Dec 0, Y toward RA 90, Z the
+    // pole (due north, altitude = latitude). The sky shader dots a view
+    // direction with these to read its (RA, Dec) and hashes a star field
+    // there, so the stars wheel about the pole with the hour and slide with
+    // the season. starVisibility: 0 by day, 1 in deep night, washed by a
+    // bright moon.
+    Vec3  celestialX, celestialY, celestialZ;
+    float starVisibility;
 };
 
 // Maps a normalized time-of-day to a sun arc and a graded sky/light palette.

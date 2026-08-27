@@ -877,6 +877,17 @@ ship. AGENTS.md is updated to state the refined rule.
   and sunrise bearing to the analytic values and the moon's rise/set to its
   phase. An ephemeris gate against published tables is deferred until a
   level is authored for a real place and date.
+  *Stars (same day):* `DayNightState` carries the celestial frame — the
+  equatorial axes in local space rotated by local sidereal time (sun hour
+  angle + RA ≈ ecliptic longitude) — and a visibility (sun gate × moon
+  wash); every sky shader hashes a procedural star field on that frame
+  (`starField`: a seamless 3-D lattice, 27-neighbour lookup, power-law
+  brightness, Milky Way on the real galactic pole), so the stars wheel about a pole at
+  altitude = latitude and slide with the season. Approximations: RA taken
+  as ecliptic longitude (≤ 2.5°), no real catalogue (no recognisable
+  constellations). Gates:
+  `day_night_stars_wheel_about_a_pole_at_the_latitude`,
+  `day_night_stars_show_at_night_and_the_moon_washes_them`.
 - Procedural **clouds — first pass** (step 3): an FBM noise layer painted on the
   sky dome (`applyClouds`/`cloudFbm` in `phong.metal`), drifted over time and
   shaded against the active sun (sunlit tops, dark night silhouettes, warm at

@@ -348,3 +348,53 @@ TEST_CASE(day_night_moonlight_follows_the_phase) {
         if (s.solarElevation > 0.0f) CHECK_APPROX(s.lightDirection.y, s.sunDirection.y, 1e-6);
     }
 }
+
+// THE STARS (device: "stars in the night sky"). The celestial frame the
+// shader hashes the field on: orthonormal, its pole due north at altitude =
+// latitude, the sun sitting in it at (RA = solar longitude, Dec = its
+// declination), and the whole frame turned half a circle about the pole
+// twelve hours later — so the stars wheel with the hour and Polaris stays.
+TEST_CASE(day_night_stars_wheel_about_a_pole_at_the_latitude) {
+    DayNightCycle c;   // 40 N, day 172
+    c.timeOfDay = 0.5;
+    const DayNightState s = c.evaluate();
+    CHECK_APPROX(s.celestialX.length(), 1.0, 1e-9);
+    CHECK_APPROX(s.celestialY.length(), 1.0, 1e-9);
+    CHECK_APPROX(s.celestialZ.length(), 1.0, 1e-9);
+    CHECK(std::fabs(dot(s.celestialX, s.celestialY)) < 1e-9);
+    CHECK(std::fabs(dot(s.celestialX, s.celestialZ)) < 1e-9);
+    CHECK(std::fabs(dot(s.celestialY, s.celestialZ)) < 1e-9);
+    // The pole: due north (-z), altitude = latitude.
+    CHECK_APPROX(s.celestialZ.y, std::sin(40.0 * 3.14159265358979323846 / 180.0), 1e-9);
+    CHECK(s.celestialZ.z < 0.0);
+    CHECK(std::fabs(s.celestialZ.x) < 1e-9);
+    // The sun reads back at its own (RA, Dec) in this frame.
+    const double dec = std::asin(dot(s.sunDirection, s.celestialZ)) * 180.0 / 3.14159265358979323846;
+    CHECK_APPROX(dec, c.declinationDeg(), 1e-6);
+    double ra = std::atan2(dot(s.sunDirection, s.celestialY), dot(s.sunDirection, s.celestialX)) *
+                180.0 / 3.14159265358979323846;
+    if (ra < 0.0) ra += 360.0;
+    CHECK_APPROX(ra, c.solarLongitudeDeg(), 1e-6);
+    // Twelve hours on: X and Y have swung to their opposites; the pole holds.
+    c.timeOfDay = 0.0;
+    const DayNightState m = c.evaluate();
+    CHECK_APPROX(dot(m.celestialX, s.celestialX), -1.0, 1e-9);
+    CHECK_APPROX(dot(m.celestialY, s.celestialY), -1.0, 1e-9);
+    CHECK_APPROX(dot(m.celestialZ, s.celestialZ), 1.0, 1e-9);
+}
+
+TEST_CASE(day_night_stars_show_at_night_and_the_moon_washes_them) {
+    const double full = kSynodicMonthDays * 0.5;
+    CHECK_APPROX(DayNightCycle::evaluateAt(0.5, EQUATOR, EQUINOX, 0.0).starVisibility, 0.0, 1e-9);
+    CHECK_APPROX(DayNightCycle::evaluateAt(0.75, EQUATOR, EQUINOX, 0.0).starVisibility, 0.0, 1e-9);  // sunset: not yet
+    CHECK_APPROX(DayNightCycle::evaluateAt(0.0, EQUATOR, EQUINOX, 0.0).starVisibility, 1.0, 1e-9);   // new moon midnight
+    const float underFull = DayNightCycle::evaluateAt(0.0, EQUATOR, EQUINOX, full).starVisibility;
+    CHECK(underFull > 0.4f);
+    CHECK(underFull < 0.6f);
+    // Dusk fades them in: between sunset and deep night the gate is partial.
+    // 18:22 at the equator: the sun is 5.4 deg down, inside the -0.02..-0.18 ramp
+    // (it drops a degree every four minutes there; by 18:43 the gate is open).
+    const float dusk = DayNightCycle::evaluateAt(0.765, EQUATOR, EQUINOX, 0.0).starVisibility;
+    CHECK(dusk > 0.0f);
+    CHECK(dusk < 1.0f);
+}

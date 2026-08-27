@@ -33,6 +33,8 @@ void DayNightSystem::onStart(FrameContext& ctx) {
     // read — its persisted 1.0 would have pinned every night to a full moon.
     cycle.moonLock = s.getDouble("daynight.moonLock", cycle.moonLock);
     skyHud_ = s.getBool("daynight.hud", skyHud_);
+    stars_ = s.getBool("daynight.stars", stars_);
+    milkyWay_ = static_cast<float>(s.getDouble("daynight.milkyWay", milkyWay_));
 
     cloudsEnabled  = s.getBool("clouds.enabled", cloudsEnabled);
     cloudCoverage  = static_cast<float>(s.getDouble("clouds.coverage", cloudCoverage));
@@ -111,6 +113,8 @@ void DayNightSystem::onStop(FrameContext& ctx) {
     s.setBool("daynight.paused", cycle.paused);
     s.setDouble("daynight.moonLock", cycle.moonLock);
     s.setBool("daynight.hud", skyHud_);
+    s.setBool("daynight.stars", stars_);
+    s.setDouble("daynight.milkyWay", milkyWay_);
 
     s.setBool("clouds.enabled", cloudsEnabled);
     s.setDouble("clouds.coverage", cloudCoverage);
@@ -143,13 +147,14 @@ void DayNightSystem::publishStatus(FrameContext& ctx, bool active) {
                   "hour=%.4f tod=%.6f dayMinutes=%.2f sunrise=%.3f sunset=%.3f "
                   "daylight=%.3f latitude=%.1f dayOfYear=%d year=%d sunY=%.3f "
                   "moonAge=%.2f moonIllum=%.3f moonY=%.3f moonX=%.3f moonZ=%.3f "
-                  "moonDisc=%.2f phase=%s paused=%d active=%d",
+                  "moonDisc=%.2f stars=%.3f phase=%s paused=%d active=%d",
                   cycle.timeOfDay * 24.0, cycle.timeOfDay, cycle.dayMinutes,
                   cycle.sunriseHour(), cycle.sunsetHour(), cycle.daylightFraction(),
                   cycle.latitudeDeg, cycle.dayOfYear, cycle.year,
                   ctx.view.lighting.solarElevation, st.moonAgeDays, st.moonIllumination,
                   st.moonDirection.y, st.moonDirection.x, st.moonDirection.z,
-                  st.moonDiscIntensity, DayNightCycle::phaseName(st.moonAgeDays),
+                  st.moonDiscIntensity, stars_ ? st.starVisibility : 0.0f,
+                  DayNightCycle::phaseName(st.moonAgeDays),
                   cycle.paused ? 1 : 0, active ? 1 : 0);
     ctx.settings.setString("daynight.status", buf);
 }
@@ -369,6 +374,12 @@ void DayNightSystem::applyLighting(FrameContext& ctx) {
     lit.sky.sunTrueDirection  = st.sunDirection;
     lit.sky.moonDiscIntensity = st.moonDiscIntensity;
     lit.sky.moonIllumination  = st.moonIllumination;
+    // The stars: the celestial frame + tonight's visibility.
+    lit.sky.celestialX = st.celestialX;
+    lit.sky.celestialY = st.celestialY;
+    lit.sky.celestialZ = st.celestialZ;
+    lit.sky.starVisibility = stars_ ? st.starVisibility : 0.0f;
+    lit.sky.milkyWay = milkyWay_;
     lit.sky.zenithColor      = st.zenithColor;
     lit.sky.horizonColor     = st.horizonColor;
     lit.sky.groundColor      = st.groundColor;
@@ -610,6 +621,12 @@ void DayNightSystem::render(FrameContext& ctx) {
         int doy = cycle.dayOfYear;
         if (ImGui::SliderInt("Day of year", &doy, 1, 365)) {
             cycle.dayOfYear = doy;
+            if (enabled) applyLighting(ctx);
+        }
+        // The stars.
+        if (ImGui::Checkbox("Stars##stars", &stars_)) { if (enabled) applyLighting(ctx); }
+        ImGui::SameLine();
+        if (ImGui::SliderFloat("Milky Way##stars", &milkyWay_, 0.0f, 2.0f, "%.2f")) {
             if (enabled) applyLighting(ctx);
         }
         // The month: the moon's age from the calendar, or a held age.

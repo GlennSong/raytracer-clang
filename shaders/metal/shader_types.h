@@ -163,6 +163,11 @@ struct LightUniforms {
     // — the moon itself at night); skyMoonIntensity 0 = below the horizon.
     simd_float3 skyMoonDir;    float skyMoonIntensity;
     simd_float3 skyMoonSun;    float skyMoonIllum;
+    // The stars: the celestial frame in local space (see DayNightState),
+    // the field's visibility (0 by day) and the Milky Way strength.
+    simd_float3 skyCelX;       float skyStarGate;
+    simd_float3 skyCelY;       float skyMilkyWay;
+    simd_float3 skyCelZ;       float _skp4;
 };
 
 // Sky LUT bake (cinematic-sky phase): parameters for the transmittance +

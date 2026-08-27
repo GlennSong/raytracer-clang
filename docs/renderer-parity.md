@@ -64,6 +64,7 @@ in `src/renderer/vulkan/` and what has been confirmed on the Windows/RTX 3060.
 | Feature | Metal | Vulkan | Notes |
 | --- | --- | --- | --- |
 | Procedural sky + day/night + FBM clouds | ✅ | ✅ | `sky.frag`; part of the verified arena render. |
+| Stars + Milky Way (celestial sphere) | 🟡 | ✅ | 2026-08-26: `starField` — procedural field hashed on a seamless 3-D LATTICE over the EQUATORIAL frame (`skyCelX/Y/Z` globals, rotated by sidereal time on the CPU; one candidate per voxel, 27-neighbour lookup), power-law brightness, blue-white..warm tint, Milky Way band on the real galactic pole; gated by `skyStars.x` (day / moon wash), horizon extinction, under the clouds. Vulkan device-run on the metro; `environment.metal` (both paths) and `mesh.wgsl` mirror it, uncompiled here. |
 | Moon disc with phases (the month) | 🟡 | ✅ | 2026-08-26: `moonDisc` — a sphere disc lit from the TRUE sun (`skyMoonDir`/`skyMoonSun` globals), crescent/quarter/full by construction, earthshine floor, glow ∝ lit fraction. Vulkan device-run on the metro (reference); `environment.metal` (both the procedural and scattering paths) and `mesh.wgsl` mirror it, uncompiled here. |
 | HDR equirectangular environment | ✅ | 🟡 | Vulkan samples the equirect directly (`uploadTextureHDR`); unverified. |
 | IBL: irradiance + GGX-prefilter + BRDF LUT | ✅ | ⚠️ | **BRDF LUT done** (🟡, baked split-sum at set 0 binding 3, used by `mesh.frag`). Irradiance + GGX-prefilter still use the analytic sky/equirect approximation — the baked prefiltered + irradiance cubes are the next IBL stage. |
