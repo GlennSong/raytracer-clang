@@ -4,6 +4,7 @@
 #include "../procgen/terrain.h"
 #include "../procgen/city/city_svg.h"   // SidewalkCrossing: the map's conflict places
 #include "../../log.h"
+#include "../../renderer/debug_ui_clipboard.h"   // which bridge a Copy went through
 
 #include "physics_system.h"
 
@@ -167,7 +168,8 @@ static int g_pendingCopyFrames = 0;
 static void copyToClipboard(const char* text) {
     ImGui::SetClipboardText(text);
     const char* back = ImGui::GetClipboardText();
-    LOG_INFO << "[teleport] clipboard <- \"" << text << "\" (read back now: "
+    LOG_INFO << "[teleport] clipboard <- \"" << text << "\" via " << debugUiClipboardName()
+             << " (read back now: "
              << (back && *back ? (std::string(back) == text ? "same" : "DIFFERENT") : "EMPTY")
              << "; window focus " << (ImGui::GetIO().AppFocusLost ? "LOST" : "held") << ")";
     // The compositor answers LATER: a Wayland set_selection it refuses comes

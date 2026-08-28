@@ -7,6 +7,7 @@
 #endif
 #include "window.h"
 #include "gamepad_gc.h"
+#include "debug_ui_clipboard.h"
 #include "../log.h"
 #include <GLFW/glfw3.h>
 #include <fstream>
@@ -395,13 +396,19 @@ bool GlfwWindow::initialize(int width, int height, const std::string& title) {
     // X11 under XWayland — where this session cannot even bridge the
     // clipboard (an X client reads "CLIPBOARD selection doesn't exist"),
     // so every Copy in the overlay died on the way out. Point at the socket.
-    if (!std::getenv("WAYLAND_DISPLAY")) {
-        std::string dir = std::getenv("XDG_RUNTIME_DIR") ? std::getenv("XDG_RUNTIME_DIR")
-                                                         : "/run/user/" + std::to_string(getuid());
-        if (access((dir + "/wayland-0").c_str(), R_OK | W_OK) == 0) {
+    {
+        const std::string dir = std::getenv("XDG_RUNTIME_DIR") ? std::getenv("XDG_RUNTIME_DIR")
+                                                               : "/run/user/" + std::to_string(getuid());
+        const char* cur = std::getenv("WAYLAND_DISPLAY");
+        // Set but stale (a socket name from an earlier login) is the same
+        // failure as unset: GLFW's Wayland connect fails and X11 wins.
+        const bool curOk = cur && *cur &&
+                           access((cur[0] == '/' ? std::string(cur) : dir + "/" + cur).c_str(),
+                                  R_OK | W_OK) == 0;
+        if (!curOk && access((dir + "/wayland-0").c_str(), R_OK | W_OK) == 0) {
+            LOG_INFO << "WAYLAND_DISPLAY was " << (cur && *cur ? std::string("'") + cur + "' (no such socket)" : "unset")
+                     << "; found " << dir << "/wayland-0 — using the Wayland platform";
             setenv("WAYLAND_DISPLAY", "wayland-0", 1);
-            LOG_INFO << "WAYLAND_DISPLAY was unset; found " << dir
-                     << "/wayland-0 — using the Wayland platform";
         }
     }
 #endif
@@ -700,41 +707,6 @@ void GlfwWindow::setDrawCallback(std::function<void()> callback) {
     impl->drawCallback = std::move(callback);
 }
 
-#if defined(RT_ENABLE_IMGUI) && defined(__linux__)
-// The debug UI's clipboard on Wayland. KWin honours a client's
-// wl_data_device.set_selection only while that client holds KEYBOARD focus;
-// otherwise the request is dropped and the copy goes into the void — GLFW
-// never hears back (device: every Copy in the overlay "did nothing", and a
-// paste still produced a wl-copy string from hours earlier; a socket `clip`
-// from a viewer launched while the user was typing elsewhere failed the
-// same way, while one launched to an idle desktop succeeded). wl-copy and
-// wl-paste speak the data-control protocol clipboard managers use, which
-// has no focus rule. When they are on PATH under Wayland, the UI's clipboard
-// goes through them; GLFW's own bridge stays for X11/macOS/Windows.
-static std::string g_wlPasteBuffer;
-static bool wlClipboardAvailable() {
-    if (!std::getenv("WAYLAND_DISPLAY")) return false;
-    return access("/usr/bin/wl-copy", X_OK) == 0 && access("/usr/bin/wl-paste", X_OK) == 0;
-}
-static void wlSetClipboardText(ImGuiContext*, const char* text) {
-    // wl-copy forks a child that serves the selection and returns at once.
-    FILE* p = popen("wl-copy", "w");
-    if (!p) { LOG_WARN << "clipboard: wl-copy could not start"; return; }
-    std::fputs(text ? text : "", p);
-    if (const int rc = pclose(p); rc != 0) LOG_WARN << "clipboard: wl-copy exited " << rc;
-}
-static const char* wlGetClipboardText(ImGuiContext*) {
-    g_wlPasteBuffer.clear();
-    FILE* p = popen("wl-paste --no-newline 2>/dev/null", "r");
-    if (!p) return nullptr;
-    char buf[4096];
-    std::size_t n;
-    while ((n = std::fread(buf, 1, sizeof(buf), p)) > 0) g_wlPasteBuffer.append(buf, n);
-    pclose(p);
-    return g_wlPasteBuffer.c_str();
-}
-#endif
-
 // Debug-UI GLFW backend (ADR-0011). The ImGui platform backend lives here, the
 // one file that owns the GLFWwindow*. No-op without ImGui.
 void GlfwWindow::initDebugUi() {
@@ -743,16 +715,13 @@ void GlfwWindow::initDebugUi() {
     // InitForOther is the right entry point for a non-GL/Vulkan (Metal) backend;
     // true installs ImGui's GLFW input callbacks, chained to ours.
     ImGui_ImplGlfw_InitForOther(impl->window, true);
-#if defined(__linux__)
-    if (wlClipboardAvailable()) {
-        ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
-        pio.Platform_SetClipboardTextFn = wlSetClipboardText;
-        pio.Platform_GetClipboardTextFn = wlGetClipboardText;
-        LOG_INFO << "Debug UI clipboard: wl-copy/wl-paste (no keyboard-focus rule)";
-    } else {
-        LOG_INFO << "Debug UI clipboard: GLFW";
-    }
-#endif
+    // The clipboard: GLFW's bridge on KDE Wayland is silently refused
+    // whenever this window lacks keyboard focus (device: every Copy in the
+    // overlay "did nothing"; pastes produced a wl-copy string from hours
+    // earlier). Under Wayland with wl-copy/wl-paste present, go through
+    // them — the data-control protocol has no focus rule. GLFW's own bridge
+    // stays for X11/macOS/Windows. See debug_ui_clipboard.h.
+    if (!installWaylandToolClipboard()) setDebugUiClipboardName("GLFW");
 #endif
 }
 

@@ -45,6 +45,7 @@ add_library(engine_core STATIC
     src/job_system.cpp
     src/renderer/settings.cpp
     src/renderer/hosted_window.cpp
+    src/renderer/debug_ui_clipboard.cpp
     src/engine/recent_scenes.cpp
     src/engine/clock.cpp
     src/engine/control/control_channel.cpp

@@ -1,4 +1,5 @@
 #include "hosted_window.h"
+#include "debug_ui_clipboard.h"
 
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>
@@ -152,6 +153,15 @@ void HostedWindow::pollEvents() {
     pendingScroll = 0.0;
 
     newDebugUiFrame();
+}
+
+void HostedWindow::initDebugUi() {
+#ifdef RT_ENABLE_IMGUI
+    // No GLFW backend here, so without this ImGui's clipboard is a private
+    // buffer: Copy "works", the read-back says "same", the OS never sees it.
+    if (!installWaylandToolClipboard())
+        setDebugUiClipboardName("ImGui private buffer — the host must install one");
+#endif
 }
 
 void HostedWindow::newDebugUiFrame() {

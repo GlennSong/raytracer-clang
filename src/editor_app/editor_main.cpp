@@ -17,6 +17,10 @@
 #include "../engine/states/editor_state.h"
 #include "../game/arena_state.h"
 #include "../renderer/hosted_window.h"
+#include "../renderer/debug_ui_clipboard.h"   // the overlay's Copy buttons go through Qt's clipboard
+#ifdef RT_ENABLE_IMGUI
+#include <imgui.h>
+#endif
 #include "../renderer/gamepad_gc.h"
 #include "../log.h"
 #include "city_planner_panel.h"
@@ -36,6 +40,7 @@
 
 #include <QActionGroup>
 #include <QApplication>
+#include <QClipboard>
 #include <QCloseEvent>
 #include <QCursor>
 #include <QDialog>
@@ -1147,6 +1152,24 @@ int main(int argc, char** argv) {
     engine::recordRecentScene(app.settings(), relativeScenePath(levelPath));
     app.pushState(makeEditor());
     app.begin();
+#ifdef RT_ENABLE_IMGUI
+    // The hosted viewport's ImGui has no GLFW backend; without this its
+    // clipboard is a private buffer and the overlay's Copy buttons reach
+    // nothing. Qt's clipboard is the right bridge for a Qt host, on every
+    // platform, and this window holds keyboard focus when a button is clicked.
+    if (ImGui::GetCurrentContext() != nullptr) {
+        ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+        pio.Platform_SetClipboardTextFn = [](ImGuiContext*, const char* text) {
+            QGuiApplication::clipboard()->setText(QString::fromUtf8(text ? text : ""));
+        };
+        pio.Platform_GetClipboardTextFn = [](ImGuiContext*) -> const char* {
+            static std::string held;
+            held = QGuiApplication::clipboard()->text().toStdString();
+            return held.c_str();
+        };
+        engine::setDebugUiClipboardName("Qt (QGuiApplication::clipboard)");
+    }
+#endif
 
     // Window chrome that mirrors engine state: action enables, dirty title,
     // mode indicator. Run on the slow poll AND immediately when a bridge

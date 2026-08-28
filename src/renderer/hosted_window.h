@@ -36,7 +36,10 @@ public:
     // injectMouseDelta instead of being derived from absolute positions.
     void setCursorMode(CursorMode mode) override;
     void resetMouseDelta() override;
-    void initDebugUi() override {}
+    // The host (Qt editor) may install its own ImGui clipboard afterwards;
+    // this puts an OS-backed one in place where the platform offers it, so
+    // the hosted overlay's Copy buttons never land in ImGui's private buffer.
+    void initDebugUi() override;
     void newDebugUiFrame() override;
     void shutdownDebugUi() override {}
 
