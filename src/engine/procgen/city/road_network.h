@@ -139,6 +139,34 @@ struct RoadGraph {
     Real edgeWidth(int edgeIndex) const { return edges[edgeIndex].width; }
 };
 
+// DANGLING ENDS become T junctions (device: "can we properly join those
+// roads"). A road whose dead end stops inside another road's corridor — the
+// end's own half-width plus the other's plus the sidewalk — never got a
+// junction: no pad, no crosswalk, and the through road's curb and sidewalk
+// run straight across the stub (metro_v2_test had exactly two, the city map
+// census's last two places). Each such end is joined: the other edge is
+// split at the end's projection and an edge of the end's own class/width
+// bridges the gap. Same layer only, streets only: freeway/ramp/baked edges
+// and anything within 40 m of them are corridor territory and left alone
+// (a street end joined INTO a ramp broke a merge on the freeway metro);
+// one-way edges (a divided road's carriageways) and ends that end TOGETHER
+// with another dead end within 30 m (twin carriageways, paired stubs at a
+// city edge) are not stubs inside another road. Returns one record per join.
+// An end that overlaps a road it is NOT heading into (the other road skirts
+// past its cap obliquely — metro's arterial ending at the shore beside a
+// local) would make an absurd acute T; it is TRIMMED instead: the end node
+// pulled back along its last edge until its cap clears the other road's
+// corridor and sidewalk (`trimmed`, `pulledBack`), still a dead end.
+struct DanglingJoin {
+    Vec2 end;          // the dead end that was joined (or trimmed: its old position)
+    Vec2 at;           // the new junction node on the other road (or the end's new position)
+    Real gap = 0;      // centreline-to-centreline distance bridged (or cleared)
+    RoadClass endClass = RoadClass::Local, throughClass = RoadClass::Local;
+    bool trimmed = false;
+    Real pulledBack = 0;
+};
+std::vector<DanglingJoin> joinDanglingEnds(RoadGraph& g, Real sidewalk);
+
 // A curved road centreline (the arc a ring/roundabout follows). Curves are the
 // source of truth; a curve is SAMPLED into the planar graph as a fine polyline
 // with a bounded chord error, so the planar pipeline (planarize/blocks/parcels)

@@ -14,6 +14,7 @@
 #include "metro.h"              // MetroParams, buildMetro ("kind":"metro" recipe)
 #include <algorithm>
 #include <cmath>
+#include <set>
 #include <limits>
 #include <cstdlib>
 #include <unordered_map>
@@ -239,6 +240,32 @@ RoadEntity roadNetStreetsOnly(const RoadEntity& road) {
 
 namespace {
 
+// Dead ends that stop inside another road become T junctions (or are pulled
+// back) on EVERY derived graph — constrainedGraph (nav, lots, census,
+// conform) and the mesher's own promotion below — so all of them agree
+// where a road ends. (The first cut joined only in constrainedGraph; the
+// map then showed the arterial's flat end cap still at the OLD position while
+// the census's graph had it pulled back: two graphs, two answers.) Each end
+// is reported once per process, not once per derivation.
+void joinDanglingEndsLogged(RoadGraph& g, const RoadEntity& road) {
+    static std::set<long long> reported;
+    for (const DanglingJoin& j : joinDanglingEnds(g, road.look.sidewalk)) {
+        const long long key = (static_cast<long long>(std::lround(j.end.x * 10.0)) << 32) ^
+                              (static_cast<long long>(std::lround(j.end.y * 10.0)) & 0xffffffffLL);
+        if (!reported.insert(key).second) continue;
+        if (j.trimmed)
+            LOG_INFO << "[roadgraph] pulled a dangling class-" << static_cast<int>(j.endClass)
+                     << " end at (" << j.end.x << ", " << j.end.y << ") back " << j.pulledBack
+                     << " m: a class-" << static_cast<int>(j.throughClass)
+                     << " road skirts past its cap " << j.gap << " m away, not a T";
+        else
+            LOG_INFO << "[roadgraph] joined a dangling class-" << static_cast<int>(j.endClass)
+                     << " end at (" << j.end.x << ", " << j.end.y << ") to the class-"
+                     << static_cast<int>(j.throughClass) << " road at (" << j.at.x << ", "
+                     << j.at.y << "): " << j.gap << " m bridged, a T junction now";
+    }
+}
+
 // The graph the mesher AND the terrain-conform both build from: the sampled graph put
 // through the local-constraints pass (ADR-0052), so a promoted roundabout is reflected
 // identically in the carriageway and in the ground it grades. One source keeps them in sync.
@@ -251,6 +278,7 @@ RoadGraph constrainedGraph(const RoadEntity& road, const RoadGroundFn& heightAt)
     RoadRules rules;
     rules.autoRoundabout = road.look.autoRoundabout;   // honour the policy (ADR-0075 P0)
     RoadGraph g = applyConstraints(sampleNetGraph(road, minR), rules);
+    joinDanglingEndsLogged(g, road);
     classifyRoadGraph(g, heightAt);   // semantic layer (#17): kinds + access
     return g;
 }
@@ -1395,6 +1423,7 @@ RenderMesh buildRoadNetMesh(const RoadEntity& road, const RoadGroundFn& heightAt
     RoadRules rules;
     rules.autoRoundabout = road.look.autoRoundabout;
     RoadGraph g = applyConstraints(raw, rules);   // promoted graph (= the constrained graph)
+    joinDanglingEndsLogged(g, road);              // the same joins/pull-backs the other graphs got
 
     // Grade separations (ADR-0051/0054): an edge on a higher layer is an overpass.
     // Instead of a separate bridge mesher, STAMP an absolute deck elevation onto

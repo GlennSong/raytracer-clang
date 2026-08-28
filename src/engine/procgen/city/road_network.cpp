@@ -659,3 +659,168 @@ std::vector<Poly2> extractBlocks(const RoadGraph& g, Real minArea) {
 }
 
 }  // namespace engine
+
+namespace engine {
+
+std::vector<DanglingJoin> joinDanglingEnds(RoadGraph& g, Real sidewalk) {
+    std::vector<DanglingJoin> joins;
+    const int n = static_cast<int>(g.nodes.size());
+    std::vector<std::vector<int>> inc(n);
+    for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
+        inc[g.edges[e].a].push_back(e);
+        inc[g.edges[e].b].push_back(e);
+    }
+    // Snapshot the dead ends first: joining adds nodes and edges.
+    std::vector<int> ends;
+    for (int v = 0; v < n; ++v)
+        if (inc[v].size() == 1) ends.push_back(v);
+    const int nEdges0 = static_cast<int>(g.edges.size());
+    std::vector<int> dead;   // edges a pull-back consumed; removed at the end
+    for (int E : ends) {
+        const int eE = inc[E][0];
+        const RoadEdge endEdge = g.edges[eE];
+        if (endEdge.baked || endEdge.klass == RoadClass::Freeway ||
+            endEdge.klass == RoadClass::Ramp)
+            continue;                                   // authored corridor ends
+        if (endEdge.oneWay || endEdge.provenance != RoadProvenance::Street)
+            continue;                                   // a carriageway of a divided road
+        const int M = endEdge.a == E ? endEdge.b : endEdge.a;
+        const Vec2 P = g.nodes[E].pos;
+        Vec2 dirE = P - g.nodes[M].pos;                  // outward along the stub
+        const Real lenE = dirE.length();
+        if (lenE < 1e-6) continue;
+        dirE = dirE * (1.0 / lenE);
+        const Real hwE = endEdge.width * 0.5;
+        // CORRIDOR TERRITORY is off limits (the merge probe on a freeway
+        // metro: a street end joined INTO a ramp broke a gore): any freeway,
+        // ramp or baked edge within 40 m of this end, and it is left alone.
+        // And a road that ENDS TOGETHER with this one — another dead end
+        // within 30 m, the twin carriageway of a divided arterial, a pair
+        // of stubs at a city edge — is not a road this one stops inside.
+        bool corridor = false, twinEnd = false;
+        for (int o = 0; o < nEdges0 && !corridor; ++o) {
+            const RoadEdge& oe = g.edges[o];
+            if (oe.a == E || oe.b == E) continue;
+            if (!(oe.baked || oe.klass == RoadClass::Freeway || oe.klass == RoadClass::Ramp ||
+                  oe.provenance != RoadProvenance::Street))
+                continue;
+            const Vec2 A = g.nodes[oe.a].pos, B = g.nodes[oe.b].pos;
+            const Vec2 AB = B - A;
+            const Real l2 = AB.lengthSquared();
+            Real t = l2 > 1e-9 ? dot(P - A, AB) / l2 : 0.0;
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            if ((A + AB * t - P).length() < 40.0) corridor = true;
+        }
+        if (corridor) continue;
+        for (int v = 0; v < n && !twinEnd; ++v)
+            if (v != E && inc[v].size() == 1 && (g.nodes[v].pos - P).length() < 30.0) twinEnd = true;
+        if (twinEnd) continue;
+        int best = -1;
+        Real bestD = 0, bestT = 0, bestReach = 0, bestHeading = 0;
+        Vec2 bestQ;
+        for (int o = 0; o < nEdges0; ++o) {
+            const RoadEdge& oe = g.edges[o];
+            if (oe.a == E || oe.b == E || oe.a == M || oe.b == M) continue;
+            if (oe.baked || oe.oneWay || oe.layer != endEdge.layer) continue;
+            if (oe.klass == RoadClass::Freeway || oe.klass == RoadClass::Ramp ||
+                oe.provenance != RoadProvenance::Street)
+                continue;
+            const Vec2 A = g.nodes[oe.a].pos, B = g.nodes[oe.b].pos;
+            const Vec2 AB = B - A;
+            const Real l2 = AB.lengthSquared();
+            if (l2 < 1e-9) continue;
+            const Real t = dot(P - A, AB) / l2;
+            if (t <= 0.05 || t >= 0.95) continue;         // interior of the edge only
+            const Vec2 Q = A + AB * t;
+            const Real d = (Q - P).length();
+            const Real reach = hwE + oe.width * 0.5 + sidewalk;
+            if (d >= reach) continue;
+            const Vec2 toQ = d > 1e-6 ? (Q - P) * (1.0 / d) : dirE;
+            if (best < 0 || d < bestD) {
+                best = o; bestD = d; bestT = t; bestQ = Q; bestReach = reach;
+                bestHeading = dot(dirE, toQ);
+            }
+        }
+        if (best < 0) continue;
+        // Already inside the other carriageway, or heading into it: a T.
+        // Otherwise the other road skirts past this cap obliquely — a T
+        // there would meet at an absurd angle — so pull the end back along
+        // its last edge until the cap clears the corridor and sidewalk.
+        const bool inside = bestD < g.edges[best].width * 0.5;
+        if (!inside && bestHeading < 0.5) {
+            // Moving back by s along -dirE grows the distance by ~s * heading
+            // (heading > 0: the end was leaning toward the road at all).
+            const Real need = bestReach - bestD + 0.5;
+            const Real want = bestHeading > 0.1 ? need / bestHeading : need * 2.0;
+            // A pull-back is a few metres of a stray cap. One that would take
+            // a road back 15-86 m (the freeway metro, before the guards
+            // above) is not a stray cap — leave the road alone.
+            if (want > 12.0) continue;
+            // A sampled road has nodes every few metres, so the pull walks
+            // back along the chain through degree-2 nodes, dropping every
+            // edge it passes, and moves the node it lands in. Dropped edges
+            // are removed at the end (their nodes stay, unconnected).
+            Real pulled = 0.0;
+            int cur = E, prevEdge = eE;
+            while (true) {
+                const RoadEdge& ce = g.edges[prevEdge];
+                const int back = ce.a == cur ? ce.b : ce.a;
+                const Vec2 seg = g.nodes[cur].pos - g.nodes[back].pos;
+                const Real segLen = seg.length();
+                const Real remaining = want - pulled;
+                if (remaining < segLen * 0.9 || inc[back].size() != 2 || segLen < 1e-6) {
+                    // Land inside this edge (never past 90 % of it).
+                    const Real s = std::min(remaining, segLen * 0.9);
+                    g.nodes[cur].pos = g.nodes[cur].pos - seg * (s / segLen);
+                    pulled += s;
+                    break;
+                }
+                // Consume the whole edge: `cur` becomes the dead end.
+                dead.push_back(prevEdge);
+                pulled += segLen;
+                const int e0 = inc[back][0], e1 = inc[back][1];
+                prevEdge = (e0 == prevEdge) ? e1 : e0;
+                cur = back;
+            }
+            joins.push_back({P, g.nodes[cur].pos, bestD, endEdge.klass, g.edges[best].klass,
+                             true, pulled});
+            continue;
+        }
+        // The new junction node, on the other road, height from its ends.
+        RoadNode nn;
+        nn.pos = bestQ;
+        const RoadNode& A = g.nodes[g.edges[best].a];
+        const RoadNode& B = g.nodes[g.edges[best].b];
+        nn.elev = A.elev + (B.elev - A.elev) * bestT;
+        nn.elevAbsolute = A.elevAbsolute;
+        const int N = static_cast<int>(g.nodes.size());
+        g.nodes.push_back(nn);
+        // Split the other edge in place: (a, b) -> (a, N) + (N, b), everything copied.
+        RoadEdge second = g.edges[best];
+        const int oldB = g.edges[best].b;
+        g.edges[best].b = N;
+        second.a = N;
+        second.b = oldB;
+        g.edges.push_back(second);
+        // Bridge the gap with the stub's own class and width (no parking on the stub).
+        RoadEdge bridge = endEdge;
+        bridge.a = E;
+        bridge.b = N;
+        bridge.parkOffset = 0;
+        bridge.parkWidth = 0;
+        g.edges.push_back(bridge);
+        joins.push_back({P, bestQ, bestD, endEdge.klass, second.klass});
+    }
+    if (!dead.empty()) {
+        std::vector<char> gone(g.edges.size(), 0);
+        for (int e : dead) gone[e] = 1;
+        std::vector<RoadEdge> kept;
+        kept.reserve(g.edges.size());
+        for (std::size_t e = 0; e < g.edges.size(); ++e)
+            if (!gone[e]) kept.push_back(g.edges[e]);
+        g.edges.swap(kept);
+    }
+    return joins;
+}
+
+}  // namespace engine

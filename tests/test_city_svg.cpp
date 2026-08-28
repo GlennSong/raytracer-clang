@@ -284,3 +284,89 @@ TEST_CASE(city_map_sharp_junction_leaves_no_sliver_loops_or_hooks) {
     std::printf("    [hygiene] %zu sidewalk-on-asphalt place(s)\n", hits.size());
     CHECK(hits.empty());
 }
+
+// DANGLING ENDS BECOME T JUNCTIONS (device: "can we properly join those
+// roads"). metro_v2_test's last two census places were the city's only two
+// dead ends, each stopping inside another road's corridor with no junction —
+// the through road's sidewalk ran straight across the stub. Here a local
+// ends 4 m from another local's centreline: the constrained graph gains a
+// degree-3 node on the through road, and the census is clean.
+TEST_CASE(city_map_a_dead_end_inside_another_road_is_joined_as_a_t) {
+    RoadEntity net;
+    net.look.defaultWidth = 12.0;
+    net.look.sidewalk = 4.0;
+    net.graph.nodes = {RoadNode{Vec2(0, 0)}, RoadNode{Vec2(200, 0)}, RoadNode{Vec2(400, 0)},
+                       RoadNode{Vec2(200, 200)}, RoadNode{Vec2(200, 4)}};
+    net.graph.addEdge(0, 1, 12.0);   // the through road, in two edges (a node at x = 200)
+    net.graph.addEdge(1, 2, 12.0);
+    net.graph.addEdge(3, 4, 12.0);   // a local from the north, ending 4 m short of the centreline
+    // Nudge the through road's middle node off the stub's line so the join
+    // lands on an edge INTERIOR, the way a generator's stub does.
+    net.graph.nodes[1].pos = Vec2(170, 0);
+    const RoadGraph g = navRoadGraph(net, nullptr);
+    int deg3 = 0, deg1 = 0;
+    std::vector<int> deg(g.nodes.size(), 0);
+    for (const RoadEdge& e : g.edges) { ++deg[e.a]; ++deg[e.b]; }
+    for (int d : deg) { if (d >= 3) ++deg3; if (d == 1) ++deg1; }
+    std::printf("    [join] %zu nodes, %zu edges, degree-3 nodes %d, dead ends %d\n",
+                g.nodes.size(), g.edges.size(), deg3, deg1);
+    CHECK(deg3 == 1);
+    CHECK(deg1 == 3);   // the three real road ends (x = 0, x = 400, z = 200)
+    CurbBandAudit audit;
+    RoadDeckField deck;
+    buildRoadNetMesh(net, nullptr, &audit, &deck);
+    CityMapData m;
+    m.roads = g;
+    m.curbLoops = audit.loops;
+    m.sidewalkWidth = audit.sidewalkWidth > 0 ? audit.sidewalkWidth : 4.0;
+    const std::vector<const RoadDeckField*> decks{&deck};
+    std::vector<SidewalkCrossing> hits = findSidewalkRoadCrossings(m, decks);
+    std::printf("    [join] %zu sidewalk-on-asphalt place(s)\n", hits.size());
+    CHECK(hits.empty());
+}
+
+// THE TRIM HALF: an end whose cap overlaps a road it is NOT heading into
+// (metro's arterial ending at the shore while a local skirts past its cap)
+// is pulled back until the cap clears — no absurd acute T, no dead end
+// inside another road, and the census is clean.
+TEST_CASE(city_map_an_end_skirted_by_another_road_is_pulled_back_not_joined) {
+    RoadEntity net;
+    net.look.defaultWidth = 12.0;
+    net.look.sidewalk = 4.0;
+    // A through road along z = 0; a wide road slanting toward it at 27 deg
+    // that ends 16 m from its centreline — the cap overlaps the corridor +
+    // sidewalk (9 + 6 + 4 = 19 m), but at 27 deg the road is not heading
+    // INTO it (heading score 0.45, under the 0.5 a T needs), so it is pulled
+    // back the ~8 m that clears the corridor rather than joined. (A shallower
+    // slant would need tens of metres of pull-back — that is a road running
+    // alongside another, not a stray cap, and the pass leaves it alone.)
+    net.graph.nodes = {RoadNode{Vec2(0, 0)}, RoadNode{Vec2(150, 0)}, RoadNode{Vec2(400, 0)},
+                       RoadNode{Vec2(60, 82)}, RoadNode{Vec2(190, 16)}};
+    net.graph.addEdge(0, 1, 12.0);
+    net.graph.addEdge(1, 2, 12.0);
+    net.graph.addEdge(3, 4, 18.0);   // the wide road, slanting at z = 0, ending beside it
+    const RoadGraph g = navRoadGraph(net, nullptr);
+    int deg3 = 0;
+    std::vector<int> deg(g.nodes.size(), 0);
+    for (const RoadEdge& e : g.edges) { ++deg[e.a]; ++deg[e.b]; }
+    for (int d : deg) if (d >= 3) ++deg3;
+    // The wide road's end is still a dead end, and it now clears the through
+    // road's corridor + sidewalk (9 + 6 + 4 = 19 m from z = 0).
+    double endZ = 0.0;
+    for (std::size_t i = 0; i < g.nodes.size(); ++i)
+        if (deg[i] == 1 && g.nodes[i].pos.y > 5.0 && g.nodes[i].pos.y < 60.0) endZ = g.nodes[i].pos.y;
+    std::printf("    [trim] degree-3 nodes %d, the wide road's end now at z = %.1f\n", deg3, endZ);
+    CHECK(deg3 == 0);
+    CHECK(endZ > 18.0);
+    CurbBandAudit audit;
+    RoadDeckField deck;
+    buildRoadNetMesh(net, nullptr, &audit, &deck);
+    CityMapData m;
+    m.roads = g;
+    m.curbLoops = audit.loops;
+    m.sidewalkWidth = audit.sidewalkWidth > 0 ? audit.sidewalkWidth : 4.0;
+    const std::vector<const RoadDeckField*> decks{&deck};
+    std::vector<SidewalkCrossing> hits = findSidewalkRoadCrossings(m, decks);
+    std::printf("    [trim] %zu sidewalk-on-asphalt place(s)\n", hits.size());
+    CHECK(hits.empty());
+}
