@@ -235,3 +235,52 @@ TEST_CASE(city_map_a_street_over_a_dip_keeps_its_sidewalk) {
                 bandAlongArm = true;
     CHECK(bandAlongArm);
 }
+
+// OUTLINE HYGIENE (device: "investigate and propose fixes for the other
+// spots"). Two roads leaving a junction at a sharp angle cross each other's
+// verges; the union of their ribbons leaves a 10 cm triangle as a loop of its
+// own and sub-metre out-and-back hooks on the big loop. The sweeper then built
+// a 2 m sidewalk ring around the triangle (metro census #1, 4.4 m onto the
+// deck) and followed every hook a metre into the carriageway (24 of the 29
+// remaining places). A sharp Y here: no loop smaller than the band, no
+// reversal inside a metre, and the census stays clean.
+TEST_CASE(city_map_sharp_junction_leaves_no_sliver_loops_or_hooks) {
+    RoadEntity net;
+    net.look.defaultWidth = 12.0;
+    net.look.sidewalk = 4.0;
+    net.graph.nodes = {RoadNode{Vec2(0, 0)}, RoadNode{Vec2(200, 0)}, RoadNode{Vec2(400, 0)},
+                       RoadNode{Vec2(300, 173)}, RoadNode{Vec2(120, 173)}};
+    net.graph.addEdge(0, 1, 12.0);   // east-west through
+    net.graph.addEdge(1, 2, 12.0);
+    net.graph.addEdge(1, 3, 12.0);   // 60 deg off the through road ...
+    net.graph.addEdge(1, 4, 12.0);   // ... and 115 deg the other way
+    CurbBandAudit audit;
+    RoadDeckField deck;
+    buildRoadNetMesh(net, nullptr, &audit, &deck);
+    CHECK(!audit.loops.empty());
+    int slivers = 0, hooks = 0;
+    for (const Poly2& L : audit.loops) {
+        double perim = 0.0;
+        for (std::size_t i = 0; i < L.size(); ++i) perim += (L[(i + 1) % L.size()] - L[i]).length();
+        if (std::fabs(signedArea(L)) < 1.0 || perim < 2.0) ++slivers;
+        const int n = static_cast<int>(L.size());
+        for (int i = 0; i < n; ++i) {
+            const Vec2 e0 = L[i] - L[(i + n - 1) % n], e1 = L[(i + 1) % n] - L[i];
+            const double l0 = e0.length(), l1 = e1.length();
+            if (l0 < 1e-9 || l1 < 1e-9) continue;
+            if (dot(e0, e1) / (l0 * l1) < -0.5 && std::min(l0, l1) < 1.0) ++hooks;
+        }
+    }
+    std::printf("    [hygiene] %zu loops, %d sliver loop(s), %d sub-metre reversal(s)\n",
+                audit.loops.size(), slivers, hooks);
+    CHECK(slivers == 0);
+    CHECK(hooks == 0);
+    CityMapData m;
+    m.roads = net.graph;
+    m.curbLoops = audit.loops;
+    m.sidewalkWidth = audit.sidewalkWidth > 0 ? audit.sidewalkWidth : 4.0;
+    const std::vector<const RoadDeckField*> decks{&deck};
+    std::vector<SidewalkCrossing> hits = findSidewalkRoadCrossings(m, decks);
+    std::printf("    [hygiene] %zu sidewalk-on-asphalt place(s)\n", hits.size());
+    CHECK(hits.empty());
+}

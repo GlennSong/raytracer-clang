@@ -1244,6 +1244,7 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
     // loop's right normal, outward from the asphalt in both cases).
     if (!bandRibbons.empty()) {
         std::vector<Poly2> loops;
+        int nSliverLoops = 0;
         for (Poly2& L : polygonUnion(bandRibbons)) {
             // snap-round + de-spur so band quads never fold on a hairline
             // vertex the union left behind.
@@ -1288,16 +1289,43 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
                     // detail — an arc segment, a mouth, a corner — is metres.
                     // (Gating this on the angle too left a band of 90-120 deg
                     // reversals alive, 155 of them on metro_v2.)
+                    // Judged against the BAND's scale, not centimetres (the
+                    // sidewalk census, metro_v2): 24 of the 29 remaining
+                    // sidewalk-on-asphalt places were reversals of 120-170 deg
+                    // on 0.2-0.6 m edges enclosing 0.1-0.5 m2 — out-and-back
+                    // hooks the union leaves where two roads' verges cross at a
+                    // junction corner — and each one took the band a metre into
+                    // the carriageway. A reversal sharper than 120 deg on an
+                    // edge under 1 m, or enclosing under 0.5 m2, is noise: a
+                    // real kerb never reverses inside a metre.
                     if (cosT < -0.985 || std::min(l0, l1) < 0.10 ||
-                        (cosT < -0.5 && sliver < 0.05)) {
+                        (cosT < -0.5 && (sliver < 0.5 || std::min(l0, l1) < 1.0))) {
                         c.erase(c.begin() + i);
                         changed = true;
                         break;
                     }
                 }
             }
-            if (c.size() >= 3) loops.push_back(std::move(c));
+            // A loop smaller than the band it would carry is not a kerb. The
+            // union leaves a 10 cm triangle where two verges cross at a sharp
+            // junction corner; the de-spur above never touches a triangle, and
+            // the sweeper built a 2 m sidewalk ring around it — the concrete
+            // wedge in the middle of metro's collector/local junction (census #1,
+            // 4.4 m onto the deck).
+            if (c.size() >= 3) {
+                double perim = 0.0;
+                for (std::size_t i = 0; i < c.size(); ++i)
+                    perim += (c[(i + 1) % c.size()] - c[i]).length();
+                if (std::fabs(signedArea(c)) < 1.0 || perim < 2.0) {
+                    ++nSliverLoops;
+                    continue;
+                }
+                loops.push_back(std::move(c));
+            }
         }
+        if (nSliverLoops > 0)
+            LOG_INFO << "[lattice] dropped " << nSliverLoops
+                     << " sliver curb loop(s) (area < 1 m2 or perimeter < 2 m)";
         if (auditOut) {
             auditOut->loops = loops;
             auditOut->mouthGaps = bandGaps;
