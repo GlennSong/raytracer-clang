@@ -1152,12 +1152,19 @@ int main(int argc, char** argv) {
     engine::recordRecentScene(app.settings(), relativeScenePath(levelPath));
     app.pushState(makeEditor());
     app.begin();
+    // The same control socket the standalone viewer opens (RT_CONTROL=0 turns
+    // it off): an already-open editor is attachable for scripted captures and
+    // diagnosis — `clip`/`clip?` proved the hosted overlay's clipboard here.
+    app.enableControlChannel([&makeEditor]() { return makeEditor(); });
 #ifdef RT_ENABLE_IMGUI
     // The hosted viewport's ImGui has no GLFW backend; without this its
     // clipboard is a private buffer and the overlay's Copy buttons reach
-    // nothing. Qt's clipboard is the right bridge for a Qt host, on every
-    // platform, and this window holds keyboard focus when a button is clicked.
-    if (ImGui::GetCurrentContext() != nullptr) {
+    // nothing. Under Wayland the hosted window has already installed the
+    // wl-copy/wl-paste bridge, which is proven to replace the selection on
+    // every consecutive copy (device: three Copy buttons, three identical
+    // pastes) — keep it. Qt's clipboard is the bridge everywhere else.
+    if (ImGui::GetCurrentContext() != nullptr &&
+        std::string(engine::debugUiClipboardName()) != "wl-copy/wl-paste") {
         ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
         pio.Platform_SetClipboardTextFn = [](ImGuiContext*, const char* text) {
             QGuiApplication::clipboard()->setText(QString::fromUtf8(text ? text : ""));
