@@ -127,6 +127,15 @@ struct UnionSpine {
     // heights (corridor decks/ramps) rides them; a plain street leaves it empty
     // and the profile is derived from the ground (road-unification: welder→3D).
     std::vector<double> yAbs;
+    // STRUCTURAL elevation: the chain carries authored absolute heights (a
+    // corridor deck / ramp — any node elevAbsolute) or rides a layer above
+    // grade. weldChainProfiles later fills yAbs for EVERY chain, so yAbs
+    // alone cannot say "this is a bridge"; and comparing a plain street's
+    // reconciled profile against the raw terrain cannot either — a street
+    // graded across a dip rides a fill the conform pass will carve the
+    // ground up to. Only these two flags make a chain a bridge.
+    bool authoredDeck = false;
+    int  layer = 0;
     // Per-point HALF-WIDTH (parallel to `points`; EMPTY = constant `halfWidth`).
     // Lets ONE deck WIDEN along its length — an aux-lane / gore flare at a
     // freeway diverge (road-unification one-mesher P5). The weld strokes a

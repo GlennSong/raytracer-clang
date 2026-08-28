@@ -2323,7 +2323,7 @@ bool LevelLoader::load(const std::string& path,
                 for (std::size_t i = 0; i < lrg.graph.nodes.size(); ++i) {
                     const engine::RoadNode& n = lrg.graph.nodes[i];
                     f << (i ? "," : "") << "[" << n.pos.x << "," << n.pos.y
-                      << "," << n.elev << "]";
+                      << "," << n.elev << "," << static_cast<int>(n.kind) << "]";
                 }
                 f << "],\"edges\":[";
                 for (std::size_t i = 0; i < lrg.graph.edges.size(); ++i) {

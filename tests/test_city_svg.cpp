@@ -188,3 +188,50 @@ TEST_CASE(city_map_finds_the_sidewalk_on_the_built_asphalt) {
     std::remove(path.c_str());
     CHECK(none.find("<line") == std::string::npos);   // nothing measured, nothing drawn
 }
+
+// A FILL IS NOT A BRIDGE (device: "those sidewalks cross roads — why?"). On
+// metro_v2_test the four deepest sidewalk-on-asphalt places were the four
+// ends of two locals that cross a valley: the mesher's "elevated" test (any
+// point of the reconciled profile > 1.5 m above the RAW terrain) made each
+// whole street a bridge — underside, piers, no sidewalk band — so the
+// arterial's band swept straight across their mouths. Same T as above, with
+// the north arm crossing a 12 m dip its grade-limited profile cannot follow:
+// it is still an at-grade street, keeps its band, and the census stays clean.
+TEST_CASE(city_map_a_street_over_a_dip_keeps_its_sidewalk) {
+    RoadEntity net;
+    net.look.defaultWidth = 10.0;
+    net.look.sidewalk = 3.5;
+    net.graph.nodes = {RoadNode{Vec2(0, 0)}, RoadNode{Vec2(200, 0)}, RoadNode{Vec2(400, 0)},
+                       RoadNode{Vec2(200, 200)}, RoadNode{Vec2(300, 0)}, RoadNode{Vec2(200, 100)}};
+    net.graph.addEdge(0, 1, 10.0);
+    net.graph.addEdge(1, 4, 10.0);
+    net.graph.addEdge(4, 2, 10.0);
+    net.graph.addEdge(1, 5, 10.0);   // the T arm north, in two edges ...
+    net.graph.addEdge(5, 3, 10.0);   // ... through a valley at z = 100
+    auto valley = [](Real, Real z) -> Real {
+        const Real d = std::fabs(z - 100.0);
+        return d < 30.0 ? -12.0 * (1.0 - d / 30.0) : Real(0);
+    };
+    CurbBandAudit audit;
+    RoadDeckField deck;
+    buildRoadNetMesh(net, valley, &audit, &deck);
+    CHECK(!audit.loops.empty());
+    CityMapData m;
+    m.roads = net.graph;
+    m.curbLoops = audit.loops;
+    m.sidewalkWidth = audit.sidewalkWidth > 0 ? audit.sidewalkWidth : 3.5;
+    const std::vector<const RoadDeckField*> decks{&deck};
+    std::vector<SidewalkCrossing> hits = findSidewalkRoadCrossings(m, decks);
+    std::printf("    [valley] %zu sidewalk-on-asphalt place(s); first at (%.1f, %.1f) %.2f m deep\n",
+                hits.size(), hits.empty() ? 0.0 : hits[0].pos.x, hits.empty() ? 0.0 : hits[0].pos.y,
+                hits.empty() ? 0.0 : hits[0].depth);
+    CHECK(hits.empty());
+    // The arm carries a band: some curb-loop vertex runs along its side
+    // through the valley (x ~ 200 +- (5 + 3.5), z ~ 100).
+    bool bandAlongArm = false;
+    for (const Poly2& L : audit.loops)
+        for (const Vec2& v : L)
+            if (std::fabs(v.y - 100.0) < 12.0 && std::fabs(std::fabs(v.x - 200.0) - 7.0) < 4.0)
+                bandAlongArm = true;
+    CHECK(bandAlongArm);
+}

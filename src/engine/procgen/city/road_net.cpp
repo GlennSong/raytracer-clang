@@ -312,6 +312,7 @@ static std::vector<UnionSpine> weldChainSpines(const RoadGraph& g) {
         while (!used[e]) {
             used[e] = 1;
             lastE = e;
+            s.layer = std::max(s.layer, g.edges[e].layer);
             int nx = (g.edges[e].a == prev) ? g.edges[e].b : g.edges[e].a;
             if (closed && nx == startNode) break;
             s.points.push_back(g.nodes[nx].pos);
@@ -324,6 +325,7 @@ static std::vector<UnionSpine> weldChainSpines(const RoadGraph& g) {
             prev = nx; e = ne;
         }
         s.accessBack = g.edges[lastE].access;   // the back end's edge (#21)
+        s.authoredDeck = anyAbs;
         if (anyAbs && ys.size() == s.points.size()) s.yAbs = std::move(ys);
         return s;
     };
@@ -606,17 +608,48 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
     std::vector<char> chainElevated(chains.size(), 0);
     struct KeepOutSeg { Vec2 a, b; double hw; };
     std::vector<KeepOutSeg> pierKeepOut;
+    int nElevated = 0, nElevatedStreets = 0;
     for (std::size_t ci = 0; ci < chains.size(); ++ci) {
         const UnionSpine& cs = chains[ci];
         bool up = false;
+        double lift = 0.0;
+        Vec2 liftAt(0, 0);
         if (cs.yAbs.size() == cs.points.size())
-            for (std::size_t i = 0; i < cs.points.size() && !up; ++i)
-                if (cs.yAbs[i] - ground(cs.points[i].x, cs.points[i].y) > 1.5) up = true;
+            for (std::size_t i = 0; i < cs.points.size(); ++i) {
+                const double d = cs.yAbs[i] - ground(cs.points[i].x, cs.points[i].y);
+                if (d > lift) { lift = d; liftAt = cs.points[i]; }
+                if (d > 1.5) up = true;
+            }
+        // A BRIDGE is structural, not a height difference: authored deck
+        // heights (corridor decks/ramps) or a layer above grade. A plain
+        // street whose grade-limited profile rides a fill over a dip is still
+        // an at-grade street — the conform pass carves the ground up to it.
+        // The old test (any point > 1.5 m above the RAW terrain) turned two
+        // metro locals crossing valleys into "bridges": no sidewalk band, so
+        // the arterial's band swept straight across their mouths at all four
+        // ends (the city map's deepest four sidewalk-on-asphalt places).
+        up = up && (cs.authoredDeck || cs.layer > 0);
         chainElevated[ci] = up;
+        if (up) {
+            ++nElevated;
+            const bool street = cs.klass != RoadClass::Freeway && cs.klass != RoadClass::Ramp;
+            if (street) ++nElevatedStreets;
+            if (std::getenv("RT_LATTICE_DEBUG"))
+                LOG_INFO << "[lattice] chain " << ci << " class " << static_cast<int>(cs.klass)
+                         << " flagged ELEVATED: rides " << lift << " m above ground at ("
+                         << liftAt.x << ", " << liftAt.y << "), " << cs.points.size()
+                         << " pts from (" << cs.points.front().x << ", " << cs.points.front().y
+                         << ") to (" << cs.points.back().x << ", " << cs.points.back().y << ")"
+                         << (street ? " — a STREET: bridge treatment, no sidewalk band" : "");
+        }
         if (!up)
             for (std::size_t i = 0; i + 1 < cs.points.size(); ++i)
                 pierKeepOut.push_back({ cs.points[i], cs.points[i + 1], cs.halfWidth });
     }
+    if (nElevatedStreets > 0)
+        LOG_INFO << "[lattice] " << nElevated << " chains elevated, " << nElevatedStreets
+                 << " of them STREETS (bridge treatment: no sidewalk band; the junction "
+                    "pad's mouth becomes a band boundary — RT_LATTICE_DEBUG=1 lists them)";
     auto pierBlocked = [&](const Vec2& p) {
         for (const KeepOutSeg& k : pierKeepOut) {
             const Vec2 ab = k.b - k.a;
