@@ -199,6 +199,8 @@ struct LotPlanDebug {
     int rejClear = 0;    // no inset of the plan cleared the road corridors
     int rejBox = 0;      // box fallback rejected (fill / shrink-fit too small)
     int rejFrontage = 0; // whole footprint too far from any road surface
+    int bisectedBlocks = 0;   // blocks the frontage walk failed on, filled by
+                              // blind bisection (lots with no street by design)
     int rejRelief = 0;   // ground range across the lot exceeds maxPadRelief
 };
 

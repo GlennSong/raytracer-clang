@@ -280,8 +280,9 @@ bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int distric
 }  // namespace
 
 std::vector<Lot> subdivideBlock(const Poly2& block, const ParcelParams& params,
-                                int district) {
+                                int district, bool* bisectedOut) {
     std::vector<Lot> lots;
+    if (bisectedOut) *bisectedOut = false;
     if (block.size() < 3) return lots;
     Poly2 b = block;
     ensureCCW(b);
@@ -294,6 +295,12 @@ std::vector<Lot> subdivideBlock(const Poly2& block, const ParcelParams& params,
     // thin enough that both halves reach opposite streets).
     if (parcelFrontage(b, params, rng, district, lots)) return lots;
 
+    // BLIND BISECTION. It divides land with no reference to the roads, so on a
+    // block the walk could not handle it produced plots up to 215 m from the
+    // nearest street — the "buildings in places without roads at all" the
+    // device reported. Reported so a caller can count it; the real answer is
+    // upstream, where a face that never got streets should have.
+    if (bisectedOut) *bisectedOut = true;
     std::vector<Poly2> pieces;
     subdivide(b, params, rng, pieces, 0);
     Vec2 blockCenter = centroid(b);

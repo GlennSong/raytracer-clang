@@ -1467,7 +1467,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 continue;
             }
         }
-        std::vector<Lot> lots = subdivideBlock(foot, bf.pp);
+        bool bisected = false;
+        std::vector<Lot> lots = subdivideBlock(foot, bf.pp, 0, &bisected);
+        if (bisected) ++dbg->bisectedBlocks;
         // RT_PARCEL_DEBUG: the per-block view the [citylots] summary cannot give.
         // The summary says how many lots a city produced; this says which blocks
         // produced them, at what district grain, on what shape of interior — which
@@ -2644,7 +2646,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                  << dbg->rejFrontage << ", relief " << dbg->rejRelief
                  << " | alleys " << dbg->alleys.size()
                  << " | " << blocksAllCarriageway
-                 << " blocks all carriageway";
+                 << " blocks all carriageway"
+                 << " | " << dbg->bisectedBlocks
+                 << " blocks BLIND-BISECTED (no street reference)";
     }
     return out;
 }

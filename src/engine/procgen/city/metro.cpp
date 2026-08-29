@@ -1163,6 +1163,20 @@ RoadGraph buildMetro(const MetroParams& p,
         const double siteBlock = sites[hots[h].site].blockSize;
         const double mn = siteBlock * kindBlockMul[kind] * 0.6;
         const double mx = siteBlock * kindBlockMul[kind] * 1.18;
+        // A RADIAL hub fills its CORE with rings and spokes; the rest of the
+        // face still gets the ordinary grid below (device: "there are
+        // buildings in places without roads at all"). The ring radius is the
+        // distance to the NEAREST face corner, which is right for the core and
+        // hopeless as a whole-face fill: metro's one radial face is 848 x 964 m
+        // and irregular, so the rings covered a small disc and left ~90% — 33.6
+        // hectares of flat, buildable ground — with no streets at all. That
+        // leftover became a single giant block, the lot parceller's frontage
+        // walk failed on its ragged outline, and its blind fallback filled it
+        // with plots. Rings alone cannot fix it: 12 spokes across 850 m leave
+        // them 220 m apart at the rim, and more spokes all converge on one
+        // node. So the core stays radial and the grid takes the remainder.
+        double coreR = 0.0;
+        Vec2 coreC(0, 0);
         if (hots[h].radial && pointInPolygon(f, hots[h].pos)) {
             ++nRadial;
             Vec2 C = hots[h].pos; int spokes = 12;
@@ -1184,7 +1198,10 @@ RoadGraph buildMetro(const MetroParams& p,
                     if (r < static_cast<int>(sn[sd].size()) && r < static_cast<int>(sn[s2].size()))
                         full.addEdge(sn[sd][r], sn[s2][r], p.streetWidth, RoadClass::Local);
                 }
-        } else {
+            coreC = C;
+            coreR = R;
+        }
+        {
             std::vector<Cut> streets;
             // v2 stage 3/3b: a district-appropriate GRID TEMPLATE fills the
             // block — clean by construction (replacing the jittered
@@ -1320,6 +1337,9 @@ RoadGraph buildMetro(const MetroParams& p,
                          << " ha at (" << c.x << ", " << c.y << ") via "
                          << (fabricHandled ? "fabric" : "gridFill");
             for (const Cut& s : streets) {
+                // The rings own the core: drop a grid cut that lands inside it
+                // rather than laying a second street pattern over the first.
+                if (coreR > 0.0 && ((s.a + s.b) * 0.5 - coreC).length() < coreR) continue;
                 int a = full.addNode(s.a, 6.0), b = full.addNode(s.b, 6.0);
                 if (s.collector)
                     full.addEdge(a, b, p.collectorWidth, RoadClass::Collector);

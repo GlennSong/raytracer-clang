@@ -53,8 +53,13 @@ struct ParcelParams {
 };
 
 // Subdivide a (CCW, simple) block footprint into lots. Deterministic for the seed.
+// `bisectedOut` (optional) reports that the frontage walk FAILED and the blind
+// bisection fallback ran — which divides land with no reference to the roads at
+// all, so its lots can sit hundreds of metres from one. Callers count it: a
+// block that lands there is a bug upstream (a face that never got streets), not
+// a shape to be filled anyway.
 std::vector<Lot> subdivideBlock(const Poly2& block, const ParcelParams& params,
-                                int district = 0);
+                                int district = 0, bool* bisectedOut = nullptr);
 
 }  // namespace engine
 
