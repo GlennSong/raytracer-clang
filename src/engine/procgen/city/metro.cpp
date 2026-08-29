@@ -4,6 +4,7 @@
 #include "road_constraints.h"   // consolidateJunctionSpans (big-block skeleton)
 #include "patch_fabric.h"       // P7 patch-conforming fabric (chords/bisect/court)
 #include "../../../profile.h"
+#include "../../../log.h"       // [fabric]: which faces got streets, and which did not
 
 #include <algorithm>
 #include <array>
@@ -1110,16 +1111,60 @@ RoadGraph buildMetro(const MetroParams& p,
     const double kindCrook[5]    = {0.0, 0.05, 0.10, 0.45, 0.18};
     const double collectorSpan =
         p.collectorSpan > 0 ? p.collectorSpan : sites[0].blockSize * 3.0;
+    // WHAT HAPPENED TO EACH FACE (device: "there are buildings in places
+    // without roads at all"). A face the street fill SKIPS keeps no interior
+    // roads, so block extraction later hands the whole thing to the lot
+    // parceller as one giant block. Counted always, named under
+    // RT_FABRIC_DEBUG=1, because the failure is silent otherwise.
+    int nFace = 0, nSkipUnbuildable = 0, nSkipOutside = 0, nRadial = 0,
+        nFabric = 0, nGrid = 0;
+    double skipWorstArea = 0.0;
+    Vec2 skipWorstAt(0, 0);
+    const bool fabricDebug = std::getenv("RT_FABRIC_DEBUG") != nullptr;
     for (const Poly2& f : faces) {
         if (f.size() < 3) continue;
+        ++nFace;
         Vec2 c = centroid(f);
-        if (gated && !buildable(c.x, c.y)) continue;   // don't fill a block that's mostly water/steep
+        // A CONCAVE face's centroid can fall outside the face itself, and on a
+        // big irregular one it is a single point standing in for hectares —
+        // so record what this one-point test is deciding.
+        const bool cIn = pointInPolygon(f, c);
+        if (fabricDebug) {
+            double x0 = 1e30, x1 = -1e30, z0 = 1e30, z1 = -1e30;
+            for (const Vec2& v : f) {
+                x0 = std::min(x0, v.x); x1 = std::max(x1, v.x);
+                z0 = std::min(z0, v.y); z1 = std::max(z1, v.y);
+            }
+            // RT_FABRIC_AT="x,z": does this face cover the point we are chasing?
+            bool hit = false;
+            if (const char* at = std::getenv("RT_FABRIC_AT")) {
+                double px = 0, pz = 0;
+                if (std::sscanf(at, "%lf,%lf", &px, &pz) == 2)
+                    hit = pointInPolygon(f, Vec2(px, pz));
+            }
+            LOG_INFO << "[fabric] face " << std::fabs(area(f)) / 10000.0 << " ha  x ["
+                     << x0 << ".." << x1 << "]  z [" << z0 << ".." << z1 << "]  centroid ("
+                     << c.x << ", " << c.y << ") " << (cIn ? "inside" : "OUTSIDE")
+                     << (hit ? "   <== COVERS THE PROBE POINT" : "");
+        }
+        if (gated && !buildable(c.x, c.y)) {   // don't fill a block that's mostly water/steep
+            ++nSkipUnbuildable;
+            if (!cIn) ++nSkipOutside;
+            const double fa = std::fabs(area(f));
+            if (fa > skipWorstArea) { skipWorstArea = fa; skipWorstAt = c; }
+            if (fabricDebug)
+                LOG_INFO << "[fabric] SKIP face " << fa / 10000.0 << " ha at (" << c.x
+                         << ", " << c.y << "): centroid "
+                         << (cIn ? "inside" : "OUTSIDE the face") << " and not buildable";
+            continue;
+        }
         int h = nearestHot(c);
         const int kind = std::clamp(hots[h].kind, 0, 4);
         const double siteBlock = sites[hots[h].site].blockSize;
         const double mn = siteBlock * kindBlockMul[kind] * 0.6;
         const double mx = siteBlock * kindBlockMul[kind] * 1.18;
         if (hots[h].radial && pointInPolygon(f, hots[h].pos)) {
+            ++nRadial;
             Vec2 C = hots[h].pos; int spokes = 12;
             double ringStep = std::max({40.0, siteBlock * 0.8, p.minBlockEdge});
             double R = 1e30; for (const Vec2& v : f) R = std::min(R, (v - C).length()); R *= 0.96;
@@ -1269,6 +1314,11 @@ RoadGraph buildMetro(const MetroParams& p,
             }
             if (!fabricHandled)
                 gridFill(f, cell, cellLong, collectorSpan, crook, rng, streets);
+            (fabricHandled ? nFabric : nGrid)++;
+            if (fabricDebug && streets.empty())
+                LOG_INFO << "[fabric] NO CUTS for face " << std::fabs(area(f)) / 10000.0
+                         << " ha at (" << c.x << ", " << c.y << ") via "
+                         << (fabricHandled ? "fabric" : "gridFill");
             for (const Cut& s : streets) {
                 int a = full.addNode(s.a, 6.0), b = full.addNode(s.b, 6.0);
                 if (s.collector)
@@ -1278,6 +1328,15 @@ RoadGraph buildMetro(const MetroParams& p,
             }
         }
     }
+    LOG_INFO << "[fabric] " << nFace << " faces: " << nFabric << " fabric, " << nGrid
+             << " grid, " << nRadial << " radial, " << nSkipUnbuildable
+             << " SKIPPED as unbuildable (" << nSkipOutside
+             << " of those judged by a centroid lying OUTSIDE the face)"
+             << (skipWorstArea > 0.0
+                     ? "; largest skipped " + std::to_string(skipWorstArea / 10000.0) +
+                           " ha at (" + std::to_string(skipWorstAt.x) + ", " +
+                           std::to_string(skipWorstAt.y) + ")"
+                     : "");
     return planarize(full, 1.0);
 }
 
