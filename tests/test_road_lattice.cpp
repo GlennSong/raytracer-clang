@@ -967,3 +967,54 @@ TEST_CASE(band_gaps_across_a_ramp_mouth) {
     for (double h : hits) raised |= (h > 0.10 && h < 0.4);
     CHECK(raised);
 }
+
+// LANE DIVIDERS (device: "can't it do multilane roads and yet I never see
+// that"). The surface shaders in all three backends paint a dashed white lane
+// line wherever the road's lateral paint coordinate exceeds 3.5 — and no
+// profile ever emitted a value above 3, so no road in the game had ever shown
+// one. The carriageway profile now lays a narrow strip carrying 4.0 at each
+// internal lane boundary, with the lane count coming from the road's class.
+TEST_CASE(carriageway_paints_a_lane_divider_per_internal_boundary) {
+    auto stripCount = [](const RoadProfile& p) {
+        int runs = 0;
+        bool in = false;
+        for (const ProfileCol& c : p.cols) {
+            const bool hot = c.mu > 3.5f;
+            if (hot && !in) ++runs;
+            in = hot;
+        }
+        return runs;
+    };
+    auto span = [](const RoadProfile& p) {   // widest painted strip, metres
+        double lo = 1e9, hi = -1e9;
+        for (const ProfileCol& c : p.cols)
+            if (c.mu > 3.5f) { lo = std::min(lo, c.absOffset); hi = std::max(hi, c.absOffset); }
+        return hi > lo ? hi - lo : 0.0;
+    };
+    // A two-lane street: its only internal boundary is the centreline, which
+    // wears the double yellow — so no dashed divider at all.
+    const RoadProfile local = carriagewayProfile(1, 2, /*oneWay=*/false);
+    std::printf("    [lanes] 2-lane street: %d divider(s)\n", stripCount(local));
+    CHECK(stripCount(local) == 0);
+    // A four-lane arterial: one either side of the centreline.
+    const RoadProfile arterial = carriagewayProfile(2, 4, /*oneWay=*/false);
+    std::printf("    [lanes] 4-lane arterial: %d divider(s), %.2f m wide\n",
+                stripCount(arterial), span(arterial));
+    CHECK(stripCount(arterial) == 2);
+    CHECK_APPROX(span(arterial), 0.15, 0.001);
+    // A one-way carriageway has no centreline to skip: 3 lanes -> 2 dividers.
+    const RoadProfile oneWay = carriagewayProfile(3, 3, /*oneWay=*/true);
+    std::printf("    [lanes] 3-lane one-way: %d divider(s)\n", stripCount(oneWay));
+    CHECK(stripCount(oneWay) == 2);
+    // Columns stay sorted by lateral position: the sweeper builds quads between
+    // CONSECUTIVE columns, so an out-of-order strip would fold the surface.
+    for (const RoadProfile* p : {&local, &arterial, &oneWay}) {
+        bool sorted = true;
+        for (std::size_t i = 1; i < p->cols.size(); ++i)
+            if (p->cols[i].edgeFrac + p->cols[i].absOffset * 0.001 <
+                p->cols[i - 1].edgeFrac + p->cols[i - 1].absOffset * 0.001 - 1e-9)
+                sorted = false;
+        CHECK(sorted);
+    }
+    CHECK(stripCount(carriagewayProfile(1, 1, /*oneWay=*/true)) == 0);
+}

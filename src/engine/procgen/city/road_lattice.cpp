@@ -313,18 +313,55 @@ RoadProfile streetProfile(int lanesPerSide, double sidewalkWidth, double curbHei
     return p;
 }
 
-RoadProfile carriagewayProfile(int lanesPerSide) {
+RoadProfile carriagewayProfile(int lanesPerSide, int laneCount, bool oneWay) {
     RoadProfile p;
     const Vec3 asphalt(0.10, 0.10, 0.11);
     const int cw = std::max(3, 2 * std::max(1, lanesPerSide) + 1);
+    // Internal lane boundaries, as fractions of the half-width. A two-way road
+    // skips its CENTRE one: that boundary wears the yellow centreline, not a
+    // dashed white divider.
+    const int lanes = std::max(1, laneCount);
+    std::vector<double> dividers;
+    for (int i = 1; i < lanes; ++i) {
+        const double f = -1.0 + 2.0 * i / lanes;
+        if (!oneWay && std::fabs(f) < 1e-6) continue;
+        dividers.push_back(f);
+    }
+    // A painted line is ~0.15 m wide however wide the road is, so the strip is
+    // an ABSOLUTE offset either side of the boundary, not a fraction of it. The
+    // two shoulder columns 5 cm further out carry the ordinary asphalt
+    // coordinate, so the step up to mu = 4 happens across 5 cm instead of
+    // ramping over half a lane and smearing one dash into a metre-wide band.
+    const double kHalfLine = 0.075, kEps = 0.05;
+    auto paint = [&](double f, double off, float mu) {
+        return pc(f, off, 0, 0.0, 1.0, mu, asphalt);
+    };
+    auto strip = [&](double d) {
+        const float shoulder = static_cast<float>(2.0 + d);
+        p.cols.push_back(paint(d, -kHalfLine - kEps, shoulder));
+        p.cols.push_back(paint(d, -kHalfLine, 4.0f));
+        p.cols.push_back(paint(d, +kHalfLine, 4.0f));
+        p.cols.push_back(paint(d, +kHalfLine + kEps, shoulder));
+    };
+    std::size_t next = 0;
     for (int j = 0; j < cw; ++j) {
         const double f = -1.0 + 2.0 * j / (cw - 1);
+        // Every divider that falls before this sample column, in order — the
+        // sweeper builds quads between CONSECUTIVE columns, so the list has to
+        // stay sorted by lateral position.
+        while (next < dividers.size() && dividers[next] < f - 1e-9) strip(dividers[next++]);
+        // A sample column that IS a boundary is replaced by the strip.
+        if (next < dividers.size() && std::fabs(dividers[next] - f) < 1e-9) {
+            strip(dividers[next++]);
+            continue;
+        }
         // curb-face crease at the verges: tilt the edge column's normal a little
         // so the curb band beside it reads as a step rather than flat asphalt.
         const double nl = (j == 0) ? 0.4 : (j == cw - 1 ? -0.4 : 0.0);
         p.cols.push_back(pc(f, 0, 0, nl, j == 0 || j == cw - 1 ? 0.9 : 1.0,
                             static_cast<float>(2.0 + f), asphalt));
     }
+    while (next < dividers.size()) strip(dividers[next++]);
     return p;
 }
 

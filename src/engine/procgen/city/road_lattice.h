@@ -173,7 +173,22 @@ RenderMesh junctionPatch(std::vector<JunctionArm> arms,
 // bodies + pads; curb + sidewalk belong to the closed band below). Columns are
 // the streetProfile asphalt columns (crease normals at the verges), nothing
 // else — a body can no longer sweep a sidewalk into a pad or a neighbour.
-RoadProfile carriagewayProfile(int lanesPerSide);
+// `laneCount` is the road's REAL lane count (lanesForClass, the one source the
+// nav lanes already use) and drives the painted lane DIVIDERS: a narrow strip
+// carrying mu = 4 at every internal lane boundary, which is the coordinate the
+// surface shaders have always tested for (`if (mu > 3.5)` -> dashed white, in
+// all three backends) and which nothing ever emitted, so no road in the game
+// has ever shown a lane line. A two-way road skips its centre boundary — that
+// one wears the yellow centreline. `oneWay` (a motorway carriageway, a slip
+// road) has no centre to skip, so every boundary is dashed.
+//
+// (The white EDGE line is still the shader's fixed 86% of the half-width, which
+// is wrong on a street with kerbside parking — 5.16 m out on a 12 m street
+// whose parked cars sit centred at 4.75 m, so it is painted through them.
+// Fixing that needs a paint coordinate the shaders don't have yet; it is its
+// own round, in all three backends plus the offline tracer.)
+RoadProfile carriagewayProfile(int lanesPerSide, int laneCount = 2,
+                               bool oneWay = false);
 
 // The raised curb + sidewalk BAND, swept along each closed boundary loop of
 // the asphalt union (per block, wrapping kerb-return corners and dead-end

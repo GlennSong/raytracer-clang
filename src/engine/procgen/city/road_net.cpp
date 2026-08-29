@@ -860,7 +860,15 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
         UnionSpine t = trimSpine(s, rA, rB);
         if (t.points.size() < 2) continue;
 
-        const int lanesPerSide = std::max(1, static_cast<int>(std::lround(s.halfWidth / 3.6)));
+        // LANES come from the road's CLASS — the one lanesForClass() source the
+        // nav lanes already use, so the painted dividers and the lanes cars
+        // actually drive in agree by construction. Dividing the width by a
+        // nominal 3.6 m (what this did) is a guess that disagreed with both:
+        // it made every 12 m street "2 lanes per side" and every road, however
+        // wide, was painted as a plain two-laner because the strip that carries
+        // a divider was never emitted at all.
+        const int laneTotal = std::max(1, lanesForClass(s.klass, /*perDirection=*/false));
+        const int lanesPerSide = std::max(1, laneTotal / 2);
         const bool elevated = chainElevated[ci] != 0;
         const bool isFwy = s.klass == RoadClass::Freeway;
         const bool isRamp = s.klass == RoadClass::Ramp;
@@ -1012,8 +1020,10 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
             // + sidewalk band owns everything outside the asphalt — a body can
             // no longer sweep a raised sidewalk into a pad or a neighbour.
             const std::size_t v0 = out.vertices.size();
-            MeshBuilder::append(out, sweepRoadLattice(t, carriagewayProfile(lanesPerSide),
-                                                      ground, 2.0, nullptr, &ring0, &ringN));
+            MeshBuilder::append(out,
+                                sweepRoadLattice(t, carriagewayProfile(lanesPerSide, laneTotal,
+                                                                       /*oneWay=*/false),
+                                                 ground, 2.0, nullptr, &ring0, &ringN));
             // LANDING/gore MOUTH GAP (#20, review S4b): where a STREET body
             // meets a ramp landing, gap the sidewalk band across its mouth —
             // exactly as the freeway/ramp branch does. Otherwise the street's
