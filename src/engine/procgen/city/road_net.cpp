@@ -317,6 +317,16 @@ static std::vector<UnionSpine> weldChainSpines(const RoadGraph& g) {
         s.halfWidth = g.edges[e0].width * 0.5;
         s.klass = g.edges[e0].klass;             // carry class into the weld (P1)
         s.access = g.edges[e0].access;           // semantic access bits (#17/#21)
+        // Where the travel lanes stop, from the kerbside PARKING band the edge
+        // already carries (resolved from the spec so nav/sim never need the
+        // table). The paint follows the road's real section from here on: a
+        // lane divider belongs on a lane boundary, and the white edge line on
+        // the parking line — not at a share of the whole carriageway.
+        if (g.edges[e0].parkWidth > 0 && s.halfWidth > 1e-6) {
+            const double travelEdge =
+                g.edges[e0].parkOffset - g.edges[e0].parkWidth * 0.5;
+            s.travelEdgeFrac = std::max(0.15, std::min(1.0, travelEdge / s.halfWidth));
+        }
         s.closed = closed;
         s.points.push_back(g.nodes[v].pos);
         // 3-D channel (welder-goes-3D): a chain with ANY absolute deck Y
@@ -1021,8 +1031,10 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
             // no longer sweep a raised sidewalk into a pad or a neighbour.
             const std::size_t v0 = out.vertices.size();
             MeshBuilder::append(out,
-                                sweepRoadLattice(t, carriagewayProfile(lanesPerSide, laneTotal,
-                                                                       /*oneWay=*/false),
+                                sweepRoadLattice(t,
+                                                 carriagewayProfile(lanesPerSide, laneTotal,
+                                                                    /*oneWay=*/false,
+                                                                    s.travelEdgeFrac),
                                                  ground, 2.0, nullptr, &ring0, &ringN));
             // LANDING/gore MOUTH GAP (#20, review S4b): where a STREET body
             // meets a ramp landing, gap the sidewalk band across its mouth —
@@ -2721,6 +2733,14 @@ void applyGenerateRecipe(RoadEntity& road, const json& g, const RoadGroundFn& he
         std::vector<std::pair<RoadClass, double>> key;
         for (RoadEdge& e : road.graph.edges) {
             const RoadClass k = e.klass;
+            // Arterials/boulevards/freeways/ramps are left specless: today's
+            // look. (Giving arterials kerbside parking needs 19 m to keep the
+            // design table's 3.5 m lane — their 17 m is four lanes of 4.25 m —
+            // and MEASURED on metro_v2 that costs 97 buildings, puts a signal
+            // pole 0.15 m onto the carriageway, and takes the worst lot-over-
+            // ground gap 0.97 -> 3.04 m. The city is tuned around 17 m
+            // arterials; widening them is its own round, with the sidewalk
+            // narrowed per class so the building line does not move.)
             if (k != RoadClass::Local && k != RoadClass::Collector) continue;
             if (e.layer != 0) continue;              // a deck/bridge has no frontage
             const double w = e.width;

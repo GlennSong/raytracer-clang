@@ -136,6 +136,12 @@ struct UnionSpine {
     // ground up to. Only these two flags make a chain a bridge.
     bool authoredDeck = false;
     int  layer = 0;
+    // Where the TRAVEL lanes end, as a fraction of the half-width (1.0 = at
+    // the kerb, no kerbside parking). A 12 m street with 2.5 m parking bays
+    // carries travel lanes only out to 3.5 m of its 6 m half-width, so this is
+    // 0.583 — and both the painted lane dividers and the white edge line
+    // belong at THAT boundary, not at a share of the whole carriageway.
+    double travelEdgeFrac = 1.0;
     // Per-point HALF-WIDTH (parallel to `points`; EMPTY = constant `halfWidth`).
     // Lets ONE deck WIDEN along its length — an aux-lane / gore flare at a
     // freeway diverge (road-unification one-mesher P5). The weld strokes a

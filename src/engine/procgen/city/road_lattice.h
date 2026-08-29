@@ -182,13 +182,17 @@ RenderMesh junctionPatch(std::vector<JunctionArm> arms,
 // one wears the yellow centreline. `oneWay` (a motorway carriageway, a slip
 // road) has no centre to skip, so every boundary is dashed.
 //
-// (The white EDGE line is still the shader's fixed 86% of the half-width, which
-// is wrong on a street with kerbside parking — 5.16 m out on a 12 m street
-// whose parked cars sit centred at 4.75 m, so it is painted through them.
-// Fixing that needs a paint coordinate the shaders don't have yet; it is its
-// own round, in all three backends plus the offline tracer.)
+// `travelEdgeFrac` is where the travel lanes END as a fraction of the
+// half-width (1.0 = at the kerb). On a street with kerbside parking they stop
+// at the parking band, and TWO things follow from it: the lane boundaries are
+// spaced across the travel width, not the whole carriageway; and the paint
+// coordinate BENDS so the shaders' white edge line — which lives at a fixed
+// |mu - 2| = 0.86 in all three backends — lands on the parking line instead of
+// 5.16 m out on a 12 m street, where it was painted straight through the
+// parked cars sitting centred at 4.75 m. No shader change: the road warps the
+// coordinate it hands them.
 RoadProfile carriagewayProfile(int lanesPerSide, int laneCount = 2,
-                               bool oneWay = false);
+                               bool oneWay = false, double travelEdgeFrac = 1.0);
 
 // The raised curb + sidewalk BAND, swept along each closed boundary loop of
 // the asphalt union (per block, wrapping kerb-return corners and dead-end

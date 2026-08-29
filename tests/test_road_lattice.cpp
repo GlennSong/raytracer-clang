@@ -1018,3 +1018,48 @@ TEST_CASE(carriageway_paints_a_lane_divider_per_internal_boundary) {
     }
     CHECK(stripCount(carriagewayProfile(1, 1, /*oneWay=*/true)) == 0);
 }
+
+// THE PAINT FOLLOWS THE SECTION (device: "if there's parking it should
+// accommodate that"). On a street with kerbside parking the travel lanes stop
+// at the parking line, so a lane boundary belongs there — and so does the
+// white edge line, which all three backends put at a fixed |mu - 2| = 0.86.
+// The profile bends its paint coordinate to put 0.86 on the parking line, so
+// no shader changes and the kerb still reads 1 / 3.
+TEST_CASE(carriageway_paint_follows_the_parking_line) {
+    auto muNear = [](const RoadProfile& p, double f) {
+        // The paint coordinate at the column nearest this lateral fraction.
+        double best = 1e9; float mu = 0;
+        for (const ProfileCol& c : p.cols) {
+            if (c.mu > 3.5f) continue;               // a divider strip, not the map
+            const double d = std::fabs(c.edgeFrac + c.absOffset * 1e-6 - f);
+            if (d < best) { best = d; mu = c.mu; }
+        }
+        return static_cast<double>(mu);
+    };
+    // A 12 m street: 2.5 m bays, so travel ends at 3.5 m of the 6 m half-width.
+    const double te = 3.5 / 6.0;
+    const RoadProfile park = carriagewayProfile(1, 2, /*oneWay=*/false, te);
+    std::printf("    [paint] parking line mu = %.3f (want 2.86), kerb mu = %.3f (want 3.0)\n",
+                muNear(park, te), muNear(park, 1.0));
+    CHECK_APPROX(muNear(park, te), 2.86, 0.02);      // the edge line lands HERE
+    CHECK_APPROX(muNear(park, 1.0), 3.0, 0.02);      // kerb unchanged: bars + gate safe
+    CHECK_APPROX(muNear(park, 0.0), 2.0, 0.02);      // centreline unmoved
+    // Without parking the map is the plain linear one it has always been.
+    const RoadProfile plain = carriagewayProfile(2, 4, /*oneWay=*/false, 1.0);
+    CHECK_APPROX(muNear(plain, 1.0), 3.0, 0.02);
+    CHECK_APPROX(muNear(plain, 0.5), 2.5, 0.02);
+    // A 19 m arterial with 2.5 m bays: travel ends at 7 m of 9.5, and its two
+    // dividers sit on the LANE boundaries (3.5 m = 0.368) — not at a quarter
+    // of the whole carriageway (4.75 m = 0.5), which is inside the bay.
+    const double ate = 7.0 / 9.5;
+    const RoadProfile art = carriagewayProfile(2, 4, /*oneWay=*/false, ate);
+    std::vector<double> at;
+    for (const ProfileCol& c : art.cols)
+        if (c.mu > 3.5f && c.absOffset > 0) at.push_back(c.edgeFrac);
+    std::sort(at.begin(), at.end());
+    at.erase(std::unique(at.begin(), at.end()), at.end());
+    std::printf("    [paint] arterial dividers at %.3f (want %.3f = 3.5 m of 9.5 m)\n",
+                at.empty() ? 0.0 : at.back(), 3.5 / 9.5);
+    CHECK(at.size() == 2);
+    CHECK_APPROX(std::fabs(at.back()), 3.5 / 9.5, 0.01);
+}

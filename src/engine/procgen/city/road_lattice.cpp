@@ -313,17 +313,35 @@ RoadProfile streetProfile(int lanesPerSide, double sidewalkWidth, double curbHei
     return p;
 }
 
-RoadProfile carriagewayProfile(int lanesPerSide, int laneCount, bool oneWay) {
+RoadProfile carriagewayProfile(int lanesPerSide, int laneCount, bool oneWay,
+                               double travelEdgeFrac) {
     RoadProfile p;
     const Vec3 asphalt(0.10, 0.10, 0.11);
     const int cw = std::max(3, 2 * std::max(1, lanesPerSide) + 1);
-    // Internal lane boundaries, as fractions of the half-width. A two-way road
-    // skips its CENTRE one: that boundary wears the yellow centreline, not a
-    // dashed white divider.
+    const double te = std::max(0.15, std::min(1.0, travelEdgeFrac));
+    const bool parked = te < 0.999;
+    // The PAINT COORDINATE: 1 at the left kerb, 2 at the centreline, 3 at the
+    // right — all three backends read the carriageway out of that range and
+    // put the white edge line at a fixed |mu - 2| = 0.86. On a street with
+    // kerbside parking the travel lanes stop well before the kerb, so bend the
+    // mapping at the parking line: 0.86 lands exactly there, and the parking
+    // band gets the remaining 0.86..1.0. The kerb still reads 1/3, so the
+    // sidewalk gate and the crosswalk bars are untouched. Without parking it
+    // is the plain linear map it has always been.
+    auto muAt = [&](double f) {
+        if (!parked) return 2.0 + f;
+        const double s = f < 0 ? -1.0 : 1.0, a = std::fabs(f);
+        if (a <= te) return 2.0 + s * 0.86 * (a / te);
+        return 2.0 + s * (0.86 + 0.14 * (a - te) / (1.0 - te));
+    };
+    // Internal lane boundaries, spaced across the TRAVEL width (a lane
+    // boundary is between lanes, not between a lane and a parking bay). A
+    // two-way road skips its CENTRE one: that boundary wears the double
+    // yellow, not a dashed white divider.
     const int lanes = std::max(1, laneCount);
     std::vector<double> dividers;
     for (int i = 1; i < lanes; ++i) {
-        const double f = -1.0 + 2.0 * i / lanes;
+        const double f = te * (-1.0 + 2.0 * i / lanes);
         if (!oneWay && std::fabs(f) < 1e-6) continue;
         dividers.push_back(f);
     }
@@ -337,29 +355,40 @@ RoadProfile carriagewayProfile(int lanesPerSide, int laneCount, bool oneWay) {
         return pc(f, off, 0, 0.0, 1.0, mu, asphalt);
     };
     auto strip = [&](double d) {
-        const float shoulder = static_cast<float>(2.0 + d);
+        const float shoulder = static_cast<float>(muAt(d));
         p.cols.push_back(paint(d, -kHalfLine - kEps, shoulder));
         p.cols.push_back(paint(d, -kHalfLine, 4.0f));
         p.cols.push_back(paint(d, +kHalfLine, 4.0f));
         p.cols.push_back(paint(d, +kHalfLine + kEps, shoulder));
     };
+    // Plain sample columns: the even spacing the deck sweeps on, plus a column
+    // ON each parking line so the bend in the paint coordinate is exact rather
+    // than interpolated across half a lane.
+    std::vector<double> plain;
+    for (int j = 0; j < cw; ++j) plain.push_back(-1.0 + 2.0 * j / (cw - 1));
+    if (parked) { plain.push_back(-te); plain.push_back(te); }
+    std::sort(plain.begin(), plain.end());
+    plain.erase(std::unique(plain.begin(), plain.end(),
+                            [](double a, double b) { return std::fabs(a - b) < 1e-6; }),
+                plain.end());
     std::size_t next = 0;
-    for (int j = 0; j < cw; ++j) {
-        const double f = -1.0 + 2.0 * j / (cw - 1);
+    for (std::size_t j = 0; j < plain.size(); ++j) {
+        const double f = plain[j];
         // Every divider that falls before this sample column, in order — the
         // sweeper builds quads between CONSECUTIVE columns, so the list has to
         // stay sorted by lateral position.
-        while (next < dividers.size() && dividers[next] < f - 1e-9) strip(dividers[next++]);
+        while (next < dividers.size() && dividers[next] < f - 1e-6) strip(dividers[next++]);
         // A sample column that IS a boundary is replaced by the strip.
-        if (next < dividers.size() && std::fabs(dividers[next] - f) < 1e-9) {
+        if (next < dividers.size() && std::fabs(dividers[next] - f) < 1e-6) {
             strip(dividers[next++]);
             continue;
         }
         // curb-face crease at the verges: tilt the edge column's normal a little
         // so the curb band beside it reads as a step rather than flat asphalt.
-        const double nl = (j == 0) ? 0.4 : (j == cw - 1 ? -0.4 : 0.0);
-        p.cols.push_back(pc(f, 0, 0, nl, j == 0 || j == cw - 1 ? 0.9 : 1.0,
-                            static_cast<float>(2.0 + f), asphalt));
+        const bool verge = (j == 0) || (j + 1 == plain.size());
+        const double nl = (j == 0) ? 0.4 : (j + 1 == plain.size() ? -0.4 : 0.0);
+        p.cols.push_back(pc(f, 0, 0, nl, verge ? 0.9 : 1.0,
+                            static_cast<float>(muAt(f)), asphalt));
     }
     while (next < dividers.size()) strip(dividers[next++]);
     return p;
