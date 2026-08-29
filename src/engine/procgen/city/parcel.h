@@ -52,6 +52,24 @@ struct ParcelParams {
     uint32_t seed = 0;
 };
 
+// WHY the frontage walk rejects the lots it tries to lay. The walk is the
+// primary path — "every lot faces a street by construction" — and when it
+// places nothing the caller falls back to blind bisection, which divides land
+// with no reference to roads at all. On metro_v2 that fallback handles 158 of
+// 177 blocks, so the primary path is in fact the exception; this says which
+// test is doing the rejecting.
+struct ParcelReject {
+    int edgeShort = 0;   // block edge shorter than one lot's frontage
+    int shallow = 0;     // no room behind the frontage for a lot's depth
+    int mitered = 0;     // clipped to nothing by the corner miters
+    int overlap = 0;     // could not be cut clear of an already-placed lot
+    int escaped = 0;     // concave block: the lot crossed outside its own block
+    int tiny = 0;        // under the minimum lot area
+    int thin = 0;        // depth-per-frontage collapsed (a back-alley strip)
+    int placed = 0;      // lots actually laid
+    int blocksWalked = 0, blocksFailed = 0;   // whole blocks the walk lost
+};
+
 // Subdivide a (CCW, simple) block footprint into lots. Deterministic for the seed.
 // `bisectedOut` (optional) reports that the frontage walk FAILED and the blind
 // bisection fallback ran — which divides land with no reference to the roads at
@@ -59,7 +77,8 @@ struct ParcelParams {
 // block that lands there is a bug upstream (a face that never got streets), not
 // a shape to be filled anyway.
 std::vector<Lot> subdivideBlock(const Poly2& block, const ParcelParams& params,
-                                int district = 0, bool* bisectedOut = nullptr);
+                                int district = 0, bool* bisectedOut = nullptr,
+                                ParcelReject* rejectOut = nullptr);
 
 }  // namespace engine
 

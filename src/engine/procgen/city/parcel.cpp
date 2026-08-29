@@ -128,7 +128,7 @@ Real frontSpan(const Poly2& piece, const Vec2& a, const Vec2& d, const Vec2& nrm
 //     sculpted mid-block green downstream.
 // Deterministic: edges walk in polygon order, one rng draw per edge.
 bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int district,
-                    std::vector<Lot>& out) {
+                    std::vector<Lot>& out, ParcelReject* rj) {
     const int n = static_cast<int>(b.size());
     if (n < 3) return false;
     const Real fw = std::max(p.frontWidth, Real(4.0));
@@ -149,7 +149,11 @@ bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int distric
     const std::size_t firstLot = out.size();
     for (int ei = 0; ei < n; ++ei) {
         const Real L = len[ei];
-        if (L < Real(0.55) * fw) { rng.unit(); continue; }   // keep the stream
+        if (L < Real(0.55) * fw) {                           // keep the stream
+            rng.unit();
+            if (rj) ++rj->edgeShort;
+            continue;
+        }
         const Vec2 A = b[ei], B = b[(ei + 1) % n];
         const Vec2 d = dir[ei], nrm = inr[ei];
         // Corner bisectors (only at CONVEX corners — at a reflex corner the
@@ -186,8 +190,9 @@ bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int distric
                              ? std::min(ld, dmax - Real(0.4))
                              : std::min(ld, Real(0.5) * dmax);
             Poly2 piece;
+            int why = 0;   // last reason this slot failed; see ParcelReject
             for (int attempt = 0; attempt < 3; ++attempt, depth *= Real(0.75)) {
-                if (depth < minDepth) { piece.clear(); break; }
+                if (depth < minDepth) { piece.clear(); why = 1; break; }
                 piece = {f0, f1, f1 + nrm * depth, f0 + nrm * depth};
                 if (miterA && mnA.length() > Real(1e-6))
                     piece = clipHalfPlane(piece, mnA, dot(mnA, A));
@@ -196,6 +201,7 @@ bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int distric
                 if (piece.size() < 3 ||
                     frontSpan(piece, A, d, nrm) < minFront) {
                     piece.clear();
+                    why = 2;
                     break;   // mitered away at a sharp corner: no lot here
                 }
                 // Backstop: clip clear of every already-placed lot. Clipping
@@ -222,7 +228,7 @@ bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int distric
                     if (bestA <= 0) { ok = false; break; }
                     piece = std::move(best);
                 }
-                if (!ok) { piece.clear(); break; }
+                if (!ok) { piece.clear(); why = 3; break; }
                 // Containment: a concave block can still cut across the rear
                 // corners the rays missed — retry shallower, then give up.
                 const Vec2 pc = centroid(piece);
@@ -234,9 +240,21 @@ bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int distric
                     }
                 if (inside) break;
                 piece.clear();
+                why = 4;
             }
-            if (piece.size() < 3) continue;
-            if (area(piece) < std::max(p.minArea, Real(25))) continue;
+            if (piece.size() < 3) {
+                if (rj) switch (why) {
+                    case 1: ++rj->shallow; break;
+                    case 2: ++rj->mitered; break;
+                    case 3: ++rj->overlap; break;
+                    default: ++rj->escaped; break;
+                }
+                continue;
+            }
+            if (area(piece) < std::max(p.minArea, Real(25))) {
+                if (rj) ++rj->tiny;
+                continue;
+            }
             // EFFECTIVE depth after the miter/backstop clips: a piece whose
             // area-per-frontage collapsed (the shallow band squeezed between
             // two full rows) is a back-alley strip, not a lot — leaving it
@@ -244,9 +262,12 @@ bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int distric
             // drag the whole distribution down).
             {
                 const Real fs = frontSpan(piece, A, d, nrm);
-                if (fs < Real(0.5) || area(piece) / fs < minDepth * Real(0.6))
+                if (fs < Real(0.5) || area(piece) / fs < minDepth * Real(0.6)) {
+                    if (rj) ++rj->thin;
                     continue;
+                }
             }
+            if (rj) ++rj->placed;
             ensureCCW(piece);
             Lot lot;
             lot.area = area(piece);
@@ -280,7 +301,8 @@ bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int distric
 }  // namespace
 
 std::vector<Lot> subdivideBlock(const Poly2& block, const ParcelParams& params,
-                                int district, bool* bisectedOut) {
+                                int district, bool* bisectedOut,
+                                ParcelReject* rejectOut) {
     std::vector<Lot> lots;
     if (bisectedOut) *bisectedOut = false;
     if (block.size() < 3) return lots;
@@ -293,7 +315,9 @@ std::vector<Lot> subdivideBlock(const Poly2& block, const ParcelParams& params,
     // the deep core becomes a reachable court. Falls back to bisection for
     // shallow/degenerate blocks (which bisection still street-fronts, being
     // thin enough that both halves reach opposite streets).
-    if (parcelFrontage(b, params, rng, district, lots)) return lots;
+    if (rejectOut) ++rejectOut->blocksWalked;
+    if (parcelFrontage(b, params, rng, district, lots, rejectOut)) return lots;
+    if (rejectOut) ++rejectOut->blocksFailed;
 
     // BLIND BISECTION. It divides land with no reference to the roads, so on a
     // block the walk could not handle it produced plots up to 215 m from the

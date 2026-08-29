@@ -1468,8 +1468,13 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             }
         }
         bool bisected = false;
-        std::vector<Lot> lots = subdivideBlock(foot, bf.pp, 0, &bisected);
+        ParcelReject prj;
+        std::vector<Lot> lots = subdivideBlock(foot, bf.pp, 0, &bisected, &prj);
         if (bisected) ++dbg->bisectedBlocks;
+        dbg->pEdgeShort += prj.edgeShort; dbg->pShallow += prj.shallow;
+        dbg->pMitered   += prj.mitered;   dbg->pOverlap += prj.overlap;
+        dbg->pEscaped   += prj.escaped;   dbg->pTiny    += prj.tiny;
+        dbg->pThin      += prj.thin;      dbg->pPlaced  += prj.placed;
         // RT_PARCEL_DEBUG: the per-block view the [citylots] summary cannot give.
         // The summary says how many lots a city produced; this says which blocks
         // produced them, at what district grain, on what shape of interior — which
@@ -2649,6 +2654,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                  << " blocks all carriageway"
                  << " | " << dbg->bisectedBlocks
                  << " blocks BLIND-BISECTED (no street reference)";
+    LOG_INFO << "[citylots] frontage walk: placed " << dbg->pPlaced
+             << " lots; rejected edgeShort " << dbg->pEdgeShort
+             << ", shallow " << dbg->pShallow << ", mitered " << dbg->pMitered
+             << ", overlap " << dbg->pOverlap << ", escaped " << dbg->pEscaped
+             << ", tiny " << dbg->pTiny << ", thin " << dbg->pThin;
     }
     return out;
 }

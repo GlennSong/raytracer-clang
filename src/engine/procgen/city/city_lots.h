@@ -201,6 +201,10 @@ struct LotPlanDebug {
     int rejFrontage = 0; // whole footprint too far from any road surface
     int bisectedBlocks = 0;   // blocks the frontage walk failed on, filled by
                               // blind bisection (lots with no street by design)
+    // WHY the frontage walk rejected the lots it tried to lay (ParcelReject,
+    // parcel.h — kept as plain ints so this header need not include it).
+    int pEdgeShort = 0, pShallow = 0, pMitered = 0, pOverlap = 0;
+    int pEscaped = 0, pTiny = 0, pThin = 0, pPlaced = 0;
     int rejRelief = 0;   // ground range across the lot exceeds maxPadRelief
 };
 
