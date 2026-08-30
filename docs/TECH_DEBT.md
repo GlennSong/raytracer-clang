@@ -918,10 +918,15 @@ eclipses); Metal/WebGPU disc code is mirrored, not run.
 
 ## Enterable buildings (2026-08-30, ADR-0080)
 
-- **Interior lighting is a stopgap.** The shader is sun-only; a roofed room
-  is lit by `PartId::Interior`'s emission (albedo x 0.10) + NightGlow.
-  Rooms read as dim concrete by day and glow faintly at night. Real fix:
-  local lights (the long-standing "no local lights" row above).
+- **Interior lighting: room lights staged, per-fixture lights owed.**
+  PARTIALLY PAID: the forward pass always looped 32 point lights (street
+  lamps/headlights use them at dusk); BuildingInteriorSystem now stages
+  warm ceiling PointLights for the resident interior nearest the player
+  (one per storey via `SceneLighting::interiorPoints`, capped at 4, merged
+  by RenderSystem like the lamps, always on). The emission x 0.10 base
+  tone stays. Residual: only the nearest interior is lit (a second
+  resident building's rooms stay dim), no visible fixtures, no shadows
+  from room lights, and the 32-slot budget is shared with the lamps.
 - **Dog-leg stairs are cut from scope.** Straight flights only, uniform
   riser count per building (shallower risers upstairs) so every flight
   shares one well hole. A dog-leg's arrival lands UNDER the slab above

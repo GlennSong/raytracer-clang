@@ -41,6 +41,51 @@ void BuildingInteriorSystem::fixedUpdate(FrameContext& ctx) {
         });
     if (!found) return;
     step(ctx.world, &physics_->physicsWorld(), ctx.assets, player);
+
+    // Room lights (ADR-0080): warm ceiling points for the resident interior
+    // NEAREST the player — one per storey, capped — staged transiently for
+    // RenderSystem to merge (the street-lamp pattern). The shader already
+    // loops point lights; interiors were the one place with none.
+    ctx.view.lighting.interiorPoints.clear();
+    if (!resident_.empty()) {
+        const CityBuildings* cb = nullptr;
+        ctx.world.each<CityBuildings>(
+            [&](Entity, CityBuildings& c) { if (!cb) cb = &c; });
+        if (cb) {
+            const Vec2 xz(player.x, player.z);
+            std::size_t bestKey = static_cast<std::size_t>(-1);
+            Real bestD = 1e30;
+            for (const auto& kv : resident_) {
+                const BuildingRecord& r = cb->records[kv.first];
+                if (r.plan.size() < 3) continue;
+                Vec2 c(0, 0);
+                for (const Vec2& v : r.plan) c = c + v;
+                c = c * (Real(1.0) / r.plan.size());
+                const Real d = (c - xz).length();
+                if (d < bestD) { bestD = d; bestKey = kv.first; }
+            }
+            if (bestKey != static_cast<std::size_t>(-1)) {
+                const BuildingRecord& r = cb->records[bestKey];
+                Vec2 c(0, 0);
+                Real ext = 1;
+                for (const Vec2& v : r.plan) c = c + v;
+                c = c * (Real(1.0) / r.plan.size());
+                for (const Vec2& v : r.plan)
+                    ext = std::max(ext, (v - c).length());
+                const std::vector<StoreyPlan> storeys =
+                    storeyPlans(r.plan, r.params);
+                const int lightCount =
+                    std::min<int>(4, static_cast<int>(storeys.size()));
+                for (int k = 0; k < lightCount; ++k) {
+                    const StoreyPlan& sp = storeys[static_cast<std::size_t>(k)];
+                    PointLight pl(Vec3(c.x, r.baseY + sp.y0 + sp.h - 0.5, c.y),
+                                  Vec3(1.0, 0.88, 0.70), 22.0f);
+                    pl.range = static_cast<float>(ext * 2.0 + sp.h);
+                    ctx.view.lighting.interiorPoints.push_back(pl);
+                }
+            }
+        }
+    }
 }
 
 void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
@@ -198,6 +243,7 @@ void BuildingInteriorSystem::release(World& world, PhysicsWorld* phys,
 }
 
 void BuildingInteriorSystem::onStop(FrameContext& ctx) {
+    ctx.view.lighting.interiorPoints.clear();
     PhysicsWorld* phys = physics_ ? &physics_->physicsWorld() : nullptr;
     std::vector<std::size_t> keys;
     for (const auto& kv : resident_) keys.push_back(kv.first);

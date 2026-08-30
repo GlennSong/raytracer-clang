@@ -422,6 +422,13 @@ struct SceneLighting {
     // RenderSystem merges them into the frame's lights ON A COPY, like the
     // street lamps, so authored spot lights are never displaced. Never saved.
     std::vector<SpotLight> vehicleSpots;
+    // Transient interior room lights (ADR-0080): BuildingInteriorSystem
+    // clears and refills this every fixed step with warm ceiling lights for
+    // the streamed interior nearest the player; RenderSystem merges them into
+    // the frame's lights ON A COPY, like the street lamps, so authored
+    // lights are never displaced. Always on (interiors are sun-blind by
+    // day too). Never saved.
+    std::vector<PointLight> interiorPoints;
     std::vector<PointLight> pointLights;
     std::vector<SpotLight> spotLights;
     ShadowConfig shadow;
