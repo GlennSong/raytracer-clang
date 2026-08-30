@@ -58,8 +58,14 @@ jobs:
       - name: Stage the site
         run: |
           mkdir -p public/thumbs
+          # Every page CMake copies into build-web must be staged, or the index
+          # links to a 404: city-build/buildings/procgen were built and then left
+          # behind here for exactly that reason. Keep this list in step with the
+          # POST_BUILD copies in CMakeLists.txt.
           cp build-web/index.html build-web/viewer.html build-web/about.html \
-             build-web/city-sim.html build-web/scenes.json \
+             build-web/city-sim.html build-web/city-build.html \
+             build-web/buildings.html build-web/procgen.html \
+             build-web/city-plan.html build-web/scenes.json \
              build-web/viewer_web.js build-web/viewer_web.wasm \
              build-web/viewer_web.data public/
           cp build-web/thumbs/*.webp public/thumbs/ 2>/dev/null || true
