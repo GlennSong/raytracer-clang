@@ -5,6 +5,7 @@
 #include "../src/engine/procgen/city/road_net.h"
 #include "../src/engine/procgen/city/corridor_mesh.h"
 #include "../src/engine/procgen/city/road_offset.h"
+#include "../src/engine/procgen/city/road_rules.h"   // DesignRules (per-class grade)
 
 #include <limits>
 
@@ -145,6 +146,106 @@ TEST_CASE(weld_authored_and_draped_spines_coexist) {
     CHECK(profs.size() == 2);
     for (double h : profs[0]) CHECK(std::fabs(h - 9.0) < 1e-6);   // deck: authored
     for (double h : profs[1]) CHECK(std::fabs(h - (2.5 + 0.06)) < 1e-6);  // street: drape+topY
+}
+
+// --- THE JOINT VERTICAL SOLVE (terrain-earthwork plan, Phase 1) ---------------
+// weldChainProfiles used to solve each chain alone, then patch the nodes: take
+// the lowest arriving deck, smear the difference along the chain, then ease
+// each chain back to grade LOWER-ONLY with nothing re-agreeing the arms. On
+// metro_v2 that left three arms at one node 8.02 m apart (RT_JUNCTION_DUMP at
+// -877,-423). Now a node is ONE variable and every consecutive pair is a grade
+// constraint, so these are the properties, checked on a fixture that would have
+// broken the old scheme the same way: a steep short stem hitting a flat street.
+
+namespace {
+// The maximum |dy| / ds over consecutive samples, minus the allowed grade.
+double worstGradeExcess(const std::vector<Vec2>& pts, const std::vector<double>& y,
+                        double g) {
+    double worst = -1e30;
+    for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
+        const double ds = (pts[i + 1] - pts[i]).length();
+        worst = std::max(worst, std::fabs(y[i + 1] - y[i]) / ds - g);
+    }
+    return worst;
+}
+UnionSpine spineAlong(const Vec2& a, const Vec2& b, int samples, RoadClass k,
+                      double hw = 4.0) {
+    UnionSpine s;
+    for (int i = 0; i < samples; ++i)
+        s.points.push_back(a + (b - a) * (static_cast<double>(i) / (samples - 1)));
+    s.halfWidth = hw;
+    s.klass = k;
+    return s;
+}
+}  // namespace
+
+// A T on a hillside: two arterial arms along a flat street, and a collector
+// stem climbing 30% away from the node — with only TWO samples, the shape the
+// old roadProfile returned raw (n < 3) and the old ease then dragged down 9.6 m.
+TEST_CASE(weld_joint_solve_agrees_at_a_tee_on_a_slope) {
+    const double g = 0.08;
+    UnionSpine A = spineAlong(Vec2(-100, 0), Vec2(0, 0), 11, RoadClass::Arterial, 8.5);
+    UnionSpine B = spineAlong(Vec2(0, 0), Vec2(100, 0), 11, RoadClass::Arterial, 8.5);
+    UnionSpine C = spineAlong(Vec2(0, 0), Vec2(0, 80), 2, RoadClass::Collector, 6.5);
+    auto ground = [](double, double z) { return 0.30 * z; };   // 24 m up the stem
+    auto profs = weldChainProfiles({ A, B, C }, ground, 0.0, g, /*overlapReach*/ 7.5);
+    CHECK(profs.size() == 3);
+    // One node, one height: the three arms agree to machine precision.
+    CHECK(std::fabs(profs[0].back() - profs[1].front()) < 1e-9);
+    CHECK(std::fabs(profs[0].back() - profs[2].front()) < 1e-9);
+    // Every pair within grade — including the two-point stem.
+    CHECK(worstGradeExcess(A.points, profs[0], g) < 1e-6);
+    CHECK(worstGradeExcess(B.points, profs[1], g) < 1e-6);
+    CHECK(worstGradeExcess(C.points, profs[2], g) < 1e-6);
+    // The stem cannot climb 24 m in 80 m at 8%: the solve must have moved
+    // BOTH ends toward each other (a cut at the top, a fill at the node), not
+    // dragged one end the whole way — the old scheme's failure mode.
+    CHECK(profs[2].back() < 24.0 - 1.0);
+    CHECK(profs[2].front() > 0.0 + 0.5);
+    // Order-independent: the same network in a different spine order yields
+    // the same heights per spine.
+    auto profs2 = weldChainProfiles({ C, B, A }, ground, 0.0, g, 7.5);
+    for (std::size_t i = 0; i < profs[0].size(); ++i)
+        CHECK(std::fabs(profs[0][i] - profs2[2][i]) < 1e-9);
+    for (std::size_t i = 0; i < profs[2].size(); ++i)
+        CHECK(std::fabs(profs[2][i] - profs2[0][i]) < 1e-9);
+}
+
+// A square ring of four chains with one corner on a knoll: the projections
+// cycle around the loop and must converge with all four corners agreed.
+TEST_CASE(weld_joint_solve_converges_around_a_loop) {
+    const double g = 0.08;
+    std::vector<UnionSpine> ring = {
+        spineAlong(Vec2(0, 0), Vec2(100, 0), 6, RoadClass::Local),
+        spineAlong(Vec2(100, 0), Vec2(100, 100), 6, RoadClass::Local),
+        spineAlong(Vec2(100, 100), Vec2(0, 100), 6, RoadClass::Local),
+        spineAlong(Vec2(0, 100), Vec2(0, 0), 6, RoadClass::Local),
+    };
+    auto ground = [](double x, double z) {   // a 20 m knoll on the (100,100) corner
+        const double d = std::hypot(x - 100, z - 100);
+        return d < 40 ? 20.0 * (1.0 - d / 40.0) : 0.0;
+    };
+    auto profs = weldChainProfiles(ring, ground, 0.0, g, 0.0);
+    for (int i = 0; i < 4; ++i) {
+        CHECK(std::fabs(profs[i].back() - profs[(i + 1) % 4].front()) < 1e-9);
+        CHECK(worstGradeExcess(ring[i].points, profs[i], g) < 1e-6);
+    }
+}
+
+// Per-class limits: the same 12% hillside street is held to 8% as an arterial
+// and allowed 12% as a local — the table DesignRules always had and no solve
+// ever read (kRoadMaxGrade everywhere).
+TEST_CASE(weld_joint_solve_grades_by_class) {
+    const DesignRules rules;
+    auto ground = [](double, double z) { return 0.12 * z; };
+    UnionSpine art = spineAlong(Vec2(0, 0), Vec2(0, 100), 11, RoadClass::Arterial);
+    UnionSpine loc = spineAlong(Vec2(50, 0), Vec2(50, 100), 11, RoadClass::Local);
+    auto profs = weldChainProfiles({ art, loc }, ground, 0.0, 0.08, 0.0, &rules);
+    CHECK(worstGradeExcess(art.points, profs[0], rules.maxGrade(RoadClass::Arterial)) < 1e-6);
+    CHECK(worstGradeExcess(loc.points, profs[1], rules.maxGrade(RoadClass::Local)) < 1e-6);
+    // The local street keeps (nearly) its 12% hill; the arterial had to cut it.
+    CHECK(profs[1].back() - profs[1].front() > 10.0);
+    CHECK(profs[0].back() - profs[0].front() < 8.5);
 }
 
 // K — the WHOLE authoring path: a RoadEntity with per-node absolute elevation

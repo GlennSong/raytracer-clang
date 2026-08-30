@@ -7,6 +7,10 @@
 #include "scripting/script_modules.h"
 #endif
 #include <cstdlib>
+#include <tinygltf/stb_image_write.h>   // the PNG writer the elevation maps use
+                                        // (implementation lives in model_importer.cpp)
+#include "procgen/city/road_rules.h"    // DesignRules: the per-class grade table the
+                                        // poke report hands weldChainProfiles
 #include "mesh_builder.h"
 #include "asset_manager.h"
 #include "procgen/terrain.h"
@@ -1959,6 +1963,152 @@ static LevelLoader::GroundProbeReport g_groundProbeReport;
 const LevelLoader::GroundProbeReport& LevelLoader::lastGroundProbeReport() {
     return g_groundProbeReport;
 }
+static LevelLoader::PokeReport g_pokeReport;
+const LevelLoader::PokeReport& LevelLoader::lastPokeReport() {
+    return g_pokeReport;
+}
+
+// ELEVATION MAPS (RT_ELEVATION_MAP=<prefix>): top-down heightmaps from an
+// INDEPENDENT probe grid — not the flatten set, not the road samples, not the
+// CDLOD vertices — so "how the terrain changed" can be SEEN, not inferred.
+// Four surfaces per probe: natural (the base relief the roads were solved
+// against), the final analytic ground (every stamp applied), the finest tile's
+// own bilinear interpolation (what is drawn), and — once the earthwork field
+// exists — the displacement alone. Written as PNGs sharing the citymap's
+// world extent (x right, z down, same as the SVG viewBox) so they overlay
+// pixel-exact, plus a JSON sidecar with the extent, cell and scales. Device:
+// "something akin to an elevation map so we can see the base terrain and how
+// the terrain changed ... a top down way to debug the landscape."
+namespace {
+struct ElevationSurface {
+    const char* name;
+    std::function<double(double, double)> at;
+};
+void writeElevationMaps(const std::string& prefix, double half, double cell,
+                        const std::vector<ElevationSurface>& surfaces,
+                        const std::vector<std::vector<Vec2>>& polylines,
+                        bool hasMark, double markX, double markZ) {
+    const int n = std::max(2, static_cast<int>(std::ceil(2.0 * half / cell)) + 1);
+    const double minX = -half, minZ = -half;
+    const std::size_t N = static_cast<std::size_t>(n) * n;
+    std::vector<std::vector<double>> H(surfaces.size(), std::vector<double>(N));
+    for (std::size_t s = 0; s < surfaces.size(); ++s)
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i)
+                H[s][static_cast<std::size_t>(j) * n + i] =
+                    surfaces[s].at(minX + i * cell, minZ + j * cell);
+    auto idx = [&](int i, int j) {
+        i = std::max(0, std::min(n - 1, i));
+        j = std::max(0, std::min(n - 1, j));
+        return static_cast<std::size_t>(j) * n + i;
+    };
+    // Shared height range across the absolute surfaces so they compare.
+    double lo = 1e300, hi = -1e300;
+    for (std::size_t s = 0; s < surfaces.size(); ++s)
+        for (double v : H[s]) { lo = std::min(lo, v); hi = std::max(hi, v); }
+    const double span = std::max(1e-6, hi - lo);
+    auto overlay = [&](std::vector<unsigned char>& rgb) {
+        auto plot = [&](int i, int j, unsigned char r, unsigned char g, unsigned char b) {
+            if (i < 0 || j < 0 || i >= n || j >= n) return;
+            unsigned char* p = &rgb[(static_cast<std::size_t>(j) * n + i) * 3];
+            p[0] = r; p[1] = g; p[2] = b;
+        };
+        for (const auto& pl : polylines)
+            for (std::size_t k = 0; k + 1 < pl.size(); ++k) {
+                const double x0 = (pl[k].x - minX) / cell, z0 = (pl[k].y - minZ) / cell;
+                const double x1 = (pl[k + 1].x - minX) / cell, z1 = (pl[k + 1].y - minZ) / cell;
+                const int steps = std::max(1, static_cast<int>(std::ceil(
+                    std::max(std::fabs(x1 - x0), std::fabs(z1 - z0)))));
+                for (int t = 0; t <= steps; ++t) {
+                    const double f = static_cast<double>(t) / steps;
+                    plot(static_cast<int>(std::lround(x0 + (x1 - x0) * f)),
+                         static_cast<int>(std::lround(z0 + (z1 - z0) * f)), 20, 20, 20);
+                }
+            }
+        if (hasMark) {
+            const int mi = static_cast<int>(std::lround((markX - minX) / cell));
+            const int mj = static_cast<int>(std::lround((markZ - minZ) / cell));
+            for (int d = -6; d <= 6; ++d) {
+                plot(mi + d, mj, 255, 0, 255);
+                plot(mi, mj + d, 255, 0, 255);
+            }
+        }
+    };
+    // Absolute surfaces: greyscale height with a NW hillshade so relief reads.
+    for (std::size_t s = 0; s < surfaces.size(); ++s) {
+        std::vector<unsigned char> rgb(N * 3);
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                const double h = H[s][idx(i, j)];
+                const double dx = (H[s][idx(i + 1, j)] - H[s][idx(i - 1, j)]) / (2 * cell);
+                const double dz = (H[s][idx(i, j + 1)] - H[s][idx(i, j - 1)]) / (2 * cell);
+                // normal (-dx, 1, -dz), light from the NW and above
+                const double nl = (dx * 0.5 + 1.0 * 0.7 + dz * 0.5) /
+                                  std::sqrt(dx * dx + 1.0 + dz * dz);
+                const double shade = 0.55 + 0.45 * std::max(0.0, nl);
+                const double g = (40.0 + 200.0 * (h - lo) / span) * shade;
+                const unsigned char v = static_cast<unsigned char>(
+                    std::max(0.0, std::min(255.0, g)));
+                unsigned char* p = &rgb[idx(i, j) * 3];
+                p[0] = v; p[1] = v; p[2] = v;
+            }
+        overlay(rgb);
+        const std::string path = prefix + "_" + surfaces[s].name + ".png";
+        stbi_write_png(path.c_str(), n, n, 3, rgb.data(), n * 3);
+    }
+    // Differences against the FIRST surface (natural): signed, diverging —
+    // blue = lowered (cut), red = raised (fill) — scaled to the max |d|.
+    std::vector<double> diffScale(surfaces.size(), 0.0);
+    std::vector<std::pair<double, double>> diffWorstAt(surfaces.size(), {0, 0});
+    for (std::size_t s = 1; s < surfaces.size(); ++s) {
+        double mx = 0; int mi = 0, mj = 0;
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                const double d = H[s][idx(i, j)] - H[0][idx(i, j)];
+                if (std::fabs(d) > mx) { mx = std::fabs(d); mi = i; mj = j; }
+            }
+        diffScale[s] = mx;
+        diffWorstAt[s] = {minX + mi * cell, minZ + mj * cell};
+        const double sc = std::max(1e-6, mx);
+        std::vector<unsigned char> rgb(N * 3);
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                const double d = (H[s][idx(i, j)] - H[0][idx(i, j)]) / sc;   // -1..1
+                const double a = std::min(1.0, std::fabs(d));
+                unsigned char* p = &rgb[idx(i, j) * 3];
+                if (d >= 0) {   // raised: white -> red
+                    p[0] = 255; p[1] = static_cast<unsigned char>(255 * (1 - a));
+                    p[2] = static_cast<unsigned char>(255 * (1 - a));
+                } else {        // lowered: white -> blue
+                    p[0] = static_cast<unsigned char>(255 * (1 - a));
+                    p[1] = static_cast<unsigned char>(255 * (1 - a)); p[2] = 255;
+                }
+            }
+        overlay(rgb);
+        const std::string path = prefix + "_" + surfaces[s].name + "_minus_" +
+                                 surfaces[0].name + ".png";
+        stbi_write_png(path.c_str(), n, n, 3, rgb.data(), n * 3);
+    }
+    std::ofstream js(prefix + ".json");
+    js << "{ \"minX\": " << minX << ", \"minZ\": " << minZ << ", \"cell\": " << cell
+       << ", \"size\": " << n << ", \"heightLo\": " << lo << ", \"heightHi\": " << hi
+       << ", \"surfaces\": [";
+    for (std::size_t s = 0; s < surfaces.size(); ++s)
+        js << (s ? ", " : "") << "{ \"name\": \"" << surfaces[s].name
+           << "\", \"diffScale\": " << diffScale[s] << ", \"diffWorstX\": "
+           << diffWorstAt[s].first << ", \"diffWorstZ\": " << diffWorstAt[s].second << " }";
+    js << "] }\n";
+    std::ostringstream summary;
+    summary << "[elevation-map] cell=" << cell << " size=" << n << "x" << n
+            << " heights [" << lo << ", " << hi << "]";
+    for (std::size_t s = 1; s < surfaces.size(); ++s)
+        summary << " | " << surfaces[s].name << "-" << surfaces[0].name
+                << " max |d| " << diffScale[s] << " m at (" << diffWorstAt[s].first
+                << "," << diffWorstAt[s].second << ")";
+    summary << " -> " << prefix << "_*.png";
+    LOG_INFO << summary.str();
+}
+}  // namespace
 
 bool LevelLoader::load(const std::string& path,
                        World& world, Renderer& renderer, RenderView& view,
@@ -1966,6 +2116,7 @@ bool LevelLoader::load(const std::string& path,
     RT_PROFILE_ZONE_NAMED("levelLoad");
     g_loadedScriptFiles.clear();
     g_groundProbeReport = {};
+    g_pokeReport = {};
     std::ifstream file(path);
     if (!file.is_open()) {
         LOG_ERROR << "Failed to open level file: " << path;
@@ -2518,6 +2669,47 @@ bool LevelLoader::load(const std::string& path,
         rebuildFlattenIndex(terrainParams);
         loadTerrain(terrainParams, terrainNoise, root["terrain"], world, assets);
 
+        // ELEVATION MAPS (RT_ELEVATION_MAP=<prefix>, see writeElevationMaps):
+        // natural vs final vs drawn, from an independent probe grid over the
+        // CDLOD extent. RT_ELEVATION_MAP_CELL (default 4 m) sets the spacing;
+        // RT_ELEVATION_MARK="x,z" draws a crosshair (a reported site).
+        if (const char* prefix = std::getenv("RT_ELEVATION_MAP")) {
+            const double half = root["terrain"].contains("cdlod")
+                                    ? root["terrain"]["cdlod"].value("worldHalf", 1024.0)
+                                    : 200.0;
+            double cell = 4.0;
+            if (const char* c = std::getenv("RT_ELEVATION_MAP_CELL")) cell = std::max(0.5, std::atof(c));
+            const double pcell = lotMeshCell > 0.5 ? lotMeshCell : 2.0;
+            auto drawn = [&](double x, double z) {
+                auto corner = [&](double cx, double cz) {
+                    return terrainHeight(terrainParams, terrainNoise, cx, cz, pcell * 1.45);
+                };
+                const double gx = std::floor(x / pcell) * pcell;
+                const double gz = std::floor(z / pcell) * pcell;
+                const double fx = (x - gx) / pcell, fz = (z - gz) / pcell;
+                return corner(gx, gz) * (1 - fx) * (1 - fz) +
+                       corner(gx + pcell, gz) * fx * (1 - fz) +
+                       corner(gx, gz + pcell) * (1 - fx) * fz +
+                       corner(gx + pcell, gz + pcell) * fx * fz;
+            };
+            std::vector<ElevationSurface> surfaces = {
+                {"natural", [&](double x, double z) { return levelGround(x, z); }},
+                {"final", [&](double x, double z) {
+                     return terrainHeight(terrainParams, terrainNoise, x, z); }},
+                {"drawn", drawn},
+            };
+            // Road centrelines, so "where the land moved" reads against the roads.
+            std::vector<std::vector<Vec2>> lines;
+            for (const engine::RoadEntity& net : preNets)
+                for (const UnionSpine& sp : engine::roadNetWeldSpines(
+                         engine::roadNetConstrainedGraph(net, levelGround)))
+                    lines.push_back(sp.points);
+            double mx = 0, mz = 0; bool hasMark = false;
+            if (const char* m = std::getenv("RT_ELEVATION_MARK"))
+                hasMark = std::sscanf(m, "%lf,%lf", &mx, &mz) == 2;
+            writeElevationMaps(prefix, half, cell, surfaces, lines, hasMark, mx, mz);
+        }
+
         // GROUND PROBES (RT_GROUND_PROBES=1, walkway-lab instrument): a grid of
         // thin posts whose BASE sits exactly at terrainHeight — the analytic
         // claim, planted in the world. Mesh above the claim = post half-buried;
@@ -2827,10 +3019,15 @@ bool LevelLoader::load(const std::string& path,
             for (const engine::RoadEntity& net : preNets) {
                 std::vector<UnionSpine> spines = engine::roadNetWeldSpines(
                     engine::roadNetConstrainedGraph(net, levelGround));
+                // The SAME arguments the carve passes (road_net.cpp
+                // roadNetConformRegions), or this report measures a different
+                // deck than the one the terrain was cut to.
+                const engine::DesignRules pokeRules;
                 std::vector<std::vector<double>> profs = engine::weldChainProfiles(
                     spines, levelGround, 0.0, /*maxGrade=*/0.08,
-                    net.look.sidewalk + 4.0);
-                if (std::getenv("RT_POKE_SITE")) {
+                    net.look.sidewalk + 4.0,
+                    net.look.perClassGrade ? &pokeRules : nullptr);
+                if (std::getenv("RT_POKE_SITE") || std::getenv("RT_JUNCTION_DUMP")) {
                     RoadGraph gFp =
                         engine::roadNetConstrainedGraph(net, levelGround);
                     double fp = 0;
@@ -2888,6 +3085,138 @@ bool LevelLoader::load(const std::string& path,
                         }
                     return h;
                 };
+                // JUNCTION DUMP (RT_JUNCTION_DUMP="x,z,radius,path"): every
+                // surface that could carry a step at one junction, at the
+                // SAME stations, so the step is attributed to ONE of them
+                // instead of argued about. Per chain with an endpoint within
+                // `radius` of (x,z), 1 m stations from the node outward to
+                // radius+40: natural ground, the solved deck P, the nearest-
+                // spine deck the pad rides, the carve target (road regions
+                // only), the final analytic terrain, and the LOD0 tile's own
+                // bilinear interpolation. Plus `nodeSpread`: the max arm-to-arm
+                // difference of the solved endpoints sharing that node key —
+                // the deck profile is grade-clamped per pair (lower-only ease,
+                // weldChainProfiles), so a cliff at a junction can only be arms
+                // DISAGREEING at the node and the pad chording across it.
+                // Written once, at LOD 0. Device: "that road T-junction is
+                // really bad ... it creates this bad dip in the road".
+                if (lvl == 0 && std::getenv("RT_JUNCTION_DUMP")) {
+                    double jx = 0, jz = 0, jr = 30;
+                    char jpath[512] = {0};
+                    if (std::sscanf(std::getenv("RT_JUNCTION_DUMP"), "%lf,%lf,%lf,%511s",
+                                    &jx, &jz, &jr, jpath) == 4) {
+                        auto nodeKey = [](const Vec2& v) {
+                            return std::make_pair(
+                                static_cast<long long>(std::llround(v.x * 8)),
+                                static_cast<long long>(std::llround(v.y * 8)));
+                        };
+                        // Arm endpoint heights per node key, for nodeSpread.
+                        std::map<std::pair<long long, long long>,
+                                 std::vector<std::pair<int, double>>> arms;
+                        for (int s2 = 0; s2 < (int)spines.size(); ++s2) {
+                            if (profs[s2].size() < 2 || spines[s2].closed) continue;
+                            const auto& pp = spines[s2].points;
+                            arms[nodeKey(pp.front())].push_back({s2, profs[s2].front()});
+                            arms[nodeKey(pp.back())].push_back({s2, profs[s2].back()});
+                        }
+                        std::ofstream jf(jpath, std::ios::app);
+                        jf << "# junction dump at (" << jx << "," << jz << ") r=" << jr
+                           << " net.sidewalk=" << net.look.sidewalk << "\n";
+                        const Vec2 J(jx, jz);
+                        for (const auto& kv : arms) {
+                            const Vec2 nv(kv.first.first / 8.0, kv.first.second / 8.0);
+                            if ((nv - J).length() > jr) continue;
+                            double lo = 1e30, hi = -1e30;
+                            for (const auto& a : kv.second) {
+                                lo = std::min(lo, a.second);
+                                hi = std::max(hi, a.second);
+                            }
+                            // Per arm: the flags that EXEMPT a chain from the
+                            // node fold and from the carve (authored deck /
+                            // layer) — an at-grade road wearing them floats.
+                            std::ostringstream armsTxt;
+                            for (const auto& a : kv.second) {
+                                const UnionSpine& sp2 = spines[a.first];
+                                armsTxt << " chain" << a.first << "=" << a.second
+                                        << "{klass=" << static_cast<int>(sp2.klass)
+                                        << " yAbs=" << sp2.yAbs.size()
+                                        << " authoredDeck=" << sp2.authoredDeck
+                                        << " layer=" << sp2.layer
+                                        << " closed=" << sp2.closed
+                                        << " pts=" << sp2.points.size() << "}";
+                            }
+                            jf << "# node (" << nv.x << "," << nv.y << ") arms=" << kv.second.size()
+                               << " nodeSpread=" << (hi - lo) << " [" << armsTxt.str() << " ]\n";
+                            LOG_INFO << "[junction-dump] node (" << nv.x << "," << nv.y
+                                     << ") arms=" << kv.second.size()
+                                     << " nodeSpread=" << (hi - lo) << " m ["
+                                     << armsTxt.str() << " ]";
+                        }
+                        jf << "chain,fromFront,s,x,z,natural,deckP,deckNearest,"
+                              "carveTarget,finalAnalytic,lod0Tile,klass\n";
+                        // The LOD0 tile's bilinear interpolation of gridH.
+                        auto tile0 = [&](double x, double z) {
+                            const double gx = std::floor(x / step), gz = std::floor(z / step);
+                            const double fx = x / step - gx, fz = z / step - gz;
+                            const int gi = (int)gx, gj = (int)gz;
+                            return gridH(gi, gj) * (1 - fx) * (1 - fz) +
+                                   gridH(gi + 1, gj) * fx * (1 - fz) +
+                                   gridH(gi, gj + 1) * (1 - fx) * fz +
+                                   gridH(gi + 1, gj + 1) * fx * fz;
+                        };
+                        for (int s2 = 0; s2 < (int)spines.size(); ++s2) {
+                            if (profs[s2].size() < 2) continue;
+                            const auto& pp = spines[s2].points;
+                            const int n2 = (int)pp.size();
+                            for (int fromFront = 1; fromFront >= 0; --fromFront) {
+                                const Vec2& end = fromFront ? pp.front() : pp.back();
+                                if ((end - J).length() > jr) continue;
+                                // Walk 1 m stations from this end along the chain.
+                                double sAcc = 0.0;
+                                int seg = fromFront ? 0 : n2 - 2;
+                                double segT = 0.0;
+                                for (double s = 0.0; s <= jr + 40.0; s += 1.0) {
+                                    // advance to station s
+                                    while (true) {
+                                        const Vec2 a = fromFront ? pp[seg] : pp[seg + 1];
+                                        const Vec2 b = fromFront ? pp[seg + 1] : pp[seg];
+                                        const double L = (b - a).length();
+                                        if (sAcc + L * (1.0 - segT) >= s || L < 1e-9) {
+                                            const double need = s - sAcc;
+                                            const double t2 = L < 1e-9 ? 0.0
+                                                : std::min(1.0, segT + need / L);
+                                            const Vec2 q = a + (b - a) * t2;
+                                            const double pa = fromFront ? profs[s2][seg]
+                                                                        : profs[s2][seg + 1];
+                                            const double pb = fromFront ? profs[s2][seg + 1]
+                                                                        : profs[s2][seg];
+                                            const double P = pa + (pb - pa) * t2;
+                                            const double nat = levelGround(q.x, q.y);
+                                            const double carve =
+                                                applyFlatten(roadFlatten, q.x, q.y, nat);
+                                            const double fin =
+                                                terrainHeight(tpFull, pnNoise, q.x, q.y);
+                                            jf << s2 << "," << fromFront << "," << s << ","
+                                               << q.x << "," << q.y << "," << nat << ","
+                                               << P << "," << deckNearest(q, P) << ","
+                                               << carve << "," << fin << ","
+                                               << tile0(q.x, q.y) << ","
+                                               << static_cast<int>(spines[s2].klass) << "\n";
+                                            break;
+                                        }
+                                        sAcc += L * (1.0 - segT);
+                                        segT = 0.0;
+                                        if (fromFront ? (++seg >= n2 - 1) : (--seg < 0)) {
+                                            seg = -1; break;
+                                        }
+                                    }
+                                    if (seg < 0) break;
+                                }
+                            }
+                        }
+                        LOG_INFO << "[junction-dump] wrote " << jpath;
+                    }
+                }
                 for (std::size_t si = 0; si < spines.size(); ++si) {
                     const auto& pts = spines[si].points;
                     if (profs[si].size() < 2) continue;
@@ -3014,6 +3343,21 @@ bool LevelLoader::load(const std::string& path,
                                 }
                                 if (dd > 0.05) {
                                     ++poke;
+                                    // RT_POKE_DUMP=<path>: every poke site with
+                                    // the owning chain's sample count, so a
+                                    // count change can be attributed by place
+                                    // and by chain shape (e.g. two-point
+                                    // chains that were never graded before).
+                                    if (const char* pd = std::getenv("RT_POKE_DUMP")) {
+                                        static std::ofstream pf(pd);
+                                        // endl: the viewer is usually killed,
+                                        // not exited, so the tail must be on
+                                        // disk already (a buffered run lost the
+                                        // last ~125 LOD2 sites).
+                                        pf << lvl << "," << q.x << "," << q.y << ","
+                                           << dd << "," << si << ","
+                                           << spines[si].points.size() << std::endl;
+                                    }
                                     if (dd > worst) { worst = dd; wx = q.x; wz = q.y; }
                                     if (dd > 0.3) {
                                         const bool covered = tpFull.flattenIndex &&
@@ -3027,6 +3371,12 @@ bool LevelLoader::load(const std::string& path,
                     }
                 }
             }
+            g_pokeReport.lods = lvl + 1;
+            g_pokeReport.samples[lvl] = n;
+            g_pokeReport.pokes[lvl] = poke;
+            g_pokeReport.worst[lvl] = worst;
+            g_pokeReport.worstX[lvl] = wx;
+            g_pokeReport.worstZ[lvl] = wz;
             LOG_INFO << "[poke-report] LOD " << lvl << " (step " << step << "m): "
                      << poke << "/" << n << " samples poke ("
                      << (n ? 100.0 * poke / n : 0.0) << "%), worst " << worst

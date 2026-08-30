@@ -50,6 +50,22 @@ struct LevelLoader {
         double worstX = 0.0, worstZ = 0.0;
     };
     static const GroundProbeReport& lastGroundProbeReport();
+
+    // The RT_POKE_REPORT=1 result (the dense deck-vs-drawn-terrain poke map at
+    // LOD 0/1/2, level_loader.cpp "[poke-report]"): kept here for the same
+    // reason as GroundProbeReport — so a test can ASSERT it on a shipped level
+    // instead of grepping a log. This is the exact number that killed the
+    // DaylightBatter earthwork (0.00% -> 0.14% poke, road_net.cpp) and it had
+    // no gate; the terrain-earthwork plan makes it one. Baseline on metro_v2:
+    // LOD0/1/2 = 0 / 184,688 pokes.
+    struct PokeReport {
+        int lods = 0;                    // levels reported (0 = RT_POKE_REPORT unset)
+        long samples[3] = {0, 0, 0};     // dense grid samples per LOD
+        long pokes[3] = {0, 0, 0};       // samples where terrain > deck + 0.05 m
+        double worst[3] = {0, 0, 0};     // metres, per LOD
+        double worstX[3] = {0, 0, 0}, worstZ[3] = {0, 0, 0};
+    };
+    static const PokeReport& lastPokeReport();
 };
 
 }  // namespace engine

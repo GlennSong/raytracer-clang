@@ -45,6 +45,13 @@ struct RoadLook {
     // planarize + cap degree instead and set this false; the mesh and terrain-
     // conform passes must honour it. Hand-authored roads keep true.
     bool   autoRoundabout = true;
+    // Vertical alignment by CLASS (DesignRules::maxGrade: freeway 5%, arterial
+    // 8%, collector 10%, local 12%, ramp 6%) instead of one 8% for every road.
+    // The table existed and was ignored — every profile solve was handed the
+    // single kRoadMaxGrade — the same way lanesForClass was read by nav and
+    // ignored by the mesher. Steeper side streets, less earth moved; freeways
+    // tighten. Glenn chose this on 2026-08-29. false pins the single grade.
+    bool   perClassGrade = true;
     Vec3   color{0.09, 0.09, 0.10};
 };
 
@@ -137,7 +144,11 @@ RenderMesh buildRoadNetLattice(const RoadGraph& g,
                                // buildRoadNetMesh; hand-built graphs keep the old shape.
                                double cornerRadius = 0.0,
                                // The deck: final chains (yAbs) + pad triangles.
-                               RoadDeckField* deckOut = nullptr);
+                               RoadDeckField* deckOut = nullptr,
+                               // Grade limit per class (RoadLook::perClassGrade) or
+                               // the single kRoadMaxGrade. Must match what the
+                               // terrain carve is told, or deck and ground disagree.
+                               bool perClassGrade = true);
 
 // The sampled + constrained road graph the mesher builds from: every edge sampled
 // to a fine polyline (a curved road becomes a chain of short straight edges; a

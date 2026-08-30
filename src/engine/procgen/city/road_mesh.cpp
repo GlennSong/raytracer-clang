@@ -1,4 +1,5 @@
 #include "road_mesh.h"
+#include "road_rules.h"   // DesignRules::maxGrade — the per-class grade table
 #include "road_rules.h"
 
 #include "../../../log.h"          // LOG_WARN (grade-sep corkscrew guardrail)
@@ -455,12 +456,174 @@ double segDist2(const Vec2& p, const Vec2& a, const Vec2& b) {
 // back linearly along each chain) — so decks meet flush at junctions on 3D
 // terrain, and the terrain-conform pass can carve to exactly this surface
 // (device: "the road is being buried by the terrain — it's not conforming").
+namespace {
+// The network's vertical alignment as ONE problem. A variable per spine sample,
+// with the endpoints of open street chains that share a node key unified into
+// one variable; a constraint per consecutive sample pair. See the header.
+struct JointProfile {
+    std::vector<double> y;                  // one height per variable
+    std::vector<Vec2> pos;                  // world position per variable (ordering key)
+    std::vector<std::vector<int>> var;      // spine -> sample -> variable (-1: fixed/authored)
+    struct Pair { int a, b; double ds, g; };
+    std::vector<Pair> pairs;
+    std::vector<std::vector<int>> adj;      // variable -> incident variables (for smoothing)
+};
+
+std::pair<long long, long long> nodeKey(const Vec2& v) {
+    return std::make_pair(static_cast<long long>(std::llround(v.x * 8)),
+                          static_cast<long long>(std::llround(v.y * 8)));
+}
+
+JointProfile buildJoint(const std::vector<UnionSpine>& spines,
+                        const std::vector<std::vector<double>>& arcs,
+                        const std::vector<std::vector<double>>& ground,
+                        const std::function<double(RoadClass)>& gradeOf) {
+    JointProfile J;
+    J.var.assign(spines.size(), {});
+    std::map<std::pair<long long, long long>, int> nodeVar;
+    for (std::size_t si = 0; si < spines.size(); ++si) {
+        const UnionSpine& sp = spines[si];
+        const int n = static_cast<int>(sp.points.size());
+        if (n < 2 || ground[si].empty()) continue;      // authored / degenerate: no variables
+        J.var[si].assign(n, -1);
+        // Open street chains share their endpoint variables through the node
+        // key — the SAME 1/8 m key the old fold used. Rings and authored
+        // chains stay out of the unification, exactly as before.
+        const bool ring = sp.closed || (sp.points.front() - sp.points.back()).length() < 1e-6;
+        for (int i = 0; i < n; ++i) {
+            const bool endpoint = !ring && (i == 0 || i == n - 1);
+            int v = -1;
+            if (endpoint) {
+                auto k = nodeKey(sp.points[i]);
+                auto it = nodeVar.find(k);
+                if (it != nodeVar.end()) v = it->second;
+                else {
+                    v = static_cast<int>(J.y.size());
+                    J.y.push_back(ground[si][i]);
+                    J.pos.push_back(sp.points[i]);
+                    J.adj.emplace_back();
+                    nodeVar.emplace(k, v);
+                }
+                // A shared node starts at the LOWEST arriving ground — the
+                // carve's rule, and the side a cut is cheaper on.
+                J.y[v] = std::min(J.y[v], ground[si][i]);
+            } else {
+                v = static_cast<int>(J.y.size());
+                J.y.push_back(ground[si][i]);
+                J.pos.push_back(sp.points[i]);
+                J.adj.emplace_back();
+            }
+            J.var[si][i] = v;
+        }
+        const double g = gradeOf(sp.klass);
+        for (int i = 0; i + 1 < n; ++i) {
+            const int a = J.var[si][i], b = J.var[si][i + 1];
+            const double ds = std::max(1e-6, arcs[si][i + 1] - arcs[si][i]);
+            J.pairs.push_back({a, b, ds, g});
+            J.adj[a].push_back(b);
+            J.adj[b].push_back(a);
+        }
+        if (ring && n >= 3) {   // wrap pair, so a ring is graded all the way round
+            const int a = J.var[si][n - 1], b = J.var[si][0];
+            const double ds = std::max(1e-6, (sp.points[0] - sp.points[n - 1]).length());
+            J.pairs.push_back({a, b, ds, g});
+            J.adj[a].push_back(b);
+            J.adj[b].push_back(a);
+        }
+    }
+    // Projection ORDER is the network's, not the caller's: sort the pairs by
+    // their endpoints' world positions, so the same network handed over in any
+    // spine order projects in the same sequence and lands on the same point.
+    // Cyclic projections converge to A feasible point, and which one depends
+    // on the order — the unit test caught a permuted spine list landing ~1e-6
+    // off. (Neighbour sums in the smoother are the only remaining order
+    // sensitivity, at floating-point rounding level.)
+    auto key = [&](int v) {
+        return std::make_pair(static_cast<long long>(std::llround(J.pos[v].x * 8)),
+                              static_cast<long long>(std::llround(J.pos[v].y * 8)));
+    };
+    // (Keys into LOCALS first: std::minmax on two temporaries hands back
+    // references to values that die at the semicolon — a comparator reading
+    // freed stack, which the order-independence test caught as ~1e-6 drift.)
+    auto pairKey = [&](const JointProfile::Pair& p) {
+        const auto ka = key(p.a), kb = key(p.b);
+        return ka < kb ? std::make_pair(ka, kb) : std::make_pair(kb, ka);
+    };
+    std::stable_sort(J.pairs.begin(), J.pairs.end(),
+                     [&](const JointProfile::Pair& p, const JointProfile::Pair& q) {
+                         return pairKey(p) < pairKey(q);
+                     });
+    for (auto& nb : J.adj) std::sort(nb.begin(), nb.end(), [&](int u, int w) {
+        return key(u) < key(w);
+    });
+    return J;
+}
+
+// [1 2 1]/4 along every chain, applied as "half self, half the mean of the
+// incident neighbours" so a node variable with three arms smooths over all
+// three. Two passes, like roadProfile. Endpoints with a single neighbour (dead
+// ends) keep their value, as roadProfile pinned its ends.
+void jointSmooth(JointProfile& J, int passes) {
+    for (int p = 0; p < passes; ++p) {
+        std::vector<double> sm = J.y;
+        for (std::size_t v = 0; v < J.y.size(); ++v) {
+            const auto& nb = J.adj[v];
+            if (nb.size() < 2) continue;
+            double mean = 0;
+            for (int u : nb) mean += J.y[u];
+            mean /= static_cast<double>(nb.size());
+            sm[v] = 0.5 * J.y[v] + 0.5 * mean;
+        }
+        J.y.swap(sm);
+    }
+}
+
+// Symmetric projection onto every grade slab |y_a - y_b| <= g*ds, cycled to a
+// fixpoint. Moving BOTH ends by half the excess is the metric projection, which
+// is what makes cyclic projections converge on a graph with cycles (POCS);
+// roadProfile's one-sided move is not a projection and can cycle on a graph.
+void jointClampSymmetric(JointProfile& J, int maxIter, double tol) {
+    for (int iter = 0; iter < maxIter; ++iter) {
+        double worst = 0.0;
+        for (const auto& p : J.pairs) {
+            const double lim = p.g * p.ds;
+            const double d = J.y[p.b] - J.y[p.a];
+            const double excess = std::fabs(d) - lim;
+            if (excess <= tol) continue;
+            worst = std::max(worst, excess);
+            const double half = 0.5 * excess * (d > 0 ? 1.0 : -1.0);
+            J.y[p.a] += half;
+            J.y[p.b] -= half;
+        }
+        if (worst <= tol) break;
+    }
+}
+
+// Lower-only min-plus closure: y_i <- min_j (y_j + g*ds) over every pair both
+// ways, through shared nodes, to the fixpoint. Values only fall, so nothing the
+// overlap pass lowered comes back up; the fixpoint is the unique largest
+// grade-feasible profile below the input (a shortest-path closure), and node
+// agreement is preserved because a node is one variable.
+void jointEaseDown(JointProfile& J) {
+    for (int iter = 0; iter < 100000; ++iter) {
+        bool changed = false;
+        for (const auto& p : J.pairs) {
+            const double lim = p.g * p.ds;
+            if (J.y[p.b] > J.y[p.a] + lim + 1e-9) { J.y[p.b] = J.y[p.a] + lim; changed = true; }
+            if (J.y[p.a] > J.y[p.b] + lim + 1e-9) { J.y[p.a] = J.y[p.b] + lim; changed = true; }
+        }
+        if (!changed) break;
+    }
+}
+}  // namespace
+
 std::vector<std::vector<double>> weldChainProfiles(
     const std::vector<UnionSpine>& spines,
     const std::function<double(double, double)>& heightAt, double topY,
-    double maxGrade, double overlapReach) {
+    double maxGrade, double overlapReach, const DesignRules* rules) {
     std::vector<std::vector<double>> out(spines.size());
     std::vector<std::vector<double>> arcs(spines.size());
+    std::vector<std::vector<double>> ground(spines.size());   // empty = authored/flat
     for (std::size_t si = 0; si < spines.size(); ++si) {
         const UnionSpine& sp = spines[si];
         const int n = static_cast<int>(sp.points.size());
@@ -470,56 +633,66 @@ std::vector<std::vector<double>> weldChainProfiles(
             sArc[i] = sArc[i - 1] + (sp.points[i] - sp.points[i - 1]).length();
         arcs[si] = sArc;
         // AUTHORED absolute heights (corridor deck / ramp): ride them as-is,
-        // untouched by drape, junction-min, overlap-min, or the topY offset
-        // below — they are already the real world Y. This is the 3-D path.
+        // untouched by the solve, overlap-min, or the topY offset below — they
+        // are already the real world Y. This is the 3-D path.
         if (!sp.yAbs.empty() && static_cast<int>(sp.yAbs.size()) == n) {
             out[si] = sp.yAbs;
             continue;
         }
         if (!heightAt) { out[si].assign(n, 0.0); continue; }   // += topY below
-        std::vector<double> ground(n);
+        ground[si].resize(n);
         for (int i = 0; i < n; ++i)
-            ground[i] = heightAt(sp.points[i].x, sp.points[i].y);
-        out[si] = roadProfile(ground, sArc, maxGrade);
+            ground[si][i] = heightAt(sp.points[i].x, sp.points[i].y);
+        out[si] = ground[si];
     }
-    if (heightAt) {
-        // Junction endpoints: every incident chain takes the LOWEST arriving
-        // deck — the SAME rule the terrain carve's overlapping-footprint fold
-        // uses (lowest plane wins), so deck and carved ground agree at the
-        // node. The old MEAN left decks up to half the arms' spread above the
-        // min-carved ground (probe: 2-3 m proud walls on junction approaches,
-        // all worst sites 7-28 m from a junction).
-        auto key = [](const Vec2& v) {
-            return std::make_pair(static_cast<long long>(std::llround(v.x * 8)),
-                                  static_cast<long long>(std::llround(v.y * 8)));
-        };
+    auto gradeOf = [&](RoadClass c) {
+        const double g = rules ? rules->maxGrade(c) : maxGrade;
+        return g > 0.0 ? g : maxGrade;
+    };
+    // RT_LEGACY_PROFILE=1: the pre-joint scheme, kept as an A/B knob so a
+    // regression can be attributed on the SAME binary and level (the poke
+    // count rose 6% when the joint solve landed; this is how that was
+    // measured, not argued). Per-chain roadProfile, lowest arriving deck at
+    // each node smeared linearly along the chain, per-chain lower-only ease.
+    const bool legacy = std::getenv("RT_LEGACY_PROFILE") != nullptr;
+    JointProfile J;
+    if (heightAt && legacy) {
+        for (std::size_t si = 0; si < spines.size(); ++si)
+            if (!ground[si].empty()) out[si] = roadProfile(ground[si], arcs[si], maxGrade);
         std::map<std::pair<long long, long long>, double> nodes;
         for (std::size_t si = 0; si < spines.size(); ++si) {
-            if (out[si].empty() || spines[si].closed) continue;
-            if (!spines[si].yAbs.empty()) continue;   // authored deck: fixed
+            if (ground[si].empty() || spines[si].closed) continue;
             const auto& pts = spines[si].points;
-            if ((pts.front() - pts.back()).length() < 1e-6) continue;   // ring
+            if ((pts.front() - pts.back()).length() < 1e-6) continue;
             auto foldMin = [&](const Vec2& v, double h) {
-                auto it = nodes.find(key(v));
-                if (it == nodes.end()) nodes.emplace(key(v), h);
+                auto it = nodes.find(nodeKey(v));
+                if (it == nodes.end()) nodes.emplace(nodeKey(v), h);
                 else it->second = std::min(it->second, h);
             };
             foldMin(pts.front(), out[si].front());
             foldMin(pts.back(), out[si].back());
         }
         for (std::size_t si = 0; si < spines.size(); ++si) {
-            if (out[si].empty() || spines[si].closed) continue;
-            if (!spines[si].yAbs.empty()) continue;   // authored deck: fixed
+            if (ground[si].empty() || spines[si].closed) continue;
             const auto& pts = spines[si].points;
             if ((pts.front() - pts.back()).length() < 1e-6) continue;
-            const double dA = nodes.at(key(pts.front())) - out[si].front();
-            const double dB = nodes.at(key(pts.back())) - out[si].back();
+            const double dA = nodes.at(nodeKey(pts.front())) - out[si].front();
+            const double dB = nodes.at(nodeKey(pts.back())) - out[si].back();
             const double L = std::max(1e-6, arcs[si].back());
             for (std::size_t i = 0; i < out[si].size(); ++i) {
                 const double t = arcs[si][i] / L;
-                out[si][i] += dA * (1.0 - t) + dB * t;   // linear blend to agree
+                out[si][i] += dA * (1.0 - t) + dB * t;
             }
         }
+    } else if (heightAt) {
+        // THE JOINT SOLVE (see the header): smooth, then project every pair
+        // onto its grade slab with shared node variables.
+        J = buildJoint(spines, arcs, ground, gradeOf);
+        jointSmooth(J, 2);
+        jointClampSymmetric(J, 256, 1e-4);
+        for (std::size_t si = 0; si < spines.size(); ++si)
+            for (std::size_t i = 0; i < J.var[si].size(); ++i)
+                if (J.var[si][i] >= 0) out[si][i] = J.y[J.var[si][i]];
     }
     if (heightAt && overlapReach > 0.0) {
         // MID-SPAN overlap reconciliation (P3.2): where corridors overlap, every
@@ -556,16 +729,36 @@ std::vector<std::vector<double>> weldChainProfiles(
                     }
                 }
             }
-            // Ease the approaches back into any dip at maxGrade (lower-only, so
-            // the reconciled overlap height is never raised back up).
-            const auto& sArc = arcs[si];
-            for (std::size_t k = 1; k < out[si].size(); ++k)
-                out[si][k] = std::min(out[si][k],
-                                      out[si][k - 1] + maxGrade * (sArc[k] - sArc[k - 1]));
-            for (std::size_t k = out[si].size() - 1; k-- > 0;)
-                out[si][k] = std::min(out[si][k],
-                                      out[si][k + 1] + maxGrade * (sArc[k + 1] - sArc[k]));
+            if (legacy) {
+                // The old per-chain lower-only ease (see RT_LEGACY_PROFILE).
+                const auto& sArc = arcs[si];
+                for (std::size_t k = 1; k < out[si].size(); ++k)
+                    out[si][k] = std::min(out[si][k],
+                                          out[si][k - 1] + maxGrade * (sArc[k] - sArc[k - 1]));
+                for (std::size_t k = out[si].size() - 1; k-- > 0;)
+                    out[si][k] = std::min(out[si][k],
+                                          out[si][k + 1] + maxGrade * (sArc[k + 1] - sArc[k]));
+            }
         }
+    }
+    if (heightAt && !legacy) {
+        // Ease the approaches back into any dip at grade — JOINTLY, through the
+        // shared node variables, lower-only, and UNCONDITIONALLY (with or
+        // without an overlap pass): the symmetric clamp stops at a 1e-4 m
+        // residual and this closure is what makes every pair exactly within
+        // grade — the contract the unit tests hold. The old per-chain ease is
+        // exactly what un-reconciled the nodes: it lowered a chain's endpoint
+        // toward its own far end and nothing re-agreed the arms (metro_v2
+        // -877,-423: 51.3 / 48.6 / 43.3 m at one node). A shared node takes
+        // the lowest of its arms' post-overlap samples, then the closure runs.
+        for (std::size_t si = 0; si < spines.size(); ++si)
+            for (std::size_t i = 0; i < J.var[si].size(); ++i)
+                if (J.var[si][i] >= 0)
+                    J.y[J.var[si][i]] = std::min(J.y[J.var[si][i]], out[si][i]);
+        jointEaseDown(J);
+        for (std::size_t si = 0; si < spines.size(); ++si)
+            for (std::size_t i = 0; i < J.var[si].size(); ++i)
+                if (J.var[si][i] >= 0) out[si][i] = J.y[J.var[si][i]];
     }
     for (std::size_t si = 0; si < out.size(); ++si) {
         if (!spines[si].yAbs.empty()) continue;   // authored deck: already absolute

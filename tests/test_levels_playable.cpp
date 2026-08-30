@@ -484,6 +484,49 @@ TEST_CASE(metro_ground_probes_adhere_between_the_seams) {
     CHECK(std::fabs(r.worst) < 20.0);               // bounded by bench depth
 }
 
+// THE POKE GATE. RT_POKE_REPORT=1 builds the dense deck-vs-drawn-terrain map at
+// LOD 0/1/2 through the loader's FINAL flatten set and the exact per-LOD grid
+// formula, so its numbers are the game's numbers. It is the measurement that
+// killed the DaylightBatter earthwork (road_net.cpp: 0.00% -> 0.14% poke) —
+// and until now it only PRINTED; nothing failed when it regressed. The terrain-
+// earthwork plan changes the ground under every road, so this is the number
+// that must not move.
+//
+// MEASURED 2026-08-29 on the shipped metro_v2 (241,530 samples per level):
+// LOD0 126 pokes (0.052%, worst 3.51 m at -501,-585), LOD1 1424 (0.59%, worst
+// 4.73 m at -841.6,-388.1), LOD2 2433 (1.0%, worst 6.61 m at -861.9,-401.3).
+// docs/metropolis-scale-plan.md's "CLOSED: 0/184,688" is from an older level
+// state and is STALE — and the LOD1/LOD2 worst sites sit 30-40 m from the
+// T-junction the device reported as a cliff (-877,-423). The gate is therefore
+// "no worse than today", to be tightened toward zero as the earthwork lands;
+// it must not be loosened.
+TEST_CASE(metro_road_decks_are_never_poked_by_the_drawn_terrain) {
+    setenv("RT_POKE_REPORT", "1", 1);
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const bool loaded =
+        LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+                          view, assets, /*editorMode=*/false);
+    unsetenv("RT_POKE_REPORT");
+    CHECK(loaded);
+    if (!loaded) return;
+
+    const LevelLoader::PokeReport& r = LevelLoader::lastPokeReport();
+    for (int l = 0; l < r.lods; ++l)
+        std::printf("    [poke] LOD %d: %ld/%ld poke, worst %.2f m at (%.1f, %.1f)\n",
+                    l, r.pokes[l], r.samples[l], r.worst[l], r.worstX[l], r.worstZ[l]);
+    CHECK(r.lods == 3);                 // the report ran for every level
+    CHECK(r.samples[0] > 100000);       // the fixture must bite
+    // The measured baseline (above). Tighten these, never loosen them.
+    CHECK(r.pokes[0] <= 126);
+    CHECK(r.pokes[1] <= 1424);
+    CHECK(r.pokes[2] <= 2433);
+    CHECK(r.worst[0] <= 3.6);
+}
+
 // THE SIGNAL CENSUS (device: "why do stoplights show up in the middle of the
 // street and not on the corners?"). planStreetFurniture backs each pole off
 // its nav node by (widest half-width + sidewalk + knot spread + curbGap), and

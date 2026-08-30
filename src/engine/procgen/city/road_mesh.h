@@ -200,20 +200,43 @@ private:
 };
 
 
-// The deck's smoothed per-spine profiles, junction-RECONCILED (chains sharing
-// an endpoint agree on its height) — weldSolid rides these, and the terrain
-// conform pass carves to the same surface. heightAt null = flat topY.
+// The deck's per-spine profiles, solved JOINTLY over the whole network — the
+// lattice mesher rides these, and the terrain conform pass carves to the same
+// surface. heightAt null = flat topY.
+//
+// One vertical alignment for the graph, not one per chain patched up after:
+// a junction is ONE variable shared by every arm, every consecutive pair of
+// samples is a grade constraint (|dy| <= g * ds, g per class when `rules` is
+// given, else `maxGrade`), and the solve is a symmetric projection onto those
+// slabs iterated to a fixpoint (each violated pair moves BOTH ends by half the
+// excess — the metric projection, so cyclic projections converge on any graph
+// with cycles; a fixed edge order makes it deterministic). Arms cannot disagree
+// at a node by construction, and a two-point chain gets the same grade limit
+// as a long one. The previous scheme — roadProfile per chain, lowest arriving
+// deck at each node smeared linearly along the chain, then a PER-CHAIN
+// lower-only ease with nothing re-reconciling the nodes — left three arms at
+// (-877,-423) on metro_v2 at 51.3 / 48.6 / 43.3 m (nodeSpread 8.02 m, measured
+// by RT_JUNCTION_DUMP); the pad chorded the 8 m inside its 12 m radius and the
+// carve cut a 9 m cliff at the disc edge. Device: "that road T-junction is
+// really bad ... it's like the land around it doesn't elevate up".
+//
 // `overlapReach` > 0 additionally reconciles MID-SPAN overlaps: wherever two
 // chains' corridors come within (halfWidth_j + overlapReach) of each other —
 // junction interiors, slip roads, close parallels — every deck is pulled to
-// the LOWEST overlapping profile and the approach is re-eased at maxGrade.
-// This is what lets the terrain conform carve to the same surface the decks
-// ride: with one-sided reconciliation the higher deck floated up to 2.6 m
-// above the carved ground (road_poke_probe metropolis, plan P3.1/P3.2).
+// the LOWEST overlapping profile (the carve's lowest-plane rule, so deck and
+// carved ground cannot disagree), and the approaches are re-eased at grade by
+// a JOINT lower-only min-plus closure over shared nodes — values only fall,
+// the fixpoint is unique, node agreement survives it, and no deck the overlap
+// pass lowered is ever raised back up.
+//
+// Authored chains (`yAbs`: corridor decks, ramps) are fixed and stay out of
+// the node unification, exactly as before.
+struct DesignRules;
 std::vector<std::vector<double>> weldChainProfiles(
     const std::vector<UnionSpine>& spines,
     const std::function<double(double, double)>& heightAt, double topY,
-    double maxGrade, double overlapReach = 0.0);
+    double maxGrade, double overlapReach = 0.0,
+    const DesignRules* rules = nullptr);
 
 
 }  // namespace engine

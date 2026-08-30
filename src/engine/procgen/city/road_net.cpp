@@ -222,7 +222,11 @@ RoadGraph sampleNetGraph(const RoadEntity& road, double minTurnRadius = 0.0) {
 // Profile slope limit (rise/run) for chain-height smoothing — the value the
 // deleted weld used (WeldSolidParams::maxGrade); mesh and terrain carve both
 // grade to it, so they stay in agreement.
-static constexpr double kRoadMaxGrade = 0.08;
+static constexpr double kRoadMaxGrade = 0.08;   // the single-grade FALLBACK
+// The per-class grade table (freeway 5%, arterial 8%, collector 10%, local
+// 12%, ramp 6%) the profile solve reads when RoadLook::perClassGrade is set.
+// It always existed in DesignRules; every solve was handed kRoadMaxGrade.
+static const DesignRules kDesignRules;
 
 RoadEntity roadNetStreetsOnly(const RoadEntity& road) {
     bool any = false;
@@ -497,7 +501,7 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
                                double sidewalkWidth, double curbHeight,
                                bool crosswalks, CurbBandAudit* auditOut,
                                double cornerRadius,
-                               RoadDeckField* deckOut) {
+                               RoadDeckField* deckOut, bool perClassGrade) {
     // Semantic self-heal (#17): tests and tools hand this hand-built graphs
     // that never went through a producer — classify so kind-gated styling
     // behaves identically for them. Classified inputs pass through untouched
@@ -574,8 +578,13 @@ RenderMesh buildRoadNetLattice(const RoadGraph& gIn,
             if (std::isnan(c.yAbs[i]))
                 c.yAbs[i] = groundFn(c.points[i].x, c.points[i].y) + 0.15;
     {
+        // overlapReach = sidewalk + 4.0, the SAME value the carve and the walls
+        // pass — it was a hardcoded 3.0 + 4.0 here, so on a 3.5 m sidewalk
+        // level a sample 7.0-7.5 m outside another corridor was min'd in the
+        // carve but not in the mesh (a deck/ground disagreement by design).
         std::vector<std::vector<double>> profiles = weldChainProfiles(
-            chains, groundFn, 0.0, kRoadMaxGrade, 3.0 + 4.0);
+            chains, groundFn, 0.0, kRoadMaxGrade, sidewalkWidth + 4.0,
+            perClassGrade ? &kDesignRules : nullptr);
         for (std::size_t si = 0; si < chains.size(); ++si) {
             const bool sized = profiles[si].size() == chains[si].points.size();
             if (chains[si].yAbs.empty()) {
@@ -1541,7 +1550,7 @@ RenderMesh buildRoadNetMesh(const RoadEntity& road, const RoadGroundFn& heightAt
     RenderMesh rm = buildRoadNetLattice(g, heightAt, nullptr, road.look.sidewalk,
                                         road.look.curb, road.look.crosswalks, auditOut,
                                         road.look.cornerRadius,
-                                        deckOut);
+                                        deckOut, road.look.perClassGrade);
     if (deckOut) deckOut->buildIndex();
     // Bounds + NaN audit: one NaN vertex poisons the bounding sphere and the
     // whole road entity frustum-culls to nothing, silently.
@@ -1734,7 +1743,11 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadEntity& roadIn,
     RoadGraph g = constrainedGraph(road, heightAt);      // grade to the roundabout, not the raw spokes
     (void)maxGrade;   // superseded: the carve must use the deck's own grade
     std::vector<UnionSpine> spines = weldChainSpines(g);
-    if (std::getenv("RT_POKE_SITE")) {
+    // RT_JUNCTION_DUMP prints this too, beside the report's own fingerprint,
+    // so the two graphs (this streets-only one and the report's full one) can
+    // be compared on the same run — on a level with baked corridors they are
+    // NOT expected to match, and the dump must say so rather than hide it.
+    if (std::getenv("RT_POKE_SITE") || std::getenv("RT_JUNCTION_DUMP")) {
         double fp = 0;
         for (std::size_t si = 0; si < spines.size(); ++si)
             fp += spines[si].points.front().x * (si + 1) * 1e-3;
@@ -1749,7 +1762,8 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadEntity& roadIn,
     // ground it never lowered (road_poke_probe metropolis, 8.4% verts >1 m).
     std::vector<std::vector<double>> profiles =
         weldChainProfiles(spines, heightAt, 0.0, kRoadMaxGrade,
-                          road.look.sidewalk + 4.0);
+                          road.look.sidewalk + 4.0,
+                          road.look.perClassGrade ? &kDesignRules : nullptr);
     for (std::size_t si = 0; si < spines.size(); ++si) {
         const UnionSpine& sp = spines[si];
         if (profiles[si].size() < 2) continue;
@@ -1870,7 +1884,8 @@ StructureSet buildRoadWalls(const RoadEntity& roadIn, const RoadGroundFn& height
     std::vector<UnionSpine> spines = weldChainSpines(g);
     std::vector<std::vector<double>> profiles =
         weldChainProfiles(spines, heightAt, 0.0, kRoadMaxGrade,
-                          road.look.sidewalk + 4.0);
+                          road.look.sidewalk + 4.0,
+                          road.look.perClassGrade ? &kDesignRules : nullptr);
     const double falloff = 8.0;   // roadNetConformRegions' feather span
 
     for (std::size_t si = 0; si < spines.size(); ++si) {
@@ -2071,6 +2086,12 @@ RoadEntity roadNetFromJson(const json& j) {
     road.look.markings = j.value("markings", road.look.markings);
     road.look.crosswalks = j.value("crosswalks", road.look.crosswalks);
     road.look.autoRoundabout = j.value("auto_roundabout", road.look.autoRoundabout);
+    road.look.perClassGrade = j.value("per_class_grade", road.look.perClassGrade);
+    // RT_PER_CLASS_GRADE=0|1 overrides the level for an A/B: the per-class
+    // table's cost (pokes, cut/fill) measured against the single 8% on the
+    // SAME level without editing it.
+    if (const char* ov = std::getenv("RT_PER_CLASS_GRADE"))
+        road.look.perClassGrade = std::atoi(ov) != 0;
     if (j.contains("color") && j["color"].is_array() && j["color"].size() == 3)
         road.look.color = Vec3(j["color"][0].get<double>(), j["color"][1].get<double>(),
                                j["color"][2].get<double>());
