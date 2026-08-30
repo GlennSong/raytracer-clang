@@ -127,6 +127,39 @@ Real frontSpan(const Poly2& piece, const Vec2& a, const Vec2& d, const Vec2& nrm
 //   * the interior remainder becomes ONE court lot (inset by lotDepth), the
 //     sculpted mid-block green downstream.
 // Deterministic: edges walk in polygon order, one rng draw per edge.
+// A block's outline is the ROAD GRAPH's sampled geometry: a road is stored as
+// points every ~4.8 m (98% of that graph's nodes are shape, not structure), so
+// one street frontage arrives here as ~40 separate short edges. The walk below
+// skips any edge too short to hold a lot — measured on metro_v2 that was 6690
+// of its ~8000 rejections, and it placed 11 lots in the whole city. Merge the
+// near-collinear fragments back into the frontages they describe: drop a vertex
+// whose sideways deviation from its neighbours' chord is under `tol`, never
+// growing an edge past `maxEdge` (so a long curve becomes several straight
+// runs instead of one chord cutting the corner off it).
+Poly2 mergeFrontageRuns(const Poly2& in, Real tol, Real maxEdge) {
+    const int n0 = static_cast<int>(in.size());
+    if (n0 < 8) return in;                     // already coarse: leave it alone
+    Poly2 out = in;
+    for (bool changed = true; changed && out.size() > 8;) {
+        changed = false;
+        const int m = static_cast<int>(out.size());
+        int best = -1;
+        Real bestDev = tol;
+        for (int i = 0; i < m; ++i) {
+            const Vec2& a = out[(i + m - 1) % m];
+            const Vec2& c = out[i];
+            const Vec2& d = out[(i + 1) % m];
+            const Vec2 e = d - a;
+            const Real L = e.length();
+            if (L < Real(1e-9) || L > maxEdge) continue;   // would over-long the run
+            const Real dev = std::fabs(cross(e, c - a)) / L;
+            if (dev < bestDev) { bestDev = dev; best = i; }
+        }
+        if (best >= 0) { out.erase(out.begin() + best); changed = true; }
+    }
+    return out;
+}
+
 bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int district,
                     std::vector<Lot>& out, ParcelReject* rj) {
     const int n = static_cast<int>(b.size());
@@ -146,6 +179,7 @@ bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int distric
     }
 
     std::vector<Poly2> placed;   // convex lot polys, for the overlap backstop
+    std::vector<int> placedEdge; // which block edge each came from
     const std::size_t firstLot = out.size();
     for (int ei = 0; ei < n; ++ei) {
         const Real L = len[ei];
@@ -186,6 +220,12 @@ bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int distric
             // and the authored lotDepth grain survives the clamp — a block
             // 2x lotDepth deep parcels 2x-deep lots, not one deep row plus
             // clipped remnants.
+            //
+            // (MEASURED: forcing half-depth on the narrow case — so facing
+            // rows meet instead of overrunning — takes overlapping pairs only
+            // 440 -> 349 while pushing blind-bisected blocks 2 -> 53 and
+            // costing 261 lots. The overshoot is a fifth of the overlaps at
+            // most; the rest is the backstop itself failing to separate.)
             Real depth = dmax < Real(1.35) * ld
                              ? std::min(ld, dmax - Real(0.4))
                              : std::min(ld, Real(0.5) * dmax);
@@ -210,12 +250,27 @@ bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int distric
                 bool ok = true;
                 for (const Poly2& q : placed) {
                     if (!convexOverlap(piece, q, Real(0.05))) continue;
+                    if (rj) ++rj->clips;
                     Poly2 best;
                     Real bestA = -1;
                     const int qn = static_cast<int>(q.size());
                     for (int j = 0; j < qn; ++j) {
                         const Vec2 qa = q[j];
                         const Vec2 qe = q[(j + 1) % qn] - qa;
+                        // A DUPLICATE vertex gives a zero-length edge, and a
+                        // zero outward normal makes clipHalfPlane's test
+                        // `dot(0, p) <= 0` true for the whole plane — so the
+                        // "cut" is the uncut piece, which then WINS the
+                        // largest-area contest below every time, and the two
+                        // lots are placed straight on top of each other.
+                        // Sutherland-Hodgman emits such duplicates whenever a
+                        // corner lands exactly on a clip line, so real lots
+                        // carry them: 532 of 1156 clips separated nothing, and
+                        // buildings stood inside each other (device: "I see
+                        // some lots or buildings intersecting each other").
+                        // convexOverlap already skips these edges, which is why
+                        // the overlap was DETECTED and never removed.
+                        if (qe.lengthSquared() < Real(1e-12)) continue;
                         const Vec2 outw(qe.y, -qe.x);   // CCW: outward right
                         Poly2 cut = clipHalfPlane(
                             piece, Vec2(-outw.x, -outw.y),
@@ -227,6 +282,20 @@ bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int distric
                     }
                     if (bestA <= 0) { ok = false; break; }
                     piece = std::move(best);
+                    // Did the clip actually SEPARATE? "Outside one edge of q"
+                    // implies "outside q" for convex q — so this must be false.
+                    if (rj && convexOverlap(piece, q, Real(0.05))) {
+                        ++rj->clipFailed;
+                        static int dumped = 0;
+                        if (std::getenv("RT_PARCEL_DUMP") && dumped < 2) {
+                            ++dumped;
+                            std::fprintf(stderr, "[clip] FAILED to separate.\n  q      =");
+                            for (const Vec2& v : q) std::fprintf(stderr, " (%.2f,%.2f)", v.x, v.y);
+                            std::fprintf(stderr, "\n    signed area %.3f\n  piece  =", area(q));
+                            for (const Vec2& v : piece) std::fprintf(stderr, " (%.2f,%.2f)", v.x, v.y);
+                            std::fprintf(stderr, "\n    signed area %.3f\n", area(piece));
+                        }
+                    }
                 }
                 if (!ok) { piece.clear(); why = 3; break; }
                 // Containment: a concave block can still cut across the rear
@@ -275,11 +344,59 @@ bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int distric
             lot.district = district;
             lot.frontage = Vec2(-nrm.x, -nrm.y);   // outward: toward the street
             lot.court = false;
+            // Was this lot ALREADY overlapping something at the moment it was
+            // added? If yes the backstop under-separates; if no, but the final
+            // sweep still finds overlaps, then something later mutates them.
+            if (rj) {
+                // Both the clip and the SAT test REQUIRE convex polygons: the
+                // clip guarantees separation only because "outside one edge of
+                // q" implies "outside q", which is false for a concave q. If a
+                // piece is concave, every guarantee in the backstop is void —
+                // so measure convexity rather than assume it.
+                auto isConvex = [](const Poly2& p) {
+                    const int m = static_cast<int>(p.size());
+                    if (m < 4) return true;
+                    int sign = 0;
+                    for (int i = 0; i < m; ++i) {
+                        const Vec2 e0 = p[(i + 1) % m] - p[i];
+                        const Vec2 e1 = p[(i + 2) % m] - p[(i + 1) % m];
+                        const Real z = cross(e0, e1);
+                        if (std::fabs(z) < Real(1e-9)) continue;
+                        const int s = z > 0 ? 1 : -1;
+                        if (sign == 0) sign = s;
+                        else if (s != sign) return false;
+                    }
+                    return true;
+                };
+                if (!isConvex(piece)) ++rj->concavePiece;
+                for (const Poly2& q : placed)
+                    if (convexOverlap(piece, q, Real(0.05))) {
+                        ++rj->overlapAtInsert;
+                        if (!isConvex(q)) ++rj->concaveQ;
+                        break;
+                    }
+            }
             placed.push_back(std::move(piece));
+            placedEdge.push_back(ei);
             out.push_back(std::move(lot));
         }
     }
     if (out.size() == firstLot) return false;   // walk failed: caller bisects
+
+    // The backstop's contract, checked rather than trusted: no two lots of this
+    // block may overlap. (It ran on ~11 lots city-wide before the outline merge,
+    // so it has effectively never been exercised.) Split by whether the pair
+    // came from the SAME block edge or different ones — that says whether the
+    // slot loop or the cross-edge backstop is the leak.
+    if (rj)
+        for (std::size_t i = 0; i < placed.size(); ++i)
+            for (std::size_t j = i + 1; j < placed.size(); ++j)
+                if (convexOverlap(placed[i], placed[j], Real(0.05))) {
+                    ++rj->leftOverlapping;
+                    if (i < placedEdge.size() && j < placedEdge.size() &&
+                        placedEdge[i] == placedEdge[j])
+                        ++rj->sameEdgeOverlap;
+                }
 
     // The interior remainder: ONE court lot (the sculpted mid-block green).
     // inset(lotDepth) sits behind every ring lot by construction; when it
@@ -306,7 +423,12 @@ std::vector<Lot> subdivideBlock(const Poly2& block, const ParcelParams& params,
     std::vector<Lot> lots;
     if (bisectedOut) *bisectedOut = false;
     if (block.size() < 3) return lots;
-    Poly2 b = block;
+    // 0.75 m tolerance, measured: 0.25 m costs 181 lots (1747 -> 1566) and
+    // changes nothing else — the fragments along a straight run are exactly
+    // collinear and merge at any tolerance, so the tighter value only refuses
+    // to follow curves. (It does NOT fix the floorplan census's one floating
+    // lot: same lot, same 0.98 m, at (-866.4, -279.5) either way.)
+    Poly2 b = mergeFrontageRuns(block, Real(0.75), Real(70.0));
     ensureCCW(b);
 
     Rng rng(params.seed ? params.seed : 1u);

@@ -1475,6 +1475,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         dbg->pMitered   += prj.mitered;   dbg->pOverlap += prj.overlap;
         dbg->pEscaped   += prj.escaped;   dbg->pTiny    += prj.tiny;
         dbg->pThin      += prj.thin;      dbg->pPlaced  += prj.placed;
+        dbg->pClips     += prj.clips;     dbg->pLeftOverlapping += prj.leftOverlapping;
+        dbg->pSameEdge  += prj.sameEdgeOverlap; dbg->pAtInsert += prj.overlapAtInsert; dbg->pConcave += prj.concavePiece + prj.concaveQ; dbg->pClipFailed += prj.clipFailed;
         // RT_PARCEL_DEBUG: the per-block view the [citylots] summary cannot give.
         // The summary says how many lots a city produced; this says which blocks
         // produced them, at what district grain, on what shape of interior — which
@@ -2262,12 +2264,20 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                    C + v * hv + u * s0, C + v * hv - u * hu};
                         ensureCCW(cand);   // area() is |signedArea| — old guard was dead
                         // The court rect is the plan's OBB — on a not-quite-
-                        // rect plan its corners can poke past the cleared
-                        // polygon, so re-check them against the roads.
+                        // rect plan its corners poke past the cleared polygon.
+                        // The old check tested the ROADS ONLY, never the lot,
+                        // so a courtyard mass could stand off its own parcel
+                        // and into the neighbour's building (device: "I see
+                        // some lots or buildings intersecting each other").
+                        // Corners must clear the roads AND stay on the lot.
                         bool ok = true;
-                        if (roads)
-                            for (const Vec2& q : cand)
-                                if (!clearOfRoads(q)) { ok = false; break; }
+                        const Vec2 cc = centroid(cand);
+                        for (const Vec2& q : cand) {
+                            if (roads && !clearOfRoads(q)) { ok = false; break; }
+                            if (!pointInPolygon(plan, q + (cc - q) * 0.02)) {
+                                ok = false; break;
+                            }
+                        }
                         if (ok) plan = cand;
                     }
                 }
@@ -2312,17 +2322,26 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // inscribed in the lot (a real drum, cornices and tiers included).
             if (planOk && rec.massing == BuildingRecipe::Massing::Circle &&
                 shortSide > 17) {
-                const Real rad = shortSide * 0.5 - 1.6;
-                Poly2 circ;
-                for (int k = 0; k < 16; ++k) {
-                    Real a2 = 2.0 * 3.14159265358979323846 * k / 16;
-                    circ.push_back(b.site + Vec2(std::cos(a2), std::sin(a2)) * rad);
-                }
-                bool clear = true;
-                if (roads)
+                // The drum is sized off the OBB short side and centred on
+                // b.site — on a TAPERED lot that circle runs past the sloping
+                // edges, and the old test checked the ROADS ONLY, so the tower
+                // could stand partly on the neighbour's parcel. SHRINK-TO-FIT,
+                // as the house path above already does: retry smaller until
+                // the whole rim sits on the lot and off the road.
+                Vec2 cc = b.site;
+                if (!pointInPolygon(plan, cc)) cc = centroid(plan);
+                for (Real rad = shortSide * 0.5 - 1.6; rad > 6.0; rad *= 0.85) {
+                    Poly2 circ;
+                    for (int k = 0; k < 16; ++k) {
+                        Real a2 = 2.0 * 3.14159265358979323846 * k / 16;
+                        circ.push_back(cc + Vec2(std::cos(a2), std::sin(a2)) * rad);
+                    }
+                    bool clear = true;
                     for (const Vec2& v : circ)
-                        if (!clearOfRoads(v)) { clear = false; break; }
-                if (clear) plan = circ;
+                        if ((roads && !clearOfRoads(v)) ||
+                            !pointInPolygon(plan, v)) { clear = false; break; }
+                    if (clear) { plan = circ; break; }
+                }
             }
             // ROWHOUSES (device: "town homes ... packed side by side"): the
             // lot becomes a terrace of narrow townhome UNITS sharing party
@@ -2331,19 +2350,35 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             if (planOk && rec.massing == BuildingRecipe::Massing::RowStrip) {
                 OBB2 sb = orientedBoundingBox(plan);
                 const int la = sb.longAxis(), sa2 = 1 - la;
-                const Real len = 2 * sb.half[la];
-                const Real dep = std::min(2 * sb.half[sa2], Real(11.0));
-                const int units =
-                    static_cast<int>(len / rng.range(5.6, 7.0));
+                Real len = 2 * sb.half[la];
+                Real dep = std::min(2 * sb.half[sa2], Real(11.0));
                 Vec2 u = sb.axis[la], v = sb.axis[sa2];
-                bool stripOk = units >= 3 && dep > 6.5;
-                if (stripOk && roads)
-                    for (int sx = -1; sx <= 1 && stripOk; sx += 2)
+                // The terrace spans the plan's OBB, and a frontage-first lot
+                // is a TRAPEZOID — so the row's ends ran past the tapered
+                // edges onto the neighbour, because the old test checked the
+                // ROADS ONLY and never the lot. This was the WIDEST spill of
+                // the three (a whole terrace, not one mass). SHRINK-TO-FIT
+                // like the house path: pull the row in until all four corners
+                // sit on the lot and off the road — a tapered lot gets a
+                // SHORTER row rather than one that overhangs.
+                bool stripOk = false;
+                for (int attempt = 0; attempt < 5 && dep > 6.5; ++attempt) {
+                    bool fits = true;
+                    for (int sx = -1; sx <= 1 && fits; sx += 2)
                         for (int sy = -1; sy <= 1; sy += 2) {
                             Vec2 corner = sb.center + u * (len * 0.5 * sx) +
                                           v * (dep * 0.5 * sy);
-                            if (!clearOfRoads(corner)) { stripOk = false; break; }
+                            if ((roads && !clearOfRoads(corner)) ||
+                                !pointInPolygon(plan, corner)) {
+                                fits = false; break;
+                            }
                         }
+                    if (fits) { stripOk = true; break; }
+                    len *= 0.88;
+                    dep *= 0.94;
+                }
+                const int units = static_cast<int>(len / rng.range(5.6, 7.0));
+                stripOk = stripOk && units >= 3 && dep > 6.5;
                 if (stripOk) {
                     const Real uw = len / units;
                     const Vec2 c0 = sb.center - u * (len * 0.5);
@@ -2658,7 +2693,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
              << " lots; rejected edgeShort " << dbg->pEdgeShort
              << ", shallow " << dbg->pShallow << ", mitered " << dbg->pMitered
              << ", overlap " << dbg->pOverlap << ", escaped " << dbg->pEscaped
-             << ", tiny " << dbg->pTiny << ", thin " << dbg->pThin;
+             << ", tiny " << dbg->pTiny << ", thin " << dbg->pThin
+             << " | backstop clipped " << dbg->pClips << ", pairs STILL overlapping "
+             << dbg->pLeftOverlapping << " (" << dbg->pSameEdge << " from ONE edge, " << dbg->pAtInsert << " already overlapping AT INSERT, " << dbg->pConcave << " NON-CONVEX, " << dbg->pClipFailed << " CLIPS THAT DID NOT SEPARATE)";
     }
     return out;
 }

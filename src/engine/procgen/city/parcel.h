@@ -67,6 +67,14 @@ struct ParcelReject {
     int tiny = 0;        // under the minimum lot area
     int thin = 0;        // depth-per-frontage collapsed (a back-alley strip)
     int placed = 0;      // lots actually laid
+    int clips = 0;       // times the backstop SAW an overlap and cut the new lot
+    int leftOverlapping = 0;   // pairs still overlapping after the walk finished
+                               // — the backstop's own contract, checked
+    int sameEdgeOverlap = 0;   // ...of which came from the SAME block edge
+    int overlapAtInsert = 0;   // lots already overlapping when they were added
+    int clipFailed = 0;  // clips that did NOT separate the pair they cut against
+    int concavePiece = 0, concaveQ = 0;   // non-convex polys: every backstop
+                                          // guarantee is void on those
     int blocksWalked = 0, blocksFailed = 0;   // whole blocks the walk lost
 };
 

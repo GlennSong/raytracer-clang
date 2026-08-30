@@ -264,8 +264,20 @@ TEST_CASE(distant_tier_mass_boxes_reach_below_the_drawn_ground) {
     net.look.defaultWidth = 12.0;
     net.look.sidewalk = 3.5;
     net.look.autoRoundabout = false;
-    net.graph.nodes = { RoadNode{Vec2(-80, -50)}, RoadNode{Vec2(80, -50)},
-                        RoadNode{Vec2(80, 50)},   RoadNode{Vec2(-80, 50)} };
+    // Block sized so the frontage ring yields a real SAMPLE of mass boxes.
+    // It used to be 160x100 and produced 8 — but 8 counted lots that OVERLAPPED
+    // each other: the parcel backstop's cut was derived from an edge of the
+    // already-placed lot, and a duplicated corner (which clipping produces
+    // whenever a vertex lands on the cut line) is a zero-length edge whose
+    // normal is (0,0), so `dot(0,p) <= 0` held everywhere and the "cut"
+    // returned the lot WHOLE — then won the largest-area contest, because
+    // removing nothing is always biggest. With the cut actually separating
+    // lots, the honest yield on that ring is 5, which tripped the sample floor
+    // below. The floor is not the gate — `violations == 0` is — so the sample
+    // is restored by giving the walk more frontage (440x300 -> 8 boxes), never
+    // by lowering the bar.
+    net.graph.nodes = { RoadNode{Vec2(-220, -150)}, RoadNode{Vec2(220, -150)},
+                        RoadNode{Vec2(220, 150)},  RoadNode{Vec2(-220, 150)} };
     net.graph.edges = { RoadEdge{0, 1, 12.0}, RoadEdge{1, 2, 12.0},
                         RoadEdge{2, 3, 12.0}, RoadEdge{3, 0, 12.0} };
     const RoadGroundFn natural = hillside;
