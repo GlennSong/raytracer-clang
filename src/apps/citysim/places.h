@@ -79,9 +79,12 @@ public:
     // walkable point of `graph` (the sidewalk in front of the nearest road).
     // Returns the assigned PlaceId (== its index in places()). If the graph is
     // empty the entrance falls back to the site and entranceLink stays -1.
+    // `entranceHint` (ADR-0080): the building's real door (world XZ, a step
+    // outside the aperture) -- when given, the sidewalk snap runs from IT,
+    // not the centroid, so the entrance lands in front of the actual door.
     PlaceId add(PlaceType type, Vec2 site, const engine::NavGraph& graph,
                 Real openHour = 0, Real closeHour = 24, int capacity = 0,
-                std::string name = {});
+                std::string name = {}, const Vec2* entranceHint = nullptr);
 
     int size() const { return static_cast<int>(places_.size()); }
     bool empty() const { return places_.empty(); }

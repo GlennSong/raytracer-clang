@@ -156,3 +156,25 @@ TEST_CASE(agent_uids_stable_and_unique) {
     for (std::size_t i = 0; i < sim.agents().size(); ++i)
         CHECK(sim.agents()[i].uid == sim2.agents()[i].uid);
 }
+
+
+TEST_CASE(place_entrance_hint_wins_over_the_site_snap) {
+    // ADR-0080: a building knows its real door; the sidewalk snap must run
+    // from the door, not the footprint centroid (which can be around a
+    // corner from it).
+    NavGraph nav = citytest::straightRoad(120, 8);
+    PlaceMap places;
+    const Vec2 site(60, 20);
+    const Vec2 door(20, 12);
+    PlaceId a = places.add(PlaceType::Shop, site, nav);
+    PlaceId b = places.add(PlaceType::Shop, site, nav, 0, 24, 0, {}, &door);
+    const Real dxa = places[a].entrance.x - site.x;   // legacy: near the site
+    const Real dxb = places[b].entrance.x - door.x;   // hinted: near the door
+    CHECK(dxa < 6.0);
+    CHECK(dxa > -6.0);
+    CHECK(dxb < 6.0);
+    CHECK(dxb > -6.0);
+    // And the two entrances genuinely differ -- the hint changed the snap.
+    const Real sep = places[b].entrance.x - places[a].entrance.x;
+    CHECK((sep < -20.0) || (sep > 20.0));
+}

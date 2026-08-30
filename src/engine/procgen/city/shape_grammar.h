@@ -58,6 +58,10 @@ enum class PartId : uint8_t {
              // NightGlow and the day/night cycle raises their emission after
              // dusk. Chosen per opening by a position hash (litWindow), so the
              // SAME windows glow at every LOD and across rebuilds.
+    Interior,// bare interior surfaces of enterable buildings (ground ceiling,
+             // upper slabs, stairs, inner walls): concrete-toned and faintly
+             // self-lit (emission = albedo x 0.10) so sun-blind rooms read as
+             // dim concrete instead of black (ADR-0080; local lights owed).
     Count    // KEEP LAST: materialIndexFor is the ordinal; arrays size by Count
 };
 
@@ -132,6 +136,8 @@ struct AttachPoint {
     Vec3 position;
     Vec3 normal;        // outward facade normal (for oriented props/signage)
     std::string tag;    // "facade", "entrance", "roof", ...
+    Real width = 0;     // opening extent along the facade (entrance: door span)
+    Real height = 0;    // opening height (entrance: head above the foot)
 };
 
 struct BuildingMesh {
@@ -143,6 +149,24 @@ struct BuildingMesh {
     // Merge all parts into one mesh (single-material preview / collision).
     RenderMesh merged() const;
 };
+
+struct BuildingParams;  // declared below (interiorLayout takes it by ref)
+
+// Where the stair goes in an enterable building (ADR-0080): chosen from the
+// plan alone -- deterministic, terrain-free -- so the ground ceiling's well
+// hole (grown with the exterior at Full detail) and the streamed interior's
+// stair (growInterior) are the SAME layout by construction.
+struct InteriorLayout {
+    bool hasStair = false;  // false: nothing fit -- no well is cut
+    bool dogleg = false;    // two half flights + a landing (short edges)
+    Vec2 stairFoot;         // XZ centre of the bottom riser
+    Vec2 stairDir;          // unit XZ direction of climb
+    Real width = 1.2;       // flight width
+    Real run = 0;           // horizontal run of one full-storey flight
+    Poly2 well;             // the well rectangle (cut from ceiling/slabs)
+};
+InteriorLayout interiorLayout(const Poly2& plan, const BuildingParams& params,
+                              std::size_t entranceEdge);
 
 // Parameters for the mid-rise mixed-use hero (ADR-0038 §7) and its variants. All
 // lengths in metres. A skyscraper is just this with a big `floors` and setbacks.
@@ -177,6 +201,12 @@ struct BuildingParams {
     Real  windowInset = 0.12;    // window recess depth
     bool  walkableGround = true; // hollow the ground floor + punch a real entrance (ADR-0038 §4)
     Real  wallThickness = 0.3;
+    // Enterable buildings (ADR-0080): emit the entrance as an OPEN aperture --
+    // no leaf, no doorframe -- with the reveal deepened to wallThickness so
+    // jambs/lintel/threshold read as a real wall section. The lot layer sets
+    // this per unit (the spawn building for now); everything else is
+    // byte-identical with it false.
+    bool  openDoorway = false;
     Real  setbackEvery = 0;      // >0: step the mass back this much every N floors
     int   setbackFloors = 0;     // floors between setbacks (0 = none)
     Real  parapet = human::PARAPET;

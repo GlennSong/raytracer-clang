@@ -154,3 +154,59 @@ TEST_CASE(curtain_wall_lights_vary_within_a_storey) {
     CHECK(lit * 10 > panes * 1);              // inhabited...
     CHECK(lit * 10 < panes * 6);              // ...but still night
 }
+
+
+// ---- ADR-0080: the open doorway ------------------------------------------
+
+TEST_CASE(open_doorway_drops_the_leaf_and_grows_an_interior) {
+    Poly2 plan = {{0, 0}, {20, 0}, {20, 15}, {0, 15}};
+    BuildingParams p = midriseParams();
+    const BuildingMesh closed = growPlanBuilding(plan, p);
+    p.openDoorway = true;
+    const BuildingMesh open = growPlanBuilding(plan, p);
+    // The painted leaf is gone at Full detail...
+    const RenderMesh* doorClosed = part(closed, PartId::Door);
+    CHECK(doorClosed && !doorClosed->indices.empty());
+    const RenderMesh* doorOpen = part(open, PartId::Door);
+    CHECK(!doorOpen || doorOpen->indices.empty());
+    // ...replaced by a real interior shell (inner walls + ceiling), which the
+    // closed building does not have at all.
+    const RenderMesh* interior = part(open, PartId::Interior);
+    CHECK(interior && !interior->indices.empty());
+    const RenderMesh* interiorClosed = part(closed, PartId::Interior);
+    CHECK(!interiorClosed || interiorClosed->indices.empty());
+    // The entrance attach carries the aperture for the collider notch.
+    bool found = false;
+    for (const AttachPoint& a : open.attaches)
+        if (a.tag == "entrance") {
+            found = true;
+            CHECK(std::fabs(a.width - human::DOOR_WIDTH) < 0.8);
+            CHECK(a.height > 2.0);
+            CHECK(a.height < 3.0);
+        }
+    CHECK(found);
+    // Flat LOD still paints its dark pane -- LOD1 shows a door, not a hole.
+    const BuildingMesh flatOpen =
+        growPlanBuilding(plan, p, 0.0, FacadeDetail::Flat);
+    const RenderMesh* flatDoor = part(flatOpen, PartId::Door);
+    CHECK(flatDoor && !flatDoor->indices.empty());
+}
+
+TEST_CASE(interior_layout_fits_the_plan_and_repeats) {
+    Poly2 plan = {{0, 0}, {20, 0}, {20, 15}, {0, 15}};
+    BuildingParams p = midriseParams();
+    const InteriorLayout il = interiorLayout(plan, p, 0);
+    CHECK(il.hasStair);
+    CHECK(il.well.size() == 4);
+    for (const Vec2& c : il.well) {
+        CHECK(pointInPolygon(plan, c));
+        CHECK(c.y > 0.5);   // never against the entrance edge (edge 0, y=0)
+    }
+    const InteriorLayout il2 = interiorLayout(plan, p, 0);
+    CHECK(il2.hasStair == il.hasStair);
+    CHECK(std::fabs(il2.stairFoot.x - il.stairFoot.x) < 1e-12);
+    CHECK(std::fabs(il2.stairFoot.y - il.stairFoot.y) < 1e-12);
+    // A sliver plan fits no stair and cuts no hole.
+    Poly2 sliver = {{0, 0}, {5, 0}, {5, 3.0}, {0, 3.0}};
+    CHECK(!interiorLayout(sliver, p, 0).hasStair);
+}

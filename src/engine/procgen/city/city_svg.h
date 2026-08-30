@@ -44,6 +44,10 @@ struct CityMapData {
     std::vector<Building> buildings;
     struct Place { Vec2 pos; std::string type, name; };
     std::vector<Place> places;
+    // Real 3-D doors (ADR-0080): the grammar's entrance apertures, from the
+    // CityBuildings records. Drawn as a tick along the outward normal.
+    struct Door { Vec2 foot; Vec2 normal; bool enterable = false; };
+    std::vector<Door> doors;
     // Everything else planted: trees/rocks (Scenery) and benches/signs/other
     // furniture instance groups, as positions.
     enum class ObjectKind { Scenery, Furniture };
@@ -54,7 +58,7 @@ struct CityMapData {
 struct CityMapLayers {
     bool roads = true, curbs = true, sidewalks = true, gaps = true, nav = true,
          furniture = true, objects = true, blocks = true, lots = true, buildings = true,
-         districts = true, places = true, conflicts = true, legend = true;
+         districts = true, places = true, doors = true, conflicts = true, legend = true;
     // "roads,sidewalks,furniture" → only those (unknown names are ignored,
     // reported by the writer's log line); "all" or "" → everything.
     static CityMapLayers fromList(const std::string& csv);

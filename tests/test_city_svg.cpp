@@ -63,7 +63,7 @@ TEST_CASE(city_map_draws_every_layer_as_its_own_group) {
     std::remove(path.c_str());
     int n = 0;
     const char* const* names = CityMapLayers::names(&n);
-    CHECK(n == 14);
+    CHECK(n == 15);   // +doors (ADR-0080): the grammar's real apertures
     for (int i = 0; i < n; ++i)
         CHECK(svg.find("id='layer-" + std::string(names[i]) + "'") != std::string::npos);
     CHECK(svg.find("toggleLayer(") != std::string::npos);            // the in-file switches

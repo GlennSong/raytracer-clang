@@ -26,6 +26,29 @@ namespace engine {
 // deterministic (ADR-0002). The host (level_loader) spawns each LotBuilding as a
 // box entity + collider and registers it as a place for the agents' schedules.
 
+// A real 3-D door on a grown building (ADR-0080): where the grammar put the
+// aperture. `foot` is the threshold centre (world XZ, at the unit's baseY),
+// `normal` the outward facade direction. Collected from the grammar's
+// "entrance" attaches (which mergeParts otherwise discards).
+struct DoorSpec {
+    Vec2 foot;
+    Vec2 normal;
+    Real width = 0;
+    Real height = 0;
+};
+
+// One GROWN MASSING and its verbatim regen key (ADR-0080): growPlanBuilding
+// is pure in (plan, params, baseY), so `params` (~250 B) is the whole recipe
+// for rebuilding this unit's interior on demand. A rowhouse strip is N units,
+// a podium tower two; the box-grammar fallback records its synthesized plan.
+struct BuildingUnit {
+    Poly2 plan;
+    Real baseY = 0;
+    BuildingParams params;
+    std::vector<DoorSpec> doors;
+    bool enterable = false;   // grown with openDoorway (LotParams::enterableAt)
+};
+
 struct LotBuilding {
     Vec2 site;              // footprint centroid (world XZ)
     Real width = 0;         // OBB extent along the lot's long axis (m) — collider
@@ -75,6 +98,8 @@ struct LotBuilding {
     // loader turns them into thin wall colliders (drive feedback: "Parks
     // also have no collision detection").
     std::vector<std::pair<Vec2, Vec2>> fenceSegs;
+    // The grown massings + regen keys + doors (ADR-0080). Parks/greens: empty.
+    std::vector<BuildingUnit> units;
 };
 
 struct LotParams {
@@ -135,6 +160,11 @@ struct LotParams {
     // boundary, the lane's edges land exactly where building walls already
     // stop, so cutting it never shrinks an existing row.
     Real alleyWidth = 2.8;
+    // Enterable buildings (ADR-0080): world XZ points; the unit whose plan
+    // contains one grows with an OPEN doorway (no leaf, deep reveal, inner
+    // shell + ceiling) and is marked BuildingUnit::enterable. The loader
+    // passes the player spawn; a level can name more later.
+    std::vector<Vec2> enterableAt;
     uint32_t seed = 1;
     // TERRAIN sampler (world y at x,z): buildings grow from their graded pad
     // plane (the ENTRANCE-side grade, so the front door sits level with the

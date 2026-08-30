@@ -256,8 +256,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             LOG_WARN << "citysim: unknown place type '" << ap.type << "' — skipped";
             continue;
         }
+        const Vec2 doorHint(ap.ex, ap.ez);
         places_.add(type, Vec2(ap.x, ap.z), nav_, ap.openHour, ap.closeHour, 0,
-                    ap.name);
+                    ap.name, ap.hasEntrance ? &doorHint : nullptr);
     }
 
     // DENSITY population (roads-v2.1 4c): -1 counts are computed from the

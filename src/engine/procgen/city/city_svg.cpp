@@ -15,8 +15,8 @@ namespace {
 
 const char* kLayerNames[] = {"roads", "curbs", "sidewalks", "gaps", "nav", "furniture",
                              "objects", "blocks", "lots", "buildings", "districts",
-                             "places", "conflicts", "legend"};
-constexpr int kLayerCount = 14;
+                             "places", "doors", "conflicts", "legend"};
+constexpr int kLayerCount = 15;
 
 bool* layerFlag(CityMapLayers& L, int i) {
     switch (i) {
@@ -24,7 +24,7 @@ bool* layerFlag(CityMapLayers& L, int i) {
         case 3: return &L.gaps;      case 4: return &L.nav;      case 5: return &L.furniture;
         case 6: return &L.objects;   case 7: return &L.blocks;   case 8: return &L.lots;
         case 9: return &L.buildings; case 10: return &L.districts; case 11: return &L.places;
-        case 12: return &L.conflicts;
+        case 12: return &L.doors;    case 13: return &L.conflicts;
         default: return &L.legend;
     }
 }
@@ -421,6 +421,19 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
                 out << "><title>" << esc(b.type) << (b.district.empty() ? "" : " · ") << esc(b.district)
                     << "</title></polygon>\n";
             else out << "/>\n";
+        }
+        out << "</g>\n";
+        ++drawn;
+    }
+    // --- doors: a tick from the aperture foot along the outward normal (ADR-0080) ----
+    if (layers.doors) {
+        out << "<g id='layer-doors' stroke='#e65100' stroke-width='0.8' fill='none'>\n";
+        for (const CityMapData::Door& d : data.doors) {
+            out << "<line x1='" << d.foot.x << "' y1='" << d.foot.y << "' x2='"
+                << d.foot.x + d.normal.x * 2.5 << "' y2='"
+                << d.foot.y + d.normal.y * 2.5 << "'"
+                << (d.enterable ? " stroke='#00c853' stroke-width='1.4'" : "")
+                << "/>\n";
         }
         out << "</g>\n";
         ++drawn;

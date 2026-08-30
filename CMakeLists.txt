@@ -118,6 +118,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/district.cpp
     src/engine/procgen/city/road_crossings.cpp
     src/engine/procgen/city/architect.cpp
+    src/engine/procgen/city/building_collider.cpp
     src/engine/procgen/city/city_lots.cpp
     src/engine/procgen/city/surface_field.cpp
     src/engine/procgen/city/structure_set.cpp
@@ -798,6 +799,7 @@ if(RT_ENABLE_PHYSICS)
         tests/test_driving_lab.cpp
         tests/test_physics_system.cpp
         tests/test_city_phys_tier.cpp
+        tests/test_building_collider.cpp
         src/engine/physics/physics_world.cpp
         src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp

@@ -71,12 +71,16 @@ Vec2 snapToSidewalk(const engine::NavGraph& graph, Vec2 site,
 
 PlaceId PlaceMap::add(PlaceType type, Vec2 site, const engine::NavGraph& graph,
                       Real openHour, Real closeHour, int capacity,
-                      std::string name) {
+                      std::string name, const Vec2* entranceHint) {
     Place p;
     p.id = static_cast<PlaceId>(places_.size());
     p.type = type;
     p.site = site;
-    p.entrance = snapToSidewalk(graph, site, p.entranceLink, p.entranceT);
+    // ADR-0080: when the caller knows the real door, snap from IT -- the
+    // entrance lands on the sidewalk in front of the door, not wherever is
+    // nearest the footprint centroid (which can be around a corner).
+    p.entrance = snapToSidewalk(graph, entranceHint ? *entranceHint : site,
+                                p.entranceLink, p.entranceT);
     p.openHour = openHour;
     p.closeHour = closeHour;
     p.capacity = capacity;

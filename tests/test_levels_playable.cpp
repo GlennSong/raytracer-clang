@@ -27,6 +27,7 @@
 #include "../src/engine/mesh_uploader.h"
 #include "../src/engine/procgen/terrain.h"
 #include "../src/engine/procgen/city/road_net.h"   // RoadEntity (signal census)
+#include "../src/engine/procgen/city/building_records.h"  // CityBuildings doors (ADR-0080)
 #include "../src/apps/citysim/city_render.h"        // CityRenderSystem (traffic census)
 #include "../src/engine/system.h"
 #include "../src/engine/world.h"
@@ -216,6 +217,15 @@ struct LevelFacts {
     // the plan prisms directly.
     bool spawnInsidePrism = false;
     std::string spawnInsideType;
+    // ADR-0080 doors: every enterable record's aperture must open OUTWARD
+    // onto clear ground (foot + 1.5n outside every prism) from a real wall
+    // (foot - 0.5n inside its own plan), and the spawn belongs at the door.
+    int enterableDoors = 0;
+    int enterableDoorsOutsideOk = 0;
+    int enterableDoorsInsideOk = 0;
+    double spawnToEnterableDoor = 1e300;   // XZ metres, nearest enterable foot
+    double enterableDoorX = 0, enterableDoorZ = 0, enterableDoorNX = 0,
+           enterableDoorNZ = 0;            // first enterable foot + normal
 };
 
 LevelFacts inspect(const std::string& name) {
@@ -277,6 +287,39 @@ LevelFacts inspect(const std::string& name) {
                 f.spawnInsidePrism = true;
                 f.spawnInsideType = pr.type;
                 return;
+            }
+        }
+    });
+
+    // ADR-0080: audit every enterable record's doors against the prisms.
+    world.each<CityBuildings>([&](Entity, CityBuildings& cb) {
+        for (const BuildingRecord& r : cb.records) {
+            if (!r.enterable) continue;
+            for (const DoorSpec& d : r.doors) {
+                if (f.enterableDoors == 0) {
+                    f.enterableDoorX = d.foot.x;
+                    f.enterableDoorZ = d.foot.y;
+                    f.enterableDoorNX = d.normal.x;
+                    f.enterableDoorNZ = d.normal.y;
+                }
+                ++f.enterableDoors;
+                const Vec2 outP = d.foot + d.normal * 1.5;
+                const Vec2 inP = d.foot - d.normal * 0.5;
+                bool outClear = true;
+                world.each<CityPlanDebug>([&](Entity, CityPlanDebug& plan) {
+                    for (const CityPlanDebug::Prism& pr : plan.prisms)
+                        if (pr.plan.size() >= 3 &&
+                            pointInPolygon(pr.plan, outP)) {
+                            outClear = false;
+                            return;
+                        }
+                });
+                if (outClear) ++f.enterableDoorsOutsideOk;
+                if (r.plan.size() >= 3 && pointInPolygon(r.plan, inP))
+                    ++f.enterableDoorsInsideOk;
+                const double dx = spawn.x - d.foot.x, dz = spawn.z - d.foot.y;
+                f.spawnToEnterableDoor = std::min(
+                    f.spawnToEnterableDoor, std::sqrt(dx * dx + dz * dz));
             }
         }
     });
@@ -462,6 +505,31 @@ TEST_CASE(every_shipped_level_spawns_outside_every_building) {
                         f.spawnInsideType.c_str());
         CHECK(!f.spawnInsidePrism);
     }
+}
+
+// ADR-0080: the metro's spawn building is ENTERABLE — it has a real door
+// whose aperture opens outward onto clear ground from a real wall, and the
+// spawn is authored AT that door (the door foot is printed so re-authoring
+// is a copy-paste).
+TEST_CASE(metro_spawn_building_has_a_walkable_door) {
+    bool sawMetro = false;
+    for (const LevelFacts& f : allLevels()) {
+        if (f.name != "metro_v2_test.json" || !f.loaded) continue;
+        sawMetro = true;
+        std::printf("    [doors] enterable doors=%d outsideOk=%d insideOk=%d "
+                    "spawn->door=%.2f m; door foot (%.2f, %.2f) n (%.2f, %.2f)\n",
+                    f.enterableDoors, f.enterableDoorsOutsideOk,
+                    f.enterableDoorsInsideOk, f.spawnToEnterableDoor,
+                    f.enterableDoorX, f.enterableDoorZ, f.enterableDoorNX,
+                    f.enterableDoorNZ);
+        CHECK(f.enterableDoors >= 1);
+        CHECK(f.enterableDoorsOutsideOk == f.enterableDoors);
+        CHECK(f.enterableDoorsInsideOk == f.enterableDoors);
+        // The spawn stands at its building's door (AGENTS.md: place it
+        // deliberately). Re-author player.position when this trips.
+        CHECK(f.spawnToEnterableDoor < 3.5);
+    }
+    CHECK(sawMetro);
 }
 
 // THE GATE (floorplan-conformance round): every building's floorplan meets

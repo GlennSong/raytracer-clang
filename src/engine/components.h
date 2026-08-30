@@ -462,6 +462,13 @@ struct AuthoredPlace {
     float x = 0, z = 0;    // building site (world XZ)
     std::string name;      // optional label (may be empty)
     float openHour = 0, closeHour = 24;
+    // The building's real DOOR (ADR-0080): world XZ a step outside the
+    // grammar's entrance aperture (foot + normal x 1.5). When set, the
+    // citysim snaps the place entrance from HERE instead of the footprint
+    // centroid, so routing targets the actual door face. hasEntrance=false
+    // keeps the legacy centroid snap.
+    bool hasEntrance = false;
+    float ex = 0, ez = 0;
     // Optional building (Living City Phase 4): when width/depth/height are all > 0
     // the loader spawns a static box STRUCTURE of this footprint at the site, so
     // the place IS a building you can walk up to (its door snaps to the sidewalk).

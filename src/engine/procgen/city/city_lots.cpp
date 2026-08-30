@@ -1309,6 +1309,47 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 MeshBuilder::append((*dst)[mi], part);
         }
     };
+    // Doors + regen key for one grown unit (ADR-0080): the "entrance"
+    // attaches mergeParts is about to discard become DoorSpecs on a
+    // BuildingUnit the runtime can rebuild interiors from.
+    auto collectUnit = [](LotBuilding& b, const Poly2& uplan,
+                          const BuildingParams& upar, Real ubase,
+                          const BuildingMesh& um) {
+        BuildingUnit u;
+        u.plan = uplan;
+        u.baseY = ubase;
+        u.params = upar;
+        u.enterable = upar.openDoorway;
+        for (const AttachPoint& ap : um.attaches)
+            if (ap.tag == "entrance")
+                u.doors.push_back({Vec2(ap.position.x, ap.position.z),
+                                   Vec2(ap.normal.x, ap.normal.z), ap.width,
+                                   ap.height});
+        b.units.push_back(std::move(u));
+    };
+    // Does an enterableAt point land in -- or stand beside -- this unit's
+    // plan? Proximity matters because a SAFE spawn is authored OUTSIDE every
+    // prism (the Phase-0 guard walks it out), a couple of metres off the
+    // building it should open. 8 m reaches across a sidewalk, never across
+    // a street (>= 12 m).
+    auto wantsDoorway = [&p](const Poly2& uplan) {
+        if (uplan.size() < 3) return false;
+        for (const Vec2& pt : p.enterableAt) {
+            if (pointInPolygon(uplan, pt)) return true;
+            for (std::size_t i = 0; i < uplan.size(); ++i) {
+                const Vec2 a = uplan[i], b = uplan[(i + 1) % uplan.size()];
+                const Vec2 ab = b - a;
+                const Real L2 = ab.lengthSquared();
+                const Real t = L2 < Real(1e-12)
+                                   ? Real(0)
+                                   : std::max(Real(0),
+                                              std::min(Real(1),
+                                                       dot(pt - a, ab) / L2));
+                if ((a + ab * t - pt).length() < 8.0) return true;
+            }
+        }
+        return false;
+    };
     // Block footprints kept for the in-pass grading step below (dbg->blocks
     // is the debug overlay's copy; grading must not depend on debug wiring).
     std::vector<Poly2> blockFoots;
@@ -2199,10 +2240,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 for (Real t : {Real(0), Real(0.8), Real(1.6), Real(2.6), Real(3.6)}) {
                     Poly2 cand = t > 0 ? inset(plan, t) : plan;
                     if (cand.size() < 3 || area(cand) < 40) break;
-                    // The MESH is the guarantee (lot buildings are visual-only
-                    // — no box collider since the invisible-walls fix), so the
-                    // plan's own vertices clearing the corridors is what keeps
-                    // facades off the street.
+                    // The MESH is the guarantee: the collider IS this plan,
+                    // extruded to a prism by the loader (ADR-0080; the old
+                    // "visual-only, no collider" note predated that), so the
+                    // plan's own vertices clearing the corridors keeps facade
+                    // AND collider off the street.
                     bool clear = true;
                     for (const Vec2& v : cand)
                         if (!clearOfRoads(v)) { clear = false; break; }
@@ -2398,7 +2440,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                             bp.floors);
                         upar.faceDir = bp.faceDir;
                         if (p.styleHook) p.styleHook("rowhouse_unit", upar);
+                        if (wantsDoorway(up4)) upar.openDoorway = true;
                         BuildingMesh um = growPlanBuilding(up4, upar, stripBase);
+                        collectUnit(b, up4, upar, stripBase, um);
                         mergeParts(outParts, um);
                         if (outFlatParts)
                             mergeParts(outFlatParts,
@@ -2543,7 +2587,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     pod.setbackFloors = 0;
                     pod.spire = false;
                     pod.dome = false;
+                    if (wantsDoorway(plan)) pod.openDoorway = true;
                     BuildingMesh pm = growPlanBuilding(plan, pod, b.baseY);
+                    collectUnit(b, plan, pod, b.baseY, pm);
                     BuildingParams twr = bp;   // the shaft: no street-level kit
                     twr.floors = std::max(1, bp.floors - rec.podiumFloors);
                     twr.groundRetail = false;
@@ -2562,6 +2608,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         b.baseY +
                         std::max(Real(0), pm.height - human::PARAPET - 0.15);
                     BuildingMesh tm = growPlanBuilding(tplan, twr, towerBase);
+                    collectUnit(b, tplan, twr, towerBase, tm);
                     if (outParts) {
                         for (const RenderMesh& part : pm.parts) {
                             const int mi = part.materialIndex;
@@ -2588,6 +2635,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 }
             }
             if (planOk) {
+                if (wantsDoorway(plan)) bp.openDoorway = true;
                 bm = growPlanBuilding(plan, bp, b.baseY);
                 if (outFlatParts)
                     bmFlat = growPlanBuilding(plan, bp, b.baseY,
@@ -2628,6 +2676,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                           o2 + f2 * scope.size.z};
             }
             if (bm.parts.empty()) continue;
+            collectUnit(b, b.plan, bp, b.baseY, bm);
             mergeParts(outParts, bm);
             mergeParts(outFlatParts, bmFlat);
             b.height = bm.height > 0 ? bm.height : 8.0;

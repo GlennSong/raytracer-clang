@@ -1,6 +1,7 @@
 #include "shape_grammar.h"
 
 #include "road_mesh.h"            // triangulatePolygon (floorplan roof/slab fill)
+#include "triangulate.h"          // triangulateWithHoles (interior ceilings, ADR-0080)
 #include "../surface_maps.h"      // surfaceWorldTileSize (shingle slope UVs)
 #include "../../mesh_builder.h"
 #include <algorithm>
@@ -166,6 +167,16 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
         case PartId::Concrete:
             m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.92f;
             m.setSurface(RenderMaterial::Surface::Concrete); break;
+        case PartId::Interior:
+            // Bare interior surfaces of enterable buildings (ADR-0080). The
+            // shader is sun-only (no local lights, TECH_DEBT), so a roofed
+            // room is sun-blind by design; a faint self-light -- emission =
+            // albedo x 0.10 -- keeps it dim concrete instead of black, and
+            // the loader tags interior chunks NightGlow for after dusk.
+            m.albedo = {0.58, 0.57, 0.55}; m.metallic = 0.0f; m.roughness = 0.92f;
+            m.setSurface(RenderMaterial::Surface::Concrete);
+            m.emission = m.albedo * 0.10;
+            break;
         case PartId::Stucco:
             m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.85f;
             m.setSurface(RenderMaterial::Surface::Stucco); break;
@@ -545,6 +556,43 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
 
 // The FLAT emitter (LOD1, city-render-perf R2): the same layout, the cheapest
 // honest drawing of it — one quad per wall, one flat pane per opening riding
+// The INNER face of an exterior ground-storey wall (enterable buildings,
+// ADR-0080): the SAME FacadeLayout as the outside, drawn at -thick facing the
+// room, so from inside you see wall around every opening instead of the sky
+// through a one-sided skin. Non-door openings also get an inward-facing pane
+// (the same lit/dark hash as the outside pane) so windows read as glass, not
+// holes; the door bay's aperture stays open -- its reveal is the passage.
+void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
+                       const FacadeLayout& L, Real thick,
+                       const Vec3& wallColor) {
+    RenderMesh wall, glass, glassLit;
+    const Vec3 in = fr.n * -thick;
+    const Vec3 nIn = fr.n * -1.0;
+    const Vec3 icol = materialFor(PartId::Interior, wallColor).albedo;
+    auto q = [&](RenderMesh& m, Real a0, Real b0, Real a1, Real b1,
+                 const Vec3& col, const Vec3& off) {
+        if (a1 - a0 < 1e-4 || b1 - b0 < 1e-4) return;
+        emitQuad(m, fr.at(a0, b0) + off, fr.at(a1, b0) + off,
+                 fr.at(a1, b1) + off, fr.at(a0, b1) + off, nIn, col);
+    };
+    for (const BayOpening& o : L.open) {
+        q(wall, o.x0, 0, o.wx0, fr.height, icol, in);         // left pier
+        q(wall, o.wx1, 0, o.x1, fr.height, icol, in);         // right pier
+        q(wall, o.wx0, 0, o.wx1, o.sill, icol, in);           // apron
+        q(wall, o.wx0, o.head, o.wx1, fr.height, icol, in);   // over the head
+        if (!o.entrance) {
+            const bool lit = litWindow(fr.at(o.wx0, o.sill));
+            q(lit ? glassLit : glass, o.wx0, o.sill, o.wx1, o.head,
+              materialFor(lit ? PartId::GlassLit : PartId::Glass, wallColor)
+                  .albedo,
+              in + fr.n * 0.02);
+        }
+    }
+    appendToPart(out, PartId::Interior, wall);
+    appendToPart(out, PartId::Glass, glass);
+    appendToPart(out, PartId::GlassLit, glassLit);
+}
+
 // 2 cm proud (no reveal, no z-fight), the door as a dark quad. No surrounds,
 // frames, muntins, sills, hoods, pilasters. ~2 triangles per opening instead
 // of ~40; the wall is 2 instead of ~10 per bay.
@@ -655,10 +703,15 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
         }
 
         if (entrance) {
-            // The DOOR element: a recessed doorway, closed like the windows —
+            // The DOOR element: a recessed doorway. Closed like the windows —
             // jambs + lintel + threshold connect the wall opening back to the
-            // door leaf, so you can't see through the gap into the hollow shell.
-            Vec3 in = fr.n * -0.18;
+            // door leaf, so you can't see through the gap into the hollow
+            // shell. With openDoorway (enterable buildings, ADR-0080) the
+            // leaf and frame are DROPPED and the reveal deepens to
+            // wallThickness: the aperture is a real hole through a real wall
+            // section, and the interior shell behind it closes the views.
+            const Real revealDepth = p.openDoorway ? p.wallThickness : 0.18;
+            Vec3 in = fr.n * -revealDepth;
             Vec3 oBL = fr.at(wx0, 0), oBR = fr.at(wx1, 0);
             Vec3 oTL = fr.at(wx0, openHead), oTR = fr.at(wx1, openHead);
             Vec3 dBL = oBL + in, dBR = oBR + in, dTL = oTL + in, dTR = oTR + in;
@@ -667,11 +720,12 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             emitQuad(wall, oBL, oBR, dBR, dBL, fr.v, rev);        // threshold (faces up)
             emitQuad(wall, oBL, oTL, dTL, dBL, fr.h, rev);        // left jamb
             emitQuad(wall, oBR, oTR, dTR, dBR, fr.h * -1, rev);   // right jamb
-            emitQuad(door, dBL, dBR, dTR, dTL, fr.n,
-                     materialFor(PartId::Door, wallColor).albedo);   // the door leaf
+            if (!p.openDoorway)
+                emitQuad(door, dBL, dBR, dTR, dTL, fr.n,
+                         materialFor(PartId::Door, wallColor).albedo);  // leaf
             // DOORFRAME (device feedback): painted stiles + head rail seated in
             // the recess around the leaf — the same joinery the windows wear.
-            {
+            if (!p.openDoorway) {
                 const Vec3 fp = fr.n * -0.09;
                 const Real dfw = 0.10;
                 auto dfQuad = [&](Real a0, Real b0, Real a1, Real b1) {
@@ -713,8 +767,11 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
                 emitBox(out, a, PartId::Detail, p.trimColor);
             }
             // The entrance attach point sits at the DOOR's foot (not the face
-            // centre — off by half a bay on even bay counts).
-            out.attaches.push_back({fr.at((wx0 + wx1) * 0.5, 0), fr.n, "entrance"});
+            // centre — off by half a bay on even bay counts), and carries the
+            // aperture: the lot layer turns it into a DoorSpec for colliders,
+            // records and the leaf.
+            out.attaches.push_back({fr.at((wx0 + wx1) * 0.5, 0), fr.n,
+                                    "entrance", wx1 - wx0, openHead});
         } else {
             const Vec3 in = fr.n * (-p.windowInset);
             const Vec3 rev = wallColor * 0.82;
@@ -2094,6 +2151,57 @@ void emitBayFront(BuildingMesh& out, const FaceRect& fr,
 
 }  // namespace
 
+InteriorLayout interiorLayout(const Poly2& planIn, const BuildingParams& params,
+                              std::size_t entranceEdge) {
+    InteriorLayout il;
+    Poly2 plan = planIn;
+    if (plan.size() < 3) return il;
+    ensureCCW(plan);
+    // One full-storey flight, sized by the TALLEST storey it must serve (the
+    // ground storey): riser <= 0.18 (comfortable, and well under the
+    // character's 0.55 stepHeight), run 0.28.
+    const int risers =
+        std::max(3, static_cast<int>(std::ceil(params.groundHeight / 0.18)));
+    il.run = (risers - 1) * 0.28;
+    // Candidate edges, longest first, never the entrance edge (the lobby's
+    // clear path from the door stays clear).
+    std::vector<std::size_t> order;
+    for (std::size_t i = 0; i < plan.size(); ++i)
+        if (i != entranceEdge % plan.size()) order.push_back(i);
+    auto elen = [&](std::size_t e) {
+        return (plan[(e + 1) % plan.size()] - plan[e]).length();
+    };
+    std::sort(order.begin(), order.end(),
+              [&](std::size_t a, std::size_t b) { return elen(a) > elen(b); });
+    for (std::size_t e : order) {
+        const Vec2 a = plan[e], b = plan[(e + 1) % plan.size()];
+        const Real len = elen(e);
+        if (len < 4.0) continue;
+        const Vec2 u = (b - a) * (1.0 / len);
+        const Vec2 nIn(-u.y, u.x);   // CCW plan: inside is left of the edge
+        il.dogleg = len < il.run + 2.6;
+        const Real wellLen =
+            il.dogleg ? il.run * 0.5 + il.width + 0.2 : il.run + 1.0;
+        const Real wellWid = il.dogleg ? il.width * 2 + 0.2 : il.width;
+        if (len < wellLen + 1.2) continue;
+        const Real inset = std::max(params.wallThickness + 0.15, Real(0.45));
+        const Vec2 s = a + u * ((len - wellLen) * 0.5) + nIn * inset;
+        Poly2 well{s, s + u * wellLen, s + u * wellLen + nIn * wellWid,
+                   s + nIn * wellWid};
+        bool fits = true;
+        for (const Vec2& c : well)
+            if (!pointInPolygon(plan, c)) { fits = false; break; }
+        if (!fits) continue;
+        il.hasStair = true;
+        il.well = well;
+        il.stairDir = u;
+        il.stairFoot = s + nIn * (il.width * 0.5);
+        return il;
+    }
+    il.dogleg = false;
+    return il;
+}
+
 BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                               Real baseY, FacadeDetail detail) {
     BuildingMesh out;
@@ -2238,6 +2346,24 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             emitFacadeRect(out, planEdgeRect(plan, i, y, gh), mode, params, wallColor);
         else
             emitFlatFacadeRect(out, planEdgeRect(plan, i, y, gh), mode, params, wallColor);
+        // Enterable buildings (ADR-0080): back the one-sided exterior skin
+        // with an inner face at -wallThickness so the room reads as a room,
+        // not as a view through to the sky.
+        if (full && params.openDoorway) {
+            const FaceRect ifr = planEdgeRect(plan, i, y, gh);
+            if (params.curtainWall && mode != FacadeMode::Entrance) {
+                RenderMesh skin;
+                const Vec3 off = ifr.n * -params.wallThickness;
+                emitQuad(skin, ifr.at(0, 0) + off, ifr.at(ifr.width, 0) + off,
+                         ifr.at(ifr.width, ifr.height) + off,
+                         ifr.at(0, ifr.height) + off, ifr.n * -1.0,
+                         materialFor(PartId::Interior, wallColor).albedo);
+                appendToPart(out, PartId::Interior, skin);
+            } else {
+                emitInnerWallRect(out, ifr, facadeLayout(ifr, mode, params),
+                                  params.wallThickness, wallColor);
+            }
+        }
     }
     // The covered timber PORCH (bungalow/craftsman) — brings its own platform
     // and steps, so it replaces the classical entrance elements.
@@ -2258,6 +2384,25 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     }
     emitPlanSlab(out, plan, y + 0.05, 0.1, PartId::Ground,
                  materialFor(PartId::Ground, wallColor).albedo);
+    // Enterable ground storey (ADR-0080): close the room from above. A
+    // ceiling underside at the storey head, with the stair well punched
+    // through when one fits -- the hole comes from the same interiorLayout
+    // the streamed interior will build its stair from, so they agree by
+    // construction.
+    if (full && params.openDoorway) {
+        const InteriorLayout il = interiorLayout(plan, params, entranceEdge);
+        std::vector<Poly2> holes;
+        if (il.hasStair) holes.push_back(il.well);
+        const Real cy = y + gh - 0.25;
+        const Vec3 icol = materialFor(PartId::Interior, wallColor).albedo;
+        RenderMesh ceil;
+        for (const auto& t : triangulateWithHoles(plan, holes))
+            MeshBuilder::emitTri(ceil, Vec3(t[0].x, cy, t[0].y),
+                                 Vec3(t[2].x, cy, t[2].y),
+                                 Vec3(t[1].x, cy, t[1].y), Vec3(0, -1, 0),
+                                 icol);
+        appendToPart(out, PartId::Interior, ceil);
+    }
     // Base course wraps the plan (skipping the door edge).
     if (full && params.baseCourse) {
         const Real bh = std::min(Real(0.45), gh * 0.12);

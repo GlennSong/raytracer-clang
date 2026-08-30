@@ -16,6 +16,8 @@
 #include "asset_manager.h"
 #include "procgen/terrain.h"
 #include "procgen/city/city_lots.h"  // grow buildings on the road net's blocks (ADR-0066)
+#include "procgen/city/building_collider.h"  // prism + door notches (ADR-0080)
+#include "procgen/city/building_records.h"   // CityBuildings runtime records (ADR-0080)
 #include "procgen/city/road_net.h"
 #include "procgen/city/road_semantics.h"   // editor-authored roads (shape:"road")
 #include "procgen/city/corridor_bake.h"
@@ -1794,6 +1796,21 @@ struct GrownLots {
     bool grown = false;
 };
 
+// The authored player spawn (world XZ), if the level has one -- the lot pass
+// flags the building beside it as enterable (ADR-0080). Read from the RAW
+// level json BEFORE any spawn-safety relocation: the safe spawn is authored
+// a couple of metres outside that same building.
+static bool authoredSpawnXZ(const json& root, engine::Vec2& out) {
+    if (!root.contains("player")) return false;
+    const json& pj = root["player"];
+    if (!pj.contains("position") || !pj["position"].is_array() ||
+        pj["position"].size() < 3)
+        return false;
+    out = engine::Vec2(pj["position"][0].get<double>(),
+                       pj["position"][2].get<double>());
+    return true;
+}
+
 // `ground` grades the lot pads; `netGround` is what the roads themselves drape
 // on (the pre-pass nets use the NATURAL terrain — the same sampler their
 // conform profiles were computed against), for the sampled clearance graph.
@@ -1804,7 +1821,8 @@ static GrownLots growCityLots(
     const engine::RoadGraph* freewayROW = nullptr,
     std::function<std::function<engine::Real(engine::Real, engine::Real, engine::Real)>(
         const std::vector<engine::TerrainFlatten>&)> groundWith = nullptr,
-    double groundMeshCell = 0.0) {
+    double groundMeshCell = 0.0,
+    const engine::Vec2* enterableAt = nullptr) {
     RT_PROFILE_ZONE_NAMED("growCityLots");
     GrownLots g;
     // Edge blocks (device feedback): the town RIM has no enclosed faces —
@@ -1837,6 +1855,9 @@ static GrownLots growCityLots(
     // the level ground sampler + the flatten ramps the loader carves).
     lp.groundWith = std::move(groundWith);
     lp.groundMeshCell = static_cast<engine::Real>(groundMeshCell);
+    // Enterable buildings (ADR-0080): the spawn building only, for now -- the
+    // unit beside this point grows with an open doorway + interior shell.
+    if (enterableAt) lp.enterableAt.push_back(*enterableAt);
     if (ground)
         lp.ground = [&ground](engine::Real x, engine::Real z) {
             return static_cast<engine::Real>(ground(x, z));
@@ -1944,6 +1965,11 @@ static std::shared_ptr<engine::CityMapData> assembleCityMap(
     });
     world.each<engine::AuthoredPlace>([&](Entity, engine::AuthoredPlace& p) {
         m->places.push_back({engine::Vec2(p.x, p.z), p.type, p.name});
+    });
+    world.each<engine::CityBuildings>([&](Entity, engine::CityBuildings& cb) {
+        for (const engine::BuildingRecord& r : cb.records)
+            for (const engine::DoorSpec& d : r.doors)
+                m->doors.push_back({d.foot, d.normal, r.enterable});
     });
     world.each<engine::InstanceGroup>([&](Entity, engine::InstanceGroup& g) {
         engine::CityMapData::ObjectKind kind;
@@ -2667,9 +2693,11 @@ bool LevelLoader::load(const std::string& path,
                                          static_cast<double>(dilate));
                 };
             };
+            engine::Vec2 spawnXZ;
+            const bool haveSpawn = authoredSpawnXZ(root, spawnXZ);
             preLots = growCityLots(preNets, root["citysim"], levelDir, lotGround,
                                    levelGround, freewayROWp, lotGroundWith,
-                                   lotMeshCell);
+                                   lotMeshCell, haveSpawn ? &spawnXZ : nullptr);
             // BLOCK GRADING CASCADE (ADR-0075 P2, re-enabled roads-v2.1 R4):
             // the old attempt extracted faces from the GRAPH (none on a
             // tree-like terrain-gated metro); the LOT PLAN's own block
@@ -3614,8 +3642,12 @@ bool LevelLoader::load(const std::string& path,
                 std::vector<engine::RoadEntity> nets;
                 world.each<engine::RoadEntity>(
                     [&](Entity, engine::RoadEntity& net) { nets.push_back(net); });
-                grown = growCityLots(nets, cs, levelDir, entityGround, entityGround, freewayROWp,
-                                     nullptr, lotMeshCell);
+                engine::Vec2 spawnXZ2;
+                const bool haveSpawn2 = authoredSpawnXZ(root, spawnXZ2);
+                grown = growCityLots(nets, cs, levelDir, entityGround,
+                                     entityGround, freewayROWp, nullptr,
+                                     lotMeshCell,
+                                     haveSpawn2 ? &spawnXZ2 : nullptr);
             }
             if (!grown.plan.blocks.empty() || !grown.plan.lots.empty()) {
                 engine::CityPlanDebug dbg;
@@ -3635,8 +3667,12 @@ bool LevelLoader::load(const std::string& path,
                 std::vector<engine::RoadEntity> nets;
                 world.each<engine::RoadEntity>(
                     [&](Entity, engine::RoadEntity& net) { nets.push_back(net); });
-                grown = growCityLots(nets, cs, levelDir, entityGround, entityGround, freewayROWp,
-                                     nullptr, lotMeshCell);
+                engine::Vec2 spawnXZ2;
+                const bool haveSpawn2 = authoredSpawnXZ(root, spawnXZ2);
+                grown = growCityLots(nets, cs, levelDir, entityGround,
+                                     entityGround, freewayROWp, nullptr,
+                                     lotMeshCell,
+                                     haveSpawn2 ? &spawnXZ2 : nullptr);
             }
             engine::LotPlanDebug& plan = grown.plan;   // debug overlay (below)
             // The buildings' geometry, merged by shape-grammar PartId across the
@@ -3689,6 +3725,7 @@ bool LevelLoader::load(const std::string& path,
             // where their walls are, with nothing spilling onto the sidewalk
             // (the failure that got box colliders removed).
             engine::MeshCollider buildingsMc;
+            engine::CityBuildings cityB;
             std::vector<engine::CityPlanDebug::Prism> colliderPrisms;
             for (const engine::LotBuilding& lb : grown.lots) {
                 const double gy = entityGround ? entityGround(lb.site.x, lb.site.y) : 0.0;
@@ -3732,29 +3769,25 @@ bool LevelLoader::load(const std::string& path,
                 if (lb.type != "park" && lb.type != "green" &&
                     lb.plan.size() >= 3) {
                     const double base = lb.baseY - 0.5, top = lb.baseY + lb.height;
-                    const uint32_t s0 =
-                        static_cast<uint32_t>(buildingsMc.vertices.size());
-                    const uint32_t n = static_cast<uint32_t>(lb.plan.size());
-                    for (const engine::Vec2& v : lb.plan) {
-                        buildingsMc.vertices.push_back(Vec3(v.x, base, v.y));
-                        buildingsMc.vertices.push_back(Vec3(v.x, top, v.y));
-                    }
-                    for (uint32_t i = 0; i < n; ++i) {
-                        const uint32_t j = (i + 1) % n;
-                        const uint32_t a0 = s0 + i * 2, a1 = a0 + 1;
-                        const uint32_t b0 = s0 + j * 2, b1 = b0 + 1;
-                        buildingsMc.indices.insert(buildingsMc.indices.end(),
-                                                   {a0, b0, b1, a0, b1, a1});
-                    }
-                    for (const auto& tri : engine::triangulatePolygon(lb.plan)) {
-                        const uint32_t rb =
-                            static_cast<uint32_t>(buildingsMc.vertices.size());
-                        for (int k = 0; k < 3; ++k)
-                            buildingsMc.vertices.push_back(Vec3(
-                                lb.plan[tri[k]].x, top, lb.plan[tri[k]].y));
-                        buildingsMc.indices.insert(buildingsMc.indices.end(),
-                                                   {rb, rb + 1, rb + 2});
-                    }
+                    // ADR-0080: prism extrusion extracted to building_collider
+                    // (door notches for ENTERABLE units, roof cap, and a floor
+                    // cap at the drawn Ground slab so whoever is inside stands
+                    // on the floor they see -- not the pad 0.5 m below it).
+                    std::vector<engine::DoorSpec> doorCuts;
+                    for (const engine::BuildingUnit& u : lb.units)
+                        if (u.enterable)
+                            doorCuts.insert(doorCuts.end(), u.doors.begin(),
+                                            u.doors.end());
+                    engine::appendBuildingPrism(
+                        buildingsMc.vertices, buildingsMc.indices, lb.plan,
+                        base, top, lb.baseY + 0.05, doorCuts,
+                        lb.baseY - lb.groundY);
+                    // Runtime records: one per grown unit (ADR-0080).
+                    for (const engine::BuildingUnit& u : lb.units)
+                        cityB.records.push_back({u.plan, u.baseY, lb.groundY,
+                                                 lb.height, u.params, u.doors,
+                                                 u.enterable, lb.recipe,
+                                                 lb.type, lb.district});
                     // Record the exact prism for the collider debug layer.
                     colliderPrisms.push_back({lb.plan, base, top, lb.district, lb.type});
                 }
@@ -3765,6 +3798,17 @@ bool LevelLoader::load(const std::string& path,
                     p.type = lb.type;
                     p.x = static_cast<float>(lb.site.x);
                     p.z = static_cast<float>(lb.site.y);
+                    // The real door (ADR-0080): first unit that has one --
+                    // the citysim snaps this place's entrance from a step
+                    // outside it instead of from the centroid.
+                    for (const engine::BuildingUnit& u : lb.units) {
+                        if (u.doors.empty()) continue;
+                        const engine::DoorSpec& d0 = u.doors.front();
+                        p.hasEntrance = true;
+                        p.ex = static_cast<float>(d0.foot.x + d0.normal.x * 1.5);
+                        p.ez = static_cast<float>(d0.foot.y + d0.normal.y * 1.5);
+                        break;
+                    }
                     cfg.places.push_back(std::move(p));
                 }
 
@@ -3886,19 +3930,26 @@ bool LevelLoader::load(const std::string& path,
                 // from outside (device: "I can shoot through them at certain
                 // angles"). Emit every triangle both ways so the prism is
                 // solid regardless of plan winding.
-                const std::size_t oneSided = buildingsMc.indices.size();
-                buildingsMc.indices.reserve(oneSided * 2);
-                for (std::size_t i = 0; i + 2 < oneSided; i += 3) {
-                    buildingsMc.indices.push_back(buildingsMc.indices[i]);
-                    buildingsMc.indices.push_back(buildingsMc.indices[i + 2]);
-                    buildingsMc.indices.push_back(buildingsMc.indices[i + 1]);
-                }
+                engine::mirrorTriangles(buildingsMc.indices);
                 Entity ce = world.create();
                 Transform ct;
                 world.add<Transform>(ce, ct);
                 world.add<PrevTransform>(ce, PrevTransform{ct});
                 buildingsMc.friction = 0.85;
                 world.add<engine::MeshCollider>(ce, std::move(buildingsMc));
+            }
+            if (!cityB.records.empty()) {
+                cityB.buildIndex();
+                std::size_t doorCount = 0, enterableCount = 0;
+                for (const engine::BuildingRecord& r : cityB.records) {
+                    doorCount += r.doors.size();
+                    if (r.enterable) ++enterableCount;
+                }
+                LOG_INFO << "[buildings] " << cityB.records.size()
+                         << " records, " << doorCount << " doors, "
+                         << enterableCount << " enterable";
+                world.add<engine::CityBuildings>(world.create(),
+                                                std::move(cityB));
             }
             // One entity per non-empty part class, with the shape-grammar's OWN
             // material recipes: materialFor(PartId) names the procedural surface
