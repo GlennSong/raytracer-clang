@@ -107,6 +107,7 @@ SRCS = \
 	$(SRC_DIR)/engine/scripting/procgen_bindings.cpp \
 	$(SRC_DIR)/engine/scripting/script_modules.cpp \
 	$(SRC_DIR)/engine/script_assets.cpp \
+	$(SRC_DIR)/engine/asset_root.cpp \
 	$(SRC_DIR)/engine/ai/nav_graph.cpp \
 	$(SRC_DIR)/engine/ai/pathfind.cpp
 OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
