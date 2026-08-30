@@ -139,7 +139,7 @@ substrate (grammar + scope ops + scatter + grading + Lua).
 | **Water** — rivers/streams, lakes, **oceans with waves**, shorelines | A subsystem: carve rivers into terrain (SDF/erosion channels), a water surface (flat plane + animated shader; gentle rolling waves far, lapping at the shore near), a shoreline/coast field. Render is **Metal-side** (animated water shader). Ties to `world-system-plan.md` §5. **It also reframes roads** (cities seed near water) — so design water *before* the growth-sim roads. Enables **piers, bridges, coastal homes**. |
 | **Bridges** | Need water/valley spans + road-over-gap geometry; gated on water + the road-grade solver. |
 | **City growth simulation over time** | The ambitious era-by-era model (organic core → planned districts). Design *after* tensor/agent roads + water exist, since it orchestrates them. |
-| **Building interiors** (rooms/hallways) | Deferred at Tier C (ADR-0038 §4) — a separate floor-plan generator. |
+| **Building interiors** (rooms/hallways) | BARE interiors SHIPPED for enterable buildings (ADR-0080): open doorways, streamed floors + stairwells, built on approach from a ~250 B regen key. ROOMS/hallways stay deferred — a separate floor-plan generator. |
 
 ### D. Far future
 Traffic/agent simulation, full LOD/HLOD + streaming for a huge city, day-night

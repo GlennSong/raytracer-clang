@@ -9,6 +9,7 @@
 #include "../src/engine/procgen/city/building_records.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
 #include "../src/engine/systems/building_interior_system.h"
+#include "../src/engine/systems/door_system.h"
 #include "../src/engine/world.h"
 
 #include <cmath>
@@ -255,4 +256,21 @@ TEST_CASE(jolt_mesh_cost_scales_sanely) {
         world.removeBody(id);
     }
     world.shutdown();
+}
+
+
+TEST_CASE(door_leaf_swings_away_from_the_mover) {
+    // Glenn's rule (ADR-0080): the leaf gets OUT OF THE WAY. Door at the
+    // origin, outward normal +Z. -1 = swings inside, +1 = swings outside.
+    const Vec2 foot(0, 0), n(0, 1);
+    // Walking IN from the street (moving -Z): the leaf leads them inward.
+    CHECK(doorSwingSign(Vec2(0, 1.5), Vec2(0, -1.2), foot, n) < 0);
+    // Walking OUT from the lobby (moving +Z): it leads them outward.
+    CHECK(doorSwingSign(Vec2(0, -1.5), Vec2(0, 1.2), foot, n) > 0);
+    // Standing still OUTSIDE: it swings to the side they are not on.
+    CHECK(doorSwingSign(Vec2(0, 1.0), Vec2(0, 0), foot, n) < 0);
+    // Standing still INSIDE: likewise, away from them.
+    CHECK(doorSwingSign(Vec2(0, -1.0), Vec2(0, 0), foot, n) > 0);
+    // Sidling along the wall (tangential velocity): position decides.
+    CHECK(doorSwingSign(Vec2(1.0, 0.8), Vec2(1.2, 0), foot, n) < 0);
 }

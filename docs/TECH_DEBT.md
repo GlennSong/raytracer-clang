@@ -914,3 +914,26 @@ as outside) and ecliptic declination, lit fraction sets its brightness
 age for art. Open: the lunar orbit's 5° tilt and the ~50-min/day drift of
 moonrise from the sun's are approximations of the same formula (no
 eclipses); Metal/WebGPU disc code is mirrored, not run.
+
+
+## Enterable buildings (2026-08-30, ADR-0080)
+
+- **Interior lighting is a stopgap.** The shader is sun-only; a roofed room
+  is lit by `PartId::Interior`'s emission (albedo x 0.10) + NightGlow.
+  Rooms read as dim concrete by day and glow faintly at night. Real fix:
+  local lights (the long-standing "no local lights" row above).
+- **Dog-leg stairs are cut from scope.** Straight flights only, uniform
+  riser count per building (shallower risers upstairs) so every flight
+  shares one well hole. A dog-leg's arrival lands UNDER the slab above
+  unless the hole grows case-by-case; buildings whose edges cannot host a
+  straight run get `hasStair = false` — honest, but their upper storeys are
+  unreachable. Pick up when a short-plan building needs to be enterable.
+- **Door leaves are distance-gated, not residency-gated.** DoorSystem gives
+  every enterable door within 60 m a leaf, whether or not the interior is
+  resident (the plan said "resident buildings only"); coupling it to
+  BuildingInteriorSystem residency was skipped to avoid a system-to-system
+  reference. Cosmetically indistinguishable today (both gates centre on the
+  player); revisit if leaf counts ever matter.
+- **Walkers do not use doors.** PedGraph door nodes exist unwired; NPCs
+  neither enter buildings nor trigger leaves (DoorSystem tracks the player
+  only).

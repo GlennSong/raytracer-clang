@@ -5855,6 +5855,57 @@ loop moves from CityPossessSystem into engine/ai as a shared component).
 
 ---
 
+## ADR-0080 — Enterable buildings: open doorways, streamed interiors, visual double-acting leaves
+
+**Date** 2026-08-30. Fires ADR-0038's revisit trigger ("when enterable
+interiors become a goal"); supersedes its "walkable shells, not interiors"
+scope for buildings flagged enterable.
+
+Decisions (taken with the device):
+
+- **The doorway is a real hole, not a door.** `BuildingParams::openDoorway`
+  drops the painted leaf + doorframe and deepens the reveal to
+  `wallThickness`; the district collider notches the aperture
+  (`building_collider.{h,cpp}`, extracted from the loader so a character can
+  be WALKED through it in a unit test) and caps a FLOOR at baseY+0.05 for
+  every building — whoever is inside stands on the floor they see, not the
+  terrain pad half a metre below it.
+- **Enter/exit logic lives in a system, not the doorway.** `CityBuildings`
+  records (plan, doors, the verbatim ~250 B `BuildingParams` regen key —
+  grow is pure) let `BuildingInteriorSystem` decide "inside" and
+  "approaching a door" (6 m, in FRONT); interiors grow deterministically on
+  approach (`growInterior`: floor slabs, inner walls on the same
+  FacadeLayout as the facade, a straight stairwell) and free at 40 m, one
+  build per fixed step, GPU frees rate-limited. Measured on a real condo:
+  grow 0.25 ms + Jolt 0.51 ms — synchronous on purpose; the ctx.jobs path
+  stays unbuilt until a measurement crosses ~4 ms.
+- **The leaf is visual-only and double-acting** (`DoorSystem`): it swings
+  AWAY from the mover (`doorSwingSign`, unit-tested), eased, closing 2 s
+  after the doorway clears. No body, no interact verb — over a physically
+  open aperture it can neither trap nor push. A locked state can later add
+  a thin static box while shut.
+- **Shared truth, not shared hope:** `storeyPlans`, `entranceEdgeFor` and
+  `interiorLayout` are consumed by BOTH the exterior massing and the
+  interior, so floors, front doors and the stair well agree by
+  construction. The extraction was proven byte-identical by the mesh-hash
+  census in test_building_lod.
+- **Scope:** the spawn building(s) only (`LotParams::enterableAt` = the
+  authored spawn; containment or within 8 m). The machinery is citywide
+  behind the flag.
+- **Owed:** dog-leg stairs (the straight-only cut: a dog-leg's arrival
+  lands under the slab above unless the hole grows per-case; short-edged
+  buildings honestly get no stair); interior lighting (sun-only shader —
+  Interior emission 0.10 + NightGlow is a stopgap, rooms read dim);
+  walker routing through doors (PedGraph still unwired); leaves gated by
+  distance rather than interior residency.
+
+Gates: test_building_collider (a character walks the notch, is blocked
+beside it, cannot exit walls), test_building_interior (determinism, the
+walked stair — up, around the well, up, down — lifecycle with bodies back
+to baseline, Jolt cost census), the aperture/attach checks in
+test_building_lod, level_tests' door audit + spawn-at-door, and the
+`[buildings]`/`[interior]` load-time censuses.
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
