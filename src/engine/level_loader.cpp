@@ -11,6 +11,7 @@
                                         // (implementation lives in model_importer.cpp)
 #include "procgen/city/road_rules.h"    // DesignRules: the per-class grade table the
                                         // poke report hands weldChainProfiles
+#include "procgen/earthwork.h"          // the earthwork displacement field
 #include "mesh_builder.h"
 #include "asset_manager.h"
 #include "procgen/terrain.h"
@@ -2098,6 +2099,52 @@ void writeElevationMaps(const std::string& prefix, double half, double cell,
            << "\", \"diffScale\": " << diffScale[s] << ", \"diffWorstX\": "
            << diffWorstAt[s].first << ", \"diffWorstZ\": " << diffWorstAt[s].second << " }";
     js << "] }\n";
+    // THE BANK CENSUS: how steep is the ground beside the roads? Cells within
+    // 20 m of any road centreline whose slope exceeds 40% — the "cliff" gate
+    // for the earthwork field (a fixed 8 m feather absorbing a metres-high
+    // disagreement is exactly a >40% bank). Per surface, so natural / final /
+    // drawn / earthworked can be compared on the same probes.
+    {
+        const int reachCells = std::max(1, static_cast<int>(std::ceil(20.0 / cell)));
+        std::vector<unsigned char> nearRoad(N, 0);
+        for (const auto& pl : polylines)
+            for (std::size_t k = 0; k + 1 < pl.size(); ++k) {
+                const double x0 = (pl[k].x - minX) / cell, z0 = (pl[k].y - minZ) / cell;
+                const double x1 = (pl[k + 1].x - minX) / cell, z1 = (pl[k + 1].y - minZ) / cell;
+                const int steps = std::max(1, static_cast<int>(std::ceil(
+                    std::max(std::fabs(x1 - x0), std::fabs(z1 - z0)))));
+                for (int t = 0; t <= steps; ++t) {
+                    const double f = static_cast<double>(t) / steps;
+                    const int ci = static_cast<int>(std::lround(x0 + (x1 - x0) * f));
+                    const int cj = static_cast<int>(std::lround(z0 + (z1 - z0) * f));
+                    for (int dj = -reachCells; dj <= reachCells; ++dj)
+                        for (int di = -reachCells; di <= reachCells; ++di) {
+                            if (di * di + dj * dj > reachCells * reachCells) continue;
+                            const int i = ci + di, j = cj + dj;
+                            if (i >= 0 && j >= 0 && i < n && j < n) nearRoad[idx(i, j)] = 1;
+                        }
+                }
+            }
+        std::ostringstream bank;
+        bank << "[bank-census] within 20 m of a road, cells over 40% slope:";
+        for (std::size_t s = 0; s < surfaces.size(); ++s) {
+            long over = 0, total = 0;
+            double worst = 0, wx = 0, wz = 0;
+            for (int j = 1; j + 1 < n; ++j)
+                for (int i = 1; i + 1 < n; ++i) {
+                    if (!nearRoad[idx(i, j)]) continue;
+                    ++total;
+                    const double dx = (H[s][idx(i + 1, j)] - H[s][idx(i - 1, j)]) / (2 * cell);
+                    const double dz = (H[s][idx(i, j + 1)] - H[s][idx(i, j - 1)]) / (2 * cell);
+                    const double slope = std::sqrt(dx * dx + dz * dz);
+                    if (slope > 0.40) ++over;
+                    if (slope > worst) { worst = slope; wx = minX + i * cell; wz = minZ + j * cell; }
+                }
+            bank << " " << surfaces[s].name << " " << over << "/" << total
+                 << " (worst " << static_cast<int>(worst * 100) << "% at " << wx << "," << wz << ")";
+        }
+        LOG_INFO << bank.str();
+    }
     std::ostringstream summary;
     summary << "[elevation-map] cell=" << cell << " size=" << n << "x" << n
             << " heights [" << lo << ", " << hi << "]";
@@ -2563,6 +2610,33 @@ bool LevelLoader::load(const std::string& path,
                                      roadFlatten.begin(), roadFlatten.end());   // carve to roads
         unsigned terrainSeed = root["terrain"].value("seed", 0u);
         Noise terrainNoise(terrainSeed);
+        // THE EARTHWORK FIELD (procgen/earthwork.h): the ground reshaped to
+        // carry the road network, fitted to the road carve regions against the
+        // NATURAL ground and installed into THESE params — the ones the lots,
+        // pads, CDLOD, colliders and walls are built on — and NOT into the
+        // shared `tp` behind levelGround, so the road solve and the load-time
+        // road mesh keep reading natural ground (deck/carve parity). Sea-floor
+        // cells are pinned so the shore never moves.
+        {
+            EarthworkStats es;
+            const double sea = root.contains("water")
+                                   ? root["water"].value("seaLevel", terrainParams.seaLevel)
+                                   : terrainParams.seaLevel;
+            terrainParams.earthwork = buildEarthworkField(
+                roadFlatten, levelGround, terrainParams.earthworkParams, sea, &es);
+            if (terrainParams.earthwork)
+                LOG_INFO << "[earthwork] " << es.cells << " cells at " << es.cell
+                         << " m (" << es.fixed << " fixed), reach "
+                         << terrainParams.earthworkParams.reach << " m, max |D| "
+                         << es.maxAbsD << " m at (" << es.maxAbsDX << "," << es.maxAbsDZ
+                         << "), last sweep residual " << es.residual << " m, extent x["
+                         << es.minX << "," << es.maxX << "] z[" << es.minZ << "," << es.maxZ << "]";
+            else
+                LOG_INFO << "[earthwork] off ("
+                         << (terrainParams.earthworkParams.enabled ? "no road regions"
+                                                                   : "disabled")
+                         << ")";
+        }
         // LOT PRE-PASS (device: "some of the buildings are sunk into the
         // terrain"): grow the living city's lots on the road-carved ground
         // BEFORE the terrain is meshed, so every building stamps a FLAT graded
@@ -2698,6 +2772,11 @@ bool LevelLoader::load(const std::string& path,
                      return terrainHeight(terrainParams, terrainNoise, x, z); }},
                 {"drawn", drawn},
             };
+            // The earthwork field alone (natural + D), so its diff against
+            // natural IS the field — the heat map Glenn asked to see.
+            if (terrainParams.earthwork)
+                surfaces.push_back({"earthworked", [&](double x, double z) {
+                    return levelGround(x, z) + (*terrainParams.earthwork)(x, z); }});
             // Road centrelines, so "where the land moved" reads against the roads.
             std::vector<std::vector<Vec2>> lines;
             for (const engine::RoadEntity& net : preNets)
@@ -2876,7 +2955,18 @@ bool LevelLoader::load(const std::string& path,
             const json& w = root.contains("water") ? root["water"]
                                                    : root["terrain"]["water"];
             engine::WaterMeshParams wp = readWaterParams(w);
-            RenderMesh wmesh = engine::buildWaterMesh(levelGround, wp);
+            // The water's floor is the EARTHWORKED ground: the field can lift a
+            // shore cell or (pinned at the sea floor, never below it) — the
+            // mesh must read the ground the player sees, not the pre-earthwork
+            // natural. Sea-floor cells are fixed at D = 0, so basins that were
+            // wet stay wet.
+            HeightSampler waterFloor = levelGround;
+            if (terrainParams.earthwork) {
+                auto ew = terrainParams.earthwork;
+                auto nat = levelGround;
+                waterFloor = [ew, nat](double x, double z) { return nat(x, z) + (*ew)(x, z); };
+            }
+            RenderMesh wmesh = engine::buildWaterMesh(waterFloor, wp);
             if (!wmesh.vertices.empty()) {
                 Entity we = world.create();
                 world.add<Transform>(we, Transform{});

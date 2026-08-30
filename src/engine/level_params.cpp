@@ -78,6 +78,19 @@ TerrainParams readTerrainParams(const json& t) {
         }
     }
     p.seaLevel = t.value("seaLevel", p.seaLevel);   // loaders may override from the water block
+    // The earthwork field's knobs (procgen/earthwork.h):
+    //   "earthwork": { "enabled": true, "reach": 100, "cell": 4, "margin": 0 }
+    if (t.contains("earthwork") && t["earthwork"].is_object()) {
+        const auto& e = t["earthwork"];
+        p.earthworkParams.enabled = e.value("enabled", p.earthworkParams.enabled);
+        p.earthworkParams.reach = e.value("reach", p.earthworkParams.reach);
+        p.earthworkParams.cell = e.value("cell", p.earthworkParams.cell);
+        p.earthworkParams.margin = e.value("margin", p.earthworkParams.margin);
+    }
+    // RT_EARTHWORK=0|1 overrides the level for an A/B on the same file: the
+    // bank census with and without the field, nothing else changed.
+    if (const char* ov = std::getenv("RT_EARTHWORK"))
+        p.earthworkParams.enabled = std::atoi(ov) != 0;
     p.snowLine = t.value("snowLine", p.snowLine);   // colour-band scaling
     p.rockLine = t.value("rockLine", p.rockLine);
     if (t.contains("rangeSpine") && t["rangeSpine"].is_array()) {

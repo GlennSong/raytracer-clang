@@ -52,6 +52,17 @@ struct TerrainFlatten {
     double planeY(double x, double z) const { return c + dx * x + dz * z; }
 };
 
+// Knobs for the earthwork displacement field (procgen/earthwork.h). `reach` is
+// the screening length — how far from a road the land is reshaped (Glenn:
+// ~100 m, one block). `cell` the finest grid spacing; `margin` how far past
+// the roads the field may extend (0 = 3 * reach).
+struct EarthworkParams {
+    bool   enabled = true;
+    double cell = 4.0;
+    double reach = 100.0;
+    double margin = 0.0;
+};
+
 // A constant-height pad over a polygon (a city block apron sits flat at targetY).
 TerrainFlatten makeFlattenPad(std::vector<Vec3> polygon, double targetY,
                               double falloff = 6.0);
@@ -211,6 +222,15 @@ struct TerrainParams {
     // path). Built by bakeErodedTerrain; null = pure analytic. The cut/fill
     // flatten still applies on top.
     std::shared_ptr<const std::function<double(double, double)>> erodedBase;
+    // THE EARTHWORK FIELD (procgen/earthwork.h): a smooth displacement fitted
+    // to the road carve and ADDED to the base relief before the flatten stamps
+    // apply — the ground follows the road network instead of meeting it in an
+    // 8 m bank. Null = off. Copies of the params carry it (that is how lots,
+    // pads, CDLOD, colliders and the census all see the same ground); any
+    // "natural" sampler derived from a copy must reset it, or the road solve
+    // would measure against ground already shaped to the roads.
+    std::shared_ptr<const std::function<double(double, double)>> earthwork;
+    EarthworkParams earthworkParams;   // how to build it (level JSON terrain.earthwork)
 };
 
 // Refresh params.flattenIndex from params.flatten (ADR-0075 Phase 0). The index

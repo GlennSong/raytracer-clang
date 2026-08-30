@@ -10,6 +10,7 @@
 #include "engine/procgen/city/road_net.h"
 #include "engine/procgen/noise.h"
 #include "engine/procgen/terrain_field.h"   // HeightField (level ground sampler)
+#include "engine/procgen/earthwork.h"       // the earthwork field (device parity)
 #include "engine/procgen/city/water_mesh.h" // buildWaterMesh (ocean/lake surface)
 #include "engine/procgen/proc_model.h"      // ProcModel (script model cache)
 #include "engine/level_params.h"            // shared level-JSON -> params readers
@@ -207,9 +208,23 @@ void addTerrain(const json& t, Scene& scene, const MaterialTable& materials,
                     erodedBase = nullptr) {
     TerrainParams tp = readTerrainParams(t);
     tp.erodedBase = erodedBase;   // shared eroded surface (roads conform to it)
+    Noise noise(t.value("seed", 0u));
+    // The earthwork field, exactly as the loader builds it: fitted to the ROAD
+    // regions (priority kRoadFlattenPriority) against the natural ground —
+    // authored flatten + erosion, no city carve. Without this the offline
+    // tracer would draw a different ground than the device and stop being the
+    // parity oracle.
+    {
+        TerrainParams naturalTp = tp;   // authored flatten only, no roads
+        rebuildFlattenIndex(naturalTp);
+        const std::function<double(double, double)> natural =
+            [&naturalTp, &noise](double x, double z) {
+                return terrainHeight(naturalTp, noise, x, z);
+            };
+        tp.earthwork = buildEarthworkField(flatten, natural, tp.earthworkParams, tp.seaLevel);
+    }
     tp.flatten = flatten;   // city cut/fill so the ground meets the roads/blocks
     rebuildFlattenIndex(tp);   // index the cut/fill set (ADR-0075 P0)
-    Noise noise(t.value("seed", 0u));
     int matIdx = importMaterial(t, scene, materials);
     // Chunked terrain (ADR-0034 Phase 1): bake every chunk's triangles. The
     // offline tracer has no far clip or culling, so this is the same surface as

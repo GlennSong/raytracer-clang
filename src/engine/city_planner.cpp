@@ -31,6 +31,7 @@ RoadGroundFn worldNaturalGround(World* world) {
         if (fn) return;
         auto tp = std::make_shared<TerrainParams>(c.params);
         tp->flatten = c.baseFlatten;
+        tp->earthwork.reset();   // natural: no ground already shaped to the roads
         rebuildFlattenIndex(*tp);
         auto noise = std::make_shared<Noise>(c.seed);
         fn = [tp, noise](double x, double z) {

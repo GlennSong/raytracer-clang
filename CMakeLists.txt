@@ -81,6 +81,7 @@ add_library(engine_core STATIC
     src/engine/procgen/vehicle/occupant.cpp
     src/engine/procgen/texture_field.cpp
     src/engine/procgen/terrain_field.cpp
+    src/engine/procgen/earthwork.cpp
     src/engine/procgen/erosion.cpp
     src/engine/procgen/rock.cpp
     src/engine/procgen/cellular.cpp
@@ -520,6 +521,7 @@ add_executable(run_tests
     tests/test_instance_tlas.cpp
     tests/test_texture_field.cpp
     tests/test_terrain_field.cpp
+    tests/test_earthwork.cpp
     tests/test_winding.cpp
     tests/test_road_constraints.cpp
     tests/test_metro_sites.cpp

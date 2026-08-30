@@ -4,6 +4,7 @@
 #include "../components.h"
 #include "../procgen/city/road_net.h"   // editable road regen (ADR-0049)
 #include "../procgen/city/corridor_plan.h"   // Regenerate re-bakes freeways (roads-v2 S3)
+#include "../procgen/earthwork.h"            // the re-conform rebuilds the earthwork field
 #include "../imgui_properties.h"
 #include "../mesh_builder.h"
 #include "../level_writer.h"
@@ -194,6 +195,7 @@ RoadGroundFn roadRegenGround(World& world, Entity e) {
     auto tp = std::make_shared<TerrainParams>(cfg->params);
     if (generated) {
         tp->flatten = cfg->baseFlatten;   // natural: the non-road grading only
+        tp->earthwork.reset();            // ...and no ground already shaped to roads
         rebuildFlattenIndex(*tp);
     }
     auto noise = std::make_shared<Noise>(cfg->seed);
@@ -268,6 +270,7 @@ void EditorSystem::conformTerrainToRoads(FrameContext& ctx) {
     // against THIS (never against terrain a previous conform already cut for the road).
     TerrainParams naturalParams = cfg->params;
     naturalParams.flatten = cfg->baseFlatten;
+    naturalParams.earthwork.reset();      // natural: not the ground the last conform shaped
     rebuildFlattenIndex(naturalParams);   // index must match this flatten, not the copy's (ADR-0075 P0)
     std::function<double(double, double)> natural =
         [naturalParams, noise](double x, double z) {
@@ -285,6 +288,10 @@ void EditorSystem::conformTerrainToRoads(FrameContext& ctx) {
     // rebuilds its tiles + collider window from the new params.
     cfg->params.flatten = cfg->baseFlatten;
     cfg->params.flatten.insert(cfg->params.flatten.end(), roads.begin(), roads.end());
+    // The earthwork field follows the roads: rebuild it from the fresh carve
+    // against the natural ground, or the re-conform silently drops it.
+    cfg->params.earthwork = buildEarthworkField(roads, natural, cfg->params.earthworkParams,
+                                                cfg->params.seaLevel);
     rebuildFlattenIndex(cfg->params);   // re-index the re-conformed set (ADR-0075 P0)
     ++cfg->revision;
 

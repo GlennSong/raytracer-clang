@@ -743,6 +743,10 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
     // placement all get natural drainage), else the raw analytic relief.
     double h = params.erodedBase ? (*params.erodedBase)(worldX, worldZ)
                                  : terrainBaseHeight(params, noise, worldX, worldZ);
+    // The earthwork field (procgen/earthwork.h): the ground reshaped to carry
+    // the road network, ADDED to the relief so its detail survives. The stamps
+    // below then have centimetres to absorb, not metres.
+    if (params.earthwork) h += (*params.earthwork)(worldX, worldZ);
     // City cut/fill: grade the ground flat under roads and blocks (applied last so
     // it overrides every relief layer there). Use the spatial index when the
     // recipe carries one (ADR-0075 Phase 0) — same height, far fewer footprints

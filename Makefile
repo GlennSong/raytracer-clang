@@ -66,6 +66,7 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/vehicle/occupant.cpp \
 	$(SRC_DIR)/engine/procgen/texture_field.cpp \
 	$(SRC_DIR)/engine/procgen/terrain_field.cpp \
+	$(SRC_DIR)/engine/procgen/earthwork.cpp \
 	$(SRC_DIR)/engine/procgen/erosion.cpp \
 	$(SRC_DIR)/engine/procgen/city/polygon.cpp \
 	$(SRC_DIR)/engine/procgen/city/shape_grammar.cpp \
@@ -193,6 +194,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_instance_tlas.cpp \
 	$(TEST_DIR)/test_texture_field.cpp \
 	$(TEST_DIR)/test_terrain_field.cpp \
+	$(TEST_DIR)/test_earthwork.cpp \
 	$(TEST_DIR)/test_nav_graph.cpp \
 	$(TEST_DIR)/test_pathfind.cpp \
 	$(TEST_DIR)/test_perception.cpp \
@@ -287,6 +289,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/vehicle/occupant.cpp \
 	$(SRC_DIR)/engine/procgen/texture_field.cpp \
 	$(SRC_DIR)/engine/procgen/terrain_field.cpp \
+	$(SRC_DIR)/engine/procgen/earthwork.cpp \
 	$(SRC_DIR)/engine/procgen/erosion.cpp \
 	$(SRC_DIR)/engine/procgen/rock.cpp \
 	$(SRC_DIR)/engine/procgen/cellular.cpp \
