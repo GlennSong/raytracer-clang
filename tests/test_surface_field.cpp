@@ -190,18 +190,30 @@ TEST_CASE(block_grades_to_a_plane_then_terraces) {
     CHECK_APPROX(g[0].planeY(30, 30), 0.05 * 30, 0.2);   // meets the ground mid-block
 
     // Steep: 30% grade across 60 m = 18 m drop > maxDrop(6) -> terrace into steps.
+    // Each step keeps a REDUCED tilt (at most maxBandRise across its width) and
+    // the steps still climb — not dead-flat stairs (the device: "I don't like
+    // the harsh stair steps"), not the full plane either (then no steps).
     HeightSampler steep = [](double x, double) { return 0.30 * x; };
-    std::vector<TerrainFlatten> t = gradeBlock(block, steep);
+    BlockGradeParams bp;
+    std::vector<TerrainFlatten> t = gradeBlock(block, steep, bp);
     CHECK(t.size() >= 2);                        // several terraces
+    const double bw = 60.0 / static_cast<double>(t.size());   // band width along x
     double prev = -1e30; int rising = 0;
     for (const TerrainFlatten& f : t) {
-        CHECK(std::fabs(f.dx) < 1e-6);           // each terrace is a FLAT step
+        CHECK(f.dx > 1e-6);                                  // tilted WITH the hill...
+        CHECK(f.dx * bw <= bp.maxBandRise + 1e-6);           // ...by at most the budget
+        CHECK(f.dx < 0.30 - 1e-6);                           // ...and less than the plane
         CHECK(std::fabs(f.dz) < 1e-6);
-        double lvl = f.planeY(30, 30);           // (constant; dx=dz=0)
+        double lvl = f.planeY(30, 30);           // the band's height on its own line
         if (lvl > prev) ++rising;
         prev = lvl;
     }
     CHECK(rising >= 1);                          // steps climb the slope
+    // The riser: consecutive bands still differ by roughly a step's worth, so
+    // the terraces are terraces — the rise across a band plus its riser spans
+    // the block's slope, and the riser carries most of it.
+    const double lvl0 = t.front().planeY(bw * 0.5, 30), lvl1 = t[1].planeY(bw * 1.5, 30);
+    CHECK(lvl1 - lvl0 > bp.maxBandRise);         // more than one band's own rise
 }
 
 // Overlap priority (ADR-0075 Phase 2): a flat building pad (priority 0) stays flat

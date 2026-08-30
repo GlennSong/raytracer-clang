@@ -109,14 +109,36 @@ std::vector<TerrainFlatten> gradeBlock(const Poly2& block, const HeightSampler& 
     for (const Vec2& v : block) { double t = dot(gdir, v); t0 = std::min(t0, t); t1 = std::max(t1, t); }
     int nTerraces = std::max(2, static_cast<int>(std::ceil(range / p.maxDrop)));
     double bw = (t1 - t0) / nTerraces;
+    // Each band keeps a REDUCED tilt: the fitted gradient, scaled so the band
+    // rises at most maxBandRise across its own width, centred on the band's
+    // mid-height so the steps still climb the slope. The riser between bands
+    // is the remainder. (Keeping the FULL gradient would reproduce the block
+    // plane exactly and the steps would vanish; snapping flat — the old code —
+    // was the staircase.)
+    const double gStep = std::min(glen, p.maxBandRise / std::max(1e-6, bw));
+    // CENTRED ON THE MID-HEIGHT: each band's plane passes through the fitted
+    // plane on the band's centre line, so no band strays more than
+    // (glen - gStep) * bw / 2 from the plane the lots are built against.
+    // Anchoring the outer bands to the streets instead (risers carrying all
+    // the remainder inside the block) was measured on metro_v2 and was worse
+    // on every gate: banks beside roads 1314 -> 2571, pokes 128/1282/2237 ->
+    // 156/1620/2758, 15 fewer buildings, relief rejections doubled — the
+    // bands strayed up to (glen - gStep) * bw from the plane and the lots on
+    // them paid. The cost of centring is a curb-step at the downhill street of
+    // (glen - gStep) * bw / 2, which MORE tilt shrinks: that is what
+    // maxBandRise trades, and why it is 3 m rather than 1.5.
     for (int i = 0; i < nTerraces; ++i) {
         double a = t0 + i * bw, b = t0 + (i + 1) * bw;
         // Clip the block to the slab a <= gdir·p <= b: two half-plane cuts.
         Poly2 band = clipHalfPlane(block, gdir, b);
         band = clipHalfPlane(band, Vec2(-gdir.x, -gdir.y), -a);
         if (band.size() < 3 || area(band) < 1.0) continue;
-        double level = c + glen * (a + b) * 0.5;   // flat step at the band's mid-height
-        out.push_back(planePad(band, level, 0.0, 0.0, p.falloff));
+        const double mid = (a + b) * 0.5;
+        const double level = c + glen * mid;          // the band's mid-height
+        // planeY(p) = cBand + gStep * (gdir . p): equals `level` on the band's
+        // centre line and rises gStep * bw across the band.
+        const double cBand = level - gStep * mid;
+        out.push_back(planePad(band, cBand, gStep * gdir.x, gStep * gdir.y, p.falloff));
     }
     if (out.empty()) out.push_back(planePad(block, c, dx, dz, p.falloff));  // clip failed: fall back
     return out;

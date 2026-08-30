@@ -29,6 +29,18 @@ struct BlockGradeParams {
     int    boundarySamples = 24;  // points around the boundary the plane is fit to
     double maxDrop  = 6.0;   // terrace when the plane's range over the block exceeds this (m)
     double minTerraceArea = 400.0;  // don't terrace a block smaller than this (m^2)
+    // How much a terrace band may RISE across its own width (m). The bands used
+    // to be snapped dead flat — the fitted plane's tilt thrown away — which is
+    // the staircase the device rejected ("I don't like the harsh stair steps.
+    // That doesn't look natural"). Each band now keeps a reduced tilt up to this
+    // rise, and the riser between bands is what is left over: a hillside block
+    // reads as a graded street with modest steps, not a flight of stairs. The
+    // bank census (RT_ELEVATION_MAP) is the gate: cells beside a road over 40%.
+    // 3 m, not 1.5: more tilt means smaller risers AND a smaller curb-step
+    // where a band meets its downhill street ((glen - gStep) * bw / 2 — the
+    // pit probe read 0.66 m at 1.5 m on its hillside ring); across a 30 m
+    // band that is a 10% grade, a hillside street, not a wall.
+    double maxBandRise = 3.0;
 };
 
 // One (usually) or several (terraced) graded footprints per block. `ground` is the
