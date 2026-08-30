@@ -4270,11 +4270,96 @@ bool LevelLoader::load(const std::string& path,
             // terrain there is higher.
             if (entityGround && pj.contains("position") &&
                 pj["position"].is_array() && pj["position"].size() >= 3) {
-                const double px = pj["position"][0].get<double>();
+                double px = pj["position"][0].get<double>();
                 const double py = pj["position"][1].get<double>();
-                const double pz = pj["position"][2].get<double>();
+                double pz = pj["position"][2].get<double>();
+                // NEVER SPAWN INSIDE A BUILDING (device: "I'm stuck inside of
+                // a building for the player start"). Every lot building is a
+                // solid plan prism (the district collider, above), so a spawn
+                // inside a footprint is a capsule inside a static mesh with
+                // no way out. Nothing checked this: the terrain lift below
+                // is the only adjustment the spawn ever got, and the
+                // playable-levels test's CDLOD branch cannot see a prism
+                // (it has no bottom face). metro_v2's authored spawn sat
+                // inside a 417 m2 building, 17.6 m from its street.
+                //
+                // Walk the spawn out: to the nearest edge of the offending
+                // prism, 2.5 m past it along the outward normal, and re-test
+                // (a neighbour's prism may be there too). Loud, not silent.
+                std::vector<const CityPlanDebug::Prism*> prisms;
+                world.each<CityPlanDebug>([&](Entity, CityPlanDebug& plan) {
+                    for (const CityPlanDebug::Prism& pr : plan.prisms)
+                        prisms.push_back(&pr);
+                });
+                const double ox = px, oz = pz;
+                // Prisms near the spawn (the sweep below stays within 24 m).
+                std::vector<const CityPlanDebug::Prism*> nearby;
+                for (const CityPlanDebug::Prism* pr : prisms) {
+                    if (pr->plan.size() < 3) continue;
+                    double x0 = 1e300, x1 = -1e300, z0 = 1e300, z1 = -1e300;
+                    for (const engine::Vec2& v : pr->plan) {
+                        x0 = std::min(x0, v.x); x1 = std::max(x1, v.x);
+                        z0 = std::min(z0, v.y); z1 = std::max(z1, v.y);
+                    }
+                    if (px > x0 - 26.0 && px < x1 + 26.0 &&
+                        pz > z0 - 26.0 && pz < z1 + 26.0)
+                        nearby.push_back(pr);
+                }
+                const auto insideAny =
+                    [&](double x, double z) -> const CityPlanDebug::Prism* {
+                    for (const CityPlanDebug::Prism* pr : nearby)
+                        if (engine::pointInPolygon(pr->plan, engine::Vec2(x, z)))
+                            return pr;
+                    return nullptr;
+                };
+                bool moved = false;
+                if (const CityPlanDebug::Prism* hit = insideAny(px, pz)) {
+                    // A building plan can be CONCAVE (metro_v2's civic
+                    // spawn building is one L-shaped polygon — measured: 1
+                    // containing prism): from inside one wing the nearest
+                    // edge is the notch, and stepping 2.5 m "outward" past
+                    // it crosses into the other wing, still inside. The
+                    // first cut of this guard did exactly that, ping-ponged,
+                    // and logged success after its attempts ran out. Sweep
+                    // rings around the authored point instead: the nearest
+                    // deterministic candidate outside EVERY prism wins. The
+                    // containing count in the warn keeps overlap measurable.
+                    int containing = 0;
+                    for (const CityPlanDebug::Prism* pr : nearby)
+                        if (engine::pointInPolygon(pr->plan,
+                                                   engine::Vec2(px, pz)))
+                            ++containing;
+                    for (double r = 3.0; r <= 24.0 && !moved; r += 1.5) {
+                        for (int h = 0; h < 16 && !moved; ++h) {
+                            const double a = h * (3.14159265358979323846 / 8.0);
+                            const double cx = ox + std::cos(a) * r;
+                            const double cz = oz + std::sin(a) * r;
+                            if (!insideAny(cx, cz)) {
+                                px = cx;
+                                pz = cz;
+                                moved = true;
+                            }
+                        }
+                    }
+                    if (moved) {
+                        pj["position"][0] = px;
+                        pj["position"][2] = pz;
+                        LOG_WARN << "[spawn] authored spawn (" << ox << ","
+                                 << oz << ") is INSIDE a building ("
+                                 << hit->type << ", " << containing
+                                 << " containing prisms) -> moved to (" << px
+                                 << "," << pz
+                                 << "); re-author player.position";
+                    } else {
+                        LOG_WARN << "[spawn] authored spawn (" << ox << ","
+                                 << oz << ") is INSIDE a building ("
+                                 << hit->type << ", " << containing
+                                 << " containing prisms) and NO clear point "
+                                    "within 24 m -- left as authored";
+                    }
+                }
                 const double gy = entityGround(px, pz);
-                if (py < gy + 1.2) pj["position"][1] = gy + 1.2;
+                if (py < gy + 1.2 || moved) pj["position"][1] = gy + 1.2;
             }
             (editorMode ? loadPlayerSpawn(pj, world, assets)
                         : loadPlayer(pj, world));

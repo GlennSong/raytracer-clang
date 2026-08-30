@@ -207,6 +207,15 @@ struct LevelFacts {
     Vec3 spawn;
     bool anyColliderOverlapsSpawnXZ = false;
     double surfaceTopAtSpawn = 0;
+
+    // THE SPAWN IS NOT INSIDE A BUILDING. Every lot building is a solid plan
+    // prism in the district collider; a spawn inside one is a capsule inside
+    // a static mesh (device: "I'm stuck inside of a building for the player
+    // start"). The CDLOD branch above cannot see this — a prism has no bottom
+    // face, so the collider probe finds only a ceiling — so it is asked of
+    // the plan prisms directly.
+    bool spawnInsidePrism = false;
+    std::string spawnInsideType;
 };
 
 LevelFacts inspect(const std::string& name) {
@@ -259,6 +268,18 @@ LevelFacts inspect(const std::string& name) {
     f.groundUnderSpawn = probe.ground;
     f.anyColliderOverlapsSpawnXZ = probe.ground || probe.ceiling;
     f.surfaceTopAtSpawn = probe.ground ? probe.groundTop : probe.lowestCeiling;
+
+    world.each<CityPlanDebug>([&](Entity, CityPlanDebug& plan) {
+        for (const CityPlanDebug::Prism& pr : plan.prisms) {
+            if (pr.plan.size() < 3) continue;
+            if (spawn.y < pr.y0 - 0.5 || spawn.y > pr.y1 + 0.5) continue;
+            if (pointInPolygon(pr.plan, Vec2(spawn.x, spawn.z))) {
+                f.spawnInsidePrism = true;
+                f.spawnInsideType = pr.type;
+                return;
+            }
+        }
+    });
 
     // CDLOD terrain: the chunk collider under the spawn has not streamed in yet,
     // but the surface is analytic and the loader snaps the spawn to it. So the
@@ -426,6 +447,22 @@ TEST_CASE(every_shipped_level_has_collidable_ground_under_the_spawn) {
     }
 }
 
+
+// The spawn stands OUTSIDE every building (device: "I'm stuck inside of a
+// building for the player start"). metro_v2's authored spawn sat inside a
+// 417 m2 building 17.6 m from its street; the loader now walks such a spawn
+// out to the street and warns, and this asks the plan prisms directly — the
+// only probe that can see a prism, which has no bottom face.
+TEST_CASE(every_shipped_level_spawns_outside_every_building) {
+    for (const LevelFacts& f : allLevels()) {
+        if (!f.loaded || f.players == 0) continue;
+        if (f.spawnInsidePrism)
+            std::printf("    level '%s': spawn (%.1f, %.1f, %.1f) is INSIDE a %s building\n",
+                        f.name.c_str(), f.spawn.x, f.spawn.y, f.spawn.z,
+                        f.spawnInsideType.c_str());
+        CHECK(!f.spawnInsidePrism);
+    }
+}
 
 // THE GATE (floorplan-conformance round): every building's floorplan meets
 // the drawn ground — no wall buried past its plinth, no daylight beyond the
