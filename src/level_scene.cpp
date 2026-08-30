@@ -809,6 +809,10 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             const auto& f = env["fog"];
             scene.fog.enabled = true;
             scene.fog.density = f.value("density", 0.0);
+            // Authored by levels and honoured by the realtime renderers; the
+            // offline path used to ignore it and fog uniformly (see Fog in
+            // scene.h) — which over-hazed every aerial render.
+            scene.fog.heightFalloff = f.value("heightFalloff", 0.0);
             scene.fog.color = parseVec3(f.value("color", json()), sky);
         }
         hdr = env.value("hdr", std::string());

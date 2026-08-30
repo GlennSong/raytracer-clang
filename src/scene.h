@@ -97,6 +97,16 @@ struct Fog {
     bool   enabled = false;
     Vec3   color{0.6, 0.7, 0.82};
     double density = 0.0;
+    // > 0: density decays with altitude as exp(-heightFalloff * y) — the haze
+    // is a LOW-LYING layer, so a camera above it looking down is not shooting
+    // through ground-level density for the whole ray. This mirrors
+    // SkySettings/LightingSettings::fog.heightFalloff in renderer.h, which the
+    // Vulkan and Metal renderers already apply. The offline tracer used to drop
+    // the authored value on the floor and fog uniformly, so the SAME level at
+    // the SAME hour came out far hazier offline than in the viewer — every
+    // aerial render washed out (device: "It's very washed out from above").
+    // metro_v2 authors 0.016, i.e. at 150 m the density is ~9% of ground.
+    double heightFalloff = 0.0;
 };
 
 class Scene {

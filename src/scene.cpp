@@ -944,7 +944,24 @@ Vec3 Scene::tracePath(const Ray& ray, int maxBounces) const {
     // Aerial-perspective fog: fade the shaded result toward the fog color with
     // primary-ray distance (sky rays already are the horizon color, so skip them).
     if (fog.enabled && fog.density > 0.0 && firstDist > 0.0) {
-        double f = 1.0 - std::exp(-fog.density * firstDist);
+        // Optical depth INTEGRATED along the primary ray. With a height
+        // falloff the density varies over the path, so sampling it at either
+        // end is wrong in opposite directions; the closed form below is exact
+        // for density(y) = rho * exp(-k*y) along a straight segment:
+        //   tau = rho * d * (exp(-k*y0) - exp(-k*y1)) / (k * (y1 - y0))
+        // degenerating to rho * d * exp(-k*y0) for a level ray.
+        double tau = fog.density * firstDist;
+        const double k = fog.heightFalloff;
+        if (k > 0.0) {
+            const double y0 = ray.origin.y;
+            const double y1 = y0 + ray.direction.y * firstDist;
+            const double dy = y1 - y0;
+            tau = std::fabs(dy) < 1e-6
+                      ? fog.density * firstDist * std::exp(-k * y0)
+                      : fog.density * firstDist *
+                            (std::exp(-k * y0) - std::exp(-k * y1)) / (k * dy);
+        }
+        double f = 1.0 - std::exp(-tau);
         radiance = radiance * (1.0 - f) + fog.color * f;
     }
 
