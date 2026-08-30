@@ -79,6 +79,9 @@ public:
                           const std::vector<uint32_t>& indices,
                           const Vec3& position, Real friction = 0.5);
     void removeBody(PhysicsBodyId id);
+    // Live bodies in the world (ADR-0080 gates: "body count back to
+    // baseline" after an interior releases). 0 before initialize().
+    int bodyCount() const;
 
     void setLinearVelocity(PhysicsBodyId id, const Vec3& velocity);
     Vec3 getLinearVelocity(PhysicsBodyId id) const;

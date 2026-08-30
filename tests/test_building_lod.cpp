@@ -210,3 +210,45 @@ TEST_CASE(interior_layout_fits_the_plan_and_repeats) {
     Poly2 sliver = {{0, 0}, {5, 0}, {5, 3.0}, {0, 3.0}};
     CHECK(!interiorLayout(sliver, p, 0).hasStair);
 }
+
+
+// A/B INSTRUMENT for refactors that must not move a vertex (the storeyPlans
+// extraction, ADR-0080 Phase 2): prints a positional hash + tri count for a
+// spread of param variants. Always passes — run it before and after the
+// refactor and DIFF the two prints; a moved vertex changes the hash.
+TEST_CASE(building_mesh_hash_census) {
+    Poly2 plan = {{0, 0}, {22, 0}, {26, 14}, {11, 20}, {0, 14}};
+    for (int v = 0; v < 6; ++v) {
+        BuildingParams p = midriseParams();
+        p.seed = 100 + v * 17;
+        p.floors = 3 + v * 3;
+        if (v == 1) { p.setbackFloors = 3; p.setbackEvery = 1.2; }
+        if (v == 2) p.curtainWall = true;
+        if (v == 3) p.solidFacade = true;
+        if (v == 4) p.openDoorway = true;
+        if (v == 5) { p.setbackFloors = 4; p.setbackEvery = 2.0;
+                      p.openDoorway = true; }
+        const BuildingMesh bm = growPlanBuilding(plan, p, 1.5);
+        uint64_t h = 1469598103934665603ull;
+        std::size_t nv = 0, nt = 0;
+        for (const RenderMesh& part : bm.parts) {
+            nt += part.indices.size() / 3;
+            nv += part.vertices.size();
+            for (const Vertex& vx : part.vertices) {
+                const double q[3] = {vx.position.x, vx.position.y,
+                                     vx.position.z};
+                for (double d : q) {
+                    const int64_t k =
+                        static_cast<int64_t>(std::llround(d * 4096.0));
+                    h ^= static_cast<uint64_t>(k);
+                    h *= 1099511628211ull;
+                }
+            }
+        }
+        std::printf("    [mesh-hash] v%d floors=%d hash=%016llx verts=%zu "
+                    "tris=%zu height=%.3f\n",
+                    v, p.floors, static_cast<unsigned long long>(h), nv, nt,
+                    bm.height);
+    }
+    CHECK(true);
+}

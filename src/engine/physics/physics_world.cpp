@@ -431,6 +431,10 @@ void PhysicsWorld::setGravity(const Vec3& gravity) {
     if (impl) impl->physicsSystem.SetGravity(toJolt(gravity));
 }
 
+int PhysicsWorld::bodyCount() const {
+    return impl ? static_cast<int>(impl->physicsSystem.GetNumBodies()) : 0;
+}
+
 CharacterId PhysicsWorld::addCharacter(Real halfHeight, Real radius,
                                        const Vec3& position, Real stepHeight,
                                        Real maxSlopeDegrees) {

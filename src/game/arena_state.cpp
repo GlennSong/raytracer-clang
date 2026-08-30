@@ -10,6 +10,7 @@
 #include "../engine/systems/motion_system.h"
 #include "../engine/systems/day_night_system.h"
 #include "../engine/systems/teleport_system.h"
+#include "../engine/systems/building_interior_system.h"
 #include "../engine/systems/terrain_lod_system.h"
 #include "../apps/citysim/city_render.h"
 #include "../apps/citysim/city_spectate.h"
@@ -191,6 +192,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<DayNightSystem>();
 #ifdef RT_ENABLE_PHYSICS
     addSystem<TerrainLodSystem>(&physSys);  // CDLOD draws + near-node colliders (ADR-0036)
+    addSystem<BuildingInteriorSystem>(&physSys);  // streamed interiors (ADR-0080)
 #else
     addSystem<TerrainLodSystem>();          // CDLOD draws only (no physics build)
 #endif

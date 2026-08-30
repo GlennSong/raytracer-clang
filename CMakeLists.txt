@@ -167,6 +167,7 @@ add_library(engine_core STATIC
     src/engine/systems/planet_lab_system.cpp
     src/engine/systems/day_night_system.cpp
     src/engine/systems/teleport_pose.cpp
+    src/engine/systems/building_interior_system.cpp
     src/engine/systems/terrain_lod_system.cpp
     # NOTE: the agent-based city simulation (ADR-0060…0066) is NOT here. It is an
     # APPLICATION of the engine, built as its own `citysim` static library below
@@ -800,6 +801,7 @@ if(RT_ENABLE_PHYSICS)
         tests/test_physics_system.cpp
         tests/test_city_phys_tier.cpp
         tests/test_building_collider.cpp
+        tests/test_building_interior.cpp
         src/engine/physics/physics_world.cpp
         src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp

@@ -2151,6 +2151,63 @@ void emitBayFront(BuildingMesh& out, const FaceRect& fr,
 
 }  // namespace
 
+std::size_t entranceEdgeFor(const Poly2& plan, const BuildingParams& params) {
+    // The longest edge whose outward normal points most toward faceDir.
+    std::size_t entranceEdge = 0;
+    Real bestScore = -1e30;
+    for (std::size_t i = 0; i < plan.size(); ++i) {
+        Vec2 a = plan[i], b = plan[(i + 1) % plan.size()];
+        Vec2 d = b - a;
+        Real len = d.length();
+        if (len < human::DOOR_WIDTH + 1.2) continue;
+        Vec2 nrm(d.y / len, -d.x / len);
+        Real score = nrm.x * params.faceDir.x + nrm.y * params.faceDir.z + len * 0.01;
+        if (score > bestScore) { bestScore = score; entranceEdge = i; }
+    }
+    return entranceEdge;
+}
+
+std::vector<StoreyPlan> storeyPlans(const Poly2& planIn,
+                                    const BuildingParams& params) {
+    std::vector<StoreyPlan> out;
+    Poly2 plan = planIn;
+    if (plan.size() < 3) return out;
+    ensureCCW(plan);
+    out.push_back({plan, 0, params.groundHeight, 0});
+    // A tier inset that EXPLODES must not become the next tier (see the
+    // exterior loop's history: "one of the triangle skyscrapers went haywire
+    // when building the top"): valid only if it truly shrank, every vertex
+    // stayed inside the tier below, and no edge flipped direction.
+    auto insetOk = [](const Poly2& outer, const Poly2& inner) {
+        if (inner.size() != outer.size()) return false;
+        const Real ai = area(inner);
+        if (ai < 60.0 || ai >= area(outer)) return false;
+        for (std::size_t k = 0; k < inner.size(); ++k) {
+            if (!pointInPolygon(outer, inner[k])) return false;
+            Vec2 d0 = outer[(k + 1) % outer.size()] - outer[k];
+            Vec2 d1 = inner[(k + 1) % inner.size()] - inner[k];
+            if (dot(d0, d1) <= 0) return false;   // edge flipped
+        }
+        return true;
+    };
+    Poly2 cur = plan;
+    Real y = params.groundHeight;
+    int tier = 0;
+    for (int i = 0; i < params.floors; ++i) {
+        if (params.setbackFloors > 0 && params.setbackEvery > 0 && i > 0 &&
+            i % params.setbackFloors == 0) {
+            Poly2 next = offsetPlan(cur, params.setbackEvery);
+            if (insetOk(cur, next)) {
+                cur = next;
+                ++tier;
+            }
+        }
+        out.push_back({cur, y, params.floorHeight, tier});
+        y += params.floorHeight;
+    }
+    return out;
+}
+
 InteriorLayout interiorLayout(const Poly2& planIn, const BuildingParams& params,
                               std::size_t entranceEdge) {
     InteriorLayout il;
@@ -2179,27 +2236,167 @@ InteriorLayout interiorLayout(const Poly2& planIn, const BuildingParams& params,
         if (len < 4.0) continue;
         const Vec2 u = (b - a) * (1.0 / len);
         const Vec2 nIn(-u.y, u.x);   // CCW plan: inside is left of the edge
-        il.dogleg = len < il.run + 2.6;
-        const Real wellLen =
-            il.dogleg ? il.run * 0.5 + il.width + 0.2 : il.run + 1.0;
-        const Real wellWid = il.dogleg ? il.width * 2 + 0.2 : il.width;
+        // STRAIGHT flights only (the dog-leg variant is owed: its arrival
+        // lands under the slab above unless the hole grows case-by-case).
+        // The stair needs its run + a 1.0 m arrival strip along the edge.
+        const Real wellLen = il.run + 1.0;
+        const Real wellWid = il.width;
         if (len < wellLen + 1.2) continue;
         const Real inset = std::max(params.wallThickness + 0.15, Real(0.45));
         const Vec2 s = a + u * ((len - wellLen) * 0.5) + nIn * inset;
-        Poly2 well{s, s + u * wellLen, s + u * wellLen + nIn * wellWid,
-                   s + nIn * wellWid};
+        // The FULL stair footprint must sit inside the plan...
+        Poly2 fit{s, s + u * wellLen, s + u * wellLen + nIn * wellWid,
+                  s + nIn * wellWid};
         bool fits = true;
-        for (const Vec2& c : well)
+        for (const Vec2& c : fit)
             if (!pointInPolygon(plan, c)) { fits = false; break; }
         if (!fits) continue;
         il.hasStair = true;
-        il.well = well;
         il.stairDir = u;
         il.stairFoot = s + nIn * (il.width * 0.5);
+        // ...but the HOLE cut from ceilings/slabs is only the ascent's upper
+        // reach plus a 5 cm lip past the top tread. Floor stays solid beside
+        // and beyond it, so walking around the well to the next flight's
+        // foot is walking on floor, not falling back down the stairwell.
+        // EVERY flight uses this same run (growInterior gives upper storeys
+        // the same riser COUNT with shallower risers), so one rect serves
+        // every level; 0.25 run clears a 2.2 m capsule's head on a 3.2 m
+        // storey with margin (the walk gate measured 0.3 run blocking it).
+        const Vec2 h0 = s + u * (il.run * 0.25) - nIn * 0.05;
+        const Vec2 h1 = s + u * (il.run + 0.05) - nIn * 0.05;
+        const Vec2 wid = nIn * (wellWid + 0.10);
+        il.well = Poly2{h0, h1, h1 + wid, h0 + wid};
         return il;
     }
-    il.dogleg = false;
     return il;
+}
+
+BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
+                          Real baseY, RenderMesh* colliderOut) {
+    BuildingMesh out;
+    Poly2 plan = planIn;
+    if (plan.size() < 3) return out;
+    ensureCCW(plan);
+    const std::size_t entranceEdge = entranceEdgeFor(plan, params);
+    const InteriorLayout il = interiorLayout(plan, params, entranceEdge);
+    const std::vector<StoreyPlan> storeys = storeyPlans(plan, params);
+    if (storeys.size() < 2) return out;   // no storeys above ground
+    const Vec3 icol = materialFor(PartId::Interior, params.wallColor).albedo;
+    RenderMesh mesh;   // slabs + stairs, folded into PartId::Interior at the end
+
+    // How high the stair reaches: the first shrunken tier the well no longer
+    // fits inside ends it (the slab there keeps its hole shut).
+    int stairTop = 0;
+    if (il.hasStair) {
+        stairTop = static_cast<int>(storeys.size()) - 1;
+        for (std::size_t k = 1; k < storeys.size(); ++k) {
+            bool fits = true;
+            for (const Vec2& c : il.well)
+                if (!pointInPolygon(storeys[k].plan, c)) { fits = false; break; }
+            if (!fits) { stairTop = static_cast<int>(k) - 1; break; }
+        }
+    }
+
+    // --- floor slabs (top + underside; the underside IS the ceiling of the
+    // storey below; the top storey's ceiling is the roof slab's underside,
+    // which the exterior grow always emits) ------------------------------
+    for (std::size_t k = 1; k < storeys.size(); ++k) {
+        std::vector<Poly2> holes;
+        if (il.hasStair && static_cast<int>(k) <= stairTop)
+            holes.push_back(il.well);
+        const Real yTop = baseY + storeys[k].y0 + 0.05;
+        for (const auto& t : triangulateWithHoles(storeys[k].plan, holes)) {
+            MeshBuilder::emitTri(mesh, Vec3(t[0].x, yTop, t[0].y),
+                                 Vec3(t[1].x, yTop, t[1].y),
+                                 Vec3(t[2].x, yTop, t[2].y), Vec3(0, 1, 0),
+                                 icol);
+            const Real yb = yTop - 0.25;
+            MeshBuilder::emitTri(mesh, Vec3(t[0].x, yb, t[0].y),
+                                 Vec3(t[2].x, yb, t[2].y),
+                                 Vec3(t[1].x, yb, t[1].y), Vec3(0, -1, 0),
+                                 icol);
+            if (colliderOut)
+                MeshBuilder::emitTri(*colliderOut, Vec3(t[0].x, yTop, t[0].y),
+                                     Vec3(t[1].x, yTop, t[1].y),
+                                     Vec3(t[2].x, yTop, t[2].y),
+                                     Vec3(0, 1, 0), icol);
+        }
+    }
+
+    // --- inner walls per storey (same layout truth as the facade) --------
+    const FacadeMode upMode =
+        params.solidFacade ? FacadeMode::Solid : FacadeMode::Residential;
+    for (std::size_t k = 1; k < storeys.size(); ++k) {
+        const StoreyPlan& spk = storeys[k];
+        for (std::size_t e = 0; e < spk.plan.size(); ++e) {
+            const FaceRect fr =
+                planEdgeRect(spk.plan, e, baseY + spk.y0, spk.h);
+            if (params.curtainWall) {
+                RenderMesh skin;
+                const Vec3 off = fr.n * -params.wallThickness;
+                emitQuad(skin, fr.at(0, 0) + off, fr.at(fr.width, 0) + off,
+                         fr.at(fr.width, fr.height) + off,
+                         fr.at(0, fr.height) + off, fr.n * -1.0, icol);
+                appendToPart(out, PartId::Interior, skin);
+            } else {
+                emitInnerWallRect(out, fr, facadeLayout(fr, upMode, params),
+                                  params.wallThickness, params.wallColor);
+            }
+        }
+    }
+
+    // --- the stair (riser <= 0.18, run 0.28, inside the well) ------------
+    const Vec2 u = il.stairDir;
+    auto flight = [&](const Vec2& foot, const Vec2& dir, Real y0f, Real rise,
+                      int nR) {
+        const Vec2 perp(-dir.y, dir.x);
+        const Real riser = rise / nR;
+        const Real half = il.width * 0.5;
+        for (int j = 0; j < nR; ++j) {
+            const Real yT = y0f + riser * (j + 1);
+            const Vec2 t0 = foot + dir * (0.28 * j);
+            const Vec2 t1 = foot + dir * (0.28 * (j + 1));
+            const Vec3 A(t0.x - perp.x * half, yT, t0.y - perp.y * half);
+            const Vec3 B(t0.x + perp.x * half, yT, t0.y + perp.y * half);
+            const Vec3 C(t1.x + perp.x * half, yT, t1.y + perp.y * half);
+            const Vec3 D(t1.x - perp.x * half, yT, t1.y - perp.y * half);
+            const Vec3 A0(A.x, yT - riser, A.z), B0(B.x, yT - riser, B.z);
+            emitQuad(mesh, A, B, C, D, Vec3(0, 1, 0), icol);           // tread
+            emitQuad(mesh, A0, B0, B, A, Vec3(-dir.x, 0, -dir.y), icol);
+            if (colliderOut) {
+                emitQuad(*colliderOut, A, B, C, D, Vec3(0, 1, 0), icol);
+                emitQuad(*colliderOut, A0, B0, B, A,
+                         Vec3(-dir.x, 0, -dir.y), icol);
+            }
+        }
+        // Railing band on the open (+perp) side, 0.1..1.1 above the slope.
+        const Vec2 r0 = foot + perp * half;
+        const Vec2 r1 = foot + dir * (0.28 * nR) + perp * half;
+        const Vec3 RA(r0.x, y0f + 0.1, r0.y), RB(r1.x, y0f + rise + 0.1, r1.y);
+        const Vec3 RC(r1.x, y0f + rise + 1.1, r1.y), RD(r0.x, y0f + 1.1, r0.y);
+        emitQuad(mesh, RA, RB, RC, RD, Vec3(perp.x, 0, perp.y), icol);
+        emitQuad(mesh, RB, RA, RD, RC, Vec3(-perp.x, 0, -perp.y), icol);
+        if (colliderOut)
+            emitQuad(*colliderOut, RA, RB, RC, RD, Vec3(perp.x, 0, perp.y),
+                     icol);
+    };
+    // UNIFORM flights: every storey's flight uses the ground flight's riser
+    // count and run — upper risers just get shallower — so all flights share
+    // one XZ footprint, one arrival x, and the single well hole. Mixed runs
+    // measured as a trap: the shorter flight's head hit the slab before the
+    // shared hole began, and its top opened onto the hole's mid-air.
+    const int nR =
+        std::max(3, static_cast<int>(std::lround(il.run / 0.28)) + 1);
+    for (int k = 0; il.hasStair && k < stairTop; ++k) {
+        const Real yk = baseY + storeys[static_cast<std::size_t>(k)].y0 + 0.05;
+        const Real rise = storeys[static_cast<std::size_t>(k) + 1].y0 -
+                          storeys[static_cast<std::size_t>(k)].y0;
+        flight(il.stairFoot, u, yk, rise, nR);
+    }
+
+    appendToPart(out, PartId::Interior, mesh);
+    out.height = storeys.back().y0 + storeys.back().h;
+    return out;
 }
 
 BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
@@ -2218,17 +2415,8 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
 
     // Street-facing edge: the longest edge whose outward normal points most
     // toward faceDir — the door (and its awning/architrave) lands there.
-    std::size_t entranceEdge = 0;
-    Real bestScore = -1e30;
-    for (std::size_t i = 0; i < plan.size(); ++i) {
-        Vec2 a = plan[i], b = plan[(i + 1) % plan.size()];
-        Vec2 d = b - a;
-        Real len = d.length();
-        if (len < human::DOOR_WIDTH + 1.2) continue;
-        Vec2 nrm(d.y / len, -d.x / len);
-        Real score = nrm.x * params.faceDir.x + nrm.y * params.faceDir.z + len * 0.01;
-        if (score > bestScore) { bestScore = score; entranceEdge = i; }
-    }
+    // Shared with growInterior (ADR-0080) so both agree on the front door.
+    const std::size_t entranceEdge = entranceEdgeFor(plan, params);
 
     // Swept cornice: three stepped courses following the CURRENT plan outline.
     auto sweptCornice = [&](const Poly2& pl, Real yTop, Real scale) {
@@ -2424,47 +2612,31 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     y += gh;
 
     // Upper floors; setbacks shrink the plan per tier (base/shaft/capital),
-    // each transition capped by a roof slab + a swept cornice.
+    // each transition capped by a roof slab + a swept cornice. The storey
+    // stack itself comes from storeyPlans (ADR-0080) so the streamed
+    // interior can never disagree with the exterior about where a floor is;
+    // this loop draws the SAME sequence it always drew (the mesh-hash census
+    // in test_building_lod is the byte-identity witness).
     BuildingParams upper = params;
     upper.pilasters = false;
+    const std::vector<StoreyPlan> storeys = storeyPlans(plan, params);
     Poly2 cur = plan;
     Real tierY0 = y;
     for (int i = 0; i < params.floors; ++i) {
-        if (params.setbackFloors > 0 && params.setbackEvery > 0 && i > 0 &&
-            i % params.setbackFloors == 0) {
-            // A tier inset that EXPLODES must not become the next tier: on an
-            // acute prow the line intersections fly off, or the ring self-
-            // crosses, while still passing an area check (device: "one of the
-            // triangle skyscrapers went haywire when building the top"). The
-            // tier is valid only if it truly shrank, every vertex stayed
-            // inside the tier below, and no edge flipped direction. An
-            // invalid inset just means the tower rises straight instead.
-            auto insetOk = [](const Poly2& outer, const Poly2& inner) {
-                if (inner.size() != outer.size()) return false;
-                const Real ai = area(inner);
-                if (ai < 60.0 || ai >= area(outer)) return false;
-                for (std::size_t k = 0; k < inner.size(); ++k) {
-                    if (!pointInPolygon(outer, inner[k])) return false;
-                    Vec2 d0 = outer[(k + 1) % outer.size()] - outer[k];
-                    Vec2 d1 = inner[(k + 1) % inner.size()] - inner[k];
-                    if (dot(d0, d1) <= 0) return false;   // edge flipped
-                }
-                return true;
-            };
-            Poly2 next = offsetPlan(cur, params.setbackEvery);
-            if (insetOk(cur, next)) {
-                emitPlanSlab(out, cur, y - 0.05, 0.2, PartId::Roof,
-                             materialFor(PartId::Roof, wallColor).albedo);
-                if (full && params.stringCourse && !params.curtainWall)
-                    sweptCornice(cur, y - 0.4, 1.0);
-                if (full) cornerPosts(cur, tierY0, y - tierY0);
-                emitPlanParapet(out, offsetPlan(cur, 0.02), y, 0.55,
-                                materialFor(PartId::Trim, wallColor).albedo,
-                                PartId::Trim,
-                                materialFor(PartId::Trim, wallColor).albedo * 0.9);
-                cur = next;
-                tierY0 = y;
-            }
+        const StoreyPlan& sp = storeys[static_cast<std::size_t>(i) + 1];
+        if (i > 0 && sp.tier != storeys[static_cast<std::size_t>(i)].tier) {
+            // A setback landed at this floor: cap the tier below.
+            emitPlanSlab(out, cur, y - 0.05, 0.2, PartId::Roof,
+                         materialFor(PartId::Roof, wallColor).albedo);
+            if (full && params.stringCourse && !params.curtainWall)
+                sweptCornice(cur, y - 0.4, 1.0);
+            if (full) cornerPosts(cur, tierY0, y - tierY0);
+            emitPlanParapet(out, offsetPlan(cur, 0.02), y, 0.55,
+                            materialFor(PartId::Trim, wallColor).albedo,
+                            PartId::Trim,
+                            materialFor(PartId::Trim, wallColor).albedo * 0.9);
+            cur = sp.plan;
+            tierY0 = y;
         }
         const Real fh = params.floorHeight;
         for (std::size_t e = 0; e < cur.size(); ++e) {

@@ -168,6 +168,38 @@ struct InteriorLayout {
 InteriorLayout interiorLayout(const Poly2& plan, const BuildingParams& params,
                               std::size_t entranceEdge);
 
+// The storey stack (ADR-0080): every storey's plan, base height (relative to
+// baseY) and height, with the setback/inset validation the exterior tier
+// loop applies. Extracted so the EXTERIOR massing and the streamed INTERIOR
+// (growInterior) agree on where every floor is by construction. `tier`
+// increments at each accepted setback. Entry 0 is the ground storey.
+struct StoreyPlan {
+    Poly2 plan;
+    Real y0 = 0;   // storey base, relative to baseY
+    Real h = 0;    // storey height
+    int tier = 0;
+};
+std::vector<StoreyPlan> storeyPlans(const Poly2& plan,
+                                    const BuildingParams& params);
+
+// The street-facing edge index of a CCW plan — the edge the door lands on.
+// Shared by growPlanBuilding, interiorLayout callers and growInterior so no
+// two layers ever pick different front doors.
+std::size_t entranceEdgeFor(const Poly2& plan, const BuildingParams& params);
+
+// The streamed interior (ADR-0080 Phase 2): a floor slab, inner walls and
+// the stairwell for every storey above ground, deterministic from the SAME
+// (plan, params, baseY) regen key as the exterior — storeyPlans and
+// interiorLayout are the shared truth, so the slabs land exactly where the
+// facade says the floors are and the stair rises through the well the
+// exterior's ground ceiling already cut. `colliderOut`, when given, receives
+// only what needs physics: slab tops, treads, risers, landings, railings
+// (the prism already blocks the walls). The ground storey's shell (inner
+// walls + ceiling) ships with the exterior grow (openDoorway); this is
+// everything above it. No RNG — two calls are identical.
+BuildingMesh growInterior(const Poly2& plan, const BuildingParams& params,
+                          Real baseY, RenderMesh* colliderOut = nullptr);
+
 // Parameters for the mid-rise mixed-use hero (ADR-0038 §7) and its variants. All
 // lengths in metres. A skyscraper is just this with a big `floors` and setbacks.
 // An OPENING design (building-grammar-plan.md P2) — the first ELEMENT: a
