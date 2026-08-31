@@ -2370,6 +2370,22 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         if (il.hasStair && static_cast<int>(k) <= stairTop)
             holes.push_back(il.well);
         const Real yTop = baseY + storeys[k].y0 + 0.05;
+        // The hole's CUT EDGE: without a skirt the slab is two horizontal
+        // faces with an open 0.25 m rim between them — from below, the top
+        // face's backface shows through it (the facing view's residual red
+        // line along the stairwell). Double-sided vertical quads close it.
+        for (const Poly2& hole : holes)
+            for (std::size_t e = 0; e < hole.size(); ++e) {
+                const Vec2 a = hole[e], b = hole[(e + 1) % hole.size()];
+                Vec2 en(-(b - a).y, (b - a).x);
+                const Real el = en.length();
+                if (el < 1e-9) continue;
+                en = en * (1.0 / el);
+                const Vec3 A(a.x, yTop, a.y), B(b.x, yTop, b.y);
+                const Vec3 C(b.x, yTop - 0.25, b.y), D(a.x, yTop - 0.25, a.y);
+                emitQuad(mesh, A, B, C, D, Vec3(en.x, 0, en.y), icol);
+                emitQuad(mesh, A, B, C, D, Vec3(-en.x, 0, -en.y), icol);
+            }
         for (const auto& t : triangulateWithHoles(storeys[k].plan, holes)) {
             float u0, v0, u1, v1, u2, v2;
             grainUV(t[0].x, t[0].y, u0, v0);
@@ -2477,12 +2493,32 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         };
         railFace(oA, oB, perp);
         railFace(iA, iB, perp * -1.0);
-        {   // top cap
+        {   // top cap ...
+            const Real runL = 0.28 * nR;
+            const Vec3 slopeUp = normalize(
+                Vec3(-dir.x * rise, runL, -dir.y * rise));   // true cap normal
             const Vec3 A(iA.x, y0f + 1.1, iA.y), B(oA.x, y0f + 1.1, oA.y);
             const Vec3 C(oB.x, y0f + rise + 1.1, oB.y);
             const Vec3 D(iB.x, y0f + rise + 1.1, iB.y);
-            MeshBuilder::emitQuadUV(floorMesh, A, B, C, D, Vec3(0, 1, 0),
+            MeshBuilder::emitQuadUV(floorMesh, A, B, C, D, slopeUp,
                                     wcol, 0, 0, 0.08f, 0, 0.08f, ru, 0, ru);
+            // ...and the BOTTOM cap: without it, from under the slope the
+            // top cap's backface showed through the open underside — the
+            // "normals are flipped on the stairwell wall" report (the
+            // facing debug view drew a red line along the rail's top edge).
+            const Vec3 A0(iA.x, y0f + 0.1, iA.y), B0(oA.x, y0f + 0.1, oA.y);
+            const Vec3 C0(oB.x, y0f + rise + 0.1, oB.y);
+            const Vec3 D0(iB.x, y0f + rise + 0.1, iB.y);
+            MeshBuilder::emitQuadUV(floorMesh, A0, B0, C0, D0, slopeUp * -1.0,
+                                    wcol, 0, 0, 0.08f, 0, 0.08f, ru, 0, ru);
+            // ...and the two END caps (the facing re-check still showed a
+            // red streak at the head end: the top cap's backface through
+            // the open end). Normals along ±dir.
+            const Vec3 dn(dir.x, 0, dir.y);
+            MeshBuilder::emitQuadUV(floorMesh, A0, B0, B, A, dn * -1.0, wcol,
+                                    0, 0, 0.08f, 0, 0.08f, 0.04f, 0, 0.04f);
+            MeshBuilder::emitQuadUV(floorMesh, D0, C0, C, D, dn, wcol, 0, 0,
+                                    0.08f, 0, 0.08f, 0.04f, 0, 0.04f);
         }
         if (colliderOut) {
             const Vec3 A(oA.x, y0f + 0.1, oA.y);
@@ -2504,6 +2540,48 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         const Real rise = storeys[static_cast<std::size_t>(k) + 1].y0 -
                           storeys[static_cast<std::size_t>(k)].y0;
         flight(il.stairFoot, u, yk, rise, nR);
+        // SOFFIT: a sloped plane under the flight (foot base to the top
+        // tread's underside), facing down — closes the sawtooth so tread
+        // backfaces never show from beneath. Visual only; the treads stay
+        // the collider truth. STRINGERS: sloped side bands from the soffit
+        // line to just above the nosing line, closing the sawtooth's open
+        // sides so the flight has real depth (device: "the floors also
+        // don't have dimension").
+        {
+            const Vec2 perp(-u.y, u.x);
+            const Real half = il.width * 0.5;
+            const Real runLen = 0.28 * nR;
+            const Real riser = rise / nR;
+            const Vec2 f0 = il.stairFoot;
+            const Vec2 f1 = il.stairFoot + u * runLen;
+            const float su =
+                static_cast<float>(runLen / grainTile);
+            const float sv = static_cast<float>(il.width / grainTile);
+            const Vec3 A(f0.x - perp.x * half, yk, f0.y - perp.y * half);
+            const Vec3 B(f0.x + perp.x * half, yk, f0.y + perp.y * half);
+            const Vec3 C(f1.x + perp.x * half, yk + rise - riser,
+                         f1.y + perp.y * half);
+            const Vec3 D(f1.x - perp.x * half, yk + rise - riser,
+                         f1.y - perp.y * half);
+            const Vec3 soffitN = normalize(
+                Vec3(u.x * (rise - riser), -runLen, u.y * (rise - riser)));
+            MeshBuilder::emitQuadUV(floorMesh, A, B, C, D, soffitN,
+                                    wcol, 0, 0, sv, 0, sv, su, 0, su);
+            const Real bandH = riser + 0.04;
+            auto stringer = [&](const Vec2& side, const Vec2& n2) {
+                const Vec3 SA(f0.x + side.x, yk, f0.y + side.y);
+                const Vec3 SB(f1.x + side.x, yk + rise - riser,
+                              f1.y + side.y);
+                const Vec3 SC(f1.x + side.x, yk + rise - riser + bandH,
+                              f1.y + side.y);
+                const Vec3 SD(f0.x + side.x, yk + bandH, f0.y + side.y);
+                MeshBuilder::emitQuadUV(floorMesh, SA, SB, SC, SD,
+                                        Vec3(n2.x, 0, n2.y), wcol, 0, 0, su,
+                                        0, su, 0.02f, 0, 0.02f);
+            };
+            stringer(perp * half, perp);
+            stringer(perp * -half, perp * -1.0);
+        }
     }
 
     appendToPart(out, PartId::Interior, mesh);
@@ -2702,6 +2780,20 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                                  Vec3(t[2].x, cy, t[2].y),
                                  Vec3(t[1].x, cy, t[1].y), Vec3(0, -1, 0),
                                  icol);
+        // Skirt the well rim (see growInterior): the ceiling's hole edge is
+        // otherwise open between its underside and the slab above.
+        for (const Poly2& hole : holes)
+            for (std::size_t e = 0; e < hole.size(); ++e) {
+                const Vec2 a = hole[e], b = hole[(e + 1) % hole.size()];
+                Vec2 en(-(b - a).y, (b - a).x);
+                const Real el = en.length();
+                if (el < 1e-9) continue;
+                en = en * (1.0 / el);
+                const Vec3 A(a.x, cy + 0.25, a.y), B(b.x, cy + 0.25, b.y);
+                const Vec3 C(b.x, cy, b.y), D(a.x, cy, a.y);
+                emitQuad(ceil, A, B, C, D, Vec3(en.x, 0, en.y), icol);
+                emitQuad(ceil, A, B, C, D, Vec3(-en.x, 0, -en.y), icol);
+            }
         appendToPart(out, PartId::Interior, ceil);
         RenderMesh woodFloor;
         const Vec3 wcol =
@@ -2724,6 +2816,20 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 Vec3(plan[t[1]].x, y + 0.07, plan[t[1]].y),
                 Vec3(plan[t[2]].x, y + 0.07, plan[t[2]].y), Vec3(0, 1, 0),
                 wcol, u0, v0, u1, v1, u2, v2);
+        }
+        // Edge band: the overlay's cut edge shows at the doorway; give the
+        // wood sheet a visible thickness instead of a paper line.
+        for (std::size_t e2 = 0; e2 < plan.size(); ++e2) {
+            const Vec2 a2 = plan[e2], b2 = plan[(e2 + 1) % plan.size()];
+            Vec2 en(-(b2 - a2).y, (b2 - a2).x);
+            const Real el = en.length();
+            if (el < 1e-9) continue;
+            en = en * (1.0 / el);
+            emitQuad(woodFloor, Vec3(a2.x, y + 0.07, a2.y),
+                     Vec3(b2.x, y + 0.07, b2.y),
+                     Vec3(b2.x, y + 0.045, b2.y),
+                     Vec3(a2.x, y + 0.045, a2.y),
+                     Vec3(-en.x, 0, -en.y), wcol);
         }
         for (Vertex& v : woodFloor.vertices)
             v.tangent = Vec3(pd.x, 0, pd.y);
