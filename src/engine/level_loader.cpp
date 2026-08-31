@@ -3979,6 +3979,28 @@ bool LevelLoader::load(const std::string& path,
                          << " records, " << doorCount << " doors, "
                          << enterableCount << " enterable (" << blockedDoors
                          << " demoted: exit into a neighbour)";
+                {   // Finish census (device: "most buildings ... still
+                    // white"): the classes actually DEALT across enterable
+                    // units, so dead seed bits or a skewed palette shows
+                    // in one line instead of a walkthrough.
+                    int hf[5] = {0, 0, 0, 0, 0}, hs2[4] = {0, 0, 0, 0},
+                        hp[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+                    for (const auto& r : cityB.records) {
+                        if (!r.enterable) continue;
+                        ++hf[((r.params.seed >> 6) & 7u) % 5u];
+                        ++hs2[(r.params.seed >> 9) & 3u];
+                        ++hp[(r.params.seed >> 11) & 7u];
+                    }
+                    char fin[192];
+                    std::snprintf(fin, sizeof fin,
+                                  "[interiors] floors %d/%d/%d/%d/%d "
+                                  "stairs %d/%d/%d/%d "
+                                  "paints %d/%d/%d/%d/%d/%d/%d/%d",
+                                  hf[0], hf[1], hf[2], hf[3], hf[4], hs2[0],
+                                  hs2[1], hs2[2], hs2[3], hp[0], hp[1],
+                                  hp[2], hp[3], hp[4], hp[5], hp[6], hp[7]);
+                    LOG_INFO << fin;
+                }
                 world.add<engine::CityBuildings>(world.create(),
                                                 std::move(cityB));
             }

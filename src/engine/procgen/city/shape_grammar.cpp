@@ -2300,18 +2300,22 @@ PartId floorFinishPartFor(const BuildingParams& params) {
 }
 
 Vec3 interiorPaintFor(const BuildingParams& params) {
-    // Soft interior paints -- every channel bright (>= 0.6) so no paint
-    // re-darkens rooms the drywall emission bounce just lifted. Index 0 is
-    // the original warm drywall white, so some homes stay classic.
+    // Interior paints, round 7: the first cut had FOUR white-family
+    // washes and gentle tints -- the device read "most buildings ...
+    // still white". Now exactly ONE white and seven colours saturated
+    // enough to read under the warm room light. Channels stay >= 0.45
+    // (census-pinned): the ceiling keeps the drywall bounce, and the
+    // walls' own emission rides the part material, so a mid-tone wall
+    // cannot cave-darken a room.
     static const Vec3 kPaints[8] = {
-        {0.87, 0.85, 0.80},   // warm white (the drywall)
-        {0.89, 0.84, 0.70},   // cream
-        {0.76, 0.81, 0.70},   // sage
-        {0.72, 0.79, 0.85},   // powder blue
-        {0.87, 0.77, 0.73},   // blush
-        {0.83, 0.75, 0.62},   // warm tan
-        {0.78, 0.78, 0.79},   // dove grey
-        {0.90, 0.86, 0.66},   // butter
+        {0.87, 0.85, 0.80},   // warm white (the drywall; the ONE white)
+        {0.62, 0.76, 0.58},   // sage
+        {0.55, 0.68, 0.84},   // cornflower blue
+        {0.88, 0.64, 0.58},   // blush terracotta
+        {0.82, 0.70, 0.48},   // ochre tan
+        {0.90, 0.83, 0.48},   // butter yellow
+        {0.66, 0.72, 0.74},   // slate grey-blue
+        {0.78, 0.62, 0.74},   // mauve
     };
     return kPaints[(params.seed >> 11) & 7u];
 }

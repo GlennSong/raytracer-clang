@@ -961,3 +961,10 @@ eclipses); Metal/WebGPU disc code is mirrored, not run.
   safe, but their apertures stay DRAWN open while the prism blocks them.
   Real fix: the lot pass chooses a different entrance edge (or faceDir)
   when the exit is blocked by a neighbour.
+- **Sky visible through a ceiling opening in some flat-roof homes.** A
+  round-7 verification shot of a mauve modern_house (fin=f1s2p7) shows a
+  white-rimmed ceiling rectangle with open sky through it -- either the
+  recipe's authored roof skylight (which the streamed drywall top ceiling
+  should now be occluding, so the two disagree) or an uncapped well
+  column. Diagnose with the facing view + a release test; the top-ceiling
+  hole rules from growInterior are the suspects to check first.

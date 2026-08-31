@@ -129,19 +129,23 @@ TEST_CASE(floor_finishes_are_five_distinct_looks) {
 }
 
 TEST_CASE(interior_paint_varies_and_stays_bright) {
-    // Device: "paint the indoor walls different color per house so that
-    // they're not all just white walls." The palette must actually vary
-    // across seeds AND stay bright enough that no paint re-darkens the
-    // rooms the emission bounce just lifted.
+    // Device: "not all just white walls" -- then, of the first palette,
+    // "most buildings I entered they were still white": variety must be
+    // READABLE, not just numerically distinct. At most ONE palette entry
+    // may sit within a white-band (all channels > 0.78 and near-equal),
+    // every channel stays >= 0.45, and all eight entries differ.
     BuildingParams p = interiorParams();
-    int distinct = 0;
+    int distinct = 0, whites = 0;
     Vec3 seen[8];
     for (uint32_t k = 0; k < 8; ++k) {
         p.seed = (p.seed & ~uint32_t(0x3800)) | (k << 11);
         const Vec3 c = interiorPaintFor(p);
-        CHECK(c.x > 0.55);
-        CHECK(c.y > 0.55);
-        CHECK(c.z > 0.55);
+        CHECK(c.x > 0.45);
+        CHECK(c.y > 0.45);
+        CHECK(c.z > 0.45);
+        const Real mx = std::max(c.x, std::max(c.y, c.z));
+        const Real mn = std::min(c.x, std::min(c.y, c.z));
+        if (mn > 0.78 && mx - mn < 0.1) ++whites;
         bool fresh = true;
         for (int j = 0; j < distinct; ++j)
             if (std::fabs(seen[j].x - c.x) < 0.02 &&
@@ -150,8 +154,10 @@ TEST_CASE(interior_paint_varies_and_stays_bright) {
                 fresh = false;
         if (fresh) seen[distinct++] = c;
     }
-    std::printf("    [paint] %d distinct paints across 8 seeds\n", distinct);
+    std::printf("    [paint] %d distinct paints, %d white-band\n",
+                distinct, whites);
     CHECK(distinct >= 6);
+    CHECK(whites <= 1);
 }
 
 TEST_CASE(stairs_pick_their_own_finish) {

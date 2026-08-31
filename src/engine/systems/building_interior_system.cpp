@@ -266,7 +266,11 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
     resident_[key] = std::move(res);
     LOG_INFO << "[interior] built " << r.recipe << " (" << r.type << ") tris="
              << tris << " grow=" << growMs << "ms jolt=" << joltMs
-             << "ms bytes=" << bytes << " resident=" << resident_.size();
+             << "ms bytes=" << bytes << " fin=f"
+             << (((r.params.seed >> 6) & 7u) % 5u) << "s"
+             << ((r.params.seed >> 9) & 3u) << "p"
+             << ((r.params.seed >> 11) & 7u) << " resident="
+             << resident_.size();
 }
 
 void BuildingInteriorSystem::release(World& world, PhysicsWorld* phys,
