@@ -15,18 +15,54 @@ Successor to `docs/edit-mode-plan.md` (whose document model, SourceSpec/
 LevelWriter, picking, and gizmos all carry forward — they become the engine
 half of this application). Roadmap cross-reference: Tier 3.6.
 
-**Status:** A1 done, A2 skeleton done. Shell: **Qt 6** (cross-platform is a
-requirement; Vulkan backend for PC/Linux is the direction). Landed: the
-`engine_core` static library (all hosts link it); the abstract `Window` seam
-with the GLFW implementation behind `createPlatformWindow()`; `HostedWindow`
-(event injection, headless-tested) with a minimal ImGui platform layer;
-`Application::begin/runFrame/end` so a host event loop can drive frames; a
-`NullRenderer` for backend-less platforms; and the Qt shell itself
-(`editor_app`: viewport widget forwarding Qt input, QTimer-driven frames,
-Play/Esc working in-viewport) — built AND smoke-run headless on Linux. The
-Metal backend now accepts an NSView handle (Qt's winId) as well as an
-NSWindow. **Mac verification pending:** the viewport rendering path
-(NSView + CAMetalLayer + retina scale) and input feel.
+**Status:** A1 done, A2 done, A3 substantially done — **and as of 2026-08-23…27
+the editor renders, on Linux, on real hardware.** Shell: **Qt 6**
+(cross-platform is a requirement; the Vulkan backend is what actually ships it).
+This section's long-standing caveat — "written here, verified there", the Mac as
+the only machine that could see a pixel — no longer applies: the viewport is
+`VulkanViewport`, device-run on an RTX 3080 (Fedora, Qt 6.11).
+
+Landed: the `engine_core` static library (all hosts link it); the abstract
+`Window` seam with the GLFW implementation behind `createPlatformWindow()`;
+`HostedWindow` (event injection, headless-tested) with a minimal ImGui platform
+layer; `Application::begin/runFrame/end` so a host event loop can drive frames; a
+`NullRenderer` for backend-less platforms; the Qt shell (`editor_app`: viewport
+widget forwarding Qt input, QTimer-driven frames, Play/Esc in-viewport); and the
+two native docks that make it an editor rather than a window — `PropertyInspector`
+(a Unity-style inspector generated entirely from `describeProperties` +
+`ComponentRegistry`, so it knows widgets and never fields; build/sync/write
+visitor passes over one field ordering; widgets hold no references into the ECS,
+so component-storage moves and entity replacement are safe by construction) and
+`CityPlannerPanel` (camera presets, the Bones recipe knobs, graph-only Regenerate
++ explicit Bake, layer toggles, stats — so road tuning is *measured* in the editor
+instead of regenerate-and-screenshot loops). Both moc-free. Gated by
+`tests/test_property_inspector_qt.cpp` and `tests/test_city_planner_qt.cpp`
+(ctest target `editor_qt_tests`).
+
+**Three platform decisions the Linux round forced**, none of which were visible
+from the Mac:
+
+- **Qt picks Wayland; the Vulkan viewport needs X11.** The Wayland platform
+  plugin hands the app no `Display*`, so the viewport came up blank behind "no
+  Xlib display for the Vulkan surface". `preferXcbForVulkanViewport()` defaults to
+  the xcb plugin when one is reachable (Xwayland backs the same session); an
+  explicit `QT_QPA_PLATFORM` or `-platform` still wins, and a Wayland session with
+  no X display gets a warning rather than a blank pane.
+- **Every host must install an OS clipboard and name it.** The debug UI's
+  copy/paste was a per-host detail that the Qt editor simply did not have — so
+  Teleport poses could be produced and not pasted. Each host now installs one
+  (`wl-copy`/`wl-paste` under Wayland) and reports which.
+- **The editor opens the control socket too.** ADR-0078's channel was a viewer
+  feature; an editor that cannot be driven by an agent is an editor that cannot be
+  measured by one.
+
+**Still owed:** Mac verification of the NSView + CAMetalLayer + retina path (the
+Metal backend accepts an NSView handle — Qt's `winId` — as well as an NSWindow,
+but nobody has run it); A4 (asset browser) and A5 (undo/redo, dirty state,
+multiple documents) untouched. **A build-system trap worth one line:** the
+Makefile owns `build/` (`BUILD_DIR = build`), so `cmake -S . -B build` — which
+CLAUDE.md still recommends — collides with the offline tracer's object directory
+and fails with "not a CMake build directory". Configure into `build-viewer/`.
 
 A3 landed too: `EditorBridge` (engine-side, headless-tested) attaches while
 an EditorState is active and detaches during Play; the Qt shell now has a
@@ -206,7 +242,7 @@ unit tests; `Renderer::initialize` accepts a view handle. Today's viewer
 re-targets onto the library unchanged. Framework-agnostic — this phase is
 identical whether the shell ends up AppKit or Qt.
 
-### A2 — Shell skeleton (Qt; buildable wherever Qt6 is installed)
+### A2 — Shell skeleton (Qt; buildable wherever Qt6 is installed) — **DONE**
 Qt app: QMainWindow, menu bar, dock layout with an engine viewport widget
 (native window handle handed to the renderer — CAMetalLayer on macOS;
 HostedWindow event forwarding from Qt events), toolbar with Save /
@@ -215,7 +251,7 @@ Play-in-viewport / Play-standalone. Exit criteria: the full existing editor
 Play works both ways. Rendering verification still needs the Mac (Metal is
 the only backend), but the Qt code itself compiles on Linux.
 
-### A3 — Native panels via EditorBridge
+### A3 — Native panels via EditorBridge — **substantially done** (inspector + city planner landed and gated; hierarchy outline and the Add menu still open)
 Hierarchy outline (entities + cameras, rename, two-way selection sync with
 the viewport), native inspector (transform, material, primitive size,
 physics, camera lens), Add menu in the menu bar. The ImGui Editor panel
@@ -232,12 +268,18 @@ project settings panel.
 
 ## Risks / honesty
 
-- **Shell compilation:** Qt6 dev packages may be installable in the remote
-  environment (unlike the macOS SDK), which would make the shell itself
-  Linux-compilable — only the Metal *rendering* inside the viewport needs
-  your Mac. If not installable remotely, the AppKit-era caveat applies:
-  written here, verified there. Everything in A1 and the EditorBridge is
-  Linux-verifiable regardless.
+- **~~Shell compilation~~ — RESOLVED (2026-08-23).** The bet was that Qt6 dev
+  packages might be installable where the macOS SDK is not, making the shell
+  Linux-compilable while only the Metal *rendering* needed a Mac. It paid off
+  better than written: Qt6 installs *and* the Vulkan backend renders, so the
+  whole application — shell, viewport, panels — is now developed and verified on
+  Linux, with macOS as the parity target rather than the only eye. The
+  "written here, verified there" caveat that shaped this document's first three
+  months is retired.
+- **The remaining risk inverted.** Metal is now the unverified half: the NSView +
+  CAMetalLayer + retina path has code but no run. Every editor feature landed
+  from here carries a Metal parity debt in the same sense
+  `docs/renderer-parity.md` already tracks for the renderer.
 - **Two windowing stacks** (GLFW for the standalone runtime, hosted for the
   editor) share the `Window` seam; input parity bugs are possible — the
   headless event-translation tests are the mitigation.

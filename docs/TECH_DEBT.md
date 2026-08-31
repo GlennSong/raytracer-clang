@@ -670,13 +670,35 @@ are refused now.
 
 ## Verification gap (the meta-debt)
 
-- **Linux CI is red on arrival: 2/1083 test cases fail only on Linux.**
-  The first-ever ubuntu run of the suite (Build & Test workflow, run
-  30992735285) passed everything except `drive_freeway_mainline_is_clear` and
-  `zoo_acute_four_way` — both road-network drive probes that pass on macOS.
-  Likely floating-point precision in freeway-weld/acute-junction geometry (the
-  "3 welds is a metric artifact" family). Until fixed or per-platform gated,
-  the Linux job's signal reads "expected red", which is CI rot — fix soon.
+- **Linux CI is red on arrival: 2/1277 test cases fail on Linux — and the two
+  are no longer the two it was.** Re-measured 2026-08-31 on Fedora / clang,
+  main @ 4f2e3752, against a same-box build of the pre-merge `origin/main`
+  (865d7562) so "pre-existing" is a measurement rather than an assumption:
+  - `drive_freeway_mainline_is_clear` — **unchanged by three months of road
+    work**, byte-identical drive report on both sides (`blocked=1`, worstStep
+    0.38 m, worstGrade 27% on the reverse mainline). Still the original
+    suspicion: floating-point precision in freeway-weld geometry, passing on
+    macOS. This is the one true platform red.
+  - `block_grading_leaves_no_pits_between_roads` — **red by decision, not by
+    accident.** `worstRiser` 0.49 → 0.86 against a 0.55 gate, caused by
+    50f55fbe (terraces keep a reduced tilt), which predicted the 0.86 in its
+    own commit message and traded the gate for banks-beside-roads 2041 → 950
+    and the poke gate red → green. See ADR-0082 for the trade and what is owed
+    (a rim correction; the unexplained fixture/city divergence).
+  - `zoo_acute_four_way`, named here as the second Linux red since 2026-08-05,
+    **now passes** — fixed in passing by 865d7562's acute-junction realignment.
+    Nobody noticed, because nobody re-ran the suite on Linux until a merge
+    forced it.
+  - `pedestrians_never_stand_inside_cars` was red pre-merge and is **green**
+    now, also unremarked.
+
+  The lesson is the entry itself: a hand-maintained list of known-red tests
+  decays silently in both directions, and every stale name costs the next
+  person the same hour of bisecting. **Owed:** the per-platform gate this entry
+  has asked for since 2026-08-05 — an expected-fail list the harness reads, so
+  that a red *not* on it fails the build and a green *on* it fails just as
+  loudly. Until then the Linux job's signal reads "expected red", which is CI
+  rot.
 - **No CI existed until 2026-08-05, and the render backends were never
   compiled in it.** Stages 0+1 of the plan below now run on every push
   (`.github/workflows/build.yml`): Linux compiles the Vulkan backend with

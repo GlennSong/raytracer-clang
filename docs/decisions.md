@@ -5906,6 +5906,178 @@ to baseline, Jolt cost census), the aperture/attach checks in
 test_building_lod, level_tests' door audit + spawn-at-door, and the
 `[buildings]`/`[interior]` load-time censuses.
 
+## ADR-0081 — One world clock: a real sun, a calendar with a moon, and a sky that knows where you stand
+
+**Date** 2026-08-26. Supersedes the bare `daynight.speed` fraction and the
+standalone `moonPhase` scalar; makes the citysim schedules of ADR-0066 *"The
+Living City"* (2026-07-09 — note that two records share the number 0066) a
+consumer of the sky rather than a second clock.
+
+The cycle was a fixed-tilt circle — 12 h up, 12 h down — driven at 0.02 days
+per second (a 50-second day) and restated as a raw fraction by settings, level
+JSON, the web slider and ImGui alike. The citysim ran its own 8-minute day
+beside it. "The day/night cycle zips by really fast" and "the two clocks are
+NOT synced" are the same defect: no one owned time.
+
+Decisions:
+
+- **One rate knob, in the unit a person thinks in.** `DayNightCycle::dayMinutes`
+  (default 30) is the only authored rate; `speed()` is derived. `daynight.speed`
+  is no longer read (legacy `speed` still honoured when `dayMinutes` is absent),
+  and every surface — level JSON, the socket, MCP, ImGui, the web slider —
+  speaks minutes.
+- **The sun is a solar model, not a tilt.** Latitude (40 N) plus day-of-year
+  declination gives analytic `sunriseHour` / `sunsetHour` / `daylightFraction`
+  (day 172 → sunrise 04:35, sunset 19:25, 14.8 h of daylight). Engine +z is
+  south, so noon leans where the old fixed tilt leaned — the substitution is
+  visually continuous.
+- **A calendar, so the moon can have an age.** `dayOfYear` turns when the clock
+  wraps midnight and a year counter keeps `absoluteDay()` continuous, so the
+  moon's age never jumps at New Year (365 days is 12.37 months). The moon is a
+  *body*: age since `newMoonDay`, lit fraction `(1 - cos E)/2`, brightness
+  `full × lit²` (a quarter is a tenth of a full moon), and a real position —
+  hour angle lagging the sun's by the elongation. A new moon travels with the
+  sun; a full moon rises at sunset.
+- **The phase is geometry, not a shader term.** Every backend draws a sphere
+  disc lit from the TRUE sun (`skyMoonDir` / `skyMoonSun`; `skySunDir` carries
+  the *active* light, which at night IS the moon), so the crescent faces the sun
+  by construction. Drawn at ~1.5° — 3× real — so the phase reads at all.
+- **Light pollution is a place, not a constant.** `DayNightSystem` takes the
+  city's footprint once (the road graphs' bounding circle) and evaluates
+  `lightPollutionFor(distance past the edge, strength, falloff)` at the *camera*
+  each frame — 0.7 downtown, fading to 0 over 1500 m. It reaches the shaders as
+  `skyCity` (unit XZ toward downtown + strength): a warm horizon glow, the faint
+  end of the star field cut, the Milky Way scaled by `(1 - pollution)`. Downtown
+  keeps a few dozen stars; a dark site keeps thousands.
+- **Stars are hashed on a celestial lattice, not screen space.** A seamless 3-D
+  lattice over the EQUATORIAL frame (`skyCelX/Y/Z`, rotated by sidereal time on
+  the CPU), one candidate per voxel with a 27-neighbour lookup, power-law
+  brightness, Milky Way band on the real galactic pole. Sub-pixel σ so the sky
+  reads as points rather than blobs.
+- **The citysim follows the sky always, not just at build**
+  (`CityRenderSystem::setWorldClock`). A jump re-places the population from its
+  schedules at the new hour (`seedFromSchedule`, skipping promoted and possessed
+  cars); a hold publishes rate 0 so the sim clock freezes while traffic keeps
+  moving; a rate change re-rates sleeping agents (`CitySim::rerateSleep`),
+  because wake times are sim-seconds computed at the old rate.
+- **The sky is instrumented, because "where is the sun" is a question you ask
+  from outside the frame.** `engine/sky_chart.*` samples one day of altitude and
+  azimuth for both bodies plus the horizon crossings, and renders an SVG chart
+  in the STREET MAP's orientation (east right, south down, rim = horizon, centre
+  = zenith) — so the sun on the chart is the sun on the map. Reached by
+  `RT_SKY_SVG=<path>`, `daynight chart <path>` on the socket, and the MCP
+  `sky_chart` tool; mirrored in-game by the Sky HUD. The offline tracer takes
+  `--hour`, so the path tracer renders the cycle's moment and stays the parity
+  oracle.
+
+Gates: `tests/test_day_night.cpp` (30 real minutes at 60 Hz back to the start;
+lit minutes censused against the analytic crossings; seasons swung; new moons
+every 29.53 days with the year-wrap age 11.1 d not 0; a new moon riding with the
+sun `dot > 0.99` all day; first quarter on the meridian at 18:00), and
+`tests/test_sky_chart.cpp` (the chart maps the map's orientation; the sun's arc
+peaks at `90 - (lat - dec)` due south).
+`city_clock_follows_the_sky_in_lockstep` and
+`sleepers_wake_on_their_hour_whatever_the_rate_did` pin the citysim coupling —
+the latter because a first cut that only *shifted* wake times woke a sleeper 6.4
+hours late. Live on the metro: 0.800 h per real minute measured over 60 s
+against an expected 0.800, both clocks, gap 0.000.
+
+**Trap worth keeping:** the debug overlay is a PUSHED STATE that pauses the game
+state's update beneath it — and that update is what consumes one-shots. Stage
+`camera` and `daynight hud on` BEFORE `overlay debug on`, or they are swallowed.
+
+**Owed:** the star field, moon disc and light-pollution glow are device-verified
+on Vulkan only; `environment.metal` (both paths) and `mesh.wgsl` mirror them
+uncompiled — a parity debt tracked in `docs/renderer-parity.md`. Terrain horizon
+shadows (`procgen/terrain_horizon.*`, an R8 horizon map marched on the CPU when
+the light moves > 2°) are Vulkan-only for the same reason.
+
+## ADR-0082 — The network solves its vertical alignment jointly, and the ground follows it as a diffusion field
+
+**Date** 2026-08-29. Phase 2 of ADR-0075's grading cascade; retires that ADR's
+`DaylightBatter` earth bank, which poked through the coarse CDLOD tiles and was
+switched off.
+
+A T-junction on metro_v2 arrived at -8% for 100 m and then -42% / -78% over its
+last 13 m, against a +33.5% arterial, with a 9 m terrain cliff at the pad edge.
+Five plausible stories fit the screenshot; only a dump told them apart. That is
+the method note as much as the fix: **a new instrument first**
+(`RT_JUNCTION_DUMP`, every surface at 1 m stations from the node) revealed the
+three arms met the node at 51.32 / 48.64 / 43.30 m — `nodeSpread` 8.02 m.
+
+Decisions:
+
+- **A node is one variable, shared by every arm.** `weldChainProfiles` used to
+  solve each chain alone, take the lowest arriving deck at each node, smear the
+  difference along that chain, and ease back to grade lower-only *per chain* —
+  so nothing ever re-agreed the node. Now one vertical alignment for the whole
+  network: every consecutive pair is a grade constraint, solved by symmetric
+  projection onto the grade slabs (both ends move half the excess — the metric
+  projection, so cyclic projections converge on a graph with cycles), with pairs
+  ordered by world position so the result is the *network's*, not the caller's.
+- **Grade limits are per class, and they already existed.**
+  `DesignRules::maxGrade` (freeway 5% / arterial 8% / collector 10% / local 12%)
+  was in the code and ignored — every solve got `kRoadMaxGrade`. Measured:
+  disabling the class table again (`RT_PER_CLASS_GRADE=0`) makes the poke census
+  *worse* (147/1540/2731 vs 134/1499/2588), so the table earns its place.
+- **The ground follows the roads as a smooth field, not as stamps.** Every
+  terrain edit was a stamp driving the ground to a plane inside a polygon and
+  feathering to natural over a FIXED 8 m — so a road 8 m off its hillside got an
+  8 m bank, and a block between two such roads was a staircase. `procgen/earthwork.*`
+  replaces that with ONE displacement field `D(x,z)`: Dirichlet data where a road
+  region covers a node (through the *same* `applyFlatten` accumulator the terrain
+  uses), `D = 0` on the sea floor and the outer ring, and a screened Poisson
+  `D - reach² ∇²D = 0` between, at reach 100 m — one block. The heat map Glenn
+  asked for is literally heat diffusion.
+- **The field is a base layer, not another stamp.** Added to the relief as
+  `TerrainParams::earthwork` (the `erodedBase` pattern, one line in
+  `terrainHeight`), so noise and erosion detail survive and there are no steps by
+  construction. Installed into the params the city is built on — **not** the
+  shared natural sampler — so the road solve and the load-time road mesh keep
+  reading natural ground and deck/carve parity holds. Coarse-to-fine Gauss-Seidel,
+  fixed sweeps, fixed order: unit-tested bit-identical.
+- **Terraces keep a reduced tilt.** `gradeBlock` fitted a tilted plane to a
+  block's street heights and then snapped every band DEAD FLAT, discarding the
+  tilt it had just computed — the staircase. Each band now keeps the fitted
+  gradient scaled to rise at most `maxBandRise` across its own width, centred on
+  the band's mid-height; the riser between bands is the remainder. Three variants
+  were measured before choosing 3.0 m; street-anchoring the outer bands was worse
+  on every gate (relief rejections doubled).
+
+Gates and censuses: `tests/test_earthwork.cpp` (determinism, the field's shape),
+`test_surface_field`'s terrace case (each band tilts WITH the hill by at most the
+budget and less than the plane, and consecutive bands still differ by more than
+one band's rise), plus three standing censuses — `[bank-census]` (cells within
+20 m of a road steeper than 40%, from a 4 m probe grid independent of both the
+roads and the CDLOD vertices), `RT_POKE_REPORT`, and `RT_ELEVATION_MAP`.
+
+Measured, metro_v2: `nodeSpread` 8.02 m → 0; the terrain step at the junction
+disc edge 9.12 → 1.46 m; the reported collector -78% → -19.7%; banks beside roads
+over 40% 2041 → 950; worst bank 177% → 120%; poke gate LOD0/1/2 red → 119/1032/1902
+below its original 126/1424/2433 baseline; worst LOD2 poke 5.23 → 4.24 m.
+
+**Two reds left deliberately, and named** — the point of naming them is that a
+future Linux run reads them as decisions, not regressions:
+
+- `block_grading_leaves_no_pits_between_roads` (test_ground_truth.cpp:149).
+  The riser probe on a synthetic ring of streets reads 0.86 m against a 0.55 gate
+  (flat steps read ~0.5; a 1.5 m tilt 0.66). More tilt makes a band follow the
+  fitted plane more faithfully, and a least-squares plane cannot meet a ring of
+  streets on curved ground — the flat steps hid that misfit by the *sign* of
+  their offset. **Owed:** a rim correction so a graded block meets its streets
+  exactly (ADR-0075's deferred "sampled patch").
+- **The fixture and the city disagree, and no one knows why.** Building the
+  earthwork field under that fixture makes it WORSE there (1.51 m) while the
+  shipped city's road-side banks fall by half. Unexplained; the fixture keeps its
+  original contract untouched until it is.
+
+**A claim the measurement refuted, kept on purpose:** the plan asserted the field
+`D` "can only reduce" corner overshoot. It did not — LOD0 pokes were identical
+cell for cell (134 → 134). 86 of those 134 are ">0.3 m inside a footprint": a
+higher-priority building-pad stamp winning *inside* the road footprint and
+lifting terrain above the deck. A separate defect, found only because the census
+existed to contradict the plan.
+
 ## Interim seams & tech-debt register
 
 Deliberate shortcuts taken to keep steps small and low-risk. Each is expected
