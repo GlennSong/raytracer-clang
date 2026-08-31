@@ -943,10 +943,13 @@ eclipses); Metal/WebGPU disc code is mirrored, not run.
   neither enter buildings nor trigger leaves (DoorSystem tracks the player
   only).
 
-- **Floor finishes beyond wood.** InteriorFloor varies only in TONE today
-  (seed-derived light/dark wood). Tile, carpet and marble each need a small
-  procedural bake in surface_maps plus a FloorFinish pick in the architect
-  (type/district: offices tile, civic marble, homes wood). (Device ask.)
+- **Floor finishes: carpet and marble still owed.** floorFinishFor ships
+  three real finishes (dark walnut, light oak, stone tile via the Concrete
+  bake on its own InteriorFloorTile part), seed-picked per building and
+  inherited by the stairwell. Still owed: carpet and marble bakes in
+  surface_maps, and an architect-driven FloorFinish so the pick follows
+  type/district (offices tile, civic marble, homes wood) instead of the
+  seed. (Device ask.)
 - **Elevator shafts for tall buildings.** Enterable is capped at <= 3 upper
   storeys; taller buildings keep painted doors until an elevator exists
   ("for really tall buildings we'd want an elevator shaft" -- device).

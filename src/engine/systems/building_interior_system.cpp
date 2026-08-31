@@ -195,7 +195,10 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
         world.add<PrevTransform>(e, PrevTransform{t});
         Renderable rd;
         rd.mesh = mh;
-        rd.material = materialFor(pid, r.params.wallColor);
+        rd.material = (pid == PartId::InteriorFloor ||
+                       pid == PartId::InteriorFloorTile)
+                          ? floorFinishFor(r.params)
+                          : materialFor(pid, r.params.wallColor);
         // Bind the baked surface texture set, like the loader does for the
         // merged city parts — the surface FLAG alone leaves the shader on
         // its procedural fallback (world-planar, no normal map): the black/

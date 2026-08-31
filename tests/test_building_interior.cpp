@@ -96,11 +96,90 @@ TEST_CASE(interior_is_deterministic_and_stays_inside_the_plan) {
     }
 }
 
+TEST_CASE(floor_finishes_are_three_distinct_looks) {
+    // Device: "all of the flooring in all of the buildings are the same."
+    // floorFinishFor picks by (seed >> 6) % 3; the three classes must be
+    // MATERIALLY distinct (albedo and/or surface), not tones of one look.
+    BuildingParams p = interiorParams();
+    RenderMaterial m[3];
+    for (uint32_t k = 0; k < 3; ++k) {
+        p.seed = (p.seed & ~uint32_t(0xC0)) | (k << 6);
+        m[k] = floorFinishFor(p);
+    }
+    for (int a = 0; a < 3; ++a)
+        for (int b = a + 1; b < 3; ++b) {
+            const bool albedoDiffers =
+                std::fabs(m[a].albedo.x - m[b].albedo.x) > 0.05 ||
+                std::fabs(m[a].albedo.y - m[b].albedo.y) > 0.05 ||
+                std::fabs(m[a].albedo.z - m[b].albedo.z) > 0.05;
+            const bool surfaceDiffers = m[a].surface() != m[b].surface();
+            CHECK(albedoDiffers || surfaceDiffers);
+        }
+    // The tile class binds a different bake (Concrete), so the streamed
+    // interior and the lobby part (InteriorFloorTile) agree on the look.
+    bool anyTile = false;
+    for (int k = 0; k < 3; ++k)
+        if (m[k].surface() == RenderMaterial::Surface::Concrete)
+            anyTile = true;
+    CHECK(anyTile);
+}
+
+TEST_CASE(side_bay_edge_keeps_its_interior_wall) {
+    // Device: "an interior wall was missing... completely see through to
+    // the outside world." The attached-garage (sideBays) edge continued
+    // past the inner-shell emission -- from inside, no wall at all. The
+    // sealing pane replaces a RICHER shell (fewer tris than a windowed
+    // wall), so a total-count census reads backwards; the honest gate is
+    // COVERAGE: every edge of the rect plan must have Interior-part
+    // triangles in its inset band. The broken bay edge had ZERO.
+    BuildingParams p = interiorParams();
+    p.floors = 1;
+    p.sideBays = 1;
+    const BuildingMesh bm =
+        growPlanBuilding(kPlan, p, 0.0, FacadeDetail::Full);
+    const Real gh = p.groundHeight;
+    struct Band { int axis; Real lo, hi; };   // axis 0 = x, 1 = z
+    const Band bands[4] = {{0, 0.35, 0.9}, {0, 19.1, 19.65},
+                           {1, 0.35, 0.9}, {1, 14.1, 14.65}};
+    int found[4] = {0, 0, 0, 0};
+    for (const RenderMesh& m : bm.parts) {
+        if (m.materialIndex != static_cast<int>(PartId::Interior)) continue;
+        for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+            bool in[4] = {true, true, true, true};
+            for (int k = 0; k < 3 && (in[0] || in[1] || in[2] || in[3]);
+                 ++k) {
+                const Vec3& v = m.vertices[m.indices[i + k]].position;
+                if (v.y > gh + 0.6) { in[0] = in[1] = in[2] = in[3] = false; }
+                for (int b = 0; b < 4; ++b) {
+                    const Real c = bands[b].axis == 0 ? v.x : v.z;
+                    if (c < bands[b].lo || c > bands[b].hi) in[b] = false;
+                }
+            }
+            for (int b = 0; b < 4; ++b)
+                if (in[b]) ++found[b];
+        }
+    }
+    std::printf("    [side-bay] inset-band tris %d %d %d %d\n", found[0],
+                found[1], found[2], found[3]);
+    for (int b = 0; b < 4; ++b) CHECK(found[b] >= 2);
+}
+
 TEST_CASE(character_climbs_the_stair_around_the_well_to_the_top) {
     BuildingParams p = interiorParams();
     const InteriorLayout il =
         interiorLayout(kPlan, p, entranceEdgeFor(kPlan, p));
     CHECK(il.hasStair);
+    {   // Layout probe: pin the numbers the climb runs against.
+        Real wx0 = 1e9, wx1 = -1e9, wz0 = 1e9, wz1 = -1e9;
+        for (const Vec2& v : il.well) {
+            wx0 = std::min(wx0, v.x); wx1 = std::max(wx1, v.x);
+            wz0 = std::min(wz0, v.y); wz1 = std::max(wz1, v.y);
+        }
+        std::printf("    [layout] foot=(%.2f,%.2f) dir=(%.2f,%.2f) "
+                    "run=%.2f tread=%.2f well x[%.2f,%.2f] z[%.2f,%.2f]\n",
+                    il.stairFoot.x, il.stairFoot.y, il.stairDir.x,
+                    il.stairDir.y, il.run, il.tread, wx0, wx1, wz0, wz1);
+    }
     RenderMesh collider;
     growInterior(kPlan, p, 0.0, &collider);
     CHECK(!collider.indices.empty());
@@ -164,8 +243,15 @@ TEST_CASE(character_climbs_the_stair_around_the_well_to_the_top) {
     CHECK(pos.x < sx0 + 0.4);
     CHECK_APPROX(pos.y, 4.55 + 1.1, 0.25);    // still ON the floor, not down
 
-    // Up flight 2 (storey 1 -> storey 2 at 7.75).
-    walkTo(sxT, sz, 1200);
+    // Up flight 2 (storey 1 -> storey 2 at 7.75). Chunked, with probe
+    // prints: when a pitch change stalls the climb, the stall point is
+    // what names the obstacle.
+    for (int leg = 0; leg < 8; ++leg) {
+        walkTo(sxT, sz, 150);
+        const Vec3 lp = world.characterPosition(c);
+        std::printf("    [climb] f2 leg %d x=%.2f y=%.2f z=%.2f\n", leg,
+                    lp.x, lp.y, lp.z);
+    }
     pos = world.characterPosition(c);
     std::printf("    [climb] flight2 end x=%.2f y=%.2f z=%.2f\n", pos.x,
                 pos.y, pos.z);

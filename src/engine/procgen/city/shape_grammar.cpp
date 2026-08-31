@@ -174,16 +174,26 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
             // is flat. The faint self-light stays so a room with no staged
             // light never goes black.
             m.albedo = {0.86, 0.84, 0.80}; m.metallic = 0.0f; m.roughness = 0.85f;
-            m.emission = m.albedo * 0.08;
+            // 0.22, not 0.08: an omni room light grazes a ceiling (no GI
+            // bounce in the renderer), so drywall carries the bounce
+            // itself -- night-test measured, walls bright / ceiling dark.
+            m.emission = m.albedo * 0.22;
             break;
         case PartId::InteriorFloor:
-            // Interior WOOD flooring (device: "a wood material for the
-            // flooring"): plank boards from the WoodSiding surface (the
-            // timber bake), warm tone, satin roughness so the room lights
-            // catch a sheen.
+            // Interior flooring BASE recipe (wood). The finish VARIES per
+            // building via floorFinishFor (dark walnut / light oak /
+            // stone tile -- device: "all of the flooring in all of the
+            // buildings are the same").
             m.albedo = {0.47, 0.34, 0.22}; m.metallic = 0.0f; m.roughness = 0.55f;
             m.setSurface(RenderMaterial::Surface::WoodSiding);
             m.emission = m.albedo * 0.06;
+            break;
+        case PartId::InteriorFloorTile:
+            // Stone tile: the Concrete bake, pale and polished (one of the
+            // floorFinishFor finishes; its own part -- see the header).
+            m.albedo = {0.62, 0.61, 0.58}; m.metallic = 0.0f; m.roughness = 0.35f;
+            m.setSurface(RenderMaterial::Surface::Concrete);
+            m.emission = m.albedo * 0.05;
             break;
         case PartId::Stucco:
             m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.85f;
@@ -2234,6 +2244,29 @@ static void plankFrame(const Poly2& plan, Vec2& d, Vec2& perp) {
 
 }  // namespace
 
+RenderMaterial floorFinishFor(const BuildingParams& params) {
+    // Three finishes, seed-picked per building (device ask for variety).
+    RenderMaterial m = materialFor(PartId::InteriorFloor, params.wallColor);
+    switch ((params.seed >> 6) % 3u) {
+        case 0:   // dark walnut (the base recipe)
+            break;
+        case 1:   // light oak
+            m.albedo = {0.66, 0.52, 0.36};
+            m.roughness = 0.5f;
+            m.emission = m.albedo * 0.06;
+            break;
+        default:  // stone tile (single source: the part material)
+            m = materialFor(PartId::InteriorFloorTile, params.wallColor);
+            break;
+    }
+    return m;
+}
+
+PartId floorFinishPartFor(const BuildingParams& params) {
+    return (params.seed >> 6) % 3u == 2 ? PartId::InteriorFloorTile
+                                        : PartId::InteriorFloor;
+}
+
 std::size_t entranceEdgeFor(const Poly2& plan, const BuildingParams& params) {
     // The longest edge whose outward normal points most toward faceDir.
     std::size_t entranceEdge = 0;
@@ -2297,12 +2330,14 @@ InteriorLayout interiorLayout(const Poly2& planIn, const BuildingParams& params,
     Poly2 plan = planIn;
     if (plan.size() < 3) return il;
     ensureCCW(plan);
-    // One full-storey flight, sized by the TALLEST storey it must serve (the
-    // ground storey): riser <= 0.18 (comfortable, and well under the
-    // character's 0.55 stepHeight), run 0.28.
+    // One full-storey flight, sized by the TALLEST storey it must serve
+    // (the ground storey). Riser 0.28 / tread 0.25 (~48 degrees, inside the
+    // 50-degree slope limit and 0.55 stepHeight): the 0.18/0.28 first cut
+    // read as too long in play -- and round 3's pitch change was silently
+    // LOST to a mid-script abort, so this is where it actually lands.
     const int risers =
-        std::max(3, static_cast<int>(std::ceil(params.groundHeight / 0.18)));
-    il.run = (risers - 1) * 0.28;
+        std::max(3, static_cast<int>(std::ceil(params.groundHeight / 0.28)));
+    il.run = (risers - 1) * il.tread;
     // Candidate edges, longest first, never the entrance edge (the lobby's
     // clear path from the door stays clear).
     std::vector<std::size_t> order;
@@ -2345,9 +2380,21 @@ InteriorLayout interiorLayout(const Poly2& planIn, const BuildingParams& params,
         // foot is walking on floor, not falling back down the stairwell.
         // EVERY flight uses this same run (growInterior gives upper storeys
         // the same riser COUNT with shallower risers), so one rect serves
-        // every level; 0.25 run clears a 2.2 m capsule's head on a 3.2 m
-        // storey with margin (the walk gate measured 0.3 run blocking it).
-        const Vec2 h0 = s + u * (il.run * 0.25) - nIn * 0.05;
+        // every level. The hole must OPEN before the climb runs out of
+        // headroom: while it is still closed overhead, the capsule's head
+        // plus the NEXT riser must clear the arriving slab (2.2 m rig,
+        // r 0.3; the upper storeys' shallow riser is the binding flight,
+        // and Jolt's step-up cast is what actually hits first -- the walk
+        // gate wedged at EXACTLY the hole edge). "0.25 run" was tuned for
+        // the 0.18 pitch and died with it; the start is now DERIVED from
+        // the constraint instead of tuned.
+        const Real upRiser = human::FLOOR_HEIGHT / risers;
+        const Real upSlope = upRiser / il.tread;
+        Real holeStart =
+            (human::FLOOR_HEIGHT - 2.2 - upRiser - 0.1) / upSlope - 0.3;
+        holeStart = std::min(holeStart, il.run * 0.25);
+        holeStart = std::max(holeStart, Real(0.3));
+        const Vec2 h0 = s + u * holeStart - nIn * 0.05;
         const Vec2 h1 = s + u * (il.run + 0.05) - nIn * 0.05;
         const Vec2 wid = nIn * (wellWid + 0.10);
         il.well = Poly2{h0, h1, h1 + wid, h0 + wid};
@@ -2369,9 +2416,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     const Vec3 icol = materialFor(PartId::Interior, params.wallColor).albedo;
     const Real floorTone =
         0.85 + 0.45 * (((params.seed >> 4) & 0xffu) / 255.0);
-    const Vec3 wcol =
-        materialFor(PartId::InteriorFloor, params.wallColor).albedo *
-        floorTone;
+    const Vec3 wcol = floorFinishFor(params).albedo * floorTone;
     RenderMesh mesh;   // DRYWALL: slab undersides (= ceilings)
     RenderMesh floorMesh;   // WOOD: slab tops, treads, risers, railings
     // One grain direction for the whole building (the ground plan's longest
@@ -2454,6 +2499,21 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     {
         const Vec3 grainT(grainD.x, 0, grainD.y);
         for (Vertex& v : floorMesh.vertices) v.tangent = grainT;
+    }
+
+    // --- top-floor ceiling: the top storey looked up at the roof slab's
+    // dark underside (device report). A drywall ceiling closes it, with
+    // the well hole only if the stair reaches this storey (it never does:
+    // stairTop is the last storey's FLOOR -- so no hole).
+    {
+        const StoreyPlan& topSp = storeys.back();
+        const Real cy2 = baseY + topSp.y0 + topSp.h - 0.25;
+        for (const auto& t : triangulateWithHoles(topSp.plan, {})) {
+            MeshBuilder::emitTri(mesh, Vec3(t[0].x, cy2, t[0].y),
+                                 Vec3(t[2].x, cy2, t[2].y),
+                                 Vec3(t[1].x, cy2, t[1].y), Vec3(0, -1, 0),
+                                 icol);
+        }
     }
 
     // --- inner-wall COLLIDERS (all storeys, ground included): planes at
@@ -2800,17 +2860,58 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             BuildingParams sp = params;
             sp.groundBays = params.sideBays;
             emitBayFront(out, planEdgeRect(plan, i, y, gh), sp, wallColor);
+            // Enterable homes: the bay front is single-sided and its edge
+            // skipped the inner shell -- from inside, a MISSING wall
+            // (see-through to the world). A plain drywall pane seals it.
+            if (full && params.openDoorway) {
+                const FaceRect gfr = planEdgeRect(plan, i, y, gh);
+                RenderMesh gi;
+                const Vec3 goff = gfr.n * -interiorInset(params);
+                const Vec3 gcol =
+                    materialFor(PartId::Interior, wallColor).albedo;
+                emitQuad(gi, gfr.at(0, 0) + goff,
+                         gfr.at(gfr.width, 0) + goff,
+                         gfr.at(gfr.width, gfr.height) + goff,
+                         gfr.at(0, gfr.height) + goff, gfr.n * -1.0, gcol);
+                emitQuad(gi, gfr.at(0, 0) + goff,
+                         gfr.at(gfr.width, 0) + goff,
+                         gfr.at(gfr.width, gfr.height) + goff,
+                         gfr.at(0, gfr.height) + goff, gfr.n, gcol);
+                appendToPart(out, PartId::Interior, gi);
+            }
             continue;
         }
         FacadeMode mode = (i == entranceEdge && params.walkableGround)
                               ? FacadeMode::Entrance : groundMode;
-        // The stairwell hugs one wall; panes crossed by a climbing stair
-        // read wrong from both sides (device feedback), so that edge goes
-        // SOLID -- the grammar's native per-edge mode axis.
+        // The stairwell hugs one wall; ANY window there reads wrong from
+        // both sides -- Solid mode's clerestory strip included (device:
+        // "the wall along which the stairwell was still had windows"). The
+        // stair edge gets a TRUE blank wall: plain quads both sides, no
+        // opening layout at all.
+        bool stairEdge = false;
         if (full && params.openDoorway && i != entranceEdge) {
             const InteriorLayout ilw =
                 interiorLayout(plan, params, entranceEdge);
-            if (ilw.hasStair && i == ilw.edge) mode = FacadeMode::Solid;
+            stairEdge = ilw.hasStair && i == ilw.edge;
+        }
+        if (stairEdge) {
+            const FaceRect bfr = planEdgeRect(plan, i, y, gh);
+            RenderMesh bw;
+            emitQuad(bw, bfr.at(0, 0), bfr.at(bfr.width, 0),
+                     bfr.at(bfr.width, bfr.height), bfr.at(0, bfr.height),
+                     bfr.n, wallColor);
+            appendToPart(out, params.wallPart, bw);
+            RenderMesh bi;
+            const Vec3 boff = bfr.n * -interiorInset(params);
+            const Vec3 bcol = materialFor(PartId::Interior, wallColor).albedo;
+            emitQuad(bi, bfr.at(0, 0) + boff, bfr.at(bfr.width, 0) + boff,
+                     bfr.at(bfr.width, bfr.height) + boff,
+                     bfr.at(0, bfr.height) + boff, bfr.n * -1.0, bcol);
+            emitQuad(bi, bfr.at(0, 0) + boff, bfr.at(bfr.width, 0) + boff,
+                     bfr.at(bfr.width, bfr.height) + boff,
+                     bfr.at(0, bfr.height) + boff, bfr.n, bcol);
+            appendToPart(out, PartId::Interior, bi);
+            continue;
         }
         if (mode == FacadeMode::Retail && params.retailStreetOnly) {
             Vec2 a = plan[i], b = plan[(i + 1) % plan.size()];
@@ -2903,8 +3004,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         // need their own surface bakes -- recorded in TECH_DEBT.
         const Real floorTone =
             0.85 + 0.45 * (((params.seed >> 4) & 0xffu) / 255.0);
-        const Vec3 wcol =
-            materialFor(PartId::InteriorFloor, wallColor).albedo * floorTone;
+        const Vec3 wcol = floorFinishFor(params).albedo * floorTone;
         Vec2 pd, pp;
         plankFrame(plan, pd, pp);
         const Real ptile =
@@ -2941,7 +3041,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         }
         for (Vertex& v : woodFloor.vertices)
             v.tangent = Vec3(pd.x, 0, pd.y);
-        appendToPart(out, PartId::InteriorFloor, woodFloor);
+        appendToPart(out, floorFinishPartFor(params), woodFloor);
     }
     // Base course wraps the plan (skipping the door edge).
     if (full && params.baseCourse) {
@@ -3001,15 +3101,26 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 emitCurtainWallRect(out, planEdgeRect(cur, e, y, fh), wallColor,
                                     detail);
             else if (full) {
-                FacadeMode um = params.solidFacade ? FacadeMode::Solid
-                                                  : FacadeMode::Residential;
+                bool stairEdgeU = false;
                 if (params.openDoorway && cur.size() == plan.size()) {
                     const InteriorLayout ilw =
                         interiorLayout(plan, params, entranceEdge);
-                    if (ilw.hasStair && e == ilw.edge) um = FacadeMode::Solid;
+                    stairEdgeU = ilw.hasStair && e == ilw.edge;
                 }
-                emitFacadeRect(out, planEdgeRect(cur, e, y, fh), um, upper,
-                               wallColor);
+                if (stairEdgeU) {
+                    const FaceRect bfr = planEdgeRect(cur, e, y, fh);
+                    RenderMesh bw;
+                    emitQuad(bw, bfr.at(0, 0), bfr.at(bfr.width, 0),
+                             bfr.at(bfr.width, bfr.height),
+                             bfr.at(0, bfr.height), bfr.n, wallColor);
+                    appendToPart(out, params.wallPart, bw);
+                } else {
+                    emitFacadeRect(out, planEdgeRect(cur, e, y, fh),
+                                   params.solidFacade
+                                       ? FacadeMode::Solid
+                                       : FacadeMode::Residential,
+                                   upper, wallColor);
+                }
             }
             else
                 emitFlatFacadeRect(out, planEdgeRect(cur, e, y, fh),

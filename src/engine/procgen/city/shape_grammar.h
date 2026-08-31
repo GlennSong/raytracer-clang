@@ -64,6 +64,10 @@ enum class PartId : uint8_t {
     InteriorFloor, // interior WOOD flooring (slab tops, the lobby floor
              // overlay, stair treads/risers/railing): plank boards via the
              // WoodSiding surface, satin roughness (device ask).
+    InteriorFloorTile, // interior STONE-TILE flooring (the tile finish of
+             // floorFinishFor): pale polished Concrete bake. Its own part
+             // because the merged city mesh binds ONE surface per part --
+             // tile lobbies must not inherit the wood bump.
     Count    // KEEP LAST: materialIndexFor is the ordinal; arrays size by Count
 };
 
@@ -165,7 +169,8 @@ struct InteriorLayout {
     Vec2 stairDir;          // unit XZ direction of climb
     Real width = 1.2;       // flight width
     Real run = 0;           // horizontal run of one full-storey flight
-    Real tread = 0.26;      // horizontal depth per step (riser 0.24 pitch)
+    Real tread = 0.25;      // horizontal depth per step (riser 0.28 pitch,
+                            // ~48 degrees)
     std::size_t edge = 0;   // plan edge the stair hugs (the facade blanks
                             // its windows there -- a stair crossing panes
                             // read wrong; device feedback)
@@ -192,6 +197,15 @@ std::vector<StoreyPlan> storeyPlans(const Poly2& plan,
 // Shared by growPlanBuilding, interiorLayout callers and growInterior so no
 // two layers ever pick different front doors.
 std::size_t entranceEdgeFor(const Poly2& plan, const BuildingParams& params);
+
+// The building's interior floor finish (dark walnut / light oak / stone
+// tile), seed-picked. The streamed-interior system binds the matching
+// surface bake per part material.
+RenderMaterial floorFinishFor(const BuildingParams& params);
+
+// The part the LOBBY floor overlay lands in (merged city mesh): tile-finish
+// buildings use InteriorFloorTile so the loader binds the Concrete bake.
+PartId floorFinishPartFor(const BuildingParams& params);
 
 // The streamed interior (ADR-0080 Phase 2): a floor slab, inner walls and
 // the stairwell for every storey above ground, deterministic from the SAME

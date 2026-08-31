@@ -4030,7 +4030,8 @@ bool LevelLoader::load(const std::string& path,
                             // room's long axis) but shares WoodSiding with the
                             // water tanks, whose world-planar re-UV must stay.
                             if (!surfaceBakesOwnUVs(surf) &&
-                                static_cast<PartId>(pi) != PartId::InteriorFloor)
+                                static_cast<PartId>(pi) != PartId::InteriorFloor &&
+                                static_cast<PartId>(pi) != PartId::InteriorFloorTile)
                                 applyWorldPlanarUVs(pm, 1.0 / surfaceWorldTileSize(surf));
                             bindSurfaceMaps(proto.material,
                                             bakeSurfaceTextures(renderer, surf, lotTex));
