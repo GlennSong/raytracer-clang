@@ -1369,6 +1369,9 @@ if(EMSCRIPTEN)
                 ${CMAKE_SOURCE_DIR}/web/city-plan.html
                 $<TARGET_FILE_DIR:viewer_web>/city-plan.html
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_SOURCE_DIR}/web/retrospective.html
+                $<TARGET_FILE_DIR:viewer_web>/retrospective.html
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${CMAKE_SOURCE_DIR}/web/scenes.json
                 $<TARGET_FILE_DIR:viewer_web>/scenes.json
         COMMAND ${CMAKE_COMMAND} -E copy_directory

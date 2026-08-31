@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<!--
+  Retrospective on the first three months (2026-06-01 -> 2026-08-31). The public
+  half of docs/retrospective.md — same claims, same numbers, written for a reader
+  who has not read the repo. Self-contained: no external scripts or fonts.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Three Months In — Raytracer Engine</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: #0c1016; color: #dfe9f3;
+      font-family: system-ui, -apple-system, sans-serif; line-height: 1.6; }
+    .wrap { max-width: 820px; margin: 0 auto; padding: 32px 24px 80px; }
+    a { color: #8ec5ff; }
+    h1 { font-size: 26px; margin: 0 0 4px; }
+    h2 { font-size: 19px; margin: 38px 0 10px; color: #bcd; }
+    h3 { font-size: 15.5px; margin: 24px 0 6px; color: #cfe4ff; }
+    .lede { color: #9fb4c9; font-size: 15px; margin: 0; }
+    .nav { margin-bottom: 8px; font-size: 14px; }
+    p, li { color: #c6d4e2; font-size: 15px; }
+    li { margin-bottom: 7px; }
+    code { background: #131c27; border: 1px solid #22303f; border-radius: 5px;
+      padding: 1px 5px; font: 13px ui-monospace, monospace; color: #b9e0ff; }
+    footer { margin-top: 44px; color: #64768a; font-size: 13px;
+      border-top: 1px solid #1c2734; padding-top: 16px; }
+    .callout { margin: 22px 0 6px; padding: 16px 18px; border-radius: 12px;
+      background: linear-gradient(135deg, #10233a, #14182a);
+      border: 1px solid #2f6a86; }
+    .callout .k { display: inline-block; font-size: 11px; font-weight: 800;
+      letter-spacing: .8px; text-transform: uppercase; color: #8ec5ff;
+      background: #0c2036; border: 1px solid #235a7a; border-radius: 6px;
+      padding: 3px 9px; margin-bottom: 9px; }
+    .callout p { margin: 0; color: #d8e6f5; font-size: 15px; }
+    .callout p + p { margin-top: 8px; }
+    /* stat strip */
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px,1fr));
+      gap: 10px; margin: 22px 0 6px; }
+    .stats div { background: #131a24; border: 1px solid #1f2a37; border-radius: 10px;
+      padding: 12px 13px; }
+    .stats b { display: block; font-size: 21px; color: #e6eef7; font-weight: 650;
+      font-variant-numeric: tabular-nums; }
+    .stats i { font-style: normal; font-size: 12.5px; color: #8ba0b6; }
+    /* timeline */
+    .tl { border-left: 2px solid #22303f; margin: 16px 0 6px; padding: 2px 0 2px 18px; }
+    .tl > div { margin-bottom: 16px; position: relative; }
+    .tl > div::before { content: ""; position: absolute; left: -24px; top: 8px;
+      width: 9px; height: 9px; border-radius: 50%; background: #3b82f6; }
+    .tl h4 { margin: 0 0 3px; font-size: 14.5px; color: #cfe4ff; }
+    .tl p { margin: 0; font-size: 14px; color: #93a6ba; }
+    /* verdict blocks */
+    .v { border-radius: 12px; padding: 14px 17px; margin: 14px 0; border: 1px solid; }
+    .v h3 { margin: 0 0 6px; }
+    .v p:last-child { margin-bottom: 0; }
+    .good { background: #101f18; border-color: #24543c; }
+    .good h3 { color: #7fd6a4; }
+    .bad  { background: #1f1414; border-color: #5c2f2f; }
+    .bad h3 { color: #ff9d9d; }
+    .quote { margin: 20px 0; padding: 14px 18px; border-left: 3px solid #3b82f6;
+      background: #101722; border-radius: 0 10px 10px 0; }
+    .quote p { margin: 0; font-size: 16px; color: #dbe7f4; font-style: italic; }
+    table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14px;
+      display: block; overflow-x: auto; white-space: nowrap; }
+    th, td { text-align: left; padding: 7px 12px 7px 0; border-bottom: 1px solid #1c2734; }
+    th { color: #8fa6bd; font-size: 12.5px; text-transform: uppercase;
+      letter-spacing: .6px; font-weight: 700; }
+    td { color: #c6d4e2; font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="nav"><a href="index.html">← all scenes</a> ·
+      <a href="about.html">about the project</a></div>
+
+    <h1>Three months in</h1>
+    <p class="lede">A retrospective on the first 92 days — what the method got
+      right, what it got wrong, and what is still broken.</p>
+
+    <div class="stats">
+      <div><b>92</b><i>days</i></div>
+      <div><b>1,299</b><i>commits</i></div>
+      <div><b>83</b><i>decision records</i></div>
+      <div><b>171k</b><i>lines of C++</i></div>
+      <div><b>158</b><i>test files</i></div>
+    </div>
+
+    <p>On June 1 this was a Cornell box with a KD-tree and a bilateral denoiser.
+      On August 31 it is a procedurally generated city you can walk into a
+      building in — three render backends, a physics vehicle fleet, an agent
+      simulation, a Qt editor, a sky with a real moon and real light pollution,
+      and an offline path tracer that still agrees with all of it.</p>
+
+    <div class="callout">
+      <span class="k">100% AI-written</span>
+      <p>As on the <a href="about.html">about page</a>: every line of this engine
+        was written by AI, prompted from start to finish. So this is also a
+        retrospective on <b>that</b> — what three months of AI-driven engineering
+        actually produced, including the failure modes, which turn out to be
+        specific and repeatable rather than mysterious.</p>
+    </div>
+
+    <h2>The spine</h2>
+    <div class="tl">
+      <div>
+        <h4>June — the foundation blitz</h4>
+        <p>45 decision records, nine of them on June 3 alone. Platform seams,
+          fixed timestep, a sparse-set ECS, physics behind a wall, Lua as the one
+          procgen authoring path — then the entire procedural substrate:
+          L-systems, curves, CDLOD terrain, the road model, the city grammar.
+          Almost all of it is still standing.</p>
+      </div>
+      <div>
+        <h4>July — systems, and a city that had to use them</h4>
+        <p>11 records: event bus, debug draw, profiler, audio, animation, glTF
+          skinning. Underneath, the city stopped being a demo and became a
+          simulation — agents with goals and perception, a car fleet, routing.</p>
+      </div>
+      <div>
+        <h4>August — contact with reality</h4>
+        <p>Continuous integration exists for the first time on August 5 —
+          <b>day 66 of 92</b>. On August 23 the Vulkan backend runs on real
+          hardware for the first time. The last week is the sky, the road
+          network's joint vertical solve, the earthwork field, and doors that
+          open.</p>
+      </div>
+    </div>
+
+    <p>The decision rate — 45, then 11, then 6 — is not simply maturity. Two of
+      August's six exist only because this retrospective was being written: they
+      were recorded <em>retroactively, days after the code shipped</em>. A third
+      change of the same weight still has no record at all. And 21 of the 83
+      carry no date. Record-keeping decayed while the decisions got bigger.</p>
+
+    <h2>What worked</h2>
+
+    <div class="v good">
+      <h3>The seams held — and we know, because the trigger fired</h3>
+      <p>Every decision record ends with a <em>revisit trigger</em>: the condition
+        that should reopen it. The very first one, on June 3, put platform code
+        behind two seams and honestly recorded its own weakness — <i>"the
+        abstraction is unproven by a second backend"</i> — with the trigger
+        <i>"adding a second backend, at which point validate the seam holds."</i></p>
+      <p>That trigger fired <b>81 days later</b>. Six real bugs surfaced the first
+        day Vulkan met a GPU: a descriptor-pool cap, back-face culling, a shader
+        hash, a baked albedo being overwritten, a camera sign, a window plugin.
+        Every one was <em>inside</em> the backend. None was a leak through the
+        seam. The June bet paid — and it was checkable only because someone wrote
+        down in advance what would prove it wrong.</p>
+    </div>
+
+    <div class="v good">
+      <h3>Instrument before you fix</h3>
+      <p>A junction on the test city had a road arriving at −78% grade into a
+        +33.5% one, with a 9-metre cliff at the edge. <b>Five different plausible
+        explanations fit the screenshot</b>, each justifying a different fix.</p>
+      <p>None was right. A new dump — every surface sampled at 1-metre stations
+        from the junction — showed the three arms meeting the shared node at
+        51.32, 48.64 and 43.30 metres and named the real cause: each road solved
+        its height profile alone, and nothing ever re-agreed the node they shared.
+        The spread went to <b>zero</b> in one pass.</p>
+    </div>
+
+    <div class="v good">
+      <h3>Measurements that refute their own plan</h3>
+      <p>The terrain plan asserted that a new smoothing field <i>"can only
+        reduce"</i> a certain class of error. The census disagreed — identical
+        <em>cell for cell</em>, 134 → 134. Chasing that non-result found a
+        different bug entirely: building foundations winning priority
+        <em>inside</em> road footprints and lifting the ground above the road.</p>
+      <p>The instrument was independent enough to contradict the code that made
+        it, and the disagreement was written into the commit rather than smoothed
+        over.</p>
+    </div>
+
+    <div class="v good">
+      <h3>Named reds beat silent greens</h3>
+      <p>Some tests are deliberately left failing, with the number, the cause and
+        what is owed recorded at the point of failure. One gate reads 0.86 against
+        a 0.55 limit — and the commit that caused it <b>predicted 0.86 in its own
+        message</b>, listing the three variants measured first and the trade it
+        bought: unnaturally steep banks beside roads cut from 2,041 to 950.</p>
+      <p>A red you predicted is a decision. A red you discover is a regression.
+        Keeping those distinguishable is most of what makes a test suite worth
+        running.</p>
+    </div>
+
+    <h2>What went wrong</h2>
+
+    <div class="v bad">
+      <h3>The verification gap</h3>
+      <p>The largest failure, and structural rather than any single bug.</p>
+      <ul>
+        <li><b>No CI until day 66.</b> Three months of "it compiles" was, mostly,
+          a claim about one machine.</li>
+        <li><b>The Vulkan backend shipped four phases having never been
+          compiled.</b> The first real compile found a reserved-keyword shader
+          bug, a wrong uniform field, and 43 broken logging calls. Review had
+          passed all of it.</li>
+        <li><b>Linux CI was red on arrival</b> and stayed red, which turns a build
+          signal into noise. The list of known failures then decayed <em>in both
+          directions</em>: one listed failure was fixed in passing and nobody
+          noticed, another went green unremarked, and a new one appeared without
+          being added.</li>
+        <li><b>"Written here, verified there"</b> was the editor's operating mode
+          for three months — the shell compiled on Linux while only a Mac could
+          see a pixel.</li>
+      </ul>
+      <p>The through-line: this project got very good at proving things it
+        measured, and had almost no defence against anything nothing was pointed
+        at.</p>
+    </div>
+
+    <div class="v bad">
+      <h3>Documentation decays silently, in every direction</h3>
+      <p>All of this was live in the repository when the retrospective was
+        written:</p>
+      <ul>
+        <li>21 of 83 decision records carry <b>no date</b>.</li>
+        <li>The editor plan said "skeleton done" for <b>two and a half months</b>
+          while the editor grew a working viewport, two native panels and its own
+          test suite.</li>
+        <li>The tech-debt entry tracking platform failures named <b>the wrong two
+          tests</b>.</li>
+        <li>The context file every session reads first gave a build command that
+          <b>cannot work</b> — it collides with the offline renderer's own output
+          directory and fails outright. It sat there through the entire Linux
+          port.</li>
+      </ul>
+      <p>None of it was caught by reading. All of it was caught by someone
+        <em>acting</em> on it and hitting a wall.</p>
+    </div>
+
+    <div class="v bad">
+      <h3>Prose does not hold</h3>
+      <p>The project's own retention notes document four cases where correct,
+        written-down knowledge — in the standing rules file, in a decision record
+        <em>with measurements attached</em> — was read and violated anyway, and a
+        subsystem was rebuilt worse. The rules file is ~400 lines, and every line
+        added lowers the odds any single line is honoured.</p>
+      <p>What survived instead were conventions with a test attached. Not because
+        they were better documented — because breaking them makes something
+        <em>fail</em>.</p>
+    </div>
+
+    <div class="quote">
+      <p>Knowledge survives only in a form that can fail. Everything else is a
+        hope with a timestamp.</p>
+    </div>
+
+    <h2>What changes next</h2>
+    <table>
+      <tr><th>Priority</th><th>Change</th><th>Why</th></tr>
+      <tr><td>1</td><td>Per-platform expected-fail list the harness reads</td>
+        <td>Stops the known-red list decaying in both directions</td></tr>
+      <tr><td>2</td><td>Headless render + cross-backend image parity</td>
+        <td>Parity is a hand-kept ledger; it should be a gate</td></tr>
+      <tr><td>3</td><td>Gate the decision log on dates and unique numbers</td>
+        <td>A fifth carry no date; two share a number</td></tr>
+      <tr><td>4</td><td>Turn the retention ladder into real gates</td>
+        <td>It has been correct — and unbuilt — since it was written</td></tr>
+      <tr><td>5</td><td>Warnings to zero, then keep them there</td>
+        <td>Warnings on every build are warnings nobody reads</td></tr>
+    </table>
+
+    <h2>Still open, honestly</h2>
+    <ul>
+      <li>One freeway drive test has failed on Linux since CI began, is
+        byte-identical before and after three months of road work, and remains
+        unexplained.</li>
+      <li>A terrain fixture and the real city <b>disagree, and nobody knows
+        why</b> — the same change makes the synthetic test worse while halving
+        the defect in the shipped city. The fixture keeps its original contract
+        until that is understood.</li>
+      <li>Building foundations still win priority inside road footprints: 86 of
+        134 measured cases. Found by accident, not yet fixed.</li>
+      <li>The stars, the moon's phases and the light-pollution glow are verified
+        on one backend only; the other two are mirrored but uncompiled.</li>
+    </ul>
+
+    <h2>The one-sentence version</h2>
+    <p>The method — instrument first, measure the trade, name the red, write the
+      revisit trigger — is genuinely good and produced a lot of correct work fast.
+      Its failure mode is just as consistent: <b>anything no instrument was
+      pointed at drifted</b>, from a shader that had never been compiled to a
+      build command in the file every session reads first.</p>
+
+    <footer>
+      Covers 2026-06-01 → 2026-08-31. The internal version, with commit hashes,
+      test names and exact censuses, is <code>docs/retrospective.md</code> in the
+      repository. · <a href="index.html">back to the scenes</a>
+    </footer>
+  </div>
+</body>
+</html>

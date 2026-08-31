@@ -58,16 +58,20 @@ jobs:
       - name: Stage the site
         run: |
           mkdir -p public/thumbs
-          # Every page CMake copies into build-web must be staged, or the index
-          # links to a 404: city-build/buildings/procgen were built and then left
-          # behind here for exactly that reason. Keep this list in step with the
-          # POST_BUILD copies in CMakeLists.txt.
-          cp build-web/index.html build-web/viewer.html build-web/about.html \
-             build-web/city-sim.html build-web/city-build.html \
-             build-web/buildings.html build-web/procgen.html \
-             build-web/city-plan.html build-web/scenes.json \
+          # Stage EVERY page CMake copied into build-web. This was once an
+          # explicit filename list and drifted twice — city-build/buildings/
+          # procgen were built and left behind, then city-plan, then
+          # retrospective — each time shipping an index that links to a 404.
+          # The glob cannot drift: build-web/*.html is exactly the set the
+          # POST_BUILD copies in CMakeLists.txt put there.
+          cp build-web/*.html build-web/scenes.json \
              build-web/viewer_web.js build-web/viewer_web.wasm \
              build-web/viewer_web.data public/
+          # Fail loudly rather than deploying a site whose index 404s.
+          for page in index viewer about city-sim city-build buildings \
+                      procgen city-plan retrospective; do
+            test -f "public/$page.html" || { echo "MISSING: $page.html"; exit 1; }
+          done
           cp build-web/thumbs/*.webp public/thumbs/ 2>/dev/null || true
           touch public/.nojekyll
           # Guard: the build-id must have been injected (never publish the raw
