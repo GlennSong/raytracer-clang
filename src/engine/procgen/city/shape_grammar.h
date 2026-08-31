@@ -58,10 +58,12 @@ enum class PartId : uint8_t {
              // NightGlow and the day/night cycle raises their emission after
              // dusk. Chosen per opening by a position hash (litWindow), so the
              // SAME windows glow at every LOD and across rebuilds.
-    Interior,// bare interior surfaces of enterable buildings (ground ceiling,
-             // upper slabs, stairs, inner walls): concrete-toned and faintly
-             // self-lit (emission = albedo x 0.10) so sun-blind rooms read as
-             // dim concrete instead of black (ADR-0080; local lights owed).
+    Interior,// interior DRYWALL of enterable buildings (inner walls,
+             // ceilings, slab undersides): smooth warm-white painted board,
+             // faintly self-lit so unlit rooms never go black (ADR-0080).
+    InteriorFloor, // interior WOOD flooring (slab tops, the lobby floor
+             // overlay, stair treads/risers/railing): plank boards via the
+             // WoodSiding surface, satin roughness (device ask).
     Count    // KEEP LAST: materialIndexFor is the ordinal; arrays size by Count
 };
 

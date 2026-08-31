@@ -168,14 +168,22 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
             m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.92f;
             m.setSurface(RenderMaterial::Surface::Concrete); break;
         case PartId::Interior:
-            // Bare interior surfaces of enterable buildings (ADR-0080). The
-            // shader is sun-only (no local lights, TECH_DEBT), so a roofed
-            // room is sun-blind by design; a faint self-light -- emission =
-            // albedo x 0.10 -- keeps it dim concrete instead of black, and
-            // the loader tags interior chunks NightGlow for after dusk.
-            m.albedo = {0.58, 0.57, 0.55}; m.metallic = 0.0f; m.roughness = 0.92f;
-            m.setSurface(RenderMaterial::Surface::Concrete);
-            m.emission = m.albedo * 0.10;
+            // Interior DRYWALL (ADR-0080; device: "an interior dry wall
+            // material for the ceiling and walls"): smooth warm-white
+            // painted board -- deliberately NO procedural surface, drywall
+            // is flat. The faint self-light stays so a room with no staged
+            // light never goes black.
+            m.albedo = {0.86, 0.84, 0.80}; m.metallic = 0.0f; m.roughness = 0.85f;
+            m.emission = m.albedo * 0.08;
+            break;
+        case PartId::InteriorFloor:
+            // Interior WOOD flooring (device: "a wood material for the
+            // flooring"): plank boards from the WoodSiding surface (the
+            // timber bake), warm tone, satin roughness so the room lights
+            // catch a sheen.
+            m.albedo = {0.47, 0.34, 0.22}; m.metallic = 0.0f; m.roughness = 0.55f;
+            m.setSurface(RenderMaterial::Surface::WoodSiding);
+            m.emission = m.albedo * 0.06;
             break;
         case PartId::Stucco:
             m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.85f;
@@ -2282,7 +2290,10 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     const std::vector<StoreyPlan> storeys = storeyPlans(plan, params);
     if (storeys.size() < 2) return out;   // no storeys above ground
     const Vec3 icol = materialFor(PartId::Interior, params.wallColor).albedo;
-    RenderMesh mesh;   // slabs + stairs, folded into PartId::Interior at the end
+    const Vec3 wcol =
+        materialFor(PartId::InteriorFloor, params.wallColor).albedo;
+    RenderMesh mesh;   // DRYWALL: slab undersides (= ceilings)
+    RenderMesh floorMesh;   // WOOD: slab tops, treads, risers, railings
 
     // How high the stair reaches: the first shrunken tier the well no longer
     // fits inside ends it (the slab there keeps its hole shut).
@@ -2306,10 +2317,10 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             holes.push_back(il.well);
         const Real yTop = baseY + storeys[k].y0 + 0.05;
         for (const auto& t : triangulateWithHoles(storeys[k].plan, holes)) {
-            MeshBuilder::emitTri(mesh, Vec3(t[0].x, yTop, t[0].y),
+            MeshBuilder::emitTri(floorMesh, Vec3(t[0].x, yTop, t[0].y),
                                  Vec3(t[1].x, yTop, t[1].y),
                                  Vec3(t[2].x, yTop, t[2].y), Vec3(0, 1, 0),
-                                 icol);
+                                 wcol);
             const Real yb = yTop - 0.25;
             MeshBuilder::emitTri(mesh, Vec3(t[0].x, yb, t[0].y),
                                  Vec3(t[2].x, yb, t[2].y),
@@ -2361,8 +2372,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             const Vec3 C(t1.x + perp.x * half, yT, t1.y + perp.y * half);
             const Vec3 D(t1.x - perp.x * half, yT, t1.y - perp.y * half);
             const Vec3 A0(A.x, yT - riser, A.z), B0(B.x, yT - riser, B.z);
-            emitQuad(mesh, A, B, C, D, Vec3(0, 1, 0), icol);           // tread
-            emitQuad(mesh, A0, B0, B, A, Vec3(-dir.x, 0, -dir.y), icol);
+            emitQuad(floorMesh, A, B, C, D, Vec3(0, 1, 0), wcol);      // tread
+            emitQuad(floorMesh, A0, B0, B, A, Vec3(-dir.x, 0, -dir.y), wcol);
             if (colliderOut) {
                 emitQuad(*colliderOut, A, B, C, D, Vec3(0, 1, 0), icol);
                 emitQuad(*colliderOut, A0, B0, B, A,
@@ -2374,8 +2385,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         const Vec2 r1 = foot + dir * (0.28 * nR) + perp * half;
         const Vec3 RA(r0.x, y0f + 0.1, r0.y), RB(r1.x, y0f + rise + 0.1, r1.y);
         const Vec3 RC(r1.x, y0f + rise + 1.1, r1.y), RD(r0.x, y0f + 1.1, r0.y);
-        emitQuad(mesh, RA, RB, RC, RD, Vec3(perp.x, 0, perp.y), icol);
-        emitQuad(mesh, RB, RA, RD, RC, Vec3(-perp.x, 0, -perp.y), icol);
+        emitQuad(floorMesh, RA, RB, RC, RD, Vec3(perp.x, 0, perp.y), wcol);
+        emitQuad(floorMesh, RB, RA, RD, RC, Vec3(-perp.x, 0, -perp.y), wcol);
         if (colliderOut)
             emitQuad(*colliderOut, RA, RB, RC, RD, Vec3(perp.x, 0, perp.y),
                      icol);
@@ -2395,6 +2406,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     }
 
     appendToPart(out, PartId::Interior, mesh);
+    appendToPart(out, PartId::InteriorFloor, floorMesh);
     out.height = storeys.back().y0 + storeys.back().h;
     return out;
 }
@@ -2590,6 +2602,16 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                                  Vec3(t[1].x, cy, t[1].y), Vec3(0, -1, 0),
                                  icol);
         appendToPart(out, PartId::Interior, ceil);
+        RenderMesh woodFloor;
+        const Vec3 wcol =
+            materialFor(PartId::InteriorFloor, wallColor).albedo;
+        for (const auto& t : triangulatePolygon(plan))
+            MeshBuilder::emitTri(
+                woodFloor, Vec3(plan[t[0]].x, y + 0.07, plan[t[0]].y),
+                Vec3(plan[t[1]].x, y + 0.07, plan[t[1]].y),
+                Vec3(plan[t[2]].x, y + 0.07, plan[t[2]].y), Vec3(0, 1, 0),
+                wcol);
+        appendToPart(out, PartId::InteriorFloor, woodFloor);
     }
     // Base course wraps the plan (skipping the door edge).
     if (full && params.baseCourse) {

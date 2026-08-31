@@ -173,6 +173,8 @@ TEST_CASE(open_doorway_drops_the_leaf_and_grows_an_interior) {
     // closed building does not have at all.
     const RenderMesh* interior = part(open, PartId::Interior);
     CHECK(interior && !interior->indices.empty());
+    const RenderMesh* woodFloor = part(open, PartId::InteriorFloor);
+    CHECK(woodFloor && !woodFloor->indices.empty());
     const RenderMesh* interiorClosed = part(closed, PartId::Interior);
     CHECK(!interiorClosed || interiorClosed->indices.empty());
     // The entrance attach carries the aperture for the collider notch.
