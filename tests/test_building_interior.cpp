@@ -65,9 +65,9 @@ TEST_CASE(interior_is_deterministic_and_stays_inside_the_plan) {
     // The streamed wood part carries AUTHORED, non-constant UVs (the lobby
     // overlay had this gate; the streamed slabs did not, and a flat-grey
     // second floor slipped through as a single clamped sample).
+    const PartId floorPart = floorFinishPartFor(interiorParams());
     for (const RenderMesh& m : a.parts) {
-        if (m.materialIndex != static_cast<int>(PartId::InteriorFloor))
-            continue;
+        if (m.materialIndex != static_cast<int>(floorPart)) continue;
         float minU = 1e9f, maxU = -1e9f, minV = 1e9f, maxV = -1e9f;
         for (const Vertex& v : m.vertices) {
             minU = std::min(minU, v.u); maxU = std::max(maxU, v.u);
@@ -96,18 +96,20 @@ TEST_CASE(interior_is_deterministic_and_stays_inside_the_plan) {
     }
 }
 
-TEST_CASE(floor_finishes_are_three_distinct_looks) {
-    // Device: "all of the flooring in all of the buildings are the same."
-    // floorFinishFor picks by (seed >> 6) % 3; the three classes must be
-    // MATERIALLY distinct (albedo and/or surface), not tones of one look.
+TEST_CASE(floor_finishes_are_five_distinct_looks) {
+    // Device: "all of the flooring in all of the buildings are the same"
+    // and "what are some other floor materials we could create?" -- the
+    // finish classes must be MATERIALLY distinct (albedo and/or surface),
+    // not tones of one look, and the stone/marble/carpet classes must
+    // actually be present so the bakes are reachable.
     BuildingParams p = interiorParams();
-    RenderMaterial m[3];
-    for (uint32_t k = 0; k < 3; ++k) {
-        p.seed = (p.seed & ~uint32_t(0xC0)) | (k << 6);
+    RenderMaterial m[5];
+    for (uint32_t k = 0; k < 5; ++k) {
+        p.seed = (p.seed & ~uint32_t(0x1C0)) | (k << 6);
         m[k] = floorFinishFor(p);
     }
-    for (int a = 0; a < 3; ++a)
-        for (int b = a + 1; b < 3; ++b) {
+    for (int a = 0; a < 5; ++a)
+        for (int b = a + 1; b < 5; ++b) {
             const bool albedoDiffers =
                 std::fabs(m[a].albedo.x - m[b].albedo.x) > 0.05 ||
                 std::fabs(m[a].albedo.y - m[b].albedo.y) > 0.05 ||
@@ -115,13 +117,63 @@ TEST_CASE(floor_finishes_are_three_distinct_looks) {
             const bool surfaceDiffers = m[a].surface() != m[b].surface();
             CHECK(albedoDiffers || surfaceDiffers);
         }
-    // The tile class binds a different bake (Concrete), so the streamed
-    // interior and the lobby part (InteriorFloorTile) agree on the look.
-    bool anyTile = false;
-    for (int k = 0; k < 3; ++k)
-        if (m[k].surface() == RenderMaterial::Surface::Concrete)
-            anyTile = true;
-    CHECK(anyTile);
+    bool tile = false, marble = false, carpet = false;
+    for (int k = 0; k < 5; ++k) {
+        if (m[k].surface() == RenderMaterial::Surface::Concrete) tile = true;
+        if (m[k].surface() == RenderMaterial::Surface::Marble) marble = true;
+        if (m[k].surface() == RenderMaterial::Surface::Carpet) carpet = true;
+    }
+    CHECK(tile);
+    CHECK(marble);
+    CHECK(carpet);
+}
+
+TEST_CASE(interior_paint_varies_and_stays_bright) {
+    // Device: "paint the indoor walls different color per house so that
+    // they're not all just white walls." The palette must actually vary
+    // across seeds AND stay bright enough that no paint re-darkens the
+    // rooms the emission bounce just lifted.
+    BuildingParams p = interiorParams();
+    int distinct = 0;
+    Vec3 seen[8];
+    for (uint32_t k = 0; k < 8; ++k) {
+        p.seed = (p.seed & ~uint32_t(0x3800)) | (k << 11);
+        const Vec3 c = interiorPaintFor(p);
+        CHECK(c.x > 0.55);
+        CHECK(c.y > 0.55);
+        CHECK(c.z > 0.55);
+        bool fresh = true;
+        for (int j = 0; j < distinct; ++j)
+            if (std::fabs(seen[j].x - c.x) < 0.02 &&
+                std::fabs(seen[j].y - c.y) < 0.02 &&
+                std::fabs(seen[j].z - c.z) < 0.02)
+                fresh = false;
+        if (fresh) seen[distinct++] = c;
+    }
+    std::printf("    [paint] %d distinct paints across 8 seeds\n", distinct);
+    CHECK(distinct >= 6);
+}
+
+TEST_CASE(stairs_pick_their_own_finish) {
+    // Device: "could we apply different materials to the stairs for
+    // different looks" -- the stair finish is an INDEPENDENT axis: a seed
+    // exists where the stair differs from the floor (stone stair, wood
+    // floor), and the matched-set class follows the floor exactly.
+    BuildingParams p = interiorParams();
+    // Floor class 0 (walnut wood), stair class 3 (stone).
+    p.seed = (p.seed & ~uint32_t(0x1C0)) & ~uint32_t(0x600);
+    p.seed |= (3u << 9);
+    CHECK(floorFinishFor(p).surface() ==
+          RenderMaterial::Surface::WoodSiding);
+    CHECK(stairFinishFor(p).surface() ==
+          RenderMaterial::Surface::Concrete);
+    CHECK(stairFinishPartFor(p) == PartId::InteriorFloorTile);
+    // Stair class 0 = matched set: identical material to the floor.
+    p.seed &= ~uint32_t(0x600);
+    const RenderMaterial f = floorFinishFor(p), st = stairFinishFor(p);
+    CHECK(st.surface() == f.surface());
+    CHECK(std::fabs(st.albedo.x - f.albedo.x) < 1e-9);
+    CHECK(stairFinishPartFor(p) == floorFinishPartFor(p));
 }
 
 TEST_CASE(side_bay_edge_keeps_its_interior_wall) {

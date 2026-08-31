@@ -195,6 +195,18 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
             m.setSurface(RenderMaterial::Surface::Concrete);
             m.emission = m.albedo * 0.05;
             break;
+        case PartId::InteriorFloorMarble:
+            // Veined polished stone (its own bake).
+            m.albedo = {0.80, 0.78, 0.76}; m.metallic = 0.0f; m.roughness = 0.25f;
+            m.setSurface(RenderMaterial::Surface::Marble);
+            m.emission = m.albedo * 0.05;
+            break;
+        case PartId::InteriorFloorCarpet:
+            // Soft cut-pile: warm greige, dead matte.
+            m.albedo = {0.62, 0.58, 0.52}; m.metallic = 0.0f; m.roughness = 0.95f;
+            m.setSurface(RenderMaterial::Surface::Carpet);
+            m.emission = m.albedo * 0.05;
+            break;
         case PartId::Stucco:
             m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.85f;
             m.setSurface(RenderMaterial::Surface::Stucco); break;
@@ -598,11 +610,12 @@ Real interiorInset(const BuildingParams& p) {
 // interior didn't have corners where the walls met").
 void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
                        const FacadeLayout& L, Real thick,
-                       const Vec3& wallColor, const Poly2& plan) {
+                       const Vec3& wallColor, const Poly2& plan,
+                       const Vec3& paint) {
     RenderMesh wall, glass, glassLit;
     const Vec3 in = fr.n * -thick;
     const Vec3 nIn = fr.n * -1.0;
-    const Vec3 icol = materialFor(PartId::Interior, wallColor).albedo;
+    const Vec3 icol = paint;   // per-building interior paint (walls only)
     auto q = [&](RenderMesh& m, Real a0, Real b0, Real a1, Real b1,
                  const Vec3& col, const Vec3& off) {
         if (a1 - a0 < 1e-4 || b1 - b0 < 1e-4) return;
@@ -2245,9 +2258,14 @@ static void plankFrame(const Poly2& plan, Vec2& d, Vec2& perp) {
 }  // namespace
 
 RenderMaterial floorFinishFor(const BuildingParams& params) {
-    // Three finishes, seed-picked per building (device ask for variety).
+    // Five finishes, seed-picked per building (device ask for variety,
+    // then for MORE materials): two woods, stone tile, marble, carpet.
     RenderMaterial m = materialFor(PartId::InteriorFloor, params.wallColor);
-    switch ((params.seed >> 6) % 3u) {
+    // Bits 6-8 ONLY (& 7 before % 5): without the mask, %5 consumes every
+    // upper bit and the stair/paint picks LEAK into the floor pick (the
+    // stair-axis census caught the correlation). 8 values % 5 biases the
+    // woods 2:1 over marble/carpet -- accents, not defaults, by design.
+    switch (((params.seed >> 6) & 7u) % 5u) {
         case 0:   // dark walnut (the base recipe)
             break;
         case 1:   // light oak
@@ -2255,16 +2273,74 @@ RenderMaterial floorFinishFor(const BuildingParams& params) {
             m.roughness = 0.5f;
             m.emission = m.albedo * 0.06;
             break;
-        default:  // stone tile (single source: the part material)
+        case 2:   // stone tile (single source: the part material)
             m = materialFor(PartId::InteriorFloorTile, params.wallColor);
+            break;
+        case 3:   // marble
+            m = materialFor(PartId::InteriorFloorMarble, params.wallColor);
+            break;
+        default:  // carpet
+            m = materialFor(PartId::InteriorFloorCarpet, params.wallColor);
             break;
     }
     return m;
 }
 
 PartId floorFinishPartFor(const BuildingParams& params) {
-    return (params.seed >> 6) % 3u == 2 ? PartId::InteriorFloorTile
-                                        : PartId::InteriorFloor;
+    // Bits 6-8 ONLY (& 7 before % 5): without the mask, %5 consumes every
+    // upper bit and the stair/paint picks LEAK into the floor pick (the
+    // stair-axis census caught the correlation). 8 values % 5 biases the
+    // woods 2:1 over marble/carpet -- accents, not defaults, by design.
+    switch (((params.seed >> 6) & 7u) % 5u) {
+        case 2:  return PartId::InteriorFloorTile;
+        case 3:  return PartId::InteriorFloorMarble;
+        case 4:  return PartId::InteriorFloorCarpet;
+        default: return PartId::InteriorFloor;
+    }
+}
+
+Vec3 interiorPaintFor(const BuildingParams& params) {
+    // Soft interior paints -- every channel bright (>= 0.6) so no paint
+    // re-darkens rooms the drywall emission bounce just lifted. Index 0 is
+    // the original warm drywall white, so some homes stay classic.
+    static const Vec3 kPaints[8] = {
+        {0.87, 0.85, 0.80},   // warm white (the drywall)
+        {0.89, 0.84, 0.70},   // cream
+        {0.76, 0.81, 0.70},   // sage
+        {0.72, 0.79, 0.85},   // powder blue
+        {0.87, 0.77, 0.73},   // blush
+        {0.83, 0.75, 0.62},   // warm tan
+        {0.78, 0.78, 0.79},   // dove grey
+        {0.90, 0.86, 0.66},   // butter
+    };
+    return kPaints[(params.seed >> 11) & 7u];
+}
+
+RenderMaterial stairFinishFor(const BuildingParams& params) {
+    switch ((params.seed >> 9) & 3u) {   // bits 9-10 only, disjoint from the floor/paint picks
+        case 0:   // matched set: the stair follows the floor
+            return floorFinishFor(params);
+        case 1: { // light oak stair
+            RenderMaterial m =
+                materialFor(PartId::InteriorFloor, params.wallColor);
+            m.albedo = {0.66, 0.52, 0.36};
+            m.roughness = 0.5f;
+            m.emission = m.albedo * 0.06;
+            return m;
+        }
+        case 2:   // dark walnut stair
+            return materialFor(PartId::InteriorFloor, params.wallColor);
+        default:  // stone stair
+            return materialFor(PartId::InteriorFloorTile, params.wallColor);
+    }
+}
+
+PartId stairFinishPartFor(const BuildingParams& params) {
+    switch ((params.seed >> 9) & 3u) {   // bits 9-10 only, disjoint from the floor/paint picks
+        case 0:  return floorFinishPartFor(params);
+        case 3:  return PartId::InteriorFloorTile;
+        default: return PartId::InteriorFloor;
+    }
 }
 
 std::size_t entranceEdgeFor(const Poly2& plan, const BuildingParams& params) {
@@ -2565,18 +2641,24 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                 const Vec3 off = fr.n * -interiorInset(params);
                 emitQuad(skin, fr.at(0, 0) + off, fr.at(fr.width, 0) + off,
                          fr.at(fr.width, fr.height) + off,
-                         fr.at(0, fr.height) + off, fr.n * -1.0, icol);
+                         fr.at(0, fr.height) + off, fr.n * -1.0,
+                         interiorPaintFor(params));
                 appendToPart(out, PartId::Interior, skin);
             } else {
                 emitInnerWallRect(out, fr, facadeLayout(fr, upMode, params),
                                   interiorInset(params), params.wallColor,
-                                  spk.plan);
+                                  spk.plan, interiorPaintFor(params));
             }
         }
     }
 
     // --- the stair (riser <= 0.18, run 0.28, inside the well) ------------
     const Vec2 u = il.stairDir;
+    // The stair's own mesh and tint: stairFinishFor is an independent
+    // axis (device ask), so treads/risers/soffit/stringers/railing land in
+    // the STAIR finish's part and carry its albedo.
+    RenderMesh stairMesh;
+    const Vec3 scol = stairFinishFor(params).albedo * floorTone;
     auto flight = [&](const Vec2& foot, const Vec2& dir, Real y0f, Real rise,
                       int nR) {
         const Vec2 perp(-dir.y, dir.x);
@@ -2594,10 +2676,10 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             const float uw = static_cast<float>(il.width / grainTile);
             const float vj0 = static_cast<float>((0.28 * j) / grainTile);
             const float vj1 = static_cast<float>((0.28 * (j + 1)) / grainTile);
-            MeshBuilder::emitQuadUV(floorMesh, A, B, C, D, Vec3(0, 1, 0),
-                                    wcol, 0, vj0, uw, vj0, uw, vj1, 0, vj1);
-            MeshBuilder::emitQuadUV(floorMesh, A0, B0, B, A,
-                                    Vec3(-dir.x, 0, -dir.y), wcol, 0, vj1, uw,
+            MeshBuilder::emitQuadUV(stairMesh, A, B, C, D, Vec3(0, 1, 0),
+                                    scol, 0, vj0, uw, vj0, uw, vj1, 0, vj1);
+            MeshBuilder::emitQuadUV(stairMesh, A0, B0, B, A,
+                                    Vec3(-dir.x, 0, -dir.y), scol, 0, vj1, uw,
                                     vj1, uw, vj0, 0, vj0);
             if (colliderOut) {
                 emitQuad(*colliderOut, A, B, C, D, Vec3(0, 1, 0), icol);
@@ -2625,8 +2707,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             const Vec3 B(b2.x, y0f + rise + 0.1, b2.y);
             const Vec3 C(b2.x, y0f + rise + 1.1, b2.y);
             const Vec3 D(a2.x, y0f + 1.1, a2.y);
-            MeshBuilder::emitQuadUV(floorMesh, A, D, C, B,
-                                    Vec3(n2.x, 0, n2.y), wcol, 0, 0, hu, 0,
+            MeshBuilder::emitQuadUV(stairMesh, A, D, C, B,
+                                    Vec3(n2.x, 0, n2.y), scol, 0, 0, hu, 0,
                                     hu, ru, 0, ru);
         };
         railFace(oA, oB, perp);
@@ -2638,8 +2720,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             const Vec3 A(iA.x, y0f + 1.1, iA.y), B(oA.x, y0f + 1.1, oA.y);
             const Vec3 C(oB.x, y0f + rise + 1.1, oB.y);
             const Vec3 D(iB.x, y0f + rise + 1.1, iB.y);
-            MeshBuilder::emitQuadUV(floorMesh, A, B, C, D, slopeUp,
-                                    wcol, 0, 0, 0.08f, 0, 0.08f, ru, 0, ru);
+            MeshBuilder::emitQuadUV(stairMesh, A, B, C, D, slopeUp,
+                                    scol, 0, 0, 0.08f, 0, 0.08f, ru, 0, ru);
             // ...and the BOTTOM cap: without it, from under the slope the
             // top cap's backface showed through the open underside — the
             // "normals are flipped on the stairwell wall" report (the
@@ -2647,15 +2729,15 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             const Vec3 A0(iA.x, y0f + 0.1, iA.y), B0(oA.x, y0f + 0.1, oA.y);
             const Vec3 C0(oB.x, y0f + rise + 0.1, oB.y);
             const Vec3 D0(iB.x, y0f + rise + 0.1, iB.y);
-            MeshBuilder::emitQuadUV(floorMesh, A0, B0, C0, D0, slopeUp * -1.0,
-                                    wcol, 0, 0, 0.08f, 0, 0.08f, ru, 0, ru);
+            MeshBuilder::emitQuadUV(stairMesh, A0, B0, C0, D0, slopeUp * -1.0,
+                                    scol, 0, 0, 0.08f, 0, 0.08f, ru, 0, ru);
             // ...and the two END caps (the facing re-check still showed a
             // red streak at the head end: the top cap's backface through
             // the open end). Normals along ±dir.
             const Vec3 dn(dir.x, 0, dir.y);
-            MeshBuilder::emitQuadUV(floorMesh, A0, B0, B, A, dn * -1.0, wcol,
+            MeshBuilder::emitQuadUV(stairMesh, A0, B0, B, A, dn * -1.0, scol,
                                     0, 0, 0.08f, 0, 0.08f, 0.04f, 0, 0.04f);
-            MeshBuilder::emitQuadUV(floorMesh, D0, C0, C, D, dn, wcol, 0, 0,
+            MeshBuilder::emitQuadUV(stairMesh, D0, C0, C, D, dn, scol, 0, 0,
                                     0.08f, 0, 0.08f, 0.04f, 0, 0.04f);
         }
         if (colliderOut) {
@@ -2703,8 +2785,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                          f1.y - perp.y * half);
             const Vec3 soffitN = normalize(
                 Vec3(u.x * (rise - riser), -runLen, u.y * (rise - riser)));
-            MeshBuilder::emitQuadUV(floorMesh, A, B, C, D, soffitN,
-                                    wcol, 0, 0, sv, 0, sv, su, 0, su);
+            MeshBuilder::emitQuadUV(stairMesh, A, B, C, D, soffitN,
+                                    scol, 0, 0, sv, 0, sv, su, 0, su);
             const Real bandH = riser + 0.04;
             const float bu = static_cast<float>(bandH / grainTile);
             auto stringer = [&](const Vec2& side, const Vec2& n2) {
@@ -2714,8 +2796,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                 const Vec3 SC(f1.x + side.x, yk + rise - riser + bandH,
                               f1.y + side.y);
                 const Vec3 SD(f0.x + side.x, yk + bandH, f0.y + side.y);
-                MeshBuilder::emitQuadUV(floorMesh, SA, SD, SC, SB,
-                                        Vec3(n2.x, 0, n2.y), wcol, 0, 0, bu,
+                MeshBuilder::emitQuadUV(stairMesh, SA, SD, SC, SB,
+                                        Vec3(n2.x, 0, n2.y), scol, 0, 0, bu,
                                         0, bu, su, 0, su);
             };
             stringer(perp * half, perp);
@@ -2724,7 +2806,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     }
 
     appendToPart(out, PartId::Interior, mesh);
-    appendToPart(out, PartId::InteriorFloor, floorMesh);
+    appendToPart(out, floorFinishPartFor(params), floorMesh);
+    appendToPart(out, stairFinishPartFor(params), stairMesh);
     out.height = storeys.back().y0 + storeys.back().h;
     return out;
 }
@@ -2867,8 +2950,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 const FaceRect gfr = planEdgeRect(plan, i, y, gh);
                 RenderMesh gi;
                 const Vec3 goff = gfr.n * -interiorInset(params);
-                const Vec3 gcol =
-                    materialFor(PartId::Interior, wallColor).albedo;
+                const Vec3 gcol = interiorPaintFor(params);
                 emitQuad(gi, gfr.at(0, 0) + goff,
                          gfr.at(gfr.width, 0) + goff,
                          gfr.at(gfr.width, gfr.height) + goff,
@@ -2903,7 +2985,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             appendToPart(out, params.wallPart, bw);
             RenderMesh bi;
             const Vec3 boff = bfr.n * -interiorInset(params);
-            const Vec3 bcol = materialFor(PartId::Interior, wallColor).albedo;
+            const Vec3 bcol = interiorPaintFor(params);
             emitQuad(bi, bfr.at(0, 0) + boff, bfr.at(bfr.width, 0) + boff,
                      bfr.at(bfr.width, bfr.height) + boff,
                      bfr.at(0, bfr.height) + boff, bfr.n * -1.0, bcol);
@@ -2937,11 +3019,12 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 emitQuad(skin, ifr.at(0, 0) + off, ifr.at(ifr.width, 0) + off,
                          ifr.at(ifr.width, ifr.height) + off,
                          ifr.at(0, ifr.height) + off, ifr.n * -1.0,
-                         materialFor(PartId::Interior, wallColor).albedo);
+                         interiorPaintFor(params));
                 appendToPart(out, PartId::Interior, skin);
             } else {
                 emitInnerWallRect(out, ifr, facadeLayout(ifr, mode, params),
-                                  interiorInset(params), wallColor, plan);
+                                  interiorInset(params), wallColor, plan,
+                                  interiorPaintFor(params));
             }
         }
     }

@@ -123,6 +123,9 @@ struct RenderMaterial {
         //  FanTop       — radial fan blades under a hub, smooth casing ring
         //                 (cowl top; the disc bakes its own centred UVs).
         VentGrille, UtilityPanel, FanTop,
+        // Interior floor finishes (ADR-0080): polished veined stone and a
+        // soft cut-pile floor covering, baked like the facade surfaces.
+        Marble, Carpet,
     };
     static constexpr uint32_t SURFACE_SHIFT = 8;
     static constexpr uint32_t SURFACE_MASK = 0xFF00u;
@@ -168,6 +171,8 @@ inline RenderMaterial::Surface surfaceFromName(const std::string& s) {
     if (s == "roadmarkings" || s == "road_markings" || s == "lanes") return S::RoadMarkings;
     if (s == "water" || s == "ocean" || s == "river") return S::Water;
     if (s == "terrain" || s == "ground" || s == "terrainground") return S::TerrainGround;
+    if (s == "marble") return S::Marble;
+    if (s == "carpet") return S::Carpet;
     return S::None;
 }
 
@@ -192,6 +197,8 @@ inline const char* surfaceName(RenderMaterial::Surface s) {
         case S::RoadMarkings:    return "roadmarkings";
         case S::Water:           return "water";
         case S::TerrainGround:   return "terrain";
+        case S::Marble:          return "marble";
+        case S::Carpet:          return "carpet";
         default:                 return "";
     }
 }

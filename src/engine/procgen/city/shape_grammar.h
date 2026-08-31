@@ -68,6 +68,8 @@ enum class PartId : uint8_t {
              // floorFinishFor): pale polished Concrete bake. Its own part
              // because the merged city mesh binds ONE surface per part --
              // tile lobbies must not inherit the wood bump.
+    InteriorFloorMarble, // veined polished Marble bake (own part, same rule)
+    InteriorFloorCarpet, // soft Carpet bake (own part, same rule)
     Count    // KEEP LAST: materialIndexFor is the ordinal; arrays size by Count
 };
 
@@ -203,9 +205,20 @@ std::size_t entranceEdgeFor(const Poly2& plan, const BuildingParams& params);
 // surface bake per part material.
 RenderMaterial floorFinishFor(const BuildingParams& params);
 
-// The part the LOBBY floor overlay lands in (merged city mesh): tile-finish
-// buildings use InteriorFloorTile so the loader binds the Concrete bake.
+// The part the LOBBY floor overlay lands in (merged city mesh): non-wood
+// finishes use their own part so the loader binds the matching bake.
 PartId floorFinishPartFor(const BuildingParams& params);
+
+// Interior wall PAINT (walls only -- ceilings stay drywall white so the
+// no-GI emission bounce keeps rooms readable): a soft seed-picked palette,
+// bright by construction (device: "not all just white walls").
+Vec3 interiorPaintFor(const BuildingParams& params);
+
+// The stair's OWN finish, an axis independent of the floor (device:
+// "different materials to the stairs for different looks"), plus the part
+// its streamed mesh lands in so the matching bake binds.
+RenderMaterial stairFinishFor(const BuildingParams& params);
+PartId stairFinishPartFor(const BuildingParams& params);
 
 // The streamed interior (ADR-0080 Phase 2): a floor slab, inner walls and
 // the stairwell for every storey above ground, deterministic from the SAME

@@ -337,6 +337,38 @@ SurfSample evalFanTop(double u, double v, uint32_t seed) {
     return s;
 }
 
+SurfSample evalMarble(double u, double v, uint32_t seed) {
+    SurfSample s;
+    // Polished veined stone: thin grey threads (a coarse and a finer vein
+    // field, each dark near its fbm midline) through a warm white, height
+    // almost flat so the normal pass reads POLISHED, roughness low.
+    double field = wrapFbm(u, v, 3, 4, seed);
+    double vein = smooth(0.0, 0.045, std::abs(field - 0.5));
+    double field2 = wrapFbm(u, v, 7, 3, seed + 17u);
+    double vein2 = smooth(0.0, 0.03, std::abs(field2 - 0.5));
+    double mott = wrapFbm(u, v, 5, 2, seed + 5u);
+    Vec3 base = Vec3(0.86, 0.84, 0.81) * (0.96 + 0.07 * mott);
+    Vec3 veinC(0.52, 0.52, 0.55);
+    double open = std::min(vein, 0.45 + 0.55 * vein2);
+    s.albedo = mixv(veinC, base, open);
+    s.h = 0.5 + 0.015 * (mott - 0.5) - 0.012 * (1.0 - open);
+    s.rough = 0.22 + 0.08 * (1.0 - open);
+    return s;
+}
+SurfSample evalCarpet(double u, double v, uint32_t seed) {
+    SurfSample s;
+    // Soft cut-pile: dense fibre noise over gentle tuft mottle -- matte,
+    // nearly flat. The greige base takes the per-building vertex tint.
+    double fibre = wrapNoise(u, v, 96, seed);
+    double tuft = wrapFbm(u, v, 24, 2, seed + 3u);
+    double mott = wrapFbm(u, v, 4, 2, seed + 11u);
+    s.h = 0.5 + 0.10 * (fibre - 0.5) + 0.08 * (tuft - 0.5);
+    double val = 0.90 + 0.10 * (mott - 0.5) + 0.10 * (fibre - 0.5);
+    s.albedo = Vec3(0.70, 0.66, 0.60) * val;
+    s.rough = 0.97;
+    return s;
+}
+
 SurfSample evalSurface(Surface s, double u, double v, uint32_t seed) {
     switch (s) {
         case Surface::Brick:           return evalBrick(u, v, seed);
@@ -352,6 +384,8 @@ SurfSample evalSurface(Surface s, double u, double v, uint32_t seed) {
         case Surface::VentGrille:      return evalVent(u, v, seed);
         case Surface::UtilityPanel:    return evalUtilityPanel(u, v, seed);
         case Surface::FanTop:          return evalFanTop(u, v, seed);
+        case Surface::Marble:          return evalMarble(u, v, seed);
+        case Surface::Carpet:          return evalCarpet(u, v, seed);
         default:                       return SurfSample{};
     }
 }
@@ -436,6 +470,8 @@ double surfaceWorldTileSize(Surface surface) {
         case Surface::VentGrille:      return 0.9;   // 6 capsule holes across ~0.9 m
         case Surface::UtilityPanel:    return 1.6;   // 2 panels ~0.8 m each
         case Surface::FanTop:          return 1.2;   // one fan per tile (disc bakes own UVs)
+        case Surface::Marble:          return 2.4;   // broad veined slabs
+        case Surface::Carpet:          return 1.6;
         default:                       return 2.0;
     }
 }

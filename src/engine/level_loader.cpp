@@ -4031,7 +4031,9 @@ bool LevelLoader::load(const std::string& path,
                             // water tanks, whose world-planar re-UV must stay.
                             if (!surfaceBakesOwnUVs(surf) &&
                                 static_cast<PartId>(pi) != PartId::InteriorFloor &&
-                                static_cast<PartId>(pi) != PartId::InteriorFloorTile)
+                                static_cast<PartId>(pi) != PartId::InteriorFloorTile &&
+                                static_cast<PartId>(pi) != PartId::InteriorFloorMarble &&
+                                static_cast<PartId>(pi) != PartId::InteriorFloorCarpet)
                                 applyWorldPlanarUVs(pm, 1.0 / surfaceWorldTileSize(surf));
                             bindSurfaceMaps(proto.material,
                                             bakeSurfaceTextures(renderer, surf, lotTex));

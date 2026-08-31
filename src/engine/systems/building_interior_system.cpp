@@ -195,10 +195,19 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
         world.add<PrevTransform>(e, PrevTransform{t});
         Renderable rd;
         rd.mesh = mh;
-        rd.material = (pid == PartId::InteriorFloor ||
-                       pid == PartId::InteriorFloorTile)
-                          ? floorFinishFor(r.params)
-                          : materialFor(pid, r.params.wallColor);
+        // Interior-floor-family parts: the FLOOR finish claims its part
+        // first (floors dominate a shared part), the STAIR finish its own;
+        // anything else keeps the part material.
+        const bool floorFam = pid == PartId::InteriorFloor ||
+                              pid == PartId::InteriorFloorTile ||
+                              pid == PartId::InteriorFloorMarble ||
+                              pid == PartId::InteriorFloorCarpet;
+        if (floorFam && pid == floorFinishPartFor(r.params))
+            rd.material = floorFinishFor(r.params);
+        else if (floorFam && pid == stairFinishPartFor(r.params))
+            rd.material = stairFinishFor(r.params);
+        else
+            rd.material = materialFor(pid, r.params.wallColor);
         // Bind the baked surface texture set, like the loader does for the
         // merged city parts — the surface FLAG alone leaves the shader on
         // its procedural fallback (world-planar, no normal map): the black/
