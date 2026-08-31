@@ -2338,6 +2338,7 @@ InteriorLayout interiorLayout(const Poly2& planIn, const BuildingParams& params,
         il.hasStair = true;
         il.stairDir = u;
         il.stairFoot = s + nIn * (il.width * 0.5);
+        il.edge = e;
         // ...but the HOLE cut from ceilings/slabs is only the ascent's upper
         // reach plus a 5 cm lip past the top tread. Floor stays solid beside
         // and beyond it, so walking around the well to the next flight's
@@ -2452,6 +2453,42 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         for (Vertex& v : floorMesh.vertices) v.tangent = grainT;
     }
 
+    // --- inner-wall COLLIDERS (all storeys, ground included): planes at
+    // the inset so a player can never stand inside the visible wall band
+    // (device: "I can sometimes slip in between walls" -- the skins were
+    // visual-only, so the capsule sank into them against the exterior
+    // prism plane). The ground entrance edge keeps a gap at the door bay.
+    if (colliderOut) {
+        const Real inset = interiorInset(params);
+        for (std::size_t k = 0; k < storeys.size(); ++k) {
+            const StoreyPlan& spk = storeys[k];
+            const Real wy0 = baseY + spk.y0;
+            for (std::size_t e = 0; e < spk.plan.size(); ++e) {
+                const FaceRect fr = planEdgeRect(spk.plan, e, wy0, spk.h);
+                Real gap0 = -1, gap1 = -1;
+                if (k == 0 && e == entranceEdge && params.walkableGround) {
+                    const FacadeLayout L =
+                        facadeLayout(fr, FacadeMode::Entrance, params);
+                    for (const BayOpening& o : L.open)
+                        if (o.entrance) { gap0 = o.wx0; gap1 = o.wx1; }
+                }
+                const Vec3 off = fr.n * -inset;
+                auto wallQuad = [&](Real a0, Real a1) {
+                    if (a1 - a0 < 0.05) return;
+                    emitQuad(*colliderOut, fr.at(a0, 0) + off,
+                             fr.at(a1, 0) + off, fr.at(a1, fr.height) + off,
+                             fr.at(a0, fr.height) + off, fr.n * -1.0, icol);
+                };
+                if (gap0 >= 0) {
+                    wallQuad(0, gap0);
+                    wallQuad(gap1, fr.width);
+                } else {
+                    wallQuad(0, fr.width);
+                }
+            }
+        }
+    }
+
     // --- inner walls per storey (same layout truth as the facade) --------
     const FacadeMode upMode =
         params.solidFacade ? FacadeMode::Solid : FacadeMode::Residential;
@@ -2484,8 +2521,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         const Real half = il.width * 0.5;
         for (int j = 0; j < nR; ++j) {
             const Real yT = y0f + riser * (j + 1);
-            const Vec2 t0 = foot + dir * (0.28 * j);
-            const Vec2 t1 = foot + dir * (0.28 * (j + 1));
+            const Vec2 t0 = foot + dir * (il.tread * j);
+            const Vec2 t1 = foot + dir * (il.tread * (j + 1));
             const Vec3 A(t0.x - perp.x * half, yT, t0.y - perp.y * half);
             const Vec3 B(t0.x + perp.x * half, yT, t0.y + perp.y * half);
             const Vec3 C(t1.x + perp.x * half, yT, t1.y + perp.y * half);
@@ -2510,11 +2547,11 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         // a top cap, 0.1..1.1 above the slope line, on the open (+perp)
         // side.
         const Vec2 oA = foot + perp * (half + 0.04);
-        const Vec2 oB = foot + dir * (0.28 * nR) + perp * (half + 0.04);
+        const Vec2 oB = foot + dir * (il.tread * nR) + perp * (half + 0.04);
         const Vec2 iA = foot + perp * (half - 0.04);
-        const Vec2 iB = foot + dir * (0.28 * nR) + perp * (half - 0.04);
+        const Vec2 iB = foot + dir * (il.tread * nR) + perp * (half - 0.04);
         const float ru =
-            static_cast<float>((0.28 * nR) / grainTile);   // along the slope
+            static_cast<float>((il.tread * nR) / grainTile);   // along the slope
         const float rv = static_cast<float>(1.0 / grainTile);
         // VERTICAL planks on the stairwell wall (device style call) — the
         // corner order makes the tangent vertical; u spans the height, v
@@ -2572,7 +2609,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     // measured as a trap: the shorter flight's head hit the slab before the
     // shared hole began, and its top opened onto the hole's mid-air.
     const int nR =
-        std::max(3, static_cast<int>(std::lround(il.run / 0.28)) + 1);
+        std::max(3, static_cast<int>(std::lround(il.run / il.tread)) + 1);
     for (int k = 0; il.hasStair && k < stairTop; ++k) {
         const Real yk = baseY + storeys[static_cast<std::size_t>(k)].y0 + 0.05;
         const Real rise = storeys[static_cast<std::size_t>(k) + 1].y0 -
@@ -2588,7 +2625,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         {
             const Vec2 perp(-u.y, u.x);
             const Real half = il.width * 0.5;
-            const Real runLen = 0.28 * nR;
+            const Real runLen = il.tread * nR;
             const Real riser = rise / nR;
             const Vec2 f0 = il.stairFoot;
             const Vec2 f1 = il.stairFoot + u * runLen;
@@ -2764,6 +2801,14 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         }
         FacadeMode mode = (i == entranceEdge && params.walkableGround)
                               ? FacadeMode::Entrance : groundMode;
+        // The stairwell hugs one wall; panes crossed by a climbing stair
+        // read wrong from both sides (device feedback), so that edge goes
+        // SOLID -- the grammar's native per-edge mode axis.
+        if (full && params.openDoorway && i != entranceEdge) {
+            const InteriorLayout ilw =
+                interiorLayout(plan, params, entranceEdge);
+            if (ilw.hasStair && i == ilw.edge) mode = FacadeMode::Solid;
+        }
         if (mode == FacadeMode::Retail && params.retailStreetOnly) {
             Vec2 a = plan[i], b = plan[(i + 1) % plan.size()];
             Vec2 d = normalize(b - a);
@@ -2945,11 +2990,17 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             if (params.curtainWall)
                 emitCurtainWallRect(out, planEdgeRect(cur, e, y, fh), wallColor,
                                     detail);
-            else if (full)
-                emitFacadeRect(out, planEdgeRect(cur, e, y, fh),
-                               params.solidFacade ? FacadeMode::Solid
-                                                  : FacadeMode::Residential,
-                               upper, wallColor);
+            else if (full) {
+                FacadeMode um = params.solidFacade ? FacadeMode::Solid
+                                                  : FacadeMode::Residential;
+                if (params.openDoorway && cur.size() == plan.size()) {
+                    const InteriorLayout ilw =
+                        interiorLayout(plan, params, entranceEdge);
+                    if (ilw.hasStair && e == ilw.edge) um = FacadeMode::Solid;
+                }
+                emitFacadeRect(out, planEdgeRect(cur, e, y, fh), um, upper,
+                               wallColor);
+            }
             else
                 emitFlatFacadeRect(out, planEdgeRect(cur, e, y, fh),
                                    params.solidFacade ? FacadeMode::Solid

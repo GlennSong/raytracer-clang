@@ -121,9 +121,12 @@ TEST_CASE(character_climbs_the_stair_around_the_well_to_the_top) {
     }
     world.addMesh(verts, idx, Vec3(), 0.85);
 
-    // Start on the ground just short of the stair foot (z from the layout).
+    // All targets derive from the layout: foot, run and arrival move with
+    // the stair pitch, so re-tuning the pitch never breaks the gate.
     const Real sz = il.stairFoot.y;
-    CharacterId c = world.addCharacter(0.8, 0.3, Vec3(4.5, 1.2, sz));
+    const Real sx0 = il.stairFoot.x;              // flight foot
+    const Real sxT = sx0 + il.run + 1.2;          // past the top tread
+    CharacterId c = world.addCharacter(0.8, 0.3, Vec3(sx0 - 1.6, 1.2, sz));
     world.optimizeBroadPhase();
     walk(world, c, Vec3(), 60);
     CHECK_APPROX(world.characterPosition(c).y, 1.1, 0.15);
@@ -142,35 +145,35 @@ TEST_CASE(character_climbs_the_stair_around_the_well_to_the_top) {
     };
 
     // Up flight 1 (ground -> storey 1 at 4.55), stopping just past the top.
-    walkTo(13.6, sz, 1200);
+    walkTo(sxT, sz, 1200);
     Vec3 pos = world.characterPosition(c);
     std::printf("    [climb] flight1 end x=%.2f y=%.2f z=%.2f\n", pos.x,
                 pos.y, pos.z);
-    CHECK(pos.x > 12.9);
+    CHECK(pos.x > sxT - 0.7);
     CHECK_APPROX(pos.y, 4.55 + 1.1, 0.25);
 
     // Around the well on the storey-1 floor (the hole spans x 8.2..12.9,
     // z 0.4..1.7): sidestep clear of it, walk back along it, return to the
     // stair line at the flight-2 foot. Never leaves the floor.
-    walkTo(13.6, sz + 2.2, 400);
-    walkTo(5.9, sz + 2.2, 1000);
-    walkTo(5.9, sz, 400);
+    walkTo(sxT, sz + 2.2, 400);
+    walkTo(sx0 - 0.3, sz + 2.2, 1000);
+    walkTo(sx0 - 0.3, sz, 400);
     pos = world.characterPosition(c);
     std::printf("    [climb] around-well x=%.2f y=%.2f z=%.2f\n", pos.x,
                 pos.y, pos.z);
-    CHECK(pos.x < 6.5);
+    CHECK(pos.x < sx0 + 0.4);
     CHECK_APPROX(pos.y, 4.55 + 1.1, 0.25);    // still ON the floor, not down
 
     // Up flight 2 (storey 1 -> storey 2 at 7.75).
-    walkTo(13.6, sz, 1200);
+    walkTo(sxT, sz, 1200);
     pos = world.characterPosition(c);
     std::printf("    [climb] flight2 end x=%.2f y=%.2f z=%.2f\n", pos.x,
                 pos.y, pos.z);
-    CHECK(pos.x > 12.9);
+    CHECK(pos.x > sxT - 0.7);
     CHECK_APPROX(pos.y, 7.75 + 1.1, 0.25);
 
     // And back down flight 2 to the storey-1 floor.
-    walkTo(5.0, sz, 1400);
+    walkTo(sx0 - 1.2, sz, 1400);
     pos = world.characterPosition(c);
     std::printf("    [climb] descent x=%.2f y=%.2f z=%.2f\n", pos.x, pos.y,
                 pos.z);

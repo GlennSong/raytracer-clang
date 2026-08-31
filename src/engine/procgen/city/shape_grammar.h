@@ -165,6 +165,10 @@ struct InteriorLayout {
     Vec2 stairDir;          // unit XZ direction of climb
     Real width = 1.2;       // flight width
     Real run = 0;           // horizontal run of one full-storey flight
+    Real tread = 0.26;      // horizontal depth per step (riser 0.24 pitch)
+    std::size_t edge = 0;   // plan edge the stair hugs (the facade blanks
+                            // its windows there -- a stair crossing panes
+                            // read wrong; device feedback)
     Poly2 well;             // the well rectangle (cut from ceiling/slabs)
 };
 InteriorLayout interiorLayout(const Poly2& plan, const BuildingParams& params,
