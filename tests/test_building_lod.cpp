@@ -175,6 +175,12 @@ TEST_CASE(open_doorway_drops_the_leaf_and_grows_an_interior) {
     CHECK(interior && !interior->indices.empty());
     const RenderMesh* woodFloor = part(open, PartId::InteriorFloor);
     CHECK(woodFloor && !woodFloor->indices.empty());
+    // The grain is AUTHORED (plank-direction UVs, ADR-0080): world-metre
+    // coordinates, so at least one vertex sits past the first tile.
+    bool authoredUV = false;
+    for (const Vertex& v : woodFloor->vertices)
+        if (std::fabs(v.u) > 1.0f || std::fabs(v.v) > 1.0f) authoredUV = true;
+    CHECK(authoredUV);
     const RenderMesh* interiorClosed = part(closed, PartId::Interior);
     CHECK(!interiorClosed || interiorClosed->indices.empty());
     // The entrance attach carries the aperture for the collider notch.

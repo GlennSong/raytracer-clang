@@ -2157,6 +2157,22 @@ void emitBayFront(BuildingMesh& out, const FaceRect& fr,
     appendToPart(out, PartId::Trim, trim);
 }
 
+// Wood-grain frame (ADR-0080; device: "proper wood grain uv direction"):
+// planks run along the plan's LONGEST edge — u follows the boards, v crosses
+// them, in world metres over the WoodSiding tile so seams read at real size.
+// Deterministic; shared by the lobby overlay and every storey slab so the
+// grain is continuous up the building.
+static void plankFrame(const Poly2& plan, Vec2& d, Vec2& perp) {
+    d = Vec2(1, 0);
+    Real bestLen = -1;
+    for (std::size_t i = 0; i < plan.size(); ++i) {
+        const Vec2 e = plan[(i + 1) % plan.size()] - plan[i];
+        const Real len = e.length();
+        if (len > bestLen) { bestLen = len; d = e * (1.0 / len); }
+    }
+    perp = Vec2(-d.y, d.x);
+}
+
 }  // namespace
 
 std::size_t entranceEdgeFor(const Poly2& plan, const BuildingParams& params) {
@@ -2294,6 +2310,16 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         materialFor(PartId::InteriorFloor, params.wallColor).albedo;
     RenderMesh mesh;   // DRYWALL: slab undersides (= ceilings)
     RenderMesh floorMesh;   // WOOD: slab tops, treads, risers, railings
+    // One grain direction for the whole building (the ground plan's longest
+    // edge), so the boards line up storey over storey.
+    Vec2 grainD, grainP;
+    plankFrame(plan, grainD, grainP);
+    const Real grainTile =
+        surfaceWorldTileSize(RenderMaterial::Surface::WoodSiding);
+    auto grainUV = [&](Real x, Real z, float& u, float& v) {
+        u = static_cast<float>((x * grainD.x + z * grainD.y) / grainTile);
+        v = static_cast<float>((x * grainP.x + z * grainP.y) / grainTile);
+    };
 
     // How high the stair reaches: the first shrunken tier the well no longer
     // fits inside ends it (the slab there keeps its hole shut).
@@ -2317,10 +2343,14 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             holes.push_back(il.well);
         const Real yTop = baseY + storeys[k].y0 + 0.05;
         for (const auto& t : triangulateWithHoles(storeys[k].plan, holes)) {
-            MeshBuilder::emitTri(floorMesh, Vec3(t[0].x, yTop, t[0].y),
-                                 Vec3(t[1].x, yTop, t[1].y),
-                                 Vec3(t[2].x, yTop, t[2].y), Vec3(0, 1, 0),
-                                 wcol);
+            float u0, v0, u1, v1, u2, v2;
+            grainUV(t[0].x, t[0].y, u0, v0);
+            grainUV(t[1].x, t[1].y, u1, v1);
+            grainUV(t[2].x, t[2].y, u2, v2);
+            MeshBuilder::emitTriUV(floorMesh, Vec3(t[0].x, yTop, t[0].y),
+                                   Vec3(t[1].x, yTop, t[1].y),
+                                   Vec3(t[2].x, yTop, t[2].y), Vec3(0, 1, 0),
+                                   wcol, u0, v0, u1, v1, u2, v2);
             const Real yb = yTop - 0.25;
             MeshBuilder::emitTri(mesh, Vec3(t[0].x, yb, t[0].y),
                                  Vec3(t[2].x, yb, t[2].y),
@@ -2372,8 +2402,14 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             const Vec3 C(t1.x + perp.x * half, yT, t1.y + perp.y * half);
             const Vec3 D(t1.x - perp.x * half, yT, t1.y - perp.y * half);
             const Vec3 A0(A.x, yT - riser, A.z), B0(B.x, yT - riser, B.z);
-            emitQuad(floorMesh, A, B, C, D, Vec3(0, 1, 0), wcol);      // tread
-            emitQuad(floorMesh, A0, B0, B, A, Vec3(-dir.x, 0, -dir.y), wcol);
+            const float uw = static_cast<float>(il.width / grainTile);
+            const float vj0 = static_cast<float>((0.28 * j) / grainTile);
+            const float vj1 = static_cast<float>((0.28 * (j + 1)) / grainTile);
+            MeshBuilder::emitQuadUV(floorMesh, A, B, C, D, Vec3(0, 1, 0),
+                                    wcol, 0, vj0, uw, vj0, uw, vj1, 0, vj1);
+            MeshBuilder::emitQuadUV(floorMesh, A0, B0, B, A,
+                                    Vec3(-dir.x, 0, -dir.y), wcol, 0, vj1, uw,
+                                    vj1, uw, vj0, 0, vj0);
             if (colliderOut) {
                 emitQuad(*colliderOut, A, B, C, D, Vec3(0, 1, 0), icol);
                 emitQuad(*colliderOut, A0, B0, B, A,
@@ -2385,8 +2421,15 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         const Vec2 r1 = foot + dir * (0.28 * nR) + perp * half;
         const Vec3 RA(r0.x, y0f + 0.1, r0.y), RB(r1.x, y0f + rise + 0.1, r1.y);
         const Vec3 RC(r1.x, y0f + rise + 1.1, r1.y), RD(r0.x, y0f + 1.1, r0.y);
-        emitQuad(floorMesh, RA, RB, RC, RD, Vec3(perp.x, 0, perp.y), wcol);
-        emitQuad(floorMesh, RB, RA, RD, RC, Vec3(-perp.x, 0, -perp.y), wcol);
+        const float ru =
+            static_cast<float>((0.28 * nR) / grainTile);   // along the slope
+        const float rv = static_cast<float>(1.0 / grainTile);
+        MeshBuilder::emitQuadUV(floorMesh, RA, RB, RC, RD,
+                                Vec3(perp.x, 0, perp.y), wcol, 0, 0, ru, 0,
+                                ru, rv, 0, rv);
+        MeshBuilder::emitQuadUV(floorMesh, RB, RA, RD, RC,
+                                Vec3(-perp.x, 0, -perp.y), wcol, ru, 0, 0, 0,
+                                0, rv, ru, rv);
         if (colliderOut)
             emitQuad(*colliderOut, RA, RB, RC, RD, Vec3(perp.x, 0, perp.y),
                      icol);
@@ -2605,12 +2648,25 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         RenderMesh woodFloor;
         const Vec3 wcol =
             materialFor(PartId::InteriorFloor, wallColor).albedo;
-        for (const auto& t : triangulatePolygon(plan))
-            MeshBuilder::emitTri(
+        Vec2 pd, pp;
+        plankFrame(plan, pd, pp);
+        const Real ptile =
+            surfaceWorldTileSize(RenderMaterial::Surface::WoodSiding);
+        auto puv = [&](const Vec2& v, float& u, float& w) {
+            u = static_cast<float>(dot(v, pd) / ptile);
+            w = static_cast<float>(dot(v, pp) / ptile);
+        };
+        for (const auto& t : triangulatePolygon(plan)) {
+            float u0, v0, u1, v1, u2, v2;
+            puv(plan[t[0]], u0, v0);
+            puv(plan[t[1]], u1, v1);
+            puv(plan[t[2]], u2, v2);
+            MeshBuilder::emitTriUV(
                 woodFloor, Vec3(plan[t[0]].x, y + 0.07, plan[t[0]].y),
                 Vec3(plan[t[1]].x, y + 0.07, plan[t[1]].y),
                 Vec3(plan[t[2]].x, y + 0.07, plan[t[2]].y), Vec3(0, 1, 0),
-                wcol);
+                wcol, u0, v0, u1, v1, u2, v2);
+        }
         appendToPart(out, PartId::InteriorFloor, woodFloor);
     }
     // Base course wraps the plan (skipping the door edge).

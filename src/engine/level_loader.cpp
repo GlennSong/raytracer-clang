@@ -3994,7 +3994,12 @@ bool LevelLoader::load(const std::string& path,
                             // FanTop/VentGrille/RoofShingle bake their own UVs in
                             // the grammar (centred disc / plate-fitted / slope-
                             // fitted) — a world-planar re-UV would break them.
-                            if (!surfaceBakesOwnUVs(surf))
+                            // InteriorFloor is exempt BY PART, not by surface:
+                            // it authors plank-direction UVs (u along the
+                            // room's long axis) but shares WoodSiding with the
+                            // water tanks, whose world-planar re-UV must stay.
+                            if (!surfaceBakesOwnUVs(surf) &&
+                                static_cast<PartId>(pi) != PartId::InteriorFloor)
                                 applyWorldPlanarUVs(pm, 1.0 / surfaceWorldTileSize(surf));
                             bindSurfaceMaps(proto.material,
                                             bakeSurfaceTextures(renderer, surf, lotTex));
