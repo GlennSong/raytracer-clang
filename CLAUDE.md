@@ -16,10 +16,16 @@ add a new submodule; CMake also tries to auto-init them):
 
 ```bash
 git submodule update --init --recursive    # fetch third_party/{JoltPhysics,imgui,lua,tracy,miniaudio}
-cmake -S . -B build && cmake --build build
-ctest --test-dir build                      # runs unit + physics tests
-./build/viewer                              # the game (boots into play; --edit for edit mode)
+cmake -S . -B build-viewer && cmake --build build-viewer
+ctest --test-dir build-viewer               # runs unit + physics tests
+./build-viewer/viewer                       # the game (boots into play; --edit for edit mode)
+./build-viewer/editor_app                   # the Qt editor (builds wherever Qt6 is found)
 ```
+
+**Do not configure CMake into `build/`.** The Makefile above owns it
+(`BUILD_DIR = build`), so on any box where `make` has run, `cmake --build build`
+fails with `Error: not a CMake build directory (missing CMakeCache.txt)`. Any
+`build-*/` name is gitignored; `build-viewer/` is the convention.
 
 The viewer target builds only where GLFW is found (e.g. macOS); physics
 (`-DRT_ENABLE_PHYSICS=ON`, default) is cross-platform and builds/tests headless.

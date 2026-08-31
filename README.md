@@ -173,12 +173,16 @@ The **same commands on every platform**; CMake picks the GPU backend per OS
 (Metal on Apple, Vulkan elsewhere once it lands, `NullRenderer` as fallback):
 ```bash
 git submodule update --init --recursive
-cmake -S . -B build
-cmake --build build
-ctest --test-dir build          # unit + physics tests
-./build/viewer                  # boots into play; --edit for edit mode
-./build/viewer --play level.json
+cmake -S . -B build-viewer
+cmake --build build-viewer
+ctest --test-dir build-viewer   # unit + physics tests
+./build-viewer/viewer           # boots into play; --edit for edit mode
+./build-viewer/viewer --play level.json
 ```
+
+> **Not `build/`.** The offline tracer's Makefile owns that directory
+> (`BUILD_DIR = build`), so configuring CMake into it fails once `make` has run.
+> `build-*/` is gitignored; `build-viewer/` is the convention.
 
 ### Build options
 | Option | Default | Effect |
