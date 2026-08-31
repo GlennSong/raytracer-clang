@@ -570,7 +570,10 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
 // the inner skin into the one-sided cavity (device: "you could clip
 // through the walls to look outside").
 Real interiorInset(const BuildingParams& p) {
-    return std::max(p.wallThickness, Real(0.42));
+    // 0.42 measured insufficient in play ("I can still clip through"): the
+    // near plane's CORNER reach at a wide FOV is ~0.2, so radius 0.3 + 0.2
+    // + margin.
+    return std::max(p.wallThickness, Real(0.55));
 }
 
 // The INNER face of an exterior ground-storey wall (enterable buildings,
@@ -2294,7 +2297,8 @@ InteriorLayout interiorLayout(const Poly2& planIn, const BuildingParams& params,
         const Real wellLen = il.run + 1.0;
         const Real wellWid = il.width;
         if (len < wellLen + 1.2) continue;
-        const Real inset = std::max(params.wallThickness + 0.15, Real(0.45));
+        // Clear of the inner wall skin (interiorInset 0.55) with margin.
+        const Real inset = std::max(params.wallThickness + 0.15, Real(0.70));
         const Vec2 s = a + u * ((len - wellLen) * 0.5) + nIn * inset;
         // The FULL stair footprint must sit inside the plan...
         Poly2 fit{s, s + u * wellLen, s + u * wellLen + nIn * wellWid,
@@ -2344,9 +2348,11 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     plankFrame(plan, grainD, grainP);
     const Real grainTile =
         surfaceWorldTileSize(RenderMaterial::Surface::WoodSiding);
+    const Vec2 grainOrigin = plan[0];
     auto grainUV = [&](Real x, Real z, float& u, float& v) {
-        u = static_cast<float>((x * grainD.x + z * grainD.y) / grainTile);
-        v = static_cast<float>((x * grainP.x + z * grainP.y) / grainTile);
+        const Real lx = x - grainOrigin.x, lz = z - grainOrigin.y;
+        u = static_cast<float>((lx * grainD.x + lz * grainD.y) / grainTile);
+        v = static_cast<float>((lx * grainP.x + lz * grainP.y) / grainTile);
     };
 
     // How high the stair reaches: the first shrunken tier the well no longer
@@ -2482,14 +2488,18 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         const float ru =
             static_cast<float>((0.28 * nR) / grainTile);   // along the slope
         const float rv = static_cast<float>(1.0 / grainTile);
+        // VERTICAL planks on the stairwell wall (device style call) — the
+        // corner order makes the tangent vertical; u spans the height, v
+        // runs along the slope.
+        const float hu = static_cast<float>(1.0 / grainTile);
         auto railFace = [&](const Vec2& a2, const Vec2& b2, const Vec2& n2) {
             const Vec3 A(a2.x, y0f + 0.1, a2.y);
             const Vec3 B(b2.x, y0f + rise + 0.1, b2.y);
             const Vec3 C(b2.x, y0f + rise + 1.1, b2.y);
             const Vec3 D(a2.x, y0f + 1.1, a2.y);
-            MeshBuilder::emitQuadUV(floorMesh, A, B, C, D,
-                                    Vec3(n2.x, 0, n2.y), wcol, 0, 0, ru, 0,
-                                    ru, rv, 0, rv);
+            MeshBuilder::emitQuadUV(floorMesh, A, D, C, B,
+                                    Vec3(n2.x, 0, n2.y), wcol, 0, 0, hu, 0,
+                                    hu, ru, 0, ru);
         };
         railFace(oA, oB, perp);
         railFace(iA, iB, perp * -1.0);
@@ -2568,6 +2578,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             MeshBuilder::emitQuadUV(floorMesh, A, B, C, D, soffitN,
                                     wcol, 0, 0, sv, 0, sv, su, 0, su);
             const Real bandH = riser + 0.04;
+            const float bu = static_cast<float>(bandH / grainTile);
             auto stringer = [&](const Vec2& side, const Vec2& n2) {
                 const Vec3 SA(f0.x + side.x, yk, f0.y + side.y);
                 const Vec3 SB(f1.x + side.x, yk + rise - riser,
@@ -2575,9 +2586,9 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                 const Vec3 SC(f1.x + side.x, yk + rise - riser + bandH,
                               f1.y + side.y);
                 const Vec3 SD(f0.x + side.x, yk + bandH, f0.y + side.y);
-                MeshBuilder::emitQuadUV(floorMesh, SA, SB, SC, SD,
-                                        Vec3(n2.x, 0, n2.y), wcol, 0, 0, su,
-                                        0, su, 0.02f, 0, 0.02f);
+                MeshBuilder::emitQuadUV(floorMesh, SA, SD, SC, SB,
+                                        Vec3(n2.x, 0, n2.y), wcol, 0, 0, bu,
+                                        0, bu, su, 0, su);
             };
             stringer(perp * half, perp);
             stringer(perp * -half, perp * -1.0);
@@ -2802,9 +2813,10 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         plankFrame(plan, pd, pp);
         const Real ptile =
             surfaceWorldTileSize(RenderMaterial::Surface::WoodSiding);
+        const Vec2 uvOrigin = plan[0];
         auto puv = [&](const Vec2& v, float& u, float& w) {
-            u = static_cast<float>(dot(v, pd) / ptile);
-            w = static_cast<float>(dot(v, pp) / ptile);
+            u = static_cast<float>(dot(v - uvOrigin, pd) / ptile);
+            w = static_cast<float>(dot(v - uvOrigin, pp) / ptile);
         };
         for (const auto& t : triangulatePolygon(plan)) {
             float u0, v0, u1, v1, u2, v2;

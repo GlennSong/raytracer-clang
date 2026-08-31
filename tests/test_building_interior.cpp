@@ -62,6 +62,22 @@ TEST_CASE(interior_is_deterministic_and_stays_inside_the_plan) {
     CHECK(va > 0);
     CHECK(va == vb);
     CHECK(col1.vertices.size() == col2.vertices.size());
+    // The streamed wood part carries AUTHORED, non-constant UVs (the lobby
+    // overlay had this gate; the streamed slabs did not, and a flat-grey
+    // second floor slipped through as a single clamped sample).
+    for (const RenderMesh& m : a.parts) {
+        if (m.materialIndex != static_cast<int>(PartId::InteriorFloor))
+            continue;
+        float minU = 1e9f, maxU = -1e9f, minV = 1e9f, maxV = -1e9f;
+        for (const Vertex& v : m.vertices) {
+            minU = std::min(minU, v.u); maxU = std::max(maxU, v.u);
+            minV = std::min(minV, v.v); maxV = std::max(maxV, v.v);
+        }
+        std::printf("    [uv-spread] floor u [%f, %f] v [%f, %f]\n",
+                    minU, maxU, minV, maxV);
+        CHECK(maxU - minU > 1.0f);
+        CHECK(maxV - minV > 1.0f);
+    }
     // Everything stays inside the plan bbox (inner shell, stair, slabs).
     for (const RenderMesh& m : a.parts)
         for (const Vertex& v : m.vertices) {
@@ -105,8 +121,9 @@ TEST_CASE(character_climbs_the_stair_around_the_well_to_the_top) {
     }
     world.addMesh(verts, idx, Vec3(), 0.85);
 
-    // Start on the ground just short of the stair foot (~6.14, z 1.05).
-    CharacterId c = world.addCharacter(0.8, 0.3, Vec3(4.5, 1.2, 1.05));
+    // Start on the ground just short of the stair foot (z from the layout).
+    const Real sz = il.stairFoot.y;
+    CharacterId c = world.addCharacter(0.8, 0.3, Vec3(4.5, 1.2, sz));
     world.optimizeBroadPhase();
     walk(world, c, Vec3(), 60);
     CHECK_APPROX(world.characterPosition(c).y, 1.1, 0.15);
@@ -125,7 +142,7 @@ TEST_CASE(character_climbs_the_stair_around_the_well_to_the_top) {
     };
 
     // Up flight 1 (ground -> storey 1 at 4.55), stopping just past the top.
-    walkTo(13.6, 1.05, 1200);
+    walkTo(13.6, sz, 1200);
     Vec3 pos = world.characterPosition(c);
     std::printf("    [climb] flight1 end x=%.2f y=%.2f z=%.2f\n", pos.x,
                 pos.y, pos.z);
@@ -135,9 +152,9 @@ TEST_CASE(character_climbs_the_stair_around_the_well_to_the_top) {
     // Around the well on the storey-1 floor (the hole spans x 8.2..12.9,
     // z 0.4..1.7): sidestep clear of it, walk back along it, return to the
     // stair line at the flight-2 foot. Never leaves the floor.
-    walkTo(13.6, 3.2, 400);
-    walkTo(5.9, 3.2, 1000);
-    walkTo(5.9, 1.05, 400);
+    walkTo(13.6, sz + 2.2, 400);
+    walkTo(5.9, sz + 2.2, 1000);
+    walkTo(5.9, sz, 400);
     pos = world.characterPosition(c);
     std::printf("    [climb] around-well x=%.2f y=%.2f z=%.2f\n", pos.x,
                 pos.y, pos.z);
@@ -145,7 +162,7 @@ TEST_CASE(character_climbs_the_stair_around_the_well_to_the_top) {
     CHECK_APPROX(pos.y, 4.55 + 1.1, 0.25);    // still ON the floor, not down
 
     // Up flight 2 (storey 1 -> storey 2 at 7.75).
-    walkTo(13.6, 1.05, 1200);
+    walkTo(13.6, sz, 1200);
     pos = world.characterPosition(c);
     std::printf("    [climb] flight2 end x=%.2f y=%.2f z=%.2f\n", pos.x,
                 pos.y, pos.z);
@@ -153,7 +170,7 @@ TEST_CASE(character_climbs_the_stair_around_the_well_to_the_top) {
     CHECK_APPROX(pos.y, 7.75 + 1.1, 0.25);
 
     // And back down flight 2 to the storey-1 floor.
-    walkTo(5.0, 1.05, 1400);
+    walkTo(5.0, sz, 1400);
     pos = world.characterPosition(c);
     std::printf("    [climb] descent x=%.2f y=%.2f z=%.2f\n", pos.x, pos.y,
                 pos.z);
@@ -188,32 +205,32 @@ TEST_CASE(interior_system_builds_on_approach_and_releases_on_leave) {
     const int baselineBodies = phys.bodyCount();
 
     // Far outside: nothing builds.
-    sys.step(world, &phys, assets, Vec3(10, 1, 80));
+    sys.step(world, &phys, assets, nullptr, Vec3(10, 1, 80));
     CHECK(sys.residentCount() == 0);
 
     // Walking along the street BESIDE the building, out of the door's
     // 6 m reach: never builds. (Directly in FRONT of the door a passer-by
     // DOES build — that is the approach trigger working as designed.)
-    sys.step(world, &phys, assets, Vec3(1, 1, 16.5));
+    sys.step(world, &phys, assets, nullptr, Vec3(1, 1, 16.5));
     CHECK(sys.residentCount() == 0);
 
     // At the door, in front: resident within one step.
-    sys.step(world, &phys, assets, Vec3(10, 1, 17.5));
+    sys.step(world, &phys, assets, nullptr, Vec3(10, 1, 17.5));
     CHECK(sys.residentCount() == 1);
     CHECK(phys.bodyCount() == baselineBodies + 1);
     CHECK(uploader.uploads > 0);
 
     // Inside: stays.
-    sys.step(world, &phys, assets, Vec3(10, 1, 8));
+    sys.step(world, &phys, assets, nullptr, Vec3(10, 1, 8));
     CHECK(sys.residentCount() == 1);
 
     // 45+ m from every door: released at once (body), mesh free rate-limited.
-    sys.step(world, &phys, assets, Vec3(10, 1, 65));
+    sys.step(world, &phys, assets, nullptr, Vec3(10, 1, 65));
     CHECK(sys.residentCount() == 0);
     CHECK(phys.bodyCount() == baselineBodies);
     CHECK(uploader.removes == 0);   // queued, not yet freed
     for (int i = 0; i < 130; ++i)
-        sys.step(world, &phys, assets, Vec3(10, 1, 65));
+        sys.step(world, &phys, assets, nullptr, Vec3(10, 1, 65));
     CHECK(uploader.removes > 0);    // the rate limiter let one through
     phys.shutdown();
 }

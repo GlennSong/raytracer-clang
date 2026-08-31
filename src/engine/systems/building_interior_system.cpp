@@ -6,6 +6,7 @@
 #include "../../profile.h"
 #include "../world.h"
 #include "../procgen/city/shape_grammar.h"
+#include "../procgen/surface_maps.h"   // surfaceMaps (bake, ADR-0080)
 #include <algorithm>
 #include <chrono>
 
@@ -40,7 +41,8 @@ void BuildingInteriorSystem::fixedUpdate(FrameContext& ctx) {
             found = true;
         });
     if (!found) return;
-    step(ctx.world, &physics_->physicsWorld(), ctx.assets, player);
+    step(ctx.world, &physics_->physicsWorld(), ctx.assets, &ctx.renderer,
+         player);
 
     // Room lights (ADR-0080): warm ceiling points for the resident interior
     // NEAREST the player — one per storey, capped — staged transiently for
@@ -89,7 +91,8 @@ void BuildingInteriorSystem::fixedUpdate(FrameContext& ctx) {
 }
 
 void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
-                                  AssetManager& assets, const Vec3& player) {
+                                  AssetManager& assets, Renderer* renderer,
+                                  const Vec3& player) {
     ++stepCount_;
     const CityBuildings* cb = nullptr;
     world.each<CityBuildings>(
@@ -138,7 +141,7 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
         if (resident_.count(key)) continue;
         if (resident_.size() >= MAX_RESIDENT && key != insideKey) continue;
         if (builtThisStep && key != insideKey) continue;
-        build(world, phys, assets, cb->records[key], key);
+        build(world, phys, assets, renderer, cb->records[key], key);
         builtThisStep = true;
     }
 
@@ -170,7 +173,7 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
 }
 
 void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
-                                   AssetManager& assets,
+                                   AssetManager& assets, Renderer* renderer,
                                    const BuildingRecord& r, std::size_t key) {
     const auto t0 = std::chrono::steady_clock::now();
     RenderMesh collider;
@@ -193,6 +196,33 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
         Renderable rd;
         rd.mesh = mh;
         rd.material = materialFor(pid, r.params.wallColor);
+        // Bind the baked surface texture set, like the loader does for the
+        // merged city parts — the surface FLAG alone leaves the shader on
+        // its procedural fallback (world-planar, no normal map): the black/
+        // diagonal upper floors.
+        const RenderMaterial::Surface surf = rd.material.surface();
+        if (renderer && surf != RenderMaterial::Surface::None) {
+            const int sid = static_cast<int>(surf);
+            auto it = surfTex_.find(sid);
+            if (it == surfTex_.end()) {
+                SurfaceMaps mp = surfaceMaps(surf, 256, 1337u);
+                auto up = [&](const TextureData& td) {
+                    return renderer->uploadTexture(td.width, td.height,
+                                                   td.channels,
+                                                   td.pixels.data());
+                };
+                it = surfTex_
+                         .emplace(sid,
+                                  std::array<TextureHandle, 4>{
+                                      up(mp.albedo), up(mp.normal),
+                                      up(mp.mr), up(mp.ao)})
+                         .first;
+            }
+            rd.material.albedoMap = it->second[0];
+            rd.material.normalMap = it->second[1];
+            rd.material.metallicRoughnessMap = it->second[2];
+            rd.material.aoMap = it->second[3];
+        }
         rd.drawClass = DrawClass::Structure;
         rd.drawDistance = 300.0;
         world.add<Renderable>(e, rd);

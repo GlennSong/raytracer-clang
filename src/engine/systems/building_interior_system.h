@@ -5,6 +5,7 @@
 #include "../asset_manager.h"
 #include "../physics/physics_world.h"
 #include "../procgen/city/building_records.h"
+#include <array>
 #include <cstdint>
 #include <unordered_map>
 #include <utility>
@@ -38,9 +39,10 @@ public:
     void onStop(FrameContext& ctx) override;
 
     // Headless step for tests: the same logic as fixedUpdate with explicit
-    // dependencies (no renderer, no clock).
+    // dependencies (no clock; renderer nullable — without it, surface maps
+    // stay unbound and parts shade flat).
     void step(World& world, PhysicsWorld* phys, AssetManager& assets,
-              const Vec3& player);
+              Renderer* renderer, const Vec3& player);
 
     std::size_t residentCount() const { return resident_.size(); }
 
@@ -56,13 +58,18 @@ private:
         PhysicsBodyId body = INVALID_PHYSICS_BODY;
     };
     void build(World& world, PhysicsWorld* phys, AssetManager& assets,
-               const BuildingRecord& r, std::size_t key);
+               Renderer* renderer, const BuildingRecord& r, std::size_t key);
     // Destroys entities and the body at once; queues the GPU meshes for the
     // rate-limited free.
     void release(World& world, PhysicsWorld* phys, std::size_t key);
 
     PhysicsSystem* physics_ = nullptr;
     std::unordered_map<std::size_t, Resident> resident_;   // key: record index
+    // Baked surface texture sets (WoodSiding, Concrete, ...), one per surface
+    // id, session-lived like the loader's SurfaceTexCache. Without this bind
+    // the streamed parts fell back to the in-shader procedural: the "second
+    // floor texture is black / no bump / 45-degree diagonal" report.
+    std::unordered_map<int, std::array<TextureHandle, 4>> surfTex_;
     std::vector<MeshHandle> freeQueue_;
     std::uint64_t stepCount_ = 0;
     std::uint64_t lastFree_ = 0;
