@@ -1319,12 +1319,18 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         u.plan = uplan;
         u.baseY = ubase;
         u.params = upar;
-        u.enterable = upar.openDoorway;
         for (const AttachPoint& ap : um.attaches)
             if (ap.tag == "entrance")
                 u.doors.push_back({Vec2(ap.position.x, ap.position.z),
                                    Vec2(ap.normal.x, ap.normal.z), ap.width,
                                    ap.height});
+        // Enterable requires an ACTUAL collected door: recipes that never
+        // take FacadeMode::Entrance (cylinders, pagodas, bay fronts) can
+        // carry openDoorway without ever emitting an aperture. Evaluated
+        // AFTER the doors loop -- the first cut sat before it, doors was
+        // always empty, and the citywide enable produced 0 enterable
+        // buildings (the level door gate caught it on the first run).
+        u.enterable = upar.openDoorway && !u.doors.empty();
         b.units.push_back(std::move(u));
     };
     // Does an enterableAt point land in -- or stand beside -- this unit's
@@ -1332,8 +1338,16 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // prism (the Phase-0 guard walks it out), a couple of metres off the
     // building it should open. 8 m reaches across a sidewalk, never across
     // a street (>= 12 m).
-    auto wantsDoorway = [&p](const Poly2& uplan) {
+    auto wantsDoorway = [&p](const Poly2& uplan, const BuildingParams& bp) {
         if (uplan.size() < 3) return false;
+        // CITYWIDE (device: "could we apply this to buildings of this size
+        // or less?"): every walk-in building up to 3 upper storeys grows
+        // open. Curtain-wall shafts keep painted doors (their look is
+        // unresolved), as do units with no walkable ground. Taller
+        // buildings wait for elevators (roadmap).
+        if (!bp.curtainWall && bp.walkableGround && bp.groundBays <= 0 &&
+            bp.floors <= 3)
+            return true;
         for (const Vec2& pt : p.enterableAt) {
             if (pointInPolygon(uplan, pt)) return true;
             for (std::size_t i = 0; i < uplan.size(); ++i) {
@@ -2440,7 +2454,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                             bp.floors);
                         upar.faceDir = bp.faceDir;
                         if (p.styleHook) p.styleHook("rowhouse_unit", upar);
-                        if (wantsDoorway(up4)) upar.openDoorway = true;
+                        if (wantsDoorway(up4, upar)) upar.openDoorway = true;
                         BuildingMesh um = growPlanBuilding(up4, upar, stripBase);
                         collectUnit(b, up4, upar, stripBase, um);
                         mergeParts(outParts, um);
@@ -2587,7 +2601,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     pod.setbackFloors = 0;
                     pod.spire = false;
                     pod.dome = false;
-                    if (wantsDoorway(plan)) pod.openDoorway = true;
+                    if (wantsDoorway(plan, pod)) pod.openDoorway = true;
                     BuildingMesh pm = growPlanBuilding(plan, pod, b.baseY);
                     collectUnit(b, plan, pod, b.baseY, pm);
                     BuildingParams twr = bp;   // the shaft: no street-level kit
@@ -2635,7 +2649,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 }
             }
             if (planOk) {
-                if (wantsDoorway(plan)) bp.openDoorway = true;
+                if (wantsDoorway(plan, bp)) bp.openDoorway = true;
                 bm = growPlanBuilding(plan, bp, b.baseY);
                 if (outFlatParts)
                     bmFlat = growPlanBuilding(plan, bp, b.baseY,

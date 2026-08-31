@@ -3726,6 +3726,7 @@ bool LevelLoader::load(const std::string& path,
             // (the failure that got box colliders removed).
             engine::MeshCollider buildingsMc;
             engine::CityBuildings cityB;
+            std::size_t blockedDoors = 0;
             std::vector<engine::CityPlanDebug::Prism> colliderPrisms;
             for (const engine::LotBuilding& lb : grown.lots) {
                 const double gy = entityGround ? entityGround(lb.site.x, lb.site.y) : 0.0;
@@ -3773,8 +3774,37 @@ bool LevelLoader::load(const std::string& path,
                     // (door notches for ENTERABLE units, roof cap, and a floor
                     // cap at the drawn Ground slab so whoever is inside stands
                     // on the floor they see -- not the pad 0.5 m below it).
+                    // EXIT AUDIT (citywide enable): a door whose exit point
+                    // (foot + 1.5 n) lands inside ANY building plan opens
+                    // into a neighbour -- stepping out would embed the
+                    // player in that neighbour's collider. Such units demote
+                    // to non-enterable BEFORE the notch is cut (the aperture
+                    // stays drawn; TECH_DEBT: the lot pass should re-pick
+                    // the entrance edge instead).
+                    std::vector<engine::BuildingUnit> units = lb.units;
+                    for (engine::BuildingUnit& u : units) {
+                        if (!u.enterable) continue;
+                        bool clear = true;
+                        for (const engine::DoorSpec& d : u.doors) {
+                            const engine::Vec2 outP = d.foot + d.normal * 1.5;
+                            for (const engine::LotBuilding& ob : grown.lots) {
+                                if (ob.type == "park" ||
+                                    ob.type == "green" || ob.plan.size() < 3)
+                                    continue;
+                                if (engine::pointInPolygon(ob.plan, outP)) {
+                                    clear = false;
+                                    break;
+                                }
+                            }
+                            if (!clear) break;
+                        }
+                        if (!clear) {
+                            u.enterable = false;
+                            ++blockedDoors;
+                        }
+                    }
                     std::vector<engine::DoorSpec> doorCuts;
-                    for (const engine::BuildingUnit& u : lb.units)
+                    for (const engine::BuildingUnit& u : units)
                         if (u.enterable)
                             doorCuts.insert(doorCuts.end(), u.doors.begin(),
                                             u.doors.end());
@@ -3783,7 +3813,7 @@ bool LevelLoader::load(const std::string& path,
                         base, top, lb.baseY + 0.05, doorCuts,
                         lb.baseY - lb.groundY);
                     // Runtime records: one per grown unit (ADR-0080).
-                    for (const engine::BuildingUnit& u : lb.units)
+                    for (const engine::BuildingUnit& u : units)
                         cityB.records.push_back({u.plan, u.baseY, lb.groundY,
                                                  lb.height, u.params, u.doors,
                                                  u.enterable, lb.recipe,
@@ -3947,7 +3977,8 @@ bool LevelLoader::load(const std::string& path,
                 }
                 LOG_INFO << "[buildings] " << cityB.records.size()
                          << " records, " << doorCount << " doors, "
-                         << enterableCount << " enterable";
+                         << enterableCount << " enterable (" << blockedDoors
+                         << " demoted: exit into a neighbour)";
                 world.add<engine::CityBuildings>(world.create(),
                                                 std::move(cityB));
             }

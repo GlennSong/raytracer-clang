@@ -2367,8 +2367,11 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     const std::vector<StoreyPlan> storeys = storeyPlans(plan, params);
     if (storeys.size() < 2) return out;   // no storeys above ground
     const Vec3 icol = materialFor(PartId::Interior, params.wallColor).albedo;
+    const Real floorTone =
+        0.85 + 0.45 * (((params.seed >> 4) & 0xffu) / 255.0);
     const Vec3 wcol =
-        materialFor(PartId::InteriorFloor, params.wallColor).albedo;
+        materialFor(PartId::InteriorFloor, params.wallColor).albedo *
+        floorTone;
     RenderMesh mesh;   // DRYWALL: slab undersides (= ceilings)
     RenderMesh floorMesh;   // WOOD: slab tops, treads, risers, railings
     // One grain direction for the whole building (the ground plan's longest
@@ -2893,8 +2896,15 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             }
         appendToPart(out, PartId::Interior, ceil);
         RenderMesh woodFloor;
+        // Floor tone varies per building (device: "different flooring
+        // variety... a lighter wood floor"): deterministic from the seed,
+        // 0.85 (dark walnut) .. 1.30 (light oak). Same derivation in
+        // growInterior, so lobby and storeys match. Tile/carpet/marble
+        // need their own surface bakes -- recorded in TECH_DEBT.
+        const Real floorTone =
+            0.85 + 0.45 * (((params.seed >> 4) & 0xffu) / 255.0);
         const Vec3 wcol =
-            materialFor(PartId::InteriorFloor, wallColor).albedo;
+            materialFor(PartId::InteriorFloor, wallColor).albedo * floorTone;
         Vec2 pd, pp;
         plankFrame(plan, pd, pp);
         const Real ptile =

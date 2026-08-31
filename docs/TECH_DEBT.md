@@ -942,3 +942,19 @@ eclipses); Metal/WebGPU disc code is mirrored, not run.
 - **Walkers do not use doors.** PedGraph door nodes exist unwired; NPCs
   neither enter buildings nor trigger leaves (DoorSystem tracks the player
   only).
+
+- **Floor finishes beyond wood.** InteriorFloor varies only in TONE today
+  (seed-derived light/dark wood). Tile, carpet and marble each need a small
+  procedural bake in surface_maps plus a FloorFinish pick in the architect
+  (type/district: offices tile, civic marble, homes wood). (Device ask.)
+- **Elevator shafts for tall buildings.** Enterable is capped at <= 3 upper
+  storeys; taller buildings keep painted doors until an elevator exists
+  ("for really tall buildings we'd want an elevator shaft" -- device).
+- **Stairwell arrival treatment.** The well is a snug stair-width slot; a
+  wider opening with a guard rail around the rim is designed and owed.
+- **Blocked-door units demote instead of re-picking their entrance.** The
+  loader's exit audit (door foot + 1.5 n inside any building plan) demotes
+  dense-lot units to non-enterable before their collider notch is cut --
+  safe, but their apertures stay DRAWN open while the prism blocks them.
+  Real fix: the lot pass chooses a different entrance edge (or faceDir)
+  when the exit is blocked by a neighbour.
