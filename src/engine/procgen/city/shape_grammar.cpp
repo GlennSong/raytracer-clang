@@ -564,15 +564,28 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
 
 // The FLAT emitter (LOD1, city-render-perf R2): the same layout, the cheapest
 // honest drawing of it — one quad per wall, one flat pane per opening riding
+// Interior wall inset for enterable buildings: at least the wall build-up,
+// and DEEPER than the capsule radius (0.3) + the camera near plane, so a
+// player pressed against the collider cannot poke the near plane through
+// the inner skin into the one-sided cavity (device: "you could clip
+// through the walls to look outside").
+Real interiorInset(const BuildingParams& p) {
+    return std::max(p.wallThickness, Real(0.42));
+}
+
 // The INNER face of an exterior ground-storey wall (enterable buildings,
 // ADR-0080): the SAME FacadeLayout as the outside, drawn at -thick facing the
 // room, so from inside you see wall around every opening instead of the sky
 // through a one-sided skin. Non-door openings also get an inward-facing pane
 // (the same lit/dark hash as the outside pane) so windows read as glass, not
 // holes; the door bay's aperture stays open -- its reveal is the passage.
+// Quads are DOUBLE-sided (the back face closes the cavity if the camera ever
+// does get in), and each wall extends past both ends by the inset so
+// adjacent edges' planes overlap and the plan CORNERS close (device: "the
+// interior didn't have corners where the walls met").
 void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
                        const FacadeLayout& L, Real thick,
-                       const Vec3& wallColor) {
+                       const Vec3& wallColor, const Poly2& plan) {
     RenderMesh wall, glass, glassLit;
     const Vec3 in = fr.n * -thick;
     const Vec3 nIn = fr.n * -1.0;
@@ -582,6 +595,8 @@ void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
         if (a1 - a0 < 1e-4 || b1 - b0 < 1e-4) return;
         emitQuad(m, fr.at(a0, b0) + off, fr.at(a1, b0) + off,
                  fr.at(a1, b1) + off, fr.at(a0, b1) + off, nIn, col);
+        emitQuad(m, fr.at(a0, b0) + off, fr.at(a1, b0) + off,
+                 fr.at(a1, b1) + off, fr.at(a0, b1) + off, fr.n, col);
     };
     for (const BayOpening& o : L.open) {
         q(wall, o.x0, 0, o.wx0, fr.height, icol, in);         // left pier
@@ -596,6 +611,19 @@ void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
               in + fr.n * 0.02);
         }
     }
+    // The corner closers: full-height continuations past each end — but
+    // ONLY where the extension lands INSIDE the plan. At a REFLEX (inward)
+    // corner the two inset planes pull apart and the extension closes the
+    // wedge; at a convex corner they already overlap, and an extension
+    // would poke THROUGH the exterior wall as a floating fin outside the
+    // building (the determinism gate's bbox check caught exactly that).
+    auto extOk = [&](Real u) {
+        const Vec3 probe = fr.at(u, fr.height * 0.5) + in;
+        return pointInPolygon(plan, Vec2(probe.x, probe.z));
+    };
+    if (extOk(-thick * 0.6)) q(wall, -thick, 0, 0, fr.height, icol, in);
+    if (extOk(fr.width + thick * 0.6))
+        q(wall, fr.width, 0, fr.width + thick, fr.height, icol, in);
     appendToPart(out, PartId::Interior, wall);
     appendToPart(out, PartId::Glass, glass);
     appendToPart(out, PartId::GlassLit, glassLit);
@@ -718,7 +746,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             // leaf and frame are DROPPED and the reveal deepens to
             // wallThickness: the aperture is a real hole through a real wall
             // section, and the interior shell behind it closes the views.
-            const Real revealDepth = p.openDoorway ? p.wallThickness : 0.18;
+            const Real revealDepth = p.openDoorway ? interiorInset(p) : 0.18;
             Vec3 in = fr.n * -revealDepth;
             Vec3 oBL = fr.at(wx0, 0), oBR = fr.at(wx1, 0);
             Vec3 oTL = fr.at(wx0, openHead), oTR = fr.at(wx1, openHead);
@@ -2364,6 +2392,16 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         }
     }
 
+    // The wood normal-map's groove direction follows TANGENTS, and emitTriUV
+    // derives one from each triangle's first edge — arbitrary after ear
+    // clipping (device: "the wood grain was oriented differently"). Pin every
+    // slab tangent to the grain frame. (Stairs and railing are emitted after
+    // this line and keep their own along-the-run tangents.)
+    {
+        const Vec3 grainT(grainD.x, 0, grainD.y);
+        for (Vertex& v : floorMesh.vertices) v.tangent = grainT;
+    }
+
     // --- inner walls per storey (same layout truth as the facade) --------
     const FacadeMode upMode =
         params.solidFacade ? FacadeMode::Solid : FacadeMode::Residential;
@@ -2374,14 +2412,15 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                 planEdgeRect(spk.plan, e, baseY + spk.y0, spk.h);
             if (params.curtainWall) {
                 RenderMesh skin;
-                const Vec3 off = fr.n * -params.wallThickness;
+                const Vec3 off = fr.n * -interiorInset(params);
                 emitQuad(skin, fr.at(0, 0) + off, fr.at(fr.width, 0) + off,
                          fr.at(fr.width, fr.height) + off,
                          fr.at(0, fr.height) + off, fr.n * -1.0, icol);
                 appendToPart(out, PartId::Interior, skin);
             } else {
                 emitInnerWallRect(out, fr, facadeLayout(fr, upMode, params),
-                                  params.wallThickness, params.wallColor);
+                                  interiorInset(params), params.wallColor,
+                                  spk.plan);
             }
         }
     }
@@ -2416,23 +2455,42 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                          Vec3(-dir.x, 0, -dir.y), icol);
             }
         }
-        // Railing band on the open (+perp) side, 0.1..1.1 above the slope.
-        const Vec2 r0 = foot + perp * half;
-        const Vec2 r1 = foot + dir * (0.28 * nR) + perp * half;
-        const Vec3 RA(r0.x, y0f + 0.1, r0.y), RB(r1.x, y0f + rise + 0.1, r1.y);
-        const Vec3 RC(r1.x, y0f + rise + 1.1, r1.y), RD(r0.x, y0f + 1.1, r0.y);
+        // Railing: a slim BOX, not a paper plane (device: "the stairwell
+        // wall ... should have some thickness") — two faces 8 cm apart and
+        // a top cap, 0.1..1.1 above the slope line, on the open (+perp)
+        // side.
+        const Vec2 oA = foot + perp * (half + 0.04);
+        const Vec2 oB = foot + dir * (0.28 * nR) + perp * (half + 0.04);
+        const Vec2 iA = foot + perp * (half - 0.04);
+        const Vec2 iB = foot + dir * (0.28 * nR) + perp * (half - 0.04);
         const float ru =
             static_cast<float>((0.28 * nR) / grainTile);   // along the slope
         const float rv = static_cast<float>(1.0 / grainTile);
-        MeshBuilder::emitQuadUV(floorMesh, RA, RB, RC, RD,
-                                Vec3(perp.x, 0, perp.y), wcol, 0, 0, ru, 0,
-                                ru, rv, 0, rv);
-        MeshBuilder::emitQuadUV(floorMesh, RB, RA, RD, RC,
-                                Vec3(-perp.x, 0, -perp.y), wcol, ru, 0, 0, 0,
-                                0, rv, ru, rv);
-        if (colliderOut)
-            emitQuad(*colliderOut, RA, RB, RC, RD, Vec3(perp.x, 0, perp.y),
-                     icol);
+        auto railFace = [&](const Vec2& a2, const Vec2& b2, const Vec2& n2) {
+            const Vec3 A(a2.x, y0f + 0.1, a2.y);
+            const Vec3 B(b2.x, y0f + rise + 0.1, b2.y);
+            const Vec3 C(b2.x, y0f + rise + 1.1, b2.y);
+            const Vec3 D(a2.x, y0f + 1.1, a2.y);
+            MeshBuilder::emitQuadUV(floorMesh, A, B, C, D,
+                                    Vec3(n2.x, 0, n2.y), wcol, 0, 0, ru, 0,
+                                    ru, rv, 0, rv);
+        };
+        railFace(oA, oB, perp);
+        railFace(iA, iB, perp * -1.0);
+        {   // top cap
+            const Vec3 A(iA.x, y0f + 1.1, iA.y), B(oA.x, y0f + 1.1, oA.y);
+            const Vec3 C(oB.x, y0f + rise + 1.1, oB.y);
+            const Vec3 D(iB.x, y0f + rise + 1.1, iB.y);
+            MeshBuilder::emitQuadUV(floorMesh, A, B, C, D, Vec3(0, 1, 0),
+                                    wcol, 0, 0, 0.08f, 0, 0.08f, ru, 0, ru);
+        }
+        if (colliderOut) {
+            const Vec3 A(oA.x, y0f + 0.1, oA.y);
+            const Vec3 B(oB.x, y0f + rise + 0.1, oB.y);
+            const Vec3 C(oB.x, y0f + rise + 1.1, oB.y);
+            const Vec3 D(oA.x, y0f + 1.1, oA.y);
+            emitQuad(*colliderOut, A, B, C, D, Vec3(perp.x, 0, perp.y), icol);
+        }
     };
     // UNIFORM flights: every storey's flight uses the ground flight's riser
     // count and run — upper risers just get shallower — so all flights share
@@ -2596,7 +2654,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             const FaceRect ifr = planEdgeRect(plan, i, y, gh);
             if (params.curtainWall && mode != FacadeMode::Entrance) {
                 RenderMesh skin;
-                const Vec3 off = ifr.n * -params.wallThickness;
+                const Vec3 off = ifr.n * -interiorInset(params);
                 emitQuad(skin, ifr.at(0, 0) + off, ifr.at(ifr.width, 0) + off,
                          ifr.at(ifr.width, ifr.height) + off,
                          ifr.at(0, ifr.height) + off, ifr.n * -1.0,
@@ -2604,7 +2662,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 appendToPart(out, PartId::Interior, skin);
             } else {
                 emitInnerWallRect(out, ifr, facadeLayout(ifr, mode, params),
-                                  params.wallThickness, wallColor);
+                                  interiorInset(params), wallColor, plan);
             }
         }
     }
@@ -2667,6 +2725,8 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 Vec3(plan[t[2]].x, y + 0.07, plan[t[2]].y), Vec3(0, 1, 0),
                 wcol, u0, v0, u1, v1, u2, v2);
         }
+        for (Vertex& v : woodFloor.vertices)
+            v.tangent = Vec3(pd.x, 0, pd.y);
         appendToPart(out, PartId::InteriorFloor, woodFloor);
     }
     // Base course wraps the plan (skipping the door edge).

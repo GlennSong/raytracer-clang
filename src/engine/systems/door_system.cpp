@@ -105,7 +105,13 @@ void DoorSystem::fixedUpdate(FrameContext& ctx) {
         Leaf& lf = kv.second;
         const Real dist = (xz - lf.foot).length();
         if (dist < TRIGGER_M) {
-            lf.target = doorSwingSign(xz, vel, lf.foot, lf.normal) * SWING_RAD;
+            // doorSwingSign's contract is semantic (-1 = the inside face,
+            // +1 = the outside); the WORLD side a positive rotY angle lands
+            // on was only ever inferred from a dark screenshot — and the
+            // device played it: "the door opens into the user not away".
+            // The measured mapping is the negation.
+            lf.target =
+                -doorSwingSign(xz, vel, lf.foot, lf.normal) * SWING_RAD;
             lf.clearFor = 0;
         } else {
             lf.clearFor += dt;
