@@ -1639,6 +1639,34 @@ FaceRect planEdgeRect(const Poly2& pl, std::size_t i, Real y, Real h) {
 
 // A horizontal SLAB filling the plan: triangulated top + underside, plus a
 // side band around the outline — roof decks, cornice tiers, ground pads.
+void emitPlanRing(BuildingMesh& out, const Poly2& outer, const Poly2& hole,
+                  Real yTop, Real thick, PartId part, const Vec3& col) {
+    if (outer.size() < 3) return;
+    RenderMesh m;
+    for (const auto& t : triangulateWithHoles(outer, {hole})) {
+        const Vec3 a(t[0].x, yTop, t[0].y), b(t[1].x, yTop, t[1].y),
+            c(t[2].x, yTop, t[2].y);
+        MeshBuilder::emitTri(m, a, b, c, Vec3(0, 1, 0), col);
+        const Real yb = yTop - thick;
+        MeshBuilder::emitTri(m, Vec3(t[0].x, yb, t[0].y),
+                             Vec3(t[2].x, yb, t[2].y),
+                             Vec3(t[1].x, yb, t[1].y), Vec3(0, -1, 0), col);
+    }
+    for (std::size_t i = 0; i < outer.size(); ++i) {
+        const Vec2 a2 = outer[i], b2 = outer[(i + 1) % outer.size()];
+        Vec2 en(-(b2 - a2).y, (b2 - a2).x);
+        const Real el = en.length();
+        if (el < 1e-9) continue;
+        en = en * (-1.0 / el);   // outward for a CCW outer ring
+        MeshBuilder::emitQuad(m, Vec3(a2.x, yTop, a2.y),
+                              Vec3(b2.x, yTop, b2.y),
+                              Vec3(b2.x, yTop - thick, b2.y),
+                              Vec3(a2.x, yTop - thick, a2.y),
+                              Vec3(en.x, 0, en.y), col);
+    }
+    appendToPart(out, part, m);
+}
+
 void emitPlanSlab(BuildingMesh& out, const Poly2& pl, Real yTop, Real thick,
                   PartId part, const Vec3& col) {
     if (pl.size() < 3) return;
@@ -2624,10 +2652,23 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     auto sweptCornice = [&](const Poly2& pl, Real yTop, Real scale) {
         struct Tier { Real grow, h; };
         const Tier tiers[3] = {{0.10, 0.16}, {0.24, 0.18}, {0.34, 0.08}};
+        // The band is a RING: emitPlanSlab filled the whole footprint, and
+        // the hidden cap of the ground string course landed 5 cm ABOVE the
+        // enterable interior's wood floor, burying it under untextured Trim
+        // (the "second floor texture is black" play report — found by the
+        // release test: the grey floor survived the interior's release).
+        const Poly2 hole = offsetPlan(pl, 0.20);
+        const bool holeOk = hole.size() == pl.size() && area(hole) > 1.0 &&
+                            area(hole) < area(pl);
         Real yb = yTop;
         for (const Tier& t : tiers) {
-            emitPlanSlab(out, offsetPlan(pl, -t.grow * scale), yb + t.h * scale,
-                         t.h * scale, PartId::Trim, params.trimColor);
+            const Poly2 ring = offsetPlan(pl, -t.grow * scale);
+            if (holeOk)
+                emitPlanRing(out, ring, hole, yb + t.h * scale, t.h * scale,
+                             PartId::Trim, params.trimColor);
+            else
+                emitPlanSlab(out, ring, yb + t.h * scale, t.h * scale,
+                             PartId::Trim, params.trimColor);
             yb += t.h * scale;
         }
     };
