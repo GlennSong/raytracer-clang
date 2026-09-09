@@ -11,11 +11,12 @@ make test       # Jolt-free unit tests (math, ECS, input, camera)
 ```
 
 The interactive viewer and physics build via CMake. Jolt, Dear ImGui, Lua,
-Tracy, and miniaudio are git submodules — fetch them first (re-run after pulling commits that
+Tracy, miniaudio, and — for the lanelab road generator (ADR-0083) — Clipper2 and
+CDT are git submodules — fetch them first (re-run after pulling commits that
 add a new submodule; CMake also tries to auto-init them):
 
 ```bash
-git submodule update --init --recursive    # fetch third_party/{JoltPhysics,imgui,lua,tracy,miniaudio}
+git submodule update --init --recursive    # third_party/{JoltPhysics,imgui,lua,tracy,miniaudio,Clipper2,CDT}
 cmake -S . -B build-viewer && cmake --build build-viewer
 ctest --test-dir build-viewer               # runs unit + physics tests
 ./build-viewer/viewer                       # the game (boots into play; --edit for edit mode)

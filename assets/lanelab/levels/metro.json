@@ -1,0 +1,96 @@
+{
+  "citysim": {
+    "buildChance": 0.9,
+    "buildLots": true,
+    "cars": 0,
+    "debugWidgets": false,
+    "detailDistance": 300,
+    "downtownRadius": 160,
+    "facadeDistance": 950,
+    "hoursPerSecond": 0.05,
+    "hubRadius": 240,
+    "midtownRadius": 340,
+    "pedestrians": 0,
+    "perceptionReliability": 1.0,
+    "plinth": 0.45,
+    "seed": 9,
+    "sidewalk": 5.0,
+    "wander": false
+  },
+  "entities": [
+    {
+      "id": 1,
+      "lanelab": {
+        "graph": "assets/lanelab/metro_v2/metropolis_sky_lanelab.json"
+      },
+      "name": "metro_v2_freeway",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "shape": "lanelab"
+    }
+  ],
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.7,
+    "exposure": 0.7,
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1,
+        0.98,
+        0.94
+      ],
+      "direction": [
+        0.4,
+        0.72,
+        -0.32
+      ],
+      "intensity": 6.0
+    }
+  },
+  "player": {
+    "collider": {
+      "halfHeight": 0.4,
+      "radius": 0.3,
+      "shape": "capsule"
+    },
+    "friction": 0.5,
+    "position": [
+      -206.90752445298506,
+      11.143776578367255,
+      -903.1697294294636
+    ]
+  },
+  "vehicles": [
+    {
+      "position": [
+        -204.2121928734323,
+        10.349089737129155,
+        -895.6374530354201
+      ],
+      "recipe": "sedan",
+      "seed": 1,
+      "yaw": 0
+    },
+    {
+      "position": [
+        78.99974138619535,
+        -1.611770673026493,
+        -611.5238120767209
+      ],
+      "recipe": "sedan",
+      "seed": 2,
+      "yaw": 0
+    }
+  ],
+  "version": 1
+}

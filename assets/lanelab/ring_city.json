@@ -1,0 +1,686 @@
+{
+ "name": "ring_city",
+ "terrain": {
+  "type": "procedural",
+  "bounds": [
+   -500,
+   500,
+   -500,
+   500
+  ],
+  "res": 4.0,
+  "seed": 11,
+  "octaves": [
+   [
+    3.0,
+    160
+   ],
+   [
+    1.2,
+    60
+   ]
+  ],
+  "hills": [
+   {
+    "x": 250,
+    "y": 250,
+    "r": 130,
+    "h": 9.0
+   },
+   {
+    "x": -250,
+    "y": -250,
+    "r": 130,
+    "h": 8.0
+   }
+  ],
+  "valleys": [
+   {
+    "y": -240,
+    "width": 40,
+    "depth": 10.0
+   }
+  ]
+ },
+ "classes": {
+  "freeway": {
+   "w": 3.6,
+   "fwd": 3,
+   "back": 0,
+   "shoulder": 2.0,
+   "g_max": 0.03,
+   "window": 300,
+   "thick": 1.2
+  },
+  "ramp": {
+   "w": 3.6,
+   "fwd": 1,
+   "back": 0,
+   "shoulder": 1.0,
+   "g_max": 0.09,
+   "window": 40,
+   "thick": 1.0
+  },
+  "arterial": {
+   "w": 3.0,
+   "fwd": 2,
+   "back": 2,
+   "gap": 0.0,
+   "sidewalk": 2.6,
+   "g_max": 0.06,
+   "window": 120,
+   "thick": 0.6
+  },
+  "local": {
+   "w": 3.5,
+   "fwd": 1,
+   "back": 1,
+   "sidewalk": 1.8,
+   "g_max": 0.09,
+   "window": 40,
+   "thick": 0.5
+  }
+ },
+ "rules": {
+  "closing": 3.0,
+  "bridge_h": 4.0,
+  "pier_spacing": 24.0,
+  "conform_w": 14.0
+ },
+ "edges": [
+  {
+   "id": "in_NE",
+   "class": "freeway",
+   "z_min": 9.0,
+   "path": {
+    "type": "arc",
+    "center": [
+     0,
+     0
+    ],
+    "r": 341.5,
+    "a0": 90,
+    "a1": 0
+   }
+  },
+  {
+   "id": "in_ES",
+   "class": "freeway",
+   "z_min": 9.0,
+   "path": {
+    "type": "arc",
+    "center": [
+     0,
+     0
+    ],
+    "r": 341.5,
+    "a0": 0,
+    "a1": -90
+   }
+  },
+  {
+   "id": "in_SW",
+   "class": "freeway",
+   "z_min": 9.0,
+   "path": {
+    "type": "arc",
+    "center": [
+     0,
+     0
+    ],
+    "r": 341.5,
+    "a0": -90,
+    "a1": -180
+   }
+  },
+  {
+   "id": "in_WN",
+   "class": "freeway",
+   "z_min": 9.0,
+   "path": {
+    "type": "arc",
+    "center": [
+     0,
+     0
+    ],
+    "r": 341.5,
+    "a0": 180,
+    "a1": 90
+   }
+  },
+  {
+   "id": "out_EN",
+   "class": "freeway",
+   "z_min": 9.0,
+   "path": {
+    "type": "arc",
+    "center": [
+     0,
+     0
+    ],
+    "r": 358.5,
+    "a0": 0,
+    "a1": 90
+   }
+  },
+  {
+   "id": "out_NW",
+   "class": "freeway",
+   "z_min": 9.0,
+   "path": {
+    "type": "arc",
+    "center": [
+     0,
+     0
+    ],
+    "r": 358.5,
+    "a0": 90,
+    "a1": 180
+   }
+  },
+  {
+   "id": "out_WS",
+   "class": "freeway",
+   "z_min": 9.0,
+   "path": {
+    "type": "arc",
+    "center": [
+     0,
+     0
+    ],
+    "r": 358.5,
+    "a0": 180,
+    "a1": 270
+   }
+  },
+  {
+   "id": "out_SE",
+   "class": "freeway",
+   "z_min": 9.0,
+   "path": {
+    "type": "arc",
+    "center": [
+     0,
+     0
+    ],
+    "r": 358.5,
+    "a0": 270,
+    "a1": 360
+   }
+  },
+  {
+   "id": "art_ns",
+   "class": "arterial",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      0,
+      -490
+     ],
+     [
+      0,
+      490
+     ]
+    ]
+   },
+   "lots_range": [
+    175.0,
+    805.0
+   ]
+  },
+  {
+   "id": "art_ew",
+   "class": "arterial",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      -490,
+      0
+     ],
+     [
+      490,
+      0
+     ]
+    ]
+   },
+   "lots_range": [
+    175.0,
+    805.0
+   ]
+  },
+  {
+   "id": "v0",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      -150,
+      -150
+     ],
+     [
+      -150,
+      150
+     ]
+    ]
+   }
+  },
+  {
+   "id": "h0",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      -150,
+      -150
+     ],
+     [
+      150,
+      -150
+     ]
+    ]
+   }
+  },
+  {
+   "id": "v1",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      -75,
+      -150
+     ],
+     [
+      -75,
+      150
+     ]
+    ]
+   }
+  },
+  {
+   "id": "h1",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      -150,
+      -75
+     ],
+     [
+      150,
+      -75
+     ]
+    ]
+   }
+  },
+  {
+   "id": "v2",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      75,
+      -150
+     ],
+     [
+      75,
+      150
+     ]
+    ]
+   }
+  },
+  {
+   "id": "h2",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      -150,
+      75
+     ],
+     [
+      150,
+      75
+     ]
+    ]
+   }
+  },
+  {
+   "id": "v3",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      150,
+      -150
+     ],
+     [
+      150,
+      150
+     ]
+    ]
+   }
+  },
+  {
+   "id": "h3",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      -150,
+      150
+     ],
+     [
+      150,
+      150
+     ]
+    ]
+   }
+  },
+  {
+   "id": "n_in_off",
+   "class": "ramp",
+   "from": {
+    "edge": "in_WN",
+    "s": 429,
+    "side": "right",
+    "decel": 80,
+    "taper": 72,
+    "approach": 60
+   },
+   "to": "art_ns",
+   "path": {
+    "type": "bezier",
+    "points": [
+     [
+      0,
+      0
+     ],
+     [
+      0,
+      0
+     ],
+     {
+      "edge": "art_ns",
+      "y": 200,
+      "normal": 4.5,
+      "along": 45
+     },
+     {
+      "edge": "art_ns",
+      "y": 200,
+      "normal": 4.5
+     }
+    ]
+   }
+  },
+  {
+   "id": "n_in_on",
+   "class": "ramp",
+   "from": "art_ns",
+   "to": {
+    "edge": "in_NE",
+    "s": 107,
+    "side": "right",
+    "aux": 110,
+    "taper": 90,
+    "approach": 60
+   },
+   "path": {
+    "type": "bezier",
+    "points": [
+     {
+      "edge": "art_ns",
+      "y": 200,
+      "normal": -4.5
+     },
+     {
+      "edge": "art_ns",
+      "y": 200,
+      "normal": -4.5,
+      "along": 45
+     },
+     [
+      0,
+      0
+     ],
+     [
+      0,
+      0
+     ]
+    ]
+   }
+  },
+  {
+   "id": "n_out_off",
+   "class": "ramp",
+   "from": {
+    "edge": "out_EN",
+    "s": 469,
+    "side": "right",
+    "decel": 80,
+    "taper": 72,
+    "approach": 60
+   },
+   "to": "art_ns",
+   "path": {
+    "type": "bezier",
+    "points": [
+     [
+      0,
+      0
+     ],
+     [
+      0,
+      0
+     ],
+     {
+      "edge": "art_ns",
+      "y": 470,
+      "normal": -4.5,
+      "along": -45
+     },
+     {
+      "edge": "art_ns",
+      "y": 470,
+      "normal": -4.5
+     }
+    ]
+   }
+  },
+  {
+   "id": "n_out_on",
+   "class": "ramp",
+   "from": "art_ns",
+   "to": {
+    "edge": "out_NW",
+    "s": 94,
+    "side": "right",
+    "aux": 110,
+    "taper": 90,
+    "approach": 60
+   },
+   "path": {
+    "type": "bezier",
+    "points": [
+     {
+      "edge": "art_ns",
+      "y": 470,
+      "normal": 4.5
+     },
+     {
+      "edge": "art_ns",
+      "y": 470,
+      "normal": 4.5,
+      "along": -45
+     },
+     [
+      0,
+      0
+     ],
+     [
+      0,
+      0
+     ]
+    ]
+   }
+  },
+  {
+   "id": "e_in_off",
+   "class": "ramp",
+   "from": {
+    "edge": "in_NE",
+    "s": 429,
+    "side": "right",
+    "decel": 80,
+    "taper": 72,
+    "approach": 60
+   },
+   "to": "art_ew",
+   "path": {
+    "type": "bezier",
+    "points": [
+     [
+      0,
+      0
+     ],
+     [
+      0,
+      0
+     ],
+     {
+      "edge": "art_ew",
+      "x": 200,
+      "normal": 4.5,
+      "along": 45
+     },
+     {
+      "edge": "art_ew",
+      "x": 200,
+      "normal": 4.5
+     }
+    ]
+   }
+  },
+  {
+   "id": "e_in_on",
+   "class": "ramp",
+   "from": "art_ew",
+   "to": {
+    "edge": "in_ES",
+    "s": 107,
+    "side": "right",
+    "aux": 110,
+    "taper": 90,
+    "approach": 60
+   },
+   "path": {
+    "type": "bezier",
+    "points": [
+     {
+      "edge": "art_ew",
+      "x": 200,
+      "normal": -4.5
+     },
+     {
+      "edge": "art_ew",
+      "x": 200,
+      "normal": -4.5,
+      "along": 45
+     },
+     [
+      0,
+      0
+     ],
+     [
+      0,
+      0
+     ]
+    ]
+   }
+  },
+  {
+   "id": "e_out_off",
+   "class": "ramp",
+   "from": {
+    "edge": "out_SE",
+    "s": 469,
+    "side": "right",
+    "decel": 80,
+    "taper": 72,
+    "approach": 60
+   },
+   "to": "art_ew",
+   "path": {
+    "type": "bezier",
+    "points": [
+     [
+      0,
+      0
+     ],
+     [
+      0,
+      0
+     ],
+     {
+      "edge": "art_ew",
+      "x": 470,
+      "normal": -4.5,
+      "along": -45
+     },
+     {
+      "edge": "art_ew",
+      "x": 470,
+      "normal": -4.5
+     }
+    ]
+   }
+  },
+  {
+   "id": "e_out_on",
+   "class": "ramp",
+   "from": "art_ew",
+   "to": {
+    "edge": "out_EN",
+    "s": 94,
+    "side": "right",
+    "aux": 110,
+    "taper": 90,
+    "approach": 60
+   },
+   "path": {
+    "type": "bezier",
+    "points": [
+     {
+      "edge": "art_ew",
+      "x": 470,
+      "normal": 4.5
+     },
+     {
+      "edge": "art_ew",
+      "x": 470,
+      "normal": 4.5,
+      "along": -45
+     },
+     [
+      0,
+      0
+     ],
+     [
+      0,
+      0
+     ]
+    ]
+   }
+  }
+ ]
+}

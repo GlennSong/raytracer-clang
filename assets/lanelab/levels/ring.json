@@ -1,0 +1,96 @@
+{
+  "citysim": {
+    "buildChance": 0.9,
+    "buildLots": true,
+    "cars": 0,
+    "debugWidgets": false,
+    "detailDistance": 300,
+    "downtownRadius": 60,
+    "facadeDistance": 950,
+    "hoursPerSecond": 0.05,
+    "hubRadius": 200,
+    "midtownRadius": 150,
+    "pedestrians": 0,
+    "perceptionReliability": 1.0,
+    "plinth": 0.45,
+    "seed": 3,
+    "sidewalk": 3.5,
+    "wander": false
+  },
+  "entities": [
+    {
+      "id": 1,
+      "lanelab": {
+        "graph": "assets/lanelab/ring_city.json"
+      },
+      "name": "ring_city",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "shape": "lanelab"
+    }
+  ],
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.7,
+    "exposure": 0.7,
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1,
+        0.98,
+        0.94
+      ],
+      "direction": [
+        0.4,
+        0.72,
+        -0.32
+      ],
+      "intensity": 6.0
+    }
+  },
+  "player": {
+    "collider": {
+      "halfHeight": 0.4,
+      "radius": 0.3,
+      "shape": "capsule"
+    },
+    "friction": 0.5,
+    "position": [
+      103.4,
+      10.6,
+      317.9
+    ]
+  },
+  "vehicles": [
+    {
+      "position": [
+        95.5,
+        9.6,
+        316.8
+      ],
+      "recipe": "sedan",
+      "seed": 1,
+      "yaw": 98
+    },
+    {
+      "position": [
+        60.4,
+        8.3,
+        311.8
+      ],
+      "recipe": "sedan",
+      "seed": 2,
+      "yaw": 98
+    }
+  ],
+  "version": 1
+}

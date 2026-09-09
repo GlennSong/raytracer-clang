@@ -1,0 +1,132 @@
+{
+ "name": "hill_junction",
+ "terrain": {
+  "type": "procedural",
+  "bounds": [
+   0,
+   600,
+   0,
+   420
+  ],
+  "res": 1.0,
+  "seed": 5,
+  "octaves": [
+   [
+    9,
+    150
+   ],
+   [
+    4,
+    60
+   ],
+   [
+    1.5,
+    25
+   ]
+  ],
+  "tilt": {
+   "dzdx": 0.006,
+   "x0": 300
+  }
+ },
+ "classes": {
+  "arterial": {
+   "w": 3.0,
+   "fwd": 2,
+   "back": 2,
+   "gap": 8.0,
+   "sidewalk": 2.6,
+   "g_max": 0.06,
+   "window": 120,
+   "thick": 0.6
+  },
+  "local": {
+   "w": 3.5,
+   "fwd": 1,
+   "back": 1,
+   "sidewalk": 1.8,
+   "g_max": 0.09,
+   "window": 40,
+   "thick": 0.5
+  }
+ },
+ "rules": {
+  "closing": 3.0
+ },
+ "edges": [
+  {
+   "id": "art",
+   "class": "arterial",
+   "path": {
+    "type": "bezier",
+    "points": [
+     [
+      0,
+      200
+     ],
+     [
+      200,
+      215
+     ],
+     [
+      400,
+      200
+     ],
+     [
+      600,
+      210
+     ]
+    ]
+   },
+   "lanes": {
+    "pockets": [
+     {
+      "id": "T",
+      "side": "left",
+      "s0": 150,
+      "s1": 292,
+      "taper": 30,
+      "kind": "turn"
+     },
+     {
+      "id": "slip",
+      "side": "right",
+      "s0": 220,
+      "s1": 262,
+      "taper": 30,
+      "kind": "slip"
+     }
+    ]
+   }
+  },
+  {
+   "id": "cross",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      300,
+      0
+     ],
+     [
+      300,
+      420
+     ]
+    ]
+   }
+  }
+ ],
+ "connectors": [
+  {
+   "from": "art.T",
+   "to": "cross.f0",
+   "to_s": 232
+  },
+  {
+   "from": "art.slip",
+   "to": "cross.b0",
+   "to_s": 170
+  }
+ ]
+}

@@ -3620,7 +3620,11 @@ bool LevelLoader::load(const std::string& path,
         // every road entity is, so the city map (`citymap`), street furniture and the citysim nav
         // read the lab's streets through the same component as any other level's. Only when the
         // level published none of its own.
-        {
+        // ONLY for a level that actually loaded a lanelab entity: this walks every RoadEntity in the
+        // world, so without the ordinal test it also fires on a plain shape:"road" level that published
+        // no graph of its own — handing it street furniture and a city map it does not have on a build
+        // with the hook off. agent_lab and small_town caught this.
+        if (g_lanelab.ordinal > 0) {
             bool have = false; world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph&) { have = true; });
             if (!have) {
                 engine::LevelRoadGraph lrg;

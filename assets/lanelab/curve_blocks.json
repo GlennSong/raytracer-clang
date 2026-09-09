@@ -1,0 +1,171 @@
+{
+ "name": "curve_blocks",
+ "classes": {
+  "freeway": {
+   "w": 3.6,
+   "fwd": 3,
+   "back": 0,
+   "shoulder": 2.0,
+   "g_max": 0.03,
+   "window": 300,
+   "thick": 1.2
+  },
+  "ramp": {
+   "w": 3.6,
+   "fwd": 1,
+   "back": 0,
+   "shoulder": 1.0,
+   "g_max": 0.09,
+   "window": 40,
+   "thick": 1.0
+  },
+  "arterial": {
+   "w": 3.0,
+   "fwd": 2,
+   "back": 2,
+   "gap": 0.0,
+   "sidewalk": 2.6,
+   "g_max": 0.06,
+   "window": 120,
+   "thick": 0.6
+  },
+  "local": {
+   "w": 3.5,
+   "fwd": 1,
+   "back": 1,
+   "sidewalk": 1.8,
+   "g_max": 0.09,
+   "window": 40,
+   "thick": 0.5
+  }
+ },
+ "rules": {
+  "closing": 3.0,
+  "bridge_h": 4.0,
+  "pier_spacing": 24.0,
+  "conform_w": 14.0
+ },
+ "terrain": {
+  "type": "flat",
+  "bounds": [
+   0,
+   620,
+   0,
+   440
+  ],
+  "res": 4.0,
+  "z": 0.0
+ },
+ "edges": [
+  {
+   "id": "art",
+   "class": "arterial",
+   "path": {
+    "type": "bezier",
+    "points": [
+     [
+      0,
+      200
+     ],
+     [
+      200,
+      260
+     ],
+     [
+      400,
+      150
+     ],
+     [
+      620,
+      230
+     ]
+    ]
+   }
+  },
+  {
+   "id": "v0",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      150,
+      40
+     ],
+     [
+      150,
+      400
+     ]
+    ]
+   }
+  },
+  {
+   "id": "v1",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      300,
+      40
+     ],
+     [
+      300,
+      400
+     ]
+    ]
+   }
+  },
+  {
+   "id": "v2",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      450,
+      40
+     ],
+     [
+      450,
+      400
+     ]
+    ]
+   }
+  },
+  {
+   "id": "h0",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      100,
+      60
+     ],
+     [
+      500,
+      60
+     ]
+    ]
+   }
+  },
+  {
+   "id": "h1",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      100,
+      380
+     ],
+     [
+      500,
+      380
+     ]
+    ]
+   }
+  }
+ ]
+}

@@ -1,0 +1,171 @@
+{
+ "name": "valley_viaduct",
+ "terrain": {
+  "type": "procedural",
+  "bounds": [
+   0,
+   640,
+   0,
+   420
+  ],
+  "res": 2.0,
+  "seed": 1,
+  "octaves": [
+   [
+    18,
+    140
+   ],
+   [
+    7,
+    55
+   ],
+   [
+    2,
+    22
+   ]
+  ],
+  "valleys": [
+   {
+    "x": 330,
+    "width": 48,
+    "depth": 26
+   }
+  ],
+  "tilt": {
+   "dzdx": 0.01,
+   "x0": 320
+  }
+ },
+ "classes": {
+  "freeway": {
+   "w": 3.6,
+   "fwd": 3,
+   "back": 0,
+   "shoulder": 0.0,
+   "g_max": 0.03,
+   "window": 440,
+   "thick": 1.2
+  },
+  "ramp": {
+   "w": 3.6,
+   "fwd": 1,
+   "back": 0,
+   "shoulder": 0.0,
+   "g_max": 0.09,
+   "window": 40,
+   "thick": 1.0
+  },
+  "local": {
+   "w": 3.6,
+   "fwd": 1,
+   "back": 1,
+   "sidewalk": 0.0,
+   "g_max": 0.09,
+   "window": 40,
+   "thick": 0.5
+  }
+ },
+ "rules": {
+  "closing": 5.0,
+  "bridge_h": 4.0,
+  "conform_w": 14.0,
+  "skirt": 1.6,
+  "pier_spacing": 24.0
+ },
+ "edges": [
+  {
+   "id": "fwy",
+   "class": "freeway",
+   "z_min": 0.0,
+   "path": {
+    "type": "bezier",
+    "points": [
+     [
+      -20,
+      190
+     ],
+     [
+      200,
+      215
+     ],
+     [
+      420,
+      200
+     ],
+     [
+      660,
+      230
+     ]
+    ],
+    "reverse": true
+   }
+  },
+  {
+   "id": "loc",
+   "class": "local",
+   "path": {
+    "type": "bezier",
+    "points": [
+     [
+      300,
+      -20
+     ],
+     [
+      345,
+      120
+     ],
+     [
+      315,
+      300
+     ],
+     [
+      410,
+      440
+     ]
+    ]
+   }
+  },
+  {
+   "id": "ramp",
+   "class": "ramp",
+   "lanes": {
+    "fwd": 2,
+    "dovetail": 40
+   },
+   "from": "loc",
+   "to": {
+    "edge": "fwy",
+    "x": 230,
+    "side": "right",
+    "aux": 120,
+    "taper": 108,
+    "approach": 120
+   },
+   "path": {
+    "type": "bezier",
+    "points": [
+     {
+      "edge": "loc",
+      "y": 400,
+      "normal": 1.8
+     },
+     {
+      "edge": "loc",
+      "y": 400,
+      "normal": 1.8,
+      "along": -30,
+      "dx": -45
+     },
+     [
+      0,
+      0
+     ],
+     [
+      0,
+      0
+     ]
+    ]
+   }
+  }
+ ]
+}

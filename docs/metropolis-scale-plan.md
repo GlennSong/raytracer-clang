@@ -228,12 +228,12 @@ a knob and it rebuilds.
   to `cache/terrain/<hash>.bin` (hash = terrain params block + seed +
   erosion params). Load = mmap + bilinear sampler as today. Invalidation is
   automatic via hash; `--nocache` to force.
-- **P4.2 City bake (design doc first).** Two candidate shapes: (a) cache the
+- **P4.2 City bake — DONE for lanelab levels (ADR-0084, 2026-09-07): `engine::bundle`, shape (b) meshes per render cell + the data products; the lot pass landed as the second producer `lots` on 2026-09-07 (read 0.96 s vs a 4.8 s grow on metro; a warm metro load is 1.2 s end to end with the parts stored per render cell, under the 15 s gate).** Original note: Two candidate shapes: (a) cache the
   RoadGraph + lots as data (fast, keeps meshes rebuildable), or (b) cache
   final meshes per chunk (fastest load, feeds §1 streaming). Leaning (a) then
   (b) as the streaming format. Must round-trip the editor's regenerate: an
   edited road invalidates its chunk hashes, not the world.
-- **P4.3 Loading progress.** The loader already logs stage boundaries; surface
+- **P4.3 Loading progress — landed for the lanelab build (ADR-0084): a progress hook through `build`, `rt_bake`'s line and the editor's status bar; viewer boot progress pending.** Original note: The loader already logs stage boundaries; surface
   them as a progress bar (stages weighted by measured time: erosion, terrain
   mesh, metro, weld, lots, buildings, veg) in both editor and viewer boot.
 - Gate: warm metropolis load < 15s; cold unchanged; progress bar tracks.
@@ -417,7 +417,7 @@ passing under, one curved partially-elevated mainline, NO buildings):**
 2. P3.1 (conform evidence) — cheap, unblocks the conform rework. **DONE**
 3. P2 (freeway ribbon) — needs a regen anyway; do after P1 so testing is fast.
 4. P4.1 (erosion cache) anytime — independent quick win. **DONE**
-5. P3.2 **DONE**; P4.2/P4.3 next.
+5. P3.2 **DONE**; P4.2/P4.3 **DONE** for lanelab levels (ADR-0084), lot-pass producer included (2026-09-07).
 6. §6 plazas (small, self-contained, huge look win near hubs/beach).
 7. §7 streaming on its own branch (P7.1 manifest split first).
 

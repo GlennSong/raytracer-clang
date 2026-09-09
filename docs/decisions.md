@@ -6171,6 +6171,127 @@ trades off something a future maintainer would question. Keep the register
 current as interim seams are paid down.*
 
 
+## ADR-0083 — lanelab: a lane-atomic road generator, quarantined by link, judged against the lattice
+
+**Status:** Accepted 2026-09-09 — see the amendment at the end, which supersedes the quarantine
+clause in point 1 and the retirement clause · **Date:** 2026-09-04
+
+**Context.** The road mesher of record is the swept lattice: `buildRoadNetLattice`
+sweeps each chain through a `RoadProfile` and fills each junction with one
+full-ring patch (`docs/junction-weld-decision.md`). It got there by retiring
+three earlier families, each for a recorded reason: the per-edge pad + trim
+(pads self-overlap at T/mixed width), the SDF roadbed (no lane
+parameterisation, so it could never texture lanes), and the polygon-union
+`weldSolid` (`road-mesher-research.md:24`: it flattened 3-D authoring to 2-D and
+*reconstructed* height per vertex by a nearest-spine winner-take-all field,
+which produced 164 % grade steps on junction diagonals; its ear-clipped decks
+were "too skew to interpolate clean UV"). ADR-0056's in-house join engine
+(`road_offset.h`) survives only for the curb band. A clean-room
+`proto/roadlab/` (Aug 11–17) explored "a road is a parametric field over arc
+length" with lane-level routing, gores and OpenDRIVE round-trips; it shared no
+type with the engine and was removed; `knowledge-retention-plan.md:18` records
+that it bypassed the junction decision. Separately, the lane model already
+exists: `RoadSpec` is an ordered band list with direction per lane, and
+`LaneSchedule` carries freeway aux spans.
+
+Outside the repo, a Python prototype (`~/Claude/roads/roadgen`, 4 scenes, 47
+invariant tests) took the owner's framing — **the lane is the atom**: every lane
+a constant-width ribbon, born by sweeping out of a neighbour and dying by
+converging into one; adjacency derived from proximity; ramps anchored on the
+host's *outer lane* with generated auxiliary/deceleration lanes; junction
+connectors generated lane-end to lane-start; medians and islands read off the
+union as gaps and holes — and measured the result: one welded surface per
+connected pavement, zero cracks and zero non-manifold edges on all scenes,
+zero terrain above any deck, a ring freeway 79 % on piers and on the ground
+over its hills with eight diamond ramps within grade, in 31 s. Two of the
+recorded failures of the union family have specific answers in it:
+
+- *Heights.* Not reconstructed. Every lane knows its spine; a deck vertex takes
+  the height of its **owning** lane's spine by projection (continuous, never
+  nearest-station), and where a lower-ranked lane meets a higher-ranked one at
+  the same level its deck **blends to the nearest partner's blended deck** over
+  20 m, recursively through the rank chain, so every seam agrees exactly. The
+  nearest-spine winner-take-all step that produced the 164 % grades does not
+  exist in it. Grade separation is a per-triangle height-cluster decision
+  (`same_level_dz`), not a 2-D planarisation, so an overpass stays an overpass.
+- *Triangulation.* One constrained Delaunay over every lane outline, densified
+  to 4 m (ear clipping fans 100–500 m slivers down a strip that sag 0.6 m under a
+  crest curve). Each lane's own (station, offset) is available per vertex, so
+  the `RoadMarkings` `mu`/`mv` contract can be met without an SDF.
+
+**Decision.** Build **lanelab** as an *experiment with a gate*, not a replacement:
+
+1. **Placement and quarantine.** `src/engine/procgen/lanelab/` (it is a solver,
+   so engine substrate per ADR-0060), built as its **own static library
+   `lanelab`** that links `engine_core`. `engine_core`, `citysim`, the viewer,
+   the editor and `run_tests` never link it. Its only hosts are
+   `lanelab_tool` (headless: graph JSON → meshes, plan SVG, stats) and
+   `lanelab_tests` (ctest). Nothing under `src/engine/procgen/city/` changes.
+2. **Engine types, not a fork.** It consumes `Vec2`/`Poly2`, the
+   `HeightField` functor, `RenderMesh` through `MeshBuilder::emitTriUV` (the
+   winding rule), and expresses lane layout as **`RoadSpec` bands** (Travel /
+   Median / Shoulder / Sidewalk with per-band direction) so the lane model is
+   the engine's, not a fourth one. Ramp anchors, pockets and connectors are
+   lanelab-only additions carried beside the graph until they earn a home.
+   Terrain conform in the lab is a heightfield pass; the integration path is
+   emitting `TerrainFlatten` regions like `roadNetConformRegions`.
+3. **⚠ Two geometry dependencies as pinned submodules** (ADR-0074 form):
+   **Clipper2** `Clipper2_1.5.4` (Boost licence; robust integer booleans and
+   offsets) and **CDT** `1.4.5` (MPL-2.0, header-only; constrained Delaunay
+   with intersecting-constraint resolution). `road-geometry-plan.md:139` ruled
+   Clipper2 out and `unified-road-plan.md:124` said the fallback decision "comes
+   back to the user"; this is that decision being asked. Both are reached only
+   through `lanelab/geom2d.cpp`; if the answer is no, that one file is rewritten
+   over `road_offset.h` plus a Lawson-flip pass and nothing else moves.
+4. **⚠ A parallel implementation exists while the experiment runs.** AGENTS.md
+   makes this an ADR-level decision; this is the ADR. It is acceptable only
+   with the gate below and the retirement clause.
+
+**Graduation gate** (all headless, on the shared corpus `assets/lanelab/*.json`
+plus the road graph of one shipped level): the street-lattice ratchet — V/T <
+0.7, slivers < 5 %, no fan > 24, zero degenerate triangles; zero cracks and
+non-manifold edges; zero terrain above any deck; every ramp anchored on a host
+lane within 5 cm and within class grade; per-vertex lane `mu`/`mv`; and a
+side-by-side in `editor_app` against `buildRoadNetLattice` on the same graph,
+judged by the owner. Passing it opens a second ADR on integration (a
+`generate.kind`, nav from lane polylines, `TerrainFlatten` export, Lua).
+
+**Alternatives considered.** (a) Extend `junctionPatch` per
+`junction-weld-decision.md` — remains the plan of record; lanelab must beat it
+on the ratchet or be deleted. (b) Hand-roll the booleans and CDT — rejected for
+a lab: robustness is the whole cost, and the in-house union already had to be
+demoted to the curb band. (c) Resurrect `proto/roadlab` — rejected: no shared
+types, and its junction approach is the one the decision doc rejected.
+
+**Consequences / tech debt.** Two submodules; a second mesher behind a link
+boundary; lab conform is grid nudging, not the ADR-0082 diffusion field;
+markings in the lab are geometry strips (the engine paints them); Linux/clang
+first. Deleting lanelab is `git rm` of one directory, one CMake block and two
+submodules.
+
+**Revisit trigger:** the graduation gate result; or an independent decision to
+adopt Clipper2 for `road_offset.h`, which would make dependency point 3 moot.
+
+**Amendment (2026-09-09) — signed off and merged to `main`.** The original text above stands as the
+record of what was decided on 2026-09-04. Three things changed when the lab was driven and landed.
+
+1. **Both ⚠ points are signed off.** Clipper2 (`Clipper2_1.5.4`) and CDT (`1.4.5`) are permanent
+   pinned submodules, fetched by every build; and two road generators may live in the tree at once.
+
+2. **The quarantine clause in point 1 is superseded.** `engine_core` links `lanelab` when
+   `RT_ENABLE_LANELAB` is on, which is now the default, so the viewer, the editor and `level_tests`
+   all know `shape:"lanelab"`. `lanelab_tool` and `lanelab_tests` remain its headless hosts. Nothing
+   under `procgen/city/` changed, which was the part of the quarantine that mattered.
+
+3. **The retirement clause — "lanelab must beat it on the ratchet or be deleted" — is withdrawn.**
+   The lattice is not being judged against lanelab and losing; it keeps every shipped level, and
+   lanelab is opt-in per scene. A generator that no scene selects costs nothing but the link. The
+   owner's framing on merging: keep the old roads, run the two side by side, let new scenes call the
+   new one. ADR-0085 records what that selection looks like and what a generator owes the engine.
+
+What the gate did produce, and what is still owed, is in ADR-0085 — the integration ADR this one said
+graduation would open.
+
 ## ADR-0084 — `engine::bundle`: content- and cell-addressed level bundles; the procedural city as first producer; GLB as export view
 
 **Status:** Accepted (owner asked for it, 2026-09-07) · **Date:** 2026-09-07
@@ -6273,3 +6394,77 @@ bundle grew from 306 MB to 1.04 GB — the packed part meshes, 5.9 M triangles, 
 is cheap to read because it is mmap'd and unpacked per part). What is left of a warm metro load is
 everything after the grow — part chunking, HLOD, colliders, trees — which is the next producer or the
 residency system's job, not this ADR's.
+
+
+## ADR-0085 — Two road generators, selected per entity: `shape:"lanelab"` beside `shape:"road"`
+
+**Status:** Accepted · **Date:** 2026-09-09
+
+**Context.** ADR-0083 built lanelab as an experiment behind a link boundary and said that passing its
+gate "opens a second ADR on integration". The lab was then driven: a freeway ring with diamonds and
+band ramps that end on the first road they meet, an edge grammar deciding what stands at a road's
+edge from what that edge faces, barriers built the way sidewalks are (offset the pavement, walk the
+rings), earthworks that daylight their cuts, analytic road surfaces and materials. It is drivable and
+it looks like a road. What it is not is a replacement: the swept lattice (`buildRoadNetLattice`,
+`road_net.cpp:498`) generates every shipped level and is the mesher of record for all of them.
+
+The owner's decision on merging was to keep both and choose per scene, rather than migrate. That is
+cheaper than it sounds, because the seam already existed: `shape:"road"` and `shape:"lanelab"` sit in
+the same entity dispatch in `level_loader.cpp` and the lanelab arm `continue`s.
+
+**Decision.**
+
+1. **The selector is the entity's `shape`.** A level picks a generator per road entity —
+   `shape:"road"` for the lattice (with its `generate` recipe, ADR-0056), `shape:"lanelab"` for the
+   lane-atomic generator (with a `graph` path or an inline spec). No level-wide mode, no flag: a
+   scene that wants the new roads asks for them by name. Both may appear in one level; see the
+   hazard below.
+
+2. **`RT_ENABLE_LANELAB` is ON by default** and is a build-capability switch, not a policy one: OFF
+   builds an engine that does not know the shape. Clipper2 and CDT are therefore required submodules
+   for every build (ADR-0083's amendment).
+
+3. **What a road generator owes the rest of the engine** — four products, and nothing else is
+   coupled to how the geometry was made:
+
+   | Output | Type | Consumed by |
+   |---|---|---|
+   | Unified road graph | `RoadGraph` in `LevelRoadGraph` (`components.h:565`) | `buildNavGraph` → traffic, pedestrians, signals, street furniture, city map |
+   | The deck | `RoadDeckField` in `RoadDeck` | anything standing on the road |
+   | Terrain carve | `std::vector<TerrainFlatten>` | terrain build, vegetation keep-out |
+   | Blocks | `std::vector<Poly2>` (+ a keep-out `RoadGraph`) | `growLotBuildings` |
+
+   `NavGraph` is the real runtime contract: every `NavLink` field is copied straight off a
+   `RoadEdge`, so a well-formed `RoadGraph` makes the whole runtime work unchanged. lanelab reaches
+   it through `roadTwin()` (`procgen/lanelab/road_twin.h:26`), which re-classes deck runs as street
+   edges so block faces close.
+
+4. **The lab's levels live apart from the game's**, in `assets/lanelab/levels/`, but are held to the
+   same playable gates: `test_levels_playable.cpp` scans that directory too when the hook is on. A
+   lab scene with no collider, or no ground under its spawn, is as broken as any other.
+
+**The hazard, recorded because it already bit once.** `LevelRoadGraph` is written in three places and
+the lattice's write is unguarded while both lanelab writes test "only if none exists". A fallback that
+walked every `RoadEntity` to publish one — intended for lab levels — also fired on a plain
+`shape:"road"` level that had published none, handing `agent_lab` and `small_town` street furniture,
+a city map and eight instance groups they do not have with the hook off. It is now gated on the load
+having actually seen a lanelab entity. **Any code reached only under `RT_ENABLE_LANELAB` must still
+prove it is looking at lanelab content**; the ifdef is not that proof, because the hook is on for
+everyone. The census in `level_tests` is what caught it, by comparing every `[citylots]`,
+`[furniture]` and entity-count line against `main`.
+
+**Alternatives considered.** (a) `generate.kind` on the existing road entity, as ADR-0083 sketched —
+rejected because the two take different inputs (a recipe versus a resolved graph), so one entity
+schema would have to mean two things. (b) Migrate the shipped levels to lanelab — rejected: no
+scene needs it yet, and it would put every level's regression risk on an untested generator.
+(c) Keep lanelab tool-only — rejected: it is drivable, and a generator nobody can select from a scene
+cannot be judged.
+
+**Consequences / tech debt.** Two mesher families to maintain. lanelab still owes: `TerrainFlatten`
+export instead of nudging a height grid (ADR-0082's diffusion field is the target); Lua authoring,
+which the ADR-0042 rule requires of anything the engine generates; lane markings from the UV contract
+rather than geometry strips; and a 2→1 taper for two-lane ramps. Known red at merge:
+`lanelab_hill_junction`, one terrain sample of 14 032 sitting 5.9 cm above a deck.
+
+**Revisit trigger:** a shipped (non-lab) level selecting `shape:"lanelab"` — that is when the two
+generators stop being independent and the lattice's retirement becomes a real question.

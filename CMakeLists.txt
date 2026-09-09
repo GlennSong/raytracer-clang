@@ -367,6 +367,84 @@ if(RT_ENABLE_SCRIPTING)
 endif()
 
 # ============================================================
+# lanelab (ADR-0083) — the lane-atomic road generator: lanes as the atomic paved
+# object, footprints by polygon union, one constrained Delaunay over every lane
+# outline, heights by projection onto the owning spine. Its own static library so
+# the dependency surface stays visible; engine_core links it when the loader hook
+# is on (ADR-0085), which is the default. Its two geometry deps (Clipper2, CDT —
+# pinned submodules) are reached only through lanelab/geom2d.cpp.
+# ============================================================
+option(RT_BUILD_LANELAB "Build the lanelab road generator library, tool and tests" ON)
+if(RT_BUILD_LANELAB)
+    foreach(dep IN ITEMS Clipper2 CDT)
+        if(NOT EXISTS "${CMAKE_SOURCE_DIR}/third_party/${dep}/LICENSE" AND Git_FOUND)
+            message(STATUS "lanelab: fetching third_party/${dep} submodule")
+            execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init -- third_party/${dep}
+                            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        endif()
+    endforeach()
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/Clipper2/CPP/CMakeLists.txt" AND EXISTS "${CMAKE_SOURCE_DIR}/third_party/CDT/CDT/CMakeLists.txt")
+        set(CLIPPER2_UTILS OFF CACHE BOOL "" FORCE)
+        set(CLIPPER2_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(CLIPPER2_TESTS OFF CACHE BOOL "" FORCE)
+        add_subdirectory(third_party/Clipper2/CPP EXCLUDE_FROM_ALL)
+        add_subdirectory(third_party/CDT/CDT EXCLUDE_FROM_ALL)
+        # third-party headers are system headers: the engine's -Wpedantic is for the engine
+        get_target_property(_clipper_inc Clipper2 INTERFACE_INCLUDE_DIRECTORIES)
+        set_target_properties(Clipper2 PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_clipper_inc}")
+        get_target_property(_cdt_inc CDT INTERFACE_INCLUDE_DIRECTORIES)
+        set_target_properties(CDT PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_cdt_inc}")
+
+        add_library(lanelab STATIC
+            src/engine/procgen/lanelab/geom2d.cpp
+            src/engine/procgen/lanelab/road_graph_spec.cpp
+            src/engine/procgen/lanelab/terrain_recipe.cpp
+            src/engine/procgen/lanelab/polyline_ops.cpp
+            src/engine/procgen/lanelab/lane_expand.cpp
+            src/engine/procgen/lanelab/vertical_profile.cpp
+            src/engine/procgen/lanelab/deck_height.cpp
+            src/engine/procgen/lanelab/pavement.cpp
+            src/engine/procgen/lanelab/terrain_conform.cpp
+            src/engine/procgen/lanelab/lanelab.cpp
+            src/engine/procgen/lanelab/deck_mesh.cpp
+            src/engine/procgen/lanelab/lanelab_export.cpp
+            src/engine/procgen/lanelab/level_import.cpp
+            src/engine/procgen/lanelab/road_twin.cpp
+            src/engine/procgen/lanelab/block_audit.cpp
+            src/engine/procgen/lanelab/city_producer.cpp
+            src/engine/procgen/lanelab/lots_producer.cpp
+        )
+        target_include_directories(lanelab PUBLIC src)
+        target_compile_options(lanelab PRIVATE -Wall -Wextra -Wpedantic)
+        target_link_libraries(lanelab PUBLIC engine_core citysim PRIVATE Clipper2 CDT::CDT)
+
+        add_executable(lanelab_tool tools/lanelab_tool.cpp)
+        target_include_directories(lanelab_tool PRIVATE src)
+        target_compile_options(lanelab_tool PRIVATE -Wall -Wextra)
+        target_link_libraries(lanelab_tool PRIVATE lanelab)
+
+        add_executable(lanelab_tests tests/main.cpp tests/test_lanelab.cpp)
+        target_include_directories(lanelab_tests PRIVATE src tests)
+        target_compile_options(lanelab_tests PRIVATE -Wall -Wextra)
+        target_compile_definitions(lanelab_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+        target_link_libraries(lanelab_tests PRIVATE lanelab)
+        add_test(NAME lanelab_tests COMMAND lanelab_tests)
+    else()
+        message(WARNING "lanelab: Clipper2/CDT submodules missing — skipping lanelab targets")
+    endif()
+endif()
+
+# The loader hook (shape:"lanelab", level_loader.cpp): ON by default (ADR-0085) so a lanelab level
+# loads its graph, meshes it and builds the same-triangle colliders in the viewer and the editor,
+# beside shape:"road" rather than instead of it. OFF builds an engine that simply does not know the
+# shape. Links the lab into engine_core (a static-library cycle CMake resolves by repetition).
+option(RT_ENABLE_LANELAB "Load shape:\"lanelab\" entities in the viewer/editor" ON)
+if(RT_ENABLE_LANELAB AND TARGET lanelab)
+    target_link_libraries(engine_core PRIVATE lanelab)
+    target_compile_definitions(engine_core PUBLIC RT_ENABLE_LANELAB=1)
+endif()
+
+# ============================================================
 # rt_bake (ADR-0084): prebuild a level's bundle from the command line — the same bakeLevel() the
 # editor's "Bake level cache" button calls. Producers register from whichever producer libraries
 # are linked in; a build with none prints "no producers are registered in this build".
@@ -374,6 +452,9 @@ endif()
 add_executable(rt_bake tools/rt_bake.cpp)
 target_link_libraries(rt_bake PRIVATE engine_core Threads::Threads)
 target_include_directories(rt_bake PRIVATE src)
+if(RT_ENABLE_LANELAB AND TARGET lanelab)
+    target_link_libraries(rt_bake PRIVATE lanelab)   # registers the city and lots producers
+endif()
 
 # ============================================================
 # Audio (ADR-0069) — miniaudio, a single-header C submodule pinned at a
@@ -1199,6 +1280,9 @@ if(Qt6_FOUND)
     )
     target_compile_options(editor_app PRIVATE -Wall -Wextra -Wpedantic)
     target_link_libraries(editor_app PRIVATE citysim engine_core Qt6::Widgets Threads::Threads)
+    if(RT_ENABLE_LANELAB AND TARGET lanelab)
+        target_link_libraries(editor_app PRIVATE lanelab)   # the city producer registers for "Bake level cache" (ADR-0084)
+    endif()
 
     if(RT_ENABLE_PHYSICS)
         target_sources(editor_app PRIVATE ${RT_PHYSICS_HOST_SOURCES})

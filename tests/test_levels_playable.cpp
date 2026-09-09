@@ -64,8 +64,16 @@ std::string levelsDir() {
 std::vector<std::string> shippedLevels() {
     std::vector<std::string> out;
     std::error_code ec;
-    for (const auto& entry : std::filesystem::directory_iterator(levelsDir(), ec)) {
-        const std::string name = entry.path().filename().string();
+    // Every directory of shipped levels, as paths relative to levelsDir(). The lab levels live
+    // apart from the game's (ADR-0085) but are held to the same gates when the loader knows the
+    // shape — a lanelab level with no collider or no ground under its spawn is as broken as any.
+    std::vector<std::string> dirs = {""};
+#ifdef RT_ENABLE_LANELAB
+    dirs.push_back("../lanelab/levels/");
+#endif
+    for (const std::string& dir : dirs)
+    for (const auto& entry : std::filesystem::directory_iterator(levelsDir() + "/" + dir, ec)) {
+        const std::string name = dir + entry.path().filename().string();
         if (name.size() < 5 || name.compare(name.size() - 5, 5, ".json") != 0) continue;
         if (name.find(".cameras.json") != std::string::npos) continue;
         // RT_LEVELS=a,b: only levels whose file name contains one of the substrings (timing one level).
