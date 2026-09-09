@@ -260,6 +260,11 @@ struct LotPlanDebug {
 // least `edge width/2 + roadClearance` from every road centreline — pass the
 // sidewalk width (+ margin) so towers on wide arterials stay behind the curb.
 struct RoadGraph;   // road_network.h (kept light — see edgeBlocks below)
+// A building's graded pad: its plan dilated by `apron` (the foundation ring and entrance steps sit just
+// outside the plan) as a flat TerrainFlatten at groundY with the given feather. One derivation for the
+// loader and every audit — a pad that is built one way and checked another is not checked.
+TerrainFlatten lotPadFlatten(const LotBuilding& lb, double apron = 2.2, double falloff = 5.0);
+
 std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                           const LotParams& params,
                                           LotPlanDebug* debug = nullptr,

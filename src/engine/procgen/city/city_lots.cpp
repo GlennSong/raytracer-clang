@@ -926,6 +926,13 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
 }
 }  // namespace
 
+TerrainFlatten lotPadFlatten(const LotBuilding& lb, double apron, double falloff) {
+    Vec2 c2(0, 0); for (const Vec2& v : lb.plan) c2 = c2 + v; if (!lb.plan.empty()) c2 = c2 * (1.0 / static_cast<double>(lb.plan.size()));
+    std::vector<Vec3> poly; poly.reserve(lb.plan.size());
+    for (const Vec2& v : lb.plan) { const Vec2 d = v - c2; const double l = d.length(); const Vec2 g = l > 1e-6 ? c2 + d * ((l + apron) / l) : v; poly.push_back(Vec3(g.x, 0, g.y)); }
+    return makeFlattenPad(std::move(poly), lb.groundY, falloff);
+}
+
 std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                           const LotParams& pIn, LotPlanDebug* debug,
                                           std::vector<RenderMesh>* outParts,

@@ -32,6 +32,7 @@ int failures = 0;
 // City Planner bridge + panel suite (test_city_planner_qt.cpp) — runs in the
 // same offscreen QApplication; returns its failure count.
 int runCityPlannerQtTests();
+int runBakeDialogQtTests();   // test_bake_dialog_qt.cpp
 
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -176,5 +177,6 @@ int main(int argc, char** argv) {
                 failures);
 
     failures += runCityPlannerQtTests();   // City Planner bridge + panel (P7.3)
+    failures += runBakeDialogQtTests();   // City Planner bridge + panel (P7.3)
     return failures == 0 ? 0 : 1;
 }

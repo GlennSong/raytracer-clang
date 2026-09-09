@@ -6169,3 +6169,107 @@ backend and mark it UNVERIFIED so a device pass closes it.
 *Add a new ADR when a decision is hard to reverse, affects multiple modules, or
 trades off something a future maintainer would question. Keep the register
 current as interim seams are paid down.*
+
+
+## ADR-0084 — `engine::bundle`: content- and cell-addressed level bundles; the procedural city as first producer; GLB as export view
+
+**Status:** Accepted (owner asked for it, 2026-09-07) · **Date:** 2026-09-07
+
+> **Landed ahead of its producers.** The facility (`engine::bundle`, `rt_bake`, the editor's
+> bake button, the GLB view) is on `main`; the `city` and `lots` producers this ADR describes live in
+> the lanelab library and arrive with ADR-0083. Until then `rt_bake` reports that no producers are
+> registered, which is the correct behaviour for a build that links none.
+
+**Context.** A lanelab level rebuilt its procedural city on every start: ~36 s of lanelab (after the
+parallel mesher) plus 30–40 s of lots and buildings, all recomputing a deterministic result. ADR-0022
+recorded "no baking pipeline yet" and named the bake-to-static-asset tier as deferred work;
+`docs/metropolis-scale-plan.md` §4/§7 and `docs/city-render-perf.md` R4 asked for a content-hashed cache
+at `cache/…/<hash>`, per-cell, with a progress bar, and for the cache to become the streaming format. The
+owner's brief: a command-line prebuild writing to a folder of his choice, fast loading, the same build behind
+an editor button with a progress bar and console output, Blender-loadable output — and the facility must be
+**general** (globs of data loaded at start, independent of lanelab, which is temporary, and of the city, its
+first customer), growing into the level streaming loader.
+
+**Decision.**
+1. **One file per bundle** (`src/engine/bundle/bundle.{h,cpp}`): `level.bundle` = a 64-byte header (magic
+   `RTBN`, format major.minor, endianness marker, `sizeof(Real)`), 64-byte-aligned binary SECTIONS appended
+   streaming, then the table of contents as JSON. `manifest.json` beside it is the same TOC, written **last**
+   as the commit marker (temp dir + rename). A reader memory-maps the file and hands out views, so a
+   whole-level load reads every section and a streaming loader touches only the cells it needs — same file,
+   same reader. Sections are named by convention, `<producer>/<global>` and
+   `<producer>/cell/<cx>_<cz>/<name>`; the bundle knows nothing about their contents.
+2. **Codecs next to the types** (`bundle/codecs.{h,cpp}`), each behind its own magic + version:
+   `PackedMesh` (float32 pos/nrm/tan/uv, u32 indices, colour only when it varies across the mesh — one lanelab
+   mesh, `concrete`, does), height grid (doubles), `RoadGraph`/`RoadEntity` (binary: the JSON writer drops
+   `klass`, `baked`, `oneWay`, `elevAbsolute`), rings. `packMesh ∘ unpackMesh` is a fixed point; **the cold path
+   packs and unpacks too** (`level_loader.cpp` instantiates only from a bundle), so a level built now and one
+   read back are the same geometry to the byte. Metro roads: 655 MB as `Vertex` doubles → ~320 MB packed.
+3. **Producers and keys** (`bundle/bake.{h,cpp}`): a producer states an identity — FNV-1a over the BYTES of
+   the inputs it reads plus a developer-bumped code tag — and writes sections under its name. `bakeLevel()`
+   runs every producer that applies, **copying an unchanged producer's sections forward** from any bundle
+   whose manifest carries the same key; the directory is named by the combined key. `obtainForLevel()` is
+   the loader's entry: hit, or bake now. Knobs: `RT_NOCACHE=1` (bake in memory, never touch disk),
+   `RT_BUNDLE_WRITE=0`, `RT_BUNDLE_REQUIRE=1`, `RT_BUNDLE_REQUIRE_ENGINE=1`. Root: `setBundleRoot()` >
+   `$RT_BUNDLE_DIR` > `cache/levels`.
+4. **Compatibility in four layers**, all recorded in the manifest: container format (hard: major,
+   endianness, `Real` width), section codec versions (a foreign section misses only its producer), producer
+   content keys + tags (automatic rebuild of that producer), and the engine identity — a generated
+   `build_info.h` from `git describe --dirty` at configure, plus build type, compiler, platform, timestamp —
+   logged at startup, on `info`, and enforced only on request.
+5. **The city producer** (`procgen/lanelab/city_producer.{h,cpp}`, in the lanelab library, registered under
+   `RT_ENABLE_LANELAB`): per lanelab entity, the lab's build → material meshes **split by render cell**
+   (`MeshBuilder::chunkByCell`, moved from the loader so a bundle cell IS a render cell), the conformed ground,
+   the class-faithful twin (nav graph, freeway right-of-way), the un-inset pavement holes (the block inset is
+   the LEVEL's sidewalk, applied at load), a report. Key = graph bytes + terrain grid bytes + render cell +
+   `sizeof(Real)` + format + `kLanelabBuildTag`. Thread count is not in the key: the parallel mesher is
+   byte-identical by construction. The loader instantiates one Renderable + collider per (cell, material).
+6. **Progress** (`BuildOptions{progress, threads}` on `lanelab::build`; the cover pass counts triangles and
+   chunk 0 reports on the calling thread; cancel throws `BuildCancelled`) drives `rt_bake`'s line and the
+   editor's status-bar bar. **`rt_bake`** (`tools/rt_bake.cpp`) and the editor's **"Bake level cache"** button
+   (`editor_app/bake_dialog.*`, a worker thread polled from the panel timer, Console raised, reload on
+   completion) call the same `bakeLevel()`.
+7. **GLB is an export view** (`engine/glb_export.*` — moved from lanelab and extended with TANGENT and
+   COLOR_0 — and `bundle/bundle_glb.*`): per material or one file per cell from section names alone, with
+   the manifest, road JSON and holes in scene extras. Blender: File → Import → glTF 2.0.
+8. **The lots producer (milestone B, 2026-09-07)** (`procgen/lanelab/lots_producer.{h,cpp}`, name `lots`): the
+   lot pass — parcelling, grammar buildings, pads, terraces, the LOD1 twin — as the second producer, written
+   under `lots/` through `procgen/city/lot_cache.*` (every `BuildingParams` field, by hand; a new field is a
+   codec change and a `kLotsFormatVersion` bump). **One derivation:** `engine/lot_grow_setup.*` lifts the
+   loader's parameter assembly (citysim knobs, hubs, ground, the spawn's enterable building, the style and
+   archetype books) into `lotGrowSetupForLevel`, and both the loader's in-place grow and the producer call it
+   with the same arguments. **Producers read each other through the bundle:** `BundleWriter::readBack(name)`
+   returns a section written earlier in the bundle under construction — built a moment ago or copied forward —
+   so `lots` reads the last lanelab entity's `city/e<n>/{meta,ground,blocks/holes}` with no side channel and
+   no dependency on whether `city` was rebuilt this run (producers run in name order; `city` < `lots`). Key =
+   the city key + the `citysim` block + the authored spawn + the books' bytes + `sizeof(Real)` + scripting
+   on/off + format + `kLotsBuildTag`. Applies to lab levels only (a lanelab entity, `buildLots` or `planOnly`,
+   no `terrain` block, no shape:"road" entity): a terrain level grows its lots in the terrain pre-pass with
+   samplers the bake cannot reproduce. The loader registers both producers before its first obtain (the
+   bundle directory is named by every producer that applies), reads the lots straight out of the city's
+   bundle when its manifest carries the current lots key (one obtain per load, also under `RT_NOCACHE`),
+   obtains `lots` otherwise, and grows in place only when neither yields a readable result. **Parts are
+   stored per render cell** (`lots/cell/<cx>_<cz>/parts/<PartId>`, `.../flat/<PartId>`; lots format 2): a
+   bundle cell is a render cell, so the split the loader used to do at load (1.6 s of per-triangle map
+   lookups on metro) happens once in the bake, and the loader unpacks one cell's part at a time into its
+   Renderable — no whole-part materialisation (metro's parts are 1.7 GB as doubles).
+
+**Alternatives.** GLB as the container (can carry it all via TANGENT/COLOR_0/extras/bufferViews, but
+tinygltf parses and copies the whole buffer per load, float32 only, 4 GB per file, no mmap or partial read —
+the properties a streaming loader needs); P4.2(a) graph + lots as data only (the cost is geometry, not the
+graph); doubles on disk (655 MB); compression (no library, ADR-0074 forbids new deps); one file per product
+(no partial reads; the TOC gives `ls` back through `rt_bake --inspect`).
+
+**Consequences.** Tag discipline: a change to a producer's output bumps its tag, or stale bundles read as
+current. `cache/levels` grows by ~320 MB per metro city section per graph/tag change (1 GB with the lots);
+`rt_bake --prune [--yes]` removes every bundle that is not the newest for its level path. Positions are quantised to float32 (≤ 0.5 mm at 4 km). Roads become ~8 × cells
+Renderables and Jolt bodies (metro ~1000) instead of 8 — the granularity the building chunks already use.
+The document/recipe entity is untouched: bundles replace only runtime companions (AGENTS.md).
+
+**Revisit trigger.** The residency system (metropolis plan §1/§7) consuming cells from `Bundle` directly.
+Milestone B landed 2026-09-07: a warm metro level opens in 1.2 s end to end (`level_tests` per-level timing;
+the gate was 15 s), ring in 0.4 s; metro's 1433 cell parts instantiate in 0.58 s where the grow took 4.8 s
+and the load-time chunking another 1.6 s (the
+bundle grew from 306 MB to 1.04 GB — the packed part meshes, 5.9 M triangles, are the bulk; the lots section
+is cheap to read because it is mmap'd and unpacked per part). What is left of a warm metro load is
+everything after the grow — part chunking, HLOD, colliders, trees — which is the next producer or the
+residency system's job, not this ADR's.

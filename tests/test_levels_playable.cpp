@@ -68,6 +68,12 @@ std::vector<std::string> shippedLevels() {
         const std::string name = entry.path().filename().string();
         if (name.size() < 5 || name.compare(name.size() - 5, 5, ".json") != 0) continue;
         if (name.find(".cameras.json") != std::string::npos) continue;
+        // RT_LEVELS=a,b: only levels whose file name contains one of the substrings (timing one level).
+        if (const char* only = std::getenv("RT_LEVELS"); only && *only) {
+            bool keep = false; std::string list = only; size_t start = 0;
+            while (start <= list.size()) { const size_t comma = list.find(',', start); const std::string sub = list.substr(start, comma == std::string::npos ? std::string::npos : comma - start); if (!sub.empty() && name.find(sub) != std::string::npos) keep = true; if (comma == std::string::npos) break; start = comma + 1; }
+            if (!keep) continue;
+        }
         out.push_back(name);
     }
     std::sort(out.begin(), out.end());
@@ -429,6 +435,7 @@ const std::vector<LevelFacts>& allLevels() {
             v.push_back(inspect(name));
             total += v.back().loadSeconds;
         }
+        for (const LevelFacts& f : v) std::printf("    [levels] %s: %.1fs\n", f.name.c_str(), f.loadSeconds);
         std::printf("    [levels] loaded %zu levels in %.1fs\n", v.size(), total);
         return v;
     }();

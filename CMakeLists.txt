@@ -61,6 +61,13 @@ add_library(engine_core STATIC
     src/engine/states/debug_overlay_state.cpp
     src/engine/states/editor_state.cpp
     src/engine/mesh_builder.cpp
+    src/engine/bundle/bundle.cpp
+    src/engine/bundle/bake.cpp
+    src/engine/bundle/codecs.cpp
+    src/engine/glb_export.cpp
+    src/engine/bundle/bundle_glb.cpp
+    src/engine/procgen/city/lot_cache.cpp
+    src/engine/lot_grow_setup.cpp
     src/engine/editable_curve.cpp
     src/engine/curve_edit.cpp
     src/engine/animation_path.cpp
@@ -177,6 +184,21 @@ add_library(engine_core STATIC
     # the core is what lets a plain engine app carry none of the city's code.
 )
 target_include_directories(engine_core SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party)
+# Build identity (ADR-0084): `git describe` at configure time into a generated header, so logs, the
+# `info` control verb and bundle manifests can say which engine built what. Content keys, not this
+# string, decide whether a bundle is current — a stale describe after commits is only cosmetic.
+execute_process(COMMAND git describe --always --dirty --tags
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                OUTPUT_VARIABLE RT_GIT_DESCRIBE OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET RESULT_VARIABLE RT_GIT_DESCRIBE_RC)
+if(NOT RT_GIT_DESCRIBE_RC EQUAL 0 OR RT_GIT_DESCRIBE STREQUAL "")
+    set(RT_GIT_DESCRIBE "unknown")
+endif()
+configure_file(${CMAKE_SOURCE_DIR}/src/engine/build_info.h.in ${CMAKE_BINARY_DIR}/generated/engine/build_info.h @ONLY)
+# The engine's own headers are reached from the src root (e.g. `engine/bundle/bundle.h`) as well as
+# relative to each file. engine_core used to inherit this only by linking a library that declared it.
+target_include_directories(engine_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(engine_core PUBLIC ${CMAKE_BINARY_DIR}/generated)
 target_compile_options(engine_core PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(engine_core PUBLIC Threads::Threads)
 
@@ -345,6 +367,15 @@ if(RT_ENABLE_SCRIPTING)
 endif()
 
 # ============================================================
+# rt_bake (ADR-0084): prebuild a level's bundle from the command line — the same bakeLevel() the
+# editor's "Bake level cache" button calls. Producers register from whichever producer libraries
+# are linked in; a build with none prints "no producers are registered in this build".
+# ============================================================
+add_executable(rt_bake tools/rt_bake.cpp)
+target_link_libraries(rt_bake PRIVATE engine_core Threads::Threads)
+target_include_directories(rt_bake PRIVATE src)
+
+# ============================================================
 # Audio (ADR-0069) — miniaudio, a single-header C submodule pinned at a
 # release tag, sealed behind AudioEngine. Cross-platform and device-optional
 # (null-device fallback, or Manual mode with no device at all), so it builds
@@ -462,6 +493,8 @@ target_link_libraries(raytracer PRIVATE engine_core)
 # ============================================================
 add_executable(run_tests
     tests/main.cpp
+    tests/test_bundle.cpp
+    tests/test_lot_cache.cpp
     tests/test_math.cpp
     tests/test_slot_map.cpp
     tests/test_sparse_set.cpp
@@ -606,6 +639,7 @@ add_executable(run_tests
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(run_tests PRIVATE citysim engine_core)
+target_include_directories(run_tests PRIVATE src tests)   # engine headers include each other from the src root
 # The GPU erosion test chdirs here to reach shaders/metal/erosion.metal (the
 # kernels are compiled from disk, CWD-relative, like the renderer's shaders).
 target_compile_definitions(run_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
@@ -1160,6 +1194,7 @@ if(Qt6_FOUND)
         src/editor_app/editor_main.cpp
         src/editor_app/property_inspector.cpp
         src/editor_app/city_planner_panel.cpp
+        src/editor_app/bake_dialog.cpp
         src/game/arena_state.cpp
     )
     target_compile_options(editor_app PRIVATE -Wall -Wextra -Wpedantic)
@@ -1237,8 +1272,10 @@ if(Qt6_FOUND)
     add_executable(editor_qt_tests
         tests/test_property_inspector_qt.cpp
         tests/test_city_planner_qt.cpp
+        tests/test_bake_dialog_qt.cpp
         src/editor_app/property_inspector.cpp
         src/editor_app/city_planner_panel.cpp
+        src/editor_app/bake_dialog.cpp
         src/renderer/null_renderer.cpp   # satisfies Renderer::create; never renders
     )
     target_compile_options(editor_qt_tests PRIVATE -Wall -Wextra)

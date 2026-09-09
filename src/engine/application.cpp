@@ -7,6 +7,8 @@
 #include "states/debug_overlay_state.h"
 #include "systems/debug_overlay_system.h"   // static settings<->renderer mapping (control `render`)
 #include "../log.h"
+#include "engine/bundle/bundle.h"
+#include "engine/bundle/bake.h"
 #include "../profile.h"
 #include <algorithm>
 #include <cmath>
@@ -57,6 +59,10 @@ bool Application::initialize(const Config& config,
                              std::unique_ptr<Window> appWindow) {
     settingsFile = config.settingsFile;
     settingsStore.load(settingsFile);
+    {   // who we are (ADR-0084 build identity): logs, `info`, bundle manifests
+        const engine::bundle::EngineIdentity id = engine::bundle::engineIdentity();
+        LOG_INFO << "engine " << id.version << " (" << id.buildType << ", " << id.compiler << ", " << id.platform << ", Real " << id.realBytes << " bytes)";
+    }
 
     int winWidth = static_cast<int>(settingsStore.getDouble("windowWidth", config.width));
     int winHeight = static_cast<int>(settingsStore.getDouble("windowHeight", config.height));
@@ -519,12 +525,13 @@ std::string Application::handleControlCommand(const std::string& line) {
     if (cmd.name == "info") {
         char buf[512];
         std::snprintf(buf, sizeof(buf),
-                      "ok level=%s frame=%llu paused=%d overlay=%d hud=%d ui=%d",
+                      "ok level=%s frame=%llu paused=%d overlay=%d hud=%d ui=%d engine=%s",
                       settingsStore.getString("levelPath", "?").c_str(),
                       static_cast<unsigned long long>(frameCounter),
                       clock.paused() ? 1 : 0, debugOverlayActive ? 1 : 0,
                       rendererPtr->showHud ? 1 : 0,
-                      rendererPtr->uiHidden ? 1 : 0);
+                      rendererPtr->uiHidden ? 1 : 0,
+                      engine::bundle::engineIdentity().version.c_str());
         return buf;
     }
 
@@ -998,10 +1005,14 @@ std::string Application::handleControlCommand(const std::string& line) {
         return "ok " + settingsStore.getString("ground.result", "none");
     }
 
+    if (cmd.name == "bundle?") {   // the level bundle (ADR-0084): hit/miss and how long it took
+        return "ok " + engine::bundle::lastBundleStatus() + " root=" + engine::bundle::bundleRoot();
+    }
+
     return "err unknown command: " + cmd.name +
            " (ping|info|camera|camera?|shot|overlay|sim|reload|set|get|"
            "daynight|daynight?|citymap|teleport|teleport?|where?|person|clip|clip?|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
-           "possess|drive_to|walk_to|possess_stop|release|possess?|ground?)";
+           "possess|drive_to|walk_to|possess_stop|release|possess?|ground?|bundle?)";
 }
 
 }  // namespace engine

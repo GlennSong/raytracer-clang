@@ -24,6 +24,13 @@
 #include "../renderer/gamepad_gc.h"
 #include "../log.h"
 #include "city_planner_panel.h"
+#include "bake_dialog.h"
+#include "../engine/bundle/bake.h"
+#include "../engine/bundle/bundle_glb.h"
+#ifdef RT_ENABLE_LANELAB
+#include "../engine/procgen/lanelab/city_producer.h"
+#include "../engine/procgen/lanelab/lots_producer.h"
+#endif
 #include "property_inspector.h"
 
 // Vulkan viewport surface seam (ADR-0057). Present only on non-Apple targets
@@ -68,6 +75,7 @@
 #include <QHeaderView>
 #include <QMouseEvent>
 #include <QPlainTextEdit>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QStatusBar>
@@ -83,7 +91,9 @@
 #include <algorithm>
 #include <cstring>
 #include <functional>
+#include <atomic>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -276,13 +286,32 @@ struct LogConsole {
 };
 
 // Main window with a save prompt on close when the document is dirty.
+// A "Bake level cache" job (ADR-0084): bakeLevel() on its own thread, progress read under the mutex from the
+// 150 ms panel timer into the status bar. The worker touches only the request, this struct, the filesystem
+// and LOG_* (the log sink is thread-safe); World, assets, renderer and settings stay on the Qt thread.
+struct BakeJob {
+    std::mutex m;
+    double fraction = 0; std::string producer, stage, message;
+    bool running = false, done = false, ok = false, upToDate = false, glbOk = true; std::string error, dir; double seconds = 0;
+    std::atomic<bool> cancel{false};
+    std::thread thread;
+    ~BakeJob() { cancel = true; if (thread.joinable()) thread.join(); }
+};
+
 class EditorWindow : public QMainWindow {
 public:
     std::function<bool()> isDirty;    // wired once the bridge exists
     std::function<void()> saveNow;
+    std::function<bool()> bakeRunning;   // a level cache bake is in flight
+    std::function<void()> cancelBake;
 
 protected:
     void closeEvent(QCloseEvent* event) override {
+        if (bakeRunning && bakeRunning()) {
+            const auto choice = QMessageBox::question(this, "Bake in progress", "A level cache bake is running. Cancel it and quit?");
+            if (choice != QMessageBox::Yes) { event->ignore(); return; }
+            if (cancelBake) cancelBake();
+        }
         if (!isDirty || !isDirty()) {
             event->accept();
             return;
@@ -695,6 +724,7 @@ int main(int argc, char** argv) {
 
     // Engine log console, tabbed with the asset browser.
     LogConsole console;
+    BakeJob bakeJob;
     QDockWidget* consoleDock = console.buildDock(&mainWindow);
     mainWindow.addDockWidget(Qt::BottomDockWidgetArea, consoleDock);
     mainWindow.tabifyDockWidget(assetsDock, consoleDock);
@@ -761,6 +791,11 @@ int main(int argc, char** argv) {
     mainWindow.statusBar()->showMessage(
         "Click selects | 1/2/3 move/rotate/scale | Shift-drag snaps | "
         "F frames selection");
+    // Level cache bake progress (ADR-0084), hidden when idle; left of the mode label.
+    auto* bakeStage = new QLabel; bakeStage->hide();
+    auto* bakeBar = new QProgressBar; bakeBar->setRange(0, 1000); bakeBar->setFormat("bake %p%"); bakeBar->setFixedWidth(180); bakeBar->hide();
+    mainWindow.statusBar()->addPermanentWidget(bakeStage);
+    mainWindow.statusBar()->addPermanentWidget(bakeBar);
     // Mode indicator, pinned right: EDITING / PLAYING / PAUSED.
     auto* modeLabel = new QLabel("EDITING");
     mainWindow.statusBar()->addPermanentWidget(modeLabel);
@@ -1140,6 +1175,47 @@ int main(int argc, char** argv) {
     bakeAction->setToolTip("Overwrite the level with the current play state");
     asTextButton(bakeAction);
 
+    // "Bake level cache" (ADR-0084): the same bakeLevel() rt_bake runs, on a worker thread, with the
+    // Console raised and a progress bar in the status bar; the level reloads from the bundle when done.
+    auto* bakeCacheAction = toolbar->addAction("Bake level cache", [&]() {
+        if (!bridge.editable() || bakeJob.running) return;
+        BakeOptions defaults; defaults.outRoot = QString::fromStdString(app.settings().getString("bundleRoot", ""));
+        defaults.glb = app.settings().getBool("bakeGlb", false); defaults.splitCells = app.settings().getBool("bakeSplitCells", false);
+        const std::optional<BakeOptions> chosen = showBakeDialog(&mainWindow, defaults, QFileInfo(QString::fromStdString(levelPath)).fileName());
+        if (!chosen) return;
+        app.settings().setString("bundleRoot", chosen->outRoot.toStdString()); app.settings().setBool("bakeGlb", chosen->glb); app.settings().setBool("bakeSplitCells", chosen->splitCells);
+        app.settings().save(app.settingsFilePath());
+        engine::bundle::setBundleRoot(chosen->outRoot.toStdString());
+        engine::bundle::BakeRequest req; req.levelPath = levelPath; req.outRoot = chosen->outRoot.toStdString(); req.force = chosen->force;
+        const bool wantGlb = chosen->glb, wantSplit = chosen->splitCells;
+        { std::lock_guard<std::mutex> l(bakeJob.m); bakeJob.running = true; bakeJob.done = false; bakeJob.ok = false; bakeJob.fraction = 0; bakeJob.producer.clear(); bakeJob.stage = "starting"; bakeJob.message.clear(); bakeJob.error.clear(); bakeJob.dir.clear(); }
+        bakeJob.cancel = false;
+        if (bakeJob.thread.joinable()) bakeJob.thread.join();
+        consoleDock->raise(); bakeBar->setValue(0); bakeBar->show(); bakeStage->setText("bake: starting"); bakeStage->show();
+        LOG_INFO << "[bake] " << levelPath << " -> " << (req.outRoot.empty() ? engine::bundle::bundleRoot() : req.outRoot);
+        BakeJob* job = &bakeJob;
+        bakeJob.thread = std::thread([req, wantGlb, wantSplit, job]() {
+            engine::bundle::ProgressFn fn = [job](const engine::bundle::Progress& p) {
+                std::lock_guard<std::mutex> l(job->m); job->fraction = p.fraction; job->producer = p.producer; job->stage = p.stage; job->message = p.message;
+                return !job->cancel.load();
+            };
+            engine::bundle::BakeReport rep = engine::bundle::bakeLevel(req, &fn);
+            std::string err; bool glbOk = true;
+            if (rep.ok && (wantGlb || wantSplit) && !job->cancel.load()) {
+                std::unique_ptr<engine::bundle::Bundle> b = engine::bundle::Bundle::open(rep.dir + "/" + engine::bundle::kBundleFile, &err);
+                if (b) {
+                    auto glbProgress = [job](const char* what) { return engine::bundle::GlbProgressFn([job, what](double f) { std::lock_guard<std::mutex> l(job->m); job->producer = "glb"; job->stage = what; job->message.clear(); job->fraction = f; return !job->cancel.load(); }); };
+                    if (wantGlb) { const engine::bundle::GlbProgressFn p = glbProgress("city.glb"); if (!engine::bundle::writeBundleGlb(*b, rep.dir + "/city.glb", &err, &p)) { glbOk = false; LOG_WARN << "[bake] glb: " << err; } else LOG_INFO << "[bake] wrote " << rep.dir << "/city.glb"; }
+                    if (wantSplit && !job->cancel.load()) { const engine::bundle::GlbProgressFn p = glbProgress("cells"); std::vector<std::string> files; if (!engine::bundle::writeBundleGlbCells(*b, rep.dir + "/cells", &err, &files, &p)) { glbOk = false; LOG_WARN << "[bake] glb cells: " << err; } else LOG_INFO << "[bake] wrote " << files.size() << " cell GLBs under " << rep.dir << "/cells"; }
+                } else { glbOk = false; LOG_WARN << "[bake] " << err; }
+            }
+            std::lock_guard<std::mutex> l(job->m);
+            job->ok = rep.ok; job->upToDate = rep.upToDate; job->glbOk = glbOk; job->error = rep.error; job->dir = rep.dir; job->seconds = rep.seconds; job->done = true; job->running = false;
+        });
+    });
+    bakeCacheAction->setToolTip("Prebuild this level's city into a bundle (cache/levels) the engine loads instead of rebuilding");
+    asTextButton(bakeCacheAction);
+
     // Open a level from the asset browser.
     QObject::connect(assetsView, &QTreeView::doubleClicked, [&](const QModelIndex& idx) {
         QString path = assetsModel->filePath(idx);
@@ -1155,6 +1231,14 @@ int main(int argc, char** argv) {
     // The same control socket the standalone viewer opens (RT_CONTROL=0 turns
     // it off): an already-open editor is attachable for scripted captures and
     // diagnosis — `clip`/`clip?` proved the hosted overlay's clipboard here.
+    // Level bundles (ADR-0084): the remembered output root, the city producer, and the quit hooks.
+    if (const std::string root = app.settings().getString("bundleRoot", ""); !root.empty()) engine::bundle::setBundleRoot(root);
+#ifdef RT_ENABLE_LANELAB
+    engine::lanelab::registerCityProducer();
+    engine::lanelab::registerLotsProducer();
+#endif
+    mainWindow.bakeRunning = [&]() { std::lock_guard<std::mutex> l(bakeJob.m); return bakeJob.running; };
+    mainWindow.cancelBake = [&]() { bakeJob.cancel = true; if (bakeJob.thread.joinable()) bakeJob.thread.join(); };
     app.enableControlChannel([&makeEditor]() { return makeEditor(); });
 #ifdef RT_ENABLE_IMGUI
     // The hosted viewport's ImGui has no GLFW backend; without this its
@@ -1191,6 +1275,7 @@ int main(int argc, char** argv) {
         pauseAction->setChecked(!editing && app.simClock().paused());
         stepAction->setEnabled(!editing && app.simClock().paused());
         bakeAction->setEnabled(!editing && bridge.attached());
+        bakeCacheAction->setEnabled(editing && !bakeJob.running);
         restartAction->setEnabled(!editing && bridge.attached());
         undoAction->setEnabled(bridge.canUndo());
         redoAction->setEnabled(bridge.canRedo());
@@ -1245,14 +1330,47 @@ int main(int argc, char** argv) {
     });
     frameTimer.start(16);
 
+    auto pollBakeJob = [&]() {
+        bool done = false, ok = false, running = false, upToDate = false, glbOk = true; double fraction = 0, seconds = 0; std::string producer, stage, message, error, dir;
+        { std::lock_guard<std::mutex> l(bakeJob.m); done = bakeJob.done; ok = bakeJob.ok; running = bakeJob.running; upToDate = bakeJob.upToDate; glbOk = bakeJob.glbOk; fraction = bakeJob.fraction; seconds = bakeJob.seconds; producer = bakeJob.producer; stage = bakeJob.stage; message = bakeJob.message; error = bakeJob.error; dir = bakeJob.dir; }
+        if (running) {
+            if (fraction <= 0.0) { if (bakeBar->maximum() != 0) bakeBar->setRange(0, 0); }   // no fraction yet: a busy marquee, not a stuck 0 %
+            else { if (bakeBar->maximum() != 1000) bakeBar->setRange(0, 1000); bakeBar->setValue(static_cast<int>(fraction * 1000.0)); }
+            bakeStage->setText(QString::fromStdString("bake: " + (producer.empty() ? stage : producer + "/" + stage) + (message.empty() ? "" : " - " + message)));
+            return;
+        }
+        if (!done) return;
+        { std::lock_guard<std::mutex> l(bakeJob.m); bakeJob.done = false; }
+        if (bakeJob.thread.joinable()) bakeJob.thread.join();
+        bakeBar->hide(); bakeStage->hide(); bakeBar->setRange(0, 1000);
+        if (!ok) { mainWindow.statusBar()->showMessage(QString::fromStdString("Level cache bake failed: " + error), 8000); LOG_ERROR << "[bake] " << error; return; }
+        const std::string glbNote = glbOk ? "" : " (GLB export failed, see console)";
+        if (upToDate) {   // nothing was rebuilt: the level already loaded from this bundle, so no reload
+            mainWindow.statusBar()->showMessage(QString::fromStdString("Level cache is up to date: " + dir + glbNote), 8000); LOG_INFO << "[bake] up to date: " << dir;
+            return;
+        }
+        char msg[512]; std::snprintf(msg, sizeof(msg), "Level cache baked in %.1f s -> %s%s", seconds, dir.c_str(), glbNote.c_str());
+        mainWindow.statusBar()->showMessage(msg, 8000); LOG_INFO << "[bake] " << msg;
+        if (!bridge.editable()) return;
+        if (mainWindow.isDirty && mainWindow.isDirty()) {   // the reload comes from the file on disk: never over unsaved work
+            const auto choice = QMessageBox::warning(&mainWindow, "Reload from the new bundle?", "The level has unsaved changes. Reloading takes the level from disk.",
+                                                     QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
+            if (choice == QMessageBox::Cancel) { mainWindow.statusBar()->showMessage("Bundle written; reload skipped (unsaved changes)", 8000); return; }
+            if (choice == QMessageBox::Save && mainWindow.saveNow) mainWindow.saveNow();
+        }
+        app.requestState(makeEditor()); viewport->setFocus();
+    };
     QTimer panelTimer;
     QObject::connect(&panelTimer, &QTimer::timeout, [&]() {
         panels.refresh();
         refreshChrome();
+        pollBakeJob();
     });
     panelTimer.start(150);
 
     int result = qtApp.exec();
+    bakeJob.cancel = true;
+    if (bakeJob.thread.joinable()) bakeJob.thread.join();
     app.end();
     return result;
 }

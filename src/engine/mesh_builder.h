@@ -60,6 +60,13 @@ struct MeshBuilder {
     // face cross product), e.g. after displacing vertices (noise terrain).
     static void recomputeNormals(RenderMesh& mesh);
 
+    // Split a WORLD-SPACE mesh into grid-cell chunks by triangle centroid (cell key = floor(x / cell),
+    // floor(z / cell)), in first-seen order; vertices are duplicated per chunk (a vertex is shared by few
+    // triangles), materialIndex carries over. The loader's render chunking and level bundles (ADR-0084)
+    // both use it, so a bundle cell IS a render cell.
+    struct CellChunk { int cx = 0, cz = 0; RenderMesh mesh; };
+    static std::vector<CellChunk> chunkByCell(const RenderMesh& m, double cell);
+
     // --- Winding-aware face emission -------------------------------------
     // The engine winds front faces CLOCKWISE: for a triangle (a,b,c) the
     // outward geometric normal is cross(c-a, b-a) (see recomputeNormals), and

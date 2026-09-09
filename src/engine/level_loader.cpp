@@ -3,6 +3,8 @@
 #include "../profile.h"
 #include "level_params.h"   // shared level-JSON -> params readers (both loaders)
 #include "script_assets.h"
+#include "lot_grow_setup.h"   // the lot pass's parameters from a level: one derivation for loader and bake
+#include "procgen/city/lot_cache.h"   // lots read back from a level bundle (ADR-0084 B)
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/script_modules.h"
 #endif
@@ -20,6 +22,15 @@
 #include "procgen/city/building_records.h"   // CityBuildings runtime records (ADR-0080)
 #include "procgen/city/road_net.h"
 #include "procgen/city/road_semantics.h"   // editor-authored roads (shape:"road")
+#ifdef RT_ENABLE_LANELAB
+#include "procgen/lanelab/lanelab.h"     // lane-atomic road lab (ADR-0083, opt-in hook)
+#include "procgen/lanelab/deck_mesh.h"
+#include "procgen/lanelab/road_twin.h"   // the derived road graph: nav, furniture, map
+#include "procgen/lanelab/block_audit.h"  // sceneBlocks: city blocks straight from the pavement
+#include "procgen/lanelab/city_producer.h" // the city as a bundle producer (ADR-0084)
+#include "procgen/lanelab/lots_producer.h" // the lot pass as the second producer (milestone B)
+#include "bundle/bake.h"
+#endif
 #include "procgen/city/corridor_bake.h"
 #include "procgen/city/corridor_plan.h"   // S3b: bake solved corridors into the net
 #include "procgen/city/block_grade.h" // grade blocks to their streets (ADR-0075 P2)
@@ -55,6 +66,7 @@
 #include "property_json.h"
 #include "../log.h"
 #include <nlohmann/json.hpp>
+#include <chrono>
 #include <fstream>
 #include <iomanip>
 #include <map>
@@ -304,40 +316,7 @@ static Entity spawnDocumentEntity(const json& ent, const std::string& shape,
 // metropolis-scale P1.1/P1.3). Vertices are duplicated per chunk (cheap: a
 // vertex is shared by few triangles); materialIndex carries over.
 static std::vector<RenderMesh> chunkMeshByCell(const RenderMesh& m, double cell) {
-    std::vector<RenderMesh> out;
-    if (cell <= 0.0 || m.indices.size() < 3) {
-        out.push_back(m);
-        return out;
-    }
-    std::map<std::pair<int, int>, std::size_t> slot;
-    std::vector<std::unordered_map<uint32_t, uint32_t>> remap;
-    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
-        const uint32_t i0 = m.indices[t], i1 = m.indices[t + 1], i2 = m.indices[t + 2];
-        const Vec3& a = m.vertices[i0].position;
-        const Vec3& b = m.vertices[i1].position;
-        const Vec3& c = m.vertices[i2].position;
-        const double cx = (a.x + b.x + c.x) / 3.0, cz = (a.z + b.z + c.z) / 3.0;
-        const std::pair<int, int> key{static_cast<int>(std::floor(cx / cell)),
-                                      static_cast<int>(std::floor(cz / cell))};
-        auto it = slot.find(key);
-        if (it == slot.end()) {
-            it = slot.emplace(key, out.size()).first;
-            out.emplace_back();
-            out.back().materialIndex = m.materialIndex;
-            remap.emplace_back();
-        }
-        RenderMesh& dst = out[it->second];
-        auto& rm = remap[it->second];
-        for (uint32_t src_i : {i0, i1, i2}) {
-            auto ri = rm.find(src_i);
-            if (ri == rm.end()) {
-                ri = rm.emplace(src_i, static_cast<uint32_t>(dst.vertices.size())).first;
-                dst.vertices.push_back(m.vertices[src_i]);
-            }
-            dst.indices.push_back(ri->second);
-        }
-    }
-    return out;
+    std::vector<RenderMesh> out; for (MeshBuilder::CellChunk& c : MeshBuilder::chunkByCell(m, cell)) out.push_back(std::move(c.mesh)); return out;
 }
 
 static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
@@ -417,6 +396,126 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
         world.add<MeshCollider>(e, mc);
     }
 }
+
+#ifdef RT_ENABLE_LANELAB
+// Lane-atomic road lab (ADR-0083, behind RT_ENABLE_LANELAB): shape:"lanelab" builds
+// the lab's graph AT LOAD and spawns one entity per material mesh, each with a static
+// MeshCollider from the SAME triangles (Playable Scenes rule) — the player drives the
+// decks, ramps, piers and the conformed terrain it sees. Paint strips are visual only
+// (a 2 mm lip reads as a step under a wheel). The authored block round-trips as a
+// DOCUMENT entity like the corridor: {"lanelab": {"graph": "<path>"}} or the inline
+// graph spec itself (recognised by its "edges").
+// The lab's conformed terrain, published for the lot pass and the building pads when
+// the level has no terrain of its own (a lab level: the lanelab grid IS the ground).
+// One struct so a level load resets every member at once (a second level used to inherit the first lab's
+// blocks, right-of-way and ground). Filled from the level's city bundle (ADR-0084): built now or read back.
+struct LaneLabPublished {
+    HeightField ground;                    // the lab's conformed terrain (a lab level's ground)
+    engine::RoadGraph row;                 // freeway + ramp edges of the class-faithful twin, for the lot pass's keep-out
+    double sidewalk = 4.0;                 // the citysim sidewalk, read before entities load
+    std::vector<engine::Poly2> blocks;     // the lab's city blocks: the pavement's holes, inset by the sidewalk
+    int ordinal = 0;                       // lanelab entities seen in this load: the bundle section namespace
+    engine::bundle::LevelInputs inputs;    // the level, for the producers' keys
+    std::shared_ptr<engine::bundle::Bundle> bundle;   // the level's city bundle, obtained on the first lanelab entity
+    std::string bundleStatus;
+};
+static LaneLabPublished g_lanelab;
+
+// Which analytic surface dresses each of the lab's material meshes. Names come from the bundle
+// (city_producer splits a cell's mesh per material), so this is the one place the two vocabularies meet.
+static RenderMaterial::Surface surfaceForLaneLabMaterial(const std::string& name) {
+    using S = RenderMaterial::Surface;
+    if (name == "asphalt" || name == "shoulder") return S::Asphalt;      // carriageway and hard shoulder
+    if (name == "concrete") return S::Concrete;                          // parapets, piers, girders, slab sides
+    if (name == "sidewalk") return S::Pavement;                          // scored concrete flags
+    if (name == "terrain") return S::TerrainGround;                      // the lab's ground: micro-relief over the baked grass colour
+    if (name == "guardrail") return S::CorrugatedMetal;                  // a W-beam is corrugated; the loader keeps it dull
+    return S::None;                                                      // median grass slabs, paint_white, paint_yellow
+}
+
+static void loadLaneLabEntity(const json& ent, World& world, AssetManager& assets,
+                              int index) {
+    using namespace engine::lanelab;
+    const json block = ent.contains("lanelab") ? ent["lanelab"] : json::object();
+    spawnDocumentEntity(ent, "lanelab", block.dump(), world);
+    const int ordinal = g_lanelab.ordinal++;
+    const auto t0 = std::chrono::steady_clock::now();
+    auto since = [](const std::chrono::steady_clock::time_point& t) { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count(); };
+    // ONE derivation (ADR-0084): the city's products come out of the level's bundle whether it was on disk
+    // or built a moment ago — never straight out of the builder — so a cold level and a cached one are the
+    // same geometry to the byte. The bundle is obtained once per load, on the first lanelab entity.
+    if (!g_lanelab.bundle) {
+        registerCityProducer(); registerLotsProducer();   // both before the first obtain: the bundle directory is named by every producer that applies
+        engine::bundle::Obtained o = engine::bundle::obtainForLevel(g_lanelab.inputs, kCityProducerName);
+        g_lanelab.bundleStatus = o.status;
+        if (!o.bundle) { LOG_ERROR << "[lanelab] no city products for this level: " << o.status; return; }
+        g_lanelab.bundle = o.bundle;
+        LOG_INFO << "[lanelab] bundle " << o.status;
+    }
+    CityProducts p; std::string err;
+    if (!readCityProducts(*g_lanelab.bundle, ordinal, p, &err)) { LOG_ERROR << "[lanelab] " << err; return; }
+    const double tRead = since(t0);
+    if (p.hasTerrain) {
+        auto grid = std::make_shared<HeightGrid>(); grid->x0 = p.ground.x0; grid->y0 = p.ground.y0; grid->res = p.ground.res; grid->nx = p.ground.nx; grid->ny = p.ground.ny; grid->z = p.ground.z;
+        g_lanelab.ground = [grid](double x, double z) { return grid->sample(x, z); };
+    }
+    {   // The CLASS-FAITHFUL twin (freeway/ramp classes intact) is the level's unified road graph — nav,
+        // furniture, map — and its freeway right-of-way is the lot pass's keep-out. The twin is DERIVED: the
+        // lab's pavement is the source of truth, a city block is a hole in it (Glenn, 2026-09-05).
+        bool have = false; world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph&) { have = true; });
+        if (!have) {
+            engine::LevelRoadGraph lrg; lrg.graph = p.nav;
+            LOG_INFO << "[lanelab] unified road graph from the class-faithful twin: " << lrg.graph.nodes.size() << " nodes, " << lrg.graph.edges.size() << " edges";
+            world.add<engine::LevelRoadGraph>(world.create(), std::move(lrg));
+        }
+        g_lanelab.row = p.row;
+        g_lanelab.blocks = blocksFromHoles(p.holes, 1.5, g_lanelab.sidewalk);   // pre-inset by the sidewalk (robust); the lot pass gets roadMargin 0
+        LOG_INFO << "[lanelab] " << g_lanelab.blocks.size() << " city blocks from " << p.holes.size() << " pavement holes";
+        if (const char* twinSvg = std::getenv("RT_LANELAB_TWIN_SVG")) {   // the twin as lines and junction dots
+            const engine::RoadEntity& twin = p.twin; std::vector<int> deg(twin.graph.nodes.size(), 0);
+            for (const engine::RoadEdge& e : twin.graph.edges) { ++deg[static_cast<size_t>(e.a)]; ++deg[static_cast<size_t>(e.b)]; }
+            double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
+            for (const engine::RoadNode& n : twin.graph.nodes) { x0 = std::min(x0, n.pos.x); y0 = std::min(y0, n.pos.y); x1 = std::max(x1, n.pos.x); y1 = std::max(y1, n.pos.y); }
+            std::ofstream f(twinSvg);
+            f << "<svg xmlns='http://www.w3.org/2000/svg' viewBox='" << x0 - 20 << " " << y0 - 20 << " " << (x1 - x0) + 40 << " " << (y1 - y0) + 40 << "'>\n";
+            f << "<rect x='" << x0 - 20 << "' y='" << y0 - 20 << "' width='" << (x1 - x0) + 40 << "' height='" << (y1 - y0) + 40 << "' fill='#f4f4ee'/>\n";
+            for (const engine::RoadEdge& e : twin.graph.edges) {
+                const char* col = e.klass == engine::RoadClass::Freeway ? "#c33" : e.klass == engine::RoadClass::Ramp ? "#e80" : "#335";
+                f << "<line x1='" << twin.graph.nodes[static_cast<size_t>(e.a)].pos.x << "' y1='" << twin.graph.nodes[static_cast<size_t>(e.a)].pos.y << "' x2='" << twin.graph.nodes[static_cast<size_t>(e.b)].pos.x << "' y2='" << twin.graph.nodes[static_cast<size_t>(e.b)].pos.y << "' stroke='" << col << "' stroke-width='1.5'/>\n";
+            }
+            for (size_t i = 0; i < deg.size(); ++i) if (deg[i] != 2) f << "<circle cx='" << twin.graph.nodes[i].pos.x << "' cy='" << twin.graph.nodes[i].pos.y << "' r='" << (deg[i] == 1 ? 2.5 : 3.5) << "' fill='" << (deg[i] == 1 ? "#c0392b" : "#1f4e9c") << "'/>\n";
+            f << "</svg>\n";
+        }
+    }
+    // One Renderable per (render cell, material) — the granularity the building chunks use — with a static
+    // MeshCollider from the SAME triangles for everything but paint (Playable Scenes rule; a 2 mm paint lip
+    // reads as a step under a wheel). Unpack one cell mesh at a time: the packed products stay float32.
+    const auto t1 = std::chrono::steady_clock::now(); int collidable = 0; size_t tris = 0;
+    for (const CityCellMesh& c : p.cells) {
+        const engine::bundle::PackedMesh& pm = c.mesh; if (pm.vertexCount() == 0 || pm.idx.empty()) continue;
+        // When the level carries a terrain block the ground is CDLOD's, built from the same conformed grid:
+        // drawing the lab's own flat copy on top of it would z-fight and cost 400k triangles.
+        if (pm.name == "terrain" && g_lanelab.inputs.level.contains("terrain")) continue;
+        Entity e = world.create();
+        createEntityCommon(e, ent, world);
+        Renderable r;
+        r.renderLayer = engine::LayerRoads;
+        r.material.albedo = Vec3(pm.albedo[0], pm.albedo[1], pm.albedo[2]);
+        r.material.roughness = pm.roughness;
+        // The lab's roads were flat colour: it never asked for a surface, so nothing textured them. These are
+        // ANALYTIC surfaces (renderer.h) — grain computed in the shader from the world-planar UV, no maps to
+        // bake and nothing to author, the same ones the engine's own roads and plazas use. Paint strips keep
+        // Surface::None: they are their own flat colour lying on the deck (Glenn, 2026-09-08).
+        r.material.setSurface(surfaceForLaneLabMaterial(pm.name));
+        if (pm.name == "guardrail") r.material.metallic = 0.18f;         // weathered galvanising: a sheen, not a mirror
+        { const RenderMesh m = engine::bundle::unpackMesh(pm); r.mesh = assets.acquireMesh(m, "lanelab:" + std::to_string(index) + ":" + pm.name + ":" + std::to_string(c.cx) + "_" + std::to_string(c.cz)); }
+        world.add<Renderable>(e, r); tris += pm.triangleCount();
+        if (pm.paint() || !pm.collidable()) continue;
+        MeshCollider mc; engine::bundle::colliderFromPacked(pm, mc); world.add<MeshCollider>(e, mc); ++collidable;
+    }
+    LOG_INFO << "[lanelab] e" << ordinal << ": " << p.cells.size() << " cell meshes, " << tris << " triangles, " << collidable << " collidable; products read in " << tRead << " s, instantiated in " << since(t1) << " s";
+}
+#endif
 
 // A hero parametric tree (shape: "tree"): a real, collidable object you can
 // bounce off or shoot at, distinct from the instanced vegetation scatter. The
@@ -805,6 +904,13 @@ static void loadEntities(const json& entities, const json& root, World& world,
             loadRoadEntity(ent, world, assets, roadIndex++, drape, pre);
             continue;
         }
+#ifdef RT_ENABLE_LANELAB
+        // Lane-atomic road lab (ADR-0083): opt-in, drivable, apart from the road mesher.
+        if (ent.value("shape", std::string()) == "lanelab") {
+            loadLaneLabEntity(ent, world, assets, roadIndex++);
+            continue;
+        }
+#endif
         // Lua recipe (ADR-0042): run the script and spawn its composable model —
         // the same shape:"script" the offline tracer renders, now in the viewer.
         // An on-terrain recipe was pre-run (for terrain grading) and is spawned
@@ -1794,22 +1900,14 @@ struct GrownLots {
     std::vector<RenderMesh> flatParts;   // the LOD1 twin (city-render-perf R2)
     std::vector<engine::TerrainFlatten> gradeFlatten;   // in-pass block grades
     bool grown = false;
+    // Lots read from a bundle whose parts are stored per render cell (ADR-0084 B): parts/flatParts stay
+    // empty and the spawner instantiates these sections one chunk at a time. `bundle` keeps the mapping alive.
+    std::shared_ptr<engine::bundle::Bundle> bundle;
+    std::vector<engine::lotcache::LotCellPart> cellParts;
 };
 
-// The authored player spawn (world XZ), if the level has one -- the lot pass
-// flags the building beside it as enterable (ADR-0080). Read from the RAW
-// level json BEFORE any spawn-safety relocation: the safe spawn is authored
-// a couple of metres outside that same building.
-static bool authoredSpawnXZ(const json& root, engine::Vec2& out) {
-    if (!root.contains("player")) return false;
-    const json& pj = root["player"];
-    if (!pj.contains("position") || !pj["position"].is_array() ||
-        pj["position"].size() < 3)
-        return false;
-    out = engine::Vec2(pj["position"][0].get<double>(),
-                       pj["position"][2].get<double>());
-    return true;
-}
+// The authored player spawn (world XZ): engine::authoredSpawnXZ in lot_grow_setup.h — read from the RAW
+// level json BEFORE any spawn-safety relocation (the lot pass flags the building beside it as enterable).
 
 // `ground` grades the lot pads; `netGround` is what the roads themselves drape
 // on (the pre-pass nets use the NATURAL terrain — the same sampler their
@@ -1825,101 +1923,60 @@ static GrownLots growCityLots(
     const engine::Vec2* enterableAt = nullptr) {
     RT_PROFILE_ZONE_NAMED("growCityLots");
     GrownLots g;
-    // Edge blocks (device feedback): the town RIM has no enclosed faces —
-    // synthesize rectangular blocks on boundary roads' open sides so the
-    // outskirts build up too. Sized by min/max length + depth knobs.
-    engine::EdgeBlockParams ep;
-    engine::LotParams lp;
-    readLotGrowParams(cs, ep, lp);
-    // Polycentric zoning: a metro recipe leaves its hubs (with district kinds)
-    // on the net — forward them so lots zone by nearest hub, not one centre.
-    for (const engine::RoadEntity& n : nets)
-        for (const engine::CityHub& h : n.plan.cityHubs)
-            lp.hubs.push_back({h.pos, h.kind});
-    lp.hubRadius = cs.value("hubRadius", 220.0);
-    // CORENESS ANCHOR: height/landmark grading measures distance from
-    // LotParams::center — which no loader ever set (it defaulted to the
-    // world origin, so coreness was ZERO for every lot in any city not at
-    // (0,0): glass towers capped at 16 floors instead of 42, no skyline).
-    // The financial hub (kind 0) is downtown; first hub as fallback.
-    for (const engine::RoadEntity& n : nets)
-        for (const engine::CityHub& h : n.plan.cityHubs) {
-            if (lp.center.x == 0 && lp.center.y == 0) lp.center = h.pos;
-            if (h.kind == 0) {
-                lp.center = h.pos;
-                break;
+    // ONE derivation (ADR-0084, milestone B): the parameters come from lotGrowSetupForLevel — the function
+    // the `lots` bundle producer runs headlessly — so a grow here and a grow in rt_bake are the same city.
+    // The setup owns the style book's VM for as long as the grow runs.
+    engine::LotGrowSetup s = engine::lotGrowSetupForLevel(cs, levelDir, ground, nets, std::move(groundWith), groundMeshCell, enterableAt);
+    for (const std::string& p : s.scriptFiles) g_loadedScriptFiles.push_back(p);
+#ifdef RT_ENABLE_LANELAB
+    if (!g_lanelab.blocks.empty()) {
+        // The lane lab's blocks are exact to the kerb and already inset by the sidewalk (Clipper): the same
+        // parceller and grammar, no road graph, and no miter inset to reject them.
+        s.lp.roadMargin = 0;
+        engine::NetLotResult r; bool fromBundle = false;
+        const auto tl = std::chrono::steady_clock::now();
+        auto since = [](const std::chrono::steady_clock::time_point& t) { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count(); };
+        // The lot pass's products come out of the level's bundle when the `lots` producer applies: the bundle
+        // the city came from already holds them when both were baked together (one obtain per load, also under
+        // RT_NOCACHE); otherwise they are obtained now — read, or baked with the city copied forward.
+        if (const engine::bundle::BundleProducer* lotsProducer = engine::bundle::findProducer(engine::lanelab::kLotsProducerName);
+            lotsProducer && lotsProducer->applies(g_lanelab.inputs)) {
+            std::string err, status;
+            const std::string want = engine::bundle::hex16(lotsProducer->identity(g_lanelab.inputs).key);
+            // Per-cell parts stay in the bundle (no whole-part materialisation): the spawner reads each cell's
+            // section when it makes the Renderable. A whole-part layout is read as before.
+            auto readLots = [&](const std::shared_ptr<engine::bundle::Bundle>& b) {
+                r = engine::NetLotResult(); g.cellParts.clear(); g.bundle.reset();
+                const bool perCell = engine::lotcache::lotCellSize(*b, engine::lanelab::kLotsSectionPrefix) > 0.0;
+                if (!engine::lotcache::readLotResult(*b, engine::lanelab::kLotsSectionPrefix, r, &err, /*withParts=*/!perCell)) return false;
+                if (perCell && !engine::lotcache::listLotCellParts(*b, engine::lanelab::kLotsSectionPrefix, g.cellParts, &err)) return false;
+                g.bundle = b; return true;
+            };
+            if (g_lanelab.bundle && engine::bundle::manifestProducer(g_lanelab.bundle->manifest(), engine::lanelab::kLotsProducerName).value("key", std::string()) == want) {
+                fromBundle = readLots(g_lanelab.bundle);
+                status = "from the city's bundle";
             }
+            if (!fromBundle) {
+                engine::bundle::Obtained o = engine::bundle::obtainForLevel(g_lanelab.inputs, engine::lanelab::kLotsProducerName);
+                status = o.status;
+                if (o.bundle) fromBundle = readLots(o.bundle);
+            }
+            if (fromBundle) LOG_INFO << "[lanelab] lots " << status << ": " << r.lots.size() << " buildings, " << r.plan.lots.size() << " lots, " << (g.cellParts.empty() ? std::to_string(r.parts.size()) + " whole parts" : std::to_string(g.cellParts.size()) + " cell parts") << ", read in " << since(tl) << " s";
+            else LOG_WARN << "[lanelab] lots bundle unusable (" << (err.empty() ? status : err) << "); growing in place";
         }
-    // TERRAIN: buildings grow from their graded pad plane, park/green pads
-    // drape per-vertex (city-on-terrain; roads conform separately via
-    // the level ground sampler + the flatten ramps the loader carves).
-    lp.groundWith = std::move(groundWith);
-    lp.groundMeshCell = static_cast<engine::Real>(groundMeshCell);
-    // Enterable buildings (ADR-0080): the spawn building only, for now -- the
-    // unit beside this point grows with an open doorway + interior shell.
-    if (enterableAt) lp.enterableAt.push_back(*enterableAt);
-    if (ground)
-        lp.ground = [&ground](engine::Real x, engine::Real z) {
-            return static_cast<engine::Real>(ground(x, z));
-        };
-    // The STYLE BOOK (the architect's Lua DATA layer): per-recipe look
-    // overrides from assets/scripts/style_book.lua. The C++ architect decides
-    // what stands where; the book restyles it. The vm must outlive
-    // growLotBuildings below (the hook holds it).
-#ifdef RT_ENABLE_SCRIPTING
-    std::unique_ptr<ScriptVM> styleVm;
-    {
-        std::string sb = loadScriptCode("style_book.lua", levelDir);
-        if (const std::string p = resolveScriptPath("style_book.lua", levelDir); !p.empty())
-            g_loadedScriptFiles.push_back(p);
-        if (!sb.empty()) {
-            styleVm = std::make_unique<ScriptVM>();
-            openProcgenLibrary(*styleVm);
-            std::string err;
-            auto hook = engine::makeStyleBook(*styleVm, sb, &err);
-            if (hook) lp.styleHook = std::move(hook);
-            else if (!err.empty())
-                LOG_WARN << "style_book.lua: " << err;
+        if (!fromBundle) {
+            r = engine::NetLotResult(); g.cellParts.clear(); g.bundle.reset();
+            r.lots = engine::growLotBuildings(g_lanelab.blocks, s.lp, &r.plan, s.planOnly ? nullptr : &r.parts, nullptr, 0.0,
+                                              (s.wantFlat && !s.planOnly) ? &r.flatParts : nullptr, &r.gradeFlatten);
+            LOG_INFO << "[lanelab] lots on " << g_lanelab.blocks.size() << " scene blocks: " << r.lots.size() << " buildings, " << r.plan.lots.size() << " lots, grown in " << since(tl) << " s";
         }
+        g.lots = std::move(r.lots); g.plan = std::move(r.plan); g.parts = std::move(r.parts); g.flatParts = std::move(r.flatParts); g.gradeFlatten = std::move(r.gradeFlatten); g.grown = true;
+        (void)netGround; (void)freewayROW;
+        return g;
     }
-    // The ARCHETYPE BOOK (the architect's Lua SELECTION layer): per-district
-    // recipe weights from assets/scripts/archetype_book.lua, resolved to
-    // plain data here — no Lua survives into the grow. ALL-OR-NOTHING: a
-    // book with any invalid entry is REJECTED with LOG_ERROR (never half
-    // applied, never silently skipped — the courtMinArea false-knob rule).
-    {
-        std::string ab = loadScriptCode("archetype_book.lua", levelDir);
-        if (const std::string p = resolveScriptPath("archetype_book.lua", levelDir);
-            !p.empty())
-            g_loadedScriptFiles.push_back(p);
-        if (!ab.empty()) {
-            ScriptVM vm;   // the book is pure data once parsed
-            openProcgenLibrary(vm);
-            std::string err;
-            engine::ArchetypeBook book = engine::makeArchetypeBook(vm, ab, &err);
-            if (!err.empty())
-                LOG_ERROR << "archetype_book.lua REJECTED (all-or-nothing): "
-                          << err;
-            else
-                lp.archetypeBook = std::move(book);
-        }
-    }
-#else
-    (void)levelDir;
 #endif
-    // Buildings keep clear of the SAMPLED road corridors by sidewalk + a
-    // margin, so nothing overhangs the concrete or pokes into the street.
-    const double roadClear = cs.value("sidewalk", 4.0) + 0.6;
-    // The middle-LOD tier is grown only when the level opts in with
-    // "facadeDistance" (R2) — the offline tracer and two-tier levels skip it.
-    const bool wantFlat = cs.value("facadeDistance", 0.0) >
-                          cs.value("detailDistance", 700.0);
-    // PLAN-ONLY (outlines, no buildings): grow the plan without a single
-    // building mesh — the loader publishes the block/lot outlines and drops
-    // everything else, so growing 8 km of facades first is pure waste.
-    const bool planOnly = !cs.value("buildLots", false) && cs.value("planOnly", false);
     engine::NetLotResult r = engine::growLotBuildingsOnNets(
-        nets, lp, ep, roadClear, netGround, freewayROW, wantFlat, !planOnly);
+        nets, s.lp, s.ep, s.roadClear, netGround, freewayROW, s.wantFlat, !s.planOnly);
     g.lots = std::move(r.lots);
     g.plan = std::move(r.plan);
     g.parts = std::move(r.parts);
@@ -2188,8 +2245,12 @@ bool LevelLoader::load(const std::string& path,
                        AssetManager& assets, bool editorMode) {
     RT_PROFILE_ZONE_NAMED("levelLoad");
     g_loadedScriptFiles.clear();
+    const auto tLoad0 = std::chrono::steady_clock::now();
     g_groundProbeReport = {};
     g_pokeReport = {};
+#ifdef RT_ENABLE_LANELAB
+    g_lanelab = LaneLabPublished();
+#endif
     std::ifstream file(path);
     if (!file.is_open()) {
         LOG_ERROR << "Failed to open level file: " << path;
@@ -2199,6 +2260,10 @@ bool LevelLoader::load(const std::string& path,
     json root;
     try {
         root = json::parse(file);
+#ifdef RT_ENABLE_LANELAB
+        g_lanelab.inputs.levelPath = path; g_lanelab.inputs.level = root;
+        { const size_t slash = path.find_last_of('/'); g_lanelab.inputs.levelDir = slash == std::string::npos ? "." : path.substr(0, slash); }
+#endif
     } catch (const json::parse_error& e) {
         LOG_ERROR << "JSON parse error in " << path << ": " << e.what();
         return false;
@@ -2235,6 +2300,43 @@ bool LevelLoader::load(const std::string& path,
     // sink or poke. terrainHeight reads params.erodedBase, so injecting the same
     // shared_ptr into every params copy is all it takes.
     auto sharedEroded = readErodedBase(root);
+#ifdef RT_ENABLE_LANELAB
+    // THE LANE LAB'S GROUND, RENDERED BY CDLOD (2026-09-08). The lab bakes the source level's terrain to a
+    // 5 m grid and conforms it to the roads, then meshed that grid itself: no LOD, no morphing, no material
+    // blending, and 400k triangles of it. CDLOD builds its nodes from TerrainParams, so it cannot take a
+    // height callback — but `terrainHeight` reads `params.erodedBase` INSTEAD of the analytic relief, and
+    // that is a std::function. Point it at the conformed grid and CDLOD renders the lab's surface with
+    // everything the real terrain path has. The grid only covers the roads plus a margin, so outside it the
+    // sampler falls back to the level's own terrain and blends across a band, or the edge value would smear
+    // over the whole world.
+    if (root.contains("terrain") && !engine::lanelab::cityEntities(root).empty()) {
+        engine::lanelab::registerCityProducer(); engine::lanelab::registerLotsProducer();
+        engine::bundle::Obtained o = engine::bundle::obtainForLevel(g_lanelab.inputs, engine::lanelab::kCityProducerName);
+        engine::lanelab::CityProducts cp; std::string cperr;
+        if (o.bundle && engine::lanelab::readCityProducts(*o.bundle, 0, cp, &cperr) && cp.hasTerrain) {
+            g_lanelab.bundle = o.bundle; g_lanelab.bundleStatus = o.status;   // loadLaneLabEntity reuses it
+            auto grid = std::make_shared<engine::lanelab::HeightGrid>();
+            grid->x0 = cp.ground.x0; grid->y0 = cp.ground.y0; grid->res = cp.ground.res;
+            grid->nx = cp.ground.nx; grid->ny = cp.ground.ny; grid->z = cp.ground.z;
+            auto fbTp = std::make_shared<TerrainParams>(readTerrainParams(root["terrain"]));
+            fbTp->erodedBase = sharedEroded;          // the fallback keeps whatever base the level had; no recursion
+            auto fbNoise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
+            const double bx1 = grid->x0 + grid->res * (grid->nx - 1), by1 = grid->y0 + grid->res * (grid->ny - 1);
+            sharedEroded = std::make_shared<const std::function<double(double, double)>>(
+                [grid, fbTp, fbNoise, bx1, by1](double x, double z) {
+                    const double band = 60.0;   // blend to the level's own terrain over the last 60 m of the grid
+                    const double inset = std::min(std::min(x - grid->x0, bx1 - x), std::min(z - grid->y0, by1 - z));
+                    if (inset <= 0.0) return terrainHeight(*fbTp, *fbNoise, x, z);
+                    const double lab = grid->sample(x, z);
+                    if (inset >= band) return lab;
+                    const double u = inset / band, w = u * u * (3 - 2 * u);
+                    return terrainHeight(*fbTp, *fbNoise, x, z) * (1 - w) + lab * w;
+                });
+            LOG_INFO << "[lanelab] CDLOD terrain from the lab's conformed grid: " << grid->nx << " x " << grid->ny
+                     << " @ " << grid->res << " m, " << (bx1 - grid->x0) << " x " << (by1 - grid->y0) << " m";
+        } else if (!cperr.empty()) LOG_WARN << "[lanelab] no conformed ground for CDLOD: " << cperr;
+    }
+#endif
 
     // A city draped on the terrain is generated BEFORE the terrain: it grades its
     // roads/blocks off the natural ground, then returns cut/fill footprints the
@@ -2719,49 +2821,40 @@ bool LevelLoader::load(const std::string& path,
                 LOG_INFO << "[grade] " << blockGrades.size()
                          << " block planes/terraces from "
                          << preLots.plan.blocks.size() << " blocks";
+                std::vector<TerrainFlatten> grades = blockGrades;
+#ifdef RT_ENABLE_LANELAB
+                if (!g_lanelab.blocks.empty()) grades = engine::lanelab::lanelabTerraces(blockGrades, g_lanelab.blocks, g_lanelab.sidewalk);   // shrunk by the feather and clipped to the block: a terrace ends at the block line, not in the road
+#endif
                 terrainParams.flatten.insert(terrainParams.flatten.end(),
-                                             blockGrades.begin(),
-                                             blockGrades.end());
+                                             grades.begin(),
+                                             grades.end());
                 // ...and into the NON-ROAD base too: the editor's Conform
                 // Terrain action rebuilds flatten = baseFlatten + fresh roads,
                 // and block grades missing from the base meant one press of G
                 // silently reverted every block plane/terrace to raw noise
                 // under the buildings.
-                baseFlatten.insert(baseFlatten.end(), blockGrades.begin(),
-                                   blockGrades.end());
+                baseFlatten.insert(baseFlatten.end(), grades.begin(), grades.end());
             }
-            for (const engine::LotBuilding& lb : preLots.lots) {
-                if (lb.type == "park" || lb.type == "green" ||
-                    lb.plan.size() < 3) continue;
-                // The pad footprint is the plan DILATED by an apron: the
-                // foundation ring (0.14 m proud) and the entrance steps
-                // (1.7-3.8 m out) live just OUTSIDE the plan, where an exact
-                // footprint left them over the falloff slope — or over ground
-                // the road clamp had pulled DOWN (padPlaneAbove misses by the
-                // same margin). The apron puts flat pad under all of it.
-                constexpr double kPadApron = 2.2;
-                engine::Vec2 c2(0, 0);
-                for (const engine::Vec2& v : lb.plan) c2 = c2 + v;
-                c2 = c2 * (1.0 / lb.plan.size());
-                std::vector<Vec3> poly;
-                poly.reserve(lb.plan.size());
-                for (const engine::Vec2& v : lb.plan) {
-                    engine::Vec2 d = v - c2;
-                    const double l = d.length();
-                    const engine::Vec2 g =
-                        l > 1e-6 ? c2 + d * ((l + kPadApron) / l) : v;
-                    poly.push_back(Vec3(g.x, 0, g.y));
+            // Pads OUTRANK roads (kPadFlattenPriority, terrain.h): the road conform half-width overlaps the
+            // first metres of building depth, and priority is a hard override — below roads, every frontage
+            // facade stood on the ROAD's plane. Road-graph levels keep pads off the carriageway by roadClear;
+            // a lanelab level has no road graph here, so its pads are CLIPPED to their block and feathered
+            // no further than the sidewalk (Glenn found a pad plane standing a metre proud inside a junction).
+            {
+                std::vector<TerrainFlatten> pads;
+#ifdef RT_ENABLE_LANELAB
+                if (!g_lanelab.blocks.empty()) pads = engine::lanelab::clipPadsToBlocks(preLots.lots, g_lanelab.blocks, g_lanelab.sidewalk);
+                else
+#endif
+                for (const engine::LotBuilding& lb : preLots.lots) {
+                    if (lb.type == "park" || lb.type == "green" || lb.plan.size() < 3) continue;
+                    pads.push_back(engine::lotPadFlatten(lb));
                 }
-                TerrainFlatten f = makeFlattenPad(std::move(poly), lb.groundY, 5.0);
-                // Pads OUTRANK roads (kPadFlattenPriority, terrain.h): the
-                // road conform half-width overlaps the first metres of
-                // building depth, and priority is a hard override — below
-                // roads, every frontage facade stood on the ROAD's plane
-                // ("the middle is surrounded by terrain but the front edge
-                // is not"). Pads can never reach the carriageway (roadClear).
-                f.priority = kPadFlattenPriority;
-                terrainParams.flatten.push_back(f);
-                baseFlatten.push_back(std::move(f));   // non-road grading
+                for (TerrainFlatten& f : pads) {
+                    f.priority = kPadFlattenPriority;
+                    terrainParams.flatten.push_back(f);
+                    baseFlatten.push_back(std::move(f));   // non-road grading
+                }
             }
         }
         // Index the assembled cut/fill set (ADR-0075 Phase 0): the CDLOD mesher,
@@ -3511,11 +3604,39 @@ bool LevelLoader::load(const std::string& path,
         roadCache.reserve(preNets.size());
         for (std::size_t i = 0; i < preNets.size(); ++i)
             roadCache.emplace_back(preNetEnts[i], std::move(preNets[i]));
+#ifdef RT_ENABLE_LANELAB
+        g_lanelab.sidewalk = root.contains("citysim") && root["citysim"].is_object() ? root["citysim"].value("sidewalk", 4.0) : 4.0;
+#endif
         loadEntities(root["entities"], root, world, renderer, assets, levelDir,
                      editorMode, &scriptCache,
                      entityGround ? &entityGround : nullptr,
                      roadCache.empty() ? nullptr : &roadCache,
                      levelGround ? &levelGround : nullptr);
+#ifdef RT_ENABLE_LANELAB
+        // A lab level has no terrain entity: the lanelab grid is the ground the lots grade
+        // on and the building pads sample (published by loadLaneLabEntity).
+        if (!entityGround && g_lanelab.ground) entityGround = g_lanelab.ground;
+        // The ONE derived road graph (§10) for a lab level: the lane lab's twin, sampled the way
+        // every road entity is, so the city map (`citymap`), street furniture and the citysim nav
+        // read the lab's streets through the same component as any other level's. Only when the
+        // level published none of its own.
+        {
+            bool have = false; world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph&) { have = true; });
+            if (!have) {
+                engine::LevelRoadGraph lrg;
+                world.each<engine::RoadEntity>([&](Entity, engine::RoadEntity& net) {
+                    engine::RoadGraph g = engine::navRoadGraph(net, entityGround);
+                    const int base = static_cast<int>(lrg.graph.nodes.size());
+                    for (const engine::RoadNode& n : g.nodes) lrg.graph.nodes.push_back(n);
+                    for (engine::RoadEdge e : g.edges) { e.a += base; e.b += base; lrg.graph.edges.push_back(e); }
+                });
+                if (!lrg.graph.edges.empty()) {
+                    LOG_INFO << "[lanelab] unified road graph from the road twin: " << lrg.graph.nodes.size() << " nodes, " << lrg.graph.edges.size() << " edges";
+                    world.add<engine::LevelRoadGraph>(world.create(), std::move(lrg));
+                }
+            }
+        }
+#endif
     // (2e: the corridor document entity carries no mesh — the freeway IS the
     // road entity's mesh, built from the baked graph by the one mesher.)
 
@@ -3628,6 +3749,21 @@ bool LevelLoader::load(const std::string& path,
                 }
             }
         }
+#ifdef RT_ENABLE_LANELAB
+        // The lane lab's freeway and ramps as the routed right-of-way (ADR-0083): its RoadEntity
+        // twin carries them by class, so the lot pass gets the per-class keep-out band and the
+        // under-deck re-zoning instead of the mainline-proxy fallback. Ramps keep their own
+        // class (declaring them Freeway re-zoned every block inside the frontage roads as
+        // freeway shadow); the embankment they sit on is carried by the twin's edge WIDTH,
+        // which the building-clearance check reads.
+        if (freewayROW.edges.empty() && !g_lanelab.row.edges.empty()) {
+            freewayROW = g_lanelab.row;
+            if (!freewayROW.edges.empty()) {
+                freewayROWp = &freewayROW;
+                LOG_INFO << "[lanelab] freeway right-of-way for the lot pass: " << freewayROW.edges.size() << " carriageway + ramp segments from the road twin";
+            }
+        }
+#endif
         // Grow buildings on the ROAD NETWORK's blocks (ADR-0066): the Living City
         // path — real roads (a shape:"road" `generate` recipe, the tech grown.json
         // uses) whose enclosed blocks become lots and REAL shape-grammar buildings
@@ -3673,6 +3809,38 @@ bool LevelLoader::load(const std::string& path,
                                      entityGround, freewayROWp, nullptr,
                                      lotMeshCell,
                                      haveSpawn2 ? &spawnXZ2 : nullptr);
+            }
+            // Stage timings for the tail after the grow (what a bundle does not yet cover), one log line.
+            const auto tLots0 = std::chrono::steady_clock::now(); auto tLotsPrev = tLots0; std::string lotStages;
+            auto lotStage = [&](const char* name) {
+                const auto now = std::chrono::steady_clock::now(); char buf[64];
+                std::snprintf(buf, sizeof buf, "%s%s %.2f s", lotStages.empty() ? "" : ", ", name, std::chrono::duration<double>(now - tLotsPrev).count());
+                lotStages += buf; tLotsPrev = now;
+            };
+            // RT_LOT_PLAN_SVG=<path>: the parceller's plan as a plain SVG (block
+            // interiors, every lot, every built plan) for levels without a city
+            // map — the lanelab lab levels — so "why is this block empty" is a
+            // picture, not a log line.
+            if (const char* planSvg = std::getenv("RT_LOT_PLAN_SVG")) {
+                double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
+                auto grow = [&](const engine::Poly2& poly) { for (const engine::Vec2& q : poly) { x0 = std::min(x0, q.x); y0 = std::min(y0, q.y); x1 = std::max(x1, q.x); y1 = std::max(y1, q.y); } };
+                for (const auto& b : grown.plan.blocks) grow(b);
+                for (const auto& l : grown.plan.lots) grow(l);
+                if (x1 > x0 && y1 > y0) {
+                    std::ofstream f(planSvg);
+                    f << "<svg xmlns='http://www.w3.org/2000/svg' viewBox='" << x0 - 20 << " " << y0 - 20 << " " << (x1 - x0) + 40 << " " << (y1 - y0) + 40 << "'>\n";
+                    f << "<rect x='" << x0 - 20 << "' y='" << y0 - 20 << "' width='" << (x1 - x0) + 40 << "' height='" << (y1 - y0) + 40 << "' fill='#eef0e6'/>\n";
+                    auto poly = [&](const engine::Poly2& pl, const char* fill, const char* stroke, double w) {
+                        f << "<polygon fill='" << fill << "' stroke='" << stroke << "' stroke-width='" << w << "' points='";
+                        for (const engine::Vec2& q : pl) f << q.x << "," << q.y << " ";
+                        f << "'/>\n";
+                    };
+                    for (const auto& b : grown.plan.blocks) poly(b, "#cfd8c0", "#44557a", 0.8);
+                    for (const auto& l : grown.plan.lots) poly(l, "none", "#c0392b", 0.4);
+                    for (const auto& lb : grown.lots) poly(lb.plan, lb.type == "park" ? "#7fb069" : "#333333", "none", 0);
+                    f << "</svg>\n";
+                    LOG_INFO << "[citylots] plan svg -> " << planSvg << " (" << grown.plan.blocks.size() << " blocks, " << grown.plan.lots.size() << " lots)";
+                }
             }
             engine::LotPlanDebug& plan = grown.plan;   // debug overlay (below)
             // The buildings' geometry, merged by shape-grammar PartId across the
@@ -3968,6 +4136,7 @@ bool LevelLoader::load(const std::string& path,
                 buildingsMc.friction = 0.85;
                 world.add<engine::MeshCollider>(ce, std::move(buildingsMc));
             }
+            lotStage("buildings+trees+collider");
             if (!cityB.records.empty()) {
                 cityB.buildIndex();
                 std::size_t doorCount = 0, enterableCount = 0;
@@ -4027,84 +4196,100 @@ bool LevelLoader::load(const std::string& path,
                 // facadeDistance, and the mass boxes take over past that.
                 // Absent (0), everything behaves exactly as before.
                 const double facadeDistance = cs.value("facadeDistance", 0.0);
+                const bool haveFlat = !grown.flatParts.empty() ||
+                    std::any_of(grown.cellParts.begin(), grown.cellParts.end(), [](const engine::lotcache::LotCellPart& c) { return c.flat; });
                 const bool threeTier =
-                    facadeDistance > detailDistance && detailDistance > 0 &&
-                    !grown.flatParts.empty();
-                // One spawner for both tiers, so material binding and chunking
-                // cannot diverge between LOD0 and LOD1.
-                auto spawnPartChunks = [&](std::vector<RenderMesh>& partsVec,
-                                           double minDist, double drawDist,
-                                           bool scaleSmallParts) {
+                    facadeDistance > detailDistance && detailDistance > 0 && haveFlat;
+                // Per part: the material, its surface textures (one bake per surface class) and the
+                // draw-distance scale — derived once and applied to every chunk of the part, whichever
+                // tier and wherever the chunk came from (grown here or read per cell from the bundle).
+                struct PartProto { Renderable proto; Surface surf = Surface::None; bool reUV = false; double ddScale = 1.0; bool ready = false; };
+                std::map<std::size_t, PartProto> protos;
+                auto protoFor = [&](std::size_t pi, bool scaleSmallParts) -> PartProto& {
+                    PartProto& pp = protos[pi * 2 + (scaleSmallParts ? 1 : 0)];
+                    if (pp.ready) return pp;
+                    pp.proto.renderLayer = engine::LayerBuildings;   // debug layer toggle
+                    pp.proto.material = materialFor(static_cast<PartId>(pi), Vec3(0.80, 0.78, 0.75));
+                    pp.surf = pp.proto.material.surface();
+                    if (pp.surf != Surface::None) {
+                        // FanTop/VentGrille/RoofShingle bake their own UVs in the grammar (centred disc /
+                        // plate-fitted / slope-fitted) — a world-planar re-UV would break them. InteriorFloor
+                        // is exempt BY PART, not by surface: it authors plank-direction UVs (u along the
+                        // room's long axis) but shares WoodSiding with the water tanks, whose world-planar
+                        // re-UV must stay.
+                        pp.reUV = !surfaceBakesOwnUVs(pp.surf) &&
+                                  static_cast<PartId>(pi) != PartId::InteriorFloor &&
+                                  static_cast<PartId>(pi) != PartId::InteriorFloorTile &&
+                                  static_cast<PartId>(pi) != PartId::InteriorFloorMarble &&
+                                  static_cast<PartId>(pi) != PartId::InteriorFloorCarpet;
+                        bindSurfaceMaps(pp.proto.material, bakeSurfaceTextures(renderer, pp.surf, lotTex));
+                    }
+                    // MID TIER: small dressing (HVAC, tanks, trim, doors, hedges) is subpixel long before
+                    // the shell swaps to its proxy — cull those parts earlier so the far half of the detail
+                    // ring draws bare shells. Superseded in three-tier mode, where EVERY part swaps to LOD1
+                    // together at detailDistance (a clean lockstep swap beats a ring of buildings missing
+                    // their trim).
+                    if (scaleSmallParts) {
+                        switch (static_cast<PartId>(pi)) {
+                            case PartId::Vent: case PartId::Utility: case PartId::Fan:
+                            case PartId::Wood: case PartId::Detail: case PartId::Trim:
+                            case PartId::Door: case PartId::Foliage: case PartId::Path:
+                                pp.ddScale = 0.55; break;
+                            default: break;
+                        }
+                    }
+                    pp.ready = true; return pp;
+                };
+                // One chunk (a render cell's share of a part) → one Renderable. World-planar UVs are a
+                // per-vertex function of position and normal, so a chunk gets the UVs the whole part would.
+                auto spawnChunk = [&](std::size_t pi, RenderMesh& chunk, double minDist, double drawDist, bool scaleSmallParts) {
+                    if (chunk.vertices.empty()) return;
+                    PartProto& pp = protoFor(pi, scaleSmallParts);
+                    if (pp.reUV) applyWorldPlanarUVs(chunk, 1.0 / surfaceWorldTileSize(pp.surf));
+                    Renderable r = pp.proto;
+                    if (drawDist > 0) r.drawDistance = drawDist * pp.ddScale;
+                    r.minDistance = minDist;
+                    r.drawClass = engine::DrawClass::Structure;
+                    r.mesh = assets.acquireMesh(chunk, "");   // world-space, unkeyed
+                    Entity e = world.create();
+                    Transform t;   // identity — the mesh sits in world space
+                    world.add<Transform>(e, t);
+                    world.add<PrevTransform>(e, PrevTransform{t});
+                    world.add<Renderable>(e, r);
+                    // The lit-window part (WS3): warm interior glow, raised after dusk by the day/night
+                    // NightGlow pass — dark at noon by construction (emission starts 0; the material
+                    // equals Glass by day).
+                    if (static_cast<PartId>(pi) == PartId::GlassLit)
+                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 0.72, 0.38) * 1.3});
+                };
+                // Whole parts (grown here, or a whole-part bundle): split per render cell now. One spawner
+                // for both tiers, so material binding and chunking cannot diverge between LOD0 and LOD1.
+                auto spawnPartChunks = [&](std::vector<RenderMesh>& partsVec, double minDist, double drawDist, bool scaleSmallParts) {
                     for (std::size_t pi = 0; pi < partsVec.size(); ++pi) {
                         RenderMesh& pm = partsVec[pi];
                         if (pm.vertices.empty()) continue;
-                        Renderable proto;
-                        proto.renderLayer = engine::LayerBuildings;   // debug layer toggle
-                        proto.material = materialFor(static_cast<PartId>(pi),
-                                                     Vec3(0.80, 0.78, 0.75));
-                        const Surface surf = proto.material.surface();
-                        if (surf != Surface::None) {
-                            // FanTop/VentGrille/RoofShingle bake their own UVs in
-                            // the grammar (centred disc / plate-fitted / slope-
-                            // fitted) — a world-planar re-UV would break them.
-                            // InteriorFloor is exempt BY PART, not by surface:
-                            // it authors plank-direction UVs (u along the
-                            // room's long axis) but shares WoodSiding with the
-                            // water tanks, whose world-planar re-UV must stay.
-                            if (!surfaceBakesOwnUVs(surf) &&
-                                static_cast<PartId>(pi) != PartId::InteriorFloor &&
-                                static_cast<PartId>(pi) != PartId::InteriorFloorTile &&
-                                static_cast<PartId>(pi) != PartId::InteriorFloorMarble &&
-                                static_cast<PartId>(pi) != PartId::InteriorFloorCarpet)
-                                applyWorldPlanarUVs(pm, 1.0 / surfaceWorldTileSize(surf));
-                            bindSurfaceMaps(proto.material,
-                                            bakeSurfaceTextures(renderer, surf, lotTex));
-                        }
-                        // MID TIER: small dressing (HVAC, tanks, trim, doors,
-                        // hedges) is subpixel long before the shell swaps to its
-                        // proxy — cull those parts earlier so the far half of the
-                        // detail ring draws bare shells. Superseded in three-tier
-                        // mode, where EVERY part swaps to LOD1 together at
-                        // detailDistance (a clean lockstep swap beats a ring of
-                        // buildings missing their trim).
-                        double ddScale = 1.0;
-                        if (scaleSmallParts) {
-                            switch (static_cast<PartId>(pi)) {
-                                case PartId::Vent: case PartId::Utility: case PartId::Fan:
-                                case PartId::Wood: case PartId::Detail: case PartId::Trim:
-                                case PartId::Door: case PartId::Foliage: case PartId::Path:
-                                    ddScale = 0.55; break;
-                                default: break;
-                            }
-                        }
-                        for (RenderMesh& chunk : chunkMeshByCell(pm, renderCell)) {
-                            if (chunk.vertices.empty()) continue;
-                            Renderable r = proto;
-                            if (drawDist > 0) r.drawDistance = drawDist * ddScale;
-                            r.minDistance = minDist;
-                            r.drawClass = engine::DrawClass::Structure;
-                            r.mesh = assets.acquireMesh(chunk, "");   // world-space, unkeyed
-                            Entity e = world.create();
-                            Transform t;   // identity — the mesh sits in world space
-                            world.add<Transform>(e, t);
-                            world.add<PrevTransform>(e, PrevTransform{t});
-                            world.add<Renderable>(e, r);
-                            // The lit-window part (WS3): warm interior glow,
-                            // raised after dusk by the day/night NightGlow pass
-                            // — dark at noon by construction (emission starts
-                            // 0; the material equals Glass by day).
-                            if (static_cast<PartId>(pi) == PartId::GlassLit)
-                                world.add<engine::NightGlow>(
-                                    e, engine::NightGlow{
-                                           Vec3(1.0, 0.72, 0.38) * 1.3});
-                        }
+                        for (RenderMesh& chunk : chunkMeshByCell(pm, renderCell)) spawnChunk(pi, chunk, minDist, drawDist, scaleSmallParts);
                     }
                 };
-                spawnPartChunks(lotParts, 0.0, detailDistance, !threeTier);
-                if (threeTier)
-                    spawnPartChunks(grown.flatParts, detailDistance,
-                                    facadeDistance, false);
+                if (!grown.cellParts.empty() && grown.bundle) {
+                    // Parts already split per render cell in the bundle (ADR-0084 B): one section → one
+                    // Renderable, unpacked one chunk at a time; nothing is chunked at load.
+                    std::size_t spawned = 0;
+                    for (const engine::lotcache::LotCellPart& cp : grown.cellParts) {
+                        if (cp.flat && !threeTier) continue;   // the LOD1 tier is drawn only in three-tier mode
+                        RenderMesh chunk;
+                        if (!engine::lotcache::readLotPart(*grown.bundle, cp.section, chunk)) { LOG_WARN << "[lots] " << cp.section << ": unreadable, skipped"; continue; }
+                        if (cp.flat) spawnChunk(static_cast<std::size_t>(cp.part), chunk, detailDistance, facadeDistance, false);
+                        else spawnChunk(static_cast<std::size_t>(cp.part), chunk, 0.0, detailDistance, !threeTier);
+                        ++spawned;
+                    }
+                    LOG_INFO << "[lots] " << spawned << " cell parts instantiated from the bundle";
+                } else {
+                    spawnPartChunks(lotParts, 0.0, detailDistance, !threeTier);
+                    if (threeTier) spawnPartChunks(grown.flatParts, detailDistance, facadeDistance, false);
+                }
             }
+            lotStage("part chunks");
             // HLOD PROXIES (P1.2): one mass-box mesh per render cell, baked
             // from the lots' oriented boxes in their own colours — a distant
             // chunk becomes a handful of boxes, visually the same silhouette
@@ -4159,6 +4344,7 @@ bool LevelLoader::load(const std::string& path,
                     world.add<Renderable>(e, r);
                 }
             }
+            lotStage("hlod proxies");
             // Publish the plan (blocks + lots + collider prisms) for the
             // citysim debug overlay.
             if (!plan.blocks.empty() || !colliderPrisms.empty()) {
@@ -4168,6 +4354,8 @@ bool LevelLoader::load(const std::string& path,
                 dbg.prisms = std::move(colliderPrisms);
                 world.add<engine::CityPlanDebug>(world.create(), std::move(dbg));
             }
+            lotStage("plan debug");
+            LOG_INFO << "[lots] load tail: " << lotStages << " (" << std::chrono::duration<double>(std::chrono::steady_clock::now() - tLots0).count() << " s after the grow)";
         }
         world.add<CitySimConfig>(world.create(), cfg);
     }
@@ -4698,7 +4886,7 @@ bool LevelLoader::load(const std::string& path,
     }
 
     LOG_INFO << "Loaded level: " << path << " (v" << version << ", "
-             << world.entityCount() << " entities)";
+             << world.entityCount() << " entities) in " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tLoad0).count() << " s";
     return true;
 }
 

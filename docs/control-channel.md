@@ -72,6 +72,7 @@ clip <text> / clip?               # set / read the debug UI's clipboard (is the
 person first|third|toggle         # on-foot camera (the V key, guard-free);
                                   # persisted as playerThirdPerson
 where?                            # the viewpoint as "x y z pitch yaw"
+bundle?                           # the level bundle (ADR-0084): last hit/miss with timings, and the root
 citymap <path.svg> [layers|all]   # the layered city map from the running level
                                   # (roads,curbs,sidewalks,gaps,nav,furniture,
                                   # objects,blocks,lots,buildings,districts,
