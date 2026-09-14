@@ -63,6 +63,10 @@ struct BuildingRecipe {
         PodiumTower, // a full-lot PODIUM of a few floors carrying a slender
                      // TOWER above it — the modern downtown block (density
                      // round: "more varied building shapes")
+        TowerInPlaza // the 1961 New York model (Seagram): the tower pulled
+                     // 12-30 m back from the avenue, the front of the lot a
+                     // paved PLAZA with pools, planters and benches
+                     // (skyscrapers v2, ADR-0086 point 5)
     };
     Massing massing = Massing::LotPlan;
     BuildingParams params;      // style/windows/roof/floors, ready to grow

@@ -647,6 +647,80 @@ void sculptPaving(const Poly2& lotIn, Real paveY,
     }
 }
 
+// The FORECOURT of a tower in a plaza (ADR-0086 point 5, the 1961 New York
+// model): the paved strip between the avenue and the tower, dressed the way
+// Seagram's is — two square reflecting pools toward the front corners, a row
+// of stone planters with trees along the tower's foot, benches between. The
+// paving itself is the lot's plate (already laid at the sidewalk's height);
+// this only stands things on it. `plaza` is the strip in world XZ, `f` the
+// site frame (u along the avenue, v inward), `y` the plate's top.
+void sculptForecourt(LotBuilding& b, const Poly2& plaza, const SiteFrame& f, Real y,
+                     uint32_t seed, std::vector<RenderMesh>* outParts) {
+    if (!outParts || plaza.size() < 3) return;
+    Hash rng(mix(seed, 0x51A7A9EDu));
+    Real x0 = 1e30, x1 = -1e30, y0 = 1e30, y1 = -1e30;
+    for (const Vec2& w : plaza) {
+        const Vec2 q = f.toFrame(w);
+        x0 = std::min(x0, q.x); x1 = std::max(x1, q.x);
+        y0 = std::min(y0, q.y); y1 = std::max(y1, q.y);
+    }
+    const Real W = x1 - x0, P = y1 - y0;
+    if (W < 16 || P < 10) return;
+    const Vec3 up(0, 1, 0);
+    const Vec3 stone(0.72, 0.70, 0.66);
+    const Vec3 u3(f.u.x, 0, f.u.y), v3(f.v.x, 0, f.v.y);
+    BuildingMesh kit;
+    auto at = [&](Real fx, Real fy) { const Vec2 w = f.toWorld({fx, fy}); return Vec3(w.x, y, w.y); };
+    // Two square POOLS: a 0.42 m stone rim, water inside.
+    const Real s = std::min(Real(7.5), std::min(W * 0.22, P * 0.36));
+    if (s >= 3.0) {
+        for (int side = 0; side < 2; ++side) {
+            const Real cx0 = side ? x1 - W * 0.22 : x0 + W * 0.22;
+            const Real cy0 = y0 + P * 0.46;
+            const Vec3 o = at(cx0 - s * 0.5, cy0 - s * 0.5);
+            const Real rim = 0.45;
+            // Four rim walls around the basin.
+            emitBox(kit, Scope{o, {u3, up, v3}, Vec3(s, 0.42, rim)}, PartId::Trim, stone);
+            emitBox(kit, Scope{o + v3 * (s - rim), {u3, up, v3}, Vec3(s, 0.42, rim)}, PartId::Trim, stone);
+            emitBox(kit, Scope{o + v3 * rim, {u3, up, v3}, Vec3(rim, 0.42, s - 2 * rim)}, PartId::Trim, stone);
+            emitBox(kit, Scope{o + u3 * (s - rim) + v3 * rim, {u3, up, v3}, Vec3(rim, 0.42, s - 2 * rim)}, PartId::Trim, stone);
+            // The water: a dark glassy sheet 0.3 m up the rim.
+            RenderMesh water;
+            const Vec3 w0 = o + u3 * rim + v3 * rim + up * 0.30;
+            const Vec3 w1 = w0 + u3 * (s - 2 * rim), w2 = w1 + v3 * (s - 2 * rim), w3 = w0 + v3 * (s - 2 * rim);
+            MeshBuilder::emitQuad(water, w0, w1, w2, w3, up, Vec3(0.20, 0.34, 0.40));
+            MeshBuilder::append((*outParts)[static_cast<std::size_t>(PartId::Glass)], water);
+        }
+    }
+    // PLANTERS along the tower's foot (the plaza's rear edge), trees in them.
+    {
+        const int np = std::max(2, std::min(6, static_cast<int>(W / 9)));
+        for (int k = 0; k < np; ++k) {
+            const Real fx = x0 + W * (k + 0.5) / np;
+            const Real fy = y1 - 2.4;
+            const Vec3 o = at(fx - 0.85, fy - 0.85);
+            emitBox(kit, Scope{o, {u3, up, v3}, Vec3(1.7, 0.55, 1.7)}, PartId::Trim, stone * 0.9);
+            const Vec2 w = f.toWorld({fx, fy});
+            b.treeSpots.push_back(Vec3(w.x, rng.range(0.6, 0.85), w.y));
+        }
+    }
+    // BENCHES facing the avenue, between the pools.
+    {
+        const Vec3 wood(0.45, 0.34, 0.22);
+        const int nb = std::max(2, std::min(5, static_cast<int>(W / 10)));
+        for (int k = 0; k < nb; ++k) {
+            const Real fx = x0 + W * (k + 0.5) / nb;
+            const Real fy = y0 + P * 0.62;
+            const Vec3 o = at(fx - 0.8, fy - 0.22) + up * 0.42;
+            emitBox(kit, Scope{o, {u3, up, v3}, Vec3(1.6, 0.07, 0.44)}, PartId::Wood, wood);
+            for (int lg = 0; lg < 2; ++lg)
+                emitBox(kit, Scope{at(fx + (lg ? 0.55 : -0.65), fy - 0.18), {u3, up, v3}, Vec3(0.10, 0.42, 0.36)},
+                        PartId::Metal, Vec3(0.20, 0.21, 0.22));
+        }
+    }
+    appendKit(kit, outParts);
+}
+
 void sculptPlaza(LotBuilding& b, const Poly2& planIn,
                  const std::function<Real(Real, Real)>& ground, uint32_t seed,
                  std::vector<RenderMesh>* outParts, const RoadGraph* roads,
@@ -2584,6 +2658,51 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     }
                 }
             }
+            // TOWER IN THE PLAZA (ADR-0086 point 5; the 1961 New York model —
+            // Seagram: a 29 x 44 m slab on a 60 x 90 m lot behind a 27 m plaza).
+            // On a rectified site deep enough for it, the tower takes 55-70 % of
+            // the width and stands 32-42 % of the depth back from the avenue;
+            // the strip in front is the plaza, paved by the lot's plate and
+            // dressed by sculptForecourt. The tower is slender by design, so it
+            // is re-capped on ITS plate and the plan-quality scaling (which
+            // reads a small plan on a big site as a pinched wedge) is skipped.
+            Poly2 plazaPoly;
+            if (std::getenv("RT_SITE_DEBUG") && rec.massing == BuildingRecipe::Massing::TowerInPlaza)
+                std::printf("[plaza-probe] %s planOk %d rectified %d site %zu\n", rec.name.c_str(), planOk ? 1 : 0, siteRectified ? 1 : 0, site.size());
+            if (planOk && siteRectified && rec.massing == BuildingRecipe::Massing::TowerInPlaza) {
+                const SiteFrame& f = siteFrameOf;
+                Real fx0 = 1e30, fx1 = -1e30, fy0 = 1e30, fy1 = -1e30;
+                for (const Vec2& v : site) {
+                    const Vec2 q = f.toFrame(v);
+                    fx0 = std::min(fx0, q.x); fx1 = std::max(fx1, q.x);
+                    fy0 = std::min(fy0, q.y); fy1 = std::max(fy1, q.y);
+                }
+                const Real W = fx1 - fx0, D = fy1 - fy0;
+                if (std::getenv("RT_SITE_DEBUG")) std::printf("[plaza-probe]   W %.1f D %.1f\n", W, D);
+                // A downtown lot is 48-60 m deep; a 28 m one still holds a tower
+                // with a 10 m forecourt (a plaza the width of the lot and the depth
+                // of a small square).
+                if (W >= 26 && D >= 28) {
+                    const Real P = std::clamp(D * rng.range(0.32, 0.42), Real(10), Real(30));
+                    const Real tw = std::clamp(W * rng.range(0.55, 0.70), Real(20), Real(46));
+                    const Real td = D - P;
+                    if (td >= 16) {
+                        const Real cx0 = (fx0 + fx1) * 0.5;
+                        Poly2 tower{f.toWorld({cx0 - tw * 0.5, fy0 + P}), f.toWorld({cx0 + tw * 0.5, fy0 + P}),
+                                    f.toWorld({cx0 + tw * 0.5, fy1}), f.toWorld({cx0 - tw * 0.5, fy1})};
+                        ensureCCW(tower);
+                        plan = tower;
+                        plazaPoly = {f.toWorld({fx0, fy0}), f.toWorld({fx1, fy0}), f.toWorld({fx1, fy0 + P}), f.toWorld({fx0, fy0 + P})};
+                        ensureCCW(plazaPoly);
+                        // Re-cap on the tower's own plate (the recipe capped on the site's).
+                        const int maxFloors = std::max(1, static_cast<int>(std::min(tw, td) * 6.0 / 3.2) - 1);
+                        bp.floors = std::min(bp.floors, maxFloors);
+                        bp.setbackFloors = 0;   // a slab in a plaza rises sheer
+                        bp.setbackEvery = 0;
+                        bp.envelope = BuildingParams::Envelope::None;
+                    }
+                }
+            }
             // BOX-MASS recipes (pagoda / cylinder shapes) must reach
             // growBuilding — the plan path can't dispatch a BuildingShape —
             // so a roomy rect-ish lot takes the shrink-fit box fallback
@@ -2743,7 +2862,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     emitGreen(); continue;
                 }
                 const Real qq = effShort / std::max(shortSide, Real(1e-6));
-                if (qq < 0.8)
+                if (qq < 0.8 && plazaPoly.size() < 3)
                     bp.floors = std::max(1, static_cast<int>(bp.floors * qq));
             }
 
@@ -2851,6 +2970,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     if (any) b.pavedLot = offsetPolygonEdges(b.pavedLot, apron);
                 }
                 if (courtNotch.size() >= 3) b.open.push_back({courtNotch, OpenKind::Courtyard});
+                if (plazaPoly.size() >= 3) {
+                    b.open.push_back({plazaPoly, OpenKind::Plaza});
+                    if (std::getenv("RT_SITE_DEBUG"))
+                        std::printf("[plaza-at] %s at (%.1f, %.1f) plaza %.0f m2 floors %d\n", rec.name.c_str(),
+                                    b.site.x, b.site.y, area(plazaPoly), bp.floors);
+                }
                 ++pavedLots;
             }
             // Entrance steps meet the REAL ground (Glenn's foundation-block
@@ -3043,6 +3168,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             b.height = bm.height > 0 ? bm.height : 8.0;
             if (!paved) emitFoundation(b.plan, b.groundY, b.baseY);   // the plate is the foundation of a paved lot
             else sculptPaving(b.pavedLot, b.paveY, meshGround, outParts, outFlatParts);
+            if (paved && plazaPoly.size() >= 3)
+                sculptForecourt(b, plazaPoly, siteFrameOf, b.paveY,
+                                mix(pp.seed, static_cast<uint32_t>(li) * 37u + 23u), outParts);
             // A yarded house earns its LANDSCAPING: front walk to the street,
             // a hedge along the front lot line, back-yard tree spots.
             if (yardApplied)

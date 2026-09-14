@@ -6575,9 +6575,17 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
    and from the first or second step a centred shaft of 28–42 % of the plan (`streetWallEnvelope`,
    `architect.cpp`) — worn by `stepped_tower` and `art_deco_tower` at 10 floors and over; shorter ones
    keep uniform setbacks. Lua reads `envelope = "street_wall_setback"` and the six knobs
-   (`readBuildingParamsOnto`). Still to come: the tower-in-plaza site composition, podium-tower,
-   slab, point tower, perimeter block, bundled taper, and a per-street (not all-sides) sky-exposure
-   plane.
+   (`readBuildingParamsOnto`).
+   *Landed second (2026-09-14):* **the tower in the plaza**, the 1961 New York model, as a site-level
+   composition (`Massing::TowerInPlaza`, chosen by `glass_tower` on a roomy lot with coreness over
+   0.4, half the time). On a rectified site at least 28 m wide and 34 m deep the tower takes 55–70 %
+   of the width and stands 32–42 % of the depth (12–30 m) back from the avenue, re-capped on its own
+   plate and rising sheer; the strip in front is the plaza — paved by the lot's plate at the sidewalk's
+   height, recorded as `OpenKind::Plaza`, and dressed by `sculptForecourt` the way Seagram's is: two
+   square reflecting pools toward the front corners, stone planters with trees along the tower's foot,
+   benches between. The plan-quality scaling (a small plan on a big site reads as a pinched wedge) is
+   skipped for it. Still to come: podium-tower, slab, point tower, perimeter block, bundled taper, and a
+   per-street (not all-sides) sky-exposure plane.
 
 6. **The building pad is the parcel, at the front street's level, and it never ends inside the
    building.** The old pad was the plan plus a 2.2 m apron with a 5 m feather, which reached the lot

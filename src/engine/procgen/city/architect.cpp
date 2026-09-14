@@ -153,9 +153,14 @@ void recipeGlassTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
                         p.setbackEvery = rng.range(1.2, 1.8); }
     if (p.floors > 16) p.setbackFloors = rng.irange(5, 7);
     cx.slender = 3.0 + cx.coreness * 4.5;
-    // Roomy square-ish lots sometimes go ROUND (a drum tower).
+    // Roomy square-ish lots sometimes go ROUND (a drum tower); otherwise, near
+    // downtown, half of them stand back from the avenue in a PLAZA (the 1961
+    // New York model — Seagram); the lot pass needs a deep enough site and
+    // falls back to the full plan when it has not got one.
     if (cx.roomy && rng.unit() < 0.35)
         out.massing = BuildingRecipe::Massing::Circle;
+    else if (cx.roomy && cx.coreness > 0.4 && rng.unit() < 0.5)
+        out.massing = BuildingRecipe::Massing::TowerInPlaza;
     out.placeType = "office";
     out.name = "glass_tower";
 }

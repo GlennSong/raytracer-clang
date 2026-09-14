@@ -1263,3 +1263,34 @@ TEST_CASE(paved_plates_reach_the_sidewalk_and_stop_there) {
     CHECK(std::fabs(o[0].y + 2.0) < 1e-9 && std::fabs(o[1].y + 2.0) < 1e-9);
     CHECK(std::fabs(o[2].y - 10.0) < 1e-9 && std::fabs(o[0].x) < 1e-9 && std::fabs(o[1].x - 10.0) < 1e-9);
 }
+
+// TOWER IN THE PLAZA (ADR-0086 point 5, the 1961 New York model): on a deep
+// financial site a glass tower stands 12-30 m back from the avenue and the
+// strip in front is a paved plaza — recorded as open space, dressed, and the
+// tower re-capped on its own plate.
+TEST_CASE(a_tower_in_a_plaza_stands_back_from_the_avenue) {
+    int plazas = 0;
+    for (uint32_t seed = 1; seed <= 8 && plazas == 0; ++seed) {
+        LotParams p;
+        p.center = {0, 0};
+        p.seed = seed;
+        p.innerRadius = 200;   // every fixture block is downtown
+        p.midRadius = 400;
+        std::vector<RenderMesh> parts;
+        std::vector<LotBuilding> b = growLotBuildings(squareBlocks(), p, nullptr, &parts);
+        for (const LotBuilding& lb : b) {
+            for (const OpenSpace& o : lb.open) {
+                if (o.kind != OpenKind::Plaza) continue;
+                ++plazas;
+                CHECK(lb.recipe == "glass_tower");
+                CHECK(area(o.poly) >= 10.0 * 26.0 * 0.9);
+                // The plaza lies between the lot's frontage and the tower: no
+                // tower corner inside it.
+                for (const Vec2& v : lb.plan) CHECK(!pointInPolygon(o.poly, v));
+                CHECK(!lb.pavedLot.empty());
+                CHECK(!lb.treeSpots.empty());   // the planters' trees
+            }
+        }
+    }
+    CHECK(plazas > 0);
+}
