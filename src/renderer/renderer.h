@@ -102,6 +102,12 @@ struct RenderMaterial {
     // Honoured by the Vulkan and Metal mesh shaders (WebGPU has no
     // transparent pass).
     static constexpr uint32_t FLAG_ALPHA_FROM_MAP = 64;
+    // FRONT FACE ONLY (skyscrapers v2, looking out): fragments whose normal
+    // faces away from the camera are discarded. The exterior window panes
+    // carry it, so from INSIDE a streamed interior the facade's pane is not
+    // there and the interior's own transparent pane shows the city; from
+    // outside nothing changes. Vulkan and Metal.
+    static constexpr uint32_t FLAG_FRONT_ONLY = 128;
 
     // World-space procedural surface library (applySurface in surfaces.metal /
     // scene.cpp): an analytic material — brick, concrete, roof tiles, asphalt,

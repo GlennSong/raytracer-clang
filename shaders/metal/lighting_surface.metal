@@ -106,6 +106,8 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
     applySurfaceRelief(surfId, geom.worldPosition, geom.texcoord, camera.windTime,
                        camera.cameraPosition, normal, rough);
     float3 viewDir = normalize(camera.cameraPosition - geom.worldPosition);
+    // FLAG_FRONT_ONLY (128): the back of this surface does not exist.
+    if ((int(mat.flags) & 128) && dot(normal, viewDir) < 0.0) discard_fragment();
     float NdotV = max(dot(normal, viewDir), 0.0);
 
     // Albedo debug view: output the final material color (after texture + tint),

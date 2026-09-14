@@ -282,7 +282,19 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
             rd.material = floorFinishFor(r.params);
         else if (floorFam && pid == stairFinishPartFor(r.params))
             rd.material = stairFinishFor(r.params);
-        else
+        else if (pid == PartId::Glass || pid == PartId::GlassLit) {
+            // The interior's own panes are CLEAR (looking out): a faint blue
+            // tint, a sharp fresnel, most of the city coming through — and
+            // both faces, since the facade's pane is front-only and gone from
+            // in here.
+            rd.material = materialFor(PartId::Glass, r.params.wallColor);
+            rd.material.albedo = Vec3(0.55, 0.66, 0.74);
+            rd.material.metallic = 0.0f;
+            rd.material.roughness = 0.06f;
+            rd.material.opacity = 0.18f;
+            rd.material.flags &= ~RenderMaterial::FLAG_FRONT_ONLY;
+            rd.material.flags &= ~RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT;
+        } else
             rd.material = materialFor(pid, r.params.wallColor);
         // Bind the baked surface texture set, like the loader does for the
         // merged city parts — the surface FLAG alone leaves the shader on
@@ -317,8 +329,8 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
         // Only the lit panes' inner faces glow at night (they are the windows
         // seen from inside); drywall keeps its own faint self-light — ramping
         // the walls lit every room up like a window (Glenn, 2026-09-14).
-        if (pid == PartId::GlassLit)
-            world.add<NightGlow>(e, NightGlow{Vec3(1.0, 1.0, 1.0) * 1.3});
+        // (No NightGlow on the interior's panes: they are clear now, and a
+        // glowing sheet between you and the city was the old look.)
         res.entities.push_back(e);
         res.meshes.push_back(mh);
     }

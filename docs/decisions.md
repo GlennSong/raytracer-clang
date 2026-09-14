@@ -6695,6 +6695,20 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
     by day and night whatever its albedo (measured: a red-painted metallic proxy still drew white).
     Beyond about a kilometre the aerial fog toward the sky colour is what the far city looks like at
     night, in every tier; that is the atmosphere's call, not the LOD's.
+
+12. **Looking out** (skyscrapers v2, the floors' payoff; Glenn: "maybe it's time to make the windows
+    transparent"). Three tiers by what is behind the glass: REAL for the building you are in (the
+    streamed interior's own panes are drawn clear — a faint blue tint, opacity 0.18, no night glow —
+    and a curtain-wall storey's inner face is now a glass part above a painted spandrel band), FAKED
+    for every other building in the facade tiers (interior-mapped panes, owed), MATERIAL past the
+    facade distance (point 11's baked window map). The exterior panes carry
+    `RenderMaterial::FLAG_FRONT_ONLY` (Vulkan and Metal: a fragment whose normal faces away from the
+    camera is discarded), so from inside a floor the facade's own pane is not there and the interior's
+    clear pane shows the city — no per-building material switching, no chunk splitting; looking in at a
+    real upper floor from the street is the one case given up. `RT_SPAWN=x,y,z` starts the walker
+    anywhere, verbatim (no prism walk-out, no terrain snap), so a headless frame can stand on the 22nd
+    floor: `after_m5_floor22_looking_out.png`, `after_m5_floor22_core.png`. Owed: interior-mapped panes
+    (the skyline), clear lobby glass on enterable buildings.
     Still owed: podium uplights, and a Lua-readable per-building lighting spec (today the choices
     are hashed, not authored).
 

@@ -972,3 +972,27 @@ TEST_CASE(distant_mass_box_carries_window_cell_uvs) {
     CHECK(std::fabs(maxV - 51.2f / (3.2f * 8)) < 1e-4f);
     for (std::size_t i = 16; i < 20; ++i) CHECK(m.vertices[i].u < 0.1f && m.vertices[i].v < 0.1f);
 }
+
+TEST_CASE(curtain_wall_interiors_look_out_through_clear_panes) {
+    // Looking out (skyscrapers v2): the facade's panes are front-face only,
+    // and a curtain-wall storey's inner face is a glass part above a painted
+    // spandrel band — the interior system draws that part clear.
+    CHECK(materialFor(PartId::Glass, Vec3(1, 1, 1)).flags & RenderMaterial::FLAG_FRONT_ONLY);
+    CHECK(materialFor(PartId::GlassLit, Vec3(1, 1, 1)).flags & RenderMaterial::FLAG_FRONT_ONLY);
+    const Poly2 plan = {{0, 0}, {30, 0}, {30, 24}, {0, 24}};
+    BuildingParams p;
+    p.floors = 6;
+    p.curtainWall = true;
+    p.walkableGround = true;
+    p.openDoorway = true;
+    p.core = 1;
+    p.seed = 3;
+    const BuildingMesh bm = growInterior(plan, p, 0.0);
+    std::size_t glassVerts = 0, paintVerts = 0;
+    for (const RenderMesh& part : bm.parts) {
+        if (part.materialIndex == static_cast<int>(PartId::Glass)) glassVerts += part.vertices.size();
+        if (part.materialIndex == static_cast<int>(PartId::Interior)) paintVerts += part.vertices.size();
+    }
+    CHECK(glassVerts >= 4 * 4 * 6);   // four edges, six upper storeys, a quad each
+    CHECK(paintVerts > 0);
+}

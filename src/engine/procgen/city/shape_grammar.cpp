@@ -159,7 +159,10 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
     RenderMaterial m;
     switch (id) {
         case PartId::Glass:
-            m.albedo = {0.18, 0.27, 0.34}; m.metallic = 0.9f; m.roughness = 0.08f; break;
+            // Front face only: from inside a streamed interior the facade's
+            // pane is not there, and the interior's own clear pane shows out.
+            m.albedo = {0.18, 0.27, 0.34}; m.metallic = 0.9f; m.roughness = 0.08f;
+            m.flags |= RenderMaterial::FLAG_FRONT_ONLY; break;
         case PartId::GlassLit:
             // Indistinguishable from Glass by DAY — the lit third of the
             // windows must not read as a checkerboard at noon. Night is the
@@ -168,7 +171,7 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
             // FLAG_EMISSIVE_VERTEX_TINT shader path applies to the emission
             // only, so the day glass stays the one glass colour.
             m.albedo = {0.18, 0.27, 0.34}; m.metallic = 0.9f; m.roughness = 0.08f;
-            m.flags |= RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT; break;
+            m.flags |= RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT | RenderMaterial::FLAG_FRONT_ONLY; break;
         case PartId::Beacon:
             // The lamp's LENS: red glass — a dark red by day with a tight
             // specular so it catches the sky; the loader's NightGlow +
@@ -656,7 +659,8 @@ Real interiorInset(const BuildingParams& p) {
 // so the room's corners close instead of leaving a `thick`-wide slot to see
 // the sky through (Glenn: "the skyscraper interiors don't have corners").
 static void emitInsetSkin(BuildingMesh& out, const Poly2& plan, std::size_t edge, Real y0, Real h,
-                          Real thick, const Vec3& paint, bool bothSides) {
+                          Real thick, const Vec3& paint, bool bothSides,
+                          PartId part = PartId::Interior) {
     if (plan.size() < 3) return;
     const Poly2 inner = offsetPolygonEdges(plan, std::vector<Real>(plan.size(), -thick));
     if (inner.size() != plan.size()) return;
@@ -672,7 +676,7 @@ static void emitInsetSkin(BuildingMesh& out, const Poly2& plan, std::size_t edge
     if (bothSides)
         emitQuad(skin, Vec3(a.x, y0, a.y), Vec3(b.x, y0, b.y), Vec3(b.x, y0 + h, b.y),
                  Vec3(a.x, y0 + h, a.y), Vec3(nOut.x, 0, nOut.y), paint);
-    appendToPart(out, PartId::Interior, skin);
+    appendToPart(out, part, skin);
 }
 
 void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
@@ -2805,8 +2809,14 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             const FaceRect fr =
                 planEdgeRect(spk.plan, e, baseY + spk.y0, spk.h);
             if (params.curtainWall) {
-                emitInsetSkin(out, spk.plan, e, baseY + spk.y0, spk.h,
+                // The inside of a curtain wall is GLASS above a spandrel band:
+                // the pane part, which the interior system draws clear, so a
+                // floor looks out over the city; the band is painted.
+                const Real band = std::min(Real(0.85), spk.h * 0.3);
+                emitInsetSkin(out, spk.plan, e, baseY + spk.y0, band,
                               interiorInset(params), interiorPaintFor(params), false);
+                emitInsetSkin(out, spk.plan, e, baseY + spk.y0 + band, spk.h - band,
+                              interiorInset(params), Vec3(1, 1, 1), false, PartId::Glass);
             } else {
                 emitInnerWallRect(out, fr, facadeLayout(fr, upMode, params),
                                   interiorInset(params), params.wallColor,

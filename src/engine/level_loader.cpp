@@ -1081,7 +1081,7 @@ static void loadPlayer(const json& player, World& world) {
     const TerrainLodConfig* tc = nullptr;
     world.each<TerrainLodConfig>(
         [&](Entity, TerrainLodConfig& cfg) { if (!tc) tc = &cfg; });
-    if (tc) {
+    if (tc && !std::getenv("RT_SPAWN")) {   // RT_SPAWN is taken verbatim (a floor of a tower, say)
         Noise noise(tc->seed);
         double surface = terrainHeight(tc->params, noise, t.position.x, t.position.z);
         t.position.y = surface + cc.radius + cc.halfHeight + 1.0;   // drop ~1 m on
@@ -4776,10 +4776,22 @@ bool LevelLoader::load(const std::string& path,
     if (!std::getenv("RT_NO_PLAYER")) {
         if (root.contains("player")) {
             json pj = root["player"];
+            // RT_SPAWN=x,y,z: a debug spawn, taken verbatim — no walk-out of
+            // prisms, no terrain lift — so a headless shot can start a walker
+            // on the 20th floor of a tower and the interior streams around it.
+            bool spawnOverride = false;
+            if (const char* sp = std::getenv("RT_SPAWN")) {
+                double sx = 0, sy = 0, sz = 0;
+                if (std::sscanf(sp, "%lf,%lf,%lf", &sx, &sy, &sz) == 3) {
+                    pj["position"] = json::array({sx, sy, sz});
+                    spawnOverride = true;
+                    LOG_INFO << "[player] RT_SPAWN override: (" << sx << ", " << sy << ", " << sz << ")";
+                }
+            }
             // Terrain levels: never spawn under a hill — authored spawns
             // assume flat ground, so lift the point to the surface when the
             // terrain there is higher.
-            if (entityGround && pj.contains("position") &&
+            if (entityGround && !spawnOverride && pj.contains("position") &&
                 pj["position"].is_array() && pj["position"].size() >= 3) {
                 double px = pj["position"][0].get<double>();
                 const double py = pj["position"][1].get<double>();

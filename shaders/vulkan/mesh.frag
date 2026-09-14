@@ -629,6 +629,8 @@ void main() {
     if ((texFlags & 16u) != 0u) emission *= texture(emissiveMap, inTexcoord).rgb;
 
     vec3 N = normalize(inWorldNormal);
+    // FLAG_FRONT_ONLY (128): the back of this surface does not exist.
+    if ((pc.surfaceFlags.y & 128u) != 0u && dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0) discard;
     // Normal map (bit 2): perturb N in tangent space. Gram-Schmidt the tangent
     // against N, then T,B,N form the TBN basis (ported from lighting.metal).
     if ((texFlags & 4u) != 0u) {

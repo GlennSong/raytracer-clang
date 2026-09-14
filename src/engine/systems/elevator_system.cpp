@@ -30,10 +30,13 @@ long long leafKey(int storey, int hoistway, bool left) {
 }
 
 RenderMaterial steel() {
+    // Brushed steel, but only a little metallic: a strongly metallic surface
+    // inside a room with nothing to reflect renders black (the hoistway
+    // leaves read as holes from the 22nd floor).
     RenderMaterial m;
-    m.albedo = {0.58, 0.58, 0.60};
-    m.metallic = 0.85f;
-    m.roughness = 0.32f;
+    m.albedo = {0.62, 0.62, 0.64};
+    m.metallic = 0.25f;
+    m.roughness = 0.45f;
     return m;
 }
 }  // namespace
