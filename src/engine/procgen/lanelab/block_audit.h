@@ -37,6 +37,11 @@ struct PadConflict { int pad = -1; std::string what; double area = 0, rise = 0; 
 
 // The feather a lanelab level allows a pad: to the kerb, never into the road.
 double lanelabPadFalloff(double sidewalk);
+// The sidewalk's top above the ground a lot samples beside it (ADR-0086): the
+// conform skirt drops the ground `skirtDrop` under the road envelope and the
+// slab stands `kSidewalkLift` over the deck. The default rule — an authored
+// skirtDrop does not yet travel through the city bundle (open).
+double lanelabSidewalkRise();
 // Building pads clipped to the block that holds each lot, feathered no further than the sidewalk. The loader
 // grades a lanelab level with exactly these; the audit checks exactly these.
 std::vector<TerrainFlatten> clipPadsToBlocks(const std::vector<LotBuilding>& lots, const std::vector<Poly2>& blocks, double sidewalk);

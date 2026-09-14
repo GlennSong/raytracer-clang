@@ -15,7 +15,7 @@ namespace engine {
 namespace lanelab {
 
 // Bump whenever the lot pass's output changes for the same inputs (the key cannot see code).
-const char* const kLotsBuildTag = "2026-09-13.1";
+const char* const kLotsBuildTag = "2026-09-13.2";
 
 namespace {
 using bundle::BinReader;
@@ -120,6 +120,7 @@ NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInput
     Vec2 spawn; const bool haveSpawn = authoredSpawnXZ(in.level, spawn);
     LotGrowSetup s = lotGrowSetupForLevel(cs, in.levelDir, ground, {}, nullptr, 0.0, haveSpawn ? &spawn : nullptr);
     s.lp.roadMargin = 0;   // the lab's blocks are exact to the kerb and already inset by the sidewalk
+    s.lp.sidewalkRise = engine::lanelab::lanelabSidewalkRise();   // paving meets the lab's sidewalk (ADR-0086)
     const auto t0 = std::chrono::steady_clock::now();
     NetLotResult r;
     r.lots = growLotBuildings(blocks, s.lp, &r.plan, s.planOnly ? nullptr : &r.parts, nullptr, 0.0,

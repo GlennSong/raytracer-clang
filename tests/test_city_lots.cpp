@@ -1142,3 +1142,48 @@ TEST_CASE(grown_buildings_stand_on_rectilinear_footprints) {
     }
     CHECK(outside == 0);
 }
+
+// ADR-0086: a downtown building stands on concrete at the sidewalk's height.
+// With a sidewalk datum, every rectified urban lot is paved to its lot line at
+// groundY + sidewalkRise, the building's base IS that paving, and the paving
+// geometry lands in the Pavement part; a residential lot keeps its lawn.
+TEST_CASE(urban_lots_are_paved_at_the_sidewalk_datum) {
+    LotParams p;
+    p.center = {0, 0};
+    p.seed = 3;
+    p.ground = [](Real, Real) { return Real(10.0); };
+    p.sidewalkRise = 0.38;
+    std::vector<RenderMesh> parts, flat;
+    std::vector<LotBuilding> b = growLotBuildings(squareBlocks(), p, nullptr, &parts, nullptr, 0.0, &flat);
+    int paved = 0, urbanRectified = 0, residentialPaved = 0;
+    for (const LotBuilding& lb : b) {
+        if (lb.units.empty()) continue;
+        const bool urban = lb.district == "financial" || lb.district == "commercial" ||
+                           lb.district == "oldtown" || lb.district == "industrial";
+        if (!lb.pavedLot.empty()) {
+            ++paved;
+            CHECK(urban);
+            CHECK_APPROX(lb.paveY, lb.groundY + 0.38, 1e-9);
+            CHECK_APPROX(lb.baseY, lb.paveY, 1e-9);
+            CHECK(lb.pavedLot.size() >= 3u);
+            // The pad flattens the whole lot, not just the plan.
+            const TerrainFlatten f = lotPadFlatten(lb, 2.2, 5.0);
+            CHECK(f.polygon.size() == lb.pavedLot.size());
+            if (lb.district == "residential") ++residentialPaved;
+        }
+        if (urban && !lb.open.empty()) ++urbanRectified;
+    }
+    CHECK(paved > 0);
+    CHECK(residentialPaved == 0);
+    CHECK(paved >= urbanRectified / 2);   // houses, drums-on-plazas aside, urban rectified lots pave
+    CHECK(!parts[static_cast<std::size_t>(PartId::Path)].vertices.empty());
+    CHECK(!flat[static_cast<std::size_t>(PartId::Path)].vertices.empty());
+    const SkylineCensus c = skylineCensus(b);
+    CHECK(c.paved == paved);
+    // No datum: the paving sits at the plinth, still flush with the base.
+    LotParams q = p;
+    q.sidewalkRise = 0;
+    std::vector<LotBuilding> b2 = growLotBuildings(squareBlocks(), q, nullptr, nullptr);
+    for (const LotBuilding& lb : b2)
+        if (!lb.pavedLot.empty()) CHECK_APPROX(lb.baseY, lb.groundY + q.plinth, 1e-9);
+}

@@ -29,6 +29,12 @@ namespace engine {
 // parameter, exactly like buildRoadNetLattice always did.
 
 // ---- presentation: how the road is drawn, not what it is -------------------
+// The road CARVE steps the terrain this far BELOW the drivable profile under
+// the road footprint (roadNetConformRegions); the curb skirt hides the step.
+// The sidewalk slab top is deck + RoadLook::curb, so a lot's paving meets the
+// sidewalk at ground + kRoadConformStep + curb — the lot pass's sidewalkRise.
+constexpr double kRoadConformStep = 0.22;
+
 struct RoadLook {
     double defaultWidth = 10.0;   // seeds RoadEdge::width where unspecified ("widen" control)
     double sidewalk = 3.5;        // raised sidewalk width per verge (m)

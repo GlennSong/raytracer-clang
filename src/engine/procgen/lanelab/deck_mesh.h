@@ -13,6 +13,10 @@
 namespace engine {
 namespace lanelab {
 
+// The sidewalk slab's top above the lane deck — the kerb. Named so the lot
+// pass's paving datum (block_audit.h lanelabSidewalkRise) is the mesher's own number.
+constexpr double kSidewalkLift = 0.12;
+
 struct NamedMesh { std::string name; RenderMesh mesh; Vec3 color; };
 
 // One mesh per material: asphalt (deck tops and bottoms), concrete (walls, piers), sidewalk,

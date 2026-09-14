@@ -1779,7 +1779,7 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadEntity& roadIn,
         // terrain grid interpolates between its samples and can overshoot the
         // carve target past the road's small lift, patchily swallowing the
         // deck. 0.22 m keeps the deck proud; the curb skirt hides the step.
-        for (double& hh : profile) hh -= 0.22;
+        for (double& hh : profile) hh -= kRoadConformStep;
         // Flatten out to the SIDEWALK's outer edge, not just the carriageway —
         // the sidewalk band rides the same smoothed profile and needs ground
         // graded under it too.
@@ -1853,7 +1853,7 @@ std::vector<TerrainFlatten> roadNetConformRegions(const RoadEntity& roadIn,
             Vec2 axis = gdir.length() > 1e-6 ? normalize(gdir) : Vec2(1, 0);
             const Vec2 A = C - axis * r, B = C + axis * r;
             out.push_back(makeFlattenRamp(Vec3(A.x, 0, A.y), Vec3(B.x, 0, B.y),
-                                          deckAt(A) - 0.22, deckAt(B) - 0.22, r,
+                                          deckAt(A) - kRoadConformStep, deckAt(B) - kRoadConformStep, r,
                                           falloff));
             out.back().owner = -2 - v;   // junction pad for node v
         }

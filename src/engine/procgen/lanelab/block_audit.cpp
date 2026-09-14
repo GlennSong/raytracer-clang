@@ -1,3 +1,5 @@
+#include "engine/procgen/lanelab/deck_mesh.h"
+#include "engine/procgen/lanelab/road_graph_spec.h"
 #include "engine/procgen/lanelab/block_audit.h"
 
 #include "engine/level_params.h"
@@ -68,6 +70,8 @@ std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simpli
 }
 
 std::vector<Poly2> sceneBlocks(const Result& r, double simplify, double minArea, double insetBy) { return blocksFromHoles(pavementHoles(r, minArea), simplify, insetBy); }
+
+double lanelabSidewalkRise() { return Rules{}.skirtDrop + kSidewalkLift; }
 
 double lanelabPadFalloff(double sidewalk) { (void)sidewalk; return 2.0; }   // the feather lives INSIDE the block: footprints are inset by it, so the ramp ends at the block line
 

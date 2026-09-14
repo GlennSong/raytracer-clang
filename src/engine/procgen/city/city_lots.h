@@ -106,6 +106,11 @@ struct LotBuilding {
     // lies (forecourt / side yards / rear yard). World XZ. Empty when the lot
     // kept its own shape, and for parks/greens.
     std::vector<OpenSpace> open;
+    // PAVED URBAN LOT (ADR-0086): the whole lot polygon is one concrete plate
+    // at `paveY` (= groundY + sidewalkRise), the pad flattens the whole lot,
+    // and the building's baseY IS paveY. Empty / 0 when the lot is not paved.
+    Poly2 pavedLot;
+    Real paveY = 0;
 };
 
 struct LotParams {
@@ -118,6 +123,13 @@ struct LotParams {
     Real maxAspect = 3.5;     // ...or whose long/short exceeds this (no knife blades)
     Real minLotArea = 90.0;   // skip tiny leftover lots
     Real buildChance = 0.92;  // per-lot occupancy (rest become plazas/gaps)
+    // SIDEWALK RISE (site plans, ADR-0086): how far the adjoining sidewalk's
+    // top stands above the ground the lot samples 2 m out from its frontage —
+    // the road carve step plus the kerb (kRoadConformStep + RoadLook::curb on
+    // the lattice, lanelabSidewalkRise() in the lab). An urban lot is paved
+    // at groundY + sidewalkRise so its threshold meets the sidewalk; 0 = no
+    // datum, the paving sits at the plinth.
+    Real sidewalkRise = 0.0;
     Vec2 center{0, 0};        // downtown centre for the radial zoning
     Real innerRadius = 55.0;  // < this: downtown (offices/shops)
     Real midRadius = 135.0;   // < this: mixed; beyond: residential
@@ -257,6 +269,7 @@ struct SkylineCensus {
     // Storey bins: 1-3, 4-8, 9-20, 21-40, 41-60, 61+.
     static constexpr int kBinLo[kBins] = {1, 4, 9, 21, 41, 61};
     int built = 0;          // lots with grown units (a plaza is open space, not a building)
+    int paved = 0;          // built lots paved to their lot line at the sidewalk datum
     int parks = 0, greens = 0;
     int storeyBins[kBins] = {0, 0, 0, 0, 0, 0};
     int over20 = 0, over40 = 0, over60 = 0;

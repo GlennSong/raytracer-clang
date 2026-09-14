@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <map>
 
 namespace engine {
@@ -602,6 +604,45 @@ void sculptYard(LotBuilding& b, const Poly2& lotPoly, const Poly2& house,
 // not apply) — dressed with STAIRS where its edges meet lower ground, guard
 // FENCING over bigger drops, and a fountain / planters / benches / flower
 // beds that each CLAIM their footprint on the flat deck.
+// PAVING for an urban lot (ADR-0086): the whole lot becomes one flat concrete
+// plate at `paveY` — the sidewalk's top — with a concrete skirt down past the
+// surrounding ground, exactly as the plaza's deck is built. The plate runs
+// under the building too (hidden by its foundation and floor), so a drum, a
+// court notch or a short row strip never shows grass inside its own site.
+// Into BOTH LOD tiers: a paving that exists only up close is a lot that turns
+// to grass at a distance.
+void sculptPaving(const Poly2& lotIn, Real paveY,
+                  const std::function<Real(Real, Real)>& ground,
+                  std::vector<RenderMesh>* outParts, std::vector<RenderMesh>* outFlatParts) {
+    Poly2 lot = lotIn;
+    if (lot.size() < 3) return;
+    ensureCCW(lot);
+    auto gy = [&](const Vec2& v) { return ground ? ground(v.x, v.y) : paveY; };
+    const Vec3 up(0, 1, 0), white(1, 1, 1);
+    RenderMesh deck, skirt;
+    for (const std::array<int, 3>& t : triangulatePolygon(lot))
+        MeshBuilder::emitTri(deck, Vec3(lot[t[0]].x, paveY, lot[t[0]].y),
+                             Vec3(lot[t[1]].x, paveY, lot[t[1]].y),
+                             Vec3(lot[t[2]].x, paveY, lot[t[2]].y), up, white);
+    for (std::size_t i = 0; i < lot.size(); ++i) {
+        const Vec2& a = lot[i];
+        const Vec2& e = lot[(i + 1) % lot.size()];
+        const Vec2 d = e - a;
+        if (d.length() < 1e-6) continue;
+        const Vec2 n2 = normalize(Vec2(d.y, -d.x));   // CCW: right normal = outward
+        const Real lo = std::min(gy(a), gy(e)) - 0.5;
+        if (paveY - lo < 0.02) continue;
+        MeshBuilder::emitQuad(skirt, Vec3(a.x, lo, a.y), Vec3(e.x, lo, e.y),
+                              Vec3(e.x, paveY, e.y), Vec3(a.x, paveY, a.y),
+                              Vec3(n2.x, 0, n2.y), white);
+    }
+    for (std::vector<RenderMesh>* parts : {outParts, outFlatParts}) {
+        if (!parts || parts->size() <= static_cast<std::size_t>(PartId::Concrete)) continue;
+        MeshBuilder::append((*parts)[static_cast<std::size_t>(PartId::Path)], deck);
+        MeshBuilder::append((*parts)[static_cast<std::size_t>(PartId::Concrete)], skirt);
+    }
+}
+
 void sculptPlaza(LotBuilding& b, const Poly2& planIn,
                  const std::function<Real(Real, Real)>& ground, uint32_t seed,
                  std::vector<RenderMesh>* outParts, const RoadGraph* roads,
@@ -928,9 +969,13 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
 }  // namespace
 
 TerrainFlatten lotPadFlatten(const LotBuilding& lb, double apron, double falloff) {
-    Vec2 c2(0, 0); for (const Vec2& v : lb.plan) c2 = c2 + v; if (!lb.plan.empty()) c2 = c2 * (1.0 / static_cast<double>(lb.plan.size()));
-    std::vector<Vec3> poly; poly.reserve(lb.plan.size());
-    for (const Vec2& v : lb.plan) { const Vec2 d = v - c2; const double l = d.length(); const Vec2 g = l > 1e-6 ? c2 + d * ((l + apron) / l) : v; poly.push_back(Vec3(g.x, 0, g.y)); }
+    // A paved lot (ADR-0086) is flat to its lot line: the plate covers the
+    // whole lot, so the pad does too, with only a hair of apron past it.
+    const Poly2& src = lb.pavedLot.empty() ? lb.plan : lb.pavedLot;
+    if (!lb.pavedLot.empty()) apron = std::min(apron, 0.3);
+    Vec2 c2(0, 0); for (const Vec2& v : src) c2 = c2 + v; if (!src.empty()) c2 = c2 * (1.0 / static_cast<double>(src.size()));
+    std::vector<Vec3> poly; poly.reserve(src.size());
+    for (const Vec2& v : src) { const Vec2 d = v - c2; const double l = d.length(); const Vec2 g = l > 1e-6 ? c2 + d * ((l + apron) / l) : v; poly.push_back(Vec3(g.x, 0, g.y)); }
     return makeFlattenPad(std::move(poly), lb.groundY, falloff);
 }
 
@@ -1149,7 +1194,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         return under;
     };
     int underFwCount = 0;
-    int sitesRectified = 0, sitesNoRect = 0, sitesRectUnfit = 0;   // site-plan ledger (M1)
+    int sitesRectified = 0, sitesNoRect = 0, sitesRectUnfit = 0, pavedLots = 0;   // site-plan ledger (M1)
     // TERRAIN base for a plan: the LOWEST ground under its vertices so the
     // downhill corner never floats, embedded slightly on real slopes so the
     // uphill side beds in instead of hovering behind a knife-edge gap.
@@ -2089,6 +2134,16 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 if (rectified) ++sitesRectified;
                 else if (anyRect) ++sitesRectUnfit;
                 else ++sitesNoRect;
+                if (!rectified && std::getenv("RT_SITE_DEBUG")) {
+                    const OBB2 lo = orientedBoundingBox(lot.footprint);
+                    std::printf("[site-fail] %s at (%.0f, %.0f) area %.0f obb %.1fx%.1f n %zu frontage (%.2f, %.2f) minShort %.1f %s\n",
+                                districtName(blockTag), centroid(lot.footprint).x, centroid(lot.footprint).y,
+                                area(lot.footprint), 2 * lo.half[0], 2 * lo.half[1], lot.footprint.size(),
+                                lot.frontage.x, lot.frontage.y, minShort, anyRect ? "rect-unfit" : "no-rect");
+                    std::printf("[site-fail]   yards %.1f/%.1f/%.1f poly", bf.yards.front, bf.yards.side, bf.yards.rear);
+                    for (const Vec2& v : lot.footprint) std::printf(" (%.2f,%.2f)", v.x, v.y);
+                    std::printf("\n");
+                }
                 siteRectified = rectified;
             }
             if (longSide > shortSide * p.maxAspect) {                           // knife blade
@@ -2346,6 +2401,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // from the street — so the mass reads as an L / U / T plan with
             // wings instead of yet another extruded rectangle. The carve is
             // inward-only, so road clearance established above still holds.
+            Poly2 courtNotch;   // the carve's court, recorded for the site plan (ADR-0086)
             if (planOk && rec.massing == BuildingRecipe::Massing::LotPlan &&
                 rec.params.floors >= 3 && area(plan) > 280 && rng.unit() < 0.5) {
                 OBB2 cb = orientedBoundingBox(plan);
@@ -2388,7 +2444,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                 ok = false; break;
                             }
                         }
-                        if (ok) plan = cand;
+                        if (ok) {
+                            plan = cand;
+                            courtNotch = {C + v * hv + u * (s0 + w), C + v * (hv - dpt) + u * (s0 + w),
+                                          C + v * (hv - dpt) + u * s0, C + v * hv + u * s0};
+                            ensureCCW(courtNotch);
+                        }
                     }
                 }
             }
@@ -2564,13 +2625,33 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                     Vec2(bp.faceDir.x, bp.faceDir.z));
             b.baseY = p.ground ? b.groundY + plinth
                                : baseYFor(planOk ? plan : site);
+            // PAVED URBAN LOT (ADR-0086; the owner's rule: a downtown building
+            // stands on concrete at the sidewalk's height, not on grass). The
+            // whole lot is paved at groundY + sidewalkRise — the sidewalk's
+            // top by the road carve's own constants — and the building's base
+            // IS that paving, so the threshold meets it flush. Houses on
+            // yards, parks and plazas keep their own ground.
+            const bool urbanTag = tag == DistrictTag::Financial || tag == DistrictTag::Commercial ||
+                                  tag == DistrictTag::OldTown || tag == DistrictTag::Industrial;
+            const bool paved = siteRectified && urbanTag && !ufShort && planOk &&
+                               rec.massing != BuildingRecipe::Massing::Park &&
+                               rec.massing != BuildingRecipe::Massing::Plaza &&
+                               rec.massing != BuildingRecipe::Massing::RectYard;
+            if (paved) {
+                b.paveY = p.ground ? b.groundY + (p.sidewalkRise > 0 ? p.sidewalkRise : plinth) : b.baseY;
+                b.baseY = b.paveY;
+                b.pavedLot = lot.footprint;
+                ensureCCW(b.pavedLot);
+                if (courtNotch.size() >= 3) b.open.push_back({courtNotch, OpenKind::Courtyard});
+                ++pavedLots;
+            }
             // Entrance steps meet the REAL ground (Glenn's foundation-block
             // design): sample the ground at the entrance-edge middle, 2 m
             // out, and hand the grammar the drop from the storey base down
             // to it — the stoop grows the extra steps. F3's min-front-edge
             // anchoring keeps this small by construction; the clamp stops a
             // pathological sample from growing a staircase tower.
-            if (p.ground) {
+            if (p.ground && !paved) {
                 const Poly2& epl = planOk ? plan : site;
                 const Vec2 f2(bp.faceDir.x, bp.faceDir.z);
                 Real eg = b.groundY;
@@ -2619,7 +2700,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 out.push_back(std::move(b));
                 continue;
             }
-            if (p.ground && !bp.entranceSteps && bp.portico == 0 &&
+            if (paved) bp.entranceSteps = false;   // a downtown door is flush with the paving
+            if (p.ground && !paved && !bp.entranceSteps && bp.portico == 0 &&
                 bp.groundBays == 0 && !bp.porch && bp.floors > 0)
                 bp.entranceSteps = true;
             // PODIUM TOWER massing (density round, "more varied building
@@ -2698,6 +2780,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     b.plan = plan;
                     b.height = (towerBase - b.baseY) + tm.height;
                     emitFoundation(b.plan, b.groundY, b.baseY);
+                    if (paved) sculptPaving(b.pavedLot, b.paveY, meshGround, outParts, outFlatParts);
                     out.push_back(std::move(b));
                     continue;
                 }
@@ -2749,6 +2832,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             mergeParts(outFlatParts, bmFlat);
             b.height = bm.height > 0 ? bm.height : 8.0;
             emitFoundation(b.plan, b.groundY, b.baseY);
+            if (paved) sculptPaving(b.pavedLot, b.paveY, meshGround, outParts, outFlatParts);
             // A yarded house earns its LANDSCAPING: front walk to the street,
             // a hedge along the front lot line, back-yard tree spots.
             if (yardApplied)
@@ -2767,7 +2851,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     LOG_INFO << "[citylots] site plans: " << sitesRectified
              << " lots rectified to a frontage-aligned rectangle; kept their lot shape: "
              << sitesNoRect << " (no rectangle of minShort in the lot), "
-             << sitesRectUnfit << " (rectangle found but a corner or edge was on a road)";
+             << sitesRectUnfit << " (rectangle found but a corner or edge was on a road)"
+             << "; " << pavedLots << " urban lots paved at the sidewalk datum";
     // The DENSITY line (Glenn's "why did lots fail" dial): one glance says how
     // much of the parcelled city actually built and where the rest went.
     {
@@ -2887,6 +2972,7 @@ SkylineCensus skylineCensus(const std::vector<LotBuilding>& lots, Real rightTolD
         if (lb.units.empty()) continue;
         ++c.built;
         for (const OpenSpace& o : lb.open) open[openKindName(o.kind)] += area(o.poly);
+        if (!lb.pavedLot.empty()) ++c.paved;
         const int storeys = buildingStoreys(lb);
         int bin = 0;
         for (int i = 0; i < SkylineCensus::kBins; ++i)
@@ -2923,8 +3009,8 @@ SkylineCensus skylineCensus(const std::vector<LotBuilding>& lots, Real rightTolD
 }
 
 std::string SkylineCensus::line() const {
-    std::string s = "[skyline] " + std::to_string(built) + " buildings (parks " +
-                    std::to_string(parks) + ", greens " + std::to_string(greens) + ") | storeys";
+    std::string s = "[skyline] " + std::to_string(built) + " buildings (paved " + std::to_string(paved) +
+                    ", parks " + std::to_string(parks) + ", greens " + std::to_string(greens) + ") | storeys";
     static const char* kBinName[kBins] = {"1-3", "4-8", "9-20", "21-40", "41-60", "61+"};
     for (int i = 0; i < kBins; ++i)
         s += std::string(i ? ", " : " ") + kBinName[i] + ": " + std::to_string(storeyBins[i]);

@@ -1936,6 +1936,7 @@ static GrownLots growCityLots(
         // The lane lab's blocks are exact to the kerb and already inset by the sidewalk (Clipper): the same
         // parceller and grammar, no road graph, and no miter inset to reject them.
         s.lp.roadMargin = 0;
+        s.lp.sidewalkRise = engine::lanelab::lanelabSidewalkRise();   // paving meets the lab's sidewalk (ADR-0086)
         engine::NetLotResult r; bool fromBundle = false;
         const auto tl = std::chrono::steady_clock::now();
         auto since = [](const std::chrono::steady_clock::time_point& t) { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count(); };

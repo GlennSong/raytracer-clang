@@ -6496,3 +6496,100 @@ rather than geometry strips; and a 2→1 taper for two-lane ramps. Known red at 
 
 **Revisit trigger:** a shipped (non-lab) level selecting `shape:"lanelab"` — that is when the two
 generators stop being independent and the lattice's retirement becomes a real question.
+
+## ADR-0086 — Site plans: buildings are rectilinear, lots are not
+
+**Status:** Provisional (steps 1–2a landed; the paving datum and the massing envelopes follow) ·
+**Date:** 2026-09-13
+
+**Context.** The lot pass handed the grammar the lot polygon inset by 0.5–1.4 m and the grammar
+extruded it verbatim (`growPlanBuilding`, one facade per edge). Two things followed that the owner
+named on 2026-09-13: every building filled its lot, and buildings came out trapezoidal or any odd
+shape, because the frontage walk clips each strip by the corner *bisectors* (`parcel.cpp`), the
+per-slot depth follows a ray cast, and the plan simplifier keeps any bend over ~4.6°. There was no
+coverage, yard or open-space rule anywhere, and no height histogram of any city — the first thing
+this work added was the census (`SkylineCensus`, `city_lots.h`), which put numbers on the complaint:
+piedmont_mini 26 % of buildings with no oblique corner, the lanelab metro 60 %, the lattice metro
+55 %; the lanelab metro's financial district was seven buildings.
+
+Real towers are the other way round. The Seagram Building is a 29×44 m slab on a 60×90 m lot behind a
+27 m plaza; the Empire State's base fills a 129×57 m lot for five floors and steps back 18 m; the
+Chrysler's typical plate is 33×27 m with a central core. **Buildings are rectilinear; sites are not;
+the difference between the lot and the building is paving, planting, a plaza or a yard — never a
+trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
+`~/.claude/plans/skyscrapers-site-plans-cores.md`.)
+
+**Decision.**
+
+1. **A blueprint layer between the lot and the grammar** — `procgen/city/site_plan.{h,cpp}`, pure
+   geometry of `(lot polygon, Lot::frontage, district yards)`, so the loader, both bundle producers,
+   the SVG map and the tests derive the same site. `SiteFrame` is the orthogonal frame on the lot's
+   frontage edge (`u` along the street, `v` inward); it comes from `Lot::frontage`, not from the road
+   graph, so the lanelab path (which has none) gets the same answer as the lattice path.
+2. **The buildable is the largest frame-aligned rectangle the lot holds with its yards** —
+   `largestAlignedRect`: the lot rastered on the frame at 0.5 m, per-edge yards by which side of the
+   lot the edge is on (front / side / rear, from the edge's outward normal against the frontage), the
+   largest rectangle of usable cells. The lot pass re-takes the site as that rectangle after the sliver
+   gate, searching the lot and then the lot inset by the clearance ladder until the rectangle's corners
+   and edge midpoints clear the roads. The raster never consults `clearOfRoads`, which walks every road
+   edge. Yards per district (`BlockInfo::yards`): financial 0 / 0.3 / 3 m, commercial 0 / 0.3 / 3,
+   old town 0 / 0.3 / 2, industrial 2 / 2 / 2, residential 3 / 1.5 / 5. A lot no rectangle of the
+   sliver floor fits keeps its shape rather than going green; the two ways that happens are counted on
+   the `[citylots] site plans:` line.
+3. **Rectilinear footprints are a gate, not a preference.** `grown_buildings_stand_on_rectilinear_
+   footprints` holds the grown city at nine in ten buildings with no oblique corner and every
+   footprint inside its lot; `test_site_plan` pins the frame, the trapezoid, the yards, the L-lot and
+   the tiling.
+4. **The ground around the building is a record, not a leftover** — `LotBuilding::open`: the lot minus
+   the buildable, cut by the rectangle's lines into a forecourt, side yards and a rear yard
+   (`openSpacePieces`), stored in the lot cache (format 3) and read by the census on warm loads too.
+   In the financial, commercial, old-town and industrial districts a rectified lot is **paved to its
+   lot line at the sidewalk's height** — the owner's rule: a downtown building stands on concrete,
+   not grass. The datum needs no new field query: both generators carve the ground under the road
+   footprint a fixed step below the deck and stand the sidewalk slab a fixed kerb above it, and the
+   lot pass already samples that carved ground 2 m out from the frontage (`padPlaneFor`). So
+   `paveY = groundY + sidewalkRise`, with `LotParams::sidewalkRise` set by the host from the
+   meshers' own constants — `kRoadConformStep` (0.22, `road_net.h`) + `RoadLook::curb` (0.16) on
+   the lattice; `Rules::skirtDrop` (0.15) + `kSidewalkLift` (0.12, `deck_mesh.h`) in lanelab
+   (`lanelabSidewalkRise()`). The building's base IS the paving (`baseY = paveY`; no stoop drop,
+   no forced entrance steps: a downtown door is flush), the plate is one concrete slab over the
+   whole lot with the plaza kit's skirt (`sculptPaving`, `PartId::Path` → `Surface::Pavement`, into
+   both LOD tiers), it runs under the building so a drum or a court notch never shows grass inside
+   its site, and the pad flatten covers the whole lot (`LotBuilding::pavedLot`, `lotPadFlatten`).
+   Gate: `urban_lots_are_paved_at_the_sidewalk_datum`. Lawns and planting are residential defaults
+   or an explicit plaza/park choice. Still open: the lot line sits 1.3–1.5 m behind the sidewalk's
+   outer edge in both generators (`roadMargin` / `citysim.sidewalk` versus the drawn band), so a
+   grass strip remains between the paving and the sidewalk — a road/lot contract change, not a
+   paving one — and the lattice band is scored by the road shader every 1.5 m while the lot paving
+   is `Surface::Pavement` on a 3.6 m grid, so the two do not yet share a joint pattern.
+5. **Massing envelopes are data the recipes choose, not new recipes** (step 3): street-wall-and-setback
+   (1916 New York), tower-in-plaza (1961), podium-tower, slab, point tower, perimeter block, bundled
+   taper — each turns the buildable and a floor count into a `MassStack` of rectilinear tiers that
+   `storeyPlans` consumes instead of its uniform offset. New York first, per the owner.
+
+**Measured (step 1).** piedmont_mini rectilinear 26.4 → 92.1 %, oblique corners 60.6 → 14.0 %;
+lanelab metro 59.5 → 81.5 %, 41.4 → 24.0 %; lattice metro 54.9 → 86.9 %, 44.5 → 19.8 %. Coverage
+fell about a quarter (yards, and the trapezoid leftovers are ground now) — the paving step is what
+keeps the block reading full at street level. The lattice metro's tallest tower lost ten floors
+(50 → 40) because `capFloors` caps on the lot's short side and the rectangle is honest about the
+plate where the trapezoid's OBB flattered it; the height law (plan M3) caps on the tower plate.
+
+**Alternatives considered.** (a) Rectify inside the grammar (snap the polygon's corners to right
+angles) — rejected: the grammar must stay pure in `(plan, params, baseY)` (ADR-0080's regen key), and
+a snapped polygon can leave the lot. (b) Fix the parceller to emit rectangles — rejected: the lots
+*are* trapezoids in a real city; it is the building that is not. (c) A polygon boolean difference for
+the open space (Clipper2) — rejected for now: Clipper stays behind lanelab's `geom2d.cpp` (ADR-0083),
+and half-plane cuts are exact on the convex lots the walk produces.
+
+**Consequences / tech debt.** The producer tags bumped (`2026-09-13.1`) and the lot cache format is 3;
+every lots bundle rebuilds. `lotSetback` survives only as the non-rectified fallback. The 0.5 m raster
+sits the building up to half a cell inside the exact rectangle; a lot that clears the sliver floor by
+less than that is allowed the half cell. Open: the 413 lanelab-metro lots that kept their shape are
+counted by reason but not yet read; open-space pieces on a concave lot may overlap a rectangle line's
+extension.
+
+**Revisit trigger:** a district that wants non-rectilinear massing on purpose (a drum tower on a
+round site, a flatiron prow) — that is a second mass kind in the site plan, not a return to the lot
+polygon.
+
+---

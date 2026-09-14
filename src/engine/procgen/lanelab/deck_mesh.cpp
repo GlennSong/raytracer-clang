@@ -197,7 +197,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
         const std::vector<int> roads = layerRoads(g, anyRoad);
         for (const FlatMesh& m : layerMeshes(g, H, poly, roads)) slab(top, concrete, m.verts, m.tris, m.boundary, thick, lift, color, kConcrete, nullptr);
     };
-    layer(r.pavement.sidewalk, sidewalk, kSidewalk, 0.12, 0.42, false); layer(r.pavement.shoulder, shoulder, kShoulder, 0.0, 0.3, false); layer(r.pavement.median, median, kMedian, 0.10, 0.40, true);
+    layer(r.pavement.sidewalk, sidewalk, kSidewalk, kSidewalkLift, 0.42, false); layer(r.pavement.shoulder, shoulder, kShoulder, 0.0, 0.3, false); layer(r.pavement.median, median, kMedian, 0.10, 0.40, true);
     // Parapets and girders on elevated decks (Glenn: "the elevated ones need walls so you don't drive
     // off", "an undercarriage"). The runs come from parapetRuns() so a diagnostic sees exactly what is swept;
     // every elevated freeway/ramp lane also gets a box girder hung from the slab.
