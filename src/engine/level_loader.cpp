@@ -4375,7 +4375,8 @@ bool LevelLoader::load(const std::string& path,
                         engine::BeaconBlink bb;
                         bb.phase = static_cast<float>(h & 0xffffu) / 65535.0f;
                         bb.period = 1.7f + 0.6f * static_cast<float>((h >> 16) & 0xffu) / 255.0f;   // 26-35 fpm
-                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 6.0});
+                        // 2.2, not 6: a hotter red clips to white in the tonemap (Glenn, 2026-09-14).
+                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 2.2});
                         world.add<engine::BeaconBlink>(e, bb);
                     }
                 };

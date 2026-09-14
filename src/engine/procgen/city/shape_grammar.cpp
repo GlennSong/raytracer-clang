@@ -636,6 +636,31 @@ Real interiorInset(const BuildingParams& p) {
 // does get in), and each wall extends past both ends by the inset so
 // adjacent edges' planes overlap and the plan CORNERS close (device: "the
 // interior didn't have corners where the walls met").
+// The painted interior SKIN behind a curtain wall (no openings to cut): one
+// quad per plan edge on the plan INSET by `thick` — consecutive inset edges
+// share their corners (offsetPolygonEdges re-intersects the offset lines),
+// so the room's corners close instead of leaving a `thick`-wide slot to see
+// the sky through (Glenn: "the skyscraper interiors don't have corners").
+static void emitInsetSkin(BuildingMesh& out, const Poly2& plan, std::size_t edge, Real y0, Real h,
+                          Real thick, const Vec3& paint, bool bothSides) {
+    if (plan.size() < 3) return;
+    const Poly2 inner = offsetPolygonEdges(plan, std::vector<Real>(plan.size(), -thick));
+    if (inner.size() != plan.size()) return;
+    const std::size_t e = edge % plan.size();
+    const Vec2 a = inner[e], b = inner[(e + 1) % inner.size()];
+    const Vec2 d = b - a;
+    const Real len = d.length();
+    if (len < 1e-6) return;
+    const Vec2 nOut(d.y / len, -d.x / len);   // CCW plan: outward is the right normal
+    RenderMesh skin;
+    emitQuad(skin, Vec3(a.x, y0, a.y), Vec3(b.x, y0, b.y), Vec3(b.x, y0 + h, b.y),
+             Vec3(a.x, y0 + h, a.y), Vec3(-nOut.x, 0, -nOut.y), paint);
+    if (bothSides)
+        emitQuad(skin, Vec3(a.x, y0, a.y), Vec3(b.x, y0, b.y), Vec3(b.x, y0 + h, b.y),
+                 Vec3(a.x, y0 + h, a.y), Vec3(nOut.x, 0, nOut.y), paint);
+    appendToPart(out, PartId::Interior, skin);
+}
+
 void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
                        const FacadeLayout& L, Real thick,
                        const Vec3& wallColor, const Poly2& plan,
@@ -644,13 +669,34 @@ void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
     const Vec3 in = fr.n * -thick;
     const Vec3 nIn = fr.n * -1.0;
     const Vec3 icol = paint;   // per-building interior paint (walls only)
+    // The MITRE ends (Glenn: "the interiors don't have corners"): the wall's
+    // end pieces run to the INSET polygon's corners, where the neighbouring
+    // edge's inner wall ends too. The old closers extended past the edge
+    // only where that stayed inside the plan — which at a convex corner it
+    // never does — leaving a `thick`-wide slot at every room corner.
+    Vec3 ia = fr.at(0, 0) + in, ib = fr.at(fr.width, 0) + in;
+    {
+        Poly2 ccw = plan;
+        ensureCCW(ccw);
+        const Poly2 inner = offsetPolygonEdges(ccw, std::vector<Real>(ccw.size(), -thick));
+        for (std::size_t e = 0; e < ccw.size() && inner.size() == ccw.size(); ++e) {
+            if (std::fabs(ccw[e].x - fr.bl.x) > 1e-4 || std::fabs(ccw[e].y - fr.bl.z) > 1e-4) continue;
+            const Vec2 a2 = inner[e], b2 = inner[(e + 1) % inner.size()];
+            ia = Vec3(a2.x, fr.bl.y, a2.y);
+            ib = Vec3(b2.x, fr.bl.y, b2.y);
+            break;
+        }
+    }
     auto q = [&](RenderMesh& m, Real a0, Real b0, Real a1, Real b1,
                  const Vec3& col, const Vec3& off) {
         if (a1 - a0 < 1e-4 || b1 - b0 < 1e-4) return;
-        emitQuad(m, fr.at(a0, b0) + off, fr.at(a1, b0) + off,
-                 fr.at(a1, b1) + off, fr.at(a0, b1) + off, nIn, col);
-        emitQuad(m, fr.at(a0, b0) + off, fr.at(a1, b0) + off,
-                 fr.at(a1, b1) + off, fr.at(a0, b1) + off, fr.n, col);
+        const bool atIn = (off - in).lengthSquared() < 1e-12;
+        Vec3 A = fr.at(a0, b0) + off, B = fr.at(a1, b0) + off;
+        if (atIn && a0 <= 1e-9) A = Vec3(ia.x, A.y, ia.z);
+        if (atIn && a1 >= fr.width - 1e-9) B = Vec3(ib.x, B.y, ib.z);
+        const Vec3 up(0, b1 - b0, 0);
+        emitQuad(m, A, B, B + up, A + up, nIn, col);
+        emitQuad(m, A, B, B + up, A + up, fr.n, col);
     };
     for (const BayOpening& o : L.open) {
         q(wall, o.x0, 0, o.wx0, fr.height, icol, in);         // left pier
@@ -665,19 +711,6 @@ void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
               in + fr.n * 0.02);
         }
     }
-    // The corner closers: full-height continuations past each end — but
-    // ONLY where the extension lands INSIDE the plan. At a REFLEX (inward)
-    // corner the two inset planes pull apart and the extension closes the
-    // wedge; at a convex corner they already overlap, and an extension
-    // would poke THROUGH the exterior wall as a floating fin outside the
-    // building (the determinism gate's bbox check caught exactly that).
-    auto extOk = [&](Real u) {
-        const Vec3 probe = fr.at(u, fr.height * 0.5) + in;
-        return pointInPolygon(plan, Vec2(probe.x, probe.z));
-    };
-    if (extOk(-thick * 0.6)) q(wall, -thick, 0, 0, fr.height, icol, in);
-    if (extOk(fr.width + thick * 0.6))
-        q(wall, fr.width, 0, fr.width + thick, fr.height, icol, in);
     appendToPart(out, PartId::Interior, wall);
     appendToPart(out, PartId::Glass, glass);
     appendToPart(out, PartId::GlassLit, glassLit);
@@ -2707,6 +2740,9 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             const std::size_t k = static_cast<std::size_t>(ki);
             const StoreyPlan& spk = storeys[k];
             const Real wy0 = baseY + spk.y0;
+            // The inset polygon: consecutive inset planes meet at its corners,
+            // so the collider closes the corner slot the visible skins close.
+            const Poly2 innerPlan = offsetPolygonEdges(spk.plan, std::vector<Real>(spk.plan.size(), -inset));
             for (std::size_t e = 0; e < spk.plan.size(); ++e) {
                 const FaceRect fr = planEdgeRect(spk.plan, e, wy0, spk.h);
                 Real gap0 = -1, gap1 = -1;
@@ -2717,11 +2753,23 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                         if (o.entrance) { gap0 = o.wx0; gap1 = o.wx1; }
                 }
                 const Vec3 off = fr.n * -inset;
+                // Along the INSET edge (mitred ends), parametrised by the
+                // facade's own x so the entrance gap maps unchanged.
+                Vec3 ia = fr.at(0, 0) + off, ib = fr.at(fr.width, 0) + off;
+                if (innerPlan.size() == spk.plan.size()) {
+                    const Vec2 a2 = innerPlan[e], b2 = innerPlan[(e + 1) % innerPlan.size()];
+                    ia = Vec3(a2.x, wy0, a2.y);
+                    ib = Vec3(b2.x, wy0, b2.y);
+                }
+                const Vec3 ih = fr.width > 1e-6 ? (ib - ia) * (1.0 / fr.width) : Vec3(0, 0, 0);
                 auto wallQuad = [&](Real a0, Real a1) {
                     if (a1 - a0 < 0.05) return;
-                    emitQuad(*colliderOut, fr.at(a0, 0) + off,
-                             fr.at(a1, 0) + off, fr.at(a1, fr.height) + off,
-                             fr.at(a0, fr.height) + off, fr.n * -1.0, icol);
+                    // The ends run to the mitre; an interior span keeps its x.
+                    const Vec3 A = a0 <= 0.0 ? ia : fr.at(a0, 0) + off;
+                    const Vec3 B = a1 >= fr.width ? ib : fr.at(a1, 0) + off;
+                    const Vec3 up(0, fr.height, 0);
+                    emitQuad(*colliderOut, A, B, B + up, A + up, fr.n * -1.0, icol);
+                    (void)ih;
                 };
                 if (gap0 >= 0) {
                     wallQuad(0, gap0);
@@ -2743,13 +2791,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             const FaceRect fr =
                 planEdgeRect(spk.plan, e, baseY + spk.y0, spk.h);
             if (params.curtainWall) {
-                RenderMesh skin;
-                const Vec3 off = fr.n * -interiorInset(params);
-                emitQuad(skin, fr.at(0, 0) + off, fr.at(fr.width, 0) + off,
-                         fr.at(fr.width, fr.height) + off,
-                         fr.at(0, fr.height) + off, fr.n * -1.0,
-                         interiorPaintFor(params));
-                appendToPart(out, PartId::Interior, skin);
+                emitInsetSkin(out, spk.plan, e, baseY + spk.y0, spk.h,
+                              interiorInset(params), interiorPaintFor(params), false);
             } else {
                 emitInnerWallRect(out, fr, facadeLayout(fr, upMode, params),
                                   interiorInset(params), params.wallColor,
@@ -3101,16 +3144,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                      bfr.at(bfr.width, bfr.height), bfr.at(0, bfr.height),
                      bfr.n, wallColor);
             appendToPart(out, params.wallPart, bw);
-            RenderMesh bi;
-            const Vec3 boff = bfr.n * -interiorInset(params);
-            const Vec3 bcol = interiorPaintFor(params);
-            emitQuad(bi, bfr.at(0, 0) + boff, bfr.at(bfr.width, 0) + boff,
-                     bfr.at(bfr.width, bfr.height) + boff,
-                     bfr.at(0, bfr.height) + boff, bfr.n * -1.0, bcol);
-            emitQuad(bi, bfr.at(0, 0) + boff, bfr.at(bfr.width, 0) + boff,
-                     bfr.at(bfr.width, bfr.height) + boff,
-                     bfr.at(0, bfr.height) + boff, bfr.n, bcol);
-            appendToPart(out, PartId::Interior, bi);
+            emitInsetSkin(out, plan, i, y, gh, interiorInset(params), interiorPaintFor(params), true);
             continue;
         }
         if (mode == FacadeMode::Retail && params.retailStreetOnly) {
@@ -3132,13 +3166,8 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         if (full && params.openDoorway) {
             const FaceRect ifr = planEdgeRect(plan, i, y, gh);
             if (params.curtainWall && mode != FacadeMode::Entrance) {
-                RenderMesh skin;
-                const Vec3 off = ifr.n * -interiorInset(params);
-                emitQuad(skin, ifr.at(0, 0) + off, ifr.at(ifr.width, 0) + off,
-                         ifr.at(ifr.width, ifr.height) + off,
-                         ifr.at(0, ifr.height) + off, ifr.n * -1.0,
-                         interiorPaintFor(params));
-                appendToPart(out, PartId::Interior, skin);
+                emitInsetSkin(out, plan, i, y, gh, interiorInset(params),
+                              interiorPaintFor(params), false);
             } else {
                 emitInnerWallRect(out, ifr, facadeLayout(ifr, mode, params),
                                   interiorInset(params), wallColor, plan,
@@ -3565,7 +3594,9 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 }
             }
             if (y >= 61.0) {
-                const Vec3 red(1.0, 0.12, 0.08);
+                // Pure red: with the glow's gain the tint's green and blue
+                // would read as pink-white once tonemapped (Glenn, 2026-09-14).
+                const Vec3 red(1.0, 0.04, 0.02);
                 // The roof corners FLASH (their own part, gated by BeaconBlink at
                 // runtime); the mid-height ring burns steady in the window part.
                 auto beacon = [&](const Vec2& v, const Vec2& toward, Real by, PartId part) {
@@ -3576,8 +3607,16 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 };
                 for (const Vec2& v : cur) beacon(v, rc, y + 0.05 + params.parapet, PartId::Beacon);
                 if (y >= 120.0) {
-                    const Vec2 pc = centroid(plan);
-                    for (const Vec2& v : plan) beacon(v, pc, y * 0.5, PartId::GlassLit);
+                    // The mid ring sits on the TIER at half height, not the
+                    // base plan: above a setback the base's corners hang in
+                    // the air (Glenn: "some of the lights float too far away").
+                    const int midFloor = static_cast<int>((y * 0.5 - params.groundHeight) / std::max(Real(1), params.floorHeight)) + 1;
+                    const std::vector<MassTier> midTiers = massStack(plan, params);   // owns the plans midPlan points into
+                    const Poly2* midPlan = &plan;
+                    for (const MassTier& t : midTiers)
+                        if (t.floor0 <= midFloor && t.plan.size() >= 3) midPlan = &t.plan;
+                    const Vec2 pc = centroid(*midPlan);
+                    for (const Vec2& v : *midPlan) beacon(v, pc, y * 0.5, PartId::GlassLit);
                 }
             }
             if (params.curtainWall && params.floors >= 20 && ((nh >> 8) & 0xffu) < 100) {

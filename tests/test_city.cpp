@@ -10,6 +10,7 @@
 #include "../src/engine/procgen/city/road_mesh.h"
 #include "../src/engine/procgen/city/road_net.h"   // buildRoadNetLattice (the ONE mesher)
 #include "../src/engine/procgen/city/city_lots.h"   // LotBuilding, appendLotMassBox
+#include "../src/engine/procgen/city/site_plan.h"   // offsetPolygonEdges (corner closure test)
 #include "../src/engine/mesh_builder.h"
 #include <algorithm>
 #include <cmath>
@@ -879,4 +880,42 @@ TEST_CASE(tall_towers_wear_a_crown_and_beacons) {
     const int low = litAbove(4, false, 4.5 + 4 * 3.2 - 0.1, redLow);
     CHECK(low == 0);
     CHECK(redLow == 0);
+}
+
+TEST_CASE(curtain_wall_interior_skins_meet_at_the_corners) {
+    // Glenn (2026-09-14): "the skyscraper interiors don't have corners so you
+    // can see through the walls" — the painted skin behind a curtain wall
+    // was one inset quad per edge, leaving an inset-wide slot at every
+    // corner. Now every skin runs to the INSET polygon's corner, so each
+    // corner is shared by two skins on every storey, the ground included.
+    const Poly2 plan = {{0, 0}, {30, 0}, {30, 24}, {0, 24}};
+    BuildingParams p;
+    p.floors = 6;
+    p.curtainWall = true;
+    p.walkableGround = true;
+    p.openDoorway = true;
+    p.core = 1;   // no core: the four facade skins are the whole room
+    p.seed = 3;
+    const Real inset = std::max(p.wallThickness, Real(0.55));
+    auto cornersShared = [&](const BuildingMesh& bm, Real y0, const Poly2& storeyPlan) {
+        const Poly2 inner = offsetPolygonEdges(storeyPlan, std::vector<Real>(storeyPlan.size(), -inset));
+        int shared = 0;
+        for (const Vec2& c : inner) {
+            int hits = 0;
+            for (const RenderMesh& part : bm.parts) {
+                if (part.materialIndex != static_cast<int>(PartId::Interior)) continue;
+                for (const Vertex& v : part.vertices)
+                    if (std::fabs(v.position.y - y0) < 1e-4 && std::fabs(v.position.x - c.x) < 1e-3 &&
+                        std::fabs(v.position.z - c.y) < 1e-3)
+                        ++hits;
+            }
+            if (hits >= 2) ++shared;
+        }
+        return shared;
+    };
+    const std::vector<StoreyPlan> storeys = storeyPlans(plan, p);
+    const BuildingMesh upper = growInterior(plan, p, 0.0);
+    CHECK(cornersShared(upper, storeys[2].y0, storeys[2].plan) == 4);
+    const BuildingMesh ground = growPlanBuilding(plan, p, 0.0, FacadeDetail::Full);
+    CHECK(cornersShared(ground, 0.0, plan) == 4);   // the entrance wall and the blank stair wall mitre too
 }

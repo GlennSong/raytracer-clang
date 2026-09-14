@@ -314,8 +314,11 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
         rd.drawClass = DrawClass::Structure;
         rd.drawDistance = 300.0;
         world.add<Renderable>(e, rd);
-        if (pid == PartId::Interior || pid == PartId::GlassLit)
-            world.add<NightGlow>(e, NightGlow{Vec3(1.0, 0.92, 0.78) * 2.0});
+        // Only the lit panes' inner faces glow at night (they are the windows
+        // seen from inside); drywall keeps its own faint self-light — ramping
+        // the walls lit every room up like a window (Glenn, 2026-09-14).
+        if (pid == PartId::GlassLit)
+            world.add<NightGlow>(e, NightGlow{Vec3(1.0, 1.0, 1.0) * 1.3});
         res.entities.push_back(e);
         res.meshes.push_back(mh);
     }

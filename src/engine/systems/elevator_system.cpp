@@ -110,7 +110,7 @@ ElevatorSystem::Bank& ElevatorSystem::ensureBank(World& world, PhysicsWorld* phy
         };
         const Quat rot = yawOf(hw);
         for (const Part& p : parts) {
-            const Vec3 pos = hw.at(p.local.x, cab.y + p.local.y, p.local.z);
+            const Vec3 pos = hw.at(p.local.x, p.local.z, cab.y + p.local.y);   // at(u, v, y)
             MeshHandle mh = assets.acquirePrimitive("box", p.half * 2.0);
             Entity e = world.create();
             Transform t;
@@ -159,7 +159,7 @@ void ElevatorSystem::placeCab(World& world, PhysicsWorld* phys, const Bank&, Cab
                               Real dt) {
     const Quat rot = yawOf(hw);
     for (std::size_t i = 0; i < cab.entities.size(); ++i) {
-        const Vec3 pos = hw.at(cab.local[i].x, cab.y + cab.local[i].y, cab.local[i].z);
+        const Vec3 pos = hw.at(cab.local[i].x, cab.local[i].z, cab.y + cab.local[i].y);   // at(u, v, y)
         if (Transform* t = world.get<Transform>(cab.entities[i])) {
             if (PrevTransform* pt = world.get<PrevTransform>(cab.entities[i])) pt->value = *t;
             t->position = pos;
@@ -204,7 +204,7 @@ void ElevatorSystem::syncLeaves(World& world, PhysicsWorld* phys, AssetManager& 
         const Real open = here ? cab.doorT : 0.0;
         const Real u = hw.doorX + (left ? -1.0 : 1.0) * (kLeafW * 0.5 + kLeafW * open);
         const Real yBase = b.storeyY[static_cast<std::size_t>(storey)] - 0.05;
-        const Vec3 pos = hw.at(u, yBase + hw.doorHeight * 0.5, kWallMid);
+        const Vec3 pos = hw.at(u, kWallMid, yBase + hw.doorHeight * 0.5);   // at(u, v, y)
         const Quat rot = yawOf(hw);
         auto it = b.leaves.find(key);
         if (it == b.leaves.end()) {

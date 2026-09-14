@@ -6649,9 +6649,12 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
     24 m rather than the render cell — re-cut at load from a bundle — and the phase and period are
     hashed from the chunk's centre, so neighbouring towers flash out of step; the mid-height ring stays
     steady (L-810) in the window part. Rejected: a time uniform in the mesh shader (a per-frame
-    constant for one part), and one Renderable per lamp (four entities per roof for nothing). Still
-    owed: podium uplights, and a Lua-readable per-building lighting spec (today the choices are
-    hashed, not authored).
+    constant for one part), and one Renderable per lamp (four entities per roof for nothing).
+    Glenn's night walk: the beacons read white with a red tinge (a 6× glow on a (1, 0.12, 0.08)
+    tint clips to white in the tonemap — now 2.2× on (1, 0.04, 0.02)) and the mid ring floated off
+    setback towers (it sat on the BASE plan's corners at half height — now on the tier at that
+    height, from `massStack`). Still owed: podium uplights, and a Lua-readable per-building lighting
+    spec (today the choices are hashed, not authored).
 
 11. **The core: shafts, stairwells and an elevator bank, climbable** (`core_plan.h`, plan M5/M6).
     A building of four floors and up (`BuildingParams::core` 0 = auto, 1 = never, 2 = always; Lua
@@ -6684,7 +6687,17 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
     wall, made the fit test sample the corridor ring's edges (a notch through the bank passed the
     corner test — `core_plan_refuses_a_notch_through_the_bank`), inset the lobby ceiling's shaft
     skirts 2 cm so they neither z-fight the streamed walls nor show open holes from the street, and
-    stopped a call from turning a moving cab around mid-shaft. Tests:
+    stopped a call from turning a moving cab around mid-shaft. Glenn's first walk (same day) found
+    the cab and the hoistway leaves scattered — `CoreShaft::at(u, v, y)` had been called as
+    `(u, y, v)`, so the cab floor hung at head height in front of the door (a real walker test now
+    calls, waits and steps into the cab: `character_enters_the_cab_through_an_open_hoistway_door`,
+    and another climbs the dog-leg: `character_walks_the_stairwell_door_and_climbs_the_dog_leg`);
+    rooms with no corners — the inner skins were one inset quad per edge, and the old closers only
+    extended where that stayed inside the plan, which at a convex corner it never does — every inner
+    wall now runs to the INSET polygon's corner (`offsetPolygonEdges`, mitred: curtain skins, the
+    layout-cut inner walls' end piers, the blank stair wall, the inner-wall colliders;
+    `curtain_wall_interior_skins_meet_at_the_corners`); and interiors lit like windows at night —
+    the drywall's `NightGlow` is gone, only lit panes glow inside, the room lights do the rest. Tests:
     `test_core_plan` (fit, bank size, tiers, storey geometry, window), `test_building_lod`'s
     straight-stair case now pins `core = 1`. Rejected: cores in the exterior mesh (the merged city
     mesh cannot stream), one Jolt body per storey (a window is one body, regrown), per-storey
