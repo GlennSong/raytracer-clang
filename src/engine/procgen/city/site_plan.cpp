@@ -209,6 +209,32 @@ std::vector<OpenSpace> openSpacePieces(const Poly2& lotIn, const Poly2& mass, co
     return out;
 }
 
+Poly2 offsetPolygonEdges(const Poly2& lotIn, const std::vector<Real>& outward) {
+    const Poly2 lot = ccwCopy(lotIn);
+    const std::size_t n = lot.size();
+    if (n < 3 || outward.size() != n) return lot;
+    Poly2 out;
+    out.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        const std::size_t h = (i + n - 1) % n;   // edge h ends at vertex i, edge i starts there
+        const Vec2 a0 = lot[h], a1 = lot[i], b1 = lot[(i + 1) % n];
+        const Vec2 dA = a1 - a0, dB = b1 - a1;
+        const Real lA = dA.length(), lB = dB.length();
+        if (lA < 1e-9 || lB < 1e-9) { out.push_back(a1); continue; }
+        const Vec2 nA(dA.y / lA, -dA.x / lA), nB(dB.y / lB, -dB.x / lB);   // outward normals
+        const Vec2 pA = a0 + nA * outward[h], pB = a1 + nB * outward[i];    // points on the moved lines
+        // Intersect line (pA, dA) with line (pB, dB).
+        const Real den = cross(dA, dB);
+        if (std::fabs(den) < 1e-9 * lA * lB) {
+            out.push_back(a1 + normalize(nA + nB) * std::max(outward[h], outward[i]));
+            continue;
+        }
+        const Real t = cross(pB - pA, dB) / den;
+        out.push_back(pA + dA * t);
+    }
+    return out;
+}
+
 SitePlan planSite(const Poly2& lot, const Vec2& frontage, const Yards& yards, Real cell,
                   Real minSide) {
     SitePlan sp;

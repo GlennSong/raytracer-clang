@@ -1224,3 +1224,42 @@ TEST_CASE(building_pads_never_cross_their_parcel_line) {
     }
     CHECK(checked > 10);
 }
+
+// The paved plate reaches the sidewalk (ADR-0086): the block inset leaves a
+// strip of grass between the lot line and the band's outer edge; along a
+// street-facing parcel edge the plate is pushed out to halfWidth + sidewalk
+// from the centreline — and never into the band itself.
+TEST_CASE(paved_plates_reach_the_sidewalk_and_stop_there) {
+    LotParams p;
+    p.seed = 3;
+    p.roadMargin = 6.0;
+    p.sidewalkWidth = 3.5;
+    RoadGraph roads;
+    roads.nodes.push_back({Vec2(-105, -200)});
+    roads.nodes.push_back({Vec2(-105, 200)});
+    roads.edges.push_back({0, 1, 13, RoadClass::Arterial, 0});   // band edge at x = -105 + 6.5 + 3.5 = -95
+    std::vector<Poly2> blocks = {{{-101, -45}, {-11, -45}, {-11, 45}, {-101, 45}}};
+    const Real clearance = 4.6;
+    std::vector<LotBuilding> b = growLotBuildings(blocks, p, nullptr, nullptr, &roads, clearance);
+    int reached = 0, paved = 0;
+    for (const LotBuilding& lb : b) {
+        if (lb.pavedLot.size() < 3) continue;
+        ++paved;
+        Real minX = 1e30, lotMinX = 1e30;
+        for (const Vec2& v : lb.pavedLot) minX = std::min(minX, v.x);
+        for (const Vec2& v : lb.lot) lotMinX = std::min(lotMinX, v.x);
+        CHECK(minX >= -95.0 - 0.15);                 // never into the band
+        if (lotMinX < -90.0) {                       // a lot on the road: its plate reaches the band
+            CHECK(minX <= -95.0 + 0.3);
+            ++reached;
+        }
+    }
+    CHECK(paved > 0);
+    CHECK(reached > 0);
+    // The offset helper itself: a square pushed out on one edge only.
+    const Poly2 sq = {{0, 0}, {10, 0}, {10, 10}, {0, 10}};
+    const Poly2 o = offsetPolygonEdges(sq, {2.0, 0.0, 0.0, 0.0});   // edge 0 (y = 0) moves to y = -2
+    CHECK(o.size() == 4u);
+    CHECK(std::fabs(o[0].y + 2.0) < 1e-9 && std::fabs(o[1].y + 2.0) < 1e-9);
+    CHECK(std::fabs(o[2].y - 10.0) < 1e-9 && std::fabs(o[0].x) < 1e-9 && std::fabs(o[1].x - 10.0) < 1e-9);
+}

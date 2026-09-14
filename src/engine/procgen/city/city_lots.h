@@ -144,6 +144,11 @@ struct LotParams {
     // at groundY + sidewalkRise so its threshold meets the sidewalk; 0 = no
     // datum, the paving sits at the plinth.
     Real sidewalkRise = 0.0;
+    // The DRAWN sidewalk band's width (RoadLook::sidewalk on the lattice): a paved
+    // lot's plate reaches out to the band's outer edge along its street-facing
+    // edges, closing the grass strip the block inset leaves between the lot line
+    // and the sidewalk. 0 = unknown, the plate stops at the lot line.
+    Real sidewalkWidth = 0.0;
     Vec2 center{0, 0};        // downtown centre for the radial zoning
     Real innerRadius = 55.0;  // < this: downtown (offices/shops)
     Real midRadius = 135.0;   // < this: mixed; beyond: residential

@@ -75,6 +75,7 @@ LotGrowSetup lotGrowSetupForLevel(const nlohmann::json& cs, const std::string& l
     // The sidewalk datum for urban paving (ADR-0086): the lattice carves the ground kRoadConformStep under
     // the deck and the sidewalk slab stands `curb` over it. lanelab sets its own (lanelabSidewalkRise).
     if (!nets.empty()) s.lp.sidewalkRise = static_cast<Real>(kRoadConformStep + nets.front().look.curb);
+    if (!nets.empty()) s.lp.sidewalkWidth = static_cast<Real>(nets.front().look.sidewalk);   // the plate reaches the band
     s.wantFlat = cs.value("facadeDistance", 0.0) > cs.value("detailDistance", 700.0);
     s.planOnly = !cs.value("buildLots", false) && cs.value("planOnly", false);
     return s;

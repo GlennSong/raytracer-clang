@@ -92,6 +92,13 @@ struct OpenSpace {
 std::vector<OpenSpace> openSpacePieces(const Poly2& lot, const Poly2& mass, const SiteFrame& frame,
                                        Real minArea = 1.0);
 
+// The polygon with each edge's line moved OUTWARD by `outward[i]` (0 leaves an
+// edge where it is), consecutive offset lines re-intersected; a parallel or
+// degenerate corner falls back to the vertex pushed along its edges' mean
+// normal. For convex-ish parcels. The paving plate uses it to reach the
+// sidewalk's outer edge along the lot's street-facing edges only.
+Poly2 offsetPolygonEdges(const Poly2& lot, const std::vector<Real>& outward);
+
 // One site: the frame, the buildable rectangle and the open ground around it.
 // `buildable` is empty when the lot holds no rectangle of `minSide`.
 struct SitePlan {

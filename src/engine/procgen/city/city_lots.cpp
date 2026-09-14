@@ -2790,6 +2790,50 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 b.baseY = b.paveY;
                 b.pavedLot = lot.footprint;
                 ensureCCW(b.pavedLot);
+                // The plate reaches the SIDEWALK: the block inset leaves a strip of
+                // grass between the lot line and the band's outer edge (1.3-2.3 m on
+                // the lattice). Along every parcel edge that lies on the block
+                // boundary and beside a road, push the plate's edge out to
+                // (halfWidth + sidewalkWidth) from that road's centreline. The
+                // parcel, pad and yards stay where they are: the strip's ground
+                // is the road's own carve, and the plate's skirt covers the rise.
+                if (roads && p.sidewalkWidth > 0 && bf.foot.size() >= 3) {
+                    auto distToBlock = [&](const Vec2& q) {
+                        Real best = 1e30;
+                        for (std::size_t i = 0; i < bf.foot.size(); ++i) {
+                            const Vec2 a = bf.foot[i], c = bf.foot[(i + 1) % bf.foot.size()];
+                            const Vec2 ac = c - a; const Real l2 = ac.lengthSquared();
+                            Real t = l2 > 1e-12 ? dot(q - a, ac) / l2 : 0.0; t = std::max(Real(0), std::min(Real(1), t));
+                            best = std::min(best, (q - (a + ac * t)).length());
+                        }
+                        return best;
+                    };
+                    std::vector<Real> apron(b.pavedLot.size(), Real(0));
+                    for (std::size_t i = 0; i < b.pavedLot.size(); ++i) {
+                        const Vec2 a = b.pavedLot[i], c = b.pavedLot[(i + 1) % b.pavedLot.size()];
+                        if (distToBlock(a) > 0.6 || distToBlock(c) > 0.6) continue;   // not a block edge
+                        const Vec2 m = (a + c) * 0.5;
+                        Real best = 1e30, bestHw = 0;
+                        for (const RoadEdge& e : roads->edges) {
+                            if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(roads->nodes.size()) ||
+                                e.b >= static_cast<int>(roads->nodes.size())) continue;
+                            const Vec2& ra = roads->nodes[e.a].pos;
+                            const Vec2& rb = roads->nodes[e.b].pos;
+                            const Vec2 ab = rb - ra; const Real len2 = ab.lengthSquared();
+                            Real t = len2 > 1e-12 ? dot(m - ra, ab) / len2 : 0.0; t = std::max(Real(0), std::min(Real(1), t));
+                            const Real d = (m - (ra + ab * t)).length();
+                            if (d < best) { best = d; bestHw = e.width * 0.5; }
+                        }
+                        const Real bandEdge = bestHw + p.sidewalkWidth;
+                        // Only an edge that really lies beside that road (within a few
+                        // metres of its band): an alley-side edge finds a far street.
+                        if (best < bandEdge || best > bandEdge + 4.0) continue;
+                        apron[i] = std::max(Real(0), best - bandEdge - Real(0.05));
+                    }
+                    bool any = false;
+                    for (Real v : apron) any = any || v > 0.05;
+                    if (any) b.pavedLot = offsetPolygonEdges(b.pavedLot, apron);
+                }
                 if (courtNotch.size() >= 3) b.open.push_back({courtNotch, OpenKind::Courtyard});
                 ++pavedLots;
             }
