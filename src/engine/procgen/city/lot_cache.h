@@ -21,7 +21,7 @@
 namespace engine {
 namespace lotcache {
 
-constexpr int kLotsFormatVersion = 2;   // 2: grown parts stored per render cell when written with cell > 0
+constexpr int kLotsFormatVersion = 3;   // 2: grown parts stored per render cell when written with cell > 0
 
 void putBuildingParams(bundle::BinWriter& w, const BuildingParams& p);
 bool getBuildingParams(bundle::BinReader& r, BuildingParams& p);

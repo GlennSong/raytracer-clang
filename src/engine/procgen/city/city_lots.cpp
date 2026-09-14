@@ -2066,9 +2066,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // plan clearance uses, until its corners and edge midpoints clear
             // the road corridors (the raster itself never consults the roads:
             // clearOfRoads walks every edge, far too slow per cell).
+            bool siteRectified = false;
+            const SiteFrame siteFrameOf = siteFrame(lot.footprint, lot.frontage);
             {
                 bool rectified = false, anyRect = false;
-                const SiteFrame frame = siteFrame(lot.footprint, lot.frontage);
+                const SiteFrame& frame = siteFrameOf;
                 for (Real t : {Real(0), Real(0.8), Real(1.6), Real(2.6), Real(3.6)}) {
                     const Poly2 host = t > 0 ? inset(lot.footprint, t) : lot.footprint;
                     if (host.size() < 3 || area(host) < 40) break;
@@ -2087,6 +2089,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 if (rectified) ++sitesRectified;
                 else if (anyRect) ++sitesRectUnfit;
                 else ++sitesNoRect;
+                siteRectified = rectified;
             }
             if (longSide > shortSide * p.maxAspect) {                           // knife blade
                 // RECOVERABLE (density round): a too-long lot still holds a
@@ -2149,6 +2152,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             b.width = w;
             b.depth = d;
             b.yaw = std::atan2(obb.axis[0].y, obb.axis[0].x);
+            // The ground around the buildable: the lot minus the rectangle the
+            // gates settled on (an aspect or fill rescue may have re-taken it).
+            if (siteRectified) b.open = openSpacePieces(lot.footprint, site, siteFrameOf);
             // A DISTRICT ENDS AT A STREET (city-pipeline.md stage 9, "district
             // refinement"). This used to re-derive the tag per LOT from the lot's
             // own centroid, while the block above already resolved one at its
@@ -2880,6 +2886,7 @@ SkylineCensus skylineCensus(const std::vector<LotBuilding>& lots, Real rightTolD
         }
         if (lb.units.empty()) continue;
         ++c.built;
+        for (const OpenSpace& o : lb.open) open[openKindName(o.kind)] += area(o.poly);
         const int storeys = buildingStoreys(lb);
         int bin = 0;
         for (int i = 0; i < SkylineCensus::kBins; ++i)

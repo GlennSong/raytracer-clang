@@ -54,6 +54,7 @@ TEST_CASE(lot_cache_round_trips_a_lot_result_with_every_part_of_it_populated) {
     a.plan = {Vec2(0, 0), Vec2(12, 0), Vec2(12, 8), Vec2(0, 8)}; a.color = Vec3(0.3, 0.2, 0.1); a.pad = {Vec2(-1, -1), Vec2(13, -1), Vec2(13, 9), Vec2(-1, 9)};
     a.padMesh = MeshBuilder::box(Vec3(3, 0.2, 2)); a.padMesh.vertices[0].color = Vec3(0.9, 0.1, 0.1);   // a varying vertex colour survives
     a.treeSpots = {Vec3(1, 2, 3), Vec3(4, 5, 6)}; a.fenceSegs = {{Vec2(0, 0), Vec2(5, 0)}, {Vec2(5, 0), Vec2(5, 5)}};
+    a.open = {{{Vec2(-1, -1), Vec2(13, -1), Vec2(13, 0), Vec2(-1, 0)}, OpenKind::Forecourt}, {{Vec2(12, 0), Vec2(13, 0), Vec2(13, 9)}, OpenKind::SideYard}};
     BuildingUnit u; u.plan = {Vec2(1, 1), Vec2(11, 1), Vec2(11, 7), Vec2(1, 7)}; u.baseY = 4.6; u.params = everyFieldSet(); DoorSpec d; d.foot = Vec2(6, 1); d.normal = Vec2(0, -1); d.width = 1.2; d.height = 2.4; u.doors = {d}; u.enterable = true;
     BuildingUnit u2; u2.plan = {Vec2(2, 2), Vec2(4, 2), Vec2(4, 4)}; u2.baseY = 5; a.units = {u, u2};
     LotBuilding park; park.type = "park"; park.site = Vec2(-50, 50); park.height = 0.25; park.pad = {Vec2(-60, 40), Vec2(-40, 40), Vec2(-40, 60), Vec2(-60, 60)}; park.treeSpots = {Vec3(-55, 0, 45)};
@@ -79,6 +80,7 @@ TEST_CASE(lot_cache_round_trips_a_lot_result_with_every_part_of_it_populated) {
         CHECK(x.padMesh.vertices.size() == a.padMesh.vertices.size() && x.padMesh.indices == a.padMesh.indices);
         CHECK_APPROX(x.padMesh.vertices[0].color.x, 0.9, 1e-6); CHECK_APPROX(x.padMesh.vertices[3].position.x, static_cast<float>(a.padMesh.vertices[3].position.x), 0.0);
         CHECK(x.treeSpots.size() == 2 && x.treeSpots[1].z == 6 && x.fenceSegs.size() == 2 && x.fenceSegs[1].second.y == 5);
+        CHECK(x.open.size() == 2 && x.open[0].kind == OpenKind::Forecourt && samePoly(x.open[0].poly, a.open[0].poly) && x.open[1].kind == OpenKind::SideYard && x.open[1].poly.size() == 3);
         CHECK(x.units.size() == 2 && x.units[0].enterable && !x.units[1].enterable && x.units[0].baseY == 4.6 && samePoly(x.units[0].plan, u.plan) && samePoly(x.units[1].plan, u2.plan));
         CHECK(x.units.size() == 2 && sameParams(x.units[0].params, u.params) && sameParams(x.units[1].params, BuildingParams()));
         CHECK(x.units.size() == 2 && x.units[0].doors.size() == 1 && x.units[0].doors[0].foot.x == 6 && x.units[0].doors[0].normal.y == -1 && x.units[0].doors[0].width == 1.2 && x.units[0].doors[0].height == 2.4);

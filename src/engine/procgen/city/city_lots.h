@@ -4,6 +4,7 @@
 #include "architect.h"      // ArchetypeBook (the Lua-authored selection layer)
 #include "polygon.h"        // Poly2, Vec2
 #include "shape_grammar.h"  // BuildingParams (the style-book hook's target)
+#include "site_plan.h"      // OpenSpace (the lot's ground around the building)
 #include "../terrain.h"      // TerrainFlatten (block grades computed in-pass)
 #include "../../../rt_math.h"   // Vec3
 #include "../../../renderer/renderer.h"   // RenderMesh (the grown building geometry)
@@ -100,6 +101,11 @@ struct LotBuilding {
     std::vector<std::pair<Vec2, Vec2>> fenceSegs;
     // The grown massings + regen keys + doors (ADR-0080). Parks/greens: empty.
     std::vector<BuildingUnit> units;
+    // SITE PLAN (skyscrapers v2, ADR-0086): the lot's ground around the
+    // building — the lot minus the buildable rectangle, by where each piece
+    // lies (forecourt / side yards / rear yard). World XZ. Empty when the lot
+    // kept its own shape, and for parks/greens.
+    std::vector<OpenSpace> open;
 };
 
 struct LotParams {
