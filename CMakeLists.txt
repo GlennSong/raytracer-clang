@@ -68,6 +68,8 @@ add_library(engine_core STATIC
     src/engine/bundle/bundle_glb.cpp
     src/engine/procgen/city/lot_cache.cpp
     src/engine/lot_grow_setup.cpp
+    src/engine/city_prepass.cpp
+    src/engine/procgen/city/citylots_producer.cpp
     src/engine/editable_curve.cpp
     src/engine/curve_edit.cpp
     src/engine/animation_path.cpp
@@ -576,6 +578,7 @@ add_executable(run_tests
     tests/main.cpp
     tests/test_bundle.cpp
     tests/test_lot_cache.cpp
+    tests/test_citylots.cpp
     tests/test_math.cpp
     tests/test_slot_map.cpp
     tests/test_sparse_set.cpp

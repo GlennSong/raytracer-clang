@@ -6396,6 +6396,34 @@ everything after the grow — part chunking, HLOD, colliders, trees — which is
 residency system's job, not this ADR's.
 
 
+
+**Milestone C (2026-09-10) — the lattice city's lot pre-pass as a producer.** The facility had two
+producers and both were lanelab's; every shipped city level still grew its lots on every load. Piedmont,
+the slowest level in the repo at 77 s, spent 41.5 s of that in the lot pre-pass and 10 s chunking the
+grown parts. `citylots` (`procgen/city/citylots_producer.{h,cpp}`, engine_core, registered
+unconditionally) grows the same lots headlessly and writes them through the milestone-B codecs with parts
+already split per render cell. Piedmont loads in 28 s warm, piedmont_roads in 25 s (was 57 s).
+
+The world it grows in comes from `engine::cityPrePassForLevel` (`engine/city_prepass.{h,cpp}`): the
+natural ground, the `shape:"road"` recipes run, the road carve, the earthwork field fitted to it, the
+freeway right-of-way, and the carved sampler the lots stand on. It is the sequence the loader runs inline,
+written once. It **refuses** a level it cannot reproduce from the JSON alone — one shaped by a Lua script
+pre-pass or a corridor solve — rather than approximating it, because a producer that grows a different
+city than the loader is worse than no cache. Eight shipped levels qualify.
+
+Two findings worth keeping. First, the loader mutates the level before the road pre-pass:
+`propagateWaterSeaLevel` defaults each recipe's sea level from the water block. The first cut of the
+producer read the level unmutated, so `coast_city` grew a different road graph and one building stood
+1.11 m under the drawn ground; `level_census_every_floorplan_conforms_to_the_drawn_ground` caught it.
+Headless reproduction has to replay every mutation the loader makes, not just its calls. Second, the
+grower's own `[citylots]` report lines cannot prove a warm load correct, because a warm load does not
+grow. Equivalence was proven instead on what both paths emit: all 60 levels' entity counts, and the
+`[grade]` block-plane lines the loader prints after reading the lots, which feed the terrain.
+
+Open: piedmont's bundle is 5.2 GB, almost all of it grammar part meshes stored as unwelded triangle
+soup — welding the parts is the size lever. `rt_bake --prune` keeps the newest bundle per level *path*
+without checking the key is still current, so a stale-tag bundle survives when it is the only one for its
+spelling of the path (`rt_bake` writes relative paths, `level_tests` absolute ones).
 ## ADR-0085 — Two road generators, selected per entity: `shape:"lanelab"` beside `shape:"road"`
 
 **Status:** Accepted · **Date:** 2026-09-09

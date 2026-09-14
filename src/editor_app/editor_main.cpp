@@ -27,6 +27,7 @@
 #include "bake_dialog.h"
 #include "../engine/bundle/bake.h"
 #include "../engine/bundle/bundle_glb.h"
+#include "../engine/procgen/city/citylots_producer.h"
 #ifdef RT_ENABLE_LANELAB
 #include "../engine/procgen/lanelab/city_producer.h"
 #include "../engine/procgen/lanelab/lots_producer.h"
@@ -1233,6 +1234,7 @@ int main(int argc, char** argv) {
     // diagnosis — `clip`/`clip?` proved the hosted overlay's clipboard here.
     // Level bundles (ADR-0084): the remembered output root, the city producer, and the quit hooks.
     if (const std::string root = app.settings().getString("bundleRoot", ""); !root.empty()) engine::bundle::setBundleRoot(root);
+    engine::registerCityLotsProducer();
 #ifdef RT_ENABLE_LANELAB
     engine::lanelab::registerCityProducer();
     engine::lanelab::registerLotsProducer();

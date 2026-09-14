@@ -22,6 +22,8 @@
 #include "procgen/city/building_records.h"   // CityBuildings runtime records (ADR-0080)
 #include "procgen/city/road_net.h"
 #include "procgen/city/road_semantics.h"   // editor-authored roads (shape:"road")
+#include "procgen/city/citylots_producer.h"   // the lattice city's lot pre-pass as a producer (ADR-0084 C)
+#include "bundle/bake.h"
 #ifdef RT_ENABLE_LANELAB
 #include "procgen/lanelab/lanelab.h"     // lane-atomic road lab (ADR-0083, opt-in hook)
 #include "procgen/lanelab/deck_mesh.h"
@@ -1913,6 +1915,7 @@ struct GrownLots {
 // on (the pre-pass nets use the NATURAL terrain — the same sampler their
 // conform profiles were computed against), for the sampled clearance graph.
 static GrownLots growCityLots(
+    const engine::bundle::LevelInputs& inputs,
     const std::vector<engine::RoadEntity>& nets, const json& cs,
     const std::string& levelDir, const HeightField& ground,
     const HeightField& netGround,
@@ -1975,8 +1978,37 @@ static GrownLots growCityLots(
         return g;
     }
 #endif
-    engine::NetLotResult r = engine::growLotBuildingsOnNets(
-        nets, s.lp, s.ep, s.roadClear, netGround, freewayROW, s.wantFlat, !s.planOnly);
+    // The lattice city's lot pre-pass comes out of the level's bundle when the `citylots` producer
+    // applies (ADR-0084 milestone C) — the same grow, done once and stored with its parts already
+    // split per render cell. A miss, an unreadable section or RT_NOCACHE falls through to growing here.
+    engine::NetLotResult r;
+    {
+        const auto tl = std::chrono::steady_clock::now();
+        auto since2 = [](const std::chrono::steady_clock::time_point& t) { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count(); };
+        engine::registerCityLotsProducer();
+        bool fromBundle = false;
+        if (const engine::bundle::BundleProducer* p = engine::bundle::findProducer(engine::kCityLotsProducerName);
+            p && !inputs.levelPath.empty() && p->applies(inputs)) {
+            std::string err;
+            engine::bundle::Obtained o = engine::bundle::obtainForLevel(inputs, engine::kCityLotsProducerName);
+            if (o.bundle) {
+                const bool perCell = engine::lotcache::lotCellSize(*o.bundle, engine::kCityLotsSectionPrefix) > 0.0;
+                if (engine::lotcache::readLotResult(*o.bundle, engine::kCityLotsSectionPrefix, r, &err, /*withParts=*/!perCell) &&
+                    (!perCell || engine::lotcache::listLotCellParts(*o.bundle, engine::kCityLotsSectionPrefix, g.cellParts, &err))) {
+                    g.bundle = o.bundle; fromBundle = true;
+                    LOG_INFO << "[citylots] lots " << o.status << ": " << r.lots.size() << " buildings, " << r.plan.lots.size()
+                             << " lots, " << (g.cellParts.empty() ? std::to_string(r.parts.size()) + " whole parts" : std::to_string(g.cellParts.size()) + " cell parts")
+                             << ", read in " << since2(tl) << " s";
+                } else {
+                    r = engine::NetLotResult(); g.cellParts.clear(); g.bundle.reset();
+                    LOG_WARN << "[citylots] lots bundle unusable (" << (err.empty() ? o.status : err) << "); growing in place";
+                }
+            }
+        }
+        if (!fromBundle)
+            r = engine::growLotBuildingsOnNets(
+                nets, s.lp, s.ep, s.roadClear, netGround, freewayROW, s.wantFlat, !s.planOnly);
+    }
     g.lots = std::move(r.lots);
     g.plan = std::move(r.plan);
     g.parts = std::move(r.parts);
@@ -2246,6 +2278,17 @@ bool LevelLoader::load(const std::string& path,
     RT_PROFILE_ZONE_NAMED("levelLoad");
     g_loadedScriptFiles.clear();
     const auto tLoad0 = std::chrono::steady_clock::now();
+    // Per-stage load timing (metropolis-scale-plan P4.3). One line at the end, so the cost of a
+    // cold city is attributable without a profiler — which is what sizing a bundle producer needs.
+    auto tStagePrev = tLoad0; std::string loadStages;
+    auto loadStage = [&](const char* name) {
+        const auto now = std::chrono::steady_clock::now();
+        const double dt = std::chrono::duration<double>(now - tStagePrev).count();
+        tStagePrev = now;
+        if (dt < 0.05) return;                     // only stages worth seeing
+        char buf[96]; std::snprintf(buf, sizeof buf, "%s%s %.2f s", loadStages.empty() ? "" : ", ", name, dt);
+        loadStages += buf;
+    };
     g_groundProbeReport = {};
     g_pokeReport = {};
 #ifdef RT_ENABLE_LANELAB
@@ -2391,6 +2434,7 @@ bool LevelLoader::load(const std::string& path,
     }
 #endif
 
+    loadStage("terrain parse");
     // Road pre-pass (ADR-0044 corridor conforming): grade the terrain to each editable
     // road (shape:"road") BEFORE it builds, mirroring the script pre-pass, so the ground
     // meets the road's drivable profile and no terrain pokes through.
@@ -2621,6 +2665,7 @@ bool LevelLoader::load(const std::string& path,
                                au.flatten.end());
         }
     }
+    loadStage("roads + corridors");
     // §10: ONE derived road graph. Streets and corridor chains weld HERE, at
     // build — the citysim nav, street furniture, and editor all read this
     // single component instead of merging graphs privately.
@@ -2721,6 +2766,7 @@ bool LevelLoader::load(const std::string& path,
     const engine::RoadGraph* freewayROWp =
         freewayROW.edges.empty() ? nullptr : &freewayROW;
 
+    loadStage("road graph + ROW");
     // Terrain is parsed once into params + noise so vegetation can scatter on
     // the same surface it generates.
     GrownLots preLots;   // lots grown by the terrain pre-pass (reused below)
@@ -2770,6 +2816,7 @@ bool LevelLoader::load(const std::string& path,
         // BEFORE the terrain is meshed, so every building stamps a FLAT graded
         // pad (at its own plane) into the flatten set. The citysim build below
         // reuses these exact lots.
+        loadStage("terrain field");
         if (root.contains("citysim") &&
             (root["citysim"].value("buildLots", false) ||
              root["citysim"].value("planOnly", false)) &&
@@ -2797,7 +2844,9 @@ bool LevelLoader::load(const std::string& path,
             };
             engine::Vec2 spawnXZ;
             const bool haveSpawn = authoredSpawnXZ(root, spawnXZ);
-            preLots = growCityLots(preNets, root["citysim"], levelDir, lotGround,
+            engine::bundle::LevelInputs lotInputs;
+            lotInputs.levelPath = path; lotInputs.level = root; lotInputs.levelDir = levelDir;
+            preLots = growCityLots(lotInputs, preNets, root["citysim"], levelDir, lotGround,
                                    levelGround, freewayROWp, lotGroundWith,
                                    lotMeshCell, haveSpawn ? &spawnXZ : nullptr);
             // BLOCK GRADING CASCADE (ADR-0075 P2, re-enabled roads-v2.1 R4):
@@ -3607,6 +3656,7 @@ bool LevelLoader::load(const std::string& path,
 #ifdef RT_ENABLE_LANELAB
         g_lanelab.sidewalk = root.contains("citysim") && root["citysim"].is_object() ? root["citysim"].value("sidewalk", 4.0) : 4.0;
 #endif
+        loadStage("terrain + lot pre-pass");
         loadEntities(root["entities"], root, world, renderer, assets, levelDir,
                      editorMode, &scriptCache,
                      entityGround ? &entityGround : nullptr,
@@ -3784,7 +3834,9 @@ bool LevelLoader::load(const std::string& path,
                     [&](Entity, engine::RoadEntity& net) { nets.push_back(net); });
                 engine::Vec2 spawnXZ2;
                 const bool haveSpawn2 = authoredSpawnXZ(root, spawnXZ2);
-                grown = growCityLots(nets, cs, levelDir, entityGround,
+                engine::bundle::LevelInputs lotInputs2;
+                lotInputs2.levelPath = path; lotInputs2.level = root; lotInputs2.levelDir = levelDir;
+                grown = growCityLots(lotInputs2, nets, cs, levelDir, entityGround,
                                      entityGround, freewayROWp, nullptr,
                                      lotMeshCell,
                                      haveSpawn2 ? &spawnXZ2 : nullptr);
@@ -3809,7 +3861,9 @@ bool LevelLoader::load(const std::string& path,
                     [&](Entity, engine::RoadEntity& net) { nets.push_back(net); });
                 engine::Vec2 spawnXZ2;
                 const bool haveSpawn2 = authoredSpawnXZ(root, spawnXZ2);
-                grown = growCityLots(nets, cs, levelDir, entityGround,
+                engine::bundle::LevelInputs lotInputs2;
+                lotInputs2.levelPath = path; lotInputs2.level = root; lotInputs2.levelDir = levelDir;
+                grown = growCityLots(lotInputs2, nets, cs, levelDir, entityGround,
                                      entityGround, freewayROWp, nullptr,
                                      lotMeshCell,
                                      haveSpawn2 ? &spawnXZ2 : nullptr);
@@ -4889,8 +4943,10 @@ bool LevelLoader::load(const std::string& path,
         renderer.setReflectionProbes(probes);
     }
 
+    loadStage("entities + spawn");
     LOG_INFO << "Loaded level: " << path << " (v" << version << ", "
              << world.entityCount() << " entities) in " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tLoad0).count() << " s";
+    if (!loadStages.empty()) LOG_INFO << "[load] " << loadStages;
     return true;
 }
 

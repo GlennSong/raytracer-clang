@@ -10,6 +10,7 @@
 // name their graphs relative to it, like the viewer.
 
 #include "engine/bundle/bake.h"
+#include "engine/procgen/city/citylots_producer.h"
 #include "engine/bundle/bundle_glb.h"
 #ifdef RT_ENABLE_LANELAB
 #include "engine/procgen/lanelab/city_producer.h"
@@ -82,6 +83,7 @@ int inspect(const std::string& dir) {
 
 int main(int argc, char** argv) {
     if (argc < 2) return usage();
+    engine::registerCityLotsProducer();
 #ifdef RT_ENABLE_LANELAB
     engine::lanelab::registerCityProducer();
     engine::lanelab::registerLotsProducer();
