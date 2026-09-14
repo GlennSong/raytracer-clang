@@ -215,6 +215,16 @@ TEST_CASE(character_rides_a_kinematic_platform) {
     }
     CHECK_APPROX(world.characterPosition(c).y, y0, 0.15);
     CHECK(world.characterGroundState(c) == GroundState::OnGround);
+    // Sideways 2 m at 1 m/s: only the ground-velocity transfer can carry the
+    // character along (stick-to-floor would keep it at x = 0 while the
+    // platform slid out from under it).
+    for (int i = 1; i <= 120; ++i) {
+        world.moveKinematic(plat, Vec3(i * dt * 1.0, 0.1, 0), Quat::identity(), dt);
+        world.moveCharacter(c, Vec3(), dt);
+        world.update(dt);
+    }
+    CHECK(world.characterPosition(c).x > 1.6);
+    CHECK(world.characterGroundState(c) == GroundState::OnGround);
     world.shutdown();
 }
 

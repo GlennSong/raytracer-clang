@@ -6,9 +6,11 @@
 
 #include "../src/engine/procgen/city/core_plan.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <vector>
 
 using namespace engine;
 
@@ -127,18 +129,64 @@ TEST_CASE(core_storey_is_enclosed_climbable_and_lands_on_the_next_floor) {
     for (const Vertex& v : cm.drywall.vertices) { whi = std::max(whi, (Real)v.position.y); wlo = std::min(wlo, (Real)v.position.y); }
     CHECK(std::fabs(whi - (y0 + h)) < 1e-6);
     CHECK(wlo <= y0 + 1e-6);
-    // Every riser is a code riser: no tread top more than 0.2 above the last.
-    const CoreStair& st = core.stairs[0];
-    const int nR = halfFlightRisers(h);
-    CHECK((h * 0.5) / nR <= 0.2 + 1e-9);
-    (void)st;
-    // The top storey grows no flights; the ground storey no landing.
+    // Every riser is a code riser: the emitted tread tops (up-facing quads in
+    // the stair mesh) climb in steps of at most 0.2 m from the slab to the
+    // next slab, with no level skipped.
+    {
+        std::vector<Real> tops;
+        for (const Vertex& v : cm.stair.vertices)
+            if (v.normal.y > 0.99) tops.push_back(v.position.y);
+        std::sort(tops.begin(), tops.end());
+        tops.erase(std::unique(tops.begin(), tops.end(), [](Real a, Real b) { return std::fabs(a - b) < 1e-6; }), tops.end());
+        CHECK(tops.size() >= 6);
+        CHECK(std::fabs(tops.front() - (y0 + 0.05 + (h * 0.5) / halfFlightRisers(h))) < 1e-6);
+        for (std::size_t i = 1; i < tops.size(); ++i) CHECK(tops[i] - tops[i - 1] <= 0.2 + 1e-9);
+        CHECK(std::fabs(tops.back() - (y0 + h + 0.05)) < 1e-6);
+    }
+    // The top storey grows no flights but guards the well: a floor-to-ceiling
+    // wall at the landing's inner edge across flight A's half and the spine.
     CoreMeshes top;
     emitCoreStorey(top, nullptr, core, storeys.back(), baseY, p, false, true);
     CHECK(top.stair.vertices.empty());
+    {
+        const CoreStair& st = core.stairs[0];
+        const Real yT0 = baseY + storeys.back().y0, hT = storeys.back().h;
+        bool guard = false;
+        for (std::size_t i = 0; i + 3 < top.drywall.vertices.size(); i += 4) {
+            bool onLine = true, spans = true;
+            Real uMin = 1e9, uMax = -1e9;
+            for (std::size_t j = 0; j < 4; ++j) {
+                const Vertex& v = top.drywall.vertices[i + j];
+                const Vec2 q = st.shaft.frame.toFrame(Vec2(v.position.x, v.position.z));
+                if (std::fabs(q.y - st.landing) > 1e-6) onLine = false;
+                uMin = std::min(uMin, q.x);
+                uMax = std::max(uMax, q.x);
+                if (v.position.y < yT0 - 1e-6 || v.position.y > yT0 + hT + 1e-6) spans = false;
+            }
+            if (onLine && spans && uMin < 1e-6 && std::fabs(uMax - (st.flightWidth + st.spine)) < 1e-6) guard = true;
+        }
+        CHECK(guard);
+    }
+    // The ground storey grows flights but no floor landing: nothing of the
+    // floor part lies at the ground slab's top (the half landing is higher).
     CoreMeshes ground;
     emitCoreStorey(ground, nullptr, core, storeys[0], baseY, p, true, false);
     CHECK(!ground.stair.vertices.empty());
+    for (const Vertex& v : ground.floor.vertices) CHECK(v.position.y > baseY + 0.05 + 0.5);
+}
+
+TEST_CASE(core_plan_refuses_a_notch_through_the_bank) {
+    // An L/notched plan whose notch cuts the corridor ring's edge while the
+    // ring's four corners stay inside — the corner-only test would seat the
+    // bank through the notch.
+    const Poly2 notched = {{0, 0}, {40, 0}, {40, 40}, {25, 40}, {25, 22}, {15, 22}, {15, 40}, {0, 40}};
+    const Poly2 square = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    const BuildingParams p = towerParams(30, true);
+    CHECK(coreFor(square, p, entranceEdgeFor(square, p)).valid);
+    CHECK(!coreFor(notched, p, entranceEdgeFor(notched, p)).valid);
+    // The policy's threshold is pinned: four floors open, three do not.
+    CHECK(wantsCore(towerParams(4, false)));
+    CHECK(!wantsCore(towerParams(3, false)));
 }
 
 TEST_CASE(grow_interior_with_a_core_punches_the_shafts_and_streams_a_window) {
@@ -212,7 +260,7 @@ TEST_CASE(core_window_grow_cost_is_bounded) {
     std::printf("    [core-census] window [18, 23) of 41 storeys: %zu tris, %zu KB, collider %zu tris, grow %.2f ms\n",
                 tris, bytes / 1024, col.indices.size() / 3, ms);
     CHECK(tris > 0);
-    CHECK(tris < 40000);
-    CHECK(col.indices.size() / 3 < 20000);
-    CHECK(ms < 250.0);   // generous: a debug build on a busy desktop
+    CHECK(tris < 4000);                   // ~2x the measured 1870
+    CHECK(col.indices.size() / 3 < 3500);   // ~2x the measured 1700
+    (void)ms;   // printed, not asserted: wall-clock on a shared desktop is not a gate
 }

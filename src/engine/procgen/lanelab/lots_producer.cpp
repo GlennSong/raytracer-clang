@@ -15,7 +15,7 @@ namespace engine {
 namespace lanelab {
 
 // Bump whenever the lot pass's output changes for the same inputs (the key cannot see code).
-const char* const kLotsBuildTag = "2026-09-14.12";
+const char* const kLotsBuildTag = "2026-09-14.13";
 
 namespace {
 using bundle::BinReader;

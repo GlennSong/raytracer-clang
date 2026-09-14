@@ -492,15 +492,24 @@ void PhysicsWorld::moveCharacter(CharacterId id, const Vec3& velocity, Real dt) 
     const float jump = impl->characters[id].pendingJump;
     impl->characters[id].pendingJump = 0.0f;
 
+    // A MOVING floor carries the character (skyscrapers v2 M6: the elevator
+    // cab, any kinematic mover): Jolt reports the ground body's velocity at
+    // the contact — zero for everything static — and the character must add
+    // it itself (CharacterVirtual owns no body). Not for a DYNAMIC body: the
+    // character pushes it, inherits the push, pushes harder — a feedback
+    // loop on a light crate.
+    JPH::Vec3 groundVel = JPH::Vec3::sZero();
+    if (ch->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround) {
+        const JPH::BodyID gid = ch->GetGroundBodyID();
+        if (!gid.IsInvalid() &&
+            impl->bodies().GetMotionType(gid) != JPH::EMotionType::Dynamic)
+            groundVel = ch->GetGroundVelocity();
+    }
     JPH::Vec3 newVel;
     if (jump > 0.0f) {
-        newVel = desired + up * jump;
+        newVel = desired + groundVel + up * jump;   // a jump in a cab keeps the cab's speed
     } else if (ch->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround) {
-        // A MOVING floor carries the character (skyscrapers v2 M6: the
-        // elevator cab, any kinematic mover): Jolt reports the ground body's
-        // velocity at the contact — zero for everything static — and the
-        // character must add it itself (CharacterVirtual owns no body).
-        newVel = desired + ch->GetGroundVelocity();
+        newVel = desired + groundVel;
     } else {
         newVel = desired + up * current.Dot(up);
     }

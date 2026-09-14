@@ -3186,8 +3186,16 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                                  icol);
         // Skirt the well rim (see growInterior): the ceiling's hole edge is
         // otherwise open between its underside and the slab above. Core
-        // shafts skip it: their own walls stand on the hole line.
-        if (!gcore.valid) for (const Poly2& hole : holes)
+        // shafts get theirs 2 cm INSIDE the hole line: their walls stand on
+        // the line once the interior streams in, and the skirt must neither
+        // z-fight them then nor leave the holes open when seen from the
+        // street before it does.
+        if (gcore.valid) {
+            std::vector<Poly2> inset;
+            for (const Poly2& hole : holes) inset.push_back(offsetPolygonEdges(hole, std::vector<Real>(hole.size(), -0.02)));
+            holes.swap(inset);
+        }
+        for (const Poly2& hole : holes)
             for (std::size_t e = 0; e < hole.size(); ++e) {
                 const Vec2 a = hole[e], b = hole[(e + 1) % hole.size()];
                 Vec2 en(-(b - a).y, (b - a).x);

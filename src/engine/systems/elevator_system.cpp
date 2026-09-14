@@ -200,8 +200,7 @@ void ElevatorSystem::syncLeaves(World& world, PhysicsWorld* phys, AssetManager& 
         const int storey = static_cast<int>(key >> 9);
         const CoreShaft& hw = b.core.hoistways[static_cast<std::size_t>(hwi)];
         const Cab& cab = b.cabs[static_cast<std::size_t>(hwi)];
-        const bool here = cab.floor == storey && cab.state != CabState::Moving &&
-                          !(cab.state == CabState::Idle && cab.target != cab.floor);
+        const bool here = cab.floor == storey && cab.state != CabState::Moving;
         const Real open = here ? cab.doorT : 0.0;
         const Real u = hw.doorX + (left ? -1.0 : 1.0) * (kLeafW * 0.5 + kLeafW * open);
         const Real yBase = b.storeyY[static_cast<std::size_t>(storey)] - 0.05;
@@ -248,7 +247,13 @@ void ElevatorSystem::step(World& world, PhysicsWorld* phys, AssetManager& assets
     status_ = Status{};
     const CityBuildings* cb = nullptr;
     world.each<CityBuildings>([&](Entity, CityBuildings& c) { if (!cb) cb = &c; });
-    if (!cb || cb->records.empty()) return;
+    if (!cb || cb->records.empty()) {
+        // No city: no bank may outlive it (bodies would strand across a level change).
+        std::vector<std::size_t> keys;
+        for (const auto& kv : banks_) keys.push_back(kv.first);
+        for (std::size_t key : keys) releaseBank(world, phys, assets, key);
+        return;
+    }
     const Vec2 xz(player.x, player.z);
 
     // The building the player is in, if it has a core.
@@ -285,7 +290,7 @@ void ElevatorSystem::step(World& world, PhysicsWorld* phys, AssetManager& assets
         const Vec2 q = hw.frame.toFrame(xz);
         const Real u0 = hw.width * 0.5 - CAB_W * 0.5, u1 = hw.width * 0.5 + CAB_W * 0.5;
         const Cab& cab = b.cabs[i];
-        if (q.x >= u0 && q.x <= u1 && q.y >= 0.2 && q.y <= 0.3 + CAB_D && player.y - kFeet > cab.y - 0.6 &&
+        if (q.x >= u0 && q.x <= u1 && q.y >= 0.0 && q.y <= 0.3 + CAB_D && player.y - kFeet > cab.y - 0.6 &&
             player.y - kFeet < cab.y + 1.5)
             inCab = static_cast<int>(i);
         if (inCab < 0 && std::fabs(q.x - hw.doorX) < 1.0 && q.y < -0.1 && q.y > -CALL_M) atDoor = static_cast<int>(i);
@@ -306,21 +311,31 @@ void ElevatorSystem::step(World& world, PhysicsWorld* phys, AssetManager& assets
     } else {
         b.selected = f;
         if (call && atDoor >= 0) {
-            // The nearest idle cab (or one already here) comes to this storey.
+            // The nearest cab that is not moving, or one moving THROUGH this
+            // storey on its way (it stops here first); a cab moving away is
+            // never turned around mid-shaft (it would flip its velocity and
+            // drop its rider). When every cab is busy the call waits for the
+            // next press.
+            const Real yHere = b.storeyY[static_cast<std::size_t>(f)];
             int best = -1;
             Real bestD = 1e30;
             for (std::size_t i = 0; i < b.cabs.size(); ++i) {
                 const Cab& c = b.cabs[i];
-                if (c.state == CabState::Moving && c.target != f) continue;
-                const Real d = std::fabs(c.y - b.storeyY[static_cast<std::size_t>(f)]) + (c.state == CabState::Moving ? 0 : 0.01);
+                if (c.state == CabState::Moving) {
+                    const Real yT = b.storeyY[static_cast<std::size_t>(std::max(0, std::min(n - 1, c.target)))];
+                    const bool onTheWay = (yHere - c.y) * (yT - c.y) > 0 && std::fabs(yHere - c.y) < std::fabs(yT - c.y);
+                    if (!onTheWay) continue;
+                }
+                const Real d = std::fabs(c.y - yHere) + (c.state == CabState::Moving ? 0 : 0.01);
                 if (d < bestD) { bestD = d; best = static_cast<int>(i); }
             }
-            if (best < 0) best = atDoor;
-            Cab& c = b.cabs[static_cast<std::size_t>(best)];
-            c.target = f;
-            if (c.floor == f && (c.state == CabState::Idle || c.state == CabState::Closing)) c.state = CabState::Opening;
-            else if (c.floor == f && c.state == CabState::Open) c.dwell = DWELL_S;
-            else if (c.state == CabState::Open || c.state == CabState::Opening) c.state = CabState::Closing;
+            if (best >= 0) {
+                Cab& c = b.cabs[static_cast<std::size_t>(best)];
+                c.target = f;
+                if (c.floor == f && (c.state == CabState::Idle || c.state == CabState::Closing)) c.state = CabState::Opening;
+                else if (c.floor == f && c.state == CabState::Open) c.dwell = DWELL_S;
+                else if (c.state == CabState::Open || c.state == CabState::Opening) c.state = CabState::Closing;
+            }
         }
     }
 

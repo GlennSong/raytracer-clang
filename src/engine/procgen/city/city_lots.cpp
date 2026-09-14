@@ -1541,7 +1541,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // stairwells and the elevator bank make every floor reachable,
             // and a curtain wall is as enterable as any other (its entrance
             // bay is a real aperture; the leaf is the DoorSystem's).
-            if (bp.floors >= 4 && coreFor(uplan, bp, entranceEdgeFor(uplan, bp)).valid) return true;
+            if (wantsCore(bp) && coreFor(uplan, bp, entranceEdgeFor(uplan, bp)).valid) return true;
         }
         for (const Vec2& pt : p.enterableAt) {
             if (pointInPolygon(uplan, pt)) return true;

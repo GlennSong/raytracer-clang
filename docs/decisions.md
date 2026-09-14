@@ -6677,8 +6677,14 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
     and the sliding hoistway-door leaves on the storeys around them; `E` in front of a door calls
     the nearest cab, Up/Down inside picks a storey, `E` goes, an ImGui strip is the panel. The
     walker rides because `PhysicsWorld::moveCharacter` now adds Jolt's `GetGroundVelocity()` on
-    the ground branch (`character_rides_a_kinematic_platform`) — the one physics change M6 needed;
-    a kinematic body keeps its last velocity, so the mover places it every step. Tests:
+    the ground branch and under a jump (`character_rides_a_kinematic_platform`, vertical and
+    sideways legs) — the one physics change M6 needed; static and kinematic ground only (a dynamic
+    crate would feed its own push back), and a kinematic body keeps its last velocity, so the mover
+    places it every step. A review pass (same day) closed the top storey's open well with a guard
+    wall, made the fit test sample the corridor ring's edges (a notch through the bank passed the
+    corner test — `core_plan_refuses_a_notch_through_the_bank`), inset the lobby ceiling's shaft
+    skirts 2 cm so they neither z-fight the streamed walls nor show open holes from the street, and
+    stopped a call from turning a moving cab around mid-shaft. Tests:
     `test_core_plan` (fit, bank size, tiers, storey geometry, window), `test_building_lod`'s
     straight-stair case now pins `core = 1`. Rejected: cores in the exterior mesh (the merged city
     mesh cannot stream), one Jolt body per storey (a window is one body, regrown), per-storey

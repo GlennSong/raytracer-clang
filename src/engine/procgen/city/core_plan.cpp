@@ -61,15 +61,24 @@ CorePlan corePlan(const Poly2& planIn, const std::vector<MassTier>& tiers,
     toDoor = normalize(toDoor);
     const Real runMax = halfFlightRun(std::max(params.groundHeight, params.floorHeight));
     const Real depth = kLanding + runMax + kLanding;
+    // The core plus its corridor ring must lie inside the base and every
+    // tier: sampled along the ring's EDGES (a metre apart, corners included),
+    // not just its corners — an L-shaped or notched plan passes the corner
+    // test with a notch cutting straight through the bank.
     auto fitsAll = [&](const SiteFrame& f, Real L, Real D) {
         const Real m = kCorridor;
-        const Vec2 c[4] = {f.toWorld({-m, -m}), f.toWorld({L + m, -m}), f.toWorld({L + m, D + m}),
-                           f.toWorld({-m, D + m})};
-        for (const Vec2& q : c)
+        const Vec2 c[4] = {{-m, -m}, {L + m, -m}, {L + m, D + m}, {-m, D + m}};
+        std::vector<Vec2> samples;
+        for (int i = 0; i < 4; ++i) {
+            const Vec2 a = c[i], b = c[(i + 1) % 4];
+            const int n = std::max(1, static_cast<int>(std::ceil((b - a).length())));
+            for (int j = 0; j < n; ++j) samples.push_back(f.toWorld(a + (b - a) * (static_cast<Real>(j) / n)));
+        }
+        for (const Vec2& q : samples)
             if (!pointInPolygon(base, q)) return false;
         for (const MassTier& t : tiers) {
             if (t.plan.size() < 3) return false;
-            for (const Vec2& q : c)
+            for (const Vec2& q : samples)
                 if (!pointInPolygon(t.plan, q)) return false;
         }
         return true;
@@ -176,21 +185,32 @@ void shaftWalls(CoreMeshes& out, RenderMesh* col, const CorePlan& core, const Co
     const Real W = s.width, D = s.depth;
     const Edge edges[4] = {{{0, 0}, {W, 0}, {0, -1}}, {{W, 0}, {W, D}, {1, 0}},
                            {{W, D}, {0, D}, {0, 1}}, {{0, D}, {0, 0}, {-1, 0}}};
+    // Is a frame point behind this wall covered by ANOTHER shaft — its rect
+    // dilated by the wall gap, so the sealed slots between neighbours count
+    // as covered too?
+    auto coveredBy = [&](const CoreShaft& o, const Vec2& w) {
+        if (&o == &s) return false;
+        const Vec2 q = o.frame.toFrame(w);
+        const Real g = kWall + 0.01;
+        return q.x >= -g && q.x <= o.width + g && q.y >= -g && q.y <= o.depth + g;
+    };
     auto inOtherShaft = [&](const Vec2& frameQ) {
         const Vec2 w = s.frame.toWorld(frameQ);
         for (const CoreShaft& hw : core.hoistways)
-            if (&hw != &s && pointInPolygon(hw.rect(), w)) return true;
+            if (coveredBy(hw, w)) return true;
         for (const CoreStair& st : core.stairs)
-            if (&st.shaft != &s && pointInPolygon(st.shaft.rect(), w)) return true;
-        if (core.hasService && &core.service != &s && pointInPolygon(core.service.rect(), w)) return true;
+            if (coveredBy(st.shaft, w)) return true;
+        if (core.hasService && coveredBy(core.service, w)) return true;
         return false;
     };
     for (int ei = 0; ei < 4; ++ei) {
         const Edge& e = edges[ei];
         const Vec2 nW = s.frame.u * e.nOut.x + s.frame.v * e.nOut.y;   // world outward normal
         const Vec3 nOut3(nW.x, 0, nW.y), nIn3(-nW.x, 0, -nW.y);
-        const Vec2 mid = (e.a + e.b) * 0.5;
-        const bool exposed = !inOtherShaft(mid + e.nOut * (kWall + 0.05));
+        // Exposed when any of three samples along the edge has nothing behind it.
+        bool exposed = false;
+        for (Real t : {0.25, 0.5, 0.75})
+            if (!inOtherShaft(e.a + (e.b - e.a) * t + e.nOut * (kWall + 0.05))) exposed = true;
         auto skinAt = [&](Real off, const Vec3& n, const Vec3& colr, Real ta, Real tb, Real yb, Real yt) {
             // The skin's segment from parameter ta to tb along the edge, `off` outward.
             const Vec2 pa = e.a + (e.b - e.a) * ta + e.nOut * off;
@@ -250,13 +270,25 @@ void stairStorey(CoreMeshes& out, RenderMesh* col, const CoreStair& st, Real y0,
     if (landing) {
         deckQuad(out.floor, col, s, 0, 0, W, Ld, yTop, true, floorCol);
         deckQuad(out.drywall, nullptr, s, 0, 0, W, Ld, yTop - kSlab, false, paint);
-        // The landing's inner edge (toward the flights): a riser-height lip.
-        const Vec3 a = s.at(0, Ld, yTop), b = s.at(W, Ld, yTop);
+        // The landing's inner edge over flight A's half: the slab's cut face
+        // (flight B's top riser and the spine wall's end cap already stand
+        // on the rest of that line).
+        const Vec3 a = s.at(0, Ld, yTop), b = s.at(fw, Ld, yTop);
         const Vec2 nv = s.frame.v;
         wallQuad(out.drywall, col, Vec3(a.x, 0, a.z), Vec3(b.x, 0, b.z), yTop - kSlab, yTop,
                  Vec3(nv.x, 0, nv.y), paint);
     }
-    if (!flightsUp) return;
+    if (!flightsUp) {
+        // The TOP storey: no flight leaves this landing, so the shaft beyond
+        // it is the storey below's well — a guard wall across flight A's
+        // half and the spine, floor to ceiling, keeps a walker on the landing
+        // (flight B's half is the way down).
+        const Vec3 a = s.at(0, Ld, 0), b = s.at(fw + st.spine, Ld, 0);
+        const Vec2 nv = s.frame.v;
+        wallQuad(out.drywall, col, a, b, y0, y0 + h, Vec3(nv.x, 0, nv.y), paint);
+        wallQuad(out.drywall, col, a, b, y0, y0 + h, Vec3(-nv.x, 0, -nv.y), paint);
+        return;
+    }
     const int nR = halfFlightRisers(h);
     const Real riser = (h * 0.5) / nR;
     const Real run = nR * st.tread;

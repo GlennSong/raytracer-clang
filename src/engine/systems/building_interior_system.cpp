@@ -81,7 +81,7 @@ void BuildingInteriorSystem::fixedUpdate(FrameContext& ctx) {
                 // follow them up).
                 const int nSt = static_cast<int>(storeys.size());
                 const int f = storeyOf(r, player.y);
-                const int kFrom = std::max(0, std::min(f - 1, nSt - 4));
+                const int kFrom = std::max(0, std::min(f - WINDOW_BELOW, nSt - 4));
                 const int lightCount = std::min(nSt, kFrom + 4);
                 for (int k = kFrom; k < lightCount; ++k) {
                     const StoreyPlan& sp = storeys[static_cast<std::size_t>(k)];
@@ -103,7 +103,14 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
     world.each<CityBuildings>(
         [&](Entity, CityBuildings& c) { if (!cb) cb = &c; });
     if (!cb || cb->records.empty()) {
-        // No city: still drain the free queue so onStop leftovers clear.
+        // No city: nothing may stay resident (a level change or a city
+        // rebuild would strand bodies); still drain the free queue so onStop
+        // leftovers clear.
+        if (!resident_.empty()) {
+            std::vector<std::size_t> keys;
+            for (const auto& kv : resident_) keys.push_back(kv.first);
+            for (std::size_t key : keys) release(world, phys, key);
+        }
         if (!freeQueue_.empty() && stepCount_ - lastFree_ >= FREE_EVERY) {
             assets.releaseMesh(freeQueue_.back());
             freeQueue_.pop_back();
