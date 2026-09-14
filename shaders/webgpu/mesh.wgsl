@@ -624,10 +624,12 @@ fn fs_main(in : VSOut) -> FsOut {
   // Alpha-cut foliage (FLAG_ALPHA_TEST): drop fully-transparent texels.
   if ((rawFlags & 2u) != 0u && albedoSample.a < 0.5) { discard; }
 
-  var albedo    = d.albedoMetallic.rgb * in.color * albedoSample.rgb;
+  // FLAG_EMISSIVE_VERTEX_TINT (32): the vertex colour tints the emission, not the albedo.
+  let emissiveTint = (rawFlags & 32u) != 0u;
+  var albedo    = d.albedoMetallic.rgb * select(in.color, vec3<f32>(1.0), emissiveTint) * albedoSample.rgb;
   let metallic  = clamp(d.albedoMetallic.a * mrSample.b, 0.0, 1.0);   // glTF: B=metal
   var roughness = clamp(d.emissionRough.a * mrSample.g, 0.04, 1.0);   //       G=rough
-  let emission  = d.emissionRough.rgb * emSample;
+  let emission  = d.emissionRough.rgb * emSample * select(vec3<f32>(1.0), in.color, emissiveTint);
 
   var N = normalize(in.worldNormal);
   // Normal map (tangent-space -> world via TBN), only with a map + a real tangent.

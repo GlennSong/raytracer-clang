@@ -601,10 +601,12 @@ vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
 }
 
 void main() {
-    vec3 albedo = pc.albedoMetallic.rgb * inColor;
+    // FLAG_EMISSIVE_VERTEX_TINT (32): the vertex colour tints the emission, not the albedo.
+    const bool emissiveTint = (pc.surfaceFlags.y & 32u) != 0u;
+    vec3 albedo = pc.albedoMetallic.rgb * (emissiveTint ? vec3(1.0) : inColor);
     float metallic = clamp(pc.albedoMetallic.a, 0.0, 1.0);
     float roughness = clamp(pc.emissionRough.a, 0.04, 1.0);
-    vec3 emission = pc.emissionRough.rgb;
+    vec3 emission = pc.emissionRough.rgb * (emissiveTint ? inColor : vec3(1.0));
     uint texFlags = pc.surfaceFlags.z;
     float ao = 1.0;
 

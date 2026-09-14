@@ -1,3 +1,6 @@
+#include <map>
+#include <cstdio>
+#include <string>
 #include "test_framework.h"
 
 #include "../src/engine/procgen/city/polygon.h"
@@ -794,4 +797,48 @@ TEST_CASE(street_wall_setback_envelope_stacks_a_base_steps_and_a_shaft) {
     const std::vector<StoreyPlan> s2 = storeyPlans(plan, q);
     CHECK(s2.back().tier == 2);
     CHECK(s2[5].tier == 1);                // floor 4: the first uniform setback
+}
+
+// NIGHT LIGHTING (skyscrapers v2 M4): a lit pane's vertex colour is its tint,
+// picked per window from the building's palette — cool whites behind a
+// curtain wall, warm ones elsewhere — and the lit-glass material carries the
+// emissive-vertex-tint flag so the shaders apply it to the emission only.
+TEST_CASE(lit_panes_carry_a_tint_palette) {
+    CHECK((materialFor(PartId::GlassLit, Vec3(1, 1, 1)).flags &
+           RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT) != 0u);
+    CHECK((materialFor(PartId::Glass, Vec3(1, 1, 1)).flags &
+           RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT) == 0u);
+    auto tints = [](bool curtain) {
+        BuildingParams p;
+        p.floors = 8;
+        p.curtainWall = curtain;
+        p.seed = 5;
+        const Poly2 plan = {{0, 0}, {30, 0}, {30, 20}, {0, 20}};
+        BuildingMesh bm = growPlanBuilding(plan, p);
+        std::map<std::string, int> counts;
+        // BuildingMesh::parts is packed (one entry per non-empty part, materialIndex = the PartId).
+        const RenderMesh* lit = nullptr;
+        for (const RenderMesh& part : bm.parts)
+            if (part.materialIndex == static_cast<int>(PartId::GlassLit)) lit = &part;
+        CHECK(lit != nullptr);
+        if (!lit) return counts;
+        for (const Vertex& v : lit->vertices) {
+            char key[64];
+            std::snprintf(key, sizeof key, "%.2f,%.2f,%.2f", v.color.x, v.color.y, v.color.z);
+            counts[key] += 1;
+        }
+        return counts;
+    };
+    const auto office = tints(true), homes = tints(false);
+    CHECK(office.size() >= 2u);   // a palette, not one colour
+    CHECK(homes.size() >= 2u);
+    auto top = [](const std::map<std::string, int>& m) {
+        std::string best; int n = -1;
+        for (const auto& kv : m) if (kv.second > n) { n = kv.second; best = kv.first; }
+        return best;
+    };
+    CHECK(top(office) != top(homes));   // offices read cool, homes warm
+    // The tint is a per-window choice hashed from the pane's anchor: deterministic.
+    const auto again = tints(true);
+    CHECK(again == office);
 }

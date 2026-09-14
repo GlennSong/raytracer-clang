@@ -4358,7 +4358,8 @@ bool LevelLoader::load(const std::string& path,
                     // NightGlow pass — dark at noon by construction (emission starts 0; the material
                     // equals Glass by day).
                     if (static_cast<PartId>(pi) == PartId::GlassLit)
-                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 0.72, 0.38) * 1.3});
+                        // White: the pane's vertex colour is its tint (litTint, FLAG_EMISSIVE_VERTEX_TINT).
+                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 1.3});
                 };
                 // Whole parts (grown here, or a whole-part bundle): split per render cell now. One spawner
                 // for both tiers, so material binding and chunking cannot diverge between LOD0 and LOD1.

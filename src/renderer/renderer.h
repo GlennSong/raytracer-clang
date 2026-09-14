@@ -88,6 +88,13 @@ struct RenderMaterial {
     // pane blends once. Backend-honoured via cull mode, so it costs a state
     // change per batch, not per triangle.
     static constexpr uint32_t FLAG_TWO_SIDED = 16;
+    // Emissive vertex tint (skyscrapers v2 M4, night lighting): the per-vertex
+    // colour multiplies the EMISSION instead of the albedo, so one lit-window
+    // part per render cell carries any number of tints — warm homes, cool
+    // offices, a coloured crown — while the material's single emission (ramped
+    // by NightGlow on the dusk curve) sets the intensity, and the day look
+    // (albedo) is untouched by the tint. Backend-honoured in all three shaders.
+    static constexpr uint32_t FLAG_EMISSIVE_VERTEX_TINT = 32;
 
     // World-space procedural surface library (applySurface in surfaces.metal /
     // scene.cpp): an analytic material — brick, concrete, roof tiles, asphalt,

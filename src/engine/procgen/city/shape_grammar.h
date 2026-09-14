@@ -77,6 +77,13 @@ enum class PartId : uint8_t {
 // emitter (full, flat, curtain wall) so LOD transitions never flicker a
 // window on or off: quantized world position in, stable coin-flip out.
 bool litWindow(const Vec3& worldPos);
+// The TINT of a lit pane (skyscrapers v2 M4): a per-window pick from the
+// building's palette — cool office whites with a share of fluorescent
+// blue-white behind a curtain wall, warm incandescent with some cream and the
+// odd cool room elsewhere — hashed from the same anchor as litWindow, so the
+// choice survives the LOD swap. Carried in the pane's vertex colour and
+// applied to the EMISSION only (RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT).
+Vec3 litTint(const Vec3& worldPos, bool curtainWall);
 // Curtain-wall towers light per BAY, not per storey-face (device: "the way
 // it's lit up row by row is odd"): each mullion bay flips its own coin
 // against a per-STOREY occupancy — some floors busy, some nearly dark, the

@@ -63,6 +63,9 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
     float mtl = mat.metallic;
     float rough = mat.roughness;
     float3 emit = mat.emission;
+    // FLAG_EMISSIVE_VERTEX_TINT (32): the vertex colour tints the emission (the entry
+    // points leave the albedo untinted for it).
+    if (int(mat.flags) & 32) emit *= geom.vertexColor;
     float ao = 1.0;
     uint tf = mat.textureFlags;
     if (tf & 1u) {

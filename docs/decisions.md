@@ -6622,6 +6622,21 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
    financial 8 → 29. Poke gate still passing (48 / 419 / 1343). Side effect to watch: bigger grain on a
    small level (piedmont_mini) sends more blocks to the blind bisection (23 → 35 of 82).
 
+10. **Night: the vertex colour tints the emission, not the albedo** (`RenderMaterial::
+    FLAG_EMISSIVE_VERTEX_TINT`, bit 32, honoured in the Vulkan, Metal and WebGPU mesh shaders). One
+    lit-window part per render cell can now carry any number of tints while `NightGlow` still ramps
+    the part's single emission on the dusk curve and the day look stays the one glass colour. The
+    lit-glass material carries the flag (`materialFor(PartId::GlassLit)`), every lit pane's vertex
+    colour is `litTint(anchor, curtainWall)` — a per-window pick hashed from the same anchor as
+    `litWindow`, so it survives the LOD swap: cool office whites with a share of fluorescent blue-white
+    behind a curtain wall, warm incandescent with some cream and the odd cool or green-white room
+    elsewhere — the inner-wall emitter takes the same flag so the inside of a window matches its
+    outside, and the loader's night glow for lit glass is white (`1.3`), the colour now living in the
+    pane. Rejected: a PartId per tint (coarser, and a material per colour per cell). Verified in the
+    Vulkan viewer's night frames; the Metal and WebGPU edits mirror it and were not compiled here.
+    Still to come in this milestone: a lighting spec per building (crown styles and colours, signage
+    boxes, podium uplights, aviation beacons with a blink system).
+
 **Measured (step 1).** piedmont_mini rectilinear 26.4 → 92.1 %, oblique corners 60.6 → 14.0 %;
 lanelab metro 59.5 → 81.5 %, 41.4 → 24.0 %; lattice metro 54.9 → 86.9 %, 44.5 → 19.8 %. Coverage
 fell about a quarter (yards, and the trapezoid leftovers are ground now) — the paving step is what

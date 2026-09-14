@@ -138,6 +138,22 @@ bool litOfficeBay(const Vec3& bayAnchor, Real occupancy) {
     return (positionHash(bayAnchor) & 0xffu) / 255.0 < occupancy;
 }
 
+Vec3 litTint(const Vec3& worldPos, bool curtainWall) {
+    // A second hash stream (offset anchor) so the tint is independent of the
+    // lit/dark choice and the storey occupancy.
+    const uint32_t h = positionHash(worldPos + Vec3(0.37, 0.11, 0.53));
+    const Real u = static_cast<Real>(h & 0xffu) / 255.0;
+    if (curtainWall) {
+        if (u < 0.62) return Vec3(1.00, 0.96, 0.88);   // office white
+        if (u < 0.90) return Vec3(0.82, 0.90, 1.00);   // fluorescent blue-white
+        return Vec3(1.00, 0.82, 0.58);                 // a warm room
+    }
+    if (u < 0.60) return Vec3(1.00, 0.72, 0.42);       // incandescent
+    if (u < 0.85) return Vec3(1.00, 0.86, 0.64);       // cream
+    if (u < 0.95) return Vec3(0.80, 0.88, 1.00);       // a cool room
+    return Vec3(0.72, 1.00, 0.78);                     // the odd green-white
+}
+
 RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
     RenderMaterial m;
     switch (id) {
@@ -146,8 +162,12 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
         case PartId::GlassLit:
             // Indistinguishable from Glass by DAY — the lit third of the
             // windows must not read as a checkerboard at noon. Night is the
-            // loader's NightGlow tag raising emission, not this material.
-            m.albedo = {0.18, 0.27, 0.34}; m.metallic = 0.9f; m.roughness = 0.08f; break;
+            // loader's NightGlow tag raising emission, not this material —
+            // and the pane's vertex colour is its TINT (litTint), which the
+            // FLAG_EMISSIVE_VERTEX_TINT shader path applies to the emission
+            // only, so the day glass stays the one glass colour.
+            m.albedo = {0.18, 0.27, 0.34}; m.metallic = 0.9f; m.roughness = 0.08f;
+            m.flags |= RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT; break;
         case PartId::Trim:
             m.albedo = wallColor * 0.55; m.metallic = 0.0f; m.roughness = 0.7f; break;
         case PartId::Roof:
@@ -457,10 +477,12 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
     const Real occupancy = litStoreyOccupancy(fr.at(0, spandrelH));
     for (int b = 0; b < bays; ++b) {
         const Real x0 = W * b / bays, x1 = W * (b + 1) / bays;
-        RenderMesh& vision =
-            litOfficeBay(fr.at((x0 + x1) * 0.5, spandrelH), occupancy) ? glassLit : glass;
+        const Vec3 bayAnchor = fr.at((x0 + x1) * 0.5, spandrelH);
+        const bool litBay = litOfficeBay(bayAnchor, occupancy);
+        RenderMesh& vision = litBay ? glassLit : glass;
         emitQuad(vision, fr.at(x0, spandrelH) + gin, fr.at(x1, spandrelH) + gin,
-                 fr.at(x1, fh) + gin, fr.at(x0, fh) + gin, fr.n, glassCol);
+                 fr.at(x1, fh) + gin, fr.at(x0, fh) + gin, fr.n,
+                 litBay ? litTint(bayAnchor, true) : glassCol);
     }
     // FLAT (LOD1): the spandrel band + vision pane carry the curtain-wall read
     // at distance; the solid mullion lattice is the expensive half — skip it.
@@ -611,7 +633,7 @@ Real interiorInset(const BuildingParams& p) {
 void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
                        const FacadeLayout& L, Real thick,
                        const Vec3& wallColor, const Poly2& plan,
-                       const Vec3& paint) {
+                       const Vec3& paint, bool curtainWall) {
     RenderMesh wall, glass, glassLit;
     const Vec3 in = fr.n * -thick;
     const Vec3 nIn = fr.n * -1.0;
@@ -632,8 +654,8 @@ void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
         if (!o.entrance) {
             const bool lit = litWindow(fr.at(o.wx0, o.sill));
             q(lit ? glassLit : glass, o.wx0, o.sill, o.wx1, o.head,
-              materialFor(lit ? PartId::GlassLit : PartId::Glass, wallColor)
-                  .albedo,
+              lit ? litTint(fr.at(o.wx0, o.sill), curtainWall)
+                  : materialFor(PartId::Glass, wallColor).albedo,
               in + fr.n * 0.02);
         }
     }
@@ -669,12 +691,11 @@ static void emitFlatFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode
     for (const BayOpening& o : facadeLayout(fr, mode, p).open) {
         // Same anchor as the full emitter's pane (fr.at(wx0, sill)), so a
         // window keeps its lit/dark choice across the LOD swap.
-        RenderMesh& dst =
-            o.entrance ? door
-                       : (litWindow(fr.at(o.wx0, o.sill)) ? glassLit : glass);
+        const bool litPane = !o.entrance && litWindow(fr.at(o.wx0, o.sill));
+        RenderMesh& dst = o.entrance ? door : (litPane ? glassLit : glass);
         emitQuad(dst, fr.at(o.wx0, o.sill) + proud, fr.at(o.wx1, o.sill) + proud,
                  fr.at(o.wx1, o.head) + proud, fr.at(o.wx0, o.head) + proud,
-                 fr.n, o.entrance ? dcol : gcol);
+                 fr.n, o.entrance ? dcol : (litPane ? litTint(fr.at(o.wx0, o.sill), p.curtainWall) : gcol));
     }
     appendToPart(out, p.wallPart, wall);
     appendToPart(out, PartId::Glass, glass);
@@ -912,15 +933,16 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             // springline plus (for an arch) a lunette fan to the arc. A third
             // of the panes route to GlassLit (litWindow — same anchor the flat
             // emitter hashes, so LOD swaps keep the same homes lit).
-            RenderMesh& pane =
-                litWindow(fr.at(wx0, openSill)) ? glassLit : glass;
-            emitQuad(pane, oBL + in, oBR + in, oTR + in, oTL + in, fr.n, gcol);
+            const bool litPane = litWindow(fr.at(wx0, openSill));
+            RenderMesh& pane = litPane ? glassLit : glass;
+            const Vec3 pcol = litPane ? litTint(fr.at(wx0, openSill), p.curtainWall) : gcol;
+            emitQuad(pane, oBL + in, oBR + in, oTR + in, oTL + in, fr.n, pcol);
             if (rise > 0) {
                 Vec3 S = fr.at(cx, ysp) + in;
                 for (int k = 0; k < NARC; ++k)
                     MeshBuilder::emitTri(pane, S, fr.at(arc[k].x, arc[k].y) + in,
                                          fr.at(arc[k + 1].x, arc[k + 1].y) + in,
-                                         fr.n, gcol);
+                                         fr.n, pcol);
             }
 
             // Surrounds (Trim): the projecting SILL course, and a HOOD — a flat
@@ -2713,7 +2735,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             } else {
                 emitInnerWallRect(out, fr, facadeLayout(fr, upMode, params),
                                   interiorInset(params), params.wallColor,
-                                  spk.plan, interiorPaintFor(params));
+                                  spk.plan, interiorPaintFor(params), params.curtainWall);
             }
         }
     }
@@ -3090,7 +3112,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             } else {
                 emitInnerWallRect(out, ifr, facadeLayout(ifr, mode, params),
                                   interiorInset(params), wallColor, plan,
-                                  interiorPaintFor(params));
+                                  interiorPaintFor(params), params.curtainWall);
             }
         }
     }
