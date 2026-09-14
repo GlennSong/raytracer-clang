@@ -401,6 +401,13 @@ struct AgentDriver {
 // tags lamp glow shells and lit-window chunks; never saved).
 struct NightGlow {
     Vec3 fullEmission{1.0, 0.85, 0.55};
+    // Optional NIGHT DIM (skyscrapers v2 M4, the distant tier): the albedo
+    // is scaled from `dayAlbedo` toward `dayAlbedo * nightAlbedo` on the same
+    // ramp, so a flat proxy box — sky-lit and six times brighter under the
+    // night exposure — goes dark like the broken-up facade it stands in for,
+    // and its lit-window glow reads. 1 = leave the albedo alone.
+    float nightAlbedo = 1.0f;
+    Vec3 dayAlbedo{1.0, 1.0, 1.0};
 };
 
 // A FLASHING night light (skyscrapers v2 M4): with NightGlow on the same
@@ -555,6 +562,16 @@ struct CitySimConfig {
     // The citysim render bridge runs it at build (scripting builds only) and
     // installs its archetype tables over the built-ins. "" = built-ins.
     std::string agentScript;
+    // LIGHT LOD (skyscrapers v2 M4; Glenn: "it would be good if they were all
+    // using the lod system"): the distances the small-light tiers hand over,
+    // level-authored in the citysim block like detailDistance. Today the
+    // aviation beacons use them (BeaconLightSystem, DayNightSystem); street
+    // lamps are the next tenant.
+    float lightSpriteIn = 20.0f;    // the billboard is fully on beyond this (fades in over the last 60 %)
+    float lightSphereOut = 35.0f;   // the near-tier glow geometry is gone beyond this (fades over the last 40 %)
+    float lightRadius = 60.0f;      // point lights within this of the camera
+    float lightRange = 10.0f;       // each small light's reach (a tighter pool reads sharper)
+    int   lightCount = 6;           // at most this many small-light point lights
     // Data-driven fleet bodies (ADR-0065): the loaded TEXT of the level's
     // `"vehicles"` script (a vehicles.lua-style file resolved by level_loader).
     // The citysim render bridge runs it at build (scripting builds only) and

@@ -428,6 +428,11 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadEntity>& nets,
 // city is actually made of — past `detailDistance` the full facades are dropped
 // and a chunk becomes a handful of these — so its normals decide how the whole
 // skyline shades. Appends to `out` (one mesh per render cell).
+// The distant tier's window grid: a cell is one bay by one storey, and the
+// lit-window emissive map the loader bakes repeats every kMassBoxTile cells
+// (its first cell is always dark, for the roof cap).
+constexpr Real kMassBoxCell = 3.2;
+constexpr int kMassBoxTile = 8;
 void appendLotMassBox(RenderMesh& out, const LotBuilding& lot,
                       const Vec3& sideColor, const Vec3& roofColor,
                       Real bottomY = std::numeric_limits<Real>::quiet_NaN());

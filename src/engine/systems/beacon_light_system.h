@@ -38,11 +38,14 @@ public:
     void onStop(FrameContext& ctx) override;
 
     static constexpr Real SPRITE_FAR = 1800.0;   // sprites beyond this are skipped
-    static constexpr Real NEAR_FADE0 = 8.0;      // sprite fully gone inside this
-    static constexpr Real NEAR_FADE1 = 20.0;     // sprite fully on beyond this
-    static constexpr Real LIGHT_M = 60.0;        // point lights within this
-    static constexpr int MAX_LIGHTS = 6;
     static constexpr int GLOW_TEX = 64;          // the baked glow texture's side
+    // The tier distances come from the level's citysim block (CitySimConfig:
+    // lightSpriteIn, lightSphereOut, lightRadius, lightRange, lightCount);
+    // these are the defaults when a level has none.
+    static constexpr Real DEFAULT_SPRITE_IN = 20.0;
+    static constexpr Real DEFAULT_LIGHT_M = 60.0;
+    static constexpr Real DEFAULT_LIGHT_RANGE = 10.0;
+    static constexpr int DEFAULT_LIGHT_COUNT = 6;
 
     std::size_t lampCount() const { return lamps_.size(); }
 

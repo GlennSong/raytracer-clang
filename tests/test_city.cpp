@@ -1,3 +1,4 @@
+#include <limits>
 #include <map>
 #include <cstdio>
 #include <string>
@@ -949,4 +950,25 @@ TEST_CASE(curtain_wall_interior_skins_meet_at_the_corners) {
     CHECK(cornersShared(upper, storeys[2].y0, storeys[2].plan) == 4);
     const BuildingMesh ground = growPlanBuilding(plan, p, 0.0, FacadeDetail::Full);
     CHECK(cornersShared(ground, 0.0, plan) == 4);   // the entrance wall and the blank stair wall mitre too
+}
+
+TEST_CASE(distant_mass_box_carries_window_cell_uvs) {
+    // The far tier's lit windows: the mass box's wall UVs count window cells
+    // (3.2 m per cell, eight cells per texture repeat), the roof cap samples
+    // the map's dark first cell.
+    LotBuilding lb;
+    lb.site = Vec2(10, 20);
+    lb.width = 32.0;   // ten cells along
+    lb.depth = 16.0;   // five cells across
+    lb.height = 51.2;  // sixteen cells up
+    lb.baseY = 0;
+    lb.yaw = 0;
+    RenderMesh m;
+    appendLotMassBox(m, lb, Vec3(0.5, 0.5, 0.5), Vec3(0.2, 0.2, 0.2), std::numeric_limits<Real>::quiet_NaN());
+    CHECK(m.vertices.size() == 20);
+    float maxU = 0, maxV = 0;
+    for (std::size_t i = 0; i < 16; ++i) { maxU = std::max(maxU, m.vertices[i].u); maxV = std::max(maxV, m.vertices[i].v); }
+    CHECK(std::fabs(maxU - 32.0f / (3.2f * 8)) < 1e-4f);
+    CHECK(std::fabs(maxV - 51.2f / (3.2f * 8)) < 1e-4f);
+    for (std::size_t i = 16; i < 20; ++i) CHECK(m.vertices[i].u < 0.1f && m.vertices[i].v < 0.1f);
 }

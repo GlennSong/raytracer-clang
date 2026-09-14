@@ -6678,8 +6678,25 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
     material. One clock: `beaconCellPhase` hashes the flash from the lamp's 24 m cell — the loader's
     chunks, the sprites and the lights all use it — and DayNightSystem publishes its flash clock and
     the night adaptation on the lighting state. Frames: `after_m4_beacon_tiers_{skyline,roof20m,
-    roof8m}.png`. Still owed: podium uplights, and a Lua-readable per-building lighting spec (today
-    the choices are hashed, not authored).
+    roof8m}.png`.
+    *In the LOD system (same day):* the tier distances are level-authored in the citysim block
+    beside `detailDistance` — `lightSpriteIn` (20), `lightSphereOut` (35), `lightRadius` (60),
+    `lightRange` (10), `lightCount` (6) on `CitySimConfig` — read by `BeaconLightSystem` and the
+    day/night sphere fade; street lamps are the next tenant. The point light's pool is tight by
+    default (range 10 with the intensity to match: the shader's falloff is a quartic window over
+    inverse-square, so a short range reads as a sharp disc, not a wash). And the DISTANT TIER lights
+    up: `appendLotMassBox` gives the mass box UVs in window cells (3.2 m, eight per repeat), the
+    loader bakes one lit-window emissive map (a third of the cells lit in the pane tints, the first
+    cell dark for the roof cap) onto every proxy under a `NightGlow` (1.0, with a night albedo dim to
+    0.22 — `NightGlow::nightAlbedo` — so the sky-lit box goes dark as the windows come up) — past
+    `detailDistance` a tower shows a soft tinted window glow after dusk instead of going grey while
+    its beacons flash. Proxies are two meshes per cell: masonry in the wall colour, and curtain-wall
+    towers in a dark MATTE glass colour — not metallic: a metallic box mirrors the sky and reads pale
+    by day and night whatever its albedo (measured: a red-painted metallic proxy still drew white).
+    Beyond about a kilometre the aerial fog toward the sky colour is what the far city looks like at
+    night, in every tier; that is the atmosphere's call, not the LOD's.
+    Still owed: podium uplights, and a Lua-readable per-building lighting spec (today the choices
+    are hashed, not authored).
 
 11. **The core: shafts, stairwells and an elevator bank, climbable** (`core_plan.h`, plan M5/M6).
     A building of four floors and up (`BuildingParams::core` 0 = auto, 1 = never, 2 = always; Lua

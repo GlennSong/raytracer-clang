@@ -320,6 +320,36 @@ static Entity spawnDocumentEntity(const json& ent, const std::string& shape,
 // vertex is shared by few triangles); materialIndex carries over.
 // Aviation-beacon chunks are cut this fine so a roof's lamps flash on their own phase (skyscrapers v2 M4).
 static constexpr double kBeaconChunk = 24.0;
+// The distant tier's lit-window map (skyscrapers v2 M4): `cells` x `cells` window
+// cells, each an 8 px cell with a 5 x 5 px pane; a third of the panes lit, in the
+// lit-glass tint palette (cool office whites, some fluorescent blue-white, warm
+// incandescent, cream); the FIRST cell is always dark (the roof cap samples it).
+// Alpha is 1 everywhere: only the emission channel reads it.
+static TextureHandle bakeLitWindowMap(Renderer& renderer, int cells, uint32_t seed) {
+    const int px = 8, n = cells * px;
+    std::vector<unsigned char> img(static_cast<std::size_t>(n) * n * 4, 0);
+    for (std::size_t i = 3; i < img.size(); i += 4) img[i] = 255;
+    uint32_t h = seed;
+    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffu) / 65535.0; };
+    static const Vec3 tints[6] = {{1.0, 0.97, 0.92}, {0.92, 0.96, 1.0}, {0.80, 0.90, 1.0},
+                                  {1.0, 0.85, 0.62}, {1.0, 0.92, 0.75}, {0.96, 0.98, 0.94}};
+    for (int cy = 0; cy < cells; ++cy)
+        for (int cx = 0; cx < cells; ++cx) {
+            const double u = rnd();
+            const bool lit = !(cx == 0 && cy == 0) && u < 0.34;
+            if (!lit) continue;
+            const Vec3 t = tints[static_cast<int>(rnd() * 5.999)];
+            for (int y = 1; y < 6; ++y)
+                for (int x = 2; x < 7; ++x) {
+                    const std::size_t o = (static_cast<std::size_t>(cy * px + y) * n + (cx * px + x)) * 4;
+                    img[o] = static_cast<unsigned char>(t.x * 255);
+                    img[o + 1] = static_cast<unsigned char>(t.y * 255);
+                    img[o + 2] = static_cast<unsigned char>(t.z * 255);
+                }
+        }
+    return renderer.uploadTexture(n, n, 4, img.data());
+}
+
 static std::vector<RenderMesh> chunkMeshByCell(const RenderMesh& m, double cell) {
     std::vector<RenderMesh> out; for (MeshBuilder::CellChunk& c : MeshBuilder::chunkByCell(m, cell)) out.push_back(std::move(c.mesh)); return out;
 }
@@ -3755,6 +3785,11 @@ bool LevelLoader::load(const std::string& path,
         cfg.pedsPerKm = cs.value("pedsPerKm", cfg.pedsPerKm);
         cfg.seed = cs.value("seed", cfg.seed);
         cfg.hoursPerSecond = cs.value("hoursPerSecond", cfg.hoursPerSecond);
+        cfg.lightSpriteIn = cs.value("lightSpriteIn", cfg.lightSpriteIn);
+        cfg.lightSphereOut = cs.value("lightSphereOut", cfg.lightSphereOut);
+        cfg.lightRadius = cs.value("lightRadius", cfg.lightRadius);
+        cfg.lightRange = cs.value("lightRange", cfg.lightRange);
+        cfg.lightCount = cs.value("lightCount", cfg.lightCount);
         cfg.startHour = cs.value("startHour", cfg.startHour);
         cfg.perceptionReliability =
             cs.value("perceptionReliability", cfg.perceptionReliability);
@@ -4443,12 +4478,17 @@ bool LevelLoader::load(const std::string& path,
                 const double cell = cs.value("renderCell", 250.0);
                 const double fd = cs.value("facadeDistance", 0.0);
                 const double dd = std::max(cs.value("detailDistance", 700.0), fd);
-                std::map<std::pair<int, int>, RenderMesh> proxies;
+                // Two proxy meshes per cell: MASONRY (matte, the wall colour) and GLASS
+                // (a curtain-wall tower's proxy is metallic like its facade — a matte box in
+                // the wall colour its facade never shows read as a pale slab by day and
+                // night beside the mirror-dark real towers; Glenn's skyline shot).
+                std::map<std::tuple<int, int, int>, RenderMesh> proxies;
                 for (const engine::LotBuilding& lb : grown.lots) {
                     if (lb.height < 1.5 || lb.pad.size() >= 3) continue;   // parks/greens: skip
+                    const bool curtain = !lb.units.empty() && lb.units.front().params.curtainWall;
                     RenderMesh& pmesh =
                         proxies[{(int)std::floor(lb.site.x / cell),
-                                 (int)std::floor(lb.site.y / cell)}];
+                                 (int)std::floor(lb.site.y / cell), curtain ? 1 : 0}];
                     // Value-match the detail look (device: pop at the swap):
                     // real facades read darker than their wall colour because
                     // of the window grid, and every roof deck is near-charcoal
@@ -4471,15 +4511,33 @@ bool LevelLoader::load(const std::string& path,
                         }
                         boxBottom = static_cast<Real>(lo - 0.5);
                     }
-                    engine::appendLotMassBox(pmesh, lb, lb.color * 0.84,
+                    // Glass carries the pane colour; masonry the wall colour, a touch darker
+                    // than the day match so the far blocks do not float pale at night.
+                    const Vec3 sideCol = curtain ? Vec3(0.10, 0.14, 0.18) : lb.color * 0.74;
+                    engine::appendLotMassBox(pmesh, lb, sideCol,
                                              Vec3(0.20, 0.20, 0.22), boxBottom);
                 }
+                // The distant tier's NIGHT: a baked lit-window emissive map — one window
+                // per bay and storey (the mass box's UVs are in those cells), a third of
+                // them lit in the same tints the real panes wear — under a NightGlow tag,
+                // so past detailDistance a tower still shows its windows after dusk instead
+                // of going grey while its beacons flash (Glenn's skyline shot, 2026-09-14).
+                // Mipmapping averages the grid to a soft glow at a kilometre, which is what
+                // the real chunk collapses to as well.
+                const TextureHandle litWindows = bakeLitWindowMap(renderer, engine::kMassBoxTile * 8, 4242u);
                 for (auto& [key, pmesh] : proxies) {
                     if (pmesh.vertices.empty()) continue;
+                    const bool glass = std::get<2>(key) == 1;
                     Renderable r;
                     r.renderLayer = engine::LayerBuildings;
                     r.material.albedo = Vec3(1, 1, 1);   // colour rides the verts
-                    r.material.roughness = 0.9f;
+                    // Glass proxies are MATTE and dark, not metallic: a metallic box mirrors
+                    // the sky — pale by day, and pale at night under the six-fold exposure,
+                    // whatever its albedo — where the real tower's panes break the sky up
+                    // and read dark. (Measured: a red-painted metallic proxy still drew white.)
+                    r.material.roughness = glass ? 0.8f : 0.9f;
+                    r.material.metallic = 0.0f;
+                    r.material.emissiveMap = litWindows;
                     r.minDistance = dd;
                     r.mesh = assets.acquireMesh(pmesh, "");
                     Entity e = world.create();
@@ -4487,6 +4545,14 @@ bool LevelLoader::load(const std::string& path,
                     world.add<Transform>(e, t);
                     world.add<PrevTransform>(e, PrevTransform{t});
                     world.add<Renderable>(e, r);
+                    // 0.4, not the panes' 1.3: mipmapping has already averaged the grid to a
+                    // third, and at the night exposure a box glowing evenly at 1.3 read as a
+                    // pale slab — the far city should be a soft, tinted glow, not lit boxes.
+                    engine::NightGlow ng;
+                    ng.fullEmission = Vec3(1.0, 1.0, 1.0) * 1.0;
+                    ng.nightAlbedo = 0.22f;   // the body goes dark with dusk; the window glow carries it
+                    ng.dayAlbedo = r.material.albedo;
+                    world.add<engine::NightGlow>(e, ng);
                 }
             }
             lotStage("hlod proxies");

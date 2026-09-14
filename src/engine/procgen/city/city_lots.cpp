@@ -3677,10 +3677,19 @@ void appendLotMassBox(RenderMesh& out, const LotBuilding& lot,
         // is culled and you see the far wall with its flipped normal aimed at you.
         const Vec3 d = b - a;
         const Vec3 n = normalize(Vec3(d.z, 0, -d.x));
-        MeshBuilder::emitQuad(out, base + a, base + b, top + b, top + a, n, sideColor);
+        // UVs in WINDOW CELLS (kMassBoxCell m per cell, kMassBoxTile cells per
+        // texture repeat), so the loader's lit-window emissive map lands one
+        // window per bay and storey on the far tier at night.
+        const float uw = static_cast<float>(d.length() / (kMassBoxCell * kMassBoxTile));
+        const float vh = static_cast<float>((top.y - base.y) / (kMassBoxCell * kMassBoxTile));
+        MeshBuilder::emitQuadUV(out, base + a, base + b, top + b, top + a, n, sideColor,
+                                0, 0, uw, 0, uw, vh, 0, vh);
     }
-    MeshBuilder::emitQuad(out, top + c[0], top + c[1], top + c[2], top + c[3],
-                          Vec3(0, 1, 0), roofColor);
+    // The roof cap samples the map's dark corner cell (its first cell is
+    // always unlit by construction).
+    const float rc = static_cast<float>(0.5 / kMassBoxTile);
+    MeshBuilder::emitQuadUV(out, top + c[0], top + c[1], top + c[2], top + c[3],
+                            Vec3(0, 1, 0), roofColor, rc, rc, rc, rc, rc, rc, rc, rc);
 }
 
 }  // namespace engine

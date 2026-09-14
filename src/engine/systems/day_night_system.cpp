@@ -574,6 +574,8 @@ void DayNightSystem::applyNightGlow(FrameContext& ctx) {
     ctx.world.each<NightGlow, Renderable>(
         [&](Entity, NightGlow& glow, Renderable& r) {
             r.material.emission = glow.fullEmission * ramp;
+            if (glow.nightAlbedo < 1.0f)
+                r.material.albedo = glow.dayAlbedo * (1.0 - (1.0 - glow.nightAlbedo) * ramp);
         });
     ctx.world.each<NightGlow, InstanceGroup>(
         [&](Entity, NightGlow& glow, InstanceGroup& g) {
@@ -596,6 +598,10 @@ void DayNightSystem::applyBeaconBlink(FrameContext& ctx) {
     ctx.view.lighting.beaconSeconds = static_cast<float>(blinkSeconds_);
     ctx.view.lighting.nightAdapt = static_cast<float>(adapt);
     const Vec3 camPos = ctx.view.camera.position;
+    // The near tier's reach: the level's light LOD block (lightSphereOut), else 35 m.
+    Real sphereOut = 35.0;
+    ctx.world.each<CitySimConfig>([&](Entity, CitySimConfig& c) { sphereOut = c.lightSphereOut; });
+    const Real sphereFade0 = sphereOut * 0.6;
     ctx.world.each<NightGlow, BeaconBlink, Renderable>(
         [&](Entity, NightGlow& glow, BeaconBlink& b, Renderable& r) {
             const Real gate = ramp <= 0 ? Real(0) : beaconBlinkGate(blinkSeconds_, b.period, b.phase, b.duty);
@@ -606,7 +612,7 @@ void DayNightSystem::applyBeaconBlink(FrameContext& ctx) {
                 // the glow, so the spheres fade out by 35 m (per chunk).
                 const BoundingSphere bs = ctx.renderer.getMeshBounds(r.mesh);
                 const Real d = (bs.center - camPos).length() - bs.radius;
-                Real far = (d - 20.0) / 15.0;
+                Real far = (d - sphereFade0) / std::max(Real(0.5), sphereOut - sphereFade0);
                 far = std::min(Real(1), std::max(Real(0), far));
                 r.material.opacity = b.baseOpacity * static_cast<float>(ramp * gate * (1.0 - far));
             }

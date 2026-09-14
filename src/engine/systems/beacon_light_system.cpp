@@ -89,6 +89,16 @@ void BeaconLightSystem::update(FrameContext& ctx) {
     InstanceGroup* g = ctx.world.get<InstanceGroup>(group_);
     if (!g) return;
 
+    // The tier distances: the level's light LOD block, else the defaults.
+    Real spriteIn = DEFAULT_SPRITE_IN, lightM = DEFAULT_LIGHT_M, lightRange = DEFAULT_LIGHT_RANGE;
+    int lightCount = DEFAULT_LIGHT_COUNT;
+    ctx.world.each<CitySimConfig>([&](Entity, CitySimConfig& c) {
+        spriteIn = c.lightSpriteIn;
+        lightM = c.lightRadius;
+        lightRange = c.lightRange;
+        lightCount = c.lightCount;
+    });
+    const Real spriteFade0 = spriteIn * 0.4;   // fades in over the last 60 % of spriteIn
     const Real ramp = duskRamp(lighting.solarElevation);
     const Real adapt = std::max(1.0f, lighting.nightAdapt);
     const double seconds = lighting.beaconSeconds;
@@ -123,7 +133,7 @@ void BeaconLightSystem::update(FrameContext& ctx) {
         const Real d = std::sqrt(d2);
         const Real gate = beaconBlinkGate(seconds, l.period, l.phase);
         if (gate <= 0.001) continue;
-        Real nearT = (d - NEAR_FADE0) / (NEAR_FADE1 - NEAR_FADE0);
+        Real nearT = (d - spriteFade0) / std::max(Real(0.5), spriteIn - spriteFade0);
         nearT = std::min(Real(1), std::max(Real(0), nearT));
         nearT = nearT * nearT * (3.0 - 2.0 * nearT);
         // 1.4 m at arm's length, growing ~1 m per 80 m so the glow holds up
@@ -144,15 +154,19 @@ void BeaconLightSystem::update(FrameContext& ctx) {
     std::sort(order_.begin(), order_.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
     int lights = 0;
     for (const auto& [d2, i] : order_) {
-        if (lights >= MAX_LIGHTS) break;
+        if (lights >= lightCount) break;
         const Real d = std::sqrt(d2);
-        if (d > LIGHT_M) break;
+        if (d > lightM) break;
         const Lamp& l = lamps_[i];
         const Real gate = beaconBlinkGate(seconds, l.period, l.phase);
-        Real fade = (LIGHT_M - d) / (0.25 * LIGHT_M);
+        Real fade = (lightM - d) / (0.25 * lightM);
         fade = std::min(Real(1), std::max(Real(0), fade));
-        PointLight pl(l.pos, Vec3(1.0, 0.06, 0.03), static_cast<float>(38.0 * ramp * gate * fade));
-        pl.range = 16.0f;
+        // A tight pool: the shader's window is (1 - (d/range)^4)^2 / d^2, so a
+        // short range with the intensity to match reads as a sharp red disc
+        // instead of a fuzzy wash (Glenn, 2026-09-14).
+        const Real k = (lightRange * lightRange) / (DEFAULT_LIGHT_RANGE * DEFAULT_LIGHT_RANGE);
+        PointLight pl(l.pos, Vec3(1.0, 0.06, 0.03), static_cast<float>(64.0 * k * ramp * gate * fade));
+        pl.range = static_cast<float>(lightRange);
         lighting.beaconPoints.push_back(pl);
         ++lights;
     }
