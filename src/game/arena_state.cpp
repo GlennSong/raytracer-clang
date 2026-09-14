@@ -12,6 +12,7 @@
 #include "../engine/systems/teleport_system.h"
 #include "../engine/systems/building_interior_system.h"
 #include "../engine/systems/door_system.h"
+#include "../engine/systems/elevator_system.h"
 #include "../engine/systems/terrain_lod_system.h"
 #include "../apps/citysim/city_render.h"
 #include "../apps/citysim/city_spectate.h"
@@ -195,6 +196,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<TerrainLodSystem>(&physSys);  // CDLOD draws + near-node colliders (ADR-0036)
     addSystem<BuildingInteriorSystem>(&physSys);  // streamed interiors (ADR-0080)
     addSystem<DoorSystem>();  // visual double-acting leaves (ADR-0080)
+    addSystem<ElevatorSystem>(&physSys);  // kinematic cabs + hoistway doors (skyscrapers v2 M5/M6)
 #else
     addSystem<TerrainLodSystem>();          // CDLOD draws only (no physics build)
 #endif

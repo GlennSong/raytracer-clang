@@ -5,6 +5,7 @@
 #include "../asset_manager.h"
 #include "../physics/physics_world.h"
 #include "../procgen/city/building_records.h"
+#include "../procgen/city/core_plan.h"   // the storey window rides the core (M5)
 #include <array>
 #include <cstdint>
 #include <unordered_map>
@@ -50,15 +51,32 @@ public:
     static constexpr double RELEASE_M = 40.0;   // free when this far from all
     static constexpr std::size_t MAX_RESIDENT = 5;
     static constexpr std::uint64_t FREE_EVERY = 120;   // steps between GPU frees
+    // The storey WINDOW (skyscrapers v2 M5): a building of up to WHOLE_UP_TO
+    // storeys is grown whole; a taller one streams [f - WINDOW_BELOW,
+    // f + WINDOW_ABOVE) around the player's storey f (the lobby's first
+    // three storeys while they are still outside), regrown when f nears an
+    // edge of the window — except while riding a cab, when the arrival is
+    // the moment the window catches up.
+    static constexpr int WHOLE_UP_TO = 8;
+    static constexpr int WINDOW_BELOW = 2;
+    static constexpr int WINDOW_ABOVE = 3;
+    // The storey a walker at `y` (capsule centre) stands in, 0 = ground.
+    static int storeyOf(const BuildingRecord& r, Real y);
+    // The window a resident holds ([k0, k1); k1 < 0 = whole); k1 = 0 when absent.
+    void residentWindow(std::size_t key, int& k0, int& k1) const;
 
 private:
     struct Resident {
         std::vector<Entity> entities;
         std::vector<MeshHandle> meshes;
         PhysicsBodyId body = INVALID_PHYSICS_BODY;
+        int k0 = 0, k1 = -1;   // the storey window grown
+        CorePlan core;         // lazily derived (the hoistway test while riding)
+        bool coreKnown = false;
     };
     void build(World& world, PhysicsWorld* phys, AssetManager& assets,
-               Renderer* renderer, const BuildingRecord& r, std::size_t key);
+               Renderer* renderer, const BuildingRecord& r, std::size_t key,
+               int k0, int k1);
     // Destroys entities and the body at once; queues the GPU meshes for the
     // rate-limited free.
     void release(World& world, PhysicsWorld* phys, std::size_t key);
@@ -73,6 +91,8 @@ private:
     std::vector<MeshHandle> freeQueue_;
     std::uint64_t stepCount_ = 0;
     std::uint64_t lastFree_ = 0;
+    Real lastPlayerY_ = 0;
+    bool havePlayerY_ = false;
 };
 
 }  // namespace engine

@@ -6653,6 +6653,38 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
     owed: podium uplights, and a Lua-readable per-building lighting spec (today the choices are
     hashed, not authored).
 
+11. **The core: shafts, stairwells and an elevator bank, climbable** (`core_plan.h`, plan M5/M6).
+    A building of four floors and up (`BuildingParams::core` 0 = auto, 1 = never, 2 = always; Lua
+    `core = "auto"|"never"|"always"`) gets a CORE when one fits: a rectangle seated at the centre
+    of the TOP tier (every tier below contains it), its door wall facing the entrance — two enclosed
+    dog-leg stairwells (2.6 m wide: two 1.2 m flights either side of a 0.2 m spine wall, 1.5 m
+    landings, riser ≤ 0.20 on a 0.26 tread, the ground storey's taller flight sizing the shaft) at
+    the ends of a bank of 2.4 × 2.6 m hoistways (one to eight floors, two to twenty, three to forty,
+    four beyond), a closed service block behind them, and a 1.8 m corridor ring the core must keep
+    inside every tier; failing that the bank shrinks to one hoistway, tries the other orientation,
+    then gives up and the building keeps ADR-0080's straight stair (or nothing). `coreFor(plan,
+    params, entranceEdge)` is the one derivation the exterior grow (the ground ceiling's shaft
+    holes), `interiorLayout` (no straight stair when a core exists), the lot pass
+    (`wantsDoorway`: tall buildings — curtain walls included — open when a core fits) and the
+    runtime share. `growInterior` cuts every shaft through every slab, emits each storey's shaft
+    walls (0.15 m, two skins, one skin between neighbours, door reveals), flights, landings and
+    soffits with colliders, and now takes a STOREY WINDOW `[k0, k1)`: `BuildingInteriorSystem`
+    grows buildings of up to eight storeys whole and streams `[f-2, f+3)` around the player's
+    storey `f` in taller ones (the lobby's first three storeys while approaching), regrowing when
+    `f` nears the window's edge — never mid-ride, the cab's arrival is when the window catches up.
+    `ElevatorSystem` runs one kinematic CAB per hoistway of the building the player is in (a floor,
+    two sides, a back and a lit ceiling moved with `moveKinematic` at 3 m/s, 1.5 m/s² trapezoid)
+    and the sliding hoistway-door leaves on the storeys around them; `E` in front of a door calls
+    the nearest cab, Up/Down inside picks a storey, `E` goes, an ImGui strip is the panel. The
+    walker rides because `PhysicsWorld::moveCharacter` now adds Jolt's `GetGroundVelocity()` on
+    the ground branch (`character_rides_a_kinematic_platform`) — the one physics change M6 needed;
+    a kinematic body keeps its last velocity, so the mover places it every step. Tests:
+    `test_core_plan` (fit, bank size, tiers, storey geometry, window), `test_building_lod`'s
+    straight-stair case now pins `core = 1`. Rejected: cores in the exterior mesh (the merged city
+    mesh cannot stream), one Jolt body per storey (a window is one body, regrown), per-storey
+    leaves for every floor (60 × 4 × 2 bodies for nothing). Owed: cab doors and a call button in the
+    grammar, the lobby dressing, sky lobbies, pedestrians in the bank, the performance census.
+
 **Measured (step 1).** piedmont_mini rectilinear 26.4 → 92.1 %, oblique corners 60.6 → 14.0 %;
 lanelab metro 59.5 → 81.5 %, 41.4 → 24.0 %; lattice metro 54.9 → 86.9 %, 44.5 → 19.8 %. Coverage
 fell about a quarter (yards, and the trapezoid leftovers are ground now) — the paving step is what

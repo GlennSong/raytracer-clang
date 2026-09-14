@@ -177,6 +177,47 @@ TEST_CASE(character_steps_up_a_curb) {
     world.shutdown();
 }
 
+TEST_CASE(character_rides_a_kinematic_platform) {
+    // The elevator contract (skyscrapers v2 M6): a walker standing on a
+    // kinematic box moved with moveKinematic goes up and comes down with it,
+    // staying grounded — Jolt's ground velocity added in moveCharacter.
+    PhysicsWorld world;
+    world.initialize();
+    addFloor(world);
+    const Real dt = 1.0 / 60.0;
+    PhysicsBodyId plat = world.addBox(Vec3(2, 0.1, 2), Vec3(0, 0.1, 0), Quat::identity(),
+                                      BodyMotion::Kinematic, 0.0, 0.8);
+    CharacterId c = world.addCharacter(0.4, 0.3, Vec3(0, 1.4, 0));
+    world.optimizeBroadPhase();
+    for (int i = 0; i < 60; ++i) { world.moveCharacter(c, Vec3(), dt); world.update(dt); }
+    const Real y0 = world.characterPosition(c).y;
+    CHECK_APPROX(y0, 0.9, 0.1);   // platform top 0.2 + the capsule's 0.7
+    // Up 2 m at 1 m/s.
+    for (int i = 1; i <= 120; ++i) {
+        world.moveKinematic(plat, Vec3(0, 0.1 + i * dt * 1.0, 0), Quat::identity(), dt);
+        world.moveCharacter(c, Vec3(), dt);
+        world.update(dt);
+    }
+    CHECK(world.characterPosition(c).y > y0 + 1.7);
+    CHECK(world.characterGroundState(c) == GroundState::OnGround);
+    // Down 2 m at 2 m/s.
+    for (int i = 1; i <= 60; ++i) {
+        world.moveKinematic(plat, Vec3(0, 2.1 - i * dt * 2.0, 0), Quat::identity(), dt);
+        world.moveCharacter(c, Vec3(), dt);
+        world.update(dt);
+    }
+    // A kinematic body KEEPS the velocity its last MoveKinematic gave it:
+    // the mover must keep placing it (the ElevatorSystem does, every step).
+    for (int i = 0; i < 30; ++i) {
+        world.moveKinematic(plat, Vec3(0, 0.1, 0), Quat::identity(), dt);
+        world.moveCharacter(c, Vec3(), dt);
+        world.update(dt);
+    }
+    CHECK_APPROX(world.characterPosition(c).y, y0, 0.15);
+    CHECK(world.characterGroundState(c) == GroundState::OnGround);
+    world.shutdown();
+}
+
 TEST_CASE(character_blocked_by_tall_wall) {
     PhysicsWorld world;
     world.initialize();

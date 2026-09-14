@@ -496,7 +496,11 @@ void PhysicsWorld::moveCharacter(CharacterId id, const Vec3& velocity, Real dt) 
     if (jump > 0.0f) {
         newVel = desired + up * jump;
     } else if (ch->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround) {
-        newVel = desired;
+        // A MOVING floor carries the character (skyscrapers v2 M6: the
+        // elevator cab, any kinematic mover): Jolt reports the ground body's
+        // velocity at the contact — zero for everything static — and the
+        // character must add it itself (CharacterVirtual owns no body).
+        newVel = desired + ch->GetGroundVelocity();
     } else {
         newVel = desired + up * current.Dot(up);
     }

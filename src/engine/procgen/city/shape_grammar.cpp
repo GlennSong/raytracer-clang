@@ -1,4 +1,5 @@
 #include "shape_grammar.h"
+#include "core_plan.h"   // the core: shafts, stairwells, the ground ceiling's holes (M5)
 
 #include "road_mesh.h"            // triangulatePolygon (floorplan roof/slab fill)
 #include "triangulate.h"          // triangulateWithHoles (interior ceilings, ADR-0080)
@@ -2499,6 +2500,9 @@ InteriorLayout interiorLayout(const Poly2& planIn, const BuildingParams& params,
     Poly2 plan = planIn;
     if (plan.size() < 3) return il;
     ensureCCW(plan);
+    // A building with a CORE climbs by its stairwells: no straight stair, no
+    // well (the core's shafts are the holes — coreSlabHoles).
+    if (coreFor(plan, params, entranceEdge).valid) return il;
     // One full-storey flight, sized by the TALLEST storey it must serve
     // (the ground storey). Riser 0.28 / tread 0.25 (~48 degrees, inside the
     // 50-degree slope limit and 0.55 stepHeight): the 0.18/0.28 first cut
@@ -2573,7 +2577,7 @@ InteriorLayout interiorLayout(const Poly2& planIn, const BuildingParams& params,
 }
 
 BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
-                          Real baseY, RenderMesh* colliderOut) {
+                          Real baseY, RenderMesh* colliderOut, int k0, int k1) {
     BuildingMesh out;
     Poly2 plan = planIn;
     if (plan.size() < 3) return out;
@@ -2582,6 +2586,11 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     const InteriorLayout il = interiorLayout(plan, params, entranceEdge);
     const std::vector<StoreyPlan> storeys = storeyPlans(plan, params);
     if (storeys.size() < 2) return out;   // no storeys above ground
+    // The core (M5) and the storey window [kA, kB).
+    const CorePlan core = coreFor(plan, params, entranceEdge);
+    const int nS = static_cast<int>(storeys.size());
+    const int kA = std::max(0, std::min(k0, nS));
+    const int kB = k1 < 0 ? nS : std::max(kA, std::min(k1, nS));
     const Vec3 icol = materialFor(PartId::Interior, params.wallColor).albedo;
     const Real floorTone =
         0.85 + 0.45 * (((params.seed >> 4) & 0xffu) / 255.0);
@@ -2617,16 +2626,18 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     // --- floor slabs (top + underside; the underside IS the ceiling of the
     // storey below; the top storey's ceiling is the roof slab's underside,
     // which the exterior grow always emits) ------------------------------
-    for (std::size_t k = 1; k < storeys.size(); ++k) {
+    for (int ki = std::max(1, kA); ki < kB; ++ki) {
+        const std::size_t k = static_cast<std::size_t>(ki);
         std::vector<Poly2> holes;
-        if (il.hasStair && static_cast<int>(k) <= stairTop)
+        if (core.valid) holes = coreSlabHoles(core);   // the shafts' own walls dress these rims
+        else if (il.hasStair && static_cast<int>(k) <= stairTop)
             holes.push_back(il.well);
         const Real yTop = baseY + storeys[k].y0 + 0.05;
         // The hole's CUT EDGE: without a skirt the slab is two horizontal
         // faces with an open 0.25 m rim between them — from below, the top
         // face's backface shows through it (the facing view's residual red
         // line along the stairwell). Double-sided vertical quads close it.
-        for (const Poly2& hole : holes)
+        if (!core.valid) for (const Poly2& hole : holes)
             for (std::size_t e = 0; e < hole.size(); ++e) {
                 const Vec2 a = hole[e], b = hole[(e + 1) % hole.size()];
                 Vec2 en(-(b - a).y, (b - a).x);
@@ -2674,7 +2685,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     // dark underside (device report). A drywall ceiling closes it, with
     // the well hole only if the stair reaches this storey (it never does:
     // stairTop is the last storey's FLOOR -- so no hole).
-    {
+    if (kB == nS) {
         const StoreyPlan& topSp = storeys.back();
         const Real cy2 = baseY + topSp.y0 + topSp.h - 0.25;
         for (const auto& t : triangulateWithHoles(topSp.plan, {})) {
@@ -2692,7 +2703,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     // prism plane). The ground entrance edge keeps a gap at the door bay.
     if (colliderOut) {
         const Real inset = interiorInset(params);
-        for (std::size_t k = 0; k < storeys.size(); ++k) {
+        for (int ki = kA; ki < kB; ++ki) {
+            const std::size_t k = static_cast<std::size_t>(ki);
             const StoreyPlan& spk = storeys[k];
             const Real wy0 = baseY + spk.y0;
             for (std::size_t e = 0; e < spk.plan.size(); ++e) {
@@ -2724,7 +2736,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     // --- inner walls per storey (same layout truth as the facade) --------
     const FacadeMode upMode =
         params.solidFacade ? FacadeMode::Solid : FacadeMode::Residential;
-    for (std::size_t k = 1; k < storeys.size(); ++k) {
+    for (int ki = std::max(1, kA); ki < kB; ++ki) {
+        const std::size_t k = static_cast<std::size_t>(ki);
         const StoreyPlan& spk = storeys[k];
         for (std::size_t e = 0; e < spk.plan.size(); ++e) {
             const FaceRect fr =
@@ -2848,7 +2861,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     // shared hole began, and its top opened onto the hole's mid-air.
     const int nR =
         std::max(3, static_cast<int>(std::lround(il.run / il.tread)) + 1);
-    for (int k = 0; il.hasStair && k < stairTop; ++k) {
+    for (int k = kA; il.hasStair && k < std::min(stairTop, kB); ++k) {
         const Real yk = baseY + storeys[static_cast<std::size_t>(k)].y0 + 0.05;
         const Real rise = storeys[static_cast<std::size_t>(k) + 1].y0 -
                           storeys[static_cast<std::size_t>(k)].y0;
@@ -2896,6 +2909,18 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             stringer(perp * half, perp);
             stringer(perp * -half, perp * -1.0);
         }
+    }
+
+    // --- the core (M5): shaft walls with doors, the dog-leg flights and
+    // landings, on every storey in range — the ground's included.
+    if (core.valid) {
+        CoreMeshes cm;
+        for (int ki = kA; ki < kB; ++ki)
+            emitCoreStorey(cm, colliderOut, core, storeys[static_cast<std::size_t>(ki)], baseY,
+                           params, ki + 1 < nS, ki >= 1);
+        appendToPart(out, PartId::Interior, cm.drywall);
+        appendToPart(out, floorFinishPartFor(params), cm.floor);
+        appendToPart(out, stairFinishPartFor(params), cm.stair);
     }
 
     appendToPart(out, PartId::Interior, mesh);
@@ -3147,8 +3172,10 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     // construction.
     if (full && params.openDoorway) {
         const InteriorLayout il = interiorLayout(plan, params, entranceEdge);
+        const CorePlan gcore = coreFor(plan, params, entranceEdge);
         std::vector<Poly2> holes;
-        if (il.hasStair) holes.push_back(il.well);
+        if (gcore.valid) holes = coreSlabHoles(gcore);   // the shafts (M5)
+        else if (il.hasStair) holes.push_back(il.well);
         const Real cy = y + gh - 0.25;
         const Vec3 icol = materialFor(PartId::Interior, wallColor).albedo;
         RenderMesh ceil;
@@ -3158,8 +3185,9 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                                  Vec3(t[1].x, cy, t[1].y), Vec3(0, -1, 0),
                                  icol);
         // Skirt the well rim (see growInterior): the ceiling's hole edge is
-        // otherwise open between its underside and the slab above.
-        for (const Poly2& hole : holes)
+        // otherwise open between its underside and the slab above. Core
+        // shafts skip it: their own walls stand on the hole line.
+        if (!gcore.valid) for (const Poly2& hole : holes)
             for (std::size_t e = 0; e < hole.size(); ++e) {
                 const Vec2 a = hole[e], b = hole[(e + 1) % hole.size()];
                 Vec2 en(-(b - a).y, (b - a).x);

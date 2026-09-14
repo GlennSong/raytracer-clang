@@ -9,6 +9,7 @@
 #include "street_kit.h"      // streetLamp (plaza lamp posts)
 #include "block_grade.h"     // gradeBlocks (in-pass block terracing)
 #include "site_plan.h"       // siteFrame + largestAlignedRect: the rectilinear buildable
+#include "core_plan.h"       // coreFor: which tall buildings open (M5)
 #include "../../../log.h"    // plaza site report (find them on the map)
 #include "../../mesh_builder.h"   // MeshBuilder::append (merge parts by PartId)
 #include <algorithm>
@@ -1534,9 +1535,14 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         // open. Curtain-wall shafts keep painted doors (their look is
         // unresolved), as do units with no walkable ground. Taller
         // buildings wait for elevators (roadmap).
-        if (!bp.curtainWall && bp.walkableGround && bp.groundBays <= 0 &&
-            bp.floors <= 3)
-            return true;
+        if (bp.walkableGround && bp.groundBays <= 0) {
+            if (!bp.curtainWall && bp.floors <= 3) return true;
+            // TALL buildings open when a CORE fits (skyscrapers v2 M5): the
+            // stairwells and the elevator bank make every floor reachable,
+            // and a curtain wall is as enterable as any other (its entrance
+            // bay is a real aperture; the leaf is the DoorSystem's).
+            if (bp.floors >= 4 && coreFor(uplan, bp, entranceEdgeFor(uplan, bp)).valid) return true;
+        }
         for (const Vec2& pt : p.enterableAt) {
             if (pointInPolygon(uplan, pt)) return true;
             for (std::size_t i = 0; i < uplan.size(); ++i) {

@@ -203,6 +203,7 @@ TEST_CASE(open_doorway_drops_the_leaf_and_grows_an_interior) {
 TEST_CASE(interior_layout_fits_the_plan_and_repeats) {
     Poly2 plan = {{0, 0}, {20, 0}, {20, 15}, {0, 15}};
     BuildingParams p = midriseParams();
+    p.core = 1;   // the straight stair of ADR-0080; cores are test_core_plan's
     const InteriorLayout il = interiorLayout(plan, p, 0);
     CHECK(il.hasStair);
     CHECK(il.well.size() == 4);

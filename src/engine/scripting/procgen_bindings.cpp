@@ -907,6 +907,13 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     p.stepDepth  = static_cast<Real>(optField(L, idx, "step_depth", p.stepDepth));
     p.towerFrac  = static_cast<Real>(optField(L, idx, "tower_frac", p.towerFrac));
     p.towerFloor = static_cast<int>(optField(L, idx, "tower_floor", p.towerFloor));
+    // The core (M5): core = "auto" | "never" | "always".
+    lua_getfield(L, idx, "core");
+    if (lua_isstring(L, -1)) {
+        const std::string c = lua_tostring(L, -1);
+        p.core = c == "never" ? 1 : c == "always" ? 2 : 0;
+    }
+    lua_pop(L, 1);
     p.steeple = optBoolField(L, idx, "steeple", p.steeple);
     p.parkingDecks = optBoolField(L, idx, "parking_decks", p.parkingDecks);
     p.sideBays = static_cast<int>(optField(L, idx, "side_bays", p.sideBays));

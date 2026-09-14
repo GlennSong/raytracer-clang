@@ -252,9 +252,16 @@ PartId stairFinishPartFor(const BuildingParams& params);
 // only what needs physics: slab tops, treads, risers, landings, railings
 // (the prism already blocks the walls). The ground storey's shell (inner
 // walls + ceiling) ships with the exterior grow (openDoorway); this is
-// everything above it. No RNG — two calls are identical.
+// everything above it — plus, when the building has a CORE (core_plan.h),
+// the core's shaft walls, flights and landings on EVERY storey in range,
+// the ground included (the lobby's core is streamed; its ceiling holes are
+// the exterior's). `k0`/`k1` select the storeys [k0, k1) to grow (k1 < 0 =
+// all): each storey's slab, inner walls and core, the top ceiling only when
+// the range reaches the top — a tall building streams a window of floors
+// around the player. No RNG — two calls are identical.
 BuildingMesh growInterior(const Poly2& plan, const BuildingParams& params,
-                          Real baseY, RenderMesh* colliderOut = nullptr);
+                          Real baseY, RenderMesh* colliderOut = nullptr,
+                          int k0 = 0, int k1 = -1);
 
 // Parameters for the mid-rise mixed-use hero (ADR-0038 §7) and its variants. All
 // lengths in metres. A skyscraper is just this with a big `floors` and setbacks.
@@ -395,6 +402,10 @@ struct BuildingParams {
     Real  stepDepth = 3.0;
     Real  towerFrac = 0.35;      // 0 = no shaft
     int   towerFloor = 20;       // 0 = no shaft
+    // THE CORE (skyscrapers v2 M5, core_plan.h): 0 = auto (four floors and
+    // up get an elevator bank and two enclosed stairwells when one fits),
+    // 1 = never (the straight stair of ADR-0080, or nothing), 2 = always.
+    uint8_t core = 0;
 };
 
 // Facade DETAIL level (city-render-perf R2): the same grammar, two emissions.

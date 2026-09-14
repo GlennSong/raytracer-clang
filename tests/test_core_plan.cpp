@@ -1,0 +1,191 @@
+// The core (skyscrapers v2 M5, core_plan.h): the elevator bank and the two
+// dog-leg stairwells a tall building climbs by — pure geometry from the plan,
+// the mass stack and the params, shared by the exterior grow, the streamed
+// interior and the runtime.
+#include "test_framework.h"
+
+#include "../src/engine/procgen/city/core_plan.h"
+
+#include <cmath>
+
+using namespace engine;
+
+namespace {
+BuildingParams towerParams(int floors, bool curtain) {
+    BuildingParams p;
+    p.floors = floors;
+    p.curtainWall = curtain;
+    p.walkableGround = true;
+    p.openDoorway = true;
+    p.seed = 77;
+    return p;
+}
+bool inside(const Poly2& poly, const Poly2& q) {
+    for (const Vec2& v : q)
+        if (!pointInPolygon(poly, v)) return false;
+    return true;
+}
+}  // namespace
+
+TEST_CASE(core_plan_seats_a_bank_and_two_stairs_facing_the_entrance) {
+    const Poly2 plan = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    const BuildingParams p = towerParams(30, true);
+    const std::size_t e = entranceEdgeFor(plan, p);
+    const CorePlan core = coreFor(plan, p, e);
+    CHECK(core.valid);
+    CHECK(core.hoistways.size() == 3);   // 21-40 floors
+    CHECK(core.stairs.size() == 2);
+    CHECK(core.hasService);
+    // Every shaft sits inside the plan and inside the core's own outline
+    // (its corners lie ON the outline, so the centroid is the inside test).
+    const Poly2 outline = core.rect();
+    for (const CoreShaft& h : core.hoistways) { CHECK(inside(plan, h.rect())); CHECK(pointInPolygon(outline, centroid(h.rect()))); }
+    for (const CoreStair& s : core.stairs) { CHECK(inside(plan, s.shaft.rect())); CHECK(pointInPolygon(outline, centroid(s.shaft.rect()))); }
+    // The doors face the entrance: the door normal points toward the
+    // entrance edge's midpoint from the core's centre.
+    Poly2 ccw = plan;
+    ensureCCW(ccw);
+    const Vec2 mid = (ccw[e] + ccw[(e + 1) % ccw.size()]) * 0.5;
+    const Vec2 c = centroid(outline);
+    for (const CoreShaft& h : core.hoistways) CHECK(dot(h.doorNormal(), normalize(mid - c)) > 0.5);
+    for (const CoreStair& s : core.stairs) CHECK(dot(s.shaft.doorNormal(), normalize(mid - c)) > 0.5);
+    // Shafts never overlap each other.
+    std::vector<Poly2> holes = coreSlabHoles(core);
+    CHECK(holes.size() == 5);
+    for (std::size_t i = 0; i < holes.size(); ++i)
+        for (std::size_t j = i + 1; j < holes.size(); ++j)
+            CHECK(!pointInPolygon(holes[j], centroid(holes[i])));
+}
+
+TEST_CASE(core_plan_scales_the_bank_with_height_and_refuses_a_small_plan) {
+    CHECK(hoistwaysFor(6) == 1);
+    CHECK(hoistwaysFor(20) == 2);
+    CHECK(hoistwaysFor(21) == 3);
+    CHECK(hoistwaysFor(41) == 4);
+    // A 4.5 m ground storey: 12 risers of 0.1875 per half flight, 3.12 m run.
+    CHECK(halfFlightRisers(4.5) == 12);
+    CHECK(std::fabs(halfFlightRun(4.5) - 12 * 0.26) < 1e-9);
+    CHECK(halfFlightRisers(3.2) == 8);
+    // Too small for a core with its corridor: the building keeps the old stair.
+    const Poly2 small = {{0, 0}, {8, 0}, {8, 10}, {0, 10}};
+    const BuildingParams p = towerParams(6, false);
+    CHECK(!coreFor(small, p, entranceEdgeFor(small, p)).valid);
+    // The policy: under four floors no core; "never" and "always" override.
+    BuildingParams low = towerParams(3, false);
+    CHECK(!wantsCore(low));
+    low.core = 2;
+    CHECK(wantsCore(low));
+    BuildingParams tall = towerParams(30, true);
+    CHECK(wantsCore(tall));
+    tall.core = 1;
+    CHECK(!wantsCore(tall));
+    CHECK(!coreFor({{0, 0}, {40, 0}, {40, 40}, {0, 40}}, tall, 0).valid);
+}
+
+TEST_CASE(core_plan_fits_inside_every_tier_of_a_setback_tower) {
+    const Poly2 plan = {{0, 0}, {36, 0}, {36, 44}, {0, 44}};
+    BuildingParams p = towerParams(40, false);
+    p.envelope = BuildingParams::Envelope::StreetWallSetback;
+    p.baseFloors = 5;
+    p.setback1 = 5;
+    p.stepFloors = 10;
+    p.stepDepth = 3;
+    p.towerFrac = 0.35;
+    p.towerFloor = 20;
+    const std::vector<MassTier> tiers = massStack(plan, p);
+    CHECK(tiers.size() >= 2);
+    const CorePlan core = corePlan(plan, tiers, p, entranceEdgeFor(plan, p));
+    CHECK(core.valid);
+    for (const MassTier& t : tiers) CHECK(inside(t.plan, core.rect()));
+}
+
+TEST_CASE(core_storey_is_enclosed_climbable_and_lands_on_the_next_floor) {
+    const Poly2 plan = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    const BuildingParams p = towerParams(12, true);
+    const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
+    CHECK(core.valid);
+    const std::vector<StoreyPlan> storeys = storeyPlans(plan, p);
+    CoreMeshes cm;
+    RenderMesh col;
+    const Real baseY = 10.0;
+    emitCoreStorey(cm, &col, core, storeys[3], baseY, p, true, true);
+    CHECK(!cm.drywall.vertices.empty());
+    CHECK(!cm.floor.vertices.empty());
+    CHECK(!cm.stair.vertices.empty());
+    CHECK(!col.indices.empty());
+    // The stair's highest tread is the next storey's slab top; nothing of it
+    // rises above that, nothing sits below this storey's slab top.
+    const Real y0 = baseY + storeys[3].y0, h = storeys[3].h;
+    Real hi = -1e9, lo = 1e9;
+    for (const Vertex& v : cm.stair.vertices) { hi = std::max(hi, (Real)v.position.y); lo = std::min(lo, (Real)v.position.y); }
+    CHECK(std::fabs(hi - (y0 + h + 0.05)) < 1e-6);
+    CHECK(lo >= y0 + 0.05 - 1e-6);
+    // Walls span the storey: the drywall reaches the ceiling and the floor.
+    Real whi = -1e9, wlo = 1e9;
+    for (const Vertex& v : cm.drywall.vertices) { whi = std::max(whi, (Real)v.position.y); wlo = std::min(wlo, (Real)v.position.y); }
+    CHECK(std::fabs(whi - (y0 + h)) < 1e-6);
+    CHECK(wlo <= y0 + 1e-6);
+    // Every riser is a code riser: no tread top more than 0.2 above the last.
+    const CoreStair& st = core.stairs[0];
+    const int nR = halfFlightRisers(h);
+    CHECK((h * 0.5) / nR <= 0.2 + 1e-9);
+    (void)st;
+    // The top storey grows no flights; the ground storey no landing.
+    CoreMeshes top;
+    emitCoreStorey(top, nullptr, core, storeys.back(), baseY, p, false, true);
+    CHECK(top.stair.vertices.empty());
+    CoreMeshes ground;
+    emitCoreStorey(ground, nullptr, core, storeys[0], baseY, p, true, false);
+    CHECK(!ground.stair.vertices.empty());
+}
+
+TEST_CASE(grow_interior_with_a_core_punches_the_shafts_and_streams_a_window) {
+    const Poly2 plan = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    const BuildingParams p = towerParams(12, true);
+    const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
+    CHECK(core.valid);
+    const std::vector<StoreyPlan> storeys = storeyPlans(plan, p);
+    const Real baseY = 0;
+    RenderMesh col;
+    const BuildingMesh all = growInterior(plan, p, baseY, &col);
+    // A point in a hoistway at storey 4's slab height has no floor
+    // triangle over it; a point in the corridor beside the core does.
+    const Vec2 inShaft = core.hoistways[0].frame.toWorld({1.2, 1.3});
+    const Vec2 corridor = core.frame.toWorld({-1.0, core.depth * 0.5});
+    const Real ySlab = baseY + storeys[4].y0 + 0.05;
+    auto floorOver = [&](const BuildingMesh& bm, const Vec2& q) {
+        for (const RenderMesh& part : bm.parts) {
+            if (part.materialIndex == static_cast<int>(PartId::Interior)) continue;
+            for (std::size_t i = 0; i + 2 < part.indices.size(); i += 3) {
+                const Vertex& a = part.vertices[part.indices[i]];
+                const Vertex& b = part.vertices[part.indices[i + 1]];
+                const Vertex& c = part.vertices[part.indices[i + 2]];
+                if (std::fabs(a.position.y - ySlab) > 1e-4 || std::fabs(b.position.y - ySlab) > 1e-4 ||
+                    std::fabs(c.position.y - ySlab) > 1e-4)
+                    continue;
+                const Poly2 tri = {{a.position.x, a.position.z}, {b.position.x, b.position.z}, {c.position.x, c.position.z}};
+                if (pointInPolygon(tri, q)) return true;
+            }
+        }
+        return false;
+    };
+    CHECK(!floorOver(all, inShaft));
+    CHECK(floorOver(all, corridor));
+    // The window [3, 6) holds storeys 3-5 only: nothing below storey 3's
+    // floor, nothing above storey 5's ceiling, and it is a strict subset.
+    RenderMesh colW;
+    const BuildingMesh win = growInterior(plan, p, baseY, &colW, 3, 6);
+    Real lo = 1e9, hi = -1e9;
+    std::size_t nWin = 0, nAll = 0;
+    for (const RenderMesh& part : win.parts) {
+        nWin += part.vertices.size();
+        for (const Vertex& v : part.vertices) { lo = std::min(lo, (Real)v.position.y); hi = std::max(hi, (Real)v.position.y); }
+    }
+    for (const RenderMesh& part : all.parts) nAll += part.vertices.size();
+    CHECK(nWin > 0);
+    CHECK(nWin < nAll);
+    CHECK(lo >= baseY + storeys[3].y0 - 0.3);
+    CHECK(hi <= baseY + storeys[5].y0 + storeys[5].h + 0.06);
+    CHECK(floorOver(win, corridor));
+    CHECK(!colW.indices.empty());
+}

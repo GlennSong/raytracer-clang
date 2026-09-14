@@ -9,6 +9,7 @@
 #include "../procgen/surface_maps.h"   // surfaceMaps (bake, ADR-0080)
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 
 namespace engine {
 
@@ -76,9 +77,13 @@ void BuildingInteriorSystem::fixedUpdate(FrameContext& ctx) {
                     ext = std::max(ext, (v - c).length());
                 const std::vector<StoreyPlan> storeys =
                     storeyPlans(r.plan, r.params);
-                const int lightCount =
-                    std::min<int>(4, static_cast<int>(storeys.size()));
-                for (int k = 0; k < lightCount; ++k) {
+                // Four storeys around the player's (M5: a tower's lit floors
+                // follow them up).
+                const int nSt = static_cast<int>(storeys.size());
+                const int f = storeyOf(r, player.y);
+                const int kFrom = std::max(0, std::min(f - 1, nSt - 4));
+                const int lightCount = std::min(nSt, kFrom + 4);
+                for (int k = kFrom; k < lightCount; ++k) {
                     const StoreyPlan& sp = storeys[static_cast<std::size_t>(k)];
                     PointLight pl(Vec3(c.x, r.baseY + sp.y0 + sp.h - 0.5, c.y),
                                   Vec3(1.0, 0.88, 0.70), 22.0f);
@@ -135,13 +140,55 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
         if (inside || approaching) desired.push_back(key);
     }
 
+    // The storey WINDOW a record streams (M5): whole up to WHOLE_UP_TO
+    // storeys; taller buildings grow around the player's storey when inside,
+    // the lobby's first three storeys while they approach.
+    auto windowFor = [&](const BuildingRecord& r, bool inside, int& k0, int& k1) {
+        const int n = r.params.floors + 1;
+        if (n <= WHOLE_UP_TO) { k0 = 0; k1 = -1; return; }
+        if (!inside) { k0 = 0; k1 = std::min(n, 3); return; }
+        const int f = storeyOf(r, player.y);
+        k0 = std::max(0, f - WINDOW_BELOW);
+        k1 = std::min(n, f + WINDOW_ABOVE);
+    };
+    // A resident window that no longer holds the player's storey with a
+    // margin is regrown — unless they are RIDING (in a hoistway, moving
+    // vertically): the cab's arrival is when the window catches up.
+    const Real dy = havePlayerY_ ? player.y - lastPlayerY_ : Real(0);
+    lastPlayerY_ = player.y;
+    havePlayerY_ = true;
+    if (insideKey != static_cast<std::size_t>(-1)) {
+        auto it = resident_.find(insideKey);
+        if (it != resident_.end() && it->second.k1 >= 0) {
+            const BuildingRecord& r = cb->records[insideKey];
+            const int n = r.params.floors + 1;
+            const int f = storeyOf(r, player.y);
+            Resident& res = it->second;
+            const bool low = f < res.k0 + 1 && res.k0 > 0;
+            const bool high = f > res.k1 - 2 && res.k1 < n;
+            if (low || high) {
+                if (!res.coreKnown) {
+                    res.core = coreFor(r.plan, r.params, entranceEdgeFor(r.plan, r.params));
+                    res.coreKnown = true;
+                }
+                bool riding = false;
+                if (res.core.valid && std::fabs(dy) > 0.01)
+                    for (const CoreShaft& h : res.core.hoistways)
+                        if (pointInPolygon(h.rect(), xz)) riding = true;
+                if (!riding) release(world, phys, insideKey);   // rebuilt below
+            }
+        }
+    }
+
     // ONE build per step; the record the player is inside builds regardless.
     bool builtThisStep = false;
     for (std::size_t key : desired) {
         if (resident_.count(key)) continue;
         if (resident_.size() >= MAX_RESIDENT && key != insideKey) continue;
         if (builtThisStep && key != insideKey) continue;
-        build(world, phys, assets, renderer, cb->records[key], key);
+        int k0 = 0, k1 = -1;
+        windowFor(cb->records[key], key == insideKey, k0, k1);
+        build(world, phys, assets, renderer, cb->records[key], key, k0, k1);
         builtThisStep = true;
     }
 
@@ -172,15 +219,37 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
     }
 }
 
+int BuildingInteriorSystem::storeyOf(const BuildingRecord& r, Real y) {
+    const int n = r.params.floors + 1;
+    // Feet are 0.7 m under the capsule centre (halfHeight 0.4 + radius 0.3);
+    // 0.4 m of tolerance rounds a walker mid-flight up to the storey they
+    // are climbing to.
+    const Real h = y - r.baseY - 0.7 + 0.4;
+    if (h < r.params.groundHeight) return 0;
+    const Real fh = std::max(Real(1), r.params.floorHeight);
+    const int k = 1 + static_cast<int>(std::floor((h - r.params.groundHeight) / fh));
+    return std::max(0, std::min(n - 1, k));
+}
+
+void BuildingInteriorSystem::residentWindow(std::size_t key, int& k0, int& k1) const {
+    auto it = resident_.find(key);
+    if (it == resident_.end()) { k0 = 0; k1 = 0; return; }
+    k0 = it->second.k0;
+    k1 = it->second.k1;
+}
+
 void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
                                    AssetManager& assets, Renderer* renderer,
-                                   const BuildingRecord& r, std::size_t key) {
+                                   const BuildingRecord& r, std::size_t key,
+                                   int k0, int k1) {
     const auto t0 = std::chrono::steady_clock::now();
     RenderMesh collider;
-    BuildingMesh bm = growInterior(r.plan, r.params, r.baseY, &collider);
+    BuildingMesh bm = growInterior(r.plan, r.params, r.baseY, &collider, k0, k1);
     const double growMs = msSince(t0);
 
     Resident res;
+    res.k0 = k0;
+    res.k1 = k1;
     std::size_t tris = 0, bytes = 0;
     for (const RenderMesh& part : bm.parts) {
         if (part.indices.empty()) continue;
@@ -264,7 +333,9 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
     const double joltMs = msSince(t1);
 
     resident_[key] = std::move(res);
-    LOG_INFO << "[interior] built " << r.recipe << " (" << r.type << ") tris="
+    LOG_INFO << "[interior] built " << r.recipe << " (" << r.type << ") storeys ["
+             << k0 << ", " << (k1 < 0 ? r.params.floors + 1 : k1) << ") of "
+             << r.params.floors + 1 << " tris="
              << tris << " grow=" << growMs << "ms jolt=" << joltMs
              << "ms bytes=" << bytes << " fin=f"
              << (((r.params.seed >> 6) & 7u) % 5u) << "s"
