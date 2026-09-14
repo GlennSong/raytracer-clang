@@ -97,9 +97,13 @@ ElevatorSystem::Bank& ElevatorSystem::ensureBank(World& world, PhysicsWorld* phy
         struct Part { Vec3 half; Vec3 local; bool lit; bool dark; };
         const Real hw2 = CAB_W * 0.5, hd2 = CAB_D * 0.5;
         const Real u0 = hw.width * 0.5, vFront = 0.25, vMid = vFront + hd2 + 0.05;
+        // The floor and ceiling reach to 5 cm off the door wall, so the sill
+        // gap reads as a threshold, not a slot (the capsule could never fall
+        // through a 0.25 m gap, but the eye would).
+        const Real vDeck = (0.05 + vFront + CAB_D + 0.1) * 0.5, hDeck = vDeck - 0.05;
         const Part parts[5] = {
-            {{hw2 + 0.05, 0.06, hd2 + 0.05}, {u0, -0.06, vMid}, false, true},               // floor
-            {{hw2 + 0.05, 0.03, hd2 + 0.05}, {u0, CAB_H + 0.03, vMid}, true, false},         // ceiling
+            {{hw2 + 0.05, 0.06, hDeck}, {u0, -0.06, vDeck}, false, true},                    // floor
+            {{hw2 + 0.05, 0.03, hDeck}, {u0, CAB_H + 0.03, vDeck}, true, false},              // ceiling
             {{hw2 + 0.05, CAB_H * 0.5, 0.05}, {u0, CAB_H * 0.5, vFront + CAB_D + 0.05}, false, false},   // back
             {{0.05, CAB_H * 0.5, hd2 + 0.05}, {u0 - hw2 - 0.05, CAB_H * 0.5, vMid}, false, false},       // left
             {{0.05, CAB_H * 0.5, hd2 + 0.05}, {u0 + hw2 + 0.05, CAB_H * 0.5, vMid}, false, false},       // right

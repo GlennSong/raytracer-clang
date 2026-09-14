@@ -6,7 +6,9 @@
 
 #include "../src/engine/procgen/city/core_plan.h"
 
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 
 using namespace engine;
 
@@ -188,4 +190,29 @@ TEST_CASE(grow_interior_with_a_core_punches_the_shafts_and_streams_a_window) {
     CHECK(hi <= baseY + storeys[5].y0 + storeys[5].h + 0.06);
     CHECK(floorOver(win, corridor));
     CHECK(!colW.indices.empty());
+}
+
+TEST_CASE(core_window_grow_cost_is_bounded) {
+    // The performance census (Glenn: "we do have to figure out how to keep
+    // the city performant"): one streamed window of a 40-storey curtain-wall
+    // tower — five storeys with their core — must stay small. Printed so the
+    // numbers travel with the run.
+    const Poly2 plan = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    const BuildingParams p = towerParams(40, true);
+    CHECK(coreFor(plan, p, entranceEdgeFor(plan, p)).valid);
+    RenderMesh col;
+    const auto t0 = std::chrono::steady_clock::now();
+    const BuildingMesh win = growInterior(plan, p, 0.0, &col, 18, 23);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    std::size_t tris = 0, bytes = 0;
+    for (const RenderMesh& part : win.parts) {
+        tris += part.indices.size() / 3;
+        bytes += part.vertices.size() * sizeof(Vertex) + part.indices.size() * sizeof(uint32_t);
+    }
+    std::printf("    [core-census] window [18, 23) of 41 storeys: %zu tris, %zu KB, collider %zu tris, grow %.2f ms\n",
+                tris, bytes / 1024, col.indices.size() / 3, ms);
+    CHECK(tris > 0);
+    CHECK(tris < 40000);
+    CHECK(col.indices.size() / 3 < 20000);
+    CHECK(ms < 250.0);   // generous: a debug build on a busy desktop
 }

@@ -6660,7 +6660,7 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
     dog-leg stairwells (2.6 m wide: two 1.2 m flights either side of a 0.2 m spine wall, 1.5 m
     landings, riser ≤ 0.20 on a 0.26 tread, the ground storey's taller flight sizing the shaft) at
     the ends of a bank of 2.4 × 2.6 m hoistways (one to eight floors, two to twenty, three to forty,
-    four beyond), a closed service block behind them, and a 1.8 m corridor ring the core must keep
+    four beyond), a closed service block behind them, and a 2.2 m corridor ring the core must keep
     inside every tier; failing that the bank shrinks to one hoistway, tries the other orientation,
     then gives up and the building keeps ADR-0080's straight stair (or nothing). `coreFor(plan,
     params, entranceEdge)` is the one derivation the exterior grow (the ground ceiling's shaft

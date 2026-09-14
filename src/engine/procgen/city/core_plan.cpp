@@ -11,7 +11,7 @@ constexpr Real kHoistW = 2.4;      // hoistway along the bank
 constexpr Real kHoistD = 2.6;      // hoistway into the core
 constexpr Real kStairW = 2.6;      // two 1.2 m flights + the 0.2 m spine
 constexpr Real kLanding = 1.5;
-constexpr Real kCorridor = 1.8;    // clear ring the core needs inside every tier
+constexpr Real kCorridor = 2.2;    // ring the core needs inside every tier: 1.5 m clear past the inner wall skin
 constexpr Real kDoorH = 2.1;
 constexpr Real kSlab = 0.25;       // slab thickness (growInterior's)
 
@@ -41,7 +41,7 @@ Real halfFlightRun(Real storeyHeight, Real tread) { return halfFlightRisers(stor
 bool wantsCore(const BuildingParams& params) {
     if (params.core == 1) return false;
     if (params.core == 2) return true;
-    return params.floors >= 6;
+    return params.floors >= 4;
 }
 
 CorePlan corePlan(const Poly2& planIn, const std::vector<MassTier>& tiers,

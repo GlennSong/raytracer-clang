@@ -79,13 +79,13 @@ int hoistwaysFor(int floors);
 // Risers in one half flight (riser <= 0.20) and its horizontal run.
 int halfFlightRisers(Real storeyHeight);
 Real halfFlightRun(Real storeyHeight, Real tread = 0.26);
-// The core policy: `params.core` 0 = auto (six floors and up), 1 = never,
+// The core policy: `params.core` 0 = auto (four floors and up), 1 = never,
 // 2 = always (a Lua override).
 bool wantsCore(const BuildingParams& params);
 
 // The core for a plan and its tiers (massStack), the door wall facing the
 // entrance edge. `valid` is false when no bank — down to one hoistway, in
-// either orientation — fits inside every tier with a 1.8 m corridor around
+// either orientation — fits inside every tier with a 2.2 m corridor around
 // it; the building then keeps the straight stair of ADR-0080 (or no stair).
 CorePlan corePlan(const Poly2& plan, const std::vector<MassTier>& tiers,
                   const BuildingParams& params, std::size_t entranceEdge);
