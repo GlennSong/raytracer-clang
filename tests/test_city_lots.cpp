@@ -1107,3 +1107,38 @@ TEST_CASE(skyline_census_reconciles_with_the_grown_lots) {
     for (BuildingUnit& u : row.units) { u.params.floors = 2; u.baseY = 0.0; }
     CHECK(buildingStoreys(row) == 3);
 }
+
+// Skyscrapers v2, M1 (ADR-0086): buildings are rectilinear, lots are not. The
+// site plan puts every building on the largest frontage-aligned rectangle its
+// lot holds, so the grown city's footprints are squared even where the blocks
+// hand the parceller trapezoids — the census is the gate.
+TEST_CASE(grown_buildings_stand_on_rectilinear_footprints) {
+    LotParams p;
+    p.center = {0, 0};
+    p.seed = 3;
+    std::vector<RenderMesh> parts;
+    std::vector<LotBuilding> b = growLotBuildings(squareBlocks(), p, nullptr, &parts);
+    const SkylineCensus c = skylineCensus(b);
+    CHECK(c.built > 10);
+    // Nine in ten buildings have no oblique corner (the rest are the lots no
+    // rectangle of minShort fits, which keep their shape rather than green).
+    CHECK(c.rectilinear >= (c.built * 9) / 10);
+    CHECK(c.obliqueCorners * 10 <= c.corners);
+    // Every building still sits inside its own lot: no corner past a lot line.
+    LotPlanDebug dbg;
+    std::vector<LotBuilding> b2 = growLotBuildings(squareBlocks(), p, &dbg, nullptr);
+    int outside = 0;
+    for (const LotBuilding& lb : b2) {
+        if (lb.units.empty() || lb.plan.size() < 3) continue;
+        const Vec2 c0 = centroid(lb.plan);
+        bool inSome = false;
+        for (const Poly2& lot : dbg.lots) {
+            bool all = true;
+            for (const Vec2& q : lb.plan)
+                if (!pointInPolygon(lot, q + (c0 - q) * 0.02)) { all = false; break; }
+            if (all) { inSome = true; break; }
+        }
+        if (!inSome) ++outside;
+    }
+    CHECK(outside == 0);
+}

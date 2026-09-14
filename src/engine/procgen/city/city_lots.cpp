@@ -8,6 +8,7 @@
 #include "road_mesh.h"       // triangulatePolygon (lot-shaped park pads)
 #include "street_kit.h"      // streetLamp (plaza lamp posts)
 #include "block_grade.h"     // gradeBlocks (in-pass block terracing)
+#include "site_plan.h"       // siteFrame + largestAlignedRect: the rectilinear buildable
 #include "../../../log.h"    // plaza site report (find them on the map)
 #include "../../mesh_builder.h"   // MeshBuilder::append (merge parts by PartId)
 #include <algorithm>
@@ -1148,6 +1149,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         return under;
     };
     int underFwCount = 0;
+    int sitesRectified = 0, sitesNoRect = 0, sitesRectUnfit = 0;   // site-plan ledger (M1)
     // TERRAIN base for a plan: the LOWEST ground under its vertices so the
     // downhill corner never floats, embedded slightly on real slopes so the
     // uphill side beds in instead of hovering behind a knife-edge gap.
@@ -1382,6 +1384,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         ParcelParams pp;
         DistrictTag tag;
         Real lotSetback, buildChance;
+        Yards yards;  // front / side / rear setbacks the site plan honours
         Poly2 foot;   // the parcelled interior (the alley pass clips to it)
     };
     struct LotCand {
@@ -1474,21 +1477,29 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 bf.pp.targetArea = 2400;           // the OBB fallback matches
                 bf.lotSetback = 1.0;
                 bf.buildChance = std::min(Real(1), p.buildChance + 0.06);
+                // YARDS (site plan): a downtown street wall stands on the
+                // lot line; the party-wall sides keep a hair so two
+                // neighbours' facades never share a plane; a short rear yard.
+                bf.yards = Yards{0.0, 0.3, 3.0};
                 break; }
             case DistrictTag::Commercial:  // narrow, deep retail frontage
                 bf.pp.frontWidth = 13; bf.pp.lotDepth = 30;
                 bf.pp.targetArea = 300; bf.lotSetback = 0.7;
+                bf.yards = Yards{0.0, 0.3, 3.0};
                 bf.buildChance = std::min(Real(1), p.buildChance + 0.06); break;
             case DistrictTag::OldTown:     // small, tight, narrow
                 bf.pp.frontWidth = 11; bf.pp.lotDepth = 22;
                 bf.pp.targetArea = 210;
                 bf.pp.minArea = std::min(ppMinArea, Real(80));
+                bf.yards = Yards{0.0, 0.3, 2.0};
                 bf.lotSetback = 0.5; bf.buildChance = 0.98; break;
             case DistrictTag::Industrial:  // big parcels
                 bf.pp.frontWidth = 42; bf.pp.lotDepth = 52;
+                bf.yards = Yards{2.0, 2.0, 2.0};
                 bf.pp.targetArea = 700; bf.lotSetback = 1.2; break;
             case DistrictTag::Residential: // house lots with yards
                 bf.pp.frontWidth = 18; bf.pp.lotDepth = 27;
+                bf.yards = Yards{3.0, 1.5, 5.0};
                 bf.pp.targetArea = 400; break;
         }
         // The parcel override rescales the district grain it just chose.
@@ -2047,6 +2058,36 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 }
                 return true;
             };
+            // SITE PLAN (skyscrapers v2 M1, ADR-0086): the building stands on
+            // the largest frontage-aligned RECTANGLE the lot holds with the
+            // district's yards — buildings are rectilinear, lots are not, and
+            // a trapezoid's leftovers are ground, not walls. The rectangle is
+            // searched on the lot, then on the lot inset by the ladder the
+            // plan clearance uses, until its corners and edge midpoints clear
+            // the road corridors (the raster itself never consults the roads:
+            // clearOfRoads walks every edge, far too slow per cell).
+            {
+                bool rectified = false, anyRect = false;
+                const SiteFrame frame = siteFrame(lot.footprint, lot.frontage);
+                for (Real t : {Real(0), Real(0.8), Real(1.6), Real(2.6), Real(3.6)}) {
+                    const Poly2 host = t > 0 ? inset(lot.footprint, t) : lot.footprint;
+                    if (host.size() < 3 || area(host) < 40) break;
+                    // The raster spans cell centres, so a rectangle comes out
+                    // up to a cell short of the exact one; a lot that clears
+                    // the sliver floor by less than that must not fail here.
+                    Poly2 rect = largestAlignedRect(host, frame, bf.yards, 0.5,
+                                                    std::max(Real(4), minShort - 0.5));
+                    if (rect.size() != 4) continue;
+                    anyRect = true;
+                    if (!rectFits(rect, lot.footprint)) continue;
+                    retakeSite(std::move(rect));
+                    rectified = true;
+                    break;
+                }
+                if (rectified) ++sitesRectified;
+                else if (anyRect) ++sitesRectUnfit;
+                else ++sitesNoRect;
+            }
             if (longSide > shortSide * p.maxAspect) {                           // knife blade
                 // RECOVERABLE (density round): a too-long lot still holds a
                 // fine building on PART of its length — clamp the site to a
@@ -2717,6 +2758,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         LOG_INFO << "[citylots] under-freeway lots: " << underFwCount
                  << " re-zoned to fit beneath the deck (open space / parking / "
                     "utility / short building)";
+    LOG_INFO << "[citylots] site plans: " << sitesRectified
+             << " lots rectified to a frontage-aligned rectangle; kept their lot shape: "
+             << sitesNoRect << " (no rectangle of minShort in the lot), "
+             << sitesRectUnfit << " (rectangle found but a corner or edge was on a road)";
     // The DENSITY line (Glenn's "why did lots fail" dial): one glance says how
     // much of the parcelled city actually built and where the rest went.
     {

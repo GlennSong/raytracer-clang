@@ -71,6 +71,7 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/polygon.cpp \
 	$(SRC_DIR)/engine/procgen/city/shape_grammar.cpp \
 	$(SRC_DIR)/engine/procgen/city/parcel.cpp \
+	$(SRC_DIR)/engine/procgen/city/site_plan.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_network.cpp \
 	$(SRC_DIR)/engine/procgen/city/street_kit.cpp \
 	$(SRC_DIR)/engine/procgen/city/street_furniture.cpp \
@@ -230,6 +231,7 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_relationships.cpp \
 	$(TEST_DIR)/test_ped_graph.cpp \
 	$(TEST_DIR)/test_city_lots.cpp \
+	$(TEST_DIR)/test_site_plan.cpp \
 	$(TEST_DIR)/test_alignment.cpp \
 	$(TEST_DIR)/test_surface_field.cpp \
 	$(TEST_DIR)/test_architect.cpp \
@@ -300,6 +302,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/polygon.cpp \
 	$(SRC_DIR)/engine/procgen/city/shape_grammar.cpp \
 	$(SRC_DIR)/engine/procgen/city/parcel.cpp \
+	$(SRC_DIR)/engine/procgen/city/site_plan.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_network.cpp \
 	$(SRC_DIR)/engine/procgen/city/street_kit.cpp \
 	$(SRC_DIR)/engine/procgen/city/street_furniture.cpp \
