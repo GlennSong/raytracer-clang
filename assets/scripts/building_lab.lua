@@ -14,8 +14,9 @@
 --   window_hood = "none" | "band" | "arch"
 --   lights_x, lights_y, arch_rise, frame_width, quoins, sill
 --
--- NOTE: massing is still a RECTANGLE fitted in the lot bbox — the outline
--- exists to SHOW the gap the floorplan phase (P3) closes.
+-- Massing defaults to the FLOORPLAN grammar (opts.massing = "plan": the lot
+-- polygon is the plan, inset by the setback); opts.massing = "box" keeps the
+-- old rectangle-in-the-bbox for comparison.
 
 local opts   = args or {}
 local lotKey = opts.lot or "rect"

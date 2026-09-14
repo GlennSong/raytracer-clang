@@ -2767,7 +2767,144 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
              << " | backstop clipped " << dbg->pClips << ", pairs STILL overlapping "
              << dbg->pLeftOverlapping << " (" << dbg->pSameEdge << " from ONE edge, " << dbg->pAtInsert << " already overlapping AT INSERT, " << dbg->pConcave << " NON-CONVEX, " << dbg->pClipFailed << " CLIPS THAT DID NOT SEPARATE)";
     }
+    // The SKYLINE lines: storeys, towers, footprint shape and open space —
+    // the same census the loader prints on a warm load (which grows nothing).
+    {
+        const SkylineCensus sc = skylineCensus(out);
+        LOG_INFO << sc.line();
+        LOG_INFO << sc.districtsLine();
+    }
     return out;
+}
+
+int buildingStoreys(const LotBuilding& lot) {
+    if (lot.type == "park" || lot.type == "green" || lot.units.empty()) return 0;
+    Real base = std::numeric_limits<Real>::infinity();
+    for (const BuildingUnit& u : lot.units) base = std::min(base, u.baseY);
+    int onBase = 0, stacked = 0;
+    for (const BuildingUnit& u : lot.units) {
+        if (u.baseY <= base + 0.5) onBase = std::max(onBase, u.params.floors + 1);
+        else stacked += u.params.floors + 1;
+    }
+    return onBase + stacked;
+}
+
+namespace {
+// Count the plan's corners and how many are oblique (neither a right angle
+// nor straight, within `tol` radians). Duplicate samples are skipped.
+void classifyCorners(const Poly2& plan, Real tol, int& corners, int& oblique) {
+    const std::size_t n = plan.size();
+    if (n < 3) return;
+    constexpr Real kRight = 1.5707963267948966;
+    for (std::size_t i = 0; i < n; ++i) {
+        const Vec2 a = plan[(i + n - 1) % n], b = plan[i], c = plan[(i + 1) % n];
+        if ((b - a).length() < 1e-6 || (c - b).length() < 1e-6) continue;
+        const Vec2 d0 = normalize(b - a), d1 = normalize(c - b);
+        const Real turn = std::fabs(std::atan2(cross(d0, d1), dot(d0, d1)));
+        if (turn <= tol) continue;               // straight: a sample, not a corner
+        ++corners;
+        if (std::fabs(turn - kRight) > tol) ++oblique;
+    }
+}
+std::string fmt1(double v) {
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%.1f", v);
+    return buf;
+}
+}  // namespace
+
+SkylineCensus skylineCensus(const std::vector<LotBuilding>& lots, Real rightTolDeg) {
+    SkylineCensus c;
+    const Real tol = rightTolDeg * 3.14159265358979323846 / 180.0;
+    std::map<std::string, double> open;
+    std::map<std::string, SkylineCensus::District> districts;
+    for (const LotBuilding& lb : lots) {
+        if (lb.type == "green") {
+            ++c.greens;
+            open["green"] += area(lb.pad);
+            continue;
+        }
+        if (lb.type == "park") {
+            ++c.parks;
+            open[lb.recipe.empty() ? "park" : lb.recipe] += area(lb.pad);
+            continue;
+        }
+        if (lb.recipe == "plaza") {   // a podium, not a building — open space
+            open["plaza"] += area(lb.plan);
+            continue;
+        }
+        if (lb.units.empty()) continue;
+        ++c.built;
+        const int storeys = buildingStoreys(lb);
+        int bin = 0;
+        for (int i = 0; i < SkylineCensus::kBins; ++i)
+            if (storeys >= SkylineCensus::kBinLo[i]) bin = i;
+        ++c.storeyBins[bin];
+        if (storeys > 20) ++c.over20;
+        if (storeys > 40) ++c.over40;
+        if (storeys > 60) ++c.over60;
+        if (storeys > c.tallestStoreys ||
+            (storeys == c.tallestStoreys && lb.height > c.tallestHeight)) {
+            c.tallestStoreys = storeys;
+            c.tallestHeight = lb.height;
+            c.tallestAt = lb.site;
+            c.tallestRecipe = lb.recipe;
+            c.tallestDistrict = lb.district;
+        }
+        int corners = 0, oblique = 0;
+        classifyCorners(lb.plan, tol, corners, oblique);
+        c.corners += corners;
+        c.obliqueCorners += oblique;
+        if (oblique == 0 && corners > 0) ++c.rectilinear;
+        const double a = area(lb.plan);
+        c.builtArea += a;
+        SkylineCensus::District& d = districts[lb.district];
+        d.name = lb.district;
+        ++d.built;
+        d.builtArea += a;
+        d.maxStoreys = std::max(d.maxStoreys, storeys);
+        if (storeys > 20) ++d.over20;
+    }
+    for (const auto& kv : open) c.openByKind.push_back(kv);
+    for (const auto& kv : districts) c.districts.push_back(kv.second);
+    return c;
+}
+
+std::string SkylineCensus::line() const {
+    std::string s = "[skyline] " + std::to_string(built) + " buildings (parks " +
+                    std::to_string(parks) + ", greens " + std::to_string(greens) + ") | storeys";
+    static const char* kBinName[kBins] = {"1-3", "4-8", "9-20", "21-40", "41-60", "61+"};
+    for (int i = 0; i < kBins; ++i)
+        s += std::string(i ? ", " : " ") + kBinName[i] + ": " + std::to_string(storeyBins[i]);
+    s += " | towers >20: " + std::to_string(over20) + ", >40: " + std::to_string(over40) +
+         ", >60: " + std::to_string(over60);
+    s += " | tallest " + std::to_string(tallestStoreys) + " storeys " +
+         std::to_string(static_cast<int>(tallestHeight)) + " m " + tallestRecipe + " (" +
+         tallestDistrict + ") at (" + std::to_string(static_cast<int>(tallestAt.x)) + ", " +
+         std::to_string(static_cast<int>(tallestAt.y)) + ")";
+    const double rectPct = built > 0 ? 100.0 * rectilinear / built : 0.0;
+    const double oblPct = corners > 0 ? 100.0 * obliqueCorners / corners : 0.0;
+    s += " | rectilinear " + fmt1(rectPct) + "% of buildings, oblique corners " + fmt1(oblPct) +
+         "% of " + std::to_string(corners);
+    s += " | built " + std::to_string(static_cast<long long>(builtArea)) + " m2 | open:";
+    if (openByKind.empty()) s += " none";
+    for (std::size_t i = 0; i < openByKind.size(); ++i)
+        s += std::string(i ? ", " : " ") + openByKind[i].first + " " +
+             std::to_string(static_cast<long long>(openByKind[i].second)) + " m2";
+    return s;
+}
+
+std::string SkylineCensus::districtsLine() const {
+    std::string s = "[skyline] districts:";
+    if (districts.empty()) s += " none";
+    for (std::size_t i = 0; i < districts.size(); ++i) {
+        const District& d = districts[i];
+        s += std::string(i ? "; " : " ") + (d.name.empty() ? "(untagged)" : d.name) + " " +
+             std::to_string(d.built) + " built, " +
+             std::to_string(static_cast<long long>(d.builtArea)) + " m2, max " +
+             std::to_string(d.maxStoreys) + " storeys, >20: " + std::to_string(d.over20);
+    }
+    return s;
 }
 
 

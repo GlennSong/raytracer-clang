@@ -1038,3 +1038,72 @@ TEST_CASE(walkways_adhere_to_the_terrain_a_cdlod_tile_actually_renders) {
     CHECK(worstByCell[8] < 6.5);
     CHECK(worstByCell[16] < 13.0);
 }
+
+// Skyscrapers v2, M0: the skyline census is the instrument every later
+// milestone is judged by, so it must reconcile with the records it reads —
+// every built lot lands in exactly one storey bin and one district, the
+// shape metric tells a rectangle from a trapezoid, and a podium tower counts
+// the storeys of both its stacked units.
+TEST_CASE(skyline_census_reconciles_with_the_grown_lots) {
+    LotParams p;
+    p.center = {0, 0};
+    p.seed = 3;
+    std::vector<RenderMesh> parts;
+    std::vector<LotBuilding> b = growLotBuildings(squareBlocks(), p, nullptr, &parts);
+    const SkylineCensus c = skylineCensus(b);
+    int built = 0, parks = 0, greens = 0;
+    for (const LotBuilding& lb : b) {
+        if (lb.type == "green") ++greens;
+        else if (lb.type == "park") ++parks;
+        else if (lb.recipe != "plaza" && !lb.units.empty()) ++built;
+    }
+    CHECK(c.built == built);
+    CHECK(c.parks == parks);
+    CHECK(c.greens == greens);
+    CHECK(c.built > 0);
+    int binned = 0;
+    for (int i = 0; i < SkylineCensus::kBins; ++i) binned += c.storeyBins[i];
+    CHECK(binned == c.built);
+    int inDistricts = 0;
+    for (const SkylineCensus::District& d : c.districts) inDistricts += d.built;
+    CHECK(inDistricts == c.built);
+    CHECK(c.rectilinear <= c.built);
+    CHECK(c.obliqueCorners <= c.corners);
+    CHECK(c.tallestStoreys >= 1);
+    CHECK(c.builtArea > 0.0);
+    CHECK(c.line().rfind("[skyline] ", 0) == 0);
+    CHECK(c.districtsLine().rfind("[skyline] districts:", 0) == 0);
+
+    // The shape metric on hand-made records: a rectangle is rectilinear, a
+    // trapezoid has four oblique corners, a collinear road sample is not a corner.
+    LotBuilding rect;
+    rect.type = "office";
+    rect.district = "financial";
+    rect.plan = {{0, 0}, {10, 0}, {20, 0}, {20, 10}, {0, 10}};   // one straight sample
+    rect.units.resize(1);
+    rect.units[0].params.floors = 4;
+    LotBuilding trap = rect;
+    trap.plan = {{0, 0}, {20, 0}, {16, 10}, {2, 10}};
+    const SkylineCensus s = skylineCensus({rect, trap});
+    CHECK(s.built == 2);
+    CHECK(s.rectilinear == 1);
+    CHECK(s.corners == 8);
+    CHECK(s.obliqueCorners == 4);
+    CHECK(s.storeyBins[1] == 2);   // 5 storeys each: the 4-8 bin
+    CHECK(buildingStoreys(rect) == 5);
+
+    // A podium tower: the tower unit stands on the podium's roof, so both count.
+    LotBuilding pt = rect;
+    pt.units.resize(2);
+    pt.units[0].params.floors = 3;   pt.units[0].baseY = 0.0;
+    pt.units[1].params.floors = 20;  pt.units[1].baseY = 14.0;
+    CHECK(buildingStoreys(pt) == 4 + 21);
+    const SkylineCensus t = skylineCensus({pt});
+    CHECK(t.over20 == 1);
+    CHECK(t.tallestStoreys == 25);
+    // A rowhouse strip: units side by side on one base count once.
+    LotBuilding row = rect;
+    row.units.resize(3);
+    for (BuildingUnit& u : row.units) { u.params.floors = 2; u.baseY = 0.0; }
+    CHECK(buildingStoreys(row) == 3);
+}

@@ -41,3 +41,18 @@ being used. One row per capability; the "used by" column is the audit trail.
 | GLB writer | `engine/glb_export.h` (was lanelab-only) | `lanelab_tool`, bundle view | TANGENT + COLOR_0 + extras added on the move |
 | Bundle → GLB view | `engine/bundle/bundle_glb.h` | `rt_bake --glb`, editor | per material or per cell from section names alone |
 | `MeshBuilder::chunkByCell` | `engine/mesh_builder.h` (was `level_loader.cpp`) | loader chunking, city producer | a bundle cell is a render cell |
+
+
+## Buildings (opened for skyscrapers v2, 2026-09-13 — site plans, envelopes, cores)
+
+| Capability | Where | Used by | Why / why not |
+|---|---|---|---|
+| Skyline census `SkylineCensus` / `skylineCensus` | `procgen/city/city_lots.h` | lot pass report, loader warm paths (lanelab + citylots), `test_city_lots` | storeys histogram, towers >20/40/60, tallest, footprint rectilinearity, open space by kind, per district — computed from `LotBuilding` records so a warm load (which grows nothing) reports the same numbers as a grow |
+| Shared facade truth `FacadeLayout` | `procgen/city/shape_grammar.cpp:520` | full, flat (LOD1) and inner-wall emitters | the model for site plans and cores: one derivation, several consumers, so LODs and interiors agree by construction |
+| Storey stack `storeyPlans` + `insetOk` | `procgen/city/shape_grammar.cpp:2366` | exterior massing, `growInterior` | tiers today are a uniform polygon offset; M2 feeds it a `MassStack` from the site plan instead |
+| Lot-level massings `Massing::{LotPlan,RectYard,Circle,RowStrip,Plaza,PodiumTower,Park}` | `procgen/city/city_lots.cpp:2297-2655` | lot pass | the only places a building pulls in from the lot line; `PodiumTower` is ad-hoc code replaced by the podium envelope |
+| Plaza kit `sculptPlaza`, park kit `sculptPark`, yard kit `sculptYard` | `procgen/city/city_lots.cpp:484-926` | lot pass | paving, stairs at street mouths, fountain, planters, benches, paths, hedges — the dressing every open-space kind reuses |
+| Enterable interiors (ADR-0080) `growInterior`, `interiorLayout`, `BuildingInteriorSystem`, `DoorSystem` | `procgen/city/shape_grammar.h:168-233`, `engine/systems/building_interior_system.h`, `door_system.h` | spawn building, `floors <= 3` | one straight stair, streamed on approach; M5 generalises to cores with shafts and per-floor streaming |
+| Walker `CharacterVirtual` step-up / step-down | `engine/physics/physics_world.cpp:437-537`, `systems/player_system.h` | player, pedestrians | stairs and kerbs already work; `GetGroundVelocity` is unused — riding a kinematic mover (the elevator cab) is M6's physics change |
+| Night gate `NightGlow` + `duskRamp` | `engine/components.h:395`, `vehicle_lamps.h:74` | lit windows, lamp shells, interiors | one emission per Renderable; emission is not vertex-tinted (`shaders/vulkan/mesh.frag:607`) — M4 adds the tint flag rather than a PartId per colour |
+| Static instancing `InstanceGroup` | `engine/components.h:152` | vegetation, lamps, signals | candidate for repeated typical floors and beacon shells; instances are static, no per-instance culling |

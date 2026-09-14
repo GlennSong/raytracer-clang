@@ -1964,7 +1964,14 @@ static GrownLots growCityLots(
                 status = o.status;
                 if (o.bundle) fromBundle = readLots(o.bundle);
             }
-            if (fromBundle) LOG_INFO << "[lanelab] lots " << status << ": " << r.lots.size() << " buildings, " << r.plan.lots.size() << " lots, " << (g.cellParts.empty() ? std::to_string(r.parts.size()) + " whole parts" : std::to_string(g.cellParts.size()) + " cell parts") << ", read in " << since(tl) << " s";
+            if (fromBundle) {
+                LOG_INFO << "[lanelab] lots " << status << ": " << r.lots.size() << " buildings, " << r.plan.lots.size() << " lots, " << (g.cellParts.empty() ? std::to_string(r.parts.size()) + " whole parts" : std::to_string(g.cellParts.size()) + " cell parts") << ", read in " << since(tl) << " s";
+                // A warm load grows nothing, so the grow's skyline lines never
+                // print; the census is computed from the records instead.
+                const engine::SkylineCensus sc = engine::skylineCensus(r.lots);
+                LOG_INFO << sc.line();
+                LOG_INFO << sc.districtsLine();
+            }
             else LOG_WARN << "[lanelab] lots bundle unusable (" << (err.empty() ? status : err) << "); growing in place";
         }
         if (!fromBundle) {
@@ -1999,6 +2006,11 @@ static GrownLots growCityLots(
                     LOG_INFO << "[citylots] lots " << o.status << ": " << r.lots.size() << " buildings, " << r.plan.lots.size()
                              << " lots, " << (g.cellParts.empty() ? std::to_string(r.parts.size()) + " whole parts" : std::to_string(g.cellParts.size()) + " cell parts")
                              << ", read in " << since2(tl) << " s";
+                    // A warm load grows nothing, so the grow's skyline lines
+                    // never print; the census is computed from the records.
+                    const engine::SkylineCensus sc = engine::skylineCensus(r.lots);
+                    LOG_INFO << sc.line();
+                    LOG_INFO << sc.districtsLine();
                 } else {
                     r = engine::NetLotResult(); g.cellParts.clear(); g.bundle.reset();
                     LOG_WARN << "[citylots] lots bundle unusable (" << (err.empty() ? o.status : err) << "); growing in place";

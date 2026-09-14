@@ -239,6 +239,56 @@ struct LotPlanDebug {
     int rejRelief = 0;   // ground range across the lot exceeds maxPadRelief
 };
 
+// The SKYLINE CENSUS (skyscrapers v2, M0): what the lot pass actually BUILT, as
+// numbers — storeys, towers, footprint shape, open space, per district. It is
+// computed from the finished LotBuilding records, not from the grow, so the
+// same function reports a cold grow, a warm bundle load (which grows nothing)
+// and a test. Numbers first: the repo's own record is that counts without a
+// census sent the parcel tuning chasing the wrong knob twice (d5db9a7), and
+// until this struct existed no height histogram of any city existed at all.
+struct SkylineCensus {
+    static constexpr int kBins = 6;
+    // Storey bins: 1-3, 4-8, 9-20, 21-40, 41-60, 61+.
+    static constexpr int kBinLo[kBins] = {1, 4, 9, 21, 41, 61};
+    int built = 0;          // lots with grown units (a plaza is open space, not a building)
+    int parks = 0, greens = 0;
+    int storeyBins[kBins] = {0, 0, 0, 0, 0, 0};
+    int over20 = 0, over40 = 0, over60 = 0;
+    int tallestStoreys = 0;
+    Real tallestHeight = 0;
+    Vec2 tallestAt{0, 0};
+    std::string tallestRecipe, tallestDistrict;
+    // FOOTPRINT SHAPE. A plan corner is RIGHT when the turn there is 90°
+    // either way within the tolerance, STRAIGHT (not a corner) when it is ~0°
+    // — a road sample the simplifier kept — and OBLIQUE otherwise. A building
+    // is rectilinear when none of its corners is oblique. Real buildings are
+    // rectilinear; today's lot-shaped prisms mostly are not, and this is the
+    // number M1 (site plans) moves.
+    int rectilinear = 0;
+    int corners = 0, obliqueCorners = 0;
+    double builtArea = 0;   // m² of built plans
+    // OPEN SPACE by kind, in m² of the lot's own polygon: keyed by recipe —
+    // "plaza", "pocket_park", "park_block", "court_green", "underfreeway_*",
+    // and "green" for every unbuilt lot. Sorted by kind.
+    std::vector<std::pair<std::string, double>> openByKind;
+    struct District {
+        std::string name;
+        int built = 0;
+        double builtArea = 0;
+        int maxStoreys = 0;
+        int over20 = 0;
+    };
+    std::vector<District> districts;   // sorted by name
+    std::string line() const;            // one "[skyline] …" line: totals
+    std::string districtsLine() const;   // one "[skyline] districts: …" line
+};
+// Storeys of a built lot: the ground storey plus BuildingParams::floors of the
+// tallest unit standing on the lowest base (a rowhouse strip's units stand side
+// by side), plus every unit STACKED above it (a podium tower's tower unit,
+// ground storey included). 0 for parks, greens and unit-less lots.
+int buildingStoreys(const LotBuilding& lot);
+SkylineCensus skylineCensus(const std::vector<LotBuilding>& lots, Real rightTolDeg = 2.0);
+
 // One building per viable lot across every block. Deterministic in seed.
 // `debug`, when non-null, receives the intermediate blocks + lots.
 //
