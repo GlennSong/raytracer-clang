@@ -630,8 +630,12 @@ void sculptPaving(const Poly2& lotIn, Real paveY,
         const Vec2 d = e - a;
         if (d.length() < 1e-6) continue;
         const Vec2 n2 = normalize(Vec2(d.y, -d.x));   // CCW: right normal = outward
-        const Real lo = std::min(gy(a), gy(e)) - 0.5;
-        if (paveY - lo < 0.02) continue;
+        // The skirt is UNCONDITIONAL and deep: the plate is a one-sided sheet, and
+        // wherever the ground dips between two corners (a neighbour's lower pad,
+        // the 1 m feather, a cross-street strip) an edge with no side under it
+        // hangs in the air as a paper-thin slab — the owner's "wafer-thin walls".
+        // A metre below the lower corner's ground, sampled at the mid-edge too.
+        const Real lo = std::min({gy(a), gy(e), gy((a + e) * 0.5)}) - 1.0;
         MeshBuilder::emitQuad(skirt, Vec3(a.x, lo, a.y), Vec3(e.x, lo, e.y),
                               Vec3(e.x, paveY, e.y), Vec3(a.x, paveY, a.y),
                               Vec3(n2.x, 0, n2.y), white);
@@ -2923,8 +2927,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     b.yaw = std::atan2(pb.axis[0].y, pb.axis[0].x);
                     b.plan = plan;
                     b.height = (towerBase - b.baseY) + tm.height;
-                    emitFoundation(b.plan, b.groundY, b.baseY);
-                    if (paved) sculptPaving(b.pavedLot, b.paveY, meshGround, outParts, outFlatParts);
+                    // A paved lot's plate and skirt ARE its foundation: the foundation's top ledge would
+                    // lie in the plate's own plane and flicker against it.
+                    if (!paved) emitFoundation(b.plan, b.groundY, b.baseY);
+                    else sculptPaving(b.pavedLot, b.paveY, meshGround, outParts, outFlatParts);
                     out.push_back(std::move(b));
                     continue;
                 }
@@ -2975,8 +2981,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             mergeParts(outParts, bm);
             mergeParts(outFlatParts, bmFlat);
             b.height = bm.height > 0 ? bm.height : 8.0;
-            emitFoundation(b.plan, b.groundY, b.baseY);
-            if (paved) sculptPaving(b.pavedLot, b.paveY, meshGround, outParts, outFlatParts);
+            if (!paved) emitFoundation(b.plan, b.groundY, b.baseY);   // the plate is the foundation of a paved lot
+            else sculptPaving(b.pavedLot, b.paveY, meshGround, outParts, outFlatParts);
             // A yarded house earns its LANDSCAPING: front walk to the street,
             // a hedge along the front lot line, back-yard tree spots.
             if (yardApplied)
