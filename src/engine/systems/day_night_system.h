@@ -130,6 +130,7 @@ private:
     // frame. Wall-clock driven (beacons keep flashing while the sim is paused).
     void applyBeaconBlink(FrameContext& ctx);
     double blinkSeconds_ = 0.0;
+    float nightAdapt_ = 1.0f;   // exposure / authored exposure this frame (1 by day, kNightAdapt at midnight)
 
     // The level's authored volumetric deck, captured on first sight: the
     // artistic knobs write ABSOLUTE values derived from this base each frame

@@ -460,7 +460,7 @@ void DayNightSystem::update(FrameContext& ctx) {
     // edits live even while the simulation is paused.
     const bool active = enabled && levelEnabled && !hdrEnvironmentActive(ctx);
     if (active) applyLighting(ctx);
-    else ctx.view.lighting.clockHours = -1.0f;   // no clock staged: the sim keeps its own
+    else { ctx.view.lighting.clockHours = -1.0f; nightAdapt_ = 1.0f; }   // no clock staged: the sim keeps its own
     publishStatus(ctx, active);
     applyClouds(ctx);
     applyNightGlow(ctx);   // even with the cycle off: static dusk levels glow
@@ -558,6 +558,7 @@ void DayNightSystem::applyLighting(FrameContext& ctx) {
         std::min(1.0, std::max(0.0, (st.solarElevation + 0.10) / 0.30)));
     const float dayEase = dayF * dayF * (3.0f - 2.0f * dayF);
     lit.exposure = baseExposure_ * (1.0f + (kNightAdapt - 1.0f) * (1.0f - dayEase));
+    nightAdapt_ = baseExposure_ > 0.0f ? lit.exposure / baseExposure_ : 1.0f;
 }
 
 // NIGHT GLOW (WS3): everything the loader tagged — street-lamp glow shells,
@@ -588,10 +589,14 @@ void DayNightSystem::applyNightGlow(FrameContext& ctx) {
 void DayNightSystem::applyBeaconBlink(FrameContext& ctx) {
     blinkSeconds_ += std::max(0.0, std::min(ctx.frameDelta, 0.25));
     const Real ramp = lastGlowRamp_ < 0 ? Real(0) : lastGlowRamp_;
+    // Divided by the night exposure adaptation (up to 6x at midnight): a red
+    // lamp brighter than ~1 on screen tonemaps to orange, then white — the
+    // beacon must read as the same saturated red at dusk and at midnight.
+    const Real adapt = std::max(1.0f, nightAdapt_);
     ctx.world.each<NightGlow, BeaconBlink, Renderable>(
         [&](Entity, NightGlow& glow, BeaconBlink& b, Renderable& r) {
             const Real gate = ramp <= 0 ? Real(0) : beaconBlinkGate(blinkSeconds_, b.period, b.phase, b.duty);
-            r.material.emission = glow.fullEmission * (ramp * gate);
+            r.material.emission = glow.fullEmission * (ramp * gate / adapt);
         });
 }
 

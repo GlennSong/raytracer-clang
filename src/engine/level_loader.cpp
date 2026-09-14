@@ -4375,8 +4375,10 @@ bool LevelLoader::load(const std::string& path,
                         engine::BeaconBlink bb;
                         bb.phase = static_cast<float>(h & 0xffffu) / 65535.0f;
                         bb.period = 1.7f + 0.6f * static_cast<float>((h >> 16) & 0xffu) / 255.0f;   // 26-35 fpm
-                        // 2.2, not 6: a hotter red clips to white in the tonemap (Glenn, 2026-09-14).
-                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 2.2});
+                        // 1.3 ON SCREEN: the beacon pass divides by the night exposure adaptation
+                        // (up to 6x), because a red brighter than ~1 tonemaps to orange, then white
+                        // (Glenn, 2026-09-14: "white and red tinged"; checked in the night frames).
+                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 1.3});
                         world.add<engine::BeaconBlink>(e, bb);
                     }
                 };
