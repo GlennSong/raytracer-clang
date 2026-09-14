@@ -70,6 +70,57 @@
       -903.1697294294636
     ]
   },
+  "terrain": {
+    "_comment": "metro_v2_test's terrain block minus the erode* keys (the lab's conformed grid, baked from the eroded source, is the eroded base here) — the lab's ground rendered by CDLOD (2026-09-08 wiring; enabled 2026-09-13 once the lab's lots grow in the terrain pre-pass so their pads reach it)",
+    "cdlod": {
+      "worldHalf": 1380
+    },
+    "heightScale": 13,
+    "material": {
+      "albedo": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roughness": 1.0
+    },
+    "mountainAlongRange": true,
+    "mountainHeight": 180,
+    "mountainMaskHi": 0.4,
+    "mountainMaskLo": -0.1,
+    "mountainMaskScale": 0.001,
+    "mountainScale": 0.002,
+    "noiseScale": 0.0026,
+    "octaves": 6,
+    "rangeHeight": 260,
+    "rangeSpine": [
+      [
+        -1180,
+        -900
+      ],
+      [
+        -1120,
+        -300
+      ],
+      [
+        -1180,
+        300
+      ],
+      [
+        -1120,
+        900
+      ]
+    ],
+    "rangeVariation": 0.6,
+    "rangeWidth": 300,
+    "resolution": 900,
+    "rockLine": 90,
+    "seed": 11,
+    "size": 2760,
+    "snowLine": 230,
+    "tiltX": -0.045,
+    "warp": 0.35
+  },
   "vehicles": [
     {
       "position": [

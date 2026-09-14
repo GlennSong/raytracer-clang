@@ -2374,6 +2374,16 @@ bool LevelLoader::load(const std::string& path,
             auto grid = std::make_shared<engine::lanelab::HeightGrid>();
             grid->x0 = cp.ground.x0; grid->y0 = cp.ground.y0; grid->res = cp.ground.res;
             grid->nx = cp.ground.nx; grid->ny = cp.ground.ny; grid->z = cp.ground.z;
+            // Publish the lab's BLOCKS and GROUND now, before the terrain pre-pass grows the lots. The
+            // pre-pass is where building pads and block grades are stamped into the terrain; a lab level
+            // whose lots grew only at entity time (after the terrain) had every pad miss the CDLOD ground —
+            // 706 of 1284 lots buried, the reason this block stayed parked on 2026-09-08. loadLaneLabEntity
+            // re-derives the same blocks from the same products (deterministic), so nothing disagrees.
+            g_lanelab.ground = [grid](double x, double z) { return grid->sample(x, z); };
+            g_lanelab.sidewalk = root.contains("citysim") && root["citysim"].is_object() ? root["citysim"].value("sidewalk", 4.0) : 4.0;
+            g_lanelab.blocks = engine::lanelab::blocksFromHoles(cp.holes, 1.5, g_lanelab.sidewalk);
+            g_lanelab.row = cp.row;
+            LOG_INFO << "[lanelab] " << g_lanelab.blocks.size() << " city blocks published for the terrain pre-pass";
             auto fbTp = std::make_shared<TerrainParams>(readTerrainParams(root["terrain"]));
             fbTp->erodedBase = sharedEroded;          // the fallback keeps whatever base the level had; no recursion
             auto fbNoise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
@@ -2830,10 +2840,18 @@ bool LevelLoader::load(const std::string& path,
         // pad (at its own plane) into the flatten set. The citysim build below
         // reuses these exact lots.
         loadStage("terrain field");
+        // A lane-lab level has no road entities but publishes its BLOCKS before this point (from the
+        // city bundle, above), and its lots must grow here too, or their pads never reach the terrain.
+        const bool labBlocks =
+#ifdef RT_ENABLE_LANELAB
+            !g_lanelab.blocks.empty();
+#else
+            false;
+#endif
         if (root.contains("citysim") &&
             (root["citysim"].value("buildLots", false) ||
              root["citysim"].value("planOnly", false)) &&
-            !preNets.empty()) {
+            (!preNets.empty() || labBlocks)) {
             auto lotTp = std::make_shared<TerrainParams>(terrainParams);
             auto lotNoise = std::make_shared<Noise>(terrainSeed);
             HeightField lotGround = [lotTp, lotNoise](double x, double z) {
@@ -4051,6 +4069,15 @@ bool LevelLoader::load(const std::string& path,
                         buildingsMc.vertices, buildingsMc.indices, lb.plan,
                         base, top, lb.baseY + 0.05, doorCuts,
                         lb.baseY - lb.groundY);
+                    // A PAVED lot (ADR-0086) is a walkable slab to its lot
+                    // line: the plate the lot pass drew at paveY gets the
+                    // same prism treatment (top cap at the plate, sides down
+                    // into the ground), else whoever steps off the building
+                    // sinks 0.3 m to the terrain under the concrete.
+                    if (lb.pavedLot.size() >= 3)
+                        engine::appendBuildingPrism(
+                            buildingsMc.vertices, buildingsMc.indices, lb.pavedLot,
+                            lb.paveY - 1.0, lb.paveY, lb.paveY - 0.5, {}, 0.0);
                     // Runtime records: one per grown unit (ADR-0080).
                     for (const engine::BuildingUnit& u : units)
                         cityB.records.push_back({u.plan, u.baseY, lb.groundY,

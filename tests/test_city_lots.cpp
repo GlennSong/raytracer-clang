@@ -1166,9 +1166,10 @@ TEST_CASE(urban_lots_are_paved_at_the_sidewalk_datum) {
             CHECK_APPROX(lb.paveY, lb.groundY + 0.38, 1e-9);
             CHECK_APPROX(lb.baseY, lb.paveY, 1e-9);
             CHECK(lb.pavedLot.size() >= 3u);
-            // The pad flattens the whole lot, not just the plan.
+            // The pad flattens the whole parcel (its bound), not just the plan.
             const TerrainFlatten f = lotPadFlatten(lb, 2.2, 5.0);
-            CHECK(f.polygon.size() == lb.pavedLot.size());
+            CHECK(f.polygon.size() >= 3u);
+            CHECK(std::fabs(area(lb.padBound)) > 0.8 * std::fabs(area(lb.lot)));
             if (lb.district == "residential") ++residentialPaved;
         }
         if (urban && !lb.open.empty()) ++urbanRectified;
@@ -1186,4 +1187,40 @@ TEST_CASE(urban_lots_are_paved_at_the_sidewalk_datum) {
     std::vector<LotBuilding> b2 = growLotBuildings(squareBlocks(), q, nullptr, nullptr);
     for (const LotBuilding& lb : b2)
         if (!lb.pavedLot.empty()) CHECK_APPROX(lb.baseY, lb.groundY + q.plinth, 1e-9);
+}
+
+// A building's pad never crosses its parcel line (ADR-0086 follow-up): the
+// rectified rectangles hug the cross-street lot line on corner lots, and a
+// pad spilling past it at the front street's level lifted the terrain through
+// the lower cross street's deck (metro_road_decks_are_never_poked_by_the_
+// drawn_terrain: 119 -> 276 pokes). Every flatten stays inside its parcel
+// dilated by 0.3 m and feathers no further than the sidewalk strip.
+TEST_CASE(building_pads_never_cross_their_parcel_line) {
+    LotParams p;
+    p.center = {0, 0};
+    p.seed = 3;
+    p.ground = [](Real, Real) { return Real(10.0); };
+    p.sidewalkRise = 0.38;
+    std::vector<LotBuilding> b = growLotBuildings(squareBlocks(), p, nullptr, nullptr);
+    int checked = 0;
+    for (const LotBuilding& lb : b) {
+        if (lb.units.empty() || lb.lot.size() < 3) continue;
+        const TerrainFlatten f = lotPadFlatten(lb, 2.2, 5.0);
+        CHECK(f.falloff <= 1.0 + 1e-9);
+        Poly2 lot = lb.lot;
+        ensureCCW(lot);
+        for (const Vec3& v3 : f.polygon) {
+            const Vec2 v(v3.x, v3.z);
+            for (std::size_t i = 0; i < lot.size(); ++i) {
+                const Vec2 a = lot[i], c = lot[(i + 1) % lot.size()];
+                const Vec2 d = c - a;
+                const Real len = d.length();
+                if (len < 1e-9) continue;
+                const Vec2 n(d.y / len, -d.x / len);
+                CHECK(dot(n, v - a) <= 0.3 + 1e-6);
+            }
+        }
+        ++checked;
+    }
+    CHECK(checked > 10);
 }

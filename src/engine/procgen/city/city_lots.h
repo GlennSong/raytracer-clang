@@ -111,6 +111,20 @@ struct LotBuilding {
     // and the building's baseY IS paveY. Empty / 0 when the lot is not paved.
     Poly2 pavedLot;
     Real paveY = 0;
+    // The PARCEL the building was placed in (world XZ, CCW) — the lot line. The
+    // pad flatten is clipped to it: a pad that crosses its parcel line reaches
+    // the road's band and lifts the terrain through a lower cross street's
+    // deck. Set for every lot the pass places a building on.
+    Poly2 lot;
+    // Where the building's PAD may flatten the ground: the parcel, pulled in
+    // 1 m along every street-facing edge except the frontage. A pad sits at
+    // the FRONT street's level; on a corner lot its rectangle runs the full
+    // depth along the cross street, and a pad reaching that street's band
+    // stood above a lower cross street's deck (the poke gate: 108 -> 275).
+    // Off those edges the terrain falls to the road's own carve and the
+    // foundation shows a base toward the lower street, as a real corner
+    // building does. CCW. Empty on parks/greens.
+    Poly2 padBound;
 };
 
 struct LotParams {

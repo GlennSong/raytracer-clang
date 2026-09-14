@@ -971,11 +971,53 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
 TerrainFlatten lotPadFlatten(const LotBuilding& lb, double apron, double falloff) {
     // A paved lot (ADR-0086) is flat to its lot line: the plate covers the
     // whole lot, so the pad does too, with only a hair of apron past it.
-    const Poly2& src = lb.pavedLot.empty() ? lb.plan : lb.pavedLot;
-    if (!lb.pavedLot.empty()) apron = std::min(apron, 0.3);
+    // THE PAD IS THE PARCEL (skyscrapers v2). It used to be the plan plus a 2.2 m
+    // apron, which reached the lot line only because the plan stood a metre
+    // inside it. With real yards the apron stops short, and the strip between
+    // the road and the building shows the block plane instead — which on a
+    // hillside stands above the road deck (the poke gate went 108 -> 275 when
+    // the yards landed, and clipping the pad to the parcel moved it by 20).
+    // So a lot with a recorded bound flattens its WHOLE parcel at groundY —
+    // its yards and paving included, the cross-street strips excluded (see
+    // LotBuilding::padBound) — and only a legacy record keeps the apron.
+    const bool paved = !lb.pavedLot.empty();
+    const bool bounded = lb.padBound.size() >= 3;
+    const Poly2& src = bounded ? lb.padBound : (paved ? lb.pavedLot : lb.plan);
+    if (bounded) apron = 0.0;
+    else if (paved) apron = std::min(apron, 0.3);
     Vec2 c2(0, 0); for (const Vec2& v : src) c2 = c2 + v; if (!src.empty()) c2 = c2 * (1.0 / static_cast<double>(src.size()));
-    std::vector<Vec3> poly; poly.reserve(src.size());
-    for (const Vec2& v : src) { const Vec2 d = v - c2; const double l = d.length(); const Vec2 g = l > 1e-6 ? c2 + d * ((l + apron) / l) : v; poly.push_back(Vec3(g.x, 0, g.y)); }
+    Poly2 grown; grown.reserve(src.size());
+    for (const Vec2& v : src) { const Vec2 d = v - c2; const double l = d.length(); grown.push_back(apron > 0 && l > 1e-6 ? c2 + d * ((l + apron) / l) : v); }
+    // A PAD NEVER CROSSES ITS PARCEL LINE. The lot line is only ~1.3 m behind
+    // the sidewalk's outer edge; a pad that spills past it (the 2.2 m apron
+    // and the 5 m feather did, on every rectified corner lot hugging a cross
+    // street) sits at the FRONT street's level and lifts the terrain through a
+    // lower cross street's deck — metro_road_decks_are_never_poked_by_the_
+    // drawn_terrain went 119 -> 276 pokes when the rectangles landed. Clip the
+    // pad to the parcel (+0.3 m) and end the feather inside the strip.
+    // The pad is clipped to LotBuilding::padBound where the pass recorded one (the
+    // parcel, 1 m inside every street-facing edge but the frontage — see the
+    // field), else to the parcel itself; the bound is convex-ish, so a half-plane
+    // clip per edge is exact enough and never needs a boolean library.
+    const Poly2& boundSrc = lb.padBound.size() >= 3 ? lb.padBound : lb.lot;
+    if (boundSrc.size() >= 3) {
+        Poly2 bound = boundSrc;
+        ensureCCW(bound);
+        const Real slack = lb.padBound.size() >= 3 ? 0.0 : 0.3;
+        Poly2 clipped = grown;
+        for (std::size_t i = 0; i < bound.size() && clipped.size() >= 3; ++i) {
+            const Vec2 a = bound[i], b = bound[(i + 1) % bound.size()];
+            const Vec2 d = b - a;
+            const Real len = d.length();
+            if (len < 1e-9) continue;
+            const Vec2 n(d.y / len, -d.x / len);   // CCW: right normal = outward
+            clipped = clipHalfPlane(clipped, n, dot(n, a) + slack);
+        }
+        if (clipped.size() >= 3) grown = std::move(clipped);   // never clip a pad to nothing
+        falloff = std::min(falloff, 1.0);
+    }
+    std::vector<Vec3> poly; poly.reserve(grown.size());
+    for (const Vec2& v : grown) poly.push_back(Vec3(v.x, 0, v.y));
     return makeFlattenPad(std::move(poly), lb.groundY, falloff);
 }
 
@@ -2113,7 +2155,13 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // clearOfRoads walks every edge, far too slow per cell).
             bool siteRectified = false;
             const SiteFrame siteFrameOf = siteFrame(lot.footprint, lot.frontage);
-            {
+            // RT_SITE_PLAN=0 skips the rectification, RT_SITE_PLAN=inset rectifies with
+            // uniform 1 m yards — a bisect switch for the terrain gates, not a feature.
+            static const char* kSitePlanMode = std::getenv("RT_SITE_PLAN");
+            const bool sitePlanOff = kSitePlanMode && std::string(kSitePlanMode) == "0";
+            Yards siteYards = bf.yards;
+            if (kSitePlanMode && std::string(kSitePlanMode) == "inset") siteYards = Yards{1.0, 1.0, 1.0};
+            if (!sitePlanOff) {
                 bool rectified = false, anyRect = false;
                 const SiteFrame& frame = siteFrameOf;
                 for (Real t : {Real(0), Real(0.8), Real(1.6), Real(2.6), Real(3.6)}) {
@@ -2122,7 +2170,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     // The raster spans cell centres, so a rectangle comes out
                     // up to a cell short of the exact one; a lot that clears
                     // the sliver floor by less than that must not fail here.
-                    Poly2 rect = largestAlignedRect(host, frame, bf.yards, 0.5,
+                    Poly2 rect = largestAlignedRect(host, frame, siteYards, 0.5,
                                                     std::max(Real(4), minShort - 0.5));
                     if (rect.size() != 4) continue;
                     anyRect = true;
@@ -2207,6 +2255,69 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             b.width = w;
             b.depth = d;
             b.yaw = std::atan2(obb.axis[0].y, obb.axis[0].x);
+            b.lot = lot.footprint;
+            ensureCCW(b.lot);
+            {   // The pad bound: the parcel, 1 m inside every street-facing edge but the frontage.
+                auto distToBlock = [&](const Vec2& q) {
+                    Real best = 1e30;
+                    const Poly2& f = bf.foot;
+                    for (std::size_t i = 0; i < f.size(); ++i) {
+                        const Vec2 a = f[i], c = f[(i + 1) % f.size()];
+                        const Vec2 ac = c - a;
+                        const Real l2 = ac.lengthSquared();
+                        Real t = l2 > 1e-12 ? dot(q - a, ac) / l2 : 0.0;
+                        t = std::max(Real(0), std::min(Real(1), t));
+                        best = std::min(best, (q - (a + ac * t)).length());
+                    }
+                    return best;
+                };
+                Poly2 bound = b.lot;
+                for (std::size_t i = 0; i < b.lot.size(); ++i) {
+                    const Vec2 a = b.lot[i], c = b.lot[(i + 1) % b.lot.size()];
+                    const Vec2 d = c - a;
+                    const Real len = d.length();
+                    if (len < 1e-9) continue;
+                    const Vec2 n(d.y / len, -d.x / len);   // CCW: outward
+                    const bool onStreet = bf.foot.size() >= 3 && distToBlock(a) < 0.6 && distToBlock(c) < 0.6;
+                    const bool front = lotSideOf(n, lot.frontage) == LotSide::Front;
+                    Real pullIn = (onStreet && !front) ? Real(1.0) : Real(-0.3);
+                    // ...but never past the building's own wall: a side yard is 0.3 m
+                    // downtown, and a pad ending inside the plan leaves that wall on
+                    // unflattened ground (the lab census: one wall buried 1.4 m).
+                    if (pullIn > 0 && site.size() >= 3) {
+                        Real planGap = 1e30;
+                        for (const Vec2& v : site) planGap = std::min(planGap, -dot(n, v - a));
+                        pullIn = std::max(Real(0), std::min(pullIn, planGap - Real(0.05)));
+                    }
+                    const Poly2 cut = clipHalfPlane(bound, n, dot(n, a) - pullIn);
+                    if (cut.size() >= 3) bound = cut;
+                }
+                b.padBound = bound;
+            }
+            // RT_LOT_AT=x,z prints the lot whose parcel holds the point: its recipe, plane,
+            // frontage and pad bound — the probe for "what stands at this poke".
+            if (const char* at = std::getenv("RT_LOT_AT")) {
+                double px = 0, pz = 0;
+                auto nearParcel = [&](double qx, double qz) {
+                    const Vec2 q(qx, qz);
+                    if (pointInPolygon(b.lot, q)) return true;
+                    for (std::size_t i = 0; i < b.lot.size(); ++i) {
+                        const Vec2 a = b.lot[i], c = b.lot[(i + 1) % b.lot.size()];
+                        const Vec2 ac = c - a; const Real l2 = ac.lengthSquared();
+                        Real t = l2 > 1e-12 ? dot(q - a, ac) / l2 : 0.0; t = std::max(Real(0), std::min(Real(1), t));
+                        if ((q - (a + ac * t)).length() < 3.0) return true;
+                    }
+                    return false;
+                };
+                if (std::sscanf(at, "%lf,%lf", &px, &pz) == 2 && nearParcel(px, pz)) {
+                    std::printf("[lot-at] %s at (%.1f, %.1f) frontage (%.2f, %.2f) parcel", districtName(blockTag), b.site.x, b.site.y,
+                                lot.frontage.x, lot.frontage.y);
+                    for (const Vec2& v : b.lot) std::printf(" (%.1f,%.1f)", v.x, v.y);
+                    std::printf("\n[lot-at]   padBound");
+                    for (const Vec2& v : b.padBound) std::printf(" (%.1f,%.1f)", v.x, v.y);
+                    std::printf("\n");
+                }
+            }
             // The ground around the buildable: the lot minus the rectangle the
             // gates settled on (an aspect or fill rescue may have re-taken it).
             if (siteRectified) b.open = openSpacePieces(lot.footprint, site, siteFrameOf);
@@ -2621,8 +2732,41 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // On terrain the building rises from its graded pad plane (plus the
             // plinth reveal); every walk-up entrance earns steps to the door —
             // porticos and bay-door fronts already bring their own.
-            b.groundY = padPlaneFor(planOk ? plan : site,
-                                    Vec2(bp.faceDir.x, bp.faceDir.z));
+            // The pad plane is the FRONT STREET's carve, probed 2 m beyond the
+            // PARCEL's frontage edge — not the plan's. With a real front yard
+            // the plan's edge stands metres inside the lot, its 2 m probe lands
+            // on the block plane above the road, and every pad along the street
+            // then stands proud of the deck (the poke gate: 108 -> 1660 once the
+            // pads grew to their parcels). Lots without a parcel keep the plan.
+            // ...and the street is the NEAREST ROAD where a road graph exists (bp.faceDir), the
+            // parcel's recorded frontage only where none does (the lab: every block edge is a
+            // street). A rim lot's frontage can face the open side of the city, and probing 2 m
+            // out there read the hillside: a pad 4.8 m above the road beside it.
+            {
+                const Vec2 nearestRoad(bp.faceDir.x, bp.faceDir.z);
+                const Vec2 probeDir = (roads && nearestRoad.length() > Real(1e-6)) ? nearestRoad
+                                      : (lot.frontage.length() > Real(1e-6) ? lot.frontage : nearestRoad);
+                b.groundY = padPlaneFor(lot.footprint.size() >= 3 ? lot.footprint : (planOk ? plan : site),
+                                        probeDir);
+            }
+            if (const char* at = std::getenv("RT_LOT_AT")) {
+                double px = 0, pz = 0;
+                const Vec2 q0(px, pz);
+                bool near = false;
+                if (std::sscanf(at, "%lf,%lf", &px, &pz) == 2) {
+                    near = pointInPolygon(b.lot, Vec2(px, pz));
+                    for (std::size_t i = 0; i < b.lot.size() && !near; ++i) {
+                        const Vec2 a = b.lot[i], c = b.lot[(i + 1) % b.lot.size()];
+                        const Vec2 ac = c - a; const Real l2 = ac.lengthSquared();
+                        Real t = l2 > 1e-12 ? dot(Vec2(px, pz) - a, ac) / l2 : 0.0; t = std::max(Real(0), std::min(Real(1), t));
+                        near = (Vec2(px, pz) - (a + ac * t)).length() < 3.0;
+                    }
+                }
+                (void)q0;
+                if (near)
+                    std::printf("[lot-at]   %s faceDir (%.2f, %.2f) groundY %.2f (ground at the probe point %.2f) plan corners %zu\n", rec.name.c_str(),
+                                bp.faceDir.x, bp.faceDir.z, b.groundY, p.ground ? p.ground(px, pz) : 0.0, (planOk ? plan : site).size());
+            }
             b.baseY = p.ground ? b.groundY + plinth
                                : baseYFor(planOk ? plan : site);
             // PAVED URBAN LOT (ADR-0086; the owner's rule: a downtown building

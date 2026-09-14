@@ -6567,6 +6567,29 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
    taper — each turns the buildable and a floor count into a `MassStack` of rectilinear tiers that
    `storeyPlans` consumes instead of its uniform offset. New York first, per the owner.
 
+6. **The building pad is the parcel, at the front street's level, and it never ends inside the
+   building.** The old pad was the plan plus a 2.2 m apron with a 5 m feather, which reached the lot
+   line only because the plan stood a metre inside it; with real yards it stopped short, and the strip
+   between road and house showed the block plane, which on a hillside stands above the road deck
+   (`metro_road_decks_are_never_poked_by_the_drawn_terrain`: 119 → 275 pokes when the yards landed).
+   Worse, the plane was probed 2 m out from the *plan's* front edge, so a 3 m front yard put the probe
+   on the block plane, not the road's carve (275 → 1660 when the pad grew to the parcel). Now
+   (`LotBuilding::lot`, `padBound`, `lotPadFlatten`): the plane is probed 2 m beyond the *parcel's*
+   edge toward the nearest road (the recorded frontage where no road graph exists — a rim lot's
+   frontage can face the open hillside), the pad polygon is the parcel pulled in on every
+   street-facing edge except the frontage — by 1 m, but never past the building's own wall — and it
+   feathers no further than 1 m, so it stays out of every road's band. Result: LOD0 pokes 119 → 59,
+   LOD1 1032 → 411, LOD2 1902 → 1071. A corner building on a slope keeps its floor at the front
+   street and shows a foundation base toward the lower cross street, as a real one does.
+7. **A paved lot is a walkable slab.** The loader extrudes `pavedLot` into the buildings collider
+   with its top at `paveY` (the owner sank 0.3 m into the plazas before it did).
+8. **The lane lab renders its ground with CDLOD** (`assets/lanelab/levels/metro.json` carries
+   metro_v2's terrain block minus the erode keys). The Sept 8 blocker — 706 of 1284 lots buried
+   because the lab's lots grew after the terrain — is closed by publishing the lab's blocks and ground
+   from the city bundle *before* the terrain pre-pass and letting that pre-pass grow the lab's lots
+   (`level_loader.cpp`: the pre-pass guard accepts published lab blocks), so their pads and block
+   grades reach the ground. Floorplan census on the lab metro: 1 burial of 1282 (was 706).
+
 **Measured (step 1).** piedmont_mini rectilinear 26.4 → 92.1 %, oblique corners 60.6 → 14.0 %;
 lanelab metro 59.5 → 81.5 %, 41.4 → 24.0 %; lattice metro 54.9 → 86.9 %, 44.5 → 19.8 %. Coverage
 fell about a quarter (yards, and the trapezoid leftovers are ground now) — the paving step is what
