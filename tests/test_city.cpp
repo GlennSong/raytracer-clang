@@ -876,6 +876,18 @@ TEST_CASE(tall_towers_wear_a_crown_and_beacons) {
     const int tall = litAbove(30, true, 4.5 + 30 * 3.2 - 0.1, red);
     CHECK(tall > 0);
     CHECK(red >= 4 * 24);   // four corner beacons, six faces of four vertices each
+    {   // ...each wearing a translucent halo bulb in its own part.
+        BuildingParams p;
+        p.floors = 30;
+        p.curtainWall = true;
+        p.seed = 9;
+        const BuildingMesh bm = growPlanBuilding({{0, 0}, {40, 0}, {40, 40}, {0, 40}}, p);
+        std::size_t haloTris = 0;
+        for (const RenderMesh& part : bm.parts)
+            if (part.materialIndex == static_cast<int>(PartId::BeaconGlow)) haloTris += part.indices.size() / 3;
+        CHECK(haloTris >= 4 * 32);
+        CHECK(materialFor(PartId::BeaconGlow, Vec3(1, 1, 1)).opacity < 1.0f);
+    }
     int redLow = 0;
     const int low = litAbove(4, false, 4.5 + 4 * 3.2 - 0.1, redLow);
     CHECK(low == 0);

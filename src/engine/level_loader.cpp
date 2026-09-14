@@ -4362,23 +4362,33 @@ bool LevelLoader::load(const std::string& path,
                     if (static_cast<PartId>(pi) == PartId::GlassLit)
                         // White: the pane's vertex colour is its tint (litTint, FLAG_EMISSIVE_VERTEX_TINT).
                         world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 1.3});
-                    if (static_cast<PartId>(pi) == PartId::Beacon) {
-                        // Aviation beacons: bright, and FLASHING on a phase hashed from where the
-                        // chunk stands (beacon chunks are cut small, so neighbouring towers differ).
+                    const bool beaconFamily = static_cast<PartId>(pi) == PartId::Beacon ||
+                                              static_cast<PartId>(pi) == PartId::BeaconGlow ||
+                                              static_cast<PartId>(pi) == PartId::BeaconHaze;
+                    if (beaconFamily) {
+                        // Aviation beacons: FLASHING on a phase hashed from the 24 m cell the chunk
+                        // stands in (beacon chunks are cut that small, so neighbouring towers differ;
+                        // the lamp and its halo share the cell, so they share the phase).
                         Vec3 c(0, 0, 0);
                         for (const Vertex& v : chunk.vertices) c += v.position;
                         c = c * (1.0 / static_cast<double>(chunk.vertices.size()));
-                        // A quantised-position hash (the grammar's own is file-static): metre cells.
                         uint32_t h = 2166136261u;
-                        for (long long q : {static_cast<long long>(std::floor(c.x)), static_cast<long long>(std::floor(c.z))})
+                        for (long long q : {static_cast<long long>(std::floor(c.x / kBeaconChunk)), static_cast<long long>(std::floor(c.z / kBeaconChunk))})
                             for (int k = 0; k < 8; ++k) { h ^= static_cast<uint32_t>((q >> (8 * k)) & 0xff); h *= 16777619u; }
                         engine::BeaconBlink bb;
                         bb.phase = static_cast<float>(h & 0xffffu) / 65535.0f;
                         bb.period = 1.7f + 0.6f * static_cast<float>((h >> 16) & 0xffu) / 255.0f;   // 26-35 fpm
-                        // 1.3 ON SCREEN: the beacon pass divides by the night exposure adaptation
-                        // (up to 6x), because a red brighter than ~1 tonemaps to orange, then white
-                        // (Glenn, 2026-09-14: "white and red tinged"; checked in the night frames).
-                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 1.3});
+                        bb.baseOpacity = r.material.opacity;   // the halos fade out with the flash
+                        if (bb.baseOpacity < 1.0f) r.material.opacity = 0.0f;   // dark at noon by construction
+                        // ON SCREEN (the beacon pass divides by the night exposure adaptation, up
+                        // to 6x, because a red brighter than ~1 tonemaps to orange, then white —
+                        // Glenn: "white and red tinged"): the lamp itself 1.3, a saturated red; its
+                        // translucent halo hotter, so the blended haze crosses the bloom threshold
+                        // and the light GLOWS (Glenn: "missing an emissive quality").
+                        // On screen through their opacity: bulb 0.55 x 3.0 = 1.65, haze 0.22 x 4.5 = 1.0.
+                        const Real glow = static_cast<PartId>(pi) == PartId::BeaconGlow ? 3.0
+                                        : static_cast<PartId>(pi) == PartId::BeaconHaze ? 4.5 : 1.3;
+                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * glow});
                         world.add<engine::BeaconBlink>(e, bb);
                     }
                 };
@@ -4389,7 +4399,10 @@ bool LevelLoader::load(const std::string& path,
                         RenderMesh& pm = partsVec[pi];
                         if (pm.vertices.empty()) continue;
                         // Beacons chunk FINE (one tower, not one cell), so each roof can flash on its own phase.
-                        const double cellFor = static_cast<PartId>(pi) == PartId::Beacon ? kBeaconChunk : renderCell;
+                        const bool beaconPart = static_cast<PartId>(pi) == PartId::Beacon ||
+                                                static_cast<PartId>(pi) == PartId::BeaconGlow ||
+                                                static_cast<PartId>(pi) == PartId::BeaconHaze;
+                        const double cellFor = beaconPart ? kBeaconChunk : renderCell;
                         for (RenderMesh& chunk : chunkMeshByCell(pm, cellFor)) spawnChunk(pi, chunk, minDist, drawDist, scaleSmallParts);
                     }
                 };
@@ -4401,7 +4414,8 @@ bool LevelLoader::load(const std::string& path,
                         if (cp.flat && !threeTier) continue;   // the LOD1 tier is drawn only in three-tier mode
                         RenderMesh chunk;
                         if (!engine::lotcache::readLotPart(*grown.bundle, cp.section, chunk)) { LOG_WARN << "[lots] " << cp.section << ": unreadable, skipped"; continue; }
-                        if (static_cast<PartId>(cp.part) == PartId::Beacon) {
+                        if (static_cast<PartId>(cp.part) == PartId::Beacon || static_cast<PartId>(cp.part) == PartId::BeaconGlow ||
+                            static_cast<PartId>(cp.part) == PartId::BeaconHaze) {
                             // The bundle cut beacons per render cell; re-cut them fine so each roof flashes alone.
                             for (RenderMesh& sub : chunkMeshByCell(chunk, kBeaconChunk)) {
                                 if (cp.flat) spawnChunk(static_cast<std::size_t>(cp.part), sub, detailDistance, facadeDistance, false);

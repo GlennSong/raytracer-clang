@@ -74,7 +74,13 @@ enum class PartId : uint8_t {
              // (skyscrapers v2 M4): its own part so the loader can tag the
              // chunk BeaconBlink and the day/night pass can gate its emission
              // on the flash cycle (the FAA L-864 pattern, ~30 flashes/min).
-             // The mid-height ring stays steady (L-810) in GlassLit.
+             // The mid-height ring flashes with it (the FAA has every L-864
+             // level on a structure flash together).
+    BeaconGlow,   // the lamp's BULB: a translucent red sphere around each beacon
+             // (opacity 0.55, emissive, tinted) so the light reads as a glow,
+             // not a painted box — tagged and gated like Beacon, brighter.
+    BeaconHaze,   // the bulb's outer HAZE: a larger, fainter sphere (opacity
+             // 0.22) — the soft red corona around the lamp at any distance.
     Count    // KEEP LAST: materialIndexFor is the ordinal; arrays size by Count
 };
 

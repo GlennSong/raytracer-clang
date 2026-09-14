@@ -6653,8 +6653,18 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
     Glenn's night walk: the beacons read white with a red tinge (a 6× glow on a (1, 0.12, 0.08)
     tint clips to white in the tonemap — now 2.2× on (1, 0.04, 0.02)) and the mid ring floated off
     setback towers (it sat on the BASE plan's corners at half height — now on the tier at that
-    height, from `massStack`). Still owed: podium uplights, and a Lua-readable per-building lighting
-    spec (today the choices are hashed, not authored).
+    height, from `massStack`). Then "the red lights are missing an emissive quality": a saturated
+    red that stays red cannot be bright enough to bloom (the tonemap desaturates anything past ~1),
+    so the glow is GEOMETRY — every lamp wears two translucent spheres in their own parts, a bulb
+    (`PartId::BeaconGlow`, r 0.5, opacity 0.55) and a haze (`PartId::BeaconHaze`, r 1.1, opacity
+    0.22), tinted red, tagged `NightGlow` + `BeaconBlink` like the lamp; `applyBeaconBlink` scales
+    their emission AND their opacity by ramp × gate (`BeaconBlink::baseOpacity`), so by day and
+    between flashes the spheres are gone rather than grey balls. On screen the lamp is 1.3, the
+    bulb 1.65 through its opacity, the haze 1.0 — a red core with a soft red corona. A ring is at most
+    six lamps (a round plan's two dozen corners wore a crown of them), and the mid ring flashes with
+    the top (the FAA has every L-864 level flash together). Frames:
+    `~/Claude/buildings/ref/after_m5_night_beacon_halos.png`. Still owed: podium uplights, and a
+    Lua-readable per-building lighting spec (today the choices are hashed, not authored).
 
 11. **The core: shafts, stairwells and an elevator bank, climbable** (`core_plan.h`, plan M5/M6).
     A building of four floors and up (`BuildingParams::core` 0 = auto, 1 = never, 2 = always; Lua

@@ -411,6 +411,10 @@ struct BeaconBlink {
     float period = 2.0f;   // seconds per flash cycle
     float phase = 0.0f;    // cycles, 0..1
     float duty = 0.45f;    // lit fraction of the cycle
+    // A translucent halo's authored opacity: the pass scales the material's
+    // opacity by ramp x gate too, so the bulb vanishes by day and between
+    // flashes instead of hanging as a grey ball. 1 = opaque, left alone.
+    float baseOpacity = 1.0f;
 };
 
 // Level-authored city-simulation settings (ADR-0063): a top-level "citysim"

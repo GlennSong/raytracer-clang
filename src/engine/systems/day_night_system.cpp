@@ -597,6 +597,8 @@ void DayNightSystem::applyBeaconBlink(FrameContext& ctx) {
         [&](Entity, NightGlow& glow, BeaconBlink& b, Renderable& r) {
             const Real gate = ramp <= 0 ? Real(0) : beaconBlinkGate(blinkSeconds_, b.period, b.phase, b.duty);
             r.material.emission = glow.fullEmission * (ramp * gate / adapt);
+            if (b.baseOpacity < 1.0f)
+                r.material.opacity = b.baseOpacity * static_cast<float>(ramp * gate);
         });
 }
 

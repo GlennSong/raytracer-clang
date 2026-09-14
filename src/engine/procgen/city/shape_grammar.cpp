@@ -174,6 +174,19 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
             // NightGlow + BeaconBlink drive its emission, tinted per vertex.
             m.albedo = {0.14, 0.13, 0.13}; m.metallic = 0.4f; m.roughness = 0.55f;
             m.flags |= RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT; break;
+        case PartId::BeaconGlow:
+            // The lamp's bulb: a translucent sphere (the transparent pass),
+            // near-invisible by day (no albedo to speak of, no emission), a
+            // red glow at night — the "emissive quality" the painted box
+            // alone lacked (Glenn, 2026-09-14).
+            m.albedo = {0.02, 0.02, 0.02}; m.metallic = 0.0f; m.roughness = 1.0f;
+            m.opacity = 0.55f;
+            m.flags |= RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT; break;
+        case PartId::BeaconHaze:
+            // The bulb's corona: larger, fainter, the soft red halo.
+            m.albedo = {0.02, 0.02, 0.02}; m.metallic = 0.0f; m.roughness = 1.0f;
+            m.opacity = 0.22f;
+            m.flags |= RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT; break;
         case PartId::Trim:
             m.albedo = wallColor * 0.55; m.metallic = 0.0f; m.roughness = 0.7f; break;
         case PartId::Roof:
@@ -3597,15 +3610,43 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 // Pure red: with the glow's gain the tint's green and blue
                 // would read as pink-white once tonemapped (Glenn, 2026-09-14).
                 const Vec3 red(1.0, 0.04, 0.02);
-                // The roof corners FLASH (their own part, gated by BeaconBlink at
-                // runtime); the mid-height ring burns steady in the window part.
-                auto beacon = [&](const Vec2& v, const Vec2& toward, Real by, PartId part) {
+                // Every lamp FLASHES (the Beacon part, gated by BeaconBlink at
+                // runtime) and wears two translucent spheres — a bulb
+                // (BeaconGlow) and a fainter, larger haze (BeaconHaze) — so the
+                // light reads as a glow at any distance.
+                RenderMesh bulb, haze;
+                auto sphere = [&](RenderMesh& m, const Vec3& c, Real r) {
+                    // An octahedron subdivided once and pushed onto the sphere: 32 faces.
+                    const Vec3 ax[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+                    auto tri = [&](const Vec3& a, const Vec3& b, const Vec3& d) {
+                        const Vec3 A = c + a * r, B = c + b * r, D = c + d * r;
+                        MeshBuilder::emitTri(m, A, B, D, normalize(cross(B - A, D - A)), red);
+                    };
+                    auto face = [&](const Vec3& a, const Vec3& b, const Vec3& d) {
+                        const Vec3 ab = normalize(a + b), bd = normalize(b + d), da = normalize(d + a);
+                        tri(a, ab, da); tri(ab, b, bd); tri(da, bd, d); tri(ab, bd, da);
+                    };
+                    const Vec3 &px = ax[0], &nx = ax[1], &py = ax[2], &ny = ax[3], &pz = ax[4], &nz = ax[5];
+                    face(py, pz, px); face(py, px, nz); face(py, nz, nx); face(py, nx, pz);
+                    face(ny, px, pz); face(ny, nz, px); face(ny, nx, nz); face(ny, pz, nx);
+                };
+                auto beacon = [&](const Vec2& v, const Vec2& toward, Real by) {
                     const Vec2 pin = v + normalize(toward - v) * 0.35;
                     const Vec3 o(pin.x - 0.2, by, pin.y - 0.2);
                     emitBox(out, Scope{o, {Vec3(1, 0, 0), up, Vec3(0, 0, 1)}, Vec3(0.4, 0.5, 0.4)},
-                            part, red);
+                            PartId::Beacon, red);
+                    const Vec3 c(pin.x, by + 0.25, pin.y);
+                    sphere(bulb, c, 0.5);
+                    sphere(haze, c, 1.1);
                 };
-                for (const Vec2& v : cur) beacon(v, rc, y + 0.05 + params.parapet, PartId::Beacon);
+                // At most SIX lamps per ring: a round plan's two dozen corners
+                // would wear a crown of beacons (the skyline frame showed it).
+                auto ring = [&](const Poly2& poly, const Vec2& toward, Real by) {
+                    const std::size_t n = poly.size();
+                    const std::size_t step = n <= 6 ? 1 : (n + 5) / 6;
+                    for (std::size_t i = 0; i < n; i += step) beacon(poly[i], toward, by);
+                };
+                ring(cur, rc, y + 0.05 + params.parapet);
                 if (y >= 120.0) {
                     // The mid ring sits on the TIER at half height, not the
                     // base plan: above a setback the base's corners hang in
@@ -3615,9 +3656,10 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                     const Poly2* midPlan = &plan;
                     for (const MassTier& t : midTiers)
                         if (t.floor0 <= midFloor && t.plan.size() >= 3) midPlan = &t.plan;
-                    const Vec2 pc = centroid(*midPlan);
-                    for (const Vec2& v : *midPlan) beacon(v, pc, y * 0.5, PartId::GlassLit);
+                    ring(*midPlan, centroid(*midPlan), y * 0.5);
                 }
+                appendToPart(out, PartId::BeaconGlow, bulb);
+                appendToPart(out, PartId::BeaconHaze, haze);
             }
             if (params.curtainWall && params.floors >= 20 && ((nh >> 8) & 0xffu) < 100) {
                 const std::size_t e = static_cast<std::size_t>((nh >> 16) % cur.size());
