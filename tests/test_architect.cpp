@@ -89,7 +89,10 @@ TEST_CASE(new_recipes_keep_their_signatures) {
         CHECK(placeTypes.count(f.placeType) == 1);
         if (f.name == "art_deco_tower") {
             CHECK(f.params.spire);
-            CHECK(f.params.setbackFloors > 0);
+            // Stepped massing: the 1916 street-wall envelope on a tall one,
+            // uniform setbacks on a short one (ADR-0086 point 5).
+            CHECK(f.params.envelope == BuildingParams::Envelope::StreetWallSetback ||
+                  f.params.setbackFloors > 0);
         }
         if (f.name == "parking_garage") {
             CHECK(f.params.parkingDecks);

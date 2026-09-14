@@ -6566,6 +6566,18 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
    (1916 New York), tower-in-plaza (1961), podium-tower, slab, point tower, perimeter block, bundled
    taper — each turns the buildable and a floor count into a `MassStack` of rectilinear tiers that
    `storeyPlans` consumes instead of its uniform offset. New York first, per the owner.
+   *Landed first (2026-09-14):* `BuildingParams::Envelope` with seven numbers (`baseFloors`,
+   `setback1`, `stepFloors`, `stepDepth`, `towerFrac`, `towerFloor`) — numbers, not polygons, so the
+   ~350-byte regen key stays a POD and the interior derives the same tiers; `massStack(plan, params)`
+   (`shape_grammar.h`) is the one derivation, `storeyPlans` consumes it, `Envelope::None` reproduces
+   the old uniform offsets tier for tier (the census test pins that). The street-wall envelope: a base
+   of 3–6 floors on the whole plan, one 3–9 m setback on every side, a 1.5–3 m step every 6–10 floors,
+   and from the first or second step a centred shaft of 28–42 % of the plan (`streetWallEnvelope`,
+   `architect.cpp`) — worn by `stepped_tower` and `art_deco_tower` at 10 floors and over; shorter ones
+   keep uniform setbacks. Lua reads `envelope = "street_wall_setback"` and the six knobs
+   (`readBuildingParamsOnto`). Still to come: the tower-in-plaza site composition, podium-tower,
+   slab, point tower, perimeter block, bundled taper, and a per-street (not all-sides) sky-exposure
+   plane.
 
 6. **The building pad is the parcel, at the front street's level, and it never ends inside the
    building.** The old pad was the plan plus a 2.2 m apron with a 5 m feather, which reached the lot

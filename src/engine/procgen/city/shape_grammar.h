@@ -195,6 +195,17 @@ struct StoreyPlan {
 std::vector<StoreyPlan> storeyPlans(const Poly2& plan,
                                     const BuildingParams& params);
 
+// The MASS STACK (ADR-0086 point 5): the tiers a building is built from — one
+// plan per tier and the floor it starts at, the base first — derived from the
+// plan and the params alone, so the exterior massing, the interior and any
+// audit agree. Envelope::None reproduces the uniform setbackEvery/setbackFloors
+// offsets exactly; storeyPlans consumes this.
+struct MassTier {
+    Poly2 plan;
+    int floor0 = 0;   // the first floor (above the ground storey) this tier serves
+};
+std::vector<MassTier> massStack(const Poly2& plan, const BuildingParams& params);
+
 // The street-facing edge index of a CCW plan — the edge the door lands on.
 // Shared by growPlanBuilding, interiorLayout callers and growInterior so no
 // two layers ever pick different front doors.
@@ -354,6 +365,24 @@ struct BuildingParams {
     int   tiers = 5;             // pagoda: number of stacked tiers (odd reads best)
     int   sides = 32;            // cylinder: facets around the round mass
     uint32_t seed = 0;
+    // MASSING ENVELOPE (skyscrapers v2, ADR-0086 point 5): how the mass above
+    // the street wall is shaped, as a few numbers so the regen key stays a
+    // POD and exterior and interior derive the same tiers (massStack).
+    //   None               today's uniform setbackEvery/setbackFloors offsets.
+    //   StreetWallSetback  the 1916 New York rule: the base fills the plan for
+    //                      `baseFloors`, steps back `setback1` on every side
+    //                      above it, then `stepDepth` every `stepFloors`, and
+    //                      from `towerFloor` a shaft covering `towerFrac` of
+    //                      the base plan rises to the top (Empire State,
+    //                      Chrysler). Floors count above the ground storey.
+    enum class Envelope : uint8_t { None, StreetWallSetback };
+    Envelope envelope = Envelope::None;
+    int   baseFloors = 5;
+    Real  setback1 = 6.0;
+    int   stepFloors = 10;       // 0 = no later steps
+    Real  stepDepth = 3.0;
+    Real  towerFrac = 0.35;      // 0 = no shaft
+    int   towerFloor = 20;       // 0 = no shaft
 };
 
 // Facade DETAIL level (city-render-perf R2): the same grammar, two emissions.

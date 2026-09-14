@@ -23,6 +23,7 @@ BuildingParams everyFieldSet() {
     p.quoins = true; p.groundBays = 7; p.portico = 4; p.entranceSteps = true; p.dome = true; p.roofStyle = BuildingParams::RoofStyle::Sawtooth; p.roofPitch = 0.83; p.retailStreetOnly = true;
     p.balconies = true; p.porch = true; p.chimney = true; p.spire = true; p.steeple = true; p.parkingDecks = true; p.sideBays = 5; p.trimColor = Vec3(0.7, 0.8, 0.9);
     p.shape = BuildingShape::Cylinder; p.tiers = 9; p.sides = 48; p.seed = 0xDEADBEEFu;
+    p.envelope = BuildingParams::Envelope::StreetWallSetback; p.baseFloors = 6; p.setback1 = 7.5; p.stepFloors = 9; p.stepDepth = 2.25; p.towerFrac = 0.4; p.towerFloor = 24;
     return p;
 }
 bool sameVec3(const Vec3& a, const Vec3& b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
@@ -34,7 +35,8 @@ bool sameParams(const BuildingParams& a, const BuildingParams& b) {
         && a.window.head == b.window.head && a.window.archRise == b.window.archRise && a.window.frameWidth == b.window.frameWidth && a.window.lightsX == b.window.lightsX && a.window.lightsY == b.window.lightsY && a.window.sill == b.window.sill && a.window.hood == b.window.hood && sameVec3(a.window.frameColor, b.window.frameColor)
         && a.quoins == b.quoins && a.groundBays == b.groundBays && a.portico == b.portico && a.entranceSteps == b.entranceSteps && a.dome == b.dome && a.roofStyle == b.roofStyle && a.roofPitch == b.roofPitch && a.retailStreetOnly == b.retailStreetOnly
         && a.balconies == b.balconies && a.porch == b.porch && a.chimney == b.chimney && a.spire == b.spire && a.steeple == b.steeple && a.parkingDecks == b.parkingDecks && a.sideBays == b.sideBays && sameVec3(a.trimColor, b.trimColor)
-        && a.shape == b.shape && a.tiers == b.tiers && a.sides == b.sides && a.seed == b.seed;
+        && a.shape == b.shape && a.tiers == b.tiers && a.sides == b.sides && a.seed == b.seed
+        && a.envelope == b.envelope && a.baseFloors == b.baseFloors && a.setback1 == b.setback1 && a.stepFloors == b.stepFloors && a.stepDepth == b.stepDepth && a.towerFrac == b.towerFrac && a.towerFloor == b.towerFloor;
 }
 bool samePoly(const Poly2& a, const Poly2& b) { if (a.size() != b.size()) return false; for (size_t i = 0; i < a.size(); ++i) if (a[i].x != b[i].x || a[i].y != b[i].y) return false; return true; }
 }  // namespace

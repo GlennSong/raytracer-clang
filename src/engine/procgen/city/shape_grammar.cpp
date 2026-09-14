@@ -2363,6 +2363,85 @@ std::size_t entranceEdgeFor(const Poly2& plan, const BuildingParams& params) {
     return entranceEdge;
 }
 
+namespace {
+// A tier inset that EXPLODES must not become the next tier (see the exterior
+// loop's history: "one of the triangle skyscrapers went haywire when building
+// the top"): valid only if it truly shrank, every vertex stayed inside the
+// tier below, and no edge flipped direction.
+bool tierInsetOk(const Poly2& outer, const Poly2& inner) {
+    if (inner.size() != outer.size()) return false;
+    const Real ai = area(inner);
+    if (ai < 60.0 || ai >= area(outer)) return false;
+    for (std::size_t k = 0; k < inner.size(); ++k) {
+        if (!pointInPolygon(outer, inner[k])) return false;
+        Vec2 d0 = outer[(k + 1) % outer.size()] - outer[k];
+        Vec2 d1 = inner[(k + 1) % inner.size()] - inner[k];
+        if (dot(d0, d1) <= 0) return false;   // edge flipped
+    }
+    return true;
+}
+}  // namespace
+
+std::vector<MassTier> massStack(const Poly2& planIn, const BuildingParams& params) {
+    std::vector<MassTier> out;
+    Poly2 plan = planIn;
+    if (plan.size() < 3) return out;
+    ensureCCW(plan);
+    out.push_back({plan, 0});
+    Poly2 cur = plan;
+    if (params.envelope == BuildingParams::Envelope::StreetWallSetback &&
+        params.floors > params.baseFloors + 1 && params.baseFloors > 0) {
+        // The street wall, then the first (big) setback on every side.
+        int f = params.baseFloors;
+        {
+            Poly2 next = offsetPlan(cur, params.setback1);
+            if (tierInsetOk(cur, next)) { out.push_back({next, f}); cur = next; }
+        }
+        // Later steps, every stepFloors, until the shaft takes over.
+        if (params.stepFloors > 0 && params.stepDepth > 0)
+            for (int g = f + params.stepFloors; g < params.floors; g += params.stepFloors) {
+                if (params.towerFloor > 0 && params.towerFrac > 0 && g >= params.towerFloor) break;
+                Poly2 next = offsetPlan(cur, params.stepDepth);
+                if (!tierInsetOk(cur, next)) break;
+                out.push_back({next, g});
+                cur = next;
+            }
+        // The SHAFT: a rectangle on the current tier's box axes covering towerFrac
+        // of the base plan, centred, shrunk until it sits inside the tier below.
+        if (params.towerFrac > 0 && params.towerFloor > 0 && params.towerFloor < params.floors) {
+            const Real want = area(plan) * params.towerFrac;
+            if (want < area(cur) * 0.95) {
+                const OBB2 ob = orientedBoundingBox(cur);
+                const Real box = std::max(Real(1), 4 * ob.half[0] * ob.half[1]);
+                Real hw = ob.half[0] * std::sqrt(want / box), hd = ob.half[1] * std::sqrt(want / box);
+                const int floor0 = std::max(params.towerFloor, out.back().floor0 + 1);
+                for (int attempt = 0; attempt < 5 && std::min(hw, hd) >= 4.0; ++attempt) {
+                    Poly2 shaft{ob.center - ob.axis[0] * hw - ob.axis[1] * hd,
+                                ob.center + ob.axis[0] * hw - ob.axis[1] * hd,
+                                ob.center + ob.axis[0] * hw + ob.axis[1] * hd,
+                                ob.center - ob.axis[0] * hw + ob.axis[1] * hd};
+                    ensureCCW(shaft);
+                    bool inside = true;
+                    for (const Vec2& q : shaft)
+                        if (!pointInPolygon(cur, q + (ob.center - q) * 0.02)) { inside = false; break; }
+                    if (inside && floor0 < params.floors) { out.push_back({shaft, floor0}); break; }
+                    hw *= 0.9;
+                    hd *= 0.9;
+                }
+            }
+        }
+        return out;
+    }
+    // Envelope::None: the uniform offsets, exactly as the storey stack always did.
+    for (int i = 1; i < params.floors; ++i) {
+        if (params.setbackFloors > 0 && params.setbackEvery > 0 && i % params.setbackFloors == 0) {
+            Poly2 next = offsetPlan(cur, params.setbackEvery);
+            if (tierInsetOk(cur, next)) { cur = next; out.push_back({cur, i}); }
+        }
+    }
+    return out;
+}
+
 std::vector<StoreyPlan> storeyPlans(const Poly2& planIn,
                                     const BuildingParams& params) {
     std::vector<StoreyPlan> out;
@@ -2370,33 +2449,16 @@ std::vector<StoreyPlan> storeyPlans(const Poly2& planIn,
     if (plan.size() < 3) return out;
     ensureCCW(plan);
     out.push_back({plan, 0, params.groundHeight, 0});
-    // A tier inset that EXPLODES must not become the next tier (see the
-    // exterior loop's history: "one of the triangle skyscrapers went haywire
-    // when building the top"): valid only if it truly shrank, every vertex
-    // stayed inside the tier below, and no edge flipped direction.
-    auto insetOk = [](const Poly2& outer, const Poly2& inner) {
-        if (inner.size() != outer.size()) return false;
-        const Real ai = area(inner);
-        if (ai < 60.0 || ai >= area(outer)) return false;
-        for (std::size_t k = 0; k < inner.size(); ++k) {
-            if (!pointInPolygon(outer, inner[k])) return false;
-            Vec2 d0 = outer[(k + 1) % outer.size()] - outer[k];
-            Vec2 d1 = inner[(k + 1) % inner.size()] - inner[k];
-            if (dot(d0, d1) <= 0) return false;   // edge flipped
-        }
-        return true;
-    };
+    const std::vector<MassTier> tiers = massStack(plan, params);
     Poly2 cur = plan;
     Real y = params.groundHeight;
     int tier = 0;
+    std::size_t next = 1;
     for (int i = 0; i < params.floors; ++i) {
-        if (params.setbackFloors > 0 && params.setbackEvery > 0 && i > 0 &&
-            i % params.setbackFloors == 0) {
-            Poly2 next = offsetPlan(cur, params.setbackEvery);
-            if (insetOk(cur, next)) {
-                cur = next;
-                ++tier;
-            }
+        while (next < tiers.size() && tiers[next].floor0 <= i) {
+            cur = tiers[next].plan;
+            ++tier;
+            ++next;
         }
         out.push_back({cur, y, params.floorHeight, tier});
         y += params.floorHeight;

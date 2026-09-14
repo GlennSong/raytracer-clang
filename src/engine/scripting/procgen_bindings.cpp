@@ -892,6 +892,21 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     p.porch = optBoolField(L, idx, "porch", p.porch);
     p.chimney = optBoolField(L, idx, "chimney", p.chimney);
     p.spire = optBoolField(L, idx, "spire", p.spire);
+    // The massing envelope (ADR-0086 point 5): envelope = "none" | "street_wall_setback",
+    // base_floors, setback1, step_floors, step_depth, tower_frac, tower_floor.
+    lua_getfield(L, idx, "envelope");
+    if (lua_isstring(L, -1)) {
+        const std::string e = lua_tostring(L, -1);
+        p.envelope = e == "street_wall_setback" ? BuildingParams::Envelope::StreetWallSetback
+                                                : BuildingParams::Envelope::None;
+    }
+    lua_pop(L, 1);
+    p.baseFloors = static_cast<int>(optField(L, idx, "base_floors", p.baseFloors));
+    p.setback1   = static_cast<Real>(optField(L, idx, "setback1", p.setback1));
+    p.stepFloors = static_cast<int>(optField(L, idx, "step_floors", p.stepFloors));
+    p.stepDepth  = static_cast<Real>(optField(L, idx, "step_depth", p.stepDepth));
+    p.towerFrac  = static_cast<Real>(optField(L, idx, "tower_frac", p.towerFrac));
+    p.towerFloor = static_cast<int>(optField(L, idx, "tower_floor", p.towerFloor));
     p.steeple = optBoolField(L, idx, "steeple", p.steeple);
     p.parkingDecks = optBoolField(L, idx, "parking_decks", p.parkingDecks);
     p.sideBays = static_cast<int>(optField(L, idx, "side_bays", p.sideBays));

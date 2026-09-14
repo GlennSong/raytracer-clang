@@ -361,17 +361,38 @@ void recipeHotel(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 
 // The ART-DECO tower: dark masonry, tight setback tiers, and the stepped
 // crown + mast SPIRE — the 1930s skyline silhouette.
+// The 1916 New York envelope (ADR-0086 point 5): a street wall of 3-6 floors on
+// the whole plan, one big setback above it, a step every 6-10 floors, and a
+// shaft of 28-42 % of the plan from the second step up — the Empire State and
+// Chrysler silhouette. A tower too short for the stack keeps uniform setbacks.
+void streetWallEnvelope(BuildingParams& p, Hash& rng, const RecipeCtx& cx) {
+    if (p.floors < 10) {
+        p.setbackFloors = rng.irange(3, 5);
+        p.setbackEvery = rng.range(1.2, 1.8);
+        return;
+    }
+    p.envelope = BuildingParams::Envelope::StreetWallSetback;
+    p.baseFloors = rng.irange(3, 6);
+    p.setback1 = cx.roomy ? rng.range(5.0, 9.0) : rng.range(3.0, 5.0);
+    p.stepFloors = rng.irange(6, 10);
+    p.stepDepth = rng.range(1.5, 3.0);
+    p.towerFrac = rng.range(0.28, 0.42);
+    p.towerFloor = p.baseFloors + p.stepFloors * rng.irange(1, 2);
+    if (p.towerFloor >= p.floors - 3) p.towerFloor = 0;   // no room for a shaft: steps only
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+}
+
 void recipeArtDecoTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
     p.floors = rng.irange(9, 14) + static_cast<int>(cx.coreness * 20);
     p.groundRetail = true;
     dress(p, rng.unit() < 0.5 ? FacadeStyle::DarkBrick : FacadeStyle::Sandstone,
           rng);
-    p.setbackFloors = rng.irange(3, 5);
-    p.setbackEvery = rng.range(1.2, 1.8);
     p.spire = true;
     p.window.lightsY = 2;
     cx.slender = 2.8 + cx.coreness * 1.5;
+    streetWallEnvelope(p, rng, cx);
     out.placeType = "office";
     out.name = "art_deco_tower";
 }
@@ -382,9 +403,8 @@ void recipeSteppedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     p.floors = rng.irange(10, 16) + static_cast<int>(cx.coreness * 14);
     p.groundRetail = true;
     dress(p, rng.unit() < 0.5 ? FacadeStyle::Sandstone : FacadeStyle::Brick, rng);
-    p.setbackFloors = rng.irange(2, 4);
-    p.setbackEvery = rng.range(0.9, 1.4);
     cx.slender = 2.6 + cx.coreness * 1.2;
+    streetWallEnvelope(p, rng, cx);
     out.placeType = "office";
     out.name = "stepped_tower";
 }

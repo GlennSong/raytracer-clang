@@ -751,3 +751,47 @@ TEST_CASE(plan_building_prow_tiers_stay_bounded) {
         CHECK(v.position.z < hi.y + 2.0);
     }
 }
+
+// The MASS STACK (skyscrapers v2, ADR-0086 point 5): the 1916 New York
+// envelope stacks a street wall, a first setback, later steps and a shaft;
+// the storey stack follows it floor by floor; Envelope::None reproduces the
+// uniform setback offsets exactly.
+TEST_CASE(street_wall_setback_envelope_stacks_a_base_steps_and_a_shaft) {
+    BuildingParams p;
+    p.floors = 30;
+    p.envelope = BuildingParams::Envelope::StreetWallSetback;
+    p.baseFloors = 5;
+    p.setback1 = 6.0;
+    p.stepFloors = 8;
+    p.stepDepth = 2.0;
+    p.towerFrac = 0.35;
+    p.towerFloor = 21;
+    const Poly2 plan = {{0, 0}, {48, 0}, {48, 36}, {0, 36}};
+    const std::vector<MassTier> tiers = massStack(plan, p);
+    CHECK(tiers.size() >= 4u);   // base, the first setback, a step, the shaft
+    for (std::size_t i = 1; i < tiers.size(); ++i) {
+        CHECK(tiers[i].floor0 > tiers[i - 1].floor0);
+        CHECK(area(tiers[i].plan) < area(tiers[i - 1].plan));
+        CHECK(tiers[i].plan.size() == 4u);   // rectilinear on a rectangular plan
+        for (const Vec2& v : tiers[i].plan) CHECK(pointInPolygon(tiers[i - 1].plan, v));
+    }
+    CHECK(tiers[1].floor0 == 5);
+    const Real shaft = area(tiers.back().plan);
+    CHECK(shaft > 0.25 * area(plan) && shaft < 0.45 * area(plan));
+    const std::vector<StoreyPlan> storeys = storeyPlans(plan, p);
+    CHECK(storeys.size() == 31u);          // the ground storey + 30 floors
+    CHECK(storeys[5].tier == 0);           // floor 4 still wears the street wall
+    CHECK(storeys[6].tier == 1);           // floor 5 wears the first setback
+    CHECK(storeys.back().tier == static_cast<int>(tiers.size()) - 1);
+    BuildingMesh bm = growPlanBuilding(plan, p);
+    CHECK(!bm.parts.empty());
+    CHECK(bm.height > 30 * p.floorHeight);
+    // Envelope::None: the uniform offsets, tier by tier as before.
+    BuildingParams q;
+    q.floors = 12;
+    q.setbackFloors = 4;
+    q.setbackEvery = 1.5;
+    const std::vector<StoreyPlan> s2 = storeyPlans(plan, q);
+    CHECK(s2.back().tier == 2);
+    CHECK(s2[5].tier == 1);                // floor 4: the first uniform setback
+}
