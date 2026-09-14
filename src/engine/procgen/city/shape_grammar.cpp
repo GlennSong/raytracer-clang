@@ -3490,6 +3490,66 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                             plainLip ? PartId::Trim : params.wallPart,
                             materialFor(PartId::Trim, wallColor).albedo * 0.9);
         }
+        // NIGHT DRESSING of a tall roof (skyscrapers v2 M4, step 2): the
+        // things that give a real skyline its colours after dark. All of it
+        // is lit glass with a per-building TINT in the vertex colour
+        // (FLAG_EMISSIVE_VERTEX_TINT), deterministic from the roof's position,
+        // and emitted for both LOD tiers — at night the skyline IS these.
+        //  - a CROWN BAND under the coping on towers of 15+ floors (curtain
+        //    walls from 12): white, amber, blue, red, green or purple, or none;
+        //  - AVIATION BEACONS: steady red lamps at the roof corners of any
+        //    building over 61 m, and a second ring at mid-height past 120 m;
+        //  - a SIGNAGE BOX high on one face of a curtain-wall tower.
+        if (cur.size() >= 3 && params.floors >= 12) {
+            const Vec2 rc = centroid(cur);
+            const uint32_t nh = positionHash(Vec3(rc.x, y, rc.y) + Vec3(0.71, 0.29, 0.13));
+            const Real u = static_cast<Real>(nh & 0xffu) / 255.0;
+            RenderMesh lit;
+            const Vec3 up(0, 1, 0);
+            const bool tall = params.floors >= 15 || (params.curtainWall && params.floors >= 12);
+            if (tall && u >= 0.30) {
+                Vec3 crown(1.0, 0.97, 0.90);                       // white
+                if (u >= 0.55 && u < 0.70) crown = Vec3(1.0, 0.75, 0.35);   // amber
+                else if (u >= 0.70 && u < 0.80) crown = Vec3(0.45, 0.60, 1.0);   // blue
+                else if (u >= 0.80 && u < 0.88) crown = Vec3(1.0, 0.25, 0.20);   // red
+                else if (u >= 0.88 && u < 0.94) crown = Vec3(0.30, 1.0, 0.50);   // green
+                else if (u >= 0.94) crown = Vec3(0.75, 0.40, 1.0);              // purple
+                const Real bandH = 0.5, bandY = y + 0.05 + std::max(Real(0.6), params.parapet) - 0.7;
+                for (std::size_t e = 0; e < cur.size(); ++e) {
+                    const FaceRect fr = planEdgeRect(cur, e, bandY, bandH);
+                    const Vec3 o = fr.n * 0.03;
+                    emitQuad(lit, fr.at(0, 0) + o, fr.at(fr.width, 0) + o,
+                             fr.at(fr.width, bandH) + o, fr.at(0, bandH) + o, fr.n, crown);
+                }
+            }
+            if (y >= 61.0) {
+                const Vec3 red(1.0, 0.12, 0.08);
+                auto beacon = [&](const Vec2& v, const Vec2& toward, Real by) {
+                    const Vec2 pin = v + normalize(toward - v) * 0.35;
+                    const Vec3 o(pin.x - 0.2, by, pin.y - 0.2);
+                    emitBox(out, Scope{o, {Vec3(1, 0, 0), up, Vec3(0, 0, 1)}, Vec3(0.4, 0.5, 0.4)},
+                            PartId::GlassLit, red);
+                };
+                for (const Vec2& v : cur) beacon(v, rc, y + 0.05 + params.parapet);
+                if (y >= 120.0) {
+                    const Vec2 pc = centroid(plan);
+                    for (const Vec2& v : plan) beacon(v, pc, y * 0.5);
+                }
+            }
+            if (params.curtainWall && params.floors >= 20 && ((nh >> 8) & 0xffu) < 100) {
+                const std::size_t e = static_cast<std::size_t>((nh >> 16) % cur.size());
+                const FaceRect fr = planEdgeRect(cur, e, y - 2.6, 1.6);
+                const Real w = std::min(Real(8.0), fr.width * 0.5);
+                if (w >= 3.0) {
+                    const Real x0 = (fr.width - w) * 0.5;
+                    const Vec3 o = fr.n * 0.06;
+                    static const Vec3 signs[4] = {{1.0, 0.98, 0.92}, {0.3, 0.95, 1.0}, {1.0, 0.2, 0.15}, {1.0, 0.7, 0.25}};
+                    emitQuad(lit, fr.at(x0, 0) + o, fr.at(x0 + w, 0) + o, fr.at(x0 + w, 1.6) + o,
+                             fr.at(x0, 1.6) + o, fr.n, signs[(nh >> 24) & 3u]);
+                }
+            }
+            appendToPart(out, PartId::GlassLit, lit);
+        }
         // Crown seated on the top tier's oriented frame: a DOME rotunda for
         // capitols/town halls, else the mechanical penthouse + tank.
         Vec3 r3(topObb.axis[0].x, 0, topObb.axis[0].y);

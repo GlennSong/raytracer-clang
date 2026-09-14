@@ -6634,8 +6634,15 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
     outside, and the loader's night glow for lit glass is white (`1.3`), the colour now living in the
     pane. Rejected: a PartId per tint (coarser, and a material per colour per cell). Verified in the
     Vulkan viewer's night frames; the Metal and WebGPU edits mirror it and were not compiled here.
-    Still to come in this milestone: a lighting spec per building (crown styles and colours, signage
-    boxes, podium uplights, aviation beacons with a blink system).
+    *Roof dressing (step 2, same day):* on a tall roof, in both LOD tiers and as lit glass with a
+    per-building tint hashed from the roof's position — a **crown band** under the coping on towers of
+    15 floors and up (curtain walls from 12): none 30 %, white 25 %, amber 15 %, blue 10 %, red 8 %,
+    green 6 %, purple 6 %; steady red **aviation beacons** at the roof corners of any building over
+    61 m and a second ring at mid-height past 120 m (the FAA's 200 ft threshold; a blink system is
+    still owed); a lit **signage box** high on one face of two in five curtain-wall towers of 20+
+    floors in white, cyan, red or amber. Test `tall_towers_wear_a_crown_and_beacons`. Still owed: the
+    blink system, podium uplights, and a Lua-readable per-building lighting spec (today the choices
+    are hashed, not authored).
 
 **Measured (step 1).** piedmont_mini rectilinear 26.4 → 92.1 %, oblique corners 60.6 → 14.0 %;
 lanelab metro 59.5 → 81.5 %, 41.4 → 24.0 %; lattice metro 54.9 → 86.9 %, 44.5 → 19.8 %. Coverage

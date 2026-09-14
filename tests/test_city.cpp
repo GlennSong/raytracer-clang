@@ -842,3 +842,38 @@ TEST_CASE(lit_panes_carry_a_tint_palette) {
     const auto again = tints(true);
     CHECK(again == office);
 }
+
+// NIGHT DRESSING (skyscrapers v2 M4, step 2): a tall tower wears a crown band
+// under its coping and red aviation beacons at its roof corners, all as lit
+// glass with a per-building tint; a short house wears none of it.
+TEST_CASE(tall_towers_wear_a_crown_and_beacons) {
+    auto litAbove = [](int floors, bool curtain, Real minY, int& red) {
+        BuildingParams p;
+        p.floors = floors;
+        p.curtainWall = curtain;
+        p.seed = 9;
+        const Poly2 plan = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+        BuildingMesh bm = growPlanBuilding(plan, p);
+        int n = 0;
+        red = 0;
+        for (const RenderMesh& part : bm.parts) {
+            if (part.materialIndex != static_cast<int>(PartId::GlassLit)) continue;
+            for (const Vertex& v : part.vertices) {
+                if (v.position.y < minY) continue;
+                ++n;
+                if (v.color.x > 0.9f && v.color.y < 0.2f) ++red;
+            }
+        }
+        return n;
+    };
+    int red = 0;
+    // 30 floors of 3.2 m + a 4.5 m ground storey: the roof is over 61 m, so
+    // beacons and (for a curtain wall) a crown or signage sit above it.
+    const int tall = litAbove(30, true, 4.5 + 30 * 3.2 - 0.1, red);
+    CHECK(tall > 0);
+    CHECK(red >= 4 * 24);   // four corner beacons, six faces of four vertices each
+    int redLow = 0;
+    const int low = litAbove(4, false, 4.5 + 4 * 3.2 - 0.1, redLow);
+    CHECK(low == 0);
+    CHECK(redLow == 0);
+}
