@@ -5,11 +5,11 @@
     "cars": -1,
     "debugWidgets": false,
     "detailDistance": 300,
-    "downtownRadius": 160,
+    "downtownRadius": 300,
     "facadeDistance": 950,
     "hoursPerSecond": 0.05,
     "hubRadius": 240,
-    "midtownRadius": 340,
+    "midtownRadius": 600,
     "pedestrians": -1,
     "perceptionReliability": 1.0,
     "plinth": 0.45,
@@ -136,7 +136,7 @@
     "friction": 0.5,
     "position": [
       -139.39,
-      3.443292655789853,
+      3.4457252007535963,
       -289.59
     ]
   },

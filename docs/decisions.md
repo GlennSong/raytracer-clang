@@ -6602,6 +6602,18 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
    (`level_loader.cpp`: the pre-pass guard accepts published lab blocks), so their pads and block
    grades reach the ground. Floorplan census on the lab metro: 1 burial of 1282 (was 706).
 
+9. **Coreness is a plateau with shoulders, and the downtown is as big as the owner asked for.**
+   Height lifts and the financial grain read `sqrt(1 − d / innerRadius)` in two places and 0 for every
+   lot outside the financial rim — a downtown of seven buildings. One function now (`corenessAt` in
+   `growLotBuildings`): 1 on a plateau over the inner half of `downtownRadius`, easing linearly to 0 at
+   `midtownRadius`; the commercial grain widens toward downtown (13×30 m at the rim to 35×45 m where
+   coreness is full) so the commercial tower recipes have plates the slenderness cap lets them rise on —
+   the skyline's shoulders. Both metros: `downtownRadius` 160 → 300, `midtownRadius` 340 → 600.
+   Measured: lattice metro towers > 20 storeys 6 → 27, > 40 storeys 0 → 16, tallest 40 → 58, financial
+   buildings 19 → 46, commercial max 25 storeys; lab metro > 20: 1 → 16, > 40: 0 → 6, tallest 37 → 58,
+   financial 8 → 29. Poke gate still passing (48 / 419 / 1343). Side effect to watch: bigger grain on a
+   small level (piedmont_mini) sends more blocks to the blind bisection (23 → 35 of 82).
+
 **Measured (step 1).** piedmont_mini rectilinear 26.4 → 92.1 %, oblique corners 60.6 → 14.0 %;
 lanelab metro 59.5 → 81.5 %, 41.4 → 24.0 %; lattice metro 54.9 → 86.9 %, 44.5 → 19.8 %. Coverage
 fell about a quarter (yards, and the trapezoid leftovers are ground now) — the paving step is what

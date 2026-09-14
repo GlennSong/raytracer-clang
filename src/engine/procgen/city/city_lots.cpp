@@ -1035,6 +1035,21 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // grades (see the grading step below), so PASS B/C grow on terraced ground.
     LotParams p = pIn;
     std::vector<LotBuilding> out;
+    // CORENESS (skyscrapers v2 M3 — the owner: "go as big as we can"): 1 on a
+    // PLATEAU over the inner half of the downtown radius, easing linearly to 0
+    // at the midtown radius — a cluster with shoulders, not a spike at the one
+    // lot nearest the centre. The financial grain, the commercial grain near
+    // downtown and every recipe's height lift read this one function; before,
+    // it was sqrt(1 - d/innerRadius) in two places and 0 for every lot outside
+    // the financial rim, which is why a "downtown" was seven buildings.
+    auto corenessAt = [&](const Vec2& q) {
+        const Real d = (q - p.center).length();
+        const Real plateau = 0.5 * std::max(Real(1), p.innerRadius);
+        const Real edge = std::max(p.midRadius, p.innerRadius + Real(1));
+        if (d <= plateau) return Real(1);
+        if (d >= edge) return Real(0);
+        return (edge - d) / (edge - plateau);
+    };
     // The plan counters always run (the build-end density line below reads
     // them); `debug` just decides whether the caller sees them too.
     LotPlanDebug localDbg;
@@ -1559,9 +1574,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 // Big plates, bigger still toward the hub: the core mints
                 // 42-55 m frontages x 48-60 m depths, so glass/podium towers
                 // stand on real floor plates instead of rowhouse slots.
-                const Real cness = std::sqrt(std::max(
-                    Real(0), 1.0 - (footC - p.center).length() /
-                                       std::max(Real(1), p.innerRadius)));
+                const Real cness = corenessAt(footC);
                 const Real ct = std::max(Real(0), (cness - 0.5) * 2.0);
                 bf.pp.frontWidth = 42 + 13 * ct;   // 42 -> 55 at the hub
                 bf.pp.lotDepth = 48 + 12 * ct;     // 48 -> 60
@@ -1573,11 +1586,16 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 // neighbours' facades never share a plane; a short rear yard.
                 bf.yards = Yards{0.0, 0.3, 3.0};
                 break; }
-            case DistrictTag::Commercial:  // narrow, deep retail frontage
-                bf.pp.frontWidth = 13; bf.pp.lotDepth = 30;
-                bf.pp.targetArea = 300; bf.lotSetback = 0.7;
+            case DistrictTag::Commercial: {  // narrow, deep retail frontage...
+                // ...that widens toward downtown into MIDTOWN plates (skyscrapers v2 M3):
+                // the shoulders of the skyline are commercial towers, and a tower needs
+                // a plate the slenderness cap will let it rise on. 13 x 30 m at the rim,
+                // 35 x 45 m where coreness is full.
+                const Real cc = corenessAt(footC);
+                bf.pp.frontWidth = 13 + 22 * cc; bf.pp.lotDepth = 30 + 15 * cc;
+                bf.pp.targetArea = 300 + 1200 * cc; bf.lotSetback = 0.7;
                 bf.yards = Yards{0.0, 0.3, 3.0};
-                bf.buildChance = std::min(Real(1), p.buildChance + 0.06); break;
+                bf.buildChance = std::min(Real(1), p.buildChance + 0.06); break; }
             case DistrictTag::OldTown:     // small, tight, narrow
                 bf.pp.frontWidth = 11; bf.pp.lotDepth = 22;
                 bf.pp.targetArea = 210;
@@ -2346,9 +2364,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // financial district's rim — the architect grows the skyscraper
             // cluster from it. sqrt widens the peak so the cluster is a
             // CLUSTER, not one tall building at the exact centre.
-            const Real coreness = std::sqrt(std::max(
-                Real(0), 1.0 - (b.site - p.center).length() /
-                                   std::max(Real(1), p.innerRadius)));
+            const Real coreness = corenessAt(b.site);
             BuildingRecipe rec =
                 cand.landmark >= 0
                     ? architectLandmark(static_cast<LandmarkKind>(cand.landmark),
