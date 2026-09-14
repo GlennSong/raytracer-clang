@@ -6707,8 +6707,21 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
     clear pane shows the city — no per-building material switching, no chunk splitting; looking in at a
     real upper floor from the street is the one case given up. `RT_SPAWN=x,y,z` starts the walker
     anywhere, verbatim (no prism walk-out, no terrain snap), so a headless frame can stand on the 22nd
-    floor: `after_m5_floor22_looking_out.png`, `after_m5_floor22_core.png`. Owed: interior-mapped panes
-    (the skyline), clear lobby glass on enterable buildings.
+    floor: `after_m5_floor22_looking_out.png`, `after_m5_floor22_core.png`.
+    *The faked tier (same night):* every lit pane is INTERIOR-MAPPED (`RenderMaterial::
+    FLAG_INTERIOR_MAP`, bit 16 — bits 8-15 are the surface id, which a first cut at bit 8 collided
+    with and turned lit glass into brick). The pane's UV is the room's front face; the fragment's
+    view ray in the pane's tangent frame is intersected with a box 1.4 pane-widths deep and the hit
+    face samples a room atlas the loader bakes once (`bakeRoomAtlas`: four rooms in a 2×2 of
+    256 px tiles, each a 2×2 of faces — back wall, ceiling with a fixture, floor, side wall — two
+    offices and two flats, values falling off with depth), bound in the pane material's albedo slot
+    without touching the albedo. The room's light multiplies the emission, so it rides the pane's
+    tint and NightGlow's ramp (now 0.22, the atlas carrying the contrast: the fixture clips, the
+    walls keep their tint), and the room is picked from the pane's 3 m world cell. By day nothing
+    changes (emission only). Verified at 80 m (`after_rooms_facade_80m.png`: back walls, floor
+    bands, side walls at an angle, warm and cool rooms) and on the skyline
+    (`after_rooms_skyline_bay.png`). Metal mirror owed; WebGPU has no path. Owed: clear lobby glass
+    on enterable buildings, rooms with furniture blobs and blinds, a per-district room mix.
     Still owed: podium uplights, and a Lua-readable per-building lighting spec (today the choices
     are hashed, not authored).
 

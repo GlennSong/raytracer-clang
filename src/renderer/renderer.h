@@ -108,6 +108,16 @@ struct RenderMaterial {
     // there and the interior's own transparent pane shows the city; from
     // outside nothing changes. Vulkan and Metal.
     static constexpr uint32_t FLAG_FRONT_ONLY = 128;
+    // INTERIOR MAPPING (skyscrapers v2, the faked tier; the Spider-Man
+    // trick): the fragment's view ray is intersected with a virtual room box
+    // behind the pane (pane UV 0..1 across and up, a fixed depth behind),
+    // and the hit face samples a room atlas bound in the ALBEDO slot — four
+    // rooms in a 2x2 grid, each a 2x2 of faces (back wall, ceiling, floor,
+    // side wall). The room's light multiplies the material emission (so it
+    // rides NightGlow's dusk ramp and the pane's vertex tint) and the albedo
+    // is left the glass colour, so the day look is untouched. Vulkan; Metal
+    // owed. Bit 16: bits 8-15 are the surface id (SURFACE_MASK below).
+    static constexpr uint32_t FLAG_INTERIOR_MAP = 1u << 16;
 
     // World-space procedural surface library (applySurface in surfaces.metal /
     // scene.cpp): an analytic material — brick, concrete, roof tiles, asphalt,

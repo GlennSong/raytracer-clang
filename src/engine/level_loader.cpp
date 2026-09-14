@@ -320,6 +320,66 @@ static Entity spawnDocumentEntity(const json& ent, const std::string& shape,
 // vertex is shared by few triangles); materialIndex carries over.
 // Aviation-beacon chunks are cut this fine so a roof's lamps flash on their own phase (skyscrapers v2 M4).
 static constexpr double kBeaconChunk = 24.0;
+// The ROOM ATLAS for interior-mapped panes (skyscrapers v2, the faked tier): four
+// rooms in a 2x2 grid of 256 px tiles, each tile a 2x2 of 128 px faces — back
+// wall (0,0), ceiling (128,0), floor (0,128), side wall (128,128) — in the
+// order mesh.frag's FLAG_INTERIOR_MAP samples them. Two offices, two flats:
+// a bright ceiling fixture, dimmer walls, a dark floor, a desk or shelf band
+// on the back wall, everything falling off with depth so the room reads deep.
+// Values are LIGHT, not albedo: they multiply the pane's night emission.
+static TextureHandle bakeRoomAtlas(Renderer& renderer) {
+    const int n = 512, tile = 256, face = 128;
+    std::vector<unsigned char> img(static_cast<std::size_t>(n) * n * 4, 255);
+    struct Room { Vec3 wall, ceil, fix, floor, band; Real bandH; };
+    const Room rooms[4] = {
+        {{0.62, 0.62, 0.60}, {0.55, 0.55, 0.54}, {1.0, 1.0, 1.0}, {0.22, 0.24, 0.30}, {0.34, 0.31, 0.29}, 0.38},   // office, carpet
+        {{0.58, 0.60, 0.62}, {0.50, 0.52, 0.54}, {1.0, 1.0, 1.0}, {0.28, 0.28, 0.30}, {0.40, 0.40, 0.42}, 0.30},   // office, grey
+        {{0.66, 0.60, 0.52}, {0.58, 0.55, 0.50}, {1.0, 0.96, 0.88}, {0.38, 0.28, 0.20}, {0.30, 0.22, 0.18}, 0.55},   // flat, wood, shelves
+        {{0.60, 0.56, 0.50}, {0.52, 0.50, 0.46}, {1.0, 0.94, 0.84}, {0.26, 0.22, 0.20}, {0.36, 0.30, 0.26}, 0.42},   // flat, dark
+    };
+    auto put = [&](int x, int y, const Vec3& c) {
+        const std::size_t o = (static_cast<std::size_t>(y) * n + x) * 4;
+        img[o] = static_cast<unsigned char>(std::min(1.0, std::max(0.0, c.x)) * 255);
+        img[o + 1] = static_cast<unsigned char>(std::min(1.0, std::max(0.0, c.y)) * 255);
+        img[o + 2] = static_cast<unsigned char>(std::min(1.0, std::max(0.0, c.z)) * 255);
+    };
+    for (int r = 0; r < 4; ++r) {
+        const Room& rm = rooms[r];
+        const int tx = (r % 2) * tile, ty = (r / 2) * tile;
+        for (int y = 0; y < face; ++y)
+            for (int x = 0; x < face; ++x) {
+                const Real u = (x + 0.5) / face, v = (y + 0.5) / face;
+                // Back wall (u across, v down): the band low on the wall, a picture high.
+                {
+                    Vec3 c = rm.wall * 0.62;
+                    if (v > 1.0 - rm.bandH) c = rm.band * 0.62;
+                    if (u > 0.30 && u < 0.62 && v > 0.18 && v < 0.42) c = rm.wall * 0.42;
+                    put(tx + x, ty + y, c);
+                }
+                // Ceiling (u across, v = depth in): a fixture at mid depth, darker deeper.
+                {
+                    const Real fall = 1.0 - 0.45 * v;
+                    Vec3 c = rm.ceil * fall;
+                    if (u > 0.28 && u < 0.72 && v > 0.30 && v < 0.62) c = rm.fix;
+                    put(tx + face + x, ty + y, c);
+                }
+                // Floor (u across, v = depth in): darker deeper.
+                {
+                    const Real fall = 1.0 - 0.5 * v;
+                    put(tx + x, ty + face + y, rm.floor * fall);
+                }
+                // Side wall (u = depth in, v down): a door deep in, darker deeper.
+                {
+                    const Real fall = 1.0 - 0.5 * u;
+                    Vec3 c = rm.wall * 0.8 * fall;
+                    if (u > 0.62 && u < 0.86 && v > 0.22) c = rm.band * 0.7 * fall;
+                    put(tx + face + x, ty + face + y, c);
+                }
+            }
+    }
+    return renderer.uploadTexture(n, n, 4, img.data());
+}
+
 // The distant tier's lit-window map (skyscrapers v2 M4): `cells` x `cells` window
 // cells, each an 8 px cell with a 5 x 5 px pane; a third of the panes lit, in the
 // lit-glass tint palette (cool office whites, some fluorescent blue-white, warm
@@ -4343,11 +4403,19 @@ bool LevelLoader::load(const std::string& path,
                 // tier and wherever the chunk came from (grown here or read per cell from the bundle).
                 struct PartProto { Renderable proto; Surface surf = Surface::None; bool reUV = false; double ddScale = 1.0; bool ready = false; };
                 std::map<std::size_t, PartProto> protos;
+                TextureHandle roomAtlas{};   // baked on first sight of a lit-glass part (interior mapping)
                 auto protoFor = [&](std::size_t pi, bool scaleSmallParts) -> PartProto& {
                     PartProto& pp = protos[pi * 2 + (scaleSmallParts ? 1 : 0)];
                     if (pp.ready) return pp;
                     pp.proto.renderLayer = engine::LayerBuildings;   // debug layer toggle
                     pp.proto.material = materialFor(static_cast<PartId>(pi), Vec3(0.80, 0.78, 0.75));
+                    if (static_cast<PartId>(pi) == PartId::GlassLit) {
+                        // The faked tier: every lit pane shows a virtual room (interior mapping),
+                        // the atlas in the albedo slot; the glass albedo stays for the day look.
+                        if (roomAtlas.index == 0) roomAtlas = bakeRoomAtlas(renderer);
+                        pp.proto.material.albedoMap = roomAtlas;
+                        pp.proto.material.flags |= RenderMaterial::FLAG_INTERIOR_MAP;
+                    }
                     pp.surf = pp.proto.material.surface();
                     if (pp.surf != Surface::None) {
                         // FanTop/VentGrille/RoofShingle bake their own UVs in the grammar (centred disc /
@@ -4398,8 +4466,11 @@ bool LevelLoader::load(const std::string& path,
                     // NightGlow pass — dark at noon by construction (emission starts 0; the material
                     // equals Glass by day).
                     if (static_cast<PartId>(pi) == PartId::GlassLit)
-                        // White: the pane's vertex colour is its tint (litTint, FLAG_EMISSIVE_VERTEX_TINT).
-                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 1.3});
+                        // White: the pane's vertex colour is its tint (litTint, FLAG_EMISSIVE_VERTEX_TINT);
+                        // 0.5, not 1.3: the room atlas carries the contrast now (a fixture at 1, walls
+                        // at ~0.6, floor ~0.25) and the night exposure lifts it, so the fixture clips
+                        // to white and the walls keep their tint instead of the whole pane clipping.
+                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 0.22});
                     const bool beaconFamily = static_cast<PartId>(pi) == PartId::Beacon ||
                                               static_cast<PartId>(pi) == PartId::BeaconGlow ||
                                               static_cast<PartId>(pi) == PartId::BeaconHaze;

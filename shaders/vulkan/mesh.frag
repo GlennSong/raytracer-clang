@@ -610,11 +610,46 @@ void main() {
     uint texFlags = pc.surfaceFlags.z;
     float ao = 1.0;
 
+    // FLAG_INTERIOR_MAP (bit 16): a virtual room behind the pane. The pane's UV
+    // (0..1 across, 0..1 up) is the room's front face; the view ray in the
+    // pane's tangent frame is intersected with the box's far faces and the
+    // hit samples the room atlas (albedo slot): 2x2 rooms, each a 2x2 of
+    // faces — back wall (0,0), ceiling (.25,0), floor (0,.25), side (.25,.25).
+    const bool interiorMap = (pc.surfaceFlags.y & 65536u) != 0u;   // bit 16: bits 8-15 are the surface id
+    vec3 roomLight = vec3(1.0);
+    if (interiorMap) {
+        vec3 Ng = normalize(inWorldNormal);
+        vec3 Tg = inWorldTangent - Ng * dot(inWorldTangent, Ng);
+        Tg = dot(Tg, Tg) > 1e-8 ? normalize(Tg) : vec3(1.0, 0.0, 0.0);
+        vec3 Bg = cross(Tg, Ng);   // up the pane
+        vec3 vIn = normalize(inWorldPos - g.cameraPosition.xyz);   // into the pane
+        vec3 d = vec3(dot(vIn, Tg), dot(vIn, Bg), dot(vIn, Ng));
+        d.z = min(d.z, -1e-3);   // always into the room (the back is front-only anyway)
+        const float depth = 1.4;
+        vec3 o = vec3(inTexcoord.x, inTexcoord.y, 0.0);
+        vec3 bound = vec3(d.x > 0.0 ? 1.0 : 0.0, d.y > 0.0 ? 1.0 : 0.0, -depth);
+        vec3 tt = (bound - o) / d;
+        float t = min(tt.x, min(tt.y, tt.z));
+        vec3 p = o + d * t;
+        vec3 cellv = floor(inWorldPos / 3.0);
+        float rnd = fract(sin(dot(cellv, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+        float roomIdx = floor(rnd * 4.0);
+        vec2 tileO = vec2(mod(roomIdx, 2.0), floor(roomIdx / 2.0)) * 0.5;
+        vec2 faceUV;
+        vec2 faceO;
+        if (t == tt.z) { faceUV = vec2(p.x, 1.0 - p.y); faceO = vec2(0.0, 0.0); }
+        else if (t == tt.y) { faceUV = vec2(p.x, -p.z / depth); faceO = d.y > 0.0 ? vec2(0.25, 0.0) : vec2(0.0, 0.25); }
+        else { faceUV = vec2(-p.z / depth, 1.0 - p.y); faceO = vec2(0.25, 0.25); }
+        vec2 uvA = tileO + faceO + clamp(faceUV, 0.012, 0.988) * 0.25;   // 1.5 px in from the tile seam
+        roomLight = texture(albedoMap, uvA).rgb;
+    }
+    emission *= roomLight;
+
     // Texture maps (glTF convention: MR = (_, roughness=g, metallic=b)).
     // Alpha-cut foliage (FLAG_ALPHA_TEST = bit 1): drop fragments under the leaf
     // mask (the albedo map's alpha) before any shading. Ports lighting.metal.
     float mapAlpha = 1.0;   // FLAG_ALPHA_FROM_MAP (64): the albedo map's alpha shapes the fragment
-    if ((texFlags & 1u) != 0u || (pc.surfaceFlags.y & 2u) != 0u) {
+    if (!interiorMap && ((texFlags & 1u) != 0u || (pc.surfaceFlags.y & 2u) != 0u)) {
         vec4 albedoTex = texture(albedoMap, inTexcoord);
         if ((texFlags & 1u) != 0u) albedo *= albedoTex.rgb;
         if ((pc.surfaceFlags.y & 2u) != 0u && albedoTex.a < 0.5) discard;
