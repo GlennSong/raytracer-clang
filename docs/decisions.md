@@ -6638,11 +6638,20 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
     per-building tint hashed from the roof's position — a **crown band** under the coping on towers of
     15 floors and up (curtain walls from 12): none 30 %, white 25 %, amber 15 %, blue 10 %, red 8 %,
     green 6 %, purple 6 %; steady red **aviation beacons** at the roof corners of any building over
-    61 m and a second ring at mid-height past 120 m (the FAA's 200 ft threshold; a blink system is
-    still owed); a lit **signage box** high on one face of two in five curtain-wall towers of 20+
-    floors in white, cyan, red or amber. Test `tall_towers_wear_a_crown_and_beacons`. Still owed: the
-    blink system, podium uplights, and a Lua-readable per-building lighting spec (today the choices
-    are hashed, not authored).
+    61 m and a second ring at mid-height past 120 m (the FAA's 200 ft threshold); a lit **signage
+    box** high on one face of two in five curtain-wall towers of 20+ floors in white, cyan, red or
+    amber. Test `tall_towers_wear_a_crown_and_beacons`.
+    *Beacon flash (step 3, same day):* the roof-corner beacons are their own part (`PartId::Beacon`,
+    the lamp housing dark by day) so the loader can tag each chunk `NightGlow` + `BeaconBlink`, and
+    `DayNightSystem::applyBeaconBlink` rewrites those few emissions every frame as dusk ramp ×
+    `beaconBlinkGate` (`vehicle_lamps.h`: the FAA L-864 pattern, a 1.7–2.3 s cycle at 45 % duty with
+    60 ms filament edges, wall-clock driven so a paused sim still flashes). Beacon chunks are cut at
+    24 m rather than the render cell — re-cut at load from a bundle — and the phase and period are
+    hashed from the chunk's centre, so neighbouring towers flash out of step; the mid-height ring stays
+    steady (L-810) in the window part. Rejected: a time uniform in the mesh shader (a per-frame
+    constant for one part), and one Renderable per lamp (four entities per roof for nothing). Still
+    owed: podium uplights, and a Lua-readable per-building lighting spec (today the choices are
+    hashed, not authored).
 
 **Measured (step 1).** piedmont_mini rectilinear 26.4 → 92.1 %, oblique corners 60.6 → 14.0 %;
 lanelab metro 59.5 → 81.5 %, 41.4 → 24.0 %; lattice metro 54.9 → 86.9 %, 44.5 → 19.8 %. Coverage

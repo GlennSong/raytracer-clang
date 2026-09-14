@@ -125,6 +125,11 @@ private:
     // application even at noon (spawn emission is 0 anyway).
     void applyNightGlow(FrameContext& ctx);
     Real lastGlowRamp_ = -1.0;
+    // Beacon flash pass (skyscrapers v2 M4): entities tagged NightGlow +
+    // BeaconBlink get their ramped emission gated on the flash cycle every
+    // frame. Wall-clock driven (beacons keep flashing while the sim is paused).
+    void applyBeaconBlink(FrameContext& ctx);
+    double blinkSeconds_ = 0.0;
 
     // The level's authored volumetric deck, captured on first sight: the
     // artistic knobs write ABSOLUTE values derived from this base each frame

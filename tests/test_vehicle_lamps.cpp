@@ -89,3 +89,21 @@ TEST_CASE(vehicle_lamps_blink_is_periodic_and_even) {
     CHECK(lampBlinkOn(period) == lampBlinkOn(0.0));
     CHECK(lampBlinkOn(period * 1.75) == lampBlinkOn(period * 0.75));
 }
+
+TEST_CASE(beacon_blink_gate_flashes_with_duty_and_phase) {
+    // A 2 s cycle at 45 % duty: lit through the middle of the on-window, dark
+    // after it, back on a period later; the phase shifts the whole cycle.
+    CHECK(beaconBlinkGate(0.4, 2.0, 0.0, 0.45) == 1.0);
+    CHECK(beaconBlinkGate(1.5, 2.0, 0.0, 0.45) == 0.0);
+    CHECK(beaconBlinkGate(2.4, 2.0, 0.0, 0.45) == 1.0);
+    CHECK(beaconBlinkGate(0.4, 2.0, 0.5, 0.45) == 0.0);
+    CHECK(beaconBlinkGate(1.5, 2.0, 0.5, 0.45) == 1.0);
+    // Soft edges: the first instant of the on-window is not yet full.
+    const Real early = beaconBlinkGate(0.01, 2.0, 0.0, 0.45);
+    CHECK(early > 0.0 && early < 1.0);
+    // Never outside 0..1 anywhere in the cycle.
+    for (int i = 0; i < 200; ++i) {
+        const Real g = beaconBlinkGate(i * 0.01, 2.0, 0.37, 0.45);
+        CHECK(g >= 0.0 && g <= 1.0);
+    }
+}

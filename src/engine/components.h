@@ -403,6 +403,16 @@ struct NightGlow {
     Vec3 fullEmission{1.0, 0.85, 0.55};
 };
 
+// A FLASHING night light (skyscrapers v2 M4): with NightGlow on the same
+// entity, the DayNightSystem multiplies the dusk-ramped emission by the
+// beaconBlinkGate every frame. The loader tags the aviation-beacon part's
+// chunks, each with a phase hashed from where it stands. Runtime-only.
+struct BeaconBlink {
+    float period = 2.0f;   // seconds per flash cycle
+    float phase = 0.0f;    // cycles, 0..1
+    float duty = 0.45f;    // lit fraction of the cycle
+};
+
 // Level-authored city-simulation settings (ADR-0063): a top-level "citysim"
 // block in the level JSON becomes one entity carrying this, and the city render
 // bridge reads it at build. Lets a level choose its own population — the agent

@@ -464,6 +464,7 @@ void DayNightSystem::update(FrameContext& ctx) {
     publishStatus(ctx, active);
     applyClouds(ctx);
     applyNightGlow(ctx);   // even with the cycle off: static dusk levels glow
+    applyBeaconBlink(ctx);
 }
 
 // Push the current cycle state into both the procedural sky colors and the
@@ -576,6 +577,21 @@ void DayNightSystem::applyNightGlow(FrameContext& ctx) {
     ctx.world.each<NightGlow, InstanceGroup>(
         [&](Entity, NightGlow& glow, InstanceGroup& g) {
             g.material.emission = glow.fullEmission * ramp;
+        });
+}
+
+// BEACON FLASH: the aviation lamps on tall roofs. Their chunks carry NightGlow
+// (the dusk ramp, written above whenever it changes) and BeaconBlink; this
+// pass re-writes their emission every frame as ramp × gate, so a beacon is
+// dark by day, a red pulse at night. Few entities (one per beacon chunk), so
+// the per-frame write is nothing.
+void DayNightSystem::applyBeaconBlink(FrameContext& ctx) {
+    blinkSeconds_ += std::max(0.0, std::min(ctx.frameDelta, 0.25));
+    const Real ramp = lastGlowRamp_ < 0 ? Real(0) : lastGlowRamp_;
+    ctx.world.each<NightGlow, BeaconBlink, Renderable>(
+        [&](Entity, NightGlow& glow, BeaconBlink& b, Renderable& r) {
+            const Real gate = ramp <= 0 ? Real(0) : beaconBlinkGate(blinkSeconds_, b.period, b.phase, b.duty);
+            r.material.emission = glow.fullEmission * (ramp * gate);
         });
 }
 

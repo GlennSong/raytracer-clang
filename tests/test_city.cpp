@@ -857,11 +857,14 @@ TEST_CASE(tall_towers_wear_a_crown_and_beacons) {
         int n = 0;
         red = 0;
         for (const RenderMesh& part : bm.parts) {
-            if (part.materialIndex != static_cast<int>(PartId::GlassLit)) continue;
+            const bool lit = part.materialIndex == static_cast<int>(PartId::GlassLit);
+            const bool beacon = part.materialIndex == static_cast<int>(PartId::Beacon);
+            if (!lit && !beacon) continue;
             for (const Vertex& v : part.vertices) {
                 if (v.position.y < minY) continue;
-                ++n;
-                if (v.color.x > 0.9f && v.color.y < 0.2f) ++red;
+                if (lit) ++n;
+                // The roof-corner lamps live in the FLASHING part, red-tinted.
+                if (beacon && v.color.x > 0.9f && v.color.y < 0.2f) ++red;
             }
         }
         return n;

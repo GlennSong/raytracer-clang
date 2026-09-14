@@ -317,6 +317,8 @@ static Entity spawnDocumentEntity(const json& ent, const std::string& shape,
 // treating a district-wide merged mesh as one always-visible draw (plan
 // metropolis-scale P1.1/P1.3). Vertices are duplicated per chunk (cheap: a
 // vertex is shared by few triangles); materialIndex carries over.
+// Aviation-beacon chunks are cut this fine so a roof's lamps flash on their own phase (skyscrapers v2 M4).
+static constexpr double kBeaconChunk = 24.0;
 static std::vector<RenderMesh> chunkMeshByCell(const RenderMesh& m, double cell) {
     std::vector<RenderMesh> out; for (MeshBuilder::CellChunk& c : MeshBuilder::chunkByCell(m, cell)) out.push_back(std::move(c.mesh)); return out;
 }
@@ -4360,6 +4362,22 @@ bool LevelLoader::load(const std::string& path,
                     if (static_cast<PartId>(pi) == PartId::GlassLit)
                         // White: the pane's vertex colour is its tint (litTint, FLAG_EMISSIVE_VERTEX_TINT).
                         world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 1.3});
+                    if (static_cast<PartId>(pi) == PartId::Beacon) {
+                        // Aviation beacons: bright, and FLASHING on a phase hashed from where the
+                        // chunk stands (beacon chunks are cut small, so neighbouring towers differ).
+                        Vec3 c(0, 0, 0);
+                        for (const Vertex& v : chunk.vertices) c += v.position;
+                        c = c * (1.0 / static_cast<double>(chunk.vertices.size()));
+                        // A quantised-position hash (the grammar's own is file-static): metre cells.
+                        uint32_t h = 2166136261u;
+                        for (long long q : {static_cast<long long>(std::floor(c.x)), static_cast<long long>(std::floor(c.z))})
+                            for (int k = 0; k < 8; ++k) { h ^= static_cast<uint32_t>((q >> (8 * k)) & 0xff); h *= 16777619u; }
+                        engine::BeaconBlink bb;
+                        bb.phase = static_cast<float>(h & 0xffffu) / 65535.0f;
+                        bb.period = 1.7f + 0.6f * static_cast<float>((h >> 16) & 0xffu) / 255.0f;   // 26-35 fpm
+                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 6.0});
+                        world.add<engine::BeaconBlink>(e, bb);
+                    }
                 };
                 // Whole parts (grown here, or a whole-part bundle): split per render cell now. One spawner
                 // for both tiers, so material binding and chunking cannot diverge between LOD0 and LOD1.
@@ -4367,7 +4385,9 @@ bool LevelLoader::load(const std::string& path,
                     for (std::size_t pi = 0; pi < partsVec.size(); ++pi) {
                         RenderMesh& pm = partsVec[pi];
                         if (pm.vertices.empty()) continue;
-                        for (RenderMesh& chunk : chunkMeshByCell(pm, renderCell)) spawnChunk(pi, chunk, minDist, drawDist, scaleSmallParts);
+                        // Beacons chunk FINE (one tower, not one cell), so each roof can flash on its own phase.
+                        const double cellFor = static_cast<PartId>(pi) == PartId::Beacon ? kBeaconChunk : renderCell;
+                        for (RenderMesh& chunk : chunkMeshByCell(pm, cellFor)) spawnChunk(pi, chunk, minDist, drawDist, scaleSmallParts);
                     }
                 };
                 if (!grown.cellParts.empty() && grown.bundle) {
@@ -4378,6 +4398,15 @@ bool LevelLoader::load(const std::string& path,
                         if (cp.flat && !threeTier) continue;   // the LOD1 tier is drawn only in three-tier mode
                         RenderMesh chunk;
                         if (!engine::lotcache::readLotPart(*grown.bundle, cp.section, chunk)) { LOG_WARN << "[lots] " << cp.section << ": unreadable, skipped"; continue; }
+                        if (static_cast<PartId>(cp.part) == PartId::Beacon) {
+                            // The bundle cut beacons per render cell; re-cut them fine so each roof flashes alone.
+                            for (RenderMesh& sub : chunkMeshByCell(chunk, kBeaconChunk)) {
+                                if (cp.flat) spawnChunk(static_cast<std::size_t>(cp.part), sub, detailDistance, facadeDistance, false);
+                                else spawnChunk(static_cast<std::size_t>(cp.part), sub, 0.0, detailDistance, !threeTier);
+                            }
+                            ++spawned;
+                            continue;
+                        }
                         if (cp.flat) spawnChunk(static_cast<std::size_t>(cp.part), chunk, detailDistance, facadeDistance, false);
                         else spawnChunk(static_cast<std::size_t>(cp.part), chunk, 0.0, detailDistance, !threeTier);
                         ++spawned;

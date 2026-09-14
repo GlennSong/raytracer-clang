@@ -3,6 +3,7 @@
 
 #include "../rt_math.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 
@@ -93,6 +94,22 @@ inline Real duskRamp(Real solarElevation) {
 // Driven by a sim clock, so it stays deterministic.
 inline bool lampBlinkOn(Real seconds) {
     return std::fmod(seconds * kLampBlinkHz, Real(1)) < Real(0.5);
+}
+
+// The AVIATION BEACON flash (skyscrapers v2 M4): the FAA L-864 red obstruction
+// light flashes 20-40 times a minute with a short duty; `period` seconds per
+// cycle, `phase` in cycles (each tower or cell hashes its own so a skyline
+// never flashes in lockstep), `duty` the lit fraction. Returns 0..1 emission
+// gain with ~60 ms edges — a filament, not a strobe.
+inline Real beaconBlinkGate(Real seconds, Real period = 2.0, Real phase = 0.0, Real duty = 0.45) {
+    if (period <= 0) return 1;
+    Real t = std::fmod(seconds / period + phase, Real(1));
+    if (t < 0) t += 1;
+    const Real edge = std::min(Real(0.03), duty * 0.25);
+    Real g = t < duty ? std::min(t, duty - t) / edge : Real(0);   // rise, hold, fall
+    if (g > 1) g = 1;
+    if (g < 0) g = 0;
+    return g;
 }
 
 }  // namespace engine

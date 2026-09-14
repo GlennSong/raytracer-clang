@@ -168,6 +168,11 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
             // only, so the day glass stays the one glass colour.
             m.albedo = {0.18, 0.27, 0.34}; m.metallic = 0.9f; m.roughness = 0.08f;
             m.flags |= RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT; break;
+        case PartId::Beacon:
+            // A lamp housing by day (dark painted steel); the loader's
+            // NightGlow + BeaconBlink drive its emission, tinted per vertex.
+            m.albedo = {0.14, 0.13, 0.13}; m.metallic = 0.4f; m.roughness = 0.55f;
+            m.flags |= RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT; break;
         case PartId::Trim:
             m.albedo = wallColor * 0.55; m.metallic = 0.0f; m.roughness = 0.7f; break;
         case PartId::Roof:
@@ -3497,8 +3502,9 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         // and emitted for both LOD tiers — at night the skyline IS these.
         //  - a CROWN BAND under the coping on towers of 15+ floors (curtain
         //    walls from 12): white, amber, blue, red, green or purple, or none;
-        //  - AVIATION BEACONS: steady red lamps at the roof corners of any
-        //    building over 61 m, and a second ring at mid-height past 120 m;
+        //  - AVIATION BEACONS: red lamps at the roof corners of any building
+        //    over 61 m (flashing — PartId::Beacon), and a steady second ring at
+        //    mid-height past 120 m;
         //  - a SIGNAGE BOX high on one face of a curtain-wall tower.
         if (cur.size() >= 3 && params.floors >= 12) {
             const Vec2 rc = centroid(cur);
@@ -3524,16 +3530,18 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             }
             if (y >= 61.0) {
                 const Vec3 red(1.0, 0.12, 0.08);
-                auto beacon = [&](const Vec2& v, const Vec2& toward, Real by) {
+                // The roof corners FLASH (their own part, gated by BeaconBlink at
+                // runtime); the mid-height ring burns steady in the window part.
+                auto beacon = [&](const Vec2& v, const Vec2& toward, Real by, PartId part) {
                     const Vec2 pin = v + normalize(toward - v) * 0.35;
                     const Vec3 o(pin.x - 0.2, by, pin.y - 0.2);
                     emitBox(out, Scope{o, {Vec3(1, 0, 0), up, Vec3(0, 0, 1)}, Vec3(0.4, 0.5, 0.4)},
-                            PartId::GlassLit, red);
+                            part, red);
                 };
-                for (const Vec2& v : cur) beacon(v, rc, y + 0.05 + params.parapet);
+                for (const Vec2& v : cur) beacon(v, rc, y + 0.05 + params.parapet, PartId::Beacon);
                 if (y >= 120.0) {
                     const Vec2 pc = centroid(plan);
-                    for (const Vec2& v : plan) beacon(v, pc, y * 0.5);
+                    for (const Vec2& v : plan) beacon(v, pc, y * 0.5, PartId::GlassLit);
                 }
             }
             if (params.curtainWall && params.floors >= 20 && ((nh >> 8) & 0xffu) < 100) {

@@ -70,6 +70,11 @@ enum class PartId : uint8_t {
              // tile lobbies must not inherit the wood bump.
     InteriorFloorMarble, // veined polished Marble bake (own part, same rule)
     InteriorFloorCarpet, // soft Carpet bake (own part, same rule)
+    Beacon,  // FLASHING red aviation obstruction lamps at a tall roof's corners
+             // (skyscrapers v2 M4): its own part so the loader can tag the
+             // chunk BeaconBlink and the day/night pass can gate its emission
+             // on the flash cycle (the FAA L-864 pattern, ~30 flashes/min).
+             // The mid-height ring stays steady (L-810) in GlassLit.
     Count    // KEEP LAST: materialIndexFor is the ordinal; arrays size by Count
 };
 
