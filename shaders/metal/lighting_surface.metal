@@ -67,12 +67,14 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
     // points leave the albedo untinted for it).
     if (int(mat.flags) & 32) emit *= geom.vertexColor;
     float ao = 1.0;
+    float mapAlpha = 1.0;   // FLAG_ALPHA_FROM_MAP (64): the albedo map's alpha shapes the fragment
     uint tf = mat.textureFlags;
     if (tf & 1u) {
         float4 base = albedoMap.sample(texSampler, geom.texcoord);
         // Alpha-cut foliage (FLAG_ALPHA_TEST): drop fragments under the leaf
         // silhouette so cards stay crisp in the opaque pass.
         if ((int(mat.flags) & 2) && base.a < 0.5) discard_fragment();
+        if (int(mat.flags) & 64) mapAlpha = base.a;
         albedo *= base.rgb;
     }
     if (tf & 2u) {
@@ -189,7 +191,7 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
     float3 color = emit + directLight
                  + (ambientDiffuse + envSpecular) * ambientShadow;
 
-    float alpha = mat.opacity;
+    float alpha = mat.opacity * mapAlpha;
     if (alpha < 1.0) {
         float fresnelTerm = fresnelSchlick(NdotV, 0.04);
         alpha = mix(alpha, 1.0, fresnelTerm);

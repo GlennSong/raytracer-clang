@@ -613,10 +613,12 @@ void main() {
     // Texture maps (glTF convention: MR = (_, roughness=g, metallic=b)).
     // Alpha-cut foliage (FLAG_ALPHA_TEST = bit 1): drop fragments under the leaf
     // mask (the albedo map's alpha) before any shading. Ports lighting.metal.
+    float mapAlpha = 1.0;   // FLAG_ALPHA_FROM_MAP (64): the albedo map's alpha shapes the fragment
     if ((texFlags & 1u) != 0u || (pc.surfaceFlags.y & 2u) != 0u) {
         vec4 albedoTex = texture(albedoMap, inTexcoord);
         if ((texFlags & 1u) != 0u) albedo *= albedoTex.rgb;
         if ((pc.surfaceFlags.y & 2u) != 0u && albedoTex.a < 0.5) discard;
+        if ((pc.surfaceFlags.y & 64u) != 0u) mapAlpha = albedoTex.a;
     }
     if ((texFlags & 2u) != 0u) {
         vec2 mr = texture(metallicRoughnessMap, inTexcoord).gb;
@@ -753,7 +755,7 @@ void main() {
         }
         // Opacity (float bits in the spare push slot) → output alpha for the
         // transparent blend pass; ignored by the opaque pipeline (blend off).
-        outColor = vec4(color, uintBitsToFloat(pc.surfaceFlags.w));
+        outColor = vec4(color, uintBitsToFloat(pc.surfaceFlags.w) * mapAlpha);
     }
     outNormal = vec4(N * 0.5 + 0.5, roughness);   // world normal (SSAO) + roughness (SSR gate)
 }

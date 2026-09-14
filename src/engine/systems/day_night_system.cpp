@@ -593,12 +593,23 @@ void DayNightSystem::applyBeaconBlink(FrameContext& ctx) {
     // lamp brighter than ~1 on screen tonemaps to orange, then white — the
     // beacon must read as the same saturated red at dusk and at midnight.
     const Real adapt = std::max(1.0f, nightAdapt_);
+    ctx.view.lighting.beaconSeconds = static_cast<float>(blinkSeconds_);
+    ctx.view.lighting.nightAdapt = static_cast<float>(adapt);
+    const Vec3 camPos = ctx.view.camera.position;
     ctx.world.each<NightGlow, BeaconBlink, Renderable>(
         [&](Entity, NightGlow& glow, BeaconBlink& b, Renderable& r) {
             const Real gate = ramp <= 0 ? Real(0) : beaconBlinkGate(blinkSeconds_, b.period, b.phase, b.duty);
             r.material.emission = glow.fullEmission * (ramp * gate / adapt);
-            if (b.baseOpacity < 1.0f)
-                r.material.opacity = b.baseOpacity * static_cast<float>(ramp * gate);
+            if (b.baseOpacity < 1.0f) {
+                // The near tier: the translucent bulb and haze belong to the
+                // roof you are standing on; past ~20 m the sprite carries
+                // the glow, so the spheres fade out by 35 m (per chunk).
+                const BoundingSphere bs = ctx.renderer.getMeshBounds(r.mesh);
+                const Real d = (bs.center - camPos).length() - bs.radius;
+                Real far = (d - 20.0) / 15.0;
+                far = std::min(Real(1), std::max(Real(0), far));
+                r.material.opacity = b.baseOpacity * static_cast<float>(ramp * gate * (1.0 - far));
+            }
         });
 }
 

@@ -885,8 +885,27 @@ TEST_CASE(tall_towers_wear_a_crown_and_beacons) {
         std::size_t haloTris = 0;
         for (const RenderMesh& part : bm.parts)
             if (part.materialIndex == static_cast<int>(PartId::BeaconGlow)) haloTris += part.indices.size() / 3;
-        CHECK(haloTris >= 4 * 32);
+        CHECK(haloTris >= 4 * 128);
         CHECK(materialFor(PartId::BeaconGlow, Vec3(1, 1, 1)).opacity < 1.0f);
+        // ...and leaves the runtime a "beacon" attach point per lamp, at the
+        // lamp: above the roof, inside the plan.
+        int beacons = 0;
+        for (const AttachPoint& ap : bm.attaches) {
+            if (ap.tag != "beacon") continue;
+            ++beacons;
+            CHECK(ap.position.y > 4.5 + 30 * 3.2);
+            CHECK(ap.position.x > 0 && ap.position.x < 40 && ap.position.z > 0 && ap.position.z < 40);
+        }
+        CHECK(beacons >= 4);
+        // The far (Flat) mesh carries the housing but not the spheres.
+        const BuildingMesh flat = growPlanBuilding({{0, 0}, {40, 0}, {40, 40}, {0, 40}}, p, 0.0, FacadeDetail::Flat);
+        std::size_t flatHalo = 0, flatLamp = 0;
+        for (const RenderMesh& part : flat.parts) {
+            if (part.materialIndex == static_cast<int>(PartId::BeaconGlow)) flatHalo += part.indices.size();
+            if (part.materialIndex == static_cast<int>(PartId::Beacon)) flatLamp += part.indices.size();
+        }
+        CHECK(flatHalo == 0);
+        CHECK(flatLamp > 0);
     }
     int redLow = 0;
     const int low = litAbove(4, false, 4.5 + 4 * 3.2 - 0.1, redLow);

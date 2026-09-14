@@ -181,6 +181,7 @@ add_library(engine_core STATIC
     src/engine/systems/building_interior_system.cpp
     src/engine/systems/door_system.cpp
     src/engine/systems/elevator_system.cpp
+    src/engine/systems/beacon_light_system.cpp
     src/engine/systems/terrain_lod_system.cpp
     # NOTE: the agent-based city simulation (ADR-0060…0066) is NOT here. It is an
     # APPLICATION of the engine, built as its own `citysim` static library below

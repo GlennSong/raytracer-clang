@@ -101,6 +101,19 @@ inline bool lampBlinkOn(Real seconds) {
 // cycle, `phase` in cycles (each tower or cell hashes its own so a skyline
 // never flashes in lockstep), `duty` the lit fraction. Returns 0..1 emission
 // gain with ~60 ms edges — a filament, not a strobe.
+// The flash a lamp in the 24 m cell (cx, cz) runs: period 1.7-2.3 s (26-35
+// flashes a minute) and a phase, hashed from the cell so neighbouring towers
+// flash out of step while everything on one roof — the grown housing and
+// spheres (chunked per cell by the loader), the sprite and the point light
+// (BeaconLightSystem) — flashes together.
+inline void beaconCellPhase(int cx, int cz, float& period, float& phase) {
+    uint32_t h = 2166136261u;
+    for (long long q : {static_cast<long long>(cx), static_cast<long long>(cz)})
+        for (int k = 0; k < 8; ++k) { h ^= static_cast<uint32_t>((q >> (8 * k)) & 0xff); h *= 16777619u; }
+    phase = static_cast<float>(h & 0xffffu) / 65535.0f;
+    period = 1.7f + 0.6f * static_cast<float>((h >> 16) & 0xffu) / 255.0f;
+}
+
 inline Real beaconBlinkGate(Real seconds, Real period = 2.0, Real phase = 0.0, Real duty = 0.45) {
     if (period <= 0) return 1;
     Real t = std::fmod(seconds / period + phase, Real(1));

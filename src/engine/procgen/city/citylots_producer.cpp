@@ -13,7 +13,7 @@ namespace engine {
 const char* const kCityLotsProducerName = "citylots";
 const char* const kCityLotsSectionPrefix = "citylots/";
 // Bump whenever the lot pass's output changes for the same inputs (the key cannot see code).
-const char* const kCityLotsBuildTag = "2026-09-14.16";   // .2: propagateWaterSeaLevel, so a level with water grows the loader's graph
+const char* const kCityLotsBuildTag = "2026-09-14.18";   // .2: propagateWaterSeaLevel, so a level with water grows the loader's graph
 
 namespace {
 

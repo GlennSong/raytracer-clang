@@ -107,3 +107,14 @@ TEST_CASE(beacon_blink_gate_flashes_with_duty_and_phase) {
         CHECK(g >= 0.0 && g <= 1.0);
     }
 }
+
+TEST_CASE(beacon_cell_phase_is_shared_within_a_cell_and_differs_between) {
+    float p0, f0, p1, f1, p2, f2;
+    beaconCellPhase(-12, 7, p0, f0);
+    beaconCellPhase(-12, 7, p1, f1);
+    CHECK(p0 == p1 && f0 == f1);
+    CHECK(p0 >= 1.7f && p0 <= 2.3f);
+    CHECK(f0 >= 0.0f && f0 <= 1.0f);
+    beaconCellPhase(-11, 7, p2, f2);
+    CHECK(f2 != f0 || p2 != p0);
+}

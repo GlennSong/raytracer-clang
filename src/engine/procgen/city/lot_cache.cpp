@@ -16,7 +16,7 @@ using bundle::BinWriter;
 static_assert(sizeof(BuildingParams) == 352, "BuildingParams layout changed: update lot_cache.cpp");
 
 namespace {
-constexpr uint32_t kParamsVersion = 3, kLotsVersion = 5, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
+constexpr uint32_t kParamsVersion = 3, kLotsVersion = 6, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
 
 void putVec2(BinWriter& w, const Vec2& v) { w.put<double>(v.x); w.put<double>(v.y); }
 bool getVec2(BinReader& r, Vec2& v) { return r.get(v.x) && r.get(v.y); }
@@ -83,6 +83,7 @@ void putLots(BinWriter& w, const std::vector<LotBuilding>& lots) {
             putPoly(w, u.plan); w.put<double>(u.baseY); putBuildingParams(w, u.params);
             w.put<uint32_t>(static_cast<uint32_t>(u.doors.size())); for (const DoorSpec& d : u.doors) { putVec2(w, d.foot); putVec2(w, d.normal); w.put<double>(d.width); w.put<double>(d.height); }
             putBool(w, u.enterable);
+            w.put<uint32_t>(static_cast<uint32_t>(u.beacons.size())); for (const Vec3& b : u.beacons) putVec3(w, b);
         }
         // Site plan (format 3): the lot's ground around the building, by kind.
         w.put<uint32_t>(static_cast<uint32_t>(lb.open.size()));
@@ -109,6 +110,8 @@ bool getLots(BinReader& r, std::vector<LotBuilding>& lots) {
             uint32_t nd = 0; if (!r.get(nd)) return false; u.doors.resize(nd);
             for (DoorSpec& d : u.doors) if (!getVec2(r, d.foot) || !getVec2(r, d.normal) || !r.get(d.width) || !r.get(d.height)) return false;
             if (!getBool(r, u.enterable)) return false;
+            uint32_t nb = 0; if (!r.get(nb)) return false; u.beacons.resize(nb);
+            for (Vec3& b : u.beacons) if (!getVec3(r, b)) return false;
         }
         uint32_t no = 0; if (!r.get(no)) return false; lb.open.resize(no);
         for (OpenSpace& o : lb.open) { uint8_t k = 0; if (!r.get(k) || !getPoly(r, o.poly)) return false; o.kind = static_cast<OpenKind>(k); }

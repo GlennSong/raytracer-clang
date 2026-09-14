@@ -95,6 +95,13 @@ struct RenderMaterial {
     // by NightGlow on the dusk curve) sets the intensity, and the day look
     // (albedo) is untouched by the tint. Backend-honoured in all three shaders.
     static constexpr uint32_t FLAG_EMISSIVE_VERTEX_TINT = 32;
+    // ALPHA FROM THE ALBEDO MAP (skyscrapers v2 M4, the beacon sprites): in
+    // the transparent pass the fragment's alpha is the material opacity
+    // times the albedo texture's alpha, so a soft glow texture shapes a
+    // billboard instead of every fragment carrying one uniform opacity.
+    // Honoured by the Vulkan and Metal mesh shaders (WebGPU has no
+    // transparent pass).
+    static constexpr uint32_t FLAG_ALPHA_FROM_MAP = 64;
 
     // World-space procedural surface library (applySurface in surfaces.metal /
     // scene.cpp): an analytic material — brick, concrete, roof tiles, asphalt,
@@ -443,6 +450,14 @@ struct SceneLighting {
     // lights are never displaced. Always on (interiors are sun-blind by
     // day too). Never saved.
     std::vector<PointLight> interiorPoints;
+    // Aviation-beacon lights (BeaconLightSystem, every frame): the nearest
+    // few lamps as red points, flashing. Merged like interiorPoints.
+    std::vector<PointLight> beaconPoints;
+    // The beacon flash clock and the night exposure adaptation (exposure /
+    // authored exposure), published by DayNightSystem each frame so the
+    // sprites and point lights flash and dim in step with the grown lamps.
+    float beaconSeconds = 0.0f;
+    float nightAdapt = 1.0f;
     std::vector<PointLight> pointLights;
     std::vector<SpotLight> spotLights;
     ShadowConfig shadow;

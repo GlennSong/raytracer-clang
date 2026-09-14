@@ -13,6 +13,7 @@
 #include "../engine/systems/building_interior_system.h"
 #include "../engine/systems/door_system.h"
 #include "../engine/systems/elevator_system.h"
+#include "../engine/systems/beacon_light_system.h"
 #include "../engine/systems/terrain_lod_system.h"
 #include "../apps/citysim/city_render.h"
 #include "../apps/citysim/city_spectate.h"
@@ -192,6 +193,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // above still follows the sim ghosts (citySys is consumed there).
 #endif
     addSystem<DayNightSystem>();
+    addSystem<BeaconLightSystem>();   // aviation-beacon sprites + near point lights (skyscrapers v2 M4)
 #ifdef RT_ENABLE_PHYSICS
     addSystem<TerrainLodSystem>(&physSys);  // CDLOD draws + near-node colliders (ADR-0036)
     addSystem<BuildingInteriorSystem>(&physSys);  // streamed interiors (ADR-0080)

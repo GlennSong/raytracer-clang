@@ -65,6 +65,7 @@
 #include <random>
 #include <sstream>
 #include "components.h"
+#include "vehicle_lamps.h"   // beaconCellPhase: the flash every beacon tier shares
 #include "property_json.h"
 #include "../log.h"
 #include <nlohmann/json.hpp>
@@ -4081,11 +4082,13 @@ bool LevelLoader::load(const std::string& path,
                             buildingsMc.vertices, buildingsMc.indices, lb.pavedLot,
                             lb.paveY - 1.0, lb.paveY, lb.paveY - 0.5, {}, 0.0);
                     // Runtime records: one per grown unit (ADR-0080).
-                    for (const engine::BuildingUnit& u : units)
+                    for (const engine::BuildingUnit& u : units) {
                         cityB.records.push_back({u.plan, u.baseY, lb.groundY,
                                                  lb.height, u.params, u.doors,
                                                  u.enterable, lb.recipe,
                                                  lb.type, lb.district});
+                        cityB.records.back().beacons = u.beacons;
+                    }
                     // Record the exact prism for the collider debug layer.
                     colliderPrisms.push_back({lb.plan, base, top, lb.district, lb.type});
                 }
@@ -4372,12 +4375,9 @@ bool LevelLoader::load(const std::string& path,
                         Vec3 c(0, 0, 0);
                         for (const Vertex& v : chunk.vertices) c += v.position;
                         c = c * (1.0 / static_cast<double>(chunk.vertices.size()));
-                        uint32_t h = 2166136261u;
-                        for (long long q : {static_cast<long long>(std::floor(c.x / kBeaconChunk)), static_cast<long long>(std::floor(c.z / kBeaconChunk))})
-                            for (int k = 0; k < 8; ++k) { h ^= static_cast<uint32_t>((q >> (8 * k)) & 0xff); h *= 16777619u; }
                         engine::BeaconBlink bb;
-                        bb.phase = static_cast<float>(h & 0xffffu) / 65535.0f;
-                        bb.period = 1.7f + 0.6f * static_cast<float>((h >> 16) & 0xffu) / 255.0f;   // 26-35 fpm
+                        engine::beaconCellPhase(static_cast<int>(std::floor(c.x / kBeaconChunk)),
+                                                static_cast<int>(std::floor(c.z / kBeaconChunk)), bb.period, bb.phase);
                         bb.baseOpacity = r.material.opacity;   // the halos fade out with the flash
                         if (bb.baseOpacity < 1.0f) r.material.opacity = 0.0f;   // dark at noon by construction
                         // ON SCREEN (the beacon pass divides by the night exposure adaptation, up

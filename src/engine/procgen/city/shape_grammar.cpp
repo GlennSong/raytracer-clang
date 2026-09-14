@@ -170,9 +170,10 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
             m.albedo = {0.18, 0.27, 0.34}; m.metallic = 0.9f; m.roughness = 0.08f;
             m.flags |= RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT; break;
         case PartId::Beacon:
-            // A lamp housing by day (dark painted steel); the loader's
-            // NightGlow + BeaconBlink drive its emission, tinted per vertex.
-            m.albedo = {0.14, 0.13, 0.13}; m.metallic = 0.4f; m.roughness = 0.55f;
+            // The lamp's LENS: red glass — a dark red by day with a tight
+            // specular so it catches the sky; the loader's NightGlow +
+            // BeaconBlink drive its emission, tinted per vertex.
+            m.albedo = {0.42, 0.05, 0.03}; m.metallic = 0.0f; m.roughness = 0.16f;
             m.flags |= RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT; break;
         case PartId::BeaconGlow:
             // The lamp's bulb: a translucent sphere (the transparent pass),
@@ -3616,15 +3617,20 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 // light reads as a glow at any distance.
                 RenderMesh bulb, haze;
                 auto sphere = [&](RenderMesh& m, const Vec3& c, Real r) {
-                    // An octahedron subdivided once and pushed onto the sphere: 32 faces.
+                    // An octahedron subdivided twice and pushed onto the sphere:
+                    // 128 faces, smooth enough at arm's length on the roof.
                     const Vec3 ax[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
                     auto tri = [&](const Vec3& a, const Vec3& b, const Vec3& d) {
                         const Vec3 A = c + a * r, B = c + b * r, D = c + d * r;
                         MeshBuilder::emitTri(m, A, B, D, normalize(cross(B - A, D - A)), red);
                     };
-                    auto face = [&](const Vec3& a, const Vec3& b, const Vec3& d) {
+                    auto quarter = [&](const Vec3& a, const Vec3& b, const Vec3& d) {
                         const Vec3 ab = normalize(a + b), bd = normalize(b + d), da = normalize(d + a);
                         tri(a, ab, da); tri(ab, b, bd); tri(da, bd, d); tri(ab, bd, da);
+                    };
+                    auto face = [&](const Vec3& a, const Vec3& b, const Vec3& d) {
+                        const Vec3 ab = normalize(a + b), bd = normalize(b + d), da = normalize(d + a);
+                        quarter(a, ab, da); quarter(ab, b, bd); quarter(da, bd, d); quarter(ab, bd, da);
                     };
                     const Vec3 &px = ax[0], &nx = ax[1], &py = ax[2], &ny = ax[3], &pz = ax[4], &nz = ax[5];
                     face(py, pz, px); face(py, px, nz); face(py, nz, nx); face(py, nx, pz);
@@ -3636,8 +3642,15 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                     emitBox(out, Scope{o, {Vec3(1, 0, 0), up, Vec3(0, 0, 1)}, Vec3(0.4, 0.5, 0.4)},
                             PartId::Beacon, red);
                     const Vec3 c(pin.x, by + 0.25, pin.y);
-                    sphere(bulb, c, 0.5);
-                    sphere(haze, c, 1.1);
+                    // The runtime's handle on the lamp (BeaconLightSystem: the
+                    // far sprite and the near point light).
+                    out.attaches.push_back({c, up, "beacon"});
+                    // The near-tier spheres ride the Full mesh only: the far
+                    // tier is the sprite's.
+                    if (full) {
+                        sphere(bulb, c, 0.5);
+                        sphere(haze, c, 1.1);
+                    }
                 };
                 // At most SIX lamps per ring: a round plan's two dozen corners
                 // would wear a crown of beacons (the skyline frame showed it).

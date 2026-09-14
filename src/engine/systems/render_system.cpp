@@ -164,6 +164,14 @@ void RenderSystem::render(FrameContext& ctx) {
             for (const PointLight& p : roomPoints)
                 withLamps.pointLights.push_back(p);
         }
+        // Aviation-beacon lights (BeaconLightSystem): the nearest few lamps,
+        // red, flashing — the near tier's light on the roof and the HVACs.
+        const auto& beaconPoints = ctx.view.lighting.beaconPoints;
+        if (!beaconPoints.empty()) {
+            if (!lit) { withLamps = ctx.view.lighting; lit = true; }
+            for (const PointLight& p : beaconPoints)
+                withLamps.pointLights.push_back(p);
+        }
         ctx.renderer.setLights(lit ? withLamps : ctx.view.lighting);
     }
 

@@ -6662,9 +6662,24 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
     between flashes the spheres are gone rather than grey balls. On screen the lamp is 1.3, the
     bulb 1.65 through its opacity, the haze 1.0 — a red core with a soft red corona. A ring is at most
     six lamps (a round plan's two dozen corners wore a crown of them), and the mid ring flashes with
-    the top (the FAA has every L-864 level flash together). Frames:
-    `~/Claude/buildings/ref/after_m5_night_beacon_halos.png`. Still owed: podium uplights, and a
-    Lua-readable per-building lighting spec (today the choices are hashed, not authored).
+    the top (the FAA has every L-864 level flash together).
+    *Three tiers (Glenn's LOD ask, same day):* the grammar leaves a `"beacon"` attach point per lamp,
+    the lot pass keeps them on the unit (`BuildingUnit::beacons`, LOTS section v6) and the loader
+    on the `BuildingRecord`, so the runtime knows every lamp. FAR: `BeaconLightSystem` draws one
+    `InstanceGroup` of camera-facing quads for the whole city, a baked 64² radial glow texture
+    shaping each through the new `RenderMaterial::FLAG_ALPHA_FROM_MAP` (the transparent pass's
+    alpha = opacity × the albedo map's alpha; Vulkan and Metal, WebGPU has no transparent pass),
+    sized 1.4 m + 1 m per 80 m so a lamp still reads across the river, the flash folded into each
+    instance's scale, sorted back to front, fading out inside 20 m. NEAR: the bulb and haze spheres
+    ride the Full mesh only and `applyBeaconBlink` fades their opacity out between 20 and 35 m from
+    the camera (per chunk), while the same system stages the nearest six lamps within 60 m as red
+    point lights (`lighting.beaconPoints`, merged by RenderSystem under the 32-light cap) so the
+    roof, the parapet and the HVAC casings pick up the red. ALWAYS: the housing is a red-glass lens
+    material. One clock: `beaconCellPhase` hashes the flash from the lamp's 24 m cell — the loader's
+    chunks, the sprites and the lights all use it — and DayNightSystem publishes its flash clock and
+    the night adaptation on the lighting state. Frames: `after_m4_beacon_tiers_{skyline,roof20m,
+    roof8m}.png`. Still owed: podium uplights, and a Lua-readable per-building lighting spec (today
+    the choices are hashed, not authored).
 
 11. **The core: shafts, stairwells and an elevator bank, climbable** (`core_plan.h`, plan M5/M6).
     A building of four floors and up (`BuildingParams::core` 0 = auto, 1 = never, 2 = always; Lua
