@@ -110,7 +110,19 @@ struct CoreMeshes {
 };
 void emitCoreStorey(CoreMeshes& out, RenderMesh* colliderOut, const CorePlan& core,
                     const StoreyPlan& sp, Real baseY, const BuildingParams& params,
-                    bool flightsUp, bool landing);
+                    bool flightsUp, bool landing, bool walls = true);
+
+// The shaft WALLS alone (inner and outer skins, the doors with their reveals)
+// for one storey: the PERMANENT half of the core. The exterior grow emits
+// them for every storey (growPlanBuilding, Full detail), so the shafts read
+// enclosed from the lobby, from a stairwell looking down and from a riding
+// cab whatever storeys the interior has streamed — Glenn's walk
+// (2026-09-14): "sides disappear", "gaps around the stairwell and
+// elevators", "the elevator door disappears and I can see the non-interior
+// as we go up". emitCoreStorey with `walls` false then adds their colliders
+// only, for the storeys it streams.
+void emitCoreShaftWalls(CoreMeshes& out, RenderMesh* colliderOut, const CorePlan& core,
+                        const StoreyPlan& sp, Real baseY, const BuildingParams& params);
 
 }  // namespace engine
 

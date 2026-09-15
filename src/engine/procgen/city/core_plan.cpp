@@ -173,44 +173,26 @@ void deckQuad(RenderMesh& m, RenderMesh* col, const CoreShaft& s, Real u0, Real 
     if (col) MeshBuilder::emitQuad(*col, A, B, C, D, n, color);
 }
 
-// The four walls of a shaft for one storey: inner skins on the shaft line
-// facing in, outer skins one wall thickness out facing out (only where no
-// other shaft sits behind them), the door cut into the v = 0 wall with its
-// reveals. Colliders for every skin.
+// The four INNER skins of a shaft for one storey, on the shaft line facing
+// in, the door cut into the v = 0 wall with its reveals out to the core's
+// outer ring (coreRing). Colliders for every skin. The outer face of the
+// core is the ring's, not the shafts': per-shaft outer skins left the
+// wall-thick slot between two neighbours open — a dark slit beside every
+// hoistway door (Glenn's walk, 2026-09-14: "gaps in the geometry
+// surrounding the stairwell and elevators").
 void shaftWalls(CoreMeshes& out, RenderMesh* col, const CorePlan& core, const CoreShaft& s, Real y0,
                 Real h, const Vec3& paintOut, const Vec3& paintIn) {
+    (void)core;
     // Edges in the shaft frame, CCW seen from above with v "up the page":
     // 0: v = 0 (u 0 -> W), 1: u = W (v 0 -> D), 2: v = D (u W -> 0), 3: u = 0 (v D -> 0).
     struct Edge { Vec2 a, b; Vec2 nOut; };   // frame coords; nOut in frame axes
     const Real W = s.width, D = s.depth;
     const Edge edges[4] = {{{0, 0}, {W, 0}, {0, -1}}, {{W, 0}, {W, D}, {1, 0}},
                            {{W, D}, {0, D}, {0, 1}}, {{0, D}, {0, 0}, {-1, 0}}};
-    // Is a frame point behind this wall covered by ANOTHER shaft — its rect
-    // dilated by the wall gap, so the sealed slots between neighbours count
-    // as covered too?
-    auto coveredBy = [&](const CoreShaft& o, const Vec2& w) {
-        if (&o == &s) return false;
-        const Vec2 q = o.frame.toFrame(w);
-        const Real g = kWall + 0.01;
-        return q.x >= -g && q.x <= o.width + g && q.y >= -g && q.y <= o.depth + g;
-    };
-    auto inOtherShaft = [&](const Vec2& frameQ) {
-        const Vec2 w = s.frame.toWorld(frameQ);
-        for (const CoreShaft& hw : core.hoistways)
-            if (coveredBy(hw, w)) return true;
-        for (const CoreStair& st : core.stairs)
-            if (coveredBy(st.shaft, w)) return true;
-        if (core.hasService && coveredBy(core.service, w)) return true;
-        return false;
-    };
     for (int ei = 0; ei < 4; ++ei) {
         const Edge& e = edges[ei];
         const Vec2 nW = s.frame.u * e.nOut.x + s.frame.v * e.nOut.y;   // world outward normal
-        const Vec3 nOut3(nW.x, 0, nW.y), nIn3(-nW.x, 0, -nW.y);
-        // Exposed when any of three samples along the edge has nothing behind it.
-        bool exposed = false;
-        for (Real t : {0.25, 0.5, 0.75})
-            if (!inOtherShaft(e.a + (e.b - e.a) * t + e.nOut * (kWall + 0.05))) exposed = true;
+        const Vec3 nIn3(-nW.x, 0, -nW.y);
         auto skinAt = [&](Real off, const Vec3& n, const Vec3& colr, Real ta, Real tb, Real yb, Real yt) {
             // The skin's segment from parameter ta to tb along the edge, `off` outward.
             const Vec2 pa = e.a + (e.b - e.a) * ta + e.nOut * off;
@@ -221,7 +203,6 @@ void shaftWalls(CoreMeshes& out, RenderMesh* col, const CorePlan& core, const Co
         const bool doorEdge = ei == 0 && s.doorWidth > 0;
         if (!doorEdge) {
             skinAt(0, nIn3, paintIn, 0, 1, y0, y0 + h);
-            if (exposed) skinAt(kWall, nOut3, paintOut, 0, 1, y0, y0 + h);
             continue;
         }
         const Real x0 = std::max(Real(0), s.doorX - s.doorWidth * 0.5);
@@ -234,7 +215,6 @@ void shaftWalls(CoreMeshes& out, RenderMesh* col, const CorePlan& core, const Co
             skinAt(off, n, colr, x0 / len, x1 / len, y0 + dh, y0 + h);   // the lintel band
         };
         piece(0, nIn3, paintIn);
-        if (exposed) piece(kWall, nOut3, paintOut);
         // Reveals: the two jambs and the lintel underside, between the skins.
         const Vec2 tangent = s.frame.u * (e.b - e.a).x / len + s.frame.v * (e.b - e.a).y / len;
         const Vec3 t3(tangent.x, 0, tangent.y);
@@ -350,18 +330,72 @@ void stairStorey(CoreMeshes& out, RenderMesh* col, const CoreStair& st, Real y0,
 }
 }  // namespace
 
-void emitCoreStorey(CoreMeshes& out, RenderMesh* colliderOut, const CorePlan& core,
-                    const StoreyPlan& sp, Real baseY, const BuildingParams& params,
-                    bool flightsUp, bool landing) {
+// The core's OUTER face for one storey: one ring a wall thickness outside
+// the core rectangle (the shafts fill it: stairs full depth, hoistways with
+// the service block behind), facing out, the doors cut into its front wall.
+// One skin for the whole core, so the slots between neighbouring shafts are
+// sealed by construction.
+void coreRing(CoreMeshes& out, RenderMesh* col, const CorePlan& core, Real y0, Real h, const Vec3& paint) {
+    const Real w = kWall, L = core.length, D = core.depth;
+    const SiteFrame& f = core.frame;
+    auto W = [&](Real u, Real v) { const Vec2 p = f.toWorld({u, v}); return Vec3(p.x, 0, p.y); };
+    const Vec3 nFront(-f.v.x, 0, -f.v.y), nBack(f.v.x, 0, f.v.y);
+    const Vec3 nRight(f.u.x, 0, f.u.y), nLeft(-f.u.x, 0, -f.u.y);
+    // The sides and the back: whole.
+    wallQuad(out.drywall, col, W(L + w, -w), W(L + w, D + w), y0, y0 + h, nRight, paint);
+    wallQuad(out.drywall, col, W(L + w, D + w), W(-w, D + w), y0, y0 + h, nBack, paint);
+    wallQuad(out.drywall, col, W(-w, D + w), W(-w, -w), y0, y0 + h, nLeft, paint);
+    // The front: full-height pieces between the doors, a lintel band over each.
+    struct Hole { Real u0, u1, top; };
+    std::vector<Hole> holes;
+    auto door = [&](const CoreShaft& s) {
+        if (s.doorWidth <= 0) return;
+        const Real su = f.toFrame(s.frame.origin).x;
+        holes.push_back({su + s.doorX - s.doorWidth * 0.5, su + s.doorX + s.doorWidth * 0.5,
+                         std::min(s.doorHeight, h - 0.3)});
+    };
+    for (const CoreShaft& hw : core.hoistways) door(hw);
+    for (const CoreStair& st : core.stairs) door(st.shaft);
+    std::sort(holes.begin(), holes.end(), [](const Hole& a, const Hole& b) { return a.u0 < b.u0; });
+    Real u = -w;
+    for (const Hole& hole : holes) {
+        if (hole.u0 > u + 1e-4) wallQuad(out.drywall, col, W(u, -w), W(hole.u0, -w), y0, y0 + h, nFront, paint);
+        wallQuad(out.drywall, col, W(hole.u0, -w), W(hole.u1, -w), y0 + hole.top, y0 + h, nFront, paint);
+        u = hole.u1;
+    }
+    if (L + w > u + 1e-4) wallQuad(out.drywall, col, W(u, -w), W(L + w, -w), y0, y0 + h, nFront, paint);
+}
+
+void emitCoreShaftWalls(CoreMeshes& out, RenderMesh* colliderOut, const CorePlan& core,
+                        const StoreyPlan& sp, Real baseY, const BuildingParams& params) {
     if (!core.valid) return;
     const Real y0 = baseY + sp.y0, h = sp.h;
     const Vec3 paint = interiorPaintFor(params);
     const Vec3 shaftDark(0.34, 0.34, 0.36);
+    coreRing(out, colliderOut, core, y0, h, paint);
+    for (const CoreShaft& hw : core.hoistways) shaftWalls(out, colliderOut, core, hw, y0, h, paint, shaftDark);
+    for (const CoreStair& st : core.stairs) shaftWalls(out, colliderOut, core, st.shaft, y0, h, paint, paint);
+    if (core.hasService) shaftWalls(out, colliderOut, core, core.service, y0, h, paint, paint);
+}
+
+void emitCoreStorey(CoreMeshes& out, RenderMesh* colliderOut, const CorePlan& core,
+                    const StoreyPlan& sp, Real baseY, const BuildingParams& params,
+                    bool flightsUp, bool landing, bool walls) {
+    if (!core.valid) return;
+    const Real y0 = baseY + sp.y0, h = sp.h;
+    const Vec3 paint = interiorPaintFor(params);
     const Real floorTone = 0.85 + 0.45 * (((params.seed >> 4) & 0xffu) / 255.0);
     const Vec3 floorCol = floorFinishFor(params).albedo * floorTone;
     const Vec3 stairCol = stairFinishFor(params).albedo * floorTone;
+    // The walls: drawn here only when the exterior mesh does not already
+    // carry them (a whole-building grow in a test); their colliders always.
+    if (walls) {
+        emitCoreShaftWalls(out, colliderOut, core, sp, baseY, params);
+    } else {
+        CoreMeshes scratch;
+        emitCoreShaftWalls(scratch, colliderOut, core, sp, baseY, params);
+    }
     for (const CoreShaft& hw : core.hoistways) {
-        shaftWalls(out, colliderOut, core, hw, y0, h, paint, shaftDark);
         // The CALL BUTTON: a small dark plate beside the door at hand height,
         // proud of the outer skin, and a hall lantern plate above the door.
         auto plate = [&](Real u0, Real u1, Real yb, Real yt, const Vec3& colr) {
@@ -381,11 +415,8 @@ void emitCoreStorey(CoreMeshes& out, RenderMesh* colliderOut, const CorePlan& co
         plate(hw.doorX - 0.16, hw.doorX + 0.16, y0 + hw.doorHeight + 0.12, y0 + hw.doorHeight + 0.24,
               Vec3(0.30, 0.30, 0.32));                                                    // the hall lantern
     }
-    for (const CoreStair& st : core.stairs) {
-        shaftWalls(out, colliderOut, core, st.shaft, y0, h, paint, paint);
+    for (const CoreStair& st : core.stairs)
         stairStorey(out, colliderOut, st, y0, h, flightsUp, landing, floorCol, stairCol, paint);
-    }
-    if (core.hasService) shaftWalls(out, colliderOut, core, core.service, y0, h, paint, paint);
 }
 
 }  // namespace engine

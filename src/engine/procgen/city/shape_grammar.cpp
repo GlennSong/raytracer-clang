@@ -315,6 +315,24 @@ void emitQuad(RenderMesh& mesh, const Vec3& a, const Vec3& b, const Vec3& c,
     MeshBuilder::emitQuad(mesh, a, b, c, d, normal, color);
 }
 
+// ROOM UVs on a pane (the interior mapping; Glenn's walk 2026-09-14: "the
+// rooms are stretched on the ground floor because the windows are tall"):
+// u counts 3 m rooms along the face, v is the fraction of the STOREY, so a
+// floor-to-ceiling pane shows a storey-high room instead of one stretched
+// to the pane. The storey height rides in the tangent's length (the shader
+// reads it back to put the room box in metres). Rewrites the vertices from
+// `v0` on — call right after the pane's quad (and its lunette) went in.
+static void roomUV(RenderMesh& m, std::size_t v0, const FaceRect& fr) {
+    const Real sh = std::max(Real(1.0), fr.height);
+    for (std::size_t i = v0; i < m.vertices.size(); ++i) {
+        Vertex& vt = m.vertices[i];
+        const Vec3 rel = vt.position - fr.bl;
+        vt.u = static_cast<float>(dot(rel, fr.h) / 3.0);
+        vt.v = static_cast<float>(dot(rel, fr.v) / sh);
+        vt.tangent = fr.h * sh;
+    }
+}
+
 // Append a part's geometry, creating the part lazily and keeping materialIndex.
 // NOTE: the returned reference is invalidated by any later partMesh() that grows
 // out.parts — use it immediately, never hold it across another partMesh() call.
@@ -527,9 +545,11 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
         const Vec3 bayAnchor = fr.at((x0 + x1) * 0.5, spandrelH);
         const bool litBay = litOfficeBay(bayAnchor, occupancy);
         RenderMesh& vision = litBay ? glassLit : glass;
+        const std::size_t pv0 = vision.vertices.size();
         emitQuad(vision, fr.at(x0, spandrelH) + gin, fr.at(x1, spandrelH) + gin,
                  fr.at(x1, fh) + gin, fr.at(x0, fh) + gin, fr.n,
                  litBay ? litTint(bayAnchor, true) : glassCol);
+        roomUV(vision, pv0, fr);
     }
     // FLAT (LOD1): the spandrel band + vision pane carry the curtain-wall read
     // at distance; the solid mullion lattice is the expensive half — skip it.
@@ -745,10 +765,24 @@ void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
         q(wall, o.wx0, o.head, o.wx1, fr.height, icol, in);   // over the head
         if (!o.entrance) {
             const bool lit = litWindow(fr.at(o.wx0, o.sill));
-            q(lit ? glassLit : glass, o.wx0, o.sill, o.wx1, o.head,
+            RenderMesh& pane = lit ? glassLit : glass;
+            const std::size_t pv0 = pane.vertices.size();
+            q(pane, o.wx0, o.sill, o.wx1, o.head,
               lit ? litTint(fr.at(o.wx0, o.sill), curtainWall)
                   : materialFor(PartId::Glass, wallColor).albedo,
               in + fr.n * 0.02);
+            roomUV(pane, pv0, fr);
+            // REVEALS (Glenn's walk, 2026-09-14: "a gap between the exterior
+            // and interior — no geo there"): the two jambs, the sill top and
+            // the head underside between the facade sheet and this skin, so
+            // the wall has a thickness at the window instead of an open slot
+            // into the cavity.
+            const Vec3 P00 = fr.at(o.wx0, o.sill), P10 = fr.at(o.wx1, o.sill);
+            const Vec3 P01 = fr.at(o.wx0, o.head), P11 = fr.at(o.wx1, o.head);
+            emitQuad(wall, P00, P00 + in, P01 + in, P01, fr.h, icol);              // left jamb
+            emitQuad(wall, P10, P10 + in, P11 + in, P11, fr.h * -1.0, icol);       // right jamb
+            emitQuad(wall, P00, P10, P10 + in, P00 + in, Vec3(0, 1, 0), icol);     // sill
+            emitQuad(wall, P01, P11, P11 + in, P01 + in, Vec3(0, -1, 0), icol);    // head
         }
     }
     appendToPart(out, PartId::Interior, wall);
@@ -771,9 +805,11 @@ static void emitFlatFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode
         // window keeps its lit/dark choice across the LOD swap.
         const bool litPane = !o.entrance && litWindow(fr.at(o.wx0, o.sill));
         RenderMesh& dst = o.entrance ? door : (litPane ? glassLit : glass);
+        const std::size_t pv0 = dst.vertices.size();
         emitQuad(dst, fr.at(o.wx0, o.sill) + proud, fr.at(o.wx1, o.sill) + proud,
                  fr.at(o.wx1, o.head) + proud, fr.at(o.wx0, o.head) + proud,
                  fr.n, o.entrance ? dcol : (litPane ? litTint(fr.at(o.wx0, o.sill), p.curtainWall) : gcol));
+        if (!o.entrance) roomUV(dst, pv0, fr);
     }
     appendToPart(out, p.wallPart, wall);
     appendToPart(out, PartId::Glass, glass);
@@ -1014,6 +1050,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             const bool litPane = litWindow(fr.at(wx0, openSill));
             RenderMesh& pane = litPane ? glassLit : glass;
             const Vec3 pcol = litPane ? litTint(fr.at(wx0, openSill), p.curtainWall) : gcol;
+            const std::size_t pv0 = pane.vertices.size();
             emitQuad(pane, oBL + in, oBR + in, oTR + in, oTL + in, fr.n, pcol);
             if (rise > 0) {
                 Vec3 S = fr.at(cx, ysp) + in;
@@ -1022,6 +1059,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
                                          fr.at(arc[k + 1].x, arc[k + 1].y) + in,
                                          fr.n, pcol);
             }
+            roomUV(pane, pv0, fr);
 
             // Surrounds (Trim): the projecting SILL course, and a HOOD — a flat
             // header band, or a voussoir band that FOLLOWS the arch (device:
@@ -3002,9 +3040,12 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     // landings, on every storey in range — the ground's included.
     if (core.valid) {
         CoreMeshes cm;
+        // The shaft walls themselves are the exterior mesh's (permanent, full
+        // height — emitCoreShaftWalls in growPlanBuilding); here only their
+        // colliders, for the storeys streamed.
         for (int ki = kA; ki < kB; ++ki)
             emitCoreStorey(cm, colliderOut, core, storeys[static_cast<std::size_t>(ki)], baseY,
-                           params, ki + 1 < nS, ki >= 1);
+                           params, ki + 1 < nS, ki >= 1, false);
         // LOBBY DRESSING (M5, owed): a reception desk facing the entrance,
         // between the door and the bank, with a planter at each end — boxes
         // with colliders, in the lobby's own storey only.
@@ -3398,6 +3439,21 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     BuildingParams upper = params;
     upper.pilasters = false;
     const std::vector<StoreyPlan> storeys = storeyPlans(plan, params);
+    // THE CORE'S ENCLOSURE at full height, permanent (skyscrapers v2 M5,
+    // Glenn's walk 2026-09-14): the shaft walls of every storey ride in the
+    // exterior mesh, so the stairwells and hoistways are closed rooms from
+    // the lobby, from a stairwell looking down and from a riding cab no
+    // matter which storeys the interior has streamed. The streamed interior
+    // adds their colliders, the flights, landings and doors.
+    if (full && params.openDoorway && wantsCore(params)) {
+        const CorePlan ecore = coreFor(plan, params, entranceEdge);
+        if (ecore.valid) {
+            CoreMeshes cm;
+            for (int i = 0; i < params.floors && i + 1 < static_cast<int>(storeys.size()); ++i)
+                emitCoreShaftWalls(cm, nullptr, ecore, storeys[static_cast<std::size_t>(i)], baseY, params);
+            appendToPart(out, PartId::Interior, cm.drywall);
+        }
+    }
     Poly2 cur = plan;
     Real tierY0 = y;
     for (int i = 0; i < params.floors; ++i) {

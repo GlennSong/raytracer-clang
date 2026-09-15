@@ -6841,6 +6841,40 @@ extension.
 round site, a flatiron prow) — that is a second mass kind in the site plan, not a return to the lot
 polygon.
 
+
+**Addendum (2026-09-14, Glenn's tower walk).** The elevator and stairs worked; the findings were
+all of one kind — geometry that exists only where the interior has streamed:
+
+- *"Sides of the stairwell disappear depending on the view", "gaps around the stairwell and
+  elevators", "after the door closes the elevator disappears and I can see the non-interior as we
+  go up", "from outside you can see the holes where the shafts are supposed to be."* The shaft
+  walls were the streamed storey window's. Now `emitCoreShaftWalls` (core_plan) puts the
+  enclosure — inner and outer skins, doors, reveals — of EVERY storey in the exterior Full mesh
+  of an enterable cored building (`growPlanBuilding`), and `emitCoreStorey(..., walls=false)`
+  streams only their colliders plus the flights, landings and plates. The cab carries its own two
+  leaves (`Cab::doorLeft/doorRight`), open with the hoistway doors at a floor, shut the moment it
+  moves. Producer tags `2026-09-14.22`.
+- *"The red lights shine into the floor of the building."* Point lights cast no shadows. A
+  building's beacon lights are muted while the camera is inside its plan and under its roof
+  (`BeaconLightSystem`); the sprites and glow spheres still show through the windows.
+- *"A gap between the exterior and interior at the windows — no geo there."* The facade sheet
+  and the inner skin each had the opening; nothing between. `emitInnerWallRect` now closes each
+  window with jambs, a sill and a head across the cavity (`inner_walls_close_the_windows_with_reveals`).
+- *"I can shoot the gun through the window."* The pane has a collider; the muzzle is half a
+  metre in front of the eye, which at a pane is already outside. `spawn.block` takes an `origin`
+  and the ScriptSystem's host-bound muzzle check (`setMuzzleCheck`, the physics ray cast)
+  swallows a shot born behind a wall.
+- *"The cube-mapped rooms are stretched on the ground floor."* The room was the pane's own
+  0..1. `roomUV` now counts 3 m rooms along the face and the storey's fraction up, with the
+  storey height in the tangent's length; the shader's room box is in metres (3 × storey × 4 deep)
+  and its room pick keys on the room's own corner.
+- *"The glass has no reflectivity."* A plain alpha blend scaled the reflection by the opacity: an
+  18 % pane showed 18 % of its sky. The transparent output's alpha is now
+  `opacity + (1 − opacity)·F` with the Fresnel reflection carried at full strength — the pane
+  ADDS its sky over what comes through. There is no screen-space reflection: it mirrors the sky,
+  not the street.
+- *"Maybe it's using the old clouds?"* It was: the lab metro level had no `environment.clouds`
+  block, so the 2D overlay drew. It now carries the volumetric deck and the scattering sky.
 ---
 
 ## ADR-0087 — Vehicle handling: a car that neither fishtails nor rolls (measured, then assisted)
@@ -6913,4 +6947,15 @@ callback); tyre load sensitivity.
 **Revisit trigger:** a drift or a rally mode — then the tyre callback (friction circle, rear bias)
 replaces the assist rather than fighting it.
 
+
+**Addendum (2026-09-14, Glenn's drive): "the turn radius is really bad — the turn arc is very
+long."** Measured (the probe's steady turn, full lock held): the assisted car's radius was the
+raw car's to within a metre at every speed — 5 m at 18 km/h, 17 m at 43, 28 m at 58 — so the
+physics had not changed; what had was the FEEL: the lift-off rotation that used to swing the
+nose (and then the tail) was gone, and the first steering assist was slow (a third of a second to
+full lock, half lock by 50 km/h). Two changes: `VehicleConfig::lateralGrip` (2.0, Jolt's curve
+peak; the slide value 85 % of it; Lua `grip`) — an arcade 1.3 g when sliding, 20 m at 58 km/h,
+14 m at 43 — with the yaw assist's cap derived from it; and the keyboard assist quickened (full
+lock to 8 m/s, half at 22, wound on in a sixth of a second). The gates (lift-off, tank slapper,
+slanted kerb) hold at the higher grip.
 ---

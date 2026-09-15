@@ -55,6 +55,7 @@ private:
         Vec3 pos;
         float period = 2.0f;
         float phase = 0.0f;
+        std::size_t record = 0;   // the building it sits on
     };
     void gather(const CityBuildings& cb);
     void ensureGroup(FrameContext& ctx);

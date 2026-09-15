@@ -236,6 +236,15 @@ public:
         // scale). It never adds yaw the driver did not steer for and never
         // acts with all four wheels off the ground. 0 = off.
         Real yawAssist = 3.0;
+        // TYRE GRIP: the peak of Jolt's lateral slip curve (its default is
+        // 1.2 at 3 degrees, 1.0 past 20; the road's friction combines in by
+        // its square root). The steady turn radius is v² over the grip the
+        // road allows, so this is THE knob for how tight a car corners
+        // without sliding — Glenn's drive (2026-09-14): "the turn radius is
+        // really bad". Measured (tests/test_vehicle_handling.cpp): 1.2 gave
+        // 28 m at 58 km/h, 1.7 gave 23, 2.0 gives ~20 (an arcade 1.3 g when
+        // sliding). The yaw assist's cap follows it.
+        Real lateralGrip = 2.0;
         std::vector<VehicleWheel> wheels;
     };
 

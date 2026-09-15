@@ -120,6 +120,7 @@ local function from_class(class_name, seed, opts)
     max_roll_deg = opts.max_roll_deg,
     anti_roll = opts.anti_roll,
     yaw_assist = opts.yaw_assist,
+    grip = opts.grip,               -- the tyres' peak lateral grip (default 1.7)
     wheel = { radius = r, width = math.max(0.18, c.track * 0.13) },
     wheels = {
       { x =  halfTrack, y = axleY, z = frontZ, steered = true,  driven = true },

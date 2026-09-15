@@ -34,6 +34,12 @@ public:
     // `events` may be null — then sound.play errors if a script calls it.
     void setServices(InputMap* input, const CameraState* camera,
                      AssetManager* assets, EventBus* events = nullptr);
+    // The muzzle check for spawn.block's `origin`: `blocked(from, to)` says
+    // whether a wall stands between the eye and the spawn point — a shot
+    // born behind a pane is swallowed. The host binds the physics world's
+    // ray cast (the engine core links no physics); unset = no check.
+    using BlockedFn = std::function<bool(const Vec3& from, const Vec3& to)>;
+    void setMuzzleCheck(BlockedFn blocked) { blocked_ = std::move(blocked); }
 
     // View mode for camera.first_person(): true when the view is the player's
     // own eyes (on foot, not the V shoulder rig, not a vehicle chase camera).
@@ -48,6 +54,7 @@ public:
 
 private:
     ScriptVM vm_;
+    BlockedFn blocked_;
     InputMap* input_ = nullptr;
     const CameraState* camera_ = nullptr;
     AssetManager* assets_ = nullptr;

@@ -144,7 +144,11 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // The shooting gun is now a Lua ScriptBehaviour on the player (ADR-0024);
     // ScriptSystem drives it. The script is attached in onEnter, once the player
     // entity exists. (Replaces the C++ ShootingSystem's bullet spawning.)
-    addSystem<ScriptSystem>();
+    addSystem<ScriptSystem>().setMuzzleCheck([&physSys](const Vec3& from, const Vec3& to) {
+        const Vec3 d = to - from;
+        Vec3 hit;
+        return d.lengthSquared() > 1e-8 && physSys.physicsWorld().castRay(from, d * 1.05, hit);
+    });
 #else
     addSystem<ShootingSystem>(camSys.flyController(), physSys, renderer);
 #endif

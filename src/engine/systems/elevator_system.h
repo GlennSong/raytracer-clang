@@ -85,6 +85,11 @@ private:
         std::vector<Entity> entities;
         std::vector<MeshHandle> meshes;
         std::vector<Vec3> local;   // part centres in the hoistway frame: (u, above the floor, v)
+        // The cab's own DOORS (Glenn's walk, 2026-09-14: "after the door
+        // closes it disappears and I can see the non-interior as we go up"):
+        // two leaves on the cab front, index into `local`, sliding with the
+        // hoistway leaves' doorT so a rider in a moving cab sees the cab.
+        int doorLeft = -1, doorRight = -1;
     };
     struct Leaf {
         Entity entity;

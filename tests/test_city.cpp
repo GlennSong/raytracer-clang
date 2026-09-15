@@ -953,6 +953,72 @@ TEST_CASE(curtain_wall_interior_skins_meet_at_the_corners) {
     CHECK(cornersShared(ground, 0.0, plan) == 4);   // the entrance wall and the blank stair wall mitre too
 }
 
+// Glenn's walk (2026-09-14): "looking out the windows there's a gap between
+// the exterior and interior — no geo there". The inner skin now closes each
+// window with jambs, a sill and a head between the facade sheet and itself:
+// Interior triangles that SPAN the wall cavity (one edge on the facade
+// plane, one on the inset plane).
+TEST_CASE(inner_walls_close_the_windows_with_reveals) {
+    const Poly2 plan = {{0, 0}, {30, 0}, {30, 24}, {0, 24}};
+    BuildingParams p;
+    p.floors = 6;
+    p.curtainWall = false;
+    p.walkableGround = true;
+    p.openDoorway = true;
+    p.core = 1;
+    p.seed = 3;
+    const Real inset = std::max(p.wallThickness, Real(0.55));
+    auto depth = [&](const Vec3& v) { return std::min({v.x, 30.0 - v.x, v.z, 24.0 - v.z}); };
+    const BuildingMesh upper = growInterior(plan, p, 0.0);
+    int spanning = 0;
+    for (const RenderMesh& part : upper.parts) {
+        if (part.materialIndex != static_cast<int>(PartId::Interior)) continue;
+        for (std::size_t i = 0; i + 2 < part.indices.size(); i += 3) {
+            Real lo = 1e9, hi = -1e9;
+            for (int k = 0; k < 3; ++k) {
+                const Real d = depth(part.vertices[part.indices[i + k]].position);
+                lo = std::min(lo, d);
+                hi = std::max(hi, d);
+            }
+            if (lo < 0.02 && hi > inset - 0.02) ++spanning;
+        }
+    }
+    std::printf("    [reveals] %d cavity-spanning interior triangles\n", spanning);
+    CHECK(spanning >= 8);   // at least one window's four reveals (two triangles each)
+}
+
+// Glenn's walk (2026-09-14): "the cube mapped rooms are stretched on the
+// ground floor because the windows are tall". A lit pane's UVs now count 3 m
+// rooms along the face (u) and the storey's fraction up (v), with the storey
+// height in the tangent's length for the shader.
+TEST_CASE(lit_panes_carry_room_uvs_in_metres) {
+    const Poly2 plan = {{0, 0}, {30, 0}, {30, 24}, {0, 24}};
+    BuildingParams p;
+    p.floors = 6;
+    p.curtainWall = false;
+    p.walkableGround = true;
+    p.openDoorway = true;
+    p.core = 1;
+    p.seed = 3;
+    const BuildingMesh bm = growPlanBuilding(plan, p, 0.0, FacadeDetail::Full);
+    std::size_t lit = 0;
+    bool beyondFirstRoom = false, vInRange = true, tangentIsStorey = true;
+    for (const RenderMesh& part : bm.parts) {
+        if (part.materialIndex != static_cast<int>(PartId::GlassLit)) continue;
+        for (const Vertex& v : part.vertices) {
+            ++lit;
+            if (v.u > 1.0f) beyondFirstRoom = true;
+            if (v.v < -0.01f || v.v > 1.01f) vInRange = false;
+            const Real tl = v.tangent.length();
+            if (tl < 2.2 || tl > 6.0) tangentIsStorey = false;
+        }
+    }
+    CHECK(lit > 0);
+    CHECK(beyondFirstRoom);
+    CHECK(vInRange);
+    CHECK(tangentIsStorey);
+}
+
 TEST_CASE(distant_mass_box_carries_window_cell_uvs) {
     // The far tier's lit windows: the mass box's wall UVs count window cells
     // (3.2 m per cell, eight cells per texture repeat), the roof cap samples

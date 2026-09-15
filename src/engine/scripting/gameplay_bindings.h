@@ -34,6 +34,13 @@ struct SpawnCommand {
     double friction = 0.3;
     Vec3 color{1, 1, 1};
     Vec3 emission{0, 0, 0};
+    // Block only: where the shot LEAVES from (the eye). With a physics world
+    // bound, a block whose spawn point lies behind a wall from here is
+    // swallowed — the muzzle sits half a metre in front of the eye, which at
+    // a window is already outside (Glenn's walk, 2026-09-14: "I can shoot
+    // the gun through the window").
+    bool hasOrigin = false;
+    Vec3 origin;
 
     // Model only:
     std::shared_ptr<RenderMesh> mesh;   // the generated mesh to render

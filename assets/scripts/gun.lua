@@ -103,6 +103,7 @@ function M:update(e, dt)
 
     spawn.block{
         position    = pos,
+        origin      = eye,     -- a muzzle behind a pane from the eye swallows the shot
         velocity    = vel,
         size        = SIZE,
         restitution = 0.7,

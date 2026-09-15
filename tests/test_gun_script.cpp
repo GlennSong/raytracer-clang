@@ -131,6 +131,33 @@ TEST_CASE(gun_fires_a_physics_block_along_camera_aim) {
     if (t) CHECK(t->position.z > 0.4);
 }
 
+// Glenn's walk (2026-09-14): "I can shoot the gun through the window". The
+// muzzle sits half a metre in front of the eye; at a pane that is already
+// outside. With the host's muzzle check bound, a wall between eye and
+// muzzle swallows the shot.
+TEST_CASE(gun_shot_is_swallowed_when_the_muzzle_is_behind_a_wall) {
+    World world;
+    Entity player = makePlayer(world, gunSource());
+    InputMap input;
+    input.bindButton("fire", MouseButton::Left);
+    bindSlots(input);
+    CameraState cam = forwardCamera();   // eye (0,1,0), forward +Z, muzzle ~z 0.5
+    EventBus events;
+    ScriptSystem sys;
+    sys.setServices(&input, &cam, nullptr, &events);
+    // A "pane" at z = 0.3: anything from the eye to a point beyond it is blocked.
+    sys.setMuzzleCheck([](const Vec3& from, const Vec3& to) {
+        return (from.z - 0.3) * (to.z - 0.3) < 0.0;
+    });
+    input.beginFrame();
+    pressKey(input, KeyCode::Num2);
+    Event click(EventType::MouseButtonPressed);
+    click.button = MouseButton::Left;
+    input.processEvent(click);
+    sys.tick(world, 0.016);
+    CHECK(!findBullet(world, player).valid());   // swallowed
+}
+
 TEST_CASE(gun_spawns_a_procgen_model_that_follows_the_camera) {
     // start() generates the gun mesh with the procgen builders and spawns it as
     // its own camera-following entity (a ScriptBehaviour, no physics). Proves the

@@ -29,11 +29,17 @@
 
 namespace engine {
 
+// Tuned twice on 2026-09-14: the first cut (full lock to 5 m/s, half at
+// 14, 3.5/s on) made Glenn's turns feel long — "the turn arc is very long"
+// — though the steady radius measured the same as the raw key's; it was
+// the RESPONSE. The yaw assist now carries the spin, so the wheel can be
+// quick again: full lock to 8 m/s, half at 22 (about 12 degrees at 90
+// km/h), wound on in a sixth of a second.
 struct SteerAssist {
-    Real fullLockBelow = 5.0;    // m/s: full lock available up to here
-    Real halfLockAt = 14.0;      // m/s: half lock here (~50 km/h)
-    Real rateIn = 3.5;           // full-scales per second, winding on
-    Real rateOut = 6.0;          // full-scales per second, returning to centre
+    Real fullLockBelow = 8.0;    // m/s: full lock available up to here
+    Real halfLockAt = 22.0;      // m/s: half lock here (~80 km/h)
+    Real rateIn = 6.0;           // full-scales per second, winding on
+    Real rateOut = 8.0;          // full-scales per second, returning to centre
 };
 
 // The lock fraction [0,1] available at a forward speed (m/s, sign ignored).

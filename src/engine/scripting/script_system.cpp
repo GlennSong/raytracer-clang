@@ -129,6 +129,10 @@ void ScriptSystem::tick(World& world, double dt) {
     // mutation contract held during each). Renderables need GPU upload, so they
     // are added only when an AssetManager is present (headless ticks skip them).
     for (const SpawnCommand& c : spawns) {
+        // The muzzle behind a wall (a window pane, a door) from the eye: the
+        // shot is swallowed rather than born on the far side.
+        if (c.kind == SpawnKind::Block && c.hasOrigin && blocked_ && blocked_(c.origin, c.position))
+            continue;
         Entity e = world.create();
         Transform t;
         t.position = c.position;

@@ -27,7 +27,8 @@
 #include "../src/engine/mesh_uploader.h"
 #include "../src/engine/procgen/terrain.h"
 #include "../src/engine/procgen/city/road_net.h"   // RoadEntity (signal census)
-#include "../src/engine/procgen/city/building_records.h"  // CityBuildings doors (ADR-0080)
+#include "../src/engine/procgen/city/building_records.h"
+#include "../src/engine/procgen/city/core_plan.h"  // CityBuildings doors (ADR-0080)
 #include "../src/apps/citysim/city_render.h"        // CityRenderSystem (traffic census)
 #include "../src/engine/system.h"
 #include "../src/engine/world.h"
@@ -580,6 +581,53 @@ TEST_CASE(level_census_every_floorplan_conforms_to_the_drawn_ground) {
 // the cut edge across one cell (docs/TECH_DEBT.md, "map vs the territory").
 // The bounds hold that seam where it is; the flush floor rises if placement
 // ever regresses to reading a stale surface again.
+// A LOCATOR for headless frames (print-only, RT_PRINT_CORES=1): the three
+// tallest cored buildings of each selected level with the world points a
+// shot needs — hoistway 0's door foot and normal, the lobby in front of
+// the bank, the same spot on the top storey — so a tower interior can be
+// framed with RT_SPAWN and lanelab_shots.py without a walk.
+TEST_CASE(level_print_tower_cores) {
+    if (!std::getenv("RT_PRINT_CORES")) return;
+    for (const std::string& name : shippedLevels()) {
+        std::unique_ptr<Renderer> renderer = Renderer::create();
+        RendererMeshUploader uploader(*renderer);
+        AssetManager assets(uploader);
+        World world;
+        RenderView view;
+        if (!LevelLoader::load(levelsDir() + "/" + name, world, *renderer, view, assets, false)) continue;
+        struct Tower { std::size_t idx; int floors; };
+        std::vector<Tower> towers;
+        const CityBuildings* cbp = nullptr;
+        world.each<CityBuildings>([&](Entity, CityBuildings& cb) { cbp = &cb; });
+        if (!cbp) continue;
+        for (std::size_t i = 0; i < cbp->records.size(); ++i) {
+            const BuildingRecord& r = cbp->records[i];
+            if (!r.enterable || !wantsCore(r.params)) continue;
+            if (!coreFor(r.plan, r.params, entranceEdgeFor(r.plan, r.params)).valid) continue;
+            towers.push_back({i, r.params.floors});
+        }
+        std::sort(towers.begin(), towers.end(), [](const Tower& a, const Tower& b) { return a.floors > b.floors; });
+        for (std::size_t k = 0; k < towers.size() && k < 3; ++k) {
+            const BuildingRecord& r = cbp->records[towers[k].idx];
+            const CorePlan core = coreFor(r.plan, r.params, entranceEdgeFor(r.plan, r.params));
+            const CoreShaft& hw = core.hoistways[0];
+            const Vec2 foot = hw.doorFoot(), n = hw.doorNormal();
+            const Vec2 lobby = foot + n * 3.0;
+            const std::vector<StoreyPlan> st = storeyPlans(r.plan, r.params);
+            const int top = r.params.floors - 1;
+            const Real yTop = r.baseY + st[static_cast<std::size_t>(top)].y0;
+            std::printf("[cores] %s record %zu: %d floors baseY %.2f groundH %.2f floorH %.2f hoistways %zu\n",
+                        name.c_str(), towers[k].idx, r.params.floors, r.baseY, r.params.groundHeight,
+                        r.params.floorHeight, core.hoistways.size());
+            std::printf("[cores]   door foot (%.2f, %.2f) normal (%.2f, %.2f); lobby spot (%.2f, %.2f) y %.2f; top storey y %.2f (storey %d)\n",
+                        foot.x, foot.y, n.x, n.y, lobby.x, lobby.y, r.baseY + 0.9, yTop, top);
+            const Vec2 c = core.frame.toWorld({core.length * 0.5, core.depth * 0.5});
+            std::printf("[cores]   core centre (%.2f, %.2f) length %.1f depth %.1f; plan centroid (%.2f, %.2f)\n",
+                        c.x, c.y, core.length, core.depth, centroid(r.plan).x, centroid(r.plan).y);
+        }
+    }
+}
+
 TEST_CASE(metro_ground_probes_adhere_between_the_seams) {
     setenv("RT_GROUND_PROBES", "1", 1);
     std::unique_ptr<Renderer> renderer = Renderer::create();

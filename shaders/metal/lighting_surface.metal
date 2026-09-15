@@ -75,15 +75,19 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
         Tg = dot(Tg, Tg) > 1e-8 ? normalize(Tg) : float3(1.0, 0.0, 0.0);
         float3 Bg = cross(Tg, Ng);
         float3 vIn = normalize(geom.worldPosition - camera.cameraPosition);
-        float3 d = float3(dot(vIn, Tg), dot(vIn, Bg), dot(vIn, Ng));
+        // The room in metres (mirrors mesh.frag): 3 m wide, a storey tall
+        // (the storey height rides in the tangent's length), 4 m deep.
+        float storeyH = clamp(length(geom.worldTangent), 1.0, 8.0);
+        float3 d = float3(dot(vIn, Tg) / 3.0, dot(vIn, Bg) / storeyH, dot(vIn, Ng));
         d.z = min(d.z, -1e-3);
-        const float depth = 1.4;
-        float3 o = float3(geom.texcoord.x, geom.texcoord.y, 0.0);
+        const float depth = 4.0;
+        float3 o = float3(fract(geom.texcoord.x), geom.texcoord.y, 0.0);
         float3 bound = float3(d.x > 0.0 ? 1.0 : 0.0, d.y > 0.0 ? 1.0 : 0.0, -depth);
         float3 tt = (bound - o) / d;
         float t = min(tt.x, min(tt.y, tt.z));
         float3 p = o + d * t;
-        float3 cellv = floor(geom.worldPosition / 3.0);
+        float3 roomCorner = geom.worldPosition - Tg * (o.x * 3.0) - Bg * (o.y * storeyH);
+        float3 cellv = floor(roomCorner * 2.0 + 0.5);
         float rnd = fract(sin(dot(cellv, float3(12.9898, 78.233, 37.719))) * 43758.5453);
         float rnd2 = fract(sin(dot(cellv, float3(39.3467, 11.135, 83.155))) * 24634.6345);
         bool office = geom.vertexColor.b >= geom.vertexColor.r;

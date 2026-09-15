@@ -377,6 +377,44 @@ TEST_CASE(handling_yaw_assist_lets_the_car_turn_as_steered) {
     CHECK(std::fabs(turned[1]) > 60.0);
 }
 
+// Diagnosis (Glenn's drive, 2026-09-14: "the turn radius is really bad"):
+// the steady turn radius against speed, full lock held, raw + no assist
+// (the car before tonight) beside shaped + assist (the car now).
+TEST_CASE(handling_probe_turn_radius_prints) {
+    for (Real speed : {5.0, 8.0, 12.0, 16.0, 22.0, 28.0}) {
+        for (int mode = 0; mode < 2; ++mode) {
+            PhysicsWorld world;
+            world.initialize();
+            PhysicsWorld::VehicleConfig cfg = playerSedan();
+            cfg.yawAssist = mode ? 3.0 : 0.0;
+            const PhysicsWorld::VehicleId car = launch(world, cfg, speed);
+            SteerShaper shaper;
+            Real prev = headingDeg(world.vehicleOrientation(car)), total = 0, vsum = 0;
+            int n = 0;
+            for (int i = 0; i < 60 * 4; ++i) {
+                const Vec3 v = world.vehicleVelocity(car);
+                const Vec2 f = forward2(world.vehicleOrientation(car));
+                const Real fwdSpeed = v.x * f.x + v.z * f.y;
+                const Real steer = mode ? shaper.step(1.0, fwdSpeed, 1.0 / 60.0) : 1.0;
+                // Hold the speed: a little throttle when under, none when over.
+                world.setVehicleInput(car, fwdSpeed < speed ? 0.5 : 0.0, steer, 0);
+                world.update(1.0 / 60.0);
+                const Real h = headingDeg(world.vehicleOrientation(car));
+                Real d = h - prev;
+                while (d > 180) d -= 360;
+                while (d < -180) d += 360;
+                prev = h;
+                if (i >= 60) { total += d; vsum += fwdSpeed; ++n; }
+            }
+            const Real yawRate = std::fabs(total) / (n / 60.0) * kPi / 180.0;   // rad/s
+            const Real vAvg = vsum / n;
+            std::printf("[handling] radius %-14s at %4.1f m/s: v=%.1f yaw=%.2f rad/s radius=%.1f m\n",
+                        mode ? "shaped+assist" : "raw", speed, vAvg, yawRate, yawRate > 1e-3 ? vAvg / yawRate : 0.0);
+            world.shutdown();
+        }
+    }
+}
+
 TEST_CASE(handling_step_steer_at_90kmh_settles_straight) {
     for (int shaped = 0; shaped < 2; ++shaped) {
         PhysicsWorld world;

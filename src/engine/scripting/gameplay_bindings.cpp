@@ -194,6 +194,12 @@ int l_spawn_block(lua_State* L) {
     c.friction = optField(L, 1, "friction", c.friction);
     c.color = optFieldVec3(L, 1, "color", c.color);
     c.emission = optFieldVec3(L, 1, "emission", c.emission);
+    lua_getfield(L, 1, "origin");
+    if (lua_istable(L, -1)) {
+        c.origin = fieldVec3(L, 1, "origin");
+        c.hasOrigin = true;
+    }
+    lua_pop(L, 1);
     g->spawns->push_back(c);
     return 0;
 }

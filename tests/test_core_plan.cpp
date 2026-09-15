@@ -5,6 +5,7 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/city/core_plan.h"
+#include "../src/engine/procgen/city/shape_grammar.h"
 
 #include <algorithm>
 #include <chrono>
@@ -238,6 +239,64 @@ TEST_CASE(grow_interior_with_a_core_punches_the_shafts_and_streams_a_window) {
     CHECK(hi <= baseY + storeys[5].y0 + storeys[5].h + 0.06);
     CHECK(floorOver(win, corridor));
     CHECK(!colW.indices.empty());
+}
+
+// Glenn's walk (2026-09-14): "sides disappear", "gaps around the stairwell
+// and elevators", "the elevator door disappears and I can see the
+// non-interior as we go up" — the shaft walls were the streamed window's.
+// Now the exterior Full mesh carries them for EVERY storey (the top one
+// here), the Flat mesh none, and the streamed interior draws none of its
+// own (its colliders still cover them).
+TEST_CASE(core_enclosure_is_permanent_and_the_streamed_walls_are_colliders_only) {
+    const Poly2 plan = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    const BuildingParams p = towerParams(12, true);
+    const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
+    CHECK(core.valid);
+    const std::vector<StoreyPlan> storeys = storeyPlans(plan, p);
+    const StoreyPlan& top = storeys[11];
+    // The hoistway's BACK wall (no door, no plates): a point on its inner
+    // skin at the top storey's mid height.
+    const CoreShaft& hw = core.hoistways[0];
+    const Vec3 back = hw.at(hw.width * 0.5, hw.depth, top.y0 + top.h * 0.5);
+    auto touches = [&](const BuildingMesh& bm, const Vec3& q) {
+        for (const RenderMesh& part : bm.parts) {
+            if (part.materialIndex != static_cast<int>(PartId::Interior)) continue;
+            for (std::size_t i = 0; i + 2 < part.indices.size(); i += 3) {
+                const Vec3 a = part.vertices[part.indices[i]].position;
+                const Vec3 b = part.vertices[part.indices[i + 1]].position;
+                const Vec3 c = part.vertices[part.indices[i + 2]].position;
+                // The triangle's plane must contain q, and q must be within it (bbox).
+                const Vec3 n = cross(b - a, c - a);
+                if (n.lengthSquared() < 1e-12) continue;
+                if (std::fabs(dot(normalize(n), q - a)) > 0.01) continue;
+                const Real minX = std::min({a.x, b.x, c.x}) - 0.01, maxX = std::max({a.x, b.x, c.x}) + 0.01;
+                const Real minY = std::min({a.y, b.y, c.y}) - 0.01, maxY = std::max({a.y, b.y, c.y}) + 0.01;
+                const Real minZ = std::min({a.z, b.z, c.z}) - 0.01, maxZ = std::max({a.z, b.z, c.z}) + 0.01;
+                if (q.x >= minX && q.x <= maxX && q.y >= minY && q.y <= maxY && q.z >= minZ && q.z <= maxZ)
+                    return true;
+            }
+        }
+        return false;
+    };
+    const BuildingMesh fullMesh = growPlanBuilding(plan, p, 0.0, FacadeDetail::Full);
+    const BuildingMesh flatMesh = growPlanBuilding(plan, p, 0.0, FacadeDetail::Flat);
+    CHECK(touches(fullMesh, back));     // the enclosure reaches the top storey
+    CHECK(!touches(flatMesh, back));    // the far LOD carries none of it
+    RenderMesh col;
+    const BuildingMesh win = growInterior(plan, p, 0.0, &col, 9, 12);
+    CHECK(!touches(win, back));         // the streamed interior draws no shaft wall...
+    bool colliderHasIt = false;
+    for (std::size_t i = 0; i + 2 < col.indices.size() && !colliderHasIt; i += 3) {
+        const Vec3 a = col.vertices[col.indices[i]].position, b = col.vertices[col.indices[i + 1]].position,
+                   c = col.vertices[col.indices[i + 2]].position;
+        const Vec3 n = cross(b - a, c - a);
+        if (n.lengthSquared() < 1e-12 || std::fabs(dot(normalize(n), back - a)) > 0.01) continue;
+        if (back.y >= std::min({a.y, b.y, c.y}) - 0.01 && back.y <= std::max({a.y, b.y, c.y}) + 0.01 &&
+            back.x >= std::min({a.x, b.x, c.x}) - 0.01 && back.x <= std::max({a.x, b.x, c.x}) + 0.01 &&
+            back.z >= std::min({a.z, b.z, c.z}) - 0.01 && back.z <= std::max({a.z, b.z, c.z}) + 0.01)
+            colliderHasIt = true;
+    }
+    CHECK(colliderHasIt);               // ...but a walker still cannot pass through it
 }
 
 TEST_CASE(core_window_grow_cost_is_bounded) {

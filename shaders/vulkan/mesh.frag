@@ -623,18 +623,26 @@ void main() {
         Tg = dot(Tg, Tg) > 1e-8 ? normalize(Tg) : vec3(1.0, 0.0, 0.0);
         vec3 Bg = cross(Tg, Ng);   // up the pane
         vec3 vIn = normalize(inWorldPos - g.cameraPosition.xyz);   // into the pane
-        vec3 d = vec3(dot(vIn, Tg), dot(vIn, Bg), dot(vIn, Ng));
+        // The room in METRES: 3 m wide (u counts rooms along the face), a
+        // storey tall (the grammar's roomUV: v is the storey fraction, the
+        // storey height rides in the tangent's length), 4 m deep. A
+        // floor-to-ceiling pane on the ground floor then shows a room the
+        // height of its storey instead of one stretched to the pane.
+        float storeyH = clamp(length(inWorldTangent), 1.0, 8.0);
+        vec3 d = vec3(dot(vIn, Tg) / 3.0, dot(vIn, Bg) / storeyH, dot(vIn, Ng));
         d.z = min(d.z, -1e-3);   // always into the room (the back is front-only anyway)
-        const float depth = 1.4;
-        vec3 o = vec3(inTexcoord.x, inTexcoord.y, 0.0);
+        const float depth = 4.0;
+        vec3 o = vec3(fract(inTexcoord.x), inTexcoord.y, 0.0);
         vec3 bound = vec3(d.x > 0.0 ? 1.0 : 0.0, d.y > 0.0 ? 1.0 : 0.0, -depth);
         vec3 tt = (bound - o) / d;
         float t = min(tt.x, min(tt.y, tt.z));
         vec3 p = o + d * t;
         // The room: a 4x4 grid of tiles — offices in rows 0-1, flats in rows
-        // 2-3 — picked by the pane's 3 m world cell, offices behind a cool
-        // tint (the curtain-wall palette), flats behind a warm one.
-        vec3 cellv = floor(inWorldPos / 3.0);
+        // 2-3 — picked by the room's own corner (its left edge at the storey
+        // floor, a point every fragment of the room agrees on), offices
+        // behind a cool tint (the curtain-wall palette), flats behind a warm one.
+        vec3 roomCorner = inWorldPos - Tg * (o.x * 3.0) - Bg * (o.y * storeyH);
+        vec3 cellv = floor(roomCorner * 2.0 + 0.5);
         float rnd = fract(sin(dot(cellv, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
         float rnd2 = fract(sin(dot(cellv, vec3(39.3467, 11.135, 83.155))) * 24634.6345);
         bool office = inColor.b >= inColor.r;
@@ -803,7 +811,23 @@ void main() {
         }
         // Opacity (float bits in the spare push slot) → output alpha for the
         // transparent blend pass; ignored by the opaque pipeline (blend off).
-        outColor = vec4(color, uintBitsToFloat(pc.surfaceFlags.w) * mapAlpha);
+        float opacity = uintBitsToFloat(pc.surfaceFlags.w) * mapAlpha;
+        if (opacity < 0.999) {
+            // GLASS (Glenn's walk, 2026-09-14: "the glass has no reflectivity"):
+            // a plain alpha blend scales the reflection by the opacity, so an
+            // 18 % pane showed 18 % of its sky. Real glass ADDS its Fresnel
+            // reflection over what comes through: the blend's alpha becomes
+            // opacity + the transmitted share the pane reflects, and the
+            // colour carries that reflection at full strength.
+            vec3 fs = f0 * brdf.x + brdf.y;                       // the split-sum reflectance
+            float F = clamp(max(fs.r, max(fs.g, fs.b)), 0.0, 1.0);
+            vec3 reflected = prefiltered * fs * g.ambient.rgb * ambientShadow;
+            float a = opacity + (1.0 - opacity) * F;
+            vec3 c = (color * opacity + reflected * (1.0 - opacity)) / max(a, 1e-4);
+            outColor = vec4(c, a);
+        } else {
+            outColor = vec4(color, opacity);
+        }
     }
     outNormal = vec4(N * 0.5 + 0.5, roughness);   // world normal (SSAO) + roughness (SSR gate)
 }

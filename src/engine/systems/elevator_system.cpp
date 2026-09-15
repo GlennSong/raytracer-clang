@@ -104,13 +104,21 @@ ElevatorSystem::Bank& ElevatorSystem::ensureBank(World& world, PhysicsWorld* phy
         // gap reads as a threshold, not a slot (the capsule could never fall
         // through a 0.25 m gap, but the eye would).
         const Real vDeck = (0.05 + vFront + CAB_D + 0.1) * 0.5, hDeck = vDeck - 0.05;
-        const Part parts[5] = {
+        // The cab DOORS: two leaves across the front, just inside the sill
+        // (the hoistway leaves slide inside the wall, these at the cab's own
+        // front), closed while the cab moves.
+        const Real vDoor = vFront + 0.02;
+        const Part parts[7] = {
             {{hw2 + 0.05, 0.06, hDeck}, {u0, -0.06, vDeck}, false, true},                    // floor
             {{hw2 + 0.05, 0.03, hDeck}, {u0, CAB_H + 0.03, vDeck}, true, false},              // ceiling
             {{hw2 + 0.05, CAB_H * 0.5, 0.05}, {u0, CAB_H * 0.5, vFront + CAB_D + 0.05}, false, false},   // back
             {{0.05, CAB_H * 0.5, hd2 + 0.05}, {u0 - hw2 - 0.05, CAB_H * 0.5, vMid}, false, false},       // left
             {{0.05, CAB_H * 0.5, hd2 + 0.05}, {u0 + hw2 + 0.05, CAB_H * 0.5, vMid}, false, false},       // right
+            {{kLeafW * 0.5, hw.doorHeight * 0.5, kLeafT * 0.5}, {hw.doorX - kLeafW * 0.5, hw.doorHeight * 0.5, vDoor}, false, false},  // left leaf
+            {{kLeafW * 0.5, hw.doorHeight * 0.5, kLeafT * 0.5}, {hw.doorX + kLeafW * 0.5, hw.doorHeight * 0.5, vDoor}, false, false},  // right leaf
         };
+        cab.doorLeft = 5;
+        cab.doorRight = 6;
         const Quat rot = yawOf(hw);
         for (const Part& p : parts) {
             const Vec3 pos = hw.at(p.local.x, p.local.z, cab.y + p.local.y);   // at(u, v, y)
@@ -161,8 +169,14 @@ void ElevatorSystem::releaseBank(World& world, PhysicsWorld* phys, AssetManager&
 void ElevatorSystem::placeCab(World& world, PhysicsWorld* phys, const Bank&, Cab& cab, const CoreShaft& hw,
                               Real dt) {
     const Quat rot = yawOf(hw);
+    // The cab leaves follow the hoistway leaves at the floor the cab is at:
+    // open by doorT there, shut the moment it moves.
+    const Real open = cab.state == CabState::Moving ? 0.0 : cab.doorT;
     for (std::size_t i = 0; i < cab.entities.size(); ++i) {
-        const Vec3 pos = hw.at(cab.local[i].x, cab.local[i].z, cab.y + cab.local[i].y);   // at(u, v, y)
+        Vec3 local = cab.local[i];
+        if (static_cast<int>(i) == cab.doorLeft) local.x = hw.doorX - (kLeafW * 0.5 + kLeafW * open);
+        if (static_cast<int>(i) == cab.doorRight) local.x = hw.doorX + (kLeafW * 0.5 + kLeafW * open);
+        const Vec3 pos = hw.at(local.x, local.z, cab.y + local.y);   // at(u, v, y)
         if (Transform* t = world.get<Transform>(cab.entities[i])) {
             if (PrevTransform* pt = world.get<PrevTransform>(cab.entities[i])) pt->value = *t;
             t->position = pos;

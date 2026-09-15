@@ -94,6 +94,79 @@ TEST_CASE(elevator_answers_a_call_and_carries_a_pick_to_its_floor) {
     phys.shutdown();
 }
 
+// Glenn's walk (2026-09-14): "after the elevator door closes it seems to
+// disappear and I can see the non-interior of the skyscraper as we go up".
+// The cab now carries its own two leaves: open with the hoistway doors at
+// a floor, shut the moment it moves — a ray from inside the cab toward the
+// door wall passes out through the open doorway, and hits a leaf while
+// the cab is moving.
+TEST_CASE(cab_doors_shut_while_the_cab_moves) {
+    World world;
+    PhysicsWorld phys;
+    phys.initialize();
+    StubUploader uploader;
+    AssetManager assets(uploader);
+    CityBuildings cb;
+    BuildingRecord r;
+    r.plan = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    r.baseY = 0;
+    r.groundY = -0.45;
+    r.params.floors = 30;
+    r.params.curtainWall = true;
+    r.params.walkableGround = true;
+    r.params.openDoorway = true;
+    r.params.seed = 5;
+    r.height = r.params.groundHeight + 30 * r.params.floorHeight;
+    r.doors.push_back({Vec2(20, 40), Vec2(0, 1), 2.0, 2.7});
+    r.enterable = true;
+    cb.records.push_back(r);
+    cb.buildIndex();
+    world.add<CityBuildings>(world.create(), std::move(cb));
+    const CorePlan core = coreFor(r.plan, r.params, entranceEdgeFor(r.plan, r.params));
+    CHECK(core.valid);
+    const CoreShaft& hw = core.hoistways[0];
+    const Real dt = 1.0 / 60.0;
+    ElevatorSystem sys(nullptr);
+    const Vec2 front = hw.frame.toWorld({hw.doorX, -1.2});
+    const Vec3 pFront(front.x, 0.05 + 0.7, front.y);
+    // The leaves and the cab are KINEMATIC bodies: they reach their poses
+    // only when the world steps, so step it after every elevator step.
+    sys.step(world, &phys, assets, pFront, dt, true, 0);       // call
+    phys.update(dt);
+    for (int i = 0; i < 90; ++i) { sys.step(world, &phys, assets, pFront, dt, false, 0); phys.update(dt); }   // doors open
+    const Vec2 in = hw.frame.toWorld({hw.doorX, 1.0});
+    Vec3 pIn(in.x, 0.05 + 0.7, in.y);
+    // From inside the cab, toward the door wall (-v), chest height.
+    const Vec3 dir = Vec3(-hw.frame.v.x, 0, -hw.frame.v.y) * 1.6;
+    Vec3 hit;
+    const Vec3 eyeOpen(in.x, sys.cabY(0, 0) + 1.2, in.y);
+    const bool blockedOpen = phys.castRay(eyeOpen, dir, hit);
+    std::printf("    [cab-doors] open: blocked=%d\n", blockedOpen ? 1 : 0);
+    CHECK(!blockedOpen);
+    // Pick five up and go; wait until the cab is moving, then ray again.
+    sys.step(world, &phys, assets, pIn, dt, false, 5);
+    phys.update(dt);
+    sys.step(world, &phys, assets, pIn, dt, true, 0);
+    phys.update(dt);
+    bool moving = false;
+    for (int i = 0; i < 60 * 6 && !moving; ++i) {
+        pIn.y = sys.cabY(0, 0) + 0.7;
+        sys.step(world, &phys, assets, pIn, dt, false, 0);
+        phys.update(dt);
+        moving = sys.status().moving && sys.cabY(0, 0) > 0.6;
+    }
+    for (int i = 0; i < 3; ++i) { sys.step(world, &phys, assets, pIn, dt, false, 0); phys.update(dt); }
+    CHECK(moving);
+    const Vec3 eyeMoving(in.x, sys.cabY(0, 0) + 1.2, in.y);
+    const bool blockedMoving = phys.castRay(eyeMoving, dir, hit);
+    std::printf("    [cab-doors] moving: blocked=%d at %.2f m\n", blockedMoving ? 1 : 0,
+                blockedMoving ? (hit - eyeMoving).length() : -1.0);
+    CHECK(blockedMoving);
+    if (blockedMoving) CHECK((hit - eyeMoving).length() < 1.0);   // the cab's own leaf, not the shaft
+    sys.step(world, &phys, assets, Vec3(500, 1, 500), dt, false, 0);
+    phys.shutdown();
+}
+
 // A REAL walker through the core: in the lobby, through stairwell A's door,
 // up flight A to the half landing, up flight B to storey 1's landing — and
 // then through a hoistway door into the cab once the bank has opened it.

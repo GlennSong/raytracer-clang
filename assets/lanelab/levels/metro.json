@@ -33,6 +33,21 @@
     }
   ],
   "environment": {
+    "clouds": {
+      "bottom": 900,
+      "coverage": 0.38,
+      "density": 0.05,
+      "lightSteps": 6,
+      "noiseScale": 0.0007,
+      "steps": 96,
+      "top": 1600,
+      "wind": 14
+    },
+    "sky": {
+      "aerial": 4.0,
+      "model": "scattering",
+      "turbidity": 2.0
+    },
     "skyColor": [
       0.55,
       0.68,

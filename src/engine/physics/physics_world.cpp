@@ -237,6 +237,7 @@ struct PhysicsWorld::Impl {
         float maxSteerRad = 0.0f;
         float wheelbase = 2.7f;
         float yawAssist = 0.0f;
+        float gripAccel = 9.0f;   // the lateral acceleration the assist lets the car keep (m/s²)
     };
     std::vector<Vehicle> vehicles;
 
@@ -719,6 +720,12 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
             ? JPH::DegreesToRadians(static_cast<float>(cfg.maxSteerDegrees))
             : 0.0f;
         ws->mMaxBrakeTorque = static_cast<float>(cfg.brakeTorque);
+        // The lateral slip curve at the config's grip (Jolt's shape: a peak
+        // at 3 degrees of slip, 85 % of it once sliding past 20).
+        ws->mLateralFriction.Clear();
+        ws->mLateralFriction.AddPoint(0.0f, 0.0f);
+        ws->mLateralFriction.AddPoint(3.0f, static_cast<float>(cfg.lateralGrip));
+        ws->mLateralFriction.AddPoint(20.0f, static_cast<float>(cfg.lateralGrip * 0.85));
         ws->mMaxHandBrakeTorque =
             w.handBrake ? static_cast<float>(cfg.handBrakeTorque) : 0.0f;
         vs.mWheels.push_back(ws);
@@ -783,6 +790,9 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
     v.wheels = static_cast<int>(cfg.wheels.size());
     v.maxSteerRad = JPH::DegreesToRadians(static_cast<float>(cfg.maxSteerDegrees));
     v.yawAssist = static_cast<float>(std::max(Real(0), cfg.yawAssist));
+    // The assist's yaw-rate cap: the grip on a 0.85 road (the city's), with
+    // 10 % in hand so it only ever trims a slide, never a cornering car.
+    v.gripAccel = static_cast<float>(1.1 * cfg.lateralGrip * std::sqrt(0.85) * 9.81);
     if (!cfg.wheels.empty()) {
         Real zMin = cfg.wheels.front().position.z, zMax = zMin;
         for (const VehicleWheel& w : cfg.wheels) {
@@ -901,7 +911,7 @@ void PhysicsWorld::applyYawAssist(std::size_t index) {
     const float yawRate = bi.GetAngularVelocity(v.body).Dot(up);
     const float delta = -v.steer * v.maxSteerRad;
     float target = speed * std::tan(delta) / v.wheelbase;
-    const float gripLimit = 0.95f * 9.81f / std::fabs(speed);
+    const float gripLimit = v.gripAccel / std::fabs(speed);
     target = std::clamp(target, -gripLimit, gripLimit);
     float excess = yawRate - target;
     // Lagging the steered rate on the same side is the driver's business

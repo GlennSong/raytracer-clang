@@ -2,6 +2,7 @@
 
 #include "../components.h"
 #include "../vehicle_lamps.h"   // duskRamp, beaconBlinkGate, beaconCellPhase
+#include "../procgen/city/polygon.h"   // pointInPolygon
 #include "../world.h"
 #include "../../log.h"
 #include <algorithm>
@@ -29,10 +30,11 @@ std::vector<unsigned char> bakeGlow(int n) {
 
 void BeaconLightSystem::gather(const CityBuildings& cb) {
     lamps_.clear();
-    for (const BuildingRecord& r : cb.records)
-        for (const Vec3& p : r.beacons) {
+    for (std::size_t ri = 0; ri < cb.records.size(); ++ri)
+        for (const Vec3& p : cb.records[ri].beacons) {
             Lamp l;
             l.pos = p;
+            l.record = ri;
             beaconCellPhase(static_cast<int>(std::floor(p.x / 24.0)), static_cast<int>(std::floor(p.z / 24.0)),
                             l.period, l.phase);
             lamps_.push_back(l);
@@ -236,6 +238,17 @@ void BeaconLightSystem::update(FrameContext& ctx) {
         const Real d = std::sqrt(d2);
         if (d > lightM) break;
         const Lamp& l = lamps_[i];
+        // Point lights cast no shadows: a roof lamp lights the top floor
+        // under it (Glenn's walk, 2026-09-14: "the red lights shining into
+        // the floor of the building"). A building's own lamps go dark while
+        // the camera is inside it; the glow geometry and the sprites still
+        // show through the windows.
+        if (l.record < cb->records.size()) {
+            const BuildingRecord& r = cb->records[l.record];
+            if (cam.position.y < r.baseY + r.height && cam.position.y > r.groundY - 1.0 &&
+                pointInPolygon(r.plan, Vec2(cam.position.x, cam.position.z)))
+                continue;
+        }
         const Real gate = beaconBlinkGate(seconds, l.period, l.phase);
         Real fade = (lightM - d) / (0.25 * lightM);
         fade = std::min(Real(1), std::max(Real(0), fade));
