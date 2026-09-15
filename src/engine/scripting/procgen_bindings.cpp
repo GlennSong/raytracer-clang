@@ -914,6 +914,22 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
         p.core = c == "never" ? 1 : c == "always" ? 2 : 0;
     }
     lua_pop(L, 1);
+    // The lighting spec (M4): crown = "auto"|"none"|"white"|"amber"|"blue"|"red"|"green"|"purple",
+    // signage = true|false, uplights = true|false (absent = auto, the hash decides).
+    lua_getfield(L, idx, "crown");
+    if (lua_isstring(L, -1)) {
+        const std::string c = lua_tostring(L, -1);
+        static const char* names[8] = {"auto", "none", "white", "amber", "blue", "red", "green", "purple"};
+        for (int i = 0; i < 8; ++i)
+            if (c == names[i]) p.crown = static_cast<uint8_t>(i);
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, idx, "signage");
+    if (lua_isboolean(L, -1)) p.signage = lua_toboolean(L, -1) ? 2 : 1;
+    lua_pop(L, 1);
+    lua_getfield(L, idx, "uplights");
+    if (lua_isboolean(L, -1)) p.uplights = lua_toboolean(L, -1) ? 2 : 1;
+    lua_pop(L, 1);
     p.steeple = optBoolField(L, idx, "steeple", p.steeple);
     p.parkingDecks = optBoolField(L, idx, "parking_decks", p.parkingDecks);
     p.sideBays = static_cast<int>(optField(L, idx, "side_bays", p.sideBays));

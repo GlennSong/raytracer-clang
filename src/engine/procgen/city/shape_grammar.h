@@ -421,6 +421,15 @@ struct BuildingParams {
     // up get an elevator bank and two enclosed stairwells when one fits),
     // 1 = never (the straight stair of ADR-0080, or nothing), 2 = always.
     uint8_t core = 0;
+    // THE LIGHTING SPEC (skyscrapers v2 M4, Lua-overridable; ADR-0086 point
+    // 10): what a tall roof wears at night. 0 = auto (the position hash
+    // decides, as before). crown: 1 none, 2 white, 3 amber, 4 blue, 5 red,
+    // 6 green, 7 purple. signage / uplights: 1 off, 2 on. Beacons follow the
+    // height rule (the FAA's, not ours). Lua: crown = "amber", signage =
+    // false, uplights = true.
+    uint8_t crown = 0;
+    uint8_t signage = 0;
+    uint8_t uplights = 0;
 };
 
 // Facade DETAIL level (city-render-perf R2): the same grammar, two emissions.

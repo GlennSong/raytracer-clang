@@ -6650,6 +6650,11 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
     hashed from the chunk's centre, so neighbouring towers flash out of step; the mid-height ring stays
     steady (L-810) in the window part. Rejected: a time uniform in the mesh shader (a per-frame
     constant for one part), and one Renderable per lamp (four entities per roof for nothing).
+    *The lighting spec (later):* `BuildingParams::{crown, signage, uplights}` (three bytes in the
+    struct's tail padding; params section v4), read from Lua as `crown = "amber"` (or "none",
+    "white", "blue", "red", "green", "purple"), `signage = true|false`, `uplights = true|false` —
+    absent means auto, the position hash as before. Beacons stay on the height rule.
+    `lighting_spec_overrides_the_hash`.
     Glenn's night walk: the beacons read white with a red tinge (a 6× glow on a (1, 0.12, 0.08)
     tint clips to white in the tonemap — now 2.2× on (1, 0.04, 0.02)) and the mid ring floated off
     setback towers (it sat on the BASE plan's corners at half height — now on the tier at that

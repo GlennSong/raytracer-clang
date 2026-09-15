@@ -3663,13 +3663,22 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             RenderMesh lit;
             const Vec3 up(0, 1, 0);
             const bool tall = params.floors >= 15 || (params.curtainWall && params.floors >= 12);
-            if (tall && u >= 0.30) {
-                Vec3 crown(1.0, 0.97, 0.90);                       // white
-                if (u >= 0.55 && u < 0.70) crown = Vec3(1.0, 0.75, 0.35);   // amber
-                else if (u >= 0.70 && u < 0.80) crown = Vec3(0.45, 0.60, 1.0);   // blue
-                else if (u >= 0.80 && u < 0.88) crown = Vec3(1.0, 0.25, 0.20);   // red
-                else if (u >= 0.88 && u < 0.94) crown = Vec3(0.30, 1.0, 0.50);   // green
-                else if (u >= 0.94) crown = Vec3(0.75, 0.40, 1.0);              // purple
+            // The crown: the lighting spec's colour when authored, else the
+            // hash's pick (none 30 %, white 25 %, amber 15 %, blue 10 %, red
+            // 8 %, green 6 %, purple 6 %).
+            static const Vec3 crownColours[7] = {{1.0, 0.97, 0.90}, {1.0, 0.97, 0.90}, {1.0, 0.75, 0.35},
+                                                 {0.45, 0.60, 1.0}, {1.0, 0.25, 0.20}, {0.30, 1.0, 0.50},
+                                                 {0.75, 0.40, 1.0}};
+            int crownPick = 0;   // 0 none, 1..6 white..purple
+            if (params.crown != 0) crownPick = params.crown == 1 ? 0 : std::min(6, static_cast<int>(params.crown) - 1);
+            else if (u >= 0.94) crownPick = 6;
+            else if (u >= 0.88) crownPick = 5;
+            else if (u >= 0.80) crownPick = 4;
+            else if (u >= 0.70) crownPick = 3;
+            else if (u >= 0.55) crownPick = 2;
+            else if (u >= 0.30) crownPick = 1;
+            if (tall && crownPick > 0) {
+                const Vec3 crown = crownColours[crownPick];
                 const Real bandH = 0.5, bandY = y + 0.05 + std::max(Real(0.6), params.parapet) - 0.7;
                 for (std::size_t e = 0; e < cur.size(); ++e) {
                     const FaceRect fr = planEdgeRect(cur, e, bandY, bandH);
@@ -3745,7 +3754,10 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 appendToPart(out, PartId::BeaconGlow, bulb);
                 appendToPart(out, PartId::BeaconHaze, haze);
             }
-            if (params.curtainWall && params.floors >= 20 && ((nh >> 8) & 0xffu) < 100) {
+            const bool signageOn = params.signage == 2 ||
+                                   (params.signage == 0 && params.curtainWall && params.floors >= 20 &&
+                                    ((nh >> 8) & 0xffu) < 100);
+            if (signageOn && cur.size() >= 3) {
                 const std::size_t e = static_cast<std::size_t>((nh >> 16) % cur.size());
                 const FaceRect fr = planEdgeRect(cur, e, y - 2.6, 1.6);
                 const Real w = std::min(Real(8.0), fr.width * 0.5);
@@ -3760,7 +3772,8 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             // PODIUM UPLIGHTS (M4, owed): on two towers in five, a warm band
             // at the ground storey's head — the wash a lobby's canopy lights
             // throw up the base of a tower — on every ground edge.
-            if (tall && ((nh >> 12) & 0xffu) < 102) {
+            const bool uplightsOn = params.uplights == 2 || (params.uplights == 0 && tall && ((nh >> 12) & 0xffu) < 102);
+            if (uplightsOn) {
                 const Vec3 warm(1.0, 0.80, 0.55);
                 const Real by = params.groundHeight - 0.34, bh = 0.30;
                 for (std::size_t e = 0; e < plan.size(); ++e) {

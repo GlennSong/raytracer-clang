@@ -1070,3 +1070,42 @@ TEST_CASE(some_towers_wear_podium_uplights) {
     for (const RenderMesh& part : bm.parts)
         CHECK(part.materialIndex != static_cast<int>(PartId::LitBand) || part.vertices.empty());
 }
+
+TEST_CASE(lighting_spec_overrides_the_hash) {
+    // The Lua-facing lighting spec: an authored crown colour, signage and
+    // uplights beat the position hash; "none"/off remove them.
+    const Poly2 plan = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    BuildingParams p;
+    p.floors = 30;
+    p.curtainWall = true;
+    p.seed = 9;
+    auto litBand = [&](const BuildingParams& q, Real y0, Real y1, Vec3* colour) {
+        const BuildingMesh bm = growPlanBuilding(plan, q);
+        int n = 0;
+        for (const RenderMesh& part : bm.parts) {
+            if (part.materialIndex != static_cast<int>(PartId::LitBand)) continue;
+            for (const Vertex& v : part.vertices)
+                if (v.position.y > y0 && v.position.y < y1) { ++n; if (colour) *colour = Vec3(v.color.x, v.color.y, v.color.z); }
+        }
+        return n;
+    };
+    const Real roof = p.groundHeight + 30 * p.floorHeight;
+    // A red crown, whatever the hash said.
+    p.crown = 5;
+    Vec3 c;
+    CHECK(litBand(p, roof - 1.0, roof + 1.0, &c) > 0);
+    CHECK(c.x > 0.9 && c.y < 0.3 && c.z < 0.3);
+    // No crown at all.
+    p.crown = 1;
+    p.signage = 1;
+    CHECK(litBand(p, roof - 1.0, roof + 1.0, nullptr) == 0);
+    CHECK(litBand(p, roof - 4.0, roof - 1.0, nullptr) == 0);   // no signage box either
+    // Uplights forced on and off.
+    p.uplights = 2;
+    CHECK(litBand(p, p.groundHeight - 0.4, p.groundHeight + 0.01, nullptr) >= 16);
+    p.uplights = 1;
+    CHECK(litBand(p, p.groundHeight - 0.4, p.groundHeight + 0.01, nullptr) == 0);
+    // Signage forced on: a box high on one face.
+    p.signage = 2;
+    CHECK(litBand(p, roof - 4.0, roof - 0.9, nullptr) > 0);
+}
