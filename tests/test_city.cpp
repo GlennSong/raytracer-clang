@@ -981,7 +981,8 @@ TEST_CASE(inner_walls_close_the_windows_with_reveals) {
                 lo = std::min(lo, d);
                 hi = std::max(hi, d);
             }
-            if (lo < 0.02 && hi > inset - 0.02) ++spanning;
+            // From the exterior's pane inset (its own reveals stop there) to the inner skin.
+            if (lo < p.windowInset + 0.02 && lo > p.windowInset - 0.02 && hi > inset - 0.02) ++spanning;
         }
     }
     std::printf("    [reveals] %d cavity-spanning interior triangles\n", spanning);

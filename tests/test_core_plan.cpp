@@ -337,8 +337,10 @@ TEST_CASE(core_window_grow_cost_is_bounded) {
     std::printf("    [core-census] window [18, 23) of 41 storeys: %zu tris, %zu KB, collider %zu tris, grow %.2f ms\n",
                 tris, bytes / 1024, col.indices.size() / 3, ms);
     CHECK(tris > 0);
-    CHECK(tris < 4000);                   // ~2x the measured 1870
-    CHECK(col.indices.size() / 3 < 3500);   // ~2x the measured 1700
+    // Re-based 2026-09-15 for the rooms (M7) and the inner mullion grid:
+    // the window measured ~1870 tris bare, ~7500 with rooms and grid.
+    CHECK(tris < 12000);
+    CHECK(col.indices.size() / 3 < 10000);
     (void)ms;   // printed, not asserted: wall-clock on a shared desktop is not a gate
 }
 

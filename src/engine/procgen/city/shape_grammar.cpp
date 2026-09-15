@@ -1,5 +1,6 @@
 #include "shape_grammar.h"
-#include "core_plan.h"   // the core: shafts, stairwells, the ground ceiling's holes (M5)
+#include "core_plan.h"
+#include "room_plan.h"   // the core: shafts, stairwells, the ground ceiling's holes (M5)
 
 #include "road_mesh.h"            // triangulatePolygon (floorplan roof/slab fill)
 #include "triangulate.h"          // triangulateWithHoles (interior ceilings, ADR-0080)
@@ -721,10 +722,44 @@ static void emitInsetSkin(BuildingMesh& out, const Poly2& plan, std::size_t edge
     appendToPart(out, part, skin);
 }
 
+// The INSIDE of a curtain wall's mullion grid (Glenn's third walk,
+// 2026-09-15: "the interior was not using the same windows as the
+// exterior" — the inner face was one clear sheet, the outside a lattice of
+// 1.6 m bays). The same bay count and transom lines as emitCurtainWallRect,
+// as bars standing proud of the inner glass into the room, so a bay reads
+// as the same bay from both sides.
+static void emitInnerCurtainGrid(BuildingMesh& out, const FaceRect& fr, Real inset, Real spandrelH) {
+    RenderMesh mull;
+    const Vec3 mullCol(0.34, 0.36, 0.40);
+    const Real W = fr.width, fh = fr.height, mw = 0.09, proud = 0.06;
+    if (W < 2.0 * inset + 0.5 || fh < 0.5) return;
+    const Vec3 gin = fr.n * -inset;               // the inner glass plane
+    const Vec3 inv = fr.n * -(inset + proud);     // the bar's room face
+    // Flat bars (one quad each, no cheeks): a streamed window of five storeys
+    // carries four faces of them, and the per-window census is a gate.
+    (void)gin;
+    auto bar = [&](Real a0, Real b0, Real a1, Real b1, bool vertical) {
+        (void)vertical;
+        if (a1 - a0 < 1e-4 || b1 - b0 < 1e-4) return;
+        emitQuad(mull, fr.at(a0, b0) + inv, fr.at(a1, b0) + inv, fr.at(a1, b1) + inv, fr.at(a0, b1) + inv,
+                 fr.n * -1.0, mullCol);
+    };
+    const int bays = std::max(1, static_cast<int>(std::lround(W / 1.6)));   // emitCurtainWallRect's rule
+    for (int b = 0; b <= bays; ++b) {
+        const Real x = std::min(std::max(b * W / bays, inset + mw * 0.5), W - inset - mw * 0.5);
+        bar(x - mw * 0.5, 0, x + mw * 0.5, fh, true);
+    }
+    for (Real ty : {spandrelH, fh - 0.04}) {
+        bar(inset, std::max(Real(0), ty - mw * 0.5), W - inset, std::min(fh, ty + mw * 0.5), false);
+    }
+    appendToPart(out, PartId::Detail, mull);
+}
+
 void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
                        const FacadeLayout& L, Real thick,
                        const Vec3& wallColor, const Poly2& plan,
-                       const Vec3& paint, bool curtainWall, bool clearPanes = false) {
+                       const Vec3& paint, bool curtainWall, bool clearPanes = false,
+                       Real revealFrom = 0.0) {
     RenderMesh wall, glass, glassLit;
     const Vec3 in = fr.n * -thick;
     const Vec3 nIn = fr.n * -1.0;
@@ -777,12 +812,20 @@ void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
             // the head underside between the facade sheet and this skin, so
             // the wall has a thickness at the window instead of an open slot
             // into the cavity.
-            const Vec3 P00 = fr.at(o.wx0, o.sill), P10 = fr.at(o.wx1, o.sill);
-            const Vec3 P01 = fr.at(o.wx0, o.head), P11 = fr.at(o.wx1, o.head);
-            emitQuad(wall, P00, P00 + in, P01 + in, P01, fr.h, icol);              // left jamb
-            emitQuad(wall, P10, P10 + in, P11 + in, P11, fr.h * -1.0, icol);       // right jamb
-            emitQuad(wall, P00, P10, P10 + in, P00 + in, Vec3(0, 1, 0), icol);     // sill
-            emitQuad(wall, P01, P11, P11 + in, P01 + in, Vec3(0, -1, 0), icol);    // head
+            // They START where the exterior's own reveals stop (the pane
+            // inset, `revealFrom`): the full facade emitter already closes
+            // the recess from the wall face to its glass, and doubling that
+            // depth z-fought at every jamb (Glenn's third walk, 2026-09-15).
+            if (revealFrom < thick - 0.01) {
+                const Vec3 from = fr.n * -revealFrom;
+                const Vec3 P00 = fr.at(o.wx0, o.sill) + from, P10 = fr.at(o.wx1, o.sill) + from;
+                const Vec3 P01 = fr.at(o.wx0, o.head) + from, P11 = fr.at(o.wx1, o.head) + from;
+                const Vec3 to = fr.n * -(thick - revealFrom);
+                emitQuad(wall, P00, P00 + to, P01 + to, P01, fr.h, icol);              // left jamb
+                emitQuad(wall, P10, P10 + to, P11 + to, P11, fr.h * -1.0, icol);       // right jamb
+                emitQuad(wall, P00, P10, P10 + to, P00 + to, Vec3(0, 1, 0), icol);     // sill
+                emitQuad(wall, P01, P11, P11 + to, P01 + to, Vec3(0, -1, 0), icol);    // head
+            }
         }
     }
     appendToPart(out, PartId::Interior, wall);
@@ -2876,8 +2919,14 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     }
 
     // --- inner walls per storey (same layout truth as the facade) --------
+    // The exterior lays its upper storeys out with a copy of the params that
+    // drops the pilasters (growPlanBuilding's `upper`): the layout must see
+    // the SAME params or its bays shift against the facade's (Glenn's third
+    // walk, 2026-09-15: "the interior was not using the same windows").
     const FacadeMode upMode =
         params.solidFacade ? FacadeMode::Solid : FacadeMode::Residential;
+    BuildingParams upperP = params;
+    upperP.pilasters = false;
     for (int ki = std::max(1, kA); ki < kB; ++ki) {
         const std::size_t k = static_cast<std::size_t>(ki);
         const StoreyPlan& spk = storeys[k];
@@ -2888,15 +2937,19 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                 // The inside of a curtain wall is GLASS above a spandrel band:
                 // the pane part, which the interior system draws clear, so a
                 // floor looks out over the city; the band is painted.
-                const Real band = std::min(Real(0.85), spk.h * 0.3);
+                // The band is the exterior's spandrel (emitCurtainWallRect:
+                // min(0.9, 0.30 fh)), and the grid inside mirrors its bays.
+                const Real band = std::min(Real(0.9), spk.h * 0.30);
                 emitInsetSkin(out, spk.plan, e, baseY + spk.y0, band,
                               interiorInset(params), interiorPaintFor(params), false);
                 emitInsetSkin(out, spk.plan, e, baseY + spk.y0 + band, spk.h - band,
                               interiorInset(params), Vec3(1, 1, 1), false, PartId::Glass);
+                emitInnerCurtainGrid(out, fr, interiorInset(params), band);
             } else {
-                emitInnerWallRect(out, fr, facadeLayout(fr, upMode, params),
+                emitInnerWallRect(out, fr, facadeLayout(fr, upMode, upperP),
                                   interiorInset(params), params.wallColor,
-                                  spk.plan, interiorPaintFor(params), params.curtainWall);
+                                  spk.plan, interiorPaintFor(params), params.curtainWall, false,
+                                  params.windowInset);
             }
         }
     }
@@ -3052,6 +3105,21 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             stringer(perp * half, perp);
             stringer(perp * -half, perp * -1.0);
         }
+    }
+
+    // --- ROOMS (M7): a ring of rooms along the outside walls of every
+    // storey above the lobby — offices behind a curtain wall, apartments
+    // behind masonry (room_plan.h) — with or without a core.
+    for (int ki = std::max(1, kA); ki < kB; ++ki) {
+        const StoreyPlan& spk = storeys[static_cast<std::size_t>(ki)];
+        const RoomPlan rp = roomPlan(spk.plan, params, core,
+                                     il.hasStair ? il.edge : static_cast<std::size_t>(-1),
+                                     interiorInset(params), ki);
+        if (rp.walls.empty()) continue;
+        RoomMeshes rm;
+        emitRooms(rm, colliderOut, rp, baseY + spk.y0, spk.h, interiorPaintFor(params));
+        appendToPart(out, PartId::Interior, rm.drywall);
+        appendToPart(out, PartId::GlassClear, rm.glass);
     }
 
     // --- the core (M5): shaft walls with doors, the dog-leg flights and
@@ -3315,7 +3383,8 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             } else {
                 emitInnerWallRect(out, ifr, facadeLayout(ifr, mode, params),
                                   interiorInset(params), wallColor, plan,
-                                  interiorPaintFor(params), params.curtainWall, true);
+                                  interiorPaintFor(params), params.curtainWall, true,
+                                  params.windowInset);
             }
         }
     }

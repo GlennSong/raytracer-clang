@@ -628,6 +628,21 @@ TEST_CASE(level_print_tower_cores) {
                 }
             }
         }
+        // Two enterable RESIDENTIAL (masonry) buildings of 3+ floors, for
+        // window-alignment frames (RT_SPAWN on an upper storey).
+        int resPrinted = 0;
+        for (std::size_t i = 0; i < cbp->records.size() && resPrinted < 2; ++i) {
+            const BuildingRecord& r = cbp->records[i];
+            if (!r.enterable || r.params.curtainWall || r.params.solidFacade || r.params.floors < 3 || r.doors.empty()) continue;
+            if (r.plan.size() != 4) continue;
+            const std::vector<StoreyPlan> st = storeyPlans(r.plan, r.params);
+            if (st.size() < 3) continue;
+            const Vec2 c = centroid(r.plan);
+            std::printf("[resi] %s record %zu (%s): %d floors baseY %.2f; door foot (%.2f, %.2f) normal (%.2f, %.2f); centroid (%.2f, %.2f); storey 1 floor y %.2f h %.2f\n",
+                        name.c_str(), i, r.recipe.c_str(), r.params.floors, r.baseY, r.doors[0].foot.x, r.doors[0].foot.y,
+                        r.doors[0].normal.x, r.doors[0].normal.y, c.x, c.y, r.baseY + st[1].y0, st[1].h);
+            ++resPrinted;
+        }
         for (std::size_t i = 0; i < cbp->records.size(); ++i) {
             const BuildingRecord& r = cbp->records[i];
             if (r.recipe != "podium_tower" || r.params.floors < 20) continue;

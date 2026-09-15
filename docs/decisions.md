@@ -6899,6 +6899,26 @@ floor, so the cab had the lobby's floor; it now has pits at the hoistways (the s
 wood). And the cab's brushed steel, lit by nothing but its own ceiling panel's emission (which lights
 nothing), went the same dark blue-grey as the hoistway skins. The cab is pale matte laminate now and
 carries a warm point light staged with the interior room lights. Tags `2026-09-15.1`.
+
+**Addendum (2026-09-15, Glenn's fourth round): windows, and the start of ROOMS (M7).**
+- *"Z-fighting at the window jambs."* The full facade emitter already closes each recess from the
+  wall face to its pane (`windowInset`); the inner wall's new reveals doubled that depth. They now
+  start at the pane inset and run inward (`emitInnerWallRect(..., revealFrom)`).
+- *"The interior was not using the same windows as the exterior."* Two halves. The upper storeys'
+  exterior lays its bays out with a params copy that drops the pilasters; the inner wall now sees
+  the same copy. And the inside of a curtain wall was one clear sheet against the outside's 1.6 m
+  lattice: `emitInnerCurtainGrid` mirrors the bay count and transom lines as flat bars proud of the
+  inner glass, the band aligned to the exterior's spandrel.
+- **Rooms (M7, `room_plan.{h,cpp}`).** Every storey above the lobby gets a ring of rooms along its
+  outside walls and an open middle: offices behind a curtain wall (glass-fronted, 4.5 m deep),
+  apartments behind masonry (drywall, 5.5 m deep), a doorway in every front, partitions on the
+  facade's bay lines (the bay rule reproduced, so a wall lands on a pier or a mullion, never a pane),
+  even-numbered edges taking the corners, a band stopping 2.2 m short of the core and skipping the
+  straight stair's edge, every wall 0.12 m thick with a collider. Pure in (storey plan, params,
+  core, storey) like the core, so the streamed window grows the same rooms every time. The per-window
+  census gate re-based (~7500 tris with rooms and grid; was 1870 bare). Furniture, unit interiors
+  (bathrooms, bedrooms), the open middle's desks and the corridor as a real double-loaded hall are
+  the next steps; the plan's "open floor plans" is the office middle today. Tags `2026-09-15.2`.
 ---
 
 ## ADR-0087 — Vehicle handling: a car that neither fishtails nor rolls (measured, then assisted)
