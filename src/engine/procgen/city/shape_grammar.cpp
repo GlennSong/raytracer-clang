@@ -186,6 +186,11 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
             m.albedo = {0.02, 0.02, 0.02}; m.metallic = 0.0f; m.roughness = 1.0f;
             m.opacity = 0.55f;
             m.flags |= RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT; break;
+        case PartId::LitBand:
+            // Lit dressing (crown bands, signage, podium uplights): the lit
+            // glass look by day, emission tinted per vertex at night, no room.
+            m.albedo = {0.16, 0.20, 0.26}; m.metallic = 0.6f; m.roughness = 0.2f;
+            m.flags |= RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT; break;
         case PartId::GlassClear:
             // Clear glass: a faint blue, a sharp fresnel, most of what is
             // behind it coming through (the transparent pass), both faces.
@@ -3752,7 +3757,20 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                              fr.at(x0, 1.6) + o, fr.n, signs[(nh >> 24) & 3u]);
                 }
             }
-            appendToPart(out, PartId::GlassLit, lit);
+            // PODIUM UPLIGHTS (M4, owed): on two towers in five, a warm band
+            // at the ground storey's head — the wash a lobby's canopy lights
+            // throw up the base of a tower — on every ground edge.
+            if (tall && ((nh >> 12) & 0xffu) < 102) {
+                const Vec3 warm(1.0, 0.80, 0.55);
+                const Real by = params.groundHeight - 0.34, bh = 0.30;
+                for (std::size_t e = 0; e < plan.size(); ++e) {
+                    const FaceRect fr = planEdgeRect(plan, e, by, bh);
+                    const Vec3 o = fr.n * 0.05;
+                    emitQuad(lit, fr.at(0, 0) + o, fr.at(fr.width, 0) + o,
+                             fr.at(fr.width, bh) + o, fr.at(0, bh) + o, fr.n, warm);
+                }
+            }
+            appendToPart(out, PartId::LitBand, lit);
         }
         // Crown seated on the top tier's oriented frame: a DOME rotunda for
         // capitols/town halls, else the mechanical penthouse + tank.

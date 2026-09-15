@@ -859,7 +859,8 @@ TEST_CASE(tall_towers_wear_a_crown_and_beacons) {
         int n = 0;
         red = 0;
         for (const RenderMesh& part : bm.parts) {
-            const bool lit = part.materialIndex == static_cast<int>(PartId::GlassLit);
+            // The crown band and signage live in LitBand (no room behind them).
+            const bool lit = part.materialIndex == static_cast<int>(PartId::LitBand);
             const bool beacon = part.materialIndex == static_cast<int>(PartId::Beacon);
             if (!lit && !beacon) continue;
             for (const Vertex& v : part.vertices) {
@@ -1035,4 +1036,37 @@ TEST_CASE(enterable_ground_storeys_have_clear_panes) {
     for (const RenderMesh& part : closed.parts)
         CHECK(part.materialIndex != static_cast<int>(PartId::GlassClear) || part.vertices.empty());
     CHECK(materialFor(PartId::GlassClear, Vec3(1, 1, 1)).opacity < 1.0f);
+}
+
+TEST_CASE(some_towers_wear_podium_uplights) {
+    // Two tall towers in five carry a warm band at the ground storey's head
+    // on every edge (LitBand); short buildings never do.
+    int with = 0;
+    for (uint32_t seed = 1; seed <= 40; ++seed) {
+        BuildingParams p;
+        p.floors = 24;
+        p.curtainWall = true;
+        p.seed = seed;
+        // The pick is hashed from the roof's POSITION (so it survives LOD
+        // swaps and rebuilds), not the seed: move each tower.
+        const Real ox = seed * 7.0, oz = seed * 3.0;
+        const BuildingMesh bm = growPlanBuilding({{ox, oz}, {ox + 36, oz}, {ox + 36, oz + 36}, {ox, oz + 36}}, p);
+        int band = 0;
+        for (const RenderMesh& part : bm.parts) {
+            if (part.materialIndex != static_cast<int>(PartId::LitBand)) continue;
+            for (const Vertex& v : part.vertices)
+                if (v.position.y > p.groundHeight - 0.4 && v.position.y < p.groundHeight + 0.01 &&
+                    v.color.y < 0.9f && v.color.z < 0.7f)
+                    ++band;
+        }
+        if (band >= 16) ++with;
+    }
+    CHECK(with >= 6);
+    CHECK(with <= 30);
+    BuildingParams low;
+    low.floors = 4;
+    low.seed = 3;
+    const BuildingMesh bm = growPlanBuilding({{0, 0}, {20, 0}, {20, 16}, {0, 16}}, low);
+    for (const RenderMesh& part : bm.parts)
+        CHECK(part.materialIndex != static_cast<int>(PartId::LitBand) || part.vertices.empty());
 }

@@ -6690,7 +6690,21 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
     cell dark for the roof cap) onto every proxy under a `NightGlow` (1.0, with a night albedo dim to
     0.22 — `NightGlow::nightAlbedo` — so the sky-lit box goes dark as the windows come up) — past
     `detailDistance` a tower shows a soft tinted window glow after dusk instead of going grey while
-    its beacons flash. Proxies are two meshes per cell: masonry in the wall colour, and curtain-wall
+    its beacons flash.
+    *The street lamps join the block (later that night):* their near tier — 20 lights within 160 m,
+    range 34, constants in the render system's merge since WS3 — reads `lampLightCount`,
+    `lampLightRadius`, `lampLightRange` from `CitySimConfig`; their glow shells and poles draw to
+    `lampGlowDistance` (650, once a literal in the loader); and beyond that every bulb is a warm,
+    steady sprite in a second instance group of `BeaconLightSystem`, out to the beacons' far limit,
+    so the grid of lights runs to the horizon instead of ending at 650 m
+    (`after_lamp_sprites_1km.png`).
+    *Lit dressing gets its own part (same night):* interior mapping on `GlassLit` had put rooms
+    behind the crown bands and signage boxes too. They live in `PartId::LitBand` now — the lit-glass
+    look, the vertex tint, a night glow of 1.3, no room — and so do the PODIUM UPLIGHTS that were
+    owed from step 2: on two tall towers in five, a warm band at the ground storey's head on every
+    edge, the wash a lobby canopy's lights throw up the base (`some_towers_wear_podium_uplights`,
+    which moves each tower because the pick is hashed from the roof's position, not the seed).
+    Proxies are two meshes per cell: masonry in the wall colour, and curtain-wall
     towers in a dark MATTE glass colour — not metallic: a metallic box mirrors the sky and reads pale
     by day and night whatever its albedo (measured: a red-painted metallic proxy still drew white).
     Beyond about a kilometre the aerial fog toward the sky colour is what the far city looks like at

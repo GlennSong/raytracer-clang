@@ -572,6 +572,15 @@ struct CitySimConfig {
     float lightRadius = 60.0f;      // point lights within this of the camera
     float lightRange = 10.0f;       // each small light's reach (a tighter pool reads sharper)
     int   lightCount = 6;           // at most this many small-light point lights
+    // The street lamps' tiers (the same block; they were constants in the
+    // render system's merge and the loader before): the nearest lampLightCount
+    // bulbs within lampLightRadius become point lights of lampLightRange, the
+    // glow shells and poles draw to lampGlowDistance, and beyond that the
+    // bulb is a sprite out to the beacons' far limit.
+    float lampLightRadius = 160.0f;
+    int   lampLightCount = 20;
+    float lampLightRange = 34.0f;
+    float lampGlowDistance = 650.0f;
     // Data-driven fleet bodies (ADR-0065): the loaded TEXT of the level's
     // `"vehicles"` script (a vehicles.lua-style file resolved by level_loader).
     // The citysim render bridge runs it at build (scripting builds only) and

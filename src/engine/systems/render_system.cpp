@@ -87,16 +87,23 @@ void RenderSystem::render(FrameContext& ctx) {
         // the player's manual L toggle at noon).
         const auto& coneSpots = ctx.view.lighting.vehicleSpots;
         if (dusk > 0.01) {
+            // The lamps' near tier from the level's light LOD block (defaults:
+            // 20 lights within 160 m, range 34). 20 of the 32 slots: more lamps
+            // only brighten the street if more of them are REAL lights, and 14
+            // ran out within half a block. Leaves the sun/moon, 6 headlight
+            // cones and authored lights room (the renderer loops every light
+            // per fragment, so this is the honest cost knob for night).
+            int kMaxLampLights = 20;
+            Real lampRadius = 160.0, lampRange = 34.0;
+            ctx.world.each<CitySimConfig>([&](Entity, CitySimConfig& c) {
+                kMaxLampLights = std::max(1, c.lampLightCount);
+                lampRadius = std::max(Real(10), Real(c.lampLightRadius));
+                lampRange = std::max(Real(2), Real(c.lampLightRange));
+            });
             ctx.world.each<StreetFurniture>([&](Entity, StreetFurniture& f) {
                 if (f.lampHeads.empty() || lit) return;
                 const Vec3 eye = ctx.view.camera.position;
-                // 20 of the 32 slots: more lamps only brighten the street if
-                // more of them are REAL lights, and 14 ran out within half a
-                // block. Leaves the sun/moon, 6 headlight cones and authored
-                // lights room (the renderer loops every light per fragment,
-                // so this is the honest cost knob for night).
-                constexpr int kMaxLampLights = 20;
-                const Real maxDist2 = 160.0 * 160.0;   // beyond this a bulb is subpixel
+                const Real maxDist2 = lampRadius * lampRadius;   // beyond this a bulb is the sprite tier's
                 std::vector<std::pair<Real, const Vec3*>> nearBulbs;
                 for (const Vec3& h : f.lampHeads) {
                     const Real d2 = (h - eye).lengthSquared();
@@ -120,7 +127,7 @@ void RenderSystem::render(FrameContext& ctx) {
                 // first: the radius, or (when the count cap is binding) the
                 // distance of the farthest lamp currently selected, which is
                 // the edge that actually moves as the camera drives.
-                Real cutoff = 160.0;
+                Real cutoff = lampRadius;
                 if (static_cast<int>(nearBulbs.size()) >= kMaxLampLights) {
                     Real farthest = 0;
                     for (const auto& [d2, h] : nearBulbs)
@@ -144,7 +151,7 @@ void RenderSystem::render(FrameContext& ctx) {
                     PointLight lamp(*h - Vec3(0, 0.35, 0),
                                     Vec3(1.0, 0.82, 0.55),
                                     48.0f * static_cast<float>(dusk * fade));
-                    lamp.range = 34.0f;
+                    lamp.range = static_cast<float>(lampRange);
                     withLamps.pointLights.push_back(lamp);
                 }
                 lit = true;

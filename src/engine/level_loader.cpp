@@ -3897,6 +3897,10 @@ bool LevelLoader::load(const std::string& path,
         cfg.lightRadius = cs.value("lightRadius", cfg.lightRadius);
         cfg.lightRange = cs.value("lightRange", cfg.lightRange);
         cfg.lightCount = cs.value("lightCount", cfg.lightCount);
+        cfg.lampLightRadius = cs.value("lampLightRadius", cfg.lampLightRadius);
+        cfg.lampLightCount = cs.value("lampLightCount", cfg.lampLightCount);
+        cfg.lampLightRange = cs.value("lampLightRange", cfg.lampLightRange);
+        cfg.lampGlowDistance = cs.value("lampGlowDistance", cfg.lampGlowDistance);
         cfg.startHour = cs.value("startHour", cfg.startHour);
         cfg.perceptionReliability =
             cs.value("perceptionReliability", cfg.perceptionReliability);
@@ -4512,6 +4516,9 @@ bool LevelLoader::load(const std::string& path,
                     // The lit-window part (WS3): warm interior glow, raised after dusk by the day/night
                     // NightGlow pass — dark at noon by construction (emission starts 0; the material
                     // equals Glass by day).
+                    if (static_cast<PartId>(pi) == PartId::LitBand)
+                        // Crown bands, signage, podium uplights: the vertex colour is the tint.
+                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 1.3});
                     if (static_cast<PartId>(pi) == PartId::GlassLit)
                         // White: the pane's vertex colour is its tint (litTint, FLAG_EMISSIVE_VERTEX_TINT);
                         // 0.5, not 1.3: the room atlas carries the contrast now (a fixture at 1, walls
@@ -4855,13 +4862,18 @@ bool LevelLoader::load(const std::string& path,
                 for (Vertex& v : glowBox.vertices)
                     v.position.y += lp.height;   // shell wraps the head
                 MeshHandle glowMesh = assets.acquireMesh(glowBox, "city:lampglow");
+                // The light LOD block: poles and glow shells draw to lampGlowDistance,
+                // beyond which BeaconLightSystem's sprite tier carries every bulb.
+                const double lampGlowDist = root.contains("citysim")
+                                                ? root["citysim"].value("lampGlowDistance", 650.0)
+                                                : 650.0;
                 for (auto& [key, transforms] : cells) {
                     InstanceGroup g;
                     g.mesh = poleMesh;
                     g.material.albedo = Vec3(1, 1, 1);
                     g.material.roughness = 0.7f;
                     g.transforms = transforms;
-                    g.drawDistance = 650.0;
+                    g.drawDistance = lampGlowDist;
                     g.drawClass = engine::DrawClass::Furniture;
                     groupBounds(g, lp.height + 1.0);
                     world.add<InstanceGroup>(world.create(), g);
@@ -4874,7 +4886,7 @@ bool LevelLoader::load(const std::string& path,
                     glow.material.emission = Vec3(0, 0, 0);
                     glow.material.roughness = 0.4f;
                     glow.transforms = std::move(transforms);
-                    glow.drawDistance = 650.0;
+                    glow.drawDistance = lampGlowDist;
                     glow.drawClass = engine::DrawClass::Effect;
                     groupBounds(glow, lp.height + 1.0);
                     Entity glowE = world.create();

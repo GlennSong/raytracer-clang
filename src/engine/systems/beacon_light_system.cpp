@@ -71,9 +71,87 @@ void BeaconLightSystem::ensureGroup(FrameContext& ctx) {
     haveGroup_ = true;
 }
 
+void BeaconLightSystem::ensureLampGroup(FrameContext& ctx) {
+    if (haveLampGroup_) return;
+    ensureGroup(ctx);   // the quad and the glow texture are shared
+    InstanceGroup g;
+    g.mesh = quad_;
+    g.material.albedo = Vec3(0, 0, 0);
+    g.material.metallic = 0.0f;
+    g.material.roughness = 1.0f;
+    g.material.opacity = 0.98f;
+    g.material.albedoMap = glow_;
+    g.material.flags |= RenderMaterial::FLAG_ALPHA_FROM_MAP | RenderMaterial::FLAG_TWO_SIDED;
+    g.material.emission = Vec3(0, 0, 0);
+    g.drawClass = DrawClass::Effect;
+    g.drawDistance = SPRITE_FAR + 100.0;
+    lampGroup_ = ctx.world.create();
+    ctx.world.add<InstanceGroup>(lampGroup_, std::move(g));
+    haveLampGroup_ = true;
+}
+
 void BeaconLightSystem::update(FrameContext& ctx) {
     auto& lighting = ctx.view.lighting;
     lighting.beaconPoints.clear();
+    // The street lamps' far sprites (gathered once from the furniture).
+    {
+        std::size_t heads = 0;
+        const StreetFurniture* sf = nullptr;
+        ctx.world.each<StreetFurniture>([&](Entity, StreetFurniture& f) { if (!sf) sf = &f; });
+        if (sf) heads = sf->lampHeads.size();
+        if (heads != lampHeadsSeen_) {
+            streetLamps_.clear();
+            if (sf) streetLamps_ = sf->lampHeads;
+            lampHeadsSeen_ = heads;
+        }
+        if (!streetLamps_.empty()) {
+            ensureLampGroup(ctx);
+            Real glowDist = 650.0;
+            ctx.world.each<CitySimConfig>([&](Entity, CitySimConfig& c) { glowDist = c.lampGlowDistance; });
+            const Real ramp = duskRamp(lighting.solarElevation);
+            const Real adapt = std::max(1.0f, lighting.nightAdapt);
+            if (InstanceGroup* g = ctx.world.get<InstanceGroup>(lampGroup_)) {
+                const auto& cam = ctx.view.camera;
+                Vec3 fwd = cam.target - cam.position;
+                if (fwd.lengthSquared() < 1e-9) fwd = Vec3(0, 0, 1);
+                fwd = normalize(fwd);
+                Vec3 right = cross(fwd, cam.up);
+                if (right.lengthSquared() < 1e-9) right = Vec3(1, 0, 0);
+                right = normalize(right);
+                const Vec3 up = normalize(cross(right, fwd));
+                g->material.emission = Vec3(1.0, 0.82, 0.55) * (2.0 * ramp / adapt);
+                g->transforms.clear();
+                g->boundsCenter = cam.position;
+                g->boundsRadius = static_cast<Real>(SPRITE_FAR + 50.0);
+                if (ramp > 0) {
+                    const Real fade0 = glowDist * 0.85, fade1 = glowDist;
+                    order_.clear();
+                    for (std::size_t i = 0; i < streetLamps_.size(); ++i) {
+                        const Real d2 = (streetLamps_[i] - cam.position).lengthSquared();
+                        if (d2 < fade0 * fade0 || d2 > SPRITE_FAR * SPRITE_FAR) continue;
+                        order_.push_back({d2, i});
+                    }
+                    std::sort(order_.begin(), order_.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+                    for (const auto& [d2, i] : order_) {
+                        const Real d = std::sqrt(d2);
+                        Real t = (d - fade0) / std::max(Real(1), fade1 - fade0);
+                        t = std::min(Real(1), std::max(Real(0), t));
+                        const Real size = (0.9 + d * 0.009) * t;
+                        if (size <= 0.01) continue;
+                        Mat4 m;
+                        for (int r = 0; r < 3; ++r) {
+                            m.m[r][0] = (r == 0 ? right.x : r == 1 ? right.y : right.z) * size;
+                            m.m[r][1] = (r == 0 ? up.x : r == 1 ? up.y : up.z) * size;
+                            m.m[r][2] = (r == 0 ? -fwd.x : r == 1 ? -fwd.y : -fwd.z) * size;
+                        }
+                        const Vec3& p = streetLamps_[i];
+                        m.m[0][3] = p.x; m.m[1][3] = p.y; m.m[2][3] = p.z;
+                        g->transforms.push_back(m);
+                    }
+                }
+            }
+        }
+    }
     const CityBuildings* cb = nullptr;
     ctx.world.each<CityBuildings>([&](Entity, CityBuildings& c) { if (!cb) cb = &c; });
     if (!cb) {
@@ -174,6 +252,10 @@ void BeaconLightSystem::update(FrameContext& ctx) {
 
 void BeaconLightSystem::onStop(FrameContext& ctx) {
     ctx.view.lighting.beaconPoints.clear();
+    if (haveLampGroup_ && ctx.world.alive(lampGroup_)) ctx.world.destroy(lampGroup_);
+    haveLampGroup_ = false;
+    streetLamps_.clear();
+    lampHeadsSeen_ = static_cast<std::size_t>(-1);
     if (haveGroup_ && ctx.world.alive(group_)) ctx.world.destroy(group_);
     if (haveGroup_) ctx.assets.releaseMesh(quad_);
     haveGroup_ = false;

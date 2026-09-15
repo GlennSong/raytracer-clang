@@ -48,6 +48,7 @@ public:
     static constexpr int DEFAULT_LIGHT_COUNT = 6;
 
     std::size_t lampCount() const { return lamps_.size(); }
+    std::size_t streetLampCount() const { return streetLamps_.size(); }
 
 private:
     struct Lamp {
@@ -57,6 +58,15 @@ private:
     };
     void gather(const CityBuildings& cb);
     void ensureGroup(FrameContext& ctx);
+    // The STREET LAMPS' far tier rides here too: past the level's
+    // lampGlowDistance (where their glow shells and poles stop drawing) every
+    // bulb is a warm, steady sprite in a second instance group, out to
+    // SPRITE_FAR — the grid of lights to the horizon a night city has.
+    void ensureLampGroup(FrameContext& ctx);
+    std::vector<Vec3> streetLamps_;
+    std::size_t lampHeadsSeen_ = static_cast<std::size_t>(-1);
+    Entity lampGroup_;
+    bool haveLampGroup_ = false;
 
     std::vector<Lamp> lamps_;
     std::size_t recordsSeen_ = static_cast<std::size_t>(-1);
