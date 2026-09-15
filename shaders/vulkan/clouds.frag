@@ -198,9 +198,11 @@ void main() {
     float t = t0 + ds * jitter;
     int dryRun = 0;
     for (int i = 0; i < viewSteps && t < t1; i++) {
+        // The stretch is capped at 6 steps (was 12): long strides re-entered
+        // banks in plates and left horizontal shelves along mid-distance decks.
         bool stretched = dryRun >= 3;
         float stepLen = stretched
-            ? min(ds * (1.0 + float(dryRun)), max(budgetStep, ds * 12.0))
+            ? min(ds * (1.0 + float(dryRun)), max(budgetStep, ds * 6.0))
             : ds;
         vec3 p = camPos + dir * t;
         // Detail falls away with distance — erosion finer than the pixel
@@ -235,12 +237,29 @@ void main() {
                 vec3 lp = p + sunDir * (lds * (float(j) + lightJitter));
                 lightOD += clDensity(lp, detailFade * farFade * 0.5) * lds;
             }
-            float beer = exp(-lightOD);
+            // MULTIPLE SCATTERING (Wrenninge's octaves): single scattering with
+            // Beer's law says a cloud base under 240 m of cloud gets no sun at
+            // all (exp(-64) is 0) and undersides went near-black. Real cloud
+            // light bounces many times; the octave sum — each order with the
+            // extinction, the sun's contribution and the phase anisotropy
+            // halved — is the standard cheap stand-in, and it is what gives a
+            // base its grey instead of its shadow.
+            float beer = 0.0;
+            {
+                float a = 1.0, b = 1.0, c = 1.0;
+                for (int k = 0; k < 3; k++) {
+                    beer += a * exp(-lightOD * b) * clPhaseHG(mu, u.march.z * c);
+                    a *= 0.45; b *= 0.5; c *= 0.5;
+                }
+                beer /= max(1e-4, clPhaseHG(mu, u.march.z));   // `phase` multiplies below
+            }
             float powder = 1.0 - exp(-2.0 * density * stepLen);
             // Ambient grades with height: bases sit in their own shadow, tops
-            // face the open sky — gives the deck its underside.
+            // face the open sky — a gentler ramp than before (0.5 at the base
+            // read as a hole in the sky), plus a bounce from the lit ground.
             float hf = clLayerHeight(p);
-            vec3 ambient = u.skyAmbient.rgb * (0.5 + 0.5 * hf);
+            vec3 ambient = u.skyAmbient.rgb * (0.70 + 0.30 * hf) +
+                           sunLight * 0.06 * (1.0 - hf) * max(0.0, sunDir.y);
             // ANALYTIC in-scatter for the step: source * (1 - exp(-sigma*ds)).
             // The rectangle rule (source * density * ds) overshoots by the
             // per-step optical depth and stacked into the horizon white wall.

@@ -104,6 +104,8 @@ private:
     // walk every few in-world hours.
     WeatherCycle weather;
     bool weatherActive = false;
+    bool weatherFromSettings_ = false;   // a persisted state was restored: the level's policy yields
+    bool weatherDefaulted_ = false;      // the level policy / volumetric default applied once
 
     // Night exposure adaptation (WS2): the eye the renderer doesn't have. A
     // moonlit world is readable because pupils dilate — without adaptation the

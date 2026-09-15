@@ -517,6 +517,12 @@ struct DayNightConfig {
     float newMoonDay = -1.0f;  // day of year of a new moon (the month); < 0 = default
     float lightPollution = -1.0f;   // downtown sky glow 0..1; < 0 = default (0.7)
     float pollutionFalloff = -1.0f; // metres past the city edge to a dark sky; < 0 = 1500
+    // WEATHER policy ("dayNight": {"weather": "auto"|"off"|"clear"|"fair"|
+    // "overcast"|"storm"}): -1 = unset — auto whenever the level has a
+    // volumetric deck, so days differ; 0 = off (the authored cloud block
+    // stands); 1 = auto (today's state from the seed and the day of year,
+    // then the walk); 2..5 = a fixed state.
+    int weather = -1;
 };
 
 struct CitySimConfig {

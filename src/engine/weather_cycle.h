@@ -69,12 +69,26 @@ inline bool weatherKindFromName(const std::string& name, WeatherKind& out) {
 
 // splitmix32 — the deterministic roll for the auto walk. Seeded per step so a
 // fixed (seed, step) pair always rolls the same weather: replays replay.
+// TODAY'S WEATHER (Glenn: "the city doesn't seem to have clear days, cloudy
+// days, days in between"): the state a day starts in, from the level's seed
+// and the day of year — clear three days in ten, fair four, overcast two,
+// a storm one in twelve. The auto walk then steps from there every few
+// hours. Deterministic, so a level's calendar is the same every launch.
+inline WeatherKind weatherForDay(uint32_t seed, int dayOfYear);
 inline uint32_t weatherHash(uint32_t seed, uint32_t step) {
     uint32_t x = seed * 0x9E3779B9u + step * 0x85EBCA6Bu;
     x ^= x >> 16; x *= 0x21F0AAADu;
     x ^= x >> 15; x *= 0x735A2D97u;
     x ^= x >> 15;
     return x;
+}
+
+inline WeatherKind weatherForDay(uint32_t seed, int dayOfYear) {
+    const uint32_t r = weatherHash(seed ^ 0xA5A5u, static_cast<uint32_t>(dayOfYear) + 1000u) % 120u;
+    if (r < 36u) return WeatherKind::Clear;      // 30 %
+    if (r < 86u) return WeatherKind::Fair;       // 42 %
+    if (r < 110u) return WeatherKind::Overcast;  // 20 %
+    return WeatherKind::Storm;                   // 8 %
 }
 
 struct WeatherCycle {

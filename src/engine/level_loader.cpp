@@ -4714,6 +4714,15 @@ bool LevelLoader::load(const std::string& path,
         dc.newMoonDay = dn.value("newMoonDay", dc.newMoonDay);
         dc.lightPollution = dn.value("lightPollution", dc.lightPollution);
         dc.pollutionFalloff = dn.value("pollutionFalloff", dc.pollutionFalloff);
+        {
+            const std::string w = dn.value("weather", std::string());
+            if (w == "off") dc.weather = 0;
+            else if (w == "auto") dc.weather = 1;
+            else if (w == "clear") dc.weather = 2;
+            else if (w == "fair") dc.weather = 3;
+            else if (w == "overcast") dc.weather = 4;
+            else if (w == "storm") dc.weather = 5;
+        }
         world.add<DayNightConfig>(world.create(), dc);
     }
 

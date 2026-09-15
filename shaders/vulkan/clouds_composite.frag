@@ -37,20 +37,22 @@ void main() {
     vec2 pos = inUV * cSize - 0.5;
     vec2 f = fract(pos);
     ivec2 base = ivec2(floor(pos));
+    // A 4x4 tent over the half-res texels (bilinear weights times a 1-2-2-1
+    // outer taper): every full-res pixel sees all four phases of the march's
+    // 2x2 dither at least twice, so the stipple the 2x2 blend left behind
+    // averages out, and cloud edges soften by half a texel — which they
+    // should, at half res. The depth term still stops the deck bleeding
+    // across building silhouettes.
     vec4 acc = vec4(0.0);
     float wSum = 0.0;
-    for (int j = 0; j < 2; j++) {
-        for (int i = 0; i < 2; i++) {
+    for (int j = -1; j <= 2; j++) {
+        for (int i = -1; i <= 2; i++) {
             ivec2 c = clamp(base + ivec2(i, j), ivec2(0), ivec2(cSize) - 1);
             vec2 cuv = (vec2(c) + 0.5) / cSize;
             float dd = texelFetch(depthTex, min(ivec2(cuv * fullSize), fullMax), 0).r;
-            // Blend of the bilinear weight and flat 0.25: pure bilinear leaves
-            // a weighted remainder of the march's 2x2 dither (stipple); pure
-            // flat resolves every full-res pixel in a half-res window to the
-            // IDENTICAL value and paints a hard screen-locked 2x2 grid. The
-            // depth term stops the deck bleeding across silhouettes.
-            float bw = (i != 0 ? f.x : 1.0 - f.x) * (j != 0 ? f.y : 1.0 - f.y);
-            float w = mix(0.25, bw, 0.5) * bilateralDepthWeight(d0, dd, 0.10) + 1e-5;
+            float dx = abs(float(i) - f.x), dy = abs(float(j) - f.y);   // texel distance
+            float tent = max(0.0, 2.0 - dx) * max(0.0, 2.0 - dy);
+            float w = tent * bilateralDepthWeight(d0, dd, 0.10) + 1e-5;
             acc += texelFetch(cloudTex, c, 0) * w;
             wSum += w;
         }

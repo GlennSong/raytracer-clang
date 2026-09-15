@@ -106,3 +106,18 @@ TEST_CASE(weather_names_round_trip_and_reject_junk) {
     CHECK(!weatherKindFromName("drizzle", out));
     CHECK(!weatherKindFromName("", out));
 }
+
+TEST_CASE(weather_for_day_spans_the_kinds_and_is_deterministic) {
+    // A year of days: clear about three in ten, fair the plurality, storms
+    // rare but present; the same seed and day always give the same sky.
+    int count[4] = {0, 0, 0, 0};
+    for (int d = 1; d <= 365; ++d) ++count[static_cast<int>(weatherForDay(7u, d))];
+    CHECK(count[0] > 70 && count[0] < 150);    // clear
+    CHECK(count[1] > 110 && count[1] < 200);   // fair
+    CHECK(count[2] > 40 && count[2] < 110);    // overcast
+    CHECK(count[3] > 8 && count[3] < 60);      // storm
+    CHECK(weatherForDay(7u, 100) == weatherForDay(7u, 100));
+    bool differs = false;
+    for (int d = 1; d <= 30 && !differs; ++d) differs = weatherForDay(7u, d) != weatherForDay(11u, d);
+    CHECK(differs);
+}

@@ -284,7 +284,7 @@ fragment float4 fragmentClouds(CloudsOut in [[stage_in]],
         // nothing, honest where there is something.
         const bool stretched = dryRun >= 3;
         float stepLen =
-            stretched ? min(ds * (1.0 + float(dryRun)), max(budgetStep, ds * 12.0))
+            stretched ? min(ds * (1.0 + float(dryRun)), max(budgetStep, ds * 6.0))
                       : ds;
         float3 p = camPos + dir * t;
         // DETAIL FALLS AWAY WITH DISTANCE — the standard treatment (Nubis /
@@ -352,12 +352,23 @@ fragment float4 fragmentClouds(CloudsOut in [[stage_in]],
                 lightOD += cl_density(lp, u, baseNoise, detailNoise,
                                       detailFade * farFade * 0.5) * lds;
             }
-            float beer = exp(-lightOD);
+            // Multiple scattering (Wrenninge's octaves) — mirrors clouds.frag:
+            // single-scatter Beer left cloud bases black.
+            float beer = 0.0;
+            {
+                float a = 1.0, b = 1.0, c = 1.0;
+                for (int k = 0; k < 3; k++) {
+                    beer += a * exp(-lightOD * b) * cl_phaseHG(mu, u.march.z * c);
+                    a *= 0.45; b *= 0.5; c *= 0.5;
+                }
+                beer /= max(1e-4, cl_phaseHG(mu, u.march.z));
+            }
             float powder = 1.0 - exp(-2.0 * density * stepLen);
             // Ambient grades with height in the layer: bases sit in their own
             // shadow, tops face the open sky — gives the deck its underside.
             float hf = cl_layerHeight(p, u);
-            float3 ambient = u.skyAmbient.rgb * (0.5 + 0.5 * hf);
+            float3 ambient = u.skyAmbient.rgb * (0.70 + 0.30 * hf) +
+                             sunLight * 0.06 * (1.0 - hf) * max(0.0, sunDir.y);
             // ANALYTIC in-scatter for the step. The source term is radiance and
             // must NOT be multiplied by density: the correct integral of
             // source * sigma * exp(-sigma * s) across the step is
@@ -431,32 +442,20 @@ float4 cloudOverlaySample(float2 uv, texture2d<float> cloudTex,
     int2 base = int2(floor(pos));
     float4 acc = float4(0.0);
     float wSum = 0.0;
-    for (int j = 0; j < 2; j++) {
-        for (int i = 0; i < 2; i++) {
+    // A 4x4 tent over the half-res texels (mirrors clouds_composite.frag):
+    // every full-res pixel sees all four phases of the march's 2x2 dither
+    // at least twice, so the stipple the 2x2 blend left behind averages out;
+    // the weight still varies per pixel, so no screen-locked grid forms.
+    // The depth term stays: it stops the deck bleeding across a silhouette.
+    for (int j = -1; j <= 2; j++) {
+        for (int i = -1; i <= 2; i++) {
             int2 c = clamp(base + int2(i, j), int2(0), int2(cSize) - 1);
             float2 cuv = (float2(c) + 0.5) / cSize;
             float dd = depthTex.read(min(uint2(cuv * fullSize), fullMax));
-            // The weight is a BLEND of the bilinear weight and a flat 0.25.
-            //
-            // Pure bilinear leaves a weighted remainder of the march's 2x2
-            // dither (the stipple). Pure EQUAL weights cancel that dither
-            // exactly — and were tried, and were much worse: with flat
-            // weights every full-res pixel inside the same half-res 2x2
-            // window resolves to the IDENTICAL value, so the upsample paints
-            // a hard 2x2 grid locked to the screen. Screen-aligned blocking
-            // is far more objectionable than a faint stipple, and it is
-            // exactly what it looks like — "the fragment shader gets jacked
-            // up because the glitches are aligned with the screen and not the
-            // scene."
-            //
-            // Any blend with a bilinear term varies per pixel, so the blocks
-            // cannot form; leaning it toward flat still cancels most of the
-            // dither. The depth term stays: it stops the deck bleeding across
-            // a silhouette.
-            float bw = (i != 0 ? f.x : 1.0 - f.x) * (j != 0 ? f.y : 1.0 - f.y);
-            float w = mix(0.25, bw, 0.5) *
-                      bilateralDepthWeight(d0, dd, camera.nearPlane,
-                                           camera.farPlane, 0.10) + 1e-5;
+            float dx = abs(float(i) - f.x), dy = abs(float(j) - f.y);
+            float tent = max(0.0, 2.0 - dx) * max(0.0, 2.0 - dy);
+            float w = tent * bilateralDepthWeight(d0, dd, camera.nearPlane,
+                                                  camera.farPlane, 0.10) + 1e-5;
             acc += cloudTex.read(uint2(c)) * w;
             wSum += w;
         }

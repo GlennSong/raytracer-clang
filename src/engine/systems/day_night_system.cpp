@@ -55,6 +55,7 @@ void DayNightSystem::onStart(FrameContext& ctx) {
         WeatherKind kind;
         if (weatherKindFromName(ws, kind)) {
             weatherActive = true;
+            weatherFromSettings_ = true;
             weather.state = kind;
             weather.autoMode = s.getBool("weather.auto", false);
             weather.snap();
@@ -241,6 +242,27 @@ void DayNightSystem::seedFromConfig(const DayNightConfig& c) {
     if (c.newMoonDay >= 0.0f) cycle.newMoonDay = c.newMoonDay;
     if (c.lightPollution >= 0.0f) lightPollution_ = c.lightPollution;
     if (c.pollutionFalloff >= 0.0f) pollutionFalloff_ = c.pollutionFalloff;
+    // The weather policy: a persisted state (yesterday's storm) still wins;
+    // otherwise the level's word, and a level that says nothing gets AUTO
+    // if it has a volumetric deck (applied in update, where the deck is known).
+    if (!weatherFromSettings_ && c.weather >= 0) {
+        weatherDefaulted_ = true;
+        if (c.weather == 0) {
+            weatherActive = false;
+        } else if (c.weather == 1) {
+            weatherActive = true;
+            weather.autoMode = true;
+            weather.state = weatherForDay(7u, cycle.dayOfYear);
+            weather.snap();
+        } else {
+            weatherActive = true;
+            weather.autoMode = false;
+            weather.state = static_cast<WeatherKind>(c.weather - 2);
+            weather.snap();
+        }
+        LOG_INFO << "[weather] level policy: " << (weatherActive ? weatherKindName(weather.state) : "off")
+                 << (weather.autoMode ? " (auto)" : "");
+    }
 }
 
 // The city's footprint: the bounding circle of every road graph's nodes.
@@ -312,6 +334,18 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
     // in-flight front always finishes arriving. While active, weather owns
     // the cloud knobs — the ImGui sliders and clouds.apply rule again after
     // `weather off`.
+    // No policy anywhere (no persisted state, the level silent): a volumetric
+    // deck gets today's weather and the walk, so days differ by default.
+    if (!weatherDefaulted_ && !weatherFromSettings_ && ctx.view.lighting.volumetricClouds.enabled) {
+        weatherDefaulted_ = true;
+        weatherActive = true;
+        weather.autoMode = true;
+        weather.state = weatherForDay(static_cast<uint32_t>(ctx.settings.getDouble("weather.seed", 7.0)),
+                                      cycle.dayOfYear);
+        weather.snap();
+        LOG_INFO << "[weather] today (day " << cycle.dayOfYear << "): " << weatherKindName(weather.state)
+                 << " (auto)";
+    }
     if (weatherActive) {
         const double dt = ctx.clock.fixedStep();
         if (!cycle.paused)
