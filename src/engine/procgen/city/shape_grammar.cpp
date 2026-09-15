@@ -2561,10 +2561,28 @@ std::vector<MassTier> massStack(const Poly2& planIn, const BuildingParams& param
                     bool inside = true;
                     for (const Vec2& q : shaft)
                         if (!pointInPolygon(cur, q + (ob.center - q) * 0.02)) { inside = false; break; }
-                    if (inside && floor0 < params.floors) { out.push_back({shaft, floor0}); break; }
+                    if (inside && floor0 < params.floors) { out.push_back({shaft, floor0}); cur = shaft; break; }
                     hw *= 0.9;
                     hd *= 0.9;
                 }
+            }
+        }
+        // Above the shaft, the uniform steps (setbackFloors/setbackEvery)
+        // keep a tall tower tiered — the podium tower's shaft kept them —
+        // but only while the tier stays wide enough for a core: the core
+        // (one hoistway, two stairs, a corridor round it) needs ~12.3 x
+        // 10.5 m and must fit EVERY tier, so a tower stepped down to a
+        // 10 m cap would have no core and no door at all (the lab metro's
+        // podium towers lost theirs the first time). 14 m keeps a margin.
+        if (out.size() > 1 && params.setbackFloors > 0 && params.setbackEvery > 0) {
+            constexpr Real kMinCoreTier = 14.0;
+            for (int i = out.back().floor0 + params.setbackFloors; i < params.floors; i += params.setbackFloors) {
+                Poly2 next = offsetPlan(cur, params.setbackEvery);
+                if (!tierInsetOk(cur, next)) break;
+                const OBB2 nb = orientedBoundingBox(next);
+                if (2.0 * std::min(nb.half[0], nb.half[1]) < kMinCoreTier) break;
+                cur = next;
+                out.push_back({cur, i});
             }
         }
         return out;

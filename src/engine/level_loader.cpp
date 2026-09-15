@@ -4199,6 +4199,14 @@ bool LevelLoader::load(const std::string& path,
                                     continue;
                                 if (engine::pointInPolygon(ob.plan, outP)) {
                                     clear = false;
+                                    if (std::getenv("RT_PRINT_DEMOTED"))
+                                        LOG_INFO << "[demoted] " << lb.recipe << " at (" << lb.site.x << ", "
+                                                 << lb.site.y << ") floors " << u.params.floors
+                                                 << " envelope " << static_cast<int>(u.params.envelope)
+                                                 << " door (" << d.foot.x << ", " << d.foot.y << ") n ("
+                                                 << d.normal.x << ", " << d.normal.y << ") exits into "
+                                                 << ob.recipe << " at (" << ob.site.x << ", " << ob.site.y
+                                                 << ")" << (&ob == &lb ? " [ITSELF]" : "");
                                     break;
                                 }
                             }

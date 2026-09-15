@@ -606,6 +606,51 @@ TEST_CASE(level_print_tower_cores) {
             if (!coreFor(r.plan, r.params, entranceEdgeFor(r.plan, r.params)).valid) continue;
             towers.push_back({i, r.params.floors});
         }
+        // PODIUM + TOWER lots: an enterable cored record with a taller record
+        // rooted above it inside its plan (Glenn's second walk: "very tall but
+        // only 4 floors on the elevator").
+        for (std::size_t i = 0; i < cbp->records.size(); ++i) {
+            const BuildingRecord& r = cbp->records[i];
+            if (!r.enterable) continue;
+            for (std::size_t j = 0; j < cbp->records.size(); ++j) {
+                const BuildingRecord& t = cbp->records[j];
+                if (j == i || t.baseY < r.baseY + 2.0 || t.plan.size() < 3) continue;
+                if (!pointInPolygon(r.plan, centroid(t.plan))) continue;
+                const CorePlan pc = coreFor(r.plan, r.params, entranceEdgeFor(r.plan, r.params));
+                std::printf("[podium] %s record %zu (%d floors, baseY %.2f, core %d) under record %zu (%d floors, baseY %.2f); door foot (%.2f, %.2f) normal (%.2f, %.2f)\n",
+                            name.c_str(), i, r.params.floors, r.baseY, pc.valid ? 1 : 0, j, t.params.floors, t.baseY,
+                            r.doors.empty() ? 0.0 : r.doors[0].foot.x, r.doors.empty() ? 0.0 : r.doors[0].foot.y,
+                            r.doors.empty() ? 0.0 : r.doors[0].normal.x, r.doors.empty() ? 0.0 : r.doors[0].normal.y);
+                if (pc.valid) {
+                    const Vec2 lob = pc.hoistways[0].doorFoot() + pc.hoistways[0].doorNormal() * 3.0;
+                    std::printf("[podium]   lobby spot (%.2f, %.2f) y %.2f; hoistway door foot (%.2f, %.2f)\n", lob.x, lob.y, r.baseY + 0.9,
+                                pc.hoistways[0].doorFoot().x, pc.hoistways[0].doorFoot().y);
+                }
+            }
+        }
+        for (std::size_t i = 0; i < cbp->records.size(); ++i) {
+            const BuildingRecord& r = cbp->records[i];
+            if (r.recipe != "podium_tower" || r.params.floors < 20) continue;
+            const CorePlan pc = coreFor(r.plan, r.params, entranceEdgeFor(r.plan, r.params));
+            const std::vector<MassTier> tiers = massStack(r.plan, r.params);
+            Real minSide = 1e9;
+            for (const MassTier& t : tiers) {
+                const OBB2 ob = orientedBoundingBox(t.plan);
+                minSide = std::min(minSide, 2.0 * std::min(ob.half[0], ob.half[1]));
+            }
+            std::printf("[podium-one] %s record %zu: %d floors enterable %d envelope %d towerFrac %.2f tiers %zu minSide %.1f core %d doors %zu at (%.1f, %.1f)\n",
+                        name.c_str(), i, r.params.floors, r.enterable ? 1 : 0, static_cast<int>(r.params.envelope),
+                        r.params.towerFrac, tiers.size(), minSide, pc.valid ? 1 : 0, r.doors.size(),
+                        centroid(r.plan).x, centroid(r.plan).y);
+            if (pc.valid) {
+                const Vec2 lob = pc.hoistways[0].doorFoot() + pc.hoistways[0].doorNormal() * 3.0;
+                const std::vector<StoreyPlan> st = storeyPlans(r.plan, r.params);
+                std::printf("[podium-one]   lobby spot (%.2f, %.2f) y %.2f; hoistway door foot (%.2f, %.2f) normal (%.2f, %.2f); top storey y %.2f\n",
+                            lob.x, lob.y, r.baseY + 0.9, pc.hoistways[0].doorFoot().x, pc.hoistways[0].doorFoot().y,
+                            pc.hoistways[0].doorNormal().x, pc.hoistways[0].doorNormal().y,
+                            r.baseY + st[static_cast<std::size_t>(r.params.floors - 1)].y0);
+            }
+        }
         std::sort(towers.begin(), towers.end(), [](const Tower& a, const Tower& b) { return a.floors > b.floors; });
         for (std::size_t k = 0; k < towers.size() && k < 3; ++k) {
             const BuildingRecord& r = cbp->records[towers[k].idx];

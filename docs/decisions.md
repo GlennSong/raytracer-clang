@@ -6875,6 +6875,20 @@ all of one kind — geometry that exists only where the interior has streamed:
   not the street.
 - *"Maybe it's using the old clouds?"* It was: the lab metro level had no `environment.clouds`
   block, so the 2D overlay drew. It now carries the volumetric deck and the scattering sky.
+
+**Addendum (2026-09-14, the second walk): "very tall but only 4 floors on the elevator."** Glenn
+guessed the core did not fit the upper floors; the truth was two buildings. The podium tower
+massing was two grows and two records — the podium (the lot plan, `podiumFloors`, the door) and
+the tower (a centred shaft rooted just under the podium parapet, no door) — so the lobby's core was
+the podium's, four floors, and the tower above had no way in. Now the lot pass expresses it as ONE
+building through the mass stack the street-wall envelope already had: `Envelope::StreetWallSetback`
+with `baseFloors = podiumFloors`, no first setback, no steps, `towerFloor = podiumFloors` and a
+`towerFrac` sized to the area the two-mass path drew; `massStack` continues the uniform
+`setbackFloors/setbackEvery` steps ABOVE the shaft so a tall tower keeps its tiers. One record
+carries the whole height: one core seated in the shaft and fitting every tier, one elevator bank to
+the top, the interior streamed per storey on its tier's plan, the beacons on the tower roof.
+Producer tags `2026-09-14.23`; the lab census counts one record per podium tower now
+(`podium_tower_is_one_mass_with_one_core_to_the_top`).
 ---
 
 ## ADR-0087 — Vehicle handling: a car that neither fishtails nor rolls (measured, then assisted)

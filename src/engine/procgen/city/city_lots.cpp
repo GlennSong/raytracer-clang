@@ -3051,6 +3051,17 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // wall, ground retail), and a slender curtain-wall tower rises
             // from its roof — the modern downtown block. Falls through to a
             // single mass when the plan can't stand a tower.
+            // ONE building, not two (Glenn's second walk, 2026-09-14: "very
+            // tall but only 4 floors on the elevator"): the podium and the
+            // tower used to be two grows and two records, so the lobby's core
+            // was the podium's — four floors — and the tower above had no
+            // way in. The mass stack already knows this shape (the street
+            // wall's shaft tier): the podium is the base, the tower the shaft
+            // from podiumFloors up, and one record carries the whole height —
+            // one core seated in the shaft and fitting every tier, one
+            // elevator bank to the top, one interior streamed per storey on
+            // the tier's plan. The tower's size check stays the guard: a plan
+            // that cannot stand a tower falls through to a single mass.
             if (planOk && rec.massing == BuildingRecipe::Massing::PodiumTower &&
                 rec.podiumFloors > 0 && bp.floors > rec.podiumFloors + 4) {
                 OBB2 pb = orientedBoundingBox(plan);
@@ -3074,59 +3085,23 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     if (!towerOk) { thw *= 0.85; thd *= 0.85; }
                 }
                 if (towerOk) {
-                    BuildingParams pod = bp;   // the street-wall base
-                    pod.floors = rec.podiumFloors;
-                    pod.setbackFloors = 0;
-                    pod.spire = false;
-                    pod.dome = false;
-                    if (wantsDoorway(plan, pod)) pod.openDoorway = true;
-                    BuildingMesh pm = growPlanBuilding(plan, pod, b.baseY);
-                    collectUnit(b, plan, pod, b.baseY, pm);
-                    BuildingParams twr = bp;   // the shaft: no street-level kit
-                    twr.floors = std::max(1, bp.floors - rec.podiumFloors);
-                    twr.groundRetail = false;
-                    twr.walkableGround = false;
-                    twr.baseCourse = false;
-                    twr.awning = false;
-                    twr.entranceSteps = false;
-                    twr.groundHeight = twr.floorHeight;
-                    if (twr.floors > 18) {
-                        twr.setbackFloors = 6;   // tall shafts keep tiers
-                        twr.setbackEvery = 1.5;
+                    // The street wall's envelope with no first setback and no
+                    // steps: base = the podium, shaft = the tower, sized to
+                    // the same area the two-mass path drew (the mass stack
+                    // shrinks it until it sits inside the podium).
+                    bp.envelope = BuildingParams::Envelope::StreetWallSetback;
+                    bp.baseFloors = rec.podiumFloors;
+                    bp.setback1 = 0;
+                    bp.stepFloors = 0;
+                    bp.stepDepth = 0;
+                    bp.towerFloor = rec.podiumFloors;
+                    bp.towerFrac = std::min(Real(0.9), (4.0 * thw * thd) / std::max(Real(1), area(plan)));
+                    if (bp.floors - rec.podiumFloors > 18) {
+                        bp.setbackFloors = 6;   // tall shafts keep tiers
+                        bp.setbackEvery = 1.5;
+                    } else {
+                        bp.setbackFloors = 0;
                     }
-                    // The tower roots just below the podium parapet, so the
-                    // joint never shows a gap.
-                    const Real towerBase =
-                        b.baseY +
-                        std::max(Real(0), pm.height - human::PARAPET - 0.15);
-                    BuildingMesh tm = growPlanBuilding(tplan, twr, towerBase);
-                    collectUnit(b, tplan, twr, towerBase, tm);
-                    if (outParts) {
-                        for (const RenderMesh& part : pm.parts) {
-                            const int mi = part.materialIndex;
-                            if (mi >= 0 &&
-                                mi < static_cast<int>(outParts->size()))
-                                MeshBuilder::append((*outParts)[mi], part);
-                        }
-                        for (const RenderMesh& part : tm.parts) {
-                            const int mi = part.materialIndex;
-                            if (mi >= 0 &&
-                                mi < static_cast<int>(outParts->size()))
-                                MeshBuilder::append((*outParts)[mi], part);
-                        }
-                    }
-                    b.site = pb.center;
-                    b.width = 2 * pb.half[0];
-                    b.depth = 2 * pb.half[1];
-                    b.yaw = std::atan2(pb.axis[0].y, pb.axis[0].x);
-                    b.plan = plan;
-                    b.height = (towerBase - b.baseY) + tm.height;
-                    // A paved lot's plate and skirt ARE its foundation: the foundation's top ledge would
-                    // lie in the plate's own plane and flicker against it.
-                    if (!paved) emitFoundation(b.plan, b.groundY, b.baseY);
-                    else sculptPaving(b.pavedLot, b.paveY, meshGround, outParts, outFlatParts);
-                    out.push_back(std::move(b));
-                    continue;
                 }
             }
             if (planOk) {

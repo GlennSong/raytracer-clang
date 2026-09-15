@@ -11,7 +11,8 @@
 #include "../src/engine/procgen/city/road_mesh.h"
 #include "../src/engine/procgen/city/road_net.h"   // buildRoadNetLattice (the ONE mesher)
 #include "../src/engine/procgen/city/city_lots.h"   // LotBuilding, appendLotMassBox
-#include "../src/engine/procgen/city/site_plan.h"   // offsetPolygonEdges (corner closure test)
+#include "../src/engine/procgen/city/site_plan.h"
+#include "../src/engine/procgen/city/core_plan.h"   // offsetPolygonEdges (corner closure test)
 #include "../src/engine/mesh_builder.h"
 #include <algorithm>
 #include <cmath>
@@ -1017,6 +1018,51 @@ TEST_CASE(lit_panes_carry_room_uvs_in_metres) {
     CHECK(beyondFirstRoom);
     CHECK(vInRange);
     CHECK(tangentIsStorey);
+}
+
+// Glenn's second walk (2026-09-14): "it's very tall but only has 4 floors
+// available on the elevator". The podium tower was two grows and two
+// records; now it is ONE building through the mass stack — the podium as
+// the base, the tower as the shaft from podiumFloors up, the tall shaft's
+// own steps above it — so one core serves every floor.
+TEST_CASE(podium_tower_is_one_mass_with_one_core_to_the_top) {
+    const Poly2 plan = {{0, 0}, {48, 0}, {48, 40}, {0, 40}};
+    BuildingParams p;
+    p.floors = 32;
+    p.curtainWall = true;
+    p.walkableGround = true;
+    p.openDoorway = true;
+    p.seed = 11;
+    p.envelope = BuildingParams::Envelope::StreetWallSetback;
+    p.baseFloors = 3;          // the podium
+    p.setback1 = 0;            // no step at the podium roof: the shaft rises from it
+    p.stepFloors = 0;
+    p.stepDepth = 0;
+    p.towerFloor = 3;
+    p.towerFrac = 0.38;
+    p.setbackFloors = 6;       // the tall shaft keeps its tiers
+    p.setbackEvery = 1.5;
+    const std::vector<MassTier> tiers = massStack(plan, p);
+    CHECK(tiers.size() >= 3);                       // podium, shaft, at least one step above
+    CHECK(tiers[0].floor0 == 0);
+    CHECK(tiers.size() > 1 && tiers[1].floor0 == 3);   // the shaft starts at the podium roof
+    if (tiers.size() > 1) {
+        const Real frac = area(tiers[1].plan) / area(plan);
+        CHECK(frac > 0.25 && frac < 0.45);          // the two-mass path's 0.62 x 0.62 shaft
+        for (const Vec2& v : tiers[1].plan) CHECK(pointInPolygon(plan, v));
+    }
+    if (tiers.size() > 2) CHECK(tiers[2].floor0 == 9);   // a step 6 floors up the shaft
+    // The storeys above the podium sit on the shaft's plan, the podium's on the lot's.
+    const std::vector<StoreyPlan> st = storeyPlans(plan, p);
+    CHECK(st.size() == 33);
+    CHECK(area(st[2].plan) > area(plan) * 0.99);
+    CHECK(area(st[5].plan) < area(plan) * 0.5);
+    // One core, seated in the shaft, fitting every tier — the elevator's bank to the top.
+    const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
+    CHECK(core.valid);
+    CHECK(core.hoistways.size() == 3);   // 21-40 floors
+    for (const MassTier& t : tiers)
+        for (const Vec2& c : core.rect()) CHECK(pointInPolygon(t.plan, c));
 }
 
 TEST_CASE(distant_mass_box_carries_window_cell_uvs) {
