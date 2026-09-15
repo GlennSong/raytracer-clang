@@ -6720,8 +6720,14 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
     walls keep their tint), and the room is picked from the pane's 3 m world cell. By day nothing
     changes (emission only). Verified at 80 m (`after_rooms_facade_80m.png`: back walls, floor
     bands, side walls at an angle, warm and cool rooms) and on the skyline
-    (`after_rooms_skyline_bay.png`). Metal mirror owed; WebGPU has no path. Owed: clear lobby glass
-    on enterable buildings, rooms with furniture blobs and blinds, a per-district room mix.
+    (`after_rooms_skyline_bay.png`). Metal mirror owed; WebGPU has no path.
+    *The real tier's lobby (same night):* an enterable building's ground storey puts every pane,
+    outer and inner, curtain wall or not, in `PartId::GlassClear` (a faint blue, opacity 0.18, both
+    faces, no room behind it) at Full detail, so the lobby that ships with the exterior shows from
+    the street and the street from the lobby; the flat tier keeps its opaque glass. The lobby's
+    drywall carries its own faint self-light, so a lobby nobody is in still reads lit after dusk.
+    Test `enterable_ground_storeys_have_clear_panes`. Owed: rooms with furniture blobs and blinds, a
+    per-district room mix, the Metal mirror of the pane shader.
     Still owed: podium uplights, and a Lua-readable per-building lighting spec (today the choices
     are hashed, not authored).
 

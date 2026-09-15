@@ -996,3 +996,43 @@ TEST_CASE(curtain_wall_interiors_look_out_through_clear_panes) {
     CHECK(glassVerts >= 4 * 4 * 6);   // four edges, six upper storeys, a quad each
     CHECK(paintVerts > 0);
 }
+
+TEST_CASE(enterable_ground_storeys_have_clear_panes) {
+    // The real tier's lobby (skyscrapers v2): an enterable building's ground
+    // storey puts every pane, outer and inner, in the CLEAR part; the upper
+    // storeys keep their dark and lit glass; a closed building has none.
+    const Poly2 plan = {{0, 0}, {30, 0}, {30, 24}, {0, 24}};
+    BuildingParams p;
+    p.floors = 6;
+    p.walkableGround = true;
+    p.openDoorway = true;
+    p.seed = 3;
+    for (int curtain = 0; curtain < 2; ++curtain) {
+        p.curtainWall = curtain == 1;
+        const BuildingMesh bm = growPlanBuilding(plan, p, 0.0, FacadeDetail::Full);
+        std::size_t clearLow = 0, clearHigh = 0, litLow = 0, litHigh = 0;
+        for (const RenderMesh& part : bm.parts) {
+            const bool clr = part.materialIndex == static_cast<int>(PartId::GlassClear);
+            const bool lit = part.materialIndex == static_cast<int>(PartId::GlassLit) ||
+                             part.materialIndex == static_cast<int>(PartId::Glass);
+            if (!clr && !lit) continue;
+            for (const Vertex& v : part.vertices) {
+                // The storey line itself is shared by both storeys' panes.
+                if (std::fabs(v.position.y - p.groundHeight) < 0.3) continue;
+                const bool low = v.position.y < p.groundHeight;
+                if (clr) (low ? clearLow : clearHigh)++;
+                else (low ? litLow : litHigh)++;
+            }
+        }
+        CHECK(clearLow > 0);
+        CHECK(clearHigh == 0);
+        CHECK(litLow == 0);
+        CHECK(litHigh > 0);
+    }
+    p.openDoorway = false;
+    p.curtainWall = false;
+    const BuildingMesh closed = growPlanBuilding(plan, p, 0.0, FacadeDetail::Full);
+    for (const RenderMesh& part : closed.parts)
+        CHECK(part.materialIndex != static_cast<int>(PartId::GlassClear) || part.vertices.empty());
+    CHECK(materialFor(PartId::GlassClear, Vec3(1, 1, 1)).opacity < 1.0f);
+}

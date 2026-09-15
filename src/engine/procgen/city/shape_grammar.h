@@ -81,6 +81,11 @@ enum class PartId : uint8_t {
              // not a painted box — tagged and gated like Beacon, brighter.
     BeaconHaze,   // the bulb's outer HAZE: a larger, fainter sphere (opacity
              // 0.22) — the soft red corona around the lamp at any distance.
+    GlassClear,   // CLEAR glass (skyscrapers v2, the real tier): the ground
+             // storey's panes of an enterable building, outer and inner, so
+             // the lobby that ships with the exterior shows from the street
+             // and the street shows from the lobby. Transparent, both faces,
+             // no room behind it.
     Count    // KEEP LAST: materialIndexFor is the ordinal; arrays size by Count
 };
 

@@ -186,6 +186,11 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
             m.albedo = {0.02, 0.02, 0.02}; m.metallic = 0.0f; m.roughness = 1.0f;
             m.opacity = 0.55f;
             m.flags |= RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT; break;
+        case PartId::GlassClear:
+            // Clear glass: a faint blue, a sharp fresnel, most of what is
+            // behind it coming through (the transparent pass), both faces.
+            m.albedo = {0.55, 0.66, 0.74}; m.metallic = 0.0f; m.roughness = 0.06f;
+            m.opacity = 0.18f; break;
         case PartId::BeaconHaze:
             // The bulb's corona: larger, fainter, the soft red halo.
             m.albedo = {0.02, 0.02, 0.02}; m.metallic = 0.0f; m.roughness = 1.0f;
@@ -468,9 +473,23 @@ enum class FacadeMode { Residential, Retail, Entrance, Solid };
 // windows — an opaque spandrel band hiding the floor slab, vision glass above,
 // and a proud steel mullion/transom grid. This is what a glass tower actually
 // is (a skin hung off a frame), and it reads far better than flat panels.
+// The panes of a facade land in Glass / GlassLit — or, for the ground storey
+// of an enterable building, ALL in GlassClear (the lobby shows through).
+static void appendGlassParts(BuildingMesh& out, RenderMesh& glass, RenderMesh& glassLit,
+                             bool clearPanes) {
+    if (clearPanes) {
+        appendToPart(out, PartId::GlassClear, glass);
+        appendToPart(out, PartId::GlassClear, glassLit);
+    } else {
+        appendToPart(out, PartId::Glass, glass);
+        appendToPart(out, PartId::GlassLit, glassLit);
+    }
+}
+
 void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
                          const Vec3& wallColor,
-                         FacadeDetail detail = FacadeDetail::Full) {
+                         FacadeDetail detail = FacadeDetail::Full,
+                         bool clearPanes = false) {
     Real fh = fr.height, W = fr.width;
     if (W < 0.5 || fh < 0.5) return;
     RenderMesh glass, glassLit, mull;
@@ -510,8 +529,7 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
     // FLAT (LOD1): the spandrel band + vision pane carry the curtain-wall read
     // at distance; the solid mullion lattice is the expensive half — skip it.
     if (detail == FacadeDetail::Flat) {
-        appendToPart(out, PartId::Glass, glass);
-        appendToPart(out, PartId::GlassLit, glassLit);
+        appendGlassParts(out, glass, glassLit, clearPanes);
         return;
     }
 
@@ -544,8 +562,7 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
         Real t0 = std::max(Real(0), ty - mw * 0.5), t1 = std::min(fh, ty + mw * 0.5);
         bar(0, t0, W, t1, false);
     }
-    appendToPart(out, PartId::Glass, glass);
-    appendToPart(out, PartId::GlassLit, glassLit);
+    appendGlassParts(out, glass, glassLit, clearPanes);
     appendToPart(out, PartId::Detail, mull);     // mullions read as metal detail
 }
 void emitCurtainWall(BuildingMesh& out, const Scope& storey, int side,
@@ -682,7 +699,7 @@ static void emitInsetSkin(BuildingMesh& out, const Poly2& plan, std::size_t edge
 void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
                        const FacadeLayout& L, Real thick,
                        const Vec3& wallColor, const Poly2& plan,
-                       const Vec3& paint, bool curtainWall) {
+                       const Vec3& paint, bool curtainWall, bool clearPanes = false) {
     RenderMesh wall, glass, glassLit;
     const Vec3 in = fr.n * -thick;
     const Vec3 nIn = fr.n * -1.0;
@@ -730,8 +747,7 @@ void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
         }
     }
     appendToPart(out, PartId::Interior, wall);
-    appendToPart(out, PartId::Glass, glass);
-    appendToPart(out, PartId::GlassLit, glassLit);
+    appendGlassParts(out, glass, glassLit, clearPanes);
 }
 
 // 2 cm proud (no reveal, no z-fight), the door as a dark quad. No surrounds,
@@ -761,7 +777,7 @@ static void emitFlatFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode
 }
 
 void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
-                    const BuildingParams& p, const Vec3& wallColor) {
+                    const BuildingParams& p, const Vec3& wallColor, bool clearPanes = false) {
     // Accumulate into locals, then append once each — never hold a part reference
     // across a partMesh() that could reallocate out.parts.
     // surround = sill/hood trim courses; frame = window frames + muntin lights.
@@ -1086,8 +1102,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
     // The wall surface goes to the building's chosen facade part (procedural
     // brick/concrete/stucco/metal, or the flat Wall).
     appendToPart(out, p.wallPart, wall);
-    appendToPart(out, PartId::Glass, glass);
-    appendToPart(out, PartId::GlassLit, glassLit);
+    appendGlassParts(out, glass, glassLit, clearPanes);
     appendToPart(out, PartId::Door, door);
     appendToPart(out, PartId::Trim, surround);
     appendToPart(out, PartId::Detail, frame);   // frames/muntins read as joinery
@@ -3178,10 +3193,13 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             if (nrm.x * params.faceDir.x + nrm.y * params.faceDir.z < 0.35)
                 mode = FacadeMode::Residential;
         }
+        // An enterable building's ground storey has CLEAR panes at Full
+        // detail (the lobby shows from the street, the street from the lobby).
+        const bool clearLobby = full && params.openDoorway;
         if (params.curtainWall && mode != FacadeMode::Entrance)
-            emitCurtainWallRect(out, planEdgeRect(plan, i, y, gh), wallColor, detail);
+            emitCurtainWallRect(out, planEdgeRect(plan, i, y, gh), wallColor, detail, clearLobby);
         else if (full)
-            emitFacadeRect(out, planEdgeRect(plan, i, y, gh), mode, params, wallColor);
+            emitFacadeRect(out, planEdgeRect(plan, i, y, gh), mode, params, wallColor, clearLobby);
         else
             emitFlatFacadeRect(out, planEdgeRect(plan, i, y, gh), mode, params, wallColor);
         // Enterable buildings (ADR-0080): back the one-sided exterior skin
@@ -3191,11 +3209,11 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             const FaceRect ifr = planEdgeRect(plan, i, y, gh);
             if (params.curtainWall && mode != FacadeMode::Entrance) {
                 emitInsetSkin(out, plan, i, y, gh, interiorInset(params),
-                              interiorPaintFor(params), false);
+                              Vec3(1, 1, 1), false, PartId::GlassClear);
             } else {
                 emitInnerWallRect(out, ifr, facadeLayout(ifr, mode, params),
                                   interiorInset(params), wallColor, plan,
-                                  interiorPaintFor(params), params.curtainWall);
+                                  interiorPaintFor(params), params.curtainWall, true);
             }
         }
     }
