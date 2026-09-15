@@ -283,3 +283,151 @@ TEST_CASE(character_enters_the_cab_through_an_open_hoistway_door) {
     CHECK_APPROX(q.y, 0.05 + 0.7, 0.15);
     phys.shutdown();
 }
+
+// THE ACCEPTANCE RIDE, headless: in from the street through the entrance,
+// across the lobby past the desk, call a cab, ride it to the 20th floor
+// standing on the moving cab, step out onto that floor, walk into the
+// stairwell and up its first flight. Every system the player meets, in one
+// run — the interior collider, the elevator bank, the physics ride.
+TEST_CASE(character_rides_the_cab_to_the_twentieth_floor_and_takes_the_stairs) {
+    World world;
+    PhysicsWorld phys;
+    phys.initialize();
+    StubUploader uploader;
+    AssetManager assets(uploader);
+    const Poly2 plan = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    CityBuildings cb;
+    BuildingRecord r;
+    r.plan = plan;
+    r.baseY = 0;
+    r.groundY = -0.45;
+    r.params.floors = 30;
+    r.params.curtainWall = true;
+    r.params.walkableGround = true;
+    r.params.openDoorway = true;
+    r.params.seed = 5;
+    r.height = r.params.groundHeight + 30 * r.params.floorHeight;
+    const std::size_t entrance = entranceEdgeFor(plan, r.params);
+    r.doors.push_back({Vec2(20, 40), Vec2(0, 1), 2.0, 2.7});
+    r.enterable = true;
+    cb.records.push_back(r);
+    cb.buildIndex();
+    world.add<CityBuildings>(world.create(), std::move(cb));
+    const CorePlan core = coreFor(plan, r.params, entrance);
+    CHECK(core.valid);
+    const std::vector<StoreyPlan> storeys = storeyPlans(plan, r.params);
+
+    // The lobby window's collider (what the interior system grows on approach).
+    auto bodyFor = [&](int k0, int k1) {
+        RenderMesh collider;
+        growInterior(plan, r.params, 0.0, &collider, k0, k1);
+        std::vector<Vec3> verts;
+        for (const Vertex& v : collider.vertices) verts.push_back(v.position);
+        std::vector<uint32_t> idx = collider.indices;
+        const std::size_t oneSided = idx.size();
+        for (std::size_t i = 0; i + 2 < oneSided; i += 3) { idx.push_back(idx[i]); idx.push_back(idx[i + 2]); idx.push_back(idx[i + 1]); }
+        return phys.addMesh(verts, idx, Vec3(), 0.85);
+    };
+    phys.addBox(Vec3(60, 0.5, 60), Vec3(20, -0.45, 20), Quat::identity(), BodyMotion::Static);   // the lobby slab, the street
+    bodyFor(0, 3);
+
+    // The walker, on the street in front of the entrance (the +Z edge).
+    CharacterId c = phys.addCharacter(0.4, 0.3, Vec3(20, 0.95, 44));
+    phys.optimizeBroadPhase();
+    const Real dt = 1.0 / 60.0;
+    ElevatorSystem sys(nullptr);
+    auto stepAll = [&](const Vec3& vel, bool call, int pick) {
+        phys.moveCharacter(c, vel, dt);
+        sys.step(world, &phys, assets, phys.characterPosition(c), dt, call, pick);
+        phys.update(dt);
+    };
+    auto toward = [&](const Vec3& target, Real speed) {
+        const Vec3 q = phys.characterPosition(c);
+        const Real dx = target.x - q.x, dz = target.z - q.z;
+        const Real len = std::sqrt(dx * dx + dz * dz);
+        return len < 0.05 ? Vec3() : Vec3(dx / len * speed, 0, dz / len * speed);
+    };
+    auto walkTo = [&](const Vec3& target, int maxFrames) {
+        for (int i = 0; i < maxFrames; ++i) {
+            const Vec3 q = phys.characterPosition(c);
+            if (std::sqrt((target.x - q.x) * (target.x - q.x) + (target.z - q.z) * (target.z - q.z)) < 0.15) break;
+            stepAll(toward(target, 1.4), false, 0);
+        }
+    };
+    for (int i = 0; i < 30; ++i) stepAll(Vec3(), false, 0);
+    // 1. In through the entrance (no leaf on an open doorway) to the lobby.
+    walkTo(Vec3(20, 0, 36), 600);
+    Vec3 q = phys.characterPosition(c);
+    std::printf("    [ride] lobby (%.1f, %.2f, %.1f)\n", q.x, q.y, q.z);
+    CHECK(q.z < 37.5);
+    CHECK(pointInPolygon(plan, Vec2(q.x, q.z)));
+    // 2. Round the desk (a walker has no pathfinding here: waypoints past its
+    // right-hand planter) to hoistway 1's door.
+    const CoreShaft& hw = core.hoistways[1];
+    auto at = [&](Real u, Real v) { const Vec2 w = hw.frame.toWorld({u, v}); return Vec3(w.x, 0, w.y); };
+    const Vec2 E = (plan[entrance] + plan[(entrance + 1) % plan.size()]) * 0.5;
+    const Vec2 Cw = core.frame.toWorld({core.length * 0.5, 0.0});
+    const Real gap = (E - Cw).length();
+    auto coreAt = [&](Real u, Real v) { const Vec2 w = core.frame.toWorld({u, v}); return Vec3(w.x, 0, w.y); };
+    walkTo(coreAt(core.length * 0.5 + 4.6, -gap * 0.62), 900);   // wide of the planter
+    walkTo(coreAt(core.length * 0.5 + 4.6, -gap * 0.30), 900);   // past it
+    walkTo(at(hw.doorX + 1.5, -3.0), 900);                        // beside the door
+    walkTo(at(hw.doorX, -1.3), 400);                              // in front of it
+    q = phys.characterPosition(c);
+    Vec2 f = hw.frame.toFrame(Vec2(q.x, q.z));
+    std::printf("    [ride] at the door u=%.2f v=%.2f y=%.2f\n", f.x, f.y, q.y);
+    CHECK(std::fabs(f.x - hw.doorX) < 0.5);
+    CHECK(f.y > -2.0 && f.y < -0.3);
+    // 3. Call, wait for the doors, step in.
+    stepAll(Vec3(), true, 0);
+    CHECK(sys.status().atDoor);
+    for (int i = 0; i < 100; ++i) stepAll(Vec3(), false, 0);
+    const Vec3 inCab = at(hw.width * 0.5, 1.0);
+    for (int i = 0; i < 240; ++i) stepAll(toward(inCab, 1.2), false, 0);
+    CHECK(sys.status().inCab);
+    // 4. Pick the 20th floor, go, and STAND STILL: the cab carries the walker.
+    stepAll(Vec3(), false, 20);
+    CHECK(sys.status().selected == 20);
+    stepAll(Vec3(), true, 0);
+    const Real target = storeys[20].y0 + 0.05;
+    Real maxY = 0;
+    bool arrived = false;
+    int steps = 0;
+    for (; steps < 60 * 60; ++steps) {
+        stepAll(Vec3(), false, 0);
+        maxY = std::max(maxY, phys.characterPosition(c).y);
+        if (std::fabs(sys.cabY(0, 1) - target) < 1e-6 && !sys.status().moving) { arrived = true; break; }
+    }
+    q = phys.characterPosition(c);
+    std::printf("    [ride] arrived=%d after %d steps: walker y=%.2f cab y=%.2f (floor 20 slab %.2f)\n",
+                arrived ? 1 : 0, steps, q.y, sys.cabY(0, 1), target);
+    CHECK(arrived);
+    CHECK(std::fabs(q.y - (target + 0.7)) < 0.35);   // riding ON the cab, not left behind
+    CHECK(sys.status().inCab);
+    CHECK(sys.status().floor == 20);
+    // 5. The floor is there (the interior system's window regrows around the
+    // arrival storey); doors open; walk out to the corridor.
+    bodyFor(18, 23);
+    for (int i = 0; i < 90; ++i) stepAll(Vec3(), false, 0);   // the doors
+    walkTo(at(hw.doorX, -1.6), 600);
+    q = phys.characterPosition(c);
+    f = hw.frame.toFrame(Vec2(q.x, q.z));
+    std::printf("    [ride] floor 20 corridor u=%.2f v=%.2f y=%.2f\n", f.x, f.y, q.y);
+    CHECK(f.y < -1.0);
+    CHECK(std::fabs(q.y - (target + 0.7)) < 0.3);
+    // 6. Into stairwell B and up its first flight to the half landing.
+    const CoreStair& st = core.stairs[1];
+    auto sat = [&](Real u, Real v) { const Vec2 w = st.shaft.frame.toWorld({u, v}); return Vec3(w.x, 0, w.y); };
+    walkTo(sat(st.shaft.doorX, -1.5), 900);
+    walkTo(sat(st.shaft.doorX, 0.8), 400);
+    walkTo(sat(0.6, 0.8), 300);
+    const Real run = halfFlightRisers(storeys[20].h) * st.tread;
+    walkTo(sat(0.6, st.landing + run + 0.6), 1500);
+    q = phys.characterPosition(c);
+    const Vec2 sf = st.shaft.frame.toFrame(Vec2(q.x, q.z));
+    std::printf("    [ride] stair B half landing u=%.2f v=%.2f y=%.2f (expect %.2f)\n", sf.x, sf.y, q.y,
+                target + storeys[20].h * 0.5 + 0.7);
+    CHECK(sf.y > st.landing + run - 0.3);
+    CHECK(std::fabs(q.y - (target + storeys[20].h * 0.5 + 0.7)) < 0.3);
+    phys.shutdown();
+}

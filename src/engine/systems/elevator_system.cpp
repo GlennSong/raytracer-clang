@@ -329,7 +329,10 @@ void ElevatorSystem::step(World& world, PhysicsWorld* phys, AssetManager& assets
                     const bool onTheWay = (yHere - c.y) * (yT - c.y) > 0 && std::fabs(yHere - c.y) < std::fabs(yT - c.y);
                     if (!onTheWay) continue;
                 }
-                const Real d = std::fabs(c.y - yHere) + (c.state == CabState::Moving ? 0 : 0.01);
+                // Ties go to the hoistway the player is standing at: a hall call
+                // opens the door in front of them, not the bank's first cab.
+                const Real d = std::fabs(c.y - yHere) + (c.state == CabState::Moving ? 0 : 0.01) +
+                               (static_cast<int>(i) == atDoor ? 0 : 0.02);
                 if (d < bestD) { bestD = d; best = static_cast<int>(i); }
             }
             if (best >= 0) {

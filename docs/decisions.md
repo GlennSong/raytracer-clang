@@ -6738,6 +6738,14 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
     riser while hugging the spine wall had its step-up cast blocked by the wall's end cap and wedged
     — the climb test had passed only by contact order — so the spine wall now starts a tread and a
     half up each flight (`lobby_gets_a_desk_and_call_buttons`; the climb test walks the same path).
+    *The acceptance ride, headless (same night):*
+    `character_rides_the_cab_to_the_twentieth_floor_and_takes_the_stairs` walks a Jolt character in
+    from the street through the open entrance, round the lobby desk, calls a cab, rides it to the
+    20th floor STANDING ON THE MOVING CAB (the walker arrives 0.7 m over the cab floor, which is
+    the slab), steps out into the corridor once the window has regrown, and climbs stairwell B's
+    first flight to its half landing — every system the player meets, in one run. It found a real
+    bug on the way: a hall call opened the bank's first idle cab rather than the one in front of the
+    player (ties in the cab pick now go to the hoistway the player stands at).
     Still owed: podium uplights, and a Lua-readable per-building lighting spec (today the choices
     are hashed, not authored).
 
