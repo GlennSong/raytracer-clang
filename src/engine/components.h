@@ -327,7 +327,10 @@ struct Vehicle {
     PhysicsWorld::VehicleId vehicleId = PhysicsWorld::INVALID_VEHICLE;
     Entity driver;                 // invalid = unoccupied; set on enter, cleared on exit
     // Live driver input, written by VehicleSystem each step (for inspection/debug).
+    // `steer` is the driver's raw value (the indicators read it); `steerApplied`
+    // is what reached the wheels after the keyboard assist (vehicle_steering.h).
     Real throttle = 0, steer = 0, brake = 0, handBrake = 0;
+    Real steerApplied = 0;
     std::vector<Entity> wheelEntities;   // rendered wheels (optional)
     // Head/taillight glow toggle (ADR-0059) and the lens entities VehicleSystem
     // positions + lights each frame; `driverModel` is a capsule shown in the seat

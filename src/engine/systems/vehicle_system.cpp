@@ -1,4 +1,5 @@
 #include "vehicle_system.h"
+#include "../vehicle_steering.h"
 
 #include "../vehicle_lamps.h"
 #include "../vehicle_audio.h"
@@ -231,9 +232,16 @@ void VehicleSystem::driveVehicles(FrameContext& ctx) {
         if (v.driver.valid()) {
             // The player is seated: host input drives it. S is plain reverse
             // throttle (Glenn's call — "S can stay reverse for now"); the
-            // BRAKE is its own pedal: Space (Ctrl = handbrake).
+            // BRAKE is its own pedal: Space (Ctrl = handbrake). The wheel
+            // goes through the keyboard assist (vehicle_steering.h): less
+            // lock the faster the car goes, wound on at a finite rate — a
+            // key is a square wave, and full lock at 90 km/h is a spin.
+            const Quat q = pw.vehicleOrientation(v.vehicleId);
+            const Vec3 fwd = q.rotate(Vec3(0, 0, 1));
+            const Vec3 vel = pw.vehicleVelocity(v.vehicleId);
+            const Real fwdSpeed = vel.x * fwd.x + vel.y * fwd.y + vel.z * fwd.z;
             in.throttle = throttle;
-            in.steer = steer;
+            in.steer = shapeSteer(v.steerApplied, steer, fwdSpeed, ctx.clock.fixedStep());
             in.brake = brake;
             in.handBrake = hand;
         } else if (AgentDriver* ad = ctx.world.get<AgentDriver>(e)) {
@@ -252,7 +260,8 @@ void VehicleSystem::driveVehicles(FrameContext& ctx) {
             in.brake = 1.0;
         }
         v.throttle = in.throttle;
-        v.steer = in.steer;
+        v.steer = v.driver.valid() ? steer : in.steer;   // the driver's wheel, for the indicators
+        v.steerApplied = in.steer;
         v.brake = in.brake;
         v.handBrake = in.handBrake;
         pw.setVehicleInput(v.vehicleId, in.throttle, in.steer, in.brake, in.handBrake);

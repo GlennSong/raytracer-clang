@@ -94,14 +94,17 @@ PhysicsWorld::VehicleConfig bodyBoxSedan() {
     c.engineTorque = 650.0;
     c.brakeTorque = 1600.0;
     c.maxSteerDegrees = 32.0;
-    // configFromBody's short-travel arcade suspension, attach lifted so the
-    // wheel rests where the fleet drew it: one radius above the box floor.
+    // configFromBody's street suspension (PhysicsWorld::kStreet*), attach
+    // lifted by the rest drop so the wheel rests where the fleet drew it: one
+    // radius above the box floor.
     auto wheel = [&](Real x, Real z, bool steered) {
         PhysicsWorld::VehicleWheel w;
         const Real restCentreY = -0.725 + 0.31;
-        w.position = Vec3(x, restCentreY + (0.15 - 0.075), z);
-        w.suspensionMin = 0.05;
-        w.suspensionMax = 0.15;
+        w.position = Vec3(x, restCentreY + PhysicsWorld::kStreetSuspensionRestDrop, z);
+        w.suspensionMin = PhysicsWorld::kStreetSuspensionMin;
+        w.suspensionMax = PhysicsWorld::kStreetSuspensionMax;
+        w.suspensionFrequency = PhysicsWorld::kStreetSuspensionFrequency;
+        w.suspensionDamping = PhysicsWorld::kStreetSuspensionDamping;
         w.radius = 0.31;          // 0.62 m wheel diameter
         w.width = 0.24;
         w.steered = steered;

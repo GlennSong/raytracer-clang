@@ -114,6 +114,12 @@ local function from_class(class_name, seed, opts)
     max_steer_deg = opts.max_steer_deg or (c.form == "coupe" and 32 or 28),
     brake_torque = opts.brake_torque or math.floor(mass * 1.15),
     hand_brake_torque = opts.hand_brake_torque or math.floor(mass * 2.9),
+    -- The forgiving handling defaults live in PhysicsWorld::VehicleConfig
+    -- (physics_world.h: roll cone 65 deg, anti-roll bars off, yaw assist 3/s);
+    -- a recipe may override any of them (nil = keep the default).
+    max_roll_deg = opts.max_roll_deg,
+    anti_roll = opts.anti_roll,
+    yaw_assist = opts.yaw_assist,
     wheel = { radius = r, width = math.max(0.18, c.track * 0.13) },
     wheels = {
       { x =  halfTrack, y = axleY, z = frontZ, steered = true,  driven = true },

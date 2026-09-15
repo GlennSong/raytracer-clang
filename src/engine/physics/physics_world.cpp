@@ -231,6 +231,12 @@ struct PhysicsWorld::Impl {
         JPH::Ref<JPH::VehicleConstraint> constraint;
         JPH::BodyID body;
         int wheels = 0;
+        // For the yaw assist (VehicleConfig::yawAssist): the last steer
+        // input, the steering lock and the wheelbase.
+        float steer = 0.0f;
+        float maxSteerRad = 0.0f;
+        float wheelbase = 2.7f;
+        float yawAssist = 0.0f;
     };
     std::vector<Vehicle> vehicles;
 
@@ -695,6 +701,11 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
     JPH::VehicleConstraintSettings vs;
     vs.mUp = JPH::Vec3(0, 1, 0);
     vs.mForward = JPH::Vec3(0, 0, 1);
+    // The roll cone: Jolt keeps the chassis up axis inside it with a rotation
+    // constraint, so a trip lifts two wheels and drops back rather than going
+    // over (tests/test_vehicle_handling.cpp: the slanted kerb at 65 km/h).
+    if (cfg.maxPitchRollDegrees < 180.0)
+        vs.mMaxPitchRollAngle = JPH::DegreesToRadians(static_cast<float>(cfg.maxPitchRollDegrees));
     for (const VehicleWheel& w : cfg.wheels) {
         JPH::WheelSettingsWV* ws = new JPH::WheelSettingsWV();
         ws->mPosition = toJolt(w.position);
@@ -711,6 +722,23 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
         ws->mMaxHandBrakeTorque =
             w.handBrake ? static_cast<float>(cfg.handBrakeTorque) : 0.0f;
         vs.mWheels.push_back(ws);
+    }
+
+    // Anti-roll bars: one per axle, pairing the wheels that share a z (an
+    // axle line) on opposite sides.
+    if (cfg.antiRollStiffness > 0.0) {
+        for (int i = 0; i < static_cast<int>(cfg.wheels.size()); ++i) {
+            for (int j = i + 1; j < static_cast<int>(cfg.wheels.size()); ++j) {
+                const Vec3& a = cfg.wheels[i].position;
+                const Vec3& b = cfg.wheels[j].position;
+                if (std::fabs(a.z - b.z) > 0.10 || a.x * b.x >= 0.0) continue;
+                JPH::VehicleAntiRollBar bar;
+                bar.mLeftWheel = a.x > b.x ? i : j;
+                bar.mRightWheel = a.x > b.x ? j : i;
+                bar.mStiffness = static_cast<float>(cfg.antiRollStiffness);
+                vs.mAntiRollBars.push_back(bar);
+            }
+        }
     }
 
     JPH::WheeledVehicleControllerSettings* controller =
@@ -753,6 +781,16 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
     v.constraint = constraint;
     v.body = chassis->GetID();
     v.wheels = static_cast<int>(cfg.wheels.size());
+    v.maxSteerRad = JPH::DegreesToRadians(static_cast<float>(cfg.maxSteerDegrees));
+    v.yawAssist = static_cast<float>(std::max(Real(0), cfg.yawAssist));
+    if (!cfg.wheels.empty()) {
+        Real zMin = cfg.wheels.front().position.z, zMax = zMin;
+        for (const VehicleWheel& w : cfg.wheels) {
+            zMin = std::min(zMin, w.position.z);
+            zMax = std::max(zMax, w.position.z);
+        }
+        v.wheelbase = static_cast<float>(std::max(Real(1.0), zMax - zMin));
+    }
     impl->vehicles.push_back(std::move(v));
     return static_cast<VehicleId>(impl->vehicles.size() - 1);
 }
@@ -780,6 +818,7 @@ void PhysicsWorld::setVehicleInput(VehicleId id, Real forward, Real right,
     auto* wc = static_cast<JPH::WheeledVehicleController*>(c->GetController());
     wc->SetDriverInput(static_cast<float>(forward), static_cast<float>(right),
                        static_cast<float>(brake), static_cast<float>(handBrake));
+    impl->vehicles[id].steer = static_cast<float>(std::clamp(right, Real(-1), Real(1)));
     // Throttle/steer is meaningless on a sleeping body — wake it.
     if (forward != 0.0 || right != 0.0 || brake != 0.0 || handBrake != 0.0)
         impl->bodies().ActivateBody(impl->vehicles[id].body);
@@ -841,8 +880,44 @@ void PhysicsWorld::optimizeBroadPhase() {
     if (impl) impl->physicsSystem.OptimizeBroadPhase();
 }
 
+// The yaw assist (VehicleConfig::yawAssist): damp the chassis' yaw rate in
+// excess of the steered one. Jolt turns a wheel by -right * lock about the
+// up axis, so +steer is a NEGATIVE yaw about up (the lab's sign probe: "+steer
+// turns toward -x" with forward +z); the Ackermann target is v tan(delta) / L,
+// capped at the yaw rate a ~0.95 g road allows at this speed.
+void PhysicsWorld::applyYawAssist(std::size_t index) {
+    Impl::Vehicle& v = impl->vehicles[index];
+    if (v.yawAssist <= 0.0f || !v.constraint) return;
+    bool grounded = false;
+    for (const JPH::Wheel* w : v.constraint->GetWheels())
+        if (w->HasContact()) { grounded = true; break; }
+    if (!grounded) return;
+    JPH::BodyInterface& bi = impl->bodies();
+    const JPH::Quat q = bi.GetRotation(v.body);
+    const JPH::Vec3 up = q * JPH::Vec3(0, 1, 0);
+    const JPH::Vec3 fwd = q * JPH::Vec3(0, 0, 1);
+    const float speed = bi.GetLinearVelocity(v.body).Dot(fwd);
+    if (std::fabs(speed) < 3.0f) return;             // parking: leave it alone
+    const float yawRate = bi.GetAngularVelocity(v.body).Dot(up);
+    const float delta = -v.steer * v.maxSteerRad;
+    float target = speed * std::tan(delta) / v.wheelbase;
+    const float gripLimit = 0.95f * 9.81f / std::fabs(speed);
+    target = std::clamp(target, -gripLimit, gripLimit);
+    float excess = yawRate - target;
+    // Lagging the steered rate on the same side is the driver's business
+    // (turn-in, understeer): the assist never adds yaw.
+    if (target != 0.0f && yawRate * target >= 0.0f && std::fabs(yawRate) < std::fabs(target))
+        excess = 0.0f;
+    if (std::fabs(excess) < 0.02f) return;           // a dead band: noise is not a spin
+    const JPH::Mat44 invI = bi.GetInverseInertia(v.body);
+    const float invIup = (invI * up).Dot(up);
+    if (invIup <= 1e-9f) return;
+    bi.AddTorque(v.body, up * (-v.yawAssist * excess / invIup));
+}
+
 void PhysicsWorld::update(Real deltaTime, int collisionSteps) {
     if (impl) {
+        for (std::size_t i = 0; i < impl->vehicles.size(); ++i) applyYawAssist(i);
         impl->physicsSystem.Update(static_cast<float>(deltaTime), collisionSteps,
                                    &impl->tempAllocator, impl->jobSystem.get());
     }

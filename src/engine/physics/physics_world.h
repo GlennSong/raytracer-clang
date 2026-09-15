@@ -158,9 +158,23 @@ public:
     // jacked up with its wheels dangling while the sim's cars sat on the road
     // (device: "inconsistencies with the simulated cars versus the player's
     // physics based car").
-    static constexpr Real kStreetSuspensionMin = 0.05;
-    static constexpr Real kStreetSuspensionMax = 0.15;
-    static constexpr Real kStreetStaticDeflection = 0.075;   // at the 1.5 Hz default
+    //
+    // TRAVEL (Glenn, 2026-09-14: "rolls easily"). The first street rig was
+    // 0.05..0.15 at the 1.5 Hz default: it settled 0.075 below the attach
+    // point with 2.5 cm of bump travel left before Jolt's hard stop — a rigid
+    // velocity constraint that hands the wheel's whole closing speed to the
+    // chassis corner. A 0.15 m kerb crossed at 65 km/h at a slant hit that
+    // stop, launched one corner 1.7 m and rolled the car over
+    // (tests/test_vehicle_handling.cpp measured it). Now the spring rests
+    // with more than a kerb's height of bump travel under it (min 0, the
+    // rest drop below), at 1.8 Hz so the rest drop stays modest and the body
+    // does not wallow, damped 0.6 so the corner settles in one bounce. The
+    // static deflection scales with 1/f²: 0.075 at 1.5 Hz -> 0.052 at 1.8.
+    static constexpr Real kStreetSuspensionMin = 0.0;
+    static constexpr Real kStreetSuspensionMax = 0.22;
+    static constexpr Real kStreetSuspensionFrequency = 1.8;
+    static constexpr Real kStreetSuspensionDamping = 0.6;
+    static constexpr Real kStreetStaticDeflection = 0.052;   // at 1.8 Hz
     static constexpr Real kStreetSuspensionRestDrop =
         kStreetSuspensionMax - kStreetStaticDeflection;
 
@@ -197,6 +211,31 @@ public:
         // floor to bumper-lip height, comfortably over the city's 0.15 kerbs,
         // while a real wall still hits the box (see driving_lab kerb/wall gates).
         Real floorClearance = 0.22;
+        // ARCADE-FORGIVING (ADR-0059's "tuned by the caller"): the roll CONE
+        // keeps the body's up axis within this angle of world up — a kerb
+        // hop or a trip can put the car on two wheels but never on its roof
+        // (>= 180 turns it off). ANTI-ROLL BARS (N/m across each axle's
+        // wheel pair) are available but OFF by default: measured on the
+        // slanted kerb they hand a one-wheel hit to the other side and lift
+        // the whole car (26 deg of roll and a 0.7 m hop at 36 km/h against
+        // 4 deg and 0.25 m without), and the street rig's cornering roll is
+        // a few degrees without them.
+        Real maxPitchRollDegrees = 65.0;
+        Real antiRollStiffness = 0.0;
+        // YAW ASSIST (the fishtail, measured in tests/test_vehicle_handling.cpp):
+        // Jolt's tyre is a per-step impulse cap, so past a degree or two of
+        // sideslip at speed all four tyres saturate at once and the net yaw
+        // moment is whatever the front/rear LOAD split says. Lift the throttle
+        // and the load walks forward, the rear cap drops, and the car rotates
+        // with nothing to stop it — at 140 km/h a 0.6 s dab of steering then
+        // a lifted throttle went from 3 to 22 degrees of sideslip in two
+        // seconds, still turning. The assist is a stability control: each
+        // step it damps the yaw rate IN EXCESS of what the steered angle asks
+        // for (Ackermann, capped at the grip the road allows) with a torque
+        // of yawAssist * I_up * excess (1/s: the excess decays on this time
+        // scale). It never adds yaw the driver did not steer for and never
+        // acts with all four wheels off the ground. 0 = off.
+        Real yawAssist = 3.0;
         std::vector<VehicleWheel> wheels;
     };
 
@@ -239,6 +278,9 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;
+    // The per-step stability torque of VehicleConfig::yawAssist, for the
+    // vehicle in slot `index` (called from update, before the Jolt step).
+    void applyYawAssist(std::size_t index);
 };
 
 

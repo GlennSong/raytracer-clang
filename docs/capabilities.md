@@ -43,6 +43,14 @@ being used. One row per capability; the "used by" column is the audit trail.
 | `MeshBuilder::chunkByCell` | `engine/mesh_builder.h` (was `level_loader.cpp`) | loader chunking, city producer | a bundle cell is a render cell |
 
 
+## Vehicles (opened for ADR-0087, 2026-09-14 — the handling pass)
+
+| Capability | Where | Used by | Notes |
+|---|---|---|---|
+| Forgiving handling defaults `VehicleConfig::{maxPitchRollDegrees, antiRollStiffness, yawAssist}` | `engine/physics/physics_world.{h,cpp}` (`addVehicle`, `applyYawAssist`), Lua `max_roll_deg` / `anti_roll` / `yaw_assist` (`vehicle_spec.cpp`) | every Jolt car: the player's spec, the commandeered fleet car, the possessed sim car, the driving lab | roll cone 65°, bars off (measured worse on a kerb), stability control damping only the yaw in excess of the steered Ackermann rate; `tests/test_vehicle_handling.cpp` is the before/after |
+| Street suspension rig `PhysicsWorld::kStreetSuspension{Min,Max,Frequency,Damping,RestDrop}` | `engine/physics/physics_world.h` | `vehicle_spec.cpp`, `citysim/city_vehicles.cpp`, `tests/test_driving_lab.cpp` | 0..0.22 m at 1.8 Hz: a kerb's height of bump travel before Jolt's hard stop; the rest drop lifts the attach point so the wheel rests where it is drawn (the settle test measures it) |
+| Keyboard steering assist `shapeSteer` / `steerLockAt` | `engine/vehicle_steering.h` (header-only) | `VehicleSystem::driveVehicles` for the seated player | speed-sensitive lock + rate limit; AI drivers bypass it; the indicators read the raw wheel (`Vehicle::steer`), the wheels get `Vehicle::steerApplied` |
+
 ## Buildings (opened for skyscrapers v2, 2026-09-13 — site plans, envelopes, cores)
 
 | Capability | Where | Used by | Why / why not |

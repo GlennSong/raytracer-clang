@@ -923,6 +923,7 @@ if(RT_ENABLE_PHYSICS)
         tests/main.cpp
         tests/test_physics.cpp
         tests/test_driving_lab.cpp
+        tests/test_vehicle_handling.cpp
         tests/test_physics_system.cpp
         tests/test_city_phys_tier.cpp
         tests/test_building_collider.cpp

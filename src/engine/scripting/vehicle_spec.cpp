@@ -81,6 +81,10 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
     c.brakeTorque = numField(L, t, "brake_torque", c.brakeTorque);
     c.handBrakeTorque = numField(L, t, "hand_brake_torque", c.handBrakeTorque);
     c.comOffsetY = numField(L, t, "com_offset", c.comOffsetY);
+    // The forgiving knobs (physics_world.h): a recipe may loosen or drop them.
+    c.maxPitchRollDegrees = numField(L, t, "max_roll_deg", c.maxPitchRollDegrees);
+    c.antiRollStiffness = numField(L, t, "anti_roll", c.antiRollStiffness);
+    c.yawAssist = numField(L, t, "yaw_assist", c.yawAssist);
 
     // lights = { { name = "headlight_l", pos = {x,y,z} }, ... }
     // Same shape citysim's fleet recipes use, so `mesh.car`'s output drops
@@ -154,6 +158,8 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
                                   numField(L, wi, "z", 0));
                 w.suspensionMin = PhysicsWorld::kStreetSuspensionMin;
                 w.suspensionMax = PhysicsWorld::kStreetSuspensionMax;
+                w.suspensionFrequency = PhysicsWorld::kStreetSuspensionFrequency;
+                w.suspensionDamping = PhysicsWorld::kStreetSuspensionDamping;
                 w.radius = numField(L, wi, "radius", wheelRadius);
                 w.width = numField(L, wi, "width", wheelWidth);
                 w.steered = boolField(L, wi, "steered", false);

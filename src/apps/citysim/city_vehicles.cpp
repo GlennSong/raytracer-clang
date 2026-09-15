@@ -78,6 +78,8 @@ PhysicsWorld::VehicleConfig configFromBody(
         w.position = restCentre + Vec3(0, kSuspensionRestDrop, 0);
         w.suspensionMin = kSuspensionMin;
         w.suspensionMax = kSuspensionMax;
+        w.suspensionFrequency = PhysicsWorld::kStreetSuspensionFrequency;
+        w.suspensionDamping = PhysicsWorld::kStreetSuspensionDamping;
     };
 
     if (!layout.empty()) {

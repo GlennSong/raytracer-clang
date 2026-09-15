@@ -6842,3 +6842,75 @@ round site, a flatiron prow) — that is a second mass kind in the site plan, no
 polygon.
 
 ---
+
+## ADR-0087 — Vehicle handling: a car that neither fishtails nor rolls (measured, then assisted)
+
+**Status:** Provisional (2026-09-14). **Trigger:** Glenn: "the car fishtails and rolls easily."
+
+**Context.** The player's car is Jolt's `WheeledVehicleController` (ADR-0059) driven straight from
+the keyboard: a key is a square wave, so the wheel goes to full lock (32°) the instant it is pressed
+at any speed, and the car reaches 176 km/h. Jolt's tyre is a per-step impulse cap (lateral
+impulse ≤ friction × suspension impulse; longitudinal and lateral independent, no slip curve past
+the cap), so a degree or two of sideslip at speed saturates all four tyres at once and the net yaw
+moment is whatever the front/rear load split says. The street suspension rig (0.05..0.15 m at
+1.5 Hz, chosen so the wheels rest where they are drawn) left 2.5 cm of bump travel before Jolt's
+hard stop — a rigid velocity constraint that hands the wheel's whole closing speed to the chassis
+corner.
+
+`tests/test_vehicle_handling.cpp` measured the car before anything was tuned:
+
+| manoeuvre | before | after |
+|---|---|---|
+| 0.15 m kerb, 25° slant, 65 km/h | rolled over (up·y −0.99, 1.8 m hop) | 2° roll, 0.24 m hop |
+| the same kerb at 36 km/h | 18° roll, 1.3 m hop | 4° roll, 0.25 m hop |
+| 0.6 s of steering at 140 km/h, throttle lifted | sideslip 3° → 31°, still rotating (−91°) | 2.9° peak, straight (−13°) |
+| full lock at 90 km/h under throttle | stable (understeer) | stable |
+
+The fishtail is a lift-off spin: the throttle on, the load sits rear and the car understeers; the
+throttle off, the load walks forward, the rear cap drops and nothing stops the rotation. The roll
+is the suspension's hard stop, not the centre of mass (0.28 m above the road; the static rollover
+threshold is 2.8 g).
+
+**Decision.** Four things, each on `PhysicsWorld::VehicleConfig` with a forgiving default and a
+Lua override (`max_roll_deg`, `anti_roll`, `yaw_assist`):
+
+1. **The street rig is softer**: `kStreetSuspension{Min 0, Max 0.22, Frequency 1.8, Damping 0.6}`,
+   rest drop 0.168 m (the ride-height rule of the driving lab holds: the deflection scales with
+   1/f², 0.075 at 1.5 Hz → 0.052 at 1.8, measured to 2 mm). A kerb's height of bump travel under the
+   spring at rest. The drivable spec, the commandeered fleet car and the lab's body-box sedan all
+   take the whole rig, not just min/max.
+2. **A roll cone** (`maxPitchRollDegrees` 65): Jolt's `mMaxPitchRollAngle` keeps the body's up axis
+   inside it. Two wheels in the air and back down, never the roof. The safety net for whatever the
+   city still throws; on the old rig it turned the rollover into a 65° lean that recovered.
+3. **A yaw assist** (`yawAssist` 3/s): stability control, applied in `PhysicsWorld::update` before
+   the Jolt step. The steered yaw rate is Ackermann `v·tan(δ)/L` capped at what a 0.95 g road allows
+   at that speed; the assist damps only the yaw rate IN EXCESS of it (`τ = −k·I_up·excess`), never
+   adds yaw the driver did not steer for, ignores a 0.02 rad/s dead band and an airborne car. A
+   steady steered turn loses 7 % of its heading change to it (gated at 15 %).
+4. **Keyboard steering through `vehicle_steering.h`** (`shapeSteer`, header-only like the lamps):
+   the available lock falls with forward speed (full to 5 m/s, half at 14 m/s, a 1/(1+x²) tail —
+   7° at 90 km/h), wound on at 3.5 full-scales/s and back at 6. VehicleSystem runs it for the seated
+   player each fixed step; the indicators still read the raw wheel. AI drivers (citysim's Stanley
+   controller) compute an angle and bypass it.
+
+Anti-roll bars are implemented (`antiRollStiffness`, one bar per axle pair) but OFF: measured on the
+slanted kerb they hand a one-wheel hit to the other side and lift the whole car (26° of roll and a
+0.7 m hop at 36 km/h against 4° and 0.25 m without), and cornering roll is 1.6° without them.
+
+**Alternatives considered.** (a) Cut the engine (it makes 176 km/h) — rejected: the spin happened at
+any speed over ~100 km/h and the kerb roll at 36; speed is Glenn's call. (b) A friction circle /
+rear grip bias in Jolt's tyre callback — rejected for now: it moves the front/rear balance but the
+lift-off transfer (20 % at 1 g) outruns any fixed bias; the assist is what real cars carry. (c)
+Raising the spring frequency instead of the travel — rejected: a 0.15 m step in 15 ms beats any
+spring; only travel before the stop absorbs it.
+
+**Consequences / tech debt.** The driving lab's kerb climb now runs on the street rig (minUp 0.99,
+was 0.86 on the old rig — chaotic at the hard stop). Every Jolt car, AI ones included, carries the
+cone and the assist. Open: Glenn's editor drive (the acceptance gate); the top speed; the
+handbrake (rears only, no friction circle, so it does not slide the tail — a drift needs the tyre
+callback); tyre load sensitivity.
+
+**Revisit trigger:** a drift or a rally mode — then the tyre callback (friction circle, rear bias)
+replaces the assist rather than fighting it.
+
+---
