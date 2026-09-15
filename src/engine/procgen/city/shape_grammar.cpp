@@ -3000,6 +3000,44 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         for (int ki = kA; ki < kB; ++ki)
             emitCoreStorey(cm, colliderOut, core, storeys[static_cast<std::size_t>(ki)], baseY,
                            params, ki + 1 < nS, ki >= 1);
+        // LOBBY DRESSING (M5, owed): a reception desk facing the entrance,
+        // between the door and the bank, with a planter at each end — boxes
+        // with colliders, in the lobby's own storey only.
+        if (kA == 0) {
+            const std::size_t e = entranceEdge % plan.size();
+            const Vec2 E = (plan[e] + plan[(e + 1) % plan.size()]) * 0.5;
+            const Vec2 C = core.frame.toWorld({core.length * 0.5, 0.0});
+            const Real gap = (E - C).length();
+            if (gap > 7.0) {
+                const Vec2 centre = C + (E - C) * 0.45;
+                const Vec2 u = core.frame.u, v = normalize(E - C);   // v: toward the entrance
+                const Real yF = baseY + 0.07;                        // on the lobby overlay
+                auto box = [&](const Vec2& c, Real w, Real d, Real h0, Real h1, const Vec3& colr, bool collide) {
+                    const Vec2 cs[4] = {c - u * (w * 0.5) - v * (d * 0.5), c + u * (w * 0.5) - v * (d * 0.5),
+                                        c + u * (w * 0.5) + v * (d * 0.5), c - u * (w * 0.5) + v * (d * 0.5)};
+                    for (int i = 0; i < 4; ++i) {
+                        const Vec2 a = cs[i], b = cs[(i + 1) % 4];
+                        const Vec2 dd = b - a;
+                        const Vec2 n = normalize(Vec2(dd.y, -dd.x));
+                        const Vec3 A(a.x, yF + h0, a.y), B(b.x, yF + h0, b.y), Cc(b.x, yF + h1, b.y), D(a.x, yF + h1, a.y);
+                        emitQuad(cm.drywall, A, B, Cc, D, Vec3(n.x, 0, n.y), colr);
+                        if (collide && colliderOut) emitQuad(*colliderOut, A, B, Cc, D, Vec3(n.x, 0, n.y), colr);
+                    }
+                    const Vec3 T0(cs[0].x, yF + h1, cs[0].y), T1(cs[1].x, yF + h1, cs[1].y),
+                        T2(cs[2].x, yF + h1, cs[2].y), T3(cs[3].x, yF + h1, cs[3].y);
+                    emitQuad(cm.drywall, T0, T1, T2, T3, Vec3(0, 1, 0), colr);
+                    if (collide && colliderOut) emitQuad(*colliderOut, T0, T1, T2, T3, Vec3(0, 1, 0), colr);
+                };
+                const Vec3 wood(0.42, 0.30, 0.20), top(0.62, 0.60, 0.56), pot(0.30, 0.30, 0.32), leaf(0.20, 0.42, 0.22);
+                box(centre, 3.4, 0.9, 0.0, 1.05, wood, true);          // the desk
+                box(centre, 3.6, 1.0, 1.05, 1.12, top, true);          // its counter top
+                for (Real sgn : {-1.0, 1.0}) {
+                    const Vec2 pc = centre + u * (sgn * 2.6);
+                    box(pc, 0.7, 0.7, 0.0, 0.62, pot, true);           // planter
+                    box(pc, 0.55, 0.55, 0.62, 1.35, leaf, false);      // its plant
+                }
+            }
+        }
         appendToPart(out, PartId::Interior, cm.drywall);
         appendToPart(out, floorFinishPartFor(params), cm.floor);
         appendToPart(out, stairFinishPartFor(params), cm.stair);

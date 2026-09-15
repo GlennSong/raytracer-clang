@@ -328,51 +328,98 @@ static constexpr double kBeaconChunk = 24.0;
 // on the back wall, everything falling off with depth so the room reads deep.
 // Values are LIGHT, not albedo: they multiply the pane's night emission.
 static TextureHandle bakeRoomAtlas(Renderer& renderer) {
-    const int n = 512, tile = 256, face = 128;
+    // 16 rooms in a 4x4 grid of 256 px tiles (offices in rows 0-1, flats in
+    // rows 2-3), each tile a 2x2 of 128 px faces: back wall (0,0), ceiling
+    // (128,0), floor (0,128), side wall (128,128) — the order mesh.frag's
+    // FLAG_INTERIOR_MAP samples them. Furniture is blobs: desks with a monitor
+    // glow, shelves, a sofa, a rug, ceiling strips or a pendant, a door on the
+    // side wall — everything falling off with depth. Values are LIGHT (they
+    // multiply the pane's night emission), not albedo.
+    const int n = 1024, tile = 256, face = 128;
     std::vector<unsigned char> img(static_cast<std::size_t>(n) * n * 4, 255);
-    struct Room { Vec3 wall, ceil, fix, floor, band; Real bandH; };
-    const Room rooms[4] = {
-        {{0.62, 0.62, 0.60}, {0.55, 0.55, 0.54}, {1.0, 1.0, 1.0}, {0.22, 0.24, 0.30}, {0.34, 0.31, 0.29}, 0.38},   // office, carpet
-        {{0.58, 0.60, 0.62}, {0.50, 0.52, 0.54}, {1.0, 1.0, 1.0}, {0.28, 0.28, 0.30}, {0.40, 0.40, 0.42}, 0.30},   // office, grey
-        {{0.66, 0.60, 0.52}, {0.58, 0.55, 0.50}, {1.0, 0.96, 0.88}, {0.38, 0.28, 0.20}, {0.30, 0.22, 0.18}, 0.55},   // flat, wood, shelves
-        {{0.60, 0.56, 0.50}, {0.52, 0.50, 0.46}, {1.0, 0.94, 0.84}, {0.26, 0.22, 0.20}, {0.36, 0.30, 0.26}, 0.42},   // flat, dark
-    };
     auto put = [&](int x, int y, const Vec3& c) {
         const std::size_t o = (static_cast<std::size_t>(y) * n + x) * 4;
         img[o] = static_cast<unsigned char>(std::min(1.0, std::max(0.0, c.x)) * 255);
         img[o + 1] = static_cast<unsigned char>(std::min(1.0, std::max(0.0, c.y)) * 255);
         img[o + 2] = static_cast<unsigned char>(std::min(1.0, std::max(0.0, c.z)) * 255);
     };
-    for (int r = 0; r < 4; ++r) {
-        const Room& rm = rooms[r];
-        const int tx = (r % 2) * tile, ty = (r / 2) * tile;
+    uint32_t h = 9176u;
+    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffu) / 65535.0; };
+    for (int r = 0; r < 16; ++r) {
+        const bool office = r < 8;
+        const int tx = (r % 4) * tile, ty = (r / 4) * tile;
+        // The palette, varied per room.
+        const Real wl = office ? 0.60 + 0.12 * rnd() : 0.56 + 0.14 * rnd();
+        const Vec3 wall = office ? Vec3(wl, wl, wl * 0.98) : Vec3(wl, wl * 0.93, wl * 0.82);
+        const Vec3 fix = office ? Vec3(1.0, 1.0, 1.0) : Vec3(1.0, 0.95, 0.86);
+        const Vec3 floorC = office ? Vec3(0.22, 0.24, 0.30) * (0.8 + 0.4 * rnd()) : Vec3(0.40, 0.30, 0.21) * (0.7 + 0.5 * rnd());
+        const Vec3 dark(0.12, 0.11, 0.10);
+        // Furniture placement (in face UV).
+        const int desks = office ? 2 + static_cast<int>(rnd() * 2.0) : 0;
+        const Real deskX[3] = {0.08 + rnd() * 0.1, 0.42 + rnd() * 0.1, 0.72 + rnd() * 0.1};
+        const bool shelves = !office && rnd() < 0.6;
+        const bool sofa = !office && rnd() < 0.7;
+        const Real sofaX = 0.15 + rnd() * 0.4;
+        const bool tv = !office && rnd() < 0.5;
+        const bool pendant = !office;
+        const Real doorU = 0.55 + rnd() * 0.3;
         for (int y = 0; y < face; ++y)
             for (int x = 0; x < face; ++x) {
                 const Real u = (x + 0.5) / face, v = (y + 0.5) / face;
-                // Back wall (u across, v down): the band low on the wall, a picture high.
+                // BACK WALL (u across, v down).
                 {
-                    Vec3 c = rm.wall * 0.62;
-                    if (v > 1.0 - rm.bandH) c = rm.band * 0.62;
-                    if (u > 0.30 && u < 0.62 && v > 0.18 && v < 0.42) c = rm.wall * 0.42;
+                    Vec3 c = wall * 0.60;
+                    if (office) {
+                        // A dado band, desks against it with a monitor each.
+                        if (v > 0.62) c = wall * 0.48;
+                        for (int k = 0; k < desks; ++k) {
+                            const Real dx = deskX[k];
+                            if (u > dx && u < dx + 0.2 && v > 0.58 && v < 0.66) c = dark * 1.6;      // desk top
+                            if (u > dx + 0.05 && u < dx + 0.13 && v > 0.44 && v < 0.56) c = Vec3(0.55, 0.65, 0.85);   // monitor
+                        }
+                        if (u > 0.30 && u < 0.70 && v > 0.14 && v < 0.36) c = wall * 0.90;   // whiteboard
+                    } else {
+                        if (shelves && u > 0.62 && u < 0.92 && v > 0.12 && v < 0.62) {
+                            const Real row = std::fmod(v * 12.0, 1.0);
+                            c = row < 0.18 ? dark * 1.8 : wall * 0.35 * (0.7 + 0.6 * std::fmod(u * 31.0, 1.0));
+                        }
+                        if (sofa && u > sofaX && u < sofaX + 0.32 && v > 0.60 && v < 0.78) c = Vec3(0.30, 0.22, 0.20);
+                        if (tv && u > 0.18 && u < 0.46 && v > 0.30 && v < 0.48) c = Vec3(0.35, 0.45, 0.75);
+                        if (!tv && u > 0.20 && u < 0.44 && v > 0.16 && v < 0.40) c = wall * 0.40;   // a picture
+                    }
                     put(tx + x, ty + y, c);
                 }
-                // Ceiling (u across, v = depth in): a fixture at mid depth, darker deeper.
+                // CEILING (u across, v = depth in): strips or a pendant, darker deeper.
                 {
                     const Real fall = 1.0 - 0.45 * v;
-                    Vec3 c = rm.ceil * fall;
-                    if (u > 0.28 && u < 0.72 && v > 0.30 && v < 0.62) c = rm.fix;
+                    Vec3 c = wall * 0.85 * fall;
+                    if (office) {
+                        if (v > 0.22 && v < 0.34 && u > 0.10 && u < 0.90) c = fix;
+                        if (v > 0.62 && v < 0.74 && u > 0.10 && u < 0.90) c = fix * 0.9;
+                    } else if (pendant) {
+                        const Real du = u - 0.5, dv = v - 0.45;
+                        if (du * du + dv * dv < 0.02) c = fix;
+                        else if (du * du + dv * dv < 0.06) c = wall * 1.05 * fall;
+                    }
                     put(tx + face + x, ty + y, c);
                 }
-                // Floor (u across, v = depth in): darker deeper.
+                // FLOOR (u across, v = depth in): a rug or desk shadows, darker deeper.
                 {
                     const Real fall = 1.0 - 0.5 * v;
-                    put(tx + x, ty + face + y, rm.floor * fall);
+                    Vec3 c = floorC * fall;
+                    if (office) {
+                        for (int k = 0; k < desks; ++k)
+                            if (u > deskX[k] && u < deskX[k] + 0.2 && v > 0.70) c = floorC * 0.45 * fall;
+                    } else if (u > 0.25 && u < 0.75 && v > 0.30 && v < 0.75) {
+                        c = Vec3(0.34, 0.26, 0.30) * fall;   // a rug
+                    }
+                    put(tx + x, ty + face + y, c);
                 }
-                // Side wall (u = depth in, v down): a door deep in, darker deeper.
+                // SIDE WALL (u = depth in, v down): a door deep in, darker deeper.
                 {
                     const Real fall = 1.0 - 0.5 * u;
-                    Vec3 c = rm.wall * 0.8 * fall;
-                    if (u > 0.62 && u < 0.86 && v > 0.22) c = rm.band * 0.7 * fall;
+                    Vec3 c = wall * 0.72 * fall;
+                    if (u > doorU && u < doorU + 0.22 && v > 0.22) c = Vec3(0.28, 0.22, 0.18) * fall;
                     put(tx + face + x, ty + face + y, c);
                 }
             }

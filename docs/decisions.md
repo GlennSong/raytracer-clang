@@ -6726,8 +6726,18 @@ trapezoidal wall.** (Reference drawings: `~/Claude/buildings/ref/`; plan:
     faces, no room behind it) at Full detail, so the lobby that ships with the exterior shows from
     the street and the street from the lobby; the flat tier keeps its opaque glass. The lobby's
     drywall carries its own faint self-light, so a lobby nobody is in still reads lit after dusk.
-    Test `enterable_ground_storeys_have_clear_panes`. Owed: rooms with furniture blobs and blinds, a
-    per-district room mix, the Metal mirror of the pane shader.
+    Test `enterable_ground_storeys_have_clear_panes`.
+    *Rooms, buttons, a desk (same night):* the atlas is sixteen furnished rooms in a 4×4 grid —
+    offices (desks with a monitor glow, a whiteboard, ceiling strips, desk shadows on the carpet)
+    behind a cool tint and flats (shelves, a sofa, a television glow or a picture, a pendant, a rug)
+    behind a warm one, the pick by the pane's 3 m cell, three rooms in ten with procedural blinds
+    across the pane; the Metal surface shader mirrors the pane path (uncompiled here). Every
+    hoistway door gets a call-button plate at hand height and a hall-lantern plate above the door;
+    the lobby storey gets a reception desk with a counter top facing the entrance and a planter at
+    each end, all with colliders. The desk exposed a marginal stair: a walker lining up for the first
+    riser while hugging the spine wall had its step-up cast blocked by the wall's end cap and wedged
+    — the climb test had passed only by contact order — so the spine wall now starts a tread and a
+    half up each flight (`lobby_gets_a_desk_and_call_buttons`; the climb test walks the same path).
     Still owed: podium uplights, and a Lua-readable per-building lighting spec (today the choices
     are hashed, not authored).
 

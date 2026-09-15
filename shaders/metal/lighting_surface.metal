@@ -66,10 +66,46 @@ GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
     // FLAG_EMISSIVE_VERTEX_TINT (32): the vertex colour tints the emission (the entry
     // points leave the albedo untinted for it).
     if (int(mat.flags) & 32) emit *= geom.vertexColor;
+    // FLAG_INTERIOR_MAP (bit 16): a virtual room behind the pane — mirrors
+    // mesh.frag (see there for the layout of the room atlas in the albedo slot).
+    const bool interiorMap = (int(mat.flags) & 65536) != 0;
+    if (interiorMap) {
+        float3 Ng = normalize(geom.worldNormal);
+        float3 Tg = geom.worldTangent - Ng * dot(geom.worldTangent, Ng);
+        Tg = dot(Tg, Tg) > 1e-8 ? normalize(Tg) : float3(1.0, 0.0, 0.0);
+        float3 Bg = cross(Tg, Ng);
+        float3 vIn = normalize(geom.worldPosition - camera.cameraPosition);
+        float3 d = float3(dot(vIn, Tg), dot(vIn, Bg), dot(vIn, Ng));
+        d.z = min(d.z, -1e-3);
+        const float depth = 1.4;
+        float3 o = float3(geom.texcoord.x, geom.texcoord.y, 0.0);
+        float3 bound = float3(d.x > 0.0 ? 1.0 : 0.0, d.y > 0.0 ? 1.0 : 0.0, -depth);
+        float3 tt = (bound - o) / d;
+        float t = min(tt.x, min(tt.y, tt.z));
+        float3 p = o + d * t;
+        float3 cellv = floor(geom.worldPosition / 3.0);
+        float rnd = fract(sin(dot(cellv, float3(12.9898, 78.233, 37.719))) * 43758.5453);
+        float rnd2 = fract(sin(dot(cellv, float3(39.3467, 11.135, 83.155))) * 24634.6345);
+        bool office = geom.vertexColor.b >= geom.vertexColor.r;
+        float roomIdx = floor(rnd * 8.0) + (office ? 0.0 : 8.0);
+        float2 tileO = float2(fmod(roomIdx, 4.0), floor(roomIdx / 4.0)) * 0.25;
+        float2 faceUV;
+        float2 faceO;
+        if (t == tt.z) { faceUV = float2(p.x, 1.0 - p.y); faceO = float2(0.0, 0.0); }
+        else if (t == tt.y) { faceUV = float2(p.x, -p.z / depth); faceO = d.y > 0.0 ? float2(0.125, 0.0) : float2(0.0, 0.125); }
+        else { faceUV = float2(-p.z / depth, 1.0 - p.y); faceO = float2(0.125, 0.125); }
+        float2 uvA = tileO + faceO + clamp(faceUV, 0.012, 0.988) * 0.125;
+        float3 roomLight = albedoMap.sample(texSampler, uvA).rgb;
+        if (rnd2 < 0.3) {
+            float slat = fract(geom.texcoord.y * 12.0);
+            roomLight *= 0.30 + 0.70 * smoothstep(0.30, 0.40, slat);
+        }
+        emit *= roomLight;
+    }
     float ao = 1.0;
     float mapAlpha = 1.0;   // FLAG_ALPHA_FROM_MAP (64): the albedo map's alpha shapes the fragment
     uint tf = mat.textureFlags;
-    if (tf & 1u) {
+    if ((tf & 1u) && !interiorMap) {
         float4 base = albedoMap.sample(texSampler, geom.texcoord);
         // Alpha-cut foliage (FLAG_ALPHA_TEST): drop fragments under the leaf
         // silhouette so cards stay crisp in the opaque pass.

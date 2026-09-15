@@ -264,3 +264,40 @@ TEST_CASE(core_window_grow_cost_is_bounded) {
     CHECK(col.indices.size() / 3 < 3500);   // ~2x the measured 1700
     (void)ms;   // printed, not asserted: wall-clock on a shared desktop is not a gate
 }
+
+TEST_CASE(lobby_gets_a_desk_and_call_buttons) {
+    // The lobby's storey carries a reception desk with a collider between the
+    // entrance and the bank, and every hoistway door a call button plate; an
+    // upper storey has the plates but no desk.
+    const Poly2 plan = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    const BuildingParams p = towerParams(20, true);
+    const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
+    CHECK(core.valid);
+    RenderMesh col0, col5;
+    const BuildingMesh lobby = growInterior(plan, p, 0.0, &col0, 0, 1);
+    const BuildingMesh upper = growInterior(plan, p, 0.0, &col5, 5, 6);
+    auto countAt = [](const BuildingMesh& bm, Real y0, Real y1) {
+        std::size_t n = 0;
+        for (const RenderMesh& part : bm.parts)
+            if (part.materialIndex == static_cast<int>(PartId::Interior))
+                for (const Vertex& v : part.vertices)
+                    if (v.position.y > y0 && v.position.y < y1) ++n;
+        return n;
+    };
+    // The call button plate at 1.05-1.22 over the storey base — on both.
+    CHECK(countAt(lobby, 1.04, 1.06) > 0);
+    CHECK(countAt(upper, 4.5 + 4 * 3.2 + 1.04, 4.5 + 4 * 3.2 + 1.06) > 0);
+    // The desk has a COLLIDER (the plates do not): triangles at its counter
+    // top (1.12 over the 0.07 overlay) in the lobby, none at that height on
+    // an upper storey.
+    auto trisAt = [](const RenderMesh& col, Real y0, Real y1) {
+        std::size_t n = 0;
+        for (std::size_t i = 0; i + 2 < col.indices.size(); i += 3) {
+            const Real y = col.vertices[col.indices[i]].position.y;
+            if (y > y0 && y < y1) ++n;
+        }
+        return n;
+    };
+    CHECK(trisAt(col0, 1.15, 1.25) >= 2);
+    CHECK(trisAt(col5, 4.5 + 4 * 3.2 + 1.15, 4.5 + 4 * 3.2 + 1.25) == 0);
+}

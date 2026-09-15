@@ -330,12 +330,17 @@ void stairStorey(CoreMeshes& out, RenderMesh* col, const CoreStair& st, Real y0,
     }
     flight(fw + st.spine, W, Ld + run, -1.0, yMid);     // B: back toward the door
     // The spine wall between the flights, floor to ceiling, with end caps.
+    // It starts a tread and a half up each flight, not at the landing line:
+    // a walker hugging the spine while lining up for the first riser had its
+    // step-up cast blocked by the cap and wedged there (the climb test only
+    // passed by the luck of contact order until the lobby desk changed it).
     {
         const Real uS0 = fw, uS1 = fw + st.spine;
+        const Real vS0 = Ld + st.tread * 1.5, vS1 = Ld + run - st.tread * 1.5;
         const Vec2 nu = s.frame.u;
         const Vec3 nL(-nu.x, 0, -nu.y), nRt(nu.x, 0, nu.y);
-        const Vec3 a0 = s.at(uS0, Ld, 0), a1 = s.at(uS0, Ld + run, 0);
-        const Vec3 b0 = s.at(uS1, Ld, 0), b1 = s.at(uS1, Ld + run, 0);
+        const Vec3 a0 = s.at(uS0, vS0, 0), a1 = s.at(uS0, vS1, 0);
+        const Vec3 b0 = s.at(uS1, vS0, 0), b1 = s.at(uS1, vS1, 0);
         wallQuad(out.drywall, col, a0, a1, y0, y0 + h, nL, paint);
         wallQuad(out.drywall, col, b0, b1, y0, y0 + h, nRt, paint);
         const Vec2 nv = s.frame.v;
@@ -355,7 +360,27 @@ void emitCoreStorey(CoreMeshes& out, RenderMesh* colliderOut, const CorePlan& co
     const Real floorTone = 0.85 + 0.45 * (((params.seed >> 4) & 0xffu) / 255.0);
     const Vec3 floorCol = floorFinishFor(params).albedo * floorTone;
     const Vec3 stairCol = stairFinishFor(params).albedo * floorTone;
-    for (const CoreShaft& hw : core.hoistways) shaftWalls(out, colliderOut, core, hw, y0, h, paint, shaftDark);
+    for (const CoreShaft& hw : core.hoistways) {
+        shaftWalls(out, colliderOut, core, hw, y0, h, paint, shaftDark);
+        // The CALL BUTTON: a small dark plate beside the door at hand height,
+        // proud of the outer skin, and a hall lantern plate above the door.
+        auto plate = [&](Real u0, Real u1, Real yb, Real yt, const Vec3& colr) {
+            const Vec2 nv = hw.frame.v * -1.0;   // out of the shaft, into the lobby
+            const Real vOut = -kWall - 0.02, vIn = -kWall + 0.002;
+            const Vec3 a = hw.at(u0, vOut, 0), b = hw.at(u1, vOut, 0);
+            wallQuad(out.drywall, nullptr, a, b, yb, yt, Vec3(nv.x, 0, nv.y), colr);
+            // Side and top faces so the plate has depth.
+            const Vec2 nu = hw.frame.u;
+            wallQuad(out.drywall, nullptr, hw.at(u0, vIn, 0), hw.at(u0, vOut, 0), yb, yt, Vec3(-nu.x, 0, -nu.y), colr);
+            wallQuad(out.drywall, nullptr, hw.at(u1, vOut, 0), hw.at(u1, vIn, 0), yb, yt, Vec3(nu.x, 0, nu.y), colr);
+            const Vec3 t0 = hw.at(u0, vIn, yt), t1 = hw.at(u1, vIn, yt), t2 = hw.at(u1, vOut, yt), t3 = hw.at(u0, vOut, yt);
+            MeshBuilder::emitQuad(out.drywall, t0, t1, t2, t3, Vec3(0, 1, 0), colr);
+        };
+        const Real bx = hw.doorX + hw.doorWidth * 0.5 + 0.28;
+        plate(bx, bx + 0.10, y0 + 1.05, y0 + 1.22, Vec3(0.28, 0.28, 0.30));               // the button plate
+        plate(hw.doorX - 0.16, hw.doorX + 0.16, y0 + hw.doorHeight + 0.12, y0 + hw.doorHeight + 0.24,
+              Vec3(0.30, 0.30, 0.32));                                                    // the hall lantern
+    }
     for (const CoreStair& st : core.stairs) {
         shaftWalls(out, colliderOut, core, st.shaft, y0, h, paint, paint);
         stairStorey(out, colliderOut, st, y0, h, flightsUp, landing, floorCol, stairCol, paint);

@@ -631,17 +631,28 @@ void main() {
         vec3 tt = (bound - o) / d;
         float t = min(tt.x, min(tt.y, tt.z));
         vec3 p = o + d * t;
+        // The room: a 4x4 grid of tiles — offices in rows 0-1, flats in rows
+        // 2-3 — picked by the pane's 3 m world cell, offices behind a cool
+        // tint (the curtain-wall palette), flats behind a warm one.
         vec3 cellv = floor(inWorldPos / 3.0);
         float rnd = fract(sin(dot(cellv, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
-        float roomIdx = floor(rnd * 4.0);
-        vec2 tileO = vec2(mod(roomIdx, 2.0), floor(roomIdx / 2.0)) * 0.5;
+        float rnd2 = fract(sin(dot(cellv, vec3(39.3467, 11.135, 83.155))) * 24634.6345);
+        bool office = inColor.b >= inColor.r;
+        float roomIdx = floor(rnd * 8.0) + (office ? 0.0 : 8.0);
+        vec2 tileO = vec2(mod(roomIdx, 4.0), floor(roomIdx / 4.0)) * 0.25;
         vec2 faceUV;
         vec2 faceO;
         if (t == tt.z) { faceUV = vec2(p.x, 1.0 - p.y); faceO = vec2(0.0, 0.0); }
-        else if (t == tt.y) { faceUV = vec2(p.x, -p.z / depth); faceO = d.y > 0.0 ? vec2(0.25, 0.0) : vec2(0.0, 0.25); }
-        else { faceUV = vec2(-p.z / depth, 1.0 - p.y); faceO = vec2(0.25, 0.25); }
-        vec2 uvA = tileO + faceO + clamp(faceUV, 0.012, 0.988) * 0.25;   // 1.5 px in from the tile seam
+        else if (t == tt.y) { faceUV = vec2(p.x, -p.z / depth); faceO = d.y > 0.0 ? vec2(0.125, 0.0) : vec2(0.0, 0.125); }
+        else { faceUV = vec2(-p.z / depth, 1.0 - p.y); faceO = vec2(0.125, 0.125); }
+        vec2 uvA = tileO + faceO + clamp(faceUV, 0.012, 0.988) * 0.125;   // 1.5 px in from the tile seam
         roomLight = texture(albedoMap, uvA).rgb;
+        // BLINDS on three rooms in ten: horizontal slats across the pane,
+        // two thirds open — a procedural mask on the pane's own UV.
+        if (rnd2 < 0.3) {
+            float slat = fract(inTexcoord.y * 12.0);
+            roomLight *= 0.30 + 0.70 * smoothstep(0.30, 0.40, slat);
+        }
     }
     emission *= roomLight;
 
