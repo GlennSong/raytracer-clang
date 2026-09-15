@@ -3399,16 +3399,29 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             u = static_cast<float>(dot(v - uvOrigin, pd) / ptile);
             w = static_cast<float>(dot(v - uvOrigin, pp) / ptile);
         };
-        for (const auto& t : triangulatePolygon(plan)) {
+        // The HOISTWAYS are pits in this sheet (Glenn's third walk, 2026-09-15:
+        // "the shaft and cab are still messed up" — the lobby's wood ran
+        // straight into the hoistway and over the cab's floor, so an open
+        // cab read as an empty shaft with the lobby floor inside it). The
+        // stairwells keep the wood: their flights start from the lobby floor.
+        std::vector<Poly2> pits;
+        {
+            const CorePlan ocore = coreFor(plan, params, entranceEdge);
+            if (ocore.valid)
+                for (const CoreShaft& hw : ocore.hoistways) pits.push_back(hw.rect());
+        }
+        auto woodTri = [&](const Vec2& a, const Vec2& b, const Vec2& c) {
             float u0, v0, u1, v1, u2, v2;
-            puv(plan[t[0]], u0, v0);
-            puv(plan[t[1]], u1, v1);
-            puv(plan[t[2]], u2, v2);
-            MeshBuilder::emitTriUV(
-                woodFloor, Vec3(plan[t[0]].x, y + 0.07, plan[t[0]].y),
-                Vec3(plan[t[1]].x, y + 0.07, plan[t[1]].y),
-                Vec3(plan[t[2]].x, y + 0.07, plan[t[2]].y), Vec3(0, 1, 0),
-                wcol, u0, v0, u1, v1, u2, v2);
+            puv(a, u0, v0);
+            puv(b, u1, v1);
+            puv(c, u2, v2);
+            MeshBuilder::emitTriUV(woodFloor, Vec3(a.x, y + 0.07, a.y), Vec3(b.x, y + 0.07, b.y),
+                                   Vec3(c.x, y + 0.07, c.y), Vec3(0, 1, 0), wcol, u0, v0, u1, v1, u2, v2);
+        };
+        if (pits.empty()) {
+            for (const auto& t : triangulatePolygon(plan)) woodTri(plan[t[0]], plan[t[1]], plan[t[2]]);
+        } else {
+            for (const auto& t : triangulateWithHoles(plan, pits)) woodTri(t[0], t[1], t[2]);
         }
         // Edge band: the overlay's cut edge shows at the doorway; give the
         // wood sheet a visible thickness instead of a paper line.

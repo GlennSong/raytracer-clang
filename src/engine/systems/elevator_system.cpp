@@ -6,6 +6,7 @@
 #include "../../log.h"
 #include "../procgen/city/shape_grammar.h"
 #include <algorithm>
+#include <cstdio>
 #include <cmath>
 #include <limits>
 #ifdef RT_ENABLE_IMGUI
@@ -39,6 +40,19 @@ RenderMaterial steel() {
     m.roughness = 0.45f;
     return m;
 }
+
+// The CAB's own finish (Glenn's third walk, 2026-09-15: an open cab at the
+// lobby "read as a shaft"): the steel above, inside a box lit only by its
+// ceiling panel, went dark blue-grey — the same tone as the hoistway's own
+// skins — so a rider could not tell the cab from the shaft. Pale, matte
+// laminate, no metal: it takes the cab's light and reads as a room.
+RenderMaterial cabWall() {
+    RenderMaterial m;
+    m.albedo = {0.74, 0.73, 0.70};
+    m.metallic = 0.03f;
+    m.roughness = 0.55f;
+    return m;
+}
 }  // namespace
 
 void ElevatorSystem::onStart(FrameContext& ctx) {
@@ -52,6 +66,15 @@ void ElevatorSystem::update(FrameContext& ctx) {
     if (ctx.actions.pressed("elevator_call")) callEdge_ = true;
     if (ctx.actions.pressed("elevator_floor_up")) ++floorDelta_;
     if (ctx.actions.pressed("elevator_floor_down")) --floorDelta_;
+    // The control channel's `elevator call` / `elevator pick <n>` (application.cpp).
+    if (ctx.settings.getDouble("elevator.call", 0.0) != 0.0) {
+        callEdge_ = true;
+        ctx.settings.setDouble("elevator.call", 0.0);
+    }
+    if (const double pick = ctx.settings.getDouble("elevator.pick", 0.0); pick != 0.0) {
+        floorDelta_ += static_cast<int>(pick);
+        ctx.settings.setDouble("elevator.pick", 0.0);
+    }
 }
 
 void ElevatorSystem::fixedUpdate(FrameContext& ctx) {
@@ -66,6 +89,29 @@ void ElevatorSystem::fixedUpdate(FrameContext& ctx) {
     if (!found) { callEdge_ = false; floorDelta_ = 0; status_ = Status{}; return; }
     PhysicsWorld* phys = physics_ ? &physics_->physicsWorld() : nullptr;
     step(ctx.world, phys, ctx.assets, player, ctx.clock.fixedStep(), callEdge_, floorDelta_);
+    // The CAB LIGHT: a warm point in each cab, staged with the interior room
+    // lights (BuildingInteriorSystem clears that list earlier in the frame).
+    // Without it the cab was lit by its ceiling panel's emission alone —
+    // which lights nothing — and its floor went black in the shaft
+    // (Glenn's third walk, 2026-09-15).
+    for (const auto& kv : banks_) {
+        const Bank& b = kv.second;
+        for (std::size_t i = 0; i < b.cabs.size() && i < b.core.hoistways.size(); ++i) {
+            const CoreShaft& hw = b.core.hoistways[i];
+            const Cab& cab = b.cabs[i];
+            PointLight pl(hw.at(hw.width * 0.5, 0.25 + CAB_D * 0.5, cab.y + CAB_H - 0.2),
+                          Vec3(1.0, 0.95, 0.86), 9.0f);
+            pl.range = 6.0f;
+            ctx.view.lighting.interiorPoints.push_back(pl);
+        }
+    }
+    {   // `elevator?` on the control channel
+        char buf[160];
+        std::snprintf(buf, sizeof buf, "inCab=%d atDoor=%d moving=%d floor=%d selected=%d floors=%d banks=%zu",
+                      status_.inCab ? 1 : 0, status_.atDoor ? 1 : 0, status_.moving ? 1 : 0, status_.floor,
+                      status_.selected, status_.floors, banks_.size());
+        ctx.settings.setString("elevator.status", buf);
+    }
     callEdge_ = false;
     floorDelta_ = 0;
 }
@@ -131,8 +177,8 @@ ElevatorSystem::Bank& ElevatorSystem::ensureBank(World& world, PhysicsWorld* phy
             world.add<PrevTransform>(e, PrevTransform{t});
             Renderable rd;
             rd.mesh = mh;
-            rd.material = steel();
-            if (p.dark) { rd.material.albedo = {0.22, 0.21, 0.20}; rd.material.metallic = 0.1f; rd.material.roughness = 0.6f; }
+            rd.material = cabWall();
+            if (p.dark) { rd.material.albedo = {0.36, 0.34, 0.32}; rd.material.metallic = 0.02f; rd.material.roughness = 0.7f; }
             if (p.lit) { rd.material.albedo = {0.9, 0.9, 0.9}; rd.material.metallic = 0.0f; rd.material.emission = Vec3(1.0, 0.97, 0.92) * 2.2; }
             rd.drawClass = DrawClass::Structure;
             rd.drawDistance = 200.0;

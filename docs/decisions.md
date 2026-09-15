@@ -6889,6 +6889,16 @@ carries the whole height: one core seated in the shaft and fitting every tier, o
 the top, the interior streamed per storey on its tier's plan, the beacons on the tower roof.
 Producer tags `2026-09-14.23`; the lab census counts one record per podium tower now
 (`podium_tower_is_one_mass_with_one_core_to_the_top`).
+
+**Addendum (2026-09-15, the third walk): "the elevator shaft and cab are still messed up."** A headless
+ride (`tools/elevator_ride.py`: the control channel's new `elevator call` / `elevator pick <n>` /
+`elevator?` verbs, the player teleported into the cab, the play camera shot through the ride) showed
+the cab whole and the ride sound — and showed what Glenn saw: from the lobby an OPEN cab read as an
+empty shaft. Two causes. The lobby's wood sheet ran straight into the hoistway, 2 cm above the cab
+floor, so the cab had the lobby's floor; it now has pits at the hoistways (the stairwells keep the
+wood). And the cab's brushed steel, lit by nothing but its own ceiling panel's emission (which lights
+nothing), went the same dark blue-grey as the hoistway skins. The cab is pale matte laminate now and
+carries a warm point light staged with the interior room lights. Tags `2026-09-15.1`.
 ---
 
 ## ADR-0087 — Vehicle handling: a car that neither fishtails nor rolls (measured, then assisted)

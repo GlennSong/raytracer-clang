@@ -823,6 +823,22 @@ std::string Application::handleControlCommand(const std::string& line) {
     if (cmd.name == "weather?") {
         return "ok " + settingsStore.getString("weather.status", "off");
     }
+    if (cmd.name == "elevator") {
+        // The elevator's verbs, remotely (ElevatorSystem consumes them next
+        // frame, exactly like the E / Up / Down keys): `elevator call` presses
+        // E, `elevator pick <n>` moves the panel's selection by n storeys.
+        // Drives a headless ride for frames (tools/elevator_ride.py).
+        if (cmd.args.empty()) return "err usage: elevator call | pick <delta>";
+        if (cmd.args[0] == "call") { settingsStore.setDouble("elevator.call", 1.0); return "ok elevator call staged"; }
+        if (cmd.args[0] == "pick" && cmd.args.size() > 1) {
+            settingsStore.setDouble("elevator.pick", std::atof(cmd.args[1].c_str()));
+            return "ok elevator pick staged";
+        }
+        return "err usage: elevator call | pick <delta>";
+    }
+    if (cmd.name == "elevator?") {
+        return "ok " + settingsStore.getString("elevator.status", "no bank");
+    }
 
     if (cmd.name == "sun") {
         // Direct sun set — the ImGui Lighting panel's slider, remotely. This

@@ -297,6 +297,24 @@ TEST_CASE(core_enclosure_is_permanent_and_the_streamed_walls_are_colliders_only)
             colliderHasIt = true;
     }
     CHECK(colliderHasIt);               // ...but a walker still cannot pass through it
+    // The lobby's wood sheet stops at the hoistways (pits for the cabs) and
+    // runs on into the stairwells (their flights start from it).
+    auto woodOver = [&](const Vec2& q) {
+        for (const RenderMesh& part : fullMesh.parts) {
+            if (part.materialIndex == static_cast<int>(PartId::Interior)) continue;   // the sheet is the finish part
+            for (std::size_t i = 0; i + 2 < part.indices.size(); i += 3) {
+                const Vec3 a = part.vertices[part.indices[i]].position;
+                const Vec3 b = part.vertices[part.indices[i + 1]].position;
+                const Vec3 c = part.vertices[part.indices[i + 2]].position;
+                if (std::fabs(a.y - 0.07) > 0.005 || std::fabs(b.y - 0.07) > 0.005 || std::fabs(c.y - 0.07) > 0.005) continue;
+                const Poly2 tri = {{a.x, a.z}, {b.x, b.z}, {c.x, c.z}};
+                if (pointInPolygon(tri, q)) return true;
+            }
+        }
+        return false;
+    };
+    CHECK(!woodOver(hw.frame.toWorld({hw.width * 0.5, hw.depth * 0.5})));
+    CHECK(woodOver(core.stairs[0].shaft.frame.toWorld({1.3, 0.8})));
 }
 
 TEST_CASE(core_window_grow_cost_is_bounded) {
