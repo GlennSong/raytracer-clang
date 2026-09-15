@@ -814,8 +814,11 @@ std::string Application::handleControlCommand(const std::string& line) {
         if (w != "clear" && w != "fair" && w != "overcast" && w != "storm" &&
             w != "auto" && w != "off")
             return "err usage: weather clear|fair|overcast|storm|auto|off";
-        settingsStore.setString("weather.set", w);
-        return "ok weather staged";
+        // A trailing `now` snaps the state instead of easing the front in
+        // (screenshots, the editor's compare); DayNightSystem parses it.
+        const bool now = cmd.args.size() > 1 && cmd.args[1] == "now";
+        settingsStore.setString("weather.set", now ? w + " now" : w);
+        return now ? "ok weather set" : "ok weather staged";
     }
     if (cmd.name == "weather?") {
         return "ok " + settingsStore.getString("weather.status", "off");

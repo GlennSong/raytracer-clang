@@ -41,7 +41,10 @@ struct WeatherTargets {
 
 inline WeatherTargets weatherTargets(WeatherKind k) {
     switch (k) {
-        case WeatherKind::Clear:    return {0.08f, 0.30f, 0.90f, 1.00f, 1.00f, 0.00f};
+        // 0.03, not 0.08: the coverage threshold rides the top of a noise
+        // field, and 8 % still filled the sky with popcorn — a clear day is a
+        // few wisps at most (Glenn, 2026-09-14: "can we see different weather?").
+        case WeatherKind::Clear:    return {0.03f, 0.25f, 0.90f, 1.00f, 1.00f, 0.00f};
         case WeatherKind::Overcast: return {0.80f, 0.60f, 1.90f, 0.55f, 1.35f, 0.60f};
         case WeatherKind::Storm:    return {0.92f, 1.00f, 1.60f, 0.28f, 1.45f, 0.85f};
         case WeatherKind::Fair:     break;

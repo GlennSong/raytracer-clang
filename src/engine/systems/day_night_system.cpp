@@ -406,10 +406,22 @@ void DayNightSystem::update(FrameContext& ctx) {
             } else if (setWeather == "auto") {
                 weatherActive = true;
                 weather.autoMode = true;
-            } else if (weatherKindFromName(setWeather, kind)) {
-                weatherActive = true;
-                weather.autoMode = false;
-                weather.state = kind;
+            } else {
+                // `weather storm` eases the front in over ~40 s; `weather storm
+                // now` snaps it (screenshots, the editor's compare).
+                std::string name = setWeather;
+                bool now = false;
+                const std::size_t sp = name.find(' ');
+                if (sp != std::string::npos) {
+                    now = name.substr(sp + 1) == "now";
+                    name = name.substr(0, sp);
+                }
+                if (weatherKindFromName(name, kind)) {
+                    weatherActive = true;
+                    weather.autoMode = false;
+                    weather.state = kind;
+                    if (now) weather.snap();
+                }
             }
         }
         cs.setString("weather.status",

@@ -71,7 +71,12 @@ float clWeather(vec2 xz) {
 // Coverage after the weather map: fair skies carve banks with real gaps,
 // storm coverage saturates the field into a full deck.
 float clLocalCoverage(float weather) {
-    return clamp(u.params.x * (0.30 + 1.4 * weather), 0.0, 1.0);
+    // LOW coverage is gated by the weather map, not just scaled: the threshold
+    // rides the top of a noise field, and 3 % still peppered the whole sky
+    // with popcorn. Under ~0.25 only the field's peaks may hold cloud, so a
+    // clear day is a few isolated puffs; fair and up are unchanged.
+    float gate = mix(smoothstep(0.55, 0.85, weather), 1.0, smoothstep(0.05, 0.25, u.params.x));
+    return clamp(u.params.x * (0.30 + 1.4 * weather) * gate, 0.0, 1.0);
 }
 
 // `detailFade` scales the high-frequency erosion (1 = full, 0 = shape only) —

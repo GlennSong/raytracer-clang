@@ -80,7 +80,8 @@ static float cl_weather(float2 xz, constant CloudUniforms& u,
 // Coverage after the weather map: fair skies carve banks with real gaps,
 // storm coverage saturates the field into a full deck.
 static float cl_localCoverage(float weather, constant CloudUniforms& u) {
-    return clamp(u.params.x * (0.30 + 1.4 * weather), 0.0, 1.0);
+    float gate = mix(smoothstep(0.55, 0.85, weather), 1.0, smoothstep(0.05, 0.25, u.params.x));   // mirrors clouds.frag
+    return clamp(u.params.x * (0.30 + 1.4 * weather) * gate, 0.0, 1.0);
 }
 
 // `detailFade` scales the high-frequency erosion (1 = full, 0 = shape only).
