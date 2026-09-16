@@ -33,6 +33,10 @@ struct CityRenderParams {
     int pedestrians = 40;   // -1 = by density (pedsPerKm over the sidewalks)
     Real carsPerLaneKm = 10.0;
     Real pedsPerKm = 6.0;
+    // Ceiling on each density-derived count (CitySimConfig::maxAmbient). The
+    // bridge used to clamp at a literal 400, which halved metro v2: its own
+    // network asks for 769 cars and 788 walkers.
+    int maxAmbient = 400;
     uint32_t seed = 1;
     Real hoursPerSecond = 0.05;            // sim-clock hours advanced per real second
     // The in-world hour the level OPENS at. The population is placed directly

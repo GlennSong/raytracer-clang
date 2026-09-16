@@ -537,6 +537,12 @@ struct CitySimConfig {
     int pedestrians = 40;
     float carsPerLaneKm = 10.0f;   // density mode: ambient cars per lane-km
     float pedsPerKm = 6.0f;        // density mode: walkers per sidewalk-km
+    // Ceiling on EACH density-derived count. This was a literal 400 in the
+    // bridge, which silently halved metro v2: its own network asks for 769
+    // cars and 788 walkers, and got 400 of each (measured 2026-09-16,
+    // metro_v2_density_target_prints). Kept at 400 so no existing level
+    // changes; a level that wants its full density raises it.
+    int maxAmbient = 400;
     uint32_t seed = 1;
     float hoursPerSecond = 0.05f;        // sim-clock hours per real second
     // The in-world hour the level OPENS at. Agents are placed straight from

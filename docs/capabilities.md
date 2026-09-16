@@ -43,6 +43,14 @@ being used. One row per capability; the "used by" column is the audit trail.
 | `MeshBuilder::chunkByCell` | `engine/mesh_builder.h` (was `level_loader.cpp`) | loader chunking, city producer | a bundle cell is a render cell |
 
 
+## City simulation scale (opened 2026-09-16 — Glenn: "a bustling urban environment")
+
+| Capability | Where | Used by | Notes |
+|---|---|---|---|
+| Headless agent-scaling bench | `tests/test_sim_scale.cpp` (`sim_scale_census_prints`, and `metro_v2_density_target_prints` under `RT_SIM_SCALE=1`) | any question of the form "how many agents can we run" | steps a real CitySim at rising populations, flat and tiered, and prints ms/tick beside the K/V/D census. Print-only: wall clock on a shared desktop is not a gate |
+| Ambient population ceiling `CitySimConfig::maxAmbient` | `engine/components.h`, `level_loader.cpp`, `citysim/city_render.{h,cpp}` | density mode (`cars: -1`, `pedestrians: -1`) | was a literal 400 in the bridge; now per level, default 400 so nothing else moves. NOT the limiter on metro v2 — its network derives 359 + 354 at stock rates |
+| Sim tier config in the log | `citysim/city_render.cpp` (`[citysim] sim tiers:`) | every level load | a level that silently failed to opt into tiering used to look identical to one that had |
+
 ## Vehicles (opened for ADR-0087, 2026-09-14 — the handling pass)
 
 | Capability | Where | Used by | Notes |

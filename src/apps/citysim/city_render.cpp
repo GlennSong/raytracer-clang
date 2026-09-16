@@ -148,6 +148,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.pedestrians = c.pedestrians;
         params_.carsPerLaneKm = c.carsPerLaneKm;
         params_.pedsPerKm = c.pedsPerKm;
+        params_.maxAmbient = c.maxAmbient;
         params_.seed = c.seed;
         params_.hoursPerSecond = c.hoursPerSecond;
         params_.startHour = c.startHour;
@@ -278,12 +279,13 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         // Directed links double-count each roadway: halve to physical km.
         laneKm *= 0.5;
         walkKm *= 0.5;
+        const int ceiling = std::max(6, params_.maxAmbient);
         if (carCount < 0)
             carCount = std::clamp(
-                static_cast<int>(laneKm * params_.carsPerLaneKm), 6, 400);
+                static_cast<int>(laneKm * params_.carsPerLaneKm), 6, ceiling);
         if (pedCount < 0)
             pedCount = std::clamp(
-                static_cast<int>(walkKm * params_.pedsPerKm), 6, 400);
+                static_cast<int>(walkKm * params_.pedsPerKm), 6, ceiling);
         LOG_INFO << "[citysim] density population: " << carCount << " cars ("
                  << laneKm << " lane-km), " << pedCount << " walkers ("
                  << walkKm << " sidewalk-km)";
@@ -358,6 +360,13 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // build warm-up therefore runs everything K, exactly as before.
     sim_.tieringEnabled = params_.tieredAgents;
     sim_.dormancyEnabled = params_.dormantAgents;
+    // What this LEVEL asked for, beside the density line above. Nothing used
+    // to print it, so a level that silently failed to opt into tiering looked
+    // exactly like one that had (2026-09-16).
+    LOG_INFO << "[citysim] sim tiers: tiered=" << (params_.tieredAgents ? "on" : "off")
+             << " dormancy=" << (params_.dormantAgents ? "on" : "off")
+             << " localHz=" << params_.localHz
+             << " maxAmbient=" << params_.maxAmbient;
     // DORMANCY MUST BE FURTHER OUT THAN ANYTHING DRAWN. A dormant agent's
     // position is rebuilt from its schedule when it wakes, so if it slept while
     // its parked car was still on screen, world-hours could pass and the wake

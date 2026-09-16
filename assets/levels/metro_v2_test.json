@@ -3,18 +3,24 @@
     "buildChance": 0.9,
     "buildLots": true,
     "cars": -1,
+    "carsPerLaneKm": 30.0,
     "debugWidgets": false,
     "detailDistance": 300,
+    "dormancy": true,
     "downtownRadius": 300,
     "facadeDistance": 950,
     "hoursPerSecond": 0.05,
     "hubRadius": 240,
+    "localHz": 30.0,
+    "maxAmbient": 2000,
     "midtownRadius": 600,
     "pedestrians": -1,
+    "pedsPerKm": 20.0,
     "perceptionReliability": 1.0,
     "plinth": 0.45,
     "seed": 9,
     "sidewalk": 5.0,
+    "tiered": true,
     "vehicles": "vehicles.lua",
     "wander": false
   },
@@ -136,7 +142,7 @@
     "friction": 0.5,
     "position": [
       -139.39,
-      3.4457252007535963,
+      3.850929385678773,
       -289.59
     ]
   },
