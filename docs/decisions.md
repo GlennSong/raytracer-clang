@@ -6919,6 +6919,45 @@ carries a warm point light staged with the interior room lights. Tags `2026-09-1
   census gate re-based (~7500 tris with rooms and grid; was 1870 bare). Furniture, unit interiors
   (bathrooms, bedrooms), the open middle's desks and the corridor as a real double-loaded hall are
   the next steps; the plan's "open floor plans" is the office middle today. Tags `2026-09-15.2`.
+
+**Addendum (2026-09-15/16, Glenn's house walks): TOPOLOGY, FINISHES, WALKABILITY, and the arch.**
+- **Two topologies, chosen by the plate.** A plate with a core, or behind a curtain wall, gets the
+  RING. A masonry plate whose short side is under 13 m is a WHOLE FLOOR: one dwelling, a hall across
+  it picked up at the stair, rooms in the bands either side, a door from each into the hall, and a
+  program by storey (ground: living/kitchen/bath; above: bedrooms and a bath). The rule is also the
+  overlap guard — two ring bands can only meet on a plate too shallow to deserve a ring, and a
+  10 x 8 m plate used to grow its rooms straight through each other.
+- **The layout is clipped to the PLAN, not its bounding box.** A box fits a rectangle and not a
+  trapezoid, and rooms laid in one hung outside the facade ("the walls immediately jutted out of the
+  building"). The working rectangle now shrinks, long axis first, until it sits inside the plan.
+- **A stair needs a PASSAGE, not a margin.** 0.45 m either side of the well is narrower than the
+  player, so both sides were walls with a view. The hall is snug on the side the stair hugs and
+  1.1 m on the other, chosen by which side has the depth.
+- **`floorIsWalkable`** (Glenn's ask: "an algorithm to determine if the entire floor is walkable...
+  and if not the entire interior needs to be rebuilt"): a 0.15 m grid over the plate, walls stamped
+  PERPENDICULAR only (a square stamp closes the doorway it just left open) and inflated by the
+  capsule radius, the STAIRWELL stamped solid (it is a hole, and flooding across it made blocked
+  floors read as walkable), flooded from inside the front door. Every room must be reached. Houses
+  that fail are rebuilt without partitions, then as an open floor. Rings are open by construction and
+  skip the check, which keeps it off the 40 m plates where the grid would cost more than it protects.
+- **Wall finishes from the facade's own fingerprint.** The style a recipe dressed a building with is
+  never stored, but the wall part, the curtain-wall flag and the window head identify it, so the
+  inside follows the outside with no new field and no cache version: concrete is brutalist board-form,
+  stucco with round heads is a Spanish tile dado, stucco with flat heads a deco lacquer dado, painted
+  siding a craftsman wainscot, metal and curtain wall timber slats (45 mm wide, 25 mm proud, 90 mm
+  pitch), anything else a colour block. Interior paint comes from the same table.
+- **A strong finish is a FEATURE wall**, capped at one per floor in a house and two on a ring. Battens
+  on every ring partition took the streamed five-storey window from 4 380 triangles to 76 380 and
+  16 MB; capped it is 10 380 and 0.85 ms. A room with four brick walls is also a cellar.
+- **No raw brick indoors.** The procedural bakes are world-positioned at facade scale, so a course
+  reads a foot tall from arm's length. Interior brick is paint until there is an interior-scale bake.
+- **The arch moved into the shared opening record.** `BayOpening::rise` is decided once in
+  `facadeLayout`; the full facade reads it, and the inner wall and the flat tier now build the same
+  head — spandrels between the arc and the apex line, the pane stopping at the springline and fanning
+  to the arc, the head reveal a curved soffit. Interior pane vertices go 384 -> 2 688 and the flat
+  tier 252 -> 1 404 on the same building. Spandrels are emitted as TRIANGLES: at the apex the arc
+  sample sits on the head line, and a quad picks one winding for both halves, so the degenerate half
+  faced the wrong way and tripped the engine winding convention. Tags `2026-09-15.3`.
 ---
 
 ## ADR-0087 — Vehicle handling: a car that neither fishtails nor rolls (measured, then assisted)

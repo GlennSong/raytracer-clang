@@ -297,6 +297,13 @@ TEST_CASE(core_enclosure_is_permanent_and_the_streamed_walls_are_colliders_only)
             colliderHasIt = true;
     }
     CHECK(colliderHasIt);               // ...but a walker still cannot pass through it
+    // THE TOP STOREY TOO. storeyPlans returns floors + 1 entries, and the
+    // enclosure loop used to stop at `floors`, so the topmost floor had
+    // collision and nothing drawn: the cab and the stair showed through
+    // (Glenn, 2026-09-15: "elevator housing... inside out or missing").
+    const StoreyPlan& roof = storeys.back();
+    const Vec3 backTop = hw.at(hw.width * 0.5, hw.depth, roof.y0 + roof.h * 0.5);
+    CHECK(touches(fullMesh, backTop));
     // The lobby's wood sheet stops at the hoistways (pits for the cabs) and
     // runs on into the stairwells (their flights start from it).
     auto woodOver = [&](const Vec2& q) {

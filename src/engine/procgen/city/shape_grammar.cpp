@@ -611,6 +611,9 @@ struct BayOpening {
     Real x0 = 0, x1 = 0;      // the bay's span along the face
     Real wx0 = 0, wx1 = 0;    // the opening's span
     Real sill = 0, head = 0;  // vertical extent (arches rise inside this box)
+    Real rise = 0;            // arch rise; 0 = a flat head. `head` is the APEX,
+                              // so the springline is head - rise and the
+                              // sill..head box is the arch's bounding box.
     bool entrance = false;    // this opening is the door
 };
 struct FacadeLayout {
@@ -667,9 +670,41 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
             Real cx = (o.x0 + o.x1) * 0.5;
             o.wx0 = cx - dw * 0.5; o.wx1 = cx + dw * 0.5;
         }
+        // THE ARCH, decided here and nowhere else. It used to be worked out
+        // inside the full facade emitter, so the inner wall and the flat
+        // tier cut a plain rectangle: an arched window was square from
+        // inside and square from across the street (Glenn, 2026-09-15).
+        if (!o.entrance && mode == FacadeMode::Residential &&
+            p.window.head != OpeningStyle::Head::Flat) {
+            const Real span = o.wx1 - o.wx0;
+            Real r = p.window.head == OpeningStyle::Head::Round
+                         ? span * 0.5
+                         : span * std::min(Real(0.5), std::max(Real(0.12), p.window.archRise));
+            if (o.head - r < o.sill + 0.35) r = 0;   // too squat to read as an arch
+            o.rise = r;
+        }
         L.open.push_back(o);
     }
     return L;
+}
+
+// The ARC of an arched head, left springer to right springer, in FACE space
+// (x along the wall, y up). Shared by the full facade, the inner wall and
+// the flat tier so all three build the SAME head. Returns the sample count
+// (0 for a flat head) and, optionally, the arc's centre.
+static int openingArc(const BayOpening& o, Vec2* out, int n, Vec2* centreOut = nullptr) {
+    if (o.rise <= 0 || n < 1) return 0;
+    const Real span = o.wx1 - o.wx0, cx = (o.wx0 + o.wx1) * 0.5;
+    const Real R = (o.rise * o.rise + span * span * 0.25) / (2 * o.rise);
+    const Real Cy = o.head - R, ysp = o.head - o.rise;
+    const Real thL = std::atan2(ysp - Cy, o.wx0 - cx);
+    const Real thR = std::atan2(ysp - Cy, o.wx1 - cx);
+    for (int k = 0; k <= n; ++k) {
+        const Real th = thL + (thR - thL) * (Real(k) / n);
+        out[k] = Vec2(cx + R * std::cos(th), Cy + R * std::sin(th));
+    }
+    if (centreOut) *centreOut = Vec2(cx, Cy);
+    return n + 1;
 }
 
 // The FLAT emitter (LOD1, city-render-perf R2): the same layout, the cheapest
@@ -797,15 +832,44 @@ void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
         q(wall, o.x0, 0, o.wx0, fr.height, icol, in);         // left pier
         q(wall, o.wx1, 0, o.x1, fr.height, icol, in);         // right pier
         q(wall, o.wx0, 0, o.wx1, o.sill, icol, in);           // apron
-        q(wall, o.wx0, o.head, o.wx1, fr.height, icol, in);   // over the head
+        q(wall, o.wx0, o.head, o.wx1, fr.height, icol, in);   // over the apex
+        // THE SAME HEAD AS THE FACADE. With an arch the wall fills the
+        // spandrels between the arc and the apex line, the pane stops at the
+        // springline and fans to the arc, and the head reveal follows it.
+        Vec2 arc[9];
+        Vec2 arcC;
+        const int narc = openingArc(o, arc, 8, &arcC);
+        const Real ysp = o.head - o.rise;
+        for (int k = 0; k + 1 < narc; ++k) {
+            const Vec3 A = fr.at(arc[k].x, arc[k].y) + in, B = fr.at(arc[k + 1].x, arc[k + 1].y) + in;
+            const Vec3 A2 = fr.at(arc[k].x, o.head) + in, B2 = fr.at(arc[k + 1].x, o.head) + in;
+            // TRIANGLES, not a quad. At the apex the arc sample sits exactly
+            // at the head, so the spandrel collapses to a sliver: emitQuad
+            // picks one winding for both halves of a quad, and the degenerate
+            // half then faces the wrong way (lot_building_parts_wind_to_the_
+            // engine_convention, 2026-09-15). emitTri orients each on its own.
+            for (const Vec3& nrm : {nIn, fr.n}) {
+                MeshBuilder::emitTri(wall, A, B, B2, nrm, icol);
+                MeshBuilder::emitTri(wall, A, B2, A2, nrm, icol);
+            }
+        }
         if (!o.entrance) {
             const bool lit = litWindow(fr.at(o.wx0, o.sill));
             RenderMesh& pane = lit ? glassLit : glass;
             const std::size_t pv0 = pane.vertices.size();
-            q(pane, o.wx0, o.sill, o.wx1, o.head,
-              lit ? litTint(fr.at(o.wx0, o.sill), curtainWall)
-                  : materialFor(PartId::Glass, wallColor).albedo,
-              in + fr.n * 0.02);
+            const Vec3 pcol = lit ? litTint(fr.at(o.wx0, o.sill), curtainWall)
+                                  : materialFor(PartId::Glass, wallColor).albedo;
+            q(pane, o.wx0, o.sill, o.wx1, narc > 0 ? ysp : o.head, pcol, in + fr.n * 0.02);
+            if (narc > 0) {
+                const Vec3 off = in + fr.n * 0.02;
+                const Vec3 S = fr.at(arcC.x, ysp) + off;
+                for (int k = 0; k + 1 < narc; ++k) {
+                    const Vec3 A = fr.at(arc[k].x, arc[k].y) + off;
+                    const Vec3 B = fr.at(arc[k + 1].x, arc[k + 1].y) + off;
+                    MeshBuilder::emitTri(pane, S, A, B, nIn, pcol);
+                    MeshBuilder::emitTri(pane, S, B, A, fr.n, pcol);
+                }
+            }
             roomUV(pane, pv0, fr);
             // REVEALS (Glenn's walk, 2026-09-14: "a gap between the exterior
             // and interior — no geo there"): the two jambs, the sill top and
@@ -818,13 +882,25 @@ void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
             // depth z-fought at every jamb (Glenn's third walk, 2026-09-15).
             if (revealFrom < thick - 0.01) {
                 const Vec3 from = fr.n * -revealFrom;
+                const Real jambTop = narc > 0 ? ysp : o.head;
                 const Vec3 P00 = fr.at(o.wx0, o.sill) + from, P10 = fr.at(o.wx1, o.sill) + from;
-                const Vec3 P01 = fr.at(o.wx0, o.head) + from, P11 = fr.at(o.wx1, o.head) + from;
+                const Vec3 P01 = fr.at(o.wx0, jambTop) + from, P11 = fr.at(o.wx1, jambTop) + from;
                 const Vec3 to = fr.n * -(thick - revealFrom);
                 emitQuad(wall, P00, P00 + to, P01 + to, P01, fr.h, icol);              // left jamb
                 emitQuad(wall, P10, P10 + to, P11 + to, P11, fr.h * -1.0, icol);       // right jamb
                 emitQuad(wall, P00, P10, P10 + to, P00 + to, Vec3(0, 1, 0), icol);     // sill
-                emitQuad(wall, P01, P11, P11 + to, P01 + to, Vec3(0, -1, 0), icol);    // head
+                if (narc > 0) {
+                    for (int k = 0; k + 1 < narc; ++k) {   // the arch SOFFIT, segment by segment
+                        const Vec3 A = fr.at(arc[k].x, arc[k].y) + from;
+                        const Vec3 B = fr.at(arc[k + 1].x, arc[k + 1].y) + from;
+                        const Real mx = (arc[k].x + arc[k + 1].x) * 0.5;
+                        const Real my = (arc[k].y + arc[k + 1].y) * 0.5;
+                        const Vec3 nrm = normalize(fr.h * (arcC.x - mx) + fr.v * (arcC.y - my));
+                        emitQuad(wall, A, B, B + to, A + to, nrm, icol);
+                    }
+                } else {
+                    emitQuad(wall, P01, P11, P11 + to, P01 + to, Vec3(0, -1, 0), icol);   // flat head
+                }
             }
         }
     }
@@ -849,9 +925,19 @@ static void emitFlatFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode
         const bool litPane = !o.entrance && litWindow(fr.at(o.wx0, o.sill));
         RenderMesh& dst = o.entrance ? door : (litPane ? glassLit : glass);
         const std::size_t pv0 = dst.vertices.size();
+        const Vec3 fcol = o.entrance ? dcol
+                                     : (litPane ? litTint(fr.at(o.wx0, o.sill), p.curtainWall) : gcol);
+        Vec2 farc[9];
+        Vec2 farcC;
+        const int fn = openingArc(o, farc, 8, &farcC);       // the middle tier arches too
+        const Real fysp = o.head - o.rise;
         emitQuad(dst, fr.at(o.wx0, o.sill) + proud, fr.at(o.wx1, o.sill) + proud,
-                 fr.at(o.wx1, o.head) + proud, fr.at(o.wx0, o.head) + proud,
-                 fr.n, o.entrance ? dcol : (litPane ? litTint(fr.at(o.wx0, o.sill), p.curtainWall) : gcol));
+                 fr.at(o.wx1, fn > 0 ? fysp : o.head) + proud,
+                 fr.at(o.wx0, fn > 0 ? fysp : o.head) + proud, fr.n, fcol);
+        for (int k = 0; k + 1 < fn; ++k)
+            MeshBuilder::emitTri(dst, fr.at(farcC.x, fysp) + proud,
+                                 fr.at(farc[k].x, farc[k].y) + proud,
+                                 fr.at(farc[k + 1].x, farc[k + 1].y) + proud, fr.n, fcol);
         if (!o.entrance) roomUV(dst, pv0, fr);
     }
     appendToPart(out, p.wallPart, wall);
@@ -896,11 +982,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
         if (entrance || mode != FacadeMode::Residential)
             st.head = OpeningStyle::Head::Flat;
         const Real span = wx1 - wx0;
-        Real rise = 0;
-        if (st.head == OpeningStyle::Head::Round) rise = span * 0.5;
-        else if (st.head == OpeningStyle::Head::Segmental)
-            rise = span * std::min(Real(0.5), std::max(Real(0.12), st.archRise));
-        if (rise > 0 && openHead - rise < openSill + 0.35) rise = 0;   // too squat
+        const Real rise = bay.rise;   // decided once, in facadeLayout
         const Real ysp = openHead - rise;                    // springline
         const Real cx = (wx0 + wx1) * 0.5;
         // Arc samples, left springer -> right springer (face space).
@@ -2480,6 +2562,13 @@ PartId floorFinishPartFor(const BuildingParams& params) {
 }
 
 Vec3 interiorPaintFor(const BuildingParams& params) {
+    // THE STYLE'S OWN FIELD COLOUR, when the facade implies one (room_plan.h
+    // interiorFinishFor: concrete is brutalist, stucco with round heads is
+    // spanish, and so on). Only a painted facade, which implies nothing,
+    // falls through to the free palette below — so a building's rooms are
+    // the colour its outside says they are (Glenn, 2026-09-15).
+    if (const WallFinish f = interiorFinishFor(params); f.kind != WallFinishKind::Accent)
+        return f.base;
     // Interior paints, round 7: the first cut had FOUR white-family
     // washes and gentle tints -- the device read "most buildings ...
     // still white". Now exactly ONE white and seven colours saturated
@@ -3110,16 +3199,20 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     // --- ROOMS (M7): a ring of rooms along the outside walls of every
     // storey above the lobby — offices behind a curtain wall, apartments
     // behind masonry (room_plan.h) — with or without a core.
-    for (int ki = std::max(1, kA); ki < kB; ++ki) {
+    // From kA, not from storey 1: a house's GROUND floor is living space,
+    // and the ring pass returns nothing for a lobby anyway.
+    for (int ki = kA; ki < kB; ++ki) {
         const StoreyPlan& spk = storeys[static_cast<std::size_t>(ki)];
         const RoomPlan rp = roomPlan(spk.plan, params, core,
                                      il.hasStair ? il.edge : static_cast<std::size_t>(-1),
-                                     interiorInset(params), ki);
+                                     interiorInset(params), ki,
+                                     il.hasStair ? il.well : Poly2{}, entranceEdge);
         if (rp.walls.empty()) continue;
         RoomMeshes rm;
         emitRooms(rm, colliderOut, rp, baseY + spk.y0, spk.h, interiorPaintFor(params));
         appendToPart(out, PartId::Interior, rm.drywall);
         appendToPart(out, PartId::GlassClear, rm.glass);
+        appendToPart(out, rp.finish.part, rm.accent);   // brick, concrete or timber
     }
 
     // --- the core (M5): shaft walls with doors, the dog-leg flights and
@@ -3549,7 +3642,13 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         const CorePlan ecore = coreFor(plan, params, entranceEdge);
         if (ecore.valid) {
             CoreMeshes cm;
-            for (int i = 0; i < params.floors && i + 1 < static_cast<int>(storeys.size()); ++i)
+            // EVERY storey, the top one included: storeyPlans returns
+            // floors + 1 entries (the ground storey is entry 0), and stopping
+            // at `floors` left the topmost floor with no shaft walls at all —
+            // collision but nothing drawn, so the cab and the stair showed
+            // through (Glenn, 2026-09-15: "elevator housing... inside out or
+            // missing").
+            for (int i = 0; i < static_cast<int>(storeys.size()); ++i)
                 emitCoreShaftWalls(cm, nullptr, ecore, storeys[static_cast<std::size_t>(i)], baseY, params);
             appendToPart(out, PartId::Interior, cm.drywall);
         }

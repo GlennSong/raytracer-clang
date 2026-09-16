@@ -1066,6 +1066,45 @@ TEST_CASE(podium_tower_is_one_mass_with_one_core_to_the_top) {
         for (const Vec2& c : core.rect()) CHECK(pointInPolygon(t.plan, c));
 }
 
+// Glenn, 2026-09-15: "windows that are arched on the outside are square on
+// the inside which is wrong". The arch now lives in the shared opening
+// record, so the inner wall and the flat tier build the head the facade
+// builds: an arched building carries MORE pane geometry than a flat-headed
+// one on every tier, because of the fan above the springline.
+TEST_CASE(an_arched_window_is_arched_from_inside_and_at_distance) {
+    const Poly2 plan = {{0, 0}, {16, 0}, {16, 12}, {0, 12}};
+    BuildingParams flatP;
+    flatP.floors = 3;
+    flatP.walkableGround = true;
+    flatP.openDoorway = true;
+    flatP.core = 1;
+    flatP.seed = 9;
+    flatP.wallPart = PartId::Stucco;
+    flatP.window.head = OpeningStyle::Head::Flat;
+    BuildingParams archP = flatP;
+    archP.window.head = OpeningStyle::Head::Round;
+
+    auto paneVerts = [](const BuildingMesh& bm) {
+        std::size_t n = 0;
+        for (const RenderMesh& part : bm.parts)
+            if (part.materialIndex == static_cast<int>(PartId::Glass) ||
+                part.materialIndex == static_cast<int>(PartId::GlassLit))
+                n += part.vertices.size();
+        return n;
+    };
+    // INSIDE: the streamed interior's own panes.
+    const std::size_t inFlat = paneVerts(growInterior(plan, flatP, 0.0));
+    const std::size_t inArch = paneVerts(growInterior(plan, archP, 0.0));
+    std::printf("    [arch] interior pane verts: flat %zu, arched %zu\n", inFlat, inArch);
+    CHECK(inFlat > 0);
+    CHECK(inArch > inFlat);
+    // THE MIDDLE TIER: the flat LOD used to square every arch off.
+    const std::size_t lodFlat = paneVerts(growPlanBuilding(plan, flatP, 0.0, FacadeDetail::Flat));
+    const std::size_t lodArch = paneVerts(growPlanBuilding(plan, archP, 0.0, FacadeDetail::Flat));
+    std::printf("    [arch] flat-tier pane verts: flat %zu, arched %zu\n", lodFlat, lodArch);
+    CHECK(lodArch > lodFlat);
+}
+
 TEST_CASE(distant_mass_box_carries_window_cell_uvs) {
     // The far tier's lit windows: the mass box's wall UVs count window cells
     // (3.2 m per cell, eight cells per texture repeat), the roof cap samples
