@@ -12,7 +12,13 @@ constexpr Real kHoistD = 2.6;      // hoistway into the core
 constexpr Real kStairW = 2.6;      // two 1.2 m flights + the 0.2 m spine
 constexpr Real kLanding = 1.5;
 constexpr Real kCorridor = 2.2;    // ring the core needs inside every tier: 1.5 m clear past the inner wall skin
-constexpr Real kDoorH = 2.1;
+// THE ENGINE'S OWN CLEAR OPENING, not a local literal. metro_v2_test's player
+// capsule is halfHeight 0.8 + radius 0.3 = 2.2 m tall, so a 2.1 m core door
+// had to be CROUCHED through while the building's own entrance (2.7 m) did
+// not (Glenn, 2026-09-16: "the cabs are too short to enter... I have to duck
+// and crawl"). Every lab level uses a 1.4 m capsule, which is why no test
+// and no walk of mine ever hit it.
+constexpr Real kDoorH = human::DOOR_HEIGHT;
 constexpr Real kSlab = 0.25;       // slab thickness (growInterior's)
 
 Poly2 rectOf(const SiteFrame& f, Real u0, Real v0, Real u1, Real v1) {

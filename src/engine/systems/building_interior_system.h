@@ -61,7 +61,7 @@ public:
     static constexpr int WINDOW_BELOW = 2;
     static constexpr int WINDOW_ABOVE = 3;
     // The storey a walker at `y` (capsule centre) stands in, 0 = ground.
-    static int storeyOf(const BuildingRecord& r, Real y);
+    static int storeyOf(const BuildingRecord& r, Real y, Real feetDrop = 0.7);
     // The window a resident holds ([k0, k1); k1 < 0 = whole); k1 = 0 when absent.
     void residentWindow(std::size_t key, int& k0, int& k1) const;
 

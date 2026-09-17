@@ -50,7 +50,10 @@ public:
     static constexpr Real DOOR_S = 1.2;      // leaf travel, seconds
     static constexpr Real DWELL_S = 6.0;     // doors open on arrival
     static constexpr int LEAF_WINDOW = 3;    // storeys of doors kept around the player
-    static constexpr Real CAB_W = 1.8, CAB_D = 1.6, CAB_H = 2.3;
+    // The cab must clear the door it is entered through (core_plan's kDoorH =
+    // human::DOOR_HEIGHT = 2.7) with a little header, and still fit inside a
+    // 3.2 m storey once its floor and ceiling slabs are counted.
+    static constexpr Real CAB_W = 1.8, CAB_D = 1.6, CAB_H = 2.9;
 
     // What the HUD shows.
     struct Status {
@@ -66,8 +69,14 @@ public:
 
     // Headless step for tests: the same logic as fixedUpdate with explicit
     // dependencies. `call` / `floorDelta` are this step's verbs.
+    // `feetDrop` is how far the player's FEET sit below the position passed
+    // in: halfHeight + radius of their capsule. It was a 0.7 constant, which
+    // is the lab capsule (0.4 + 0.3); metro_v2_test ships 0.8 + 0.3 = 1.1, so
+    // the storey came out a step high and in-cab detection was unreliable —
+    // which reset the selected floor every tick and made the go button reopen
+    // the doors instead of moving (Glenn, 2026-09-16).
     void step(World& world, PhysicsWorld* phys, AssetManager& assets, const Vec3& player, Real dt,
-              bool call, int floorDelta);
+              bool call, int floorDelta, Real feetDrop = 0.7);
     // The cab's floor height (world) in bank `record`, hoistway `i`; NaN when absent.
     Real cabY(std::size_t record, std::size_t i) const;
 
@@ -111,7 +120,7 @@ private:
     void placeCab(World& world, PhysicsWorld* phys, const Bank& b, Cab& cab, const CoreShaft& hw, Real dt);
     void syncLeaves(World& world, PhysicsWorld* phys, AssetManager& assets, Bank& b, int playerStorey,
                     Real dt);
-    static int storeyOf(const Bank& b, Real y);
+    static int storeyOf(const Bank& b, Real y, Real feetDrop = 0.7);
 
     PhysicsSystem* physics_ = nullptr;
     std::unordered_map<std::size_t, Bank> banks_;   // key: record index

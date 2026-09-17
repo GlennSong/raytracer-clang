@@ -16,7 +16,10 @@
 namespace engine {
 
 namespace {
-constexpr Real kFeet = 0.7;          // the capsule centre (halfHeight 0.4 + radius 0.3) above the feet
+// The DEFAULT drop from the passed position to the feet (the lab capsule:
+// halfHeight 0.4 + radius 0.3). The real one comes from the player's own
+// CharacterController — see ElevatorSystem::step's `feetDrop`.
+constexpr Real kFeet = 0.7;
 constexpr Real kLeafW = 0.55;        // one leaf of the 1.1 m hoistway door
 constexpr Real kLeafT = 0.04;
 constexpr Real kWallMid = -0.075;    // the leaf slides inside the 0.15 m wall
@@ -79,16 +82,20 @@ void ElevatorSystem::update(FrameContext& ctx) {
 
 void ElevatorSystem::fixedUpdate(FrameContext& ctx) {
     Vec3 player;
+    Real feetDrop = kFeet;
     bool found = false;
     ctx.world.each<Transform, ControlledBy>([&](Entity e, Transform& t, ControlledBy&) {
         if (found) return;
         if (ctx.world.has<InVehicle>(e)) return;   // no elevators from a car seat
         player = t.position;
+        // The player's OWN capsule, not the one the tests happen to use.
+        if (const CharacterController* cc = ctx.world.get<CharacterController>(e))
+            feetDrop = cc->halfHeight + cc->radius;
         found = true;
     });
     if (!found) { callEdge_ = false; floorDelta_ = 0; status_ = Status{}; return; }
     PhysicsWorld* phys = physics_ ? &physics_->physicsWorld() : nullptr;
-    step(ctx.world, phys, ctx.assets, player, ctx.clock.fixedStep(), callEdge_, floorDelta_);
+    step(ctx.world, phys, ctx.assets, player, ctx.clock.fixedStep(), callEdge_, floorDelta_, feetDrop);
     // The CAB LIGHT: a warm point in each cab, staged with the interior room
     // lights (BuildingInteriorSystem clears that list earlier in the frame).
     // Without it the cab was lit by its ceiling panel's emission alone —
@@ -116,8 +123,8 @@ void ElevatorSystem::fixedUpdate(FrameContext& ctx) {
     floorDelta_ = 0;
 }
 
-int ElevatorSystem::storeyOf(const Bank& b, Real y) {
-    const Real feet = y - kFeet + 0.4;   // a step of tolerance: mid-flight rounds up
+int ElevatorSystem::storeyOf(const Bank& b, Real y, Real feetDrop) {
+    const Real feet = y - feetDrop + 0.4;   // a step of tolerance: mid-flight rounds up
     int k = 0;
     for (std::size_t i = 1; i < b.storeyY.size(); ++i)
         if (b.storeyY[i] <= feet) k = static_cast<int>(i);
@@ -306,7 +313,7 @@ void ElevatorSystem::syncLeaves(World& world, PhysicsWorld* phys, AssetManager& 
 }
 
 void ElevatorSystem::step(World& world, PhysicsWorld* phys, AssetManager& assets, const Vec3& player,
-                          Real dt, bool call, int floorDelta) {
+                          Real dt, bool call, int floorDelta, Real feetDrop) {
     status_ = Status{};
     const CityBuildings* cb = nullptr;
     world.each<CityBuildings>([&](Entity, CityBuildings& c) { if (!cb) cb = &c; });
@@ -344,7 +351,7 @@ void ElevatorSystem::step(World& world, PhysicsWorld* phys, AssetManager& assets
     Bank& b = ensureBank(world, phys, assets, rec, insideKey);
     if (!b.core.valid || b.cabs.empty() || b.storeyY.size() < 2) return;
     const int n = static_cast<int>(b.storeyY.size());
-    const int f = storeyOf(b, player.y);
+    const int f = storeyOf(b, player.y, feetDrop);
 
     // Where the player stands relative to the bank: in a cab, or at a door.
     int inCab = -1, atDoor = -1;
@@ -353,8 +360,8 @@ void ElevatorSystem::step(World& world, PhysicsWorld* phys, AssetManager& assets
         const Vec2 q = hw.frame.toFrame(xz);
         const Real u0 = hw.width * 0.5 - CAB_W * 0.5, u1 = hw.width * 0.5 + CAB_W * 0.5;
         const Cab& cab = b.cabs[i];
-        if (q.x >= u0 && q.x <= u1 && q.y >= 0.0 && q.y <= 0.3 + CAB_D && player.y - kFeet > cab.y - 0.6 &&
-            player.y - kFeet < cab.y + 1.5)
+        if (q.x >= u0 && q.x <= u1 && q.y >= 0.0 && q.y <= 0.3 + CAB_D &&
+            player.y - feetDrop > cab.y - 0.6 && player.y - feetDrop < cab.y + 1.5)
             inCab = static_cast<int>(i);
         if (inCab < 0 && std::fabs(q.x - hw.doorX) < 1.0 && q.y < -0.1 && q.y > -CALL_M) atDoor = static_cast<int>(i);
     }

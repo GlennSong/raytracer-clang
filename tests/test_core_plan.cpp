@@ -62,6 +62,24 @@ TEST_CASE(core_plan_seats_a_bank_and_two_stairs_facing_the_entrance) {
             CHECK(!pointInPolygon(holes[j], centroid(holes[i])));
 }
 
+// Glenn, 2026-09-16: "the elevator cabs are too short to enter. I have to
+// duck and crawl into one." The player capsule that ships in metro_v2_test
+// is 2.2 m tall (halfHeight 0.8 + radius 0.3); the core's doors were a local
+// 2.1 m literal while the building's entrance is 2.7. An interior opening
+// may never be smaller than the entrance the player already came through.
+TEST_CASE(core_doors_clear_the_entrance_the_player_walked_through) {
+    const Poly2 plan = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    const BuildingParams p = towerParams(12, true);
+    const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
+    CHECK(core.valid);
+    const Real shipping = 2.0 * 0.8 + 2.0 * 0.3;   // metro_v2_test's capsule
+    for (const CoreShaft& hw : core.hoistways) {
+        CHECK(hw.doorHeight >= human::DOOR_HEIGHT - 1e-6);
+        CHECK(hw.doorHeight >= shipping);
+    }
+    for (const CoreStair& st : core.stairs) CHECK(st.shaft.doorHeight >= shipping);
+}
+
 TEST_CASE(core_plan_scales_the_bank_with_height_and_refuses_a_small_plan) {
     CHECK(hoistwaysFor(6) == 1);
     CHECK(hoistwaysFor(20) == 2);
@@ -344,8 +362,11 @@ TEST_CASE(core_window_grow_cost_is_bounded) {
     std::printf("    [core-census] window [18, 23) of 41 storeys: %zu tris, %zu KB, collider %zu tris, grow %.2f ms\n",
                 tris, bytes / 1024, col.indices.size() / 3, ms);
     CHECK(tris > 0);
-    // Re-based 2026-09-15 for the rooms (M7) and the inner mullion grid:
-    // the window measured ~1870 tris bare, ~7500 with rooms and grid.
+    // Re-based 2026-09-15 for the rooms (M7) and the inner mullion grid,
+    // re-measured 2026-09-16: ~1870 tris bare, ~7500 with rooms and grid,
+    // 10380 once arched openings and wall finishes landed. That is 86% of
+    // the cap — the next storey of content needs a real budget, not a
+    // bigger number here.
     CHECK(tris < 12000);
     CHECK(col.indices.size() / 3 < 10000);
     (void)ms;   // printed, not asserted: wall-clock on a shared desktop is not a gate

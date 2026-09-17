@@ -16,6 +16,14 @@
 
 using namespace engine;
 
+// THE SHIPPING PLAYER (metro_v2_test): halfHeight 0.8 + radius 0.3, so 2.2 m
+// tall and its feet 1.1 m below the capsule centre. The lab levels' 1.4 m
+// capsule is what let a 2.1 m lift door pass these tests.
+namespace {
+constexpr Real kPlayerHalf = 0.8, kPlayerRad = 0.3;
+constexpr Real kPlayerFeet = kPlayerHalf + kPlayerRad;
+}  // namespace
+
 namespace {
 struct StubUploader : MeshUploader {
     uint32_t next = 1;
@@ -59,7 +67,7 @@ TEST_CASE(elevator_answers_a_call_and_carries_a_pick_to_its_floor) {
     ElevatorSystem sys(nullptr);
     // In front of hoistway 0's door on the ground floor: E calls the cab.
     const Vec2 front = hw.frame.toWorld({hw.doorX, -1.2});
-    const Vec3 pFront(front.x, 0.05 + 0.7, front.y);
+    const Vec3 pFront(front.x, 0.05 + kPlayerFeet, front.y);
     sys.step(world, &phys, assets, pFront, dt, true, 0);
     CHECK(sys.bankCount() == 1);
     CHECK(sys.status().atDoor);
@@ -68,7 +76,7 @@ TEST_CASE(elevator_answers_a_call_and_carries_a_pick_to_its_floor) {
     for (int i = 0; i < 90; ++i) sys.step(world, &phys, assets, pFront, dt, false, 0);
     // Step in, pick five floors up, go.
     const Vec2 in = hw.frame.toWorld({hw.width * 0.5, 1.0});
-    Vec3 pIn(in.x, 0.05 + 0.7, in.y);
+    Vec3 pIn(in.x, 0.05 + kPlayerFeet, in.y);
     sys.step(world, &phys, assets, pIn, dt, false, 5);
     CHECK(sys.status().inCab);
     CHECK(sys.status().selected == 5);
@@ -78,7 +86,7 @@ TEST_CASE(elevator_answers_a_call_and_carries_a_pick_to_its_floor) {
     int steps = 0;
     bool arrived = false;
     for (; steps < 60 * 40; ++steps) {
-        pIn.y = sys.cabY(0, 0) + 0.7;   // ride along (the physics transfer is tested elsewhere)
+        pIn.y = sys.cabY(0, 0) + kPlayerFeet;   // ride along (the physics transfer is tested elsewhere)
         sys.step(world, &phys, assets, pIn, dt, false, 0);
         if (std::fabs(sys.cabY(0, 0) - target) < 1e-6 && !sys.status().moving) { arrived = true; break; }
     }
@@ -128,14 +136,14 @@ TEST_CASE(cab_doors_shut_while_the_cab_moves) {
     const Real dt = 1.0 / 60.0;
     ElevatorSystem sys(nullptr);
     const Vec2 front = hw.frame.toWorld({hw.doorX, -1.2});
-    const Vec3 pFront(front.x, 0.05 + 0.7, front.y);
+    const Vec3 pFront(front.x, 0.05 + kPlayerFeet, front.y);
     // The leaves and the cab are KINEMATIC bodies: they reach their poses
     // only when the world steps, so step it after every elevator step.
     sys.step(world, &phys, assets, pFront, dt, true, 0);       // call
     phys.update(dt);
     for (int i = 0; i < 90; ++i) { sys.step(world, &phys, assets, pFront, dt, false, 0); phys.update(dt); }   // doors open
     const Vec2 in = hw.frame.toWorld({hw.doorX, 1.0});
-    Vec3 pIn(in.x, 0.05 + 0.7, in.y);
+    Vec3 pIn(in.x, 0.05 + kPlayerFeet, in.y);
     // From inside the cab, toward the door wall (-v), chest height.
     const Vec3 dir = Vec3(-hw.frame.v.x, 0, -hw.frame.v.y) * 1.6;
     Vec3 hit;
@@ -150,7 +158,7 @@ TEST_CASE(cab_doors_shut_while_the_cab_moves) {
     phys.update(dt);
     bool moving = false;
     for (int i = 0; i < 60 * 6 && !moving; ++i) {
-        pIn.y = sys.cabY(0, 0) + 0.7;
+        pIn.y = sys.cabY(0, 0) + kPlayerFeet;
         sys.step(world, &phys, assets, pIn, dt, false, 0);
         phys.update(dt);
         moving = sys.status().moving && sys.cabY(0, 0) > 0.6;
@@ -198,10 +206,10 @@ TEST_CASE(character_walks_the_stairwell_door_and_climbs_the_dog_leg) {
     const CoreShaft& sh = st.shaft;
     auto at = [&](Real u, Real v) { const Vec2 w = sh.frame.toWorld({u, v}); return Vec3(w.x, 0, w.y); };
     const Vec3 start = at(sh.doorX, -2.0);
-    CharacterId c = world.addCharacter(0.4, 0.3, Vec3(start.x, 0.05 + 0.7 + 0.2, start.z));
+    CharacterId c = world.addCharacter(kPlayerHalf, kPlayerRad, Vec3(start.x, 0.05 + kPlayerFeet + 0.2, start.z));
     world.optimizeBroadPhase();
     for (int i = 0; i < 60; ++i) world.moveCharacter(c, Vec3(), 1.0 / 60.0);
-    CHECK_APPROX(world.characterPosition(c).y, 0.75, 0.15);
+    CHECK_APPROX(world.characterPosition(c).y, 0.05 + kPlayerFeet, 0.15);
     auto walkTo = [&](const Vec3& target, int maxFrames) {
         for (int i = 0; i < maxFrames; ++i) {
             const Vec3 q = world.characterPosition(c);
@@ -224,24 +232,24 @@ TEST_CASE(character_walks_the_stairwell_door_and_climbs_the_dog_leg) {
     walkTo(at(0.6, st.landing + run + 0.6), 1500);
     q = world.characterPosition(c);
     f = frameOf(q);
-    std::printf("    [core-walk] half landing u=%.2f v=%.2f y=%.2f (expect y ~ %.2f)\n", f.x, f.y, q.y, 0.05 + 2.25 + 0.7);
+    std::printf("    [core-walk] half landing u=%.2f v=%.2f y=%.2f (expect y ~ %.2f)\n", f.x, f.y, q.y, 0.05 + 2.25 + kPlayerFeet);
     CHECK(f.y > st.landing + run - 0.3);
-    CHECK_APPROX(q.y, 0.05 + 2.25 + 0.7, 0.3);
+    CHECK_APPROX(q.y, 0.05 + 2.25 + kPlayerFeet, 0.3);
     // Across to flight B and down... up to storey 1's landing.
     walkTo(at(2.0, st.landing + run + 0.6), 400);
     walkTo(at(2.0, 0.6), 1500);
     q = world.characterPosition(c);
     f = frameOf(q);
-    std::printf("    [core-walk] storey 1 landing u=%.2f v=%.2f y=%.2f (expect y ~ %.2f)\n", f.x, f.y, q.y, 4.55 + 0.7);
+    std::printf("    [core-walk] storey 1 landing u=%.2f v=%.2f y=%.2f (expect y ~ %.2f)\n", f.x, f.y, q.y, 4.55 + kPlayerFeet);
     CHECK(f.y < 1.2);
-    CHECK_APPROX(q.y, 4.55 + 0.7, 0.3);
+    CHECK_APPROX(q.y, 4.55 + kPlayerFeet, 0.3);
     // Out through storey 1's stair door into the corridor.
     walkTo(at(sh.doorX, -1.5), 600);
     q = world.characterPosition(c);
     f = frameOf(q);
     std::printf("    [core-walk] corridor u=%.2f v=%.2f y=%.2f\n", f.x, f.y, q.y);
     CHECK(f.y < -1.0);
-    CHECK_APPROX(q.y, 4.55 + 0.7, 0.3);
+    CHECK_APPROX(q.y, 4.55 + kPlayerFeet, 0.3);
     world.shutdown();
 }
 
@@ -283,7 +291,10 @@ TEST_CASE(character_enters_the_cab_through_an_open_hoistway_door) {
     const CoreShaft& hw = core.hoistways[0];
     auto at = [&](Real u, Real v) { const Vec2 w = hw.frame.toWorld({u, v}); return Vec3(w.x, 0, w.y); };
     const Vec3 start = at(hw.doorX, -1.5);
-    CharacterId c = phys.addCharacter(0.4, 0.3, Vec3(start.x, 0.95, start.z));
+    // THE SHIPPING CAPSULE (metro_v2_test: halfHeight 0.8 + radius 0.3 = 2.2 m
+    // tall), not the 1.4 m lab one this test used to build. A fixture smaller
+    // than the real player is how a 2.1 m lift door shipped (Glenn, 2026-09-16).
+    CharacterId c = phys.addCharacter(kPlayerHalf, kPlayerRad, Vec3(start.x, 0.05 + kPlayerFeet, start.z));
     phys.optimizeBroadPhase();
     const Real dt = 1.0 / 60.0;
     ElevatorSystem sys(nullptr);
@@ -353,7 +364,7 @@ TEST_CASE(character_enters_the_cab_through_an_open_hoistway_door) {
     std::printf("    [cab-walk] in the cab: u=%.2f v=%.2f y=%.2f\n", f.x, f.y, q.y);
     CHECK(f.y > 0.6);
     CHECK(sys.status().inCab);
-    CHECK_APPROX(q.y, 0.05 + 0.7, 0.15);
+    CHECK_APPROX(q.y, 0.05 + kPlayerFeet, 0.15);
     phys.shutdown();
 }
 
@@ -405,7 +416,7 @@ TEST_CASE(character_rides_the_cab_to_the_twentieth_floor_and_takes_the_stairs) {
     bodyFor(0, 3);
 
     // The walker, on the street in front of the entrance (the +Z edge).
-    CharacterId c = phys.addCharacter(0.4, 0.3, Vec3(20, 0.95, 44));
+    CharacterId c = phys.addCharacter(kPlayerHalf, kPlayerRad, Vec3(20, 1.35, 44));
     phys.optimizeBroadPhase();
     const Real dt = 1.0 / 60.0;
     ElevatorSystem sys(nullptr);
@@ -475,7 +486,7 @@ TEST_CASE(character_rides_the_cab_to_the_twentieth_floor_and_takes_the_stairs) {
     std::printf("    [ride] arrived=%d after %d steps: walker y=%.2f cab y=%.2f (floor 20 slab %.2f)\n",
                 arrived ? 1 : 0, steps, q.y, sys.cabY(0, 1), target);
     CHECK(arrived);
-    CHECK(std::fabs(q.y - (target + 0.7)) < 0.35);   // riding ON the cab, not left behind
+    CHECK(std::fabs(q.y - (target + kPlayerFeet)) < 0.35);   // riding ON the cab, not left behind
     CHECK(sys.status().inCab);
     CHECK(sys.status().floor == 20);
     // 5. The floor is there (the interior system's window regrows around the
@@ -487,7 +498,7 @@ TEST_CASE(character_rides_the_cab_to_the_twentieth_floor_and_takes_the_stairs) {
     f = hw.frame.toFrame(Vec2(q.x, q.z));
     std::printf("    [ride] floor 20 corridor u=%.2f v=%.2f y=%.2f\n", f.x, f.y, q.y);
     CHECK(f.y < -1.0);
-    CHECK(std::fabs(q.y - (target + 0.7)) < 0.3);
+    CHECK(std::fabs(q.y - (target + kPlayerFeet)) < 0.3);
     // 6. Into stairwell B and up its first flight to the half landing.
     const CoreStair& st = core.stairs[1];
     auto sat = [&](Real u, Real v) { const Vec2 w = st.shaft.frame.toWorld({u, v}); return Vec3(w.x, 0, w.y); };
@@ -499,8 +510,8 @@ TEST_CASE(character_rides_the_cab_to_the_twentieth_floor_and_takes_the_stairs) {
     q = phys.characterPosition(c);
     const Vec2 sf = st.shaft.frame.toFrame(Vec2(q.x, q.z));
     std::printf("    [ride] stair B half landing u=%.2f v=%.2f y=%.2f (expect %.2f)\n", sf.x, sf.y, q.y,
-                target + storeys[20].h * 0.5 + 0.7);
+                target + storeys[20].h * 0.5 + kPlayerFeet);
     CHECK(sf.y > st.landing + run - 0.3);
-    CHECK(std::fabs(q.y - (target + storeys[20].h * 0.5 + 0.7)) < 0.3);
+    CHECK(std::fabs(q.y - (target + storeys[20].h * 0.5 + kPlayerFeet)) < 0.3);
     phys.shutdown();
 }

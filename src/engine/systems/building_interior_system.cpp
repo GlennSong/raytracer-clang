@@ -226,12 +226,14 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
     }
 }
 
-int BuildingInteriorSystem::storeyOf(const BuildingRecord& r, Real y) {
+int BuildingInteriorSystem::storeyOf(const BuildingRecord& r, Real y, Real feetDrop) {
     const int n = r.params.floors + 1;
-    // Feet are 0.7 m under the capsule centre (halfHeight 0.4 + radius 0.3);
+    // Feet sit `feetDrop` under the passed position (halfHeight + radius of
+    // the player's own capsule; 0.7 for the lab's, 1.1 for metro_v2_test's).
     // 0.4 m of tolerance rounds a walker mid-flight up to the storey they
-    // are climbing to.
-    const Real h = y - r.baseY - 0.7 + 0.4;
+    // are climbing to. This was a 0.7 literal, so a taller player streamed
+    // the storey above the one they stood on (Glenn, 2026-09-16).
+    const Real h = y - r.baseY - feetDrop + 0.4;
     if (h < r.params.groundHeight) return 0;
     const Real fh = std::max(Real(1), r.params.floorHeight);
     const int k = 1 + static_cast<int>(std::floor((h - r.params.groundHeight) / fh));
