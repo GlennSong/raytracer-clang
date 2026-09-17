@@ -3893,6 +3893,42 @@ bool LevelLoader::load(const std::string& path,
         cfg.maxAmbient = cs.value("maxAmbient", cfg.maxAmbient);
         cfg.seed = cs.value("seed", cfg.seed);
         cfg.hoursPerSecond = cs.value("hoursPerSecond", cfg.hoursPerSecond);
+        // ONE CLOCK, ONE AUTHOR (Glenn, 2026-09-16: "use the same tick for
+        // day/night and city simulation so it all syncs up"). At RUNTIME they
+        // already share the sky's tick: DayNightSystem stages the hour and the
+        // rate, and CityRenderSystem::setWorldClock pushes both into the sim.
+        // But the LEVEL could author the rate twice -- "dayMinutes" for the sky
+        // and "hoursPerSecond" for the city -- and only the sky's was honoured.
+        // Worse, a headless context that runs no DayNightSystem (level_tests,
+        // the commute census) fell back to the citysim default and reported a
+        // day length the game never runs.
+        //
+        // So the authored day is now the ONE number: derive the sim's rate from
+        // it, and say so when a level still carries the old knob.
+        {
+            const bool cycleRuns = !root.contains("dayNight") ||
+                                   !root["dayNight"].is_object() ||
+                                   root["dayNight"].value("enabled", true);
+            double dayMinutes = -1.0;
+            if (root.contains("dayNight") && root["dayNight"].is_object())
+                dayMinutes = root["dayNight"].value("dayMinutes", -1.0);
+            if (cycleRuns && dayMinutes > 0.0) {
+                const float derived = static_cast<float>(24.0 / (dayMinutes * 60.0));
+                if (cs.contains("hoursPerSecond") &&
+                    std::fabs(derived - cfg.hoursPerSecond) > 1e-6f)
+                    LOG_WARN << "[citysim] \"hoursPerSecond\" " << cfg.hoursPerSecond
+                             << " is OVERRIDDEN by the authored day: dayMinutes "
+                             << dayMinutes << " -> " << derived
+                             << " h/s. One clock, one author -- drop the citysim key.";
+                cfg.hoursPerSecond = derived;
+            } else if (cycleRuns && cs.contains("hoursPerSecond")) {
+                LOG_WARN << "[citysim] \"hoursPerSecond\" " << cfg.hoursPerSecond
+                         << " (a " << (cfg.hoursPerSecond > 0 ? 24.0 / (cfg.hoursPerSecond * 60.0) : 0.0)
+                         << " minute day) is IGNORED while a day/night cycle runs: the sky's "
+                            "clock drives the city's schedules. Author \"dayNight\": "
+                            "{\"dayMinutes\": N} instead.";
+            }
+        }
         cfg.lightSpriteIn = cs.value("lightSpriteIn", cfg.lightSpriteIn);
         cfg.lightSphereOut = cs.value("lightSphereOut", cfg.lightSphereOut);
         cfg.lightRadius = cs.value("lightRadius", cfg.lightRadius);

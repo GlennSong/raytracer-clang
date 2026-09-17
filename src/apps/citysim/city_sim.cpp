@@ -722,18 +722,37 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             // they just stop being the default.
             const Vec2 homePos = places[hp].site;
             PlaceId pick = kNoPlace;
-            Real bestD2 = 1e30;
-            const int kCandidates = 6;
+            // SHORTER COMMUTES (Glenn, 2026-09-16: "the agents should have
+            // shorter commutes"). Distance FIRST, routing second. The old loop
+            // drew 6 candidates and tested routability as it went, keeping the
+            // best so far -- so it paid a route pair for every draw that
+            // happened to improve the distance, and still settled for whatever
+            // those 6 offered. Routing is the expensive part and distance is
+            // nearly free, so: draw a wider sample, sort by distance, take the
+            // first routable one. Usually ONE route pair instead of several,
+            // and a much nearer job. Long cross-town commutes still happen
+            // when nothing near is routable -- they just stop being common.
+            const int kCandidates = 24;
+            std::pair<Real, PlaceId> cands[kCandidates];
+            int nc = 0;
             for (int c = 0; c < kCandidates; ++c) {
                 uint32_t h = a.brain + static_cast<uint32_t>(c) * 0x9E3779B9u;
                 h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15;
                 PlaceId cand = jobs[h % jobs.size()];
                 const Vec2 d = places[cand].site - homePos;
-                const Real d2 = d.x * d.x + d.y * d.y;
-                if (d2 >= bestD2) continue;
-                if (!commutable(hn, nodeOf(cand))) continue;
-                bestD2 = d2;
-                pick = cand;
+                cands[nc++] = {d.x * d.x + d.y * d.y, cand};
+            }
+            // Ties break on place id so the pick cannot depend on draw order.
+            std::sort(cands, cands + nc, [](const std::pair<Real, PlaceId>& x,
+                                            const std::pair<Real, PlaceId>& y) {
+                if (x.first != y.first) return x.first < y.first;
+                return x.second < y.second;
+            });
+            for (int c = 0; c < nc; ++c) {
+                if (commutable(hn, nodeOf(cands[c].second))) {
+                    pick = cands[c].second;
+                    break;
+                }
             }
             if (pick == kNoPlace) {   // none of the samples routed: widen out
                 const std::size_t start =
