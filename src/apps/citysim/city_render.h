@@ -56,6 +56,14 @@ struct CityRenderParams {
     // Physical-walker budget; see CityWalkerSystem. 0 or negative = unbounded
     // (the historical behaviour, kept so a measurement can A/B against it).
     int maxWalkerBodies = 200;
+    // How far pedestrians promote into the drawn/simulated near tier and fall
+    // back out (hysteresis). What is DRAWN is bounded by this, not by the
+    // population: ~350 agents stood near the player at every hour on metro v2
+    // whatever the density, because past the demote radius an agent has no
+    // render membership at all. Drawn count scales with AREA, so 280 -> 400 is
+    // ~2x, and near-tier agents are the expensive ones.
+    Real pedPromoteRadius = 280.0;
+    Real pedDemoteRadius = 350.0;
     // SIM RATE (P8.2d). Traffic is not physics: agents follow lanes, so a
     // bigger dt costs nothing but precision. 0 or >= the fixed rate keeps the
     // historical every-step tick (and every existing test/gate bit-identical);

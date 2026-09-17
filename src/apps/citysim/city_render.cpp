@@ -158,6 +158,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.adaptiveRate = c.adaptiveRate;
         params_.tieredAgents = c.tieredAgents;
         params_.dormantAgents = c.dormantAgents;
+        params_.pedPromoteRadius = c.pedPromoteRadius;
+        params_.pedDemoteRadius = c.pedDemoteRadius;
         params_.wander = c.wander;
         params_.agentScript = c.agentScript;
         params_.vehicleScript = c.vehicleScript;
@@ -360,6 +362,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // build warm-up therefore runs everything K, exactly as before.
     sim_.tieringEnabled = params_.tieredAgents;
     sim_.dormancyEnabled = params_.dormantAgents;
+    sim_.pedPromoteRadius = params_.pedPromoteRadius;
+    sim_.pedDemoteRadius = params_.pedDemoteRadius;
     // What this LEVEL asked for, beside the density line above. Nothing used
     // to print it, so a level that silently failed to opt into tiering looked
     // exactly like one that had (2026-09-16).

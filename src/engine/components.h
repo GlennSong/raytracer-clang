@@ -558,6 +558,18 @@ struct CitySimConfig {
     // drawn and animated from the sim ghost. Bounds an O(bodies^2) separation
     // pass that was otherwise a function of how crowded downtown happened to be.
     int maxWalkerBodies = 200;
+    // How far pedestrians promote INTO the drawn/simulated near tier, and fall
+    // back out of it (hysteresis). What is drawn is bounded by THIS, not by the
+    // population: ~350 agents stood near the player at every hour of the day on
+    // metro v2 whatever the density, because beyond the demote radius an agent
+    // has no render membership at all (Glenn, 2026-09-16: "it's still very
+    // sparse"). Drawn count scales with AREA, so 280 -> 400 is ~2x. Near-tier
+    // agents are the expensive ones (3 -> 30 us each as local density rises,
+    // test_sim_scale), so this is deliberately a level knob and NOT a new
+    // default: a level that wants a crowded street pays for it, agent_lab does
+    // not.
+    float pedPromoteRadius = 280.0f;
+    float pedDemoteRadius = 350.0f;
     // Sim tick rate for LOCAL agents (Hz). 0 = every fixed step (historical).
     // 30 halves the traffic sim's cost; poses extrapolate between ticks.
     float localHz = 0.0f;
