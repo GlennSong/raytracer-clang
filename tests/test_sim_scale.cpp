@@ -62,8 +62,13 @@ TEST_CASE(sim_scale_census_prints) {
     std::printf("    [scale] nav: %zu nodes, %zu links\n", nav.nodes.size(), nav.links.size());
     std::printf("    [scale] %-7s %-7s %9s %7s %7s %7s %9s\n",
                 "agents", "mode", "ms/tick", "K", "V", "D", "sleeping");
-    for (int n : {500, 1000, 2000, 4000}) {
+    // Glenn, 2026-09-16: "can we reach say 50k agents walking around?" The
+    // answer has to be MEASURED, not extrapolated off the 4k row. Flat stops
+    // at 4k -- it is the known-bad path and would dominate the runtime to
+    // prove something already proven.
+    for (int n : {500, 1000, 2000, 4000, 10000, 25000, 50000}) {
         for (int tiered = 0; tiered < 2; ++tiered) {
+            if (n > 4000 && tiered == 0) continue;
             const Row r = run(nav, n, tiered == 1, 120);
             std::printf("    [scale] %-7d %-7s %9.3f %7d %7d %7d %9d\n",
                         r.agents, tiered ? "tiered" : "flat", r.msPerTick, r.k, r.v, r.d, r.sleeping);
