@@ -5,6 +5,7 @@
 #include "../../profile.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>    // RT_CRASH_DEBUG contact telemetry
 #include <cstdlib>
@@ -741,24 +742,49 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             // walks away, and archetype is what measureCommute samples -- branch
             // on the wrong one and the metric never moves.
             if (a.archetype == Agent::Mode::Pedestrian) {
+                // A WALK WORTH TAKING (Glenn, 2026-09-17: "I haven't seen
+                // anybody in the suburbs"). Taking the NEAREST job put walkers
+                // ~70 m from home, so they reached work almost at once and sat
+                // indoors: measured, moving fell 847 -> 377 at 17:00 and
+                // 332 -> 76 at noon. What fills a street is not headcount but
+                // the SHARE OF THE DAY spent walking -- at a 5% outdoor share
+                // you need ~70k walkers for the street life 12k gives at 30%.
+                // So aim for a real commute: the nearest routable job at least
+                // kWalkJobFloor out, and only if none of those route does the
+                // nearest of all win.
+                constexpr Real kWalkJobFloor = 300.0;   // metres, straight line
                 jobDist.clear();
                 jobDist.reserve(jobs.size());
                 for (PlaceId cand : jobs) {
                     const Vec2 d = places[cand].site - homePos;
                     jobDist.push_back({d.x * d.x + d.y * d.y, cand});
                 }
-                const std::size_t take = std::min<std::size_t>(8, jobDist.size());
-                std::partial_sort(jobDist.begin(), jobDist.begin() + take, jobDist.end(),
-                                  [](const std::pair<Real, PlaceId>& x,
-                                     const std::pair<Real, PlaceId>& y) {
-                                      if (x.first != y.first) return x.first < y.first;
-                                      return x.second < y.second;
-                                  });
-                for (std::size_t c = 0; c < take; ++c)
-                    if (commutable(hn, nodeOf(jobDist[c].second))) {
-                        pick = jobDist[c].second;
-                        break;
-                    }
+                const auto byDist = [](const std::pair<Real, PlaceId>& x,
+                                       const std::pair<Real, PlaceId>& y) {
+                    if (x.first != y.first) return x.first < y.first;
+                    return x.second < y.second;   // deterministic ties
+                };
+                // [begin, split) are far enough to be a commute; [split, end) are not.
+                const auto split = std::stable_partition(
+                    jobDist.begin(), jobDist.end(),
+                    [&](const std::pair<Real, PlaceId>& e) {
+                        return e.first >= kWalkJobFloor * kWalkJobFloor;
+                    });
+                const std::size_t far =
+                    static_cast<std::size_t>(split - jobDist.begin());
+                const std::size_t takeFar = std::min<std::size_t>(8, far);
+                std::partial_sort(jobDist.begin(), jobDist.begin() + takeFar, split, byDist);
+                for (std::size_t c = 0; c < takeFar && pick == kNoPlace; ++c)
+                    if (commutable(hn, nodeOf(jobDist[c].second))) pick = jobDist[c].second;
+                if (pick == kNoPlace) {   // nothing beyond the floor routes
+                    const std::size_t near =
+                        static_cast<std::size_t>(jobDist.end() - split);
+                    const std::size_t takeNear = std::min<std::size_t>(8, near);
+                    std::partial_sort(split, split + takeNear, jobDist.end(), byDist);
+                    for (std::size_t c = 0; c < takeNear && pick == kNoPlace; ++c)
+                        if (commutable(hn, nodeOf((split + c)->second)))
+                            pick = (split + c)->second;
+                }
             } else {
                 const int kCandidates = 24;
                 std::pair<Real, PlaceId> cands[kCandidates];
@@ -2599,11 +2625,22 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
 void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     RT_PROFILE_ZONE_NAMED("CitySim step");
     if (!nav_ || agents_.empty()) return;
+    // Print-only phase timing (CitySim::PhaseTimes): whole-population passes
+    // vs per-active-agent passes. Stage 1 of the 100k plan needs a baseline.
+    const auto phaseNow = std::chrono::steady_clock::now;
+    auto phaseT0 = phaseNow();
+    const auto stepBegin = phaseT0;
+    const auto phaseMark = [&](double& into) {
+        const auto n2 = phaseNow();
+        into += std::chrono::duration<double, std::micro>(n2 - phaseT0).count();
+        phaseT0 = n2;
+    };
 
     // P4.1: re-hash the population. place() early-outs on an unchanged cell,
     // so a V agent (whose pose only moves on its coarse tick) costs a compare.
     for (std::size_t i = 0; i < agents_.size(); ++i)
         grid_.place(static_cast<int>(i), agents_[i].pos);
+    phaseMark(phase_.rehash);
     // Record the rate BEFORE tierPass: waking a dormant agent reconstructs it
     // through scheduleSnapshot, which converts commute seconds into a share of
     // the day and so needs the CURRENT rate, not last step's.
@@ -2615,6 +2652,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // pose is the exact lane pose). BEFORE the clock advances: a promoted
     // agent joins this step's K passes with no double-advanced time.
     tierPass(hoursPerSecond);
+    phaseMark(phase_.tierPass);
     // ACTIVE LIST (perf). Every pass below used to walk the WHOLE population
     // just to `continue` on the far tier: ~12 sweeps over thousands of
     // 432-byte agents per step, which is memory traffic, not simulation. The
@@ -2640,6 +2678,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         }
         active_.push_back(static_cast<int>(i));
     }
+    phaseMark(phase_.activeList);
 
     clockHours_ += dt * hoursPerSecond;
     clockHours_ = std::fmod(clockHours_, 24.0);
@@ -2703,8 +2742,10 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // advance() (and so had refreshPose re-anchor its base position) this tick —
     // the reactive lean below is only valid on a re-anchored pose.
     std::vector<uint8_t> advanced(agents_.size(), 0);
+    phaseMark(phase_.goals);   // clock + signals + goal pass + sensed build
     computeGaps();
     computeCarWedge();   // S7 senses: bodies in the forward corridor
+    phaseMark(phase_.gaps);
     for (int ai : active_) {
         Agent& a = agents_[ai];
         const std::size_t i = static_cast<std::size_t>(ai);
@@ -2748,7 +2789,25 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         if (a.mode != Agent::Mode::Driver || !a.moving || a.released ||
             a.playerControlled)
             continue;
-        for (std::size_t j = i + 1; j < agents_.size(); ++j) {
+        // THE QUADRATIC. This was `for (j = i + 1; j < agents_.size(); ++j)`:
+        // every agent in the city, per active driver, per tick, each loaded
+        // from a 432-byte struct just to be rejected. O(drivers x TOTAL).
+        // That is where the step went -- 96.8% of a 50k step (test_sim_scale
+        // [phase]) -- and why cost per NEAR agent climbed 2.4 -> 29.5 us as the
+        // TOTAL population grew, and why capping the sensing query changed
+        // nothing: wrong loop.
+        //
+        // grid_ holds every agent and returns a SUPERSET SORTED ASCENDING, with
+        // callers applying their own exact predicates -- precisely this case.
+        // Skipping j <= i reproduces `j = i + 1`; ascending order keeps the
+        // pair ORDER identical; every predicate below is untouched. So results
+        // stay bit-identical. The radius must exceed the largest rs a pair can
+        // have (0.35 * (lenA + lenB)); 30 m clears any fleet vehicle.
+        constexpr Real kPairQueryRadius = 30.0;
+        grid_.query(a.pos, kPairQueryRadius, pairScratch_);
+        for (int gj : pairScratch_) {
+            const std::size_t j = static_cast<std::size_t>(gj);
+            if (j <= i) continue;
             Agent& b = agents_[j];
             if (b.mode != Agent::Mode::Driver || !b.moving || b.released ||
                 b.playerControlled || b.far())
@@ -3164,6 +3223,10 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             vehicles_[a.vehicle].heading = a.heading;
         }
     }
+    phaseMark(phase_.advance);
+    phase_.total += std::chrono::duration<double, std::micro>(
+                        std::chrono::steady_clock::now() - stepBegin).count();
+    ++phase_.steps;
 }
 
 // --- three-tier traffic (P4.2) ----------------------------------------------

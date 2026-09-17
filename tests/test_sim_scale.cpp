@@ -38,9 +38,23 @@ Row run(const NavGraph& nav, int agents, bool tiered, int ticks) {
     // the clock starts, so the measurement is steady state, not spawn.
     for (int i = 0; i < 30; ++i) sim.step(1.0 / 60.0, 0.05);
 
+    sim.resetPhaseTimes();
     const auto t0 = std::chrono::steady_clock::now();
     for (int i = 0; i < ticks; ++i) sim.step(1.0 / 60.0, 0.05);
     const auto t1 = std::chrono::steady_clock::now();
+    {   // WHERE the step time goes. The three passes left of the bar touch the
+        // WHOLE population every tick regardless of tier; the three right of it
+        // walk only the active list. Stage 1 of the 100k plan needs to know
+        // which side dominates -- capping the sensing radius query at 50k moved
+        // nothing, which killed two guesses.
+        const auto& ph = sim.phaseTimes();
+        const double n = ph.steps > 0 ? ph.steps : 1;
+        std::printf("    [phase] %6d agents | rehash %8.1f tier %8.1f active %8.1f "
+                    "| goals %8.1f gaps %8.1f advance %8.1f | total %9.1f us/step\n",
+                    static_cast<int>(sim.agents().size()), ph.rehash / n, ph.tierPass / n,
+                    ph.activeList / n, ph.goals / n, ph.gaps / n, ph.advance / n,
+                    ph.total / n);
+    }
 
     Row r;
     r.agents = static_cast<int>(sim.agents().size());

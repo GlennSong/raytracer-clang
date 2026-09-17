@@ -389,6 +389,18 @@ public:
     // waiting out their day at a door and costing nothing. Rises at night and
     // midday, falls through both rush hours.
     int sleepingAgents() const { return sleeping_; }
+    // PHASE TIMINGS (print-only, 2026-09-17). Where the milliseconds actually
+    // go per step. Capping the sensing radius query changed nothing at 50k,
+    // which killed two successive guesses about the hot path -- so measure it
+    // rather than read the code and conclude. Microseconds, accumulated since
+    // the last resetPhaseTimes().
+    struct PhaseTimes {
+        double rehash = 0, tierPass = 0, activeList = 0, goals = 0,
+               sensedBuild = 0, gaps = 0, advance = 0, total = 0;
+        int steps = 0;
+    };
+    const PhaseTimes& phaseTimes() const { return phase_; }
+    void resetPhaseTimes() { phase_ = PhaseTimes{}; }
 
     Real timeOfDay() const { return clockHours_; }
     Real seconds() const { return simSeconds_; }   // monotonic sim clock (memory time base)
@@ -749,6 +761,7 @@ private:
                                               // separate so a vehicle query can
                                               // nest inside an agent query)
     mutable std::vector<int> queryScratch_;   // shared candidate buffer (queries
+    std::vector<int> pairScratch_;   // car-vs-car pair query (stepTick)
                                               // never nest across a live iteration)
     std::vector<int> tierScratch_;            // tierPass promotion candidates
     std::vector<int> dormantScratch_;         // tierPass wake candidates
@@ -769,6 +782,7 @@ private:
     // until my next event" into a sim-second wake time.
     Real hoursPerSecond_ = 0.05;
     int sleeping_ = 0;   // agents skipped this step by the scheduled wake
+    PhaseTimes phase_;   // print-only instrumentation
     Real clockHours_ = 6.0;
     // The clock UNWRAPPED (never reset): the time base for dwell accounting
     // across sleeps, immune to rate changes and holds. heldSeconds_ counts
