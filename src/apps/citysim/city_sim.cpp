@@ -663,6 +663,9 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         return p.entrance + (p.site - p.entrance) * 0.4;
     };
 
+    // Scratch for the on-foot job search, hoisted: one allocation, not one
+    // per walker.
+    std::vector<std::pair<Real, PlaceId>> jobDist;
     for (Agent& a : agents_) {
         // Home: deterministic pick from the agent's own brain bits (no rng
         // draw). MIXED first: brains are forced odd (rnd()|1), so a raw
@@ -723,36 +726,61 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             const Vec2 homePos = places[hp].site;
             PlaceId pick = kNoPlace;
             // SHORTER COMMUTES (Glenn, 2026-09-16: "the agents should have
-            // shorter commutes"). Distance FIRST, routing second. The old loop
-            // drew 6 candidates and tested routability as it went, keeping the
-            // best so far -- so it paid a route pair for every draw that
-            // happened to improve the distance, and still settled for whatever
-            // those 6 offered. Routing is the expensive part and distance is
-            // nearly free, so: draw a wider sample, sort by distance, take the
-            // first routable one. Usually ONE route pair instead of several,
-            // and a much nearer job. Long cross-town commutes still happen
-            // when nothing near is routable -- they just stop being common.
-            const int kCandidates = 24;
-            std::pair<Real, PlaceId> cands[kCandidates];
-            int nc = 0;
-            for (int c = 0; c < kCandidates; ++c) {
-                uint32_t h = a.brain + static_cast<uint32_t>(c) * 0x9E3779B9u;
-                h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15;
-                PlaceId cand = jobs[h % jobs.size()];
-                const Vec2 d = places[cand].site - homePos;
-                cands[nc++] = {d.x * d.x + d.y * d.y, cand};
-            }
-            // Ties break on place id so the pick cannot depend on draw order.
-            std::sort(cands, cands + nc, [](const std::pair<Real, PlaceId>& x,
-                                            const std::pair<Real, PlaceId>& y) {
-                if (x.first != y.first) return x.first < y.first;
-                return x.second < y.second;
-            });
-            for (int c = 0; c < nc; ++c) {
-                if (commutable(hn, nodeOf(cands[c].second))) {
-                    pick = cands[c].second;
-                    break;
+            // shorter commutes") -- and it is NOT the same problem for both
+            // modes. A walker covers ground ~5x slower, so the same home/work
+            // pair costs it ~5x the day. Measured on metro_v2 after the first
+            // pass: drivers 0.59 in-world hours each way, walkers 3.86.
+            //
+            //   ON FOOT  the nearest routable job in the CITY -- the 8 nearest
+            //            by straight line, tested in order. Exact, not sampled.
+            //   DRIVING  the nearest routable of 24 sampled jobs. The variety is
+            //            deliberate: a city with cross-town car commutes reads
+            //            better than one where everybody works next door.
+            //
+            // Keyed on ARCHETYPE, not mode: mode flips when a driver parks and
+            // walks away, and archetype is what measureCommute samples -- branch
+            // on the wrong one and the metric never moves.
+            if (a.archetype == Agent::Mode::Pedestrian) {
+                jobDist.clear();
+                jobDist.reserve(jobs.size());
+                for (PlaceId cand : jobs) {
+                    const Vec2 d = places[cand].site - homePos;
+                    jobDist.push_back({d.x * d.x + d.y * d.y, cand});
                 }
+                const std::size_t take = std::min<std::size_t>(8, jobDist.size());
+                std::partial_sort(jobDist.begin(), jobDist.begin() + take, jobDist.end(),
+                                  [](const std::pair<Real, PlaceId>& x,
+                                     const std::pair<Real, PlaceId>& y) {
+                                      if (x.first != y.first) return x.first < y.first;
+                                      return x.second < y.second;
+                                  });
+                for (std::size_t c = 0; c < take; ++c)
+                    if (commutable(hn, nodeOf(jobDist[c].second))) {
+                        pick = jobDist[c].second;
+                        break;
+                    }
+            } else {
+                const int kCandidates = 24;
+                std::pair<Real, PlaceId> cands[kCandidates];
+                int nc = 0;
+                for (int c = 0; c < kCandidates; ++c) {
+                    uint32_t h = a.brain + static_cast<uint32_t>(c) * 0x9E3779B9u;
+                    h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15;
+                    PlaceId cand = jobs[h % jobs.size()];
+                    const Vec2 d = places[cand].site - homePos;
+                    cands[nc++] = {d.x * d.x + d.y * d.y, cand};
+                }
+                // Ties break on place id so the pick cannot depend on draw order.
+                std::sort(cands, cands + nc, [](const std::pair<Real, PlaceId>& x,
+                                                const std::pair<Real, PlaceId>& y) {
+                    if (x.first != y.first) return x.first < y.first;
+                    return x.second < y.second;
+                });
+                for (int c = 0; c < nc; ++c)
+                    if (commutable(hn, nodeOf(cands[c].second))) {
+                        pick = cands[c].second;
+                        break;
+                    }
             }
             if (pick == kNoPlace) {   // none of the samples routed: widen out
                 const std::size_t start =
