@@ -2783,6 +2783,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // holds, so a junction tangle crunches to a stop and unwinds car by car.
     // Triggering only on a closing approach lets the first resumer drive OUT
     // through the residual overlap without instantly re-freezing the pair.
+    phaseMark(phase_.advMove);
     for (int ai : active_) {
         Agent& a = agents_[ai];
         const std::size_t i = static_cast<std::size_t>(ai);
@@ -2957,6 +2958,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // body-overlap floor below is the physical backstop so two people can't occupy
     // the same spot. Deterministic (index order); resets to the sidewalk each
     // step, so the sidestep is a transient lean while someone is in view.
+    phaseMark(phase_.advPairs);
     for (Agent& a : agents_)
         if (!a.moving) { a.state = Agent::State::Resting; a.lateralOffset = 0; }
     for (std::size_t i = 0; i < agents_.size(); ++i) {
@@ -3089,13 +3091,33 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     }
     // Hard body-overlap floor: several symmetric relaxation passes so two people
     // (whether or not they saw each other) never interpenetrate.
+    phaseMark(phase_.advPop);
     for (int iter = 0; iter < 6; ++iter)
         for (int ai : active_) {
             Agent& a = agents_[ai];
             const std::size_t i = static_cast<std::size_t>(ai);
             if (a.mode != Agent::Mode::Pedestrian || !a.moving)
                 continue;
-            for (std::size_t j = i + 1; j < agents_.size(); ++j) {
+            // THE BIG ONE. This was `for (j = i + 1; j < agents_.size(); ++j)`
+            // -- every agent in the city, per active walker, SIX TIMES a tick,
+            // with a sqrt on most of them. Measured: 163,259 us of a 178,607 us
+            // step at 50k, i.e. 91% of the whole simulation, and it scales as
+            // n^2: 2,588 us at 10k, 163,259 at 50k -- 5x the agents, 63x the
+            // cost. It ignores tiers entirely, which is why it got worse with
+            // every agent added and why fixing the car pair scan barely moved.
+            //
+            // grid_ returns a superset sorted ascending and callers apply their
+            // own predicates, so skipping j <= i keeps the same pairs in the
+            // same order. RADIUS: this loop MOVES agents, so grid positions go
+            // stale as it relaxes. Pushes are always apart, but an agent shoved
+            // clear of one neighbour can drift toward another, so the radius
+            // carries the body minimum plus room for six passes of drift. Pairs
+            // beyond it could not have touched anyway -- the push only fires
+            // below kPedBodyMin.
+            grid_.query(a.pos, kPedBodyMin + 4.0, pairScratch_);
+            for (int gj : pairScratch_) {
+                const std::size_t j = static_cast<std::size_t>(gj);
+                if (j <= i) continue;
                 Agent& b = agents_[j];
                 if (b.mode != Agent::Mode::Pedestrian || !b.moving ||
                     b.far())
@@ -3117,6 +3139,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // walker never ends up standing inside a pole — or brushing through the
     // player (a wider berth, so a near miss reads as a step-around). The cone
     // bias above makes it lean away in advance; this is the physical backstop.
+    phaseMark(phase_.advSolver);
     for (Agent& a : agents_) {
         if (a.mode != Agent::Mode::Pedestrian || !a.moving ||
             a.far())

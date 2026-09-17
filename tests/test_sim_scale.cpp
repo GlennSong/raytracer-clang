@@ -54,6 +54,11 @@ Row run(const NavGraph& nav, int agents, bool tiered, int ticks) {
                     static_cast<int>(sim.agents().size()), ph.rehash / n, ph.tierPass / n,
                     ph.activeList / n, ph.goals / n, ph.gaps / n, ph.advance / n,
                     ph.total / n);
+        std::printf("    [adv]   %6d agents | move %8.1f pairs %8.1f "
+                    "pop %8.1f solver %8.1f tail %8.1f us/step\n",
+                    static_cast<int>(sim.agents().size()), ph.advMove / n,
+                    ph.advPairs / n, ph.advPop / n, ph.advSolver / n,
+                    ph.advance / n);
     }
 
     Row r;

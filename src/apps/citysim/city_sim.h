@@ -397,6 +397,10 @@ public:
     struct PhaseTimes {
         double rehash = 0, tierPass = 0, activeList = 0, goals = 0,
                sensedBuild = 0, gaps = 0, advance = 0, total = 0;
+        // advance split five ways: the movement loop, the car pair check,
+        // the two WHOLE-POPULATION loops, the 6-pass overlap relaxation,
+        // and the tail.
+        double advMove = 0, advPairs = 0, advPop = 0, advSolver = 0;
         int steps = 0;
     };
     const PhaseTimes& phaseTimes() const { return phase_; }
