@@ -4173,6 +4173,9 @@ bool LevelLoader::load(const std::string& path,
             engine::CityBuildings cityB;
             std::size_t blockedDoors = 0;
             std::vector<engine::CityPlanDebug::Prism> colliderPrisms;
+            // TREES IN THE ROAD (Glenn: "one lot being built in the middle of a
+            // street which is placing trees in the road"). Counted, not assumed.
+            int treesOnPad = 0, treesOffPad = 0, treesNoPad = 0;
             for (const engine::LotBuilding& lb : grown.lots) {
                 const double gy = entityGround ? entityGround(lb.site.x, lb.site.y) : 0.0;
                 // Park FENCES + TREE TRUNKS are solid (drive feedback: "Parks
@@ -4402,14 +4405,37 @@ bool LevelLoader::load(const std::string& path,
                         double lx = fx * lb.width, lz = fz * lb.depth;
                         // Keep the tree on the pad: shrink toward the centroid
                         // until the spot is inside the lot polygon.
-                        if (!lb.pad.empty())
+                        //
+                        // THE TRAPDOOR. The exit test used to be
+                        // `pointInPolygon(...) || f * 0.55 <= 0.1`, so a spot
+                        // that never landed on the pad was given up on at
+                        // f ~ 0.166 and planted ANYWAY -- unvetted, right where
+                        // the shrink was heading. The pads themselves ARE
+                        // pushed clear of roads (pushPolyClearOfRoads, in
+                        // emitGreen and the park path), but `lb.site` is the
+                        // centroid of the ORIGINAL footprint, so for a lot
+                        // straddling a street the shrink converges INTO the
+                        // carriageway. Same shape as the lot pass's
+                        // `planOk ? plan : site`: a fallback that silently
+                        // accepts an unvetted value. A tree that cannot be put
+                        // on its own pad is not planted at all.
+                        bool onPad = false;
+                        if (!lb.pad.empty()) {
                             for (double f = 1.0; f > 0.1; f *= 0.55) {
                                 engine::Vec2 spot(lb.site.x + (lx * cy - lz * sy) * f,
                                                   lb.site.y + (lx * sy + lz * cy) * f);
-                                if (engine::pointInPolygon(lb.pad, spot) || f * 0.55 <= 0.1) {
-                                    lx *= f; lz *= f; break;
+                                if (engine::pointInPolygon(lb.pad, spot)) {
+                                    lx *= f; lz *= f; onPad = true; break;
                                 }
                             }
+                            if (!onPad) { ++treesOffPad; continue; }
+                            ++treesOnPad;
+                        } else {
+                            // No pad to test against. Counted separately so the
+                            // census says how many these are before anyone
+                            // tightens it further.
+                            ++treesNoPad;
+                        }
                         const double scale = 0.8 + ((th >> 24) & 0x3Fu) / 63.0 * 0.6;
                         plantTreeAt(lb.site.x + lx * cy - lz * sy,
                                     lb.site.y + lx * sy + lz * cy, scale,
@@ -4417,6 +4443,9 @@ bool LevelLoader::load(const std::string& path,
                     }
                 }
             }
+            LOG_INFO << "[trees] scatter: " << treesOnPad << " on pad, "
+                     << treesOffPad << " skipped (not placeable on their pad), "
+                     << treesNoPad << " planted with no pad to test";
             if (!buildingsMc.indices.empty()) {
                 // Jolt mesh triangles are SINGLE-SIDED, and the grown plans
                 // arrive with mixed winding (offset/prow/courtyard plans flip

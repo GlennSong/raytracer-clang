@@ -1187,6 +1187,14 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // politely stops at the kerb. Prune any spot inside a carriageway; a lot
     // keeps whatever spots are genuinely on its own ground.
     int treeSpotsPruned = 0;
+    // MEASURED, not assumed: pads that come back from pushPolyClearOfRoads
+    // still covering carriageway. The relaxation pushes to width/2 +
+    // roadClearance (4.6 m) but VERIFIES at width/2 + 0.3, and when up to
+    // 20%% of vertices still fail it DELETES them and returns the rest --
+    // and a polygon missing the vertex that poked into a street can still
+    // span it, because the edge across the gap is never re-tested.
+    int padsStillInRoad = 0, padsChecked = 0;
+    int padsOnCarriageway = 0;   // the STRICT question: on the asphalt itself
     auto pruneTreeSpotsIntoRoad = [&](std::vector<Vec3>& spots) {
         if (!roads || spots.empty()) return;
         const std::size_t before = spots.size();
@@ -1320,6 +1328,100 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             return kept;
         }
         return dense;
+    };
+    // Does a finished pad still cover roadway? Samples the RING and the
+    // centroid against the same predicate the buildings use, so this asks the
+    // question at the clearance the pass actually intends.
+    // ON THE ASPHALT. clearOfRoads() carries the 4.6 m building clearance, so a
+    // park touching the pavement trips it without being in the road at all.
+    // This asks the question Glenn actually asked: is the point on the
+    // carriageway surface?
+    auto onCarriageway = [&](const Vec2& c) {
+        if (!roads) return false;
+        const RoadGraph* gs[2] = {roads, &alleyGraph};
+        for (const RoadGraph* gp : gs) {
+            const RoadGraph& g = *gp;
+            for (const RoadEdge& e : g.edges) {
+                if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(g.nodes.size()) ||
+                    e.b >= static_cast<int>(g.nodes.size())) continue;
+                const Vec2& a2 = g.nodes[e.a].pos;
+                const Vec2& b2 = g.nodes[e.b].pos;
+                Vec2 ab = b2 - a2;
+                Real len2 = ab.lengthSquared();
+                Real t = len2 > 1e-12 ? dot(c - a2, ab) / len2 : 0.0;
+                t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                const Vec2 q(a2.x + ab.x * t, a2.y + ab.y * t);
+                if ((c - q).length() < e.width * 0.5) return true;
+            }
+        }
+        return false;
+    };
+    auto padCoversRoad = [&](const Poly2& pad) {
+        if (pad.size() < 3) return false;
+        ++padsChecked;
+        for (const Vec2& v : pad)
+            if (!clearOfRoads(v)) { ++padsStillInRoad; return true; }
+        if (!clearOfRoads(centroid(pad))) { ++padsStillInRoad; return true; }
+        // Edge midpoints: the case a deleted vertex leaves behind.
+        bool near = false;
+        for (std::size_t i = 0; i < pad.size(); ++i) {
+            const Vec2 m = (pad[i] + pad[(i + 1) % pad.size()]) * 0.5;
+            if (!clearOfRoads(m)) { near = true; break; }
+        }
+        if (near) ++padsStillInRoad;
+        return near;
+    };
+    // Same sampling, strict predicate: ring, centroid and edge midpoints (the
+    // midpoint being exactly what a DELETED vertex leaves spanning a street).
+    // A pad that LIES ACROSS a street is not a pad. Vertex relaxation cannot
+    // catch this case: every corner of a big green can sit clear of the kerb
+    // while the carriageway runs straight through its middle, so the ring test
+    // passes and the polygon still furnishes the roadway (Glenn: "one lot being
+    // built in the middle of a street which is placing trees in the road").
+    // Measured: 4 of 301 pads, all of them bad == 0 -- they never went near the
+    // trim path. Sampled on the ring, the centroid AND along every edge, since
+    // a road crossing a polygon must cross its boundary somewhere.
+    auto padClearOrEmpty = [&](const Poly2& pad) -> Poly2 {
+        if (pad.size() < 3) return pad;
+        auto hit = [&](const Vec2& c) {
+            if (!roads) return false;
+            const RoadGraph* gs2[2] = {roads, &alleyGraph};
+            for (const RoadGraph* gp : gs2)
+                for (const RoadEdge& e : gp->edges) {
+                    const RoadGraph& g = *gp;
+                    if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(g.nodes.size()) ||
+                        e.b >= static_cast<int>(g.nodes.size())) continue;
+                    const Vec2& a3 = g.nodes[e.a].pos;
+                    const Vec2& b3 = g.nodes[e.b].pos;
+                    Vec2 ab3 = b3 - a3;
+                    Real l2 = ab3.lengthSquared();
+                    Real t3 = l2 > 1e-12 ? dot(c - a3, ab3) / l2 : 0.0;
+                    t3 = t3 < 0 ? 0 : (t3 > 1 ? 1 : t3);
+                    const Vec2 q3(a3.x + ab3.x * t3, a3.y + ab3.y * t3);
+                    if ((c - q3).length() < e.width * 0.5) return true;
+                }
+            return false;
+        };
+        if (hit(centroid(pad))) return Poly2{};
+        for (std::size_t i2 = 0; i2 < pad.size(); ++i2) {
+            const Vec2& A = pad[i2];
+            const Vec2& B = pad[(i2 + 1) % pad.size()];
+            const Real len = (B - A).length();
+            const int steps = std::max(1, static_cast<int>(len / 2.0));
+            for (int k2 = 0; k2 <= steps; ++k2)
+                if (hit(A + (B - A) * (static_cast<Real>(k2) / steps))) return Poly2{};
+        }
+        return pad;
+    };
+    auto padOnCarriageway = [&](const Poly2& pad) {
+        if (pad.size() < 3) return false;
+        for (const Vec2& v : pad) if (onCarriageway(v)) { ++padsOnCarriageway; return true; }
+        if (onCarriageway(centroid(pad))) { ++padsOnCarriageway; return true; }
+        for (std::size_t i = 0; i < pad.size(); ++i)
+            if (onCarriageway((pad[i] + pad[(i + 1) % pad.size()]) * 0.5)) {
+                ++padsOnCarriageway; return true;
+            }
+        return false;
     };
     // Under a FREEWAY/RAMP deck? The clearance graph carries the freeway
     // right-of-way as RoadClass::Freeway / ::Ramp edges whose width is the deck
@@ -1736,7 +1838,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 g.type = "park";
                 g.recipe = "park_block";
                 g.color = colorFor("park");
-                g.pad = pushPolyClearOfRoads(foot);
+                g.pad = pushPolyClearOfRoads(foot); g.pad = padClearOrEmpty(g.pad);
+                (void)padCoversRoad(g.pad); (void)padOnCarriageway(g.pad);
                 if (g.pad.empty()) continue;   // road-locked block: no square
                 // The city square is DESIGNED: plaza, paths, fountain,
                 // benches, hedges, tree spots (not a bare green pad).
@@ -1804,7 +1907,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 g.type = "park";
                 g.recipe = "court_green";
                 g.color = colorFor("park");
-                g.pad = pushPolyClearOfRoads(lots[li].footprint);
+                g.pad = pushPolyClearOfRoads(lots[li].footprint); g.pad = padClearOrEmpty(g.pad);
+                (void)padCoversRoad(g.pad); (void)padOnCarriageway(g.pad);
                 if (g.pad.empty()) continue;
                 // Deferred like the city square above: sculpt on the graded
                 // ground, not the pre-terrace hill.
@@ -2119,7 +2223,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 g.type = "green";
                 g.recipe = "green";
                 g.color = Vec3(0.32, 0.52, 0.30);
-                g.pad = pushPolyClearOfRoads(lot.footprint);
+                g.pad = pushPolyClearOfRoads(lot.footprint); g.pad = padClearOrEmpty(g.pad);
+                (void)padCoversRoad(g.pad); (void)padOnCarriageway(g.pad);
                 if (g.pad.empty()) return;     // road-locked sliver: no green
                 // NO pad mesh (device: "I still get the green pads here and
                 // there. We should remove them"): the terrain is the green's
@@ -2487,15 +2592,15 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             if (rec.massing == BuildingRecipe::Massing::Park) {
                 b.height = 0.18;  // low green pad — stays UNDER the road deck
                                   // lift so park edges tuck below the asphalt
-                b.pad = pushPolyClearOfRoads(lot.footprint);
+                b.pad = pushPolyClearOfRoads(lot.footprint); b.pad = padClearOrEmpty(b.pad);
+                (void)padCoversRoad(b.pad); (void)padOnCarriageway(b.pad);
                 if (b.pad.empty()) continue;   // road-locked sliver: no park
                 sculptPark(b, b.pad, b.height, meshGround,
                            mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u),
                            outParts, nullptr,
                            p.groundMeshCell > 0.5 ? p.groundMeshCell : Real(3.0));
                 pruneTreeSpotsIntoRoad(b.treeSpots);
-                pruneTreeSpotsIntoRoad(b.treeSpots);
-            out.push_back(std::move(b));
+                out.push_back(std::move(b));
                 continue;
             }
             // Grow a REAL building that FITS the lot: its oriented footprint IS the
@@ -2887,8 +2992,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                               sb.center - u * (len * 0.5) + v * (dep * 0.5)};
                     emitFoundation(b.plan, b.groundY, b.baseY);
                     pruneTreeSpotsIntoRoad(b.treeSpots);
-                pruneTreeSpotsIntoRoad(b.treeSpots);
-            out.push_back(std::move(b));
+                    out.push_back(std::move(b));
                     continue;
                 }
                 // Too short/shallow for a terrace: build as one plan building.
@@ -3080,8 +3184,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 LOG_INFO << "[plaza] at (" << b.site.x << ", " << b.site.y
                          << ") area " << static_cast<int>(area(plan)) << " m2";
                 pruneTreeSpotsIntoRoad(b.treeSpots);
-                pruneTreeSpotsIntoRoad(b.treeSpots);
-            out.push_back(std::move(b));
+                out.push_back(std::move(b));
                 continue;
             }
             if (paved) bp.entranceSteps = false;   // a downtown door is flush with the paving
@@ -3254,6 +3357,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                  << ", aspect " << dbg->rejAspect << ", fill " << dbg->rejFill
                  << ", plan " << dbg->rejPlan << ", clear " << dbg->rejClear
                  << " | tree spots pruned from carriageways " << treeSpotsPruned
+                 << " | pads still covering road " << padsStillInRoad
+                 << " (ON THE CARRIAGEWAY " << padsOnCarriageway << ")"
+                 << " of " << padsChecked
                  << ", box " << dbg->rejBox << ", frontage "
                  << dbg->rejFrontage << ", relief " << dbg->rejRelief
                  << " | alleys " << dbg->alleys.size()
