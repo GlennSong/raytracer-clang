@@ -354,6 +354,7 @@ add_library(citysim STATIC
     src/apps/citysim/traffic_rules.cpp
     src/apps/citysim/city_goals.cpp
     src/apps/citysim/city_transit.cpp   # carrying people: the shared ride primitive
+    src/apps/citysim/city_dispatch.cpp   # hailing a ride: the matching policy
     src/apps/citysim/places.cpp          # places layer: buildings → routable POIs (ADR-0066)
     src/apps/citysim/ped_graph.cpp       # pedestrian nav-graph: door-to-door walking (ADR-0066)
     src/apps/citysim/relationships.cpp   # surface-level social graph (ADR-0066)
@@ -699,6 +700,7 @@ add_executable(run_tests
     tests/test_city_sim.cpp
     tests/test_city_goals.cpp
     tests/test_city_transit.cpp
+    tests/test_city_dispatch.cpp
     tests/test_city_signals.cpp
     tests/test_city_perception.cpp
     tests/test_driver_agent.cpp
