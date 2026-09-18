@@ -3890,6 +3890,10 @@ bool LevelLoader::load(const std::string& path,
         cfg.taxiFraction = cs.value("taxiFraction", cfg.taxiFraction);
         cfg.hailChance = cs.value("hailChance", cfg.hailChance);
         cfg.hailMinMetres = cs.value("hailMinMetres", cfg.hailMinMetres);
+        cfg.busRoutes = cs.value("busRoutes", cfg.busRoutes);
+        cfg.busStops = cs.value("busStops", cfg.busStops);
+        cfg.buses = cs.value("buses", cfg.buses);
+        cfg.busMaxWalk = cs.value("busMaxWalk", cfg.busMaxWalk);
         cfg.pedDemoteRadius = cs.value("pedDemoteRadius", cfg.pedDemoteRadius);
         cfg.localHz = cs.value("localHz", cfg.localHz);
         cfg.adaptiveRate = cs.value("adaptiveRate", cfg.adaptiveRate);

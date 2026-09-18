@@ -9,6 +9,8 @@
     "dormancy": true,
     "downtownRadius": 300,
     "facadeDistance": 950,
+    "hailChance": 0.25,
+    "hailMinMetres": 350.0,
     "hubRadius": 240,
     "localHz": 30.0,
     "maxAmbient": 14000,
@@ -21,12 +23,14 @@
     "plinth": 0.45,
     "seed": 9,
     "sidewalk": 5.0,
+    "taxiFraction": 0.12,
     "tiered": true,
     "vehicles": "vehicles.lua",
     "wander": false,
-    "taxiFraction": 0.12,
-    "hailChance": 0.25,
-    "hailMinMetres": 350.0
+    "busRoutes": 4,
+    "busStops": 14,
+    "buses": 24,
+    "busMaxWalk": 220.0
   },
   "dayNight": {
     "dayMinutes": 30.0,

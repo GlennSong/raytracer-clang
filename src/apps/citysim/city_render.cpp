@@ -163,6 +163,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.taxiFraction = c.taxiFraction;
         params_.hailChance = c.hailChance;
         params_.hailMinMetres = c.hailMinMetres;
+        params_.busRoutes = c.busRoutes;
+        params_.busStops = c.busStops;
+        params_.buses = c.buses;
+        params_.busMaxWalk = c.busMaxWalk;
         params_.wander = c.wander;
         params_.agentScript = c.agentScript;
         params_.vehicleScript = c.vehicleScript;
@@ -370,9 +374,15 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // Cabs: setTaxiFraction re-marks the fleet, so it must come AFTER build.
     sim_.setHailPolicy(params_.hailChance, params_.hailMinMetres);
     sim_.setTaxiFraction(params_.taxiFraction);
+    // Buses AFTER the cabs: setBuses skips an agent already marked as a taxi.
+    sim_.setBuses(params_.busRoutes, params_.busStops, params_.buses,
+                  params_.busMaxWalk);
     // What this LEVEL asked for, beside the density line above. Nothing used
     // to print it, so a level that silently failed to opt into tiering looked
     // exactly like one that had (2026-09-16).
+    LOG_INFO << "[citysim] buses: " << params_.buses << " on "
+             << sim_.buses().routeCount() << " derived routes of " << params_.busStops
+             << " stops; riders walk <= " << params_.busMaxWalk << " m to a stop";
     LOG_INFO << "[citysim] cabs: " << (params_.taxiFraction * 100.0) << "% of drivers, hail "
              << (params_.hailChance * 100.0) << "% over " << params_.hailMinMetres << " m";
     LOG_INFO << "[citysim] sim tiers: tiered=" << (params_.tieredAgents ? "on" : "off")

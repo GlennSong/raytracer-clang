@@ -7,6 +7,7 @@
 #include "agent_grid.h"
 #include "agent_id.h"
 #include "city_goals.h"
+#include "city_bus.h"
 #include "city_dispatch.h"
 #include "city_transit.h"
 #include "places.h"
@@ -634,6 +635,12 @@ public:
     // Hailed, or already promised a cab: either way the agent is WAITING and
     // must not be re-dispatched on foot by the goal pass.
     bool awaitingRide(int i) const {
+        // A BUS RIDER STANDING AT A STOP counts too: the same hazard as the
+        // taxi, one vehicle later. Without this the goal pass would relaunch
+        // their trip on foot every tick and they would walk off before the bus
+        // came. (A rider still WALKING to the stop is `moving`, so the GoTo
+        // branch leaves them alone anyway.)
+        if (const BusTrip* bt = buses_.tripOf(i)) { if (!bt->aboard) return true; }
         return dispatch_.isWaiting(i) || dispatch_.driverFor(i) >= 0;
     }
     const Dispatch& dispatch() const { return dispatch_; }
@@ -643,6 +650,22 @@ public:
     // hail one. Both persist across a rebuild, like the wander and tier knobs:
     // the host owns them.
     void setTaxiFraction(Real f);
+    // BUSES. `routes` loops of `stopsPerRoute` stops are derived from the nav
+    // graph (city_bus.h), and `busCount` drivers are put on them. `maxWalk`
+    // bounds how far a rider will walk to a stop -- and so, in practice, how
+    // often a bus is worth taking at all.
+    void setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk);
+    const BusNetwork& buses() const { return buses_; }
+    bool isBus(int i) const;
+    // Legs a bus could not route and skipped. Evidence, not decoration: the
+    // stall this counts is what stopped anyone boarding.
+    long busSkippedLegs() const { return busSkippedLegs_; }
+    long busStopsServed() const { return busStopsServed_; }
+    // Discriminates the two ways a waiting rider is never carried: the bus
+    // never OFFERED (attempts 0 -> it has not come round since they arrived)
+    // or it offered and RideBook refused (attempts > 0, refused > 0).
+    long busBoardAttempts() const { return busBoardAttempts_; }
+    long busBoardRefused() const { return busBoardRefused_; }
     // `chance` is the odds a walker facing a trip at least `minMetres` long
     // hails instead of setting off on foot. 0 disables hailing entirely.
     void setHailPolicy(Real chance, Real minMetres) {
@@ -722,12 +745,15 @@ private:
     // per-AGENT table beats a per-archetype one, because being a taxi is a job,
     // not a species. Everything else still goes through goalsFor.
     GoalTable& tableFor(const Agent& a) {
-        return isTaxi(indexOf(a)) ? taxiTable_ : goalsFor(a.archetype);
+        const int i = indexOf(a);
+        if (isBus(i)) return busTable_;
+        return isTaxi(i) ? taxiTable_ : goalsFor(a.archetype);
     }
     const GoalTable& tableFor(const Agent& a) const {
-        return isTaxi(indexOf(a)) ? taxiTable_
-                                  : (a.archetype == Agent::Mode::Driver ? goalDriver_
-                                                                        : goalPed_);
+        const int i = indexOf(a);
+        if (isBus(i)) return busTable_;
+        return isTaxi(i) ? taxiTable_
+                         : (a.archetype == Agent::Mode::Driver ? goalDriver_ : goalPed_);
     }
     void installGoalTables(GoalTable pedestrian, GoalTable driver);
     bool launchClear(const Agent& a, int node) const;   // no moving car near the spawn
@@ -846,6 +872,13 @@ private:
     Dispatch dispatch_;              // who wants a ride (city_dispatch.h)
     std::vector<uint8_t> taxi_;      // per-agent: runs the taxi table
     GoalTable taxiTable_;
+    BusNetwork buses_;
+    std::vector<int> busRoute_, busStop_;   // per agent; -1 = not a bus
+    GoalTable busTable_;
+    Real busMaxWalk_ = 0;
+    long busSkippedLegs_ = 0;
+    long busStopsServed_ = 0;
+    long busBoardAttempts_ = 0, busBoardRefused_ = 0;
     Real taxiFraction_ = 0;
     Real hailChance_ = 0;
     Real hailMinMetres_ = 400;

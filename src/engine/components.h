@@ -583,6 +583,13 @@ struct CitySimConfig {
     float taxiFraction = 0.0f;
     float hailChance = 0.0f;
     float hailMinMetres = 400.0f;
+    // BUSES (city_bus.h): `busRoutes` derived loops of `busStops` stops, with
+    // `buses` drivers on them. `busMaxWalk` is how far a rider will walk to a
+    // stop, and is in practice the knob that decides how often a bus is used.
+    int busRoutes = 0;
+    int busStops = 8;
+    int buses = 0;
+    float busMaxWalk = 120.0f;
     // Sim tick rate for LOCAL agents (Hz). 0 = every fixed step (historical).
     // 30 halves the traffic sim's cost; poses extrapolate between ticks.
     float localHz = 0.0f;

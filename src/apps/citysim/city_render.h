@@ -68,6 +68,10 @@ struct CityRenderParams {
     Real taxiFraction = 0.0;
     Real hailChance = 0.0;
     Real hailMinMetres = 400.0;
+    int busRoutes = 0;
+    int busStops = 8;
+    int buses = 0;
+    Real busMaxWalk = 120.0;
     // SIM RATE (P8.2d). Traffic is not physics: agents follow lanes, so a
     // bigger dt costs nothing but precision. 0 or >= the fixed rate keeps the
     // historical every-step tick (and every existing test/gate bit-identical);

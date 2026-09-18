@@ -18,6 +18,8 @@ using engine::Vec2;
 using engine::NavGraph;
 
 namespace {
+// How many a bus carries. Beyond this it drives past a stop full.
+constexpr int kBusSeats = 24;
 constexpr Real kWalkSpeed = 1.4;
 // "Wakes on nothing": a rest with no dwell and no commute. Large enough to mean
 // never in any real session, finite so the arithmetic stays ordinary.
@@ -1270,6 +1272,38 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
                 started = a.moving;
             }
             break;
+        case GoalTarget::Stop: {
+            // The bus's NEXT stop. arriveOrChain advances the index before the
+            // table is asked what comes next, so by the time this runs it
+            // already names the stop after the one just served.
+            const int self2 = indexOf(a);
+            if (isBus(self2)) {
+                const int r = busRoute_[static_cast<std::size_t>(self2)];
+                const int si = busStop_[static_cast<std::size_t>(self2)];
+                if (r >= 0 && r < buses_.routeCount()) {
+                    const BusRoute& br = buses_.route(r);
+                    if (si >= 0 && si < static_cast<int>(br.stops.size())) {
+                        startTrip(a, origin, br.stops[static_cast<std::size_t>(si)].node,
+                                  fromRest);
+                        started = a.moving;
+                        // A STOP IT CANNOT REACH IS SKIPPED. The index only
+                        // advances on ARRIVAL, so without this a bus whose next
+                        // stop is unroutable retries that same stop for ever:
+                        // NoRoute -> Drive -> the same node -> NoRoute. It
+                        // stalls mid-route and never serves the stops where
+                        // people are waiting, which is exactly what the
+                        // end-to-end test caught -- buses drove, riders waited,
+                        // and nobody was ever picked up.
+                        if (!started) {
+                            busStop_[static_cast<std::size_t>(self2)] =
+                                (si + 1) % static_cast<int>(br.stops.size());
+                            ++busSkippedLegs_;
+                        }
+                    }
+                }
+            }
+            break;
+        }
         case GoalTarget::Fare:
         case GoalTarget::Drop: {
             // DYNAMIC targets: the node comes from the hail this driver was
@@ -1374,6 +1408,29 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
             // from the agent's own brain stream so it is reproducible; a hail
             // that finds no cab simply waits, and the rider is parked at the
             // kerb until one is free (hail(), awaitingRide()).
+            // THE BUS FIRST, when one genuinely helps: it is the cheaper
+            // and commoner way to cross a city, and planTrip already refuses
+            // to offer one that saves no walking. Unlike a cab, the rider must
+            // WALK TO THE STOP -- so this starts an ordinary trip to the stop
+            // node, and arriveOrChain parks them there to wait.
+            if (a.mode == Agent::Mode::Pedestrian && nav_ && !buses_.empty() &&
+                !isBus(self) && !buses_.tripOf(self)) {
+                const int to = goalNodeFor(a, s.target);
+                if (to >= 0 && from >= 0 && from < nav_->nodeCount() &&
+                    to < nav_->nodeCount()) {
+                    const Vec2 p0 = nav_->nodes[static_cast<std::size_t>(from)];
+                    const Vec2 p1 = nav_->nodes[static_cast<std::size_t>(to)];
+                    BusTrip bt = buses_.planTrip(p0, p1, busMaxWalk_);
+                    if (bt.valid() && buses_.waitFor(self, bt)) {
+                        const int stopNode =
+                            buses_.route(bt.route)
+                                .stops[static_cast<std::size_t>(bt.fromStop)].node;
+                        startTrip(a, from, stopNode, /*fromRest=*/true);
+                        if (a.moving) return;
+                        buses_.stopWaiting(self);   // could not reach the stop
+                    }
+                }
+            }
             if (hailChance_ > 0 && a.mode == Agent::Mode::Pedestrian && nav_ &&
                 !isTaxi(self) && dispatch_.driverFor(self) < 0) {
                 const int to = goalNodeFor(a, s.target);
@@ -1508,6 +1565,39 @@ int CitySim::goalNodeFor(const Agent& a, GoalTarget target) const {
         case GoalTarget::Shop: return a.shop;
         default: return -1;
     }
+}
+
+bool CitySim::isBus(int i) const {
+    return i >= 0 && i < static_cast<int>(busRoute_.size()) &&
+           busRoute_[static_cast<std::size_t>(i)] >= 0;
+}
+
+void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk) {
+    busMaxWalk_ = maxWalk;
+    buses_.clear();
+    busRoute_.assign(agents_.size(), -1);
+    busStop_.assign(agents_.size(), -1);
+    if (!nav_ || routes <= 0 || busCount <= 0) return;
+    buses_.build(nav_->nodes, routes, stopsPerRoute, rng_ ? rng_ : 1u);
+    if (buses_.empty()) return;
+    if (busTable_.stateCount() == 0) busTable_ = busGoals();
+    // Buses come off the DRIVER pool, spread by index like the cabs, and are
+    // dealt round-robin across the routes so no route is left without one.
+    int made = 0;
+    for (std::size_t i = 0; i < agents_.size() && made < busCount; ++i) {
+        if (agents_[i].archetype != Agent::Mode::Driver) continue;
+        if (isTaxi(static_cast<int>(i))) continue;   // a cab is not also a bus
+        const int r = made % buses_.routeCount();
+        busRoute_[i] = r;
+        // Start each bus at a DIFFERENT stop on its loop, so a route's buses
+        // are spaced round it instead of nose to tail.
+        const int stops = static_cast<int>(buses_.route(r).stops.size());
+        busStop_[i] = stops > 0 ? (made / buses_.routeCount()) % stops : 0;
+        agents_[i].goal = busTable_.entry();
+        agents_[i].goalHours = 0;
+        ++made;
+    }
+    (void)stopsPerRoute;   // the network already has them; logging lives in city_render
 }
 
 void CitySim::setTaxiFraction(Real f) {
@@ -2447,6 +2537,45 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
 void CitySim::arriveOrChain(Agent& a, Real vArrive) {
     a.moving = false;
     a.speed = 0;
+    // A WALKER REACHING THE STOP THEY WERE HEADING FOR: stand and wait for the
+    // bus rather than carrying on with the day. The goal state is left exactly
+    // as it was, so once the bus sets them down the trip they were originally
+    // making simply resumes from wherever that is.
+    {
+        const int self = indexOf(a);
+        if (a.mode == Agent::Mode::Pedestrian) {
+            const BusTrip* bt = buses_.tripOf(self);
+            if (bt && !bt->aboard) return;   // already stopped above
+        }
+    }
+    // A BUS AT A STOP: set down everyone whose stop this is, then pick up
+    // everyone waiting here for this route, then move the index on. ALIGHT
+    // FIRST -- a full bus that boards first would drive past the people at the
+    // very stop where it just freed seats.
+    {
+        const int self = indexOf(a);
+        if (isBus(self)) {
+            const int r = busRoute_[static_cast<std::size_t>(self)];
+            const int si = busStop_[static_cast<std::size_t>(self)];
+            if (r >= 0 && r < buses_.routeCount()) {
+                const int stops = static_cast<int>(buses_.route(r).stops.size());
+                if (si >= 0 && si < stops) {
+                    for (int p : buses_.alightingAt(r, si)) {
+                        alightRide(p);
+                        buses_.forget(p);
+                    }
+                    for (int p : buses_.waitingAt(r, si)) {
+                        if (rides_.load(self) >= kBusSeats) break;
+                        ++busBoardAttempts_;
+                        if (boardRide(p, self)) buses_.markAboard(p);
+                        else ++busBoardRefused_;
+                    }
+                    ++busStopsServed_;
+                    busStop_[static_cast<std::size_t>(self)] = (si + 1) % stops;
+                }
+            }
+        }
+    }
     // A CAB AT ITS STOP. The passenger changes vehicle HERE, before the table
     // is asked what comes next, so the transition out of ToPickup already has
     // them aboard and the one out of ToDrop already has them on the pavement.

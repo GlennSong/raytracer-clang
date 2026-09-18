@@ -39,7 +39,7 @@ enum class GoalAction : uint8_t {
 // Drop: that fare's destination. Both are DYNAMIC -- unlike Work/Home/Shop
 // they are not a field on the agent, they are looked up in the Dispatch,
 // which is what lets one table drive a taxi, a Lyft or a bus.
-enum class GoalTarget : uint8_t { None, Work, Home, Random, Shop, Fare, Drop };
+enum class GoalTarget : uint8_t { None, Work, Home, Random, Shop, Fare, Drop, Stop };
 
 // The events CitySim EMITS at fixed points — the full trigger vocabulary a
 // table may transition on. Emission lives in C++ (clock windows, arrival,
@@ -121,6 +121,8 @@ GoalTable defaultScheduleGoals();
 GoalTable wanderGoals(bool driver);
 // A TAXI's day: cruise until dispatched, collect, deliver, cruise again.
 GoalTable taxiGoals();
+// A BUS's day: drive the loop, for ever. One state.
+GoalTable busGoals();
 
 }  // namespace citysim
 

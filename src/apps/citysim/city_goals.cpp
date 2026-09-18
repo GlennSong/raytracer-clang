@@ -24,6 +24,7 @@ const char* targetName(GoalTarget t) {
         case GoalTarget::Shop: return "shop";
         case GoalTarget::Fare: return "fare";
         case GoalTarget::Drop: return "drop";
+        case GoalTarget::Stop: return "stop";
         default: return "none";
     }
 }
@@ -157,6 +158,20 @@ GoalTable wanderGoals(bool driver) {
         t.addTransition("RoamRest", GoalEvent::Idle, "Roam");
     }
     t.setEntry("Roam");
+    return t;
+}
+
+GoalTable busGoals() {
+    GoalTable t;
+    // ONE state. A bus has no decisions to make: it drives to the next stop,
+    // for ever. Arriving CHAINS into the next leg (arriveOrChain), and the
+    // stop index advances there too, so the self-loop is the whole timetable.
+    t.addState("Drive", GoalAction::GoTo, GoalTarget::Stop, Activity::Commuting);
+    t.addTransition("Drive", GoalEvent::Arrived, "Drive");
+    // A leg it cannot route is skipped, not fatal: the stop index has already
+    // moved on, so the bus simply tries the one after it.
+    t.addTransition("Drive", GoalEvent::NoRoute, "Drive");
+    t.setEntry("Drive");
     return t;
 }
 
