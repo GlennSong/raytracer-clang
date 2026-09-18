@@ -1060,6 +1060,23 @@ void CitySim::placeFromSchedule(int idx) {
             : s.where == Snapshot::Where::AtWork ? Agent::Activity::AtWork
             : s.where == Snapshot::Where::ToWork ? Agent::Activity::Commuting
                                                  : Agent::Activity::Returning;
+        // A BUS HAS NO DAY. Re-seating works by finding the table state wearing
+        // the schedule's activity label -- and a service vehicle's table has
+        // states wearing those labels for its own reasons: OffDuty is
+        // Activity::AtHome. So any clock jump that said "this agent is at home
+        // now" parked the ENTIRE FLEET off-duty, permanently, and no bus moved
+        // again (measured: 0% moving, 0.0 m over 91 samples, every bus goal=2).
+        // A bus or a cab runs its own table from its own entry; a commuter's
+        // schedule has nothing to say about it.
+        {
+            const int who = indexOf(a);
+            if (isBus(who) || isTaxi(who)) {
+                a.goal = tableFor(a).entry();
+                a.goalHours = 0;
+                a.wakeAt = -1;
+                return;
+            }
+        }
         // Seat the agent on the table state wearing that label (the same
         // remapping installGoalTables uses), so its next transition is the one
         // its day actually calls for.
@@ -1576,8 +1593,13 @@ void CitySim::installGoalTables(GoalTable pedestrian, GoalTable driver) {
     for (Agent& a : agents_) {
         const GoalTable& t = tableFor(a);
         int mapped = t.entry();
-        for (int s = 0; s < t.stateCount(); ++s)
-            if (t.state(s).activity == a.activity) { mapped = s; break; }
+        // Service vehicles keep their own entry, for the reason in
+        // placeFromSchedule: matching on an activity LABEL would seat a bus in
+        // whatever state happens to wear AtHome, which is its depot.
+        const int who = indexOf(a);
+        if (!isBus(who) && !isTaxi(who))
+            for (int s = 0; s < t.stateCount(); ++s)
+                if (t.state(s).activity == a.activity) { mapped = s; break; }
         a.goal = mapped;
         a.goalHours = 0;
     }

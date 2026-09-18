@@ -1840,6 +1840,8 @@ void CityRenderSystem::step(World& world, Real dt) {
                 const Agent& a = sim_.agents()[ai];
                 LOG_INFO << "[bus] agent " << ai << " at (" << a.pos.x << ", "
                          << a.pos.y << ") moving=" << (a.moving ? 1 : 0)
+                         << " far=" << (a.far() ? 1 : 0)
+                         << " goal=" << a.goal
                          << " riders=" << sim_.rides().load(static_cast<int>(ai));
                 ++shown;
             }

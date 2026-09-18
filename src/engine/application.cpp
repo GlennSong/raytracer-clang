@@ -780,6 +780,20 @@ std::string Application::handleControlCommand(const std::string& line) {
                       std::atan2(fwd.x, -fwd.z) * kRadToDeg);
         return buf;
     }
+    if (cmd.name == "ride") {
+        // Board the nearest bus or cab, or get off (city_player_transit.h).
+        // NPCs have been riding since RideBook; this is the player's seat.
+        const std::string what = cmd.args.empty() ? "any" : cmd.args[0];
+        double v = -1.0;
+        if (what == "off") v = 0.0;
+        else if (what == "bus") v = 1.0;
+        else if (what == "taxi" || what == "cab") v = 2.0;
+        else if (what == "any") v = 3.0;
+        else return "err usage: ride bus|taxi|any|off";
+        settingsStore.setDouble("player.rideRequest", v);
+        return "ok ride " + what + " staged";
+    }
+
     if (cmd.name == "detach") {
         // Drive the F toggle from a script so the fast-travel path is testable
         // without a keyboard (it was reported fixed twice while broken).
