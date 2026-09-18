@@ -53,7 +53,15 @@ public:
     // The cab must clear the door it is entered through (core_plan's kDoorH =
     // human::DOOR_HEIGHT = 2.7) with a little header, and still fit inside a
     // 3.2 m storey once its floor and ceiling slabs are counted.
-    static constexpr Real CAB_W = 1.8, CAB_D = 1.6, CAB_H = 2.9;
+    //
+    // WIDTH is set by the door pocket, not by taste: a leaf is kLeafW = 0.55
+    // and slides a full leaf clear of a 1.1 m opening, so the front wall
+    // beside the opening must be at least 0.55 wide to swallow it --
+    // CAB_W/2 - 0.55 >= 0.55, hence 2.2. At the old 1.8 the pocket was 0.35
+    // and each leaf drove 0.2 m THROUGH the side wall every time the doors
+    // opened, which is what Glenn saw: "the elevator door looks weird from
+    // the inside". 2.2 + two 0.05 walls = 2.3, inside core_plan's 2.4 shaft.
+    static constexpr Real CAB_W = 2.2, CAB_D = 1.6, CAB_H = 2.9;
 
     // What the HUD shows.
     struct Status {

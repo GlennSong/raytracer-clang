@@ -161,14 +161,40 @@ ElevatorSystem::Bank& ElevatorSystem::ensureBank(World& world, PhysicsWorld* phy
         // (the hoistway leaves slide inside the wall, these at the cab's own
         // front), closed while the cab moves.
         const Real vDoor = vFront + 0.02;
-        const Part parts[7] = {
+        // Coincident faces are what z-fights, and the old cab was full of them:
+        // the floor's TOP face sat exactly at cab.y, and so did the BOTTOM face
+        // of the back wall, both side walls and both door leaves -- a
+        // flickering seam right round the cab ("there's z-fighting on the
+        // floor"). Every vertical part now starts kSink BELOW the floor's top
+        // face, buried in the slab, and the ceiling dips kSink below the wall
+        // tops. The floor itself keeps its top at cab.y, so walking in from the
+        // landing is still stepless.
+        constexpr Real kSink = 0.03;
+        const Real wHalf = (CAB_H + kSink) * 0.5, wMidY = (CAB_H - kSink) * 0.5;
+        const Real dTop = hw.doorHeight;
+        const Real dHalf = (dTop + kSink) * 0.5, dMidY = (dTop - kSink) * 0.5;
+        // The cab FRONT WALL, which the old cab simply did not have: a jamb
+        // either side of the opening for the leaves to pocket into, and a
+        // header across the top. It sits at vPanel, INSIDE the leaves (larger v
+        // = nearer a rider), so an open leaf is occluded by it exactly the way
+        // a real car door pocket works. The header is 1 cm thinner in v than
+        // the jambs and overlaps them in u, so no two faces of the front wall
+        // ever share a plane either.
+        const Real vPanel = vDoor + 0.06;
+        const Real jambIn = kLeafW;               // half the clear opening
+        const Real jambW = hw2 - jambIn;          // the pocket; == kLeafW at CAB_W 2.2
+        const Real hdrH = std::max(Real(0.005), (CAB_H - dTop) * 0.5);
+        const Part parts[10] = {
             {{hw2 + 0.05, 0.06, hDeck}, {u0, -0.06, vDeck}, false, true},                    // floor
-            {{hw2 + 0.05, 0.03, hDeck}, {u0, CAB_H + 0.03, vDeck}, true, false},              // ceiling
-            {{hw2 + 0.05, CAB_H * 0.5, 0.05}, {u0, CAB_H * 0.5, vFront + CAB_D + 0.05}, false, false},   // back
-            {{0.05, CAB_H * 0.5, hd2 + 0.05}, {u0 - hw2 - 0.05, CAB_H * 0.5, vMid}, false, false},       // left
-            {{0.05, CAB_H * 0.5, hd2 + 0.05}, {u0 + hw2 + 0.05, CAB_H * 0.5, vMid}, false, false},       // right
-            {{kLeafW * 0.5, hw.doorHeight * 0.5, kLeafT * 0.5}, {hw.doorX - kLeafW * 0.5, hw.doorHeight * 0.5, vDoor}, false, false},  // left leaf
-            {{kLeafW * 0.5, hw.doorHeight * 0.5, kLeafT * 0.5}, {hw.doorX + kLeafW * 0.5, hw.doorHeight * 0.5, vDoor}, false, false},  // right leaf
+            {{hw2 + 0.05, 0.03, hDeck}, {u0, CAB_H, vDeck}, true, false},                    // ceiling
+            {{hw2 + 0.05, wHalf, 0.05}, {u0, wMidY, vFront + CAB_D + 0.05}, false, false},   // back
+            {{0.05, wHalf, hd2 + 0.05}, {u0 - hw2 - 0.05, wMidY, vMid}, false, false},       // left
+            {{0.05, wHalf, hd2 + 0.05}, {u0 + hw2 + 0.05, wMidY, vMid}, false, false},       // right
+            {{kLeafW * 0.5, dHalf, kLeafT * 0.5}, {hw.doorX - kLeafW * 0.5, dMidY, vDoor}, false, false},  // left leaf
+            {{kLeafW * 0.5, dHalf, kLeafT * 0.5}, {hw.doorX + kLeafW * 0.5, dMidY, vDoor}, false, false},  // right leaf
+            {{jambW * 0.5, wHalf, 0.03}, {hw.doorX - jambIn - jambW * 0.5, wMidY, vPanel}, false, false},  // left jamb
+            {{jambW * 0.5, wHalf, 0.03}, {hw.doorX + jambIn + jambW * 0.5, wMidY, vPanel}, false, false},  // right jamb
+            {{jambIn + 0.05, hdrH, 0.02}, {u0, dTop + hdrH, vPanel}, false, false},                       // header
         };
         cab.doorLeft = 5;
         cab.doorRight = 6;
