@@ -7,6 +7,7 @@
 #include "agent_grid.h"
 #include "agent_id.h"
 #include "city_goals.h"
+#include "city_transit.h"
 #include "places.h"
 #include "relationships.h"
 #include "traffic_signal.h"
@@ -613,6 +614,16 @@ public:
     // (first state with a matching label, else the entry state); a rebuild or
     // setWander() resets back to the built-ins.
     void setGoalTables(GoalTable pedestrian, GoalTable driver);
+
+    // CARRYING PEOPLE (city_transit.h). RideBook is the bare relation; these
+    // apply the sim-side POLICY that goes with it. Boarding clears `moving`,
+    // and that one flag is all it takes: the pedestrian overlap solver, the
+    // sensed_ scan and advance() ALREADY gate on it, so a passenger drops out
+    // of all three without any of them learning what a ride is.
+    bool boardRide(int passenger, int driver);
+    void alightRide(int passenger);
+    const RideBook& rides() const { return rides_; }
+    bool riding(int i) const { return rides_.driverOf(i) >= 0; }
     // Keyed by ARCHETYPE (see goalsFor): pass an agent's `archetype`, not its
     // current `mode`.
     const GoalTable& goalTable(Agent::Mode archetype) const {
@@ -787,6 +798,7 @@ private:
                                               // nest inside an agent query)
     mutable std::vector<int> queryScratch_;   // shared candidate buffer (queries
     std::vector<int> pairScratch_;   // car-vs-car pair query (stepTick)
+    RideBook rides_;                 // who is riding with whom (city_transit.h)
                                               // never nest across a live iteration)
     std::vector<int> tierScratch_;            // tierPass promotion candidates
     std::vector<int> dormantScratch_;         // tierPass wake candidates

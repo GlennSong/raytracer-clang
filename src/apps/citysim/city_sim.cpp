@@ -1432,6 +1432,23 @@ void CitySim::setGoalTables(GoalTable pedestrian, GoalTable driver) {
     installGoalTables(std::move(pedestrian), std::move(driver));
 }
 
+bool CitySim::boardRide(int passenger, int driver) {
+    const int n = static_cast<int>(agents_.size());
+    if (passenger < 0 || passenger >= n || driver < 0 || driver >= n) return false;
+    if (!rides_.board(passenger, driver)) return false;
+    Agent& p = agents_[static_cast<std::size_t>(passenger)];
+    p.moving = false;   // the one flag; see the note on boardRide in the header
+    p.speed = 0;
+    return true;
+}
+
+void CitySim::alightRide(int passenger) {
+    rides_.alight(passenger);
+    // Set down RESTING, wherever the vehicle stopped. The next goal tick sees a
+    // GoTo state with !moving and launches a fresh trip from here -- which is
+    // exactly "got out and walked the rest of the way", with no special case.
+}
+
 void CitySim::setWander(bool on) {
     wander_ = on;
     installGoalTables(on ? wanderGoals(false) : defaultScheduleGoals(),
@@ -2742,7 +2759,9 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         Agent& a = agents_[ai];
         const std::size_t i = static_cast<std::size_t>(ai);
         if (a.playerControlled || a.released) continue;
-        goalThink(a, dt * hoursPerSecond);
+        // A RIDER does not re-plan: its GoTo state would see !moving and
+        // relaunch the trip on foot every tick, walking it out of the car.
+        if (!riding(ai)) goalThink(a, dt * hoursPerSecond);
         // A departure moved the pose (idle verge -> lane start): re-hash NOW so
         // every later grid consumer this step sees current positions.
         grid_.place(static_cast<int>(i), a.pos);
@@ -3288,6 +3307,22 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             vehicles_[a.vehicle].heading = a.heading;
         }
     }
+    // RIDERS (city_transit.h) take their driver's pose. LAST, after every
+    // driver has advanced, so a passenger lands on its driver's final position
+    // for the tick rather than trailing it by one. rides() is sorted ascending
+    // by passenger, so traversal order -- and the result -- never depends on
+    // hash order (ADR-0002).
+    for (const std::pair<int, int>& r : rides_.rides()) {
+        const int n = static_cast<int>(agents_.size());
+        if (r.first < 0 || r.first >= n || r.second < 0 || r.second >= n) continue;
+        Agent& rider = agents_[static_cast<std::size_t>(r.first)];
+        const Agent& drv = agents_[static_cast<std::size_t>(r.second)];
+        rider.pos = drv.pos;
+        rider.elevation = drv.elevation;
+        rider.heading = drv.heading;
+        rider.speed = drv.speed;
+        grid_.place(r.first, rider.pos);
+    }
     phaseMark(phase_.advance);
     phase_.total += std::chrono::duration<double, std::micro>(
                         std::chrono::steady_clock::now() - stepBegin).count();
@@ -3382,7 +3417,7 @@ void CitySim::tickV(int i, Real hoursPerSecond) {
     a.vLastTick = simSeconds_;
     if (dts <= 1e-9) return;
     if (a.playerControlled || a.released) return;
-    if (!a.moving) goalThink(a, dts * hoursPerSecond);
+    if (!a.moving && !riding(i)) goalThink(a, dts * hoursPerSecond);
     if (a.moving) vAdvance(a, dts);
     grid_.place(i, a.pos);   // the far tier re-hashes on its tick, not per step
 }
