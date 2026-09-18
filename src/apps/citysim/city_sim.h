@@ -271,7 +271,7 @@ struct Agent {
 // The kind of body a vehicle wears (ADR-0061 Phase 4: one composable vehicle,
 // varied by a Body component). Dimensions come from the shared fleet table below,
 // so the sim (following distance, colliders) and the renderer (mesh, lift) agree.
-enum class VehicleType : uint8_t { Sedan, Hatchback, SUV, Pickup, Van, BoxTruck };
+enum class VehicleType : uint8_t { Sedan, Hatchback, SUV, Pickup, Van, BoxTruck, Bus };
 
 // A body's physical dimensions (metres) + its type. `length` is the travel axis;
 // car-following keeps cars a bumper apart from THIS, so a longer truck naturally
@@ -332,6 +332,25 @@ public:
     int fleetSize() const {
         return fleet_.empty() ? vehicleFleetSize()
                               : static_cast<int>(fleet_.size());
+    }
+    // AMBIENT traffic and kerbside parking skip TRANSIT bodies. A bus is 11.4 m
+    // and belongs to a route, not to a parking bay -- the moment it entered the
+    // ordinary rotation it broke 692 parking-band checks, because one car in
+    // thirteen became a bus and no bay is that long. The sim and the renderer
+    // both go through this, so a body and its mesh can never disagree.
+    int ambientSlotFor(int i) const {
+        const int n = fleetSize();
+        if (n <= 0) return 0;
+        int usable = 0;
+        for (int s2 = 0; s2 < n; ++s2)
+            if (fleetBody(s2).type != VehicleType::Bus) ++usable;
+        if (usable <= 0) return ((i % n) + n) % n;   // a fleet of only buses
+        int want = ((i % usable) + usable) % usable;
+        for (int s2 = 0; s2 < n; ++s2) {
+            if (fleetBody(s2).type == VehicleType::Bus) continue;
+            if (want-- == 0) return s2;
+        }
+        return 0;
     }
     const VehicleBody& fleetBody(int slot) const {
         if (fleet_.empty()) return vehicleFleetBody(slot);

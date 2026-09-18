@@ -1,5 +1,7 @@
 #include "city_render.h"
 
+#include "bus_stop_props.h"
+
 #include "car_lamps.h"                                // lamp decision core (ADR-0065)
 #include "screen_project.h"                           // worldToScreen (place labels)
 #include "../../engine/asset_manager.h"
@@ -353,6 +355,11 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                     body.height = size.y;
                     body.length = size.z;
                 }
+                // Which slot is the BUS, by the script's own class name --
+                // so the transit fleet draws as a bus without a hard-coded
+                // index that a reordered fleet would silently break.
+                if (className == "bus") busVariant_ = v;
+                else if (body.type == VehicleType::Bus) busVariant_ = v;
                 catalogue.push_back(body);
             }
             sim_.setFleet(std::move(catalogue));
@@ -377,6 +384,25 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // Buses AFTER the cabs: setBuses skips an agent already marked as a taxi.
     sim_.setBuses(params_.busRoutes, params_.busStops, params_.buses,
                   params_.busMaxWalk);
+    // The stops themselves, as something you can SEE: a pole, a route-coloured
+    // sign and a bench (Glenn: "We should have stops with benches and signs for
+    // bus stops so that we know where the route is"). The ground sampler goes
+    // in as a callback so the prop builder needs nothing from this class but a
+    // height. The entities are recorded so a rebuild can drop them.
+    std::vector<Vec3> stopPositions;
+    if (!sim_.buses().empty() && assets) {
+        const int stops = buildBusStopProps(
+            world, *assets, sim_.buses(), nav_,
+            [this](Real x, Real z) { return groundAt(x, z); }, &busStopProps_,
+            &stopPositions);
+        LOG_INFO << "[citysim] bus stops furnished: " << stops << " of "
+                 << (params_.busRoutes * params_.busStops)
+                 << " (a stop with no kerbed street gets none)";
+        for (std::size_t k = 0; k < stopPositions.size() && k < 4; ++k)
+            LOG_INFO << "[citysim]   stop furniture " << k << " at ("
+                     << stopPositions[k].x << ", " << stopPositions[k].y << ", "
+                     << stopPositions[k].z << ")";
+    }
     // What this LEVEL asked for, beside the density line above. Nothing used
     // to print it, so a level that silently failed to opt into tiering looked
     // exactly like one that had (2026-09-16).
@@ -1463,7 +1489,14 @@ void CityRenderSystem::syncGroups(World& world) {
             if (a.released) continue;     // commandeered: its PHYSICAL car replaced it
             // Each driver keeps the same variant (keyed off its car index), so a
             // given car is always the same model + colour.
-            int v = (a.vehicle >= 0 ? a.vehicle : 0) % drawVariantCount();
+            // A BUS draws as the bus slot, not as whatever body its vehicle
+            // index happened to land on. Everything else keeps its stable
+            // per-car variant.
+            int v = sim_.ambientSlotFor(a.vehicle >= 0 ? a.vehicle : 0);
+            if (v >= drawVariantCount()) v %= drawVariantCount();
+            if (busVariant_ >= 0 && sim_.isBus(static_cast<int>(ai)) &&
+                busVariant_ < drawVariantCount())
+                v = busVariant_;
             if (!cars[v]) continue;
             // R5: a physically-possessed agent renders its Jolt body's pose —
             // real suspension, pitch and roll — while the sim's kinematic

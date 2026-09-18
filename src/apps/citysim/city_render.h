@@ -403,6 +403,10 @@ private:
 
     CityRenderParams params_;
     engine::NavGraph nav_;
+    // Bus-stop furniture entities, kept so a rebuild can remove the old set
+    // rather than stacking a second pole on every stop.
+    std::vector<engine::Entity> busStopProps_;
+    int busVariant_ = -1;   // fleet slot that draws as a bus (-1 = none)
     CitySim sim_;
     std::vector<engine::Entity> carGroups_;   // one per car variant (body + colour)
     std::unordered_map<int, engine::Mat4> physPose_;      // R5: agent -> body pose

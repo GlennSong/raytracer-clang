@@ -304,10 +304,15 @@ TEST_CASE(fleet_catalogue_is_the_size_the_car_is_built_at) {
         std::string className;
         std::string err;
         CHECK(loadFleetCatalogueEntry(a.vm, slot, size, className, &err));
-        CHECK(size.x > 1.0 && size.x < 3.0);     // width
-        CHECK(size.y > 1.0 && size.y < 3.5);     // height
-        CHECK(size.z > 3.0 && size.z < 8.0);     // length
         CHECK(!className.empty());
+        // The length bound said "a car is 3 to 8 m", which was true while every
+        // fleet slot WAS a car. The transit slot is an 11.4 m bus, so the bound
+        // is per-class now rather than being quietly loosened for everyone --
+        // an 8 m "car" should still fail.
+        const bool transit = (className == "bus");
+        CHECK(size.x > 1.0 && size.x < 3.0);                          // width
+        CHECK(size.y > 1.0 && size.y < (transit ? 4.0 : 3.5));        // height
+        CHECK(size.z > 3.0 && size.z < (transit ? 15.0 : 8.0));       // length
 
         CarBodyRecipe body;
         CHECK(loadFleetCarBody(a.vm, slot, body, &err));

@@ -192,7 +192,8 @@ vehicle.from_class = from_class
 -- `lights` mark the front/rear lamp positions the emissive lamp pass draws
 -- (city_render syncCarLamps). Car faces +Z; x>0 = right.
 --
--- The fleet is 3 sedans, 3 hatchbacks, 3 SUVs, a pickup, a van, a box truck.
+-- The fleet is 3 sedans, 3 hatchbacks, 3 SUVs, a pickup, a van, a box truck
+-- and a CITY BUS (the transit routes used to be driven by sedans).
 -- Its DIMENSIONS are no longer mirrored in C++: each recipe publishes its own
 -- `size` from the class package and the sim adopts it (CitySim::setFleet). The
 -- built-in C++ table survives only as the Lua-free build's fallback.
@@ -314,6 +315,7 @@ local FLEET_SLOTS = {
     { class = "pickup",    color = { 0.14, 0.30, 0.20 } },   -- pickup (green)
     { class = "van",       color = { 0.62, 0.60, 0.42 } },   -- van (tan)
     { class = "box_truck", color = { 0.20, 0.42, 0.55 } },   -- box truck (teal)
+    { class = "bus",       color = { 0.86, 0.62, 0.08 } },   -- CITY BUS (municipal yellow)
 }
 
 -- The fleet is DESCRIPTION up front and GEOMETRY on demand.

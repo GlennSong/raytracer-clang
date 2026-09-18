@@ -587,7 +587,8 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         // maps the same index to a body) draws exactly this shape + size.
         if (a.mode == Agent::Mode::Driver) {
             SimVehicle v;
-            const VehicleBody& body = fleetBody(static_cast<int>(vehicles_.size()));
+            const VehicleBody& body =
+                fleetBody(ambientSlotFor(static_cast<int>(vehicles_.size())));
             v.length = body.length;
             v.width = body.width;
             v.height = body.height;
@@ -1595,6 +1596,22 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
         busStop_[i] = stops > 0 ? (made / buses_.routeCount()) % stops : 0;
         agents_[i].goal = busTable_.entry();
         agents_[i].goalHours = 0;
+        // A BUS DRIVES A BUS. Without this the transit fleet was ordinary cars
+        // -- a sedan carrying 24 people -- and car-following held them a
+        // sedan's gap apart. The body comes from whichever fleet slot declares
+        // itself a Bus, so a scripted fleet's own dimensions win over the
+        // built-in fallback.
+        if (agents_[i].vehicle >= 0 &&
+            agents_[i].vehicle < static_cast<int>(vehicles_.size())) {
+            VehicleBody bb{11.4, 2.55, 3.20, VehicleType::Bus};
+            for (int fs = 0; fs < fleetSize(); ++fs)
+                if (fleetBody(fs).type == VehicleType::Bus) { bb = fleetBody(fs); break; }
+            SimVehicle& sv = vehicles_[static_cast<std::size_t>(agents_[i].vehicle)];
+            sv.length = bb.length;
+            sv.width = bb.width;
+            sv.height = bb.height;
+            sv.type = bb.type;
+        }
         ++made;
     }
     (void)stopsPerRoute;   // the network already has them; logging lives in city_render

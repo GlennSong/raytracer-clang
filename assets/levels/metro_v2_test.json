@@ -2,6 +2,10 @@
   "citysim": {
     "buildChance": 0.9,
     "buildLots": true,
+    "busMaxWalk": 220.0,
+    "busRoutes": 4,
+    "busStops": 14,
+    "buses": 24,
     "cars": -1,
     "carsPerLaneKm": 35.0,
     "debugWidgets": false,
@@ -26,14 +30,10 @@
     "taxiFraction": 0.12,
     "tiered": true,
     "vehicles": "vehicles.lua",
-    "wander": false,
-    "busRoutes": 4,
-    "busStops": 14,
-    "buses": 24,
-    "busMaxWalk": 220.0
+    "wander": false
   },
   "dayNight": {
-    "dayMinutes": 30.0,
+    "dayMinutes": 1440.0,
     "timeOfDay": 0.32292
   },
   "entities": [
