@@ -44,6 +44,8 @@ bool parseTarget(const std::string& s, GoalTarget& out) {
     if (s == "work") { out = GoalTarget::Work; return true; }
     if (s == "home") { out = GoalTarget::Home; return true; }
     if (s == "random") { out = GoalTarget::Random; return true; }
+
+    if (s == "shop") { out = GoalTarget::Shop; return true; }
     return false;
 }
 
@@ -52,6 +54,8 @@ bool parseActivity(const std::string& s, Activity& out) {
     if (s == "Commuting") { out = Activity::Commuting; return true; }
     if (s == "AtWork") { out = Activity::AtWork; return true; }
     if (s == "Returning") { out = Activity::Returning; return true; }
+
+    if (s == "Shopping") { out = Activity::Shopping; return true; }
     return false;
 }
 

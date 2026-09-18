@@ -145,8 +145,10 @@ struct Agent {
     // PlaceMap UIDs assigned at build, or kNoPlace when the city authored none.
     // `home`/`work` NODES below are derived from these places' entrances, so the
     // existing commute machinery routes the agent to REAL buildings.
+    Vec2 shopDoor;
     PlaceId homePlace = kNoPlace;
     PlaceId workPlace = kNoPlace;
+    PlaceId shopPlace = kNoPlace;
     // The assigned places' DOORSTEPS (entrance nudged toward the building), set
     // by assignPlaces alongside the place ids. A resting walker stands here —
     // semantically indoors — instead of at the road-corner idle pose, which
@@ -155,6 +157,9 @@ struct Agent {
 
     // Daily schedule (hours, 0..24), per-agent jittered.
     int home = 0, work = 0;
+    // An errand stop near home (GoalTarget::Shop). -1 = this agent has none,
+    // in which case the shopping leg fails NoRoute straight to ReturnHome.
+    int shop = -1;
     // departWork is the TARGET ARRIVAL at work (Glenn, 2026-09-17: "the agent
     // would have to leave home earlier to get to work at 8"). The actual
     // departure is derived: arrival minus the trip, via departWorkHour().

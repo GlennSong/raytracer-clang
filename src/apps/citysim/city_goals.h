@@ -22,7 +22,7 @@ namespace citysim {
 // The label an agent's day reads as from outside — what tests and the debug
 // widgets consume (the historical Agent::Activity). Each goal STATE carries
 // the value it shows, so the legacy field stays in sync with the table.
-enum class Activity : uint8_t { AtHome, Commuting, AtWork, Returning };
+enum class Activity : uint8_t { AtHome, Commuting, AtWork, Returning, Shopping };
 
 // The C++ action vocabulary a goal state wires together. Deliberately tiny:
 // behaviours come from how the TABLE composes these, not from new actions.
@@ -34,7 +34,8 @@ enum class GoalAction : uint8_t {
 
 // Where a GoTo state travels: the agent's work node, its home node, or a
 // random routable node drawn from the sim rng (wander's goal pick).
-enum class GoalTarget : uint8_t { None, Work, Home, Random };
+// Shop: an errand stop picked near home at assignment (Agent::shop).
+enum class GoalTarget : uint8_t { None, Work, Home, Random, Shop };
 
 // The events CitySim EMITS at fixed points — the full trigger vocabulary a
 // table may transition on. Emission lives in C++ (clock windows, arrival,

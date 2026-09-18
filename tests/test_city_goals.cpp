@@ -17,13 +17,16 @@ using namespace citysim;
 // and that a new behaviour — "go somewhere random and dwell two hours" — is
 // pure data, no C++ changes.
 
-TEST_CASE(goal_default_table_mirrors_the_legacy_schedule) {
+// The day is home -> work -> ERRAND -> home (Glenn, 2026-09-17: "go to work
+// / work till 5pm / go shopping / go home"). It no longer mirrors the
+// pre-table control flow, which had no errand leg.
+TEST_CASE(goal_default_table_is_the_daily_round) {
     GoalTable t = defaultScheduleGoals();
     int home = t.findState("AtHome");
     int commute = t.findState("CommuteToWork");
     int work = t.findState("AtWork");
     int ret = t.findState("ReturnHome");
-    CHECK(t.stateCount() == 4);
+    CHECK(t.stateCount() == 6);
     CHECK(t.entry() == home);
     CHECK(t.state(home).action == GoalAction::Rest);
     CHECK(t.state(commute).action == GoalAction::GoTo);
@@ -34,7 +37,12 @@ TEST_CASE(goal_default_table_mirrors_the_legacy_schedule) {
     CHECK(t.onEvent(home, GoalEvent::DepartHome) == -1);   // already home
     CHECK(t.onEvent(commute, GoalEvent::Arrived) == work);
     CHECK(t.onEvent(commute, GoalEvent::NoRoute) == home);
-    CHECK(t.onEvent(work, GoalEvent::DepartHome) == ret);
+    const int shopGo = t.findState("GoShopping");
+    const int shopAt = t.findState("AtShop");
+    CHECK(t.onEvent(work, GoalEvent::DepartHome) == shopGo);
+    CHECK(t.onEvent(shopGo, GoalEvent::Arrived) == shopAt);
+    CHECK(t.onEvent(shopGo, GoalEvent::NoRoute) == ret);
+    CHECK(t.onEvent(shopAt, GoalEvent::DwellDone) == ret);
     CHECK(t.onEvent(ret, GoalEvent::Arrived) == home);
     CHECK(t.onEvent(ret, GoalEvent::NoRoute) == work);
     // Labels the tests/renderers read (Agent::activity) come from the states.

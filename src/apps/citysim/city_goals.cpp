@@ -20,6 +20,7 @@ const char* targetName(GoalTarget t) {
         case GoalTarget::Work: return "work";
         case GoalTarget::Home: return "home";
         case GoalTarget::Random: return "random";
+        case GoalTarget::Shop: return "shop";
         default: return "none";
     }
 }
@@ -29,6 +30,7 @@ const char* activityName(Activity a) {
         case Activity::Commuting: return "Commuting";
         case Activity::AtWork: return "AtWork";
         case Activity::Returning: return "Returning";
+        case Activity::Shopping: return "Shopping";
         default: return "AtHome";
     }
 }
@@ -111,12 +113,25 @@ GoalTable defaultScheduleGoals() {
     t.addState("CommuteToWork", GoalAction::GoTo, GoalTarget::Work,
                Activity::Commuting);
     t.addState("AtWork", GoalAction::Rest, GoalTarget::None, Activity::AtWork);
+    t.addState("GoShopping", GoalAction::GoTo, GoalTarget::Shop,
+               Activity::Shopping);
+    t.addState("AtShop", GoalAction::Rest, GoalTarget::None, Activity::Shopping,
+               0.5);   // half an in-world hour of errand
     t.addState("ReturnHome", GoalAction::GoTo, GoalTarget::Home,
                Activity::Returning);
     t.addTransition("AtHome", GoalEvent::DepartWork, "CommuteToWork");
     t.addTransition("CommuteToWork", GoalEvent::Arrived, "AtWork");
     t.addTransition("CommuteToWork", GoalEvent::NoRoute, "AtHome");
-    t.addTransition("AtWork", GoalEvent::DepartHome, "ReturnHome");
+    // AN ERRAND ON THE WAY HOME (Glenn, 2026-09-17: "go to work / work till
+    // 5pm / go shopping / go home"). A third trip per day is also what keeps
+    // pavements busy once the day lengthens: a fixed-length walk is a SMALLER
+    // share of a longer day, so street life comes from more trips, not longer
+    // ones. An agent with no shop, or none routable, falls straight through to
+    // ReturnHome.
+    t.addTransition("AtWork", GoalEvent::DepartHome, "GoShopping");
+    t.addTransition("GoShopping", GoalEvent::Arrived, "AtShop");
+    t.addTransition("GoShopping", GoalEvent::NoRoute, "ReturnHome");
+    t.addTransition("AtShop", GoalEvent::DwellDone, "ReturnHome");
     t.addTransition("ReturnHome", GoalEvent::Arrived, "AtHome");
     t.addTransition("ReturnHome", GoalEvent::NoRoute, "AtWork");
     t.setEntry("AtHome");

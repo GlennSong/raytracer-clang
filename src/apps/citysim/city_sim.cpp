@@ -826,6 +826,22 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 a.workPlace = pick;
                 a.work = nodeOf(pick);
                 a.workDoor = doorOf(pick);
+                {   // An errand stop: the nearest shop to HOME that is routable
+                    // from work, so the last leg home is short. Deterministic:
+                    // nearest first, ties by place id.
+                    const std::vector<PlaceId>& shops = places.ofType(PlaceType::Shop);
+                    Real bestD2 = 1e30;
+                    for (PlaceId sp : shops) {
+                        const Vec2 d = places[sp].site - places[hp].site;
+                        const Real d2 = d.x * d.x + d.y * d.y;
+                        if (d2 >= bestD2) continue;
+                        const int sn = nodeOf(sp);
+                        if (sn == a.work || sn == hn) continue;
+                        if (!engine::findRoute(graph, a.work, sn).valid()) continue;
+                        if (!engine::findRoute(graph, sn, hn).valid()) continue;
+                        bestD2 = d2; a.shop = sn; a.shopPlace = sp; a.shopDoor = doorOf(sp);
+                    }
+                }
                 {   // What this commute COSTS, in seconds (see Agent::commuteSeconds).
                     const bool onFoot = a.archetype == Agent::Mode::Pedestrian;
                     const engine::Route rt = engine::findRoute(graph, hn, a.work, onFoot);
@@ -1246,6 +1262,12 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
             startTrip(a, origin, s.target == GoalTarget::Work ? a.work : a.home,
                       fromRest);
             started = a.moving;
+            break;
+        case GoalTarget::Shop:
+            if (a.shop >= 0) {
+                startTrip(a, origin, a.shop, fromRest);
+                started = a.moving;
+            }
             break;
         default:
             break;   // a GoTo with no target: nothing to do
@@ -2398,8 +2420,10 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             node == a.work &&
             (a.workPlace != kNoPlace ||
              (a.role == Agent::Role::Stroller && a.work != a.home));
+        const bool atShop = a.shopPlace != kNoPlace && node == a.shop;
         if (atHome) a.pos = a.homeDoor;
         else if (atWork) a.pos = a.workDoor;
+        else if (atShop) a.pos = a.shopDoor;
     }
     if (next >= 0) {
         a.goal = next;
