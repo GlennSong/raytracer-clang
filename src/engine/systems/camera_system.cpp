@@ -193,7 +193,19 @@ void CameraSystem::update(FrameContext& ctx) {
     // Detach/re-attach the fly camera (game states pin it to the player via
     // positionLocked; see PlayerSystem). Detaching switches to fly so the
     // freecam is immediately steerable.
-    if (detachEnabled && ctx.actions.pressed("cam_detach")) {
+    // The same toggle F drives, reachable from the control channel as
+    // `detach on|off|toggle`. Extracted so the fast-travel path can actually be
+    // TESTED -- reasoning about it from the code was wrong twice.
+    double detachReq = ctx.settings.getDouble("camera.setDetached", -1.0);
+    bool detachFired = detachEnabled && ctx.actions.pressed("cam_detach");
+    if (detachReq >= 0.0) {
+        ctx.settings.setDouble("camera.setDetached", -1.0);
+        const bool wantDetached =
+            detachReq >= 2.0 ? fly.positionLocked : (detachReq >= 1.0);
+        if (wantDetached == !fly.positionLocked) detachReq = -1.0;   // already there
+        else detachFired = true;
+    }
+    if (detachFired) {
         fly.positionLocked = !fly.positionLocked;
         freeLook = !fly.positionLocked;
         if (!fly.positionLocked) {

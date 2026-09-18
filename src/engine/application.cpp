@@ -780,6 +780,18 @@ std::string Application::handleControlCommand(const std::string& line) {
                       std::atan2(fwd.x, -fwd.z) * kRadToDeg);
         return buf;
     }
+    if (cmd.name == "detach") {
+        // Drive the F toggle from a script so the fast-travel path is testable
+        // without a keyboard (it was reported fixed twice while broken).
+        const std::string mode = cmd.args.empty() ? "toggle" : cmd.args[0];
+        double v = 2.0;
+        if (mode == "on") v = 1.0;
+        else if (mode == "off") v = 0.0;
+        else if (mode != "toggle") return "err usage: detach on|off|toggle";
+        settingsStore.setDouble("camera.setDetached", v);
+        return "ok detach " + mode + " staged";
+    }
+
     if (cmd.name == "lot?") {
         // WHAT IS ACTUALLY HERE (Glenn: "Are you able to pull the city block
         // and lot details while the game is running? If not that would be a
