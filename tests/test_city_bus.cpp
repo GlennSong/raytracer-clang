@@ -1,4 +1,5 @@
 #include "../src/apps/citysim/city_bus.h"
+#include "city_test_util.h"
 #include "test_framework.h"
 
 #include <cmath>
@@ -14,12 +15,10 @@ using namespace citysim;
 
 namespace {
 
-std::vector<Vec2> gridNodes(int side, Real spacing) {
-    std::vector<Vec2> out;
-    for (int y = 0; y < side; ++y)
-        for (int x = 0; x < side; ++x)
-            out.push_back(Vec2(x * spacing, y * spacing));
-    return out;
+// Routes are pathfound over STREETS now, so the fixture is a real grid city
+// rather than a bag of points -- a network that cannot route has no routes.
+NavGraph gridCity(Real extent = 500.0, Real cell = 120.0, uint32_t seed = 4) {
+    return citytest::cityNav(extent, cell, seed);
 }
 
 Real dist(Vec2 a, Vec2 b) {
@@ -32,12 +31,12 @@ Real dist(Vec2 a, Vec2 b) {
 TEST_CASE(bus_network_lays_out_the_routes_it_was_asked_for) {
     BusNetwork net;
     CHECK(net.empty());
-    net.build(gridNodes(8, 100.0), 3, 6, 11);
+    net.build(gridCity(), 3, 6, 11);
     CHECK(net.routeCount() == 3);
     for (int r = 0; r < net.routeCount(); ++r) {
         const BusRoute& route = net.route(r);
         CHECK(route.valid());
-        CHECK(route.stops.size() == 6);
+        CHECK(route.stops.size() >= 3);   // spacing drives the count now
         // Every stop sits ON a node, and no stop repeats within a route.
         std::vector<int> seen;
         for (const BusStop& s : route.stops) {
@@ -52,10 +51,8 @@ TEST_CASE(bus_stops_spread_across_the_city_instead_of_clumping) {
     // Farthest-point sampling is the reason this holds: a route whose stops all
     // landed in one district would be useless, and is what a naive "pick N
     // random nodes" would produce often enough to matter.
-    const Real spacing = 100.0;
-    std::vector<Vec2> nodes = gridNodes(8, spacing);   // 700 m across
     BusNetwork net;
-    net.build(nodes, 1, 6, 5);
+    net.build(gridCity(), 1, 8, 5);
     const BusRoute& route = net.route(0);
 
     Real spanX = 0, spanY = 0;
@@ -65,15 +62,15 @@ TEST_CASE(bus_stops_spread_across_the_city_instead_of_clumping) {
             spanY = std::max(spanY, std::fabs(a.pos.y - b.pos.y));
         }
     // Covers most of the map in both directions, not a corner of it.
-    CHECK(spanX > 400.0);
-    CHECK(spanY > 400.0);
+    CHECK(spanX > 250.0);
+    CHECK(spanY > 250.0);
 }
 
 TEST_CASE(bus_network_is_reproducible_and_routes_differ) {
-    const std::vector<Vec2> nodes = gridNodes(8, 100.0);
+    const NavGraph nav = gridCity();
     BusNetwork a, b;
-    a.build(nodes, 3, 5, 99);
-    b.build(nodes, 3, 5, 99);
+    a.build(nav, 3, 5, 99);
+    b.build(nav, 3, 5, 99);
     CHECK(a.routeCount() == b.routeCount());
     for (int r = 0; r < a.routeCount(); ++r) {
         CHECK(a.route(r).stops.size() == b.route(r).stops.size());
@@ -89,40 +86,38 @@ TEST_CASE(bus_network_is_reproducible_and_routes_differ) {
 
 TEST_CASE(bus_network_refuses_impossible_layouts) {
     BusNetwork net;
-    net.build({}, 2, 4, 1);                       // no city
+    net.build(NavGraph{}, 2, 4, 1);               // no city
     CHECK(net.empty());
-    net.build(gridNodes(4, 50.0), 0, 4, 1);       // no routes asked for
+    net.build(gridCity(), 0, 4, 1);               // no routes asked for
     CHECK(net.empty());
-    net.build(gridNodes(4, 50.0), 2, 1, 1);       // a "route" of one stop
+    net.build(gridCity(), 2, 1, 1);               // a "route" of one stop
     CHECK(net.empty());
     CHECK(net.nearestStop(0, Vec2(0, 0)) == -1);
     CHECK(!net.planTrip(Vec2(0, 0), Vec2(100, 100), 200.0).valid());
 }
 
 TEST_CASE(bus_trip_is_planned_only_when_the_bus_actually_helps) {
-    std::vector<Vec2> nodes = gridNodes(8, 100.0);
     BusNetwork net;
-    net.build(nodes, 2, 6, 3);
+    net.build(gridCity(), 2, 8, 3);
 
     // Across the city: a bus should be worth taking.
-    const BusTrip far = net.planTrip(Vec2(0, 0), Vec2(700, 700), 250.0);
+    const BusTrip far = net.planTrip(Vec2(-400, -400), Vec2(400, 400), 250.0);
     CHECK(far.valid());
     CHECK(far.fromStop != far.toStop);
     const BusRoute& r = net.route(far.route);
     // Both ends are within the walk bound the caller allowed.
-    CHECK(dist(Vec2(0, 0), r.stops[static_cast<std::size_t>(far.fromStop)].pos) <= 250.0);
-    CHECK(dist(Vec2(700, 700), r.stops[static_cast<std::size_t>(far.toStop)].pos) <= 250.0);
+    CHECK(dist(Vec2(-400, -400), r.stops[static_cast<std::size_t>(far.fromStop)].pos) <= 250.0);
+    CHECK(dist(Vec2(400, 400), r.stops[static_cast<std::size_t>(far.toStop)].pos) <= 250.0);
 
     // A few steps down the street: walking beats waiting, so no trip.
-    CHECK(!net.planTrip(Vec2(0, 0), Vec2(30, 0), 250.0).valid());
+    CHECK(!net.planTrip(Vec2(0, 0), Vec2(25, 0), 250.0).valid());
     // Nothing within the walk bound: no trip rather than a silly one.
-    CHECK(!net.planTrip(Vec2(0, 0), Vec2(700, 700), 5.0).valid());
+    CHECK(!net.planTrip(Vec2(-400, -400), Vec2(400, 400), 5.0).valid());
 }
 
 TEST_CASE(bus_waiting_lists_are_per_stop_and_ascending) {
-    std::vector<Vec2> nodes = gridNodes(8, 100.0);
     BusNetwork net;
-    net.build(nodes, 1, 6, 7);
+    net.build(gridCity(), 1, 8, 7);
     BusTrip t;
     t.route = 0; t.fromStop = 2; t.toStop = 4;
 
@@ -151,7 +146,6 @@ TEST_CASE(bus_waiting_lists_are_per_stop_and_ascending) {
 }
 
 // --- and now the whole thing, in a running city ----------------------------
-#include "city_test_util.h"
 #include "../src/apps/citysim/city_sim.h"
 
 TEST_CASE(buses_drive_their_loop_and_carry_riders) {

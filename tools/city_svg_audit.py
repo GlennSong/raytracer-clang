@@ -77,6 +77,13 @@ def main():
     ap.add_argument("--step", type=float, default=2.0,
                     help="edge sampling step, metres")
     ap.add_argument("--top", type=int, default=20)
+    ap.add_argument("--annotate", metavar="OUT.svg",
+                    help="write a copy of the map with the offending lots "
+                         "ringed and labelled, so the defect can be SEEN "
+                         "rather than read off a list")
+    ap.add_argument("--zoom", metavar="X,Z,HALF",
+                    help="crop the annotated map to a square around a world "
+                         "point, e.g. -790,437,120")
     a = ap.parse_args()
 
     svg = open(a.svg).read()
@@ -134,6 +141,41 @@ def main():
             bad.append((worst, at, (cx, cy), n))
 
     bad.sort(key=lambda r: -r[0])
+    if a.annotate:
+        # Draw on top of the map itself: a red ring at the worst point of each
+        # offending lot, the lot outlined, and a label. A picture of WHERE is
+        # worth more than a table of coordinates when the next question is
+        # "is that the one I was looking at".
+        marks = ["<g id='layer-AUDIT' fill='none' stroke='#d81b1b' "
+                 "stroke-width='1.6'>"]
+        for i, (worst, at, c, n) in enumerate(bad):
+            marks.append(
+                "<circle cx='%.2f' cy='%.2f' r='9' stroke='#d81b1b' "
+                "stroke-width='1.8' fill='#d81b1b' fill-opacity='0.18'/>"
+                % (at[0], at[1]))
+            marks.append(
+                "<line x1='%.2f' y1='%.2f' x2='%.2f' y2='%.2f' stroke='#d81b1b' "
+                "stroke-width='1.0' stroke-dasharray='3 2'/>"
+                % (at[0], at[1], c[0], c[1]))
+            marks.append(
+                "<text x='%.2f' y='%.2f' font-size='11' fill='#a01010' "
+                "stroke='none'>%d: %.2f m into the lane  (%.0f, %.0f)</text>"
+                % (at[0] + 12, at[1] - 10, i + 1, worst, c[0], c[1]))
+        marks.append("</g>")
+        out = svg.replace("</svg>", "\n".join(marks) + "\n</svg>")
+        if a.zoom:
+            try:
+                zx, zz, half = (float(v) for v in a.zoom.split(","))
+                out = re.sub(r"viewBox='[^']*'",
+                             "viewBox='%.1f %.1f %.1f %.1f'"
+                             % (zx - half, zz - half, half * 2, half * 2), out, count=1)
+                out = re.sub(r"width='[\d.]+' height='[\d.]+'",
+                             "width='900' height='900'", out, count=1)
+            except ValueError:
+                print("--zoom wants X,Z,HALF")
+        open(a.annotate, "w").write(out)
+        print("annotated map -> %s (%d marked)" % (a.annotate, len(bad)))
+
     print("%d of %d lots reach into a carriageway (margin %.2f m)"
           % (len(bad), len(lots), a.margin))
     for worst, at, c, n in bad[:a.top]:

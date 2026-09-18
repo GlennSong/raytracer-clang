@@ -7,7 +7,7 @@ namespace citysim {
 namespace {
 const char* kEventNames[] = {"departWork", "departHome", "arrived",
                              "noRoute",    "idle",       "dwellDone",
-                             "gotFare"};
+                             "gotFare",    "serviceEnd", "serviceStart"};
 static_assert(sizeof(kEventNames) / sizeof(kEventNames[0]) ==
                   static_cast<std::size_t>(GoalEvent::Count),
               "goal event names out of sync with GoalEvent");
@@ -25,6 +25,7 @@ const char* targetName(GoalTarget t) {
         case GoalTarget::Fare: return "fare";
         case GoalTarget::Drop: return "drop";
         case GoalTarget::Stop: return "stop";
+        case GoalTarget::Depot: return "depot";
         default: return "none";
     }
 }
@@ -171,6 +172,19 @@ GoalTable busGoals() {
     // A leg it cannot route is skipped, not fatal: the stop index has already
     // moved on, so the bus simply tries the one after it.
     t.addTransition("Drive", GoalEvent::NoRoute, "Drive");
+
+    // OUT OF SERVICE. At the end of the service day the bus stops taking
+    // passengers and drives to the yard, then sits there until service resumes.
+    // Deadheading is a REAL state, not an absence of one: a bus crossing town
+    // empty with its doors shut is doing its job, and a viewer can tell it from
+    // one that is simply stuck.
+    t.addState("ToDepot", GoalAction::GoTo, GoalTarget::Depot, Activity::Returning);
+    t.addState("OffDuty", GoalAction::Rest, GoalTarget::None, Activity::AtHome);
+    t.addTransition("Drive", GoalEvent::ServiceEnd, "ToDepot");
+    t.addTransition("ToDepot", GoalEvent::Arrived, "OffDuty");
+    // A yard it cannot reach must not strand the bus mid-road for the night.
+    t.addTransition("ToDepot", GoalEvent::NoRoute, "OffDuty");
+    t.addTransition("OffDuty", GoalEvent::ServiceStart, "Drive");
     t.setEntry("Drive");
     return t;
 }

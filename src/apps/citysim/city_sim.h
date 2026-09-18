@@ -674,11 +674,27 @@ public:
     // bounds how far a rider will walk to a stop -- and so, in practice, how
     // often a bus is worth taking at all.
     void setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk);
+    // The SERVICE DAY. Outside [startHour, endHour) buses finish up, deadhead
+    // to the yard and sit there. endHour <= startHour means around the clock,
+    // which is the old behaviour and stays the default.
+    void setBusService(Real startHour, Real endHour) {
+        busServiceStart_ = startHour;
+        busServiceEnd_ = endHour;
+    }
+    bool busesInService() const {
+        if (busServiceEnd_ <= busServiceStart_) return true;   // 24 hour service
+        return clockHours_ >= busServiceStart_ && clockHours_ < busServiceEnd_;
+    }
     const BusNetwork& buses() const { return buses_; }
     bool isBus(int i) const;
     // Legs a bus could not route and skipped. Evidence, not decoration: the
     // stall this counts is what stopped anyone boarding.
     long busSkippedLegs() const { return busSkippedLegs_; }
+    // Which gate stops a walker even ASKING for a bus.
+    struct BusGate { long thinkPed = 0, thinkDrv = 0, gotoPed = 0, gotoDrv = 0,
+                     departures = 0, notPed = 0, noNet = 0, isBus = 0,
+                     already = 0, noTarget = 0, asked = 0; };
+    const BusGate& busGate() const { return busGate_; }
     long busStopsServed() const { return busStopsServed_; }
     // Discriminates the two ways a waiting rider is never carried: the bus
     // never OFFERED (attempts 0 -> it has not come round since they arrived)
@@ -895,7 +911,10 @@ private:
     std::vector<int> busRoute_, busStop_;   // per agent; -1 = not a bus
     GoalTable busTable_;
     Real busMaxWalk_ = 0;
+    Real busServiceStart_ = 0, busServiceEnd_ = 0;   // 0/0 = around the clock
+    bool busServiceWas_ = true;                      // edge detect for the events
     long busSkippedLegs_ = 0;
+    mutable BusGate busGate_;
     long busStopsServed_ = 0;
     long busBoardAttempts_ = 0, busBoardRefused_ = 0;
     Real taxiFraction_ = 0;

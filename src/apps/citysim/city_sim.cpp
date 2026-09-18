@@ -1257,6 +1257,40 @@ int CitySim::departNode(const Agent& a) const {
 bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
     const GoalState& s = tableFor(a).state(a.goal);
     bool started = false;
+
+    // CATCH THE BUS. This lived in goalThink's "at a GoTo state and not moving"
+    // branch, which MEASURED as the wrong place: walkers are never in that
+    // state (1.46M goalThink entries, ZERO at a resting GoTo), because
+    // tryGoalEvent transitions Rest -> GoTo and launches the trip in the same
+    // tick. Only drivers linger there, blocked by launch clearance -- so the
+    // bus was offered exclusively to agents who could not get their car out.
+    //
+    // startGoalTrip is the choke point EVERY trip passes through, however its
+    // state was reached, which is where a mode choice belongs.
+    const int busSelf = indexOf(a);
+    if (a.mode == Agent::Mode::Pedestrian && nav_ && !buses_.empty() &&
+        !isBus(busSelf) && !buses_.tripOf(busSelf) && !isTaxi(busSelf)) {
+        const int to = goalNodeFor(a, s.target);
+        if (to >= 0 && origin >= 0 && origin < nav_->nodeCount() &&
+            to < nav_->nodeCount() && to != origin) {
+            const Vec2 p0 = nav_->nodes[static_cast<std::size_t>(origin)];
+            const Vec2 p1 = nav_->nodes[static_cast<std::size_t>(to)];
+            BusTrip bt = buses_.planTrip(p0, p1, busMaxWalk_);
+            if (bt.valid() && buses_.waitFor(busSelf, bt)) {
+                const int stopNode =
+                    buses_.route(bt.route)
+                        .stops[static_cast<std::size_t>(bt.fromStop)].node;
+                if (stopNode != origin) {
+                    startTrip(a, origin, stopNode, fromRest);
+                    if (a.moving) {
+                        a.activity = s.activity;
+                        return true;    // walking to the stop IS the trip now
+                    }
+                }
+                buses_.stopWaiting(busSelf);   // could not reach the stop
+            }
+        }
+    }
     switch (s.target) {
         case GoalTarget::Random:
             started = startWanderTrip(a, origin, fromRest);
@@ -1273,6 +1307,20 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
                 started = a.moving;
             }
             break;
+        case GoalTarget::Depot: {
+            const int self3 = indexOf(a);
+            if (isBus(self3)) {
+                const int r = busRoute_[static_cast<std::size_t>(self3)];
+                if (r >= 0 && r < buses_.routeCount()) {
+                    const int dn = buses_.route(r).depotNode;
+                    if (dn >= 0) {
+                        startTrip(a, origin, dn, fromRest);
+                        started = a.moving;
+                    }
+                }
+            }
+            break;
+        }
         case GoalTarget::Stop: {
             // The bus's NEXT stop. arriveOrChain advances the index before the
             // table is asked what comes next, so by the time this runs it
@@ -1356,7 +1404,12 @@ CitySim::GoalFire CitySim::tryGoalEvent(Agent& a, GoalEvent event) {
         // arrival — which is to say, almost all of them. That reinstates the
         // "two cars spawn inside each other at a node" case launchClear exists
         // to prevent, and the fender-bender rule then freezes both in place.
-        if (a.archetype == Agent::Mode::Driver && !a.far() &&
+        // A BUS IS NOT PULLING OUT OF A DRIVEWAY. launchClear stops a PARKED
+        // car spawning into moving traffic; a bus leaving a stop is already on
+        // the road, mid-route, and gating it there stalls the whole service --
+        // measured: 24 buses served 13 stops in 400 s while 1404 riders stood
+        // waiting, and the blocked-driver counter ticked 4187 times.
+        if (a.archetype == Agent::Mode::Driver && !a.far() && !isBus(indexOf(a)) &&
             !launchClear(a, from))
             return GoalFire::Blocked;
         a.goal = next;
@@ -1381,11 +1434,24 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
         a.goalHours += clockTotalHours_ - a.sleptAt;   // exact across rate changes
         a.wakeAt = -1;
     }
+    const int self = indexOf(a);
+    // Does a WALKER even get here? 1615 of them are moving, so they departed
+    // somehow; if none of them passes through goalThink the departure happens
+    // somewhere else entirely and the bus check is in the wrong place.
+    if (a.archetype == Agent::Mode::Pedestrian) ++busGate_.thinkPed;
+    else ++busGate_.thinkDrv;
+
+    // THE SERVICE DAY opens and closes ONCE, not every tick: the edge is what
+    // carries the event, so a bus that has already started for the yard is not
+    // told again each frame (and one that failed to route there is not nagged).
+    if (isBus(self) && busesInService() != busServiceWas_)
+        tryGoalEvent(a, busesInService() ? GoalEvent::ServiceStart
+                                         : GoalEvent::ServiceEnd);
+
     // A FREE CAB LOOKS FOR WORK. Costed on straight-line distance to the
     // pickup: cheap, and the real route is computed anyway the moment the trip
     // starts -- a pickup with no route fires NoRoute and the table puts the cab
     // back on its cruise, so a bad guess here costs one tick, not a stuck cab.
-    const int self = indexOf(a);
     if (isTaxi(self) && nav_ && dispatch_.waiting() > 0 && !dispatch_.fareOf(self)) {
         const Vec2 from = a.pos;
         const int nodeCount = static_cast<int>(nav_->nodes.size());
@@ -1403,35 +1469,14 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
     if (s.action == GoalAction::GoTo) {
         if (!a.moving) {
             int from = departNode(a);
+            if (a.archetype == Agent::Mode::Pedestrian) ++busGate_.gotoPed;
+            else ++busGate_.gotoDrv;
             // HAIL INSTEAD OF WALK. A walker facing a long trip sometimes takes
             // a cab -- which is the only thing that puts anyone in the back of
             // one without a host driving it. Decided ONCE, at the departure,
             // from the agent's own brain stream so it is reproducible; a hail
             // that finds no cab simply waits, and the rider is parked at the
             // kerb until one is free (hail(), awaitingRide()).
-            // THE BUS FIRST, when one genuinely helps: it is the cheaper
-            // and commoner way to cross a city, and planTrip already refuses
-            // to offer one that saves no walking. Unlike a cab, the rider must
-            // WALK TO THE STOP -- so this starts an ordinary trip to the stop
-            // node, and arriveOrChain parks them there to wait.
-            if (a.mode == Agent::Mode::Pedestrian && nav_ && !buses_.empty() &&
-                !isBus(self) && !buses_.tripOf(self)) {
-                const int to = goalNodeFor(a, s.target);
-                if (to >= 0 && from >= 0 && from < nav_->nodeCount() &&
-                    to < nav_->nodeCount()) {
-                    const Vec2 p0 = nav_->nodes[static_cast<std::size_t>(from)];
-                    const Vec2 p1 = nav_->nodes[static_cast<std::size_t>(to)];
-                    BusTrip bt = buses_.planTrip(p0, p1, busMaxWalk_);
-                    if (bt.valid() && buses_.waitFor(self, bt)) {
-                        const int stopNode =
-                            buses_.route(bt.route)
-                                .stops[static_cast<std::size_t>(bt.fromStop)].node;
-                        startTrip(a, from, stopNode, /*fromRest=*/true);
-                        if (a.moving) return;
-                        buses_.stopWaiting(self);   // could not reach the stop
-                    }
-                }
-            }
             if (hailChance_ > 0 && a.mode == Agent::Mode::Pedestrian && nav_ &&
                 !isTaxi(self) && dispatch_.driverFor(self) < 0) {
                 const int to = goalNodeFor(a, s.target);
@@ -1447,7 +1492,7 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
             }
             // Archetype, for the same reason as tryGoalEvent above.
             if (a.archetype != Agent::Mode::Driver || a.far() ||
-                launchClear(a, from))
+                isBus(indexOf(a)) || launchClear(a, from))
                 startGoalTrip(a, from, /*fromRest=*/true);
         }
         return;
@@ -1579,7 +1624,7 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
     busRoute_.assign(agents_.size(), -1);
     busStop_.assign(agents_.size(), -1);
     if (!nav_ || routes <= 0 || busCount <= 0) return;
-    buses_.build(nav_->nodes, routes, stopsPerRoute, rng_ ? rng_ : 1u);
+    buses_.build(*nav_, routes, stopsPerRoute, rng_ ? rng_ : 1u);
     if (buses_.empty()) return;
     if (busTable_.stateCount() == 0) busTable_ = busGoals();
     // Buses come off the DRIVER pool, spread by index like the cabs, and are
@@ -3062,6 +3107,12 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // ignore bodies a bridge deck away. AI cars are deliberately excluded (see
     // advance()): lanes + car-following + signals govern car-vs-car, and braking
     // for cross/oncoming cars in the cone deadlocked traffic.
+    // The service edge is consumed now that every bus has seen it. Updated ONCE
+    // per tick, after the goal pass -- flipping it inside the per-agent loop
+    // would let the first bus swallow the edge and leave the other 23 in
+    // service until the next boundary.
+    busServiceWas_ = busesInService();
+
     sensed_.clear();
     sensedIndex_.assign(agents_.size(), -1);   // agent -> its ghost (grid lookups)
     for (int ai : active_) {

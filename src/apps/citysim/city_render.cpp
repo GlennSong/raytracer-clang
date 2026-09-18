@@ -391,6 +391,52 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // bus stops so that we know where the route is"). The ground sampler goes
     // in as a callback so the prop builder needs nothing from this class but a
     // height. The entities are recorded so a rebuild can drop them.
+    // RT_BUS_MAP=<path>: dump the derived transit network as JSON so it can be
+    // drawn over the city's own SVG (tools/city_bus_map.py). The routes are
+    // built at RUNTIME from the nav graph, so citymap -- which draws what
+    // procgen produced -- has never heard of them.
+    if (const char* bm = std::getenv("RT_BUS_MAP")) {
+        std::string j = "{\n  \"routes\": [\n";
+        for (int r = 0; r < sim_.buses().routeCount(); ++r) {
+            const citysim::BusRoute& rt = sim_.buses().route(r);
+            if (r) j += ",\n";
+            j += "    {\"route\": " + std::to_string(r) + ", \"depot\": [" +
+                 std::to_string(rt.depotPos.x) + ", " + std::to_string(rt.depotPos.y) +
+                 "], \"stops\": [";
+            for (std::size_t k = 0; k < rt.stops.size(); ++k) {
+                if (k) j += ", ";
+                j += "[" + std::to_string(rt.stops[k].pos.x) + ", " +
+                     std::to_string(rt.stops[k].pos.y) + "]";
+            }
+            j += "], \"path\": [";
+            for (std::size_t k = 0; k < rt.path.size(); ++k) {
+                if (k) j += ", ";
+                j += "[" + std::to_string(rt.path[k].x) + ", " +
+                     std::to_string(rt.path[k].y) + "]";
+            }
+            j += "], \"hubStops\": [";
+            for (std::size_t k = 0; k < rt.hubStops.size(); ++k) {
+                if (k) j += ", ";
+                j += std::to_string(rt.hubStops[k]);
+            }
+            j += "]}";
+        }
+        j += "\n  ],\n  \"hubs\": [";
+        for (std::size_t k = 0; k < sim_.buses().hubs().size(); ++k) {
+            if (k) j += ", ";
+            j += "[" + std::to_string(sim_.buses().hubs()[k].x) + ", " +
+                 std::to_string(sim_.buses().hubs()[k].y) + "]";
+        }
+        j += "]\n}\n";
+        if (FILE* f = std::fopen(bm, "w")) {
+            std::fwrite(j.data(), 1, j.size(), f);
+            std::fclose(f);
+            LOG_INFO << "[citysim] bus network written to " << bm;
+        } else {
+            LOG_WARN << "[citysim] could not write bus map to " << bm;
+        }
+    }
+
     std::vector<Vec3> stopPositions;
     if (!sim_.buses().empty() && assets) {
         const int stops = buildBusStopProps(
@@ -1755,6 +1801,39 @@ void CityRenderSystem::step(World& world, Real dt) {
         busPrintAcc_ += dt;
         if (busPrintAcc_ >= 1.0) {
             busPrintAcc_ = 0;
+            const citysim::BusNetwork::PlanStats& ps = sim_.buses().planStats();
+            // WHO IS EVEN ACTIVE. The gate said every departure was "not a
+            // pedestrian", which is only meaningful next to how many walkers
+            // are being simulated at all.
+            long pedAll = 0, drvAll = 0, pedMoving = 0, pedResting = 0;
+            for (const citysim::Agent& ag : sim_.agents()) {
+                if (ag.archetype == citysim::Agent::Mode::Pedestrian) {
+                    ++pedAll;
+                    if (ag.moving) ++pedMoving; else ++pedResting;
+                } else ++drvAll;
+            }
+            LOG_INFO << "[bus] POP walkers " << pedAll << " (moving " << pedMoving
+                     << ", resting " << pedResting << "), drivers " << drvAll;
+            const citysim::CitySim::BusGate& bg = sim_.busGate();
+            LOG_INFO << "[bus] THINK walkers " << bg.thinkPed << " drivers "
+                     << bg.thinkDrv << " | at a GoTo, resting: walkers "
+                     << bg.gotoPed << " drivers " << bg.gotoDrv;
+            LOG_INFO << "[bus] GATE departures " << bg.departures
+                     << ": not a pedestrian " << bg.notPed
+                     << ", no network " << bg.noNet
+                     << ", is a bus " << bg.isBus
+                     << ", already waiting " << bg.already
+                     << ", no target node " << bg.noTarget
+                     << ", ASKED " << bg.asked;
+            LOG_INFO << "[bus] WAITING at stops " << sim_.buses().waitingCount()
+                     << " | stops served " << sim_.busStopsServed()
+                     << " | board attempts " << sim_.busBoardAttempts()
+                     << " refused " << sim_.busBoardRefused();
+            LOG_INFO << "[bus] planTrip asked " << ps.asked << ": ok " << ps.ok
+                     << ", refused -- no saving " << ps.noSaving
+                     << ", dest stop too far " << ps.farTo
+                     << ", origin stop too far " << ps.farFrom
+                     << ", same stop " << ps.sameStop;
             int shown = 0;
             for (std::size_t ai = 0; ai < sim_.agents().size() && shown < 6; ++ai) {
                 if (!sim_.isBus(static_cast<int>(ai))) continue;

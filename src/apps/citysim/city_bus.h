@@ -22,6 +22,7 @@
 // geometry has to be placed or collided, and a route leg is an ordinary trip the
 // existing router already knows how to plan.
 
+#include "../../engine/ai/nav_graph.h"   // routes FOLLOW STREETS, so the graph
 #include "../../engine/procgen/city/polygon.h"   // engine::Vec2, engine::Real
 
 #include <cstddef>
@@ -39,6 +40,21 @@ struct BusStop {
 // A closed loop. The bus drives stops in order and wraps, for ever.
 struct BusRoute {
     std::vector<BusStop> stops;
+    // The route as DRIVEN: every nav node between one stop and the next, so the
+    // line on a map follows the streets instead of cutting across blocks. A
+    // route that looks like a straight chord between scattered points is not a
+    // bus route (Glenn: "those do not look like bus routes. Buses tend to stop
+    // at consecutive streets").
+    std::vector<engine::Vec2> path;
+    // Stops shared with another route: where a rider can change buses.
+    std::vector<int> hubStops;
+    // THE YARD (Glenn: "buses should be constantly running (that is until their
+    // stop time and then they should go back to some kind of bus yard). A bus
+    // can be in a no-service state and travel back home"). Peripheral, like a
+    // real depot: the stop furthest from the city's middle, so an off-duty bus
+    // drives OUT of town rather than parking on the busiest corner.
+    int depotNode = -1;
+    engine::Vec2 depotPos{0, 0};
     bool valid() const { return stops.size() >= 2; }
 };
 
@@ -57,13 +73,28 @@ struct BusTrip {
 
 class BusNetwork {
 public:
-    // Lay out `routeCount` loops of up to `stopsPerRoute` stops over the given
-    // node positions. Deterministic in (nodes, counts, seed): stops are chosen
-    // by farthest-point sampling so they SPREAD instead of clumping, and ties
-    // break on the lower node index, so the same city always gets the same
-    // network (ADR-0002).
-    void build(const std::vector<engine::Vec2>& nodes, int routeCount,
-               int stopsPerRoute, uint32_t seed);
+    // Lay out `routeCount` LOOPS over the street graph.
+    //
+    // A real bus route is a corridor, not a tour of scattered points: it runs
+    // ALONG streets, stopping every few hundred metres, and it meets other
+    // routes at hubs so a rider can change. So the network is built as:
+    //   1. HUBS -- well-connected junctions, spread across the city. Every
+    //      route passes through several, and routes SHARE them, which is what
+    //      makes a transfer possible at all.
+    //   2. each route is a closed loop over its own ordered subset of hubs,
+    //      with the legs between them PATHFOUND over the road graph, so the
+    //      line follows real streets.
+    //   3. stops are dropped along that path at a regular spacing, plus one at
+    //      every hub, which is why consecutive stops share a street.
+    //
+    // Deterministic in (graph, counts, seed): hub choice is farthest-point with
+    // ties on the lower node index, and the legs come from the deterministic
+    // A* the agents themselves use (ADR-0002).
+    void build(const engine::NavGraph& nav, int routeCount, int stopsPerRoute,
+               uint32_t seed);
+
+    // The hubs the network was built around, in world XZ.
+    const std::vector<engine::Vec2>& hubs() const { return hubs_; }
 
     int routeCount() const { return static_cast<int>(routes_.size()); }
     const BusRoute& route(int r) const { return routes_[static_cast<std::size_t>(r)]; }
@@ -80,6 +111,16 @@ public:
     // the common case for a short hop, and the caller should simply walk.
     // `maxWalk` bounds how far a rider will walk to or from a stop.
     BusTrip planTrip(engine::Vec2 from, engine::Vec2 to, engine::Real maxWalk) const;
+
+    // WHY a trip was refused, counted. Ridership was zero in the shipped city
+    // while the mechanism provably worked in a test one, and the difference has
+    // to be one of these gates -- guessing which cost two rounds elsewhere.
+    struct PlanStats {
+        long asked = 0, noRoutes = 0, sameStop = 0, farFrom = 0, farTo = 0,
+             noSaving = 0, ok = 0;
+    };
+    const PlanStats& planStats() const { return stats_; }
+    void resetPlanStats() { stats_ = PlanStats{}; }
 
     // --- who is waiting, and who is aboard --------------------------------
     // These are keyed by AGENT INDEX and deliberately sparse: a city of
@@ -100,7 +141,9 @@ public:
 
 private:
     std::vector<BusRoute> routes_;
+    std::vector<engine::Vec2> hubs_;
     std::unordered_map<int, BusTrip> waiting_;
+    mutable PlanStats stats_;
 };
 
 }  // namespace citysim
