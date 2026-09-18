@@ -26,7 +26,7 @@
     "wander": false
   },
   "dayNight": {
-    "dayMinutes": 1440.0,
+    "dayMinutes": 30.0,
     "timeOfDay": 0.32292
   },
   "entities": [

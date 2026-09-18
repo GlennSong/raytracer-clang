@@ -1178,6 +1178,25 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         }
         return true;
     };
+
+    // TREES IN THE ROAD (Glenn, 2026-09-17: "one lot being built in the middle
+    // of a street which is placing trees in the road"). The BUILDING is shrunk
+    // to clear the carriageway -- measured, 0 of 1397 plans stand in a lane --
+    // but landscaping is planted across the LOT, which was never inset. So a
+    // parcel that runs into the street grows its trees there while its facade
+    // politely stops at the kerb. Prune any spot inside a carriageway; a lot
+    // keeps whatever spots are genuinely on its own ground.
+    int treeSpotsPruned = 0;
+    auto pruneTreeSpotsIntoRoad = [&](std::vector<Vec3>& spots) {
+        if (!roads || spots.empty()) return;
+        const std::size_t before = spots.size();
+        spots.erase(std::remove_if(spots.begin(), spots.end(),
+                                   [&](const Vec3& sp) {
+                                       return !clearOfRoads(Vec2(sp.x, sp.z));
+                                   }),
+                    spots.end());
+        treeSpotsPruned += static_cast<int>(before - spots.size());
+    };
     // Distance from a point to the nearest road SURFACE edge (centreline
     // distance minus half-width, floored at 0). Frontage gate: a lot whose
     // whole footprint sits farther than the frontage bound from every road
@@ -2474,7 +2493,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                            mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u),
                            outParts, nullptr,
                            p.groundMeshCell > 0.5 ? p.groundMeshCell : Real(3.0));
-                out.push_back(std::move(b));
+                pruneTreeSpotsIntoRoad(b.treeSpots);
+                pruneTreeSpotsIntoRoad(b.treeSpots);
+            out.push_back(std::move(b));
                 continue;
             }
             // Grow a REAL building that FITS the lot: its oriented footprint IS the
@@ -2607,7 +2628,24 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         fit = true;
                     }
                 }
-                if (!fit) dbg->rejClear++;   // (box fallback may still build)
+                if (!fit) {
+                    dbg->rejClear++;
+                    // A LOT IN THE ROAD (Glenn, 2026-09-17: "one lot being
+                    // built in the middle of a street which is placing trees in
+                    // the road"). Failing the fit used to fall through with
+                    // planOk = false -- and EVERY downstream consumer reads
+                    // `planOk ? plan : site`: the building's own plan (epl), its
+                    // pad plane, its base Y. `site` is the raw parcel polygon,
+                    // which has NEVER been clearance-checked. So the rejection
+                    // was counted and then ignored, and the lot built across the
+                    // carriageway with its landscaping following it there.
+                    //
+                    // A plan that cannot be made to clear the road is GREEN. On
+                    // metro_v2 that is 3 lots of 1,413, which is the right price
+                    // for never putting a facade or a collider in a traffic lane.
+                    emitGreen();
+                    continue;
+                }
                 planOk = fit;
             }
             // COURTYARD massing (device: "a lot of same-y looking ones"): a
@@ -2848,7 +2886,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                               sb.center + u * (len * 0.5) + v * (dep * 0.5),
                               sb.center - u * (len * 0.5) + v * (dep * 0.5)};
                     emitFoundation(b.plan, b.groundY, b.baseY);
-                    out.push_back(std::move(b));
+                    pruneTreeSpotsIntoRoad(b.treeSpots);
+                pruneTreeSpotsIntoRoad(b.treeSpots);
+            out.push_back(std::move(b));
                     continue;
                 }
                 // Too short/shallow for a terrace: build as one plan building.
@@ -3039,7 +3079,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                             p.groundMeshCell > 0.5 ? p.groundMeshCell : Real(3.0));
                 LOG_INFO << "[plaza] at (" << b.site.x << ", " << b.site.y
                          << ") area " << static_cast<int>(area(plan)) << " m2";
-                out.push_back(std::move(b));
+                pruneTreeSpotsIntoRoad(b.treeSpots);
+                pruneTreeSpotsIntoRoad(b.treeSpots);
+            out.push_back(std::move(b));
                 continue;
             }
             if (paved) bp.entranceSteps = false;   // a downtown door is flush with the paving
@@ -3163,6 +3205,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                            p.ground,
                            mix(pp.seed, static_cast<uint32_t>(li) * 29u + 11u),
                            outParts);
+            pruneTreeSpotsIntoRoad(b.treeSpots);
             out.push_back(std::move(b));
         }
     }
@@ -3210,6 +3253,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                  << dbg->rejChance << ", sliver " << dbg->rejSliver
                  << ", aspect " << dbg->rejAspect << ", fill " << dbg->rejFill
                  << ", plan " << dbg->rejPlan << ", clear " << dbg->rejClear
+                 << " | tree spots pruned from carriageways " << treeSpotsPruned
                  << ", box " << dbg->rejBox << ", frontage "
                  << dbg->rejFrontage << ", relief " << dbg->rejRelief
                  << " | alleys " << dbg->alleys.size()

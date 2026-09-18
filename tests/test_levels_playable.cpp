@@ -29,6 +29,7 @@
 #include "../src/engine/procgen/city/road_net.h"   // RoadEntity (signal census)
 #include "../src/engine/procgen/city/building_records.h"
 #include "../src/engine/procgen/city/core_plan.h"  // CityBuildings doors (ADR-0080)
+#include "../src/engine/procgen/city/city_svg.h"   // CityMapData (the in-road census)
 #include "../src/apps/citysim/city_render.h"        // CityRenderSystem (traffic census)
 #include "../src/engine/system.h"
 #include "../src/engine/world.h"
@@ -586,6 +587,64 @@ TEST_CASE(level_census_every_floorplan_conforms_to_the_drawn_ground) {
 // shot needs — hoistway 0's door foot and normal, the lobby in front of
 // the bank, the same spot on the top storey — so a tower interior can be
 // framed with RT_SPAWN and lanelab_shots.py without a walk.
+// BUILDINGS IN THE ROAD (Glenn, 2026-09-17: "one lot being built in the middle
+// of a street which is placing trees in the road"). The lot pass has a road
+// clearance test, but every consumer downstream reads `planOk ? plan : site`,
+// and `site` is the raw parcel polygon that clearance never touched -- so a lot
+// whose plan fails for ANY reason can still build from an unvetted footprint.
+// This asks the finished city the question directly: does any building's plan
+// stand inside a carriageway? Print-only for now: it names offenders so the
+// path that produced them can be traced, before it becomes a gate.
+TEST_CASE(level_print_buildings_in_the_carriageway) {
+    for (const LevelFacts& f : allLevels()) {
+        if (!f.loaded) continue;
+        std::unique_ptr<Renderer> renderer = Renderer::create();
+        RendererMeshUploader uploader(*renderer);
+        AssetManager assets(uploader);
+        World world;
+        RenderView view;
+        if (!LevelLoader::load(levelsDir() + "/" + f.name, world, *renderer, view, assets, false))
+            continue;
+        const CityBuildings* cb = nullptr;
+        world.each<CityBuildings>([&](Entity, CityBuildings& c) { if (!cb) cb = &c; });
+        const CityMap* cm = nullptr;
+        world.each<CityMap>([&](Entity, CityMap& m) { if (!cm) cm = &m; });
+        if (!cb || !cm || !cm->data) continue;
+        const RoadGraph& rg = cm->data->roads;
+        auto segDist = [](const Vec2& p, const Vec2& a, const Vec2& b) {
+            const Vec2 ab = b - a;
+            const Real l2 = ab.x * ab.x + ab.y * ab.y;
+            if (l2 < 1e-9) return (p - a).length();
+            Real t = ((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / l2;
+            t = std::max(Real(0), std::min(Real(1), t));
+            return (p - (a + ab * t)).length();
+        };
+        int offenders = 0;
+        Real worst = 0; Vec2 worstAt(0, 0); std::size_t worstRec = 0;
+        for (std::size_t i = 0; i < cb->records.size(); ++i) {
+            const BuildingRecord& r = cb->records[i];
+            if (r.plan.size() < 3) continue;
+            bool bad = false;
+            for (const Vec2& v : r.plan) {
+                for (std::size_t e = 0; e < rg.edges.size(); ++e) {
+                    const RoadEdge& ed = rg.edges[e];
+                    if (ed.a < 0 || ed.b < 0) continue;
+                    const Real d = segDist(v, rg.nodes[ed.a].pos, rg.nodes[ed.b].pos);
+                    const Real into = ed.width * Real(0.5) - d;   // >0 = inside the lane
+                    if (into > Real(0.25)) {
+                        bad = true;
+                        if (into > worst) { worst = into; worstAt = v; worstRec = i; }
+                    }
+                }
+            }
+            if (bad) ++offenders;
+        }
+        std::printf("    [in-road] %s: %d of %zu buildings stand in a carriageway; worst %.2f m "
+                    "into the lane at (%.1f, %.1f), record %zu\n",
+                    f.name.c_str(), offenders, cb->records.size(), worst, worstAt.x, worstAt.y, worstRec);
+    }
+}
+
 TEST_CASE(level_print_tower_cores) {
     if (!std::getenv("RT_PRINT_CORES")) return;
     for (const std::string& name : shippedLevels()) {
