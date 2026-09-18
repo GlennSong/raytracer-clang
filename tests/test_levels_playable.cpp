@@ -427,6 +427,20 @@ LevelFacts inspect(const std::string& name) {
                         }
                     }
                 }
+                // NAME EVERY OFFENDER, not just the worst. The census used to
+                // report a count and one position, which says a defect exists
+                // somewhere but not WHICH building -- so a walk that finds a
+                // broken lot cannot be matched against it (Glenn flew to one
+                // and the worst-case coordinate was 600 m away). Each is
+                // printed with a teleport-ready position.
+                if (buried || gapped) {
+                    const Vec2 c = centroid(prism.plan);
+                    std::printf("    [census]   %s %s at (%.1f, %.1f)"
+                                "  ->  teleport %.2f %.2f\n",
+                                f.name.c_str(),
+                                buried && gapped ? "BURIED+GAP" : (buried ? "BURIED" : "GAP"),
+                                c.x, c.y, c.x, c.y);
+                }
                 if (buried) ++f.censusBurials;
                 if (gapped) ++f.censusGaps;
             }

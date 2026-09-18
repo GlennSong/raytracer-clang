@@ -13,7 +13,7 @@ namespace engine {
 const char* const kCityLotsProducerName = "citylots";
 const char* const kCityLotsSectionPrefix = "citylots/";
 // Bump whenever the lot pass's output changes for the same inputs (the key cannot see code).
-const char* const kCityLotsBuildTag = "2026-09-17.6";   // .1: a lot that cannot clear the carriageway is green, not built from the raw site polygon   // .2: propagateWaterSeaLevel, so a level with water grows the loader's graph   // .3: measure pads that still cover carriageway
+const char* const kCityLotsBuildTag = "2026-09-18.2";   // .1: a lot that cannot clear the carriageway is green, not built from the raw site polygon   // .2: propagateWaterSeaLevel, so a level with water grows the loader's graph   // .3: measure pads that still cover carriageway
 
 namespace {
 

@@ -1195,6 +1195,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // span it, because the edge across the gap is never re-tested.
     int padsStillInRoad = 0, padsChecked = 0;
     int padsOnCarriageway = 0;   // the STRICT question: on the asphalt itself
+    int lotsInCarriageway = 0;   // PARCELS that reach into a lane
+    std::vector<Vec2> rejectedPadAt;   // WHERE the road-locked pads were
     auto pruneTreeSpotsIntoRoad = [&](std::vector<Vec3>& spots) {
         if (!roads || spots.empty()) return;
         const std::size_t before = spots.size();
@@ -1402,14 +1404,18 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 }
             return false;
         };
-        if (hit(centroid(pad))) return Poly2{};
+        const Vec2 c0 = centroid(pad);
+        if (hit(c0)) { rejectedPadAt.push_back(c0); return Poly2{}; }
         for (std::size_t i2 = 0; i2 < pad.size(); ++i2) {
             const Vec2& A = pad[i2];
             const Vec2& B = pad[(i2 + 1) % pad.size()];
             const Real len = (B - A).length();
             const int steps = std::max(1, static_cast<int>(len / 2.0));
             for (int k2 = 0; k2 <= steps; ++k2)
-                if (hit(A + (B - A) * (static_cast<Real>(k2) / steps))) return Poly2{};
+                if (hit(A + (B - A) * (static_cast<Real>(k2) / steps))) {
+                    rejectedPadAt.push_back(c0);
+                    return Poly2{};
+                }
         }
         return pad;
     };
@@ -1857,6 +1863,29 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         bool bisected = false;
         ParcelReject prj;
         std::vector<Lot> lots = subdivideBlock(foot, bf.pp, 0, &bisected, &prj);
+        // A PARCEL IN A LANE (Glenn: "That's a road, there should be no lot
+        // there", after being told twice it was fixed).
+        //
+        // The block interior is pushed clear of roads, but pushPolyClearOfRoads
+        // DELETES up to 20% of vertices it cannot settle and returns the rest --
+        // so `foot` can still cross a carriageway, and every lot parcelled out
+        // of it inherits that. The BUILDING on such a lot is shrunk clear, which
+        // is why every building-based check reported clean; the lot itself never
+        // was, and landscaping scatters across the lot. Measured from the city's
+        // own SVG (tools/city_svg_audit.py): 5 of 1702 lots reached into a lane,
+        // worst 5.99 m.
+        //
+        // Dropping the lot is proportionate where dropping the BLOCK was not --
+        // this is five parcels, not five city blocks.
+        {
+            const std::size_t before = lots.size();
+            lots.erase(std::remove_if(lots.begin(), lots.end(),
+                                      [&](const Lot& L) {
+                                          return padOnCarriageway(L.footprint);
+                                      }),
+                       lots.end());
+            lotsInCarriageway += static_cast<int>(before - lots.size());
+        }
         if (bisected) ++dbg->bisectedBlocks;
         dbg->pEdgeShort += prj.edgeShort; dbg->pShallow += prj.shallow;
         dbg->pMitered   += prj.mitered;   dbg->pOverlap += prj.overlap;
@@ -3366,7 +3395,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                  << " | " << blocksAllCarriageway
                  << " blocks all carriageway"
                  << " | " << dbg->bisectedBlocks
-                 << " blocks BLIND-BISECTED (no street reference)";
+                 << " blocks BLIND-BISECTED (no street reference)"
+                 << " | lots dropped for reaching into a lane " << lotsInCarriageway;
+    for (std::size_t k = 0; k < rejectedPadAt.size(); ++k)
+        LOG_INFO << "[citylots] road-locked lot " << k << " REMOVED at ("
+                 << rejectedPadAt[k].x << ", " << rejectedPadAt[k].y
+                 << ") -- this ground is street again";
     LOG_INFO << "[citylots] frontage walk: placed " << dbg->pPlaced
              << " lots; rejected edgeShort " << dbg->pEdgeShort
              << ", shallow " << dbg->pShallow << ", mitered " << dbg->pMitered
