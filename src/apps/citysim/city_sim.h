@@ -639,6 +639,16 @@ public:
     const Dispatch& dispatch() const { return dispatch_; }
     // Mark an agent as a cab: it runs the taxi table instead of its archetype's.
     void setTaxi(int i, bool on);
+    // What fraction of the DRIVERS work as cabs, and how willing a walker is to
+    // hail one. Both persist across a rebuild, like the wander and tier knobs:
+    // the host owns them.
+    void setTaxiFraction(Real f);
+    // `chance` is the odds a walker facing a trip at least `minMetres` long
+    // hails instead of setting off on foot. 0 disables hailing entirely.
+    void setHailPolicy(Real chance, Real minMetres) {
+        hailChance_ = chance;
+        hailMinMetres_ = minMetres;
+    }
     bool isTaxi(int i) const;
     // Keyed by ARCHETYPE (see goalsFor): pass an agent's `archetype`, not its
     // current `mode`.
@@ -697,6 +707,10 @@ private:
     // False when no trip launched (then a NoRoute row, if any, has been taken).
     bool startGoalTrip(Agent& a, int origin, bool fromRest);
     int departNode(const Agent& a) const;   // where a rest departure starts from
+    // The node a GoTo state aims at, or -1 when it has no fixed one (Random
+    // picks inside startWanderTrip; Fare/Drop come from the Dispatch).
+    int goalNodeFor(const Agent& a, GoalTarget target) const;
+    void applyTaxiFraction();
     // Selects by ARCHETYPE (what the agent is), never by `mode` (how it happens
     // to be moving). An agent that parks and walks to a door must keep running
     // the same day — if this read `mode`, getting out of the car would swap it
@@ -832,6 +846,9 @@ private:
     Dispatch dispatch_;              // who wants a ride (city_dispatch.h)
     std::vector<uint8_t> taxi_;      // per-agent: runs the taxi table
     GoalTable taxiTable_;
+    Real taxiFraction_ = 0;
+    Real hailChance_ = 0;
+    Real hailMinMetres_ = 400;
                                               // never nest across a live iteration)
     std::vector<int> tierScratch_;            // tierPass promotion candidates
     std::vector<int> dormantScratch_;         // tierPass wake candidates

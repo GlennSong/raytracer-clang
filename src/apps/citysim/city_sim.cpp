@@ -631,6 +631,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
             maxJunctionRadius_ = std::max(maxJunctionRadius_, junctions_[j].second);
         }
     }
+    applyTaxiFraction();   // a rebuild re-marks the cabs (the knob persists)
     // Measure the commute here as well as after assignPlaces: a level with no
     // authored places never calls that, and scheduleSnapshot (and the host's
     // clock-scale warning) both need a travel time to be meaningful.
@@ -1367,6 +1368,25 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
     if (s.action == GoalAction::GoTo) {
         if (!a.moving) {
             int from = departNode(a);
+            // HAIL INSTEAD OF WALK. A walker facing a long trip sometimes takes
+            // a cab -- which is the only thing that puts anyone in the back of
+            // one without a host driving it. Decided ONCE, at the departure,
+            // from the agent's own brain stream so it is reproducible; a hail
+            // that finds no cab simply waits, and the rider is parked at the
+            // kerb until one is free (hail(), awaitingRide()).
+            if (hailChance_ > 0 && a.mode == Agent::Mode::Pedestrian && nav_ &&
+                !isTaxi(self) && dispatch_.driverFor(self) < 0) {
+                const int to = goalNodeFor(a, s.target);
+                if (to >= 0 && from >= 0 && to != from &&
+                    from < nav_->nodeCount() && to < nav_->nodeCount()) {
+                    const Vec2 p0 = nav_->nodes[static_cast<std::size_t>(from)];
+                    const Vec2 p1 = nav_->nodes[static_cast<std::size_t>(to)];
+                    const Real dx = p1.x - p0.x, dy = p1.y - p0.y;
+                    if (std::sqrt(dx * dx + dy * dy) >= hailMinMetres_ &&
+                        brainUnit(a) < hailChance_ && hail(self, from, to))
+                        return;
+                }
+            }
             // Archetype, for the same reason as tryGoalEvent above.
             if (a.archetype != Agent::Mode::Driver || a.far() ||
                 launchClear(a, from))
@@ -1479,6 +1499,46 @@ void CitySim::alightRide(int passenger) {
     // Set down RESTING, wherever the vehicle stopped. The next goal tick sees a
     // GoTo state with !moving and launches a fresh trip from here -- which is
     // exactly "got out and walked the rest of the way", with no special case.
+}
+
+int CitySim::goalNodeFor(const Agent& a, GoalTarget target) const {
+    switch (target) {
+        case GoalTarget::Work: return a.work;
+        case GoalTarget::Home: return a.home;
+        case GoalTarget::Shop: return a.shop;
+        default: return -1;
+    }
+}
+
+void CitySim::setTaxiFraction(Real f) {
+    taxiFraction_ = f < 0 ? 0 : (f > 1 ? 1 : f);
+    applyTaxiFraction();
+}
+
+void CitySim::applyTaxiFraction() {
+    if (agents_.empty()) return;
+    taxi_.assign(agents_.size(), 0);
+    if (taxiFraction_ <= 0) return;
+    if (taxiTable_.stateCount() == 0) taxiTable_ = taxiGoals();
+    int drivers = 0;
+    for (const Agent& a : agents_)
+        if (a.archetype == Agent::Mode::Driver) ++drivers;
+    if (drivers <= 0) return;
+    const int want = static_cast<int>(drivers * taxiFraction_ + 0.5);
+    if (want <= 0) return;
+    // Every Nth DRIVER by index: deterministic, and spread through the fleet
+    // instead of clustered at the front where they would all spawn together.
+    const int stride = std::max(1, drivers / want);
+    int seen = 0, made = 0;
+    for (std::size_t i = 0; i < agents_.size() && made < want; ++i) {
+        if (agents_[i].archetype != Agent::Mode::Driver) continue;
+        if (seen++ % stride == 0) {
+            taxi_[i] = 1;
+            agents_[i].goal = taxiTable_.entry();
+            agents_[i].goalHours = 0;
+            ++made;
+        }
+    }
 }
 
 bool CitySim::hail(int passenger, int pickup, int dropoff) {

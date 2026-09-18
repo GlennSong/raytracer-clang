@@ -121,3 +121,35 @@ TEST_CASE(taxi_carries_its_passenger_rather_than_leaving_them_behind) {
     CHECK(sampled > 20);       // there really was a ride to sample
     CHECK(worstGap < 0.01);    // and the rider never trailed the cab
 }
+
+TEST_CASE(walkers_hail_cabs_on_their_own) {
+    // The whole chain with NOBODY driving it from outside: some drivers work as
+    // cabs, some walkers facing a long trip hail one, and rides happen. If this
+    // passes only because the test called hail(), it is worthless — so it never
+    // calls hail() at all.
+    NavGraph nav = citytest::cityNav(900.0, 120.0, 9);
+    CitySim sim;
+    sim.build(nav, 40, 80, 13);
+    sim.setTaxiFraction(0.25);
+    sim.setHailPolicy(0.6, 250.0);
+
+    int cabs = 0;
+    for (std::size_t i = 0; i < sim.agents().size(); ++i)
+        if (sim.isTaxi(static_cast<int>(i))) ++cabs;
+    CHECK(cabs > 0);
+    CHECK(cabs < 40);            // a QUARTER of the drivers, not all of them
+
+    long everHailed = 0, everRode = 0;
+    std::vector<char> rodeOnce(sim.agents().size(), 0);
+    std::vector<char> hailedOnce(sim.agents().size(), 0);
+    for (int tick = 0; tick < 24000; ++tick) {
+        sim.step(0.05, 0.4);     // let the clock run: schedules drive departures
+        for (std::size_t i = 0; i < sim.agents().size(); ++i) {
+            const int ai = static_cast<int>(i);
+            if (!hailedOnce[i] && sim.awaitingRide(ai)) { hailedOnce[i] = 1; ++everHailed; }
+            if (!rodeOnce[i] && sim.riding(ai)) { rodeOnce[i] = 1; ++everRode; }
+        }
+    }
+    CHECK(everHailed > 0);       // walkers decided to hail, unprompted
+    CHECK(everRode > 0);         // and cabs actually collected them
+}
