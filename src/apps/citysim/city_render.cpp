@@ -362,6 +362,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 else if (body.type == VehicleType::Bus) busVariant_ = v;
                 catalogue.push_back(body);
             }
+            LOG_INFO << "[citysim] fleet: " << slots << " slots, bus variant "
+                     << busVariant_ << (busVariant_ < 0 ? " (NO BUS MESH)" : "");
             sim_.setFleet(std::move(catalogue));
             fleetScripted = true;
         }
@@ -1745,6 +1747,25 @@ void CityRenderSystem::syncGroups(World& world) {
 
 void CityRenderSystem::step(World& world, Real dt) {
     if (!built_) return;
+    // WHERE ARE THE BUSES (print-only, RT_PRINT_BUSES=1). Same idea as
+    // RT_PRINT_CORES: transit vehicles drive a loop across the whole city, so
+    // finding one to look at by standing at a stop and waiting is a matter of
+    // luck -- at 1:1 a lap takes minutes. This says where they actually are.
+    if (std::getenv("RT_PRINT_BUSES")) {
+        busPrintAcc_ += dt;
+        if (busPrintAcc_ >= 1.0) {
+            busPrintAcc_ = 0;
+            int shown = 0;
+            for (std::size_t ai = 0; ai < sim_.agents().size() && shown < 6; ++ai) {
+                if (!sim_.isBus(static_cast<int>(ai))) continue;
+                const Agent& a = sim_.agents()[ai];
+                LOG_INFO << "[bus] agent " << ai << " at (" << a.pos.x << ", "
+                         << a.pos.y << ") moving=" << (a.moving ? 1 : 0)
+                         << " riders=" << sim_.rides().load(static_cast<int>(ai));
+                ++shown;
+            }
+        }
+    }
     bakeDt_ = dt;   // the tilt low-pass keys its gain to the bake interval
     // CADENCE IS THE SIM'S OWN (P8.2e): hand it the level's period, scaled by
     // the adaptive load multiplier, and let it decide whether this call

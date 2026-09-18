@@ -3,6 +3,7 @@
 #include <imgui.h>                       // clip/clip?: the debug UI clipboard from the socket
 #endif
 #include "procgen/city/city_svg.h"     // the layered city map
+#include "procgen/city/building_records.h"   // `lot?`: what is actually here
 #include "application.h"
 #include "states/debug_overlay_state.h"
 #include "systems/debug_overlay_system.h"   // static settings<->renderer mapping (control `render`)
@@ -779,6 +780,86 @@ std::string Application::handleControlCommand(const std::string& line) {
                       std::atan2(fwd.x, -fwd.z) * kRadToDeg);
         return buf;
     }
+    if (cmd.name == "lot?") {
+        // WHAT IS ACTUALLY HERE (Glenn: "Are you able to pull the city block
+        // and lot details while the game is running? If not that would be a
+        // useful mcp diagnostic").
+        //
+        // `citymap` draws the whole city and the censuses count aggregates, but
+        // there was no way to stand somewhere wrong and ask WHY. Chasing the
+        // lot-in-a-street bug cost a day of measuring populations to find four
+        // bad pads, when the one question worth asking was "what is the lot
+        // under my feet, and what does it think it is".
+        if (cmd.args.size() < 2)
+            return "err usage: lot? <x> <z> [radius]  (radius default 40)";
+        double qx = 0, qz = 0, rad = 40.0;
+        if (!num(cmd.args[0], qx) || !num(cmd.args[1], qz))
+            return "err usage: lot? <x> <z> [radius]";
+        if (cmd.args.size() > 2) num(cmd.args[2], rad);
+        const engine::Vec2 q(qx, qz);
+        std::string out = "at (" + std::to_string(qx) + ", " + std::to_string(qz) + ")";
+
+        // THE ROAD under/near the point: the thing a lot must not be standing in.
+        const CityMap* map = nullptr;
+        worldState.each<CityMap>([&](Entity, CityMap& m) { if (!map) map = &m; });
+        if (map && map->data) {
+            const engine::RoadGraph& g = map->data->roads;
+            double bestD = 1e30, bestW = 0;
+            int bestE = -1;
+            for (std::size_t e = 0; e < g.edges.size(); ++e) {
+                const engine::RoadEdge& ed = g.edges[e];
+                if (ed.a < 0 || ed.b < 0 ||
+                    ed.a >= static_cast<int>(g.nodes.size()) ||
+                    ed.b >= static_cast<int>(g.nodes.size())) continue;
+                const engine::Vec2& A = g.nodes[ed.a].pos;
+                const engine::Vec2& B = g.nodes[ed.b].pos;
+                engine::Vec2 ab = B - A;
+                const double l2 = ab.x * ab.x + ab.y * ab.y;
+                double t = l2 > 1e-12 ? ((q.x - A.x) * ab.x + (q.y - A.y) * ab.y) / l2 : 0.0;
+                t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                const engine::Vec2 P(A.x + ab.x * t, A.y + ab.y * t);
+                const double d = std::sqrt((q.x - P.x) * (q.x - P.x) + (q.y - P.y) * (q.y - P.y));
+                if (d < bestD) { bestD = d; bestW = ed.width; bestE = static_cast<int>(e); }
+            }
+            if (bestE >= 0) {
+                const double into = bestW * 0.5 - bestD;
+                out += " | road edge " + std::to_string(bestE) + " width " +
+                       std::to_string(bestW) + " centreline " + std::to_string(bestD) + " m";
+                out += into > 0 ? (" -- IN THE CARRIAGEWAY by " + std::to_string(into) + " m")
+                                : (" (clear by " + std::to_string(-into) + " m)");
+            }
+        } else {
+            out += " | no city map on this level";
+        }
+
+        // THE BUILDINGS here: what stands on this ground and what it thinks it is.
+        const CityBuildings* cb = nullptr;
+        worldState.each<CityBuildings>([&](Entity, CityBuildings& b) { if (!cb) cb = &b; });
+        if (!cb) return "ok " + out + " | no city buildings on this level";
+        std::vector<const BuildingRecord*> hits;
+        cb->near(q, rad, hits);
+        out += " | " + std::to_string(hits.size()) + " record(s) within " +
+               std::to_string(rad) + " m";
+        int shown = 0;
+        for (const BuildingRecord* r : hits) {
+            if (shown++ >= 6) { out += " | ..."; break; }
+            const bool inside = r->plan.size() >= 3 && pointInPolygon(r->plan, q);
+            const engine::Vec2 c = r->plan.size() >= 3 ? centroid(r->plan) : engine::Vec2(0, 0);
+            out += " | #" + std::to_string(static_cast<int>(r - cb->records.data())) +
+                   " " + (r->type.empty() ? "?" : r->type) +
+                   "/" + (r->recipe.empty() ? "?" : r->recipe) +
+                   " district=" + (r->district.empty() ? "?" : r->district) +
+                   " verts=" + std::to_string(r->plan.size()) +
+                   " baseY=" + std::to_string(r->baseY) +
+                   " h=" + std::to_string(r->height) +
+                   " floors=" + std::to_string(r->params.floors) +
+                   (r->enterable ? " enterable" : "") +
+                   " centroid=(" + std::to_string(c.x) + ", " + std::to_string(c.y) + ")" +
+                   (inside ? " <-- YOU ARE INSIDE THIS PLAN" : "");
+        }
+        return "ok " + out;
+    }
+
     if (cmd.name == "citymap") {
         // The layered city map, from the running level (city_svg.h):
         // `citymap <path.svg> [roads,sidewalks,furniture,...|all]`.

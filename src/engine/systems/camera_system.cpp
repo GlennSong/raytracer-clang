@@ -1,5 +1,7 @@
 #include "camera_system.h"
 
+#include <cstdio>
+
 #include "../camera/view_distance.h"
 #include "../components.h"
 #include "../mesh_builder.h"
@@ -200,7 +202,27 @@ void CameraSystem::update(FrameContext& ctx) {
             LOG_INFO << "Camera detached: free-fly (mouse looks, WASD/QE "
                         "moves, F re-attaches)";
         } else {
-            LOG_INFO << "Camera attached";
+            // FAST TRAVEL (Glenn: "if I exit out of that mode F just drops me
+            // where I moved to instead of back to where I was"). Re-attaching
+            // used to snap the view back to wherever the body was left
+            // standing, which made the freecam a look-around tool and nothing
+            // else. Now the PLAYER comes to the camera.
+            //
+            // Staged as an ordinary teleport request rather than by writing the
+            // transform: TeleportSystem already does the ground snap, resets the
+            // fall baseline so arriving does not read as a long drop, and
+            // reports through `teleport?`. Two spellings of "move the player"
+            // would drift apart.
+            if (ctx.settings.getBool("cameraDetachFastTravel", true)) {
+                char pose[96];
+                std::snprintf(pose, sizeof(pose), "%.3f %.3f", fly.eye.x, fly.eye.z);
+                ctx.settings.setString("teleport.result", "");
+                ctx.settings.setString("teleport.request", pose);
+                LOG_INFO << "Camera attached: player moved to the camera ("
+                         << pose << ")";
+            } else {
+                LOG_INFO << "Camera attached";
+            }
         }
     }
 
