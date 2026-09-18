@@ -149,8 +149,13 @@ void emitRooms(RoomMeshes& out, RenderMesh* colliderOut, const RoomPlan& rp, Rea
                const Vec3& paint);
 
 // The doorway every room front carries.
-constexpr Real kRoomDoorW = 0.9;
-constexpr Real kRoomDoorH = 2.05;
+// AN OPENING THE PLAYER FITS THROUGH (Glenn, 2026-09-17: "the player cannot fit
+// through the doorway"). This was 0.9 x 2.05 -- shorter than the 2.2 m capsule
+// metro_v2_test ships, so every interior doorway was a duck. Exactly the bug
+// fixed in the CORE doors this morning (kDoorH -> human::DOOR_HEIGHT); the room
+// doors kept their own literal and were missed.
+constexpr Real kRoomDoorW = human::INNER_DOOR_WIDTH;
+constexpr Real kRoomDoorH = human::DOOR_HEIGHT;
 constexpr Real kRoomWallT = 0.12;
 // A masonry plate narrower than this, with no core, is one dwelling a floor.
 constexpr Real kWholeFloorShortSide = 13.0;

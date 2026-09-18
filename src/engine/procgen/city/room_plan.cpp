@@ -656,6 +656,27 @@ void glassRun(RenderMesh& m, RenderMesh* col, const Vec2& a, const Vec2& b, Real
     piece(0, d0, y0, yt);
     piece(d1, L, y0, yt);
     piece(d0, d1, y0 + kRoomDoorH, yt);
+    // GLAZING, NOT A PLANE (Glenn, 2026-09-17: "the glass walls are hard to
+    // see"). A flat quad has no edge to catch light. But a pane only READS as
+    // thick where its edge is visible -- at a reveal -- and this renderer culls
+    // no back faces, so a second face and caps along every run cost triangles
+    // for nothing. A first cut did all four and put the streamed-window census
+    // over its cap (12,900 of 12,000). So: the pane stays one face, and each
+    // door jamb gets a 60 mm returned edge, which is the only place you see it.
+    {
+        const Real gt = human::GLASS_THICKNESS;
+        auto jamb = [&](Real x, Real sgn) {
+            auto J = [&](Real off, Real y) {
+                const Vec2 p = a + d * x + nn * off;
+                return Vec3(p.x, y, p.y);
+            };
+            const Vec3 e(d.x * sgn, 0, d.y * sgn);
+            quad(m, nullptr, J(-gt * 0.5, y0), J(gt * 0.5, y0),
+                 J(gt * 0.5, y0 + kRoomDoorH), J(-gt * 0.5, y0 + kRoomDoorH), e, white);
+        };
+        jamb(d0, 1.0);
+        jamb(d1, -1.0);
+    }
 }
 
 // SLATS on one face of a wall: vertical battens standing proud of it, the

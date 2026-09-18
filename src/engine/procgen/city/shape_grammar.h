@@ -33,6 +33,10 @@ constexpr Real DOOR_HEIGHT       = 2.7;   // clear opening — reads as an ENTRA
                                           // against 4.5 m retail ground floors
                                           // (device: "front doors are very short")
 constexpr Real DOOR_WIDTH        = 2.0;   // double-leaf entrance
+constexpr Real INNER_DOOR_WIDTH  = 1.2;   // single-leaf interior opening: a
+                                          // 0.6 m player capsule walks through
+                                          // it instead of squeezing
+constexpr Real GLASS_THICKNESS   = 0.06;  // a pane reads as glazing, not a plane
 constexpr Real WINDOW_SILL       = 0.9;
 constexpr Real WINDOW_HEAD       = 2.4;   // top of window above its floor
 constexpr Real PARAPET           = 1.1;   // roof-edge railing height
