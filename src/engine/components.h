@@ -526,6 +526,12 @@ struct DayNightConfig {
     // stands); 1 = auto (today's state from the seed and the day of year,
     // then the walk); 2..5 = a fixed state.
     int weather = -1;
+    // THE CLOCK SOURCE. 0 = fixed (timeOfDay above is where the day opens);
+    // 1 = real (open at the wall clock's time of day); < 0 = unset, keep the
+    // cycle's default. `utcOffsetHours` <= -100 uses the machine's timezone.
+    // Pair with "dayMinutes": 1440 for one-to-one with reality.
+    int clockSource = -1;
+    float utcOffsetHours = -1000.0f;
 };
 
 struct CitySimConfig {

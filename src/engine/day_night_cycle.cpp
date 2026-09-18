@@ -1,5 +1,7 @@
 #include "day_night_cycle.h"
 
+#include <ctime>
+
 #include <algorithm>
 #include <cmath>
 
@@ -233,6 +235,28 @@ DayNightState DayNightCycle::evaluateAt(double timeOfDay, double latitudeDeg,
         s.lightIntensity = static_cast<float>(moonI);
     }
     return s;
+}
+
+double wallClockTimeOfDay(double utcOffsetHours) {
+    const std::time_t now = std::time(nullptr);
+    double secondsIntoDay = 0;
+    if (utcOffsetHours <= -100.0) {
+        std::tm local{};
+#if defined(_WIN32)
+        localtime_s(&local, &now);
+#else
+        localtime_r(&now, &local);
+#endif
+        secondsIntoDay = local.tm_hour * 3600.0 + local.tm_min * 60.0 + local.tm_sec;
+    } else {
+        // UTC seconds into the day, shifted, wrapped.
+        const double utc = std::fmod(static_cast<double>(now), 86400.0);
+        secondsIntoDay = std::fmod(utc + utcOffsetHours * 3600.0 + 86400.0, 86400.0);
+    }
+    double f = secondsIntoDay / 86400.0;
+    if (f < 0) f += 1.0;
+    if (f >= 1.0) f -= 1.0;
+    return f;
 }
 
 }  // namespace engine

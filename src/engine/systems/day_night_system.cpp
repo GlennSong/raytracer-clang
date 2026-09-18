@@ -235,6 +235,17 @@ void DayNightSystem::onStop(FrameContext& ctx) {
 // once; the settings-persisted values stand where the level says nothing.
 void DayNightSystem::seedFromConfig(const DayNightConfig& c) {
     if (c.timeOfDay >= 0.0f) cycle.timeOfDay = c.timeOfDay;
+    // REAL CLOCK: open at the wall clock's time of day. Applied ONCE here, not
+    // polled -- CityRenderSystem::setWorldClock re-seeds the whole population
+    // whenever the sky hour jumps past its tolerance, so a periodic resync
+    // would rebuild the city on a timer. At dayMinutes 1440 the drift across a
+    // session is seconds.
+    if (c.clockSource == 1) {
+        cycle.timeOfDay = wallClockTimeOfDay(c.utcOffsetHours);
+        LOG_INFO << "[daynight] real clock: opening at "
+                 << (cycle.timeOfDay * 24.0) << " h (utcOffsetHours "
+                 << c.utcOffsetHours << ")";
+    }
     if (c.dayMinutes >= 0.0f) cycle.dayMinutes = c.dayMinutes;
     else if (c.speed > 0.0f) cycle.dayMinutes = 1.0 / (c.speed * 60.0);   // legacy days/sec
     if (c.latitude >= -90.0f) cycle.latitudeDeg = c.latitude;

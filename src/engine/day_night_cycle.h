@@ -166,6 +166,14 @@ public:
     static double lightPollutionFor(double distanceOutside, double strength, double falloff);
 };
 
+// WALL-CLOCK TIME OF DAY as a [0, 1) fraction (Glenn, 2026-09-17: "an option to
+// let it run based on the real time of day in PST -- that should be tuneable").
+// `utcOffsetHours` <= -100 means "use the machine's own timezone"; otherwise the
+// fraction is UTC shifted by that many hours, so Pacific is a VALUE (-8 standard,
+// -7 daylight) rather than a hardcoded assumption. Pure: no cycle state, so it
+// is testable on its own.
+double wallClockTimeOfDay(double utcOffsetHours = -1000.0);
+
 }  // namespace engine
 
 #endif

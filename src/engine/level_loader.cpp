@@ -4755,6 +4755,13 @@ bool LevelLoader::load(const std::string& path,
         dc.enabled = dn.value("enabled", dc.enabled);
         dc.timeOfDay = dn.value("timeOfDay", dc.timeOfDay);
         dc.dayMinutes = dn.value("dayMinutes", dc.dayMinutes);
+        {   // "clock": "real" opens at the wall clock; "fixed" (default) opens
+            // at timeOfDay. "utcOffsetHours" tunes the zone.
+            const std::string c = dn.value("clock", std::string());
+            if (c == "real") dc.clockSource = 1;
+            else if (c == "fixed") dc.clockSource = 0;
+            dc.utcOffsetHours = dn.value("utcOffsetHours", dc.utcOffsetHours);
+        }
         dc.speed = dn.value("speed", dc.speed);   // legacy days/sec
         dc.latitude = dn.value("latitude", dc.latitude);
         dc.dayOfYear = dn.value("dayOfYear", dc.dayOfYear);
