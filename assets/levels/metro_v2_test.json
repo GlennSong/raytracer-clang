@@ -23,7 +23,10 @@
     "sidewalk": 5.0,
     "tiered": true,
     "vehicles": "vehicles.lua",
-    "wander": false
+    "wander": false,
+    "taxiFraction": 0.12,
+    "hailChance": 0.25,
+    "hailMinMetres": 350.0
   },
   "dayNight": {
     "dayMinutes": 30.0,

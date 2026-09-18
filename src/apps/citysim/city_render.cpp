@@ -160,6 +160,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.dormantAgents = c.dormantAgents;
         params_.pedPromoteRadius = c.pedPromoteRadius;
         params_.pedDemoteRadius = c.pedDemoteRadius;
+        params_.taxiFraction = c.taxiFraction;
+        params_.hailChance = c.hailChance;
+        params_.hailMinMetres = c.hailMinMetres;
         params_.wander = c.wander;
         params_.agentScript = c.agentScript;
         params_.vehicleScript = c.vehicleScript;
@@ -364,9 +367,14 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     sim_.dormancyEnabled = params_.dormantAgents;
     sim_.pedPromoteRadius = params_.pedPromoteRadius;
     sim_.pedDemoteRadius = params_.pedDemoteRadius;
+    // Cabs: setTaxiFraction re-marks the fleet, so it must come AFTER build.
+    sim_.setHailPolicy(params_.hailChance, params_.hailMinMetres);
+    sim_.setTaxiFraction(params_.taxiFraction);
     // What this LEVEL asked for, beside the density line above. Nothing used
     // to print it, so a level that silently failed to opt into tiering looked
     // exactly like one that had (2026-09-16).
+    LOG_INFO << "[citysim] cabs: " << (params_.taxiFraction * 100.0) << "% of drivers, hail "
+             << (params_.hailChance * 100.0) << "% over " << params_.hailMinMetres << " m";
     LOG_INFO << "[citysim] sim tiers: tiered=" << (params_.tieredAgents ? "on" : "off")
              << " dormancy=" << (params_.dormantAgents ? "on" : "off")
              << " localHz=" << params_.localHz

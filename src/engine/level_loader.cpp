@@ -3887,6 +3887,9 @@ bool LevelLoader::load(const std::string& path,
         cfg.sceneryRadius = cs.value("sceneryRadius", cfg.sceneryRadius);
         cfg.maxWalkerBodies = cs.value("maxWalkerBodies", cfg.maxWalkerBodies);
         cfg.pedPromoteRadius = cs.value("pedPromoteRadius", cfg.pedPromoteRadius);
+        cfg.taxiFraction = cs.value("taxiFraction", cfg.taxiFraction);
+        cfg.hailChance = cs.value("hailChance", cfg.hailChance);
+        cfg.hailMinMetres = cs.value("hailMinMetres", cfg.hailMinMetres);
         cfg.pedDemoteRadius = cs.value("pedDemoteRadius", cfg.pedDemoteRadius);
         cfg.localHz = cs.value("localHz", cfg.localHz);
         cfg.adaptiveRate = cs.value("adaptiveRate", cfg.adaptiveRate);

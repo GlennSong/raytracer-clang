@@ -64,6 +64,10 @@ struct CityRenderParams {
     // ~2x, and near-tier agents are the expensive ones.
     Real pedPromoteRadius = 280.0;
     Real pedDemoteRadius = 350.0;
+    // Cabs on the street, and how readily a walker hails one (0 = off).
+    Real taxiFraction = 0.0;
+    Real hailChance = 0.0;
+    Real hailMinMetres = 400.0;
     // SIM RATE (P8.2d). Traffic is not physics: agents follow lanes, so a
     // bigger dt costs nothing but precision. 0 or >= the fixed rate keeps the
     // historical every-step tick (and every existing test/gate bit-identical);

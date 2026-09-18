@@ -576,6 +576,13 @@ struct CitySimConfig {
     // not.
     float pedPromoteRadius = 280.0f;
     float pedDemoteRadius = 350.0f;
+    // CABS (city_dispatch / taxiGoals). `taxiFraction` of the DRIVERS work as
+    // taxis; a walker facing a trip at least `hailMinMetres` long hails one
+    // with probability `hailChance` instead of walking. All three default to
+    // OFF, so no existing level changes behaviour by being reloaded.
+    float taxiFraction = 0.0f;
+    float hailChance = 0.0f;
+    float hailMinMetres = 400.0f;
     // Sim tick rate for LOCAL agents (Hz). 0 = every fixed step (historical).
     // 30 halves the traffic sim's cost; poses extrapolate between ticks.
     float localHz = 0.0f;
