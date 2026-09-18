@@ -3238,8 +3238,26 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                 const Vec2 u = core.frame.u, v = normalize(E - C);   // v: toward the entrance
                 const Real yF = baseY + 0.07;                        // on the lobby overlay
                 auto box = [&](const Vec2& c, Real w, Real d, Real h0, Real h1, const Vec3& colr, bool collide) {
-                    const Vec2 cs[4] = {c - u * (w * 0.5) - v * (d * 0.5), c + u * (w * 0.5) - v * (d * 0.5),
-                                        c + u * (w * 0.5) + v * (d * 0.5), c - u * (w * 0.5) + v * (d * 0.5)};
+                    Vec2 cs[4] = {c - u * (w * 0.5) - v * (d * 0.5), c + u * (w * 0.5) - v * (d * 0.5),
+                                  c + u * (w * 0.5) + v * (d * 0.5), c - u * (w * 0.5) + v * (d * 0.5)};
+                    // INSIDE-OUT DESKS (Glenn, 2026-09-17: "some of the table
+                    // furniture's normals are backwards"). This ring inherits
+                    // its winding from (u, v): u is the core's frame axis, v is
+                    // "toward the entrance" -- an arbitrary direction with no
+                    // fixed handedness. Where (u, v) comes out left-handed the
+                    // ring is CW, and the side normal below, (dy, -dx), is the
+                    // right-hand perpendicular: on a CW ring it points INWARD,
+                    // so the box lights as if seen from inside. SOME desks, not
+                    // all -- it depends which side of the core the door is on,
+                    // which is why it survived. The top is immune: its normal is
+                    // hardcoded up. Force CCW and (dy, -dx) is outward again.
+                    Real ringArea = 0;
+                    for (int i = 0; i < 4; ++i) {
+                        const Vec2& p0 = cs[i];
+                        const Vec2& p1 = cs[(i + 1) % 4];
+                        ringArea += p0.x * p1.y - p1.x * p0.y;
+                    }
+                    if (ringArea < 0) std::swap(cs[1], cs[3]);
                     for (int i = 0; i < 4; ++i) {
                         const Vec2 a = cs[i], b = cs[(i + 1) % 4];
                         const Vec2 dd = b - a;
