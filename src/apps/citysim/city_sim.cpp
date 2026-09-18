@@ -753,6 +753,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 // kWalkJobFloor out, and only if none of those route does the
                 // nearest of all win.
                 constexpr Real kWalkJobFloor = 300.0;   // metres, straight line
+                constexpr Real kWalkJobCeil  = 900.0;   // "a local place to work"
                 jobDist.clear();
                 jobDist.reserve(jobs.size());
                 for (PlaceId cand : jobs) {
@@ -765,10 +766,15 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                     return x.second < y.second;   // deterministic ties
                 };
                 // [begin, split) are far enough to be a commute; [split, end) are not.
+                // BAND, not a floor. The floor alone stopped walkers working
+                // 70 m away and emptying the streets; a ceiling stops them
+                // crossing town. Rank: inside the band first, then beyond it,
+                // then nearer than it -- nearest first within each group.
                 const auto split = std::stable_partition(
                     jobDist.begin(), jobDist.end(),
                     [&](const std::pair<Real, PlaceId>& e) {
-                        return e.first >= kWalkJobFloor * kWalkJobFloor;
+                        return e.first >= kWalkJobFloor * kWalkJobFloor &&
+                               e.first <= kWalkJobCeil * kWalkJobCeil;
                     });
                 const std::size_t far =
                     static_cast<std::size_t>(split - jobDist.begin());
@@ -820,6 +826,17 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 a.workPlace = pick;
                 a.work = nodeOf(pick);
                 a.workDoor = doorOf(pick);
+                {   // What this commute COSTS, in seconds (see Agent::commuteSeconds).
+                    const bool onFoot = a.archetype == Agent::Mode::Pedestrian;
+                    const engine::Route rt = engine::findRoute(graph, hn, a.work, onFoot);
+                    Real secs = 0;
+                    for (int li : rt.links) {
+                        const engine::NavLink& L = graph.links[li];
+                        const Real v = onFoot ? kWalkSpeed : engine::classSpeed(L.klass);
+                        secs += L.length / std::max(Real(0.1), v * a.speedFactor);
+                    }
+                    a.commuteSeconds = secs;
+                }
                 if (places[pick].type == PlaceType::Shop) {
                     const Real open = places[pick].openHour;
                     const Real close = places[pick].closeHour;
@@ -965,10 +982,11 @@ CitySim::Snapshot CitySim::scheduleSnapshot(const Agent& a, Real clock) const {
     // which goalThink short-circuits in exactly the same way.
     if (a.home == a.work) return s;
 
-    const bool atWorkWindow = inWindow(clock, a.departWork, a.departHome);
+    const Real dwHour = departWorkHour(a);
+    const bool atWorkWindow = inWindow(clock, dwHour, a.departHome);
     // Hours since the boundary that put us in this half of the day.
     const Real since = std::fmod(
-        clock - (atWorkWindow ? a.departWork : a.departHome) + 24.0, 24.0);
+        clock - (atWorkWindow ? dwHour : a.departHome) + 24.0, 24.0);
     const Real travelHours =
         commuteSecondsMedian_ * (hoursPerSecond_ > 0 ? hoursPerSecond_ : 0.0);
 
@@ -1311,7 +1329,7 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
     // with a real commute — a stranded pair (work == home, no route at build)
     // never departs, exactly as before.
     if (a.home != a.work) {
-        const bool atWorkNow = inWindow(clockHours_, a.departWork, a.departHome);
+        const bool atWorkNow = inWindow(clockHours_, departWorkHour(a), a.departHome);
         if (tryGoalEvent(a, atWorkNow ? GoalEvent::DepartWork
                                       : GoalEvent::DepartHome) != GoalFire::NoRow)
             return;
@@ -1336,7 +1354,7 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
     if (a.home != a.work) {
         // The commute fires when the window predicate FLIPS, so the next
         // boundary is whichever end of the window is ahead of us.
-        const bool atWorkNow = inWindow(clockHours_, a.departWork, a.departHome);
+        const bool atWorkNow = inWindow(clockHours_, departWorkHour(a), a.departHome);
         const Real boundary = atWorkNow ? a.departHome : a.departWork;
         Real delta = std::fmod(boundary - clockHours_, Real(24));
         if (delta < 0) delta += 24.0;

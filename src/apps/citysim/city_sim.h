@@ -155,7 +155,14 @@ struct Agent {
 
     // Daily schedule (hours, 0..24), per-agent jittered.
     int home = 0, work = 0;
+    // departWork is the TARGET ARRIVAL at work (Glenn, 2026-09-17: "the agent
+    // would have to leave home earlier to get to work at 8"). The actual
+    // departure is derived: arrival minus the trip, via departWorkHour().
     Real departWork = 8.0, departHome = 17.0;
+    // What this agent's own commute COSTS, in seconds. Rate-free on purpose:
+    // assignPlaces runs before the clock rate is set, and the sky changes the
+    // rate at runtime, so an hour baked at assignment would be wrong twice.
+    Real commuteSeconds = 0;
     Activity activity = Activity::AtHome;
     // Goal layer (ADR-0064): the agent's current state in its archetype's
     // GoalTable, plus the in-world hours spent resting in it (feeds the
@@ -389,6 +396,15 @@ public:
     // waiting out their day at a door and costing nothing. Rises at night and
     // midday, falls through both rush hours.
     int sleepingAgents() const { return sleeping_; }
+    // The hour this agent must LEAVE to arrive at departWork, at the current
+    // clock rate. Wraps midnight: a long commute on a fast clock departs the
+    // previous evening.
+    Real departWorkHour(const Agent& a) const {
+        const Real travel = a.commuteSeconds * (hoursPerSecond_ > 0 ? hoursPerSecond_ : 0.0);
+        Real h = std::fmod(a.departWork - travel, 24.0);
+        if (h < 0) h += 24.0;
+        return h;
+    }
     // PHASE TIMINGS (print-only, 2026-09-17). Where the milliseconds actually
     // go per step. Capping the sensing radius query changed nothing at 50k,
     // which killed two successive guesses about the hot path -- so measure it
