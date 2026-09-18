@@ -53,6 +53,8 @@ public:
 
     // The fare `driver` is currently serving, or nullptr when free.
     const Fare* fareOf(int driver) const;
+    // Still in the queue (hailed, nobody assigned yet).
+    bool isWaiting(int passenger) const;
     // The driver coming for `passenger`, or -1 when nobody is.
     int driverFor(int passenger) const;
     // Drop the assignment (the ride is over, or the driver gave up). The

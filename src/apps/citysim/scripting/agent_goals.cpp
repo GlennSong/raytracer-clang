@@ -46,6 +46,8 @@ bool parseTarget(const std::string& s, GoalTarget& out) {
     if (s == "random") { out = GoalTarget::Random; return true; }
 
     if (s == "shop") { out = GoalTarget::Shop; return true; }
+    if (s == "fare") { out = GoalTarget::Fare; return true; }
+    if (s == "drop") { out = GoalTarget::Drop; return true; }
     return false;
 }
 

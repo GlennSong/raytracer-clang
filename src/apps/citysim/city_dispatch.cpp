@@ -48,6 +48,13 @@ int Dispatch::assign(int driver, const std::function<double(int)>& cost) {
     return f.passenger;
 }
 
+bool Dispatch::isWaiting(int passenger) const {
+    const auto it = std::lower_bound(
+        queue_.begin(), queue_.end(), passenger,
+        [](const Fare& q, int p) { return q.passenger < p; });
+    return it != queue_.end() && it->passenger == passenger;
+}
+
 const Fare* Dispatch::fareOf(int driver) const {
     const auto it = byDriver_.find(driver);
     return it == byDriver_.end() ? nullptr : &it->second;

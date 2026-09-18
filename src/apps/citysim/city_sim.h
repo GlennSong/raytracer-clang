@@ -7,6 +7,7 @@
 #include "agent_grid.h"
 #include "agent_id.h"
 #include "city_goals.h"
+#include "city_dispatch.h"
 #include "city_transit.h"
 #include "places.h"
 #include "relationships.h"
@@ -624,6 +625,21 @@ public:
     void alightRide(int passenger);
     const RideBook& rides() const { return rides_; }
     bool riding(int i) const { return rides_.driverOf(i) >= 0; }
+
+    // HAILING (city_dispatch.h). `hail` queues a walker for a ride; a free
+    // taxi picks the cheapest reachable one up in the goal pass. Exposed so a
+    // host, a test or a future bus policy can drive it without reaching into
+    // the sim's internals.
+    bool hail(int passenger, int pickup, int dropoff);
+    // Hailed, or already promised a cab: either way the agent is WAITING and
+    // must not be re-dispatched on foot by the goal pass.
+    bool awaitingRide(int i) const {
+        return dispatch_.isWaiting(i) || dispatch_.driverFor(i) >= 0;
+    }
+    const Dispatch& dispatch() const { return dispatch_; }
+    // Mark an agent as a cab: it runs the taxi table instead of its archetype's.
+    void setTaxi(int i, bool on);
+    bool isTaxi(int i) const;
     // Keyed by ARCHETYPE (see goalsFor): pass an agent's `archetype`, not its
     // current `mode`.
     const GoalTable& goalTable(Agent::Mode archetype) const {
@@ -672,6 +688,9 @@ private:
     // the agent's current goal state — retry a GoTo departure, or (Rest) emit
     // this tick's events and take the first table row that fires.
     void goalThink(Agent& a, Real dtHours);
+    int indexOf(const Agent& a) const {
+        return static_cast<int>(&a - agents_.data());
+    }
     enum class GoalFire { NoRow, Blocked, Fired };
     GoalFire tryGoalEvent(Agent& a, GoalEvent event);
     // Execute the agent's (GoTo) goal state: start the trip toward its target.
@@ -684,6 +703,17 @@ private:
     // onto the pedestrian schedule mid-commute.
     GoalTable& goalsFor(Agent::Mode archetype) {
         return archetype == Agent::Mode::Driver ? goalDriver_ : goalPed_;
+    }
+    // A CAB runs the taxi table instead of its archetype's -- the one place a
+    // per-AGENT table beats a per-archetype one, because being a taxi is a job,
+    // not a species. Everything else still goes through goalsFor.
+    GoalTable& tableFor(const Agent& a) {
+        return isTaxi(indexOf(a)) ? taxiTable_ : goalsFor(a.archetype);
+    }
+    const GoalTable& tableFor(const Agent& a) const {
+        return isTaxi(indexOf(a)) ? taxiTable_
+                                  : (a.archetype == Agent::Mode::Driver ? goalDriver_
+                                                                        : goalPed_);
     }
     void installGoalTables(GoalTable pedestrian, GoalTable driver);
     bool launchClear(const Agent& a, int node) const;   // no moving car near the spawn
@@ -799,6 +829,9 @@ private:
     mutable std::vector<int> queryScratch_;   // shared candidate buffer (queries
     std::vector<int> pairScratch_;   // car-vs-car pair query (stepTick)
     RideBook rides_;                 // who is riding with whom (city_transit.h)
+    Dispatch dispatch_;              // who wants a ride (city_dispatch.h)
+    std::vector<uint8_t> taxi_;      // per-agent: runs the taxi table
+    GoalTable taxiTable_;
                                               // never nest across a live iteration)
     std::vector<int> tierScratch_;            // tierPass promotion candidates
     std::vector<int> dormantScratch_;         // tierPass wake candidates

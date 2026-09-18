@@ -528,7 +528,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         // later draw and re-pin every seeded scenario in the suite.
         const Real j0 = rndUnit(), j1 = rndUnit();       // per-agent jitter
         a.activity = Agent::Activity::AtHome;
-        a.goal = goalsFor(a.archetype).entry();   // the day starts at the table's entry
+        a.goal = tableFor(a).entry();   // the day starts at the table's entry
         a.brain = rnd() | 1u;            // per-agent fault RNG (non-zero)
         // Trip stream: HASHED from the brain, not drawn, so the build sequence
         // (and every seeded scenario's layout) is unchanged. Must be non-zero —
@@ -1059,7 +1059,7 @@ void CitySim::placeFromSchedule(int idx) {
         // Seat the agent on the table state wearing that label (the same
         // remapping installGoalTables uses), so its next transition is the one
         // its day actually calls for.
-        const GoalTable& t = goalsFor(a.archetype);
+        const GoalTable& t = tableFor(a);
         int goal = -1;
         for (int st = 0; st < t.stateCount(); ++st)
             if (t.state(st).activity == want) { goal = st; break; }
@@ -1251,7 +1251,7 @@ int CitySim::departNode(const Agent& a) const {
 // target. On failure the table's NoRoute row (if any) decides the fallback
 // state — the historical "no path: fall back to the origin's resting state".
 bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
-    const GoalState& s = goalsFor(a.archetype).state(a.goal);
+    const GoalState& s = tableFor(a).state(a.goal);
     bool started = false;
     switch (s.target) {
         case GoalTarget::Random:
@@ -1269,6 +1269,22 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
                 started = a.moving;
             }
             break;
+        case GoalTarget::Fare:
+        case GoalTarget::Drop: {
+            // DYNAMIC targets: the node comes from the hail this driver was
+            // assigned, not from a field on the agent. No fare -> no trip, and
+            // the NoRoute row below puts the cab back on its cruise rather
+            // than leaving it parked forever.
+            const Fare* f = dispatch_.fareOf(indexOf(a));
+            if (f) {
+                const int node = s.target == GoalTarget::Fare ? f->pickup : f->dropoff;
+                if (node >= 0) {
+                    startTrip(a, origin, node, fromRest);
+                    started = a.moving;
+                }
+            }
+            break;
+        }
         default:
             break;   // a GoTo with no target: nothing to do
     }
@@ -1276,11 +1292,11 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
         a.activity = s.activity;   // the day now reads as this state's label
         return true;
     }
-    int next = goalsFor(a.archetype).onEvent(a.goal, GoalEvent::NoRoute);
+    int next = tableFor(a).onEvent(a.goal, GoalEvent::NoRoute);
     if (next >= 0) {
         a.goal = next;
         a.goalHours = 0;
-        a.activity = goalsFor(a.archetype).state(next).activity;
+        a.activity = tableFor(a).state(next).activity;
     }
     return false;
 }
@@ -1290,7 +1306,7 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
 // its spawn area is clear of moving traffic — it waits out the traffic and the
 // event simply fires again next tick, like anyone pulling out of a spot).
 CitySim::GoalFire CitySim::tryGoalEvent(Agent& a, GoalEvent event) {
-    const GoalTable& t = goalsFor(a.archetype);
+    const GoalTable& t = tableFor(a);
     int next = t.onEvent(a.goal, event);
     if (next < 0) return GoalFire::NoRow;
     const GoalState& to = t.state(next);
@@ -1329,7 +1345,23 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
         a.goalHours += clockTotalHours_ - a.sleptAt;   // exact across rate changes
         a.wakeAt = -1;
     }
-    const GoalTable& t = goalsFor(a.archetype);
+    // A FREE CAB LOOKS FOR WORK. Costed on straight-line distance to the
+    // pickup: cheap, and the real route is computed anyway the moment the trip
+    // starts -- a pickup with no route fires NoRoute and the table puts the cab
+    // back on its cruise, so a bad guess here costs one tick, not a stuck cab.
+    const int self = indexOf(a);
+    if (isTaxi(self) && nav_ && dispatch_.waiting() > 0 && !dispatch_.fareOf(self)) {
+        const Vec2 from = a.pos;
+        const int nodeCount = static_cast<int>(nav_->nodes.size());
+        const int took = dispatch_.assign(self, [&](int pickup) -> double {
+            if (pickup < 0 || pickup >= nodeCount) return -1.0;
+            const Vec2 p = nav_->nodes[static_cast<std::size_t>(pickup)];
+            const Real dx = p.x - from.x, dy = p.y - from.y;
+            return std::sqrt(dx * dx + dy * dy);
+        });
+        if (took >= 0 && tryGoalEvent(a, GoalEvent::GotFare) != GoalFire::NoRow) return;
+    }
+    const GoalTable& t = tableFor(a);
     if (a.goal < 0 || a.goal >= t.stateCount()) return;   // no table: inert
     const GoalState& s = t.state(a.goal);
     if (s.action == GoalAction::GoTo) {
@@ -1419,7 +1451,7 @@ void CitySim::installGoalTables(GoalTable pedestrian, GoalTable driver) {
     goalPed_ = std::move(pedestrian);
     goalDriver_ = std::move(driver);
     for (Agent& a : agents_) {
-        const GoalTable& t = goalsFor(a.archetype);
+        const GoalTable& t = tableFor(a);
         int mapped = t.entry();
         for (int s = 0; s < t.stateCount(); ++s)
             if (t.state(s).activity == a.activity) { mapped = s; break; }
@@ -1447,6 +1479,37 @@ void CitySim::alightRide(int passenger) {
     // Set down RESTING, wherever the vehicle stopped. The next goal tick sees a
     // GoTo state with !moving and launches a fresh trip from here -- which is
     // exactly "got out and walked the rest of the way", with no special case.
+}
+
+bool CitySim::hail(int passenger, int pickup, int dropoff) {
+    if (!dispatch_.hail(passenger, pickup, dropoff)) return false;
+    // WAIT AT THE KERB. A rider who carries on walking is not where the cab was
+    // sent, and boarding would snap them across the city to meet it. Stopping
+    // here is what makes `pickup` mean anything -- and the goal pass leaves a
+    // waiting agent alone (see awaitingRide), so they stand until collected.
+    if (passenger >= 0 && passenger < static_cast<int>(agents_.size())) {
+        Agent& p = agents_[static_cast<std::size_t>(passenger)];
+        p.moving = false;
+        p.speed = 0;
+    }
+    return true;
+}
+
+void CitySim::setTaxi(int i, bool on) {
+    if (taxiTable_.stateCount() == 0) taxiTable_ = taxiGoals();
+    if (i < 0 || i >= static_cast<int>(agents_.size())) return;
+    if (taxi_.size() != agents_.size()) taxi_.assign(agents_.size(), 0);
+    taxi_[static_cast<std::size_t>(i)] = on ? 1 : 0;
+    if (on) {
+        Agent& a = agents_[static_cast<std::size_t>(i)];
+        a.goal = taxiTable_.entry();
+        a.goalHours = 0;
+    }
+}
+
+bool CitySim::isTaxi(int i) const {
+    return i >= 0 && i < static_cast<int>(taxi_.size()) &&
+           taxi_[static_cast<std::size_t>(i)] != 0;
 }
 
 void CitySim::setWander(bool on) {
@@ -2324,12 +2387,31 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
 void CitySim::arriveOrChain(Agent& a, Real vArrive) {
     a.moving = false;
     a.speed = 0;
+    // A CAB AT ITS STOP. The passenger changes vehicle HERE, before the table
+    // is asked what comes next, so the transition out of ToPickup already has
+    // them aboard and the one out of ToDrop already has them on the pavement.
+    // Which stop it is comes from the state's TARGET, not from a flag: the cab
+    // is at a pickup if that is what it was driving to.
+    {
+        const int self = indexOf(a);
+        const Fare* f = isTaxi(self) ? dispatch_.fareOf(self) : nullptr;
+        const GoalTable& tt = tableFor(a);
+        if (f && a.goal >= 0 && a.goal < tt.stateCount()) {
+            const GoalTarget tgt = tt.state(a.goal).target;
+            if (tgt == GoalTarget::Fare) {
+                boardRide(f->passenger, self);
+            } else if (tgt == GoalTarget::Drop) {
+                alightRide(f->passenger);
+                dispatch_.complete(self);   // free to take another hail
+            }
+        }
+    }
     int lastLink = a.route.links.back();
     // Rest at the ARRIVAL link's elevation — zeroing it parked bridge-deck
     // arrivals at ground level, under their own road.
     a.elevation = nav_->links[lastLink].layer * kLayerClearance +
                   nav_->links[lastLink].elevB;
-    const GoalTable& t = goalsFor(a.archetype);
+    const GoalTable& t = tableFor(a);
     int next = t.onEvent(a.goal, GoalEvent::Arrived);
     if (a.mode == Agent::Mode::Driver && next >= 0 &&
         t.state(next).action == GoalAction::GoTo) {
@@ -2761,7 +2843,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         if (a.playerControlled || a.released) continue;
         // A RIDER does not re-plan: its GoTo state would see !moving and
         // relaunch the trip on foot every tick, walking it out of the car.
-        if (!riding(ai)) goalThink(a, dt * hoursPerSecond);
+        if (!riding(ai) && !awaitingRide(ai)) goalThink(a, dt * hoursPerSecond);
         // A departure moved the pose (idle verge -> lane start): re-hash NOW so
         // every later grid consumer this step sees current positions.
         grid_.place(static_cast<int>(i), a.pos);
@@ -3417,7 +3499,7 @@ void CitySim::tickV(int i, Real hoursPerSecond) {
     a.vLastTick = simSeconds_;
     if (dts <= 1e-9) return;
     if (a.playerControlled || a.released) return;
-    if (!a.moving && !riding(i)) goalThink(a, dts * hoursPerSecond);
+    if (!a.moving && !riding(i) && !awaitingRide(i)) goalThink(a, dts * hoursPerSecond);
     if (a.moving) vAdvance(a, dts);
     grid_.place(i, a.pos);   // the far tier re-hashes on its tick, not per step
 }

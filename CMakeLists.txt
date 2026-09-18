@@ -701,6 +701,7 @@ add_executable(run_tests
     tests/test_city_goals.cpp
     tests/test_city_transit.cpp
     tests/test_city_dispatch.cpp
+    tests/test_city_taxi.cpp
     tests/test_city_signals.cpp
     tests/test_city_perception.cpp
     tests/test_driver_agent.cpp

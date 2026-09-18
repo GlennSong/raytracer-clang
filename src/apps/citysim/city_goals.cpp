@@ -6,7 +6,8 @@ namespace citysim {
 
 namespace {
 const char* kEventNames[] = {"departWork", "departHome", "arrived",
-                             "noRoute",    "idle",       "dwellDone"};
+                             "noRoute",    "idle",       "dwellDone",
+                             "gotFare"};
 static_assert(sizeof(kEventNames) / sizeof(kEventNames[0]) ==
                   static_cast<std::size_t>(GoalEvent::Count),
               "goal event names out of sync with GoalEvent");
@@ -21,6 +22,8 @@ const char* targetName(GoalTarget t) {
         case GoalTarget::Home: return "home";
         case GoalTarget::Random: return "random";
         case GoalTarget::Shop: return "shop";
+        case GoalTarget::Fare: return "fare";
+        case GoalTarget::Drop: return "drop";
         default: return "none";
     }
 }
@@ -154,6 +157,30 @@ GoalTable wanderGoals(bool driver) {
         t.addTransition("RoamRest", GoalEvent::Idle, "Roam");
     }
     t.setEntry("Roam");
+    return t;
+}
+
+GoalTable taxiGoals() {
+    GoalTable t;
+    // Cruise: a wandering car, exactly like wanderGoals' Roam -- Arrived chains
+    // straight into the next leg so the cab keeps rolling through junctions.
+    t.addState("Cruise", GoalAction::GoTo, GoalTarget::Random, Activity::Commuting);
+    t.addState("ToPickup", GoalAction::GoTo, GoalTarget::Fare, Activity::Commuting);
+    t.addState("ToDrop", GoalAction::GoTo, GoalTarget::Drop, Activity::Commuting);
+    t.addTransition("Cruise", GoalEvent::Arrived, "Cruise");
+    // The dispatch matched us: break off the cruise and go and collect.
+    t.addTransition("Cruise", GoalEvent::GotFare, "ToPickup");
+    // Arriving AT the pickup boards the passenger (CitySim::arriveOrChain does
+    // the boarding, then the table moves the cab on to the destination).
+    t.addTransition("ToPickup", GoalEvent::Arrived, "ToDrop");
+    // Arriving at the destination sets them down; back to cruising for another.
+    t.addTransition("ToDrop", GoalEvent::Arrived, "Cruise");
+    // A fare we cannot route to is not a fare: drop it and keep cruising,
+    // rather than a cab frozen forever on an unreachable pickup.
+    t.addTransition("ToPickup", GoalEvent::NoRoute, "Cruise");
+    t.addTransition("ToDrop", GoalEvent::NoRoute, "Cruise");
+    t.addTransition("Cruise", GoalEvent::NoRoute, "Cruise");
+    t.setEntry("Cruise");
     return t;
 }
 
