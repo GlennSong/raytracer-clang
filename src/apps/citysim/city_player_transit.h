@@ -21,6 +21,7 @@
 // policy on top.
 
 #include "../../engine/system.h"
+#include "../../rt_math.h"   // engine::Vec3
 
 namespace engine { class PhysicsSystem; }
 
@@ -33,12 +34,15 @@ public:
     CityPlayerTransitSystem(CityRenderSystem& city, engine::PhysicsSystem& physics)
         : city_(city), physics_(physics) {}
 
+    void onStart(engine::FrameContext& ctx) override;
     void fixedUpdate(engine::FrameContext& ctx) override;
 
 private:
     CityRenderSystem& city_;
     engine::PhysicsSystem& physics_;
     int riding_ = -1;          // agent index of the vehicle we are aboard, or -1
+    engine::Vec3 seat_{0, 0, 0};   // where we put the player last step
+    bool seated_ = false;          // seat_ is meaningful
     bool wasAboard_ = false;   // for the one-shot log on boarding/alighting
 };
 

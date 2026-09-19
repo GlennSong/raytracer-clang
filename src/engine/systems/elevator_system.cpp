@@ -60,6 +60,7 @@ RenderMaterial cabWall() {
 
 void ElevatorSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("elevator_call", KeyCode::E);
+    ctx.actions.setActionContext("elevator_call", engine::InputContext::OnFoot);
     ctx.actions.bindButton("elevator_floor_up", KeyCode::Up);
     ctx.actions.bindButton("elevator_floor_down", KeyCode::Down);
 }

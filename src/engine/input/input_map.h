@@ -7,6 +7,7 @@
 
 #include <array>
 #include <string>
+#include <utility>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -28,6 +29,17 @@ namespace engine {
 // Backend-neutral: driven entirely by our own Event/KeyCode types, so it is
 // testable without a window. Application feeds it: beginFrame() once per frame,
 // then processEvent() for each event, before systems run.
+// WHICH MODE AN ACTION BELONGS TO (Glenn, 2026-09-18: "There seems like a
+// separation of concerns exist for in vehicle vs on foot"). Space is jump on
+// foot and brake in a car; T is teleport on foot and flip in a car. Those are
+// not collisions, they are one key meaning different things in different
+// modes -- and until now nothing SAID that: both handlers fired and only their
+// own guards kept them apart. With a context, only the active mode's action
+// resolves, and a genuine clash (two actions, one key, SAME mode) is what gets
+// reported.
+enum class InputContext : uint8_t { Always, OnFoot, InVehicle };
+const char* inputContextName(InputContext c);
+
 class InputMap {
 public:
     // --- Binding configuration ---
@@ -52,6 +64,33 @@ public:
                         Real scale);
 
     void clearBindings();
+
+    // WHO ELSE HAS THIS KEY. Eight keys in this engine already carry two or
+    // three actions (F is cam_detach AND editor_frame; Space is drive_brake AND
+    // player_jump), and that works only because their owners are never active
+    // at once -- an accident that holds, not a rule that is enforced. Nothing
+    // warned when a NINTH was added: binding E to transit_board beside
+    // elevator_call silently let a passing bus capture the player, which then
+    // beat the fast-travel key (Glenn, 2026-09-18: "This is the fourth time
+    // today. Why does it keep breaking??").
+    //
+    // So: every binding is reported, and a clash is logged at startup where it
+    // can be seen, rather than discovered from the far end of a bug.
+    std::vector<std::string> actionsFor(KeyCode key) const;
+
+    // Tag an action with the mode it belongs to (untagged = Always).
+    void setActionContext(const std::string& action, InputContext c);
+    InputContext actionContext(const std::string& action) const;
+    // The mode the player is in. Only actions of this context (or Always)
+    // answer held/pressed/released.
+    void setContext(InputContext c) { context_ = c; }
+    InputContext context() const { return context_; }
+    // Keys whose actions can fire TOGETHER: same context, or one of them
+    // Always. Shared keys split across OnFoot/InVehicle are deliberate and
+    // are not listed.
+    std::vector<std::string> collisions() const;
+    // Every (key, actions) pair, sorted, for `keys?` and for tests.
+    std::vector<std::pair<std::string, std::vector<std::string>>> bindingReport() const;
 
     // --- Per-frame lifecycle (driven by Application) ---
     void beginFrame();                      // clears this frame's pressed/released
@@ -105,6 +144,9 @@ private:
                           const std::unordered_set<int>& sources) const;
 
     std::unordered_map<std::string, std::vector<int>> buttons;
+    std::unordered_map<std::string, InputContext> actionContext_;
+    InputContext context_ = InputContext::OnFoot;
+    bool live(const std::string& action) const;
     std::unordered_map<std::string, std::vector<AxisContribution>> axes;
 
     std::unordered_set<int> heldSources;

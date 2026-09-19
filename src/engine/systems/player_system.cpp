@@ -21,6 +21,7 @@ void PlayerSystem::onStart(FrameContext& ctx) {
     thirdPerson = false;
     ctx.settings.setBool("playerThirdPerson", false);
     ctx.actions.bindButton("player_respawn", KeyCode::R);   // fell off the level? snap back to spawn
+    ctx.actions.setActionContext("player_respawn", engine::InputContext::OnFoot);
     // FAST TRAVEL (device: "click somewhere and immediately jump there and
     // continue play"): T teleports the player to the surface point under the
     // crosshair — fly somewhere in the freecam, look at a street, press T,
@@ -29,6 +30,7 @@ void PlayerSystem::onStart(FrameContext& ctx) {
     // XR: the same action fires on a quick gaze-pinch (see update() — the
     // release edge, so a long HOLD can mean something else to the shell).
     ctx.actions.bindButton("player_teleport", XrButton::Pinch);
+    ctx.actions.setActionContext("player_teleport", engine::InputContext::OnFoot);
     // First <-> third person on foot. V is also CameraSystem's viewport-cycle
     // key; see the placed-camera guard in update().
     ctx.actions.bindButton("player_camera_toggle", KeyCode::V);
@@ -38,7 +40,9 @@ void PlayerSystem::onStart(FrameContext& ctx) {
     // overlay's Controls table paints such keys yellow, which is honest.
     ctx.actions.bindButton("player_jump", KeyCode::Space);
     ctx.actions.bindButton("player_jump", GamepadButton::A);
+    ctx.actions.setActionContext("player_jump", engine::InputContext::OnFoot);
     ctx.actions.bindButton("player_crouch", KeyCode::LeftControl);
+    ctx.actions.setActionContext("player_crouch", engine::InputContext::OnFoot);
 }
 
 void PlayerSystem::fixedUpdate(FrameContext& ctx) {
@@ -271,6 +275,17 @@ void PlayerSystem::update(FrameContext& ctx) {
                         "use `person first|third` (socket) or Debug > Teleport";
         }
     }
+
+    // THE INPUT MODE follows the body: in a vehicle, the in-vehicle actions
+    // resolve (brake, handbrake, flip); on foot, the on-foot ones (jump, crouch,
+    // teleport, board). One key can then mean different things in each without
+    // both handlers firing. Set here because this is where "is the player in a
+    // vehicle" is already known; a system reading input earlier in the frame
+    // sees last frame's mode, a one-frame lag on getting in or out.
+    if (ctx.world.alive(playerEntity))
+        ctx.actions.setContext(ctx.world.has<InVehicle>(playerEntity)
+                                   ? engine::InputContext::InVehicle
+                                   : engine::InputContext::OnFoot);
 
     // Driving: the chase camera (CameraSystem follow) owns the view; don't pin
     // the first-person eye over it.

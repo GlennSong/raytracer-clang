@@ -35,16 +35,12 @@ void CameraSystem::registerBindings(InputMap& actions) const {
 
     actions.bindButton("cam_boost", KeyCode::LeftShift);
     actions.bindButton("cam_boost", GamepadButton::LeftBumper);
-    actions.bindButton("cam_toggle", KeyCode::Tab);
-    actions.bindButton("cam_toggle", GamepadButton::Back);
     actions.bindButton("cam_toggle_projection", KeyCode::P);
     actions.bindButton("cam_toggle_projection", GamepadButton::Start);
 
     // Placed-camera viewports (docs/virtual-camera-plan.md, Phase 1).
-    actions.bindButton("cam_place", KeyCode::C);
     // Pad X, not Y: Y is the conventional get-in/out-of-car button
     // (VehicleSystem's enter_vehicle), and one press was doing both.
-    actions.bindButton("cam_place", GamepadButton::X);
     actions.bindButton("cam_cycle_next", KeyCode::V);
     actions.bindButton("cam_cycle_next", GamepadButton::DpadRight);
     actions.bindButton("cam_cycle_prev", KeyCode::B);
@@ -57,6 +53,7 @@ void CameraSystem::registerBindings(InputMap& actions) const {
     // game states) to roam freely — e.g. to place a camera up high.
     actions.bindButton("cam_detach", KeyCode::F);
     actions.bindButton("cam_detach", GamepadButton::RightThumb);
+    actions.setActionContext("cam_detach", engine::InputContext::OnFoot);
 }
 
 void CameraSystem::onStart(FrameContext& ctx) {
@@ -248,8 +245,11 @@ void CameraSystem::update(FrameContext& ctx) {
 
     // Placing only makes sense from the editor view, where you just framed the
     // shot; while looking through a placed camera the editor pose is hidden.
-    if (ctx.actions.pressed("cam_place") && !activeCamera.valid())
-        activeCamera = placeCamera(ctx, aspect);
+    // NO IN-GAME CAMERA PLACEMENT (Glenn, 2026-09-18: "we should get rid of
+    // the toggle cam and even place camera"). Placing a scene camera is an
+    // EDITOR operation -- the editor and its camera panel call
+    // placeCameraAtView directly, so the function stays; only the play-mode C
+    // key that dropped one mid-game is gone.
 
     if (ctx.actions.pressed("cam_cycle_next"))
         activeCamera = cycleCamera(collectCameras(ctx.world), activeCamera, +1);
@@ -258,15 +258,11 @@ void CameraSystem::update(FrameContext& ctx) {
     if (ctx.actions.pressed("cam_view_editor"))
         activeCamera = Entity{};
 
-    if (ctx.actions.pressed("cam_toggle")) {
-        if (activeCamera.valid()) {
-            activeCamera = Entity{};  // Tab from a placed camera returns home
-        } else {
-            flyActive = !flyActive;
-            active = flyActive ? static_cast<CameraController*>(&fly)
-                               : static_cast<CameraController*>(&orbit);
-        }
-    }
+    // NO TAB CAMERA TOGGLE. It flipped play mode between the player-pinned fly
+    // camera and a free orbit, which in a game state just unhooked the view
+    // from the player -- a mode with no use and no way to tell you were in it.
+    // F already covers "look around freely" (detach), and lands you where you
+    // flew to.
     if (ctx.actions.pressed("cam_toggle_projection"))
         active->setOrthographic(!active->isOrthographic());
 

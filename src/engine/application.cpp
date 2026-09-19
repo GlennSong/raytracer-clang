@@ -780,6 +780,24 @@ std::string Application::handleControlCommand(const std::string& line) {
                       std::atan2(fwd.x, -fwd.z) * kRadToDeg);
         return buf;
     }
+    if (cmd.name == "keys?") {
+        // WHAT DOES THIS KEY DO. Bindings live in a dozen systems' onStart, so
+        // the only way to answer that was grep. A shared key is legitimate --
+        // several here are deliberate -- but it should be readable.
+        std::string out;
+        for (const auto& kv : inputMap.bindingReport()) {
+            out += (out.empty() ? "" : "  |  ") + kv.first + ": ";
+            for (std::size_t i = 0; i < kv.second.size(); ++i)
+                out += std::string(i ? ", " : "") + kv.second[i] + " [" +
+                       inputContextName(inputMap.actionContext(kv.second[i])) + "]";
+        }
+        const std::vector<std::string> clash = inputMap.collisions();
+        out += "  ||  REAL CLASHES (same mode): " +
+               (clash.empty() ? std::string("none") : std::to_string(clash.size()));
+        for (const std::string& c : clash) out += "  " + c;
+        return "ok " + (out.empty() ? std::string("no bindings") : out);
+    }
+
     if (cmd.name == "ride") {
         // Board the nearest bus or cab, or get off (city_player_transit.h).
         // NPCs have been riding since RideBook; this is the player's seat.

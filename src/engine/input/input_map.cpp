@@ -1,5 +1,8 @@
 #include "input_map.h"
 
+#include "../../log.h"
+#include <map>
+
 #include <algorithm>
 
 namespace engine {
@@ -90,6 +93,26 @@ void InputMap::setDeadzone(Real value) {
 
 void InputMap::bindButton(const std::string& action, KeyCode key) {
     buttons[action].push_back(encodeKey(key));
+}
+
+std::vector<std::string> InputMap::actionsFor(KeyCode key) const {
+    const int code = encodeKey(key);
+    std::vector<std::string> out;
+    for (const auto& kv : buttons)
+        for (int c : kv.second)
+            if (c == code) { out.push_back(kv.first); break; }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+std::vector<std::pair<std::string, std::vector<std::string>>>
+InputMap::bindingReport() const {
+    std::map<std::string, std::vector<std::string>> byKey;
+    for (const auto& entry : keyNameTable()) {
+        std::vector<std::string> acts = actionsFor(entry.first);
+        if (!acts.empty()) byKey[entry.second] = std::move(acts);
+    }
+    return {byKey.begin(), byKey.end()};
 }
 
 void InputMap::bindButton(const std::string& action, MouseButton button) {
@@ -287,16 +310,57 @@ bool InputMap::anyBoundSourceIn(const std::string& action,
     return false;
 }
 
+const char* inputContextName(InputContext c) {
+    switch (c) {
+        case InputContext::OnFoot: return "on-foot";
+        case InputContext::InVehicle: return "in-vehicle";
+        default: return "always";
+    }
+}
+
+void InputMap::setActionContext(const std::string& action, InputContext c) {
+    actionContext_[action] = c;
+}
+
+InputContext InputMap::actionContext(const std::string& action) const {
+    auto it = actionContext_.find(action);
+    return it == actionContext_.end() ? InputContext::Always : it->second;
+}
+
+bool InputMap::live(const std::string& action) const {
+    const InputContext c = actionContext(action);
+    return c == InputContext::Always || c == context_;
+}
+
 bool InputMap::held(const std::string& action) const {
-    return anyBoundSourceIn(action, heldSources);
+    return live(action) && anyBoundSourceIn(action, heldSources);
 }
 
 bool InputMap::pressed(const std::string& action) const {
-    return anyBoundSourceIn(action, pressedSources);
+    return live(action) && anyBoundSourceIn(action, pressedSources);
 }
 
 bool InputMap::released(const std::string& action) const {
-    return anyBoundSourceIn(action, releasedSources);
+    return live(action) && anyBoundSourceIn(action, releasedSources);
+}
+
+std::vector<std::string> InputMap::collisions() const {
+    std::vector<std::string> out;
+    for (const auto& entry : keyNameTable()) {
+        const std::vector<std::string> acts = actionsFor(entry.first);
+        for (std::size_t i = 0; i < acts.size(); ++i)
+            for (std::size_t j = i + 1; j < acts.size(); ++j) {
+                const InputContext a = actionContext(acts[i]);
+                const InputContext b = actionContext(acts[j]);
+                const bool together = a == InputContext::Always ||
+                                      b == InputContext::Always || a == b;
+                if (!together) continue;   // foot vs vehicle: deliberate
+                out.push_back(std::string(entry.second) + ": '" + acts[i] +
+                              "' and '" + acts[j] + "' both fire " +
+                              inputContextName(a == InputContext::Always ? b : a));
+            }
+    }
+    return out;
 }
 
 Real InputMap::axis(const std::string& name) const {

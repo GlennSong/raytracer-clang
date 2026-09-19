@@ -45,7 +45,9 @@ void VehicleSystem::onStart(FrameContext& ctx) {
     // the conventional pad brake, like Y for get-in/out below.
     ctx.actions.bindButton("drive_brake", KeyCode::Space);
     ctx.actions.bindButton("drive_brake", GamepadButton::B);
+    ctx.actions.setActionContext("drive_brake", engine::InputContext::InVehicle);
     ctx.actions.bindButton("drive_handbrake", KeyCode::LeftControl);
+    ctx.actions.setActionContext("drive_handbrake", engine::InputContext::InVehicle);
 
     ctx.actions.bindButton("enter_vehicle", KeyCode::G);
     ctx.actions.bindButton("enter_vehicle", GamepadButton::DpadUp);
@@ -53,14 +55,19 @@ void VehicleSystem::onStart(FrameContext& ctx) {
     // D-pad Up alone was undiscoverable (Glenn asked for "a button to get in
     // and out" twice while one existed).
     ctx.actions.bindButton("enter_vehicle", GamepadButton::Y);
+    // enter_vehicle stays ALWAYS: the same key gets you OUT (handleEnterExit
+    // branches on InVehicle), so an on-foot tag would lock you in the car.
 
     // Recover a rolled car (keep heading, level it, lift it).
     ctx.actions.bindButton("vehicle_flip", KeyCode::T);
+    ctx.actions.setActionContext("vehicle_flip", engine::InputContext::InVehicle);
     // Toggle the head/taillights.
     ctx.actions.bindButton("vehicle_lights", KeyCode::L);
+    ctx.actions.setActionContext("vehicle_lights", engine::InputContext::InVehicle);
     // The horn: held, like a real one (L3 is the pad convention).
     ctx.actions.bindButton("vehicle_horn", KeyCode::H);
     ctx.actions.bindButton("vehicle_horn", GamepadButton::LeftThumb);
+    ctx.actions.setActionContext("vehicle_horn", engine::InputContext::InVehicle);
     // Debug: spawn a fresh car in front of the player (always on solid ground,
     // since the player is standing on a collider).
     ctx.actions.bindButton("spawn_vehicle", KeyCode::N);
