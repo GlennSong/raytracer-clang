@@ -95,6 +95,27 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
                 }
             }
 
+            // A TELEPORT IS NEVER A FALL. Something moved the player further
+            // than any physics step can -- a walker covers well under 1 m a
+            // frame even at terminal velocity -- so this was a teleport: F's
+            // fast travel, the `teleport` verb, the Teleport panel. The fall
+            // tracker's baseline is still the OLD height, and without this a
+            // teleport to lower ground read as a long drop, tripped the
+            // auto-respawn below, and put the player back at the spawn point
+            // (Glenn: "When I tap F again I go back to where I started").
+            //
+            // T's own teleport already did this reset (teleportAlong); the
+            // Teleport SYSTEM, which F uses, never did. Detecting the jump here
+            // covers every teleport path, including ones not written yet,
+            // instead of relying on each to remember.
+            if (haveLastBodyPos_) {
+                const Real jx = t.position.x - lastBodyPos_.x;
+                const Real jy = t.position.y - lastBodyPos_.y;
+                const Real jz = t.position.z - lastBodyPos_.z;
+                if (jx * jx + jy * jy + jz * jz > 4.0 * 4.0)
+                    fall.onGrounded(t.position.y);
+            }
+
             // JUMP: one press, one leap. Refused mid-air and while crouched by
             // the physics gate (grounded-only) and the crouch check here.
             if (jumpRequested) {
@@ -137,6 +158,8 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
                 respawn(cc.characterId, /*manual=*/false);
                 t.position = spawnPos;
             }
+            lastBodyPos_ = t.position;
+            haveLastBodyPos_ = true;
         });
 }
 

@@ -107,6 +107,8 @@ private:
     Vec3 spawnPos{0, 0, 0};       // captured authored spawn; "respawn" returns the player here
     bool spawnCaptured = false;
     FallRespawnTracker fall;
+    Vec3 lastBodyPos_{0, 0, 0};   // where physics left the player last step
+    bool haveLastBodyPos_ = false;
 };
 
 }  // namespace engine

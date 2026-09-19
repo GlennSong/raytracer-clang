@@ -272,6 +272,30 @@ void Application::runFrame() {
         // typed there is text, never an action (a ',' in the Teleport paste
         // box was halving the sim speed).
         inputMap.setTextInputCaptured(window->getInput().uiWantsKeyboard);
+        // A SCRIPTED KEY (`tap <Key>`): a press this frame, the release the
+        // next, fed through the same processEvent a real keyboard uses. It
+        // exists because F was "fixed" four times today through side doors
+        // (verbs that bypass the key) while the key itself -- the thing Glenn
+        // actually presses -- went untested, and then a context gate was put in
+        // front of it that no test exercised.
+        {
+            const std::string tapName = settingsStore.getString("input.tap", "");
+            if (!tapName.empty()) {
+                settingsStore.setString("input.tap", "");
+                const KeyCode k = keyCodeFromName(tapName);
+                if (k != KeyCode::Unknown) {
+                    Event down(EventType::KeyPressed);
+                    down.key = k;
+                    inputMap.processEvent(down);
+                    pendingTapRelease_ = k;
+                }
+            } else if (pendingTapRelease_ != KeyCode::Unknown) {
+                Event up(EventType::KeyReleased);
+                up.key = pendingTapRelease_;
+                inputMap.processEvent(up);
+                pendingTapRelease_ = KeyCode::Unknown;
+            }
+        }
         for (const Event& event : window->getEvents()) {
             inputMap.processEvent(event);
             playerInputs.routeEvent(event);
@@ -780,6 +804,16 @@ std::string Application::handleControlCommand(const std::string& line) {
                       std::atan2(fwd.x, -fwd.z) * kRadToDeg);
         return buf;
     }
+    if (cmd.name == "tap") {
+        // Press and release a key through the real input path (see the frame
+        // loop). Tests the KEY, not a verb that imitates what the key does.
+        if (cmd.args.empty()) return "err usage: tap <KeyName>  (e.g. tap F)";
+        if (keyCodeFromName(cmd.args[0]) == KeyCode::Unknown)
+            return "err unknown key: " + cmd.args[0];
+        settingsStore.setString("input.tap", cmd.args[0]);
+        return "ok tap " + cmd.args[0] + " staged";
+    }
+
     if (cmd.name == "keys?") {
         // WHAT DOES THIS KEY DO. Bindings live in a dozen systems' onStart, so
         // the only way to answer that was grep. A shared key is legitimate --

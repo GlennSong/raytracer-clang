@@ -152,6 +152,7 @@ private:
     DebugDraw debugLines;
     AudioEngine audioEngine;
     InputMap inputMap;
+    KeyCode pendingTapRelease_ = KeyCode::Unknown;   // `tap`: release next frame
     PlayerInputs playerInputs;
     // Headset state (engine/xr/). `xr` is the renderer's backend or null;
     // `xrState` is refreshed at the top of every runFrame and handed to all
