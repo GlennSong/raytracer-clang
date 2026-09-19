@@ -1184,6 +1184,8 @@ void CitySim::placeFromSchedule(int idx) {
         }
         grid_.place(static_cast<int>(i), a.pos);
         a.vLastTick = simSeconds_;
+        a.tickFromPos = a.pos;      // re-seeded: placed, not moved
+        a.tickFromHeading = a.heading;
     }
 }
 
@@ -1823,6 +1825,21 @@ std::vector<int> CitySim::nearestFreeBays(Vec2 target, Real maxDist, int k) cons
     return out;
 }
 
+// Metres a bus still has to drive to the point it stops at: the rest of its
+// route, less the stand-back from the last junction (the arrival rule).
+Real CitySim::busDistanceToStop(const Agent& a) const {
+    const int legs = static_cast<int>(a.route.links.size());
+    if (a.leg >= legs) return 0;
+    Real rem = nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])].length -
+               a.distOnLeg;
+    for (int k = a.leg + 1; k < legs && rem < 200.0; ++k)
+        rem += nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(k)])].length;
+    const engine::NavLink& last =
+        nav_->links[static_cast<std::size_t>(a.route.links.back())];
+    const Real shortBy = std::min(junctionRadius(last.to) + kBusStopPastBox, last.length * 0.6);
+    return rem - shortBy;
+}
+
 void CitySim::releaseBays(Agent& a) {
     const int self = indexOf(a);
     for (int* b : {&a.parkedBay, &a.targetBay}) {
@@ -1862,6 +1879,8 @@ void CitySim::seatBusAt(int idx, int node, int queued) {
     // length further back instead of on the first one (two buses at a hub
     // were seated on the identical point).
     if (queued > 0) a.pos = a.pos - a.heading * (Real(14) * queued);
+    a.tickFromPos = a.pos;
+    a.tickFromHeading = a.heading;
     if (a.car >= 0 && a.car < static_cast<int>(vehicles_.size())) {
         vehicles_[static_cast<std::size_t>(a.car)].pos = a.pos;
         vehicles_[static_cast<std::size_t>(a.car)].heading = a.heading;
@@ -2128,6 +2147,9 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
     }
     refreshPose(a);
     a.heading = nav_->direction(a.route.links.front());   // start pointed down leg 0
+    a.tickFromPos = a.pos;          // a placement, not a motion (see tickFromPos)
+    a.tickFromHeading = a.heading;
+    a.tickFromPullS = a.pullS;
     // Pull out of the space rather than appear in the lane. Only for a car
     // leaving from rest in the drawn tier; a far agent is never on screen. A
     // CHAINED trip keeps a pull already under way -- cutting it short snapped
@@ -2157,9 +2179,9 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
 // the sim's own position/heading instead stalled the cars: a car that starts
 // pointed away from its lane will not accelerate, and a stopped car cannot
 // turn, so 84% of pulling-out samples stood still.
-Real CitySim::pullOutWeight(const Agent& a) {
+Real CitySim::pullOutWeight(const Agent& a, Real pullS) {
     if (a.pullLen <= 0) return 0;
-    const Real t = std::min(a.pullS / a.pullLen, Real(1));
+    const Real t = std::min(pullS / a.pullLen, Real(1));
     return 1 - t * t * (3 - 2 * t);
 }
 
@@ -2680,6 +2702,18 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             netGap = carAheadGap_[myIdx];
             dv = a.speed - carAheadSpeed_[myIdx];
         }
+        // A BUS BRAKES FOR ITS STOP. It used to arrive at speed and stand
+        // still the next tick -- 5.6 m/s to 0 in 33 ms, a jolt nobody rides
+        // through (Glenn: "a lot of jitter from the bus movement"). The stop
+        // point (short of the junction, see the arrival rule below) is a
+        // stationary leader: IDM eases the bus to rest on it.
+        if (isBus(myIdx) && a.busDwell <= 0 && !a.route.links.empty()) {
+            const Real toStop = busDistanceToStop(a);
+            if (toStop + kCarBumperGap < netGap) {
+                netGap = std::max(Real(0.05), toStop + kCarBumperGap);
+                dv = a.speed;
+            }
+        }
         // Any wedge-IGNORING drive (gridlock creep past 6 s, tow-truck
         // escape) happens at a CRAWL while bodies are near: a full-speed
         // escape brushing a moving passerby registered as a fast
@@ -2821,10 +2855,6 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     }
 
     Real motion = a.speed * dt;
-    if (a.pullLen > 0) {
-        a.pullS += motion;
-        if (a.pullS >= a.pullLen) a.pullLen = 0;
-    }
 
     // A pedestrian never walks INTO a car body (roads-v2.1 R3): a car
     // standing across the walkway — queue spillback over a crosswalk, a
@@ -2961,9 +2991,9 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         const int li = a.route.links[a.leg];
         Real L = nav_->links[li].length;
         Real shortBy = std::min(Real(3.0), L * 0.5);
-        if (busHere)
+        if (busHere)   // + a little: IDM settles ON the point, not past it
             shortBy = std::min(junctionRadius(nav_->links[li].to) + kBusStopPastBox,
-                               L * 0.6);
+                               L * 0.6) + Real(0.6);
         if (L - a.distOnLeg < shortBy) a.leg = legCount;
         // Driving to a reserved BAY: the trip ends AT the bay's station.
         if (a.targetBay >= 0 && a.targetBay < static_cast<int>(bays_.size()) &&
@@ -3237,6 +3267,8 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
     a.restNode = nav_->links[lastLink].to;   // the next departure starts here
     a.arrivedLink = lastLink;                // ...and avoids U-turning back up this
     a.route.links.clear();
+    a.tickFromPos = a.pos;          // parked / at the door: placed, not slid there
+    a.tickFromHeading = a.heading;
 }
 
 // Driver FSM (ADR-0061): label what's governing the car this step, from what it
@@ -3465,6 +3497,12 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     const Real simDt = tickAccum_;
     tickAccum_ = 0.0;
     sinceTick_ = 0.0;
+    // The interpolation origin for this tick: where everyone was before it.
+    for (Agent& a : agents_) {
+        a.tickFromPos = a.pos;
+        a.tickFromHeading = a.heading;
+        a.tickFromPullS = a.pullS;
+    }
     stepTick(simDt, hoursPerSecond);
 }
 
@@ -4116,6 +4154,15 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         rider.heading = drv.heading;
         rider.speed = drv.speed;
         grid_.place(r.first, rider.pos);
+    }
+    // PULL-OUT PROGRESS is the distance each car actually moved this tick,
+    // whichever path moved it. Counting it inside advance() missed the
+    // stop-line approach, which moves the car and returns early -- the pull
+    // then advanced on alternate ticks only, a stutter in the easing.
+    for (Agent& a : agents_) {
+        if (a.pullLen <= 0) continue;
+        a.pullS += (a.pos - a.tickFromPos).length();
+        if (a.pullS >= a.pullLen) a.pullLen = 0;
     }
     phaseMark(phase_.advance);
     phase_.total += std::chrono::duration<double, std::micro>(

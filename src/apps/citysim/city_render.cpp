@@ -1318,31 +1318,52 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
         return su;
     };
     Real x = a.pos.x, z = a.pos.y;          // Vec2 maps to world XZ (.y = world z)
-    // EXTRAPOLATE between sim ticks. With localHz below the fixed rate the
-    // sim's pose is up to a tick stale, and a body that freezes then jumps
-    // reads as judder AND shoves the player (Jolt infers a kinematic body's
-    // velocity from its position delta, so one 33 ms jump is a doubled
-    // instantaneous velocity). Agents follow lanes at a known speed along a
-    // known heading, so carrying them forward along it is what they are
-    // actually doing — no added latency, and the next tick lands the truth.
-    const Real sinceTick = sim_.secondsSinceTick();
-    if (sinceTick > 0.0 && a.speed > 0.01 && !a.released) {
-        const Real adv = a.speed * sinceTick;
-        x += a.heading.x * adv;
-        z += a.heading.y * adv;
+    Vec2 baseHeading = a.heading;
+    // BETWEEN SIM TICKS (localHz below the fixed rate): draw ONE TICK BEHIND,
+    // interpolating from where the agent was when this tick began to where it
+    // is now. A body frozen between ticks then jumping read as judder and
+    // shoved the player (Jolt infers a kinematic body's velocity from its
+    // position delta), which is why this used to EXTRAPOLATE -- but a straight
+    // line along the heading at the current speed is not the lane: on a curve
+    // or a change of speed the next tick yanked the body back, 30 times a
+    // second. Measured on a bus at localHz 30: step-to-step lurch 0.0127 m
+    // mean / 0.10 max (at 8 m/s a step is 0.13 m), 40x the every-step sim's.
+    // Riding the bus, that lurch was the whole world shaking (Glenn: "a lot of
+    // jitter from the bus movement"). Interpolation follows the sim's own path
+    // exactly, still moves every step, for 33 ms of latency.
+    const Real period = sim_.tickPeriod();
+    Real tickT = 1;   // how far through the current tick this pose is drawn
+    if (period > 0.0 && !a.released) {
+        const Vec2 d = a.pos - a.tickFromPos;
+        if (d.x * d.x + d.y * d.y < 8.0 * 8.0) {   // a placement snaps, never slides
+            const Real t = std::clamp(sim_.secondsSinceTick() / period, Real(0), Real(1));
+            tickT = t;
+            x = a.tickFromPos.x + d.x * t;
+            z = a.tickFromPos.y + d.y * t;
+            Real dy = std::atan2(a.heading.x, a.heading.y) -
+                      std::atan2(a.tickFromHeading.x, a.tickFromHeading.y);
+            while (dy > engine::PI) dy -= 2 * engine::PI;
+            while (dy < -engine::PI) dy += 2 * engine::PI;
+            const Real yw = std::atan2(a.tickFromHeading.x, a.tickFromHeading.y) + dy * t;
+            baseHeading = Vec2(std::sin(yw), std::cos(yw));
+        }
     }
     // Lift the box so it rests on the ground: half its OWN body height (a tall van
     // or box truck sits higher than a sedan). Read the height from the possessed
     // SimVehicle (authoritative), falling back to the default car/ped size.
     // PULLING OUT: drawn easing from its parking space into the lane (the
     // sim itself drives the lane; see CitySim::pullOutWeight).
-    Vec2 drawHeading = a.heading;
+    Vec2 drawHeading = baseHeading;
     if (car) {
-        const Real w = CitySim::pullOutWeight(a);
+        // The pull's progress interpolates with the position: the sim moves it
+        // only at ticks, and an easing that shrank in 30 Hz steps under a
+        // gliding body was a stutter of its own.
+        const Real pullS = a.tickFromPullS + (a.pullS - a.tickFromPullS) * tickT;
+        const Real w = CitySim::pullOutWeight(a, a.pullLen > 0 ? pullS : a.pullS);
         if (w > 0) {
             x += a.pullOffset.x * w;
             z += a.pullOffset.y * w;
-            const Real yw = std::atan2(a.heading.x, a.heading.y) + a.pullYawOffset * w;
+            const Real yw = std::atan2(baseHeading.x, baseHeading.y) + a.pullYawOffset * w;
             drawHeading = Vec2(std::sin(yw), std::cos(yw));
         }
         // PULLING IN: over the last metres before its reserved bay the car
@@ -1356,10 +1377,15 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
             if (bay.link == li) {
                 constexpr Real kPullIn = 14.0;
                 const Real remaining = bay.station - a.distOnLeg;
-                if (remaining < kPullIn) {
+                if (remaining < kPullIn + 2.0) {
                     const Vec2 dir = nav_.direction(li);
-                    const Real rem = std::max(remaining, Real(0));
-                    const Vec2 laneAtBay = a.pos + dir * rem;
+                    // The lane point level with the bay is a FIXED place (the
+                    // sim's pos and distance agree on it); measure the drawn
+                    // car's way to it from the DRAWN position, so the easing
+                    // glides with the body instead of stepping at ticks.
+                    const Vec2 laneAtBay = a.pos + dir * remaining;
+                    const Real rem = std::max(
+                        (laneAtBay.x - x) * dir.x + (laneAtBay.y - z) * dir.y, Real(0));
                     const Vec2 off = bay.pos - laneAtBay;
                     const Real t = std::clamp(1 - rem / kPullIn, Real(0), Real(1));
                     const Real w = t * t * (3 - 2 * t);
@@ -1582,7 +1608,14 @@ void CityRenderSystem::syncCarLamps(World& world) {
         if (a.mode != Agent::Mode::Driver) continue;
         if (a.released) continue;      // commandeered: the physical car owns its lamps
         if (a.far()) continue;   // far tier: no drawn car, no lamps
-        const int v = (a.vehicle >= 0 ? a.vehicle : 0) % drawVariantCount();
+        // The SAME slot the body is drawn with (syncGroups). This used
+        // vehicle % count, a different model's lamps: a bus wore a sedan's,
+        // whose tail lights sit 2.3 m behind centre -- inside the saloon.
+        int v = sim_.ambientSlotFor(a.vehicle >= 0 ? a.vehicle : 0);
+        if (v >= drawVariantCount()) v %= drawVariantCount();
+        if (busVariant_ >= 0 && sim_.isBus(static_cast<int>(ai)) &&
+            busVariant_ < drawVariantCount())
+            v = busVariant_;
         if (v < 0 || v >= static_cast<int>(carLights_.size())) continue;
         const std::vector<LampMarker>& markers = carLights_[v];
         if (markers.empty()) continue;
@@ -1622,12 +1655,20 @@ void CityRenderSystem::syncCarLamps(World& world) {
             lampPo != physPose_.end() ? lampPo->second : agentPose(a);
         const Real yaw = std::atan2(a.heading.x, a.heading.y);
         const Quat rot = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
+        // A vehicle you can SEE INTO (the bus): the lens box is centred on its
+        // marker, which sits exactly on the end face, so half of it poked
+        // through into the saloon -- tail lights glowing inside the bus
+        // (Glenn). Out by half the lens depth, it sits flush on the outside.
+        const bool seeInto = v < static_cast<int>(carGlassGroups_.size()) &&
+                             carGlassGroups_[static_cast<std::size_t>(v)].valid();
         for (const LampMarker& m : markers) {
             const bool isHead = m.name.rfind("headlight", 0) == 0;
             const bool isTail = m.name.rfind("taillight", 0) == 0;
             const bool leftSide = !m.name.empty() && m.name.back() == 'l';
             const bool rightSide = !m.name.empty() && m.name.back() == 'r';
-            const Vec3 wpos = pose.transformPoint(m.pos);
+            Vec3 local = m.pos;
+            if (seeInto) local.z += (local.z >= 0 ? Real(1) : Real(-1)) * Real(0.061);
+            const Vec3 wpos = pose.transformPoint(local);
             const Mat4 xf = Mat4::trs(wpos, rot, Vec3(1, 1, 1));
             if (isHead && lamps.head && head) head->transforms.push_back(xf);
             if (isTail && lamps.brake && brake) brake->transforms.push_back(xf);

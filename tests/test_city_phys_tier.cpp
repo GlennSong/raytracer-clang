@@ -557,3 +557,68 @@ TEST_CASE(city_drawn_traffic_rolls_on_its_wheels) {
     CHECK(kin.worstJump < 0.5);
     CHECK(kin.backs <= 5);
 }
+
+// EVERY LIT LAMP IS ON ITS OWN CAR'S NOSE OR TAIL (Glenn, 2026-09-18: "when I'm
+// in the bus the tail lights show up inside of the bus"). The lamp pass chose a
+// car's markers by vehicle % fleet while the body was drawn from its own slot,
+// so a bus wore a sedan's lamps -- tail lights 2.3 m behind its centre, inside
+// the saloon -- and every other car another model's. Checked on the drawn
+// instances: each lit lens, in the frame of the nearest drawn body, sits at
+// that body's own end (|z| ~ half its length).
+TEST_CASE(city_lamps_sit_on_their_own_car_s_ends) {
+    World world;
+    world.add<RoadEntity>(world.create(), cityGrid());
+    CityRenderParams params;
+    params.cars = 24;
+    params.pedestrians = 0;
+    params.seed = 7;
+    params.wander = true;
+    params.busRoutes = 1;
+    params.busStops = 6;
+    params.buses = 2;
+    params.busMaxWalk = 200;
+    params.vehicleScript = readAsset("vehicles.lua");
+    CityRenderSystem city(params);
+    StubUploader uploader;
+    engine::AssetManager assets(uploader);
+    CHECK(city.build(world, &assets));
+    const std::vector<Vec3> he = city.carGroupHalfExtents();
+    long lamps = 0, misplaced = 0;
+    Real worst = 0;
+    for (int i = 0; i < 60 * 40; ++i) {
+        city.step(world, 1.0 / 60.0);
+        if (i % 15) continue;
+        for (Entity lg : {city.brakeLightGroup(), city.turnSignalGroup(), city.headlightGroup()}) {
+            const InstanceGroup* g = world.get<InstanceGroup>(lg);
+            if (!g) continue;
+            for (const Mat4& lm : g->transforms) {
+                const Vec3 lp(lm.m[0][3], lm.m[1][3], lm.m[2][3]);
+                // The body this lens belongs to: one whose box (a little
+                // grown) contains it, at an end. "Nearest centre" misassigns
+                // a bus's tail light (5.7 m out) to the car queued behind it.
+                Real off = 1e9;
+                for (std::size_t v = 0; v < city.carGroups().size(); ++v) {
+                    const InstanceGroup* cg = world.get<InstanceGroup>(city.carGroups()[v]);
+                    if (!cg || v >= he.size()) continue;
+                    for (const Mat4& cm : cg->transforms) {
+                        const Vec3 c(cm.m[0][3], cm.m[1][3], cm.m[2][3]);
+                        if ((c - lp).length() > he[v].z + 2.0) continue;
+                        const Vec3 local = cm.inverse().transformPoint(lp);
+                        if (std::fabs(local.x) > he[v].x + 0.3 ||
+                            std::fabs(local.y) > he[v].y + 0.5 ||
+                            std::fabs(local.z) > he[v].z + 0.3)
+                            continue;
+                        off = std::min(off, std::fabs(std::fabs(local.z) - he[v].z));
+                    }
+                }
+                ++lamps;
+                worst = std::max(worst, std::min(off, Real(99)));
+                if (off > 0.25) ++misplaced;
+            }
+        }
+    }
+    std::printf("    [lamps] %ld lit lamps checked; %ld not at their own car's end (worst %.2f m)\n",
+                lamps, misplaced, worst);
+    CHECK(lamps > 50);
+    CHECK(misplaced == 0);
+}

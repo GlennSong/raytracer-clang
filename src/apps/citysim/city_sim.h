@@ -204,6 +204,13 @@ struct Agent {
     // instead of appearing in the lane in one frame -- which read as "jump
     // back or teleport, then pivot" (Glenn, 2026-09-18; measured: 5-10 m
     // single-step jumps on departure). pullLen 0 = not pulling out.
+    // Where the agent stood when the current sim tick began: its body is DRAWN
+    // interpolated from here to `pos` across the tick (one tick behind the
+    // sim), not extrapolated past it. Reset wherever the sim PLACES an agent
+    // rather than moving it, so a placement is never drawn as a slide.
+    engine::Vec2 tickFromPos{0, 0};
+    engine::Vec2 tickFromHeading{0, 1};
+    Real tickFromPullS = 0;   // pullS at the tick's start (the easing interpolates too)
     engine::Vec2 pullOffset{0, 0};    // parked position minus lane start
     // The turn from the lane heading back to the parked one, SIGNED and fixed
     // at departure (radians): the drawn yaw is the sim's plus this, fading.
@@ -719,7 +726,9 @@ public:
     bool isBus(int i) const;
     // 1 while a departing car is still drawn at its parking space, easing to 0
     // once it has merged into its lane (see Agent::pullOffset).
-    static Real pullOutWeight(const Agent& a);
+    // `pullS`: how far into the pull the DRAWN car is (interpolated through
+    // the sim tick by the renderer, like its position).
+    static Real pullOutWeight(const Agent& a, Real pullS);
     // A bus's route and the index of the stop it is heading for; -1 if the
     // agent is not a bus.
     int busRouteOf(int i) const {
@@ -838,6 +847,7 @@ private:
     // `self` (-1 if none). The one allocator for a car at load and on arrival.
     int claimBayNear(engine::Vec2 target, int self, Real maxDist);
     void releaseBays(Agent& a);          // free both the held and the reserved bay
+    Real busDistanceToStop(const Agent& a) const;
     std::vector<int> nearestFreeBays(engine::Vec2 target, Real maxDist, int k) const;
     bool parksInBays(const Agent& a) const;   // a private car that parks (not a bus/cab/wanderer)
     void advance(Agent& a, Real dt, Real gap, Real minGap);
