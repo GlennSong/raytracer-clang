@@ -30,7 +30,8 @@ end
 
 -- The viewmodel's own behaviour: glue itself to the camera every frame, barrel
 -- pointing where you look. Snap PrevTransform so it renders crisp (no smear).
--- Slot 1 = bare hands (gun stowed out of sight), slot 2 = gun drawn. The viewmodel tracks the slot
+-- Slot 1 = bare hands (gun stowed out of sight), slot 2 = gun drawn, slot 3 = the map (gun stowed;
+-- CityMapToolSystem). The viewmodel tracks the slot
 -- itself (it can't be hidden via the API, so it stows far below the world when holstered). The main
 -- script tracks the same slot keys independently to gate firing — both start on slot 1.
 --
@@ -46,6 +47,7 @@ function G:update(e, dt)
     if fp then
         if input.pressed("slot_2") then self.equipped = true end
         if input.pressed("slot_1") then self.equipped = false end
+        if input.pressed("slot_3") then self.equipped = false end   -- the map
     end
     if not (self.equipped and fp) then              -- holstered: stow out of sight
         entity.set_position(e, { 0.0, -100000.0, 0.0 })
@@ -84,6 +86,7 @@ function M:update(e, dt)
     if fp then
         if input.pressed("slot_2") then self.equipped = true end
         if input.pressed("slot_1") then self.equipped = false end
+        if input.pressed("slot_3") then self.equipped = false end   -- the map
     end
     if not (self.equipped and fp) then return end   -- bare hands / third person
     if self.fired >= MAX then return end

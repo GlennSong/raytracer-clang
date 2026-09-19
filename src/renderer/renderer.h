@@ -752,6 +752,31 @@ public:
 
     virtual void endFrame() = 0;
 
+    // THE GAME UI LAYER. Textured quads in screen pixels, drawn after the
+    // scene is tonemapped -- so no exposure, bloom or fog touches them -- and
+    // before the debug UI, alpha-blended in submission order. Not ImGui: the
+    // debug overlay is for developers and can be hidden; this is what a
+    // player's tools (the map) draw with. A backend without the layer
+    // ignores the list (Vulkan implements it).
+    struct UiQuad {
+        TextureHandle texture;            // invalid = solid colour
+        // Corners TL, TR, BR, BL in FRAMEBUFFER pixels (x right, y down), so a
+        // quad may rotate (a map's you-are-here arrow).
+        float x[4] = {0, 0, 0, 0}, y[4] = {0, 0, 0, 0};
+        float u[4] = {0, 1, 1, 0}, v[4] = {0, 0, 1, 1};
+        // Multiplies the texel; display (sRGB-encoded) values, straight alpha.
+        float r = 1, g = 1, b = 1, a = 1;
+        // An axis-aligned quad from a pixel rectangle.
+        static UiQuad rect(float x0, float y0, float x1, float y1) {
+            UiQuad q;
+            q.x[0] = x0; q.y[0] = y0; q.x[1] = x1; q.y[1] = y0;
+            q.x[2] = x1; q.y[2] = y1; q.x[3] = x0; q.y[3] = y1;
+            return q;
+        }
+    };
+    // This frame's UI (drawn once, then cleared: submit every frame it shows).
+    virtual void submitUi(const std::vector<UiQuad>& /*quads*/) {}
+
     // Debug-UI (Dear ImGui) backend hooks — see ADR-0011. No-ops unless a
     // backend implements them and the build defines RT_ENABLE_IMGUI; engine
     // code never sees ImGui types. The per-frame new-frame/submit are handled

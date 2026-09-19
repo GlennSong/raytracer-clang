@@ -7042,3 +7042,36 @@ peak; the slide value 85 % of it; Lua `grip`) — an arcade 1.3 g when sliding, 
 lock to 8 m/s, half at 22, wound on in a sixth of a second). The gates (lift-off, tank slapper,
 slanted kerb) hold at the higher grip.
 ---
+
+## ADR-0088 — A game UI layer: textured screen quads after the tonemap, not ImGui
+
+**Status:** Provisional (2026-09-19), Vulkan only. **Trigger:** Glenn, asking for a map
+tool: "make a minimap using the svg map we have and use it to pan and zoom around", then
+"We will have to make some kind of map ui. It can't be imgui. But should show the svg map".
+
+**Context.** Everything on screen that is not the 3-D scene was Dear ImGui (ADR-0011): the
+debug overlay, the editor, the transit HUD. ImGui is the developer's surface -- it can be hidden
+for screenshots (`overlay ui off`), it is compiled out without `RT_ENABLE_IMGUI`, and it looks
+like a debug panel. The one other on-top path, `RenderMaterial::FLAG_OVERLAY`, draws meshes
+through the LIT HDR pipeline, so exposure, bloom and fog would all act on a map held up at dusk.
+
+**Decision.** `Renderer::submitUi(std::vector<UiQuad>)`: a frame's list of textured quads in
+framebuffer pixels (four corners, so a quad can rotate; UVs; a straight-alpha tint; an invalid
+texture draws the tint solid). The Vulkan backend draws them into the composite pass right after
+the tonemap and before ImGui, alpha-blended, one draw per quad with a transient descriptor from a
+per-frame pool. The swapchain is UNORM and the composite writes display-encoded colour, so UI
+texels (UNORM uploads) pass through as authored. The list is drawn once and cleared: a tool that
+stops submitting disappears. Other backends inherit a no-op.
+
+The first user is the map (`citysim::CityMapToolSystem`, tool slot 3): the level's own city SVG
+(`writeCityMapSvg`, the streets/blocks/buildings layers) plus the bus lines, rasterized per view
+by nanosvg (`third_party/nanosvg`, zlib, vendored at upstream 239e102) on a worker thread, with
+stops, live buses and the you-are-here chevron drawn as quads over it.
+
+**Consequences.** No text: labels and a route legend with names need a font rasterizer (stb_truetype
+is available beside ImGui; a font asset is not). One draw per quad suits a tool's few hundred
+quads, not a widget toolkit. `removeTexture` waits for the device, so the map re-rasterizes only
+once a pan or zoom settles and slides the previous picture meanwhile. Metal and WebGPU draw
+nothing until they implement `submitUi`. `FlyCameraController::inputSuspended` is how a tool takes
+the pointer: mouse-look, scroll zoom and click-to-fire stand down while it is set.
+---

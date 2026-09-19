@@ -357,7 +357,7 @@ void PlayerSystem::update(FrameContext& ctx) {
         // orbitYaw += 0 is a no-op and the orbitPitch write below overrides
         // update()'s pitch clamp, leaving only the distance dolly.
         CameraInput zoom;
-        zoom.zoomDelta = ctx.input.scrollDelta;
+        zoom.zoomDelta = camera.inputSuspended ? 0.0 : ctx.input.scrollDelta;
         shoulder.update(zoom, ctx.frameDelta);
         shoulder.orbitPitch =
             std::clamp(camera.pitch, kShoulderPitchMin, kShoulderPitchMax);

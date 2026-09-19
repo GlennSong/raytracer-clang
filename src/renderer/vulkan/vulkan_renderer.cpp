@@ -411,6 +411,16 @@ struct VulkanRenderer::Impl {
     VkDescriptorSet compositeSet = VK_NULL_HANDLE;
     VkPipelineLayout compositePipelineLayout = VK_NULL_HANDLE;
     VkPipeline compositePipeline = VK_NULL_HANDLE;
+    // THE GAME UI LAYER (Renderer::submitUi): textured quads drawn into the
+    // composite pass after the tonemap. One transient descriptor per quad from
+    // a per-frame pool, reset with the frame.
+    VkDescriptorSetLayout uiSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout uiPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline uiPipeline = VK_NULL_HANDLE;
+    VkSampler uiSampler = VK_NULL_HANDLE;
+    std::array<VkDescriptorPool, MAX_FRAMES_IN_FLIGHT> uiPools{};
+    std::vector<Renderer::UiQuad> uiQuads;
+    static constexpr uint32_t kUiQuadsPerFrame = 256;
     float sceneExposure = 1.0f;
     int   tonemapOp = 0;          // mirrored from Renderer::tonemapOperator each frame
     float gradeContrast = 1.0f;
@@ -638,6 +648,8 @@ struct VulkanRenderer::Impl {
     bool createSceneFramebuffer();
     bool createFramebuffers();           // composite framebuffers (per swapchain image)
     bool createCompositeResources();     // sampler, descriptor, pipeline
+    bool createUiResources();            // the game UI layer (after composite)
+    void recordUi(VkCommandBuffer cmd);
     void updateCompositeDescriptor();
     bool createBloomResources();
     void updateBloomDescriptors();
@@ -2994,6 +3006,175 @@ bool VulkanRenderer::Impl::createCompositeResources() {
     return true;
 }
 
+bool VulkanRenderer::Impl::createUiResources() {
+    VkSamplerCreateInfo samp{};
+    samp.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samp.magFilter = VK_FILTER_LINEAR;
+    samp.minFilter = VK_FILTER_LINEAR;
+    samp.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samp.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samp.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samp.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if (vkCreateSampler(device, &samp, nullptr, &uiSampler) != VK_SUCCESS) return false;
+
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo layout{};
+    layout.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layout.bindingCount = 1;
+    layout.pBindings = &binding;
+    if (vkCreateDescriptorSetLayout(device, &layout, nullptr, &uiSetLayout) != VK_SUCCESS)
+        return false;
+
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kUiQuadsPerFrame};
+    VkDescriptorPoolCreateInfo pool{};
+    pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool.poolSizeCount = 1;
+    pool.pPoolSizes = &size;
+    pool.maxSets = kUiQuadsPerFrame;
+    for (VkDescriptorPool& p : uiPools)
+        if (vkCreateDescriptorPool(device, &pool, nullptr, &p) != VK_SUCCESS) return false;
+
+    // pos[4] + uv[4] (vertex), colour (fragment): 80 bytes, one range.
+    VkPushConstantRange pushRange{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 80};
+    VkPipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &uiSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushRange;
+    if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &uiPipelineLayout) != VK_SUCCESS)
+        return false;
+
+    VkShaderModule vert = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/ui.vert.spv");
+    VkShaderModule frag = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/ui.frag.spv");
+    if (!vert || !frag) return false;
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = frag;
+    stages[1].pName = "main";
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    VkPipelineInputAssemblyStateCreateInfo ia{};
+    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkPipelineViewportStateCreateInfo vp{};
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+    VkPipelineRasterizationStateCreateInfo raster{};
+    raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.cullMode = VK_CULL_MODE_NONE;
+    raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    raster.lineWidth = 1.0f;
+    VkPipelineMultisampleStateCreateInfo ms{};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineDepthStencilStateCreateInfo ds{};
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    VkPipelineColorBlendAttachmentState ba{};
+    ba.blendEnable = VK_TRUE;
+    ba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    ba.colorBlendOp = VK_BLEND_OP_ADD;
+    ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    ba.alphaBlendOp = VK_BLEND_OP_ADD;
+    ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo blend{};
+    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blend.attachmentCount = 1;
+    blend.pAttachments = &ba;
+    std::array<VkDynamicState, 2> dyn{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic{};
+    dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic.dynamicStateCount = static_cast<uint32_t>(dyn.size());
+    dynamic.pDynamicStates = dyn.data();
+    VkGraphicsPipelineCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    info.stageCount = 2;
+    info.pStages = stages;
+    info.pVertexInputState = &vertexInput;
+    info.pInputAssemblyState = &ia;
+    info.pViewportState = &vp;
+    info.pRasterizationState = &raster;
+    info.pMultisampleState = &ms;
+    info.pDepthStencilState = &ds;
+    info.pColorBlendState = &blend;
+    info.pDynamicState = &dynamic;
+    info.layout = uiPipelineLayout;
+    info.renderPass = compositeRenderPass;
+    info.subpass = 0;
+    VkResult result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr,
+                                                &uiPipeline);
+    vkDestroyShaderModule(device, vert, nullptr);
+    vkDestroyShaderModule(device, frag, nullptr);
+    if (result != VK_SUCCESS) {
+        LOG_ERROR("[vulkan] ui pipeline creation failed");
+        return false;
+    }
+    return true;
+}
+
+// Inside the composite pass, after the tonemap: each quad its own draw (the
+// map is a handful of quads, not a widget toolkit).
+void VulkanRenderer::Impl::recordUi(VkCommandBuffer cmd) {
+    if (uiQuads.empty() || !uiPipeline) return;
+    const float w = static_cast<float>(swapchainExtent.width);
+    const float h = static_cast<float>(swapchainExtent.height);
+    if (w <= 0 || h <= 0) return;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, uiPipeline);
+    uint32_t used = 0;
+    for (const Renderer::UiQuad& q : uiQuads) {
+        if (used >= kUiQuadsPerFrame) break;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        VkDescriptorSetAllocateInfo dsa{};
+        dsa.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsa.descriptorPool = uiPools[currentFrame];
+        dsa.descriptorSetCount = 1;
+        dsa.pSetLayouts = &uiSetLayout;
+        if (vkAllocateDescriptorSets(device, &dsa, &set) != VK_SUCCESS) break;
+        ++used;
+        VkDescriptorImageInfo img{};
+        img.sampler = uiSampler;
+        img.imageView = textureViewOr(q.texture);   // invalid: 1x1 white -> solid tint
+        img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = set;
+        write.dstBinding = 0;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.descriptorCount = 1;
+        write.pImageInfo = &img;
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, uiPipelineLayout, 0, 1,
+                                &set, 0, nullptr);
+        float push[20];
+        for (int k = 0; k < 4; ++k) {
+            push[k * 2 + 0] = q.x[k] / w * 2.0f - 1.0f;   // Vulkan NDC: y down, like pixels
+            push[k * 2 + 1] = q.y[k] / h * 2.0f - 1.0f;
+            push[8 + k * 2 + 0] = q.u[k];
+            push[8 + k * 2 + 1] = q.v[k];
+        }
+        push[16] = q.r; push[17] = q.g; push[18] = q.b; push[19] = q.a;
+        vkCmdPushConstants(cmd, uiPipelineLayout,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           sizeof(push), push);
+        vkCmdDraw(cmd, 6, 1, 0, 0);
+    }
+    uiQuads.clear();   // shown once: a tool that stops submitting disappears
+}
+
 bool VulkanRenderer::Impl::createCommandBuffers() {
     VkCommandBufferAllocateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -4670,6 +4851,11 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     vkCmdPushConstants(cmd, compositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CompositePush), &cpush);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+    // The game UI (a player's map), over the finished image and under the
+    // debug UI.
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    recordUi(cmd);
 #ifdef RT_ENABLE_IMGUI
     // ImGui overlay, into the same swapchain pass (draw data finalized in endFrame).
     if (imguiInitialized) {
@@ -4730,6 +4916,7 @@ void VulkanRenderer::Impl::drawFrame() {
     // This frame's prior submission is done: recycle its transient material sets.
     for (VkDescriptorPool pool : materialPools[currentFrame])
         vkResetDescriptorPool(device, pool, 0);
+    if (uiPools[currentFrame]) vkResetDescriptorPool(device, uiPools[currentFrame], 0);
     materialPoolActive = 0;
     materialPoolExhaustedWarned = false;
 
@@ -4902,6 +5089,7 @@ bool VulkanRenderer::initialize(void* /*windowHandle*/, int width, int height) {
               impl->createSsrResources() &&
               impl->createDofResources() && impl->createCloudResources() &&
               impl->createCompositeResources() &&
+              impl->createUiResources() &&
               impl->createShadowPipeline() &&
               impl->createPipeline() &&
               impl->createSkyPipeline();
@@ -5125,6 +5313,19 @@ void VulkanRenderer::shutdown() {
     impl->bloomSampler = VK_NULL_HANDLE;
     impl->bloomRenderPass = VK_NULL_HANDLE;
 
+    // Game UI layer.
+    if (impl->uiPipeline) vkDestroyPipeline(impl->device, impl->uiPipeline, nullptr);
+    if (impl->uiPipelineLayout)
+        vkDestroyPipelineLayout(impl->device, impl->uiPipelineLayout, nullptr);
+    for (VkDescriptorPool& p : impl->uiPools)
+        if (p) { vkDestroyDescriptorPool(impl->device, p, nullptr); p = VK_NULL_HANDLE; }
+    if (impl->uiSetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->uiSetLayout, nullptr);
+    if (impl->uiSampler) vkDestroySampler(impl->device, impl->uiSampler, nullptr);
+    impl->uiPipeline = VK_NULL_HANDLE;
+    impl->uiPipelineLayout = VK_NULL_HANDLE;
+    impl->uiSetLayout = VK_NULL_HANDLE;
+    impl->uiSampler = VK_NULL_HANDLE;
+
     // Composite (tonemap) resources.
     if (impl->compositePipeline) vkDestroyPipeline(impl->device, impl->compositePipeline, nullptr);
     if (impl->compositePipelineLayout)
@@ -5242,6 +5443,10 @@ TextureHandle VulkanRenderer::uploadTexture(int width, int height, int channels,
         }
     }
     return impl->textures.insert(tex);
+}
+
+void VulkanRenderer::submitUi(const std::vector<UiQuad>& quads) {
+    impl->uiQuads = quads;
 }
 
 TextureHandle VulkanRenderer::uploadTextureHDR(int width, int height, int channels,

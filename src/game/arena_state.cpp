@@ -24,6 +24,7 @@
 #include "../apps/citysim/city_walkers.h"
 #include "../apps/citysim/city_player_body.h"
 #include "../apps/citysim/city_player_transit.h"
+#include "../apps/citysim/city_map_tool.h"
 #include "../apps/citysim/city_possess.h"
 #endif
 #include "../engine/systems/vehicle_system.h"
@@ -189,6 +190,9 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<citysim::CityPlayerBodySystem>();
     // The passenger seat: `ride bus|taxi|any` / `ride off` (city_player_transit).
     addSystem<citysim::CityPlayerTransitSystem>(citySys, physSys, camSys.flyController());
+    // The map: tool slot 3 (city_map_tool) -- the city SVG through the game UI
+    // layer; drag pans, the wheel zooms, C centres on you.
+    addSystem<citysim::CityMapToolSystem>(citySys, camSys.flyController());
     // The control channel's avatar (ADR-0079): consumes possess.cmd one-shots,
     // produces AgentDriver commands. AFTER CityWalkerSystem (commandeered
     // pedestrians already have bodies), BEFORE VehicleSystem (same-tick command

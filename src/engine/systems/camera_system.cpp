@@ -106,7 +106,7 @@ CameraInput CameraSystem::gatherInput(FrameContext& ctx) const {
     // Fly looks freely when pinned first-person OR detached (freeLook) — no
     // button to hold — but never while the pointer is over a debug panel, so
     // dragging a slider doesn't spin the view.
-    bool mouseLook = !ctx.input.uiWantsMouse &&
+    bool mouseLook = !ctx.input.uiWantsMouse && !(flyActive && fly.inputSuspended) &&
         (flyActive ? (fly.positionLocked || freeLook || ctx.input.mouseRightDown)
                    : ctx.input.mouseLeftDown);
     // Yaw sign is per MODE: first-person fly look FOLLOWS the mouse (right =
@@ -122,7 +122,7 @@ CameraInput CameraSystem::gatherInput(FrameContext& ctx) const {
     in.lookYawDelta = mouseYaw + ctx.actions.axis("cam_look_x") * stick;
     in.lookPitchDelta = mousePitch + ctx.actions.axis("cam_look_y") * stick;
 
-    in.zoomDelta = ctx.input.scrollDelta;
+    in.zoomDelta = (flyActive && fly.inputSuspended) ? 0.0 : ctx.input.scrollDelta;
     return in;
 }
 

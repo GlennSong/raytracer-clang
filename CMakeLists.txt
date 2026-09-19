@@ -357,6 +357,7 @@ add_library(citysim STATIC
     src/apps/citysim/city_dispatch.cpp   # hailing a ride: the matching policy
     src/apps/citysim/city_bus.cpp   # fixed-loop transit: derived routes and stops
     src/apps/citysim/bus_stop_props.cpp   # the pole, sign and bench you can see
+    src/apps/citysim/city_map_raster.cpp  # the map tool's picture: the city SVG, rasterized (nanosvg)
     src/apps/citysim/places.cpp          # places layer: buildings → routable POIs (ADR-0066)
     src/apps/citysim/ped_graph.cpp       # pedestrian nav-graph: door-to-door walking (ADR-0066)
     src/apps/citysim/relationships.cpp   # surface-level social graph (ADR-0066)
@@ -925,6 +926,7 @@ if(RT_ENABLE_PHYSICS)
         src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
         src/apps/citysim/city_player_body.cpp  # player renders as a person in third person (ADR-0064)
         src/apps/citysim/city_player_transit.cpp  # the player's passenger seat on a bus or cab
+        src/apps/citysim/city_map_tool.cpp  # the map: tool slot 3, drawn with the game UI layer
         src/apps/citysim/city_possess.cpp   # the control channel's avatar (ADR-0079)
     )
 
@@ -939,6 +941,7 @@ if(RT_ENABLE_PHYSICS)
         tests/test_physics_system.cpp
         tests/test_city_phys_tier.cpp
         tests/test_city_ride.cpp
+        tests/test_city_map.cpp
         tests/test_building_collider.cpp
         tests/test_building_interior.cpp
     tests/test_elevator.cpp
@@ -947,6 +950,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/systems/physics_system.cpp
         src/apps/citysim/city_physics.cpp
         src/apps/citysim/city_player_transit.cpp
+        src/apps/citysim/city_map_tool.cpp
     )
     target_include_directories(physics_tests PRIVATE src)
     target_compile_options(physics_tests PRIVATE -Wall -Wextra)
@@ -994,7 +998,8 @@ function(rt_build_vulkan_shaders)
     set(VK_SHADERS mesh.vert mesh.frag mesh_wire.frag mesh_shadow.vert terrain.vert
                    sky.vert sky.frag composite.vert composite.frag bloom.frag
                    ssao.frag ssao_blur.frag ssr.frag dof.frag brdf_lut.frag
-                   atmosphere.frag clouds.frag clouds_composite.frag water.vert water.frag star.frag)
+                   atmosphere.frag clouds.frag clouds_composite.frag water.vert water.frag star.frag
+                   ui.vert ui.frag)
     set(VK_SPV_FILES "")
     foreach(shader ${VK_SHADERS})
         add_custom_command(

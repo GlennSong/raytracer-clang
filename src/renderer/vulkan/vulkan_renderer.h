@@ -35,6 +35,7 @@ public:
     void setTerrainHorizon(TextureHandle map, float originX, float originZ, float extent,
                            float encodeLo, float encodeHi) override;
     void removeTexture(TextureHandle handle) override;
+    void submitUi(const std::vector<UiQuad>& quads) override;
     RenderStats getRenderStats() const override;
 
     void beginFrame() override;

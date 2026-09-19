@@ -128,7 +128,7 @@ void ShootingSystem::update(FrameContext& ctx) {
 
     // Fire on press — but not when the click was aimed at a debug panel.
     if (firstPerson && ctx.actions.pressed("fire") && !ctx.input.uiWantsMouse &&
-        bulletCount < maxBullets) {
+        !camera.inputSuspended && bulletCount < maxBullets) {
         spawnBullet(ctx);
     }
 
