@@ -12,6 +12,9 @@ const char* placeTypeName(PlaceType type) {
         case PlaceType::Office: return "office";
         case PlaceType::Park:   return "park";
         case PlaceType::Civic:  return "civic";
+        case PlaceType::Cafe:        return "cafe";
+        case PlaceType::Restaurant:  return "restaurant";
+        case PlaceType::Supermarket: return "supermarket";
         default:                return "?";
     }
 }
@@ -25,6 +28,21 @@ bool parsePlaceType(const std::string& tag, PlaceType& out) {
         }
     }
     return false;
+}
+
+RetailKind retailKindFor(Vec2 site) {
+    // Hash the site on a 0.5 m lattice: stable across builds, and two lots
+    // never share one.
+    uint32_t h = static_cast<uint32_t>(static_cast<int32_t>(std::lround(site.x * 2.0))) * 73856093u ^
+                 static_cast<uint32_t>(static_cast<int32_t>(std::lround(site.y * 2.0))) * 19349663u;
+    h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15; h *= 0x846ca68bU; h ^= h >> 16;
+    const uint32_t roll = h % 100u;
+    RetailKind k;
+    if (roll < 25)      { k.type = PlaceType::Cafe;        k.openHour = 6.5; k.closeHour = 19.0; }
+    else if (roll < 45) { k.type = PlaceType::Restaurant;  k.openHour = 11.0; k.closeHour = 23.0; }
+    else if (roll < 55) { k.type = PlaceType::Supermarket; k.openHour = 7.0; k.closeHour = 22.0; }
+    else                { k.type = PlaceType::Shop;        k.openHour = 9.0; k.closeHour = 20.0; }
+    return k;
 }
 
 bool Place::openAt(Real clock) const {

@@ -187,6 +187,21 @@ struct Agent {
     // freezes it ignores car contact until it has driven clear of the spot.
     Real crashTimer = 0;
     int crashCount = 0;              // consecutive freezes at this wreck
+    // INDOORS (Glenn, 2026-09-19: "agents who are at work or home should ...
+    // go inside the building"). Resting at a door -- home, work, a shop, a
+    // cafe -- means inside: not drawn, not a body on the pavement. Cleared the
+    // moment a trip starts. Resting OUTSIDE (a bus stop, a park, a pause on a
+    // walk) keeps this false and the walker stands where it is.
+    bool indoors = false;
+    // This rest's own length in in-world hours, when the stop sets it (a
+    // coffee outlasts a look in a shop window); 0 = the goal state's dwell.
+    Real restDwell = 0;
+    // The venue (CitySim::venues_) this trip is heading for, -1 for none.
+    int tripVenue = -1;
+    // Where the current outing/lunch trip is going, kept until arrival: a leg
+    // by BUS sets the walker down at a stop and the trip resumes from there,
+    // and it must resume to the same place, not re-pick one.
+    int outingTo = -1;
     // A bus that pulled up short of its stop node (busStandBack): the leg it
     // stands on, so its next trip starts from there. -1 otherwise.
     int busStoodLeg = -1;
@@ -736,6 +751,26 @@ public:
     }
     const BusNetwork& buses() const { return buses_; }
     bool isBus(int i) const;
+    // Is this pedestrian ON THE STREET to be drawn (and given a body)? A
+    // walker, someone waiting at a stop or pausing outside -- not someone
+    // indoors, riding, or far. The walker system and the renderer both ask.
+    bool pedVisible(int i) const;
+    // The Stroller role's table (strollerGoals by default; a level script may
+    // replace it -- agents.lua `stroller`).
+    void setStrollerTable(GoalTable t) { strollerTable_ = std::move(t); }
+    // Places people go out to (everything but homes), for outings and lunch.
+    struct Venue {
+        PlaceType type = PlaceType::Shop;
+        int node = -1;
+        engine::Vec2 door;
+        Real openHour = 0, closeHour = 24;
+        bool openAt(Real h) const {
+            if (openHour == closeHour) return true;
+            if (openHour < closeHour) return h >= openHour && h < closeHour;
+            return h >= openHour || h < closeHour;
+        }
+    };
+    const std::vector<Venue>& venues() const { return venues_; }
     // 1 while a departing car is still drawn at its parking space, easing to 0
     // once it has merged into its lane (see Agent::pullOffset).
     // `pullS`: how far into the pull the DRAWN car is (interpolated through
@@ -844,14 +879,26 @@ private:
     GoalTable& tableFor(const Agent& a) {
         const int i = indexOf(a);
         if (isBus(i)) return busTable_;
-        return isTaxi(i) ? taxiTable_ : goalsFor(a.archetype);
+        if (isTaxi(i)) return taxiTable_;
+        if (outingStroller(a)) return strollerTable_;
+        return goalsFor(a.archetype);
     }
     const GoalTable& tableFor(const Agent& a) const {
         const int i = indexOf(a);
         if (isBus(i)) return busTable_;
-        return isTaxi(i) ? taxiTable_
-                         : (a.archetype == Agent::Mode::Driver ? goalDriver_ : goalPed_);
+        if (isTaxi(i)) return taxiTable_;
+        if (outingStroller(a)) return strollerTable_;
+        return a.archetype == Agent::Mode::Driver ? goalDriver_ : goalPed_;
     }
+    // A walker with the day off runs the outing table (strollerGoals); a
+    // driving stroller keeps the historical park-as-destination schedule.
+    bool outingStroller(const Agent& a) const {
+        return !wander_ && a.role == Agent::Role::Stroller &&
+               a.archetype == Agent::Mode::Pedestrian && !venues_.empty();
+    }
+    int pickOuting(Agent& a, int origin);   // GoalTarget::Outing -> a node (sets tripVenue)
+    int pickLunch(Agent& a, int origin);    // GoalTarget::Lunch  -> a node, or -1
+    engine::Vec2 freeStandingSpot(const Agent& a, engine::Vec2 want, engine::Vec2 along) const;
     void installGoalTables(GoalTable pedestrian, GoalTable driver);
     bool launchClear(const Agent& a, int node) const;   // no moving car near the spawn
     void seatBusAt(int idx, int node, int queued = 0);   // a bus at rest on a stop
@@ -1025,6 +1072,8 @@ private:
     // defaults mirror the historical schedule/wander control flow bit-exactly;
     // scripting builds may replace them at load via setGoalTables.
     GoalTable goalPed_ = defaultScheduleGoals();
+    GoalTable strollerTable_ = strollerGoals();
+    std::vector<Venue> venues_;
     GoalTable goalDriver_ = defaultScheduleGoals();
     RelationshipTable relationships_;   // surface-level social graph (ADR-0066)
     long faultCount_ = 0;

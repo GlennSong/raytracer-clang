@@ -62,6 +62,14 @@ TEST_CASE(agents_lua_rebuilds_the_wander_tables) {
     CHECK(p.describe() == wanderGoals(false).describe());
 }
 
+TEST_CASE(agents_lua_rebuilds_the_stroller_table) {
+    AgentsVM a;
+    CHECK(a.loaded);
+    GoalTable t;
+    CHECK(loadGoalTable(a.vm, "stroller", t));
+    CHECK(t.describe() == strollerGoals().describe());
+}
+
 TEST_CASE(agents_lua_custom_table_carries_action_params) {
     // A behaviour authored from scratch in Lua — "go somewhere random, browse
     // two hours, repeat" — arrives with its params (target, activity, dwell).

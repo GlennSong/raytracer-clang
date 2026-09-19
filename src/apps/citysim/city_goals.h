@@ -22,7 +22,9 @@ namespace citysim {
 // The label an agent's day reads as from outside — what tests and the debug
 // widgets consume (the historical Agent::Activity). Each goal STATE carries
 // the value it shows, so the legacy field stays in sync with the table.
-enum class Activity : uint8_t { AtHome, Commuting, AtWork, Returning, Shopping };
+// Outing: out and about (a stroller between stops, or pausing at one).
+// Lunch: out of the office for lunch.
+enum class Activity : uint8_t { AtHome, Commuting, AtWork, Returning, Shopping, Outing, Lunch };
 
 // The C++ action vocabulary a goal state wires together. Deliberately tiny:
 // behaviours come from how the TABLE composes these, not from new actions.
@@ -39,7 +41,12 @@ enum class GoalAction : uint8_t {
 // Drop: that fare's destination. Both are DYNAMIC -- unlike Work/Home/Shop
 // they are not a field on the agent, they are looked up in the Dispatch,
 // which is what lets one table drive a taxi, a Lyft or a bus.
-enum class GoalTarget : uint8_t { None, Work, Home, Random, Shop, Fare, Drop, Stop, Depot };
+// Lunch: a cafe or restaurant near work that is open now (none, or a walker
+// who brought lunch: the trip does not start and NoRoute fires).
+// Outing: somewhere near to go next -- a park, a cafe, a store, a supermarket,
+// a civic building, or just a walk round the block (CitySim::pickOuting).
+enum class GoalTarget : uint8_t { None, Work, Home, Random, Shop, Fare, Drop, Stop, Depot,
+                                  Lunch, Outing };
 
 // The events CitySim EMITS at fixed points — the full trigger vocabulary a
 // table may transition on. Emission lives in C++ (clock windows, arrival,
@@ -121,6 +128,11 @@ GoalTable defaultScheduleGoals();
 // straight through the arrival node (Arrived self-loop onto a GoTo state); a
 // walker rests one tick at the kerb first (Arrived -> RoamRest -Idle-> Roam).
 GoalTable wanderGoals(bool driver);
+// A day OUT (Glenn, 2026-09-19: "non workers and pedestrians who are out for a
+// stroll or going to public spaces"): from home, a chain of nearby stops --
+// park, cafe, store, a walk round the block -- each with a pause, until the
+// outing window closes and they head home. The Stroller role's table.
+GoalTable strollerGoals();
 // A TAXI's day: cruise until dispatched, collect, deliver, cruise again.
 GoalTable taxiGoals();
 // A BUS's day: drive the loop, for ever. One state.

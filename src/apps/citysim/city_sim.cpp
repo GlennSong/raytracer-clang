@@ -693,8 +693,10 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     const std::vector<PlaceId>& parks = places.ofType(PlaceType::Park);
     // A "job" is a workplace place: shop / office / civic (a park is not a job).
     std::vector<PlaceId> jobs;
-    for (PlaceType t : {PlaceType::Shop, PlaceType::Office, PlaceType::Civic})
+    for (PlaceType t : {PlaceType::Shop, PlaceType::Office, PlaceType::Civic,
+                        PlaceType::Cafe, PlaceType::Restaurant, PlaceType::Supermarket})
         for (PlaceId id : places.ofType(t)) jobs.push_back(id);
+    venues_.clear();
     if (homes.empty()) return;   // nowhere to live → leave the built schedule alone
 
     // The nav node a place routes through (nearest to its snapped entrance).
@@ -710,6 +712,18 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         const Place& p = places[id];
         return p.entrance + (p.site - p.entrance) * 0.4;
     };
+    // Everywhere people go OUT to: every place but a home. What outings and
+    // lunch breaks choose from at trip time (pickOuting / pickLunch).
+    for (const Place& p : places.places()) {
+        if (p.type == PlaceType::Home) continue;
+        Venue v;
+        v.type = p.type;
+        v.node = nodeOf(p.id);
+        v.door = doorOf(p.id);
+        v.openHour = p.openHour;
+        v.closeHour = p.closeHour;
+        if (v.node >= 0) venues_.push_back(v);
+    }
 
     // Scratch for the on-foot job search, hoisted: one allocation, not one
     // per walker.
@@ -739,6 +753,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             // the verge (idlePose) — a car "at home" is a car parked outside it.
             a.pos = a.mode == Agent::Mode::Pedestrian ? a.homeDoor
                                                       : idlePose(hn, a.mode, a.brain);
+            a.indoors = a.mode == Agent::Mode::Pedestrian;
             if (!graph.outLinks[hn].empty())
                 a.heading = graph.direction(graph.outLinks[hn][0]);
         }
@@ -752,8 +767,41 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         const uint32_t roleRoll = (a.brain >> 20) & 0xFF;   // 0..255
         const bool stroller = !parks.empty() && roleRoll < 51;   // ~20%
         auto unit = [](uint32_t bits) { return (bits & 0xFF) / 255.0; };
-
-        if (stroller) {
+        // A WALKER WITH THE DAY OFF (Glenn, 2026-09-19: "we should have non
+        // workers and pedestrians who are out for a stroll or going to public
+        // spaces"): about one walker in three holds no job and spends part of
+        // the day out -- park, cafe, shops, a walk round the block (the
+        // outing table, strollerGoals). Their outings are spread over the day
+        // (early, mid-morning, afternoon, evening) so the street is never
+        // just the commute.
+        const bool dayOff = a.archetype == Agent::Mode::Pedestrian &&
+                            !venues_.empty() && roleRoll < 85;   // ~1 in 3
+        int anchor = -1;
+        if (dayOff) {
+            // The window mechanics need somewhere that is not home: the
+            // nearest routable venue. Outings themselves choose afresh.
+            Real best = 1e30;
+            for (const Venue& v : venues_) {
+                const Vec2 d = graph.nodes[static_cast<std::size_t>(v.node)] -
+                               graph.nodes[static_cast<std::size_t>(hn)];
+                const Real d2 = d.x * d.x + d.y * d.y;
+                if (d2 < best && v.node != hn) { best = d2; anchor = v.node; }
+            }
+            if (anchor >= 0 && !commutable(hn, anchor)) anchor = -1;
+        }
+        if (anchor >= 0) {
+            a.role = Agent::Role::Stroller;
+            a.work = anchor;
+            a.workPlace = kNoPlace;
+            a.workDoor = graph.nodes[static_cast<std::size_t>(anchor)];
+            const Real u0 = unit(a.brain >> 4), u1 = unit(a.brain >> 12);
+            switch ((a.brain >> 28) & 3u) {
+                case 0:  a.departWork = 6.5 + 1.5 * u0;  a.departHome = a.departWork + 2.0 + 2.0 * u1; break;
+                case 1:  a.departWork = 9.0 + 2.0 * u0;  a.departHome = a.departWork + 3.0 + 3.0 * u1; break;
+                case 2:  a.departWork = 12.5 + 2.0 * u0; a.departHome = a.departWork + 3.0 + 2.0 * u1; break;
+                default: a.departWork = 17.5 + 1.5 * u0; a.departHome = a.departWork + 2.0 + 2.0 * u1; break;
+            }
+        } else if (stroller) {
             PlaceId pk = parks[(a.brain >> 4) % parks.size()];
             if (commutable(hn, nodeOf(pk))) {
                 a.role = Agent::Role::Stroller;
@@ -883,7 +931,9 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 {   // An errand stop: the nearest shop to HOME that is routable
                     // from work, so the last leg home is short. Deterministic:
                     // nearest first, ties by place id.
-                    const std::vector<PlaceId>& shops = places.ofType(PlaceType::Shop);
+                    // A store or a supermarket: the errand on the way home.
+                    std::vector<PlaceId> shops = places.ofType(PlaceType::Shop);
+                    for (PlaceId sp : places.ofType(PlaceType::Supermarket)) shops.push_back(sp);
                     Real bestD2 = 1e30;
                     for (PlaceId sp : shops) {
                         const Vec2 d = places[sp].site - places[hp].site;
@@ -907,7 +957,9 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                     }
                     a.commuteSeconds = secs;
                 }
-                if (places[pick].type == PlaceType::Shop) {
+                const PlaceType wt = places[pick].type;
+                if (wt == PlaceType::Shop || wt == PlaceType::Cafe ||
+                    wt == PlaceType::Restaurant || wt == PlaceType::Supermarket) {
                     const Real open = places[pick].openHour;
                     const Real close = places[pick].closeHour;
                     // ONLY when the shop actually authored hours. A place minted
@@ -920,7 +972,8 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                     // piedmont, where every place is lot-derived, that was every
                     // shop worker in the city. Without authored hours it simply
                     // keeps the shift it drew at build.
-                    const bool authored = open > 0.0 || close < 24.0;
+                    const bool authored = (open > 0.0 || close < 24.0) &&
+                                          places[pick].authoredHours;
                     const Real dw = open > 0.5 ? open - 0.5 : 0.0;
                     const Real dh = close < 23.5 ? close + 0.5 : 24.0;
                     if (authored && dw != dh) {
@@ -1159,6 +1212,22 @@ void CitySim::placeFromSchedule(int idx) {
         a.goalHours = 0;
         a.activity = want;
         a.wakeAt = -1;
+        // AT WORK SINCE WHEN: the morning at work ends in lunch (a dwell), so a
+        // city opened at 12:30 must know its workers arrived hours ago -- with
+        // the clock started at the seed, every lunch fell after the shift and
+        // nobody went out.
+        if (s.where == Snapshot::Where::AtWork) {
+            Real since = std::fmod(clockHours_ - departWorkHour(a) + 48.0, 24.0) -
+                         a.commuteSeconds * hoursPerSecond_;
+            a.goalHours = std::max(Real(0), since);
+            // Lunch long over (the morning's dwell plus the break): the
+            // afternoon, not a lunch rush of everyone at once at load.
+            const GoalState& gs = t.state(goal);
+            if (gs.dwellHours > 0 && since > gs.dwellHours + 0.6) {
+                for (int st = 0; st < t.stateCount(); ++st)
+                    if (t.state(st).name == "AtWorkPM") { a.goal = st; a.goalHours = 0; break; }
+            }
+        }
 
         if (!travelling) {
             // At one end of the day. Rest there, and park the car with it.
@@ -1173,6 +1242,22 @@ void CitySim::placeFromSchedule(int idx) {
             a.pos = idlePose(node, a.mode, a.brain);
             if (!nav_->outLinks[node].empty())
                 a.heading = nav_->direction(nav_->outLinks[node][0]);
+            // A WALKER AT ONE END OF ITS DAY IS INSIDE, at the door -- not
+            // standing on the sidewalk by the node (the seeded crowd that stood
+            // around all day). Someone whose "work" is outdoors (a stroller's
+            // park) stays out.
+            if (a.mode == Agent::Mode::Pedestrian) {
+                const bool atWorkEnd = s.where == Snapshot::Where::AtWork;
+                if (!atWorkEnd && a.homePlace != kNoPlace) {
+                    a.pos = a.homeDoor;
+                    a.indoors = true;
+                } else if (atWorkEnd && a.workPlace != kNoPlace) {
+                    a.pos = a.workDoor;
+                    a.indoors = true;
+                } else {
+                    a.indoors = false;
+                }
+            }
             releaseBays(a);
             a.tripGoal = node;
             bool offStreet = false;
@@ -1367,6 +1452,22 @@ int CitySim::departNode(const Agent& a) const {
 bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
     const GoalState& s = tableFor(a).state(a.goal);
     bool started = false;
+    // OUTING / LUNCH destinations are chosen HERE, before the bus check, so a
+    // trip across town can take the bus like any other. A trip resumed after a
+    // bus leg keeps the destination it chose (outingTo).
+    int chosen = -1;
+    if (s.target == GoalTarget::Outing || s.target == GoalTarget::Lunch) {
+        if (a.outingTo >= 0) {
+            chosen = a.outingTo;
+        } else {
+            chosen = s.target == GoalTarget::Outing ? pickOuting(a, origin)
+                                                     : pickLunch(a, origin);
+            a.outingTo = chosen;
+        }
+    } else {
+        a.tripVenue = -1;
+        a.outingTo = -1;
+    }
 
     // CATCH THE BUS. This lived in goalThink's "at a GoTo state and not moving"
     // branch, which MEASURED as the wrong place: walkers are never in that
@@ -1380,7 +1481,7 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
     const int busSelf = indexOf(a);
     if (a.mode == Agent::Mode::Pedestrian && nav_ && !buses_.empty() &&
         !isBus(busSelf) && !buses_.tripOf(busSelf) && !isTaxi(busSelf)) {
-        const int to = goalNodeFor(a, s.target);
+        const int to = chosen >= 0 ? chosen : goalNodeFor(a, s.target);
         if (to >= 0 && origin >= 0 && origin < nav_->nodeCount() &&
             to < nav_->nodeCount() && to != origin) {
             const Vec2 p0 = nav_->nodes[static_cast<std::size_t>(origin)];
@@ -1404,6 +1505,14 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
     switch (s.target) {
         case GoalTarget::Random:
             started = startWanderTrip(a, origin, fromRest);
+            break;
+        case GoalTarget::Outing:
+        case GoalTarget::Lunch:
+            if (chosen >= 0 && chosen != origin) {
+                startTrip(a, origin, chosen, fromRest);
+                started = a.moving;
+            }
+            if (!started) { a.outingTo = -1; a.tripVenue = -1; }
             break;
         case GoalTarget::Work:
         case GoalTarget::Home:
@@ -1609,18 +1718,26 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
     }
     // Rest: the dwell clock runs on in-world hours, like the schedule windows.
     a.goalHours += dtHours;
-    if (s.dwellHours > 0 && a.goalHours >= s.dwellHours)
-        if (tryGoalEvent(a, GoalEvent::DwellDone) != GoalFire::NoRow) return;
+    // The stop's own length when it set one (a coffee, a browse), else the
+    // state's.
+    const Real dwell = a.restDwell > 0 ? a.restDwell : s.dwellHours;
     // The commute clock: inside the [departWork, departHome) window the day
     // says "be at work", outside it "be at home". Only meaningful for agents
     // with a real commute — a stranded pair (work == home, no route at build)
     // never departs, exactly as before.
+    //
+    // Checked BEFORE the dwell: a state that has both (an outing's pause, the
+    // morning at work before lunch) ends the day when the window closes
+    // instead of starting another stop -- else a stroller whose pauses kept
+    // finishing never went home.
     if (a.home != a.work) {
         const bool atWorkNow = inWindow(clockHours_, departWorkHour(a), a.departHome);
         if (tryGoalEvent(a, atWorkNow ? GoalEvent::DepartWork
                                       : GoalEvent::DepartHome) != GoalFire::NoRow)
             return;
     }
+    if (dwell > 0 && a.goalHours >= dwell)
+        if (tryGoalEvent(a, GoalEvent::DwellDone) != GoalFire::NoRow) return;
     if (tryGoalEvent(a, GoalEvent::Idle) != GoalFire::NoRow) return;
 
     // NOTHING FIRED, AND NOTHING CAN UNTIL A KNOWN TIME. An agent resting at
@@ -1636,8 +1753,8 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
     // sleep — which is right: they are supposed to keep moving.)
     if (hoursPerSecond_ <= 0) return;   // clock stopped: nothing to wait for
     Real hoursUntil = kNeverWakes;
-    if (s.dwellHours > 0)
-        hoursUntil = std::max(Real(0), s.dwellHours - a.goalHours);
+    if (dwell > 0)
+        hoursUntil = std::max(Real(0), dwell - a.goalHours);
     if (a.home != a.work) {
         // The commute fires when the window predicate FLIPS, so the next
         // boundary is whichever end of the window is ahead of us.
@@ -1725,6 +1842,161 @@ void CitySim::alightRide(int passenger, int atNode) {
     if (nav_ && atNode >= 0 && atNode < nav_->nodeCount() && passenger >= 0 &&
         passenger < static_cast<int>(agents_.size()))
         agents_[static_cast<std::size_t>(passenger)].restNode = atNode;
+}
+
+bool CitySim::pedVisible(int i) const {
+    if (i < 0 || i >= static_cast<int>(agents_.size())) return false;
+    const Agent& a = agents_[static_cast<std::size_t>(i)];
+    if (a.mode != Agent::Mode::Pedestrian || a.far()) return false;
+    if (riding(i)) return false;   // drawn in the vehicle, not on the pavement
+    return a.moving || !a.indoors;
+}
+
+// A place to STAND near `want` that nobody else is standing in: `want` itself,
+// else steps along the sidewalk (`along`) either way, then a second row a step
+// back from the kerb. People waiting at a stop or pausing on a walk otherwise
+// all end on the one sidewalk point their street leads to (measured on metro:
+// 427 overlapping pairs among ~190 standing figures near the player).
+engine::Vec2 CitySim::freeStandingSpot(const Agent& a, engine::Vec2 want,
+                                       engine::Vec2 along) const {
+    const int self = indexOf(a);
+    const Real al = along.length();
+    const Vec2 u = al > 1e-6 ? along * (1.0 / al) : Vec2(1, 0);
+    const Vec2 side(u.y, -u.x);   // right of travel: away from the kerb on the right-hand walk
+    std::vector<int> near;
+    auto clear = [&](Vec2 p) {
+        grid_.query(p, 1.5, near);
+        for (int bi : near) {
+            if (bi == self) continue;
+            const Agent& b = agents_[static_cast<std::size_t>(bi)];
+            if (b.mode != Agent::Mode::Pedestrian || b.far()) continue;
+            if (!b.moving && b.indoors) continue;   // inside: not on the pavement
+            if (riding(bi)) continue;
+            if ((b.pos - p).lengthSquared() < 0.75 * 0.75) return false;
+        }
+        return true;
+    };
+    constexpr Real kStep = 0.8;
+    for (int row = 0; row < 2; ++row) {
+        const Vec2 base = want + side * (row * kStep);
+        for (int k = 0; k < 9; ++k) {
+            const Real off = kStep * static_cast<Real>((k + 1) / 2) * ((k & 1) ? 1.0 : -1.0);
+            const Vec2 p = base + u * off;
+            if (clear(p)) return p;
+        }
+    }
+    return want;
+}
+
+// Somewhere NEAR to go next on an outing: an open park, cafe, store,
+// supermarket, restaurant or civic building within a short walk -- or just a
+// walk round the block (a random street corner 150-450 m off). Weighted so a
+// park or a coffee is likelier than the town hall; never straight back to
+// the stop just left. Sets a.tripVenue (-1 for the plain walk).
+int CitySim::pickOuting(Agent& a, int origin) {
+    const int prev = a.tripVenue;
+    a.tripVenue = -1;
+    if (!nav_ || origin < 0 || origin >= nav_->nodeCount()) return -1;
+    const Vec2 here = nav_->nodes[static_cast<std::size_t>(origin)];
+    const Real h = clockHours_;
+    // Now and then, somewhere ACROSS TOWN: a park, a civic building, a
+    // restaurant 1.2-3 km off -- the trip a bus is for (the rider plans it in
+    // startGoalTrip like any other). Local stops are walks.
+    if (rnd() % 100u < 14u) {
+        std::vector<int> far;
+        for (int i = 0; i < static_cast<int>(venues_.size()); ++i) {
+            const Venue& v = venues_[static_cast<std::size_t>(i)];
+            if (i == prev || !v.openAt(h)) continue;
+            if (v.type != PlaceType::Park && v.type != PlaceType::Civic &&
+                v.type != PlaceType::Restaurant && v.type != PlaceType::Cafe)
+                continue;
+            const Vec2 d = nav_->nodes[static_cast<std::size_t>(v.node)] - here;
+            const Real d2 = d.x * d.x + d.y * d.y;
+            if (d2 < 1200.0 * 1200.0 || d2 > 3000.0 * 3000.0) continue;
+            far.push_back(i);
+        }
+        if (!far.empty()) {
+            a.tripVenue = far[rnd() % static_cast<uint32_t>(far.size())];
+            return venues_[static_cast<std::size_t>(a.tripVenue)].node;
+        }
+    }
+    constexpr Real kReach = 650.0;
+    std::vector<std::pair<Real, int>> cum;   // cumulative weight -> venue index
+    Real total = 0;
+    for (int i = 0; i < static_cast<int>(venues_.size()); ++i) {
+        const Venue& v = venues_[static_cast<std::size_t>(i)];
+        if (i == prev || v.node == origin) continue;
+        const Vec2 d = nav_->nodes[static_cast<std::size_t>(v.node)] - here;
+        const Real d2 = d.x * d.x + d.y * d.y;
+        if (d2 > kReach * kReach || d2 < 60.0 * 60.0) continue;
+        if (!v.openAt(h)) continue;
+        Real w = 0;
+        switch (v.type) {
+            case PlaceType::Park:        w = 3.0; break;
+            case PlaceType::Cafe:        w = 2.5; break;
+            case PlaceType::Shop:        w = 2.0; break;
+            case PlaceType::Supermarket: w = 1.0; break;
+            case PlaceType::Restaurant:  w = (h >= 11.5 && h < 21.5) ? 1.5 : 0.0; break;
+            case PlaceType::Civic:       w = 0.7; break;
+            default:                     w = 0.0; break;
+        }
+        if (w <= 0) continue;
+        total += w;
+        cum.push_back({total, i});
+    }
+    constexpr Real kWalkWeight = 3.0;
+    const Real roll = static_cast<Real>(rnd() % 100000u) / 100000.0 * (total + kWalkWeight);
+    if (roll < total) {
+        for (const auto& c : cum)
+            if (roll <= c.first) {
+                a.tripVenue = c.second;
+                return venues_[static_cast<std::size_t>(c.second)].node;
+            }
+    }
+    // A walk round the block.
+    const int n = nav_->nodeCount();
+    for (int tries = 0; tries < 48; ++tries) {
+        const int cand = static_cast<int>(rnd() % static_cast<uint32_t>(n));
+        const Vec2 d = nav_->nodes[static_cast<std::size_t>(cand)] - here;
+        const Real d2 = d.x * d.x + d.y * d.y;
+        if (d2 < 150.0 * 150.0 || d2 > 450.0 * 450.0) continue;
+        for (int ol : nav_->outLinks[static_cast<std::size_t>(cand)])
+            if (nav_->links[static_cast<std::size_t>(ol)].walkable) return cand;
+    }
+    if (!cum.empty()) {
+        a.tripVenue = cum.back().second;
+        return venues_[static_cast<std::size_t>(a.tripVenue)].node;
+    }
+    return -1;
+}
+
+// Lunch OUT: a walker at work, in its shift, goes to one of the few nearest
+// open cafes or restaurants. About three in eight brought lunch and stay in;
+// a car commuter stays in too (its car is parked at work -- a lunch trip
+// would drive it round the block). -1 = no trip (the table's NoRoute row).
+int CitySim::pickLunch(Agent& a, int origin) {
+    a.tripVenue = -1;
+    if (!nav_ || origin < 0 || origin >= nav_->nodeCount()) return -1;
+    if (a.archetype != Agent::Mode::Pedestrian || a.mode != Agent::Mode::Pedestrian) return -1;
+    if (((a.brain >> 13) & 7u) < 3u) return -1;
+    if (!inWindow(clockHours_, departWorkHour(a), a.departHome)) return -1;
+    const Vec2 here = nav_->nodes[static_cast<std::size_t>(origin)];
+    std::vector<std::pair<Real, int>> near;
+    for (int i = 0; i < static_cast<int>(venues_.size()); ++i) {
+        const Venue& v = venues_[static_cast<std::size_t>(i)];
+        if (v.type != PlaceType::Cafe && v.type != PlaceType::Restaurant) continue;
+        if (v.node == origin || !v.openAt(clockHours_)) continue;
+        const Vec2 d = nav_->nodes[static_cast<std::size_t>(v.node)] - here;
+        const Real d2 = d.x * d.x + d.y * d.y;
+        if (d2 > 600.0 * 600.0) continue;
+        near.push_back({d2, i});
+    }
+    if (near.empty()) return -1;
+    std::sort(near.begin(), near.end());
+    const std::size_t k = std::min<std::size_t>(near.size(), 4);
+    const int pick = near[static_cast<std::size_t>(tripRnd(a) % k)].second;
+    a.tripVenue = pick;
+    return venues_[static_cast<std::size_t>(pick)].node;
 }
 
 int CitySim::goalNodeFor(const Agent& a, GoalTarget target) const {
@@ -2162,6 +2434,8 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
     a.laneTimer = 4.0 + (a.home % 11);
     ++a.trips;   // a new route: the pursuit bridge rebuilds its path off this
     a.moving = true;
+    a.indoors = false;   // out of the door
+    a.restDwell = 0;
     int leaveStation = -1;
     Real leaveAt = 0;
     if (a.parkedBay >= 0 && a.parkedBay < static_cast<int>(bays_.size())) {
@@ -3303,7 +3577,18 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         const int self = indexOf(a);
         if (a.mode == Agent::Mode::Pedestrian) {
             const BusTrip* bt = buses_.tripOf(self);
-            if (bt && !bt->aboard) return;   // already stopped above
+            if (bt && !bt->aboard) {   // already stopped above
+                // Waiting OUTSIDE, in a spot of their own: everyone bound for
+                // this stop ended on the same sidewalk point, one inside the
+                // next.
+                a.indoors = false;
+                if (!a.route.links.empty()) {
+                    const int ll = a.route.links.back();
+                    a.pos = freeStandingSpot(a, a.pos, nav_->direction(ll));
+                    a.tickFromPos = a.pos;
+                }
+                return;
+            }
         }
     }
     // A BUS AT A STOP: set down everyone whose stop this is, then pick up
@@ -3544,9 +3829,49 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             (a.workPlace != kNoPlace ||
              (a.role == Agent::Role::Stroller && a.work != a.home));
         const bool atShop = a.shopPlace != kNoPlace && node == a.shop;
-        if (atHome) a.pos = a.homeDoor;
-        else if (atWork) a.pos = a.workDoor;
-        else if (atShop) a.pos = a.shopDoor;
+        // Where the agent is now: INSIDE at a door (not drawn), or outside
+        // (drawn, standing somewhere of its own).
+        bool inside = false;
+        auto jitter = [&](Real lo, Real hi) {
+            return lo + (hi - lo) * static_cast<Real>(tripRnd(a) % 1000u) / 999.0;
+        };
+        if (a.tripVenue >= 0 && a.tripVenue < static_cast<int>(venues_.size()) &&
+            venues_[static_cast<std::size_t>(a.tripVenue)].node == node) {
+            // An OUTING or LUNCH stop: in through the door, for as long as
+            // that kind of place keeps people -- or, at a park, outside.
+            const Venue& v = venues_[static_cast<std::size_t>(a.tripVenue)];
+            switch (v.type) {
+                case PlaceType::Cafe:        a.restDwell = jitter(0.25, 0.5); break;
+                case PlaceType::Restaurant:  a.restDwell = jitter(0.5, 1.0); break;
+                case PlaceType::Supermarket: a.restDwell = jitter(0.2, 0.4); break;
+                case PlaceType::Civic:       a.restDwell = jitter(0.3, 0.6); break;
+                case PlaceType::Park:        a.restDwell = jitter(0.1, 0.25); break;
+                default:                     a.restDwell = jitter(0.1, 0.3); break;
+            }
+            if (placeIsIndoors(v.type)) {
+                a.pos = v.door;
+                inside = true;
+            }
+        } else if (a.mode == Agent::Mode::Pedestrian && outingStroller(a) &&
+                   node != a.home) {
+            // A walk round the block: a pause to look about, outside.
+            a.restDwell = jitter(0.01, 0.04);
+        } else if (atHome) {
+            a.pos = a.homeDoor;
+            inside = true;
+        } else if (atWork) {
+            a.pos = a.workDoor;
+            inside = a.role != Agent::Role::Stroller;   // the park is outside
+        } else if (atShop) {
+            a.pos = a.shopDoor;
+            inside = true;
+        }
+        a.indoors = inside && a.mode == Agent::Mode::Pedestrian;
+        a.outingTo = -1;   // arrived: the next outing chooses afresh
+        // Outside: a spot of its own, not the sidewalk point everyone arriving
+        // along this street ends on.
+        if (!a.indoors && a.mode == Agent::Mode::Pedestrian)
+            a.pos = freeStandingSpot(a, a.pos, nav_->direction(lastLink));
     }
     if (next >= 0) {
         a.goal = next;

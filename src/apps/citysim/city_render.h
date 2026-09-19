@@ -283,6 +283,7 @@ public:
     // public so the gate can assert paint never leaves the carriageway.
     engine::RenderMesh buildRoadMarkings() const;
     CitySim& simMutable() { return sim_; }   // ADR-0062 bridge: release ejected drivers
+    const PlaceMap& places() const { return places_; }
     const engine::NavGraph& nav() const { return nav_; }
     // Cars are split across several instance groups, one per body/colour variant
     // (an InstanceGroup shares one mesh, so variety needs multiple groups).

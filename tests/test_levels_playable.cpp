@@ -1574,3 +1574,75 @@ TEST_CASE(metro_junctions_stay_clear) {
     CHECK(stuckBox < 300);
     CHECK(overlaps < 800);
 }
+
+// PEOPLE ARE OUT DOING THINGS, AND INSIDE WHEN THEY ARE NOT (Glenn, 2026-09-19:
+// "npcs stand around and don't walk and also overlap each other ... More
+// movement in the city would be great", then "agents who are at work or home
+// should ... go inside the building. We should have non workers and pedestrians
+// who are out for a stroll or going to public spaces").
+//
+// Measured on metro before the change, within 200 m of the player at 7:45:
+// 2.4 walkers moving, ~193 standing on the pavement by the node of their home
+// or job (every pedestrian between trips was drawn where it rested), and 427
+// overlapping pairs among them (one idle pose per node, 8 slots). After: the
+// resting are indoors, about a third of walkers have the day off and go out
+// (parks, cafes, stores, a walk round the block), commuters walk out to lunch,
+// and ~21 are moving at any hour sampled (7:45 .. 18:30).
+//
+// Sampled after a minute's warm-up at the level's own hour, with the sky's
+// real-time clock the game runs:
+//  - MOVING: walkers under way within 200 m.
+//  - STANDING OUTSIDE: drawn (pedVisible) but not moving and not waiting for a
+//    bus -- the idle crowd.
+//  - OVERLAPS: two drawn walkers closer than 0.45 m (bodies are 0.5 m wide).
+TEST_CASE(metro_pedestrians_walk_and_keep_apart) {
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const bool loaded =
+        LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+                          view, assets, /*editorMode=*/false);
+    CHECK(loaded);
+    if (!loaded) return;
+    citysim::CityRenderSystem city;
+    city.setWorldClock(7.75, 1.0 / 3600.0);   // the level's hour, the sky's pace
+    CHECK(city.build(world, &assets, nullptr));
+    for (int i = 0; i < 600; ++i) city.step(world, 0.1);
+    long samples = 0, moving = 0, standing = 0, indoors = 0, overlaps = 0;
+    for (int i = 0; i < 600; ++i) {
+        city.step(world, 0.1);
+        if (i % 20) continue;
+        ++samples;
+        const auto& ag = city.sim().agents();
+        const Vec2 c = city.sim().tierCenter();
+        std::vector<std::size_t> drawn;
+        for (std::size_t k = 0; k < ag.size(); ++k) {
+            const auto& a = ag[k];
+            if (a.mode != citysim::Agent::Mode::Pedestrian || a.far()) continue;
+            const Vec2 d = a.pos - c;
+            if (d.x * d.x + d.y * d.y > 200.0 * 200.0) continue;
+            const int ki = static_cast<int>(k);
+            if (city.sim().riding(ki)) continue;
+            if (!city.sim().pedVisible(ki)) { ++indoors; continue; }
+            if (a.moving) ++moving;
+            else if (!city.sim().awaitingRide(ki)) ++standing;
+            drawn.push_back(k);
+        }
+        for (std::size_t x = 0; x < drawn.size(); ++x)
+            for (std::size_t y = x + 1; y < drawn.size(); ++y) {
+                const Vec2 d = ag[drawn[x]].pos - ag[drawn[y]].pos;
+                if (d.x * d.x + d.y * d.y < 0.45 * 0.45) ++overlaps;
+            }
+    }
+    const double n = samples ? static_cast<double>(samples) : 1.0;
+    std::printf("    [peds] within 200 m per sample: moving %.1f, standing outside %.1f, "
+                "indoors %.1f | overlapping pairs %ld\n",
+                moving / n, standing / n, indoors / n, overlaps);
+    CHECK(samples > 0);
+    CHECK(indoors / n > 50);          // the neighbourhood is populated...
+    CHECK(moving / n > 12);           // ...and people are out walking (was 2.4)
+    CHECK(standing / n < 5);          // nobody loitering by their front door (was ~193)
+    CHECK(overlaps == 0);             // and nobody standing inside anybody (was 427/sample)
+}

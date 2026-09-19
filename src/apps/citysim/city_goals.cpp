@@ -26,6 +26,8 @@ const char* targetName(GoalTarget t) {
         case GoalTarget::Drop: return "drop";
         case GoalTarget::Stop: return "stop";
         case GoalTarget::Depot: return "depot";
+        case GoalTarget::Lunch: return "lunch";
+        case GoalTarget::Outing: return "outing";
         default: return "none";
     }
 }
@@ -36,6 +38,8 @@ const char* activityName(Activity a) {
         case Activity::AtWork: return "AtWork";
         case Activity::Returning: return "Returning";
         case Activity::Shopping: return "Shopping";
+        case Activity::Outing: return "Outing";
+        case Activity::Lunch: return "Lunch";
         default: return "AtHome";
     }
 }
@@ -117,7 +121,16 @@ GoalTable defaultScheduleGoals() {
     t.addState("AtHome", GoalAction::Rest, GoalTarget::None, Activity::AtHome);
     t.addState("CommuteToWork", GoalAction::GoTo, GoalTarget::Work,
                Activity::Commuting);
-    t.addState("AtWork", GoalAction::Rest, GoalTarget::None, Activity::AtWork);
+    // The morning at work, then lunch: about four hours after arriving
+    // (arrivals are spread over the commute, so lunches are too). Walking out
+    // to a cafe or restaurant and back is the midday street life a real-time
+    // day otherwise lacks. Someone who brought lunch (or a car commuter, or a
+    // shift with nothing open) gets NoRoute and simply carries on working.
+    t.addState("AtWork", GoalAction::Rest, GoalTarget::None, Activity::AtWork, 4.0);
+    t.addState("GoLunch", GoalAction::GoTo, GoalTarget::Lunch, Activity::Lunch);
+    t.addState("AtLunch", GoalAction::Rest, GoalTarget::None, Activity::Lunch, 0.6);
+    t.addState("BackToWork", GoalAction::GoTo, GoalTarget::Work, Activity::Commuting);
+    t.addState("AtWorkPM", GoalAction::Rest, GoalTarget::None, Activity::AtWork);
     t.addState("GoShopping", GoalAction::GoTo, GoalTarget::Shop,
                Activity::Shopping);
     t.addState("AtShop", GoalAction::Rest, GoalTarget::None, Activity::Shopping,
@@ -134,11 +147,39 @@ GoalTable defaultScheduleGoals() {
     // ones. An agent with no shop, or none routable, falls straight through to
     // ReturnHome.
     t.addTransition("AtWork", GoalEvent::DepartHome, "GoShopping");
+    t.addTransition("AtWork", GoalEvent::DwellDone, "GoLunch");
+    t.addTransition("GoLunch", GoalEvent::Arrived, "AtLunch");
+    t.addTransition("GoLunch", GoalEvent::NoRoute, "AtWorkPM");
+    t.addTransition("AtLunch", GoalEvent::DwellDone, "BackToWork");
+    t.addTransition("BackToWork", GoalEvent::Arrived, "AtWorkPM");
+    t.addTransition("BackToWork", GoalEvent::NoRoute, "AtWorkPM");
+    t.addTransition("AtWorkPM", GoalEvent::DepartHome, "GoShopping");
     t.addTransition("GoShopping", GoalEvent::Arrived, "AtShop");
     t.addTransition("GoShopping", GoalEvent::NoRoute, "ReturnHome");
     t.addTransition("AtShop", GoalEvent::DwellDone, "ReturnHome");
     t.addTransition("ReturnHome", GoalEvent::Arrived, "AtHome");
-    t.addTransition("ReturnHome", GoalEvent::NoRoute, "AtWork");
+    t.addTransition("ReturnHome", GoalEvent::NoRoute, "AtWorkPM");
+    t.setEntry("AtHome");
+    return t;
+}
+
+GoalTable strollerGoals() {
+    GoalTable t;
+    t.addState("AtHome", GoalAction::Rest, GoalTarget::None, Activity::AtHome);
+    t.addState("Outing", GoalAction::GoTo, GoalTarget::Outing, Activity::Outing);
+    // The pause at each stop. Its length is the stop's (a coffee is longer
+    // than a look in a window -- see CitySim::pickOuting); this is only the
+    // fallback.
+    t.addState("OutAndAbout", GoalAction::Rest, GoalTarget::None, Activity::Outing, 0.05);
+    t.addState("ReturnHome", GoalAction::GoTo, GoalTarget::Home, Activity::Returning);
+    t.addTransition("AtHome", GoalEvent::DepartWork, "Outing");
+    t.addTransition("Outing", GoalEvent::Arrived, "OutAndAbout");
+    t.addTransition("Outing", GoalEvent::NoRoute, "ReturnHome");
+    // The window closes -> home (checked before the pause: see goalThink).
+    t.addTransition("OutAndAbout", GoalEvent::DepartHome, "ReturnHome");
+    t.addTransition("OutAndAbout", GoalEvent::DwellDone, "Outing");
+    t.addTransition("ReturnHome", GoalEvent::Arrived, "AtHome");
+    t.addTransition("ReturnHome", GoalEvent::NoRoute, "OutAndAbout");
     t.setEntry("AtHome");
     return t;
 }

@@ -26,7 +26,7 @@ TEST_CASE(goal_default_table_is_the_daily_round) {
     int commute = t.findState("CommuteToWork");
     int work = t.findState("AtWork");
     int ret = t.findState("ReturnHome");
-    CHECK(t.stateCount() == 6);
+    CHECK(t.stateCount() == 10);
     CHECK(t.entry() == home);
     CHECK(t.state(home).action == GoalAction::Rest);
     CHECK(t.state(commute).action == GoalAction::GoTo);
@@ -44,12 +44,43 @@ TEST_CASE(goal_default_table_is_the_daily_round) {
     CHECK(t.onEvent(shopGo, GoalEvent::NoRoute) == ret);
     CHECK(t.onEvent(shopAt, GoalEvent::DwellDone) == ret);
     CHECK(t.onEvent(ret, GoalEvent::Arrived) == home);
-    CHECK(t.onEvent(ret, GoalEvent::NoRoute) == work);
+    // Lunch OUT, about four hours into the shift; no lunch (brought one, car
+    // commuter, nothing open) carries straight on into the afternoon.
+    const int lunchGo = t.findState("GoLunch");
+    const int lunchAt = t.findState("AtLunch");
+    const int back = t.findState("BackToWork");
+    const int pm = t.findState("AtWorkPM");
+    CHECK(t.state(work).dwellHours > 3.0);
+    CHECK(t.onEvent(work, GoalEvent::DwellDone) == lunchGo);
+    CHECK(t.state(lunchGo).target == GoalTarget::Lunch);
+    CHECK(t.onEvent(lunchGo, GoalEvent::Arrived) == lunchAt);
+    CHECK(t.onEvent(lunchGo, GoalEvent::NoRoute) == pm);
+    CHECK(t.onEvent(lunchAt, GoalEvent::DwellDone) == back);
+    CHECK(t.onEvent(back, GoalEvent::Arrived) == pm);
+    CHECK(t.onEvent(pm, GoalEvent::DepartHome) == shopGo);
+    CHECK(t.onEvent(ret, GoalEvent::NoRoute) == pm);
     // Labels the tests/renderers read (Agent::activity) come from the states.
     CHECK(t.state(home).activity == Activity::AtHome);
     CHECK(t.state(commute).activity == Activity::Commuting);
     CHECK(t.state(work).activity == Activity::AtWork);
     CHECK(t.state(ret).activity == Activity::Returning);
+}
+
+TEST_CASE(goal_stroller_table_is_an_outing) {
+    // A day OUT: from home, stop after stop until the window closes.
+    GoalTable t = strollerGoals();
+    const int home = t.findState("AtHome");
+    const int go = t.findState("Outing");
+    const int pause = t.findState("OutAndAbout");
+    const int ret = t.findState("ReturnHome");
+    CHECK(t.entry() == home);
+    CHECK(t.state(go).target == GoalTarget::Outing);
+    CHECK(t.onEvent(home, GoalEvent::DepartWork) == go);
+    CHECK(t.onEvent(go, GoalEvent::Arrived) == pause);
+    CHECK(t.onEvent(pause, GoalEvent::DwellDone) == go);       // the next stop
+    CHECK(t.onEvent(pause, GoalEvent::DepartHome) == ret);     // the window closed
+    CHECK(t.onEvent(ret, GoalEvent::Arrived) == home);
+    CHECK(t.state(pause).activity == Activity::Outing);
 }
 
 TEST_CASE(goal_wander_tables_chain_drivers_and_rest_walkers) {

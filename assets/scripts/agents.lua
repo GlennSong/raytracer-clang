@@ -8,8 +8,9 @@
 -- A table is:
 --   entry       = "StateName"          -- where every agent's day starts
 --   states      = { { name=, action=("rest"|"goto"), target=("work"|"home"|
---                     "random"), activity=("AtHome"|"Commuting"|"AtWork"|
---                     "Returning"), dwell=<hours> }, ... }
+--                     "random"|"shop"|"lunch"|"outing"), activity=("AtHome"|
+--                     "Commuting"|"AtWork"|"Returning"|"Shopping"|"Lunch"|
+--                     "Outing"), dwell=<hours> }, ... }
 --   transitions = { { from=, event=, to= }, ... }   -- first matching row wins
 --
 -- Actions are the small C++ vocabulary: `rest` stays put until an event
@@ -24,7 +25,7 @@
 --   dwellDone   resting, `dwell` hours elapsed in this state
 -- `activity` is the label the debug HUD (and tests) read while in the state.
 --
--- These three tables mirror the engine's built-in defaults exactly (pinned by
+-- These tables mirror the engine's built-in defaults exactly (pinned by
 -- tests/test_agent_goals.cpp): the daily schedule, and wander's perpetual
 -- random trips — chained by drivers, kerb-rested one tick by walkers.
 
@@ -35,7 +36,11 @@ agents.schedule = {
     states = {
         { name = "AtHome",        action = "rest",                   activity = "AtHome" },
         { name = "CommuteToWork", action = "goto", target = "work",  activity = "Commuting" },
-        { name = "AtWork",        action = "rest",                   activity = "AtWork" },
+        { name = "AtWork",        action = "rest",                   activity = "AtWork", dwell = 4.0 },
+        { name = "GoLunch",       action = "goto", target = "lunch", activity = "Lunch" },
+        { name = "AtLunch",       action = "rest",                   activity = "Lunch", dwell = 0.6 },
+        { name = "BackToWork",    action = "goto", target = "work",  activity = "Commuting" },
+        { name = "AtWorkPM",      action = "rest",                   activity = "AtWork" },
         { name = "GoShopping",    action = "goto", target = "shop",  activity = "Shopping" },
         { name = "AtShop",        action = "rest",                   activity = "Shopping", dwell = 0.5 },
         { name = "ReturnHome",    action = "goto", target = "home",  activity = "Returning" },
@@ -45,11 +50,19 @@ agents.schedule = {
         { from = "CommuteToWork", event = "arrived",    to = "AtWork" },
         { from = "CommuteToWork", event = "noRoute",    to = "AtHome" },
         { from = "AtWork",        event = "departHome", to = "GoShopping" },
+        -- Lunch, about four hours into the shift (noRoute: brought lunch).
+        { from = "AtWork",        event = "dwellDone",  to = "GoLunch" },
+        { from = "GoLunch",       event = "arrived",    to = "AtLunch" },
+        { from = "GoLunch",       event = "noRoute",    to = "AtWorkPM" },
+        { from = "AtLunch",       event = "dwellDone",  to = "BackToWork" },
+        { from = "BackToWork",    event = "arrived",    to = "AtWorkPM" },
+        { from = "BackToWork",    event = "noRoute",    to = "AtWorkPM" },
+        { from = "AtWorkPM",      event = "departHome", to = "GoShopping" },
         { from = "GoShopping",    event = "arrived",    to = "AtShop" },
         { from = "GoShopping",    event = "noRoute",    to = "ReturnHome" },
         { from = "AtShop",        event = "dwellDone",  to = "ReturnHome" },
         { from = "ReturnHome",    event = "arrived",    to = "AtHome" },
-        { from = "ReturnHome",    event = "noRoute",    to = "AtWork" },
+        { from = "ReturnHome",    event = "noRoute",    to = "AtWorkPM" },
     },
 }
 
@@ -74,5 +87,29 @@ agents.wander_pedestrian = {
         -- A walker turns around AT the kerb: rest a tick, then idle relaunches.
         { from = "Roam",     event = "arrived", to = "RoamRest" },
         { from = "RoamRest", event = "idle",    to = "Roam" },
+    },
+}
+
+-- A day OUT: the Stroller role (non-workers). From home, a chain of nearby
+-- stops -- park, cafe, store, a walk round the block -- each with a pause
+-- (the stop sets its own length; `dwell` is the fallback), until the outing
+-- window closes. departHome is checked before dwellDone, so an outing ends
+-- at the next pause after the window shuts.
+agents.stroller = {
+    entry = "AtHome",
+    states = {
+        { name = "AtHome",      action = "rest",                    activity = "AtHome" },
+        { name = "Outing",      action = "goto", target = "outing", activity = "Outing" },
+        { name = "OutAndAbout", action = "rest",                    activity = "Outing", dwell = 0.05 },
+        { name = "ReturnHome",  action = "goto", target = "home",   activity = "Returning" },
+    },
+    transitions = {
+        { from = "AtHome",      event = "departWork", to = "Outing" },
+        { from = "Outing",      event = "arrived",    to = "OutAndAbout" },
+        { from = "Outing",      event = "noRoute",    to = "ReturnHome" },
+        { from = "OutAndAbout", event = "departHome", to = "ReturnHome" },
+        { from = "OutAndAbout", event = "dwellDone",  to = "Outing" },
+        { from = "ReturnHome",  event = "arrived",    to = "AtHome" },
+        { from = "ReturnHome",  event = "noRoute",    to = "OutAndAbout" },
     },
 }

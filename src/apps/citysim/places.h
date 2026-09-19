@@ -37,6 +37,13 @@ enum class PlaceType : uint8_t {
     Office,   // workplace for commuters
     Park,     // open green space — a stroll destination
     Civic,    // town hall / services (catch-all public building)
+    // Reasons to be out (Glenn, 2026-09-19: "we need more specialized buildings
+    // like cafes, restaurants, supermarkets, stores to get agents to move around
+    // and do things"). A generated city's lot planner only says "shop"; the
+    // citysim splits those into these by retailKindFor (below).
+    Cafe,         // morning coffee, a stroller's stop, a quick lunch
+    Restaurant,   // lunch and dinner
+    Supermarket,  // the errand on the way home
     Count
 };
 
@@ -47,6 +54,20 @@ const char* placeTypeName(PlaceType type);
 // Parse a place-type tag ("home", "shop", …). Returns false (leaving `out`
 // untouched) for an unrecognized tag, so a level loader can report it.
 bool parsePlaceType(const std::string& tag, PlaceType& out);
+
+// What a generic "shop" lot is, and its hours: a deterministic draw from the
+// site (so a city always has the same cafe on the same corner). About a
+// quarter cafes, a fifth restaurants, one in ten supermarkets, the rest
+// stores (PlaceType::Shop), each with the hours that kind keeps.
+struct RetailKind {
+    PlaceType type = PlaceType::Shop;
+    Real openHour = 9, closeHour = 20;
+};
+RetailKind retailKindFor(Vec2 site);
+
+// Is this kind of place somewhere people spend time INSIDE (hidden from the
+// street while they are there)? Everything but a park.
+inline bool placeIsIndoors(PlaceType t) { return t != PlaceType::Park; }
 
 // One place in the world. `site` is the building footprint centroid; `entrance`
 // is the door, snapped to the nearest walkable point so routing to the place is
@@ -63,6 +84,10 @@ struct Place {
     Real openHour = 0;
     Real closeHour = 24;
     int capacity = 0;
+    // The hours came from the LEVEL (true), not from retailKindFor's guess for
+    // a generated shop. Only authored hours set a worker's shift: a synthetic
+    // cafe's 6:30-19:00 is when customers come, not a 13-hour day for staff.
+    bool authoredHours = true;
     std::string name;      // optional authored label ("Al's Diner"); may be empty
 
     // Is this place open at in-world hour `clock` (0..24)? Handles a window that
@@ -92,6 +117,9 @@ public:
 
     // Access by UID. Out-of-range asserts in debug; callers hold valid ids.
     const Place& operator[](PlaceId id) const { return places_[id]; }
+    void setAuthoredHours(PlaceId id, bool on) {
+        if (id < places_.size()) places_[id].authoredHours = on;
+    }
 
     // All place ids of a given type, in insertion order. Empty if none.
     const std::vector<PlaceId>& ofType(PlaceType type) const;

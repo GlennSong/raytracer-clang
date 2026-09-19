@@ -272,8 +272,21 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             continue;
         }
         const Vec2 doorHint(ap.ex, ap.ez);
-        places_.add(type, Vec2(ap.x, ap.z), nav_, ap.openHour, ap.closeHour, 0,
-                    ap.name, ap.hasEntrance ? &doorHint : nullptr);
+        Real openH = ap.openHour, closeH = ap.closeHour;
+        // A GENERATED shop (no authored hours) becomes a cafe, restaurant,
+        // supermarket or store: reasons for people to be out (retailKindFor).
+        // An authored shop keeps exactly what the level said.
+        bool synthetic = false;
+        if (type == PlaceType::Shop && openH <= 0.0 && closeH >= 24.0) {
+            const RetailKind k = retailKindFor(Vec2(ap.x, ap.z));
+            type = k.type;
+            openH = k.openHour;
+            closeH = k.closeHour;
+            synthetic = true;
+        }
+        const PlaceId pid = places_.add(type, Vec2(ap.x, ap.z), nav_, openH, closeH, 0,
+                                        ap.name, ap.hasEntrance ? &doorHint : nullptr);
+        if (synthetic) places_.setAuthoredHours(pid, false);
     }
 
     // DENSITY population (roads-v2.1 4c): -1 counts are computed from the
@@ -516,6 +529,11 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             engine::loadGoalTable(vm, pedName, ped, &err) &&
             engine::loadGoalTable(vm, drvName, driver, &err)) {
             sim_.setGoalTables(std::move(ped), std::move(driver));
+            // The day-off walkers' outing table, when the script has one.
+            citysim::GoalTable stroll;
+            std::string serr;
+            if (!params_.wander && engine::loadGoalTable(vm, "stroller", stroll, &serr))
+                sim_.setStrollerTable(std::move(stroll));
         } else {
             LOG_WARN << "citysim agents script: " << err << " (using built-ins)";
         }
@@ -1733,6 +1751,7 @@ void CityRenderSystem::syncGroups(World& world) {
                                       : agentPose(a, static_cast<int>(ai)));
             carAgentIds_[v].push_back(static_cast<int>(ai));
         } else if (ped && !pedsExternallyOwned_) {   // walkers owned externally: no bake
+            if (!sim_.pedVisible(static_cast<int>(ai))) continue;   // indoors / riding
             ped->transforms.push_back(agentPose(a));
             pedAgentIds_[0].push_back(static_cast<int>(ai));
         }
@@ -2269,6 +2288,9 @@ ImU32 placeColor(PlaceType t) {
         case PlaceType::Office: return IM_COL32( 90, 160, 240, 255);
         case PlaceType::Park:   return IM_COL32( 60, 210, 190, 255);
         case PlaceType::Civic:  return IM_COL32(190, 130, 240, 255);
+        case PlaceType::Cafe:        return IM_COL32(200, 140,  90, 255);
+        case PlaceType::Restaurant:  return IM_COL32(230,  90,  80, 255);
+        case PlaceType::Supermarket: return IM_COL32(250, 220,  90, 255);
         default:                return IM_COL32(220, 220, 220, 255);
     }
 }

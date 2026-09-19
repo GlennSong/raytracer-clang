@@ -72,10 +72,12 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
     // physics has no entity-destroy hook; see the onStop note).
     for (std::size_t wi = 0; wi < walkers_.size();) {
         Walker& w = walkers_[wi];
+        // Gone INDOORS (home, work, a cafe), onto a bus, or out of the bubble:
+        // no body on the pavement (CitySim::pedVisible). It gets a fresh one
+        // when it steps out again.
         const bool stale =
             w.agentId < 0 || w.agentId >= static_cast<int>(agents.size()) ||
-            agents[w.agentId].far() ||
-            agents[w.agentId].mode != Agent::Mode::Pedestrian;
+            !sim.pedVisible(w.agentId);
         if (!stale) { ++wi; continue; }
         if (world.alive(w.entity)) {
             if (CharacterController* cc = world.get<CharacterController>(w.entity))
@@ -93,8 +95,7 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
             haveWalker_[w.agentId] = 1;
     for (int i = 0; i < static_cast<int>(agents.size()); ++i) {
         const Agent& a = agents[i];
-        if (a.mode != Agent::Mode::Pedestrian) continue;
-        if (a.far()) continue;
+        if (!sim.pedVisible(i)) continue;
         if (haveWalker_[i]) continue;
 
         Entity e = world.create();
