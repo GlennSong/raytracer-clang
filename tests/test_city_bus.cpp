@@ -102,6 +102,9 @@ TEST_CASE(bus_network_refuses_impossible_layouts) {
 TEST_CASE(bus_trip_is_planned_only_when_the_bus_actually_helps) {
     BusNetwork net;
     net.build(gridCity(), 2, 8, 3);
+    // Riders weigh the WAIT: half a headway. One bus a route is a wait of
+    // half a lap, which no cross-town trip beats on foot; six is a service.
+    net.setFleet({6, 6});
 
     // Across the city: a bus should be worth taking.
     const BusTrip far = net.planTrip(Vec2(-400, -400), Vec2(400, 400), 250.0);
@@ -429,4 +432,34 @@ TEST_CASE(buses_sharing_hub_stops_neither_overlap_nor_deadlock) {
     CHECK(sim.busStopsServed() >= 30);
     CHECK(worstOverlap < 5.0);
     CHECK(worstStill < 100.0);
+}
+
+// THE RIDE HAS TO BEAT THE WALK (Glenn: "Is there some algorithm that ... takes
+// bus routing into account to help them get across the city faster?"). A loop
+// only runs one way, so a stop "near both ends" can still mean riding almost
+// the whole loop round. The choice is door-to-door time; with a single bus a
+// route the wait alone sinks it.
+TEST_CASE(bus_trip_is_chosen_by_door_to_door_time) {
+    BusNetwork net;
+    net.build(gridCity(), 2, 8, 3);
+    net.setFleet({6, 6});
+    const Vec2 from(-400, -400), to(400, 400);
+    const BusTrip t = net.planTrip(from, to, 250.0);
+    CHECK(t.valid());
+    if (!t.valid()) return;
+    const BusRoute& r = net.route(t.route);
+    const Real walk = dist(from, to) * 1.25 / 1.4;
+    const Real bus = dist(from, r.stops[static_cast<std::size_t>(t.fromStop)].pos) * 1.25 / 1.4 +
+                     net.waitSeconds(t.route) + net.rideSeconds(t.route, t.fromStop, t.toStop) +
+                     dist(r.stops[static_cast<std::size_t>(t.toStop)].pos, to) * 1.25 / 1.4;
+    std::printf("    [choice] walk %.0f s, bus %.0f s (ride %.0f m of a %.0f m loop)\n", walk,
+                bus, net.rideMetres(t.route, t.fromStop, t.toStop), r.loopLength);
+    CHECK(bus < walk - 60.0);
+    // A ride is measured FORWARD round the loop: stop b to stop a is the rest
+    // of the loop, not the way back.
+    CHECK(std::fabs(net.rideMetres(t.route, t.fromStop, t.toStop) +
+                    net.rideMetres(t.route, t.toStop, t.fromStop) - r.loopLength) < 1e-6);
+    // One bus a route: waiting half a lap is not worth it.
+    net.setFleet({1, 1});
+    CHECK(!net.planTrip(from, to, 250.0).valid());
 }

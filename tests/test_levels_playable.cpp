@@ -1246,6 +1246,66 @@ TEST_CASE(metro_bus_network_serves_the_city) {
                 stops, 100.0 * served, walk, 100.0 * block, 100.0 * share);
     // A walker outside the served area is never offered a bus at all.
     CHECK(served >= 0.90);
+
+    // WHAT THE RIDER'S RULE ACCEPTS: walking trips across the city,
+    // scored by door-to-door TIME -- walk to the stop, wait half a headway,
+    // ride forward round the loop, walk on -- against walking the whole way
+    // (straight line x1.25 for the street network).
+    {
+        const auto& nav = city.nav();
+        uint32_t h = 12345u;
+        auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return h; };
+        int trips = 0, accepted = 0, slowerThanWalking = 0, backwardsRide = 0, changes = 0;
+        double sumSaved = 0;
+        for (int k = 0; k < 3000; ++k) {
+            const Vec2 o = nav.nodes[rnd() % nav.nodes.size()];
+            const Vec2 d = nav.nodes[rnd() % nav.nodes.size()];
+            const Real direct = std::sqrt((d.x - o.x) * (d.x - o.x) + (d.y - o.y) * (d.y - o.y));
+            if (direct < 300 || direct > 2500) continue;
+            ++trips;
+            const citysim::BusTrip t = net.planTrip(o, d, walk);
+            if (!t.valid()) continue;
+            ++accepted;
+            const auto& r = net.route(t.route);
+            const Vec2 a = r.stops[static_cast<std::size_t>(t.fromStop)].pos;
+            const Vec2 b = r.stops[static_cast<std::size_t>(t.toStop)].pos;
+            const Real wa = std::sqrt((a.x - o.x) * (a.x - o.x) + (a.y - o.y) * (a.y - o.y));
+            const Real wb = std::sqrt((d.x - b.x) * (d.x - b.x) + (d.y - b.y) * (d.y - b.y));
+            const Real walkT = direct * 1.25 / 1.4;
+            Real busT = wa * 1.25 / 1.4 + net.waitSeconds(t.route) +
+                        net.rideSeconds(t.route, t.fromStop, t.toStop);
+            // A TRANSFER is planned as its first leg; stepping off at the change
+            // stop the rider plans again, exactly as here.
+            const citysim::BusTrip t2 = net.planTrip(b, d, walk);
+            if (t2.valid() && t2.route != t.route) {
+                ++changes;
+                const auto& r2 = net.route(t2.route);
+                const Vec2 a2 = r2.stops[static_cast<std::size_t>(t2.fromStop)].pos;
+                const Vec2 b2 = r2.stops[static_cast<std::size_t>(t2.toStop)].pos;
+                busT += std::sqrt((a2.x - b.x) * (a2.x - b.x) + (a2.y - b.y) * (a2.y - b.y)) * 1.25 / 1.4 +
+                        60.0 + net.waitSeconds(t2.route) +
+                        net.rideSeconds(t2.route, t2.fromStop, t2.toStop) +
+                        std::sqrt((d.x - b2.x) * (d.x - b2.x) + (d.y - b2.y) * (d.y - b2.y)) * 1.25 / 1.4;
+            } else {
+                busT += wb * 1.25 / 1.4;
+            }
+            if (busT > walkT) ++slowerThanWalking;
+            if (net.rideMetres(t.route, t.fromStop, t.toStop) > 0.5 * r.loopLength) ++backwardsRide;
+            sumSaved += walkT - busT;
+        }
+        std::printf("    [rider] %d trips 300-2500 m: bus taken for %d (%d with a change); "
+                    "%d of those SLOWER than walking, %d riding over half a loop; "
+                    "mean saving %.0f s\n",
+                    trips, accepted, changes, slowerThanWalking, backwardsRide,
+                    accepted ? sumSaved / accepted : 0.0);
+        // The old walk-only rule, measured: 2378 of 2552 accepted, 1382 of them
+        // SLOWER than walking, a mean 132 s LOST. Chosen by time now.
+        CHECK(accepted > 500);
+        CHECK(changes > 0);                     // transfers are used
+        CHECK(slowerThanWalking == 0);
+        CHECK(accepted && sumSaved / accepted > 120.0);
+    }
+
     // And a stop should be about a block away, on a street you might walk
     // down: the old network had 57% and 28% here, which is what "I walked
     // around for a while and couldn't find one" measured as.
@@ -1274,6 +1334,25 @@ TEST_CASE(metro_bus_network_serves_the_city) {
                 buses, offRoute, worst);
     CHECK(buses == 24);
     CHECK(offRoute == 0);
+
+    // And in the running city, walkers choose it: three minutes, boardings.
+    {
+        const long before = city.sim().busBoardAttempts();
+        const auto ps0 = city.sim().buses().planStats();
+        for (int i = 0; i < 1800; ++i) city.step(world, 0.1);
+        long aboard = 0;
+        for (std::size_t ai = 0; ai < city.sim().agents().size(); ++ai)
+            if (city.sim().isBus(static_cast<int>(ai)))
+                aboard += city.sim().rides().load(static_cast<int>(ai));
+        const auto& ps = city.sim().buses().planStats();
+        std::printf("    [rider] 3 min of metro: %ld boardings, %ld aboard now, %ld waiting; "
+                    "plans asked %ld, bus %ld (%ld with a change), not worth it %ld\n",
+                    city.sim().busBoardAttempts() - before, aboard,
+                    static_cast<long>(city.sim().buses().waitingCount()), ps.asked - ps0.asked,
+                    ps.ok - ps0.ok,
+                    ps.transfers - ps0.transfers, ps.noSaving - ps0.noSaving);
+        CHECK(city.sim().busBoardAttempts() - before > 0);
+    }
 }
 
 // PARKING (Glenn, 2026-09-18: "They park at the corner in a pile, but they

@@ -1752,6 +1752,14 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
         ++made;
     }
 
+    // Buses per route, for the wait a rider weighs (half a headway).
+    {
+        std::vector<int> perRoute(static_cast<std::size_t>(buses_.routeCount()), 0);
+        for (std::size_t i = 0; i < agents_.size(); ++i)
+            if (busRoute_[i] >= 0 && busRoute_[i] < buses_.routeCount())
+                ++perRoute[static_cast<std::size_t>(busRoute_[i])];
+        buses_.setFleet(std::move(perRoute));
+    }
     // How many buses already stand at each stop node: the next queues behind.
     std::unordered_map<int, int> seatedAt;
     // START ON THE ROUTE, SPREAD ROUND IT. Each bus used to begin wherever its

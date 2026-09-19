@@ -47,6 +47,11 @@ struct BusRoute {
     // at consecutive streets").
     std::vector<engine::Vec2> path;
     std::vector<int> pathNodes;   // the same, as nav node ids
+    // How far round the loop each stop is (metres from the first path node),
+    // and the loop's length: a ride's distance is the arc FORWARD from the
+    // boarding stop, because a loop only runs one way.
+    std::vector<engine::Real> stopArc;
+    engine::Real loopLength = 0;
     // Stops shared with another route: where a rider can change buses.
     std::vector<int> hubStops;
     // THE YARD (Glenn: "buses should be constantly running (that is until their
@@ -113,6 +118,18 @@ public:
     // find one" (Glenn, 2026-09-18) is this number being low.
     engine::Real coverage(const engine::NavGraph& nav, engine::Real maxWalk) const;
 
+    // --- time, for choosing a bus by how long it TAKES ------------------------
+    // Metres a bus drives from stop a to stop b on route r: forward round the
+    // loop, never backwards.
+    engine::Real rideMetres(int r, int a, int b) const;
+    // Seconds for that ride: the drive at a city pace plus a dwell at every
+    // stop in between.
+    engine::Real rideSeconds(int r, int a, int b) const;
+    // Buses on each route (the sim deals them), and so the mean wait: half the
+    // headway, a lap's time over the buses sharing it.
+    void setFleet(std::vector<int> busesPerRoute) { fleet_ = std::move(busesPerRoute); }
+    engine::Real waitSeconds(int r) const;
+
     // THE SHARE OF STREETS A BUS DRIVES ALONG, by length. The number coverage
     // hides: 94% of metro's street was within 220 m of a stop while 71% of its
     // streets had no bus on them, because the stop was a street over behind a
@@ -131,7 +148,7 @@ public:
     // to be one of these gates -- guessing which cost two rounds elsewhere.
     struct PlanStats {
         long asked = 0, noRoutes = 0, sameStop = 0, farFrom = 0, farTo = 0,
-             noSaving = 0, ok = 0;
+             noSaving = 0, ok = 0, transfers = 0;
     };
     const PlanStats& planStats() const { return stats_; }
     void resetPlanStats() { stats_ = PlanStats{}; }
@@ -158,6 +175,12 @@ private:
     std::vector<engine::Vec2> hubs_;
     std::unordered_map<int, BusTrip> waiting_;
     mutable PlanStats stats_;
+    std::vector<int> fleet_;   // buses per route
+    struct Transfer {
+        int fromRoute, fromStop, toRoute, toStop;
+        engine::Real walk;   // metres between the two stops
+    };
+    std::vector<Transfer> transfers_;
 };
 
 }  // namespace citysim
