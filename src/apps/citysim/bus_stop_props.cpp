@@ -1,5 +1,8 @@
 #include "bus_stop_props.h"
 
+#include <algorithm>
+#include <unordered_map>
+
 #include "../../engine/components.h"
 
 #include <cmath>
@@ -19,20 +22,6 @@ using engine::Vec2;
 using engine::Vec3;
 using engine::World;
 
-namespace {
-
-// The plaza benches in city_lots use exactly these dimensions; a bus stop bench
-// that did not match them would read as a different kind of object.
-// A bench somebody could actually sit on (Glenn: "that tiny ass bench is the
-// bus bench?"). The plaza bench is a 1.6 m backless plank, which is fine in the
-// middle of a plaza and mean as the only seat at a bus stop -- so this one is
-// longer, deeper and has a BACK, which is most of what makes a bench read as
-// furniture rather than a kerb.
-constexpr Real kSeatL = 2.4, kSeatT = 0.09, kSeatW = 0.58, kSeatY = 0.44;
-constexpr Real kBackH = 0.52, kBackT = 0.07;
-constexpr Real kPoleH = 2.6, kPoleR = 0.05;
-constexpr Real kSignW = 0.88, kSignH = 0.62, kSignT = 0.05, kSignY = 2.30;
-
 // One colour per route, so the sign answers "which route is this" and not just
 // "there is a bus stop here". Distinguishable rather than pretty, and it wraps
 // for a network with more routes than colours.
@@ -49,6 +38,28 @@ Vec3 routeColour(int route) {
     };
     return kPalette[static_cast<std::size_t>(((route % 8) + 8) % 8)];
 }
+
+const char* routeColourName(int route) {
+    static const char* kNames[8] = {"red", "blue", "amber", "green",
+                                    "violet", "teal", "orange", "grey"};
+    return kNames[static_cast<std::size_t>(((route % 8) + 8) % 8)];
+}
+
+namespace {
+
+// The plaza benches in city_lots use exactly these dimensions; a bus stop bench
+// that did not match them would read as a different kind of object.
+// A bench somebody could actually sit on (Glenn: "that tiny ass bench is the
+// bus bench?"). The plaza bench is a 1.6 m backless plank, which is fine in the
+// middle of a plaza and mean as the only seat at a bus stop -- so this one is
+// longer, deeper and has a BACK, which is most of what makes a bench read as
+// furniture rather than a kerb.
+constexpr Real kSeatL = 2.4, kSeatT = 0.09, kSeatW = 0.58, kSeatY = 0.44;
+constexpr Real kBackH = 0.52, kBackT = 0.07;
+constexpr Real kPoleH = 2.6, kPoleR = 0.05;
+constexpr Real kSignW = 0.88, kSignH = 0.62, kSignT = 0.05, kSignY = 2.30;
+constexpr Real kBandH = 0.34;   // one route's plate on a shared pole
+
 
 Vec2 rightOf(Vec2 d) { return {d.y, -d.x}; }
 
@@ -88,9 +99,26 @@ int buildBusStopProps(
     if (net.empty() || nav.nodeCount() == 0 || !groundAt) return 0;
     int built = 0;
 
-    for (int r = 0; r < net.routeCount(); ++r) {
-        const Vec3 colour = routeColour(r);
+    // ONE STOP PER CORNER. Routes that share a node share its furniture: this
+    // used to build a pole, sign and bench per ROUTE, all at the identical
+    // spot, so a hub served by three routes was three benches inside each
+    // other and one visible sign -- whichever colour won the z-fight. A real
+    // shared stop is one pole carrying every route's plate.
+    std::vector<int> nodeOrder;
+    std::unordered_map<int, std::vector<int>> routesAt;
+    for (int r = 0; r < net.routeCount(); ++r)
         for (const BusStop& stop : net.route(r).stops) {
+            std::vector<int>& at = routesAt[stop.node];
+            if (at.empty()) nodeOrder.push_back(stop.node);
+            if (std::find(at.begin(), at.end(), r) == at.end()) at.push_back(r);
+        }
+
+    for (int node : nodeOrder) {
+        const std::vector<int>& calling = routesAt[node];
+        {
+            const BusStop stop{node, node >= 0 && node < nav.nodeCount()
+                                         ? nav.nodes[static_cast<std::size_t>(node)]
+                                         : Vec2(0, 0)};
             if (stop.node < 0 || stop.node >= nav.nodeCount()) continue;
             const std::vector<int>& outs =
                 nav.outLinks[static_cast<std::size_t>(stop.node)];
@@ -157,8 +185,17 @@ int buildBusStopProps(
             // the street, and that is the direction it has to be legible from.
             const engine::Quat signRot = engine::Quat::fromAxisAngle(
                 Vec3(0, 1, 0), std::atan2(dir.x, dir.y));
-            box(world, assets, Vec3(polePos.x, gy + kSignY, polePos.y),
-                Vec3(kSignW, kSignH, kSignT), signRot, colour, 0.1, 0.45, out);
+            // One plate per route calling here, stacked down from the top of
+            // the sign: a lone route keeps the full plate, a hub gets a band
+            // for each, so the colours on the pole ARE the list of routes.
+            const int bands = static_cast<int>(calling.size());
+            const Real bandH = bands == 1 ? kSignH : kBandH;
+            const Real top = kSignY + kSignH * 0.5;
+            for (int k = 0; k < bands; ++k)
+                box(world, assets,
+                    Vec3(polePos.x, gy + top - bandH * (k + 0.5), polePos.y),
+                    Vec3(kSignW, bandH - (bands == 1 ? 0.0 : 0.02), kSignT), signRot,
+                    routeColour(calling[static_cast<std::size_t>(k)]), 0.1, 0.45, out);
 
             // The bench, matching the plaza benches: a wooden seat on two metal
             // legs, facing the street.
@@ -179,7 +216,7 @@ int buildBusStopProps(
                     Vec3(0.10, kSeatY, kSeatW * 0.9), rot, steel, 0.7, 0.42, out);
             }
             if (outPositions) outPositions->push_back(Vec3(p.x, gy, p.y));
-            ++built;
+            built += bands;   // route-stops served, comparable to the network's count
         }
     }
     return built;

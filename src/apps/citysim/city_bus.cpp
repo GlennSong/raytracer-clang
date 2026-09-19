@@ -12,6 +12,17 @@ using engine::Vec2;
 
 namespace {
 
+// What a street already on a bus route costs the NEXT route, per route using
+// it, as a multiple of its travel time: 4.0 makes a shared street cost five
+// times as much. Measured on metro: 0 -> 28% of streets with a bus, 1 -> 50%,
+// 2 -> 54%, 4 -> 65%, with loop lengths unchanged.
+//
+// A high price could send a leg far out of its way to dodge a shared street,
+// so a priced leg longer than kMaxDetour x the plain fastest leg is dropped in
+// favour of the plain one: sharing a street beats a bus that meanders.
+constexpr Real kReusePrice = 4.0;
+constexpr Real kMaxDetour = 1.6;
+
 Real dist(Vec2 a, Vec2 b) {
     const Real dx = a.x - b.x, dy = a.y - b.y;
     return std::sqrt(dx * dx + dy * dy);
@@ -75,6 +86,29 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
     // and four hubs, both routes were one loop with the stops renumbered.
     const int H0 = static_cast<int>(hubNodes.size());
     const int perRoute = std::min<int>(4, routeCount > 1 ? H0 - 1 : H0);
+
+    // STREETS ALREADY SERVED COST MORE. Left to the plain fastest-path A*,
+    // every leg between two hubs takes the same few arterials, so four loops
+    // drove 23.6 km on only 8.5 km of distinct street and 71% of metro's
+    // streets never saw a bus (Glenn, 2026-09-18: "I couldn't find one and I
+    // walked around for a while"). Charging for a street each time a route
+    // uses it -- in either direction, and including the route's own earlier
+    // legs, so a loop does not go out and back on one street -- makes the next
+    // route prefer the parallel street. It is a price, not a ban: where there
+    // is no parallel street, routes still share.
+    std::vector<int> streetUses(nav.links.size(), 0);
+    std::unordered_map<long long, int> linkAt;   // (from, to) -> link
+    for (std::size_t li = 0; li < nav.links.size(); ++li)
+        linkAt[static_cast<long long>(nav.links[li].from) * n + nav.links[li].to] =
+            static_cast<int>(li);
+    auto markStreet = [&](int li) {
+        ++streetUses[static_cast<std::size_t>(li)];
+        const engine::NavLink& L = nav.links[static_cast<std::size_t>(li)];
+        const auto back = linkAt.find(static_cast<long long>(L.to) * n + L.from);
+        if (back != linkAt.end()) ++streetUses[static_cast<std::size_t>(back->second)];
+    };
+    std::vector<Real> costScale(nav.links.size(), 1.0);
+
     for (int r = 0; r < routeCount; ++r) {
         // CONSECUTIVE hubs, rotated by route. The first cut strided by two
         // ((r + k*2) % H), which wrapped the fourth hub back onto the first --
@@ -91,18 +125,45 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
         }
         if (ring.size() < 3) continue;   // a loop needs three corners
 
+        // IN MAP ORDER. The hubs are numbered in the order farthest-point
+        // picked them, and each pick is by construction the point FARTHEST
+        // from the last -- so visiting them in that order drove each loop
+        // corner to corner across the city, a bow-tie rather than a loop.
+        // Sorting by bearing around the ring's own centre makes the loop go
+        // round its hubs.
+        Vec2 ringMid(0, 0);
+        for (int hn : ring) ringMid = ringMid + nav.nodes[static_cast<std::size_t>(hn)];
+        ringMid = ringMid * (1.0 / static_cast<Real>(ring.size()));
+        std::stable_sort(ring.begin(), ring.end(), [&](int a0, int b0) {
+            const Vec2 pa = nav.nodes[static_cast<std::size_t>(a0)];
+            const Vec2 pb = nav.nodes[static_cast<std::size_t>(b0)];
+            return std::atan2(pa.y - ringMid.y, pa.x - ringMid.x) <
+                   std::atan2(pb.y - ringMid.y, pb.x - ringMid.x);
+        });
+
         // --- 3. the legs, PATHFOUND, so the line follows streets ---------
         std::vector<int> pathNodes;
         bool ok = true;
         for (std::size_t k = 0; k < ring.size() && ok; ++k) {
             const int a0 = ring[k], b0 = ring[(k + 1) % ring.size()];
             if (a0 == b0) continue;
-            const engine::Route leg = engine::findRoute(nav, a0, b0, /*onFoot=*/false);
+            for (std::size_t li = 0; li < costScale.size(); ++li)
+                costScale[li] = 1.0 + kReusePrice * streetUses[li];
+            // STREETS ONLY: the pedestrian rule skips freeways and ramps, and
+            // a city bus has nobody to serve on either. One-way streets keep
+            // only their forward link in the graph, so this is still a legal
+            // drive.
+            engine::Route leg =
+                engine::findRoute(nav, a0, b0, /*onFoot=*/true, &costScale);
             if (leg.links.empty()) { ok = false; break; }
+            const engine::Route plain = engine::findRoute(nav, a0, b0, /*onFoot=*/true);
+            if (!plain.links.empty() && leg.length(nav) > kMaxDetour * plain.length(nav))
+                leg = plain;
             if (pathNodes.empty()) pathNodes.push_back(a0);
             for (int li : leg.links) {
                 const int to = nav.links[static_cast<std::size_t>(li)].to;
                 if (pathNodes.empty() || pathNodes.back() != to) pathNodes.push_back(to);
+                markStreet(li);
             }
         }
         if (!ok || pathNodes.size() < 4) continue;
@@ -117,6 +178,7 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
         if (spacing > 300.0) spacing = 300.0;      // but never a hike between stops
 
         BusRoute route;
+        route.pathNodes = pathNodes;
         route.path.reserve(pathNodes.size());
         for (int nd : pathNodes)
             route.path.push_back(nav.nodes[static_cast<std::size_t>(nd)]);
@@ -188,6 +250,30 @@ Real BusNetwork::coverage(const engine::NavGraph& nav, Real maxWalk) const {
         }
     }
     return total > 0 ? covered / total : 0;
+}
+
+Real BusNetwork::streetShare(const engine::NavGraph& nav) const {
+    // A street is an undirected node pair; the directed links of a two-way
+    // street would otherwise count it twice on one side of the ratio only.
+    const long long n = nav.nodeCount();
+    auto key = [n](int a, int b) {
+        return a < b ? static_cast<long long>(a) * n + b : static_cast<long long>(b) * n + a;
+    };
+    std::unordered_map<long long, bool> driven;
+    for (const BusRoute& r : routes_)
+        for (std::size_t k = 0; k < r.pathNodes.size(); ++k)
+            driven[key(r.pathNodes[k], r.pathNodes[(k + 1) % r.pathNodes.size()])] = true;
+    std::unordered_map<long long, bool> seen;
+    Real total = 0, onRoute = 0;
+    for (const engine::NavLink& L : nav.links) {
+        if (!L.walkable) continue;
+        const long long k = key(L.from, L.to);
+        if (seen.count(k)) continue;
+        seen[k] = true;
+        total += L.length;
+        if (driven.count(k)) onRoute += L.length;
+    }
+    return total > 0 ? onRoute / total : 0;
 }
 
 int BusNetwork::nearestStop(int r, Vec2 p) const {

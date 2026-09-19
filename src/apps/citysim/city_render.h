@@ -227,6 +227,10 @@ public:
 
     bool built() const { return built_; }
     const CitySim& sim() const { return sim_; }
+    // The player is aboard a sim vehicle (CityPlayerTransitSystem): stop
+    // feeding their body to the sim as an obstacle, or the vehicle they are
+    // riding brakes for them.
+    void setPlayerRiding(bool riding) { playerRiding_ = riding; }
     // R5 physical tier (roads-v2.1): agents whose RENDER truth is a Jolt
     // vehicle body. CityPhysicsSystem drives the bodies from the sim's own
     // plan and writes each pose here; syncGroups bakes it instead of the
@@ -403,6 +407,7 @@ private:
 
     CityRenderParams params_;
     engine::NavGraph nav_;
+    bool playerRiding_ = false;
     // Bus-stop furniture entities, kept so a rebuild can remove the old set
     // rather than stacking a second pole on every stop.
     std::vector<engine::Entity> busStopProps_;

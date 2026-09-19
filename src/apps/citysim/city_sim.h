@@ -194,6 +194,11 @@ struct Agent {
     // driver inches through a gridlocked box — which breaks the circular wait a
     // knot of overlapping junctions can otherwise form. Staggered per agent.
     Real holdTimer = 0;
+    // A BUS AT ITS STOP: seconds it still stands there with the doors open
+    // (Glenn, 2026-09-18: "they should stop and give people time to get on and
+    // off"). The next trip is already routed; the bus just does not move until
+    // this runs out. Both tiers honour it (advance, vAdvance).
+    Real busDwell = 0;
 
     // Think cadence (ADR-0062): agents DECIDE on a slow clock and COMMIT — the
     // reactive scan (what do I see, which way do I lean) runs only when
@@ -642,7 +647,7 @@ public:
     // sensed_ scan and advance() ALREADY gate on it, so a passenger drops out
     // of all three without any of them learning what a ride is.
     bool boardRide(int passenger, int driver);
-    void alightRide(int passenger);
+    void alightRide(int passenger, int atNode = -1);   // atNode: where they step off
     const RideBook& rides() const { return rides_; }
     bool riding(int i) const { return rides_.driverOf(i) >= 0; }
 
@@ -687,6 +692,14 @@ public:
     }
     const BusNetwork& buses() const { return buses_; }
     bool isBus(int i) const;
+    // A bus's route and the index of the stop it is heading for; -1 if the
+    // agent is not a bus.
+    int busRouteOf(int i) const {
+        return isBus(i) ? busRoute_[static_cast<std::size_t>(i)] : -1;
+    }
+    int busNextStopOf(int i) const {
+        return isBus(i) ? busStop_[static_cast<std::size_t>(i)] : -1;
+    }
     // Legs a bus could not route and skipped. Evidence, not decoration: the
     // stall this counts is what stopped anyone boarding.
     long busSkippedLegs() const { return busSkippedLegs_; }
@@ -792,6 +805,7 @@ private:
     }
     void installGoalTables(GoalTable pedestrian, GoalTable driver);
     bool launchClear(const Agent& a, int node) const;   // no moving car near the spawn
+    void seatBusAt(int idx, int node);   // a bus at rest on a stop, in its vehicle
     void advance(Agent& a, Real dt, Real gap, Real minGap);
     // advance()'s junction verdict: the speed target after the signal brake and
     // the box-occupancy / turn-yield scan, plus the effective stop line (distance

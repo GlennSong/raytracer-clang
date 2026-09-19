@@ -27,8 +27,16 @@ Real classSpeed(RoadClass klass);
 // `onFoot`: skip Freeway/Ramp-class links — a pedestrian must never route
 // along a carriageway (§10.5; the unified graph made those links visible to
 // every consumer, including walkers).
+//
+// `linkCostScale` (optional, one entry per link, each >= 1): multiplies a
+// link's travel time. A planner uses it to steer a route OFF streets it wants
+// to avoid without forbidding them -- the bus network charges extra for a
+// street another route already drives, so routes spread across the city
+// instead of piling onto the same arterial. Scales >= 1 keep the heuristic
+// admissible.
 Route findRoute(const NavGraph& graph, int startNode, int goalNode,
-                bool onFoot = false);
+                bool onFoot = false,
+                const std::vector<Real>* linkCostScale = nullptr);
 
 // Convenience: snap world points to their nearest nodes, then route.
 Route findRouteBetween(const NavGraph& graph, const Vec2& start, const Vec2& goal);

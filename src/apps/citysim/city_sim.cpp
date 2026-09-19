@@ -20,6 +20,14 @@ using engine::NavGraph;
 namespace {
 // How many a bus carries. Beyond this it drives past a stop full.
 constexpr int kBusSeats = 24;
+// How long a bus stands at a stop: a base wait so a walker (or the player) who
+// is nearly there can still make it, plus boarding/alighting time per person.
+constexpr Real kBusDwellBase = 10.0;
+constexpr Real kBusDwellPerRider = 3.0;
+constexpr Real kBusDwellMax = 40.0;
+// How far past the junction box a bus stands at its stop: half a bus length
+// and a little, so its rear is clear of the box too.
+constexpr Real kBusStopPastBox = 7.0;
 constexpr Real kWalkSpeed = 1.4;
 // "Wakes on nothing": a rest with no dwell and no commute. Large enough to mean
 // never in any real session, finite so the arithmetic stays ordinary.
@@ -684,14 +692,21 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         int hn = nodeOf(hp);
         a.homePlace = hp;
         a.home = hn;
-        a.restNode = hn;
         a.homeDoor = doorOf(hp);
-        // Walkers start the day at their door (indoors); cars stay parked on the
-        // verge (idlePose) — a car "at home" is a car parked outside it.
-        a.pos = a.mode == Agent::Mode::Pedestrian ? a.homeDoor
-                                                  : idlePose(hn, a.mode, a.brain);
-        if (!graph.outLinks[hn].empty())
-            a.heading = graph.direction(graph.outLinks[hn][0]);
+        // A BUS STAYS AT ITS STOP. setBuses runs before this and seats every
+        // bus at a stop on its own route; moving it "home" here sent all 24
+        // back to their drivers' houses, up to 1.8 km off their loops, and the
+        // first lap was spent driving back to the route. A bus still gets a
+        // home -- places are per agent -- it just does not start there.
+        if (!isBus(indexOf(a))) {
+            a.restNode = hn;
+            // Walkers start the day at their door (indoors); cars stay parked on
+            // the verge (idlePose) — a car "at home" is a car parked outside it.
+            a.pos = a.mode == Agent::Mode::Pedestrian ? a.homeDoor
+                                                      : idlePose(hn, a.mode, a.brain);
+            if (!graph.outLinks[hn].empty())
+                a.heading = graph.direction(graph.outLinks[hn][0]);
+        }
 
         // Role (Phase 4) decides how the day runs. ~1 in 5 (when the city has a
         // park) is a Stroller — no job, a day out at the park; the rest hold a job
@@ -1619,11 +1634,19 @@ bool CitySim::boardRide(int passenger, int driver) {
     return true;
 }
 
-void CitySim::alightRide(int passenger) {
+void CitySim::alightRide(int passenger, int atNode) {
     rides_.alight(passenger);
     // Set down RESTING, wherever the vehicle stopped. The next goal tick sees a
     // GoTo state with !moving and launches a fresh trip from here -- which is
     // exactly "got out and walked the rest of the way", with no special case.
+    //
+    // "From here" is restNode, and nothing moved it during the ride: the next
+    // trip departed from the stop the rider BOARDED at, so they stepped off and
+    // reappeared back where they started (255 of 277 alightings in the rider
+    // test, up to 1.7 km). The vehicle's stop is the new departure point.
+    if (nav_ && atNode >= 0 && atNode < nav_->nodeCount() && passenger >= 0 &&
+        passenger < static_cast<int>(agents_.size()))
+        agents_[static_cast<std::size_t>(passenger)].restNode = atNode;
 }
 
 int CitySim::goalNodeFor(const Agent& a, GoalTarget target) const {
@@ -1657,10 +1680,6 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
         if (isTaxi(static_cast<int>(i))) continue;   // a cab is not also a bus
         const int r = made % buses_.routeCount();
         busRoute_[i] = r;
-        // Start each bus at a DIFFERENT stop on its loop, so a route's buses
-        // are spaced round it instead of nose to tail.
-        const int stops = static_cast<int>(buses_.route(r).stops.size());
-        busStop_[i] = stops > 0 ? (made / buses_.routeCount()) % stops : 0;
         agents_[i].goal = busTable_.entry();
         agents_[i].goalHours = 0;
         // A BUS DRIVES A BUS. Without this the transit fleet was ordinary cars
@@ -1668,12 +1687,15 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
         // sedan's gap apart. The body comes from whichever fleet slot declares
         // itself a Bus, so a scripted fleet's own dimensions win over the
         // built-in fallback.
-        if (agents_[i].vehicle >= 0 &&
-            agents_[i].vehicle < static_cast<int>(vehicles_.size())) {
+        // The OWNED car, not the one being driven this instant: a driver who
+        // happened to be on foot at setup has vehicle -1, and its bus stayed a
+        // sedan.
+        if (agents_[i].car >= 0 &&
+            agents_[i].car < static_cast<int>(vehicles_.size())) {
             VehicleBody bb{11.4, 2.55, 3.20, VehicleType::Bus};
             for (int fs = 0; fs < fleetSize(); ++fs)
                 if (fleetBody(fs).type == VehicleType::Bus) { bb = fleetBody(fs); break; }
-            SimVehicle& sv = vehicles_[static_cast<std::size_t>(agents_[i].vehicle)];
+            SimVehicle& sv = vehicles_[static_cast<std::size_t>(agents_[i].car)];
             sv.length = bb.length;
             sv.width = bb.width;
             sv.height = bb.height;
@@ -1681,7 +1703,56 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
         }
         ++made;
     }
+
+    // START ON THE ROUTE, SPREAD ROUND IT. Each bus used to begin wherever its
+    // driver happened to be -- often a kilometre from its own loop -- and bus
+    // k of a route was aimed at stop k, so a route's six buses were bunched
+    // over its first six stops (the "comes 689 m off" the HUD caught). Now
+    // bus k of m starts AT stop k*N/m, standing at the kerb, so a route's
+    // buses are evenly spaced from the first minute and a player who arrives
+    // at a stop sees one within a headway, not after the fleet finds its way.
+    for (int r = 0; r < buses_.routeCount(); ++r) {
+        std::vector<int> fleet;
+        for (std::size_t i = 0; i < agents_.size(); ++i)
+            if (busRoute_[i] == r) fleet.push_back(static_cast<int>(i));
+        const BusRoute& route = buses_.route(r);
+        const int n = static_cast<int>(route.stops.size());
+        const int m = static_cast<int>(fleet.size());
+        for (int k = 0; k < m && n > 0; ++k) {
+            const int at = static_cast<int>((static_cast<long long>(k) * n) / m);
+            seatBusAt(fleet[static_cast<std::size_t>(k)],
+                      route.stops[static_cast<std::size_t>(at)].node);
+            busStop_[static_cast<std::size_t>(fleet[static_cast<std::size_t>(k)])] =
+                (at + 1) % n;
+        }
+    }
     (void)stopsPerRoute;   // the network already has them; logging lives in city_render
+}
+
+// A bus standing at a stop, engine running: in its own vehicle, at rest on
+// the node, with no trip -- so the goal table's Drive launches it toward its
+// next stop on the next tick. The same fields placeFromSchedule resets for an
+// agent seated at rest, plus the mount, because a bus is never on foot.
+void CitySim::seatBusAt(int idx, int node) {
+    if (!nav_ || idx < 0 || idx >= static_cast<int>(agents_.size())) return;
+    if (node < 0 || node >= nav_->nodeCount()) return;
+    Agent& a = agents_[static_cast<std::size_t>(idx)];
+    remountOwnedCar(a);
+    a.restNode = node;
+    a.moving = false;
+    a.speed = 0;
+    a.route.links.clear();
+    a.leg = 0;
+    a.distOnLeg = 0;
+    a.elevation = 0;
+    a.pos = idlePose(node, Agent::Mode::Driver, a.brain);
+    if (!nav_->outLinks[static_cast<std::size_t>(node)].empty())
+        a.heading = nav_->direction(nav_->outLinks[static_cast<std::size_t>(node)][0]);
+    if (a.car >= 0 && a.car < static_cast<int>(vehicles_.size())) {
+        vehicles_[static_cast<std::size_t>(a.car)].pos = a.pos;
+        vehicles_[static_cast<std::size_t>(a.car)].heading = a.heading;
+    }
+    grid_.place(idx, a.pos);
 }
 
 void CitySim::setTaxiFraction(Real f) {
@@ -2190,6 +2261,11 @@ Real CitySim::senseAhead(Agent& a) {
 
 void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     if (!a.moving) return;
+    if (a.busDwell > 0) {   // doors open at a stop: stand still
+        a.busDwell = std::max<Real>(0, a.busDwell - dt);
+        a.speed = 0;
+        return;
+    }
     int li = a.route.links[a.leg];
     bool car = a.mode == Agent::Mode::Driver;
     if (car) {
@@ -2598,9 +2674,21 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     // fender-bender rule) cars converging on the same point crash-locked just
     // shy of it and never completed. Close enough is arrived; the park pose
     // takes over. Wander keeps exact arrival — its trips chain THROUGH the node.
-    if (!wander_ && car && a.leg == legCount - 1) {
-        Real L = nav_->links[a.route.links[a.leg]].length;
-        if (L - a.distOnLeg < std::min(Real(3.0), L * 0.5)) a.leg = legCount;
+    //
+    // A BUS stops well short: clear of the junction box plus half its own
+    // length, at the kerb of the street it came in on. Stopping ON the node
+    // parked it in the middle of the junction for its whole dwell, and at a
+    // hub the buses of three routes arrived on three different streets,
+    // stood on the same point inside each other, and never untangled.
+    const bool busHere = isBus(indexOf(a));
+    if ((!wander_ || busHere) && car && a.leg == legCount - 1) {
+        const int li = a.route.links[a.leg];
+        Real L = nav_->links[li].length;
+        Real shortBy = std::min(Real(3.0), L * 0.5);
+        if (busHere)
+            shortBy = std::min(junctionRadius(nav_->links[li].to) + kBusStopPastBox,
+                               L * 0.6);
+        if (L - a.distOnLeg < shortBy) a.leg = legCount;
     }
 
     if (a.leg >= legCount) {
@@ -2644,16 +2732,32 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             if (r >= 0 && r < buses_.routeCount()) {
                 const int stops = static_cast<int>(buses_.route(r).stops.size());
                 if (si >= 0 && si < stops) {
+                    int people = 0;
                     for (int p : buses_.alightingAt(r, si)) {
-                        alightRide(p);
+                        // Only riders on THIS bus. alightingAt lists everyone on
+                        // the route bound for this stop, and a route runs six
+                        // buses: whichever reached the stop first set down
+                        // riders sitting on the others, hundreds of metres away,
+                        // and they jumped to the stop (97 of 152 alightings).
+                        if (rides_.driverOf(p) != self) continue;
+                        alightRide(p, buses_.route(r).stops[static_cast<std::size_t>(si)].node);
                         buses_.forget(p);
+                        ++people;
                     }
                     for (int p : buses_.waitingAt(r, si)) {
                         if (rides_.load(self) >= kBusSeats) break;
                         ++busBoardAttempts_;
-                        if (boardRide(p, self)) buses_.markAboard(p);
+                        if (boardRide(p, self)) { buses_.markAboard(p); ++people; }
                         else ++busBoardRefused_;
                     }
+                    // THE DWELL. It used to chain straight into the next leg
+                    // at speed, so a stop was a place the bus drove through:
+                    // riders "boarded" in passing and a player could never get
+                    // on at all (boarding needs a standing bus). Every stop is
+                    // a stop -- a base wait, so someone walking up has time --
+                    // plus a few seconds per person on or off.
+                    a.busDwell = std::min(kBusDwellMax,
+                                          kBusDwellBase + kBusDwellPerRider * people);
                     ++busStopsServed_;
                     busStop_[static_cast<std::size_t>(self)] = (si + 1) % stops;
                 }
@@ -2674,7 +2778,10 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             if (tgt == GoalTarget::Fare) {
                 boardRide(f->passenger, self);
             } else if (tgt == GoalTarget::Drop) {
-                alightRide(f->passenger);
+                alightRide(f->passenger,
+                           a.route.links.empty()
+                               ? -1
+                               : nav_->links[static_cast<std::size_t>(a.route.links.back())].to);
                 dispatch_.complete(self);   // free to take another hail
             }
         }
@@ -2699,8 +2806,26 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         a.goal = next;
         a.goalHours = 0;
         Vec2 keepHeading = a.heading;
+        // Where a bus actually stopped: short of the node, on the link it came
+        // in on (see advance). Its next trip starts FROM there, not from the
+        // node, or it would jump the setback forward on pulling away.
+        const bool busStopShort = isBus(indexOf(a)) && !a.far() &&
+            a.distOnLeg < nav_->links[lastLink].length - 0.5;
+        const Real stoodAt = a.distOnLeg;
+        const int keepLane = a.lane;
+        const Real keepLaneF = a.laneF;
         if (startGoalTrip(a, a.restNode, /*fromRest=*/false)) {
-            a.speed = vArrive;
+            if (busStopShort && a.moving) {
+                a.route.links.insert(a.route.links.begin(), lastLink);
+                a.leg = 0;
+                a.distOnLeg = stoodAt;
+                const int lanes = std::max(1, nav_->links[lastLink].lanes);
+                a.lane = std::min(keepLane, lanes - 1);
+                a.laneF = std::min(keepLaneF, Real(lanes - 1));
+                refreshPose(a);
+            }
+            // A bus standing at its stop leaves from rest when the dwell ends.
+            a.speed = a.busDwell > 0 ? Real(0) : vArrive;
             a.heading = keepHeading;   // no snap: the yaw stays rate-limited
             return;
         }
@@ -3794,6 +3919,13 @@ void CitySim::vAdvance(Agent& a, Real dt) {
     if (a.leg >= legCount) { a.moving = false; return; }
     Real t = dt;
     while (t > 1e-9 && a.leg < legCount) {
+        if (a.busDwell > 0) {   // a bus standing at its stop
+            const Real h = std::min(a.busDwell, t);
+            a.busDwell -= h;
+            t -= h;
+            a.speed = 0;
+            continue;
+        }
         if (a.vHold > 0) {   // waiting out a modelled junction dwell
             const Real h = std::min(a.vHold, t);
             a.vHold -= h;

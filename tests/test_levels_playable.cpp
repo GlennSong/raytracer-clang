@@ -1240,8 +1240,38 @@ TEST_CASE(metro_bus_network_serves_the_city) {
     const Real walk = 220.0;   // metro_v2_test.json busMaxWalk
     const Real served = net.coverage(city.nav(), walk);
     const Real block = net.coverage(city.nav(), 120.0);
+    const Real share = net.streetShare(city.nav());
     std::printf("    [buses] %d stops; %.0f%% of walkable street within %.0f m of one, "
-                "%.0f%% within 120 m\n", stops, 100.0 * served, walk, 100.0 * block);
+                "%.0f%% within 120 m; %.0f%% of streets have a bus on them\n",
+                stops, 100.0 * served, walk, 100.0 * block, 100.0 * share);
     // A walker outside the served area is never offered a bus at all.
     CHECK(served >= 0.90);
+    // And a stop should be about a block away, on a street you might walk
+    // down: the old network had 57% and 28% here, which is what "I walked
+    // around for a while and couldn't find one" measured as.
+    CHECK(block >= 0.80);
+    CHECK(share >= 0.50);
+
+    // EVERY BUS STARTS AT A STOP ON ITS OWN ROUTE, through the whole build --
+    // setBuses seated them, and assignPlaces (which runs after it) then sent
+    // every one home, so a route's first bus was a kilometre off its loop.
+    int buses = 0, offRoute = 0;
+    Real worst = 0;
+    for (int i = 0; i < static_cast<int>(city.sim().agents().size()); ++i) {
+        const int r = city.sim().busRouteOf(i);
+        if (r < 0) continue;
+        ++buses;
+        const citysim::BusRoute& route = net.route(r);
+        const int n = static_cast<int>(route.stops.size());
+        const int at = (city.sim().busNextStopOf(i) - 1 + n) % n;
+        const Vec2 d = city.sim().agents()[static_cast<std::size_t>(i)].pos -
+                       route.stops[static_cast<std::size_t>(at)].pos;
+        const Real dd = std::sqrt(d.x * d.x + d.y * d.y);
+        worst = std::max(worst, dd);
+        if (dd > 30.0) ++offRoute;
+    }
+    std::printf("    [buses] %d buses; %d not at their starting stop (worst %.0f m)\n",
+                buses, offRoute, worst);
+    CHECK(buses == 24);
+    CHECK(offRoute == 0);
 }

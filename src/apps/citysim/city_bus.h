@@ -46,6 +46,7 @@ struct BusRoute {
     // bus route (Glenn: "those do not look like bus routes. Buses tend to stop
     // at consecutive streets").
     std::vector<engine::Vec2> path;
+    std::vector<int> pathNodes;   // the same, as nav node ids
     // Stops shared with another route: where a rider can change buses.
     std::vector<int> hubStops;
     // THE YARD (Glenn: "buses should be constantly running (that is until their
@@ -111,6 +112,12 @@ public:
     // routes look like on a map -- "I walked around for a while and couldn't
     // find one" (Glenn, 2026-09-18) is this number being low.
     engine::Real coverage(const engine::NavGraph& nav, engine::Real maxWalk) const;
+
+    // THE SHARE OF STREETS A BUS DRIVES ALONG, by length. The number coverage
+    // hides: 94% of metro's street was within 220 m of a stop while 71% of its
+    // streets had no bus on them, because the stop was a street over behind a
+    // building. Whether you WALK PAST a bus stop is this number.
+    engine::Real streetShare(const engine::NavGraph& nav) const;
 
     // The best route to get from `from` to `to`: the one whose nearest stop to
     // each is closest overall, scored on the walking a rider would still have to

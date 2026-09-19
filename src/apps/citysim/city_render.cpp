@@ -458,7 +458,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                  << "% of walkable street within " << params_.busMaxWalk
                  << " m of a stop ("
                  << static_cast<int>(100.0 * sim_.buses().coverage(nav_, 120.0) + 0.5)
-                 << "% within 120 m, about a block)";
+                 << "% within 120 m, about a block); "
+                 << static_cast<int>(100.0 * sim_.buses().streetShare(nav_) + 0.5)
+                 << "% of streets have a bus on them";
         for (std::size_t k = 0; k < stopPositions.size() && k < 4; ++k)
             LOG_INFO << "[citysim]   stop furniture " << k << " at ("
                      << stopPositions[k].x << ", " << stopPositions[k].y << ", "
@@ -1847,16 +1849,29 @@ void CityRenderSystem::step(World& world, Real dt) {
                      << ", dest stop too far " << ps.farTo
                      << ", origin stop too far " << ps.farFrom
                      << ", same stop " << ps.sameStop;
-            int shown = 0;
-            for (std::size_t ai = 0; ai < sim_.agents().size() && shown < 6; ++ai) {
-                if (!sim_.isBus(static_cast<int>(ai))) continue;
+            // EVERY bus: its route, the stop it is heading for, and how far
+            // that stop is. A bus whose next stop is a kilometre away is not
+            // where its route index says it is -- the HUD caught one.
+            for (std::size_t ai = 0; ai < sim_.agents().size(); ++ai) {
+                const int bi = static_cast<int>(ai);
+                if (!sim_.isBus(bi)) continue;
                 const Agent& a = sim_.agents()[ai];
-                LOG_INFO << "[bus] agent " << ai << " at (" << a.pos.x << ", "
+                const int r = sim_.busRouteOf(bi), si = sim_.busNextStopOf(bi);
+                double toStop = -1;
+                if (r >= 0 && si >= 0 && si < static_cast<int>(sim_.buses().route(r).stops.size())) {
+                    const engine::Vec2 d = sim_.buses().route(r).stops[static_cast<std::size_t>(si)].pos - a.pos;
+                    toStop = std::sqrt(d.x * d.x + d.y * d.y);
+                }
+                LOG_INFO << "[bus] agent " << ai << " route " << r << " next stop " << si
+                         << " (" << static_cast<int>(toStop) << " m) at (" << a.pos.x << ", "
                          << a.pos.y << ") moving=" << (a.moving ? 1 : 0)
+                         << " speed=" << a.speed
                          << " far=" << (a.far() ? 1 : 0)
                          << " goal=" << a.goal
-                         << " riders=" << sim_.rides().load(static_cast<int>(ai));
-                ++shown;
+                         << " routeLen=" << static_cast<int>(a.route.length(nav_))
+                         << " leg=" << a.leg << "/" << a.route.links.size()
+                         << " restNode=" << a.restNode
+                         << " riders=" << sim_.rides().load(bi);
             }
         }
     }
@@ -2263,11 +2278,15 @@ void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
     // whether the player is on foot or driving. The player is the entity with a
     // CharacterController under host control (PlayerSystem).
     std::vector<Vec2> obstacles;
-    ctx.world.each<engine::Transform, engine::CharacterController, engine::ControlledBy>(
-        [&](engine::Entity, engine::Transform& t, engine::CharacterController&,
-            engine::ControlledBy&) {
-            obstacles.push_back(Vec2(t.position.x, t.position.z));
-        });
+    // NOT while riding: the player then sits on the vehicle's own pose, and a
+    // bus braking for an obstacle at distance zero never pulls away from the
+    // stop -- it stood at speed 0 with its passenger aboard.
+    if (!playerRiding_)
+        ctx.world.each<engine::Transform, engine::CharacterController, engine::ControlledBy>(
+            [&](engine::Entity, engine::Transform& t, engine::CharacterController&,
+                engine::ControlledBy&) {
+                obstacles.push_back(Vec2(t.position.x, t.position.z));
+            });
     // Every REAL physics Vehicle too (the player's car, commandeered/promoted
     // cars — driven OR abandoned): a promoted car has no planner ghost, so
     // without this ambient traffic plans straight through a car parked across

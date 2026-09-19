@@ -31,7 +31,7 @@ Real Route::length(const NavGraph& g) const {
 }
 
 Route findRoute(const NavGraph& graph, int startNode, int goalNode,
-                bool onFoot) {
+                bool onFoot, const std::vector<Real>* linkCostScale) {
     Route route;
     const int n = graph.nodeCount();
     if (startNode < 0 || goalNode < 0 || startNode >= n || goalNode >= n) return route;
@@ -75,6 +75,8 @@ Route findRoute(const NavGraph& graph, int startNode, int goalNode,
                        link.klass == RoadClass::Ramp || !link.walkable))
                 continue;
             Real step = link.length / classSpeed(link.klass);
+            if (linkCostScale && static_cast<std::size_t>(li) < linkCostScale->size())
+                step *= std::max<Real>(1.0, (*linkCostScale)[static_cast<std::size_t>(li)]);
             Real tentative = g[u] + step;
             if (tentative + 1e-12 < g[link.to]) {
                 g[link.to] = tentative;

@@ -36,6 +36,11 @@ namespace citysim {
 // a stop whose node carries no usable street link is skipped rather than having
 // a pole dropped in a carriageway. Entities are appended to `out` when given,
 // so a caller can tear them down on a rebuild.
+// The route's colour, as painted on its stop signs, and its name -- so the
+// HUD, the map and the street all call route 2 the same thing.
+engine::Vec3 routeColour(int route);
+const char* routeColourName(int route);
+
 int buildBusStopProps(
     engine::World& world, engine::AssetManager& assets, const BusNetwork& net,
     const engine::NavGraph& nav,

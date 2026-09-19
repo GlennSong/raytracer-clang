@@ -2,6 +2,7 @@
 #include "city_test_util.h"
 #include "test_framework.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -187,11 +188,41 @@ TEST_CASE(buses_drive_their_loop_and_carry_riders) {
     std::vector<char> waitedOnce(sim.agents().size(), 0);
     std::vector<char> rodeOnce(sim.agents().size(), 0);
     std::vector<Vec2> boardedAt(sim.agents().size(), Vec2(0, 0));
+    // AFTER THE RIDE: where each rider got off, and how far from there they
+    // are over the next few seconds. Their next trip used to depart from the
+    // stop they BOARDED at (restNode was never moved), so a rider stepped off
+    // the bus and reappeared a kilometre back where they started.
+    std::vector<int> wasOnBus(sim.agents().size(), 0);
+    std::vector<Vec2> alightedAt(sim.agents().size(), Vec2(0, 0));
+    std::vector<int> sinceAlight(sim.agents().size(), -1);
+    long alightings = 0, snappedBack = 0;
+    Real worstSnap = 0;
 
     for (int tick = 0; tick < 90000; ++tick) {
         sim.step(0.05, 0.4);
         for (std::size_t i = 0; i < sim.agents().size(); ++i) {
             const int ai = static_cast<int>(i);
+            {
+                const int d = sim.rides().driverOf(ai);
+                const bool onBus = d >= 0 && sim.isBus(d);
+                if (wasOnBus[i] && !onBus) {
+                    alightedAt[i] = sim.agents()[i].pos;
+                    sinceAlight[i] = 0;
+                    ++alightings;
+                }
+                wasOnBus[i] = onBus ? 1 : 0;
+                if (sinceAlight[i] >= 0) {
+                    const Real away = dist(sim.agents()[i].pos, alightedAt[i]);
+                    // 3 s at walking pace is ~4 m; 60 m is only reachable by a jump.
+                    if (away > 60.0) {
+                        ++snappedBack;
+                        worstSnap = std::max(worstSnap, away);
+                        sinceAlight[i] = -1;
+                    } else if (++sinceAlight[i] > 60) {
+                        sinceAlight[i] = -1;
+                    }
+                }
+            }
             if (sim.isBus(ai))
                 farthestBusDrove = std::max(farthestBusDrove,
                                             dist(sim.agents()[i].pos, busStart[i]));
@@ -219,5 +250,183 @@ TEST_CASE(buses_drive_their_loop_and_carry_riders) {
                 sim.busSkippedLegs(), sim.busStopsServed(), everWaited, everRode, farthestCarried);
     std::printf("    [bus] board attempts %ld, refused %ld\n",
                 sim.busBoardAttempts(), sim.busBoardRefused());
+    std::printf("    [bus] %ld alightings; %ld riders jumped away from where they got "
+                "off (worst %.0f m)\n", alightings, snappedBack, worstSnap);
+    CHECK(alightings > 0);
+    CHECK(snappedBack == 0);
 }
 
+
+// ROUTES SPREAD OUT. The legs between hubs are pathfound, and a fastest-path
+// search sends every one of them down the same few arterials: metro's four
+// loops drove 23.6 km on 8.5 km of street. Each street a route has used costs
+// the next route more, so the share of a route's streets that some other route
+// also drives stays a minority.
+TEST_CASE(bus_routes_spread_across_streets_instead_of_sharing_them) {
+    const NavGraph nav = gridCity(600.0, 100.0, 6);
+    BusNetwork net;
+    net.build(nav, 3, 10, 21);
+    CHECK(net.routeCount() == 3);
+    auto key = [&](int a, int b) {
+        const long long n = nav.nodeCount();
+        return a < b ? a * n + b : b * n + a;
+    };
+    std::vector<std::vector<long long>> streets(static_cast<std::size_t>(net.routeCount()));
+    for (int r = 0; r < net.routeCount(); ++r) {
+        const std::vector<int>& p = net.route(r).pathNodes;
+        CHECK(p.size() >= 4);
+        for (std::size_t k = 0; k + 1 < p.size(); ++k)
+            streets[static_cast<std::size_t>(r)].push_back(key(p[k], p[k + 1]));
+    }
+    Real sharedTotal = 0;
+    for (int r = 0; r < net.routeCount(); ++r) {
+        int shared = 0;
+        for (long long st : streets[static_cast<std::size_t>(r)]) {
+            bool other = false;
+            for (int q = 0; q < net.routeCount() && !other; ++q) {
+                if (q == r) continue;
+                for (long long s2 : streets[static_cast<std::size_t>(q)])
+                    if (s2 == st) { other = true; break; }
+            }
+            shared += other ? 1 : 0;
+        }
+        const Real frac = static_cast<Real>(shared) /
+                          static_cast<Real>(std::max<std::size_t>(1, streets[static_cast<std::size_t>(r)].size()));
+        std::printf("    [spread] route %d: %.0f%% of its streets shared\n", r, 100.0 * frac);
+        sharedTotal += frac;
+    }
+    CHECK(sharedTotal / net.routeCount() < 0.5);
+    CHECK(net.streetShare(nav) > 0.0);
+}
+
+// A BUS STARTS ON ITS ROUTE, AND ITS ROUTE'S BUSES START APART. They began
+// wherever their drivers were, aimed at stops 0..m-1 -- a route's fleet bunched
+// over its first few stops, some a kilometre off their own loop. Now bus k of
+// m stands at stop k*N/m, in its vehicle, ready to leave.
+TEST_CASE(buses_start_at_their_own_stops_evenly_spaced) {
+    NavGraph nav = citytest::cityNav(900.0, 120.0, 4);
+    CitySim sim;
+    sim.build(nav, 24, 60, 17);
+    sim.setBuses(2, 12, 8, 260.0);
+    const BusNetwork& net = sim.buses();
+    CHECK(net.routeCount() == 2);
+    for (int r = 0; r < net.routeCount(); ++r) {
+        const BusRoute& route = net.route(r);
+        const int n = static_cast<int>(route.stops.size());
+        std::vector<int> starts;
+        for (int i = 0; i < static_cast<int>(sim.agents().size()); ++i) {
+            if (sim.busRouteOf(i) != r) continue;
+            const Agent& a = sim.agents()[static_cast<std::size_t>(i)];
+            CHECK(a.vehicle >= 0);                       // at the wheel
+            const int at = (sim.busNextStopOf(i) - 1 + n) % n;
+            starts.push_back(at);
+            // Standing at that stop (idlePose puts it at the kerb, not the node).
+            CHECK(dist(a.pos, route.stops[static_cast<std::size_t>(at)].pos) < 25.0);
+        }
+        CHECK(starts.size() == 4);
+        std::sort(starts.begin(), starts.end());
+        // Evenly spread: consecutive start stops are about N/m apart.
+        for (std::size_t k = 1; k < starts.size(); ++k)
+            CHECK(starts[k] - starts[k - 1] >= n / 4 - 1);
+    }
+}
+
+
+// A BUS STOPS AT A STOP. It used to chain straight into the next leg at speed:
+// riders boarded in passing and a player could never get on, since boarding
+// needs a standing bus (Glenn: "they should stop and give people time to get on
+// and off"). Every served stop now holds the bus still, doors open, for at
+// least the base dwell.
+TEST_CASE(a_bus_stands_at_each_stop_long_enough_to_board) {
+    NavGraph nav = citytest::cityNav(900.0, 120.0, 4);
+    CitySim sim;
+    sim.build(nav, 24, 60, 17);
+    sim.setBuses(2, 12, 4, 260.0);
+    const Real dt = 1.0 / 30.0;
+    // Timed from the moment a bus SERVES a stop (its next-stop index moves on)
+    // to the moment it pulls away. Red lights near a stop do not count: the
+    // clock only starts at a service.
+    const std::size_t N = sim.agents().size();
+    std::vector<int> lastNext(N, -2);
+    std::vector<Real> held(N, -1);          // -1 = not timing
+    std::vector<Real> shortest(N, 1e9);
+    int services = 0;
+    Real nearestStand = 1e9, farthestStand = 0;
+    for (int t = 0; t < 30 * 240; ++t) {
+        sim.step(dt);
+        for (int i = 0; i < static_cast<int>(N); ++i) {
+            if (sim.busRouteOf(i) < 0) continue;
+            const std::size_t k = static_cast<std::size_t>(i);
+            const Agent& a = sim.agents()[k];
+            const int next = sim.busNextStopOf(i);
+            if (lastNext[k] != -2 && next != lastNext[k]) {
+                held[k] = 0;
+                ++services;
+                // WHERE it stands: back from the corner, on the street it came
+                // in on -- not on the node, where buses of other routes leaving
+                // by the same street were placed on top of it.
+                const BusRoute& route = sim.buses().route(sim.busRouteOf(i));
+                const Vec2 node = route.stops[static_cast<std::size_t>(lastNext[k])].pos;
+                nearestStand = std::min(nearestStand, dist(a.pos, node));
+                farthestStand = std::max(farthestStand, dist(a.pos, node));
+            }
+            lastNext[k] = next;
+            if (held[k] < 0) continue;
+            if (a.speed <= 0.5) held[k] += dt;
+            else { shortest[k] = std::min(shortest[k], held[k]); held[k] = -1; }
+        }
+    }
+    Real worst = 1e9;
+    for (std::size_t k = 0; k < N; ++k) worst = std::min(worst, shortest[k]);
+    std::printf("    [dwell] %d stop services; shortest stand after a service %.1f s; "
+                "a bus stood %.1f..%.1f m from the stop's node\n",
+                services, worst, nearestStand, farthestStand);
+    CHECK(services >= 8);
+    CHECK(worst >= 9.5);
+    CHECK(nearestStand >= 5.0);
+    CHECK(farthestStand <= 40.0);   // AT the stop it served, not somewhere else
+}
+
+// BUSES AT A SHARED STOP DO NOT PILE INTO EACH OTHER. With a dwell, buses of
+// three routes arriving at a hub on three different streets all stood on the
+// node itself -- inside one another, in the middle of the junction -- and none
+// ever left (metro, 2026-09-18). A bus now stands short of the junction on
+// the street it came in on, so none should share a spot, and none should stand
+// still for longer than a dwell plus a signal cycle.
+TEST_CASE(buses_sharing_hub_stops_neither_overlap_nor_deadlock) {
+    NavGraph nav = citytest::cityNav(900.0, 120.0, 4);
+    CitySim sim;
+    sim.build(nav, 24, 60, 17);
+    sim.setBuses(3, 12, 12, 260.0);
+    const Real dt = 1.0 / 30.0;
+    const std::size_t N = sim.agents().size();
+    std::vector<int> fleet;
+    for (int i = 0; i < static_cast<int>(N); ++i)
+        if (sim.busRouteOf(i) >= 0) fleet.push_back(i);
+    std::vector<Real> still(N, 0), longestStill(N, 0);
+    Real overlapFor = 0, worstOverlap = 0;
+    for (int t = 0; t < 30 * 360; ++t) {
+        sim.step(dt);
+        bool overlapping = false;
+        for (std::size_t x = 0; x < fleet.size(); ++x) {
+            const Agent& a = sim.agents()[static_cast<std::size_t>(fleet[x])];
+            const std::size_t k = static_cast<std::size_t>(fleet[x]);
+            still[k] = a.speed <= 0.1 ? still[k] + dt : 0;
+            longestStill[k] = std::max(longestStill[k], still[k]);
+            for (std::size_t y = x + 1; y < fleet.size(); ++y) {
+                const Agent& b = sim.agents()[static_cast<std::size_t>(fleet[y])];
+                if (dist(a.pos, b.pos) < 3.0) overlapping = true;
+            }
+        }
+        overlapFor = overlapping ? overlapFor + dt : 0;
+        worstOverlap = std::max(worstOverlap, overlapFor);
+    }
+    Real worstStill = 0;
+    for (int i : fleet) worstStill = std::max(worstStill, longestStill[static_cast<std::size_t>(i)]);
+    std::printf("    [hub] %zu buses, %ld stops served; longest overlap %.1f s, "
+                "longest standstill %.1f s\n",
+                fleet.size(), sim.busStopsServed(), worstOverlap, worstStill);
+    CHECK(sim.busStopsServed() >= 30);
+    CHECK(worstOverlap < 5.0);
+    CHECK(worstStill < 100.0);
+}
