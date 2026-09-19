@@ -1275,3 +1275,113 @@ TEST_CASE(metro_bus_network_serves_the_city) {
     CHECK(buses == 24);
     CHECK(offRoute == 0);
 }
+
+// PARKING (Glenn, 2026-09-18: "They park at the corner in a pile, but they
+// should be using the parallel parking spaces or maybe the parking garages, but
+// they need to park in spaces and not in a heap on the corner"). A census of
+// every DRAWN parked car in the loader-built metro: in a marked bay, or on the
+// verge; how many sit on top of another parked car; how many inside a junction.
+namespace {
+struct ParkCensus {
+    int drivers = 0, bays = 0, parked = 0, inBay = 0, verge = 0, stacked = 0,
+        atJunction = 0, offStreet = 0;
+};
+ParkCensus parkCensus(const citysim::CityRenderSystem& city) {
+    ParkCensus c;
+    const auto& sim = city.sim();
+    const auto& nav = city.nav();
+    c.bays = static_cast<int>(sim.parkingBays().size());
+    std::vector<Vec2> parkedAt;
+    for (std::size_t ai = 0; ai < sim.agents().size(); ++ai) {
+        const auto& a = sim.agents()[ai];
+        if (a.archetype != citysim::Agent::Mode::Driver) continue;
+        if (sim.isBus(static_cast<int>(ai))) continue;   // at a stop, not parked
+        ++c.drivers;
+        if (a.moving) continue;                      // on the road
+        if (a.car < 0 || a.car >= static_cast<int>(sim.vehicles().size())) continue;
+        const auto& v = sim.vehicles()[static_cast<std::size_t>(a.car)];
+        if (v.offStreet) { ++c.offStreet; continue; }
+        ++c.parked;
+        if (a.parkedBay >= 0) ++c.inBay; else ++c.verge;
+        // A driver resting IN its car is drawn at its own pose; one that got
+        // out left the car where it parked.
+        parkedAt.push_back(a.vehicle >= 0 ? a.pos : v.pos);
+    }
+    for (std::size_t i = 0; i < parkedAt.size(); ++i) {
+        for (std::size_t j = 0; j < parkedAt.size(); ++j) {
+            if (i == j) continue;
+            const Vec2 d = parkedAt[i] - parkedAt[j];
+            if (d.x * d.x + d.y * d.y < 3.0 * 3.0) { ++c.stacked; break; }
+        }
+        for (int n = 0; n < nav.nodeCount(); ++n) {
+            if (!nav.isJunction(n)) continue;
+            const Vec2 d = parkedAt[i] - nav.nodes[static_cast<std::size_t>(n)];
+            if (d.x * d.x + d.y * d.y < 10.0 * 10.0) { ++c.atJunction; break; }
+        }
+    }
+    return c;
+}
+void printPark(const char* when, const ParkCensus& c) {
+    std::printf("    [park] %s: %d drivers, %d bays | %d parked on street: %d in bays, "
+                "%d on the verge | %d stacked within 3 m of another | %d inside a "
+                "junction | %d off-street\n",
+                when, c.drivers, c.bays, c.parked, c.inBay, c.verge, c.stacked,
+                c.atJunction, c.offStreet);
+}
+}  // namespace
+
+TEST_CASE(metro_cars_park_in_spaces_not_heaps) {
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const bool loaded =
+        LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+                          view, assets, /*editorMode=*/false);
+    CHECK(loaded);
+    if (!loaded) return;
+    citysim::CityRenderSystem city;
+    CHECK(city.build(world, &assets, nullptr));
+    const ParkCensus atLoad = parkCensus(city);
+    printPark("at load", atLoad);
+    for (int i = 0; i < 1800; ++i) city.step(world, 0.1);   // 3 minutes
+    // AND TRAFFIC STILL FLOWS. Two ways parking in bays first slowed metro:
+    // cars resting in a bay sat just inside the car-ahead corridor of the kerb
+    // lane (passing cars braked behind them), and routes ended in U-turns to
+    // reach a bay's street, or left one by turning straight back. Measured:
+    // mean speed of moving cars after 3 min 5.6 m/s before the allocator, 4.1
+    // with those two bugs, 6.1 fixed; U-turn routes 0 / 67 / ~11.
+    int moving = 0, uturns = 0;
+    double speed = 0;
+    for (std::size_t ai = 0; ai < city.sim().agents().size(); ++ai) {
+        const auto& a = city.sim().agents()[ai];
+        if (a.archetype != citysim::Agent::Mode::Driver || !a.moving ||
+            city.sim().isBus(static_cast<int>(ai)))
+            continue;
+        ++moving;
+        speed += a.speed;
+        const auto& rl = a.route.links;
+        for (std::size_t q = 1; q < rl.size(); ++q) {
+            const auto& l0 = city.nav().links[static_cast<std::size_t>(rl[q - 1])];
+            const auto& l1 = city.nav().links[static_cast<std::size_t>(rl[q])];
+            if (l0.from == l1.to && l0.to == l1.from) { ++uturns; break; }
+        }
+    }
+    const double meanSpeed = moving ? speed / moving : 0.0;
+    std::printf("    [park] traffic after 3 min: %d moving, mean %.2f m/s, %d routes "
+                "with a U-turn\n", moving, meanSpeed, uturns);
+    CHECK(moving > 100);
+    CHECK(meanSpeed > 5.0);
+    CHECK(uturns < 25);
+    const ParkCensus later = parkCensus(city);
+    printPark("after 3 min", later);
+    // Measured before the allocator: 2 of 1257 parked cars in a bay, 857
+    // within 3 m of another, 23 inside a junction -- with 4646 bays free.
+    for (const ParkCensus* c : {&atLoad, &later}) {
+        CHECK(c->parked > 500);                       // the fixture must bite
+        CHECK(c->inBay >= c->parked * 95 / 100);      // in marked spaces
+        CHECK(c->stacked == 0);                       // no heaps
+        CHECK(c->atJunction == 0);                    // nothing in the box
+    }
+}

@@ -163,8 +163,11 @@ TEST_CASE(parking_arrivals_claim_bays_and_departures_free_them) {
             // occupancy is the only record of where a car is — a bay holding a
             // stale index is a car nobody can ever retrieve.
             const int occ = bays[bi].occupant;
+            // A driver on its way holds the bay it is driving to (the route
+            // ends AT it): reserved is claimed too.
             if (occ >= 0 && (occ >= static_cast<int>(ag.size()) ||
-                             ag[occ].parkedBay != static_cast<int>(bi)))
+                             (ag[occ].parkedBay != static_cast<int>(bi) &&
+                              ag[occ].targetBay != static_cast<int>(bi))))
                 orphanedBay = true;
             // A bay that held an agent and is free again = a real departure.
             if (lastOccupant[bi] >= 0 && bays[bi].occupant == -1)

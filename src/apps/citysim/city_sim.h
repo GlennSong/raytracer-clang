@@ -227,6 +227,12 @@ struct Agent {
     engine::Route route;
     int leg = 0;
     int parkedBay = -1;   // curbside bay held while resting (roads-v2.1 R6b)
+    // PARKING NEAR THE DESTINATION: the bay reserved for the trip under way
+    // (the route ends AT it, not at the corner), and the node the trip is
+    // really for -- a car parked a street away still puts its driver at the
+    // right door.
+    int targetBay = -1;
+    int tripGoal = -1;
     int trips = 0;   // trips started so far — the ADR-0062 bridge rebuilds its
                      // pursuit path when this changes (a new route = a new path)
     Real distOnLeg = 0, speed = 0, elevation = 0;
@@ -323,6 +329,11 @@ struct SimVehicle {
     int driver = -1;             // agent index, or -1 when parked/unpossessed
     engine::Vec2 pos;            // cached pose (mirrors the driver while possessed)
     engine::Vec2 heading{1, 0};
+    // Parked OFF-STREET -- in a garage or driveway, not on the road: not drawn,
+    // not a body anything collides with. Where a car goes when there is no
+    // marked bay or clear kerb near its owner's destination, rather than onto
+    // a heap at the corner.
+    bool offStreet = false;
 };
 
 // A body some agent might sense this step (ADR-0063): its plan position, its
@@ -822,7 +833,13 @@ private:
     }
     void installGoalTables(GoalTable pedestrian, GoalTable driver);
     bool launchClear(const Agent& a, int node) const;   // no moving car near the spawn
-    void seatBusAt(int idx, int node);   // a bus at rest on a stop, in its vehicle
+    void seatBusAt(int idx, int node, int queued = 0);   // a bus at rest on a stop
+    // The nearest FREE bay to `target` within `maxDist`, claimed for agent
+    // `self` (-1 if none). The one allocator for a car at load and on arrival.
+    int claimBayNear(engine::Vec2 target, int self, Real maxDist);
+    void releaseBays(Agent& a);          // free both the held and the reserved bay
+    std::vector<int> nearestFreeBays(engine::Vec2 target, Real maxDist, int k) const;
+    bool parksInBays(const Agent& a) const;   // a private car that parks (not a bus/cab/wanderer)
     void advance(Agent& a, Real dt, Real gap, Real minGap);
     // advance()'s junction verdict: the speed target after the signal brake and
     // the box-occupancy / turn-yield scan, plus the effective stop line (distance
@@ -896,6 +913,10 @@ private:
     // Adopted fleet catalogue; empty = use the built-in table (see setFleet).
     std::vector<VehicleBody> fleet_;
     std::vector<ParkingBay> bays_;
+    // Each link's reverse twin (-1 if one-way), and a per-link route cost
+    // scale kept at 1 except while a bay departure prices its own twin.
+    std::vector<int> twinOf_;
+    std::vector<Real> departScale_;
     std::vector<std::vector<int>> baysOnLink_;   // link -> bay indices
     std::vector<char> bayNarrowed_;   // link (or its reverse) carries bays
     std::vector<Real> gaps_;

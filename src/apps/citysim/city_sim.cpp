@@ -28,6 +28,8 @@ constexpr Real kBusDwellMax = 40.0;
 // How far past the junction box a bus stands at its stop: half a bus length
 // and a little, so its rear is clear of the box too.
 constexpr Real kBusStopPastBox = 7.0;
+// How far from its destination a driver will park and walk: a few blocks.
+constexpr Real kParkSearch = 250.0;
 constexpr Real kWalkSpeed = 1.4;
 // "Wakes on nothing": a rest with no dwell and no commute. Large enough to mean
 // never in any real session, finite so the arithmetic stays ordinary.
@@ -453,6 +455,11 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
                      "layer=%d  no-frontage=%d  bays=%zu\n",
                      graph.linkCount(), dbgChains, dbgShortChain, dbgNoBand, dbgLayer,
                      dbgNoFrontage, bays_.size());
+    twinOf_.assign(graph.linkCount(), -1);
+    departScale_.assign(graph.linkCount(), 1.0);
+    for (int li = 0; li < graph.linkCount(); ++li)
+        for (int ol : graph.outLinks[graph.links[li].to])
+            if (graph.links[ol].to == graph.links[li].from) { twinOf_[li] = ol; break; }
     bayNarrowed_.assign(graph.linkCount(), 0);
     for (int li = 0; li < graph.linkCount(); ++li)
         if (!baysOnLink_[li].empty()) bayNarrowed_[li] = 1;
@@ -1089,6 +1096,26 @@ void CitySim::placeFromSchedule(int idx) {
                 a.goal = tableFor(a).entry();
                 a.goalHours = 0;
                 a.wakeAt = -1;
+                // A cab waiting for its first fare waits IN A BAY near where it
+                // stands -- idle cabs were the heap left at the corners on load.
+                if (isTaxi(who) && !a.moving && a.car >= 0 &&
+                    a.car < static_cast<int>(vehicles_.size()) && a.restNode >= 0 &&
+                    a.restNode < nav_->nodeCount()) {
+                    releaseBays(a);
+                    const int bay = claimBayNear(
+                        nav_->nodes[static_cast<std::size_t>(a.restNode)], who, kParkSearch);
+                    if (bay >= 0) {
+                        const ParkingBay& b = bays_[static_cast<std::size_t>(bay)];
+                        a.parkedBay = bay;
+                        a.pos = b.pos;
+                        a.heading = b.heading;
+                        a.restNode = nav_->links[static_cast<std::size_t>(b.link)].to;
+                        vehicles_[static_cast<std::size_t>(a.car)].pos = a.pos;
+                        vehicles_[static_cast<std::size_t>(a.car)].heading = a.heading;
+                        parkedGrid_.place(a.car, a.pos);
+                        grid_.place(who, a.pos);
+                    }
+                }
                 return;
             }
         }
@@ -1118,10 +1145,29 @@ void CitySim::placeFromSchedule(int idx) {
             a.pos = idlePose(node, a.mode, a.brain);
             if (!nav_->outLinks[node].empty())
                 a.heading = nav_->direction(nav_->outLinks[node][0]);
+            releaseBays(a);
+            a.tripGoal = node;
+            bool offStreet = false;
+            if (a.mode == Agent::Mode::Driver && parksInBays(a)) {
+                // In a MARKED BAY near home or work -- the one allocator every
+                // parked car goes through -- or, with none free, off-street.
+                const int bay = claimBayNear(nav_->nodes[static_cast<std::size_t>(node)],
+                                             indexOf(a), kParkSearch);
+                if (bay >= 0) {
+                    const ParkingBay& b = bays_[static_cast<std::size_t>(bay)];
+                    a.parkedBay = bay;
+                    a.pos = b.pos;
+                    a.heading = b.heading;
+                    a.restNode = nav_->links[static_cast<std::size_t>(b.link)].to;
+                } else if (!bays_.empty()) {
+                    offStreet = true;   // a parking city with none free near
+                }
+            }
             if (a.mode == Agent::Mode::Driver && a.car >= 0 &&
                 a.car < static_cast<int>(vehicles_.size())) {
                 vehicles_[a.car].pos = a.pos;
                 vehicles_[a.car].heading = a.heading;
+                vehicles_[a.car].offStreet = offStreet;
                 parkedGrid_.place(a.car, a.pos);
             }
         } else {
@@ -1131,6 +1177,7 @@ void CitySim::placeFromSchedule(int idx) {
             // a seeded agent and a simulated one move by identical rules.
             const int from = s.where == Snapshot::Where::ToWork ? a.home : a.work;
             const int to = s.where == Snapshot::Where::ToWork ? a.work : a.home;
+            releaseBays(a);   // under way: not pulling out of a bay it was seeded in
             a.restNode = from;
             startTrip(a, from, to, /*fromRest=*/true);
             if (a.moving && s.elapsedSeconds > 0) vAdvance(a, s.elapsedSeconds);
@@ -1236,6 +1283,7 @@ void CitySim::remountOwnedCar(Agent& a) {
 }
 
 bool CitySim::startWanderTrip(Agent& a, int from, bool fromRest) {
+    a.tripGoal = -1;   // a wander has no destination door
     const int n = nav_ ? nav_->nodeCount() : 0;
     if (n <= 1 || from < 0 || from >= n) return false;
     remountOwnedCar(a);
@@ -1704,6 +1752,8 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
         ++made;
     }
 
+    // How many buses already stand at each stop node: the next queues behind.
+    std::unordered_map<int, int> seatedAt;
     // START ON THE ROUTE, SPREAD ROUND IT. Each bus used to begin wherever its
     // driver happened to be -- often a kilometre from its own loop -- and bus
     // k of a route was aimed at stop k, so a route's six buses were bunched
@@ -1720,8 +1770,8 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
         const int m = static_cast<int>(fleet.size());
         for (int k = 0; k < m && n > 0; ++k) {
             const int at = static_cast<int>((static_cast<long long>(k) * n) / m);
-            seatBusAt(fleet[static_cast<std::size_t>(k)],
-                      route.stops[static_cast<std::size_t>(at)].node);
+            const int stopNode = route.stops[static_cast<std::size_t>(at)].node;
+            seatBusAt(fleet[static_cast<std::size_t>(k)], stopNode, seatedAt[stopNode]++);
             busStop_[static_cast<std::size_t>(fleet[static_cast<std::size_t>(k)])] =
                 (at + 1) % n;
         }
@@ -1729,11 +1779,63 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
     (void)stopsPerRoute;   // the network already has them; logging lives in city_render
 }
 
+// PARKING (Glenn, 2026-09-18: "They park at the corner in a pile, but they
+// should be using the parallel parking spaces... they need to park in spaces
+// and not in a heap on the corner"). Measured on metro at load: 4646 marked
+// bays and 1259 drivers, yet 2 cars in bays and 857 of 1257 parked cars within
+// 3 m of another -- every car was put 2-12 m from its home NODE, and an
+// arrival only looked for a bay on the street it came in on, within 30 m of
+// the corner. The spaces existed; nothing chose them.
+int CitySim::claimBayNear(Vec2 target, int self, Real maxDist) {
+    int best = -1;
+    Real bestD2 = maxDist * maxDist;
+    for (std::size_t i = 0; i < bays_.size(); ++i) {
+        if (bays_[i].occupant != -1) continue;
+        const Vec2 d = bays_[i].pos - target;
+        const Real d2 = d.x * d.x + d.y * d.y;
+        if (d2 < bestD2) { bestD2 = d2; best = static_cast<int>(i); }
+    }
+    if (best >= 0) bays_[static_cast<std::size_t>(best)].occupant = self;
+    return best;
+}
+
+std::vector<int> CitySim::nearestFreeBays(Vec2 target, Real maxDist, int k) const {
+    std::vector<std::pair<Real, int>> near;
+    const Real r2 = maxDist * maxDist;
+    for (std::size_t i = 0; i < bays_.size(); ++i) {
+        if (bays_[i].occupant != -1) continue;
+        const Vec2 d = bays_[i].pos - target;
+        const Real d2 = d.x * d.x + d.y * d.y;
+        if (d2 < r2) near.push_back({d2, static_cast<int>(i)});
+    }
+    const std::size_t keep = std::min(near.size(), static_cast<std::size_t>(std::max(k, 0)));
+    std::partial_sort(near.begin(), near.begin() + static_cast<std::ptrdiff_t>(keep), near.end());
+    std::vector<int> out;
+    for (std::size_t i = 0; i < keep; ++i) out.push_back(near[i].second);
+    return out;
+}
+
+void CitySim::releaseBays(Agent& a) {
+    const int self = indexOf(a);
+    for (int* b : {&a.parkedBay, &a.targetBay}) {
+        if (*b >= 0 && *b < static_cast<int>(bays_.size()) &&
+            bays_[static_cast<std::size_t>(*b)].occupant == self)
+            bays_[static_cast<std::size_t>(*b)].occupant = -1;
+        *b = -1;
+    }
+}
+
+bool CitySim::parksInBays(const Agent& a) const {
+    if (a.archetype != Agent::Mode::Driver || wander_) return false;
+    const int self = indexOf(a);
+    return !isBus(self) && !isTaxi(self);
+}
+
 // A bus standing at a stop, engine running: in its own vehicle, at rest on
 // the node, with no trip -- so the goal table's Drive launches it toward its
 // next stop on the next tick. The same fields placeFromSchedule resets for an
 // agent seated at rest, plus the mount, because a bus is never on foot.
-void CitySim::seatBusAt(int idx, int node) {
+void CitySim::seatBusAt(int idx, int node, int queued) {
     if (!nav_ || idx < 0 || idx >= static_cast<int>(agents_.size())) return;
     if (node < 0 || node >= nav_->nodeCount()) return;
     Agent& a = agents_[static_cast<std::size_t>(idx)];
@@ -1748,6 +1850,10 @@ void CitySim::seatBusAt(int idx, int node) {
     a.pos = idlePose(node, Agent::Mode::Driver, a.brain);
     if (!nav_->outLinks[static_cast<std::size_t>(node)].empty())
         a.heading = nav_->direction(nav_->outLinks[static_cast<std::size_t>(node)][0]);
+    // Routes share hub stops: a second bus at the same stop stands a bus
+    // length further back instead of on the first one (two buses at a hub
+    // were seated on the identical point).
+    if (queued > 0) a.pos = a.pos - a.heading * (Real(14) * queued);
     if (a.car >= 0 && a.car < static_cast<int>(vehicles_.size())) {
         vehicles_[static_cast<std::size_t>(a.car)].pos = a.pos;
         vehicles_[static_cast<std::size_t>(a.car)].heading = a.heading;
@@ -1828,6 +1934,32 @@ void CitySim::setWander(bool on) {
 // car spawned two bodies inside each other, which the crash rule then locked.
 bool CitySim::launchClear(const Agent& a, int node) const {
     if (!nav_ || node < 0 || node >= nav_->nodeCount()) return true;
+    // LEAVING A BAY: the car pulls out mid-street, into the kerb lane at its
+    // bay's station -- not at the node. Wait for a GAP there: no moving car on
+    // this street coming up from behind within 30 m, nor just ahead. Checking
+    // only the node let cars pull out in front of passing traffic; the
+    // follower crash-froze and the queue behind it stalled (metro: mean speed
+    // 5.6 -> 4.1 m/s after 3 minutes once cars parked in bays).
+    if (a.parkedBay >= 0 && a.parkedBay < static_cast<int>(bays_.size())) {
+        const ParkingBay& bay = bays_[static_cast<std::size_t>(a.parkedBay)];
+        if (nav_->links[static_cast<std::size_t>(bay.link)].to == node) {
+            grid_.query(bay.pos, 40.0, queryScratch_);
+            for (int bi : queryScratch_) {
+                const Agent& b = agents_[static_cast<std::size_t>(bi)];
+                if (&b == &a || b.mode != Agent::Mode::Driver) continue;
+                if (b.far() || !b.moving || b.released) continue;
+                if (b.leg < static_cast<int>(b.route.links.size()) &&
+                    b.route.links[static_cast<std::size_t>(b.leg)] == bay.link) {
+                    const Real rel = b.distOnLeg - bay.station;
+                    if (rel > -30.0 && rel < 8.0) return false;
+                    continue;
+                }
+                const Vec2 d = b.pos - bay.pos;
+                if (d.x * d.x + d.y * d.y < 8.0 * 8.0) return false;
+            }
+            return true;
+        }
+    }
     const Vec2 p = nav_->nodes[node];
     // The radius must cover every place the launch could put the body: the lane
     // start at the node PLUS the junction-origin box skip (jr + 2 m down the
@@ -1859,9 +1991,75 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
         pulledFrom = vehicles_[static_cast<std::size_t>(a.car)].pos;
         pulledHeading = vehicles_[static_cast<std::size_t>(a.car)].heading;
     }
+    // Leaving a BAY: the trip starts from where the car stands on its street,
+    // not from the node past it (see the prepend below).
+    const int leavingBay =
+        (fromRest && a.parkedBay >= 0 && a.parkedBay < static_cast<int>(bays_.size()) &&
+         nav_->links[static_cast<std::size_t>(bays_[static_cast<std::size_t>(a.parkedBay)].link)].to == origin)
+            ? a.parkedBay : -1;
     remountOwnedCar(a);
-    a.route = engine::findRoute(*nav_, origin, goal,
-                                a.mode == Agent::Mode::Pedestrian);
+    if (a.car >= 0 && a.car < static_cast<int>(vehicles_.size()))
+        vehicles_[static_cast<std::size_t>(a.car)].offStreet = false;   // out of the garage
+    // A bay reserved for a previous plan is not this trip's.
+    if (a.targetBay >= 0) {
+        if (a.targetBay < static_cast<int>(bays_.size()) &&
+            bays_[static_cast<std::size_t>(a.targetBay)].occupant == indexOf(a))
+            bays_[static_cast<std::size_t>(a.targetBay)].occupant = -1;
+        a.targetBay = -1;
+    }
+    a.tripGoal = goal;
+    // DRIVE TO A SPACE NEAR THE DESTINATION: reserve the nearest free bay to
+    // it and end the route AT that bay (its street, stopping at its station).
+    // The nearest few free bays, tried in order: a bay whose approach would
+    // U-TURN onto its own street (arriving along the far carriageway, then
+    // coming back) is skipped for the next -- usually the one across the
+    // road. Taking the nearest regardless put a U-turn at the end of 67 of 144
+    // routes in metro, and U-turning cars stalled the streets behind them.
+    int bay = -1;
+    if (a.mode == Agent::Mode::Driver && parksInBays(a) && goal >= 0 &&
+        goal < nav_->nodeCount() && goal != origin) {
+        for (int cand : nearestFreeBays(nav_->nodes[static_cast<std::size_t>(goal)],
+                                        kParkSearch, 8)) {
+            const int bl = bays_[static_cast<std::size_t>(cand)].link;
+            const engine::NavLink& BL = nav_->links[static_cast<std::size_t>(bl)];
+            engine::Route r;
+            if (BL.from != origin) {
+                const int twin = (leavingBay >= 0 &&
+                                  static_cast<std::size_t>(bays_[static_cast<std::size_t>(leavingBay)].link) < twinOf_.size())
+                                     ? twinOf_[static_cast<std::size_t>(bays_[static_cast<std::size_t>(leavingBay)].link)]
+                                     : -1;
+                if (twin >= 0) departScale_[static_cast<std::size_t>(twin)] = 50.0;
+                r = engine::findRoute(*nav_, origin, BL.from, false,
+                                      twin >= 0 ? &departScale_ : nullptr);
+                if (twin >= 0) departScale_[static_cast<std::size_t>(twin)] = 1.0;
+                if (!r.valid()) continue;
+                const engine::NavLink& last =
+                    nav_->links[static_cast<std::size_t>(r.links.back())];
+                if (last.from == BL.to && last.to == BL.from) continue;   // a U-turn
+            }
+            r.links.push_back(bl);
+            a.route = r;
+            a.targetBay = cand;
+            bays_[static_cast<std::size_t>(cand)].occupant = indexOf(a);
+            bay = cand;
+            break;
+        }
+    }
+    if (bay < 0) {
+        // Leaving a bay the car faces along its street; turning straight back
+        // down the other carriageway at the corner is a U-turn in traffic (67
+        // of 144 metro routes did it). Price that twin so the route goes round
+        // the block instead, unless nothing else gets there.
+        const int twin = (leavingBay >= 0 && a.mode == Agent::Mode::Driver &&
+                          static_cast<std::size_t>(bays_[static_cast<std::size_t>(leavingBay)].link) < twinOf_.size())
+                             ? twinOf_[static_cast<std::size_t>(bays_[static_cast<std::size_t>(leavingBay)].link)]
+                             : -1;
+        if (twin >= 0) departScale_[static_cast<std::size_t>(twin)] = 50.0;
+        a.route = engine::findRoute(*nav_, origin, goal,
+                                    a.mode == Agent::Mode::Pedestrian,
+                                    twin >= 0 ? &departScale_ : nullptr);
+        if (twin >= 0) departScale_[static_cast<std::size_t>(twin)] = 1.0;
+    }
     a.leg = 0;
     a.distOnLeg = 0;
     a.speed = 0;
@@ -1871,7 +2069,16 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
         // trip; the goal layer's NoRoute row decides where its day falls back to.
         a.moving = false;
         a.elevation = 0;
-        a.pos = idlePose(origin, a.mode, a.brain);
+        // A car in a BAY stays in it: moving it to the verge left the bay
+        // claimed by a car 80 m away (and put it back on the corner heap).
+        if (a.parkedBay >= 0 && a.parkedBay < static_cast<int>(bays_.size()))
+            a.pos = bays_[static_cast<std::size_t>(a.parkedBay)].pos;
+        else
+            a.pos = idlePose(origin, a.mode, a.brain);
+        if (a.targetBay >= 0 && a.targetBay < static_cast<int>(bays_.size()) &&
+            bays_[static_cast<std::size_t>(a.targetBay)].occupant == indexOf(a))
+            bays_[static_cast<std::size_t>(a.targetBay)].occupant = -1;
+        a.targetBay = -1;
         return;
     }
     int lanes = nav_->links[a.route.links.front()].lanes;
@@ -1882,8 +2089,15 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
     a.laneTimer = 4.0 + (a.home % 11);
     ++a.trips;   // a new route: the pursuit bridge rebuilds its path off this
     a.moving = true;
+    int leaveStation = -1;
+    Real leaveAt = 0;
     if (a.parkedBay >= 0 && a.parkedBay < static_cast<int>(bays_.size())) {
-        bays_[a.parkedBay].occupant = -1;   // pulling out frees the bay
+        if (a.parkedBay == leavingBay) {
+            leaveStation = bays_[static_cast<std::size_t>(a.parkedBay)].link;
+            leaveAt = bays_[static_cast<std::size_t>(a.parkedBay)].station;
+        }
+        if (bays_[a.parkedBay].occupant == indexOf(a))
+            bays_[a.parkedBay].occupant = -1;   // pulling out frees the bay
         a.parkedBay = -1;
     }
     a.crashTimer = 0;    // a fresh trip carries no wreck state: without this an
@@ -1892,7 +2106,15 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
     // A REST departure whose origin is a junction starts a few metres down the
     // first link, past the box — materializing a parked car among crossing
     // traffic spawned collisions the crash rule then locked in place.
-    if (fromRest && a.mode == Agent::Mode::Driver && nav_->isJunction(origin)) {
+    if (leaveStation >= 0 && a.mode == Agent::Mode::Driver) {
+        // Out of the bay: the route begins on the bay's own street, at the
+        // bay's station, so pulling out is a sideways step into the lane.
+        a.route.links.insert(a.route.links.begin(), leaveStation);
+        a.distOnLeg = leaveAt;
+        const int lanes0 = std::max(1, nav_->links[static_cast<std::size_t>(leaveStation)].lanes);
+        a.lane = lanes0 - 1;   // the kerb lane, beside the bay
+        a.laneF = a.lane;
+    } else if (fromRest && a.mode == Agent::Mode::Driver && nav_->isJunction(origin)) {
         Real L0 = nav_->links[a.route.links.front()].length;
         a.distOnLeg = std::min(junctionRadius(origin) + 2.0, L0 * 0.4);
     }
@@ -2735,6 +2957,11 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             shortBy = std::min(junctionRadius(nav_->links[li].to) + kBusStopPastBox,
                                L * 0.6);
         if (L - a.distOnLeg < shortBy) a.leg = legCount;
+        // Driving to a reserved BAY: the trip ends AT the bay's station.
+        if (a.targetBay >= 0 && a.targetBay < static_cast<int>(bays_.size()) &&
+            bays_[static_cast<std::size_t>(a.targetBay)].link == li &&
+            a.distOnLeg >= bays_[static_cast<std::size_t>(a.targetBay)].station - 0.3)
+            a.leg = legCount;
     }
 
     if (a.leg >= legCount) {
@@ -2899,7 +3126,15 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         // the same range the old verge snap used. Fallback: the grass verge.
         const int myIdx = static_cast<int>(&a - agents_.data());
         int bay = -1;
-        if (lastLink < static_cast<int>(baysOnLink_.size())) {
+        // The bay this trip was driven to (the route ended at it).
+        if (a.targetBay >= 0 && a.targetBay < static_cast<int>(bays_.size()) &&
+            bays_[static_cast<std::size_t>(a.targetBay)].link == lastLink)
+            bay = a.targetBay;
+        else if (a.targetBay >= 0 && a.targetBay < static_cast<int>(bays_.size()) &&
+                 bays_[static_cast<std::size_t>(a.targetBay)].occupant == myIdx)
+            bays_[static_cast<std::size_t>(a.targetBay)].occupant = -1;
+        a.targetBay = -1;
+        if (bay < 0 && lastLink < static_cast<int>(baysOnLink_.size())) {
             const Real L = nav_->links[lastLink].length;
             for (int bi : baysOnLink_[lastLink]) {
                 if (bays_[bi].occupant != -1) continue;
@@ -2908,11 +3143,20 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
                 break;
             }
         }
+        bool offStreet = false;
         if (bay >= 0) {
             bays_[bay].occupant = myIdx;
             a.parkedBay = bay;
             a.pos = bays_[bay].pos;
             a.heading = bays_[bay].heading;
+        } else if (parksInBays(a) && !bays_.empty()) {
+            // NO FREE SPACE NEAR: off-street (a garage, a driveway) rather
+            // than onto the verge at the corner, where every such car used to
+            // pile up. It is not drawn and is not a body until it leaves. A
+            // city with no kerbside parking at all keeps the verge below.
+            offStreet = true;
+            a.pos = idlePose(nav_->links[lastLink].to, a.mode, a.brain);
+            a.heading = nav_->direction(lastLink);
         } else {
             // Verge fallback: a few metres short of the node, per-agent
             // setback so arrivals at one destination don't stack. Pushed
@@ -2940,6 +3184,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             v.pos = a.pos;          // the pose it keeps until someone drives it
             v.heading = a.heading;
             v.driver = -1;          // nobody is in it
+            v.offStreet = offStreet;
             // Index it where it stands: from here it is a body in the world
             // that nothing can find through its owner.
             parkedGrid_.place(a.car, v.pos);
@@ -2957,7 +3202,9 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
     // Applies to a driver too now that it finishes its trip on foot: it leaves
     // the car at the kerb and covers the last few metres to the door.
     {
-        const int node = nav_->links[lastLink].to;
+        // The node the trip was FOR: a car parked in a bay a street away still
+        // delivers its driver to the right door.
+        const int node = a.tripGoal >= 0 ? a.tripGoal : nav_->links[lastLink].to;
         const bool atHome = a.homePlace != kNoPlace && node == a.home;
         const bool atWork =
             node == a.work &&
@@ -3113,6 +3360,12 @@ void CitySim::computeCarWedge() {
             const Agent& b = agents_[j];
             if (b.mode != Agent::Mode::Driver) continue;
             if (b.far()) continue;   // far tier: no body
+            // A car standing in a marked BAY is out of the travel lanes by
+            // construction (bays narrow the lanes). Its centre is ~2.1 m off
+            // the kerb lane's heading line -- just inside the 2.15 m corridor
+            // -- and every passing car braked behind it as a stopped leader
+            // (metro: mean speed 5.6 -> 4.3 m/s once cars rested in bays).
+            if (!b.moving && b.parkedBay >= 0) continue;
             // Different decks never conflict (viaduct vs the street below).
             if (std::fabs(b.elevation - a.elevation) > 2.5) continue;
             const Real dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
@@ -3796,6 +4049,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             if (vi < 0 || vi >= static_cast<int>(vehicles_.size())) continue;
             const SimVehicle& v = vehicles_[vi];
             if (v.driver >= 0) continue;   // driven: handled by the scan above
+            if (v.offStreet) continue;     // in a garage: not in the street
             clearOfCar(v, a.elevation);    // parked at grade with the walker
         }
     }

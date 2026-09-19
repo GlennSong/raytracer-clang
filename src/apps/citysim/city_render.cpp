@@ -1345,6 +1345,29 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
             const Real yw = std::atan2(a.heading.x, a.heading.y) + a.pullYawOffset * w;
             drawHeading = Vec2(std::sin(yw), std::cos(yw));
         }
+        // PULLING IN: over the last metres before its reserved bay the car
+        // eases from its lane into the space, so the parked pose it takes on
+        // arrival is where it already is (drawn only; the sim drives the lane).
+        if (a.moving && a.targetBay >= 0 &&
+            a.targetBay < static_cast<int>(sim_.parkingBays().size()) &&
+            a.leg < static_cast<int>(a.route.links.size())) {
+            const auto& bay = sim_.parkingBays()[static_cast<std::size_t>(a.targetBay)];
+            const int li = a.route.links[static_cast<std::size_t>(a.leg)];
+            if (bay.link == li) {
+                constexpr Real kPullIn = 14.0;
+                const Real remaining = bay.station - a.distOnLeg;
+                if (remaining < kPullIn) {
+                    const Vec2 dir = nav_.direction(li);
+                    const Real rem = std::max(remaining, Real(0));
+                    const Vec2 laneAtBay = a.pos + dir * rem;
+                    const Vec2 off = bay.pos - laneAtBay;
+                    const Real t = std::clamp(1 - rem / kPullIn, Real(0), Real(1));
+                    const Real w = t * t * (3 - 2 * t);
+                    x += off.x * w;
+                    z += off.y * w;
+                }
+            }
+        }
     }
     Real bodyH = car ? params_.carSize.y : params_.pedSize.y;
     if (car && a.vehicle >= 0 && a.vehicle < static_cast<int>(sim_.vehicles().size()))
@@ -1643,6 +1666,11 @@ void CityRenderSystem::syncGroups(World& world) {
         if (a.mode == Agent::Mode::Driver) {
             if (cars.empty()) continue;   // cars owned externally (ADR-0062 bridge)
             if (a.released) continue;     // commandeered: its PHYSICAL car replaced it
+            // Resting in a car that is parked OFF-STREET: nothing to draw.
+            if (!a.moving && a.vehicle >= 0 &&
+                a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
+                sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].offStreet)
+                continue;
             // Each driver keeps the same variant (keyed off its car index), so a
             // given car is always the same model + colour.
             // A BUS draws as the bus slot, not as whatever body its vehicle
@@ -1710,11 +1738,16 @@ void CityRenderSystem::syncGroups(World& world) {
             if (sv.driver >= 0) continue;      // someone is driving it: the agent
                                                // bake above already drew it
             if (suppressed[vi]) continue;      // the player is driving it
+            if (sv.offStreet) continue;        // in a garage: not on the street
             if (haveCentre && rad > 0) {
                 const Real dx = sv.pos.x - centre.x, dz = sv.pos.y - centre.y;
                 if (dx * dx + dz * dz > rad2) continue;
             }
-            const int v = static_cast<int>(vi) % drawVariantCount();
+            // The SAME slot the car is drawn with when driven (vi % count gave
+            // a parked car a different model and colour from the one it
+            // arrived in -- and could make an ordinary car a parked bus).
+            int v = sim_.ambientSlotFor(static_cast<int>(vi));
+            if (v >= drawVariantCount()) v %= drawVariantCount();
             if (!cars[v]) continue;
             // The ground sample is the per-frame cost the old one-shot bake
             // existed to avoid — but only a few dozen cars survive the cull, and
