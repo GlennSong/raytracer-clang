@@ -105,6 +105,13 @@ public:
     // -1 when the route is empty.
     int nearestStop(int r, engine::Vec2 p) const;
 
+    // COVERAGE: the share of walkable street, by length, that lies within
+    // `maxWalk` (straight line, the same measure planTrip uses) of SOME stop on
+    // SOME route. A walker outside it can never be offered a bus, whatever the
+    // routes look like on a map -- "I walked around for a while and couldn't
+    // find one" (Glenn, 2026-09-18) is this number being low.
+    engine::Real coverage(const engine::NavGraph& nav, engine::Real maxWalk) const;
+
     // The best route to get from `from` to `to`: the one whose nearest stop to
     // each is closest overall, scored on the walking a rider would still have to
     // do at both ends. Returns an invalid trip when no route helps — which is

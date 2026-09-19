@@ -1201,3 +1201,47 @@ TEST_CASE(metro_traffic_drives_on_the_road_deck) {
     CHECK(std::fabs(checked ? sum / checked : 0.0) < 0.03);   // no systematic term
 }
 
+
+// THE BUSES SERVE THE CITY (Glenn, 2026-09-18: "The bus routes do seem sparse.
+// I couldn't find one and I walked around for a while"). Built exactly as the
+// game builds it -- the loader's terrain-gated street network, the level's own
+// busRoutes / busStops / busMaxWalk, the sim's own seed -- because a headless
+// metro grown without terrain is a different, rounder city, and measuring that
+// one once already produced a wrong answer.
+TEST_CASE(metro_bus_network_serves_the_city) {
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const bool loaded =
+        LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+                          view, assets, /*editorMode=*/false);
+    CHECK(loaded);
+    if (!loaded) return;
+    citysim::CityRenderSystem city;
+    CHECK(city.build(world, &assets, nullptr));
+
+    const citysim::BusNetwork& net = city.sim().buses();
+    CHECK(net.routeCount() >= 3);
+    int stops = 0;
+    for (int r = 0; r < net.routeCount(); ++r) {
+        const citysim::BusRoute& route = net.route(r);
+        Real loop = 0;
+        for (std::size_t k = 1; k < route.path.size(); ++k) {
+            const Real dx = route.path[k].x - route.path[k - 1].x;
+            const Real dy = route.path[k].y - route.path[k - 1].y;
+            loop += std::sqrt(dx * dx + dy * dy);
+        }
+        stops += static_cast<int>(route.stops.size());
+        std::printf("    [buses] route %d: %zu stops over a %.0f m loop (%.0f m apart)\n",
+                    r, route.stops.size(), loop, loop / std::max<std::size_t>(1, route.stops.size()));
+    }
+    const Real walk = 220.0;   // metro_v2_test.json busMaxWalk
+    const Real served = net.coverage(city.nav(), walk);
+    const Real block = net.coverage(city.nav(), 120.0);
+    std::printf("    [buses] %d stops; %.0f%% of walkable street within %.0f m of one, "
+                "%.0f%% within 120 m\n", stops, 100.0 * served, walk, 100.0 * block);
+    // A walker outside the served area is never offered a bus at all.
+    CHECK(served >= 0.90);
+}

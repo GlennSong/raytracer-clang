@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <functional>
 #include <string>
@@ -69,8 +70,14 @@ struct TestRegistrar {
 
 inline int runAllTests() {
     int passedCases = 0;
-    const int totalCases = static_cast<int>(testRegistry().size());
+    int totalCases = 0;
+    // RT_TEST_FILTER=<substring> runs only the cases whose name contains it.
+    // The whole suite takes minutes; iterating on one measurement should not.
+    const char* filter = std::getenv("RT_TEST_FILTER");
     for (auto& testCase : testRegistry()) {
+        if (filter && *filter && testCase.name.find(filter) == std::string::npos)
+            continue;
+        ++totalCases;
         currentCaseFailedChecks() = 0;
         std::printf("[ RUN  ] %s\n", testCase.name.c_str());
         std::fflush(stdout);  // flush before the case so a crash names the culprit

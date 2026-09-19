@@ -3,6 +3,8 @@
 #include "test_framework.h"
 
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 using namespace engine;
 using namespace citysim;
@@ -103,6 +105,10 @@ TEST_CASE(bus_trip_is_planned_only_when_the_bus_actually_helps) {
     // Across the city: a bus should be worth taking.
     const BusTrip far = net.planTrip(Vec2(-400, -400), Vec2(400, 400), 250.0);
     CHECK(far.valid());
+    // Stop here on failure: an invalid trip is route -1, and indexing it is
+    // undefined -- it read as "4 checks failed" on one run and killed the
+    // whole suite with a segfault on the next three.
+    if (!far.valid()) return;
     CHECK(far.fromStop != far.toStop);
     const BusRoute& r = net.route(far.route);
     // Both ends are within the walk bound the caller allowed.
@@ -214,3 +220,4 @@ TEST_CASE(buses_drive_their_loop_and_carry_riders) {
     std::printf("    [bus] board attempts %ld, refused %ld\n",
                 sim.busBoardAttempts(), sim.busBoardRefused());
 }
+

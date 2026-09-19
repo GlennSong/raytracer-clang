@@ -443,9 +443,22 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             world, *assets, sim_.buses(), nav_,
             [this](Real x, Real z) { return groundAt(x, z); }, &busStopProps_,
             &stopPositions);
+        // The denominator is the network's own stop count: spacing, not the
+        // level's busStops, decides how many a route gets.
+        int networkStops = 0;
+        for (int r = 0; r < sim_.buses().routeCount(); ++r)
+            networkStops += static_cast<int>(sim_.buses().route(r).stops.size());
         LOG_INFO << "[citysim] bus stops furnished: " << stops << " of "
-                 << (params_.busRoutes * params_.busStops)
-                 << " (a stop with no kerbed street gets none)";
+                 << networkStops << " (a stop with no kerbed street gets none)";
+        // HOW MUCH OF THE CITY THE BUSES SERVE, in the walk the level allows.
+        // A walker outside it is never offered a bus, so this is the ceiling
+        // on ridership that no amount of route drawing shows.
+        LOG_INFO << "[citysim] bus coverage: "
+                 << static_cast<int>(100.0 * sim_.buses().coverage(nav_, params_.busMaxWalk) + 0.5)
+                 << "% of walkable street within " << params_.busMaxWalk
+                 << " m of a stop ("
+                 << static_cast<int>(100.0 * sim_.buses().coverage(nav_, 120.0) + 0.5)
+                 << "% within 120 m, about a block)";
         for (std::size_t k = 0; k < stopPositions.size() && k < 4; ++k)
             LOG_INFO << "[citysim]   stop furniture " << k << " at ("
                      << stopPositions[k].x << ", " << stopPositions[k].y << ", "

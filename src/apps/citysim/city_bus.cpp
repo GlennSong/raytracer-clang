@@ -69,7 +69,12 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
     // --- 2. one LOOP per route, over a rotating subset of the hubs -------
     // Rotating means consecutive routes SHARE hubs, which is the whole point:
     // a shared stop is a transfer.
-    const int perRoute = std::min<int>(4, static_cast<int>(hubNodes.size()));
+    // FEWER hubs per ring than there are hubs, whenever there is more than one
+    // route. A ring over EVERY hub is the same cycle whichever hub it starts
+    // from, so rotating it changes the start and nothing else: with two routes
+    // and four hubs, both routes were one loop with the stops renumbered.
+    const int H0 = static_cast<int>(hubNodes.size());
+    const int perRoute = std::min<int>(4, routeCount > 1 ? H0 - 1 : H0);
     for (int r = 0; r < routeCount; ++r) {
         // CONSECUTIVE hubs, rotated by route. The first cut strided by two
         // ((r + k*2) % H), which wrapped the fourth hub back onto the first --
@@ -109,7 +114,7 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
                           nav.nodes[static_cast<std::size_t>(pathNodes[k])]);
         Real spacing = total / std::max(1, stopsPerRoute);
         if (spacing < 180.0) spacing = 180.0;      // not every kerb
-        if (spacing > 500.0) spacing = 500.0;      // but never a hike between stops
+        if (spacing > 300.0) spacing = 300.0;      // but never a hike between stops
 
         BusRoute route;
         route.path.reserve(pathNodes.size());
@@ -153,6 +158,37 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
     }
 }
 
+
+Real BusNetwork::coverage(const engine::NavGraph& nav, Real maxWalk) const {
+    // Sample every walkable link every few metres and weigh by length, so a
+    // long avenue counts for more than a stub. Links are directed, so each
+    // street is counted twice -- which cancels in the ratio.
+    std::vector<Vec2> stops;
+    for (const BusRoute& r : routes_)
+        for (const BusStop& s : r.stops) stops.push_back(s.pos);
+    const Real r2 = maxWalk * maxWalk;
+    constexpr Real kStep = 10.0;
+    Real total = 0, covered = 0;
+    for (const engine::NavLink& L : nav.links) {
+        if (!L.walkable) continue;
+        const Vec2 a = nav.nodes[static_cast<std::size_t>(L.from)];
+        const Vec2 b = nav.nodes[static_cast<std::size_t>(L.to)];
+        const Real len = dist(a, b);
+        if (len <= 0) continue;
+        const int n = std::max(1, static_cast<int>(len / kStep));
+        const Real w = len / n;
+        for (int k = 0; k < n; ++k) {
+            const Real t = (k + 0.5) / n;
+            const Vec2 p(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+            total += w;
+            for (const Vec2& s : stops) {
+                const Real dx = p.x - s.x, dy = p.y - s.y;
+                if (dx * dx + dy * dy <= r2) { covered += w; break; }
+            }
+        }
+    }
+    return total > 0 ? covered / total : 0;
+}
 
 int BusNetwork::nearestStop(int r, Vec2 p) const {
     if (r < 0 || r >= routeCount()) return -1;
