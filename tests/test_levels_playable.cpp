@@ -1464,3 +1464,113 @@ TEST_CASE(metro_cars_park_in_spaces_not_heaps) {
         CHECK(c->atJunction == 0);                    // nothing in the box
     }
 }
+
+// CARS WAIT BEFORE THE CROSSWALK AND DO NOT DRIVE THROUGH EACH OTHER (Glenn,
+// 2026-09-19: "they should not stop in the middle of the intersection. That
+// creates an instant traffic jam. They should stop before the cross walk and
+// then wait for the light ... The cars should not go through each other").
+//
+// Metro's streets are chains of ~4 m links, and every junction rule looked at
+// the current link only: the stop line was clamped to 40% of a 4 m link (inside
+// the box), the car one link back did not see the junction at all, car-
+// following saw two links (~8 m) ahead, and far-tier cars were promoted into
+// the live sim at cruise on top of stopped queues. Measured by this test on
+// the code before the fix: 3732 car-seconds stuck in a box and 5535
+// overlapping pairs; after it, ~100 and ~80-270 (the busy ring where far cars
+// join the live sim still makes the odd pile). The gates sit well between.
+//
+// Sampled once a second after a 20 s warm-up, over the live (non-far) cars:
+//  - STUCK IN A BOX: a car stopped > 5 s with its centre inside a junction's
+//    drawn mouth (the widest arm's half-width + the 3.5 m sidewalk band --
+//    where the road mesher trims the streets and the zebras start).
+//  - OVERLAPS: two car bodies interpenetrating by more than a 10 cm skin.
+TEST_CASE(metro_junctions_stay_clear) {
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const bool loaded =
+        LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+                          view, assets, /*editorMode=*/false);
+    CHECK(loaded);
+    if (!loaded) return;
+    citysim::CityRenderSystem city;
+    CHECK(city.build(world, &assets, nullptr));
+    const auto& nav = city.nav();
+    std::vector<int> junctions;
+    std::vector<Real> mouth;
+    for (int n = 0; n < nav.nodeCount(); ++n) {
+        if (!nav.isJunction(n)) continue;
+        Real r = 0;
+        for (int li : nav.outLinks[static_cast<std::size_t>(n)])
+            r = std::max(r, nav.links[static_cast<std::size_t>(li)].width * 0.5);
+        junctions.push_back(n);
+        mouth.push_back(r + 3.5);
+    }
+    // Rectangle overlap by separating axes, bodies shrunk by a 10 cm skin.
+    auto overlap = [](Vec2 pa, Vec2 ha, Real la, Vec2 pb, Vec2 hb, Real lb) {
+        const Vec2 axes[4] = {ha, Vec2(-ha.y, ha.x), hb, Vec2(-hb.y, hb.x)};
+        const Vec2 d = pb - pa;
+        for (const Vec2& ax : axes) {
+            auto reach = [&](Vec2 h, Real l) {
+                return std::fabs(h.x * ax.x + h.y * ax.y) * (l * 0.5 - 0.1) +
+                       std::fabs(-h.y * ax.x + h.x * ax.y) * 0.8;
+            };
+            if (std::fabs(d.x * ax.x + d.y * ax.y) > reach(ha, la) + reach(hb, lb)) return false;
+        }
+        return true;
+    };
+    auto bodyLength = [&](const citysim::Agent& a) {
+        return a.vehicle >= 0 ? city.sim().vehicles()[static_cast<std::size_t>(a.vehicle)].length
+                              : Real(4.2);
+    };
+    std::vector<Real> stoppedFor(city.sim().agents().size(), 0);
+    long samples = 0, carsSeen = 0, inBox = 0, stuckBox = 0, overlaps = 0;
+    for (int i = 0; i < 1800; ++i) {
+        city.step(world, 0.1);
+        const auto& ag = city.sim().agents();
+        for (std::size_t k = 0; k < ag.size(); ++k) {
+            if (ag[k].mode == citysim::Agent::Mode::Driver && ag[k].moving && ag[k].speed < 0.3)
+                stoppedFor[k] += 0.1;
+            else
+                stoppedFor[k] = 0;
+        }
+        if (i < 200 || i % 10) continue;
+        ++samples;
+        std::vector<std::size_t> cars;
+        for (std::size_t k = 0; k < ag.size(); ++k)
+            if (ag[k].mode == citysim::Agent::Mode::Driver && ag[k].moving && !ag[k].far())
+                cars.push_back(k);
+        carsSeen += static_cast<long>(cars.size());
+        for (std::size_t k : cars) {
+            if (ag[k].speed >= 0.3) continue;
+            for (std::size_t j = 0; j < junctions.size(); ++j) {
+                const Vec2 d = ag[k].pos - nav.nodes[static_cast<std::size_t>(junctions[j])];
+                const Real r = mouth[j];
+                if (d.x * d.x + d.y * d.y < r * r) {
+                    ++inBox;
+                    if (stoppedFor[k] > 5.0) ++stuckBox;
+                    break;
+                }
+            }
+        }
+        for (std::size_t x = 0; x < cars.size(); ++x)
+            for (std::size_t y = x + 1; y < cars.size(); ++y) {
+                const auto& A = ag[cars[x]];
+                const auto& B = ag[cars[y]];
+                const Vec2 d = A.pos - B.pos;
+                if (d.x * d.x + d.y * d.y > 16.0 * 16.0) continue;
+                if (std::fabs(A.elevation - B.elevation) > 2.5) continue;
+                if (overlap(A.pos, A.heading, bodyLength(A), B.pos, B.heading, bodyLength(B)))
+                    ++overlaps;
+            }
+    }
+    std::printf("    [junction] %ld samples, %.0f live cars each: %ld stopped in a box "
+                "(%ld for > 5 s), %ld overlapping pairs\n",
+                samples, samples ? static_cast<double>(carsSeen) / samples : 0.0, inBox,
+                stuckBox, overlaps);
+    CHECK(samples > 0 && carsSeen / samples > 40);   // the city is actually driving
+    CHECK(stuckBox < 300);
+    CHECK(overlaps < 800);
+}

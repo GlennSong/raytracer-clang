@@ -25,9 +25,6 @@ constexpr int kBusSeats = 24;
 constexpr Real kBusDwellBase = 10.0;
 constexpr Real kBusDwellPerRider = 3.0;
 constexpr Real kBusDwellMax = 40.0;
-// How far past the junction box a bus stands at its stop: half a bus length
-// and a little, so its rear is clear of the box too.
-constexpr Real kBusStopPastBox = 7.0;
 // How far from its destination a driver will park and walk: a few blocks.
 constexpr Real kParkSearch = 250.0;
 constexpr Real kWalkSpeed = 1.4;
@@ -497,12 +494,43 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         // permanent gridlock (device: "cars all stuck at one intersection"). Cap
         // the radius at 60% of the shortest incident link so adjacent boxes can
         // never overlap; open grids (80 m links) are untouched.
-        Real shortestLink = 1e9;
+        //
+        // "Neighbouring" means the next JUNCTION, not the next node: metro's
+        // streets are chains of ~4 m links (the polyline's own vertices), and
+        // capping by the adjacent link shrank every box there to ~2.5 m -- on
+        // a 17 m arterial the stop line landed inside the crossing, which is
+        // where cars were seen waiting (Glenn, 2026-09-19). So walk each arm
+        // through its plain (degree-2) nodes to the next junction.
+        // (A plain node keeps its adjacent-link cap: it has no box.)
+        Real shortestArm = 1e9;
         for (int li : graph.outLinks[v]) {
             r = std::max(r, graph.links[li].width * 0.5);
-            shortestLink = std::min(shortestLink, graph.links[li].length);
+            if (!graph.isJunction(v)) {
+                shortestArm = std::min(shortestArm, graph.links[li].length);
+                continue;
+            }
+            Real arm = 0;
+            int cur = li;
+            for (int hop = 0; hop < 64; ++hop) {
+                const engine::NavLink& L = graph.links[cur];
+                arm += L.length;
+                if (arm >= 200.0 || graph.isJunction(L.to)) break;
+                int next = -1;
+                for (int ol : graph.outLinks[L.to])
+                    if (graph.links[ol].to != L.from) { next = ol; break; }
+                if (next < 0) break;   // dead end
+                cur = next;
+            }
+            shortestArm = std::min(shortestArm, arm);
         }
-        if (shortestLink < 1e9) r = std::min(r, std::max(Real(1.5), shortestLink * 0.6));
+        // A street INTERSECTION's box reaches the drawn mouth (half-width +
+        // sidewalk): the stop line and the zebra are measured from there.
+        if (graph.isJunction(v) && junctionPad_ > 0) {
+            const engine::JunctionKind k = graph.kindOf(v);
+            if (k == engine::JunctionKind::Intersection || k == engine::JunctionKind::Auto)
+                r += junctionPad_;
+        }
+        if (shortestArm < 1e9) r = std::min(r, std::max(Real(1.5), shortestArm * 0.6));
         nodeBoxRadius_[v] = r;
         if (graph.isJunction(v)) junctions_.push_back({graph.nodes[v], r});
     }
@@ -1834,10 +1862,28 @@ Real CitySim::busDistanceToStop(const Agent& a) const {
                a.distOnLeg;
     for (int k = a.leg + 1; k < legs && rem < 200.0; ++k)
         rem += nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(k)])].length;
-    const engine::NavLink& last =
-        nav_->links[static_cast<std::size_t>(a.route.links.back())];
-    const Real shortBy = std::min(junctionRadius(last.to) + kBusStopPastBox, last.length * 0.6);
-    return rem - shortBy;
+    return rem - busStandBack(a);
+}
+
+// Where a bus stands at its stop: behind the crosswalk on the street it came
+// in on, exactly like a car held at the stop line -- the box, the zebra band, a
+// margin, and half its own length. In ROUTE metres, because on metro's ~4 m
+// links "short of the node on the last link" was 2.4 m: the bus dwelt up to
+// 40 s inside the junction (Glenn, 2026-09-19: "That creates an instant
+// traffic jam"). Never behind the previous junction on its route.
+Real CitySim::busStandBack(const Agent& a) const {
+    if (a.route.links.empty()) return 0;
+    const int legs = static_cast<int>(a.route.links.size());
+    const int node = nav_->links[static_cast<std::size_t>(a.route.links.back())].to;
+    Real approach = 0;
+    for (int k = legs - 1; k >= 0 && approach < 80.0; --k) {
+        const engine::NavLink& L = nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(k)])];
+        approach += L.length;
+        if (nav_->isJunction(L.from)) break;
+    }
+    const Real want = junctionRadius(node) + kCrosswalkFarEdge + kStopLineMargin +
+                      0.5 * vehicleLength(indexOf(a));
+    return std::min(want, approach * 0.6);
 }
 
 void CitySim::releaseBays(Agent& a) {
@@ -2142,8 +2188,23 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
         a.lane = lanes0 - 1;   // the kerb lane, beside the bay
         a.laneF = a.lane;
     } else if (fromRest && a.mode == Agent::Mode::Driver && nav_->isJunction(origin)) {
-        Real L0 = nav_->links[a.route.links.front()].length;
-        a.distOnLeg = std::min(junctionRadius(origin) + 2.0, L0 * 0.4);
+        // Start clear of the origin's box -- the WHOLE body past it. Walked
+        // across legs: on metro's ~4 m links the old single-link clamp (40%
+        // of the first link) started a car 1.6 m from the node, inside the
+        // crossing it was leaving (every bus began its day parked in one).
+        Real skip = junctionRadius(origin) + 0.5 * vehicleLength(indexOf(a)) + 0.5;
+        const int legN = static_cast<int>(a.route.links.size());
+        Real total = 0;
+        for (int k = 0; k < legN; ++k) total += nav_->links[a.route.links[k]].length;
+        skip = std::min(skip, total * 0.4);   // a short trip: most of it still ahead
+        a.leg = 0;
+        Real Lk = nav_->links[a.route.links.front()].length;
+        while (skip > Lk && a.leg + 1 < legN) {
+            skip -= Lk;
+            ++a.leg;
+            Lk = nav_->links[a.route.links[a.leg]].length;
+        }
+        a.distOnLeg = std::min(skip, Lk);
     }
     refreshPose(a);
     a.heading = nav_->direction(a.route.links.front());   // start pointed down leg 0
@@ -2297,17 +2358,28 @@ void CitySim::refreshPose(Agent& a) {
         return p0 * (v * v) + c * (2.0 * u * v) + p2 * (u * u);
     };
     const int legCount = static_cast<int>(a.route.links.size());
+    // The path's own direction where the pose lands: the corner curve's
+    // tangent inside a blend, else the link's.
+    Vec2 tangent = nav_->direction(li);
+    auto cornerAt = [&](int la, int lb, Real B, Real u) {
+        const Vec2 ahead = corner(la, lb, B, std::min(Real(1), u + 0.02));
+        const Vec2 behind = corner(la, lb, B, std::max(Real(0), u - 0.02));
+        const Vec2 t = ahead - behind;
+        const Real tl = t.length();
+        if (tl > 1e-6) tangent = t * (1.0 / tl);
+        return corner(la, lb, B, u);
+    };
     if (a.leg + 1 < legCount) {              // exit half: approaching the node
         int nli = a.route.links[a.leg + 1];
         Real B = blendSpan(li, nli);
         if (B > 1e-6 && L - s < B)
-            a.pos = corner(li, nli, B, (B - (L - s)) / (2.0 * B));
+            a.pos = cornerAt(li, nli, B, (B - (L - s)) / (2.0 * B));
     }
     if (a.leg > 0) {                         // entry half: just past the node
         int pli = a.route.links[a.leg - 1];
         Real B = blendSpan(pli, li);
         if (B > 1e-6 && s < B)
-            a.pos = corner(pli, li, B, 0.5 + s / (2.0 * B));
+            a.pos = cornerAt(pli, li, B, 0.5 + s / (2.0 * B));
     } else if (wander_ && a.arrivedLink >= 0 &&
                nav_->links[a.arrivedLink].to == nav_->links[li].from) {
         // A CHAINED wander trip (arrival rolled straight into the next route):
@@ -2316,7 +2388,87 @@ void CitySim::refreshPose(Agent& a) {
         // line, stacking simultaneous chainers on the node point.
         Real B = blendSpan(a.arrivedLink, li);
         if (B > 1e-6 && s < B)
-            a.pos = corner(a.arrivedLink, li, B, 0.5 + s / (2.0 * B));
+            a.pos = cornerAt(a.arrivedLink, li, B, 0.5 + s / (2.0 * B));
+    }
+    if (a.mode != Agent::Mode::Driver) return;
+    a.pathDir = tangent;
+
+    // JUNCTION TURNS ACROSS SHORT LINKS. The blend above caps its span at 45%
+    // of each link, which on metro's ~4 m links turned a 90-degree junction
+    // turn into a ~2 m kink: the position whipped round the corner and the
+    // rate-limited nose trailed it, so a turning car CRABBED sideways (measured:
+    // 4.5% of moving cars more than 40 degrees off their direction of travel),
+    // its body swung across the next lane, and a car that stopped mid-turn
+    // stayed stuck pointing at the kerb -- a stopped car cannot yaw. So a
+    // TURN at a junction traces one curve over the full span, reaching back and
+    // forward across as many links as it needs, and the path tangent there is
+    // what steer() turns the nose toward.
+    {
+        const int legN = legCount;
+        const Real kReach = 14.0;
+        int kin = -1;
+        Real d = 0;   // route metres from the car ahead to the node (< 0: past it)
+        {
+            Real ahead = L - s;
+            for (int k = a.leg; k + 1 < legN && ahead <= kReach; ++k) {
+                if (k > a.leg) ahead += nav_->links[a.route.links[k]].length;
+                if (ahead > kReach) break;
+                if (nav_->isJunction(nav_->links[a.route.links[k]].to)) { kin = k; d = ahead; break; }
+            }
+            Real behind = s;
+            for (int k = a.leg; k > 0 && behind <= kReach; --k) {
+                if (k < a.leg) behind += nav_->links[a.route.links[k]].length;
+                if (behind > kReach) break;
+                if (nav_->isJunction(nav_->links[a.route.links[k]].from)) {
+                    if (kin < 0 || behind < d) { kin = k - 1; d = -behind; }
+                    break;
+                }
+            }
+        }
+        if (kin >= 0) {
+            const int lin = a.route.links[kin], lout = a.route.links[kin + 1];
+            const Vec2 din = nav_->direction(lin), dout = nav_->direction(lout);
+            const Real cosT = din.x * dout.x + din.y * dout.y;
+            if (cosT < 0.94 && cosT > -0.5) {   // a real turn, not a reversal
+                // Span: the per-link rule's ~10 m, bounded by the street run on
+                // either side (to the neighbouring junction or the route's end)
+                // so two corners' curves never overlap.
+                Real B = std::max(Real(10.0), std::max(nav_->links[lin].width,
+                                                       nav_->links[lout].width) * 0.5 + 1.0);
+                Real runIn = 0, runOut = 0;
+                for (int k = kin; k >= 0 && runIn < 2.5 * B; --k) {
+                    runIn += nav_->links[a.route.links[k]].length;
+                    if (nav_->isJunction(nav_->links[a.route.links[k]].from)) break;
+                }
+                for (int k = kin + 1; k < legN && runOut < 2.5 * B; ++k) {
+                    runOut += nav_->links[a.route.links[k]].length;
+                    if (nav_->isJunction(nav_->links[a.route.links[k]].to)) break;
+                }
+                B = std::min(B, std::min(runIn, runOut) * 0.45);
+                if (B > 0.5 && std::fabs(d) < B) {
+                    auto back = [&](Real m) {   // the guide line m before the node
+                        int k = kin;
+                        Real Lk = nav_->links[a.route.links[k]].length;
+                        while (m > Lk && k > 0) { m -= Lk; --k; Lk = nav_->links[a.route.links[k]].length; }
+                        return sample(a.route.links[k], Lk > 1e-9 ? (Lk - m) / Lk : 0.0);
+                    };
+                    auto fwd = [&](Real m) {    // ...and m after it
+                        int k = kin + 1;
+                        Real Lk = nav_->links[a.route.links[k]].length;
+                        while (m > Lk && k + 1 < legN) { m -= Lk; ++k; Lk = nav_->links[a.route.links[k]].length; }
+                        return sample(a.route.links[k], Lk > 1e-9 ? m / Lk : 1.0);
+                    };
+                    const Vec2 p0 = back(B), p2 = fwd(B);
+                    const Vec2 c = (back(0) + fwd(0)) * 0.5;
+                    const Real u = (B - d) / (2.0 * B);
+                    const Real v = 1.0 - u;
+                    a.pos = p0 * (v * v) + c * (2.0 * u * v) + p2 * (u * u);
+                    const Vec2 tan = (c - p0) * (2.0 * v) + (p2 - c) * (2.0 * u);
+                    const Real tl = tan.length();
+                    if (tl > 1e-6) a.pathDir = tan * (1.0 / tl);
+                }
+            }
+        }
     }
 }
 
@@ -2328,6 +2480,7 @@ void CitySim::steer(Agent& a, Real dt) {
     if (a.leg >= static_cast<int>(a.route.links.size())) return;
     Vec2 desired = nav_->direction(a.route.links[a.leg]);
     if (a.mode != Agent::Mode::Driver) { a.heading = desired; return; }
+    if (a.pathDir.x != 0 || a.pathDir.y != 0) desired = a.pathDir;   // the arc's tangent
     // Yaw rate is proportional to speed: at v the tightest arc is kCarMinTurnRadius,
     // so the car may turn at most v / radius rad/s. A stopped car cannot change
     // heading at all (like a real car) — it holds until it rolls, which also means
@@ -2337,49 +2490,107 @@ void CitySim::steer(Agent& a, Real dt) {
     a.heading = rotateToward(a.heading, desired, rate * dt);
 }
 
+// THE NEXT JUNCTION IS NOT ALWAYS AT THE END OF THIS LINK. The junction rules
+// used to look only at the current link's end node -- fine when a link runs
+// junction to junction, but metro's streets are chains of ~4 m links (the
+// road polyline's own vertices). A 4 m link cannot hold a 9 m stop setback, so
+// the line was clamped to 40% of the link: 2.4 m short of the node, INSIDE the
+// box. And the car one link back saw no junction at all (Glenn, 2026-09-19:
+// "they should not stop in the middle of the intersection ... They should
+// stop before the cross walk"). So the rules now look ahead along the route to
+// the next real junction and measure the line in route metres.
+CitySim::JunctionAhead CitySim::junctionAhead(const Agent& a, Real horizon) const {
+    JunctionAhead j;
+    const int legN = static_cast<int>(a.route.links.size());
+    if (a.leg >= legN) return j;
+    Real ahead = nav_->links[a.route.links[a.leg]].length - a.distOnLeg;
+    for (int k = a.leg; k < legN; ++k) {
+        const engine::NavLink& lk = nav_->links[a.route.links[k]];
+        if (k > a.leg) ahead += lk.length;
+        if (nav_->isJunction(lk.to)) {
+            j.leg = k;
+            j.node = lk.to;
+            j.toNode = ahead;
+            // The approach runs back to the previous junction (or the route's
+            // start); a line never sits behind it. 60 m is past any setback's
+            // reach (the clamp below stops growing at setback / 0.6).
+            Real app = lk.length;
+            for (int b = k; b > 0 && app < 60.0 &&
+                            !nav_->isJunction(nav_->links[a.route.links[b]].from);
+                 --b)
+                app += nav_->links[a.route.links[b - 1]].length;
+            j.approach = app;
+            return j;
+        }
+        if (ahead >= horizon) break;
+    }
+    return j;
+}
+
+// Where this agent's STOP LINE sits, in metres back from the junction node. A
+// walker holds at the corner; a car holds with its front bumper short of the
+// painted zebra band on its approach: junction box radius (the mouth) + the
+// band + a margin + half its own body. Stopping at the node itself parked a
+// legally-waiting car in the middle of the intersection (device round 3).
+//
+// The ONE effective stop line every junction rule agrees on: the setback short
+// of the node, but never behind the start of the APPROACH — an approach shorter
+// than the setback (junctions a few metres apart) gets a line partway down it,
+// and the smooth brake, the yield scan, and the hard clamp all use THIS.
+// (Gating the rules on the raw setback used to disable box occupancy + turn
+// yield entirely on short approaches — exactly where junctions are densest.)
+Real CitySim::stopLineBack(const Agent& a, const JunctionAhead& ja) const {
+    Real stopSetback = 0.5;
+    if (a.mode == Agent::Mode::Driver) {
+        Real halfLen = 2.1;   // sedan fallback
+        if (a.vehicle >= 0 && a.vehicle < static_cast<int>(vehicles_.size()))
+            halfLen = vehicles_[a.vehicle].length * 0.5;
+        stopSetback = junctionRadius(ja.node) + kCrosswalkFarEdge + kStopLineMargin +
+                      halfLen;
+    }
+    return std::min(stopSetback, std::max(Real(0.5), ja.approach * 0.6));
+}
+
 // The junction rules of advance(): the stop-line geometry, the signal brake, and
-// the box-occupancy / turn-yield scan. Returns the speed target after those caps
-// plus the effective stop line the hard clamp in advance() holds at. Pure query:
-// no rng draws, no agent mutation.
+// the box-occupancy / turn-yield / exit-room scan. Returns the speed target
+// after those caps plus the stop line the hard clamp in advance() holds at.
+// Pure query: no rng draws, no agent mutation.
 CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
                                                 Real target) const {
     JunctionGate gate;
     bool car = a.mode == Agent::Mode::Driver;
-    // Where this agent's signal STOP LINE sits, measured back from the node. A
-    // walker holds at the corner; a car holds with its front bumper short of the
-    // painted zebra band on its approach: junction box radius (the mouth) + the
-    // band + a margin + half its own body. Stopping at the node itself parked a
-    // legally-waiting car in the middle of the intersection (device round 3).
-    Real stopSetback = 0.5;
-    int toNode = nav_->links[li].to;
-    if (car && nav_->isJunction(toNode)) {
-        Real halfLen = 2.1;   // sedan fallback
-        if (a.vehicle >= 0 && a.vehicle < static_cast<int>(vehicles_.size()))
-            halfLen = vehicles_[a.vehicle].length * 0.5;
-        stopSetback = junctionRadius(toNode) + kCrosswalkFarEdge + kStopLineMargin +
-                      halfLen;
+    // Cars look ahead along the route (see junctionAhead); walkers keep the
+    // current link -- their kerb rules are written per link. The reach covers
+    // the longest setback (a bus at a wide box, ~25 m) plus the signal
+    // approach.
+    const JunctionAhead ja = junctionAhead(a, car ? kSignalApproach + 34.0 : 0.0);
+    if (ja.leg < 0) {
+        gate.cap = target;
+        return gate;
     }
-    // The ONE effective stop line every junction rule agrees on: the setback
-    // short of the node, but never behind the link start — a link shorter than
-    // the setback gets a line partway down it, and the smooth brake, the yield
-    // scan, and the hard clamp all use THIS. (Gating the rules on the raw
-    // setback used to disable box occupancy + turn yield entirely on short
-    // links — exactly where junctions are densest.)
-    Real stopLinePos = 0;
-    if (nav_->isJunction(toNode)) {
-        Real L0 = nav_->links[li].length;
-        stopLinePos = std::max(L0 - stopSetback, std::min(L0 - 0.5, L0 * 0.4));
-    }
+    li = a.route.links[static_cast<std::size_t>(ja.leg)];   // the APPROACH link
+    const int jLeg = ja.leg;
+    const int toNode = ja.node;
+    JunctionAhead jw = ja;
+    if (!car) jw.approach = nav_->links[li].length;   // walkers: their link
+    const Real lineBack = stopLineBack(a, jw);
     bool yieldAtLine = false;   // a TURNING car holding for oncoming traffic
-    if (nav_->isJunction(toNode)) {
-        Real distToEnd = nav_->links[li].length - a.distOnLeg;
-        if (car && distToEnd < kJunctionApproach) target = std::min(target, kJunctionSpeed);
+    {
+        Real distToEnd = ja.toNode;
+        // Box pace, eased into: kJunctionSpeed by kJunctionApproach metres out,
+        // braking comfortably (half the stop decel) before that. The cap used
+        // to switch on AT 9 m -- a car at 13 m/s dropped to 4 in one tick.
+        if (car)
+            target = std::min(target,
+                              std::sqrt(kJunctionSpeed * kJunctionSpeed +
+                                        kCarDecel * std::max(Real(0), distToEnd - kJunctionApproach)));
         // Obey the stoplight. Cars go on THEIR approach's green; pedestrians
         // cross ONLY in the WALK window (roads-v2.1 R3) — the conflict-group
         // phases mean a "green approach" no longer guarantees the crossing
         // street is red, so the old ride-the-perpendicular-green rule would
         // walk peds into moving turns. WALK is everything-red by construction.
-        Real distToLine = stopLinePos - a.distOnLeg;
+        Real distToLine = ja.toNode - lineBack;
+        gate.distToLine = distToLine;
         // Only cars still BEFORE the line brake for the signal — a car already
         // past it is COMMITTED and must clear the box (the all-red clearance
         // exists for exactly that). Capping a committed car to zero pinned it
@@ -2416,8 +2627,8 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
             a.leg < static_cast<int>(a.route.links.size())) {
             Vec2 d0 = nav_->direction(li);
             bool turning = false;
-            if (a.leg + 1 < static_cast<int>(a.route.links.size())) {
-                Vec2 d1 = nav_->direction(a.route.links[a.leg + 1]);
+            if (jLeg + 1 < static_cast<int>(a.route.links.size())) {
+                Vec2 d1 = nav_->direction(a.route.links[jLeg + 1]);
                 turning = d0.x * d1.x + d0.y * d1.y < 0.85;   // a real bend
             } else if (wander_) {
                 // Final leg in wander mode: arrival CHAINS straight through this
@@ -2465,10 +2676,11 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
                 // opposing turners still don't sweep simultaneously.
                 if (gridlocked) continue;
                 if (&b < &a && b.leg + 1 < static_cast<int>(b.route.links.size())) {
-                    int bli = b.route.links[b.leg];
-                    if (nav_->links[bli].to == toNode) {
-                        Vec2 bd0 = nav_->direction(bli);
-                        Vec2 bd1 = nav_->direction(b.route.links[b.leg + 1]);
+                    const JunctionAhead jb = junctionAhead(b, range + 4.0);
+                    if (jb.node == toNode &&
+                        jb.leg + 1 < static_cast<int>(b.route.links.size())) {
+                        Vec2 bd0 = nav_->direction(b.route.links[jb.leg]);
+                        Vec2 bd1 = nav_->direction(b.route.links[jb.leg + 1]);
                         if (bd0.x * bd1.x + bd0.y * bd1.y < 0.85) {
                             yieldAtLine = true;
                             break;
@@ -2476,13 +2688,37 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
                     }
                 }
             }
+            // 3: EXIT ROOM -- don't block the box (Glenn, 2026-09-19: "they
+            //    should not stop in the middle of the intersection. That creates
+            //    an instant traffic jam"). Rule 1 only holds for CROSSING
+            //    occupants, so a car stopped in the box heading the same way --
+            //    its exit full -- held nobody, and the cars behind followed it
+            //    in: measured on metro, ~3 cars at any moment stopped in a box,
+            //    and pile-ups there rolled back onto one another by the contact
+            //    rule. Enter only if the WHOLE car fits past the box behind the
+            //    car ahead in its lane (or that car is moving away). The lane
+            //    chain's leader is exactly that car, wherever it stands: in the
+            //    box short of the node, or queued on the street beyond it.
+            //    No gridlock override: waiting at the line is always right.
+            if (!yieldAtLine && jLeg + 1 < static_cast<int>(a.route.links.size())) {
+                const std::size_t self = static_cast<std::size_t>(indexOf(a));
+                if (self < gaps_.size() && gaps_[self] < 1e8 &&
+                    leaderSpeeds_[self] < 3.0) {
+                    const Real clearAt = ja.toNode + jr +
+                                         0.5 * vehicleLength(static_cast<int>(self)) +
+                                         minGaps_[self];
+                    if (gaps_[self] < clearAt) yieldAtLine = true;
+                }
+            }
             if (yieldAtLine)
                 target = std::min(target, approachStop(distToLine, kCarDecel, target));
         }
     }
     gate.cap = target;
-    gate.stopLinePos = stopLinePos;
     gate.yieldAtLine = yieldAtLine;
+    gate.node = toNode;
+    gate.approachLink = li;
+    gate.distToNode = ja.toNode;
     return gate;
 }
 
@@ -2505,7 +2741,10 @@ Real CitySim::senseAhead(Agent& a) {
     Real seenAhead = std::numeric_limits<Real>::infinity();   // dist to a person ahead
     engine::VisionCone cone;
     cone.origin = a.pos;
-    cone.forward = a.heading;
+    // Look where the car is GOING. The nose trails the path through a turn
+    // (rate-limited yaw), so a cone on the nose missed a walker off the
+    // front corner the car was turning toward.
+    cone.forward = (a.pathDir.x != 0 || a.pathDir.y != 0) ? a.pathDir : a.heading;
     cone.range = 18.0;
     cone.halfAngleRad = 0.45;    // ~26 deg: a crosser in the lane ahead,
                                  // not someone standing on the far sidewalk
@@ -2605,7 +2844,13 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
                     // room check: nobody in the target lane alongside.
                     // Grid candidates (P4.1): 13 m along + the widest
                     // carriageway's lane offsets fit well inside 26 m.
+                    //
+                    // By POSITION, not by link: "same link, distOnLeg within
+                    // 13 m" saw nobody on metro's ~4 m links but the car's
+                    // own link, and cars merged into bodies one link ahead.
                     bool room = true;
+                    const Real spacing = laneSpacingFor(li);
+                    const Real shift = (Real(want) - a.laneF) * spacing;   // + = rightward
                     grid_.query(a.pos, 26.0, queryScratch_);
                     for (int bi : queryScratch_) {
                         const Agent& b = agents_[bi];
@@ -2613,9 +2858,13 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
                             b.far() ||
                             !b.moving || b.leg >= (int)b.route.links.size())
                             continue;
-                        if (b.route.links[b.leg] != li) continue;
-                        if (std::fabs(b.laneF - Real(want)) > 0.6) continue;
-                        if (std::fabs(b.distOnLeg - a.distOnLeg) < 13.0) {
+                        if (b.heading.x * a.heading.x + b.heading.y * a.heading.y < 0.7)
+                            continue;   // not travelling my way
+                        const Real dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
+                        const Real along = a.heading.x * dx + a.heading.y * dy;
+                        const Real right = a.heading.y * dx - a.heading.x * dy;
+                        if (std::fabs(right - shift) > spacing * 0.6) continue;
+                        if (std::fabs(along) < 13.0) {
                             room = false;
                             break;
                         }
@@ -2648,15 +2897,23 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             // class (< 3 m/s) — the ped kerb rule's "fast car" boundary.
             return std::max(Real(2.8), Real(8.5) * std::max(Real(0), cosB));
         };
-        if (a.leg + 1 < static_cast<int>(a.route.links.size())) {
-            const engine::Vec2 dn = nav_->direction(a.route.links[a.leg + 1]);
-            const Real cosB = dl.x * dn.x + dl.y * dn.y;
-            if (cosB < 0.94) {   // > ~20 degrees: a real bend
-                const Real rem =
-                    std::max(Real(0), nav_->links[li].length - a.distOnLeg);
-                const Real vC = bendCap(cosB);
-                target = std::min(
-                    target, std::sqrt(vC * vC + 2 * kCarDecel * 0.6 * rem));
+        // Every real bend within braking reach, not just the one at the end
+        // of this link: on ~4 m links that one was always 0-4 m away, so the
+        // cap bound in a single tick.
+        {
+            Real rem = std::max(Real(0), nav_->links[li].length - a.distOnLeg);
+            engine::Vec2 dPrev = dl;
+            for (int k = a.leg + 1;
+                 k < static_cast<int>(a.route.links.size()) && rem < 45.0; ++k) {
+                const engine::Vec2 dn = nav_->direction(a.route.links[k]);
+                const Real cosB = dPrev.x * dn.x + dPrev.y * dn.y;
+                if (cosB < 0.94) {   // > ~20 degrees: a real bend
+                    const Real vC = bendCap(cosB);
+                    target = std::min(
+                        target, std::sqrt(vC * vC + 2 * kCarDecel * 0.6 * rem));
+                }
+                rem += nav_->links[a.route.links[k]].length;
+                dPrev = dn;
             }
         }
         const Real cosH = a.heading.x * dl.x + a.heading.y * dl.y;
@@ -2743,12 +3000,10 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     // ring inches apart the way real drivers unpick a blocked box. If bodies
     // brush during the creep, the fender-bender freeze-and-recover arbitrates.
     if (car) {
-        const int toNode = nav_->links[li].to;
-        const bool redAhead = signals_.hasSignal(li) &&
-                              signals_.stateForLink(li) != SignalState::Green;
-        const bool nearJunc =
-            nav_->isJunction(toNode) &&
-            nav_->links[li].length - a.distOnLeg < kSignalApproach + 12.0;
+        const int jli = gate.approachLink;
+        const bool redAhead = jli >= 0 && signals_.hasSignal(jli) &&
+                              signals_.stateForLink(jli) != SignalState::Green;
+        const bool nearJunc = gate.node >= 0 && gate.distToNode < kSignalApproach + 12.0;
         // The gridlock clock also runs for a WEDGE-PINNED car ANYWHERE on the
         // road — a wreck pile at a link ENTRANCE (post-crash bodies
         // overlapped, wedge gap ~0) held five cars at v=0 forever, because
@@ -2773,19 +3028,31 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     // never to exactly zero, so without this the leftover motion would carry it
     // THROUGH the light. Clamp advance so it cannot pass the line while its
     // approach is not green; it waits here until the signal clears.
-    {
-        int toNode = nav_->links[li].to;
-        bool redAhead = signals_.hasSignal(li) &&
-                        (car ? signals_.stateForLink(li) != SignalState::Green
-                             : !(signals_.stateForLink(li) == SignalState::Green ||
+    //
+    // The line is in ROUTE metres and may lie beyond this link: then the motion
+    // below runs the normal leg-chaining loop, capped at the line (lineRoom).
+    Real lineRoom = std::numeric_limits<Real>::infinity();
+    if (gate.node >= 0) {
+        const int toNode = gate.node;
+        const int jli = gate.approachLink;
+        bool redAhead = signals_.hasSignal(jli) &&
+                        (car ? signals_.stateForLink(jli) != SignalState::Green
+                             : !(signals_.stateForLink(jli) == SignalState::Green ||
                                  signals_.walkRemainingAt(toNode) >= 6.5));
-        if (nav_->isJunction(toNode) && (redAhead || gate.yieldAtLine)) {
+        // A car that the cap has just brought to the line can overshoot it by a
+        // hair in one tick; it is still waiting AT the line, not committed.
+        const Real kLineSlack = car ? 0.3 : 0.0;
+        if ((redAhead || gate.yieldAtLine) && gate.distToLine >= -kLineSlack - 1e-6 &&
+            car && gate.distToLine > nav_->links[li].length - a.distOnLeg) {
+            lineRoom = std::max(Real(0), gate.distToLine);
+            a.state = redAhead ? Agent::State::Waiting : Agent::State::Yielding;
+        } else if (redAhead || gate.yieldAtLine) {
             // The hold applies only BEFORE the line. A car already past it is
             // committed to the box and drives on — clamping it there trapped it
             // mid-intersection whenever a green expired under it, and everything
             // arriving cross-phase piled into it.
-            if (a.distOnLeg <= gate.stopLinePos + 1e-6) {
-                Real room = std::max(Real(0), gate.stopLinePos - a.distOnLeg);
+            if (gate.distToLine >= -kLineSlack - 1e-6) {
+                Real room = std::max(Real(0), gate.distToLine);
                 Real motion = std::min(a.speed * dt, room);
                 if (motion < a.speed * dt) a.speed = 0;   // held at the line
                 a.distOnLeg += motion;
@@ -2855,6 +3122,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     }
 
     Real motion = a.speed * dt;
+    if (motion > lineRoom) { motion = lineRoom; a.speed = 0; }   // held at a line further on
 
     // A pedestrian never walks INTO a car body (roads-v2.1 R3): a car
     // standing across the walkway — queue spillback over a crosswalk, a
@@ -2987,13 +3255,20 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     // hub the buses of three routes arrived on three different streets,
     // stood on the same point inside each other, and never untangled.
     const bool busHere = isBus(indexOf(a));
-    if ((!wander_ || busHere) && car && a.leg == legCount - 1) {
+    if (busHere && car && a.leg < legCount) {
+        // Route metres to the stop node; + a little on the stand-back so IDM
+        // settles ON the point, not past it.
+        Real rem = nav_->links[a.route.links[a.leg]].length - a.distOnLeg;
+        for (int k = a.leg + 1; k < legCount && rem < 200.0; ++k)
+            rem += nav_->links[a.route.links[k]].length;
+        if (rem < busStandBack(a) + 0.6) {
+            a.busStoodLeg = a.leg;
+            a.leg = legCount;
+        }
+    } else if (!wander_ && car && a.leg == legCount - 1) {
         const int li = a.route.links[a.leg];
         Real L = nav_->links[li].length;
         Real shortBy = std::min(Real(3.0), L * 0.5);
-        if (busHere)   // + a little: IDM settles ON the point, not past it
-            shortBy = std::min(junctionRadius(nav_->links[li].to) + kBusStopPastBox,
-                               L * 0.6) + Real(0.6);
         if (L - a.distOnLeg < shortBy) a.leg = legCount;
         // Driving to a reserved BAY: the trip ends AT the bay's station.
         if (a.targetBay >= 0 && a.targetBay < static_cast<int>(bays_.size()) &&
@@ -3044,6 +3319,21 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
                 const int stops = static_cast<int>(buses_.route(r).stops.size());
                 if (si >= 0 && si < stops) {
                     int people = 0;
+                    // Riders step off where the bus STANDS (short of the stop
+                    // node, see busStandBack): the nearer end of its link, if
+                    // walkers can start there.
+                    int setDown = buses_.route(r).stops[static_cast<std::size_t>(si)].node;
+                    if (!a.far() && a.busStoodLeg >= 0 &&
+                        a.busStoodLeg < static_cast<int>(a.route.links.size())) {
+                        const engine::NavLink& SL =
+                            nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.busStoodLeg)])];
+                        const int nearEnd =
+                            (a.pos - nav_->nodes[static_cast<std::size_t>(SL.from)]).lengthSquared() <
+                                    (a.pos - nav_->nodes[static_cast<std::size_t>(SL.to)]).lengthSquared()
+                                ? SL.from : SL.to;
+                        for (int ol : nav_->outLinks[static_cast<std::size_t>(nearEnd)])
+                            if (nav_->links[static_cast<std::size_t>(ol)].walkable) { setDown = nearEnd; break; }
+                    }
                     for (int p : buses_.alightingAt(r, si)) {
                         // Only riders on THIS bus. alightingAt lists everyone on
                         // the route bound for this stop, and a route runs six
@@ -3051,7 +3341,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
                         // riders sitting on the others, hundreds of metres away,
                         // and they jumped to the stop (97 of 152 alightings).
                         if (rides_.driverOf(p) != self) continue;
-                        alightRide(p, buses_.route(r).stops[static_cast<std::size_t>(si)].node);
+                        alightRide(p, setDown);
                         buses_.forget(p);
                         ++people;
                     }
@@ -3117,20 +3407,25 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         a.goal = next;
         a.goalHours = 0;
         Vec2 keepHeading = a.heading;
-        // Where a bus actually stopped: short of the node, on the link it came
-        // in on (see advance). Its next trip starts FROM there, not from the
-        // node, or it would jump the setback forward on pulling away.
-        const bool busStopShort = isBus(indexOf(a)) && !a.far() &&
-            a.distOnLeg < nav_->links[lastLink].length - 0.5;
+        // Where a bus actually stopped: short of the node, possibly a few links
+        // back (see busStandBack). Its next trip starts FROM there, not from
+        // the node, or it would jump the setback forward on pulling away.
+        const int stoodLeg = a.busStoodLeg;
+        a.busStoodLeg = -1;
+        const bool busStopShort = isBus(indexOf(a)) && !a.far() && stoodLeg >= 0 &&
+            stoodLeg < static_cast<int>(a.route.links.size());
+        std::vector<int> stoodLinks;
+        if (busStopShort)
+            stoodLinks.assign(a.route.links.begin() + stoodLeg, a.route.links.end());
         const Real stoodAt = a.distOnLeg;
         const int keepLane = a.lane;
         const Real keepLaneF = a.laneF;
         if (startGoalTrip(a, a.restNode, /*fromRest=*/false)) {
             if (busStopShort && a.moving) {
-                a.route.links.insert(a.route.links.begin(), lastLink);
+                a.route.links.insert(a.route.links.begin(), stoodLinks.begin(), stoodLinks.end());
                 a.leg = 0;
                 a.distOnLeg = stoodAt;
-                const int lanes = std::max(1, nav_->links[lastLink].lanes);
+                const int lanes = std::max(1, nav_->links[stoodLinks.front()].lanes);
                 a.lane = std::min(keepLane, lanes - 1);
                 a.laneF = std::min(keepLaneF, Real(lanes - 1));
                 refreshPose(a);
@@ -3343,7 +3638,12 @@ void CitySim::computeGaps() {
         if (!a.moving) continue;
         int legN = static_cast<int>(a.route.links.size());
         Real ahead = nav_->links[a.route.links[a.leg]].length - a.distOnLeg;  // to end of this link
-        for (int step = 1; step <= 2 && a.leg + step < legN; ++step) {
+        // Chain by DISTANCE, not by link count: metro's streets are ~4 m links,
+        // so "two links" was ~8 m of sight -- a car at 15 m/s met a stopped
+        // queue with a third of its braking distance (measured: the fast
+        // rear-enders that seeded the junction pile-ups). 60 m covers IDM's
+        // comfortable stop from the fastest street class.
+        for (int step = 1; a.leg + step < legN && ahead < 60.0; ++step) {
             int nextLi = a.route.links[a.leg + step];
             auto it = minEntry.find(laneKeyOf(a, nextLi));
             if (it != minEntry.end()) {
@@ -3822,6 +4122,11 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
                             la, a.distOnLeg, la >= 0 ? nav_->links[la].length : 0.0,
                             lb, b.distOnLeg, lb >= 0 ? nav_->links[lb].length : 0.0,
                             a.crashCount, b.crashCount);
+                std::printf("        ids %zu/%zu gaps %.1f/%.1f wedge %.1f/%.1f lane %d/%d laneF %.2f/%.2f leg %d/%d state %d/%d hold %.1f/%.1f\n", i, j,
+                            gaps_[i] > 1e8 ? -1.0 : gaps_[i], gaps_[j] > 1e8 ? -1.0 : gaps_[j],
+                            carAheadGap_[i] > 1e8 ? -1.0 : carAheadGap_[i],
+                            carAheadGap_[j] > 1e8 ? -1.0 : carAheadGap_[j], a.lane, b.lane, a.laneF, b.laneF,
+                            a.leg, b.leg, (int)a.state, (int)b.state, a.holdTimer, b.holdTimer);
             }
             if (a.speed > 2.0 && b.speed > 2.0) ++fastCrashEvents_;
             auto crash = [this](Agent& c) {
@@ -4244,9 +4549,123 @@ void CitySim::tierPass(Real hoursPerSecond) {
         // catch-up left it: the promotion pose IS the lane pose — no teleport,
         // no snap. Render + kinematic proxy pick it up on this step's bake.
         tickV(idx, hoursPerSecond);
+        if (!clearPromotion(idx)) continue;   // no room behind: stays far, retries
         a.tier = Agent::Tier::K;
+        grid_.place(idx, a.pos);
         ++promotions_;
     }
+}
+
+// A far car drives its route BLIND (vAdvance: no sensing, no queues), so the
+// catch-up tick can leave it inside a live queue. Promoted as-is, it arrived at
+// cruise on top of stopped cars: measured on metro, the worst junction heap sat
+// exactly on the 500 m promotion ring -- a car at 15 m/s handed to the live
+// sim 0.9 m behind a stopped one, the contact freeze, and the pile that grew
+// from it. So seat it where a driver would be: behind the last body in its
+// corridor, at that body's pace. Returns false when its route has no room
+// behind it; it then stays far and tries again next pass.
+bool CitySim::clearPromotion(int idx) {
+    Agent& a = agents_[static_cast<std::size_t>(idx)];
+    if (a.mode != Agent::Mode::Driver || !a.moving ||
+        a.leg >= static_cast<int>(a.route.links.size()))
+        return true;
+    const int leg0 = a.leg;
+    const Real dist0 = a.distOnLeg;
+    const Real myLen = vehicleLength(idx);
+    Real pace = a.speed;
+    // The far tier's heading is its link's; the live pose is the lane curve.
+    if (a.pathDir.x != 0 || a.pathDir.y != 0) a.heading = a.pathDir;
+    for (int pass = 0; pass < 10; ++pass) {
+        Real backBy = 0;
+        grid_.query(a.pos, 30.0, queryScratch_);
+        for (int bi : queryScratch_) {
+            if (bi == idx) continue;
+            const Agent& b = agents_[static_cast<std::size_t>(bi)];
+            if (b.mode != Agent::Mode::Driver || b.far()) continue;
+            if (!b.moving && b.parkedBay >= 0) continue;   // out of the lanes
+            if (!b.moving && b.vehicle < 0) continue;
+            if (std::fabs(b.elevation - a.elevation) > 2.5) continue;
+            const Real dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
+            const Real along = a.heading.x * dx + a.heading.y * dy;
+            const Real across = -a.heading.y * dx + a.heading.x * dy;
+            const Real hdot = a.heading.x * b.heading.x + a.heading.y * b.heading.y;
+            const Real bodies = 0.5 * (myLen + vehicleLength(bi));
+            if (std::fabs(across) < 2.15 && along > 0.5) {
+                const Real need = bodies + kCarBumperGap + std::min(a.speed, Real(6.0)) * 0.6;
+                if (along >= need) continue;
+                // Ahead in my lane: stand behind it, at its pace. A body
+                // CROSSING my path that close: not now.
+                if (hdot <= 0.3) { a.leg = leg0; a.distOnLeg = dist0; refreshPose(a); return false; }
+                backBy = std::max(backBy, need - along);
+                pace = std::min(pace, std::max(Real(0), b.speed * hdot));
+                continue;
+            }
+            // Any other body TOUCHING me (behind, beside, crossing a box):
+            // backing up cannot fix that -- wait a pass; the far car moves on.
+            if (dx * dx + dy * dy < bodies * bodies) {
+                // Rectangle overlap, half-width 0.95 (separating axes).
+                const Vec2 ax[4] = {a.heading, Vec2(-a.heading.y, a.heading.x), b.heading,
+                                    Vec2(-b.heading.y, b.heading.x)};
+                bool apart = false;
+                for (const Vec2& n : ax) {
+                    auto reach = [&](Vec2 h, Real len) {
+                        return std::fabs(h.x * n.x + h.y * n.y) * len * 0.5 +
+                               std::fabs(-h.y * n.x + h.x * n.y) * 0.95;
+                    };
+                    if (std::fabs(dx * n.x + dy * n.y) >
+                        reach(a.heading, myLen) + reach(b.heading, vehicleLength(bi))) {
+                        apart = true;
+                        break;
+                    }
+                }
+                if (!apart) { a.leg = leg0; a.distOnLeg = dist0; refreshPose(a); return false; }
+            }
+        }
+        // Handed over INSIDE a junction (past the stop line, short of the
+        // node): the far tier drives through boxes on a modelled dwell, not
+        // the lights. Put it back at the line; the live rules take it from
+        // there.
+        // Past the node but still in the box: it is leaving; wait a pass.
+        if (backBy <= 0) {
+            const JunctionAhead ja = junctionAhead(a, 40.0);
+            if (ja.leg >= 0) {
+                const Real toLine = ja.toNode - stopLineBack(a, ja);
+                if (toLine < 0 && ja.toNode > 0) backBy = -toLine + 0.2;
+            }
+            if (backBy <= 0) {
+                Real behind = a.distOnLeg;
+                for (int k = a.leg; k >= 0 && behind < 30.0; --k) {
+                    const int from = nav_->links[a.route.links[static_cast<std::size_t>(k)]].from;
+                    if (nav_->isJunction(from)) {
+                        if (behind < junctionRadius(from) + 0.5 * myLen) {
+                            a.leg = leg0; a.distOnLeg = dist0; refreshPose(a);
+                            return false;
+                        }
+                        break;
+                    }
+                    if (k > 0) behind += nav_->links[a.route.links[static_cast<std::size_t>(k - 1)]].length;
+                }
+            }
+        }
+        if (backBy <= 0) {
+            a.speed = std::min(a.speed, pace);
+            return true;
+        }
+        pace = 0;   // backed up: it waits there, not rolls on at cruise
+        Real m = backBy;
+        while (m > 0) {
+            if (a.distOnLeg >= m) { a.distOnLeg -= m; break; }
+            m -= a.distOnLeg;
+            if (a.leg == 0) { a.leg = leg0; a.distOnLeg = dist0; refreshPose(a); return false; }
+            --a.leg;
+            a.distOnLeg = nav_->links[a.route.links[static_cast<std::size_t>(a.leg)]].length;
+        }
+        refreshPose(a);
+    }
+    a.leg = leg0;
+    a.distOnLeg = dist0;
+    refreshPose(a);
+    return false;
 }
 
 // One coarse tick: the goal layer at accumulated hours (departures, dwell,

@@ -199,6 +199,14 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
 
         Real since = spacing;   // a stop at the very first node
         Real arc = 0;           // metres along the loop from its first node
+        // Metres since the path last crossed a junction. A bus stands a bus
+        // length or so SHORT of its stop node, so a stop a few metres past a
+        // junction (on streets cut into ~4 m links, most nodes are) parked the
+        // bus inside that junction for its whole dwell. A stop sits AT a
+        // junction (the bus waits behind the crosswalk on its approach) or
+        // well clear past one.
+        constexpr Real kStopPastJunction = 30.0;
+        Real sinceJunction = kStopPastJunction;
         for (std::size_t k = 0; k < pathNodes.size(); ++k) {
             const int nd = pathNodes[k];
             if (k > 0) {
@@ -206,10 +214,14 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
                                        nav.nodes[static_cast<std::size_t>(nd)]);
                 since += step;
                 arc += step;
+                sinceJunction += step;
             }
+            const bool atJunction = nav.isJunction(nd);
+            const bool tooNear = !atJunction && sinceJunction < kStopPastJunction;
+            if (atJunction) sinceJunction = 0;
             const bool isHub =
                 std::find(ring.begin(), ring.end(), nd) != ring.end();
-            if (since < spacing && !isHub) continue;
+            if ((since < spacing || tooNear) && !isHub) continue;
             // ONCE PER CIRCUIT. The loop closes back onto its first hub, so
             // without this the origin appears as both the first stop and the
             // last, and the A* legs can re-cross a node mid-route -- a bus

@@ -187,6 +187,9 @@ struct Agent {
     // freezes it ignores car contact until it has driven clear of the spot.
     Real crashTimer = 0;
     int crashCount = 0;              // consecutive freezes at this wreck
+    // A bus that pulled up short of its stop node (busStandBack): the leg it
+    // stands on, so its next trip starts from there. -1 otherwise.
+    int busStoodLeg = -1;
     engine::Vec2 crashAnchor;        // where the pile-up started
     // Gridlock escape (ADR-0066 device fix): seconds this car has been pinned at
     // a junction hold (yieldAtLine with ~zero speed). Past a few seconds, box
@@ -297,6 +300,10 @@ struct Agent {
     // Cached world pose (XZ + a height for bridges); what a renderer reads.
     engine::Vec2 pos;
     engine::Vec2 heading{1, 0};
+    // A driver's PATH direction at `pos` (refreshPose): the tangent of the
+    // corner curve through a junction turn, else its link's direction. steer()
+    // turns the body toward this, so the nose follows the arc it is driving.
+    engine::Vec2 pathDir{0, 0};
     bool moving = false;
 };
 
@@ -557,6 +564,11 @@ public:
     // above the state it governs; the V tier's own bucket phase then quietly
     // disagreed with it (see docs/piedmont-p8-report.md).
     void setTickPeriod(Real seconds) { tickPeriodSeconds_ = seconds; }
+    // The drawn junction MOUTH sits at the widest arm's half-width PLUS the
+    // sidewalk band (the road mesher trims every street body there and paints
+    // the zebra just past it). Set before build(); 0 keeps the carriageway-only
+    // box (headless sims with no drawn roads).
+    void setJunctionPad(Real metres) { junctionPad_ = metres < 0 ? 0 : metres; }
     Real tickPeriod() const { return tickPeriodSeconds_; }
     // Sim seconds banked since the last tick — what a renderer extrapolates
     // poses by so traffic stays smooth at rates below the frame rate.
@@ -848,18 +860,35 @@ private:
     int claimBayNear(engine::Vec2 target, int self, Real maxDist);
     void releaseBays(Agent& a);          // free both the held and the reserved bay
     Real busDistanceToStop(const Agent& a) const;
+    Real busStandBack(const Agent& a) const;   // route metres short of its stop node
     std::vector<int> nearestFreeBays(engine::Vec2 target, Real maxDist, int k) const;
     bool parksInBays(const Agent& a) const;   // a private car that parks (not a bus/cab/wanderer)
     void advance(Agent& a, Real dt, Real gap, Real minGap);
     // advance()'s junction verdict: the speed target after the signal brake and
-    // the box-occupancy / turn-yield scan, plus the effective stop line (distance
-    // along the current leg) the hard clamp in advance() holds at.
+    // the box-occupancy / turn-yield scan, plus where the stop line is -- in
+    // ROUTE metres from the car, because the line need not be on the current
+    // leg (see junctionAhead).
     struct JunctionGate {
         Real cap = 0;               // speed target after junction/signal/yield caps
-        Real stopLinePos = 0;       // effective stop line on the current leg
-        bool yieldAtLine = false;   // a TURNING car holding for box/oncoming traffic
+        bool yieldAtLine = false;   // holding for box/oncoming traffic/exit room
+        int node = -1;              // the junction ahead (-1: none within reach)
+        int approachLink = -1;      // the route link that enters it (its signal)
+        Real distToNode = 0;        // route metres to the node
+        Real distToLine = 0;        // route metres to the stop line (< 0: past it)
     };
     JunctionGate junctionSpeedCap(const Agent& a, int li, Real target) const;
+    // The next junction on the route within `horizon` route metres: the leg
+    // whose link enters it, the distance to its node, and the length of the
+    // APPROACH (back to the previous junction), which is where the stop line
+    // may sit. horizon 0 looks at the current link only.
+    struct JunctionAhead {
+        int leg = -1;
+        int node = -1;
+        Real toNode = 0;
+        Real approach = 0;
+    };
+    JunctionAhead junctionAhead(const Agent& a, Real horizon) const;
+    Real stopLineBack(const Agent& a, const JunctionAhead& ja) const;   // line, metres short of ja.node
     Real senseAhead(Agent& a);   // perception/memory/TTC: distance to a body ahead
     void arriveOrChain(Agent& a, Real vArrive);   // arrival: chain, park, or rest
     void labelDriverState(Agent& a, Real seenAhead, Real gap, int legCount) const;
@@ -879,6 +908,7 @@ private:
     // The actual advance. step() is the cadence gate in front of it.
     void stepTick(Real dt, Real hoursPerSecond);
     void tickV(int i, Real hoursPerSecond);
+    bool clearPromotion(int i);   // seat a promoted car behind live traffic
     // Advance a V agent along its REAL route at the modelled speed: link class
     // speed shaped by fixed average junction delays (vHold). No sensing, no
     // FSM, no live signal state — hasSignal() is static topology, not a query.
@@ -895,7 +925,8 @@ public:
     int fastCrashEvents() const { return fastCrashEvents_; }
 
 private:
-    // Per-node junction box radius: the widest incident half-width. Nonzero at
+    // Per-node junction box radius: the widest incident half-width (+ the
+    // junction pad at street intersections: the drawn mouth). Nonzero at
     // PLAIN nodes too (their road's half-width) — launchClear reads it at
     // arbitrary departure nodes; 0 only where a node has no out-links.
     Real junctionRadius(int node) const;
@@ -948,7 +979,8 @@ private:
     std::vector<engine::Vec2> externalObstacles_;   // host-injected (the live player)
     std::vector<engine::Vec2> staticObstacles_;     // host-injected, static (signal poles)
     std::vector<std::pair<engine::Vec2, Real>> junctions_;   // centre + box radius
-    std::vector<Real> nodeBoxRadius_;   // per node: widest incident half-width
+    std::vector<Real> nodeBoxRadius_;   // per node: widest incident half-width (+ pad)
+    Real junctionPad_ = 0;              // + this at street intersections (see setJunctionPad)
     // P4.1 spatial index. grid_ holds every agent (K re-hashed each step —
     // effectively free, place() early-outs on an unchanged cell; V only on its
     // coarse tick, when its position actually moves). junctionGrid_ is a static

@@ -373,6 +373,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     }
 #endif
 
+    sim_.setJunctionPad(sidewalk_);
     sim_.build(nav_, carCount, pedCount, params_.seed);
     sim_.setPerceptionReliability(params_.perceptionReliability);
     sim_.setWander(params_.wander);
