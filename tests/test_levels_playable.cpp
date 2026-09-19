@@ -33,11 +33,14 @@
 #include "../src/apps/citysim/city_render.h"        // CityRenderSystem (traffic census)
 #include "../src/apps/citysim/city_map_raster.h"    // the map tool's picture
 #include "../src/apps/citysim/bus_stop_props.h"     // routeColour
+#include "../src/engine/procgen/city/street_signs.h"   // street name signs
+#include "../src/engine/text/font.h"
 #include "../src/engine/system.h"
 #include "../src/engine/world.h"
 #include "../src/renderer/renderer.h"
 
 #include <algorithm>
+#include <set>
 #include <chrono>
 #include <cstdlib>   // setenv (the marker test)
 #include <cmath>
@@ -1747,4 +1750,106 @@ TEST_CASE(metro_map_shows_the_city_and_its_bus_lines) {
     CHECK(inkShare > 0.08);                    // it is a city, not a blank sheet
     CHECK(worstRoute >= 30);                   // every route's line is on it (routes sharing a street paint over each other)
     CHECK(streetShapes < cityShapes / 5);      // a close view only rasterizes what it shows
+}
+
+// STREET NAME SIGNS ON METRO (Glenn, 2026-09-19: "store a list of all the
+// street sign textures and map them to the right signs and make sure they fit
+// and are legible"). The loader names the streets and stands a post at a
+// corner of every intersection; this rebuilds the same plan and atlas from
+// the level's graph and holds the whole city to it: every blade's lettering
+// fits its blade and its capitals are no smaller than 40% of the blade, every
+// post names exactly the streets that meet at its junction, and no post
+// stands in a carriageway.
+TEST_CASE(metro_street_signs_fit_and_name_their_corners) {
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const bool loaded = LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+                                          view, assets, false);
+    CHECK(loaded);
+    if (!loaded) return;
+    const engine::RoadGraph* graph = nullptr;
+    world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph& g) { if (!graph) graph = &g.graph; });
+    const engine::StreetDirectory* dir = nullptr;
+    world.each<engine::StreetDirectory>([&](Entity, engine::StreetDirectory& d) { if (!dir) dir = &d; });
+    CHECK(graph && dir && dir->naming);
+    if (!graph || !dir || !dir->naming) return;
+    const engine::StreetNaming& names = *dir->naming;
+    const engine::Font* font = engine::signFont();
+    CHECK(font != nullptr);
+    if (!font) return;
+    engine::StreetSignParams sp;
+    sp.sidewalkWidth = 3.5;
+    const auto posts = engine::planStreetSigns(*graph, names, nullptr, sp);
+    const engine::SignAtlas atlas = engine::buildSignAtlas(*font, names, posts, sp);
+    // Intersections where two or more named streets meet.
+    std::vector<std::vector<int>> at(graph->nodes.size());
+    for (int e = 0; e < static_cast<int>(graph->edges.size()); ++e) {
+        at[static_cast<std::size_t>(graph->edges[static_cast<std::size_t>(e)].a)].push_back(e);
+        at[static_cast<std::size_t>(graph->edges[static_cast<std::size_t>(e)].b)].push_back(e);
+    }
+    int corners = 0;
+    for (std::size_t n = 0; n < graph->nodes.size(); ++n) {
+        if (at[n].size() < 3) continue;
+        const auto k = graph->nodes[n].kind;
+        if (k != engine::JunctionKind::Intersection && k != engine::JunctionKind::Auto) continue;
+        std::set<int> s;
+        for (int e : at[n]) if (names.streetOf(e) >= 0) s.insert(names.streetOf(e));
+        if (s.size() >= 2) ++corners;
+    }
+    int fits = 0, legible = 0, abbreviated = 0, condensed = 0, wrongNames = 0, inRoad = 0;
+    float minCap = 1e9f;
+    const int pad = static_cast<int>(std::lround(sp.bladePx * 0.28));
+    for (const auto& [s, b] : atlas.blades) {
+        if (b.textPx + 2 * pad <= b.wPx + 1) ++fits;
+        if (b.capPx >= 0.40f * sp.bladePx) ++legible;
+        abbreviated += b.abbreviated ? 1 : 0;
+        condensed += b.xScale < 0.999f ? 1 : 0;
+        minCap = std::min(minCap, b.capPx);
+    }
+    for (const auto& post : posts) {
+        std::set<int> want, have;
+        for (int e : at[static_cast<std::size_t>(post.node)])
+            if (names.streetOf(e) >= 0) want.insert(names.streetOf(e));
+        for (const auto& b : post.blades) have.insert(b.street);
+        // Up to three blades: the widest three of the streets here.
+        if (!(have.size() == std::min<std::size_t>(3, want.size()) &&
+              std::includes(want.begin(), want.end(), have.begin(), have.end())))
+            ++wrongNames;
+        // In ANY carriageway (not just this junction's): distance to every
+        // edge's centreline segment against its half-width.
+        const Vec2 q(post.base.x, post.base.z);
+        for (const auto& ed : graph->edges) {
+            const Vec2 a = graph->nodes[static_cast<std::size_t>(ed.a)].pos;
+            const Vec2 b = graph->nodes[static_cast<std::size_t>(ed.b)].pos;
+            const Vec2 ab = b - a;
+            const Real l2 = ab.x * ab.x + ab.y * ab.y;
+            const Real t = l2 > 1e-12 ? std::clamp(((q.x - a.x) * ab.x + (q.y - a.y) * ab.y) / l2, 0.0, 1.0) : 0.0;
+            const Vec2 c(a.x + ab.x * t, a.y + ab.y * t);
+            if ((q - c).length() < ed.width * 0.5 + 0.3) { ++inRoad; break; }
+        }
+    }
+    std::printf("    [signs] %zu named streets; %d intersections, %zu posts; %zu blades on %zu page(s): "
+                "%d fit, %d legible (smallest capitals %.1f px = %.2f m), %d abbreviated, %d condensed; "
+                "%d posts with wrong names, %d in a carriageway\n",
+                names.streets.size(), corners, posts.size(), atlas.blades.size(), atlas.pages.size(),
+                fits, legible, minCap, minCap / sp.bladePx * sp.bladeHeight, abbreviated, condensed,
+                wrongNames, inRoad);
+    if (const char* dump = std::getenv("RT_SIGN_ATLAS_DUMP")) {
+        const auto& pg = atlas.pages.front();
+        FILE* f = std::fopen(dump, "wb");
+        if (f) {
+            std::fprintf(f, "P6 %d %d 255\n", pg.w, pg.h);
+            for (std::size_t k = 0; k < pg.rgba.size(); k += 4) std::fwrite(&pg.rgba[k], 1, 3, f);
+            std::fclose(f);
+        }
+    }
+    CHECK(posts.size() >= static_cast<std::size_t>(corners * 9 / 10));   // nearly every corner signed
+    CHECK(fits == static_cast<int>(atlas.blades.size()));
+    CHECK(legible == static_cast<int>(atlas.blades.size()));
+    CHECK(wrongNames == 0);
+    CHECK(inRoad == 0);
+    CHECK(dir->signPosts == static_cast<int>(posts.size()));   // the loader stood the same plan
 }

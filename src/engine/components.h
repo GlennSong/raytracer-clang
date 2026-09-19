@@ -488,6 +488,16 @@ struct CityMap {
     std::shared_ptr<const std::vector<SidewalkCrossing>> conflicts;
 };
 
+// THE STREETS BY NAME (procgen/city/street_names.h): every named street as a
+// chain of the level's road-graph edges, published by the loader for the name
+// signs, the map, and addresses.
+struct StreetNaming;
+struct StreetDirectory {
+    std::shared_ptr<const StreetNaming> naming;
+    // How many signs stood up (the loader's census; 0 with signs off).
+    int signPosts = 0;
+};
+
 struct AuthoredPlace {
     std::string type;      // "home" | "shop" | "office" | "park" | "civic"
     float x = 0, z = 0;    // building site (world XZ)

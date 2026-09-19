@@ -46,6 +46,9 @@
 #include "procgen/city/road_lattice.h"       // swept-lattice freeway mesher
 #include "procgen/city/street_furniture.h"   // build-time signal/lamp placement
 #include "procgen/city/street_kit.h"  // trafficSignalProto, streetLamp
+#include "procgen/city/street_names.h"  // nameStreets
+#include "procgen/city/street_signs.h"  // street name signs
+#include "text/font.h"                  // signFont
 #include "procgen/city/water_mesh.h"  // buildWaterMesh (ocean/lake surface)
 #include "ai/nav_graph.h"             // buildNavGraph (street furniture plan)
 #include "procgen/erosion.h"
@@ -4994,6 +4997,86 @@ bool LevelLoader::load(const std::string& path,
                     world.add<engine::NightGlow>(
                         glowE, engine::NightGlow{Vec3(1.0, 0.85, 0.55) * 4.5});
                 }
+            }
+            // STREET NAME SIGNS (Glenn, 2026-09-19: "It would be nice to have
+            // in world signs for streets"). The streets are named from the
+            // same unified graph; a post at a kerb corner of every junction
+            // carries a blade per street, lettered into a shared atlas
+            // (street_signs.h). Blades merge per cell and atlas page.
+            {
+                auto naming = std::make_shared<engine::StreetNaming>(engine::nameStreets(combined));
+                engine::StreetDirectory dir;
+                dir.naming = naming;
+                const engine::Font* font = engine::signFont();
+                const bool wantSigns = root["citysim"].value("streetSigns", true);
+                if (wantSigns && !font)
+                    LOG_WARN << "[signs] no sign font (assets/fonts/Overpass-Bold.ttf): no street signs";
+                if (wantSigns && font) {
+                    engine::StreetSignParams sp;
+                    world.each<engine::RoadEntity>([&](Entity, engine::RoadEntity& net) {
+                        sp.sidewalkWidth = std::max(sp.sidewalkWidth, static_cast<Real>(net.look.sidewalk));
+                    });
+                    std::vector<Vec3> avoid;
+                    for (const engine::SignalSpot& s : fplan.signals) avoid.push_back(s.base);
+                    const std::vector<engine::StreetSignPost> posts =
+                        engine::planStreetSigns(combined, *naming, furnGround, sp, avoid);
+                    const engine::SignAtlas atlas = engine::buildSignAtlas(*font, *naming, posts, sp);
+                    const engine::StreetSignMeshes sm = engine::buildStreetSignMeshes(posts, atlas, sp);
+                    std::vector<TextureHandle> pages;
+                    for (const engine::TextImage& pg : atlas.pages)
+                        pages.push_back(renderer.uploadTexture(pg.w, pg.h, 4, pg.rgba.data()));
+                    const double signDist = root["citysim"].value("streetSignDistance", 260.0);
+                    int cellNo = 0;
+                    for (const engine::StreetSignMeshes::Cell& c : sm.blades) {
+                        if (c.mesh.vertices.empty()) continue;
+                        InstanceGroup g;
+                        g.mesh = assets.acquireMesh(c.mesh, "city:signblades:" + std::to_string(cellNo++));
+                        g.material.albedo = Vec3(1, 1, 1);
+                        g.material.roughness = 0.55f;
+                        g.material.albedoMap = pages[static_cast<std::size_t>(c.page)];
+                        g.material.flags |= RenderMaterial::FLAG_TWO_SIDED;
+                        g.transforms.push_back(Mat4());
+                        g.boundsCenter = c.centre;
+                        g.boundsRadius = c.radius + 1.0;
+                        g.drawDistance = signDist;
+                        g.drawClass = engine::DrawClass::Furniture;
+                        world.add<InstanceGroup>(world.create(), g);
+                    }
+                    if (!sm.posts.empty()) {
+                        const Real cellSz = sp.cellSize;
+                        std::map<std::pair<int, int>, std::vector<Mat4>> cells;
+                        for (const Mat4& m : sm.posts)
+                            cells[{(int)std::floor(m.m[0][3] / cellSz), (int)std::floor(m.m[2][3] / cellSz)}]
+                                .push_back(m);
+                        MeshHandle postMesh = assets.acquireMesh(sm.postMesh, "city:signpost");
+                        for (auto& [key, transforms] : cells) {
+                            InstanceGroup g;
+                            g.mesh = postMesh;
+                            g.material.albedo = Vec3(1, 1, 1);   // colour rides the verts
+                            g.material.metallic = 0.4f;
+                            g.material.roughness = 0.5f;
+                            g.transforms = transforms;
+                            g.drawDistance = signDist;
+                            g.drawClass = engine::DrawClass::Furniture;
+                            groupBounds(g, 4.0);
+                            world.add<InstanceGroup>(world.create(), g);
+                        }
+                    }
+                    int abbreviated = 0, condensed = 0;
+                    float minCap = 1e9f;
+                    for (const auto& [s, b] : atlas.blades) {
+                        abbreviated += b.abbreviated ? 1 : 0;
+                        condensed += b.xScale < 0.999f ? 1 : 0;
+                        minCap = std::min(minCap, b.capPx);
+                    }
+                    dir.signPosts = static_cast<int>(posts.size());
+                    LOG_INFO << "[signs] " << naming->streets.size() << " named streets, "
+                             << posts.size() << " sign posts, " << atlas.blades.size()
+                             << " blades on " << atlas.pages.size() << " atlas page(s); "
+                             << abbreviated << " abbreviated, " << condensed
+                             << " condensed, smallest capitals " << minCap << " px";
+                }
+                world.add<engine::StreetDirectory>(world.create(), std::move(dir));
             }
             LOG_INFO << "[furniture] " << sf.signalPoles.size() << " signals, "
                      << fplan.lampBases.size() << " street lamps";
