@@ -938,6 +938,7 @@ if(RT_ENABLE_PHYSICS)
         tests/test_vehicle_handling.cpp
         tests/test_physics_system.cpp
         tests/test_city_phys_tier.cpp
+        tests/test_city_ride.cpp
         tests/test_building_collider.cpp
         tests/test_building_interior.cpp
     tests/test_elevator.cpp
@@ -945,6 +946,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp
         src/apps/citysim/city_physics.cpp
+        src/apps/citysim/city_player_transit.cpp
     )
     target_include_directories(physics_tests PRIVATE src)
     target_compile_options(physics_tests PRIVATE -Wall -Wextra)

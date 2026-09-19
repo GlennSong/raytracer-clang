@@ -260,24 +260,28 @@ bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
             lua_settop(L, base);
             return fail(err, where + ": `glass` is not a Mesh");
         }
-        lua_getfield(L, rec, "seats");
-        if (lua_istable(L, -1)) {
-            const int seats = lua_gettop(L);
-            const int nSeats = static_cast<int>(luaL_len(L, seats));
-            for (int i = 1; i <= nSeats; ++i) {
-                lua_rawgeti(L, seats, i);
-                const int si = lua_gettop(L);
-                if (lua_istable(L, si)) {
-                    Vec3 v(0, 0, 0);
-                    lua_rawgeti(L, si, 1); v.x = lua_tonumber(L, -1); lua_pop(L, 1);
-                    lua_rawgeti(L, si, 2); v.y = lua_tonumber(L, -1); lua_pop(L, 1);
-                    lua_rawgeti(L, si, 3); v.z = lua_tonumber(L, -1); lua_pop(L, 1);
-                    body.seats.push_back(v);
+        auto readPoints = [&](const char* key, std::vector<Vec3>& out) {
+            lua_getfield(L, rec, key);
+            if (lua_istable(L, -1)) {
+                const int list = lua_gettop(L);
+                const int n = static_cast<int>(luaL_len(L, list));
+                for (int i = 1; i <= n; ++i) {
+                    lua_rawgeti(L, list, i);
+                    const int si = lua_gettop(L);
+                    if (lua_istable(L, si)) {
+                        Vec3 v(0, 0, 0);
+                        lua_rawgeti(L, si, 1); v.x = lua_tonumber(L, -1); lua_pop(L, 1);
+                        lua_rawgeti(L, si, 2); v.y = lua_tonumber(L, -1); lua_pop(L, 1);
+                        lua_rawgeti(L, si, 3); v.z = lua_tonumber(L, -1); lua_pop(L, 1);
+                        out.push_back(v);
+                    }
+                    lua_pop(L, 1);
                 }
-                lua_pop(L, 1);
             }
-        }
-        lua_pop(L, 1);   // seats
+            lua_pop(L, 1);
+        };
+        readPoints("seats", body.seats);
+        readPoints("doors", body.doors);
         lua_getfield(L, rec, "driver_seat");
         body.hasDriverSeat = lua_istable(L, -1);
         lua_pop(L, 1);

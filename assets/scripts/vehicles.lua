@@ -295,10 +295,12 @@ local function fleet_car(class_name, color)
 
     -- mesh.car publishes every mount point under `lights`: lamps, and the
     -- seats (the driver's hip point, and each passenger seat's on a bus).
-    local lights, seats, driver_seat = {}, {}, nil
+    local lights, seats, doors, driver_seat = {}, {}, {}, nil
     for _, lt in ipairs(car.lights or {}) do
         if lt.name == "seat" then
             seats[#seats + 1] = lt.pos
+        elseif lt.name == "door" then
+            doors[#doors + 1] = lt.pos
         elseif lt.name == "driver_seat" then
             driver_seat = lt.pos
         else
@@ -316,6 +318,7 @@ local function fleet_car(class_name, color)
         class = class_name,
         glass = seeInto and car.glass or nil,
         seats = seeInto and seats or nil,
+        doors = seeInto and doors or nil,
         driver_seat = seeInto and driver_seat or nil,
     }
 end

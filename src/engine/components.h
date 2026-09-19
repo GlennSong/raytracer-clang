@@ -382,6 +382,13 @@ struct InVehicle {
     Entity vehicle;
 };
 
+// The player is a PASSENGER: carried by a vehicle another system moves (a
+// city bus), walking around inside it in that vehicle's own frame. PlayerSystem
+// leaves the character alone while this is present -- no walking, no gravity,
+// no ground snapping -- because the carrier owns the position every step, and
+// the character's own motion between its pins was what jittered the view.
+struct Passenger {};
+
 // Marks a Vehicle as driven by an AI brain rather than the player (ADR-0062): the
 // SAME physics Vehicle, but its {throttle, steer, brake} come from
 // computeDriverInput(command) instead of host input, so an NPC car and the

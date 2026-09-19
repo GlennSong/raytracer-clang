@@ -54,6 +54,8 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
             // Seated in a vehicle (ADR-0059): VehicleSystem owns the pose and the
             // chase camera owns the view, so on-foot movement is suppressed.
             if (ctx.world.has<InVehicle>(e)) return;
+            // A PASSENGER (a bus): the carrier owns the position every step.
+            if (ctx.world.has<Passenger>(e)) return;
             if (cc.characterId == INVALID_CHARACTER) return;
             if (!spawnCaptured) {                                  // authored spawn
                 spawnPos = t.position;

@@ -188,7 +188,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // PlayerSystem (line 60) so the capsule pose it reads is already this tick's.
     addSystem<citysim::CityPlayerBodySystem>();
     // The passenger seat: `ride bus|taxi|any` / `ride off` (city_player_transit).
-    addSystem<citysim::CityPlayerTransitSystem>(citySys, physSys);
+    addSystem<citysim::CityPlayerTransitSystem>(citySys, physSys, camSys.flyController());
     // The control channel's avatar (ADR-0079): consumes possess.cmd one-shots,
     // produces AgentDriver commands. AFTER CityWalkerSystem (commandeered
     // pedestrians already have bodies), BEFORE VehicleSystem (same-tick command

@@ -64,7 +64,8 @@ struct InteriorParams {
 // a CITY BUS (buildBusInterior below): driver's cab, aisle, doors, poles.
 RenderMesh buildCarInterior(const CabinSpace& cabin, const InteriorParams& p,
                             Vec3* sgrpOut = nullptr,
-                            std::vector<Vec3>* seatsOut = nullptr);
+                            std::vector<Vec3>* seatsOut = nullptr,
+                            std::vector<Vec3>* doorsOut = nullptr);
 
 // A CITY BUS saloon (Glenn, 2026-09-18: "build an actual bus model with an
 // interior and exterior and have it look like a city bus"). Not a car cabin
@@ -73,8 +74,12 @@ RenderMesh buildCarInterior(const CabinSpace& cabin, const InteriorParams& p,
 // side with no seats in front of it, a full-width bench across the back, and
 // the yellow stanchions and ceiling rails that make a bus read as a bus from
 // the pavement. Everything faces forward (+Z).
+//
+// `doorsOut` receives each DOOR's floor point on the kerb (right) side, just
+// inside the body: where a passenger stands to step off.
 RenderMesh buildBusInterior(const CabinSpace& cabin, const InteriorParams& p,
-                            Vec3* driverSgrpOut, std::vector<Vec3>* seatsOut);
+                            Vec3* driverSgrpOut, std::vector<Vec3>* seatsOut,
+                            std::vector<Vec3>* doorsOut = nullptr);
 
 }  // namespace engine
 

@@ -60,6 +60,7 @@ struct CarBodyRecipe {
     // Seat hip points (body-local), for drawing people IN the vehicle: the
     // driver, and one per passenger seat. Empty when the recipe has none.
     std::vector<Vec3> seats;
+    std::vector<Vec3> doors;   // floor points a passenger steps off from
     Vec3 driverSeat{0, 0, 0};
     bool hasDriverSeat = false;
 };

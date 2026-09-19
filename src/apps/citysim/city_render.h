@@ -241,6 +241,19 @@ public:
     // Where a passenger STANDS on this bus, in world space: the aisle by the
     // middle door. False when the agent is not drawn as a see-into vehicle.
     bool busStandingSpot(int agent, engine::Vec3* world) const;
+    // A PASSENGER'S FRAME (Glenn: "Should the player be able to move freely
+    // around the bus interior and find a seat?"). The bus's drawn pose -- the
+    // exact matrix its body is drawn with this step -- and its saloon layout
+    // in that body frame: seat hip points, door floor points, floor height.
+    // False when the agent is not a see-into vehicle.
+    bool busFrame(int agent, engine::Mat4* pose) const;
+    const std::vector<engine::Vec3>& busSeats() const;
+    const std::vector<engine::Vec3>& busDoors() const;
+    engine::Real busFloorY() const;   // body-local floor height
+    // True if an NPC rider is drawn in `seat` on this bus right now.
+    bool busSeatTaken(int agent, int seat) const;
+    static int riderSeat(int agent, int j, int n);
+    void setPlayerSeat(int agent, int seat) { playerSeatAgent_ = agent; playerSeat_ = seat; }
     // R5 physical tier (roads-v2.1): agents whose RENDER truth is a Jolt
     // vehicle body. CityPhysicsSystem drives the bodies from the sim's own
     // plan and writes each pose here; syncGroups bakes it instead of the
@@ -469,10 +482,19 @@ private:
     // driver group, three rider groups for a little variety of dress.
     std::vector<engine::Entity> carGlassGroups_;
     std::vector<std::vector<engine::Vec3>> carSeats_;
+    std::vector<std::vector<engine::Vec3>> carDoors_;
     std::vector<engine::Vec3> carDriverSeat_;
     std::vector<char> carHasDriver_;
     engine::Entity busDriverGroup_{};
     engine::Entity busRiderGroups_[3] = {};
+    // The seat the PLAYER holds on the bus they ride (-1 none): NPC riders
+    // are dealt round it, so nobody is drawn sitting in the player's lap.
+    int playerSeatAgent_ = -1, playerSeat_ = -1;
+    // The matrix each see-into vehicle was DRAWN with at the last bake, by
+    // agent. A passenger is placed through exactly this -- recomputing the
+    // pose skipped the drawn body's tilt filter, and on a slope the rider
+    // wobbled against the bus by the difference.
+    std::unordered_map<int, engine::Mat4> busDrawnPose_;
     // Parked cars that survived the distance cull on the last bake — how many
     // car bodies the frame actually pays for. This was computed and discarded,
     // which left the car share of the frame a guess with a 2.7x spread.

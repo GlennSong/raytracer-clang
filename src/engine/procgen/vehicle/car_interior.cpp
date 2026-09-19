@@ -171,7 +171,8 @@ void emitSteeringWheel(RenderMesh& out, const Vec3& hub, const InteriorParams& p
 }  // namespace
 
 RenderMesh buildBusInterior(const CabinSpace& cabin, const InteriorParams& p,
-                            Vec3* driverSgrpOut, std::vector<Vec3>* seatsOut) {
+                            Vec3* driverSgrpOut, std::vector<Vec3>* seatsOut,
+                            std::vector<Vec3>* doorsOut) {
     RenderMesh out;
     const Real len = cabin.frontZ - cabin.rearZ;
     const Real H = cabin.roofY - cabin.floorY;
@@ -246,6 +247,15 @@ RenderMesh buildBusInterior(const CabinSpace& cabin, const InteriorParams& p,
                 box(bm, at(px - Real(0.02), 0, z + Real(0.05), Real(0.04), H, Real(0.04)),
                     poleCol);
     }
+    // The doors, as floor points just inside the kerb-side wall: the front
+    // door beside the driver's partition, and the middle door's centre.
+    if (doorsOut) {
+        auto floorAt = [&](Real x0, Real z0) {
+            return cab.origin + cab.axis[kRight] * x0 + cab.axis[kAft] * z0;
+        };
+        doorsOut->push_back(floorAt(hw * 2 - Real(0.45), dashD + Real(0.55)));
+        doorsOut->push_back(floorAt(hw * 2 - Real(0.45), (doorZ0 + doorZ1) * Real(0.5)));
+    }
     // Door poles, both doors.
     for (Real pz : {partZ + Real(0.25), doorZ0, doorZ1})
         box(bm, at(hw * 2 - Real(0.25), 0, pz, Real(0.04), H, Real(0.04)), poleCol);
@@ -280,8 +290,9 @@ RenderMesh buildBusInterior(const CabinSpace& cabin, const InteriorParams& p,
 }
 
 RenderMesh buildCarInterior(const CabinSpace& cabin, const InteriorParams& p,
-                            Vec3* sgrpOut, std::vector<Vec3>* seatsOut) {
-    if (p.rows <= 0) return buildBusInterior(cabin, p, sgrpOut, seatsOut);
+                            Vec3* sgrpOut, std::vector<Vec3>* seatsOut,
+                            std::vector<Vec3>* doorsOut) {
+    if (p.rows <= 0) return buildBusInterior(cabin, p, sgrpOut, seatsOut, doorsOut);
     RenderMesh out;
     const Real cabinLen = cabin.frontZ - cabin.rearZ;
     const Real cabinH = cabin.roofY - cabin.floorY;

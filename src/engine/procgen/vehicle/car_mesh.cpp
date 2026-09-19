@@ -694,11 +694,14 @@ CarMesh buildCarMesh(const CarParams& p) {
             ip.cushionHeight = p.hipHeight;
 
             Vec3 sgrp(0, 0, 0);
-            std::vector<Vec3> seats;
-            MeshBuilder::append(interior, buildCarInterior(cabin, ip, &sgrp, &seats));
+            std::vector<Vec3> seats, doors;
+            MeshBuilder::append(interior,
+                                buildCarInterior(cabin, ip, &sgrp, &seats, &doors));
             out.attaches.push_back({sgrp, Vec3(0, 0, 1), "driver_seat"});
             // Every passenger seat's hip point: where a seated rider goes.
             for (const Vec3& s : seats) out.attaches.push_back({s, Vec3(0, 0, 1), "seat"});
+            // Doors (a bus): the floor point a passenger steps off from.
+            for (const Vec3& d : doors) out.attaches.push_back({d, Vec3(1, 0, 0), "door"});
         }
 
         // Glass: set into the aperture, and emitted TWICE with opposite winding.

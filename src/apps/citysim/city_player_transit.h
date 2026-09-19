@@ -25,7 +25,13 @@
 
 #include <vector>
 
-namespace engine { class PhysicsSystem; }
+#include "../../engine/components.h"   // Transform, CharacterController
+#include "../../engine/world.h"
+
+namespace engine {
+class PhysicsSystem;
+class FlyCameraController;
+}
 
 namespace citysim {
 
@@ -33,11 +39,25 @@ class CityRenderSystem;
 
 class CityPlayerTransitSystem : public engine::System {
 public:
-    CityPlayerTransitSystem(CityRenderSystem& city, engine::PhysicsSystem& physics)
-        : city_(city), physics_(physics) {}
+    // `fly` is the first-person view's controller: aboard a bus the view turns
+    // with the bus, so a corner swings the saloon rather than the world.
+    CityPlayerTransitSystem(CityRenderSystem& city, engine::PhysicsSystem& physics,
+                            engine::FlyCameraController& fly)
+        : city_(city), physics_(physics), fly_(fly) {}
 
     void onStart(engine::FrameContext& ctx) override;
     void fixedUpdate(engine::FrameContext& ctx) override;
+
+    // --- testable core (no FrameContext), the CityRenderSystem pattern ------
+    // One fixed step of the ride. `request`: -1 none, 0 get off, 1 bus, 2 cab,
+    // 3 either (the `ride` verb); `interact` is E; forward/right the move axes.
+    struct RideInput {
+        double request = -1.0;
+        bool interact = false;
+        engine::Real forward = 0, right = 0;
+    };
+    void step(engine::World& world, engine::Real dt, const RideInput& in);
+    int riding() const { return riding_; }
     void update(engine::FrameContext& ctx) override;
     void render(engine::FrameContext& ctx) override;
 
@@ -64,10 +84,28 @@ public:
         engine::Real nextStopDistance = -1;
     };
     const Hud& hud() const { return hud_; }
+    int seatHeld() const { return seatIdx_; }            // -1 standing
+    const engine::Vec3& aboardAt() const { return local_; }   // bus-frame floor point
 
 private:
+    void rideBus(engine::World& world, engine::Real dt, const RideInput& in,
+                 engine::Entity player, engine::Transform& t,
+                 engine::CharacterController& cc, const engine::Mat4& pose, bool interact);
+    void pin(engine::World& world, engine::Entity player, engine::Transform& t,
+             engine::CharacterController& cc, const engine::Vec3& pos);
+    void leave(engine::World& world, engine::Entity player, const engine::Vec3& where);
+
     CityRenderSystem& city_;
     engine::PhysicsSystem& physics_;
+    engine::FlyCameraController& fly_;
+    // Aboard a bus: where the player stands in the bus's OWN frame (a floor
+    // point), the seat they hold (-1 standing), and the bus's yaw last step
+    // (so the view can turn with it).
+    engine::Vec3 local_{0, 0, 0};
+    int seatIdx_ = -1;
+    bool haveBusYaw_ = false;
+    engine::Real lastBusYaw_ = 0;
+    const char* busPrompt_ = "";
     int riding_ = -1;          // agent index of the vehicle we are aboard, or -1
     engine::Vec3 seat_{0, 0, 0};   // where we put the player last step
     bool seated_ = false;          // seat_ is meaningful
