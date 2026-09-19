@@ -240,7 +240,10 @@ vehicle_classes.classes = {
         rows = 1, l50 = 0.90,
     },
     bus = {                                    -- ~11.4 x 2.55 x 3.20 m  [ours]
-        gates = SUV_GATES, form = "suv",
+        -- Its own FORM: a city bus is one box with a flat, near-vertical face
+        -- and a band of glass down each side. Borrowing the SUV's silhouette
+        -- drew "a really stretched out car" (Glenn).
+        gates = SUV_GATES, form = "bus", body_width = 2.55,
         box_count = 1, modules = { "cargo_box", "seat_rows" },
         drivetrain = "rwd", sae_class = "b",
         wheel_diameter = 1.05, wheelbase_wd = 5.62, height_wd = 3.05,
@@ -281,7 +284,7 @@ function vehicle_classes.dims(c)
         -- the box truck and bus by ~8%, because on those the body width is set by
         -- the CARGO MODULE (which is wider than the cab), not by the track. The
         -- module overrides this when it lands.
-        width  = c.track + 0.26,
+        width  = c.body_width or (c.track + 0.26),
         front_overhang = c.front_overhang_wd * wd,
         rear_overhang  = c.rear_overhang_wd * wd,
     }

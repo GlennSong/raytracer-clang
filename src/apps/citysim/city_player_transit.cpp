@@ -190,8 +190,16 @@ void CityPlayerTransitSystem::fixedUpdate(engine::FrameContext& ctx) {
     // Sit on the vehicle's pose. The ground under it is the reference, not the
     // agent's own elevation, so a bus on a bridge deck carries you at deck
     // height rather than dropping you through it.
-    const Real gy = city_.groundHeightAt(veh.pos.x, veh.pos.y);
-    const Vec3 seat(veh.pos.x, gy + veh.elevation + kSeatLift, veh.pos.y);
+    // On a bus you STAND IN THE AISLE, by the middle door: the saloon has
+    // seats, glass and other passengers now, and the body's centre point put
+    // the camera inside a seat. A cab (no saloon) keeps the centre.
+    Vec2 at = veh.pos;
+    {
+        Vec3 aisle;
+        if (city_.busStandingSpot(riding_, &aisle)) at = Vec2(aisle.x, aisle.z);
+    }
+    const Real gy = city_.groundHeightAt(at.x, at.y);
+    const Vec3 seat(at.x, gy + veh.elevation + kSeatLift, at.y);
     pt->position = seat;
     if (auto* prev = world.get<engine::PrevTransform>(player)) prev->value = *pt;
     if (cc->characterId != engine::INVALID_CHARACTER)
@@ -203,7 +211,7 @@ void CityPlayerTransitSystem::fixedUpdate(engine::FrameContext& ctx) {
 
 void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
     if (ctx.actions.pressed("transit_board")) boardEdge_ = true;
-    city_.setPlayerRiding(riding_ >= 0);
+    city_.setPlayerRidingAgent(riding_);
     hud_ = Hud{};
     const CitySim& sim = city_.sim();
     const BusNetwork& net = sim.buses();

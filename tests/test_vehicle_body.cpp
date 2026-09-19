@@ -1,5 +1,6 @@
 #include "test_framework.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "../src/engine/scripting/script_vm.h"
@@ -428,3 +429,52 @@ TEST_CASE(drivable_spec_rests_the_wheels_where_they_are_drawn) {
     }
 }
 
+
+// THE CITY BUS (Glenn, 2026-09-18: "build an actual bus model with an interior
+// and exterior and have it look like a city bus", "we should see the npcs
+// sitting on the bus. There should be a driver"). The bus slot is the only one
+// meant to be seen into: it publishes CLEAR glass as its own part, a driver's
+// seat front-left, and a saloon's worth of passenger seats with a gap on the
+// kerb side where the middle door is. Every other slot keeps its glass merged
+// dark and publishes no seats, so ordinary traffic pays nothing for this.
+TEST_CASE(fleet_bus_is_a_bus_you_can_see_into) {
+    VehiclesVM a;
+    CHECK(a.loaded);
+    int buses = 0;
+    for (int slot = 0; slot < fleetSlotCount(a.vm); ++slot) {
+        CarBodyRecipe body;
+        std::string err;
+        CHECK(loadFleetCarBody(a.vm, slot, body, &err));
+        if (body.className != "bus") {
+            CHECK(body.glass.vertices.empty());
+            CHECK(body.seats.empty());
+            continue;
+        }
+        ++buses;
+        const Real W = body.size.x, H = body.size.y, L = body.size.z;
+        CHECK(!body.glass.vertices.empty());
+        CHECK(body.hasDriverSeat);
+        CHECK(body.driverSeat.x < 0);            // driver on the left...
+        CHECK(body.driverSeat.z > L * 0.30);     // ...at the front
+        CHECK(body.seats.size() >= 24);
+        std::vector<Real> kerbZ;
+        for (const Vec3& s : body.seats) {
+            CHECK(std::fabs(s.x) < W * 0.5);
+            CHECK(std::fabs(s.z) < L * 0.5);
+            // Hip height above the road: floor plus a bus seat, ~0.6-0.9 m.
+            const Real hip = s.y + H * 0.5;
+            CHECK(hip > 0.5 && hip < 1.0);
+            if (s.x > 0.3) kerbZ.push_back(s.z);
+        }
+        std::sort(kerbZ.begin(), kerbZ.end());
+        Real widest = 0;
+        for (std::size_t i = 1; i < kerbZ.size(); ++i)
+            widest = std::max(widest, kerbZ[i] - kerbZ[i - 1]);
+        std::printf("    [bus] %zu passenger seats, driver at (%.2f, %.2f, %.2f), "
+                    "widest kerb-side gap %.2f m\n",
+                    body.seats.size(), body.driverSeat.x, body.driverSeat.y,
+                    body.driverSeat.z, widest);
+        CHECK(widest > 1.1);                      // the middle door
+    }
+    CHECK(buses == 1);
+}

@@ -403,6 +403,19 @@ CarParams readCarParams(lua_State* L, int idx) {
     p.railDrop        = static_cast<Real>(optField(L, idx, "rail_drop", p.railDrop));
     p.archHalfSpan    = static_cast<Real>(optField(L, idx, "arch_half_span", p.archHalfSpan));
     p.archTop         = static_cast<Real>(optField(L, idx, "arch_top", p.archTop));
+    // Cabin furniture and the belt's shape: a bus needs its own (rows 0 is the
+    // bus saloon), and none of these reached Lua, so every class got a car's.
+    p.rows            = static_cast<int>(optField(L, idx, "rows", p.rows));
+    p.seatPitch       = static_cast<Real>(optField(L, idx, "seat_pitch", p.seatPitch));
+    p.backAngle       = static_cast<Real>(optField(L, idx, "back_angle", p.backAngle));
+    p.steerDiameter   = static_cast<Real>(optField(L, idx, "steer_diameter", p.steerDiameter));
+    p.hipHeight       = static_cast<Real>(optField(L, idx, "hip_height", p.hipHeight));
+    p.cabinFloor      = static_cast<Real>(optField(L, idx, "cabin_floor", p.cabinFloor));
+    p.beltKick        = static_cast<Real>(optField(L, idx, "belt_kick", p.beltKick));
+    p.beltKickStart   = static_cast<Real>(optField(L, idx, "belt_kick_start", p.beltKickStart));
+    p.beltKickEnd     = static_cast<Real>(optField(L, idx, "belt_kick_end", p.beltKickEnd));
+    p.shellThickness  = static_cast<Real>(optField(L, idx, "shell_thickness", p.shellThickness));
+    p.interior        = optField(L, idx, "interior", p.interior ? 1.0 : 0.0) != 0.0;
 
     readNumbers(L, idx, "stations", &p.stations);
     readKeys(L, idx, "roof", &p.roof);
@@ -414,6 +427,9 @@ CarParams readCarParams(lua_State* L, int idx) {
     readNumbers(L, idx, "pillars", &p.pillars);
     readColor(L, idx, "paint", &p.paint);
     readColor(L, idx, "trim_color", &p.trimColor);
+    readColor(L, idx, "seat_color", &p.seatColor);
+    readColor(L, idx, "interior_color", &p.interiorColor);
+    readColor(L, idx, "pillar_color", &p.pillarColor);
 
     lua_getfield(L, idx, "lod");
     if (lua_isstring(L, -1)) {

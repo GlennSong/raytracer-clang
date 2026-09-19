@@ -230,7 +230,14 @@ public:
     // The player is aboard a sim vehicle (CityPlayerTransitSystem): stop
     // feeding their body to the sim as an obstacle, or the vehicle they are
     // riding brakes for them.
-    void setPlayerRiding(bool riding) { playerRiding_ = riding; }
+    void setPlayerRidingAgent(int agent) {
+        playerRidingAgent_ = agent;
+        playerRiding_ = agent >= 0;
+    }
+    int playerRidingAgent() const { return playerRidingAgent_; }
+    // Where a passenger STANDS on this bus, in world space: the aisle by the
+    // middle door. False when the agent is not drawn as a see-into vehicle.
+    bool busStandingSpot(int agent, engine::Vec3* world) const;
     // R5 physical tier (roads-v2.1): agents whose RENDER truth is a Jolt
     // vehicle body. CityPhysicsSystem drives the bodies from the sim's own
     // plan and writes each pose here; syncGroups bakes it instead of the
@@ -408,6 +415,7 @@ private:
     CityRenderParams params_;
     engine::NavGraph nav_;
     bool playerRiding_ = false;
+    int playerRidingAgent_ = -1;
     // Bus-stop furniture entities, kept so a rebuild can remove the old set
     // rather than stacking a second pole on every stop.
     std::vector<engine::Entity> busStopProps_;
@@ -450,6 +458,18 @@ private:
     // wheelset; see carChassisMesh() / carWheels().
     std::vector<engine::MeshHandle> carChassis_;
     std::vector<std::vector<CarWheel>> carWheels_;
+    // SEE-INTO VEHICLES (the bus; Glenn: "we should see the npcs sitting on
+    // the bus. There should be a driver"). Per variant, indexed like
+    // carGroups_: a CLEAR glass group (invalid Entity when the slot's glass is
+    // merged dark into its body, i.e. every ordinary car), and the seat hip
+    // points people are drawn on. The people themselves are instanced: one
+    // driver group, three rider groups for a little variety of dress.
+    std::vector<engine::Entity> carGlassGroups_;
+    std::vector<std::vector<engine::Vec3>> carSeats_;
+    std::vector<engine::Vec3> carDriverSeat_;
+    std::vector<char> carHasDriver_;
+    engine::Entity busDriverGroup_{};
+    engine::Entity busRiderGroups_[3] = {};
     // Parked cars that survived the distance cull on the last bake — how many
     // car bodies the frame actually pays for. This was computed and discarded,
     // which left the car share of the frame a guess with a 2.7x spread.

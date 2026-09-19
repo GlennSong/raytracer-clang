@@ -252,6 +252,38 @@ bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
     }
     lua_pop(L, 1);   // lights (or non-table)
 
+    // glass (a Mesh), seats = { {x,y,z}, ... }, driver_seat = {x,y,z}: only a
+    // vehicle meant to be seen into publishes these.
+    {
+        bool hasGlass = false;
+        if (!optMeshField(L, rec, "glass", body.glass, hasGlass)) {
+            lua_settop(L, base);
+            return fail(err, where + ": `glass` is not a Mesh");
+        }
+        lua_getfield(L, rec, "seats");
+        if (lua_istable(L, -1)) {
+            const int seats = lua_gettop(L);
+            const int nSeats = static_cast<int>(luaL_len(L, seats));
+            for (int i = 1; i <= nSeats; ++i) {
+                lua_rawgeti(L, seats, i);
+                const int si = lua_gettop(L);
+                if (lua_istable(L, si)) {
+                    Vec3 v(0, 0, 0);
+                    lua_rawgeti(L, si, 1); v.x = lua_tonumber(L, -1); lua_pop(L, 1);
+                    lua_rawgeti(L, si, 2); v.y = lua_tonumber(L, -1); lua_pop(L, 1);
+                    lua_rawgeti(L, si, 3); v.z = lua_tonumber(L, -1); lua_pop(L, 1);
+                    body.seats.push_back(v);
+                }
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);   // seats
+        lua_getfield(L, rec, "driver_seat");
+        body.hasDriverSeat = lua_istable(L, -1);
+        lua_pop(L, 1);
+        if (body.hasDriverSeat) body.driverSeat = vec3Field(L, rec, "driver_seat", Vec3(0, 0, 0));
+    }
+
     // Compose the two forms the city needs. `mesh` is always the whole car, so
     // every existing consumer is unaffected. `chassis` is filled ONLY when the
     // recipe published a separate wheelset — otherwise there is no honest

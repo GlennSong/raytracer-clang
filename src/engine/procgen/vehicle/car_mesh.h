@@ -199,6 +199,7 @@ struct CarParams {
     Real seatPitch = 0.86;            // SAE L50 couple distance
     Real backAngle = 25.0;            // SAE A40, degrees from vertical
     Real steerDiameter = 0.37;        // SAE W9
+    Real hipHeight = 0.28;            // SAE H30: cushion top above the floor (bus ~0.45)
 
     CarLod lod = CarLod::High;
 };

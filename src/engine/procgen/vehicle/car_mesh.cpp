@@ -664,7 +664,11 @@ CarMesh buildCarMesh(const CarParams& p) {
         // Walk both ends inward until the local headroom can actually hold the
         // furniture, then take the roof as the LOWEST point over what is left —
         // so the box fits everywhere, not just in the middle.
-        const Real kMinHeadroom = Real(0.62);
+        // A BUS is walked through, not sat in: its saloon ends where there is
+        // STANDING room. With a car's 0.62 m the bus kept its bumper-height
+        // nose station, and the lowest-roof rule below then built the whole
+        // saloon a metre tall -- rails at knee height, poles to the waist.
+        const Real kMinHeadroom = p.rows <= 0 ? Real(1.90) : Real(0.62);
         while (firstW < lastW && innerTopY(firstW) - floorY < kMinHeadroom) ++firstW;
         while (lastW > firstW && innerTopY(lastW) - floorY < kMinHeadroom) --lastW;
 
@@ -687,10 +691,14 @@ CarMesh buildCarMesh(const CarParams& p) {
             ip.steerDiameter = p.steerDiameter;
             ip.trimColor = p.interiorColor;
             ip.seatColor = p.seatColor;
+            ip.cushionHeight = p.hipHeight;
 
             Vec3 sgrp(0, 0, 0);
-            MeshBuilder::append(interior, buildCarInterior(cabin, ip, &sgrp));
+            std::vector<Vec3> seats;
+            MeshBuilder::append(interior, buildCarInterior(cabin, ip, &sgrp, &seats));
             out.attaches.push_back({sgrp, Vec3(0, 0, 1), "driver_seat"});
+            // Every passenger seat's hip point: where a seated rider goes.
+            for (const Vec3& s : seats) out.attaches.push_back({s, Vec3(0, 0, 1), "seat"});
         }
 
         // Glass: set into the aperture, and emitted TWICE with opposite winding.

@@ -226,7 +226,16 @@ local function fleet_car(class_name, color)
     -- distance — exactly the role the box fleet's dark glass slabs played.
     local shell = { car.body }
     if car.lamp then shell[#shell + 1] = car.lamp end
-    if car.glass then shell[#shell + 1] = car.glass end
+    -- A BUS IS MEANT TO BE SEEN INTO (Glenn: "we should see the npcs sitting
+    -- on the bus. There should be a driver"). Its saloon goes into the opaque
+    -- shell and its glass stays a separate, CLEAR part; 24 buses can afford the
+    -- transparent pass that hundreds of cars cannot.
+    local seeInto = (c.form == "bus")
+    if seeInto then
+      if car.interior then shell[#shell + 1] = car.interior end
+    elseif car.glass then
+      shell[#shell + 1] = car.glass
+    end
 
     -- WHEELS. mesh.car deliberately emits no wheel part (real wheels are placed
     -- per-vehicle by the physics spec), so the fleet bakes its own — ROUND ones:
@@ -284,9 +293,17 @@ local function fleet_car(class_name, color)
         }
     end
 
-    local lights = {}
+    -- mesh.car publishes every mount point under `lights`: lamps, and the
+    -- seats (the driver's hip point, and each passenger seat's on a bus).
+    local lights, seats, driver_seat = {}, {}, nil
     for _, lt in ipairs(car.lights or {}) do
-        lights[#lights + 1] = { name = lt.name, pos = lt.pos }
+        if lt.name == "seat" then
+            seats[#seats + 1] = lt.pos
+        elseif lt.name == "driver_seat" then
+            driver_seat = lt.pos
+        else
+            lights[#lights + 1] = { name = lt.name, pos = lt.pos }
+        end
     end
 
     return {
@@ -297,6 +314,9 @@ local function fleet_car(class_name, color)
         -- by construction rather than by a transcribed table.
         size = { d.width, d.height, d.length },
         class = class_name,
+        glass = seeInto and car.glass or nil,
+        seats = seeInto and seats or nil,
+        driver_seat = seeInto and driver_seat or nil,
     }
 end
 

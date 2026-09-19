@@ -54,6 +54,14 @@ struct CarBodyRecipe {
     std::vector<Attachment> lights;
     Vec3 size{0, 0, 0};
     std::string className;
+    // SEE-THROUGH GLASS, for a vehicle you are meant to look into (the bus).
+    // Empty for ordinary traffic, whose dark glass is merged into `mesh`.
+    RenderMesh glass;
+    // Seat hip points (body-local), for drawing people IN the vehicle: the
+    // driver, and one per passenger seat. Empty when the recipe has none.
+    std::vector<Vec3> seats;
+    Vec3 driverSeat{0, 0, 0};
+    bool hasDriverSeat = false;
 };
 
 // The vehicles.lua fleet reader (ADR-0065) — mirrors agent_goals' pattern: Lua

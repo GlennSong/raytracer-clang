@@ -17,6 +17,7 @@
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>                                   // Living City debug section
 #endif
+#include "../../engine/procgen/vehicle/occupant.h"   // people seated on the bus
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/agent_goals.h"      // scripted goal tables (ADR-0064)
 #include "scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
@@ -31,6 +32,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cmath>
+#include <numeric>   // std::gcd
 #include <string>
 
 namespace citysim {
@@ -627,6 +629,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     carLights_.clear();
     carChassis_.clear();
     carWheels_.clear();
+    carGlassGroups_.clear();
+    carSeats_.clear();
+    carDriverSeat_.clear();
+    carHasDriver_.clear();
     if (!carsExternallyOwned_) {
 #ifdef RT_ENABLE_SCRIPTING
         // Data-driven fleet bodies (ADR-0065). The recipes were already read
@@ -640,6 +646,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             MeshHandle mh{}, chassisMh{};
             std::vector<LampMarker> lights;
             std::vector<CarWheel> wheels;
+            engine::RenderMesh glassMesh;
+            std::vector<Vec3> seats;
+            Vec3 driverSeat(0, 0, 0);
+            bool hasDriver = false;
             if (assets) {
                 engine::RenderMesh mesh;
                 bool scripted = false;
@@ -670,6 +680,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                         // baked in syncCarLamps. Previously parsed-and-dropped.
                         for (const engine::Attachment& att : recipe.lights)
                             lights.push_back({att.name, att.pos});
+                        glassMesh = std::move(recipe.glass);
+                        seats = recipe.seats;
+                        driverSeat = recipe.driverSeat;
+                        hasDriver = recipe.hasDriverSeat;
                 } else if (vehScript) {
                     LOG_ERROR << "[citysim] fleet slot " << v << ": " << slotErr
                               << " — this slot draws NO car";
@@ -695,6 +709,28 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             carLights_.push_back(std::move(lights));
             carChassis_.push_back(chassisMh);
             carWheels_.push_back(std::move(wheels));
+            // Clear glass, for a vehicle meant to be seen into.
+            {
+                Entity ge{};
+                if (assets && !glassMesh.vertices.empty()) {
+                    ge = world.create();
+                    InstanceGroup gg;
+                    gg.mesh = assets->acquireMesh(glassMesh, "city:carglass" + std::to_string(v));
+                    engine::RenderMaterial gm;
+                    gm.albedo = Vec3(1, 1, 1);
+                    gm.metallic = 0.0f;
+                    gm.roughness = 0.06f;
+                    gm.opacity = 0.30f;
+                    gg.material = gm;
+                    gg.renderLayer = engine::LayerSim;
+                    gg.drawClass = engine::DrawClass::SimBody;
+                    world.add<InstanceGroup>(ge, gg);
+                }
+                carGlassGroups_.push_back(ge);
+                carSeats_.push_back(std::move(seats));
+                carDriverSeat_.push_back(driverSeat);
+                carHasDriver_.push_back(hasDriver ? 1 : 0);
+            }
 
             Entity e = world.create();
             InstanceGroup g;
@@ -704,6 +740,47 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             g.drawClass = engine::DrawClass::SimBody;
             world.add<InstanceGroup>(e, g);
             carGroups_.push_back(e);
+        }
+
+        // PEOPLE ON THE BUS: seated figures posed from the same SAE manikin as
+        // the player's driver, at a bus's seat height. Only built when some
+        // slot publishes seats, so ordinary cities pay nothing.
+        busDriverGroup_ = Entity{};
+        for (Entity& e : busRiderGroups_) e = Entity{};
+        bool anySeats = false;
+        for (const auto& st : carSeats_) anySeats = anySeats || !st.empty();
+        for (char hd : carHasDriver_) anySeats = anySeats || hd;
+        if (assets && anySeats) {
+            auto person = [&](Vec3 shirt, Vec3 trousers, Vec3 skin, Real arms,
+                              const std::string& key) {
+                engine::OccupantParams op;
+                op.hipToHeel = 0.45;      // a bus seat, not a sedan's
+                op.sittingHeight = 0.86;  // a bus has the headroom a sedan lacks
+                op.backAngle = 12.0;
+                op.armReach = arms;
+                op.shirt = shirt;
+                op.trousers = trousers;
+                op.skin = skin;
+                Entity e = world.create();
+                InstanceGroup g;
+                g.mesh = assets->acquireMesh(engine::buildSeatedOccupant(op), key);
+                g.material = carMaterial();
+                g.renderLayer = engine::LayerSim;
+                g.drawClass = engine::DrawClass::SimBody;
+                g.drawDistance = 160.0;   // a face in a window: gone by a block
+                world.add<InstanceGroup>(e, g);
+                return e;
+            };
+            // The driver in uniform, hands on the wheel: a LIGHT shirt, because
+            // navy on the navy moquette vanished into the seat from the kerb.
+            busDriverGroup_ = person(Vec3(0.66, 0.76, 0.90), Vec3(0.10, 0.12, 0.20),
+                                     Vec3(0.72, 0.54, 0.42), 72.0, "city:busdriver");
+            busRiderGroups_[0] = person(Vec3(0.62, 0.18, 0.16), Vec3(0.20, 0.21, 0.26),
+                                        Vec3(0.80, 0.62, 0.50), 24.0, "city:busrider0");
+            busRiderGroups_[1] = person(Vec3(0.20, 0.45, 0.32), Vec3(0.30, 0.26, 0.20),
+                                        Vec3(0.52, 0.36, 0.25), 24.0, "city:busrider1");
+            busRiderGroups_[2] = person(Vec3(0.80, 0.74, 0.60), Vec3(0.15, 0.16, 0.20),
+                                        Vec3(0.92, 0.76, 0.64), 24.0, "city:busrider2");
         }
 
         // FLEET VERDICT — loud, unmissable, once per build. "Why is the city
@@ -1668,6 +1745,57 @@ void CityRenderSystem::syncGroups(World& world) {
     refreshBounds(ped);
     for (int s = 0; s < 3; ++s) refreshBounds(sig[s]);
 
+    // SEE-INTO VEHICLES. The clear glass rides exactly its bodies' transforms
+    // (bodies and agent ids were pushed in lockstep above), and the people are
+    // posed on the same pose: the driver on the driver's seat, and one rider per
+    // passenger the sim actually has aboard -- the load IS the RideBook, so a
+    // full bus looks full and an empty one looks empty.
+    {
+        InstanceGroup* drv = world.get<InstanceGroup>(busDriverGroup_);
+        InstanceGroup* rid[3];
+        for (int k = 0; k < 3; ++k) rid[k] = world.get<InstanceGroup>(busRiderGroups_[k]);
+        if (drv) drv->transforms.clear();
+        for (InstanceGroup* r : rid) if (r) r->transforms.clear();
+        for (std::size_t v = 0; v < cars.size() && v < carGlassGroups_.size(); ++v) {
+            if (!cars[v]) continue;
+            if (carGlassGroups_[v].valid())
+                if (InstanceGroup* g = world.get<InstanceGroup>(carGlassGroups_[v])) {
+                    g->transforms = cars[v]->transforms;
+                    refreshBounds(g);
+                }
+            const std::vector<Vec3>& seats = carSeats_[v];
+            const bool hasDriver = carHasDriver_[v] != 0;
+            if (seats.empty() && !hasDriver) continue;
+            const std::vector<int>& ids = carAgentIds_[v];
+            const int n = static_cast<int>(seats.size());
+            // Spread riders through the saloon rather than filling the front
+            // row first: a stride coprime with the seat count visits every
+            // seat once, offset per bus so no two buses look identical.
+            int stride = 1;
+            for (int c : {7, 5, 11, 13, 3})
+                if (n > 0 && std::gcd(c, n) == 1) { stride = c; break; }
+            for (std::size_t k = 0; k < ids.size() && k < cars[v]->transforms.size(); ++k) {
+                const int ai = ids[k];
+                if (ai < 0) continue;   // a parked scenery body: nobody aboard
+                const Mat4& xf = cars[v]->transforms[k];
+                if (hasDriver && drv)
+                    drv->transforms.push_back(
+                        xf * Mat4::trs(carDriverSeat_[v], Quat(), Vec3(1, 1, 1)));
+                const int load = std::min(sim_.rides().load(ai), n);
+                for (int j = 0; j < load; ++j) {
+                    const int seat = (j * stride + ai * 3) % n;
+                    InstanceGroup* r = rid[(ai + j) % 3];
+                    if (r)
+                        r->transforms.push_back(
+                            xf * Mat4::trs(seats[static_cast<std::size_t>(seat)], Quat(),
+                                           Vec3(1, 1, 1)));
+                }
+            }
+        }
+        refreshBounds(drv);
+        for (InstanceGroup* r : rid) refreshBounds(r);
+    }
+
     // Debug widgets: a ground footprint (coloured by state) + a forward arrow per
     // agent, scaled to the agent's speed so it reads as the present trajectory.
     {
@@ -1864,7 +1992,8 @@ void CityRenderSystem::step(World& world, Real dt) {
                 }
                 LOG_INFO << "[bus] agent " << ai << " route " << r << " next stop " << si
                          << " (" << static_cast<int>(toStop) << " m) at (" << a.pos.x << ", "
-                         << a.pos.y << ") moving=" << (a.moving ? 1 : 0)
+                         << a.pos.y << ") hdg=(" << a.heading.x << ", " << a.heading.y
+                         << ") moving=" << (a.moving ? 1 : 0)
                          << " speed=" << a.speed
                          << " far=" << (a.far() ? 1 : 0)
                          << " goal=" << a.goal
@@ -2320,6 +2449,19 @@ void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
 
     step(ctx.world, ctx.clock.fixedStep());
     bakeThisStep_ = true;   // a direct step() call (tests) always bakes
+}
+
+bool CityRenderSystem::busStandingSpot(int agent, Vec3* world) const {
+    if (!world || !sim_.isBus(agent)) return false;
+    if (agent < 0 || agent >= static_cast<int>(sim_.agents().size())) return false;
+    if (busVariant_ < 0 || busVariant_ >= static_cast<int>(carSeats_.size())) return false;
+    if (carSeats_[static_cast<std::size_t>(busVariant_)].empty()) return false;
+    // The aisle, a little aft of the middle: where standing passengers stand.
+    // The pose is the body's (agentPose without an index does not advance the
+    // tilt filter, so this is a pure read).
+    const Mat4 pose = agentPose(sim_.agents()[static_cast<std::size_t>(agent)]);
+    *world = pose.transformPoint(Vec3(0, 0, -0.8));
+    return true;
 }
 
 }  // namespace citysim

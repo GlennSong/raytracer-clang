@@ -4,6 +4,8 @@
 #include "../../../renderer/renderer.h"
 #include "../../../rt_math.h"
 
+#include <vector>
+
 namespace engine {
 
 // The cabin interior, built with the BUILDING GRAMMAR's Scope ops.
@@ -56,8 +58,23 @@ struct InteriorParams {
 // Build the cabin's furniture. `sgrpOut`, when set, receives the driver's seating
 // reference point (SAE SgRP) — the anchor a seated occupant is posed from and
 // the position published as the "driver_seat" attach.
+//
+// `seatsOut`, when set, receives every PASSENGER seat's hip point (SgRP), in
+// the same body-local space -- where a seated rider is posed. rows <= 0 builds
+// a CITY BUS (buildBusInterior below): driver's cab, aisle, doors, poles.
 RenderMesh buildCarInterior(const CabinSpace& cabin, const InteriorParams& p,
-                            Vec3* sgrpOut = nullptr);
+                            Vec3* sgrpOut = nullptr,
+                            std::vector<Vec3>* seatsOut = nullptr);
+
+// A CITY BUS saloon (Glenn, 2026-09-18: "build an actual bus model with an
+// interior and exterior and have it look like a city bus"). Not a car cabin
+// repeated: a driver's cab front-left behind a dash, the front door opposite
+// it, pairs of seats either side of a centre aisle, a middle door on the kerb
+// side with no seats in front of it, a full-width bench across the back, and
+// the yellow stanchions and ceiling rails that make a bus read as a bus from
+// the pavement. Everything faces forward (+Z).
+RenderMesh buildBusInterior(const CabinSpace& cabin, const InteriorParams& p,
+                            Vec3* driverSgrpOut, std::vector<Vec3>* seatsOut);
 
 }  // namespace engine
 

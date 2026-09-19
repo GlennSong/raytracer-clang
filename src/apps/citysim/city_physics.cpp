@@ -70,6 +70,11 @@ void CityPhysicsSystem::syncKinematic(World& world, const std::vector<Entity>& g
             if (ai >= 0)
                 for (const Possessed& p : possessed_)
                     if (p.agent == ai) { isParked = true; break; }
+            // THE VEHICLE THE PLAYER IS RIDING has no box either: the ride
+            // pins the player inside it every step, and physics pushed the
+            // capsule back out through the side -- a passenger watching their
+            // own bus from the kerb, a metre or three to its left.
+            if (ai >= 0 && ai == city_.playerRidingAgent()) isParked = true;
             const Mat4& m = g->transforms[ii];
             Vec3 p(m.m[0][3], m.m[1][3], m.m[2][3]);
             if (isParked) p.y = -1000.0;   // possessed: box parks below the world
