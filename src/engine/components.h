@@ -590,6 +590,14 @@ struct CitySimConfig {
     int busStops = 8;
     int buses = 0;
     float busMaxWalk = 120.0f;
+    // PHYSICAL TRAFFIC (R5): how many of the moving cars nearest the player are
+    // handed to real Jolt vehicles that chase the sim's plan. 0 = none: every
+    // car is drawn on the sim's own motion, which keeps its wheels on the road
+    // and never snaps. Off by default since 2026-09-18 -- the chasing bodies
+    // floated or sank by up to 0.65 m (one sedan chassis for every class, the
+    // bus included) and snapped back onto the plan when they fell behind,
+    // which read on screen as a car jumping back and pivoting on the spot.
+    int physicalCars = 0;
     // Sim tick rate for LOCAL agents (Hz). 0 = every fixed step (historical).
     // 30 halves the traffic sim's cost; poses extrapolate between ticks.
     float localHz = 0.0f;

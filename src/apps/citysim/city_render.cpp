@@ -171,6 +171,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.busStops = c.busStops;
         params_.buses = c.buses;
         params_.busMaxWalk = c.busMaxWalk;
+        params_.physicalCars = c.physicalCars;
         params_.wander = c.wander;
         params_.agentScript = c.agentScript;
         params_.vehicleScript = c.vehicleScript;
@@ -1330,6 +1331,18 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
     // Lift the box so it rests on the ground: half its OWN body height (a tall van
     // or box truck sits higher than a sedan). Read the height from the possessed
     // SimVehicle (authoritative), falling back to the default car/ped size.
+    // PULLING OUT: drawn easing from its parking space into the lane (the
+    // sim itself drives the lane; see CitySim::pullOutWeight).
+    Vec2 drawHeading = a.heading;
+    if (car) {
+        const Real w = CitySim::pullOutWeight(a);
+        if (w > 0) {
+            x += a.pullOffset.x * w;
+            z += a.pullOffset.y * w;
+            const Real yw = std::atan2(a.heading.x, a.heading.y) + a.pullYawOffset * w;
+            drawHeading = Vec2(std::sin(yw), std::cos(yw));
+        }
+    }
     Real bodyH = car ? params_.carSize.y : params_.pedSize.y;
     if (car && a.vehicle >= 0 && a.vehicle < static_cast<int>(sim_.vehicles().size()))
         bodyH = sim_.vehicles()[a.vehicle].height;
@@ -1338,7 +1351,7 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
     // placement hovered/sank between chain nodes on hills (device).
     Real y = (a.deckY > -1e29) ? a.deckY + halfH
                                : groundAt(x, z) + a.elevation + halfH;
-    Real yaw = std::atan2(a.heading.x, a.heading.y); // box local +Z -> travel heading
+    Real yaw = std::atan2(drawHeading.x, drawHeading.y); // box local +Z -> travel heading
     // Cars sit NORMAL to the road plane (device: a world-upright box on a
     // graded street floats its nose or buries its tail). Sample the drive
     // surface a wheelbase fore/aft and a track left/right, build the tilted
@@ -1348,7 +1361,7 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
         // ELEVATED (deck/ramp): the ground sampler below would read the
         // terrain UNDER the structure, so pitch from the link's grade
         // instead — all four wheels track the ramp (device feedback).
-        Vec2 f = a.heading;
+        Vec2 f = drawHeading;
         const Real fl = f.length();
         if (fl > 1e-6 && std::fabs(a.grade) > 1e-4) {
             f = f * (1.0 / fl);
@@ -1368,7 +1381,7 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
         }
     }
     if (car && a.elevation < 0.5) {
-        Vec2 f = a.heading;
+        Vec2 f = drawHeading;
         const Real fl = f.length();
         if (fl > 1e-6) {
             f = f * (1.0 / fl);
@@ -1398,7 +1411,7 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
     }
     if (car && agentIdx >= 0) {
         const Vec3 up = smoothedUp(Vec3(0, 1, 0));
-        Vec2 f = a.heading;
+        Vec2 f = drawHeading;
         const Real fl = f.length();
         if (fl > 1e-6 && up.y < 0.99999) {
             f = f * (1.0 / fl);

@@ -1850,6 +1850,15 @@ bool CitySim::launchClear(const Agent& a, int node) const {
 }
 
 void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
+    // Where the CAR is before it pulls out: its own parked pose if it is
+    // standing in the world unattended, else wherever the agent stands.
+    Vec2 pulledFrom = a.pos;
+    Vec2 pulledHeading = a.heading;
+    if (a.car >= 0 && a.car < static_cast<int>(vehicles_.size()) &&
+        vehicles_[static_cast<std::size_t>(a.car)].driver < 0) {
+        pulledFrom = vehicles_[static_cast<std::size_t>(a.car)].pos;
+        pulledHeading = vehicles_[static_cast<std::size_t>(a.car)].heading;
+    }
     remountOwnedCar(a);
     a.route = engine::findRoute(*nav_, origin, goal,
                                 a.mode == Agent::Mode::Pedestrian);
@@ -1889,6 +1898,39 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
     }
     refreshPose(a);
     a.heading = nav_->direction(a.route.links.front());   // start pointed down leg 0
+    // Pull out of the space rather than appear in the lane. Only for a car
+    // leaving from rest in the drawn tier; a far agent is never on screen. A
+    // CHAINED trip keeps a pull already under way -- cutting it short snapped
+    // the car into its lane mid-merge (a 9 m jump and a 158-degree pivot).
+    if (fromRest) a.pullLen = 0;
+    if (fromRest && a.mode == Agent::Mode::Driver && !a.far()) {
+        const Vec2 off = pulledFrom - a.pos;
+        const Real d = off.length();
+        if (d > 0.5 && d < 40.0) {
+            a.pullOffset = off;
+            a.pullYawOffset = 0;
+            if (pulledHeading.lengthSquared() > 0.25) {
+                Real dy = std::atan2(pulledHeading.x, pulledHeading.y) -
+                          std::atan2(a.heading.x, a.heading.y);
+                while (dy > engine::PI) dy -= 2 * engine::PI;
+                while (dy < -engine::PI) dy += 2 * engine::PI;
+                a.pullYawOffset = dy;
+            }
+            a.pullLen = std::min(std::max(d * 2.5, Real(8)), Real(30));
+            a.pullS = 0;
+        }
+    }
+}
+
+// How far into the pull-out a car is drawn: 1 at its space, 0 in its lane.
+// PURELY A DRAWING MATTER -- the sim drives the lane exactly as before. Moving
+// the sim's own position/heading instead stalled the cars: a car that starts
+// pointed away from its lane will not accelerate, and a stopped car cannot
+// turn, so 84% of pulling-out samples stood still.
+Real CitySim::pullOutWeight(const Agent& a) {
+    if (a.pullLen <= 0) return 0;
+    const Real t = std::min(a.pullS / a.pullLen, Real(1));
+    return 1 - t * t * (3 - 2 * t);
 }
 
 void CitySim::refreshPose(Agent& a) {
@@ -2549,6 +2591,10 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     }
 
     Real motion = a.speed * dt;
+    if (a.pullLen > 0) {
+        a.pullS += motion;
+        if (a.pullS >= a.pullLen) a.pullLen = 0;
+    }
 
     // A pedestrian never walks INTO a car body (roads-v2.1 R3): a car
     // standing across the walkway — queue spillback over a crosswalk, a

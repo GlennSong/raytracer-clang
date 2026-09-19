@@ -199,6 +199,20 @@ struct Agent {
     // off"). The next trip is already routed; the bus just does not move until
     // this runs out. Both tiers honour it (advance, vAdvance).
     Real busDwell = 0;
+    // PULLING OUT OF A SPACE: the car's drawn position eases from where it was
+    // parked into its lane over `pullLen` metres of driving (pullS so far),
+    // instead of appearing in the lane in one frame -- which read as "jump
+    // back or teleport, then pivot" (Glenn, 2026-09-18; measured: 5-10 m
+    // single-step jumps on departure). pullLen 0 = not pulling out.
+    engine::Vec2 pullOffset{0, 0};    // parked position minus lane start
+    // The turn from the lane heading back to the parked one, SIGNED and fixed
+    // at departure (radians): the drawn yaw is the sim's plus this, fading.
+    // Taking the shortest turn afresh each frame flipped direction whenever
+    // the sim heading swung past the opposite of the parked one (a 136-degree
+    // pivot mid-merge).
+    Real pullYawOffset = 0;
+    Real pullLen = 0;
+    Real pullS = 0;
 
     // Think cadence (ADR-0062): agents DECIDE on a slow clock and COMMIT — the
     // reactive scan (what do I see, which way do I lean) runs only when
@@ -692,6 +706,9 @@ public:
     }
     const BusNetwork& buses() const { return buses_; }
     bool isBus(int i) const;
+    // 1 while a departing car is still drawn at its parking space, easing to 0
+    // once it has merged into its lane (see Agent::pullOffset).
+    static Real pullOutWeight(const Agent& a);
     // A bus's route and the index of the stop it is heading for; -1 if the
     // agent is not a bus.
     int busRouteOf(int i) const {
@@ -862,6 +879,7 @@ private:
     uint32_t tripRnd(Agent& a); // per-agent stream for TRIP decisions (see .cpp)
     void refreshPose(Agent& a);
     void steer(Agent& a, Real dt);   // rate-limited heading (bounded turn radius)
+
     engine::Vec2 idlePose(int node, Agent::Mode mode, uint32_t brain) const;
     // Push a parked/idle car pose OUT of every at-grade carriageway. A knot
     // of short links can put one link's verge INSIDE a neighbour's lanes; a

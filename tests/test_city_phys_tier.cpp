@@ -84,6 +84,7 @@ TEST_CASE(city_phys_tier_soak) {
     params.pedestrians = 0;
     params.seed = 7;
     params.wander = true;   // perpetual trips: drivers keep moving all soak
+    params.physicalCars = 12;   // this soak exercises the physical tier
     CityRenderSystem city(params);
     CHECK(city.build(world, nullptr));
 
@@ -213,6 +214,7 @@ TEST_CASE(city_phys_tier_with_tiering) {
     params.pedestrians = 8;
     params.seed = 7;
     params.wander = true;
+    params.physicalCars = 12;   // this soak exercises the physical tier
     CityRenderSystem city(params);
     CHECK(city.build(world, nullptr));
     CitySim& sim = city.simMutable();
@@ -295,6 +297,7 @@ TEST_CASE(city_every_drawn_car_is_solid) {
     params.pedestrians = 0;
     params.seed = 7;
     params.wander = true;
+    params.physicalCars = 12;   // this soak exercises the physical tier
     params.vehicleScript = readAsset("vehicles.lua");
     CHECK(!params.vehicleScript.empty());
     CityRenderSystem city(params);
@@ -418,4 +421,139 @@ TEST_CASE(city_every_drawn_car_is_solid) {
     CHECK(!passedThrough);
 
     physics.shutdown();
+}
+
+// WHAT THE PLAYER SEES OF TRAFFIC (Glenn, 2026-09-18: "When the AI agent cars
+// are driving they're floating off the road. The wheels seem sunk into the
+// body", "the bus is sunk into the ground", "the vehicle will start to turn but
+// then jump back or teleport and then do a sudden pivot on a dime", and "the
+// wheels have to be on the road"). Measured on the DRAWN transforms, with each
+// slot's own wheel layout -- the thing on screen, not the sim's idea of it:
+//   wheels: every wheel's lowest point against the road (flat, y = 0 here)
+//   jumps:  a drawn car moving further in one step than its speed allows
+//   pivots: its heading swinging faster than a car can turn at that speed
+//   backs:  a step that moves it backwards while it is driving forwards
+namespace {
+struct TrafficLook {
+    long wheelSamples = 0;
+    Real wheelMin = 1e9, wheelMax = -1e9, wheelAbsSum = 0;
+    long steps = 0, jumps = 0, pivots = 0, backs = 0, reversingOut = 0;
+    Real worstJump = 0;
+};
+TrafficLook watchTraffic(bool physicalTier) {
+    World world;
+    world.add<RoadEntity>(world.create(), cityGrid());
+    CityRenderParams params;
+    params.cars = 24;
+    params.pedestrians = 0;
+    params.seed = 7;
+    params.wander = true;
+    params.physicalCars = physicalTier ? 12 : 0;
+    params.vehicleScript = readAsset("vehicles.lua");
+    CityRenderSystem city(params);
+    StubUploader uploader;
+    engine::AssetManager assets(uploader);
+    CHECK(city.build(world, &assets));
+    Entity player = world.create();
+    Transform pt;
+    pt.position = Vec3(120, 0.9, 120);
+    world.add<Transform>(player, pt);
+    world.add<CharacterController>(player, CharacterController{});
+    PhysicsSystem physics;
+    physics.initialize();
+    physics.physicsWorld().addBox(Vec3(600, 1, 600), Vec3(120, -1, 120),
+                                  Quat::identity(), BodyMotion::Static);
+    CityPhysicsSystem bridge(city, physics);
+
+    TrafficLook t;
+    const Real dt = 1.0 / 60.0;
+    struct Last { Vec3 p; Real yaw; };
+    std::unordered_map<int, Last> last;
+    for (int i = 0; i < 60 * 40; ++i) {
+        city.step(world, dt);
+        bridge.step(world, dt);   // proxies run either way, as in the game
+        physics.step(world, dt);
+        if (i < 60 * 3) continue;   // let the tier settle
+        std::unordered_map<int, Last> now;
+        const auto& ids = city.carAgentIds();
+        for (std::size_t v = 0; v < city.carGroups().size(); ++v) {
+            InstanceGroup* g = world.get<InstanceGroup>(city.carGroups()[v]);
+            if (!g || v >= ids.size()) continue;
+            const auto& wheels = city.carWheels(static_cast<int>(v));
+            for (std::size_t k = 0; k < g->transforms.size() && k < ids[v].size(); ++k) {
+                const int ai = ids[v][k];
+                if (ai < 0) continue;
+                const Agent& a = city.sim().agents()[static_cast<std::size_t>(ai)];
+                const Mat4& m = g->transforms[k];
+                for (const auto& w : wheels) {
+                    const Vec3 bottom = m.transformPoint(w.pos - Vec3(0, w.radius, 0));
+                    t.wheelMin = std::min(t.wheelMin, bottom.y);
+                    t.wheelMax = std::max(t.wheelMax, bottom.y);
+                    t.wheelAbsSum += std::fabs(bottom.y);
+                    ++t.wheelSamples;
+                }
+                const Vec3 p(m.m[0][3], m.m[1][3], m.m[2][3]);
+                const Real yaw = std::atan2(m.m[0][2], m.m[2][2]);
+                now[ai] = {p, yaw};
+                const auto it = last.find(ai);
+                if (it == last.end() || !a.moving) continue;
+                ++t.steps;
+                const Vec3 d = p - it->second.p;
+                const Real disp = std::sqrt(d.x * d.x + d.z * d.z);
+                const Real allowed = std::max(a.speed, Real(2)) * dt * 2.0 + 0.05;
+                if (disp > allowed) {
+                    ++t.jumps;
+                    t.worstJump = std::max(t.worstJump, disp);
+                }
+                Real dy = yaw - it->second.yaw;
+                while (dy > PI) dy -= 2 * PI;
+                while (dy < -PI) dy += 2 * PI;
+                // A car's yaw rate is bounded by speed / min turn radius (~5 m)
+                // plus a margin; "on a dime" is turning with no speed to turn.
+                if (std::fabs(dy) / dt > a.speed / 4.0 + 0.8) ++t.pivots;
+                const Real fwdMove = d.x * std::sin(yaw) + d.z * std::cos(yaw);
+                // Moving against its drawn nose while still merging out of a
+                // space is REVERSING OUT (a car parked facing the other way
+                // turning round); anywhere else it is a bug.
+                if (a.speed > 1.0 && fwdMove < -0.02) {
+                    if (a.pullLen > 0) ++t.reversingOut;
+                    else ++t.backs;
+                }
+            }
+        }
+        last.swap(now);
+    }
+    return t;
+}
+void printLook(const char* label, const TrafficLook& t) {
+    std::printf("    [look] %-9s wheels: %ld samples, lowest %+.2f m, highest %+.2f m, "
+                "mean |gap| %.3f m | %ld steps: %ld jumps (worst %.2f m), %ld pivots, "
+                "%ld backwards (+%ld reversing out of a space)\n",
+                label, t.wheelSamples, t.wheelMin, t.wheelMax,
+                t.wheelSamples ? t.wheelAbsSum / t.wheelSamples : 0.0, t.steps, t.jumps,
+                t.worstJump, t.pivots, t.backs, t.reversingOut);
+}
+}  // namespace
+
+TEST_CASE(city_drawn_traffic_rolls_on_its_wheels) {
+    // Both, printed side by side: the physical tier is opt-in now
+    // (CitySimConfig::physicalCars), and this is the measurement that made it
+    // so -- measured 2026-09-18 it drew wheels from 0.57 m into the road to
+    // 0.36 m above it, with 26 pivots and snaps of up to 12 m, while the sim's
+    // own motion put every wheel on the deck.
+    const TrafficLook phys = watchTraffic(true);
+    const TrafficLook kin = watchTraffic(false);
+    printLook("physical", phys);
+    printLook("kinematic", kin);
+    // THE SHIPPING DEFAULT. Flat ground: every wheel of every car at one
+    // height, on the road deck (the deck stands a few cm proud of y = 0).
+    CHECK(kin.wheelSamples > 10000);
+    CHECK(kin.wheelMax - kin.wheelMin < 0.05);
+    CHECK(kin.wheelMin > -0.02 && kin.wheelMax < 0.15);
+    // Continuous motion: no pivots, no teleports (a pull-out used to redraw
+    // the car in its lane 5-10 m away in one frame), nothing driving
+    // backwards except a car turning round as it leaves a space.
+    CHECK(kin.pivots == 0);
+    CHECK(kin.worstJump < 0.5);
+    CHECK(kin.backs <= 5);
 }

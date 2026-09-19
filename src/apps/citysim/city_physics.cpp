@@ -239,7 +239,11 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
         }
     }
     // Acquire: nearest moving drivers inside the ring, up to the budget.
-    if (static_cast<int>(possessed_.size()) < maxPhysical_) {
+    // The level's budget (CitySimConfig::physicalCars), capped by the tier's
+    // own. 0 -- the default -- possesses nothing: every car keeps the sim's
+    // own on-road pose.
+    const int budget = std::min(maxPhysical_, city_.params().physicalCars);
+    if (static_cast<int>(possessed_.size()) < budget) {
         const Real inR2 = possessRadius_ * possessRadius_;
         std::vector<std::pair<Real, int>> cand;
         // Grid candidates (P4.1) instead of the full agent scan — ascending,
@@ -262,7 +266,7 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
         }
         std::sort(cand.begin(), cand.end());
         for (const auto& [d2, ai] : cand) {
-            if (static_cast<int>(possessed_.size()) >= maxPhysical_) break;
+            if (static_cast<int>(possessed_.size()) >= budget) break;
             const Agent& a = agents[ai];
             PhysicsWorld::VehicleConfig cfg;   // ambient sedan
             cfg.chassisHalfExtent = Vec3(0.92, 0.45, 2.15);

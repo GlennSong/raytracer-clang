@@ -3894,6 +3894,7 @@ bool LevelLoader::load(const std::string& path,
         cfg.busStops = cs.value("busStops", cfg.busStops);
         cfg.buses = cs.value("buses", cfg.buses);
         cfg.busMaxWalk = cs.value("busMaxWalk", cfg.busMaxWalk);
+        cfg.physicalCars = cs.value("physicalCars", cfg.physicalCars);
         cfg.pedDemoteRadius = cs.value("pedDemoteRadius", cfg.pedDemoteRadius);
         cfg.localHz = cs.value("localHz", cfg.localHz);
         cfg.adaptiveRate = cs.value("adaptiveRate", cfg.adaptiveRate);

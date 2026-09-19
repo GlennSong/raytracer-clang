@@ -72,6 +72,9 @@ struct CityRenderParams {
     int busStops = 8;
     int buses = 0;
     Real busMaxWalk = 120.0;
+    // Cars handed to real physics near the player (CitySimConfig::physicalCars).
+    // 0 = none, the shipping default; the physics soaks opt in.
+    int physicalCars = 0;
     // SIM RATE (P8.2d). Traffic is not physics: agents follow lanes, so a
     // bigger dt costs nothing but precision. 0 or >= the fixed rate keeps the
     // historical every-step tick (and every existing test/gate bit-identical);
