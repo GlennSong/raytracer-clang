@@ -126,13 +126,14 @@ def scene_run(sc, tool, outroot, timeout):
         graph = imp["graph"]
     cmd = [tool, "build", graph, "--out", os.path.join(out, "build")]
     if sc.get("quick"):
-        cmd.append("--quick")
+        cmd.append("--quick")          # no invariant sweep: the verdicts are UNKNOWN, not clean
     text, rc, secs = run(cmd, timeout)
     res["seconds"] = round(secs, 1)
     if rc == 124:
         res["error"] = f"build timed out after {timeout}s"
         return res
     res.update(parse_build(text))
+    res["checked"] = not sc.get("quick")
     if rc != 0 and not res.get("invariants"):
         res["error"] = f"build failed (rc={rc})"
     return res
@@ -153,7 +154,9 @@ def table(rows):
               if "mismatch_after_cm" in r else "—")
         ad = (f"{g(r,'above_deck',0)} of {g(r,'above_deck_of',0)} ({g(r,'above_deck_max_m',0):.1f} m)"
               if "above_deck" in r else "—")
-        inv = "all pass" if not r["failed"] else f"{len(r['failed'])} FAIL: " + ", ".join(r["failed"])
+        inv = ("not checked (--quick)" if not r.get("checked", True)
+               else "all pass" if not r["failed"]
+               else f"{len(r['failed'])} FAIL: " + ", ".join(r["failed"]))
         print(f"{r['name']:<22}{r['kind']:<10}{r['tris']:>9}{r['nonmanifold']:>7}{r['cracks']:>8}"
               f"{mm:>15}{ad:>24}  {inv[:70]}")
     imported = [r for r in rows if r["kind"] == "imported" and r.get("import")]
@@ -190,6 +193,8 @@ def check(rows, base):
         for k, tol in WATCH:
             if k in r and k in b and r[k] > b[k] + tol:
                 bad.append(f"{r['name']}: {k} {b[k]} → {r[k]}")
+        if not r.get("checked", True) or not b.get("checked", True):
+            continue                    # one side never ran the sweep: compare numbers only
         new_fail = set(r["failed"]) - set(b.get("failed", []))
         if new_fail:
             bad.append(f"{r['name']}: new invariant failures: {', '.join(sorted(new_fail))}")

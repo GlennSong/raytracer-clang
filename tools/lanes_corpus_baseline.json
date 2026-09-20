@@ -403,6 +403,37 @@
    "failed": [
     "decks welded (no cracks, no non-manifold edges, closed boundary loops)"
    ]
+  },
+  {
+   "name": "metro_route",
+   "kind": "imported",
+   "tests": "a city whose freeway is an authored ROUTE, not the traced ring: 215 streets kept, diamonds at the crossings",
+   "import": {
+    "streets": 215,
+    "trimmed": 0,
+    "dropped": 0,
+    "landings": 2,
+    "ramps": 8,
+    "graph": "/tmp/lanes-corpus/metro_route/metro_route_lanelab.json",
+    "edges": 225
+   },
+   "import_seconds": 0.3,
+   "seconds": 21.3,
+   "decks": 1,
+   "tris": 583346,
+   "nonmanifold": 0,
+   "cracks": 24,
+   "odd_boundary": 0,
+   "mismatch_before_cm": 338.0,
+   "mismatch_after_cm": 0.4,
+   "lane_pairs": 610,
+   "above_deck": 198,
+   "above_deck_of": 912363,
+   "above_deck_max_m": 3.6,
+   "islands": 109,
+   "enclosed_blocks": 97,
+   "failed": [],
+   "checked": false
   }
  ]
 }
