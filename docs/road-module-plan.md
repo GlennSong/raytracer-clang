@@ -152,3 +152,65 @@ And the third thing phase 3 owes: the loader still calls `navRoadGraph` directly
 the level road graph, so a lanes level's nav graph would silently come from the lattice's sampler
 rather than `roadTwin()`. Those sites work from components, not from the level JSON, so the chosen
 builder has to be recorded beside the road entity first.
+
+## Priority, after looking at the old freeway in the viewer (2026-09-20)
+
+Glenn, on the legacy corridor freeway: *"we know it doesn't work because it doesn't correctly merge
+properly with other roads ... that's all legacy ... the new road system should be given priority."*
+
+So the order changes. The lane builder must not consume the legacy corridor's **output** — that is
+the old freeway, and it is going away. What survives of that pipeline is its **input**: the route
+planner's anchor polyline, "a freeway should run from here to here", plus an interchange spacing.
+That part is cheap, geometry-free and honest.
+
+1. **Lanes builds the freeway from a route.** `level_import` stops tracing the city's outer face;
+   it takes a route as data (the recipe's `plan.freewayPlans`, or a level's own `freewayPlans`
+   block) and the lanes builder constructs the carriageways, ramps, elevation and interchanges
+   itself, the way it builds everything else. The traced ring becomes a bypass a level ASKS for.
+2. **Then the shapes Glenn wants**: a freeway cutting through the city elevated with ramps; a
+   cloverleaf where two perpendicular freeways meet, then a route around the city. `freeway_cross`
+   in the corpus is the first geometry of the second one.
+3. **Then the corridor pipeline retires** — `corridor_plan`, `corridor_mesh`, the bake, and the
+   `corridor_freeways` recipe key — once the levels that ship with it (freeway_lab,
+   freeway_variants, hillcity, metropolis, metropolis_roads, metropolis_sky) can be built by lanes.
+
+metro_v2_test is untouched by all of this and stays the city it has always been.
+
+### How the route goes in (the seam, read 2026-09-20)
+
+`level_import.cpp` builds its freeway from one variable: `loop`, a polyline, plus `isLoop` (which
+source chains the freeway replaces) and `loopS` (stations along it). Everything after that —
+landing selection, diamonds, band ramps, trimming streets short of the carriageway, the frontage
+ring — works by station along that polyline. Today `loop` comes from `outerFace(chains)`: the city's
+traced boundary.
+
+So the change is to make `loop` come from **data**, and the ring one case of it:
+
+```
+ImportOptions.routes : [ {points: [[x,y]...], closed: bool} ]   // authored, or the recipe's plan
+     empty + freewayLoop  -> today's traced ring (a bypass a level ASKS for)
+     one open route       -> a freeway that cuts through, ends at the map edge
+     several routes       -> they cross; the crossing is an interchange (the cloverleaf)
+```
+
+Reading the rest of the block changes the shape of the job. The ring is not just a polyline: the
+code around it is built on *inside*. `pointInRing(loop, p)` decides which streets are in the city,
+which side a ramp lands on, and where the frontage ring goes; `offsetLoop` wraps; `designLoop` is
+morphological closing-and-opening, which only means anything for a closed curve. Almost all of that
+machinery exists to cope with the fact that the ring was TRACED from a jagged outline.
+
+An authored route needs none of it. It arrives already designed, it has no inside, and its
+alignment is not ours to redraw. So the route is a **separate, simpler path** rather than a retrofit
+of the ring:
+
+* two carriageways offset either side of the polyline (the ring already does this — reusable)
+* every street chain it crosses is either **trimmed short** of the carriageway or promoted to a
+  **landing**; "inside the ring" becomes "left or right of the route", which is well defined
+* no frontage ring, no morphological redraw, no ring tests
+* its two ends are open, so the profile must come down to the ground there — the defect
+  `steep_climb` already pins
+
+The ring path stays where it is, for the bypass case, until it is retired.
+
+The level's `freewayPlans` block is the natural authoring surface — the loader already reads one at
+top level for the rules lab, so the same data serves both road systems while the old one lives.

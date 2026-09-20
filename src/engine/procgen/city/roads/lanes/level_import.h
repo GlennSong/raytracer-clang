@@ -7,13 +7,32 @@
 // freeway: other streets are cut short of it, chosen streets pass under it as landings, and
 // diamond ramps join both carriageways to those landings. Nothing here authors a lane.
 
+#include "engine/procgen/city/polygon.h"   // Vec2
 #include <nlohmann/json.hpp>
 #include <string>
+#include <vector>
 
 namespace engine {
 namespace roads::lanes {
 
+// A freeway ROUTE: where a freeway should go, as data. This is the one part of the
+// old corridor pipeline worth keeping (Glenn, 2026-09-20: the rest is legacy) — a
+// polyline and nothing else, no alignment opinions, no geometry. The lanes builder
+// builds the carriageways, the clearance and the ramps from it.
+//
+// A route is NOT the traced ring: the ring is the city's own outline, which is why
+// its redraw only ever reaches a 9-12 m radius on a real city. A route arrives
+// already designed, so it needs none of the ring's morphology, and none of its
+// "inside" tests either — a route has a left and a right, not an inside.
+struct FreewayRoute {
+    std::vector<Vec2> points;
+    bool closed = false;         // a bypass a level ASKED for, rather than a traced fallback
+};
+
 struct ImportOptions {
+    // Routes win when present; the traced ring is what happens when a level says
+    // nothing, and is on its way out (see docs/road-module-plan.md).
+    std::vector<FreewayRoute> routes;
     bool freewayLoop = true;
     int diamonds = 6;                 // landings around the loop
     double gateSpacing = 650;         // min loop distance between landings

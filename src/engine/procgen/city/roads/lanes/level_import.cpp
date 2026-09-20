@@ -166,9 +166,71 @@ nlohmann::json graphFromLevel(const std::string& levelPath, const std::string& o
         {"ramp",      {{"w", o.rampLaneW}, {"fwd", 1}, {"back", 0}, {"shoulder", o.rampShoulder}, {"rank", 0}, {"g_max", 0.08}, {"window", 40}, {"thick", 1.0}}}};
     out["rules"] = {{"closing", 3.0}, {"bridge_h", 4.0}, {"pier_spacing", 24.0}, {"conform_w", 14.0}, {"same_level_dz", 1.0}};
     nlohmann::json edges = nlohmann::json::array();
+    // --- a freeway ROUTE (data) is built INSTEAD of tracing the city's outline ---
+    // Glenn, 2026-09-20: "it should use the freeway already planned for the city. I
+    // don't think it should just take a ring road and make it a freeway." A route is
+    // a polyline and nothing else: it arrives designed, so none of the ring's
+    // morphology, wrap-arounds or inside-tests below apply to it. Authored in the
+    // level's own `freewayPlans` block — the same key the old loader reads, so one
+    // piece of data serves both road systems while the old one lives.
+    std::vector<FreewayRoute> routes = o.routes;
+    if (routes.empty() && level.contains("freewayPlans") && level["freewayPlans"].is_array()) {
+        for (const auto& jp : level["freewayPlans"]) {
+            FreewayRoute r;
+            const nlohmann::json& pts = jp.is_object() ? jp.value("points", nlohmann::json::array()) : jp;
+            if (jp.is_object()) r.closed = jp.value("closed", false);
+            for (const auto& q : pts)
+                if (q.is_array() && q.size() >= 2)
+                    r.points.emplace_back(q[0].get<double>(), q[1].get<double>());
+            if (r.points.size() >= 2) routes.push_back(std::move(r));
+        }
+    }
+    if (!routes.empty()) {
+        const double dCarriage = o.medianGap / 2 + o.freewayLanes * o.freewayLaneW / 2;
+        for (std::size_t ri = 0; ri < routes.size(); ++ri) {
+            std::vector<Vec2> centre = resample(routes[ri].points, 4.0);
+            if (centre.size() < 2) continue;
+            std::vector<Vec2> tan, nrm;
+            frames(centre, tan, nrm);
+            std::vector<Vec2> ca(centre.size()), cb(centre.size());
+            for (std::size_t i = 0; i < centre.size(); ++i) {
+                ca[i] = centre[i] + nrm[i] * dCarriage;
+                cb[i] = centre[i] - nrm[i] * dCarriage;
+            }
+            std::reverse(cb.begin(), cb.end());          // the other direction
+            // Every street it crosses is passed OVER, not severed: hold the deck clear
+            // above the ground there. (Ramps come next; today the city is crossed, not
+            // yet joined.)
+            nlohmann::json floors = nlohmann::json::array();
+            int crossed = 0;
+            for (const Chain& c : chains) {
+                if (c.xy.size() < 2) continue;
+                for (const Vec2& x : crossings(centre, c.xy)) {
+                    const double z = (ground ? ground(x.x, x.y) : 0.0) + o.clearance;
+                    floors.push_back(nlohmann::json::array({x.x, x.y, z, 30.0}));
+                    ++crossed;
+                }
+            }
+            for (int k = 0; k < 2; ++k) {
+                nlohmann::json e;
+                e["id"] = "fw" + std::to_string(ri) + (k ? "_b" : "_a");
+                e["class"] = "freeway";
+                e["path"] = {{"type", "polyline"}, {"points", pointList(k ? cb : ca)}};
+                e["floor"] = floors;
+                edges.push_back(e);
+            }
+            std::ostringstream rs;
+            rs << "route " << ri << ": " << static_cast<int>(stations(centre).back()) << " m, "
+               << crossed << " street crossings held clear; ";
+            rep.notes += rs.str();
+            rep.loopLength += stations(centre).back();
+            rep.ramps += 0;
+        }
+    }
+
     // --- perimeter loop -> freeway ---
     std::vector<Vec2> loop; std::vector<bool> isLoop(chains.size(), false); std::vector<double> loopS;
-    if (o.freewayLoop) {
+    if (routes.empty() && o.freewayLoop) {
         { int cnt[6] = {0, 0, 0, 0, 0, 0}; for (const Chain& c : chains) ++cnt[static_cast<int>(c.klass)]; std::ostringstream cs; cs << "chains by class: freeway " << cnt[0] << " arterial " << cnt[1] << " collector " << cnt[2] << " local " << cnt[3] << " ramp " << cnt[4] << " alley " << cnt[5] << "; "; rep.notes += cs.str(); }
         std::vector<std::pair<int, bool>> walk = ringChains(outerFace(chains));
         for (const auto& w : walk) { std::vector<Vec2> part = chains[static_cast<size_t>(w.first)].xy; if (w.second) std::reverse(part.begin(), part.end()); if (loop.empty()) loop = part; else loop.insert(loop.end(), part.begin() + 1, part.end()); isLoop[static_cast<size_t>(w.first)] = true; }
