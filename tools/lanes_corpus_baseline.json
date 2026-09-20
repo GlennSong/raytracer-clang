@@ -1,11 +1,11 @@
 {
- "when": "2026-09-20 12:55",
+ "when": "2026-09-20 16:19",
  "scenes": [
   {
    "name": "hill_junction",
    "kind": "authored",
    "tests": "a junction on a slope",
-   "seconds": 1.6,
+   "seconds": 1.8,
    "decks": 1,
    "tris": 8540,
    "nonmanifold": 0,
@@ -21,13 +21,14 @@
    "enclosed_blocks": 0,
    "failed": [
     "no terrain above any deck (> 1 cm)"
-   ]
+   ],
+   "checked": true
   },
   {
    "name": "curve_blocks",
    "kind": "authored",
    "tests": "curved streets closing blocks",
-   "seconds": 1.0,
+   "seconds": 0.9,
    "decks": 1,
    "tris": 11994,
    "nonmanifold": 0,
@@ -38,13 +39,14 @@
    "lane_pairs": 2,
    "islands": 0,
    "enclosed_blocks": 4,
-   "failed": []
+   "failed": [],
+   "checked": true
   },
   {
    "name": "grid_city",
    "kind": "authored",
    "tests": "a regular street grid",
-   "seconds": 4.2,
+   "seconds": 4.1,
    "decks": 2,
    "tris": 30310,
    "nonmanifold": 0,
@@ -55,7 +57,8 @@
    "lane_pairs": 14,
    "islands": 1,
    "enclosed_blocks": 21,
-   "failed": []
+   "failed": [],
+   "checked": true
   },
   {
    "name": "valley_viaduct",
@@ -75,7 +78,8 @@
    "above_deck_max_m": -0.1,
    "islands": 0,
    "enclosed_blocks": 1,
-   "failed": []
+   "failed": [],
+   "checked": true
   },
   {
    "name": "ring_city",
@@ -95,13 +99,14 @@
    "above_deck_max_m": -0.0,
    "islands": 4,
    "enclosed_blocks": 28,
-   "failed": []
+   "failed": [],
+   "checked": true
   },
   {
    "name": "freeway_cross",
    "kind": "authored",
    "tests": "two FREEWAYS crossing, one carried over the other on piers (flat ground, so the scene is about the crossing)",
-   "seconds": 2.0,
+   "seconds": 2.1,
    "decks": 3,
    "tris": 18368,
    "nonmanifold": 0,
@@ -112,33 +117,35 @@
    "lane_pairs": 8,
    "islands": 1,
    "enclosed_blocks": 2,
-   "failed": []
+   "failed": [],
+   "checked": true
   },
   {
    "name": "freeway_cross_relief",
    "kind": "authored",
    "tests": "the same crossing with relief under it: the carried road must climb to its hold and back inside its window",
-   "seconds": 3.4,
+   "seconds": 3.2,
    "decks": 3,
    "tris": 18368,
    "nonmanifold": 0,
    "cracks": 0,
    "odd_boundary": 0,
    "mismatch_before_cm": 95.4,
-   "mismatch_after_cm": 0.6,
+   "mismatch_after_cm": 0.3,
    "lane_pairs": 8,
    "above_deck": 0,
    "above_deck_of": 29648,
    "above_deck_max_m": -0.0,
    "islands": 1,
    "enclosed_blocks": 2,
-   "failed": []
+   "failed": [],
+   "checked": true
   },
   {
    "name": "merge_taper",
    "kind": "authored",
    "tests": "on-ramps merging: one lane, then two dying into one over a short dovetail and a long one",
-   "seconds": 2.0,
+   "seconds": 2.1,
    "decks": 1,
    "tris": 14617,
    "nonmanifold": 0,
@@ -149,27 +156,32 @@
    "lane_pairs": 11,
    "islands": 0,
    "enclosed_blocks": 0,
-   "failed": []
+   "failed": [],
+   "checked": true
   },
   {
    "name": "steep_climb",
    "kind": "authored",
    "tests": "sustained 6% ground under a 4% road, a hill on top, a crossing on the slope and a ramp climbing off it",
-   "seconds": 2.3,
+   "seconds": 2.2,
    "decks": 2,
-   "tris": 9792,
+   "tris": 10259,
    "nonmanifold": 0,
    "cracks": 0,
    "odd_boundary": 0,
    "mismatch_before_cm": 0.0,
    "mismatch_after_cm": 0.0,
-   "lane_pairs": 3,
-   "above_deck": 0,
-   "above_deck_of": 16124,
-   "above_deck_max_m": -0.0,
+   "lane_pairs": 4,
+   "above_deck": 81,
+   "above_deck_of": 16937,
+   "above_deck_max_m": 1.6,
    "islands": 0,
    "enclosed_blocks": 0,
-   "failed": []
+   "failed": [
+    "driving surface has no steps (> kerb, < bridge_h)",
+    "no terrain above any deck (> 1 cm)"
+   ],
+   "checked": true
   },
   {
    "name": "coast_city",
@@ -188,17 +200,17 @@
     "edges": 6
    },
    "import_seconds": 1.4,
-   "seconds": 4.9,
+   "seconds": 4.8,
    "decks": 1,
-   "tris": 21269,
+   "tris": 21286,
    "nonmanifold": 0,
    "cracks": 0,
    "odd_boundary": 0,
    "mismatch_before_cm": 198.0,
-   "mismatch_after_cm": 172.5,
+   "mismatch_after_cm": 70.1,
    "lane_pairs": 8,
-   "above_deck": 250,
-   "above_deck_of": 33822,
+   "above_deck": 259,
+   "above_deck_of": 33850,
    "above_deck_max_m": 0.9,
    "islands": 12,
    "enclosed_blocks": 4,
@@ -206,7 +218,8 @@
     "driving surface has no steps (> kerb, < bridge_h)",
     "junction heights consistent",
     "no terrain above any deck (> 1 cm)"
-   ]
+   ],
+   "checked": true
   },
   {
    "name": "living_city",
@@ -224,31 +237,30 @@
     "graph": "/tmp/lanes-corpus/living_city/level_lanelab.json",
     "edges": 13
    },
-   "import_seconds": 0.0,
-   "seconds": 11.3,
-   "decks": 2,
-   "tris": 46619,
-   "nonmanifold": 13,
-   "cracks": 23,
-   "odd_boundary": 4,
+   "import_seconds": 0.1,
+   "seconds": 10.6,
+   "decks": 1,
+   "tris": 41897,
+   "nonmanifold": 6,
+   "cracks": 12,
+   "odd_boundary": 2,
    "mismatch_before_cm": 222.3,
-   "mismatch_after_cm": 410.3,
+   "mismatch_after_cm": 199.1,
    "lane_pairs": 24,
-   "above_deck": 1303,
-   "above_deck_of": 73836,
-   "above_deck_max_m": 1.7,
-   "islands": 33,
+   "above_deck": 907,
+   "above_deck_of": 66032,
+   "above_deck_max_m": 1.4,
+   "islands": 29,
    "enclosed_blocks": 4,
    "failed": [
-    "decks follow their profiles (partners pull < 2.5 m)",
     "decks welded (no cracks, no non-manifold edges, closed boundary loops)",
     "driving surface has no steps (> kerb, < bridge_h)",
     "grade-separated pairs clear their structure",
-    "grades within class limits",
     "junction heights consistent",
     "multilane roads have derived lane adjacency",
     "no terrain above any deck (> 1 cm)"
-   ]
+   ],
+   "checked": true
   },
   {
    "name": "freeway_lab",
@@ -266,20 +278,20 @@
     "graph": "/tmp/lanes-corpus/freeway_lab/freeway_lab_lanelab.json",
     "edges": 15
    },
-   "import_seconds": 1.4,
-   "seconds": 75.1,
-   "decks": 6,
-   "tris": 90582,
-   "nonmanifold": 104,
-   "cracks": 40,
-   "odd_boundary": 20,
+   "import_seconds": 1.5,
+   "seconds": 78.9,
+   "decks": 1,
+   "tris": 89476,
+   "nonmanifold": 80,
+   "cracks": 34,
+   "odd_boundary": 12,
    "mismatch_before_cm": 392.4,
-   "mismatch_after_cm": 318.1,
+   "mismatch_after_cm": 308.5,
    "lane_pairs": 26,
-   "above_deck": 1482,
-   "above_deck_of": 145022,
-   "above_deck_max_m": 9.7,
-   "islands": 55,
+   "above_deck": 1419,
+   "above_deck_of": 143110,
+   "above_deck_max_m": 4.7,
+   "islands": 53,
    "enclosed_blocks": 13,
    "failed": [
     "decks follow their profiles (partners pull < 2.5 m)",
@@ -289,7 +301,8 @@
     "grades within class limits",
     "junction heights consistent",
     "no terrain above any deck (> 1 cm)"
-   ]
+   ],
+   "checked": true
   },
   {
    "name": "hillcity",
@@ -307,20 +320,20 @@
     "graph": "/tmp/lanes-corpus/hillcity/hillcity_lanelab.json",
     "edges": 56
    },
-   "import_seconds": 0.7,
-   "seconds": 287.0,
-   "decks": 3,
-   "tris": 300637,
-   "nonmanifold": 278,
-   "cracks": 95,
-   "odd_boundary": 40,
+   "import_seconds": 0.6,
+   "seconds": 282.8,
+   "decks": 2,
+   "tris": 295757,
+   "nonmanifold": 428,
+   "cracks": 172,
+   "odd_boundary": 48,
    "mismatch_before_cm": 331.3,
-   "mismatch_after_cm": 385.2,
+   "mismatch_after_cm": 358.9,
    "lane_pairs": 175,
-   "above_deck": 6040,
-   "above_deck_of": 475281,
-   "above_deck_max_m": 11.0,
-   "islands": 80,
+   "above_deck": 6757,
+   "above_deck_of": 467404,
+   "above_deck_max_m": 8.0,
+   "islands": 79,
    "enclosed_blocks": 24,
    "failed": [
     "decks follow their profiles (partners pull < 2.5 m)",
@@ -331,7 +344,8 @@
     "grades within class limits",
     "junction heights consistent",
     "no terrain above any deck (> 1 cm)"
-   ]
+   ],
+   "checked": true
   },
   {
    "name": "metro_hills",
@@ -348,17 +362,17 @@
     "edges": 16
    },
    "import_seconds": 0.1,
-   "seconds": 2.1,
+   "seconds": 2.4,
    "decks": 1,
-   "tris": 23408,
+   "tris": 23188,
    "nonmanifold": 0,
    "cracks": 0,
    "odd_boundary": 0,
    "mismatch_before_cm": 312.4,
-   "mismatch_after_cm": 0.0,
+   "mismatch_after_cm": 0.5,
    "lane_pairs": 37,
-   "above_deck": 95,
-   "above_deck_of": 37306,
+   "above_deck": 105,
+   "above_deck_of": 36885,
    "above_deck_max_m": 0.5,
    "islands": 17,
    "enclosed_blocks": 1,
@@ -369,7 +383,8 @@
     "grades within class limits",
     "multilane roads have derived lane adjacency",
     "no terrain above any deck (> 1 cm)"
-   ]
+   ],
+   "checked": true
   },
   {
    "name": "piedmont_mini",
@@ -386,7 +401,7 @@
     "edges": 11
    },
    "import_seconds": 0.1,
-   "seconds": 6.3,
+   "seconds": 6.0,
    "decks": 1,
    "tris": 70501,
    "nonmanifold": 0,
@@ -402,7 +417,42 @@
    "enclosed_blocks": 2,
    "failed": [
     "decks welded (no cracks, no non-manifold edges, closed boundary loops)"
-   ]
+   ],
+   "checked": true
+  },
+  {
+   "name": "metro_v2",
+   "kind": "imported",
+   "tests": "the level the importer was tuned on \u2014 the reference, not a sample",
+   "import": {
+    "streets": 164,
+    "trimmed": 28,
+    "dropped": 4,
+    "landings": 4,
+    "ramps": 12,
+    "ring_target_r": 220.0,
+    "ring_len": 4940.0,
+    "ring_min_r": 215.0,
+    "graph": "/tmp/lanes-corpus/metro_v2/metropolis_sky_lanelab.json",
+    "edges": 182
+   },
+   "import_seconds": 0.7,
+   "seconds": 30.2,
+   "decks": 1,
+   "tris": 518079,
+   "nonmanifold": 0,
+   "cracks": 2,
+   "odd_boundary": 0,
+   "mismatch_before_cm": 156.8,
+   "mismatch_after_cm": 0.2,
+   "lane_pairs": 399,
+   "above_deck": 392,
+   "above_deck_of": 817465,
+   "above_deck_max_m": 0.5,
+   "islands": 28,
+   "enclosed_blocks": 109,
+   "failed": [],
+   "checked": false
   },
   {
    "name": "metro_route",
@@ -417,18 +467,18 @@
     "graph": "/tmp/lanes-corpus/metro_route/metro_route_lanelab.json",
     "edges": 225
    },
-   "import_seconds": 0.3,
-   "seconds": 21.3,
+   "import_seconds": 0.4,
+   "seconds": 81.6,
    "decks": 1,
-   "tris": 583346,
+   "tris": 583269,
    "nonmanifold": 0,
    "cracks": 24,
    "odd_boundary": 0,
-   "mismatch_before_cm": 338.0,
-   "mismatch_after_cm": 0.4,
+   "mismatch_before_cm": 340.3,
+   "mismatch_after_cm": 0.5,
    "lane_pairs": 610,
-   "above_deck": 198,
-   "above_deck_of": 912363,
+   "above_deck": 259,
+   "above_deck_of": 912227,
    "above_deck_max_m": 3.6,
    "islands": 109,
    "enclosed_blocks": 97,

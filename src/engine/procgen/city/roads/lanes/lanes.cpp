@@ -51,17 +51,37 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
     for (EdgeSpec& e : g.edges) if (!e.isRamp()) throughProfile(e, terrain, g.cls(e));
     for (EdgeSpec& e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);   // ramps need heights to take part in crossing consistency
     auto agree = [&](bool first) {
-        // 120, not 12: each pass only partially resolves (a correction is smoothed
-        // over a radius), so a city whose crossings all have to agree needs many more
-        // rounds than a lab scene. metro_hills went 35 cm at 12 iterations, 19 at 30,
-        // 5.5 at 60. The loop exits the moment it is within 0.5 cm, so the extra cap
-        // costs nothing on a scene that converges quickly.
+        // Iterate to the BEST state, not the last one. Each pass only partially
+        // resolves (a correction is smoothed over a radius), so a city whose
+        // crossings all have to agree needs many more rounds than a lab scene:
+        // metro_hills reads 35 cm at 12 iterations, 19 at 30, 5.5 at 60, 0.5 at 120.
+        // But some inputs DIVERGE — a freeway traced off a city's outline with 9 m
+        // hairpins cannot be satisfied — and there a longer run simply travels
+        // further from the answer: living_city went 410 cm at 12 and 710 at 120.
+        // So: keep the profiles from the best round, stop once it stops improving,
+        // and restore them. Convergent scenes are unaffected; divergent ones end at
+        // their best instead of their worst.
+        double best = 1e300;
+        int stalls = 0;
+        std::vector<std::vector<double>> keep;
         for (int it = 0; it < 120; ++it) {
             double mm = nodeConsistency(g, R.endpointTol, R.bridgeH), xm = crossingConsistency(g, R.bridgeH, R.rampLevelDz);
             for (EdgeSpec& e : g.edges) if (!e.isRamp()) applyFloors(e, g.cls(e));   // lifts survive the blends
             for (EdgeSpec& e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);   // hosts moved
-            if (first && it == 0) r.nodeMismatchBefore = std::max(mm, xm);
-            if (std::max(mm, xm) < 0.005) break;
+            const double cur = std::max(mm, xm);
+            if (first && it == 0) r.nodeMismatchBefore = cur;
+            if (cur < best - 1e-4) {
+                best = cur; stalls = 0;
+                keep.clear(); keep.reserve(g.edges.size());
+                for (const EdgeSpec& e : g.edges) keep.push_back(e.z);
+            } else if (++stalls >= 4) {
+                break;
+            }
+            if (cur < 0.005) break;
+        }
+        if (stalls >= 4 && keep.size() == g.edges.size()) {
+            for (std::size_t i = 0; i < g.edges.size(); ++i) g.edges[i].z = keep[i];
+            for (EdgeSpec& e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);
         }
     };
     agree(true);

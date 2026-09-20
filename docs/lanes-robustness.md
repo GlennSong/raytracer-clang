@@ -185,3 +185,24 @@ Three things fell out of authoring them:
    point (331 → 385 cm, 222 → 410 cm).
 
 Artefacts of a run are under `/tmp/lanes-corpus/`; nothing was added to `assets/levels/`.
+
+## What the gate caught in its own author (2026-09-20)
+
+Raising the agree loop's cap from 12 to 120 helped every city that converges and harmed every one
+that does not: living_city went from 410 cm to **710**, hillcity's non-manifold edges doubled,
+freeway_lab's worst terrain-over-deck went 9.7 m to 18.1 m. More iterations on a diverging solve
+only travel further from the answer. The loop now iterates to the BEST state — snapshot the
+profiles whenever the mismatch improves, stop after four rounds without improvement, restore the
+snapshot — so convergent scenes are untouched and divergent ones end at their best:
+
+| | baseline | 120 iterations | best-state |
+|---|---|---|---|
+| living_city | 222 → 410 | 222 → 710 | 222 → **199** |
+| metro_hills | 312 → 0 | 312 → 0.5 | 312 → **0.5** |
+
+Two regressions are accepted and recorded in the baseline. `steep_climb` trades floating for a
+53 m cutting, which is the scene's whole point. `hillcity` — the worst hairpin ring, 9 m radius
+where 220 was asked for — comes out with more weld damage (278 → 428 non-manifold) because the
+dead-zone fix levels more of its crossings and there is no satisfying geometry underneath. Its
+ROUTE version is 27 non-manifold against 428, which is the answer: the ring is the thing to retire,
+not the levelling.
