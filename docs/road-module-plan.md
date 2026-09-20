@@ -214,3 +214,25 @@ The ring path stays where it is, for the bypass case, until it is retired.
 
 The level's `freewayPlans` block is the natural authoring surface — the loader already reads one at
 top level for the rules lab, so the same data serves both road systems while the old one lives.
+
+### Diamonds on a route: three things that had to be right (2026-09-20)
+
+A route's diamond is simpler than the ring's — each carriageway drops a ramp into the band beside it
+and meets the street the freeway crosses, with no frontage road to invent. Getting it to hold took
+three corrections, each of which the invariants named:
+
+1. **Size the ramp against the ground it LANDS on, not the crossing.** The first cut measured the
+   climb at the crossing point and arrived at the street too high; the profile solver then dragged
+   the STREET up to meet it — `c27 26.97% > 8%` — and the junction solve went divergent
+   (338 → 474 cm).
+2. **Finish ALONG the street, not into its centreline.** A ramp driven in at right angles is a
+   sliver in the pavement union, not a junction: 193 non-manifold edges and 309 cracks. Approaching
+   from 40 m back and running tangent brought that to 51 and 80.
+3. **Anchor the free end's HEIGHT to the street.** The graph format already has it: a bare edge id
+   as `from`/`to` is a height-only anchor (`readAnchor`, road_graph_spec.cpp:35). With
+   `"to": "c214"` the ramp arrives at the street's own level instead of the two fighting —
+   **0 non-manifold, 24 cracks, and the junction solve converges to 0.4 cm.**
+
+The ramps must also be emitted AFTER the streets they name: an anchor may not reference a later
+edge. Route ramps are collected and appended once the street edges exist, and any whose street did
+not survive is dropped with a note.

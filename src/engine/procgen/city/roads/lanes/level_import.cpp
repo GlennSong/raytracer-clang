@@ -15,6 +15,7 @@
 #include <fstream>
 #include <memory>
 #include <cstdio>
+#include <set>
 #include <sstream>
 
 namespace engine {
@@ -166,6 +167,9 @@ nlohmann::json graphFromLevel(const std::string& levelPath, const std::string& o
         {"ramp",      {{"w", o.rampLaneW}, {"fwd", 1}, {"back", 0}, {"shoulder", o.rampShoulder}, {"rank", 0}, {"g_max", 0.08}, {"window", 40}, {"thick", 1.0}}}};
     out["rules"] = {{"closing", 3.0}, {"bridge_h", 4.0}, {"pier_spacing", 24.0}, {"conform_w", 14.0}, {"same_level_dz", 1.0}};
     nlohmann::json edges = nlohmann::json::array();
+    // Ramps wait for their streets: an anchor may not name a later edge, and a route
+    // ramp takes its landing height from the street it meets.
+    std::vector<nlohmann::json> routeRamps;
     // --- a freeway ROUTE (data) is built INSTEAD of tracing the city's outline ---
     // Glenn, 2026-09-20: "it should use the freeway already planned for the city. I
     // don't think it should just take a ring road and make it a freeway." A route is
@@ -174,8 +178,18 @@ nlohmann::json graphFromLevel(const std::string& levelPath, const std::string& o
     // level's own `freewayPlans` block — the same key the old loader reads, so one
     // piece of data serves both road systems while the old one lives.
     std::vector<FreewayRoute> routes = o.routes;
-    if (routes.empty() && level.contains("freewayPlans") && level["freewayPlans"].is_array()) {
-        for (const auto& jp : level["freewayPlans"]) {
+    // `lanes.routes`, NOT the top-level `freewayPlans`: that key is read by the old
+    // loader and would grow a LEGACY corridor in the same level (docs/freeway-rules.md
+    // — the corridor pipeline is deprecated). A route for the lane builder has to be
+    // invisible to it. `freewayPlans` is still accepted for a level that has one and
+    // no lattice road entity (the rules-lab scenes).
+    nlohmann::json routeJson = nlohmann::json::array();
+    if (level.contains("lanes") && level["lanes"].is_object() && level["lanes"].contains("routes"))
+        routeJson = level["lanes"]["routes"];
+    else if (level.contains("freewayPlans") && level["freewayPlans"].is_array())
+        routeJson = level["freewayPlans"];
+    if (routes.empty() && routeJson.is_array()) {
+        for (const auto& jp : routeJson) {
             FreewayRoute r;
             const nlohmann::json& pts = jp.is_object() ? jp.value("points", nlohmann::json::array()) : jp;
             if (jp.is_object()) r.closed = jp.value("closed", false);
@@ -219,12 +233,151 @@ nlohmann::json graphFromLevel(const std::string& levelPath, const std::string& o
                 e["floor"] = floors;
                 edges.push_back(e);
             }
+            // --- DIAMONDS: a way on and off, at the streets it crosses ---------------
+            // The ring path's diamonds are built around "inside the ring": the ramps
+            // land on a frontage road that only exists because the ring encircles the
+            // city. A route has no inside, only a LEFT and a RIGHT, and the street it
+            // crosses is already the road its ramps should meet — so the diamond here
+            // is the simpler thing the ring could not be: each carriageway drops a
+            // ramp into the band beside it and Ts onto the crossing street, out past
+            // the freeway's own edge.
+            const std::vector<double> cs = stations(centre);
+            const double routeLen = cs.back();
+            const double edgeReach = dCarriage + o.freewayLanes * o.freewayLaneW / 2 + 2.5;
+            const double rBand = edgeReach + 6.7;          // the band centre, clear of the shoulder
+            const double tOut = 45.0;                      // the T, past the freeway's edge
+            const double dec = 80, tapOff = 72, aux = 110, tapOn = 90, appr = 60;
+            std::vector<double> routeZ;
+            if (ground) { HeightField hf = ground; routeZ = profileAlong(centre, hf, o.freewayWindow, o.freewayGMax); }
+            auto clampS = [&](double st) { return std::max(0.0, std::min(routeLen, st)); };
+            auto deckZ = [&](double st) { return routeZ.empty() ? 0.0 : interp(cs, routeZ, clampS(st)) + o.clearance; };
+            auto atS = [&](double st) { return pointAt(centre, cs, clampS(st)); };
+            auto nrmS = [&](double st) { return perp(tangentAtStation(centre, cs, clampS(st))); };
+
+            // Candidates: every street crossing, squarest first — a ramp meeting its
+            // street at 20 degrees is a merge, not a junction.
+            struct Cand { double s; Vec2 x; std::size_t chain; double angle; };
+            std::vector<Cand> cands;
+            for (std::size_t ci = 0; ci < chains.size(); ++ci) {
+                const Chain& c = chains[ci];
+                if (c.xy.size() < 2) continue;
+                for (const Vec2& x : crossings(centre, c.xy)) {
+                    const Projection pr = project(centre, cs, x);
+                    const Projection pc = project(c.xy, c.s, x);
+                    const Vec2 tr = tangentAtStation(centre, cs, pr.station);
+                    const Vec2 tc = tangentAt(c.xy, pc.segment);
+                    const double d = std::fabs(dot(tr, tc));
+                    cands.push_back({pr.station, x, ci, std::acos(std::min(1.0, d)) * 180.0 / M_PI});
+                }
+            }
+            std::sort(cands.begin(), cands.end(), [](const Cand& a, const Cand& b) { return a.angle > b.angle; });
+
+            // The terminal: the nearest STREET point to where the ramp wants to end —
+            // out past the freeway's edge on the side asked for, beside the crossing.
+            // It need not be the crossing street: a diamond lands on whatever road is
+            // there, which is what the ring path did with its frontage road and what a
+            // city actually looks like.
+            auto terminal = [&](const Cand& cd, double side, Vec2& out, Vec2& dir, std::size_t& chain) {
+                const Vec2 ideal = atS(cd.s) + nrmS(cd.s) * ((edgeReach + tOut) * side);
+                double best = 1e300;
+                for (std::size_t ci = 0; ci < chains.size(); ++ci) {
+                    const Chain& c = chains[ci];
+                    if (c.xy.size() < 2) continue;
+                    const Projection pr = project(c.xy, c.s, ideal);
+                    if (pr.distance > 90.0) continue;                    // not beside this crossing
+                    const Vec2 q = pointAt(c.xy, c.s, pr.station);
+                    if (dot(q - atS(cd.s), nrmS(cd.s)) * side < edgeReach + 15.0) continue;   // still under the freeway
+                    if (pr.distance < best) {
+                        best = pr.distance; out = q; chain = ci;
+                        dir = tangentAt(c.xy, pr.segment);
+                        // point it AWAY from the freeway, so the ramp finishes running
+                        // along the street rather than crossing back under the deck
+                        if (dot(dir, nrmS(cd.s)) * side < 0) dir = dir * -1.0;
+                    }
+                }
+                return best < 1e299;
+            };
+
+            int diamonds = 0, rejOblique = 0, rejNear = 0, rejTerm = 0, rejRoom = 0;
+            double worstAngle = 0;
+            std::vector<double> taken;
+            for (const Cand& cd : cands) {
+                if (diamonds >= o.diamonds) break;
+                worstAngle = std::max(worstAngle, cd.angle);
+                if (cd.angle < 32.0) { ++rejOblique; continue; }     // a ramp at 20 deg is a merge, not a junction
+                bool near = false;
+                for (double t : taken) if (std::fabs(t - cd.s) < o.gateSpacing) near = true;
+                if (near) { ++rejNear; continue; }
+                Vec2 tLeft, tRight, dLeft, dRight;
+                std::size_t cLeft = 0, cRight = 0;
+                if (!terminal(cd, +1.0, tLeft, dLeft, cLeft) || !terminal(cd, -1.0, tRight, dRight, cRight)) { ++rejTerm; continue; }
+                // The run each ramp needs for its climb, at 6% with the approach on top.
+                // Measured to the TERMINAL's ground, not the crossing's: a ramp sized
+                // against the wrong end arrives at the street too high, and then the
+                // profile solver drags the STREET up to meet it — which is what put
+                // c27 at 27% grade and sent the junction solve divergent (338 -> 474 cm)
+                // on the first cut of this.
+                const double gTerm = ground ? std::min(ground(tLeft.x, tLeft.y), ground(tRight.x, tRight.y)) : 0.0;
+                const double climb = std::fabs(deckZ(cd.s) - gTerm);
+                const double L = std::max(170.0, climb / 0.06) + appr;
+                if (cd.s - L < 20.0 || cd.s + L > routeLen - 20.0) { ++rejRoom; continue; }   // no room
+
+                // gore -> band -> the T on the street. `side` picks the carriageway:
+                // +1 is the one offset along +normal (fw_a), -1 its opposite (fw_b).
+                auto band = [&](double sFrom, double sTo, double side, const Vec2& t, const Vec2& tdir) {
+                    std::vector<Vec2> pts;
+                    pts.push_back(atS(sFrom) + nrmS(sFrom) * (dCarriage * side));
+                    const int n = 12;
+                    for (int i = 0; i <= n; ++i) {
+                        const double st = sFrom + (sTo - sFrom) * (static_cast<double>(i) / n);
+                        pts.push_back(atS(st) + nrmS(st) * (rBand * side));
+                    }
+                    // approach the street from 40 m back and finish ALONG it: a ramp
+                    // driven into a centreline at right angles is a sliver in the
+                    // pavement union, not a junction (193 non-manifold edges and 309
+                    // cracks said so).
+                    pts.push_back(t - tdir * 40.0);
+                    pts.push_back(t);
+                    return resample(pts, 4.0);
+                };
+                auto ramp = [&](const std::string& id, const std::string& arc, bool off,
+                                const Vec2& gore, const std::vector<Vec2>& spine, std::size_t street) {
+                    nlohmann::json e; e["id"] = id; e["class"] = "ramp";
+                    nlohmann::json anchor = {{"edge", arc}, {"at", {gore.x, gore.y}}, {"side", "right"},
+                                             {"approach", appr}};
+                    const std::string sid = "c" + std::to_string(street);
+                    if (off) { anchor["decel"] = dec; anchor["taper"] = tapOff; e["from"] = anchor; e["to"] = sid; }
+                    else     { anchor["aux"] = aux;   anchor["taper"] = tapOn;  e["to"] = anchor; e["from"] = sid; }
+                    e["path"] = {{"type", "polyline"}, {"points", pointList(spine)}};
+                    return e;
+                };
+                const std::string pre = "d" + std::to_string(ri) + "_" + std::to_string(diamonds);
+                const std::string aid = "fw" + std::to_string(ri) + "_a";
+                const std::string bid = "fw" + std::to_string(ri) + "_b";
+                // fw_a travels with increasing station: it exits upstream of the
+                // crossing and merges downstream of it. fw_b is the mirror.
+                const Vec2 gAoff = atS(cd.s - L) + nrmS(cd.s - L) * dCarriage;
+                const Vec2 gAon  = atS(cd.s + L) + nrmS(cd.s + L) * dCarriage;
+                const Vec2 gBoff = atS(cd.s + L) - nrmS(cd.s + L) * dCarriage;
+                const Vec2 gBon  = atS(cd.s - L) - nrmS(cd.s - L) * dCarriage;
+                routeRamps.push_back(ramp(pre + "_a_off", aid, true,  gAoff, band(cd.s - L, cd.s, +1.0, tLeft, dLeft), cLeft));
+                routeRamps.push_back(ramp(pre + "_a_on",  aid, false, gAon,  band(cd.s + L, cd.s, +1.0, tLeft, dLeft), cLeft));
+                routeRamps.push_back(ramp(pre + "_b_off", bid, true,  gBoff, band(cd.s + L, cd.s, -1.0, tRight, dRight), cRight));
+                routeRamps.push_back(ramp(pre + "_b_on",  bid, false, gBon,  band(cd.s - L, cd.s, -1.0, tRight, dRight), cRight));
+                taken.push_back(cd.s);
+                ++diamonds;
+                rep.ramps += 4;
+            }
+            rep.landings += diamonds;
+
             std::ostringstream rs;
-            rs << "route " << ri << ": " << static_cast<int>(stations(centre).back()) << " m, "
-               << crossed << " street crossings held clear; ";
+            rs << "route " << ri << ": " << static_cast<int>(routeLen) << " m, "
+               << crossed << " street crossings held clear, " << diamonds << " diamonds of "
+               << cands.size() << " candidate crossings (squarest " << static_cast<int>(worstAngle)
+               << " deg; rejected: oblique " << rejOblique << ", spacing " << rejNear
+               << ", no terminal " << rejTerm << ", no room " << rejRoom << "); ";
             rep.notes += rs.str();
-            rep.loopLength += stations(centre).back();
-            rep.ramps += 0;
+            rep.loopLength += routeLen;
         }
     }
 
@@ -531,6 +684,21 @@ nlohmann::json graphFromLevel(const std::string& levelPath, const std::string& o
             e["lots_range"] = {0.0, sQ + dOuter + 5.0};
         }
         e["path"] = {{"type", "polyline"}, {"points", pointList(c.xy)}}; edges.push_back(e); ++rep.streets; 
+    }
+
+    // The route's ramps, now that every street they name exists.
+    if (!routeRamps.empty()) {
+        std::set<std::string> have;
+        for (const auto& e : edges) have.insert(e["id"].get<std::string>());
+        int kept = 0, dropped = 0;
+        for (nlohmann::json& r : routeRamps) {
+            const nlohmann::json& from = r["from"], & to = r["to"];
+            const std::string sid = from.is_string() ? from.get<std::string>() : to.get<std::string>();
+            if (!have.count(sid)) { ++dropped; continue; }       // its street did not survive
+            edges.push_back(std::move(r)); ++kept;
+        }
+        rep.ramps = kept;
+        if (dropped) rep.notes += std::to_string(dropped) + " route ramps dropped (their street was not emitted); ";
     }
     // --- diamonds ---
     if (!loop.empty()) {

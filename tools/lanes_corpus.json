@@ -106,6 +106,14 @@
    "slow": true,
    "quick": true,
    "tests": "the level the importer was tuned on \u2014 the reference, not a sample"
+  },
+  {
+   "name": "metro_route",
+   "kind": "imported",
+   "source": "assets/lanelab/sources/metro_route.json",
+   "slow": true,
+   "quick": true,
+   "tests": "a city whose freeway is an authored ROUTE, not the traced ring: 215 streets kept, diamonds at the crossings"
   }
  ]
 }
