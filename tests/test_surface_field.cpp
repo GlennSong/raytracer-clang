@@ -2,7 +2,8 @@
 
 #include "../src/engine/procgen/city/surface_field.h"
 #include "../src/engine/procgen/city/block_grade.h"
-#include "../src/engine/procgen/city/road_net.h"
+#include "../src/engine/procgen/city/roads/road_entity.h"
+#include "../src/engine/procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "../src/engine/procgen/city/road_constraints.h"
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/terrain.h"

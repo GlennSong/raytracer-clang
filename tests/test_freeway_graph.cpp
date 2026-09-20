@@ -21,8 +21,9 @@
 #include "../src/engine/procgen/city/corridor_bake.h"
 #include "../src/engine/procgen/city/corridor_mesh.h"
 #include "../src/engine/procgen/city/corridor_plan.h"
-#include "../src/engine/procgen/city/road_lattice.h"
-#include "../src/engine/procgen/city/road_net.h"
+#include "../src/engine/procgen/deprecated/roads/road_lattice.h"
+#include "../src/engine/procgen/city/roads/road_entity.h"
+#include "../src/engine/procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "../src/engine/procgen/city/road_semantics.h"
 #include <nlohmann/json.hpp>
 #include <cmath>

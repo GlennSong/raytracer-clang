@@ -5,7 +5,7 @@
 #include "engine/procgen/lanelab/vertical_profile.h"
 
 #include "engine/level_params.h"
-#include "engine/procgen/city/road_net.h"
+#include "engine/procgen/city/roads/road_entity.h"
 #include "engine/procgen/city/road_mesh.h"
 #include "engine/procgen/noise.h"
 #include "engine/procgen/terrain.h"

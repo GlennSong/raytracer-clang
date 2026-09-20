@@ -26,7 +26,7 @@
 // Run:
 //   /tmp/road_map_svg assets/levels/piedmont_roads.json /tmp/piedmont_map.svg
 
-#include "engine/procgen/city/road_net.h"
+#include "engine/procgen/city/roads/road_entity.h"
 #include "engine/procgen/city/city_lots.h"
 #include "engine/procgen/city/road_network.h"
 #include "engine/ai/nav_graph.h"

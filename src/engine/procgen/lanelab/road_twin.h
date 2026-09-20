@@ -10,7 +10,7 @@
 // every T within 0.5 m becomes a shared node, which is what extractBlocks needs to close a
 // block face. Freeways and ramps are grade-separated from streets: neither split nor splitting.
 
-#include "engine/procgen/city/road_net.h"
+#include "engine/procgen/city/roads/road_entity.h"
 #include "engine/procgen/lanelab/lanelab.h"
 
 namespace engine {

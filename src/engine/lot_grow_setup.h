@@ -8,7 +8,7 @@
 // producer grow the same city from the same inputs.
 
 #include "engine/procgen/city/city_lots.h"
-#include "engine/procgen/city/road_net.h"
+#include "engine/procgen/city/roads/road_entity.h"
 #include "engine/procgen/terrain.h"
 #include "engine/procgen/terrain_field.h"
 

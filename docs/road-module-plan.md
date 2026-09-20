@@ -41,28 +41,24 @@ recipe (level "generate" block) ──applyGenerateRecipe──► planned RoadG
 ```
 
 ```cpp
-// src/engine/procgen/roads/road_builder.h
+// src/engine/procgen/city/roads/road_builder.h  (as built)
 struct RoadBuildInput {
-    RoadGraph planned;                     // from the recipe, or authored
-    RoadLook look;                         // widths, sidewalk, markings, lift
-    std::function<Real(Real, Real)> ground;
-    nlohmann::json options;                // builder-specific knobs (the level's block)
-    Real renderCell = 250.0;
+    const RoadEntity* road = nullptr;      // planned: the recipe has run
+    RoadGroundFn ground;                   // null = flat
+    nlohmann::json options;                // the level's road block
 };
 struct RoadProducts {
-    std::vector<CellMesh> meshes;          // world-space, split by render cell
-    RoadDeckField deck;
-    std::vector<TerrainFlatten> flattens;
-    RoadGraph nav;                         // what buildNavGraph consumes
-    RoadGraph rowKeepOut;                  // freeway/ramp right of way, for the lot pass
-    std::vector<Poly2> blocks;
+    RenderMesh mesh;                       // carriageway, kerbs, sidewalks, markings
+    RoadDeckField deck;                    // the surface things stand on
     CurbBandAudit bands;                   // sidewalk loops (the city map reads them)
 };
 class RoadBuilder {
 public:
     virtual ~RoadBuilder() = default;
-    virtual const char* name() const = 0;          // "lattice" | "lanes"
-    virtual RoadProducts build(const RoadBuildInput&) = 0;
+    virtual const char* name() const = 0;              // "lattice" | "lanes"
+    virtual RoadProducts build(const RoadBuildInput&) const = 0;
+    virtual std::vector<TerrainFlatten> flattens(const RoadBuildInput&) const = 0;
+    virtual RoadGraph navGraph(const RoadBuildInput&) const = 0;
 };
 RoadBuilder* roadBuilder(std::string_view name);   // registry; unknown name -> nullptr + warning
 ```
@@ -74,12 +70,15 @@ the same registry by name, so a recipe script can pick a builder.
 
 ## Phases
 
-1. **Interface, no behaviour change.** Add `road_builder.h`, wrap the lattice and lanelab paths
-   behind it, and make the loader instantiate `RoadProducts` uniformly. The gate is the census:
-   every shipped level's `[citylots]`, `[furniture]`, entity counts and playable checks identical to
-   this branch's parent.
-2. **Fold lanelab in.** `procgen/lanelab/*` → `procgen/roads/lanes/*`, namespace `engine::lanelab` →
-   `engine::roads`, the `lanelab` static library folded into `engine_core` (Clipper2 and CDT become
+1. ~~**Interface, no behaviour change.**~~ **Done** (ADR-0089). `procgen/city/roads/` holds the
+   module: `road_entity.{h,cpp}` (the shared model that was road_net's first half), `road_builder`
+   (interface + registry) and `lattice_builder.cpp`. `procgen/deprecated/roads/` holds the old
+   builder: `road_net_mesh.{h,cpp}` (mesher, carve, walls) and `road_lattice.{h,cpp}`. The loader
+   and the terrain pre-pass both resolve `roads::roadBuilderFor(roadBlock)`. Gate: run_tests
+   1376/1378 (the two known pre-existing failures) and the level census byte-identical across the
+   move.
+2. **Fold lanelab in.** `procgen/lanelab/*` → `procgen/city/roads/lanes/*`, namespace
+   `engine::lanelab` → `engine::roads::lanes`, the `lanelab` static library folded into `engine_core` (Clipper2 and CDT become
    ordinary engine deps), `RT_ENABLE_LANELAB` retired as a policy switch, lab levels moved into the
    normal tree. No "lab" left — it is the lanes builder.
 3. **metro on lanes.** metro_v2_test keeps its recipe and sets `builder:"lanes"`; the lanes builder
@@ -102,3 +101,14 @@ the same registry by name, so a recipe script can pick a builder.
   metro switching builders will show any place where they disagree.
 - **ADR-0085's hazard still stands:** code reached only under the lanes path must prove it is
   looking at lanes content, not assume it from a build flag.
+
+## What phase 1 deliberately did not move
+
+* **The nav graph call sites.** The loader still calls `navRoadGraph` where it derives the level
+  road graph (it is the lattice's `navGraph`, the same function). On lanes the graph comes from
+  `roadTwin()`, so those sites must resolve a builder too — but they work from components, not from
+  the level JSON, so they need the chosen builder recorded beside the entity. Phase 3's first job.
+* **`road_network`, `road_mesh`, `road_spec` and the planning files** (metro, district, constraints,
+  rules, semantics). They are shared road model, used by both builders; they stay in
+  `procgen/city` until the lanes builder lands, then move into `city/roads` as a rename.
+* **`shape:"lanelab"`.** Still the lab's own entry point until the lanes builder can take a recipe.

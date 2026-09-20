@@ -142,7 +142,8 @@ TEST_CASE(clearance_hugs_ground_when_unconstrained) {
 
 // --- the bridge deck rides the clearance profile (ADR-0054) ---
 
-#include "../src/engine/procgen/city/road_net.h"
+#include "../src/engine/procgen/city/roads/road_entity.h"
+#include "../src/engine/procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include <nlohmann/json.hpp>
 
 // edge layers survive a JSON round-trip.

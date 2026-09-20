@@ -25,7 +25,8 @@
 // Usage:
 //     ./build/curb_weld_probe [level.json] [--top N] [--radius M] [--csv out.csv]
 // Default level: assets/levels/metro_v2_test.json
-#include "../../src/engine/procgen/city/road_net.h"
+#include "../../src/engine/procgen/city/roads/road_entity.h"
+#include "../../src/engine/procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "../../src/engine/procgen/city/road_network.h"
 #include "../../src/engine/procgen/city/polygon.h"
 

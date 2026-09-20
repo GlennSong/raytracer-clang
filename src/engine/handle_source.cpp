@@ -1,6 +1,6 @@
 #include "handle_source.h"
 
-#include "procgen/city/road_net.h"   // RoadEntity + its edit ops
+#include "procgen/city/roads/road_entity.h"   // RoadEntity + its edit ops
 
 namespace engine {
 

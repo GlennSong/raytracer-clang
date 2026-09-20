@@ -7075,3 +7075,47 @@ once a pan or zoom settles and slides the previous picture meanwhile. Metal and 
 nothing until they implement `submitUi`. `FlyCameraController::inputSuspended` is how a tool takes
 the pointer: mouse-look, scroll zoom and click-to-fire stand down while it is set.
 ---
+
+## ADR-0089 — One roads module: a builder chosen by data, the lattice deprecated behind it
+
+**Status:** Provisional (2026-09-20). **Trigger:** Glenn: "I'd like to take what's in lanelab and
+make it a new road building module and allow us to switch between using the old one and the new
+one ... call one or the other up via lua or some common C++ interface", and then "Can we back up
+the old road code into a deprecate folder and remove it from procgen/city ... in procgen/city I
+would like a folder for roads where we would put this new code."
+
+**Context.** ADR-0085 kept two road generators and chose between them by entity `shape`:
+`shape:"road"` swept the lattice, `shape:"lanelab"` ran the lane-atomic generator behind a link
+boundary. That settled how they coexist but not where they live. `procgen/city/road_net.cpp` was
+2811 lines holding two unrelated things — the road ENTITY (its `generate` recipe, the sampled and
+constrained graphs everything routes on, the editor ops, the JSON) and the lattice MESHER (the
+swept surface, its terrain carve, its retaining walls). The first is shared road model that the
+lane generator already calls (`applyGenerateRecipe`, `navRoadGraph`, `roadNetWeldSpines`); the
+second is the old builder. One file, so no boundary.
+
+**Decision.** Split by responsibility, not by file:
+
+* `procgen/city/roads/` — the module. `road_entity.{h,cpp}` is the shared model (what used to be
+  road_net); `road_builder.h` is the interface every builder implements — `build` (surface, deck,
+  kerb band), `flattens` (the carve the terrain pre-pass needs before the surface exists) and
+  `navGraph` (the centrelines everything routes on) — plus a registry by name.
+* `procgen/deprecated/roads/` — `road_net_mesh.{h,cpp}` and `road_lattice.{h,cpp}`: the lattice
+  builder, moved verbatim, still compiled, still selectable, with a README saying what deletes it.
+* **Selection is data.** A road entity's block says `"builder": "lattice"` (the default) or
+  `"builder": "lanes"`. The loader and the terrain pre-pass both resolve it through
+  `roads::roadBuilderFor(roadBlock)`, so one level can use one builder and the next another. An
+  unknown name warns once and falls back to the default: a typo costs a road's shape, not a level.
+* Builders register explicitly (`registerLatticeRoadBuilder`), not with a file-static registrar:
+  engine_core is a static library and a translation unit nothing references is dropped at link.
+
+**Consequences.** `buildRoadNetMesh` is no longer what the loader calls; it is what the `"lattice"`
+builder calls. Every shipped level still builds with it, byte for byte — the gate is that the
+census (citylots, skyline, furniture, playable checks) is identical across the move, and
+`the_lattice_builder_builds_exactly_what_the_loader_built_before` holds the wrapper to the three
+direct calls it replaced. Code that still calls the mesher directly (diagnostics, the editor's
+explicit rebuild, the surface tests) now says so by including from `deprecated/`, which is the
+point: the remaining callers are visible. `road_net_internal.h` is the seam the split left — the
+sampler, the constraints pass and the weld chains both halves share — and it collapses back into
+`road_entity.cpp` when the lattice goes. Still to come: the lanes builder implementing this
+interface from a recipe (the `level_import` bridge), lanelab folded in as `city/roads/lanes`, and
+metro_v2_test switching over.

@@ -1,8 +1,8 @@
 #include "road_lattice.h"
 
-#include "../../mesh_builder.h"      // MeshBuilder::emitLattice
-#include "triangulate.h"           // junction pad ear-clip (roads-v2)
-#include "road_mesh.h"             // curbReturnFillet (the authored kerb return)
+#include "../../../mesh_builder.h"      // MeshBuilder::emitLattice
+#include "../../city/triangulate.h"           // junction pad ear-clip (roads-v2)
+#include "../../city/road_mesh.h"             // curbReturnFillet (the authored kerb return)
 #include <unordered_map>
 #include <algorithm>
 #include <cmath>

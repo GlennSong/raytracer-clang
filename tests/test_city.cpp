@@ -9,7 +9,8 @@
 #include "../src/engine/procgen/city/parcel.h"
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/city/road_mesh.h"
-#include "../src/engine/procgen/city/road_net.h"   // buildRoadNetLattice (the ONE mesher)
+#include "../src/engine/procgen/city/roads/road_entity.h"   // buildRoadNetLattice (the ONE mesher)
+#include "../src/engine/procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "../src/engine/procgen/city/city_lots.h"   // LotBuilding, appendLotMassBox
 #include "../src/engine/procgen/city/site_plan.h"
 #include "../src/engine/procgen/city/core_plan.h"   // offsetPolygonEdges (corner closure test)

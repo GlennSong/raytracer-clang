@@ -26,7 +26,7 @@
 #include "../src/engine/level_loader.h"
 #include "../src/engine/mesh_uploader.h"
 #include "../src/engine/procgen/terrain.h"
-#include "../src/engine/procgen/city/road_net.h"   // RoadEntity (signal census)
+#include "../src/engine/procgen/city/roads/road_entity.h"   // RoadEntity (signal census)
 #include "../src/engine/procgen/city/building_records.h"
 #include "../src/engine/procgen/city/core_plan.h"  // CityBuildings doors (ADR-0080)
 #include "../src/engine/procgen/city/city_svg.h"   // CityMapData (the in-road census)

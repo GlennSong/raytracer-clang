@@ -1,11 +1,10 @@
-#ifndef RAYTRACER_ENGINE_PROCGEN_CITY_ROAD_NET_H
-#define RAYTRACER_ENGINE_PROCGEN_CITY_ROAD_NET_H
+#ifndef RAYTRACER_ENGINE_PROCGEN_CITY_ROADS_ROAD_ENTITY_H
+#define RAYTRACER_ENGINE_PROCGEN_CITY_ROADS_ROAD_ENTITY_H
 
-#include "road_mesh.h"          // UnionSpine, strokeRibbon, roadProfile, RenderMesh
-#include "road_spec.h"          // RoadSpec band model (roads-v2 Part 1)
-#include "road_network.h"       // RoadGraph — the ONE road graph
-#include "structure_set.h"      // StructureSet, StructureParams (buildRoadWalls)
-#include "metro.h"              // CityHub (polycentric zoning handoff)
+#include "../road_mesh.h"          // UnionSpine, strokeRibbon, roadProfile, RenderMesh
+#include "../road_spec.h"          // RoadSpec band model (roads-v2 Part 1)
+#include "../road_network.h"       // RoadGraph — the ONE road graph
+#include "../metro.h"              // CityHub (polycentric zoning handoff)
 #include <nlohmann/json.hpp>
 #include <functional>
 #include <string>
@@ -104,8 +103,6 @@ struct RoadEntity {
 // serialized; pass what the loader (or the editor's conform pass) knows.
 using RoadGroundFn = std::function<double(double, double)>;
 
-// Build the road surface for `road` (its graph swept by buildRoadNetLattice).
-// `heightAt` drapes it on the level terrain (null = flat).
 // Diagnostic capture of the curb/sidewalk BAND's inputs (roads-v2 S5). The band
 // is not a per-junction object — it is swept along the closed boundary loops of
 // the whole asphalt union — so a probe cannot reconstruct it from the graph
@@ -125,36 +122,6 @@ struct CurbBandAudit {
     double curbHeight = 0.0;
 };
 
-// `deckOut` (optional) receives the DECK the mesh rode — see RoadDeckField —
-// indexed and ready to query; the loader stores it beside the road entity.
-RenderMesh buildRoadNetMesh(const RoadEntity& road, const RoadGroundFn& heightAt,
-                            CurbBandAudit* auditOut = nullptr,
-                            RoadDeckField* deckOut = nullptr);
-
-// Swept-lattice street mesher (street-lattice-plan.md, stage 3): sweep each chain
-// as a lattice body trimmed to the junction boundary, and fill each deg>=3 node
-// with a Coons junction patch that shares the bodies' mouth rings — so the
-// surface is quads with interior vertices (conforms to terrain) and junctions
-// interpolate height (no medial-axis step). `heightAt` drapes the streets
-// (null = flat). `chainTriEndsOut` (optional, diagnostics): index-buffer
-// position after each swept chain BODY, in order; back() is where bodies end
-// and junction PADS begin. The surface-scan tests use it to classify which
-// surfaces stack (same-chain self-fold / cross-chain / body-pad / pad-pad).
-RenderMesh buildRoadNetLattice(const RoadGraph& g,
-                               const std::function<Real(Real, Real)>& heightAt,
-                               std::vector<std::size_t>* chainTriEndsOut = nullptr,
-                               double sidewalkWidth = 3.0, double curbHeight = 0.15,
-                               bool crosswalks = true, CurbBandAudit* auditOut = nullptr,
-                               // 0 = the old radius-less quadratic corner. The real
-                               // value arrives from RoadLook::cornerRadius via
-                               // buildRoadNetMesh; hand-built graphs keep the old shape.
-                               double cornerRadius = 0.0,
-                               // The deck: final chains (yAbs) + pad triangles.
-                               RoadDeckField* deckOut = nullptr,
-                               // Grade limit per class (RoadLook::perClassGrade) or
-                               // the single kRoadMaxGrade. Must match what the
-                               // terrain carve is told, or deck and ground disagree.
-                               bool perClassGrade = true);
 
 // The sampled + constrained road graph the mesher builds from: every edge sampled
 // to a fine polyline (a curved road becomes a chain of short straight edges; a
@@ -178,25 +145,6 @@ RoadGraph roadNetFullGraph(const RoadEntity& road, const RoadGroundFn& heightAt)
 RoadGraph roadNetConstrainedGraph(const RoadEntity& road, const RoadGroundFn& heightAt);
 std::vector<UnionSpine> roadNetWeldSpines(const RoadGraph& g);
 
-// The terrain cut/fill footprints that grade the ground to this road (ADR-0044 corridor
-// conforming). Traces the graph's chains, gives each a smoothed, grade-limited vertical
-// profile (roadProfile, over `heightAt`), and emits a flatten ramp per segment at the
-// profile, half-width = carriageway + `shoulder`, feathered over `falloff`. The loader
-// folds these into the level terrain before it builds, so the ground meets the road and no
-// terrain pokes through. Empty if `heightAt` is null (a flat road needs no carving).
-std::vector<TerrainFlatten> roadNetConformRegions(const RoadEntity& road,
-                                                  const RoadGroundFn& heightAt,
-                                                  double shoulder = 1.5,
-                                                  double falloff = 8.0, double maxGrade = 0.10);
-
-// Retaining / fill walls for a road whose `heightAt` is the NATURAL (pre-carve)
-// ground (ADR-0075 Phase 1). Reuses the SAME spine + grade-limited profile as
-// roadNetConformRegions, so a wall stands exactly where the terrain batter clamps
-// at `p.reach` — capping the residual step a steep cut/fill can't daylight, never
-// double-counting it. The 3-D grade-break geometry the 2.5-D ground defers to a
-// StructureSet. Empty on flat ground or when `heightAt` is null.
-StructureSet buildRoadWalls(const RoadEntity& road, const RoadGroundFn& heightAt,
-                            const StructureParams& p = {});
 
 // --- editor edit ops (each leaves the road ready for buildRoadNetMesh) ---------
 // The SPEC of edge `ei`: its entry in the graph's spec table when assigned, else

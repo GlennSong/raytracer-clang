@@ -16,7 +16,9 @@
 #include "../procgen/city/street_kit.h"
 #include "../procgen/city/road_network.h"
 #include "../procgen/city/road_mesh.h"
-#include "../procgen/city/road_net.h"   // buildRoadNetLattice (city.solid, S6)
+#include "../procgen/city/roads/road_entity.h"   // buildRoadNetLattice (city.solid, S6)
+#include "../procgen/city/roads/road_builder.h"   // city.road_builders(): the registry, by name
+#include "../procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "../procgen/city/road_crossings.h"
 #include "../procgen/city/polygon.h"
 #include "../procgen/city/parcel.h"
@@ -1879,6 +1881,21 @@ int l_terrain_preset(lua_State* L) {
     return 1;
 }
 
+// city.road_builders() -> array of names. The road builders THIS BUILD has
+// (roads module, ADR-0089): "lattice" is the swept lattice every shipped level
+// is built with; "lanes" is the lane-atomic builder once it is folded in. A
+// level or a recipe chooses one by writing `builder = "<name>"` into its road
+// block -- selection is data, so a script picks a builder without a rebuild.
+int l_city_road_builders(lua_State* L) {
+    const std::vector<std::string> names = roads::roadBuilderNames();
+    lua_createtable(L, static_cast<int>(names.size()), 0);
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        lua_pushstring(L, names[i].c_str());
+        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    return 1;
+}
+
 // city.road_mesh(layout, { height=HeightField, sidewalk=, curb=, crosswalks= })
 //   -> mesh. Builds a connected road *surface* from a layout table (the one
 // city.layout returns, or one a recipe edited — added spine edges/nodes).
@@ -2903,6 +2920,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"layout", l_city_layout},
         {"lots", l_city_lots},
         {"road_mesh", l_city_road_mesh},
+        {"road_builders", l_city_road_builders},
         {"stroke", l_city_stroke},
         {"solid", l_city_solid},
         {"resolve", l_city_resolve},

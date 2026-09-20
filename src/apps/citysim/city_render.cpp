@@ -7,7 +7,7 @@
 #include "../../engine/asset_manager.h"
 #include "../../engine/components.h"
 #include "../../engine/mesh_builder.h"
-#include "../../engine/procgen/city/road_net.h"
+#include "../../engine/procgen/city/roads/road_entity.h"
 #include "../../engine/procgen/city/road_mesh.h"     // strokeRibbon (closed lot/block outlines)
 #include "../../engine/procgen/city/street_kit.h"   // trafficSignalProto, SignalParams
 #include "../../engine/procgen/noise.h"             // Noise (carved-terrain sampler)

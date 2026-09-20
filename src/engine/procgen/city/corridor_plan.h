@@ -21,7 +21,7 @@
 // for ONE net — the editor's recipe-Regenerate entry point.
 
 #include "alignment.h"     // CorridorDef
-#include "road_net.h"      // RoadEntity
+#include "roads/road_entity.h"      // RoadEntity
 
 #include <functional>
 #include <utility>

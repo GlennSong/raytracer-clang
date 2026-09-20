@@ -1,8 +1,8 @@
-#ifndef RAYTRACER_ENGINE_PROCGEN_CITY_ROAD_LATTICE_H
-#define RAYTRACER_ENGINE_PROCGEN_CITY_ROAD_LATTICE_H
+#ifndef RAYTRACER_ENGINE_PROCGEN_DEPRECATED_ROADS_ROAD_LATTICE_H
+#define RAYTRACER_ENGINE_PROCGEN_DEPRECATED_ROADS_ROAD_LATTICE_H
 
-#include "road_mesh.h"                     // UnionSpine
-#include "../../../renderer/renderer.h"    // RenderMesh
+#include "../../city/road_mesh.h"                     // UnionSpine
+#include "../../../../renderer/renderer.h"    // RenderMesh
 #include <functional>
 #include <vector>
 

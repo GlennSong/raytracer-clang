@@ -2,6 +2,7 @@
 
 #include "engine/level_params.h"
 #include "engine/procgen/earthwork.h"
+#include "procgen/city/roads/road_builder.h"   // one interface, several road builders
 
 namespace engine {
 namespace {
@@ -84,7 +85,15 @@ bool cityPrePassForLevel(const nlohmann::json& rootIn, CityPrePass& out) {
             RoadEntity net = roadNetFromJson(roadBlock);
             if (roadBlock.contains("generate"))
                 applyGenerateRecipe(net, roadBlock["generate"], out.naturalGround);
-            std::vector<TerrainFlatten> r = roadNetConformRegions(net, out.naturalGround);
+            // The carve is the BUILDER's (roads module): the lattice grades the
+            // ground to its own swept profile, and a lanes road will grade to
+            // its own. Same selection as the loader's — the road block's
+            // "builder", default "lattice".
+            roads::RoadBuildInput in;
+            in.road = &net;
+            in.ground = out.naturalGround;
+            in.options = roadBlock;
+            std::vector<TerrainFlatten> r = roads::roadBuilderFor(roadBlock).flattens(in);
             out.roadFlatten.insert(out.roadFlatten.end(), r.begin(), r.end());
             out.nets.push_back(std::move(net));
         }

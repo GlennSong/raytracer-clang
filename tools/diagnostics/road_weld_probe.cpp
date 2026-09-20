@@ -7,7 +7,8 @@
 // measure GAP = area the curb encloses that the actual deck mesh does NOT cover
 // (the terrain-through-the-junction failure). Also reports the min approach angle
 // and how fragmented polygonUnion's output was (a robustness proxy).
-#include "../../src/engine/procgen/city/road_net.h"
+#include "../../src/engine/procgen/city/roads/road_entity.h"
+#include "../../src/engine/procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "../../src/engine/procgen/city/road_network.h"
 #include "../../src/engine/procgen/city/road_offset.h"
 #include "../../src/engine/procgen/city/polygon.h"

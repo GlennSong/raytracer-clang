@@ -28,7 +28,7 @@
 
 #include "../src/engine/level_params.h"
 #include "../src/engine/procgen/city/city_lots.h"
-#include "../src/engine/procgen/city/road_net.h"
+#include "../src/engine/procgen/city/roads/road_entity.h"
 #include "../src/engine/procgen/city/road_network.h"
 
 #include <cmath>

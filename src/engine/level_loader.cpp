@@ -20,7 +20,9 @@
 #include "procgen/city/city_lots.h"  // grow buildings on the road net's blocks (ADR-0066)
 #include "procgen/city/building_collider.h"  // prism + door notches (ADR-0080)
 #include "procgen/city/building_records.h"   // CityBuildings runtime records (ADR-0080)
-#include "procgen/city/road_net.h"
+#include "procgen/city/roads/road_entity.h"
+#include "procgen/city/roads/road_builder.h"   // one interface, several road builders
+#include "procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "procgen/city/road_semantics.h"   // editor-authored roads (shape:"road")
 #include "procgen/city/citylots_producer.h"   // the lattice city's lot pre-pass as a producer (ADR-0084 C)
 #include "bundle/bake.h"
@@ -43,7 +45,7 @@
 #include "procgen/city/road_constraints.h"   // applyConstraints — bake roundabouts into the graph
 #include "procgen/city/road_mesh.h"   // triangulatePolygon (building prism colliders)
 #include "procgen/city/corridor_mesh.h"      // freeway corridors (plan §8)
-#include "procgen/city/road_lattice.h"       // swept-lattice freeway mesher
+#include "procgen/deprecated/roads/road_lattice.h"       // swept-lattice freeway mesher
 #include "procgen/city/street_furniture.h"   // build-time signal/lamp placement
 #include "procgen/city/street_kit.h"  // trafficSignalProto, streetLamp
 #include "procgen/city/street_names.h"  // nameStreets
@@ -509,16 +511,24 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     r.material.roughness = 0.93f;
     if (net.look.markings)                           // lane paint via the surface shader
         r.material.setSurface(RenderMaterial::Surface::RoadMarkings);
-    RoadDeckField deck;
-    // The mesher's own curb band outlines ride along for the city map: the
-    // sidewalks drawn are the sidewalks built (a few thousand points).
-    engine::CurbBandAudit bandAudit;
-    RenderMesh mesh = buildRoadNetMesh(net, drapeGround, &bandAudit, &deck);
-    if (!bandAudit.loops.empty()) {
+    // WHICH BUILDER IS DATA (roads module, docs/road-module-plan.md): the road
+    // block's "builder" names it, default "lattice" — the swept lattice every
+    // shipped level is built with. The builder owes the surface, the deck it
+    // rides and the kerb band; the mesher's own curb band outlines ride along
+    // for the city map, so the sidewalks drawn are the sidewalks built.
+    roads::RoadBuildInput buildIn;
+    buildIn.road = &net;
+    buildIn.ground = drapeGround;
+    buildIn.options = roadBlock;
+    roads::RoadProducts built = roads::roadBuilderFor(roadBlock).build(buildIn);
+    RoadDeckField deck = std::move(built.deck);
+    RenderMesh mesh = std::move(built.mesh);
+    if (!built.bands.loops.empty()) {
         engine::RoadBandDebug band;
-        band.loops = std::move(bandAudit.loops);
-        band.mouthGaps = std::move(bandAudit.mouthGaps);
-        band.sidewalkWidth = bandAudit.sidewalkWidth > 0 ? bandAudit.sidewalkWidth : net.look.sidewalk;
+        band.loops = std::move(built.bands.loops);
+        band.mouthGaps = std::move(built.bands.mouthGaps);
+        band.sidewalkWidth =
+            built.bands.sidewalkWidth > 0 ? built.bands.sidewalkWidth : net.look.sidewalk;
         world.add<engine::RoadBandDebug>(e, std::move(band));
     }
     if (!mesh.vertices.empty())

@@ -5,7 +5,7 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/city/road_spec.h"
-#include "../src/engine/procgen/city/road_net.h"
+#include "../src/engine/procgen/city/roads/road_entity.h"
 #include <cmath>
 
 using namespace engine;

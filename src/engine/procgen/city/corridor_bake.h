@@ -19,7 +19,7 @@
 // solver input; nothing downstream needs it once the graph exists.
 
 #include "corridor_mesh.h"   // CorridorDef, RampPath, CorridorAuthoring
-#include "road_net.h"        // RoadEntity
+#include "roads/road_entity.h"        // RoadEntity
 
 namespace engine {
 

@@ -11,7 +11,7 @@
 
 #include "engine/bundle/binary_stream.h"
 #include "engine/components.h"
-#include "engine/procgen/city/road_net.h"
+#include "engine/procgen/city/roads/road_entity.h"
 #include "renderer/renderer.h"
 #include "rt_math.h"
 

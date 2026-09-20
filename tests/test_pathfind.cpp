@@ -1,7 +1,7 @@
 #include "test_framework.h"
 
 #include "../src/engine/ai/pathfind.h"
-#include "../src/engine/procgen/city/road_net.h"   // S8: band-model walk tests
+#include "../src/engine/procgen/city/roads/road_entity.h"   // S8: band-model walk tests
 
 using namespace engine;
 

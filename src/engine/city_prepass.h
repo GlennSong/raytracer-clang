@@ -15,7 +15,7 @@
 // than the loader would is worse than no cache at all.
 
 #include "engine/lot_grow_setup.h"
-#include "engine/procgen/city/road_net.h"
+#include "engine/procgen/city/roads/road_entity.h"
 #include "engine/procgen/terrain.h"
 #include "engine/procgen/terrain_field.h"
 

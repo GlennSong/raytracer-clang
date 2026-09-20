@@ -9,7 +9,7 @@
 #include "../src/engine/asset_manager.h"
 #include "../src/engine/components.h"
 #include "../src/engine/editor_bridge.h"
-#include "../src/engine/procgen/city/road_net.h"
+#include "../src/engine/procgen/city/roads/road_entity.h"
 #include "../src/engine/systems/editor_system.h"
 
 #include <QCheckBox>

@@ -5,7 +5,8 @@
 #include "mesh_builder.h"
 #include "systems/camera_system.h"
 #include "procgen/city/corridor_plan.h"   // rebakeNetCorridors
-#include "procgen/city/road_net.h"
+#include "procgen/city/roads/road_entity.h"
+#include "procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "../log.h"
 
 #include <nlohmann/json.hpp>

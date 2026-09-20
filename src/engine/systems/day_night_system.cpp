@@ -1,6 +1,6 @@
 #include "day_night_system.h"
 #include "../components.h"
-#include "../procgen/city/road_net.h"   // RoadEntity: the city's footprint (light pollution)
+#include "../procgen/city/roads/road_entity.h"   // RoadEntity: the city's footprint (light pollution)
 #include "../procgen/noise.h"
 #include "../procgen/terrain.h"          // terrainHeight: the horizon raster
 #include "../vehicle_lamps.h"   // duskRamp: night glow shares the lamp boundary

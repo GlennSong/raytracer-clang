@@ -1,7 +1,7 @@
 #include "city_lots.h"
 
 #include "parcel.h"          // subdivideBlock, Lot, ParcelParams
-#include "road_net.h"        // RoadEntity + navRoadGraph (growLotBuildingsOnNets)
+#include "roads/road_entity.h"        // RoadEntity + navRoadGraph (growLotBuildingsOnNets)
 #include "road_network.h"    // RoadGraph (edge blocks walk its chains)
 #include "architect.h"       // DistrictMap + archetype tables (the architect pass)
 #include "shape_grammar.h"   // scopeFromFootprint, growBuilding — REAL buildings

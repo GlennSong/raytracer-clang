@@ -2,7 +2,7 @@
 
 #include "../src/engine/handle_source.h"
 #include "../src/engine/path_edit_tool.h"
-#include "../src/engine/procgen/city/road_net.h"
+#include "../src/engine/procgen/city/roads/road_entity.h"
 
 using namespace engine;
 

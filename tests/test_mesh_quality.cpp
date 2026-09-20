@@ -16,7 +16,8 @@
 #include "test_framework.h"
 #include "mesh_invariants.h"
 
-#include "../src/engine/procgen/city/road_net.h"
+#include "../src/engine/procgen/city/roads/road_entity.h"
+#include "../src/engine/procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "../src/engine/procgen/city/road_mesh.h"
 #include <algorithm>
 #include <cmath>

@@ -16,7 +16,7 @@
 //
 // Usage:
 //     ./build/junction_angle_probe [level.json] [--target 60] [--csv out.csv]
-#include "../../src/engine/procgen/city/road_net.h"
+#include "../../src/engine/procgen/city/roads/road_entity.h"
 #include "../../src/engine/procgen/city/road_network.h"
 #include "../../src/engine/procgen/city/polygon.h"
 

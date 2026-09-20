@@ -10,7 +10,7 @@
 #include "../src/apps/citysim/city_physics.h"
 #include "../src/apps/citysim/city_render.h"
 #include "../src/engine/components.h"
-#include "../src/engine/procgen/city/road_net.h"
+#include "../src/engine/procgen/city/roads/road_entity.h"
 #include "../src/engine/systems/physics_system.h"
 #include "../src/engine/asset_manager.h"
 #include "../src/engine/mesh_uploader.h"

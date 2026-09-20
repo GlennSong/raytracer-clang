@@ -117,7 +117,6 @@ add_library(engine_core STATIC
     src/engine/procgen/city/alignment.cpp
     src/engine/procgen/city/corridor_mesh.cpp
     src/engine/procgen/city/road_mesh.cpp
-    src/engine/procgen/city/road_lattice.cpp
     src/engine/procgen/city/triangulate.cpp
     src/engine/procgen/city/metro.cpp
     src/engine/procgen/city/water_mesh.cpp
@@ -125,7 +124,14 @@ add_library(engine_core STATIC
     src/engine/procgen/city/corridor_bake.cpp
     src/engine/procgen/city/corridor_plan.cpp
     src/engine/procgen/city/road_spec.cpp
-    src/engine/procgen/city/road_net.cpp
+    # the roads module (2026-09-20): the road ENTITY and its recipe are shared
+    # model; the lattice mesher that used to sit in the same file is deprecated
+    # but still what every shipped level builds, so it still compiles.
+    src/engine/procgen/city/roads/road_entity.cpp
+    src/engine/procgen/city/roads/road_builder.cpp
+    src/engine/procgen/city/roads/lattice_builder.cpp
+    src/engine/procgen/deprecated/roads/road_net_mesh.cpp
+    src/engine/procgen/deprecated/roads/road_lattice.cpp
     src/engine/procgen/city/road_constraints.cpp
     src/engine/procgen/city/road_semantics.cpp
     src/engine/procgen/city/road_rules.cpp
@@ -669,6 +675,7 @@ add_executable(run_tests
     tests/test_road_crossings.cpp
     tests/test_building_lod.cpp
     tests/test_road_net.cpp
+    tests/test_road_builder.cpp
     tests/test_road_graph_order.cpp
     tests/test_road_rules.cpp
     tests/test_road_weld.cpp

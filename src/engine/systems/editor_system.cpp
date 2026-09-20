@@ -2,7 +2,8 @@
 #include <cstdlib>
 
 #include "../components.h"
-#include "../procgen/city/road_net.h"   // editable road regen (ADR-0049)
+#include "../procgen/city/roads/road_entity.h"   // editable road regen (ADR-0049)
+#include "../procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "../procgen/city/corridor_plan.h"   // Regenerate re-bakes freeways (roads-v2 S3)
 #include "../procgen/earthwork.h"            // the re-conform rebuilds the earthwork field
 #include "../imgui_properties.h"

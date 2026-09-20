@@ -7,7 +7,8 @@
 #include "engine/procgen/surface_maps.h"
 #include "engine/model_importer.h"
 #include "engine/procgen/city/city_lots.h"   // living-city lots (offline parity)
-#include "engine/procgen/city/road_net.h"
+#include "engine/procgen/city/roads/road_entity.h"
+#include "engine/procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "engine/procgen/noise.h"
 #include "engine/procgen/terrain_field.h"   // HeightField (level ground sampler)
 #include "engine/procgen/earthwork.h"       // the earthwork field (device parity)

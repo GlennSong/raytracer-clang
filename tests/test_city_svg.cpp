@@ -2,7 +2,8 @@
 
 #include "../src/engine/procgen/city/city_svg.h"
 #include "../src/engine/procgen/city/road_network.h"
-#include "../src/engine/procgen/city/road_net.h"   // buildRoadNetMesh: a real deck for the census
+#include "../src/engine/procgen/city/roads/road_entity.h"   // buildRoadNetMesh: a real deck for the census
+#include "../src/engine/procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "../src/engine/ai/nav_graph.h"
 
 #include <cmath>

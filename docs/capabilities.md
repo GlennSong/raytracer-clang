@@ -11,11 +11,11 @@ being used. One row per capability; the "used by" column is the audit trail.
 | Road topology `RoadGraph` (nodes, edges, class, layer, spec) | `procgen/city/road_network.h` | input model target | lanelab's graph JSON resolves to spines + `RoadSpec`; a converter to `RoadGraph` is the integration step |
 | Lane model `RoadSpec` / `RoadBand` (direction per lane) | `procgen/city/road_spec.h` | **used** | the lane layout lanelab expands is expressed as bands, not a new model |
 | Freeway aux lanes `LaneSchedule` | `procgen/city/alignment.h` | not used | lanelab's pockets/aux are lane births and deaths on any road; same idea, general form |
-| Swept-lattice mesher + full-ring junction patch | `procgen/city/road_lattice.h`, `road_net.cpp:498` | not used | **both ship** (ADR-0085): the lattice meshes every `shape:"road"` level and stays the mesher of record; lanelab meshes `shape:"lanelab"`. A level picks. |
+| Swept-lattice mesher + full-ring junction patch | `procgen/deprecated/roads/road_lattice.h`, `road_net_mesh.cpp` (ADR-0089) | not used | **both ship** (ADR-0085): the lattice meshes every `shape:"road"` level and stays the mesher of record; lanelab meshes `shape:"lanelab"`. A level picks. |
 | In-house polygon offset / union / hole bridging | `procgen/city/road_offset.h` | not used | needs difference, closing offsets and outer/hole trees; Clipper2 behind `lanelab/geom2d.cpp`; substitutable if ADR-0083 point 3 is refused |
 | Ear-clip triangulation (mapbox port) | `procgen/city/triangulate.h` | not used | fans long slivers that sag under curved profiles; CDT ladders instead |
 | Joint vertical alignment `weldChainProfiles` (ADR-0082) | `procgen/city/road_mesh.h` | not yet | lanelab has node + crossing consistency with iteration; the joint solve is the integration target |
-| Terrain conform `roadNetConformRegions` → `TerrainFlatten` | `procgen/city/road_net.h:181` | export path | the lab nudges a heightfield grid; integration emits flatten regions |
+| Terrain conform `roadNetConformRegions` → `TerrainFlatten` | `procgen/deprecated/roads/road_net_mesh.h` | export path | the lab nudges a heightfield grid; integration emits flatten regions |
 | 2.5-D crossings `planarizeLayered` | `procgen/city/road_network.h:298` | equivalent | lanelab decides levels per triangle by height cluster; no 2-D planarisation |
 | Winding rule `MeshBuilder::emitTri/UV` | `engine/mesh_builder.h` | **used** | all lanelab triangles go through it |
 | Heightfield functor `HeightField` | `procgen/terrain_field.h` | **used** | lanelab's procedural terrain is one of these |

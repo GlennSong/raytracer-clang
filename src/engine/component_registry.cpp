@@ -2,7 +2,7 @@
 
 #include "components.h"
 #include "camera/scene_camera.h"
-#include "procgen/city/road_net.h"
+#include "procgen/city/roads/road_entity.h"
 
 namespace engine {
 
