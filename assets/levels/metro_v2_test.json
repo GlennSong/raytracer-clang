@@ -60,7 +60,7 @@
           "beach_rise": 2.5,
           "block_size": 180,
           "collector_width": 13,
-          "corridor_freeways": true,
+          "corridor_freeways": false,
           "corridor_spacing": 200,
           "curviness": 0.2,
           "district_len": 900,

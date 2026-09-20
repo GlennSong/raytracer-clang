@@ -430,7 +430,6 @@ RoadGraph buildMetro(const MetroParams& p,
                                 city && (i % 3) == 0, static_cast<int>(si)});
             }
         }
-    const int H = static_cast<int>(hots.size());
     if (p.skeleton != "footprint" && p.outHubs) *p.outHubs = hots;
 
     // --- freeway backbone (metropolis tier): connect the hubs with an MST plus
@@ -442,8 +441,8 @@ RoadGraph buildMetro(const MetroParams& p,
 
     // --- P8-C footprint skeleton: rim + spine + recursive bisection, per
     // site, then curved connectors between paired gates. No colonization,
-    // no backbone MST (H == 0 self-skips the block below), no loop closure —
-    // the constructed skeleton already encloses its faces.
+    // no backbone MST, no loop closure — the constructed skeleton already
+    // encloses its faces. (It fills `hots` itself, one hub per district cell.)
     if (p.skeleton == "footprint") {
         SkeletonParams sp;
         sp.districtLen = p.districtLen;
@@ -476,7 +475,36 @@ RoadGraph buildMetro(const MetroParams& p,
         if (p.outHubs) *p.outHubs = hots;
     }
 
-    if (p.freeways && H >= 2) {
+    // The hub count is taken HERE, not before the skeleton above: footprint mode
+    // fills `hots` inside that block, and a count taken earlier was 0 — so a
+    // footprint city (metro_v2_test) asked for freeways, had 3 hubs, and silently
+    // got none for as long as the footprint skeleton has existed. What footprint
+    // mode really means to skip is the LEGACY backbone, which would re-grow
+    // arterials the constructed skeleton already drew; the corridor route planner
+    // below adds no street edges at all, only anchor polylines for the loader to
+    // build as real corridors. RT_METRO_TRACE_FREEWAY=1 reports every cull.
+    const int H = static_cast<int>(hots.size());
+    const bool legacyBackboneOk = p.skeleton != "footprint";
+    // LEGACY, PENDING REMOVAL (Glenn, 2026-09-20: "that's all legacy ... we need to
+    // deprecate that and eventually remove it from the code base"). The corridor
+    // freeway pipeline — this planner, corridor_plan, corridor_mesh, the bake — is
+    // the OLD road system's freeway. It is kept only for the levels that already
+    // ship with it; the lanes builder is the road system going forward, and no new
+    // level should set corridor_freeways. Said once per process so a level that
+    // turns it on cannot do so silently.
+    if (p.freeways && p.corridorFreeways && H >= 2) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            LOG_WARN << "[metro] corridor freeways are LEGACY and pending removal — "
+                        "the lanes builder (procgen/city/roads/lanes) is the road system "
+                        "going forward; this path exists for the levels that already ship with it";
+        }
+    }
+    if (std::getenv("RT_METRO_TRACE_FREEWAY"))
+        std::fprintf(stderr, "[metro/freeway] skeleton=%s H=%d hots=%zu freeways=%d corridorFreeways=%d\n",
+                     p.skeleton.c_str(), H, hots.size(), p.freeways ? 1 : 0, p.corridorFreeways ? 1 : 0);
+    if (p.freeways && H >= 2 && (p.corridorFreeways || legacyBackboneOk)) {
         // MST over hubs (Prim) + each hub's nearest non-tree neighbour when the
         // link is under ~1.2 DOM (adds loops without a hairball).
         std::vector<std::pair<int, int>> links;
@@ -512,7 +540,7 @@ RoadGraph buildMetro(const MetroParams& p,
         // (freeways curve gently — DesignRules Freeway minRadius is 300 m), then
         // segments every ~36 m. Unbuildable anchors slide sideways to stay on
         // land (a coastal freeway hugs the shoreline instead of wading).
-        if (!p.corridorFreeways) {
+        if (!p.corridorFreeways && legacyBackboneOk) {
             // LEGACY freeway tier: the backbone stays street edges (proven,
             // shipping) while the corridor path earns its lab proof.
             for (auto& l : links) {
@@ -640,6 +668,12 @@ RoadGraph buildMetro(const MetroParams& p,
                 for (int cand : hubAdj[hub])
                     if (!usedLink[cand]) walk(hub, cand);
         }
+        // RT_METRO_TRACE_FREEWAY=1: why a recipe that asks for corridor freeways
+        // gets none. Every cull below reports itself, so the answer is one run.
+        static const bool fwTrace = std::getenv("RT_METRO_TRACE_FREEWAY") != nullptr;
+        if (fwTrace)
+            std::fprintf(stderr, "[metro/freeway] %d hubs, %zu links, %zu routes\n",
+                         H, links.size(), routes.size());
         // §12: freeways stay OFF THE BEACH (device: "I don't think anyone
         // wants that, lol") — anchors demand real elevation over the sea,
         // not merely "buildable", so routes swing inland and cross the
@@ -680,7 +714,10 @@ RoadGraph buildMetro(const MetroParams& p,
                     pts.push_back(q);
                 }
             }
-            if (pts.size() < 2) continue;
+            if (fwTrace)
+                std::fprintf(stderr, "[metro/freeway]   route of %zu hubs -> %zu anchors\n",
+                             seq.size(), pts.size());
+            if (pts.size() < 2) { if (fwTrace) std::fprintf(stderr, "[metro/freeway]     dropped: fewer than 2 buildable anchors\n"); continue; }
             // §12 R1.3b: a freeway PASSES THROUGH a region — extend both end
             // legs outward until the domain boundary (or the water/beach/
             // mountain line) so dead ends live at the map's edge, never
@@ -739,10 +776,13 @@ RoadGraph buildMetro(const MetroParams& p,
             double planLen = 0;
             for (std::size_t k = 0; k + 1 < pts.size(); ++k)
                 planLen += (pts[k + 1] - pts[k]).length();
-            if (planLen < 560.0) continue;
+            if (fwTrace)
+                std::fprintf(stderr, "[metro/freeway]     %.0f m after extend + chamfer (needs 560)\n", planLen);
+            if (planLen < 560.0) { if (fwTrace) std::fprintf(stderr, "[metro/freeway]     dropped: too short\n"); continue; }
             // §10.6: the route becomes a CORRIDOR PLAN — anchor polyline out,
             // NO street edges (the freeway-as-fat-street era ends here). The
             // interchange seeds stay: streets grow toward the future ramps.
+            if (fwTrace) std::fprintf(stderr, "[metro/freeway]     KEPT\n");
             if (freewayPlans) freewayPlans->push_back(pts);
             double along = 0, nextSeed = p.interchangeSpacing * 0.5;
             for (std::size_t k = 0; k + 1 < pts.size(); ++k) {

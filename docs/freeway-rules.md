@@ -22,6 +22,45 @@ Street growth currently happens BEFORE stage 2 — that inversion is why
 "just stop". The intended order (§10.4, not yet built) is corridors FIRST,
 then streets grow around them, seeded toward the ramp landings.
 
+## THIS WHOLE PIPELINE IS LEGACY (2026-09-20)
+
+Glenn, after looking at it in the viewer: *"that's all legacy, and now that I see it's confusing
+you we need to deprecate that and eventually remove it from the code base ... the new road system
+should be given priority."*
+
+The corridor freeway — this planner, `corridor_plan`, `corridor_mesh` and the bake — is the OLD
+road system's freeway, and it does not merge properly with the streets around it. It stays only for
+the levels that already ship with it (freeway_lab, freeway_variants, hillcity, metropolis,
+metropolis_roads, metropolis_sky). **No new level should set `corridor_freeways`**, and the path
+now says so once per process when it runs. The lanes builder
+(`procgen/city/roads/lanes`) is the road system going forward; what is worth keeping from the text
+below is the ROUTE planning — where a freeway should go, as an anchor polyline — which is cheap,
+geometry-free, and is the input the lanes builder needs. The rest goes when lanes can build a
+freeway.
+
+### The trapdoor that hid it: no hubs, no freeway
+
+Worth recording because it explains why metro never had a freeway. Stage 0 is gated
+`if (p.freeways && H >= 2)`, and `H` was read near the top of `buildMetro` — **before** the
+footprint skeleton runs. Footprint mode fills the hub list itself, so for every footprint city `H`
+was a stale 0 and the whole freeway pipeline was skipped without a word:
+
+```
+[metro/freeway] skeleton=footprint  H=0  hots=3  freeways=1  corridorFreeways=1
+```
+
+Three hubs present, count says zero, the recipe asking for freeways, nothing built. The comment
+above the skeleton made the skip look deliberate — and half of it was: footprint mode means to skip
+the LEGACY street backbone. The corridor planner just shared the block. The count is now taken
+where it is used (`RT_METRO_TRACE_FREEWAY=1` prints the gate and every cull after it), which means
+the gate is honest — but nothing opts in.
+
+**metro_v2_test keeps the city it has.** Its `corridor_freeways` key is now `false`, which is what
+it has always built; left at `true` it would have grown a legacy freeway the moment the count was
+fixed. A `metro_v3` with the freeway on was built, looked at, and deleted: 2028 m of elevated
+legacy corridor, 688 m of ramps, and three gates broken (10 signal poles standing in a carriageway,
+1014 terrain samples poking the deck, bus coverage halved). Not worth fixing in the old system.
+
 ## The rules
 
 ### Stage-1 rules (route shape)
