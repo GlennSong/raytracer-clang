@@ -1,6 +1,7 @@
 #ifndef RAYTRACER_ENGINE_PROCGEN_CITY_ROADS_ROAD_BUILDER_H
 #define RAYTRACER_ENGINE_PROCGEN_CITY_ROADS_ROAD_BUILDER_H
 
+#include "ground_grid.h"
 #include "road_entity.h"
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -43,15 +44,37 @@ struct RoadProducts {
     CurbBandAudit bands;          // sidewalk loops — the city map draws these
 };
 
+// WHAT A BUILDER DOES TO THE GROUND — asked BEFORE anything is built, because a
+// road picks a smooth, grade-limited line of its own and the ground has to be
+// made to meet it. There are two honest answers and a builder gives exactly one:
+//
+//   carve    the level's terrain stays the level's; these are the patches to
+//            press into it ("inside this polygon the ground is this plane,
+//            feathering back to natural over N m"). The lattice works this way.
+//   replace  the builder MADE the ground: a baked grid of absolute heights with
+//            the cut and fill already in it, for the terrain to use as its base
+//            inside the grid's bounds. The lane builder works this way — it
+//            conforms its own grid while it paves, and that grid is what CDLOD
+//            renders (it rides in through TerrainParams::erodedBase, the same
+//            slot a baked erosion uses).
+//
+// Glenn chose `replace` for lanes on 2026-09-20: "it should hand back the ground
+// which is what it currently does ... handing back patches is the old way."
+struct GroundPlan {
+    std::vector<TerrainFlatten> carve;
+    std::shared_ptr<const GroundGrid> replace;
+    bool replaces() const { return replace && !replace->empty(); }
+};
+
 class RoadBuilder {
 public:
     virtual ~RoadBuilder() = default;
     virtual const char* name() const = 0;
-    // The surface, built on `ground` (already carved).
+    // The surface, built on `ground` (already carved/replaced).
     virtual RoadProducts build(const RoadBuildInput& in) const = 0;
-    // The cut/fill the ground needs BEFORE the surface is built — the terrain
-    // pre-pass runs this against the NATURAL ground, then builds on the result.
-    virtual std::vector<TerrainFlatten> flattens(const RoadBuildInput& in) const = 0;
+    // What the ground must become before the surface exists — see GroundPlan.
+    // The terrain pre-pass asks this against the NATURAL ground.
+    virtual GroundPlan ground(const RoadBuildInput& in) const = 0;
     // The centrelines everything routes on: nav, traffic, furniture, signs, map.
     virtual RoadGraph navGraph(const RoadBuildInput& in) const = 0;
 };

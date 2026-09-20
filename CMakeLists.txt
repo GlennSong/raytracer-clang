@@ -129,6 +129,7 @@ add_library(engine_core STATIC
     # but still what every shipped level builds, so it still compiles.
     src/engine/procgen/city/roads/road_entity.cpp
     src/engine/procgen/city/roads/road_builder.cpp
+    src/engine/procgen/city/roads/ground_grid.cpp
     src/engine/procgen/city/roads/lattice_builder.cpp
     src/engine/procgen/deprecated/roads/road_net_mesh.cpp
     src/engine/procgen/deprecated/roads/road_lattice.cpp
@@ -818,6 +819,15 @@ if(RT_BUILD_DEMOS)
     target_include_directories(curb_weld_probe PRIVATE src)
     target_compile_options(curb_weld_probe PRIVATE -Wall -Wextra)
     target_link_libraries(curb_weld_probe PRIVATE engine_core)
+
+    # What a road BUILDER hands the engine for a real level (ADR-0089): the
+    # carve, the surface, the deck, the kerb band and the nav graph, by the
+    # numbers. Naming a builder overrides the level's key, so one level can be
+    # measured both ways — the A/B instrument for moving a level to lanes.
+    add_executable(road_products_probe tools/diagnostics/road_products_probe.cpp ${CORE_SOURCES})
+    target_include_directories(road_products_probe PRIVATE src)
+    target_compile_options(road_products_probe PRIVATE -Wall -Wextra)
+    target_link_libraries(road_products_probe PRIVATE engine_core)
 
     # Junction-geometry census: the PLANNING-phase view of acute angles —
     # tightest gaps, realign feasibility, bend radii, and a dry run of the

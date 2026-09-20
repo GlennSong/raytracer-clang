@@ -131,15 +131,17 @@ lanes' own terrain mesh when the level has a `terrain` block. `terrain_conform.h
 "the lab nudges a heightfield grid; integration emits flatten regions" is listed as an export path
 that was never built.
 
-So `RoadBuilder::flattens` is honest for the lattice and empty for lanes as it stands. Phase 3 picks:
-
-1. **Lanes emit flattens.** Convert the conformed grid into `TerrainFlatten` regions (per deck
-   chain, as the lattice does). One ground, one carve, no loader change — and metro's terrain,
-   lots and CDLOD keep working the way every other level's do. The conversion is real work and
-   lossy at junctions, where the grid is exactly where the lab is most careful.
-2. **The builder may hand back a ground.** Add a `groundOverride` to `RoadProducts` and let the
-   terrain system take it. Faithful to what lanes computes, but now two kinds of level ground exist
-   and everything downstream (earthwork, block grading, lot conformance, CDLOD) has to agree which.
+**Decided (Glenn, 2026-09-20): the builder hands back the ground.** "I think it should hand back the
+ground which is what it currently does. I think handing back patches is the old way of doing it."
+So `flattens()` became `ground()`, returning a `GroundPlan` with exactly one side filled — `carve`
+(the lattice's patches, pressed into the level's terrain) or `replace` (a baked `GroundGrid` of
+absolute heights with the cut and fill already in it). Making lanes emit patches would have
+re-described, more coarsely, a grid it already computes exactly — and lost precision at junctions,
+which is where it is most careful. The path is also already proven: the lanes grid rides into the
+terrain through `TerrainParams::erodedBase` (the slot a baked erosion uses), so CDLOD renders it with
+LOD, morphing and material blending, falling back to the level's own terrain outside the grid over a
+60 m blend. What blocked it in September — lot pads graded after the terrain, 706 of 1284 lots buried
+— was fixed by publishing the lanes' blocks and ground BEFORE the terrain pre-pass.
 
 The second product list is also wider than `RoadProducts` today: lanes build **many** meshes (one
 per render cell × material, with paint/collidable flags), not one. `RoadProducts::mesh` becomes a

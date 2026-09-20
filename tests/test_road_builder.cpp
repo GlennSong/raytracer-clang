@@ -84,9 +84,13 @@ TEST_CASE(the_lattice_builder_builds_exactly_what_the_loader_built_before) {
     for (std::size_t i = 0; i < p.mesh.vertices.size(); i += 97)
         CHECK((p.mesh.vertices[i].position - direct.vertices[i].position).length() < 1e-9);
 
-    // The carve the terrain pre-pass asks for.
-    CHECK(b.flattens(in).size() == roadNetConformRegions(road, ground).size());
-    CHECK(!b.flattens(in).empty());
+    // The carve the terrain pre-pass asks for. The lattice edits the level's
+    // ground; it never hands one back.
+    const roads::GroundPlan gp = b.ground(in);
+    CHECK(gp.carve.size() == roadNetConformRegions(road, ground).size());
+    CHECK(!gp.carve.empty());
+    CHECK(!gp.replaces());
+    CHECK(gp.replace == nullptr);
 
     // The centrelines everything routes on.
     const RoadGraph nav = b.navGraph(in);

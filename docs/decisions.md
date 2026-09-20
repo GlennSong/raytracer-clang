@@ -7101,6 +7101,13 @@ second is the old builder. One file, so no boundary.
   `navGraph` (the centrelines everything routes on) — plus a registry by name.
 * `procgen/deprecated/roads/` — `road_net_mesh.{h,cpp}` and `road_lattice.{h,cpp}`: the lattice
   builder, moved verbatim, still compiled, still selectable, with a README saying what deletes it.
+* **A builder answers for the ground before it builds anything.** `RoadBuilder::ground` returns a
+  `GroundPlan` with exactly one side filled: `carve` (patches pressed into the level's terrain — the
+  lattice) or `replace` (a baked `GroundGrid` of absolute heights, cut and fill already in it — the
+  lanes builder, whose grid rides into the terrain through `TerrainParams::erodedBase` and is what
+  CDLOD renders). Glenn chose `replace` for lanes on 2026-09-20: "handing back patches is the old
+  way of doing it." The grid type was lifted out of the lanes sources into `roads/ground_grid.h` so
+  the interface can name it in a build that has no lanes builder.
 * **Selection is data.** A road entity's block says `"builder": "lattice"` (the default) or
   `"builder": "lanes"`. The loader and the terrain pre-pass both resolve it through
   `roads::roadBuilderFor(roadBlock)`, so one level can use one builder and the next another. An

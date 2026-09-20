@@ -93,7 +93,11 @@ bool cityPrePassForLevel(const nlohmann::json& rootIn, CityPrePass& out) {
             in.road = &net;
             in.ground = out.naturalGround;
             in.options = roadBlock;
-            std::vector<TerrainFlatten> r = roads::roadBuilderFor(roadBlock).flattens(in);
+            roads::GroundPlan gp = roads::roadBuilderFor(roadBlock).ground(in);
+            // A builder that MAKES the ground (lanes) publishes its grid through the
+            // level's bundle before this pre-pass runs; the pre-pass only presses in
+            // the patches a carving builder (the lattice) asked for.
+            std::vector<TerrainFlatten> r = std::move(gp.carve);
             out.roadFlatten.insert(out.roadFlatten.end(), r.begin(), r.end());
             out.nets.push_back(std::move(net));
         }

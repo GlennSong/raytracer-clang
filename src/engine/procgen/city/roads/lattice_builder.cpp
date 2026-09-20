@@ -24,9 +24,12 @@ public:
         return p;
     }
 
-    std::vector<TerrainFlatten> flattens(const RoadBuildInput& in) const override {
-        if (!in.road) return {};
-        return roadNetConformRegions(*in.road, in.ground);
+    // The lattice never makes a ground — it only ever describes edits to the
+    // level's own terrain.
+    GroundPlan ground(const RoadBuildInput& in) const override {
+        GroundPlan g;
+        if (in.road) g.carve = roadNetConformRegions(*in.road, in.ground);
+        return g;
     }
 
     RoadGraph navGraph(const RoadBuildInput& in) const override {
