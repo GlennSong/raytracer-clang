@@ -49,6 +49,19 @@ void throughProfile(EdgeSpec& e, const HeightField& terrain, const RoadClassSpec
         for (size_t i = 0; i < z.size(); ++i) z[i] = std::max(z[i], fp[2] - gd * std::max(0.0, std::fabs(e.s[i] - sc) - fp[3]));
     }
     e.z = gradeLimit(z, e.s, gd);
+    // An open end is pinned to the ground there, and nothing may sit higher than the
+    // grade allows from it: gradeLimit is the max of two monotone envelopes, so it
+    // fills and never cuts. The cone has slope gd exactly, so the result is still
+    // grade-legal. A floor (a crossing's hold) within reach of an open end loses to
+    // it — a road cannot both start at ground level and clear a bridge 50 m later,
+    // and the clearance invariant says which crossings that cost.
+    for (int k = 0; k < 2 && !e.z.empty(); ++k) {
+        if (!e.openEnd[k]) continue;
+        const double zEnd = k ? e.t.back() : e.t.front();
+        const double sEnd = k ? e.s.back() : e.s.front();
+        for (std::size_t i = 0; i < e.z.size(); ++i)
+            e.z[i] = std::min(e.z[i], zEnd + gd * std::fabs(e.s[i] - sEnd));
+    }
 }
 
 void applyFloors(EdgeSpec& e, const RoadClassSpec& c) {
@@ -123,9 +136,39 @@ double crossingConsistency(RoadLabGraph& g, double maxDz, double rampMaxDz, doub
         if (a.isRamp() && b.isRamp()) continue;
         if (a.isRamp() && (a.from.edge == b.id || a.to.edge == b.id)) continue;
         if (b.isRamp() && (b.from.edge == a.id || b.to.edge == a.id)) continue;
-        for (const Vec2& p : crossings(a.xy, b.xy)) {
-            double nearEnd = std::min({distance(a.xy.front(), p), distance(a.xy.back(), p), distance(b.xy.front(), p), distance(b.xy.back(), p)});
-            if (nearEnd < 1.0) continue;                                                     // a node, handled elsewhere
+        // The SAME notion of a crossing the clearance lift uses (lanes.cpp): two
+        // centrelines meeting, AND either road ending under the other's paved band.
+        // They used to differ, and that gap was a dead zone — a street ending 1.1 m
+        // under another was levelled by nobody (consistency never saw it), lifted by
+        // nobody (the lift only fires above bridge_h), and then failed by the
+        // clearance invariant, which needs 7.8 m. metro_hills, with no freeway at all,
+        // failed 9 of 9 pairs that way.
+        std::vector<Vec2> meet = crossings(a.xy, b.xy);
+        for (int side = 0; side < 2; ++side) {
+            const EdgeSpec& e = side ? b : a;
+            const EdgeSpec& o = side ? a : b;
+            for (const Vec2& q : {e.xy.front(), e.xy.back()}) {
+                const Projection pr = project(o.xy, o.s, q);
+                if (pr.distance > g.hw(o) + g.hw(e)) continue;
+                // Leave nodeConsistency its own cases, or the two passes pull the same
+                // T against each other and the agree loop stalls 35 cm short: it owns
+                // an end within endpointTol of the other centreline (and a shared node).
+                if (pr.distance <= g.rules.endpointTol) continue;
+                if (std::min(distance(o.xy.front(), q), distance(o.xy.back(), q)) <= g.rules.endpointTol) continue;
+                bool dup = false;
+                for (const Vec2& m : meet) if (distance(m, q) < 1.0) dup = true;
+                if (!dup) meet.push_back(q);
+            }
+        }
+        for (const Vec2& p : meet) {
+            // Only a SHARED node belongs to nodeConsistency — both roads ending here.
+            // One road ending mid-span of the other is a T, and nodeConsistency only
+            // recognises it within endpointTol (0.5 m) of the centreline; a metre out
+            // it saw nothing, this pass skipped it as "a node", and the pair went on
+            // to fail clearance at 1.1 m. A T is a level crossing: it is levelled here.
+            const double aEnd = std::min(distance(a.xy.front(), p), distance(a.xy.back(), p));
+            const double bEnd = std::min(distance(b.xy.front(), p), distance(b.xy.back(), p));
+            if (aEnd < g.rules.endpointTol && bEnd < g.rules.endpointTol) continue;          // a shared node
             bool aWins = a.isRamp() ? true : b.isRamp() ? false : std::make_pair(g.cls(a).rank, -g.index.at(a.id)) >= std::make_pair(g.cls(b).rank, -g.index.at(b.id));
             EdgeSpec& hi = aWins ? a : b; EdgeSpec& lo = aWins ? b : a;
             double dz = projectZ(hi, p) - projectZ(lo, p);

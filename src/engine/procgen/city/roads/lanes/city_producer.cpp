@@ -16,7 +16,7 @@
 namespace engine {
 namespace roads::lanes {
 
-const char* const kLanesBuildTag = "2026-09-08.16";
+const char* const kLanesBuildTag = "2026-09-20.1";
 
 namespace {
 using bundle::BinReader;

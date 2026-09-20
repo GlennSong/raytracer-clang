@@ -108,6 +108,11 @@ struct EdgeSpec {
     std::vector<Vec2> xy;                // spine, resampled at rules.step
     std::vector<double> s, z, t;         // station, deck height, terrain height along the spine
     RampInfo ramp;
+    // Does anything meet this end? An OPEN end is pinned to the ground by the profile
+    // solve: gradeLimit only ever RAISES a profile, so a road that cannot follow its
+    // terrain otherwise floats — steep_climb began 65 m in the air over a valley floor
+    // it never came down to. Filled by build() before the profiles are solved.
+    bool openEnd[2] = {false, false};
     int anchorIdx[2] = {-1, -1};         // spine index of the from-gore and the to-gore, when anchored
     std::map<std::string, std::string> anchorLanes;   // "from"/"to" -> host lane id
     bool isRamp() const { return !from.edge.empty() || !to.edge.empty(); }

@@ -155,6 +155,12 @@ TEST_CASE(lanes_two_lane_ramps_die_into_one_over_their_dovetail) {
     CHECK(r.graph.find("ramp_one")->anchorLanes.count("to") == 1);   // the control still merges
 }
 
+// NOTE: this scene still fails two invariants, and they are the scene's point. With
+// its open ends pinned the road answers 114 m of ground rise with a 53 m CUTTING at
+// the top, and the terrain conform does not fully clear a cutting that deep: ~80
+// samples sit above the deck and the cutting's lip leaves step edges. Before the pin
+// it passed both — by floating 65 m in the air instead. A builder that cannot
+// switchback or tunnel has to lose somewhere; this is where, and what it costs.
 TEST_CASE(lanes_a_freeway_climbs_sustained_relief_within_its_grade) {
     const Result& r = scene("steep_climb"); checkInvariants(r);
     const EdgeSpec* climb = r.graph.find("climb");
@@ -171,19 +177,19 @@ TEST_CASE(lanes_a_freeway_climbs_sustained_relief_within_its_grade) {
     CHECK(hi - lo > 40.0);
     CHECK(thi - tlo > hi - lo);                                // the ground out-climbs the road
 
-    // KNOWN DEFECT (2026-09-20, this scene found it): a profile does not PIN to the
-    // ground at an open end. It picks a level that suits the middle of the road and
-    // holds it, so this freeway begins 65 m in the air over a valley floor it never
-    // comes down to — 1040 m of viaduct, every invariant green. The top end behaves:
-    // it sits ~4 m INTO the hill, a cut. Expect both ends to meet the ground; this
-    // fails until the profile solver pins them.
+    // An OPEN end may be cut into the ground — that is a cutting, and buildable — but
+    // it must never FLOAT: a viaduct to nowhere. Before the profile solve pinned open
+    // ends (2026-09-20) this freeway began 65 m in the air over a valley floor it
+    // never came down to, 1040 m of it on piers, with every invariant green. It now
+    // starts at the ground and pays for the climb it cannot make with a cutting at
+    // the far end, which is what the ground leaves it.
     const double startGap = climb->z.front() - climb->t.front();
     const double endGap = climb->z.back() - climb->t.back();
     std::printf("    [climb] ends: start deck-ground %+.1f m, end %+.1f m\n", startGap, endGap);
-    CHECK(std::fabs(endGap) < 15.0);
-    CHECK(std::fabs(startGap) < 15.0);   // 65 m today
-    // and it answers the climb with structure: over half the road is bridge
-    CHECK(bridge(r, "climb") > 0.4 * climb->length());
+    CHECK(startGap < 1.0);
+    CHECK(endGap < 1.0);
+    // and it no longer answers the climb with a kilometre of viaduct
+    CHECK(bridge(r, "climb") < 0.15 * climb->length());
 }
 
 TEST_CASE(lanes_ring_city_builds_and_holds_its_invariants) {

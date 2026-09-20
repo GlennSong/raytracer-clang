@@ -32,10 +32,31 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
     // 1. lanes (ramps compose from anchors)
     stage(0, "lanes", 0.0); r.lanes = expand(g); r.timings["lanes"] = secondsSince(t1); t1 = std::chrono::steady_clock::now(); stage(1, "profiles", 0.0);
     // 2. profiles: through roads, agree at nodes and crossings (iterated), then ramps, then connector ends
+    // Which ends are open: nothing else ends there, and no other road's paved band
+    // covers them. A road that meets the world only at its middle has to come down to
+    // the ground at both tips.
+    for (EdgeSpec& e : g.edges) {
+        if (e.xy.size() < 2) continue;
+        for (int k = 0; k < 2; ++k) {
+            const Vec2 q = k ? e.xy.back() : e.xy.front();
+            bool met = false;
+            for (const EdgeSpec& o : g.edges) {
+                if (&o == &e || o.xy.size() < 2) continue;
+                if (std::min(distance(o.xy.front(), q), distance(o.xy.back(), q)) <= R.endpointTol) { met = true; break; }
+                if (project(o.xy, o.s, q).distance <= g.hw(o) + g.hw(e)) { met = true; break; }
+            }
+            e.openEnd[k] = !met;
+        }
+    }
     for (EdgeSpec& e : g.edges) if (!e.isRamp()) throughProfile(e, terrain, g.cls(e));
     for (EdgeSpec& e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);   // ramps need heights to take part in crossing consistency
     auto agree = [&](bool first) {
-        for (int it = 0; it < 12; ++it) {
+        // 120, not 12: each pass only partially resolves (a correction is smoothed
+        // over a radius), so a city whose crossings all have to agree needs many more
+        // rounds than a lab scene. metro_hills went 35 cm at 12 iterations, 19 at 30,
+        // 5.5 at 60. The loop exits the moment it is within 0.5 cm, so the extra cap
+        // costs nothing on a scene that converges quickly.
+        for (int it = 0; it < 120; ++it) {
             double mm = nodeConsistency(g, R.endpointTol, R.bridgeH), xm = crossingConsistency(g, R.bridgeH, R.rampLevelDz);
             for (EdgeSpec& e : g.edges) if (!e.isRamp()) applyFloors(e, g.cls(e));   // lifts survive the blends
             for (EdgeSpec& e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);   // hosts moved

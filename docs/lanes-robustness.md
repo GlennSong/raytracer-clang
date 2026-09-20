@@ -152,12 +152,30 @@ Three things fell out of authoring them:
    16 scenes, `--check` against a recorded baseline.
 2. ~~**Author the scenes that were missing.**~~ Done: the four above, also wired into `lanes_tests`
    so the fast suite carries them.
-3. **Make the three level rules one rule.** The 1–4 m dead zone above is the cheapest real fix and
-   it hits every imported scene, including the two with no freeway at all. Either consistency pulls
-   a crossing under `bridge_h` all the way to level, or the lift starts where consistency stops —
-   but one number, not three.
-4. **Pin a profile's open ends to the ground** (the `steep_climb` defect). A road that starts 65 m
-   up is not a grade problem, it is a boundary-condition problem.
+3. ~~**Make the three level rules one rule.**~~ **Done** (2026-09-20). The dead zone was not a
+   threshold disagreement at all — it was a disagreement about what counts as a CROSSING. A street
+   ending a metre off another road's centreline (inside its paved band, outside `endpointTol`) was
+   a node to nobody and a crossing to nobody: `nodeConsistency` only recognises a T within 0.5 m of
+   the centreline, and `crossingConsistency` only looked at centreline intersections. The clearance
+   invariant then saw overlapping lanes with no same-level area and asked for 7.8 m. Now the
+   crossing pass uses the same inclusive rule the clearance lift uses (an end under the other's
+   paved band counts), skips only genuinely SHARED nodes, and leaves `nodeConsistency` the cases
+   within its own tolerance. A second finding fell out: the agree loop was capped at 12 iterations
+   and each pass only partially resolves, so a real city stalled short — metro_hills read 35 cm at
+   12, 19 at 30, 5.5 at 60. The cap is 120 with the existing 0.5 cm early exit, so the lab scenes
+   are unaffected and unchanged in cost. **metro_hills, which builds no freeway at all: clearance
+   failures 9 of 9 → 1 of 1, surface steps 146 → 1, junction solve 312 → 0.5 cm.**
+4. ~~**Pin a profile's open ends to the ground.**~~ **Done** (2026-09-20). `gradeLimit` is the max
+   of two monotone envelopes — it fills and never cuts — so a road that cannot follow its terrain
+   floated. An end nothing meets is now pinned to the ground there, and nothing may sit higher than
+   the grade allows from it (a cone of slope `gd`, so the result is still grade-legal; a crossing's
+   hold within reach of an open end loses to it). `steep_climb` went from **starting 65 m in the
+   air with 1040 m of viaduct** to starting at the ground with none. The rule the test now holds is
+   the honest one: an open end may be CUT into the ground — that is buildable — but must never
+   float. What it exposed in exchange: the terrain conform does not fully clear a 53 m cutting
+   (~80 samples above the deck, step edges at the lip), which is the scene's remaining pair of
+   failures and a fair question about what a builder with no switchback and no tunnel should do
+   when the ground out-climbs the road.
 5. **Fix the ring redraw**: it is specified `R >= 220 m` and delivers 9–12 m on every real city.
    Alignment feeds ramp feasibility, which feeds clearance.
 6. **Score landings on whether their ramps can actually be built**, once — today it both
