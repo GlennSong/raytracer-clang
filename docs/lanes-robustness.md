@@ -68,9 +68,33 @@ The importer discards most of a real city, and on two levels it finds no ring to
    clearance, worst by 6.6 m. living_city: **36 of 36**. These are crossings drawn as if they
    passed over one another while the gap is ~1.3 m.
 
+## It is not only the freeway machinery
+
+`metro_hills` and `piedmont_mini` are the control for that claim: neither has a perimeter ring, so
+**no freeway, no landings, no ramps are built at all** — just streets converted to lanes. metro_hills
+still fails six invariants, including grades (`c2 12.8% > 8%`, an arterial over its own class limit)
+and 9 of 9 grade-separated pairs short of clearance. Plain street conversion is not clean either.
+
+Following that one down found a specific mechanism, and it is a disagreement between three passes
+about what "the same level" means:
+
+| pass | rule | where |
+|---|---|---|
+| crossing consistency | pulls two roads together when they are within `bridge_h` (4.0 m) | `vertical_profile.cpp:115` |
+| the clearance lift | raises the upper road only when they are **already** more than `bridge_h` apart (`ramp_level_dz`, 1.5 m, for ramps) | `lanes.cpp:78` |
+| the clearance invariant | judges lane pairs "purely grade-separated (never same-level anywhere they meet)" — a third rule, on lanes rather than edges | `lanes.cpp:318` |
+
+A crossing sitting 1–4 m apart therefore falls between all three: consistency did not bring it to
+zero, the lift declines it as "a level crossing the street meets", and the invariant still calls it
+a grade separation and demands 7.2 m. metro_hills' nine failures all sit at ~1.1 m
+(`z 5.37/6.48`). The reference city never shows this because it lifts properly: metro's log says
+`9 grade-separated crossings lifted to clear their structure`, and **metro_hills' log never mentions
+a lift at all.**
+
 ## The reading
 
-**The lane geometry engine is solid; the importer is what is not robust.** Given a graph authored
+**The lane geometry engine is solid; the importer is what is not robust** — and where the engine
+itself is weak, it is at thresholds that an authored scene never lands on. Given a graph authored
 for it, the builder welds decks, converges junction heights to zero, keeps grades legal and clears
 its structures — on five different scenes including a viaduct and a ring. Given a graph the importer
 derived from a real city recipe, it fails in ways that all trace back to the *input*: a ring with
@@ -79,20 +103,67 @@ derived from a real city recipe, it fails in ways that all trace back to the *in
 metro_v2_test is not evidence that the system generalises. It is the level the importer was tuned
 on, and it is the only imported graph that comes out clean.
 
+## The gate, and the scenes that were missing (2026-09-20, same day)
+
+`tools/lanes_corpus.py` runs every scene in `tools/lanes_corpus.json` — importing first where the
+scene comes from a level recipe — parses what `lanes_tool` already prints, and reports one table.
+`--check` compares against `tools/lanes_corpus_baseline.json` and exits non-zero if a count grew or
+an invariant that passed now fails; `--update` records a run as the baseline. Counts must not grow
+at all; the continuous numbers carry a small tolerance, because a mesher is not bit-stable across
+compilers and a gate that cries over 0.3 cm gets switched off.
+
+The authored scenes are also wired into `lanes_tests`, which is the fast gate; it now carries two
+known failures on purpose — hill_junction's 5.9 cm terrain sample, and the `steep_climb` open-end
+defect below. Both are defects, not tolerances, and both go green when they are fixed.
+
+Running the first corpus showed what it did **not** contain, so four scenes were authored for the
+holes (all pass, which is the point — they are controls now, and they will catch the day they stop):
+
+| new scene | what had never been tested | outcome |
+|---|---|---|
+| `freeway_cross` | two **freeway**-class roads crossing, one carried over the other. ring_city carries a freeway over *arterials*, which is not the same test | passes: 24 piers, clearance held, no steps |
+| `freeway_cross_relief` | the same crossing with relief under it — the carried road must reach its hold and come back down inside its profile window | passes: 36 piers, agree loop 95.4 → 0.6 cm |
+| `merge_taper` | a **2 → 1 ramp merge**. The lab builds two-lane ramps and has a dovetail station for the second lane, and no scene used it | passes: 14 lanes, one-lane control beside a 30 m and a 90 m dovetail |
+| `steep_climb` | **sustained grade**: ground rising ~6% under a road capped at 4%, a hill on top, a crossing on the slope, a ramp climbing off it | passes — and see below |
+
+Three things fell out of authoring them:
+
+* **Two freeways with no hold between them meet at grade.** The agree loop pulls them together
+  (182.6 → 0.6 cm) and builds one flat intersection of two 3-lane freeways. Nothing objects. The
+  only thing that ever separates two high-rank roads is an author writing a `floor`, or the
+  importer's diamonds.
+* **A hold that is too low for the ground is built anyway.** The first cut of `freeway_cross` put
+  its hold at 8 m over ground that is ~6 m up; the result was a crossing with a 2.0 m gap and
+  36 of 36 clearance failures reported. It does not lift the structure to make its own clearance —
+  the same shape of behaviour as the importer's 88% ramps: **infeasible input is built and
+  reported, not resolved.**
+* **The profile solver prefers structure to earthwork, and does not pin an open end to the ground.**
+  `steep_climb` answers 114 m of relief with **1040 m of bridge** (55% of the road) and only 48k m³
+  of cut — and it begins **65 m in the air**: deck 74 m where the ground is 8 m, because the profile
+  picks a level that suits the middle of the road and holds it. The far end behaves (3.7 m into the
+  hill, a cut). Every invariant passes; the road is a kilometre of viaduct over a valley floor it
+  never comes down to. `lanes_tests` now pins this
+  (`lanes_a_freeway_climbs_sustained_relief_within_its_grade`) and fails on the start gap until a
+  profile pins its open ends.
+
 ## What to do about it, in order
 
-1. **Make this corpus a gate.** The table above is a script's worth of work
-   (`lanes_tool from-level` + `build`, parse the invariants). Robustness then has a number, and the
-   next change to the importer either improves it or does not.
-2. **Fix the ring redraw** (failure 1). It is the root: alignment feeds ramp feasibility, which
-   feeds clearance and the profile pull.
-3. **Make landing selection honest** (failure 2). Today it both over-rejects (hillcity: 23 of 25
-   candidates skipped) and under-rejects (freeway_lab: a landing accepted whose ramps then need
-   94%). A candidate should be scored on whether its ramps can actually be built, once.
-4. **Instrument the agree loop** (failure 3) before touching it — print per-iteration mismatch and
-   find out where it turns around.
-5. Then re-run the corpus and see what is left of failures 4 and 5, which may be consequences
-   rather than causes.
+1. ~~**Make this corpus a gate.**~~ Done: `tools/lanes_corpus.py` over `tools/lanes_corpus.json`,
+   16 scenes, `--check` against a recorded baseline.
+2. ~~**Author the scenes that were missing.**~~ Done: the four above, also wired into `lanes_tests`
+   so the fast suite carries them.
+3. **Make the three level rules one rule.** The 1–4 m dead zone above is the cheapest real fix and
+   it hits every imported scene, including the two with no freeway at all. Either consistency pulls
+   a crossing under `bridge_h` all the way to level, or the lift starts where consistency stops —
+   but one number, not three.
+4. **Pin a profile's open ends to the ground** (the `steep_climb` defect). A road that starts 65 m
+   up is not a grade problem, it is a boundary-condition problem.
+5. **Fix the ring redraw**: it is specified `R >= 220 m` and delivers 9–12 m on every real city.
+   Alignment feeds ramp feasibility, which feeds clearance.
+6. **Score landings on whether their ramps can actually be built**, once — today it both
+   over-rejects (23 of 25 skipped on hillcity) and under-rejects (a landing whose ramps come out at
+   94%).
+7. **Instrument the agree loop** before touching it: on two cities it moves away from its fixed
+   point (331 → 385 cm, 222 → 410 cm).
 
-Artefacts of this run (graphs, stats, SVG plans) are under `/tmp/claude-road/lanes/`; nothing was
-added to `assets/`.
+Artefacts of a run are under `/tmp/lanes-corpus/`; nothing was added to `assets/levels/`.

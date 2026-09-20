@@ -1,0 +1,36 @@
+{
+ "name": "freeway_cross",
+ "_tests": "two FREEWAY-class roads crossing, one carried over the other on piers. Nothing in the corpus did this: ring_city carries a freeway over ARTERIALS, and every imported city is one ring with diamonds, so a structure between two high-rank roads — and a hold wide enough to span a whole carriageway pair — was never exercised.",
+ "_terrain_note": "flat on purpose: this scene is about the crossing. Relief is freeway_cross_relief's job, and sustained grade is steep_climb's.",
+
+ "terrain": { "type": "flat", "bounds": [-700, 700, -700, 700], "res": 3.0 },
+
+ "classes": {
+  "freeway": { "w": 3.6, "fwd": 3, "back": 0, "shoulder": 2.5, "g_max": 0.04, "window": 420, "thick": 1.2,
+               "edges": { "elevated": { "kind": "wall", "h": 0.9 },
+                          "at_grade": { "kind": "guardrail", "h": 0.75 } } },
+  "local":   { "w": 3.5, "fwd": 1, "back": 1, "sidewalk": 1.8, "g_max": 0.08 }
+ },
+ "rules": { "closing": 4.0, "bridge_h": 4.0, "conform_w": 16.0, "pier_spacing": 26.0,
+            "under_clearance": 5.0, "structure_depth": 1.6 },
+
+ "edges": [
+  { "id": "ew_a", "class": "freeway",
+    "path": { "type": "polyline", "points": [[-660, -11], [660, -11]] } },
+  { "id": "ew_b", "class": "freeway",
+    "path": { "type": "polyline", "points": [[-660, 11], [660, 11]], "reverse": true } },
+
+  { "id": "ns_a", "class": "freeway",
+    "_floor": "the hold has to clear BOTH east-west carriageways, which span y in [-19,-3] and [3,19] — hence a 30 m half-span, not a point",
+    "floor": [[-11, 0, 8.0, 30]],
+    "path": { "type": "polyline", "points": [[-11, -660], [-11, 660]] } },
+  { "id": "ns_b", "class": "freeway",
+    "floor": [[11, 0, 8.0, 30]],
+    "path": { "type": "polyline", "points": [[11, -660], [11, 660]], "reverse": true } },
+
+  { "id": "street_w", "class": "local",
+    "path": { "type": "polyline", "points": [[-420, -660], [-420, 660]] } },
+  { "id": "street_e", "class": "local",
+    "path": { "type": "polyline", "points": [[420, -660], [420, 660]] } }
+ ]
+}

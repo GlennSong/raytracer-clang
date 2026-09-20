@@ -127,6 +127,65 @@ TEST_CASE(lanes_hill_junction_builds_and_holds_its_invariants) {
     CHECK(!r.pavement.islands.empty());                        // the slip lane and its connector enclose an island
 }
 
+// THE SCENES THE CORPUS WAS MISSING (2026-09-20). Running every scene through
+// tools/lanes_corpus.py showed the authored set had no crossing of two FREEWAYS
+// (ring_city carries a freeway over arterials, which is a different test), no
+// 2 -> 1 ramp merge, and no sustained grade. These four are the controls for
+// those three holes: they pass today, and the day one stops passing is the day
+// something real broke.
+TEST_CASE(lanes_two_freeways_cross_one_carried_over_the_other) {
+    const Result& r = scene("freeway_cross"); checkInvariants(r);
+    CHECK(r.piers.size() >= 12);                               // it is carried, not merged
+    CHECK(bridge(r, "ns_a") > 100 && bridge(r, "ns_b") > 100); // the north-south pair flies
+    CHECK(bridge(r, "ew_a") == 0.0 && bridge(r, "ew_b") == 0.0);   // the east-west pair stays down
+}
+
+TEST_CASE(lanes_a_carried_crossing_still_clears_when_the_ground_rises_under_it) {
+    const Result& r = scene("freeway_cross_relief"); checkInvariants(r);
+    CHECK(r.piers.size() >= 12);
+    CHECK(r.hasTerrain);
+}
+
+TEST_CASE(lanes_two_lane_ramps_die_into_one_over_their_dovetail) {
+    const Result& r = scene("merge_taper"); checkInvariants(r);
+    // mainline 3 + three feeders at 2 + ramps 1, 2, 2
+    CHECK(r.lanes.lanes.size() == 14);
+    CHECK(r.graph.find("ramp_short")->lanes.dovetail == 30.0);
+    CHECK(r.graph.find("ramp_long")->lanes.dovetail == 90.0);
+    CHECK(r.graph.find("ramp_one")->anchorLanes.count("to") == 1);   // the control still merges
+}
+
+TEST_CASE(lanes_a_freeway_climbs_sustained_relief_within_its_grade) {
+    const Result& r = scene("steep_climb"); checkInvariants(r);
+    const EdgeSpec* climb = r.graph.find("climb");
+    CHECK(climb != nullptr);
+    if (!climb) return;
+    double lo = 1e9, hi = -1e9, tlo = 1e9, thi = -1e9;
+    for (double z : climb->z) { lo = std::min(lo, z); hi = std::max(hi, z); }
+    for (double t : climb->t) { tlo = std::min(tlo, t); thi = std::max(thi, t); }
+    std::printf("    [climb] deck %.0f..%.0f m (%.0f m gained) over ground %.0f..%.0f m (%.0f m)\n",
+                lo, hi, hi - lo, tlo, thi, thi - tlo);
+    // The ground gains more than the road is allowed to: 1900 m at 4% is 76 m and
+    // the relief is ~114 m, so the road cannot follow it — the case every imported
+    // city failed on.
+    CHECK(hi - lo > 40.0);
+    CHECK(thi - tlo > hi - lo);                                // the ground out-climbs the road
+
+    // KNOWN DEFECT (2026-09-20, this scene found it): a profile does not PIN to the
+    // ground at an open end. It picks a level that suits the middle of the road and
+    // holds it, so this freeway begins 65 m in the air over a valley floor it never
+    // comes down to — 1040 m of viaduct, every invariant green. The top end behaves:
+    // it sits ~4 m INTO the hill, a cut. Expect both ends to meet the ground; this
+    // fails until the profile solver pins them.
+    const double startGap = climb->z.front() - climb->t.front();
+    const double endGap = climb->z.back() - climb->t.back();
+    std::printf("    [climb] ends: start deck-ground %+.1f m, end %+.1f m\n", startGap, endGap);
+    CHECK(std::fabs(endGap) < 15.0);
+    CHECK(std::fabs(startGap) < 15.0);   // 65 m today
+    // and it answers the climb with structure: over half the road is bridge
+    CHECK(bridge(r, "climb") > 0.4 * climb->length());
+}
+
 TEST_CASE(lanes_ring_city_builds_and_holds_its_invariants) {
     const Result& r = scene("ring_city"); checkInvariants(r);
     double onStructure = 0, total = 0;

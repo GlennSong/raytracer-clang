@@ -1,0 +1,50 @@
+{
+ "name": "merge_taper",
+ "_tests": "on-ramps merging into a mainline: one lane (the control), then two lanes dying into one over a SHORT dovetail and a LONG one. The lab builds 2-lane ramps and has a dovetail station for the second lane, but no scene in the corpus used it, so the 2 -> 1 taper was never checked.",
+ "terrain": { "type": "flat", "bounds": [-200, 1500, -500, 260], "res": 3.0 },
+ "classes": {
+  "freeway": { "w": 3.6, "fwd": 3, "back": 0, "shoulder": 2.5, "g_max": 0.04, "window": 420, "thick": 1.2,
+               "edges": { "at_grade": { "kind": "guardrail", "h": 0.75 } } },
+  "ramp":    { "w": 4.5, "fwd": 1, "back": 0, "shoulder": 2.5, "g_max": 0.06, "window": 60, "thick": 1.0 },
+  "local":   { "w": 3.5, "fwd": 1, "back": 1, "sidewalk": 1.8, "g_max": 0.08 }
+ },
+ "rules": { "closing": 4.0, "bridge_h": 4.0, "conform_w": 16.0, "pier_spacing": 26.0 },
+ "edges": [
+  { "id": "mainline", "class": "freeway",
+    "path": { "type": "polyline", "points": [[-150, 0], [1450, 0]] } },
+
+  { "id": "feed_one",  "class": "local", "path": { "type": "bezier",
+    "points": [[120, -460], [150, -300], [190, -180], [230, -60]] } },
+  { "id": "feed_short", "class": "local", "path": { "type": "bezier",
+    "points": [[560, -460], [590, -300], [630, -180], [670, -60]] } },
+  { "id": "feed_long",  "class": "local", "path": { "type": "bezier",
+    "points": [[1000, -460], [1030, -300], [1070, -180], [1110, -60]] } },
+
+  { "id": "ramp_one", "class": "ramp",
+    "_note": "one lane: the control. Whatever the dovetail does, this is what a clean merge looks like.",
+    "from": "feed_one",
+    "to": { "edge": "mainline", "x": 330, "side": "right", "aux": 120, "taper": 108, "approach": 120 },
+    "path": { "type": "bezier", "points": [
+      { "edge": "feed_one", "y": -200, "normal": 1.8 },
+      { "edge": "feed_one", "y": -200, "normal": 1.8, "along": 60, "dx": 30 },
+      [0, 0], [0, 0] ] } },
+
+  { "id": "ramp_short", "class": "ramp", "lanes": { "fwd": 2, "dovetail": 30 },
+    "_note": "two lanes, the second dying into the first over 30 m",
+    "from": "feed_short",
+    "to": { "edge": "mainline", "x": 780, "side": "right", "aux": 120, "taper": 108, "approach": 120 },
+    "path": { "type": "bezier", "points": [
+      { "edge": "feed_short", "y": -200, "normal": 1.8 },
+      { "edge": "feed_short", "y": -200, "normal": 1.8, "along": 60, "dx": 30 },
+      [0, 0], [0, 0] ] } },
+
+  { "id": "ramp_long", "class": "ramp", "lanes": { "fwd": 2, "dovetail": 90 },
+    "_note": "the same two lanes over 90 m",
+    "from": "feed_long",
+    "to": { "edge": "mainline", "x": 1220, "side": "right", "aux": 120, "taper": 108, "approach": 120 },
+    "path": { "type": "bezier", "points": [
+      { "edge": "feed_long", "y": -200, "normal": 1.8 },
+      { "edge": "feed_long", "y": -200, "normal": 1.8, "along": 60, "dx": 30 },
+      [0, 0], [0, 0] ] } }
+ ]
+}

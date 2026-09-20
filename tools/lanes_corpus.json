@@ -1,0 +1,111 @@
+{
+ "_comment": [
+  "The lane builder's test corpus (docs/lanes-robustness.md). Two kinds of scene:",
+  "'authored' graphs were written by hand FOR the builder; 'imported' ones come out of",
+  "lanes_tool from-level, the path a real city takes. The split is the point \u2014 the",
+  "builder passes everything on authored input and fails on imported input, so a gate",
+  "that only ran the authored half would report a health the system does not have.",
+  "Add a scene here, not in the script.",
+  "The four scenes after ring_city were authored on 2026-09-20 for the gaps the first run exposed: no freeway-to-freeway crossing anywhere (ring_city carries a freeway over ARTERIALS, which is not the same test), no 2->1 ramp merge, and no sustained grade."
+ ],
+ "scenes": [
+  {
+   "name": "hill_junction",
+   "kind": "authored",
+   "source": "assets/lanelab/hill_junction.json",
+   "tests": "a junction on a slope"
+  },
+  {
+   "name": "curve_blocks",
+   "kind": "authored",
+   "source": "assets/lanelab/curve_blocks.json",
+   "tests": "curved streets closing blocks"
+  },
+  {
+   "name": "grid_city",
+   "kind": "authored",
+   "source": "assets/lanelab/grid_city.json",
+   "tests": "a regular street grid"
+  },
+  {
+   "name": "valley_viaduct",
+   "kind": "authored",
+   "source": "assets/lanelab/valley_viaduct.json",
+   "tests": "a viaduct over a valley: piers, structure, clearance"
+  },
+  {
+   "name": "ring_city",
+   "kind": "authored",
+   "source": "assets/lanelab/ring_city.json",
+   "tests": "ring road and arterials, the largest authored scene"
+  },
+  {
+   "name": "freeway_cross",
+   "kind": "authored",
+   "source": "assets/lanelab/freeway_cross.json",
+   "tests": "two FREEWAYS crossing, one carried over the other on piers (flat ground, so the scene is about the crossing)"
+  },
+  {
+   "name": "freeway_cross_relief",
+   "kind": "authored",
+   "source": "assets/lanelab/freeway_cross_relief.json",
+   "tests": "the same crossing with relief under it: the carried road must climb to its hold and back inside its window"
+  },
+  {
+   "name": "merge_taper",
+   "kind": "authored",
+   "source": "assets/lanelab/merge_taper.json",
+   "tests": "on-ramps merging: one lane, then two dying into one over a short dovetail and a long one"
+  },
+  {
+   "name": "steep_climb",
+   "kind": "authored",
+   "source": "assets/lanelab/steep_climb.json",
+   "tests": "sustained 6% ground under a 4% road, a hill on top, a crossing on the slope and a ramp climbing off it"
+  },
+  {
+   "name": "coast_city",
+   "kind": "imported",
+   "source": "assets/levels/coast_city.json",
+   "tests": "a metro recipe on a coastline"
+  },
+  {
+   "name": "living_city",
+   "kind": "imported",
+   "source": "assets/levels/living_city.json",
+   "tests": "a district recipe, compact"
+  },
+  {
+   "name": "freeway_lab",
+   "kind": "imported",
+   "source": "assets/levels/freeway_lab.json",
+   "tests": "a metro recipe built around its freeway"
+  },
+  {
+   "name": "hillcity",
+   "kind": "imported",
+   "source": "assets/levels/hillcity.json",
+   "tests": "a metro recipe on real relief"
+  },
+  {
+   "name": "metro_hills",
+   "kind": "imported",
+   "source": "assets/levels/metro_hills.json",
+   "tests": "too compact for a perimeter ring: no freeway is built"
+  },
+  {
+   "name": "piedmont_mini",
+   "kind": "imported",
+   "source": "assets/levels/piedmont_mini.json",
+   "tests": "the smallest metro recipe: no perimeter ring either"
+  },
+  {
+   "name": "metro_v2",
+   "kind": "imported",
+   "source": "assets/levels/metro_v2_test.json",
+   "slow": true,
+   "quick": true,
+   "tests": "the level the importer was tuned on \u2014 the reference, not a sample"
+  }
+ ]
+}

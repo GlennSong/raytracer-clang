@@ -1,0 +1,41 @@
+{
+ "name": "steep_climb",
+ "_tests": "a freeway crossing sustained relief — ground rising ~6% under a road limited to 4%, with a hill on top of the tilt so the climb is not monotonic — plus a street crossing on the slope and a ramp climbing off it. Every imported city that failed did so on grades; the authored corpus had only a single hill and a single valley, neither of them long.",
+ "terrain": {
+  "type": "procedural", "bounds": [-300, 1700, -600, 600], "res": 3.0, "seed": 11,
+  "octaves": [[7, 220], [2.5, 70]],
+  "tilt": { "dzdx": 0.06, "x0": -300 },
+  "hills": [ { "x": 900, "y": 0, "r": 340, "h": 34 } ]
+ },
+ "classes": {
+  "freeway": { "w": 3.6, "fwd": 3, "back": 0, "shoulder": 2.5, "g_max": 0.04, "window": 420, "thick": 1.2,
+               "edges": { "at_grade": { "kind": "guardrail", "h": 0.75 },
+                          "elevated": { "kind": "wall", "h": 0.9 } } },
+  "ramp":    { "w": 4.5, "fwd": 1, "back": 0, "shoulder": 2.5, "g_max": 0.06, "window": 60, "thick": 1.0 },
+  "local":   { "w": 3.5, "fwd": 1, "back": 1, "sidewalk": 1.8, "g_max": 0.10 }
+ },
+ "rules": { "closing": 4.0, "bridge_h": 4.0, "conform_w": 18.0, "pier_spacing": 26.0,
+            "under_clearance": 5.0, "structure_depth": 1.6 },
+ "edges": [
+  { "id": "climb", "class": "freeway",
+    "_note": "straight up the tilt and over the hill: 1600 m for ~110 m of ground rise at 4% max",
+    "path": { "type": "polyline", "points": [[-250, 0], [1650, 0]] } },
+
+  { "id": "cross_st", "class": "local",
+    "_note": "a street crossing where the ground is steepest — the crossing has to agree on a slope",
+    "path": { "type": "polyline", "points": [[620, -520], [620, 520]] } },
+
+  { "id": "hill_st", "class": "local",
+    "_note": "the feeder the on-ramp climbs from, on the far side of the hill",
+    "path": { "type": "bezier", "points": [[1180, -520], [1220, -360], [1260, -200], [1300, -60]] } },
+
+  { "id": "climb_on", "class": "ramp",
+    "_note": "an on-ramp that has to gain height on ground already climbing",
+    "from": "hill_st",
+    "to": { "edge": "climb", "x": 1420, "side": "right", "aux": 140, "taper": 120, "approach": 140 },
+    "path": { "type": "bezier", "points": [
+      { "edge": "hill_st", "y": -240, "normal": 1.8 },
+      { "edge": "hill_st", "y": -240, "normal": 1.8, "along": 70, "dx": 40 },
+      [0, 0], [0, 0] ] } }
+ ]
+}
