@@ -31,8 +31,8 @@ being used. One row per capability; the "used by" column is the audit trail.
 | Level bundle `Bundle`/`BundleWriter` | `engine/bundle/bundle.h` | loader, `rt_bake`, editor | one file, aligned mmap-able sections, JSON TOC, manifest as commit marker; general — no producer knowledge |
 | Producers, keys, bake, obtain, prune | `engine/bundle/bake.h` | loader, `rt_bake`, editor | content keys + code tags, copy-forward of unchanged producers, `RT_NOCACHE`/`RT_BUNDLE_*` knobs; `pruneBundles` keeps the newest per level |
 | Codecs `PackedMesh`, height grid, road graphs, rings | `engine/bundle/codecs.h` | city producer, GLB view | float32 packed meshes; the cold path packs too (byte-identical cold/warm) |
-| City producer | `procgen/lanelab/city_producer.h` | loader, `rt_bake`, editor | lanelab's products per render cell; `kLanelabBuildTag` |
-| Lots producer | `procgen/lanelab/lots_producer.h` | loader, `rt_bake`, editor | the lot pass on the city's blocks, read back through `BundleWriter::readBack`; `kLotsBuildTag`; lab levels only |
+| City producer | `procgen/city/roads/lanes/city_producer.h` | loader, `rt_bake`, editor | lanelab's products per render cell; `kLanesBuildTag` |
+| Lots producer | `procgen/city/roads/lanes/lots_producer.h` | loader, `rt_bake`, editor | the lot pass on the city's blocks, read back through `BundleWriter::readBack`; `kLotsBuildTag`; lab levels only |
 | City lots producer `citylots` | `procgen/city/citylots_producer.h` | loader, `rt_bake`, editor | the lattice city's lot pre-pass (`shape:"road"` + `generate`), engine_core, registers unconditionally; `kCityLotsBuildTag`. Piedmont 77 s -> 28 s warm |
 | Lot pre-pass world `CityPrePass` | `engine/city_prepass.h` | `citylots` producer | ground, road nets, carve, earthwork, ROW from the level JSON alone; refuses a level shaped by a Lua script or a corridor solve rather than approximating it |
 | Lot codecs | `procgen/city/lot_cache.h` | lots producer, loader | `NetLotResult` to sections — every `BuildingParams` field by hand, parts per render cell, `kLotsFormatVersion` |

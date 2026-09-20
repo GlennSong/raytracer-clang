@@ -7116,6 +7116,16 @@ direct calls it replaced. Code that still calls the mesher directly (diagnostics
 explicit rebuild, the surface tests) now says so by including from `deprecated/`, which is the
 point: the remaining callers are visible. `road_net_internal.h` is the seam the split left — the
 sampler, the constraints pass and the weld chains both halves share — and it collapses back into
-`road_entity.cpp` when the lattice goes. Still to come: the lanes builder implementing this
-interface from a recipe (the `level_import` bridge), lanelab folded in as `city/roads/lanes`, and
-metro_v2_test switching over.
+`road_entity.cpp` when the lattice goes.
+
+**The lab folds in with it.** `procgen/lanelab/*` becomes `procgen/city/roads/lanes/*`, namespace
+`engine::lanelab` becomes `engine::roads::lanes`, and the static library disappears: the sources
+compile inside `engine_core`, with Clipper2 and CDT as ordinary private engine deps. The two
+switches `RT_BUILD_LANELAB` and `RT_ENABLE_LANELAB` become one, `RT_ROADS_LANES` — which asks "is
+the lanes builder in this build?", a capability question about two submodules, not a policy one
+about a lab. `lanelab_tool` and `lanelab_tests` become `lanes_tool` and `lanes_tests`. ADR-0085's
+hazard survives the rename verbatim: code reached only under `RT_ROADS_LANES` must still prove it
+is looking at lanes content rather than assume it from the flag. What does NOT move is the data —
+`shape:"lanelab"` and `assets/lanelab/` still name the entity and its levels, because a level is
+content and migrates on its own schedule (phase 3, when a road block can say `"builder": "lanes"`
+and the lanes builder takes a recipe).

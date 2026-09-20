@@ -28,9 +28,9 @@
 #include "../engine/bundle/bake.h"
 #include "../engine/bundle/bundle_glb.h"
 #include "../engine/procgen/city/citylots_producer.h"
-#ifdef RT_ENABLE_LANELAB
-#include "../engine/procgen/lanelab/city_producer.h"
-#include "../engine/procgen/lanelab/lots_producer.h"
+#ifdef RT_ROADS_LANES
+#include "../engine/procgen/city/roads/lanes/city_producer.h"
+#include "../engine/procgen/city/roads/lanes/lots_producer.h"
 #endif
 #include "property_inspector.h"
 
@@ -1235,9 +1235,9 @@ int main(int argc, char** argv) {
     // Level bundles (ADR-0084): the remembered output root, the city producer, and the quit hooks.
     if (const std::string root = app.settings().getString("bundleRoot", ""); !root.empty()) engine::bundle::setBundleRoot(root);
     engine::registerCityLotsProducer();
-#ifdef RT_ENABLE_LANELAB
-    engine::lanelab::registerCityProducer();
-    engine::lanelab::registerLotsProducer();
+#ifdef RT_ROADS_LANES
+    engine::roads::lanes::registerCityProducer();
+    engine::roads::lanes::registerLotsProducer();
 #endif
     mainWindow.bakeRunning = [&]() { std::lock_guard<std::mutex> l(bakeJob.m); return bakeJob.running; };
     mainWindow.cancelBake = [&]() { bakeJob.cancel = true; if (bakeJob.thread.joinable()) bakeJob.thread.join(); };

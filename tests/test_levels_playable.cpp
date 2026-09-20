@@ -75,7 +75,7 @@ std::vector<std::string> shippedLevels() {
     // apart from the game's (ADR-0085) but are held to the same gates when the loader knows the
     // shape — a lanelab level with no collider or no ground under its spawn is as broken as any.
     std::vector<std::string> dirs = {""};
-#ifdef RT_ENABLE_LANELAB
+#ifdef RT_ROADS_LANES
     dirs.push_back("../lanelab/levels/");
 #endif
     for (const std::string& dir : dirs)

@@ -71,7 +71,8 @@ The old two-type split (`RoadGraph` + a parallel-array `RoadNet`) is gone —
   and writes this: the generators, `planarize`, `applyConstraints`,
   `extractBlocks`, the lattice mesher, the nav graph, the corridor bake, and
   the editor's node/tangent/widen ops.
-- **`RoadEntity`** (`road_net.h`) is the editable component:
+- **`RoadEntity`** (`roads/road_entity.h`, what was `road_net.h` before ADR-0089) is
+  the editable component:
   `{ RoadGraph graph; RoadLook look; RoadPlan plan; }`. `RoadLook` is how the
   road is drawn (default width, sidewalk, curb, markings, colour, junction
   policy); `RoadPlan` is what the generator knew (`cityHubs`, `freewayPlans`,
@@ -84,6 +85,12 @@ the only code that still knows the parallel-array shape — they resolve every
 fallback on the way in (a missing/zero edge width becomes the look's default,
 a short class array becomes Local, a null `node_elev` becomes at-grade) and
 reconstruct the sparse form on the way out. No saved level moved.
+
+Since ADR-0089 the road entity and the thing that BUILDS it are separate files:
+`procgen/city/roads/` holds the model (`road_entity`) and the builder interface
+(`road_builder.h` — `build` / `flattens` / `navGraph`, chosen by the road block's
+`"builder"` key), and the swept lattice that used to share `road_net.cpp` lives in
+`procgen/deprecated/roads/`, still compiled and still the default.
 
 What the unification deleted: the eight parallel arrays and their fallback
 semantics, the 54 defensive `.size()` guards they cost across five files, the

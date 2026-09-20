@@ -12,9 +12,9 @@
 #include "engine/bundle/bake.h"
 #include "engine/procgen/city/citylots_producer.h"
 #include "engine/bundle/bundle_glb.h"
-#ifdef RT_ENABLE_LANELAB
-#include "engine/procgen/lanelab/city_producer.h"
-#include "engine/procgen/lanelab/lots_producer.h"
+#ifdef RT_ROADS_LANES
+#include "engine/procgen/city/roads/lanes/city_producer.h"
+#include "engine/procgen/city/roads/lanes/lots_producer.h"
 #endif
 
 #include <cstdio>
@@ -84,9 +84,9 @@ int inspect(const std::string& dir) {
 int main(int argc, char** argv) {
     if (argc < 2) return usage();
     engine::registerCityLotsProducer();
-#ifdef RT_ENABLE_LANELAB
-    engine::lanelab::registerCityProducer();
-    engine::lanelab::registerLotsProducer();
+#ifdef RT_ROADS_LANES
+    engine::roads::lanes::registerCityProducer();
+    engine::roads::lanes::registerLotsProducer();
 #endif
     if (std::strcmp(argv[1], "--inspect") == 0) { if (argc < 3) return usage(); return inspect(argv[2]); }
     if (std::strcmp(argv[1], "--prune") == 0) {
@@ -121,7 +121,7 @@ int main(int argc, char** argv) {
         else if (a == "--check") setenv("RT_CITY_CHECK", "1", 1);   // run the lab's invariant sweep into the report (slow on metro)
         else return usage();
     }
-    if (producers().empty()) { std::fprintf(stderr, "rt_bake: no producers are registered in this build (RT_ENABLE_LANELAB off?)\n"); return 1; }
+    if (producers().empty()) { std::fprintf(stderr, "rt_bake: no producers are registered in this build (RT_ROADS_LANES off?)\n"); return 1; }
     if (require) {
         LevelInputs in; std::string err; if (!loadLevelInputs(req.levelPath, in, &err)) { std::fprintf(stderr, "rt_bake: %s\n", err.c_str()); return 1; }
         setenv("RT_BUNDLE_REQUIRE", "1", 1); if (!req.outRoot.empty()) setBundleRoot(req.outRoot);

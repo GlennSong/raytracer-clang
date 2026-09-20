@@ -458,7 +458,10 @@ up, they drift.
   if/else wants a table). `MetalRenderer::endFrame` 1153 + `initialize` 708
   (`metal_renderer.mm`; a pass-graph split — Metal-only, needs on-device
   verification). `growLotBuildings` 1004 (`city_lots.cpp:897`). The 775-line
-  unnamed lambda in `road_net.cpp:469` (naming it is step one).
+  unnamed lambda in the lattice mesher (`procgen/deprecated/roads/road_net_mesh.cpp`,
+  inside `buildRoadNetLattice`; naming it is step one) — debt that DIES with the
+  file if the lanes builder takes over, so weigh the refactor against ADR-0089's
+  phase 3 before spending on it.
   `CityRenderSystem::build` 636, `buildCarMesh` 618, `buildMetro` 577,
   `LevelScene::load` 490 — and `loadVegetation` 493, which has its own entry
   above and has DOUBLED since that entry was written.

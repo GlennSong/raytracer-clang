@@ -141,7 +141,7 @@ struct LotParams {
     // SIDEWALK RISE (site plans, ADR-0086): how far the adjoining sidewalk's
     // top stands above the ground the lot samples 2 m out from its frontage —
     // the road carve step plus the kerb (kRoadConformStep + RoadLook::curb on
-    // the lattice, lanelabSidewalkRise() in the lab). An urban lot is paved
+    // the lattice, lanesSidewalkRise() in the lab). An urban lot is paved
     // at groundY + sidewalkRise so its threshold meets the sidewalk; 0 = no
     // datum, the paving sits at the plinth.
     Real sidewalkRise = 0.0;

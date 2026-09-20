@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lot outlines over the lane lab's own pavement plan. Inputs: the plan SVG from `lanelab_tool
+"""Lot outlines over the lane lab's own pavement plan. Inputs: the plan SVG from `lanes_tool
 build` (paved footprints, world -> pixels as X=(x-minX)*s, Y=(maxY-y)*s over the graph's terrain
 bounds), the graph JSON (for those bounds) and the RT_LOT_PLAN_SVG dump (blocks, lots, built plans,
 world x/z). Output: one PNG of the whole plan and optional zooms.
