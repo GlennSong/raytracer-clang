@@ -28,6 +28,7 @@
 #include "street_names.h"
 #include "../../../renderer/renderer.h"   // RenderMesh
 
+#include <nlohmann/json.hpp>
 #include <functional>
 #include <map>
 #include <string>
@@ -35,6 +36,9 @@
 
 namespace engine {
 
+// The blade's shape and colours are CONTENT: assets/data/streets.json "signs"
+// (Glenn, 2026-09-20). streetSignParams() reads them; the level supplies only
+// what it alone knows (its sidewalk width).
 struct StreetSignParams {
     Real sidewalkWidth = 3.5;     // the band the post stands in
     Real kerbGap = 1.0;           // post centre this far past the carriageway edge
@@ -46,7 +50,18 @@ struct StreetSignParams {
     int bladePx = 80;             // atlas pixels per blade height
     int pagePx = 2048;            // atlas page size
     Real cellSize = 280.0;        // mesh cells (as the street lamps)
+    // Lettering: capitals this tall as a fraction of the blade, never set
+    // smaller than the floor to make a long name fit.
+    float capFraction = 0.56f;
+    float capFloorFraction = 0.40f;
+    uint8_t face[4] = {0, 104, 64, 255};        // US street-name green
+    uint8_t legend[4] = {246, 246, 240, 255};   // the lettering and border
 };
+
+// Read the "signs" object of the streets asset over `p`.
+void applyStreetSignData(const nlohmann::json& signs, StreetSignParams& p);
+// The shipped blade (assets/data/streets.json), read once.
+const StreetSignParams& streetSignParams();
 
 struct StreetSignBlade {
     int street = -1;              // StreetNaming::streets index

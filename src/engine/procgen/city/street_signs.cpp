@@ -1,9 +1,12 @@
 #include "street_signs.h"
 
 #include "../../mesh_builder.h"
+#include "../../asset_root.h"
+#include "../../../log.h"
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <map>
 #include <set>
 
@@ -13,10 +16,6 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 
-// Sign-shop colours: US street-name green, white legend and border.
-constexpr uint8_t kGreen[4] = {0, 104, 64, 255};
-constexpr uint8_t kWhite[4] = {246, 246, 240, 255};
-
 Real distToRay(Vec2 p, Vec2 o, Vec2 d, Real len) {
     const Vec2 v = p - o;
     const Real t = std::clamp(v.x * d.x + v.y * d.y, Real(0), len);
@@ -25,6 +24,47 @@ Real distToRay(Vec2 p, Vec2 o, Vec2 d, Real len) {
 }
 
 }  // namespace
+
+void applyStreetSignData(const nlohmann::json& signs, StreetSignParams& p) {
+    if (!signs.is_object()) return;
+    p.bladeHeight = signs.value("bladeHeight", static_cast<double>(p.bladeHeight));
+    p.minBladeWidth = signs.value("minBladeWidth", static_cast<double>(p.minBladeWidth));
+    p.maxBladeWidth = signs.value("maxBladeWidth", static_cast<double>(p.maxBladeWidth));
+    p.topBladeY = signs.value("topBladeY", static_cast<double>(p.topBladeY));
+    p.bladeStep = signs.value("bladeStep", static_cast<double>(p.bladeStep));
+    p.kerbGap = signs.value("kerbGap", static_cast<double>(p.kerbGap));
+    p.bladePx = signs.value("bladePx", p.bladePx);
+    p.pagePx = signs.value("pagePx", p.pagePx);
+    p.capFraction = signs.value("capFraction", p.capFraction);
+    p.capFloorFraction = signs.value("capFloorFraction", p.capFloorFraction);
+    auto colour = [&](const char* key, uint8_t* out) {
+        if (!signs.contains(key) || !signs[key].is_array()) return;
+        const auto& c = signs[key];
+        for (std::size_t i = 0; i < 3 && i < c.size(); ++i)
+            out[i] = static_cast<uint8_t>(std::clamp(c[i].get<int>(), 0, 255));
+        out[3] = 255;
+    };
+    colour("face", p.face);
+    colour("legend", p.legend);
+}
+
+const StreetSignParams& streetSignParams() {
+    static StreetSignParams p = [] {
+        StreetSignParams q;
+        std::ifstream in(assetPath("assets/data/streets.json"));
+        if (in) {
+            nlohmann::json doc;
+            try {
+                in >> doc;
+                applyStreetSignData(doc.value("signs", nlohmann::json::object()), q);
+            } catch (const std::exception& e) {
+                LOG_WARN << "[streets] signs: " << e.what();
+            }
+        }
+        return q;
+    }();
+    return p;
+}
 
 Real SignBlade::widthM() const {
     return hPx > 0 ? heightM * static_cast<Real>(wPx) / static_cast<Real>(hPx) : 0.0;
@@ -176,8 +216,8 @@ SignAtlas buildSignAtlas(const Font& font, const StreetNaming& names,
     const int padX = static_cast<int>(std::lround(H * 0.28));
     const float capUnit = font.capHeight(1.0f);
     if (capUnit <= 0) return atlas;
-    const float em0 = 0.56f * H / capUnit;            // capitals ~56% of the blade
-    const float emFloor = 0.40f * H / capUnit;        // never smaller than 40%
+    const float em0 = p.capFraction * H / capUnit;
+    const float emFloor = p.capFloorFraction * H / capUnit;
     const float budget = static_cast<float>(maxW - 2 * padX);
 
     struct Made { int street; SignBlade blade; TextImage img; };
@@ -200,15 +240,15 @@ SignAtlas buildSignAtlas(const Font& font, const StreetNaming& names,
         b.hPx = H;
         b.wPx = std::clamp(static_cast<int>(std::ceil(tw)) + 2 * padX, minW, maxW);
         TextImage img;
-        img.resize(b.wPx, H, kGreen);
+        img.resize(b.wPx, H, p.face);
         // The white border, inset like a real blade's.
         const int in = std::max(2, H / 26), t = std::max(2, H / 30);
-        img.fillRect(in, in, b.wPx - in, in + t, kWhite);
-        img.fillRect(in, H - in - t, b.wPx - in, H - in, kWhite);
-        img.fillRect(in, in, in + t, H - in, kWhite);
-        img.fillRect(b.wPx - in - t, in, b.wPx - in, H - in, kWhite);
+        img.fillRect(in, in, b.wPx - in, in + t, p.legend);
+        img.fillRect(in, H - in - t, b.wPx - in, H - in, p.legend);
+        img.fillRect(in, in, in + t, H - in, p.legend);
+        img.fillRect(b.wPx - in - t, in, b.wPx - in, H - in, p.legend);
         const float baseline = 0.5f * (H + b.capPx);
-        font.draw(img, b.text, 0.5f * (b.wPx - tw), baseline, em, kWhite, xs);
+        font.draw(img, b.text, 0.5f * (b.wPx - tw), baseline, em, p.legend, xs);
         made.push_back({s, b, std::move(img)});
     }
     // Shelf-pack, widest first; each blade padded by edge-extension so the
@@ -221,8 +261,7 @@ SignAtlas buildSignAtlas(const Font& font, const StreetNaming& names,
     std::vector<int> usedH;
     auto newPage = [&]() {
         TextImage page;
-        const uint8_t clearC[4] = {0, 104, 64, 255};
-        page.resize(W, p.pagePx, clearC);
+        page.resize(W, p.pagePx, p.face);
         atlas.pages.push_back(std::move(page));
         usedH.push_back(0);
         x = 0;

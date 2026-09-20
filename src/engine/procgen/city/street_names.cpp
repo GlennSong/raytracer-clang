@@ -1,33 +1,36 @@
 #include "street_names.h"
 
+#include "../../asset_root.h"
+#include "../../../log.h"
+
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <unordered_set>
 
 namespace engine {
 
 namespace {
 
-// A deterministic name bank. Real cities mix trees, people, places and
-// numbers; the mix matters more than any one word for a map feeling
-// navigable. (Kept in step with tools/city_street_names.py's spirit, larger:
-// a metro has hundreds of streets and every name must be unique.)
-const char* const kTrees[] = {"Oak", "Maple", "Elm", "Cedar", "Willow", "Birch", "Aspen",
-    "Alder", "Chestnut", "Hawthorn", "Laurel", "Linden", "Magnolia", "Juniper", "Poplar",
-    "Sycamore", "Hazel", "Rowan", "Spruce", "Walnut", "Cypress", "Hickory", "Locust",
-    "Mulberry", "Pine", "Redwood", "Sequoia", "Tamarack", "Beech", "Dogwood"};
-const char* const kPeople[] = {"Lincoln", "Jefferson", "Franklin", "Madison", "Monroe",
-    "Jackson", "Harrison", "Sherman", "Grant", "Hamilton", "Adams", "Clay", "Kearny",
-    "Bryant", "Folsom", "Larkin", "Geary", "Taylor", "Hayes", "Fulton", "Grove", "Page",
-    "Haight", "Mason", "Powell", "Stockton", "Davis", "Drumm", "Howard", "Harrison"};
-const char* const kPlaces[] = {"Harbour", "Market", "Mill", "Quarry", "Foundry", "Cannery",
-    "Depot", "Union", "Commerce", "Exchange", "Granary", "Wharf", "Mission", "Station",
-    "College", "Church", "Garden", "Orchard", "Meadow", "Ridge", "Summit", "Valley",
-    "Lake", "River", "Bridge", "Park", "Hill", "Spring", "Forest", "Canal"};
-const char* const kOrdinals[] = {"First", "Second", "Third", "Fourth", "Fifth", "Sixth",
-    "Seventh", "Eighth", "Ninth", "Tenth", "Eleventh", "Twelfth", "Thirteenth",
-    "Fourteenth", "Fifteenth", "Sixteenth", "Seventeenth", "Eighteenth", "Nineteenth",
-    "Twentieth"};
+// The FALLBACK book: assets/data/streets.json is the content (see the header).
+// This is only what a stripped install falls back to, so a city still has
+// street names when the asset is missing.
+StreetNameBook fallbackBook() {
+    StreetNameBook b;
+    b.banks = {{"Oak", "Maple", "Elm", "Cedar", "Willow", "Birch", "Aspen", "Alder"},
+               {"Lincoln", "Jefferson", "Franklin", "Madison", "Monroe", "Jackson"},
+               {"Market", "Mill", "Depot", "Union", "Commerce", "Exchange"},
+               {"First", "Second", "Third", "Fourth", "Fifth", "Sixth"}};
+    b.suffixes = {{16, {"Boulevard", "Avenue", "Parkway"}},
+                  {13, {"Avenue", "Road", "Way"}},
+                  {9, {"Street", "Road", "Drive"}},
+                  {0, {"Lane", "Court", "Place"}}};
+    b.classSuffix = {{"alley", "Alley"}};
+    b.abbreviations = {{"Boulevard", "Blvd"}, {"Parkway", "Pkwy"}, {"Avenue", "Ave"},
+                       {"Street", "St"}, {"Road", "Rd"}, {"Drive", "Dr"}, {"Lane", "Ln"},
+                       {"Court", "Ct"}, {"Place", "Pl"}, {"Alley", "Aly"}};
+    return b;
+}
 
 struct Rng {
     uint32_t s;
@@ -35,25 +38,95 @@ struct Rng {
     uint32_t next() { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return s; }
 };
 
-// Suffix by width (the only class signal the plan reliably carries), plus the
-// graph's own class for alleys.
-const char* suffixFor(double width, RoadClass k, Rng& r) {
-    if (k == RoadClass::Alley) return "Alley";
-    static const char* const wide[] = {"Boulevard", "Avenue", "Parkway"};
-    static const char* const mid[] = {"Avenue", "Road", "Way"};
-    static const char* const street[] = {"Street", "Road", "Drive"};
-    static const char* const narrow[] = {"Lane", "Court", "Place"};
-    if (width >= 16) return wide[r.next() % 3];
-    if (width >= 13) return mid[r.next() % 3];
-    if (width >= 9) return street[r.next() % 3];
-    return narrow[r.next() % 3];
+const char* classTag(RoadClass k) {
+    switch (k) {
+        case RoadClass::Freeway: return "freeway";
+        case RoadClass::Arterial: return "arterial";
+        case RoadClass::Collector: return "collector";
+        case RoadClass::Ramp: return "ramp";
+        case RoadClass::Alley: return "alley";
+        default: return "local";
+    }
+}
+
+// The suffix for a road: its CLASS if the book names one (an alley is an
+// Alley whatever its width), else the widest rule it meets.
+std::string suffixFor(const StreetNameBook& b, double width, RoadClass k, Rng& r) {
+    const auto byClass = b.classSuffix.find(classTag(k));
+    if (byClass != b.classSuffix.end()) return byClass->second;
+    for (const StreetNameBook::SuffixRule& rule : b.suffixes)
+        if (width >= rule.minWidth && !rule.choices.empty())
+            return rule.choices[r.next() % rule.choices.size()];
+    return "Street";
 }
 
 bool isStreet(RoadClass k) { return k != RoadClass::Freeway && k != RoadClass::Ramp; }
 
 }  // namespace
 
+StreetNameBook parseStreetNameBook(const nlohmann::json& names) {
+    StreetNameBook b;
+    if (!names.is_object()) return b;
+    b.seed = names.value("seed", 20260918u);
+    if (names.contains("banks") && names["banks"].is_object())
+        for (const auto& [tag, words] : names["banks"].items()) {
+            std::vector<std::string> pool;
+            for (const auto& w : words)
+                if (w.is_string()) pool.push_back(w.get<std::string>());
+            if (!pool.empty()) b.banks.push_back(std::move(pool));
+        }
+    if (names.contains("suffixes"))
+        for (const auto& rule : names["suffixes"]) {
+            StreetNameBook::SuffixRule sr;
+            sr.minWidth = rule.value("minWidth", 0.0);
+            for (const auto& c : rule.value("choices", nlohmann::json::array()))
+                if (c.is_string()) sr.choices.push_back(c.get<std::string>());
+            if (!sr.choices.empty()) b.suffixes.push_back(std::move(sr));
+        }
+    std::stable_sort(b.suffixes.begin(), b.suffixes.end(),
+                     [](const StreetNameBook::SuffixRule& x, const StreetNameBook::SuffixRule& y) {
+                         return x.minWidth > y.minWidth;   // widest rule first
+                     });
+    if (names.contains("classSuffix") && names["classSuffix"].is_object())
+        for (const auto& [k, v] : names["classSuffix"].items())
+            if (v.is_string()) b.classSuffix[k] = v.get<std::string>();
+    if (names.contains("abbreviations") && names["abbreviations"].is_object())
+        for (const auto& [k, v] : names["abbreviations"].items())
+            if (v.is_string()) b.abbreviations[k] = v.get<std::string>();
+    return b;
+}
+
+const StreetNameBook& streetNameBook() {
+    static StreetNameBook book = [] {
+        StreetNameBook b;
+        const std::string path = assetPath("assets/data/streets.json");
+        std::ifstream in(path);
+        if (in) {
+            nlohmann::json doc;
+            try {
+                in >> doc;
+                b = parseStreetNameBook(doc.value("names", nlohmann::json::object()));
+                b.fromAsset = b.usable();
+            } catch (const std::exception& e) {
+                LOG_WARN << "[streets] " << path << ": " << e.what();
+            }
+        }
+        if (!b.usable()) {
+            LOG_WARN << "[streets] no usable assets/data/streets.json: "
+                        "falling back to the built-in name book";
+            b = fallbackBook();
+        }
+        return b;
+    }();
+    return book;
+}
+
 StreetNaming nameStreets(const RoadGraph& g, const StreetNamingParams& p) {
+    return nameStreets(g, streetNameBook(), p);
+}
+
+StreetNaming nameStreets(const RoadGraph& g, const StreetNameBook& book,
+                         const StreetNamingParams& p) {
     StreetNaming out;
     const int E = static_cast<int>(g.edges.size());
     const int N = static_cast<int>(g.nodes.size());
@@ -145,22 +218,18 @@ StreetNaming nameStreets(const RoadGraph& g, const StreetNamingParams& p) {
         return out.streets[static_cast<std::size_t>(a)].length >
                out.streets[static_cast<std::size_t>(b)].length;
     });
-    Rng rng(p.seed);
+    Rng rng(p.seed ? p.seed : book.seed);
     // The WORD is unique while the bank lasts: "Hamilton Rd" and "Hamilton Dr"
     // in one city is a wrong turn waiting to happen. Past that, the full name.
     std::unordered_set<std::string> taken, takenWord;
-    struct Bank { const char* const* words; int n; };
-    const Bank banks[] = {{kTrees, static_cast<int>(sizeof(kTrees) / sizeof(*kTrees))},
-                          {kPeople, static_cast<int>(sizeof(kPeople) / sizeof(*kPeople))},
-                          {kPlaces, static_cast<int>(sizeof(kPlaces) / sizeof(*kPlaces))},
-                          {kOrdinals, static_cast<int>(sizeof(kOrdinals) / sizeof(*kOrdinals))}};
+    const std::size_t bankCount = book.banks.size();
     for (int si : order) {
         Street& s = out.streets[static_cast<std::size_t>(si)];
         std::string name;
-        for (int attempt = 0; attempt < 96; ++attempt) {
-            const Bank& b = banks[rng.next() % 4];
-            const std::string word = b.words[rng.next() % static_cast<uint32_t>(b.n)];
-            name = word + " " + suffixFor(s.width, s.klass, rng);
+        for (int attempt = 0; attempt < 96 && bankCount; ++attempt) {
+            const std::vector<std::string>& bank = book.banks[rng.next() % bankCount];
+            const std::string word = bank[rng.next() % bank.size()];
+            name = word + " " + suffixFor(book, s.width, s.klass, rng);
             const bool wordFree = !takenWord.count(word);
             if (!taken.count(name) && (wordFree || attempt >= 64)) {
                 takenWord.insert(word);
@@ -168,10 +237,10 @@ StreetNaming nameStreets(const RoadGraph& g, const StreetNamingParams& p) {
             }
             name.clear();
         }
-        if (name.empty()) {   // the bank ran dry: number it
-            const Bank& b = banks[rng.next() % 4];
-            name = std::string(b.words[rng.next() % static_cast<uint32_t>(b.n)]) + " " +
-                   suffixFor(s.width, s.klass, rng) + " " + std::to_string(si);
+        if (name.empty() && bankCount) {   // the banks ran dry: number it
+            const std::vector<std::string>& bank = book.banks[rng.next() % bankCount];
+            name = bank[rng.next() % bank.size()] + " " +
+                   suffixFor(book, s.width, s.klass, rng) + " " + std::to_string(si);
         }
         taken.insert(name);
         s.name = std::move(name);
@@ -180,11 +249,11 @@ StreetNaming nameStreets(const RoadGraph& g, const StreetNamingParams& p) {
 }
 
 std::string abbreviateStreetName(const std::string& name) {
-    static const std::pair<const char*, const char*> kShort[] = {
-        {"Boulevard", "Blvd"}, {"Avenue", "Ave"}, {"Parkway", "Pkwy"}, {"Street", "St"},
-        {"Road", "Rd"}, {"Drive", "Dr"}, {"Lane", "Ln"}, {"Court", "Ct"}, {"Place", "Pl"},
-        {"Alley", "Aly"}};
-    for (const auto& [full, abbr] : kShort) {
+    return abbreviateStreetName(name, streetNameBook());
+}
+
+std::string abbreviateStreetName(const std::string& name, const StreetNameBook& book) {
+    for (const auto& [full, abbr] : book.abbreviations) {
         const std::string suffix = std::string(" ") + full;
         const std::size_t at = name.rfind(suffix);
         if (at != std::string::npos &&

@@ -1,0 +1,64 @@
+{
+  "_comment": [
+    "Street naming and sign look as DATA (Glenn, 2026-09-20: 'for the street names",
+    "you've put them in code. I'm starting to wonder if some of this shouldn't be",
+    "data and not baked into the C++'). The C++ owns the ALGORITHM -- which edges",
+    "form one street (street_names.h) and how a blade is lettered to fit",
+    "(street_signs.h). This file owns the CONTENT: the words, what suffix a road of",
+    "a given width carries, how a sign shop shortens it, and what the blade looks",
+    "like. Edit it and the city renames itself; no rebuild.",
+    "A name is '<word> <suffix>'. Banks are drawn from evenly; a word is used once",
+    "per city while the banks last."
+  ],
+  "names": {
+    "seed": 20260918,
+    "banks": {
+      "trees": ["Oak", "Maple", "Elm", "Cedar", "Willow", "Birch", "Aspen", "Alder",
+                "Chestnut", "Hawthorn", "Laurel", "Linden", "Magnolia", "Juniper",
+                "Poplar", "Sycamore", "Hazel", "Rowan", "Spruce", "Walnut", "Cypress",
+                "Hickory", "Locust", "Mulberry", "Pine", "Redwood", "Sequoia",
+                "Tamarack", "Beech", "Dogwood"],
+      "people": ["Lincoln", "Jefferson", "Franklin", "Madison", "Monroe", "Jackson",
+                 "Harrison", "Sherman", "Grant", "Hamilton", "Adams", "Clay", "Kearny",
+                 "Bryant", "Folsom", "Larkin", "Geary", "Taylor", "Hayes", "Fulton",
+                 "Page", "Haight", "Mason", "Powell", "Stockton", "Davis", "Howard",
+                 "Bancroft", "Lowell", "Emerson"],
+      "places": ["Harbour", "Market", "Mill", "Quarry", "Foundry", "Cannery", "Depot",
+                 "Union", "Commerce", "Exchange", "Granary", "Wharf", "Mission",
+                 "Station", "College", "Church", "Garden", "Orchard", "Meadow", "Ridge",
+                 "Summit", "Valley", "Lake", "River", "Bridge", "Park", "Hill", "Spring",
+                 "Forest", "Canal"],
+      "ordinals": ["First", "Second", "Third", "Fourth", "Fifth", "Sixth", "Seventh",
+                   "Eighth", "Ninth", "Tenth", "Eleventh", "Twelfth", "Thirteenth",
+                   "Fourteenth", "Fifteenth", "Sixteenth", "Seventeenth", "Eighteenth",
+                   "Nineteenth", "Twentieth"]
+    },
+    "suffixes": [
+      { "minWidth": 16, "choices": ["Boulevard", "Avenue", "Parkway"] },
+      { "minWidth": 13, "choices": ["Avenue", "Road", "Way"] },
+      { "minWidth": 9,  "choices": ["Street", "Road", "Drive"] },
+      { "minWidth": 0,  "choices": ["Lane", "Court", "Place"] }
+    ],
+    "classSuffix": { "alley": "Alley" },
+    "abbreviations": {
+      "Boulevard": "Blvd", "Parkway": "Pkwy", "Avenue": "Ave", "Street": "St",
+      "Road": "Rd", "Drive": "Dr", "Lane": "Ln", "Court": "Ct", "Place": "Pl",
+      "Alley": "Aly", "Way": "Way"
+    }
+  },
+  "signs": {
+    "_comment": "Metres, except the atlas sizes (pixels) and the fractions.",
+    "bladeHeight": 0.30,
+    "minBladeWidth": 0.75,
+    "maxBladeWidth": 1.8,
+    "topBladeY": 3.05,
+    "bladeStep": 0.34,
+    "kerbGap": 1.0,
+    "bladePx": 80,
+    "pagePx": 2048,
+    "capFraction": 0.56,
+    "capFloorFraction": 0.40,
+    "face": [0, 104, 64],
+    "legend": [246, 246, 240]
+  }
+}

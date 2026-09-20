@@ -5,6 +5,8 @@
 #include "../src/engine/procgen/city/street_signs.h"
 #include "../src/engine/text/font.h"
 
+#include <nlohmann/json.hpp>
+
 #include <cmath>
 #include <map>
 #include <set>
@@ -68,6 +70,43 @@ TEST_CASE(street_names_follow_a_street_through_its_junctions) {
     CHECK(abbreviateStreetName("Oak Boulevard") == "Oak Blvd");
     CHECK(abbreviateStreetName("Market Street") == "Market St");
     CHECK(abbreviateStreetName("Mill") == "Mill");
+}
+
+// THE NAMES ARE CONTENT, NOT CODE (Glenn, 2026-09-20: "I'm starting to wonder
+// if some of this shouldn't be data and not baked into the C++").
+// assets/data/streets.json holds the words, the suffix a width carries and the
+// sign shop's abbreviations; the C++ holds only the algorithm.
+TEST_CASE(street_names_come_from_the_streets_asset) {
+    // The shipped book really loaded (not the built-in fallback).
+    const StreetNameBook& shipped = streetNameBook();
+    CHECK(shipped.fromAsset);
+    CHECK(shipped.banks.size() >= 2);
+    CHECK(shipped.abbreviations.count("Boulevard") == 1);
+
+    // A book authored here names the city from ITS words and suffixes.
+    const nlohmann::json doc = nlohmann::json::parse(R"({
+        "seed": 7,
+        "banks": { "cats": ["Tabby", "Calico", "Tortoise", "Siamese"] },
+        "suffixes": [ { "minWidth": 11, "choices": ["Causeway"] },
+                      { "minWidth": 0,  "choices": ["Mews"] } ],
+        "classSuffix": { "alley": "Ginnel" },
+        "abbreviations": { "Causeway": "Cswy" }
+    })");
+    const StreetNameBook book = parseStreetNameBook(doc);
+    CHECK(book.usable());
+    const RoadGraph g = sampledGrid(4, 80.0, 4.0);
+    const StreetNaming n = nameStreets(g, book);
+    CHECK(n.streets.size() == 8);
+    for (const Street& s : n.streets) {
+        const std::string word = s.name.substr(0, s.name.find(' '));
+        const std::string suffix = s.name.substr(s.name.find(' ') + 1);
+        CHECK(word == "Tabby" || word == "Calico" || word == "Tortoise" || word == "Siamese");
+        // Rows are 12 m (Causeway), columns 9 m (Mews).
+        CHECK(suffix == (s.width >= 11 ? "Causeway" : "Mews"));
+    }
+    CHECK(abbreviateStreetName("Calico Causeway", book) == "Calico Cswy");
+    // The shipped book does not know "Causeway"; a book is self-contained.
+    CHECK(abbreviateStreetName("Calico Causeway", shipped) == "Calico Causeway");
 }
 
 TEST_CASE(street_signs_stand_on_the_corner_with_the_right_names) {

@@ -20,11 +20,39 @@
 
 #include "road_network.h"
 
+#include <nlohmann/json.hpp>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
 namespace engine {
+
+// THE CONTENT, AS DATA (Glenn, 2026-09-20: "for the street names you've put
+// them in code. I'm starting to wonder if some of this shouldn't be data and
+// not baked into the C++"). assets/data/streets.json holds the words, what
+// suffix a road of a given width carries, and how a sign shop shortens it;
+// this file holds only the algorithm that uses them.
+struct StreetNameBook {
+    std::vector<std::vector<std::string>> banks;   // word pools, drawn from evenly
+    struct SuffixRule {
+        double minWidth = 0;
+        std::vector<std::string> choices;
+    };
+    std::vector<SuffixRule> suffixes;                   // widest first
+    std::map<std::string, std::string> classSuffix;     // "alley" -> "Alley"
+    std::map<std::string, std::string> abbreviations;   // "Boulevard" -> "Blvd"
+    uint32_t seed = 20260918;
+    bool fromAsset = false;                             // false = the built-in fallback
+    bool usable() const { return !banks.empty() && !suffixes.empty(); }
+};
+
+// Parse the asset's "names" object. An empty/!usable book means the caller
+// should fall back.
+StreetNameBook parseStreetNameBook(const nlohmann::json& names);
+// assets/data/streets.json, read once. Falls back to a small built-in book
+// (with a warning) so a stripped install still names its streets.
+const StreetNameBook& streetNameBook();
 
 struct Street {
     std::string name;
@@ -44,6 +72,7 @@ struct StreetNaming {
 };
 
 struct StreetNamingParams {
+    // (The naming CONTENT lives in the book; these are the geometry rules.)
     // Carrying on THROUGH A JUNCTION: the straightest continuation within this
     // many degrees, of a width within widthTolerance. (Plain nodes always
     // continue: a curve is not a new street.)
@@ -52,13 +81,17 @@ struct StreetNamingParams {
     // Through a PLAIN node: a curve is still the street, a kink sharper than
     // 60 degrees at a single node is a corner between two.
     double cosPlainKink = 0.5;
-    uint32_t seed = 20260918u;
+    uint32_t seed = 0;   // 0 = the book's own seed
 };
 
+StreetNaming nameStreets(const RoadGraph& g, const StreetNameBook& book,
+                         const StreetNamingParams& p = {});
+// ...with the shipped book (streetNameBook()).
 StreetNaming nameStreets(const RoadGraph& g, const StreetNamingParams& p = {});
 
-// The sign-shop short form of a street's suffix ("Boulevard" -> "Blvd").
-// Unchanged when there is nothing to shorten.
+// The sign-shop short form of a street's suffix ("Boulevard" -> "Blvd"), from
+// the book's abbreviations. Unchanged when there is nothing to shorten.
+std::string abbreviateStreetName(const std::string& name, const StreetNameBook& book);
 std::string abbreviateStreetName(const std::string& name);
 
 }  // namespace engine

@@ -5012,7 +5012,7 @@ bool LevelLoader::load(const std::string& path,
                 if (wantSigns && !font)
                     LOG_WARN << "[signs] no sign font (assets/fonts/Overpass-Bold.ttf): no street signs";
                 if (wantSigns && font) {
-                    engine::StreetSignParams sp;
+                    engine::StreetSignParams sp = engine::streetSignParams();
                     world.each<engine::RoadEntity>([&](Entity, engine::RoadEntity& net) {
                         sp.sidewalkWidth = std::max(sp.sidewalkWidth, static_cast<Real>(net.look.sidewalk));
                     });
