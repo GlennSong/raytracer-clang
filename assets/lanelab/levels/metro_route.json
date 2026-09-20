@@ -1,0 +1,163 @@
+{
+ "citysim": {
+  "buildChance": 0.9,
+  "buildLots": true,
+  "cars": 0,
+  "debugWidgets": false,
+  "detailDistance": 300,
+  "downtownRadius": 300,
+  "facadeDistance": 950,
+  "hoursPerSecond": 0.05,
+  "hubRadius": 240,
+  "midtownRadius": 600,
+  "pedestrians": 0,
+  "perceptionReliability": 1.0,
+  "plinth": 0.45,
+  "seed": 9,
+  "sidewalk": 5.0,
+  "wander": false
+ },
+ "entities": [
+  {
+   "id": 1,
+   "lanelab": {
+    "graph": "assets/lanelab/metro_route/metro_route_lanelab.json"
+   },
+   "name": "metro_route_freeway",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "shape": "lanelab"
+  }
+ ],
+ "environment": {
+  "clouds": {
+   "bottom": 900,
+   "coverage": 0.38,
+   "density": 0.05,
+   "lightSteps": 6,
+   "noiseScale": 0.0007,
+   "steps": 96,
+   "top": 1600,
+   "wind": 14
+  },
+  "sky": {
+   "aerial": 4.0,
+   "model": "scattering",
+   "turbidity": 2.0
+  },
+  "skyColor": [
+   0.55,
+   0.68,
+   0.86
+  ]
+ },
+ "lighting": {
+  "ambientMultiplier": 0.7,
+  "exposure": 0.7,
+  "sun": {
+   "castsShadow": true,
+   "color": [
+    1,
+    0.98,
+    0.94
+   ],
+   "direction": [
+    0.4,
+    0.72,
+    -0.32
+   ],
+   "intensity": 6.0
+  }
+ },
+ "player": {
+  "collider": {
+   "halfHeight": 0.4,
+   "radius": 0.3,
+   "shape": "capsule"
+  },
+  "friction": 0.5,
+  "position": [
+   -300.0,
+   40.0,
+   -20.0
+  ]
+ },
+ "terrain": {
+  "_comment": "metro_v2_test's terrain block minus the erode* keys (the lab's conformed grid, baked from the eroded source, is the eroded base here) \u2014 the lab's ground rendered by CDLOD (2026-09-08 wiring; enabled 2026-09-13 once the lab's lots grow in the terrain pre-pass so their pads reach it)",
+  "cdlod": {
+   "worldHalf": 1380
+  },
+  "heightScale": 13,
+  "material": {
+   "albedo": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "roughness": 1.0
+  },
+  "mountainAlongRange": true,
+  "mountainHeight": 180,
+  "mountainMaskHi": 0.4,
+  "mountainMaskLo": -0.1,
+  "mountainMaskScale": 0.001,
+  "mountainScale": 0.002,
+  "noiseScale": 0.0026,
+  "octaves": 6,
+  "rangeHeight": 260,
+  "rangeSpine": [
+   [
+    -1180,
+    -900
+   ],
+   [
+    -1120,
+    -300
+   ],
+   [
+    -1180,
+    300
+   ],
+   [
+    -1120,
+    900
+   ]
+  ],
+  "rangeVariation": 0.6,
+  "rangeWidth": 300,
+  "resolution": 900,
+  "rockLine": 90,
+  "seed": 11,
+  "size": 2760,
+  "snowLine": 230,
+  "tiltX": -0.045,
+  "warp": 0.35
+ },
+ "vehicles": [
+  {
+   "position": [
+    -204.2121928734323,
+    10.349089737129155,
+    -895.6374530354201
+   ],
+   "recipe": "sedan",
+   "seed": 1,
+   "yaw": 0
+  },
+  {
+   "position": [
+    78.99974138619535,
+    -1.611770673026493,
+    -611.5238120767209
+   ],
+   "recipe": "sedan",
+   "seed": 2,
+   "yaw": 0
+  }
+ ],
+ "version": 1,
+ "name": "metro_route"
+}
