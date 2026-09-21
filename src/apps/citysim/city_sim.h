@@ -714,6 +714,13 @@ public:
         // function's contract ("the agent keeps its current plan") true.
         if (to < 0) return false;
         const Real keepDist = a.distOnLeg;
+        // WAKE THEM. A sleeping agent is not in the active list at all, so the
+        // stepper never reaches it: the errand sets moving, a valid route and a
+        // destination, and the agent stands in its doorway until its OWN alarm
+        // goes off — measured, with `stepped=0` and the ghost sitting 0.4 m
+        // from its body, so neither the leash nor the route was to blame. A
+        // director's errand overrides the day, and that includes the lie-in.
+        a.wakeAt = -1;
         startTrip(a, from, to, /*fromRest=*/!a.moving);
         if (!a.route.valid()) return false;
         if (legLink >= 0) {

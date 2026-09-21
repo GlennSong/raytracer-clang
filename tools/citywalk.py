@@ -75,6 +75,19 @@ class Channel:
     def possess(self, what="walker"):
         return self.send(f"possess {what}")
 
+    def agent(self):
+        """`agent?` -> the possessed agent's own mind (ADR-0091)."""
+        return self.send("agent?")
+
+    def look(self):
+        """`look?` -> what it can see, as a menu of reachable options."""
+        return self.send("look?")
+
+    def direct(self, on=True):
+        """Hold the goal layer off it, so its schedule stops overwriting the
+        director's plan. ALWAYS turn this off again (release does it too)."""
+        return self.send(f"direct {'on' if on else 'off'}")
+
     def status(self):
         """`possess?` -> state + pos/speed/remaining (ADR-0079). The settings key
         possess.status is the INTERNAL channel; the verb is what a director uses."""
@@ -123,6 +136,48 @@ def parse_status(text):
     return out
 
 
+def parse_look(text):
+    """`look?` replies as ` | `-separated items, each a run of key=value:
+       clock=7.76 pos=-362,-962 facing=1.0,0.1 | next d=21 b=23 at=-344,-952
+       | place=civic id=1065 d=64 b=91 open=1 at=-370.6,-898.3 | ped=3029 d=27 ...
+    Returns (header, items). Bearings are degrees from the agent's heading,
+    positive to its RIGHT — the same convention as the in-game bus HUD."""
+    if not text.startswith("ok "):
+        return {}, []
+    parts = text[3:].split(" | ")
+    def fields(chunk):
+        out = {}
+        for tok in chunk.split():
+            if "=" not in tok:
+                out.setdefault("kind", tok)
+                continue
+            k, v = tok.split("=", 1)
+            if "," in v:
+                try:
+                    out[k] = [float(n) for n in v.split(",")]
+                    continue
+                except ValueError:
+                    pass
+            try:
+                out[k] = float(v)
+            except ValueError:
+                out[k] = v
+        return out
+    header = fields(parts[0]) if parts else {}
+    items = []
+    for chunk in parts[1:]:
+        f = fields(chunk)
+        # The engine names the item by which key it carries: place=cafe,
+        # ped=3029, car=1872, or a leading bare word (next, stop).
+        for key in ("place", "ped", "car"):
+            if key in f:
+                f["kind"] = key
+                f["what"] = f[key]
+                break
+        items.append(f)
+    return header, items
+
+
 def position(status):
     """World x, z of the possessed avatar (pos is x,y,z)."""
     pos = status.get("pos")
@@ -140,28 +195,63 @@ def position(status):
     return None
 
 
-def candidates(pos, radius, rng, n=6, visited=()):
-    """Phase 1 menu: points on a ring around the agent, skipping ones already
-    used. Phase 3 replaces this with real destinations (shopfronts, stops,
-    crossings) pulled from the generated map."""
-    x, z = pos
+def candidates(look_items, pos, radius, rng, visited=()):
+    """The menu the ENGINE offered, turned into options a director can pick.
+
+    Every option carries an (x, z) that `walk_to` accepts, because look? only
+    reports points already on the pedestrian network — a place's door, a bus
+    stop, a waypoint. That is the ADR-0091 rule: an out-of-range answer should
+    not be possible even in principle.
+
+    Ring points are still appended when the real menu is thin, so a walker in
+    an empty quarter has somewhere to go."""
     out = []
-    for i in range(n):
-        a = (i / n) * math.tau + rng.uniform(-0.2, 0.2)
-        r = radius * rng.uniform(0.7, 1.3)
-        p = (round(x + math.cos(a) * r, 1), round(z + math.sin(a) * r, 1))
-        if all(math.dist(p, v) > radius * 0.5 for v in visited):
-            out.append({"label": f"{'NESW'[i % 4]} {int(r)} m", "x": p[0], "z": p[1]})
+    for f in look_items:
+        at = f.get("at")
+        if not (isinstance(at, list) and len(at) == 2):
+            continue
+        if f.get("kind") == "place":
+            shut = "" if f.get("open") == 1.0 else ", shut"
+            name = str(f.get("name", "")).replace("_", " ")
+            label = f"{f['what']}{' ' + name if name else ''} {int(f.get('d', 0))} m{shut}"
+            out.append({"label": label, "x": at[0], "z": at[1],
+                        "kind": "place", "what": f["what"], "open": f.get("open") == 1.0,
+                        "d": f.get("d"), "b": f.get("b")})
+        elif f.get("kind") == "stop":
+            out.append({"label": f"bus stop, route {int(f.get('route', -1))}, "
+                                 f"{int(f.get('d', 0))} m",
+                        "x": at[0], "z": at[1], "kind": "stop",
+                        "what": "bus stop", "open": True,
+                        "d": f.get("d"), "b": f.get("b")})
+    out = [c for c in out
+           if all(math.dist((c["x"], c["z"]), v) > 8.0 for v in visited)]
+    if len(out) < 3:
+        x, z = pos
+        for i in range(4 - len(out)):
+            a = rng.uniform(0, math.tau)
+            r = radius * rng.uniform(0.7, 1.3)
+            p = (round(x + math.cos(a) * r, 1), round(z + math.sin(a) * r, 1))
+            if all(math.dist(p, v) > radius * 0.5 for v in visited):
+                out.append({"label": f"wander {int(r)} m", "x": p[0], "z": p[1],
+                            "kind": "wander", "what": "street", "open": True,
+                            "d": r, "b": None})
     return out
 
 
 def stub_decider(state, menu):
-    """Phase 1 stand-in for the model: the nearest option, with a nudge toward
-    variety so it does not oscillate between two points."""
-    here = (state["x"], state["z"])
-    ranked = sorted(menu, key=lambda c: math.dist(here, (c["x"], c["z"])))
-    pick = ranked[0] if len(ranked) < 3 else ranked[min(1, len(ranked) - 1)]
-    return menu.index(pick), "nearest-unvisited (stub)"
+    """Phase 1 stand-in for the model. Prefers somewhere that is OPEN and is an
+    actual place over wandering, then the nearest of those. Deliberately dumb:
+    the point of phase 1 is that the loop, the arrival test and the log are
+    right before any model is in the way of judging them."""
+    def rank(c):
+        return (0 if c["kind"] == "place" and c["open"] else
+                1 if c["kind"] in ("place", "stop") else 2,
+                c.get("d") or 1e9)
+    ranked = sorted(menu, key=rank)
+    pick = ranked[0]
+    why = ("nearest open " + pick["what"] if pick["kind"] == "place" and pick["open"]
+           else "nearest " + pick["what"]) + " (stub)"
+    return menu.index(pick), why
 
 
 def log(entry):
@@ -194,6 +284,10 @@ def main():
     else:
         print("possess walker ->", ch.possess("walker"))
         time.sleep(1.0)
+        # TAKE THE PLAN, NOT JUST THE CAMERA. Without this the agent's own
+        # schedule chains a new trip seconds after each errand ends, and the
+        # director spends the run arguing with the goal table it is replacing.
+        print("direct on ->", ch.direct(True))
 
     status = parse_status(ch.status())
     pos = position(status)
@@ -207,15 +301,20 @@ def main():
 
     visited = [pos]
     for step in range(a.steps):
+        look_raw = ch.look()
+        header, seen = parse_look(look_raw)
         state = {"step": step, "x": pos[0], "z": pos[1], "visited": len(visited),
-                 "status": status["raw"]}
-        menu = candidates(pos, a.radius, rng, visited=visited)
+                 "status": status["raw"], "agent": ch.agent()[3:],
+                 "clock": header.get("clock"), "look": look_raw[3:]}
+        menu = candidates(seen, pos, a.radius, rng, visited=visited)
         if not menu:
             print("no candidates left"); break
         idx, why = stub_decider(state, menu)
         choice = menu[idx]
-        print(f"\nstep {step}: at ({pos[0]:.1f}, {pos[1]:.1f}) -> {choice['label']} "
-              f"({choice['x']}, {choice['z']})  [{why}]")
+        clock = header.get("clock")
+        print(f"\nstep {step}: {clock:.2f}h " if isinstance(clock, float) else f"\nstep {step}: ", end="")
+        print(f"at ({pos[0]:.1f}, {pos[1]:.1f}), sees {len(menu)} options "
+              f"-> {choice['label']} ({choice['x']}, {choice['z']})  [{why}]")
         entry = {"t": time.time(), "step": step, "state": state, "menu": menu,
                  "choice": idx, "why": why, "decider": "stub"}
         if a.dry_run:
@@ -226,7 +325,7 @@ def main():
             continue
 
         print("  walk_to ->", ch.walk_to(choice["x"], choice["z"]))
-        t0, arrived, last = time.time(), False, None
+        t0, arrived, last, why_done = time.time(), False, None, "timeout"
         while time.time() - t0 < a.timeout:
             time.sleep(1.0)
             status = parse_status(ch.status())
@@ -236,7 +335,14 @@ def main():
             last = p
             d = math.dist(p, (choice["x"], choice["z"]))
             if d <= a.arrive:
-                arrived = True
+                arrived, why_done = True, "at the point"
+                break
+            # THE ROUTE ENDS AT A NODE, not at the door: an arrival can be tens
+            # of metres from the point asked for, so "did the agent stop" is the
+            # honest test and the residual is reported, not hidden.
+            ag = dict(t.split("=", 1) for t in ch.agent()[3:].split() if "=" in t)
+            if ag.get("moving") == "0" and time.time() - t0 > 3:
+                arrived, why_done = True, f"stopped {d:.0f} m short"
                 break
         pos = last or pos
         visited.append(pos)
@@ -249,14 +355,19 @@ def main():
                 if os.path.exists(shot) and os.path.getsize(shot) > 0:
                     break
             entry["shot"] = shot
-        entry["result"] = {"arrived": arrived, "seconds": round(time.time() - t0, 1),
+        entry["result"] = {"arrived": arrived, "how": why_done,
+                           "seconds": round(time.time() - t0, 1),
                            "ended_at": pos, "status": status["raw"]}
         log(entry)
-        print(f"  {'arrived' if arrived else 'gave up'} after "
+        print(f"  {'arrived' if arrived else 'gave up'} ({why_done}) after "
               f"{entry['result']['seconds']}s at {pos}")
 
+    if not a.dry_run and a.keep:
+        # Still possessed, still DIRECTED: hand the schedule back anyway, or the
+        # agent stands where it was left for the rest of the run.
+        print("\ndirect off ->", ch.direct(False))
     if not a.dry_run and not a.keep:
-        print("\nrelease ->", ch.release())
+        print("\nrelease ->", ch.release())   # release clears `directed` too
     print(f"log: {os.path.abspath(LOG)}")
 
 
