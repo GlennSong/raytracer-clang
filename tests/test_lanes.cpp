@@ -85,6 +85,7 @@ TEST_CASE(lanes_graph_loads_and_expands_the_valley_scene) {
 #include "engine/procgen/city/roads/lanes/block_audit.h"
 #include "engine/procgen/city/roads/lanes/city_producer.h"
 #include "engine/procgen/city/roads/lanes/lots_producer.h"
+#include "engine/procgen/city/roads/road_builder.h"
 #include "engine/bundle/bundle_glb.h"
 #include "engine/procgen/city/lot_cache.h"
 #include "engine/model_importer.h"
@@ -348,6 +349,59 @@ TEST_CASE(lanes_city_producer_identity_follows_its_inputs) {
     LevelInputs other = in; other.level["citysim"]["renderCell"] = 125.0; CHECK(cp->identity(other).key != a.key);
     LevelInputs inl = in; inl.level["entities"][cityEntities(in.level)[0].entityIndex]["lanelab"] = nlohmann::json{{"edges", nlohmann::json::array()}};
     CHECK(cityEntities(inl.level)[0].inlineGraph && cp->identity(inl).key != a.key);
+}
+
+// TWO SPELLINGS, ONE CITY (docs/road-module-plan.md phase 3). The lab's shape:"lanelab"
+// and the roads module's shape:"road" with `"builder": "lanes"` name the same city entity:
+// the producer sees both, numbers them the same, and — because the key is the graph's bytes
+// and not the entity's spelling — a level MIGRATES from one to the other without rebaking.
+TEST_CASE(lanes_a_road_entity_that_names_the_builder_is_the_same_city) {
+    using namespace engine::bundle;
+    registerCityProducer(); const BundleProducer* cp = findProducer(kCityProducerName);
+    CHECK(cp != nullptr); if (!cp) return;
+    const std::filesystem::path before = std::filesystem::current_path(); std::filesystem::current_path(RT_SOURCE_DIR);
+    struct Restore { std::filesystem::path p; ~Restore() { std::error_code ec; std::filesystem::current_path(p, ec); } } restore{before};
+    LevelInputs lab; std::string err; CHECK(loadLevelInputs("assets/lanelab/levels/ring.json", lab, &err));
+    const std::vector<CityEntity> labCity = cityEntities(lab.level);
+    CHECK(labCity.size() == 1); if (labCity.size() != 1) return;
+    const int idx = labCity[0].entityIndex;
+
+    // The same level, respelled: shape:"road", the block under "road", builder named.
+    LevelInputs road = lab;
+    nlohmann::json& ent = road.level["entities"][static_cast<std::size_t>(idx)];
+    nlohmann::json block = ent["lanelab"]; block["builder"] = "lanes";
+    ent.erase("lanelab"); ent["shape"] = "road"; ent["road"] = block;
+
+    const std::vector<CityEntity> roadCity = cityEntities(road.level);
+    CHECK(roadCity.size() == 1); if (roadCity.size() != 1) return;
+    CHECK(roadCity[0].graphPath == labCity[0].graphPath && !roadCity[0].inlineGraph);
+    CHECK(roadCity[0].ordinal == 0 && roadCity[0].entityIndex == idx);
+    CHECK(cityOrdinalForEntity(road.level, idx) == 0);
+    CHECK(cityOrdinalForEntity(road.level, idx + 1) == -1);   // nothing else in the level is a city
+    CHECK(cp->applies(road) && cp->identity(road).key == cp->identity(lab).key);   // no rebake to migrate
+
+    // A road entity that does NOT name the builder is not a city, and the default still stands.
+    LevelInputs plain = road; plain.level["entities"][static_cast<std::size_t>(idx)]["road"].erase("builder");
+    CHECK(cityEntities(plain.level).empty());
+    CHECK(engine::roads::roadBuilderName(block) == "lanes");
+    CHECK(engine::roads::roadBuilderName(plain.level["entities"][static_cast<std::size_t>(idx)]["road"]) == "lattice");
+
+    // The OTHER producers must read the level the same way, or the migration would move the
+    // bundle DIRECTORY (keyed by the whole applicable set) and silently rebake the city. A
+    // road entity that IS this city must not count as "a road entity whose lots the lattice
+    // pipeline owns" — the bug the first cut of the second spelling had.
+    registerLotsProducer();
+    const BundleProducer* lp = findProducer(kLotsProducerName);
+    CHECK(lp != nullptr);
+    if (lp) { CHECK(lp->applies(lab)); CHECK(lp->applies(road) == lp->applies(lab)); }
+    CHECK(bundleDirForLevel(road) == bundleDirForLevel(lab));
+
+    // And the builder behind that name owns the graph everything routes on — which is why
+    // the loader publishes ITS twin and does not re-derive one from the recipe.
+    engine::roads::RoadBuilder* b = engine::roads::roadBuilder("lanes");
+    CHECK(b != nullptr); if (!b) return;
+    CHECK(b->ownsNavGraph());
+    CHECK(!engine::roads::roadBuilderFor(plain.level["entities"][static_cast<std::size_t>(idx)]["road"]).ownsNavGraph());
 }
 
 TEST_CASE(lanes_bundle_glb_view_reads_back_through_the_engine_importer) {

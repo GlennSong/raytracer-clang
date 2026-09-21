@@ -20,16 +20,17 @@
  "entities": [
   {
    "id": 1,
-   "lanelab": {
-    "graph": "assets/lanelab/metro_route/metro_route_lanelab.json"
-   },
    "name": "metro_route_freeway",
    "position": [
     0.0,
     0.0,
     0.0
    ],
-   "shape": "lanelab"
+   "road": {
+    "builder": "lanes",
+    "graph": "assets/lanelab/metro_route/metro_route_lanelab.json"
+   },
+   "shape": "road"
   }
  ],
  "environment": {
@@ -72,6 +73,7 @@
    "intensity": 6.0
   }
  },
+ "name": "metro_route",
  "player": {
   "collider": {
    "halfHeight": 0.4,
@@ -158,6 +160,5 @@
    "yaw": 0
   }
  ],
- "version": 1,
- "name": "metro_route"
+ "version": 1
 }

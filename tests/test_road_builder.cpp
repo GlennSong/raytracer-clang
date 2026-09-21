@@ -52,6 +52,12 @@ TEST_CASE(road_builders_are_chosen_by_data_not_by_a_build_flag) {
     CHECK(roads::roadBuilder("lattice") != nullptr);
     CHECK(std::string(roads::roadBuilder("lattice")->name()) == "lattice");
 
+#ifdef RT_ROADS_LANES
+    // The lanes builder is registered, not a promise: a level may ask for it.
+    CHECK(std::find(names.begin(), names.end(), "lanes") != names.end());
+    CHECK(roads::roadBuilder("lanes") != nullptr);
+#endif
+
     // A name this build does not have is a miss, not a crash...
     CHECK(roads::roadBuilder("no-such-builder") == nullptr);
     // ...and a level that asks for one still gets a road.
@@ -74,15 +80,19 @@ TEST_CASE(the_lattice_builder_builds_exactly_what_the_loader_built_before) {
     RoadDeckField deck;
     const RenderMesh direct = buildRoadNetMesh(road, ground, &bands, &deck);
     const roads::RoadProducts p = b.build(in);
-    CHECK(p.mesh.vertices.size() == direct.vertices.size());
-    CHECK(p.mesh.indices.size() == direct.indices.size());
-    CHECK(!p.mesh.vertices.empty());
+    CHECK(p.meshes.size() == 1);                       // the lattice welds a city into one
+    if (p.meshes.empty()) return;
+    const RenderMesh& built = p.meshes.front().mesh;
+    CHECK(built.vertices.size() == direct.vertices.size());
+    CHECK(built.indices.size() == direct.indices.size());
+    CHECK(!built.vertices.empty());
+    CHECK(p.meshes.front().collidable);
     CHECK(p.bands.loops.size() == bands.loops.size());
     CHECK(!p.bands.loops.empty());
     CHECK(p.deck.spines.size() == deck.spines.size());
     CHECK(!p.deck.empty());
-    for (std::size_t i = 0; i < p.mesh.vertices.size(); i += 97)
-        CHECK((p.mesh.vertices[i].position - direct.vertices[i].position).length() < 1e-9);
+    for (std::size_t i = 0; i < built.vertices.size(); i += 97)
+        CHECK((built.vertices[i].position - direct.vertices[i].position).length() < 1e-9);
 
     // The carve the terrain pre-pass asks for. The lattice edits the level's
     // ground; it never hands one back.

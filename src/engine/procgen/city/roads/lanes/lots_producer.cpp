@@ -1,5 +1,7 @@
 #include "engine/procgen/city/roads/lanes/lots_producer.h"
 
+#include <set>
+
 #include "engine/lot_grow_setup.h"
 #include "engine/procgen/city/lot_cache.h"
 #include "engine/procgen/city/roads/lanes/block_audit.h"
@@ -22,9 +24,17 @@ using bundle::BinReader;
 
 double secondsSince(const std::chrono::steady_clock::time_point& t) { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count(); }
 
+// A road entity whose lots belong to the OTHER pipeline (the lattice's terrain pre-pass).
+// A shape:"road" entity that names the lanes builder is this very city (ADR-0089) and
+// disqualifies nothing — that is the whole point of the second spelling.
 bool hasRoadEntities(const nlohmann::json& level) {
-    for (const nlohmann::json& e : level.value("entities", nlohmann::json::array()))
-        if (e.is_object() && e.value("shape", std::string()) == "road") return true;
+    std::set<int> city;
+    for (const CityEntity& c : cityEntities(level)) city.insert(c.entityIndex);
+    int i = -1;
+    for (const nlohmann::json& e : level.value("entities", nlohmann::json::array())) {
+        ++i;
+        if (e.is_object() && e.value("shape", std::string()) == "road" && city.count(i) == 0) return true;
+    }
     return false;
 }
 bool lotsWanted(const nlohmann::json& level) {

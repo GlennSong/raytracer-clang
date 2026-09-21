@@ -20,7 +20,13 @@ public:
     RoadProducts build(const RoadBuildInput& in) const override {
         RoadProducts p;
         if (!in.road) return p;
-        p.mesh = buildRoadNetMesh(*in.road, in.ground, &p.bands, &p.deck);
+        RoadMesh m;
+        m.mesh = buildRoadNetMesh(*in.road, in.ground, &p.bands, &p.deck);
+        m.name = "road";
+        m.albedo = Vec3(1, 1, 1);        // the hue rides in the vertex colour
+        m.roughness = 0.93f;
+        m.markings = in.road->look.markings;
+        p.meshes.push_back(std::move(m));
         return p;
     }
 

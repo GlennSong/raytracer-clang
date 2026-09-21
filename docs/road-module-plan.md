@@ -88,12 +88,40 @@ the same registry by name, so a recipe script can pick a builder.
    `assets/lanelab/` still name the entity and its levels, because levels are content and they
    migrate in phase 3.
 
-3. **metro on lanes.** metro_v2_test keeps its recipe and sets `builder:"lanes"`; the lanes builder
-   plans with `applyGenerateRecipe` and converts with the `level_import` logic. Keep `lattice`
-   selectable for A/B. Then re-run every metro gate — playable, citylots, junctions, pedestrians,
-   buses, parking, street signs, map — and fix the fallout.
-4. **Retire the duplication** that phase 3 exposes (the bundle producer's identity key must include
-   the recipe; the lab's own level list folds into the level scan).
+3. ~~**One load path, two spellings.**~~ **Done** (2026-09-20). The lab's own loader is gone. A
+   lane-built city reaches the world through the roads module like any other road:
+
+   * `RoadProducts` is the plan's full product list — a LIST of named meshes (per render cell x
+     material, each with its own albedo/roughness/friction/collidable), the deck, the kerb bands,
+     the freeway **right-of-way** and the pavement **holes** the lot pass turns into blocks. The
+     lattice returns a list of one and neither of the last two.
+   * `GroundPlan` is `carve` or `replace` (decided above).
+   * `RoadBuilder::ownsNavGraph()` answers the third thing phase 3 owed — *is this builder's graph
+     THE level's road graph?* The lattice says no (its `navGraph` is `navRoadGraph`, the same
+     function the loader applies downstream to every `RoadEntity`); a builder that paves a city says
+     yes, and the loader publishes ITS twin. That, not the entity's shape and not a build flag, is
+     the test — ADR-0085's hazard, answered.
+   * `loadRoadEntity` spawns per mesh, dresses each by NAME (`surfaceForRoadMaterial`: asphalt,
+     concrete, sidewalk, terrain, guardrail) and calls one `publishCityProducts` for the ground, the
+     blocks, the right-of-way and the graph. `loadLanesEntity` is 30 lines that spell the same call
+     differently.
+   * `shape:"lanelab"` **is** `shape:"road"` + `"builder":"lanes"`: `cityEntities()` recognises both,
+     numbers them in one sequence, and the bundle key does not see the spelling — so a level migrates
+     by editing two keys, with **no rebake**. `assets/lanelab/levels/metro_route.json` is migrated and
+     the rest stay on the lab's spelling, which keeps both live.
+   * One obtain per level per process (`lanes::levelCityBundle`): the terrain pre-pass and the road
+     builder ask for the same city, and under `RT_NOCACHE` a second obtain would BUILD it twice.
+
+4. **metro on lanes.** metro_v2_test keeps its recipe and sets `builder:"lanes"`; the lanes builder
+   plans with `applyGenerateRecipe` and converts with the `level_import` logic. This is the one part
+   of the integration still open, and it is a real piece of work, not plumbing: `graphFromLevel`
+   is file-oriented (it writes a terrain grid beside the graph) and the producer's identity key must
+   fold in the recipe and the terrain params, or an edited recipe would load a stale city. Keep
+   `lattice` selectable for A/B. Then re-run every metro gate — playable, citylots, junctions,
+   pedestrians, buses, parking, street signs, map — and fix the fallout.
+   *(Glenn, 2026-09-20: "I want metro_v2 as it was" — so this waits for him to ask for it.)*
+5. **Retire the duplication** that phase 4 exposes (the lab's own level list folds into the level
+   scan).
 
 ## Risks worth naming now
 
@@ -111,14 +139,13 @@ the same registry by name, so a recipe script can pick a builder.
 
 ## What phase 1 deliberately did not move
 
-* **The nav graph call sites.** The loader still calls `navRoadGraph` where it derives the level
-  road graph (it is the lattice's `navGraph`, the same function). On lanes the graph comes from
-  `roadTwin()`, so those sites must resolve a builder too — but they work from components, not from
-  the level JSON, so they need the chosen builder recorded beside the entity. Phase 3's first job.
+* ~~**The nav graph call sites.**~~ Phase 3 answered this with `ownsNavGraph()`: the builder that
+  owns its graph publishes it as it loads, and the downstream re-derivation only fires when nothing
+  did. Nothing had to be recorded beside the entity after all — the builder knows.
 * **`road_network`, `road_mesh`, `road_spec` and the planning files** (metro, district, constraints,
   rules, semantics). They are shared road model, used by both builders; they stay in
   `procgen/city` until the lanes builder lands, then move into `city/roads` as a rename.
-* **`shape:"lanelab"`.** Still the lab's own entry point until the lanes builder can take a recipe.
+* ~~**`shape:"lanelab"`.**~~ Now an alias: same entity, same city, same code (phase 3).
 
 ## What phase 3 has to decide before it starts: the terrain contract
 

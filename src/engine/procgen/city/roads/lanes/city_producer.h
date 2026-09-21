@@ -29,6 +29,14 @@ extern const char* const kLanesBuildTag;
 
 void registerCityProducer();   // idempotent
 
+// ONE obtain per level per process. The bundle is expensive and RT_NOCACHE builds it in
+// memory every time it is asked for, so the loader's terrain pre-pass and the lanes road
+// builder asking separately would build the same city twice. Both come here instead.
+// `status` (optional) takes the obtain's own status line. Never null on success.
+std::shared_ptr<bundle::Bundle> levelCityBundle(const bundle::LevelInputs& in,
+                                                std::string* status = nullptr);
+void forgetLevelCityBundles();   // between levels / tests: drop what is held
+
 struct CityEntity {
     int ordinal = 0;        // n-th lanelab entity of the level: the section namespace
     int entityIndex = 0;    // position in the level's entities array
@@ -36,7 +44,15 @@ struct CityEntity {
     std::string graphPath;  // empty when the graph is inline ("edges" in the block)
     bool inlineGraph = false;
 };
+// Every entity of the level that IS a lane-built city, in array order. Two spellings,
+// one meaning: shape:"lanelab" (the lab's own, with a "lanelab" block) and the roads
+// module's shape:"road" whose road block says `"builder": "lanes"` (ADR-0089). The
+// ordinal — which the bundle sections are named by — counts both.
 std::vector<CityEntity> cityEntities(const nlohmann::json& level);
+// The ordinal of the city entity at `entityIndex` in the level's entities array, or
+// -1 when that entity is not a city. This is the map from "which entity the loader is
+// on" to "which section of the bundle is its city".
+int cityOrdinalForEntity(const nlohmann::json& level, int entityIndex);
 double cityRenderCell(const nlohmann::json& level);   // citysim.renderCell, default 250 m
 std::string citySectionPrefix(int ordinal);          // "city/e<ordinal>/"
 RoadLabGraph loadCityGraph(const CityEntity& e);      // the loader's rule: inline "edges" or the "graph" path

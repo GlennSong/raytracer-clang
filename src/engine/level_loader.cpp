@@ -95,6 +95,11 @@ namespace engine {
 // out-param on a dozen call sites.
 static std::vector<std::string> g_loadedScriptFiles;
 
+// The level being loaded, for producers that are keyed by it (the lanes road builder asks the
+// bundle for THIS level's city). Set once at the top of loadLevel, read far below.
+static std::string g_levelPath;
+static json g_levelRoot;
+
 
 // parseVec3/parseOrientation and propagateWaterSeaLevel come from
 // level_params.h — one definition for both this loader and the offline
@@ -466,9 +471,131 @@ static std::vector<RenderMesh> chunkMeshByCell(const RenderMesh& m, double cell)
     std::vector<RenderMesh> out; for (MeshBuilder::CellChunk& c : MeshBuilder::chunkByCell(m, cell)) out.push_back(std::move(c.mesh)); return out;
 }
 
+#ifdef RT_ROADS_LANES
+// WHAT A LANE-BUILT CITY PUBLISHES TO THE REST OF THE LOAD (ADR-0084/0089). A builder that
+// paves a city hands back more than meshes: the ground it conformed (which is the ground the
+// lots grade on and the building pads sample, when the level has no terrain of its own), the
+// blocks its pavement left, and the freeway right-of-way the lot pass keeps out of. They are
+// read far apart — the terrain pre-pass, the lot grow, the entity pass — so they live here.
+// ONE struct so a level load resets every member at once: a second level used to inherit the
+// first city's blocks, right-of-way and ground.
+struct LanesPublished {
+    HeightField ground;                    // the lab's conformed terrain (a lab level's ground)
+    engine::RoadGraph row;                 // freeway + ramp edges of the class-faithful twin, for the lot pass's keep-out
+    double sidewalk = 4.0;                 // the citysim sidewalk, read before entities load
+    std::vector<engine::Poly2> blocks;     // the lab's city blocks: the pavement's holes, inset by the sidewalk
+    int ordinal = 0;                       // lanelab entities seen in this load: the bundle section namespace
+    engine::bundle::LevelInputs inputs;    // the level, for the producers' keys
+    std::shared_ptr<engine::bundle::Bundle> bundle;   // the level's city bundle, obtained on the first lanelab entity
+    std::string bundleStatus;
+};
+static LanesPublished g_lanes;
+
+#endif
+
+// Which analytic surface dresses a builder's named mesh. The names come from the builder
+// (the lanes one splits a cell's mesh per material); this is the one place the two
+// vocabularies meet. An unnamed or plain "road" mesh gets no surface: the lattice's
+// carriageway is vertex-coloured and asks for RoadMarkings itself.
+static RenderMaterial::Surface surfaceForRoadMaterial(const std::string& name) {
+    using S = RenderMaterial::Surface;
+    if (name == "asphalt" || name == "shoulder") return S::Asphalt;      // carriageway and hard shoulder
+    if (name == "concrete") return S::Concrete;                          // parapets, piers, girders, slab sides
+    if (name == "sidewalk") return S::Pavement;                          // scored concrete flags
+    if (name == "terrain") return S::TerrainGround;                      // the lab's ground: micro-relief over the baked grass colour
+    if (name == "guardrail") return S::CorrugatedMetal;                  // a W-beam is corrugated; the loader keeps it dull
+    return S::None;                                                      // median grass slabs, paint_white, paint_yellow
+}
+
+#ifdef RT_ROADS_LANES
+// EVERYTHING A CITY BUILDER HANDS BACK BESIDES ITS MESHES. A builder that paves a whole
+// city knows four things a mesher does not: the ground it made (GroundPlan::replace), the
+// blocks its pavement left, the freeway right-of-way the lots must keep out of, and the
+// graph everything routes on. The lattice returns none of them and nothing here fires.
+// Both spellings of a lane-built city — shape:"lanelab" and shape:"road" with
+// `"builder": "lanes"` — come through this one function (docs/road-module-plan.md).
+static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBuildInput& in,
+                                const roads::RoadProducts& built, World& world) {
+    // A builder that owns its road graph is one that paved the whole city; a mesher
+    // carves the ground it was given and publishes nothing. That is the test, not the
+    // entity's shape and not a build flag (ADR-0085's hazard).
+    if (!b.ownsNavGraph()) return;
+    ++g_lanes.ordinal;                  // a city was loaded: the late nav-graph fallback keys off this
+    // The ground the builder MADE, for the lot pass and the building pads when the level
+    // has no terrain of its own (a lab level: the builder's grid IS the ground).
+    const roads::GroundPlan gp = b.ground(in);
+    if (gp.replaces()) {
+        auto grid = std::make_shared<engine::roads::lanes::HeightGrid>();
+        grid->x0 = gp.replace->x0; grid->y0 = gp.replace->y0; grid->res = gp.replace->res;
+        grid->nx = gp.replace->nx; grid->ny = gp.replace->ny; grid->z = gp.replace->z;
+        g_lanes.ground = [grid](double x, double z) { return grid->sample(x, z); };
+    }
+    if (!built.row.edges.empty()) g_lanes.row = built.row;
+    if (!built.holes.empty()) {
+        // Pre-inset by the sidewalk (robust); the lot pass then gets roadMargin 0.
+        g_lanes.blocks = engine::roads::lanes::blocksFromHoles(built.holes, 1.5, g_lanes.sidewalk);
+        LOG_INFO << "[roads] " << g_lanes.blocks.size() << " city blocks from " << built.holes.size()
+                 << " pavement holes";
+    }
+    // The ONE derived road graph: nav, traffic, furniture, street signs, the city map. The
+    // lattice's is re-derived downstream from every RoadEntity in the world by the same
+    // function, and only when nothing published one.
+    bool have = false; world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph&) { have = true; });
+    if (have) return;
+    engine::LevelRoadGraph lrg; lrg.graph = b.navGraph(in);
+    if (lrg.graph.edges.empty()) return;
+    LOG_INFO << "[roads] unified road graph from the " << b.name() << " builder's twin: "
+             << lrg.graph.nodes.size() << " nodes, " << lrg.graph.edges.size() << " edges";
+    world.add<engine::LevelRoadGraph>(world.create(), std::move(lrg));
+}
+#endif
+
+// A BUILT ROAD BECOMES ENTITIES. A builder returns a LIST of meshes: the lattice welds a
+// city into one, a city builder splits it by render cell and material — the granularity the
+// building chunks use, so the frustum cull drops blocks instead of treating a district as
+// one always-visible draw. `host` takes the first mesh when the caller has an entity that
+// must carry it (a road entity carries the SourceSpec, the recipe and the deck); otherwise
+// every mesh gets its own entity at the same transform.
+// Static collision comes from the SAME triangles (ADR-0059, Playable Scenes): ground roads
+// could borrow the terrain's, but an elevated deck has nothing under it. Paint is drawn and
+// never driven on — a 2 mm lip reads as a step under a wheel.
+static void spawnRoadMeshes(const json& ent, std::vector<roads::RoadMesh>& meshes,
+                            const Renderable& proto, World& world, AssetManager& assets,
+                            const std::string& tag, Entity host, bool hostTakesFirst) {
+    std::size_t spawned = 0;
+    for (std::size_t mi = 0; mi < meshes.size(); ++mi) {
+        roads::RoadMesh& rm = meshes[mi];
+        if (rm.mesh.vertices.empty()) continue;
+        const bool onHost = hostTakesFirst && spawned == 0;
+        const Entity me = onHost ? host : world.create();
+        if (!onHost) createEntityCommon(me, ent, world);
+        ++spawned;
+        Renderable mr = proto;
+        mr.material.albedo = rm.albedo;
+        mr.material.roughness = rm.roughness;
+        mr.material.metallic = rm.metallic;
+        // The lattice's carriageway is vertex-coloured and asks for the paint shader itself;
+        // a city builder's meshes are named and the name picks the analytic surface.
+        if (rm.markings) mr.material.setSurface(RenderMaterial::Surface::RoadMarkings);
+        else mr.material.setSurface(surfaceForRoadMaterial(rm.name));
+        mr.mesh = assets.acquireMesh(rm.mesh, tag + ":" + rm.name + ":" + std::to_string(mi));
+        world.add<Renderable>(me, mr);
+        if (!rm.collidable) continue;
+        MeshCollider mc;
+        mc.vertices.reserve(rm.mesh.vertices.size());
+        for (const Vertex& v : rm.mesh.vertices) mc.vertices.push_back(v.position);
+        mc.indices = rm.mesh.indices;
+        mc.friction = rm.friction;
+        world.add<MeshCollider>(me, mc);
+    }
+    // A road that built nothing still IS one: the host keeps its (mesh-less) Renderable so the
+    // editor can select it and give it nodes, exactly as before there was a list.
+    if (spawned == 0 && hostTakesFirst) world.add<Renderable>(host, proto);
+}
+
 static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
                            int index, const HeightField& drapeGround,
-                           const RoadEntity* preNet = nullptr) {
+                           const RoadEntity* preNet = nullptr, int entityIndex = -1) {
     const json roadBlock = ent.contains("road") ? ent["road"] : json::object();
     // REUSE the terrain pre-pass net when given: the pre-pass ran the recipe
     // against the NATURAL ground and everything downstream (corridor carve,
@@ -520,9 +647,13 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     buildIn.road = &net;
     buildIn.ground = drapeGround;
     buildIn.options = roadBlock;
-    roads::RoadProducts built = roads::roadBuilderFor(roadBlock).build(buildIn);
+    buildIn.level = g_levelRoot;      // the lanes builder is produced per level
+    buildIn.levelPath = g_levelPath;
+    buildIn.ordinal = index;
+    buildIn.entityIndex = entityIndex;
+    roads::RoadBuilder& builder = roads::roadBuilderFor(roadBlock);
+    roads::RoadProducts built = builder.build(buildIn);
     RoadDeckField deck = std::move(built.deck);
-    RenderMesh mesh = std::move(built.mesh);
     if (!built.bands.loops.empty()) {
         engine::RoadBandDebug band;
         band.loops = std::move(built.bands.loops);
@@ -531,144 +662,57 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
             built.bands.sidewalkWidth > 0 ? built.bands.sidewalkWidth : net.look.sidewalk;
         world.add<engine::RoadBandDebug>(e, std::move(band));
     }
-    if (!mesh.vertices.empty())
-        r.mesh = assets.acquireMesh(mesh, "road:" + std::to_string(index));
-    world.add<Renderable>(e, r);
+
+    spawnRoadMeshes(ent, built.meshes, r, world, assets, "road:" + std::to_string(index), e, true);
     // The deck the mesh rode, for everything that must stand ON it (RoadDeck).
     if (!deck.empty()) world.add<RoadDeck>(e, RoadDeck{std::move(deck)});
-
-    // Static collision from the carriageway geometry (ADR-0059): without this a
-    // road has no collider of its own — ground roads borrow the terrain's, but an
-    // elevated bridge DECK has nothing under it, so cars fall through. Build a
-    // MeshCollider from the same triangles (deck + ramps + piers) so the player's
-    // car (and physics bodies) drive on roads, the overpass included.
-    if (!mesh.vertices.empty()) {
-        MeshCollider mc;
-        mc.vertices.reserve(mesh.vertices.size());
-        for (const Vertex& v : mesh.vertices) mc.vertices.push_back(v.position);
-        mc.indices = mesh.indices;
-        mc.friction = 0.85;
-        world.add<MeshCollider>(e, mc);
-    }
+#ifdef RT_ROADS_LANES
+    publishCityProducts(builder, buildIn, built, world);
+#endif
 }
+
 
 #ifdef RT_ROADS_LANES
-// The LANES builder (ADR-0083/0089, compiled when RT_ROADS_LANES): shape:"lanelab" builds
-// its graph AT LOAD and spawns one entity per material mesh, each with a static
-// MeshCollider from the SAME triangles (Playable Scenes rule) — the player drives the
-// decks, ramps, piers and the conformed terrain it sees. Paint strips are visual only
-// (a 2 mm lip reads as a step under a wheel). The authored block round-trips as a
-// DOCUMENT entity like the corridor: {"lanelab": {"graph": "<path>"}} or the inline
-// graph spec itself (recognised by its "edges").
-// The lab's conformed terrain, published for the lot pass and the building pads when
-// the level has no terrain of its own (a lab level: the lanelab grid IS the ground).
-// One struct so a level load resets every member at once (a second level used to inherit the first lab's
-// blocks, right-of-way and ground). Filled from the level's city bundle (ADR-0084): built now or read back.
-struct LanesPublished {
-    HeightField ground;                    // the lab's conformed terrain (a lab level's ground)
-    engine::RoadGraph row;                 // freeway + ramp edges of the class-faithful twin, for the lot pass's keep-out
-    double sidewalk = 4.0;                 // the citysim sidewalk, read before entities load
-    std::vector<engine::Poly2> blocks;     // the lab's city blocks: the pavement's holes, inset by the sidewalk
-    int ordinal = 0;                       // lanelab entities seen in this load: the bundle section namespace
-    engine::bundle::LevelInputs inputs;    // the level, for the producers' keys
-    std::shared_ptr<engine::bundle::Bundle> bundle;   // the level's city bundle, obtained on the first lanelab entity
-    std::string bundleStatus;
-};
-static LanesPublished g_lanes;
-
-// Which analytic surface dresses each of the lab's material meshes. Names come from the bundle
-// (city_producer splits a cell's mesh per material), so this is the one place the two vocabularies meet.
-static RenderMaterial::Surface surfaceForLanesMaterial(const std::string& name) {
-    using S = RenderMaterial::Surface;
-    if (name == "asphalt" || name == "shoulder") return S::Asphalt;      // carriageway and hard shoulder
-    if (name == "concrete") return S::Concrete;                          // parapets, piers, girders, slab sides
-    if (name == "sidewalk") return S::Pavement;                          // scored concrete flags
-    if (name == "terrain") return S::TerrainGround;                      // the lab's ground: micro-relief over the baked grass colour
-    if (name == "guardrail") return S::CorrugatedMetal;                  // a W-beam is corrugated; the loader keeps it dull
-    return S::None;                                                      // median grass slabs, paint_white, paint_yellow
-}
-
-static void loadLanesEntity(const json& ent, World& world, AssetManager& assets,
-                              int index) {
-    using namespace engine::roads::lanes;
+// A LANE-BUILT CITY, THE LAB'S SPELLING. shape:"lanelab" IS shape:"road" with
+// `"builder": "lanes"` and the lanelab block as the road block — one path, two spellings
+// (docs/road-module-plan.md phase 3). It keeps its own spelling because a level is
+// content: the entity round-trips as a DOCUMENT entity, {"lanelab": {"graph": "<path>"}}
+// or the inline graph spec itself (recognised by its "edges"), so a save writes back what
+// was authored rather than rewriting Glenn's levels under him.
+//
+// Everything else — obtaining the city through the bundle (ADR-0084), the per-cell meshes
+// with their colliders, the conformed ground, the blocks, the freeway right-of-way and the
+// road graph — is the roads module's, reached through the same interface any road entity
+// uses. There is no second implementation here any more.
+static void loadLanesEntity(const json& ent, World& world, AssetManager& assets, int index,
+                            int entityIndex) {
     const json block = ent.contains("lanelab") ? ent["lanelab"] : json::object();
-    spawnDocumentEntity(ent, "lanelab", block.dump(), world);
-    const int ordinal = g_lanes.ordinal++;
+    const Entity doc = spawnDocumentEntity(ent, "lanelab", block.dump(), world);
+    json roadBlock = block;
+    roadBlock["builder"] = "lanes";
+
     const auto t0 = std::chrono::steady_clock::now();
-    auto since = [](const std::chrono::steady_clock::time_point& t) { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count(); };
-    // ONE derivation (ADR-0084): the city's products come out of the level's bundle whether it was on disk
-    // or built a moment ago — never straight out of the builder — so a cold level and a cached one are the
-    // same geometry to the byte. The bundle is obtained once per load, on the first lanelab entity.
-    if (!g_lanes.bundle) {
-        registerCityProducer(); registerLotsProducer();   // both before the first obtain: the bundle directory is named by every producer that applies
-        engine::bundle::Obtained o = engine::bundle::obtainForLevel(g_lanes.inputs, kCityProducerName);
-        g_lanes.bundleStatus = o.status;
-        if (!o.bundle) { LOG_ERROR << "[lanelab] no city products for this level: " << o.status; return; }
-        g_lanes.bundle = o.bundle;
-        LOG_INFO << "[lanelab] bundle " << o.status;
-    }
-    CityProducts p; std::string err;
-    if (!readCityProducts(*g_lanes.bundle, ordinal, p, &err)) { LOG_ERROR << "[lanelab] " << err; return; }
-    const double tRead = since(t0);
-    if (p.hasTerrain) {
-        auto grid = std::make_shared<HeightGrid>(); grid->x0 = p.ground.x0; grid->y0 = p.ground.y0; grid->res = p.ground.res; grid->nx = p.ground.nx; grid->ny = p.ground.ny; grid->z = p.ground.z;
-        g_lanes.ground = [grid](double x, double z) { return grid->sample(x, z); };
-    }
-    {   // The CLASS-FAITHFUL twin (freeway/ramp classes intact) is the level's unified road graph — nav,
-        // furniture, map — and its freeway right-of-way is the lot pass's keep-out. The twin is DERIVED: the
-        // lab's pavement is the source of truth, a city block is a hole in it (Glenn, 2026-09-05).
-        bool have = false; world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph&) { have = true; });
-        if (!have) {
-            engine::LevelRoadGraph lrg; lrg.graph = p.nav;
-            LOG_INFO << "[lanelab] unified road graph from the class-faithful twin: " << lrg.graph.nodes.size() << " nodes, " << lrg.graph.edges.size() << " edges";
-            world.add<engine::LevelRoadGraph>(world.create(), std::move(lrg));
-        }
-        g_lanes.row = p.row;
-        g_lanes.blocks = blocksFromHoles(p.holes, 1.5, g_lanes.sidewalk);   // pre-inset by the sidewalk (robust); the lot pass gets roadMargin 0
-        LOG_INFO << "[lanelab] " << g_lanes.blocks.size() << " city blocks from " << p.holes.size() << " pavement holes";
-        if (const char* twinSvg = std::getenv("RT_LANELAB_TWIN_SVG")) {   // the twin as lines and junction dots
-            const engine::RoadEntity& twin = p.twin; std::vector<int> deg(twin.graph.nodes.size(), 0);
-            for (const engine::RoadEdge& e : twin.graph.edges) { ++deg[static_cast<size_t>(e.a)]; ++deg[static_cast<size_t>(e.b)]; }
-            double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
-            for (const engine::RoadNode& n : twin.graph.nodes) { x0 = std::min(x0, n.pos.x); y0 = std::min(y0, n.pos.y); x1 = std::max(x1, n.pos.x); y1 = std::max(y1, n.pos.y); }
-            std::ofstream f(twinSvg);
-            f << "<svg xmlns='http://www.w3.org/2000/svg' viewBox='" << x0 - 20 << " " << y0 - 20 << " " << (x1 - x0) + 40 << " " << (y1 - y0) + 40 << "'>\n";
-            f << "<rect x='" << x0 - 20 << "' y='" << y0 - 20 << "' width='" << (x1 - x0) + 40 << "' height='" << (y1 - y0) + 40 << "' fill='#f4f4ee'/>\n";
-            for (const engine::RoadEdge& e : twin.graph.edges) {
-                const char* col = e.klass == engine::RoadClass::Freeway ? "#c33" : e.klass == engine::RoadClass::Ramp ? "#e80" : "#335";
-                f << "<line x1='" << twin.graph.nodes[static_cast<size_t>(e.a)].pos.x << "' y1='" << twin.graph.nodes[static_cast<size_t>(e.a)].pos.y << "' x2='" << twin.graph.nodes[static_cast<size_t>(e.b)].pos.x << "' y2='" << twin.graph.nodes[static_cast<size_t>(e.b)].pos.y << "' stroke='" << col << "' stroke-width='1.5'/>\n";
-            }
-            for (size_t i = 0; i < deg.size(); ++i) if (deg[i] != 2) f << "<circle cx='" << twin.graph.nodes[i].pos.x << "' cy='" << twin.graph.nodes[i].pos.y << "' r='" << (deg[i] == 1 ? 2.5 : 3.5) << "' fill='" << (deg[i] == 1 ? "#c0392b" : "#1f4e9c") << "'/>\n";
-            f << "</svg>\n";
-        }
-    }
-    // One Renderable per (render cell, material) — the granularity the building chunks use — with a static
-    // MeshCollider from the SAME triangles for everything but paint (Playable Scenes rule; a 2 mm paint lip
-    // reads as a step under a wheel). Unpack one cell mesh at a time: the packed products stay float32.
-    const auto t1 = std::chrono::steady_clock::now(); int collidable = 0; size_t tris = 0;
-    for (const CityCellMesh& c : p.cells) {
-        const engine::bundle::PackedMesh& pm = c.mesh; if (pm.vertexCount() == 0 || pm.idx.empty()) continue;
-        // When the level carries a terrain block the ground is CDLOD's, built from the same conformed grid:
-        // drawing the lab's own flat copy on top of it would z-fight and cost 400k triangles.
-        if (pm.name == "terrain" && g_lanes.inputs.level.contains("terrain")) continue;
-        Entity e = world.create();
-        createEntityCommon(e, ent, world);
-        Renderable r;
-        r.renderLayer = engine::LayerRoads;
-        r.material.albedo = Vec3(pm.albedo[0], pm.albedo[1], pm.albedo[2]);
-        r.material.roughness = pm.roughness;
-        // The lab's roads were flat colour: it never asked for a surface, so nothing textured them. These are
-        // ANALYTIC surfaces (renderer.h) — grain computed in the shader from the world-planar UV, no maps to
-        // bake and nothing to author, the same ones the engine's own roads and plazas use. Paint strips keep
-        // Surface::None: they are their own flat colour lying on the deck (Glenn, 2026-09-08).
-        r.material.setSurface(surfaceForLanesMaterial(pm.name));
-        if (pm.name == "guardrail") r.material.metallic = 0.18f;         // weathered galvanising: a sheen, not a mirror
-        { const RenderMesh m = engine::bundle::unpackMesh(pm); r.mesh = assets.acquireMesh(m, "lanelab:" + std::to_string(index) + ":" + pm.name + ":" + std::to_string(c.cx) + "_" + std::to_string(c.cz)); }
-        world.add<Renderable>(e, r); tris += pm.triangleCount();
-        if (pm.paint() || !pm.collidable()) continue;
-        MeshCollider mc; engine::bundle::colliderFromPacked(pm, mc); world.add<MeshCollider>(e, mc); ++collidable;
-    }
-    LOG_INFO << "[lanelab] e" << ordinal << ": " << p.cells.size() << " cell meshes, " << tris << " triangles, " << collidable << " collidable; products read in " << tRead << " s, instantiated in " << since(t1) << " s";
+    const RoadEntity net;                 // the lanes builder plans from its graph, not from nodes
+    roads::RoadBuildInput in;
+    in.road = &net;
+    in.options = roadBlock;
+    in.level = g_levelRoot;
+    in.levelPath = g_levelPath;
+    in.ordinal = index;
+    in.entityIndex = entityIndex;
+    roads::RoadBuilder& b = roads::roadBuilderFor(roadBlock);
+    roads::RoadProducts built = b.build(in);
+
+    Renderable proto;
+    proto.renderLayer = engine::LayerRoads;              // debug layer toggle
+    std::size_t tris = 0;
+    for (const roads::RoadMesh& rm : built.meshes) tris += rm.mesh.indices.size() / 3;
+    spawnRoadMeshes(ent, built.meshes, proto, world, assets,
+                    "lanelab:" + std::to_string(index), doc, false);
+    publishCityProducts(b, in, built, world);
+    LOG_INFO << "[lanelab] e" << index << ": " << built.meshes.size() << " cell meshes, " << tris
+             << " triangles, loaded in "
+             << std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() << " s";
 }
 #endif
 
@@ -1021,10 +1065,13 @@ static void loadEntities(const json& entities, const json& root, World& world,
     MaterialTable materials = buildMaterialTable(root);   // named "materials" table
     SurfaceTexCache surfaceTex;   // one bake+upload per surface across the load
     int treeIndex = 0;
-    int cityIndex = 0;
+    // Where each entity sits in the level's array: a builder produced per LEVEL finds its
+    // own section of the bundle by this (roads::lanes::cityOrdinalForEntity).
+    int entityIndex = -1;
     int scriptIndex = 0;
     int roadIndex = 0;
     for (auto& ent : entities) {
+        ++entityIndex;
         // Hero parametric tree: a collidable, textured object (not scatter).
         if (ent.value("shape", std::string()) == "tree") {
             loadTreeEntity(ent, world, renderer, assets, treeIndex++);
@@ -1056,13 +1103,13 @@ static void loadEntities(const json& entities, const json& root, World& world,
             const HeightField& drape =
                 pre ? (naturalGround ? *naturalGround : kFlat)
                     : (ground ? *ground : kFlat);
-            loadRoadEntity(ent, world, assets, roadIndex++, drape, pre);
+            loadRoadEntity(ent, world, assets, roadIndex++, drape, pre, entityIndex);
             continue;
         }
 #ifdef RT_ROADS_LANES
         // The lanes builder (ADR-0083): drivable, apart from the lattice mesher.
         if (ent.value("shape", std::string()) == "lanelab") {
-            loadLanesEntity(ent, world, assets, roadIndex++);
+            loadLanesEntity(ent, world, assets, roadIndex++, entityIndex);
             continue;
         }
 #endif
@@ -2109,6 +2156,10 @@ static GrownLots growCityLots(
                 if (perCell && !engine::lotcache::listLotCellParts(*b, engine::roads::lanes::kLotsSectionPrefix, g.cellParts, &err)) return false;
                 g.bundle = b; return true;
             };
+            // The level's bundle, obtained ONCE per level (the road builder asks for the same
+            // one) — but only READ here when its lots section is the one this build wants:
+            // the memo hands back what is on disk, and a stale section has to be rebuilt.
+            if (!g_lanes.bundle) g_lanes.bundle = engine::roads::lanes::levelCityBundle(g_lanes.inputs);
             if (g_lanes.bundle && engine::bundle::manifestProducer(g_lanes.bundle->manifest(), engine::roads::lanes::kLotsProducerName).value("key", std::string()) == want) {
                 fromBundle = readLots(g_lanes.bundle);
                 status = "from the city's bundle";
@@ -2459,6 +2510,7 @@ bool LevelLoader::load(const std::string& path,
     g_pokeReport = {};
 #ifdef RT_ROADS_LANES
     g_lanes = LanesPublished();
+    engine::roads::lanes::forgetLevelCityBundles();   // the previous level's city is not this one's
 #endif
     std::ifstream file(path);
     if (!file.is_open()) {
@@ -2473,6 +2525,9 @@ bool LevelLoader::load(const std::string& path,
         g_lanes.inputs.levelPath = path; g_lanes.inputs.level = root;
         { const size_t slash = path.find_last_of('/'); g_lanes.inputs.levelDir = slash == std::string::npos ? "." : path.substr(0, slash); }
 #endif
+        // Which level a road belongs to, for every builder (the lanes one is
+        // produced per LEVEL through the bundle, not per entity).
+        g_levelPath = path; g_levelRoot = root;
     } catch (const json::parse_error& e) {
         LOG_ERROR << "JSON parse error in " << path << ": " << e.what();
         return false;
@@ -2519,11 +2574,13 @@ bool LevelLoader::load(const std::string& path,
     // sampler falls back to the level's own terrain and blends across a band, or the edge value would smear
     // over the whole world.
     if (root.contains("terrain") && !engine::roads::lanes::cityEntities(root).empty()) {
-        engine::roads::lanes::registerCityProducer(); engine::roads::lanes::registerLotsProducer();
-        engine::bundle::Obtained o = engine::bundle::obtainForLevel(g_lanes.inputs, engine::roads::lanes::kCityProducerName);
+        // ONE obtain per level: the road builder asks for the same city when the entities load,
+        // and under RT_NOCACHE a second obtain would BUILD it a second time.
+        std::string ostatus;
+        std::shared_ptr<engine::bundle::Bundle> ob = engine::roads::lanes::levelCityBundle(g_lanes.inputs, &ostatus);
         engine::roads::lanes::CityProducts cp; std::string cperr;
-        if (o.bundle && engine::roads::lanes::readCityProducts(*o.bundle, 0, cp, &cperr) && cp.hasTerrain) {
-            g_lanes.bundle = o.bundle; g_lanes.bundleStatus = o.status;   // loadLanesEntity reuses it
+        if (ob && engine::roads::lanes::readCityProducts(*ob, 0, cp, &cperr) && cp.hasTerrain) {
+            g_lanes.bundle = ob; g_lanes.bundleStatus = ostatus;   // the lot pass reads its section too
             auto grid = std::make_shared<engine::roads::lanes::HeightGrid>();
             grid->x0 = cp.ground.x0; grid->y0 = cp.ground.y0; grid->res = cp.ground.res;
             grid->nx = cp.ground.nx; grid->ny = cp.ground.ny; grid->z = cp.ground.z;

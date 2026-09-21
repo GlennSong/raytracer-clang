@@ -461,10 +461,20 @@ up, they drift.
   unnamed lambda in the lattice mesher (`procgen/deprecated/roads/road_net_mesh.cpp`,
   inside `buildRoadNetLattice`; naming it is step one) — debt that DIES with the
   file if the lanes builder takes over, so weigh the refactor against ADR-0089's
-  phase 3 before spending on it.
+  phase 4 before spending on it.
   `CityRenderSystem::build` 636, `buildCarMesh` 618, `buildMetro` 577,
   `LevelScene::load` 490 — and `loadVegetation` 493, which has its own entry
   above and has DOUBLED since that entry was written.
+- **The lanes builder answers two of the five products with nothing** (2026-09-20,
+  ADR-0089 amendment). `RoadProducts::deck` and `::bands` come back empty from
+  `"builder": "lanes"`: a lane city's collidable meshes ARE the surface, and its kerbs are
+  geometry rather than an audited loop. Nothing regressed — `loadLanesEntity` never
+  published a `RoadDeck` or a `RoadBandDebug` either — but it means anything that reads a
+  road's deck (furniture that must stand ON it) or its kerb bands (the city map's
+  sidewalks) silently gets less on a lanes level than on a lattice one. `road_products_probe
+  <level>` prints both as zeros, which is how to notice. Fix when something actually wants
+  them, and make the probe's zeros a gate then.
+
 - **Small intra-file clone pairs — fix on touch, not worth standalone PRs:**
   `alignment.cpp` 18×2 (128/164), `road_constraints.cpp` 12×2 (197/340),
   `city.cpp:164` ↔ `street_kit.cpp:12` 14×2, `city_lots.cpp` 11×2

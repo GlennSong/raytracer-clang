@@ -3,6 +3,8 @@
 
 #include "ground_grid.h"
 #include "road_entity.h"
+#include "../polygon.h"
+#include <string>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <string>
@@ -34,14 +36,46 @@ struct RoadBuildInput {
     const RoadEntity* road = nullptr;
     RoadGroundFn ground;                  // null = flat
     nlohmann::json options = nlohmann::json::object();
+    // The level this road belongs to. The lattice ignores it; the lanes builder
+    // needs it, because a lane-built city is produced once per LEVEL through the
+    // bundle (ADR-0084) rather than per entity — the same products the loader,
+    // rt_bake and the editor's bake button all read.
+    nlohmann::json level = nlohmann::json::object();
+    std::string levelPath;
+    int ordinal = 0;                      // which road entity of this level
+    // Where this entity sits in the level's `entities` array. A city builder is
+    // produced per LEVEL and finds its own section of the bundle by this, because
+    // not every road entity is a city and not every city entity is a road.
+    int entityIndex = -1;
 };
 
-// What every builder owes. (Phase 3 adds the lanes builder's blocks and its
-// right-of-way keep-out here; nothing fills them yet, so they are not fields.)
+// One piece of built road. The lattice welds a city into a single mesh; the lanes
+// builder emits one per (render cell x material), because a lane-built city is
+// asphalt, kerb, sidewalk, median, paint and guardrail as separate surfaces and
+// the renderer wants them separate too. So the product is a LIST, and the lattice
+// returns a list of one.
+struct RoadMesh {
+    RenderMesh mesh;
+    std::string name = "road";       // the material/part this is ("asphalt", "paint", ...)
+    Vec3 albedo{1, 1, 1};
+    float roughness = 0.93f;
+    float metallic = 0.0f;
+    bool collidable = true;          // paint is a 2 mm lip: drawn, never driven on
+    double friction = 0.85;          // what a tyre finds here (terrain is looser than asphalt)
+    bool markings = false;           // the lane-paint surface shader
+    int cx = 0, cz = 0;              // render cell, for the ones split that way
+};
+
+// What every builder owes.
 struct RoadProducts {
-    RenderMesh mesh;              // the carriageway, kerbs, sidewalks, markings
-    RoadDeckField deck;           // the surface things stand on
-    CurbBandAudit bands;          // sidewalk loops — the city map draws these
+    std::vector<RoadMesh> meshes;   // the carriageway, kerbs, sidewalks, markings
+    RoadDeckField deck;             // the surface things stand on
+    CurbBandAudit bands;            // sidewalk loops — the city map draws these
+    // The two things a builder that paves a whole CITY knows and a mesher does not.
+    // Both empty from the lattice: a lattice level grows its lots from the road
+    // graph's faces and has no freeway right-of-way to keep them out of.
+    RoadGraph row;                  // freeway + ramp right-of-way: the lot pass's keep-out
+    std::vector<Poly2> holes;       // un-inset pavement holes: the city's blocks
 };
 
 // WHAT A BUILDER DOES TO THE GROUND — asked BEFORE anything is built, because a
@@ -77,6 +111,12 @@ public:
     virtual GroundPlan ground(const RoadBuildInput& in) const = 0;
     // The centrelines everything routes on: nav, traffic, furniture, signs, map.
     virtual RoadGraph navGraph(const RoadBuildInput& in) const = 0;
+    // Is that graph THE level's road graph? The lattice says no: its navGraph is
+    // navRoadGraph(), the same function the loader applies downstream to every
+    // RoadEntity in the world, so publishing it here would only pre-empt that. A
+    // builder that paves a city says yes — its graph is the twin of what it
+    // actually built, and nothing downstream can re-derive that from the recipe.
+    virtual bool ownsNavGraph() const { return false; }
 };
 
 inline constexpr const char* kDefaultRoadBuilder = "lattice";

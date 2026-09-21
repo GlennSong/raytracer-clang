@@ -436,6 +436,7 @@ if(RT_BUILD_ROADS_LANES)
             src/engine/procgen/city/roads/lanes/block_audit.cpp
             src/engine/procgen/city/roads/lanes/city_producer.cpp
             src/engine/procgen/city/roads/lanes/lots_producer.cpp
+            src/engine/procgen/city/roads/lanes_builder.cpp
         )
         target_link_libraries(engine_core PRIVATE Clipper2 CDT::CDT)
         # Consumers ask "is the lanes builder in this build?", never "is the lab enabled?"

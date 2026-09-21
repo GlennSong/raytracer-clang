@@ -73,9 +73,20 @@ int main(int argc, char** argv) {
     }
     std::vector<nlohmann::json> blocks;
     std::vector<RoadEntity> nets;
+    std::vector<int> at;                 // where each road sits in the level's entities array
+    int entityIndex = -1;
     for (const nlohmann::json& e : root.value("entities", nlohmann::json::array())) {
-        if (!e.is_object() || e.value("shape", std::string()) != "road") continue;
-        const nlohmann::json block = e.contains("road") ? e["road"] : nlohmann::json::object();
+        ++entityIndex;
+        // Both spellings of a road: shape:"road", and the lab's shape:"lanelab", which IS
+        // shape:"road" with `"builder": "lanes"` (docs/road-module-plan.md).
+        if (!e.is_object()) continue;
+        const std::string shape = e.value("shape", std::string());
+        if (shape != "road" && shape != "lanelab") continue;
+        nlohmann::json block = shape == "lanelab"
+                                   ? (e.contains("lanelab") ? e["lanelab"] : nlohmann::json::object())
+                                   : (e.contains("road") ? e["road"] : nlohmann::json::object());
+        if (shape == "lanelab") block["builder"] = "lanes";
+        at.push_back(entityIndex);
         RoadEntity net = roadNetFromJson(block);
         if (block.contains("generate")) applyGenerateRecipe(net, block["generate"], ground);
         // The recipe PLANS a freeway (an anchor polyline); it only becomes road when the
@@ -90,7 +101,7 @@ int main(int argc, char** argv) {
         blocks.push_back(block);
         nets.push_back(std::move(net));
     }
-    if (nets.empty()) { std::fprintf(stderr, "%s: no shape:\"road\" entity\n", argv[1]); return 1; }
+    if (nets.empty()) { std::fprintf(stderr, "%s: no road entity\n", argv[1]); return 1; }
 
     std::printf("%s: %zu road entit%s%s\n", argv[1], nets.size(), nets.size() == 1 ? "y" : "ies",
                 ground ? "" : " (flat: no terrain block)");
@@ -103,6 +114,11 @@ int main(int argc, char** argv) {
         in.road = &net;
         in.ground = ground;
         in.options = block;
+        // A builder produced per LEVEL (lanes) needs the level, not just the entity.
+        in.level = root;
+        in.levelPath = argv[1];
+        in.ordinal = static_cast<int>(i);
+        in.entityIndex = at[i];
 
         std::printf("\nroad %zu — builder \"%s\"\n", i, b.name());
         std::printf("  plan     : %zu control nodes, %zu edges (the recipe's own graph)\n",
@@ -126,8 +142,20 @@ int main(int argc, char** argv) {
         for (const UnionSpine& s : p.deck.spines) deckPts += s.points.size();
         std::size_t bandPts = 0;
         for (const Poly2& l : p.bands.loops) bandPts += l.size();
-        std::printf("  mesh     : %zu vertices, %zu triangles\n",
-                    p.mesh.vertices.size(), p.mesh.indices.size() / 3);
+        std::size_t verts = 0, tris = 0, collide = 0;
+        for (const roads::RoadMesh& rm : p.meshes) {
+            verts += rm.mesh.vertices.size();
+            tris += rm.mesh.indices.size() / 3;
+            if (rm.collidable) ++collide;
+        }
+        // The lattice welds a city into one mesh; lanes hands back one per render
+        // cell per material, which is what the loader spawns.
+        std::printf("  mesh     : %zu mesh%s (%zu collidable), %zu vertices, %zu triangles\n",
+                    p.meshes.size(), p.meshes.size() == 1 ? "" : "es", collide, verts, tris);
+        if (p.meshes.size() > 1)
+            for (const roads::RoadMesh& rm : p.meshes)
+                std::printf("             %-22s cell %+d,%+d %6zu tris%s\n", rm.name.c_str(), rm.cx,
+                            rm.cz, rm.mesh.indices.size() / 3, rm.collidable ? "" : "  (no collider)");
         std::printf("  deck     : %zu spines / %zu profile points, %zu junction pad triangles\n",
                     p.deck.spines.size(), deckPts, p.deck.pads.size());
         std::printf("  bands    : %zu kerb loops / %zu points, sidewalk %.2f m, curb %.2f m\n",

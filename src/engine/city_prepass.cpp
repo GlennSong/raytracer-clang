@@ -29,18 +29,33 @@ bool wantsCorridors(const nlohmann::json& root) {
     return false;
 }
 
+// A road entity that names a builder other than the lattice is a CITY, not a recipe this
+// pre-pass can grow lots in: that builder makes its own ground and its own blocks
+// (ADR-0089), and the level's bundle publishes them before the pre-pass runs. Asked by
+// name, so a build without the lanes sources answers it the same way.
+bool hasNonLatticeRoad(const nlohmann::json& root) {
+    for (const nlohmann::json& e : root.value("entities", nlohmann::json::array())) {
+        if (!e.is_object() || e.value("shape", std::string()) != "road") continue;
+        const nlohmann::json block = e.contains("road") ? e["road"] : nlohmann::json::object();
+        if (roads::roadBuilderName(block) != roads::kDefaultRoadBuilder) return true;
+    }
+    return false;
+}
+
 }  // namespace
 
 bool cityPrePassApplies(const nlohmann::json& root) {
     if (!root.contains("terrain")) return false;         // the lot pre-pass only runs with terrain
     if (hasShape(root, "script")) return false;          // a Lua pre-pass shapes the ground; not JSON-derivable
-    if (hasShape(root, "lanelab")) return false;         // the lanelab `lots` producer owns those
+    if (hasShape(root, "lanelab")) return false;         // the lanes `lots` producer owns those
+    if (hasNonLatticeRoad(root)) return false;           // ...and its other spelling (ADR-0089)
     if (wantsCorridors(root)) return false;              // the corridor solve happens in the loader
     bool generated = false;
     if (root.contains("entities") && root["entities"].is_array())
         for (const nlohmann::json& e : root["entities"])
             if (e.value("shape", std::string()) == "road" && e.contains("road") &&
-                e["road"].contains("generate"))
+                e["road"].contains("generate") &&
+                roads::roadBuilderName(e["road"]) == roads::kDefaultRoadBuilder)
                 generated = true;
     return generated;
 }
@@ -82,6 +97,8 @@ bool cityPrePassForLevel(const nlohmann::json& rootIn, CityPrePass& out) {
         for (const nlohmann::json& ent : root["entities"]) {
             if (ent.value("shape", std::string()) != "road") continue;
             const nlohmann::json roadBlock = ent.contains("road") ? ent["road"] : nlohmann::json::object();
+            // A city builder's road is not a net this pre-pass plans, carves or routes on.
+            if (roads::roadBuilderName(roadBlock) != roads::kDefaultRoadBuilder) continue;
             RoadEntity net = roadNetFromJson(roadBlock);
             if (roadBlock.contains("generate"))
                 applyGenerateRecipe(net, roadBlock["generate"], out.naturalGround);

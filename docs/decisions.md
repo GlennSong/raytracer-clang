@@ -7136,3 +7136,34 @@ is looking at lanes content rather than assume it from the flag. What does NOT m
 `shape:"lanelab"` and `assets/lanelab/` still name the entity and its levels, because a level is
 content and migrates on its own schedule (phase 3, when a road block can say `"builder": "lanes"`
 and the lanes builder takes a recipe).
+
+**Amendment, 2026-09-20 — one load path, two spellings.** Glenn: "Finish up all the work with
+integrating lanelabs into the procgen engine." The lab's own loader is gone; a lane-built city now
+reaches the world through this interface like any other road, and the interface grew to the shape
+that made that possible:
+
+* `RoadProducts` is a LIST of named meshes (per render cell x material, each with its own albedo,
+  roughness, friction and collidable flag) plus the deck, the kerb bands, the freeway
+  **right-of-way** and the pavement **holes** the lot pass turns into blocks. The lattice returns a
+  list of one and neither of the last two, which is the honest answer for a mesher.
+* `RoadBuilder::ownsNavGraph()` — *is this builder's graph THE level's road graph?* The lattice says
+  no: its `navGraph` is `navRoadGraph`, the same function the loader applies downstream to every
+  `RoadEntity` in the world, so publishing here would only pre-empt that. A builder that paves a
+  city says yes, and the loader publishes ITS twin. This is the test for "am I looking at a lane
+  city" — not the entity's shape, and not `RT_ROADS_LANES`. ADR-0085's hazard, answered by asking
+  the builder rather than the build.
+* One loader function, `publishCityProducts`, takes the ground (`GroundPlan::replace`), the blocks,
+  the right-of-way and the graph from whatever built them, and fires for no lattice road.
+* `shape:"lanelab"` **is** `shape:"road"` with `"builder":"lanes"`: `cityEntities()` recognises both
+  spellings and numbers them in one sequence, and the bundle key never sees the spelling — so a
+  level migrates by editing two keys with **no rebake**, which is what makes the migration safe to
+  do one level at a time. `assets/lanelab/levels/metro_route.json` is migrated;
+  `hill`/`metro`/`ring` stay on the lab's spelling, so both paths stay live and tested.
+* `lanes::levelCityBundle()` is the one obtain per level per process. The terrain pre-pass and the
+  road builder both want the same city, and `obtainForLevel` does not memoise — under `RT_NOCACHE`
+  a second ask would BUILD the city a second time.
+
+What is still open is phase 4, and it is not plumbing: a lanes city planned from a level's
+`generate` **recipe** (`graphFromLevel` is file-oriented, and the producer's identity key would have
+to fold in the recipe and the terrain params or an edited recipe loads a stale city). Glenn on
+2026-09-20: "I want metro_v2 as it was" — so metro stays on the lattice until he asks.

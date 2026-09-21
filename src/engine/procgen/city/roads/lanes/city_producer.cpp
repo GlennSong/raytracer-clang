@@ -3,6 +3,7 @@
 #include "engine/mesh_builder.h"
 #include "engine/procgen/city/roads/lanes/block_audit.h"
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"
+#include "engine/procgen/city/roads/lanes/lots_producer.h"
 #include "engine/procgen/city/roads/lanes/road_twin.h"
 #include "engine/procgen/terrain_field.h"
 #include "log.h"
@@ -12,11 +13,13 @@
 #include <cstdlib>
 #include <fstream>
 #include <map>
+#include <memory>
+#include <mutex>
 
 namespace engine {
 namespace roads::lanes {
 
-const char* const kLanesBuildTag = "2026-09-20.1";
+const char* const kLanesBuildTag = "2026-09-20.2";
 
 namespace {
 using bundle::BinReader;
@@ -101,12 +104,50 @@ std::vector<CityEntity> cityEntities(const nlohmann::json& level) {
     int i = 0;
     for (const nlohmann::json& ent : level["entities"]) {
         const int idx = i++;
-        if (ent.value("shape", std::string()) != "lanelab") continue;
-        CityEntity e; e.ordinal = static_cast<int>(out.size()); e.entityIndex = idx; e.block = ent.contains("lanelab") ? ent["lanelab"] : nlohmann::json::object();
+        const std::string shape = ent.value("shape", std::string());
+        // The lab's own entity, and the roads module's road entity that names this
+        // builder: the same city, two spellings (docs/road-module-plan.md phase 3).
+        nlohmann::json block;
+        if (shape == "lanelab") block = ent.contains("lanelab") ? ent["lanelab"] : nlohmann::json::object();
+        else if (shape == "road" && ent.contains("road") && ent["road"].is_object() &&
+                 ent["road"].value("builder", std::string()) == "lanes") block = ent["road"];
+        else continue;
+        CityEntity e; e.ordinal = static_cast<int>(out.size()); e.entityIndex = idx; e.block = std::move(block);
         e.inlineGraph = e.block.contains("edges"); e.graphPath = e.inlineGraph ? std::string() : e.block.value("graph", std::string());
         out.push_back(std::move(e));
     }
     return out;
+}
+
+int cityOrdinalForEntity(const nlohmann::json& level, int entityIndex) {
+    for (const CityEntity& e : cityEntities(level)) if (e.entityIndex == entityIndex) return e.ordinal;
+    return -1;
+}
+
+namespace {
+std::mutex g_cityBundleMu;
+std::map<std::string, std::pair<std::shared_ptr<bundle::Bundle>, std::string>> g_cityBundles;
+}  // namespace
+
+std::shared_ptr<bundle::Bundle> levelCityBundle(const bundle::LevelInputs& in, std::string* status) {
+    // Keyed by the level AND by what its inputs hash to, so an edited level in the same
+    // process is a different city rather than a stale one.
+    const std::string key = in.levelPath + "|" + bundle::bundleDirForLevel(in);
+    std::lock_guard<std::mutex> lock(g_cityBundleMu);
+    auto it = g_cityBundles.find(key);
+    if (it == g_cityBundles.end()) {
+        registerCityProducer();
+        registerLotsProducer();   // both before the first obtain: the bundle is named by every producer that applies
+        bundle::Obtained o = bundle::obtainForLevel(in, kCityProducerName);
+        it = g_cityBundles.emplace(key, std::make_pair(std::shared_ptr<bundle::Bundle>(std::move(o.bundle)), o.status)).first;
+    }
+    if (status) *status = it->second.second;
+    return it->second.first;
+}
+
+void forgetLevelCityBundles() {
+    std::lock_guard<std::mutex> lock(g_cityBundleMu);
+    g_cityBundles.clear();
 }
 
 double cityRenderCell(const nlohmann::json& level) {
