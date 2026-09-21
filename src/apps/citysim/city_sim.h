@@ -133,7 +133,14 @@ struct Agent {
     // departs in the same 90 minutes has almost nobody asleep at any moment.
     Real wakeAt = -1;
     Real sleptAt = 0;
-    bool playerControlled = false;   // brain = host input; the sim won't auto-drive it
+    bool playerControlled = false;
+    // DIRECTED (ADR-0091): a director owns this agent's plan — the possession
+    // channel now, a model later. The goal layer leaves it entirely alone (no
+    // schedule, no chained trip on arrival) while the stepper keeps moving it
+    // along whatever route the director gave. This is NOT `released`, which
+    // stops the agent being stepped at all, nor `playerControlled`, which hands
+    // the body to the host: a directed agent is still the sim's to move.
+    bool directed = false;   // brain = host input; the sim won't auto-drive it
     bool released = false;           // ejected by the player (ADR-0062): the sim stops
                                      // driving this agent's ghost so it can't fight the
                                      // now player-driven physical car
@@ -612,6 +619,18 @@ public:
     void queryAgentsNear(engine::Vec2 pos, Real radius,
                          std::vector<int>& out) const {
         grid_.query(pos, radius, out);
+    }
+
+    // Hand an agent's PLAN to a director (ADR-0091). Idempotent; -1 or an
+    // out-of-range index is a no-op. Turning it off returns the agent to its
+    // schedule from wherever it is standing.
+    void setAgentDirected(int agentIndex, bool on) {
+        if (agentIndex >= 0 && agentIndex < static_cast<int>(agents_.size()))
+            agents_[static_cast<std::size_t>(agentIndex)].directed = on;
+    }
+    bool agentDirected(int agentIndex) const {
+        return agentIndex >= 0 && agentIndex < static_cast<int>(agents_.size()) &&
+               agents_[static_cast<std::size_t>(agentIndex)].directed;
     }
 
     // Mark an agent as host-driven (the player): the sim won't run its AI brain.

@@ -3677,6 +3677,16 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
     // arrivals at ground level, under their own road.
     a.elevation = nav_->links[lastLink].layer * kLayerClearance +
                   nav_->links[lastLink].elevB;
+    // A DIRECTED AGENT ARRIVES AND WAITS (ADR-0091). Its plan belongs to the
+    // director, so the goal table does not get to chain the next trip — it
+    // stands where it was sent until told otherwise. restNode still moves, so
+    // `direct off` hands the schedule an agent standing somewhere real.
+    if (a.directed) {
+        a.restNode = nav_->links[static_cast<std::size_t>(lastLink)].to;
+        a.arrivedLink = lastLink;
+        a.state = Agent::State::Resting;
+        return;
+    }
     const GoalTable& t = tableFor(a);
     int next = t.onEvent(a.goal, GoalEvent::Arrived);
     if (a.mode == Agent::Mode::Driver && next >= 0 &&
@@ -4211,7 +4221,9 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         if (a.playerControlled || a.released) continue;
         // A RIDER does not re-plan: its GoTo state would see !moving and
         // relaunch the trip on foot every tick, walking it out of the car.
-        if (!riding(ai) && !awaitingRide(ai)) goalThink(a, dt * hoursPerSecond);
+        // A DIRECTED agent's plan is the director's (ADR-0091): no schedule.
+        if (!a.directed && !riding(ai) && !awaitingRide(ai))
+            goalThink(a, dt * hoursPerSecond);
         // A departure moved the pose (idle verge -> lane start): re-hash NOW so
         // every later grid consumer this step sees current positions.
         grid_.place(static_cast<int>(i), a.pos);
@@ -5005,7 +5017,8 @@ void CitySim::tickV(int i, Real hoursPerSecond) {
     a.vLastTick = simSeconds_;
     if (dts <= 1e-9) return;
     if (a.playerControlled || a.released) return;
-    if (!a.moving && !riding(i) && !awaitingRide(i)) goalThink(a, dts * hoursPerSecond);
+    if (!a.directed && !a.moving && !riding(i) && !awaitingRide(i))
+        goalThink(a, dts * hoursPerSecond);
     if (a.moving) vAdvance(a, dts);
     grid_.place(i, a.pos);   // the far tier re-hashes on its tick, not per step
 }

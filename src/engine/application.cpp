@@ -1159,6 +1159,14 @@ std::string Application::handleControlCommand(const std::string& line) {
                 " " + cmd.args[1]);
         return "ok staged (poll possess?)";
     }
+    // Hold the goal layer off the possessed agent so a director's plan is not
+    // overwritten by its schedule seconds later (ADR-0091).
+    if (cmd.name == "direct") {
+        if (cmd.args.size() != 1 || (cmd.args[0] != "on" && cmd.args[0] != "off"))
+            return "err usage: direct on|off";
+        settingsStore.setString("possess.cmd", "direct " + cmd.args[0]);
+        return "ok staged (poll possess?)";
+    }
     if (cmd.name == "possess_stop") {
         settingsStore.setString("possess.cmd", "stop");
         return "ok staged";
@@ -1172,6 +1180,11 @@ std::string Application::handleControlCommand(const std::string& line) {
     // The possessed agent's own mind: activity, goal state, and the fields that
     // decide whether it walks (ADR-0091). Written every frame by
     // CityPossessSystem; "none" when nothing is possessed.
+    // What the agent can SEE: the places, people and transit around it, each
+    // with a point walk_to accepts (ADR-0091). Written every frame by
+    // CityPossessSystem; "none" when nothing is possessed.
+    if (cmd.name == "look?")
+        return "ok " + settingsStore.getString("look.status", "none");
     if (cmd.name == "agent?")
         return "ok " + settingsStore.getString("agent.status", "none");
 
@@ -1195,7 +1208,7 @@ std::string Application::handleControlCommand(const std::string& line) {
     return "err unknown command: " + cmd.name +
            " (ping|info|camera|camera?|shot|overlay|sim|reload|set|get|"
            "daynight|daynight?|citymap|teleport|teleport?|where?|person|clip|clip?|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
-           "possess|drive_to|walk_to|possess_stop|release|possess?|agent?|ground?|bundle?)";
+           "possess|drive_to|walk_to|direct|possess_stop|release|possess?|agent?|ground?|bundle?)";
 }
 
 }  // namespace engine

@@ -55,6 +55,12 @@ const char* stateLabel(Agent::State s) {
     return "?";
 }
 
+// How far a director's menu reaches. Places are a destination you would cross
+// a street for; agents are who is actually around you.
+constexpr engine::Real kLookRadiusPlaces = 250.0;
+constexpr engine::Real kLookRadiusAgents = 40.0;
+constexpr int kLookMaxAgents = 6;
+
 char tierLabel(Agent::Tier t) {
     using T = Agent::Tier;
     return t == T::K ? 'K' : (t == T::V ? 'V' : 'D');
@@ -103,6 +109,7 @@ void CityPossessSystem::update(engine::FrameContext& ctx) {
 
     updateCamera(ctx);
     publishStatus(ctx);
+    publishLook(ctx);
 }
 
 void CityPossessSystem::handleCommand(engine::FrameContext& ctx,
@@ -139,6 +146,18 @@ void CityPossessSystem::handleCommand(engine::FrameContext& ctx,
                     ad->command = engine::DriverCommand{};   // speed 0 = brake hold
             state_ = (car_.valid() || walkerAgent_ >= 0) ? PossessState::Idle
                                                          : PossessState::None;
+            return;
+        case PossessCmd::Kind::Direct:
+            // THE GOAL LAYER STOPS FIGHTING THE DIRECTOR (ADR-0091). Without
+            // this an errand ends, the schedule chains the next trip seconds
+            // later, and a director spends the session arguing with the table
+            // it is supposed to be replacing.
+            if (walkerAgent_ >= 0) {
+                city_.simMutable().setAgentDirected(walkerAgent_, cmd.on);
+                directed_ = cmd.on;
+            } else {
+                error_ = "nothing possessed — `possess walker` first";
+            }
             return;
         case PossessCmd::Kind::Release:
             releasePossession(ctx);
@@ -382,6 +401,12 @@ void CityPossessSystem::releasePossession(engine::FrameContext& ctx) {
         ctx.world.has<engine::AgentDriver>(car_))
         ctx.world.remove<engine::AgentDriver>(car_);
     car_ = Entity{};
+    // GIVE THE AGENT ITS DAY BACK. A released agent left `directed` would stand
+    // wherever the director abandoned it for the rest of the run, because the
+    // goal layer has been told to leave it alone (ADR-0091).
+    if (walkerAgent_ >= 0 && city_.built())
+        city_.simMutable().setAgentDirected(walkerAgent_, false);
+    directed_ = false;
     walkerAgent_ = -1;
     hasDest_ = false;
     follower_ = engine::LaneFollower{};
@@ -536,6 +561,156 @@ void CityPossessSystem::updateCamera(engine::FrameContext& ctx) {
             : 1.0f;
     ctx.view.camera = follow_.cameraState(aspect);
     ctx.view.activeCameraEntity = Entity{};
+}
+
+// WHAT THE AGENT CAN SEE (ADR-0091). The menu a director chooses from, and the
+// reason it is built HERE rather than by the director: every entry carries a
+// point `walk_to` accepts, so a choice is one command and never a coordinate
+// the agent cannot reach. A place's `at` is its ENTRANCE — already snapped to
+// the pedestrian network by PlaceMap — not its footprint centroid, which is
+// inside a building and routes to nothing.
+//
+// Bearings are degrees from where the agent faces, positive to its RIGHT, the
+// same convention (and the same two lines of arithmetic) as the bus HUD the
+// player reads, so the two never disagree about which way "left" is.
+void CityPossessSystem::publishLook(engine::FrameContext& ctx) {
+    if (!city_.built() || walkerAgent_ < 0) {
+        ctx.settings.setString("look.status", "none");
+        return;
+    }
+    const std::vector<Agent>& agents = city_.sim().agents();
+    if (walkerAgent_ >= static_cast<int>(agents.size())) {
+        ctx.settings.setString("look.status", "none");
+        return;
+    }
+    const CitySim& sim = city_.sim();
+    const Agent& me = agents[static_cast<std::size_t>(walkerAgent_)];
+    const Vec2 eye = me.pos;
+    Vec2 f = me.heading;
+    const engine::Real fl = std::sqrt(f.x * f.x + f.y * f.y);
+    f = fl > 1e-6 ? Vec2(f.x / fl, f.y / fl) : Vec2(0, 1);
+    const engine::Real clock = sim.clockHours();
+
+    auto bearing = [&](Vec2 to) {
+        const Vec2 d(to.x - eye.x, to.y - eye.y);
+        return std::atan2(-d.x * f.y + d.y * f.x, d.x * f.x + d.y * f.y) *
+               57.29577951308232;
+    };
+    auto dist = [&](Vec2 to) {
+        const engine::Real dx = to.x - eye.x, dy = to.y - eye.y;
+        return std::sqrt(dx * dx + dy * dy);
+    };
+
+    std::string out;
+    char buf[320];
+    std::snprintf(buf, sizeof(buf), "clock=%.2f pos=%.1f,%.1f facing=%.1f,%.1f",
+                  static_cast<double>(clock), static_cast<double>(eye.x),
+                  static_cast<double>(eye.y), static_cast<double>(f.x),
+                  static_cast<double>(f.y));
+    out = buf;
+
+    // WHERE ITS OWN PLAN GOES NEXT, so a director can see what it is
+    // interrupting before it interrupts it.
+    if (const engine::NavGraph* nav = sim.graph()) {
+        if (me.route.valid() &&
+            me.leg < static_cast<int>(me.route.links.size())) {
+            const Vec2 wp = nav->nodes[static_cast<std::size_t>(
+                nav->links[static_cast<std::size_t>(
+                               me.route.links[static_cast<std::size_t>(me.leg)])]
+                    .to)];
+            std::snprintf(buf, sizeof(buf),
+                          " | next d=%.0f b=%.0f at=%.1f,%.1f legs=%d",
+                          static_cast<double>(dist(wp)),
+                          static_cast<double>(bearing(wp)),
+                          static_cast<double>(wp.x), static_cast<double>(wp.y),
+                          static_cast<int>(me.route.links.size()) - me.leg);
+            out += buf;
+        }
+    }
+
+    // ONE PLACE OF EACH KIND, the nearest. A menu of seven is a menu a model
+    // can hold in its head; every shop in the district is a search problem.
+    const PlaceMap& places = city_.places();
+    for (int t = 0; t < static_cast<int>(PlaceType::Count); ++t) {
+        const PlaceType type = static_cast<PlaceType>(t);
+        const PlaceId id = places.nearest(type, eye);
+        if (id == kNoPlace) continue;
+        const Place& pl = places[id];
+        const engine::Real d = dist(pl.entrance);
+        if (d > kLookRadiusPlaces) continue;
+        std::string name = pl.name;
+        for (char& ch : name) if (ch == ' ') ch = '_';   // one token per field
+        std::snprintf(buf, sizeof(buf),
+                      " | place=%s id=%u d=%.0f b=%.0f open=%d at=%.1f,%.1f%s%s",
+                      placeTypeName(type), static_cast<unsigned>(id),
+                      static_cast<double>(d), static_cast<double>(bearing(pl.entrance)),
+                      pl.openAt(clock) ? 1 : 0,
+                      static_cast<double>(pl.entrance.x),
+                      static_cast<double>(pl.entrance.y),
+                      name.empty() ? "" : " name=", name.c_str());
+        out += buf;
+    }
+
+    // THE NEAREST BUS STOP AND WHAT CALLS THERE. The agent's own transit state
+    // is in `agent?`; this is the option it has not taken yet.
+    {
+        const BusNetwork& net = sim.buses();
+        int bestR = -1, bestS = -1;
+        engine::Real bestD = 0;
+        for (int r = 0; r < net.routeCount(); ++r) {
+            const BusRoute& route = net.route(r);
+            for (std::size_t si = 0; si < route.stops.size(); ++si) {
+                const engine::Real d = dist(route.stops[si].pos);
+                if (bestR < 0 || d < bestD) {
+                    bestR = r; bestS = static_cast<int>(si); bestD = d;
+                }
+            }
+        }
+        if (bestR >= 0 && bestD <= kLookRadiusPlaces) {
+            const BusStop& st = net.route(bestR).stops[static_cast<std::size_t>(bestS)];
+            std::snprintf(buf, sizeof(buf),
+                          " | stop route=%d d=%.0f b=%.0f at=%.1f,%.1f node=%d",
+                          bestR, static_cast<double>(bestD),
+                          static_cast<double>(bearing(st.pos)),
+                          static_cast<double>(st.pos.x),
+                          static_cast<double>(st.pos.y), st.node);
+            out += buf;
+        }
+    }
+
+    // THE PEOPLE AROUND IT, nearest first, capped. The grid answers by CELL, so
+    // this is a superset — the distance test below is the exact one.
+    {
+        std::vector<int> near;
+        sim.queryAgentsNear(eye, kLookRadiusAgents, near);
+        std::vector<std::pair<engine::Real, int>> byDist;
+        byDist.reserve(near.size());
+        for (int ai : near) {
+            if (ai == walkerAgent_ || ai < 0 ||
+                ai >= static_cast<int>(agents.size()))
+                continue;
+            const Agent& o = agents[static_cast<std::size_t>(ai)];
+            if (o.indoors || o.released) continue;   // not on the street
+            const engine::Real d = dist(o.pos);
+            if (d <= kLookRadiusAgents) byDist.emplace_back(d, ai);
+        }
+        std::sort(byDist.begin(), byDist.end());
+        int shown = 0;
+        for (const auto& [d, ai] : byDist) {
+            if (shown++ >= kLookMaxAgents) break;
+            const Agent& o = agents[static_cast<std::size_t>(ai)];
+            std::snprintf(buf, sizeof(buf),
+                          " | %s=%d d=%.1f b=%.0f state=%s speed=%.1f",
+                          o.mode == Agent::Mode::Driver ? "car" : "ped", ai,
+                          static_cast<double>(d), static_cast<double>(bearing(o.pos)),
+                          stateLabel(o.state), static_cast<double>(o.speed));
+            out += buf;
+        }
+        std::snprintf(buf, sizeof(buf), " | crowd=%d", static_cast<int>(byDist.size()));
+        out += buf;
+    }
+
+    ctx.settings.setString("look.status", out);
 }
 
 void CityPossessSystem::publishStatus(engine::FrameContext& ctx) {

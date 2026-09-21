@@ -47,6 +47,26 @@ TEST_CASE(possess_cmd_parses_stop_release_none_and_unknown) {
     CHECK(!bad.error.empty());
 }
 
+// `direct on|off` hands the agent's PLAN to the director and gives it back
+// (ADR-0091). A bare or misspelled switch must not silently mean "on": that
+// would hold the goal layer off an agent nobody meant to direct, and it would
+// stand in the street for the rest of the run.
+TEST_CASE(possess_cmd_parses_direct_and_requires_an_explicit_switch) {
+    PossessCmd on = parsePossessCmd("direct on");
+    CHECK(on.kind == PossessCmd::Kind::Direct);
+    CHECK(on.on);
+
+    PossessCmd off = parsePossessCmd("direct off");
+    CHECK(off.kind == PossessCmd::Kind::Direct);
+    CHECK(!off.on);
+
+    for (const char* bad : {"direct", "direct yes", "direct 1", "direct ON"}) {
+        PossessCmd c = parsePossessCmd(bad);
+        CHECK(c.kind == PossessCmd::Kind::Invalid);
+        CHECK(!c.error.empty());
+    }
+}
+
 TEST_CASE(possess_status_line_carries_kind_state_pose_and_remaining) {
     const std::string s = formatPossessStatus(
         "car", PossessState::Driving, Vec3(-281.2, 6.0, 149.8), 8.4, 412.0);

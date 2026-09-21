@@ -29,10 +29,12 @@ struct PossessCmd {
         WalkTo,      // "walkto x z"
         Stop,        // "stop" — hold the brakes / stand still
         Release,     // "release" — detach brain + camera
+        Direct,      // "direct on|off" — hold the goal layer off this agent
         Invalid,     // unparseable: status carries the reason
     };
     Kind kind = Kind::None;
     bool hasPos = false;   // Car/Walker: optional spawn point supplied
+    bool on = false;       // Direct: on|off
     Real x = 0, z = 0;
     std::string error;     // Invalid: what was wrong (surfaced in status)
 };
@@ -59,6 +61,17 @@ inline PossessCmd parsePossessCmd(const std::string& line) {
             cmd.kind = PossessCmd::Kind::Invalid;
             cmd.error = word + " needs <x> <z>";
         }
+        return cmd;
+    }
+    if (word == "direct") {
+        std::string sw;
+        if (!(in >> sw) || (sw != "on" && sw != "off")) {
+            cmd.kind = PossessCmd::Kind::Invalid;
+            cmd.error = "direct needs on|off";
+            return cmd;
+        }
+        cmd.kind = PossessCmd::Kind::Direct;
+        cmd.on = sw == "on";
         return cmd;
     }
     if (word == "stop") { cmd.kind = PossessCmd::Kind::Stop; return cmd; }
