@@ -7,6 +7,8 @@
 #include "../src/engine/bundle/bundle.h"
 #include "../src/engine/city_prepass.h"
 #include "../src/engine/lot_grow_setup.h"
+#include "../src/engine/level_params.h"
+#include "../src/engine/procgen/city/architect.h"
 #include "../src/engine/procgen/city/citylots_producer.h"
 #include "../src/engine/procgen/city/lot_cache.h"
 
@@ -127,4 +129,51 @@ TEST_CASE(citylots_bake_grows_the_same_city_as_a_direct_grow) {
           entry.value("key", std::string()) == bundle::hex16(bundle::findProducer(kCityLotsProducerName)->identity(in).key));
     std::printf("    %s; %zu cell parts\n",
                 rep.reports.at(kCityLotsProducerName).report.value("summary", std::string()).c_str(), cps.size());
+}
+
+// DISTRICTS THE LEVEL AUTHORS (Glenn, 2026-09-20: a lane-built metro with "more
+// skyscrapers like in metro_test_v2"). Hubs used to come only from a metro RECIPE,
+// left on the road entity — so a city built from a baked lane graph had no districts
+// at all: one radial core, and half the towers of the recipe-planned city beside it.
+TEST_CASE(a_level_can_author_its_own_district_hubs) {
+    const nlohmann::json cs = nlohmann::json::parse(R"({
+        "downtownRadius": 420, "midtownRadius": 750,
+        "districts": { "hubRadius": 260, "hubs": [
+            {"at": [-150.0, 950.0],  "kind": "commercial"},
+            {"at": [0.0, 0.0],       "kind": "financial"},
+            {"at": [-600.0, -900.0], "kind": "residential"},
+            {"at": [2000.0, 2000.0], "kind": "no-such-quarter"}
+        ] } })");
+    EdgeBlockParams ep;
+    LotParams lp;
+    readLotGrowParams(cs, ep, lp);
+    CHECK(lp.hubs.size() == 4);
+    if (lp.hubs.size() != 4) return;
+    CHECK(lp.hubRadius == 260.0);
+    CHECK(lp.innerRadius == 420.0 && lp.midRadius == 750.0);
+    CHECK(lp.hubs[0].second == 1 && lp.hubs[1].second == 0 && lp.hubs[2].second == 2);
+    CHECK(lp.hubs[3].second == 2);                       // an unknown quarter is housing
+    // Coreness — height grading and the landmark quotas measure from here — is the
+    // FINANCIAL hub, not merely the first one authored.
+    CHECK(lp.center.x == 0.0 && lp.center.y == 0.0);
+
+    // And the zoning those hubs describe: downtown is the financial hub's own disc,
+    // a commercial collar sits around a flavoured hub, and the far corner is housing.
+    DistrictMap dm;
+    dm.hubs = lp.hubs;
+    dm.hubRadius = lp.hubRadius;
+    dm.innerRadius = lp.innerRadius;
+    dm.midRadius = lp.midRadius;
+    CHECK(dm.tagAt(Vec2(0, 0)) == DistrictTag::Financial);
+    CHECK(dm.tagAt(Vec2(300, 0)) == DistrictTag::Financial);        // inside downtownRadius
+    CHECK(dm.tagAt(Vec2(2000, 2000)) == DistrictTag::Residential);  // the unknown quarter, housing
+    CHECK(dm.tagAt(Vec2(-150, 950)) == DistrictTag::Commercial);    // the flavoured hub
+    CHECK(dm.tagAt(Vec2(-600, -900)) == DistrictTag::Residential);
+
+    // A level that authors nothing is unchanged: no hubs, the radial reading.
+    LotParams plain;
+    EdgeBlockParams ep2;
+    readLotGrowParams(nlohmann::json::parse(R"({"downtownRadius": 300})"), ep2, plain);
+    CHECK(plain.hubs.empty());
+    CHECK(plain.center.x == 0.0 && plain.center.y == 0.0);
 }

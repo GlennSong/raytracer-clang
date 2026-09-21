@@ -210,8 +210,55 @@ void readLotGrowParams(const json& cityJson,
     // the editor grew a different city than the game (no parcel grain, no
     // polycentric zoning, no tower core). That is the whole reason this
     // function exists, so a field added to one loader cannot go missing in the
-    // other. `hubs` and `center` cannot join them: they come from the road
-    // nets, not the JSON, so each caller still fills those from its own nets.
+    // other.
+    //
+    // DISTRICTS THE LEVEL AUTHORS ("districts", 2026-09-20). `hubs` used to come
+    // only from the road nets — a metro RECIPE plans them and leaves them on the
+    // entity — which left a city built from a baked lane graph with no districts
+    // at all: one radial core, and half the towers of the recipe-planned city
+    // beside it. A level can now say where its quarters are:
+    //
+    //   "districts": { "hubRadius": 220,
+    //                  "hubs": [ {"at": [x, z], "kind": "financial"}, ... ] }
+    //
+    // kind is financial | commercial | residential | oldtown | industrial (the
+    // DistrictTag order). Lots zone by the NEAREST hub; a kind-0 (financial) hub
+    // reads as a downtown CORE — the radial rings are measured from it, so
+    // downtownRadius/midtownRadius size its financial and commercial discs, and
+    // several of them make several downtowns. When a level authors hubs they are
+    // the city's districts; the nets' own are not merged in, or a recipe would
+    // silently outvote the author. `road_products_probe <level>` prints what a
+    // recipe planned in exactly this form, to copy across.
+    if (cityJson.contains("districts") && cityJson["districts"].is_object()) {
+        const auto& dj = cityJson["districts"];
+        lots.hubRadius = dj.value("hubRadius", lots.hubRadius);
+        if (dj.contains("hubs") && dj["hubs"].is_array()) {
+            auto kindOf = [](const std::string& n) {
+                if (n == "financial") return 0;
+                if (n == "commercial") return 1;
+                if (n == "residential") return 2;
+                if (n == "oldtown") return 3;
+                if (n == "industrial") return 4;
+                return 2;                                  // an unknown quarter is housing
+            };
+            bool haveCore = false;
+            for (const auto& hj : dj["hubs"]) {
+                if (!hj.is_object() || !hj.contains("at") || !hj["at"].is_array() || hj["at"].size() < 2)
+                    continue;
+                const Vec2 at(hj["at"][0].get<double>(), hj["at"][1].get<double>());
+                const int kind = hj["kind"].is_number()
+                                     ? hj.value("kind", 2)
+                                     : kindOf(hj.value("kind", std::string("residential")));
+                lots.hubs.push_back({at, kind});
+                // Coreness (height grading, landmark quotas) measures from `center`:
+                // the first financial hub is downtown, else the first hub at all.
+                if (!haveCore && (kind == 0 || lots.hubs.size() == 1)) {
+                    lots.center = at;
+                    haveCore = kind == 0;
+                }
+            }
+        }
+    }
     if (cityJson.contains("parcel") && cityJson["parcel"].is_object()) {
         const auto& pj = cityJson["parcel"];
         lots.parcelTargetArea = pj.value("targetArea", lots.parcelTargetArea);

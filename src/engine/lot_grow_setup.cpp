@@ -24,17 +24,23 @@ LotGrowSetup lotGrowSetupForLevel(const nlohmann::json& cs, const std::string& l
     LotGrowSetup s;
     readLotGrowParams(cs, s.ep, s.lp);
     // Polycentric zoning: a metro recipe leaves its hubs (with district kinds) on the net — forward them
-    // so lots zone by nearest hub, not one centre.
-    for (const RoadEntity& n : nets)
-        for (const CityHub& h : n.plan.cityHubs) s.lp.hubs.push_back({h.pos, h.kind});
-    s.lp.hubRadius = cs.value("hubRadius", 220.0);
-    // Coreness anchor: height/landmark grading measures distance from LotParams::center — the financial
-    // hub (kind 0) is downtown; first hub as fallback.
-    for (const RoadEntity& n : nets)
-        for (const CityHub& h : n.plan.cityHubs) {
-            if (s.lp.center.x == 0 && s.lp.center.y == 0) s.lp.center = h.pos;
-            if (h.kind == 0) { s.lp.center = h.pos; break; }
-        }
+    // so lots zone by nearest hub, not one centre. A level that AUTHORS its districts
+    // (citysim.districts, read above) has already filled these, and wins: a city built from a baked
+    // lane graph has no recipe to plan hubs, and where a level says its quarters are is not a thing
+    // for a recipe to overrule.
+    const bool authored = !s.lp.hubs.empty();
+    if (!authored) {
+        for (const RoadEntity& n : nets)
+            for (const CityHub& h : n.plan.cityHubs) s.lp.hubs.push_back({h.pos, h.kind});
+        s.lp.hubRadius = cs.value("hubRadius", 220.0);
+        // Coreness anchor: height/landmark grading measures distance from LotParams::center — the
+        // financial hub (kind 0) is downtown; first hub as fallback.
+        for (const RoadEntity& n : nets)
+            for (const CityHub& h : n.plan.cityHubs) {
+                if (s.lp.center.x == 0 && s.lp.center.y == 0) s.lp.center = h.pos;
+                if (h.kind == 0) { s.lp.center = h.pos; break; }
+            }
+    }
     // Terrain: buildings grow from their graded pad plane, park/green pads drape per-vertex.
     s.lp.groundWith = std::move(groundWith);
     s.lp.groundMeshCell = static_cast<Real>(groundMeshCell);

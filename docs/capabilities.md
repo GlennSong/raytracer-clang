@@ -64,6 +64,7 @@ being used. One row per capability; the "used by" column is the audit trail.
 
 | Capability | Where | Used by | Why / why not |
 |---|---|---|---|
+| Level-authored districts `citysim.districts` | `level_params.cpp` (`readLotGrowParams`), `architect.h` (`DistrictMap`) (ADR-0090) | **used by metro_lanes** | hubs used to come only from a metro recipe, so a city built from a baked lane graph had no quarters at all; a level now says where its downtown is, and authored hubs beat the nets' planned ones |
 | Skyline census `SkylineCensus` / `skylineCensus` | `procgen/city/city_lots.h` | lot pass report, loader warm paths (lanelab + citylots), `test_city_lots` | storeys histogram, towers >20/40/60, tallest, footprint rectilinearity, open space by kind, per district — computed from `LotBuilding` records so a warm load (which grows nothing) reports the same numbers as a grow |
 | Shared facade truth `FacadeLayout` | `procgen/city/shape_grammar.cpp:520` | full, flat (LOD1) and inner-wall emitters | the model for site plans and cores: one derivation, several consumers, so LODs and interiors agree by construction |
 | Storey stack `storeyPlans` on `massStack` | `procgen/city/shape_grammar.h` | exterior massing, `growInterior`, `test_city` | the tiers a building is built from — one plan per tier and its first floor — from `(plan, params)` alone; `Envelope::None` = the old uniform offsets, `StreetWallSetback` = the 1916 New York base / setback / steps / shaft |

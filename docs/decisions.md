@@ -7167,3 +7167,66 @@ What is still open is phase 4, and it is not plumbing: a lanes city planned from
 `generate` **recipe** (`graphFromLevel` is file-oriented, and the producer's identity key would have
 to fold in the recipe and the terrain params or an edited recipe loads a stale city). Glenn on
 2026-09-20: "I want metro_v2 as it was" — so metro stays on the lattice until he asks.
+
+## ADR-0090 — A level authors its own districts, and metro_lanes is the first city that needs it
+
+**Status:** Provisional (2026-09-20). **Trigger:** Glenn: "Ideally I'd like to have the lanelab/metro
+combined with metro_test_v2. I like the freeway that goes around the city, but I would like to have
+more skyscrapers like in metro_test_v2. I also want the city simulation and bus routes. I would like
+you to make this new level not in lanelab but in the main levels folder."
+
+**Context.** `assets/levels/metro_lanes.json` is that city: the lane-built metro (ADR-0083/0089,
+ring freeway, diamonds, conformed ground) with metro_v2_test's whole sim — cars, pedestrians, 24
+buses on 4 derived routes, taxis, tiering. It composed without a line of code: the entity is
+`shape:"road"` with `"builder":"lanes"` (the second spelling, ADR-0089's amendment), the citysim
+block is metro_v2_test's, and because the bundle key never sees the level's sim knobs it reused
+metro's existing city bundle with no rebake.
+
+The skyline did not compose. Against metro_v2_test's 27 towers over 20 storeys it had 16, and 6 over
+40 against 14. The cause was structural, not a tuning miss: **`DistrictMap::hubs` only ever came
+from a metro RECIPE**, which plans hotspots and leaves them on the road entity for `lot_grow_setup`
+to forward. A city built from a baked lane graph has no recipe, so it had no hubs — one radial core
+at the origin, a single 300 m financial disc, and everything else graded to Residential. The comment
+in the shared reader said as much: "`hubs` and `center` cannot join them: they come from the road
+nets, not the JSON."
+
+**Decision.** They can now come from the JSON, because where a city's quarters are is content:
+
+```json
+"citysim": { "downtownRadius": 420, "midtownRadius": 750,
+             "districts": { "hubRadius": 260,
+                            "hubs": [ {"at": [0, 0], "kind": "financial"},
+                                      {"at": [-150, 950], "kind": "commercial"},
+                                      {"at": [-600, -900], "kind": "residential"} ] } }
+```
+
+* `kind` is `financial | commercial | residential | oldtown | industrial` — the `DistrictTag` order,
+  by name rather than by index, and an unknown quarter is housing rather than an error.
+* It is read in `readLotGrowParams`, the ONE reader the loader, the editor and the headless bake all
+  share, so a level cannot grow a different city in one of them (that function exists because it
+  already happened once).
+* A kind-0 hub reads as a downtown CORE: the radial rings are measured from it, so
+  `downtownRadius`/`midtownRadius` size its financial and commercial discs. Several of them make
+  several downtowns.
+* **Authored hubs win.** When a level names its districts, `lot_grow_setup` does not merge the nets'
+  planned ones in — a recipe silently outvoting the author is the bug, not the feature.
+* `road_products_probe <level>` prints what a recipe planned in exactly this syntax, so the districts
+  of a recipe-planned city can be copied onto a graph-built one.
+
+**Consequences, measured.** Tuning the one dial that now matters — how big downtown is — against
+metro_v2_test:
+
+| `downtownRadius` | buildings | towers >20 | >40 | financial district |
+|---|---|---|---|---|
+| 300 (no districts) | 1262 | 16 | 6 | 29 buildings |
+| 420 (shipped) | 1012 | **27** | 8 | 59 buildings |
+| 520 | 948 | 44 | 12 | 91 buildings |
+| metro_v2_test | 1396 | 27 | 14 | 46 buildings |
+
+420 matches metro_v2_test's headline (27 towers over 20 storeys, same tallest at 57 storeys / 184 m)
+and 520 is a one-line change for a denser skyline. What does NOT match is the total: 1012 against
+1396. That is the lanes builder, not the zoning — it paves true lane widths, shoulders and medians,
+so this city is 95 big blocks at 29.6% cover where the lattice metro is many more small ones. More
+towers, fewer mid-rise. A coarser parcel grain (`citysim.parcel`, piedmont's numbers) was tried and
+made it worse on both counts — 824 buildings and 26.3% cover — and was dropped.
+

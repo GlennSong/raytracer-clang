@@ -1,0 +1,259 @@
+{
+ "citysim": {
+  "buildChance": 0.9,
+  "buildLots": true,
+  "busMaxWalk": 220.0,
+  "busRoutes": 4,
+  "busStops": 14,
+  "buses": 24,
+  "cars": -1,
+  "carsPerLaneKm": 35.0,
+  "debugWidgets": false,
+  "detailDistance": 300,
+  "districts": {
+   "hubs": [
+    {
+     "at": [
+      0.0,
+      0.0
+     ],
+     "kind": "financial"
+    },
+    {
+     "at": [
+      -150.0,
+      950.0
+     ],
+     "kind": "commercial"
+    },
+    {
+     "at": [
+      -600.0,
+      -900.0
+     ],
+     "kind": "residential"
+    }
+   ]
+  },
+  "dormancy": true,
+  "downtownRadius": 420,
+  "facadeDistance": 950,
+  "hailChance": 0.25,
+  "hailMinMetres": 350.0,
+  "hoursPerSecond": 0.05,
+  "hubRadius": 260,
+  "localHz": 30.0,
+  "maxAmbient": 14000,
+  "midtownRadius": 750,
+  "pedDemoteRadius": 440.0,
+  "pedPromoteRadius": 300.0,
+  "pedestrians": -1,
+  "pedsPerKm": 120.0,
+  "perceptionReliability": 1.0,
+  "plinth": 0.45,
+  "seed": 9,
+  "sidewalk": 5.0,
+  "taxiFraction": 0.12,
+  "tiered": true,
+  "vehicles": "vehicles.lua",
+  "wander": false
+ },
+ "dayNight": {
+  "dayMinutes": 1440.0,
+  "timeOfDay": 0.32292
+ },
+ "entities": [
+  {
+   "id": 1,
+   "name": "streets",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "road": {
+    "builder": "lanes",
+    "graph": "assets/lanelab/metro_v2/metropolis_sky_lanelab.json"
+   },
+   "shape": "road"
+  }
+ ],
+ "environment": {
+  "clouds": {
+   "bottom": 900,
+   "coverage": 0.38,
+   "density": 0.05,
+   "lightSteps": 6,
+   "noiseScale": 0.0007,
+   "steps": 96,
+   "top": 1600,
+   "wind": 14
+  },
+  "sky": {
+   "aerial": 4.0,
+   "model": "scattering",
+   "turbidity": 2.0
+  },
+  "skyColor": [
+   0.55,
+   0.68,
+   0.86
+  ]
+ },
+ "lighting": {
+  "ambientMultiplier": 0.7,
+  "exposure": 0.7,
+  "sun": {
+   "castsShadow": true,
+   "color": [
+    1,
+    0.98,
+    0.94
+   ],
+   "direction": [
+    0.4,
+    0.72,
+    -0.32
+   ],
+   "intensity": 6.0
+  }
+ },
+ "name": "metro_lanes",
+ "player": {
+  "collider": {
+   "halfHeight": 0.4,
+   "radius": 0.3,
+   "shape": "capsule"
+  },
+  "friction": 0.5,
+  "position": [
+   -206.90752445298506,
+   11.143776578367255,
+   -903.1697294294636
+  ]
+ },
+ "terrain": {
+  "_comment": "metro_v2_test's terrain block minus the erode* keys (the lab's conformed grid, baked from the eroded source, is the eroded base here) \u2014 the lab's ground rendered by CDLOD (2026-09-08 wiring; enabled 2026-09-13 once the lab's lots grow in the terrain pre-pass so their pads reach it)",
+  "cdlod": {
+   "worldHalf": 1380
+  },
+  "heightScale": 13,
+  "material": {
+   "albedo": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "roughness": 1.0
+  },
+  "mountainAlongRange": true,
+  "mountainHeight": 180,
+  "mountainMaskHi": 0.4,
+  "mountainMaskLo": -0.1,
+  "mountainMaskScale": 0.001,
+  "mountainScale": 0.002,
+  "noiseScale": 0.0026,
+  "octaves": 6,
+  "rangeHeight": 260,
+  "rangeSpine": [
+   [
+    -1180,
+    -900
+   ],
+   [
+    -1120,
+    -300
+   ],
+   [
+    -1180,
+    300
+   ],
+   [
+    -1120,
+    900
+   ]
+  ],
+  "rangeVariation": 0.6,
+  "rangeWidth": 300,
+  "resolution": 900,
+  "rockLine": 90,
+  "seed": 11,
+  "size": 2760,
+  "snowLine": 230,
+  "tiltX": -0.045,
+  "warp": 0.35
+ },
+ "vegetation": {
+  "clearMargin": 4.0,
+  "clusterCount": 90,
+  "clusterRadius": 28,
+  "count": 22000,
+  "densityScale": 0.004,
+  "densityThreshold": -0.35,
+  "drawDistance": 1100,
+  "maxHeight": 150,
+  "maxScale": 1.4,
+  "maxSlopeDeg": 40,
+  "minHeight": 2.0,
+  "minScale": 0.7,
+  "region": 1300,
+  "seed": 31,
+  "spacingFactor": 0.75,
+  "species": [
+   {
+    "collide": true,
+    "kind": "script",
+    "script": "return flora.scatter_tree(seed, {species='pine'})",
+    "variants": 3
+   },
+   {
+    "collide": true,
+    "kind": "script",
+    "script": "return flora.scatter_tree(seed, {species='oak'})",
+    "variants": 2
+   },
+   {
+    "cuts": 4,
+    "faceted": true,
+    "kind": "rock",
+    "lumpScale": 0.45,
+    "lumps": 5,
+    "material": {
+     "albedo": [
+      0.26,
+      0.25,
+      0.24
+     ],
+     "roughness": 1.0
+    },
+    "sdfResolution": 18,
+    "skin": "sdf",
+    "smoothness": 0.22,
+    "variants": 3
+   }
+  ]
+ },
+ "vehicles": [
+  {
+   "position": [
+    -204.2121928734323,
+    10.349089737129155,
+    -895.6374530354201
+   ],
+   "recipe": "sedan",
+   "seed": 1,
+   "yaw": 0
+  },
+  {
+   "position": [
+    78.99974138619535,
+    -1.611770673026493,
+    -611.5238120767209
+   ],
+   "recipe": "sedan",
+   "seed": 2,
+   "yaw": 0
+  }
+ ],
+ "version": 1
+}

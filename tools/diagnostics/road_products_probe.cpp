@@ -10,6 +10,7 @@
 // a level from the lattice to the lanes builder.
 #include "engine/level_params.h"
 #include "engine/procgen/city/corridor_plan.h"   // --corridors: the freeway the recipe PLANNED
+#include "engine/procgen/city/metro.h"          // CityHub: where the recipe put the districts
 #include "engine/procgen/city/roads/road_builder.h"
 #include "engine/procgen/noise.h"
 #include "engine/procgen/terrain.h"
@@ -123,6 +124,23 @@ int main(int argc, char** argv) {
         std::printf("\nroad %zu — builder \"%s\"\n", i, b.name());
         std::printf("  plan     : %zu control nodes, %zu edges (the recipe's own graph)\n",
                     net.graph.nodes.size(), net.graph.edges.size());
+        // WHERE THE DISTRICTS ARE. A metro recipe plans hubs and leaves them on the net;
+        // the lot pass zones by the nearest one. A level built from a baked graph has no
+        // recipe, so it has no hubs unless it authors them (citysim.districts) — print
+        // them here in exactly the form a level authors, so one can be copied into the
+        // other.
+        if (!net.plan.cityHubs.empty()) {
+            static const char* kKind[] = {"financial", "commercial", "residential", "oldtown", "industrial"};
+            std::printf("  districts: %zu hubs — paste into citysim.districts.hubs:\n   {\"hubs\": [",
+                        net.plan.cityHubs.size());
+            for (std::size_t h = 0; h < net.plan.cityHubs.size(); ++h) {
+                const CityHub& c = net.plan.cityHubs[h];
+                const int k = c.kind >= 0 && c.kind < 5 ? c.kind : 2;
+                std::printf("%s{\"at\": [%.1f, %.1f], \"kind\": \"%s\"}", h ? ", " : "", c.pos.x, c.pos.y,
+                            kKind[k]);
+            }
+            std::printf("]}\n");
+        }
 
         const roads::GroundPlan gp = b.ground(in);
         if (gp.replaces()) {
