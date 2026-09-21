@@ -1853,21 +1853,21 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     // keeps canopies from overhanging the kerb.
     FlattenGrid keepOut;
     const double margin = veg.value("clearMargin", 3.0);
-#ifdef RT_ROADS_LANES
-    // A city that REPLACED the ground rather than carving it leaves no road footprint in
-    // `flatten`; its deck is the footprint. Asked first because it is the cheap test and the
-    // one that matters on a lane-built city.
-    const RoadDeckField* lanesDeck = g_lanes.deck.spines.empty() ? nullptr : &g_lanes.deck;
-#else
-    const RoadDeckField* lanesDeck = nullptr;
-#endif
-    if (!terrain.flatten.empty() || lanesDeck) {
+    // THE ROADS THEMSELVES. This pass now runs after the city (loadLevel defers it), so
+    // every builder's deck is in the world and the scatter can ask the asphalt directly.
+    // `flatten` stays as the second test because it also covers what is NOT road — the
+    // building pads and block grades a tree should equally keep off.
+    auto decks = std::make_shared<std::vector<const RoadDeckField*>>();
+    world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) {
+        if (!d.field.spines.empty()) decks->push_back(&d.field);
+    });
+    if (!terrain.flatten.empty() || !decks->empty()) {
         if (!terrain.flatten.empty()) keepOut = buildFlattenGrid(terrain.flatten);
         const TerrainParams& tp = terrain;
-        scatter.exclude = [&tp, &keepOut, margin, lanesDeck](double x, double z) {
-            if (lanesDeck) {
+        scatter.exclude = [&tp, &keepOut, margin, decks](double x, double z) {
+            for (const RoadDeckField* d : *decks) {
                 double y = 0;
-                if (lanesDeck->heightAt(x, z, margin, &y)) return true;
+                if (d->heightAt(x, z, margin, &y)) return true;
             }
             return !tp.flatten.empty() && flattenCovers(keepOut, tp.flatten, x, z, margin);
         };
@@ -2536,6 +2536,10 @@ void writeElevationMaps(const std::string& prefix, double half, double cell,
 bool LevelLoader::load(const std::string& path,
                        World& world, Renderer& renderer, RenderView& view,
                        AssetManager& assets, bool editorMode) {
+    // The scatter (trees, rocks, ground cover), HELD until the city exists so it can
+    // ask the roads where they are instead of a stand-in for them. Filled by the
+    // terrain block below, invoked after loadEntities.
+    std::function<void()> plantScatter;
     RT_PROFILE_ZONE_NAMED("levelLoad");
     g_loadedScriptFiles.clear();
     const auto tLoad0 = std::chrono::steady_clock::now();
@@ -3510,20 +3514,39 @@ bool LevelLoader::load(const std::string& path,
         entityGround = [carvedTp, carvedNoise, placeDilate](double x, double z) {
             return terrainHeight(*carvedTp, *carvedNoise, x, z, placeDilate);
         };
-        if (root.contains("vegetation"))
-            loadVegetation(root["vegetation"], terrainParams, terrainNoise, world,
-                           renderer, assets, levelDir, "veg",
-                           preLots.grown ? &preLots.lots : nullptr, placeDilate);
-        // A second, denser pass for ground cover (grass/flowers). Same scatter
-        // generator with its own params — typically a low maxSlopeDeg so it lands
-        // on the gentle, green ground (terrainColor reads steep slopes as rock).
-        if (root.contains("foliage"))
-            loadVegetation(root["foliage"], terrainParams, terrainNoise, world,
-                           renderer, assets, levelDir, "foliage", nullptr,
-                           placeDilate);
+        // PLANTED LAST, NOT HERE (Glenn, 2026-09-21: "If you're making them after you
+        // make the terrain but before the city that doesn't seem to make any sense now
+        // that you're receiving different data for how to conform the terrain. The trees
+        // like signs, bus stops, etc. would be done last and done in a way to avoid
+        // planting them in streets.")
+        //
+        // He is right, and it is the same lesson as the furniture: a scatter that runs
+        // before the roads exist can only avoid them through a PROXY — the flatten set,
+        // which a builder that replaces the ground does not fill — and every proxy in
+        // this pipeline has eventually disagreed with the asphalt. Deferred to after
+        // loadEntities, where the RoadDeck components exist and the scatter can ask the
+        // road itself. Signals, lamps and street signs already ran last; trees and rocks
+        // were the one pass that did not.
+        // CAPTURED BY VALUE, the three that do not outlive this block: `terrainParams`
+        // and `terrainNoise` are scoped to the terrain section and `placeDilate` to this
+        // block, so holding references to them and calling later reads freed stack (it
+        // segfaulted on the first run of exactly that). Copies are correct as well as
+        // safe: the scatter wants the ground AS IT IS NOW, fully carved.
+        plantScatter = [&, tp = terrainParams, nz = terrainNoise, placeDilate] {
+            if (root.contains("vegetation"))
+                loadVegetation(root["vegetation"], tp, nz, world,
+                               renderer, assets, levelDir, "veg",
+                               preLots.grown ? &preLots.lots : nullptr, placeDilate);
+            // A second, denser pass for ground cover (grass/flowers). Same scatter
+            // generator with its own params — typically a low maxSlopeDeg so it lands
+            // on the gentle, green ground (terrainColor reads steep slopes as rock).
+            if (root.contains("foliage"))
+                loadVegetation(root["foliage"], tp, nz, world,
+                               renderer, assets, levelDir, "foliage", nullptr,
+                               placeDilate);
+        };
     }
 
-    if (root.contains("entities"))
     // RT_POKE_REPORT=1: measure the REAL renderer's ground against the decks.
     // The headless probe approximated the CDLOD sample as "terrainHeight at the
     // test point with a dilated footprint" — but the device interpolates BETWEEN
@@ -3994,6 +4017,9 @@ bool LevelLoader::load(const std::string& path,
                      entityGround ? &entityGround : nullptr,
                      roadCache.empty() ? nullptr : &roadCache,
                      levelGround ? &levelGround : nullptr);
+        // THE CITY EXISTS NOW, so the scatter can ask the roads themselves where they
+        // are instead of asking a set that was only ever a stand-in for them.
+        if (plantScatter) { loadStage("scatter"); plantScatter(); }
 #ifdef RT_ROADS_LANES
         // A lab level has no terrain entity: the lanelab grid is the ground the lots grade
         // on and the building pads sample (published by loadLanesEntity).
