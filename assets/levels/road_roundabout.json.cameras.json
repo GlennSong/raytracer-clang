@@ -1,8 +1,0 @@
-{
-  "cameras": [
-    { "name": "Top", "position": [0, 220, 55], "forward": [0.0, -0.972, -0.235],
-      "lens": { "focalLength": 30, "sensorHeight": 24, "fStop": 0, "focusDistance": 220 } },
-    { "name": "Oblique", "position": [-120, 95, 130], "forward": [0.6, -0.45, -0.66],
-      "lens": { "focalLength": 34, "sensorHeight": 24, "fStop": 0, "focusDistance": 180 } }
-  ]
-}

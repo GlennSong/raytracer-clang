@@ -36,3 +36,6 @@ build-visionos-sim/
 build-visionos/
 build-visionos-dev/
 .DS_Store
+
+# Viewer camera bookmarks: per-machine editor state, never checked in (Glenn, 2026-09-20).
+*.cameras.json
