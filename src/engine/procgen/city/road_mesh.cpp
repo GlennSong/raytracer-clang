@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <map>
 #include <array>
+#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <unordered_map>
@@ -910,6 +911,14 @@ bool RoadDeckField::heightAt(double x, double z, double margin, double* outY) co
     auto it = cells_.find(k);
     if (it == cells_.end()) return false;
     const Vec2 q(x, z);
+    // WHICH DECK, WHEN TWO ARE STACKED HERE. Everything that asks this question in 2-D is at
+    // GRADE — a parked car, a painted bay, a crosswalk decal, a signal pole — while moving
+    // traffic reads its own link's profile (CityRenderSystem::deckYAt). So a lower LAYER wins
+    // outright over a nearer one: the street under an overpass is the surface, not the deck
+    // eight metres above it. Within a layer it is the nearest spine, as before. Every lattice
+    // city is one layer, so this changes nothing there; a lane-built city with a freeway over
+    // its streets was reading the freeway (metro_lanes: cars ±1 m off, 161 samples past 25 cm).
+    int bestLayer = INT_MAX;
     double bestD = 1e30, bestY = 0.0;
     for (const Seg& sg : it->second) {
         const UnionSpine& sp = spines[sg.spine];
@@ -923,7 +932,9 @@ bool RoadDeckField::heightAt(double x, double z, double margin, double* outY) co
         const double hw = sp.hw.size() == sp.points.size()
                               ? sp.hw[sg.i] + (sp.hw[sg.i + 1] - sp.hw[sg.i]) * t
                               : sp.halfWidth;
-        if (d > hw + margin || d >= bestD) continue;
+        if (d > hw + margin) continue;
+        if (sp.layer > bestLayer || (sp.layer == bestLayer && d >= bestD)) continue;
+        bestLayer = sp.layer;
         bestD = d;
         bestY = sp.yAbs[sg.i] + (sp.yAbs[sg.i + 1] - sp.yAbs[sg.i]) * t;
         // Superelevation: the lattice banks the deck by signedLateral *

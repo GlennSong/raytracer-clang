@@ -7163,6 +7163,32 @@ that made that possible:
   road builder both want the same city, and `obtainForLevel` does not memoise — under `RT_NOCACHE`
   a second ask would BUILD the city a second time.
 
+**Second amendment, 2026-09-20 — the deck and the kerb line, baked.** The first cut of the lanes
+builder answered two of the five products with nothing, and `docs/TECH_DEBT.md` said "fix when
+something actually wants them". metro_lanes wanted them within the day. Measured on it with both
+empty: traffic reported `decks=0` and sat a mean 0.067 m (worst 0.53 m) *under* the surface it drives
+on; no car parked in a marked bay; 22 signal poles stood in a carriageway; the deck-poke test found
+0 samples to measure; and junctions jammed four times worse than the lattice metro (1152 cars stopped
+in a box against 295). Everything the citysim places stands on the `RoadDeck` components it finds and
+measures its lateral placement off a `RoadEntity`'s `look.sidewalk` — a lane-built city gave it
+neither, so it fell back to the terrain beside the asphalt.
+
+So the lanes builder now hands back both, through the bundle like everything else it makes:
+
+* **The deck** is one `UnionSpine` per graph edge — the edge's resampled centreline and `EdgeSpec::z`,
+  the profile the pavement was actually laid to — with the CARRIAGEWAY half-width (lanes plus
+  shoulder, not the sidewalk), because the field answers "am I on the road".
+* **No junction pads**, and that is a statement rather than an omission: the lattice needs them
+  because a pad is an earcut with heights only at its boundary while the chain profile through the
+  node curves. The lanes pipeline's agree loop already drives node mismatch to millimetres, so the
+  edges' profiles MEET at a node and the nearest-spine answer is the same answer.
+* **The bands** are the pavement surface's own polygon set — outer rings and island holes alike are
+  kerb loops — plus the widest sidewalk any class asks for and the paving datum
+  (`lanesSidewalkRise`). The loader writes that width into the entity's `look`, so a city built from
+  a baked graph stops being read as a default 3.5 m band.
+* Both ride in the bundle (`putDeckField` / `putCurbBands`, `kLanesBuildTag` 2026-09-20.3), because
+  the loader reads products rather than building them, and a warm load must be the cold build.
+
 What is still open is phase 4, and it is not plumbing: a lanes city planned from a level's
 `generate` **recipe** (`graphFromLevel` is file-oriented, and the producer's identity key would have
 to fold in the recipe and the terrain params or an edited recipe loads a stale city). Glenn on

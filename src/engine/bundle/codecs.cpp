@@ -9,6 +9,7 @@ namespace bundle {
 
 namespace {
 constexpr uint32_t kMeshVersion = 1, kGridVersion = 1, kRoadGraphVersion = 1, kRoadEntityVersion = 1, kRingsVersion = 1;
+constexpr uint32_t kDeckVersion = 1, kBandVersion = 1;
 inline float f(double v) { return static_cast<float>(v); }
 }  // namespace
 
@@ -164,6 +165,118 @@ bool getRings(BinReader& r, std::vector<std::vector<Vec2>>& rings) {
     uint32_t v = 0; if (!r.magic("RING", &v) || v != kRingsVersion) return false;
     uint32_t n = 0; if (!r.get(n)) return false; rings.resize(n);
     for (std::vector<Vec2>& ring : rings) { uint32_t k = 0; if (!r.get(k)) return false; ring.resize(k); for (Vec2& q : ring) if (!r.get(q.x) || !r.get(q.y)) return false; }
+    return r.ok();
+}
+
+// --- the deck and the kerb band -------------------------------------------------------------------
+//
+// The lattice hands its deck straight to the loader because it meshes at load. A city built through
+// the bundle has to carry the same surface across, or everything the sim stands ON a road — moving
+// traffic, parked cars, painted bays, signal poles, crosswalk decals — falls back to the terrain
+// beside it and sinks into the asphalt (metro_lanes, measured: mean -0.067 m, worst -0.53 m).
+
+namespace {
+void putVec2s(BinWriter& w, const std::vector<Vec2>& v) {
+    w.put<uint32_t>(static_cast<uint32_t>(v.size()));
+    for (const Vec2& q : v) { w.put<double>(q.x); w.put<double>(q.y); }
+}
+bool getVec2s(BinReader& r, std::vector<Vec2>& v) {
+    uint32_t n = 0; if (!r.get(n)) return false; v.resize(n);
+    for (Vec2& q : v) if (!r.get(q.x) || !r.get(q.y)) return false;
+    return true;
+}
+void putDoubles(BinWriter& w, const std::vector<double>& v) {
+    w.put<uint32_t>(static_cast<uint32_t>(v.size()));
+    for (double d : v) w.put<double>(d);
+}
+bool getDoubles(BinReader& r, std::vector<double>& v) {
+    uint32_t n = 0; if (!r.get(n)) return false; v.resize(n);
+    for (double& d : v) if (!r.get(d)) return false;
+    return true;
+}
+}  // namespace
+
+void putDeckField(BinWriter& w, const RoadDeckField& d) {
+    w.magic("DECK", kDeckVersion);
+    w.put<uint32_t>(static_cast<uint32_t>(d.spines.size()));
+    for (const UnionSpine& s : d.spines) {
+        putVec2s(w, s.points);
+        putDoubles(w, s.yAbs);
+        putDoubles(w, s.hw);
+        putDoubles(w, s.crossSlope);
+        w.put<double>(s.halfWidth);
+        w.put<double>(s.travelEdgeFrac);
+        w.put<uint8_t>(static_cast<uint8_t>(s.closed));
+        w.put<uint8_t>(static_cast<uint8_t>(s.klass));
+        w.put<uint8_t>(s.access);
+        w.put<uint8_t>(s.accessBack);
+        w.put<uint8_t>(static_cast<uint8_t>(s.authoredDeck));
+        w.put<int32_t>(static_cast<int32_t>(s.layer));
+    }
+    w.put<uint32_t>(static_cast<uint32_t>(d.pads.size()));
+    for (const RoadDeckField::Tri& t : d.pads) {
+        const Vec3 v3[3] = {t.a, t.b, t.c};
+        for (const Vec3& p : v3) { w.put<double>(p.x); w.put<double>(p.y); w.put<double>(p.z); }
+    }
+}
+
+bool getDeckField(BinReader& r, RoadDeckField& d) {
+    uint32_t v = 0; if (!r.magic("DECK", &v) || v != kDeckVersion) return false;
+    uint32_t n = 0; if (!r.get(n)) return false; d.spines.assign(n, UnionSpine{});
+    for (UnionSpine& s : d.spines) {
+        if (!getVec2s(r, s.points) || !getDoubles(r, s.yAbs) || !getDoubles(r, s.hw) ||
+            !getDoubles(r, s.crossSlope))
+            return false;
+        uint8_t closed = 0, klass = 0, access = 0, accessBack = 0, authored = 0;
+        int32_t layer = 0;
+        if (!r.get(s.halfWidth) || !r.get(s.travelEdgeFrac) || !r.get(closed) || !r.get(klass) ||
+            !r.get(access) || !r.get(accessBack) || !r.get(authored) || !r.get(layer))
+            return false;
+        s.closed = closed != 0;
+        s.klass = static_cast<RoadClass>(klass);
+        s.access = access;
+        s.accessBack = accessBack;
+        s.authoredDeck = authored != 0;
+        s.layer = layer;
+    }
+    if (!r.get(n)) return false; d.pads.assign(n, RoadDeckField::Tri{});
+    for (RoadDeckField::Tri& t : d.pads) {
+        Vec3* v3[3] = {&t.a, &t.b, &t.c};
+        for (Vec3* p : v3) if (!r.get(p->x) || !r.get(p->y) || !r.get(p->z)) return false;
+    }
+    if (!r.ok()) return false;
+    d.buildIndex();            // the field arrives ready to query, as the mesher's does
+    return true;
+}
+
+void putCurbBands(BinWriter& w, const CurbBandAudit& b) {
+    w.magic("KERB", kBandVersion);
+    putRings(w, b.loops);
+    w.put<uint32_t>(static_cast<uint32_t>(b.mouthGaps.size()));
+    for (const auto& g : b.mouthGaps) {
+        w.put<double>(g.first.x); w.put<double>(g.first.y);
+        w.put<double>(g.second.x); w.put<double>(g.second.y);
+    }
+    putVec2s(w, b.junctions);
+    w.put<uint32_t>(static_cast<uint32_t>(b.junctionDegree.size()));
+    for (int deg : b.junctionDegree) w.put<int32_t>(static_cast<int32_t>(deg));
+    putDoubles(w, b.junctionMinAngle);
+    w.put<double>(b.sidewalkWidth);
+    w.put<double>(b.curbHeight);
+}
+
+bool getCurbBands(BinReader& r, CurbBandAudit& b) {
+    uint32_t v = 0; if (!r.magic("KERB", &v) || v != kBandVersion) return false;
+    if (!getRings(r, b.loops)) return false;
+    uint32_t n = 0; if (!r.get(n)) return false; b.mouthGaps.resize(n);
+    for (auto& g : b.mouthGaps)
+        if (!r.get(g.first.x) || !r.get(g.first.y) || !r.get(g.second.x) || !r.get(g.second.y))
+            return false;
+    if (!getVec2s(r, b.junctions)) return false;
+    if (!r.get(n)) return false; b.junctionDegree.resize(n);
+    for (int& deg : b.junctionDegree) { int32_t k = 0; if (!r.get(k)) return false; deg = k; }
+    if (!getDoubles(r, b.junctionMinAngle)) return false;
+    if (!r.get(b.sidewalkWidth) || !r.get(b.curbHeight)) return false;
     return r.ok();
 }
 

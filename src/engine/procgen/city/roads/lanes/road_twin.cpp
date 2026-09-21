@@ -1,4 +1,6 @@
 #include "engine/procgen/city/roads/lanes/road_twin.h"
+
+#include "engine/procgen/city/road_spec.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 
 #include <algorithm>
@@ -14,16 +16,8 @@ namespace {
 
 constexpr double kTwinTolerance = 1.5;   // Douglas-Peucker tolerance of the twin's spines (metres)
 
-struct Line { std::vector<Vec2> pts; std::vector<double> z, s; RoadClass k; double w = 8; bool deck = false; double lotsFrom = -1, lotsTo = -1; };
+struct Line { std::vector<Vec2> pts; std::vector<double> z, s; RoadClass k; double w = 8; bool deck = false; double lotsFrom = -1, lotsTo = -1; RoadSpec spec; };
 
-RoadClass classOf(const EdgeSpec& e) {
-    if (e.isRamp() || e.cls == "ramp") return RoadClass::Ramp;
-    if (e.cls == "freeway") return RoadClass::Freeway;
-    if (e.cls == "arterial") return RoadClass::Arterial;
-    if (e.cls == "collector") return RoadClass::Collector;
-    if (e.cls == "alley") return RoadClass::Alley;
-    return RoadClass::Local;
-}
 
 // Segment p+t(q-p) against a+u(b-a): true with t,u when the lines are not parallel.
 bool lineParams(const Vec2& p, const Vec2& q, const Vec2& a, const Vec2& b, double& t, double& u) {
@@ -60,6 +54,15 @@ std::vector<size_t> simplifyIndices(const std::vector<Vec2>& pts, double tol, do
 }
 
 }  // namespace
+
+RoadClass classOf(const EdgeSpec& e) {
+    if (e.isRamp() || e.cls == "ramp") return RoadClass::Ramp;
+    if (e.cls == "freeway") return RoadClass::Freeway;
+    if (e.cls == "arterial") return RoadClass::Arterial;
+    if (e.cls == "collector") return RoadClass::Collector;
+    if (e.cls == "alley") return RoadClass::Alley;
+    return RoadClass::Local;
+}
 
 RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots) {
     RoadEntity net; net.look.sidewalk = 3.5; net.look.autoRoundabout = false;   // lanelab owns its junctions
@@ -125,6 +128,17 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots) {
         // + clearance from every sampled centreline, so the width is where the embankment lives.
         const RoadClassSpec& cs = atGradeRamp ? r.graph.classes.at(r.graph.find(e.id)->cls) : r.graph.cls(e);
         L.w = 2.0 * (r.graph.hw(atGradeRamp ? *r.graph.find(e.id) : e) + cs.shoulder + kTwinTolerance + (deckEarthwork ? r.graph.rules.conformW : 0.0));
+        // THE CROSS-SECTION, so the city can park on it. `w` above is the LOT clearance band —
+        // padded by the twin tolerance and, on a deck, by the whole earthwork — and is not a
+        // street's actual asphalt. The sim's kerbside bays are laid in a road's own Parking band
+        // (NavLink::parkWidth, resolved from this spec by navRoadGraph), and a twin with no spec
+        // has no band, so a lane-built city parked 2249 cars on the verge and none in a bay.
+        // Freeways, ramps and deck runs get none: you do not park on them.
+        if (!deckEarthwork) {
+            const double carriageway = 2.0 * (r.graph.hw(atGradeRamp ? *r.graph.find(e.id) : e) + cs.shoulder);
+            const int perDir = std::max(1, std::max(cs.lanes.fwd, cs.lanes.back));
+            L.spec = roadSpecStreetParking(carriageway, perDir, cs.sidewalk, 0.15);
+        }
         // Corners only (Douglas-Peucker at 0.25 m), capped at `nodeSpacing` between nodes: a straight
         // street becomes ONE chord between its junctions. The lot pass insets each block face by
         // the sidewalk with a miter offset that collapses on runs of collinear vertices — a face
@@ -214,11 +228,19 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots) {
     // --- the graph ---
     for (size_t li = 0; li < lines.size(); ++li) {
         const Line& L = lines[li]; int prev = -1; double prevS = 0;
+        // RoadEdge::spec is an INDEX into the graph's own table: one entry per line, shared by
+        // every edge the line is chopped into.
+        int specIdx = -1;
+        if (!L.spec.bands.empty()) {
+            specIdx = static_cast<int>(net.graph.specs.size());
+            net.graph.specs.push_back(L.spec);
+        }
         auto node = [&](const Vec2& p, double z, double st) {
             const int n = net.graph.addNode(p, tol);
             if (L.deck) { net.graph.nodes[static_cast<size_t>(n)].elev = z; net.graph.nodes[static_cast<size_t>(n)].elevAbsolute = true; }
             if (prev >= 0 && prev != n) {
                 net.graph.addEdge(prev, n, L.w, L.k);
+                net.graph.edges.back().spec = specIdx;   // the band model rides the graph (roads-v2)
                 // outside the edge's lots_range the street is right-of-way: no block frontage, no rim lots
                 // (a landing street beyond the freeway; an arterial's run outside the ring). `baked` is
                 // exactly what growLotBuildingsOnNets skips as a block/lot source while keeping the

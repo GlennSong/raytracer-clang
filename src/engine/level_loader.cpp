@@ -481,6 +481,13 @@ static std::vector<RenderMesh> chunkMeshByCell(const RenderMesh& m, double cell)
 // first city's blocks, right-of-way and ground.
 struct LanesPublished {
     HeightField ground;                    // the lab's conformed terrain (a lab level's ground)
+    // THE PAVEMENT'S FOOTPRINT, published before the entities load. `terrain.flatten` is what
+    // everything that asks "did the city grade here" reads — and it means two things at once,
+    // "grade this" AND "do not scatter here". A builder that REPLACES the ground satisfies the
+    // first and silently drops the second, so the vegetation scatter planted trees down the
+    // middle of the roads (Glenn, 2026-09-20: "There are trees in the roadways"). The deck IS
+    // the footprint, so consumers that run before the RoadDeck components exist read it here.
+    RoadDeckField deck;
     engine::RoadGraph row;                 // freeway + ramp edges of the class-faithful twin, for the lot pass's keep-out
     double sidewalk = 4.0;                 // the citysim sidewalk, read before entities load
     std::vector<engine::Poly2> blocks;     // the lab's city blocks: the pavement's holes, inset by the sidewalk
@@ -653,6 +660,15 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     buildIn.entityIndex = entityIndex;
     roads::RoadBuilder& builder = roads::roadBuilderFor(roadBlock);
     roads::RoadProducts built = builder.build(buildIn);
+    // A CITY BUILDER KNOWS ITS OWN SIDEWALK. The entity's `look` is the recipe's, and a road
+    // built from a baked graph has no recipe — so the citysim read a default 3.5 m band beside
+    // a 5 m city and put its bays, poles and crosswalks in the wrong place. Take the width the
+    // builder actually paved.
+    if (built.bands.sidewalkWidth > 0) {
+        net.look.sidewalk = built.bands.sidewalkWidth;
+        if (built.bands.curbHeight > 0) net.look.curb = built.bands.curbHeight;
+        if (engine::RoadEntity* stored = world.get<engine::RoadEntity>(e)) stored->look = net.look;
+    }
     RoadDeckField deck = std::move(built.deck);
     if (!built.bands.loops.empty()) {
         engine::RoadBandDebug band;
@@ -692,7 +708,7 @@ static void loadLanesEntity(const json& ent, World& world, AssetManager& assets,
     roadBlock["builder"] = "lanes";
 
     const auto t0 = std::chrono::steady_clock::now();
-    const RoadEntity net;                 // the lanes builder plans from its graph, not from nodes
+    RoadEntity net;                       // the lanes builder plans from its graph, not from nodes
     roads::RoadBuildInput in;
     in.road = &net;
     in.options = roadBlock;
@@ -709,6 +725,22 @@ static void loadLanesEntity(const json& ent, World& world, AssetManager& assets,
     for (const roads::RoadMesh& rm : built.meshes) tris += rm.mesh.indices.size() / 3;
     spawnRoadMeshes(ent, built.meshes, proto, world, assets,
                     "lanelab:" + std::to_string(index), doc, false);
+    // THE DECK, on this spelling too. The citysim stands everything it places on the RoadDeck
+    // components it finds in the world, and reads the sidewalk band off a RoadEntity's look —
+    // so a lab level needs both as much as a road-entity one does.
+    if (!built.bands.loops.empty()) {
+        engine::RoadBandDebug band;
+        band.loops = built.bands.loops;
+        band.mouthGaps = built.bands.mouthGaps;
+        band.sidewalkWidth = built.bands.sidewalkWidth;
+        world.add<engine::RoadBandDebug>(doc, std::move(band));
+    }
+    if (built.bands.sidewalkWidth > 0) {
+        net.look.sidewalk = built.bands.sidewalkWidth;
+        if (built.bands.curbHeight > 0) net.look.curb = built.bands.curbHeight;
+    }
+    if (!built.deck.empty()) world.add<RoadDeck>(doc, RoadDeck{std::move(built.deck)});
+    world.add<RoadEntity>(doc, net);      // an empty graph, but its LOOK is the city's
     publishCityProducts(b, in, built, world);
     LOG_INFO << "[lanelab] e" << index << ": " << built.meshes.size() << " cell meshes, " << tris
              << " triangles, loaded in "
@@ -1820,12 +1852,24 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     // right up to the streets without a hand-authored clear circle. The margin
     // keeps canopies from overhanging the kerb.
     FlattenGrid keepOut;
-    if (!terrain.flatten.empty()) {
-        keepOut = buildFlattenGrid(terrain.flatten);
-        const double margin = veg.value("clearMargin", 3.0);
+    const double margin = veg.value("clearMargin", 3.0);
+#ifdef RT_ROADS_LANES
+    // A city that REPLACED the ground rather than carving it leaves no road footprint in
+    // `flatten`; its deck is the footprint. Asked first because it is the cheap test and the
+    // one that matters on a lane-built city.
+    const RoadDeckField* lanesDeck = g_lanes.deck.spines.empty() ? nullptr : &g_lanes.deck;
+#else
+    const RoadDeckField* lanesDeck = nullptr;
+#endif
+    if (!terrain.flatten.empty() || lanesDeck) {
+        if (!terrain.flatten.empty()) keepOut = buildFlattenGrid(terrain.flatten);
         const TerrainParams& tp = terrain;
-        scatter.exclude = [&tp, &keepOut, margin](double x, double z) {
-            return flattenCovers(keepOut, tp.flatten, x, z, margin);
+        scatter.exclude = [&tp, &keepOut, margin, lanesDeck](double x, double z) {
+            if (lanesDeck) {
+                double y = 0;
+                if (lanesDeck->heightAt(x, z, margin, &y)) return true;
+            }
+            return !tp.flatten.empty() && flattenCovers(keepOut, tp.flatten, x, z, margin);
         };
     }
 
@@ -2593,6 +2637,8 @@ bool LevelLoader::load(const std::string& path,
             g_lanes.sidewalk = root.contains("citysim") && root["citysim"].is_object() ? root["citysim"].value("sidewalk", 4.0) : 4.0;
             g_lanes.blocks = engine::roads::lanes::blocksFromHoles(cp.holes, 1.5, g_lanes.sidewalk);
             g_lanes.row = cp.row;
+            g_lanes.deck = cp.deck;
+            g_lanes.deck.buildIndex();      // queried by the scatter, below, and by the poke report
             LOG_INFO << "[lanelab] " << g_lanes.blocks.size() << " city blocks published for the terrain pre-pass";
             auto fbTp = std::make_shared<TerrainParams>(readTerrainParams(root["terrain"]));
             fbTp->erodedBase = sharedEroded;          // the fallback keeps whatever base the level had; no recursion
@@ -3517,20 +3563,65 @@ bool LevelLoader::load(const std::string& path,
             // reconciled chain profiles the mesher rides, not the carve proxy.
             long n = 0, poke = 0, pokeCovered = 0, pokeHole = 0;
             double worst = 0, wx = 0, wz = 0;
+            // WHAT THERE IS TO MEASURE. A lattice level re-derives its chains from the recipe
+            // nets the pre-pass ran; a city built by another builder has no recipe to re-derive
+            // and publishes its deck instead (RoadDeck), which IS the surface the question is
+            // about. Without this the report walked an empty preNets list on a lane-built city
+            // and answered "0 of 0 samples" — a gate that cannot fail is not a gate.
+            struct PokeSet {
+                std::vector<UnionSpine> spines;
+                std::vector<std::vector<double>> profs;
+                double sidewalk = 3.5, lift = 0.08;
+            };
+            std::vector<PokeSet> pokeSets;
             for (const engine::RoadEntity& net : preNets) {
-                std::vector<UnionSpine> spines = engine::roadNetWeldSpines(
+                PokeSet ps;
+                ps.sidewalk = net.look.sidewalk;
+                ps.lift = net.look.lift;
+                ps.spines = engine::roadNetWeldSpines(
                     engine::roadNetConstrainedGraph(net, levelGround));
                 // The SAME arguments the carve passes (road_net.cpp
                 // roadNetConformRegions), or this report measures a different
                 // deck than the one the terrain was cut to.
                 const engine::DesignRules pokeRules;
-                std::vector<std::vector<double>> profs = engine::weldChainProfiles(
-                    spines, levelGround, 0.0, /*maxGrade=*/0.08,
+                ps.profs = engine::weldChainProfiles(
+                    ps.spines, levelGround, 0.0, /*maxGrade=*/0.08,
                     net.look.sidewalk + 4.0,
                     net.look.perClassGrade ? &pokeRules : nullptr);
-                if (std::getenv("RT_POKE_SITE") || std::getenv("RT_JUNCTION_DUMP")) {
+                pokeSets.push_back(std::move(ps));
+            }
+#ifdef RT_ROADS_LANES
+            // ...from the BUNDLE, not from the world. This report runs in the terrain section,
+            // hundreds of lines before loadEntities, so the RoadDeck components a lane-built
+            // city publishes do not exist yet — reading the world here finds nothing and the
+            // report silently answers "0 of 0" all over again. The city's deck is already on
+            // disk in the bundle the terrain pre-pass obtained a moment ago.
+            if (pokeSets.empty() && g_lanes.bundle) {
+                engine::roads::lanes::CityProducts cp;
+                std::string pokeErr;
+                if (engine::roads::lanes::readCityProducts(*g_lanes.bundle, 0, cp, &pokeErr) &&
+                    !cp.deck.spines.empty()) {
+                    PokeSet ps;
+                    ps.sidewalk = g_lanes.sidewalk;
+                    ps.lift = 0.0;               // a published deck's yAbs IS the surface
+                    ps.spines = cp.deck.spines;
+                    ps.profs.reserve(ps.spines.size());
+                    for (const UnionSpine& sp : ps.spines) ps.profs.push_back(sp.yAbs);
+                    pokeSets.push_back(std::move(ps));
+                } else if (!pokeErr.empty()) {
+                    LOG_WARN << "[poke] no deck to measure: " << pokeErr;
+                }
+            }
+#endif
+            for (const PokeSet& pokeSet : pokeSets) {
+                const std::vector<UnionSpine>& spines = pokeSet.spines;
+                const std::vector<std::vector<double>>& profs = pokeSet.profs;
+                // The site/junction dumps re-derive the recipe's own graph, so they only mean
+                // anything for a lattice net; a published deck has no recipe behind it.
+                if (!preNets.empty() &&
+                    (std::getenv("RT_POKE_SITE") || std::getenv("RT_JUNCTION_DUMP"))) {
                     RoadGraph gFp =
-                        engine::roadNetConstrainedGraph(net, levelGround);
+                        engine::roadNetConstrainedGraph(preNets.front(), levelGround);
                     double fp = 0;
                     for (std::size_t si2 = 0; si2 < spines.size(); ++si2)
                         fp += spines[si2].points.front().x * (si2 + 1) * 1e-3;
@@ -3622,7 +3713,7 @@ bool LevelLoader::load(const std::string& path,
                         }
                         std::ofstream jf(jpath, std::ios::app);
                         jf << "# junction dump at (" << jx << "," << jz << ") r=" << jr
-                           << " net.sidewalk=" << net.look.sidewalk << "\n";
+                           << " net.sidewalk=" << pokeSet.sidewalk << "\n";
                         const Vec2 J(jx, jz);
                         for (const auto& kv : arms) {
                             const Vec2 nv(kv.first.first / 8.0, kv.first.second / 8.0);
@@ -3721,7 +3812,7 @@ bool LevelLoader::load(const std::string& path,
                 for (std::size_t si = 0; si < spines.size(); ++si) {
                     const auto& pts = spines[si].points;
                     if (profs[si].size() < 2) continue;
-                    const double hw = spines[si].halfWidth + net.look.sidewalk - 0.3;
+                    const double hw = spines[si].halfWidth + pokeSet.sidewalk - 0.3;
                     for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
                         Vec2 d2v = pts[i + 1] - pts[i];
                         const double L = d2v.length();
@@ -3738,7 +3829,7 @@ bool LevelLoader::load(const std::string& path,
                                 0.0;
                             for (int li = -lats; li <= lats; ++li) {
                                 const Vec2 q = qc + nrm * (hw * li / (double)lats);
-                                const double deck = deckNearest(q, ownDeck) + net.look.lift;
+                                const double deck = deckNearest(q, ownDeck) + pokeSet.lift;
                                 const double fx = q.x / step, fz = q.y / step;
                                 const int gi = (int)std::floor(fx), gj = (int)std::floor(fz);
                                 const double u = fx - gi, v = fz - gj;

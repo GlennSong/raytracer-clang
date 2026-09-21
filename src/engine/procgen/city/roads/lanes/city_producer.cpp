@@ -19,7 +19,7 @@
 namespace engine {
 namespace roads::lanes {
 
-const char* const kLanesBuildTag = "2026-09-20.2";
+const char* const kLanesBuildTag = "2026-09-20.6";   // .6: the deck field answers the BLENDED height the pavement was drawn at
 
 namespace {
 using bundle::BinReader;
@@ -159,6 +159,80 @@ std::string citySectionPrefix(int ordinal) { return "city/e" + std::to_string(or
 
 RoadLabGraph loadCityGraph(const CityEntity& e) { return e.inlineGraph ? RoadLabGraph::fromJson(e.block, ".") : RoadLabGraph::load(e.graphPath); }
 
+// THE DRIVING SURFACE THE LANES BUILT, as the field everything stands on. One spine per graph
+// edge: the edge's own resampled centreline and the profile the pavement was laid to (EdgeSpec::z
+// is the deck, not the terrain). The half-width is the CARRIAGEWAY's — lanes plus shoulder, not
+// the sidewalk — because this answers "am I on the road", and a car on the pavement edge is not.
+// No junction pads: a lane city has no separate pad surface, its ribbons simply overlap, and each
+// edge's profile is defined right through the node.
+static RoadDeckField deckFromResult(const Result& r) {
+    RoadDeckField d;
+    d.spines.reserve(r.graph.edges.size());
+    for (std::size_t ei = 0; ei < r.graph.edges.size(); ++ei) {
+        const EdgeSpec& e = r.graph.edges[ei];
+        if (e.xy.size() < 2 || e.z.size() != e.xy.size()) continue;
+        const auto it = r.graph.classes.find(e.cls);
+        const double shoulder = it != r.graph.classes.end() ? it->second.shoulder : 0.0;
+        const double lanes = std::max(1, e.laneCount()) * e.lanes.w + e.lanes.gap;
+        UnionSpine s;
+        s.points = e.xy;
+        // THE HEIGHT THE PAVEMENT WAS DRAWN AT, not the height this edge alone wanted.
+        // EdgeSpec::z is the edge's OWN solved profile; within blendLen of a higher-ranked
+        // road the drawn deck is DeckHeight::deckRoad — the partner's blend — and the two
+        // differ by the junction's mismatch. Measured on metro_lanes with the own profile:
+        // 171 of 1639 traffic samples past 25 cm, worst 1.07 m, every one of them beside a
+        // merge. A deck field that does not answer what was drawn is worse than none.
+        s.yAbs.reserve(e.xy.size());
+        for (std::size_t k = 0; k < e.xy.size(); ++k)
+            s.yAbs.push_back(r.heights ? r.heights->deckRoad(static_cast<int>(ei), e.xy[k]) : e.z[k]);
+        s.halfWidth = lanes * 0.5 + shoulder;
+        s.klass = classOf(e);
+        s.authoredDeck = e.isRamp() || s.klass == RoadClass::Freeway;
+        // A road that bridges is a LAYER above the one it crosses, which is how a 2-D height
+        // query tells them apart (RoadDeckField::heightAt). The build already measured it.
+        const auto bl = r.bridgeLen.find(e.id);
+        s.layer = bl != r.bridgeLen.end() && bl->second > 0.0 ? 1 : 0;
+        d.spines.push_back(std::move(s));
+    }
+    d.buildIndex();
+    return d;
+}
+
+// THE KERB LINE: the boundary of the driving surface itself, which is what the city map draws a
+// sidewalk against and what street furniture stands clear of. The lanes pavement already holds it
+// as a polygon set — outers and holes alike are kerb loops, an island's kerb is still a kerb.
+static CurbBandAudit bandsFromResult(const Result& r) {
+    CurbBandAudit b;
+    for (const Polygon2& poly : r.pavement.surface) {
+        if (poly.outer.size() >= 3) b.loops.push_back(poly.outer);
+        for (const Ring& h : poly.holes)
+            if (h.size() >= 3) b.loops.push_back(h);
+    }
+    // The widest sidewalk any class asks for: the band the loader falls back to, and what the
+    // citysim reads as "how far from the kerb does the pavement reach".
+    for (const auto& [name, spec] : r.graph.classes) {
+        (void)name;
+        b.sidewalkWidth = std::max(b.sidewalkWidth, spec.sidewalk);
+    }
+    b.curbHeight = lanesSidewalkRise();
+    // Junctions, for the audits that ask how sharp a city's corners are: a node where three or
+    // more edge ENDS meet, counted from the resolved spines rather than the authored graph.
+    std::map<std::pair<long, long>, int> deg;
+    auto key = [](const Vec2& p) { return std::make_pair(std::lround(p.x * 10), std::lround(p.y * 10)); };
+    for (const EdgeSpec& e : r.graph.edges) {
+        if (e.xy.size() < 2) continue;
+        ++deg[key(e.xy.front())];
+        ++deg[key(e.xy.back())];
+    }
+    for (const auto& [k, n] : deg) {
+        if (n < 3) continue;
+        b.junctions.push_back(Vec2(k.first / 10.0, k.second / 10.0));
+        b.junctionDegree.push_back(n);
+        b.junctionMinAngle.push_back(-1.0);       // not measured here; the mesher's own audit does
+    }
+    return b;
+}
+
 CityProducts cityProductsFromResult(const Result& r, double renderCell, bool withInvariants) {
     CityProducts p; p.cell = renderCell; const auto t0 = std::chrono::steady_clock::now();
     if (r.hasTerrain) { p.hasTerrain = true; p.ground.x0 = r.terrain.x0; p.ground.y0 = r.terrain.y0; p.ground.res = r.terrain.res; p.ground.nx = r.terrain.nx; p.ground.ny = r.terrain.ny; p.ground.z = r.terrain.z; }
@@ -169,6 +243,8 @@ CityProducts cityProductsFromResult(const Result& r, double renderCell, bool wit
     for (const RoadNode& n : p.twin.graph.nodes) p.row.nodes.push_back(n);
     for (const RoadEdge& e : p.twin.graph.edges) if (e.klass == RoadClass::Freeway || e.klass == RoadClass::Ramp) p.row.edges.push_back(e);
     p.holes = pavementHoles(r, 2000.0);
+    p.deck = deckFromResult(r);
+    p.bands = bandsFromResult(r);
     const double tTwin = secondsSince(t0); const auto t1 = std::chrono::steady_clock::now();
     size_t triangles = 0, bytes = 0; nlohmann::json materials = nlohmann::json::array();
     std::vector<NamedMesh> named = buildMeshes(r); const double tMeshes = secondsSince(t1); const auto t2 = std::chrono::steady_clock::now();
@@ -192,7 +268,7 @@ CityProducts cityProductsFromResult(const Result& r, double renderCell, bool wit
     if (withInvariants) for (const Check& c : invariants(r)) inv.push_back({{"name", c.name}, {"ok", c.ok}, {"detail", c.detail}});
     std::map<std::string, double> timings = r.timings; timings["twin"] = tTwin; timings["meshes"] = tMeshes; timings["pack"] = tPack; if (withInvariants) timings["invariants"] = secondsSince(t3);
     p.report = {{"summary", summary(r)}, {"invariants", inv}, {"checked", withInvariants}, {"timings", timings}, {"seconds", r.seconds}, {"lanes", r.lanes.lanes.size()}, {"triangles", triangles},
-                {"meshBytes", bytes}, {"materials", materials}, {"cells", p.cells.size()}, {"holes", p.holes.size()}, {"twinNodes", p.twin.graph.nodes.size()}, {"twinEdges", p.twin.graph.edges.size()},
+                {"meshBytes", bytes}, {"materials", materials}, {"cells", p.cells.size()}, {"holes", p.holes.size()}, {"deckSpines", p.deck.spines.size()}, {"kerbLoops", p.bands.loops.size()}, {"twinNodes", p.twin.graph.nodes.size()}, {"twinEdges", p.twin.graph.edges.size()},
                 {"navNodes", p.nav.nodes.size()}, {"navEdges", p.nav.edges.size()}, {"rowEdges", p.row.edges.size()}, {"hasTerrain", p.hasTerrain}};
     return p;
 }
@@ -205,6 +281,8 @@ void writeCityProducts(bundle::BundleWriter& w, int ordinal, const CityProducts&
     { BinWriter b; bundle::putRoadGraph(b, p.nav); w.add(pre + "roads/nav", b.bytes); }
     { BinWriter b; bundle::putRoadGraph(b, p.row); w.add(pre + "roads/row", b.bytes); }
     { BinWriter b; bundle::putRings(b, p.holes); w.add(pre + "blocks/holes", b.bytes); }
+    { BinWriter b; bundle::putDeckField(b, p.deck); w.add(pre + "roads/deck", b.bytes); }
+    { BinWriter b; bundle::putCurbBands(b, p.bands); w.add(pre + "roads/bands", b.bytes); }
     std::map<std::pair<int, int>, nlohmann::json> cells;
     for (const CityCellMesh& c : p.cells) {
         BinWriter b; bundle::putPackedMesh(b, c.mesh);
@@ -231,6 +309,11 @@ bool readCityProducts(const bundle::Bundle& b, int ordinal, CityProducts& p, std
     if (!section("roads/nav", v)) return fail("roads/nav: missing"); { BinReader r(v.data, v.size); if (!bundle::getRoadGraph(r, p.nav)) return fail("roads/nav: unreadable"); }
     if (!section("roads/row", v)) return fail("roads/row: missing"); { BinReader r(v.data, v.size); if (!bundle::getRoadGraph(r, p.row)) return fail("roads/row: unreadable"); }
     if (!section("blocks/holes", v)) return fail("blocks/holes: missing"); { BinReader r(v.data, v.size); if (!bundle::getRings(r, p.holes)) return fail("blocks/holes: unreadable"); }
+    // The deck and the kerb line (2026-09-20): a bundle baked before they existed has neither,
+    // and the tag bump that introduced them means one cannot be loaded — so a missing section
+    // here is a hard error, not a silent city the sim would sink into.
+    if (!section("roads/deck", v)) return fail("roads/deck: missing"); { BinReader r(v.data, v.size); if (!bundle::getDeckField(r, p.deck)) return fail("roads/deck: unreadable"); }
+    if (!section("roads/bands", v)) return fail("roads/bands: missing"); { BinReader r(v.data, v.size); if (!bundle::getCurbBands(r, p.bands)) return fail("roads/bands: unreadable"); }
     const nlohmann::json cells = b.json(pre + "cells"); if (cells.is_null()) return fail("cells: missing");
     p.cells.clear();
     for (const nlohmann::json& c : cells.value("cells", nlohmann::json::array())) {

@@ -45,6 +45,8 @@ public:
         RoadProducts out;
         const lanes::CityProducts* p = products(in);
         if (!p) return out;
+        out.deck = p->deck;                            // the surface everything stands ON
+        out.bands = p->bands;                          // and the kerb line it stands clear of
         out.row = p->row;                              // the lot pass keeps out of the freeway
         for (const lanes::Ring& h : p->holes) out.holes.push_back(h);   // un-inset: the caller insets by its own sidewalk
         for (const lanes::CityCellMesh& c : p->cells) {

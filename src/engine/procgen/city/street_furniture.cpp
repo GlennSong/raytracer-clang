@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <map>
 
 namespace engine {
@@ -16,6 +17,38 @@ StreetFurniturePlan planStreetFurniture(
     // Grade-separated links ride a bridge deck this far up per layer — the same
     // constant CityRenderSystem uses, so poles on a bridge stand on its deck.
     const Real kLayerLift = 5.8;
+    // How far a pole looks for asphalt that is not its own junction's, and how far it may be
+    // walked to escape it before the placement is abandoned as not-a-corner.
+    const Real kPoleSearch = 26.0, kPoleMaxWalk = 12.0, kPoleDropInside = 1.5;
+
+    // Every link bucketed by cell, so "what asphalt is near this point" is a few dozen
+    // segment tests rather than the city's thousands.
+    const Real kLinkCell = 32.0;
+    std::unordered_map<long long, std::vector<int>> poleGrid;
+    auto cellOf = [](int cx, int cz) {
+        return static_cast<long long>(cx) * 73856093LL ^ static_cast<long long>(cz) * 19349663LL;
+    };
+    for (int li2 = 0; li2 < nav.linkCount(); ++li2) {
+        const NavLink& L2 = nav.links[li2];
+        const Vec2 a = nav.nodes[L2.from], b = nav.nodes[L2.to];
+        const int x0 = static_cast<int>(std::floor(std::min(a.x, b.x) / kLinkCell));
+        const int x1 = static_cast<int>(std::floor(std::max(a.x, b.x) / kLinkCell));
+        const int z0 = static_cast<int>(std::floor(std::min(a.y, b.y) / kLinkCell));
+        const int z1 = static_cast<int>(std::floor(std::max(a.y, b.y) / kLinkCell));
+        for (int cx = x0; cx <= x1; ++cx)
+            for (int cz = z0; cz <= z1; ++cz) poleGrid[cellOf(cx, cz)].push_back(li2);
+    }
+    auto forEachLinkNear = [&](const Vec2& q, Real radius, const std::function<void(int)>& fn) {
+        const int r = static_cast<int>(std::ceil(radius / kLinkCell));
+        const int cx = static_cast<int>(std::floor(q.x / kLinkCell));
+        const int cz = static_cast<int>(std::floor(q.y / kLinkCell));
+        for (int dx = -r; dx <= r; ++dx)
+            for (int dz = -r; dz <= r; ++dz) {
+                auto it = poleGrid.find(cellOf(cx + dx, cz + dz));
+                if (it == poleGrid.end()) continue;
+                for (int li2 : it->second) fn(li2);
+            }
+    };
 
     // SIGNALS: one per (junction, approach BEARING) — matching the sim's
     // SignalController for real this time. Two mismatches used to break the
@@ -127,6 +160,53 @@ StreetFurniturePlan planStreetFurniture(
                                                      // gore, not a corner
         }
         Vec2 corner = node - d * t + right * w;
+        // ...AND OUT OF EVERY OTHER ROAD'S CARRIAGEWAY. The back-off above reasons about the
+        // ARMS AT THIS NODE, which is all a lattice city has near a corner. A lane-built city
+        // puts a freeway carriageway or a ramp gore right past the end of a street — no arm of
+        // this node, and 18 m of asphalt the pole stood in the middle of (metro_lanes: 22 of
+        // 292 poles). Push it clear of any link it is inside, iterating because clearing one
+        // can enter another, and giving up rather than walking a pole across the city.
+        Real residual = 0;
+        for (int pass = 0; pass < 5; ++pass) {
+            Vec2 push(0, 0);
+            Real worst = 0;
+            forEachLinkNear(corner, kPoleSearch, [&](int ol) {
+                if (ol == li) return;
+                const engine::NavLink& O = nav.links[ol];
+                const Vec2 a = nav.nodes[O.from], b = nav.nodes[O.to];
+                const Vec2 ab = b - a;
+                const Real L2 = ab.lengthSquared();
+                const Real u = L2 < Real(1e-9) ? Real(0) : std::clamp(dot(corner - a, ab) / L2, Real(0), Real(1));
+                const Vec2 foot = a + ab * u;
+                Vec2 away = corner - foot;
+                const Real dist = away.length();
+                const Real need = O.width * Real(0.5) + p.curbGap;
+                if (dist >= need) return;
+                if (dist < Real(1e-6)) {              // dead centre: step off sideways
+                    const Vec2 n2(-ab.y, ab.x);
+                    const Real nl = n2.length();
+                    away = nl > Real(1e-9) ? n2 * (Real(1) / nl) : Vec2(1, 0);
+                } else {
+                    away = away * (Real(1) / dist);
+                }
+                const Real gap = need - dist;
+                if (gap > worst) { worst = gap; push = away * gap; }
+            });
+            residual = worst;
+            if (worst <= Real(1e-3)) break;
+            if ((corner + push - node).length() > kPoleMaxWalk) break;   // not a corner any more
+            corner = corner + push;
+            residual = 0;
+        }
+        // A CORNER INSIDE A FREEWAY IS NOT A STREET CORNER — but a corner a few centimetres
+        // inside its OWN street is just a kerb. A two-way road is two links sharing one
+        // centreline and one width, so every correctly-placed pole reads as marginally inside
+        // the opposite direction's carriageway; dropping on any residual at all threw away 148
+        // of metro's 288 signals and made its junctions worse. Only a pole genuinely BURIED —
+        // metro_lanes' worst sat 18.6 m inside a freeway, which no back-off along a kerb can
+        // reach — is discarded. The sim's SignalController is unaffected either way: it
+        // signalises a junction by its approaches, and these spots are what gets DRAWN.
+        if (residual > kPoleDropInside) continue;
         SignalSpot s;
         s.base = Vec3(corner.x, gy(corner.x, corner.y) + L.layer * kLayerLift,
                       corner.y);

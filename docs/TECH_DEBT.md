@@ -465,15 +465,18 @@ up, they drift.
   `CityRenderSystem::build` 636, `buildCarMesh` 618, `buildMetro` 577,
   `LevelScene::load` 490 — and `loadVegetation` 493, which has its own entry
   above and has DOUBLED since that entry was written.
-- **The lanes builder answers two of the five products with nothing** (2026-09-20,
-  ADR-0089 amendment). `RoadProducts::deck` and `::bands` come back empty from
-  `"builder": "lanes"`: a lane city's collidable meshes ARE the surface, and its kerbs are
-  geometry rather than an audited loop. Nothing regressed — `loadLanesEntity` never
-  published a `RoadDeck` or a `RoadBandDebug` either — but it means anything that reads a
-  road's deck (furniture that must stand ON it) or its kerb bands (the city map's
-  sidewalks) silently gets less on a lanes level than on a lattice one. `road_products_probe
-  <level>` prints both as zeros, which is how to notice. Fix when something actually wants
-  them, and make the probe's zeros a gate then.
+- ~~**The lanes builder answers two of the five products with nothing**~~ **FIXED
+  2026-09-20.** `RoadProducts::deck` and `::bands` came back empty from
+  `"builder": "lanes"`, and it was not harmless: on metro_lanes the citysim had nothing to
+  stand anything on. Measured before the fix — traffic `decks=0`, cars a mean 0.067 m and a
+  worst 0.53 m *under* the surface they drive on; 0 cars in a marked bay; 22 signal poles
+  standing in a carriageway; the deck-poke test finding 0 samples to measure; junctions
+  jamming 4x worse than the lattice metro (1152 cars stopped in a box against 295). The deck
+  is now one `UnionSpine` per graph edge carrying the profile the pavement was laid to, the
+  bands are the pavement surface's own kerb loops, both baked into the city bundle
+  (`kLanesBuildTag` 2026-09-20.3) so a warm load and a cold build agree. No junction pads:
+  the agree loop already drives node mismatch to millimetres, so the edges' profiles meet at
+  a node and the nearest-spine answer is the same answer.
 
 - **Small intra-file clone pairs — fix on touch, not worth standalone PRs:**
   `alignment.cpp` 18×2 (128/164), `road_constraints.cpp` 12×2 (197/340),

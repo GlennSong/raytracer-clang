@@ -65,6 +65,12 @@ struct CityProducts {
     RoadGraph nav;                   // navRoadGraph(twin, ground): the level's unified road graph
     RoadGraph row;                   // twin nodes + Freeway/Ramp edges: the lot pass's keep-out
     std::vector<Ring> holes;         // un-inset pavement holes >= 2000 m² (blocks after the level's sidewalk inset)
+    // THE DRIVING SURFACE, as a queryable field, and the kerb line around it. Everything the
+    // sim stands ON a road reads these: moving traffic, parked cars, painted bays, signal
+    // poles, crosswalk decals. Without them a lane-built city hands the sim nothing and it
+    // falls back to the terrain beside the asphalt (metro_lanes: cars 0.53 m under the deck).
+    RoadDeckField deck;
+    CurbBandAudit bands;
     double cell = 250;
     std::vector<CityCellMesh> cells; // one per (render cell, material), material name inside
     nlohmann::json report;           // summary, invariants, timings, counts

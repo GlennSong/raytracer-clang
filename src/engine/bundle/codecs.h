@@ -11,6 +11,7 @@
 
 #include "engine/bundle/binary_stream.h"
 #include "engine/components.h"
+#include "engine/procgen/city/road_mesh.h"          // RoadDeckField: the surface things stand on
 #include "engine/procgen/city/roads/road_entity.h"
 #include "renderer/renderer.h"
 #include "rt_math.h"
@@ -58,6 +59,16 @@ bool getRoadEntity(BinReader& r, RoadEntity& e);
 
 void putRings(BinWriter& w, const std::vector<std::vector<Vec2>>& rings);
 bool getRings(BinReader& r, std::vector<std::vector<Vec2>>& rings);
+
+// THE DECK, BAKED. The lattice hands its deck straight to the loader because it
+// meshes at load; a city built through the bundle has to carry the same surface
+// across, or everything the sim stands on a road — traffic, parked cars, painted
+// bays, signal poles — falls back to the terrain beside it. getDeckField rebuilds
+// the spatial index on the way in, so the field is ready to query.
+void putDeckField(BinWriter& w, const RoadDeckField& d);
+bool getDeckField(BinReader& r, RoadDeckField& d);
+void putCurbBands(BinWriter& w, const CurbBandAudit& b);
+bool getCurbBands(BinReader& r, CurbBandAudit& b);
 
 }  // namespace bundle
 }  // namespace engine

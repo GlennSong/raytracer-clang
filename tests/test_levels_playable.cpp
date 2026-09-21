@@ -66,6 +66,21 @@ std::string levelsDir() {
 #endif
 }
 
+// WHICH CITY THE SIM CASES DRIVE. These cases measure BEHAVIOUR — traffic on the
+// road, buses that serve the city, cars that clear a junction — against the shipped
+// metro, and they say "metro" rather than "this one particular file". A second city
+// now exists that is built by the other road builder (metro_lanes, ADR-0089/0090),
+// whose road graph is the lanes twin rather than the lattice's sampler: a quarter
+// the nodes, and every number here was tuned on the other one. RT_CITYSIM_LEVEL
+// points them at it, so "does the sim work on a lane-built city" is a measurement
+// rather than an opinion.
+std::string simLevelPath() {
+    const char* only = std::getenv("RT_CITYSIM_LEVEL");
+    const std::string name = only && *only ? std::string(only) : std::string("metro_v2_test");
+    return levelsDir() + "/" + name + (name.size() > 5 && name.compare(name.size() - 5, 5, ".json") == 0
+                                           ? "" : ".json");
+}
+
 // Every shipped level, sorted so a failure names the same file run to run.
 // `*.json.cameras.json` sidecars are camera bookmarks, not levels.
 std::vector<std::string> shippedLevels() {
@@ -774,7 +789,7 @@ TEST_CASE(metro_ground_probes_adhere_between_the_seams) {
     World world;
     RenderView view;
     const bool loaded =
-        LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+        LevelLoader::load(simLevelPath(), world, *renderer,
                           view, assets, /*editorMode=*/false);
     unsetenv("RT_GROUND_PROBES");   // never leaks into the census cases
     CHECK(loaded);
@@ -814,7 +829,7 @@ TEST_CASE(metro_road_decks_are_never_poked_by_the_drawn_terrain) {
     World world;
     RenderView view;
     const bool loaded =
-        LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+        LevelLoader::load(simLevelPath(), world, *renderer,
                           view, assets, /*editorMode=*/false);
     unsetenv("RT_POKE_REPORT");
     CHECK(loaded);
@@ -852,7 +867,7 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
     World world;
     RenderView view;
     const bool loaded =
-        LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+        LevelLoader::load(simLevelPath(), world, *renderer,
                           view, assets, /*editorMode=*/false);
     CHECK(loaded);
     if (!loaded) return;
@@ -1084,7 +1099,7 @@ TEST_CASE(metro_traffic_drives_on_the_road_deck) {
     World world;
     RenderView view;
     const bool loaded =
-        LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+        LevelLoader::load(simLevelPath(), world, *renderer,
                           view, assets, /*editorMode=*/false);
     CHECK(loaded);
     if (!loaded) return;
@@ -1220,7 +1235,7 @@ TEST_CASE(metro_bus_network_serves_the_city) {
     World world;
     RenderView view;
     const bool loaded =
-        LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+        LevelLoader::load(simLevelPath(), world, *renderer,
                           view, assets, /*editorMode=*/false);
     CHECK(loaded);
     if (!loaded) return;
@@ -1421,7 +1436,7 @@ TEST_CASE(metro_cars_park_in_spaces_not_heaps) {
     World world;
     RenderView view;
     const bool loaded =
-        LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+        LevelLoader::load(simLevelPath(), world, *renderer,
                           view, assets, /*editorMode=*/false);
     CHECK(loaded);
     if (!loaded) return;
@@ -1496,7 +1511,7 @@ TEST_CASE(metro_junctions_stay_clear) {
     World world;
     RenderView view;
     const bool loaded =
-        LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+        LevelLoader::load(simLevelPath(), world, *renderer,
                           view, assets, /*editorMode=*/false);
     CHECK(loaded);
     if (!loaded) return;
@@ -1607,7 +1622,7 @@ TEST_CASE(metro_pedestrians_walk_and_keep_apart) {
     World world;
     RenderView view;
     const bool loaded =
-        LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+        LevelLoader::load(simLevelPath(), world, *renderer,
                           view, assets, /*editorMode=*/false);
     CHECK(loaded);
     if (!loaded) return;
@@ -1665,7 +1680,7 @@ TEST_CASE(metro_map_shows_the_city_and_its_bus_lines) {
     AssetManager assets(uploader);
     World world;
     RenderView view;
-    const bool loaded = LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+    const bool loaded = LevelLoader::load(simLevelPath(), world, *renderer,
                                           view, assets, false);
     CHECK(loaded);
     if (!loaded) return;
@@ -1766,7 +1781,7 @@ TEST_CASE(metro_street_signs_fit_and_name_their_corners) {
     AssetManager assets(uploader);
     World world;
     RenderView view;
-    const bool loaded = LevelLoader::load(levelsDir() + "/metro_v2_test.json", world, *renderer,
+    const bool loaded = LevelLoader::load(simLevelPath(), world, *renderer,
                                           view, assets, false);
     CHECK(loaded);
     if (!loaded) return;
@@ -1852,4 +1867,201 @@ TEST_CASE(metro_street_signs_fit_and_name_their_corners) {
     CHECK(wrongNames == 0);
     CHECK(inRoad == 0);
     CHECK(dir->signPosts == static_cast<int>(posts.size()));   // the loader stood the same plan
+}
+
+// ============================================================================
+// THE CITY COMPLETENESS GATE (Glenn, 2026-09-20: "These systems we've built seem
+// incredibly brittle. If you can change one thing and the whole thing collapses
+// like this and regresses I think that means systems need to be built more
+// resiliently.")
+//
+// He was right, and the shape of it is measurable. `RoadBuilder` declares THREE
+// products — build / ground / navGraph. The engine reads road facts from EIGHT
+// channels across ~76 sites: RoadEntity (28), terrain.flatten (21), the spec's
+// parking band (11), freewayROW (10), look.sidewalk (3), RoadDeck (2),
+// LevelRoadGraph (1), RoadBandDebug. The lattice fills all eight as a SIDE
+// EFFECT of being a RoadEntity that carries a graph. So a second builder can
+// satisfy 100% of the declared interface and still produce a city where cars
+// sink into the asphalt, nobody can park, signal poles stand in the road and
+// trees grow on the carriageway — which is exactly what happened, four times,
+// each discovered by a different downstream test weeks apart.
+//
+// With one implementation an implicit contract is invisible. It only becomes
+// visible when there are two. So this gate enumerates the contract ONCE and
+// holds every builder to it: load a shipped level built by each, and assert the
+// city published what the engine is going to read. It is deliberately about
+// PRESENCE and SELF-CONSISTENCY, not quality — the quality gates already exist
+// and are per-subsystem; this one exists so a missing channel cannot reach them.
+// ============================================================================
+
+namespace {
+
+struct CityFacts {
+    std::string level;
+    bool loaded = false;
+    // channel 1: the graph everything routes on
+    std::size_t navNodes = 0, navEdges = 0;
+    // channel 2: the surface things stand on
+    std::size_t deckFields = 0, deckSpines = 0;
+    long navSamples = 0, navOnDeck = 0;         // does the deck cover the graph?
+    // channel 3: the road's own look (the sidewalk band furniture measures off)
+    double sidewalk = 0, curb = 0;
+    // channel 4: the kerbside parking band the sim lays bays in
+    std::size_t streetEdges = 0, edgesWithParking = 0;
+    // channel 5: the keep-out the vegetation scatter (and anything else that
+    // asks "did the city grade here") reads
+    std::size_t flattenRegions = 0;
+    long carriagewaySamples = 0, carriagewayKeptOut = 0;
+    // channel 6: the freeway right-of-way the lot pass zones around
+    std::size_t freewayEdges = 0;
+    // channel 7: something to build on
+    std::size_t lotBuildings = 0;
+};
+
+CityFacts gatherCityFacts(const std::string& levelName) {
+    CityFacts f;
+    f.level = levelName;
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    f.loaded = LevelLoader::load(levelsDir() + "/" + levelName, world, *renderer, view,
+                                 assets, /*editorMode=*/false);
+    if (!f.loaded) return f;
+
+    engine::RoadGraph nav;
+    world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph& g) {
+        if (!g.graph.edges.empty()) nav = g.graph;
+    });
+    f.navNodes = nav.nodes.size();
+    f.navEdges = nav.edges.size();
+
+    std::vector<const engine::RoadDeckField*> decks;
+    world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) {
+        decks.push_back(&d.field);
+        f.deckSpines += d.field.spines.size();
+    });
+    f.deckFields = decks.size();
+
+    world.each<engine::RoadEntity>([&](Entity, engine::RoadEntity& net) {
+        f.sidewalk = std::max(f.sidewalk, static_cast<double>(net.look.sidewalk));
+        f.curb = std::max(f.curb, static_cast<double>(net.look.curb));
+    });
+
+    // The terrain's final flatten set: what the city told the ground it had graded.
+    std::vector<engine::TerrainFlatten> flatten;
+    world.each<engine::TerrainLodConfig>([&](Entity, engine::TerrainLodConfig& c) {
+        if (c.params.flatten.size() > flatten.size()) flatten = c.params.flatten;
+    });
+    f.flattenRegions = flatten.size();
+    engine::FlattenGrid keepOut;
+    if (!flatten.empty()) keepOut = engine::buildFlattenGrid(flatten);
+
+    // Walk the graph: sample the middle of every street edge and ask the two
+    // questions a consumer asks — is there a DECK under this point, and did the
+    // city mark it as graded so nothing scatters onto it?
+    for (const engine::RoadEdge& e : nav.edges) {
+        if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(nav.nodes.size()) ||
+            e.b >= static_cast<int>(nav.nodes.size()))
+            continue;
+        const engine::Vec2 a = nav.nodes[static_cast<std::size_t>(e.a)].pos;
+        const engine::Vec2 b = nav.nodes[static_cast<std::size_t>(e.b)].pos;
+        const bool street = e.klass != engine::RoadClass::Freeway &&
+                            e.klass != engine::RoadClass::Ramp;
+        if (street) {
+            ++f.streetEdges;
+            if (e.parkWidth > 0.0) ++f.edgesWithParking;
+        } else {
+            ++f.freewayEdges;
+        }
+        for (int k = 1; k <= 3; ++k) {
+            const double t = k / 4.0;
+            const engine::Vec2 q(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+            ++f.navSamples;
+            double y = 0;
+            for (const engine::RoadDeckField* d : decks)
+                if (d->heightAt(q.x, q.y, 1.0, &y)) { ++f.navOnDeck; break; }
+            // The keep-out question, asked exactly the way the vegetation scatter asks
+            // it: is this point excluded from scatter? Two sources answer it — the
+            // graded `flatten` set a carving builder fills, and the DECK a replacing
+            // builder publishes instead. Testing one implementation rather than the
+            // consumer's question is how this went unnoticed in the first place.
+            ++f.carriagewaySamples;
+            bool kept = !flatten.empty() && engine::flattenCovers(keepOut, flatten, q.x, q.y, 0.0);
+            if (!kept)
+                for (const engine::RoadDeckField* d : decks) {
+                    double dy = 0;
+                    if (d->heightAt(q.x, q.y, 0.0, &dy)) { kept = true; break; }
+                }
+            if (kept) ++f.carriagewayKeptOut;
+        }
+    }
+
+    world.each<CityBuildings>([&](Entity, CityBuildings& cb) { f.lotBuildings += cb.records.size(); });
+    return f;
+}
+
+void printCityFacts(const CityFacts& f) {
+    std::printf("    [city] %-22s nav %zu/%zu  deck %zu fields/%zu spines  "
+                "on-deck %ld/%ld  sidewalk %.2f curb %.2f\n",
+                f.level.c_str(), f.navNodes, f.navEdges, f.deckFields, f.deckSpines,
+                f.navOnDeck, f.navSamples, f.sidewalk, f.curb);
+    std::printf("    [city] %-22s parking %zu/%zu street edges  flatten %zu regions, "
+                "carriageway kept out %ld/%ld  freeway %zu edges\n",
+                f.level.c_str(), f.edgesWithParking, f.streetEdges, f.flattenRegions,
+                f.carriagewayKeptOut, f.carriagewaySamples, f.freewayEdges);
+}
+
+}  // namespace
+
+// Every shipped city, whichever builder paved it, publishes what the engine reads.
+TEST_CASE(every_builder_publishes_a_complete_city) {
+    // One level per builder. Adding a builder means adding a level here.
+    const char* kCities[] = {"metro_v2_test.json", "metro_lanes.json"};
+    for (const char* name : kCities) {
+        const CityFacts f = gatherCityFacts(name);
+        CHECK(f.loaded);
+        if (!f.loaded) { std::printf("    [city] %s FAILED TO LOAD\n", name); continue; }
+        printCityFacts(f);
+
+        // 1. THE GRAPH. Nav, traffic, furniture, signs and the map all route on it.
+        CHECK(f.navEdges > 100);
+        CHECK(f.navNodes > 100);
+
+        // 2. THE DECK. Everything the sim stands on a road reads this; without it
+        //    traffic falls back to the terrain and sinks into the asphalt.
+        CHECK(f.deckFields > 0);
+        CHECK(f.deckSpines > 0);
+        //    ...and it must COVER the graph it belongs to, not merely exist.
+        CHECK(f.navSamples > 0);
+        CHECK(f.navOnDeck * 100 >= f.navSamples * 90);
+
+        // 3. THE LOOK. Furniture measures its lateral placement off this band;
+        //    a city built from a baked graph used to report a default 3.5 m beside
+        //    its real 5 m one.
+        CHECK(f.sidewalk > 0.5);
+        CHECK(f.curb > 0.0);
+
+        // 4. THE PARKING BAND. No band, no bays: the sim parked 2249 cars on the
+        //    verge and stacked 2065 of them on each other.
+        CHECK(f.streetEdges > 0);
+        CHECK(f.edgesWithParking * 4 >= f.streetEdges);
+
+        // 5. THE KEEP-OUT. `terrain.flatten` means two things — "grade this" and
+        //    "do not scatter here" — and a builder that replaces the ground instead
+        //    of carving it satisfied the first and silently dropped the second, so
+        //    the vegetation scatter planted trees down the middle of the roads.
+        CHECK(f.flattenRegions > 0);
+        CHECK(f.carriagewaySamples > 0);
+        CHECK(f.carriagewayKeptOut * 100 >= f.carriagewaySamples * 90);
+
+        // 6. THE FREEWAY, IF THERE IS ONE, is in the same graph as the streets — a
+        //    separate corridor nobody routes on was the legacy failure (ADR-0089).
+        //    The right-of-way itself is consumed inside the load and is not a world
+        //    component, so it is the lot pass's own gate that owns it, not this one.
+
+        // 7. SOMETHING TO BUILD ON.
+        CHECK(f.lotBuildings > 100);
+    }
 }

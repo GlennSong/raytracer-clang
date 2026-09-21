@@ -6,6 +6,7 @@
 #include "../src/engine/bundle/codecs.h"
 #include "../src/engine/mesh_builder.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -121,6 +122,75 @@ TEST_CASE(height_grid_road_entity_and_rings_round_trip_field_for_field) {
 
     std::vector<std::vector<Vec2>> rings = {{Vec2(0, 0), Vec2(1, 0), Vec2(1, 1)}, {}};
     BinWriter w4; putRings(w4, rings); std::vector<std::vector<Vec2>> back; BinReader r4(w4.bytes.data(), w4.bytes.size()); CHECK(getRings(r4, back) && back.size() == 2 && back[0].size() == 3 && back[0][2].y == 1 && back[1].empty());
+}
+
+// THE DECK AND THE KERB LINE ROUND-TRIP (2026-09-20). A lane-built city is READ from the
+// bundle, never built at load, so anything the sim stands on has to survive the write. It
+// did not exist until metro_lanes needed it, and the cost of getting it wrong is silent: the
+// field comes back empty and the citysim quietly puts its cars 0.5 m under the asphalt.
+TEST_CASE(the_deck_field_and_kerb_bands_round_trip_and_arrive_queryable) {
+    using namespace engine;
+    using namespace engine::bundle;
+    RoadDeckField d;
+    {   // a 100 m straight climbing 1 m, 8 m wide
+        UnionSpine s;
+        for (int i = 0; i <= 10; ++i) {
+            s.points.push_back(Vec2(i * 10.0, 0.0));
+            s.yAbs.push_back(i * 0.1);
+            s.hw.push_back(4.0);
+        }
+        s.halfWidth = 4.0;
+        s.klass = RoadClass::Arterial;
+        s.authoredDeck = true;
+        s.layer = 1;
+        s.travelEdgeFrac = 0.75;
+        d.spines.push_back(std::move(s));
+    }
+    d.pads.push_back(RoadDeckField::Tri{Vec3(0, 5, 0), Vec3(1, 5, 0), Vec3(0, 5, 1)});
+    d.buildIndex();
+
+    BinWriter w;
+    putDeckField(w, d);
+    RoadDeckField back;
+    BinReader r(w.bytes.data(), w.bytes.size());
+    CHECK(getDeckField(r, back));
+    CHECK(back.spines.size() == 1 && back.pads.size() == 1);
+    if (back.spines.empty()) return;
+    const UnionSpine& b = back.spines[0];
+    CHECK(b.points.size() == 11 && b.yAbs.size() == 11 && b.hw.size() == 11);
+    CHECK(b.halfWidth == 4.0 && b.klass == RoadClass::Arterial && b.authoredDeck && b.layer == 1);
+    CHECK(b.travelEdgeFrac == 0.75);
+    CHECK(b.points[10].x == 100.0 && b.yAbs[10] == 1.0);
+    // getDeckField rebuilds the index, so the field answers immediately — the whole point.
+    double y = -1;
+    CHECK(back.heightAt(50.0, 0.0, 1.0, &y));
+    CHECK(std::fabs(y - 0.5) < 1e-9);
+    CHECK(!back.heightAt(50.0, 40.0, 1.0, &y));          // off every road
+    CHECK(back.depthInside(50.0, 0.0) > 3.0);            // 4 m from the kerb at the centreline
+
+    CurbBandAudit bands;
+    bands.loops = {{Vec2(0, 0), Vec2(10, 0), Vec2(10, 10)}, {Vec2(1, 1), Vec2(2, 1), Vec2(2, 2)}};
+    bands.mouthGaps = {{Vec2(3, 3), Vec2(4, 4)}};
+    bands.junctions = {Vec2(7, 8)};
+    bands.junctionDegree = {4};
+    bands.junctionMinAngle = {71.5};
+    bands.sidewalkWidth = 5.0;
+    bands.curbHeight = 0.27;
+    BinWriter w2;
+    putCurbBands(w2, bands);
+    CurbBandAudit back2;
+    BinReader r2(w2.bytes.data(), w2.bytes.size());
+    CHECK(getCurbBands(r2, back2));
+    CHECK(back2.loops.size() == 2 && back2.loops[0].size() == 3 && back2.loops[1][2].y == 2);
+    CHECK(back2.mouthGaps.size() == 1 && back2.mouthGaps[0].second.x == 4);
+    CHECK(back2.junctions.size() == 1 && back2.junctionDegree[0] == 4);
+    CHECK(back2.junctionMinAngle.size() == 1 && back2.junctionMinAngle[0] == 71.5);
+    CHECK(back2.sidewalkWidth == 5.0 && back2.curbHeight == 0.27);
+
+    // A reader handed the wrong section says so rather than inventing a city.
+    RoadDeckField nope;
+    BinReader r3(w2.bytes.data(), w2.bytes.size());
+    CHECK(!getDeckField(r3, nope));
 }
 
 TEST_CASE(bundle_keys_are_deterministic_and_order_free) {

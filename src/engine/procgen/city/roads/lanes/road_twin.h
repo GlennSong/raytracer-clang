@@ -22,6 +22,10 @@ namespace roads::lanes {
 // 300 m² across a ramp). In this mode every deck run is emitted as a street-class edge — a face
 // boundary — and planarised with the streets; its earthwork width still keeps buildings off. The
 // class-faithful twin (default) is what the unified road graph, the nav and the map read.
+// Which engine RoadClass a lanes edge carries. ONE mapping — the twin, the deck field and
+// anything else that has to speak both vocabularies reads it here.
+RoadClass classOf(const EdgeSpec& e);
+
 RoadEntity roadTwin(const Result& r, double nodeSpacing = 60.0, bool forLots = false);
 
 }  // namespace roads::lanes

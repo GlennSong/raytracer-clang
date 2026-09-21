@@ -255,5 +255,18 @@
    "yaw": 0
   }
  ],
- "version": 1
+ "version": 1,
+ "water": {
+  "cell": 12,
+  "color": [
+   0.012,
+   0.05,
+   0.08
+  ],
+  "foamBand": 40,
+  "opacity": 0.82,
+  "region": 1900,
+  "roughness": 0.04,
+  "seaLevel": -5.0
+ }
 }
