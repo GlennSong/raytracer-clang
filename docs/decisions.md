@@ -7256,3 +7256,127 @@ so this city is 95 big blocks at 29.6% cover where the lattice metro is many mor
 towers, fewer mid-rise. A coarser parcel grain (`citysim.parcel`, piedmont's numbers) was tried and
 made it worse on both counts — 824 buildings and 26.3% cover — and was dropped.
 
+
+---
+
+## ADR-0091 — One agent that decides for itself: a decision service above the goal table
+
+**Status:** Sketch (2026-09-21) — nothing is built. **Trigger:** Glenn: "What if we could make an
+agent and have jev run just that agent and the agent has some autonomy that way in the procgen
+world?" and, in the same breath, "the simulation should be 1:1 with a real day."
+
+**Context.** Agents already have a brain: `agents.lua` (ADR-0064) declares an archetype's goal
+table — states carrying action/target/activity/dwell, plus transitions keyed on events — and C++
+runs every transition in the tick with no scripting in the loop. Three roles (Commuter, Shopkeeper,
+Stroller), tiered D/V/K by distance, ~2,259 agents in metro v2 at about half a millisecond a tick.
+The behaviour is good and cheap, and it is also completely predetermined: a Commuter's day is the
+same day every day, because the transition table says so.
+
+Jev (TypeSafe's "System One" model, early access September 2026) is a different shape of thing from
+an LLM. It emits no text. You send a state and a set of questions — *choice* (pick one of N, with a
+probability per option), *score* (rate on ordered levels), *noul* (probability a statement is true)
+— and it answers all of them in one round trip, 70-500 ms, API-only, at $0.042/MTok in. Its
+schema guarantee is worth being precise about: the answer is always a **valid** member of the menu
+you supplied. It is not a promise the answer is **right**.
+
+Two facts decide the design. A 60 Hz tick is 16.7 ms, so a 70 ms call is four ticks at best: this
+can never sit in the tick. And at 1:1 time — one real second is one sim second, a day is a day —
+a goal lasts minutes, so a transition happens rarely: a Commuter's whole day is perhaps twenty to
+sixty of them. The expensive thing is rare, and the rare thing is exactly where the interesting
+choice lives.
+
+**Decision (proposed).** A decision *service*, consulted at transitions, for one flagged agent:
+
+1. **One agent, not the crowd.** A flag on a single agent (or a `Resident` archetype of size one).
+   Every other agent keeps the scripted table untouched, so the tick cost and the tier budgets do
+   not move at all.
+2. **The decision point is the transition, not the tick.** The engine asks only when a state's dwell
+   expires or an event fires. At 1:1 that is minutes apart; nothing is asked per frame, ever.
+3. **The engine builds the menu.** Options are the transitions legal *right now* — this bus exists,
+   that shop is open, a taxi is hailable — so an out-of-range answer is not possible even in
+   principle. This is the one place the model's schema guarantee earns its keep, and it caps the
+   menu far below Jev's 255.
+4. **Asynchronous, with the scripted table as the fallback.** Fire the request, let the agent
+   continue its current goal, apply the answer when it lands; on timeout or error take the
+   transition the table would have taken. The agent must never stand still waiting on a network,
+   and the game must be fully playable with the service switched off.
+5. **A sidecar process over a local socket.** The engine writes `{state, menu}` and reads back an
+   index. No HTTP, TLS or API key inside the engine; the backend behind the socket is swappable —
+   a stub decider first, Jev second, a local policy third.
+6. **Log every `(state, menu, choice, latency)`.** Two payoffs: a recorded session replays offline
+   with no service at all (determinism preserved for tests), and the log is training data.
+
+**Consequences.** One agent deciding forty times a day costs a few hundred tokens a call: pennies a
+month, and invisible latency because a goal outlives the round trip by two orders of magnitude. The
+60 Hz budget, the tier radii and the draw-call ceiling (ADR — citysim scale) are all untouched,
+because no model output ever moves a body; it only picks which scripted goal runs next.
+
+The endgame is the log, not the API. A few thousand recorded decisions distil into a small local
+policy that answers in microseconds, at which point autonomy stops being one networked agent and
+becomes something affordable on hundreds. Jev is then a teacher, not a dependency.
+
+**The 1:1 clock is part of this decision and cuts both ways.** It makes goal-level reasoning cheap
+and makes an agent's day legible — leave at eight, eat at one, home by seven, and a player can
+actually witness it. It also means nobody can watch a full day: the sim day now costs a real day.
+Levels currently ship a compressed day (`dayNight.dayMinutes`, and metro_v2_test's 30-minute day),
+so authoring must stay at 1:1 while tests and inspection keep a debug time scale. Any behaviour
+tuned only under compressed time is tuned against a world that no longer exists.
+
+**Rejected.** *Per-tick inference* — four ticks of latency and thousands of calls a second, for a
+decision that changes every few minutes. *A local LLM via Ollama* — measured 18-33 s for a
+single-step call on this box, two orders of magnitude too slow, and unreliable past one step.
+*More hand-written transitions* — cheap and predictable, but it is the thing that already makes
+every Commuter's day identical; more rules make a denser puppet, not an autonomous one.
+
+**Open.** What the agent perceives (the state summary is the real design work, not the model);
+whether wants are modelled explicitly (energy, money, hunger as *score* questions) or left implicit;
+whether possession (`city_possess`) should suspend the service or feed it the player's actions as
+context; and what a believable day looks like well enough to tell whether any of this worked.
+
+**Amendment (2026-09-21) — phase 1 is built, and it found that every drawn agent is two
+objects.** Status moves from Sketch to **Provisional**: the director path exists
+(`tools/citywalk.py`, the `possess` / `walk_to` / `release` verbs, and a new `agent?` verb);
+the decision service above it does not.
+
+Building it turned up the fact anyone working here needs first. A near-tier agent is a planner
+*ghost* (the `CitySim::Agent`) AND a physical *body* — a character capsule for a walker
+(`CityWalkerSystem`), a rigid car for a driver. The body's position is fed back as the ghost's
+ADR-0062 tether anchor every frame with a 5 m lead, and if the ghost leads by more than that the
+stepper skips `advance()` entirely. The symptom is an agent standing still with a perfectly valid
+route: `speed=0`, `state=Waiting`, `moving=1`, for ever. **A director that moves the plan without
+moving the body has not moved the agent.**
+
+`walk_to` did exactly that, through four layers that are each individually reasonable:
+`nearestNode` snapping the destination to a node with no path from here at all (metro 394 -> 86 are
+32 m apart and route for neither a pedestrian nor a car); `startTrip`'s no-path branch PARKING the
+agent — route cleared, teleported to `idlePose`, the caller's goal left in `tripGoal` — while its
+comment claimed the agent keeps its current plan; the goal layer then re-planning from
+`a.restNode` rather than from where the agent stands, which PLACES the ghost there (measured: 27 m
+in one run, 290 m in another); and the leash holding the displaced ghost for the rest of the day.
+
+So: **`CitySim::sendAgentTo` validates the route before it mutates anything**, routes from the node
+AHEAD on the leg the agent stands on and prepends that leg (the idiom a bus already uses to pull
+away from where it actually stopped), and tries the nearest few nodes to the destination until one
+routes. A refusal now really does leave the agent its day. An off-graph destination still lands the
+agent at the nearest routable node, which can be ~25 m short; the director is told, and closing
+that gap is the body's job, not the planner's.
+
+**`agent?` is the perception channel's first half.** It reports the possessed agent's own mind —
+activity, state, tier, moving/indoors, route leg, `tripGoal`, home/work, the transit fields — plus
+the four numbers that diagnose a stalled agent in one poll: `stepped` (did `advance()` run last
+tick), `gap`/`minGap`, and `tethered`/`anchorDist`/`lead`. `stepped` is the discriminator that
+settled this: it splits "the stepper never reached this agent" from "it ran and clamped the motion
+to zero", which no amount of reading the code did.
+
+Two defects found on the way, both older than possession and neither fixed here. **The leash has
+no timeout**: a body jammed against a guardrail with its ghost 5.1 m out is a permanent deadlock,
+and walkers queue behind it (Glenn, watching: "I see three agents walking against a fence"). Same
+agent at the same coordinates in two runs forty minutes apart, so it is a trap location rather than
+an unlucky frame. **And the nav graph may have disconnected components** — 394 and 86 again. If an
+agent's home and work fall in different ones it silently never travels, and nothing reports it. A
+census is cheap and nobody has run it.
+
+This also settles one of the Open questions above: possession must be able to **suspend the goal
+layer**, not race it. An errand completes, the agent goes to rest, and seconds later the schedule
+has it walking a 27-leg trip of its own — a director issuing one command per decision spends the
+whole session fighting the table it is supposed to be replacing.

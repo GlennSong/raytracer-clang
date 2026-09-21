@@ -4292,6 +4292,9 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         }
         if (a.moving) { advance(a, dt, gaps_[i], minGaps_[i]); advanced[i] = 1; }
     }
+    // Keep the flags: "did this agent get stepped" is the question a director
+    // asks when its agent stands still (ADR-0091).
+    advancedLast_ = advanced;
 
     // FENDER-BENDERS (device: cars must collide, not ghost). Ambient cars are
     // planner-owned (ADR-0062) — no rigid bodies between them — so contact is

@@ -21,6 +21,47 @@
 
 namespace citysim {
 
+namespace {
+
+// Names for the agent's OWN mind, kept local: the goal layer's activityName()
+// lives in city_goals.cpp without a header declaration, and telemetry is not
+// worth widening an interface for.
+const char* activityLabel(Activity a) {
+    switch (a) {
+        case Activity::AtHome:    return "at-home";
+        case Activity::Commuting: return "commuting";
+        case Activity::AtWork:    return "at-work";
+        case Activity::Returning: return "returning";
+        case Activity::Shopping:  return "shopping";
+        case Activity::Outing:    return "outing";
+        case Activity::Lunch:     return "lunch";
+    }
+    return "?";
+}
+
+const char* stateLabel(Agent::State s) {
+    using S = Agent::State;
+    switch (s) {
+        case S::Resting:   return "resting";
+        case S::Walking:   return "walking";
+        case S::Avoiding:  return "avoiding";
+        case S::Waiting:   return "waiting";
+        case S::Cruising:  return "cruising";
+        case S::Following: return "following";
+        case S::Yielding:  return "yielding";
+        case S::Turning:   return "turning";
+        case S::Count:     break;
+    }
+    return "?";
+}
+
+char tierLabel(Agent::Tier t) {
+    using T = Agent::Tier;
+    return t == T::K ? 'K' : (t == T::V ? 'V' : 'D');
+}
+
+}  // namespace
+
 using engine::Entity;
 using engine::Vec2;
 using engine::Vec3;
@@ -309,9 +350,25 @@ void CityPossessSystem::walkTo(engine::FrameContext& ctx, engine::Real x,
                                engine::Real z) {
     (void)ctx;
     if (!city_.sim().graph()) { error_ = "no nav graph"; return; }
+    // One line per director errand. It prints where the agent STOOD and where
+    // it was placed, because those differing is the whole bug this path had:
+    // sendAgentTo used to put the planner ghost on its new route's first leg,
+    // away from the physical body, and the ADR-0062 tether then held it for
+    // ever. They should now be the same point.
+    const Vec2 was = city_.sim().agents()[static_cast<std::size_t>(walkerAgent_)].pos;
     if (!city_.simMutable().sendAgentTo(walkerAgent_, Vec2(x, z))) {
+        LOG_INFO << "walk_to: agent " << walkerAgent_ << " REFUSED " << x << ","
+                 << z << " — nothing near it routes from where the agent stands;"
+                 << " it keeps its own plan";
         state_ = PossessState::NoRoute;
         return;
+    }
+    {
+        const Agent& a = city_.sim().agents()[static_cast<std::size_t>(walkerAgent_)];
+        LOG_INFO << "walk_to: agent " << walkerAgent_ << " -> " << x << "," << z
+                 << " | stood at " << was.x << "," << was.y << ", placed at "
+                 << a.pos.x << "," << a.pos.y << " on leg " << a.leg << "/"
+                 << a.route.links.size();
     }
     dest_ = Vec2(x, z);
     hasDest_ = true;
@@ -520,6 +577,55 @@ void CityPossessSystem::publishStatus(engine::FrameContext& ctx) {
         line = city_.built() ? "none" : "none (city not built — play mode only)";
     }
     ctx.settings.setString("possess.status", line);
+
+    // THE AGENT'S OWN MIND (ADR-0091 telemetry). possess.status answers "what
+    // is the puppeteer doing"; this answers "what is this person doing" — the
+    // activity and goal state the sim is running them under, and the four
+    // fields that decide whether they take a step (moving/indoors/restDwell/
+    // route). A director cannot reason about an agent it cannot read, and the
+    // walk_to freeze was invisible precisely because none of this was exposed.
+    std::string agentLine = "none";
+    if (walkerAgent_ >= 0) {
+        const auto& sim = city_.sim();
+        const auto& agents = sim.agents();
+        if (walkerAgent_ < static_cast<int>(agents.size())) {
+            const Agent& a = agents[static_cast<std::size_t>(walkerAgent_)];
+            char buf[512];
+            std::snprintf(
+                buf, sizeof(buf),
+                "agent=%d mode=ped activity=%s state=%s tier=%c moving=%d "
+                "indoors=%d restDwell=%.1f speed=%.2f pos=%.1f,%.1f "
+                "leg=%d/%d routeValid=%d tripGoal=%d home=%d work=%d "
+                "busDwell=%.1f busStoodLeg=%d riding=%d awaitingRide=%d "
+                "busRoute=%d busNextStop=%d stepped=%d gap=%.1f minGap=%.1f "
+                "tethered=%d anchorDist=%.1f lead=%.1f playerCtl=%d released=%d",
+                walkerAgent_, activityLabel(a.activity), stateLabel(a.state),
+                tierLabel(a.tier), a.moving ? 1 : 0, a.indoors ? 1 : 0,
+                static_cast<double>(a.restDwell), static_cast<double>(a.speed),
+                static_cast<double>(a.pos.x), static_cast<double>(a.pos.y),
+                a.leg, static_cast<int>(a.route.links.size()),
+                a.route.valid() ? 1 : 0, a.tripGoal, a.home, a.work,
+                // The transit half of its mind: `advance` returns early while
+                // busDwell runs, so an agent queued for a bus stands still no
+                // matter how valid its route is.
+                static_cast<double>(a.busDwell), a.busStoodLeg,
+                sim.riding(walkerAgent_) ? 1 : 0,
+                sim.awaitingRide(walkerAgent_) ? 1 : 0,
+                sim.busRouteOf(walkerAgent_), sim.busNextStopOf(walkerAgent_),
+                sim.steppedLastTick(walkerAgent_) ? 1 : 0,
+                static_cast<double>(sim.gapOf(walkerAgent_)),
+                static_cast<double>(sim.minGapOf(walkerAgent_)),
+                // The ADR-0062 leash from the director's side: a ghost more than
+                // `lead` metres from its physical body is held, not stepped.
+                a.tethered ? 1 : 0,
+                a.tethered ? static_cast<double>((a.pos - a.tetherAnchor).length())
+                           : -1.0,
+                static_cast<double>(a.tetherLead),
+                a.playerControlled ? 1 : 0, a.released ? 1 : 0);
+            agentLine = buf;
+        }
+    }
+    ctx.settings.setString("agent.status", agentLine);
 }
 
 }  // namespace citysim

@@ -1,6 +1,7 @@
 #ifndef RAYTRACER_APPS_CITYSIM_CITY_SIM_H
 #define RAYTRACER_APPS_CITYSIM_CITY_SIM_H
 
+#include <algorithm>
 #include "../../engine/ai/agent_memory.h"
 #include "../../engine/ai/nav_graph.h"
 #include "../../engine/ai/pathfind.h"
@@ -658,12 +659,80 @@ public:
         if (!nav_ || agentIndex < 0 ||
             agentIndex >= static_cast<int>(agents_.size()))
             return false;
-        Agent& a = agents_[agentIndex];
-        const int from = nav_->nearestNode(a.pos);
-        const int to = nav_->nearestNode(dest);
-        if (from < 0 || to < 0 || from == to) return false;
+        Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+        // WHERE THE ERRAND STARTS. startTrip PLACES an agent on its new route's
+        // first leg, so routing from the node nearest its position teleports it
+        // — and a drawn walker's planner ghost is leashed to its physical body
+        // (ADR-0062, 5 m), so the stepper then skips it for ever: speed 0,
+        // state Waiting, a perfectly valid route, and a possessed pedestrian
+        // that never moves again. Measured: a 40 m errand moved the ghost 290 m.
+        // An agent already under way therefore finishes the leg it stands on and
+        // routes from the node AHEAD of it, and the leg is prepended below.
+        const int legLink =
+            (a.moving && a.route.valid() &&
+             a.leg < static_cast<int>(a.route.links.size()))
+                ? a.route.links[static_cast<std::size_t>(a.leg)] : -1;
+        const int from = legLink >= 0
+                             ? nav_->links[static_cast<std::size_t>(legLink)].to
+                             : nav_->nearestNode(a.pos);
+        if (from < 0) return false;
+        // A DESTINATION THAT ROUTES. The single nearest node to `dest` can have
+        // no path from here at all — 394 -> 86 in metro are 32 m apart with no
+        // route for a pedestrian OR a car (different components of the graph),
+        // and every walk_to that snapped to such a node was refused. Try the
+        // nearest few and take the first that routes.
+        engine::Route route;
+        int to = -1;
+        for (int cand : nearestNodesTo(dest, 8)) {
+            if (cand == from) continue;
+            engine::Route r = engine::findRoute(*nav_, from, cand,
+                                                a.mode == Agent::Mode::Pedestrian);
+            if (r.valid()) { route = std::move(r); to = cand; break; }
+        }
+        // NOTHING has been mutated yet, so a refusal really does leave the agent
+        // its day. startTrip's no-path branch parks the agent, clears its route
+        // and keeps the caller's goal — validating first is what makes this
+        // function's contract ("the agent keeps its current plan") true.
+        if (to < 0) return false;
+        const Real keepDist = a.distOnLeg;
         startTrip(a, from, to, /*fromRest=*/!a.moving);
-        return a.route.valid();
+        if (!a.route.valid()) return false;
+        if (legLink >= 0) {
+            // Finish the leg it is standing on (the same idiom as a bus pulling
+            // away from where it actually stopped): prepend that link and put
+            // the pose back, so the errand changes the PLAN and never the pose.
+            a.route.links.insert(a.route.links.begin(), legLink);
+            a.leg = 0;
+            a.distOnLeg = keepDist;
+            refreshPose(a);
+        }
+        // A DIRECTOR'S ERRAND OVERRIDES THE DAY. startTrip sets the trip
+        // (moving, indoors, route) but not the reactive state the stepper reads,
+        // so an agent sent from rest kept state=Resting and stood still holding
+        // a valid route. Its activity has to move too: left at AtHome the goal
+        // layer parks it again on its own schedule.
+        a.state = a.mode == Agent::Mode::Driver ? Agent::State::Cruising
+                                                : Agent::State::Walking;
+        a.activity = Activity::Outing;
+        return true;
+    }
+
+    // The `k` nav nodes nearest `p`, nearest first. Linear scan + partial sort:
+    // a director's command, not a per-frame path (nearestNode is a scan too).
+    std::vector<int> nearestNodesTo(engine::Vec2 p, int k) const {
+        std::vector<int> idx;
+        if (!nav_) return idx;
+        const int n = nav_->nodeCount();
+        idx.resize(static_cast<std::size_t>(n));
+        for (int i = 0; i < n; ++i) idx[static_cast<std::size_t>(i)] = i;
+        k = std::min(k, n);
+        auto d2 = [&](int i) {
+            return (nav_->nodes[static_cast<std::size_t>(i)] - p).lengthSquared();
+        };
+        std::partial_sort(idx.begin(), idx.begin() + k, idx.end(),
+                          [&](int A, int B) { return d2(A) < d2(B); });
+        idx.resize(static_cast<std::size_t>(k));
+        return idx;
     }
 
     // Sample agent `agentIndex`'s current route as a polyline of lane-centre
@@ -709,6 +778,22 @@ public:
     void alightRide(int passenger, int atNode = -1);   // atNode: where they step off
     const RideBook& rides() const { return rides_; }
     bool riding(int i) const { return rides_.driverOf(i) >= 0; }
+
+    // Why is this agent standing still? The question splits in two: advance()
+    // was never called (a guard above the call site), or it ran and something
+    // inside clamped the motion to zero. These three answer it.
+    bool steppedLastTick(int i) const {
+        return i >= 0 && i < static_cast<int>(advancedLast_.size()) &&
+               advancedLast_[static_cast<std::size_t>(i)] != 0;
+    }
+    Real gapOf(int i) const {
+        return i >= 0 && i < static_cast<int>(gaps_.size())
+                   ? gaps_[static_cast<std::size_t>(i)] : Real(-1);
+    }
+    Real minGapOf(int i) const {
+        return i >= 0 && i < static_cast<int>(minGaps_.size())
+                   ? minGaps_[static_cast<std::size_t>(i)] : Real(-1);
+    }
 
     // HAILING (city_dispatch.h). `hail` queues a walker for a ride; a free
     // taxi picks the cheapest reachable one up in the goal pass. Exposed so a
@@ -1007,6 +1092,7 @@ private:
     std::vector<Real> departScale_;
     std::vector<std::vector<int>> baysOnLink_;   // link -> bay indices
     std::vector<char> bayNarrowed_;   // link (or its reverse) carries bays
+    std::vector<uint8_t> advancedLast_;   // did advance() step agent i last tick
     std::vector<Real> gaps_;
     std::vector<Real> minGaps_;   // per-agent follow gap to ITS leader (length-aware)
     std::vector<Real> leaderSpeeds_;   // leader's speed where gaps_ < INF (IDM dv)

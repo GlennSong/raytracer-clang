@@ -1169,6 +1169,11 @@ std::string Application::handleControlCommand(const std::string& line) {
     }
     if (cmd.name == "possess?")
         return "ok " + settingsStore.getString("possess.status", "none");
+    // The possessed agent's own mind: activity, goal state, and the fields that
+    // decide whether it walks (ADR-0091). Written every frame by
+    // CityPossessSystem; "none" when nothing is possessed.
+    if (cmd.name == "agent?")
+        return "ok " + settingsStore.getString("agent.status", "none");
 
     // Ground probe (the planting/seam diagnosis tool): `ground? x z` stages a
     // query CityRenderSystem answers next frame (carved field, road lift, and
@@ -1190,7 +1195,7 @@ std::string Application::handleControlCommand(const std::string& line) {
     return "err unknown command: " + cmd.name +
            " (ping|info|camera|camera?|shot|overlay|sim|reload|set|get|"
            "daynight|daynight?|citymap|teleport|teleport?|where?|person|clip|clip?|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
-           "possess|drive_to|walk_to|possess_stop|release|possess?|ground?|bundle?)";
+           "possess|drive_to|walk_to|possess_stop|release|possess?|agent?|ground?|bundle?)";
 }
 
 }  // namespace engine
