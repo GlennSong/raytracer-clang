@@ -20,7 +20,13 @@ struct ExcessSample { Vec2 xy; double excess; int owner; std::string nodeOwner; 
 struct ConformStats { double cutM3 = 0, fillM3 = 0; int samples = 0, above = 0; double maxExcess = -1e300; std::vector<ExcessSample> worst;
                       std::vector<std::string> nodeOwner; std::vector<double> nodeDist; };   // per grid node: who graded it (diagnostic)
 
-void conformGrid(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& H, HeightGrid& grid, ConformStats& stats);
+// `decks`: the BUILT deck surfaces (Pavement::decks). The clamping passes inside reach out
+// from centrelines by a road's or a lane's own width, which cannot see the junction fillets
+// and closing pieces the pavement union adds — and those are exactly where a driver comes off
+// a ramp. Given the decks, the grid is clamped under every deck VERTEX as well, which is what
+// terrainVsDeck measures. Empty = the old centreline-reach behaviour.
+void conformGrid(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& H, HeightGrid& grid,
+                 ConformStats& stats, const std::vector<Surface>& decks = {});
 // Deck vertices and centroids where the conformed terrain rises more than 1 cm above the deck.
 void terrainVsDeck(const std::vector<Surface>& decks, const HeightGrid& grid, ConformStats& stats);
 

@@ -19,7 +19,7 @@
 namespace engine {
 namespace roads::lanes {
 
-const char* const kLanesBuildTag = "2026-09-20.6";   // .6: the deck field answers the BLENDED height the pavement was drawn at
+const char* const kLanesBuildTag = "2026-09-21.1";   // .1: the terrain is clamped under every deck VERTEX, not by centreline reach
 
 namespace {
 using bundle::BinReader;

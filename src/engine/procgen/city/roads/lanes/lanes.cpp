@@ -198,7 +198,7 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
     r.adjacent = adjacency(r.lanes);
     // 6. terrain
     if (r.hasTerrain) {
-        r.terrain = bakeGrid(terrain, g.terrain, bounds); conformGrid(g, r.lanes, *r.heights, r.terrain, r.conform); terrainVsDeck(r.pavement.decks, r.terrain, r.conform);
+        r.terrain = bakeGrid(terrain, g.terrain, bounds); conformGrid(g, r.lanes, *r.heights, r.terrain, r.conform, r.pavement.decks); terrainVsDeck(r.pavement.decks, r.terrain, r.conform);
     }
     r.timings["terrain"] = secondsSince(t1); r.seconds = secondsSince(t0); stage(4, "done", 1.0);
     return rp;

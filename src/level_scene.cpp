@@ -8,7 +8,8 @@
 #include "engine/model_importer.h"
 #include "engine/procgen/city/city_lots.h"   // living-city lots (offline parity)
 #include "engine/procgen/city/roads/road_entity.h"
-#include "engine/procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
+#include "engine/procgen/city/roads/road_builder.h"   // ONE road builder interface — the level picks (ADR-0089)
+#include "engine/procgen/deprecated/roads/road_net_mesh.h"   // roadNetConformRegions (the terrain carve; not yet through the module)
 #include "engine/procgen/noise.h"
 #include "engine/procgen/terrain_field.h"   // HeightField (level ground sampler)
 #include "engine/procgen/earthwork.h"       // the earthwork field (device parity)
@@ -396,6 +397,18 @@ void bakeProcModel(const ProcModel& m, Scene& scene, const Vec3& offset) {
     }
 }
 
+// Which analytic surface dresses a builder's named mesh — the same mapping the level
+// loader uses, so the offline render and the game shade the same asphalt.
+static RenderMaterial::Surface surfaceForSceneRoadMaterial(const std::string& name) {
+    using S = RenderMaterial::Surface;
+    if (name == "asphalt" || name == "shoulder") return S::Asphalt;
+    if (name == "concrete") return S::Concrete;
+    if (name == "sidewalk") return S::Pavement;
+    if (name == "terrain") return S::TerrainGround;
+    if (name == "guardrail") return S::CorrugatedMetal;
+    return S::None;
+}
+
 bool LevelScene::load(const std::string& levelPath, Scene& scene,
                       std::string* outHdrPath) {
     std::ifstream file(levelPath);
@@ -485,7 +498,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
     // footprints can grade it. Cache the model (by pointer) so the entity loop
     // bakes it rather than re-running the recipe.
     if (levelGround) {
-        for (const auto& ent : root.value("entities", json::array())) {
+    for (const auto& ent : root.value("entities", json::array())) {
             if (ent.value("shape", std::string()) == "script" &&
                 ent.value("onTerrain", false)) {
                 ProcModel m;
@@ -700,7 +713,10 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         }
     }
 
+    // Where each entity sits, for a builder produced per LEVEL (roads module).
+    int entityIndex = -1, roadIndex = 0;
     for (const auto& ent : root.value("entities", json::array())) {
+        ++entityIndex;
         if (ent.contains("mesh")) {
             addGltfModel(ent, levelDir, scene);   // imported glTF, path-traced
             continue;
@@ -740,12 +756,35 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             // drapes the mesh.
             if (roadBlock.contains("generate"))
                 applyGenerateRecipe(net, roadBlock["generate"], levelGround);
-            Material rm = Material::pbr(Vec3(1, 1, 1), 0.0, 0.93);
-            if (net.look.markings)   // lane paint via the RoadMarkings surface, not geometry
-                rm.surface = static_cast<int>(RenderMaterial::Surface::RoadMarkings);
-            int mi = scene.addMaterial(rm);
-            addMeshAsTriangles(buildRoadNetMesh(net, levelGround), Vec3(),
-                               Quat::identity(), Vec3(1, 1, 1), mi, scene);
+            // ONE ROAD BUILDER, CHOSEN BY THE LEVEL (Glenn, 2026-09-21: "whatever it is
+            // they should be 1:1. I don't know why the editor should end up building a
+            // procedurally generated city different than any other path. There should
+            // only be one path."). This called buildRoadNetMesh — the lattice — directly
+            // and unconditionally, so it had never heard of the road block's "builder"
+            // key: a lane-built city has no authored nodes and no `generate`, so
+            // roadNetFromJson returned an EMPTY net and this path drew no roads at all.
+            // A world with no roads is one where nothing can keep trees off them, which
+            // is what Glenn was looking at in the editor.
+            roads::RoadBuildInput in;
+            in.road = &net;
+            in.ground = levelGround;
+            in.options = roadBlock;
+            in.level = root;
+            in.levelPath = levelPath;
+            in.entityIndex = entityIndex;
+            in.ordinal = roadIndex++;
+            const roads::RoadProducts built = roads::roadBuilderFor(roadBlock).build(in);
+            for (const roads::RoadMesh& rm2 : built.meshes) {
+                if (rm2.mesh.vertices.empty()) continue;
+                Material rm = Material::pbr(Vec3(rm2.albedo.x, rm2.albedo.y, rm2.albedo.z), 0.0,
+                                            rm2.roughness);
+                if (rm2.markings)   // lane paint via the RoadMarkings surface, not geometry
+                    rm.surface = static_cast<int>(RenderMaterial::Surface::RoadMarkings);
+                else
+                    rm.surface = static_cast<int>(surfaceForSceneRoadMaterial(rm2.name));
+                addMeshAsTriangles(rm2.mesh, Vec3(), Quat::identity(), Vec3(1, 1, 1),
+                                   scene.addMaterial(rm), scene);
+            }
             continue;
         }
         static const char* SUPPORTED[] = {"sphere", "box", "plane", "cylinder",

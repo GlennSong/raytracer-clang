@@ -1861,6 +1861,25 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) {
         if (!d.field.spines.empty()) decks->push_back(&d.field);
     });
+    // A TIGHT road test, for the passes that place INSIDE a block and only need to know
+    // "is this actually on the asphalt". The scatter's own `exclude` keeps the level's
+    // clearMargin, which is a canopy allowance; reusing that for park trees excluded every
+    // pad within 6.5 m of a carriageway and took the metro from 656 placements to 18.
+    // The reach is the SIDEWALK, not the canopy margin: a park abuts a street and should
+    // plant right up to its own edge, but the footway between them is road. Carriageway-only
+    // (depthInside) left 57 trees on the lattice metro's pavements; the scatter's clearMargin
+    // on top of it excluded whole pads and took the city from 656 placements to 18.
+    double footway = 0;
+    world.each<engine::RoadEntity>([&](Entity, engine::RoadEntity& net) {
+        footway = std::max(footway, static_cast<double>(net.look.sidewalk));
+    });
+    auto onRoad = [footway](const std::vector<const RoadDeckField*>& ds, double x, double z) {
+        for (const RoadDeckField* d : ds) {
+            double y = 0;
+            if (d->heightAt(x, z, footway, &y)) return true;
+        }
+        return false;
+    };
     if (!terrain.flatten.empty() || !decks->empty()) {
         if (!terrain.flatten.empty()) keepOut = buildFlattenGrid(terrain.flatten);
         const TerrainParams& tp = terrain;
@@ -1903,6 +1922,12 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                 engine::Vec2 q(mnx + uni(prng) * (mxx - mnx),
                                mnz + uni(prng) * (mxz - mnz));
                 if (!engine::pointInPolygon(lb.pad, q)) continue;
+                // ...and not ON A ROAD. This path appends straight to `placements` and never
+                // asked at all, so a park pad that reaches the kerb planted trees on the
+                // pavement: 57 of the lattice metro's 1373 scenery instances, which is what
+                // Glenn kept seeing. The test is the TIGHT one — a park legitimately abuts a
+                // street, and excluding by the scatter's canopy margin threw the parks away.
+                if (onRoad(*decks, q.x, q.y)) continue;
                 Placement pl;
                 pl.position = Vec3(
                     q.x,
@@ -1997,6 +2022,17 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                     }
                     mm.m[0][3] += off.x;
                     mm.m[2][3] += off.y;
+                    // A FORMATION MEMBER IS A PLACEMENT TOO. The cluster is grown from one
+                    // accepted point and its members are thrown up to `spread` metres off it
+                    // — 2.2 m for a boulder cluster — and nothing re-asked the keep-out, so a
+                    // rock accepted just clear of the kerb put a member on the pavement.
+                    // 57 of the lattice metro's 1373 scenery instances, the last of five
+                    // separate reasons things stood in its roads.
+                    // The TIGHT test, not scatter.exclude: `exclude` also covers every graded
+                    // pad and block (it is a canopy allowance), and applying it here pruned 43%
+                    // of the city's scenery. A formation member has to be off the ROAD, which is
+                    // all that was ever wrong with it.
+                    if (onRoad(*decks, mm.m[0][3], mm.m[2][3])) continue;
                     const double gy = terrainHeight(terrain, terrainNoise,
                                                     mm.m[0][3], mm.m[2][3],
                                                     placeDilate);

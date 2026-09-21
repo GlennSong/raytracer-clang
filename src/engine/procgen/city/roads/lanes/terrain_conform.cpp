@@ -9,7 +9,7 @@
 namespace engine {
 namespace roads::lanes {
 
-void conformGrid(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& H, HeightGrid& grid, ConformStats& stats) {
+void conformGrid(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& H, HeightGrid& grid, ConformStats& stats, const std::vector<Surface>& decks) {
     const Rules& R = g.rules; double W = R.conformW; size_t nl = L.lanes.size();
     // owners: lanes first (by rank desc), then road envelopes (rank - 0.1)
     struct Owner { bool lane; int index; double rank; double halfWidth; std::unique_ptr<SegmentGrid> grid; double x0, x1, y0, y1; };
@@ -137,6 +137,28 @@ void conformGrid(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& H, H
     }
     stats.nodeOwner.assign(N, "-"); stats.nodeDist.assign(N, -1);
     for (size_t n = 0; n < N; ++n) if (owner[n] >= 0) { const Owner& o = owners[static_cast<size_t>(owner[n])]; stats.nodeOwner[n] = o.lane ? L.lanes[static_cast<size_t>(o.index)].id : g.edges[static_cast<size_t>(o.index)].id + "(envelope)"; stats.nodeDist[n] = odist[n]; }
+    // UNDER THE DECK ITSELF (2026-09-21). Everything above reaches out from a CENTRELINE by a
+    // road's or a lane's own width. The pavement union is wider than that wherever it closes a
+    // junction — the fillets, the gores, the closing pieces — and those are precisely where a
+    // driver leaves a ramp or crosses an intersection. On metro 392 of 817465 deck samples
+    // still stood under natural ground, the worst by 0.52 m: a wedge of hillside through the
+    // carriageway, which is what "you cannot drive the roads" looks like from inside a car.
+    // terrainVsDeck measures deck VERTICES against the bilinear grid, so clamp the four nodes
+    // that sample each one. A deck on structure is exempt, as in every pass above: the ground
+    // under a viaduct is not its business.
+    for (const Surface& sf : decks) {
+        for (const DeckVertex& v : sf.verts) {
+            const double fi = (v.xy.x - grid.x0) / grid.res, fj = (v.xy.y - grid.y0) / grid.res;
+            const int i0 = static_cast<int>(std::floor(fi)), j0 = static_cast<int>(std::floor(fj));
+            for (int dj = 0; dj <= 1; ++dj) for (int di = 0; di <= 1; ++di) {
+                const int i = i0 + di, j = j0 + dj;
+                if (i < 0 || j < 0 || i >= grid.nx || j >= grid.ny) continue;
+                const size_t n = static_cast<size_t>(j) * grid.nx + i;
+                if (v.z - T0[n] > R.bridgeH) continue;             // on structure
+                grid.z[n] = std::min(grid.z[n], v.z - 0.05);
+            }
+        }
+    }
     stats.cutM3 = stats.fillM3 = 0; double cell = grid.cellArea();
     for (size_t n = 0; n < N; ++n) { double dz = grid.z[n] - T0[n]; if (dz < 0) stats.cutM3 -= dz * cell; else stats.fillM3 += dz * cell; }
 }
