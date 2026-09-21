@@ -459,7 +459,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         const int stops = buildBusStopProps(
             world, *assets, sim_.buses(), nav_,
             [this](Real x, Real z) { return groundAt(x, z); }, &busStopProps_,
-            &stopPositions);
+            &stopPositions, decks_.empty() ? nullptr : &decks_.front());
         // The denominator is the network's own stop count: spacing, not the
         // level's busStops, decides how many a route gets.
         int networkStops = 0;

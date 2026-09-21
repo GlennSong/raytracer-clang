@@ -95,7 +95,8 @@ int buildBusStopProps(
     World& world, AssetManager& assets, const BusNetwork& net,
     const NavGraph& nav,
     const std::function<Real(Real, Real)>& groundAt,
-    std::vector<Entity>* out, std::vector<Vec3>* outPositions) {
+    std::vector<Entity>* out, std::vector<Vec3>* outPositions,
+    const engine::RoadDeckField* deck) {
     if (net.empty() || nav.nodeCount() == 0 || !groundAt) return 0;
     int built = 0;
 
@@ -160,8 +161,29 @@ int buildBusStopProps(
             if (along > 7.0) along = 7.0;
             if (along < 1.2) along = 1.2;
             const Real offset = use->width * 0.5 + 1.5;
-            const Vec2 p(a.x + dir.x * along + right.x * offset,
-                         a.y + dir.y * along + right.y * offset);
+            Vec2 p(a.x + dir.x * along + right.x * offset,
+                   a.y + dir.y * along + right.y * offset);
+            // ...AND OFF THE ASPHALT THAT WAS DRAWN. `use->width` is the chosen
+            // street's own width, so a stop beside a narrow street at a junction with
+            // a wide one is placed into the wide one: measured at 14 of 68 stops inside
+            // a carriageway on the lattice metro and 7 of 50 on the lane-built city,
+            // worst 9.8 m in. Step further along the SAME kerb normal — which keeps the
+            // stop beside its own street — until the deck says it is clear. A stop that
+            // cannot get clear is skipped, exactly as one with no kerbed street is:
+            // better no bench than a bench in a lane.
+            if (deck) {
+                Real moved = 0;
+                bool clear = false;
+                for (int guard = 0; guard < 24; ++guard) {
+                    const Real depth = static_cast<Real>(deck->depthInside(p.x, p.y));
+                    if (depth <= 0) { clear = true; break; }
+                    const Real step = std::min(Real(0.5) + depth, Real(14.0) - moved);
+                    if (step <= Real(1e-3)) break;
+                    p = Vec2(p.x + right.x * step, p.y + right.y * step);
+                    moved += step;
+                }
+                if (!clear) continue;
+            }
             const Real gy = groundAt(p.x, p.y);
 
             // Everything faces the road, i.e. along -right. The facing

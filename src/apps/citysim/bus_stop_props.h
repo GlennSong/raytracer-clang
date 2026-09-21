@@ -25,12 +25,14 @@
 
 #include "../../engine/asset_manager.h"
 #include "../../engine/ai/nav_graph.h"
+#include "../../engine/procgen/city/road_mesh.h"   // RoadDeckField: where the asphalt really is
 #include "../../engine/world.h"
 
 #include <functional>
 #include <vector>
 
 namespace citysim {
+
 
 // Build the furniture for every stop in `net`. Returns how many stops got it —
 // a stop whose node carries no usable street link is skipped rather than having
@@ -49,7 +51,14 @@ int buildBusStopProps(
     // Where each stop's furniture actually LANDED (the kerbside point, not the
     // nav node it was derived from). For framing and for anyone auditing that
     // a stop ended up on a pavement rather than in a lane.
-    std::vector<engine::Vec3>* outPositions = nullptr);
+    std::vector<engine::Vec3>* outPositions = nullptr,
+    // THE ASPHALT THAT WAS DRAWN. The kerbside point below is derived from the chosen
+    // street's own WIDTH, so a stop beside a narrow street at a junction with a wide one
+    // lands in the wide one — measured: 14 of 68 stops inside a carriageway on the
+    // lattice metro, 7 of 50 on the lane-built city, worst 9.8 m in. Given the deck, the
+    // furniture is stepped further out along the same kerb normal until it is clear.
+    // Null = width-only, as before.
+    const engine::RoadDeckField* deck = nullptr);
 
 }  // namespace citysim
 

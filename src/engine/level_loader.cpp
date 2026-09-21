@@ -5039,6 +5039,12 @@ bool LevelLoader::load(const std::string& path,
                                 fp.sidewalkWidth,
                                 static_cast<Real>(net.look.sidewalk));
                         });
+                    // The asphalt that was actually drawn, not a width on a graph edge:
+                    // whichever builder paved this city published a deck, and it is the
+                    // only thing that cannot be wrong about where the road is.
+                    world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) {
+                        if (!fp.deck && !d.field.spines.empty()) fp.deck = &d.field;
+                    });
                     return engine::planStreetFurniture(nav, furnGround, fp);
                 }();
             engine::StreetFurniture sf;

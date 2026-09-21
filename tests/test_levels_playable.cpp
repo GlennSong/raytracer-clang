@@ -2065,3 +2065,144 @@ TEST_CASE(every_builder_publishes_a_complete_city) {
         CHECK(f.lotBuildings > 100);
     }
 }
+
+// ============================================================================
+// NOTHING THE CITY DRESSES ITSELF WITH STANDS IN A ROAD
+//
+// Glenn, 2026-09-21, looking at metro_lanes: "the blocks, lots, buildings look
+// fine. Things related to the road are broken. Cars aren't parked on the side of
+// the street properly. Trees are in the middle of the road. Bus stops aren't on
+// the sidewalks ... Please write validation tests to verify that trees, rocks,
+// stop signs, stop lights, street signs, bus stops, benches -- really any
+// obstacle or furniture doesn't intersect with the roads."
+//
+// One predicate, asked of every class of thing the city plants: is this point on
+// the DRIVING SURFACE? The deck field answers it for whichever builder paved the
+// road (`depthInside` > 0 = inside the built asphalt, and it returns HOW FAR in,
+// which is what makes a failure actionable instead of a yes/no).
+//
+// Why a single test over all of them rather than one per subsystem: every one of
+// these placements measures off its own idea of where the kerb is — a width on a
+// graph edge, a `look.sidewalk`, a nav link's half-width — and those ideas drift
+// apart silently. The asphalt is the only thing that cannot be wrong about where
+// it is.
+// ============================================================================
+
+namespace {
+
+struct RoadIntrusion {
+    std::string what;
+    int count = 0;
+    int total = 0;
+    double worst = 0;
+    engine::Vec2 worstAt{0, 0};
+    std::vector<std::pair<double, engine::Vec2>> sites;   // the deepest few, for the dump
+};
+
+// How far INSIDE the built driving surface this point lies, over every deck in
+// the world. 0 = not on a road.
+double depthOnAnyDeck(const std::vector<const engine::RoadDeckField*>& decks, double x, double z) {
+    double worst = 0;
+    for (const engine::RoadDeckField* d : decks) worst = std::max(worst, d->depthInside(x, z));
+    return worst;
+}
+
+void note(RoadIntrusion& r, const std::vector<const engine::RoadDeckField*>& decks, double x,
+          double z, double allow) {
+    ++r.total;
+    const double d = depthOnAnyDeck(decks, x, z);
+    if (d <= allow) return;
+    ++r.count;
+    if (d > r.worst) { r.worst = d; r.worstAt = engine::Vec2(x, z); }
+    r.sites.push_back({d, engine::Vec2(x, z)});
+}
+
+}  // namespace
+
+TEST_CASE(city_furniture_never_stands_in_a_road) {
+    const char* kCities[] = {"metro_v2_test.json", "metro_lanes.json"};
+    for (const char* name : kCities) {
+        std::unique_ptr<Renderer> renderer = Renderer::create();
+        RendererMeshUploader uploader(*renderer);
+        AssetManager assets(uploader);
+        World world;
+        RenderView view;
+        const bool loaded = LevelLoader::load(levelsDir() + "/" + name, world, *renderer, view,
+                                              assets, /*editorMode=*/false);
+        CHECK(loaded);
+        if (!loaded) continue;
+
+        std::vector<const engine::RoadDeckField*> decks;
+        world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { decks.push_back(&d.field); });
+        CHECK(!decks.empty());
+        if (decks.empty()) continue;
+
+        // SCATTER — trees and rocks. Instanced, so the transforms ARE the trunks.
+        // A trunk is allowed nothing: a tree in the road is the thing Glenn saw.
+        RoadIntrusion scatter{"trees + rocks"};
+        world.each<InstanceGroup>([&](Entity, InstanceGroup& g) {
+            // SCENERY only. Furniture, paint and structure ride in InstanceGroups too, and
+            // some of those carry LOCAL transforms whose translation is the origin — 198 of
+            // them read as "at (0,0)", which sits in a road on this city and turned the
+            // scatter count into a fiction. A measurement that cannot say WHICH thing it
+            // measured is not a measurement.
+            if (g.drawClass != DrawClass::Scenery) return;
+            for (const Mat4& m : g.transforms) note(scatter, decks, m.m[0][3], m.m[2][3], 0.0);
+        });
+
+        // STREET FURNITURE — signal poles and lamp posts. The pole FOOT is what
+        // must be clear; a mast arm reaching over the near lane is the point of it.
+        RoadIntrusion poles{"signal poles"}, lamps{"street lamps"};
+        world.each<engine::StreetFurniture>([&](Entity, engine::StreetFurniture& sf) {
+            for (const engine::StreetFurniture::Signal& s : sf.signalPoles)
+                note(poles, decks, s.base.x, s.base.z, 0.0);
+            // A lamp HEAD legitimately overhangs; its post is directly below it.
+            for (const Vec3& h : sf.lampHeads) note(lamps, decks, h.x, h.z, 0.0);
+        });
+
+        // BUS STOPS — the pole, the sign and the bench. A BusStop::pos is a nav
+        // NODE and sits on the centreline by construction, so asking about THAT
+        // measures nothing; what must be clear is where the furniture LANDED,
+        // which buildBusStopProps reports for exactly this audit.
+        RoadIntrusion stops{"bus stop furniture"};
+        {
+            citysim::CityRenderSystem city;
+            if (city.build(world, &assets, nullptr)) {
+                std::vector<Vec3> at;
+                // Height does not matter to this audit — only WHERE the prop landed
+                // in plan — so the deck (or 0) is a sufficient ground for the call.
+                citysim::buildBusStopProps(
+                    world, assets, city.sim().buses(), city.nav(),
+                    [&](Real x, Real z) {
+                        double y = 0;
+                        for (const engine::RoadDeckField* d : decks)
+                            if (d->heightAt(x, z, 4.0, &y)) return static_cast<Real>(y);
+                        return Real(0);
+                    },
+                    nullptr, &at, decks.front());
+                for (const Vec3& p : at) note(stops, decks, p.x, p.z, 0.0);
+            }
+        }
+
+        const RoadIntrusion* all[] = {&scatter, &poles, &lamps, &stops};
+        for (const RoadIntrusion* r : all) {
+            std::printf("    [furniture] %-14s %-20s %d of %d in a road%s\n", name, r->what.c_str(),
+                        r->count, r->total,
+                        r->count ? (" — worst " + std::to_string(r->worst) + " m in at (" +
+                                    std::to_string(r->worstAt.x) + ", " +
+                                    std::to_string(r->worstAt.y) + ")")
+                                       .c_str()
+                                 : "");
+        }
+        for (const RoadIntrusion* r : all) {
+            if (r->count == 0) continue;
+            std::vector<std::pair<double, engine::Vec2>> worst = r->sites;
+            std::sort(worst.begin(), worst.end(),
+                      [](const auto& a, const auto& b) { return a.first > b.first; });
+            for (std::size_t i = 0; i < worst.size() && i < 4; ++i)
+                std::printf("        %s deepest %zu: %.2f m in at (%.1f, %.1f)\n", r->what.c_str(),
+                            i, worst[i].first, worst[i].second.x, worst[i].second.y);
+        }
+        for (const RoadIntrusion* r : all) CHECK(r->count == 0);
+    }
+}

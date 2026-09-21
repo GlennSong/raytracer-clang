@@ -21,6 +21,24 @@ StreetFurniturePlan planStreetFurniture(
     // walked to escape it before the placement is abandoned as not-a-corner.
     const Real kPoleSearch = 26.0, kPoleMaxWalk = 12.0, kPoleDropInside = 1.5;
 
+    // WALK A PLACEMENT OFF THE ASPHALT. `out` is the direction away from the road it
+    // belongs to (its kerb normal); stepping along that keeps a pole on its own corner
+    // and a lamp on its own verge instead of teleporting it somewhere arbitrary.
+    // Returns how deep it still is when it gives up — 0 means clear.
+    auto walkOffDeck = [&](Vec2& at, const Vec2& out, Real limit) -> Real {
+        if (!p.deck) return 0;
+        Real moved = 0;
+        for (int i = 0; i < 24; ++i) {
+            const Real depth = static_cast<Real>(p.deck->depthInside(at.x, at.y));
+            if (depth <= 0) return 0;
+            const Real step = std::min(Real(0.5) + depth, limit - moved);
+            if (step <= Real(1e-3)) return depth;
+            at = at + out * step;
+            moved += step;
+        }
+        return static_cast<Real>(p.deck->depthInside(at.x, at.y));
+    };
+
     // Every link bucketed by cell, so "what asphalt is near this point" is a few dozen
     // segment tests rather than the city's thousands.
     const Real kLinkCell = 32.0;
@@ -207,6 +225,8 @@ StreetFurniturePlan planStreetFurniture(
         // reach — is discarded. The sim's SignalController is unaffected either way: it
         // signalises a junction by its approaches, and these spots are what gets DRAWN.
         if (residual > kPoleDropInside) continue;
+        // ...and off the DRAWN asphalt, which the link widths above only approximate.
+        if (walkOffDeck(corner, right, kPoleMaxWalk) > kPoleDropInside) continue;
         SignalSpot s;
         s.base = Vec3(corner.x, gy(corner.x, corner.y) + L.layer * kLayerLift,
                       corner.y);
@@ -319,6 +339,12 @@ StreetFurniturePlan planStreetFurniture(
                  (sp - nav.nodes[L.from]).length() < p.junctionClear);
             if (nearJunction) continue;
             if (insideAnyCarriageway(sp)) continue;
+            // ...and off the DRAWN asphalt. insideAnyCarriageway reasons from link
+            // WIDTHS, which is its own road's width — a lamp clears the street it is
+            // marching along and stands on the junction pad or on the wider road
+            // crossing behind it. Lamps are sampled every 2.5 m along a kerb, so
+            // dropping one costs nothing; a signal pole gets walked out instead.
+            if (p.deck && p.deck->depthInside(sp.x, sp.y) > 0.0) continue;
             if (tooClose(sp, dir)) continue;
             const Real y = gy(sp.x, sp.y) + L.layer * kLayerLift;
             out.lampBases.push_back(Vec3(sp.x, y, sp.y));

@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_STREET_FURNITURE_H
 
 #include "../../ai/nav_graph.h"
+#include "road_mesh.h"      // RoadDeckField: where the asphalt really is
 #include "../../../rt_math.h"
 #include <functional>
 #include <vector>
@@ -33,6 +34,14 @@ struct StreetFurnitureParams {
     // neighbouring arm's carriageway too (the metro's organic grid put a
     // pole inside the neighbour's ribbon at every corner under ~75 degrees).
     Real sidewalkWidth = 3.5;
+    // THE ASPHALT THAT WAS ACTUALLY DRAWN. Every placement here reasons from nav link
+    // WIDTHS, and a link's width is its own road's — so a pole clears the street it
+    // belongs to and stands on the junction pad, or on the freeway crossing behind it
+    // (metro_v2_test: 50 of 2057 lamps and 3 of 288 poles inside a carriageway; the
+    // lattice metro has shipped that way). The deck field is the one thing that cannot
+    // be wrong about where the road is: given it, a placement that lands on asphalt is
+    // walked out along its own kerb normal. Null = width-only, as before.
+    const RoadDeckField* deck = nullptr;
     // 26 m between lamps: close enough that the 34 m pools OVERLAP rather
     // than leaving a dark gap between every pair (device: "it's pretty dark
     // in the city at night").
