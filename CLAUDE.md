@@ -65,6 +65,33 @@ the engine rules and decision records into gates that fail, because several of
 them were written down, read, and violated anyway. Worth reading before adding a
 subsystem that overlaps an existing one.
 
+## Branches and worktrees
+
+**Glenn, 2026-09-20: "If we close a branch, even if we haven't deleted it yet, it should be
+done. We shouldn't be going back to old branches and continuing work in them."**
+
+A branch is CLOSED the moment its work is merged into `main` — whether or not it still
+exists. A closed branch never takes another commit. Not a follow-up, not a fix to the thing
+it just landed, not "while I'm in here". If there is more to do, it is new work and it gets a
+new branch.
+
+1. **New work, new branch, named for the work.** Cut it from `main`:
+   `git -C <worktree> checkout main && git -C <worktree> checkout -b claude/<what-it-is>`.
+   The name describes what is being built, not where the last round happened — a branch
+   called `road-module` carrying citysim work is a lie that costs the next reader ten
+   minutes.
+2. **State the branch when starting and when landing.** "Working on `claude/x`" at the
+   start; "`claude/x` is merged into main and closed" at the end. A reader should never have
+   to run `git worktree list` to find out what is going on.
+3. **Land, then close.** Fast-forward `main` onto the branch, say so, and delete the branch
+   in the same breath unless Glenn wants it kept. Leaving it undeleted does not leave it open.
+4. **`git worktree list` before committing anything**, every session. Two worktrees cannot
+   hold the same branch, and that constraint — not a decision — is what silently keeps work
+   on an old branch. If `main` is checked out elsewhere, cut the new branch anyway; do not
+   fall back to whatever the worktree happens to be sitting on.
+5. **Glenn pushes.** There are no GitHub credentials here. Say plainly what is unpushed, on
+   which branch, and what it contains.
+
 ## Key Conventions
 
 - C++17, clang++, standard library only — no external deps

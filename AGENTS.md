@@ -324,6 +324,36 @@ follow along and review.
   Never end a visual change with only "verified, suite green" — end it with
   "open X, look at Y, you'll see Z."
 
+## Branches and Worktrees (Agent Rule)
+
+**Glenn, 2026-09-20: "If we close a branch, even if we haven't deleted it yet, it should
+be done. We shouldn't be going back to old branches and continuing work in them. It's
+confusing."** He reads the branch name to know what is going on; four rounds of citysim
+work committed to a branch called `claude/road-module` — whose roads work had landed hours
+earlier — made the repo unreadable to him, and he had to ask three times where we were.
+
+- **A merged branch is CLOSED**, deleted or not, and takes no further commits. Not a
+  follow-up, not a fix to the thing it just landed, not "while I'm already in here". More
+  work is NEW work.
+- **New work, new branch, cut from `main`, named for the work** — what is being built, not
+  where the last round happened. A branch called `road-module` carrying citysim changes is a
+  lie that costs the next reader ten minutes.
+- **`git worktree list` before you commit, every session.** Two worktrees cannot hold the
+  same branch, so if `main` (or your intended branch) is checked out elsewhere, git silently
+  leaves you on whatever the worktree was already sitting on. That CONSTRAINT, not a
+  decision, is what quietly continues an old branch. Cut the new branch anyway.
+- **Say the branch out loud** when starting work and when landing it: "working on
+  `claude/x`", then "`claude/x` is merged into main and closed".
+- **Land, then close, in the same breath.** Fast-forward `main`, say so, delete the branch
+  unless Glenn wants it kept. An undeleted branch is not an open one.
+- **Glenn pushes.** No GitHub credentials here. State plainly what is unpushed, on which
+  branch, and what it contains — he should not have to discover that `main` grew a commit.
+
+Two git behaviours that make this look worse than it is: `git branch -d` tests "merged into
+**HEAD**", not into `main`, so it refuses to delete a branch that IS in main while you stand
+on an older one; and a checkout is blocked by a locally-modified file the target branch
+deletes — save that file aside and restore it after, never stash-and-forget.
+
 ## Coding Standards
 
 ### Naming Conventions
