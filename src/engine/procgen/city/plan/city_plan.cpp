@@ -200,6 +200,68 @@ RoadGraph planarizePolylines(const std::vector<Polyline>& roads, Real snap = 0.6
 }
 
 // Remove dead-end chains shorter than `stub` (the overshoot past a crossing road).
+// A LINK SHORTER THAN THE ROADS THAT MEET THERE IS NOT A LINK, it is one junction the
+// planarizer found twice — two grid lines crossing a boulevard a few metres apart leave a
+// triangle whose inside is narrower than the pavement around it. The plan cannot see the
+// harm (the block insets to nothing and drops out of the count) but the builder paves it,
+// and its lanes then sit inside each other's footprints. So the two ends become one node.
+void collapseShortLinks(RoadGraph& g, Real sidewalk) {
+    for (int pass = 0; pass < 6; ++pass) {
+        // Only a link BETWEEN JUNCTIONS counts: the graph's edges are 15 m samples along a
+        // road, and collapsing those would fold every street into a point.
+        std::vector<int> degree(g.nodes.size(), 0);
+        for (const RoadEdge& e : g.edges) { ++degree[static_cast<std::size_t>(e.a)]; ++degree[static_cast<std::size_t>(e.b)]; }
+        std::vector<Real> widest(g.nodes.size(), 0);
+        for (const RoadEdge& e : g.edges) {
+            widest[static_cast<std::size_t>(e.a)] = std::max(widest[static_cast<std::size_t>(e.a)], e.width);
+            widest[static_cast<std::size_t>(e.b)] = std::max(widest[static_cast<std::size_t>(e.b)], e.width);
+        }
+        std::vector<int> merge(g.nodes.size());
+        for (std::size_t i = 0; i < merge.size(); ++i) merge[i] = static_cast<int>(i);
+        std::function<int(int)> find = [&](int a) { while (merge[static_cast<std::size_t>(a)] != a) a = merge[static_cast<std::size_t>(a)] = merge[static_cast<std::size_t>(merge[static_cast<std::size_t>(a)])]; return a; };
+        bool any = false;
+        for (const RoadEdge& e : g.edges) {
+            const Vec2 pa = g.nodes[static_cast<std::size_t>(e.a)].pos, pb = g.nodes[static_cast<std::size_t>(e.b)].pos;
+            if (degree[static_cast<std::size_t>(e.a)] < 3 || degree[static_cast<std::size_t>(e.b)] < 3) continue;
+            const Real want = 0.5 * (widest[static_cast<std::size_t>(e.a)] + widest[static_cast<std::size_t>(e.b)]) + 4 * sidewalk;
+            if ((pb - pa).length() >= want) continue;
+            const int ra = find(e.a), rb = find(e.b);
+            if (ra != rb) { merge[static_cast<std::size_t>(std::max(ra, rb))] = std::min(ra, rb); any = true; }
+        }
+        if (!any) return;
+        // Rebuild: merged nodes keep the average position, edges within a group disappear.
+        std::vector<Vec2> sum(g.nodes.size(), Vec2(0, 0));
+        std::vector<int> count(g.nodes.size(), 0);
+        for (std::size_t i = 0; i < g.nodes.size(); ++i) {
+            const int r = find(static_cast<int>(i));
+            sum[static_cast<std::size_t>(r)] = sum[static_cast<std::size_t>(r)] + g.nodes[i].pos;
+            ++count[static_cast<std::size_t>(r)];
+        }
+        RoadGraph out;
+        std::vector<int> remap(g.nodes.size(), -1);
+        for (std::size_t i = 0; i < g.nodes.size(); ++i) {
+            const int r = find(static_cast<int>(i));
+            if (remap[static_cast<std::size_t>(r)] < 0) {
+                remap[static_cast<std::size_t>(r)] = static_cast<int>(out.nodes.size());
+                RoadNode n = g.nodes[static_cast<std::size_t>(r)];
+                n.pos = sum[static_cast<std::size_t>(r)] * (1.0 / std::max(1, count[static_cast<std::size_t>(r)]));
+                out.nodes.push_back(n);
+            }
+            remap[i] = remap[static_cast<std::size_t>(r)];
+        }
+        std::set<std::pair<int, int>> seen;
+        for (const RoadEdge& e : g.edges) {
+            RoadEdge n = e;
+            n.a = remap[static_cast<std::size_t>(e.a)];
+            n.b = remap[static_cast<std::size_t>(e.b)];
+            if (n.a == n.b) continue;
+            if (!seen.insert({std::min(n.a, n.b), std::max(n.a, n.b)}).second) continue;
+            out.edges.push_back(n);
+        }
+        g = std::move(out);
+    }
+}
+
 void pruneStubs(RoadGraph& g, Real stub) {
     for (int pass = 0; pass < 4; ++pass) {
         std::vector<std::vector<int>> inc(g.nodes.size());
@@ -658,6 +720,7 @@ CityPlan generatePlan(const Brief& B) {
     }
     // --- the street graph ---
     plan.streets = planarizePolylines(roads);
+    collapseShortLinks(plan.streets, B.sidewalk);
     pruneStubs(plan.streets, 45.0);
     // Interchanges: where the ring crosses an arterial (a spoke).
     for (const RoadEdge& e : plan.streets.edges) {
