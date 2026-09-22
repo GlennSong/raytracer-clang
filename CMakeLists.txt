@@ -68,6 +68,7 @@ add_library(engine_core STATIC
     src/engine/bundle/bundle_glb.cpp
     src/engine/procgen/city/lot_cache.cpp
     src/engine/lot_grow_setup.cpp
+    src/engine/city_grow.cpp
     src/engine/city_prepass.cpp
     src/engine/procgen/city/citylots_producer.cpp
     src/engine/editable_curve.cpp

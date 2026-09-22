@@ -4,6 +4,7 @@
 #include "level_params.h"   // shared level-JSON -> params readers (both loaders)
 #include "script_assets.h"
 #include "lot_grow_setup.h"   // the lot pass's parameters from a level: one derivation for loader and bake
+#include "city_grow.h"          // ONE grow, every host (Glenn: "for building the city should be one path right?")
 #include "procgen/city/lot_cache.h"   // lots read back from a level bundle (ADR-0084 B)
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/script_modules.h"
@@ -2232,17 +2233,29 @@ static GrownLots growCityLots(
     const engine::Vec2* enterableAt = nullptr) {
     RT_PROFILE_ZONE_NAMED("growCityLots");
     GrownLots g;
-    // ONE derivation (ADR-0084, milestone B): the parameters come from lotGrowSetupForLevel — the function
-    // the `lots` bundle producer runs headlessly — so a grow here and a grow in rt_bake are the same city.
-    // The setup owns the style book's VM for as long as the grow runs.
-    engine::LotGrowSetup s = engine::lotGrowSetupForLevel(cs, levelDir, ground, nets, std::move(groundWith), groundMeshCell, enterableAt);
-    for (const std::string& p : s.scriptFiles) g_loadedScriptFiles.push_back(p);
+    // ONE GROW (engine/city_grow.h): the rules — the parameters (ADR-0084 B), which blocks, the
+    // streets a door faces, a built city's margin and paving datum — are engine::growCity, which is
+    // what the `lots` producer runs headlessly and what the offline tracer runs. What stays HERE is
+    // this host's caching: the level's bundle, read when its section is the one this build wants.
+    // A warm load grows nothing, so the books are resolved (for the watch list) but never parsed.
+    for (const std::string& p : engine::cityGrowScriptFiles(levelDir)) g_loadedScriptFiles.push_back(p);
+    engine::CityGrowInputs gin;
+    gin.citysim = cs.is_object() ? cs : json::object();
+    gin.levelDir = levelDir;
+    gin.padGround = ground;
+    gin.netGround = netGround;
+    gin.nets = &nets;
+    gin.freewayROW = freewayROW;
+    gin.groundWith = std::move(groundWith);
+    gin.groundMeshCell = groundMeshCell;
+    gin.enterableAt = enterableAt;
 #ifdef RT_ROADS_LANES
     if (!g_lanes.blocks.empty()) {
-        // The lane lab's blocks are exact to the kerb and already inset by the sidewalk (Clipper): the same
-        // parceller and grammar, no road graph, and no miter inset to reject them.
-        s.lp.roadMargin = 0;
-        s.lp.sidewalkRise = engine::roads::lanes::lanesSidewalkRise();   // paving meets the lab's sidewalk (ADR-0086)
+        // The lanes builder paved the whole city: its pavement's holes are the blocks, its twin is
+        // the streets, its kerb band is the pavement a door walks out to.
+        gin.blocks = &g_lanes.blocks;
+        gin.streets = &g_lanes.nav;
+        gin.pavedSidewalk = g_lanes.pavedSidewalk;
         engine::NetLotResult r; bool fromBundle = false;
         const auto tl = std::chrono::steady_clock::now();
         auto since = [](const std::chrono::steady_clock::time_point& t) { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count(); };
@@ -2287,33 +2300,8 @@ static GrownLots growCityLots(
         }
         if (!fromBundle) {
             r = engine::NetLotResult(); g.cellParts.clear(); g.bundle.reset();
-            // THE STREETS, so a door knows which way to face. growLotBuildings aims each
-            // building's faceDir at the nearest point on this graph — "the door (and the
-            // retail front) faces the nearest STREET, not a fixed +Z" — and passing nullptr
-            // left every door in a lane-built city pointing whichever way the plan happened
-            // to run (Glenn, 2026-09-21: "The doors of these buildings should face the
-            // streets"). The lanes city publishes its twin as the level road graph; it was
-            // simply never handed to the lot pass. `roadClear` is the same sidewalk-derived
-            // clearance the lattice path uses, so buildings also stay behind the kerb.
-            const engine::RoadGraph* lotRoads = g_lanes.nav.edges.empty() ? nullptr : &g_lanes.nav;
-            // ...but NOT the lattice's clearance. `s.roadClear` is sidewalk + 0.6 m from each
-            // centreline's half-width — the lattice's way of keeping a building off a pavement
-            // its blocks do not know about. A lane-built block is cut from the BUILT pavement
-            // (pavementHoles stops at the back of the drawn sidewalk), so the pavement is
-            // already outside it and the lattice clearance counted it twice: measured on
-            // metro_lanes, 1082 buildings with 0 extra clearance against 977 with it (main,
-            // which never passed the graph, had 1012). Buildings still clear the carriageway
-            // itself (half-width + 0).
-            constexpr double kLanesLotRoadClear = 0.0;
-            // ...and the width of the pavement beside them, which the lattice gets from its
-            // own net's look and a lane-built city never supplied (see LanesPublished).
-            if (s.lp.sidewalkWidth <= 0 && g_lanes.pavedSidewalk > 0)
-                s.lp.sidewalkWidth = static_cast<engine::Real>(g_lanes.pavedSidewalk);
-            s.lp.padFeatherInside = static_cast<engine::Real>(engine::roads::lanes::lanesPadFalloff(g_lanes.sidewalk));
-            r.lots = engine::growLotBuildings(g_lanes.blocks, s.lp, &r.plan, s.planOnly ? nullptr : &r.parts,
-                                              lotRoads, kLanesLotRoadClear,
-                                              (s.wantFlat && !s.planOnly) ? &r.flatParts : nullptr, &r.gradeFlatten);
-            LOG_INFO << "[lanelab] lots on " << g_lanes.blocks.size() << " scene blocks: " << r.lots.size() << " buildings, " << r.plan.lots.size() << " lots, grown in " << since(tl) << " s";
+            r = engine::growCity(gin);
+            LOG_INFO << "[lanelab] grown in place in " << since(tl) << " s";
         }
         g.lots = std::move(r.lots); g.plan = std::move(r.plan); g.parts = std::move(r.parts); g.flatParts = std::move(r.flatParts); g.gradeFlatten = std::move(r.gradeFlatten); g.grown = true;
         (void)netGround; (void)freewayROW;
@@ -2352,9 +2340,7 @@ static GrownLots growCityLots(
                 }
             }
         }
-        if (!fromBundle)
-            r = engine::growLotBuildingsOnNets(
-                nets, s.lp, s.ep, s.roadClear, netGround, freewayROW, s.wantFlat, !s.planOnly);
+        if (!fromBundle) r = engine::growCity(gin);
     }
     g.lots = std::move(r.lots);
     g.plan = std::move(r.plan);

@@ -1,0 +1,45 @@
+{
+  "center": [
+    0.0,
+    0.0
+  ],
+  "core": {
+    "angle": 19.06279087510491,
+    "arterialEvery": 3,
+    "block": [
+      94.42401007095445,
+      64.38000686655985
+    ],
+    "radius": 403.2500572213321
+  },
+  "freeway": {
+    "radials": 2,
+    "radius": 1022.8024719615474,
+    "wobble": 50.0
+  },
+  "midtown": {
+    "block": [
+      159.34589150835433,
+      108.12756923781185
+    ],
+    "radius": 800.0,
+    "warp": 18.822384985122454
+  },
+  "name": "metro_planned",
+  "outskirts": {
+    "curvature": 23.627489127946898,
+    "margin": 120.0,
+    "ringSpacing": 140.65973907072558,
+    "spokes": 10,
+    "streetSpacing": 95.0
+  },
+  "roads": {
+    "arterial": 22.0,
+    "collector": 16.0,
+    "freeway": 30.0,
+    "local": 12.0,
+    "sidewalk": 5.0
+  },
+  "seed": 474349,
+  "size": 3000.0
+}

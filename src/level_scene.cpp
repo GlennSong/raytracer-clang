@@ -6,6 +6,7 @@
 #include "engine/procgen/tree.h"
 #include "engine/procgen/surface_maps.h"
 #include "engine/model_importer.h"
+#include "engine/city_grow.h"                 // ONE grow, every host
 #include "engine/procgen/city/city_lots.h"   // living-city lots (offline parity)
 #include "engine/procgen/city/roads/road_entity.h"
 #include "engine/procgen/city/roads/road_builder.h"   // ONE road builder interface — the level picks (ADR-0089)
@@ -571,63 +572,23 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             ctp.flatten = allFlatten;   // the road-carved ground the lots see
             rebuildFlattenIndex(ctp);   // index the cut/fill set (ADR-0075 P0)
             Noise cnoise(root["terrain"].value("seed", 0u));
-            engine::EdgeBlockParams ep;
-            engine::LotParams lp;
-            readLotGrowParams(cs, ep, lp);
-            // EDITOR/RUNTIME PARITY: the JSON-derived half is the shared reader
-            // above (which now carries the parcel grain and hubRadius). What it
-            // cannot carry is anything derived from the ROAD NETS — the hub list
-            // and the coreness anchor — so those stay here, mirroring
-            // level_loader's growCityLots exactly. Without them the editor
-            // preview grows a DIFFERENT city than the game: no districts past
-            // the radial rings, and coreness 0 everywhere, which means no towers.
-            for (const engine::RoadEntity& n : lotNets)
-                for (const engine::CityHub& h : n.plan.cityHubs)
-                    lp.hubs.push_back({h.pos, h.kind});
-            for (const engine::RoadEntity& n : lotNets)
-                for (const engine::CityHub& h : n.plan.cityHubs) {
-                    if (lp.center.x == 0 && lp.center.y == 0) lp.center = h.pos;
-                    if (h.kind == 0) {
-                        lp.center = h.pos;
-                        break;
-                    }
-                }
-            lp.ground = [&ctp, &cnoise](engine::Real x, engine::Real z) {
-                return static_cast<engine::Real>(terrainHeight(ctp, cnoise, x, z));
+            // ONE GROW, EVERY HOST (engine/city_grow.h; Glenn, 2026-09-22: "for building the
+            // city should be one path right?"). What stood here was a hand-rolled copy of the
+            // loader's setup — its own hub list, its own coreness centre, its own style and
+            // archetype book loads — which meant a level that AUTHORS its districts (ADR-0090)
+            // grew a DIFFERENT city offline than in the game. The tracer renders the city; it
+            // does not decide what the city is.
+            engine::CityGrowInputs gin;
+            gin.citysim = cs;
+            gin.levelDir = levelDir;
+            gin.padGround = [&ctp, &cnoise](double x, double z) {
+                return terrainHeight(ctp, cnoise, x, z);   // pads grade off the road-carved ground
             };
-#ifdef RT_ENABLE_SCRIPTING
-            std::unique_ptr<ScriptVM> styleVm;   // must outlive the grow
-            {
-                std::string sb = loadScriptCode("style_book.lua", levelDir);
-                if (!sb.empty()) {
-                    styleVm = std::make_unique<ScriptVM>();
-                    openProcgenLibrary(*styleVm);
-                    std::string err;
-                    auto hook = engine::makeStyleBook(*styleVm, sb, &err);
-                    if (hook) lp.styleHook = std::move(hook);
-                }
-            }
-            // ARCHETYPE BOOK — same all-or-nothing contract as the viewer's
-            // loader (level_loader.cpp); a rejected book LOG_ERRORs and the
-            // compiled ladders stand, so both hosts grow the SAME city.
-            {
-                std::string ab = loadScriptCode("archetype_book.lua", levelDir);
-                if (!ab.empty()) {
-                    ScriptVM vm;   // the book is pure data once parsed
-                    openProcgenLibrary(vm);
-                    std::string err;
-                    engine::ArchetypeBook book =
-                        engine::makeArchetypeBook(vm, ab, &err);
-                    if (!err.empty())
-                        LOG_ERROR << "archetype_book.lua REJECTED "
-                                     "(all-or-nothing): " << err;
-                    else
-                        lp.archetypeBook = std::move(book);
-                }
-            }
-#endif
-            engine::NetLotResult lots = engine::growLotBuildingsOnNets(
-                lotNets, lp, ep, cs.value("sidewalk", 4.0) + 0.6, levelGround);
+            gin.netGround = levelGround;                   // ...the nets drape on the natural one
+            gin.nets = &lotNets;
+            engine::Vec2 spawnXZ;
+            if (engine::authoredSpawnXZ(root, spawnXZ)) gin.enterableAt = &spawnXZ;
+            engine::NetLotResult lots = engine::growCity(gin);
             // Building pads: flat graded ground under every footprint.
             for (const engine::LotBuilding& lb : lots.lots) {
                 if (lb.type == "park" || lb.type == "green" ||
@@ -716,7 +677,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                         for (const Vec3& s : lb.treeSpots) {
                             th = th * 1664525u + 1013904223u;
                             const TreeMesh& kit = kits[(th >> 8) % kits.size()];
-                            const Vec3 pos(s.x, lp.ground ? lp.ground(s.x, s.z) : 0.0,
+                            const Vec3 pos(s.x, gin.padGround ? gin.padGround(s.x, s.z) : 0.0,
                                            s.z);
                             const Quat rot = Quat::fromAxisAngle(
                                 Vec3(0, 1, 0), ((th >> 8) % 628u) / 100.0);

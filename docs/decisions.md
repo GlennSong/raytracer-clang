@@ -7443,3 +7443,52 @@ pinned by `tests/test_city_plan.cpp`, which also holds the grid core to rectangl
 one connected network, every block to a use it can hold, and the freeway to a share of commutes
 worth building it for. What a plan still says nothing about: terrain (it plans on the flat, so a
 hill can still make a planned street unbuildable), water, districts' building styles, or transit.
+
+## ADR-0093 — One grow: every host calls engine::growCity, and owns only its caching
+
+**Status:** Accepted (2026-09-22). **Trigger:** Glenn: "I would like the offline path tracer to work.
+But for building the city should be one path right?", following 2026-09-21: "I don't know why the
+editor should end up building a procedurally generated city different than any other path. There
+should only be one path."
+
+**Context.** ADR-0084 milestone B made the lot pass's *parameters* one derivation
+(`lotGrowSetupForLevel`). What stayed duplicated was the **call around them** — which blocks, which
+streets a door faces, a built city's margin and paving datum, whether geometry is wanted at all —
+written out three times:
+
+* `LevelLoader::growCityLots` — the game's;
+* `roads::lanes::growLotsForLevel` — the `lots` bundle producer's, commented "the loader's rules,
+  one for one", which passed **no** street graph and never set `sidewalkWidth`;
+* `src/level_scene.cpp` — the offline tracer's, which re-derived the hub list and the coreness
+  centre by hand and loaded the style and archetype books itself.
+
+Each copy was faithful on the day it was written. Two had already drifted. The tracer's copy
+overwrote the hub list unconditionally, so a level that **authors** its districts (ADR-0090 —
+metro_lanes does) grew a different city offline than in the game. The producer's copy grew doors
+that face whichever way a block's plan ran, so a lane-built city's buildings depended on **whether
+its lots came out of the bundle or were grown in place** — the cache deciding what the city looks
+like, which is the worst version of this bug because it is invisible until someone clears a cache.
+
+**Decision.** `engine::growCity(CityGrowInputs)` (`src/engine/city_grow.h`) is the grow. A host fills
+one of two sides — `nets` (the lattice: blocks are the road graph's faces) or `holes`/`blocks` plus
+the `streets` and paved band (a builder that paved a whole city) — and gets a `NetLotResult` back.
+`cityBlocksFromHoles` is the one spelling of the hole→block inset, which three call sites had each
+written with its own constants. The loader, the producer and the tracer now call it, and what stays
+host-specific is **caching**: the loader and the producer read and write bundles; the tracer grows
+in place.
+
+**Consequences.** The producer bakes with the streets and the paved band it never had
+(`kLotsBuildTag` → `2026-09-22.1`; lab-level lots bundles rebuild once). The offline tracer honours
+authored districts, the enterable spawn, `planOnly` and the LOD1 twin, none of which its copy knew
+about — and it lost ~60 lines that existed only to say again what the loader says. A warm load no
+longer parses the style book just to throw it away; the watch list comes from
+`cityGrowScriptFiles`, which resolves the books without running them. The gate is that the block
+and skyline censuses are identical across the change with caches off (RT_NOCACHE=1), on the lattice
+city and the lane-built one.
+
+**What is still not one path.** The tracer parses the level itself (terrain, entities, camera,
+lights) rather than running `LevelLoader` into a headless World — it *renders* a city it no longer
+designs, but it still assembles the scene twice. Retiring that is a bigger job than this one and
+wants its own decision. The Makefile build of `raytracer` is a second, hand-listed build of the same
+binary and has not compiled since ADR-0089 renamed `road_net.cpp` two days ago; CMake's `raytracer`
+target (which links `engine_core`) is the live one.

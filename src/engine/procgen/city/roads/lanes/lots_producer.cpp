@@ -2,6 +2,7 @@
 
 #include <set>
 
+#include "engine/city_grow.h"
 #include "engine/lot_grow_setup.h"
 #include "engine/procgen/city/lot_cache.h"
 #include "engine/procgen/city/roads/lanes/block_audit.h"
@@ -17,7 +18,7 @@ namespace engine {
 namespace roads::lanes {
 
 // Bump whenever the lot pass's output changes for the same inputs (the key cannot see code).
-const char* const kLotsBuildTag = "2026-09-21.17";   // ground-relative (draped) dressing slots; blocks behind the drawn sidewalk; door walks reach it
+const char* const kLotsBuildTag = "2026-09-22.1";   // ground-relative (draped) dressing slots; blocks behind the drawn sidewalk; door walks reach it   // 2026-09-22.1: ONE grow (engine::growCity) — the bake gets the streets and the paved band the loader always had
 
 namespace {
 using bundle::BinReader;
@@ -97,6 +98,13 @@ public:
         }
         if (!out.readBack(pre + "blocks/holes", bytes)) return fail(pre + "blocks/holes: missing");
         { BinReader r(bytes.data(), bytes.size()); if (!bundle::getRings(r, city.holes)) return fail(pre + "blocks/holes: unreadable"); }
+        // The streets a door faces and the pavement it walks out to — what the loader hands the
+        // grow when it grows in place. Without them the BAKED city's doors pointed whichever way
+        // the block's plan ran, so a level looked different warm than cold.
+        if (!out.readBack(pre + "roads/nav", bytes)) return fail(pre + "roads/nav: missing");
+        { BinReader r(bytes.data(), bytes.size()); if (!bundle::getRoadGraph(r, city.nav)) return fail(pre + "roads/nav: unreadable"); }
+        if (!out.readBack(pre + "roads/bands", bytes)) return fail(pre + "roads/bands: missing");
+        { BinReader r(bytes.data(), bytes.size()); CurbBandAudit b; if (!bundle::getCurbBands(r, b)) return fail(pre + "roads/bands: unreadable"); city.pavedSidewalk = b.sidewalkWidth; }
         if (!report(0.03, "grow", std::to_string(city.holes.size()) + " pavement holes")) return fail("cancelled");
         const auto tg = std::chrono::steady_clock::now();
         nlohmann::json counts;
@@ -117,31 +125,33 @@ void registerLotsProducer() { bundle::registerProducer(std::make_unique<LotsProd
 
 NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInputs& city, nlohmann::json* report) {
     const nlohmann::json cs = in.level.value("citysim", nlohmann::json::object());
-    const double sidewalk = cs.is_object() ? cs.value("sidewalk", 4.0) : 4.0;
-    // The loader's rules, one for one (LevelLoader::loadLanesEntity + growCityLots's lanelab branch):
-    // the lab's grid IS the ground, the blocks are the pavement holes (sidewalks included) inset by a margin, no nets.
+    // The city's own grid IS the ground; the blocks are its pavement holes; there are no nets.
     HeightField ground;
     if (city.hasTerrain) {
         auto grid = std::make_shared<HeightGrid>();
         grid->x0 = city.ground.x0; grid->y0 = city.ground.y0; grid->res = city.ground.res; grid->nx = city.ground.nx; grid->ny = city.ground.ny; grid->z = city.ground.z;
         ground = [grid](double x, double z) { return grid->sample(x, z); };
     }
-    const std::vector<Poly2> blocks = blocksFromHoles(city.holes, 1.5, kBlockMarginBehindSidewalk, kMinBlockWidth);
     Vec2 spawn; const bool haveSpawn = authoredSpawnXZ(in.level, spawn);
-    LotGrowSetup s = lotGrowSetupForLevel(cs, in.levelDir, ground, {}, nullptr, 0.0, haveSpawn ? &spawn : nullptr);
-    s.lp.roadMargin = 0;   // the lab's blocks already begin behind the drawn sidewalk
-    s.lp.padFeatherInside = static_cast<Real>(lanesPadFalloff(sidewalk));   // plates stand on the flat pad (loader rule)
-    s.lp.sidewalkRise = engine::roads::lanes::lanesSidewalkRise();   // paving meets the lab's sidewalk (ADR-0086)
+    // ONE GROW (engine/city_grow.h): the same call the loader makes, from the same city products.
+    CityGrowInputs gin;
+    gin.citysim = cs;
+    gin.levelDir = in.levelDir;
+    gin.padGround = ground;
+    gin.holes = &city.holes;
+    gin.streets = &city.nav;
+    gin.pavedSidewalk = city.pavedSidewalk;
+    if (haveSpawn) gin.enterableAt = &spawn;
     const auto t0 = std::chrono::steady_clock::now();
-    NetLotResult r;
-    r.lots = growLotBuildings(blocks, s.lp, &r.plan, s.planOnly ? nullptr : &r.parts, nullptr, 0.0,
-                              (s.wantFlat && !s.planOnly) ? &r.flatParts : nullptr, &r.gradeFlatten);
+    LotGrowSetup s;
+    NetLotResult r = growCity(gin, &s);
+    const std::size_t blockCount = r.plan.blocks.size();
     if (report) {
         size_t units = 0; for (const LotBuilding& b : r.lots) units += b.units.size();
         size_t partTris = 0; for (const RenderMesh& m : r.parts) partTris += m.indices.size() / 3;
         const double seconds = secondsSince(t0);
-        *report = {{"summary", std::to_string(blocks.size()) + " blocks, " + std::to_string(r.plan.lots.size()) + " lots, " + std::to_string(r.lots.size()) + " buildings, " + std::to_string(units) + " units, " + std::to_string(partTris) + " part triangles"},
-                   {"blocks", blocks.size()}, {"lots", r.plan.lots.size()}, {"buildings", r.lots.size()}, {"units", units}, {"parts", r.parts.size()}, {"partTriangles", partTris},
+        *report = {{"summary", std::to_string(blockCount) + " blocks, " + std::to_string(r.plan.lots.size()) + " lots, " + std::to_string(r.lots.size()) + " buildings, " + std::to_string(units) + " units, " + std::to_string(partTris) + " part triangles"},
+                   {"blocks", blockCount}, {"lots", r.plan.lots.size()}, {"buildings", r.lots.size()}, {"units", units}, {"parts", r.parts.size()}, {"partTriangles", partTris},
                    {"flatParts", r.flatParts.size()}, {"terraces", r.gradeFlatten.size()}, {"planOnly", s.planOnly}, {"lod1", s.wantFlat && !s.planOnly}, {"hasTerrain", city.hasTerrain}, {"spawn", haveSpawn}, {"seconds", seconds}};
     }
     return r;

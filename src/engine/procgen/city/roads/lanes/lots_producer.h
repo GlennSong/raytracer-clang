@@ -18,6 +18,7 @@
 #include "engine/bundle/bake.h"
 #include "engine/bundle/codecs.h"
 #include "engine/procgen/city/city_lots.h"
+#include "engine/procgen/city/road_network.h"
 #include "engine/procgen/city/roads/lanes/geom2d.h"
 
 #include <string>
@@ -36,7 +37,12 @@ void registerLotsProducer();   // idempotent
 struct LotsCityInputs {
     bool hasTerrain = false;
     bundle::HeightGridBlob ground;
-    std::vector<Ring> holes;   // pavement holes (they stop at the back of the drawn sidewalk); blocksFromHoles(holes, 1.5, kBlockMarginBehindSidewalk, kMinBlockWidth) at grow time
+    std::vector<Ring> holes;   // pavement holes (they stop at the back of the drawn sidewalk); cityBlocksFromHoles at grow time
+    // The streets a door faces and the pavement it walks out to, from the same city products.
+    // The loader hands both to the grow; baking without them made the BAKED city's doors differ
+    // from the same city grown in place — the cache deciding what the buildings look like.
+    RoadGraph nav;
+    double pavedSidewalk = 0.0;
 };
 
 // ONE derivation: what the producer runs, exposed for tests. `report` (optional) receives the counts.
