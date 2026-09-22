@@ -446,6 +446,7 @@ if(RT_BUILD_ROADS_LANES)
             src/engine/procgen/city/roads/lanes/level_import.cpp
             src/engine/procgen/city/roads/lanes/road_twin.cpp
             src/engine/procgen/city/roads/lanes/block_audit.cpp
+            src/engine/procgen/city/roads/lanes/interchange.cpp
             src/engine/procgen/city/roads/lanes/city_producer.cpp
             src/engine/procgen/city/roads/lanes/lots_producer.cpp
             src/engine/procgen/city/roads/lanes_builder.cpp

@@ -19,9 +19,11 @@ namespace engine {
 namespace plan {
 
 struct SceneOptions {
-    bool ramps = true;           // interchange ramps (off: the freeway is a wall)
-    Real carriagewayGap = 7.0;   // centre to each carriageway's centreline (m)
-    Real rampDecel = 80, rampTaper = 72, rampApproach = 60;
+    bool ramps = true;              // interchange ramps (off: the freeway is a wall)
+    Real carriagewayGap = 7.0;      // centre to each carriageway's centreline (m)
+    Real clearance = 8.0;           // the deck's height over a street it crosses
+    int diamondsPerRoute = 6;       // interchanges per freeway route
+    Real interchangeSpacing = 650;  // least distance between them along the route
 };
 
 // The scene, ready for `lanes_tool build` or a level's road entity.

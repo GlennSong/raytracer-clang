@@ -1,5 +1,9 @@
 #include "plan_scene.h"
 
+#include "../roads/lanes/interchange.h"   // ONE ramp generator, shared with the level importer
+#include "../roads/lanes/polyline_ops.h"   // stations/pointAt: sampling along the route
+#include "../roads/lanes/road_graph_spec.h"
+
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -72,19 +76,61 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
     scene["rules"] = {{"closing", 3.0}};
 
     json edges = json::array();
+    std::vector<std::string> streetIds;
     int id = 0;
-    for (const Chain& c : chainsOf(plan.streets))
-        edges.push_back({{"id", "s" + std::to_string(id++)}, {"class", className(c.klass)}, {"path", {{"points", pointsJson(c.pts)}}}});
-    // The freeway, as the two one-way carriageways either side of its centreline.
-    std::vector<std::string> carriageways;
+    for (const Chain& c : chainsOf(plan.streets)) {
+        streetIds.push_back("s" + std::to_string(id++));
+        edges.push_back({{"id", streetIds.back()}, {"class", className(c.klass)}, {"path", {{"points", pointsJson(c.pts)}}}});
+    }
+    // The freeway: two one-way carriageways either side of its centreline, riding OVER the
+    // streets it crosses (`floor` holds the deck clear above the ground there), with diamond
+    // interchanges onto the streets beside it. Without those it is a wall with no way on —
+    // which is what the first planned city was.
+    const std::vector<PlanChain> streetChains = chainsOf(plan.streets);
+    std::vector<roads::lanes::RampStreet> rampStreets;
+    rampStreets.reserve(streetChains.size());
+    for (std::size_t i = 0; i < streetChains.size() && i < streetIds.size(); ++i)
+        rampStreets.push_back({streetIds[i], streetChains[i].pts});
+    int route = 0;
     for (const Chain& c : chainsOf(plan.freeway)) {
-        const std::string a = "fw" + std::to_string(id) + "a", d = "fw" + std::to_string(id++) + "b";
+        const std::string a = "fw" + std::to_string(route) + "_a", d = "fw" + std::to_string(route) + "_b";
         std::vector<Vec2> back = offsetPolyline(c.pts, -opt.carriagewayGap);
         std::reverse(back.begin(), back.end());
-        edges.push_back({{"id", a}, {"class", "freeway"}, {"path", {{"points", pointsJson(offsetPolyline(c.pts, opt.carriagewayGap))}}}});
-        edges.push_back({{"id", d}, {"class", "freeway"}, {"path", {{"points", pointsJson(back)}}}});
-        carriageways.push_back(a);
-        carriageways.push_back(d);
+        // AN ELEVATED RING. Two designs failed before this one: holding the freeway's deck
+        // clear only where it crosses a street put 1.4 km of a 2.1 km ring on piers anyway
+        // (at 6% it cannot come back down between crossings 350 m apart), and making the
+        // STREET climb instead asked a 25 m chain — cut that short by the frontage roads
+        // either side — to gain 8 m, which is a 24% ramp. On a flat city the honest answer
+        // is the one real cities build: the motorway runs above the streets for its whole
+        // length, every street passes under it, and the ramps come down to the frontage
+        // roads beside it.
+        json floors = json::array();
+        {
+            const std::vector<double> st = roads::lanes::stations(c.pts);
+            for (double s0 = 0; s0 < st.back(); s0 += 60.0) {
+                const Vec2 q = roads::lanes::pointAt(c.pts, st, s0);
+                floors.push_back(json::array({std::round(q.x * 100) / 100, std::round(q.y * 100) / 100,
+                                              opt.clearance, 60.0}));
+            }
+        }
+        edges.push_back({{"id", a}, {"class", "freeway"}, {"floor", floors},
+                         {"path", {{"points", pointsJson(offsetPolyline(c.pts, opt.carriagewayGap))}}}});
+        edges.push_back({{"id", d}, {"class", "freeway"}, {"floor", floors},
+                         {"path", {{"points", pointsJson(back)}}}});
+        if (opt.ramps) {
+            roads::lanes::DiamondOptions dop;
+            dop.aId = a;
+            dop.bId = d;
+            dop.idPrefix = "d" + std::to_string(route);
+            dop.carriage = opt.carriagewayGap;
+            dop.edgeReach = b.freewayWidth / 2 + 2.5;
+            dop.maxDiamonds = opt.diamondsPerRoute;
+            dop.spacing = opt.interchangeSpacing;
+            dop.clearance = opt.clearance;
+            const roads::lanes::DiamondResult dr = roads::lanes::diamondRamps(c.pts, rampStreets, dop);
+            for (const json& r : dr.ramps) edges.push_back(r);
+        }
+        ++route;
     }
     scene["edges"] = std::move(edges);
     return scene;
