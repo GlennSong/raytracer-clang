@@ -68,6 +68,8 @@ constexpr int kLookMaxAgents = 6;
 // so the reach is a street's width. Getting to the STREET is still the
 // director's problem, which is the part that matters.
 constexpr engine::Real kBoardReach = 25.0;
+// ...and how close to a door you have to be to walk through it.
+constexpr engine::Real kEnterReach = 25.0;
 
 char tierLabel(Agent::Tier t) {
     using T = Agent::Tier;
@@ -122,13 +124,22 @@ void CityPossessSystem::update(engine::FrameContext& ctx) {
 
 void CityPossessSystem::handleCommand(engine::FrameContext& ctx,
                                       const PossessCmd& cmd) {
-    error_.clear();
     switch (cmd.kind) {
         case PossessCmd::Kind::None:
+            // NOTHING STAGED. Clearing the error here — which is what this did
+            // — meant a refusal lived for exactly one frame: a director that
+            // sends a command and polls a second later NEVER sees why it was
+            // refused, and reads the stale success instead. The error stands
+            // until the next real command replaces it.
             return;
         case PossessCmd::Kind::Invalid:
             error_ = cmd.error;
             return;
+        default:
+            break;
+    }
+    error_.clear();   // a real command: start clean, then let it set its own
+    switch (cmd.kind) {
         case PossessCmd::Kind::Car:
             possessCar(ctx, cmd);
             return;
@@ -173,6 +184,59 @@ void CityPossessSystem::handleCommand(engine::FrameContext& ctx,
         case PossessCmd::Kind::Alight:
             alightHere(ctx);
             return;
+        case PossessCmd::Kind::Ride:
+            if (walkerAgent_ < 0) { error_ = "nothing possessed"; return; }
+            if (!city_.simMutable().sendAgentByBus(walkerAgent_, Vec2(cmd.x, cmd.z))) {
+                error_ = "no bus route helps from here — walk instead";
+                state_ = PossessState::NoRoute;
+            } else {
+                LOG_INFO << "ride: agent " << walkerAgent_ << " is walking to a stop for "
+                         << cmd.x << "," << cmd.z;
+                hasDest_ = true;
+                dest_ = Vec2(cmd.x, cmd.z);
+                state_ = PossessState::Walking;
+            }
+            return;
+        case PossessCmd::Kind::Enter:
+        case PossessCmd::Kind::Exit: {
+            if (walkerAgent_ < 0) { error_ = "nothing possessed"; return; }
+            const bool inside = cmd.kind == PossessCmd::Kind::Enter;
+            // YOU HAVE TO BE AT A DOOR. Without this `enter` is teleportation
+            // into the nearest wall: the director could put the agent inside a
+            // building from across the district, and the one thing possession
+            // has to keep true is that the agent only does what it could walk
+            // up and do.
+            std::string what = "the street";
+            if (inside) {
+                const auto& agents = city_.sim().agents();
+                if (walkerAgent_ >= static_cast<int>(agents.size())) return;
+                const Vec2 me = agents[static_cast<std::size_t>(walkerAgent_)].pos;
+                const PlaceMap& places = city_.places();
+                engine::Real bestD = kEnterReach;
+                PlaceId bestId = kNoPlace;
+                for (int t = 0; t < static_cast<int>(PlaceType::Count); ++t) {
+                    const PlaceId id = places.nearest(static_cast<PlaceType>(t), me);
+                    if (id == kNoPlace) continue;
+                    const Place& pl = places[id];
+                    if (!placeIsIndoors(pl.type)) continue;
+                    const engine::Real d =
+                        std::sqrt((pl.entrance.x - me.x) * (pl.entrance.x - me.x) +
+                                  (pl.entrance.y - me.y) * (pl.entrance.y - me.y));
+                    if (d < bestD) { bestD = d; bestId = id; }
+                }
+                if (bestId == kNoPlace) {
+                    error_ = "no door within reach — walk to one first";
+                    return;
+                }
+                what = placeTypeName(places[bestId].type);
+            }
+            city_.simMutable().setAgentIndoors(walkerAgent_, inside);
+            LOG_INFO << (inside ? "enter: agent " : "exit: agent ") << walkerAgent_
+                     << " " << (inside ? "into " : "out of ") << what;
+            hasDest_ = false;
+            state_ = PossessState::Idle;
+            return;
+        }
         case PossessCmd::Kind::Release:
             releasePossession(ctx);
             return;
@@ -883,7 +947,8 @@ void CityPossessSystem::publishStatus(engine::FrameContext& ctx) {
                 "leg=%d/%d routeValid=%d tripGoal=%d home=%d work=%d "
                 "busDwell=%.1f busStoodLeg=%d riding=%d awaitingRide=%d "
                 "busRoute=%d busNextStop=%d stepped=%d gap=%.1f minGap=%.1f "
-                "tethered=%d anchorDist=%.1f lead=%.1f playerCtl=%d released=%d",
+                "tethered=%d anchorDist=%.1f lead=%.1f playerCtl=%d released=%d "
+                "carrier=%d cityHeld=%d",
                 walkerAgent_,
                 a.mode == Agent::Mode::Driver ? "car" : "ped",
                 activityLabel(a.activity), stateLabel(a.state),
@@ -908,7 +973,11 @@ void CityPossessSystem::publishStatus(engine::FrameContext& ctx) {
                 a.tethered ? static_cast<double>((a.pos - a.tetherAnchor).length())
                            : -1.0,
                 static_cast<double>(a.tetherLead),
-                a.playerControlled ? 1 : 0, a.released ? 1 : 0);
+                a.playerControlled ? 1 : 0, a.released ? 1 : 0,
+                // WHAT IS CARRYING IT. `riding` only says yes; a director
+                // (and a tour script) needs to know whether that is the bus
+                // it asked for, somebody's cab, or its own car.
+                sim.carrierOf(walkerAgent_), sim.tetherHeld());
             agentLine = buf;
         }
     }

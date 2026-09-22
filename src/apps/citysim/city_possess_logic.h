@@ -32,6 +32,9 @@ struct PossessCmd {
         Direct,      // "direct on|off" — hold the goal layer off this agent
         Board,       // "board [x z]" — get into the nearest free car
         Alight,      // "alight" — get out again, on the kerb
+        Ride,        // "ride x z" — take the bus there
+        Enter,       // "enter" — go inside the place you are standing at
+        Exit,        // "exit" — come back out
         Invalid,     // unparseable: status carries the reason
     };
     Kind kind = Kind::None;
@@ -82,6 +85,16 @@ inline PossessCmd parsePossessCmd(const std::string& line) {
         return cmd;
     }
     if (word == "alight") { cmd.kind = PossessCmd::Kind::Alight; return cmd; }
+    if (word == "ride") {
+        cmd.kind = PossessCmd::Kind::Ride;
+        if (!twoNumbers(/*required=*/true)) {
+            cmd.kind = PossessCmd::Kind::Invalid;
+            cmd.error = "ride needs <x> <z>";
+        }
+        return cmd;
+    }
+    if (word == "enter") { cmd.kind = PossessCmd::Kind::Enter; return cmd; }
+    if (word == "exit") { cmd.kind = PossessCmd::Kind::Exit; return cmd; }
     if (word == "stop") { cmd.kind = PossessCmd::Kind::Stop; return cmd; }
     if (word == "release") { cmd.kind = PossessCmd::Kind::Release; return cmd; }
     cmd.kind = PossessCmd::Kind::Invalid;

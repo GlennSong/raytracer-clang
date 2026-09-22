@@ -631,6 +631,73 @@ public:
         grid_.query(pos, radius, out);
     }
 
+    // TAKE THE BUS (ADR-0091). The same choice the goal layer makes at every
+    // trip, offered to a director: plan a ride from where the agent stands to
+    // `dest`, register it as waiting, and walk it to the boarding stop —
+    // walking to the stop IS the trip. From there the sim does the rest, and
+    // it already knows how: arriveOrChain stands a rider at its stop, the bus
+    // picks up everyone waiting for its route, and sets them down at theirs.
+    // False when no route helps, which for a short hop is the common answer
+    // and means "just walk".
+    bool sendAgentByBus(int agentIndex, engine::Vec2 dest) {
+        if (!nav_ || agentIndex < 0 ||
+            agentIndex >= static_cast<int>(agents_.size()))
+            return false;
+        Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+        if (a.mode != Agent::Mode::Pedestrian || buses_.empty() ||
+            isBus(agentIndex) || isTaxi(agentIndex) || buses_.tripOf(agentIndex))
+            return false;
+        const int origin = nav_->nearestNode(a.pos);
+        const int to = nav_->nearestNode(dest);
+        if (origin < 0 || to < 0 || origin == to) return false;
+        BusTrip bt = buses_.planTrip(nav_->nodes[static_cast<std::size_t>(origin)],
+                                     nav_->nodes[static_cast<std::size_t>(to)],
+                                     busMaxWalk_);
+        if (!bt.valid()) return false;
+        const int stopNode =
+            buses_.route(bt.route).stops[static_cast<std::size_t>(bt.fromStop)].node;
+        // PROVE THE WALK BEFORE TAKING IT. startTrip's no-path branch PARKS the
+        // agent — clears its route and moves it to an idle pose at the origin —
+        // so calling it speculatively means every REFUSED ride still shunts the
+        // agent about. Fourteen refusals in half a minute is a person flickering
+        // around the street, which is exactly what Glenn watched happen. Same
+        // rule as sendAgentTo: nothing is mutated until the answer is yes.
+        if (stopNode != origin &&
+            !engine::findRoute(*nav_, origin, stopNode, /*pedestrian=*/true).valid())
+            return false;
+        if (!buses_.waitFor(agentIndex, bt)) return false;
+        a.wakeAt = -1;
+        if (stopNode != origin) {
+            startTrip(a, origin, stopNode, /*fromRest=*/!a.moving);
+            if (!a.moving) { buses_.stopWaiting(agentIndex); return false; }
+            a.state = Agent::State::Walking;
+        }
+        a.activity = Activity::Outing;
+        return true;
+    }
+
+    // GO INSIDE (ADR-0091). A place is somewhere people are hidden from the
+    // street while they are in it — pedVisible() is false for a still agent
+    // that is indoors, so its body is reaped and it is simply "in there" until
+    // it comes out. The director decides it has arrived; the engine has no
+    // opinion about doors.
+    void setAgentIndoors(int agentIndex, bool inside) {
+        if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size()))
+            return;
+        Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+        if (a.mode != Agent::Mode::Pedestrian) return;   // not while driving
+        a.indoors = inside;
+        if (inside) {
+            a.moving = false;
+            a.speed = 0;
+            a.route = engine::Route{};
+            a.leg = 0;
+            a.distOnLeg = 0;
+            a.state = Agent::State::Resting;
+            a.tethered = false;
+        }
+    }
+
     // GET IN AND DRIVE (ADR-0091). A possessed pedestrian walks up to a car
     // and takes it. Everything else follows from `mode`, because every pass
     // already reads it: pedVisible() goes false so the walker system reaps its
@@ -794,7 +861,28 @@ public:
         // nearest few and take the first that routes.
         engine::Route route;
         int to = -1;
-        for (int cand : nearestNodesTo(dest, 8)) {
+        int finalLink = -1;
+        // ARRIVE ALONG THE STREET THE DESTINATION IS ON. A door, a parked car
+        // and a bus stop all belong to a LINK, not to a junction, so routing to
+        // the nearest node leaves the agent wherever that junction happens to
+        // be — measured at 23 m from a civic entrance it had been sent to.
+        // Routing to the near end of the destination's own link and appending
+        // that link makes the last street it walks the one it was sent to, and
+        // the stop-short below then lands it beside the address.
+        if (a.mode == Agent::Mode::Pedestrian) {
+            const int dl = nav_->nearestLink(dest);
+            if (dl >= 0) {
+                const engine::NavLink& L = nav_->links[static_cast<std::size_t>(dl)];
+                if (L.from != from) {
+                    engine::Route r = engine::findRoute(*nav_, from, L.from, true);
+                    if (r.valid()) { route = std::move(r); to = L.from; finalLink = dl; }
+                } else if (L.to != from) {
+                    engine::Route r = engine::findRoute(*nav_, from, L.to, true);
+                    if (r.valid()) { route = std::move(r); to = L.to; }
+                }
+            }
+        }
+        if (to < 0) for (int cand : nearestNodesTo(dest, 8)) {
             if (cand == from) continue;
             engine::Route r = engine::findRoute(*nav_, from, cand,
                                                 a.mode == Agent::Mode::Pedestrian);
@@ -815,6 +903,10 @@ public:
         a.wakeAt = -1;
         startTrip(a, from, to, /*fromRest=*/!a.moving);
         if (!a.route.valid()) return false;
+        if (finalLink >= 0 &&
+            (a.route.links.empty() ||
+             a.route.links.back() != finalLink))
+            a.route.links.push_back(finalLink);
         if (legLink >= 0) {
             // Finish the leg it is standing on (the same idiom as a bus pulling
             // away from where it actually stopped): prepend that link and put
@@ -919,10 +1011,20 @@ public:
     void alightRide(int passenger, int atNode = -1);   // atNode: where they step off
     const RideBook& rides() const { return rides_; }
     bool riding(int i) const { return rides_.driverOf(i) >= 0; }
+    // Which agent is driving the thing carrying `i` — a bus, a cab, anything.
+    // -1 when it is on its own feet. `riding` answers whether; this answers
+    // what, which is the question a director actually has.
+    int carrierOf(int i) const { return rides_.driverOf(i); }
 
     // Why is this agent standing still? The question splits in two: advance()
     // was never called (a guard above the call site), or it ran and something
     // inside clamped the motion to zero. These three answer it.
+    // How many agents the ADR-0062 leash held this tick, across the whole city.
+    // A city where this sits above zero for minutes has people stranded in it —
+    // the ghost cannot advance and the body cannot catch up — and that is the
+    // one number that says so without possessing anybody.
+    int tetherHeld() const { return tetherHeld_; }
+
     bool steppedLastTick(int i) const {
         return i >= 0 && i < static_cast<int>(advancedLast_.size()) &&
                advancedLast_[static_cast<std::size_t>(i)] != 0;
@@ -1234,6 +1336,7 @@ private:
     std::vector<std::vector<int>> baysOnLink_;   // link -> bay indices
     std::vector<char> bayNarrowed_;   // link (or its reverse) carries bays
     std::vector<uint8_t> advancedLast_;   // did advance() step agent i last tick
+    int tetherHeld_ = 0;                 // agents the leash held last tick
     std::vector<Real> gaps_;
     std::vector<Real> minGaps_;   // per-agent follow gap to ITS leader (length-aware)
     std::vector<Real> leaderSpeeds_;   // leader's speed where gaps_ < INF (IDM dv)

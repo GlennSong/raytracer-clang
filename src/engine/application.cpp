@@ -1174,6 +1174,18 @@ std::string Application::handleControlCommand(const std::string& line) {
         settingsStore.setString("possess.cmd", "board" + arg);
         return "ok staged (poll possess?)";
     }
+    if (cmd.name == "ride") {
+        double x, z;
+        if (cmd.args.size() < 2 || !num(cmd.args[0], x) || !num(cmd.args[1], z))
+            return "err usage: ride <x> <z>";
+        settingsStore.setString("possess.cmd",
+                                "ride " + cmd.args[0] + " " + cmd.args[1]);
+        return "ok staged (poll possess?)";
+    }
+    if (cmd.name == "enter" || cmd.name == "exit") {
+        settingsStore.setString("possess.cmd", cmd.name);
+        return "ok staged (poll possess?)";
+    }
     if (cmd.name == "alight") {
         settingsStore.setString("possess.cmd", "alight");
         return "ok staged (poll possess?)";

@@ -63,7 +63,8 @@ private:
         int outfit = 0;                    // deterministic shirt/pants/skin pick
         engine::Real stride = 0;           // walk-cycle phase (advances with speed)
         engine::Real heldFor = 0;          // seconds its plan has been leashed
-                                           // to a body that is not moving
+                                           // to a body that is not CLOSING on it
+        engine::Real lastLead = -1;        // last distance body -> ghost
     };
 
     // PHYSICAL-BODY BUDGET. A walker's Jolt capsule is stepped every tick and

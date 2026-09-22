@@ -4283,6 +4283,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     computeGaps();
     computeCarWedge();   // S7 senses: bodies in the forward corridor
     phaseMark(phase_.gaps);
+    int tetherHeldThisTick = 0;   // stranded by the leash, city-wide
     for (int ai : active_) {
         Agent& a = agents_[ai];
         const std::size_t i = static_cast<std::size_t>(ai);
@@ -4307,6 +4308,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             if (std::sqrt(dx * dx + dy * dy) > a.tetherLead) {
                 a.speed = 0;
                 a.state = Agent::State::Waiting;
+                ++tetherHeldThisTick;
                 continue;
             }
         }
@@ -4315,6 +4317,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // Keep the flags: "did this agent get stepped" is the question a director
     // asks when its agent stands still (ADR-0091).
     advancedLast_ = advanced;
+    tetherHeld_ = tetherHeldThisTick;
 
     // FENDER-BENDERS (device: cars must collide, not ghost). Ambient cars are
     // planner-owned (ADR-0062) — no rigid bodies between them — so contact is
