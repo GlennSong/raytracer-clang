@@ -100,13 +100,33 @@ struct PlanScore {
     int lots = 0;
     Real rectilinearShare = 0;         // share of buildable area in blocks with rectangularity >= 0.85
     Real coreRectilinearShare = 0;     // the same, core + midtown only
+    Real gridRectilinearShare = 0;     // the same, the CORE grid alone (midtown is allowed to warp)
     Real meanLotsPerLotBlock = 0;
     int streetComponents = 0;          // 1 = one connected street network
+    // Roads whose CORRIDORS (carriageway + sidewalk) overlap: two streets drawn so close
+    // that the builder paves one over the other. The lanes builder reports it as lanes that
+    // do not own their footprint; it is a design fault and belongs here, before anything is
+    // built. Pairs that share a junction are not counted — that is what a junction is.
+    int corridorOverlaps = 0;
+    Real worstOverlap = 0;             // deepest intrusion (m)
     int commutesSampled = 0;
     Real freewayCommuteShare = 0;      // of sampled outskirts->downtown commutes routed on the freeway
     Real streetKm = 0, freewayKm = 0;
     std::vector<std::string> notes;
 };
+
+// A ROAD, not a graph edge: the longest run of one class between junctions. A curve the
+// planner laid down as forty short edges is one chain — which is what the builder has to be
+// handed (forty stubs is what the frontage walk rejected), and what "two roads overlap"
+// has to be measured between (consecutive edges of one curve are always within a lane of
+// each other, and that is not an overlap).
+struct PlanChain {
+    std::vector<Vec2> pts;
+    std::vector<int> nodes;            // the graph nodes along it
+    RoadClass klass = RoadClass::Local;
+    Real width = 12;
+};
+std::vector<PlanChain> chainsOf(const RoadGraph& g);
 
 CityPlan generatePlan(const Brief& brief);
 PlanScore evaluatePlan(CityPlan& plan);

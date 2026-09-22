@@ -12,6 +12,7 @@
 // scores well here builds the way it scored.
 
 #include "engine/procgen/city/plan/city_plan.h"
+#include "engine/procgen/city/plan/plan_scene.h"
 
 #include <nlohmann/json.hpp>
 
@@ -29,6 +30,7 @@ using namespace engine::plan;
 static int usage() {
     std::fprintf(stderr,
                  "usage: city_plan generate BRIEF.json OUT_DIR [--variants N]\n"
+                 "       city_plan scene BRIEF.json OUT_SCENE.json [--no-ramps]\n"
                  "       city_plan brief\n");
     return 2;
 }
@@ -45,7 +47,7 @@ int main(int argc, char** argv) {
         std::cout << briefToJson(Brief{}).dump(2) << "\n";
         return 0;
     }
-    if (verb != "generate" || argc < 4) return usage();
+    if ((verb != "generate" && verb != "scene") || argc < 4) return usage();
     const std::string briefPath = argv[2], outDir = argv[3];
     int variants = 1;
     for (int i = 4; i + 1 < argc; ++i)
@@ -55,6 +57,22 @@ int main(int argc, char** argv) {
     nlohmann::json bj;
     try { in >> bj; } catch (const std::exception& e) { std::fprintf(stderr, "city_plan: %s: %s\n", briefPath.c_str(), e.what()); return 1; }
     const Brief base = briefFromJson(bj);
+    if (verb == "scene") {
+        // THE PLAN, BUILT: the same plan the scorecard scored, as the lanes builder's scene.
+        SceneOptions so;
+        for (int i = 4; i < argc; ++i)
+            if (std::string(argv[i]) == "--no-ramps") so.ramps = false;
+        CityPlan plan = generatePlan(base);
+        const PlanScore s = evaluatePlan(plan);
+        const nlohmann::json scene = planToLanesScene(plan, so);
+        std::ofstream o(outDir);   // the scene's path, in this verb
+        if (!o) { std::fprintf(stderr, "city_plan: cannot write %s\n", outDir.c_str()); return 1; }
+        o << scene.dump(1) << "\n";
+        std::printf("%s: %zu scene edges from %zu street + %zu freeway plan edges; %d blocks, ~%d buildings scored\n",
+                    outDir.c_str(), scene["edges"].size(), plan.streets.edges.size(), plan.freeway.edges.size(),
+                    s.blocks, s.predictedBuildings);
+        return 0;
+    }
     fs::create_directories(outDir);
     const bool inkscape = haveCommand("inkscape");
     std::vector<std::string> pngs;
@@ -66,10 +84,10 @@ int main(int argc, char** argv) {
         { std::ofstream o(stem + ".json"); o << planToJson(plan, s).dump(1) << "\n"; }
         { std::ofstream o(stem + ".svg"); o << planToSvg(plan, s); }
         std::printf("%-20s blocks %4d (lots %4d, landmark %3d, park %3d, freeway %3d)  buildings ~%5d  "
-                    "rectilinear %3.0f%% (core+mid %3.0f%%)  freeway commutes %3.0f%%  streets %.1f km  pieces %d\n",
+                    "rectilinear %3.0f%% (core+mid %3.0f%%, grid %3.0f%%)  freeway commutes %3.0f%%  streets %.1f km  pieces %d  overlaps %d\n",
                     b.name.c_str(), s.blocks, s.lotBlocks, s.landmarkBlocks, s.parkBlocks, s.rowBlocks, s.predictedBuildings,
-                    100 * s.rectilinearShare, 100 * s.coreRectilinearShare, 100 * s.freewayCommuteShare, s.streetKm,
-                    s.streetComponents);
+                    100 * s.rectilinearShare, 100 * s.coreRectilinearShare, 100 * s.gridRectilinearShare,
+                    100 * s.freewayCommuteShare, s.streetKm, s.streetComponents, s.corridorOverlaps);
         if (inkscape) {
             const std::string cmd = "inkscape '" + stem + ".svg' --export-type=png --export-filename='" + stem +
                                     ".png' --export-width=1800 >/dev/null 2>&1";

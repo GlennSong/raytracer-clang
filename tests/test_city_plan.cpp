@@ -51,12 +51,16 @@ TEST_CASE(city_plan_is_the_same_plan_every_time) {
 
 TEST_CASE(city_plan_core_is_a_grid_of_rectangles) {
     // Glenn, 2026-09-22: "the core of the city should be gridlike ... they can't
-    // be weird shaped blocks". Rectangularity is buildable area over its
-    // oriented box, so a rectangle scores 1 whatever its aspect or angle.
+    // be weird shaped blocks ... maybe in the outskirts the roads can become more
+    // wedge like and curvy". Rectangularity is buildable area over its oriented
+    // box, so a rectangle scores 1 whatever its aspect or angle. The CORE is held
+    // to being rectangles outright; midtown is the grid already warping, and the
+    // outskirts are meant to curve.
     CityPlan plan = generatePlan(testBrief());
     const PlanScore s = evaluatePlan(plan);
-    CHECK(s.coreRectilinearShare >= 0.85);
-    CHECK(s.rectilinearShare >= 0.5);   // the outskirts curve, and may
+    CHECK(s.gridRectilinearShare >= 0.95);
+    CHECK(s.coreRectilinearShare >= 0.75);
+    CHECK(s.rectilinearShare >= 0.5);
     CHECK(s.streetComponents == 1);     // one drivable street network
     int core = 0;
     for (const PlanBlock& b : plan.blocks)
@@ -82,6 +86,20 @@ TEST_CASE(city_plan_gives_every_block_a_use_it_can_hold) {
         }
     }
     CHECK(s.meanLotsPerLotBlock >= 4);
+}
+
+TEST_CASE(city_plan_does_not_draw_two_roads_on_one_line) {
+    // A grid clipped to a ring, the ring's own boulevard, spokes leaving it and the
+    // first ring road outside it all land in the same annulus, and each generator
+    // knows only its own geometry. Drawn over each other they build as lanes that do
+    // not own their footprint — so the plan measures it: two roads inside each other's
+    // corridor, running within 20 degrees of parallel, for 25 m or more. Crossings and
+    // continuations are neither. The test brief measured 11, worst 13 m, when this was
+    // pinned; it was 122 before the rim and the frontage roads learned to keep clear.
+    CityPlan plan = generatePlan(testBrief());
+    const PlanScore s = evaluatePlan(plan);
+    CHECK(s.corridorOverlaps <= 15);
+    CHECK(s.worstOverlap < 20);
 }
 
 TEST_CASE(city_plan_freeway_is_worth_driving_to) {
