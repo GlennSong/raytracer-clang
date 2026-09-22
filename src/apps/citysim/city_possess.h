@@ -51,6 +51,8 @@ private:
     void walkTo(engine::FrameContext& ctx, engine::Real x, engine::Real z);
     void releasePossession(engine::FrameContext& ctx);
     void publishLook(engine::FrameContext& ctx);
+    void boardNearby(engine::FrameContext& ctx, const PossessCmd& cmd);
+    void alightHere(engine::FrameContext& ctx);
     void driveCar(engine::FrameContext& ctx);
     void updateCamera(engine::FrameContext& ctx);
     void publishStatus(engine::FrameContext& ctx);

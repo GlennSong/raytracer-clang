@@ -2353,6 +2353,8 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
         a.targetBay = -1;
     }
     a.tripGoal = goal;
+    a.stopAtDist = -1;   // an ordinary trip ends at its node
+
     // DRIVE TO A SPACE NEAR THE DESTINATION: reserve the nearest free bay to
     // it and end the route AT that bay (its street, stopping at its station).
     // The nearest few free bays, tried in order: a bay whose approach would
@@ -3550,6 +3552,12 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             a.distOnLeg >= bays_[static_cast<std::size_t>(a.targetBay)].station - 0.3)
             a.leg = legCount;
     }
+
+    // A DIRECTOR'S ERRAND ENDS WHERE IT WAS SENT (ADR-0091), part-way down the
+    // last link rather than at its node — the difference between arriving at
+    // the car and arriving twenty metres from it.
+    if (a.stopAtDist >= 0 && a.leg == legCount - 1 && a.distOnLeg >= a.stopAtDist)
+        a.leg = legCount;
 
     if (a.leg >= legCount) {
         arriveOrChain(a, a.speed);   // pass the still-rolling speed: a chain keeps it

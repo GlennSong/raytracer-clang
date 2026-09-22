@@ -1,3 +1,4 @@
+#include "../../log.h"
 #include "city_walkers.h"
 
 #include "../../engine/asset_manager.h"
@@ -29,6 +30,8 @@ constexpr Real kWalkGain = 1.2;         // metres behind the ghost -> m/s toward
 constexpr Real kWalkStandoff = 0.4;     // settle this short of the ghost's spot
 constexpr Real kWalkMax = 2.4;          // catch-up ceiling (a brisk jog)
 constexpr Real kTetherLead = 5.0;       // ghost may lead its walker by at most this
+constexpr Real kTetherGiveUp = 4.0;     // ...for at most this long while stuck
+constexpr Real kWedgedSpeed = 0.15;     // below this the body is not travelling
 constexpr Real kKnockRadius = 1.5;      // a vehicle centre this close...
 constexpr Real kKnockSpeed = 2.5;       // ...moving this fast -> knockdown
 constexpr Real kFaceSpeed = 0.3;        // turn to face travel above this speed
@@ -361,6 +364,46 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         } else {
             t->position = pos;
             t->orientation = yawQ;
+        }
+
+        // THE LEASH NEEDS A WAY OUT. The tether holds the plan back until the
+        // body catches up (ADR-0062), which is right until the body CANNOT
+        // catch up: wedged on a guardrail, the two deadlock for ever — the
+        // ghost is not stepped because it leads, the body cannot move because
+        // it is stuck, and neither side ever yields. Measured on metro: the
+        // same agent at the same coordinates held at anchorDist 5.0 against a
+        // 5.0 m lead in two runs forty minutes apart, with a queue of walkers
+        // stacked behind it, and Glenn watching three of them walk into a
+        // fence. After kTetherGiveUp seconds of no progress the PLAN wins and
+        // the body is moved to it. A visible step is worse than a person who
+        // stands in the road for the rest of the day.
+        if (!down && (g.pos - posXZ).lengthSquared() > kTetherLead * kTetherLead &&
+            hSpeed < kWedgedSpeed) {
+            w.heldFor += dt;
+            if (w.heldFor >= kTetherGiveUp) {
+                pw.setCharacterPosition(
+                    cc->characterId,
+                    Vec3(g.pos.x,
+                         city_.groundHeightAt(g.pos.x, g.pos.y) + kCapsuleHalf +
+                             kCapsuleRadius,
+                         g.pos.y));
+                pos = pw.characterPosition(cc->characterId);
+                posXZ = Vec2(pos.x, pos.z);
+                t->position = pos;
+                w.heldFor = 0;
+                w.backoff = 0;
+                // Say so, thinly. Each one of these is a place where the
+                // pedestrian network runs through something solid, so the
+                // positions are the bug report; the thinning keeps a bad level
+                // from drowning the log in them.
+                if (unwedged_ < 10 || unwedged_ % 100 == 0)
+                    LOG_INFO << "[walkers] unwedged agent " << w.agentId << " at "
+                             << posXZ.x << "," << posXZ.y << " (total "
+                             << (unwedged_ + 1) << ")";
+                ++unwedged_;
+            }
+        } else {
+            w.heldFor = 0;
         }
 
         // The plan waits for the body (never outruns a blocked/downed walker),

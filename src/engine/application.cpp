@@ -1167,6 +1167,17 @@ std::string Application::handleControlCommand(const std::string& line) {
         settingsStore.setString("possess.cmd", "direct " + cmd.args[0]);
         return "ok staged (poll possess?)";
     }
+    // Get into the nearest free car / get out again (ADR-0091).
+    if (cmd.name == "board") {
+        std::string arg;
+        if (cmd.args.size() >= 2) arg = " " + cmd.args[0] + " " + cmd.args[1];
+        settingsStore.setString("possess.cmd", "board" + arg);
+        return "ok staged (poll possess?)";
+    }
+    if (cmd.name == "alight") {
+        settingsStore.setString("possess.cmd", "alight");
+        return "ok staged (poll possess?)";
+    }
     if (cmd.name == "possess_stop") {
         settingsStore.setString("possess.cmd", "stop");
         return "ok staged";

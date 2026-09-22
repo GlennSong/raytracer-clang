@@ -60,6 +60,14 @@ const char* stateLabel(Agent::State s) {
 constexpr engine::Real kLookRadiusPlaces = 250.0;
 constexpr engine::Real kLookRadiusAgents = 40.0;
 constexpr int kLookMaxAgents = 6;
+// How close you have to be to open a car door. Measured rather than guessed: a
+// walker sent to a parked car stops on the PAVEMENT, and the car is parked on
+// the far side of the carriageway — 8.3 m off the street's centreline one way,
+// the footway the other, about 20 m apart on a metro street with nothing
+// wrong. Reaching a car you can see across the road is a person crossing it,
+// so the reach is a street's width. Getting to the STREET is still the
+// director's problem, which is the part that matters.
+constexpr engine::Real kBoardReach = 25.0;
 
 char tierLabel(Agent::Tier t) {
     using T = Agent::Tier;
@@ -158,6 +166,12 @@ void CityPossessSystem::handleCommand(engine::FrameContext& ctx,
             } else {
                 error_ = "nothing possessed — `possess walker` first";
             }
+            return;
+        case PossessCmd::Kind::Board:
+            boardNearby(ctx, cmd);
+            return;
+        case PossessCmd::Kind::Alight:
+            alightHere(ctx);
             return;
         case PossessCmd::Kind::Release:
             releasePossession(ctx);
@@ -369,6 +383,7 @@ void CityPossessSystem::walkTo(engine::FrameContext& ctx, engine::Real x,
                                engine::Real z) {
     (void)ctx;
     if (!city_.sim().graph()) { error_ = "no nav graph"; return; }
+    const engine::NavGraph& nav = *city_.sim().graph();
     // One line per director errand. It prints where the agent STOOD and where
     // it was placed, because those differing is the whole bug this path had:
     // sendAgentTo used to put the planner ghost on its new route's first leg,
@@ -384,14 +399,90 @@ void CityPossessSystem::walkTo(engine::FrameContext& ctx, engine::Real x,
     }
     {
         const Agent& a = city_.sim().agents()[static_cast<std::size_t>(walkerAgent_)];
+        // Why an errand ends where it does: the last link it walks, how far the
+        // destination sits OFF that link, and the stop-short it derived.
+        double off = -1, tpar = -1, footX = 0, footY = 0;
+        if (a.route.valid()) {
+            const engine::NavLink& last =
+                nav.links[static_cast<std::size_t>(a.route.links.back())];
+            const Vec2 A = nav.nodes[static_cast<std::size_t>(last.from)];
+            const Vec2 B = nav.nodes[static_cast<std::size_t>(last.to)];
+            const Vec2 AB(B.x - A.x, B.y - A.y);
+            const double len2 = AB.x * AB.x + AB.y * AB.y;
+            if (len2 > 1e-6) {
+                double t = ((x - A.x) * AB.x + (z - A.y) * AB.y) / len2;
+                t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                tpar = t;
+                footX = A.x + AB.x * t;
+                footY = A.y + AB.y * t;
+                off = std::sqrt((x - footX) * (x - footX) + (z - footY) * (z - footY));
+            }
+        }
         LOG_INFO << "walk_to: agent " << walkerAgent_ << " -> " << x << "," << z
                  << " | stood at " << was.x << "," << was.y << ", placed at "
                  << a.pos.x << "," << a.pos.y << " on leg " << a.leg << "/"
-                 << a.route.links.size();
+                 << a.route.links.size() << " | dest sits " << off
+                 << " m off the last link at t=" << tpar
+                 << ", stopAtDist=" << a.stopAtDist << ", foot=" << footX << ","
+                 << footY;
     }
     dest_ = Vec2(x, z);
     hasDest_ = true;
     state_ = PossessState::Walking;
+}
+
+// WALK UP TO A CAR AND TAKE IT (ADR-0091). The reach is deliberately short —
+// a director has to actually send the agent to the car first, which is the
+// whole point of the exercise: the errand, the arrival and the boarding are
+// three decisions, not one teleport.
+void CityPossessSystem::boardNearby(engine::FrameContext& ctx,
+                                    const PossessCmd& cmd) {
+    (void)ctx;
+    if (walkerAgent_ < 0) {
+        error_ = "nothing possessed — `possess walker` first";
+        return;
+    }
+    CitySim& sim = city_.simMutable();
+    const auto& agents = sim.agents();
+    if (walkerAgent_ >= static_cast<int>(agents.size())) return;
+    const Agent& a = agents[static_cast<std::size_t>(walkerAgent_)];
+    if (a.vehicle >= 0) { error_ = "already driving"; return; }
+    const Vec2 from = cmd.hasPos ? Vec2(cmd.x, cmd.z) : a.pos;
+    const int veh = sim.nearestFreeVehicle(from, kBoardReach);
+    if (veh < 0) {
+        error_ = "no free car within reach — walk to one first";
+        state_ = PossessState::Idle;
+        return;
+    }
+    const Vec2 where = sim.vehicles()[static_cast<std::size_t>(veh)].pos;
+    const engine::Real walk = std::sqrt((where.x - a.pos.x) * (where.x - a.pos.x) +
+                                        (where.y - a.pos.y) * (where.y - a.pos.y));
+    if (walk > kBoardReach) {
+        error_ = "that car is too far to get into — walk to it first";
+        return;
+    }
+    if (!sim.boardVehicle(walkerAgent_, veh)) {
+        error_ = "that car is taken";
+        return;
+    }
+    LOG_INFO << "board: agent " << walkerAgent_ << " took car " << veh << " at "
+             << where.x << "," << where.y << " (" << walk << " m away)";
+    configureFollow(follow_, /*car=*/true);
+    hasDest_ = false;
+    state_ = PossessState::Idle;
+}
+
+void CityPossessSystem::alightHere(engine::FrameContext& ctx) {
+    (void)ctx;
+    if (walkerAgent_ < 0) { error_ = "nothing possessed"; return; }
+    if (!city_.simMutable().alightVehicle(walkerAgent_)) {
+        error_ = "not in a car";
+        return;
+    }
+    LOG_INFO << "alight: agent " << walkerAgent_ << " got out";
+    configureFollow(follow_, /*car=*/false);
+    hasDest_ = false;
+    state_ = PossessState::Idle;
 }
 
 void CityPossessSystem::releasePossession(engine::FrameContext& ctx) {
@@ -678,6 +769,25 @@ void CityPossessSystem::publishLook(engine::FrameContext& ctx) {
         }
     }
 
+    // A CAR IT COULD TAKE — the nearest one with nobody in it, out to the same
+    // range as the places, because a car two streets away is a destination you
+    // can walk to. `boardable` is the different question: can it reach in and
+    // open the door from where it is standing right now.
+    {
+        const int veh = sim.nearestFreeVehicle(eye, kLookRadiusPlaces);
+        if (veh >= 0) {
+            const Vec2 vp = sim.vehicles()[static_cast<std::size_t>(veh)].pos;
+            const engine::Real d = dist(vp);
+            std::snprintf(buf, sizeof(buf),
+                          " | car_free=%d d=%.1f b=%.0f at=%.1f,%.1f boardable=%d",
+                          veh, static_cast<double>(d),
+                          static_cast<double>(bearing(vp)),
+                          static_cast<double>(vp.x), static_cast<double>(vp.y),
+                          d <= kBoardReach ? 1 : 0);
+            out += buf;
+        }
+    }
+
     // THE PEOPLE AROUND IT, nearest first, capped. The grid answers by CELL, so
     // this is a superset — the distance test below is the exact one.
     {
@@ -768,13 +878,15 @@ void CityPossessSystem::publishStatus(engine::FrameContext& ctx) {
             char buf[512];
             std::snprintf(
                 buf, sizeof(buf),
-                "agent=%d mode=ped activity=%s state=%s tier=%c moving=%d "
+                "agent=%d mode=%s activity=%s state=%s tier=%c moving=%d "
                 "indoors=%d restDwell=%.1f speed=%.2f pos=%.1f,%.1f "
                 "leg=%d/%d routeValid=%d tripGoal=%d home=%d work=%d "
                 "busDwell=%.1f busStoodLeg=%d riding=%d awaitingRide=%d "
                 "busRoute=%d busNextStop=%d stepped=%d gap=%.1f minGap=%.1f "
                 "tethered=%d anchorDist=%.1f lead=%.1f playerCtl=%d released=%d",
-                walkerAgent_, activityLabel(a.activity), stateLabel(a.state),
+                walkerAgent_,
+                a.mode == Agent::Mode::Driver ? "car" : "ped",
+                activityLabel(a.activity), stateLabel(a.state),
                 tierLabel(a.tier), a.moving ? 1 : 0, a.indoors ? 1 : 0,
                 static_cast<double>(a.restDwell), static_cast<double>(a.speed),
                 static_cast<double>(a.pos.x), static_cast<double>(a.pos.y),

@@ -140,6 +140,11 @@ struct Agent {
     // along whatever route the director gave. This is NOT `released`, which
     // stops the agent being stepped at all, nor `playerControlled`, which hands
     // the body to the host: a directed agent is still the sim's to move.
+    // WHERE ON THE LAST LEG THE ERRAND ACTUALLY ENDS, in metres along it, or
+    // -1 for "at the node" (every ordinary trip). A route is a list of LINKS,
+    // so arrival used to mean reaching the end of the last one — which on a
+    // 40 m link leaves an agent 20 m from the door, or the car, it was sent to.
+    Real stopAtDist = -1;
     bool directed = false;   // brain = host input; the sim won't auto-drive it
     bool released = false;           // ejected by the player (ADR-0062): the sim stops
                                      // driving this agent's ghost so it can't fight the
@@ -358,6 +363,11 @@ const VehicleBody& vehicleFleetBody(int slot);   // slot wraps into [0, size)
 
 // A drivable car. Kinematic in the sim core; its pose tracks its driver. Inert
 // when `driver < 0`. Its body (type + dimensions) comes from the fleet table.
+// How far off its final street a director's destination may sit and still be
+// walked to exactly. Beyond this it is not really "along that street" and the
+// agent arrives at the node instead.
+constexpr Real kErrandOffLink = 15.0;
+
 struct SimVehicle {
     Real length = 4.2;
     Real width = 1.8;
@@ -621,6 +631,88 @@ public:
         grid_.query(pos, radius, out);
     }
 
+    // GET IN AND DRIVE (ADR-0091). A possessed pedestrian walks up to a car
+    // and takes it. Everything else follows from `mode`, because every pass
+    // already reads it: pedVisible() goes false so the walker system reaps its
+    // body, the vehicle bridge draws the car instead, findRoute switches from
+    // the pavement to the road graph, and the stepper advances it as traffic.
+    // The agent's pose BECOMES the car's — you are where the car is once you
+    // are in it — so the planner ghost and the thing on screen stay one object.
+    // Refuses a car that already has a driver. The caller owns the question of
+    // how far away is too far to reach.
+    bool boardVehicle(int agentIndex, int vehicleIndex) {
+        if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size()))
+            return false;
+        if (vehicleIndex < 0 || vehicleIndex >= static_cast<int>(vehicles_.size()))
+            return false;
+        Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+        SimVehicle& v = vehicles_[static_cast<std::size_t>(vehicleIndex)];
+        if (v.driver >= 0 || a.vehicle >= 0) return false;
+        a.pos = v.pos;
+        a.heading = v.heading;
+        a.mode = Agent::Mode::Driver;
+        a.vehicle = vehicleIndex;
+        v.driver = agentIndex;
+        v.offStreet = false;              // on the street the moment it is driven
+        a.indoors = false;
+        a.tethered = false;               // the walker body it had is gone
+        a.moving = false;
+        a.speed = 0;
+        a.route = engine::Route{};
+        a.leg = 0;
+        a.distOnLeg = 0;
+        a.state = Agent::State::Waiting;
+        a.tickFromPos = a.pos;            // a placement, not a motion
+        a.tickFromHeading = a.heading;
+        grid_.place(agentIndex, a.pos);
+        return true;
+    }
+
+    // Get out again, on the kerb beside the car, leaving it where it stands.
+    bool alightVehicle(int agentIndex) {
+        if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size()))
+            return false;
+        Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+        if (a.vehicle < 0 || a.vehicle >= static_cast<int>(vehicles_.size()))
+            return false;
+        SimVehicle& v = vehicles_[static_cast<std::size_t>(a.vehicle)];
+        v.pos = a.pos;
+        v.heading = a.heading;
+        v.driver = -1;
+        parkedGrid_.place(a.vehicle, v.pos);
+        a.vehicle = -1;
+        a.mode = Agent::Mode::Pedestrian;
+        a.moving = false;
+        a.speed = 0;
+        a.route = engine::Route{};
+        a.leg = 0;
+        a.distOnLeg = 0;
+        a.state = Agent::State::Resting;
+        // Step out onto the pavement rather than into the lane you parked in.
+        const engine::Vec2 side(a.heading.y, -a.heading.x);
+        a.pos = pushPoseClearOfLanes(engine::Vec2(a.pos.x + side.x * 2.0,
+                                                  a.pos.y + side.y * 2.0), 1.0);
+        a.tickFromPos = a.pos;
+        grid_.place(agentIndex, a.pos);
+        return true;
+    }
+
+    // The nearest car with nobody in it within `radius` of `p` — what a
+    // director means by "that one". Skips off-street cars (in a garage, not
+    // drawn, not reachable on foot). -1 when there is none.
+    int nearestFreeVehicle(engine::Vec2 p, Real radius) const {
+        int best = -1;
+        Real bestD2 = radius * radius;
+        for (std::size_t i = 0; i < vehicles_.size(); ++i) {
+            const SimVehicle& v = vehicles_[i];
+            if (v.driver >= 0 || v.offStreet) continue;
+            const Real dx = v.pos.x - p.x, dy = v.pos.y - p.y;
+            const Real d2 = dx * dx + dy * dy;
+            if (d2 <= bestD2) { bestD2 = d2; best = static_cast<int>(i); }
+        }
+        return best;
+    }
+
     // Hand an agent's PLAN to a director (ADR-0091). Idempotent; -1 or an
     // out-of-range index is a no-op. Turning it off returns the agent to its
     // schedule from wherever it is standing.
@@ -731,6 +823,29 @@ public:
             a.leg = 0;
             a.distOnLeg = keepDist;
             refreshPose(a);
+        }
+        // END AT THE POINT, not at the node. Project the destination onto the
+        // last link of the route: if it lies alongside it, that is where the
+        // agent stops. A destination that is not beside its final street (a
+        // door round the corner) keeps the old behaviour and arrives at the
+        // node, which is the honest answer rather than a wrong one.
+        a.stopAtDist = -1;
+        if (!a.route.links.empty()) {
+            const engine::NavLink& last =
+                nav_->links[static_cast<std::size_t>(a.route.links.back())];
+            const engine::Vec2 A = nav_->nodes[static_cast<std::size_t>(last.from)];
+            const engine::Vec2 B = nav_->nodes[static_cast<std::size_t>(last.to)];
+            const engine::Vec2 AB(B.x - A.x, B.y - A.y);
+            const Real len2 = AB.x * AB.x + AB.y * AB.y;
+            if (len2 > 1e-6) {
+                Real t = ((dest.x - A.x) * AB.x + (dest.y - A.y) * AB.y) / len2;
+                t = std::max(Real(0), std::min(Real(1), t));
+                const engine::Vec2 foot(A.x + AB.x * t, A.y + AB.y * t);
+                const Real off = std::sqrt((dest.x - foot.x) * (dest.x - foot.x) +
+                                           (dest.y - foot.y) * (dest.y - foot.y));
+                if (off <= kErrandOffLink)
+                    a.stopAtDist = t * last.length;
+            }
         }
         // A DIRECTOR'S ERRAND OVERRIDES THE DAY. startTrip sets the trip
         // (moving, indoors, route) but not the reactive state the stepper reads,
