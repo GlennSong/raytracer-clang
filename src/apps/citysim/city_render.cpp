@@ -151,6 +151,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.cars = c.cars;
         params_.pedestrians = c.pedestrians;
         params_.carsPerLaneKm = c.carsPerLaneKm;
+        params_.longCommuteShare = c.longCommuteShare;
         params_.pedsPerKm = c.pedsPerKm;
         params_.maxAmbient = c.maxAmbient;
         params_.seed = c.seed;
@@ -544,7 +545,11 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // routes them to actual buildings. No-op when the level authored no places
     // (then the built random home/work schedule stands). After setWander so the
     // (persistent) mode is settled; before the warm-up so day one runs on places.
+    sim_.setLongCommuteShare(params_.longCommuteShare);
     sim_.assignPlaces(places_, nav_);
+    LOG_INFO << "[citysim] commutes: " << sim_.commuteStats().driversWithJobs << " drivers with jobs, "
+             << sim_.commuteStats().crossTownDrivers << " cross-town (share " << params_.longCommuteShare
+             << "), mean driver commute " << static_cast<int>(sim_.commuteStats().meanDriverCommute) << " m";
 
     // ONE CLOCK. A staged day/night cycle owns the world's hour and rate:
     // the sim opens at the sky's hour and its schedules run at the sky's

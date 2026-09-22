@@ -1147,6 +1147,12 @@ public:
     // the build stream is unchanged). Call AFTER build()/setWander with the same
     // graph; a no-op when `places` has no homes. `graph` must be the built one.
     void assignPlaces(const PlaceMap& places, const engine::NavGraph& graph);
+    // Share of drivers assignPlaces gives a CROSS-TOWN job (1.2 km+ away); the rest
+    // take the nearest of their sampled jobs. Set before assignPlaces.
+    void setLongCommuteShare(Real share) { longCommuteShare_ = share; }
+    // What the last assignPlaces did with the drivers' jobs (for the load log).
+    struct CommuteStats { int crossTownDrivers = 0, driversWithJobs = 0; Real meanDriverCommute = 0; };
+    const CommuteStats& commuteStats() const { return commuteStats_; }
     const RelationshipTable& relationships() const { return relationships_; }
 
     // How often an agent re-DECIDES its reactive behaviour (seconds). Between
@@ -1324,6 +1330,8 @@ private:
     Real rndUnit();
 
     const engine::NavGraph* nav_ = nullptr;
+    Real longCommuteShare_ = 0;   // setLongCommuteShare
+    CommuteStats commuteStats_;
     std::vector<Agent> agents_;
     std::vector<SimVehicle> vehicles_;
     // Adopted fleet catalogue; empty = use the built-in table (see setFleet).

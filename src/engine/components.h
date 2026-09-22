@@ -568,6 +568,11 @@ struct CitySimConfig {
     int pedestrians = 40;
     float carsPerLaneKm = 10.0f;   // density mode: ambient cars per lane-km
     float pedsPerKm = 6.0f;        // density mode: walkers per sidewalk-km
+    // Share of DRIVERS who commute across town: their job is drawn from 1.2 km+
+    // away, so a city with a ring freeway sees it used (Glenn, 2026-09-22: "I'd
+    // like more traffic on the freeway"). 0 = everyone takes the nearest of their
+    // sampled jobs (the short-commute rule).
+    float longCommuteShare = 0.0f;
     // Ceiling on EACH density-derived count. This was a literal 400 in the
     // bridge, which silently halved metro v2: its own network asks for 769
     // cars and 788 walkers, and got 400 of each (measured 2026-09-16,

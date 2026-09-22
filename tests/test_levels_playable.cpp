@@ -3026,6 +3026,20 @@ TEST_CASE(freeway_census_links_routes_and_traffic) {
         CHECK(offDeckCars == 0);
         std::string now;
         for (const auto& [k, v] : onClass) now += " " + k + " " + std::to_string(v);
+        // DEMAND, not a snapshot: every driver's own commute (home -> work, the router's
+        // choice) and whether it takes the freeway. At any moment most cars are parked.
+        int commutes = 0, commutesViaFreeway = 0;
+        for (std::size_t ai = 0; ai < city.sim().agents().size(); ++ai) {
+            const auto& a = city.sim().agents()[ai];
+            if (a.archetype != citysim::Agent::Mode::Driver || city.sim().isBus(static_cast<int>(ai))) continue;
+            if (a.home < 0 || a.work < 0 || a.home == a.work || a.home >= n || a.work >= n) continue;
+            const engine::Route r = engine::findRoute(nav, a.home, a.work);
+            if (!r.valid()) continue;
+            ++commutes;
+            if (usesFreeway(r)) ++commutesViaFreeway;
+        }
+        std::printf("    [freeway] %-18s commutes: %d of %d drivers' home->work routes take the freeway\n", name,
+                    commutesViaFreeway, commutes);
         std::printf("    [freeway] %-18s traffic after 3 min: %d drivers, moving on:%s | %d planned routes touch "
                     "the freeway | %d home-work pairs > 1.5 km apart\n",
                     name, drivers, now.c_str(), plannedFreeway, longTrips);

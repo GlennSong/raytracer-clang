@@ -22,6 +22,15 @@ namespace {
 // The fastest class speed bounds the A* heuristic so it never overestimates the
 // remaining travel time (admissibility -> optimal routes).
 constexpr Real kMaxSpeed = 28.0;
+// THE TIME A CAR LOSES AT A STREET INTERSECTION — signals, stop signs, yielding
+// (Glenn, 2026-09-22: "I'd like more traffic on the freeway"). Travel time was
+// length / class speed and nothing else, so a straight arterial through town cost
+// the same as a free-flowing freeway at 28 m/s against 16 m/s — and in a city 1.4 x
+// 2.4 km the detour out to the ring and back never paid. Real freeways win because
+// an arterial stops every block; charging each street junction a few seconds is the
+// same fact in the router. Freeway and ramp merges are free-flowing and cost nothing,
+// and a walker (onFoot) is not charged.
+constexpr Real kStreetJunctionDelay = 6.0;   // seconds
 }  // namespace
 
 Real Route::length(const NavGraph& g) const {
@@ -75,6 +84,9 @@ Route findRoute(const NavGraph& graph, int startNode, int goalNode,
                        link.klass == RoadClass::Ramp || !link.walkable))
                 continue;
             Real step = link.length / classSpeed(link.klass);
+            if (!onFoot && link.to != goalNode && link.klass != RoadClass::Freeway &&
+                link.klass != RoadClass::Ramp && graph.isJunction(link.to))
+                step += kStreetJunctionDelay;
             if (linkCostScale && static_cast<std::size_t>(li) < linkCostScale->size())
                 step *= std::max<Real>(1.0, (*linkCostScale)[static_cast<std::size_t>(li)]);
             Real tentative = g[u] + step;

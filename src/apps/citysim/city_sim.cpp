@@ -728,6 +728,8 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     // Scratch for the on-foot job search, hoisted: one allocation, not one
     // per walker.
     std::vector<std::pair<Real, PlaceId>> jobDist;
+    int crossTownDrivers = 0, driversWithJobs = 0;
+    Real driverCommute = 0;
     for (Agent& a : agents_) {
         // Home: deterministic pick from the agent's own brain bits (no rng
         // draw). MIXED first: brains are forced odd (rnd()|1), so a raw
@@ -910,7 +912,29 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                     if (x.first != y.first) return x.first < y.first;
                     return x.second < y.second;
                 });
-                for (int c = 0; c < nc; ++c)
+                // CROSS-TOWN COMMUTERS (Glenn, 2026-09-22: "I'd like more traffic on the
+                // freeway"). Nearest-of-24 keeps car commutes short — measured on
+                // metro_lanes, 19 of 2279 drivers lived more than 1.5 km from work, and
+                // a ring freeway only pays on a trip across town. A level-set share of
+                // drivers (their own brain bits, no rng draw) instead takes the nearest
+                // sampled job at least kLongCommute away — the outskirts-to-downtown
+                // commute — and failing that the farthest one that routes.
+                constexpr Real kLongCommute = 1800.0;
+                uint32_t ct = a.brain * 0x9E3779B9u;   // own bits, decorrelated from the role roll
+                ct ^= ct >> 15; ct *= 0x2c1b3c6dU; ct ^= ct >> 12;
+                const bool crossTown =
+                    longCommuteShare_ > 0 &&
+                    static_cast<Real>(ct & 0x3FF) < longCommuteShare_ * 1024.0;
+                if (crossTown) {
+                    ++crossTownDrivers;
+                    for (int c = 0; c < nc && pick == kNoPlace; ++c)
+                        if (cands[c].first >= kLongCommute * kLongCommute &&
+                            commutable(hn, nodeOf(cands[c].second)))
+                            pick = cands[c].second;
+                    for (int c = nc - 1; c >= 0 && pick == kNoPlace; --c)
+                        if (commutable(hn, nodeOf(cands[c].second))) pick = cands[c].second;
+                }
+                for (int c = 0; c < nc && pick == kNoPlace; ++c)
                     if (commutable(hn, nodeOf(cands[c].second))) {
                         pick = cands[c].second;
                         break;
@@ -928,6 +952,10 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 a.workPlace = pick;
                 a.work = nodeOf(pick);
                 a.workDoor = doorOf(pick);
+                if (a.archetype == Agent::Mode::Driver) {
+                    ++driversWithJobs;
+                    driverCommute += (places[pick].site - homePos).length();
+                }
                 {   // An errand stop: the nearest shop to HOME that is routable
                     // from work, so the last leg home is short. Deterministic:
                     // nearest first, ties by place id.
@@ -1038,6 +1066,9 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             }
         }
     }
+    commuteStats_.crossTownDrivers = crossTownDrivers;
+    commuteStats_.driversWithJobs = driversWithJobs;
+    commuteStats_.meanDriverCommute = driversWithJobs ? driverCommute / driversWithJobs : 0;
 }
 
 // MEDIAN COMMUTE, in sim-seconds. Sampled (every 64th commuter) because each

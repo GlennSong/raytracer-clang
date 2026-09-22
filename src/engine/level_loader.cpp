@@ -4199,6 +4199,7 @@ bool LevelLoader::load(const std::string& path,
         cfg.localHz = cs.value("localHz", cfg.localHz);
         cfg.adaptiveRate = cs.value("adaptiveRate", cfg.adaptiveRate);
         cfg.carsPerLaneKm = cs.value("carsPerLaneKm", cfg.carsPerLaneKm);
+        cfg.longCommuteShare = cs.value("longCommuteShare", cfg.longCommuteShare);
         cfg.pedsPerKm = cs.value("pedsPerKm", cfg.pedsPerKm);
         cfg.maxAmbient = cs.value("maxAmbient", cfg.maxAmbient);
         cfg.seed = cs.value("seed", cfg.seed);

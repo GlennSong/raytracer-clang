@@ -8,6 +8,7 @@
   "buses": 24,
   "cars": -1,
   "carsPerLaneKm": 35.0,
+  "longCommuteShare": 0.35,
   "debugWidgets": false,
   "detailDistance": 300,
   "districts": {
