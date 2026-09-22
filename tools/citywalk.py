@@ -22,6 +22,7 @@ import json
 import math
 import os
 import random
+import re
 import socket
 import time
 
@@ -254,6 +255,68 @@ def stub_decider(state, menu):
     return menu.index(pick), why
 
 
+def describe(state):
+    """The agent's situation as a sentence, because that is what a classifier
+    reads. Everything here comes from `agent?` and `look?` — no invention."""
+    ag = dict(t.split("=", 1) for t in str(state.get("agent", "")).split() if "=" in t)
+    clock = state.get("clock") or 0.0
+    hh, mm = int(clock), int((clock % 1) * 60)
+    where = "standing indoors at home" if ag.get("indoors") == "1" else "out on the street"
+    doing = str(ag.get("activity", "unknown")).replace("-", " ")
+    moving = "walking" if ag.get("moving") == "1" else "standing still"
+    crowd = re.search(r"crowd=(\d+)", str(state.get("look", "")))
+    near = f" There are {crowd.group(1)} people within 40 m." if crowd else ""
+    return (f"It is {hh:02d}:{mm:02d} in the morning in a city. A person is {where}, "
+            f"{moving}. What they are doing today so far: {doing}.{near} "
+            f"They can walk to any of the places listed.")
+
+
+def laya_decider_factory(model_id="convaiinnovations/laya"):
+    """The System One decider (ADR-0091's second step, arrived early).
+
+    Laya is an open-weights 421M-parameter encoder under Apache 2.0: ONE
+    forward pass, calibrated probabilities per option, no API key and no
+    network. It answers the same choice/score/noul primitives the ADR
+    specifies, so the menu the ENGINE built goes to it unchanged and an
+    out-of-range answer stays impossible. ~450 ms on this box's CPU, which is
+    nothing against a goal that lasts minutes at 1:1 time — and it leaves the
+    GPU entirely to the renderer.
+
+    Run citywalk under the venv that has it:
+        ~/Projects/laya/.venv/bin/python tools/citywalk.py --decider laya
+    """
+    import laya                              # not a stdlib dep: imported only on demand
+    agent = laya.load(model_id)
+
+    def decide(state, menu):
+        keys, criteria = [], {}
+        for i, c in enumerate(menu):
+            k = f"{i}_{re.sub(r'[^a-z0-9]+', '_', str(c['what']).lower()).strip('_')}"[:40]
+            keys.append(k)
+            criteria[k] = c["label"]
+        questions = {
+            "where_next": {"type": "choice",
+                           "instructions": "Where should this person go next?",
+                           "criteria": criteria},
+            "in_a_hurry": {"type": "noul",
+                           "instructions": "This person is in a hurry."},
+        }
+        t0 = time.time()
+        res = agent.predict(describe(state), questions)
+        ms = (time.time() - t0) * 1000
+        ans = res["answers"]["where_next"]
+        pick = ans.get("choice")
+        idx = keys.index(pick) if pick in keys else 0
+        probs = ans.get("probabilities", {})
+        state["laya"] = {"ms": round(ms, 1), "probabilities": probs,
+                         "confidence": ans.get("confidence"),
+                         "hurry": res["answers"].get("in_a_hurry", {}).get("noul")}
+        return idx, (f"laya p={probs.get(pick, 0):.2f} conf={ans.get('confidence', 0):.2f} "
+                     f"{ms:.0f} ms")
+
+    return decide
+
+
 def log(entry):
     with open(LOG, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -270,8 +333,17 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--keep", action="store_true", help="stay possessed at the end")
     ap.add_argument("--shots", help="directory for a screenshot per leg")
+    ap.add_argument("--decider", choices=("stub", "laya"), default="stub",
+                    help="who chooses: the phase 1 stub, or Laya locally on the CPU")
+    ap.add_argument("--laya-model", default="convaiinnovations/laya")
     a = ap.parse_args()
     rng = random.Random(a.seed)
+    decider = stub_decider
+    if a.decider == "laya":
+        print(f"loading {a.laya_model} (CPU) ...", flush=True)
+        t0 = time.time()
+        decider = laya_decider_factory(a.laya_model)
+        print(f"loaded in {time.time() - t0:.1f}s", flush=True)
 
     ch = Channel(a.socket)
     info = ch.send("info")
@@ -309,14 +381,14 @@ def main():
         menu = candidates(seen, pos, a.radius, rng, visited=visited)
         if not menu:
             print("no candidates left"); break
-        idx, why = stub_decider(state, menu)
+        idx, why = decider(state, menu)
         choice = menu[idx]
         clock = header.get("clock")
         print(f"\nstep {step}: {clock:.2f}h " if isinstance(clock, float) else f"\nstep {step}: ", end="")
         print(f"at ({pos[0]:.1f}, {pos[1]:.1f}), sees {len(menu)} options "
               f"-> {choice['label']} ({choice['x']}, {choice['z']})  [{why}]")
         entry = {"t": time.time(), "step": step, "state": state, "menu": menu,
-                 "choice": idx, "why": why, "decider": "stub"}
+                 "choice": idx, "why": why, "decider": a.decider}
         if a.dry_run:
             entry["result"] = "dry-run"
             log(entry)
