@@ -204,6 +204,30 @@ bool isIdentity(const Quat& q) {
 // A procedural terrain block: regenerate the same mesh the engine does and add
 // it (vertex color carries the slope/height coloring; material albedo
 // multiplies it, so a white albedo lets the baked color show).
+// The offline terrain's height field, exactly as addTerrain meshes it (minus a
+// private erosion bake when no shared eroded base is supplied): the ground the
+// lot pass's ground-relative dressing is laid on here, as the loader lays it on
+// the CDLOD surface.
+TerrainParams offlineTerrainParams(const json& t, const std::vector<TerrainFlatten>& flatten,
+                                   std::shared_ptr<const std::function<double(double, double)>>
+                                       erodedBase) {
+    TerrainParams tp = readTerrainParams(t);
+    tp.erodedBase = erodedBase;
+    Noise noise(t.value("seed", 0u));
+    {
+        TerrainParams naturalTp = tp;
+        rebuildFlattenIndex(naturalTp);
+        const std::function<double(double, double)> natural =
+            [&naturalTp, &noise](double x, double z) {
+                return terrainHeight(naturalTp, noise, x, z);
+            };
+        tp.earthwork = buildEarthworkField(flatten, natural, tp.earthworkParams, tp.seaLevel);
+    }
+    tp.flatten = flatten;
+    rebuildFlattenIndex(tp);
+    return tp;
+}
+
 void addTerrain(const json& t, Scene& scene, const MaterialTable& materials,
                 const std::vector<TerrainFlatten>& flatten = {},
                 std::shared_ptr<const std::function<double(double, double)>>
@@ -619,8 +643,23 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             {
                 using S = RenderMaterial::Surface;
                 SurfaceTexCache texCache;
-                for (const RenderMesh& part : lots.parts) {
-                    if (part.vertices.empty()) continue;
+                // Ground-relative dressing (city_lots.h, kDrapedPartBase) lands on the
+                // ground this scene's terrain is meshed from — pads included.
+                const TerrainParams dtp =
+                    offlineTerrainParams(root["terrain"], allFlatten, sharedEroded);
+                const Noise dnoise(root["terrain"].value("seed", 0u));
+                const std::function<engine::Real(engine::Real, engine::Real)> dressingGround =
+                    [&dtp, &dnoise](engine::Real x, engine::Real z) {
+                        return terrainHeight(dtp, dnoise, x, z);
+                    };
+                for (std::size_t slot = 0; slot < lots.parts.size(); ++slot) {
+                    if (lots.parts[slot].vertices.empty()) continue;
+                    RenderMesh draped;
+                    if (engine::isDrapedSlot(slot)) {
+                        draped = lots.parts[slot];
+                        engine::drapeOnGround(draped, dressingGround);
+                    }
+                    const RenderMesh& part = engine::isDrapedSlot(slot) ? draped : lots.parts[slot];
                     RenderMaterial rm = materialFor(
                         static_cast<PartId>(part.materialIndex), Vec3(1, 1, 1));
                     Material mat = Material::pbr(Vec3(1, 1, 1), rm.metallic,
@@ -640,7 +679,9 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                         lb.padMesh.vertices.empty()) continue;
                     Material mat = Material::pbr(lb.color, 0.0, 1.0);
                     int mi = scene.addMaterial(mat);
-                    addMeshAsTriangles(lb.padMesh, Vec3(), Quat::identity(),
+                    RenderMesh onGround = lb.padMesh;   // ground-relative (kDrapedPartBase)
+                    engine::drapeOnGround(onGround, dressingGround);
+                    addMeshAsTriangles(onGround, Vec3(), Quat::identity(),
                                        Vec3(1, 1, 1), mi, scene);
                 }
                 // Sculpted lots carry TREE SPOTS (x, scale, z): bake real

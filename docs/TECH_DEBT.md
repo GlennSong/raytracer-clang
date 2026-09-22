@@ -954,6 +954,46 @@ moonrise from the sun's are approximations of the same formula (no
 eclipses); Metal/WebGPU disc code is mirrored, not run.
 
 
+### Addendum (2026-09-21): the lot pass stops draping itself
+
+The terrace-lip note above was the visible end of a bigger fact: the lot pass
+runs BEFORE its ground is final — the building pads, block grades and (on a
+lane-built city) the clipped terraces are stamped into the terrain after it —
+so every walk, hedge and park path it draped was draped on a surface that
+then changed under it. Measured with a CPU copy of the real meshes against
+the CDLOD leaf surface (`lodSurfaceHeight`, checked against real tiles to
+0.0000 m): 408 of metro_lanes' 1264 hedges and 583 of its 974 front walks
+off the drawn ground by > 0.3 m; 927 of the lattice metro's 1856 hedges.
+
+Now: yard, door-walk, park and alley dressing is emitted GROUND-RELATIVE into
+the draped part slots (`kDrapedPartBase + PartId`, city_lots.h) and a park's
+padMesh the same way; the loader (and level_scene) lay it on the finished
+terrain with `drapeOnGround`, cutting every triangle along the leaf grid's
+cell lines and diagonals first so a walk follows the mesh exactly. The path
+RAMPS still grade the terrain from the absolute ground. Scatter trees/rocks
+and lot trees stand on `lodSurfaceHeight` too, and planting asks the road
+AS DRAWN (`engine::DrawnRoad`, the same index the furniture gate uses).
+Gates: `scenery_is_planted_on_the_ground`, `lot_dressing_is_planted_on_the_ground`,
+`city_furniture_never_stands_in_a_road` (ratchet retired: 0 everywhere).
+The old tile-fidelity unit test became `walkways_are_emitted_on_the_ground_the_host_draws`.
+
+Open, ratcheted:
+- **Paved plates under the grass** (metro_lanes 155, metro_v2_test 22, worst
+  ~4.7 m). A lane-built pad is inset by its 2 m feather and clipped to the
+  block (`clipPadsToBlocks`); a plate reaching its lot line stands on the
+  feather, and uphill the ground climbs over it (129 of metro_lanes' 155 go
+  under inside their block). Same strip as "blocks inset by the sidewalk that
+  was actually built" — fix together.
+- **Lot depth derived from the block — tried, measured, reverted.** Halving
+  the depth wherever two full rows could not both fit shrank ordinary blocks
+  (lattice metro 1396 -> 1548 smaller buildings for the same floor area; 90 m
+  financial blocks lost their tower plazas; alley strips built fewer houses).
+  Restricting it to blocks shallower than the grain still cost the lattice
+  metro 37 lots to green, halved the walkers near spawn and made a landlocked
+  lot whose door stepped into its neighbour — for +11 buildings on
+  metro_lanes. The shallow-block case wants ONE row of through-lots with the
+  opposite row dropped, not two overlapping rows clipped into remnants.
+
 ## Enterable buildings (2026-08-30, ADR-0080)
 
 - **Interior lighting: room lights staged, per-fixture lights owed.**

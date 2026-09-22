@@ -177,56 +177,77 @@ StreetFurniturePlan planStreetFurniture(
             t = std::min(tNext, Real(30.0));         // a fork this sharp is a
                                                      // gore, not a corner
         }
-        Vec2 corner = node - d * t + right * w;
-        // ...AND OUT OF EVERY OTHER ROAD'S CARRIAGEWAY. The back-off above reasons about the
-        // ARMS AT THIS NODE, which is all a lattice city has near a corner. A lane-built city
-        // puts a freeway carriageway or a ramp gore right past the end of a street — no arm of
-        // this node, and 18 m of asphalt the pole stood in the middle of (metro_lanes: 22 of
-        // 292 poles). Push it clear of any link it is inside, iterating because clearing one
-        // can enter another, and giving up rather than walking a pole across the city.
-        Real residual = 0;
-        for (int pass = 0; pass < 5; ++pass) {
-            Vec2 push(0, 0);
-            Real worst = 0;
-            forEachLinkNear(corner, kPoleSearch, [&](int ol) {
-                if (ol == li) return;
-                const engine::NavLink& O = nav.links[ol];
-                const Vec2 a = nav.nodes[O.from], b = nav.nodes[O.to];
-                const Vec2 ab = b - a;
-                const Real L2 = ab.lengthSquared();
-                const Real u = L2 < Real(1e-9) ? Real(0) : std::clamp(dot(corner - a, ab) / L2, Real(0), Real(1));
-                const Vec2 foot = a + ab * u;
-                Vec2 away = corner - foot;
-                const Real dist = away.length();
-                const Real need = O.width * Real(0.5) + p.curbGap;
-                if (dist >= need) return;
-                if (dist < Real(1e-6)) {              // dead centre: step off sideways
-                    const Vec2 n2(-ab.y, ab.x);
-                    const Real nl = n2.length();
-                    away = nl > Real(1e-9) ? n2 * (Real(1) / nl) : Vec2(1, 0);
-                } else {
-                    away = away * (Real(1) / dist);
-                }
-                const Real gap = need - dist;
-                if (gap > worst) { worst = gap; push = away * gap; }
-            });
-            residual = worst;
-            if (worst <= Real(1e-3)) break;
-            if ((corner + push - node).length() > kPoleMaxWalk) break;   // not a corner any more
-            corner = corner + push;
-            residual = 0;
+        // TRY BOTH KERBS (Glenn, 2026-09-21: "the stoplights aren't showing up in some
+        // places"). A pole goes on the approach's right-hand corner; where that corner lies
+        // inside somebody else's carriageway — a freeway past the end of a street, a ramp
+        // gore — it used to be DROPPED, and the junction was left with no drawn signal while
+        // the sim went on phasing it (16 of metro_lanes' 292). The left-hand corner, across
+        // the same approach, is usually fine. Only when both are buried is there no pole.
+        auto tryCorner = [&](Real side, Real reach, Vec2& out) -> bool {
+            const Vec2 sideDir = right * side;
+            Vec2 corner = node + d * reach + sideDir * w;
+            // ...AND OUT OF EVERY OTHER ROAD'S CARRIAGEWAY. The back-off above reasons about
+            // the ARMS AT THIS NODE, which is all a lattice city has near a corner. A lane-built
+            // city puts a freeway carriageway or a ramp gore right past the end of a street —
+            // no arm of this node, and 18 m of asphalt the pole stood in the middle of. Push it
+            // clear of any link it is inside, iterating because clearing one can enter another,
+            // and giving up rather than walking a pole across the city.
+            Real residual = 0;
+            for (int pass = 0; pass < 5; ++pass) {
+                Vec2 push(0, 0);
+                Real worst = 0;
+                forEachLinkNear(corner, kPoleSearch, [&](int ol) {
+                    if (ol == li) return;
+                    const engine::NavLink& O = nav.links[ol];
+                    const Vec2 a = nav.nodes[O.from], b = nav.nodes[O.to];
+                    const Vec2 ab = b - a;
+                    const Real L2 = ab.lengthSquared();
+                    const Real u = L2 < Real(1e-9) ? Real(0) : std::clamp(dot(corner - a, ab) / L2, Real(0), Real(1));
+                    const Vec2 foot = a + ab * u;
+                    Vec2 away = corner - foot;
+                    const Real dist = away.length();
+                    const Real need = O.width * Real(0.5) + p.curbGap;
+                    if (dist >= need) return;
+                    if (dist < Real(1e-6)) {
+                        const Vec2 n2(-ab.y, ab.x);
+                        const Real nl = n2.length();
+                        away = nl > Real(1e-9) ? n2 * (Real(1) / nl) : Vec2(1, 0);
+                    } else {
+                        away = away * (Real(1) / dist);
+                    }
+                    const Real gap = need - dist;
+                    if (gap > worst) { worst = gap; push = away * gap; }
+                });
+                residual = worst;
+                if (worst <= Real(1e-3)) break;
+                if ((corner + push - node).length() > kPoleMaxWalk) break;   // not a corner any more
+                corner = corner + push;
+                residual = 0;
+            }
+            // A corner a few centimetres inside its OWN street is just a kerb — a two-way road
+            // is two links sharing one centreline, so every correct pole reads as marginally
+            // inside the opposite direction's carriageway. Only a pole genuinely BURIED fails.
+            if (residual > kPoleDropInside) return false;
+            // ...and off the DRAWN asphalt, which the link widths above only approximate —
+            // ALL the way off. The kerb allowance is for the link-width estimate (two links on
+            // one centreline); the deck has no such ambiguity, and every lattice pole ends at
+            // exactly 0 here. A pole still inside it (one on metro_lanes, 0.30 m into a
+            // carriageway after a 12 m walk) tries the other corner instead.
+            if (walkOffDeck(corner, sideDir, kPoleMaxWalk) > Real(0)) return false;
+            out = corner;
+            return true;
+        };
+        Vec2 corner;
+        // ...and then ACROSS the junction. A far-side signal — on the exit corner, facing the
+        // approaching traffic — is the ordinary North American arrangement, and it is where a
+        // light goes when both near corners are asphalt (a ramp gore on one side, a freeway
+        // past the end of the street on the other).
+        const Real farReach = crossHalf + p.sidewalkWidth + spread + p.curbGap;
+        if (!tryCorner(Real(1), -t, corner) && !tryCorner(Real(-1), -t, corner) &&
+            !tryCorner(Real(1), farReach, corner) && !tryCorner(Real(-1), farReach, corner)) {
+            out.unpoledApproaches.push_back(node);
+            continue;
         }
-        // A CORNER INSIDE A FREEWAY IS NOT A STREET CORNER — but a corner a few centimetres
-        // inside its OWN street is just a kerb. A two-way road is two links sharing one
-        // centreline and one width, so every correctly-placed pole reads as marginally inside
-        // the opposite direction's carriageway; dropping on any residual at all threw away 148
-        // of metro's 288 signals and made its junctions worse. Only a pole genuinely BURIED —
-        // metro_lanes' worst sat 18.6 m inside a freeway, which no back-off along a kerb can
-        // reach — is discarded. The sim's SignalController is unaffected either way: it
-        // signalises a junction by its approaches, and these spots are what gets DRAWN.
-        if (residual > kPoleDropInside) continue;
-        // ...and off the DRAWN asphalt, which the link widths above only approximate.
-        if (walkOffDeck(corner, right, kPoleMaxWalk) > kPoleDropInside) continue;
         SignalSpot s;
         s.base = Vec3(corner.x, gy(corner.x, corner.y) + L.layer * kLayerLift,
                       corner.y);

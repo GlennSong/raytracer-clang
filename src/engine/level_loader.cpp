@@ -17,6 +17,8 @@
 #include "mesh_builder.h"
 #include "asset_manager.h"
 #include "procgen/terrain.h"
+#include "procgen/terrain_lod.h"   // lodSurfaceHeight: the drawn ground
+#include "drawn_road.h"               // DrawnRoad: the road as built, for planting
 #include "procgen/city/city_lots.h"  // grow buildings on the road net's blocks (ADR-0066)
 #include "procgen/city/building_collider.h"  // prism + door notches (ADR-0080)
 #include "procgen/city/building_records.h"   // CityBuildings runtime records (ADR-0080)
@@ -488,6 +490,14 @@ struct LanesPublished {
     // middle of the roads (Glenn, 2026-09-20: "There are trees in the roadways"). The deck IS
     // the footprint, so consumers that run before the RoadDeck components exist read it here.
     RoadDeckField deck;
+    // The city's STREETS. growLotBuildings aims every building's door at the nearest point
+    // on this graph; without it a door keeps whichever way its plan happened to run.
+    engine::RoadGraph nav;
+    // The sidewalk the builder actually PAVED. The lot pass reads LotParams::sidewalkWidth
+    // to reach its paved plates out to the band and to walk every door to the pavement; it
+    // was only ever filled from a lattice net's look, so on a lane-built city it stayed 0
+    // and both passes silently did nothing.
+    double pavedSidewalk = 0.0;
     engine::RoadGraph row;                 // freeway + ramp edges of the class-faithful twin, for the lot pass's keep-out
     double sidewalk = 4.0;                 // the citysim sidewalk, read before entities load
     std::vector<engine::Poly2> blocks;     // the lab's city blocks: the pavement's holes, inset by the sidewalk
@@ -1567,8 +1577,15 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                            const std::string& levelDir,
                            const std::string& tag = "veg",
                            const std::vector<engine::LotBuilding>* lots = nullptr,
-                           double placeDilate = 0.0) {
+                           double placeDilate = 0.0,
+                           std::function<double(double, double)> drawnGround = {}) {
     RT_PROFILE_ZONE_NAMED("loadVegetation");
+    // Where a placement stands: the drawn mesh's surface when the terrain is CDLOD
+    // (lodSurfaceHeight), else the dilate-matched field.
+    auto groundAt = [&](double x, double z) {
+        return drawnGround ? drawnGround(x, z)
+                           : terrainHeight(terrain, terrainNoise, x, z, placeDilate);
+    };
     if (!veg.contains("species") || !veg["species"].is_array()) return;
 
     // A species variant is now a multi-part model (ADR-0032): each part is one
@@ -1818,6 +1835,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
 
     ScatterParams scatter;
     scatter.placeDilate      = placeDilate;   // sample the mesh's own surface
+    scatter.ground           = drawnGround;   // ...and stand on its triangles
     scatter.regionSize       = veg.value("region", 70.0f);
     scatter.count            = veg.value("count", 80);
     scatter.maxSlopeDeg      = veg.value("maxSlopeDeg", 40.0f);
@@ -1873,21 +1891,29 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     world.each<engine::RoadEntity>([&](Entity, engine::RoadEntity& net) {
         footway = std::max(footway, static_cast<double>(net.look.sidewalk));
     });
-    auto onRoad = [footway](const std::vector<const RoadDeckField*>& ds, double x, double z) {
+    // ...and THE ROAD AS DRAWN (drawn_road.h): every collider triangle on the roads layer.
+    // The deck's half-width is lanes plus shoulder, so a junction pad, a flare or a median
+    // is off-deck and read as clear — 65 of the lattice metro's trees stood on exactly
+    // those. The level gate checks trunks against this same index, so placement and gate
+    // cannot disagree about where the road is.
+    auto drawnRoad = std::make_shared<engine::DrawnRoad>(engine::gatherDrawnRoad(world));
+    auto onRoad = [footway, drawnRoad](const std::vector<const RoadDeckField*>& ds, double x, double z) {
+        if (drawnRoad->covers(x, z)) return true;
         for (const RoadDeckField* d : ds) {
             double y = 0;
             if (d->heightAt(x, z, footway, &y)) return true;
         }
         return false;
     };
-    if (!terrain.flatten.empty() || !decks->empty()) {
+    if (!terrain.flatten.empty() || !decks->empty() || !drawnRoad->empty()) {
         if (!terrain.flatten.empty()) keepOut = buildFlattenGrid(terrain.flatten);
         const TerrainParams& tp = terrain;
-        scatter.exclude = [&tp, &keepOut, margin, decks](double x, double z) {
+        scatter.exclude = [&tp, &keepOut, margin, decks, drawnRoad](double x, double z) {
             for (const RoadDeckField* d : *decks) {
                 double y = 0;
                 if (d->heightAt(x, z, margin, &y)) return true;
             }
+            if (drawnRoad->near(x, z, margin)) return true;
             return !tp.flatten.empty() && flattenCovers(keepOut, tp.flatten, x, z, margin);
         };
     }
@@ -1931,8 +1957,8 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                 Placement pl;
                 pl.position = Vec3(
                     q.x,
-                    terrainHeight(terrain, terrainNoise, q.x, q.y, placeDilate) + 0.1,
-                    q.y);   // the ground under its OWN feet (mesh-matched dilate)
+                    groundAt(q.x, q.y) + 0.1,
+                    q.y);   // the drawn ground under its OWN feet
                 pl.yaw = static_cast<float>(uni(prng) * 6.2831853);
                 pl.scale = static_cast<float>(0.55 + 0.35 * uni(prng));
                 placements.push_back(pl);
@@ -2033,9 +2059,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                     // of the city's scenery. A formation member has to be off the ROAD, which is
                     // all that was ever wrong with it.
                     if (onRoad(*decks, mm.m[0][3], mm.m[2][3])) continue;
-                    const double gy = terrainHeight(terrain, terrainNoise,
-                                                    mm.m[0][3], mm.m[2][3],
-                                                    placeDilate);
+                    const double gy = groundAt(mm.m[0][3], mm.m[2][3]);
                     mm.m[1][3] = gy - 0.33 * sy * variantList[si].trunkHeight;
                     const int cx2 = (int)std::floor(mm.m[0][3] / vegCell);
                     const int cz2 = (int)std::floor(mm.m[2][3] / vegCell);
@@ -2261,7 +2285,30 @@ static GrownLots growCityLots(
         }
         if (!fromBundle) {
             r = engine::NetLotResult(); g.cellParts.clear(); g.bundle.reset();
-            r.lots = engine::growLotBuildings(g_lanes.blocks, s.lp, &r.plan, s.planOnly ? nullptr : &r.parts, nullptr, 0.0,
+            // THE STREETS, so a door knows which way to face. growLotBuildings aims each
+            // building's faceDir at the nearest point on this graph — "the door (and the
+            // retail front) faces the nearest STREET, not a fixed +Z" — and passing nullptr
+            // left every door in a lane-built city pointing whichever way the plan happened
+            // to run (Glenn, 2026-09-21: "The doors of these buildings should face the
+            // streets"). The lanes city publishes its twin as the level road graph; it was
+            // simply never handed to the lot pass. `roadClear` is the same sidewalk-derived
+            // clearance the lattice path uses, so buildings also stay behind the kerb.
+            const engine::RoadGraph* lotRoads = g_lanes.nav.edges.empty() ? nullptr : &g_lanes.nav;
+            // ...but NOT the lattice's clearance. `s.roadClear` is sidewalk + 0.6 m from each
+            // centreline's half-width — the lattice's way of keeping a building off a pavement
+            // its blocks do not know about. A lane-built block is cut from the BUILT pavement
+            // (blocksFromHoles insets the hole by the sidewalk + 1.5 m), so the pavement is
+            // already outside it and the lattice clearance counted it twice: measured on
+            // metro_lanes, 1082 buildings with 0 extra clearance against 977 with it (main,
+            // which never passed the graph, had 1012). Buildings still clear the carriageway
+            // itself (half-width + 0).
+            constexpr double kLanesLotRoadClear = 0.0;
+            // ...and the width of the pavement beside them, which the lattice gets from its
+            // own net's look and a lane-built city never supplied (see LanesPublished).
+            if (s.lp.sidewalkWidth <= 0 && g_lanes.pavedSidewalk > 0)
+                s.lp.sidewalkWidth = static_cast<engine::Real>(g_lanes.pavedSidewalk);
+            r.lots = engine::growLotBuildings(g_lanes.blocks, s.lp, &r.plan, s.planOnly ? nullptr : &r.parts,
+                                              lotRoads, kLanesLotRoadClear,
                                               (s.wantFlat && !s.planOnly) ? &r.flatParts : nullptr, &r.gradeFlatten);
             LOG_INFO << "[lanelab] lots on " << g_lanes.blocks.size() << " scene blocks: " << r.lots.size() << " buildings, " << r.plan.lots.size() << " lots, grown in " << since(tl) << " s";
         }
@@ -2679,6 +2726,8 @@ bool LevelLoader::load(const std::string& path,
             g_lanes.row = cp.row;
             g_lanes.deck = cp.deck;
             g_lanes.deck.buildIndex();      // queried by the scatter, below, and by the poke report
+            g_lanes.nav = cp.nav;           // the streets a door faces
+            g_lanes.pavedSidewalk = cp.bands.sidewalkWidth;   // the band a door walks to
             LOG_INFO << "[lanelab] " << g_lanes.blocks.size() << " city blocks published for the terrain pre-pass";
             auto fbTp = std::make_shared<TerrainParams>(readTerrainParams(root["terrain"]));
             fbTp->erodedBase = sharedEroded;          // the fallback keeps whatever base the level had; no recursion
@@ -3568,18 +3617,40 @@ bool LevelLoader::load(const std::string& path,
         // block, so holding references to them and calling later reads freed stack (it
         // segfaulted on the first run of exactly that). Copies are correct as well as
         // safe: the scatter wants the ground AS IT IS NOW, fully carved.
-        plantScatter = [&, tp = terrainParams, nz = terrainNoise, placeDilate] {
+        plantScatter = [&, tpAtTerrain = terrainParams, nz = terrainNoise, placeDilate] {
+            // THE FINISHED GROUND, not the one this lambda was built beside. The copy above
+            // was taken in the terrain section — BEFORE the lot pass stamped its pads and
+            // block grades in — so a tree placed on it stood where the ground USED to be: in
+            // the air over a cut (Glenn, 2026-09-21: "I noticed floating shrubs"; measured:
+            // 35 of metro_lanes' scenery floating, worst 2.7 m, and 153 of the lattice
+            // metro's, worst 6.2 m). This runs after the city now, so it can plant on exactly
+            // the surface CDLOD draws.
+            TerrainParams tp = tpAtTerrain;
+            std::function<double(double, double)> drawn;
+            world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) {
+                tp = c.params;
+                // THE SURFACE CDLOD DRAWS (and the leaf collider is built from): the
+                // leaf mesh's triangle under the point. Measured against it, 17 of
+                // metro_lanes' 1034 scenery instances and 62 of the lattice metro's
+                // 1373 stood > 0.3 m above the drawn ground while sitting exactly on
+                // the smooth field at their own point.
+                const TerrainLodConfig cfg = c;
+                drawn = [cfg, nz](double x, double z) {
+                    return lodSurfaceHeight(cfg.params, nz, x, z, cfg.worldHalf, cfg.numLods,
+                                            cfg.gridRes);
+                };
+            });
             if (root.contains("vegetation"))
                 loadVegetation(root["vegetation"], tp, nz, world,
                                renderer, assets, levelDir, "veg",
-                               preLots.grown ? &preLots.lots : nullptr, placeDilate);
+                               preLots.grown ? &preLots.lots : nullptr, placeDilate, drawn);
             // A second, denser pass for ground cover (grass/flowers). Same scatter
             // generator with its own params — typically a low maxSlopeDeg so it lands
             // on the gentle, green ground (terrainColor reads steep slopes as rock).
             if (root.contains("foliage"))
                 loadVegetation(root["foliage"], tp, nz, world,
                                renderer, assets, levelDir, "foliage", nullptr,
-                               placeDilate);
+                               placeDilate, drawn);
         };
     }
 
@@ -4355,6 +4426,35 @@ bool LevelLoader::load(const std::string& path,
             // whole district — the SAME structure as CityModel::parts, so the same
             // PBR recipes bind below.
             std::vector<RenderMesh>& lotParts = grown.parts;
+            // THE DRAWN GROUND the lot pass's ground-relative dressing lands on
+            // (city_lots.h, kDrapedPartBase: yards, door walks, parks, alleys): the
+            // CDLOD leaf mesh's surface when the level has one — what the renderer
+            // draws and the leaf collider is built from — else the carved field the
+            // entities drape on. The terrain is final by now; the lot pass ran before
+            // its pads and grades were stamped in, which is why it cannot drape itself.
+            // With the leaf grid known, the drape also CUTS each piece along the mesh's cell
+            // lines and diagonals first, so a walk follows the triangles exactly instead of
+            // chording between its joints (drapeOnGround).
+            std::function<Real(Real, Real)> dressingGround;
+            Real dressingStep = 0;
+            engine::Vec2 dressingOrigin(0, 0);
+            world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) {
+                const TerrainLodConfig cfg = c;
+                auto nz = std::make_shared<Noise>(cfg.seed);
+                dressingGround = [cfg, nz](Real x, Real z) {
+                    return lodSurfaceHeight(cfg.params, *nz, x, z, cfg.worldHalf, cfg.numLods,
+                                            cfg.gridRes);
+                };
+                const int res = std::max(2, cfg.gridRes + (cfg.gridRes % 2));
+                const float leaf = (2.0f * cfg.worldHalf) / static_cast<float>(1 << std::max(0, cfg.numLods - 1));
+                dressingStep = static_cast<Real>(leaf / static_cast<float>(res));   // the mesher's float step
+                dressingOrigin = engine::Vec2(-cfg.worldHalf, -cfg.worldHalf);
+            });
+            if (!dressingGround && entityGround)
+                dressingGround = [g = entityGround](Real x, Real z) { return g(x, z); };
+            // The road as drawn, for the lot trees below (drawn_road.h).
+            const engine::DrawnRoad lotRoad = engine::gatherDrawnRoad(world);
+            int lotTreesOnRoad = 0;
             MeshHandle pad = assets.acquirePrimitive("box", Vec3(1, 1, 1));   // park pads
             // Street-tree kit for parks + unbuilt greens (device: "empty lots had
             // vegetation like trees and grass"): a few shared varieties, one mesh
@@ -4542,10 +4642,17 @@ bool LevelLoader::load(const std::string& path,
 
                 // One tree (bark + leaf entities) planted at a world spot —
                 // shared by the legacy scatter and the sculpted treeSpots.
+                // Lot trees (yard spots, park spots, green lots) are the city's own planting
+                // and follow the scatter's two rules: stand on the DRAWN ground (the leaf mesh,
+                // dressingGround — not the smooth field, which sits metres off it across a pad
+                // edge) and never on the road AS DRAWN (drawn_road.h — the lot pass's own
+                // pruning only knows the centreline graph, which misses junction pads).
                 auto plantTreeAt = [&](double px, double pz, double scale,
                                        uint32_t th) {
+                    if (lotRoad.covers(px, pz)) { ++lotTreesOnRoad; return; }
                     Vec3 tPos(px, 0, pz);
-                    tPos.y = entityGround ? entityGround(tPos.x, tPos.z) : 0.0;
+                    tPos.y = dressingGround ? dressingGround(tPos.x, tPos.z)
+                                            : (entityGround ? entityGround(tPos.x, tPos.z) : 0.0);
                     const TreeKit& kit = treeKit(th % 3u);
                     Transform tt;
                     tt.position = tPos;
@@ -4596,10 +4703,13 @@ bool LevelLoader::load(const std::string& path,
                         Transform t;
                         Renderable r;
                         if (!lb.padMesh.vertices.empty()) {
-                            t.position = Vec3(0, 0, 0);   // heights baked (draped)
+                            t.position = Vec3(0, 0, 0);   // world-space once draped
+                            // Ground-relative (kDrapedPartBase): laid on the finished terrain.
+                            RenderMesh onGround = lb.padMesh;
+                            engine::drapeOnGround(onGround, dressingGround, dressingStep, dressingOrigin);
                             r.mesh = assets.acquireMesh(
-                                lb.padMesh, "lotPad:" + std::to_string(lb.site.x) +
-                                            ":" + std::to_string(lb.site.y));
+                                onGround, "lotPad:" + std::to_string(lb.site.x) +
+                                          ":" + std::to_string(lb.site.y));
                         } else {
                             t.position = Vec3(lb.site.x, gy + lb.height * 0.5, lb.site.y);
                             t.scale = Vec3(lb.width, lb.height, lb.depth);
@@ -4612,6 +4722,9 @@ bool LevelLoader::load(const std::string& path,
                         r.material.roughness = 1.0f;
                         r.renderLayer = engine::LayerBuildings;   // debug layer toggle
                         world.add<Renderable>(e, r);
+                        // A park's plaza and walking paths: the dressing gate reads them as Path.
+                        if (lb.type == "park" && !lb.padMesh.vertices.empty())
+                            world.add<LotPartChunk>(e, LotPartChunk{static_cast<uint8_t>(PartId::Path)});
                     }
 
                     // Trees: deterministic count + spots from the lot position,
@@ -4676,7 +4789,8 @@ bool LevelLoader::load(const std::string& path,
             }
             LOG_INFO << "[trees] scatter: " << treesOnPad << " on pad, "
                      << treesOffPad << " skipped (not placeable on their pad), "
-                     << treesNoPad << " planted with no pad to test";
+                     << treesNoPad << " planted with no pad to test, "
+                     << lotTreesOnRoad << " kept off the drawn road";
             if (!buildingsMc.indices.empty()) {
                 // Jolt mesh triangles are SINGLE-SIDED, and the grown plans
                 // arrive with mixed winding (offset/prow/courtyard plans flip
@@ -4806,8 +4920,13 @@ bool LevelLoader::load(const std::string& path,
                 };
                 // One chunk (a render cell's share of a part) → one Renderable. World-planar UVs are a
                 // per-vertex function of position and normal, so a chunk gets the UVs the whole part would.
-                auto spawnChunk = [&](std::size_t pi, RenderMesh& chunk, double minDist, double drawDist, bool scaleSmallParts) {
+                auto spawnChunk = [&](std::size_t slot, RenderMesh& chunk, double minDist, double drawDist, bool scaleSmallParts) {
                     if (chunk.vertices.empty()) return;
+                    // A DRAPED slot is ground-relative dressing: lay it on the drawn ground and
+                    // draw it as its base part (city_lots.h, kDrapedPartBase).
+                    if (engine::isDrapedSlot(slot))
+                        engine::drapeOnGround(chunk, dressingGround, dressingStep, dressingOrigin);
+                    const std::size_t pi = engine::baseSlot(slot);
                     PartProto& pp = protoFor(pi, scaleSmallParts);
                     if (pp.reUV) applyWorldPlanarUVs(chunk, 1.0 / surfaceWorldTileSize(pp.surf));
                     Renderable r = pp.proto;
@@ -4820,6 +4939,7 @@ bool LevelLoader::load(const std::string& path,
                     world.add<Transform>(e, t);
                     world.add<PrevTransform>(e, PrevTransform{t});
                     world.add<Renderable>(e, r);
+                    world.add<LotPartChunk>(e, LotPartChunk{static_cast<uint8_t>(pi)});
                     // The lit-window part (WS3): warm interior glow, raised after dusk by the day/night
                     // NightGlow pass — dark at noon by construction (emission starts 0; the material
                     // equals Glass by day).
@@ -5109,6 +5229,14 @@ bool LevelLoader::load(const std::string& path,
                     });
                     return engine::planStreetFurniture(nav, furnGround, fp);
                 }();
+            if (!fplan.unpoledApproaches.empty()) {
+                std::string at;
+                for (std::size_t i = 0; i < fplan.unpoledApproaches.size() && i < 12; ++i)
+                    at += " (" + std::to_string(static_cast<int>(fplan.unpoledApproaches[i].x)) + "," +
+                          std::to_string(static_cast<int>(fplan.unpoledApproaches[i].y)) + ")";
+                LOG_WARN << "[furniture] " << fplan.unpoledApproaches.size()
+                         << " signalled approaches have no pole (both corners in asphalt):" << at;
+            }
             engine::StreetFurniture sf;
             sf.navLinkCount = nav.linkCount();
             sf.lampHeads = fplan.lampHeads;

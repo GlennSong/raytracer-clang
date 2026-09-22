@@ -2,6 +2,7 @@
 
 #include "engine/procgen/city/road_spec.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
+#include "log.h"
 
 #include <algorithm>
 #include <array>
@@ -16,7 +17,12 @@ namespace {
 
 constexpr double kTwinTolerance = 1.5;   // Douglas-Peucker tolerance of the twin's spines (metres)
 
-struct Line { std::vector<Vec2> pts; std::vector<double> z, s; RoadClass k; double w = 8; bool deck = false; double lotsFrom = -1, lotsTo = -1; RoadSpec spec; };
+struct Line {
+    std::vector<Vec2> pts; std::vector<double> z, s; RoadClass k; double w = 8; bool deck = false; double lotsFrom = -1, lotsTo = -1; RoadSpec spec;
+    // Which lab edge this line came from, and whether it carries that edge's FROM / TO end
+    // (a ramp is split into at-grade and elevated runs; only the outer runs hold its ends).
+    std::string edgeId; bool holdsFrom = false, holdsTo = false;
+};
 
 
 // Segment p+t(q-p) against a+u(b-a): true with t,u when the lines are not parallel.
@@ -120,6 +126,11 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots) {
         if (e.xy.size() < 2) continue;
         const bool atGradeRamp = e.cls == "__ramp_at_grade";
         Line L; L.k = atGradeRamp ? RoadClass::Local : classOf(e); L.deck = L.k == RoadClass::Freeway || L.k == RoadClass::Ramp;
+        L.edgeId = e.id;
+        if (const EdgeSpec* whole = r.graph.find(e.id); whole && !whole->s.empty() && !e.s.empty()) {
+            L.holdsFrom = std::fabs(e.s.front() - whole->s.front()) < 1e-6;
+            L.holdsTo = std::fabs(e.s.back() - whole->s.back()) < 1e-6;
+        }
         const bool deckEarthwork = L.deck;   // the width padding stays with the real deck classes
         if (forLots && L.deck) { L.k = RoadClass::Local; L.deck = false; }   // a face boundary, planarised with the streets
         // Paved width for streets. Freeways and ramps carry their EARTHWORK too: the conform band grades
@@ -224,6 +235,58 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots) {
             }
         }
     }
+    // RAMPS MEET THE ROAD THEY MERGE INTO. Deck lines stay out of the planariser above — a
+    // freeway or ramp crossing a street is a BRIDGE, not a junction — and that also kept every
+    // elevated ramp end from ever meeting the carriageway it merges into: the gore lies mid-way
+    // along the host's line, and nothing split it there. (An at-grade ramp run meeting a
+    // freeway at grade is a street line against a deck line: the same gap.) The sim's graph came out with the
+    // freeway as an island (0 of metro_lanes' 532 freeway links reachable from a street, 0
+    // leading back) and dead-end ramps hanging off the streets, so no car ever took it
+    // (Glenn, 2026-09-21: "vehicles don't take the freeway"). The lab records exactly which
+    // edge each ramp end is anchored to, so weld THAT pair and nothing else: split the host at
+    // the point nearest the ramp end and snap the end onto it. Bridges stay bridges.
+    int rampWelds = 0, rampWeldsMissed = 0;
+    {
+        std::unordered_map<std::string, std::vector<size_t>> linesOf;
+        for (size_t li = 0; li < lines.size(); ++li) if (!lines[li].edgeId.empty()) linesOf[lines[li].edgeId].push_back(li);
+        constexpr double kWeldReach = 40.0;   // a gore sits a host half-width plus a lane off the host line
+        for (size_t li = 0; li < lines.size(); ++li) {
+            const Line& L = lines[li];
+            if (L.edgeId.empty() || L.pts.size() < 2) continue;
+            const EdgeSpec* whole = r.graph.find(L.edgeId); if (!whole || !whole->isRamp()) continue;
+            for (int end = 0; end < 2; ++end) {
+                if (end == 0 ? !L.holdsFrom : !L.holdsTo) continue;
+                const std::string& hostId = end == 0 ? whole->from.edge : whole->to.edge;
+                if (hostId.empty()) continue;
+                auto it = linesOf.find(hostId); if (it == linesOf.end()) { ++rampWeldsMissed; continue; }
+                // A street-to-street meeting (an at-grade ramp run on a street host) is the
+                // planariser's job and already done; only a DECK on either side was never joined.
+                bool hostDeck = false;
+                for (size_t hl : it->second) hostDeck = hostDeck || lines[hl].deck;
+                if (!L.deck && !hostDeck) continue;
+                const Vec2 ep = end == 0 ? L.pts.front() : L.pts.back();
+                double best = 1e30, bestU = 0; size_t bestLine = 0, bestSeg = 0;
+                for (size_t hl : it->second) {
+                    if (hl == li) continue;
+                    const Line& H = lines[hl];
+                    for (size_t si = 0; si + 1 < H.pts.size(); ++si) {
+                        double d; const double u = nearestParam(ep, H.pts[si], H.pts[si + 1], d);
+                        if (d < best) { best = d; bestU = u; bestLine = hl; bestSeg = si; }
+                    }
+                }
+                if (best > kWeldReach) { ++rampWeldsMissed; continue; }
+                const Line& H = lines[bestLine];
+                const Vec2 a = H.pts[bestSeg], b = H.pts[bestSeg + 1];
+                if (bestU > eps && bestU < 1 - eps) splits[bestLine][bestSeg].push_back(bestU);
+                snapped[li][static_cast<size_t>(end)] = true;
+                snapTo[li][static_cast<size_t>(end)] = Vec2(a.x + (b.x - a.x) * bestU, a.y + (b.y - a.y) * bestU);
+                ++rampWelds;
+            }
+        }
+    }
+    if (!forLots && (rampWelds || rampWeldsMissed))
+        LOG_INFO << "[lanes twin] " << rampWelds << " ramp ends welded to the road they merge into"
+                 << (rampWeldsMissed ? ", " + std::to_string(rampWeldsMissed) + " with no host line within reach" : std::string());
     for (size_t li = 0; li < lines.size(); ++li) { if (snapped[li][0]) lines[li].pts.front() = snapTo[li][0]; if (snapped[li][1]) lines[li].pts.back() = snapTo[li][1]; }
     // --- the graph ---
     for (size_t li = 0; li < lines.size(); ++li) {

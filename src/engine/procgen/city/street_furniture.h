@@ -63,6 +63,11 @@ struct StreetFurnitureParams {
 
 struct StreetFurniturePlan {
     std::vector<SignalSpot> signals;
+    // Signalled approaches that got NO pole (both kerb corners buried in asphalt): the
+    // junction node each one enters. The sim still phases them; this names where the
+    // drawn city is missing a light (Glenn: "the stoplights aren't showing up in some
+    // places").
+    std::vector<Vec2> unpoledApproaches;
     std::vector<Vec3> lampBases;   // pole feet (instance translations)
     std::vector<Vec3> lampHeads;   // bulb positions (night point lights)
 };

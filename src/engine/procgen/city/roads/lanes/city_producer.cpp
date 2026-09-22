@@ -19,7 +19,7 @@
 namespace engine {
 namespace roads::lanes {
 
-const char* const kLanesBuildTag = "2026-09-21.1";   // .1: the terrain is clamped under every deck VERTEX, not by centreline reach
+const char* const kLanesBuildTag = "2026-09-21.3";   // .1: the terrain is clamped under every deck VERTEX, not by centreline reach   // .2/.3: ramp ends (elevated or at-grade runs) welded to the road they merge into (nav twin)
 
 namespace {
 using bundle::BinReader;

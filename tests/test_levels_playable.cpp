@@ -24,10 +24,15 @@
 #include "../src/engine/asset_manager.h"
 #include "../src/engine/components.h"
 #include "../src/engine/level_loader.h"
+#include "../src/engine/drawn_road.h"
+#include "../src/engine/ai/pathfind.h"
 #include "../src/engine/mesh_uploader.h"
 #include "../src/engine/procgen/terrain.h"
+#include "../src/engine/procgen/noise.h"
+#include "../src/engine/procgen/terrain_lod.h"
 #include "../src/engine/procgen/city/roads/road_entity.h"   // RoadEntity (signal census)
 #include "../src/engine/procgen/city/building_records.h"
+#include "../src/engine/procgen/city/shape_grammar.h"   // PartId (the dressing gate)
 #include "../src/engine/procgen/city/core_plan.h"  // CityBuildings doors (ADR-0080)
 #include "../src/engine/procgen/city/city_svg.h"   // CityMapData (the in-road census)
 #include "../src/apps/citysim/city_render.h"        // CityRenderSystem (traffic census)
@@ -48,6 +53,7 @@
 #include <functional>
 #include <cstdio>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -2110,53 +2116,10 @@ struct RoadIntrusion {
 // So: the collider triangles of everything drawn on the ROADS layer, which is the
 // asphalt, the kerbs and the junction pads as built, for either builder. Point in
 // triangle in plan, bucketed by cell so a query touches a few dozen triangles.
-struct DrawnRoad {
-    struct Tri { engine::Vec2 a, b, c; };
-    std::vector<Tri> tris;
-    std::unordered_map<long long, std::vector<int>> cells;
-    static constexpr double kCell = 8.0;
-    static long long key(int cx, int cz) {
-        return static_cast<long long>(cx) * 73856093LL ^ static_cast<long long>(cz) * 19349663LL;
-    }
-    void add(const engine::Vec2& a, const engine::Vec2& b, const engine::Vec2& c) {
-        const int i = static_cast<int>(tris.size());
-        tris.push_back({a, b, c});
-        const double x0 = std::min({a.x, b.x, c.x}), x1 = std::max({a.x, b.x, c.x});
-        const double z0 = std::min({a.y, b.y, c.y}), z1 = std::max({a.y, b.y, c.y});
-        for (int cx = static_cast<int>(std::floor(x0 / kCell)); cx <= static_cast<int>(std::floor(x1 / kCell)); ++cx)
-            for (int cz = static_cast<int>(std::floor(z0 / kCell)); cz <= static_cast<int>(std::floor(z1 / kCell)); ++cz)
-                cells[key(cx, cz)].push_back(i);
-    }
-    bool covers(double x, double z) const {
-        auto it = cells.find(key(static_cast<int>(std::floor(x / kCell)), static_cast<int>(std::floor(z / kCell))));
-        if (it == cells.end()) return false;
-        for (int ti : it->second) {
-            const Tri& t = tris[static_cast<std::size_t>(ti)];
-            const double d1 = (x - t.b.x) * (t.a.y - t.b.y) - (t.a.x - t.b.x) * (z - t.b.y);
-            const double d2 = (x - t.c.x) * (t.b.y - t.c.y) - (t.b.x - t.c.x) * (z - t.c.y);
-            const double d3 = (x - t.a.x) * (t.c.y - t.a.y) - (t.c.x - t.a.x) * (z - t.a.y);
-            const bool neg = d1 < 0 || d2 < 0 || d3 < 0, pos = d1 > 0 || d2 > 0 || d3 > 0;
-            if (!(neg && pos)) return true;
-        }
-        return false;
-    }
-};
-
-DrawnRoad gatherDrawnRoad(World& world) {
-    DrawnRoad rp;
-    world.each<Renderable>([&](Entity e, Renderable& r) {
-        if (!(r.renderLayer & engine::LayerRoads)) return;
-        const MeshCollider* mc = world.get<MeshCollider>(e);
-        if (!mc) return;
-        for (std::size_t i = 0; i + 2 < mc->indices.size(); i += 3) {
-            const Vec3& a = mc->vertices[mc->indices[i]];
-            const Vec3& b = mc->vertices[mc->indices[i + 1]];
-            const Vec3& c = mc->vertices[mc->indices[i + 2]];
-            rp.add(engine::Vec2(a.x, a.z), engine::Vec2(b.x, b.z), engine::Vec2(c.x, c.z));
-        }
-    });
-    return rp;
-}
+// THE ROAD AS IT WAS ACTUALLY DRAWN — engine::DrawnRoad (src/engine/drawn_road.h), the
+// same index tree placement asks, so the gate and the planter cannot disagree.
+using engine::DrawnRoad;
+using engine::gatherDrawnRoad;
 
 // How far INSIDE the built driving surface this point lies, over every deck in
 // the world. 0 = not on a road.
@@ -2221,6 +2184,17 @@ TEST_CASE(city_furniture_never_stands_in_a_road) {
             if (g.drawClass != DrawClass::Scenery) return;
             for (const Mat4& m : g.transforms) note(scatter, decks, m.m[0][3], m.m[2][3], 0.0, &plan);
         });
+        // ...and the LOT trees (yard and park spots), planted one entity each: a bark
+        // Renderable per tree (its leaves ride a second entity at the same Transform).
+        {
+            std::set<std::pair<long long, long long>> seen;
+            world.each<Renderable, Transform>([&](Entity, Renderable& r, Transform& t) {
+                if (r.drawClass != DrawClass::Scenery || !(r.renderLayer & engine::LayerFoliage)) return;
+                if (!seen.insert({std::llround(t.position.x * 100), std::llround(t.position.z * 100)}).second)
+                    return;   // the leaves of a tree already counted
+                note(scatter, decks, t.position.x, t.position.z, 0.0, &plan);
+            });
+        }
 
         // STREET FURNITURE — signal poles and lamp posts. The pole FOOT is what
         // must be clear; a mast arm reaching over the near lane is the point of it.
@@ -2275,14 +2249,686 @@ TEST_CASE(city_furniture_never_stands_in_a_road) {
                 std::printf("        %s deepest %zu: %.2f m in at (%.1f, %.1f)\n", r->what.c_str(),
                             i, worst[i].first, worst[i].second.x, worst[i].second.y);
         }
-        // A RATCHET, not a pass mark, for what was already broken. metro_v2_test still
-        // stands 57 of its scenery instances on junction PADS — a defect it has shipped
-        // with, outside deck-plus-sidewalk reach, and not something the lanes builder
-        // caused. Asserting 0 there would leave this suite permanently red, and a suite
-        // that is never green stops being read; ignoring it would let it grow. So: the
-        // city under development must be clean, and the old one may not get worse.
-        const int kKnownResidue = std::string(name) == "metro_v2_test.json" ? 57 : 0;
-        for (const RoadIntrusion* r : all)
-            CHECK(r->count <= (r->what.rfind("trees", 0) == 0 ? kKnownResidue : 0));
+        // NO RATCHET ANY MORE. metro_v2_test shipped with 57 (then 65) trees on junction pads
+        // and flares — off every deck spine, so the planters' deck test read them as clear —
+        // and this held it to "no worse". Tree placement now asks the road AS DRAWN
+        // (engine::DrawnRoad, the index this gate uses), lot trees included, and both cities
+        // are clean: nothing stands in a road, on either builder.
+        for (const RoadIntrusion* r : all) CHECK(r->count == 0);
+        // ...and the things measured EXIST. "0 of 0 bus stops in a road" passed while the
+        // freeway weld had left metro_lanes with no bus routes at all.
+        for (const RoadIntrusion* r : all) CHECK(r->total > 0);
+    }
+}
+
+// ============================================================================
+// A FRONT DOOR FACES ITS STREET (Glenn, 2026-09-21: "The doors of these
+// buildings should face the streets ... some of those buildings have their
+// doorways facing into the grass and clipping with other buildings.")
+//
+// The lot pass already intends this — "the door (and the retail front) faces the
+// nearest STREET, not a fixed +Z" — but it only aims when it is GIVEN a road
+// graph, and the lane-built city passed nullptr, so nothing was ever aimed. A
+// door is judged by where it points: step out of it and you should reach
+// pavement, not the middle of the block and not the wall of your neighbour.
+// ============================================================================
+
+TEST_CASE(front_doors_face_their_street) {
+    const char* kCities[] = {"metro_v2_test.json", "metro_lanes.json"};
+    for (const char* name : kCities) {
+        std::unique_ptr<Renderer> renderer = Renderer::create();
+        RendererMeshUploader uploader(*renderer);
+        AssetManager assets(uploader);
+        World world;
+        RenderView view;
+        if (!LevelLoader::load(levelsDir() + "/" + name, world, *renderer, view, assets, false)) {
+            CHECK(false);
+            continue;
+        }
+        engine::RoadGraph nav;
+        world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph& g) {
+            if (!g.graph.edges.empty()) nav = g.graph;
+        });
+        CHECK(!nav.edges.empty());
+        if (nav.edges.empty()) continue;
+
+        // Nearest point on any street centreline, and how far.
+        auto nearestStreet = [&](const engine::Vec2& p, engine::Vec2& at) {
+            Real best = Real(1e30);
+            for (const engine::RoadEdge& e : nav.edges) {
+                if (e.a < 0 || e.b < 0) continue;
+                const engine::Vec2 a = nav.nodes[static_cast<std::size_t>(e.a)].pos;
+                const engine::Vec2 b = nav.nodes[static_cast<std::size_t>(e.b)].pos;
+                const engine::Vec2 ab = b - a;
+                const Real L2 = ab.lengthSquared();
+                const Real t = L2 < Real(1e-12) ? Real(0) : std::clamp(dot(p - a, ab) / L2, Real(0), Real(1));
+                const engine::Vec2 q = a + ab * t;
+                const Real d = (q - p).length();
+                if (d < best) { best = d; at = q; }
+            }
+            return best;
+        };
+
+        int doors = 0, away = 0, blocked = 0;
+        int hist[4] = {0, 0, 0, 0};   // <=20, <=45, <=90, >90 degrees off the street
+        double worstDeg = 0;
+        engine::Vec2 worstAt(0, 0);
+        world.each<CityBuildings>([&](Entity, CityBuildings& cb) {
+            for (const BuildingRecord& r : cb.records)
+                for (const DoorSpec& d : r.doors) {
+                    if (d.normal.length() < Real(1e-6)) continue;
+                    ++doors;
+                    engine::Vec2 at(0, 0);
+                    const Real dist = nearestStreet(d.foot, at);
+                    if (dist > Real(120.0)) continue;   // deep interior: no street to face
+                    engine::Vec2 toStreet = at - d.foot;
+                    if (toStreet.length() < Real(1e-6)) continue;
+                    toStreet = normalize(toStreet);
+                    const engine::Vec2 n = normalize(d.normal);
+                    const double deg = std::acos(std::clamp<double>(dot(n, toStreet), -1.0, 1.0)) * 57.29578;
+                    ++hist[deg <= 20.0 ? 0 : deg <= 45.0 ? 1 : deg <= 90.0 ? 2 : 3];
+                    // A door may be off-axis — a corner plot, a chamfer — but it must not
+                    // point AWAY from the street it belongs to.
+                    if (deg > 90.0) {
+                        ++away;
+                        if (deg > worstDeg) { worstDeg = deg; worstAt = d.foot; }
+                    }
+                    // ...and stepping out of it must not walk into a neighbour.
+                    const engine::Vec2 step = d.foot + n * Real(1.2);
+                    for (const BuildingRecord& o : cb.records) {
+                        if (&o == &r || o.plan.size() < 3) continue;
+                        if (engine::pointInPolygon(o.plan, step)) {
+                            ++blocked;
+                            std::printf("    [doors]   blocked: %s door at (%.1f, %.1f) n (%.2f, %.2f) steps into %s "
+                                        "(its plan centroid %.1f, %.1f)\n",
+                                        r.recipe.c_str(), d.foot.x, d.foot.y, n.x, n.y, o.recipe.c_str(),
+                                        engine::centroid(o.plan).x, engine::centroid(o.plan).y);
+                            break;
+                        }
+                    }
+                }
+        });
+        std::printf("    [doors] %-22s %d doors: %d face AWAY from their street (worst %.0f deg at "
+                    "%.0f,%.0f), %d open into a neighbour\n",
+                    name, doors, away, worstDeg, worstAt.x, worstAt.y, blocked);
+        // THE DISTRIBUTION, not just the tail. "Faces away" (> 90 deg) only catches a door
+        // pointing backwards; a door 75 deg off faces SIDEWAYS into the gap between two
+        // houses, which reads as "facing the grass" and passed the first version of this
+        // gate while Glenn was looking at exactly that.
+        std::printf("    [doors] %-22s off-street: <=20 deg %d, 20-45 %d, 45-90 %d, >90 %d\n", name,
+                    hist[0], hist[1], hist[2], hist[3]);
+        CHECK(doors > 100);
+        CHECK(away * 20 <= doors);      // under 5%: corner plots and chamfers, not the rule
+        CHECK((hist[0] + hist[1]) * 100 >= doors * 80);   // most doors look AT their street
+        CHECK(blocked == 0);
+    }
+}
+
+// ============================================================================
+// PLANTED ON THE GROUND (Glenn, 2026-09-21: "I noticed floating shrubs. They
+// should be planted on the ground.")
+//
+// Every scattered instance records its base in its transform. The ground it
+// should stand on is the FINISHED terrain — after the roads conformed it and the
+// lot pass graded its pads and blocks into it — which is what TerrainLodConfig
+// holds and CDLOD draws. A plant that sampled the ground at an earlier stage
+// stands where the ground used to be: in the air over a cut, buried under a fill.
+// ============================================================================
+
+TEST_CASE(scenery_is_planted_on_the_ground) {
+    const char* kCities[] = {"metro_v2_test.json", "metro_lanes.json"};
+    for (const char* name : kCities) {
+        std::unique_ptr<Renderer> renderer = Renderer::create();
+        RendererMeshUploader uploader(*renderer);
+        AssetManager assets(uploader);
+        World world;
+        RenderView view;
+        if (!LevelLoader::load(levelsDir() + "/" + name, world, *renderer, view, assets, false)) {
+            CHECK(false);
+            continue;
+        }
+        const engine::TerrainLodConfig* cfg = nullptr;
+        world.each<engine::TerrainLodConfig>([&](Entity, engine::TerrainLodConfig& c) { cfg = &c; });
+        CHECK(cfg != nullptr);
+        if (!cfg) continue;
+        const engine::Noise noise(cfg->seed);
+        int total = 0, floating = 0, buried = 0;
+        double worst = 0;
+        engine::Vec2 worstAt(0, 0);
+        world.each<InstanceGroup>([&](Entity, InstanceGroup& g) {
+            if (g.drawClass != DrawClass::Scenery) return;
+            for (const Mat4& m : g.transforms) {
+                const double x = m.m[0][3], y = m.m[1][3], z = m.m[2][3];
+                // THE DRAWN GROUND: the leaf mesh's triangle under (x, z), not the
+                // smooth field at the point — across a pad edge those differ by metres.
+                const double ground = engine::lodSurfaceHeight(cfg->params, noise, x, z,
+                                                               cfg->worldHalf, cfg->numLods,
+                                                               cfg->gridRes);
+                // A trunk is bedded a little below grade and a rock a third of its
+                // height; neither should hang ABOVE it.
+                const double gap = y - ground;
+                ++total;
+                if (gap > 0.30) {
+                    ++floating;
+                    if (gap > worst) { worst = gap; worstAt = engine::Vec2(x, z); }
+                } else if (gap < -3.0) {
+                    ++buried;
+                }
+            }
+        });
+        // ...and the LOT trees (yard and park spots): one entity per tree, trunk at its
+        // Transform (the leaves ride a second entity at the same place).
+        {
+            std::set<std::pair<long long, long long>> seen;
+            world.each<Renderable, Transform>([&](Entity, Renderable& r, Transform& t) {
+                if (r.drawClass != DrawClass::Scenery || !(r.renderLayer & engine::LayerFoliage)) return;
+                if (!seen.insert({std::llround(t.position.x * 100), std::llround(t.position.z * 100)}).second)
+                    return;
+                const double ground = engine::lodSurfaceHeight(cfg->params, noise, t.position.x, t.position.z,
+                                                               cfg->worldHalf, cfg->numLods, cfg->gridRes);
+                const double gap = t.position.y - ground;
+                ++total;
+                if (gap > 0.30) {
+                    ++floating;
+                    if (gap > worst) { worst = gap; worstAt = engine::Vec2(t.position.x, t.position.z); }
+                } else if (gap < -3.0) {
+                    ++buried;
+                }
+            });
+        }
+        std::printf("    [grounded] %-22s %d scenery instances: %d floating > 0.3 m (worst %.2f m at "
+                    "%.0f,%.0f), %d buried > 3 m\n",
+                    name, total, floating, worst, worstAt.x, worstAt.y, buried);
+        CHECK(total > 0);
+        CHECK(floating == 0);
+    }
+}
+
+// LOT DRESSING STANDS ON THE DRAWN GROUND (Glenn, 2026-09-21: "I noticed floating
+// shrubs. They should be planted on the ground."). The scatter's trees and rocks
+// are InstanceGroups and the gate above covers them; hedges, bushes, front walks
+// and park paths are baked into the lot pass's merged part meshes, which nothing
+// measured. This keeps a CPU copy of every uploaded mesh, finds the chunks tagged
+// Foliage and Path, welds each into its pieces (one hedge box, one walk) and asks
+// each piece's FOOT against the leaf mesh's surface:
+//   - a hedge/bush floats when a corner of its base stands > 0.3 m above the ground
+//     (a rigid box on a slope hangs its downhill end in the air);
+//   - a walk floats when a top vertex is > 0.3 m above the ground, and is buried
+//     (drawn under the grass, invisible) when a top vertex is > 0.15 m below it.
+namespace {
+
+class CapturingUploader : public MeshUploader {
+public:
+    explicit CapturingUploader(Renderer& r) : renderer_(r) {}
+    MeshHandle uploadMesh(const RenderMesh& mesh) override {
+        const MeshHandle h = renderer_.uploadMesh(mesh);
+        meshes[h.index] = mesh;
+        return h;
+    }
+    void removeMesh(MeshHandle handle) override {
+        meshes.erase(handle.index);
+        renderer_.removeMesh(handle);
+    }
+    BoundingSphere getMeshBounds(MeshHandle handle) const override {
+        return renderer_.getMeshBounds(handle);
+    }
+    std::unordered_map<uint32_t, RenderMesh> meshes;
+
+private:
+    Renderer& renderer_;
+};
+
+// Pieces of a mesh: vertices welded by position (1 cm), joined through triangles.
+std::vector<std::vector<uint32_t>> meshPieces(const RenderMesh& m) {
+    const std::size_t n = m.vertices.size();
+    std::vector<uint32_t> parent(n);
+    for (std::size_t i = 0; i < n; ++i) parent[i] = static_cast<uint32_t>(i);
+    std::function<uint32_t(uint32_t)> find = [&](uint32_t a) {
+        while (parent[a] != a) a = parent[a] = parent[parent[a]];
+        return a;
+    };
+    auto unite = [&](uint32_t a, uint32_t b) { parent[find(a)] = find(b); };
+    std::unordered_map<long long, uint32_t> weld;
+    for (std::size_t i = 0; i < n; ++i) {
+        const Vec3& p = m.vertices[i].position;
+        const long long key = (std::llround(p.x * 100.0) * 73856093LL) ^
+                              (std::llround(p.y * 100.0) * 19349663LL) ^
+                              (std::llround(p.z * 100.0) * 83492791LL);
+        auto [it, fresh] = weld.emplace(key, static_cast<uint32_t>(i));
+        if (!fresh) unite(static_cast<uint32_t>(i), it->second);
+    }
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        unite(m.indices[t], m.indices[t + 1]);
+        unite(m.indices[t], m.indices[t + 2]);
+    }
+    std::unordered_map<uint32_t, std::vector<uint32_t>> groups;
+    for (std::size_t i = 0; i < n; ++i) groups[find(static_cast<uint32_t>(i))].push_back(static_cast<uint32_t>(i));
+    std::vector<std::vector<uint32_t>> out;
+    out.reserve(groups.size());
+    for (auto& [root, g] : groups) out.push_back(std::move(g));
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE(lot_dressing_is_planted_on_the_ground) {
+    const char* kCities[] = {"metro_v2_test.json", "metro_lanes.json"};
+    for (const char* name : kCities) {
+        std::unique_ptr<Renderer> renderer = Renderer::create();
+        CapturingUploader uploader(*renderer);
+        AssetManager assets(uploader);
+        World world;
+        RenderView view;
+        if (!LevelLoader::load(levelsDir() + "/" + name, world, *renderer, view, assets, false)) {
+            CHECK(false);
+            continue;
+        }
+        const engine::TerrainLodConfig* cfg = nullptr;
+        world.each<engine::TerrainLodConfig>([&](Entity, engine::TerrainLodConfig& c) { cfg = &c; });
+        CHECK(cfg != nullptr);
+        if (!cfg) continue;
+        const engine::Noise noise(cfg->seed);
+        auto drawn = [&](double x, double z) {
+            return engine::lodSurfaceHeight(cfg->params, noise, x, z, cfg->worldHalf,
+                                            cfg->numLods, cfg->gridRes);
+        };
+        // THE REFERENCE IS THE MESH: lodSurfaceHeight is checked against real leaf
+        // tiles (generateLodNodeMesh) at scattered points before anything is measured
+        // with it — a sampler that only agrees with the placements it drives proves
+        // nothing.
+        {
+            const double leafSize = (2.0 * cfg->worldHalf) / double(1 << (cfg->numLods - 1));
+            double worstDiff = 0;
+            uint32_t h = 12345;
+            auto rnd = [&h] { h = h * 1664525u + 1013904223u; return (h >> 8) / double(1 << 24); };
+            for (int node = 0; node < 12; ++node) {
+                const double px = (rnd() - 0.5) * 1600.0, pz = (rnd() - 0.5) * 1600.0;
+                engine::LodNode ln;
+                ln.level = 0;
+                ln.size = static_cast<float>(leafSize);
+                ln.minX = static_cast<float>(-cfg->worldHalf + std::floor((px + cfg->worldHalf) / leafSize) * leafSize);
+                ln.minZ = static_cast<float>(-cfg->worldHalf + std::floor((pz + cfg->worldHalf) / leafSize) * leafSize);
+                const engine::LodNodeMesh tile = engine::generateLodNodeMesh(cfg->params, noise, ln, cfg->gridRes);
+                const int res = (cfg->gridRes % 2) ? cfg->gridRes + 1 : cfg->gridRes;
+                const int n = res + 1;
+                const double step = ln.size / double(res);
+                for (int k = 0; k < 40; ++k) {
+                    const double x = ln.minX + rnd() * ln.size * 0.999, z = ln.minZ + rnd() * ln.size * 0.999;
+                    const int i = std::min(res - 1, int((x - ln.minX) / step));
+                    const int j = std::min(res - 1, int((z - ln.minZ) / step));
+                    const double u = (x - ln.minX) / step - i, v = (z - ln.minZ) / step - j;
+                    auto H = [&](int a, int b) { return (double)tile.mesh.vertices[size_t(b) * n + a].position.y; };
+                    const double mesh = (u >= v) ? H(i, j) + u * (H(i + 1, j) - H(i, j)) + v * (H(i + 1, j + 1) - H(i + 1, j))
+                                                 : H(i, j) + v * (H(i, j + 1) - H(i, j)) + u * (H(i + 1, j + 1) - H(i, j + 1));
+                    worstDiff = std::max(worstDiff, std::fabs(mesh - drawn(x, z)));
+                }
+            }
+            std::printf("    [dressing] %-20s reference check: lodSurfaceHeight vs 12 real leaf tiles, worst %.4f m\n",
+                        name, worstDiff);
+            CHECK(worstDiff < 0.01);
+        }
+        struct Tally {
+            int pieces = 0, floating = 0, buried = 0;
+            double worst = 0, worstBuried = 0;
+            Vec3 at{0, 0, 0}, buriedAt{0, 0, 0};
+        } foliage, path;
+        // WHICH SCULPTOR: the pieces carry their maker's colour (yard hedge, park bush,
+        // front walk, alley, paving), so a breakdown by colour names the culprit.
+        struct Bucket { int pieces = 0, floating = 0, buried = 0; double worst = 0; Vec3 at{0, 0, 0}; };
+        std::map<std::string, Bucket> byColour;
+        std::vector<Vec3> buriedPlateAt;   // where a paved plate's top went under the ground
+        // WHAT A PLANTER STANDS ON: a flower bed's greenery sits on its stone curb, a
+        // forecourt's on a paved plate — so a hedge's foot is measured against the
+        // highest surface under it (the drawn ground, or the top of a curb, plate or
+        // skirt from the lot pass that lies at or just below the foot), not the ground
+        // alone. Top-facing Trim/Path/Concrete triangles, hashed on a 2 m grid.
+        struct TopTri { Vec3 a, b, c; };
+        std::unordered_map<long long, std::vector<TopTri>> supports;
+        auto cellKey = [](int cx, int cz) { return (static_cast<long long>(cx) << 32) ^ static_cast<uint32_t>(cz); };
+        world.each<engine::LotPartChunk, Renderable>([&](Entity, engine::LotPartChunk& tag, Renderable& r) {
+            if (tag.part != static_cast<uint8_t>(PartId::Trim) && tag.part != static_cast<uint8_t>(PartId::Path) &&
+                tag.part != static_cast<uint8_t>(PartId::Concrete)) return;
+            if (r.minDistance > 0) return;
+            auto it = uploader.meshes.find(r.mesh.index);
+            if (it == uploader.meshes.end()) return;
+            const RenderMesh& m = it->second;
+            for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+                const Vertex& a = m.vertices[m.indices[t]];
+                const Vertex& b = m.vertices[m.indices[t + 1]];
+                const Vertex& c = m.vertices[m.indices[t + 2]];
+                if (a.normal.y < 0.5) continue;
+                const TopTri tri{a.position, b.position, c.position};
+                const int x0 = (int)std::floor(std::min({a.position.x, b.position.x, c.position.x}) / 2.0);
+                const int x1 = (int)std::floor(std::max({a.position.x, b.position.x, c.position.x}) / 2.0);
+                const int z0 = (int)std::floor(std::min({a.position.z, b.position.z, c.position.z}) / 2.0);
+                const int z1 = (int)std::floor(std::max({a.position.z, b.position.z, c.position.z}) / 2.0);
+                if ((x1 - x0 + 1) * (z1 - z0 + 1) > 400) continue;   // a whole plate: the ground under it is the pad
+                for (int cx = x0; cx <= x1; ++cx)
+                    for (int cz = z0; cz <= z1; ++cz) supports[cellKey(cx, cz)].push_back(tri);
+            }
+        });
+        auto supportUnder = [&](const Vec3& p) {
+            double best = drawn(p.x, p.z);
+            auto it = supports.find(cellKey((int)std::floor(p.x / 2.0), (int)std::floor(p.z / 2.0)));
+            if (it == supports.end()) return best;
+            for (const TopTri& t : it->second) {
+                const double d = (t.b.z - t.c.z) * (t.a.x - t.c.x) + (t.c.x - t.b.x) * (t.a.z - t.c.z);
+                if (std::fabs(d) < 1e-12) continue;
+                const double l1 = ((t.b.z - t.c.z) * (p.x - t.c.x) + (t.c.x - t.b.x) * (p.z - t.c.z)) / d;
+                const double l2 = ((t.c.z - t.a.z) * (p.x - t.c.x) + (t.a.x - t.c.x) * (p.z - t.c.z)) / d;
+                const double l3 = 1.0 - l1 - l2;
+                if (l1 < -1e-4 || l2 < -1e-4 || l3 < -1e-4) continue;
+                const double y = l1 * t.a.y + l2 * t.b.y + l3 * t.c.y;
+                if (y <= p.y + 0.05 && y > best) best = y;
+            }
+            return best;
+        };
+        world.each<engine::LotPartChunk, Renderable>([&](Entity, engine::LotPartChunk& tag, Renderable& r) {
+            const bool isFoliage = tag.part == static_cast<uint8_t>(PartId::Foliage);
+            const bool isPath = tag.part == static_cast<uint8_t>(PartId::Path);
+            if (!isFoliage && !isPath) return;
+            if (r.minDistance > 0) return;   // the full-detail tier only
+            auto it = uploader.meshes.find(r.mesh.index);
+            if (it == uploader.meshes.end()) return;
+            const RenderMesh& m = it->second;
+            const std::vector<std::vector<uint32_t>> pieces = meshPieces(m);
+            // A walk can pass at its joints and still dip under the grass between
+            // them: fold each walking-surface triangle's CENTRE into its piece too.
+            std::vector<uint32_t> pieceOf(m.vertices.size(), 0);
+            for (uint32_t pc = 0; pc < pieces.size(); ++pc)
+                for (uint32_t v : pieces[pc]) pieceOf[v] = pc;
+            std::vector<double> midUp(pieces.size(), -1e30), midDown(pieces.size(), 1e30);
+            std::vector<Vec3> midUpAt(pieces.size()), midDownAt(pieces.size());
+            if (isPath)
+                for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+                    const Vertex& a = m.vertices[m.indices[t]];
+                    const Vertex& b = m.vertices[m.indices[t + 1]];
+                    const Vertex& c = m.vertices[m.indices[t + 2]];
+                    if (a.normal.y < 0.5 || b.normal.y < 0.5 || c.normal.y < 0.5) continue;
+                    const Vec3 ctr = (a.position + b.position + c.position) * (1.0 / 3.0);
+                    const double gap = ctr.y - drawn(ctr.x, ctr.z);
+                    const uint32_t pc = pieceOf[m.indices[t]];
+                    if (gap > midUp[pc]) { midUp[pc] = gap; midUpAt[pc] = ctr; }
+                    if (gap < midDown[pc]) { midDown[pc] = gap; midDownAt[pc] = ctr; }
+                }
+            for (uint32_t pc = 0; pc < pieces.size(); ++pc) {
+                const std::vector<uint32_t>& piece = pieces[pc];
+                Tally& t = isFoliage ? foliage : path;
+                ++t.pieces;
+                double minY = 1e30;
+                for (uint32_t v : piece) minY = std::min(minY, (double)m.vertices[v].position.y);
+                double up = -1e30, down = 1e30;
+                Vec3 upAt, downAt;
+                for (uint32_t v : piece) {
+                    const Vertex& vx = m.vertices[v];
+                    const Vec3& p = vx.position;
+                    if (isFoliage && p.y > minY + 0.02) continue;   // the base only
+                    if (isPath && vx.normal.y < 0.5) continue;      // the walking surface only
+                    const double gap = p.y - (isFoliage ? supportUnder(p) : drawn(p.x, p.z));
+                    if (gap > up) { up = gap; upAt = p; }
+                    if (gap < down) { down = gap; downAt = p; }
+                }
+                if (midUp[pc] > up) { up = midUp[pc]; upAt = midUpAt[pc]; }
+                if (midDown[pc] < down) { down = midDown[pc]; downAt = midDownAt[pc]; }
+                char key[64];
+                const Vec3 c0 = m.vertices[piece.front()].color;
+                std::snprintf(key, sizeof key, "%s %.2f %.2f %.2f", isFoliage ? "foliage" : "path",
+                              std::floor(c0.x * 20) / 20, std::floor(c0.y * 20) / 20,
+                              std::floor(c0.z * 20) / 20);
+                Bucket& bk = byColour[key];
+                ++bk.pieces;
+                // A PAVED LOT'S PLATE (white: its surface texture carries the look) stands
+                // 0.35 m proud of its pad by design, and its skirt is a separate part
+                // (Concrete) — so it cannot float by this test, only be buried.
+                const bool plate = isPath && c0.x > 0.99 && c0.y > 0.99 && c0.z > 0.99;
+                if (up > 0.30 && !plate) {
+                    ++t.floating;
+                    if (up > t.worst) { t.worst = up; t.at = upAt; }
+                    ++bk.floating;
+                    if (up > bk.worst) { bk.worst = up; bk.at = upAt; }
+                }
+                if (isPath && down < -0.15) {
+                    ++t.buried;
+                    if (-down > t.worstBuried) { t.worstBuried = -down; t.buriedAt = downAt; }
+                    ++bk.buried;
+                    if (plate) buriedPlateAt.push_back(downAt);
+                }
+            }
+        });
+        std::printf("    [dressing] %-20s hedges/bushes: %d pieces, %d floating > 0.3 m (worst %.2f m at "
+                    "%.0f,%.0f)\n",
+                    name, foliage.pieces, foliage.floating, foliage.worst, foliage.at.x, foliage.at.z);
+        std::printf("    [dressing] %-20s walks/paths:   %d pieces, %d floating > 0.3 m (worst %.2f m at "
+                    "%.0f,%.0f), %d buried > 0.15 m (worst %.2f m at %.0f,%.0f)\n",
+                    name, path.pieces, path.floating, path.worst, path.at.x, path.at.z, path.buried,
+                    path.worstBuried, path.buriedAt.x, path.buriedAt.z);
+        std::vector<std::pair<std::string, Bucket>> ranked(byColour.begin(), byColour.end());
+        std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) {
+            return a.second.floating + a.second.buried > b.second.floating + b.second.buried;
+        });
+        for (std::size_t i = 0; i < ranked.size() && i < 10; ++i) {
+            const Bucket& bk = ranked[i].second;
+            if (bk.floating + bk.buried == 0) break;
+            std::printf("    [dressing]   colour %-24s %5d pieces, %4d floating (worst %.2f m at %.0f,%.0f), "
+                        "%4d buried\n",
+                        ranked[i].first.c_str(), bk.pieces, bk.floating, bk.worst, bk.at.x, bk.at.z,
+                        bk.buried);
+        }
+        // WHERE the buried plates go under: inside their block (the pad should hold the
+        // ground there) or out on the apron the plate is pushed across to reach the
+        // pavement (ground the pad does not own).
+        if (!buriedPlateAt.empty()) {
+            int inBlock = 0;
+            world.each<engine::CityPlanDebug>([&](Entity, engine::CityPlanDebug& plan) {
+                for (const Vec3& q : buriedPlateAt)
+                    for (const Poly2& b : plan.blocks)
+                        if (pointInPolygon(b, Vec2(q.x, q.z))) { ++inBlock; break; }
+            });
+            std::printf("    [dressing]   buried plates: %zu, deepest point inside its block for %d, "
+                        "outside (apron) for %zu\n",
+                        buriedPlateAt.size(), inBlock, buriedPlateAt.size() - inBlock);
+        }
+        CHECK(foliage.pieces > 0);
+        CHECK(path.pieces > 0);
+        CHECK(foliage.floating == 0);
+        CHECK(path.floating == 0);
+        // Walks, alleys and park paths: never under the grass.
+        CHECK(path.buried - static_cast<int>(buriedPlateAt.size()) == 0);
+        // PAVED PLATES, a RATCHET for now: a lane-built block's pad is inset by its 2 m
+        // feather and clipped to the block (clipPadsToBlocks), so the last metres of a plate
+        // that reaches its lot line stand on the feather — and on the uphill side the ground
+        // there climbs over the plaza. Same strip as the block-inset question (TECH_DEBT,
+        // "blocks inset by the sidewalk that was actually built"); it predates the draped
+        // dressing (214 of metro_lanes' plates before it, 155 after). No worse than today.
+        const std::size_t kPlateResidue = std::string(name) == "metro_lanes.json" ? 155 : 22;
+        CHECK(buriedPlateAt.size() <= kPlateResidue);
+    }
+}
+
+// THE FREEWAY CENSUS (Glenn, 2026-09-21: "vehicles don't take the freeway"). Three
+// questions, so a zero can be pinned on the right layer:
+//   1. is there a freeway in the sim's graph at all (links by class);
+//   2. does the ROUTER take it when it should — long cross-city pairs, travel time;
+//   3. does TRAFFIC take it — which class every moving car is on after 3 minutes,
+//      and how many of the drivers' planned routes touch a freeway link.
+TEST_CASE(freeway_census_links_routes_and_traffic) {
+    const char* kCities[] = {"metro_lanes.json", "metro_v2_test.json"};
+    for (const char* name : kCities) {
+        std::unique_ptr<Renderer> renderer = Renderer::create();
+        RendererMeshUploader uploader(*renderer);
+        AssetManager assets(uploader);
+        World world;
+        RenderView view;
+        if (!LevelLoader::load(levelsDir() + "/" + name, world, *renderer, view, assets, false)) {
+            CHECK(false);
+            continue;
+        }
+        citysim::CityRenderSystem city;
+        CHECK(city.build(world, &assets, nullptr));
+        const engine::NavGraph& nav = city.nav();
+        auto klassName = [](engine::RoadClass k) {
+            switch (k) {
+                case engine::RoadClass::Freeway: return "freeway";
+                case engine::RoadClass::Arterial: return "arterial";
+                case engine::RoadClass::Collector: return "collector";
+                case engine::RoadClass::Local: return "local";
+                case engine::RoadClass::Ramp: return "ramp";
+            }
+            return "?";
+        };
+        // 1. The graph.
+        std::map<std::string, std::pair<int, double>> byClass;
+        for (const engine::NavLink& l : nav.links) {
+            auto& e = byClass[klassName(l.klass)];
+            ++e.first;
+            e.second += l.length;
+        }
+        std::string mix;
+        for (const auto& [k, v] : byClass) {
+            char buf[96];
+            std::snprintf(buf, sizeof buf, " %s %d (%.1f km)", k.c_str(), v.first, v.second / 1000.0);
+            mix += buf;
+        }
+        std::printf("    [freeway] %-18s links:%s\n", name, mix.c_str());
+        auto usesFreeway = [&](const engine::Route& r) {
+            for (int li : r.links)
+                if (nav.links[static_cast<std::size_t>(li)].klass == engine::RoadClass::Freeway) return true;
+            return false;
+        };
+        // 1b. CONNECTIVITY: the directed graph's strongly connected components. A car's
+        // home and work must route BOTH ways (commutable), so anything outside the biggest
+        // component can only ever host trips inside its own little island.
+        {
+            const int nn = nav.nodeCount();
+            std::vector<int> idx(nn, -1), low(nn, 0), comp(nn, -1);
+            std::vector<char> onStack(nn, 0);
+            std::vector<int> stack;
+            int counter = 0, comps = 0;
+            // Iterative Tarjan.
+            for (int s0 = 0; s0 < nn; ++s0) {
+                if (idx[s0] >= 0) continue;
+                std::vector<std::pair<int, std::size_t>> work{{s0, 0}};
+                idx[s0] = low[s0] = counter++;
+                stack.push_back(s0);
+                onStack[s0] = 1;
+                while (!work.empty()) {
+                    auto& [v, ei] = work.back();
+                    if (ei < nav.outLinks[v].size()) {
+                        const int w = nav.links[static_cast<std::size_t>(nav.outLinks[v][ei++])].to;
+                        if (idx[w] < 0) {
+                            idx[w] = low[w] = counter++;
+                            stack.push_back(w);
+                            onStack[w] = 1;
+                            work.push_back({w, 0});
+                        } else if (onStack[w]) {
+                            low[v] = std::min(low[v], idx[w]);
+                        }
+                    } else {
+                        if (low[v] == idx[v]) {
+                            while (true) {
+                                const int w = stack.back();
+                                stack.pop_back();
+                                onStack[w] = 0;
+                                comp[w] = comps;
+                                if (w == v) break;
+                            }
+                            ++comps;
+                        }
+                        const int done = v;
+                        work.pop_back();
+                        if (!work.empty()) low[work.back().first] = std::min(low[work.back().first], low[done]);
+                    }
+                }
+            }
+            std::vector<int> size(comps, 0);
+            for (int v = 0; v < nn; ++v) ++size[comp[v]];
+            const int big = static_cast<int>(std::max_element(size.begin(), size.end()) - size.begin());
+            std::map<std::string, std::pair<int, int>> inBig;   // class -> (links in the big SCC, all)
+            for (const engine::NavLink& l : nav.links) {
+                auto& e = inBig[klassName(l.klass)];
+                ++e.second;
+                if (comp[l.from] == big && comp[l.to] == big) ++e.first;
+            }
+            std::string cls;
+            for (const auto& [k, v] : inBig) cls += " " + k + " " + std::to_string(v.first) + "/" + std::to_string(v.second);
+            int singles = 0;
+            for (int c = 0; c < comps; ++c) singles += size[c] == 1;
+            // Which way is the freeway cut off? Forward reach from the big component
+            // (can a street GET ON?) and backward reach to it (can the freeway GET OFF?).
+            std::vector<char> fwd(nn, 0), bwd(nn, 0);
+            std::vector<std::vector<int>> inLinks(nn);
+            for (std::size_t li = 0; li < nav.links.size(); ++li) inLinks[nav.links[li].to].push_back(static_cast<int>(li));
+            int seed = -1;
+            for (int v = 0; v < nn && seed < 0; ++v) if (comp[v] == big) seed = v;
+            if (seed >= 0) {
+                std::vector<int> q{seed};
+                fwd[seed] = 1;
+                while (!q.empty()) { int v = q.back(); q.pop_back(); for (int li : nav.outLinks[v]) { int w = nav.links[li].to; if (!fwd[w]) { fwd[w] = 1; q.push_back(w); } } }
+                q = {seed};
+                bwd[seed] = 1;
+                while (!q.empty()) { int v = q.back(); q.pop_back(); for (int li : inLinks[v]) { int w = nav.links[li].from; if (!bwd[w]) { bwd[w] = 1; q.push_back(w); } } }
+            }
+            int fwOn = 0, fwOff = 0, fwLinks = 0, rampOn = 0, rampOff = 0, ramps = 0;
+            for (const engine::NavLink& l : nav.links) {
+                if (l.klass == engine::RoadClass::Freeway) { ++fwLinks; fwOn += fwd[l.from]; fwOff += bwd[l.to]; }
+                if (l.klass == engine::RoadClass::Ramp) { ++ramps; rampOn += fwd[l.from]; rampOff += bwd[l.to]; }
+            }
+            std::printf("    [freeway] %-18s reach: freeway links a street can get onto %d/%d, that can get back to a "
+                        "street %d/%d | ramps reachable %d/%d, leading back %d/%d\n",
+                        name, fwOn, fwLinks, fwOff, fwLinks, rampOn, ramps, rampOff, ramps);
+            // THE GATE: every freeway and ramp link can be reached from the streets and
+            // leads back to them (the twin welds each ramp end to the road it merges into).
+            CHECK(fwOn == fwLinks);
+            CHECK(fwOff == fwLinks);
+            CHECK(rampOn == ramps);
+            CHECK(rampOff == ramps);
+            int linksInBig = 0;
+            for (const engine::NavLink& l : nav.links) linksInBig += comp[l.from] == big && comp[l.to] == big;
+            CHECK(linksInBig == static_cast<int>(nav.links.size()));   // one drivable network
+            std::printf("    [freeway] %-18s connectivity: %d nodes, %d strongly connected components, the biggest "
+                        "holds %d nodes; %d nodes are islands of one | links inside it:%s\n",
+                        name, nn, comps, size[big], singles, cls.c_str());
+        }
+        // 2. The router, on long pairs.
+        uint32_t h = 2024;
+        auto rnd = [&h] { h = h * 1664525u + 1013904223u; return h >> 8; };
+        int pairs = 0, routed = 0, viaFreeway = 0;
+        const int n = nav.nodeCount();
+        for (int k = 0; k < 4000 && pairs < 200 && n > 1; ++k) {
+            const int a = static_cast<int>(rnd() % n), b = static_cast<int>(rnd() % n);
+            if ((nav.nodes[a] - nav.nodes[b]).length() < 1500.0) continue;
+            ++pairs;
+            const engine::Route r = engine::findRoute(nav, a, b);
+            if (!r.valid()) continue;
+            ++routed;
+            if (usesFreeway(r)) ++viaFreeway;
+        }
+        std::printf("    [freeway] %-18s router: %d pairs > 1.5 km apart, %d routable, %d via the freeway\n",
+                    name, pairs, routed, viaFreeway);
+        // 3. The traffic.
+        for (int i = 0; i < 1800; ++i) city.step(world, 0.1);
+        std::map<std::string, int> onClass;
+        int drivers = 0, plannedFreeway = 0, longTrips = 0;
+        for (std::size_t ai = 0; ai < city.sim().agents().size(); ++ai) {
+            const auto& a = city.sim().agents()[ai];
+            if (a.archetype != citysim::Agent::Mode::Driver || city.sim().isBus(static_cast<int>(ai))) continue;
+            ++drivers;
+            if (usesFreeway(a.route)) ++plannedFreeway;
+            if (a.home >= 0 && a.work >= 0 && a.home < n && a.work < n &&
+                (nav.nodes[a.home] - nav.nodes[a.work]).length() > 1500.0)
+                ++longTrips;
+            if (!a.moving || a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size())) continue;
+            ++onClass[klassName(nav.links[static_cast<std::size_t>(a.route.links[a.leg])].klass)];
+        }
+        std::string now;
+        for (const auto& [k, v] : onClass) now += " " + k + " " + std::to_string(v);
+        std::printf("    [freeway] %-18s traffic after 3 min: %d drivers, moving on:%s | %d planned routes touch "
+                    "the freeway | %d home-work pairs > 1.5 km apart\n",
+                    name, drivers, now.c_str(), plannedFreeway, longTrips);
+        // A city with a freeway USES it: long pairs route over it, and cars are on it.
+        if (byClass.count("freeway")) {
+            CHECK(viaFreeway * 4 >= routed);        // metro_lanes: 124 of 184
+            CHECK(onClass["freeway"] > 0);          // metro_lanes: 17 cars at 3 min
+        }
     }
 }

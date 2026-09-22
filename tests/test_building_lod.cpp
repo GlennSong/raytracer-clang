@@ -96,9 +96,11 @@ TEST_CASE(lot_growth_emits_the_flat_tier_on_request) {
     CHECK(tris(flatParts) * 3 < tris(fullParts));
     // Same PartId indexing discipline as the full set, so the loader binds the
     // same materials and chunks both tiers identically.
+    // (Slots past kDrapedPartBase are ground-relative dressing; they bind their
+    // base part's material.)
     CHECK(flatParts.size() == fullParts.size());
     for (std::size_t i = 0; i < flatParts.size(); ++i)
-        CHECK(flatParts[i].materialIndex == static_cast<int>(i));
+        CHECK(flatParts[i].materialIndex == static_cast<int>(baseSlot(i)));
 }
 
 // THE LIT WINDOWS VARY WITHIN A STOREY (device: "the way it's lit up row by

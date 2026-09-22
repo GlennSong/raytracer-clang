@@ -96,6 +96,22 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
                                 const LodNode& node, int gridRes,
                                 double normalEps = 0.0);
 
+// THE HEIGHT A LEAF VERTEX IS DRAWN AT: the field sampled with the mesher's
+// footprint dilation (step * 1.45) and the road-plane corner clamp. The mesher and
+// every placement that must stand on the drawn ground call this one function.
+double lodVertexHeight(const TerrainParams& params, const Noise& noise, double x, double z,
+                       double step);
+
+// THE DRAWN GROUND at (x, z): the finest (LOD0) mesh's surface — its three grid
+// corners from lodVertexHeight, interpolated across the same triangle split the
+// mesher emits. terrainHeight() at a point is the smooth field; the mesh is that
+// field sampled every leaf step and joined by flat triangles, and across a pad or
+// block-grade edge the two differ by metres (Glenn, 2026-09-21: "I noticed floating
+// shrubs"). The leaf-level physics collider is built from the same mesh, so what
+// stands on this stands on what the player walks and drives on.
+double lodSurfaceHeight(const TerrainParams& params, const Noise& noise, double x, double z,
+                        double worldHalf, int numLods, int gridRes);
+
 // Bookkeeping for streaming node meshes off the render thread (JobSystem,
 // ADR-0014). The render thread `begin`s a cache key before enqueueing its build
 // job (dedupes against jobs already in flight), workers `complete` finished

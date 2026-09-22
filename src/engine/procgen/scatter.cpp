@@ -74,6 +74,7 @@ std::vector<Placement> scatterOnTerrain(const ScatterParams& params,
                      terrainHeight(terrain, terrainNoise, x, z - eps, pd)) / (2.0 * eps);
         Vec3 normal = normalize(Vec3(-hx, 1.0, -hz));
         if (normal.y < minSlopeCos) continue;   // too steep
+        if (params.ground) h = params.ground(x, z);   // stand on the drawn triangle
 
         double d = density.noise2(x * params.densityScale, z * params.densityScale);
         if (d < params.densityThreshold) continue;

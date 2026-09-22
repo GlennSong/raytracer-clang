@@ -169,6 +169,48 @@ std::vector<LodMeshStream::Result> LodMeshStream::drain(uint32_t currentRevision
 
 void LodMeshStream::invalidate() { inFlight_.clear(); }
 
+double lodVertexHeight(const TerrainParams& params, const Noise& noise, double x, double z,
+                       double step) {
+    const double flattenDilate = step * 1.45;
+    double y = terrainHeight(params, noise, x, z, flattenDilate);
+    // FIX A corner clamp: a corner within ~1.6 cells of a road corridor
+    // never exceeds the corridor's plane — an uphill lot pad's higher
+    // ground starts its climb one cell later instead of tilting a
+    // triangle across the sidewalk.
+    if (params.flattenIndex) {
+        const double rp = roadPlaneNear(*params.flattenIndex, params.flatten,
+                                        x, z, step * 1.6);
+        if (rp < 1e29 &&
+            !padPlaneAbove(*params.flattenIndex, params.flatten, x, z, rp, flattenDilate))
+            y = std::min(y, rp);
+    }
+    return y;
+}
+
+double lodSurfaceHeight(const TerrainParams& params, const Noise& noise, double x, double z,
+                        double worldHalf, int numLods, int gridRes) {
+    int res = std::max(2, gridRes);
+    if (res % 2 != 0) res += 1;
+    const double leafSize = (2.0 * worldHalf) / static_cast<double>(1 << std::max(0, numLods - 1));
+    // The mesher's step is computed in float (node.size / res); match it.
+    const double step = static_cast<double>(static_cast<float>(leafSize) / static_cast<float>(res));
+    // Leaf grid lines sit at -worldHalf + m*step in both axes (every leaf node's
+    // minX/minZ is a multiple of leafSize from -worldHalf, and res divides it).
+    const double gx = (x + worldHalf) / step, gz = (z + worldHalf) / step;
+    const double fi = std::floor(gx), fj = std::floor(gz);
+    const double u = gx - fi, v = gz - fj;
+    const double x0 = -worldHalf + fi * step, z0 = -worldHalf + fj * step;
+    const double ha = lodVertexHeight(params, noise, x0, z0, step);
+    const double hd = lodVertexHeight(params, noise, x0 + step, z0 + step, step);
+    // Triangles (a,b,d) and (a,d,c), split on the a-d diagonal (see generateLodNodeMesh).
+    if (u >= v) {
+        const double hb = lodVertexHeight(params, noise, x0 + step, z0, step);
+        return ha + u * (hb - ha) + v * (hd - hb);
+    }
+    const double hc = lodVertexHeight(params, noise, x0, z0 + step, step);
+    return ha + v * (hc - ha) + u * (hd - hc);
+}
+
 LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
                                 const LodNode& node, int gridRes, double normalEps) {
     // Even grid so the next-coarser level samples align on even indices.
@@ -200,19 +242,7 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
         for (int i = 0; i < n; i++) {
             double x = node.minX + i * step;
             double z = node.minZ + j * step;
-            double y = terrainHeight(params, noise, x, z, flattenDilate);
-            // FIX A corner clamp: a corner within ~1.6 cells of a road corridor
-            // never exceeds the corridor's plane — an uphill lot pad's higher
-            // ground starts its climb one cell later instead of tilting a
-            // triangle across the sidewalk.
-            if (params.flattenIndex) {
-                const double rp = roadPlaneNear(*params.flattenIndex, params.flatten,
-                                                x, z, static_cast<double>(step) * 1.6);
-                if (rp < 1e29 &&
-                    !padPlaneAbove(*params.flattenIndex, params.flatten, x, z, rp,
-                               flattenDilate))
-                    y = std::min(y, rp);
-            }
+            const double y = lodVertexHeight(params, noise, x, z, static_cast<double>(step));
             H[static_cast<size_t>(j) * n + i] = static_cast<float>(y);
             minY = std::min(minY, static_cast<float>(y));
             maxY = std::max(maxY, static_cast<float>(y));

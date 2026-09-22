@@ -328,6 +328,40 @@ struct SkylineCensus {
 int buildingStoreys(const LotBuilding& lot);
 SkylineCensus skylineCensus(const std::vector<LotBuilding>& lots, Real rightTolDeg = 2.0);
 
+// GROUND-RELATIVE DRESSING (Glenn, 2026-09-21: "I noticed floating shrubs. They
+// should be planted on the ground."). The lot pass runs BEFORE the ground it
+// dresses is final: the building pads, the block grades and a lane city's
+// terraces are stamped into the terrain after it, so whatever it draped on "the
+// ground" was draped on a surface that then changed under it. Measured against
+// the drawn mesh: 408 of metro_lanes' 1264 hedge/bush pieces and 583 of its 974
+// front walks stood > 0.3 m off it (the lattice metro: 927 of 1856 hedges).
+//
+// So yard, door-walk and park dressing is emitted into the DRAPED slots of the
+// part list — `kDrapedPartBase + PartId` — with every vertex's y measured FROM
+// THE GROUND UNDER THAT VERTEX, and a park's or under-deck lot's padMesh the
+// same way. The host resolves both with drapeOnGround once the terrain is final
+// and draws a draped slot as its base part. What a building stands on (pads,
+// paved plates and their skirts) stays absolute: the terrain is graded to it,
+// not the other way round. Per-vertex, not per-object: a hedge on a slope
+// follows the slope, and pieces that meet (a planter's curb and its greenery, a
+// fence post and its rails) meet at the same ground.
+constexpr std::size_t kDrapedPartBase = static_cast<std::size_t>(PartId::Count);
+constexpr std::size_t kLotPartSlots = 2 * kDrapedPartBase;
+inline std::size_t drapedSlot(PartId p) { return kDrapedPartBase + static_cast<std::size_t>(p); }
+inline bool isDrapedSlot(std::size_t slot) { return slot >= kDrapedPartBase; }
+inline std::size_t baseSlot(std::size_t slot) {
+    return isDrapedSlot(slot) ? slot - kDrapedPartBase : slot;
+}
+// Lift every vertex by the ground under it: ground-relative y becomes world y.
+// With `gridStep` > 0 the ground is the terrain MESH on that grid (cells of
+// gridStep from `gridOrigin`, each split on its (i,j)-(i+1,j+1) diagonal — the
+// CDLOD leaf layout): every triangle is first cut along the cell lines and
+// diagonals it crosses, so each piece lies inside one terrain triangle and, once
+// lifted, follows it EXACTLY — no chord between two joints can dip under the
+// grass or bridge a hollow.
+void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground,
+                   Real gridStep = 0, Vec2 gridOrigin = Vec2(0, 0));
+
 // One building per viable lot across every block. Deterministic in seed.
 // `debug`, when non-null, receives the intermediate blocks + lots.
 //
@@ -336,7 +370,8 @@ SkylineCensus skylineCensus(const std::vector<LotBuilding>& lots, Real rightTolD
 // Brick / Concrete / Stucco / …), exactly like CityModel::parts — so the caller
 // binds the SAME PBR recipes (materialFor + baked surface maps) the shape:"city"
 // pipeline uses, and the whole district draws as a handful of textured meshes.
-// Each entry's materialIndex is set to its PartId.
+// Each entry's materialIndex is set to its PartId. The list is kLotPartSlots
+// long: slots past kDrapedPartBase hold ground-relative dressing (above).
 //
 // `outFlatParts`, when non-null, additionally receives the SAME buildings grown
 // at FacadeDetail::Flat — the middle LOD (city-render-perf R2): identical bay

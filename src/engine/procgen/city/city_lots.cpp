@@ -59,12 +59,15 @@ Real distToSeg(const Vec2& p, const Vec2& a, const Vec2& b) {
 }
 
 // Merge a grown kit's parts into the by-PartId output array.
-void appendKit(const BuildingMesh& kit, std::vector<RenderMesh>* outParts) {
+void appendKit(const BuildingMesh& kit, std::vector<RenderMesh>* outParts,
+               bool draped = false) {
     if (!outParts) return;
     for (const RenderMesh& part : kit.parts) {
         const int mi = part.materialIndex;
-        if (mi >= 0 && mi < static_cast<int>(outParts->size()))
-            MeshBuilder::append((*outParts)[mi], part);
+        if (mi < 0) continue;
+        const std::size_t slot = draped ? drapedSlot(static_cast<PartId>(mi))
+                                        : static_cast<std::size_t>(mi);
+        if (slot < outParts->size()) MeshBuilder::append((*outParts)[slot], part);
     }
 }
 
@@ -82,7 +85,12 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
                 Real meshCell = 3.0) {
     const Vec3 grass(0.30, 0.50, 0.26);
     const Vec3 pathCol(0.72, 0.68, 0.60);        // decomposed granite
-    auto gy = [&](const Vec2& v) { return ground ? ground(v.x, v.y) : Real(0); };
+    // GROUND-RELATIVE (kDrapedPartBase): everything this emits — the padMesh and
+    // the furnishing kit — is measured from the ground under it, and the host
+    // drapes it on the finished terrain. Only the path RAMPS, which grade the
+    // terrain itself, need the absolute ground.
+    auto gy = [](const Vec2&) { return Real(0); };
+    auto gyAbs = [&](const Vec2& v) { return ground ? ground(v.x, v.y) : Real(0); };
     Hash rng(mix(seed, 0x9A46B1u));
 
     (void)grass;
@@ -167,7 +175,7 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
             if (outFlatten)
                 outFlatten->push_back(makeFlattenRamp(
                     Vec3(q0.x, 0, q0.y), Vec3(q1.x, 0, q1.y),
-                    gy(q0) + py - 0.05, gy(q1) + py - 0.05, hw + 0.6, 2.5));
+                    gyAbs(q0) + py - 0.05, gyAbs(q1) + py - 0.05, hw + 0.6, 2.5));
             // Curb skirts: the path is a slab with thickness — its long edges
             // drop below the lawn so a terrain dip never leaves it hovering
             // (device: "the walkway is floating").
@@ -372,7 +380,7 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
                 }
             }
         }
-        appendKit(kit, outParts);
+        appendKit(kit, outParts, /*draped=*/true);
     }
 
     // TREE SPOTS: a loose ring between the plaza and the boundary, kept off
@@ -414,7 +422,8 @@ static void sculptUnderPad(LotBuilding& g, const Poly2& poly,
                            uint32_t seed, bool utility) {
     if (poly.size() < 3) return;
     Hash rng(mix(seed, utility ? 0xC0FFEEu : 0x5A1A5Au));
-    auto gy = [&](const Vec2& v) { return ground ? ground(v.x, v.y) : Real(0); };
+    (void)ground;
+    auto gy = [](const Vec2&) { return Real(0); };   // ground-relative padMesh (kDrapedPartBase)
     const Real lift = 0.05;
     const Vec3 slab = utility ? Vec3(0.50, 0.50, 0.48)     // concrete
                               : Vec3(0.24, 0.24, 0.26);    // asphalt
@@ -482,20 +491,80 @@ static void sculptUnderPad(LotBuilding& g, const Poly2& poly,
     g.color = Vec3(1, 1, 1);
 }
 
+// A WALK FROM EVERY DOOR TO THE PAVEMENT (Glenn, 2026-09-21: "If it can't [face the
+// street] it would be nice to have a walk way to the door and the walk way should be on
+// the ground leading to the house's front door").
+//
+// sculptYard below already lays one — "a draped pavement ribbon, door to lot line" — but
+// only for a house with a yard, and only as far as the LOT LINE, which is not where the
+// pavement is: the block is inset from the kerb and a gap of ground lies between the two.
+// This runs for every door that does not already open onto pavement, and walks from the
+// threshold along the door's own outward normal until it reaches the sidewalk band's
+// outer edge — `roadHalfWidth + sidewalkWidth` from the nearest centreline, the same line
+// a paved lot's plate is pushed out to. A door already on the pavement (a tower built to
+// the lot line) gets nothing: a 20 cm stub through the kerb is worse than no walk.
+//
+// The ribbon DRAPES: a joint every metre, each vertex ground-relative (kDrapedPartBase),
+// so once the host lays it on the finished terrain it follows it instead of floating
+// over a dip or cutting into a rise.
+void sculptDoorWalks(const LotBuilding& b, const RoadGraph* roads, Real sidewalkWidth,
+                     std::vector<RenderMesh>* outParts) {
+    if (!outParts || !roads || roads->edges.empty() || sidewalkWidth <= 0) return;
+    // How far past the sidewalk band this point still is (0 = on it or beyond it).
+    auto pastBand = [&](const Vec2& q) {
+        Real best = Real(1e30), bestHw = 0;
+        for (const RoadEdge& e : roads->edges) {
+            if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(roads->nodes.size()) ||
+                e.b >= static_cast<int>(roads->nodes.size())) continue;
+            const Vec2& ra = roads->nodes[e.a].pos;
+            const Vec2& rb = roads->nodes[e.b].pos;
+            const Vec2 ab = rb - ra;
+            const Real len2 = ab.lengthSquared();
+            Real t = len2 > 1e-12 ? dot(q - ra, ab) / len2 : 0.0;
+            t = std::max(Real(0), std::min(Real(1), t));
+            const Real d = (q - (ra + ab * t)).length();
+            if (d < best) { best = d; bestHw = e.width * 0.5; }
+        }
+        return std::max(Real(0), best - (bestHw + sidewalkWidth));
+    };
+    // GROUND-RELATIVE (kDrapedPartBase): y is the lift over the ground; the host
+    // lays the ribbon on the finished terrain.
+    auto gy = [](const Vec2&) { return Real(0); };
+    RenderMesh& path = (*outParts)[drapedSlot(PartId::Path)];
+    constexpr Real kHalfWidth = 0.6, kStep = 1.0, kMaxWalk = 30.0, kLift = 0.05;
+    for (const BuildingUnit& u : b.units)
+        for (const DoorSpec& d : u.doors) {
+            if (d.normal.length() < Real(1e-6)) continue;
+            const Vec2 f = normalize(d.normal);
+            // Walk out until the ground under the next step is the sidewalk.
+            const Real gap = pastBand(d.foot);
+            if (gap < Real(0.8)) continue;          // already at the pavement
+            Real len = 0;
+            while (len < kMaxWalk && pastBand(d.foot + f * len) > Real(0.05)) len += Real(0.25);
+            if (len < Real(0.8) || len >= kMaxWalk) continue;   // never reaches a street
+            const Vec2 perp(-f.y, f.x);
+            const int segs = std::max(1, static_cast<int>(std::ceil(len / kStep)));
+            for (int si = 0; si < segs; ++si) {
+                const Vec2 q0 = d.foot + f * (len * si / segs);
+                const Vec2 q1 = d.foot + f * (len * (si + 1) / segs);
+                const Vec2 a0 = q0 - perp * kHalfWidth, b0 = q0 + perp * kHalfWidth;
+                const Vec2 a1 = q1 - perp * kHalfWidth, b1 = q1 + perp * kHalfWidth;
+                MeshBuilder::emitQuad(path, Vec3(a0.x, gy(a0) + kLift, a0.y), Vec3(b0.x, gy(b0) + kLift, b0.y),
+                                      Vec3(b1.x, gy(b1) + kLift, b1.y), Vec3(a1.x, gy(a1) + kLift, a1.y),
+                                      Vec3(0, 1, 0), Vec3(0.72, 0.70, 0.65));
+            }
+        }
+}
+
 // YARD SCULPTING: a house lot earns a FRONT WALK from its door to the street
 // boundary, a clipped hedge along the front lot line (with a gap where the
 // walk crosses), and a back-yard tree spot or two.
 void sculptYard(LotBuilding& b, const Poly2& lotPoly, const Poly2& house,
-                const Vec2& face, Real walkTopY,
-                const std::function<Real(Real, Real)>& ground, uint32_t seed,
-                std::vector<RenderMesh>* outParts) {
+                const Vec2& face, uint32_t seed, std::vector<RenderMesh>* outParts) {
     if (!outParts || house.size() < 3 || lotPoly.size() < 3 ||
         face.length() < 1e-6)
         return;
     Hash rng(mix(seed, 0xF00D5EEDu));
-    auto gy = [&](const Vec2& v) {
-        return ground ? ground(v.x, v.y) : Real(0);
-    };
     const Vec2 f = normalize(face);
     // The DOOR: midpoint of the house edge whose outward normal best faces
     // the street (the same rule growPlanBuilding uses for the entrance).
@@ -525,16 +594,17 @@ void sculptYard(LotBuilding& b, const Poly2& lotPoly, const Poly2& house,
     }
     Vec2 walkEnd = door + f * std::max(tExit, Real(0));
     if (tExit > 0.6) {
-        // The front WALK: a draped pavement ribbon, door to lot line.
-        RenderMesh& path = (*outParts)[static_cast<std::size_t>(PartId::Path)];
+        // The front WALK: a pavement ribbon, door to lot line, GROUND-RELATIVE
+        // (kDrapedPartBase) — the host lays it on the finished terrain. A joint
+        // every metre so it can bend with the mesh's 2.7 m cells.
+        RenderMesh& path = (*outParts)[drapedSlot(PartId::Path)];
         Vec2 perp(-f.y, f.x);
         const Real hw = 0.55;
-        const int segs = std::max(1, static_cast<int>(tExit / 2.5));
+        const int segs = std::max(1, static_cast<int>(std::ceil(tExit / 1.0)));
         for (int s = 0; s < segs; ++s) {
             Vec2 q0 = door + f * (tExit * s / segs);
             Vec2 q1 = door + f * (tExit * (s + 1) / segs);
-            const Real y0 = ground ? gy(q0) + 0.06 : walkTopY + 0.06;
-            const Real y1 = ground ? gy(q1) + 0.06 : walkTopY + 0.06;
+            const Real y0 = 0.06, y1 = 0.06;
             MeshBuilder::emitQuad(
                 path, Vec3(q0.x - perp.x * hw, y0, q0.y - perp.y * hw),
                 Vec3(q0.x + perp.x * hw, y0, q0.y + perp.y * hw),
@@ -574,13 +644,15 @@ void sculptYard(LotBuilding& b, const Poly2& lotPoly, const Poly2& house,
                 if (distToSeg(hc, door, walkEnd) < 1.4) continue;   // walk gap
                 if (!pointInPolygon(lotPoly, hc)) continue;
                 Vec3 t3(dir.x, 0, dir.y), n3(nrm.x, 0, nrm.y);
-                emitBox(kit, Scope{Vec3(hc.x, gy(hc), hc.y) - t3 * 0.9 -
+                // Bedded 5 cm: ground-relative, so the base sits in the grass
+                // at every corner once draped.
+                emitBox(kit, Scope{Vec3(hc.x, -0.05, hc.y) - t3 * 0.9 -
                                        n3 * 0.3,
-                                   {t3, up, n3}, Vec3(1.8, 0.65, 0.6)},
+                                   {t3, up, n3}, Vec3(1.8, 0.70, 0.6)},
                         PartId::Foliage, hedgeCol);
             }
         }
-        appendKit(kit, outParts);
+        appendKit(kit, outParts, /*draped=*/true);
     }
     // BACK-YARD trees: a spot or two behind the house.
     const Vec2 hc = centroid(house);
@@ -1046,6 +1118,84 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
     b.color = Vec3(1, 1, 1);   // the surfaces carry the plaza's look
 }
 }  // namespace
+
+namespace {
+Vertex lerpVertex(const Vertex& a, const Vertex& b, Real t) {
+    Vertex v = a;
+    v.position = a.position + (b.position - a.position) * t;
+    v.normal = a.normal + (b.normal - a.normal) * t;
+    v.tangent = a.tangent + (b.tangent - a.tangent) * t;
+    v.u = a.u + (b.u - a.u) * static_cast<float>(t);
+    v.v = a.v + (b.v - a.v) * static_cast<float>(t);
+    v.color = a.color + (b.color - a.color) * t;
+    return v;
+}
+
+// Cut every triangle of `m` along the lines f(x, z) = k (integer k) and
+// re-triangulate the convex pieces as fans. `f` must be affine.
+void splitAlongLines(RenderMesh& m, const std::function<Real(const Vec3&)>& f) {
+    RenderMesh out;
+    out.materialIndex = m.materialIndex;
+    out.vertices.reserve(m.vertices.size());
+    out.indices.reserve(m.indices.size());
+    auto emitPoly = [&](const std::vector<Vertex>& poly) {
+        if (poly.size() < 3) return;
+        const uint32_t base = static_cast<uint32_t>(out.vertices.size());
+        for (const Vertex& v : poly) out.vertices.push_back(v);
+        for (std::size_t i = 1; i + 1 < poly.size(); ++i) {
+            out.indices.push_back(base);
+            out.indices.push_back(base + static_cast<uint32_t>(i));
+            out.indices.push_back(base + static_cast<uint32_t>(i + 1));
+        }
+    };
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        std::vector<Vertex> rest = {m.vertices[m.indices[t]], m.vertices[m.indices[t + 1]],
+                                    m.vertices[m.indices[t + 2]]};
+        Real lo = 1e30, hi = -1e30;
+        for (const Vertex& v : rest) {
+            const Real fv = f(v.position);
+            lo = std::min(lo, fv);
+            hi = std::max(hi, fv);
+        }
+        // Peel off the piece below each line crossing the triangle, low to high.
+        for (Real k = std::floor(lo) + 1; k < hi - 1e-9; k += 1) {
+            if (k <= lo + 1e-9) continue;
+            std::vector<Vertex> below, above;
+            for (std::size_t i = 0; i < rest.size(); ++i) {
+                const Vertex& a = rest[i];
+                const Vertex& b = rest[(i + 1) % rest.size()];
+                const Real fa = f(a.position) - k, fb = f(b.position) - k;
+                if (fa <= 0) below.push_back(a);
+                if (fa >= 0) above.push_back(a);
+                if ((fa < 0 && fb > 0) || (fa > 0 && fb < 0)) {
+                    const Vertex x = lerpVertex(a, b, fa / (fa - fb));
+                    below.push_back(x);
+                    above.push_back(x);
+                }
+            }
+            emitPoly(below);
+            rest.swap(above);
+            if (rest.size() < 3) break;
+        }
+        emitPoly(rest);
+    }
+    m = std::move(out);
+}
+}  // namespace
+
+void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground, Real gridStep,
+                   Vec2 gridOrigin) {
+    if (!ground) return;
+    if (gridStep > Real(1e-6) && !m.indices.empty()) {
+        const Real inv = Real(1) / gridStep;
+        const Real ox = gridOrigin.x, oz = gridOrigin.y;
+        splitAlongLines(m, [=](const Vec3& p) { return (p.x - ox) * inv; });
+        splitAlongLines(m, [=](const Vec3& p) { return (p.z - oz) * inv; });
+        splitAlongLines(m, [=](const Vec3& p) { return (p.x - ox) * inv - (p.z - oz) * inv; });
+    }
+    for (Vertex& v : m.vertices)
+        v.position.y += ground(v.position.x, v.position.z);
+}
 
 TerrainFlatten lotPadFlatten(const LotBuilding& lb, double apron, double falloff) {
     // A paved lot (ADR-0086) is flat to its lot line: the plate covers the
@@ -1606,14 +1756,14 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         emitInto(outFlatParts);   // the LOD1 twin stands on the same concrete
     };
     if (outParts) {
-        outParts->assign(static_cast<std::size_t>(PartId::Count), RenderMesh{});
+        outParts->assign(kLotPartSlots, RenderMesh{});   // base + draped slots
         for (std::size_t i = 0; i < outParts->size(); ++i)
-            (*outParts)[i].materialIndex = static_cast<int>(i);
+            (*outParts)[i].materialIndex = static_cast<int>(baseSlot(i));
     }
-    if (outFlatParts) {
-        outFlatParts->assign(static_cast<std::size_t>(PartId::Count), RenderMesh{});
+    if (outFlatParts) {   // same slot layout as outParts (the LOD1 tier draws no dressing)
+        outFlatParts->assign(kLotPartSlots, RenderMesh{});
         for (std::size_t i = 0; i < outFlatParts->size(); ++i)
-            (*outFlatParts)[i].materialIndex = static_cast<int>(i);
+            (*outFlatParts)[i].materialIndex = static_cast<int>(baseSlot(i));
     }
     // Merge one grown building's parts into a PartId-indexed set (the same
     // fold the LOD0 path does inline below — shared so the flat set cannot
@@ -2152,7 +2302,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // parks, and each segment stamps its band into the flatten set so the
     // rendered terrain agrees at every LOD (see the sculptPark spoke ramps).
     if (outParts && !deferredAlleys.empty()) {
-        RenderMesh& path = (*outParts)[static_cast<std::size_t>(PartId::Path)];
+        // GROUND-RELATIVE ribbon (kDrapedPartBase); the RAMP it stamps grades the
+        // terrain and so reads the absolute ground.
+        RenderMesh& path = (*outParts)[drapedSlot(PartId::Path)];
         auto gy = [&](const Vec2& v) {
             return meshGround ? meshGround(v.x, v.y) : Real(0);
         };
@@ -2175,12 +2327,13 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 const Real y0R = gy(q0 + perp * hw) + Real(0.06);
                 const Real y1L = gy(q1 - perp * hw) + Real(0.06);
                 const Real y1R = gy(q1 + perp * hw) + Real(0.06);
+                const Real lift = Real(0.06);
                 MeshBuilder::emitQuad(
                     path,
-                    Vec3(q0.x - perp.x * hw, y0L, q0.y - perp.y * hw),
-                    Vec3(q0.x + perp.x * hw, y0R, q0.y + perp.y * hw),
-                    Vec3(q1.x + perp.x * hw, y1R, q1.y + perp.y * hw),
-                    Vec3(q1.x - perp.x * hw, y1L, q1.y - perp.y * hw),
+                    Vec3(q0.x - perp.x * hw, lift, q0.y - perp.y * hw),
+                    Vec3(q0.x + perp.x * hw, lift, q0.y + perp.y * hw),
+                    Vec3(q1.x + perp.x * hw, lift, q1.y + perp.y * hw),
+                    Vec3(q1.x - perp.x * hw, lift, q1.y - perp.y * hw),
                     Vec3(0, 1, 0), Vec3(0.42, 0.41, 0.40));
                 if (outGrade)
                     outGrade->push_back(makeFlattenRamp(
@@ -3333,10 +3486,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // a hedge along the front lot line, back-yard tree spots.
             if (yardApplied)
                 sculptYard(b, lot.footprint, plan,
-                           Vec2(bp.faceDir.x, bp.faceDir.z), b.groundY,
-                           p.ground,
+                           Vec2(bp.faceDir.x, bp.faceDir.z),
                            mix(pp.seed, static_cast<uint32_t>(li) * 29u + 11u),
                            outParts);
+            else
+                sculptDoorWalks(b, roads, p.sidewalkWidth, outParts);
             pruneTreeSpotsIntoRoad(b.treeSpots);
             out.push_back(std::move(b));
         }

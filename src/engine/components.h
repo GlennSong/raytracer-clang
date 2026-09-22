@@ -434,6 +434,14 @@ struct BeaconBlink {
     float baseOpacity = 1.0f;
 };
 
+// Which lot-grammar part (PartId, as its integer) a world-space city chunk
+// carries. The chunks are merged per render cell and unkeyed, so without this
+// nothing downstream can ask for "the hedges" or "the front walks" — a gate
+// checking that ground dressing stands on the drawn terrain needs exactly that.
+struct LotPartChunk {
+    uint8_t part = 0;
+};
+
 // Level-authored city-simulation settings (ADR-0063): a top-level "citysim"
 // block in the level JSON becomes one entity carrying this, and the city render
 // bridge reads it at build. Lets a level choose its own population — the agent

@@ -22,6 +22,13 @@ struct ScatterParams {
     // the rendered/collidable mesh shows. Sampling with 0 while the mesh
     // dilates is why trees floated or sank near every flatten edge.
     double placeDilate = 0.0;
+    // THE DRAWN GROUND, when the loader knows it (lodSurfaceHeight over the CDLOD
+    // leaf mesh): a placement's height comes from here, not from the smooth field
+    // at the point. The mesh joins leaf-step samples with flat triangles, and
+    // across a pad or grade edge the field at a point sits metres off that
+    // triangle — trees stood in the air over cuts. Slope and altitude rules still
+    // read the smooth field (the mesh's per-triangle slope is a step function).
+    std::function<double(double, double)> ground;
     float minScale = 0.8f;
     float maxScale = 1.2f;
     float maxSlopeDeg = 30.0f;       // reject ground steeper than this

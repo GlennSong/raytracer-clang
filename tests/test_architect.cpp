@@ -283,7 +283,7 @@ TEST_CASE(parks_are_sculpted_with_paths_and_tree_spots) {
         }
     std::vector<RenderMesh> parts;
     std::vector<LotBuilding> lots = growLotBuildings(blocks, p, nullptr, &parts);
-    CHECK(parts.size() == static_cast<std::size_t>(PartId::Count));
+    CHECK(parts.size() == kLotPartSlots);   // base parts + ground-relative draped slots
 
     int parks = 0, yardsWithTrees = 0;
     for (const LotBuilding& lb : lots) {
@@ -303,8 +303,9 @@ TEST_CASE(parks_are_sculpted_with_paths_and_tree_spots) {
     CHECK(parks > 0);                                 // the tables roll parks
     CHECK(yardsWithTrees > 0);                        // yards got landscaping
     // Front walks / park paths exist: the Path part carries geometry.
-    CHECK(!parts[static_cast<std::size_t>(PartId::Path)].vertices.empty() ||
-          !parts[static_cast<std::size_t>(PartId::Foliage)].vertices.empty());
+    // (Yard walks and hedges are ground-relative dressing: the draped slots.)
+    CHECK(!parts[drapedSlot(PartId::Path)].vertices.empty() ||
+          !parts[drapedSlot(PartId::Foliage)].vertices.empty());
 
     // Determinism: the same seed sculpts the same city.
     std::vector<RenderMesh> parts2;

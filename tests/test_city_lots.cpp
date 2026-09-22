@@ -76,7 +76,8 @@ TEST_CASE(lot_buildings_are_grown_and_not_slivers) {
     for (std::size_t i = 0; i < parts.size(); ++i) {
         if (parts[i].vertices.empty()) continue;
         ++filled;
-        CHECK(parts[i].materialIndex == static_cast<int>(i));
+        // A draped slot (ground-relative dressing) binds its base part's material.
+        CHECK(parts[i].materialIndex == static_cast<int>(baseSlot(i)));
     }
     CHECK(filled >= 2);   // at least walls + one more class (glass/roof/trim)
     // Facades must land in the SURFACED wall parts (Brick/Concrete/Stucco/Metal
@@ -192,7 +193,7 @@ TEST_CASE(lot_buildings_keep_clear_of_roads) {
     // part is EXEMPT by design: plaza walks and stair runs exist to reach the
     // sidewalk, so they legitimately run right up to the carriageway edge.
     for (std::size_t pi = 0; pi < parts.size(); ++pi) {
-        if (pi == static_cast<std::size_t>(PartId::Path)) continue;
+        if (baseSlot(pi) == static_cast<std::size_t>(PartId::Path)) continue;
         for (const Vertex& v : parts[pi].vertices)
             CHECK(std::fabs(v.position.x + 105.0) >= minDist - 1.2);
     }
@@ -375,8 +376,11 @@ TEST_CASE(buildings_grow_from_terrain_base) {
     int sloped = 0;
     for (const LotBuilding& lb : b) {
         if (lb.type == "park" || lb.type == "green") {
-            // Draped pads: vertex heights track the sampler, not a flat 0.
-            for (const Vertex& v : lb.padMesh.vertices)
+            // Ground-relative pads (city_lots.h, kDrapedPartBase): laid on the
+            // ground, the vertex heights track the sampler, not a flat 0.
+            RenderMesh laid = lb.padMesh;
+            drapeOnGround(laid, p.ground);
+            for (const Vertex& v : laid.vertices)
                 CHECK(std::fabs(v.position.y -
                                 (0.04 * v.position.x + 0.02 * v.position.z)) <
                       1.5);
@@ -887,7 +891,11 @@ TEST_CASE(park_walkways_adhere_to_the_graded_ground) {
             if (lb.type != "park" || lb.padMesh.vertices.empty()) continue;
             ++parksChecked;
             Real worstLow = 0.0, worstHigh = 0.0, maxGrade = 0.0;
-            for (const Vertex& v : lb.padMesh.vertices) {
+            // Ground-relative (kDrapedPartBase): the host lays the pad on its
+            // ground; here that ground is the graded field itself.
+            RenderMesh laid = lb.padMesh;
+            drapeOnGround(laid, finalGround);
+            for (const Vertex& v : laid.vertices) {
                 const Real g = finalGround(v.position.x, v.position.z);
                 const Real d = v.position.y - g;
                 worstLow = std::min(worstLow, d);
@@ -911,17 +919,22 @@ TEST_CASE(park_walkways_adhere_to_the_graded_ground) {
     CHECK(sawGradedPark);
 }
 
-TEST_CASE(walkways_adhere_to_the_terrain_a_cdlod_tile_actually_renders) {
-    // The analytic check above measures the MAP; the reporter kept seeing
-    // floaters because the RENDERED terrain is the TERRITORY: a CDLOD tile
-    // samples the height function at grid corners and interpolates linearly
-    // between them, so between samples the triangle is free to bulge through
-    // (or drop out from under) a thin path band the function never told it
-    // about. This is the headless raycast-down: rebuild the ground the way a
-    // tile does — corner samples with the coarse tile's half-cell flatten
-    // dilation, bilinear across the cell — and measure every walkway vertex
-    // against THAT, at fine and coarse cell sizes. The band-stamping ramps
-    // (park spokes, plaza walks, alley pavements) are what make this pass.
+TEST_CASE(walkways_are_emitted_on_the_ground_the_host_draws) {
+    // HISTORY: this measured every walkway vertex against a CDLOD-style tile
+    // sampler and pinned the residual (2.28 m fine-cell worst, from terrace lips).
+    // It could never reach zero, and the level-scale gate showed why the lot pass
+    // cannot drape its own dressing: it runs BEFORE the ground is final — the
+    // building pads, the block grades and a lane city's terraces are stamped in
+    // after it (Glenn, 2026-09-21: "I noticed floating shrubs"; 583 of
+    // metro_lanes' 974 front walks off the drawn ground by > 0.3 m).
+    //
+    // THE CONTRACT NOW (city_lots.h, kDrapedPartBase): walks, alleys and park
+    // plazas/paths are emitted GROUND-RELATIVE — y is the lift over the ground
+    // under each vertex — and the host lays them on the surface it draws
+    // (level_tests: lot_dressing_is_planted_on_the_ground measures that against
+    // real CDLOD tiles). This pins the emitter's half: nothing it emits carries
+    // an absolute height, the terrain-grading RAMPS the paths stamp are still
+    // there, and draped on any ground the walking surface sits at its lift.
     auto natural = [](Real x, Real z) -> Real {
         return 0.22 * x + 3.0 * std::sin(z * 0.045);
     };
@@ -935,7 +948,7 @@ TEST_CASE(walkways_adhere_to_the_terrain_a_cdlod_tile_actually_renders) {
     LotParams p;
     p.center = {0, 0};
     p.seed = 7;
-    p.groundMeshCell = 2.0;   // conform walkways to the same grid the gate models
+    p.groundMeshCell = 2.0;
     p.ground = natural;
     p.groundWith = [&natural](const std::vector<TerrainFlatten>& grades) {
         auto flat = std::make_shared<std::vector<TerrainFlatten>>(grades);
@@ -943,100 +956,49 @@ TEST_CASE(walkways_adhere_to_the_terrain_a_cdlod_tile_actually_renders) {
             return applyFlatten(*flat, x, z, natural(x, z), dilate);
         };
     };
-    std::vector<RenderMesh> parts(static_cast<std::size_t>(PartId::Count));
+    std::vector<RenderMesh> parts;
     std::vector<TerrainFlatten> grades;
     LotPlanDebug dbg;
     std::vector<LotBuilding> lots = growLotBuildings(
         blocks, p, &dbg, &parts, nullptr, 0.0, nullptr, &grades);
-    auto graded = [&](Real x, Real z) {
-        return applyFlatten(grades, x, z, natural(x, z));
-    };
+    CHECK(parts.size() == kLotPartSlots);
 
-    // A CDLOD-style sampler: corner heights on an L-metre grid (dilated by
-    // half a cell, as the real coarse tile queries), bilinear in between.
-    auto tileGround = [&](Real x, Real z, Real cell) {
-        auto corner = [&](Real cx, Real cz) {
-            return applyFlatten(grades, cx, cz, natural(cx, cz), cell * 0.5);
-        };
-        Real gx = std::floor(x / cell) * cell, gz = std::floor(z / cell) * cell;
-        Real fx = (x - gx) / cell, fz = (z - gz) / cell;
-        Real h00 = corner(gx, gz), h10 = corner(gx + cell, gz);
-        Real h01 = corner(gx, gz + cell), h11 = corner(gx + cell, gz + cell);
-        return h00 * (1 - fx) * (1 - fz) + h10 * fx * (1 - fz) +
-               h01 * (1 - fx) * fz + h11 * fx * fz;
-    };
-
-    // Provenanced walkway geometry only (the merged Path part also holds
-    // plaza STAIRS, whose treads are legitimately elevated): every park
-    // padMesh vertex, plus the alley pavement corners reconstructed from the
-    // plan debug's recorded lanes exactly as the emitter builds them.
-    int measured = 0;
-    std::map<int, Real> worstByCell;
-    const char* curSrc = "?";
-    struct Worst { Real d = 0; Real x = 0, z = 0; const char* src = "?"; } worst2;
-    auto sample = [&](Real x, Real y, Real z) {
-        for (Real cell : {2.0, 8.0, 16.0}) {
-            Real d = y - tileGround(x, z, cell);
-            Real& w = worstByCell[static_cast<int>(cell)];
-            w = std::max(w, d);
-            if (cell == 2.0 && d > worst2.d) worst2 = {d, x, z, curSrc};
+    // Any ground will do for the host's half: a steep, wavy one.
+    auto host = [](Real x, Real z) -> Real { return 40.0 + 0.3 * x + 4.0 * std::sin(z * 0.07); };
+    int measured = 0, parksWithPaths = 0;
+    Real worstTop = 0, worstAbs = 0;
+    auto measure = [&](const RenderMesh& rel) {
+        RenderMesh laid = rel;
+        drapeOnGround(laid, host);
+        for (std::size_t i = 0; i < rel.vertices.size(); ++i) {
+            const Vertex& v = rel.vertices[i];
+            worstAbs = std::max(worstAbs, std::fabs(v.position.y));   // relative: small
+            if (v.normal.y < 0.5) continue;                           // skirts drop below
+            const Vec3& q = laid.vertices[i].position;
+            worstTop = std::max(worstTop, std::fabs(q.y - host(q.x, q.z)));
+            ++measured;
         }
-        ++measured;
     };
-    curSrc = "park";
     for (const LotBuilding& lb : lots)
-        if (lb.type == "park")
-            for (const Vertex& v : lb.padMesh.vertices)
-                sample(v.position.x, v.position.y, v.position.z);
-    curSrc = "alley";
-    auto meshGy = [&](Real x, Real z) {   // the emitters' conforming sampler
-        const Real cell = p.groundMeshCell;
-        const Real gx = std::floor(x / cell) * cell, gz = std::floor(z / cell) * cell;
-        const Real fx = (x - gx) / cell, fz = (z - gz) / cell;
-        return graded(gx, gz) * (1 - fx) * (1 - fz) +
-               graded(gx + cell, gz) * fx * (1 - fz) +
-               graded(gx, gz + cell) * (1 - fx) * fz +
-               graded(gx + cell, gz + cell) * fx * fz;
-    };
-    for (const auto& [A, B] : dbg.alleys) {
-        const Vec2 dirN = normalize(B - A);
-        const Vec2 perp(-dirN.y, dirN.x);
-        const Real hw = p.alleyWidth * 0.5;
-        const Real L = (B - A).length();
-        const int segs = std::max(1, static_cast<int>(L / 3.0));
-        for (int sgi = 0; sgi <= segs; ++sgi) {
-            const Vec2 q = A + dirN * (L * sgi / segs);
-            for (Real side : {-hw, hw}) {
-                const Vec2 e = q + perp * side;
-                sample(e.x, meshGy(e.x, e.y) + 0.06, e.y);
-            }
+        if (lb.type == "park" && !lb.padMesh.vertices.empty()) {
+            ++parksWithPaths;
+            measure(lb.padMesh);
         }
-    }
-    CHECK(measured > 200);   // the fixture must actually produce walkways
-    for (auto [cell, w] : worstByCell)
-        std::printf("  cell %2dm: worst tile-gap %.2f m\n", cell, w);
-    std::printf("  worst@2m: %.2f m from %s at (%.1f, %.1f)\n",
-                worst2.d, worst2.src, worst2.x, worst2.z);
-    // WHAT THIS GATE NOW KNOWS (worst-offender localization above): walkways
-    // conform to the tile's own dilated bilinear sampler, and away from grade
-    // discontinuities they sit on the rendered surface. The residual worst
-    // case is a path CROSSING A TERRACE LIP, where adjacent block planes
-    // differ by metres INSIDE one cell — the rendered mesh itself is a cliff
-    // there, and no draping can lay a flat band on a cliff. That is a ROUTING
-    // problem, not a sampling one: paths must route around lips or emit
-    // stairs (the plaza podium already builds stairs — the pattern exists).
-    // Bounds pin today's truth; the target (< 0.55 m fine-cell, everywhere)
-    // becomes reachable when lip-aware routing lands. docs/TECH_DEBT.md.
-    // Cell-tied tessellation (device: "the walkway needs more geometry")
-    // dropped the FINE-cell worst 6.5 -> 2.28 m: strips now follow the
-    // rendered surface the player actually sees. The coarse 16 m figure grew
-    // by the same move — hugging the real ground means diverging from a
-    // distant tile that smears cliff notches across one cell. That gap
-    // renders only at far LOD (CDLOD morph + distance), and shrinks when
-    // lip-aware routing lands; the bound keeps it from growing unnoticed.
-    CHECK(worstByCell[2] < 2.6);
-    CHECK(worstByCell[8] < 6.5);
-    CHECK(worstByCell[16] < 13.0);
+    measure(parts[drapedSlot(PartId::Path)]);   // yard walks, door walks, alleys
+    std::printf("  %d walking-surface vertices: worst |relative y| %.2f m, "
+                "worst gap once draped %.3f m\n", measured, worstAbs, worstTop);
+    CHECK(parksWithPaths >= 1);
+    CHECK(measured > 100);   // the fixture must actually produce walkways
+    CHECK(worstAbs < 1.0);    // no absolute heights leaked into the dressing
+    // The walking surface sits at its lift: 5-6 cm for walks and alleys, the
+    // park height + 3 cm for a plaza (0.28 m in this fixture).
+    CHECK(worstTop < 0.35);
+    // The paths still GRADE the terrain: their ramps (makeFlattenRamp(..., hw + 0.6,
+    // 2.5) — the only grades with a 2.5 m feather) are in the grade set.
+    int ramps = 0;
+    for (const TerrainFlatten& f : grades)
+        if (std::fabs(f.falloff - 2.5) < 1e-9) ++ramps;
+    CHECK(ramps > 0);
 }
 
 // Skyscrapers v2, M0: the skyline census is the instrument every later

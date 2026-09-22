@@ -17,7 +17,7 @@ namespace engine {
 namespace roads::lanes {
 
 // Bump whenever the lot pass's output changes for the same inputs (the key cannot see code).
-const char* const kLotsBuildTag = "2026-09-16.1";
+const char* const kLotsBuildTag = "2026-09-21.4";   // ground-relative (draped) dressing slots
 
 namespace {
 using bundle::BinReader;

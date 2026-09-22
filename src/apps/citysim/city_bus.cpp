@@ -61,9 +61,23 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
     // Junctions, because a hub wants several streets meeting: a rider changing
     // buses there can also walk somewhere. Spread by farthest-point so the
     // network spans the city, ties on the lower index for determinism.
+    // A STREET junction: a bus stops where a rider can walk, and its legs route on foot-
+    // walkable streets. Once a lane-built city's ramps were welded to their freeway, the
+    // weld nodes became junctions too — and farthest-point spreading put every hub on the
+    // freeway ring around the city, where no walkable leg can reach: metro_lanes derived 0
+    // bus routes. Count only walkable, non-freeway, non-ramp approaches.
+    auto streetJunction = [&](int i) {
+        if (!nav.isJunction(i)) return false;
+        int streets = 0;
+        for (int li : nav.outLinks[static_cast<std::size_t>(i)]) {
+            const engine::NavLink& L = nav.links[static_cast<std::size_t>(li)];
+            if (L.walkable && L.klass != engine::RoadClass::Freeway && L.klass != engine::RoadClass::Ramp) ++streets;
+        }
+        return streets >= 3;
+    };
     std::vector<int> cand;
     for (int i = 0; i < n; ++i)
-        if (nav.isJunction(i)) cand.push_back(i);
+        if (streetJunction(i)) cand.push_back(i);
     if (static_cast<int>(cand.size()) < 3)
         for (int i = 0; i < n; ++i) cand.push_back(i);   // a city with no junctions
 
