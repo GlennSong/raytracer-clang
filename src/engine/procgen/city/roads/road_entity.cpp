@@ -205,6 +205,7 @@ RoadGraph sampleNetGraph(const RoadEntity& road, double minTurnRadius) {
             g.nodes.push_back(nd);
             RoadEdge ge{prev, idx, w, kls, lay};
             ge.spec = e.spec;                    // roads-v2: band model rides the graph
+            ge.oneWay = e.oneWay;                // a carriageway stays one-way (a -> b is travel)
             ge.walkable = ewalk(ei);
             ge.parkOffset = parkOff; ge.parkWidth = parkW;
             g.edges.push_back(ge);
@@ -212,6 +213,7 @@ RoadGraph sampleNetGraph(const RoadEntity& road, double minTurnRadius) {
         }
         RoadEdge geLast{prev, b, w, kls, lay};
         geLast.spec = e.spec;
+        geLast.oneWay = e.oneWay;
         geLast.walkable = ewalk(ei);
         geLast.parkOffset = parkOff; geLast.parkWidth = parkW;
         g.edges.push_back(geLast);               // last -> shared node b

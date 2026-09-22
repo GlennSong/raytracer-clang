@@ -72,7 +72,12 @@ std::vector<Poly2> sceneBlocks(const Result& r, double simplify = 1.5, double mi
 // The two halves of sceneBlocks, for the bundle (ADR-0084): the un-inset holes of the paved surface are a
 // property of the BUILD; the inset is the LEVEL's sidewalk, applied at load.
 std::vector<Ring> pavementHoles(const Result& r, double minArea);
-std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simplify, double insetBy);
+// `minWidth` (0 = the old 2 * (insetBy + 3)): a hole piece narrower than this is a verge or a
+// median, not a block. The holes already stop at the back of the drawn sidewalk, so a lane-built
+// level insets by kBlockMarginBehindSidewalk and passes the width a block must have.
+std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simplify, double insetBy, double minWidth = 0.0);
+constexpr double kBlockMarginBehindSidewalk = 0.3;   // the block begins just behind the drawn sidewalk
+constexpr double kMinBlockWidth = 16.0;              // the old effective rule at a 5 m inset
 
 // `citysim`: the level's citysim block (sidewalk, buildChance, parcel knobs, seed); empty -> defaults.
 // `fromScene`: hand the pass sceneBlocks() (the loader's lanelab path) instead of letting it extract

@@ -508,7 +508,7 @@ static void sculptUnderPad(LotBuilding& g, const Poly2& poly,
 // so once the host lays it on the finished terrain it follows it instead of floating
 // over a dip or cutting into a rise.
 void sculptDoorWalks(const LotBuilding& b, const RoadGraph* roads, Real sidewalkWidth,
-                     std::vector<RenderMesh>* outParts) {
+                     const Poly2* block, std::vector<RenderMesh>* outParts) {
     if (!outParts || !roads || roads->edges.empty() || sidewalkWidth <= 0) return;
     // How far past the sidewalk band this point still is (0 = on it or beyond it).
     auto pastBand = [&](const Vec2& q) {
@@ -536,12 +536,19 @@ void sculptDoorWalks(const LotBuilding& b, const RoadGraph* roads, Real sidewalk
         for (const DoorSpec& d : u.doors) {
             if (d.normal.length() < Real(1e-6)) continue;
             const Vec2 f = normalize(d.normal);
-            // Walk out until the ground under the next step is the sidewalk.
-            const Real gap = pastBand(d.foot);
-            if (gap < Real(0.8)) continue;          // already at the pavement
+            // Walk out until the ground under the next step is the sidewalk: past the sidewalk
+            // band's inner edge AND out of the block. The band is measured from the graph's
+            // centreline and half-width, which on a lane-built city is the lot-clearance width
+            // (padded) — it reads the sidewalk as starting ~1.5 m inside a block that now begins
+            // right behind the drawn sidewalk, and a walk stopped there left a strip of grass
+            // between its end and the pavement. The block edge IS the back of the sidewalk.
+            auto inBlock = [&](const Vec2& q) { return block && block->size() >= 3 && pointInPolygon(*block, q); };
+            auto onPavement = [&](const Vec2& q) { return pastBand(q) <= Real(0.05) && !inBlock(q); };
+            if (onPavement(d.foot + f * Real(0.8))) continue;   // already at the pavement
             Real len = 0;
-            while (len < kMaxWalk && pastBand(d.foot + f * len) > Real(0.05)) len += Real(0.25);
+            while (len < kMaxWalk && !onPavement(d.foot + f * len)) len += Real(0.25);
             if (len < Real(0.8) || len >= kMaxWalk) continue;   // never reaches a street
+            len += Real(0.3);                                    // tuck the end under the sidewalk's edge
             const Vec2 perp(-f.y, f.x);
             const int segs = std::max(1, static_cast<int>(std::ceil(len / kStep)));
             for (int si = 0; si < segs; ++si) {
@@ -1234,6 +1241,24 @@ TerrainFlatten lotPadFlatten(const LotBuilding& lb, double apron, double falloff
         ensureCCW(bound);
         const Real slack = lb.padBound.size() >= 3 ? 0.0 : 0.3;
         Poly2 clipped = grown;
+        // A pad that IS its bound (the parcel, apron 0) is already inside it — and the per-edge
+        // half-plane clip below is only right for a CONVEX bound: a whole-block site's parcel is a
+        // concave polygon of 40-80 edges, and clipping it by each of its own edges cut the pad to a
+        // sliver, so the landmark stood on the bare block grade (floorplan census: a 3768 m2 civic
+        // hall 3.2 m under its uphill ground, no pad at the point at all).
+        // The same holds for any CONCAVE bound: there the pad keeps to its own source polygon (no
+        // apron — it cannot spill past a lot line it never crosses) and skips the clip.
+        bool concave = false;
+        {
+            const std::size_t nb = bound.size();
+            for (std::size_t i = 0; i < nb && !concave; ++i) {
+                const Vec2 e0 = bound[(i + 1) % nb] - bound[i];
+                const Vec2 e1 = bound[(i + 2) % nb] - bound[(i + 1) % nb];
+                if (cross(e0, e1) < -1e-6 * e0.length() * e1.length()) concave = true;   // a right turn on a CCW ring
+            }
+        }
+        if (concave && !bounded) grown = src;
+        if (bounded || concave) clipped.clear();
         for (std::size_t i = 0; i < bound.size() && clipped.size() >= 3; ++i) {
             const Vec2 a = bound[i], b = bound[(i + 1) % bound.size()];
             const Vec2 d = b - a;
@@ -2065,6 +2090,79 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                          2 * fb2.half[1], foot.size(), bf.pp.frontWidth,
                          bf.pp.lotDepth, lots.size(), courts, tiny);
         }
+        // ONE BLOCK, ONE BUILDING (Glenn, 2026-09-21: "Some of the city blocks only create a lot
+        // or two ... if only one lot can fit for whatever reason then it should take up the entire
+        // city block ... I would accept having 1 lot with a large massive building on it rather
+        // than a city block that has just a dinky lot"). A block the parcel walk left with two or
+        // fewer building lots covering under half of it — an odd-shaped block between curving
+        // streets, a wedge by a ramp, a block too shallow for the grain — is ONE site instead:
+        // the whole interior, a landmark on it (architectBlockLandmark), always built.
+        {
+            constexpr Real kWholeBlockMinArea = 900.0;   // a block big enough to be worth a landmark
+            constexpr Real kWholeBlockMinShort = 14.0;   // and wide enough to hold one
+            const Real blockA = std::fabs(area(foot));
+            int viable = 0;
+            Real viableA = 0;
+            for (const Lot& L : lots)
+                if (!L.court && std::fabs(area(L.footprint)) >= bf.pp.minArea) {
+                    ++viable;
+                    viableA += std::fabs(area(L.footprint));
+                }
+            const OBB2 fb = orientedBoundingBox(foot);
+            // ...on ground one pad can seat: the relief limit every lot's pad already obeys
+            // (LotParams::maxPadRelief). Without it three of the lattice metro's whole-block towers
+            // stood on blocks falling more than that and the floorplan census found them buried;
+            // metro_lanes' candidates fall 5-6.6 m along 150 m blocks and seat fine. The block
+            // grade fits a plane to this boundary, so the boundary's relief is the test.
+            const Real kWholeBlockMaxRelief = p.maxPadRelief;
+            Real lo = Real(1e30), hi = Real(-1e30);
+            if (p.ground)
+                for (const Vec2& v : foot) {
+                    const Real g = p.ground(v.x, v.y);
+                    lo = std::min(lo, g);
+                    hi = std::max(hi, g);
+                }
+            const bool seatable = !p.ground || hi - lo <= kWholeBlockMaxRelief;
+            if (!seatable && viable <= 2 && viableA < Real(0.5) * blockA && blockA >= kWholeBlockMinArea &&
+                dbg->wholeBlocks < 24)
+                LOG_INFO << "[citylots] whole block SKIPPED (relief " << (hi - lo) << " m across its edge) "
+                         << static_cast<int>(blockA) << " m2 at " << static_cast<int>(centroid(foot).x) << " "
+                         << static_cast<int>(centroid(foot).y);
+            if (viable <= 2 && viableA < Real(0.5) * blockA && blockA >= kWholeBlockMinArea &&
+                2 * std::min(fb.half[0], fb.half[1]) >= kWholeBlockMinShort && !padOnCarriageway(foot) &&
+                seatable) {
+                Lot whole;
+                whole.footprint = foot;
+                whole.area = blockA;
+                whole.wholeBlock = true;
+                // Faces its longest street edge (the door rule re-aims it at the nearest road).
+                const Real sgn = signedArea(foot) >= 0 ? Real(1) : Real(-1);
+                Real longest = -1;
+                for (std::size_t i = 0; i < foot.size(); ++i) {
+                    const Vec2 d = foot[(i + 1) % foot.size()] - foot[i];
+                    const Real len = d.length();
+                    if (len > longest && len > Real(1e-6)) {
+                        longest = len;
+                        whole.frontage = Vec2(d.y, -d.x) * (sgn / len);   // outward for this winding
+                    }
+                }
+                // WHY it could not be parcelled, in the parcel walk's own words (this block only).
+                if (dbg->wholeBlocks < 24)
+                    LOG_INFO << "[citylots] whole block " << districtName(bf.tag) << " "
+                             << static_cast<int>(blockA) << " m2, "
+                             << static_cast<int>(2 * fb.half[0]) << " x " << static_cast<int>(2 * fb.half[1])
+                             << " m, " << foot.size() << " edges: parcel walk made " << viable
+                             << " lot(s) covering " << static_cast<int>(100 * viableA / blockA)
+                             << "% (rejected edgeShort " << prj.edgeShort << ", shallow " << prj.shallow
+                             << ", tiny " << prj.tiny << ", thin " << prj.thin << "; grain "
+                             << static_cast<int>(bf.pp.frontWidth) << " x " << static_cast<int>(bf.pp.lotDepth)
+                             << " m) at " << static_cast<int>(centroid(foot).x) << " "
+                             << static_cast<int>(centroid(foot).y) << " relief " << (hi - lo);
+                lots.clear();
+                lots.push_back(std::move(whole));
+                ++dbg->wholeBlocks;
+            }
+        }
         for (const Lot& lot : lots) dbg->lots.push_back(lot.footprint);
         bf.foot = foot;
         binfos.push_back(bf);
@@ -2487,7 +2585,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     }
                 }
             }
-            if (cand.landmark < 0 && rng.unit() > buildChance) {
+            if (cand.landmark < 0 && !lot.wholeBlock && rng.unit() > buildChance) {
                 dbg->rejChance++;
                 emitGreen(); continue;   // plaza / gap (landmarks always build)
             }
@@ -2683,6 +2781,22 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     return best;
                 };
                 Poly2 bound = b.lot;
+                // A CONCAVE parcel (a whole-block site: 40-80 edges round a curving block) cannot be
+                // cut by a half-plane per edge — each of its own edges' half-planes slices away the
+                // rest of it, and the bound collapsed to four coincident points, so the landmark on
+                // it got no pad and stood 3-4 m under its uphill ground. There each edge MOVES by its
+                // own amount instead (offsetPolygonEdges); a convex parcel keeps the exact clip.
+                bool lotConcave = false;
+                {
+                    const std::size_t nl = b.lot.size();
+                    const Real sgn = signedArea(b.lot) >= 0 ? Real(1) : Real(-1);
+                    for (std::size_t i = 0; i < nl && !lotConcave; ++i) {
+                        const Vec2 e0 = b.lot[(i + 1) % nl] - b.lot[i];
+                        const Vec2 e1 = b.lot[(i + 2) % nl] - b.lot[(i + 1) % nl];
+                        if (sgn * cross(e0, e1) < -1e-6 * e0.length() * e1.length()) lotConcave = true;
+                    }
+                }
+                std::vector<Real> outward(b.lot.size(), Real(0));
                 for (std::size_t i = 0; i < b.lot.size(); ++i) {
                     const Vec2 a = b.lot[i], c = b.lot[(i + 1) % b.lot.size()];
                     const Vec2 d = c - a;
@@ -2700,8 +2814,19 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         for (const Vec2& v : site) planGap = std::min(planGap, -dot(n, v - a));
                         pullIn = std::max(Real(0), std::min(pullIn, planGap - Real(0.05)));
                     }
+                    // Only ever IN: the convex clip below cannot grow a polygon (a half-plane 0.3 m
+                    // outside an edge cuts nothing), so its "slack" never widened a pad — and a pad
+                    // grown past its lot line outranks the road beside it (the deck-poke gate).
+                    outward[i] = std::min(Real(0), -pullIn);
+                    if (lotConcave) continue;
                     const Poly2 cut = clipHalfPlane(bound, n, dot(n, a) - pullIn);
                     if (cut.size() >= 3) bound = cut;
+                }
+                if (lotConcave) {
+                    // b.lot is CCW here (the loop's outward normals assume it), so the per-edge
+                    // amounts index the same edges offsetPolygonEdges walks.
+                    Poly2 moved = offsetPolygonEdges(b.lot, outward);
+                    if (moved.size() >= 3 && area(moved) > Real(0.5) * area(b.lot)) bound = std::move(moved);
                 }
                 b.padBound = bound;
             }
@@ -2760,6 +2885,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                         shortSide, area(site),
                                         mix(pp.seed,
                                             static_cast<uint32_t>(li) * 7u + 3u))
+                : lot.wholeBlock
+                    ? architectBlockLandmark(tag, shortSide, area(site),
+                                             mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u),
+                                             coreness)
                     : architectPick(tag, shortSide, area(site),
                                     mix(pp.seed,
                                         static_cast<uint32_t>(li) * 7u + 3u),
@@ -3222,6 +3351,18 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                       : (lot.frontage.length() > Real(1e-6) ? lot.frontage : nearestRoad);
                 b.groundY = padPlaneFor(lot.footprint.size() >= 3 ? lot.footprint : (planOk ? plan : site),
                                         probeDir);
+                // A WHOLE-BLOCK site is a street on every side: at its front edge's grade the pad stood
+                // above the streets falling away behind it, and the mesher's footprint dilation lifted
+                // the terrain through their decks (the deck-poke gate: 126 -> 400, worst 4.2 m). Seat
+                // it at the lowest ground on its boundary, below every street around it.
+                if (lot.wholeBlock && p.ground && lot.footprint.size() >= 3) {
+                    Real lowest = b.groundY;
+                    for (std::size_t i = 0; i < lot.footprint.size(); ++i) {
+                        const Vec2 a = lot.footprint[i], c = lot.footprint[(i + 1) % lot.footprint.size()];
+                        lowest = std::min({lowest, p.ground(a.x, a.y), p.ground((a.x + c.x) * 0.5, (a.y + c.y) * 0.5)});
+                    }
+                    b.groundY = lowest;
+                }
             }
             if (const char* at = std::getenv("RT_LOT_AT")) {
                 double px = 0, pz = 0;
@@ -3298,11 +3439,62 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         // Only an edge that really lies beside that road (within a few
                         // metres of its band): an alley-side edge finds a far street.
                         if (best < bandEdge || best > bandEdge + 4.0) continue;
-                        apron[i] = std::max(Real(0), best - bandEdge - Real(0.05));
+                        const Real reach = std::max(Real(0), best - bandEdge - Real(0.05));
+                        // ...and only where the ground it would cover is not ABOVE the plate. Uphill
+                        // of a sloping street the sidewalk's grading stands higher than the lot's
+                        // pad, and a plate stretched over it went under the grass (measured: 28 of
+                        // the lattice metro's 35 buried plates were apron). There the lot line keeps
+                        // its edge and the skirt meets the rising ground.
+                        if (reach > Real(0.05) && p.ground) {
+                            const Vec2 dd = c - a;
+                            const Real dl = dd.length();
+                            if (dl > Real(1e-6)) {
+                                const Vec2 out(dd.y / dl, -dd.x / dl);   // CCW: right normal is outward
+                                const Vec2 q = m + out * reach;
+                                if (p.ground(q.x, q.y) > b.paveY + Real(0.1)) continue;
+                            }
+                        }
+                        apron[i] = reach;
                     }
                     bool any = false;
                     for (Real v : apron) any = any || v > 0.05;
                     if (any) b.pavedLot = offsetPolygonEdges(b.pavedLot, apron);
+                }
+                // ...and on a lane-built city, pulled IN to where the pad is flat. A lane-built
+                // pad is inset by its feather and clipped to the block (clipPadsToBlocks), so
+                // the last metres of a plate that reached the lot line stood on the ramp from
+                // the pad up to the sidewalk — and uphill that ground climbed over the plaza
+                // (metro_lanes: 173 plates under the grass once blocks began right behind the
+                // sidewalk). The plate stops where the flat pad stops; the feather between it
+                // and the sidewalk is graded ground.
+                if (p.padFeatherInside > 0 && bf.foot.size() >= 3 && b.pavedLot.size() >= 3) {
+                    ensureCCW(b.pavedLot);
+                    auto blockDist = [&](const Vec2& q) {
+                        Real best = Real(1e30);
+                        for (std::size_t i = 0; i < bf.foot.size(); ++i) {
+                            const Vec2 a = bf.foot[i], c = bf.foot[(i + 1) % bf.foot.size()];
+                            const Vec2 ac = c - a; const Real l2 = ac.lengthSquared();
+                            Real t = l2 > 1e-12 ? dot(q - a, ac) / l2 : 0.0; t = std::max(Real(0), std::min(Real(1), t));
+                            best = std::min(best, (q - (a + ac * t)).length());
+                        }
+                        return best;
+                    };
+                    // Corners on the block line; the middle may sag off a CURVED block edge by the
+                    // chord's sagitta (a lane city's blocks follow curving streets).
+                    auto onBlockEdge = [&](const Vec2& q, Real tol) { return blockDist(q) < tol; };
+                    std::vector<Real> pull(b.pavedLot.size(), Real(0));
+                    bool anyPull = false;
+                    for (std::size_t i = 0; i < b.pavedLot.size(); ++i) {
+                        const Vec2 a = b.pavedLot[i], c = b.pavedLot[(i + 1) % b.pavedLot.size()];
+                        if (onBlockEdge(a, Real(0.6)) && onBlockEdge(c, Real(0.6)) && onBlockEdge((a + c) * 0.5, Real(2.5))) {
+                            pull[i] = -p.padFeatherInside;
+                            anyPull = true;
+                        }
+                    }
+                    if (anyPull) {
+                        Poly2 pulled = offsetPolygonEdges(b.pavedLot, pull);
+                        if (pulled.size() >= 3 && area(pulled) > Real(0.3) * area(b.pavedLot)) b.pavedLot = std::move(pulled);
+                    }
                 }
                 if (courtNotch.size() >= 3) b.open.push_back({courtNotch, OpenKind::Courtyard});
                 if (plazaPoly.size() >= 3) {
@@ -3490,7 +3682,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                            mix(pp.seed, static_cast<uint32_t>(li) * 29u + 11u),
                            outParts);
             else
-                sculptDoorWalks(b, roads, p.sidewalkWidth, outParts);
+                sculptDoorWalks(b, roads, p.sidewalkWidth, &bf.foot, outParts);
             pruneTreeSpotsIntoRoad(b.treeSpots);
             out.push_back(std::move(b));
         }
@@ -3531,7 +3723,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         const double coverPct =
             blockArea > 1.0 ? 100.0 * builtArea / blockArea : 0.0;
         LOG_INFO << "[citylots] " << dbg->blocks.size() << " blocks -> "
-                 << dbg->lots.size() << " lots, " << nBuilt << " built, "
+                 << dbg->lots.size() << " lots (" << dbg->wholeBlocks << " whole-block landmark sites), " << nBuilt << " built, "
                  << nGreen << " green, " << nCourt << " courts | COVER "
                  << static_cast<int>(builtArea) << " m2 of "
                  << static_cast<int>(blockArea) << " m2 buildable ("

@@ -27,6 +27,10 @@ namespace roads::lanes {
 RoadClass classOf(const EdgeSpec& e);
 
 RoadEntity roadTwin(const Result& r, double nodeSpacing = 60.0, bool forLots = false);
+// The nav twin carries a deck's TRAVEL width (what traffic spreads its lanes across); the lot
+// pass's right-of-way around a freeway or ramp is that plus this: shoulders, the twin tolerance
+// and the earthwork band either side.
+double twinRightOfWayPad(const Result& r, RoadClass k);
 
 }  // namespace roads::lanes
 }  // namespace engine

@@ -24,6 +24,9 @@ struct Lot {
     bool  court = false;    // a block-interior court (plaza/park), not buildable —
                             // the frontage parceler emits this for the leftover
                             // core of a deep block (city-pipeline v2 step 10)
+    bool  wholeBlock = false;   // the whole block as ONE site (the parcel walk
+                                // could not fill it): the lot pass builds a
+                                // landmark on it (architectBlockLandmark)
 };
 
 struct ParcelParams {

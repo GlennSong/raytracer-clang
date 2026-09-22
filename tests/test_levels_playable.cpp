@@ -466,6 +466,39 @@ LevelFacts inspect(const std::string& name) {
                                 f.name.c_str(),
                                 buried && gapped ? "BURIED+GAP" : (buried ? "BURIED" : "GAP"),
                                 c.x, c.y, c.x, c.y);
+                    if (std::getenv("RT_CENSUS_WHY")) {
+                        // The deepest wall point and who owns the ground there.
+                        double deep = -1e30; Vec2 at(0, 0);
+                        for (std::size_t i = 0; i < prism.plan.size(); ++i) {
+                            const Vec2& a = prism.plan[i];
+                            const Vec2& b = prism.plan[(i + 1) % prism.plan.size()];
+                            const int steps = std::max(1, static_cast<int>(std::ceil((b - a).length())));
+                            for (int st = 0; st <= steps; ++st) {
+                                const Vec2 q = a + (b - a) * (static_cast<double>(st) / steps);
+                                const double bur = meshGround(q.x, q.y) - baseY;
+                                if (bur > deep) { deep = bur; at = q; }
+                            }
+                        }
+                        std::printf("    [census]     %s, plan %.0f m2, baseY %.2f, deepest %.2f m at (%.1f, %.1f):",
+                                    prism.type.c_str(), std::fabs(area(prism.plan)), baseY, deep, at.x, at.y);
+                        for (const TerrainFlatten& fl : cfg.params.flatten) {
+                            if (at.x < fl.minX - fl.falloff || at.x > fl.maxX + fl.falloff ||
+                                at.y < fl.minZ - fl.falloff || at.y > fl.maxZ + fl.falloff) continue;
+                            Poly2 poly;
+                            for (const Vec3& v : fl.polygon) poly.push_back(Vec2(v.x, v.z));
+                            std::printf(" [p%d %s %.2f]", fl.priority, pointInPolygon(poly, at) ? "IN" : "f",
+                                        fl.planeY(at.x, at.y));
+                        }
+                        int padsAtCentre = 0;
+                        double padY = 0;
+                        for (const TerrainFlatten& fl : cfg.params.flatten) {
+                            if (fl.priority < 2) continue;
+                            Poly2 poly;
+                            for (const Vec3& v : fl.polygon) poly.push_back(Vec2(v.x, v.z));
+                            if (pointInPolygon(poly, c)) { ++padsAtCentre; padY = fl.planeY(c.x, c.y); }
+                        }
+                        std::printf(" | pads covering its centre: %d (plane %.2f)\n", padsAtCentre, padY);
+                    }
                 }
                 if (buried) ++f.censusBurials;
                 if (gapped) ++f.censusGaps;
@@ -2727,6 +2760,23 @@ TEST_CASE(lot_dressing_is_planted_on_the_ground) {
             std::printf("    [dressing]   buried plates: %zu, deepest point inside its block for %d, "
                         "outside (apron) for %zu\n",
                         buriedPlateAt.size(), inBlock, buriedPlateAt.size() - inBlock);
+            // WHO OWNS THE GROUND at the first few: every flatten region whose footprint (or feather)
+            // reaches the point, with its plane there — the winner is what the plate went under.
+            for (std::size_t k = 0; k < buriedPlateAt.size() && k < 3; ++k) {
+                const Vec3 q = buriedPlateAt[k];
+                std::printf("    [dressing]     plate top %.2f, drawn ground %.2f at (%.1f, %.1f):", q.y,
+                            drawn(q.x, q.z), q.x, q.z);
+                for (const engine::TerrainFlatten& f : cfg->params.flatten) {
+                    if (q.x < f.minX - f.falloff || q.x > f.maxX + f.falloff || q.z < f.minZ - f.falloff ||
+                        q.z > f.maxZ + f.falloff) continue;
+                    Poly2 poly;
+                    for (const Vec3& v : f.polygon) poly.push_back(Vec2(v.x, v.z));
+                    const bool in = pointInPolygon(poly, Vec2(q.x, q.z));
+                    std::printf(" [prio %d %s plane %.2f falloff %.1f]", f.priority, in ? "IN" : "feather",
+                                f.planeY(q.x, q.z), f.falloff);
+                }
+                std::printf("\n");
+            }
         }
         CHECK(foliage.pieces > 0);
         CHECK(path.pieces > 0);
@@ -2734,13 +2784,12 @@ TEST_CASE(lot_dressing_is_planted_on_the_ground) {
         CHECK(path.floating == 0);
         // Walks, alleys and park paths: never under the grass.
         CHECK(path.buried - static_cast<int>(buriedPlateAt.size()) == 0);
-        // PAVED PLATES, a RATCHET for now: a lane-built block's pad is inset by its 2 m
-        // feather and clipped to the block (clipPadsToBlocks), so the last metres of a plate
-        // that reaches its lot line stand on the feather — and on the uphill side the ground
-        // there climbs over the plaza. Same strip as the block-inset question (TECH_DEBT,
-        // "blocks inset by the sidewalk that was actually built"); it predates the draped
-        // dressing (214 of metro_lanes' plates before it, 155 after). No worse than today.
-        const std::size_t kPlateResidue = std::string(name) == "metro_lanes.json" ? 155 : 22;
+        // PAVED PLATES, a RATCHET for now. Two causes found and fixed (2026-09-21): a lane-built
+        // pad was shrunk by its feather on EVERY side, so plates stood on the ramp at every party
+        // line (metro_lanes 162 -> 33 once pads hold their whole parcel), and plate aprons were
+        // stretched over sidewalk grading that stood above the plaza (lattice 35 -> 20). What is
+        // left is steep ground at block edges and plazas on neighbours' feathers. No worse.
+        const std::size_t kPlateResidue = std::string(name) == "metro_lanes.json" ? 33 : 20;
         CHECK(buriedPlateAt.size() <= kPlateResidue);
     }
 }
@@ -2920,6 +2969,61 @@ TEST_CASE(freeway_census_links_routes_and_traffic) {
             if (!a.moving || a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size())) continue;
             ++onClass[klassName(nav.links[static_cast<std::size_t>(a.route.links[a.leg])].klass)];
         }
+        // WHAT GLENN SAW (2026-09-21): "turning around between freeways which is not possible
+        // since there are walls" and "cars floating alongside the freeway". So: no planned route
+        // takes a freeway/ramp link straight back along its reverse, no freeway/ramp link has a
+        // reverse at all, and a car on one is inside the drawn deck.
+        std::vector<const engine::RoadDeckField*> fwDecks;
+        world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { fwDecks.push_back(&d.field); });
+        int deckLinks = 0, twoWayDeck = 0, uturnRoutes = 0, onDeckCars = 0, offDeckCars = 0;
+        double worstOff = 0;
+        Vec2 worstOffAt(0, 0);
+        {
+            std::set<std::pair<int, int>> dir;
+            for (const engine::NavLink& l : nav.links) dir.insert({l.from, l.to});
+            for (const engine::NavLink& l : nav.links) {
+                if (l.klass != engine::RoadClass::Freeway && l.klass != engine::RoadClass::Ramp) continue;
+                ++deckLinks;
+                if (dir.count({l.to, l.from})) ++twoWayDeck;
+            }
+        }
+        for (std::size_t ai = 0; ai < city.sim().agents().size(); ++ai) {
+            const auto& a = city.sim().agents()[ai];
+            if (a.archetype != citysim::Agent::Mode::Driver) continue;
+            const auto& rl = a.route.links;
+            for (std::size_t q = 1; q < rl.size(); ++q) {
+                const auto& l0 = nav.links[static_cast<std::size_t>(rl[q - 1])];
+                const auto& l1 = nav.links[static_cast<std::size_t>(rl[q])];
+                const bool deck0 = l0.klass == engine::RoadClass::Freeway || l0.klass == engine::RoadClass::Ramp;
+                if (deck0 && l1.from == l0.to && l1.to == l0.from) { ++uturnRoutes; break; }
+            }
+            if (!a.moving || a.leg < 0 || a.leg >= static_cast<int>(rl.size()) || fwDecks.empty()) continue;
+            const auto& cur = nav.links[static_cast<std::size_t>(rl[a.leg])];
+            if (cur.klass != engine::RoadClass::Freeway && cur.klass != engine::RoadClass::Ramp) continue;
+            double depth = 0;
+            for (const engine::RoadDeckField* d : fwDecks) depth = std::max(depth, d->depthInside(a.pos.x, a.pos.y));
+            if (depth > 0) { ++onDeckCars; continue; }
+            ++offDeckCars;
+            // How far off: step outward until the deck is found (0.25 m steps, up to 20 m).
+            double off = 20.0;
+            for (double r = 0.25; r <= 20.0; r += 0.25) {
+                bool hit = false;
+                for (int k = 0; k < 16 && !hit; ++k) {
+                    const double ang = k * 0.3926991;
+                    for (const engine::RoadDeckField* d : fwDecks)
+                        if (d->depthInside(a.pos.x + r * std::cos(ang), a.pos.y + r * std::sin(ang)) > 0) { hit = true; break; }
+                }
+                if (hit) { off = r; break; }
+            }
+            if (off > worstOff) { worstOff = off; worstOffAt = a.pos; }
+        }
+        std::printf("    [freeway] %-18s carriageways: %d freeway/ramp links, %d with a reverse twin | %d routes turn "
+                    "back on one | cars on them: %d on the deck, %d off it (worst %.2f m off at %.0f,%.0f)\n",
+                    name, deckLinks, twoWayDeck, uturnRoutes, onDeckCars, offDeckCars, worstOff, worstOffAt.x,
+                    worstOffAt.y);
+        CHECK(twoWayDeck == 0);
+        CHECK(uturnRoutes == 0);
+        CHECK(offDeckCars == 0);
         std::string now;
         for (const auto& [k, v] : onClass) now += " " + k + " " + std::to_string(v);
         std::printf("    [freeway] %-18s traffic after 3 min: %d drivers, moving on:%s | %d planned routes touch "
@@ -2929,6 +3033,75 @@ TEST_CASE(freeway_census_links_routes_and_traffic) {
         if (byClass.count("freeway")) {
             CHECK(viaFreeway * 4 >= routed);        // metro_lanes: 124 of 184
             CHECK(onClass["freeway"] > 0);          // metro_lanes: 17 cars at 3 min
+        }
+    }
+}
+
+// THE BLOCK CENSUS (Glenn, 2026-09-21: "Some of the city blocks only create a lot or two. I'd be
+// curious as to why that is ... I would accept having 1 lot with a large massive building on it
+// rather than a city block that has just a dinky lot"). Per block: how many lots the parcel walk
+// laid, how many buildings stand, and what share of the block they cover — so a thin block names
+// itself with its size and shape.
+TEST_CASE(block_census_lots_per_block) {
+    const char* kCities[] = {"metro_lanes.json", "metro_v2_test.json"};
+    for (const char* name : kCities) {
+        std::unique_ptr<Renderer> renderer = Renderer::create();
+        RendererMeshUploader uploader(*renderer);
+        AssetManager assets(uploader);
+        World world;
+        RenderView view;
+        if (!LevelLoader::load(levelsDir() + "/" + name, world, *renderer, view, assets, false)) {
+            CHECK(false);
+            continue;
+        }
+        const engine::CityPlanDebug* plan = nullptr;
+        world.each<engine::CityPlanDebug>([&](Entity, engine::CityPlanDebug& p) { plan = &p; });
+        CHECK(plan != nullptr);
+        if (!plan) continue;
+        struct Row { int lots = 0, buildings = 0; double area = 0, built = 0, minWidth = 0; Vec2 c{0, 0}; };
+        std::vector<Row> rows(plan->blocks.size());
+        for (std::size_t b = 0; b < plan->blocks.size(); ++b) {
+            const Poly2& bp = plan->blocks[b];
+            rows[b].area = std::fabs(area(bp));
+            rows[b].c = centroid(bp);
+            const engine::OBB2 ob = engine::orientedBoundingBox(bp);
+            rows[b].minWidth = 2.0 * std::min(ob.half[0], ob.half[1]);
+        }
+        auto blockOf = [&](const Vec2& q) {
+            for (std::size_t b = 0; b < plan->blocks.size(); ++b)
+                if (pointInPolygon(plan->blocks[b], q)) return static_cast<int>(b);
+            return -1;
+        };
+        for (const Poly2& l : plan->lots) {
+            const int b = blockOf(centroid(l));
+            if (b >= 0) ++rows[static_cast<std::size_t>(b)].lots;
+        }
+        for (const auto& pr : plan->prisms) {
+            if (pr.plan.size() < 3) continue;
+            const int b = blockOf(centroid(pr.plan));
+            if (b < 0) continue;
+            ++rows[static_cast<std::size_t>(b)].buildings;
+            rows[static_cast<std::size_t>(b)].built += std::fabs(area(pr.plan));
+        }
+        int hist[5] = {0, 0, 0, 0, 0};   // 0, 1, 2, 3-5, 6+ buildings
+        double thinArea = 0, allArea = 0;
+        std::vector<std::size_t> thin;
+        for (std::size_t b = 0; b < rows.size(); ++b) {
+            const Row& r = rows[b];
+            allArea += r.area;
+            ++hist[r.buildings == 0 ? 0 : r.buildings == 1 ? 1 : r.buildings == 2 ? 2 : r.buildings <= 5 ? 3 : 4];
+            if (r.buildings <= 2 && r.area > 800.0) { thin.push_back(b); thinArea += r.area; }
+        }
+        std::printf("    [blocks] %-18s %zu blocks by buildings: 0:%d 1:%d 2:%d 3-5:%d 6+:%d | blocks > 800 m2 with <= 2 "
+                    "buildings: %zu (%.0f%% of block area)\n",
+                    name, rows.size(), hist[0], hist[1], hist[2], hist[3], hist[4], thin.size(),
+                    allArea > 0 ? 100.0 * thinArea / allArea : 0.0);
+        std::sort(thin.begin(), thin.end(), [&](std::size_t a, std::size_t b) { return rows[a].area > rows[b].area; });
+        for (std::size_t i = 0; i < thin.size() && i < 12; ++i) {
+            const Row& r = rows[thin[i]];
+            std::printf("    [blocks]   %6.0f m2, narrow side %5.1f m: %d lots, %d buildings covering %4.1f%%  at %.0f %.0f\n",
+                        r.area, r.minWidth, r.lots, r.buildings, r.area > 0 ? 100.0 * r.built / r.area : 0.0, r.c.x,
+                        r.c.y);
         }
     }
 }

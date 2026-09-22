@@ -22,6 +22,9 @@ struct Line {
     // Which lab edge this line came from, and whether it carries that edge's FROM / TO end
     // (a ramp is split into at-grade and elevated runs; only the outer runs hold its ends).
     std::string edgeId; bool holdsFrom = false, holdsTo = false;
+    // ONE-WAY lab edges (a freeway carriageway: 3 forward, 0 back; a ramp) stay one-way in the
+    // twin, pointing the way traffic flows; `reversed` when the lab's lanes run against the spine.
+    bool oneWay = false, reversed = false;
 };
 
 
@@ -68,6 +71,14 @@ RoadClass classOf(const EdgeSpec& e) {
     if (e.cls == "collector") return RoadClass::Collector;
     if (e.cls == "alley") return RoadClass::Alley;
     return RoadClass::Local;
+}
+
+double twinRightOfWayPad(const Result& r, RoadClass k) {
+    const char* cls = k == RoadClass::Freeway ? "freeway" : k == RoadClass::Ramp ? "ramp" : nullptr;
+    if (!cls) return 0.0;
+    auto it = r.graph.classes.find(cls);
+    const double shoulder = it != r.graph.classes.end() ? it->second.shoulder : 0.0;
+    return 2.0 * (shoulder + kTwinTolerance + r.graph.rules.conformW);
 }
 
 RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots) {
@@ -131,6 +142,14 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots) {
             L.holdsFrom = std::fabs(e.s.front() - whole->s.front()) < 1e-6;
             L.holdsTo = std::fabs(e.s.back() - whole->s.back()) < 1e-6;
         }
+        // DIRECTION (Glenn, 2026-09-21: "I see them turning around between freeways which is not
+        // possible since there are walls ... cars that are floating alongside the freeway"). A lab
+        // freeway is two one-way carriageways, each its own edge; the twin made every edge two-way,
+        // so a car could take a carriageway against the flow and turn round at any node, and — lanes
+        // filling the right half of what it took for a two-way road — drove half a carriageway off
+        // the deck. The one-way flag rides to the nav graph; the sim centres a one-way link's lanes.
+        L.oneWay = (e.lanes.fwd > 0) != (e.lanes.back > 0);
+        L.reversed = e.lanes.fwd == 0 && e.lanes.back > 0;
         const bool deckEarthwork = L.deck;   // the width padding stays with the real deck classes
         if (forLots && L.deck) { L.k = RoadClass::Local; L.deck = false; }   // a face boundary, planarised with the streets
         // Paved width for streets. Freeways and ramps carry their EARTHWORK too: the conform band grades
@@ -139,6 +158,12 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots) {
         // + clearance from every sampled centreline, so the width is where the embankment lives.
         const RoadClassSpec& cs = atGradeRamp ? r.graph.classes.at(r.graph.find(e.id)->cls) : r.graph.cls(e);
         L.w = 2.0 * (r.graph.hw(atGradeRamp ? *r.graph.find(e.id) : e) + cs.shoulder + kTwinTolerance + (deckEarthwork ? r.graph.rules.conformW : 0.0));
+        // ...except for TRAFFIC on a deck. The nav graph takes this width as the carriageway a
+        // one-way link's lanes are spread across, and a freeway's lot-clearance band (earthwork,
+        // shoulders, tolerance: ~31 m) put three lanes 10 m apart. The nav twin carries the
+        // travel lanes' own width; the right-of-way the lot pass zones around gets its padding
+        // back where it is built (twinRightOfWayPad, city_producer).
+        if (deckEarthwork && !forLots) L.w = 2.0 * r.graph.hw(e);
         // THE CROSS-SECTION, so the city can park on it. `w` above is the LOT clearance band —
         // padded by the twin tolerance and, on a deck, by the whole earthwork — and is not a
         // street's actual asphalt. The sim's kerbside bays are laid in a road's own Parking band
@@ -302,7 +327,11 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots) {
             const int n = net.graph.addNode(p, tol);
             if (L.deck) { net.graph.nodes[static_cast<size_t>(n)].elev = z; net.graph.nodes[static_cast<size_t>(n)].elevAbsolute = true; }
             if (prev >= 0 && prev != n) {
-                net.graph.addEdge(prev, n, L.w, L.k);
+                const size_t before = net.graph.edges.size();
+                if (L.oneWay && L.reversed) net.graph.addEdge(n, prev, L.w, L.k);
+                else net.graph.addEdge(prev, n, L.w, L.k);
+                if (net.graph.edges.size() == before) { prev = n; prevS = st; return; }   // a duplicate: nothing new to tag
+                net.graph.edges.back().oneWay = L.oneWay;
                 net.graph.edges.back().spec = specIdx;   // the band model rides the graph (roads-v2)
                 // outside the edge's lots_range the street is right-of-way: no block frontage, no rim lots
                 // (a landing street beyond the freeway; an arterial's run outside the ring). `baked` is
@@ -341,6 +370,8 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots) {
                 const bool near0 = d0 < 6.0 && inc[static_cast<size_t>(u0)].size() != 2, near1 = d1 < 6.0 && inc[static_cast<size_t>(u1)].size() != 2;
                 if (!near0 && !near1) continue;
                 RoadEdge merged = e0; merged.a = u0; merged.b = u1; merged.baked = e0.baked || e1.baked;
+                // A one-way pair keeps the direction of travel: if traffic runs u1 -> v -> u0, so does the merge.
+                if (e0.oneWay && e0.a == static_cast<int>(v)) std::swap(merged.a, merged.b);
                 const int i0 = inc[v][0], i1 = inc[v][1];
                 E[static_cast<size_t>(i0)] = merged; E.erase(E.begin() + i1); changed = true;
             }

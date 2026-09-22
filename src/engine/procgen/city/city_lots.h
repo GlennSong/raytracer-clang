@@ -150,6 +150,10 @@ struct LotParams {
     // edges, closing the grass strip the block inset leaves between the lot line
     // and the sidewalk. 0 = unknown, the plate stops at the lot line.
     Real sidewalkWidth = 0.0;
+    // A lane-built city's pads are inset by this feather and clipped to the block
+    // (clipPadsToBlocks): paved plates pull their block-edge sides in by it so
+    // they stand on flat pad, not on the ramp up to the sidewalk. 0 = lattice.
+    Real padFeatherInside = 0.0;
     Vec2 center{0, 0};        // downtown centre for the radial zoning
     Real innerRadius = 55.0;  // < this: downtown (offices/shops)
     Real midRadius = 135.0;   // < this: mixed; beyond: residential
@@ -252,6 +256,7 @@ struct LotParams {
 // interiors the parcel pass actually subdivided (post road-margin inset) and every
 // lot it produced (built or not) — so "blocks → lots → buildings" can be SEEN.
 struct LotPlanDebug {
+    int wholeBlocks = 0;         // blocks the parcel walk could not fill, given to ONE landmark
     std::vector<Poly2> blocks;   // buildable block interiors (inset from the roads)
     std::vector<Poly2> lots;     // every parcelled lot
     // Stage-10 alleys cut this build: centreline segments (plan view + tests).

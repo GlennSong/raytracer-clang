@@ -17,7 +17,7 @@ namespace engine {
 namespace roads::lanes {
 
 // Bump whenever the lot pass's output changes for the same inputs (the key cannot see code).
-const char* const kLotsBuildTag = "2026-09-21.4";   // ground-relative (draped) dressing slots
+const char* const kLotsBuildTag = "2026-09-21.17";   // ground-relative (draped) dressing slots; blocks behind the drawn sidewalk; door walks reach it
 
 namespace {
 using bundle::BinReader;
@@ -119,17 +119,18 @@ NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInput
     const nlohmann::json cs = in.level.value("citysim", nlohmann::json::object());
     const double sidewalk = cs.is_object() ? cs.value("sidewalk", 4.0) : 4.0;
     // The loader's rules, one for one (LevelLoader::loadLanesEntity + growCityLots's lanelab branch):
-    // the lab's grid IS the ground, the blocks are the pavement holes inset by the sidewalk, no nets.
+    // the lab's grid IS the ground, the blocks are the pavement holes (sidewalks included) inset by a margin, no nets.
     HeightField ground;
     if (city.hasTerrain) {
         auto grid = std::make_shared<HeightGrid>();
         grid->x0 = city.ground.x0; grid->y0 = city.ground.y0; grid->res = city.ground.res; grid->nx = city.ground.nx; grid->ny = city.ground.ny; grid->z = city.ground.z;
         ground = [grid](double x, double z) { return grid->sample(x, z); };
     }
-    const std::vector<Poly2> blocks = blocksFromHoles(city.holes, 1.5, sidewalk);
+    const std::vector<Poly2> blocks = blocksFromHoles(city.holes, 1.5, kBlockMarginBehindSidewalk, kMinBlockWidth);
     Vec2 spawn; const bool haveSpawn = authoredSpawnXZ(in.level, spawn);
     LotGrowSetup s = lotGrowSetupForLevel(cs, in.levelDir, ground, {}, nullptr, 0.0, haveSpawn ? &spawn : nullptr);
-    s.lp.roadMargin = 0;   // the lab's blocks are exact to the kerb and already inset by the sidewalk
+    s.lp.roadMargin = 0;   // the lab's blocks already begin behind the drawn sidewalk
+    s.lp.padFeatherInside = static_cast<Real>(lanesPadFalloff(sidewalk));   // plates stand on the flat pad (loader rule)
     s.lp.sidewalkRise = engine::roads::lanes::lanesSidewalkRise();   // paving meets the lab's sidewalk (ADR-0086)
     const auto t0 = std::chrono::steady_clock::now();
     NetLotResult r;

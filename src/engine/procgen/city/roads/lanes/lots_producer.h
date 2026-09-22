@@ -36,7 +36,7 @@ void registerLotsProducer();   // idempotent
 struct LotsCityInputs {
     bool hasTerrain = false;
     bundle::HeightGridBlob ground;
-    std::vector<Ring> holes;   // un-inset pavement holes; blocksFromHoles(holes, 1.5, citysim.sidewalk) at grow time
+    std::vector<Ring> holes;   // pavement holes (they stop at the back of the drawn sidewalk); blocksFromHoles(holes, 1.5, kBlockMarginBehindSidewalk, kMinBlockWidth) at grow time
 };
 
 // ONE derivation: what the producer runs, exposed for tests. `report` (optional) receives the counts.

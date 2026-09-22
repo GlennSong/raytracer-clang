@@ -175,6 +175,12 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
                              uint32_t seed, Real coreness = 0,
                              const ArchetypeBook* book = nullptr);
 
+// A WHOLE BLOCK the parcel walk could not fill, as ONE landmark site: a tower in a plaza, a
+// podium tower on the whole block or a stepped mass on its polygon downtown; a mansion block in
+// a residential quarter; a grand hall in an old town; a works in industry. Deterministic in seed.
+BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area, uint32_t seed,
+                                      Real coreness = 0);
+
 }  // namespace engine
 
 #endif

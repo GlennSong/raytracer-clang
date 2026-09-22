@@ -549,8 +549,10 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
     }
     if (!built.row.edges.empty()) g_lanes.row = built.row;
     if (!built.holes.empty()) {
-        // Pre-inset by the sidewalk (robust); the lot pass then gets roadMargin 0.
-        g_lanes.blocks = engine::roads::lanes::blocksFromHoles(built.holes, 1.5, g_lanes.sidewalk);
+        // The holes stop at the back of the drawn sidewalk; the block begins just behind it and the
+        // lot pass gets roadMargin 0. (Same derivation as the terrain pre-pass, below.)
+        g_lanes.blocks = engine::roads::lanes::blocksFromHoles(built.holes, 1.5, engine::roads::lanes::kBlockMarginBehindSidewalk,
+                                                               engine::roads::lanes::kMinBlockWidth);
         LOG_INFO << "[roads] " << g_lanes.blocks.size() << " city blocks from " << built.holes.size()
                  << " pavement holes";
     }
@@ -2297,7 +2299,7 @@ static GrownLots growCityLots(
             // ...but NOT the lattice's clearance. `s.roadClear` is sidewalk + 0.6 m from each
             // centreline's half-width — the lattice's way of keeping a building off a pavement
             // its blocks do not know about. A lane-built block is cut from the BUILT pavement
-            // (blocksFromHoles insets the hole by the sidewalk + 1.5 m), so the pavement is
+            // (pavementHoles stops at the back of the drawn sidewalk), so the pavement is
             // already outside it and the lattice clearance counted it twice: measured on
             // metro_lanes, 1082 buildings with 0 extra clearance against 977 with it (main,
             // which never passed the graph, had 1012). Buildings still clear the carriageway
@@ -2307,6 +2309,7 @@ static GrownLots growCityLots(
             // own net's look and a lane-built city never supplied (see LanesPublished).
             if (s.lp.sidewalkWidth <= 0 && g_lanes.pavedSidewalk > 0)
                 s.lp.sidewalkWidth = static_cast<engine::Real>(g_lanes.pavedSidewalk);
+            s.lp.padFeatherInside = static_cast<engine::Real>(engine::roads::lanes::lanesPadFalloff(g_lanes.sidewalk));
             r.lots = engine::growLotBuildings(g_lanes.blocks, s.lp, &r.plan, s.planOnly ? nullptr : &r.parts,
                                               lotRoads, kLanesLotRoadClear,
                                               (s.wantFlat && !s.planOnly) ? &r.flatParts : nullptr, &r.gradeFlatten);
@@ -2722,7 +2725,10 @@ bool LevelLoader::load(const std::string& path,
             // re-derives the same blocks from the same products (deterministic), so nothing disagrees.
             g_lanes.ground = [grid](double x, double z) { return grid->sample(x, z); };
             g_lanes.sidewalk = root.contains("citysim") && root["citysim"].is_object() ? root["citysim"].value("sidewalk", 4.0) : 4.0;
-            g_lanes.blocks = engine::roads::lanes::blocksFromHoles(cp.holes, 1.5, g_lanes.sidewalk);
+            // The holes stop at the back of the DRAWN sidewalk (pavementHoles), so the block begins
+            // right behind it — not `citysim.sidewalk` further in, which left a grass strip.
+            g_lanes.blocks = engine::roads::lanes::blocksFromHoles(cp.holes, 1.5, engine::roads::lanes::kBlockMarginBehindSidewalk,
+                                                                   engine::roads::lanes::kMinBlockWidth);
             g_lanes.row = cp.row;
             g_lanes.deck = cp.deck;
             g_lanes.deck.buildIndex();      // queried by the scatter, below, and by the poke report

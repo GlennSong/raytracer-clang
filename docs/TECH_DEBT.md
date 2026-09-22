@@ -978,12 +978,44 @@ Gates: `scenery_is_planted_on_the_ground`, `lot_dressing_is_planted_on_the_groun
 The old tile-fidelity unit test became `walkways_are_emitted_on_the_ground_the_host_draws`.
 
 Open, ratcheted:
-- **Paved plates under the grass** (metro_lanes 155, metro_v2_test 22, worst
-  ~4.7 m). A lane-built pad is inset by its 2 m feather and clipped to the
-  block (`clipPadsToBlocks`); a plate reaching its lot line stands on the
-  feather, and uphill the ground climbs over it (129 of metro_lanes' 155 go
-  under inside their block). Same strip as "blocks inset by the sidewalk that
-  was actually built" — fix together.
+- **Paved plates under the grass — mostly fixed (2026-09-21, round 2).** Two
+  causes: a lane-built pad was shrunk by its 2 m feather on EVERY side
+  (`clipPadsToBlocks`), leaving a strip at each party line no pad owned, so
+  the outer 2 m of every plate stood on a ramp and a higher neighbour buried
+  it — pads now hold their whole parcel and give up the feather only at the
+  block edge; and plate aprons were stretched over sidewalk grading that
+  stood above the plaza — now skipped there. metro_lanes 162 -> 33,
+  metro_v2_test 35 -> 20 (ratcheted). Left: steep block edges, plazas on
+  neighbours' feathers. (`offsetPolygonEdges` also gained a spike guard: two
+  nearly collinear edges offset by different amounts met 290 m away.)
+- **Blocks begin behind the sidewalk that was drawn** (was: `citysim.sidewalk`
+  inset on top of the kerb, a strip of grass). `pavementHoles` unions the
+  drawn sidewalk; blocks inset 0.3 m (`kBlockMarginBehindSidewalk`), strips
+  under 16 m dropped (`kMinBlockWidth`). A lane-built level can set its
+  sidewalks per class (`road.sidewalks`); metro_lanes: arterial 6, collector
+  5.5, local 5 m. Door walks end at the back of the sidewalk.
+- **One block, one building.** A block the parcel walk leaves with <= 2 lots
+  covering under half of it (>= 900 m², >= 14 m wide) becomes ONE site with
+  a landmark (`architectBlockLandmark`: tower in a plaza / podium tower /
+  stepped mass on the block polygon downtown, mansion block residential),
+  on ground one pad can seat (`maxPadRelief`), its pad at the LOWEST grade
+  on its boundary (a street on every side: at its front edge's grade it
+  stood above the streets behind it and the mesher's dilation poked their
+  decks — 400 pokes, now 86); metro_lanes 6, metro_v2_test 19. The causes, logged per block: curving
+  streets arrive as 40-80 short segments the frontage walk rejects
+  (edgeShort), and the downtown grain (45-55 x 51-60 m) is deeper than 60 m
+  blocks (shallow). The real fix for both is a parcel walk that fronts a
+  curved street as one frontage — open.
+- **Concave parcels had no pad — FIXED (2026-09-21).** `padBound` (the
+  parcel, street sides pulled in 1 m) was cut with a half-plane per parcel
+  edge, which only works on a convex parcel; on a concave one it collapsed to
+  a few coincident points, so the building got NO pad and stood on the raw
+  block grade. That was every census burial the cities had shipped with
+  (hillcity 5, metropolis 4, living_city 2, ...), and the whole-block
+  landmarks exposed it (a 3768 m2 civic hall 3.2 m under its uphill ground).
+  Concave parcels now move each edge by its own amount (`offsetPolygonEdges`);
+  `lotPadFlatten` skips the same convex-only clip. Census: 0 burials on every
+  level (was 9 failing levels); one pre-existing gap on metro_v2_test remains.
 - **Lot depth derived from the block — tried, measured, reverted.** Halving
   the depth wherever two full rows could not both fit shrank ordinary blocks
   (lattice metro 1396 -> 1548 smaller buildings for the same floor area; 90 m

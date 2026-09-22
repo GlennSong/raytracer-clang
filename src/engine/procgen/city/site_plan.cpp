@@ -230,7 +230,18 @@ Poly2 offsetPolygonEdges(const Poly2& lotIn, const std::vector<Real>& outward) {
             continue;
         }
         const Real t = cross(pB - pA, dB) / den;
-        out.push_back(pA + dA * t);
+        const Vec2 x = pA + dA * t;
+        // NEARLY COLLINEAR neighbours moved by DIFFERENT amounts meet far away: a vertex between a
+        // pushed edge and an unpushed one on a straight kerb shot 290 m across the city (a plate
+        // spike found by the dressing gate). A corner can move at most a few times its offsets;
+        // past that, it moves the way the parallel case does.
+        const Real maxMove = std::max(std::fabs(outward[h]), std::fabs(outward[i]));
+        if ((x - a1).length() > Real(4) * maxMove + Real(1e-6)) {
+            const Real avg = (outward[h] + outward[i]) * Real(0.5);
+            out.push_back(a1 + normalize(nA + nB) * avg);
+            continue;
+        }
+        out.push_back(x);
     }
     return out;
 }

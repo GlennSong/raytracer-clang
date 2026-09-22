@@ -19,7 +19,7 @@
 namespace engine {
 namespace roads::lanes {
 
-const char* const kLanesBuildTag = "2026-09-21.3";   // .1: the terrain is clamped under every deck VERTEX, not by centreline reach   // .2/.3: ramp ends (elevated or at-grade runs) welded to the road they merge into (nav twin)
+const char* const kLanesBuildTag = "2026-09-21.5";   // .1: the terrain is clamped under every deck VERTEX, not by centreline reach   // .2/.3: ramp ends (elevated or at-grade runs) welded to the road they merge into (nav twin)   // .4: one-way carriageways and ramps; the nav gets a deck's travel width   // .5: blocks are the holes of the pavement WITH its sidewalks
 
 namespace {
 using bundle::BinReader;
@@ -157,7 +157,24 @@ double cityRenderCell(const nlohmann::json& level) {
 
 std::string citySectionPrefix(int ordinal) { return "city/e" + std::to_string(ordinal) + "/"; }
 
-RoadLabGraph loadCityGraph(const CityEntity& e) { return e.inlineGraph ? RoadLabGraph::fromJson(e.block, ".") : RoadLabGraph::load(e.graphPath); }
+RoadLabGraph loadCityGraph(const CityEntity& e) {
+    RoadLabGraph g = e.inlineGraph ? RoadLabGraph::fromJson(e.block, ".") : RoadLabGraph::load(e.graphPath);
+    // THE LEVEL SETS ITS SIDEWALKS (Glenn, 2026-09-21: "I think the sidewalks should be wider.
+    // They're too skinny"). The importer copies the source level's one sidewalk number (3.5 m)
+    // into every street class of the graph asset; a level can override it without regenerating
+    // the asset: `"sidewalks": 5` (every class that has a sidewalk) or `"sidewalks": {"arterial": 6,
+    // "local": 5}` (by class). Plural, because a road block's `sidewalk` is already the lattice's
+    // one number and other readers take it as such. The level JSON keys the bundle, so an edit
+    // rebuilds the city.
+    if (e.block.contains("sidewalks")) {
+        const nlohmann::json& sw = e.block["sidewalks"];
+        for (auto& [name, cls] : g.classes) {
+            if (sw.is_number()) { if (cls.sidewalk > 0) cls.sidewalk = sw.get<double>(); }
+            else if (sw.is_object() && sw.contains(name) && sw[name].is_number()) cls.sidewalk = sw[name].get<double>();
+        }
+    }
+    return g;
+}
 
 // THE DRIVING SURFACE THE LANES BUILT, as the field everything stands on. One spine per graph
 // edge: the edge's own resampled centreline and the profile the pavement was laid to (EdgeSpec::z
@@ -241,7 +258,12 @@ CityProducts cityProductsFromResult(const Result& r, double renderCell, bool wit
     if (p.hasTerrain) { auto grid = std::make_shared<HeightGrid>(r.terrain); ground = [grid](double x, double z) { return grid->sample(x, z); }; }
     p.nav = navRoadGraph(p.twin, ground ? ground : HeightField());
     for (const RoadNode& n : p.twin.graph.nodes) p.row.nodes.push_back(n);
-    for (const RoadEdge& e : p.twin.graph.edges) if (e.klass == RoadClass::Freeway || e.klass == RoadClass::Ramp) p.row.edges.push_back(e);
+    for (const RoadEdge& e : p.twin.graph.edges)
+        if (e.klass == RoadClass::Freeway || e.klass == RoadClass::Ramp) {
+            RoadEdge w = e;
+            w.width += twinRightOfWayPad(r, e.klass);   // the right-of-way, not the travel lanes
+            p.row.edges.push_back(w);
+        }
     p.holes = pavementHoles(r, 2000.0);
     p.deck = deckFromResult(r);
     p.bands = bandsFromResult(r);

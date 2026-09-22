@@ -73,7 +73,12 @@
    ],
    "road": {
     "builder": "lanes",
-    "graph": "assets/lanelab/metro_v2/metropolis_sky_lanelab.json"
+    "graph": "assets/lanelab/metro_v2/metropolis_sky_lanelab.json",
+    "sidewalks": {
+     "arterial": 6.0,
+     "collector": 5.5,
+     "local": 5.0
+    }
    },
    "shape": "road"
   }

@@ -13,7 +13,7 @@ namespace engine {
 const char* const kCityLotsProducerName = "citylots";
 const char* const kCityLotsSectionPrefix = "citylots/";
 // Bump whenever the lot pass's output changes for the same inputs (the key cannot see code).
-const char* const kCityLotsBuildTag = "2026-09-21.4";   // 2026-09-21: ground-relative (draped) dressing slots (.1-.3 carried lot-depth and door-rule experiments, both reverted)   // .1: a lot that cannot clear the carriageway is green, not built from the raw site polygon   // .2: propagateWaterSeaLevel, so a level with water grows the loader's graph   // .3: measure pads that still cover carriageway
+const char* const kCityLotsBuildTag = "2026-09-21.17";   // 2026-09-21: ground-relative (draped) dressing slots (.1-.3 carried lot-depth and door-rule experiments, both reverted)   // .5: door walks end at the back of the sidewalk   // .6: a block the parcel walk cannot fill is one landmark site   // .1: a lot that cannot clear the carriageway is green, not built from the raw site polygon   // .2: propagateWaterSeaLevel, so a level with water grows the loader's graph   // .3: measure pads that still cover carriageway
 
 namespace {
 

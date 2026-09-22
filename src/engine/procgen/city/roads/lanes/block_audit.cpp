@@ -38,7 +38,12 @@ std::vector<Ring> pavementHoles(const Result& r, double minArea) {
     // touches it has one hole — the whole city — and taking it as a block parcelled lots over every street
     // (the slip-ramp metro, 2026-09-07). Hole-shaped pieces (an annulus: the band between the ring and the
     // frontage road) are verge, not blocks, and are dropped; the inner polygon's own holes are the blocks.
-    std::vector<Ring> holes; const PolySet paved = unionSets(r.pavement.surface, r.pavement.shoulder);
+    // The SIDEWALK is pavement too (Glenn, 2026-09-21: blocks sat inset from the street by a
+    // strip of grass). Holes used to stop at the kerb and the loader then inset every block by
+    // the level's `citysim.sidewalk` — a lattice number, 5 m on metro_lanes against a 3.5 m
+    // sidewalk actually drawn. With the drawn sidewalk in the union, a hole stops at the back
+    // of whatever sidewalk each street really has, and the block begins there.
+    std::vector<Ring> holes; const PolySet paved = unionSets(unionSets(r.pavement.surface, r.pavement.shoulder), r.pavement.sidewalk);
     PolySet enclosed;
     for (const Polygon2& p : paved) for (const Ring& h : p.holes) if (std::fabs(ringArea(h)) >= minArea) for (const Polygon2& q : fromRing(h)) enclosed.push_back(q);
     if (enclosed.empty()) return holes;
@@ -49,13 +54,17 @@ std::vector<Ring> pavementHoles(const Result& r, double minArea) {
     return holes;
 }
 
-std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simplify, double insetBy) {
+std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simplify, double insetBy, double minWidth) {
     std::vector<Poly2> blocks; std::vector<Ring> rings;
     for (const Ring& h : holes) {
         if (insetBy <= 0) { rings.push_back(h); continue; }
         // A hole may split when inset. A piece that vanishes under a further 3 m inset is a strip under 2*(inset+3) m
         // wide — the verge between a freeway and its frontage road, a median — not a block (2026-09-07).
-        for (const Polygon2& q : offsetSet(fromRing(h), -insetBy)) if (std::fabs(ringArea(q.outer)) >= 135.0 && !offsetSet(PolySet{q}, -3.0).empty()) rings.push_back(q.outer);
+        // The strip test is an absolute width (default 2 * (inset + 3), the old rule): a hole that
+        // already excludes its sidewalks is inset by centimetres, and "vanishes under 3 m more"
+        // would then keep 7 m verges as blocks.
+        const double stripHalf = std::max(3.0, (minWidth > 0 ? minWidth : 2.0 * (insetBy + 3.0)) * 0.5 - insetBy);
+        for (const Polygon2& q : offsetSet(fromRing(h), -insetBy)) if (std::fabs(ringArea(q.outer)) >= 135.0 && !offsetSet(PolySet{q}, -stripHalf).empty()) rings.push_back(q.outer);
     }
     for (const Ring& h : rings) {
         Ring closed = h; closed.push_back(h.front());   // DP wants an open run: split the loop at its first point
@@ -82,9 +91,9 @@ namespace {
 PolySet blocksInset(const std::vector<Poly2>& blocks, double falloff) {   // every block, inset by the feather, as one set: no per-lot lookup (a concave block's centroid can lie outside it)
     PolySet all; for (const Poly2& b : blocks) all = unionSets(all, offsetSet(fromRing(b), -falloff)); return all;
 }
-std::vector<std::vector<Vec3>> insideBlock(const std::vector<Vec3>& polygon, const PolySet& blocks, double falloff) {
+std::vector<std::vector<Vec3>> insideBlock(const std::vector<Vec3>& polygon, const PolySet& blocks, double falloff, bool shrinkSelf = true) {
     Ring ring; for (const Vec3& v : polygon) ring.emplace_back(v.x, v.z);
-    PolySet ps = intersectSets(offsetSet(fromRing(ring), -falloff), blocks);   // the blocks inset too: a terrace wider than its block would otherwise feather from the block line outward
+    PolySet ps = intersectSets(shrinkSelf ? offsetSet(fromRing(ring), -falloff) : fromRing(ring), blocks);   // the blocks inset too: a terrace wider than its block would otherwise feather from the block line outward
     std::vector<std::vector<Vec3>> out;
     for (const Polygon2& pg : ps) { if (pg.outer.size() < 3 || std::fabs(ringArea(pg.outer)) < 1.0) continue; std::vector<Vec3> poly; for (const Vec2& q : pg.outer) poly.push_back(Vec3(q.x, 0, q.y)); out.push_back(std::move(poly)); }
     return out;
@@ -95,8 +104,14 @@ std::vector<TerrainFlatten> clipPadsToBlocks(const std::vector<LotBuilding>& lot
     std::vector<TerrainFlatten> out; const double falloff = lanesPadFalloff(sidewalk); const PolySet inside = blocksInset(blocks, falloff);
     for (const LotBuilding& lb : lots) {
         if (lb.type == "park" || lb.type == "green" || lb.plan.size() < 3) continue;
-        const TerrainFlatten raw = lotPadFlatten(lb, 2.2 + falloff, falloff);   // the apron grows by the feather the inset takes back
-        for (std::vector<Vec3>& poly : insideBlock(raw.polygon, inside, falloff)) out.push_back(makeFlattenPad(std::move(poly), lb.groundY, falloff));
+        // THE PAD HOLDS ITS WHOLE PARCEL; only the BLOCK EDGE gives up the feather. Shrinking the pad
+        // by its feather on every side (it was) left a 4 m strip at every party line that neither
+        // neighbour's pad owned — the outer 2 m of every plate and plaza stood on a ramp, and a
+        // higher neighbour's feather climbed over it (147 of metro_lanes' 162 buried plates, inside
+        // their blocks). Clipped to the block inset by the feather, the ramp still ends at the
+        // block line — behind the sidewalk, never in the road — and neighbours meet at their lot line.
+        const TerrainFlatten raw = lotPadFlatten(lb, 2.2 + falloff, falloff);
+        for (std::vector<Vec3>& poly : insideBlock(raw.polygon, inside, falloff, /*shrinkSelf=*/false)) out.push_back(makeFlattenPad(std::move(poly), lb.groundY, falloff));
     }
     return out;
 }

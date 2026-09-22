@@ -1167,6 +1167,58 @@ DistrictTag DistrictMap::tagAt(const Vec2& p) const {
                                   : DistrictTag::Residential;
 }
 
+// ONE BLOCK, ONE BUILDING (Glenn, 2026-09-21: "Maybe if only one lot can fit for whatever reason
+// then it should take up the entire city block and build a plaza and a large architectural piece
+// ... I would accept having 1 lot with a large massive building on it rather than a city block
+// that has just a dinky lot"). The lot pass hands a block the parcel walk could not fill here as
+// ONE lot, and this picks something that deserves it: downtown, a tower standing back in a plaza
+// (Seagram), a podium tower whose base is the whole block, or a stepped mass on the block's own
+// polygon; in a residential quarter a mansion block that fills it; an old town's grand hall; an
+// industrial works. It stands taller than a lot-sized pick would (coreness floored), and the
+// slenderness cap still holds it to its plate.
+BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area, uint32_t seed,
+                                      Real coreness) {
+    Hash rng(seed * 2654435761u ^ 0x85ebca6bu);
+    BuildingRecipe out;
+    out.params.seed = rng.next();
+    out.params.retailStreetOnly = true;
+    RecipeCtx cx;
+    cx.shortSide = shortSide;
+    cx.area = area;
+    cx.coreness = std::max(coreness, Real(0.4));
+    cx.roomy = true;
+    switch (tag) {
+        case DistrictTag::Financial:
+        case DistrictTag::Commercial: {
+            const Real r = rng.unit();
+            if (r < 0.45) {
+                recipeGlassTower(out, rng, cx);
+                out.massing = BuildingRecipe::Massing::TowerInPlaza;   // falls back to the block plan when too shallow
+            } else if (r < 0.8) {
+                recipePodiumTower(out, rng, cx);
+            } else {
+                recipeSteppedTower(out, rng, cx);
+                out.massing = BuildingRecipe::Massing::LotPlan;       // the block's own polygon, stepped
+            }
+            break;
+        }
+        case DistrictTag::Residential:
+            recipeApartments(out, rng, cx);
+            out.params.floors = rng.irange(5, 9);
+            out.massing = BuildingRecipe::Massing::LotPlan;
+            cx.slender = std::max(cx.slender, Real(2.5));
+            break;
+        case DistrictTag::OldTown:
+            recipeOldTownGrand(out, rng, cx);
+            break;
+        case DistrictTag::Industrial:
+            recipeFactory(out, rng, cx);
+            break;
+    }
+    capFloors(out.params, shortSide, cx.slender);
+    return out;
+}
+
 BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
                              uint32_t seed, Real coreness,
                              const ArchetypeBook* book) {
