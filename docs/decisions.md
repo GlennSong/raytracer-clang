@@ -7380,3 +7380,66 @@ This also settles one of the Open questions above: possession must be able to **
 layer**, not race it. An errand completes, the agent goes to rest, and seconds later the schedule
 has it walking a 27-leg trip of its own — a director issuing one command per decision spends the
 whole session fighting the table it is supposed to be replacing.
+
+## ADR-0092 — The city is designed as data first: a brief, a plan, a score, then the build
+
+**Status:** Provisional (2026-09-22) — the planner and its evaluator exist (`city_plan`); nothing
+builds from a plan yet. **Trigger:** Glenn: "we should make the city blocks rectilinear ... the core
+of the city should be gridlike and maybe in the outskirts the roads can become more wedge like and
+curvy. Blocks should contain either multiple smaller buildings or one massive block sized building +
+plaza. I don't think we should take this concept into the code. It's like we need some way to design
+the city we want and build a road graph and block layout and evaluate it as data before it gets
+built by the city generator", and then "Can you build maps before trying to construct anything so we
+can see potential city layouts?"
+
+**Context.** Nothing in the pipeline ever *decides* what the city is. `lanes_tool from-level`
+replays metro_v2's lattice recipe and keeps whatever survives conversion (182 of 419 segments);
+blocks are the holes the built pavement happens to leave; the lot pass parcels whatever shape it is
+handed. Every recent city complaint is the same complaint in a different place — blocks that hold
+one dinky lot, a downtown grain deeper than the block it sits in, curving streets arriving as 40-80
+stubs the frontage walk rejects, and a freeway ring that 21 of 1657 drivers used because the jobs
+are inside the ring and the only way in is three interchanges. Each was answered inside the
+generator, which is how we got rules like "a block the parcel walk cannot fill becomes a landmark
+site": a layout failure caught at meshing time and patched where it was noticed, not where it was
+caused. And the feedback loop costs a full build — terrain, roads, lots, meshes, a bundle — to see
+a layout at all.
+
+**Decision.** A design stage above the generator, in three artefacts:
+
+* **The brief** (`assets/city_plans/*.json`, ~30 numbers) — map size, the core grid's block size and
+  angle, how blocks grow to midtown's rim, how much the grid warps, the outskirts' ring spacing,
+  spokes, curvature and wedge streets, the freeway's radius, radials and wobble, road widths and the
+  sidewalk. It says what *kind* of city, not where anything is.
+* **The plan** (`engine::plan::CityPlan`) — the street graph (local/collector/arterial, planarized:
+  real crossings, T-junctions, no stubs), the freeway graph and its interchanges, and every block as
+  a face plus the polygon actually buildable inside it (inset by each bounding street's own
+  half-width and sidewalk), carrying a **district** and a **use**. The use — parcel into lots, one
+  landmark on the whole block, a park, or right-of-way the freeway needs — is decided here, as data
+  that can be read, diffed, hand-edited and re-scored.
+* **The score** (`evaluatePlan`) — computed with **the engine's own** parcel walk (`subdivideBlock`
+  at the district's grain) and **the engine's own** router (`buildNavGraph`/`findRoute` over the
+  merged street and freeway graphs, with the same junction delay the sim charges), so a plan that
+  scores well builds the way it scored. Rectangularity as buildable area over its oriented box,
+  the narrow side, predicted lots and buildings, street-network connectivity, and the share of
+  sampled outskirts→downtown commutes that choose the freeway.
+
+Two consequences are the point of the whole thing. **Layout failures are caught as layout**: a block
+that would parcel into two lots is given to one landmark in the plan, where that is a design choice,
+instead of being discovered by the lot pass and patched there. And **a layout costs a second, not a
+build**: six candidate cities, each with a map and a scorecard, come out of one `city_plan generate`
+run in about seven seconds, which is what makes "look at maps before constructing anything"
+possible at all.
+
+**Why C++ in the repo, not a Python prototype.** The evaluator's numbers are only worth having
+because they come from the same parcel walk and router the build uses. A prototype would score
+against re-implementations of both — the two-paths problem the city already has, invited into the
+one place whose whole job is to be believed.
+
+**Consequences.** The generator does not consume plans yet: this ADR buys the design stage and the
+maps, and the build side (lanes builder takes the plan's graph, the lot pass takes the plan's blocks
+and their uses) is the next step, after which the importer, the pavement-hole blocks and the
+whole-block fallback are all candidates for retirement. A plan is deterministic from its brief —
+pinned by `tests/test_city_plan.cpp`, which also holds the grid core to rectangles, the streets to
+one connected network, every block to a use it can hold, and the freeway to a share of commutes
+worth building it for. What a plan still says nothing about: terrain (it plans on the flat, so a
+hill can still make a planned street unbuildable), water, districts' building styles, or transit.

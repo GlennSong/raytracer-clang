@@ -1,0 +1,11 @@
+{
+  "name": "metro_3km",
+  "seed": 7,
+  "size": 3000,
+  "center": [0, 0],
+  "core":      { "radius": 450,  "block": [110, 75], "angle": 12, "arterialEvery": 3 },
+  "midtown":   { "radius": 800,  "block": [140, 95], "warp": 30 },
+  "outskirts": { "ringSpacing": 160, "spokes": 12, "curvature": 45, "streetSpacing": 95, "margin": 120 },
+  "freeway":   { "radius": 1000, "radials": 2, "wobble": 50 },
+  "roads":     { "local": 12, "collector": 16, "arterial": 22, "freeway": 30, "sidewalk": 5 }
+}

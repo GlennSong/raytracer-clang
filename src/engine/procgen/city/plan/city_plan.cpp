@@ -1,0 +1,833 @@
+#include "city_plan.h"
+
+#include "../parcel.h"
+#include "../site_plan.h"
+#include "../../../ai/nav_graph.h"
+#include "../../../ai/pathfind.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <functional>
+#include <map>
+#include <set>
+#include <sstream>
+#include <unordered_map>
+
+namespace engine {
+namespace plan {
+
+namespace {
+
+constexpr Real kPi = 3.14159265358979323846;
+
+// ---- noise -------------------------------------------------------------------
+uint32_t hash3(int x, int y, uint32_t s) {
+    uint32_t h = s ^ (static_cast<uint32_t>(x) * 0x8da6b343u) ^ (static_cast<uint32_t>(y) * 0xd8163841u);
+    h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+    return h;
+}
+Real valueNoise(Real x, Real y, uint32_t s) {   // -1..1, smooth
+    const int xi = static_cast<int>(std::floor(x)), yi = static_cast<int>(std::floor(y));
+    const Real fx = x - xi, fy = y - yi;
+    auto r = [&](int a, int b) { return (hash3(a, b, s) & 0xFFFF) / 65535.0 * 2.0 - 1.0; };
+    const Real u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy);
+    const Real a0 = r(xi, yi) + (r(xi + 1, yi) - r(xi, yi)) * u;
+    const Real a1 = r(xi, yi + 1) + (r(xi + 1, yi + 1) - r(xi, yi + 1)) * u;
+    return a0 + (a1 - a0) * v;
+}
+// Periodic in theta: a closed ring stays closed.
+Real ringNoise(Real theta, int k, uint32_t s) {
+    Real v = 0, norm = 0;
+    for (int h = 2; h <= 5; ++h) {
+        const uint32_t hh = hash3(k, h, s);
+        const Real phase = (hh & 0xFFFF) / 65535.0 * 2 * kPi;
+        const Real amp = 1.0 / h;
+        v += amp * std::sin(h * theta + phase);
+        norm += amp;
+    }
+    return v / norm;
+}
+Real smooth01(Real t) { t = std::max(Real(0), std::min(Real(1), t)); return t * t * (3 - 2 * t); }
+
+// ---- roads as polylines ------------------------------------------------------
+struct Polyline {
+    std::vector<Vec2> pts;
+    RoadClass klass = RoadClass::Local;
+    Real width = 12;
+    bool closed = false;
+};
+
+struct Frame {
+    Vec2 c, u, v;
+    Vec2 toWorld(Real a, Real b) const { return c + u * a + v * b; }
+};
+
+// Grid line positions from the centre outward: denser near the middle, the block
+// growing toward midtown's rim.
+std::vector<std::pair<Real, int>> gridPositions(Real coreBlock, Real midBlock, Real coreR, Real midR) {
+    std::vector<std::pair<Real, int>> out{{0.0, 0}};
+    for (int dir = -1; dir <= 1; dir += 2) {
+        Real s = 0;
+        for (int i = 1; i < 200; ++i) {
+            const Real t = smooth01((s - coreR * 0.6) / std::max(Real(1), midR - coreR * 0.6));
+            const Real step = coreBlock + (midBlock - coreBlock) * t;
+            s += step;
+            if (s > midR * 1.15) break;
+            out.push_back({dir * s, dir * i});
+        }
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+// ---- planarize polylines (spatially hashed) ------------------------------------
+struct SegRef { int road, seg; };
+
+RoadGraph planarizePolylines(const std::vector<Polyline>& roads, Real snap = 0.6) {
+    // All segments.
+    std::vector<std::vector<std::vector<Real>>> cuts(roads.size());
+    std::vector<std::pair<Vec2, Vec2>> segs;
+    std::vector<SegRef> refs;
+    for (std::size_t r = 0; r < roads.size(); ++r) {
+        const auto& P = roads[r].pts;
+        const std::size_t n = P.size();
+        const std::size_t ns = roads[r].closed ? n : (n > 0 ? n - 1 : 0);
+        cuts[r].assign(ns, {});
+        for (std::size_t i = 0; i < ns; ++i) {
+            segs.push_back({P[i], P[(i + 1) % n]});
+            refs.push_back({static_cast<int>(r), static_cast<int>(i)});
+        }
+    }
+    const Real cell = 40.0;
+    std::unordered_map<long long, std::vector<int>> grid;
+    auto key = [](int cx, int cy) { return (static_cast<long long>(cx) << 32) ^ static_cast<uint32_t>(cy); };
+    for (int si = 0; si < static_cast<int>(segs.size()); ++si) {
+        const Vec2& a = segs[si].first; const Vec2& b = segs[si].second;
+        const int x0 = static_cast<int>(std::floor((std::min(a.x, b.x) - snap) / cell));
+        const int x1 = static_cast<int>(std::floor((std::max(a.x, b.x) + snap) / cell));
+        const int y0 = static_cast<int>(std::floor((std::min(a.y, b.y) - snap) / cell));
+        const int y1 = static_cast<int>(std::floor((std::max(a.y, b.y) + snap) / cell));
+        for (int cx = x0; cx <= x1; ++cx)
+            for (int cy = y0; cy <= y1; ++cy) grid[key(cx, cy)].push_back(si);
+    }
+    std::set<std::pair<int, int>> tested;
+    auto nearestT = [](const Vec2& p, const Vec2& a, const Vec2& b, Real& d) {
+        const Vec2 ab = b - a; const Real L2 = ab.lengthSquared();
+        Real t = L2 > 1e-12 ? dot(p - a, ab) / L2 : 0.0;
+        t = std::max(Real(0), std::min(Real(1), t));
+        d = (p - (a + ab * t)).length();
+        return t;
+    };
+    for (const auto& [k, list] : grid) {
+        for (std::size_t i = 0; i < list.size(); ++i)
+            for (std::size_t j = i + 1; j < list.size(); ++j) {
+                int s0 = list[i], s1 = list[j];
+                if (s0 > s1) std::swap(s0, s1);
+                if (!tested.insert({s0, s1}).second) continue;
+                const SegRef& A = refs[s0]; const SegRef& B = refs[s1];
+                if (A.road == B.road) {
+                    const int n = static_cast<int>(cuts[A.road].size());
+                    const int d = std::abs(A.seg - B.seg);
+                    if (d <= 1 || (roads[A.road].closed && d == n - 1)) continue;   // neighbours share a vertex
+                }
+                const Vec2 p = segs[s0].first, q = segs[s0].second, a = segs[s1].first, b = segs[s1].second;
+                const Vec2 r = q - p, s = b - a;
+                const Real den = r.x * s.y - r.y * s.x;
+                if (std::fabs(den) > 1e-12) {
+                    const Vec2 ap = a - p;
+                    const Real t = (ap.x * s.y - ap.y * s.x) / den, u = (ap.x * r.y - ap.y * r.x) / den;
+                    if (t > 1e-6 && t < 1 - 1e-6 && u > 1e-6 && u < 1 - 1e-6) {
+                        cuts[A.road][A.seg].push_back(t);
+                        cuts[B.road][B.seg].push_back(u);
+                        continue;
+                    }
+                }
+                // T-junctions within the snap distance: an end of one on the other.
+                Real d;
+                for (const Vec2* e : {&p, &q}) {
+                    const Real t = nearestT(*e, a, b, d);
+                    if (d < snap && t > 1e-6 && t < 1 - 1e-6) cuts[B.road][B.seg].push_back(t);
+                }
+                for (const Vec2* e : {&a, &b}) {
+                    const Real t = nearestT(*e, p, q, d);
+                    if (d < snap && t > 1e-6 && t < 1 - 1e-6) cuts[A.road][A.seg].push_back(t);
+                }
+            }
+    }
+    // Nodes, snapped on a hash.
+    RoadGraph g;
+    std::unordered_map<long long, std::vector<int>> nodeGrid;
+    const Real ncell = 2.0;
+    auto nodeAt = [&](const Vec2& p) {
+        const int cx = static_cast<int>(std::floor(p.x / ncell)), cy = static_cast<int>(std::floor(p.y / ncell));
+        for (int dx = -1; dx <= 1; ++dx)
+            for (int dy = -1; dy <= 1; ++dy) {
+                auto it = nodeGrid.find(key(cx + dx, cy + dy));
+                if (it == nodeGrid.end()) continue;
+                for (int ni : it->second)
+                    if ((g.nodes[static_cast<std::size_t>(ni)].pos - p).length() < snap) return ni;
+            }
+        const int id = static_cast<int>(g.nodes.size());
+        g.nodes.push_back(RoadNode{p});
+        nodeGrid[key(cx, cy)].push_back(id);
+        return id;
+    };
+    std::set<std::pair<int, int>> have;
+    auto addEdge = [&](int a, int b, const Polyline& R) {
+        if (a == b) return;
+        const std::pair<int, int> k2 = {std::min(a, b), std::max(a, b)};
+        if (!have.insert(k2).second) return;
+        RoadEdge e{a, b, R.width, R.klass};
+        g.edges.push_back(e);
+    };
+    for (std::size_t r = 0; r < roads.size(); ++r) {
+        const auto& P = roads[r].pts;
+        const std::size_t n = P.size();
+        int prev = -1;
+        for (std::size_t i = 0; i < cuts[r].size(); ++i) {
+            const Vec2 a = P[i], b = P[(i + 1) % n];
+            if (prev < 0) prev = nodeAt(a);
+            std::vector<Real>& ts = cuts[r][i];
+            std::sort(ts.begin(), ts.end());
+            for (Real t : ts) { const int m = nodeAt(a + (b - a) * t); addEdge(prev, m, roads[r]); prev = m; }
+            const int e = nodeAt(b);
+            addEdge(prev, e, roads[r]);
+            prev = e;
+        }
+    }
+    return g;
+}
+
+// Remove dead-end chains shorter than `stub` (the overshoot past a crossing road).
+void pruneStubs(RoadGraph& g, Real stub) {
+    for (int pass = 0; pass < 4; ++pass) {
+        std::vector<std::vector<int>> inc(g.nodes.size());
+        for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
+            inc[static_cast<std::size_t>(g.edges[e].a)].push_back(e);
+            inc[static_cast<std::size_t>(g.edges[e].b)].push_back(e);
+        }
+        std::vector<char> drop(g.edges.size(), 0);
+        bool any = false;
+        for (int v = 0; v < static_cast<int>(g.nodes.size()); ++v) {
+            if (inc[static_cast<std::size_t>(v)].size() != 1) continue;
+            std::vector<int> chain;
+            Real len = 0;
+            int cur = v, e = inc[static_cast<std::size_t>(v)][0];
+            while (true) {
+                chain.push_back(e);
+                const RoadEdge& E = g.edges[static_cast<std::size_t>(e)];
+                const int nxt = E.a == cur ? E.b : E.a;
+                len += (g.nodes[static_cast<std::size_t>(nxt)].pos - g.nodes[static_cast<std::size_t>(cur)].pos).length();
+                if (len > stub) break;
+                if (inc[static_cast<std::size_t>(nxt)].size() != 2) {   // reached a junction (or another end)
+                    for (int c : chain) drop[static_cast<std::size_t>(c)] = 1;
+                    any = true;
+                    break;
+                }
+                const auto& ie = inc[static_cast<std::size_t>(nxt)];
+                e = ie[0] == e ? ie[1] : ie[0];
+                cur = nxt;
+            }
+        }
+        if (!any) break;
+        std::vector<RoadEdge> kept;
+        for (std::size_t i = 0; i < g.edges.size(); ++i) if (!drop[i]) kept.push_back(g.edges[i]);
+        g.edges.swap(kept);
+    }
+}
+
+Real polylineLength(const RoadGraph& g) {
+    Real L = 0;
+    for (const RoadEdge& e : g.edges) L += (g.nodes[static_cast<std::size_t>(e.a)].pos - g.nodes[static_cast<std::size_t>(e.b)].pos).length();
+    return L;
+}
+
+Real distToPolyline(const Vec2& p, const std::vector<Vec2>& P, bool closed) {
+    Real best = 1e30;
+    const std::size_t n = P.size();
+    const std::size_t ns = closed ? n : (n ? n - 1 : 0);
+    for (std::size_t i = 0; i < ns; ++i) {
+        const Vec2 a = P[i], b = P[(i + 1) % n], ab = b - a;
+        const Real L2 = ab.lengthSquared();
+        Real t = L2 > 1e-12 ? dot(p - a, ab) / L2 : 0.0;
+        t = std::max(Real(0), std::min(Real(1), t));
+        best = std::min(best, (p - (a + ab * t)).length());
+    }
+    return best;
+}
+
+std::vector<std::size_t> dpKeep(const Poly2& P, Real tol) {
+    const std::size_t n = P.size();
+    if (n < 4) { std::vector<std::size_t> all(n); for (std::size_t i = 0; i < n; ++i) all[i] = i; return all; }
+    std::vector<char> keep(n, 0); keep[0] = keep[n - 1] = 1;
+    std::vector<std::pair<std::size_t, std::size_t>> st{{0, n - 1}};
+    while (!st.empty()) {
+        auto [a, b] = st.back(); st.pop_back();
+        if (b <= a + 1) continue;
+        Real bd = -1; std::size_t bi = a;
+        const Vec2 d = P[b] - P[a]; const Real L = d.length();
+        for (std::size_t i = a + 1; i < b; ++i) {
+            const Vec2 v = P[i] - P[a];
+            const Real dist = L > 1e-9 ? std::fabs(cross(v, d)) / L : v.length();
+            if (dist > bd) { bd = dist; bi = i; }
+        }
+        if (bd > tol) { keep[bi] = 1; st.push_back({a, bi}); st.push_back({bi, b}); }
+    }
+    std::vector<std::size_t> out;
+    for (std::size_t i = 0; i < n; ++i) if (keep[i]) out.push_back(i);
+    return out;
+}
+
+}  // namespace
+
+// ---- brief I/O -------------------------------------------------------------------
+Brief briefFromJson(const nlohmann::json& j) {
+    Brief b;
+    b.name = j.value("name", b.name);
+    b.seed = j.value("seed", b.seed);
+    b.size = j.value("size", b.size);
+    if (j.contains("center") && j["center"].is_array() && j["center"].size() == 2)
+        b.center = Vec2(j["center"][0].get<Real>(), j["center"][1].get<Real>());
+    if (j.contains("core")) {
+        const auto& c = j["core"];
+        b.coreRadius = c.value("radius", b.coreRadius);
+        if (c.contains("block") && c["block"].size() == 2) { b.coreBlockU = c["block"][0]; b.coreBlockV = c["block"][1]; }
+        b.gridAngleDeg = c.value("angle", b.gridAngleDeg);
+        b.arterialEvery = c.value("arterialEvery", b.arterialEvery);
+    }
+    if (j.contains("midtown")) {
+        const auto& m = j["midtown"];
+        b.midRadius = m.value("radius", b.midRadius);
+        if (m.contains("block") && m["block"].size() == 2) { b.midBlockU = m["block"][0]; b.midBlockV = m["block"][1]; }
+        b.warp = m.value("warp", b.warp);
+    }
+    if (j.contains("outskirts")) {
+        const auto& o = j["outskirts"];
+        b.ringSpacing = o.value("ringSpacing", b.ringSpacing);
+        b.spokes = o.value("spokes", b.spokes);
+        b.curvature = o.value("curvature", b.curvature);
+        b.wedgeStreetSpacing = o.value("streetSpacing", b.wedgeStreetSpacing);
+        b.outerMargin = o.value("margin", b.outerMargin);
+    }
+    if (j.contains("freeway")) {
+        const auto& f = j["freeway"];
+        b.freewayRadius = f.value("radius", b.freewayRadius);
+        b.freewayRadials = f.value("radials", b.freewayRadials);
+        b.freewayWobble = f.value("wobble", b.freewayWobble);
+    }
+    if (j.contains("roads")) {
+        const auto& r = j["roads"];
+        b.localWidth = r.value("local", b.localWidth);
+        b.collectorWidth = r.value("collector", b.collectorWidth);
+        b.arterialWidth = r.value("arterial", b.arterialWidth);
+        b.freewayWidth = r.value("freeway", b.freewayWidth);
+        b.sidewalk = r.value("sidewalk", b.sidewalk);
+    }
+    return b;
+}
+
+nlohmann::json briefToJson(const Brief& b) {
+    return {{"name", b.name}, {"seed", b.seed}, {"size", b.size}, {"center", {b.center.x, b.center.y}},
+            {"core", {{"radius", b.coreRadius}, {"block", {b.coreBlockU, b.coreBlockV}}, {"angle", b.gridAngleDeg},
+                      {"arterialEvery", b.arterialEvery}}},
+            {"midtown", {{"radius", b.midRadius}, {"block", {b.midBlockU, b.midBlockV}}, {"warp", b.warp}}},
+            {"outskirts", {{"ringSpacing", b.ringSpacing}, {"spokes", b.spokes}, {"curvature", b.curvature},
+                           {"streetSpacing", b.wedgeStreetSpacing}, {"margin", b.outerMargin}}},
+            {"freeway", {{"radius", b.freewayRadius}, {"radials", b.freewayRadials}, {"wobble", b.freewayWobble}}},
+            {"roads", {{"local", b.localWidth}, {"collector", b.collectorWidth}, {"arterial", b.arterialWidth},
+                       {"freeway", b.freewayWidth}, {"sidewalk", b.sidewalk}}}};
+}
+
+Brief variantOf(const Brief& b, int k) {
+    if (k <= 0) return b;
+    Brief v = b;
+    auto u = [&](int salt) { return (hash3(k, salt, b.seed) & 0xFFFF) / 65535.0; };   // 0..1
+    v.name = b.name + "_v" + std::to_string(k);
+    v.seed = b.seed * 7919u + static_cast<uint32_t>(k) * 104729u;
+    v.gridAngleDeg = b.gridAngleDeg + (u(1) - 0.5) * 40.0;
+    const Real bs = 0.85 + 0.3 * u(2);
+    v.coreBlockU *= bs; v.coreBlockV *= bs;
+    v.midBlockU *= 0.85 + 0.3 * u(3); v.midBlockV *= 0.85 + 0.3 * u(3);
+    v.arterialEvery = 2 + static_cast<int>(u(4) * 2.99);
+    v.warp = b.warp * (0.5 + u(5));
+    v.spokes = std::max(6, b.spokes + static_cast<int>((u(6) - 0.5) * 8));
+    v.curvature = b.curvature * (0.5 + u(7));
+    v.ringSpacing = b.ringSpacing * (0.85 + 0.3 * u(8));
+    v.freewayRadius = b.freewayRadius * (0.92 + 0.12 * u(9));
+    v.freewayRadials = static_cast<int>(u(10) * 3.99);
+    v.coreRadius = b.coreRadius * (0.85 + 0.3 * u(11));
+    return v;
+}
+
+const char* blockUseName(BlockUse u) {
+    switch (u) {
+        case BlockUse::Lots: return "lots";
+        case BlockUse::Landmark: return "landmark";
+        case BlockUse::Park: return "park";
+        case BlockUse::RightOfWay: return "right_of_way";
+    }
+    return "?";
+}
+
+// ---- generate -----------------------------------------------------------------------
+CityPlan generatePlan(const Brief& B) {
+    CityPlan plan;
+    plan.brief = B;
+    const Real ang = B.gridAngleDeg * kPi / 180.0;
+    const Frame F{B.center, Vec2(std::cos(ang), std::sin(ang)), Vec2(-std::sin(ang), std::cos(ang))};
+    const Real outerR = B.size * 0.5 - B.outerMargin;
+    auto midR = [&](Real theta) { return B.midRadius * (1.0 + 0.05 * ringNoise(theta, 99, B.seed)); };
+    // The warp field: zero in the core, full at midtown's rim.
+    auto warped = [&](const Vec2& p) {
+        const Vec2 d = p - B.center;
+        const Real r = d.length();
+        const Real w = B.warp * smooth01((r - B.coreRadius) / std::max(Real(1), B.midRadius - B.coreRadius));
+        if (w <= 0) return p;
+        const Real s = 1.0 / 260.0;
+        return p + Vec2(valueNoise(p.x * s, p.y * s, B.seed + 11), valueNoise(p.x * s + 17.3, p.y * s + 5.1, B.seed + 23)) * w;
+    };
+    std::vector<Polyline> roads;
+    // --- the grid (core + midtown), clipped to midtown's (wobbly) rim, overshooting it a little ---
+    const auto posU = gridPositions(B.coreBlockU, B.midBlockU, B.coreRadius, B.midRadius);
+    const auto posV = gridPositions(B.coreBlockV, B.midBlockV, B.coreRadius, B.midRadius);
+    auto gridLine = [&](Real fixed, bool alongV, int idx) {
+        const bool arterial = idx % std::max(1, B.arterialEvery) == 0;
+        Polyline cur;
+        cur.klass = arterial ? RoadClass::Arterial : RoadClass::Local;
+        cur.width = arterial ? B.arterialWidth : B.localWidth;
+        const Real L = B.midRadius * 1.25, step = 15.0;
+        auto flush = [&] { if (cur.pts.size() >= 2) roads.push_back(cur); cur.pts.clear(); };
+        for (Real t = -L; t <= L; t += step) {
+            const Vec2 p = alongV ? F.toWorld(fixed, t) : F.toWorld(t, fixed);
+            const Vec2 d = p - B.center;
+            const Real th = std::atan2(d.y, d.x);
+            if (d.length() <= midR(th) + 25.0) cur.pts.push_back(warped(p));   // overshoot the rim road
+            else flush();
+        }
+        flush();
+    };
+    for (const auto& [s, i] : posU) gridLine(s, true, std::abs(i));
+    for (const auto& [s, i] : posV) gridLine(s, false, std::abs(i));
+    // --- midtown's rim: a boulevard the grid Ts into ---
+    auto ringAt = [&](std::function<Real(Real)> radius, RoadClass k, Real w) {
+        Polyline ring; ring.klass = k; ring.width = w; ring.closed = true;
+        const Real r0 = radius(0);
+        const int n = std::max(24, static_cast<int>(2 * kPi * r0 / 15.0));
+        for (int i = 0; i < n; ++i) {
+            const Real th = 2 * kPi * i / n;
+            const Real r = radius(th);
+            ring.pts.push_back(warped(B.center + Vec2(std::cos(th), std::sin(th)) * r));
+        }
+        return ring;
+    };
+    roads.push_back(ringAt(midR, RoadClass::Arterial, B.arterialWidth));
+    // --- outskirts: rings (collectors), spokes (arterials), wedge locals ---
+    // The freeway runs between two FRONTAGE roads (collectors hugging its right-of-way).
+    // No local street crosses that corridor, so the blocks either side stay whole — with
+    // locals running across it, every block in the freeway's band straddled the freeway
+    // and the whole ring of land was right-of-way.
+    auto freewayR = [&](Real th) { return B.freewayRadius + B.freewayWobble * ringNoise(th, 777, B.seed); };
+    const Real corridorHalf = B.freewayWidth * 0.5 + 35.0;
+    struct BandEdge { Real base; std::function<Real(Real)> r; bool corridorInner; };
+    std::vector<BandEdge> bandEdges{{B.midRadius, midR, false}};
+    const bool haveFreeway = B.freewayRadius > B.midRadius + corridorHalf && B.freewayRadius + corridorHalf < outerR;
+    if (haveFreeway) {
+        auto inner = [&, freewayR, corridorHalf](Real th) { return freewayR(th) - corridorHalf; };
+        auto outer = [&, freewayR, corridorHalf](Real th) { return freewayR(th) + corridorHalf; };
+        roads.push_back(ringAt(inner, RoadClass::Collector, B.collectorWidth));
+        roads.push_back(ringAt(outer, RoadClass::Collector, B.collectorWidth));
+        bandEdges.push_back({B.freewayRadius - corridorHalf, inner, true});
+        bandEdges.push_back({B.freewayRadius + corridorHalf, outer, false});
+    }
+    for (int k = 1; ; ++k) {
+        const Real rk = B.midRadius + k * B.ringSpacing;
+        if (rk > outerR) break;
+        // Keep a ring clear of the corridor and its frontage roads (the frontage roads ARE its rings there).
+        if (haveFreeway && std::fabs(rk - B.freewayRadius) < corridorHalf + 0.5 * B.ringSpacing) continue;
+        auto rf = [&, rk, k](Real th) { return rk + B.curvature * ringNoise(th, k, B.seed); };
+        roads.push_back(ringAt(rf, RoadClass::Collector, B.collectorWidth));
+        bandEdges.push_back({rk, rf, false});
+    }
+    std::sort(bandEdges.begin(), bandEdges.end(), [](const BandEdge& a, const BandEdge& b) { return a.base < b.base; });
+    std::vector<Real> spokeTheta;
+    for (int s = 0; s < B.spokes; ++s) {
+        const Real th0 = 2 * kPi * (s + 0.5 * ((hash3(s, 3, B.seed) & 0xFF) / 255.0 - 0.5)) / B.spokes;
+        spokeTheta.push_back(th0);
+        Polyline sp; sp.klass = RoadClass::Arterial; sp.width = B.arterialWidth;
+        for (Real r = midR(th0) - 25.0; r <= outerR + 25.0; r += 15.0) {
+            const Real th = th0 + (B.curvature / std::max(Real(200), r)) * valueNoise(r / 180.0, s * 3.1, B.seed + 41);
+            sp.pts.push_back(warped(B.center + Vec2(std::cos(th), std::sin(th)) * r));
+        }
+        roads.push_back(sp);
+    }
+    std::sort(spokeTheta.begin(), spokeTheta.end());
+    // Wedge locals: short radial streets across each band, staggered band to band.
+    for (std::size_t bi = 0; bi + 1 < bandEdges.size(); ++bi) {
+        if (bandEdges[bi].corridorInner) continue;   // the freeway corridor: no local crosses it
+        const auto& inner = bandEdges[bi].r;
+        const auto& outer = bandEdges[bi + 1].r;
+        const Real rMid = 0.5 * (inner(0) + outer(0));
+        const Real dTheta = B.wedgeStreetSpacing / std::max(Real(100), rMid);
+        const Real stagger = (bi % 2) * 0.5 * dTheta;
+        for (Real th = stagger; th < 2 * kPi; th += dTheta) {
+            bool nearSpoke = false;
+            for (Real st : spokeTheta) {
+                Real d = std::fabs(std::remainder(th - st, 2 * kPi));
+                if (d * rMid < 0.45 * B.wedgeStreetSpacing) nearSpoke = true;
+            }
+            if (nearSpoke) continue;
+            Polyline ls; ls.klass = RoadClass::Local; ls.width = B.localWidth;
+            const Real r0 = inner(th) - 20.0, r1 = outer(th) + 20.0;
+            for (int i = 0; i <= 8; ++i) {
+                const Real r = r0 + (r1 - r0) * i / 8.0;
+                const Real bend = (B.curvature * 0.4 / rMid) * std::sin(kPi * i / 8.0) * valueNoise(th * 3.0, bi * 1.7, B.seed + 7);
+                ls.pts.push_back(warped(B.center + Vec2(std::cos(th + bend), std::sin(th + bend)) * r));
+            }
+            roads.push_back(ls);
+        }
+    }
+    // --- the street graph ---
+    plan.streets = planarizePolylines(roads);
+    pruneStubs(plan.streets, 45.0);
+    // --- freeway: a ring and radial spurs toward downtown ---
+    std::vector<Polyline> fw;
+    {
+        Polyline ring; ring.klass = RoadClass::Freeway; ring.width = B.freewayWidth; ring.closed = true;
+        const int n = static_cast<int>(2 * kPi * B.freewayRadius / 20.0);
+        for (int i = 0; i < n; ++i) {
+            const Real th = 2 * kPi * i / n;
+            ring.pts.push_back(B.center + Vec2(std::cos(th), std::sin(th)) * freewayR(th));
+        }
+        fw.push_back(ring);
+        for (int i = 0; i < B.freewayRadials; ++i) {
+            // Midway between two spokes, so the spur never runs down an arterial.
+            Real th0 = 2 * kPi * (i + 0.25) / std::max(1, B.freewayRadials);
+            if (!spokeTheta.empty()) {
+                Real best = 1e9, pick = th0;
+                for (std::size_t s = 0; s < spokeTheta.size(); ++s) {
+                    const Real a = spokeTheta[s], b = spokeTheta[(s + 1) % spokeTheta.size()] + (s + 1 == spokeTheta.size() ? 2 * kPi : 0);
+                    const Real mid = 0.5 * (a + b);
+                    const Real d = std::fabs(std::remainder(mid - th0, 2 * kPi));
+                    if (d < best) { best = d; pick = mid; }
+                }
+                th0 = pick;
+            }
+            Polyline spur; spur.klass = RoadClass::Freeway; spur.width = B.freewayWidth;
+            const Real rEnd = midR(th0);
+            for (Real r = B.freewayRadius + B.freewayWobble; r >= rEnd; r -= 20.0)
+                spur.pts.push_back(B.center + Vec2(std::cos(th0), std::sin(th0)) * r);
+            spur.pts.push_back(warped(B.center + Vec2(std::cos(th0), std::sin(th0)) * rEnd));
+            fw.push_back(spur);
+            plan.interchanges.push_back(spur.pts.back());   // the spur lands on midtown's boulevard
+        }
+    }
+    plan.freeway = planarizePolylines(fw);
+    // Interchanges: where the ring crosses an arterial (a spoke).
+    for (const RoadEdge& e : plan.streets.edges) {
+        if (e.klass != RoadClass::Arterial) continue;
+        const Vec2 a = plan.streets.nodes[static_cast<std::size_t>(e.a)].pos, b = plan.streets.nodes[static_cast<std::size_t>(e.b)].pos;
+        const Real ra = (a - B.center).length(), rb = (b - B.center).length();
+        const Real thA = std::atan2(a.y - B.center.y, a.x - B.center.x);
+        const Real rf = B.freewayRadius + B.freewayWobble * ringNoise(thA, 777, B.seed);
+        if ((ra - rf) * (rb - rf) <= 0) {
+            const Real t = std::fabs(ra - rb) > 1e-9 ? (rf - ra) / (rb - ra) : 0.5;
+            const Vec2 p = a + (b - a) * t;
+            bool dup = false;
+            for (const Vec2& q : plan.interchanges) if ((q - p).length() < 150.0) dup = true;
+            if (!dup) plan.interchanges.push_back(p);
+        }
+    }
+    // --- blocks: faces of the street graph, inset by each street's half-width + sidewalk ---
+    std::map<std::pair<long long, long long>, Real> widthOf;
+    auto q = [](const Vec2& p) { return (static_cast<long long>(std::llround(p.x * 10)) << 32) ^ static_cast<uint32_t>(std::llround(p.y * 10)); };
+    for (const RoadEdge& e : plan.streets.edges) {
+        const long long ka = q(plan.streets.nodes[static_cast<std::size_t>(e.a)].pos), kb = q(plan.streets.nodes[static_cast<std::size_t>(e.b)].pos);
+        widthOf[{std::min(ka, kb), std::max(ka, kb)}] = e.width;
+    }
+    for (Poly2 rawFace : extractBlocks(plan.streets, 300.0)) {
+        ensureCCW(rawFace);
+        const std::size_t nr = rawFace.size();
+        // Each raw edge's street width (the face walks graph edges node to node).
+        std::vector<Real> rawW(nr, B.localWidth);
+        for (std::size_t i = 0; i < nr; ++i) {
+            const long long ka = q(rawFace[i]), kb = q(rawFace[(i + 1) % nr]);
+            auto it = widthOf.find({std::min(ka, kb), std::max(ka, kb)});
+            if (it != widthOf.end()) rawW[i] = it->second;
+        }
+        // THE BLOCK'S REAL CORNERS. A face carries every 15 m sample of its streets and the
+        // slivers a junction leaves; offsetting that dense outline folded little loops into
+        // every corner (rectangularity read 0.74 on a plainly rectangular block). Simplify
+        // the ring first, keeping a corner wherever the STREET changes too, and carry each
+        // street's width onto the simplified edge it becomes.
+        std::size_t start = 0;
+        for (std::size_t i = 1; i < nr; ++i) if (rawFace[i].x < rawFace[start].x) start = i;   // an extreme point is a true corner
+        Poly2 open;
+        std::vector<Real> openW;
+        for (std::size_t k = 0; k <= nr; ++k) { open.push_back(rawFace[(start + k) % nr]); openW.push_back(rawW[(start + k) % nr]); }
+        std::vector<std::size_t> keep = dpKeep(open, 1.0);
+        {   // also keep every vertex where the street width changes
+            std::set<std::size_t> ks(keep.begin(), keep.end());
+            for (std::size_t k = 1; k < nr; ++k) if (std::fabs(openW[k] - openW[k - 1]) > 0.1) ks.insert(k);
+            keep.assign(ks.begin(), ks.end());
+        }
+        Poly2 face;
+        std::vector<Real> out;
+        for (std::size_t k = 0; k + 1 < keep.size(); ++k) {
+            face.push_back(open[keep[k]]);
+            out.push_back(-(openW[keep[k]] * 0.5 + B.sidewalk));
+        }
+        if (face.size() < 3) continue;
+        Real mean = 0;
+        for (Real o : out) mean += -o;
+        mean /= static_cast<Real>(out.size());
+        Poly2 bld = offsetPolygonEdges(face, out);
+        const Real fa = area(face);
+        if (bld.size() < 3 || signedArea(bld) <= 0 || area(bld) >= fa || area(bld) < 0.1 * fa) bld = inset(face, mean);
+        if (bld.size() < 3 || area(bld) < 150.0) continue;
+        PlanBlock pb;
+        pb.face = std::move(face);
+        pb.buildable = std::move(bld);
+        const Real r = (centroid(pb.buildable) - B.center).length();
+        pb.district = r < B.coreRadius ? 0 : r < B.midRadius ? 1 : 2;
+        plan.blocks.push_back(std::move(pb));
+    }
+    return plan;
+}
+
+// ---- evaluate -------------------------------------------------------------------------
+PlanScore evaluatePlan(CityPlan& plan) {
+    const Brief& B = plan.brief;
+    PlanScore s;
+    // Freeway geometry for right-of-way tests.
+    std::vector<std::vector<Vec2>> fwLines;
+    for (const RoadEdge& e : plan.freeway.edges)
+        fwLines.push_back({plan.freeway.nodes[static_cast<std::size_t>(e.a)].pos, plan.freeway.nodes[static_cast<std::size_t>(e.b)].pos});
+    const Real rowHalf = B.freewayWidth * 0.5 + 25.0;
+    Real rectArea = 0, allArea = 0, coreRect = 0, coreAll = 0;
+    int lotsInLotBlocks = 0;
+    for (PlanBlock& b : plan.blocks) {
+        b.area = area(b.buildable);
+        const OBB2 ob = orientedBoundingBox(b.buildable);
+        const Real obbArea = 4 * ob.half[0] * ob.half[1];
+        b.rectangularity = obbArea > 0 ? b.area / obbArea : 0;
+        b.narrow = 2 * std::min(ob.half[0], ob.half[1]);
+        b.edges = static_cast<int>(dpKeep(b.buildable, 1.5).size());
+        // On the freeway: any buildable vertex (or the centroid) inside its right-of-way.
+        bool onFreeway = false;
+        const Vec2 c = centroid(b.buildable);
+        for (const auto& L : fwLines) {
+            if (distToPolyline(c, L, false) < rowHalf) { onFreeway = true; break; }
+            for (const Vec2& v : b.buildable) if (distToPolyline(v, L, false) < rowHalf * 0.6) { onFreeway = true; break; }
+            if (onFreeway) break;
+        }
+        // A dry-run of the engine's parcel walk at the district grain (the lot pass's).
+        ParcelParams pp;
+        if (b.district == 0) { pp.frontWidth = 45; pp.lotDepth = 50; pp.targetArea = 2400; }
+        else if (b.district == 1) { pp.frontWidth = 22; pp.lotDepth = 36; pp.targetArea = 700; }
+        else { pp.frontWidth = 18; pp.lotDepth = 27; pp.targetArea = 400; }
+        pp.seed = static_cast<uint32_t>(std::llround(c.x * 3.1 + c.y * 7.7)) ^ B.seed;
+        int lots = 0;
+        for (const Lot& L : subdivideBlock(b.buildable, pp, b.district))
+            if (!L.court && area(L.footprint) >= pp.minArea) ++lots;
+        b.lots = lots;
+        if (onFreeway) b.use = BlockUse::RightOfWay;
+        else if (b.area < 700.0 || b.narrow < 16.0) b.use = BlockUse::Park;
+        else if (lots <= 2) b.use = BlockUse::Landmark;
+        else b.use = BlockUse::Lots;
+        b.predictedBuildings = b.use == BlockUse::Lots ? static_cast<int>(std::lround(lots * 0.9))
+                               : b.use == BlockUse::Landmark ? 1 : 0;
+        ++s.blocks;
+        switch (b.use) {
+            case BlockUse::Lots: ++s.lotBlocks; lotsInLotBlocks += lots; break;
+            case BlockUse::Landmark: ++s.landmarkBlocks; break;
+            case BlockUse::Park: ++s.parkBlocks; break;
+            case BlockUse::RightOfWay: ++s.rowBlocks; break;
+        }
+        s.predictedBuildings += b.predictedBuildings;
+        s.lots += b.use == BlockUse::Lots ? lots : 0;
+        if (b.use != BlockUse::RightOfWay) {
+            allArea += b.area;
+            if (b.rectangularity >= 0.85) rectArea += b.area;
+            if (b.district <= 1) { coreAll += b.area; if (b.rectangularity >= 0.85) coreRect += b.area; }
+        }
+    }
+    s.rectilinearShare = allArea > 0 ? rectArea / allArea : 0;
+    s.coreRectilinearShare = coreAll > 0 ? coreRect / coreAll : 0;
+    s.meanLotsPerLotBlock = s.lotBlocks ? static_cast<Real>(lotsInLotBlocks) / s.lotBlocks : 0;
+    s.streetKm = polylineLength(plan.streets) / 1000.0;
+    s.freewayKm = polylineLength(plan.freeway) / 1000.0;
+    // Street connectivity (undirected components that carry an edge).
+    {
+        std::vector<int> parent(plan.streets.nodes.size());
+        for (std::size_t i = 0; i < parent.size(); ++i) parent[i] = static_cast<int>(i);
+        std::function<int(int)> find = [&](int a) { while (parent[a] != a) a = parent[a] = parent[parent[a]]; return a; };
+        for (const RoadEdge& e : plan.streets.edges) parent[find(e.a)] = find(e.b);
+        std::set<int> roots;
+        for (const RoadEdge& e : plan.streets.edges) roots.insert(find(e.a));
+        s.streetComponents = static_cast<int>(roots.size());
+    }
+    // The route-choice test: commutes from the outskirts and midtown into the core, on the
+    // engine's own router (with its street-junction delay), streets + freeway + interchanges.
+    {
+        RoadGraph all = plan.streets;
+        const int off = static_cast<int>(all.nodes.size());
+        for (const RoadNode& n : plan.freeway.nodes) all.nodes.push_back(n);
+        for (RoadEdge e : plan.freeway.edges) { e.a += off; e.b += off; e.layer = 1; all.edges.push_back(e); }
+        auto nearest = [&](const Vec2& p, int from, int to, bool arterialOnly) {
+            int best = -1; Real bd = 1e30;
+            for (int i = from; i < to; ++i) {
+                const Real d = (all.nodes[static_cast<std::size_t>(i)].pos - p).length();
+                if (d < bd) { bd = d; best = i; }
+            }
+            (void)arterialOnly;
+            return best;
+        };
+        for (const Vec2& p : plan.interchanges) {
+            const int fn = nearest(p, off, static_cast<int>(all.nodes.size()), false);
+            const int sn = nearest(p, 0, off, true);
+            if (fn >= 0 && sn >= 0) {
+                RoadEdge r{fn, sn, 8.0, RoadClass::Ramp};
+                all.edges.push_back(r);
+            }
+        }
+        NavBuildParams np;
+        np.oneWayRamps = false;
+        const NavGraph nav = buildNavGraph(all, np);
+        std::vector<int> homes, jobs;
+        for (std::size_t i = 0; i < plan.blocks.size(); ++i) {
+            const PlanBlock& b = plan.blocks[i];
+            if (b.use == BlockUse::RightOfWay || b.use == BlockUse::Park) continue;
+            if (b.district == 0) jobs.push_back(static_cast<int>(i));
+            else homes.push_back(static_cast<int>(i));
+        }
+        int via = 0, routed = 0;
+        if (!homes.empty() && !jobs.empty() && nav.nodeCount() > 1) {
+            for (int k = 0; k < 300; ++k) {
+                const uint32_t h = hash3(k, 91, B.seed);
+                const PlanBlock& hb = plan.blocks[static_cast<std::size_t>(homes[h % homes.size()])];
+                const PlanBlock& jb = plan.blocks[static_cast<std::size_t>(jobs[(h >> 12) % jobs.size()])];
+                const int hn = nav.nearestNode(centroid(hb.buildable)), jn = nav.nearestNode(centroid(jb.buildable));
+                if (hn < 0 || jn < 0 || hn == jn) continue;
+                const Route r = findRoute(nav, hn, jn);
+                if (!r.valid()) continue;
+                ++routed;
+                for (int li : r.links)
+                    if (nav.links[static_cast<std::size_t>(li)].klass == RoadClass::Freeway) { ++via; break; }
+            }
+        }
+        s.commutesSampled = routed;
+        s.freewayCommuteShare = routed ? static_cast<Real>(via) / routed : 0;
+    }
+    if (s.streetComponents != 1) s.notes.push_back("the street network is in " + std::to_string(s.streetComponents) + " pieces");
+    if (s.coreRectilinearShare < 0.6) s.notes.push_back("the core and midtown are less than 60% rectilinear by area");
+    return s;
+}
+
+// ---- output --------------------------------------------------------------------------------
+nlohmann::json planToJson(const CityPlan& plan, const PlanScore& s) {
+    nlohmann::json j;
+    j["brief"] = briefToJson(plan.brief);
+    auto graphJson = [](const RoadGraph& g) {
+        nlohmann::json nodes = nlohmann::json::array(), edges = nlohmann::json::array();
+        for (const RoadNode& n : g.nodes) nodes.push_back({n.pos.x, n.pos.y});
+        for (const RoadEdge& e : g.edges) {
+            const char* k = e.klass == RoadClass::Freeway ? "freeway" : e.klass == RoadClass::Arterial ? "arterial"
+                          : e.klass == RoadClass::Collector ? "collector" : e.klass == RoadClass::Ramp ? "ramp" : "local";
+            edges.push_back({{"a", e.a}, {"b", e.b}, {"class", k}, {"width", e.width}});
+        }
+        return nlohmann::json{{"nodes", nodes}, {"edges", edges}};
+    };
+    j["streets"] = graphJson(plan.streets);
+    j["freeway"] = graphJson(plan.freeway);
+    nlohmann::json ic = nlohmann::json::array();
+    for (const Vec2& p : plan.interchanges) ic.push_back({p.x, p.y});
+    j["interchanges"] = ic;
+    nlohmann::json blocks = nlohmann::json::array();
+    for (const PlanBlock& b : plan.blocks) {
+        nlohmann::json poly = nlohmann::json::array();
+        for (const Vec2& v : b.buildable) poly.push_back({std::round(v.x * 10) / 10, std::round(v.y * 10) / 10});
+        blocks.push_back({{"polygon", poly}, {"district", b.district == 0 ? "core" : b.district == 1 ? "midtown" : "outskirts"},
+                          {"use", blockUseName(b.use)}, {"area", std::round(b.area)}, {"rectangularity", std::round(b.rectangularity * 100) / 100},
+                          {"narrow", std::round(b.narrow * 10) / 10}, {"lots", b.lots}, {"buildings", b.predictedBuildings}});
+    }
+    j["blocks"] = blocks;
+    j["score"] = {{"blocks", s.blocks}, {"lotBlocks", s.lotBlocks}, {"landmarkBlocks", s.landmarkBlocks}, {"parkBlocks", s.parkBlocks},
+                  {"rightOfWayBlocks", s.rowBlocks}, {"predictedBuildings", s.predictedBuildings}, {"lots", s.lots},
+                  {"rectilinearShare", s.rectilinearShare}, {"coreRectilinearShare", s.coreRectilinearShare},
+                  {"meanLotsPerLotBlock", s.meanLotsPerLotBlock}, {"streetComponents", s.streetComponents},
+                  {"commutesSampled", s.commutesSampled}, {"freewayCommuteShare", s.freewayCommuteShare},
+                  {"streetKm", s.streetKm}, {"freewayKm", s.freewayKm}, {"notes", s.notes}};
+    return j;
+}
+
+std::string planToSvg(const CityPlan& plan, const PlanScore& s) {
+    const Brief& B = plan.brief;
+    const Real half = B.size * 0.5;
+    const Real panel = B.size * 0.36;
+    std::ostringstream o;
+    o.setf(std::ios::fixed); o.precision(1);
+    const Real x0 = B.center.x - half, y0 = B.center.y - half;
+    o << "<svg xmlns='http://www.w3.org/2000/svg' viewBox='" << x0 << " " << y0 << " " << (B.size + panel) << " " << B.size
+      << "' width='" << (B.size + panel) * 0.5 << "' height='" << B.size * 0.5 << "' font-family='Helvetica, Arial, sans-serif'>\n";
+    o << "<rect x='" << x0 << "' y='" << y0 << "' width='" << B.size + panel << "' height='" << B.size << "' fill='#f4f1ea'/>\n";
+    auto poly = [&](const Poly2& p, const char* fill, const char* stroke, Real sw) {
+        o << "<polygon points='";
+        for (const Vec2& v : p) o << v.x << "," << v.y << " ";
+        o << "' fill='" << fill << "' stroke='" << stroke << "' stroke-width='" << sw << "'/>\n";
+    };
+    for (const PlanBlock& b : plan.blocks) {
+        const char* fill = "#e3dcc0";
+        if (b.use == BlockUse::RightOfWay) fill = "#e2e2e2";
+        else if (b.use == BlockUse::Park) fill = "#b9d4a2";
+        else if (b.use == BlockUse::Landmark) fill = "#b0896a";
+        else fill = b.district == 0 ? "#c9b79c" : b.district == 1 ? "#d8c9a8" : "#e6dfc4";
+        poly(b.buildable, fill, "#8a7d6b", 1.2);
+    }
+    auto roadsSvg = [&](const RoadGraph& g, bool fwy) {
+        for (const RoadEdge& e : g.edges) {
+            const Vec2 a = g.nodes[static_cast<std::size_t>(e.a)].pos, b = g.nodes[static_cast<std::size_t>(e.b)].pos;
+            const char* col = fwy ? "#262626" : e.klass == RoadClass::Arterial ? "#6a6a6a" : e.klass == RoadClass::Collector ? "#858585" : "#a3a3a3";
+            o << "<line x1='" << a.x << "' y1='" << a.y << "' x2='" << b.x << "' y2='" << b.y << "' stroke='" << col
+              << "' stroke-width='" << e.width << "' stroke-linecap='round'/>\n";
+        }
+    };
+    roadsSvg(plan.streets, false);
+    roadsSvg(plan.freeway, true);
+    for (const Vec2& p : plan.interchanges)
+        o << "<circle cx='" << p.x << "' cy='" << p.y << "' r='30' fill='none' stroke='#e07a1f' stroke-width='8'/>\n";
+    // The scorecard.
+    const Real tx = B.center.x + half + 40, ty = y0 + 90;
+    const Real fs = B.size / 60.0;
+    int line = 0;
+    auto text = [&](const std::string& t, bool bold = false) {
+        o << "<text x='" << tx << "' y='" << ty + line * fs * 1.5 << "' font-size='" << (bold ? fs * 1.3 : fs)
+          << "'" << (bold ? " font-weight='bold'" : "") << ">" << t << "</text>\n";
+        ++line;
+    };
+    char buf[256];
+    text(B.name, true);
+    std::snprintf(buf, sizeof buf, "%.1f x %.1f km, grid %.0f deg, core %.0fx%.0f m", B.size / 1000, B.size / 1000, B.gridAngleDeg, B.coreBlockU, B.coreBlockV); text(buf);
+    ++line;
+    std::snprintf(buf, sizeof buf, "blocks %d: lots %d, landmark %d, park %d, freeway %d", s.blocks, s.lotBlocks, s.landmarkBlocks, s.parkBlocks, s.rowBlocks); text(buf);
+    std::snprintf(buf, sizeof buf, "predicted buildings %d (%d lots, %.1f per block)", s.predictedBuildings, s.lots, s.meanLotsPerLotBlock); text(buf);
+    std::snprintf(buf, sizeof buf, "rectilinear: %.0f%% of block area (core+midtown %.0f%%)", 100 * s.rectilinearShare, 100 * s.coreRectilinearShare); text(buf);
+    std::snprintf(buf, sizeof buf, "streets %.1f km, freeway %.1f km, %zu interchanges", s.streetKm, s.freewayKm, plan.interchanges.size()); text(buf);
+    std::snprintf(buf, sizeof buf, "freeway share of commutes: %.0f%% (%d sampled)", 100 * s.freewayCommuteShare, s.commutesSampled); text(buf);
+    std::snprintf(buf, sizeof buf, "street network: %d piece%s", s.streetComponents, s.streetComponents == 1 ? "" : "s"); text(buf);
+    for (const std::string& n : s.notes) text("! " + n);
+    ++line;
+    struct Key { const char* fill; const char* label; };
+    for (const Key& k : {Key{"#c9b79c", "core lots"}, Key{"#d8c9a8", "midtown lots"}, Key{"#e6dfc4", "outskirts lots"},
+                         Key{"#b0896a", "landmark (one building + plaza)"}, Key{"#b9d4a2", "park"}, Key{"#e2e2e2", "freeway right-of-way"}}) {
+        o << "<rect x='" << tx << "' y='" << ty + line * fs * 1.5 - fs << "' width='" << fs * 1.4 << "' height='" << fs * 1.1
+          << "' fill='" << k.fill << "' stroke='#8a7d6b'/>\n";
+        o << "<text x='" << tx + fs * 2 << "' y='" << ty + line * fs * 1.5 << "' font-size='" << fs << "'>" << k.label << "</text>\n";
+        ++line;
+    }
+    o << "</svg>\n";
+    return o.str();
+}
+
+}  // namespace plan
+}  // namespace engine

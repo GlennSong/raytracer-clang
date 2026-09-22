@@ -102,6 +102,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/shape_grammar.cpp
     src/engine/procgen/city/city_svg.cpp
     src/engine/procgen/city/parcel.cpp
+    src/engine/procgen/city/plan/city_plan.cpp
     src/engine/procgen/city/site_plan.cpp
     src/engine/procgen/city/core_plan.cpp
     src/engine/procgen/city/room_plan.cpp
@@ -399,6 +400,14 @@ endif()
 # them builds an engine that simply does not know the lanes builder.
 # ============================================================
 option(RT_BUILD_ROADS_LANES "Build the lanes road builder (needs the Clipper2 and CDT submodules)" ON)
+# The city planner: design a city as data (a road graph and blocks with a use),
+# score it with the engine's own parcel walk and router, draw it (ADR-0092).
+# Engine-only — it plans a city, it does not build one, so no roads builder here.
+add_executable(city_plan tools/city_plan.cpp)
+target_include_directories(city_plan PRIVATE src)
+target_compile_options(city_plan PRIVATE -Wall -Wextra)
+target_link_libraries(city_plan PRIVATE engine_core)
+
 if(RT_BUILD_ROADS_LANES)
     foreach(dep IN ITEMS Clipper2 CDT)
         if(NOT EXISTS "${CMAKE_SOURCE_DIR}/third_party/${dep}/LICENSE" AND Git_FOUND)
@@ -740,6 +749,7 @@ add_executable(run_tests
     tests/test_architect.cpp
     tests/test_erosion_gpu.cpp
     tests/test_lot_road_clearance.cpp
+    tests/test_city_plan.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
