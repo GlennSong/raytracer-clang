@@ -391,7 +391,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         // 5.0 m lead in two runs forty minutes apart, with a queue of walkers
         // stacked behind it, and Glenn watching three of them walk into a
         // fence. After kTetherGiveUp seconds of no progress the PLAN wins and
-        // the body is moved to it. A visible step is worse than a person who
+        // the body is moved to it. A visible step is less bad than a person who
         // stands in the road for the rest of the day.
         const Real lead = std::sqrt((g.pos.x - posXZ.x) * (g.pos.x - posXZ.x) +
                                     (g.pos.y - posXZ.y) * (g.pos.y - posXZ.y));
