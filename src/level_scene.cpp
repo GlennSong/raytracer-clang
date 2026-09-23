@@ -478,6 +478,42 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
     // matches the same eroded surface everywhere (see level_loader for the rationale).
     auto sharedEroded = readErodedBase(root);
 
+    // A BUILDER THAT MADE THE GROUND IS THE GROUND (ADR-0089 GroundPlan::replace). The lanes
+    // builder conforms its own grid while it paves, and that grid is what the game renders —
+    // so the offline render has to use it too, or the city sits on one surface and the terrain
+    // mesh draws another: 40 m of relief put the level's own hills in front of the camera and
+    // buried the street. Outside the grid the level's terrain takes over across a 60 m band,
+    // exactly as the loader blends it.
+    if (root.contains("terrain")) {
+        auto base = std::make_shared<TerrainParams>(readTerrainParams(root["terrain"]));
+        base->erodedBase = sharedEroded;
+        auto baseNoise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
+        HeightField natural = [base, baseNoise](double x, double z) { return terrainHeight(*base, *baseNoise, x, z); };
+        for (const auto& ent : root.value("entities", json::array())) {
+            if (ent.value("shape", std::string()) != "road") continue;
+            const json roadBlock = ent.contains("road") ? ent["road"] : json::object();
+            roads::RoadBuilder& rb = roads::roadBuilderFor(roadBlock);
+            RoadEntity net = roadNetFromJson(roadBlock);
+            roads::RoadBuildInput in;
+            in.road = &net; in.ground = natural; in.options = roadBlock; in.level = root; in.levelPath = levelPath;
+            const roads::GroundPlan gp = rb.ground(in);
+            if (!gp.replaces()) continue;
+            auto grid = gp.replace;
+            const double gx1 = grid->x0 + grid->res * (grid->nx - 1), gy1 = grid->y0 + grid->res * (grid->ny - 1);
+            sharedEroded = std::make_shared<const std::function<double(double, double)>>(
+                [grid, natural, gx1, gy1](double x, double z) {
+                    const double band = 60.0;
+                    const double inset = std::min(std::min(x - grid->x0, gx1 - x), std::min(z - grid->y0, gy1 - z));
+                    if (inset <= 0) return natural(x, z);
+                    const double g = grid->sample(x, z);
+                    if (inset >= band) return g;
+                    const double t = inset / band;
+                    return natural(x, z) * (1 - t) + g * t;
+                });
+            break;
+        }
+    }
+
     HeightField levelGround;
     if (root.contains("terrain")) {
         auto tp = std::make_shared<TerrainParams>(readTerrainParams(root["terrain"]));
@@ -546,6 +582,14 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         std::vector<TerrainFlatten> allFlatten;
         allFlatten.insert(allFlatten.end(), scriptFlatten.begin(), scriptFlatten.end());
         std::vector<RoadEntity> lotNets;
+        // A builder that paves a WHOLE CITY knows the blocks; a lattice net does not. The
+        // lanes builder's pavement holes are where this city's lots go, and asking for them
+        // here is what the loader does before its terrain pre-pass. Without it the offline
+        // render of a lane-built city had roads, traffic and no buildings at all.
+        std::vector<engine::Poly2> cityHoles;
+        engine::RoadGraph cityStreets;
+        double cityPavedSidewalk = 0;
+        int lotRoadOrdinal = 0;
         if (levelGround)
             for (const auto& ent : root.value("entities", json::array())) {
                 if (ent.value("shape", std::string()) != "road") continue;
@@ -558,13 +602,29 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                 std::vector<TerrainFlatten> r =
                     roadNetConformRegions(net, levelGround);
                 allFlatten.insert(allFlatten.end(), r.begin(), r.end());
+                roads::RoadBuilder& rb = roads::roadBuilderFor(roadBlock);
+                if (rb.ownsNavGraph()) {   // a builder that paves a whole city knows its blocks
+                    roads::RoadBuildInput in;
+                    in.road = &net;
+                    in.ground = levelGround;
+                    in.options = roadBlock;
+                    in.level = root;
+                    in.levelPath = levelPath;
+                    in.ordinal = lotRoadOrdinal++;
+                    const roads::RoadProducts built = rb.build(in);   // a bundle hit, not a rebuild
+                    if (!built.holes.empty()) {
+                        cityHoles = built.holes;
+                        cityStreets = rb.navGraph(in);   // the streets a door faces
+                        cityPavedSidewalk = built.bands.sidewalkWidth;
+                    }
+                }
                 lotNets.push_back(std::move(net));
             }
         // Living-city LOTS (mirrors the viewer's loader): grow the blocks'
         // buildings on the road-carved ground, stamp each building's FLAT
         // graded pad into the terrain, and bake the grown geometry — so the
         // offline render shows the same city-on-terrain the device does.
-        if (levelGround && !lotNets.empty() && root.contains("citysim") &&
+        if (levelGround && (!lotNets.empty() || !cityHoles.empty()) && root.contains("citysim") &&
             root["citysim"].value("buildLots", false)) {
             const json& cs = root["citysim"];
             TerrainParams ctp = readTerrainParams(root["terrain"]);
@@ -586,6 +646,11 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             };
             gin.netGround = levelGround;                   // ...the nets drape on the natural one
             gin.nets = &lotNets;
+            if (!cityHoles.empty()) {
+                gin.holes = &cityHoles;
+                gin.streets = &cityStreets;
+                gin.pavedSidewalk = cityPavedSidewalk;
+            }
             engine::Vec2 spawnXZ;
             if (engine::authoredSpawnXZ(root, spawnXZ)) gin.enterableAt = &spawnXZ;
             engine::NetLotResult lots = engine::growCity(gin);
