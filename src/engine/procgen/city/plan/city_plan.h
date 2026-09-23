@@ -107,6 +107,16 @@ struct CityPlan {
     // inner end meets midtown's boulevard. Not built where no site out there stands clear of the sea.
     struct Town { bool built = false; Vec2 gate, axis, centre; };
     std::vector<Town> towns;
+    // THE OUTER LOOP (optional, brief.world.loop): a freeway that carries the two expressways on
+    // round the mountain side of the city, following the mountain front — so the route is one
+    // road, city -> spur `loopFrom` outward -> loop -> spur `loopTo` inward -> city, with no
+    // freeway-to-freeway junction. `loop` runs from the first spur's outer end to the second's.
+    // PLACES stand along it: strip towns laid out in its frame, their main street on the city
+    // side and a back road on the mountain side, cross streets under the (elevated) freeway.
+    std::vector<Vec2> loop;
+    int loopFrom = -1, loopTo = -1;
+    struct Place { std::string name, kind; double s0 = 0, s1 = 0; Vec2 hub; };
+    std::vector<Place> places;
     std::vector<Vec2> interchanges;
     std::vector<PlanBlock> blocks;
 };

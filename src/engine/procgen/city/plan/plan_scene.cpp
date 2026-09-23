@@ -419,17 +419,45 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
     // Inside the ring, past the interchange's loops, the carriageways carry on as a one-way
     // boulevard pair that splays to meet midtown's boulevard at two Ts 40 m apart. (Closed
     // into one two-way road, two edges' lanes share one centreline at the node and overlap.)
+    // THE OUTER LOOP makes the two expressways and itself one route — the first spur outward, the
+    // loop, the second spur inward — offset once, as the ring is, then cut into its three edges so
+    // their carriageways meet end to end. A spur's own a still runs with the spur, inward.
+    const bool looped = !plan.loop.empty() && plan.loopFrom >= 0 && plan.loopTo >= 0;
+    std::vector<Vec2> routeA, routeB;
+    std::size_t nFrom = 0, nLoop = 0;
+    if (looped) {
+        std::vector<Vec2> from = spurFreeway(plan, static_cast<std::size_t>(plan.loopFrom)), to = spurFreeway(plan, static_cast<std::size_t>(plan.loopTo));
+        std::reverse(from.begin(), from.end());
+        std::vector<Vec2> route = from;
+        route.insert(route.end(), plan.loop.begin() + 1, plan.loop.end());
+        route.insert(route.end(), to.begin() + 1, to.end());
+        routeA = offsetPolyline(route, -fs.carriage);
+        routeB = offsetPolyline(route, fs.carriage);
+        nFrom = from.size();
+        nLoop = plan.loop.size();
+    }
+    auto slice = [](const std::vector<Vec2>& v, std::size_t a, std::size_t b) { return std::vector<Vec2>(v.begin() + static_cast<long>(a), v.begin() + static_cast<long>(b)); };
     for (std::size_t j = 0; j < plan.spurs.size(); ++j) {
         const std::vector<Vec2> fwy = spurFreeway(plan, j);
         double sx = 0; std::size_t seg = 0;
         const bool crosses = crossingWithRing(fwy, plan.ring, sx, seg);
-        const std::vector<Vec2> ca = offsetPolyline(fwy, -fs.carriage), cb = offsetPolyline(fwy, fs.carriage);
+        std::vector<Vec2> ca = offsetPolyline(fwy, -fs.carriage), cb = offsetPolyline(fwy, fs.carriage);
+        const bool onLoop = looped && (static_cast<int>(j) == plan.loopFrom || static_cast<int>(j) == plan.loopTo);
+        if (onLoop && static_cast<int>(j) == plan.loopFrom) {
+            // run outward in the route: its left carriageway is the spur's a, reversed back inward
+            ca = slice(routeB, 0, nFrom); std::reverse(ca.begin(), ca.end());
+            cb = slice(routeA, 0, nFrom); std::reverse(cb.begin(), cb.end());
+        } else if (onLoop) {
+            ca = slice(routeA, nFrom + nLoop - 2, routeA.size());
+            cb = slice(routeB, nFrom + nLoop - 2, routeB.size());
+        }
         const std::size_t id = chains.size() + j;
         // floors to 200 m out: at 8 m to 140 m (past the suburbs' first street, 200 m out on
         // rolling ground), then down at design grade to pass under the ring, held higher there —
         // and, approaching a town, from 250 m out, down to meet its main street at ground level
         const bool town = j < plan.towns.size() && plan.towns[j].built;
-        carriageways(id, ca, cb, floorsOver(fwy, town ? 250.0 : 0.0, crosses ? sx - 200.0 : 1e30));
+        // on the loop, the spur comes down to meet it at ground level 300 m in from the joint
+        carriageways(id, ca, cb, floorsOver(fwy, onLoop ? 300.0 : town ? 250.0 : 0.0, crosses ? sx - 200.0 : 1e30));
         // A pair of one-way boulevards between a freeway end and its two Ts, `dir` pointing along
         // the freeway away from the Ts; a (the carriageway with the route) takes the T on its right.
         auto pair = [&](const std::string& idp, const std::array<Vec2, 2>& tp, const Vec2& freewayEnd, const Vec2& dir,
@@ -448,7 +476,9 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         };
         const auto& tp = teePoints[j];
         auto found = [](const std::array<Vec2, 2>& t) { return t[0].lengthSquared() != 0 || t[1].lengthSquared() != 0; };
-        if (town && found(tp[0])) {
+        if (onLoop) {
+            // the far end runs on into the loop: nothing to end
+        } else if (town && found(tp[0])) {
             // THE TOWN END: the expressway comes down to its main street as the same pair
             pair("bt" + std::to_string(j), tp[0], fwy.front(), normalize(fwy[1] - fwy.front()), ca.front(), cb.front(), true);
         } else {
@@ -474,6 +504,15 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         }
         // THE MIDTOWN END
         if (found(tp[1])) pair("bv" + std::to_string(j), tp[1], fwy.back(), normalize(fwy[fwy.size() - 2] - fwy.back()), ca.back(), cb.back(), false);
+    }
+    // the loop itself: at ground level across open country, 8 m up through each place and 150 m
+    // either side of it, so the places' cross streets pass under
+    const std::size_t loopId = chains.size() + plan.spurs.size();
+    if (looped) {
+        json floors = json::array();
+        for (const CityPlan::Place& pl : plan.places)
+            for (const json& f : floorsOver(plan.loop, pl.s0 - 150.0, pl.s1 + 150.0)) floors.push_back(f);
+        carriageways(loopId, slice(routeA, nFrom - 1, nFrom - 1 + nLoop), slice(routeB, nFrom - 1, nFrom - 1 + nLoop), floors);
     }
 
     // THE RAMPS, after every edge they anchor to. Each ring chain gets diamonds onto the streets
@@ -503,6 +542,29 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
                 std::printf("[plan] %s: %d diamonds of %d crossings (oblique %d, spacing %d, no terminal %d, no room %d, over a street %d)\n",
                             dop.aId.c_str(), dr.built, dr.candidates, dr.rejectedOblique, dr.rejectedSpacing, dr.rejectedTerminal,
                             dr.rejectedRoom, dr.rejectedConflict);
+        }
+        if (looped) {
+            // the loop's diamonds, onto its places' main streets and back roads
+            roads::lanes::DiamondOptions dop;
+            dop.aId = "fw" + std::to_string(loopId) + "_a";
+            dop.bId = "fw" + std::to_string(loopId) + "_b";
+            dop.idPrefix = "dl";
+            dop.carriage = fs.carriage;
+            dop.edgeReach = fs.edgeReach;
+            dop.freewayLanes = fs.lanes;
+            dop.freewayLaneW = fs.laneW;
+            dop.maxDiamonds = 3 * opt.diamondsPerRoute;
+            dop.spacing = opt.interchangeSpacing;
+            dop.clearance = opt.clearance;
+            dop.rampHalf = 4.5 / 2 + 2.5;
+            dop.gRamp = 0.08;
+            dop.ground = ground;
+            dop.window = 60.0;
+            const roads::lanes::DiamondResult dr = roads::lanes::diamondRamps(plan.loop, rampStreets, dop);
+            for (const json& r : dr.ramps) edges.push_back(r);
+            if (std::getenv("RT_PLAN_WHY"))
+                std::printf("[plan] the loop: %d diamonds of %d crossings (oblique %d, spacing %d, no terminal %d, no room %d, over a street %d)\n",
+                            dr.built, dr.candidates, dr.rejectedOblique, dr.rejectedSpacing, dr.rejectedTerminal, dr.rejectedRoom, dr.rejectedConflict);
         }
         for (const SystemAt& at : systems) {
             for (const json& r : at.r.ramps) edges.push_back(r);

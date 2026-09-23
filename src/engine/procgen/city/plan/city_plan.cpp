@@ -1,6 +1,7 @@
 #include "city_plan.h"
 #include "plan_scene.h"   // the freeway both sides build: what the plan clears for the scene
 #include "../roads/lanes/road_graph_spec.h"   // stations
+#include "../roads/lanes/polyline_ops.h"     // pointAt, tangentAtStation: the loop's frame
 
 #include "../parcel.h"
 #include "../site_plan.h"
@@ -780,6 +781,140 @@ CityPlan generatePlan(const Brief& B) {
         }
     };
 
+    // --- the outer loop and its places ---
+    const nlohmann::json loopSpec = B.world.is_null() ? nlohmann::json() : B.world.value("loop", nlohmann::json());
+    // A PLACE along the loop, in the loop's own frame (station along it, offset from it): its main
+    // street 50 m in on the city side (an arterial), `depth` - 1 more streets parallel behind it, a
+    // back road 50 m out on the mountain side, and cross streets every 110 m from the back road to
+    // the last parallel, passing under the freeway. The two roads 50 m either side are where the
+    // loop's diamonds land, as the ring's land on its frontage roads.
+    std::vector<Polyline> placeRoads;
+    auto layPlace = [&](CityPlan::Place& pl, int depth, const HeightField& g) {
+        (void)g;
+        const std::vector<double> st = roads::lanes::stations(plan.loop);
+        auto frame = [&](Real s, Real off) {
+            const Vec2 p = roads::lanes::pointAt(plan.loop, st, s), t = roads::lanes::tangentAtStation(plan.loop, st, s);
+            const Vec2 n(-t.y, t.x);
+            const Real in = dot(n, B.center - p) > 0 ? 1 : -1;   // + offsets toward the city
+            return p + n * (in * off);
+        };
+        auto street = [&](Real s0, Real s1, Real off0, Real off1, RoadClass k, Real w) {
+            Polyline p; p.klass = k; p.width = w;
+            if (off0 == off1) {   // along the loop, curving with it
+                for (Real s = s0; s < s1; s += 20) p.pts.push_back(frame(s, off0));
+                p.pts.push_back(frame(s1, off0));
+            } else {              // across it
+                const int n = std::max(1, static_cast<int>(std::fabs(off1 - off0) / 20));
+                for (int i = 0; i <= n; ++i) p.pts.push_back(frame(s0, off0 + (off1 - off0) * i / n));
+            }
+            placeRoads.push_back(p);
+        };
+        const Real bv = 90, bu = 110;
+        const Real inner = 50 + (depth - 1) * bv;
+        street(pl.s0 - 2, pl.s1 + 2, 50, 50, RoadClass::Arterial, B.arterialWidth);                  // main street
+        for (int k = 1; k < depth; ++k) street(pl.s0 - 2, pl.s1 + 2, 50 + k * bv, 50 + k * bv, RoadClass::Local, B.localWidth);
+        street(pl.s0 - 2, pl.s1 + 2, -50, -50, RoadClass::Collector, B.collectorWidth);             // back road
+        // Every fourth cross street passes under the freeway to the back road; the rest stop at the
+        // main street. With all of them crossing, 110 m apart, every diamond had a ramp coming down
+        // across one — the generator refused all 40. A diamond sits on a crossing street, its
+        // ramps touching down on the main street and back road between them.
+        int j = 0;
+        for (Real s = pl.s0; s <= pl.s1 + 1; s += bu, ++j) {
+            const bool under = j % 4 == 0;
+            street(s, s, under ? -52 : 48, inner + 2, under ? RoadClass::Collector : RoadClass::Local, under ? B.collectorWidth : B.localWidth);
+        }
+        pl.hub = frame((pl.s0 + pl.s1) / 2, 50 + (depth - 1) * bv / 2);
+    };
+
+    // THE MOUNTAIN FRONT, ray by ray from the centre: the first place past the city where the
+    // ground turns steep (6% over 20 m). The loop keeps `setback` short of it, clamped between
+    // room for the places inside and the edge of the ground grid, and is smoothed along its arc.
+    // Of the two arcs between the expressways it takes the one with more front: the mountain side.
+    auto buildLoop = [&](const std::vector<Real>& th, std::vector<Real>& start) {
+        const HeightField g = sceneGround(B);
+        const Real gridHalf = B.world.value("grid", B.size * 0.5 + 60);
+        const Real setback = loopSpec.value("setback", 250.0);
+        const Real rMin = outerR + loopSpec.value("inner", 650.0), rMax = gridHalf - 350;
+        auto front = [&](Real a) {
+            const Vec2 d(std::cos(a), std::sin(a));
+            for (Real r = rMin; r <= rMax + setback; r += 20) {
+                const Vec2 p = B.center + d * r, q = B.center + d * (r + 20);
+                if (std::fabs(q.x - B.center.x) > gridHalf - 100 || std::fabs(q.y - B.center.y) > gridHalf - 100) return Real(1e9);
+                if (g(q.x, q.y) - g(p.x, p.y) > 0.06 * 20) return r;
+            }
+            return Real(1e9);
+        };
+        const Real deg = kPi / 180;
+        Real a0 = th[0], a1 = th[1];
+        auto sweep = [&](Real from, Real to, Real sign) {   // angles from `from` to `to` going `sign`-wise, 1 degree apart
+            std::vector<Real> out;
+            Real span = std::remainder(to - from, 2 * kPi);
+            if (span * sign < 0) span += sign * 2 * kPi;
+            for (Real t = 0; t <= std::fabs(span) + 1e-9; t += deg) out.push_back(from + sign * t);
+            return out;
+        };
+        int hitsUp = 0, hitsDown = 0;
+        for (Real a : sweep(a0, a1, +1)) if (front(a) < 1e8) ++hitsUp;
+        for (Real a : sweep(a0, a1, -1)) if (front(a) < 1e8) ++hitsDown;
+        const Real sign = hitsUp >= hitsDown ? 1 : -1;
+        const std::vector<Real> arc = sweep(a0, a1, sign);
+        std::vector<Real> r(arc.size());
+        for (std::size_t i = 0; i < arc.size(); ++i) r[i] = std::clamp(front(arc[i]) - setback, rMin, rMax);
+        for (int pass = 0; pass < 4; ++pass) {   // +-8 degrees, four times: a curve a freeway can drive
+            std::vector<Real> sm(r.size());
+            for (std::size_t i = 0; i < r.size(); ++i) {
+                Real sum = 0; int n = 0;
+                for (int k = -8; k <= 8; ++k) { const long j = static_cast<long>(i) + k; if (j < 0 || j >= static_cast<long>(r.size())) continue; sum += r[static_cast<std::size_t>(j)]; ++n; }
+                sm[i] = sum / n;
+            }
+            r.swap(sm);
+        }
+        // THE JOINTS: each spur runs out to 450 m short of the loop's radius at its angle and bends
+        // into the loop 25 degrees along, on one cubic — a 90-degree turn at a freeway's radius
+        // (350 m and 20 degrees made the NE joint's tightest curve 250 m).
+        const std::size_t bend = std::min<std::size_t>(25, arc.size() / 4);
+        auto at = [&](std::size_t i) { return B.center + Vec2(std::cos(arc[i]), std::sin(arc[i])) * r[i]; };
+        auto tangent = [&](std::size_t i) { return normalize(at(std::min(i + 1, arc.size() - 1)) - at(i > 0 ? i - 1 : 0)); };
+        const Vec2 dA(std::cos(a0), std::sin(a0)), dB(std::cos(a1), std::sin(a1));
+        const Vec2 jA = B.center + dA * (r.front() - 450), jB = B.center + dB * (r.back() - 450);
+        start = {r.front() - 450, r.back() - 450};
+        const std::size_t iA = bend, iB = arc.size() - 1 - bend;
+        auto curve = [&](const Vec2& p0, const Vec2& t0, const Vec2& p3, const Vec2& t3) {
+            const Real k = (p3 - p0).length() * Real(0.45);
+            const Vec2 p1 = p0 + t0 * k, p2 = p3 - t3 * k;
+            std::vector<Vec2> out;
+            const int n = std::max(4, static_cast<int>((p3 - p0).length() / 20));
+            for (int i = 0; i < n; ++i) { const Real t = Real(i) / n, u = 1 - t; out.push_back(p0 * (u * u * u) + p1 * (3 * u * u * t) + p2 * (3 * u * t * t) + p3 * (t * t * t)); }
+            return out;
+        };
+        plan.loop = curve(jA, dA, at(iA), tangent(iA));
+        for (std::size_t i = iA; i <= iB; ++i) plan.loop.push_back(at(i));
+        const std::vector<Vec2> tail = curve(at(iB), tangent(iB), jB, dB * Real(-1));
+        plan.loop.insert(plan.loop.end(), tail.begin() + 1, tail.end());
+        plan.loop.push_back(jB);
+        plan.loopFrom = 0; plan.loopTo = 1;
+        // THE PLACES: each at the loop's point nearest its angle, `length` along the loop.
+        const std::vector<double> st = roads::lanes::stations(plan.loop);
+        for (const nlohmann::json& pj : loopSpec.value("places", nlohmann::json::array())) {
+            const Real want = pj.value("at", 180.0) * deg;
+            std::size_t best = 0; Real bd = 1e9;
+            for (std::size_t i = 0; i < plan.loop.size(); ++i) {
+                const Vec2 d = plan.loop[i] - B.center;
+                const Real e = std::fabs(std::remainder(std::atan2(d.y, d.x) - want, 2 * kPi));
+                if (e < bd) { bd = e; best = i; }
+            }
+            CityPlan::Place pl;
+            pl.name = pj.value("name", std::string("place"));
+            pl.kind = pj.value("kind", std::string("oldtown"));
+            const Real len = pj.value("length", 500.0);
+            pl.s0 = std::max(400.0, st[best] - len / 2);
+            pl.s1 = std::min(st.back() - 400.0, st[best] + len / 2);
+            if (pl.s1 - pl.s0 < 200) continue;
+            layPlace(pl, pj.value("depth", 2), g);
+            plan.places.push_back(pl);
+        }
+    };
+
     // --- freeway: a ring and radial spurs toward downtown ---
     std::vector<Polyline> fw;
     {
@@ -790,6 +925,7 @@ CityPlan generatePlan(const Brief& B) {
             ring.pts.push_back(B.center + Vec2(std::cos(th), std::sin(th)) * freewayR(th));
         }
         fw.push_back(ring);
+        std::vector<Real> spurTheta;
         for (int i = 0; i < B.freewayRadials; ++i) {
             // Midway between two spokes, so the spur never runs down an arterial.
             Real th0 = 2 * kPi * (i + 0.25) / std::max(1, B.freewayRadials);
@@ -803,32 +939,42 @@ CityPlan generatePlan(const Brief& B) {
                 }
                 th0 = pick;
             }
-            // A RADIAL EXPRESSWAY: in from the map edge — the region's road into the city —
-            // across the ring at a system interchange, to midtown's boulevard. It used to start
-            // just past the ring, which left a 40 m stub outside it and a 275 m freeway that
-            // went from the ring to nowhere.
+            spurTheta.push_back(th0);
+        }
+        // THE OUTER LOOP: round the mountain side, from one expressway's outer end to the other's.
+        std::vector<Real> spurStart(spurTheta.size(), 0);   // where each spur begins, if the loop sets it
+        if (!loopSpec.is_null() && spurTheta.size() == 2) buildLoop(spurTheta, spurStart);
+        for (std::size_t i = 0; i < spurTheta.size(); ++i) {
+            const Real th0 = spurTheta[i];
+            // A RADIAL EXPRESSWAY: in from the loop, a town or the map edge — the region's road
+            // into the city — across the ring at a system interchange, to midtown's boulevard.
             Polyline spur; spur.klass = RoadClass::Freeway; spur.width = B.freewayWidth;
             const Real rEnd = midR(th0);
-            // out to a town where the world has room for one, else to near the edge of the ground
             const Vec2 dir(std::cos(th0), std::sin(th0));
             std::vector<Vec2> head;   // gate -> where it leaves the city, when it bends to a town
-            CityPlan::Town town = siteTown(dir, head);
-            const Real rStart = town.built ? outerR + 60
+            CityPlan::Town town;
+            if (spurStart[i] <= 0) town = siteTown(dir, head);
+            const Real rStart = spurStart[i] > 0 ? spurStart[i]
+                                : town.built ? outerR + 60
                                 : B.world.is_null() ? B.size * Real(0.5) + 30 : B.world.value("grid", B.size * 0.5 + 60) - 120;
             if (town.built) layTown(town);
             plan.towns.push_back(town);
             spur.pts = head;
             for (Real r = rStart; r >= rEnd; r -= 20.0)
-                spur.pts.push_back(B.center + Vec2(std::cos(th0), std::sin(th0)) * r);
-            spur.pts.push_back(warped(B.center + Vec2(std::cos(th0), std::sin(th0)) * rEnd));
+                spur.pts.push_back(B.center + dir * r);
+            spur.pts.push_back(warped(B.center + dir * rEnd));
             fw.push_back(spur);
             plan.interchanges.push_back(spur.pts.back());   // the spur lands on midtown's boulevard
             if (town.built) plan.interchanges.push_back(town.gate);   // and on its town's main street
         }
+        if (!plan.loop.empty()) {
+            Polyline lp; lp.klass = RoadClass::Freeway; lp.width = B.freewayWidth; lp.pts = plan.loop;
+            fw.push_back(lp);
+        }
     }
     plan.freeway = planarizePolylines(fw);
     plan.ring = fw.front().pts;
-    for (std::size_t i = 1; i < fw.size(); ++i) plan.spurs.push_back(fw[i].pts);
+    for (std::size_t i = 1; i < fw.size(); ++i) if (plan.loop.empty() || i + 1 < fw.size()) plan.spurs.push_back(fw[i].pts);   // the loop is last, not a spur
     // NO STREET RUNS DOWN THE FREEWAY'S RIGHT-OF-WAY. The ring already has its two frontage
     // roads and nothing crosses between them, but a radial SPUR had no such rule: ring roads
     // and wedge streets ran inside its right-of-way for hundreds of metres, which builds as a
@@ -933,6 +1079,7 @@ CityPlan generatePlan(const Brief& B) {
     }
     // --- the street graph ---
     roads.insert(roads.end(), townRoads.begin(), townRoads.end());
+    roads.insert(roads.end(), placeRoads.begin(), placeRoads.end());
     plan.streets = planarizePolylines(roads);
     collapseShortLinks(plan.streets, B.sidewalk);
     pruneStubs(plan.streets, 45.0);

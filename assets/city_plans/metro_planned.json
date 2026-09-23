@@ -124,14 +124,32 @@
       "roughness": 0.04,
       "opacity": 0.82
     },
-    "towns": {
-      "_comment": "A town at each expressway's far end (Glenn, 2026-09-23: 'make those termination points tiny towns'): depth along the expressway, halfWidth across it, block = [cross-street spacing, side-street spacing]; sited as far out as it stands 5 m clear of the sea, at least gap past the city.",
-      "depth": 420,
-      "halfWidth": 240,
-      "gap": 500,
-      "block": [
-        100,
-        80
+    "loop": {
+      "_comment": "The outer loop (Glenn, 2026-09-23: 'go around and hug the edge of the mountains and then wrap around to the other small town and connect back to the city ... on ramps for the small towns and multiple ramps for the big mountain city'). It carries the two expressways on round the mountain side, `setback` metres short of the mountain front; places stand along it at polar angles `at` (degrees), `length` along it, `depth` streets deep on the city side.",
+      "setback": 250,
+      "inner": 650,
+      "places": [
+        {
+          "name": "sw town",
+          "at": 226,
+          "length": 550,
+          "depth": 2,
+          "kind": "oldtown"
+        },
+        {
+          "name": "mountain city",
+          "at": 178,
+          "length": 3000,
+          "depth": 5,
+          "kind": "commercial"
+        },
+        {
+          "name": "ne town",
+          "at": 75,
+          "length": 550,
+          "depth": 2,
+          "kind": "oldtown"
+        }
       ]
     }
   }

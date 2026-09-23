@@ -35,20 +35,28 @@
      "kind": "residential"
     },
     {
+     "_place": "sw town",
      "at": [
-      1059.0,
-      2572.0
+      -1775.0,
+      -1768.0
      ],
-     "kind": "oldtown",
-     "_town": true
+     "kind": "oldtown"
     },
     {
+     "_place": "mountain city",
      "at": [
-      -1731.0,
-      -2475.0
+      -1966.0,
+      68.0
      ],
-     "kind": "oldtown",
-     "_town": true
+     "kind": "commercial"
+    },
+    {
+     "_place": "ne town",
+     "at": [
+      651.0,
+      2470.0
+     ],
+     "kind": "oldtown"
     }
    ]
   },
