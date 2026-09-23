@@ -1,5 +1,9 @@
 #include "engine/procgen/city/roads/lanes/terrain_recipe.h"
 
+#include "engine/level_params.h"   // readTerrainParams: a level terrain block, read the way the level reads it
+#include "engine/procgen/terrain.h"
+
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -42,12 +46,22 @@ HeightField makeTerrain(const TerrainSpec& spec, const std::array<double, 4>& bo
     if (spec.type != "procedural") throw std::runtime_error("unknown terrain type " + spec.type);
     TerrainSpec s = spec;
     if (s.octaves.empty()) s.octaves = {{18, 140}, {7, 55}, {2, 22}};
-    return [s](double x, double y) {
+    std::shared_ptr<const TerrainParams> baseParams;
+    std::shared_ptr<const Noise> baseNoise;
+    if (!s.base.is_null()) {
+        baseParams = std::make_shared<const TerrainParams>(readTerrainParams(s.base));
+        baseNoise = std::make_shared<const Noise>(s.base.value("seed", 0u));   // as the level loader seeds it
+    }
+    auto ease = [](double u) { u = std::clamp(u, 0.0, 1.0); return u * u * (3 - 2 * u); };
+    return [s, baseParams, baseNoise, ease](double x, double y) {
         double h = 0; uint32_t seed = static_cast<uint32_t>(s.seed);
         for (size_t k = 0; k < s.octaves.size(); ++k) h += s.octaves[k].first * valueNoise(x, y, s.octaves[k].second, seed + static_cast<uint32_t>(k));
         for (const auto& v : s.valleys) { double u = (v.alongY ? y : x) - v.c; h -= v.depth * std::exp(-(u / v.width) * (u / v.width)); }
         for (const auto& b : s.hills) h += b.h * std::exp(-((x - b.x) * (x - b.x) + (y - b.y) * (y - b.y)) / (b.r * b.r));
+        if (s.hasFade) h *= 1.0 - ease((std::hypot(x - s.fadeX, y - s.fadeY) - s.fadeR0) / std::max(1e-6, s.fadeR1 - s.fadeR0));
+        if (s.hasCalm) h *= 1.0 - ease((x * s.calmDx + y * s.calmDy - s.calmFrom) / std::max(1e-6, s.calmTo - s.calmFrom));
         if (s.hasTilt) h += s.dzdx * (x - s.x0) + s.dzdy * (y - s.y0);
+        if (baseParams) h += terrainHeight(*baseParams, *baseNoise, x, y);   // lanes y is world z
         return h;
     };
 }

@@ -65,6 +65,7 @@ struct DiamondOptions {
     double shift = 50, along = 20;   // band -> frontage road at grade, then on its line to the terminal
     double clearance = 0;        // the deck's height over the ground at a crossing
     double window = 200, gMax = 0.06;   // the freeway's own profile, for the climb
+    std::vector<std::pair<double, double>> keepOut;   // station ranges no ramp's lanes may touch (a system interchange's)
     HeightField ground;          // empty: a flat city, every climb is zero
 };
 
@@ -78,6 +79,51 @@ struct DiamondResult {
 // `route` is the freeway's centreline (resampled); `streets` are what its ramps may land on.
 DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<RampStreet>& streets,
                            const DiamondOptions& o);
+
+// SYSTEM INTERCHANGE: where a radial expressway (the STEM) crosses the ring (the THROUGH road),
+// the stem passing under the ring's deck at ground level. Four ramps, the movements a radial
+// needs — in from outside to either way round the ring, and either way round the ring back
+// out: two corner connectors (right turns) in the quadrants OUTSIDE the ring and two loops
+// (left turns, 270 degrees) in the quadrants INSIDE it. The stem's inner leg carries only
+// the loops' ends, close to the crossing, because inside the ring it becomes a boulevard into
+// midtown within a couple of hundred metres; ring-to-midtown traffic uses the ring's diamonds.
+//
+// Every ramp is built in its quadrant's own frame, the two roads' stations and offsets
+// blended by angle, so a ramp that runs along the curving ring stays at its band offset from
+// it rather than from its tangent (the ring bends ~50 m over 300 m).
+struct SystemRoad {
+    std::vector<Vec2> route;     // centreline
+    std::string aId, bId;        // carriageways: a with the route, on its right (-normal); b against it
+    double carriage = 7.0;       // centreline -> a carriageway's centreline
+    double edgeReach = 12.0;     // centreline -> the outer edge of the pavement
+    int lanes = 3;               // per carriageway, and their width: where the outer lane is
+    double laneW = 3.6;
+};
+
+struct SystemOptions {
+    std::string idPrefix = "x0";   // ramp ids are <prefix>_<quadrant>_{loop,link}
+    double rampHalf = 4.75, bandGap = 3.5;
+    double loopR = 60;             // a loop's radius
+    double linkR = 80;             // a corner connector's radius
+    double linkReach = 190;        // how far from the crossing a corner connector leaves and joins
+    double diverge = 30;           // gore -> band
+    // A loop's lanes on its hosts are short: each stops clear of the other road's deck, so on
+    // the ring one loop's merge and the other's exit never meet (no cloverleaf weave).
+    double loopLane = 60;          // the most any loop lane (decel/aux + taper) may be
+    double decel = 80, taperOff = 72, aux = 110, taperOn = 90, approach = 60;
+};
+
+struct SystemResult {
+    std::vector<nlohmann::json> ramps;
+    bool built = false;
+    std::string why;                 // when not built
+    double sThrough = 0, sStem = 0;  // the crossing's station on each road
+    double reach = 0;                // stations either side of the crossing the ramps use, on each road
+};
+
+// `outward` is +1 when the stem's outer leg (the one that stays a freeway, away from the city)
+// runs along increasing station from the crossing, -1 when it runs the other way.
+SystemResult systemInterchange(const SystemRoad& through, const SystemRoad& stem, double outward, const SystemOptions& o);
 
 }  // namespace roads::lanes
 }  // namespace engine

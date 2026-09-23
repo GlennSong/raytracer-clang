@@ -484,6 +484,24 @@
    "enclosed_blocks": 97,
    "failed": [],
    "checked": false
+  },
+  {
+   "name": "system_interchange",
+   "kind": "authored",
+   "tests": "a radial expressway under an elevated ring at ground level, their system interchange (two corner connectors, two loops), and the expressway's inner leg as a one-way boulevard pair meeting a boulevard at two Ts. Written by `lanes_tool interchange-demo`: regenerate it when the generator changes.",
+   "seconds": 31.8,
+   "decks": 7,
+   "tris": 83824,
+   "nonmanifold": 0,
+   "cracks": 0,
+   "odd_boundary": 0,
+   "mismatch_before_cm": 0.0,
+   "mismatch_after_cm": 0.0,
+   "lane_pairs": 49,
+   "islands": 1,
+   "enclosed_blocks": 5,
+   "failed": [],
+   "checked": true
   }
  ]
 }

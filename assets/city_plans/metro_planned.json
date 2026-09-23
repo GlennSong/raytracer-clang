@@ -42,5 +42,97 @@
   },
   "seed": 474349,
   "size": 3000.0,
-  "relief": 40.0
+  "relief": 60.0,
+  "world": {
+    "_comment": "The world the city stands in (Glenn, 2026-09-23: more hills, mountains in the background, a beach along one edge). 'base' is a level terrain block: the ground under everything, and what the level renders beyond the city's ground grid (city_plan level-world prints it). Tilted 2% down to the east into a sea at seaLevel, a mountain range bending round the west and north into a headland. The brief's relief is laid over it inside the city, faded out between reliefFade's radii before the grid's edge (grid, a half-width) and calmed toward the coast along calm.dir, so the east side is a coastal plain.",
+    "grid": 3000,
+    "reliefFade": [
+      1450,
+      1950
+    ],
+    "calm": {
+      "dir": [
+        1,
+        0
+      ],
+      "from": 500,
+      "to": 1350
+    },
+    "seaLevel": -32.0,
+    "base": {
+      "seed": 11,
+      "size": 12000,
+      "resolution": 1200,
+      "heightScale": 7,
+      "noiseScale": 0.0005,
+      "octaves": 5,
+      "warp": 0.35,
+      "tiltX": -0.02,
+      "mountainHeight": 350,
+      "mountainScale": 0.0015,
+      "mountainAlongRange": true,
+      "mountainMaskScale": 0,
+      "rangeSpine": [
+        [
+          -3000,
+          -6200
+        ],
+        [
+          -3500,
+          -3000
+        ],
+        [
+          -3300,
+          0
+        ],
+        [
+          -3000,
+          2200
+        ],
+        [
+          -1900,
+          3700
+        ],
+        [
+          0,
+          4400
+        ],
+        [
+          2200,
+          4700
+        ],
+        [
+          4200,
+          5200
+        ]
+      ],
+      "rangeWidth": 900,
+      "rangeHeight": 450,
+      "rangeVariation": 0.6,
+      "snowLine": 520,
+      "rockLine": 240
+    },
+    "water": {
+      "region": 6000,
+      "cell": 20,
+      "foamBand": 36,
+      "color": [
+        0.012,
+        0.05,
+        0.08
+      ],
+      "roughness": 0.04,
+      "opacity": 0.82
+    },
+    "towns": {
+      "_comment": "A town at each expressway's far end (Glenn, 2026-09-23: 'make those termination points tiny towns'): depth along the expressway, halfWidth across it, block = [cross-street spacing, side-street spacing]; sited as far out as it stands 5 m clear of the sea, at least gap past the city.",
+      "depth": 420,
+      "halfWidth": 240,
+      "gap": 500,
+      "block": [
+        100,
+        80
+      ]
+    }
+  }
 }

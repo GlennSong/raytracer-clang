@@ -203,7 +203,9 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
             L = std::max(runFor(deckZ(p.sTerm + away * L) - groundAt(p.term)), o.diverge) + arrive;   // the deck's height at the gore, not the street
             p.sGore = p.sTerm + away * L;
             const double lead = p.off ? o.decel + o.taperOff : o.aux + o.taperOn;
-            if (std::min(p.sGore, p.sGore + away * lead) < 20.0 || std::max(p.sGore, p.sGore + away * lead) > routeLen - 20.0) room = false;
+            const double lo = std::min({p.sGore, p.sGore + away * lead, p.sTerm}), hi = std::max({p.sGore, p.sGore + away * lead, p.sTerm});
+            if (lo < 20.0 || hi > routeLen - 20.0) room = false;
+            for (const auto& k : o.keepOut) if (lo < k.second && hi > k.first) room = false;
             spines.push_back(spine(p.sGore, p.sTerm, p.side, p.term, p.off, p.cross ? rBand : p.beside));
             const double zGore = deckZ(p.sGore), zTerm = groundAt(p.term);
             if (conflicts(spines.back(), cd.street, p.street, p.off ? zGore : zTerm, p.off ? zTerm : zGore)) clear = false;
@@ -231,6 +233,135 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
         taken.push_back(cd.s);
         ++out.built;
     }
+    return out;
+}
+
+namespace {
+
+// One road as a frame: a point at a station and an offset (+ is left of increasing station).
+struct Frame {
+    const SystemRoad& road;
+    std::vector<double> s;
+    explicit Frame(const SystemRoad& r) : road(r), s(stations(r.route)) {}
+    double clampS(double st) const { return std::max(0.0, std::min(s.back(), st)); }
+    Vec2 at(double st, double off) const {
+        const double c = clampS(st);
+        return pointAt(road.route, s, c) + perp(tangentAtStation(road.route, s, c)) * off;
+    }
+    Vec2 tangent(double st) const { return tangentAtStation(road.route, s, clampS(st)); }
+    double auxOff() const { return road.carriage + road.lanes * road.laneW / 2 + road.laneW / 2; }
+    // the carriageway that runs AWAY from the crossing along ray `sigma`, and the one that runs toward it
+    const std::string& outbound(double sigma) const { return sigma > 0 ? road.aId : road.bId; }
+    const std::string& inbound(double sigma) const { return sigma > 0 ? road.bId : road.aId; }
+};
+
+}  // namespace
+
+SystemResult systemInterchange(const SystemRoad& through, const SystemRoad& stem, double outward, const SystemOptions& o) {
+    SystemResult out;
+    const Frame T(through), S(stem);
+    const std::vector<Vec2> xs = crossings(through.route, stem.route);
+    if (xs.size() != 1) { out.why = xs.empty() ? "the roads do not cross" : "the roads cross more than once"; return out; }
+    const Vec2 X = xs.front();
+    out.sThrough = project(through.route, T.s, X).station;
+    out.sStem = project(stem.route, S.s, X).station;
+    const Vec2 tT = T.tangent(out.sThrough), tS = S.tangent(out.sStem);
+    if (std::fabs(cross(tT, tS)) < 0.8) { out.why = "the crossing is too oblique for a cloverleaf"; return out; }
+    const double rBand = std::max(through.edgeReach, stem.edgeReach) + o.rampHalf + o.bandGap;
+
+    // A quadrant is two rays from the crossing, p along road P and q along road Q, with q on
+    // p's RIGHT. The carriageway running out along p and the one running in along q both face
+    // it. (u, v) are distances along p and along q, placed in the THROUGH road's own frame —
+    // its station and its offset — which is exact for both roads when the stem is a radius of
+    // the ring: a radial line IS a line of constant station in a circle's frame. (Blending the
+    // two roads' frames instead dented the loops where the ring curves.)
+    struct Quadrant { const Frame* P; double sigP; const Frame* Q; double sigQ; };
+    auto place = [&](const Quadrant& k, double u, double v) {
+        if (k.P == &T) return T.at(out.sThrough + k.sigP * u, -k.sigP * v);   // the quadrant is on the right of p: -normal when p runs with the station
+        return T.at(out.sThrough + k.sigQ * v, k.sigQ * u);                   // and on the left of q
+    };
+    auto rayOf = [&](const Frame& f, double sigma) { return f.tangent(&f == &T ? out.sThrough : out.sStem) * sigma; };
+    auto quadrant = [&](const Frame& f1, double sig1, const Frame& f2, double sig2) {
+        return cross(rayOf(f1, sig1), rayOf(f2, sig2)) < 0 ? Quadrant{&f1, sig1, &f2, sig2} : Quadrant{&f2, sig2, &f1, sig1};
+    };
+    auto smooth = [](double t) { t = std::clamp(t, 0.0, 1.0); return t * t * (3 - 2 * t); };
+    // The auxiliary lane's offset from a road's CENTRELINE, on the quadrant side, for the
+    // first/last `diverge` metres of a ramp, easing out to the band.
+    auto bandOff = [&](const Frame& f, double d) { return f.auxOff() + (rBand - f.auxOff()) * smooth(d / o.diverge); };
+
+    // The four quadrants by what they hold. r is the stem's outward ray; c1 the ring's ray to its right.
+    const double sigC1 = cross(rayOf(S, outward), tT) < 0 ? 1.0 : -1.0;
+    const Quadrant outR = quadrant(S, outward, T, sigC1), outL = quadrant(T, -sigC1, S, outward);
+    const Quadrant inR = quadrant(T, sigC1, S, -outward), inL = quadrant(S, -outward, T, -sigC1);
+
+    auto anchorOff = [&](const std::string& host, const Vec2& gore, double decel, double taper) {
+        return nlohmann::json{{"edge", host}, {"at", {gore.x, gore.y}}, {"side", "right"}, {"decel", decel}, {"taper", taper}, {"approach", o.approach}};
+    };
+    auto anchorOn = [&](const std::string& host, const Vec2& gore, double aux, double taper) {
+        return nlohmann::json{{"edge", host}, {"at", {gore.x, gore.y}}, {"side", "right"}, {"aux", aux}, {"taper", taper}, {"approach", o.approach}};
+    };
+    auto sOf = [&](const Frame* f) { return f == &T ? out.sThrough : out.sStem; };
+    // A point on a ramp's run along one of its roads: in that road's own frame at the gore, eased
+    // into the ring's frame by the curve (w = 1 at the gore, 0 at the curve), so a stem that is
+    // not quite a radius of a wobbling ring leaves no kink where the two meet.
+    auto along = [&](const Quadrant& k, bool onP, double dist, double off, double w) {
+        const Frame* f = onP ? k.P : k.Q;
+        const double sig = onP ? k.sigP : k.sigQ;
+        const Vec2 own = f->at(sOf(f) + sig * dist, (onP ? -sig : sig) * off);
+        if (f == &T) return own;
+        const Vec2 ring = onP ? place(k, dist, off) : place(k, off, dist);
+        return ring + (own - ring) * smooth(w);
+    };
+    auto emit = [&](const std::string& id, const std::vector<Vec2>& spine, nlohmann::json from, nlohmann::json to) {
+        nlohmann::json e; e["id"] = id; e["class"] = "ramp"; e["from"] = std::move(from); e["to"] = std::move(to);
+        e["path"] = {{"type", "polyline"}, {"points", pointList(resample(spine, 4.0))}};
+        out.ramps.push_back(std::move(e));
+    };
+
+    // A CORNER CONNECTOR: in along q, a right turn round the corner, out along p.
+    auto link = [&](const Quadrant& k, const std::string& name) {
+        const double c = rBand + o.linkR, L = o.linkReach;
+        std::vector<Vec2> sp;
+        for (double v = L; v > c; v -= 4.0) sp.push_back(along(k, false, v, bandOff(*k.Q, L - v), (v - c) / (L - c)));
+        for (int i = 0; i <= 24; ++i) {
+            const double th = M_PI + 0.5 * M_PI * i / 24.0;   // 180 -> 270 degrees, round the corner
+            sp.push_back(place(k, c + o.linkR * std::cos(th), c + o.linkR * std::sin(th)));
+        }
+        for (double u = c + 4.0; u <= L; u += 4.0) sp.push_back(along(k, true, u, bandOff(*k.P, L - u), (u - c) / (L - c)));
+        const Vec2 gIn = k.Q->at(sOf(k.Q) + k.sigQ * L, k.sigQ * k.Q->road.carriage);
+        const Vec2 gOut = k.P->at(sOf(k.P) + k.sigP * L, -k.sigP * k.P->road.carriage);
+        emit(o.idPrefix + "_" + name + "_link", sp, anchorOff(k.Q->inbound(k.sigQ), gIn, o.decel, o.taperOff),
+             anchorOn(k.P->outbound(k.sigP), gOut, o.aux, o.taperOn));
+    };
+    // A LOOP: out along p past the crossing, 270 degrees round the far side, in along q.
+    auto loop = [&](const Quadrant& k, const std::string& name) -> bool {
+        const double H = rBand + o.loopR, g = H - o.diverge;
+        std::vector<Vec2> sp;
+        for (double u = g; u < H; u += 4.0) sp.push_back(along(k, true, u, bandOff(*k.P, u - g), (H - u) / (H - g)));
+        for (int i = 0; i <= 72; ++i) {
+            const double th = -0.5 * M_PI + 1.5 * M_PI * i / 72.0;   // -90 -> 180 degrees, the far side
+            sp.push_back(place(k, H + o.loopR * std::cos(th), H + o.loopR * std::sin(th)));
+        }
+        for (double v = H - 4.0; v >= g; v -= 4.0) sp.push_back(along(k, false, v, bandOff(*k.Q, v - g), (H - v) / (H - g)));
+        const Vec2 gOut = k.P->at(sOf(k.P) + k.sigP * g, -k.sigP * k.P->road.carriage);
+        const Vec2 gIn = k.Q->at(sOf(k.Q) + k.sigQ * g, k.sigQ * k.Q->road.carriage);
+        // how much lane each end has room for, toward the crossing: it stops clear of the other
+        // road's deck. A loop's lane is one lane from its exit to its merge, so a decel lane on
+        // the ring reaching back over the stem made one lane both stacked over the stem and level
+        // with it at the far end — and the deck tore where the builder had to choose.
+        auto room = [&](const Frame* host) { const Frame* other = host == &T ? &S : &T; return std::min(o.loopLane, g - other->road.edgeReach - 6.0); };
+        const double lp = room(k.P), lq = room(k.Q);
+        if (lp < 20 || lq < 20) { out.why = "no room for a loop's lanes: raise loopR"; return false; }
+        emit(o.idPrefix + "_" + name + "_loop", sp, anchorOff(k.P->outbound(k.sigP), gOut, 0.4 * lp, 0.6 * lp),
+             anchorOn(k.Q->inbound(k.sigQ), gIn, 0.4 * lq, 0.6 * lq));
+        return true;
+    };
+
+    link(outR, "outR");   // round the ring the far way -> back out
+    link(outL, "outL");   // in from outside -> round the ring the near way
+    if (!loop(inR, "inR") || !loop(inL, "inL")) { out.ramps.clear(); return out; }   // left turns: round the ring -> back out, in -> round the ring
+    out.reach = o.linkReach + std::max(o.decel + o.taperOff, o.aux + o.taperOn);
+    out.built = true;
     return out;
 }
 

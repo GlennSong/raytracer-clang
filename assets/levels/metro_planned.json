@@ -1,4 +1,5 @@
 {
+ "_comment": "The first city built from a PLAN (ADR-0092): assets/city_plans/metro_planned.json is the brief Glenn picked (variant 4 of six), city_plan turns it into the lanes scene this level names, and the plan's own scorecard says what should come out \u2014 ~490 blocks and ~4100 buildings over 3 x 3 km.",
  "citysim": {
   "buildChance": 0.9,
   "buildLots": true,
@@ -8,7 +9,6 @@
   "buses": 24,
   "cars": -1,
   "carsPerLaneKm": 35.0,
-  "longCommuteShare": 0.35,
   "debugWidgets": false,
   "detailDistance": 300,
   "districts": {
@@ -33,6 +33,22 @@
       -520.0
      ],
      "kind": "residential"
+    },
+    {
+     "at": [
+      1059.0,
+      2572.0
+     ],
+     "kind": "oldtown",
+     "_town": true
+    },
+    {
+     "at": [
+      -1731.0,
+      -2475.0
+     ],
+     "kind": "oldtown",
+     "_town": true
     }
    ]
   },
@@ -44,6 +60,7 @@
   "hoursPerSecond": 0.05,
   "hubRadius": 300,
   "localHz": 30.0,
+  "longCommuteShare": 0.35,
   "maxAmbient": 14000,
   "midtownRadius": 800.0,
   "pedDemoteRadius": 440.0,
@@ -133,17 +150,17 @@
   },
   "friction": 0.5,
   "position": [
-   60.0,
-   12.0,
+   67.5,
+   14.213380398833378,
    60.0
   ]
  },
  "terrain": {
-  "_comment": "The ground outside the lanes grid, matched to the brief's relief (22 m peak to trough): the grid IS the ground inside the city and CDLOD renders it, so this is what it blends out to. heightScale 3 gave +-72 m, which is what the sea was filling.",
+  "_comment": "Written by `city_plan level-world assets/city_plans/metro_planned.json`: the brief's world, which the city's ground grid is built on. Edit the brief, not this.",
   "cdlod": {
-   "worldHalf": 1600
+   "worldHalf": 6000.0
   },
-  "heightScale": 0.82,
+  "heightScale": 7,
   "material": {
    "albedo": [
     1.0,
@@ -153,41 +170,55 @@
    "roughness": 1.0
   },
   "mountainAlongRange": true,
-  "mountainHeight": 0,
-  "mountainMaskHi": 0.4,
-  "mountainMaskLo": -0.1,
-  "mountainMaskScale": 0.001,
-  "mountainScale": 0.002,
-  "noiseScale": 0.0012,
-  "octaves": 6,
-  "rangeHeight": 0,
+  "mountainHeight": 350,
+  "mountainMaskScale": 0,
+  "mountainScale": 0.0015,
+  "noiseScale": 0.0005,
+  "octaves": 5,
+  "rangeHeight": 450,
   "rangeSpine": [
    [
-    -1180,
-    -900
+    -3000,
+    -6200
    ],
    [
-    -1120,
-    -300
+    -3500,
+    -3000
    ],
    [
-    -1180,
-    300
+    -3300,
+    0
    ],
    [
-    -1120,
-    900
+    -3000,
+    2200
+   ],
+   [
+    -1900,
+    3700
+   ],
+   [
+    0,
+    4400
+   ],
+   [
+    2200,
+    4700
+   ],
+   [
+    4200,
+    5200
    ]
   ],
   "rangeVariation": 0.6,
-  "rangeWidth": 300,
-  "resolution": 900,
-  "rockLine": 200,
+  "rangeWidth": 900,
+  "resolution": 1200,
+  "rockLine": 240,
   "seed": 11,
-  "size": 3400,
-  "snowLine": 400,
-  "tiltX": -0.045,
-  "warp": 0
+  "size": 12000,
+  "snowLine": 520,
+  "tiltX": -0.02,
+  "warp": 0.35
  },
  "vegetation": {
   "clearMargin": 4.0,
@@ -252,5 +283,17 @@
   }
  ],
  "version": 1,
- "_comment": "The first city built from a PLAN (ADR-0092): assets/city_plans/metro_planned.json is the brief Glenn picked (variant 4 of six), city_plan turns it into the lanes scene this level names, and the plan's own scorecard says what should come out \u2014 ~490 blocks and ~4100 buildings over 3 x 3 km."
+ "water": {
+  "cell": 20,
+  "color": [
+   0.012,
+   0.05,
+   0.08
+  ],
+  "foamBand": 36,
+  "opacity": 0.82,
+  "region": 6000,
+  "roughness": 0.04,
+  "seaLevel": -32.0
+ }
 }

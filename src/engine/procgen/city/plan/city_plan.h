@@ -62,6 +62,12 @@ struct Brief {
     // built on this: rolling relief, peak to trough, over the map. Roads conform to it within
     // their class grades and lots grade their pads off it.
     Real relief = 18;
+    // THE WORLD AROUND IT (optional): a level `terrain` block as the ground under everything —
+    // the tilt toward a coast, the mountain range — with the relief above laid over it inside the
+    // city and faded out before the edge of the city's ground grid, so the grid and the level's own
+    // terrain beyond it are one surface. {"base", "seaLevel", "grid", "reliefFade", "calm", "water"};
+    // `city_plan level-world` prints the level blocks that must match it. Null: the old flat world.
+    nlohmann::json world;
     // Road widths (carriageway) and the sidewalk every street carries (m).
     Real localWidth = 12, collectorWidth = 16, arterialWidth = 22, freewayWidth = 30;
     Real sidewalk = 5;
@@ -94,6 +100,13 @@ struct CityPlan {
     Brief brief;
     RoadGraph streets;                 // local / collector / arterial, planar
     RoadGraph freeway;                 // ring + radials (grade-separated from streets)
+    std::vector<Vec2> ring;            // the freeway ring's centreline, closed (empty: no ring)
+    std::vector<std::vector<Vec2>> spurs;   // the radial expressways, drawn from their far end in to midtown's boulevard
+    // A TOWN at an expressway's far end, one per spur: a small grid square to the expressway, whose
+    // main street crosses it at the GATE — where the expressway's boulevard pair meets it, as the
+    // inner end meets midtown's boulevard. Not built where no site out there stands clear of the sea.
+    struct Town { bool built = false; Vec2 gate, axis, centre; };
+    std::vector<Town> towns;
     std::vector<Vec2> interchanges;
     std::vector<PlanBlock> blocks;
 };

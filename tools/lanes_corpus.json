@@ -64,6 +64,12 @@
    "tests": "sustained 6% ground under a 4% road, a hill on top, a crossing on the slope and a ramp climbing off it"
   },
   {
+   "name": "system_interchange",
+   "kind": "authored",
+   "source": "assets/lanelab/system_interchange.json",
+   "tests": "a radial expressway under an elevated ring at ground level, their system interchange (two corner connectors, two loops), and the expressway's inner leg as a one-way boulevard pair meeting a boulevard at two Ts. Written by `lanes_tool interchange-demo`: regenerate it when the generator changes."
+  },
+  {
    "name": "coast_city",
    "kind": "imported",
    "source": "assets/levels/coast_city.json",

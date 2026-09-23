@@ -74,7 +74,9 @@ def main():
             time.sleep(0.2)
         print(f"viewer up ({time.time() - t0:.1f}s); waiting for the level:", send(sock_path, "camera?", timeout=a.load_timeout), flush=True)
         time.sleep(a.settle)
-        if a.hour >= 0: send(sock_path, f"daynight {a.hour:g}"); send(sock_path, "daynight hold")
+        # the city sim builds on the first frames after the load (its agents' routes, minutes on a
+        # big city), so the first command after the load gets the load's patience too
+        if a.hour >= 0: send(sock_path, f"daynight {a.hour:g}", timeout=a.load_timeout); send(sock_path, "daynight hold")
         for c in a.cmd: print("   ", c, "->", send(sock_path, c), flush=True)
         ok = 0
         queue = list(shots); extra = queue

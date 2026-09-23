@@ -1,4 +1,6 @@
 #include "city_plan.h"
+#include "plan_scene.h"   // the freeway both sides build: what the plan clears for the scene
+#include "../roads/lanes/road_graph_spec.h"   // stations
 
 #include "../parcel.h"
 #include "../site_plan.h"
@@ -262,6 +264,38 @@ void collapseShortLinks(RoadGraph& g, Real sidewalk) {
     }
 }
 
+// A dead end whose free end satisfies `near` goes back to its junction whatever its length:
+// a street cut short by a keep-out is not a cul-de-sac anyone designed.
+void pruneStubsNear(RoadGraph& g, const std::function<bool(const Vec2&)>& near) {
+    for (int pass = 0; pass < 8; ++pass) {
+        std::vector<std::vector<int>> inc(g.nodes.size());
+        for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
+            inc[static_cast<std::size_t>(g.edges[e].a)].push_back(e);
+            inc[static_cast<std::size_t>(g.edges[e].b)].push_back(e);
+        }
+        std::vector<char> drop(g.edges.size(), 0);
+        bool any = false;
+        for (int v = 0; v < static_cast<int>(g.nodes.size()); ++v) {
+            if (inc[static_cast<std::size_t>(v)].size() != 1 || !near(g.nodes[static_cast<std::size_t>(v)].pos)) continue;
+            int cur = v, e = inc[static_cast<std::size_t>(v)][0];
+            while (true) {
+                drop[static_cast<std::size_t>(e)] = 1;
+                any = true;
+                const RoadEdge& E = g.edges[static_cast<std::size_t>(e)];
+                const int nxt = E.a == cur ? E.b : E.a;
+                if (inc[static_cast<std::size_t>(nxt)].size() != 2) break;   // reached a junction (or another end)
+                const auto& ie = inc[static_cast<std::size_t>(nxt)];
+                e = ie[0] == e ? ie[1] : ie[0];
+                cur = nxt;
+            }
+        }
+        if (!any) break;
+        std::vector<RoadEdge> kept;
+        for (std::size_t i = 0; i < g.edges.size(); ++i) if (!drop[i]) kept.push_back(g.edges[i]);
+        g.edges.swap(kept);
+    }
+}
+
 void pruneStubs(RoadGraph& g, Real stub) {
     for (int pass = 0; pass < 4; ++pass) {
         std::vector<std::vector<int>> inc(g.nodes.size());
@@ -438,6 +472,7 @@ Brief briefFromJson(const nlohmann::json& j) {
         b.freewayWobble = f.value("wobble", b.freewayWobble);
     }
     b.relief = j.value("relief", b.relief);
+    if (j.contains("world")) b.world = j["world"];
     if (j.contains("roads")) {
         const auto& r = j["roads"];
         b.localWidth = r.value("local", b.localWidth);
@@ -450,7 +485,7 @@ Brief briefFromJson(const nlohmann::json& j) {
 }
 
 nlohmann::json briefToJson(const Brief& b) {
-    return {{"name", b.name}, {"seed", b.seed}, {"size", b.size}, {"center", {b.center.x, b.center.y}},
+    nlohmann::json j = {{"name", b.name}, {"seed", b.seed}, {"size", b.size}, {"center", {b.center.x, b.center.y}},
             {"core", {{"radius", b.coreRadius}, {"block", {b.coreBlockU, b.coreBlockV}}, {"angle", b.gridAngleDeg},
                       {"arterialEvery", b.arterialEvery}}},
             {"midtown", {{"radius", b.midRadius}, {"block", {b.midBlockU, b.midBlockV}}, {"warp", b.warp}}},
@@ -460,6 +495,8 @@ nlohmann::json briefToJson(const Brief& b) {
             {"relief", b.relief},
             {"roads", {{"local", b.localWidth}, {"collector", b.collectorWidth}, {"arterial", b.arterialWidth},
                        {"freeway", b.freewayWidth}, {"sidewalk", b.sidewalk}}}};
+    if (!b.world.is_null()) j["world"] = b.world;
+    return j;
 }
 
 Brief variantOf(const Brief& b, int k) {
@@ -657,6 +694,92 @@ CityPlan generatePlan(const Brief& B) {
             roads.push_back(ls);
         }
     }
+    // --- the towns at the expressways' far ends ---
+    // A site: the farthest point along the expressway's line, past the city by `gap` and inside the
+    // ground grid, where the whole town — `depth` along the expressway, `halfWidth` either side —
+    // stands 5 m clear of the sea. The coast is why it slides: the NE expressway points at it.
+    const nlohmann::json townSpec = B.world.is_null() ? nlohmann::json() : B.world.value("towns", nlohmann::json());
+    const HeightField townGround = townSpec.is_null() ? HeightField() : sceneGround(B);
+    const Real townDepth = townSpec.is_null() ? 0 : townSpec.value("depth", 420.0), townHalf = townSpec.is_null() ? 0 : townSpec.value("halfWidth", 240.0);
+    // Past the city the expressway may BEND toward its town: straight on first, then 10 degrees at a
+    // time up to 50 either side, taking the smallest bend with a dry site — the NE expressway points
+    // straight at the coast. The bend is one smooth curve from where it leaves the city (`leave`)
+    // to the town's gate, and the whole of it must stand clear of the sea too.
+    auto siteTown = [&](const Vec2& dir, std::vector<Vec2>& head) {
+        CityPlan::Town t;
+        if (townSpec.is_null()) return t;
+        const Real sea = B.world.value("seaLevel", -1e30), gridHalf = B.world.value("grid", B.size * 0.5 + 60);
+        const Vec2 leave = B.center + dir * (outerR + 60);
+        auto dry = [&](const Vec2& q, Real above) {
+            return std::fabs(q.x - B.center.x) <= gridHalf - 150 && std::fabs(q.y - B.center.y) <= gridHalf - 150 && townGround(q.x, q.y) >= sea + above;
+        };
+        for (int k = 0; k <= 10; ++k) {
+            const Real bend = (k == 0 ? 0 : (k % 2 ? 1 : -1) * ((k + 1) / 2) * 10.0) * kPi / 180.0;
+            const Vec2 d(dir.x * std::cos(bend) - dir.y * std::sin(bend), dir.x * std::sin(bend) + dir.y * std::cos(bend));
+            const Vec2 left(-d.y, d.x);
+            for (Real r = gridHalf * Real(1.41); r >= townSpec.value("gap", 500.0); r -= 20) {
+                const Vec2 gate = leave + d * r;
+                bool ok = true;
+                for (Real u = -150; u <= townDepth + 60 && ok; u += 40)
+                    for (Real v = -townHalf - 60; v <= townHalf + 60 && ok; v += 40) ok = dry(gate + d * u + left * v, 5);
+                if (!ok) continue;
+                // the curve from the gate back to where the expressway leaves the city
+                const Real k2 = (gate - leave).length() * Real(0.4);
+                std::vector<Vec2> path;
+                const int n = std::max(4, static_cast<int>((gate - leave).length() / 20));
+                for (int i = 0; i < n; ++i) {
+                    const Real tt = Real(i) / n, uu = 1 - tt;
+                    const Vec2 p0 = gate, p1 = gate - d * k2, p2 = leave + dir * k2, p3 = leave;
+                    path.push_back(p0 * (uu * uu * uu) + p1 * (3 * uu * uu * tt) + p2 * (3 * uu * tt * tt) + p3 * (tt * tt * tt));
+                }
+                for (const Vec2& q : path) if (!dry(q, 2)) ok = false;
+                if (!ok) continue;
+                t.built = true; t.gate = gate; t.axis = d; t.centre = gate + d * (townDepth * Real(0.5));
+                head = std::move(path);
+                return t;
+            }
+        }
+        return t;
+    };
+    // The streets: a MAIN STREET across the expressway's end at the gate (an arterial), cross
+    // streets behind it every `block`[0], and streets running out from it every `block`[1] — but
+    // none within 40 m of the expressway's line, where its boulevard pair meets the main street at
+    // two Ts 40 m apart. Each street overshoots the one it ends on by 2 m, so the planariser finds
+    // the T, and pruneStubs takes the overshoot back.
+    std::vector<Polyline> townRoads;
+    auto layTown = [&](const CityPlan::Town& t) {
+        const Vec2 left(-t.axis.y, t.axis.x);
+        const Real bu = townSpec.contains("block") ? townSpec["block"][0].get<double>() : 100.0;
+        const Real bv = townSpec.contains("block") ? townSpec["block"][1].get<double>() : 80.0;
+        auto at = [&](Real u, Real v) { return t.gate + t.axis * u + left * v; };
+        auto street = [&](Vec2 a, Vec2 b, RoadClass k, Real w) {
+            Polyline p; p.klass = k; p.width = w;
+            const int n = std::max(1, static_cast<int>((b - a).length() / 20.0));
+            for (int i = 0; i <= n; ++i) p.pts.push_back(a + (b - a) * (Real(i) / n));
+            townRoads.push_back(p);
+        };
+        std::vector<Real> vs;
+        for (Real v = 40; v <= townHalf + 1; v += bv) { vs.push_back(v); vs.push_back(-v); }
+        const Real vMax = vs.empty() ? 40 : *std::max_element(vs.begin(), vs.end());
+        // the town rounds off away from the city: its streets shorten toward the far corners
+        auto reach = [&](Real v) { return townDepth * std::sqrt(std::max(Real(0.25), 1 - (v / (vMax + bv)) * (v / (vMax + bv)))); };
+        street(at(0, -vMax - 2), at(0, vMax + 2), RoadClass::Arterial, B.arterialWidth);
+        // cross streets first, each as wide as the side streets that reach it; then each side
+        // street runs out to the last cross street that spans it, so every block closes and
+        // nothing is left dangling past the edge of town
+        std::vector<std::pair<Real, Real>> cross;   // (u, half-width)
+        for (Real u = bu; u <= townDepth - 20; u += bu) {
+            Real w = 0;
+            for (Real v : vs) if (reach(v) >= u + 20) w = std::max(w, std::fabs(v));
+            if (w > 0) { cross.push_back({u, w}); street(at(u, -w - 2), at(u, w + 2), RoadClass::Local, B.localWidth); }
+        }
+        for (Real v : vs) {
+            Real end = 0;
+            for (const auto& c : cross) if (c.second >= std::fabs(v) - 0.5) end = std::max(end, c.first);
+            if (end > 0) street(at(-2, v), at(end + 2, v), RoadClass::Local, B.localWidth);
+        }
+    };
+
     // --- freeway: a ring and radial spurs toward downtown ---
     std::vector<Polyline> fw;
     {
@@ -680,16 +803,32 @@ CityPlan generatePlan(const Brief& B) {
                 }
                 th0 = pick;
             }
+            // A RADIAL EXPRESSWAY: in from the map edge — the region's road into the city —
+            // across the ring at a system interchange, to midtown's boulevard. It used to start
+            // just past the ring, which left a 40 m stub outside it and a 275 m freeway that
+            // went from the ring to nowhere.
             Polyline spur; spur.klass = RoadClass::Freeway; spur.width = B.freewayWidth;
             const Real rEnd = midR(th0);
-            for (Real r = B.freewayRadius + B.freewayWobble; r >= rEnd; r -= 20.0)
+            // out to a town where the world has room for one, else to near the edge of the ground
+            const Vec2 dir(std::cos(th0), std::sin(th0));
+            std::vector<Vec2> head;   // gate -> where it leaves the city, when it bends to a town
+            CityPlan::Town town = siteTown(dir, head);
+            const Real rStart = town.built ? outerR + 60
+                                : B.world.is_null() ? B.size * Real(0.5) + 30 : B.world.value("grid", B.size * 0.5 + 60) - 120;
+            if (town.built) layTown(town);
+            plan.towns.push_back(town);
+            spur.pts = head;
+            for (Real r = rStart; r >= rEnd; r -= 20.0)
                 spur.pts.push_back(B.center + Vec2(std::cos(th0), std::sin(th0)) * r);
             spur.pts.push_back(warped(B.center + Vec2(std::cos(th0), std::sin(th0)) * rEnd));
             fw.push_back(spur);
             plan.interchanges.push_back(spur.pts.back());   // the spur lands on midtown's boulevard
+            if (town.built) plan.interchanges.push_back(town.gate);   // and on its town's main street
         }
     }
     plan.freeway = planarizePolylines(fw);
+    plan.ring = fw.front().pts;
+    for (std::size_t i = 1; i < fw.size(); ++i) plan.spurs.push_back(fw[i].pts);
     // NO STREET RUNS DOWN THE FREEWAY'S RIGHT-OF-WAY. The ring already has its two frontage
     // roads and nothing crosses between them, but a radial SPUR had no such rule: ring roads
     // and wedge streets ran inside its right-of-way for hundreds of metres, which builds as a
@@ -729,10 +868,80 @@ CityPlan generatePlan(const Brief& B) {
         }
         roads.swap(kept);
     }
+    // THE SYSTEM INTERCHANGES CLEAR THEIR GROUND. Where an expressway crosses the ring it runs
+    // at ground level under the ring's deck, so no street may cross it there, and its four
+    // ramps sweep through the quadrants round the crossing. Streets are cut back from both —
+    // the same ramps the scene will build (plan_scene.h), so what is cleared is what is built
+    // — and the dead ends that leaves are pruned to their last junction below.
+    std::vector<std::vector<Vec2>> keepOut;
+    std::vector<Real> keepReach;
+    {
+        const FreewaySection fs = freewaySection(B);
+        const roads::lanes::SystemOptions so = systemOptions();
+        for (const SystemAt& at : systemInterchanges(plan, ringChains(plan))) {
+            if (!at.r.built) continue;
+            for (const nlohmann::json& r : at.r.ramps) {
+                std::vector<Vec2> sp;
+                for (const nlohmann::json& p : r["path"]["points"]) sp.push_back(Vec2(p[0].get<double>(), p[1].get<double>()));
+                keepOut.push_back(sp);
+                keepReach.push_back(so.rampHalf + 3);
+            }
+            // the expressway at ground level: from 150 m outside the ring (where it is still
+            // climbing to bridge the suburbs) to where its freeway ends inside
+            const std::vector<Vec2> fwy = spurFreeway(plan, at.spur);
+            const std::vector<double> st = roads::lanes::stations(fwy);
+            std::vector<Vec2> low;
+            for (std::size_t i = 0; i < fwy.size(); ++i) if (st[i] >= at.r.sStem - 150.0) low.push_back(fwy[i]);
+            if (low.size() >= 2) { keepOut.push_back(low); keepReach.push_back(fs.edgeReach + 3); }
+        }
+        if (!keepOut.empty()) {
+            auto blocked = [&](const Vec2& q, Real half) {
+                for (std::size_t k = 0; k < keepOut.size(); ++k)
+                    if (distToPolyline(q, keepOut[k], false) < keepReach[k] + half) return true;
+                return false;
+            };
+            std::vector<Polyline> kept;
+            for (const Polyline& p : roads) {
+                const Real half = p.width / 2 + B.sidewalk;
+                // walked at 4 m so a cut lands within a few metres of the keep-out, not a vertex away
+                std::vector<Vec2> dense;
+                const std::size_t n = p.pts.size(), segs = p.closed ? n : n - 1;
+                for (std::size_t i = 0; i < segs; ++i) {
+                    const Vec2 a = p.pts[i], b = p.pts[(i + 1) % n];
+                    const int m = std::max(1, static_cast<int>(std::ceil((b - a).length() / 4.0)));
+                    for (int k = 0; k < m; ++k) dense.push_back(a + (b - a) * (Real(k) / m));
+                }
+                if (!p.closed) dense.push_back(p.pts.back());
+                bool any = false;
+                for (const Vec2& q : dense) if (blocked(q, half)) { any = true; break; }
+                if (!any) { kept.push_back(p); continue; }
+                Polyline cur = p;
+                cur.closed = false;
+                cur.pts.clear();
+                for (const Vec2& q : dense) {
+                    if (blocked(q, half)) {
+                        if (cur.pts.size() >= 2 && roads::lanes::stations(cur.pts).back() > 30.0) kept.push_back(cur);
+                        cur.pts.clear();
+                    } else {
+                        cur.pts.push_back(q);
+                    }
+                }
+                if (cur.pts.size() >= 2 && roads::lanes::stations(cur.pts).back() > 30.0) kept.push_back(cur);
+            }
+            roads.swap(kept);
+        }
+    }
     // --- the street graph ---
+    roads.insert(roads.end(), townRoads.begin(), townRoads.end());
     plan.streets = planarizePolylines(roads);
     collapseShortLinks(plan.streets, B.sidewalk);
     pruneStubs(plan.streets, 45.0);
+    if (!keepOut.empty())
+        pruneStubsNear(plan.streets, [&](const Vec2& p) {
+            for (std::size_t k = 0; k < keepOut.size(); ++k)
+                if (distToPolyline(p, keepOut[k], false) < keepReach[k] + 40.0) return true;
+            return false;
+        });
     // Interchanges: where the ring crosses an arterial (a spoke).
     for (const RoadEdge& e : plan.streets.edges) {
         if (e.klass != RoadClass::Arterial) continue;

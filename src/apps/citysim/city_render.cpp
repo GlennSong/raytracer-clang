@@ -29,6 +29,7 @@
 #endif
 
 #include <algorithm>
+#include <sstream>
 #include <chrono>
 #include <cstdlib>
 #include <cmath>
@@ -233,30 +234,80 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // the weld failed and freeway traffic is impossible — say so loudly.
     {
         int fwLinks = 0, rampLinks = 0, onWelds = 0, offWelds = 0;
+        auto street = [&](int li) { const engine::RoadClass k = nav_.links[li].klass; return k != engine::RoadClass::Ramp && k != engine::RoadClass::Freeway; };
+        // A street link ENTERING a node counts as much as one leaving it: an on-ramp's street-level
+        // run is a one-way link into the node where its deck begins, and a census that only looked
+        // at links leaving that node called every such on-ramp unconnected.
+        std::vector<char> streetIn(static_cast<std::size_t>(nav_.nodeCount()), 0);
+        for (int li = 0; li < nav_.linkCount(); ++li) if (street(li)) streetIn[static_cast<std::size_t>(nav_.links[li].to)] = 1;
         for (int li = 0; li < nav_.linkCount(); ++li) {
             const engine::NavLink& L = nav_.links[li];
             if (L.klass == engine::RoadClass::Freeway) ++fwLinks;
             if (L.klass != engine::RoadClass::Ramp) continue;
             ++rampLinks;
-            // a ramp link leaving a node that also has street links = on-weld
-            bool fromStreet = false, toStreet = false;
-            for (int ol : nav_.outLinks[L.from])
-                if (nav_.links[ol].klass != engine::RoadClass::Ramp &&
-                    nav_.links[ol].klass != engine::RoadClass::Freeway)
-                    fromStreet = true;
-            for (int ol : nav_.outLinks[L.to])
-                if (nav_.links[ol].klass != engine::RoadClass::Ramp &&
-                    nav_.links[ol].klass != engine::RoadClass::Freeway)
-                    toStreet = true;
+            bool fromStreet = streetIn[static_cast<std::size_t>(L.from)] != 0, toStreet = false;
+            for (int ol : nav_.outLinks[L.from]) if (street(ol)) fromStreet = true;
+            for (int ol : nav_.outLinks[L.to]) if (street(ol)) toStreet = true;
             if (fromStreet) ++onWelds;
             if (toStreet) ++offWelds;
+        }
+        // ...and the truth the welds only suggest: WALK it. From every street, how much of the
+        // carriageway can a car reach; from the carriageway, can it get back to a street.
+        auto reach = [&](auto&& seed) {
+            std::vector<char> seen(static_cast<std::size_t>(nav_.linkCount()), 0);
+            std::vector<int> stack;
+            for (int li = 0; li < nav_.linkCount(); ++li) if (seed(li)) { seen[static_cast<std::size_t>(li)] = 1; stack.push_back(li); }
+            while (!stack.empty()) {
+                const int li = stack.back(); stack.pop_back();
+                for (int ol : nav_.outLinks[nav_.links[li].to]) if (!seen[static_cast<std::size_t>(ol)]) { seen[static_cast<std::size_t>(ol)] = 1; stack.push_back(ol); }
+            }
+            return seen;
+        };
+        const std::vector<char> fromStreets = reach(street);
+        const std::vector<char> fromFreeway = reach([&](int li) { return nav_.links[li].klass == engine::RoadClass::Freeway; });
+        int fwReached = 0, streetsReached = 0;
+        for (int li = 0; li < nav_.linkCount(); ++li) {
+            if (nav_.links[li].klass == engine::RoadClass::Freeway && fromStreets[static_cast<std::size_t>(li)]) ++fwReached;
+            if (street(li) && fromFreeway[static_cast<std::size_t>(li)]) ++streetsReached;
+        }
+        // STRANDED STREETS: links a car can reach the city from and get back to — the main loop —
+        // against those it cannot. A home on one of the rest routes nowhere, and assignPlaces then
+        // tries every job in the city from it, a full search each.
+        {
+            int seedLink = -1;
+            for (int li = 0; li < nav_.linkCount() && seedLink < 0; ++li) if (street(li) && nav_.outLinks[nav_.links[li].to].size() >= 3) seedLink = li;
+            if (seedLink >= 0) {
+                const std::vector<char> down = reach([&](int li) { return li == seedLink; });
+                std::vector<std::vector<int>> inLinks(static_cast<std::size_t>(nav_.nodeCount()));
+                for (int li = 0; li < nav_.linkCount(); ++li) inLinks[static_cast<std::size_t>(nav_.links[li].to)].push_back(li);
+                std::vector<char> up(static_cast<std::size_t>(nav_.linkCount()), 0);
+                std::vector<int> stack{seedLink};
+                up[static_cast<std::size_t>(seedLink)] = 1;
+                while (!stack.empty()) {
+                    const int li = stack.back(); stack.pop_back();
+                    for (int il : inLinks[static_cast<std::size_t>(nav_.links[li].from)]) if (!up[static_cast<std::size_t>(il)]) { up[static_cast<std::size_t>(il)] = 1; stack.push_back(il); }
+                }
+                int stranded = 0, streets = 0;
+                std::ostringstream where;
+                for (int li = 0; li < nav_.linkCount(); ++li) {
+                    if (!street(li)) continue;
+                    ++streets;
+                    if (down[static_cast<std::size_t>(li)] && up[static_cast<std::size_t>(li)]) continue;
+                    if (stranded++ < 8) {
+                        const Vec2 a = nav_.nodes[static_cast<std::size_t>(nav_.links[li].from)];
+                        where << " (" << static_cast<int>(a.x) << ", " << static_cast<int>(a.y) << ")" << (down[static_cast<std::size_t>(li)] ? "" : " unreachable") << (up[static_cast<std::size_t>(li)] ? "" : " no way back");
+                    }
+                }
+                if (stranded) LOG_WARN << "[citysim] " << stranded << " of " << streets << " street links are off the main loop, e.g." << where.str();
+            }
         }
         if (fwLinks > 0)
             LOG_INFO << "[citysim] freeway in nav: " << fwLinks
                      << " carriageway links, " << rampLinks << " ramp links, "
                      << onWelds << " street->ramp welds, " << offWelds
-                     << " ramp->street welds"
-                     << ((onWelds == 0 || offWelds == 0)
+                     << " ramp->street welds; from the streets a car reaches " << fwReached << " of "
+                     << fwLinks << " carriageway links, and from the carriageway " << streetsReached << " street links"
+                     << ((fwReached == 0 || streetsReached == 0)
                              ? "  <-- NOT DRIVABLE"
                              : "");
     }

@@ -211,6 +211,9 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         if (t.contains("valleys")) for (const auto& v : t["valleys"]) { TerrainSpec::Valley V; V.alongY = v.contains("y") && !v.contains("x"); V.c = V.alongY ? v.at("y").get<double>() : v.at("x").get<double>(); V.width = num(v, "width", 40.0); V.depth = num(v, "depth", 0.0); T.valleys.push_back(V); }
         if (t.contains("hills")) for (const auto& h : t["hills"]) T.hills.push_back({num(h, "x", 0), num(h, "y", 0), num(h, "r", 1), num(h, "h", 0)});
         if (t.contains("tilt")) { T.hasTilt = true; const auto& k = t["tilt"]; T.dzdx = num(k, "dzdx", 0); T.x0 = num(k, "x0", 0); T.dzdy = num(k, "dzdy", 0); T.y0 = num(k, "y0", 0); }
+        if (t.contains("base")) T.base = t["base"];
+        if (t.contains("relief_fade")) { T.hasFade = true; const auto& k = t["relief_fade"]; T.fadeX = k.at("centre").at(0).get<double>(); T.fadeY = k.at("centre").at(1).get<double>(); T.fadeR0 = num(k, "r0", 0); T.fadeR1 = num(k, "r1", 1); }
+        if (t.contains("relief_calm")) { T.hasCalm = true; const auto& k = t["relief_calm"]; T.calmDx = k.at("dir").at(0).get<double>(); T.calmDy = k.at("dir").at(1).get<double>(); T.calmFrom = num(k, "from", 0); T.calmTo = num(k, "to", 1); }
         if (t.contains("file")) { T.file = t["file"].get<std::string>(); if (!T.file.empty() && T.file[0] != '/') T.file = baseDir + "/" + T.file; }
     }
     for (const auto& ej : spec.at("edges")) {

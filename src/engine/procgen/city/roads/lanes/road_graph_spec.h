@@ -87,6 +87,15 @@ struct TerrainSpec {
     struct Hill { double x = 0, y = 0, r = 1, h = 0; };
     std::vector<Hill> hills;
     bool hasTilt = false; double dzdx = 0, x0 = 0, dzdy = 0, y0 = 0;
+    // THE WORLD UNDERNEATH: a level's own `terrain` block, evaluated by the engine's terrainHeight —
+    // the same function the level renders outside this grid — with the relief above (octaves,
+    // valleys, hills) added on top. Null: no base.
+    nlohmann::json base;
+    // Where that relief applies: fully within fadeR0 of the fade centre, not at all past fadeR1 —
+    // so at the grid's edge the ground IS the level's and the seam cannot show — and calmed
+    // toward a coast: fully before calmFrom along (calmDx, calmDy), not at all past calmTo.
+    bool hasFade = false; double fadeX = 0, fadeY = 0, fadeR0 = 0, fadeR1 = 0;
+    bool hasCalm = false; double calmDx = 1, calmDy = 0, calmFrom = 0, calmTo = 0;
 };
 
 struct RampInfo {

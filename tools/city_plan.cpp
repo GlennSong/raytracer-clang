@@ -31,7 +31,8 @@ static int usage() {
     std::fprintf(stderr,
                  "usage: city_plan generate BRIEF.json OUT_DIR [--variants N]\n"
                  "       city_plan scene BRIEF.json OUT_SCENE.json [--no-ramps]\n"
-                 "       city_plan brief\n");
+                 "       city_plan brief\n"
+                 "       city_plan level-world BRIEF.json      the level's terrain + water blocks that match the brief's world, and its towns' hubs\n");
     return 2;
 }
 
@@ -45,6 +46,36 @@ int main(int argc, char** argv) {
     const std::string verb = argv[1];
     if (verb == "brief") {
         std::cout << briefToJson(Brief{}).dump(2) << "\n";
+        return 0;
+    }
+    if (verb == "level-world" && argc == 3) {
+        // THE LEVEL'S SIDE OF THE WORLD: the city's ground grid is the brief's world plus its hills,
+        // and beyond the grid the level renders its own terrain block — which must be the same
+        // world, or the seam shows. This prints the blocks to put in the level.
+        std::ifstream in(argv[2]);
+        if (!in) { std::fprintf(stderr, "city_plan: cannot read %s\n", argv[2]); return 1; }
+        nlohmann::json bj;
+        in >> bj;
+        const Brief b = briefFromJson(bj);
+        if (b.world.is_null()) { std::fprintf(stderr, "city_plan: %s has no world\n", argv[2]); return 1; }
+        nlohmann::json terrain = b.world.at("base");
+        terrain["_comment"] = "Written by `city_plan level-world " + std::string(argv[2]) + "`: the brief's world, which the city's ground grid is built on. Edit the brief, not this.";
+        terrain["cdlod"] = {{"worldHalf", terrain.value("size", 3400.0) / 2}};
+        terrain["material"] = {{"albedo", {1.0, 1.0, 1.0}}, {"roughness", 1.0}};
+        nlohmann::json out = {{"terrain", terrain}};
+        if (b.world.contains("seaLevel")) {
+            nlohmann::json water = b.world.value("water", nlohmann::json::object());
+            water["seaLevel"] = b.world["seaLevel"];
+            out["water"] = water;
+        }
+        // and a district hub for each town the plan builds, so its lots grow as a small old town
+        // rather than as the city's outskirts (citysim.districts.hubs; authored hubs win)
+        const CityPlan plan = generatePlan(b);
+        nlohmann::json hubs = nlohmann::json::array();
+        for (const CityPlan::Town& t : plan.towns)
+            if (t.built) hubs.push_back({{"at", {std::round(t.centre.x), std::round(t.centre.y)}}, {"kind", "oldtown"}});
+        out["townHubs"] = hubs;
+        std::cout << out.dump(1) << "\n";
         return 0;
     }
     if ((verb != "generate" && verb != "scene") || argc < 4) return usage();
