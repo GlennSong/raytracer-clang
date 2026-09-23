@@ -437,6 +437,7 @@ Brief briefFromJson(const nlohmann::json& j) {
         b.freewayRadials = f.value("radials", b.freewayRadials);
         b.freewayWobble = f.value("wobble", b.freewayWobble);
     }
+    b.relief = j.value("relief", b.relief);
     if (j.contains("roads")) {
         const auto& r = j["roads"];
         b.localWidth = r.value("local", b.localWidth);
@@ -456,6 +457,7 @@ nlohmann::json briefToJson(const Brief& b) {
             {"outskirts", {{"ringSpacing", b.ringSpacing}, {"spokes", b.spokes}, {"curvature", b.curvature},
                            {"streetSpacing", b.wedgeStreetSpacing}, {"margin", b.outerMargin}}},
             {"freeway", {{"radius", b.freewayRadius}, {"radials", b.freewayRadials}, {"wobble", b.freewayWobble}}},
+            {"relief", b.relief},
             {"roads", {{"local", b.localWidth}, {"collector", b.collectorWidth}, {"arterial", b.arterialWidth},
                        {"freeway", b.freewayWidth}, {"sidewalk", b.sidewalk}}}};
 }

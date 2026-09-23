@@ -58,6 +58,10 @@ struct Brief {
     Real freewayRadius = 1000;
     int freewayRadials = 2;
     Real freewayWobble = 50;
+    // GROUND. The plan is drawn flat — blocks, lots and routes are plan-view — but the city is
+    // built on this: rolling relief, peak to trough, over the map. Roads conform to it within
+    // their class grades and lots grade their pads off it.
+    Real relief = 18;
     // Road widths (carriageway) and the sidewalk every street carries (m).
     Real localWidth = 12, collectorWidth = 16, arterialWidth = 22, freewayWidth = 30;
     Real sidewalk = 5;

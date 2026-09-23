@@ -3,6 +3,7 @@
 #include "../roads/lanes/interchange.h"   // ONE ramp generator, shared with the level importer
 #include "../roads/lanes/polyline_ops.h"   // stations/pointAt: sampling along the route
 #include "../roads/lanes/road_graph_spec.h"
+#include "../roads/lanes/terrain_recipe.h"   // makeTerrain: the same ground the builder will make
 
 #include <algorithm>
 #include <cmath>
@@ -64,7 +65,21 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
     scene["name"] = b.name;
     // The map, with room for the sidewalks outside the outermost road.
     const Real half = b.size * Real(0.5) + 60;
-    scene["terrain"] = {{"type", "flat"}, {"bounds", {b.center.x - half, b.center.x + half, b.center.y - half, b.center.y + half}}};
+    // THE GROUND THE CITY IS BUILT ON. Never "flat": a scene whose terrain is `flat` makes no
+    // ground grid at all (lanes.cpp: hasTerrain = type != "flat"), and the loader's lane-city
+    // path publishes its blocks only when there IS one — so the first planned level loaded
+    // with 0 blocks, 0 lots and not one building in 3 km of streets. The brief's relief is
+    // rolling hills the roads conform to and the lots grade their pads off.
+    const Real relief = std::max(Real(2), b.relief);
+    nlohmann::json octaves = json::array();
+    octaves.push_back({relief * 0.34, 900.0});
+    octaves.push_back({relief * 0.12, 360.0});
+    octaves.push_back({relief * 0.04, 140.0});
+    scene["terrain"] = {{"type", "procedural"},
+                        {"bounds", {b.center.x - half, b.center.x + half, b.center.y - half, b.center.y + half}},
+                        {"res", 10.0},
+                        {"seed", static_cast<int>(b.seed)},
+                        {"octaves", octaves}};
     // Lane counts and widths that add up to the brief's carriageway widths.
     scene["classes"] = {
         {"local", {{"w", b.localWidth / 2}, {"fwd", 1}, {"back", 1}, {"sidewalk", b.sidewalk}, {"g_max", 0.12}, {"rank", 1}, {"thick", 0.5}, {"window", 40}}},
@@ -74,6 +89,16 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         {"ramp", {{"w", 4.5}, {"fwd", 1}, {"back", 0}, {"shoulder", 2.5}, {"g_max", 0.08}, {"rank", 0}, {"thick", 1.0}, {"window", 40}}},
     };
     scene["rules"] = {{"closing", 3.0}};
+
+    // The ground this scene declares, evaluated here so the freeway's floors can ride over it.
+    roads::lanes::TerrainSpec tspec;
+    tspec.type = "procedural";
+    tspec.res = 10.0;
+    tspec.seed = static_cast<int>(b.seed);
+    for (const json& o2 : scene["terrain"]["octaves"])
+        tspec.octaves.emplace_back(o2[0].get<double>(), o2[1].get<double>());
+    const std::array<double, 4> tbounds{b.center.x - half, b.center.x + half, b.center.y - half, b.center.y + half};
+    const HeightField ground = roads::lanes::makeTerrain(tspec, tbounds);
 
     json edges = json::array();
     std::vector<std::string> streetIds;
@@ -109,8 +134,12 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             const std::vector<double> st = roads::lanes::stations(c.pts);
             for (double s0 = 0; s0 < st.back(); s0 += 60.0) {
                 const Vec2 q = roads::lanes::pointAt(c.pts, st, s0);
+                // OVER THE GROUND, not at an absolute height: on rolling ground a flat 8 m
+                // floor is under the hills and pointless over the hollows. Sampled from the
+                // same terrain the builder will make from this scene's own spec.
+                const double z = (ground ? ground(q.x, q.y) : 0.0) + opt.clearance;
                 floors.push_back(json::array({std::round(q.x * 100) / 100, std::round(q.y * 100) / 100,
-                                              opt.clearance, 60.0}));
+                                              std::round(z * 100) / 100, 60.0}));
             }
         }
         edges.push_back({{"id", a}, {"class", "freeway"}, {"floor", floors},

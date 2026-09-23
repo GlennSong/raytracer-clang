@@ -139,11 +139,11 @@
   ]
  },
  "terrain": {
-  "_comment": "metro_lanes' terrain, flattened: the plan is drawn on the flat, so the ground outside the lanes grid is a gentle basin that meets it. Terrain-aware planning (a brief that reads relief) is the next thing this level wants.",
+  "_comment": "The ground outside the lanes grid, matched to the brief's relief (22 m peak to trough): the grid IS the ground inside the city and CDLOD renders it, so this is what it blends out to. heightScale 3 gave +-72 m, which is what the sea was filling.",
   "cdlod": {
    "worldHalf": 1600
   },
-  "heightScale": 3,
+  "heightScale": 0.45,
   "material": {
    "albedo": [
     1.0,
@@ -187,7 +187,7 @@
   "size": 3400,
   "snowLine": 400,
   "tiltX": -0.045,
-  "warp": 0.35
+  "warp": 0
  },
  "vegetation": {
   "clearMargin": 4.0,
@@ -252,18 +252,5 @@
   }
  ],
  "version": 1,
- "water": {
-  "cell": 12,
-  "color": [
-   0.012,
-   0.05,
-   0.08
-  ],
-  "foamBand": 40,
-  "opacity": 0.82,
-  "region": 2300,
-  "roughness": 0.04,
-  "seaLevel": -5.0
- },
  "_comment": "The first city built from a PLAN (ADR-0092): assets/city_plans/metro_planned.json is the brief Glenn picked (variant 4 of six), city_plan turns it into the lanes scene this level names, and the plan's own scorecard says what should come out \u2014 ~490 blocks and ~4100 buildings over 3 x 3 km."
 }
