@@ -210,8 +210,8 @@ nlohmann::json graphFromLevel(const std::string& levelPath, const std::string& o
             frames(centre, tan, nrm);
             std::vector<Vec2> ca(centre.size()), cb(centre.size());
             for (std::size_t i = 0; i < centre.size(); ++i) {
-                ca[i] = centre[i] + nrm[i] * dCarriage;
-                cb[i] = centre[i] - nrm[i] * dCarriage;
+                ca[i] = centre[i] - nrm[i] * dCarriage;   // right-hand in plan coordinates (keep-left on screen): a, with the route, on its right
+                cb[i] = centre[i] + nrm[i] * dCarriage;
             }
             std::reverse(cb.begin(), cb.end());          // the other direction
             // Every street it crosses is passed OVER, not severed: hold the deck clear
@@ -256,6 +256,9 @@ nlohmann::json graphFromLevel(const std::string& levelPath, const std::string& o
             dop.idPrefix = "d" + std::to_string(ri);
             dop.carriage = dCarriage;
             dop.edgeReach = dCarriage + o.freewayLanes * o.freewayLaneW / 2 + 2.5;
+            dop.freewayLanes = o.freewayLanes;
+            dop.freewayLaneW = o.freewayLaneW;
+            dop.rampHalf = o.rampLaneW / 2 + o.rampShoulder;
             dop.maxDiamonds = o.diamonds;
             dop.spacing = o.gateSpacing;
             dop.clearance = o.clearance;
@@ -278,7 +281,7 @@ nlohmann::json graphFromLevel(const std::string& levelPath, const std::string& o
                << crossed << " street crossings held clear, " << diamonds << " diamonds of "
                << candCount << " candidate crossings (squarest " << static_cast<int>(worstAngle)
                << " deg; rejected: oblique " << rejOblique << ", spacing " << rejNear
-               << ", no terminal " << rejTerm << ", no room " << rejRoom << "); ";
+               << ", no terminal " << rejTerm << ", no room " << rejRoom << ", over a street " << dr.rejectedConflict << "); ";
             rep.notes += rs.str();
             rep.loopLength += routeLen;
         }

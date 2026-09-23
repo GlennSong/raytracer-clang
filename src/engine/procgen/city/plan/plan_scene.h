@@ -20,7 +20,8 @@ namespace plan {
 
 struct SceneOptions {
     bool ramps = true;              // interchange ramps (off: the freeway is a wall)
-    Real carriagewayGap = 7.0;      // centre to each carriageway's centreline (m)
+    Real medianGap = 4.0;           // clear air between the two carriageways' decks (m): more than the
+                                    // pavement's `closing`, so each is its own deck with its own parapet
     Real clearance = 8.0;           // the deck's height over a street it crosses
     int diamondsPerRoute = 6;       // interchanges per freeway route
     Real interchangeSpacing = 650;  // least distance between them along the route

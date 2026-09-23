@@ -3,12 +3,21 @@
 
 // DIAMONDS: the way on and off a freeway, at the streets it crosses.
 //
-// Each carriageway drops a ramp into the band beside it and Ts onto a street out past the
-// freeway's own edge — the simpler thing a ring's frontage-road diamond could not be, since
-// a route has no inside, only a left and a right. The ramp is sized for its CLIMB measured
-// to the terminal's ground, not the crossing's (sized against the wrong end, it arrives at
-// the street too high and the profile solver drags the street up to meet it: 27% grade and
-// a divergent junction solve).
+// Right-hand traffic IN PLAN COORDINATES — plan (x, y) is world (x, z), a reflection, so the
+// city drives on the LEFT on screen, and that is the intent (Glenn, 2026-09-23). Carriageway
+// `a` runs with the route on its RIGHT (-normal), `b` against
+// it on the left; each ramp leaves from, or joins, its carriageway's OUTER lane. Each side of
+// a crossing street gets two ramps that run in a band beside the deck and meet the street
+// where the band crosses it — the off-ramp arriving from upstream, the on-ramp leaving
+// downstream — so the pair makes one four-way point on the street and neither ramp lies on
+// top of the other. Where that point would sit in the mouth of the street's next junction (a
+// freeway between frontage roads), the ramps touch down along the road beside the freeway
+// instead: the off-ramp upstream of the crossing, the on-ramp downstream of it.
+//
+// A ramp is as long as its climb needs at the RAMP's grade under the builder's smoothstep
+// profile (steepest at 1.5x the mean), measured to the ground where it lands, plus the part
+// of it within reach of that street. A diamond whose ramps would pass over another street
+// partway down is refused, not built.
 //
 // This is the one generator. The level importer builds its routes' diamonds with it, and so
 // does the city planner, whose freeway is planned rather than traced (ADR-0092) — a second
@@ -32,13 +41,28 @@ struct RampStreet {
 };
 
 struct DiamondOptions {
-    std::string aId, bId;        // the carriageway edge ids: a runs with the route, b against it
+    std::string aId, bId;        // the carriageway edge ids: a runs with the route (on its right), b against it
     std::string idPrefix = "d0"; // ramp ids are <prefix>_<n>_{a,b}_{off,on}
     double carriage = 7.0;       // centreline -> a carriageway's centreline
     double edgeReach = 12.0;     // centreline -> the outer edge of the freeway's pavement
+    int freewayLanes = 3;        // lanes per carriageway, and their width: where the outer lane is
+    double freewayLaneW = 3.6;
     int maxDiamonds = 8;
     double spacing = 600;        // least distance between interchanges along the route
     double decel = 80, taperOff = 72, aux = 110, taperOn = 90, approach = 60;
+    double rampHalf = 4.75;      // a ramp's half-width, shoulders included
+    double bandGap = 3.5;        // clear air between the deck's edge and a ramp's: more than the
+                                 // pavement's `closing`, or the two fuse into one slab
+    double gRamp = 0.08;         // the grade a ramp is sized at (its class's g_max)
+    double landing = 20;         // the level approach across a crossing street's half-width
+    double diverge = 60;         // gore -> band: the run a ramp takes to pull clear of the deck
+    double mouth = 30;           // least distance from a ramp terminal to the next junction on its street,
+    double crossMouth = 15;      // and the least, where there is no road beside the freeway to land on
+    double splitReach = 120;     // how far along the freeway a side may land from the crossing: a
+                                 // grid's cross street, cut by a junction under the deck, carries on
+                                 // a block over — a split diamond
+    double frontageReach = 90;   // how far out a road beside the freeway may be and still be one
+    double shift = 50, along = 20;   // band -> frontage road at grade, then on its line to the terminal
     double clearance = 0;        // the deck's height over the ground at a crossing
     double window = 200, gMax = 0.06;   // the freeway's own profile, for the climb
     HeightField ground;          // empty: a flat city, every climb is zero
@@ -47,7 +71,7 @@ struct DiamondOptions {
 struct DiamondResult {
     std::vector<nlohmann::json> ramps;
     int built = 0;
-    int candidates = 0, rejectedOblique = 0, rejectedSpacing = 0, rejectedTerminal = 0, rejectedRoom = 0;
+    int candidates = 0, rejectedOblique = 0, rejectedSpacing = 0, rejectedTerminal = 0, rejectedRoom = 0, rejectedConflict = 0;
     double squarestRejected = 0;
 };
 

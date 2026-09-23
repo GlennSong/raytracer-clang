@@ -501,11 +501,23 @@ CityPlan generatePlan(const Brief& B) {
     const Frame F{B.center, Vec2(std::cos(ang), std::sin(ang)), Vec2(-std::sin(ang), std::cos(ang))};
     const Real outerR = B.size * 0.5 - B.outerMargin;
     auto midR = [&](Real theta) { return B.midRadius * (1.0 + 0.05 * ringNoise(theta, 99, B.seed)); };
-    // The warp field: zero in the core, full at midtown's rim.
+    // The freeway ring and its corridor: the ring's centreline radius at an angle, and the
+    // half-width out to the frontage roads either side of it.
+    auto freewayR = [&](Real th) { return B.freewayRadius + B.freewayWobble * ringNoise(th, 777, B.seed); };
+    const Real corridorHalf = B.freewayWidth * 0.5 + 35.0;
+    const bool haveFreeway = B.freewayRadius > B.midRadius + corridorHalf && B.freewayRadius + corridorHalf < outerR;
+    // The warp field: zero in the core, full at midtown's rim — and zero again across the
+    // freeway's corridor. The freeway is not warped (at 260 m a 19 m warp bends it tighter
+    // than a motorway can), so a warped frontage road wandered 37-69 m from it: too close
+    // for a ramp beside the deck in places, and never parallel enough to land one along.
     auto warped = [&](const Vec2& p) {
         const Vec2 d = p - B.center;
         const Real r = d.length();
-        const Real w = B.warp * smooth01((r - B.coreRadius) / std::max(Real(1), B.midRadius - B.coreRadius));
+        Real w = B.warp * smooth01((r - B.coreRadius) / std::max(Real(1), B.midRadius - B.coreRadius));
+        if (haveFreeway && w > 0) {
+            const Real off = std::fabs(r - freewayR(std::atan2(d.y, d.x)));
+            w *= smooth01((off - corridorHalf - 10) / 80.0);
+        }
         if (w <= 0) return p;
         const Real s = 1.0 / 260.0;
         return p + Vec2(valueNoise(p.x * s, p.y * s, B.seed + 11), valueNoise(p.x * s + 17.3, p.y * s + 5.1, B.seed + 23)) * w;
@@ -567,11 +579,8 @@ CityPlan generatePlan(const Brief& B) {
     // No local street crosses that corridor, so the blocks either side stay whole — with
     // locals running across it, every block in the freeway's band straddled the freeway
     // and the whole ring of land was right-of-way.
-    auto freewayR = [&](Real th) { return B.freewayRadius + B.freewayWobble * ringNoise(th, 777, B.seed); };
-    const Real corridorHalf = B.freewayWidth * 0.5 + 35.0;
     struct BandEdge { Real base; std::function<Real(Real)> r; bool corridorInner; };
     std::vector<BandEdge> bandEdges{{B.midRadius, midR, false}};
-    const bool haveFreeway = B.freewayRadius > B.midRadius + corridorHalf && B.freewayRadius + corridorHalf < outerR;
     if (haveFreeway) {
         auto inner = [&, freewayR, corridorHalf](Real th) { return freewayR(th) - corridorHalf; };
         auto outer = [&, freewayR, corridorHalf](Real th) { return freewayR(th) + corridorHalf; };

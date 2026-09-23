@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <set>
 
@@ -116,10 +118,18 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
     rampStreets.reserve(streetChains.size());
     for (std::size_t i = 0; i < streetChains.size() && i < streetIds.size(); ++i)
         rampStreets.push_back({streetIds[i], streetChains[i].pts});
+    // Each carriageway is the brief's freeway width over two — four lanes — plus a 2.5 m
+    // shoulder either side, and they stand `medianGap` apart. They used to be 7 m off the
+    // centreline, which laid 20 m carriageways 6 m into each other: one slab, no median.
+    const Real carriageHalf = b.freewayWidth / 4 + Real(2.5);
+    const Real carriageway = carriageHalf + opt.medianGap / 2;
     int route = 0;
     for (const Chain& c : chainsOf(plan.freeway)) {
+        // Right-hand traffic in plan coordinates (keep-left on screen: roads/lanes/interchange.h): a runs with the chain on its RIGHT, b against it on its left
+        // (offsetPolyline's +d is left). Placed the other way, every ramp anchored to a
+        // carriageway's right-hand lane left from beside the median and crossed the deck.
         const std::string a = "fw" + std::to_string(route) + "_a", d = "fw" + std::to_string(route) + "_b";
-        std::vector<Vec2> back = offsetPolyline(c.pts, -opt.carriagewayGap);
+        std::vector<Vec2> back = offsetPolyline(c.pts, carriageway);
         std::reverse(back.begin(), back.end());
         // AN ELEVATED RING. Two designs failed before this one: holding the freeway's deck
         // clear only where it crosses a street put 1.4 km of a 2.1 km ring on piers anyway
@@ -127,8 +137,8 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         // STREET climb instead asked a 25 m chain — cut that short by the frontage roads
         // either side — to gain 8 m, which is a 24% ramp. On a flat city the honest answer
         // is the one real cities build: the motorway runs above the streets for its whole
-        // length, every street passes under it, and the ramps come down to the frontage
-        // roads beside it.
+        // length, every street passes under it, and the ramps come down beside it to the
+        // streets that pass under it.
         json floors = json::array();
         {
             const std::vector<double> st = roads::lanes::stations(c.pts);
@@ -143,7 +153,7 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             }
         }
         edges.push_back({{"id", a}, {"class", "freeway"}, {"floor", floors},
-                         {"path", {{"points", pointsJson(offsetPolyline(c.pts, opt.carriagewayGap))}}}});
+                         {"path", {{"points", pointsJson(offsetPolyline(c.pts, -carriageway))}}}});
         edges.push_back({{"id", d}, {"class", "freeway"}, {"floor", floors},
                          {"path", {{"points", pointsJson(back)}}}});
         if (opt.ramps) {
@@ -151,13 +161,22 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             dop.aId = a;
             dop.bId = d;
             dop.idPrefix = "d" + std::to_string(route);
-            dop.carriage = opt.carriagewayGap;
-            dop.edgeReach = b.freewayWidth / 2 + 2.5;
+            dop.carriage = carriageway;
+            dop.edgeReach = carriageway + carriageHalf;
+            dop.freewayLanes = 4;
+            dop.freewayLaneW = b.freewayWidth / 8;
             dop.maxDiamonds = opt.diamondsPerRoute;
             dop.spacing = opt.interchangeSpacing;
             dop.clearance = opt.clearance;
+            dop.rampHalf = 4.5 / 2 + 2.5;   // the ramp class below: one 4.5 m lane, 2.5 m shoulders
+            dop.gRamp = 0.08;               // and its g_max
+            dop.ground = ground;            // the climb is to the ground the ramp lands on
             const roads::lanes::DiamondResult dr = roads::lanes::diamondRamps(c.pts, rampStreets, dop);
             for (const json& r : dr.ramps) edges.push_back(r);
+            if (std::getenv("RT_PLAN_WHY"))
+                std::printf("[plan] %s: %d diamonds of %d crossings (oblique %d, spacing %d, no terminal %d, no room %d, over a street %d)\n",
+                            a.c_str(), dr.built, dr.candidates, dr.rejectedOblique, dr.rejectedSpacing, dr.rejectedTerminal,
+                            dr.rejectedRoom, dr.rejectedConflict);
         }
         ++route;
     }
