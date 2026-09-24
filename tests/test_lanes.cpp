@@ -462,7 +462,8 @@ TEST_CASE(lanes_lots_producer_identity_follows_its_inputs_and_the_city_key) {
     LevelInputs seed = in; seed.level["citysim"]["seed"] = 4242; CHECK(lp->identity(seed).key != a.key);                 // the citysim block
     LevelInputs cell = in; cell.level["citysim"]["renderCell"] = 125.0; CHECK(lp->identity(cell).key != a.key);         // through the city key
     LevelInputs spawn = in; spawn.level["player"]["position"][0] = spawn.level["player"]["position"][0].get<double>() + 5.0; CHECK(lp->identity(spawn).key != a.key);
-    LevelInputs terrain = in; terrain.level["terrain"] = nlohmann::json::object(); CHECK(!lp->applies(terrain));       // terrain levels grow in the pre-pass
+    LevelInputs terrain = in; terrain.level["terrain"] = nlohmann::json::object(); CHECK(lp->applies(terrain));        // terrain levels bake too, on the loader's ground (ADR-0095)...
+    LevelInputs shaped = terrain; shaped.level["entities"].push_back(nlohmann::json{{"shape", "script"}, {"onTerrain", true}}); CHECK(!lp->applies(shaped));   // ...unless a script shapes it
     LevelInputs plain = in; plain.level["citysim"].erase("buildLots"); plain.level["citysim"].erase("planOnly"); CHECK(!lp->applies(plain));
     LevelInputs road = in; road.level["entities"].push_back(nlohmann::json{{"shape", "road"}}); CHECK(!lp->applies(road));
 }
@@ -475,7 +476,7 @@ TEST_CASE(lanes_lots_bake_reads_the_city_products_back_and_is_deterministic) {
     LevelInputs in; std::string err; CHECK(loadLevelInputs("assets/lanelab/levels/ring.json", in, &err));
     // The producer's grow, twice, from the cached ring scene's products: byte-identical lots.
     const CityProducts p = cityProductsFromResult(scene("ring_city"), cityRenderCell(in.level));
-    LotsCityInputs city; city.hasTerrain = p.hasTerrain; city.ground = p.ground; city.holes = p.holes;
+    LotsCityInputs city; city.hasTerrain = p.hasTerrain; city.ground = p.ground; city.holes = p.holes; city.nav = p.nav; city.pavedSidewalk = p.bands.sidewalkWidth;
     nlohmann::json ra, rb;
     const NetLotResult ga = growLotsForLevel(in, city, &ra), gb = growLotsForLevel(in, city, &rb);
     CHECK(ga.lots.size() > 100 && ga.lots.size() == gb.lots.size() && ra["units"] == rb["units"] && !ga.parts.empty());
