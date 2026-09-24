@@ -1,4 +1,5 @@
 #include "level_params.h"
+#include "procgen/terrain_lod.h"   // kBakedCell0 (ADR-0095)
 
 #include "procgen/erosion.h"
 #include "procgen/noise.h"
@@ -149,6 +150,17 @@ TreeParams readTreeParams(const json& ent, uint32_t& seedOut) {
     tp.leafColor       = parseVec3(j.value("leafColor", json()), tp.leafColor);
     seedOut            = j.value("seed", 0u);
     return tp;
+}
+
+double levelDrawnGroundCell(const json& root) {
+    if (!root.contains("terrain") || !root["terrain"].contains("cdlod")) return 0.0;
+    const json& cj = root["terrain"]["cdlod"];
+    const double worldHalf = cj.is_object() ? cj.value("worldHalf", 1024.0) : 1024.0;
+    const int numLods = cj.is_object() ? cj.value("numLods", 6) : 6;
+    const int gridRes = cj.is_object() ? cj.value("gridRes", 32) : 32;
+    const char* bakedEnv = std::getenv("RT_BAKED_TERRAIN");
+    if (cj.is_object() && cj.value("baked", false) && !(bakedEnv && bakedEnv[0] == '0')) return kBakedCell0;
+    return (worldHalf * 2.0 / double(1 << (numLods - 1))) / std::max(1, gridRes);
 }
 
 std::shared_ptr<const std::function<double(double, double)>>

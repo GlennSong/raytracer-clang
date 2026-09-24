@@ -84,17 +84,7 @@ bool cityPrePassForLevel(const nlohmann::json& rootIn, CityPrePass& out) {
 
     // The finest rendered CDLOD cell: the walkway sculptors sample ground through the tile's own
     // interpolation on this grid, so ribbons sit on the MESH and not on the analytic function between.
-    if (const nlohmann::json& tj = root["terrain"]; tj.contains("cdlod")) {
-        const nlohmann::json& cj = tj["cdlod"];
-        const double worldHalf = cj.is_object() ? cj.value("worldHalf", 1024.0) : 1024.0;
-        const int numLods = cj.is_object() ? cj.value("numLods", 6) : 6;
-        const int gridRes = cj.is_object() ? cj.value("gridRes", 32) : 32;
-        out.lotMeshCell = (worldHalf * 2.0 / double(1 << (numLods - 1))) / std::max(1, gridRes);
-        // Baked ground (ADR-0095): drawn on the pyramid's finest cell.
-        const char* bakedEnv = std::getenv("RT_BAKED_TERRAIN");
-        if (cj.is_object() && cj.value("baked", false) && !(bakedEnv && bakedEnv[0] == '0'))
-            out.lotMeshCell = kBakedCell0;
-    }
+    out.lotMeshCell = levelDrawnGroundCell(root);   // the one derivation (level_params.h)
 
     // 2. The road nets, recipes run against the natural ground (which gates the metro's
     //    terrain-aware layout), and the carve regions they ask the terrain for.

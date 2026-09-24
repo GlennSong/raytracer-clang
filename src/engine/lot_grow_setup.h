@@ -36,6 +36,18 @@ LotGrowSetup lotGrowSetupForLevel(const nlohmann::json& cs, const std::string& l
                                   const std::vector<RoadEntity>& nets, LotGroundWithFn groundWith, double groundMeshCell,
                                   const Vec2* enterableAt);
 
+// THE GROUND THE LOTS GROW ON, from final-for-lots terrain params: the sampler, and the
+// priority-correct rebind the in-pass block grades use (their extra regions folded into the
+// same list, dilate-aware so a walkway reproduces a CDLOD corner query). The loader and the
+// lots producer both build it here, so a baked city stands on the ground the loader's would.
+struct LotGround {
+    std::shared_ptr<TerrainParams> params;
+    std::shared_ptr<Noise> noise;
+    HeightField ground;
+    LotGroundWithFn groundWith;
+};
+LotGround lotGroundFor(std::shared_ptr<TerrainParams> params, unsigned seed);
+
 // The authored player position's XZ (the spawn building grows enterable), false when the level has none.
 bool authoredSpawnXZ(const nlohmann::json& root, Vec2& out);
 

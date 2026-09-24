@@ -2788,20 +2788,8 @@ bool LevelLoader::load(const std::string& path,
             g_lanes.nav = cp.nav;           // the streets a door faces
             g_lanes.pavedSidewalk = cp.bands.sidewalkWidth;   // the band a door walks to
             LOG_INFO << "[lanelab] " << g_lanes.blocks.size() << " city blocks published for the terrain pre-pass";
-            auto fbTp = std::make_shared<TerrainParams>(readTerrainParams(root["terrain"]));
-            fbTp->erodedBase = sharedEroded;          // the fallback keeps whatever base the level had; no recursion
-            auto fbNoise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
+            sharedEroded = engine::roads::lanes::laneErodedBase(root, grid, sharedEroded);
             const double bx1 = grid->x0 + grid->res * (grid->nx - 1), by1 = grid->y0 + grid->res * (grid->ny - 1);
-            sharedEroded = std::make_shared<const std::function<double(double, double)>>(
-                [grid, fbTp, fbNoise, bx1, by1](double x, double z) {
-                    const double band = 60.0;   // blend to the level's own terrain over the last 60 m of the grid
-                    const double inset = std::min(std::min(x - grid->x0, bx1 - x), std::min(z - grid->y0, by1 - z));
-                    if (inset <= 0.0) return terrainHeight(*fbTp, *fbNoise, x, z);
-                    const double lab = grid->sample(x, z);
-                    if (inset >= band) return lab;
-                    const double u = inset / band, w = u * u * (3 - 2 * u);
-                    return terrainHeight(*fbTp, *fbNoise, x, z) * (1 - w) + lab * w;
-                });
             LOG_INFO << "[lanelab] CDLOD terrain from the lab's conformed grid: " << grid->nx << " x " << grid->ny
                      << " @ " << grid->res << " m, " << (bx1 - grid->x0) << " x " << (by1 - grid->y0) << " m";
         } else if (!cperr.empty()) LOG_WARN << "[lanelab] no conformed ground for CDLOD: " << cperr;
@@ -2829,19 +2817,7 @@ bool LevelLoader::load(const std::string& path,
             return terrainHeight(*tp, *noise, x, z);
         };
         const json& tj = root["terrain"];
-        if (tj.contains("cdlod")) {
-            const json& cj = tj["cdlod"];
-            const double worldHalf =
-                cj.is_object() ? cj.value("worldHalf", 1024.0) : 1024.0;
-            const int numLods = cj.is_object() ? cj.value("numLods", 6) : 6;
-            const int gridRes = cj.is_object() ? cj.value("gridRes", 32) : 32;
-            lotMeshCell = (worldHalf * 2.0 / double(1 << (numLods - 1))) /
-                          std::max(1, gridRes);
-            // Baked ground (ADR-0095): the pyramid's finest cell -- the grid it is drawn on.
-            const char* bakedEnv = std::getenv("RT_BAKED_TERRAIN");
-            if (cj.is_object() && cj.value("baked", false) && !(bakedEnv && bakedEnv[0] == '0'))
-                lotMeshCell = kBakedCell0;
-        }
+        lotMeshCell = levelDrawnGroundCell(root);   // the one derivation (level_params.h)
     }
 
     // Pre-pass: run on-terrain recipes BEFORE the terrain so their cut/fill
@@ -3260,27 +3236,11 @@ bool LevelLoader::load(const std::string& path,
             (root["citysim"].value("buildLots", false) ||
              root["citysim"].value("planOnly", false)) &&
             (!preNets.empty() || labBlocks)) {
-            auto lotTp = std::make_shared<TerrainParams>(terrainParams);
-            auto lotNoise = std::make_shared<Noise>(terrainSeed);
-            HeightField lotGround = [lotTp, lotNoise](double x, double z) {
-                return terrainHeight(*lotTp, *lotNoise, x, z);
-            };
-            // Priority-correct rebind hook for the in-pass block grades
-            // (LotParams::groundWith): fold extras into the SAME region list
-            // as the roads so priorities resolve as the final terrain will.
-            auto lotGroundWith = [lotTp, lotNoise](
-                                     const std::vector<TerrainFlatten>& extra) {
-                auto tp = std::make_shared<TerrainParams>(*lotTp);
-                tp->flatten.insert(tp->flatten.end(), extra.begin(),
-                                   extra.end());
-                rebuildFlattenIndex(*tp);
-                // Dilate-aware (third arg): the mesh-conforming walkway
-                // sampler reproduces a CDLOD corner query exactly.
-                return [tp, lotNoise](Real x, Real z, Real dilate) {
-                    return terrainHeight(*tp, *lotNoise, x, z,
-                                         static_cast<double>(dilate));
-                };
-            };
+            // The lots' ground and its priority-correct rebind for the in-pass block grades -- the
+            // SAME construction the lots producer uses (lot_grow_setup.h), so a baked city matches.
+            const engine::LotGround lg = engine::lotGroundFor(std::make_shared<TerrainParams>(terrainParams), terrainSeed);
+            HeightField lotGround = lg.ground;
+            auto lotGroundWith = lg.groundWith;
             engine::Vec2 spawnXZ;
             const bool haveSpawn = authoredSpawnXZ(root, spawnXZ);
             engine::bundle::LevelInputs lotInputs;

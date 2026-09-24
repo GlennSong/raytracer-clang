@@ -3,6 +3,7 @@
 #include <set>
 
 #include "engine/city_grow.h"
+#include "engine/level_params.h"   // readTerrainParams, levelDrawnGroundCell, readErodedBase
 #include "engine/lot_grow_setup.h"
 #include "engine/procgen/city/lot_cache.h"
 #include "engine/procgen/city/roads/lanes/block_audit.h"
@@ -18,7 +19,7 @@ namespace engine {
 namespace roads::lanes {
 
 // Bump whenever the lot pass's output changes for the same inputs (the key cannot see code).
-const char* const kLotsBuildTag = "2026-09-22.1";   // ground-relative (draped) dressing slots; blocks behind the drawn sidewalk; door walks reach it   // 2026-09-22.1: ONE grow (engine::growCity) — the bake gets the streets and the paved band the loader always had
+const char* const kLotsBuildTag = "2026-09-24.1";   // 2026-09-24.1: grows on terrain, on the loader's ground (laneErodedBase + lotGroundFor, ADR-0095);   // ground-relative (draped) dressing slots; blocks behind the drawn sidewalk; door walks reach it   // 2026-09-22.1: ONE grow (engine::growCity) — the bake gets the streets and the paved band the loader always had
 
 namespace {
 using bundle::BinReader;
@@ -28,6 +29,14 @@ double secondsSince(const std::chrono::steady_clock::time_point& t) { return std
 // A road entity whose lots belong to the OTHER pipeline (the lattice's terrain pre-pass).
 // A shape:"road" entity that names the lanes builder is this very city (ADR-0089) and
 // disqualifies nothing — that is the whole point of the second spelling.
+// A Lua script entity that grades the terrain before the lots grow (shape:"script",
+// onTerrain): its footprints join the ground only the loader assembles.
+bool hasTerrainScripts(const nlohmann::json& level) {
+    for (const nlohmann::json& e : level.value("entities", nlohmann::json::array()))
+        if (e.is_object() && e.value("shape", std::string()) == "script" && e.value("onTerrain", false)) return true;
+    return false;
+}
+
 bool hasRoadEntities(const nlohmann::json& level) {
     std::set<int> city;
     for (const CityEntity& c : cityEntities(level)) city.insert(c.entityIndex);
@@ -47,7 +56,11 @@ class LotsProducer : public bundle::BundleProducer {
 public:
     std::string name() const override { return kLotsProducerName; }
     bool applies(const bundle::LevelInputs& in) const override {
-        return !cityEntities(in.level).empty() && lotsWanted(in.level) && !in.level.contains("terrain") && !hasRoadEntities(in.level);
+        // On terrain the lots grow on the loader's ground; this producer builds the SAME ground from
+        // the level JSON and the city's grid (laneErodedBase + lotGroundFor, ADR-0095) -- unless a Lua
+        // pre-pass shapes the terrain, which only the loader can run.
+        return !cityEntities(in.level).empty() && lotsWanted(in.level) && !hasRoadEntities(in.level) &&
+               !hasTerrainScripts(in.level);
     }
     double weight() const override { return 35.0; }
 
@@ -64,6 +77,11 @@ public:
             k = bundle::fnv1a(&c.key, sizeof(c.key), k); id.inputs = c.inputs;
         } else k = bundle::fnv1aStr("nocity", k);
         k = bundle::fnv1aStr(in.level.value("citysim", nlohmann::json::object()).dump(), k);
+        // The ground the lots stand on: the terrain and water blocks, and the cell it is drawn at.
+        k = bundle::fnv1aStr(in.level.value("terrain", nlohmann::json()).dump(), k);
+        k = bundle::fnv1aStr(in.level.value("water", nlohmann::json()).dump(), k);
+        const double drawnCell = levelDrawnGroundCell(in.level);
+        k = bundle::fnv1a(&drawnCell, sizeof(drawnCell), k);
         Vec2 spawn;
         if (authoredSpawnXZ(in.level, spawn)) { k = bundle::fnv1a(&spawn.x, sizeof(spawn.x), k); k = bundle::fnv1a(&spawn.y, sizeof(spawn.y), k); }
         else k = bundle::fnv1aStr("nospawn", k);
@@ -123,14 +141,46 @@ public:
 
 void registerLotsProducer() { bundle::registerProducer(std::make_unique<LotsProducer>()); }
 
+std::shared_ptr<const std::function<double(double, double)>> laneErodedBase(
+    const nlohmann::json& root, std::shared_ptr<const HeightGrid> grid,
+    std::shared_ptr<const std::function<double(double, double)>> levelEroded) {
+    auto fbTp = std::make_shared<TerrainParams>(readTerrainParams(root["terrain"]));
+    fbTp->erodedBase = std::move(levelEroded);   // the fallback keeps whatever base the level had; no recursion
+    auto fbNoise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
+    const double bx1 = grid->x0 + grid->res * (grid->nx - 1), by1 = grid->y0 + grid->res * (grid->ny - 1);
+    return std::make_shared<const std::function<double(double, double)>>(
+        [grid, fbTp, fbNoise, bx1, by1](double x, double z) {
+            const double band = 60.0;   // blend to the level's own terrain over the last 60 m of the grid
+            const double inset = std::min(std::min(x - grid->x0, bx1 - x), std::min(z - grid->y0, by1 - z));
+            if (inset <= 0.0) return terrainHeight(*fbTp, *fbNoise, x, z);
+            const double lab = grid->sample(x, z);
+            if (inset >= band) return lab;
+            const double u = inset / band, w = u * u * (3 - 2 * u);
+            return terrainHeight(*fbTp, *fbNoise, x, z) * (1 - w) + lab * w;
+        });
+}
+
 NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInputs& city, nlohmann::json* report) {
     const nlohmann::json cs = in.level.value("citysim", nlohmann::json::object());
-    // The city's own grid IS the ground; the blocks are its pavement holes; there are no nets.
+    // The blocks are the city's pavement holes; there are no nets. The ground: on a level with
+    // terrain, the loader's -- the level's terrain with the city's grid blended in, sampled and
+    // re-graded exactly as the loader's lot pass does; without, the city's own grid.
     HeightField ground;
+    LotGroundWithFn groundWith;
+    double groundMeshCell = 0.0;
     if (city.hasTerrain) {
         auto grid = std::make_shared<HeightGrid>();
         grid->x0 = city.ground.x0; grid->y0 = city.ground.y0; grid->res = city.ground.res; grid->nx = city.ground.nx; grid->ny = city.ground.ny; grid->z = city.ground.z;
-        ground = [grid](double x, double z) { return grid->sample(x, z); };
+        if (in.level.contains("terrain")) {
+            auto tp = std::make_shared<TerrainParams>(readTerrainParams(in.level["terrain"]));
+            tp->erodedBase = laneErodedBase(in.level, grid, readErodedBase(in.level));
+            const LotGround lg = lotGroundFor(tp, in.level["terrain"].value("seed", 0u));
+            ground = lg.ground;
+            groundWith = lg.groundWith;
+            groundMeshCell = levelDrawnGroundCell(in.level);
+        } else {
+            ground = [grid](double x, double z) { return grid->sample(x, z); };
+        }
     }
     Vec2 spawn; const bool haveSpawn = authoredSpawnXZ(in.level, spawn);
     // ONE GROW (engine/city_grow.h): the same call the loader makes, from the same city products.
@@ -138,6 +188,8 @@ NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInput
     gin.citysim = cs;
     gin.levelDir = in.levelDir;
     gin.padGround = ground;
+    gin.groundWith = groundWith;
+    gin.groundMeshCell = groundMeshCell;
     gin.holes = &city.holes;
     gin.streets = &city.nav;
     gin.pavedSidewalk = city.pavedSidewalk;
