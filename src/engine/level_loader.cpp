@@ -18,7 +18,9 @@
 #include "mesh_builder.h"
 #include "asset_manager.h"
 #include "procgen/terrain.h"
-#include "procgen/terrain_lod.h"   // lodSurfaceHeight: the drawn ground
+#include "procgen/terrain_lod.h"
+#include "procgen/height_pyramid.h"   // baked ground (ADR-0095)
+#include "../job_system.h"   // lodSurfaceHeight: the drawn ground
 #include "drawn_road.h"               // DrawnRoad: the road as built, for planting
 #include "procgen/city/city_lots.h"  // grow buildings on the road net's blocks (ADR-0066)
 #include "procgen/city/building_collider.h"  // prism + door notches (ADR-0080)
@@ -1487,6 +1489,31 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
     // colour; this only adds the normal/roughness detail (Surface::TerrainGround).
     if (cfg.material.surface() == RenderMaterial::Surface::None)
         cfg.material.setSurface(RenderMaterial::Surface::TerrainGround);
+    // BAKED GROUND (ADR-0095): the final field -- every flatten folded in -- sampled once into
+    // a height pyramid, and the CDLOD grid becomes the pyramid's (1 m at the finest level,
+    // refined only where the ground needs it). RT_BAKED_TERRAIN=0 draws the formula instead.
+    const char* bakedEnv = std::getenv("RT_BAKED_TERRAIN");
+    if (c.is_object() && c.value("baked", false) && !(bakedEnv && bakedEnv[0] == '0')) {
+        const auto t0 = std::chrono::steady_clock::now();
+        const pyramid::PyramidSpec spec = bakedPyramidSpec(cfg.worldHalf);
+        auto noise = std::make_shared<Noise>(cfg.seed);
+        const TerrainParams& tp = cfg.params;
+        JobSystem jobs;
+        auto pyr = std::make_shared<pyramid::Pyramid>(pyramid::buildPyramid(
+            spec, [&](double x, double z, double step) { return lodVertexHeight(tp, *noise, x, z, step); }, &jobs));
+        const CdlodGeometry g = bakedCdlodGeometry(cfg.worldHalf);
+        cfg.worldHalf = static_cast<float>(g.worldHalf);
+        cfg.numLods = g.numLods;
+        cfg.gridRes = g.gridRes;
+        cfg.baked = pyr;
+        int perLevel[24] = {};
+        for (const auto& kv : pyr->tiles) ++perLevel[std::clamp(kv.first.level, 0, 23)];
+        std::string lv;
+        for (int l = 0; l < spec.levels; ++l) lv += " L" + std::to_string(l) + ":" + std::to_string(perLevel[l]);
+        LOG_INFO << "[terrain] baked ground: " << pyr->tiles.size() << " tiles (" << pyr->sampleBytes() / 1048576
+                 << " MB),"<< lv << "; " << spec.cell0 << " m finest, " << spec.extent() << " m square, built in "
+                 << std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() << " s";
+    }
     Entity e = world.create();
     world.add<TerrainLodConfig>(e, cfg);
 }
@@ -2770,6 +2797,10 @@ bool LevelLoader::load(const std::string& path,
             const int gridRes = cj.is_object() ? cj.value("gridRes", 32) : 32;
             lotMeshCell = (worldHalf * 2.0 / double(1 << (numLods - 1))) /
                           std::max(1, gridRes);
+            // Baked ground (ADR-0095): the pyramid's finest cell -- the grid it is drawn on.
+            const char* bakedEnv = std::getenv("RT_BAKED_TERRAIN");
+            if (cj.is_object() && cj.value("baked", false) && !(bakedEnv && bakedEnv[0] == '0'))
+                lotMeshCell = kBakedCell0;
         }
     }
 

@@ -10,6 +10,7 @@
 #include "procgen/city/road_network.h"   // RoadGraph (ExtraNavGraph, plan §8 P8.4)
 #include "procgen/city/road_mesh.h"      // RoadDeckField (RoadDeck)
 #include "procgen/terrain.h"
+#include "procgen/height_pyramid.h"   // TerrainLodConfig::baked (ADR-0095)
 #include "world.h"
 #include <cstdint>
 #include <string>
@@ -190,6 +191,10 @@ struct TerrainLodConfig {
     // Bumped whenever `params` changes at runtime (a re-conform). TerrainLodSystem
     // watches it and rebuilds its tile cache + collider window when it changes.
     uint32_t revision = 0;
+    // BAKED (ADR-0095): the final ground as a height pyramid. When set, worldHalf/numLods/
+    // gridRes are the pyramid's grid (bakedCdlodGeometry) and TerrainLodSystem draws its
+    // stored tiles instead of evaluating `params` per vertex.
+    std::shared_ptr<const pyramid::Pyramid> baked;
 };
 
 // The ears of the scene (ADR-0069): AudioSystem drives the AudioEngine

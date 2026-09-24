@@ -2,6 +2,7 @@
 
 #include "engine/level_params.h"
 #include "engine/procgen/earthwork.h"
+#include "engine/procgen/terrain_lod.h"   // kBakedCell0 (ADR-0095)
 #include "procgen/city/roads/road_builder.h"   // one interface, several road builders
 
 namespace engine {
@@ -89,6 +90,10 @@ bool cityPrePassForLevel(const nlohmann::json& rootIn, CityPrePass& out) {
         const int numLods = cj.is_object() ? cj.value("numLods", 6) : 6;
         const int gridRes = cj.is_object() ? cj.value("gridRes", 32) : 32;
         out.lotMeshCell = (worldHalf * 2.0 / double(1 << (numLods - 1))) / std::max(1, gridRes);
+        // Baked ground (ADR-0095): drawn on the pyramid's finest cell.
+        const char* bakedEnv = std::getenv("RT_BAKED_TERRAIN");
+        if (cj.is_object() && cj.value("baked", false) && !(bakedEnv && bakedEnv[0] == '0'))
+            out.lotMeshCell = kBakedCell0;
     }
 
     // 2. The road nets, recipes run against the natural ground (which gates the metro's

@@ -26,7 +26,23 @@ struct TerrainGenInputs {
     int gridRes = 0;
     double normalEps = 0.0;
     uint32_t revision = 0;
+    std::shared_ptr<const pyramid::Pyramid> baked;   // ADR-0095: tiles, not the formula
 };
+
+namespace {
+// A node's tile in a baked pyramid (the spec is centred, so node (level, index) IS the tile).
+pyramid::TileKey tileKeyOf(const pyramid::Pyramid& p, const LodNode& n) {
+    return {n.level, static_cast<int>(std::lround((n.minX - p.spec.originX) / n.size)),
+            static_cast<int>(std::lround((n.minZ - p.spec.originZ) / n.size))};
+}
+LodNodeMesh buildNode(const TerrainGenInputs& gi, const LodNode& node) {
+    if (gi.baked) {
+        const pyramid::HeightTile* t = gi.baked->find(tileKeyOf(*gi.baked, node));
+        if (t) return generateBakedTileMesh(*gi.baked, *t, gi.params, gi.noise, gi.normalEps);
+    }
+    return generateLodNodeMesh(gi.params, gi.noise, node, gi.gridRes, gi.normalEps);
+}
+}  // namespace
 
 namespace {
 // Exact cache key for a node: level (4 bits) + integer grid coords (26 bits each,
@@ -87,6 +103,9 @@ void TerrainLodSystem::render(FrameContext& ctx) {
     float leafSize = (cfg->worldHalf * 2.0f) /
                      static_cast<float>(1 << std::max(0, cfg->numLods - 1));
     double normalEps = leafSize / static_cast<float>(std::max(2, cfg->gridRes));
+    // Baked (ADR-0095): normals of the drawn surface at 2 m, every level -- the 1 m leaf
+    // step would alias to glitter on the far tiles that share it.
+    if (cfg->baked) normalEps = 2.0 * cfg->baked->spec.cell0;
 
     ++frame_;
 
@@ -104,15 +123,26 @@ void TerrainLodSystem::render(FrameContext& ctx) {
     std::vector<LodNode> nodes;
     if (syncOnly) {
         RT_PROFILE_ZONE_NAMED("cdlod_generate_sync");
-        Noise noise(cfg->seed);
-        nodes = selectLodNodes(
-            cfg->worldHalf, cfg->numLods, ranges,
-            static_cast<float>(cam.position.x), static_cast<float>(cam.position.z));
+        TerrainGenInputs gi;
+        gi.params = cfg->params;
+        gi.noise = Noise(cfg->seed);
+        gi.gridRes = cfg->gridRes;
+        gi.normalEps = normalEps;
+        gi.baked = cfg->baked;
+        if (cfg->baked) {
+            // Only nodes the pyramid stores; a missing child leaves its parent drawn.
+            nodes = selectLodNodesGated(cfg->worldHalf, cfg->numLods, ranges,
+                                        static_cast<float>(cam.position.x), static_cast<float>(cam.position.z),
+                                        [&](const LodNode& n) { return cfg->baked->find(tileKeyOf(*cfg->baked, n)) != nullptr; });
+        } else {
+            nodes = selectLodNodes(
+                cfg->worldHalf, cfg->numLods, ranges,
+                static_cast<float>(cam.position.x), static_cast<float>(cam.position.z));
+        }
         for (const LodNode& node : nodes) {
             int64_t key = nodeKey(node);
             if (cache_.count(key)) continue;
-            insertNode(key, generateLodNodeMesh(cfg->params, noise, node,
-                                                cfg->gridRes, normalEps));
+            insertNode(key, buildNode(gi, node));
         }
     } else {
         if (!stream_) stream_ = std::make_shared<LodMeshStream>();
@@ -123,6 +153,7 @@ void TerrainLodSystem::render(FrameContext& ctx) {
             gi->gridRes = cfg->gridRes;
             gi->normalEps = normalEps;
             gi->revision = cfg->revision;
+            gi->baked = cfg->baked;
             genInputs_ = std::move(gi);
         }
 
@@ -138,6 +169,10 @@ void TerrainLodSystem::render(FrameContext& ctx) {
         // built inline so there is always ground, even on the first frame.
         std::vector<LodNode> missing;
         auto ensure = [&](const LodNode& node) {
+            // A baked pyramid stores children only where they change the ground: a node it
+            // does not store is simply not a split (its parent is the finest there is).
+            if (genInputs_->baked && !genInputs_->baked->find(tileKeyOf(*genInputs_->baked, node)))
+                return false;
             int64_t key = nodeKey(node);
             auto it = cache_.find(key);
             if (it != cache_.end()) {
@@ -146,10 +181,7 @@ void TerrainLodSystem::render(FrameContext& ctx) {
             }
             if (node.level >= cfg->numLods - 2) {
                 RT_PROFILE_ZONE_NAMED("cdlod_generate_coarse");
-                insertNode(key, generateLodNodeMesh(genInputs_->params,
-                                                    genInputs_->noise, node,
-                                                    genInputs_->gridRes,
-                                                    genInputs_->normalEps));
+                insertNode(key, buildNode(*genInputs_, node));
                 return true;
             }
             missing.push_back(node);
@@ -176,8 +208,7 @@ void TerrainLodSystem::render(FrameContext& ctx) {
                 LodMeshStream::Result r;
                 r.key = key;
                 r.revision = gi->revision;
-                r.built = generateLodNodeMesh(gi->params, gi->noise, node,
-                                              gi->gridRes, gi->normalEps);
+                r.built = buildNode(*gi, node);
                 stream->complete(std::move(r));
             });
         }
@@ -315,8 +346,10 @@ void TerrainLodSystem::fixedUpdate(FrameContext& ctx) {
     for (const Missing& m : missing) {
         const bool underFeet = m.d2 <= feet2;   // player's own / adjacent cell
         if (!underFeet && budget <= 0) continue;
-        LodNodeMesh built = generateLodNodeMesh(cfg->params, noise, m.node,
-                                                cfg->gridRes, normalEps);
+        // Baked (ADR-0095): the collider is the drawn surface at its finest cell.
+        LodNodeMesh built = cfg->baked ? generateBakedPatch(*cfg->baked, m.node)
+                                       : generateLodNodeMesh(cfg->params, noise, m.node,
+                                                             cfg->gridRes, normalEps);
         std::vector<Vec3> verts;
         verts.reserve(built.mesh.vertices.size());
         for (const Vertex& v : built.mesh.vertices) verts.push_back(v.position);

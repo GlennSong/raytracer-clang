@@ -231,7 +231,8 @@
  "terrain": {
   "_comment": "Written by `city_plan level-world assets/city_plans/metro_planned.json`: the brief's world, which the city's ground grid is built on. Edit the brief, not this.",
   "cdlod": {
-   "worldHalf": 6000.0
+   "worldHalf": 6000.0,
+   "baked": true
   },
   "heightScale": 7,
   "material": {

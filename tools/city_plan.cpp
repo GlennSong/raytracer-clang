@@ -60,7 +60,8 @@ int main(int argc, char** argv) {
         if (b.world.is_null()) { std::fprintf(stderr, "city_plan: %s has no world\n", argv[2]); return 1; }
         nlohmann::json terrain = b.world.at("base");
         terrain["_comment"] = "Written by `city_plan level-world " + std::string(argv[2]) + "`: the brief's world, which the city's ground grid is built on. Edit the brief, not this.";
-        terrain["cdlod"] = {{"worldHalf", terrain.value("size", 3400.0) / 2}};
+        // baked: the ground is drawn from a height pyramid at 1 m where it needs it (ADR-0095)
+        terrain["cdlod"] = {{"worldHalf", terrain.value("size", 3400.0) / 2}, {"baked", true}};
         terrain["material"] = {{"albedo", {1.0, 1.0, 1.0}}, {"roughness", 1.0}};
         nlohmann::json out = {{"terrain", terrain}};
         if (b.world.contains("seaLevel")) {
