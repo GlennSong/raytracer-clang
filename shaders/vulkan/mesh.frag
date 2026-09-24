@@ -739,6 +739,23 @@ void main() {
 
     vec3 direct = evaluateLighting(inWorldPos, N, V, albedo, metallic, roughness, f0, directShadow);
 
+    // GRASS TRANSMISSION (FLAG_GRASS), the cheap stand-in for subsurface scattering: sunlight
+    // through thin blades. Strongest looking toward the sun (the backlit glow of a field at
+    // dawn and dusk), a little from any angle, more at the thin tips (inTexcoord.y runs 0 root
+    // .. 1 tip, procgen/grass.cpp), warmer than the blade, and only where the sun reaches.
+    if ((pc.surfaceFlags.y & (1u << 17)) != 0u) {
+        for (int i = 0; i < min(g.counts.x, 32); ++i) {
+            if (int(g.lights[i].typeRange.x) != 1) continue;   // the sun
+            vec3 L = normalize(g.lights[i].directionInner.xyz);
+            float toward = pow(max(dot(-V, L), 0.0), 5.0);
+            float tip = smoothstep(0.1, 1.0, inTexcoord.y);
+            vec3 transColor = albedo * vec3(2.2, 2.4, 1.1);
+            direct += transColor * g.lights[i].colorOuter.rgb * g.lights[i].positionIntensity.w
+                    * (0.08 + 0.9 * toward) * tip * sunVis / PI;
+            break;
+        }
+    }
+
     // Image-based lighting from the procedural sky (analytic approximation of
     // Metal's baked irradiance + GGX-prefiltered split-sum; Phase 4b adds the
     // real cubemap bake + BRDF LUT, and HDR-equirect mode). g.ambient carries
