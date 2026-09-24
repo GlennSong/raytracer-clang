@@ -7526,3 +7526,31 @@ old ones but for clouds and moving shadows. `mem?` now prints the heaps (blocks,
 against budget) and the upload totals. The Metal backend is unchanged (Metal heaps are its own
 question). Still open, and next: nothing is ever *evicted* for memory — everything a level loads
 stays resident (ADR-0095's residency service), and a vertex is still 56 bytes for every mesh.
+
+## ADR-0095 — Design for a 100 km world: memory bounded by the camera, terrain as a baked pyramid
+
+**Context.** A 6 km city fills a 10 GB card, and not with terrain: buildings (4.9 GB) and road decks
+(1.4 GB) are loaded whole and kept, and the CDLOD terrain's finest cell is tied to a stock level
+count, so it coarsened to 11.7 m when the world grew and buried streets beside graded lots. Glenn
+asked for the world to be designed for 100 km (2026-09-24).
+
+**Decision** (`docs/world-streaming-plan.md`):
+- **GPU and RAM are bounded by what is near the camera, never by world size.** Disk and bake time may
+  grow with the world.
+- **Terrain is a baked pyramid of height tiles** (129² shared-border `uint16` samples, quantized per
+  tile, per-tile min/max/error, sparse: a child exists only where the parent errs), stored
+  cell-addressed in the bundle (ADR-0084), drawn as one shared grid mesh lifted in the vertex shader,
+  selected by screen-space error, with the physics heightfield and lot draping read from the same
+  tiles. The runtime formula stays for the editor's live preview and unbaked levels.
+- **One residency service** decides what is on the GPU under the driver's budget; terrain tiles,
+  building clusters, road cells, props and interiors are its clients, each with a LOD chain whose
+  coarsest level stays resident.
+- **Double in the simulation, camera-relative float on the GPU** (a render origin snapped to 1 km).
+- **Regions of 8 km** bake and load independently, each in its own bundle.
+- Supersedes the ~16 km size assumption of ADR-0034; its reverse-Z, partitioning and HLOD stand.
+
+**Consequences.** Terrain memory falls from ~1 MB of vertices per tile to ~33 KB of heights, which pays
+for 0.5–1 m cells where there are streets. The order is: residency service with terrain as its first
+client, buildings second, then vertex layouts, road deck tolerance meshing, camera-relative
+rendering, regions, and a 100 km test world. Each step carries before/after `mem?`, load and frame
+times, and a level-test byte budget.
