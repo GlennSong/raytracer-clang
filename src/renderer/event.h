@@ -47,6 +47,8 @@ enum class KeyCode {
     Comma, Period, Slash, Semicolon, Minus, Equal,
     LeftBracket, RightBracket,
     GraveAccent,
+    // Appended, so no earlier value moves.
+    F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
 };
 
 enum class MouseButton {

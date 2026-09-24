@@ -1,5 +1,6 @@
 #include "dev_control_system.h"
 #include "../../log.h"
+#include "../screenshot.h"
 
 #include <algorithm>
 #include <iostream>
@@ -26,6 +27,7 @@ const ActionBinding DEV_ACTIONS[] = {
     {"sim_slower", KeyCode::Comma},
     {"sim_faster", KeyCode::Period},
     {"sim_reset", KeyCode::Num0},
+    {"screenshot", KeyCode::F12},   // engine/screenshot.h
 };
 
 }  // namespace
@@ -55,6 +57,7 @@ void DevControlSystem::onStart(FrameContext& ctx) {
               << "  WASD=move, QE=up/down, Shift=fast\n"
               << "  Up/Down=exposure, Esc=quit\n"
               << "  Enter=pause, ','/'.'=slower/faster sim, 0=reset speed\n"
+              << "  F12=screenshot (into " << screenshotFolder(ctx.settings) << ")\n"
               << "  P=toggle perspective/orthographic camera\n"
               << "  F=detach/attach freecam (mouse looks, WASD/QE fly)\n"
               << "  C=place camera here, V/B=cycle viewports, X=editor view\n"
@@ -71,6 +74,17 @@ void DevControlSystem::update(FrameContext& ctx) {
     // key press toggles exactly once regardless of how many events the frame saw.
     if (ownsQuit && ctx.actions.pressed("quit")) ctx.quit = true;
     if (ctx.actions.pressed("pause")) ctx.clock.setPaused(!ctx.clock.paused());
+    if (ctx.actions.pressed("screenshot")) {
+        const std::string folder = screenshotFolder(ctx.settings);
+        const std::string path = nextScreenshotPath(folder);
+        if (path.empty())
+            LOG_WARN << "Screenshot: cannot create the folder " << folder
+                     << " (set " << kScreenshotFolderKey << " in settings.json)";
+        else if (ctx.renderer.requestFrameDump(path))
+            LOG_INFO << "Screenshot: " << path;
+        else
+            LOG_WARN << "Screenshot: this renderer cannot capture frames";
+    }
     if (ctx.actions.pressed("sim_slower"))
         simSpeed = std::clamp(simSpeed * 0.5, 0.0625, 16.0);
     if (ctx.actions.pressed("sim_faster"))

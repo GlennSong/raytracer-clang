@@ -22,6 +22,7 @@
 #include <imgui.h>
 #endif
 #include "../renderer/gamepad_gc.h"
+#include "../engine/screenshot.h"
 #ifdef RT_EDITOR_GLFW_GAMEPADS
 #include "../renderer/gamepad_glfw.h"
 #endif
@@ -136,6 +137,7 @@ KeyCode mapQtKey(int key) {
         case Qt::Key_BracketLeft:  return KeyCode::LeftBracket;
         case Qt::Key_BracketRight: return KeyCode::RightBracket;
         case Qt::Key_QuoteLeft: return KeyCode::GraveAccent;
+        case Qt::Key_F12:       return KeyCode::F12;   // screenshot (F11 is the big-view shortcut)
         default:                return KeyCode::Unknown;
     }
 }
@@ -969,6 +971,35 @@ int main(int argc, char** argv) {
         });
     });
     fileMenu->insertMenu(fileTailSeparator, recentMenu);
+
+    // SCREENSHOTS (engine/screenshot.h): F12 in the viewport takes one, in play or
+    // edit; these put the same thing on the menu, and let the folder be chosen.
+    // The choice is saved to settings.json at once, so the viewer uses it too.
+    fileMenu->insertSeparator(fileTailSeparator);
+    auto* shotAction = new QAction("Take &Screenshot", &mainWindow);
+    shotAction->setShortcut(QKeySequence(Qt::Key_F12));
+    shotAction->setShortcutContext(Qt::WidgetShortcut);   // F12 in the viewport is the engine's own key
+    QObject::connect(shotAction, &QAction::triggered, [&]() {
+        const std::string path = engine::nextScreenshotPath(engine::screenshotFolder(app.settings()));
+        if (path.empty()) { mainWindow.statusBar()->showMessage("Screenshot folder cannot be created", 6000); return; }
+        if (app.renderer().requestFrameDump(path))
+            mainWindow.statusBar()->showMessage(QString::fromStdString("Screenshot: " + path), 6000);
+        else
+            mainWindow.statusBar()->showMessage("This renderer cannot capture frames", 6000);
+    });
+    fileMenu->insertAction(fileTailSeparator, shotAction);
+    fileMenu->insertAction(fileTailSeparator, [&]() {
+        auto* a = new QAction("Screenshot &Folder...", &mainWindow);
+        QObject::connect(a, &QAction::triggered, [&]() {
+            const QString now = QString::fromStdString(engine::screenshotFolder(app.settings()));
+            const QString dir = QFileDialog::getExistingDirectory(&mainWindow, "Save screenshots to", now);
+            if (dir.isEmpty()) return;
+            app.settings().setString(engine::kScreenshotFolderKey, dir.toStdString());
+            app.settings().save(app.settingsFilePath());
+            mainWindow.statusBar()->showMessage("Screenshots go to " + dir + " (F12)", 6000);
+        });
+        return a;
+    }());
 
     // Level menu: document-level properties (they belong to the level, not
     // ---- Render menu: feature switches + cloud tuning -------------------

@@ -251,6 +251,12 @@ static KeyCode translateKey(int glfwKey) {
         case GLFW_KEY_LEFT_BRACKET:  return KeyCode::LeftBracket;
         case GLFW_KEY_RIGHT_BRACKET: return KeyCode::RightBracket;
         case GLFW_KEY_GRAVE_ACCENT:  return KeyCode::GraveAccent;
+        case GLFW_KEY_F1:  return KeyCode::F1;   case GLFW_KEY_F2:  return KeyCode::F2;
+        case GLFW_KEY_F3:  return KeyCode::F3;   case GLFW_KEY_F4:  return KeyCode::F4;
+        case GLFW_KEY_F5:  return KeyCode::F5;   case GLFW_KEY_F6:  return KeyCode::F6;
+        case GLFW_KEY_F7:  return KeyCode::F7;   case GLFW_KEY_F8:  return KeyCode::F8;
+        case GLFW_KEY_F9:  return KeyCode::F9;   case GLFW_KEY_F10: return KeyCode::F10;
+        case GLFW_KEY_F11: return KeyCode::F11;  case GLFW_KEY_F12: return KeyCode::F12;
         default:                     return KeyCode::Unknown;
     }
 }
