@@ -26,8 +26,14 @@ forward, shadows, IBL, post) still to do. Decision: ADR-0057. Plan:
   buffers → per-frame sync → descriptor set layout + per-frame global UBO +
   descriptor pool/sets → forward graphics pipeline → `drawFrame`. Defines
   `Renderer::create()`.
-- **Rendering:** `uploadMesh` packs the (double) engine `Vertex` to float
-  `GpuVertex`, uploads device-local vertex/index buffers via a staging copy.
+- **Rendering:** `uploadMesh` packs the (double) engine `Vertex` into one of TWO
+  layouts (ADR-0096): the 32-byte standard `GpuVertexPacked` (octahedral snorm16
+  normal + tangent, RGBA8 tint) unless the mesh needs the 56-byte full `GpuVertex`
+  (`RenderMesh::tangentIsData` — CDLOD terrain's morph target — or a tint outside
+  [0, 1]). Every pipeline that reads mesh vertices has a `...Packed` twin (same
+  state, packed vertex input, `mesh.vert`'s `kPackedVertex` specialisation on) and
+  a draw binds the twin its mesh needs. A new mesh pipeline needs its twin too;
+  terrain has none. `RT_VERTEX_FULL=1` keeps everything full for A/B frames.
   `setCamera`/`setLights` fill a `GlobalsUBO` (viewProjection with the clip-space
   Y-flip baked in by `packMat4`, camera pos, sun, ambient). `drawMesh` queues a
   draw with a `MeshPush` push-constant (model + albedo/metallic + emission/

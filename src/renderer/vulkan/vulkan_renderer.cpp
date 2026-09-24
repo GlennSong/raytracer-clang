@@ -81,6 +81,52 @@ struct GpuVertex {
     float color[3];
 };
 
+// THE STANDARD VERTEX (ADR-0096): 32 bytes where GpuVertex is 56. Position stays float
+// (a metre-scale city at kilometres from its origin needs it); the normal and tangent are
+// unit vectors, so two snorm16 octahedral components each hold them to ~0.003 deg; the UV
+// stays float (world-planar and station UVs run to thousands); the tint is an 8-bit
+// colour in [0, 1]. uploadMesh() picks it per mesh from the data -- a mesh that does not
+// fit (a tint above 1, a tangent slot that carries data: terrain's morph target) keeps
+// GpuVertex, the FULL layout, and draws through the full twin of the same pipeline.
+struct GpuVertexPacked {
+    float position[3];
+    int16_t normal[2];    // octahedral, snorm16
+    int16_t tangent[2];   // octahedral, snorm16
+    float texcoord[2];
+    uint8_t color[4];     // unorm8; alpha unused
+};
+static_assert(sizeof(GpuVertexPacked) == 32, "the standard vertex is 32 bytes");
+
+// Unit vector -> octahedral snorm16 pair (the inverse is octDecode() in mesh.vert).
+void octEncode(double x, double y, double z, int16_t out[2]) {
+    const double l1 = std::fabs(x) + std::fabs(y) + std::fabs(z);
+    double u = 0.0, v = 0.0;
+    if (l1 > 1e-30) {
+        u = x / l1; v = y / l1;
+        if (z < 0.0) {
+            const double fu = (1.0 - std::fabs(v)) * (u >= 0.0 ? 1.0 : -1.0);
+            const double fv = (1.0 - std::fabs(u)) * (v >= 0.0 ? 1.0 : -1.0);
+            u = fu; v = fv;
+        }
+    }
+    out[0] = static_cast<int16_t>(std::lround(std::clamp(u, -1.0, 1.0) * 32767.0));
+    out[1] = static_cast<int16_t>(std::lround(std::clamp(v, -1.0, 1.0) * 32767.0));
+}
+
+// Which layout a mesh can take. Full when its tangent slot carries data (the mesh says so:
+// RenderMesh::tangentIsData) or a tint leaves [0, 1] (8 bits would clamp it). A tangent of
+// any other length is a direction -- generators emit raw edge vectors, and mesh.vert
+// normalises -- so packing it as a unit vector loses nothing.
+enum class VertexFit { Packed, FullHdrColor, FullTangentData };
+VertexFit vertexFitFor(const RenderMesh& mesh) {
+    if (mesh.tangentIsData) return VertexFit::FullTangentData;
+    for (const Vertex& v : mesh.vertices) {
+        const Vec3& c = v.color;
+        if (c.x < 0 || c.y < 0 || c.z < 0 || c.x > 1.0001 || c.y > 1.0001 || c.z > 1.0001) return VertexFit::FullHdrColor;
+    }
+    return VertexFit::Packed;
+}
+
 // One light, packed into 4 vec4 (std140). Mirrors the Light struct in the
 // shaders. Maps the engine's GPULight fields: positionIntensity = (pos, intensity),
 // directionInner = (dir, innerCos), colorOuter = (color, outerCos),
@@ -248,6 +294,10 @@ struct GpuMesh {
     BoundingSphere bounds;
     VkDeviceSize allocated = 0;   // device bytes the driver reserved (memoryReport)
     VkDeviceSize data = 0;        // ...of which vertex + index data
+    bool packed = false;          // GpuVertexPacked (32 B) or GpuVertex (56 B): picks the pipeline twin
+    uint8_t fit = 0;              // VertexFit, for the counts
+    VkDeviceSize vertexData = 0;  // vertex bytes alone
+    size_t vertexCount = 0;
 };
 
 struct GpuTexture {
@@ -587,6 +637,18 @@ struct VulkanRenderer::Impl {
     VkPipeline transparentPipeline = VK_NULL_HANDLE;   // alpha blend, no depth write
     VkPipeline overlayPipeline = VK_NULL_HANDLE;       // FLAG_OVERLAY: no depth test/write, on top
     VkPipeline terrainPipeline = VK_NULL_HANDLE;       // CDLOD morph (terrain.vert)
+    // ...and each one's twin for the 32-byte standard vertex (ADR-0096): the same state and
+    // shaders, the packed vertex input, mesh.vert's kPackedVertex on. Terrain has none: its
+    // tangent slot is a morph target, which always keeps the full layout.
+    VkPipeline meshPipelinePacked = VK_NULL_HANDLE;
+    VkPipeline meshPipelineCulledPacked = VK_NULL_HANDLE;
+    VkPipeline wirePipelinePacked = VK_NULL_HANDLE;
+    VkPipeline transparentPipelinePacked = VK_NULL_HANDLE;
+    VkPipeline overlayPipelinePacked = VK_NULL_HANDLE;
+    // what uploadMesh chose, live, for memoryReport: meshes and vertex bytes per VertexFit,
+    // and what the standard vertex saved against the full one
+    long meshesByFit[3] = {0, 0, 0};
+    VkDeviceSize vertexBytesByFit[3] = {0, 0, 0}, vertexBytesSaved = 0;
 
     // Procedural-sky skybox (fullscreen triangle, no vertex buffer).
     VkPipelineLayout skyPipelineLayout = VK_NULL_HANDLE;
@@ -619,6 +681,7 @@ struct VulkanRenderer::Impl {
     VkRenderPass shadowRenderPass = VK_NULL_HANDLE;
     VkPipelineLayout shadowPipelineLayout = VK_NULL_HANDLE;
     VkPipeline shadowPipeline = VK_NULL_HANDLE;
+    VkPipeline shadowPipelinePacked = VK_NULL_HANDLE;   // same shader, the 32-byte stride
     VkSampler shadowSampler = VK_NULL_HANDLE;
     int activeCascadeCount = 0;
     float shadowDepthBiasConst = 1.25f;
@@ -3697,6 +3760,22 @@ bool VulkanRenderer::Impl::createPipeline() {
     vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(attrs.size());
     vertexInput.pVertexAttributeDescriptions = attrs.data();
 
+    // The standard (packed) vertex: same locations, narrower formats; mesh.vert decodes them
+    // when its kPackedVertex specialisation constant is on (ADR-0096).
+    VkVertexInputBindingDescription bindingPacked{0, sizeof(GpuVertexPacked), VK_VERTEX_INPUT_RATE_VERTEX};
+    std::array<VkVertexInputAttributeDescription, 5> attrsPacked{};
+    attrsPacked[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertexPacked, position)};
+    attrsPacked[1] = {1, 0, VK_FORMAT_R16G16_SNORM, offsetof(GpuVertexPacked, normal)};
+    attrsPacked[2] = {2, 0, VK_FORMAT_R16G16_SNORM, offsetof(GpuVertexPacked, tangent)};
+    attrsPacked[3] = {3, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(GpuVertexPacked, texcoord)};
+    attrsPacked[4] = {4, 0, VK_FORMAT_R8G8B8A8_UNORM, offsetof(GpuVertexPacked, color)};
+    VkPipelineVertexInputStateCreateInfo vertexInputPacked = vertexInput;
+    vertexInputPacked.pVertexBindingDescriptions = &bindingPacked;
+    vertexInputPacked.pVertexAttributeDescriptions = attrsPacked.data();
+    const VkSpecializationMapEntry packedEntry{0, 0, sizeof(VkBool32)};
+    const VkBool32 packedOn = VK_TRUE;
+    VkSpecializationInfo packedSpec{1, &packedEntry, sizeof(VkBool32), &packedOn};
+
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -3766,13 +3845,24 @@ bool VulkanRenderer::Impl::createPipeline() {
     info.renderPass = renderPass;
     info.subpass = 0;
 
-    VkResult result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &meshPipeline);
+    // One pipeline and its standard-vertex twin, from the state as it stands (packed == null: none).
+    auto createTwin = [&](VkPipeline* full, VkPipeline* packed) {
+        VkResult r = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, full);
+        if (r != VK_SUCCESS || !packed) return r;
+        info.pVertexInputState = &vertexInputPacked;
+        stages[0].pSpecializationInfo = &packedSpec;
+        r = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, packed);
+        info.pVertexInputState = &vertexInput;
+        stages[0].pSpecializationInfo = nullptr;
+        return r;
+    };
+
+    VkResult result = createTwin(&meshPipeline, &meshPipelinePacked);
     // Back-face-culled variant — the default path for opaque batches (see the
     // cull-mode comment above). Same state but cullMode; created while the
     // shader modules are still alive.
     raster.cullMode = VK_CULL_MODE_BACK_BIT;
-    VkResult resultCulled = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr,
-                                                      &meshPipelineCulled);
+    VkResult resultCulled = createTwin(&meshPipelineCulled, &meshPipelineCulledPacked);
     raster.cullMode = VK_CULL_MODE_NONE;   // wire + transparent stay two-sided
     vkDestroyShaderModule(device, vert, nullptr);
     vkDestroyShaderModule(device, frag, nullptr);
@@ -3792,7 +3882,7 @@ bool VulkanRenderer::Impl::createPipeline() {
     stages[0].module = wvert;
     stages[1].module = wfrag;
     raster.polygonMode = VK_POLYGON_MODE_LINE;
-    VkResult wresult = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &wirePipeline);
+    VkResult wresult = createTwin(&wirePipeline, &wirePipelinePacked);
     vkDestroyShaderModule(device, wvert, nullptr);
     vkDestroyShaderModule(device, wfrag, nullptr);
     if (wresult != VK_SUCCESS) {
@@ -3819,8 +3909,7 @@ bool VulkanRenderer::Impl::createPipeline() {
     blendAttachments[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAttachments[0].alphaBlendOp = VK_BLEND_OP_ADD;
     blendAttachments[1].colorWriteMask = 0;   // don't write the normal G-buffer
-    VkResult tresult = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr,
-                                                 &transparentPipeline);
+    VkResult tresult = createTwin(&transparentPipeline, &transparentPipelinePacked);
     vkDestroyShaderModule(device, tvert, nullptr);
     vkDestroyShaderModule(device, tfrag, nullptr);
     if (tresult != VK_SUCCESS) {
@@ -3845,8 +3934,7 @@ bool VulkanRenderer::Impl::createPipeline() {
                                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     blendAttachments[1].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    VkResult cresult = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr,
-                                                 &terrainPipeline);
+    VkResult cresult = createTwin(&terrainPipeline, nullptr);
     vkDestroyShaderModule(device, cvert, nullptr);
     vkDestroyShaderModule(device, cfrag, nullptr);
     if (cresult != VK_SUCCESS) {
@@ -3867,8 +3955,7 @@ bool VulkanRenderer::Impl::createPipeline() {
     stages[1].module = ofrag;
     depthStencil.depthTestEnable = VK_FALSE;
     depthStencil.depthWriteEnable = VK_FALSE;
-    VkResult oresult = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr,
-                                                 &overlayPipeline);
+    VkResult oresult = createTwin(&overlayPipeline, &overlayPipelinePacked);
     vkDestroyShaderModule(device, overt, nullptr);
     vkDestroyShaderModule(device, ofrag, nullptr);
     if (oresult != VK_SUCCESS) {
@@ -4207,7 +4294,11 @@ void VulkanRenderer::Impl::collectRetired(bool all) {
 }
 
 void VulkanRenderer::Impl::destroyMesh(GpuMesh& m) {
-    if (m.allocated) { meshAllocs -= 2; meshBytes -= m.allocated; meshDataBytes -= m.data; }
+    if (m.allocated) {
+        meshAllocs -= 2; meshBytes -= m.allocated; meshDataBytes -= m.data;
+        --meshesByFit[m.fit]; vertexBytesByFit[m.fit] -= m.vertexData;
+        if (m.packed) vertexBytesSaved -= m.vertexCount * (sizeof(GpuVertex) - sizeof(GpuVertexPacked));
+    }
     if (m.vertexBuffer) vmaDestroyBuffer(allocator, m.vertexBuffer, m.vertexAlloc);
     if (m.indexBuffer) vmaDestroyBuffer(allocator, m.indexBuffer, m.indexAlloc);
     m = GpuMesh{};
@@ -4626,6 +4717,9 @@ bool VulkanRenderer::Impl::createShadowPipeline() {
     info.renderPass = shadowRenderPass;
     info.subpass = 0;
     VkResult result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &shadowPipeline);
+    // the standard vertex's twin: position is float3 at offset 0 in both, only the stride differs
+    binding.stride = sizeof(GpuVertexPacked);
+    if (result == VK_SUCCESS) result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &shadowPipelinePacked);
     vkDestroyShaderModule(device, vert, nullptr);
     if (result != VK_SUCCESS) {
         LOG_ERROR("[vulkan] shadow pipeline creation failed");
@@ -4656,10 +4750,12 @@ void VulkanRenderer::Impl::recordShadowPass(VkCommandBuffer cmd) {
             vkCmdSetViewport(cmd, 0, 1, &viewport);
             vkCmdSetScissor(cmd, 0, 1, &scissor);
             vkCmdSetDepthBias(cmd, shadowDepthBiasConst, 0.0f, shadowDepthBiasSlope);
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline);
+            VkPipeline bound = VK_NULL_HANDLE;
             for (const DrawItem& item : drawQueue) {
                 GpuMesh* m = meshes.get(item.mesh);
                 if (!m || m->indexCount == 0) continue;
+                const VkPipeline want = m->packed ? shadowPipelinePacked : shadowPipeline;
+                if (want != bound) { vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, want); bound = want; }
                 // Debug-gizmo overlays (FLAG_OVERLAY) never cast shadows.
                 if (item.push.surfaceFlags[1] & RenderMaterial::FLAG_OVERLAY) continue;
                 ShadowPush push;
@@ -4861,15 +4957,25 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     allItems.insert(allItems.end(), transparent.begin(), transparent.end());
     allItems.insert(allItems.end(), overlay.begin(), overlay.end());
 
-    auto recordGeometry = [&](const std::vector<const DrawItem*>& items, VkPipeline pipe,
+    // `pipe` draws full-layout meshes, `pipePacked` its standard-vertex twin (ADR-0096); a
+    // mesh draws through the one its layout needs. Both share pipelineLayout, so the bound
+    // descriptor sets and push ranges survive the switch.
+    auto recordGeometry = [&](const std::vector<const DrawItem*>& items, VkPipeline pipe, VkPipeline pipePacked,
                               bool wire, bool countStats) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
-                                &descriptorSets[currentFrame], 0, nullptr);
+        VkPipeline bound = VK_NULL_HANDLE;
         for (const DrawItem* itemPtr : items) {
             const DrawItem& item = *itemPtr;
             GpuMesh* m = meshes.get(item.mesh);
             if (!m || m->indexCount == 0) continue;
+            const VkPipeline want = m->packed ? pipePacked : pipe;
+            if (!want) continue;   // a standard-vertex mesh on the terrain path: nothing can draw it
+            if (want != bound) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+                if (bound == VK_NULL_HANDLE)
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
+                                            &descriptorSets[currentFrame], 0, nullptr);
+                bound = want;
+            }
 
             MeshPush push = item.push;
             if (wire) {
@@ -4944,7 +5050,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     };
 
     if (wireframeFrame == 1) {
-        recordGeometry(allItems, wirePipeline, /*wire=*/true, /*countStats=*/true);
+        recordGeometry(allItems, wirePipeline, wirePipelinePacked, /*wire=*/true, /*countStats=*/true);
     } else {
         // FLAG_TWO_SIDED selects the unculled variant per batch (Metal parity:
         // issuePass sets encoder cull mode per batch; here it picks the pipeline).
@@ -4954,14 +5060,14 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
             ((it->push.surfaceFlags[1] & RenderMaterial::FLAG_TWO_SIDED) ? opaqueTwoSided
                                                                          : opaqueCulled)
                 .push_back(it);
-        recordGeometry(opaqueCulled, meshPipelineCulled, /*wire=*/false, /*countStats=*/true);
-        recordGeometry(opaqueTwoSided, meshPipeline, /*wire=*/false, /*countStats=*/true);
-        recordGeometry(terrainItems, terrainPipeline, /*wire=*/false, /*countStats=*/true);
-        recordGeometry(transparent, transparentPipeline, /*wire=*/false, /*countStats=*/true);
+        recordGeometry(opaqueCulled, meshPipelineCulled, meshPipelineCulledPacked, /*wire=*/false, /*countStats=*/true);
+        recordGeometry(opaqueTwoSided, meshPipeline, meshPipelinePacked, /*wire=*/false, /*countStats=*/true);
+        recordGeometry(terrainItems, terrainPipeline, VK_NULL_HANDLE, /*wire=*/false, /*countStats=*/true);
+        recordGeometry(transparent, transparentPipeline, transparentPipelinePacked, /*wire=*/false, /*countStats=*/true);
         // Debug gizmos on top, after everything, with depth off (ADR-0061).
-        recordGeometry(overlay, overlayPipeline, /*wire=*/false, /*countStats=*/true);
+        recordGeometry(overlay, overlayPipeline, overlayPipelinePacked, /*wire=*/false, /*countStats=*/true);
         if (wireframeFrame == 2)
-            recordGeometry(allItems, wirePipeline, /*wire=*/true, /*countStats=*/false);
+            recordGeometry(allItems, wirePipeline, wirePipelinePacked, /*wire=*/true, /*countStats=*/false);
     }
 
     vkCmdEndRenderPass(cmd);
@@ -5388,6 +5494,11 @@ void VulkanRenderer::shutdown() {
     impl->overlayPipeline = VK_NULL_HANDLE;
     if (impl->terrainPipeline) vkDestroyPipeline(impl->device, impl->terrainPipeline, nullptr);
     impl->terrainPipeline = VK_NULL_HANDLE;
+    for (VkPipeline* p : {&impl->meshPipelinePacked, &impl->meshPipelineCulledPacked, &impl->wirePipelinePacked,
+                          &impl->transparentPipelinePacked, &impl->overlayPipelinePacked, &impl->shadowPipelinePacked}) {
+        if (*p) vkDestroyPipeline(impl->device, *p, nullptr);
+        *p = VK_NULL_HANDLE;
+    }
     if (impl->pipelineLayout) vkDestroyPipelineLayout(impl->device, impl->pipelineLayout, nullptr);
     if (impl->descriptorPool) vkDestroyDescriptorPool(impl->device, impl->descriptorPool, nullptr);
     if (impl->descriptorSetLayout)
@@ -5592,26 +5703,56 @@ MeshHandle VulkanRenderer::uploadMesh(const RenderMesh& mesh) {
     record.indexCount = static_cast<uint32_t>(mesh.indices.size());
 
     if (impl->device && !mesh.vertices.empty() && !mesh.indices.empty()) {
-        std::vector<GpuVertex> verts(mesh.vertices.size());
-        for (size_t i = 0; i < mesh.vertices.size(); ++i) {
-            const Vertex& v = mesh.vertices[i];
-            GpuVertex& g = verts[i];
-            g.position[0] = static_cast<float>(v.position.x);
-            g.position[1] = static_cast<float>(v.position.y);
-            g.position[2] = static_cast<float>(v.position.z);
-            g.normal[0] = static_cast<float>(v.normal.x);
-            g.normal[1] = static_cast<float>(v.normal.y);
-            g.normal[2] = static_cast<float>(v.normal.z);
-            g.tangent[0] = static_cast<float>(v.tangent.x);
-            g.tangent[1] = static_cast<float>(v.tangent.y);
-            g.tangent[2] = static_cast<float>(v.tangent.z);
-            g.texcoord[0] = v.u;
-            g.texcoord[1] = v.v;
-            g.color[0] = static_cast<float>(v.color.x);
-            g.color[1] = static_cast<float>(v.color.y);
-            g.color[2] = static_cast<float>(v.color.z);
+        // The layout this mesh fits (ADR-0096): the 32-byte standard vertex unless its data
+        // needs the full one. RT_VERTEX_FULL=1 keeps every mesh full, for A/B comparisons.
+        static const bool forceFull = std::getenv("RT_VERTEX_FULL") != nullptr;
+        const VertexFit fit = forceFull ? VertexFit::FullHdrColor : vertexFitFor(mesh);
+        record.packed = fit == VertexFit::Packed;
+        record.fit = static_cast<uint8_t>(fit);
+        record.vertexCount = mesh.vertices.size();
+        std::vector<GpuVertex> verts;
+        std::vector<GpuVertexPacked> packedVerts;
+        if (record.packed) {
+            packedVerts.resize(mesh.vertices.size());
+            for (size_t i = 0; i < mesh.vertices.size(); ++i) {
+                const Vertex& v = mesh.vertices[i];
+                GpuVertexPacked& g = packedVerts[i];
+                g.position[0] = static_cast<float>(v.position.x);
+                g.position[1] = static_cast<float>(v.position.y);
+                g.position[2] = static_cast<float>(v.position.z);
+                octEncode(v.normal.x, v.normal.y, v.normal.z, g.normal);
+                octEncode(v.tangent.x, v.tangent.y, v.tangent.z, g.tangent);
+                g.texcoord[0] = v.u;
+                g.texcoord[1] = v.v;
+                auto unorm8 = [](double c) { return static_cast<uint8_t>(std::lround(std::clamp(c, 0.0, 1.0) * 255.0)); };
+                g.color[0] = unorm8(v.color.x);
+                g.color[1] = unorm8(v.color.y);
+                g.color[2] = unorm8(v.color.z);
+                g.color[3] = 255;
+            }
+        } else {
+            verts.resize(mesh.vertices.size());
+            for (size_t i = 0; i < mesh.vertices.size(); ++i) {
+                const Vertex& v = mesh.vertices[i];
+                GpuVertex& g = verts[i];
+                g.position[0] = static_cast<float>(v.position.x);
+                g.position[1] = static_cast<float>(v.position.y);
+                g.position[2] = static_cast<float>(v.position.z);
+                g.normal[0] = static_cast<float>(v.normal.x);
+                g.normal[1] = static_cast<float>(v.normal.y);
+                g.normal[2] = static_cast<float>(v.normal.z);
+                g.tangent[0] = static_cast<float>(v.tangent.x);
+                g.tangent[1] = static_cast<float>(v.tangent.y);
+                g.tangent[2] = static_cast<float>(v.tangent.z);
+                g.texcoord[0] = v.u;
+                g.texcoord[1] = v.v;
+                g.color[0] = static_cast<float>(v.color.x);
+                g.color[1] = static_cast<float>(v.color.y);
+                g.color[2] = static_cast<float>(v.color.z);
+            }
         }
-        VkDeviceSize vsize = verts.size() * sizeof(GpuVertex);
+        const void* vdata = record.packed ? static_cast<const void*>(packedVerts.data()) : static_cast<const void*>(verts.data());
+        VkDeviceSize vsize = mesh.vertices.size() * (record.packed ? sizeof(GpuVertexPacked) : sizeof(GpuVertex));
         VkDeviceSize isize = mesh.indices.size() * sizeof(uint32_t);
         // Suballocated by VMA; the data goes through the upload queue and is on the
         // device by the next frame (ADR-0094).
@@ -5622,7 +5763,7 @@ MeshHandle VulkanRenderer::uploadMesh(const RenderMesh& mesh) {
             impl->destroyMesh(record);
             record.indexCount = 0;
         } else {
-            impl->uploadToBuffer(verts.data(), vsize, record.vertexBuffer);
+            impl->uploadToBuffer(vdata, vsize, record.vertexBuffer);
             impl->uploadToBuffer(mesh.indices.data(), isize, record.indexBuffer);
             VmaAllocationInfo vi{}, ii{};
             vmaGetAllocationInfo(impl->allocator, record.vertexAlloc, &vi);
@@ -5632,6 +5773,10 @@ MeshHandle VulkanRenderer::uploadMesh(const RenderMesh& mesh) {
             impl->meshAllocs += 2;
             impl->meshBytes += record.allocated;
             impl->meshDataBytes += vsize + isize;
+            record.vertexData = vsize;
+            ++impl->meshesByFit[record.fit];
+            impl->vertexBytesByFit[record.fit] += vsize;
+            if (record.packed) impl->vertexBytesSaved += record.vertexCount * (sizeof(GpuVertex) - sizeof(GpuVertexPacked));
         }
     }
     return impl->meshes.insert(record);
@@ -5643,6 +5788,10 @@ std::string VulkanRenderer::memoryReport() const {
                   impl->meshAllocs, impl->meshBytes / 1048576.0, impl->meshDataBytes / 1048576.0,
                   impl->texAllocs, impl->texBytes / 1048576.0, impl->up.copies, impl->up.bytes / 1048576.0, impl->up.flushes);
     std::string out = buf;
+    std::snprintf(buf, sizeof(buf), "; vertices: %ld meshes standard %.0f MB, %ld full for a tint above 1 %.0f MB, %ld full for tangent data %.0f MB; %.0f MB saved",
+                  impl->meshesByFit[0], impl->vertexBytesByFit[0] / 1048576.0, impl->meshesByFit[1], impl->vertexBytesByFit[1] / 1048576.0,
+                  impl->meshesByFit[2], impl->vertexBytesByFit[2] / 1048576.0, impl->vertexBytesSaved / 1048576.0);
+    out += buf;
     if (!impl->allocator) return out;
     // The heaps, as VMA sees them: its blocks (device allocations) and what is in them,
     // against the budget -- the driver's own figures with VK_EXT_memory_budget.
@@ -6095,6 +6244,13 @@ void VulkanRenderer::drawTerrain(MeshHandle handle, const RenderMaterial& materi
     // CDLOD node (ADR-0036): world-space mesh, identity model; terrain.vert morphs
     // each vertex toward its coarser-LOD position (packed in the tangent slot) over
     // [morphStart, morphEnd] camera distance. Shares the lit fragment + material.
+    if (const GpuMesh* m = impl->meshes.get(handle); m && m->packed) {
+        // terrain.vert reads the morph target from the full layout; a packed mesh here
+        // was built without RenderMesh::tangentIsData, and nothing can draw it
+        static bool warned = false;
+        if (!warned) { LOG_WARN("[vulkan] drawTerrain: a mesh without tangentIsData (standard vertex) is not drawn"); warned = true; }
+        return;
+    }
     DrawItem item;
     item.mesh = handle;
     packMat4(Mat4(), item.push.model, /*flipY=*/false);   // identity (verts are world-space)

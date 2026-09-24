@@ -224,6 +224,7 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
 
     LodNodeMesh out;
     RenderMesh& mesh = out.mesh;
+    mesh.tangentIsData = true;   // the morph target rides in the tangent slot
     mesh.vertices.reserve(static_cast<size_t>(n) * n);
 
     // First pass: positions/normals/colors + the raw height grid (for morph targets).
@@ -355,6 +356,7 @@ LodNodeMesh generateBakedTileMesh(const pyramid::Pyramid& p, const pyramid::Heig
     const double eps = normalEps > 0.0 ? normalEps : step;
     LodNodeMesh out;
     RenderMesh& mesh = out.mesh;
+    mesh.tangentIsData = true;   // the morph target rides in the tangent slot
     mesh.vertices.reserve(static_cast<std::size_t>(n) * n + 4 * n);
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i) {

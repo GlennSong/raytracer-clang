@@ -237,6 +237,10 @@ struct RenderMesh {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     int materialIndex;
+    // The tangent slot carries DATA, not a direction: a CDLOD terrain node's morph target
+    // (terrain_lod.cpp). A renderer that packs tangents as unit vectors keeps this mesh in
+    // its full vertex layout (ADR-0096). Every other tangent is a direction, of any length.
+    bool tangentIsData = false;
 
     RenderMesh() : materialIndex(0) {}
 };

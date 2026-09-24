@@ -4,11 +4,24 @@
 // The viewProjection is uploaded already carrying the Vulkan clip-space Y-flip
 // (the C++ side negates clip row 1), so this stage needs no convention fix-ups.
 
+// Two vertex layouts, one shader (ADR-0096). The full layout feeds float3 normal/tangent/colour
+// (the missing .w reads as 1); the 32-byte standard one feeds octahedral snorm16 pairs in .xy
+// and an 8-bit colour, and its pipeline twin turns kPackedVertex on.
+layout(constant_id = 0) const bool kPackedVertex = false;
 layout(location = 0) in vec3 inPosition;
-layout(location = 1) in vec3 inNormal;
-layout(location = 2) in vec3 inTangent;
+layout(location = 1) in vec4 inNormal;
+layout(location = 2) in vec4 inTangent;
 layout(location = 3) in vec2 inTexcoord;
-layout(location = 4) in vec3 inColor;
+layout(location = 4) in vec4 inColor;
+
+// Octahedral pair -> unit vector (the inverse of octEncode() in vulkan_renderer.cpp).
+vec3 octDecode(vec2 e) {
+    vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
+    float t = max(-n.z, 0.0);
+    n.x += n.x >= 0.0 ? -t : t;
+    n.y += n.y >= 0.0 ? -t : t;
+    return normalize(n);
+}
 
 // Must match the block layout in mesh.frag and GlobalsUBO in vulkan_renderer.cpp.
 struct Light {
@@ -55,6 +68,8 @@ layout(location = 4) out vec3 outWorldTangent;
 
 void main() {
     vec4 world = pc.model * vec4(inPosition, 1.0);
+    vec3 normal = kPackedVertex ? octDecode(inNormal.xy) : inNormal.xyz;
+    vec3 tangent = kPackedVertex ? octDecode(inTangent.xy) : inTangent.xyz;
 
     // Wind sway (FLAG_WIND = bit 2): displace in the wind direction, weighted by
     // height above the model's base (planted root, moving tips) and phase-offset
@@ -71,10 +86,10 @@ void main() {
     outWorldPos = world.xyz;
     // Inverse-transpose so non-uniform scale keeps normals perpendicular.
     mat3 normalMatrix = mat3(transpose(inverse(pc.model)));
-    outWorldNormal = normalize(normalMatrix * inNormal);
+    outWorldNormal = normalize(normalMatrix * normal);
     // Tangent in world space for normal mapping (matches Metal's model*tangent).
-    outWorldTangent = normalize((pc.model * vec4(inTangent, 0.0)).xyz);
+    outWorldTangent = normalize((pc.model * vec4(tangent, 0.0)).xyz);
     outTexcoord = inTexcoord;
-    outColor = inColor;
+    outColor = inColor.rgb;
     gl_Position = g.viewProjection * world;
 }

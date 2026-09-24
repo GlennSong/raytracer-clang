@@ -7554,3 +7554,48 @@ for 0.5–1 m cells where there are streets. The order is: residency service wit
 client, buildings second, then vertex layouts, road deck tolerance meshing, camera-relative
 rendering, regions, and a 100 km test world. Each step carries before/after `mem?`, load and frame
 times, and a level-test byte budget.
+
+## ADR-0096 — Two vertex layouts: a 32-byte standard vertex, and the full one where the data needs it
+
+**Context.** Every mesh paid 56 bytes a vertex (float3 position, normal, tangent and colour, float2
+UV) whatever it held. On metro_planned that was ~1.7 GB of the GPU's mesh data. ADR-0095 §5 planned
+smaller layouts per kind of mesh. Two things decided how: terrain's CDLOD tiles use the tangent slot
+for their morph-target *position* (terrain.vert), and a few meshes carry tints above 1.
+
+**Decision.**
+- **The standard vertex is 32 bytes** (`GpuVertexPacked`): float3 position (streets kilometres from
+  the origin need it until camera-relative rendering lands), normal and tangent as octahedral snorm16
+  pairs (~0.003° error), **float2 UV** (world-planar and station UVs run to thousands, so half floats
+  would smear them), and an RGBA8 tint.
+- **The full 56-byte vertex stays for what does not fit**, chosen per mesh at upload
+  (`vertexFitFor`): a mesh that says its tangent is data (`RenderMesh::tangentIsData`, set by the
+  CDLOD tile generators), or one with a tint outside [0, 1]. The mesh declares the first. It is not
+  guessed from tangent length, because the generators emit raw edge vectors 3–5 m long that
+  `mesh.vert` normalises anyway.
+- **One shader, twin pipelines.** `mesh.vert` reads normal, tangent and colour as `vec4` and decodes
+  when its `kPackedVertex` specialisation constant is on. Every pipeline that reads mesh vertices
+  (opaque, culled, wire, transparent, overlay, shadow) has a packed twin with the same state, and a
+  draw binds the twin its mesh needs. Terrain has only the full pipeline, and `drawTerrain` refuses
+  (and warns about) a packed mesh rather than drawing it wrong.
+- `RT_VERTEX_FULL=1` keeps every mesh full, for A/B frames. `mem?` reports meshes and bytes per
+  layout, and what the standard vertex saved.
+- **Vulkan only for now.** The layout is private to each backend, so Metal and WebGPU keep their
+  float vertices and lose nothing. A Metal port needs a Mac to verify it.
+
+**Consequences.** metro_planned at the spawn point: 5,660 standard meshes, 37 full for tangent data
+(terrain), 17 full for a tint above 1 (all tiny); **641 MB saved**; mesh data 1,078 MB (together with
+the kerb pass below). ring: 191 → 118 MB. The frames match the full layout to within 1/255 on ring,
+and on cdlod to within the run-to-run noise of wind and water. The conversion still runs on the
+render thread inside `uploadMesh`, as before. Moving it into the residency service's prepare() is
+the follow-up.
+
+**The kerb pass (ADR-0095 §5, same session).** A deck or layer slab emitted a side quad for every
+boundary edge. Most of them could not be seen: asphalt edges under a sidewalk, shoulder edges against
+the lane they continue, and 4 m densified outline segments on straight kerbs. `slab()` now drops a
+side where the surface beyond it stands at or above its top (`hidden`: asphalt, sidewalk, shoulder or
+median within +0.5 m), and merges consecutive collinear sides (top within 1 cm, bottom no shallower)
+into one quad. It also fixed a latent bug: layer boundaries were unoriented `(min, max)` pairs, so
+about half of all sidewalk kerb faces pointed inward. They are now wound as the triangles are, and
+the triangles are made counter-clockwise. metro_planned concrete side triangles went from 1.86 M to
+0.23 M (deck 689 k → 4.5 k, sidewalk 906 k → 198 k, shoulder 267 k → 28 k). What remains is the
+parapet walls (457 k) and girders (183 k).

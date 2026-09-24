@@ -166,8 +166,12 @@ The service enforces the total; the split is a starting point to tune, not a con
    current 6 km world: bake stage, tile format in the bundle, shared-grid rendering (Vulkan and
    Metal), error-driven selection, collider from tiles. *Fixes the buried roads properly.*
 3. **Buildings as the second client** — cluster by bundle cell, chain full → shell → HLOD.
-4. **Vertex layouts** (32-byte building/road vertex).
-5. **Road deck tolerance meshing.**
+4. **Done (Vulkan) — vertex layouts** (ADR-0096): a 32-byte standard vertex, the full one kept
+   for terrain's morph target and tints above 1, chosen per mesh at upload; 641 MB saved on
+   metro_planned. UVs stay float2, not half (world-planar and station UVs run to thousands).
+5. **Road deck savings — in part**: decks welded and undersides only where visible (ADR-0095),
+   hidden and collinear slab sides dropped or merged (ADR-0096's kerb pass). Tolerance meshing of
+   the deck tops, parapets and girders is still to do.
 6. **Camera-relative rendering** (render origin), then physics rebasing.
 7. **Regions:** per-region bundles and bakes, parallel; hierarchical nav.
 8. **A 100 km test world:** several towns joined by regional roads, most of it terrain — the
