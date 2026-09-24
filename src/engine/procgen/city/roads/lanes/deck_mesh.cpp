@@ -7,6 +7,8 @@
 #include <unordered_map>
 #include <cmath>
 #include <functional>
+#include <tuple>
+#include <map>
 #include <cstdio>
 
 namespace engine {
@@ -24,15 +26,54 @@ const Vec3 kAsphalt(0.085f, 0.085f, 0.090f), kConcrete(0.80f, 0.79f, 0.75f), kSi
            kGuardrail(0.66f, 0.68f, 0.70f),
            kMedian(0.22f, 0.34f, 0.14f), kPaintWhite(0.9f, 0.9f, 0.85f), kPaintYellow(0.95f, 0.75f, 0.15f), kGrass(0.20f, 0.30f, 0.13f);
 
+// WELDED, AND NO UNDERSIDE WHERE NOBODY CAN SEE ONE (ADR-0095). Every deck triangle used to be
+// emitted with three vertices of its own, top AND bottom face: metro_planned's asphalt alone was
+// 779 MB of GPU mesh. A top vertex is now shared by every triangle that meets it with the same
+// UV (one lane's triangles; two lanes' UVs differ and keep their own), and the underside is
+// emitted only where it stands clear of the ground (`groundAt`, 0.3 m) -- a bridge, a viaduct,
+// a ramp; a street lies on the ground. Null groundAt: every underside, as before.
 void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& verts, const std::vector<std::array<int, 3>>& tris,
           const std::vector<std::pair<int, int>>& boundary, double thick, double lift, const Vec3& color, const Vec3& sideColor,
-          const std::vector<std::array<float, 6>>* uv, const std::function<bool(const Vec2&, const Vec2&, double)>* seam = nullptr) {
+          const std::vector<std::array<float, 6>>* uv, const std::function<bool(const Vec2&, const Vec2&, double)>* seam = nullptr,
+          const std::function<double(const Vec2&)>* groundAt = nullptr) {
+    std::map<std::tuple<int, float, float, int>, uint32_t> shared;   // (deck vertex, u, v, face) -> mesh vertex
+    auto vertexFor = [&](int vi, const Vec3& p, float u, float v, const Vec3& normal, const Vec3& tan, int face) {
+        auto [it, fresh] = shared.try_emplace(std::make_tuple(vi, u, v, face), static_cast<uint32_t>(top.vertices.size()));
+        if (fresh) {
+            Vertex vx(p, normal, tan, u, v);
+            vx.color = color;
+            top.vertices.push_back(vx);
+        }
+        return it->second;
+    };
+    auto emit = [&](const int (&vi)[3], const Vec3 (&P)[3], const float (&u)[6], const Vec3& normal, int face) {
+        const Vec3 edge = P[1] - P[0];
+        const Vec3 tan = edge.lengthSquared() > 1e-12 ? normalize(edge) : Vec3(1, 0, 0);
+        const uint32_t a = vertexFor(vi[0], P[0], u[0], u[1], normal, tan, face);
+        const uint32_t b = vertexFor(vi[1], P[1], u[2], u[3], normal, tan, face);
+        const uint32_t c = vertexFor(vi[2], P[2], u[4], u[5], normal, tan, face);
+        // the front face points the way the shading normal does (as MeshBuilder::emitTri)
+        if (dot(cross(P[2] - P[0], P[1] - P[0]), normal) >= 0) top.indices.insert(top.indices.end(), {a, b, c});
+        else top.indices.insert(top.indices.end(), {a, c, b});
+    };
+    static const float kNoUV[6] = {0, 0, 0, 0, 0, 0};
     for (size_t ti = 0; ti < tris.size(); ++ti) {
         const auto& t = tris[ti]; const DeckVertex& a = verts[static_cast<size_t>(t[0])]; const DeckVertex& b = verts[static_cast<size_t>(t[1])]; const DeckVertex& c = verts[static_cast<size_t>(t[2])];
-        Vec3 A = world(a.xy, a.z + lift), B = world(b.xy, b.z + lift), C = world(c.xy, c.z + lift);
-        if (uv) { const auto& u = (*uv)[ti]; MeshBuilder::emitTriUV(top, A, B, C, Vec3(0, 1, 0), color, u[0], u[1], u[2], u[3], u[4], u[5]); }
-        else MeshBuilder::emitTri(top, A, B, C, Vec3(0, 1, 0), color);
-        MeshBuilder::emitTri(top, world(a.xy, a.z + lift - thick), world(b.xy, b.z + lift - thick), world(c.xy, c.z + lift - thick), Vec3(0, -1, 0), color);
+        const int vi[3] = {t[0], t[1], t[2]};
+        const Vec3 P[3] = {world(a.xy, a.z + lift), world(b.xy, b.z + lift), world(c.xy, c.z + lift)};
+        float u[6];
+        for (int k = 0; k < 6; ++k) u[k] = uv ? (*uv)[ti][static_cast<size_t>(k)] : 0.0f;
+        emit(vi, P, u, Vec3(0, 1, 0), 0);
+        bool under = true;
+        if (groundAt) {
+            under = false;
+            for (const DeckVertex* dv : {&a, &b, &c})
+                if (dv->z + lift - thick - (*groundAt)(dv->xy) > 0.3) under = true;
+        }
+        if (under) {
+            const Vec3 Q[3] = {world(a.xy, a.z + lift - thick), world(b.xy, b.z + lift - thick), world(c.xy, c.z + lift - thick)};
+            emit(vi, Q, kNoUV, Vec3(0, -1, 0), 1);
+        }
     }
     for (const auto& e : boundary) {
         const DeckVertex& a = verts[static_cast<size_t>(e.first)]; const DeckVertex& b = verts[static_cast<size_t>(e.second)];
@@ -156,6 +197,10 @@ void strip(RenderMesh& mesh, const std::vector<Vec2>& pts, const std::vector<dou
 std::vector<NamedMesh> buildMeshes(const Result& r) {
     const RoadLabGraph& g = r.graph; const LaneSet& L = r.lanes; const DeckHeight& H = *r.heights;
     RenderMesh asphalt, concrete, sidewalk, shoulder, median, paintW, paintY, terrain, guardrail;
+    // The ground under a deck, for the underside rule (slab): the conformed grid, or 0 on a flat level.
+    const std::function<double(const Vec2&)> groundUnder = [&r](const Vec2& q) {
+        return r.hasTerrain ? r.terrain.sample(q.x, q.y) : 0.0;
+    };
     // decks with lane-local UVs
     // A boundary edge is only a deck EDGE if the pavement ends there. A weld crack is also "used by one
     // triangle" and so also a boundary edge — but the asphalt continues on its far side, and a parapet
@@ -190,12 +235,12 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
                 uv[ti][static_cast<size_t>(2 * k)] = static_cast<float>(lateral); uv[ti][static_cast<size_t>(2 * k + 1)] = static_cast<float>(pr.station);
             }
         }
-        slab(asphalt, concrete, s.verts, s.tris, s.boundary, s.thick, 0.0, kAsphalt, kConcrete, &uv, &seamFn);
+        slab(asphalt, concrete, s.verts, s.tris, s.boundary, s.thick, 0.0, kAsphalt, kConcrete, &uv, &seamFn, &groundUnder);
     }
     // layers
     auto layer = [&](const PolySet& poly, RenderMesh& top, const Vec3& color, double lift, double thick, bool anyRoad) {
         const std::vector<int> roads = layerRoads(g, anyRoad);
-        for (const FlatMesh& m : layerMeshes(g, H, poly, roads)) slab(top, concrete, m.verts, m.tris, m.boundary, thick, lift, color, kConcrete, nullptr);
+        for (const FlatMesh& m : layerMeshes(g, H, poly, roads)) slab(top, concrete, m.verts, m.tris, m.boundary, thick, lift, color, kConcrete, nullptr, nullptr, &groundUnder);
     };
     layer(r.pavement.sidewalk, sidewalk, kSidewalk, kSidewalkLift, 0.42, false); layer(r.pavement.shoulder, shoulder, kShoulder, 0.0, 0.3, false); layer(r.pavement.median, median, kMedian, 0.10, 0.40, true);
     // Parapets and girders on elevated decks (Glenn: "the elevated ones need walls so you don't drive
