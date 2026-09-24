@@ -100,6 +100,7 @@ add_library(engine_core STATIC
     src/engine/procgen/planet.cpp
     src/engine/procgen/atmosphere.cpp
     src/engine/procgen/scatter.cpp
+    src/engine/procgen/grass.cpp
     src/engine/procgen/sdf.cpp
     src/engine/procgen/city/polygon.cpp
     src/engine/procgen/city/shape_grammar.cpp
@@ -201,6 +202,7 @@ add_library(engine_core STATIC
     src/engine/systems/beacon_light_system.cpp
     src/engine/systems/terrain_lod_system.cpp
     src/engine/systems/residency_system.cpp
+    src/engine/systems/grass_system.cpp
     src/engine/residency.cpp
     # NOTE: the agent-based city simulation (ADR-0060…0066) is NOT here. It is an
     # APPLICATION of the engine, built as its own `citysim` static library below

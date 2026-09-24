@@ -118,6 +118,12 @@ struct RenderMaterial {
     // is left the glass colour, so the day look is untouched. Vulkan; Metal
     // owed. Bit 16: bits 8-15 are the surface id (SURFACE_MASK below).
     static constexpr uint32_t FLAG_INTERIOR_MAP = 1u << 16;
+    // GROUND COVER (the grass field, GrassSystem): each instance shrinks to nothing as the
+    // camera distance to its origin crosses [fadeStart, fadeEnd] below, so the field thins
+    // away instead of popping at a draw distance; and it casts no shadow (a field of blades
+    // in the shadow map is noise and cost). Vulkan; Metal draws it unfaded, with shadows.
+    static constexpr uint32_t FLAG_GRASS = 1u << 17;
+    float fadeStart = 0.0f, fadeEnd = 0.0f;   // FLAG_GRASS only
 
     // World-space procedural surface library (applySurface in surfaces.metal /
     // scene.cpp): an analytic material — brick, concrete, roof tiles, asphalt,

@@ -13,6 +13,7 @@
 #include "procgen/height_pyramid.h"   // TerrainLodConfig::baked (ADR-0095)
 #include "world.h"
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <memory>
 #include <vector>
@@ -163,6 +164,24 @@ struct InstanceGroup {
     Real drawDistance = 0;
     uint32_t renderLayer = 0;   // debug layer bits (0 = always visible)
     DrawClass drawClass = DrawClass::Unset;   // see DrawClass above
+};
+
+// A GRASS FIELD around the camera (GrassSystem, the flora plan): clumps of geometry blades
+// (procgen/grass.h) instanced on a jittered grid in tiles that come and go with the camera --
+// full density near, half beyond `nearRadius`, blades shrinking away over [fadeStart,
+// fadeEnd] (RenderMaterial::FLAG_GRASS). Where it grows is `density` (0..1); the ground-cover
+// map will supply it, and until then the loader's slope rule does.
+struct GrassField {
+    std::function<double(double, double)> ground;    // the drawn ground height at (x, z)
+    std::function<double(double, double)> density;   // how much grass grows at (x, z): 0..1
+    std::vector<MeshHandle> clumps;                   // the clump variants
+    RenderMaterial material;
+    double spacing = 0.3;       // grid step inside nearRadius (m); 1.6x beyond
+    double nearRadius = 24.0;
+    double radius = 62.0;       // tiles are kept out to here
+    double tile = 16.0;
+    double fadeStart = 44.0, fadeEnd = 60.0;
+    uint32_t seed = 1;
 };
 
 // CDLOD heightfield terrain (ADR-0036, open-world Phase 1c). One per level: when a

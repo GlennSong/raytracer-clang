@@ -14,7 +14,8 @@
                                         // (implementation lives in model_importer.cpp)
 #include "procgen/city/road_rules.h"    // DesignRules: the per-class grade table the
                                         // poke report hands weldChainProfiles
-#include "procgen/earthwork.h"          // the earthwork displacement field
+#include "procgen/earthwork.h"
+#include "procgen/grass.h"            // the grass field's clumps (GrassSystem)          // the earthwork displacement field
 #include "mesh_builder.h"
 #include "asset_manager.h"
 #include "procgen/terrain.h"
@@ -3675,6 +3676,81 @@ bool LevelLoader::load(const std::string& path,
                 loadVegetation(root["foliage"], tp, nz, world,
                                renderer, assets, levelDir, "foliage", nullptr,
                                placeDilate, drawn);
+            // THE GRASS FIELD (flora plan): not scattered here -- GrassSystem plants it around
+            // the camera, from clump meshes and the ground and density rules set up here.
+            if (root.contains("grass") && root["grass"].is_object()) {
+                const json& gj = root["grass"];
+                GrassField gf;
+                const double dilate = placeDilate;
+                gf.ground = drawn ? drawn
+                                  : std::function<double(double, double)>([tp, nz, dilate](double x, double z) {
+                                        return terrainHeight(tp, nz, x, z, dilate);
+                                    });
+                // Where it grows, until the ground-cover map: not on slopes steeper than
+                // maxSlopeDeg (thinning over the last 8 degrees), not under the sea, and in
+                // soft patches (patchiness 0 = uniform).
+                const double maxSlope = gj.value("maxSlopeDeg", 32.0) * 3.14159265358979 / 180.0;
+                const double thin = 8.0 * 3.14159265358979 / 180.0;
+                const double sea = root.contains("water") ? root["water"].value("seaLevel", -1e30) : -1e30;
+                const double patchiness = gj.value("patchiness", 0.35), patchScale = gj.value("patchScale", 0.045);
+                const auto ground = gf.ground;
+                const Noise patches(gj.value("seed", 1u) + 911u);
+                gf.density = [ground, maxSlope, thin, sea, patchiness, patchScale, patches](double x, double z) {
+                    const double h = 0.6;
+                    const double y = ground(x, z);
+                    if (y < sea + 0.15) return 0.0;
+                    const double gx = (ground(x + h, z) - ground(x - h, z)) / (2 * h);
+                    const double gz = (ground(x, z + h) - ground(x, z - h)) / (2 * h);
+                    const double slope = std::atan(std::sqrt(gx * gx + gz * gz));
+                    double d = std::clamp((maxSlope - slope) / thin, 0.0, 1.0);
+                    if (patchiness > 0.0) {
+                        const double n = patches.fbm2(x * patchScale, z * patchScale, 3);   // about -1..1
+                        d *= std::clamp(1.0 - patchiness + n * 1.4, 0.0, 1.0);
+                    }
+                    return d;
+                };
+                auto colour = [&](const char* key, Vec3 fallback) {
+                    if (gj.contains(key) && gj[key].is_array() && gj[key].size() == 3)
+                        return Vec3(gj[key][0].get<double>(), gj[key][1].get<double>(), gj[key][2].get<double>());
+                    return fallback;
+                };
+                GrassClumpParams cp;
+                cp.blades = gj.value("blades", cp.blades);
+                cp.height = gj.value("height", cp.height);
+                cp.width = gj.value("width", cp.width);
+                cp.radius = gj.value("clumpRadius", cp.radius);
+                cp.lean = gj.value("lean", cp.lean);
+                cp.rootColor = colour("rootColor", cp.rootColor);
+                cp.tipColor = colour("tipColor", cp.tipColor);
+                const int variants = std::max(1, gj.value("variants", 4));
+                gf.seed = gj.value("seed", 1u);
+                // Each variant is tinted a little differently (warmer / cooler, lighter / darker), so
+                // the field mottles instead of reading as one flat green.
+                const double tint = gj.value("variantTint", 0.14);
+                for (int v = 0; v < variants; ++v) {
+                    GrassClumpParams vp = cp;
+                    const double t = variants > 1 ? (static_cast<double>(v) / (variants - 1)) * 2.0 - 1.0 : 0.0;   // -1..1
+                    vp.tipColor = Vec3(cp.tipColor.x * (1.0 + tint * t), cp.tipColor.y * (1.0 + tint * 0.4 * t),
+                                       cp.tipColor.z * (1.0 - tint * t));
+                    vp.rootColor = cp.rootColor * (1.0 - 0.5 * tint * t);
+                    gf.clumps.push_back(assets.acquireMesh(grassClump(gf.seed * 131u + static_cast<uint32_t>(v), vp),
+                                                           "grass:clump:" + std::to_string(v)));
+                }
+                gf.spacing = gj.value("spacing", gf.spacing);
+                gf.nearRadius = gj.value("nearRadius", gf.nearRadius);
+                gf.radius = gj.value("radius", gf.radius);
+                gf.fadeStart = gj.value("fadeStart", gf.fadeStart);
+                gf.fadeEnd = gj.value("fadeEnd", gf.fadeEnd);
+                gf.material.albedo = Vec3(1, 1, 1);   // the vertex colours are the grass
+                gf.material.roughness = static_cast<float>(gj.value("roughness", 0.85));
+                gf.material.metallic = 0.0f;
+                gf.material.opacity = 1.0f;
+                gf.material.flags = RenderMaterial::FLAG_GRASS | RenderMaterial::FLAG_WIND | RenderMaterial::FLAG_TWO_SIDED;
+                gf.material.fadeStart = static_cast<float>(gf.fadeStart);
+                gf.material.fadeEnd = static_cast<float>(gf.fadeEnd);
+                const Entity ge = world.create();
+                world.add<GrassField>(ge, std::move(gf));
+            }
         };
     }
 

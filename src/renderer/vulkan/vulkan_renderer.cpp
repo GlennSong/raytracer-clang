@@ -4869,8 +4869,8 @@ void VulkanRenderer::Impl::recordShadowPass(VkCommandBuffer cmd) {
                 if (!m || m->indexCount == 0) continue;
                 const VkPipeline want = m->packed ? shadowPipelinePacked : shadowPipeline;
                 if (want != bound) { vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, want); bound = want; }
-                // Debug-gizmo overlays (FLAG_OVERLAY) never cast shadows.
-                if (item.push.surfaceFlags[1] & RenderMaterial::FLAG_OVERLAY) continue;
+                // Debug-gizmo overlays (FLAG_OVERLAY) and ground cover (FLAG_GRASS) cast no shadows.
+                if (item.push.surfaceFlags[1] & (RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS)) continue;
                 ShadowPush push;
                 std::memcpy(push.lightViewProj, cpuGlobals.cascadeVP[c], sizeof(push.lightViewProj));
                 std::memcpy(push.model, item.push.model, sizeof(push.model));
@@ -6387,8 +6387,12 @@ void VulkanRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
     // Stash opacity (float bits) in the spare push slot so mesh.frag can write it
     // as the output alpha for the transparent blend pass.
     std::memcpy(&item.push.surfaceFlags[3], &material.opacity, sizeof(float));
-    item.push.morphStart = 0.0f;   // terrain-only (drawTerrain sets these)
+    item.push.morphStart = 0.0f;   // terrain's morph band (drawTerrain), or a grass fade band:
     item.push.morphEnd = 0.0f;
+    if (material.flags & RenderMaterial::FLAG_GRASS) {
+        item.push.morphStart = material.fadeStart;
+        item.push.morphEnd = material.fadeEnd;
+    }
     item.opacity = material.opacity;
     item.firstInstance = impl->pushInstance(transform);
     item.instanceCount = 1;

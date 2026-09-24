@@ -1,3 +1,4 @@
+#include "../src/engine/procgen/grass.h"
 #include "test_framework.h"
 
 #include "../src/engine/procgen/scatter.h"
@@ -170,4 +171,25 @@ TEST_CASE(scatter_density_threshold_filters) {
     open.maxSlopeDeg = 89.0f; open.densityThreshold = -1.0f;   // keep ~all
     ScatterParams picky = open; picky.densityThreshold = 0.3f; // keep dense spots
     CHECK(scatterOnTerrain(picky, t, n).size() < scatterOnTerrain(open, t, n).size());
+}
+
+// The grass clump (procgen/grass.h): three triangles a blade, every normal straight up (the
+// soft carpet look), root colour at the ground and tip colour at the top, same seed same clump.
+TEST_CASE(grass_clump_is_blades_lit_as_a_carpet) {
+    engine::GrassClumpParams p;
+    p.blades = 12;
+    const engine::RenderMesh a = engine::grassClump(5, p), b = engine::grassClump(5, p), c = engine::grassClump(6, p);
+    CHECK(a.vertices.size() == 12u * 5u && a.indices.size() == 12u * 9u);
+    bool up = true, same = a.vertices.size() == b.vertices.size(), differs = false;
+    double top = 0.0;
+    for (std::size_t i = 0; i < a.vertices.size(); ++i) {
+        const engine::Vertex& v = a.vertices[i];
+        if (v.normal.y < 0.999) up = false;
+        if (v.position.y < 1e-9 && (v.color - p.rootColor).length() > 1e-9) up = false;
+        top = std::max(top, static_cast<double>(v.position.y));
+        if (same && (v.position - b.vertices[i].position).length() > 1e-12) same = false;
+        if (i < c.vertices.size() && (v.position - c.vertices[i].position).length() > 1e-6) differs = true;
+    }
+    CHECK(up && same && differs);
+    CHECK(top > p.height * 0.6 && top < p.height * 1.4);
 }

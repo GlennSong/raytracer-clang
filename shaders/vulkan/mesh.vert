@@ -61,6 +61,8 @@ layout(push_constant) uniform Push {
     vec4  albedoMetallic;
     vec4  emissionRough;
     uvec4 surfaceFlags;
+    float morphStart;      // FLAG_GRASS: the fade band (terrain.vert: its morph band)
+    float morphEnd;
 } pc;
 
 layout(location = 0) out vec3 outWorldPos;
@@ -77,9 +79,19 @@ void main() {
     // Wind sway (FLAG_WIND = bit 2): displace in the wind direction, weighted by
     // height above the model's base (planted root, moving tips) and phase-offset
     // by world XZ so a field doesn't sway in unison. Ports lighting_entry.metal.
+    const bool grass = (pc.surfaceFlags.y & (1u << 17)) != 0u;   // FLAG_GRASS
+    // Ground cover shrinks to nothing about its planted origin across the fade band, so the
+    // field thins away with distance instead of ending at a line.
+    if (grass) {
+        vec3 origin = inModel[3].xyz;
+        float k = 1.0 - smoothstep(pc.morphStart, pc.morphEnd, distance(origin, g.cameraPosition.xyz));
+        world.xyz = origin + (world.xyz - origin) * k;
+    }
     if ((pc.surfaceFlags.y & 4u) != 0u) {
         float baseY = inModel[3].y;
-        float weight = clamp((world.y - baseY) / max(g.wind2.y, 0.001), 0.0, 1.0);
+        // grass sways over its own half-metre height, not a tree's
+        float swayHeight = grass ? 0.6 : g.wind2.y;
+        float weight = clamp((world.y - baseY) / max(swayHeight, 0.001), 0.0, 1.0);
         weight *= weight;
         float phase = g.wind1.w * g.wind2.x + dot(world.xz, vec2(0.15, 0.1));
         float gust = sin(phase) + 0.3 * sin(phase * 2.3 + 1.7);

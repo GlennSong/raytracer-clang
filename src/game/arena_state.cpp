@@ -16,6 +16,7 @@
 #include "../engine/systems/beacon_light_system.h"
 #include "../engine/systems/terrain_lod_system.h"
 #include "../engine/systems/residency_system.h"
+#include "../engine/systems/grass_system.h"
 #include "../apps/citysim/city_render.h"
 #include "../apps/citysim/city_spectate.h"
 #include "../apps/citysim/city_traffic_audio.h"
@@ -204,6 +205,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // physics-off build: no collider/vehicle/walker bridges; the spectate camera
     // above still follows the sim ghosts (citySys is consumed there).
 #endif
+    addSystem<GrassSystem>();            // the grass field around the camera (flora plan)
     addSystem<DayNightSystem>();
     addSystem<BeaconLightSystem>();   // aviation-beacon sprites + near point lights (skyscrapers v2 M4)
 #ifdef RT_ENABLE_PHYSICS
