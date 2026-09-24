@@ -37,6 +37,22 @@ std::vector<double> gradeLimit(const std::vector<double>& z, const std::vector<d
 
 double smoothstep(double u) { u = std::clamp(u, 0.0, 1.0); return u * u * (3 - 2 * u); }
 
+// An edge's plan bounds, for the all-pairs passes below: a pair whose boxes, grown by the reach the
+// pass tests within, do not overlap cannot meet, and on a city of 1500 edges with 10 km freeway runs
+// the projections and crossings of every such pair were most of the profile stage.
+struct Bounds { double x0, y0, x1, y1; };
+Bounds boundsOf(const std::vector<Vec2>& xy) {
+    Bounds b{1e300, 1e300, -1e300, -1e300};
+    for (const Vec2& p : xy) { b.x0 = std::min(b.x0, p.x); b.y0 = std::min(b.y0, p.y); b.x1 = std::max(b.x1, p.x); b.y1 = std::max(b.y1, p.y); }
+    return b;
+}
+bool near(const Bounds& a, const Bounds& b, double reach) {
+    return a.x0 - reach <= b.x1 && b.x0 - reach <= a.x1 && a.y0 - reach <= b.y1 && b.y0 - reach <= a.y1;
+}
+bool near(const Bounds& a, const Vec2& p, double reach) {
+    return p.x >= a.x0 - reach && p.x <= a.x1 + reach && p.y >= a.y0 - reach && p.y <= a.y1 + reach;
+}
+
 }  // namespace
 
 void throughProfile(EdgeSpec& e, const HeightField& terrain, const RoadClassSpec& c) {
@@ -85,13 +101,15 @@ double maxGrade(const EdgeSpec& e) {
 
 double nodeConsistency(RoadLabGraph& g, double tol, double maxDz) {
     std::vector<EdgeSpec*> thr; for (EdgeSpec& e : g.edges) if (!e.isRamp() && e.z.size() > 1) thr.push_back(&e);
+    std::vector<Bounds> box; box.reserve(thr.size()); for (EdgeSpec* e : thr) box.push_back(boundsOf(e->xy));
     double worst = 0; std::vector<std::array<double, 2>> corr(thr.size(), {0.0, 0.0});
     for (size_t ei = 0; ei < thr.size(); ++ei) {
         EdgeSpec& e = *thr[ei];
         for (int k = 0; k < 2; ++k) {
             Vec2 p = k == 0 ? e.xy.front() : e.xy.back(); double own = k == 0 ? e.z.front() : e.z.back(); std::vector<double> ends, ints;
-            for (EdgeSpec* h : thr) {
-                if (h == &e) continue; Projection pr = project(h->xy, h->s, p); if (pr.distance > tol) continue;
+            for (size_t hi = 0; hi < thr.size(); ++hi) {
+                EdgeSpec* h = thr[hi];
+                if (h == &e || !near(box[hi], p, tol)) continue; Projection pr = project(h->xy, h->s, p); if (pr.distance > tol) continue;
                 double zh = interp(h->s, h->z, pr.station); bool atEnd = std::min(distance(h->xy.front(), p), distance(h->xy.back(), p)) <= tol;
                 if (!atEnd && std::fabs(zh - own) >= maxDz) continue;                    // an endpoint under a viaduct is not a node
                 (atEnd ? ends : ints).push_back(zh);
@@ -130,9 +148,11 @@ double crossingConsistency(RoadLabGraph& g, double maxDz, double rampMaxDz, doub
     // crossing the STREET rises or dips to meet (Glenn's exit ramps sat a metre over local streets; the
     // ramp is pinned to its anchors, so only the street can give). Two ramps, or a ramp and its own host, do not pair.
     std::vector<EdgeSpec*> thr; for (EdgeSpec& e : g.edges) if (e.z.size() > 1 && e.laneCount() > 0) thr.push_back(&e);
+    std::vector<Bounds> box; box.reserve(thr.size()); for (EdgeSpec* e : thr) box.push_back(boundsOf(e->xy));
     double worst = 0;
     for (size_t i = 0; i < thr.size(); ++i) for (size_t j = i + 1; j < thr.size(); ++j) {
         EdgeSpec& a = *thr[i]; EdgeSpec& b = *thr[j];
+        if (!near(box[i], box[j], g.hw(a) + g.hw(b) + 1.0)) continue;   // cannot cross, nor end under the other's band
         if (a.isRamp() && b.isRamp()) continue;
         if (a.isRamp() && (a.from.edge == b.id || a.to.edge == b.id)) continue;
         if (b.isRamp() && (b.from.edge == a.id || b.to.edge == a.id)) continue;

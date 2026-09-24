@@ -128,9 +128,52 @@ bool contains(const PolySet& s, const Vec2& q) {
     return false;
 }
 
+// A ring as integer points, its edges binned by y: a point's crossing test reads only the edges whose
+// y-span covers its band, not all of them (a 10 km lane footprint has thousands).
+struct BinnedRing {
+    Clipper2Lib::Path64 pts;
+    int64_t y0 = 0, bin = 1;
+    std::vector<std::vector<uint32_t>> edges;   // per y band: edge i runs pts[i] -> pts[i + 1]
+    void build(Clipper2Lib::Path64 p) {
+        pts = std::move(p);
+        if (pts.size() < 3) return;
+        int64_t lo = pts[0].y, hi = pts[0].y;
+        for (const auto& q : pts) { lo = std::min(lo, q.y); hi = std::max(hi, q.y); }
+        const std::size_t n = pts.size();
+        const int64_t bands = std::clamp<int64_t>(static_cast<int64_t>(n / 4), 1, 4096);
+        y0 = lo; bin = std::max<int64_t>(1, (hi - lo) / bands + 1);
+        edges.assign(static_cast<std::size_t>((hi - lo) / bin + 1), {});
+        for (std::size_t i = 0; i < n; ++i) {
+            const auto& a = pts[i]; const auto& b = pts[(i + 1) % n];
+            const int64_t e0 = (std::min(a.y, b.y) - y0) / bin, e1 = (std::max(a.y, b.y) - y0) / bin;
+            for (int64_t k = e0; k <= e1; ++k) edges[static_cast<std::size_t>(k)].push_back(static_cast<uint32_t>(i));
+        }
+    }
+    // Clipper2's PointInPolygon, restricted to the edges that can matter: on an edge is on, else the
+    // even-odd count of edges crossing the horizontal ray to the right.
+    bool inside(const Clipper2Lib::Point64& q) const {
+        if (pts.size() < 3 || q.y < y0) return false;
+        const int64_t k = (q.y - y0) / bin;
+        if (k >= static_cast<int64_t>(edges.size())) return false;
+        const std::size_t n = pts.size();
+        bool odd = false;
+        for (uint32_t i : edges[static_cast<std::size_t>(k)]) {
+            const auto& a = pts[i]; const auto& b = pts[(i + 1) % n];
+            // on the segment?
+            const __int128 cr = static_cast<__int128>(b.x - a.x) * (q.y - a.y) - static_cast<__int128>(b.y - a.y) * (q.x - a.x);
+            if (cr == 0 && std::min(a.x, b.x) <= q.x && q.x <= std::max(a.x, b.x) && std::min(a.y, b.y) <= q.y && q.y <= std::max(a.y, b.y)) return true;
+            if ((a.y > q.y) == (b.y > q.y)) continue;
+            // x of the edge at q.y, compared exactly: cross-multiplied by (b.y - a.y)
+            const __int128 lhs = static_cast<__int128>(q.x - a.x) * (b.y - a.y), rhs = static_cast<__int128>(b.x - a.x) * (q.y - a.y);
+            if (b.y > a.y ? lhs < rhs : lhs > rhs) odd = !odd;
+        }
+        return odd;
+    }
+};
+
 struct PreparedSet::Poly {
-    Clipper2Lib::Path64 outer;
-    std::vector<Clipper2Lib::Path64> holes;
+    BinnedRing outer;
+    std::vector<BinnedRing> holes;
 };
 
 PreparedSet::PreparedSet(const PolySet& s) {
@@ -138,8 +181,8 @@ PreparedSet::PreparedSet(const PolySet& s) {
     polys->reserve(s.size());
     for (const Polygon2& p : s) {
         Poly q;
-        q.outer = toPath(p.outer);
-        for (const Ring& h : p.holes) q.holes.push_back(toPath(h));
+        q.outer.build(toPath(p.outer));
+        for (const Ring& h : p.holes) { q.holes.emplace_back(); q.holes.back().build(toPath(h)); }
         polys->push_back(std::move(q));
     }
     polys_ = std::move(polys);
@@ -149,10 +192,9 @@ bool PreparedSet::contains(const Vec2& q) const {
     if (!polys_) return false;
     const Clipper2Lib::Point64 pt(static_cast<int64_t>(std::llround(q.x * kScale)), static_cast<int64_t>(std::llround(q.y * kScale)));
     for (const Poly& p : *polys_) {
-        if (Clipper2Lib::PointInPolygon(pt, p.outer) == Clipper2Lib::PointInPolygonResult::IsOutside) continue;
+        if (!p.outer.inside(pt)) continue;
         bool inHole = false;
-        for (const Clipper2Lib::Path64& h : p.holes)
-            if (Clipper2Lib::PointInPolygon(pt, h) != Clipper2Lib::PointInPolygonResult::IsOutside) { inHole = true; break; }
+        for (const BinnedRing& h : p.holes) if (h.inside(pt)) { inHole = true; break; }
         if (!inHole) return true;
     }
     return false;
