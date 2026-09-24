@@ -1211,6 +1211,7 @@ if(glfw3_FOUND)
 set(VIEWER_SOURCES
     src/viewer_main.cpp
     src/renderer/window.cpp
+    src/renderer/gamepad_glfw.cpp
     src/game/arena_state.cpp
 )
 
@@ -1383,6 +1384,18 @@ if(Qt6_FOUND)
         else()
             target_sources(editor_app PRIVATE src/renderer/null_renderer.cpp)
             message(STATUS "Vulkan not found — editor uses NullRenderer (no GPU output)")
+        endif()
+    endif()
+
+    # Gamepads off macOS: the Qt host has no GLFW window, so it inits GLFW
+    # windowless for its joystick API (gamepad_glfw.cpp). macOS keeps the
+    # GCController path above.
+    if(NOT APPLE)
+        find_package(glfw3 QUIET)
+        if(glfw3_FOUND)
+            target_sources(editor_app PRIVATE src/renderer/gamepad_glfw.cpp)
+            target_link_libraries(editor_app PRIVATE glfw)
+            target_compile_definitions(editor_app PRIVATE RT_EDITOR_GLFW_GAMEPADS=1)
         endif()
     endif()
 

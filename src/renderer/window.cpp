@@ -7,6 +7,9 @@
 #endif
 #include "window.h"
 #include "gamepad_gc.h"
+#ifndef __EMSCRIPTEN__
+#include "gamepad_glfw.h"
+#endif
 #include "debug_ui_clipboard.h"
 #include "../log.h"
 #include <GLFW/glfw3.h>
@@ -264,31 +267,6 @@ static GlfwWindow::Impl* implOf(GLFWwindow* window) {
     return static_cast<GlfwWindow::Impl*>(glfwGetWindowUserPointer(window));
 }
 
-// Translate GLFW's gamepad snapshot into our backend-neutral one. Our
-// GamepadButton/GamepadAxis enums mirror GLFW's standard layout order, but we
-// map explicitly (and normalize triggers from GLFW's [-1, 1] to [0, 1]) so the
-// neutral types stay decoupled from GLFW values.
-#ifndef __EMSCRIPTEN__  // unused on the web (no glfwGetGamepadState there)
-static void fillGamepadState(GamepadState& out, const GLFWgamepadstate& in) {
-    out.connected = true;
-    for (std::size_t i = 0; i < GAMEPAD_BUTTON_COUNT; i++)
-        out.buttons[i] = (in.buttons[i] == GLFW_PRESS);
-
-    out.axes[static_cast<std::size_t>(GamepadAxis::LeftX)] =
-        in.axes[GLFW_GAMEPAD_AXIS_LEFT_X];
-    out.axes[static_cast<std::size_t>(GamepadAxis::LeftY)] =
-        in.axes[GLFW_GAMEPAD_AXIS_LEFT_Y];
-    out.axes[static_cast<std::size_t>(GamepadAxis::RightX)] =
-        in.axes[GLFW_GAMEPAD_AXIS_RIGHT_X];
-    out.axes[static_cast<std::size_t>(GamepadAxis::RightY)] =
-        in.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y];
-    out.axes[static_cast<std::size_t>(GamepadAxis::LeftTrigger)] =
-        (in.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] + 1.0f) * 0.5f;
-    out.axes[static_cast<std::size_t>(GamepadAxis::RightTrigger)] =
-        (in.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] + 1.0f) * 0.5f;
-}
-#endif
-
 static void onCursorPos(GLFWwindow* window, double xpos, double ypos) {
     auto* impl = implOf(window);
     if (impl->firstMouse) {
@@ -430,18 +408,7 @@ bool GlfwWindow::initialize(int width, int height, const std::string& title) {
     // Emscripten's GLFW shim doesn't implement the gamepad-mapping API; the web
     // build skips loading the SDL controller DB (browser gamepads come mapped).
 #ifndef __EMSCRIPTEN__
-    {
-        std::ifstream file("gamecontrollerdb.txt");
-        if (file) {
-            std::ostringstream buf;
-            buf << file.rdbuf();
-            std::string mappings = buf.str();
-            if (glfwUpdateGamepadMappings(mappings.c_str()))
-                LOG_INFO << "Loaded gamepad mappings from gamecontrollerdb.txt";
-            else
-                LOG_WARN << "gamecontrollerdb.txt found but glfwUpdateGamepadMappings failed";
-        }
-    }
+    loadGlfwGamepadMappings("gamecontrollerdb.txt");
 #endif
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -563,22 +530,15 @@ void GlfwWindow::pollEvents() {
     // Apple's Game Controller framework provides data — this is the only
     // reliable path for Xbox/PS controllers on macOS 13+ where Apple's
     // DriverKit driver intercepts the USB device (ADR-0010).
-    for (int jid = 0; jid < MAX_GAMEPADS; jid++) {
-        GamepadState& slot = impl->gamepads[jid];
-
-        // Emscripten's GLFW shim lacks glfwGetGamepadState; the web build leaves
-        // the slots cleared (browser gamepad support is a later phase).
+    // Emscripten's GLFW shim lacks glfwGetGamepadState; the web build leaves
+    // the slots cleared but for the on-screen sticks (browser gamepad support
+    // is a later phase).
 #ifndef __EMSCRIPTEN__
-        GLFWgamepadstate gs;
-        if (glfwJoystickIsGamepad(jid) && glfwGetGamepadState(jid, &gs)) {
-            fillGamepadState(slot, gs);
-        } else {
-            slot = GamepadState{};
-        }
+    pollGlfwGamepads(impl->gamepads);
 #else
-        slot = (jid == 0) ? impl->virtualPad : GamepadState{};  // on-screen sticks
+    for (int jid = 0; jid < MAX_GAMEPADS; jid++)
+        impl->gamepads[jid] = (jid == 0) ? impl->virtualPad : GamepadState{};  // on-screen sticks
 #endif
-    }
 
     // GCController overlay: fills slots that GLFW left empty (or overwrites
     // with better data). Does nothing on non-Apple platforms.
