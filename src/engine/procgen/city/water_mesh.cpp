@@ -1,6 +1,8 @@
 #include "water_mesh.h"
 
 #include <cmath>
+#include <cstdint>
+#include <vector>
 
 namespace engine {
 
@@ -28,21 +30,29 @@ RenderMesh buildWaterMesh(const HeightSampler& floor, const WaterMeshParams& p) 
     const Vec3 col(0.09, 0.22, 0.34);          // fallback tint; the shader grades by depth
     auto P = [&](double x, double z) { return Vec3(x, p.seaLevel, z); };
 
+    // An INDEXED grid (ADR-0096): a corner is shared by the cells that meet it -- its depth and
+    // shore distance are the corner's own, so the shading is the same -- where each cell used to
+    // carry six vertices of its own and run the shore search at every one of them.
+    std::vector<int32_t> vid(static_cast<std::size_t>(nx + 1) * (nz + 1), -1);
+    auto corner = [&](int i, int j) -> uint32_t {
+        int32_t& id = vid[static_cast<std::size_t>(j) * (nx + 1) + i];
+        if (id < 0) {
+            const double x = p.lo.x + i * p.cell, z = p.lo.y + j * p.cell;
+            Vertex v(P(x, z), up, Vec3(1, 0, 0), static_cast<float>(std::max(0.0, depthAt(x, z))), shoreAt(x, z));
+            v.color = col;
+            id = static_cast<int32_t>(mesh.vertices.size());
+            mesh.vertices.push_back(v);
+        }
+        return static_cast<uint32_t>(id);
+    };
     for (int j = 0; j < nz; ++j)
         for (int i = 0; i < nx; ++i) {
-            double x0 = p.lo.x + i * p.cell, z0 = p.lo.y + j * p.cell;
-            double x1 = x0 + p.cell, z1 = z0 + p.cell;
-            double d00 = depthAt(x0, z0), d10 = depthAt(x1, z0),
-                   d01 = depthAt(x0, z1), d11 = depthAt(x1, z1);
-            if (d00 <= 0 && d10 <= 0 && d01 <= 0 && d11 <= 0) continue;  // all land: skip
-            float u00 = static_cast<float>(std::max(0.0, d00)), u10 = static_cast<float>(std::max(0.0, d10)),
-                  u01 = static_cast<float>(std::max(0.0, d01)), u11 = static_cast<float>(std::max(0.0, d11));
-            float s00 = shoreAt(x0, z0), s10 = shoreAt(x1, z0),
-                  s01 = shoreAt(x0, z1), s11 = shoreAt(x1, z1);
-            MeshBuilder::emitTriUV(mesh, P(x0, z0), P(x1, z0), P(x1, z1), up, col,
-                                   u00, s00, u10, s10, u11, s11);
-            MeshBuilder::emitTriUV(mesh, P(x0, z0), P(x1, z1), P(x0, z1), up, col,
-                                   u00, s00, u11, s11, u01, s01);
+            const double x0 = p.lo.x + i * p.cell, z0 = p.lo.y + j * p.cell;
+            const double x1 = x0 + p.cell, z1 = z0 + p.cell;
+            if (depthAt(x0, z0) <= 0 && depthAt(x1, z0) <= 0 && depthAt(x0, z1) <= 0 && depthAt(x1, z1) <= 0) continue;  // all land: skip
+            const uint32_t a00 = corner(i, j), a10 = corner(i + 1, j), a11 = corner(i + 1, j + 1), a01 = corner(i, j + 1);
+            // wound to face up, as emitTriUV winds them
+            mesh.indices.insert(mesh.indices.end(), {a00, a10, a11, a00, a11, a01});
         }
     return mesh;
 }

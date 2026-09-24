@@ -519,6 +519,9 @@ private:
     std::vector<engine::Mat4> navNodeBake_;
     std::vector<engine::Mat4> blockBake_;    // cached block-outline transforms
     std::vector<engine::Mat4> lotBake_;      // cached lot-outline transforms
+    engine::AssetManager* assets_ = nullptr; // for bakes made after build() (bakePlanOutlines)
+    bool planBaked_ = false;                 // the plan outlines bake on first show
+    void bakePlanOutlines(engine::World& world);
     std::vector<engine::Mat4> colliderStripBake_;  // prism rims (base + top loops)
     std::vector<engine::Mat4> colliderPostBake_;   // prism vertical corner posts
     std::vector<int> signalLinks_;     // approach links that carry a signal (cached)

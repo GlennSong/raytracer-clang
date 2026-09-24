@@ -1206,49 +1206,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             Vec3(p.x, groundAt(p.x, p.y) + 0.04, p.y), Quat(), Vec3(1.2, 1, 1.2)));
     }
 
-    // Bake the CITY-PLAN outlines once (ADR-0066): every block/lot polygon
-    // (published by the loader as CityPlanDebug) is stroked as ONE CLOSED
-    // RIBBON (device: "use the ribbon library ... form polygon shapes
-    // properly") — a continuous mitred loop, not per-edge strips with corner
-    // gaps. Draped at each polygon's local ground height (a block is small vs
-    // the terrain, so one height reads flat). The group shows the merged mesh
-    // via a single identity transform; the show/hide toggle stays the same.
+    // The CITY-PLAN outlines bake the first time they are shown (bakePlanOutlines): a
+    // debug view that is off by default should not hold ~40 MB of GPU mesh (ADR-0096).
+    assets_ = assets;
+    planBaked_ = false;
     blockBake_.clear();
     lotBake_.clear();
-    if (assets) {
-        engine::RenderMesh blockRib, lotRib;
-        auto strokePoly = [&](const engine::Poly2& poly, double halfW,
-                              double lift, engine::RenderMesh& into) {
-            if (poly.size() < 3) return;
-            std::vector<engine::Vec2> pts(poly.begin(), poly.end());
-            const engine::Vec2 c = engine::centroid(poly);
-            engine::MeshBuilder::append(
-                into, engine::strokeRibbon(pts, {halfW}, groundAt(c.x, c.y) + lift,
-                                           engine::Vec3(1, 1, 1), /*closed=*/true));
-        };
-        world.each<engine::CityPlanDebug>([&](Entity, engine::CityPlanDebug& plan) {
-            for (const engine::Poly2& b : plan.blocks) strokePoly(b, 0.45, 0.06, blockRib);
-            for (const engine::Poly2& l : plan.lots) strokePoly(l, 0.26, 0.05, lotRib);
-        });
-        if (!blockRib.vertices.empty()) {
-            MeshHandle h = assets->acquireMesh(blockRib, "city:blockoutline");
-            if (auto* g = world.get<InstanceGroup>(blockGroup_)) {
-                g->mesh = h;
-                g->boundsCenter = Vec3(0, 0, 0);
-                g->boundsRadius = 6000.0;   // city-wide merged mesh: never cull
-            }
-            blockBake_ = {Mat4()};
-        }
-        if (!lotRib.vertices.empty()) {
-            MeshHandle h = assets->acquireMesh(lotRib, "city:lotoutline");
-            if (auto* g = world.get<InstanceGroup>(lotGroup_)) {
-                g->mesh = h;
-                g->boundsCenter = Vec3(0, 0, 0);
-                g->boundsRadius = 6000.0;
-            }
-            lotBake_ = {Mat4()};
-        }
-    }
 
     // Bake the COLLIDER-PRISM outlines once (device: "a physics hull
     // visualizer"): the exact Jolt volumes — a rim loop at each prism's world
@@ -1771,6 +1734,54 @@ void CityRenderSystem::syncCarLamps(World& world) {
     refreshBounds(turn);
 }
 
+// Bake the CITY-PLAN outlines (ADR-0066), on first show (syncGroups).
+void CityRenderSystem::bakePlanOutlines(World& world) {
+    // The CITY-PLAN outlines (ADR-0066): every block/lot polygon
+    // (published by the loader as CityPlanDebug) is stroked as ONE CLOSED
+    // RIBBON (device: "use the ribbon library ... form polygon shapes
+    // properly") — a continuous mitred loop, not per-edge strips with corner
+    // gaps. Draped at each polygon's local ground height (a block is small vs
+    // the terrain, so one height reads flat). The group shows the merged mesh
+    // via a single identity transform; the show/hide toggle stays the same.
+    planBaked_ = true;
+    engine::AssetManager* assets = assets_;
+    if (assets) {
+        engine::RenderMesh blockRib, lotRib;
+        auto strokePoly = [&](const engine::Poly2& poly, double halfW,
+                              double lift, engine::RenderMesh& into) {
+            if (poly.size() < 3) return;
+            std::vector<engine::Vec2> pts(poly.begin(), poly.end());
+            const engine::Vec2 c = engine::centroid(poly);
+            engine::MeshBuilder::append(
+                into, engine::strokeRibbon(pts, {halfW}, groundAt(c.x, c.y) + lift,
+                                           engine::Vec3(1, 1, 1), /*closed=*/true));
+        };
+        world.each<engine::CityPlanDebug>([&](Entity, engine::CityPlanDebug& plan) {
+            for (const engine::Poly2& b : plan.blocks) strokePoly(b, 0.45, 0.06, blockRib);
+            for (const engine::Poly2& l : plan.lots) strokePoly(l, 0.26, 0.05, lotRib);
+        });
+        if (!blockRib.vertices.empty()) {
+            MeshHandle h = assets->acquireMesh(blockRib, "city:blockoutline");
+            if (auto* g = world.get<InstanceGroup>(blockGroup_)) {
+                g->mesh = h;
+                g->boundsCenter = Vec3(0, 0, 0);
+                g->boundsRadius = 6000.0;   // city-wide merged mesh: never cull
+            }
+            blockBake_ = {Mat4()};
+        }
+        if (!lotRib.vertices.empty()) {
+            MeshHandle h = assets->acquireMesh(lotRib, "city:lotoutline");
+            if (auto* g = world.get<InstanceGroup>(lotGroup_)) {
+                g->mesh = h;
+                g->boundsCenter = Vec3(0, 0, 0);
+                g->boundsRadius = 6000.0;
+            }
+            lotBake_ = {Mat4()};
+        }
+    }
+
+}
+
 void CityRenderSystem::syncGroups(World& world) {
     std::vector<InstanceGroup*> cars;
     cars.reserve(carGroups_.size());
@@ -1998,6 +2009,7 @@ void CityRenderSystem::syncGroups(World& world) {
         if (navN) navN->transforms = showNav ? navNodeBake_ : std::vector<Mat4>{};
         // City-plan outlines (static bakes, same show-or-empty pattern).
         const bool showPlan = debugWidgets_ && showPlan_;
+        if (showPlan && !planBaked_) bakePlanOutlines(world);
         InstanceGroup* blk = world.get<InstanceGroup>(blockGroup_);
         InstanceGroup* lot = world.get<InstanceGroup>(lotGroup_);
         if (blk) blk->transforms = showPlan ? blockBake_ : std::vector<Mat4>{};

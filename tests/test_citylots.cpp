@@ -11,6 +11,7 @@
 #include "../src/engine/procgen/city/architect.h"
 #include "../src/engine/procgen/city/citylots_producer.h"
 #include "../src/engine/procgen/city/lot_cache.h"
+#include "../src/engine/procgen/city/water_mesh.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -176,4 +177,28 @@ TEST_CASE(a_level_can_author_its_own_district_hubs) {
     readLotGrowParams(nlohmann::json::parse(R"({"downtownRadius": 300})"), ep2, plain);
     CHECK(plain.hubs.empty());
     CHECK(plain.center.x == 0.0 && plain.center.y == 0.0);
+}
+
+// The water plane is an indexed grid (ADR-0096): one vertex per wet corner, shared by the cells
+// that meet it, every triangle facing up, and a corner's UV (depth, shore distance) its own.
+TEST_CASE(water_mesh_shares_its_grid_corners) {
+    engine::WaterMeshParams wp;
+    wp.seaLevel = 0.0; wp.lo = engine::Vec2(0, 0); wp.hi = engine::Vec2(100, 100); wp.cell = 10.0; wp.foamBand = 30.0;
+    // a basin: land (floor above sea) for x < 30, sloping sea floor beyond
+    const engine::HeightSampler floor = [](double x, double) { return x < 30.0 ? 2.0 : -(x - 30.0) * 0.1; };
+    const engine::RenderMesh m = engine::buildWaterMesh(floor, wp);
+    // wet cells: those with any corner at x > 30 -> columns i = 3..9, 10 rows
+    CHECK(m.indices.size() == 7u * 10u * 6u);
+    CHECK(m.vertices.size() == 8u * 11u);   // corners x = 30..100, z = 0..100, each once
+    bool up = true;
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const engine::Vec3 a = m.vertices[m.indices[t]].position, b = m.vertices[m.indices[t + 1]].position,
+                           c = m.vertices[m.indices[t + 2]].position;
+        if (engine::dot(engine::cross(c - a, b - a), engine::Vec3(0, 1, 0)) <= 0) up = false;
+    }
+    CHECK(up);
+    for (const engine::Vertex& v : m.vertices) {
+        CHECK(std::fabs(v.u - static_cast<float>(std::max(0.0, -floor(v.position.x, v.position.z)))) < 1e-5);
+        if (v.position.x > 60.5) CHECK(v.v > 29.0f);   // far from the shore: the foam band's cap
+    }
 }
