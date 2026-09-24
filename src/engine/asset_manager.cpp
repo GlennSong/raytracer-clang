@@ -1,6 +1,9 @@
 #include "asset_manager.h"
 #include "mesh_builder.h"
 #include "../profile.h"
+
+#include <algorithm>
+#include <map>
 #include <cstdio>
 
 namespace engine {
@@ -40,9 +43,33 @@ MeshHandle AssetManager::acquireMesh(const RenderMesh& mesh, const std::string& 
     rec.bounds = uploader_.getMeshBounds(handle);
     rec.refs = 1;
     rec.key = key;
+    rec.bytes = mesh.vertices.size() * 56 + mesh.indices.size() * 4;
     records_[handle] = rec;
     if (!key.empty()) byKey_[key] = handle;
     return handle;
+}
+
+std::vector<AssetManager::MeshGroup> AssetManager::meshBytesByPrefix() const {
+    std::map<std::string, MeshGroup> groups;
+    for (const auto& kv : records_) {
+        const std::string& k = kv.second.key;
+        // every run of digits becomes '#': "road:3:deck:12" -> "road:#:deck:#"
+        std::string p;
+        for (std::size_t i = 0; i < k.size(); ++i) {
+            if (k[i] >= '0' && k[i] <= '9') {
+                if (p.empty() || p.back() != '#') p += '#';
+            } else p += k[i];
+        }
+        if (k.empty()) p = "(unkeyed)";
+        MeshGroup& g = groups[p];
+        g.prefix = p;
+        ++g.meshes;
+        g.bytes += kv.second.bytes;
+    }
+    std::vector<MeshGroup> out;
+    for (auto& kv : groups) out.push_back(kv.second);
+    std::sort(out.begin(), out.end(), [](const MeshGroup& a, const MeshGroup& b) { return a.bytes > b.bytes; });
+    return out;
 }
 
 MeshHandle AssetManager::retain(MeshHandle handle) {

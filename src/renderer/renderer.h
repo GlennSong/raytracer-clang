@@ -698,6 +698,9 @@ public:
     // today), so callers can report "unsupported" instead of hanging on a
     // file that will never appear.
     virtual bool requestFrameDump(const std::string& /*path*/) { return false; }
+    // What the backend holds on the GPU, one line (the control channel's mem?). Empty
+    // when it does not count.
+    virtual std::string memoryReport() const { return ""; }
 
     virtual void beginFrame() = 0;
     virtual void setCamera(const CameraState& camera) = 0;

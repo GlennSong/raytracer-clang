@@ -240,12 +240,15 @@ struct GpuMesh {
     VkDeviceMemory indexMemory = VK_NULL_HANDLE;
     uint32_t indexCount = 0;
     BoundingSphere bounds;
+    VkDeviceSize allocated = 0;   // device bytes the driver reserved (memoryReport)
+    VkDeviceSize data = 0;        // ...of which vertex + index data
 };
 
 struct GpuTexture {
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
+    VkDeviceSize allocated = 0;
 };
 
 // Material texture slots, in the order the fragment shader samples them and the
@@ -704,6 +707,11 @@ struct VulkanRenderer::Impl {
                                  VkBufferUsageFlags usage, VkBuffer& buffer, VkDeviceMemory& memory);
     VkShaderModule loadShaderModule(const std::string& path);
     void destroyMesh(GpuMesh& m);
+    // GPU MEMORY, counted (Renderer::memoryReport): live mesh and texture allocations
+    // and the bytes the driver reserved for them -- every mesh buffer is its own
+    // vkAllocateMemory, so how many there are matters as much as their size.
+    long meshAllocs = 0, texAllocs = 0;
+    VkDeviceSize meshBytes = 0, meshDataBytes = 0, texBytes = 0;
 
     bool createImageRGBA8(const uint8_t* rgba, uint32_t w, uint32_t h, GpuTexture& out);
     void transitionImageLayout(VkCommandBuffer cmd, VkImage image,
@@ -3969,6 +3977,7 @@ bool VulkanRenderer::Impl::createDeviceLocalBuffer(const void* data, VkDeviceSiz
 }
 
 void VulkanRenderer::Impl::destroyMesh(GpuMesh& m) {
+    if (m.allocated) { meshAllocs -= 2; meshBytes -= m.allocated; meshDataBytes -= m.data; }
     if (m.vertexBuffer) vkDestroyBuffer(device, m.vertexBuffer, nullptr);
     if (m.vertexMemory) vkFreeMemory(device, m.vertexMemory, nullptr);
     if (m.indexBuffer) vkDestroyBuffer(device, m.indexBuffer, nullptr);
@@ -4056,6 +4065,9 @@ bool VulkanRenderer::Impl::createImageRGBA8(const uint8_t* rgba, uint32_t w, uin
         return false;
     }
     vkBindImageMemory(device, out.image, out.memory, 0);
+    out.allocated = req.size;
+    ++texAllocs;
+    texBytes += req.size;
 
     // One-time upload: transition, copy, transition to shader-read.
     VkCommandBufferAllocateInfo cba{};
@@ -4167,6 +4179,7 @@ bool VulkanRenderer::Impl::createImageRGBA8(const uint8_t* rgba, uint32_t w, uin
 }
 
 void VulkanRenderer::Impl::destroyTexture(GpuTexture& t) {
+    if (t.allocated) { --texAllocs; texBytes -= t.allocated; }
     if (t.view) vkDestroyImageView(device, t.view, nullptr);
     if (t.image) vkDestroyImage(device, t.image, nullptr);
     if (t.memory) vkFreeMemory(device, t.memory, nullptr);
@@ -5405,9 +5418,26 @@ MeshHandle VulkanRenderer::uploadMesh(const RenderMesh& mesh) {
             LOG_ERROR("[vulkan] uploadMesh buffer creation failed");
             impl->destroyMesh(record);
             record.indexCount = 0;
+        } else {
+            VkMemoryRequirements vr, ir;
+            vkGetBufferMemoryRequirements(impl->device, record.vertexBuffer, &vr);
+            vkGetBufferMemoryRequirements(impl->device, record.indexBuffer, &ir);
+            record.allocated = vr.size + ir.size;
+            record.data = vsize + isize;
+            impl->meshAllocs += 2;
+            impl->meshBytes += record.allocated;
+            impl->meshDataBytes += vsize + isize;
         }
     }
     return impl->meshes.insert(record);
+}
+
+std::string VulkanRenderer::memoryReport() const {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "meshes %ld allocations %.0f MB (%.0f MB of data), textures %ld allocations %.0f MB",
+                  impl->meshAllocs, impl->meshBytes / 1048576.0, impl->meshDataBytes / 1048576.0,
+                  impl->texAllocs, impl->texBytes / 1048576.0);
+    return buf;
 }
 
 void VulkanRenderer::removeMesh(MeshHandle handle) {

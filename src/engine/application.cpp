@@ -804,6 +804,25 @@ std::string Application::handleControlCommand(const std::string& line) {
                       std::atan2(fwd.x, -fwd.z) * kRadToDeg);
         return buf;
     }
+    if (cmd.name == "mem?") {
+        // WHAT IS ON THE GPU: the backend's live allocations, then the meshes grouped by
+        // name, largest first (AssetManager::meshBytesByPrefix). The rest of what the
+        // driver reports -- render targets, shadow maps, instance and uniform buffers --
+        // is the difference against nvidia-smi.
+        std::string out = "ok " + rendererPtr->memoryReport();
+        std::size_t total = 0;
+        const auto groups = assetManager->meshBytesByPrefix();
+        for (const auto& g : groups) total += g.bytes;
+        char head[96];
+        std::snprintf(head, sizeof(head), " || mesh data by name, %.0f MB in all:", total / 1048576.0);
+        out += head;
+        for (std::size_t i = 0; i < groups.size() && i < 16; ++i) {
+            char b[160];
+            std::snprintf(b, sizeof(b), "  %s %zu meshes %.1f MB", groups[i].prefix.c_str(), groups[i].meshes, groups[i].bytes / 1048576.0);
+            out += b;
+        }
+        return out;
+    }
     if (cmd.name == "tap") {
         // Press and release a key through the real input path (see the frame
         // loop). Tests the KEY, not a verb that imitates what the key does.
