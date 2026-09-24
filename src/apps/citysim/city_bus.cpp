@@ -75,9 +75,36 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
         }
         return streets >= 3;
     };
+    // ...in the city's one STREET NETWORK. With towns out along a freeway (metro_planned), the
+    // farthest-point spread put hubs in them, no street leg reached them, and every route was
+    // dropped: "24 buses on 0 derived routes". Hubs come from the largest set of junctions
+    // joined by walkable streets; places reached only by freeway need their own network.
+    std::vector<int> comp(static_cast<std::size_t>(n), -1), compSize;
+    {
+        std::vector<std::vector<int>> adj(static_cast<std::size_t>(n));
+        for (const engine::NavLink& L : nav.links)
+            if (L.walkable && L.klass != engine::RoadClass::Freeway && L.klass != engine::RoadClass::Ramp) {
+                adj[static_cast<std::size_t>(L.from)].push_back(L.to);
+                adj[static_cast<std::size_t>(L.to)].push_back(L.from);
+            }
+        for (int s0 = 0; s0 < n; ++s0) {
+            if (comp[static_cast<std::size_t>(s0)] >= 0) continue;
+            const int c = static_cast<int>(compSize.size());
+            compSize.push_back(0);
+            std::vector<int> stack{s0};
+            comp[static_cast<std::size_t>(s0)] = c;
+            while (!stack.empty()) {
+                const int u = stack.back(); stack.pop_back();
+                ++compSize.back();
+                for (int v : adj[static_cast<std::size_t>(u)])
+                    if (comp[static_cast<std::size_t>(v)] < 0) { comp[static_cast<std::size_t>(v)] = c; stack.push_back(v); }
+            }
+        }
+    }
+    const int mainComp = static_cast<int>(std::max_element(compSize.begin(), compSize.end()) - compSize.begin());
     std::vector<int> cand;
     for (int i = 0; i < n; ++i)
-        if (streetJunction(i)) cand.push_back(i);
+        if (streetJunction(i) && comp[static_cast<std::size_t>(i)] == mainComp) cand.push_back(i);
     if (static_cast<int>(cand.size()) < 3)
         for (int i = 0; i < n; ++i) cand.push_back(i);   // a city with no junctions
 
