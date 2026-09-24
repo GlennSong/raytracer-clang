@@ -61,6 +61,12 @@ struct BusRoute {
     // drives OUT of town rather than parking on the busiest corner.
     int depotNode = -1;
     engine::Vec2 depotPos{0, 0};
+    // Which street network the loop serves (BusNetwork::networkOf); -1 for the
+    // REGIONAL route, which joins the networks by freeway and stops only at
+    // their interchange stops. Its pace is its own (m/s): mostly freeway.
+    int network = -1;
+    bool regional = false;
+    engine::Real pace = 0;   // 0 = a city bus's (kBusPace)
     bool valid() const { return stops.size() >= 2; }
 };
 
@@ -99,6 +105,17 @@ public:
     void build(const engine::NavGraph& nav, int routeCount, int stopsPerRoute,
                uint32_t seed);
 
+    // The street network a nav node belongs to (junctions joined by walkable
+    // streets; the city is one, each town out along the freeway another), or
+    // -1. Two nodes in different networks can be joined only by a vehicle.
+    int networkOf(int node) const {
+        return node >= 0 && node < static_cast<int>(comp_.size()) ? comp_[static_cast<std::size_t>(node)] : -1;
+    }
+    bool hasRegional() const {
+        for (const BusRoute& r : routes_) if (r.regional) return true;
+        return false;
+    }
+
     // The hubs the network was built around, in world XZ.
     const std::vector<engine::Vec2>& hubs() const { return hubs_; }
 
@@ -128,6 +145,7 @@ public:
     // Buses on each route (the sim deals them), and so the mean wait: half the
     // headway, a lap's time over the buses sharing it.
     void setFleet(std::vector<int> busesPerRoute) { fleet_ = std::move(busesPerRoute); }
+    int fleetOf(int r) const { return r >= 0 && r < static_cast<int>(fleet_.size()) ? fleet_[static_cast<std::size_t>(r)] : 0; }
     engine::Real waitSeconds(int r) const;
 
     // THE SHARE OF STREETS A BUS DRIVES ALONG, by length. The number coverage
@@ -171,6 +189,8 @@ public:
     std::size_t waitingCount() const { return waiting_.size(); }
 
 private:
+    void buildRegional(const engine::NavGraph& nav);
+    std::vector<int> comp_;   // street network per nav node
     std::vector<BusRoute> routes_;
     std::vector<engine::Vec2> hubs_;
     std::unordered_map<int, BusTrip> waiting_;

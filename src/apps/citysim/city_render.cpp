@@ -153,6 +153,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.pedestrians = c.pedestrians;
         params_.carsPerLaneKm = c.carsPerLaneKm;
         params_.longCommuteShare = c.longCommuteShare;
+        params_.busCommuteShare = c.busCommuteShare;
         params_.pedsPerKm = c.pedsPerKm;
         params_.maxAmbient = c.maxAmbient;
         params_.seed = c.seed;
@@ -541,6 +542,14 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     LOG_INFO << "[citysim] buses: " << params_.buses << " on "
              << sim_.buses().routeCount() << " derived routes of " << params_.busStops
              << " stops; riders walk <= " << params_.busMaxWalk << " m to a stop";
+    for (int r = 0; r < sim_.buses().routeCount(); ++r) {
+        const BusRoute& br = sim_.buses().route(r);
+        const Real lap = sim_.buses().rideSeconds(r, 0, 0);
+        LOG_INFO << "[citysim]   route " << r << ": " << (br.regional ? "REGIONAL" : "network " + std::to_string(br.network))
+                 << ", " << br.stops.size() << " stops, " << static_cast<int>(br.loopLength) << " m, lap "
+                 << static_cast<int>(lap / 60) << " min, " << sim_.buses().fleetOf(r) << " buses (every "
+                 << static_cast<int>(lap / 60 / std::max(1, sim_.buses().fleetOf(r))) << " min)";
+    }
     LOG_INFO << "[citysim] cabs: " << (params_.taxiFraction * 100.0) << "% of drivers, hail "
              << (params_.hailChance * 100.0) << "% over " << params_.hailMinMetres << " m";
     LOG_INFO << "[citysim] sim tiers: tiered=" << (params_.tieredAgents ? "on" : "off")
@@ -597,10 +606,13 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // (then the built random home/work schedule stands). After setWander so the
     // (persistent) mode is settled; before the warm-up so day one runs on places.
     sim_.setLongCommuteShare(params_.longCommuteShare);
+    sim_.setBusCommuteShare(params_.busCommuteShare);
     sim_.assignPlaces(places_, nav_);
     LOG_INFO << "[citysim] commutes: " << sim_.commuteStats().driversWithJobs << " drivers with jobs, "
              << sim_.commuteStats().crossTownDrivers << " cross-town (share " << params_.longCommuteShare
-             << "), mean driver commute " << static_cast<int>(sim_.commuteStats().meanDriverCommute) << " m";
+             << "), mean driver commute " << static_cast<int>(sim_.commuteStats().meanDriverCommute) << " m; "
+             << sim_.commuteStats().busCommuters << " walkers ride to work in another town (share "
+             << params_.busCommuteShare << ", " << sim_.commuteStats().busCommuteTried << " tried)";
 
     // ONE CLOCK. A staged day/night cycle owns the world's hour and rate:
     // the sim opens at the sky's hour and its schedules run at the sky's

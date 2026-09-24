@@ -6,7 +6,7 @@
   "busMaxWalk": 220.0,
   "busRoutes": 4,
   "busStops": 14,
-  "buses": 24,
+  "buses": 40,
   "cars": -1,
   "carsPerLaneKm": 35.0,
   "debugWidgets": false,
@@ -146,7 +146,8 @@
   "taxiFraction": 0.12,
   "tiered": true,
   "vehicles": "vehicles.lua",
-  "wander": false
+  "wander": false,
+  "busCommuteShare": 0.1
  },
  "dayNight": {
   "dayMinutes": 1440.0,

@@ -1150,8 +1150,9 @@ public:
     // Share of drivers assignPlaces gives a CROSS-TOWN job (1.2 km+ away); the rest
     // take the nearest of their sampled jobs. Set before assignPlaces.
     void setLongCommuteShare(Real share) { longCommuteShare_ = share; }
+    void setBusCommuteShare(Real share) { busCommuteShare_ = share; }
     // What the last assignPlaces did with the drivers' jobs (for the load log).
-    struct CommuteStats { int crossTownDrivers = 0, driversWithJobs = 0; Real meanDriverCommute = 0; };
+    struct CommuteStats { int crossTownDrivers = 0, driversWithJobs = 0; Real meanDriverCommute = 0; int busCommuters = 0, busCommuteTried = 0; };
     const CommuteStats& commuteStats() const { return commuteStats_; }
     const RelationshipTable& relationships() const { return relationships_; }
 
@@ -1331,6 +1332,7 @@ private:
 
     const engine::NavGraph* nav_ = nullptr;
     Real longCommuteShare_ = 0;   // setLongCommuteShare
+    Real busCommuteShare_ = 0;    // setBusCommuteShare
     CommuteStats commuteStats_;
     std::vector<Agent> agents_;
     std::vector<SimVehicle> vehicles_;

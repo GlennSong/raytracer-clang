@@ -728,7 +728,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     // Scratch for the on-foot job search, hoisted: one allocation, not one
     // per walker.
     std::vector<std::pair<Real, PlaceId>> jobDist;
-    int crossTownDrivers = 0, driversWithJobs = 0;
+    int crossTownDrivers = 0, driversWithJobs = 0, busCommuters = 0, busCommuteTried = 0;
     Real driverCommute = 0;
     for (Agent& a : agents_) {
         // Home: deterministic pick from the agent's own brain bits (no rng
@@ -845,7 +845,43 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             // Keyed on ARCHETYPE, not mode: mode flips when a driver parks and
             // walks away, and archetype is what measureCommute samples -- branch
             // on the wrong one and the metric never moves.
-            if (a.archetype == Agent::Mode::Pedestrian) {
+            // BUS COMMUTERS (Glenn, 2026-09-23: "regional buses ... that go between towns").
+            // Nobody on foot could reach another town, so a regional bus would run empty.
+            // A level-set share of walkers (their own bits, no rng draw) work in ANOTHER
+            // street network -- the city from a town, a town from the city -- at the
+            // nearest of 24 sampled jobs there that the buses can take them to and back.
+            // On the day they walk to a stop, ride, change, and walk the last stretch.
+            if (a.archetype == Agent::Mode::Pedestrian && busCommuteShare_ > 0 && buses_.hasRegional()) {
+                uint32_t bc = a.brain * 0x85EBCA6Bu;
+                bc ^= bc >> 13; bc *= 0xC2B2AE35u; bc ^= bc >> 16;
+                if (static_cast<Real>(bc & 0x3FF) < busCommuteShare_ * 1024.0) {
+                    ++busCommuteTried;
+                    const int homeNet = buses_.networkOf(hn);
+                    const Vec2 homeAt = graph.nodes[static_cast<std::size_t>(hn)];
+                    std::vector<std::pair<Real, PlaceId>> far;
+                    for (int c = 0; c < 24; ++c) {
+                        uint32_t hh = bc + static_cast<uint32_t>(c) * 0x9E3779B9u;
+                        hh ^= hh >> 16; hh *= 0x7feb352dU; hh ^= hh >> 15;
+                        const PlaceId cand = jobs[hh % jobs.size()];
+                        const int net = buses_.networkOf(nodeOf(cand));
+                        if (net < 0 || net == homeNet) continue;
+                        far.push_back({(places[cand].site - homePos).lengthSquared(), cand});
+                    }
+                    std::sort(far.begin(), far.end());
+                    for (const auto& fc : far) {
+                        const Vec2 jobAt = graph.nodes[static_cast<std::size_t>(nodeOf(fc.second))];
+                        if (buses_.planTrip(homeAt, jobAt, busMaxWalk_).valid() &&
+                            buses_.planTrip(jobAt, homeAt, busMaxWalk_).valid()) {
+                            pick = fc.second;
+                            ++busCommuters;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (pick != kNoPlace) {
+                // a bus commuter: chosen above
+            } else if (a.archetype == Agent::Mode::Pedestrian) {
                 // A WALK WORTH TAKING (Glenn, 2026-09-17: "I haven't seen
                 // anybody in the suburbs"). Taking the NEAREST job put walkers
                 // ~70 m from home, so they reached work almost at once and sat
@@ -1067,6 +1103,9 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         }
     }
     commuteStats_.crossTownDrivers = crossTownDrivers;
+    commuteStats_.busCommuters = busCommuters;
+    commuteStats_.busCommuteTried = busCommuteTried;
+    if (busCommuteTried) buses_.resetPlanStats();   // the choosing is not ridership
     commuteStats_.driversWithJobs = driversWithJobs;
     commuteStats_.meanDriverCommute = driversWithJobs ? driverCommute / driversWithJobs : 0;
 }
@@ -1528,6 +1567,14 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
                         a.activity = s.activity;
                         return true;    // walking to the stop IS the trip now
                     }
+                } else {
+                    // ALREADY AT THE STOP -- the usual case after a change of bus at a
+                    // shared stop. This fell through to walking the whole trip, which
+                    // between towns there is no walk for: wait here (awaitingRide
+                    // holds them).
+                    a.indoors = false;
+                    a.activity = s.activity;
+                    return true;
                 }
                 buses_.stopWaiting(busSelf);   // could not reach the stop
             }
@@ -2054,12 +2101,32 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
     if (buses_.empty()) return;
     if (busTable_.stateCount() == 0) busTable_ = busGoals();
     // Buses come off the DRIVER pool, spread by index like the cabs, and are
-    // dealt round-robin across the routes so no route is left without one.
+    // dealt across the routes BY LAP TIME -- one each first, then to whichever
+    // route is furthest short of its share -- so every route runs about the same
+    // headway. Round-robin gave a town's 3 km loop as many buses as the 25 km
+    // regional one once places out along the freeway had routes of their own.
+    const int R = buses_.routeCount();
+    std::vector<Real> lapShare(static_cast<std::size_t>(R), 0);
+    {
+        Real total = 0;
+        for (int r = 0; r < R; ++r) {
+            const BusRoute& br = buses_.route(r);
+            lapShare[static_cast<std::size_t>(r)] = buses_.rideSeconds(r, 0, 0) > 0 ? buses_.rideSeconds(r, 0, 0) : br.loopLength;
+            total += lapShare[static_cast<std::size_t>(r)];
+        }
+        for (Real& l : lapShare) l = total > 0 ? l / total : 1.0 / R;
+    }
+    std::vector<int> dealt(static_cast<std::size_t>(R), 0);
     int made = 0;
     for (std::size_t i = 0; i < agents_.size() && made < busCount; ++i) {
         if (agents_[i].archetype != Agent::Mode::Driver) continue;
         if (isTaxi(static_cast<int>(i))) continue;   // a cab is not also a bus
-        const int r = made % buses_.routeCount();
+        int r = made < R ? made : 0;
+        if (made >= R)
+            for (int q = 1; q < R; ++q)
+                if (lapShare[static_cast<std::size_t>(q)] * (made + 1) - dealt[static_cast<std::size_t>(q)] >
+                    lapShare[static_cast<std::size_t>(r)] * (made + 1) - dealt[static_cast<std::size_t>(r)]) r = q;
+        ++dealt[static_cast<std::size_t>(r)];
         busRoute_[i] = r;
         agents_[i].goal = busTable_.entry();
         agents_[i].goalHours = 0;
@@ -4896,6 +4963,13 @@ void CitySim::tierPass(Real hoursPerSecond) {
             Agent& a = agents_[i];
             if (a.tier != Agent::Tier::V) continue;
             if (a.playerControlled || a.released || a.tethered) continue;
+            // NEVER A BUS, NOR ANYONE MID-JOURNEY ON ONE. A bus is the city's shared
+            // state: frozen out past the bubble it stranded every rider waiting along
+            // its loop, and the riders aboard with it -- measured on metro_planned, 38 of
+            // 40 buses far, 5 moved in five minutes, and the regional loop (18 km, nearly
+            // all of it far) carried nobody. A rider rebuilt from their schedule on waking
+            // would also lose the ride. Forty buses ticking at 1 Hz cost nothing.
+            if (isBus(static_cast<int>(i)) || buses_.tripOf(static_cast<int>(i))) continue;
             const Real dx = a.pos.x - c.x, dy = a.pos.y - c.y;
             if (dx * dx + dy * dy <= dormantRadius * dormantRadius) continue;
             a.tier = Agent::Tier::D;

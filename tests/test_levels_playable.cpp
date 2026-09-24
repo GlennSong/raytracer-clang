@@ -1414,6 +1414,129 @@ TEST_CASE(metro_bus_network_serves_the_city) {
     }
 }
 
+// REGIONAL BUSES (Glenn, 2026-09-23: "Are there regional buses and long distance
+// buses that go between towns?"). metro_planned has places out along its freeways --
+// two towns and a mountain city -- whose streets meet the city's only by freeway. Each
+// street network gets loops of its own, one REGIONAL loop joins them by freeway at
+// stops the local loops share, and a share of walkers work in another town and ride.
+TEST_CASE(metro_planned_regional_bus_joins_the_towns) {
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const bool loaded = LevelLoader::load(levelsDir() + "/metro_planned.json", world, *renderer,
+                                          view, assets, /*editorMode=*/false);
+    CHECK(loaded);
+    if (!loaded) return;
+    citysim::CityRenderSystem city;
+    CHECK(city.build(world, &assets, nullptr));
+    const citysim::BusNetwork& net = city.sim().buses();
+
+    int regional = -1;
+    std::set<int> localNets;
+    for (int r = 0; r < net.routeCount(); ++r) {
+        const citysim::BusRoute& route = net.route(r);
+        if (route.regional) regional = r;
+        else localNets.insert(route.network);
+    }
+    std::printf("    [regional] %d routes, local loops in %zu street networks, regional route %d\n",
+                net.routeCount(), localNets.size(), regional);
+    CHECK(localNets.size() >= 3);    // the city, the mountain city (with the SW town), the NE town
+    CHECK(regional >= 0);
+    if (regional < 0) return;
+    // it stops in every network that has local loops, at a stop one of them shares
+    std::set<int> servedNets;
+    for (const citysim::BusStop& st : net.route(regional).stops) {
+        servedNets.insert(net.networkOf(st.node));
+        bool shared = false;
+        for (int r = 0; r < net.routeCount() && !shared; ++r)
+            if (r != regional)
+                for (const citysim::BusStop& o : net.route(r).stops)
+                    if (o.node == st.node) { shared = true; break; }
+        CHECK(shared);
+    }
+    CHECK(servedNets == localNets);
+
+    // Walkers who work in another town, and a trip between two of them planned end to
+    // end: the first leg is a bus that exists.
+    const auto& cs = city.sim().commuteStats();
+    std::printf("    [regional] %d of %d walkers tried ride to work in another town\n",
+                cs.busCommuters, cs.busCommuteTried);
+    CHECK(cs.busCommuters > 0);
+
+    // And in the running city someone rides it: the most aboard the regional buses at once,
+    // over the morning commute -- opened at 7:00, the day's clock run at 3 in-world minutes a
+    // real second so departures keep coming, the buses still driving in real time.
+    // Dormancy off: out past the player's bubble a walker's day is not simulated at all
+    // (rebuilt from the schedule on waking), and the town commuters all live out there.
+    // With it on, only riders near the player ride -- though they stay awake for the whole
+    // journey once they have a bus trip.
+    city.simMutable().dormancyEnabled = false;
+    city.simMutable().setHoursPerSecond(0.05);
+    city.simMutable().seedFromSchedule(7.0);
+    long most = 0, boardings0 = city.sim().busBoardAttempts();
+    for (int i = 0; i < 30000 && most < 10; ++i) {
+        city.step(world, 0.1);
+        if (i % 50) continue;
+        long aboard = 0;
+        for (std::size_t ai = 0; ai < city.sim().agents().size(); ++ai)
+            if (city.sim().busRouteOf(static_cast<int>(ai)) == regional)
+                aboard += city.sim().rides().load(static_cast<int>(ai));
+        most = std::max(most, aboard);
+    }
+    std::printf("    [regional] until %.1f h: %ld boardings in all, at most %ld aboard the regional buses\n",
+                city.sim().clockHours(), city.sim().busBoardAttempts() - boardings0, most);
+    CHECK(most >= 10);   // a busload, not a straggler left aboard from the minutes above
+
+    // ...and gets off in another town: the riders aboard the regional buses now, followed
+    // until they step off, stand in a different street network from home.
+    // (Where they BOARDED, not home: a rider's restNode stays the boarding stop for the ride.
+    // The mountain city and the SW town are one street network with three regional stops, so
+    // some ride it as an express within their own town -- that is not "another town".)
+    std::vector<std::pair<int, int>> riders;   // (agent, network boarded in)
+    for (std::size_t p = 0; p < city.sim().agents().size(); ++p) {
+        const int d = city.sim().rides().driverOf(static_cast<int>(p));
+        if (d >= 0 && city.sim().busRouteOf(d) == regional)
+            riders.push_back({static_cast<int>(p), net.networkOf(city.sim().agents()[p].restNode)});
+    }
+    int across = 0, within = 0, still = 0;
+    for (int i = 0; i < 21000; ++i) {   // a lap and then some
+        city.step(world, 0.1);
+        if (i % 100) continue;
+        across = within = still = 0;
+        for (const auto& [p, boardedIn] : riders) {
+            const citysim::Agent& a = city.sim().agents()[static_cast<std::size_t>(p)];
+            if (city.sim().rides().driverOf(p) >= 0) { ++still; continue; }
+            if (net.networkOf(a.restNode) != boardedIn) ++across; else ++within;
+        }
+        if (still == 0) break;
+    }
+    std::printf("    [regional] of %zu riders aboard the regional: %d set down in another town, %d in their own, %d still aboard\n",
+                riders.size(), across, within, still);
+    CHECK(across > 0);
+
+    // EVERY BUS DRIVES, near the player or not, with dormancy back on: it froze the far ones
+    // (5 of 40 moved in five minutes, and the regional loop never ran). Last, because agents
+    // put to sleep stay asleep when it is switched off again.
+    city.simMutable().dormancyEnabled = true;
+    {
+        std::vector<Vec2> was(city.sim().agents().size());
+        for (std::size_t ai = 0; ai < was.size(); ++ai) was[ai] = city.sim().agents()[ai].pos;
+        for (int i = 0; i < 3000; ++i) city.step(world, 0.1);
+        int buses = 0, moved = 0;
+        for (std::size_t ai = 0; ai < was.size(); ++ai) {
+            if (!city.sim().isBus(static_cast<int>(ai))) continue;
+            const Vec2 d = city.sim().agents()[ai].pos - was[ai];
+            ++buses;
+            if (d.x * d.x + d.y * d.y > 25.0) ++moved;
+        }
+        std::printf("    [regional] %d of %d buses moved in five minutes (dormancy %s)\n", moved, buses,
+                    city.sim().dormancyEnabled ? "on" : "off");
+        CHECK(moved * 10 >= buses * 9);
+    }
+}
+
 // PARKING (Glenn, 2026-09-18: "They park at the corner in a pile, but they
 // should be using the parallel parking spaces or maybe the parking garages, but
 // they need to park in spaces and not in a heap on the corner"). A census of

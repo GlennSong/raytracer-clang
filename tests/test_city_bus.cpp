@@ -313,6 +313,7 @@ TEST_CASE(buses_start_at_their_own_stops_evenly_spaced) {
     sim.setBuses(2, 12, 8, 260.0);
     const BusNetwork& net = sim.buses();
     CHECK(net.routeCount() == 2);
+    int dealt = 0;
     for (int r = 0; r < net.routeCount(); ++r) {
         const BusRoute& route = net.route(r);
         const int n = static_cast<int>(route.stops.size());
@@ -326,12 +327,17 @@ TEST_CASE(buses_start_at_their_own_stops_evenly_spaced) {
             // Standing at that stop (idlePose puts it at the kerb, not the node).
             CHECK(dist(a.pos, route.stops[static_cast<std::size_t>(at)].pos) < 25.0);
         }
-        CHECK(starts.size() == 4);
+        // Dealt by lap time (a longer loop gets more), at least one each.
+        const int m = static_cast<int>(starts.size());
+        CHECK(m >= 1);
+        CHECK(m == net.fleetOf(r));
+        dealt += m;
         std::sort(starts.begin(), starts.end());
         // Evenly spread: consecutive start stops are about N/m apart.
         for (std::size_t k = 1; k < starts.size(); ++k)
-            CHECK(starts[k] - starts[k - 1] >= n / 4 - 1);
+            CHECK(starts[k] - starts[k - 1] >= n / m - 1);
     }
+    CHECK(dealt == 8);
 }
 
 

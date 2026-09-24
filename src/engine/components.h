@@ -573,6 +573,11 @@ struct CitySimConfig {
     // like more traffic on the freeway"). 0 = everyone takes the nearest of their
     // sampled jobs (the short-commute rule).
     float longCommuteShare = 0.0f;
+    // Share of WALKERS who work in another town and ride there: their job is
+    // drawn from a different street network (a town, the mountain city, the
+    // city) that the buses — local, regional, local — can take them to. 0 =
+    // every walker works within walking distance (the old rule).
+    float busCommuteShare = 0.0f;
     // Ceiling on EACH density-derived count. This was a literal 400 in the
     // bridge, which silently halved metro v2: its own network asks for 769
     // cars and 788 walkers, and got 400 of each (measured 2026-09-16,

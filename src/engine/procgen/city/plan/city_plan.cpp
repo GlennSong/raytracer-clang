@@ -1441,7 +1441,7 @@ CityPlan generatePlan(const Brief& B) {
         auto inCity = [&](const Vec2& p) { return (p - B.center).length() < outerR + 60; };
         int removed = 0;
         const int city = simplifyThinBlocks(plan.streets, minArea, minRadius, inCity, true, nullptr);
-        const int out = simplifyThinBlocks(plan.streets, minArea, minRadius, [&](const Vec2& p) { return !inCity(p); }, !B.world.value("simplifyBlocks", true), &removed);
+        const int out = simplifyThinBlocks(plan.streets, minArea, minRadius, [&](const Vec2& p) { return !inCity(p); }, !(B.world.is_object() ? B.world.value("simplifyBlocks", true) : true), &removed);
         if (std::getenv("RT_PLAN_WHY"))
             std::printf("[plan] thin or tiny blocks (< %.0f m2, or 2A/P < %.0f m): %d in the city (left), %d beyond it (%d streets removed)\n",
                         minArea, minRadius, city, out, removed);

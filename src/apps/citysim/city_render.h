@@ -34,6 +34,7 @@ struct CityRenderParams {
     Real carsPerLaneKm = 10.0;
     Real pedsPerKm = 6.0;
     Real longCommuteShare = 0.0;   // CitySimConfig::longCommuteShare
+    Real busCommuteShare = 0.0;    // CitySimConfig::busCommuteShare
     // Ceiling on each density-derived count (CitySimConfig::maxAmbient). The
     // bridge used to clamp at a literal 400, which halved metro v2: its own
     // network asks for 769 cars and 788 walkers.
