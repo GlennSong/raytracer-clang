@@ -200,6 +200,8 @@ add_library(engine_core STATIC
     src/engine/systems/elevator_system.cpp
     src/engine/systems/beacon_light_system.cpp
     src/engine/systems/terrain_lod_system.cpp
+    src/engine/systems/residency_system.cpp
+    src/engine/residency.cpp
     # NOTE: the agent-based city simulation (ADR-0060…0066) is NOT here. It is an
     # APPLICATION of the engine, built as its own `citysim` static library below
     # (src/apps/citysim). engine_core is the platform-free, city-free engine; a
@@ -708,6 +710,7 @@ add_executable(run_tests
     tests/test_animation_path.cpp
     tests/test_terrain_lod.cpp
     tests/test_height_pyramid.cpp
+    tests/test_residency.cpp
     tests/test_terrain_async.cpp
     tests/test_nav_graph.cpp
     tests/test_pathfind.cpp

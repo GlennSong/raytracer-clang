@@ -20,6 +20,7 @@
 #include "procgen/terrain.h"
 #include "procgen/terrain_lod.h"
 #include "procgen/height_pyramid.h"   // baked ground (ADR-0095)
+#include "residency.h"               // streamed building cells (ADR-0095)
 #include "../job_system.h"   // lodSurfaceHeight: the drawn ground
 #include "drawn_road.h"               // DrawnRoad: the road as built, for planting
 #include "procgen/city/city_lots.h"  // grow buildings on the road net's blocks (ADR-0066)
@@ -4875,7 +4876,8 @@ bool LevelLoader::load(const std::string& path,
             // (user: "we absolutely should be using the pre-existing recipes").
             {
                 using Surface = RenderMaterial::Surface;
-                SurfaceTexCache lotTex;   // one bake+upload per surface class
+                // The part materials, their surface textures and the chunk spawner outlive the load:
+                // streamed building cells (ADR-0095) are spawned later, by the residency service.
                 // Chunked per grid cell (plan P1.1): the whole-district merged
                 // mesh defeated frustum culling — any visible corner drew the
                 // entire city. One Renderable per (cell, part) gives the AABB
@@ -4899,10 +4901,18 @@ bool LevelLoader::load(const std::string& path,
                 // draw-distance scale — derived once and applied to every chunk of the part, whichever
                 // tier and wherever the chunk came from (grown here or read per cell from the bundle).
                 struct PartProto { Renderable proto; Surface surf = Surface::None; bool reUV = false; double ddScale = 1.0; bool ready = false; };
-                std::map<std::size_t, PartProto> protos;
-                TextureHandle roomAtlas{};   // baked on first sight of a lit-glass part (interior mapping)
-                auto protoFor = [&](std::size_t pi, bool scaleSmallParts) -> PartProto& {
-                    PartProto& pp = protos[pi * 2 + (scaleSmallParts ? 1 : 0)];
+                struct PartSpawnState {
+                    SurfaceTexCache lotTex;                  // one bake+upload per surface class
+                    std::map<std::size_t, PartProto> protos;
+                    TextureHandle roomAtlas{};               // baked on first sight of a lit-glass part (interior mapping)
+                };
+                auto spawnState = std::make_shared<PartSpawnState>();
+                Renderer* rendererP = &renderer;
+                std::function<PartProto&(std::size_t, bool)> protoFor = [spawnState, rendererP](std::size_t pi, bool scaleSmallParts) -> PartProto& {
+                    Renderer& renderer = *rendererP;
+                    SurfaceTexCache& lotTex = spawnState->lotTex;
+                    TextureHandle& roomAtlas = spawnState->roomAtlas;
+                    PartProto& pp = spawnState->protos[pi * 2 + (scaleSmallParts ? 1 : 0)];
                     if (pp.ready) return pp;
                     pp.proto.renderLayer = engine::LayerBuildings;   // debug layer toggle
                     pp.proto.material = materialFor(static_cast<PartId>(pi), Vec3(0.80, 0.78, 0.75));
@@ -4945,15 +4955,39 @@ bool LevelLoader::load(const std::string& path,
                 };
                 // One chunk (a render cell's share of a part) → one Renderable. World-planar UVs are a
                 // per-vertex function of position and normal, so a chunk gets the UVs the whole part would.
-                auto spawnChunk = [&](std::size_t slot, RenderMesh& chunk, double minDist, double drawDist, bool scaleSmallParts) {
+                World* worldP = &world;
+                AssetManager* assetsP = &assets;
+                // A chunk is made in two halves (ADR-0095): PREPARE touches only the mesh -- the drape
+                // and the world-planar UVs, the slow part -- and may run on a worker thread; COMMIT binds
+                // the material, uploads and makes the entity, on the render thread. The UV rule per part
+                // comes from protoFor, which bakes textures, so it is tabled up front (reUVFor).
+                auto reUVTable = std::make_shared<std::vector<double>>();   // per base part: 1/tile, 0 = keep UVs
+                std::function<void()> tableReUV = [reUVTable, protoFor]() {
+                    if (!reUVTable->empty()) return;
+                    reUVTable->assign(engine::kDrapedPartBase, 0.0);
+                    for (std::size_t pi = 0; pi < engine::kDrapedPartBase; ++pi) {
+                        PartProto& pp = protoFor(pi, false);
+                        if (pp.reUV) (*reUVTable)[pi] = 1.0 / surfaceWorldTileSize(pp.surf);
+                    }
+                };
+                std::function<void(std::size_t, RenderMesh&)> prepareChunk =
+                    [reUVTable, dressingGround, dressingStep, dressingOrigin](std::size_t slot, RenderMesh& chunk) {
                     if (chunk.vertices.empty()) return;
                     // A DRAPED slot is ground-relative dressing: lay it on the drawn ground and
                     // draw it as its base part (city_lots.h, kDrapedPartBase).
                     if (engine::isDrapedSlot(slot))
                         engine::drapeOnGround(chunk, dressingGround, dressingStep, dressingOrigin);
+                    const double inv = (*reUVTable)[engine::baseSlot(slot)];
+                    if (inv > 0.0) applyWorldPlanarUVs(chunk, inv);
+                };
+                std::function<Entity(std::size_t, RenderMesh&, double, double, bool)> commitChunk =
+                    [protoFor, worldP, assetsP](
+                        std::size_t slot, RenderMesh& chunk, double minDist, double drawDist, bool scaleSmallParts) -> Entity {
+                    World& world = *worldP;
+                    AssetManager& assets = *assetsP;
+                    if (chunk.vertices.empty()) return Entity{};
                     const std::size_t pi = engine::baseSlot(slot);
                     PartProto& pp = protoFor(pi, scaleSmallParts);
-                    if (pp.reUV) applyWorldPlanarUVs(chunk, 1.0 / surfaceWorldTileSize(pp.surf));
                     Renderable r = pp.proto;
                     if (drawDist > 0) r.drawDistance = drawDist * pp.ddScale;
                     r.minDistance = minDist;
@@ -5003,6 +5037,13 @@ bool LevelLoader::load(const std::string& path,
                         world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * glow});
                         world.add<engine::BeaconBlink>(e, bb);
                     }
+                    return e;
+                };
+                tableReUV();
+                std::function<Entity(std::size_t, RenderMesh&, double, double, bool)> spawnChunk =
+                    [prepareChunk, commitChunk](std::size_t slot, RenderMesh& chunk, double minDist, double drawDist, bool scale) -> Entity {
+                    prepareChunk(slot, chunk);
+                    return commitChunk(slot, chunk, minDist, drawDist, scale);
                 };
                 // Whole parts (grown here, or a whole-part bundle): split per render cell now. One spawner
                 // for both tiers, so material binding and chunking cannot diverge between LOD0 and LOD1.
@@ -5018,7 +5059,96 @@ bool LevelLoader::load(const std::string& path,
                         for (RenderMesh& chunk : chunkMeshByCell(pm, cellFor)) spawnChunk(pi, chunk, minDist, drawDist, scaleSmallParts);
                     }
                 };
-                if (!grown.cellParts.empty() && grown.bundle) {
+                const char* streamEnv = std::getenv("RT_STREAM_BUILDINGS");
+                const bool streamCells = !(streamEnv && streamEnv[0] == '0');
+                if (!grown.cellParts.empty() && grown.bundle && streamCells) {
+                    // STREAMED (ADR-0095): the bundle's per-cell part sections are registered with the
+                    // residency service instead of all instantiated -- full detail within detailDistance
+                    // of the camera, flat facades out to facadeDistance, each cell's mass-box proxy
+                    // (below, always resident) beyond. One item per cell and tier.
+                    std::map<std::tuple<int, int, bool>, std::vector<engine::lotcache::LotCellPart>> cellsOf;
+                    for (const engine::lotcache::LotCellPart& cp : grown.cellParts) {
+                        if (cp.flat && !threeTier) continue;
+                        cellsOf[{cp.cx, cp.cz, cp.flat}].push_back(cp);
+                    }
+                    auto residency = std::make_shared<engine::Residency>();
+                    std::shared_ptr<const engine::bundle::Bundle> bundle = grown.bundle;
+                    const double cell = renderCell > 0 ? renderCell : 250.0;
+                    for (auto& [key, parts] : cellsOf) {
+                        const auto [cx, cz, flat] = key;
+                        engine::Residency::Item it;
+                        it.client = flat ? "building facades" : "buildings";
+                        const double x = (cx + 0.5) * cell, z = (cz + 0.5) * cell;
+                        it.center = Vec3(x, entityGround ? entityGround(x, z) : 0.0, z);
+                        it.radius = cell * 0.72;   // the cell's half-diagonal
+                        // A cell of margin: loaded before it is drawn, in ordinary movement.
+                        const double reach = flat ? facadeDistance : detailDistance;
+                        it.loadWithin = reach + cell;
+                        it.dropBeyond = reach + cell * 1.5;
+                        if (flat) it.dropWithin = std::max(0.0, detailDistance - cell);   // not drawn inside the detail ring
+                        auto ents = std::make_shared<std::vector<Entity>>();
+                        const double minD = flat ? detailDistance : 0.0, maxD = flat ? facadeDistance : detailDistance;
+                        const bool scale = flat ? false : !threeTier;
+                        // Two-phase (residency.h): read + drape + UVs on a worker, upload + entities on
+                        // the render thread.
+                        struct Prepared { std::vector<std::pair<std::size_t, RenderMesh>> chunks; };
+                        it.prepare = [parts, bundle, prepareChunk]() -> std::shared_ptr<void> {
+                            auto out = std::make_shared<Prepared>();
+                            for (const engine::lotcache::LotCellPart& cp : parts) {
+                                RenderMesh chunk;
+                                if (!engine::lotcache::readLotPart(*bundle, cp.section, chunk)) continue;
+                                const std::size_t slot = static_cast<std::size_t>(cp.part);
+                                const bool beacon = static_cast<PartId>(cp.part) == PartId::Beacon || static_cast<PartId>(cp.part) == PartId::BeaconGlow ||
+                                                    static_cast<PartId>(cp.part) == PartId::BeaconHaze;
+                                if (beacon) {
+                                    for (RenderMesh& sub : chunkMeshByCell(chunk, kBeaconChunk)) {
+                                        prepareChunk(slot, sub);
+                                        out->chunks.push_back({slot, std::move(sub)});
+                                    }
+                                    continue;
+                                }
+                                prepareChunk(slot, chunk);
+                                out->chunks.push_back({slot, std::move(chunk)});
+                            }
+                            return out;
+                        };
+                        it.commit = [commitChunk, ents, minD, maxD, scale](std::shared_ptr<void> payload) -> std::size_t {
+                            auto* p = static_cast<Prepared*>(payload.get());
+                            if (!p) return 0;
+                            std::size_t bytes = 0;
+                            for (auto& [slot, chunk] : p->chunks) {
+                                bytes += chunk.vertices.size() * 56 + chunk.indices.size() * 4;
+                                const Entity e = commitChunk(slot, chunk, minD, maxD, scale);
+                                if (e.valid()) ents->push_back(e);
+                            }
+                            return bytes;
+                        };
+                        World* wp = &world;
+                        AssetManager* ap = &assets;
+                        it.unload = [ents, wp, ap]() {
+                            for (Entity e : *ents) {
+                                if (!wp->alive(e)) continue;
+                                if (const Renderable* r = wp->get<Renderable>(e)) ap->releaseMesh(r->mesh);
+                                wp->destroy(e);
+                            }
+                            ents->clear();
+                        };
+                        residency->add(std::move(it));
+                    }
+                    // The first frame is complete: load what the spawn point sees, unbudgeted.
+                    Vec3 spawnAt(0, 0, 0);
+                    {
+                        engine::Vec2 sp;
+                        if (authoredSpawnXZ(root, sp)) spawnAt = Vec3(sp.x, entityGround ? entityGround(sp.x, sp.y) : 0.0, sp.y);
+                    }
+                    residency->update(spawnAt, 0.0);
+                    std::size_t resident = 0, bytes = 0;
+                    for (const auto& kv : residency->stats()) { resident += kv.second.resident; bytes += kv.second.bytes; }
+                    LOG_INFO << "[lots] " << grown.cellParts.size() << " cell parts in " << residency->size()
+                             << " streamed cells; " << resident << " resident at the spawn (" << bytes / 1048576 << " MB)";
+                    Entity re = world.create();
+                    world.add<engine::ResidencyService>(re, engine::ResidencyService{residency});
+                } else if (!grown.cellParts.empty() && grown.bundle) {
                     // Parts already split per render cell in the bundle (ADR-0084 B): one section → one
                     // Renderable, unpacked one chunk at a time; nothing is chunked at load.
                     std::size_t spawned = 0;
