@@ -55,7 +55,9 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
         return pts;
     };
 
-    // Candidates: every street crossing, squarest first — a ramp meeting its street at 20
+    // Streets closed by a diamond already built, and streets a built diamond stands on or lands on.
+    std::vector<char> closed(streets.size(), 0), used(streets.size(), 0);
+    // Candidates: every street crossing — a ramp meeting its street at 20
     // degrees is a merge, not a junction.
     struct Cand { double s; Vec2 x; std::size_t street; double angle; };
     std::vector<Cand> cands;
@@ -88,7 +90,7 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
         double best = 1e300;
         for (std::size_t ci = 0; ci < streets.size(); ++ci) {
             const RampStreet& c = streets[ci];
-            if (c.xy.size() < 2) continue;
+            if (c.xy.size() < 2 || closed[ci]) continue;
             const std::vector<double> ss = stations(c.xy);
             for (const Vec2& x : crossings(band, c.xy)) {
                 if (std::fabs(dot(tangentAt(c.xy, project(c.xy, ss, x).segment), t)) > 0.85) continue;   // parallel: not a cross street
@@ -155,25 +157,52 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
     // (Except in its landing: the stretch where it runs along or into the street it lands on it is at
     // street level on purpose, and passing the side streets that meet that street is a merge, not a
     // conflict — a town's grid met its main street there and refused its diamond.)
-    auto conflicts = [&](const std::vector<Vec2>& sp, std::size_t landing, std::size_t landing2, double zStart, double zEnd, bool landsAtEnd) {
+    // Its height is the builder's: level across the arrival, a smoothstep over the free run — near the
+    // gore it is still at deck height, and a straight line from deck to street put it a metre or
+    // more too low there, refusing a ramp for bridging a street it clears.
+    std::vector<std::size_t> closing;   // the closable streets the candidate under test would close
+    auto conflicts = [&](const std::vector<Vec2>& sp, std::size_t landing, std::size_t landing2, double zStart, double zEnd, bool landsAtEnd, double arrive) {
         const std::vector<double> ss = stations(sp);
         const double land = o.along + o.landing + 10.0;
         for (std::size_t ci = 0; ci < streets.size(); ++ci) {
-            if (ci == landing || ci == landing2 || streets[ci].xy.size() < 2) continue;
+            if (ci == landing || ci == landing2 || streets[ci].xy.size() < 2 || closed[ci]) continue;
             for (const Vec2& x : crossings(sp, streets[ci].xy)) {
                 const double sx = project(sp, ss, x).station;
                 if (landsAtEnd ? sx > ss.back() - land : sx < land) continue;
-                const double u = sx / ss.back();
-                const double z = zStart + (zEnd - zStart) * u;   // the ramp's height there, roughly
-                if (z - groundAt(x) < o.clearance - 0.2) return true;
+                const double run = std::max(ss.back() - arrive, 1.0);
+                const double z = zStart + (zEnd - zStart) * smoothStep(landsAtEnd ? sx / run : (sx - arrive) / run);
+                if (z - groundAt(x) < o.clearance - 0.2) {
+                    if (streets[ci].closable && !used[ci]) { closing.push_back(ci); continue; }
+                    if (std::getenv("RT_DIAMOND_WHY")) std::fprintf(stderr, "    spine meets %s at %.0f of %.0f m, %.1f m up\n", streets[ci].id.c_str(), sx, ss.back(), z - groundAt(x));
+                    return true;
+                }
             }
         }
         return false;
     };
 
+    // Which crossing next: the one FARTHEST from the diamonds already built and from the route's
+    // ends and keep-outs (squareness weighing in), so however many fit, they spread evenly along
+    // the route instead of crowding wherever the squarest crossings happen to be. Every refusal
+    // is final — it depends only on what is already built, which only grows — so each candidate
+    // is tried once.
     std::vector<double> taken;
-    for (const Cand& cd : cands) {
-        if (out.built >= o.maxDiamonds) break;
+    std::vector<char> tried(cands.size(), 0);
+    auto openness = [&](const Cand& cd) {
+        double d = std::min(cd.s, routeLen - cd.s);
+        for (double t : taken) d = std::min(d, std::fabs(t - cd.s));
+        for (const auto& k : o.keepOut) d = std::min(d, cd.s < k.first ? k.first - cd.s : cd.s > k.second ? cd.s - k.second : 0.0);
+        return d * std::sin(cd.angle * M_PI / 180.0);
+    };
+    while (out.built < o.maxDiamonds) {
+        std::size_t pick = cands.size();
+        for (std::size_t i = 0; i < cands.size(); ++i)
+            if (!tried[i] && (pick == cands.size() || openness(cands[i]) > openness(cands[pick]))) pick = i;
+        if (pick == cands.size()) break;
+        tried[pick] = 1;
+        const Cand& cd = cands[pick];
+        if (closed[cd.street]) continue;   // a diamond already built closed this street
+        closing.clear();
         if (cd.angle < 32.0) { ++out.rejectedOblique; out.squarestRejected = std::max(out.squarestRejected, cd.angle); continue; }
         bool near = false;
         for (double t : taken) if (std::fabs(t - cd.s) < o.spacing) near = true;
@@ -221,23 +250,31 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
             for (const auto& k : o.keepOut) if (lo < k.second && hi > k.first) room = false;
             spines.push_back(spine(p.sGore, p.sTerm, p.side, p.term, p.off, p.cross ? rBand : p.beside));
             const double zGore = deckZ(p.sGore), zTerm = groundAt(p.term);
-            if (conflicts(spines.back(), cd.street, p.street, p.off ? zGore : zTerm, p.off ? zTerm : zGore, p.off)) clear = false;
+            if (conflicts(spines.back(), cd.street, p.street, p.off ? zGore : zTerm, p.off ? zTerm : zGore, p.off, arrive)) clear = false;
             // ...nor may its decel or aux lane, up on the freeway, pass over a street crossing under
             // it: that lane is one with the ramp, which comes down to the ground, and a lane both
             // stacked over a street and level with the streets it meets tore the deck (the SW town).
             const double l0 = std::min(p.sGore, p.sGore + away * lead), l1 = std::max(p.sGore, p.sGore + away * lead);
             for (std::size_t ci = 0; ci < streets.size() && clear; ++ci) {
-                if (ci == cd.street || ci == p.street || streets[ci].xy.size() < 2) continue;
+                if (ci == cd.street || ci == p.street || streets[ci].xy.size() < 2 || closed[ci]) continue;
                 for (const Vec2& x : crossings(route, streets[ci].xy)) {
                     const double sx = project(route, cs, x).station;
-                    if (sx > l0 - 10 && sx < l1 + 10) { clear = false; break; }
+                    if (sx > l0 - 10 && sx < l1 + 10) {
+                        if (streets[ci].closable && !used[ci]) { closing.push_back(ci); break; }
+                        if (std::getenv("RT_DIAMOND_WHY")) std::fprintf(stderr, "    lead lane over %s at s=%.0f\n", streets[ci].id.c_str(), sx);
+                        clear = false; break;
+                    }
                 }
             }
         }
+        for (std::size_t ci : closing)
+            if (ci == cd.street || ci == ps[0].street || ci == ps[1].street || ci == ps[2].street || ci == ps[3].street) clear = false;
         static const bool why = std::getenv("RT_DIAMOND_WHY") != nullptr;
         if (why) std::fprintf(stderr, "[diamond] %s crossing at s=%.0f (%.0f deg, street %s): side a %s, side b %s -> %s\n", o.idPrefix.c_str(), cd.s, cd.angle,
                               streets[cd.street].id.c_str(), crossA ? "four-way" : "frontage?", crossB ? "four-way" : "frontage?",
                               !found ? "no terminal" : !room ? "no room" : !clear ? "over a street" : "built");
+        if (why && !room) { std::fprintf(stderr, "    route %.0f m, keep-outs", routeLen); for (const auto& k : o.keepOut) std::fprintf(stderr, " [%.0f, %.0f]", k.first, k.second); std::fprintf(stderr, "\n"); }
+        if (why) for (const Plan& p : ps) std::fprintf(stderr, "    %s: term s=%.0f gore s=%.0f cross=%d beside=%.0f deck %.1f over ground %.1f (band %.0f)\n", p.name, p.sTerm, p.sGore, p.cross, p.beside, deckZ(p.sGore), groundAt(p.term), rBand);
         if (!found) { ++out.rejectedTerminal; continue; }
         if (!room) { ++out.rejectedRoom; continue; }
         if (!clear) { ++out.rejectedConflict; continue; }
@@ -255,6 +292,10 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
             out.ramps.push_back(e);
         }
         taken.push_back(cd.s);
+        used[cd.street] = 1;
+        for (const Plan& p : ps) used[p.street] = 1;
+        for (std::size_t ci : closing)
+            if (!closed[ci]) { closed[ci] = 1; out.closed.push_back(streets[ci].id); }
         ++out.built;
     }
     return out;
@@ -280,6 +321,8 @@ struct Frame {
 };
 
 }  // namespace
+
+double systemReach(const SystemOptions& o) { return o.linkReach + std::max(o.decel + o.taperOff, o.aux + o.taperOn); }
 
 SystemResult systemInterchange(const SystemRoad& through, const SystemRoad& stem, double outward, const SystemOptions& o) {
     SystemResult out;
@@ -384,7 +427,7 @@ SystemResult systemInterchange(const SystemRoad& through, const SystemRoad& stem
     link(outR, "outR");   // round the ring the far way -> back out
     link(outL, "outL");   // in from outside -> round the ring the near way
     if (!loop(inR, "inR") || !loop(inL, "inL")) { out.ramps.clear(); return out; }   // left turns: round the ring -> back out, in -> round the ring
-    out.reach = o.linkReach + std::max(o.decel + o.taperOff, o.aux + o.taperOn);
+    out.reach = systemReach(o);
     out.built = true;
     return out;
 }

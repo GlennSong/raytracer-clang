@@ -130,11 +130,12 @@ std::vector<std::vector<Vec2>> ringChains(const CityPlan& plan) {
         if (crossingWithRing(sp, ring, s, k)) at.push_back(k);
     }
     std::sort(at.begin(), at.end());
+    const std::size_t real = at.size();
     if (at.empty()) at = {0, n / 2};
     if (at.size() == 1) at.push_back((at[0] + n / 2) % n);
     std::sort(at.begin(), at.end());
-    // Where the ring crosses a street: a SEAM goes on one of these. A diamond cannot span a seam
-    // (its ramps anchor to one chain), so a seam midway between two arterials cost both their
+    // Without two expressways, a SEAM goes midway, on a street crossing there. A diamond cannot span a
+    // seam (its ramps anchor to one chain), so a seam midway between two arterials cost both their
     // diamonds; on an arterial it costs that one, and the builder carries a deck joint over a street.
     std::vector<char> crossed(n, 0);
     for (const RoadEdge& e : plan.streets.edges) {
@@ -148,7 +149,15 @@ std::vector<std::vector<Vec2>> ringChains(const CityPlan& plan) {
         }
     }
     std::vector<std::size_t> seams;
-    for (std::size_t i = 0; i < at.size(); ++i) {
+    if (real >= 2) {
+        // INSIDE the system interchanges' own stretch: just past the end of its ramps' lanes on from
+        // each expressway's crossing, where no diamond could stand anyway. Midway between them the
+        // seams took four of the ring's ten arterial crossings, and every diamond left was on one side.
+        const std::vector<double> st = roads::lanes::stations(ring);
+        const double per = st.back() / static_cast<double>(n - 1);   // ~20 m a vertex
+        const std::size_t step = static_cast<std::size_t>(std::ceil((roads::lanes::systemReach(systemOptions()) + per) / per));
+        for (std::size_t a : at) seams.push_back((a + step) % n);
+    } else for (std::size_t i = 0; i < at.size(); ++i) {
         const std::size_t a = at[i], b = i + 1 < at.size() ? at[i + 1] : at[0] + n;
         const std::size_t mid = (a + b) / 2, reach = std::min<std::size_t>((b - a) / 4, 15);   // vertices are ~20 m apart
         std::size_t seam = mid % n;
@@ -285,7 +294,9 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         {"arterial", {{"w", b.arterialWidth / 6}, {"fwd", 3}, {"back", 3}, {"sidewalk", b.sidewalk}, {"g_max", 0.08}, {"rank", 2}, {"thick", 0.6}, {"window", 120}}},
         {"boulevard", {{"w", b.arterialWidth / 6}, {"fwd", 3}, {"back", 0}, {"sidewalk", b.sidewalk}, {"g_max", 0.08}, {"rank", 2}, {"thick", 0.6}, {"window", 120}}},
         {"freeway", {{"w", b.freewayWidth / 8}, {"fwd", 4}, {"back", 0}, {"shoulder", 2.5}, {"sidewalk", 0.0}, {"g_max", 0.06}, {"rank", 3}, {"thick", 1.2}, {"window", 200.0}}},
-        {"ramp", {{"w", 4.5}, {"fwd", 1}, {"back", 0}, {"shoulder", 2.5}, {"g_max", 0.08}, {"rank", 0}, {"thick", 1.0}, {"window", 40}}},
+        // 9%: an urban ramp's grade, and with 8% the diamonds on the hilly ring ran longer than the
+        // 535 m between its arterials and only two fit, both on one side
+        {"ramp", {{"w", 4.5}, {"fwd", 1}, {"back", 0}, {"shoulder", 2.5}, {"g_max", 0.09}, {"rank", 0}, {"thick", 1.0}, {"window", 40}}},
     };
     scene["rules"] = {{"closing", 3.0}};
 
@@ -328,9 +339,17 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         }
     }
     std::vector<roads::lanes::RampStreet> rampStreets;
+    // A short collector or local passing under the ring — frontage road to frontage road, nothing
+    // but a crossing — is one a ring diamond may close when its ramp would pass over it too low.
+    auto closable = [&](RoadClass k, const std::vector<Vec2>& pts) {
+        if (k != RoadClass::Collector && k != RoadClass::Local) return false;
+        if (roads::lanes::stations(pts).back() > 2 * (fs.edgeReach + 60.0)) return false;
+        for (const auto& c : chains) if (!roads::lanes::crossings(c, pts).empty()) return true;
+        return false;
+    };
     auto street = [&](const std::string& sid, RoadClass k, const std::vector<Vec2>& pts) {
         edges.push_back({{"id", sid}, {"class", className(k)}, {"path", {{"points", pointsJson(pts)}}}});
-        rampStreets.push_back({sid, pts});
+        rampStreets.push_back({sid, pts, closable(k, pts)});
     };
     auto piece = [](const std::vector<Vec2>& pts, double s0, double s1) {
         const std::vector<double> st = roads::lanes::stations(pts);
@@ -560,13 +579,20 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             dop.spacing = opt.interchangeSpacing;
             dop.clearance = opt.clearance;
             dop.rampHalf = 4.5 / 2 + 2.5;   // the ramp class below: one 4.5 m lane, 2.5 m shoulders
-            dop.gRamp = 0.08;               // and its g_max
+            dop.gRamp = 0.09;               // and its g_max
+            // a city ring's lanes on and off: 70 m + 50 m taper to leave, 90 m + 60 m to join
+            dop.decel = 70; dop.taperOff = 50; dop.aux = 90; dop.taperOn = 60;
             dop.ground = ground;            // the climb is to the ground the ramp lands on
             dop.deck = deckOf(chains[k], floorsOf[k]);   // and from the deck as built
             for (const SystemAt& at : systems)
                 if (at.chain == k && at.r.built) dop.keepOut.push_back({at.r.sThrough - at.r.reach - 60.0, at.r.sThrough + at.r.reach + 60.0});
             const roads::lanes::DiamondResult dr = roads::lanes::diamondRamps(chains[k], rampStreets, dop);
             for (const json& r : dr.ramps) edges.push_back(r);
+            for (const std::string& id : dr.closed) {
+                edges.erase(std::remove_if(edges.begin(), edges.end(), [&](const json& e) { return e["id"] == id; }), edges.end());
+                for (roads::lanes::RampStreet& rs : rampStreets) if (rs.id == id) rs.xy.clear();
+            }
+            if (std::getenv("RT_PLAN_WHY") && !dr.closed.empty()) std::printf("[plan] %s: %zu streets under the ring closed for ramps\n", dop.aId.c_str(), dr.closed.size());
             if (std::getenv("RT_PLAN_WHY"))
                 std::printf("[plan] %s: %d diamonds of %d crossings (oblique %d, spacing %d, no terminal %d, no room %d, over a street %d)\n",
                             dop.aId.c_str(), dr.built, dr.candidates, dr.rejectedOblique, dr.rejectedSpacing, dr.rejectedTerminal,
@@ -586,7 +612,8 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             dop.spacing = opt.interchangeSpacing;
             dop.clearance = opt.clearance;
             dop.rampHalf = 4.5 / 2 + 2.5;
-            dop.gRamp = 0.08;
+            dop.gRamp = 0.09;
+            dop.decel = 70; dop.taperOff = 50; dop.aux = 90; dop.taperOn = 60;
             dop.ground = ground;
             dop.deck = deckOf(plan.loop, floorsOf[loopId]);
             const roads::lanes::DiamondResult dr = roads::lanes::diamondRamps(plan.loop, rampStreets, dop);

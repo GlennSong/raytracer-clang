@@ -49,9 +49,9 @@ struct FreewaySection {
 FreewaySection freewaySection(const Brief& b, Real medianGap = SceneOptions{}.medianGap);
 roads::lanes::SystemOptions systemOptions();
 
-// The ring as open chains — an edge cannot close on itself — split midway between the places
-// an expressway crosses it, on a street crossing near there (a diamond cannot span a seam), so
-// each expressway crossing sits in the middle of one chain.
+// The ring as open chains — an edge cannot close on itself — split 400 m past each place an
+// expressway crosses it, inside that system interchange's own stretch, where no diamond could
+// stand anyway (a diamond cannot span a seam).
 std::vector<std::vector<Vec2>> ringChains(const CityPlan& plan);
 // An expressway's FREEWAY: from the map edge to where it ends just inside the ring, past its
 // interchange's loops. Inside that it is a one-way boulevard pair to midtown's boulevard.

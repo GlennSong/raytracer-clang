@@ -39,6 +39,10 @@ namespace roads::lanes {
 struct RampStreet {
     std::string id;
     std::vector<Vec2> xy;
+    // A short minor street passing under the freeway that nothing else depends on: a diamond whose
+    // ramp or lead lane would pass over it too low may CLOSE it instead of being refused
+    // (DiamondResult::closed), its two ends becoming Ts on the roads either side.
+    bool closable = false;
 };
 
 struct DiamondOptions {
@@ -80,6 +84,7 @@ struct DiamondResult {
     int built = 0;
     int candidates = 0, rejectedOblique = 0, rejectedSpacing = 0, rejectedTerminal = 0, rejectedRoom = 0, rejectedConflict = 0;
     double squarestRejected = 0;
+    std::vector<std::string> closed;   // closable streets the built diamonds closed: drop their edges
 };
 
 // `route` is the freeway's centreline (resampled); `streets` are what its ramps may land on.
@@ -118,6 +123,10 @@ struct SystemOptions {
     double loopLane = 60;          // the most any loop lane (decel/aux + taper) may be
     double decel = 80, taperOff = 72, aux = 110, taperOn = 90, approach = 60;
 };
+
+// How far along the through road from the crossing a system interchange's lanes reach: a corner
+// connector's gore, plus the longer of its decel and aux lanes with their tapers.
+double systemReach(const SystemOptions& o);
 
 struct SystemResult {
     std::vector<nlohmann::json> ramps;

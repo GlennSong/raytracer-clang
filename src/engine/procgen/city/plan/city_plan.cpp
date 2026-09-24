@@ -774,6 +774,31 @@ CityPlan generatePlan(const Brief& B) {
         roads.push_back(sp);
     }
     std::sort(spokeTheta.begin(), spokeTheta.end());
+    // STREETS UNDER THE RING. Only the spokes used to cross the freeway's corridor, ten crossings
+    // round a 6.4 km ring; with the system interchanges taking the stretch round each expressway,
+    // the diamonds that fitted all landed on one side (Glenn: "on-ramps on one side but not the
+    // other"). A collector now crosses the corridor midway between each pair of spokes, frontage
+    // road to frontage road, passing under the ring — twice the places a diamond can stand, evenly
+    // round it. Where one meets a system interchange, its keep-out cuts it, like any street there.
+    // It runs on, like a spoke, to the ring each side of the corridor: a ramp lands on it at a
+    // four-way out past the band, and a street that stopped at the frontage road left no room
+    // for one — every diamond on the new crossings fell back to the frontage road and failed.
+    std::vector<Real> underTheta;
+    if (haveFreeway && spokeTheta.size() >= 2) {
+        std::size_t ci = 0;
+        while (ci < bandEdges.size() && !bandEdges[ci].corridorInner) ++ci;
+        for (std::size_t sI = 0; sI < spokeTheta.size() && ci < bandEdges.size(); ++sI) {
+            const Real a = spokeTheta[sI], b = spokeTheta[(sI + 1) % spokeTheta.size()] + (sI + 1 == spokeTheta.size() ? 2 * kPi : 0);
+            const Real th = 0.5 * (a + b);
+            Polyline c; c.klass = RoadClass::Collector; c.width = B.collectorWidth;
+            const Real r0 = (ci > 0 ? bandEdges[ci - 1].r(th) : freewayR(th) - corridorHalf) - 8;
+            const Real r1 = (ci + 2 < bandEdges.size() ? bandEdges[ci + 2].r(th) : freewayR(th) + corridorHalf + 120) + 8;
+            const int n = std::max(2, static_cast<int>((r1 - r0) / 15.0));
+            for (int i = 0; i <= n; ++i) c.pts.push_back(warped(B.center + Vec2(std::cos(th), std::sin(th)) * (r0 + (r1 - r0) * i / n)));
+            roads.push_back(c);
+            underTheta.push_back(th);
+        }
+    }
     // Wedge locals: short radial streets across each band, staggered band to band.
     for (std::size_t bi = 0; bi + 1 < bandEdges.size(); ++bi) {
         if (bandEdges[bi].corridorInner) continue;   // the freeway corridor: no local crosses it
@@ -784,10 +809,12 @@ CityPlan generatePlan(const Brief& B) {
         const Real stagger = (bi % 2) * 0.5 * dTheta;
         for (Real th = stagger; th < 2 * kPi; th += dTheta) {
             bool nearSpoke = false;
-            for (Real st : spokeTheta) {
-                Real d = std::fabs(std::remainder(th - st, 2 * kPi));
-                if (d * rMid < 0.45 * B.wedgeStreetSpacing) nearSpoke = true;
-            }
+            const bool besideCorridor = bandEdges[bi + 1].corridorInner || (bi > 0 && bandEdges[bi - 1].corridorInner);
+            for (const std::vector<Real>* at : {&spokeTheta, besideCorridor ? &underTheta : &spokeTheta})
+                for (Real st : *at) {
+                    Real d = std::fabs(std::remainder(th - st, 2 * kPi));
+                    if (d * rMid < 0.45 * B.wedgeStreetSpacing) nearSpoke = true;
+                }
             if (nearSpoke) continue;
             Polyline ls; ls.klass = RoadClass::Local; ls.width = B.localWidth;
             const Real r0 = inner(th) - 8.0, r1 = outer(th) + 8.0;
@@ -1360,14 +1387,21 @@ CityPlan generatePlan(const Brief& B) {
     pruneStubs(plan.streets, 45.0);
     {
         // thin and tiny blocks, counted over the whole map, split: the city, and the places out past it
-        const Real minArea = 3500, minRadius = 22;
+        // Both from the street and the lot, not tuned: 2A/P is a strip's whole width, so a strip
+        // narrower than a local street's pavement (carriageway + a sidewalk each side, measured
+        // centreline to centreline) holds nothing; and a block whose land, once that pavement is
+        // taken off, is less than three stock lots (ParcelParams: 16 x 28 m) is too small to lot.
+        const ParcelParams lot;
+        const Real pavement = B.localWidth + 2 * B.sidewalk;
+        const Real minRadius = pavement;
+        const Real minArea = std::pow(pavement + std::sqrt(3 * lot.frontWidth * lot.lotDepth), 2);
         auto inCity = [&](const Vec2& p) { return (p - B.center).length() < outerR + 60; };
         int removed = 0;
         const int city = simplifyThinBlocks(plan.streets, minArea, minRadius, inCity, true, nullptr);
         const int out = simplifyThinBlocks(plan.streets, minArea, minRadius, [&](const Vec2& p) { return !inCity(p); }, !B.world.value("simplifyBlocks", true), &removed);
         if (std::getenv("RT_PLAN_WHY"))
-            std::printf("[plan] thin or tiny blocks (< %.0f m2, or < %.0f m across the middle): %d in the city (left), %d beyond it (%d streets removed)\n",
-                        minArea, 2 * minRadius, city, out, removed);
+            std::printf("[plan] thin or tiny blocks (< %.0f m2, or 2A/P < %.0f m): %d in the city (left), %d beyond it (%d streets removed)\n",
+                        minArea, minRadius, city, out, removed);
     }
     if (!keepOut.empty())
         pruneStubsNear(plan.streets, [&](const Vec2& p) {
