@@ -82,6 +82,7 @@ add_library(engine_core STATIC
     src/engine/procgen/terrain.cpp
     src/engine/procgen/terrain_horizon.cpp
     src/engine/procgen/terrain_lod.cpp
+    src/engine/procgen/height_pyramid.cpp
     src/engine/procgen/lsystem.cpp
     src/engine/procgen/skeleton.cpp
     src/engine/procgen/tree.cpp
@@ -706,6 +707,7 @@ add_executable(run_tests
     tests/test_curb_return.cpp
     tests/test_animation_path.cpp
     tests/test_terrain_lod.cpp
+    tests/test_height_pyramid.cpp
     tests/test_terrain_async.cpp
     tests/test_nav_graph.cpp
     tests/test_pathfind.cpp
