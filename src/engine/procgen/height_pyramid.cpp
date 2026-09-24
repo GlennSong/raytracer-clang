@@ -1,10 +1,12 @@
 #include "height_pyramid.h"
 #include "../../job_system.h"
+#include "../bundle/bundle.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <filesystem>
 #include <mutex>
 
 namespace engine {
@@ -198,6 +200,58 @@ bool decodeTile(const uint8_t* data, std::size_t size, HeightTile& out) {
 
 std::string tileSectionName(const TileKey& k, const std::string& prefix) {
     return prefix + "/L" + std::to_string(k.level) + "/" + std::to_string(k.tx) + "_" + std::to_string(k.tz);
+}
+
+bool writePyramidBundle(const Pyramid& p, uint64_t key, const std::string& path, std::string* err) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (fs::path(path).has_parent_path()) fs::create_directories(fs::path(path).parent_path(), ec);
+    const std::string tmp = path + ".tmp";
+    bundle::BundleWriter w;
+    if (!w.openFile(tmp, err)) return false;
+    nlohmann::json spec = {{"originX", p.spec.originX}, {"originZ", p.spec.originZ}, {"cell0", p.spec.cell0},
+                           {"levels", p.spec.levels}, {"tolerance", p.spec.tolerance},
+                           {"key", bundle::hex16(key)}, {"codec", kTileCodecVersion}, {"tiles", p.tiles.size()}};
+    w.addJson("terrain/spec", spec);
+    // Sections in a fixed order (level, then row, then column): the same bytes every time.
+    std::vector<const HeightTile*> order;
+    for (const auto& kv : p.tiles) order.push_back(&kv.second);
+    std::sort(order.begin(), order.end(), [](const HeightTile* a, const HeightTile* b) {
+        if (a->key.level != b->key.level) return a->key.level > b->key.level;
+        return a->key.tz != b->key.tz ? a->key.tz < b->key.tz : a->key.tx < b->key.tx;
+    });
+    for (const HeightTile* t : order) w.add(tileSectionName(t->key), encodeTile(*t));
+    nlohmann::json manifest = {{"kind", "rt-height-pyramid"}, {"key", bundle::hex16(key)}};
+    if (!w.finish(manifest, err)) { fs::remove(tmp, ec); return false; }
+    fs::rename(tmp, path, ec);
+    if (ec) { if (err) *err = "cannot move " + tmp + " into place: " + ec.message(); fs::remove(tmp, ec); return false; }
+    return true;
+}
+
+bool readPyramidBundle(const std::string& path, uint64_t key, Pyramid& out, std::string* err) {
+    std::unique_ptr<bundle::Bundle> b = bundle::Bundle::open(path, err);
+    if (!b) return false;
+    const nlohmann::json spec = b->json("terrain/spec");
+    if (spec.is_null() || spec.value("key", std::string()) != bundle::hex16(key) ||
+        spec.value("codec", 0u) != kTileCodecVersion) {
+        if (err) *err = "built for another key or codec";
+        return false;
+    }
+    Pyramid p;
+    p.spec.originX = spec.value("originX", 0.0);
+    p.spec.originZ = spec.value("originZ", 0.0);
+    p.spec.cell0 = spec.value("cell0", 1.0);
+    p.spec.levels = spec.value("levels", 1);
+    p.spec.tolerance = spec.value("tolerance", 0.0);
+    for (const std::string& name : b->sections("terrain/L")) {
+        const bundle::Bundle::View v = b->section(name);
+        HeightTile t;
+        if (!decodeTile(v.data, v.size, t)) { if (err) *err = "bad tile section " + name; return false; }
+        p.tiles.emplace(t.key, std::move(t));
+    }
+    if (p.tiles.size() != spec.value("tiles", std::size_t(0))) { if (err) *err = "tile count mismatch"; return false; }
+    out = std::move(p);
+    return true;
 }
 
 }  // namespace pyramid

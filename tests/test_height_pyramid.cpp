@@ -78,3 +78,21 @@ TEST_CASE(pyramid_tile_codec_round_trips) {
     CHECK(!decodeTile(bytes.data(), bytes.size() - 1, back));   // a truncated section is refused
     CHECK(tileSectionName({3, 4, -2}) == "terrain/L3/4_-2");
 }
+
+TEST_CASE(pyramid_bundle_round_trips_and_refuses_another_key) {
+    const PyramidSpec s = PyramidSpec::covering(0, 0, 600, 600, 1.0, 0.02);
+    const Pyramid p = buildPyramid(s, [](double x, double z, double) { return std::sin(x * 0.05) * 3 + z * 0.01; });
+    const std::string path = "/tmp/rt_test_pyramid.bundle";
+    std::string err;
+    CHECK(writePyramidBundle(p, 0x1234, path, &err));
+    Pyramid back;
+    CHECK(readPyramidBundle(path, 0x1234, back, &err));
+    CHECK(back.tiles.size() == p.tiles.size());
+    CHECK(back.spec.levels == p.spec.levels && back.spec.cell0 == p.spec.cell0);
+    double worst = 0;
+    for (double z = 5; z < 600; z += 37) for (double x = 3; x < 600; x += 41) worst = std::max(worst, std::fabs(back.height(x, z) - p.height(x, z)));
+    CHECK(worst < 1e-9);
+    Pyramid other;
+    CHECK(!readPyramidBundle(path, 0x9999, other, &err));   // another key: a miss, not a wrong ground
+    std::remove(path.c_str());
+}

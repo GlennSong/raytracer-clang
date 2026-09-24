@@ -1449,7 +1449,28 @@ static void loadChunkedTerrain(const TerrainParams& p, const Noise& noise,
 // block's "cdlod" key (an object of overrides, or `true` for defaults). The
 // TerrainLodSystem also maintains a moving window of near-node colliders (ADR-0036)
 // so the player walks on the surface.
-static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world) {
+// THE BAKED GROUND'S CONTENT KEY (ADR-0095): everything the field reads -- the whole level JSON
+// (terrain, roads, grading, earthwork all come from it), the lane city's bundle (the carved grid),
+// every flatten the loader assembled, and a code tag bumped when the height code changes.
+static constexpr const char* kBakedGroundCodeTag = "2026-09-24.1";
+static uint64_t bakedGroundKey(const json& root, const TerrainParams& p) {
+    using namespace engine::bundle;
+    uint64_t h = fnv1aStr(std::string("rt-baked-ground/") + kBakedGroundCodeTag);
+    h = fnv1aStr(root.dump(), h);
+#ifdef RT_ROADS_LANES
+    if (g_lanes.bundle) h = fnv1aStr(g_lanes.bundle->manifest().value("key", std::string()), h);
+#endif
+    for (const TerrainFlatten& f : p.flatten) {
+        for (const Vec3& v : f.polygon) { h = fnv1a(&v.x, sizeof(v.x), h); h = fnv1a(&v.z, sizeof(v.z), h); }
+        const double nums[] = {f.c, f.dx, f.dz, f.falloff, f.cutBatter, f.fillBatter};
+        h = fnv1a(nums, sizeof(nums), h);
+        const int ints[] = {static_cast<int>(f.falloffMode), f.priority};
+        h = fnv1a(ints, sizeof(ints), h);
+    }
+    return h;
+}
+
+static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world, uint64_t groundKey) {
     TerrainLodConfig cfg;
     cfg.params = p;
     cfg.seed = t.value("seed", 0u);
@@ -1496,11 +1517,28 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
     if (c.is_object() && c.value("baked", false) && !(bakedEnv && bakedEnv[0] == '0')) {
         const auto t0 = std::chrono::steady_clock::now();
         const pyramid::PyramidSpec spec = bakedPyramidSpec(cfg.worldHalf);
-        auto noise = std::make_shared<Noise>(cfg.seed);
-        const TerrainParams& tp = cfg.params;
-        JobSystem jobs;
-        auto pyr = std::make_shared<pyramid::Pyramid>(pyramid::buildPyramid(
-            spec, [&](double x, double z, double step) { return lodVertexHeight(tp, *noise, x, z, step); }, &jobs));
+        // Cached by content (cache/terrain, like the erosion cache): a hit maps the tiles back
+        // instead of sampling the field ~70 M times. RT_NOCACHE=1 always builds.
+        uint64_t key = groundKey;
+        {
+            const double sp[] = {spec.originX, spec.originZ, spec.cell0, spec.tolerance, static_cast<double>(spec.levels)};
+            key = engine::bundle::fnv1a(sp, sizeof(sp), key);
+        }
+        const char* nocacheEnv = std::getenv("RT_NOCACHE");
+        const bool useCache = groundKey != 0 && !(nocacheEnv && nocacheEnv[0] == '1');
+        const std::string cachePath = "cache/terrain/" + engine::bundle::hex16(key) + ".pyramid";
+        auto pyr = std::make_shared<pyramid::Pyramid>();
+        std::string cacheErr;
+        const bool hit = useCache && std::filesystem::exists(cachePath) && pyramid::readPyramidBundle(cachePath, key, *pyr, &cacheErr);
+        if (!hit) {
+            auto noise = std::make_shared<Noise>(cfg.seed);
+            const TerrainParams& tp = cfg.params;
+            JobSystem jobs;
+            *pyr = pyramid::buildPyramid(
+                spec, [&](double x, double z, double step) { return lodVertexHeight(tp, *noise, x, z, step); }, &jobs);
+            if (useCache && !pyramid::writePyramidBundle(*pyr, key, cachePath, &cacheErr))
+                LOG_WARN << "[terrain] baked ground not cached: " << cacheErr;
+        }
         const CdlodGeometry g = bakedCdlodGeometry(cfg.worldHalf);
         cfg.worldHalf = static_cast<float>(g.worldHalf);
         cfg.numLods = g.numLods;
@@ -1511,7 +1549,9 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
         std::string lv;
         for (int l = 0; l < spec.levels; ++l) lv += " L" + std::to_string(l) + ":" + std::to_string(perLevel[l]);
         LOG_INFO << "[terrain] baked ground: " << pyr->tiles.size() << " tiles (" << pyr->sampleBytes() / 1048576
-                 << " MB),"<< lv << "; " << spec.cell0 << " m finest, " << spec.extent() << " m square, built in "
+                 << " MB),"<< lv << "; " << spec.cell0 << " m finest, " << spec.extent() << " m square, "
+                 << (hit ? "read from " : (useCache ? "built and cached as " : "built (no cache) "))
+                 << (useCache ? cachePath : std::string()) << " in "
                  << std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() << " s";
     }
     Entity e = world.create();
@@ -1519,12 +1559,12 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
 }
 
 static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& t,
-                        World& world, AssetManager& assets) {
+                        World& world, AssetManager& assets, uint64_t groundKey = 0) {
     bool wantCdlod = t.contains("cdlod") &&
                      (t["cdlod"].is_object() ||
                       (t["cdlod"].is_boolean() && t["cdlod"].get<bool>()));
     if (wantCdlod) {
-        loadCdlodTerrain(p, t, world);
+        loadCdlodTerrain(p, t, world, groundKey);
         return;
     }
     if (t.contains("chunks") && t["chunks"].get<int>() > 0) {
@@ -3310,7 +3350,7 @@ bool LevelLoader::load(const std::string& path,
         // O(footprints) scan there dominates the build. Shared, so the carved
         // copies below reuse it.
         rebuildFlattenIndex(terrainParams);
-        loadTerrain(terrainParams, terrainNoise, root["terrain"], world, assets);
+        loadTerrain(terrainParams, terrainNoise, root["terrain"], world, assets, bakedGroundKey(root, terrainParams));
 
         // ELEVATION MAPS (RT_ELEVATION_MAP=<prefix>, see writeElevationMaps):
         // natural vs final vs drawn, from an independent probe grid over the

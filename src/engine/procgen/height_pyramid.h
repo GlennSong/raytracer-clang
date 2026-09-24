@@ -114,6 +114,12 @@ bool decodeTile(const uint8_t* data, std::size_t size, HeightTile& out);
 // "terrain/L<level>/<tx>_<tz>"
 std::string tileSectionName(const TileKey& k, const std::string& prefix = "terrain");
 
+// A whole pyramid as a bundle file (ADR-0084 format): "terrain/spec" (JSON: the spec and the
+// content key it was built for) and one section per tile. Written to a temp name and renamed,
+// so a reader never sees half a file. read() refuses a bundle built for another key or codec.
+bool writePyramidBundle(const Pyramid& p, uint64_t key, const std::string& path, std::string* err);
+bool readPyramidBundle(const std::string& path, uint64_t key, Pyramid& out, std::string* err);
+
 }  // namespace pyramid
 }  // namespace engine
 
