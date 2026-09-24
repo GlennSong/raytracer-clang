@@ -814,13 +814,17 @@ CityPlan generatePlan(const Brief& B) {
         street(pl.s0 - 2, pl.s1 + 2, 50, 50, RoadClass::Arterial, B.arterialWidth);                  // main street
         for (int k = 1; k < depth; ++k) street(pl.s0 - 2, pl.s1 + 2, 50 + k * bv, 50 + k * bv, RoadClass::Local, B.localWidth);
         street(pl.s0 - 2, pl.s1 + 2, -50, -50, RoadClass::Collector, B.collectorWidth);             // back road
-        // Every fourth cross street passes under the freeway to the back road; the rest stop at the
+        // Every fifth cross street passes under the freeway to the back road; the rest stop at the
         // main street. With all of them crossing, 110 m apart, every diamond had a ramp coming down
-        // across one — the generator refused all 40. A diamond sits on a crossing street, its
-        // ramps touching down on the main street and back road between them.
+        // across one — the generator refused all 40 — and at every fourth, a diamond's decel or aux
+        // lane still reached over the next. A diamond sits on a crossing street, its ramps touching
+        // down on the main street and back road between them.
+        // Counted from the MIDDLE cross street, so a short town's one crossing is at its centre,
+        // with main street and back road running on both ways for its ramps to land along.
+        const int nCross = static_cast<int>((pl.s1 + 1 - pl.s0) / bu) + 1, mid = nCross / 2;
         int j = 0;
         for (Real s = pl.s0; s <= pl.s1 + 1; s += bu, ++j) {
-            const bool under = j % 4 == 0;
+            const bool under = (j - mid) % 5 == 0;
             street(s, s, under ? -52 : 48, inner + 2, under ? RoadClass::Collector : RoadClass::Local, under ? B.collectorWidth : B.localWidth);
         }
         pl.hub = frame((pl.s0 + pl.s1) / 2, 50 + (depth - 1) * bv / 2);

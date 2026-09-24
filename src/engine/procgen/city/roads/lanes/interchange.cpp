@@ -40,7 +40,10 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
     std::vector<double> routeZ;
     if (o.ground) { HeightField hf = o.ground; routeZ = profileAlong(route, hf, o.window, o.gMax); }
     auto clampS = [&](double st) { return std::max(0.0, std::min(routeLen, st)); };
-    auto deckZ = [&](double st) { return routeZ.empty() ? 0.0 : interp(cs, routeZ, clampS(st)) + o.clearance; };
+    auto deckZ = [&](double st) {
+        if (o.deck) return o.deck(clampS(st));
+        return routeZ.empty() ? 0.0 : interp(cs, routeZ, clampS(st)) + o.clearance;
+    };
     auto groundAt = [&](const Vec2& p) { return o.ground ? o.ground(p.x, p.y) : 0.0; };
     auto atS = [&](double st) { return pointAt(route, cs, clampS(st)); };
     auto nrmS = [&](double st) { return perp(tangentAtStation(route, cs, clampS(st))); };
@@ -122,7 +125,11 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
     // height from its departure to its arrival along a smoothstep, whose steepest point is 1.5x
     // its mean (vertical_profile.cpp, rampProfile). Free means clear of both hosts' reach: it
     // ends where the ramp comes within a half-width of the street it lands on.
-    auto runFor = [&](double climb) { return std::fabs(climb) / o.gRamp * 1.5 + 15.0; };   // + the deck-height estimate's slack
+    // + 15% of climb and 15 m of run for the estimate's slack: the street a ramp lands on is its own
+    // smoothed profile, not the raw ground, and at the mountain foot it stood a metre or more higher
+    // + 25 m for the ramp's first stretch, still within reach of the carriageway it leaves, which
+    // the builder does not count as free run either
+    auto runFor = [&](double climb) { return std::fabs(climb) * 1.15 / o.gRamp * 1.5 + 40.0; };
 
     // A ramp's spine, in its direction of travel. It starts on the auxiliary lane (the builder
     // replaces the first/last point with the exact gore), eases out to the band over `diverge`
@@ -209,6 +216,17 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
             spines.push_back(spine(p.sGore, p.sTerm, p.side, p.term, p.off, p.cross ? rBand : p.beside));
             const double zGore = deckZ(p.sGore), zTerm = groundAt(p.term);
             if (conflicts(spines.back(), cd.street, p.street, p.off ? zGore : zTerm, p.off ? zTerm : zGore)) clear = false;
+            // ...nor may its decel or aux lane, up on the freeway, pass over a street crossing under
+            // it: that lane is one with the ramp, which comes down to the ground, and a lane both
+            // stacked over a street and level with the streets it meets tore the deck (the SW town).
+            const double l0 = std::min(p.sGore, p.sGore + away * lead), l1 = std::max(p.sGore, p.sGore + away * lead);
+            for (std::size_t ci = 0; ci < streets.size() && clear; ++ci) {
+                if (ci == cd.street || ci == p.street || streets[ci].xy.size() < 2) continue;
+                for (const Vec2& x : crossings(route, streets[ci].xy)) {
+                    const double sx = project(route, cs, x).station;
+                    if (sx > l0 - 10 && sx < l1 + 10) { clear = false; break; }
+                }
+            }
         }
         static const bool why = std::getenv("RT_DIAMOND_WHY") != nullptr;
         if (why) std::fprintf(stderr, "[diamond] %s crossing at s=%.0f (%.0f deg, street %s): side a %s, side b %s -> %s\n", o.idPrefix.c_str(), cd.s, cd.angle,

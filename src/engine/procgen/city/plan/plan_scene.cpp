@@ -3,12 +3,14 @@
 #include "../roads/lanes/interchange.h"   // ONE ramp generator, shared with the level importer
 #include "../roads/lanes/polyline_ops.h"   // stations/pointAt: sampling along the route
 #include "../roads/lanes/road_graph_spec.h"
-#include "../roads/lanes/terrain_recipe.h"   // makeTerrain: the same ground the builder will make
+#include "../roads/lanes/terrain_recipe.h"
+#include "../roads/lanes/vertical_profile.h"   // profileAlong, kDesignGrade: the deck the diamonds are sized against   // makeTerrain: the same ground the builder will make
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <map>
 #include <set>
 
@@ -379,14 +381,31 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         // builder will make from this scene's own spec.
         json floors = json::array();
         const std::vector<double> st = roads::lanes::stations(c);
-        for (double s0 = std::max(0.0, from); s0 < std::min(st.back(), to); s0 += 60.0) {
+        // Every 30 m, held flat 15 m either side: at 60 m and 60 m the deck stayed at a high
+        // sample's height right across the dips between, and a diamond's ramp down into one had
+        // half as much again to climb as the ground said.
+        for (double s0 = std::max(0.0, from); s0 < std::min(st.back(), to); s0 += 30.0) {
             const Vec2 q = roads::lanes::pointAt(c, st, s0);
             const double z = (ground ? ground(q.x, q.y) : 0.0) + opt.clearance;
-            floors.push_back(json::array({std::round(q.x * 100) / 100, std::round(q.y * 100) / 100, std::round(z * 100) / 100, 60.0}));
+            floors.push_back(json::array({std::round(q.x * 100) / 100, std::round(q.y * 100) / 100, std::round(z * 100) / 100, 15.0}));
         }
         return floors;
     };
+    // The deck as the builder will make it from a centreline's floors: the smoothed ground, raised
+    // to each floor's tent — flat over its half-span, falling at the freeway's design grade beyond.
+    std::map<std::size_t, json> floorsOf;   // by route id, for the diamonds' sizing
+    auto deckOf = [&](const std::vector<Vec2>& c, const json& floors) {
+        const std::vector<double> st = roads::lanes::stations(c);
+        std::vector<double> z = roads::lanes::profileAlong(c, ground, 200.0, 0.06);
+        const double gd = roads::lanes::kDesignGrade * 0.06;
+        for (const json& f : floors) {
+            const double sf = roads::lanes::project(c, st, Vec2(f[0].get<double>(), f[1].get<double>())).station;
+            for (std::size_t i = 0; i < z.size(); ++i) z[i] = std::max(z[i], f[2].get<double>() - gd * std::max(0.0, std::fabs(st[i] - sf) - f[3].get<double>()));
+        }
+        return std::function<double(double)>([st, z](double s) { return roads::lanes::interp(st, z, s); });
+    };
     auto carriageways = [&](std::size_t id, const std::vector<Vec2>& ca, std::vector<Vec2> cb, const json& floors) {
+        floorsOf[id] = floors;
         std::reverse(cb.begin(), cb.end());
         edges.push_back({{"id", "fw" + std::to_string(id) + "_a"}, {"class", "freeway"}, {"floor", floors}, {"path", {{"points", pointsJson(ca)}}}});
         edges.push_back({{"id", "fw" + std::to_string(id) + "_b"}, {"class", "freeway"}, {"floor", floors}, {"path", {{"points", pointsJson(cb)}}}});
@@ -408,7 +427,17 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             for (const SystemAt& at : systems) {
                 if (at.chain != k || !at.r.built) continue;
                 const Vec2 q = roads::lanes::pointAt(chains[k], roads::lanes::stations(chains[k]), at.r.sThrough);
-                const double z = (ground ? ground(q.x, q.y) : 0.0) + opt.clearance + 2.5;
+                // ...or over the expressway's own deck there, which on a hillside comes down from higher
+                // ground and passes under well above it (3.2 m at the SW crossing). 3.5 m over the
+                // clearance: this estimate of its floors put it 0.7 m up there — it is still climbing
+                // across the ring's width (~1.2 m more at the far kerb), and the builder's lifts add
+                // the rest.
+                const std::vector<Vec2> stem = spurFreeway(plan, at.spur);
+                const double stemDeck = deckOf(stem, floorsOver(stem, 0.0, at.r.sStem - 170.0))(at.r.sStem);
+                const double z = std::max((ground ? ground(q.x, q.y) : 0.0) + opt.clearance + 2.5, stemDeck + 8.1 + 3.5);
+                if (std::getenv("RT_PLAN_WHY"))
+                    std::printf("[plan] ring over expressway %zu: ground %.2f, expressway deck ~%.2f, ring held at %.2f\n", at.spur,
+                                ground ? ground(q.x, q.y) : 0.0, stemDeck, z);
                 floors.push_back(json::array({std::round(q.x * 100) / 100, std::round(q.y * 100) / 100, std::round(z * 100) / 100, 40.0}));
             }
             carriageways(k, ca, cb, floors);
@@ -452,12 +481,12 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             cb = slice(routeB, nFrom + nLoop - 2, routeB.size());
         }
         const std::size_t id = chains.size() + j;
-        // floors to 200 m out: at 8 m to 140 m (past the suburbs' first street, 200 m out on
+        // floors to 170 m out: at 8 m to 155 m (past the suburbs' first street, 200 m out on
         // rolling ground), then down at design grade to pass under the ring, held higher there —
         // and, approaching a town, from 250 m out, down to meet its main street at ground level
         const bool town = j < plan.towns.size() && plan.towns[j].built;
         // on the loop, the spur comes down to meet it at ground level 300 m in from the joint
-        carriageways(id, ca, cb, floorsOver(fwy, onLoop ? 300.0 : town ? 250.0 : 0.0, crosses ? sx - 200.0 : 1e30));
+        carriageways(id, ca, cb, floorsOver(fwy, onLoop ? 300.0 : town ? 250.0 : 0.0, crosses ? sx - 170.0 : 1e30));
         // A pair of one-way boulevards between a freeway end and its two Ts, `dir` pointing along
         // the freeway away from the Ts; a (the carriageway with the route) takes the T on its right.
         auto pair = [&](const std::string& idp, const std::array<Vec2, 2>& tp, const Vec2& freewayEnd, const Vec2& dir,
@@ -533,7 +562,7 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             dop.rampHalf = 4.5 / 2 + 2.5;   // the ramp class below: one 4.5 m lane, 2.5 m shoulders
             dop.gRamp = 0.08;               // and its g_max
             dop.ground = ground;            // the climb is to the ground the ramp lands on
-            dop.window = 60.0;              // and from the deck as built: floors every 60 m over the ground
+            dop.deck = deckOf(chains[k], floorsOf[k]);   // and from the deck as built
             for (const SystemAt& at : systems)
                 if (at.chain == k && at.r.built) dop.keepOut.push_back({at.r.sThrough - at.r.reach - 60.0, at.r.sThrough + at.r.reach + 60.0});
             const roads::lanes::DiamondResult dr = roads::lanes::diamondRamps(chains[k], rampStreets, dop);
@@ -559,7 +588,7 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             dop.rampHalf = 4.5 / 2 + 2.5;
             dop.gRamp = 0.08;
             dop.ground = ground;
-            dop.window = 60.0;
+            dop.deck = deckOf(plan.loop, floorsOf[loopId]);
             const roads::lanes::DiamondResult dr = roads::lanes::diamondRamps(plan.loop, rampStreets, dop);
             for (const json& r : dr.ramps) edges.push_back(r);
             if (std::getenv("RT_PLAN_WHY"))

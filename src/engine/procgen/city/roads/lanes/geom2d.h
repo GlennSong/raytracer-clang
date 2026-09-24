@@ -11,6 +11,7 @@
 #include "engine/procgen/city/polygon.h"   // Vec2
 #include <array>
 #include <utility>
+#include <memory>
 #include <vector>
 
 namespace engine {
@@ -41,6 +42,21 @@ double ringArea(const Ring& r);             // signed (+ CCW)
 double setArea(const PolySet& s);
 bool contains(const Polygon2& p, const Vec2& q);   // holes excluded; boundary counts as inside
 bool contains(const PolySet& s, const Vec2& q);
+
+// A polygon set converted ONCE for many point queries. contains(PolySet, q) converts every ring to
+// Clipper's integer path on every call; a freeway lane 10 km long is one footprint of thousands of
+// vertices, and placing the walls along the outer loop's 89 km of outline spent some forty minutes of
+// a bake converting it. Same test, same integer points, same answers.
+class PreparedSet {
+public:
+    PreparedSet() = default;
+    explicit PreparedSet(const PolySet& s);
+    bool contains(const Vec2& q) const;   // as contains(PolySet, q): holes excluded, boundary counts as inside
+private:
+    struct Poly;
+    std::shared_ptr<const std::vector<Poly>> polys_;
+};
+std::vector<PreparedSet> prepareAll(const std::vector<PolySet>& sets);
 struct Box2 { double minX = 0, minY = 0, maxX = 0, maxY = 0; };
 Box2 bounds(const Polygon2& p);
 Box2 bounds(const PolySet& ps);              // over EVERY polygon of the set (a footprint may carry a detached sliver first)

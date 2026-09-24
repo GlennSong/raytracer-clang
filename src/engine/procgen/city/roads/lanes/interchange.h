@@ -28,6 +28,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -66,6 +67,11 @@ struct DiamondOptions {
     double clearance = 0;        // the deck's height over the ground at a crossing
     double window = 200, gMax = 0.06;   // the freeway's own profile, for the climb
     std::vector<std::pair<double, double>> keepOut;   // station ranges no ramp's lanes may touch (a system interchange's)
+    // The deck's height at a station along the route, as the builder will make it (its floors'
+    // tents over the smoothed ground). Unset: estimated as the smoothed ground + clearance, which
+    // on rolling ground runs low — the floors hold the deck up over every dip between them — and
+    // left ramps sized for 4 m that had to climb 6.5.
+    std::function<double(double)> deck;
     HeightField ground;          // empty: a flat city, every climb is zero
 };
 

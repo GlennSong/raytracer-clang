@@ -165,11 +165,11 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     // the viaduct is pavement in plan but not a continuation of this deck.
     // Every point query below asks "which lanes' footprints contain q": the boxes once, a grid of them, never
     // a bounds() over a footprint's vertices per call (that was a 100 s stall on metro).
-    const std::vector<Box2> laneBox = laneBoxes(r.pavement.footprints); const LaneGrid laneGrid(laneBox, r.pavement.footprints);
+    const std::vector<Box2> laneBox = laneBoxes(r.pavement.footprints); const LaneGrid laneGrid(laneBox, r.pavement.footprints); const std::vector<PreparedSet> footprint = prepareAll(r.pavement.footprints);
     auto sameLevelPavedAt = [&](const Vec2& q, double z) {
         for (int ojI : laneGrid.at(q)) {
             const size_t oj = static_cast<size_t>(ojI); const Box2& bb = laneBox[oj];
-            if (q.x < bb.minX || q.x > bb.maxX || q.y < bb.minY || q.y > bb.maxY || !contains(r.pavement.footprints[oj], q)) continue;
+            if (q.x < bb.minX || q.x > bb.maxX || q.y < bb.minY || q.y > bb.maxY || !footprint[oj].contains(q)) continue;
             if (std::fabs(H.deck(ojI, q) - z) < 1.0) return true;
         }
         return false;
@@ -243,7 +243,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
             const size_t oj = static_cast<size_t>(ojI); const Lane& o = L.lanes[oj];
             if (oj == li || o.isConnector() || o.parent == l.parent || o.parent < 0 || r.pavement.footprints[oj].empty()) continue;
             const Box2& b = laneBox[oj];
-            if (p.x < b.minX || p.x > b.maxX || p.y < b.minY || p.y > b.maxY || !contains(r.pavement.footprints[oj], p)) continue;
+            if (p.x < b.minX || p.x > b.maxX || p.y < b.minY || p.y > b.maxY || !footprint[oj].contains(p)) continue;
             if (std::fabs(H.deck(static_cast<int>(oj), p) - zl) > 1.0) continue;
             Projection pr = project(o.xy, o.s, p);
             if (std::fabs(dot(t, tangentAtStation(o.xy, o.s, pr.station))) > 0.7) continue;
@@ -290,7 +290,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
                 for (int ojI : laneGrid.at(q)) {
                     if (sty != 0) break; const size_t oj = static_cast<size_t>(ojI);
                     if (oj == li || r.pavement.footprints[oj].empty()) continue; const Box2& b = laneBox[oj];
-                    if (q.x < b.minX || q.x > b.maxX || q.y < b.minY || q.y > b.maxY || !contains(r.pavement.footprints[oj], q)) continue;
+                    if (q.x < b.minX || q.x > b.maxX || q.y < b.minY || q.y > b.maxY || !footprint[oj].contains(q)) continue;
                     const Lane& o = L.lanes[oj]; Projection pr = project(o.xy, o.s, q);
                     double same = dot(t * static_cast<double>(l.dir), tangentAtStation(o.xy, o.s, pr.station) * static_cast<double>(o.dir)); sty = same > 0 ? 1 : 2;
                 }
@@ -386,7 +386,7 @@ BarrierSpec barrierFor(const RoadClassSpec& c, EdgeRole role) {
 std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
     const LaneSet& L = r.lanes;
     std::vector<ParapetRun> out;
-    const std::vector<Box2> laneBox = laneBoxes(r.pavement.footprints); const LaneGrid laneGrid(laneBox, r.pavement.footprints);
+    const std::vector<Box2> laneBox = laneBoxes(r.pavement.footprints); const LaneGrid laneGrid(laneBox, r.pavement.footprints); const std::vector<PreparedSet> footprint = prepareAll(r.pavement.footprints);
     auto isDeckLane = [&](int li) {
         if (li < 0 || li >= static_cast<int>(L.lanes.size())) return false; const Lane& l = L.lanes[static_cast<size_t>(li)];
         if (l.isConnector() || l.parent < 0) return false; const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)]; return e.isRamp() || e.cls == "freeway";
@@ -395,7 +395,7 @@ std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
         for (int ojI : laneGrid.at(q)) {
             const size_t oj = static_cast<size_t>(ojI); const Box2& bb = laneBox[oj];
             if (deckOnly && !isDeckLane(ojI)) continue;
-            if (q.x < bb.minX || q.x > bb.maxX || q.y < bb.minY || q.y > bb.maxY || !contains(r.pavement.footprints[oj], q)) continue;
+            if (q.x < bb.minX || q.x > bb.maxX || q.y < bb.minY || q.y > bb.maxY || !footprint[oj].contains(q)) continue;
             if (std::fabs(r.heights->deck(ojI, q) - z) < 1.0) return ojI;
         }
         return -1;
@@ -405,7 +405,7 @@ std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
         for (int ojI : laneGrid.at(q)) {
             const size_t oj = static_cast<size_t>(ojI); const Box2& bb = laneBox[oj];
             if (!isDeckLane(ojI)) continue;
-            if (q.x < bb.minX || q.x > bb.maxX || q.y < bb.minY || q.y > bb.maxY || !contains(r.pavement.footprints[oj], q)) continue;
+            if (q.x < bb.minX || q.x > bb.maxX || q.y < bb.minY || q.y > bb.maxY || !footprint[oj].contains(q)) continue;
             return ojI;
         }
         return -1;

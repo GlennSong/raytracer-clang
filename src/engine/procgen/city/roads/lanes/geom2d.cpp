@@ -128,6 +128,43 @@ bool contains(const PolySet& s, const Vec2& q) {
     return false;
 }
 
+struct PreparedSet::Poly {
+    Clipper2Lib::Path64 outer;
+    std::vector<Clipper2Lib::Path64> holes;
+};
+
+PreparedSet::PreparedSet(const PolySet& s) {
+    auto polys = std::make_shared<std::vector<Poly>>();
+    polys->reserve(s.size());
+    for (const Polygon2& p : s) {
+        Poly q;
+        q.outer = toPath(p.outer);
+        for (const Ring& h : p.holes) q.holes.push_back(toPath(h));
+        polys->push_back(std::move(q));
+    }
+    polys_ = std::move(polys);
+}
+
+bool PreparedSet::contains(const Vec2& q) const {
+    if (!polys_) return false;
+    const Clipper2Lib::Point64 pt(static_cast<int64_t>(std::llround(q.x * kScale)), static_cast<int64_t>(std::llround(q.y * kScale)));
+    for (const Poly& p : *polys_) {
+        if (Clipper2Lib::PointInPolygon(pt, p.outer) == Clipper2Lib::PointInPolygonResult::IsOutside) continue;
+        bool inHole = false;
+        for (const Clipper2Lib::Path64& h : p.holes)
+            if (Clipper2Lib::PointInPolygon(pt, h) != Clipper2Lib::PointInPolygonResult::IsOutside) { inHole = true; break; }
+        if (!inHole) return true;
+    }
+    return false;
+}
+
+std::vector<PreparedSet> prepareAll(const std::vector<PolySet>& sets) {
+    std::vector<PreparedSet> out;
+    out.reserve(sets.size());
+    for (const PolySet& s : sets) out.emplace_back(s);
+    return out;
+}
+
 Box2 bounds(const Polygon2& p) {
     Box2 b; bool first = true;
     for (const Vec2& v : p.outer) {
