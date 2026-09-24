@@ -109,8 +109,12 @@ void octEncode(double x, double y, double z, int16_t out[2]) {
             u = fu; v = fv;
         }
     }
-    out[0] = static_cast<int16_t>(std::lround(std::clamp(u, -1.0, 1.0) * 32767.0));
-    out[1] = static_cast<int16_t>(std::lround(std::clamp(v, -1.0, 1.0) * 32767.0));
+    auto snorm16 = [](double c) {
+        const double x = std::clamp(c, -1.0, 1.0) * 32767.0;
+        return static_cast<int16_t>(x >= 0.0 ? x + 0.5 : x - 0.5);   // round half away from zero
+    };
+    out[0] = snorm16(u);
+    out[1] = snorm16(v);
 }
 
 // Which layout a mesh can take. Full when its tangent slot carries data (the mesh says so:
@@ -774,6 +778,9 @@ struct VulkanRenderer::Impl {
                       VkMemoryPropertyFlags props, VkBuffer& buffer, VkDeviceMemory& memory);
     VkShaderModule loadShaderModule(const std::string& path);
     void destroyMesh(GpuMesh& m);
+    // One mesh's buffers from bytes already in its GPU layout (uploadMesh, uploadPrepared).
+    MeshHandle uploadMeshBytes(const BoundingSphere& bounds, const std::vector<uint8_t>& vertexBytes,
+                               const uint32_t* indices, std::size_t indexCount, VertexFit fit, std::size_t vertexCount);
     // GPU MEMORY, counted (Renderer::memoryReport): live mesh and texture allocations
     // and the bytes VMA gave them.
     long meshAllocs = 0, texAllocs = 0;
@@ -5697,89 +5704,121 @@ void VulkanRenderer::resize(int width, int height) {
     impl->framebufferResized = true;
 }
 
-MeshHandle VulkanRenderer::uploadMesh(const RenderMesh& mesh) {
-    GpuMesh record;
-    record.bounds = computeBoundingSphere(mesh.vertices.data(), mesh.vertices.size());
-    record.indexCount = static_cast<uint32_t>(mesh.indices.size());
-
-    if (impl->device && !mesh.vertices.empty() && !mesh.indices.empty()) {
-        // The layout this mesh fits (ADR-0096): the 32-byte standard vertex unless its data
-        // needs the full one. RT_VERTEX_FULL=1 keeps every mesh full, for A/B comparisons.
-        static const bool forceFull = std::getenv("RT_VERTEX_FULL") != nullptr;
-        const VertexFit fit = forceFull ? VertexFit::FullHdrColor : vertexFitFor(mesh);
-        record.packed = fit == VertexFit::Packed;
-        record.fit = static_cast<uint8_t>(fit);
-        record.vertexCount = mesh.vertices.size();
-        std::vector<GpuVertex> verts;
-        std::vector<GpuVertexPacked> packedVerts;
-        if (record.packed) {
-            packedVerts.resize(mesh.vertices.size());
-            for (size_t i = 0; i < mesh.vertices.size(); ++i) {
-                const Vertex& v = mesh.vertices[i];
-                GpuVertexPacked& g = packedVerts[i];
-                g.position[0] = static_cast<float>(v.position.x);
-                g.position[1] = static_cast<float>(v.position.y);
-                g.position[2] = static_cast<float>(v.position.z);
-                octEncode(v.normal.x, v.normal.y, v.normal.z, g.normal);
-                octEncode(v.tangent.x, v.tangent.y, v.tangent.z, g.tangent);
-                g.texcoord[0] = v.u;
-                g.texcoord[1] = v.v;
-                auto unorm8 = [](double c) { return static_cast<uint8_t>(std::lround(std::clamp(c, 0.0, 1.0) * 255.0)); };
-                g.color[0] = unorm8(v.color.x);
-                g.color[1] = unorm8(v.color.y);
-                g.color[2] = unorm8(v.color.z);
-                g.color[3] = 255;
-            }
-        } else {
-            verts.resize(mesh.vertices.size());
-            for (size_t i = 0; i < mesh.vertices.size(); ++i) {
-                const Vertex& v = mesh.vertices[i];
-                GpuVertex& g = verts[i];
-                g.position[0] = static_cast<float>(v.position.x);
-                g.position[1] = static_cast<float>(v.position.y);
-                g.position[2] = static_cast<float>(v.position.z);
-                g.normal[0] = static_cast<float>(v.normal.x);
-                g.normal[1] = static_cast<float>(v.normal.y);
-                g.normal[2] = static_cast<float>(v.normal.z);
-                g.tangent[0] = static_cast<float>(v.tangent.x);
-                g.tangent[1] = static_cast<float>(v.tangent.y);
-                g.tangent[2] = static_cast<float>(v.tangent.z);
-                g.texcoord[0] = v.u;
-                g.texcoord[1] = v.v;
-                g.color[0] = static_cast<float>(v.color.x);
-                g.color[1] = static_cast<float>(v.color.y);
-                g.color[2] = static_cast<float>(v.color.z);
-            }
+namespace {
+// The mesh's vertices in the layout it fits, as bytes (ADR-0096). Reads only the mesh, so it
+// runs on any thread: prepareMesh calls it from a residency worker, uploadMesh in place.
+// RT_VERTEX_FULL=1 keeps every mesh full, for A/B comparisons.
+VertexFit packVertices(const RenderMesh& mesh, std::vector<uint8_t>& out) {
+    static const bool forceFull = std::getenv("RT_VERTEX_FULL") != nullptr;
+    const VertexFit fit = forceFull ? VertexFit::FullHdrColor : vertexFitFor(mesh);
+    const std::size_t n = mesh.vertices.size();
+    if (fit == VertexFit::Packed) {
+        out.resize(n * sizeof(GpuVertexPacked));
+        auto* gv = reinterpret_cast<GpuVertexPacked*>(out.data());
+        auto unorm8 = [](double c) { return static_cast<uint8_t>(std::clamp(c, 0.0, 1.0) * 255.0 + 0.5); };
+        for (std::size_t i = 0; i < n; ++i) {
+            const Vertex& v = mesh.vertices[i];
+            GpuVertexPacked& g = gv[i];
+            g.position[0] = static_cast<float>(v.position.x);
+            g.position[1] = static_cast<float>(v.position.y);
+            g.position[2] = static_cast<float>(v.position.z);
+            octEncode(v.normal.x, v.normal.y, v.normal.z, g.normal);
+            octEncode(v.tangent.x, v.tangent.y, v.tangent.z, g.tangent);
+            g.texcoord[0] = v.u;
+            g.texcoord[1] = v.v;
+            g.color[0] = unorm8(v.color.x);
+            g.color[1] = unorm8(v.color.y);
+            g.color[2] = unorm8(v.color.z);
+            g.color[3] = 255;
         }
-        const void* vdata = record.packed ? static_cast<const void*>(packedVerts.data()) : static_cast<const void*>(verts.data());
-        VkDeviceSize vsize = mesh.vertices.size() * (record.packed ? sizeof(GpuVertexPacked) : sizeof(GpuVertex));
-        VkDeviceSize isize = mesh.indices.size() * sizeof(uint32_t);
-        // Suballocated by VMA; the data goes through the upload queue and is on the
-        // device by the next frame (ADR-0094).
-        bool ok = impl->createGpuBuffer(vsize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, record.vertexBuffer, record.vertexAlloc) &&
-                  impl->createGpuBuffer(isize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, record.indexBuffer, record.indexAlloc);
-        if (!ok) {
-            LOG_ERROR("[vulkan] uploadMesh buffer creation failed");
-            impl->destroyMesh(record);
-            record.indexCount = 0;
-        } else {
-            impl->uploadToBuffer(vdata, vsize, record.vertexBuffer);
-            impl->uploadToBuffer(mesh.indices.data(), isize, record.indexBuffer);
-            VmaAllocationInfo vi{}, ii{};
-            vmaGetAllocationInfo(impl->allocator, record.vertexAlloc, &vi);
-            vmaGetAllocationInfo(impl->allocator, record.indexAlloc, &ii);
-            record.allocated = vi.size + ii.size;
-            record.data = vsize + isize;
-            impl->meshAllocs += 2;
-            impl->meshBytes += record.allocated;
-            impl->meshDataBytes += vsize + isize;
-            record.vertexData = vsize;
-            ++impl->meshesByFit[record.fit];
-            impl->vertexBytesByFit[record.fit] += vsize;
-            if (record.packed) impl->vertexBytesSaved += record.vertexCount * (sizeof(GpuVertex) - sizeof(GpuVertexPacked));
+    } else {
+        out.resize(n * sizeof(GpuVertex));
+        auto* gv = reinterpret_cast<GpuVertex*>(out.data());
+        for (std::size_t i = 0; i < n; ++i) {
+            const Vertex& v = mesh.vertices[i];
+            GpuVertex& g = gv[i];
+            g.position[0] = static_cast<float>(v.position.x);
+            g.position[1] = static_cast<float>(v.position.y);
+            g.position[2] = static_cast<float>(v.position.z);
+            g.normal[0] = static_cast<float>(v.normal.x);
+            g.normal[1] = static_cast<float>(v.normal.y);
+            g.normal[2] = static_cast<float>(v.normal.z);
+            g.tangent[0] = static_cast<float>(v.tangent.x);
+            g.tangent[1] = static_cast<float>(v.tangent.y);
+            g.tangent[2] = static_cast<float>(v.tangent.z);
+            g.texcoord[0] = v.u;
+            g.texcoord[1] = v.v;
+            g.color[0] = static_cast<float>(v.color.x);
+            g.color[1] = static_cast<float>(v.color.y);
+            g.color[2] = static_cast<float>(v.color.z);
         }
     }
-    return impl->meshes.insert(record);
+    return fit;
+}
+}  // namespace
+
+MeshHandle VulkanRenderer::Impl::uploadMeshBytes(const BoundingSphere& bounds, const std::vector<uint8_t>& vertexBytes,
+                                                 const uint32_t* indices, std::size_t indexCount, VertexFit fit,
+                                                 std::size_t vertexCount) {
+    GpuMesh record;
+    record.bounds = bounds;
+    record.indexCount = static_cast<uint32_t>(indexCount);
+    if (device && !vertexBytes.empty() && indexCount > 0) {
+        record.packed = fit == VertexFit::Packed;
+        record.fit = static_cast<uint8_t>(fit);
+        record.vertexCount = vertexCount;
+        const VkDeviceSize vsize = vertexBytes.size();
+        const VkDeviceSize isize = indexCount * sizeof(uint32_t);
+        // Suballocated by VMA; the data goes through the upload queue and is on the
+        // device by the next frame (ADR-0094).
+        bool ok = createGpuBuffer(vsize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, record.vertexBuffer, record.vertexAlloc) &&
+                  createGpuBuffer(isize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, record.indexBuffer, record.indexAlloc);
+        if (!ok) {
+            LOG_ERROR("[vulkan] uploadMesh buffer creation failed");
+            destroyMesh(record);
+            record.indexCount = 0;
+        } else {
+            uploadToBuffer(vertexBytes.data(), vsize, record.vertexBuffer);
+            uploadToBuffer(indices, isize, record.indexBuffer);
+            VmaAllocationInfo vi{}, ii{};
+            vmaGetAllocationInfo(allocator, record.vertexAlloc, &vi);
+            vmaGetAllocationInfo(allocator, record.indexAlloc, &ii);
+            record.allocated = vi.size + ii.size;
+            record.data = vsize + isize;
+            meshAllocs += 2;
+            meshBytes += record.allocated;
+            meshDataBytes += vsize + isize;
+            record.vertexData = vsize;
+            ++meshesByFit[record.fit];
+            vertexBytesByFit[record.fit] += vsize;
+            if (record.packed) vertexBytesSaved += record.vertexCount * (sizeof(GpuVertex) - sizeof(GpuVertexPacked));
+        }
+    }
+    return meshes.insert(record);
+}
+
+MeshHandle VulkanRenderer::uploadMesh(const RenderMesh& mesh) {
+    std::vector<uint8_t> bytes;
+    VertexFit fit = VertexFit::Packed;
+    if (!mesh.vertices.empty() && !mesh.indices.empty()) fit = packVertices(mesh, bytes);
+    return impl->uploadMeshBytes(computeBoundingSphere(mesh.vertices.data(), mesh.vertices.size()), bytes,
+                                 mesh.indices.data(), mesh.indices.size(), fit, mesh.vertices.size());
+}
+
+PreparedMesh VulkanRenderer::prepareMesh(RenderMesh&& mesh) const {
+    PreparedMesh p;
+    p.bounds = computeBoundingSphere(mesh.vertices.data(), mesh.vertices.size());
+    p.vertexCount = mesh.vertices.size();
+    p.indexCount = mesh.indices.size();
+    if (!mesh.vertices.empty() && !mesh.indices.empty()) p.layout = static_cast<uint32_t>(packVertices(mesh, p.vertexBytes));
+    p.indices = std::move(mesh.indices);
+    return p;
+}
+
+MeshHandle VulkanRenderer::uploadPrepared(PreparedMesh&& p) {
+    if (p.vertexBytes.empty() && !p.raw.vertices.empty()) return uploadMesh(p.raw);   // prepared elsewhere, raw
+    return impl->uploadMeshBytes(p.bounds, p.vertexBytes, p.indices.data(), p.indices.size(),
+                                 static_cast<VertexFit>(p.layout), p.vertexCount);
 }
 
 std::string VulkanRenderer::memoryReport() const {

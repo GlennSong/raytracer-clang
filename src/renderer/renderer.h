@@ -245,6 +245,28 @@ struct RenderMesh {
     RenderMesh() : materialIndex(0) {}
 };
 
+// A mesh made ready to upload OFF the render thread (ADR-0096). Renderer::prepareMesh converts
+// it to the backend's GPU vertex layout on any thread -- no device calls -- and uploadPrepared
+// hands the bytes to the upload queue on the render thread, which is then only a copy. A
+// backend with no layout of its own keeps the RenderMesh (`raw`) and uploads it as usual.
+struct PreparedMesh {
+    RenderMesh raw;                    // used when vertexBytes is empty
+    std::vector<uint8_t> vertexBytes;  // the backend's own vertex layout
+    std::vector<uint32_t> indices;     // with vertexBytes
+    BoundingSphere bounds;
+    std::size_t vertexCount = 0, indexCount = 0;
+    uint32_t layout = 0;               // backend-private
+};
+// The default preparation: keep the mesh as it is.
+inline PreparedMesh prepareRawMesh(RenderMesh&& mesh) {
+    PreparedMesh p;
+    p.bounds = computeBoundingSphere(mesh.vertices.data(), mesh.vertices.size());
+    p.vertexCount = mesh.vertices.size();
+    p.indexCount = mesh.indices.size();
+    p.raw = std::move(mesh);
+    return p;
+}
+
 // Light units (ADR-0017 Phase 1): for the sun, color * intensity is the
 // illuminance arriving from its direction. For point/spot lights it is the
 // illuminance at 1 m; falloff is inverse-square, windowed to zero at `range`.
@@ -641,6 +663,11 @@ public:
     virtual void resize(int width, int height) = 0;
 
     virtual MeshHandle uploadMesh(const RenderMesh& mesh) = 0;
+    // Two-phase upload (PreparedMesh above): prepareMesh is safe on any thread and touches no
+    // renderer state; uploadPrepared runs on the render thread. The defaults keep the mesh and
+    // upload it through uploadMesh.
+    virtual PreparedMesh prepareMesh(RenderMesh&& mesh) const { return prepareRawMesh(std::move(mesh)); }
+    virtual MeshHandle uploadPrepared(PreparedMesh&& mesh) { return uploadMesh(mesh.raw); }
     virtual void removeMesh(MeshHandle handle) = 0;
     virtual BoundingSphere getMeshBounds(MeshHandle handle) const = 0;
     virtual TextureHandle uploadTexture(int width, int height, int channels,

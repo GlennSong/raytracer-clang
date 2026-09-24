@@ -34,6 +34,9 @@ forward, shadows, IBL, post) still to do. Decision: ADR-0057. Plan:
   state, packed vertex input, `mesh.vert`'s `kPackedVertex` specialisation on) and
   a draw binds the twin its mesh needs. A new mesh pipeline needs its twin too;
   terrain has none. `RT_VERTEX_FULL=1` keeps everything full for A/B frames.
+  `prepareMesh` (any thread, no device calls) + `uploadPrepared` (render thread,
+  a staging copy) are the same upload in two halves; streamed content prepares
+  on its worker. Keep `packVertices` free of renderer state so it stays thread-safe.
   `setCamera`/`setLights` fill a `GlobalsUBO` (viewProjection with the clip-space
   Y-flip baked in by `packMat4`, camera pos, sun, ambient). `drawMesh` queues a
   draw with a `MeshPush` push-constant (model + albedo/metallic + emission/

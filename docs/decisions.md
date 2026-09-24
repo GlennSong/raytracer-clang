@@ -7585,9 +7585,13 @@ for their morph-target *position* (terrain.vert), and a few meshes carry tints a
 **Consequences.** metro_planned at the spawn point: 5,660 standard meshes, 37 full for tangent data
 (terrain), 17 full for a tint above 1 (all tiny); **641 MB saved**; mesh data 1,078 MB (together with
 the kerb pass below). ring: 191 → 118 MB. The frames match the full layout to within 1/255 on ring,
-and on cdlod to within the run-to-run noise of wind and water. The conversion still runs on the
-render thread inside `uploadMesh`, as before. Moving it into the residency service's prepare() is
-the follow-up.
+and on cdlod to within the run-to-run noise of wind and water. Packing on the render thread doubled a detail cell's commit (11 → 24 ms): the
+octahedral encode costs more than a float copy. So the conversion moved off it.
+`Renderer::prepareMesh(RenderMesh&&)` packs on any thread with no device calls; `uploadPrepared`
+only copies into the upload queue. The streamed building cells prepare their chunks on the
+residency worker (`AssetManager::prepareMesh` / `acquirePrepared`). A detail cell now commits in
+**1.7 ms (slowest 5.4; was 24 / 55)**, a facade cell in 0.18 ms. Backends without a layout of their
+own inherit a default that carries the RenderMesh through.
 
 **The kerb pass (ADR-0095 §5, same session).** A deck or layer slab emitted a side quad for every
 boundary edge. Most of them could not be seen: asphalt edges under a sidewalk, shoulder edges against

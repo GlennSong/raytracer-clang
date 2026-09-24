@@ -49,6 +49,28 @@ MeshHandle AssetManager::acquireMesh(const RenderMesh& mesh, const std::string& 
     return handle;
 }
 
+MeshHandle AssetManager::acquirePrepared(PreparedMesh&& mesh, const std::string& key) {
+    RT_PROFILE_ZONE_NAMED("acquirePrepared");
+    if (!key.empty()) {
+        auto it = byKey_.find(key);
+        if (it != byKey_.end()) {
+            records_[it->second].refs++;
+            return it->second;
+        }
+    }
+    const std::size_t bytes = mesh.vertexCount * 56 + mesh.indexCount * 4;   // as acquireMesh counts
+    MeshHandle handle = uploader_.uploadPrepared(std::move(mesh));
+    MeshRecord rec;
+    rec.handle = handle;
+    rec.bounds = uploader_.getMeshBounds(handle);
+    rec.refs = 1;
+    rec.key = key;
+    rec.bytes = bytes;
+    records_[handle] = rec;
+    if (!key.empty()) byKey_[key] = handle;
+    return handle;
+}
+
 std::vector<AssetManager::MeshGroup> AssetManager::meshBytesByPrefix() const {
     std::map<std::string, MeshGroup> groups;
     for (const auto& kv : records_) {

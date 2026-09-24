@@ -30,6 +30,12 @@ public:
     // generated mesh with no reuse). Refcount is bumped on every call.
     MeshHandle acquireMesh(const RenderMesh& mesh, const std::string& key = "");
 
+    // The same in two halves (renderer.h, PreparedMesh): prepareMesh converts the mesh for the
+    // GPU and is safe on ANY thread (a residency worker, ADR-0096); acquirePrepared uploads it on
+    // the render thread, and is acquireMesh otherwise (key, refcount, accounting).
+    PreparedMesh prepareMesh(RenderMesh&& mesh) const { return uploader_.prepareMesh(std::move(mesh)); }
+    MeshHandle acquirePrepared(PreparedMesh&& mesh, const std::string& key = "");
+
     // Release one reference; the GPU mesh is freed (MeshUploader::removeMesh)
     // when its refcount reaches zero. A null or unknown handle is ignored.
     void releaseMesh(MeshHandle handle);

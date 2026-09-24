@@ -113,3 +113,26 @@ TEST_CASE(asset_manager_primitive_dedups_and_builds_once) {
     CHECK(up.uploads == 2);          // two distinct primitives uploaded
     CHECK(assets.refCount(a) == 2);
 }
+
+// The two-phase path (ADR-0096): prepareMesh on any thread, acquirePrepared on the render
+// thread. With an uploader that has no layout of its own, the prepared mesh carries the
+// RenderMesh through and uploads it as acquireMesh would -- same record, same byte count.
+TEST_CASE(asset_manager_prepared_mesh_uploads_like_acquire) {
+    StubUploader up;
+    AssetManager assets(up);
+    RenderMesh m;
+    m.vertices.resize(3);
+    m.indices = {0, 1, 2};
+    PreparedMesh p = assets.prepareMesh(RenderMesh(m));
+    CHECK(p.vertexCount == 3 && p.indexCount == 3 && p.raw.vertices.size() == 3);
+    MeshHandle a = assets.acquirePrepared(std::move(p), "");
+    MeshHandle b = assets.acquireMesh(m, "");
+    CHECK(a.valid() && b.valid() && a != b);
+    CHECK(up.uploads == 2);
+    const auto groups = assets.meshBytesByPrefix();
+    CHECK(groups.size() == 1 && groups[0].meshes == 2 && groups[0].bytes == 2 * (3 * 56 + 3 * 4));
+    // a key still dedups on the prepared path
+    MeshHandle k1 = assets.acquirePrepared(assets.prepareMesh(RenderMesh(m)), "k");
+    MeshHandle k2 = assets.acquirePrepared(assets.prepareMesh(RenderMesh(m)), "k");
+    CHECK(k1 == k2 && up.uploads == 3 && assets.refCount(k1) == 2);
+}

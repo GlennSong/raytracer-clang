@@ -25,6 +25,8 @@ public:
     void resize(int width, int height) override;
 
     MeshHandle uploadMesh(const RenderMesh& mesh) override;
+    PreparedMesh prepareMesh(RenderMesh&& mesh) const override;
+    MeshHandle uploadPrepared(PreparedMesh&& mesh) override;
     void removeMesh(MeshHandle handle) override;
     BoundingSphere getMeshBounds(MeshHandle handle) const override;
     TextureHandle uploadTexture(int width, int height, int channels,

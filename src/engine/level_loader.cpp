@@ -4980,19 +4980,28 @@ bool LevelLoader::load(const std::string& path,
                     const double inv = (*reUVTable)[engine::baseSlot(slot)];
                     if (inv > 0.0) applyWorldPlanarUVs(chunk, inv);
                 };
-                std::function<Entity(std::size_t, RenderMesh&, double, double, bool)> commitChunk =
-                    [protoFor, worldP, assetsP](
-                        std::size_t slot, RenderMesh& chunk, double minDist, double drawDist, bool scaleSmallParts) -> Entity {
+                // Where a beacon chunk stands (its blink phase hashes the cell); zero for anything else.
+                auto beaconCentroid = [](std::size_t slot, const RenderMesh& chunk) {
+                    const PartId id = static_cast<PartId>(engine::baseSlot(slot));
+                    if ((id != PartId::Beacon && id != PartId::BeaconGlow && id != PartId::BeaconHaze) || chunk.vertices.empty())
+                        return Vec3(0, 0, 0);
+                    Vec3 c(0, 0, 0);
+                    for (const Vertex& v : chunk.vertices) c += v.position;
+                    return c * (1.0 / static_cast<double>(chunk.vertices.size()));
+                };
+                // COMMIT takes the chunk already uploaded: in place (spawnChunk) or converted on a
+                // residency worker and only copied here (the streamed cells, ADR-0096).
+                std::function<Entity(std::size_t, MeshHandle, const Vec3&, double, double, bool)> commitChunk =
+                    [protoFor, worldP](
+                        std::size_t slot, MeshHandle mesh, const Vec3& centroid, double minDist, double drawDist, bool scaleSmallParts) -> Entity {
                     World& world = *worldP;
-                    AssetManager& assets = *assetsP;
-                    if (chunk.vertices.empty()) return Entity{};
                     const std::size_t pi = engine::baseSlot(slot);
                     PartProto& pp = protoFor(pi, scaleSmallParts);
                     Renderable r = pp.proto;
                     if (drawDist > 0) r.drawDistance = drawDist * pp.ddScale;
                     r.minDistance = minDist;
                     r.drawClass = engine::DrawClass::Structure;
-                    r.mesh = assets.acquireMesh(chunk, "");   // world-space, unkeyed
+                    r.mesh = mesh;   // world-space, unkeyed
                     Entity e = world.create();
                     Transform t;   // identity — the mesh sits in world space
                     world.add<Transform>(e, t);
@@ -5018,9 +5027,7 @@ bool LevelLoader::load(const std::string& path,
                         // Aviation beacons: FLASHING on a phase hashed from the 24 m cell the chunk
                         // stands in (beacon chunks are cut that small, so neighbouring towers differ;
                         // the lamp and its halo share the cell, so they share the phase).
-                        Vec3 c(0, 0, 0);
-                        for (const Vertex& v : chunk.vertices) c += v.position;
-                        c = c * (1.0 / static_cast<double>(chunk.vertices.size()));
+                        const Vec3& c = centroid;
                         engine::BeaconBlink bb;
                         engine::beaconCellPhase(static_cast<int>(std::floor(c.x / kBeaconChunk)),
                                                 static_cast<int>(std::floor(c.z / kBeaconChunk)), bb.period, bb.phase);
@@ -5041,9 +5048,10 @@ bool LevelLoader::load(const std::string& path,
                 };
                 tableReUV();
                 std::function<Entity(std::size_t, RenderMesh&, double, double, bool)> spawnChunk =
-                    [prepareChunk, commitChunk](std::size_t slot, RenderMesh& chunk, double minDist, double drawDist, bool scale) -> Entity {
+                    [prepareChunk, commitChunk, beaconCentroid, assetsP](std::size_t slot, RenderMesh& chunk, double minDist, double drawDist, bool scale) -> Entity {
                     prepareChunk(slot, chunk);
-                    return commitChunk(slot, chunk, minDist, drawDist, scale);
+                    if (chunk.vertices.empty()) return Entity{};
+                    return commitChunk(slot, assetsP->acquireMesh(chunk, ""), beaconCentroid(slot, chunk), minDist, drawDist, scale);
                 };
                 // Whole parts (grown here, or a whole-part bundle): split per render cell now. One spawner
                 // for both tiers, so material binding and chunking cannot diverge between LOD0 and LOD1.
@@ -5089,10 +5097,11 @@ bool LevelLoader::load(const std::string& path,
                         auto ents = std::make_shared<std::vector<Entity>>();
                         const double minD = flat ? detailDistance : 0.0, maxD = flat ? facadeDistance : detailDistance;
                         const bool scale = flat ? false : !threeTier;
-                        // Two-phase (residency.h): read + drape + UVs on a worker, upload + entities on
-                        // the render thread.
-                        struct Prepared { std::vector<std::pair<std::size_t, RenderMesh>> chunks; };
-                        it.prepare = [parts, bundle, prepareChunk]() -> std::shared_ptr<void> {
+                        // Two-phase (residency.h): read + drape + UVs + the GPU vertex conversion on a
+                        // worker; the upload copy and the entities on the render thread.
+                        struct Chunk { std::size_t slot; PreparedMesh mesh; Vec3 centroid; };
+                        struct Prepared { std::vector<Chunk> chunks; };
+                        it.prepare = [parts, bundle, prepareChunk, beaconCentroid, assetsP]() -> std::shared_ptr<void> {
                             auto out = std::make_shared<Prepared>();
                             for (const engine::lotcache::LotCellPart& cp : parts) {
                                 RenderMesh chunk;
@@ -5103,22 +5112,25 @@ bool LevelLoader::load(const std::string& path,
                                 if (beacon) {
                                     for (RenderMesh& sub : chunkMeshByCell(chunk, kBeaconChunk)) {
                                         prepareChunk(slot, sub);
-                                        out->chunks.push_back({slot, std::move(sub)});
+                                        if (sub.vertices.empty()) continue;
+                                        const Vec3 c = beaconCentroid(slot, sub);
+                                        out->chunks.push_back({slot, assetsP->prepareMesh(std::move(sub)), c});
                                     }
                                     continue;
                                 }
                                 prepareChunk(slot, chunk);
-                                out->chunks.push_back({slot, std::move(chunk)});
+                                if (chunk.vertices.empty()) continue;
+                                out->chunks.push_back({slot, assetsP->prepareMesh(std::move(chunk)), Vec3(0, 0, 0)});
                             }
                             return out;
                         };
-                        it.commit = [commitChunk, ents, minD, maxD, scale](std::shared_ptr<void> payload) -> std::size_t {
+                        it.commit = [commitChunk, assetsP, ents, minD, maxD, scale](std::shared_ptr<void> payload) -> std::size_t {
                             auto* p = static_cast<Prepared*>(payload.get());
                             if (!p) return 0;
                             std::size_t bytes = 0;
-                            for (auto& [slot, chunk] : p->chunks) {
-                                bytes += chunk.vertices.size() * 56 + chunk.indices.size() * 4;
-                                const Entity e = commitChunk(slot, chunk, minD, maxD, scale);
+                            for (Chunk& c : p->chunks) {
+                                bytes += c.mesh.vertexCount * 56 + c.mesh.indexCount * 4;
+                                const Entity e = commitChunk(c.slot, assetsP->acquirePrepared(std::move(c.mesh)), c.centroid, minD, maxD, scale);
                                 if (e.valid()) ents->push_back(e);
                             }
                             return bytes;
