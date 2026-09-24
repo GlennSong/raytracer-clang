@@ -1243,7 +1243,7 @@ else()
     # ADR-0057; see src/renderer/vulkan/AGENTS.md.
     find_package(Vulkan QUIET)
     if(Vulkan_FOUND)
-        list(APPEND VIEWER_SOURCES src/renderer/vulkan/vulkan_renderer.cpp)
+        list(APPEND VIEWER_SOURCES src/renderer/vulkan/vulkan_renderer.cpp src/renderer/vulkan/vma_impl.cpp)
         set(PLATFORM_LIBS Vulkan::Vulkan)
 
         # Compile the SPIR-V shaders (shared target; sets VK_SHADER_OUT_DIR).
@@ -1268,7 +1268,7 @@ add_executable(viewer
 target_compile_options(viewer PRIVATE -Wall -Wextra -Wpedantic)
 # Vendored headers (tinygltf/stb/nlohmann) are SYSTEM so our strict warnings
 # apply only to our own code, not to libraries we don't maintain.
-target_include_directories(viewer SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
+target_include_directories(viewer SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party ${CMAKE_SOURCE_DIR}/third_party/VulkanMemoryAllocator)
 target_link_libraries(viewer PRIVATE citysim engine_core glfw Threads::Threads ${PLATFORM_LIBS})
 target_compile_definitions(viewer PRIVATE ${PLATFORM_DEFINES})
 # Build the SPIR-V shaders before the viewer that loads them (Vulkan builds only).
@@ -1367,8 +1367,10 @@ if(Qt6_FOUND)
             rt_build_vulkan_shaders()   # shared target; sets VK_SHADER_OUT_DIR
             target_sources(editor_app PRIVATE
                 src/renderer/vulkan/vulkan_renderer.cpp
+                src/renderer/vulkan/vma_impl.cpp
                 src/editor_app/vulkan_viewport.cpp
             )
+            target_include_directories(editor_app SYSTEM PRIVATE third_party/VulkanMemoryAllocator)
             target_link_libraries(editor_app PRIVATE Vulkan::Vulkan)
             target_compile_definitions(editor_app PRIVATE
                 RT_HAVE_VULKAN=1

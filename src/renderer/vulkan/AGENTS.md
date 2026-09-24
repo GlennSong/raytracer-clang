@@ -9,6 +9,16 @@ real Linux/Windows run with the validation layers). Phases 2+ (textures, full
 forward, shadows, IBL, post) still to do. Decision: ADR-0057. Plan:
 `docs/vulkan-renderer-plan.md`. Parity reference: `../metal/AGENTS.md`.
 
+### GPU memory and uploads (ADR-0094) — read before allocating anything
+- **Meshes and textures go through VMA** (`allocator`, `createGpuBuffer`, `createGpuImage`),
+  never a raw `vkAllocateMemory`. Only render targets, UBOs and readback buffers allocate raw.
+- **Uploads go through the queue:** `stage()` the bytes (may flush — call it *before*
+  `uploadCmd()`), then record the copy into `uploadCmd()`. Never submit + `vkQueueWaitIdle` a
+  one-time command buffer for an upload. The batch flushes at the start of `drawFrame`.
+- **Removal retires, it does not destroy:** `retiredMeshes`/`retiredTextures` are freed by
+  `collectRetired` once `MAX_FRAMES_IN_FLIGHT` frames have passed. No `vkDeviceWaitIdle` for it.
+- `mem?` (control channel) prints heaps, blocks, allocations and upload totals.
+
 ### What exists after Phase 1
 - `vulkan_renderer.h` — `VulkanRenderer : Renderer`, pimpl (no Vulkan in header).
 - `vulkan_renderer.cpp` — instance (+ debug messenger) → surface (Window seam) →

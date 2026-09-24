@@ -7492,3 +7492,37 @@ designs, but it still assembles the scene twice. Retiring that is a bigger job t
 wants its own decision. The Makefile build of `raytracer` is a second, hand-listed build of the same
 binary and has not compiled since ADR-0089 renamed `road_net.cpp` two days ago; CMake's `raytracer`
 target (which links `engine_core`) is the live one.
+
+## ADR-0094 — GPU memory: one allocator, one upload queue, deferred destruction (Vulkan)
+
+**Context.** Measured on metro_planned (`mem?`, 2026-09-24): the viewer held 6.5 GB of mesh data in
+**25,394 separate `vkAllocateMemory` calls** — one per vertex buffer and one per index buffer — and
+each upload made its own staging buffer, submitted a one-time command buffer and waited the queue
+idle. Near 9.85 GB on the 10 GB card uploads began to fail (419 in one run) although the data was
+6.6 GB: per-allocation overhead, not data. Every `removeMesh`/`removeTexture` called
+`vkDeviceWaitIdle`, so each evicted CDLOD tile stalled the whole GPU. This blocked finer terrain
+(the "roads under the terrain" fix) and is the wrong foundation for streaming a large world.
+
+**Decision.** In the Vulkan backend:
+- **One allocator.** Meshes and textures are suballocated with AMD's Vulkan Memory Allocator
+  (vendored single header, `third_party/VulkanMemoryAllocator`, v3.3.0, MIT; implementation in
+  `vma_impl.cpp`). `VK_EXT_memory_budget` is enabled when the driver has it, so heap usage and
+  budget are the driver's own figures — the input the residency budget will need (ADR-0095).
+  Render targets, UBOs and readback buffers keep their own allocations (a few dozen, recreated
+  with the swapchain).
+- **One upload queue.** Data for device-local memory is copied into a persistent, mapped 64 MB
+  staging ring and its copy (or image transition + copy + mip blits) recorded into one command
+  buffer. The batch is submitted at the start of each frame, when the ring fills, and at shutdown,
+  closed by one full barrier and waited on its fence; a payload larger than the ring gets a one-off
+  staging buffer freed with its batch. An upload is usable by the next frame, whatever records it.
+- **Deferred destruction.** A removed mesh or texture is retired with the frame counter and
+  destroyed once every frame that could reference it has completed (`MAX_FRAMES_IN_FLIGHT` later),
+  never with `vkDeviceWaitIdle`.
+
+**Consequences.** metro_planned, same build otherwise: device allocations 25,394 → **28 blocks**;
+peak GPU use (with ~1.6 GB of desktop) **9.6 → 8.1 GB**; upload submits ~25,000 → **109 batches**;
+load **225 → 180 s** (entities + spawn 61.7 → 23.9 s); zero upload failures; the frames match the
+old ones but for clouds and moving shadows. `mem?` now prints the heaps (blocks, allocations, usage
+against budget) and the upload totals. The Metal backend is unchanged (Metal heaps are its own
+question). Still open, and next: nothing is ever *evicted* for memory — everything a level loads
+stays resident (ADR-0095's residency service), and a vertex is still 56 bytes for every mesh.
