@@ -45,18 +45,66 @@
     {
      "_place": "sw town",
      "at": [
-      -1636.0,
-      -1478.0
+      -1638.0,
+      -1528.0
      ],
      "kind": "residential"
     },
     {
      "_place": "mountain city",
      "at": [
-      -1966.0,
-      68.0
+      -1995.0,
+      71.0
+     ],
+     "kind": "financial"
+    },
+    {
+     "_place": "mountain city",
+     "at": [
+      -1907.0,
+      1124.0
      ],
      "kind": "commercial"
+    },
+    {
+     "_place": "mountain city",
+     "at": [
+      -2079.0,
+      -958.0
+     ],
+     "kind": "commercial"
+    },
+    {
+     "_place": "mountain city",
+     "at": [
+      -2071.0,
+      -1193.0
+     ],
+     "kind": "industrial"
+    },
+    {
+     "_place": "mountain city",
+     "at": [
+      -1541.0,
+      1253.0
+     ],
+     "kind": "residential"
+    },
+    {
+     "_place": "mountain city",
+     "at": [
+      -1603.0,
+      54.0
+     ],
+     "kind": "residential"
+    },
+    {
+     "_place": "mountain city",
+     "at": [
+      -1719.0,
+      -1102.0
+     ],
+     "kind": "residential"
     },
     {
      "_place": "ne town",
@@ -69,8 +117,8 @@
     {
      "_place": "ne town",
      "at": [
-      536.0,
-      2222.0
+      553.0,
+      2229.0
      ],
      "kind": "residential"
     }

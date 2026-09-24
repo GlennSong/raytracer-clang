@@ -1292,8 +1292,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // downtown and every recipe's height lift read this one function; before,
     // it was sqrt(1 - d/innerRadius) in two places and 0 for every lot outside
     // the financial rim, which is why a "downtown" was seven buildings.
+    // From the NEAREST downtown: every financial hub zones a downtown of its own (DistrictMap), and
+    // measuring height from `center` alone left a second one — metro_planned's mountain city — a
+    // financial district of low-rise.
     auto corenessAt = [&](const Vec2& q) {
-        const Real d = (q - p.center).length();
+        Real d = (q - p.center).length();
+        for (const auto& h : p.hubs) if (h.second == 0) d = std::min(d, (q - h.first).length());
         const Real plateau = 0.5 * std::max(Real(1), p.innerRadius);
         const Real edge = std::max(p.midRadius, p.innerRadius + Real(1));
         if (d <= plateau) return Real(1);

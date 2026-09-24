@@ -206,7 +206,10 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
         if (cd.angle < 32.0) { ++out.rejectedOblique; out.squarestRejected = std::max(out.squarestRejected, cd.angle); continue; }
         bool near = false;
         for (double t : taken) if (std::fabs(t - cd.s) < o.spacing) near = true;
-        if (near) { ++out.rejectedSpacing; continue; }
+        if (near) {
+            if (std::getenv("RT_DIAMOND_WHY")) std::fprintf(stderr, "[diamond] %s crossing at s=%.0f (street %s): within %.0f m of a diamond\n", o.idPrefix.c_str(), cd.s, streets[cd.street].id.c_str(), o.spacing);
+            ++out.rejectedSpacing; continue;
+        }
         // Each side: a four-way on the cross street where the band meets it, if that street
         // carries on well clear of its next junction; else a touch-down on the road beside the
         // freeway, the off-ramp upstream of the crossing and the on-ramp downstream of it; else,

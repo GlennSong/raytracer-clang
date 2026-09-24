@@ -997,32 +997,57 @@ CityPlan generatePlan(const Brief& B) {
             std::vector<Vec2> pts; const int n = std::max(1, static_cast<int>(std::fabs(off1 - off0) / 20));
             for (int i = 0; i <= n; ++i) pts.push_back(frame(s, off0 + (off1 - off0) * i / n)); street(pts, k, w);
         };
-        // THE CENTRE: a grid behind the main street, `grid` blocks each way, its streets square to the
-        // loop. The main street is its front edge; the back road runs as far on the far side, and the
-        // one street under the freeway is at the centre — the diamond's, which lands within 100 m of it.
-        // (With the town closed by streets under the freeway at both ends too, every diamond's merge
-        // lanes reached over one and it was refused.)
+        // THE CENTRE: a grid behind the main street, `grid` blocks each way — or, for a CITY on the
+        // loop, `gridAlong` blocks along it by `gridDeep` deep — its streets square to the loop and
+        // curving with it. The main street is its front edge; the back road runs as far on the far
+        // side. Streets pass under the freeway the least interchange spacing apart, counted from the centre (a town's one is
+        // at its middle): with more, every diamond's ramps or merge lanes reached over one and it was
+        // refused. A city's DOWNTOWN is its middle, a financial hub of its own: towers, not smaller
+        // blocks (half-size ones fall under the three-lot minimum and the thin-block pass took them).
         const int nb = pj.value("grid", 3);
-        const Real bu = 90, bv = 75, half = nb * bu / 2, depth = 50 + nb * bv;
+        const int nbU = pj.value("gridAlong", nb), nbV = pj.value("gridDeep", nb);
+        const Real bu = pj.value("blockAlong", 90.0), bv = pj.value("blockDeep", 75.0);
+        const Real half = nbU * bu / 2, depth = 50 + nbV * bv;
+        const bool town = nbU == nb && nbV == nb;
         along(sc - half - 2, sc + half + 2, 50, RoadClass::Arterial, B.arterialWidth);
-        along(sc - half - 32, sc + half + 32, -50, RoadClass::Collector, B.collectorWidth);
-        across(sc, -52, 52, RoadClass::Collector, B.collectorWidth);
-        for (int i = 0; i <= nb; ++i) across(sc - half + i * bu, 48, depth + 2, i == nb / 2 ? RoadClass::Collector : RoadClass::Local, B.localWidth);
-        for (int j = 1; j <= nb; ++j) along(sc - half - 2, sc + half + 2, 50 + j * bv, RoadClass::Local, B.localWidth);
+        // (a city's runs on past its end crossing far enough for that diamond's ramps to land along it:
+        // touch-down, run along it and the shift across, 30 + 20 + 50 m)
+        const Real backRun = town ? 32 : 110;
+        along(sc - half - backRun, sc + half + backRun, -50, RoadClass::Collector, B.collectorWidth);
+        const int underEvery = std::max(1, static_cast<int>(std::ceil(SceneOptions{}.interchangeSpacing / bu)));   // a diamond at each
+        for (int i = 0; i <= nbU; ++i) {
+            const int fromMid = i - nbU / 2;
+            const bool under = town ? i == nbU / 2 : fromMid % underEvery == 0;
+            const bool main = i == nbU / 2 || under;
+            across(sc - half + i * bu, under ? -52 : 48, depth + 2, main ? RoadClass::Collector : RoadClass::Local, main ? B.collectorWidth : B.localWidth);
+        }
+        for (int j = 1; j <= nbV; ++j) along(sc - half - 2, sc + half + 2, 50 + j * bv, RoadClass::Local, B.localWidth);
         Vec2 o, a, in; frameAt(sc, 0, o, a, in);
-        const Vec2 centre = o + in * (50 + nb * bv / 2);
-        pl.hubs.push_back({centre, pl.kind});
-        auto inGrid = [&](const Vec2& p, Real margin) {   // inside the centre's rectangle, in the loop's local frame at sc
-            const Vec2 d = p - o; const Real u = dot(d, a), v = dot(d, in);
+        const Vec2 centre = o + in * (50 + nbV * bv / 2);
+        if (town) pl.hubs.push_back({centre, pl.kind});
+        else {
+            // a city's quarters: downtown in the middle, shops and offices a third of the way out
+            // each side, industry at the far end by the freeway, housing beyond (the cells' hub)
+            pl.hubs.push_back({centre, "financial"});
+            for (Real f : {-0.36, 0.36}) pl.hubs.push_back({frame(sc + f * 2 * half, 50 + nbV * bv / 2), "commercial"});
+            pl.hubs.push_back({frame(sc + half * 0.9, 50 + nbV * bv * 0.4), "industrial"});
+        }
+        // inside the centre's grid, in the loop's own (station, offset) frame, so a grid kilometres
+        // long follows the loop's curve (a town's straight frame at its middle was close enough)
+        const std::vector<double> gst = roads::lanes::stations(plan.loop);
+        auto inGrid = [&](const Vec2& p, Real margin) {
+            const roads::lanes::Projection pr = roads::lanes::project(plan.loop, gst, p);
+            const Vec2 foot = roads::lanes::pointAt(plan.loop, gst, pr.station);
+            const Real u = pr.station - sc, v = dot(p - foot, in) > 0 ? pr.distance : -pr.distance;
             return u > -half - margin && u < half + margin && v > 50 - margin && v < depth + margin;
         };
         // THE CELLS: seeds at least `cell` apart, a jittered lattice thinned by distance
-        const Real cell = pj.value("cell", 105.0), radius = pj.value("radius", 520.0);
+        const Real cell = pj.value("cell", 105.0), radius = pj.value("radius", 520.0), fringe = pj.value("fringe", 0.0);
         const Real sea = B.world.value("seaLevel", -1e30), gridHalf = B.world.value("grid", B.size * 0.5 + 60);
-        const Vec2 tc = o + in * (50 + nb * bv * Real(0.5));
+        const Vec2 tc = o + in * (50 + nbV * bv * Real(0.5));
         const std::vector<double> lst = roads::lanes::stations(plan.loop);
         auto open = [&](const Vec2& p) {   // may a residential street stand here?
-            if ((p - tc).length() > radius) return false;
+            if (town ? (p - tc).length() > radius : !inGrid(p, fringe)) return false;
             // on the town's own side of the loop: across it, nothing reaches a cell
             const roads::lanes::Projection pr = roads::lanes::project(plan.loop, lst, p);
             if (dot(p - roads::lanes::pointAt(plan.loop, lst, pr.station), in) < 0) return false;
@@ -1034,8 +1059,18 @@ CityPlan generatePlan(const Brief& B) {
         };
         std::vector<Vec2> seeds;
         const uint32_t salt = static_cast<uint32_t>(std::hash<std::string>{}(pl.name));
-        for (Real y = -radius - cell; y <= radius + cell; y += cell * Real(0.55))
-            for (Real x = -radius - cell; x <= radius + cell; x += cell * Real(0.55)) {
+        // the seed lattice spans the town's disc, or the city's grid and its fringe
+        Vec2 lo = tc - Vec2(radius, radius), hi = tc + Vec2(radius, radius);
+        if (!town) {
+            lo = Vec2(1e30, 1e30); hi = Vec2(-1e30, -1e30);
+            for (Real su = sc - half - fringe; su <= sc + half + fringe + 1; su += 40)
+                for (Real sv : {Real(50) - fringe, depth + fringe}) {
+                    const Vec2 q = frame(su, sv);
+                    lo = Vec2(std::min(lo.x, q.x), std::min(lo.y, q.y)); hi = Vec2(std::max(hi.x, q.x), std::max(hi.y, q.y));
+                }
+        }
+        for (Real y = lo.y - tc.y - cell; y <= hi.y - tc.y + cell; y += cell * Real(0.55))
+            for (Real x = lo.x - tc.x - cell; x <= hi.x - tc.x + cell; x += cell * Real(0.55)) {
                 const int ix = static_cast<int>(std::lround(x)), iy = static_cast<int>(std::lround(y));
                 const Real jx = ((hash3(ix, iy, B.seed ^ salt) & 0xFFFF) / 65535.0 - 0.5) * cell * 0.5;
                 const Real jy = ((hash3(iy, ix, B.seed ^ salt ^ 0x9E37u) & 0xFFFF) / 65535.0 - 0.5) * cell * 0.5;
@@ -1120,11 +1155,19 @@ CityPlan generatePlan(const Brief& B) {
             ++streets;
         }
         // the residential hub: the mean of the seeds that stand in open ground
-        Vec2 sum(0, 0); int n = 0;
-        for (const Vec2& s2 : seeds) if (open(s2) && !inGrid(s2, 20)) { sum = sum + s2; ++n; }
-        if (n) pl.hubs.push_back({sum / Real(n), "residential"});
+        // (a city's, one per third of its length: one mean over a city kilometres long lands downtown)
+        const int bins = town ? 1 : 3;
+        std::vector<Vec2> sum(static_cast<std::size_t>(bins), Vec2(0, 0)); std::vector<int> n(static_cast<std::size_t>(bins), 0);
+        for (const Vec2& s2 : seeds) {
+            if (!open(s2) || inGrid(s2, 20)) continue;
+            const Real u = roads::lanes::project(plan.loop, gst, s2).station - sc;
+            const int k = std::clamp(static_cast<int>((u + half + fringe) / (2 * (half + fringe)) * bins), 0, bins - 1);
+            sum[static_cast<std::size_t>(k)] = sum[static_cast<std::size_t>(k)] + s2; ++n[static_cast<std::size_t>(k)];
+        }
+        for (int k = 0; k < bins; ++k) if (n[static_cast<std::size_t>(k)]) pl.hubs.push_back({sum[static_cast<std::size_t>(k)] / Real(n[static_cast<std::size_t>(k)]), "residential"});
         pl.hub = centre;
-        if (std::getenv("RT_PLAN_WHY")) std::printf("[plan] %s: a %dx%d centre, %d cell streets from %zu seeds\n", pl.name.c_str(), nb, nb, streets, seeds.size());
+        if (std::getenv("RT_PLAN_WHY")) std::printf("[plan] %s: a %dx%d centre, %d cell streets from %zu seeds, hubs", pl.name.c_str(), nbU, nbV, streets, seeds.size());
+        if (std::getenv("RT_PLAN_WHY")) { for (const auto& h : pl.hubs) std::printf(" %s", h.second.c_str()); std::printf("\n"); }
     };
 
     // THE MOUNTAIN FRONT, ray by ray from the centre: the first place past the city where the

@@ -142,10 +142,15 @@
         },
         {
           "name": "mountain city",
+          "_comment": "A city, not a strip (Glenn, 2026-09-23: 'make it a real city'): a gridded centre 33 x 4 blocks following the loop, a downtown in its middle with its own financial hub (towers), shops a third of the way out, industry at one end, and cell-grown residential streets `fringe` metres round it.",
           "at": 178,
           "length": 3000,
-          "depth": 5,
-          "kind": "commercial"
+          "kind": "commercial",
+          "style": "town",
+          "gridAlong": 33,
+          "gridDeep": 4,
+          "fringe": 480,
+          "cell": 105
         },
         {
           "name": "ne town",
