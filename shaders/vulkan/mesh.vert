@@ -13,6 +13,9 @@ layout(location = 1) in vec4 inNormal;
 layout(location = 2) in vec4 inTangent;
 layout(location = 3) in vec2 inTexcoord;
 layout(location = 4) in vec4 inColor;
+// The model matrix, per instance (binding 1, a column per location; ADR-0097). A plain
+// drawMesh is a one-instance draw, so every mesh reads it here, not from the push block.
+layout(location = 5) in mat4 inModel;
 
 // Octahedral pair -> unit vector (the inverse of octEncode() in vulkan_renderer.cpp).
 vec3 octDecode(vec2 e) {
@@ -67,7 +70,7 @@ layout(location = 3) out vec3 outColor;
 layout(location = 4) out vec3 outWorldTangent;
 
 void main() {
-    vec4 world = pc.model * vec4(inPosition, 1.0);
+    vec4 world = inModel * vec4(inPosition, 1.0);
     vec3 normal = kPackedVertex ? octDecode(inNormal.xy) : inNormal.xyz;
     vec3 tangent = kPackedVertex ? octDecode(inTangent.xy) : inTangent.xyz;
 
@@ -75,7 +78,7 @@ void main() {
     // height above the model's base (planted root, moving tips) and phase-offset
     // by world XZ so a field doesn't sway in unison. Ports lighting_entry.metal.
     if ((pc.surfaceFlags.y & 4u) != 0u) {
-        float baseY = pc.model[3].y;
+        float baseY = inModel[3].y;
         float weight = clamp((world.y - baseY) / max(g.wind2.y, 0.001), 0.0, 1.0);
         weight *= weight;
         float phase = g.wind1.w * g.wind2.x + dot(world.xz, vec2(0.15, 0.1));
@@ -85,10 +88,10 @@ void main() {
 
     outWorldPos = world.xyz;
     // Inverse-transpose so non-uniform scale keeps normals perpendicular.
-    mat3 normalMatrix = mat3(transpose(inverse(pc.model)));
+    mat3 normalMatrix = mat3(transpose(inverse(inModel)));
     outWorldNormal = normalize(normalMatrix * normal);
     // Tangent in world space for normal mapping (matches Metal's model*tangent).
-    outWorldTangent = normalize((pc.model * vec4(tangent, 0.0)).xyz);
+    outWorldTangent = normalize((inModel * vec4(tangent, 0.0)).xyz);
     outTexcoord = inTexcoord;
     outColor = inColor.rgb;
     gl_Position = g.viewProjection * world;

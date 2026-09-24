@@ -45,6 +45,9 @@ public:
     void setLights(const SceneLighting& lighting) override;
     void drawMesh(MeshHandle handle, const Mat4& transform,
                   const RenderMaterial& material) override;
+    bool setPresentSync(bool enabled) override;
+    void drawMeshInstanced(MeshHandle handle, const std::vector<Mat4>& transforms,
+                           const RenderMaterial& material) override;
     void drawTerrain(MeshHandle handle, const RenderMaterial& material,
                      float morphStart, float morphEnd) override;
     void endFrame() override;

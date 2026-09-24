@@ -6,6 +6,7 @@
 // NDC->uv mapping, so write and read are self-consistent.
 
 layout(location = 0) in vec3 inPosition;
+layout(location = 1) in mat4 inModel;   // per instance (ADR-0097); pc.model is no longer read
 
 layout(push_constant) uniform Push {
     mat4 lightViewProj;
@@ -13,5 +14,5 @@ layout(push_constant) uniform Push {
 } pc;
 
 void main() {
-    gl_Position = pc.lightViewProj * pc.model * vec4(inPosition, 1.0);
+    gl_Position = pc.lightViewProj * inModel * vec4(inPosition, 1.0);
 }

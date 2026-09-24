@@ -7603,3 +7603,36 @@ about half of all sidewalk kerb faces pointed inward. They are now wound as the 
 the triangles are made counter-clockwise. metro_planned concrete side triangles went from 1.86 M to
 0.23 M (deck 689 k → 4.5 k, sidewalk 906 k → 198 k, shoulder 267 k → 28 k). What remains is the
 parapet walls (457 k) and girders (183 k).
+
+## ADR-0097 — Instanced drawing on Vulkan, and a test forest that measures it
+
+**Context.** Metal batched instances; Vulkan drew one `vkCmdDrawIndexed` per transform, with the model
+matrix in a push constant, so every tree, grass patch and lamp in an `InstanceGroup` cost a draw call.
+Draw calls were already the city's measured ceiling (citysim scale). Forests and street trees (the
+flora plan) cannot be built on that.
+
+**Decision.**
+- **Every mesh draw reads its model matrix per instance** from a per-frame, host-visible instance
+  buffer (binding 1, instance rate, locations 5–8 in `mesh.vert`, 1–4 in `mesh_shadow.vert`).
+  `drawMesh` is a one-instance draw, and `drawMeshInstanced` is one draw for the whole visible set.
+  One path, not an instanced twin of every pipeline. Terrain keeps its own input (its nodes are
+  world-space) but still writes an identity row, which the shadow pass reads.
+- The buffer is rewritten each frame after that slot's fence wait, and regrows by doubling.
+- `RT_NO_INSTANCING=1` restores one draw per instance, for A/B.
+- **Vulkan honours `setPresentSync(false)`**, and `RT_VSYNC=0` turns sync off at start (MAILBOX,
+  else IMMEDIATE). Under FIFO every timing was a multiple of the refresh interval: both builds read
+  exactly 50.0 ms on the test forest.
+- **`assets/levels/instancing_forest.json`**: 800 m of terrain, ~7,400 scatter-grade trees (three
+  species × four variants) and ~18,600 grass patches. Many *light* instances, so draw calls are what
+  it measures. `forest.json` is the opposite (a few 100k-triangle trees), and GPU-bound.
+
+**Consequences.** Frame times with vsync off and `RT_DUMP_STATS=1`:
+
+| Scene | Draws | Frame time |
+|---|---|---|
+| instancing_forest | 9,750 → 178 | 11.0 → 2.95 ms |
+| metro_planned downtown | 10,185 → 4,441 | 26.0 → 19.8 ms |
+
+Frames match. The remaining single draws on metro are unique meshes (building chunks, road cells),
+which need merging or indirect draws, not instancing. Next in the flora plan: a baked tree catalog
+with polygon-capped LODs.

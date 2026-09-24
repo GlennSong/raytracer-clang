@@ -320,6 +320,10 @@ struct DrawItem {
     std::array<TextureHandle, 5> textures;   // albedo, MR, normal, AO, emissive
     float opacity = 1.0f;                     // < 1 → transparent pass (back-to-front)
     bool  terrain = false;                    // → terrainPipeline (CDLOD morph in vert)
+    // INSTANCED (ADR-0097): the model matrices are rows [firstInstance, +instanceCount) of the
+    // frame's instance buffer, read by the vertex shader at instance rate. drawMesh is a
+    // one-instance draw; drawMeshInstanced is one draw for the whole visible set.
+    uint32_t firstInstance = 0, instanceCount = 1;
 };
 
 bool hasValidationLayer() {
@@ -698,6 +702,8 @@ struct VulkanRenderer::Impl {
     float camFar = 1000.0f;
 
     bool framebufferResized = false;
+    // v-sync (FIFO) on unless a benchmark turns it off: setPresentSync, or RT_VSYNC=0 at start
+    bool presentSync = [] { const char* e = std::getenv("RT_VSYNC"); return !(e && e[0] == '0'); }();
     bool initialized = false;
 
     SlotMap<GpuMesh, MeshTag> meshes;
@@ -784,6 +790,16 @@ struct VulkanRenderer::Impl {
     // GPU MEMORY, counted (Renderer::memoryReport): live mesh and texture allocations
     // and the bytes VMA gave them.
     long meshAllocs = 0, texAllocs = 0;
+    // The frame's model matrices (16 floats each, DrawItem::firstInstance), filled by the draw
+    // calls and copied into this frame slot's host-visible instance buffer before recording.
+    std::vector<float> instanceData;
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> instanceBuffers{};
+    std::array<VmaAllocation, MAX_FRAMES_IN_FLIGHT> instanceAllocs{};
+    std::array<void*, MAX_FRAMES_IN_FLIGHT> instanceMapped{};
+    std::array<VkDeviceSize, MAX_FRAMES_IN_FLIGHT> instanceCapacity{};
+    uint32_t pushInstance(const Mat4& m);         // appends one model matrix, returns its row
+    bool uploadInstances();                       // this frame's rows -> instanceBuffers[currentFrame]
+    void destroyInstanceBuffers();
     VkDeviceSize meshBytes = 0, meshDataBytes = 0, texBytes = 0;
 
     // ---- memory + uploads (ADR-0094) --------------------------------------------
@@ -1072,7 +1088,19 @@ bool VulkanRenderer::Impl::createSwapchain() {
         if (f.format == VK_FORMAT_B8G8R8A8_UNORM &&
             f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) { chosen = f; break; }
 
+    // FIFO (v-sync) unless presentation sync is off (setPresentSync(false), RT_VSYNC=0): then
+    // MAILBOX, or IMMEDIATE, whichever the surface offers -- a benchmark needs the frame's own
+    // time, not the next multiple of the refresh interval.
     VkPresentModeKHR present = VK_PRESENT_MODE_FIFO_KHR;  // always available, v-sync
+    if (!presentSync) {
+        uint32_t nModes = 0;
+        vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &nModes, nullptr);
+        std::vector<VkPresentModeKHR> modes(nModes);
+        vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &nModes, modes.data());
+        for (VkPresentModeKHR want : {VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR})
+            if (std::find(modes.begin(), modes.end(), want) != modes.end()) { present = want; break; }
+        if (present == VK_PRESENT_MODE_FIFO_KHR) LOG_WARN("[vulkan] no unsynced present mode; staying on FIFO");
+    }
 
     VkExtent2D extent;
     if (caps.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
@@ -3760,24 +3788,41 @@ bool VulkanRenderer::Impl::createPipeline() {
     attrs[3] = {3, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(GpuVertex, texcoord)};
     attrs[4] = {4, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, color)};
 
+    // Terrain's input: the mesh alone (terrain.vert ignores the model, its nodes are world-space).
+    VkPipelineVertexInputStateCreateInfo vertexInputTerrain{};
+    vertexInputTerrain.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInputTerrain.vertexBindingDescriptionCount = 1;
+    vertexInputTerrain.pVertexBindingDescriptions = &binding;
+    vertexInputTerrain.vertexAttributeDescriptionCount = static_cast<uint32_t>(attrs.size());
+    vertexInputTerrain.pVertexAttributeDescriptions = attrs.data();
+
+    // Every other mesh pipeline also reads its MODEL MATRIX per instance (ADR-0097): binding 1,
+    // one mat4 (locations 5-8, a column each) per instance from the frame's instance buffer.
+    const VkVertexInputBindingDescription instanceBinding{1, 16 * sizeof(float), VK_VERTEX_INPUT_RATE_INSTANCE};
+    std::array<VkVertexInputBindingDescription, 2> bindings{binding, instanceBinding};
+    std::array<VkVertexInputAttributeDescription, 9> attrsInst{};
+    for (int k = 0; k < 5; ++k) attrsInst[k] = attrs[k];
+    for (uint32_t c = 0; c < 4; ++c) attrsInst[5 + c] = {5 + c, 1, VK_FORMAT_R32G32B32A32_SFLOAT, c * 4 * static_cast<uint32_t>(sizeof(float))};
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInput.vertexBindingDescriptionCount = 1;
-    vertexInput.pVertexBindingDescriptions = &binding;
-    vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(attrs.size());
-    vertexInput.pVertexAttributeDescriptions = attrs.data();
+    vertexInput.vertexBindingDescriptionCount = static_cast<uint32_t>(bindings.size());
+    vertexInput.pVertexBindingDescriptions = bindings.data();
+    vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(attrsInst.size());
+    vertexInput.pVertexAttributeDescriptions = attrsInst.data();
 
     // The standard (packed) vertex: same locations, narrower formats; mesh.vert decodes them
     // when its kPackedVertex specialisation constant is on (ADR-0096).
     VkVertexInputBindingDescription bindingPacked{0, sizeof(GpuVertexPacked), VK_VERTEX_INPUT_RATE_VERTEX};
-    std::array<VkVertexInputAttributeDescription, 5> attrsPacked{};
+    std::array<VkVertexInputAttributeDescription, 9> attrsPacked{};
     attrsPacked[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertexPacked, position)};
     attrsPacked[1] = {1, 0, VK_FORMAT_R16G16_SNORM, offsetof(GpuVertexPacked, normal)};
     attrsPacked[2] = {2, 0, VK_FORMAT_R16G16_SNORM, offsetof(GpuVertexPacked, tangent)};
     attrsPacked[3] = {3, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(GpuVertexPacked, texcoord)};
     attrsPacked[4] = {4, 0, VK_FORMAT_R8G8B8A8_UNORM, offsetof(GpuVertexPacked, color)};
+    for (int c = 5; c < 9; ++c) attrsPacked[c] = attrsInst[c];
+    std::array<VkVertexInputBindingDescription, 2> bindingsPacked{bindingPacked, instanceBinding};
     VkPipelineVertexInputStateCreateInfo vertexInputPacked = vertexInput;
-    vertexInputPacked.pVertexBindingDescriptions = &bindingPacked;
+    vertexInputPacked.pVertexBindingDescriptions = bindingsPacked.data();
     vertexInputPacked.pVertexAttributeDescriptions = attrsPacked.data();
     const VkSpecializationMapEntry packedEntry{0, 0, sizeof(VkBool32)};
     const VkBool32 packedOn = VK_TRUE;
@@ -3941,7 +3986,9 @@ bool VulkanRenderer::Impl::createPipeline() {
                                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     blendAttachments[1].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    info.pVertexInputState = &vertexInputTerrain;
     VkResult cresult = createTwin(&terrainPipeline, nullptr);
+    info.pVertexInputState = &vertexInput;
     vkDestroyShaderModule(device, cvert, nullptr);
     vkDestroyShaderModule(device, cfrag, nullptr);
     if (cresult != VK_SUCCESS) {
@@ -4184,6 +4231,60 @@ bool VulkanRenderer::Impl::createUploads() {
     VkFenceCreateInfo fi{};
     fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     return vkCreateFence(device, &fi, nullptr, &up.fence) == VK_SUCCESS;
+}
+
+uint32_t VulkanRenderer::Impl::pushInstance(const Mat4& m) {
+    const uint32_t row = static_cast<uint32_t>(instanceData.size() / 16);
+    instanceData.resize(instanceData.size() + 16);
+    packMat4(m, instanceData.data() + static_cast<std::size_t>(row) * 16, /*flipY=*/false);
+    return row;
+}
+
+// This frame slot's instance buffer holds the frame's model matrices. Its previous use was the
+// frame MAX_FRAMES_IN_FLIGHT ago, whose fence drawFrame has just waited on, so it is rewritten
+// (or regrown, doubling) in place. Host-visible and mapped; VMA picks device-local BAR memory
+// where the driver offers it.
+bool VulkanRenderer::Impl::uploadInstances() {
+    const VkDeviceSize need = std::max<VkDeviceSize>(instanceData.size() * sizeof(float), 64);
+    const int f = currentFrame;
+    if (instanceCapacity[f] < need) {
+        if (instanceBuffers[f]) vmaDestroyBuffer(allocator, instanceBuffers[f], instanceAllocs[f]);
+        instanceBuffers[f] = VK_NULL_HANDLE;
+        VkDeviceSize cap = std::max<VkDeviceSize>(instanceCapacity[f] * 2, 64 * 4096);
+        while (cap < need) cap *= 2;
+        VkBufferCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        info.size = cap;
+        info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_AUTO;
+        ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VmaAllocationInfo got{};
+        if (vmaCreateBuffer(allocator, &info, &ai, &instanceBuffers[f], &instanceAllocs[f], &got) != VK_SUCCESS ||
+            !got.pMappedData) {
+            LOG_ERROR("[vulkan] instance buffer (%.1f MB) allocation failed", cap / 1048576.0);
+            instanceBuffers[f] = VK_NULL_HANDLE;
+            instanceCapacity[f] = 0;
+            return false;
+        }
+        instanceMapped[f] = got.pMappedData;
+        instanceCapacity[f] = cap;
+    }
+    if (!instanceData.empty()) {
+        std::memcpy(instanceMapped[f], instanceData.data(), instanceData.size() * sizeof(float));
+        vmaFlushAllocation(allocator, instanceAllocs[f], 0, instanceData.size() * sizeof(float));
+    }
+    return true;
+}
+
+void VulkanRenderer::Impl::destroyInstanceBuffers() {
+    for (int f = 0; f < MAX_FRAMES_IN_FLIGHT; ++f) {
+        if (instanceBuffers[f]) vmaDestroyBuffer(allocator, instanceBuffers[f], instanceAllocs[f]);
+        instanceBuffers[f] = VK_NULL_HANDLE;
+        instanceMapped[f] = nullptr;
+        instanceCapacity[f] = 0;
+    }
 }
 
 void VulkanRenderer::Impl::destroyUploads() {
@@ -4660,15 +4761,20 @@ bool VulkanRenderer::Impl::createShadowPipeline() {
     // declaring the full layout just triggers "attribute N not consumed"
     // validation warnings. The binding stride stays sizeof(GpuVertex) — the same
     // interleaved vertex buffer is bound, we only read position at offset 0.
-    VkVertexInputBindingDescription binding{0, sizeof(GpuVertex), VK_VERTEX_INPUT_RATE_VERTEX};
-    VkVertexInputAttributeDescription posAttr{0, 0, VK_FORMAT_R32G32B32_SFLOAT,
-                                              offsetof(GpuVertex, position)};
+    // ...plus the model matrix per instance (binding 1, locations 1-4; ADR-0097).
+    std::array<VkVertexInputBindingDescription, 2> sbind{
+        VkVertexInputBindingDescription{0, sizeof(GpuVertex), VK_VERTEX_INPUT_RATE_VERTEX},
+        VkVertexInputBindingDescription{1, 16 * sizeof(float), VK_VERTEX_INPUT_RATE_INSTANCE}};
+    VkVertexInputBindingDescription& binding = sbind[0];
+    std::array<VkVertexInputAttributeDescription, 5> sattrs{};
+    sattrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, position)};
+    for (uint32_t c = 0; c < 4; ++c) sattrs[1 + c] = {1 + c, 1, VK_FORMAT_R32G32B32A32_SFLOAT, c * 4 * static_cast<uint32_t>(sizeof(float))};
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInput.vertexBindingDescriptionCount = 1;
-    vertexInput.pVertexBindingDescriptions = &binding;
-    vertexInput.vertexAttributeDescriptionCount = 1;
-    vertexInput.pVertexAttributeDescriptions = &posAttr;
+    vertexInput.vertexBindingDescriptionCount = static_cast<uint32_t>(sbind.size());
+    vertexInput.pVertexBindingDescriptions = sbind.data();
+    vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(sattrs.size());
+    vertexInput.pVertexAttributeDescriptions = sattrs.data();
 
     VkPipelineInputAssemblyStateCreateInfo ia{};
     ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -4770,10 +4876,11 @@ void VulkanRenderer::Impl::recordShadowPass(VkCommandBuffer cmd) {
                 std::memcpy(push.model, item.push.model, sizeof(push.model));
                 vkCmdPushConstants(cmd, shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
                                    0, sizeof(ShadowPush), &push);
-                VkDeviceSize offset = 0;
-                vkCmdBindVertexBuffers(cmd, 0, 1, &m->vertexBuffer, &offset);
+                const VkBuffer vbs[2] = {m->vertexBuffer, instanceBuffers[currentFrame]};
+                const VkDeviceSize offs[2] = {0, 0};
+                vkCmdBindVertexBuffers(cmd, 0, 2, vbs, offs);
                 vkCmdBindIndexBuffer(cmd, m->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-                vkCmdDrawIndexed(cmd, m->indexCount, 1, 0, 0, 0);
+                vkCmdDrawIndexed(cmd, m->indexCount, item.instanceCount, 0, 0, item.firstInstance);
             }
         }
         vkCmdEndRenderPass(cmd);
@@ -5045,13 +5152,18 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
             vkCmdPushConstants(cmd, pipelineLayout,
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(MeshPush), &push);
-            VkDeviceSize offset = 0;
-            vkCmdBindVertexBuffers(cmd, 0, 1, &m->vertexBuffer, &offset);
+            // binding 0 the mesh, binding 1 the frame's model matrices (terrain's pipeline has
+            // no binding 1; binding it anyway is harmless)
+            const VkBuffer vbs[2] = {m->vertexBuffer, instanceBuffers[currentFrame]};
+            const VkDeviceSize offs[2] = {0, 0};
+            vkCmdBindVertexBuffers(cmd, 0, 2, vbs, offs);
             vkCmdBindIndexBuffer(cmd, m->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdDrawIndexed(cmd, m->indexCount, 1, 0, 0, 0);
+            vkCmdDrawIndexed(cmd, m->indexCount, item.instanceCount, 0, 0, item.firstInstance);
             if (countStats) {
                 stats.drawCalls++;
-                stats.trianglesDrawn += m->indexCount / 3;
+                stats.trianglesDrawn += static_cast<uint64_t>(m->indexCount / 3) * item.instanceCount;
+                stats.totalInstances += item.instanceCount;
+                if (item.instanceCount > 1) stats.instancedDrawCalls++;
             }
         }
     };
@@ -5235,6 +5347,8 @@ void VulkanRenderer::Impl::drawFrame() {
     flushUploads();
     ++frameCounter;
     collectRetired(false);
+    // The frame's model matrices, for every draw recorded below (ADR-0097).
+    if (!uploadInstances()) return;
 
     // This frame's prior submission is done: recycle its transient material sets.
     for (VkDescriptorPool pool : materialPools[currentFrame])
@@ -5680,6 +5794,7 @@ void VulkanRenderer::shutdown() {
     impl->commandPool = VK_NULL_HANDLE;
     impl->renderPass = VK_NULL_HANDLE;
 
+    impl->destroyInstanceBuffers();
     impl->destroyUploads();
     if (impl->allocator) { vmaDestroyAllocator(impl->allocator); impl->allocator = nullptr; }
     vkDestroyDevice(impl->device, nullptr);
@@ -5999,6 +6114,7 @@ RenderStats VulkanRenderer::getRenderStats() const { return impl->stats; }
 void VulkanRenderer::beginFrame() {
     impl->stats = RenderStats{};
     impl->drawQueue.clear();
+    impl->instanceData.clear();
 #ifdef RT_ENABLE_IMGUI
     // Backend new-frame here; the GLFW new-frame ran in Window::pollEvents, and
     // ImGui::NewFrame() must come after both (mirrors the Metal backend).
@@ -6274,8 +6390,33 @@ void VulkanRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
     item.push.morphStart = 0.0f;   // terrain-only (drawTerrain sets these)
     item.push.morphEnd = 0.0f;
     item.opacity = material.opacity;
+    item.firstInstance = impl->pushInstance(transform);
+    item.instanceCount = 1;
     impl->drawQueue.push_back(item);
     impl->stats.entitiesSubmitted++;
+}
+
+bool VulkanRenderer::setPresentSync(bool enabled) {
+    if (impl->presentSync != enabled) {
+        impl->presentSync = enabled;
+        impl->framebufferResized = true;   // the swapchain is recreated with the new present mode
+    }
+    return true;
+}
+
+void VulkanRenderer::drawMeshInstanced(MeshHandle handle, const std::vector<Mat4>& transforms,
+                                       const RenderMaterial& material) {
+    if (transforms.empty()) return;
+    // RT_NO_INSTANCING=1: one draw per instance, as before ADR-0097 (A/B frames and timings).
+    static const bool noInstancing = [] { const char* e = std::getenv("RT_NO_INSTANCING"); return e && e[0] == '1'; }();
+    if (noInstancing) { for (const Mat4& m : transforms) drawMesh(handle, m, material); return; }
+    // One draw for the whole set (ADR-0097): the material and the first transform (which the
+    // transparent sort reads) as drawMesh makes them, then every matrix into the instance rows.
+    drawMesh(handle, transforms.front(), material);
+    DrawItem& item = impl->drawQueue.back();
+    for (std::size_t i = 1; i < transforms.size(); ++i) impl->pushInstance(transforms[i]);
+    item.instanceCount = static_cast<uint32_t>(transforms.size());
+    impl->stats.entitiesSubmitted += transforms.size() - 1;
 }
 
 void VulkanRenderer::drawTerrain(MeshHandle handle, const RenderMaterial& material,
@@ -6314,6 +6455,7 @@ void VulkanRenderer::drawTerrain(MeshHandle handle, const RenderMaterial& materi
     item.push.morphStart = morphStart;
     item.push.morphEnd = morphEnd;
     item.terrain = true;
+    item.firstInstance = impl->pushInstance(Mat4());   // identity: the shadow pass reads it
     impl->drawQueue.push_back(item);
     impl->stats.entitiesSubmitted++;
 }
