@@ -74,8 +74,9 @@ int main(int argc, char** argv) {
         nlohmann::json hubs = nlohmann::json::array();
         for (const CityPlan::Town& t : plan.towns)
             if (t.built) hubs.push_back({{"at", {std::round(t.centre.x), std::round(t.centre.y)}}, {"kind", "oldtown"}});
-        for (const CityPlan::Place& p : plan.places)   // and one for each place on the outer loop
-            hubs.push_back({{"at", {std::round(p.hub.x), std::round(p.hub.y)}}, {"kind", p.kind}, {"_place", p.name}});
+        for (const CityPlan::Place& p : plan.places)   // and the hubs of each place on the outer loop
+            for (const auto& h : p.hubs)
+                hubs.push_back({{"at", {std::round(h.first.x), std::round(h.first.y)}}, {"kind", h.second}, {"_place", p.name}});
         out["townHubs"] = hubs;
         std::cout << out.dump(1) << "\n";
         return 0;

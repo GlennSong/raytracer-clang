@@ -1,7 +1,8 @@
 #include "city_plan.h"
 #include "plan_scene.h"   // the freeway both sides build: what the plan clears for the scene
 #include "../roads/lanes/road_graph_spec.h"   // stations
-#include "../roads/lanes/polyline_ops.h"     // pointAt, tangentAtStation: the loop's frame
+#include "../roads/lanes/polyline_ops.h"
+#include "../roads/lanes/geom2d.h"          // constrainedTriangulation: the towns' cells     // pointAt, tangentAtStation: the loop's frame
 
 #include "../parcel.h"
 #include "../site_plan.h"
@@ -295,6 +296,118 @@ void pruneStubsNear(RoadGraph& g, const std::function<bool(const Vec2&)>& near) 
         for (std::size_t i = 0; i < g.edges.size(); ++i) if (!drop[i]) kept.push_back(g.edges[i]);
         g.edges.swap(kept);
     }
+}
+
+// THIN AND TINY BLOCKS (Glenn, 2026-09-23: "very close and criss crossing roads ... will make weird
+// blocks"). A block is judged by its own shape — its area, and 2 * area / perimeter, about the radius
+// of the largest circle that fits in it — because that is what fails: a block narrower than a street's
+// half-width and sidewalk each side, plus room to build, holds nothing, and its corners are the
+// shallow junctions the lanes builder handles worst. Each failing block loses one side, merging it with
+// its neighbour: the longest LOCAL street segment (junction to junction) on its boundary — never an
+// arterial or a collector, which carry the main streets, frontage roads and the streets under the
+// freeways. Dead ends that leaves are pruned. `where` limits the pass to blocks whose centroid it
+// accepts. With `dryRun` it only counts. Returns the blocks that failed (before any removal).
+int simplifyThinBlocks(RoadGraph& g, Real minArea, Real minRadius, const std::function<bool(const Vec2&)>& where, bool dryRun, int* removedOut) {
+    std::vector<char> alive(g.edges.size(), 1);
+    auto other = [&](int e, int n) { const RoadEdge& E = g.edges[static_cast<std::size_t>(e)]; return E.a == n ? E.b : E.a; };
+    int firstBad = -1, removed = 0;
+    std::set<long long> hopeless;
+    for (int iter = 0; iter < 2000; ++iter) {
+        // the faces: at each node its live edges by angle; a face turns to the next edge clockwise
+        std::vector<std::vector<std::pair<Real, int>>> at(g.nodes.size());
+        for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
+            if (!alive[static_cast<std::size_t>(e)]) continue;
+            const RoadEdge& E = g.edges[static_cast<std::size_t>(e)];
+            if (E.a == E.b) continue;
+            const Vec2 pa = g.nodes[static_cast<std::size_t>(E.a)].pos, pb = g.nodes[static_cast<std::size_t>(E.b)].pos;
+            at[static_cast<std::size_t>(E.a)].push_back({std::atan2(pb.y - pa.y, pb.x - pa.x), e});
+            at[static_cast<std::size_t>(E.b)].push_back({std::atan2(pa.y - pb.y, pa.x - pb.x), e});
+        }
+        for (auto& v : at) std::sort(v.begin(), v.end());
+        std::vector<char> seen(g.edges.size() * 2, 0);
+        struct Face { Real area = 0, perim = 0; Vec2 centroid; std::vector<int> edges; };
+        const Face* worst = nullptr; Face worstFace; Real worstScore = 1e30; int bad = 0;
+        for (int h0 = 0; h0 < static_cast<int>(g.edges.size()) * 2; ++h0) {
+            if (seen[static_cast<std::size_t>(h0)] || !alive[static_cast<std::size_t>(h0 / 2)]) continue;
+            Face f; Real cx = 0, cy = 0; int h = h0, guard = 0;
+            while (!seen[static_cast<std::size_t>(h)] && guard++ < 100000) {
+                seen[static_cast<std::size_t>(h)] = 1;
+                const int e = h / 2; const RoadEdge& E = g.edges[static_cast<std::size_t>(e)];
+                const int u = h % 2 ? E.b : E.a, v = h % 2 ? E.a : E.b;
+                const Vec2 pu = g.nodes[static_cast<std::size_t>(u)].pos, pv = g.nodes[static_cast<std::size_t>(v)].pos;
+                const Real cr = pu.x * pv.y - pv.x * pu.y;
+                f.area += cr; cx += (pu.x + pv.x) * cr; cy += (pu.y + pv.y) * cr;
+                f.perim += (pv - pu).length();
+                f.edges.push_back(e);
+                // at v, the edge just clockwise of the one we came in on
+                const auto& lst = at[static_cast<std::size_t>(v)];
+                std::size_t k = 0;
+                for (; k < lst.size(); ++k) if (lst[k].second == e && other(e, v) == u) break;
+                const int nxt = lst[(k + lst.size() - 1) % lst.size()].second;
+                h = 2 * nxt + (g.edges[static_cast<std::size_t>(nxt)].a == v ? 0 : 1);
+            }
+            f.area *= 0.5;
+            if (f.area <= 1.0) continue;   // the outer face (and degenerate ones)
+            f.centroid = Vec2(cx / (6 * f.area), cy / (6 * f.area));
+            if (!where(f.centroid)) continue;
+            const Real radius = 2 * f.area / std::max(Real(1), f.perim);
+            if (f.area >= minArea && radius >= minRadius) continue;
+            long long key = 0; for (int e : f.edges) key = key * 1000003 + e;
+            if (hopeless.count(key)) continue;
+            ++bad;
+            if (radius < worstScore) { worstScore = radius; worstFace = f; worst = &worstFace; }
+        }
+        if (firstBad < 0) firstBad = bad;
+        if (dryRun || !worst) break;
+        // the longest local segment on its boundary, junction to junction
+        auto degree = [&](int n) { return at[static_cast<std::size_t>(n)].size(); };
+        std::vector<int> best; Real bestLen = -1;
+        std::set<int> tried;
+        for (int e0 : worst->edges) {
+            if (tried.count(e0) || g.edges[static_cast<std::size_t>(e0)].klass != RoadClass::Local) continue;
+            std::vector<int> seg{e0}; tried.insert(e0);
+            for (int dir = 0; dir < 2; ++dir) {
+                int e = e0, n = dir ? g.edges[static_cast<std::size_t>(e0)].b : g.edges[static_cast<std::size_t>(e0)].a;
+                while (degree(n) == 2) {
+                    const auto& lst = at[static_cast<std::size_t>(n)];
+                    const int nx = lst[0].second == e ? lst[1].second : lst[0].second;
+                    if (g.edges[static_cast<std::size_t>(nx)].klass != RoadClass::Local || tried.count(nx)) break;
+                    seg.push_back(nx); tried.insert(nx); n = other(nx, n); e = nx;
+                }
+            }
+            Real len = 0;
+            for (int e : seg) len += (g.nodes[static_cast<std::size_t>(g.edges[static_cast<std::size_t>(e)].a)].pos - g.nodes[static_cast<std::size_t>(g.edges[static_cast<std::size_t>(e)].b)].pos).length();
+            if (len > bestLen) { bestLen = len; best = seg; }
+        }
+        if (best.empty()) { long long key = 0; for (int e : worst->edges) key = key * 1000003 + e; hopeless.insert(key); continue; }
+        for (int e : best) alive[static_cast<std::size_t>(e)] = 0;
+        ++removed;
+        // dead ends the removal left: back to their junction, local streets only
+        for (int pass = 0; pass < 8; ++pass) {
+            std::vector<int> deg(g.nodes.size(), 0);
+            for (std::size_t e = 0; e < g.edges.size(); ++e) if (alive[e]) { ++deg[static_cast<std::size_t>(g.edges[e].a)]; ++deg[static_cast<std::size_t>(g.edges[e].b)]; }
+            bool any = false;
+            for (std::size_t e = 0; e < g.edges.size(); ++e) {
+                if (!alive[e] || g.edges[e].klass != RoadClass::Local) continue;
+                for (int end : {g.edges[e].a, g.edges[e].b})
+                    if (deg[static_cast<std::size_t>(end)] == 1 && (end == best.front() || true)) {
+                        // only dead ends the pass made: next to a removed segment's junctions
+                        bool near = false;
+                        for (int r : best) for (int q : {g.edges[static_cast<std::size_t>(r)].a, g.edges[static_cast<std::size_t>(r)].b})
+                            if ((g.nodes[static_cast<std::size_t>(q)].pos - g.nodes[static_cast<std::size_t>(end)].pos).length() < 200) near = true;
+                        if (near) { alive[e] = 0; any = true; break; }
+                    }
+            }
+            if (!any) break;
+        }
+    }
+    if (!dryRun) {
+        std::vector<RoadEdge> kept;
+        for (std::size_t e = 0; e < g.edges.size(); ++e) if (alive[e]) kept.push_back(g.edges[e]);
+        g.edges.swap(kept);
+    }
+    if (removedOut) *removedOut = removed;
+    return std::max(0, firstBad);
 }
 
 void pruneStubs(RoadGraph& g, Real stub) {
@@ -830,6 +943,163 @@ CityPlan generatePlan(const Brief& B) {
         pl.hub = frame((pl.s0 + pl.s1) / 2, 50 + (depth - 1) * bv / 2);
     };
 
+    // AN ORGANIC TOWN on the loop (Glenn, 2026-09-23: "organic cellular lot growth — curvy residential
+    // areas and gridded town centers"). What its diamond needs from a strip place — main street and back
+    // road 50 m either side of the loop, one street under it at the centre — then a gridded CENTRE on the
+    // city side of the main street, and around it RESIDENTIAL streets that are the edges of cells: seeds
+    // scattered at least `cell` apart, their Voronoi cells (the dual of their Delaunay triangulation),
+    // each edge bowed into a gentle curve. Cells meet three to a junction at near 120 degrees, which is
+    // also the junction the lanes builder is happiest with. The cells stop short of the freeway, the
+    // centre, steep ground (6%), the sea and the edge of the ground grid, so the town's edge is ragged.
+    auto layTown2 = [&](CityPlan::Place& pl, const nlohmann::json& pj, const HeightField& g) {
+        const std::vector<double> st = roads::lanes::stations(plan.loop);
+        const Real sc = (pl.s0 + pl.s1) / 2;
+        auto frameAt = [&](Real s, Real off, Vec2& origin, Vec2& along, Vec2& in) {
+            origin = roads::lanes::pointAt(plan.loop, st, s);
+            along = roads::lanes::tangentAtStation(plan.loop, st, s);
+            const Vec2 n(-along.y, along.x);
+            in = dot(n, B.center - origin) > 0 ? n : n * Real(-1);
+            origin = origin + in * off;
+        };
+        auto frame = [&](Real s, Real off) { Vec2 o, a, i; frameAt(s, 0, o, a, i); return o + i * off; };
+        auto street = [&](std::vector<Vec2> pts, RoadClass k, Real w) { Polyline p; p.klass = k; p.width = w; p.pts = std::move(pts); placeRoads.push_back(p); };
+        auto along = [&](Real s0, Real s1, Real off, RoadClass k, Real w) {
+            std::vector<Vec2> pts; for (Real s = s0; s < s1; s += 20) pts.push_back(frame(s, off)); pts.push_back(frame(s1, off)); street(pts, k, w);
+        };
+        auto across = [&](Real s, Real off0, Real off1, RoadClass k, Real w) {
+            std::vector<Vec2> pts; const int n = std::max(1, static_cast<int>(std::fabs(off1 - off0) / 20));
+            for (int i = 0; i <= n; ++i) pts.push_back(frame(s, off0 + (off1 - off0) * i / n)); street(pts, k, w);
+        };
+        // THE CENTRE: a grid behind the main street, `grid` blocks each way, its streets square to the
+        // loop. The main street is its front edge; the back road runs as far on the far side, and the
+        // one street under the freeway is at the centre — the diamond's, which lands within 100 m of it.
+        // (With the town closed by streets under the freeway at both ends too, every diamond's merge
+        // lanes reached over one and it was refused.)
+        const int nb = pj.value("grid", 3);
+        const Real bu = 90, bv = 75, half = nb * bu / 2, depth = 50 + nb * bv;
+        along(sc - half - 2, sc + half + 2, 50, RoadClass::Arterial, B.arterialWidth);
+        along(sc - half - 32, sc + half + 32, -50, RoadClass::Collector, B.collectorWidth);
+        across(sc, -52, 52, RoadClass::Collector, B.collectorWidth);
+        for (int i = 0; i <= nb; ++i) across(sc - half + i * bu, 48, depth + 2, i == nb / 2 ? RoadClass::Collector : RoadClass::Local, B.localWidth);
+        for (int j = 1; j <= nb; ++j) along(sc - half - 2, sc + half + 2, 50 + j * bv, RoadClass::Local, B.localWidth);
+        Vec2 o, a, in; frameAt(sc, 0, o, a, in);
+        const Vec2 centre = o + in * (50 + nb * bv / 2);
+        pl.hubs.push_back({centre, pl.kind});
+        auto inGrid = [&](const Vec2& p, Real margin) {   // inside the centre's rectangle, in the loop's local frame at sc
+            const Vec2 d = p - o; const Real u = dot(d, a), v = dot(d, in);
+            return u > -half - margin && u < half + margin && v > 50 - margin && v < depth + margin;
+        };
+        // THE CELLS: seeds at least `cell` apart, a jittered lattice thinned by distance
+        const Real cell = pj.value("cell", 105.0), radius = pj.value("radius", 520.0);
+        const Real sea = B.world.value("seaLevel", -1e30), gridHalf = B.world.value("grid", B.size * 0.5 + 60);
+        const Vec2 tc = o + in * (50 + nb * bv * Real(0.5));
+        const std::vector<double> lst = roads::lanes::stations(plan.loop);
+        auto open = [&](const Vec2& p) {   // may a residential street stand here?
+            if ((p - tc).length() > radius) return false;
+            // on the town's own side of the loop: across it, nothing reaches a cell
+            const roads::lanes::Projection pr = roads::lanes::project(plan.loop, lst, p);
+            if (dot(p - roads::lanes::pointAt(plan.loop, lst, pr.station), in) < 0) return false;
+            if (std::fabs(p.x - B.center.x) > gridHalf - 150 || std::fabs(p.y - B.center.y) > gridHalf - 150) return false;
+            if (distToPolyline(p, plan.loop, false) < 62) return false;
+            if (g(p.x, p.y) < sea + 3) return false;
+            const Real e = 10, sx = g(p.x + e, p.y) - g(p.x - e, p.y), sy = g(p.x, p.y + e) - g(p.x, p.y - e);
+            return std::hypot(sx, sy) / (2 * e) < 0.06;
+        };
+        std::vector<Vec2> seeds;
+        const uint32_t salt = static_cast<uint32_t>(std::hash<std::string>{}(pl.name));
+        for (Real y = -radius - cell; y <= radius + cell; y += cell * Real(0.55))
+            for (Real x = -radius - cell; x <= radius + cell; x += cell * Real(0.55)) {
+                const int ix = static_cast<int>(std::lround(x)), iy = static_cast<int>(std::lround(y));
+                const Real jx = ((hash3(ix, iy, B.seed ^ salt) & 0xFFFF) / 65535.0 - 0.5) * cell * 0.5;
+                const Real jy = ((hash3(iy, ix, B.seed ^ salt ^ 0x9E37u) & 0xFFFF) / 65535.0 - 0.5) * cell * 0.5;
+                const Vec2 q = tc + Vec2(x + jx, y + jy);
+                bool ok = true;
+                for (const Vec2& s2 : seeds) if ((s2 - q).lengthSquared() < cell * cell) { ok = false; break; }
+                if (ok) seeds.push_back(q);
+            }
+        const roads::lanes::Triangulation tri = roads::lanes::constrainedTriangulation(seeds, {});
+        auto circumcentre = [&](const std::array<int, 3>& t) {
+            const Vec2 A = tri.verts[static_cast<std::size_t>(t[0])], Bv = tri.verts[static_cast<std::size_t>(t[1])], C = tri.verts[static_cast<std::size_t>(t[2])];
+            const Real d = 2 * (A.x * (Bv.y - C.y) + Bv.x * (C.y - A.y) + C.x * (A.y - Bv.y));
+            if (std::fabs(d) < 1e-9) return (A + Bv + C) / Real(3);
+            const Real a2 = A.lengthSquared(), b2 = Bv.lengthSquared(), c2 = C.lengthSquared();
+            return Vec2((a2 * (Bv.y - C.y) + b2 * (C.y - A.y) + c2 * (A.y - Bv.y)) / d, (a2 * (C.x - Bv.x) + b2 * (A.x - C.x) + c2 * (Bv.x - A.x)) / d);
+        };
+        std::map<std::pair<int, int>, std::vector<std::size_t>> byEdge;   // Delaunay edge -> its triangles
+        for (std::size_t ti = 0; ti < tri.tris.size(); ++ti)
+            for (int k = 0; k < 3; ++k) {
+                const int u = tri.tris[ti][static_cast<std::size_t>(k)], v = tri.tris[ti][static_cast<std::size_t>((k + 1) % 3)];
+                byEdge[{std::min(u, v), std::max(u, v)}].push_back(ti);
+            }
+        // The cells' corners are the triangles' circumcentres. Near-cocircular seeds put two corners
+        // metres apart; those MERGE into one junction (dropping the short edge between them instead
+        // left every cell an island).
+        std::vector<std::size_t> root(tri.tris.size());
+        for (std::size_t i = 0; i < root.size(); ++i) root[i] = i;
+        std::function<std::size_t(std::size_t)> find = [&](std::size_t i) { return root[i] == i ? i : root[i] = find(root[i]); };
+        std::vector<Vec2> cc(tri.tris.size());
+        for (std::size_t ti = 0; ti < tri.tris.size(); ++ti) cc[ti] = circumcentre(tri.tris[ti]);
+        for (const auto& kv : byEdge)
+            if (kv.second.size() == 2 && (cc[kv.second[0]] - cc[kv.second[1]]).length() < 30) root[find(kv.second[0])] = find(kv.second[1]);
+        std::map<std::size_t, std::pair<Vec2, int>> merged;
+        for (std::size_t ti = 0; ti < tri.tris.size(); ++ti) { auto& m = merged[find(ti)]; m.first = m.first + cc[ti]; ++m.second; }
+        auto corner = [&](std::size_t ti) { const auto& m = merged[find(ti)]; return m.first / Real(m.second); };
+        std::set<std::pair<std::size_t, std::size_t>> done;
+        int streets = 0;
+        // Every street already laid out here — this town's grid and main street, the loop's other
+        // places — as a cell street may cross one (a junction) but not run beside one: a cell edge
+        // that ends near a grid ran along its edge street 10-18 m off, two roads where one belongs.
+        const std::size_t before = placeRoads.size();
+        auto runsBeside = [&](const std::vector<Vec2>& pts) {
+            const std::vector<double> ss = roads::lanes::stations(pts);
+            for (Real sv = 10; sv < ss.back() - 10; sv += 6) {
+                const Vec2 q = roads::lanes::pointAt(pts, ss, sv), t = roads::lanes::tangentAtStation(pts, ss, sv);
+                for (std::size_t k = 0; k < before; ++k) {
+                    const std::vector<Vec2>& o2 = placeRoads[k].pts;
+                    const std::vector<double> os = roads::lanes::stations(o2);
+                    const roads::lanes::Projection pr = roads::lanes::project(o2, os, q);
+                    if (pr.distance < 24 && std::fabs(dot(t, roads::lanes::tangentAtStation(o2, os, pr.station))) > 0.8) return true;
+                }
+            }
+            return false;
+        };
+        for (const auto& kv : byEdge) {
+            if (kv.second.size() != 2) continue;   // a hull edge: no Voronoi edge of finite length
+            const std::size_t ra = find(kv.second[0]), rb = find(kv.second[1]);
+            if (ra == rb || !done.insert({std::min(ra, rb), std::max(ra, rb)}).second) continue;
+            Vec2 p = corner(kv.second[0]), q = corner(kv.second[1]);
+            // into the centre's grid, only as far as its edge (3 m on, for the planariser's T)
+            const bool pIn = inGrid(p, 0), qIn = inGrid(q, 0);
+            if (pIn && qIn) continue;
+            if (pIn || qIn) {
+                const Vec2 inside = pIn ? p : q, out = pIn ? q : p;
+                Real lo = 0, hi = 1;   // bisect for the rectangle's edge
+                for (int it = 0; it < 30; ++it) { const Real m = (lo + hi) / 2; if (inGrid(out + (inside - out) * m, 0)) hi = m; else lo = m; }
+                const Vec2 edge = out + (inside - out) * lo;
+                const Vec2 dir = normalize(inside - out);
+                p = out; q = edge + dir * Real(3);
+            }
+            if (!open(p) && !inGrid(p, 5)) continue;
+            if (!open(q) && !inGrid(q, 5)) continue;
+            // bowed into a curve: the midpoint pushed aside by up to 12% of the street's length
+            const Vec2 d = q - p, n(-d.y / d.length(), d.x / d.length());
+            const Real bow = ((hash3(kv.first.first, kv.first.second, B.seed ^ salt) & 0xFF) / 255.0 - 0.5) * 0.24 * d.length();
+            const Vec2 m = (p + q) * Real(0.5) + n * bow;
+            std::vector<Vec2> pts;
+            for (int i = 0; i <= 6; ++i) { const Real t = Real(i) / 6, u = 1 - t; pts.push_back(p * (u * u) + m * (2 * u * t) + q * (t * t)); }
+            if (!open(m) && !inGrid(m, 5)) continue;
+            if (runsBeside(pts)) continue;
+            street(pts, RoadClass::Local, B.localWidth);
+            ++streets;
+        }
+        // the residential hub: the mean of the seeds that stand in open ground
+        Vec2 sum(0, 0); int n = 0;
+        for (const Vec2& s2 : seeds) if (open(s2) && !inGrid(s2, 20)) { sum = sum + s2; ++n; }
+        if (n) pl.hubs.push_back({sum / Real(n), "residential"});
+        pl.hub = centre;
+        if (std::getenv("RT_PLAN_WHY")) std::printf("[plan] %s: a %dx%d centre, %d cell streets from %zu seeds\n", pl.name.c_str(), nb, nb, streets, seeds.size());
+    };
+
     // THE MOUNTAIN FRONT, ray by ray from the centre: the first place past the city where the
     // ground turns steep (6% over 20 m). The loop keeps `setback` short of it, clamped between
     // room for the places inside and the edge of the ground grid, and is smoothed along its arc.
@@ -914,7 +1184,8 @@ CityPlan generatePlan(const Brief& B) {
             pl.s0 = std::max(400.0, st[best] - len / 2);
             pl.s1 = std::min(st.back() - 400.0, st[best] + len / 2);
             if (pl.s1 - pl.s0 < 200) continue;
-            layPlace(pl, pj.value("depth", 2), g);
+            if (pj.value("style", std::string("strip")) == "town") layTown2(pl, pj, g);
+            else { layPlace(pl, pj.value("depth", 2), g); pl.hubs.push_back({pl.hub, pl.kind}); }
             plan.places.push_back(pl);
         }
     };
@@ -1087,6 +1358,17 @@ CityPlan generatePlan(const Brief& B) {
     plan.streets = planarizePolylines(roads);
     collapseShortLinks(plan.streets, B.sidewalk);
     pruneStubs(plan.streets, 45.0);
+    {
+        // thin and tiny blocks, counted over the whole map, split: the city, and the places out past it
+        const Real minArea = 3500, minRadius = 22;
+        auto inCity = [&](const Vec2& p) { return (p - B.center).length() < outerR + 60; };
+        int removed = 0;
+        const int city = simplifyThinBlocks(plan.streets, minArea, minRadius, inCity, true, nullptr);
+        const int out = simplifyThinBlocks(plan.streets, minArea, minRadius, [&](const Vec2& p) { return !inCity(p); }, !B.world.value("simplifyBlocks", true), &removed);
+        if (std::getenv("RT_PLAN_WHY"))
+            std::printf("[plan] thin or tiny blocks (< %.0f m2, or < %.0f m across the middle): %d in the city (left), %d beyond it (%d streets removed)\n",
+                        minArea, 2 * minRadius, city, out, removed);
+    }
     if (!keepOut.empty())
         pruneStubsNear(plan.streets, [&](const Vec2& p) {
             for (std::size_t k = 0; k < keepOut.size(); ++k)

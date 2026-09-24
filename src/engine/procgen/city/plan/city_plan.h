@@ -115,7 +115,9 @@ struct CityPlan {
     // side and a back road on the mountain side, cross streets under the (elevated) freeway.
     std::vector<Vec2> loop;
     int loopFrom = -1, loopTo = -1;
-    struct Place { std::string name, kind; double s0 = 0, s1 = 0; Vec2 hub; };
+    // `hubs` are district hubs for the level: (at, kind). A strip place has one; an organic town has
+    // its gridded centre and its curvy residential cells.
+    struct Place { std::string name, kind; double s0 = 0, s1 = 0; Vec2 hub; std::vector<std::pair<Vec2, std::string>> hubs; };
     std::vector<Place> places;
     std::vector<Vec2> interchanges;
     std::vector<PlanBlock> blocks;

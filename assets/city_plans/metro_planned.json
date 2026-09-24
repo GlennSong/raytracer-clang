@@ -132,9 +132,13 @@
         {
           "name": "sw town",
           "at": 226,
-          "length": 550,
+          "length": 500,
           "depth": 2,
-          "kind": "oldtown"
+          "kind": "oldtown",
+          "style": "town",
+          "grid": 3,
+          "cell": 105,
+          "radius": 520
         },
         {
           "name": "mountain city",
@@ -146,9 +150,13 @@
         {
           "name": "ne town",
           "at": 75,
-          "length": 550,
+          "length": 500,
           "depth": 2,
-          "kind": "oldtown"
+          "kind": "oldtown",
+          "style": "town",
+          "grid": 3,
+          "cell": 105,
+          "radius": 520
         }
       ]
     }

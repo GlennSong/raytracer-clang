@@ -152,12 +152,18 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
     };
     // Every other street the ramp crosses on its way down. Near the gore the ramp is still at
     // deck height and bridges it; partway down it can do neither.
-    auto conflicts = [&](const std::vector<Vec2>& sp, std::size_t landing, std::size_t landing2, double zStart, double zEnd) {
+    // (Except in its landing: the stretch where it runs along or into the street it lands on it is at
+    // street level on purpose, and passing the side streets that meet that street is a merge, not a
+    // conflict — a town's grid met its main street there and refused its diamond.)
+    auto conflicts = [&](const std::vector<Vec2>& sp, std::size_t landing, std::size_t landing2, double zStart, double zEnd, bool landsAtEnd) {
         const std::vector<double> ss = stations(sp);
+        const double land = o.along + o.landing + 10.0;
         for (std::size_t ci = 0; ci < streets.size(); ++ci) {
             if (ci == landing || ci == landing2 || streets[ci].xy.size() < 2) continue;
             for (const Vec2& x : crossings(sp, streets[ci].xy)) {
-                const double u = project(sp, ss, x).station / ss.back();
+                const double sx = project(sp, ss, x).station;
+                if (landsAtEnd ? sx > ss.back() - land : sx < land) continue;
+                const double u = sx / ss.back();
                 const double z = zStart + (zEnd - zStart) * u;   // the ramp's height there, roughly
                 if (z - groundAt(x) < o.clearance - 0.2) return true;
             }
@@ -215,7 +221,7 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
             for (const auto& k : o.keepOut) if (lo < k.second && hi > k.first) room = false;
             spines.push_back(spine(p.sGore, p.sTerm, p.side, p.term, p.off, p.cross ? rBand : p.beside));
             const double zGore = deckZ(p.sGore), zTerm = groundAt(p.term);
-            if (conflicts(spines.back(), cd.street, p.street, p.off ? zGore : zTerm, p.off ? zTerm : zGore)) clear = false;
+            if (conflicts(spines.back(), cd.street, p.street, p.off ? zGore : zTerm, p.off ? zTerm : zGore, p.off)) clear = false;
             // ...nor may its decel or aux lane, up on the freeway, pass over a street crossing under
             // it: that lane is one with the ramp, which comes down to the ground, and a lane both
             // stacked over a street and level with the streets it meets tore the deck (the SW town).

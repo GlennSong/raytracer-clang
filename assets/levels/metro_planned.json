@@ -37,10 +37,18 @@
     {
      "_place": "sw town",
      "at": [
-      -1775.0,
-      -1768.0
+      -1726.0,
+      -1720.0
      ],
      "kind": "oldtown"
+    },
+    {
+     "_place": "sw town",
+     "at": [
+      -1636.0,
+      -1478.0
+     ],
+     "kind": "residential"
     },
     {
      "_place": "mountain city",
@@ -53,10 +61,18 @@
     {
      "_place": "ne town",
      "at": [
-      651.0,
-      2470.0
+      633.0,
+      2405.0
      ],
      "kind": "oldtown"
+    },
+    {
+     "_place": "ne town",
+     "at": [
+      536.0,
+      2222.0
+     ],
+     "kind": "residential"
     }
    ]
   },
