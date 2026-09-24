@@ -1,9 +1,11 @@
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"
 #include "engine/mesh_builder.h"
+#include "log.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/geom2d.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <unordered_map>
 #include <cmath>
 #include <functional>
@@ -35,7 +37,8 @@ const Vec3 kAsphalt(0.085f, 0.085f, 0.090f), kConcrete(0.80f, 0.79f, 0.75f), kSi
 void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& verts, const std::vector<std::array<int, 3>>& tris,
           const std::vector<std::pair<int, int>>& boundary, double thick, double lift, const Vec3& color, const Vec3& sideColor,
           const std::vector<std::array<float, 6>>* uv, const std::function<bool(const Vec2&, const Vec2&, double)>* seam = nullptr,
-          const std::function<double(const Vec2&)>* groundAt = nullptr) {
+          const std::function<double(const Vec2&)>* groundAt = nullptr,
+          const std::function<bool(const Vec2&, double)>* hidden = nullptr) {
     std::map<std::tuple<int, float, float, int>, uint32_t> shared;   // (deck vertex, u, v, face) -> mesh vertex
     auto vertexFor = [&](int vi, const Vec3& p, float u, float v, const Vec3& normal, const Vec3& tan, int face) {
         auto [it, fresh] = shared.try_emplace(std::make_tuple(vi, u, v, face), static_cast<uint32_t>(top.vertices.size()));
@@ -75,12 +78,69 @@ void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& vert
             emit(vi, Q, kNoUV, Vec3(0, -1, 0), 1);
         }
     }
+    // THE SIDE ONLY WHERE IT SHOWS (ADR-0095). A side is dropped where the surface beyond the edge
+    // stands at or above its top (`hidden`: asphalt under a sidewalk, a shoulder against the lane it
+    // continues), and where it does not rise above the ground outside it (`groundAt`); one that shows
+    // stops 5 cm below that ground instead of the slab's full thickness. Then consecutive sides along
+    // one straight line become ONE quad: a kerb is a polyline tessellated for its curves, and on the
+    // straights every one of those vertices was a quad of its own. Null groundAt/hidden: every side,
+    // full depth, as before (still merged).
+    struct Side { int a, b; double topA, topB, botA, botB; };
+    std::vector<Side> sides; sides.reserve(boundary.size());
     for (const auto& e : boundary) {
         const DeckVertex& a = verts[static_cast<size_t>(e.first)]; const DeckVertex& b = verts[static_cast<size_t>(e.second)];
         Vec2 d = b.xy - a.xy; if (d.length() < 1e-9) continue; Vec2 out = Vec2(d.y, -d.x) / d.length();   // interior on the left => outward is the right normal
         if (seam && (*seam)(a.xy, b.xy, 0.5 * (a.z + b.z) + lift)) continue;                          // an internal seam: the asphalt continues at this level, no side face
-        MeshBuilder::emitQuad(side, world(a.xy, a.z + lift), world(b.xy, b.z + lift), world(b.xy, b.z + lift - thick), world(a.xy, a.z + lift - thick),
+        const double topA = a.z + lift, topB = b.z + lift;
+        if (hidden && (*hidden)((a.xy + b.xy) * 0.5 + out * 0.15, 0.5 * (topA + topB))) continue;
+        double botA = topA - thick, botB = topB - thick;
+        if (groundAt) {
+            const double gA = (*groundAt)(a.xy + out * 0.3), gB = (*groundAt)(b.xy + out * 0.3);
+            if (topA - gA < 0.03 && topB - gB < 0.03) continue;
+            botA = std::max(botA, std::min(topA, gA) - 0.05);
+            botB = std::max(botB, std::min(topB, gB) - 0.05);
+        }
+        sides.push_back({e.first, e.second, topA, topB, botA, botB});
+    }
+    // chain: side i continues at the side that starts where it ends (only where that is unambiguous)
+    std::unordered_map<int, int> startsAt; startsAt.reserve(sides.size());
+    for (size_t i = 0; i < sides.size(); ++i) { auto [it, fresh] = startsAt.try_emplace(sides[i].a, static_cast<int>(i)); if (!fresh) it->second = -1; }
+    std::vector<char> used(sides.size(), 0);
+    auto emitRun = [&](const std::vector<int>& run) {
+        const Side& f = sides[static_cast<size_t>(run.front())]; const Side& l = sides[static_cast<size_t>(run.back())];
+        const Vec2 A = verts[static_cast<size_t>(f.a)].xy, B = verts[static_cast<size_t>(l.b)].xy;
+        Vec2 d = B - A; const Vec2 out = Vec2(d.y, -d.x) / d.length();
+        MeshBuilder::emitQuad(side, world(A, f.topA), world(B, l.topB), world(B, l.botB), world(A, f.botA),
                               Vec3(static_cast<Real>(out.x), 0, static_cast<Real>(out.y)), sideColor);
+    };
+    for (size_t i0 = 0; i0 < sides.size(); ++i0) {
+        if (used[i0]) continue;
+        std::vector<int> run{static_cast<int>(i0)}; used[i0] = 1;
+        while (run.size() < 256) {
+            const Side& last = sides[static_cast<size_t>(run.back())];
+            auto it = startsAt.find(last.b); if (it == startsAt.end() || it->second < 0 || used[static_cast<size_t>(it->second)]) break;
+            const Side& nx = sides[static_cast<size_t>(it->second)];
+            // would the run's single quad, start to nx's end, still pass through every vertex it covers?
+            const Side& f = sides[static_cast<size_t>(run.front())];
+            const Vec2 A = verts[static_cast<size_t>(f.a)].xy, B = verts[static_cast<size_t>(nx.b)].xy;
+            const Vec2 d = B - A; const double len = d.length(); if (len < 1e-9) break;
+            const Vec2 u = d / len;
+            bool ok = true;
+            auto check = [&](int vi, double top, double bot) {
+                const Vec2 q = verts[static_cast<size_t>(vi)].xy - A; const double t = dot(q, u) / len;
+                if (t <= 0.0 || t >= 1.0 || std::fabs(cross(u, q)) > 0.01) return false;
+                const double topL = f.topA + (nx.topB - f.topA) * t, botL = f.botA + (nx.botB - f.botA) * t;
+                return std::fabs(topL - top) < 0.01 && botL <= bot + 0.01 && botL >= bot - 0.5;   // the top exact, the bottom no shallower
+            };
+            for (size_t k = 0; k < run.size() && ok; ++k) {
+                const Side& s0 = sides[static_cast<size_t>(run[k])];
+                const Side& s1 = k + 1 < run.size() ? sides[static_cast<size_t>(run[k + 1])] : nx;
+                ok = check(s0.b, s0.topB, std::min(s0.botB, s1.botA));
+            }
+            if (!ok) break;
+            used[static_cast<size_t>(it->second)] = 1; run.push_back(it->second);
+        }
+        emitRun(run);
     }
 }
 
@@ -224,6 +284,39 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
         return sameLevelPavedAt((a + b) * 0.5 + out * 0.35, z);
     };
     const std::function<bool(const Vec2&, const Vec2&, double)> seamFn = internalSeam;
+    // What stands beyond a slab's edge, for slab()'s side rule: a surface whose top at q is at or up to
+    // half a metre above `top` hides the side (asphalt under a sidewalk's edge, a shoulder's edge against
+    // the lane it continues). One much higher is a bridge over it and hides nothing. Each layer is split
+    // into its polygons so a point tests only the few whose box covers it.
+    struct Cover { std::vector<PolySet> polys; std::vector<Box2> box; std::vector<PreparedSet> prep; std::vector<int> roads; double lift; };
+    auto coverOf = [&](const PolySet& set, double lift, bool anyRoad) {
+        Cover c; for (const Polygon2& p : set) c.polys.push_back(PolySet{p});
+        c.box = laneBoxes(c.polys); c.prep = prepareAll(c.polys); c.roads = layerRoads(g, anyRoad); c.lift = lift; return c;
+    };
+    const Cover covers[3] = {coverOf(r.pavement.sidewalk, kSidewalkLift, false), coverOf(r.pavement.shoulder, 0.0, false), coverOf(r.pavement.median, 0.10, true)};
+    const LaneGrid coverGrid[3] = {LaneGrid(covers[0].box, covers[0].polys), LaneGrid(covers[1].box, covers[1].polys), LaneGrid(covers[2].box, covers[2].polys)};
+    const std::function<bool(const Vec2&, double)> hiddenFn = [&](const Vec2& q, double top) {
+        auto hides = [&](double z) { return z >= top - 0.02 && z <= top + 0.5; };
+        for (int li : laneGrid.at(q)) {
+            const Box2& bb = laneBox[static_cast<size_t>(li)];
+            if (q.x < bb.minX || q.x > bb.maxX || q.y < bb.minY || q.y > bb.maxY || !footprint[static_cast<size_t>(li)].contains(q)) continue;
+            if (hides(H.deck(li, q))) return true;
+        }
+        for (int k = 0; k < 3; ++k) {
+            const Cover& c = covers[k];
+            for (int pi : coverGrid[k].at(q)) {
+                const Box2& bb = c.box[static_cast<size_t>(pi)];
+                if (q.x < bb.minX || q.x > bb.maxX || q.y < bb.minY || q.y > bb.maxY || !c.prep[static_cast<size_t>(pi)].contains(q)) continue;
+                if (hides(H.layerHeight(c.roads, q) + c.lift)) return true;
+            }
+        }
+        return false;
+    };
+    // RT_DECK_STATS=1: what each stage adds to the concrete mesh (triangles), to see where it goes.
+    static const bool deckStats = std::getenv("RT_DECK_STATS") != nullptr;
+    std::vector<std::pair<const char*, std::size_t>> concreteBy;
+    auto mark = [&](const char* stage) { if (deckStats) concreteBy.push_back({stage, concrete.indices.size() / 3}); };
+    mark("start");
     for (const Surface& s : r.pavement.decks) {
         std::vector<std::array<float, 6>> uv(s.tris.size());
         for (size_t ti = 0; ti < s.tris.size(); ++ti) {
@@ -235,14 +328,17 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
                 uv[ti][static_cast<size_t>(2 * k)] = static_cast<float>(lateral); uv[ti][static_cast<size_t>(2 * k + 1)] = static_cast<float>(pr.station);
             }
         }
-        slab(asphalt, concrete, s.verts, s.tris, s.boundary, s.thick, 0.0, kAsphalt, kConcrete, &uv, &seamFn, &groundUnder);
+        slab(asphalt, concrete, s.verts, s.tris, s.boundary, s.thick, 0.0, kAsphalt, kConcrete, &uv, &seamFn, &groundUnder, &hiddenFn);
     }
     // layers
     auto layer = [&](const PolySet& poly, RenderMesh& top, const Vec3& color, double lift, double thick, bool anyRoad) {
         const std::vector<int> roads = layerRoads(g, anyRoad);
-        for (const FlatMesh& m : layerMeshes(g, H, poly, roads)) slab(top, concrete, m.verts, m.tris, m.boundary, thick, lift, color, kConcrete, nullptr, nullptr, &groundUnder);
+        for (const FlatMesh& m : layerMeshes(g, H, poly, roads)) slab(top, concrete, m.verts, m.tris, m.boundary, thick, lift, color, kConcrete, nullptr, nullptr, &groundUnder, &hiddenFn);
     };
-    layer(r.pavement.sidewalk, sidewalk, kSidewalk, kSidewalkLift, 0.42, false); layer(r.pavement.shoulder, shoulder, kShoulder, 0.0, 0.3, false); layer(r.pavement.median, median, kMedian, 0.10, 0.40, true);
+    mark("deck sides");
+    layer(r.pavement.sidewalk, sidewalk, kSidewalk, kSidewalkLift, 0.42, false); mark("sidewalk sides");
+    layer(r.pavement.shoulder, shoulder, kShoulder, 0.0, 0.3, false); mark("shoulder sides");
+    layer(r.pavement.median, median, kMedian, 0.10, 0.40, true); mark("median sides");
     // Parapets and girders on elevated decks (Glenn: "the elevated ones need walls so you don't drive
     // off", "an undercarriage"). The runs come from parapetRuns() so a diagnostic sees exactly what is swept;
     // every elevated freeway/ramp lane also gets a box girder hung from the slab.
@@ -251,6 +347,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
         else sweepWall(concrete, run.pts, run.z, run.offOuter, run.offInner, run.height, kConcrete, run.closed,
                        run.capOnPavement[0] ? 8.0 : 0.0, run.capOnPavement[1] ? 8.0 : 0.0);   // 8 m terminal only where a cap would stand on road
     }
+    mark("parapet walls");
     auto groundAt = [&](const Vec2& p) { return r.hasTerrain ? r.terrain.sample(p.x, p.y) : 0.0; };
     auto isDeckLane = [&](int li) {
         if (li < 0 || li >= static_cast<int>(L.lanes.size())) return false; const Lane& l = L.lanes[static_cast<size_t>(li)];
@@ -271,10 +368,19 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
             prevOn = on; pp = p; pn = nrm; pz = z;
         }
     }
+    mark("girders");
     // piers
     for (const Pier& p : r.piers) {
         double h = p.z1 - p.z0; if (h <= 0) continue; RenderMesh box = MeshBuilder::box(Vec3(2.6f, static_cast<float>(h), 2.6f));
         MeshBuilder::appendTransformed(concrete, box, Mat4::translate(static_cast<Real>(p.xy.x), static_cast<Real>(p.z0 + h / 2), static_cast<Real>(p.xy.y)));
+    }
+    mark("piers");
+    if (deckStats) {
+        std::string o;
+        for (std::size_t k = 1; k < concreteBy.size(); ++k)
+            o += std::string(" ") + concreteBy[k].first + " " + std::to_string(concreteBy[k].second - concreteBy[k - 1].second);
+        LOG_INFO << "[deck stats] concrete triangles by stage:" << o << "; asphalt " << asphalt.indices.size() / 3
+                 << " (" << asphalt.vertices.size() << " verts), hasTerrain " << r.hasTerrain;
     }
     // Junction boxes: a point on a street lane that lies inside a CROSSING road's lane at the same level
     // is inside an intersection. Lane paint stops there (lane lines running through a junction read as

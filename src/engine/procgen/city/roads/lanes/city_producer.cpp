@@ -19,7 +19,7 @@
 namespace engine {
 namespace roads::lanes {
 
-const char* const kLanesBuildTag = "2026-09-24.1";   // 2026-09-24.1: deck meshes welded, undersides only where a deck stands clear of the ground (ADR-0095)   // .1: the terrain is clamped under every deck VERTEX, not by centreline reach   // .2/.3: ramp ends (elevated or at-grade runs) welded to the road they merge into (nav twin)   // .4: one-way carriageways and ramps; the nav gets a deck's travel width   // .5: blocks are the holes of the pavement WITH its sidewalks
+const char* const kLanesBuildTag = "2026-09-24.3";   // .3: hidden slab sides dropped, straight runs merged, layer boundaries oriented   // 2026-09-24.1: deck meshes welded, undersides only where a deck stands clear of the ground (ADR-0095)   // .2: slab sides only where they rise above the ground outside   // .1: the terrain is clamped under every deck VERTEX, not by centreline reach   // .2/.3: ramp ends (elevated or at-grade runs) welded to the road they merge into (nav twin)   // .4: one-way carriageways and ramps; the nav gets a deck's travel width   // .5: blocks are the holes of the pavement WITH its sidewalks
 
 namespace {
 using bundle::BinReader;

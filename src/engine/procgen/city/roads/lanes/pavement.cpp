@@ -81,10 +81,16 @@ FlatMesh triangulatePolygon(const Polygon2& poly) {
     std::vector<Vec2> pts; std::vector<std::pair<int, int>> edges; densify(poly.outer, pts, edges); for (const Ring& h : poly.holes) densify(h, pts, edges);
     Triangulation t = constrainedTriangulation(pts, edges); FlatMesh m; m.verts.reserve(t.verts.size());
     for (const Vec2& v : t.verts) m.verts.push_back({v, 0.0});
-    for (const auto& tri : t.tris) { Vec2 c = (t.verts[tri[0]] + t.verts[tri[1]] + t.verts[tri[2]]) / 3.0; if (contains(poly, c)) m.tris.push_back(tri); }
-    std::map<std::pair<int, int>, int> count;
-    for (const auto& tri : m.tris) for (int k = 0; k < 3; ++k) { int a = tri[k], b = tri[(k + 1) % 3]; count[{std::min(a, b), std::max(a, b)}]++; }
-    for (const auto& kv : count) if (kv.second == 1) m.boundary.push_back(kv.first);
+    for (auto tri : t.tris) {
+        const Vec2 &A = t.verts[static_cast<size_t>(tri[0])], &B = t.verts[static_cast<size_t>(tri[1])], &C = t.verts[static_cast<size_t>(tri[2])];
+        if (!contains(poly, (A + B + C) / 3.0)) continue;
+        if (cross(B - A, C - A) < 0) std::swap(tri[1], tri[2]);   // counter-clockwise, so the interior is on each edge's left
+        m.tris.push_back(tri);
+    }
+    // the boundary as the triangles wind it (interior on the left), so a slab's side faces outward
+    std::map<std::pair<int, int>, int> count; std::map<std::pair<int, int>, std::pair<int, int>> oriented;
+    for (const auto& tri : m.tris) for (int k = 0; k < 3; ++k) { int a = tri[k], b = tri[(k + 1) % 3]; const std::pair<int, int> key{std::min(a, b), std::max(a, b)}; count[key]++; oriented.emplace(key, std::make_pair(a, b)); }
+    for (const auto& kv : count) if (kv.second == 1) m.boundary.push_back(oriented[kv.first]);
     return m;
 }
 
@@ -350,9 +356,10 @@ std::vector<FlatMesh> layerMeshes(const RoadLabGraph& g, const DeckHeight& H, co
             keep.push_back(t);
         }
         if (keep.size() != m.tris.size()) {
-            m.tris = std::move(keep); m.boundary.clear(); std::map<std::pair<int, int>, int> count;
-            for (const auto& tri : m.tris) for (int k = 0; k < 3; ++k) { int a = tri[k], b = tri[(k + 1) % 3]; count[{std::min(a, b), std::max(a, b)}]++; }
-            for (const auto& kv : count) if (kv.second == 1) m.boundary.push_back(kv.first);
+            // the boundary as the triangles wind it (interior on the left), so a side faces outward
+            m.tris = std::move(keep); m.boundary.clear(); std::map<std::pair<int, int>, int> count; std::map<std::pair<int, int>, std::pair<int, int>> oriented;
+            for (const auto& tri : m.tris) for (int k = 0; k < 3; ++k) { int a = tri[k], b = tri[(k + 1) % 3]; const std::pair<int, int> key{std::min(a, b), std::max(a, b)}; count[key]++; oriented.emplace(key, std::make_pair(a, b)); }
+            for (const auto& kv : count) if (kv.second == 1) m.boundary.push_back(oriented[kv.first]);
             if (m.tris.empty()) continue;
         }
         out.push_back(std::move(m));
