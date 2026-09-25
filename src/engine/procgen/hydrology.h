@@ -84,7 +84,13 @@ public:
     // lake's own inside a lake, else the nearest river's) and carries the flow: the tangent is
     // the flow direction, colour r the speed (0..1) and g the fade into a mouth, u the distance
     // to the bank (0 at the bank, 0.5 well inside).
-    RenderMesh waterMesh(const std::vector<std::vector<Vec2>>& sea = {}) const;   // sea: cells it stops at
+    // `ground` (the DRAWN ground, carve included): each vertex's water depth / 8 m (clamped to 1) goes in colour b, so
+    // the shader can make deep water opaque and shallows clear.
+    // Under open water: inside a lake, or within a river's width (plus `margin` metres). Binned:
+    // cheap enough for a scatter to ask per placement, and safe on any thread.
+    bool isWet(double x, double z, double margin = 0.0) const;
+    RenderMesh waterMesh(const std::vector<std::vector<Vec2>>& sea = {},
+                         const std::function<double(double, double)>& ground = {}) const;   // sea: cells it stops at
 
 private:
     HydroParams p_;

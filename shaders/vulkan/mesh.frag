@@ -702,6 +702,11 @@ void main() {
     // The detail is a FLOW MAP (Vlachos, Portal 2): world-space noise advected along the flow in
     // two phases half a cycle apart, crossfaded so neither is seen stretching.
     const bool river = pc.surfaceFlags.x == 20u;
+    // WATER, both kinds (rivers/lakes id 20, the sea id 12): depth drives how much of the bed shows,
+    // and the composite below adds the Fresnel sky reflection and the sun's sparkle.
+    const bool isWater = river || pc.surfaceFlags.x == 12u;
+    float waterDepth = 0.0, waterFoam = 0.0, waterAbsorb = 0.6;
+    if (pc.surfaceFlags.x == 12u) waterDepth = max(inTexcoord.x, 0.0);   // the sea's baked depth (m)
     float riverSpeed = 0.0, riverFade = 1.0, flowBlend = 0.0;
     vec2 flowA = vec2(0.0), flowB = vec2(0.0);
     if (river) {
@@ -717,9 +722,13 @@ void main() {
         flowBlend = abs(1.0 - 2.0 * ph0);                     // 1 = all B while A resets
         vec2 xz = inWorldPos.xz;
         float edge = clamp(inTexcoord.x, 0.0, 0.5);           // 0 at a bank, 0.5 open water
+        waterDepth = clamp(inColor.b, 0.0, 1.0) * 8.0;        // metres (baked / 8)
+        // still water (lakes) is murky and hides its bed within a couple of metres; a running river
+        // stays clear enough to show stones in its shallows
+        waterAbsorb = mix(1.1, 0.5, smoothstep(0.05, 0.3, riverSpeed));
         vec3 deep = pc.albedoMetallic.rgb;
         vec3 shallow = deep * 2.4 + vec3(0.02, 0.07, 0.06);
-        albedo = mix(shallow, deep, smoothstep(0.0, 0.35, edge));
+        albedo = mix(shallow, deep, smoothstep(0.2, 2.5, waterDepth));
         vec2 pa = (xz - flowA) * 0.12, pb = (xz - flowB) * 0.12;
         float n1 = mix(fbm2(pa.x, pa.y), fbm2(pb.x, pb.y), flowBlend);
         float n2 = mix(vnoise2(pa.x * 7.0, pa.y * 7.0), vnoise2(pb.x * 7.0, pb.y * 7.0), flowBlend);
@@ -728,9 +737,15 @@ void main() {
         // breaking over the steps, not a white sheet)
         float foam = (1.0 - smoothstep(0.0, 0.035, edge)) * (0.15 + 0.5 * n2) * (0.3 + 0.7 * riverSpeed) +
                      smoothstep(0.55, 1.0, riverSpeed) * smoothstep(0.72, 0.92, n1 + 0.35 * n2) * 0.85;
-        foam = clamp(foam, 0.0, 1.0) * riverFade;
+        // stylized SHORE FOAM where still water meets the land: a band that laps in and out
+        float lap = 0.28 + 0.14 * sin(g.wind1.w * 1.3 + n1 * 6.2831853);
+        float shoreFoam = (1.0 - smoothstep(0.03, lap, waterDepth)) * smoothstep(0.35, 0.65, n2 + 0.25) *
+                          (1.0 - smoothstep(0.1, 0.4, riverSpeed)) *
+                          (1.0 - smoothstep(0.02, 0.12, edge));   // at the bank, not over a whole shallow pond
+        foam = clamp(max(foam, shoreFoam * 0.9), 0.0, 1.0) * riverFade;
         albedo = mix(albedo, vec3(0.82, 0.88, 0.9), foam);
         roughness = mix(0.05, 0.45, foam);
+        waterFoam = foam;
         texFlags = 0u;
     }
     // MATERIAL FEATURES (ADR-0098): triplanar maps, per-instance variation (the top layer is
@@ -997,6 +1012,36 @@ void main() {
         outColor = vec4(tint, 1.0);
     } else {
         vec3 color = direct + ambient + emission;
+        // WATER COMPOSITE. Over the bed the right result is
+        //   F * sky + (1 - F) * (a_w * body + (1 - a_w) * bed)
+        // with a_w the body's opacity from its depth (Beer-Lambert) and F the Fresnel reflectance:
+        // the blend's alpha is 1 - (1 - F)(1 - a_w) and the colour the first two terms over it.
+        // Foam is opaque and matte. The reflection is the sky itself, as the sky pass draws it.
+        float waterA = 1.0;
+        if (isWater) {
+            float aw = max(1.0 - exp(-waterAbsorb * waterDepth), 0.18);
+            aw = max(aw, waterFoam);
+            vec3 fs = f0 * brdf.x + brdf.y;
+            float F = clamp(max(fs.r, max(fs.g, fs.b)), 0.0, 1.0) * (1.0 - waterFoam);
+            waterA = 1.0 - (1.0 - F) * (1.0 - aw);
+            color = (F * prefiltered + (1.0 - F) * aw * color) / max(waterA, 1e-4);
+            // SPARKLE: the sun caught by facets smaller than the ripple normal -- a jittered normal
+            // per ~30 cm cell, re-rolled a few times a second, with a very tight highlight.
+            for (int i = 0; i < min(g.counts.x, 32); ++i) {
+                if (int(g.lights[i].typeRange.x) != 1) continue;   // the sun
+                vec3 L = normalize(g.lights[i].directionInner.xyz);
+                vec2 cell = floor(inWorldPos.xz * 3.3);
+                float tick = floor(g.wind1.w * 8.0 + featHash(vec3(cell, 1.0)) * 8.0);
+                float h1 = featHash(vec3(cell, tick)), h2 = featHash(vec3(cell.yx, tick + 3.1));
+                vec3 Nj = normalize(N + vec3(h1 - 0.5, 0.0, h2 - 0.5) * 0.35);
+                // a point, not the cell: only a small disc about a random spot in it catches the sun
+                vec2 local = fract(inWorldPos.xz * 3.3) - vec2(featHash(vec3(cell, 7.0)), featHash(vec3(cell, 9.0)));
+                float dot2 = 1.0 - smoothstep(0.06, 0.14, length(local - round(local)));
+                float glint = pow(max(dot(reflect(-L, Nj), V), 0.0), 900.0) * dot2 * (1.0 - waterFoam);
+                color += g.lights[i].colorOuter.rgb * g.lights[i].positionIntensity.w * glint * 4.0 * sunVis;
+                break;
+            }
+        }
         // Aerial-perspective fog. The fade target is the SKY the surface
         // occludes, not the authored fog colour — the P5 fog-restoration
         // semantics (metal 6d20e85): on Metal the metro runs the scattering
@@ -1013,7 +1058,9 @@ void main() {
         // Opacity (float bits in the spare push slot) → output alpha for the
         // transparent blend pass; ignored by the opaque pipeline (blend off).
         float opacity = uintBitsToFloat(pc.surfaceFlags.w) * mapAlpha;
-        if (opacity < 0.999) {
+        if (isWater) {
+            outColor = vec4(color, waterA);   // composited above
+        } else if (opacity < 0.999) {
             // GLASS (Glenn's walk, 2026-09-14: "the glass has no reflectivity"):
             // a plain alpha blend scales the reflection by the opacity, so an
             // 18 % pane showed 18 % of its sky. Real glass ADDS its Fresnel

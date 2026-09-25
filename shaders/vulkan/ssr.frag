@@ -66,11 +66,17 @@ void main() {
     vec3 V = normalize(P - g.cameraPosition.xyz);   // camera → surface
     vec3 R = reflect(V, N);
 
-    float stepLen = pc.maxRayDist / float(STEPS);
+    // MIRROR MODE: a flat, near-perfect mirror (still water) must reflect what is kilometres away
+    // -- the far bank, the mountains. It marches in GROWING steps (0.5 m, x1.19 a step: ~2 km in 48)
+    // with a hit tolerance that grows with them; everything else keeps the short, even march.
+    const bool mirror = roughness < 0.08 && N.y > 0.9;
+    const int steps = mirror ? 48 : STEPS;
+    float stepLen = mirror ? 0.5 : pc.maxRayDist / float(STEPS);
     vec3 rayPos = P + N * 0.02;                      // bias off the surface
     vec3 prevPos = rayPos;                           // last position in front of geometry
-    for (int i = 0; i < STEPS; ++i) {
+    for (int i = 0; i < steps; ++i) {
         prevPos = rayPos;
+        if (mirror && i > 0) stepLen *= 1.19;
         rayPos += R * stepLen;
         vec4 clip = g.viewProjection * vec4(rayPos, 1.0);
         if (clip.w <= 0.0) return;

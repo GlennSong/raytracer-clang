@@ -7797,6 +7797,29 @@ lists rivers as a future reader of `Skeleton`.
   `HydroParams::incisionMin/Max/K`, `bankSteep` (level JSON `rivers.*`). The baked ground's key takes
   a hydrology code tag only when the level has rivers, so other levels keep their caches.
 
+- **Water reads as water (2026-09-25).** Glenn: "you can still see the bottom… foam around the
+  edges… sparkle when the sun hits… reflection". All of it is shading, no ray tracing:
+  - **Depth opacity.** `waterMesh` bakes each vertex's depth ÷ 8 m into colour b, from the drawn
+    ground; the sea already had its depth in u. Opacity is Beer-Lambert,
+    a_w = 1 − e^(−k·depth), with k 1.1 for still water and 0.5 for a running river. Lakes and the
+    sea hide their beds past about 2 m; river shallows show stones.
+  - **One composite for both kinds of water** (`mesh.frag`, surfaces 12 and 20):
+    F·sky + (1 − F)·a_w·body over the bed, with alpha 1 − (1 − F)(1 − a_w). Foam is opaque and
+    matte.
+  - **Sparkle:** a jittered normal per ~30 cm cell, re-rolled about 8 times a second, with a
+    power-900 highlight in a small disc per cell. It is a glitter path under a low sun, and points,
+    not squares, up close.
+  - **Stylized shore foam** laps in and out where still water meets the bank.
+  - **Reflections of the world.** A water pipeline (the transparent one, but writing depth and the
+    normal G-buffer) draws water before other transparents, so SSR sees the surface. SSR gains a
+    *mirror mode* for flat, near-perfect mirrors (roughness < 0.08, normal y > 0.9): 48 steps
+    growing ×1.19 from 0.5 m, reaching about 2 km, so still lakes reflect the far bank and the
+    mountains.
+  - **Nothing grows in the water:** `Hydrology::isWet` (a lake cell, or within a river's width,
+    binned) zeroes grass density and skips tree and rock placements there.
+
+  Cost: a 5 m/s walk around the big lake, water in view throughout, runs a 4.3 ms median.
+
 **Consequences.** The drainage costs 0.15 s on a 376² grid (3 km at 8 m). `river_valley.json` is the
 test bed: 6 rivers and 9 lakes from its own relief. **Owed:**
 - waterfalls where the level drops sharply;

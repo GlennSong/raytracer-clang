@@ -2206,6 +2206,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
             const double gx = (groundAt(x + e, z) - groundAt(x - e, z)) / (2 * e), gz = (groundAt(x, z + e) - groundAt(x, z - e)) / (2 * e);
             const Cover cv = terrain.cover->at(x, z, pl.position.y, 1.0 / std::sqrt(1.0 + gx * gx + gz * gz));
             if (cv.biome == Biome::Sea) continue;
+            if (terrain.hydro && terrain.hydro->isWet(x, z, 1.5)) continue;   // nor in rivers and lakes
             fits.clear();
             for (std::size_t vi = 0; vi < variantList.size(); ++vi)
                 if (variantList[vi].biomeMask == 0 || (variantList[vi].biomeMask >> static_cast<uint32_t>(cv.biome) & 1u)) {
@@ -3786,7 +3787,7 @@ bool LevelLoader::load(const std::string& path,
             wm.opacity = 0.84f;
             wm.setSurface(RenderMaterial::Surface::River);
             // one surface for all of it: river corridors unioned with the lakes (ADR-0099)
-            RenderMesh m = hy.waterMesh(seaCells);
+            RenderMesh m = hy.waterMesh(seaCells, levelGround);
             if (!m.vertices.empty()) {
                 std::fprintf(stderr, "[hydrology] water mesh: %zu verts, %zu tris\n", m.vertices.size(), m.indices.size() / 3);
                 if (const char* dump = std::getenv("RT_WATER_OBJ")) {   // debug: the water polygon as OBJ (v x y z speed fade u)
@@ -3971,8 +3972,10 @@ bool LevelLoader::load(const std::string& path,
                 const double patchiness = gj.value("patchiness", tp.cover ? 0.0 : 0.35), patchScale = gj.value("patchScale", 0.045);
                 const Noise patches(gj.value("seed", 1u) + 911u);
                 const std::shared_ptr<const GroundCover> cover = tp.cover;
-                gf.density = [maxSlope, thin, sea, patchiness, patchScale, patches, cover](double x, double z, double y, double slopeCos) {
+                const std::shared_ptr<const Hydrology> hydro = tp.hydro;
+                gf.density = [maxSlope, thin, sea, patchiness, patchScale, patches, cover, hydro](double x, double z, double y, double slopeCos) {
                     if (y < sea + 0.15) return 0.0;
+                    if (hydro && hydro->isWet(x, z, 0.3)) return 0.0;   // not in the rivers and lakes
                     const double slope = std::acos(std::clamp(slopeCos, -1.0, 1.0));
                     // With a ground-cover map the cover decides (grass stops at sand, rock and
                     // bare earth, raggedly); without one, the slope rule.

@@ -270,6 +270,26 @@ double Hydrology::carve(double x, double z, double h) const {
     return out;
 }
 
+bool Hydrology::isWet(double x, double z, double margin) const {
+    const int n = n_;
+    if (n > 0 && !lakeOfCell_.empty()) {
+        const int i = static_cast<int>(std::lround((x + p_.half) / p_.cell)), j = static_cast<int>(std::lround((z + p_.half) / p_.cell));
+        if (i >= 0 && j >= 0 && i < n && j < n && lakeOfCell_[static_cast<std::size_t>(j) * n + i] >= 0) return true;
+    }
+    if (segs_.empty()) return false;
+    const int bi = static_cast<int>((x + p_.half) / binSize_), bj = static_cast<int>((z + p_.half) / binSize_);
+    if (bi < 0 || bj < 0 || bi >= bins_ || bj >= bins_) return false;
+    const Vec2 q(x, z);
+    for (int s : bin_[static_cast<std::size_t>(bj) * bins_ + bi]) {
+        const Seg& g = segs_[static_cast<std::size_t>(s)];
+        const Vec2 ab = g.b - g.a;
+        const double L2 = dot(ab, ab);
+        const double t = L2 > 1e-12 ? clampd(dot(q - g.a, ab) / L2, 0.0, 1.0) : 0.0;
+        if ((q - (g.a + ab * t)).length() < (g.wa + (g.wb - g.wa) * t) * 0.5 + margin) return true;
+    }
+    return false;
+}
+
 double Hydrology::distanceToRiver(double x, double z, double maxDist) const {
     double best = maxDist;
     for (const Seg& g : segs_) {
@@ -282,7 +302,8 @@ double Hydrology::distanceToRiver(double x, double z, double maxDist) const {
     return best;
 }
 
-RenderMesh Hydrology::waterMesh(const std::vector<std::vector<Vec2>>& sea) const {
+RenderMesh Hydrology::waterMesh(const std::vector<std::vector<Vec2>>& sea,
+                                const std::function<double(double, double)>& ground) const {
     namespace L = roads::lanes;
     RenderMesh out;
     // 1. THE OUTLINE: every river's corridor (a quad per segment and a disc at each node, on a
@@ -468,7 +489,9 @@ RenderMesh Hydrology::waterMesh(const std::vector<std::vector<Vec2>>& sea) const
             speed = clampd((bestR->nodes[k0].level - bestR->nodes[k1].level) / run * 6.0, 0.0, 1.0);
         }
         Vertex v(Vec3(q.x, level, q.y), Vec3(0, 1, 0), Vec3(flow.x, 0, flow.y), bank.count(key(q)) ? 0.0f : 0.5f, 0.0f);
-        v.color = Vec3(speed, fade, 0.0);
+        // depth / 8 m, clamped: colour stays in [0, 1], so the mesh keeps the packed vertex (ADR-0096)
+        const double depth = ground ? std::max(0.0, level - ground(q.x, q.y)) : 2.0;
+        v.color = Vec3(speed, fade, std::min(1.0, depth / 8.0));
         out.vertices.push_back(v);
         return remap[static_cast<std::size_t>(vi)] = static_cast<uint32_t>(out.vertices.size() - 1);
     };
