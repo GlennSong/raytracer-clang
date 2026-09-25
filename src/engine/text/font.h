@@ -52,6 +52,12 @@ public:
     void draw(TextImage& img, const std::string& text, float x, float baselineY,
               float pixelHeight, const uint8_t rgba[4], float xScale = 1.0f) const;
 
+    // The string's OUTLINES as SVG path data (y down, baseline's left end at (x, baselineY)), in the
+    // same units and metrics as draw(): text on a map or a sign sheet that looks the same in any
+    // viewer, with no font to install or embed (a browser or Inkscape ignoring an embedded font laid
+    // wider text over a panel sized for this one).
+    std::string svgPath(const std::string& text, float x, float baselineY, float pixelHeight, float xScale = 1.0f) const;
+
 private:
     std::vector<uint8_t> data_;
     std::unique_ptr<stbtt_fontinfo> info_;

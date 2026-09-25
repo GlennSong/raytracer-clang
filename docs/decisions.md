@@ -8286,3 +8286,58 @@ shape instead of floodfilling a circle each time?"
   - bus routes;
   - the island's ragged, erosion-toothed coast (a terrain artifact) makes the limits jagged in
     places.
+
+## ADR-0107 — Place names and road signs, planned as data and drawn from one face layout
+
+**Context.** Glenn, on the island's freeway: "freeway signs. Like how far each town is. This way we
+can name the towns and show which direction they are. Also! We need signs for which side of the
+freeway we should enter to go in the right direction." Then: "These signs would be built and cached
+offline? … They don't have to be Hawaiian."
+
+**Decision.**
+1. **Places are named from data** (`world/place_names.h`, `assets/data/places.json`), split the same
+   way as street names: the file holds the words, the C++ the algorithm.
+   - A name is a root run into an ending (Ash + ford → Ashford), and the site can shape it: "Port …"
+     or "… Bay" on the coast, "…ford" or "… Falls" on a river, "… Ridge" in the mountains.
+   - Names are deterministic per world seed and unique. Island 8 gets Saltwood and Weyby (the
+     cities), Coldwell, Brookcliff, Carrcombe Harbor, Dunwyn, Port Penwood and Ivycombe (the towns),
+     and Marlwick (the mountain town).
+2. **Interchanges are recorded, and exits numbered.** Each `IslandInterchange` holds its crossing
+   road, the place it serves, its station, and its four ramps: gores, terminals, and which
+   carriageway. Exit numbers are the km along the Inner Loop from the route's start, with A/B when
+   two fall in one km.
+3. **The sign plan is data** (`world/road_signs.h`, `planIslandSigns`): position, the facing of the
+   traffic that reads it, mount, and legend. It is computed offline with the plan.
+   - **On the freeway, per exit and direction:** advance signs 2 km and 1 km out, never reaching
+     back past the interchange before; the exit direction sign overhead where the exit lane opens;
+     the gore sign.
+   - **After each on-ramp:** a route marker, and a distance sign giving the next three places by road
+     distance.
+   - **On the road at each interchange:** an entrance sign before each on-ramp (route, direction,
+     destination, turn arrow), and DO NOT ENTER plus WRONG WAY at every off-ramp's end.
+   - **Elsewhere:** town/city limit signs with a population estimated from the planned buildings,
+     and trailblazers on the pass and the mountain road.
+   - **Directions on a ring:** it has no north or south, so it runs as the **Inner Loop**
+     (clockwise) and **Outer Loop**, each signed with the next city that way. Where both ways reach
+     the same city (two cities on a ring do), each ramp names its first place instead.
+   - **Exits into one city are told apart by the street they land on** ("Summit Ave / Saltwood"),
+     from the city's own street names.
+4. **One face layout, two renderers** (`layoutSign` → `SignFace`, in metres, measured with the sign
+   font's own metrics). The SVG sign sheet (`signs.svg`) draws it now, lettered as the font's glyph
+   outlines (`Font::svgPath`), so it looks the same in any viewer. Inkscape ignored an embedded
+   @font-face and set wider text over panels sized for Overpass. The texture baker will draw the
+   same layout into atlas pages cached with the level.
+5. **Handedness:** plan coordinates mirror the world, so traffic keeps right in the plan and left in
+   the world. Every left/right a driver sees (turn arrows, the exit tab's side) is mirrored from the
+   plan's geometry.
+6. **Tests run from the repo** (`WORKING_DIRECTORY` on `unit_tests`, `level_tests`, `lanes_tests`).
+   The two street-sign tests failed under ctest only because it ran them from the build folder,
+   where `assets/` was not found.
+
+**Consequences.**
+- Island 8 has 221 signs: 23 advance, 26 each of exit, gore, route, distance, entrance, do-not-enter
+  and wrong-way, 12 limit, 4 trailblazer.
+- **Not yet:**
+  - the 3D build of signs (gantries, posts, the atlas bake and its cache);
+  - warning signs (curve chevrons, advisory speeds);
+  - lane-use signs over multi-lane approaches.

@@ -5,6 +5,7 @@
 #include "../city/terrain_route.h"
 #include "../city/roads/lanes/interchange.h"   // diamondRamps: the one way on and off a freeway
 #include "../city/plan/land_shape.h"             // isoLines: contours, the coastline
+#include "place_names.h"
 #include "../../level_params.h"   // readTerrainParams: the island's terrain block, as a level reads it
 
 #include <tinygltf/stb_image_write.h>
@@ -373,10 +374,24 @@ IslandWorld planIsland(const json& blockIn, double half, double cell) {
         route("mountain", -1, k, foot, top, mountainRouteParams());
     }
 
+    // NAMES (place_names.h): the site shapes the name -- the coast, a river through it, the mountain
+    {
+        std::set<std::string> used;
+        const uint32_t worldSeed = static_cast<uint32_t>(w.terrain.value("seed", 0u));
+        for (std::size_t k = 0; k < w.sites.size(); ++k) {
+            IslandSite& s = w.sites[k];
+            PlaceTraits t;
+            t.city = s.kind == "city";
+            t.coastal = s.coastal;
+            t.mountain = s.kind == "mountain town";
+            t.river = w.hydro && w.hydro->distanceToRiver(s.at.x, s.at.y, 2000.0) < std::max(200.0, s.radius * 0.8);
+            s.name = placeName(placeNameBook(), t, worldSeed, static_cast<uint32_t>(k), used);
+        }
+    }
     // 5. THE REPORT
     json sites = json::array(), roads = json::array();
     for (const IslandSite& s : w.sites)
-        sites.push_back({{"kind", s.kind}, {"at", {std::round(s.at.x), std::round(s.at.y)}}, {"radius", std::round(s.radius)},
+        sites.push_back({{"name", s.name}, {"kind", s.kind}, {"at", {std::round(s.at.x), std::round(s.at.y)}}, {"radius", std::round(s.radius)},
                          {"elevation", std::round(s.elevation)}, {"flatKm2", std::round(s.flatArea / 1e4) / 100.0}, {"coastal", s.coastal}});
     double fwLen = 0.0;
     for (const IslandRoad& rd : w.roads) {
@@ -492,6 +507,7 @@ void routeFreewayRoundCities(IslandWorld& w, const std::vector<std::pair<int, st
     };
     // each city's inside, rasterized (even-odd, row by row), and the no-go mask: every inside grown 40 m
     std::vector<int> owner(N, -1);
+    for (const auto& [site, loops] : cityLimits) w.sites[static_cast<std::size_t>(site)].limits = loops;
     for (const auto& [site, loops] : cityLimits)
         for (int j = 0; j < n; ++j) {
             const double z = -w.half + j * w.cell;
@@ -627,12 +643,14 @@ void routeFreewayRoundCities(IslandWorld& w, const std::vector<std::pair<int, st
     w.report["freewayRoundCities"] = {{"cities", cityLimits.size()}, {"unrouted", unrouted}};
 }
 
-void linkCityToFreeway(IslandWorld& w, int site, const std::vector<Vec2>& arterialNodes, int maxLinks, double spacing, double maxLength) {
+void linkCityToFreeway(IslandWorld& w, int site, const std::vector<Vec2>& arterialNodes, int maxLinks, double spacing, double maxLength,
+                       const std::vector<std::string>& streets) {
     // every candidate's nearest freeway point
-    struct C { Vec2 at, onto; double d; };
+    struct C { Vec2 at, onto; double d; std::string street; };
     std::vector<C> cs;
-    for (const Vec2& p : arterialNodes) {
-        C c{p, p, 1e30};
+    for (std::size_t i = 0; i < arterialNodes.size(); ++i) {
+        const Vec2 p = arterialNodes[i];
+        C c{p, p, 1e30, i < streets.size() ? streets[i] : std::string()};
         for (const IslandRoad& f : w.roads)
             if (f.kind == "freeway")
                 for (std::size_t q = 0; q + 1 < f.points.size(); ++q) {
@@ -657,6 +675,7 @@ void linkCityToFreeway(IslandWorld& w, int site, const std::vector<Vec2>& arteri
         rd.from = site;
         rd.points = {c.at, c.onto};
         rd.length = c.d;
+        rd.street = c.street;
         w.roads.push_back(rd);
     }
 }
@@ -729,6 +748,7 @@ void islandInterchanges(IslandWorld& w, const std::vector<Vec2>& cityStreets) {
         if (w.roads[k].kind != "freeway" && w.roads[k].points.size() >= 2) streets.push_back({w.roads[k].kind + std::to_string(k), w.roads[k].points, false});
     const HeightField ground = [&w](double x, double z) { return w.heightAt(x, z); };
     w.ramps.clear();
+    w.interchanges.clear();
     int built = 0, candidates = 0, oblique = 0, spacing = 0, terminal = 0, room = 0, conflict = 0;
     // the freeway as ONE route: its legs end to end round the island (each leg's end is the next one's
     // start, a city's waypoint -- right where that city's links reach it, so a seam there cost every
@@ -799,13 +819,42 @@ void islandInterchanges(IslandWorld& w, const std::vector<Vec2>& cityStreets) {
             dop.idPrefix = "d" + std::to_string(k) + (phase ? "l" : "r");
             const roads::lanes::DiamondResult dr = roads::lanes::diamondRamps(route, these, dop);
             std::map<std::string, std::vector<double>> at;   // each served street's gores, by station
+            std::map<std::string, IslandInterchange> byDiamond;   // "<prefix>_<n>" -> its ramps
             for (const json& r : dr.ramps) {
                 std::vector<Vec2> pts;
                 for (const json& pt : r["path"]["points"]) pts.push_back(Vec2(pt[0].get<double>(), pt[1].get<double>()));
                 w.ramps.push_back(pts);
-                const std::string sid = r["to"].is_string() ? r["to"].get<std::string>() : r["from"].is_string() ? r["from"].get<std::string>() : "";
+                const bool off = r["to"].is_string();
+                const std::string sid = off ? r["to"].get<std::string>() : r["from"].is_string() ? r["from"].get<std::string>() : "";
+                const json& anchor = off ? r["from"] : r["to"];
                 served.insert(sid);
                 if (!pts.empty()) at[sid].push_back(stationOn(route, pts.front()));
+                // ids are <prefix>_<n>_<a|b>_<off|on>: the diamond is <prefix>_<n>
+                const std::string id = r.value("id", std::string());
+                const std::size_t cut = id.rfind('_', id.rfind('_') - 1);
+                IslandInterchange& ic = byDiamond[id.substr(0, cut)];
+                ic.road = std::atoi(sid.substr(sid.find_first_of("0123456789")).c_str());
+                IslandInterchange::Ramp rp;
+                rp.off = off;
+                const std::string edge = anchor.value("edge", std::string());
+                rp.withRoute = !edge.empty() && edge.back() == 'a';   // carriageway a runs with the route
+                rp.gorePt = Vec2(anchor["at"][0].get<double>(), anchor["at"][1].get<double>());
+                rp.gore = stationOn(route, rp.gorePt);
+                rp.terminal = pts.empty() ? rp.gorePt : (off ? pts.back() : pts.front());
+                rp.path = pts;
+                ic.ramps.push_back(rp);
+            }
+            for (auto& [key, ic] : byDiamond) {
+                double sum = 0;
+                for (const IslandInterchange::Ramp& rp : ic.ramps) sum += rp.gore;
+                ic.station = sum / static_cast<double>(std::max<std::size_t>(1, ic.ramps.size()));
+                // where the road crosses: its point nearest the route there
+                double best = 1e30;
+                for (const Vec2& q : w.roads[static_cast<std::size_t>(ic.road)].points) {
+                    const double d = std::fabs(stationOn(route, q) - ic.station) + 0.0;
+                    if (d < best) { best = d; ic.at = q; }
+                }
+                w.interchanges.push_back(ic);
             }
             for (const auto& [sid, ss] : at) {
                 double c = 0;
@@ -815,6 +864,38 @@ void islandInterchanges(IslandWorld& w, const std::vector<Vec2>& cityStreets) {
             }
             built += dr.built; candidates += dr.candidates; oblique += dr.rejectedOblique; spacing += dr.rejectedSpacing;
             terminal += dr.rejectedTerminal; room += dr.rejectedRoom; conflict += dr.rejectedConflict;
+        }
+    }
+    // THE ROUTE the interchanges are numbered along, and which way round it runs
+    if (routes.size() == 1) {
+        w.freewayRoute = routes.front();
+        double area2 = 0.0;
+        const std::vector<Vec2>& R = w.freewayRoute;
+        for (std::size_t q = 0; q + 1 < R.size(); ++q) area2 += R[q].x * R[q + 1].y - R[q + 1].x * R[q].y;
+        w.routeClockwise = area2 < 0.0;   // x east, y north: a negative area runs clockwise
+        double L = 0.0;
+        for (std::size_t q = 0; q + 1 < R.size(); ++q) L += (R[q + 1] - R[q]).length();
+        std::sort(w.interchanges.begin(), w.interchanges.end(), [](const IslandInterchange& a, const IslandInterchange& b) { return a.station < b.station; });
+        // EXIT NUMBERS: the km along the Inner Loop (clockwise) from the route's start; two in one km get A, B
+        std::map<int, int> count;
+        std::vector<int> num;
+        for (const IslandInterchange& ic : w.interchanges) {
+            const double d = w.routeClockwise ? ic.station : L - ic.station;
+            num.push_back(static_cast<int>(std::floor(d / 1000.0)) + 1);
+            ++count[num.back()];
+        }
+        std::map<int, int> seen;
+        for (std::size_t k = 0; k < w.interchanges.size(); ++k) {
+            IslandInterchange& ic = w.interchanges[k];
+            ic.exit = std::to_string(num[k]);
+            if (count[num[k]] > 1) ic.exit += static_cast<char>('A' + seen[num[k]]++);
+            // the place it serves: the site whose limits (or centre) is nearest the crossing
+            double best = 1e30;
+            for (std::size_t si = 0; si < w.sites.size(); ++si) {
+                double d = (w.sites[si].at - ic.at).length();
+                for (const auto& loop : w.sites[si].limits) for (const Vec2& q : loop) d = std::min(d, (q - ic.at).length());
+                if (d < best && d < 1500.0) { best = d; ic.site = static_cast<int>(si); }
+            }
         }
     }
     // a link that got no interchange has no reason to be: it goes (a pass or mountain road without one
@@ -1095,13 +1176,23 @@ bool writeIslandSvg(const IslandWorld& w, const std::string& svgPath, const Isla
     lines(w.ramps, "stroke=\"#1f1a14\" stroke-width=\"12\"");
     lines(w.ramps, "stroke=\"#fbb54d\" stroke-width=\"9.5\"");
     o << "</g>\n";
+    // SIGNS: a marker where each stands, pointing the way its traffic reads it; its legend on hover
+    o << "<g id=\"signs\">\n";
+    for (const IslandSign& sg : w.signs) {
+        const std::string col = sg.kind == "do-not-enter" || sg.kind == "wrong-way" ? "#c1272d" : sg.kind == "route" ? "#ffffff" : "#00693f";
+        const Vec2 f = sg.facing, r(f.y, -f.x);
+        const Vec2 a = sg.at + f * 9.0, b = sg.at - f * 5.0 + r * 5.0, c = sg.at - f * 5.0 - r * 5.0;
+        o << "<path fill=\"" << col << "\" stroke=\"#111\" stroke-width=\"1\" d=\"M" << a.x << ' ' << -a.y << "L" << b.x << ' ' << -b.y << "L" << c.x << ' ' << -c.y
+          << "Z\"><title>" << sg.kind << " (" << sg.mount << "): " << sg.legend.dump() << "</title></path>\n";
+    }
+    o << "</g>\n";
     // LABELS
     o << "<g id=\"labels\">\n";
     for (std::size_t k = 0; k < w.sites.size(); ++k) {
         const IslandSite& st = w.sites[k];
         const double fs = st.kind == "city" ? 260.0 : 150.0;
         o << "<text x=\"" << st.at.x << "\" y=\"" << -st.at.y << "\" font-size=\"" << fs << "\" text-anchor=\"middle\" fill=\"#3a1026\">"
-          << (st.kind == "city" ? "City " : st.kind == "town" ? "Town " : "Mountain town ") << k << "</text>\n";
+          << st.name << "</text>\n";
     }
     // a scale bar, 5 km (or 1 km close in), bottom left
     const double bar = half > 4000.0 ? 5000.0 : half > 1000.0 ? 1000.0 : 200.0;

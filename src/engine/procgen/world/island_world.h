@@ -33,11 +33,40 @@ namespace engine {
 
 struct IslandSite {
     std::string kind;          // "city", "town", "mountain town"
+    std::string name;          // place_names.h: what the signs call it
     Vec2 at;
     double radius = 0.0;       // the flat ground it has (m): a city's footprint, a town's
     double elevation = 0.0;
     double flatArea = 0.0;     // m^2 of buildable ground in its patch
     bool coastal = false;
+    std::vector<std::vector<Vec2>> limits;   // its planned limits (routeFreewayRoundCities), closed
+    int population = 0;                      // estimated from its planned buildings (the town-limit sign)
+};
+
+// An INTERCHANGE on the island freeway: a diamond where a road crosses it (islandInterchanges).
+struct IslandInterchange {
+    int road = -1;             // the crossing road (w.roads index)
+    int site = -1;             // the place it serves (-1: none, a country road)
+    double station = 0.0;      // along w.freewayRoute
+    Vec2 at;                   // where the road crosses
+    std::string exit;          // the exit number: km along the Inner Loop from the zero point ("12", "12A")
+    struct Ramp {
+        bool off = false;
+        bool withRoute = false;   // on the carriageway that runs with increasing station
+        double gore = 0.0;        // its gore's station
+        Vec2 gorePt, terminal;    // where it leaves/joins the freeway, and lands on the road
+        std::vector<Vec2> path;
+    };
+    std::vector<Ramp> ramps;
+};
+
+// A SIGN (road_signs.h): where it stands, which way the traffic reading it travels, and what it says.
+struct IslandSign {
+    std::string kind;          // advance, exit, gore, distance, route, entrance, do-not-enter, wrong-way, limit, trailblazer
+    Vec2 at;                   // its post (or a gantry's middle)
+    Vec2 facing;               // the direction of travel of the traffic that reads it (unit)
+    std::string mount;         // "roadside", "overhead"
+    nlohmann::json legend;     // what it says (road_signs.h lays the face out from this)
 };
 
 struct IslandRoad {
@@ -45,6 +74,7 @@ struct IslandRoad {
     std::vector<Vec2> points;
     double length = 0.0, climb = 0.0, worstGrade = 0.0;
     int from = -1, to = -1;    // site indices
+    std::string street;        // a link: the city street it lands on (its exit is signed with it)
 };
 
 struct IslandWorld {
@@ -58,6 +88,10 @@ struct IslandWorld {
     std::vector<IslandRoad> roads;
     Vec2 axis{1, 0};           // the island's long axis (the range runs along it)
     std::vector<std::vector<Vec2>> ramps;   // the interchanges' ramps (islandInterchanges), centrelines
+    std::vector<Vec2> freewayRoute;         // the freeway as the one route the diamonds were laid on
+    bool routeClockwise = false;            // increasing station runs clockwise (seen on the map, north up)
+    std::vector<IslandInterchange> interchanges;   // in station order
+    std::vector<IslandSign> signs;
     nlohmann::json report;
     double heightAt(double x, double z) const;   // bilinear
 };
@@ -89,7 +123,9 @@ void routeFreewayRoundCities(IslandWorld& w, const std::vector<std::pair<int, st
 
 // LINK ROADS from a city's arterials to the freeway (an interchange at each): the arterial ends nearest
 // the freeway, up to `maxLinks`, their freeway ends at least `spacing` apart, none longer than maxLength.
-void linkCityToFreeway(IslandWorld& w, int site, const std::vector<Vec2>& arterialNodes, int maxLinks, double spacing, double maxLength = 700.0);
+// `streets` names each node's street (parallel to arterialNodes; empty: unnamed).
+void linkCityToFreeway(IslandWorld& w, int site, const std::vector<Vec2>& arterialNodes, int maxLinks, double spacing, double maxLength = 700.0,
+                       const std::vector<std::string>& streets = {});
 
 // THE INTERCHANGES: every road that meets the freeway (a city's links, the pass, the mountain road)
 // CROSSES it -- carried on past, into the city's nearest arterial if one is there, else just far enough

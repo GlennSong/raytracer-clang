@@ -14,6 +14,8 @@
 #include "engine/procgen/city/plan/city_plan.h"
 #include "engine/procgen/city/plan/plan_scene.h"
 #include "engine/procgen/world/island_world.h"
+#include "engine/procgen/world/road_signs.h"
+#include "engine/procgen/city/street_names.h"
 
 #include <nlohmann/json.hpp>
 
@@ -23,6 +25,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -94,6 +97,7 @@ int main(int argc, char** argv) {
         std::vector<Drawn> sites;
         std::vector<std::pair<int, std::vector<std::vector<engine::Vec2>>>> cityLimits;
         std::vector<std::pair<int, std::vector<engine::Vec2>>> arterialNodes;
+        std::map<int, std::vector<std::string>> arterialNames;
         engine::IslandMapLayer locals, collectors, arterials, freeways;
         locals.name = "streets-local"; collectors.name = "streets-collector"; arterials.name = "streets-arterial"; freeways.name = "city-freeways";
         locals.rgb[0] = 0.96f; locals.rgb[1] = 0.95f; locals.rgb[2] = 0.92f; locals.widthM = 12;
@@ -108,7 +112,14 @@ int main(int argc, char** argv) {
             const nlohmann::json bj = engine::islandSiteBrief(w, static_cast<int>(k));
             std::ofstream(outDir + "/" + bj["name"].get<std::string>() + ".brief.json") << bj.dump(2) << "\n";
             const Brief b = briefFromJson(bj);
-            const CityPlan plan = generatePlan(b);
+            CityPlan plan = generatePlan(b);
+            {
+                // what its town-limit sign says: people, from its planned buildings (a rough 6 a building)
+                const PlanScore sc = evaluatePlan(plan);
+                const int pop = sc.predictedBuildings * 6;
+                const int unit = pop > 10000 ? 1000 : pop > 1000 ? 100 : 10;
+                w.sites[k].population = (pop + unit / 2) / unit * unit;
+            }
             double km[4] = {0, 0, 0, 0};
             for (const auto& e : plan.streets.edges) {
                 const engine::Vec2 a = plan.streets.nodes[static_cast<std::size_t>(e.a)].pos, c = plan.streets.nodes[static_cast<std::size_t>(e.b)].pos;
@@ -126,15 +137,25 @@ int main(int argc, char** argv) {
             else if (!plan.ringArc.empty()) engine::joinFreewayToRing(w, static_cast<int>(k), plan.ringArc, false);
             else if (!plan.ring.empty()) engine::joinFreewayToRing(w, static_cast<int>(k), plan.ring, true);
             {
+                // the arterials' junctions, each with its street's name (street_names.h), for the links
+                engine::StreetNamingParams np;
+                np.seed = b.seed;
+                const engine::StreetNaming naming = engine::nameStreets(plan.streets, np);
                 std::vector<engine::Vec2> art;
-                for (const auto& e : plan.streets.edges)
-                    if (e.klass == engine::RoadClass::Arterial)
-                        for (int nd : {e.a, e.b}) art.push_back(plan.streets.nodes[static_cast<std::size_t>(nd)].pos);
+                std::vector<std::string> names;
+                for (std::size_t ei = 0; ei < plan.streets.edges.size(); ++ei) {
+                    const auto& e = plan.streets.edges[ei];
+                    if (e.klass != engine::RoadClass::Arterial) continue;
+                    const int st = naming.streetOf(static_cast<int>(ei));
+                    const std::string nm = st >= 0 ? engine::abbreviateStreetName(naming.streets[static_cast<std::size_t>(st)].name) : std::string();
+                    for (int nd : {e.a, e.b}) { art.push_back(plan.streets.nodes[static_cast<std::size_t>(nd)].pos); names.push_back(nm); }
+                }
                 arterialNodes.push_back({static_cast<int>(k), art});
+                arterialNames[static_cast<int>(k)] = names;
             }
             sites.push_back({b.name, b.center, b.size * 0.5 + 250.0});
-            std::printf("%-16s %-13s at (%6.0f, %6.0f), %4.0f m across: %4zu blocks, streets %.1f km local / %.1f collector / %.1f arterial, freeway %.1f km%s (%.1f s)\n",
-                        b.name.c_str(), w.sites[k].kind.c_str(), b.center.x, b.center.y, b.size, plan.blocks.size(), km[0], km[1], km[2], km[3],
+            std::printf("%-18s %-16s %-13s at (%6.0f, %6.0f), %4.0f m across: %4zu blocks, streets %.1f km local / %.1f collector / %.1f arterial, freeway %.1f km%s (%.1f s)\n",
+                        w.sites[k].name.c_str(), b.name.c_str(), w.sites[k].kind.c_str(), b.center.x, b.center.y, b.size, plan.blocks.size(), km[0], km[1], km[2], km[3],
                         !plan.ringArc.empty() ? ", ring a C on the coast" : !plan.ring.empty() ? ", closed ring" : "",
                         std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
         }
@@ -144,11 +165,18 @@ int main(int argc, char** argv) {
             for (const auto& [k, art] : arterialNodes) {
                 const bool city = w.sites[static_cast<std::size_t>(k)].kind == "city";
                 if (w.sites[static_cast<std::size_t>(k)].kind == "mountain town") continue;   // its road is the mountain road
-                engine::linkCityToFreeway(w, k, art, city ? 4 : 2, city ? 1000.0 : 700.0);
+                engine::linkCityToFreeway(w, k, art, city ? 4 : 2, city ? 1000.0 : 700.0, 700.0, arterialNames[k]);
             }
             std::vector<engine::Vec2> allArterial;
             for (const auto& [k, art] : arterialNodes) allArterial.insert(allArterial.end(), art.begin(), art.end());
             engine::islandInterchanges(w, allArterial);
+            engine::planIslandSigns(w);
+            engine::writeSignSheetSvg(w, outDir + "/signs.svg");
+            std::map<std::string, int> kinds;
+            for (const auto& sg : w.signs) ++kinds[sg.kind];
+            std::printf("signs: %zu (", w.signs.size());
+            for (const auto& [kd, n] : kinds) std::printf(" %s %d", kd.c_str(), n);
+            std::printf(" ) -> %s/signs.svg\n", outDir.c_str());
             const auto& ic = w.report["interchanges"];
             std::printf("interchanges: %d diamonds at %d crossings (%zu ramps); refused: %s\n", ic["built"].get<int>(), ic["crossings"].get<int>(),
                         w.ramps.size(), ic["refused"].dump().c_str());

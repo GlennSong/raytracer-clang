@@ -116,6 +116,8 @@ add_library(engine_core STATIC
     src/engine/procgen/city/plan/city_plan.cpp
     src/engine/procgen/city/plan/plan_scene.cpp
     src/engine/procgen/city/plan/land_shape.cpp
+    src/engine/procgen/world/place_names.cpp
+    src/engine/procgen/world/road_signs.cpp
     src/engine/procgen/city/site_plan.cpp
     src/engine/procgen/city/core_plan.cpp
     src/engine/procgen/city/room_plan.cpp
@@ -483,7 +485,7 @@ if(RT_BUILD_ROADS_LANES)
         target_compile_options(lanes_tests PRIVATE -Wall -Wextra)
         target_compile_definitions(lanes_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
         target_link_libraries(lanes_tests PRIVATE engine_core citysim)
-        add_test(NAME lanes_tests COMMAND lanes_tests)
+        add_test(NAME lanes_tests COMMAND lanes_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     else()
         message(WARNING "roads/lanes: Clipper2/CDT submodules missing — the lanes builder is not in this build")
     endif()
@@ -773,6 +775,7 @@ add_executable(run_tests
     tests/test_erosion_gpu.cpp
     tests/test_lot_road_clearance.cpp
     tests/test_city_plan.cpp
+    tests/test_road_signs.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
@@ -798,7 +801,8 @@ if(RT_ENABLE_AUDIO AND NOT EMSCRIPTEN)
     target_sources(run_tests PRIVATE tests/test_audio.cpp)
 endif()
 enable_testing()
-add_test(NAME unit_tests COMMAND run_tests)
+# from the repo: the tests read assets/ by relative path (street names, the sign font, places)
+add_test(NAME unit_tests COMMAND run_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # ============================================================
 # Content gate: every SHIPPED level is playable (AGENTS.md § Playable Scenes)
@@ -822,7 +826,8 @@ target_compile_options(level_tests PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(level_tests PRIVATE citysim engine_core)
 # Reads assets/levels + assets/scripts from the source tree, like the game does.
 target_compile_definitions(level_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-add_test(NAME level_tests COMMAND level_tests)
+# from the repo: the tests read assets/ by relative path (street names, the sign font, places)
+add_test(NAME level_tests COMMAND level_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 # Loading every shipped city is minutes of procgen; the default 1500s ctest
 # timeout is generous but not obviously enough on a cold CI runner.
 set_tests_properties(level_tests PROPERTIES TIMEOUT 1800)

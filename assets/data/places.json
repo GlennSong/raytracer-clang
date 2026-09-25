@@ -1,0 +1,36 @@
+{
+  "_comment": [
+    "Place naming as DATA (the same split as streets.json): the C++ (world/place_names.h) owns the",
+    "algorithm, this file the words. Glenn, 2026-09-25: 'I'll leave it to you to generate the town",
+    "names. They don't have to be Hawaiian.' A name is a ROOT + an ENDING run together (Ash + ford ->",
+    "Ashford), and a place's SITE can shape it: a coastal town may be 'Port ...' or '... Bay', a town on",
+    "a river '... Ford' or '...bridge', the mountain town '... Ridge'. Each word is used once per world",
+    "while the banks last; the same world seed always gives the same names.",
+    "routes: what the island's roads are signed as, and the two directions round a ring road (the",
+    "Capital Beltway's convention: the INNER loop runs clockwise, the OUTER counter-clockwise)."
+  ],
+  "places": {
+    "seed": 20260925,
+    "roots": ["Ash", "Bram", "Clay", "Dun", "Elm", "Fair", "Glen", "Hart", "Ivy", "Kings", "Lark", "Marl",
+              "Oak", "Pen", "Red", "Stan", "Thorn", "Wey", "Wick", "Alder", "Bel", "Carr", "Hol", "Mill",
+              "Brook", "Cold", "Deer", "Fern", "Gold", "Hazel", "Lin", "Moss", "Ned", "Os", "Quarry",
+              "Rook", "Salt", "Stone", "Swan", "Tarn", "Wren", "Yew", "Ember", "Grey", "Heath", "Kel"],
+    "endings": ["ford", "field", "ton", "by", "wick", "stead", "ham", "well", "dale", "wood", "worth",
+                "more", "ley", "bury", "holm", "combe", "hurst", "gate", "wyn", "sted"],
+    "traits": {
+      "coastal":  {"chance": 0.45, "prefix": ["Port "], "suffix": [" Bay", " Harbor", " Point", " Cove"],
+                   "endings": ["mouth", "haven", "port", "cliff", "sands"]},
+      "river":    {"chance": 0.5, "suffix": [" Falls", " Crossing"], "endings": ["ford", "bridge", "mouth", "water"]},
+      "mountain": {"chance": 0.8, "suffix": [" Ridge", " Summit", " Heights"], "endings": ["crest", "top", "fell"]}
+    },
+    "cityChance": 0.25
+  },
+  "routes": {
+    "freeway": "1",
+    "pass": "2",
+    "mountain": "3",
+    "loop": {"clockwise": "Inner Loop", "counterclockwise": "Outer Loop"},
+    "freewayName": "Route",
+    "exitNumbering": "km"
+  }
+}
