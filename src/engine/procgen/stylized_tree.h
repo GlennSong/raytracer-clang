@@ -7,6 +7,8 @@
 // one soft volume of foliage instead of a thousand leaves; colour is baked darker underneath
 // and inside, lighter on top. About 1-1.5k triangles a tree. Pines are stacked jagged cone
 // tiers; palms a ringed, curved trunk under a crown of drooping sawtooth fronds (no alpha).
+// Oaks carry a thick flared trunk and heavy spreading limbs; birches slender white, dark-marked
+// stems, often several; shrubs are trunkless clumps, the flowering ones dotted with blossom.
 
 #include "../../renderer/renderer.h"   // RenderMesh
 
@@ -15,7 +17,7 @@
 
 namespace engine {
 
-enum class StylizedShape { Round, Spreading, Columnar, Flowering, Pine, Palm };
+enum class StylizedShape { Round, Spreading, Columnar, Flowering, Pine, Palm, Oak, Maple, Birch, Shrub, FloweringShrub };
 bool stylizedShapeFromName(const std::string& name, StylizedShape& out);
 
 struct StylizedTreeParams {

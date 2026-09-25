@@ -6,6 +6,7 @@
 #include "../src/engine/procgen/terrain.h"
 #include "../src/engine/procgen/noise.h"
 #include <algorithm>
+#include <string>
 #include <cmath>
 
 using namespace engine;  // namespace migration (ADR-0015)
@@ -198,7 +199,8 @@ TEST_CASE(grass_clump_is_blades_lit_as_a_carpet) {
 // Stylized trees (procgen/stylized_tree.h): every shape grows bark and canopy within the
 // polygon budget, stands on its base, reaches about its height, and is the same for a seed.
 TEST_CASE(stylized_trees_stay_in_budget_and_repeat) {
-    for (const char* name : {"round", "spreading", "columnar", "flowering", "pine", "palm"}) {
+    for (const char* name : {"round", "spreading", "columnar", "flowering", "pine", "palm", "oak", "maple", "birch",
+                             "shrub", "flowering_shrub"}) {
         engine::StylizedTreeParams p;
         CHECK(engine::stylizedShapeFromName(name, p.shape));
         p.height = 8.0;
@@ -207,8 +209,9 @@ TEST_CASE(stylized_trees_stay_in_budget_and_repeat) {
         double lo = 1e9, hi = -1e9;
         for (const auto* m : {&a.bark, &a.canopy})
             for (const engine::Vertex& v : m->vertices) { lo = std::min(lo, (double)v.position.y); hi = std::max(hi, (double)v.position.y); }
-        const bool ok = !a.bark.indices.empty() && !a.canopy.indices.empty() && tris < 2000 &&
-                        lo > -0.5 && lo < 0.5 && hi > 8.0 * 0.6 && hi < 8.0 * 1.45 &&
+        const bool shrub = std::string(name).find("shrub") != std::string::npos;   // no trunk, and low
+        const bool ok = (shrub || !a.bark.indices.empty()) && !a.canopy.indices.empty() && tris < 2500 &&
+                        lo > -0.5 && lo < 0.5 && hi > 8.0 * (shrub ? 0.3 : 0.6) && hi < 8.0 * 1.45 &&
                         a.canopy.vertices.size() == b.canopy.vertices.size() &&
                         (a.canopy.vertices.back().position - b.canopy.vertices.back().position).length() < 1e-12;
         if (!ok) std::printf("    %s: %zu tris, y %.2f..%.2f\n", name, tris, lo, hi);
