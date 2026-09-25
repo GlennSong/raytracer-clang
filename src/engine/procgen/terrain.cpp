@@ -528,6 +528,12 @@ Vec3 terrainColor(double height, double normalUp, double noiseValue) {
                             noiseValue * 0.0, -1e30);
 }
 
+double terrainSnowWeight(double worldX, double worldZ, double height, double normalUp,
+                         const TerrainParams& params) {
+    if (!params.cover || !params.coverWeights) return 0.0;
+    return params.cover->at(worldX, worldZ, height, normalUp).snow;
+}
+
 Vec3 terrainColor(double worldX, double worldZ, double height, double normalUp,
                   const Noise& noise, const TerrainParams& params) {
     if (params.cover) {   // the ground-cover map: its colour, or its weights for the layered surface

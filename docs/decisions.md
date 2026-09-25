@@ -7906,3 +7906,55 @@ The cheaper step also stops a second step being needed each frame, so the saving
   searches). Spreading departures across steps, or caching commute routes (home and work do not
   move), is the next lever.
 - `block_grading_leaves_no_pits_between_roads` fails (worstRiser 0.86) as it did before this work.
+
+## ADR-0102 — Realism is calibrated against photographs, not tuned by eye
+
+**Context.** Glenn: "The colors for everything are too bright and don't look realistic… closer to
+realism for the grass, water, and terrain." The guide is his four reference photos: Alaska, the
+Colorado aspens, Maroon Bells, Lauterbrunnen.
+
+**Decision: measure, then set.** Sample the same kinds of region in a reference photo and in our
+render (sunlit meadow, conifer slope, rock, snow, lake water, distant mountains, sky zenith), and
+compare mean display colour, especially the ratios red/green and blue/green. Colour is set as
+linear albedo in the level wherever the vocabulary exposes it (`groundCover` colours and the
+`grass` block), not in code. river_valley is the first level done:
+- **Atmosphere:** `environment.fog` density 0.00035 gives aerial perspective. On Vulkan the fog
+  mixes toward the sky behind, so distant ridges fade blue-grey, as every reference does.
+  Volumetric clouds are added. Exposure is 0.7.
+- **Palette** (linear albedo):
+  - grass tips (0.10, 0.14, 0.03) and roots (0.018, 0.032, 0.008): yellow-green, red/green about
+    0.8 as measured;
+  - terrain grass (0.055, 0.085, 0.018), the blades' average, so the card-to-terrain hand-off
+    does not show;
+  - upland (0.10, 0.10, 0.04);
+  - rock (0.15, 0.14, 0.12), a warm grey (real rock is about 0.2, not charcoal);
+  - dirt (0.12, 0.085, 0.05);
+  - water (0.01, 0.06, 0.055), teal as in the glacial lakes;
+  - snowline at 140 m.
+- **Snow is a fifth terrain layer.** The layered terrain carried only three weights plus rock as
+  the remainder, so snow was being drawn as rock. The snow weight now rides in the vertex's `u`
+  (`terrainSnowWeight`; the layers sample by world position, not UV). The shader blends in a
+  procedural powder that settles into the rock's hollows first. The cover rule sheds snow off
+  faces past about 50°, so ledges hold it and cliffs stay bare.
+- **Water:** foam only where the river really runs fast, in sparse patches. Bank lace is thinner,
+  and ripples are a metre-scale swell instead of grain.
+
+**Found on the way (the reasons earlier tuning "did nothing"):**
+- `environment.skyColor` is read only by the offline path tracer, and `sky.model: "scattering"`
+  is Metal-only. The Vulkan sky's colours come from the day/night palette
+  (`day_night_cycle.cpp`).
+- With day/night on, `lighting.sun.intensity` and `ambientMultiplier` are *scales* on the cycle's
+  noon values.
+- Adding a volumetric deck turns weather to AUTO, and the auto state for river_valley's day is
+  overcast (soft shadows, dimmed sun). A remembered weather in `settings.json` beats the level's
+  `dayNight.weather` by design. Screenshots pin it with `--cmd "weather fair now"`.
+
+**Consequences.** Sunlit meadow: red/green 0.62 → 0.83 (the references measure 0.67–0.91). Distant
+ridges now haze toward the sky. The peaks carry snow caps with rock between them, and the rivers
+are clear teal.
+
+**Left:**
+- Meadow blue/green is still 0.51 against 0.33: sky light plus haze, a sky-palette question.
+- Rock is one tone at distance: no strata, no dark forest bands.
+- Slope-rock patches on the meadows read like flat decals.
+- The other levels are not yet calibrated.

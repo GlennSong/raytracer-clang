@@ -251,6 +251,7 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
             v.u = static_cast<float>(x / node.size);
             v.v = static_cast<float>(z / node.size);
             v.color = terrainColor(x, z, y, v.normal.y, noise, params);
+            if (params.cover && params.coverWeights) v.u = static_cast<float>(terrainSnowWeight(x, z, y, v.normal.y, params));
             mesh.vertices.push_back(v);
         }
     }
@@ -370,6 +371,7 @@ LodNodeMesh generateBakedTileMesh(const pyramid::Pyramid& p, const pyramid::Heig
             v.u = static_cast<float>(x / size);
             v.v = static_cast<float>(z / size);
             v.color = terrainColor(x, z, y, v.normal.y, noise, params);
+            if (params.cover && params.coverWeights) v.u = static_cast<float>(terrainSnowWeight(x, z, y, v.normal.y, params));
             mesh.vertices.push_back(v);
         }
     // The CDLOD morph target, as generateLodNodeMesh: even vertices stay, odd ones collapse to

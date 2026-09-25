@@ -305,6 +305,11 @@ Vec3 terrainColor(double height, double normalUp, double noiseValue);
 // grain), plus a CURVATURE term (4 extra height taps) — gullies read wetter/
 // darker and hold snow tongues, ridges stay bare. Band heights scale with
 // params.snowLine/rockLine. Used by the mesh bakers; the 3-arg form is for tests.
+// The layered surface's fifth weight (ground-cover map, coverWeights): snow, 0..1. The drawn
+// terrain carries it in the vertex's u (the layers sample by world position, not UV); 0 when
+// the level has no cover map or draws it as a flat colour.
+double terrainSnowWeight(double worldX, double worldZ, double height, double normalUp,
+                         const TerrainParams& params);
 Vec3 terrainColor(double worldX, double worldZ, double height, double normalUp,
                   const Noise& noise, const TerrainParams& params);
 

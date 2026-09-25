@@ -33,7 +33,12 @@ Cover GroundCover::at(double x, double z, double height, double normalUp) const 
     const double fine = noise_.noise2(x * 0.22 - 3.7, z * 0.22 + 8.9);
     const double jag = 0.65 * macro + 0.35 * fine;
     // raw coverage of each layer, sharpened after its noise
-    const double snowRaw = p_.snowHeight < 1e29 ? smooth(-0.1, 0.1, (h + 15.0 * jag - p_.snowHeight) / 20.0) : 0.0;
+    // snow above the snowline -- but it slides off faces much past 50 degrees: ledges and gullies
+    // hold it, cliffs stay bare rock (every alpine reference reads that way)
+    const double snowRaw = p_.snowHeight < 1e29
+                               ? smooth(-0.1, 0.1, (h + 15.0 * jag - p_.snowHeight) / 20.0) *
+                                     (1.0 - smooth(-0.15, 0.15, (slope + 6.0 * jag - 50.0) / 12.0))
+                               : 0.0;
     const double rockRaw = std::max(smooth(-0.15, 0.15, (slope + 7.0 * jag - p_.rockSlopeDeg) / 10.0),
                                     0.55 * smooth(-0.2, 0.2, (h + 12.0 * jag - p_.mountainHeight * 1.25) / 30.0));
     const double sandRaw = sea ? 1.0 - smooth(-0.12, 0.12, (h + 1.2 * jag - p_.beachHeight) / p_.beachHeight) : 0.0;

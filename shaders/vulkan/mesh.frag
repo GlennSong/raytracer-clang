@@ -376,9 +376,11 @@ vec4 layerRock(sampler2D t, vec3 wp, vec3 n, float mixB) {
     w /= (w.x + w.y + w.z);
     return layerPlanar(t, wp.zy, mixB) * w.x + layerPlanar(t, wp.xz, mixB) * w.y + layerPlanar(t, wp.xy, mixB) * w.z;
 }
-vec3 terrainLayers(vec3 cover, vec3 wp, vec3 n) {
+vec3 terrainLayers(vec3 cover, float wsn, vec3 wp, vec3 n) {
+    // weights: grass, dirt, sand in the vertex colour, SNOW in the vertex u, rock the remainder
     float wg = cover.r, wd = cover.g, ws = cover.b;
-    float wr = max(0.0, 1.0 - wg - wd - ws);
+    wsn = clamp(wsn, 0.0, 1.0);
+    float wr = max(0.0, 1.0 - wg - wd - ws - wsn);
     float mixB = 0.6 * smoothstep(0.35, 0.65, fbm2(wp.x * 0.045, wp.z * 0.045));
     // only the layers present here are sampled
     const vec4 none = vec4(0.0);
@@ -392,11 +394,17 @@ vec3 terrainLayers(vec3 cover, vec3 wp, vec3 n) {
     float bd = wd > 0.001 ? wd + d.a * 0.5 : -1.0;
     float bs = ws > 0.001 ? ws + s.a * 0.5 : -1.0;
     float br = wr > 0.001 ? wr + r.a * 0.5 : -1.0;
-    float top = max(max(bg, bd), max(bs, br)) - depth;
-    float kg = max(bg - top, 0.0), kd = max(bd - top, 0.0), ks = max(bs - top, 0.0), kr = max(br - top, 0.0);
-    float sum = max(kg + kd + ks + kr, 1e-5);
+    // snow has no texture: settled powder, a soft mottle, lying LOW (it fills the hollows of the
+    // rock's height, so its edge follows the stone instead of a contour line)
+    float snowMottle = fbm2(wp.x * 0.11 + 5.3, wp.z * 0.11 - 2.2);
+    float bn = wsn > 0.001 ? wsn + (1.0 - r.a) * 0.35 + 0.1 * snowMottle : -1.0;
+    vec3 snow = vec3(0.80, 0.84, 0.90) * (0.92 + 0.1 * snowMottle);
+    float top = max(max(max(bg, bd), max(bs, br)), bn) - depth;
+    float kg = max(bg - top, 0.0), kd = max(bd - top, 0.0), ks = max(bs - top, 0.0), kr = max(br - top, 0.0),
+          kn = max(bn - top, 0.0);
+    float sum = max(kg + kd + ks + kr + kn, 1e-5);
     vec3 c = (pow(g.rgb, vec3(2.2)) * kg + pow(d.rgb, vec3(2.2)) * kd + pow(s.rgb, vec3(2.2)) * ks +
-              pow(r.rgb, vec3(2.2)) * kr) / sum;
+              pow(r.rgb, vec3(2.2)) * kr + snow * kn) / sum;
     // a broad macro tint so kilometres of ground aren't one tone (one cheap octave)
     c *= 0.88 + 0.24 * vnoise2(wp.x * 0.008 + 3.1, wp.z * 0.008 - 1.7);
     return c;
@@ -684,7 +692,7 @@ void main() {
     // TERRAIN LAYERS: the texture slots are the ground's layers, not the usual maps.
     const bool layered = pc.surfaceFlags.x == 19u;
     if (layered) {
-        albedo = terrainLayers(inColor, inWorldPos, normalize(inWorldNormal));
+        albedo = terrainLayers(inColor, inTexcoord.x, inWorldPos, normalize(inWorldNormal));
         roughness = 0.95;
         texFlags = 0u;   // nothing below reads the slots as albedo / MR / normal / AO
     }
@@ -715,8 +723,11 @@ void main() {
         vec2 pa = (xz - flowA) * 0.12, pb = (xz - flowB) * 0.12;
         float n1 = mix(fbm2(pa.x, pa.y), fbm2(pb.x, pb.y), flowBlend);
         float n2 = mix(vnoise2(pa.x * 7.0, pa.y * 7.0), vnoise2(pb.x * 7.0, pb.y * 7.0), flowBlend);
-        float foam = (1.0 - smoothstep(0.0, 0.05, edge)) * (0.25 + 0.6 * n2) * (0.3 + 0.7 * riverSpeed) +
-                     smoothstep(0.35, 0.9, riverSpeed) * smoothstep(0.6, 0.85, n1 + 0.45 * n2);   // white water: rapids only
+        // foam: a thin lace at the banks, and white water in PATCHES only where it really runs fast --
+        // most of a rapid's surface stays clear (the references' rivers are glassy teal with white
+        // breaking over the steps, not a white sheet)
+        float foam = (1.0 - smoothstep(0.0, 0.035, edge)) * (0.15 + 0.5 * n2) * (0.3 + 0.7 * riverSpeed) +
+                     smoothstep(0.55, 1.0, riverSpeed) * smoothstep(0.72, 0.92, n1 + 0.35 * n2) * 0.85;
         foam = clamp(foam, 0.0, 1.0) * riverFade;
         albedo = mix(albedo, vec3(0.82, 0.88, 0.9), foam);
         roughness = mix(0.05, 0.45, foam);
@@ -834,12 +845,12 @@ void main() {
     if (featNormal) N = featN;
     if (river) {   // ripples: the two flow phases' noise gradients in world xz, crossfaded
         const float e = 0.04;
-        vec2 pa = (inWorldPos.xz - flowA) * 0.35, pb = (inWorldPos.xz - flowB) * 0.35;
+        vec2 pa = (inWorldPos.xz - flowA) * 0.2, pb = (inWorldPos.xz - flowB) * 0.2;   // metre-scale swell, not grain
         float a0 = fbm2(pa.x, pa.y), b0 = fbm2(pb.x, pb.y);
         vec2 ga = vec2(fbm2(pa.x + e, pa.y) - a0, fbm2(pa.x, pa.y + e) - a0);
         vec2 gb = vec2(fbm2(pb.x + e, pb.y) - b0, fbm2(pb.x, pb.y + e) - b0);
         vec2 grad = mix(ga, gb, flowBlend) / e;
-        float amp = (0.06 + 0.4 * riverSpeed) * 0.1;
+        float amp = (0.035 + 0.25 * riverSpeed) * 0.1;
         N = normalize(N - vec3(grad.x, 0.0, grad.y) * amp);
     }
     // FLAG_FRONT_ONLY (128): the back of this surface does not exist.
