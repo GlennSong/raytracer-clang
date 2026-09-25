@@ -70,6 +70,13 @@ struct LandShape {
 LandShape growLandShape(const HeightField& ground, const std::function<bool(const Vec2&)>& buildable,
                         const Vec2& seed, double half, const LandShapeParams& p = {});
 
+// MARCHING SQUARES: the `level` iso-lines of an n x n grid (row-major from `origin`, `cell` m apart) --
+// closed loops, and open runs where they meet the grid's edge -- resampled every `step` m, smoothed
+// over `smooth` m, those shorter than `minLength` dropped. A city's depth contours; a terrain's
+// height contours; a coastline (level = sea level).
+std::vector<std::vector<Vec2>> isoLines(const std::vector<float>& field, int n, const Vec2& origin, double cell,
+                                        double level, double step = 15.0, double minLength = 200.0, double smooth = 0.0);
+
 // A moving average `window` m wide along a polyline sampled every `step` m (ends held on an open one).
 std::vector<Vec2> smoothPolyline(const std::vector<Vec2>& pts, bool closed, double window, double step);
 

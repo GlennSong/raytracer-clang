@@ -128,11 +128,12 @@ double LandShape::depthHolding(double share) const {
     return d[at];
 }
 
-std::vector<std::vector<Vec2>> LandShape::contour(double level, double step, double minLength, double smooth) const {
+std::vector<std::vector<Vec2>> isoLines(const std::vector<float>& field, int n, const Vec2& origin, double cell,
+                                        double level, double step, double minLength, double smooth) {
     // MARCHING SQUARES over the depth grid. Each crossing is named by the grid edge it lies on
     // (cell index * 2 + 0 for the edge along x, + 1 along y), so the segments of neighbouring
     // squares share their ends exactly and chain into lines.
-    auto val = [&](int i, int j) { return static_cast<double>(depth[static_cast<std::size_t>(j) * n + i]) - level; };
+    auto val = [&](int i, int j) { return static_cast<double>(field[static_cast<std::size_t>(j) * n + i]) - level; };
     auto key = [&](int i, int j, int axis) { return (static_cast<long long>(j) * n + i) * 2 + axis; };
     auto point = [&](int i, int j, int axis) {
         const double a = val(i, j), b = axis == 0 ? val(i + 1, j) : val(i, j + 1);
@@ -185,6 +186,10 @@ std::vector<std::vector<Vec2>> LandShape::contour(double level, double step, dou
     for (const auto& [k, nb] : adj) if (nb.size() == 1 && !used[k]) walk(k);   // open runs from an end
     for (const auto& [k, nb] : adj) if (!used[k]) walk(k);                       // then the loops
     return out;
+}
+
+std::vector<std::vector<Vec2>> LandShape::contour(double level, double step, double minLength, double smooth) const {
+    return isoLines(depth, n, origin, cell, level, step, minLength, smooth);
 }
 
 LandShape growLandShape(const HeightField& ground, const std::function<bool(const Vec2&)>& buildable,

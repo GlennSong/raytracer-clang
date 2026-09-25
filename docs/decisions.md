@@ -8250,7 +8250,28 @@ shape instead of floodfilling a circle each time?"
      itself in a spike (up a spur and back).
    - **Connected:** the pass ends on the freeway at each side, not at a city's edge beside it, and
      `linkCityToFreeway` adds link roads from each city's arterials (4 for a city, 2 for a town).
-10. **Edge streets are smoothed** so they drive as curves:
+11. **Interchanges** (`islandInterchanges`) use the one diamond generator (`lanes/interchange.h`):
+    - **Every road that meets the freeway crosses it** square. On the far side it carries on into
+      the nearest city arterial if one is within 500 m; otherwise it runs only the ~90 m the far
+      ramps need to land.
+    - **The freeway is ONE route** round the island, opened at the point farthest from any
+      crossing. As separate legs, every city's waypoint was a seam, right where its links reach the
+      freeway, and a diamond cannot span a seam: that cost 8 of 23.
+    - **The pass and the mountain road get their diamonds first**, being the only way on from the
+      hills. The city links follow, kept a spacing (900 m) clear of them. A link left without a
+      diamond is dropped. Island 8: 13 diamonds, 52 ramps.
+12. **The map is SVG** (`writeIslandSvg`). Glenn: "We should favor that over raster for maps."
+    - In metres, north up, one file to zoom into instead of a close-up per site.
+    - Everything planned is vector, at its real width: streets, freeway (44 m), ramps, pass,
+      links, rivers, city limits, labels. So are the terrain's contours (every 20 m, 100 m
+      heavier) and the coastline, both from `isoLines`, the marching squares now shared with the
+      city depth field.
+    - The shaded relief is one embedded image at the terrain's own 20 m resolution; vectorizing it
+      would add nothing.
+    - Each layer is a `<g id>`, to toggle in Inkscape or a browser.
+    - The raster map is kept as a quick look; per-site PNG close-ups need `--png`, and `--view X Z
+      HALF NAME` renders one.
+13. **Edge streets are smoothed** so they drive as curves:
    - contour streets get a 90 m moving average (`smoothPolyline`);
    - the limits are smoothed at 60 m;
    - the depth field gets two box blurs.

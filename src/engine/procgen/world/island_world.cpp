@@ -3,6 +3,8 @@
 #include "../noise.h"
 #include "../terrain.h"
 #include "../city/terrain_route.h"
+#include "../city/roads/lanes/interchange.h"   // diamondRamps: the one way on and off a freeway
+#include "../city/plan/land_shape.h"             // isoLines: contours, the coastline
 #include "../../level_params.h"   // readTerrainParams: the island's terrain block, as a level reads it
 
 #include <tinygltf/stb_image_write.h>
@@ -11,7 +13,12 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <map>
+#include <set>
+#include <fstream>
+#include <sstream>
 #include <thread>
+#include <tuple>
 
 namespace engine {
 
@@ -654,6 +661,172 @@ void linkCityToFreeway(IslandWorld& w, int site, const std::vector<Vec2>& arteri
     }
 }
 
+void islandInterchanges(IslandWorld& w, const std::vector<Vec2>& cityStreets) {
+    // the freeway's nearest point to p (and which leg, and the direction along it there)
+    auto nearestFreeway = [&](const Vec2& p, Vec2& onto, Vec2& along) {
+        double best = 1e30;
+        for (const IslandRoad& f : w.roads)
+            if (f.kind == "freeway")
+                for (std::size_t q = 0; q + 1 < f.points.size(); ++q) {
+                    const Vec2 a = f.points[q], ab = f.points[q + 1] - a;
+                    const double L2 = ab.x * ab.x + ab.y * ab.y;
+                    const double t = L2 > 1e-12 ? std::clamp(((p - a).x * ab.x + (p - a).y * ab.y) / L2, 0.0, 1.0) : 0.0;
+                    const Vec2 fp = a + ab * t;
+                    if ((p - fp).length() < best) { best = (p - fp).length(); onto = fp; along = ab * (1.0 / std::sqrt(std::max(L2, 1e-12))); }
+                }
+        return best;
+    };
+    // 1. EVERY ROAD THAT MEETS THE FREEWAY CROSSES IT: its end on the freeway carried on square across
+    for (IslandRoad& rd : w.roads) {
+        if (rd.kind == "freeway" || rd.points.size() < 2) continue;
+        for (int end = 0; end < 2; ++end) {
+            std::vector<Vec2>& P = rd.points;
+            const Vec2 e = end ? P.back() : P.front(), prev = end ? P[P.size() - 2] : P[1];
+            Vec2 onto, along;
+            if (nearestFreeway(e, onto, along) > 5.0) continue;   // this end is not on the freeway
+            Vec2 across(-along.y, along.x);
+            if ((e - prev).x * across.x + (e - prev).y * across.y < 0) across = across * -1.0;   // on, the way it came
+            // square across the freeway for the last 60 m before it, then on past it: into the city's
+            // nearest arterial when one is there (a pass arriving at a town), else as far as the far
+            // ramps need to land (90 m)
+            std::vector<Vec2> tail;
+            for (double t = 30.0; t <= 90.0; t += 30.0) {
+                const Vec2 q = onto + across * t;
+                if (w.heightAt(q.x, q.y) < 0.8) break;
+                tail.push_back(q);
+            }
+            if (tail.empty()) continue;
+            {
+                double best = 500.0;
+                Vec2 into = tail.back();
+                for (const Vec2& c : cityStreets) {
+                    const Vec2 d = c - onto;
+                    const double ahead = d.x * across.x + d.y * across.y;
+                    if (ahead > 80.0 && d.length() < best) { best = d.length(); into = c; }   // beyond the far ramps
+                }
+                if (best < 500.0) tail.push_back(into);
+            }
+            const Vec2 lead = onto - across * 60.0;
+            if (end) {
+                while (P.size() > 1 && ((P.back() - onto).length() < 60.0)) P.pop_back();
+                P.push_back(lead); P.push_back(onto);
+                P.insert(P.end(), tail.begin(), tail.end());
+            } else {
+                while (P.size() > 1 && ((P.front() - onto).length() < 60.0)) P.erase(P.begin());
+                std::vector<Vec2> head(tail.rbegin(), tail.rend());
+                head.push_back(onto); head.push_back(lead);
+                P.insert(P.begin(), head.begin(), head.end());
+            }
+        }
+    }
+    // ...and rounded again, so the turn onto the square crossing is a curve, not a kink; the crossing
+    // itself stays square (the rounding is short against its 150 m straight)
+    for (IslandRoad& rd : w.roads)
+        if (rd.kind != "freeway" && rd.points.size() >= 3) rd.points = roundRoute(rd.points, rd.kind == "pass" ? 30.0 : 15.0);
+    // 2. THE DIAMONDS
+    std::vector<roads::lanes::RampStreet> streets;
+    for (std::size_t k = 0; k < w.roads.size(); ++k)
+        if (w.roads[k].kind != "freeway" && w.roads[k].points.size() >= 2) streets.push_back({w.roads[k].kind + std::to_string(k), w.roads[k].points, false});
+    const HeightField ground = [&w](double x, double z) { return w.heightAt(x, z); };
+    w.ramps.clear();
+    int built = 0, candidates = 0, oblique = 0, spacing = 0, terminal = 0, room = 0, conflict = 0;
+    // the freeway as ONE route: its legs end to end round the island (each leg's end is the next one's
+    // start, a city's waypoint -- right where that city's links reach it, so a seam there cost every
+    // diamond), opened at the point farthest from any crossing
+    std::vector<Vec2> ring;
+    for (const IslandRoad& f : w.roads) {
+        if (f.kind != "freeway" || f.points.size() < 2) continue;
+        std::vector<Vec2> leg = f.points;
+        if (!ring.empty() && (leg.back() - ring.back()).length() < (leg.front() - ring.back()).length()) std::reverse(leg.begin(), leg.end());
+        for (const Vec2& q : leg) if (ring.empty() || (q - ring.back()).length() > 1.0) ring.push_back(q);
+    }
+    std::vector<Vec2> dense;
+    for (std::size_t q = 0; q + 1 < ring.size(); ++q) {
+        const Vec2 a2 = ring[q], b2 = ring[q + 1];
+        const int m = std::max(1, static_cast<int>(std::ceil((b2 - a2).length() / 20.0)));
+        for (int j = 0; j < m; ++j) dense.push_back(a2 + (b2 - a2) * (static_cast<double>(j) / m));
+    }
+    std::vector<std::vector<Vec2>> routes;
+    if (dense.size() > 10 && (ring.front() - ring.back()).length() < 60.0) {
+        // closed: open it where it is farthest from every crossing street
+        std::size_t seam = 0;
+        double far = -1;
+        for (std::size_t q = 0; q < dense.size(); ++q) {
+            double d = 1e30;
+            for (const roads::lanes::RampStreet& st : streets) for (const Vec2& p : st.xy) d = std::min(d, (p - dense[q]).length());
+            if (d > far) { far = d; seam = q; }
+        }
+        std::vector<Vec2> r(dense.begin() + static_cast<std::ptrdiff_t>(seam), dense.end());
+        r.insert(r.end(), dense.begin(), dense.begin() + static_cast<std::ptrdiff_t>(seam) + 1);
+        routes.push_back(r);
+    } else if (dense.size() > 1) {
+        dense.push_back(ring.back());
+        routes.push_back(dense);
+    }
+    // along a route, where a point is (its station)
+    auto stationOn = [](const std::vector<Vec2>& route, const Vec2& p) {
+        double best = 1e30, bestS = 0.0, acc = 0.0;
+        for (std::size_t q = 0; q + 1 < route.size(); ++q) {
+            const Vec2 a2 = route[q], ab = route[q + 1] - a2;
+            const double L2 = ab.x * ab.x + ab.y * ab.y, L = std::sqrt(L2);
+            const double t = L2 > 1e-12 ? std::clamp(((p - a2).x * ab.x + (p - a2).y * ab.y) / L2, 0.0, 1.0) : 0.0;
+            const double d = (p - (a2 + ab * t)).length();
+            if (d < best) { best = d; bestS = acc + L * t; }
+            acc += L;
+        }
+        return bestS;
+    };
+    std::set<std::string> served;   // the streets a diamond serves
+    for (std::size_t k = 0; k < routes.size(); ++k) {
+        const std::vector<Vec2>& route = routes[k];
+        roads::lanes::DiamondOptions dop;
+        dop.aId = "fw" + std::to_string(k) + "_a";
+        dop.bId = "fw" + std::to_string(k) + "_b";
+        // the planner's freeway section (plan_scene.h FreewaySection): four 3.75 m lanes a side
+        dop.carriage = 12.0; dop.edgeReach = 22.0; dop.freewayLanes = 4; dop.freewayLaneW = 3.75;
+        dop.maxDiamonds = 40;
+        dop.spacing = 900.0;
+        dop.clearance = 7.0;              // the crossing road passes under, the freeway on its embankment
+        dop.rampHalf = 4.5 / 2 + 2.5;     // one 4.5 m lane, 2.5 m shoulders
+        dop.gRamp = 0.09;
+        dop.ground = ground;
+        // FIRST the pass and the mountain road -- the only way on from the hills -- THEN the cities'
+        // links, clear of those by the spacing
+        for (int phase = 0; phase < 2; ++phase) {
+            std::vector<roads::lanes::RampStreet> these;
+            for (const roads::lanes::RampStreet& st : streets)
+                if ((st.id.rfind("link", 0) == 0) == (phase == 1)) these.push_back(st);
+            dop.idPrefix = "d" + std::to_string(k) + (phase ? "l" : "r");
+            const roads::lanes::DiamondResult dr = roads::lanes::diamondRamps(route, these, dop);
+            std::map<std::string, std::vector<double>> at;   // each served street's gores, by station
+            for (const json& r : dr.ramps) {
+                std::vector<Vec2> pts;
+                for (const json& pt : r["path"]["points"]) pts.push_back(Vec2(pt[0].get<double>(), pt[1].get<double>()));
+                w.ramps.push_back(pts);
+                const std::string sid = r["to"].is_string() ? r["to"].get<std::string>() : r["from"].is_string() ? r["from"].get<std::string>() : "";
+                served.insert(sid);
+                if (!pts.empty()) at[sid].push_back(stationOn(route, pts.front()));
+            }
+            for (const auto& [sid, ss] : at) {
+                double c = 0;
+                for (double x : ss) c += x;
+                c /= static_cast<double>(ss.size());
+                dop.keepOut.push_back({c - dop.spacing + 200.0, c + dop.spacing - 200.0});
+            }
+            built += dr.built; candidates += dr.candidates; oblique += dr.rejectedOblique; spacing += dr.rejectedSpacing;
+            terminal += dr.rejectedTerminal; room += dr.rejectedRoom; conflict += dr.rejectedConflict;
+        }
+    }
+    // a link that got no interchange has no reason to be: it goes (a pass or mountain road without one
+    // still crosses, under the freeway)
+    int dropped = 0;
+    for (std::size_t k = 0; k < w.roads.size(); ++k)
+        if (w.roads[k].kind == "link" && !served.count("link" + std::to_string(k))) { w.roads[k].points.clear(); ++dropped; }
+    w.report["linksDropped"] = dropped;
+    w.report["interchanges"] = {{"built", built}, {"crossings", candidates}, {"ramps", w.ramps.size()},
+                                {"refused", {{"oblique", oblique}, {"spacing", spacing}, {"noTerminal", terminal}, {"noRoom", room}, {"overAStreet", conflict}}}};
+}
+
 bool writeIslandMap(const IslandWorld& w, const std::string& pngPath, int px, const IslandMapView& view) {
     const double vhalf = view.half > 0.0 ? view.half : w.half;
     const Vec2 vc = view.half > 0.0 ? view.centre : Vec2(0, 0);
@@ -734,10 +907,17 @@ bool writeIslandMap(const IslandWorld& w, const std::string& pngPath, int px, co
     }
     for (const IslandRoad& rd : w.roads) {
         if (rd.points.empty()) continue;
-        if (rd.kind == "freeway") { stroke(rd.points, 6.0, 0.15f, 0.10f, 0.05f); stroke(rd.points, 4.0, 0.98f, 0.60f, 0.10f); }
-        else if (rd.kind == "pass") { stroke(rd.points, 4.5, 0.15f, 0.10f, 0.05f); stroke(rd.points, 3.0, 0.99f, 0.90f, 0.25f); }
-        else if (rd.kind == "link") { stroke(rd.points, 4.0, 0.15f, 0.10f, 0.05f); stroke(rd.points, 2.6, 0.99f, 0.80f, 0.20f); }
-        else { stroke(rd.points, 3.2, 0.15f, 0.10f, 0.05f); stroke(rd.points, 1.8, 1.0f, 1.0f, 1.0f); }
+        // to scale when zoomed in (the freeway's pavement is 44 m kerb to kerb), never thinner than a
+        // line that reads on the whole island
+        auto wide = [&](double metres, double px) { return std::max(px, metres / mpp); };
+        if (rd.kind == "freeway") { const double W = wide(44.0, 4.0); stroke(rd.points, W + 2.0, 0.15f, 0.10f, 0.05f); stroke(rd.points, W, 0.98f, 0.60f, 0.10f); }
+        else if (rd.kind == "pass") { const double W = wide(11.0, 3.0); stroke(rd.points, W + 1.5, 0.15f, 0.10f, 0.05f); stroke(rd.points, W, 0.99f, 0.90f, 0.25f); }
+        else if (rd.kind == "link") { const double W = wide(16.0, 2.6); stroke(rd.points, W + 1.5, 0.15f, 0.10f, 0.05f); stroke(rd.points, W, 0.99f, 0.80f, 0.20f); }
+        else { const double W = wide(9.0, 1.8); stroke(rd.points, W + 1.4, 0.15f, 0.10f, 0.05f); stroke(rd.points, W, 1.0f, 1.0f, 1.0f); }
+    }
+    for (const std::vector<Vec2>& r : w.ramps) {   // the ramps, over the roads they join
+        stroke(r, std::max(1.2, 9.5 / mpp) + 1.5, 0.15f, 0.10f, 0.05f);
+        stroke(r, std::max(1.0, 9.5 / mpp), 0.98f, 0.72f, 0.30f);
     }
     for (const IslandSite& s : w.sites) {
         if (!view.sites) break;
@@ -773,4 +953,168 @@ bool writeIslandMap(const IslandWorld& w, const std::string& pngPath, int px, co
     return stbi_write_png(pngPath.c_str(), px, px, 3, out.data(), px * 3) != 0;
 }
 
+namespace {
+// hypsometric tint and northwest hillshade, `px` a side over the square (c, half): the relief alone
+std::vector<unsigned char> reliefPixels(const IslandWorld& w, int px, const Vec2& c, double half) {
+    const double mpp = 2.0 * half / px;
+    std::vector<unsigned char> out(static_cast<std::size_t>(px) * px * 3);
+    auto mix3 = [](const float* a, const float* b, float t, float* o) { for (int k = 0; k < 3; ++k) o[k] = a[k] + (b[k] - a[k]) * t; };
+    const float sand[3] = {0.86f, 0.80f, 0.60f}, low[3] = {0.40f, 0.58f, 0.28f}, mid[3] = {0.46f, 0.52f, 0.30f},
+                high[3] = {0.55f, 0.48f, 0.36f}, rock[3] = {0.60f, 0.58f, 0.55f}, snow[3] = {0.93f, 0.94f, 0.96f},
+                shallow[3] = {0.55f, 0.80f, 0.85f}, deep[3] = {0.10f, 0.28f, 0.48f};
+    const double lx = -0.6, ly = 0.75, lz = 0.9, ll = std::sqrt(lx * lx + ly * ly + lz * lz);
+    for (int y = 0; y < px; ++y)
+        for (int x = 0; x < px; ++x) {
+            const double wx = c.x - half + (x + 0.5) * mpp, wz = c.y + half - (y + 0.5) * mpp;
+            const double h = w.heightAt(wx, wz);
+            float col[3];
+            if (h < 0.0) mix3(shallow, deep, static_cast<float>(std::clamp(-h / 40.0, 0.0, 1.0)), col);
+            else {
+                if (h < 3) mix3(sand, low, static_cast<float>(h / 3.0), col);
+                else if (h < 120) mix3(low, mid, static_cast<float>((h - 3) / 117.0), col);
+                else if (h < 450) mix3(mid, high, static_cast<float>((h - 120) / 330.0), col);
+                else if (h < 900) mix3(high, rock, static_cast<float>((h - 450) / 450.0), col);
+                else mix3(rock, snow, static_cast<float>(std::clamp((h - 900) / 300.0, 0.0, 1.0)), col);
+                const double e = std::max(mpp, w.cell * 0.5);
+                const double gx = (w.heightAt(wx + e, wz) - w.heightAt(wx - e, wz)) / (2 * e);
+                const double gz = (w.heightAt(wx, wz + e) - w.heightAt(wx, wz - e)) / (2 * e);
+                const double nx = -gx, nzz = -gz, nl = std::sqrt(nx * nx + 1.0 + nzz * nzz);
+                const double shade = std::clamp(0.45 + 0.75 * (nx * lx + lz + nzz * ly) / (nl * ll), 0.25, 1.25);
+                for (float& k : col) k = static_cast<float>(std::min(1.0, k * shade));
+            }
+            unsigned char* o = &out[(static_cast<std::size_t>(y) * px + x) * 3];
+            for (int k = 0; k < 3; ++k) o[k] = static_cast<unsigned char>(std::clamp(col[k], 0.0f, 1.0f) * 255.0f + 0.5f);
+        }
+    return out;
+}
+std::string base64(const std::vector<unsigned char>& in) {
+    static const char* T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve((in.size() + 2) / 3 * 4);
+    for (std::size_t i = 0; i < in.size(); i += 3) {
+        const unsigned v = (in[i] << 16) | ((i + 1 < in.size() ? in[i + 1] : 0) << 8) | (i + 2 < in.size() ? in[i + 2] : 0);
+        out += T[(v >> 18) & 63];
+        out += T[(v >> 12) & 63];
+        out += i + 1 < in.size() ? T[(v >> 6) & 63] : '=';
+        out += i + 2 < in.size() ? T[v & 63] : '=';
+    }
+    return out;
+}
+}  // namespace
+
+bool writeIslandSvg(const IslandWorld& w, const std::string& svgPath, const IslandMapView& view, int reliefPx) {
+    const double half = view.half > 0.0 ? view.half : w.half;
+    const Vec2 c = view.half > 0.0 ? view.centre : Vec2(0, 0);
+    std::ostringstream o;
+    o.setf(std::ios::fixed);
+    o.precision(1);
+    // user units are metres; y is -z (north up)
+    auto path = [&](const std::vector<Vec2>& pts, bool closed = false) {
+        for (std::size_t k = 0; k < pts.size(); ++k) o << (k ? 'L' : 'M') << pts[k].x << ' ' << -pts[k].y << ' ';
+        if (closed) o << 'Z';
+    };
+    auto lines = [&](const std::vector<std::vector<Vec2>>& ls, const std::string& attrs) {
+        if (ls.empty()) return;
+        o << "<path " << attrs << " d=\"";
+        for (const auto& l : ls) if (l.size() >= 2) path(l, l.size() > 2 && (l.front() - l.back()).length() < 25.0);
+        o << "\"/>\n";
+    };
+    const double x0 = c.x - half, y0 = -(c.y + half), W = 2 * half;
+    o << "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" viewBox=\"" << x0 << ' ' << y0 << ' ' << W << ' ' << W
+      << "\" width=\"2000\" height=\"2000\">\n";
+    o << "<style>path{fill:none;stroke-linecap:round;stroke-linejoin:round}"
+         ".hair{vector-effect:non-scaling-stroke}"
+         "text{font-family:sans-serif;paint-order:stroke;stroke:#fff;stroke-width:0.25em;stroke-linejoin:round}</style>\n";
+    // THE RELIEF: one image at the terrain's resolution
+    {
+        std::vector<unsigned char> px = reliefPixels(w, reliefPx, c, half), png;
+        stbi_write_png_to_func([](void* ctx, void* data, int size) {
+            auto* v = static_cast<std::vector<unsigned char>*>(ctx);
+            v->insert(v->end(), static_cast<unsigned char*>(data), static_cast<unsigned char*>(data) + size);
+        }, &png, reliefPx, reliefPx, 3, px.data(), reliefPx * 3);
+        o << "<g id=\"relief\"><image x=\"" << x0 << "\" y=\"" << y0 << "\" width=\"" << W << "\" height=\"" << W
+          << "\" preserveAspectRatio=\"none\" xlink:href=\"data:image/png;base64," << base64(png) << "\"/></g>\n";
+    }
+    // CONTOURS every 20 m, 100 m heavier; the COASTLINE
+    {
+        const Vec2 origin(-w.half, -w.half);
+        o << "<g id=\"contours\" opacity=\"0.55\">\n";
+        for (int lv = 20; lv <= 1400; lv += 20) {
+            const auto ls = plan::isoLines(w.height, w.n, origin, w.cell, lv, 20.0, 120.0, 0.0);
+            lines(ls, lv % 100 ? "class=\"hair\" stroke=\"#4a3c2c\" stroke-width=\"0.35\""
+                               : "class=\"hair\" stroke=\"#3a2c1c\" stroke-width=\"0.9\"");
+        }
+        o << "</g>\n<g id=\"coast\">\n";
+        lines(plan::isoLines(w.height, w.n, origin, w.cell, 0.0, 20.0, 150.0, 0.0), "class=\"hair\" stroke=\"#1d4f7a\" stroke-width=\"1.2\"");
+        o << "</g>\n";
+    }
+    // RIVERS at their widths (in runs of a few nodes, each at its mean width)
+    o << "<g id=\"rivers\" stroke=\"#3372c4\">\n";
+    if (w.hydro)
+        for (const River& rv : w.hydro->rivers())
+            for (std::size_t a = 0; a + 1 < rv.nodes.size(); a += 6) {
+                const std::size_t b = std::min(rv.nodes.size() - 1, a + 7);
+                std::vector<Vec2> pts;
+                double ws = 0;
+                for (std::size_t k = a; k <= b; ++k) { pts.push_back(rv.nodes[k].p); ws += rv.nodes[k].width; }
+                o << "<path stroke-width=\"" << ws / static_cast<double>(b - a + 1) << "\" d=\"";
+                path(pts);
+                o << "\"/>\n";
+            }
+    o << "</g>\n";
+    // the view's layers (a city's limits and streets), to scale
+    for (const IslandMapLayer& L : view.layers) {
+        char rgb[8];
+        std::snprintf(rgb, sizeof rgb, "#%02x%02x%02x", static_cast<int>(L.rgb[0] * 255), static_cast<int>(L.rgb[1] * 255), static_cast<int>(L.rgb[2] * 255));
+        o << "<g id=\"" << (L.name.empty() ? std::string("layer") : L.name) << "\">\n";
+        std::ostringstream a;
+        a.setf(std::ios::fixed);
+        a.precision(1);
+        if (L.casing) { a << "stroke=\"#1f1a14\" stroke-width=\"" << L.widthM + 3.0 << "\""; lines(L.lines, a.str()); a.str(""); }
+        a << "stroke=\"" << rgb << "\" stroke-width=\"" << L.widthM << "\"" << (L.widthM < 6.0 ? " class=\"hair\"" : "");
+        lines(L.lines, a.str());
+        o << "</g>\n";
+    }
+    // THE ISLAND'S ROADS: freeway (44 m kerb to kerb), its ramps, the pass, the links, the mountain road
+    auto roadsOf = [&](const std::string& kind) {
+        std::vector<std::vector<Vec2>> ls;
+        for (const IslandRoad& rd : w.roads) if (rd.kind == kind && rd.points.size() >= 2) ls.push_back(rd.points);
+        return ls;
+    };
+    o << "<g id=\"roads-country\">\n";
+    for (const auto& [kind, wd, col] : std::vector<std::tuple<std::string, double, std::string>>{
+             {"mountain", 9.0, "#ffffff"}, {"pass", 11.0, "#fbe43f"}, {"link", 16.0, "#fbcc33"}}) {
+        lines(roadsOf(kind), "stroke=\"#1f1a14\" stroke-width=\"" + std::to_string(wd + 3.0) + "\"");
+        lines(roadsOf(kind), "stroke=\"" + col + "\" stroke-width=\"" + std::to_string(wd) + "\"");
+    }
+    o << "</g>\n<g id=\"freeway\">\n";
+    lines(roadsOf("freeway"), "stroke=\"#1f1a14\" stroke-width=\"47\"");
+    lines(roadsOf("freeway"), "stroke=\"#f8961a\" stroke-width=\"44\"");
+    lines(roadsOf("freeway"), "stroke=\"#ffffff\" stroke-width=\"0.6\" stroke-dasharray=\"12 18\"");   // the median line
+    o << "</g>\n<g id=\"ramps\">\n";
+    lines(w.ramps, "stroke=\"#1f1a14\" stroke-width=\"12\"");
+    lines(w.ramps, "stroke=\"#fbb54d\" stroke-width=\"9.5\"");
+    o << "</g>\n";
+    // LABELS
+    o << "<g id=\"labels\">\n";
+    for (std::size_t k = 0; k < w.sites.size(); ++k) {
+        const IslandSite& st = w.sites[k];
+        const double fs = st.kind == "city" ? 260.0 : 150.0;
+        o << "<text x=\"" << st.at.x << "\" y=\"" << -st.at.y << "\" font-size=\"" << fs << "\" text-anchor=\"middle\" fill=\"#3a1026\">"
+          << (st.kind == "city" ? "City " : st.kind == "town" ? "Town " : "Mountain town ") << k << "</text>\n";
+    }
+    // a scale bar, 5 km (or 1 km close in), bottom left
+    const double bar = half > 4000.0 ? 5000.0 : half > 1000.0 ? 1000.0 : 200.0;
+    const double bx = x0 + W * 0.03, by = y0 + W * 0.97;
+    o << "<path stroke=\"#111\" stroke-width=\"" << W * 0.004 << "\" d=\"M" << bx << ' ' << by << 'L' << bx + bar << ' ' << by << "\"/>\n";
+    o << "<text x=\"" << bx << "\" y=\"" << by - W * 0.008 << "\" font-size=\"" << W * 0.014 << "\" fill=\"#111\">"
+      << (bar >= 1000 ? std::to_string(static_cast<int>(bar / 1000)) + " km" : std::to_string(static_cast<int>(bar)) + " m") << "</text>\n";
+    o << "</g>\n</svg>\n";
+    std::ofstream f(svgPath);
+    if (!f) return false;
+    f << o.str();
+    return static_cast<bool>(f);
+}
+
 }  // namespace engine
+

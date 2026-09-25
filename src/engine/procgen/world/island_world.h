@@ -57,6 +57,7 @@ struct IslandWorld {
     std::vector<IslandSite> sites;
     std::vector<IslandRoad> roads;
     Vec2 axis{1, 0};           // the island's long axis (the range runs along it)
+    std::vector<std::vector<Vec2>> ramps;   // the interchanges' ramps (islandInterchanges), centrelines
     nlohmann::json report;
     double heightAt(double x, double z) const;   // bilinear
 };
@@ -90,10 +91,21 @@ void routeFreewayRoundCities(IslandWorld& w, const std::vector<std::pair<int, st
 // the freeway, up to `maxLinks`, their freeway ends at least `spacing` apart, none longer than maxLength.
 void linkCityToFreeway(IslandWorld& w, int site, const std::vector<Vec2>& arterialNodes, int maxLinks, double spacing, double maxLength = 700.0);
 
+// THE INTERCHANGES: every road that meets the freeway (a city's links, the pass, the mountain road)
+// CROSSES it -- carried on past, into the city's nearest arterial if one is there, else just far enough
+// for the far ramps to land -- and at each crossing the one
+// diamond generator (roads/lanes/interchange.h, as the level importer and the city planner use it)
+// lays the ramps: off from each carriageway before the crossing, on after it, landing on the road
+// either side. A crossing it refuses (too oblique, too close to the last, no room) is reported, not
+// forced. Fills w.ramps and w.report["interchanges"].
+// `cityStreets`: the cities' arterial junctions, for a crossing road to carry on into.
+void islandInterchanges(IslandWorld& w, const std::vector<Vec2>& cityStreets = {});
+
 // The map: shaded relief and water, buildable land tinted, sites and roads drawn. `px` a side.
 // A view may zoom to a window (centre, half-width; 0 = the whole island) and lay extra lines over
 // it (a planned city's streets), each drawn `widthM` wide but never thinner than `minPx`.
 struct IslandMapLayer {
+    std::string name;                      // the SVG group's id ("streets-local", ...)
     std::vector<std::vector<Vec2>> lines;
     float rgb[3] = {0.1f, 0.1f, 0.1f};
     double widthM = 10.0, minPx = 1.0;
@@ -106,6 +118,14 @@ struct IslandMapView {
     std::vector<IslandMapLayer> layers;    // drawn after the rivers, before the island roads
 };
 bool writeIslandMap(const IslandWorld& w, const std::string& pngPath, int px = 1400, const IslandMapView& view = {});
+
+// The same map as SVG (Glenn: "We should favor that over raster for maps"), in metres, north up, one
+// file to zoom into instead of a close-up per site. Everything planned is VECTOR -- streets at their
+// widths, the freeway and its ramps, the pass, links, rivers at their widths, city limits, labels --
+// and so is the terrain's line work: contours every 20 m (100 m heavier) and the coastline. The
+// shaded relief under it is one embedded image at the terrain's own resolution (a 20 m grid: vectors
+// would add nothing). Each layer is a group (<g id=...>), to toggle in Inkscape or a browser.
+bool writeIslandSvg(const IslandWorld& w, const std::string& svgPath, const IslandMapView& view = {}, int reliefPx = 2000);
 
 }  // namespace engine
 

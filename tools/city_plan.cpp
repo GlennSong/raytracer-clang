@@ -36,7 +36,7 @@ static int usage() {
                  "       city_plan brief\n"
                  "       city_plan level-world BRIEF.json      the level's terrain + water blocks that match the brief's world, and its towns' hubs\n"
                  "       city_plan island SEED OUT_DIR [--variants N]   island worlds on the map: terrain, sites, ring freeway (ADR-0105)\n"
-                 "       city_plan island-cities SEED OUT_DIR   that island's cities and towns planned on its land, mapped (ADR-0106)\n"
+                 "       city_plan island-cities SEED OUT_DIR [--png] [--view X Z HALF NAME]...   that island's cities and towns planned on its land, mapped, and extra close-ups (ADR-0106)\n"
                  "       city_plan rivers BRIEF.json [STEP]         the rivers its world's hydrology makes, plan coordinates\n"
                  "       city_plan heights BRIEF.json [HALF STEP]   the brief's ground on a grid, plan coordinates (for placing mountain roads)\n");
     return 2;
@@ -95,10 +95,12 @@ int main(int argc, char** argv) {
         std::vector<std::pair<int, std::vector<std::vector<engine::Vec2>>>> cityLimits;
         std::vector<std::pair<int, std::vector<engine::Vec2>>> arterialNodes;
         engine::IslandMapLayer locals, collectors, arterials, freeways;
+        locals.name = "streets-local"; collectors.name = "streets-collector"; arterials.name = "streets-arterial"; freeways.name = "city-freeways";
         locals.rgb[0] = 0.96f; locals.rgb[1] = 0.95f; locals.rgb[2] = 0.92f; locals.widthM = 12;
         collectors.rgb[0] = 1.0f; collectors.rgb[1] = 0.93f; collectors.rgb[2] = 0.62f; collectors.widthM = 16;
         arterials.rgb[0] = 1.0f; arterials.rgb[1] = 0.84f; arterials.rgb[2] = 0.35f; arterials.widthM = 22; arterials.minPx = 1.4;
         engine::IslandMapLayer limits;
+        limits.name = "city-limits";
         limits.rgb[0] = 0.55f; limits.rgb[1] = 0.12f; limits.rgb[2] = 0.35f; limits.widthM = 4; limits.minPx = 1.2;
         freeways.rgb[0] = 0.98f; freeways.rgb[1] = 0.60f; freeways.rgb[2] = 0.10f; freeways.widthM = 30; freeways.minPx = 2.5; freeways.casing = true;
         for (std::size_t k = 0; k < w.sites.size(); ++k) {
@@ -144,6 +146,12 @@ int main(int argc, char** argv) {
                 if (w.sites[static_cast<std::size_t>(k)].kind == "mountain town") continue;   // its road is the mountain road
                 engine::linkCityToFreeway(w, k, art, city ? 4 : 2, city ? 1000.0 : 700.0);
             }
+            std::vector<engine::Vec2> allArterial;
+            for (const auto& [k, art] : arterialNodes) allArterial.insert(allArterial.end(), art.begin(), art.end());
+            engine::islandInterchanges(w, allArterial);
+            const auto& ic = w.report["interchanges"];
+            std::printf("interchanges: %d diamonds at %d crossings (%zu ramps); refused: %s\n", ic["built"].get<int>(), ic["crossings"].get<int>(),
+                        w.ramps.size(), ic["refused"].dump().c_str());
             std::printf("island freeway round the cities: %.1f km, %d legs unrouted\n", w.report["ringFreewayKm"].get<double>(),
                         w.report["freewayRoundCities"]["unrouted"].get<int>());
         }
@@ -151,9 +159,17 @@ int main(int argc, char** argv) {
         whole.sites = false;
         whole.layers = {limits, locals, collectors, arterials, freeways};
         const std::string base = outDir + "/island_" + std::to_string(seed);
-        engine::writeIslandMap(w, base + "_cities.png", 2000, whole);
-        std::printf("-> %s_cities.png\n", base.c_str());
+        engine::writeIslandSvg(w, base + ".svg", whole);
+        engine::writeIslandMap(w, base + "_cities.png", 2000, whole);   // a quick look; the SVG is the map
+        std::printf("-> %s.svg (the map: vector, zoom into it; layers toggle) and %s_cities.png (a quick look)\n", base.c_str(), base.c_str());
+        bool png = false;
+        for (int a = 4; a < argc; ++a) if (std::string(argv[a]) == "--png") png = true;
+        // extra close-ups: --view X Z HALF NAME (an interchange, a pass's foot)
+        for (int a = 4; a + 4 < argc; ++a)
+            if (std::string(argv[a]) == "--view")
+                sites.push_back({argv[a + 4], engine::Vec2(std::atof(argv[a + 1]), std::atof(argv[a + 2])), std::atof(argv[a + 3])});
         for (const Drawn& d : sites) {
+            if (!png && d.name.rfind("zoom", 0) != 0) continue;   // per-site close-ups only with --png: zoom into the SVG instead
             engine::IslandMapView z = whole;
             z.centre = d.at;
             z.half = d.half;
