@@ -814,7 +814,12 @@ void main() {
     if (!interiorMap && ((texFlags & 1u) != 0u || (pc.surfaceFlags.y & 2u) != 0u)) {
         vec4 albedoTex = texture(albedoMap, inTexcoord);
         if ((texFlags & 1u) != 0u) albedo *= albedoTex.rgb;
-        if ((pc.surfaceFlags.y & 2u) != 0u && albedoTex.a < 0.5) discard;
+        float cut = albedoTex.a;
+        // grass cards: keep the cut-out's coverage down the mips (Golus) -- a thin blade's alpha
+        // averages toward nothing, and a far card would vanish
+        if ((pc.surfaceFlags.y & (1u << 17)) != 0u)
+            cut *= 1.0 + max(textureQueryLod(albedoMap, inTexcoord).x, 0.0) * 0.3;
+        if ((pc.surfaceFlags.y & 2u) != 0u && cut < 0.5) discard;
         if ((pc.surfaceFlags.y & 64u) != 0u) mapAlpha = albedoTex.a;
     }
     if ((texFlags & 2u) != 0u) {

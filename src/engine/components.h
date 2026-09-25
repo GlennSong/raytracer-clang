@@ -185,6 +185,15 @@ struct GrassField {
     double tile = 16.0;
     double fadeStart = 44.0, fadeEnd = 60.0;
     uint32_t seed = 1;
+    // THE FAR FIELD: grass cards (procgen/grass.h grassCardMesh) from where the clumps fade out
+    // to cardRadius, fading in over [cardFadeIn, fadeEnd - 4] and out over the last cardFadeOut
+    // metres, in bigger tiles. No card mesh: the field ends with the clumps.
+    MeshHandle card;
+    RenderMaterial cardMaterial;
+    double cardSpacing = 1.1;
+    double cardRadius = 150.0;
+    double cardFadeIn = 38.0, cardFadeOut = 40.0;
+    double cardTile = 32.0;
 };
 
 // CDLOD heightfield terrain (ADR-0036, open-world Phase 1c). One per level: when a

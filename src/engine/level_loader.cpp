@@ -4020,6 +4020,23 @@ bool LevelLoader::load(const std::string& path,
                 gf.material.flags = RenderMaterial::FLAG_GRASS | RenderMaterial::FLAG_WIND | RenderMaterial::FLAG_TWO_SIDED;
                 gf.material.fadeStart = static_cast<float>(gf.fadeStart);
                 gf.material.fadeEnd = static_cast<float>(gf.fadeEnd);
+                // THE FAR FIELD: cards of baked blades beyond the clumps, growing in as they fade
+                if (gj.value("cards", true)) {
+                    const TextureData ct = grassCardTexture(gf.seed * 7919u + 3u, cp);
+                    gf.card = assets.acquireMesh(grassCardMesh(cp), "grass:card");
+                    gf.cardSpacing = gj.value("cardSpacing", gf.cardSpacing);
+                    gf.cardRadius = gj.value("cardRadius", gf.cardRadius);
+                    gf.cardFadeIn = gj.value("cardFadeIn", gf.fadeStart - 6.0);
+                    gf.cardFadeOut = gj.value("cardFadeOut", gf.cardFadeOut);
+                    RenderMaterial cm = gf.material;
+                    cm.albedoMap = renderer.uploadTexture(ct.width, ct.height, ct.channels, ct.pixels.data());
+                    cm.flags |= RenderMaterial::FLAG_ALPHA_TEST;
+                    cm.fadeInStart = static_cast<float>(gf.cardFadeIn);
+                    cm.fadeInEnd = static_cast<float>(gf.fadeEnd - 4.0);
+                    cm.fadeStart = static_cast<float>(gf.cardRadius - gf.cardFadeOut);
+                    cm.fadeEnd = static_cast<float>(gf.cardRadius);
+                    gf.cardMaterial = cm;
+                }
                 const Entity ge = world.create();
                 world.add<GrassField>(ge, std::move(gf));
             }

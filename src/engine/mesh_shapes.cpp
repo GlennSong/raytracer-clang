@@ -110,6 +110,29 @@ void MeshBuilder::colorBy(RenderMesh& mesh, const std::function<Vec3(const Verte
     for (Vertex& v : mesh.vertices) v.color = fn(v);
 }
 
+RenderMesh MeshBuilder::crossCards(double width, double height, int planes, const Vec3& normalIn) {
+    RenderMesh m;
+    const Vec3 n = normalize(normalIn);
+    const int k = std::max(1, planes);
+    for (int p = 0; p < k; ++p) {
+        const double a = 3.141592653589793 * p / k;   // half a turn covers every direction (two-sided)
+        const Vec3 side(std::cos(a) * width * 0.5, 0.0, std::sin(a) * width * 0.5);
+        const Vec3 tan = normalize(side);
+        const uint32_t base = static_cast<uint32_t>(m.vertices.size());
+        auto put = [&](const Vec3& pos, float u, float v) {
+            Vertex vx(pos, n, tan, u, v);
+            vx.color = Vec3(1, 1, 1);
+            m.vertices.push_back(vx);
+        };
+        put(Vec3(0, 0, 0) - side, 0.0f, 0.0f);
+        put(Vec3(0, 0, 0) + side, 1.0f, 0.0f);
+        put(Vec3(0, height, 0) + side, 1.0f, 1.0f);
+        put(Vec3(0, height, 0) - side, 0.0f, 1.0f);
+        m.indices.insert(m.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+    }
+    return m;
+}
+
 RenderMesh MeshBuilder::ribbon(const std::vector<Vec3>& pts, const std::vector<double>& hw, const Vec3& upIn,
                                const std::vector<Vec3>& colours) {
     RenderMesh m;

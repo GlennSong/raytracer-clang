@@ -175,6 +175,11 @@ struct MeshBuilder {
     // normalised) and return its index; append a triangle wound to face `out`.
     static uint32_t vertex(RenderMesh& mesh, const Vec3& p, const Vec3& n, const Vec3& color);
     static void triFacing(RenderMesh& mesh, uint32_t a, uint32_t b, uint32_t c, const Vec3& out);
+    // CROSSED CARDS: `planes` vertical quads `width` x `height` through the origin, evenly turned
+    // about +y, standing on y = 0. u runs 0..1 across a card, v 0 at the foot .. 1 at the top;
+    // every normal is `normal` (straight up for ground cover, so it lights like the ground it
+    // stands on). White. Grass cards, flowers, reeds, distant-tree impostors.
+    static RenderMesh crossCards(double width, double height, int planes, const Vec3& normal = Vec3(0, 1, 0));
     // A tapered generalized cylinder through `points` (a `sides`-gon ring at each, radial
     // normals), colour per ring (`colours` may be empty: white).
     static RenderMesh tube(const std::vector<Vec3>& points, const std::vector<double>& radii, int sides,

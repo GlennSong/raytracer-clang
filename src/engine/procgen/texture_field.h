@@ -49,6 +49,12 @@ Field2 fieldCellEdges(uint32_t seed, int period);   // distance to the nearest c
 Field2 fieldCellId(uint32_t seed, int period);      // a random value per cell (plates, pebbles, tones)
 // Sine bands across v, `count` a tile (ripples, strata): 0.5 + 0.5 sin(2 pi count v).
 Field2 fieldBands(double count);
+// BLADES: `count` tapered blades rooted along v = 0, growing up v, each its own height (minHeight..1
+// of the tile), root width (`width`, a fraction of the tile) and curving lean (up to `lean` of its
+// height, either way). Tiles across u, not v. The mask is 1 inside a blade; the tone is a random
+// value per blade (the frontmost at that texel), for colour variation. Grass cards, reeds, fur.
+Field2 fieldBlades(uint32_t seed, int count, double width, double lean, double minHeight);
+Field2 fieldBladeTone(uint32_t seed, int count, double width, double lean, double minHeight);
 
 // --- shaping and composition ---
 Field2 fieldSmoothstep(Field2 a, double lo, double hi);

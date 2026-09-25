@@ -94,6 +94,8 @@ void main() {
         vec3 origin = M[3].xyz;
         float d = distance(origin, g.cameraPosition.xyz);
         float k = 1.0 - smoothstep(pc.morphStart, pc.morphEnd, d);
+        vec2 grow = pc.features[2].yz;   // the grow-in band (cards arriving as the clumps leave)
+        if (grow.y > grow.x) k *= smoothstep(grow.x, grow.y, d);
         vec4 thin = pc.features[3];
         if (thin.y > thin.x) {
             float t = smoothstep(thin.x, thin.y, d);

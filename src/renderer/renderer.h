@@ -124,6 +124,10 @@ struct RenderMaterial {
     // in the shadow map is noise and cost). Vulkan; Metal draws it unfaded, with shadows.
     static constexpr uint32_t FLAG_GRASS = 1u << 17;
     float fadeStart = 0.0f, fadeEnd = 0.0f;   // FLAG_GRASS only
+    // FLAG_GRASS: grows in over [fadeInStart, fadeInEnd] (the far field's cards, arriving as the
+    // clumps leave); off when equal. With FLAG_ALPHA_TEST the cut-out keeps its coverage down the
+    // mip chain (a thin blade's alpha averages away otherwise, and a far card vanishes).
+    float fadeInStart = 0.0f, fadeInEnd = 0.0f;
     // FLAG_GRASS: continuous thinning. Each clump carries a random RANK (its transform's bottom
     // row, GrassSystem); across [thinStart, thinEnd] the clumps ranked above a falling threshold
     // (to `keepFar`) shrink away and the rest grow toward `growFar` -- so the sparse outer ring,

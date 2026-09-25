@@ -6380,6 +6380,7 @@ void VulkanRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
     f[12] = f[13] = f[14] = f[15] = 0.0f;
     if (material.flags & RenderMaterial::FLAG_GRASS) {   // [3]: the grass's thinning band
         f[12] = material.thinStart; f[13] = material.thinEnd; f[14] = material.keepFar; f[15] = material.growFar;
+        f[9] = material.fadeInStart; f[10] = material.fadeInEnd;   // [2].yz: the grow-in band
     }
     item.push.albedoMetallic[0] = static_cast<float>(material.albedo.x);
     item.push.albedoMetallic[1] = static_cast<float>(material.albedo.y);

@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -17,6 +18,10 @@ namespace engine {
 // instanced clumps, made as they come within the field's radius and dropped as they leave.
 // A tile's clumps are a pure function of its coordinates and the field's seed, so a tile
 // made again is the same tile -- the field never swims as the camera moves.
+//
+// Two LAYERS: clumps (layer 0; full density inside nearRadius, the survivors of the thinning
+// beyond, shrinking away over the fade band) and, when the field has a card mesh, grass CARDS
+// (layer 1; bigger tiles, from the clumps' fade band out to cardRadius) -- the far field.
 //
 // Tiles are BUILT ON THE JOB SYSTEM, nearest first, and committed on the render thread: a
 // tile's placement (ground, slope and density for ~2,800 clumps) cost 10-30 ms, and on the
@@ -28,9 +33,10 @@ public:
     void update(FrameContext& ctx) override;
     void onStop(FrameContext& ctx) override;
 
-    // One tile's clumps, per variant: what a job hands back.
+    using Key = std::tuple<int, int, int>;   // layer, tile x, tile z
+    // One tile's instances, per variant: what a job hands back.
     struct Built {
-        std::pair<int, int> key;
+        Key key;
         int lod = 0;
         uint64_t generation = 0;
         std::vector<std::vector<Mat4>> perVariant;
@@ -39,7 +45,7 @@ public:
 
 private:
     struct Tile {
-        int lod = -1;                 // the committed ring (-1: nothing yet)
+        int lod = -1;                 // the committed ring: 0 near, 1 outer clumps, 2 cards (-1: nothing yet)
         int building = -1;            // the ring in flight (-1: none)
         std::vector<Entity> groups;
     };
@@ -47,7 +53,7 @@ private:
         std::mutex m;
         std::vector<Built> done;
     };
-    std::map<std::pair<int, int>, Tile> tiles_;
+    std::map<Key, Tile> tiles_;
     std::shared_ptr<Inbox> inbox_ = std::make_shared<Inbox>();
     uint64_t generation_ = 1;        // bumped on stop: results from before are dropped
     int inFlight_ = 0;

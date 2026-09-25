@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <vector>
 
 namespace engine {
 namespace {
@@ -91,6 +92,50 @@ Field2 fieldCellId(uint32_t seed, int period) {
     return [seed, p](double u, double v) {
         const uint32_t id = tileCells(wrap01(u), wrap01(v), p, seed).id;
         return ((id * 2654435761u) >> 8) / 16777215.0;
+    };
+}
+namespace {
+struct Blade { double root, height, width, lean, tone; };
+std::vector<Blade> makeBlades(uint32_t seed, int count, double width, double lean, double minHeight) {
+    std::vector<Blade> out;
+    uint32_t s = seed * 747796405u + 2891336453u;
+    auto next = [&s] { s = s * 747796405u + 2891336453u; uint32_t w = ((s >> ((s >> 28) + 4)) ^ s) * 277803737u; return ((w >> 22) ^ w) / 4294967295.0; };
+    for (int i = 0; i < std::max(1, count); ++i) {
+        Blade b;
+        b.root = next();
+        b.height = minHeight + (1.0 - minHeight) * next();
+        b.width = width * (0.6 + 0.8 * next());
+        b.lean = lean * (next() * 2.0 - 1.0);
+        b.tone = next();
+        out.push_back(b);
+    }
+    return out;
+}
+// the blade covering (u, v), last drawn wins (-1: none)
+int bladeAt(const std::vector<Blade>& bl, double u, double v) {
+    int hit = -1;
+    for (int i = 0; i < static_cast<int>(bl.size()); ++i) {
+        const Blade& b = bl[static_cast<std::size_t>(i)];
+        if (v >= b.height) continue;
+        const double t = v / b.height;                       // 0 root .. 1 tip
+        const double centre = b.root + b.lean * b.height * t * t;   // curving out toward the tip
+        double du = u - centre;
+        du -= std::round(du);                                // wrap across u
+        const double half = 0.5 * b.width * (1.0 - t) * (1.0 - 0.3 * t);   // tapering to a point
+        if (std::fabs(du) < half) hit = i;
+    }
+    return hit;
+}
+}  // namespace
+Field2 fieldBlades(uint32_t seed, int count, double width, double lean, double minHeight) {
+    auto bl = std::make_shared<std::vector<Blade>>(makeBlades(seed, count, width, lean, minHeight));
+    return [bl](double u, double v) { return bladeAt(*bl, wrap01(u), v) >= 0 ? 1.0 : 0.0; };
+}
+Field2 fieldBladeTone(uint32_t seed, int count, double width, double lean, double minHeight) {
+    auto bl = std::make_shared<std::vector<Blade>>(makeBlades(seed, count, width, lean, minHeight));
+    return [bl](double u, double v) {
+        const int i = bladeAt(*bl, wrap01(u), v);
+        return i >= 0 ? (*bl)[static_cast<std::size_t>(i)].tone : 0.5;
     };
 }
 Field2 fieldBands(double count) {

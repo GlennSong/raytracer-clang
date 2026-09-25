@@ -7653,6 +7653,23 @@ What changed:
 - A tile samples the ground once on a 1 m grid and interpolates height and slope.
   `GrassField::density` now takes (x, z, y, slopeCos) and must be pure: it runs on workers.
 
+**The far field is grass cards (2026-09-24).** Grass used to end at 60 m, so the distance had no grass
+in it. A second GrassSystem layer now covers the distance:
+- **What it is:** 32 m tiles of crossed cards (`MeshBuilder::crossCards`, three quads about 1.3 m
+  across), each carrying a baked blade texture (`fieldBlades` / `fieldBladeTone` via
+  `grassCardTexture`). The texture is coloured root to tip like the clumps.
+- **Where it sits:** the cards grow in over [fadeStart − 6, fadeEnd − 4] as the clumps shrink away,
+  and fade out over the last 40 m before `cardRadius` (150 m). `RenderMaterial::fadeInStart` and
+  `fadeInEnd` travel in `features[2].yz`.
+- **Mip coverage:** alpha-tested grass scales its cut-out alpha by 1 + 0.3·mip level (Golus), so thin
+  blades keep their coverage down the mips instead of averaging away.
+- **Normals and shadows:** normals point up, so the cards light like the clumps and the ground. Like
+  all `FLAG_GRASS` draws, they cast no shadow.
+- **Cost:** the same walk went from p50 4.4 to 4.6 ms, with instances up from 13 k to 19.6 k and
+  still one hitch.
+- **Beyond `cardRadius`:** the terrain colour carries the field. Matching it to the cards is the
+  realism pass. Set `"cards": false` to turn the layer off.
+
 ## ADR-0098 — The procedural vocabulary grows; content is recipes over it
 
 **Context.** The flora work (ADR-0097's grass, the stylized trees, the rock library, the terrain

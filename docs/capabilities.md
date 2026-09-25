@@ -114,16 +114,17 @@ vocabulary, and a missing word is added HERE (C++ and Lua), not privately to one
 |---|---|---|---|
 | 2D fields + combinators + bakes (gray / colour / normal / RGBA) | `procgen/texture_field.h` (ADR-0042/0043) | terrain layers, stone textures, Lua `texture.*` | the texture language. `fieldNoise` / `fieldFbm` do NOT tile; use `fieldTile*` |
 | Tileable fields: tile noise / fbm, cells, cell edges, cell id, bands, warp | `procgen/texture_field.h` | `ground_layers.cpp`, `material_recipes.cpp` | added 2026-09-24 from the terrain layers' private code |
+| Blades: `fieldBlades` (mask) / `fieldBladeTone` (per-blade tone) | `procgen/texture_field.h` | `grassCardTexture` | tapered, curving, tile across u; reeds and fur are the other readers |
 | Colour fields + `bakeFieldRGBA` (sRGB rgb, height in alpha) | `procgen/texture_field.h` | terrain layers, stones | feature albedo maps are sRGB (the shader decodes) |
 | Bake cache `bakeCached(key, bake)` → `cache/fields/` | `procgen/texture_field.h` | every recipe bake | the recipe string carries the version; replaced `cache/terrain_layers` |
 | Material recipes: stone (granite, sandstone, basalt) | `procgen/material_recipes.h` | rock library | add new material texture sets here |
-| Shape kit: icosphere, displaceNoise, cutByPlane, facet, leanNormals, deform, colorBy, tube, vertex / triFacing | `mesh_builder.h` / `mesh_shapes.cpp` | stylized trees, rocks, grass; Lua `mesh.*` | organic/mineral forms; `leanNormals` is the "one soft volume" trick |
+| Shape kit: icosphere, displaceNoise, cutByPlane, facet, leanNormals, deform, colorBy, tube, crossCards, vertex / triFacing | `mesh_builder.h` / `mesh_shapes.cpp` | stylized trees, rocks, grass; Lua `mesh.*` | organic/mineral forms; `leanNormals` is the "one soft volume" trick |
 | Seeded stream `ProcRng` | `procgen/proc_rng.h` | flora generators | do not add another private `Rng` (city/district.cpp's predates it) |
 | Winding `MeshBuilder::emitTri` / `triFacing` | `mesh_builder.h` | everything | front face = `dot(cross(c-a, b-a), n) >= 0` |
 | Material features: triplanar, per-instance variation, top layer | `RenderMaterial` fields + `mesh.frag` (ADR-0098) | rocks | off at 0; Vulkan only (Metal owed) |
 | Terrain layers (height-blended, cover weights in vertex colour) | `Surface::TerrainLayers`, `procgen/ground_layers.h` | levels with `groundCover` | Metal owed |
 | Ground cover (weights + biome) | `procgen/ground_cover.h` | terrain colour, grass density, species `biome` / `cover` | the one answer to "what is the ground here" |
-| Stylized recipes: trees (11 shapes), rocks (4 families × 4 stones), grass clumps | `procgen/stylized_tree.h`, `stylized_rock.h`, `grass.h`; Lua `stylized.*` | vegetation species `stylized` / `stylized_rock`, `GrassSystem` | recipes over the kit; custom topology left: pine tiers, palm fronds (a ribbon word would absorb them) |
+| Stylized recipes: trees (11 shapes), rocks (4 families × 4 stones), grass clumps + far-field cards | `procgen/stylized_tree.h`, `stylized_rock.h`, `grass.h`; Lua `stylized.*` | vegetation species `stylized` / `stylized_rock`, `GrassSystem` | recipes over the kit; custom topology left: pine tiers, palm fronds (a ribbon word would absorb them) |
 | Legacy flora: parametric L-system trees, turtle trees, SDF rocks | `procgen/tree.h`, `lsystem.h`, `rock.h`; `flora.lua` | older levels | kept; the stylized recipes are the BotW direction |
 | Instanced drawing | Vulkan `drawMeshInstanced` (ADR-0097) | `InstanceGroup` (vegetation, grass, city groups) | one draw per visible set; `RT_NO_INSTANCING=1` for A/B |
 | Water polygon (rivers + lakes, one mesh) | `Hydrology::waterMesh` (ADR-0099) on lanes `geom2d` union + CDT | `level_loader` hydro water | clipped by `waterMeshCells` so it meets the ocean edge to edge; `Surface::River` flow-map shading |

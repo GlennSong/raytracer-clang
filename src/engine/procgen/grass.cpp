@@ -1,5 +1,9 @@
 #include "grass.h"
 #include "proc_rng.h"
+#include "../mesh_builder.h"
+
+#include <cstdio>
+#include <string>
 
 #include <cmath>
 
@@ -37,6 +41,27 @@ RenderMesh grassClump(uint32_t seed, const GrassClumpParams& p) {
         m.indices.insert(m.indices.end(), {r0, r1, b1, r0, b1, b0, b0, b1, t0});
     }
     return m;
+}
+
+RenderMesh grassCardMesh(const GrassClumpParams& p) {
+    // a card is a patch of field about a metre across, a little taller than a clump (its tallest blades)
+    return MeshBuilder::crossCards(1.3, p.height * 1.25, 3);
+}
+
+TextureData grassCardTexture(uint32_t seed, const GrassClumpParams& p) {
+    char key[256];
+    std::snprintf(key, sizeof key, "grassCard/v1/%u/%.4f,%.4f,%.4f/%.4f,%.4f,%.4f/%.3f", seed, p.rootColor.x, p.rootColor.y,
+                  p.rootColor.z, p.tipColor.x, p.tipColor.y, p.tipColor.z, p.lean);
+    return bakeCached(key, [&] {
+        const int count = 90;
+        const double width = 0.03, minHeight = 0.4;
+        const Field2 mask = fieldBlades(seed, count, width, p.lean, minHeight);
+        const Field2 tone = fieldBladeTone(seed, count, width, p.lean, minHeight);
+        // root to tip as the clumps' vertex colours run, each blade a little lighter or darker
+        const ColorField2 base = colorMixBy(colorConstant(p.rootColor), colorConstant(p.tipColor),
+                                            fieldSmoothstep(fieldGradientY(), 0.0, 1.0));
+        return bakeFieldRGBA(colorMul(base, fieldScaleBias(tone, 0.5, 0.75)), mask, 256, false);
+    });
 }
 
 }  // namespace engine
