@@ -8,7 +8,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace engine {
 
@@ -66,6 +69,17 @@ private:
 
     PhysicsSystem* physics_ = nullptr;
     std::unordered_map<int64_t, PhysicsBodyId> colliders_;   // leaf key -> body
+    // Collider tiles in flight on the job system: the patch and its collision shape are built
+    // there (the ~50 ms part), the body is added here. Shared with the jobs so a late one lands
+    // in a live inbox. The tile under the player's feet is still built on the spot if missing.
+    struct ColliderInbox {
+        std::mutex m;
+        struct Done { int64_t key; uint32_t revision; std::shared_ptr<const PreparedMeshShape> shape; };
+        std::vector<Done> done;
+    };
+    std::shared_ptr<ColliderInbox> colliderInbox_ = std::make_shared<ColliderInbox>();
+    std::unordered_set<int64_t> colliderPending_;
+    static constexpr std::size_t kMaxColliderJobs = 3;
     // Last TerrainLodConfig::revision the cache / collider window were built at; a
     // mismatch (a re-conform) forces a rebuild from the new params.
     uint32_t cacheRevision_ = 0;

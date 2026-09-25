@@ -2244,6 +2244,8 @@ void CityRenderSystem::step(World& world, Real dt) {
     }
     static double simMs = 0.0, syncMs = 0.0;
     static int calls = 0;
+    const CitySim::PhaseTimes ph0 = sim_.phaseTimes();
+    const engine::RouteStats rs0 = engine::routeStats();
     auto t0 = std::chrono::steady_clock::now();
     sim_.step(dt, params_.hoursPerSecond);
     auto t1 = std::chrono::steady_clock::now();
@@ -2251,6 +2253,35 @@ void CityRenderSystem::step(World& world, Real dt) {
     auto t2 = std::chrono::steady_clock::now();
     simMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
     syncMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
+    if (std::chrono::duration<double, std::milli>(t2 - t0).count() > 16.0)
+        LOG_INFO << "[stats] SPIKE citysim step " << std::chrono::duration<double, std::milli>(t1 - t0).count()
+                 << " ms, group sync " << std::chrono::duration<double, std::milli>(t2 - t1).count() << " ms"
+                 << " | phases ms: rehash " << (sim_.phaseTimes().rehash - ph0.rehash) / 1000.0
+                 << " tier " << (sim_.phaseTimes().tierPass - ph0.tierPass) / 1000.0
+                 << " goals " << (sim_.phaseTimes().goals - ph0.goals) / 1000.0
+                 << " sensed " << (sim_.phaseTimes().sensedBuild - ph0.sensedBuild) / 1000.0
+                 << " gaps " << (sim_.phaseTimes().gaps - ph0.gaps) / 1000.0
+                 << " active " << (sim_.phaseTimes().activeList - ph0.activeList) / 1000.0
+                 << " move " << (sim_.phaseTimes().advMove - ph0.advMove) / 1000.0
+                 << " pairs " << (sim_.phaseTimes().advPairs - ph0.advPairs) / 1000.0
+                 << " pop " << (sim_.phaseTimes().advPop - ph0.advPop) / 1000.0
+                 << " solver " << (sim_.phaseTimes().advSolver - ph0.advSolver) / 1000.0
+                 << " tail " << (sim_.phaseTimes().advance - ph0.advance) / 1000.0
+                 << " total " << (sim_.phaseTimes().total - ph0.total) / 1000.0
+                 << " | routes " << engine::routeStats().calls - rs0.calls << " in "
+                 << engine::routeStats().ms - rs0.ms << " ms, " << engine::routeStats().expanded - rs0.expanded
+                 << " nodes expanded";
+        {   // who routed: caller addresses (the viewer is not PIE: `nm -C -n` names them)
+            std::vector<std::pair<const void*, long>> d;
+            for (const auto& c : engine::routeStats().callers) {
+                long before = 0;
+                for (const auto& b : rs0.callers) if (b.first == c.first) before = b.second;
+                if (c.second > before) d.push_back({c.first, c.second - before});
+            }
+            std::sort(d.begin(), d.end(), [](const auto& x, const auto& y) { return x.second > y.second; });
+            for (std::size_t k = 0; k < d.size() && k < 4; ++k)
+                LOG_INFO << "[stats]   route caller " << d[k].first << " x" << d[k].second;
+        }
     if (++calls % 300 == 0) {
         // `moving` means "has an open route" — it stays true through red
         // lights, crash freezes, car-following stops and the far tier's

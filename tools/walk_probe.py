@@ -110,13 +110,18 @@ def main():
     q = sorted(ms)
     pct = lambda p: q[min(len(q) - 1, int(p * len(q)))]
     med = statistics.median(ms)
-    print(f"{len(ms)} frames: p50 {med:.1f}  p95 {pct(.95):.1f}  p99 {pct(.99):.1f}  max {q[-1]:.1f} ms")
+    lines = [f"walk frames {mark}..{end}",
+             f"{len(ms)} frames: p50 {med:.1f}  p95 {pct(.95):.1f}  p99 {pct(.99):.1f}  max {q[-1]:.1f} ms"]
     cols = [c for c in ("update_ms", "fixed_ms", "render_ms", "wait_ms", "encode_ms", "submit_ms", "gpu_ms",
-                        "mesh_uploads", "texture_uploads", "draw_calls", "instances") if c in walk[0]]
+                        "fixed_steps", "mesh_uploads", "texture_uploads", "draw_calls", "instances") if c in walk[0]]
     hitches = [r for r in walk if float(r["total_ms"]) > a.hitch * med]
-    print(f"{len(hitches)} hitches (> {a.hitch:g} x median):")
+    lines.append(f"{len(hitches)} hitches (> {a.hitch:g} x median):")
     for r in hitches[:40]:
-        print("  " + f"{float(r['total_ms']):6.1f} ms  " + "  ".join(f"{c.replace('_ms', '')}={r[c]}" for c in cols))
+        lines.append("  " + f"frame {r.get('frame', '?')}  {float(r['total_ms']):6.1f} ms  " +
+                     "  ".join(f"{c.replace('_ms', '')}={r[c]}" for c in cols))
+    print("\n".join(lines))
+    with open(os.path.join(a.out, "summary.txt"), "w") as fsum:   # kept beside the capture
+        fsum.write("\n".join(lines) + "\n")
 
 
 if __name__ == "__main__":

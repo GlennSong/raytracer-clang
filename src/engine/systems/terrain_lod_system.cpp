@@ -5,6 +5,7 @@
 #include "../procgen/terrain_lod.h"
 #include "../procgen/noise.h"
 #include "../../profile.h"
+#include "../../job_system.h"
 
 #include <algorithm>
 #include <cmath>
@@ -341,22 +342,51 @@ void TerrainLodSystem::fixedUpdate(FrameContext& ctx) {
               [](const Missing& a, const Missing& b) {
                   return a.d2 != b.d2 ? a.d2 < b.d2 : a.key < b.key;
               });
-    const double feet2 = leafSize * static_cast<double>(leafSize);
-    int budget = 1;
-    for (const Missing& m : missing) {
-        const bool underFeet = m.d2 <= feet2;   // player's own / adjacent cell
-        if (!underFeet && budget <= 0) continue;
-        // Baked (ADR-0095): the collider is the drawn surface at its finest cell.
-        LodNodeMesh built = cfg->baked ? generateBakedPatch(*cfg->baked, m.node)
-                                       : generateLodNodeMesh(cfg->params, noise, m.node,
-                                                             cfg->gridRes, normalEps);
+    // Finished jobs first: a tile still wanted, at this revision, and not built meanwhile.
+    {
+        std::vector<ColliderInbox::Done> done;
+        {
+            std::lock_guard<std::mutex> lock(colliderInbox_->m);
+            done.swap(colliderInbox_->done);
+        }
+        for (ColliderInbox::Done& d : done) {
+            colliderPending_.erase(d.key);
+            if (d.revision != colliderRevision_ || !d.shape || !desired.count(d.key) || colliders_.count(d.key)) continue;
+            const PhysicsBodyId id = physics_->physicsWorld().addPreparedMesh(*d.shape, Vec3(0, 0, 0), 0.8);
+            if (id != INVALID_PHYSICS_BODY) colliders_[d.key] = id;
+        }
+    }
+    // The tile (patch + collision shape): the same on the spot or on a worker.
+    auto buildShape = [](std::shared_ptr<const pyramid::Pyramid> baked, const TerrainParams* params, const Noise* nz,
+                         LodNode node, int gridRes, double eps) {
+        LodNodeMesh built = baked ? generateBakedPatch(*baked, node) : generateLodNodeMesh(*params, *nz, node, gridRes, eps);
         std::vector<Vec3> verts;
         verts.reserve(built.mesh.vertices.size());
         for (const Vertex& v : built.mesh.vertices) verts.push_back(v.position);
-        PhysicsBodyId id = physics_->physicsWorld().addMesh(
-            verts, built.mesh.indices, Vec3(0, 0, 0), 0.8);
-        if (id != INVALID_PHYSICS_BODY) colliders_[m.key] = id;
-        if (!underFeet) --budget;
+        return PhysicsWorld::prepareMeshShape(verts, built.mesh.indices);
+    };
+    const double feet2 = leafSize * static_cast<double>(leafSize);
+    for (const Missing& m : missing) {
+        if (colliders_.count(m.key)) continue;   // arrived above
+        const bool underFeet = m.d2 <= feet2;   // player's own / adjacent cell: the floor is never deferred
+        if (underFeet) {
+            const auto shape = buildShape(cfg->baked, &cfg->params, &noise, m.node, cfg->gridRes, normalEps);
+            const PhysicsBodyId id = shape ? physics_->physicsWorld().addPreparedMesh(*shape, Vec3(0, 0, 0), 0.8)
+                                           : INVALID_PHYSICS_BODY;
+            if (id != INVALID_PHYSICS_BODY) colliders_[m.key] = id;
+            continue;
+        }
+        if (colliderPending_.count(m.key) || colliderPending_.size() >= kMaxColliderJobs) continue;
+        colliderPending_.insert(m.key);
+        // the job's own inputs: the pyramid by shared_ptr, the formula's params and noise by copy
+        auto params = cfg->baked ? nullptr : std::make_shared<TerrainParams>(cfg->params);
+        auto nz = cfg->baked ? nullptr : std::make_shared<Noise>(cfg->seed);
+        ctx.jobs.run([inbox = colliderInbox_, baked = cfg->baked, params, nz, node = m.node, key = m.key,
+                      rev = colliderRevision_, gridRes = cfg->gridRes, eps = normalEps, buildShape] {
+            auto shape = buildShape(baked, params.get(), nz.get(), node, gridRes, eps);
+            std::lock_guard<std::mutex> lock(inbox->m);
+            inbox->done.push_back({key, rev, std::move(shape)});
+        });
     }
     for (auto it = colliders_.begin(); it != colliders_.end();) {
         if (desired.count(it->first)) { ++it; continue; }
@@ -366,6 +396,9 @@ void TerrainLodSystem::fixedUpdate(FrameContext& ctx) {
 }
 
 void TerrainLodSystem::onStop(FrameContext&) {
+    // jobs still running land in the old inbox; start clean
+    colliderInbox_ = std::make_shared<ColliderInbox>();
+    colliderPending_.clear();
     if (!physics_) return;
     for (auto& kv : colliders_) physics_->physicsWorld().removeBody(kv.second);
     colliders_.clear();

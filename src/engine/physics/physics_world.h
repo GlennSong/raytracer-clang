@@ -46,6 +46,9 @@ struct ContactEvent {
 
 class JobSystem;   // our thread pool (src/job_system.h)
 
+// A static mesh's collision shape, built ahead (PhysicsWorld::prepareMeshShape) -- opaque.
+struct PreparedMeshShape;
+
 class PhysicsWorld {
 public:
     PhysicsWorld();
@@ -78,6 +81,12 @@ public:
     PhysicsBodyId addMesh(const std::vector<Vec3>& vertices,
                           const std::vector<uint32_t>& indices,
                           const Vec3& position, Real friction = 0.5);
+    // TWO-PHASE addMesh: building the shape (its bounding-volume tree -- ~50 ms for a terrain
+    // tile) is safe on any thread and touches no world; adding the body is the cheap part and
+    // stays on the simulation thread. Null on an empty or degenerate mesh.
+    static std::shared_ptr<const PreparedMeshShape> prepareMeshShape(const std::vector<Vec3>& vertices,
+                                                                     const std::vector<uint32_t>& indices);
+    PhysicsBodyId addPreparedMesh(const PreparedMeshShape& shape, const Vec3& position, Real friction = 0.5);
     void removeBody(PhysicsBodyId id);
     // Live bodies in the world (ADR-0080 gates: "body count back to
     // baseline" after an interior releases). 0 before initialize().

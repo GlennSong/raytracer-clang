@@ -1,6 +1,7 @@
 #include "pathfind.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <queue>
@@ -39,16 +40,67 @@ Real Route::length(const NavGraph& g) const {
     return total;
 }
 
+RouteStats& routeStats() {
+    thread_local RouteStats s;
+    return s;
+}
+
+namespace {
+Route findRouteImpl(const NavGraph& graph, int startNode, int goalNode, bool onFoot,
+                    const std::vector<Real>* linkCostScale, long& expanded);
+}
+
 Route findRoute(const NavGraph& graph, int startNode, int goalNode,
                 bool onFoot, const std::vector<Real>* linkCostScale) {
+    const auto t0 = std::chrono::steady_clock::now();
+    long expanded = 0;
+    Route r = findRouteImpl(graph, startNode, goalNode, onFoot, linkCostScale, expanded);
+    RouteStats& s = routeStats();
+    ++s.calls;
+    s.expanded += expanded;
+    const void* caller = __builtin_return_address(0);
+    auto it = std::find_if(s.callers.begin(), s.callers.end(), [&](const auto& c) { return c.first == caller; });
+    if (it == s.callers.end()) s.callers.push_back({caller, 1}); else ++it->second;
+    s.ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    return r;
+}
+
+namespace {
+Route findRouteImpl(const NavGraph& graph, int startNode, int goalNode, bool onFoot,
+                    const std::vector<Real>* linkCostScale, long& expanded) {
     Route route;
     const int n = graph.nodeCount();
     if (startNode < 0 || goalNode < 0 || startNode >= n || goalNode >= n) return route;
     if (startNode == goalNode) return route;
 
     const Real INF = std::numeric_limits<Real>::infinity();
-    std::vector<Real> g(n, INF);          // best known travel time to a node
-    std::vector<int> cameLink(n, -1);     // link used to reach a node on the best path
+    // Per-thread scratch, reused across searches: a node's g and cameLink count only when its
+    // stamp is this search's. Filling two graph-sized arrays per call was most of a short
+    // search's cost -- and a morning rush runs thousands of them in a step.
+    struct Scratch {
+        std::vector<Real> g;
+        std::vector<int> came;
+        std::vector<uint32_t> stamp;
+        uint32_t gen = 0;
+    };
+    thread_local Scratch sc;
+    if (sc.stamp.size() != static_cast<std::size_t>(n)) {
+        sc.g.assign(static_cast<std::size_t>(n), INF);
+        sc.came.assign(static_cast<std::size_t>(n), -1);
+        sc.stamp.assign(static_cast<std::size_t>(n), 0);
+        sc.gen = 0;
+    }
+    if (++sc.gen == 0) {   // wrapped: clear the stamps once
+        std::fill(sc.stamp.begin(), sc.stamp.end(), 0u);
+        sc.gen = 1;
+    }
+    const uint32_t gen = sc.gen;
+    auto gOf = [&](int u) { return sc.stamp[static_cast<std::size_t>(u)] == gen ? sc.g[static_cast<std::size_t>(u)] : INF; };
+    auto setG = [&](int u, Real v, int link) {
+        sc.stamp[static_cast<std::size_t>(u)] = gen;
+        sc.g[static_cast<std::size_t>(u)] = v;
+        sc.came[static_cast<std::size_t>(u)] = link;
+    };
 
     auto heuristic = [&](int node) {
         return distance(graph.nodes[node], graph.nodes[goalNode]) / kMaxSpeed;
@@ -65,18 +117,23 @@ Route findRoute(const NavGraph& graph, int startNode, int goalNode,
             return a.node > b.node;
         }
     };
-    std::priority_queue<QEntry, std::vector<QEntry>, Cmp> open;
+    // the frontier: a reused vector heap, exactly priority_queue's push_heap / pop_heap ordering
+    thread_local std::vector<QEntry> open;
+    open.clear();
+    const Cmp cmp;
 
-    g[startNode] = 0;
-    open.push({heuristic(startNode), startNode});
+    setG(startNode, 0, -1);
+    open.push_back({heuristic(startNode), startNode});
 
     while (!open.empty()) {
-        QEntry cur = open.top();
-        open.pop();
+        std::pop_heap(open.begin(), open.end(), cmp);
+        const QEntry cur = open.back();
+        open.pop_back();
         int u = cur.node;
         // Stale entry (a better g was found after this was queued).
-        if (cur.f > g[u] + heuristic(u) + 1e-9) continue;
+        if (cur.f > gOf(u) + heuristic(u) + 1e-9) continue;
         if (u == goalNode) break;
+        ++expanded;
 
         for (int li : graph.outLinks[u]) {
             const NavLink& link = graph.links[li];
@@ -89,26 +146,49 @@ Route findRoute(const NavGraph& graph, int startNode, int goalNode,
                 step += kStreetJunctionDelay;
             if (linkCostScale && static_cast<std::size_t>(li) < linkCostScale->size())
                 step *= std::max<Real>(1.0, (*linkCostScale)[static_cast<std::size_t>(li)]);
-            Real tentative = g[u] + step;
-            if (tentative + 1e-12 < g[link.to]) {
-                g[link.to] = tentative;
-                cameLink[link.to] = li;
-                open.push({tentative + heuristic(link.to), link.to});
+            Real tentative = gOf(u) + step;
+            if (tentative + 1e-12 < gOf(link.to)) {
+                setG(link.to, tentative, li);
+                open.push_back({tentative + heuristic(link.to), link.to});
+                std::push_heap(open.begin(), open.end(), cmp);
             }
         }
     }
 
-    if (g[goalNode] == INF) return route;   // unreachable
+    if (gOf(goalNode) == INF) return route;   // unreachable
 
     // Reconstruct the link sequence by walking cameLink back to the start.
     for (int node = goalNode; node != startNode;) {
-        int li = cameLink[node];
+        int li = sc.stamp[static_cast<std::size_t>(node)] == gen ? sc.came[static_cast<std::size_t>(node)] : -1;
         if (li < 0) { route.links.clear(); return route; }   // defensive
         route.links.push_back(li);
         node = graph.links[li].from;
     }
     std::reverse(route.links.begin(), route.links.end());
     return route;
+}
+}  // namespace
+
+std::vector<char> reachableFrom(const NavGraph& graph, int startNode, bool onFoot) {
+    const int n = graph.nodeCount();
+    std::vector<char> seen(static_cast<std::size_t>(n), 0);
+    if (startNode < 0 || startNode >= n) return seen;
+    std::vector<int> stack{startNode};
+    seen[static_cast<std::size_t>(startNode)] = 1;
+    while (!stack.empty()) {
+        const int u = stack.back();
+        stack.pop_back();
+        for (int li : graph.outLinks[static_cast<std::size_t>(u)]) {
+            const NavLink& link = graph.links[static_cast<std::size_t>(li)];
+            if (onFoot && (link.klass == RoadClass::Freeway || link.klass == RoadClass::Ramp || !link.walkable))
+                continue;
+            if (!seen[static_cast<std::size_t>(link.to)]) {
+                seen[static_cast<std::size_t>(link.to)] = 1;
+                stack.push_back(link.to);
+            }
+        }
+    }
+    return seen;
 }
 
 Route findRouteBetween(const NavGraph& graph, const Vec2& start, const Vec2& goal) {

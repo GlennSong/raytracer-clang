@@ -1478,18 +1478,57 @@ bool CitySim::startWanderTrip(Agent& a, int from, bool fromRest) {
         const engine::NavLink& out = nav_->links[r.links.front()];
         return out.from == in.to && out.to == in.from;
     };
+    // A DEAD END: the only way out is back along the link it arrived on, so every route reverses
+    // it and the scan below would search the WHOLE graph (thousands of A* runs, a second of one
+    // step in the morning rush) only to take its fallback -- the first valid goal. Take that
+    // goal at once: the same trip, without the search.
+    bool forcedUTurn = false;
+    if (a.arrivedLink >= 0 && static_cast<std::size_t>(from) < nav_->outLinks.size()) {
+        const engine::NavLink& in = nav_->links[static_cast<std::size_t>(a.arrivedLink)];
+        forcedUTurn = true;
+        for (int li : nav_->outLinks[static_cast<std::size_t>(from)]) {
+            const engine::NavLink& L = nav_->links[static_cast<std::size_t>(li)];
+            if (a.mode == Agent::Mode::Pedestrian &&
+                (L.klass == engine::RoadClass::Freeway || L.klass == engine::RoadClass::Ramp || !L.walkable))
+                continue;
+            if (!(L.from == in.to && L.to == in.from)) { forcedUTurn = false; break; }
+        }
+    }
     // Scan EVERY node from a random start, so a non-reversing goal is found
     // whenever one exists — dice rolls occasionally picked only U-turn goals,
     // and each of those flipped the car to the other side of the road in place.
+    // (A cap on the scan was tried: it brought those flips back.) The searches
+    // price the U-turn link like startTrip's bay exit does, so a route takes
+    // the way round the block whenever there is one and the first reachable
+    // goal nearly always serves: one search, not thousands.
+    int uturn = -1;
+    if (a.arrivedLink >= 0 && static_cast<std::size_t>(a.arrivedLink) < twinOf_.size())
+        uturn = twinOf_[static_cast<std::size_t>(a.arrivedLink)];
+    if (uturn >= 0 && static_cast<std::size_t>(uturn) < departScale_.size()) departScale_[static_cast<std::size_t>(uturn)] = 50.0;
+    else uturn = -1;
+    struct RestoreScale {   // however the scan ends
+        std::vector<Real>& s; int li; bool& priced;
+        ~RestoreScale() { if (li >= 0) s[static_cast<std::size_t>(li)] = 1.0; priced = false; }
+    } restore{departScale_, uturn, wanderPriced_};
+    wanderPriced_ = uturn >= 0;
     int start = static_cast<int>(tripRnd(a) % static_cast<uint32_t>(n));
     int fallback = -1;
+    // After the first unreachable goal, flood what IS reachable once and skip the rest without
+    // searching: a failed A* explores everything reachable before it gives up, the costliest
+    // search there is, and an agent on a scrap of network met dozens of them per trip.
+    std::vector<char> reach;
     for (int k = 0; k < n; ++k) {
         int goal = (start + k) % n;
         if (goal == from) continue;
+        if (!reach.empty() && !reach[static_cast<std::size_t>(goal)]) continue;
         engine::Route r = engine::findRoute(*nav_, from, goal,
-                                            a.mode == Agent::Mode::Pedestrian);
-        if (!r.valid()) continue;
-        if (reversesArrival(r)) { if (fallback < 0) fallback = goal; continue; }
+                                            a.mode == Agent::Mode::Pedestrian,
+                                            uturn >= 0 ? &departScale_ : nullptr);
+        if (!r.valid()) {
+            if (reach.empty()) reach = engine::reachableFrom(*nav_, from, a.mode == Agent::Mode::Pedestrian);
+            continue;
+        }
+        if (reversesArrival(r) && !forcedUTurn) { if (fallback < 0) fallback = goal; continue; }
         startTrip(a, from, goal, fromRest);
         return a.moving;
     }
@@ -2475,7 +2514,7 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
                                      : -1;
                 if (twin >= 0) departScale_[static_cast<std::size_t>(twin)] = 50.0;
                 r = engine::findRoute(*nav_, origin, BL.from, false,
-                                      twin >= 0 ? &departScale_ : nullptr);
+                                      (twin >= 0 || wanderPriced_) ? &departScale_ : nullptr);
                 if (twin >= 0) departScale_[static_cast<std::size_t>(twin)] = 1.0;
                 if (!r.valid()) continue;
                 const engine::NavLink& last =
@@ -2502,7 +2541,7 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
         if (twin >= 0) departScale_[static_cast<std::size_t>(twin)] = 50.0;
         a.route = engine::findRoute(*nav_, origin, goal,
                                     a.mode == Agent::Mode::Pedestrian,
-                                    twin >= 0 ? &departScale_ : nullptr);
+                                    (twin >= 0 || wanderPriced_) ? &departScale_ : nullptr);
         if (twin >= 0) departScale_[static_cast<std::size_t>(twin)] = 1.0;
     }
     a.leg = 0;

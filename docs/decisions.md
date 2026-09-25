@@ -7844,3 +7844,65 @@ compute pipelines and no depth readback.
 - **Screenshots match** with occlusion on and off, from the air and at street level.
 - **What the city's frame is actually made of:** the *fixed* step (city sim and physics) is 11 ms
   at the median, with spikes of 50–300 ms. That, not drawing, is the next target.
+
+## ADR-0101 — The city's hitches were the simulation: wander routing, collider tiles, `each<>`
+
+**Context.** ADR-0100's walk found that metro_planned's frame was mostly the *fixed* step: 9.5 ms a
+step at 1.6 steps a frame, with spikes of 50–1,000 ms. Glenn: "the frame rate seems a bit hitchy, so
+I'm worried what that will be like with the full on city."
+
+**How it was found.** `RT_DUMP_STATS=1` now names every single fixed step over 16 ms (`SPIKE fixed
+… <system>`). For citysim it splits the step into its phases and adds the step's route searches:
+count, time, nodes expanded, and the callers' addresses. `engine::routeStats()` keeps per-thread
+running totals of `findRoute`. The viewer is not position-independent, so `nm -C -n` names the
+addresses.
+
+**What it was.**
+1. **Wander trips scanned the whole graph.** Every big spike was one agent's `startWanderTrip`
+   running 1,500–5,000 A* searches (up to 1 s) before a single `startTrip`. The scan rejects routes
+   that U-turn back along the arrival link:
+   - at a dead end every route does, so it searched every node only to take its fallback;
+   - on a scrap of network most goals are unreachable, and a failed search is the costliest there
+     is (it exhausts everything reachable first).
+
+   The fixes:
+   - a forced U-turn (the only way out is back) takes the first valid goal at once: the same trip;
+   - after the first failed search, one `reachableFrom` flood marks what can be reached, and
+     unreachable goals are skipped without searching;
+   - the searches price the U-turn link at 50× (as `startTrip` already did leaving a parking bay),
+     so a route goes round the block when it can, and the first reachable goal nearly always
+     serves;
+   - `startTrip` honours that pricing (`wanderPriced_`), so the trip it builds does not U-turn
+     either.
+
+   **A cap on the scan was tried and rejected.** `city_drawn_traffic_rolls_on_its_wheels` caught
+   it: capped scans fell back to U-turn goals, and cars flipped lanes (305 backward steps and
+   2.8 m jumps, against 2–4 and 0.33 m).
+2. **Collider tiles were built on the main thread.** `TerrainLodSystem` built a terrain tile's
+   collision mesh in the fixed step (about 55 ms, mostly Jolt building its bounding-volume tree).
+   `PhysicsWorld::prepareMeshShape` now builds the shape on a worker (three at once), and
+   `addPreparedMesh` adds the body on the simulation thread. The tile under the player's feet is
+   still built on the spot when missing.
+3. **`World::each` walked the first type's pool.** `each<Transform, ControlledBy>` walked every
+   Transform in the city (tens of thousands) to find the one player: about 0.2 ms in each of eight
+   systems, every step. It now drives from the smallest requested pool, walking a copy when that
+   pool is not the first type's.
+4. `findRoute` also reuses per-thread scratch buffers (generation-stamped). That changed little,
+   because the search itself (about 100 ns per expanded node) is the cost, not setup.
+
+**Consequences.** metro_planned, a 5 m/s street walk (`tools/walk_probe.py`; `summary.txt` now
+saved beside the capture):
+
+| | Before | After |
+|---|---|---|
+| Frame p50 / p95 / p99 | 19.1 / 29.5 / 34.5 ms | 13.1 / 17.6 / 19.5 ms |
+| Worst frame in the walk | about 1,000 ms | 27 ms (a 90° snap turn, when occlusion stands down) |
+| Fixed step | 9.5 ms × 1.6 a frame | 6.0 ms × 1.0 a frame |
+
+The cheaper step also stops a second step being needed each frame, so the saving compounds.
+
+**Left:**
+- Rush-hour steps still reach 15–24 ms when 50–110 departures route in one step (single valid
+  searches). Spreading departures across steps, or caching commute routes (home and work do not
+  move), is the next lever.
+- `block_grading_leaves_no_pits_between_roads` fails (worstRiser 0.86) as it did before this work.

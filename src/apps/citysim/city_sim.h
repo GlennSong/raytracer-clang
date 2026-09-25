@@ -1343,6 +1343,9 @@ private:
     // scale kept at 1 except while a bay departure prices its own twin.
     std::vector<int> twinOf_;
     std::vector<Real> departScale_;
+    // True while startWanderTrip has priced the U-turn in departScale_: startTrip's own searches
+    // must see the same prices, or the trip it builds could U-turn after all.
+    bool wanderPriced_ = false;
     std::vector<std::vector<int>> baysOnLink_;   // link -> bay indices
     std::vector<char> bayNarrowed_;   // link (or its reverse) carries bays
     std::vector<uint8_t> advancedLast_;   // did advance() step agent i last tick

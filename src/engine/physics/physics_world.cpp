@@ -364,10 +364,13 @@ PhysicsBodyId PhysicsWorld::addCapsule(Real halfHeight, Real radius,
                       restitution, friction, lockRotation, continuous);
 }
 
-PhysicsBodyId PhysicsWorld::addMesh(const std::vector<Vec3>& vertices,
-                                    const std::vector<uint32_t>& indices,
-                                    const Vec3& position, Real friction) {
-    if (!impl || vertices.empty() || indices.size() < 3) return INVALID_PHYSICS_BODY;
+struct PreparedMeshShape {
+    JPH::RefConst<JPH::Shape> shape;
+};
+
+std::shared_ptr<const PreparedMeshShape> PhysicsWorld::prepareMeshShape(const std::vector<Vec3>& vertices,
+                                                                        const std::vector<uint32_t>& indices) {
+    if (vertices.empty() || indices.size() < 3) return nullptr;
     JPH::VertexList verts;
     verts.reserve(vertices.size());
     for (const Vec3& v : vertices)
@@ -384,9 +387,24 @@ PhysicsBodyId PhysicsWorld::addMesh(const std::vector<Vec3>& vertices,
 
     JPH::MeshShapeSettings shapeSettings(verts, tris);
     JPH::ShapeSettings::ShapeResult result = shapeSettings.Create();
-    if (result.HasError()) return INVALID_PHYSICS_BODY;
-    return createBody(impl->bodies(), result.Get(), position, Quat::identity(),
+    if (result.HasError()) return nullptr;
+    auto out = std::make_shared<PreparedMeshShape>();
+    out->shape = result.Get();
+    return out;
+}
+
+PhysicsBodyId PhysicsWorld::addPreparedMesh(const PreparedMeshShape& shape, const Vec3& position, Real friction) {
+    if (!impl || !shape.shape) return INVALID_PHYSICS_BODY;
+    return createBody(impl->bodies(), shape.shape.GetPtr(), position, Quat::identity(),
                       BodyMotion::Static, 0.0, friction);
+}
+
+PhysicsBodyId PhysicsWorld::addMesh(const std::vector<Vec3>& vertices,
+                                    const std::vector<uint32_t>& indices,
+                                    const Vec3& position, Real friction) {
+    if (!impl) return INVALID_PHYSICS_BODY;
+    const auto shape = prepareMeshShape(vertices, indices);
+    return shape ? addPreparedMesh(*shape, position, friction) : INVALID_PHYSICS_BODY;
 }
 
 void PhysicsWorld::removeBody(PhysicsBodyId id) {

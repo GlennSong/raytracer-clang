@@ -81,8 +81,12 @@ void PlayingState::fixedUpdate(FrameContext& ctx) {
     for (std::size_t i = 0; i < systems.size(); ++i) {
         const auto t0 = std::chrono::steady_clock::now();
         systems[i]->fixedUpdate(ctx);
-        ms[i] += std::chrono::duration<double, std::milli>(
-                     std::chrono::steady_clock::now() - t0).count();
+        const double one = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        ms[i] += one;
+        if (one > 16.0) {   // a SPIKE: named now, not averaged away
+            const System& sys = *systems[i];
+            LOG_INFO << "[stats] SPIKE fixed " << one << " ms  " << typeid(sys).name();
+        }
     }
     if (++calls % 300 == 0) {
         for (std::size_t i = 0; i < systems.size(); ++i)
