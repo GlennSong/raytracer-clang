@@ -5,7 +5,8 @@
 #include "script_assets.h"
 #include "lot_grow_setup.h"   // the lot pass's parameters from a level: one derivation for loader and bake
 #include "city_grow.h"          // ONE grow, every host (Glenn: "for building the city should be one path right?")
-#include "procgen/city/lot_cache.h"   // lots read back from a level bundle (ADR-0084 B)
+#include "procgen/city/lot_cache.h"
+#include "procgen/world/road_sign_build.h"   // shape:"road_signs" (ADR-0110)   // lots read back from a level bundle (ADR-0084 B)
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/script_modules.h"
 #endif
@@ -880,6 +881,67 @@ static bool runScriptModel(const json& ent, const std::string& levelDir,
 }
 #endif
 
+// ROAD SIGNS (shape:"road_signs", ADR-0110): a sign plan (road_signs.h, e.g. `city_plan
+// island-cities`' signs.json) built -- faces baked into atlas pages CACHED under cache/road_signs by
+// their content (a level loads them, it does not letter them), posts and gantries on the ground.
+static void loadRoadSignsEntity(const json& ent, const std::string& levelDir, World& world, Renderer& renderer,
+                                AssetManager& assets, const HeightField* ground) {
+    const engine::Font* font = engine::signFont();
+    if (!font) { LOG_WARN << "[roadsigns] no sign font: no road signs"; return; }
+    std::vector<engine::IslandSign> signs;
+    if (ent.contains("signs")) signs = engine::roadSignsFromJson(ent["signs"]);
+    else if (ent.contains("file")) {
+        const std::string rel = ent["file"].get<std::string>();
+        std::ifstream in(levelDir.empty() ? rel : levelDir + "/" + rel);
+        if (!in) in.open(rel);
+        if (!in) { LOG_WARN << "[roadsigns] cannot read " << rel; return; }
+        json j;
+        in >> j;
+        signs = engine::roadSignsFromJson(j.contains("signs") ? j["signs"] : j);
+    }
+    if (signs.empty()) return;
+    const auto t0 = std::chrono::steady_clock::now();
+    const engine::RoadSignAtlas atlas = engine::bakeRoadSignAtlas(signs, *font, "cache/road_signs");
+    const std::function<double(double, double)> groundAt = [ground](double x, double z) { return ground && *ground ? (*ground)(x, z) : 0.0; };
+    const engine::RoadSignMeshes sm = engine::buildRoadSignMeshes(signs, atlas, groundAt, ent.value("carriageHalf", 11.0));
+    std::vector<TextureHandle> pages;
+    for (const engine::TextImage& pg : atlas.pages) pages.push_back(renderer.uploadTexture(pg.w, pg.h, 4, pg.rgba.data()));
+    const double dist = ent.value("drawDistance", 900.0);
+    int n = 0;
+    for (const engine::RoadSignMeshes::Panels& p : sm.panels) {
+        if (p.mesh.vertices.empty()) continue;
+        InstanceGroup g;
+        g.mesh = assets.acquireMesh(p.mesh, "roadsigns:faces:" + std::to_string(n++));
+        g.material.albedo = Vec3(1, 1, 1);
+        g.material.roughness = 0.45f;
+        g.material.albedoMap = pages[static_cast<std::size_t>(p.page)];
+        g.material.flags |= RenderMaterial::FLAG_ALPHA_TEST;   // the rounded corners and the air beside an exit tab
+        g.transforms.push_back(Mat4());
+        g.boundsCenter = p.centre;
+        g.boundsRadius = static_cast<float>(p.radius + 1.0);
+        g.drawDistance = dist;
+        g.drawClass = engine::DrawClass::Furniture;
+        world.add<InstanceGroup>(world.create(), g);
+    }
+    for (const engine::RoadSignMeshes::Steel& p : sm.steel) {
+        if (p.mesh.vertices.empty()) continue;
+        InstanceGroup g;
+        g.mesh = assets.acquireMesh(p.mesh, "roadsigns:steel:" + std::to_string(n++));
+        g.material.albedo = Vec3(1, 1, 1);   // colour rides the verts
+        g.material.metallic = 0.6f;
+        g.material.roughness = 0.45f;
+        g.transforms.push_back(Mat4());
+        g.boundsCenter = p.centre;
+        g.boundsRadius = static_cast<float>(p.radius + 1.0);
+        g.drawDistance = dist;
+        g.drawClass = engine::DrawClass::Furniture;
+        world.add<InstanceGroup>(world.create(), g);
+    }
+    LOG_INFO << "[roadsigns] " << signs.size() << " signs on " << atlas.pages.size() << " atlas page(s)"
+             << (atlas.fromCache ? " (cached " : " (baked, cached as ") << atlas.key << ") in "
+             << std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() << " s";
+}
+
 // A Lua recipe entity (shape:"script", ADR-0042): run the recipe and spawn its
 // composable model — parts as Renderable entities, instance groups as
 // InstanceGroups. The realtime twin of level_scene's bakeProcModel, so the same
@@ -1169,6 +1231,10 @@ static void loadEntities(const json& entities, const json& root, World& world,
             continue;
         }
 #endif
+        if (ent.value("shape", std::string()) == "road_signs") {
+            loadRoadSignsEntity(ent, levelDir, world, renderer, assets, ground);
+            continue;
+        }
         // Lua recipe (ADR-0042): run the script and spawn its composable model —
         // the same shape:"script" the offline tracer renders, now in the viewer.
         // An on-terrain recipe was pre-run (for terrain grading) and is spawned

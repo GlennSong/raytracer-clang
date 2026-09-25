@@ -162,3 +162,51 @@ TEST_CASE(ring_freeway_signs_say_which_ramp_goes_where_and_how_far) {
     // exits 4.2 km apart: both the 2 km and the 1 km sign fit before each, each way
     CHECK(advances == 12);
 }
+
+// IN 3D (ADR-0110): the faces bake into atlas pages that are cached by content -- the second bake of
+// the same signs is read back, not lettered again -- and each panel's texture runs to its READER's
+// right in the world (u along cross(forward, up)), so the plan/world mirror never reverses a word.
+#include "../src/engine/procgen/world/road_sign_build.h"
+#include <filesystem>
+TEST_CASE(road_sign_atlas_is_cached_and_panels_read_left_to_right) {
+    const Font* font = signFont();
+    CHECK(font != nullptr);
+    if (!font) return;
+    IslandWorld w = ringWorld();
+    planIslandSigns(w);
+    const std::string dir = (std::filesystem::temp_directory_path() / "rt_roadsign_cache_test").string();
+    std::filesystem::remove_all(dir);
+    const RoadSignAtlas a = bakeRoadSignAtlas(w.signs, *font, dir, 40.0, 1024);
+    CHECK(!a.fromCache);
+    CHECK(a.slots.size() == w.signs.size());
+    for (const RoadSignAtlas::Slot& s : a.slots) { CHECK(s.page >= 0); CHECK(s.u1 > s.u0); CHECK(s.v1 > s.v0); CHECK(s.w > 0.5); }
+    const RoadSignAtlas b = bakeRoadSignAtlas(w.signs, *font, dir, 40.0, 1024);
+    CHECK(b.fromCache);
+    CHECK(b.key == a.key);
+    CHECK(b.pages.size() == a.pages.size());
+    CHECK(b.slots.size() == a.slots.size());
+    if (!b.slots.empty()) CHECK(std::fabs(b.slots[0].u0 - a.slots[0].u0) < 1e-6f);
+    std::filesystem::remove_all(dir);
+    // one sign, read by traffic heading -z: its panel faces +z, and u grows toward +x (the reader's right)
+    IslandSign s;
+    s.kind = "limit";
+    s.at = Vec2(0, 0);
+    s.facing = Vec2(0, -1);
+    s.mount = "roadside";
+    s.legend = {{"name", "Ashford"}, {"pop", 1200}, {"kind", "town"}};
+    const RoadSignAtlas one = bakeRoadSignAtlas({s}, *font, {}, 40.0, 1024);
+    const RoadSignMeshes m = buildRoadSignMeshes({s}, one, [](double, double) { return 0.0; });
+    CHECK(m.panels.size() == 1);
+    if (m.panels.size() == 1) {
+        const auto& vs = m.panels[0].mesh.vertices;
+        CHECK(vs.size() >= 4);
+        double xAtU0 = 0, xAtU1 = 0;
+        for (const auto& v : vs) {
+            if (std::fabs(v.u - one.slots[0].u0) < 1e-5f) xAtU0 = v.position.x;
+            if (std::fabs(v.u - one.slots[0].u1) < 1e-5f) xAtU1 = v.position.x;
+            CHECK(v.normal.z > 0.9f);   // it faces the traffic coming at it
+        }
+        CHECK(xAtU1 > xAtU0);
+    }
+    CHECK(!m.steel.empty());
+}
