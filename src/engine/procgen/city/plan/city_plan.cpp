@@ -1425,6 +1425,180 @@ CityPlan generatePlan(const Brief& B) {
     // --- the street graph ---
     roads.insert(roads.end(), townRoads.begin(), townRoads.end());
     roads.insert(roads.end(), placeRoads.begin(), placeRoads.end());
+    // --- RIVERS (ADR-0104). Glenn: "regenerate the city into two halves cut by the river and then
+    // create a handful of bridges. Not every road would become a bridge. Look at Chicago." The river
+    // is the world's (its hydrology). A street that crosses it is a BRIDGE only if it is a main
+    // street -- an arterial -- or the river would otherwise run too far without one (a collector is
+    // promoted in the middle of the gap). Every other street stops at a RIVERSIDE street that runs
+    // along each bank inside the city (Chicago's Wacker Drive), in a T.
+    if (const std::shared_ptr<const Hydrology> hy = worldHydrology(B)) {
+        const nlohmann::json rp = B.world.value("riverPlan", nlohmann::json::object());
+        const Real quay = rp.value("quay", 4.0);                         // bank to the riverside street's kerb
+        const Real sideHalf = B.collectorWidth * 0.5 + B.sidewalk;       // the riverside street's half-width
+        const Real sideAt = quay + sideHalf;                              // its centreline, from the bank
+        const Real maxGap = rp.value("maxBridgeGap", 650.0);
+        const Real maxBridge = rp.value("maxBridge", 220.0);
+        const bool riverside = rp.value("riversideStreets", true);
+        auto bank = [&](const Vec2& q) { return hy->distanceToRiver(q.x, q.y, 300.0); };
+        auto inCity = [&](const Vec2& q) { return (q - B.center).length() < outerR - 20.0; };
+        // where each river crossing is along its river: (river, station) -> for the gap rule
+        auto riverStation = [&](const Vec2& q, int* which, Vec2* tangent = nullptr) {
+            double best = 1e30, bestS = 0.0;
+            int bw = -1;
+            Vec2 bt(1, 0);
+            for (std::size_t ri = 0; ri < hy->rivers().size(); ++ri) {
+                const auto& nodes = hy->rivers()[ri].nodes;
+                double acc = 0.0;
+                for (std::size_t k = 0; k + 1 < nodes.size(); ++k) {
+                    const Vec2 a2 = nodes[k].p, ab = nodes[k + 1].p - a2;
+                    const double L2 = dot(ab, ab), L = std::sqrt(L2);
+                    const double t = L2 > 1e-12 ? std::clamp(dot(q - a2, ab) / L2, 0.0, 1.0) : 0.0;
+                    const double d = (q - (a2 + ab * t)).length();
+                    if (d < best) { best = d; bestS = acc + L * t; bw = static_cast<int>(ri); if (L > 1e-9) bt = ab / L; }
+                    acc += L;
+                }
+            }
+            if (which) *which = bw;
+            if (tangent) *tangent = bt;
+            return bestS;
+        };
+        struct Crossing { std::size_t road; int river; double station; bool bridge; };
+        std::vector<Crossing> crossings;
+        std::vector<std::vector<Vec2>> dense(roads.size());
+        std::vector<char> wetRoad(roads.size(), 0), bridgeRoad(roads.size(), 0);
+        for (std::size_t i = 0; i < roads.size(); ++i) {
+            const Polyline& pl = roads[i];
+            const std::size_t n = pl.pts.size(), segs = pl.closed ? n : n - 1;
+            for (std::size_t k = 0; k < segs; ++k) {
+                const Vec2 a2 = pl.pts[k], b2 = pl.pts[(k + 1) % n];
+                const int m = std::max(1, static_cast<int>(std::ceil((b2 - a2).length() / 4.0)));
+                for (int j = 0; j < m; ++j) dense[i].push_back(a2 + (b2 - a2) * (Real(j) / m));
+            }
+            if (!pl.closed && n) dense[i].push_back(pl.pts.back());
+            const Real half = pl.width * 0.5 + B.sidewalk + quay;
+            // its wet runs
+            std::vector<std::pair<std::size_t, std::size_t>> runs;
+            bool in = false;
+            std::size_t r0 = 0;
+            for (std::size_t k = 0; k < dense[i].size(); ++k) {
+                const bool wet = bank(dense[i][k]) < half;
+                if (wet && !in) { in = true; r0 = k; }
+                if (!wet && in) { in = false; runs.push_back({r0, k}); }
+            }
+            if (in) runs.push_back({r0, dense[i].size() - 1});
+            if (runs.empty()) continue;
+            wetRoad[i] = 1;
+            // a candidate bridge: every wet run inside it, short (a crossing, not a street along the bank)
+            bool candidate = !pl.closed;
+            for (const auto& r : runs) {
+                const Real len = 4.0 * static_cast<Real>(r.second - r.first);
+                if (r.first == 0 || r.second + 1 >= dense[i].size() || len > maxBridge) candidate = false;
+            }
+            // and it crosses, not glances: a street at a shallow angle would be a long diagonal deck
+            for (const auto& r : runs) {
+                const std::size_t mid = (r.first + r.second) / 2;
+                const Vec2 d0 = dense[i][mid > 2 ? mid - 2 : 0], d1 = dense[i][std::min(mid + 2, dense[i].size() - 1)];
+                Vec2 rt;
+                riverStation(dense[i][mid], nullptr, &rt);
+                const Vec2 sd = d1 - d0;
+                if (sd.length() > 1e-9 && std::fabs(cross(sd / sd.length(), rt)) < std::sin(40.0 * 3.14159265358979 / 180.0)) candidate = false;
+            }
+            if (!candidate) continue;
+            for (const auto& r : runs) {
+                int which = -1;
+                const double st = riverStation(dense[i][(r.first + r.second) / 2], &which);
+                crossings.push_back({i, which, st, pl.klass == RoadClass::Arterial});
+            }
+        }
+        // the gap rule: along each river, between consecutive bridges (and from the city's edge),
+        // promote the collector crossing nearest the middle of any gap over maxGap
+        for (std::size_t ri = 0; ri < hy->rivers().size(); ++ri) {
+            for (int round = 0; round < 12; ++round) {
+                std::vector<double> at;
+                for (const Crossing& c : crossings) if (c.river == static_cast<int>(ri) && c.bridge) at.push_back(c.station);
+                std::sort(at.begin(), at.end());
+                // the gaps between the city's own crossings (candidates bound the city's extent)
+                double lo = 1e30, hi = -1e30;
+                for (const Crossing& c : crossings) if (c.river == static_cast<int>(ri)) { lo = std::min(lo, c.station); hi = std::max(hi, c.station); }
+                if (lo > hi) break;
+                std::vector<double> edges2{lo};
+                edges2.insert(edges2.end(), at.begin(), at.end());
+                edges2.push_back(hi);
+                double worst = 0.0, mid = 0.0;
+                for (std::size_t k = 0; k + 1 < edges2.size(); ++k)
+                    if (edges2[k + 1] - edges2[k] > worst) { worst = edges2[k + 1] - edges2[k]; mid = 0.5 * (edges2[k] + edges2[k + 1]); }
+                if (worst <= maxGap) break;
+                int pick = -1;
+                double pd = 1e30;
+                for (std::size_t c = 0; c < crossings.size(); ++c) {
+                    const Crossing& x = crossings[c];
+                    if (x.river != static_cast<int>(ri) || x.bridge) continue;
+                    if (roads[x.road].klass != RoadClass::Collector && roads[x.road].klass != RoadClass::Arterial) continue;
+                    if (std::fabs(x.station - mid) < pd) { pd = std::fabs(x.station - mid); pick = static_cast<int>(c); }
+                }
+                if (pick < 0 || pd > worst * 0.5) break;
+                for (Crossing& x : crossings) if (x.road == crossings[static_cast<std::size_t>(pick)].road) x.bridge = true;
+            }
+        }
+        for (const Crossing& c : crossings) if (c.bridge) bridgeRoad[c.road] = 1;
+        // cut the rest back to just past the riverside street's centreline (a T once planarized; the
+        // pruner takes the overhang)
+        const Real cutAt = riverside ? sideAt - 2.0 : quay + 2.0;
+        std::vector<Polyline> kept;
+        int bridges = 0, cut = 0;
+        for (std::size_t i = 0; i < roads.size(); ++i) {
+            if (!wetRoad[i] && !(riverside && roads[i].pts.size() >= 2)) { kept.push_back(roads[i]); continue; }
+            if (bridgeRoad[i]) { kept.push_back(roads[i]); ++bridges; continue; }
+            bool near = false;
+            for (const Vec2& q : dense[i]) if (bank(q) < cutAt) { near = true; break; }
+            if (!near) { kept.push_back(roads[i]); continue; }
+            ++cut;
+            Polyline cur = roads[i];
+            cur.closed = false;
+            cur.pts.clear();
+            for (const Vec2& q : dense[i]) {
+                if (bank(q) < cutAt) {
+                    if (cur.pts.size() >= 2 && roads::lanes::stations(cur.pts).back() > 20.0) kept.push_back(cur);
+                    cur.pts.clear();
+                } else {
+                    cur.pts.push_back(q);
+                }
+            }
+            if (cur.pts.size() >= 2 && roads::lanes::stations(cur.pts).back() > 20.0) kept.push_back(cur);
+        }
+        roads.swap(kept);
+        // the riverside streets: each bank of each river, where it runs through the city
+        int sideRuns = 0;
+        if (riverside)
+            for (const River& rv : hy->rivers()) {
+                for (int sgn : {-1, 1}) {
+                    Polyline cur;
+                    cur.klass = RoadClass::Collector;
+                    cur.width = B.collectorWidth;
+                    auto flush = [&] {
+                        if (cur.pts.size() >= 2 && roads::lanes::stations(cur.pts).back() > 80.0) { roads.push_back(cur); ++sideRuns; }
+                        cur.pts.clear();
+                    };
+                    double since = 1e30;
+                    for (std::size_t k = 0; k < rv.nodes.size(); ++k) {
+                        const Vec2 prev = rv.nodes[k > 0 ? k - 1 : 0].p, next = rv.nodes[std::min(k + 1, rv.nodes.size() - 1)].p;
+                        Vec2 t = next - prev;
+                        if (t.length() < 1e-9) continue;
+                        t = t / t.length();
+                        const Vec2 q = rv.nodes[k].p + perp(t) * (sgn * (rv.nodes[k].width * 0.5 + sideAt));
+                        bool ok = inCity(q) && bank(q) > sideAt - 3.0;   // inside the city, and not over another reach
+                        for (std::size_t kk = 0; ok && kk < keepOut.size(); ++kk)
+                            if (distToPolyline(q, keepOut[kk], false) < keepReach[kk] + sideHalf) ok = false;
+                        if (!ok) { flush(); since = 1e30; continue; }
+                        if (k > 0) since += (rv.nodes[k].p - rv.nodes[k - 1].p).length();
+                        if (cur.pts.empty() || since >= 12.0) { cur.pts.push_back(q); since = 0.0; }
+                    }
+                    flush();
+                }
+            }
+        std::printf("[plan] rivers: %zu; %d bridges (main streets%s), %d streets stop at the water, %d riverside street runs\n",
+                    hy->rivers().size(), bridges, maxGap < 1e29 ? " + gap-fillers" : "", cut, sideRuns);
+    }
     plan.streets = planarizePolylines(roads);
     collapseShortLinks(plan.streets, B.sidewalk);
     pruneStubs(plan.streets, 45.0);

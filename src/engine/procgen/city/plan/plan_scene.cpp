@@ -700,7 +700,9 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             if (!classes.contains(k)) return 8.0;
             const json& c = classes[k];
             const double lanes = c.value("fwd", 1.0) + c.value("back", 1.0);
-            return 0.5 * lanes * c.value("w", 3.5) + c.value("shoulder", 0.0) + c.value("sidewalk", 0.0);
+            // the CARRIAGEWAY: a bridge is where the road itself is over water (the plan's riverside
+            // streets stand their junctions just clear of that; counting sidewalks put them in the river)
+            return 0.5 * lanes * c.value("w", 3.5) + c.value("shoulder", 0.0);
         };
         constexpr double kClear = 6.0;        // water to the deck's underside, plus its structure
         constexpr double kMaxBridge = 180.0;  // wetter than this is a street along the river, not across it

@@ -214,12 +214,18 @@ void bakeErodedTerrain(TerrainParams& params, const Noise& noise, double worldSi
     const double half = worldSize * 0.5;
     const double margin = std::max(1.0, worldSize * 0.06);   // feather band width
     HeightField analyticCopy = analytic;                     // both closures share `base`
+    const double sea = params.erodeLandOnly && params.seaLevel > -1e29 ? params.seaLevel : -1e30;
     params.erodedBase = std::make_shared<const std::function<double(double, double)>>(
-        [eroded, analyticCopy, half, margin](double x, double z) {
+        [eroded, analyticCopy, half, margin, sea](double x, double z) {
             double wx = clamp01((half - std::fabs(x)) / margin);
             double wz = clamp01((half - std::fabs(z)) / margin);
             double w = wx < wz ? wx : wz;                    // 0 at/outside edge, 1 inside
             if (w <= 0.0) return analyticCopy(x, z);
+            if (sea > -1e29) {   // land only: the raw relief below the sea, blended over the beach
+                const double a = analyticCopy(x, z);
+                if (a < sea + 2.0) w *= clamp01((a - (sea - 4.0)) / 6.0);
+                return a + (eroded(x, z) - a) * w;
+            }
             double a = analyticCopy(x, z);
             if (w >= 1.0) return eroded(x, z);
             return a + (eroded(x, z) - a) * w;
@@ -659,8 +665,37 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
     return terrainHeight(params, noise, worldX, worldZ, 0.0);
 }
 
-double terrainBaseHeight(const TerrainParams& params, const Noise& noise,
-                         double worldX, double worldZ) {
+double islandLand(const TerrainParams& params, const Noise& noise, double worldX, double worldZ) {
+    const TerrainParams::Island& I = params.island;
+    const double dx = worldX - I.cx, dz = worldZ - I.cz;
+    const double a = I.angleDeg * 3.14159265358979 / 180.0, ca = std::cos(a), sa = std::sin(a);
+    const double u = dx * ca + dz * sa, v = -dx * sa + dz * ca;   // along / across the island's axis
+    const double d = std::sqrt((u / (I.radius * I.aspect)) * (u / (I.radius * I.aspect)) + (v / I.radius) * (v / I.radius));
+    // the coast's bays and inlets: warped noise at a few kilometres, and a finer wobble
+    const double n = noise.warpedFbm2(worldX * I.coastScale + 17.3, worldZ * I.coastScale - 9.1, 0.6, 4);
+    double land = (1.0 - d) + I.coastNoise * n;
+    if (I.penDeg > -1e8) {   // the peninsula: a lobe from the coast out along penDeg
+        const double pa = I.penDeg * 3.14159265358979 / 180.0, pc = std::cos(pa), ps = std::sin(pa);
+        const double along = dx * pc + dz * ps, lat = -dx * ps + dz * pc;
+        // where the main outline's coast is along that bearing (the ellipse radius in that direction)
+        const double eu = pc * ca + ps * sa, ev = -pc * sa + ps * ca;
+        const double rCoast = 1.0 / std::sqrt((eu / (I.radius * I.aspect)) * (eu / (I.radius * I.aspect)) + (ev / I.radius) * (ev / I.radius));
+        const double t = (along - rCoast * 0.75) / I.penLength;   // 0 inland of the coast .. 1 at its tip
+        // the lobe carries its own shelf: its land field is the lobe's height where it stands, and
+        // falls to the open sea's (-0.12) away from it -- a Gaussian never reaches zero, and a lobe of
+        // "barely land" to either side read as a sand bar across the whole sea
+        const double taper = 1.0 - smoothstep(0.55, 1.1, t);
+        const double w = I.penWidth * (0.55 + 0.45 * taper);
+        const double e = taper * smoothstep(-0.3, 0.05, t) * std::exp(-(lat / w) * (lat / w));
+        const double lobe = (0.26 + 0.1 * noise.noise2(along * 0.0015, 3.3)) * e - 0.12 * (1.0 - e);
+        land = std::max(land, lobe);
+    }
+    return land;
+}
+
+namespace {
+// the ordinary relief layers: fbm, tilt, mountains, the range, the ridge network
+double reliefHeight(const TerrainParams& params, const Noise& noise, double worldX, double worldZ) {
     double nx = worldX * params.noiseScale;
     double nz = worldZ * params.noiseScale;
     double h = params.warp > 0.0
@@ -747,6 +782,33 @@ double terrainBaseHeight(const TerrainParams& params, const Noise& noise,
     }
 
     return h;
+}
+}  // namespace
+
+double terrainBaseHeight(const TerrainParams& params, const Noise& noise,
+                         double worldX, double worldZ) {
+    if (params.island.on) {
+        // the relief of an island: the ordinary layers below, rising only on land
+        const double relief = reliefHeight(params, noise, worldX, worldZ);
+        const TerrainParams::Island& I = params.island;
+        const double land = islandLand(params, noise, worldX, worldZ);
+        if (land <= 0.0)   // the sea: a shelf falling away from the coast
+            return -I.shelfDepth * smoothstep(0.0, 0.12, -land) - 0.6 + 0.6 * noise.noise2(worldX * 0.01, worldZ * 0.01);
+        double h = I.plainHeight * smoothstep(0.0, 0.16, land) + relief * smoothstep(0.02, 0.32, land);
+        if (I.cliffHeight > 0.0) {   // the cliff coast: a plateau right to the edge, then the drop
+            double ang = std::atan2(worldZ - I.cz, worldX - I.cx) * 180.0 / 3.14159265358979;
+            double from = I.cliffFromDeg, to = I.cliffToDeg;
+            if (to < from) to += 360.0;
+            if (ang < from) ang += 360.0;
+            const double into = std::min(ang - from, to - ang);   // degrees inside the sector (negative: outside)
+            if (into > -8.0) {
+                const double sector = smoothstep(-8.0, 6.0, into);
+                h += I.cliffHeight * sector * smoothstep(0.0, 0.006, land) * (0.85 + 0.15 * noise.noise2(worldX * 0.004, worldZ * 0.004));
+            }
+        }
+        return h;
+    }
+    return reliefHeight(params, noise, worldX, worldZ);
 }
 
 double terrainHeight(const TerrainParams& params, const Noise& noise,

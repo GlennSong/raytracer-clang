@@ -134,6 +134,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/metro.cpp
     src/engine/procgen/city/water_mesh.cpp
     src/engine/procgen/city/terrain_route.cpp
+    src/engine/procgen/world/island_world.cpp
     src/engine/procgen/city/buildability.cpp
     src/engine/procgen/city/corridor_bake.cpp
     src/engine/procgen/city/corridor_plan.cpp

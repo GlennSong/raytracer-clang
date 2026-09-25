@@ -44,6 +44,8 @@ void propagateWaterSeaLevel(json& root) {
     }
 }
 
+std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(const json& tj);
+
 TerrainParams readTerrainParams(const json& t) {
     TerrainParams p;
     p.size        = t.value("size", p.size);
@@ -93,6 +95,7 @@ TerrainParams readTerrainParams(const json& t) {
         }
     }
     p.seaLevel = t.value("seaLevel", p.seaLevel);   // loaders may override from the water block
+    p.erodeLandOnly = t.value("erodeLandOnly", p.erodeLandOnly);
     // The earthwork field's knobs (procgen/earthwork.h):
     //   "earthwork": { "enabled": true, "reach": 100, "cell": 4, "margin": 0 }
     if (t.contains("earthwork") && t["earthwork"].is_object()) {
@@ -118,6 +121,23 @@ TerrainParams readTerrainParams(const json& t) {
     p.rangeWidth = t.value("rangeWidth", p.rangeWidth);
     p.rangeHeight = t.value("rangeHeight", p.rangeHeight);
     p.rangeVariation = t.value("rangeVariation", p.rangeVariation);
+    if (t.contains("island") && t["island"].is_object()) {   // ADR-0105
+        const json& il = t["island"];
+        TerrainParams::Island& I = p.island;
+        I.on = il.value("on", true);
+        if (il.contains("center") && il["center"].is_array()) { I.cx = il["center"][0].get<double>(); I.cz = il["center"][1].get<double>(); }
+        I.radius = il.value("radius", I.radius); I.aspect = il.value("aspect", I.aspect); I.angleDeg = il.value("angle", I.angleDeg);
+        I.coastNoise = il.value("coastNoise", I.coastNoise); I.coastScale = il.value("coastScale", I.coastScale);
+        if (il.contains("peninsula") && il["peninsula"].is_object()) {
+            const json& pn = il["peninsula"];
+            I.penDeg = pn.value("bearing", 0.0); I.penLength = pn.value("length", I.penLength); I.penWidth = pn.value("width", I.penWidth);
+        }
+        if (il.contains("cliffs") && il["cliffs"].is_object()) {
+            const json& c = il["cliffs"];
+            I.cliffFromDeg = c.value("from", 0.0); I.cliffToDeg = c.value("to", 0.0); I.cliffHeight = c.value("height", 0.0);
+        }
+        I.plainHeight = il.value("plainHeight", I.plainHeight); I.shelfDepth = il.value("shelfDepth", I.shelfDepth);
+    }
     if (t.contains("range") && t["range"].is_object()) {
         const auto& r = t["range"];
         p.rangeRidges = buildRangeRidges(
@@ -178,6 +198,18 @@ TerrainParams readTerrainParams(const json& t) {
             hp.incisionK = r.value("incisionK", hp.incisionK);
             hp.bankSteep = r.value("bankSteep", hp.bankSteep);
             hp.lakeMinArea = r.value("lakeMinArea", hp.lakeMinArea);
+            hp.autoRivers = r.value("auto", hp.autoRivers);
+            if (r.contains("courses") && r["courses"].is_array())
+                for (const json& c : r["courses"]) {
+                    HydroParams::Course course;
+                    for (const json& q : c.value("points", json::array())) course.points.emplace_back(q[0].get<double>(), q[1].get<double>());
+                    if (c.contains("width") && c["width"].is_array() && c["width"].size() == 2) {
+                        course.width0 = c["width"][0].get<double>();
+                        course.width1 = c["width"][1].get<double>();
+                    }
+                    course.meander = c.value("meander", course.meander);
+                    hp.courses.push_back(std::move(course));
+                }
             hp.lakeMinDepth = r.value("lakeMinDepth", hp.lakeMinDepth);
             TerrainParams base = p;   // the relief the water runs over: no flatten, no earthwork
             base.flatten.clear();
@@ -185,7 +217,12 @@ TerrainParams readTerrainParams(const json& t) {
             base.hydro.reset();
             const Noise n(t.value("seed", 0u));
             const auto t0 = std::chrono::steady_clock::now();
-            auto hy = Hydrology::build([base, n](double x, double z) { return terrainBaseHeight(base, n, x, z); }, hp);
+            // the ground the water runs over: the ERODED relief when the terrain erodes (its valleys
+            // are where the rivers belong), else the raw relief
+            std::function<double(double, double)> over = [base, n](double x, double z) { return terrainBaseHeight(base, n, x, z); };
+            if (t.value("erode", false))
+                if (auto eb = erodedForTerrain(t)) over = [eb](double x, double z) { return (*eb)(x, z); };
+            auto hy = Hydrology::build(over, hp);
             LOG_INFO << "[hydrology] " << hy->rivers().size() << " rivers, " << hy->lakes().size() << " lakes on a "
                      << hy->gridSize() << "^2 grid (" << hp.cell << " m) in "
                      << std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() << " s";
@@ -246,7 +283,19 @@ std::shared_ptr<const std::function<double(double, double)>>
 readErodedBase(const json& root) {
     if (!root.contains("terrain") || !root["terrain"].value("erode", false))
         return nullptr;
-    const json& tj = root["terrain"];
+    return erodedForTerrain(root["terrain"]);
+}
+
+std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(const json& tjIn) {
+    // once per terrain block (a load reads it several times; the island planner and the level agree).
+    // Its "rivers" are left out: they are computed ON this, and reading them here would recurse.
+    json tj = tjIn;
+    tj.erase("rivers");
+    static std::mutex memoMutex;
+    static std::map<std::string, std::shared_ptr<const std::function<double(double, double)>>> memo;
+    const std::string key = tj.dump();
+    std::lock_guard<std::mutex> lock(memoMutex);
+    if (auto it = memo.find(key); it != memo.end()) return it->second;
     TerrainParams eb = readTerrainParams(tj);
     Noise en(tj.value("seed", 0u));
     ErosionParams ep;
@@ -256,6 +305,7 @@ readErodedBase(const json& root) {
     ep.thermalIterations = tj.value("erodeThermal", ep.thermalIterations);
     ep.talus = tj.value("erodeTalus", ep.talus);
     bakeErodedTerrain(eb, en, eb.size, tj.value("erodeRes", 512), ep);
+    memo[key] = eb.erodedBase;
     return eb.erodedBase;
 }
 

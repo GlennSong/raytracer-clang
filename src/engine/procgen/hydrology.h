@@ -45,6 +45,14 @@ struct HydroParams {
     double lakeMinArea = 12000.0;   // m^2 of filled basin before it is a lake
     double lakeMinDepth = 0.6;      // m of fill before a cell is lake
     int smoothIterations = 3;       // Chaikin passes on each river's path (grid staircase -> curve)
+    // The drainage's own rivers (false: only the authored courses below are rivers; lakes still form
+    // where basins fill -- raise lakeMinArea to keep them out too).
+    bool autoRivers = true;
+    // AUTHORED COURSES (ADR-0104): rivers a level lays down through waypoints -- a source up in the
+    // range, a gap between two towns, the sea -- widening from width0 to width1, with a gentle meander
+    // (metres) between the waypoints. Levels and depth as for any river.
+    struct Course { std::vector<Vec2> points; double width0 = 12.0, width1 = 40.0, meander = 14.0; };
+    std::vector<Course> courses;
 };
 
 struct RiverNode {
@@ -54,7 +62,10 @@ struct RiverNode {
     double area = 0;    // upstream area (m^2)
     double fade = 1;    // 1 upstream, 0 at a mouth: the surface fades into the sea or lake it meets
 };
-struct River { std::vector<RiverNode> nodes; bool mouth = false; int intoLake = -1; };   // source -> end; mouth: ends in the sea or a lake
+struct River {
+    std::vector<RiverNode> nodes; bool mouth = false; int intoLake = -1;
+    bool authored = false; double width0 = 0.0, width1 = 0.0;   // an authored course: its width, source to mouth
+};   // source -> end; mouth: ends in the sea or a lake
 
 struct Lake {
     double level = 0;

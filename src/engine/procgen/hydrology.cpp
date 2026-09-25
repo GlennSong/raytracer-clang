@@ -143,7 +143,9 @@ std::shared_ptr<const Hydrology> Hydrology::build(const std::function<double(dou
         nd.area = acc[static_cast<std::size_t>(c)];
         return nd;
     };
+    std::vector<River> found;
     for (int s : sources) {
+        if (!p.autoRivers) break;
         River r;
         int c = s;
         while (true) {
@@ -161,6 +163,49 @@ std::shared_ptr<const Hydrology> Hydrology::build(const std::function<double(dou
             c = nx;
         }
         if (r.nodes.size() < 3) continue;
+        found.push_back(std::move(r));
+    }
+    // AUTHORED RIVERS (ADR-0104): a course a level lays down -- from a source in the range, through a
+    // gap, out to the sea -- walked every half cell with a gentle meander, its width running from the
+    // source's to the mouth's. It is carved and drawn like any other river.
+    for (const HydroParams::Course& course : p.courses) {
+        if (course.points.size() < 2) continue;
+        River r;
+        r.authored = true;
+        r.width0 = course.width0;
+        r.width1 = course.width1;
+        double total = 0.0;
+        for (std::size_t k = 0; k + 1 < course.points.size(); ++k) total += (course.points[k + 1] - course.points[k]).length();
+        double along = 0.0;
+        for (std::size_t k = 0; k + 1 < course.points.size(); ++k) {
+            const Vec2 a = course.points[k], b = course.points[k + 1];
+            const double L = (b - a).length();
+            const int m = std::max(1, static_cast<int>(std::ceil(L / (p.cell * 0.5))));
+            const Vec2 side = L > 1e-9 ? perp((b - a) / L) : Vec2(1, 0);
+            for (int j = 0; j < m; ++j) {
+                const double t = static_cast<double>(j) / m, s0 = along + L * t;
+                // a meander: two slow waves, fading to nothing at the waypoints (they are where it goes)
+                const double fadeW = std::sin(3.14159265358979 * t);
+                const double wob = course.meander * fadeW * (std::sin(s0 / 170.0 + 1.3) + 0.5 * std::sin(s0 / 61.0 + 4.1));
+                RiverNode nd;
+                nd.p = a + (b - a) * t + side * wob;
+                nd.level = 1e30;
+                nd.area = s0 / std::max(1.0, total);   // authored: the fraction along (the width's parameter)
+                r.nodes.push_back(nd);
+            }
+            along += L;
+        }
+        RiverNode last;
+        last.p = course.points.back();
+        last.level = 1e30;
+        last.area = 1.0;
+        r.nodes.push_back(last);
+        const int lc = std::clamp(static_cast<int>(std::lround((last.p.x + p.half) / p.cell)), 0, n - 1) +
+                       std::clamp(static_cast<int>(std::lround((last.p.y + p.half) / p.cell)), 0, n - 1) * n;
+        r.mouth = sea[static_cast<std::size_t>(lc)] != 0;
+        found.push_back(std::move(r));
+    }
+    for (River& r : found) {
         // smooth the grid staircase into a curve (Chaikin), endpoints kept
         for (int it = 0; it < p.smoothIterations; ++it) {
             std::vector<RiverNode> sm{r.nodes.front()};
@@ -177,9 +222,14 @@ std::shared_ptr<const Hydrology> Hydrology::build(const std::function<double(dou
         // come from the area drained.
         for (std::size_t k = 0; k < r.nodes.size(); ++k) {
             RiverNode& nd = r.nodes[k];
-            const double sq = std::sqrt(nd.area);
-            nd.width = clampd(p.widthMin + p.widthK * sq, p.widthMin, p.widthMax);
-            nd.depth = clampd(p.depthMin + p.depthK * sq, p.depthMin, p.depthMax);
+            if (r.authored) {
+                nd.width = r.width0 + (r.width1 - r.width0) * clampd(nd.area, 0.0, 1.0);
+                nd.depth = clampd(0.8 + 0.08 * nd.width, p.depthMin, p.depthMax);
+            } else {
+                const double sq = std::sqrt(nd.area);
+                nd.width = clampd(p.widthMin + p.widthK * sq, p.widthMin, p.widthMax);
+                nd.depth = clampd(p.depthMin + p.depthK * sq, p.depthMin, p.depthMax);
+            }
             // the lowest natural ground across the corridor (centre and just past each bank), less
             // the incision: the water can never stand above a bank, and the channel is a trench
             const Vec2 along = r.nodes[std::min(k + 1, r.nodes.size() - 1)].p - r.nodes[k > 0 ? k - 1 : 0].p;

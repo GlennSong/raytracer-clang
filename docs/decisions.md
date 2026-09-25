@@ -8104,3 +8104,69 @@ copied in, so rivers end at the sea.
 - bridges that meet the river square (the plan's grid crosses it at about 40°, so some decks are
   100 m long);
 - metro itself, and bridges' parapets and lighting.
+
+## ADR-0105 — Terrain first: an island world planned on the map before anything is built
+
+**Context.** Glenn, after the river-through-metro attempts: "we're trying to shoehorn a city design
+into a river valley … build the terrain first and then build the city around it … We should look at
+a map construction before we build anything in 3d." Then: "an island with a mountain range in the
+middle … two cities on either side of the mountains … small towns scattered throughout … connected
+by a large ring freeway … a peninsula … cliffs where you can drive up a windy mountain road." The
+size is 20 km.
+
+**Decision: the world is planned in stages, each judged on a 2D map.**
+1. **The terrain** (`TerrainParams::Island`, `islandLand`). The island's outline is an ellipse
+   broken by warped noise (bays, inlets), plus a peninsula lobe carrying its own shelf and a sector
+   of cliff coast. The ordinary relief layers (fbm, a range spine along the long axis with passes,
+   ridged mountains) rise only on land, and the shelf falls to −45 m beyond the coast. The
+   refactor is behaviour-preserving: `terrainBaseHeight` wraps the old body (`reliefHeight`).
+2. **Erosion shapes it** (1.5 M droplets on a 1,024² grid, about 10 s on the CPU). With
+   `erodeLandOnly`, the sea floor stays raw; droplets settling in the sea left speckled shoals.
+   **Rivers now run on the eroded ground whenever a terrain erodes** (`erodedForTerrain`, memoised
+   per block, with its rivers left out so it cannot recurse). Before this, a level's rivers ignored
+   its own valleys.
+3. **Buildable land:** above the beach, under 9%, and dry. A chamfer distance transform measures how
+   deep each cell is into flat ground.
+4. **Sites:**
+   - a city on each side of the range: the deepest flat ground, preferring lowlands, with a radius
+     of 1.6 × the depth, up to 2 km;
+   - towns on other deep ground at least 2.2 km clear of every other site;
+   - the mountain town on the highest decent flat.
+5. **Roads, routed over the ground** (`routeOnTerrain`):
+   - the ring freeway through every site but the mountain town, in order round the island (5%
+     design grade, 30% ceiling, turns under 25°, never over the sea);
+   - the pass between the two cities through the SADDLE, the lowest point along the middle of the
+     range's spine (7%);
+   - the winding road from the ring up to the mountain town (8%).
+6. **The map:**
+   - hypsometric tint, hillshade from the northwest, 100 m contours;
+   - buildable land warmed toward straw;
+   - rivers at their width;
+   - roads cased by kind, sites as footprint circles, a 5 km scale bar;
+   - plus a JSON report: land area, peak, rivers, sites, and each road's length, climb and
+     steepest grade.
+
+`city_plan island SEED OUT_DIR --variants N` writes `island_<seed>.png` and `.json` (with the terrain
+block a level will use). Each variant takes about 10 s.
+
+**Consequences.**
+- Variants 1–4 each have:
+  - 105–120 km² of land and a 745–865 m peak;
+  - 14–18 rivers;
+  - two cities and 5–7 towns;
+  - a 36–38 km ring freeway;
+  - passes over saddles of 126–203 m.
+- Before erosion, the pass wandered 10–21 km across ridge after ridge. Erosion's valleys are what
+  let it climb to the saddle.
+- Also landed (vocabulary kept from the river-city work, ADR-0104):
+  - authored river courses (`HydroParams::courses`, `rivers.auto`);
+  - the planner's river step (arterials bridge, a collector is promoted into any gap over
+    `maxBridgeGap`, other streets stop at riverside streets);
+  - bridges only where a street crosses at 40° or more;
+  - the scene pass judging wetness by the carriageway.
+- **Next:**
+  - Glenn picks a variant;
+  - then each site's city is planned INSIDE its buildable land (downtown grid, organic outskirts,
+    bridges where it spans a river);
+  - a ring road round each city, and local and intercity bus routes;
+  - then the 3D build.

@@ -13,6 +13,7 @@
 
 #include "engine/procgen/city/plan/city_plan.h"
 #include "engine/procgen/city/plan/plan_scene.h"
+#include "engine/procgen/world/island_world.h"
 
 #include <nlohmann/json.hpp>
 
@@ -33,6 +34,7 @@ static int usage() {
                  "       city_plan scene BRIEF.json OUT_SCENE.json [--no-ramps]\n"
                  "       city_plan brief\n"
                  "       city_plan level-world BRIEF.json      the level's terrain + water blocks that match the brief's world, and its towns' hubs\n"
+                 "       city_plan island SEED OUT_DIR [--variants N]   island worlds on the map: terrain, sites, ring freeway (ADR-0105)\n"
                  "       city_plan rivers BRIEF.json [STEP]         the rivers its world's hydrology makes, plan coordinates\n"
                  "       city_plan heights BRIEF.json [HALF STEP]   the brief's ground on a grid, plan coordinates (for placing mountain roads)\n");
     return 2;
@@ -48,6 +50,32 @@ int main(int argc, char** argv) {
     const std::string verb = argv[1];
     if (verb == "brief") {
         std::cout << briefToJson(Brief{}).dump(2) << "\n";
+        return 0;
+    }
+    if (verb == "island" && argc >= 4) {
+        // AN ISLAND WORLD ON THE MAP (ADR-0105): the terrain first, then where the cities and towns
+        // can go, then the ring freeway, the pass and the mountain road -- a PNG and a report per
+        // variant, before anything is built in 3D.
+        const uint32_t seed = static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10));
+        const std::string outDir = argv[3];
+        int variants = 1;
+        for (int k = 4; k + 1 < argc; ++k) if (std::string(argv[k]) == "--variants") variants = std::atoi(argv[k + 1]);
+        std::filesystem::create_directories(outDir);
+        for (int v = 0; v < variants; ++v) {
+            const uint32_t s = seed + static_cast<uint32_t>(v);
+            const nlohmann::json block = engine::islandTerrainBlock(s);
+            const engine::IslandWorld w = engine::planIsland(block);
+            const std::string base = outDir + "/island_" + std::to_string(s);
+            engine::writeIslandMap(w, base + ".png");
+            std::ofstream(base + ".json") << nlohmann::json{{"seed", s}, {"terrain", block}, {"report", w.report}}.dump(2) << "\n";
+            int cities = 0, towns = 0, unrouted = 0;
+            for (const auto& st : w.sites) (st.kind == "city" ? cities : towns)++;
+            for (const auto& rd : w.roads) if (rd.points.empty()) ++unrouted;
+            std::printf("island %u: %.0f km2 of land, peak %.0f m, %zu rivers, %d cities, %d towns, ring freeway %.1f km%s (%.1f s) -> %s.png\n",
+                        s, w.report["landKm2"].get<double>(), w.report["peak"]["height"].get<double>(), w.hydro ? w.hydro->rivers().size() : 0,
+                        cities, towns, w.report["ringFreewayKm"].get<double>(),
+                        unrouted ? (", " + std::to_string(unrouted) + " roads UNROUTED").c_str() : "", w.report["seconds"].get<double>(), base.c_str());
+        }
         return 0;
     }
     if (verb == "rivers" && argc >= 3) {

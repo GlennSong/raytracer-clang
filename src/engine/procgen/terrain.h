@@ -214,6 +214,27 @@ struct TerrainParams {
     // main divide -> lower spurs by branch depth). Empty = no branching range.
     std::vector<RidgeSegment> rangeRidges;
 
+    // AN ISLAND (ADR-0105): the land is an elongated island in the sea, and everything above --
+    // the fbm, the tilt, the mountains, the range -- rises only on it. Its outline is an ellipse
+    // (radius x aspect along `angleDeg`, radius across) broken by warped noise into bays and inlets,
+    // plus a PENINSULA (a lobe out along penDeg) and a stretch of CLIFF coast (a plateau cliffHeight
+    // up, dropping to the sea within a few tens of metres, between cliffFromDeg and cliffToDeg around
+    // the centre). Inland of the beach the ground rises to plainHeight; past the coast the shelf falls
+    // to -shelfDepth. `land` (see islandLand) is 0 at the coast, about 1 at the centre.
+    // Erosion reshapes LAND only: below the sea the raw relief stands (droplets settling in the sea
+    // left a speckled band of shoals round an island). Opt-in ("erodeLandOnly"); other levels' sea
+    // floors are as they were.
+    bool erodeLandOnly = false;
+    struct Island {
+        bool on = false;
+        double cx = 0.0, cz = 0.0;
+        double radius = 6500.0, aspect = 1.45, angleDeg = 20.0;
+        double coastNoise = 0.22, coastScale = 0.00032;
+        double penDeg = -1e9, penLength = 2600.0, penWidth = 900.0;   // penDeg < -1e8: none
+        double cliffFromDeg = 0.0, cliffToDeg = 0.0, cliffHeight = 0.0;
+        double plainHeight = 14.0, shelfDepth = 45.0;
+    } island;
+
     // Cut/fill footprints (ADR-0038): where a city road or block sits, the raw
     // noise is graded flat to a target surface so the ground doesn't poke through
     // the carriageway and the road sits on level earth. Applied last in
@@ -278,6 +299,9 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
 // field is baked, and bakeErodedTerrain erodes THIS into params.erodedBase.
 double terrainBaseHeight(const TerrainParams& params, const Noise& noise,
                          double worldX, double worldZ);
+// The island's land field at (x, z): 0 on the coast, positive inland (about 1 at the centre),
+// negative at sea. Meaningful only with params.island.on.
+double islandLand(const TerrainParams& params, const Noise& noise, double worldX, double worldZ);
 
 // Bake hydraulic + thermal EROSION of the analytic relief into params.erodedBase,
 // so the CDLOD terrain (and collider, and placement) get natural drainage detail
