@@ -262,9 +262,9 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
                 emitBox(kit, Scope{o, {t3, up, n3}, Vec3(1.0, 0.35, 1.0)},
                         PartId::Trim, stone * 0.9);
                 const Vec3 hedge(0.24 + rng.range(0, 0.05), 0.40, 0.20);
-                emitBox(kit, Scope{o + Vec3(0, 0.35, 0) + t3 * 0.1 + n3 * 0.1,
-                                   {t3, up, n3}, Vec3(0.8, 0.55, 0.8)},
-                        PartId::Foliage, hedge);
+                emitSoftBox(kit, Scope{o + Vec3(0, 0.35, 0) + t3 * 0.1 + n3 * 0.1,
+                                       {t3, up, n3}, Vec3(0.8, 0.55, 0.8)},
+                            PartId::Foliage, hedge, 0u);
             }
         }
         // FLOWER BEDS: a stone curb with a bright planted top, on the plaza
@@ -284,9 +284,9 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
             Vec3 o = Vec3(fp.x, by, fp.y) - t3 * 0.55 - n3 * 0.55;
             emitBox(kit, Scope{o, {t3, up, n3}, Vec3(1.1, 0.22, 1.1)},
                     PartId::Trim, stone * 0.92);
-            emitBox(kit, Scope{o + Vec3(0, 0.22, 0) + t3 * 0.12 + n3 * 0.12,
-                               {t3, up, n3}, Vec3(0.86, 0.14, 0.86)},
-                    PartId::Foliage, bloom[static_cast<int>(rng.unit() * 2.99)]);
+            emitSoftBox(kit, Scope{o + Vec3(0, 0.22, 0) + t3 * 0.12 + n3 * 0.12,
+                                   {t3, up, n3}, Vec3(0.86, 0.18, 0.86)},
+                        PartId::Foliage, bloom[static_cast<int>(rng.unit() * 2.99)], 0u);
         }
         // SHRUBS: loose clipped bushes scattered on the lawn, off everything.
         Real mnx = 1e30, mnz = 1e30, mxx = -1e30, mxz = -1e30;
@@ -307,9 +307,9 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
             Vec3 t3(std::cos(a2), 0, std::sin(a2)), n3(-t3.z, 0, t3.x);
             const Real sw = rng.range(0.7, 1.15), sh = rng.range(0.5, 0.85);
             const Vec3 bush(0.20 + rng.range(0, 0.06), 0.38 + rng.range(0, 0.06), 0.18);
-            emitBox(kit, Scope{Vec3(sp.x, by, sp.y) - t3 * (sw * 0.5) - n3 * (sw * 0.5),
-                               {t3, up, n3}, Vec3(sw, sh, sw)},
-                    PartId::Foliage, bush);
+            emitSoftBox(kit, Scope{Vec3(sp.x, by, sp.y) - t3 * (sw * 0.5) - n3 * (sw * 0.5),
+                                   {t3, up, n3}, Vec3(sw, sh, sw)},
+                        PartId::Foliage, bush, 0u);
         }
         // The FENCE: post-and-rail around the lot line, with OPENINGS where
         // the walking paths meet the street (and one gap on tiny greens with
@@ -653,10 +653,10 @@ void sculptYard(LotBuilding& b, const Poly2& lotPoly, const Poly2& house,
                 Vec3 t3(dir.x, 0, dir.y), n3(nrm.x, 0, nrm.y);
                 // Bedded 5 cm: ground-relative, so the base sits in the grass
                 // at every corner once draped.
-                emitBox(kit, Scope{Vec3(hc.x, -0.05, hc.y) - t3 * 0.9 -
-                                       n3 * 0.3,
-                                   {t3, up, n3}, Vec3(1.8, 0.70, 0.6)},
-                        PartId::Foliage, hedgeCol);
+                emitSoftBox(kit, Scope{Vec3(hc.x, -0.05, hc.y) - t3 * 0.9 -
+                                           n3 * 0.3,
+                                       {t3, up, n3}, Vec3(1.8, 0.70, 0.6)},
+                            PartId::Foliage, hedgeCol, 0u);
             }
         }
         appendKit(kit, outParts, /*draped=*/true);

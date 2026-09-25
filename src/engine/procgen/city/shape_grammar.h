@@ -480,6 +480,12 @@ RenderMesh latheMesh(const Vec3& center, const std::vector<Vec2>& profile,
 
 // Emit the six faces of a scope as a solid box under `part`.
 void emitBox(BuildingMesh& out, const Scope& s, PartId part, const Vec3& color);
+// A SOFT BOX of foliage (the flora plan): a clipped hedge, a bush, a planted bed. The scope's
+// box with rounded edges and a noise-lumped surface (~30 cm cells, five faces, no bottom),
+// normals leaning toward the box's own centre so it lights as one soft mass, colour dark at the
+// base and lighter on top. `color` is read as sRGB (the city's foliage colours were authored
+// that way) and made linear. ~100-250 triangles where emitBox makes 12. `seed` 0 = from its position.
+void emitSoftBox(BuildingMesh& out, const Scope& s, PartId part, const Vec3& color, uint32_t seed);
 // Emit only the four vertical walls of a scope (a hollow storey: floor+ceiling
 // optional) under `part` — the walkable-shell primitive (ADR-0038 §4).
 void emitShell(BuildingMesh& out, const Scope& s, PartId part, const Vec3& color,
