@@ -57,7 +57,7 @@ layout(set = 0, binding = 0) uniform Globals {
 } g;
 
 layout(push_constant) uniform Push {
-    mat4  model;
+    vec4  features[4];     // the material features (ADR-0098); the model is per instance
     vec4  albedoMetallic;
     vec4  emissionRough;
     uvec4 surfaceFlags;
@@ -70,6 +70,7 @@ layout(location = 1) out vec3 outWorldNormal;
 layout(location = 2) out vec2 outTexcoord;
 layout(location = 3) out vec3 outColor;
 layout(location = 4) out vec3 outWorldTangent;
+layout(location = 5) flat out vec3 outInstanceOrigin;   // per-instance variation (ADR-0098)
 
 void main() {
     vec4 world = inModel * vec4(inPosition, 1.0);
@@ -99,6 +100,7 @@ void main() {
     }
 
     outWorldPos = world.xyz;
+    outInstanceOrigin = inModel[3].xyz;
     // Inverse-transpose so non-uniform scale keeps normals perpendicular.
     mat3 normalMatrix = mat3(transpose(inverse(inModel)));
     outWorldNormal = normalize(normalMatrix * normal);

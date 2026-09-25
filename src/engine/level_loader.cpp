@@ -19,7 +19,8 @@
 #include "procgen/stylized_tree.h"
 #include "procgen/ground_cover.h"
 #include "procgen/ground_layers.h"
-#include "procgen/stylized_rock.h"   // "kind":"stylized_rock" (the rock library)   // terrain layer textures (TerrainLayers surface)   // the cover decides grass density and tree biomes   // "kind":"stylized" species (the flora plan)            // the grass field's clumps (GrassSystem)          // the earthwork displacement field
+#include "procgen/stylized_rock.h"
+#include "procgen/material_recipes.h"   // stone textures (the rock material)   // "kind":"stylized_rock" (the rock library)   // terrain layer textures (TerrainLayers surface)   // the cover decides grass density and tree biomes   // "kind":"stylized" species (the flora plan)            // the grass field's clumps (GrassSystem)          // the earthwork displacement field
 #include "mesh_builder.h"
 #include "asset_manager.h"
 #include "procgen/terrain.h"
@@ -1951,9 +1952,26 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                     LOG_WARN << "stylized_rock: unknown stone '" << s.value("stone", std::string()) << "'";
                 rp.size = s.value("size", rp.size);
                 rp.moss = s.value("moss", rp.moss);
+                // Its look is a MATERIAL (ADR-0098): a triplanar stone texture (material_recipes.h),
+                // per-instance variation, and moss as the top layer -- one texture set per stone.
                 RenderMaterial rockMat;
                 rockMat.albedo = Vec3(1, 1, 1);
                 rockMat.roughness = 1.0f; rockMat.metallic = 0.0f; rockMat.opacity = 1.0f;
+                {
+                    const StoneKind sk = rp.material == RockMaterial::Sandstone ? StoneKind::Sandstone
+                                       : rp.material == RockMaterial::Basalt    ? StoneKind::Basalt
+                                                                                : StoneKind::Granite;
+                    const StoneTextures stt = stoneTextures(sk, s.value("textureSeed", 1u));
+                    rockMat.albedoMap = renderer.uploadTexture(stt.albedo.width, stt.albedo.height, stt.albedo.channels, stt.albedo.pixels.data());
+                    rockMat.normalMap = renderer.uploadTexture(stt.normal.width, stt.normal.height, stt.normal.channels, stt.normal.pixels.data());
+                    rockMat.triplanarScale = static_cast<float>(s.value("textureScale", 1.8));
+                    rockMat.normalStrength = static_cast<float>(s.value("relief", 0.55));   // stylized: soft, not wet
+                    rockMat.variation = static_cast<float>(s.value("variation", 0.6));
+                    rockMat.topAmount = static_cast<float>(rp.moss >= 0 ? rp.moss : rockDefaultMoss(rp.material));
+                    rockMat.topThreshold = static_cast<float>(s.value("mossThreshold", 0.5));
+                    if (s.contains("topColor") && s["topColor"].is_array() && s["topColor"].size() == 3)
+                        rockMat.topColor = Vec3(s["topColor"][0].get<double>(), s["topColor"][1].get<double>(), s["topColor"][2].get<double>());
+                }
                 addPart(stylizedRock(seed, rp), rockMat);
                 var.bedFraction = rp.family == RockFamily::Pebbles ? 0.3 : 0.22;
                 var.tiltDeg = rp.family == RockFamily::Outcrop ? 6.0 : 14.0;

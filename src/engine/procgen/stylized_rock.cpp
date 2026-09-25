@@ -60,23 +60,24 @@ void stone(RenderMesh& m, const Vec3& at, const Vec3& scale, int subdiv, int cut
     MeshBuilder::deform(st, [&](const Vec3& q) { return at + Vec3(q.x * scale.x, (q.y + 0.35) * scale.y, q.z * scale.z); });
     const Vec3 c0 = at + Vec3(0, 0.5 * scale.y, 0);
     MeshBuilder::facet(st, c0);
+    (void)noise; (void)pal; (void)moss;
+    // The colour is the MATERIAL's (a triplanar stone texture) and its moss the material's top
+    // layer (ADR-0098); the mesh carries only light: a slight shade per facet, a darker foot.
     MeshBuilder::colorBy(st, [&](const Vertex& v) {
-        // one shade per facet: the facet's normal is shared by its three vertices, so hash it
         const uint32_t hf = static_cast<uint32_t>(std::llround(v.normal.x * 977.0) * 73856093LL ^ std::llround(v.normal.y * 977.0) * 19349663LL ^
                                                   std::llround(v.normal.z * 977.0) * 83492791LL);
-        const double shade = 0.85 + 0.3 * ((hf * 2654435761u) >> 8) / 16777215.0;
-        Vec3 col = pal.base * shade;
-        const double up = std::clamp((v.normal.y - 0.25) / 0.4, 0.0, 1.0) * moss;
-        const double mossNoise = 0.5 + 0.5 * noise.noise3(v.position.x * 1.3, v.position.y * 1.3, v.position.z * 1.3);
-        col = col + (Vec3(0.045, 0.10, 0.02) - col) * std::clamp(up * (0.7 + 0.9 * mossNoise), 0.0, 1.0);
+        const double shade = 0.94 + 0.12 * ((hf * 2654435761u) >> 8) / 16777215.0;
         const double foot = std::clamp((v.position.y - footY) / std::max(0.05, 0.25 * scale.y), 0.0, 1.0);
-        return pal.dark + (col - pal.dark) * (0.45 + 0.55 * foot);
+        return Vec3(1, 1, 1) * (shade * (0.55 + 0.45 * foot));
     });
-    MeshBuilder::leanNormals(st, c0, scale * 0.5, 0.25);
+    // smooth-ish shading over a low-poly silhouette: the facets still break the outline
+    MeshBuilder::leanNormals(st, c0, scale * 0.5, 0.55);
     MeshBuilder::append(m, st);
 }
 
 }  // namespace
+
+double rockDefaultMoss(RockMaterial m) { return paletteFor(m).moss; }
 
 RenderMesh stylizedRock(uint32_t seed, const StylizedRockParams& p) {
     RenderMesh m;

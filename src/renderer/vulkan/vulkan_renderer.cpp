@@ -206,7 +206,10 @@ struct CloudUniformsGPU {
 
 // Per-draw push constants for the forward pass (120 <= 128 B).
 struct MeshPush {
-    float    model[16];
+    // The model matrix moved to the instance buffer (ADR-0097); these 64 bytes carry the
+    // MATERIAL FEATURES (ADR-0098): [0] triplanarScale, variation, topAmount, topThreshold;
+    // [1] topColor rgb, topNoiseScale; [2] normalStrength, -, -, -; [3] reserved.
+    float    features[16];
     float    albedoMetallic[4];  // rgb albedo, a metallic
     float    emissionRough[4];   // rgb emission, a roughness
     uint32_t surfaceFlags[4];    // x surfaceId, y rawFlags, z textureFlags
@@ -319,6 +322,7 @@ struct DrawItem {
     MeshPush push;
     std::array<TextureHandle, 5> textures;   // albedo, MR, normal, AO, emissive
     float opacity = 1.0f;                     // < 1 → transparent pass (back-to-front)
+    float sortPos[3] = {0, 0, 0};             // where it stands, for the transparent sort
     bool  terrain = false;                    // → terrainPipeline (CDLOD morph in vert)
     // INSTANCED (ADR-0097): the model matrices are rows [firstInstance, +instanceCount) of the
     // frame's instance buffer, read by the vertex shader at instance rate. drawMesh is a
@@ -4873,7 +4877,7 @@ void VulkanRenderer::Impl::recordShadowPass(VkCommandBuffer cmd) {
                 if (item.push.surfaceFlags[1] & (RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS)) continue;
                 ShadowPush push;
                 std::memcpy(push.lightViewProj, cpuGlobals.cascadeVP[c], sizeof(push.lightViewProj));
-                std::memcpy(push.model, item.push.model, sizeof(push.model));
+                // (the shadow shader reads the model per instance; this slot is unused)
                 vkCmdPushConstants(cmd, shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
                                    0, sizeof(ShadowPush), &push);
                 const VkBuffer vbs[2] = {m->vertexBuffer, instanceBuffers[currentFrame]};
@@ -5060,8 +5064,8 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     const float cx = cpuGlobals.cameraPosition[0], cy = cpuGlobals.cameraPosition[1],
                 cz = cpuGlobals.cameraPosition[2];
     auto camDistSq = [&](const DrawItem* it) {
-        float dx = it->push.model[12] - cx, dy = it->push.model[13] - cy,
-              dz = it->push.model[14] - cz;
+        float dx = it->sortPos[0] - cx, dy = it->sortPos[1] - cy,
+              dz = it->sortPos[2] - cz;
         return dx * dx + dy * dy + dz * dz;
     };
     std::sort(transparent.begin(), transparent.end(),
@@ -6365,7 +6369,15 @@ void VulkanRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
                               const RenderMaterial& material) {
     DrawItem item;
     item.mesh = handle;
-    packMat4(transform, item.push.model, /*flipY=*/false);
+    item.sortPos[0] = static_cast<float>(transform.m[0][3]);
+    item.sortPos[1] = static_cast<float>(transform.m[1][3]);
+    item.sortPos[2] = static_cast<float>(transform.m[2][3]);
+    float* f = item.push.features;
+    f[0] = material.triplanarScale; f[1] = material.variation; f[2] = material.topAmount; f[3] = material.topThreshold;
+    f[4] = static_cast<float>(material.topColor.x); f[5] = static_cast<float>(material.topColor.y);
+    f[6] = static_cast<float>(material.topColor.z); f[7] = material.topNoiseScale;
+    f[8] = material.normalStrength; f[9] = f[10] = f[11] = 0.0f;
+    f[12] = f[13] = f[14] = f[15] = 0.0f;
     item.push.albedoMetallic[0] = static_cast<float>(material.albedo.x);
     item.push.albedoMetallic[1] = static_cast<float>(material.albedo.y);
     item.push.albedoMetallic[2] = static_cast<float>(material.albedo.z);
@@ -6437,7 +6449,7 @@ void VulkanRenderer::drawTerrain(MeshHandle handle, const RenderMaterial& materi
     }
     DrawItem item;
     item.mesh = handle;
-    packMat4(Mat4(), item.push.model, /*flipY=*/false);   // identity (verts are world-space)
+    for (float& x : item.push.features) x = 0.0f;   // terrain uses no material features
     item.push.albedoMetallic[0] = static_cast<float>(material.albedo.x);
     item.push.albedoMetallic[1] = static_cast<float>(material.albedo.y);
     item.push.albedoMetallic[2] = static_cast<float>(material.albedo.z);

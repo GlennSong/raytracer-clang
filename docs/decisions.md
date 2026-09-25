@@ -7669,8 +7669,19 @@ missing word, the word is added to the vocabulary, in C++ and in Lua, not privat
 
   A script composes with the same words the C++ recipes use; tests build a tileable stone texture
   and a moss-topped stone in Lua.
-- **Shader work** follows the same rule. Triplanar sampling, top-projected layers and per-instance
-  variation become material features any surface can switch on, not per-surface special cases.
+- **Shader work** follows the same rule, as MATERIAL FEATURES that any surface can switch on
+  (RenderMaterial fields, each off at 0; Vulkan, Metal owed). They are carried in the 64 bytes of
+  push constant the model matrix left for the instance buffer (ADR-0097):
+  - `triplanarScale`: albedo and normal maps sampled in world space on three axes, with no UVs
+    and no stretching. Feature albedo maps are sRGB.
+  - `variation`: brightness, hue and the texture offset, hashed from each instance's origin.
+  - `topAmount` / `topThreshold` / `topColor` / `topNoiseScale`: a layer on faces that look up
+    (moss, snow, dust), mottled by noise, settling first into the albedo map's low spots
+    (its alpha as a height).
+
+  The first user is the rock library: stone textures are recipes (`procgen/material_recipes.h`:
+  granite, sandstone, basalt), the mesh carries only light (a facet shade and a dark foot), and
+  the moss is the material's top layer.
 
 **Consequences.** Looks are unchanged except that variants come from the shared random stream
 (different, but equivalent, trees and rocks). A one-off is acceptable only when no general word

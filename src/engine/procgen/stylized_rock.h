@@ -7,7 +7,9 @@
 // where it meets the ground (with the bedding, the seam reads as contact, not a cut).
 //   boulder  a squat lumpy mass           slab     flat and broad, a cut top
 //   pebbles  a cluster of small stones     outcrop  tall and jagged, planar breaks
-// Materials: granite (cool grey), sandstone (warm), basalt (near black), mossy (granite, moss).
+// Materials: granite, sandstone, basalt, mossy (granite, heavily mossed). The mesh carries only
+// light (a per-facet shade, a dark foot); the stone's colour and moss are its MATERIAL's -- a
+// triplanar texture from material_recipes.h and the top-layer feature (ADR-0098).
 
 #include "../../renderer/renderer.h"   // RenderMesh
 
@@ -30,6 +32,8 @@ struct StylizedRockParams {
 
 // Origin at the base centre, +Y up; the stone rises from y = 0 (bed it in by ~a quarter).
 RenderMesh stylizedRock(uint32_t seed, const StylizedRockParams& p);
+// The stone's default moss (top-layer amount): mossy 0.9, others light.
+double rockDefaultMoss(RockMaterial m);
 
 }  // namespace engine
 

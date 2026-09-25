@@ -124,6 +124,20 @@ struct RenderMaterial {
     // in the shadow map is noise and cost). Vulkan; Metal draws it unfaded, with shadows.
     static constexpr uint32_t FLAG_GRASS = 1u << 17;
     float fadeStart = 0.0f, fadeEnd = 0.0f;   // FLAG_GRASS only
+    // MATERIAL FEATURES (ADR-0098): generic, any surface, each off at 0 (Vulkan; Metal owed).
+    // Triplanar: the albedo and normal maps are sampled in WORLD space, one tile per
+    // `triplanarScale` metres, on three axes blended by the normal -- no UVs needed, nothing
+    // stretches. Feature albedo maps are sRGB (gamma-encoded, the procedural bakes' convention).
+    float triplanarScale = 0.0f;
+    float normalStrength = 1.0f;
+    // Per-instance variation: brightness / hue and the triplanar offset hashed from each
+    // instance's position, so every copy of one mesh looks its own.
+    float variation = 0.0f;
+    // Top layer: `topColor` on faces whose normal looks up past `topThreshold` (its y), broken by
+    // noise at `topNoiseScale` metres and preferring the albedo map's LOW spots (its alpha as a
+    // height) -- moss, snow, dust, sand. `topAmount` 0 = off.
+    float topAmount = 0.0f, topThreshold = 0.55f, topNoiseScale = 1.5f;
+    Vec3 topColor{0.045, 0.10, 0.02};
 
     // World-space procedural surface library (applySurface in surfaces.metal /
     // scene.cpp): an analytic material — brick, concrete, roof tiles, asphalt,

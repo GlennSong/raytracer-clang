@@ -62,7 +62,7 @@ vec3 sampleEquirect(vec3 dir) {
 }
 
 layout(push_constant) uniform Push {
-    mat4  model;
+    vec4  features[4];     // the material features (ADR-0098); the model is per instance
     vec4  albedoMetallic;     // rgb albedo, a metallic
     vec4  emissionRough;      // rgb emission, a roughness
     uvec4 surfaceFlags;       // x surfaceId, y rawFlags, z textureFlags
@@ -82,6 +82,7 @@ layout(location = 1) in vec3 inWorldNormal;
 layout(location = 2) in vec2 inTexcoord;
 layout(location = 3) in vec3 inColor;
 layout(location = 4) in vec3 inWorldTangent;
+layout(location = 5) flat in vec3 inInstanceOrigin;   // per-instance variation (ADR-0098)
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outNormal;   // world normal *0.5+0.5 (SSAO G-buffer)
@@ -401,6 +402,25 @@ vec3 terrainLayers(vec3 cover, vec3 wp, vec3 n) {
     return c;
 }
 
+// ---- MATERIAL FEATURES (ADR-0098): generic, any surface, each off at 0 --------------------
+// pc.features[0] = (triplanarScale, variation, topAmount, topThreshold)
+// pc.features[1] = (topColor.rgb, topNoiseScale),  pc.features[2].x = normalStrength
+float featHash(vec3 p) {
+    p = fract(p * 0.1031);
+    p += dot(p, p.zyx + 31.32);
+    return fract((p.x + p.y) * p.z);
+}
+vec4 triplanarSample(sampler2D t, vec3 p, vec3 w) {
+    return texture(t, p.zy) * w.x + texture(t, p.xz) * w.y + texture(t, p.xy) * w.z;
+}
+// Triplanar normal mapping, whiteout-style: each projection's tangent normal applied in its plane.
+vec3 triplanarNormal(sampler2D t, vec3 p, vec3 n, vec3 w, float strength) {
+    vec2 tx = (texture(t, p.zy).xy * 2.0 - 1.0) * strength;
+    vec2 ty = (texture(t, p.xz).xy * 2.0 - 1.0) * strength;
+    vec2 tz = (texture(t, p.xy).xy * 2.0 - 1.0) * strength;
+    return normalize(n + vec3(0.0, tx.y, tx.x) * w.x + vec3(ty.x, 0.0, ty.y) * w.y + vec3(tz.x, tz.y, 0.0) * w.z);
+}
+
 vec3 applySurface(uint id, vec3 base, vec3 worldPos, vec3 n, vec2 meshUV, float time) {
     vec2 uv = surfUV(worldPos, n);
     vec3 c;
@@ -668,6 +688,36 @@ void main() {
         roughness = 0.95;
         texFlags = 0u;   // nothing below reads the slots as albedo / MR / normal / AO
     }
+    // MATERIAL FEATURES (ADR-0098): triplanar maps, per-instance variation (the top layer is
+    // applied after the normal, below).
+    const vec4 feat0 = pc.features[0], feat1 = pc.features[1], feat2 = pc.features[2];
+    const float instA = featHash(inInstanceOrigin + vec3(0.17, 0.0, 0.0));
+    const float instB = featHash(inInstanceOrigin * 1.37 + vec3(5.3));
+    float featHeight = 0.5;             // the albedo map's alpha (a height) where it has one
+    vec3 featN = vec3(0.0);
+    bool featNormal = false;
+    if (!layered && feat0.x > 0.0) {
+        vec3 n0 = normalize(inWorldNormal);
+        vec3 w = pow(abs(n0), vec3(4.0));
+        w /= (w.x + w.y + w.z);
+        // each instance samples its own patch of the texture
+        vec3 shift = feat0.y > 0.0 ? vec3(instA, instB, fract(instA * 7.13)) * 37.0 : vec3(0.0);
+        vec3 p = (inWorldPos + shift) / feat0.x;
+        if ((texFlags & 1u) != 0u) {
+            vec4 a = triplanarSample(albedoMap, p, w);
+            albedo *= pow(a.rgb, vec3(2.2));   // feature albedo maps are sRGB
+            featHeight = a.a;
+        }
+        if ((texFlags & 4u) != 0u) {
+            featN = triplanarNormal(normalMap, p, n0, w, feat2.x > 0.0 ? feat2.x : 1.0);
+            featNormal = true;
+        }
+        texFlags &= ~5u;   // albedo and normal handled here, not by mesh UV below
+    }
+    if (feat0.y > 0.0) {   // variation: brightness and a warm/cool shift per instance
+        vec3 warmCool = mix(vec3(1.06, 1.0, 0.93), vec3(0.94, 1.0, 1.07), instB);
+        albedo *= (1.0 + feat0.y * (instA - 0.5) * 0.7) * mix(vec3(1.0), warmCool, min(feat0.y, 1.0));
+    }
 
     // FLAG_INTERIOR_MAP (bit 16): a virtual room behind the pane. The pane's UV
     // (0..1 across, 0..1 up) is the room's front face; the view ray in the
@@ -742,6 +792,7 @@ void main() {
     if ((texFlags & 16u) != 0u) emission *= texture(emissiveMap, inTexcoord).rgb;
 
     vec3 N = normalize(inWorldNormal);
+    if (featNormal) N = featN;
     // FLAG_FRONT_ONLY (128): the back of this surface does not exist.
     if ((pc.surfaceFlags.y & 128u) != 0u && dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0) discard;
     // Normal map (bit 2): perturb N in tangent space. Gram-Schmidt the tangent
@@ -751,6 +802,20 @@ void main() {
         vec3 B = cross(N, T);
         vec3 tsN = texture(normalMap, inTexcoord).xyz * 2.0 - 1.0;
         N = normalize(T * tsN.x + B * tsN.y + N * tsN.z);
+    }
+
+    // TOP LAYER (material feature): moss / snow / dust on faces that look up, broken by noise and
+    // settling first into the albedo map's low spots.
+    if (feat0.z > 0.0) {
+        float scale = max(feat1.w, 0.05);
+        float nz = fbm2(inWorldPos.x / scale + inWorldPos.y * 0.13, inWorldPos.z / scale - inWorldPos.y * 0.11);
+        float up = N.y + (nz - 0.5) * 0.55 + (0.5 - featHeight) * 0.4;
+        float t = clamp(smoothstep(feat0.w - 0.2, feat0.w + 0.2, up) * feat0.z, 0.0, 1.0);
+        // mottled, not a flat cap: a fine clumpy breakup, lighter tufts and darker hollows
+        float fine = vnoise2(inWorldPos.x * 9.0 + inWorldPos.y * 3.1, inWorldPos.z * 9.0 - inWorldPos.y * 2.7);
+        t *= smoothstep(0.15, 0.55, fine + t * 0.6);
+        albedo = mix(albedo, feat1.rgb * (0.65 + 0.35 * nz + 0.45 * fine), t);
+        roughness = mix(roughness, 1.0, t);
     }
 
     uint rawFlags = pc.surfaceFlags.y;
