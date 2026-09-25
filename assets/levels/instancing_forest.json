@@ -78,40 +78,45 @@
    {
     "kind": "stylized",
     "shape": "round",
-    "variants": 4,
+    "variants": 6,
     "height": 7.5
    },
    {
     "kind": "stylized",
     "shape": "spreading",
-    "variants": 3,
+    "variants": 6,
     "height": 8.0
    },
    {
     "kind": "stylized",
     "shape": "columnar",
-    "variants": 2,
+    "variants": 6,
     "height": 10.0
    },
    {
     "kind": "stylized",
     "shape": "flowering",
-    "variants": 2,
+    "variants": 6,
     "height": 5.5
    },
    {
     "kind": "stylized",
     "shape": "pine",
-    "variants": 3,
+    "variants": 6,
     "height": 11.0
    },
    {
     "kind": "stylized",
     "shape": "palm",
-    "variants": 3,
+    "variants": 6,
     "height": 8.5
    }
-  ]
+  ],
+  "stretch": [
+   0.85,
+   1.2
+  ],
+  "maxTiltDeg": 4
  },
  "grass": {
   "seed": 7,

@@ -2085,6 +2085,12 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     // map's scatter as one huge always-visible group (device: 2 fps whenever
     // trees were on screen). Plants carry no SourceSpec (ADR-0022).
     const Real vegCell = veg.value("cullCell", 280.0);
+    double stretchLo = 1.0, stretchHi = 1.0;
+    if (veg.contains("stretch") && veg["stretch"].is_array() && veg["stretch"].size() == 2) {
+        stretchLo = veg["stretch"][0].get<double>();
+        stretchHi = veg["stretch"][1].get<double>();
+    }
+    const double maxTilt = veg.value("maxTiltDeg", 0.0) * 3.14159265358979 / 180.0;
     std::vector<std::vector<Mat4>> buckets =
         bucketPlacementsBySpecies(placements, variantList.size(), vegSeed + 7u);
     for (std::size_t si = 0; si < variantList.size(); ++si) {
@@ -2178,6 +2184,22 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                 const double s = 0.85 + 0.3 * unit(3);
                 for (int r = 0; r < 3; ++r)
                     for (int c = 0; c < 3; ++c) m.m[r][c] *= s;
+                // VARIETY (the flora plan): a height stretch of its own, so one variant stands
+                // tall and narrow or short and wide, and a slight lean in a random direction.
+                // Both off unless the block asks ("stretch": [lo, hi], "maxTiltDeg").
+                if (stretchHi > stretchLo || stretchLo != 1.0) {
+                    const double st = stretchLo + (stretchHi - stretchLo) * unit(21);
+                    for (int r = 0; r < 3; ++r) m.m[r][1] *= st;
+                }
+                if (maxTilt > 0.0) {
+                    const double dirA = unit(22) * 6.2831853, ang = maxTilt * unit(23);
+                    const Mat4 tilt = Mat4::trs(Vec3(0, 0, 0), Quat::fromAxisAngle(Vec3(std::cos(dirA), 0, std::sin(dirA)), ang),
+                                                Vec3(1, 1, 1));
+                    const Real tx = m.m[0][3], ty = m.m[1][3], tz = m.m[2][3];
+                    m.m[0][3] = m.m[1][3] = m.m[2][3] = 0;
+                    m = tilt * m;
+                    m.m[0][3] = tx; m.m[1][3] = ty; m.m[2][3] = tz;
+                }
                 m.m[1][3] -= 0.12;   // bed the root ball just below grade
                 // (was -0.35: tuned when placement sampled a DIFFERENT surface
                 // than the mesh — with the dilate-matched sample that much

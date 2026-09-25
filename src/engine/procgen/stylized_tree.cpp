@@ -144,8 +144,14 @@ StylizedTree broadleaf(uint32_t seed, const StylizedTreeParams& p, Rng& rng) {
         default:                       R = H * 0.36; Escale = Vec3(0.62, 0.50, 0.62); cy = H - R * 0.95; nClumps = 11; clumpR = 0.46; break;
     }
     if (p.crownRadius > 0) R = p.crownRadius;
+    // VARIETY per seed: an oval or squat or tall crown, more or fewer clumps, a crown sitting
+    // higher or lower and off-centre (lopsided), sometimes a forked twin trunk.
+    Escale = Vec3(Escale.x * rng.in(0.85, 1.2), Escale.y * rng.in(0.85, 1.2), Escale.z * rng.in(0.85, 1.2));
+    nClumps += static_cast<int>(std::floor(rng.in(-2.0, 4.0)));
     if (p.clumps > 0) nClumps = p.clumps;
-    const Vec3 C(rng.in(-0.1, 0.1) * R, cy, rng.in(-0.1, 0.1) * R);
+    cy *= rng.in(0.92, 1.06);
+    const bool twin = (p.shape == StylizedShape::Round || p.shape == StylizedShape::Spreading) && rng.next() < 0.3;
+    const Vec3 C(rng.in(-0.2, 0.2) * R, cy, rng.in(-0.2, 0.2) * R);
     const Vec3 E(R * Escale.x, R * Escale.y, R * Escale.z);
     Vec3 dark = p.leafDark, light = p.leafLight;
     const StylizedTreeParams defaults;
@@ -182,6 +188,13 @@ StylizedTree broadleaf(uint32_t seed, const StylizedTreeParams& p, Rng& rng) {
         cols.push_back(p.barkColor * (0.75 + 0.35 * s));
     }
     tube(t.bark, pts, rad, 6, cols);
+    if (twin) {   // a second stem forking low off the first, out to the crown's side
+        const double a = rng.in(0, 2 * kPi);
+        const Vec3 from = lerp3(pts[0], pts.back(), 0.28);
+        const Vec3 to = C + Vec3(std::cos(a) * E.x * 0.45, -E.y * 0.15, std::sin(a) * E.z * 0.45);
+        tube(t.bark, {from, lerp3(from, to, 0.5) + Vec3(0, 0.1 * R, 0), to}, {tr * 0.85, tr * 0.7, tr * 0.5}, 6,
+             {p.barkColor * 0.8, p.barkColor * 0.95, p.barkColor * 1.1});
+    }
     const double fork = C.y - E.y * 0.75;
     int limbs = 0;
     for (std::size_t i = clumps.size() / 2; i < clumps.size() - 1 && limbs < 4; ++i, ++limbs) {
@@ -198,8 +211,9 @@ StylizedTree pine(uint32_t seed, const StylizedTreeParams& p, Rng& rng) {
     StylizedTree t;
     (void)seed;
     const double H = p.height * rng.in(0.85, 1.2);
-    const double Rb = (p.crownRadius > 0 ? p.crownRadius : H * 0.25) * rng.in(0.9, 1.1);
-    const int tiers = p.clumps > 0 ? p.clumps : 6 + static_cast<int>(rng.next() * 2.0);
+    const double Rb = (p.crownRadius > 0 ? p.crownRadius : H * 0.25) * rng.in(0.8, 1.25);
+    const int tiers = p.clumps > 0 ? p.clumps : 5 + static_cast<int>(rng.next() * 5.0);   // 5-9
+    const double droop = rng.in(0.1, 0.35), start = rng.in(0.12, 0.3);
     Vec3 dark = p.leafDark * 0.8 * p.leafTint, light = p.leafLight * Vec3(0.75, 0.85, 1.1) * p.leafTint;   // cooler, bluer
     const double tr = std::max(0.08, H * 0.022);
     tube(t.bark, {Vec3(0, 0, 0), Vec3(0, H * 0.5, 0), Vec3(0, H * 0.95, 0)}, {tr * 1.3, tr, tr * 0.4}, 6,
@@ -208,7 +222,7 @@ StylizedTree pine(uint32_t seed, const StylizedTreeParams& p, Rng& rng) {
     for (int i = 0; i < tiers; ++i) {
         const double s = static_cast<double>(i) / std::max(1, tiers - 1);
         const double r = Rb * (1.0 - 0.78 * s) * rng.in(0.92, 1.08);
-        const double y0 = H * (0.18 + 0.66 * s);
+        const double y0 = H * (start + (0.84 - start) * s);
         const double apexY = std::min(H, y0 + r * 1.25 + H * 0.06);
         const Vec3 apex(0, apexY, 0), under(0, y0 + r * 0.22, 0);
         const double twist = rng.in(0, 2 * kPi);
@@ -216,7 +230,7 @@ StylizedTree pine(uint32_t seed, const StylizedTreeParams& p, Rng& rng) {
         for (int k = 0; k < ringN; ++k) {
             const double a = twist + 2 * kPi * k / ringN;
             const double rr = r * (k % 2 == 0 ? 1.0 : 0.72) * rng.in(0.92, 1.08);
-            rim[static_cast<std::size_t>(k)] = Vec3(rr * std::cos(a), y0 - (k % 2 == 0 ? 0.22 * r : 0.05 * r), rr * std::sin(a));
+            rim[static_cast<std::size_t>(k)] = Vec3(rr * std::cos(a), y0 - (k % 2 == 0 ? droop * r : 0.05 * r), rr * std::sin(a));
         }
         // the top surface: apex to the rim, normals out and up (a soft cone)
         const uint32_t ia = vert(t.canopy, apex, Vec3(0, 1, 0), lerp3(dark, light, 0.75));
@@ -243,7 +257,7 @@ StylizedTree palm(uint32_t seed, const StylizedTreeParams& p, Rng& rng) {
     StylizedTree t;
     (void)seed;
     const double H = p.height * rng.in(0.85, 1.2);
-    const double bend = rng.in(0.10, 0.24) * H, yaw = rng.in(0, 2 * kPi);
+    const double bend = rng.in(0.05, 0.3) * H, yaw = rng.in(0, 2 * kPi);
     const Vec3 bendDir(std::cos(yaw), 0, std::sin(yaw));
     std::vector<Vec3> pts, cols; std::vector<double> rad;
     const int segs = 12;
@@ -256,8 +270,8 @@ StylizedTree palm(uint32_t seed, const StylizedTreeParams& p, Rng& rng) {
     tube(t.bark, pts, rad, 6, cols);
     const Vec3 top = pts.back();
     const Vec3 dark = p.leafDark * Vec3(1.1, 1.0, 0.8) * p.leafTint, light = p.leafLight * Vec3(1.15, 1.05, 0.7) * p.leafTint;   // warmer
-    const int fronds = p.clumps > 0 ? p.clumps : 11;
-    const double L = H * rng.in(0.36, 0.44);
+    const int fronds = p.clumps > 0 ? p.clumps : 8 + static_cast<int>(rng.next() * 6.0);   // 8-13
+    const double L = H * rng.in(0.32, 0.48);
     for (int f = 0; f < fronds; ++f) {
         const double a = 2 * kPi * f / fronds + rng.in(-0.2, 0.2);
         const Vec3 out(std::cos(a), 0, std::sin(a)), side(-out.z, 0, out.x);
