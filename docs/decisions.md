@@ -7637,6 +7637,22 @@ Frames match. The remaining single draws on metro are unique meshes (building ch
 which need merging or indirect draws, not instancing. Next in the flora plan: a baked tree catalog
 with polygon-capped LODs.
 
+**Grass tiles are built off the render thread (2026-09-24).** `tools/walk_probe.py` walks the camera
+along a path at a set speed and lists the frames that hitch. On river_valley at 5 m/s:
+- **Before:** p99 34.9 ms and max 101 ms, with 455 frames over twice the 4.4 ms median. Every one
+  was `update`: GrassSystem building a tile on the render thread. A near tile is about 2,800 clumps,
+  each with six ground evaluations (height plus slope) and a density rule, 10–30 ms per tile. The
+  2 ms budget was checked only *between* tiles.
+- **After:** p99 7.1 ms, max 9.4 ms, one hitch (a render encode).
+
+What changed:
+- Tiles build on the job system (up to four at once), nearest first. The render thread commits
+  them under a 1 ms budget.
+- A tile changing ring keeps its old clumps until the new ones arrive.
+- Tiles are built one tile beyond the radius, so they are ready before they are due.
+- A tile samples the ground once on a 1 m grid and interpolates height and slope.
+  `GrassField::density` now takes (x, z, y, slopeCos) and must be pure: it runs on workers.
+
 ## ADR-0098 — The procedural vocabulary grows; content is recipes over it
 
 **Context.** The flora work (ADR-0097's grass, the stylized trees, the rock library, the terrain

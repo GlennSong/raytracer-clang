@@ -173,7 +173,10 @@ struct InstanceGroup {
 // map will supply it, and until then the loader's slope rule does.
 struct GrassField {
     std::function<double(double, double)> ground;    // the drawn ground height at (x, z)
-    std::function<double(double, double)> density;   // how much grass grows at (x, z): 0..1
+    // How much grass grows at (x, z), 0..1, given the ground's height y there and the cosine of its
+    // slope (the caller has both from its own ground samples: density must not re-sample the ground).
+    // Called from worker threads: it must be a pure function.
+    std::function<double(double x, double z, double y, double slopeCos)> density;
     std::vector<MeshHandle> clumps;                   // the clump variants
     RenderMaterial material;
     double spacing = 0.3;       // grid step inside nearRadius (m); 1.6x beyond

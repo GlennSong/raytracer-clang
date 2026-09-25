@@ -3966,19 +3966,14 @@ bool LevelLoader::load(const std::string& path,
                 const double thin = 8.0 * 3.14159265358979 / 180.0;
                 const double sea = root.contains("water") ? root["water"].value("seaLevel", -1e30) : -1e30;
                 const double patchiness = gj.value("patchiness", tp.cover ? 0.0 : 0.35), patchScale = gj.value("patchScale", 0.045);
-                const auto ground = gf.ground;
                 const Noise patches(gj.value("seed", 1u) + 911u);
                 const std::shared_ptr<const GroundCover> cover = tp.cover;
-                gf.density = [ground, maxSlope, thin, sea, patchiness, patchScale, patches, cover](double x, double z) {
-                    const double h = 0.6;
-                    const double y = ground(x, z);
+                gf.density = [maxSlope, thin, sea, patchiness, patchScale, patches, cover](double x, double z, double y, double slopeCos) {
                     if (y < sea + 0.15) return 0.0;
-                    const double gx = (ground(x + h, z) - ground(x - h, z)) / (2 * h);
-                    const double gz = (ground(x, z + h) - ground(x, z - h)) / (2 * h);
-                    const double slope = std::atan(std::sqrt(gx * gx + gz * gz));
+                    const double slope = std::acos(std::clamp(slopeCos, -1.0, 1.0));
                     // With a ground-cover map the cover decides (grass stops at sand, rock and
                     // bare earth, raggedly); without one, the slope rule.
-                    double d = cover ? cover->at(x, z, y, std::cos(slope)).grass
+                    double d = cover ? cover->at(x, z, y, slopeCos).grass
                                      : std::clamp((maxSlope - slope) / thin, 0.0, 1.0);
                     if (patchiness > 0.0) {
                         const double n = patches.fbm2(x * patchScale, z * patchScale, 3);   // about -1..1
