@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <map>
 #include <set>
@@ -810,25 +812,32 @@ void islandInterchanges(IslandWorld& w, const std::vector<Vec2>& cityStreets) {
         dop.rampHalf = 4.5 / 2 + 2.5;     // one 4.5 m lane, 2.5 m shoulders
         dop.gRamp = 0.09;
         dop.ground = ground;
-        // FIRST the pass and the mountain road -- the only way on from the hills -- THEN the cities'
-        // links, clear of those by the spacing
-        for (int phase = 0; phase < 2; ++phase) {
-            std::vector<roads::lanes::RampStreet> these;
-            for (const roads::lanes::RampStreet& st : streets)
-                if ((st.id.rfind("link", 0) == 0) == (phase == 1)) these.push_back(st);
-            dop.idPrefix = "d" + std::to_string(k) + (phase ? "l" : "r");
-            const roads::lanes::DiamondResult dr = roads::lanes::diamondRamps(route, these, dop);
-            std::map<std::string, std::vector<double>> at;   // each served street's gores, by station
-            std::map<std::string, IslandInterchange> byDiamond;   // "<prefix>_<n>" -> its ramps
+        // ONE ATTEMPT: the diamond generator over `these` streets (the candidate, and the roads already
+        // served, which a ramp must not pass over), keeping only the ramps that land on `want` (or all,
+        // when it is empty). Returns whether `want` got its diamond.
+        std::vector<std::pair<double, double>> laid;   // each diamond's crossing station, and its reach
+        int attemptNo = 0;
+        auto attempt = [&](const std::vector<roads::lanes::RampStreet>& these, const std::string& want, bool relaxed) {
+            roads::lanes::DiamondOptions o = dop;
+            o.idPrefix = "d" + std::to_string(k) + "_" + std::to_string(attemptNo++);
+            if (relaxed) {
+                o.spacing = 400.0;
+                o.keepOut.clear();
+                for (const auto& [c, r] : laid) o.keepOut.push_back({c - r, c + r});
+            }
+            const roads::lanes::DiamondResult dr = roads::lanes::diamondRamps(route, these, o);
+            std::map<std::string, IslandInterchange> byDiamond;    // "<prefix>_<n>" -> its ramps
+            bool got = false;
             for (const json& r : dr.ramps) {
+                const bool off = r["to"].is_string();
+                const std::string sid = off ? r["to"].get<std::string>() : r["from"].is_string() ? r["from"].get<std::string>() : "";
+                if (!want.empty() && sid != want) continue;
+                got = true;
                 std::vector<Vec2> pts;
                 for (const json& pt : r["path"]["points"]) pts.push_back(Vec2(pt[0].get<double>(), pt[1].get<double>()));
                 w.ramps.push_back(pts);
-                const bool off = r["to"].is_string();
-                const std::string sid = off ? r["to"].get<std::string>() : r["from"].is_string() ? r["from"].get<std::string>() : "";
                 const json& anchor = off ? r["from"] : r["to"];
                 served.insert(sid);
-                if (!pts.empty()) at[sid].push_back(stationOn(route, pts.front()));
                 // ids are <prefix>_<n>_<a|b>_<off|on>: the diamond is <prefix>_<n>
                 const std::string id = r.value("id", std::string());
                 const std::size_t cut = id.rfind('_', id.rfind('_') - 1);
@@ -848,23 +857,72 @@ void islandInterchanges(IslandWorld& w, const std::vector<Vec2>& cityStreets) {
                 double sum = 0;
                 for (const IslandInterchange::Ramp& rp : ic.ramps) sum += rp.gore;
                 ic.station = sum / static_cast<double>(std::max<std::size_t>(1, ic.ramps.size()));
-                // where the road crosses: its point nearest the route there
-                double best = 1e30;
-                for (const Vec2& q : w.roads[static_cast<std::size_t>(ic.road)].points) {
-                    const double d = std::fabs(stationOn(route, q) - ic.station) + 0.0;
-                    if (d < best) { best = d; ic.at = q; }
+                // where the road crosses: its point nearest the FREEWAY at that station (a point up a
+                // mountain road can project onto the same station from a kilometre away)
+                Vec2 onRoute = route.front();
+                {
+                    double acc = 0;
+                    for (std::size_t q = 0; q + 1 < route.size(); ++q) {
+                        const double L2 = (route[q + 1] - route[q]).length();
+                        if (acc + L2 >= ic.station) { onRoute = route[q] + (route[q + 1] - route[q]) * ((ic.station - acc) / std::max(1e-9, L2)); break; }
+                        acc += L2;
+                    }
                 }
+                double best = 1e30;
+                for (const Vec2& q : w.roads[static_cast<std::size_t>(ic.road)].points)
+                    if ((q - onRoute).length() < best) { best = (q - onRoute).length(); ic.at = q; }
                 w.interchanges.push_back(ic);
+                // what it takes of the freeway, PER DIAMOND (a road crossing twice -- the pass, one at each
+                // end -- is two interchanges; kept by street, their gores averaged to a "diamond" in the
+                // middle of the island whose reach blocked 20 km of it)
+                double lo = ic.station, hi = ic.station;
+                for (const IslandInterchange::Ramp& rp : ic.ramps) { lo = std::min(lo, rp.gore); hi = std::max(hi, rp.gore); }
+                dop.keepOut.push_back({ic.station - dop.spacing + 200.0, ic.station + dop.spacing - 200.0});
+                laid.push_back({ic.station, std::max(ic.station - lo, hi - ic.station) + 150.0});   // its gores' reach, and the lanes beyond
+                ++built;
             }
-            for (const auto& [sid, ss] : at) {
-                double c = 0;
-                for (double x : ss) c += x;
-                c /= static_cast<double>(ss.size());
-                dop.keepOut.push_back({c - dop.spacing + 200.0, c + dop.spacing - 200.0});
-            }
-            built += dr.built; candidates += dr.candidates; oblique += dr.rejectedOblique; spacing += dr.rejectedSpacing;
+            candidates += dr.candidates; oblique += dr.rejectedOblique; spacing += dr.rejectedSpacing;
             terminal += dr.rejectedTerminal; room += dr.rejectedRoom; conflict += dr.rejectedConflict;
+            return got;
+        };
+        auto servedStreets = [&] {
+            std::vector<roads::lanes::RampStreet> out;
+            for (const roads::lanes::RampStreet& st : streets) if (served.count(st.id)) out.push_back(st);
+            return out;
+        };
+        // FIRST the pass and the mountain road -- the only way on from the hills
+        {
+            std::vector<roads::lanes::RampStreet> country;
+            for (const roads::lanes::RampStreet& st : streets) if (st.id.rfind("link", 0) != 0) country.push_back(st);
+            if (!country.empty()) attempt(country, "", false);
         }
+        // THEN each place's links, one candidate at a time, best (shortest) first, until it has its
+        // share (a city three, a town one) -- all of them together blocked each other's ramps
+        std::vector<int> order;
+        for (std::size_t si = 0; si < w.sites.size(); ++si) order.push_back(static_cast<int>(si));
+        std::stable_sort(order.begin(), order.end(), [&](int a2, int b2) { return (w.sites[static_cast<std::size_t>(a2)].kind == "city") > (w.sites[static_cast<std::size_t>(b2)].kind == "city"); });
+        auto candidatesOf = [&](int site) {
+            std::vector<std::pair<double, std::string>> c;
+            for (const roads::lanes::RampStreet& st : streets) {
+                if (st.id.rfind("link", 0) != 0) continue;
+                const IslandRoad& rd = w.roads[static_cast<std::size_t>(std::atoi(st.id.substr(4).c_str()))];
+                if (rd.from == site) c.push_back({rd.length, st.id});
+            }
+            std::sort(c.begin(), c.end());
+            return c;
+        };
+        std::map<int, int> got;
+        for (int relaxedPass = 0; relaxedPass < 2; ++relaxedPass)
+            for (int site : order) {
+                const int want = w.sites[static_cast<std::size_t>(site)].kind == "city" ? 3 : 1;
+                if (relaxedPass && got[site] > 0) continue;   // LAST: only places still cut off, spacing relaxed
+                for (const auto& [len, sid] : candidatesOf(site)) {
+                    if (got[site] >= (relaxedPass ? 1 : want) || served.count(sid)) continue;
+                    std::vector<roads::lanes::RampStreet> these = servedStreets();
+                    for (const roads::lanes::RampStreet& st : streets) if (st.id == sid) these.push_back(st);
+                    if (attempt(these, sid, relaxedPass == 1)) ++got[site];
+                }
+            }
     }
     // THE ROUTE the interchanges are numbered along, and which way round it runs
     if (routes.size() == 1) {
@@ -906,6 +964,146 @@ void islandInterchanges(IslandWorld& w, const std::vector<Vec2>& cityStreets) {
     w.report["linksDropped"] = dropped;
     w.report["interchanges"] = {{"built", built}, {"crossings", candidates}, {"ramps", w.ramps.size()},
                                 {"refused", {{"oblique", oblique}, {"spacing", spacing}, {"noTerminal", terminal}, {"noRoom", room}, {"overAStreet", conflict}}}};
+}
+
+void planIntercityBuses(IslandWorld& w, const std::function<std::vector<Vec2>(int, const Vec2&, const Vec2&)>& streets) {
+    const std::vector<Vec2>& R = w.freewayRoute;
+    if (R.size() < 3 || w.centres.size() != w.sites.size()) return;
+    std::vector<double> st{0.0};
+    for (std::size_t k = 1; k < R.size(); ++k) st.push_back(st.back() + (R[k] - R[k - 1]).length());
+    const double L = st.back();
+    auto wrap = [&](double s) { return std::fmod(std::fmod(s, L) + L, L); };
+    // the freeway between two stations, the shorter way round (or forward, when told)
+    auto freeway = [&](double s0, double s1, int forceDir) {
+        const double fwd = wrap(s1 - s0);
+        const int dir = forceDir ? forceDir : (fwd <= L - fwd ? +1 : -1);
+        const double len = dir > 0 ? fwd : L - fwd;
+        std::vector<Vec2> out;
+        for (double d = 0; d <= len; d += 40.0) {
+            const double s = wrap(s0 + dir * d);
+            const std::size_t k = std::min<std::size_t>(R.size() - 1, std::max<std::size_t>(1, static_cast<std::size_t>(std::upper_bound(st.begin(), st.end(), s) - st.begin())));
+            const double t = (s - st[k - 1]) / std::max(1e-9, st[k] - st[k - 1]);
+            out.push_back(R[k - 1] + (R[k] - R[k - 1]) * t);
+        }
+        return out;
+    };
+    auto append = [](std::vector<Vec2>& a, const std::vector<Vec2>& b) { a.insert(a.end(), b.begin(), b.end()); };
+    auto reversed = [](std::vector<Vec2> v) { std::reverse(v.begin(), v.end()); return v; };
+    // a road from the point on it nearest `from` to its end nearest `to`
+    auto roadPart = [](const std::vector<Vec2>& P, const Vec2& from, const Vec2& toward) {
+        std::size_t i = 0;
+        double bd = 1e30;
+        for (std::size_t k = 0; k < P.size(); ++k) if ((P[k] - from).length() < bd) { bd = (P[k] - from).length(); i = k; }
+        std::vector<Vec2> out;
+        if ((P.front() - toward).length() < (P.back() - toward).length()) for (std::size_t k = i + 1; k-- > 0;) out.push_back(P[k]);
+        else for (std::size_t k = i; k < P.size(); ++k) out.push_back(P[k]);
+        return out;
+    };
+    // each place's way onto the freeway: its link interchange nearest its centre
+    std::vector<int> access(w.sites.size(), -1);
+    for (std::size_t k = 0; k < w.interchanges.size(); ++k) {
+        const IslandInterchange& ic = w.interchanges[k];
+        if (ic.site < 0 || w.roads[static_cast<std::size_t>(ic.road)].kind != "link") continue;
+        const std::size_t si = static_cast<std::size_t>(ic.site);
+        if (access[si] < 0 || (ic.at - w.centres[si]).length() < (w.interchanges[static_cast<std::size_t>(access[si])].at - w.centres[si]).length())
+            access[si] = static_cast<int>(k);
+    }
+    // centre -> the freeway, and back: its streets, then its link road
+    auto toFreeway = [&](int site) {
+        const IslandInterchange& ic = w.interchanges[static_cast<std::size_t>(access[static_cast<std::size_t>(site)])];
+        const std::vector<Vec2> link = roadPart(w.roads[static_cast<std::size_t>(ic.road)].points, ic.at, w.centres[static_cast<std::size_t>(site)]);   // freeway -> town
+        std::vector<Vec2> p = streets(site, w.centres[static_cast<std::size_t>(site)], link.empty() ? ic.at : link.back());
+        append(p, reversed(link));
+        return p;
+    };
+    auto label = [&](int site) { return w.sites[static_cast<std::size_t>(site)].name; };
+    w.busLines.erase(std::remove_if(w.busLines.begin(), w.busLines.end(), [](const IslandBusLine& b) { return b.kind == "intercity"; }), w.busLines.end());
+    // X1 THE ISLAND RING: every place with a way onto the freeway, in order round it
+    {
+        std::vector<int> order;
+        for (std::size_t si = 0; si < w.sites.size(); ++si) if (access[si] >= 0) order.push_back(static_cast<int>(si));
+        std::sort(order.begin(), order.end(), [&](int a, int b) {
+            return w.interchanges[static_cast<std::size_t>(access[static_cast<std::size_t>(a)])].station < w.interchanges[static_cast<std::size_t>(access[static_cast<std::size_t>(b)])].station;
+        });
+        if (order.size() >= 2) {
+            IslandBusLine line;
+            line.name = "X1 Island Ring";
+            line.kind = "intercity";
+            for (std::size_t k = 0; k < order.size(); ++k) {
+                const int a = order[k], b = order[(k + 1) % order.size()];
+                const std::vector<Vec2> out = toFreeway(a);
+                append(line.path, reversed(out));   // in from the freeway to the centre...
+                line.stops.push_back(w.centres[static_cast<std::size_t>(a)]);
+                line.stopNames.push_back(label(a));
+                append(line.path, out);             // ...and back out
+                append(line.path, freeway(w.interchanges[static_cast<std::size_t>(access[static_cast<std::size_t>(a)])].station,
+                                          w.interchanges[static_cast<std::size_t>(access[static_cast<std::size_t>(b)])].station, +1));
+            }
+            w.busLines.push_back(line);
+        }
+    }
+    // the place at a road's end: the site whose limits (or centre) is nearest, within 1.5 km
+    auto placeAt = [&](const Vec2& p) {
+        int best = -1;
+        double bd = 1500.0;
+        for (std::size_t si = 0; si < w.sites.size(); ++si) {
+            double d = (w.sites[si].at - p).length();
+            for (const auto& loop : w.sites[si].limits) for (const Vec2& q : loop) d = std::min(d, (q - p).length());
+            if (d < bd) { bd = d; best = static_cast<int>(si); }
+        }
+        return best;
+    };
+    for (const IslandRoad& rd : w.roads) {
+        if (rd.points.size() < 2) continue;
+        // X2 OVER THE PASS: a centre each end, Route 2 between, a stop at the summit
+        if (rd.kind == "pass") {
+            const int a = placeAt(rd.points.front()), b = placeAt(rd.points.back());
+            if (a < 0 || b < 0 || a == b) continue;
+            IslandBusLine line;
+            line.name = "X2 Over the Pass: " + label(a) + " \u2013 " + label(b);
+            line.kind = "intercity";
+            line.path = streets(a, w.centres[static_cast<std::size_t>(a)], rd.points.front());
+            append(line.path, rd.points);
+            append(line.path, streets(b, rd.points.back(), w.centres[static_cast<std::size_t>(b)]));
+            // the summit: the pass's highest point
+            Vec2 top = rd.points.front();
+            for (const Vec2& q : rd.points) if (w.heightAt(q.x, q.y) > w.heightAt(top.x, top.y)) top = q;
+            line.stops = {w.centres[static_cast<std::size_t>(a)], top, w.centres[static_cast<std::size_t>(b)]};
+            line.stopNames = {label(a), "Pass Summit", label(b)};
+            w.busLines.push_back(line);
+        }
+        // X3 THE MOUNTAIN SHUTTLE: from the place whose way onto the freeway is nearest the road's foot,
+        // along the freeway, up Route 3
+        if (rd.kind == "mountain" && rd.to >= 0) {
+            const Vec2 top = w.centres[static_cast<std::size_t>(rd.to)];
+            const std::vector<Vec2> up = (rd.points.front() - top).length() > (rd.points.back() - top).length() ? rd.points : reversed(rd.points);
+            // its interchange: the one on this road
+            int icM = -1;
+            for (std::size_t k = 0; k < w.interchanges.size(); ++k)
+                if (&w.roads[static_cast<std::size_t>(w.interchanges[k].road)] == &rd) icM = static_cast<int>(k);
+            if (icM < 0) continue;
+            int from = -1;
+            double bd = 1e30;
+            for (std::size_t si = 0; si < w.sites.size(); ++si) {
+                if (access[si] < 0) continue;
+                const double s0 = w.interchanges[static_cast<std::size_t>(access[si])].station, s1 = w.interchanges[static_cast<std::size_t>(icM)].station;
+                const double d = std::min(wrap(s1 - s0), L - wrap(s1 - s0));
+                if (d < bd) { bd = d; from = static_cast<int>(si); }
+            }
+            if (from < 0) continue;
+            IslandBusLine line;
+            line.name = "X3 Mountain Shuttle: " + label(from) + " \u2013 " + label(rd.to);
+            line.kind = "intercity";
+            line.path = toFreeway(from);
+            append(line.path, freeway(w.interchanges[static_cast<std::size_t>(access[static_cast<std::size_t>(from)])].station, w.interchanges[static_cast<std::size_t>(icM)].station, 0));
+            append(line.path, roadPart(up, w.interchanges[static_cast<std::size_t>(icM)].at, top));
+            if (std::getenv("RT_BUS_WHY")) std::printf("[bus] shuttle: road %zu pts, from ic (%.0f, %.0f), up front (%.0f,%.0f) back (%.0f,%.0f), top (%.0f,%.0f)\n", up.size(),
+                w.interchanges[static_cast<std::size_t>(icM)].at.x, w.interchanges[static_cast<std::size_t>(icM)].at.y, up.front().x, up.front().y, up.back().x, up.back().y, top.x, top.y);
+            line.stops = {w.centres[static_cast<std::size_t>(from)], top};
+            line.stopNames = {label(from), label(rd.to)};
+            w.busLines.push_back(line);
+        }
+    }
 }
 
 bool writeIslandMap(const IslandWorld& w, const std::string& pngPath, int px, const IslandMapView& view) {
@@ -1175,6 +1373,25 @@ bool writeIslandSvg(const IslandWorld& w, const std::string& svgPath, const Isla
     o << "</g>\n<g id=\"ramps\">\n";
     lines(w.ramps, "stroke=\"#1f1a14\" stroke-width=\"12\"");
     lines(w.ramps, "stroke=\"#fbb54d\" stroke-width=\"9.5\"");
+    o << "</g>\n";
+    // BUS LINES: local loops thin, intercity lines bold and dashed; stops as white dots
+    o << "<g id=\"buses\">\n";
+    {
+        const char* localCols[] = {"#e6194b", "#3cb44b", "#4363d8", "#911eb4", "#f58231", "#42d4f4", "#f032e6", "#9a6324"};
+        const char* interCols[] = {"#d4004f", "#1a1aff", "#7a00b3"};
+        int nl = 0, ni = 0;
+        for (const IslandBusLine& b : w.busLines) {
+            const bool inter = b.kind == "intercity";
+            const std::string col = inter ? interCols[ni++ % 3] : localCols[nl++ % 8];
+            o << "<g><title>" << b.name << "</title>";
+            lines({b.path}, inter ? "class=\"hair\" stroke=\"" + col + "\" stroke-width=\"3.2\" stroke-dasharray=\"14 6\" opacity=\"0.9\""
+                                  : "stroke=\"" + col + "\" stroke-width=\"6\" opacity=\"0.85\"");
+            for (std::size_t k = 0; k < b.stops.size(); ++k)
+                o << "<circle cx=\"" << b.stops[k].x << "\" cy=\"" << -b.stops[k].y << "\" r=\"" << (inter ? 28 : 12) << "\" fill=\"#fff\" stroke=\"" << col
+                  << "\" stroke-width=\"" << (inter ? 8 : 5) << "\"><title>" << b.name << ": " << (k < b.stopNames.size() ? b.stopNames[k] : std::string()) << "</title></circle>";
+            o << "</g>\n";
+        }
+    }
     o << "</g>\n";
     // SIGNS: a marker where each stands, pointing the way its traffic reads it; its legend on hover
     o << "<g id=\"signs\">\n";

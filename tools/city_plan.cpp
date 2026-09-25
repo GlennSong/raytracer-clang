@@ -15,7 +15,11 @@
 #include "engine/procgen/city/plan/plan_scene.h"
 #include "engine/procgen/world/island_world.h"
 #include "engine/procgen/world/road_signs.h"
+#include "engine/procgen/world/road_sign_build.h"
 #include "engine/procgen/city/street_names.h"
+#include "engine/ai/nav_graph.h"
+#include "engine/ai/pathfind.h"
+#include "apps/citysim/city_bus.h"
 
 #include <nlohmann/json.hpp>
 
@@ -98,6 +102,8 @@ int main(int argc, char** argv) {
         std::vector<std::pair<int, std::vector<std::vector<engine::Vec2>>>> cityLimits;
         std::vector<std::pair<int, std::vector<engine::Vec2>>> arterialNodes;
         std::map<int, std::vector<std::string>> arterialNames;
+        std::vector<engine::NavGraph> navs(w.sites.size());   // each place's streets, for its buses
+        w.centres.assign(w.sites.size(), engine::Vec2(0, 0));
         engine::IslandMapLayer locals, collectors, arterials, freeways;
         locals.name = "streets-local"; collectors.name = "streets-collector"; arterials.name = "streets-arterial"; freeways.name = "city-freeways";
         locals.rgb[0] = 0.96f; locals.rgb[1] = 0.95f; locals.rgb[2] = 0.92f; locals.widthM = 12;
@@ -151,6 +157,15 @@ int main(int argc, char** argv) {
                     for (int nd : {e.a, e.b}) { art.push_back(plan.streets.nodes[static_cast<std::size_t>(nd)].pos); names.push_back(nm); }
                 }
                 arterialNodes.push_back({static_cast<int>(k), art});
+                // its streets as a nav graph, and its CENTRE: the node nearest the middle of its core blocks
+                navs[k] = engine::buildNavGraph(plan.streets);
+                engine::Vec2 mid(0, 0);
+                double n = 0;
+                for (const auto& blk : plan.blocks)
+                    if (blk.district == 0 && !blk.buildable.empty()) { for (const auto& q : blk.buildable) mid = mid + q; n += static_cast<double>(blk.buildable.size()); }
+                mid = n > 0 ? mid * (1.0 / n) : b.center;
+                const int cn = navs[k].nodes.empty() ? -1 : navs[k].nearestNode(mid);
+                w.centres[k] = cn >= 0 ? navs[k].nodes[static_cast<std::size_t>(cn)] : b.center;
                 arterialNames[static_cast<int>(k)] = names;
             }
             sites.push_back({b.name, b.center, b.size * 0.5 + 250.0});
@@ -165,18 +180,63 @@ int main(int argc, char** argv) {
             for (const auto& [k, art] : arterialNodes) {
                 const bool city = w.sites[static_cast<std::size_t>(k)].kind == "city";
                 if (w.sites[static_cast<std::size_t>(k)].kind == "mountain town") continue;   // its road is the mountain road
-                engine::linkCityToFreeway(w, k, art, city ? 4 : 2, city ? 1000.0 : 700.0, 700.0, arterialNames[k]);
+                // candidates, more than will be kept: the diamond passes keep the ones that fit and drop the rest
+                engine::linkCityToFreeway(w, k, art, city ? 6 : 4, city ? 700.0 : 300.0, 900.0, arterialNames[k]);
             }
             std::vector<engine::Vec2> allArterial;
             for (const auto& [k, art] : arterialNodes) allArterial.insert(allArterial.end(), art.begin(), art.end());
             engine::islandInterchanges(w, allArterial);
+            // BUSES: local loops in each place (the city sim's own network builder), then the intercity lines
+            for (std::size_t k = 0; k < w.sites.size(); ++k) {
+                if (navs[k].nodes.empty() || w.sites[k].kind == "mountain town") continue;
+                const bool city = w.sites[k].kind == "city";
+                citysim::BusNetwork bn;
+                bn.build(navs[k], city ? 4 : 1, city ? 14 : 8, 1000u + static_cast<uint32_t>(k));
+                for (int r = 0; r < bn.routeCount(); ++r) {
+                    const citysim::BusRoute& br = bn.route(r);
+                    if (!br.valid() || br.regional) continue;
+                    engine::IslandBusLine line;
+                    line.name = w.sites[k].name + " " + std::to_string(r + 1);
+                    line.kind = "local";
+                    line.site = static_cast<int>(k);
+                    line.path = br.path;
+                    for (const citysim::BusStop& stop : br.stops) { line.stops.push_back(stop.pos); line.stopNames.push_back(""); }
+                    w.busLines.push_back(line);
+                }
+            }
+            engine::planIntercityBuses(w, [&](int site, const engine::Vec2& from, const engine::Vec2& to) {
+                const engine::NavGraph& nav = navs[static_cast<std::size_t>(site)];
+                if (nav.nodes.empty()) return std::vector<engine::Vec2>{from, to};
+                const engine::Route r = engine::findRouteBetween(nav, from, to);
+                std::vector<engine::Vec2> p = engine::routePolyline(nav, r, 10.0);
+                if (p.empty()) p = {from, to};
+                return p;
+            });
+            {
+                int local = 0;
+                std::printf("buses:");
+                for (const auto& bl : w.busLines) { if (bl.kind == "local") ++local; else std::printf(" [%s: %zu stops]", bl.name.c_str(), bl.stops.size()); }
+                std::printf(" + %d local lines\n", local);
+            }
             engine::planIslandSigns(w);
             engine::writeSignSheetSvg(w, outDir + "/signs.svg");
+            std::ofstream(outDir + "/signs.json") << nlohmann::json{{"signs", engine::roadSignsToJson(w.signs)}}.dump(1) << "\n";   // for shape:"road_signs"
             std::map<std::string, int> kinds;
             for (const auto& sg : w.signs) ++kinds[sg.kind];
             std::printf("signs: %zu (", w.signs.size());
             for (const auto& [kd, n] : kinds) std::printf(" %s %d", kd.c_str(), n);
             std::printf(" ) -> %s/signs.svg\n", outDir.c_str());
+            {
+                // every place's ways onto the freeway (a place with none is cut off from the island)
+                std::printf("interchanges by place:");
+                for (std::size_t k = 0; k < w.sites.size(); ++k) {
+                    int n = 0, links = 0;
+                    for (const auto& icx : w.interchanges) if (icx.site == static_cast<int>(k)) ++n;
+                    for (const auto& rd : w.roads) if (rd.kind == "link" && rd.from == static_cast<int>(k) && !rd.points.empty()) ++links;
+                    std::printf(" %s %d(%d links)", w.sites[k].name.c_str(), n, links);
+                }
+                std::printf("\n");
+            }
             const auto& ic = w.report["interchanges"];
             std::printf("interchanges: %d diamonds at %d crossings (%zu ramps); refused: %s\n", ic["built"].get<int>(), ic["crossings"].get<int>(),
                         w.ramps.size(), ic["refused"].dump().c_str());

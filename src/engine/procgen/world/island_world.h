@@ -25,6 +25,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -60,6 +61,17 @@ struct IslandInterchange {
     std::vector<Ramp> ramps;
 };
 
+// A BUS LINE (Glenn: "bus routes in local regions. Maybe a bus to go between towns?"): a local loop
+// in one place, or an intercity line between places' centres over the island's roads.
+struct IslandBusLine {
+    std::string name;          // "Saltwood 2", "X1 Island Ring"
+    std::string kind;          // "local", "intercity"
+    int site = -1;             // a local line's place
+    std::vector<Vec2> path;    // as driven
+    std::vector<Vec2> stops;
+    std::vector<std::string> stopNames;
+};
+
 // A SIGN (road_signs.h): where it stands, which way the traffic reading it travels, and what it says.
 struct IslandSign {
     std::string kind;          // advance, exit, gore, distance, route, entrance, do-not-enter, wrong-way, limit, trailblazer
@@ -92,6 +104,8 @@ struct IslandWorld {
     bool routeClockwise = false;            // increasing station runs clockwise (seen on the map, north up)
     std::vector<IslandInterchange> interchanges;   // in station order
     std::vector<IslandSign> signs;
+    std::vector<IslandBusLine> busLines;
+    std::vector<Vec2> centres;              // per site: its centre stop (the transit centre), set by the caller
     nlohmann::json report;
     double heightAt(double x, double z) const;   // bilinear
 };
@@ -136,6 +150,13 @@ void linkCityToFreeway(IslandWorld& w, int site, const std::vector<Vec2>& arteri
 // forced. Fills w.ramps and w.report["interchanges"].
 // `cityStreets`: the cities' arterial junctions, for a crossing road to carry on into.
 void islandInterchanges(IslandWorld& w, const std::vector<Vec2>& cityStreets = {});
+
+// INTERCITY BUSES over the island's roads, between the places' centres (w.centres): the RING line
+// calls at every place round the freeway (in and out of each on its link road and streets); the PASS
+// line runs city to city over the range by Route 2; a SHUTTLE climbs Route 3 to the mountain town from
+// the place nearest its foot. `streets(site, from, to)` is a street path inside a place (the caller
+// has its graph); the freeway, the links, the pass and the mountain road are the island's.
+void planIntercityBuses(IslandWorld& w, const std::function<std::vector<Vec2>(int site, const Vec2& from, const Vec2& to)>& streets);
 
 // The map: shaded relief and water, buildable land tinted, sites and roads drawn. `px` a side.
 // A view may zoom to a window (centre, half-width; 0 = the whole island) and lay extra lines over

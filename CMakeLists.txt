@@ -118,6 +118,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/plan/land_shape.cpp
     src/engine/procgen/world/place_names.cpp
     src/engine/procgen/world/road_signs.cpp
+    src/engine/procgen/world/road_sign_build.cpp
     src/engine/procgen/city/site_plan.cpp
     src/engine/procgen/city/core_plan.cpp
     src/engine/procgen/city/room_plan.cpp
@@ -427,7 +428,7 @@ option(RT_BUILD_ROADS_LANES "Build the lanes road builder (needs the Clipper2 an
 add_executable(city_plan tools/city_plan.cpp)
 target_include_directories(city_plan PRIVATE src)
 target_compile_options(city_plan PRIVATE -Wall -Wextra)
-target_link_libraries(city_plan PRIVATE engine_core)
+target_link_libraries(city_plan PRIVATE engine_core citysim)   # citysim: the bus network (local routes on the island's map)
 
 if(RT_BUILD_ROADS_LANES)
     foreach(dep IN ITEMS Clipper2 CDT)

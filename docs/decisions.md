@@ -8375,3 +8375,126 @@ stop bar).
   - protected turns: traffic signals have no turn-arrow phase (the next step of this work: a
     protected-left phase, arrow signal heads, the sim obeying them, and the paint to match);
   - the city sim app's own arrows are unchanged: they are still angle-guessed and flat.
+
+## ADR-0109 — Protected left turns: a lead arrow phase, cars that read their own movement
+
+**Context.** Glenn wanted lane arrows "to define if you have a protected turn". The signals phased
+whole approaches: a green let an approach go every way, and opposing approaches shared it. A left
+turn was always permissive: it held at the line while oncoming traffic was moving (the turn-yield
+rule), with no phase of its own.
+
+**Decision.**
+- **A lead left arrow** (`SignalController`). Where a group's green is shared by OPPOSING approaches
+  and an approach has a lane to turn from (two or more), the group's slot opens with an arrow:
+  7 s green, then 2.5 s yellow. During it, those approaches' left turns go, protected, while their
+  straight and right movements and every other approach are red. Then comes the shared green, where
+  a left is permissive again, then yellow and all-red as before.
+  - Opposing left turns pass each other (traffic keeps right in the sim's frame), so both arrows run
+    at once.
+  - One-lane approaches, and approaches with nobody opposite (whose green is already protected), get
+    no arrow.
+- **Signals answer per movement:**
+  - `stateFor(link, Move)` gives the state for a turn; `stateForLink` means straight on, which is
+    what pedestrians walk with.
+  - `protectedLeft(link)` says whether the arrow is green now; `hasLeftArrow(link)` whether the head
+    carries one.
+  - `moveOf` classifies a bend the sim's way: under cos 0.85 is a turn, and counter-clockwise is the
+    left that crosses oncoming traffic.
+- **Cars read their own movement** (`CitySim::moveFor` and `signalFor`, from the route). This applies
+  at the signal brake, the stop-line clamp, the gridlock clock, and the cross-traffic check on
+  another car. A left on its green arrow skips the oncoming-traffic yield; everything it would cross
+  is red.
+- **The head shows the arrow:** a fourth lamp beside the head, on the side the left turn goes (the
+  nav frame's left of travel, mapped straight into the world, so no handedness to reason about). It
+  is lit green, then amber, through the lead arrow, while the straight-on lamps show red.
+
+**Consequences.**
+- Arterial junctions' cycles grow by 9.5 s for each group that has an arrow.
+- The lanes builder's painted arrows (ADR-0108) mark the lanes a protected left is taken from.
+- Unit tests: during the arrow nothing crossing it is green, the shared green after it is permissive,
+  and one-lane streets have no arrow. All 1,415 other unit cases are unchanged; the two known failures
+  are the old ones.
+- **Not yet:**
+  - an arrow-shaped lens (the lamp is the ordinary round lens, beside the head);
+  - protected-only lefts (no permissive phase) for triple-lane arterials;
+  - right-turn arrows.
+
+## ADR-0110 — Road signs in 3D: one face layout rasterized into cached atlas pages, on posts and gantries
+
+**Context.** ADR-0107 planned the island's signs and drew their faces on an SVG sheet. Glenn asked
+whether they would be "built and cached offline". The street-name blades were lettered at load
+time.
+
+**Decision** (`world/road_sign_build.h`).
+- **One layout, rasterized.** `rasterizeSignFace` draws the same `SignFace` the SVG sheet draws:
+  - rounded panel, border ring, exit tab, text via the sign font, route shield, arrows, disc;
+  - everything is 3×3 supersampled at 64 px/m.
+- **Cached by content.** `bakeRoadSignAtlas` shelf-packs the faces onto 2048² pages, keyed by an FNV
+  hash of every face's content, the resolution and a layout version. The key is written to
+  `cache/road_signs/roadsigns_<key>_<n>.png` plus a slot table. A level with the same signs reads the
+  pages back instead of lettering them. Bump the layout version when `layoutSign` changes.
+- **Structures** (`buildRoadSignMeshes`), grouped in 400 m cells so draw distance culls them:
+  - **Roadside** signs stand on one post, or two under a panel wider than 1.6 m. A guide sign's
+    bottom is 2.1 m up; DO NOT ENTER and WRONG WAY stand at 1.5 m.
+  - **Overhead** signs hang 5.6 m over the road from a gantry: two uprights either side of the
+    carriageway and a double truss.
+  - Each panel has a steel backing plate behind it and its tab.
+- **Reading direction:** a face's u runs along `cross(forward, up)`, the reader's right in the world,
+  so lettering never comes out mirrored whatever the plan's handedness.
+- **Faces are alpha-cut** (`FLAG_ALPHA_TEST`): the rounded corners, and the air beside an exit tab.
+  Without it the tab's row rendered as a black band across the panel's width.
+- **Level entity** `shape:"road_signs"` takes `signs` inline or a `file` (the `signs.json` that
+  `city_plan island-cities` now writes), with `carriageHalf` and `drawDistance`.
+- **Test level:** `assets/levels/sign_yard.json` has one sign of each kind in a row on flat ground.
+
+**Consequences.**
+- The sign yard bakes 10 faces onto one page in 0.3 s the first time, then loads them from cache.
+- Tested: the cache round-trips (same key, slots and pages), and a panel's texture runs to its
+  reader's right with its face toward them.
+- **Not yet:**
+  - signs in a real level: the island's 3D build, and signs for a lanes scene's own freeway;
+  - retroreflection at night;
+  - the street-name blades moving to the same cache.
+
+## ADR-0111 — Island transit on the map; every place keeps a way onto the freeway
+
+**Context.** Glenn asked for "bus routes in local regions. Maybe a bus to go between towns?", and to
+plan it on the map before 3D. Building it exposed that one town, Ivycombe, had no interchange at all.
+Its only link's diamond had been refused, so the link was dropped, and the town was cut off from the
+island.
+
+**Decision.**
+1. **Local lines** come from the city sim's own `BusNetwork`, run on each place's street graph: four
+   loops of 14 stops in a city, one of 8 in a town. Routes are derived, not authored, as in the sim.
+2. **Intercity lines** (`planIntercityBuses`) run between places' centres over the island's roads.
+   A centre is the street node nearest the middle of the place's core blocks.
+   - **X1 Island Ring** calls at every place round the freeway, into each on its link road and
+     streets and back out.
+   - **X2 Over the Pass** runs city to city by Route 2, with a stop at the summit.
+   - **X3 Mountain Shuttle** climbs Route 3 from the place whose interchange is nearest its foot.
+   - Street legs are routed on the place's nav graph (`findRouteBetween`).
+3. **Interchanges are searched for, per place.**
+   - The pass and the mountain road get theirs first.
+   - Then each place's candidate links are tried one at a time, shortest first, until the place has
+     its share (a city three, a town one). Roads already served are passed in as obstacles.
+     Submitting all candidates at once made them block one another's ramps: 10 of 44 were built,
+     with 13 refused as "over a street".
+   - Last, any place still without an interchange is retried with the spacing relaxed to 400 m.
+     A cut-off town is worse than two close interchanges.
+   - `linkCityToFreeway` now proposes more candidates (6 for a city, 4 for a town) than will be kept.
+4. **Two bugs found on the way:**
+   - An interchange's crossing point was taken as the road point whose freeway STATION matched. A
+     point high up the mountain road projected onto the same station a kilometre away, which put the
+     shuttle's interchange on the mountain. It is now the road point nearest the freeway point at
+     that station.
+   - Keep-outs were grouped per STREET. The pass crosses the freeway twice, and its two diamonds were
+     averaged into one in the middle of the island whose reach blocked 20 km of freeway. That is what
+     had refused Ivycombe. They are now per diamond.
+- **The map** has a bus layer: local loops as thin lines, intercity lines bold and dashed, stops as
+  dots, each with its name and stop names on hover.
+
+**Consequences.**
+- Island 8: 12 diamonds, and every place has at least one. X1 calls at all 8 places, X2 runs
+  Saltwood–Dunwyn, X3 runs Coldwell–Marlwick, plus 14 local lines.
+- **Not yet:** the sim running these intercity lines (it has one regional route type, for towns
+  joined by freeway), timetables, and stop shelters on the island.
