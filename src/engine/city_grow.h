@@ -46,6 +46,7 @@ struct CityGrowInputs {
     const RoadGraph* freewayROW = nullptr;   // NETS: the lot pass's keep-out
     const std::vector<Poly2>* holes = nullptr;   // HOLES: un-inset, straight from the builder
     const std::vector<Poly2>* blocks = nullptr;  // HOLES, already run through cityBlocksFromHoles
+    const std::vector<std::vector<Vec2>>* water = nullptr;   // HOLES: rivers and lakes the blocks stand back from (levelWaterKeepOut)
     const RoadGraph* streets = nullptr;          // HOLES: the graph a door faces
     double pavedSidewalk = 0.0;                  // HOLES: the band that was actually paved
     LotGroundWithFn groundWith;
@@ -63,7 +64,8 @@ std::vector<std::string> cityGrowScriptFiles(const std::string& levelDir);
 
 // The pavement's holes as city blocks: ONE spelling of the inset and the minimum
 // width, which three call sites had each written out with its own constants.
-std::vector<Poly2> cityBlocksFromHoles(const std::vector<Poly2>& holes);
+std::vector<Poly2> cityBlocksFromHoles(const std::vector<Poly2>& holes,
+                                       const std::vector<std::vector<Vec2>>* water = nullptr);
 
 }  // namespace engine
 

@@ -47,6 +47,9 @@ inline Quat parseOrientation(const nlohmann::json& ent) {
 // Run before the road pre-pass in BOTH pipelines so they gate on an
 // identical graph.
 void propagateWaterSeaLevel(nlohmann::json& root);
+// The rivers and lakes of a level's terrain (its "rivers" block, ADR-0099) as rings a city's blocks
+// stand back from: each corridor grown by `margin` past the bank (ADR-0104). Empty: none.
+std::vector<std::vector<Vec2>> levelWaterKeepOut(const nlohmann::json& root, double margin = 6.0);
 
 // The level's top-level "terrain" block.
 TerrainParams readTerrainParams(const nlohmann::json& t);

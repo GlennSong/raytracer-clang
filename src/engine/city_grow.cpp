@@ -9,14 +9,15 @@
 
 namespace engine {
 
-std::vector<Poly2> cityBlocksFromHoles(const std::vector<Poly2>& holes) {
+std::vector<Poly2> cityBlocksFromHoles(const std::vector<Poly2>& holes, const std::vector<std::vector<Vec2>>* water) {
 #ifdef RT_ROADS_LANES
     // The holes stop at the back of the DRAWN sidewalk (pavementHoles), so a block begins
     // just behind it — not `citysim.sidewalk` further in, which left a grass strip.
     return roads::lanes::blocksFromHoles(holes, 1.5, roads::lanes::kBlockMarginBehindSidewalk,
-                                         roads::lanes::kMinBlockWidth);
+                                         roads::lanes::kMinBlockWidth, water);
 #else
     (void)holes;
+    (void)water;
     return {};
 #endif
 }
@@ -40,7 +41,7 @@ NetLotResult growCity(const CityGrowInputs& in, LotGrowSetup* setupOut) {
         // A WHOLE-CITY BUILDER'S BLOCKS. They are exact to the kerb and already inset by the
         // sidewalk (Clipper): the same parceller and grammar, no road graph to derive faces
         // from, and no miter inset to reject them.
-        const std::vector<Poly2> derived = in.blocks ? std::vector<Poly2>() : cityBlocksFromHoles(*in.holes);
+        const std::vector<Poly2> derived = in.blocks ? std::vector<Poly2>() : cityBlocksFromHoles(*in.holes, in.water);
         const std::vector<Poly2>& blocks = in.blocks ? *in.blocks : derived;
         s.lp.roadMargin = 0;   // the block already begins behind the drawn sidewalk
 #ifdef RT_ROADS_LANES

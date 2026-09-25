@@ -512,6 +512,7 @@ struct LanesPublished {
     engine::RoadGraph row;                 // freeway + ramp edges of the class-faithful twin, for the lot pass's keep-out
     double sidewalk = 4.0;                 // the citysim sidewalk, read before entities load
     std::vector<engine::Poly2> blocks;     // the lab's city blocks: the pavement's holes, inset by the sidewalk
+    std::vector<std::vector<engine::Vec2>> water;   // rivers and lakes the blocks stand back from (ADR-0104)
     int ordinal = 0;                       // lanelab entities seen in this load: the bundle section namespace
     engine::bundle::LevelInputs inputs;    // the level, for the producers' keys
     std::shared_ptr<engine::bundle::Bundle> bundle;   // the level's city bundle, obtained on the first lanelab entity
@@ -563,7 +564,7 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
         // The holes stop at the back of the drawn sidewalk; the block begins just behind it and the
         // lot pass gets roadMargin 0. (Same derivation as the terrain pre-pass, below.)
         g_lanes.blocks = engine::roads::lanes::blocksFromHoles(built.holes, 1.5, engine::roads::lanes::kBlockMarginBehindSidewalk,
-                                                               engine::roads::lanes::kMinBlockWidth);
+                                                               engine::roads::lanes::kMinBlockWidth, &g_lanes.water);
         LOG_INFO << "[roads] " << g_lanes.blocks.size() << " city blocks from " << built.holes.size()
                  << " pavement holes";
     }
@@ -2533,6 +2534,7 @@ static GrownLots growCityLots(
         // The lanes builder paved the whole city: its pavement's holes are the blocks, its twin is
         // the streets, its kerb band is the pavement a door walks out to.
         gin.blocks = &g_lanes.blocks;
+        gin.water = &g_lanes.water;
         gin.streets = &g_lanes.nav;
         gin.pavedSidewalk = g_lanes.pavedSidewalk;
         engine::NetLotResult r; bool fromBundle = false;
@@ -2992,8 +2994,9 @@ bool LevelLoader::load(const std::string& path,
             g_lanes.sidewalk = root.contains("citysim") && root["citysim"].is_object() ? root["citysim"].value("sidewalk", 4.0) : 4.0;
             // The holes stop at the back of the DRAWN sidewalk (pavementHoles), so the block begins
             // right behind it — not `citysim.sidewalk` further in, which left a grass strip.
+            g_lanes.water = engine::levelWaterKeepOut(root);
             g_lanes.blocks = engine::roads::lanes::blocksFromHoles(cp.holes, 1.5, engine::roads::lanes::kBlockMarginBehindSidewalk,
-                                                                   engine::roads::lanes::kMinBlockWidth);
+                                                                   engine::roads::lanes::kMinBlockWidth, &g_lanes.water);
             g_lanes.row = cp.row;
             g_lanes.deck = cp.deck;
             g_lanes.deck.buildIndex();      // queried by the scatter, below, and by the poke report

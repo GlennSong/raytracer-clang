@@ -14,6 +14,14 @@ using json = nlohmann::json;
 
 namespace engine {
 
+std::vector<std::vector<Vec2>> levelWaterKeepOut(const json& rootIn, double margin) {
+    if (!rootIn.contains("terrain") || !rootIn["terrain"].is_object() || !rootIn["terrain"].contains("rivers")) return {};
+    json root = rootIn;
+    propagateWaterSeaLevel(root);   // the hydrology ends its rivers at the sea
+    const TerrainParams p = readTerrainParams(root["terrain"]);
+    return p.hydro ? p.hydro->corridorRings(margin) : std::vector<std::vector<Vec2>>{};
+}
+
 void propagateWaterSeaLevel(json& root) {
     if (!root.contains("water")) return;
     const json& w = root["water"];

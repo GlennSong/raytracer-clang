@@ -33,6 +33,7 @@ static int usage() {
                  "       city_plan scene BRIEF.json OUT_SCENE.json [--no-ramps]\n"
                  "       city_plan brief\n"
                  "       city_plan level-world BRIEF.json      the level's terrain + water blocks that match the brief's world, and its towns' hubs\n"
+                 "       city_plan rivers BRIEF.json [STEP]         the rivers its world's hydrology makes, plan coordinates\n"
                  "       city_plan heights BRIEF.json [HALF STEP]   the brief's ground on a grid, plan coordinates (for placing mountain roads)\n");
     return 2;
 }
@@ -47,6 +48,33 @@ int main(int argc, char** argv) {
     const std::string verb = argv[1];
     if (verb == "brief") {
         std::cout << briefToJson(Brief{}).dump(2) << "\n";
+        return 0;
+    }
+    if (verb == "rivers" && argc >= 3) {
+        // THE RIVERS A BRIEF'S WORLD MAKES: its base terrain's hydrology (a "rivers" block in
+        // world.base, ADR-0099), each river's course in PLAN coordinates, width and water level.
+        std::ifstream in(argv[2]);
+        if (!in) { std::fprintf(stderr, "city_plan: cannot read %s\n", argv[2]); return 1; }
+        nlohmann::json bj;
+        in >> bj;
+        const Brief b = briefFromJson(bj);
+        const std::shared_ptr<const engine::Hydrology> hy = worldHydrology(b);
+        if (!hy) { std::fprintf(stderr, "city_plan: %s's world has no rivers block\n", argv[2]); return 1; }
+        const double step = argc > 3 ? std::atof(argv[3]) : 200.0;
+        std::printf("%zu rivers, %zu lakes\n", hy->rivers().size(), hy->lakes().size());
+        for (std::size_t i = 0; i < hy->rivers().size(); ++i) {
+            const auto& r = hy->rivers()[i];
+            double acc = 0, next = 0;
+            std::printf("river %zu: %zu nodes, width %.0f..%.0f m, %s\n", i, r.nodes.size(), r.nodes.front().width,
+                        r.nodes.back().width, r.mouth ? (r.intoLake >= 0 ? "into a lake" : "to the sea") : "ends inland");
+            for (std::size_t k = 0; k < r.nodes.size(); ++k) {
+                if (k) acc += (r.nodes[k].p - r.nodes[k - 1].p).length();
+                if (acc >= next || k + 1 == r.nodes.size()) {
+                    std::printf("   (%7.0f, %7.0f)  level %6.1f  width %4.0f\n", r.nodes[k].p.x, r.nodes[k].p.y, r.nodes[k].level, r.nodes[k].width);
+                    next += step;
+                }
+            }
+        }
         return 0;
     }
     if (verb == "heights" && argc >= 3) {

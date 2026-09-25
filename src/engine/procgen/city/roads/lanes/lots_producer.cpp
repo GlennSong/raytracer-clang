@@ -191,6 +191,8 @@ NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInput
     gin.groundWith = groundWith;
     gin.groundMeshCell = groundMeshCell;
     gin.holes = &city.holes;
+    const std::vector<std::vector<Vec2>> water = levelWaterKeepOut(in.level);   // blocks stand back from rivers (ADR-0104)
+    gin.water = &water;
     gin.streets = &city.nav;
     gin.pavedSidewalk = city.pavedSidewalk;
     if (haveSpawn) gin.enterableAt = &spawn;

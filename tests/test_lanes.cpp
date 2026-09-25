@@ -505,3 +505,16 @@ TEST_CASE(lanes_lots_bake_reads_the_city_products_back_and_is_deterministic) {
     CHECK(!lotsEntry.is_null() && lotsEntry.value("key", std::string()) == hex16(findProducer(kLotsProducerName)->identity(in).key));
     std::printf("    %s; %zu cell parts (grow %.1f s, write %.1f s)\n", rep.reports.at(kLotsProducerName).report.value("summary", std::string()).c_str(), cps.size(), rep.reports.at(kLotsProducerName).timings.at("grow"), rep.reports.at(kLotsProducerName).timings.at("write"));
 }
+
+// ADR-0104: a river through a block leaves TWO blocks, one each side, and none of either is wet.
+TEST_CASE(lanes_blocks_stand_back_from_a_river_through_them) {
+    using namespace engine::roads::lanes;
+    const std::vector<Ring> holes{{Vec2(0, 0), Vec2(200, 0), Vec2(200, 100), Vec2(0, 100)}};
+    const std::vector<Ring> water{{Vec2(-10, 40), Vec2(210, 40), Vec2(210, 60), Vec2(-10, 60)}};   // a 20 m river across it
+    const std::vector<Poly2> dry = blocksFromHoles(holes, 0.5, 0.0, 0.0, &water);
+    const std::vector<Poly2> all = blocksFromHoles(holes, 0.5, 0.0, 0.0);
+    CHECK(all.size() == 1);
+    CHECK(dry.size() == 2);
+    for (const Poly2& b : dry)
+        for (const Vec2& p : b) CHECK(p.y <= 40.0 + 1e-6 || p.y >= 60.0 - 1e-6);
+}

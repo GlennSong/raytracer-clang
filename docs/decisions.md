@@ -8045,3 +8045,54 @@ on the city's rolling relief.
   - tunnels where the earthwork is absurd;
   - rivers inside the city with bridges (the hydrology is there; the planner does not avoid water
     yet).
+
+## ADR-0104 — Rivers through cities: the world's hydrology, bridges, and blocks that stand back
+
+**Context.** Glenn: "Please keep going with rivers and bridges." Rivers existed as terrain (ADR-0099)
+but no city had one. The planner knew nothing about water, so a river would have run under blocks
+and through junctions.
+
+**Decision: the river is the world's.** A brief's `world.base` takes the same `rivers` block a level
+terrain does. So the planner (`worldHydrology`), the lanes ground grid (its `base` is evaluated
+with the engine's `terrainHeight`, carve included), and the level (`city_plan level-world` prints
+the block) all compute one network. It is memoised per terrain block. The world's sea level is
+copied in, so rivers end at the sea.
+
+- **The city's hills stand back from the water** (`terrain_recipe`). The brief's relief is added
+  on top of the carved base, so it would have put ±20 m bumps in the channel. It fades out over the
+  last 100 m to a bank, and a hollow (negative relief) fades from 300 m, so there is no land below
+  the water beside it.
+- **Streets meet the river in `planToLanesScene`.** Every non-freeway edge is sampled every 2 m. A
+  sample is wet within the street's half-width (lanes, shoulders and sidewalks, from its class) plus
+  2 m of a bank (`Hydrology::distanceToRiver`, now indexed, with the water level). Each wet run is
+  judged:
+  - **Inside a street and at most 180 m long: a bridge.** A floor at the water level + 6 m, held
+    flat across the run + 14 m. The builder raises a deck and sets piers under it, unchanged.
+  - **Reaching a street's end, at a junction in the water:** the straightest pair of streets wet
+    at that node (more than about 130° apart), both dry at their far ends, with less than 180 m of
+    water between them, is one bridge, a floor on each. Every other street wet at that node is cut.
+    Without the pairing, 96 of 101 crossings were cut, because junctions sit in the river.
+  - **Anything else (along the river, or wet end to end): cut** back to the banks, keeping dry
+    pieces of 25 m or more.
+- **Blocks stand back from the water.** `blocksFromHoles` takes an optional water set
+  (`Hydrology::corridorRings`: the water mesh's own outline, grown 6 m past each bank). A block the
+  river runs through becomes two, and wet strips are dropped. The loader computes it once per level
+  (`levelWaterKeepOut`, at the terrain pre-pass) for both of its block sites and the grow inputs.
+  The lots producer computes the same for the bake.
+- `city_plan rivers BRIEF [STEP]` lists a brief's rivers in plan coordinates.
+
+**Consequences.**
+- `river_town` (brief `assets/city_plans/river_town.json`, level `assets/levels/river_town.json`):
+  a 1.6 km town on metro's world with hydrology on. One river (12–40 m wide, falling from about
+  +10 m to the sea at −32 m) crosses the town.
+  - 13 bridges, 34 streets cut, 144 blocks.
+  - Buses drive over the bridges.
+  - The full bake takes 54 s.
+- Pinned by `lanes_blocks_stand_back_from_a_river_through_them`.
+
+**Next:**
+- quay walls instead of grassy slopes on urban banks;
+- riverside streets planned along the water, not cut;
+- bridges that meet the river square (the plan's grid crosses it at about 40°, so some decks are
+  100 m long);
+- metro itself, and bridges' parapets and lighting.

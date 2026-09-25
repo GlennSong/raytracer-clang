@@ -54,7 +54,8 @@ std::vector<Ring> pavementHoles(const Result& r, double minArea) {
     return holes;
 }
 
-std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simplify, double insetBy, double minWidth) {
+std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simplify, double insetBy, double minWidth,
+                                   const std::vector<Ring>* water) {
     std::vector<Poly2> blocks; std::vector<Ring> rings;
     for (const Ring& h : holes) {
         if (insetBy <= 0) { rings.push_back(h); continue; }
@@ -65,6 +66,16 @@ std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simpli
         // would then keep 7 m verges as blocks.
         const double stripHalf = std::max(3.0, (minWidth > 0 ? minWidth : 2.0 * (insetBy + 3.0)) * 0.5 - insetBy);
         for (const Polygon2& q : offsetSet(fromRing(h), -insetBy)) if (std::fabs(ringArea(q.outer)) >= 135.0 && !offsetSet(PolySet{q}, -stripHalf).empty()) rings.push_back(q.outer);
+    }
+    // THE WATER (rivers and lakes, ADR-0104): a block the river runs through is two blocks, one each
+    // side; a block only grazed by it loses the wet strip. Pieces under 135 m2 are not blocks.
+    if (water && !water->empty()) {
+        const PolySet wet = unionRings(*water);
+        std::vector<Ring> dry;
+        for (const Ring& h : rings)
+            for (const Polygon2& q : differenceSets(fromRing(h), wet))
+                if (std::fabs(ringArea(q.outer)) >= 135.0) dry.push_back(q.outer);
+        rings = std::move(dry);
     }
     for (const Ring& h : rings) {
         Ring closed = h; closed.push_back(h.front());   // DP wants an open run: split the loop at its first point

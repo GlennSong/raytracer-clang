@@ -70,7 +70,13 @@ public:
     // The ground at (x, z) with the channels cut into it: min(h, channel profile).
     double carve(double x, double z, double h) const;
     // Distance to the nearest river channel's edge (<= 0 inside it), capped at `maxDist`.
-    double distanceToRiver(double x, double z, double maxDist) const;
+    // Distance from (x, z) to the nearest river's BANK (0 at the water's edge, negative in the water),
+    // capped at maxDist (no river within kFarReach: maxDist); `level`, when given, gets that river's
+    // water level there (NaN when none). Indexed: cheap per sample.
+    double distanceToRiver(double x, double z, double maxDist, double* level = nullptr) const;
+    // The rivers' and lakes' outline grown by `margin` metres past each river bank, as rings (outer
+    // counter-clockwise, holes clockwise) -- what a city cuts its blocks back from.
+    std::vector<std::vector<Vec2>> corridorRings(double margin) const;
 
     const std::vector<River>& rivers() const { return rivers_; }
     const std::vector<Lake>& lakes() const { return lakes_; }
@@ -105,7 +111,11 @@ private:
     double binSize_ = 64.0, reach_ = 0.0;
     int bins_ = 1;
     std::vector<std::vector<int>> bin_;
+    static constexpr double kFarBin = 128.0, kFarReach = 250.0;
+    int farBins_ = 0;
+    std::vector<std::vector<int>> farBin_;
     void index();
+    std::vector<std::vector<Vec2>> outlineRings(double margin, std::vector<Vec2>* interior) const;
 };
 
 }  // namespace engine

@@ -11,6 +11,7 @@
 // freeway becomes its two one-way carriageways, and each interchange becomes a
 // pair of ramps onto the arterial it crosses.
 
+#include "../../hydrology.h"
 #include "city_plan.h"
 #include "../roads/lanes/interchange.h"
 
@@ -36,6 +37,9 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt = 
 // to keep a town above the sea.
 nlohmann::json sceneTerrain(const Brief& b);
 HeightField sceneGround(const Brief& b);
+// The rivers of the brief's world: world.base's hydrology (a "rivers" block, ADR-0099) with the
+// world's sea level -- the same network the level computes from its terrain block. Null: none.
+std::shared_ptr<const Hydrology> worldHydrology(const Brief& b);
 
 // THE FREEWAY AS BOTH SIDES SEE IT. The plan clears streets out of the way of what the scene
 // will build, so the two must build it from the same numbers; these are those numbers.

@@ -1,4 +1,5 @@
 #include "plan_scene.h"
+#include "../../../level_params.h"   // readTerrainParams: the world's rivers
 
 #include "../roads/lanes/interchange.h"   // ONE ramp generator, shared with the level importer
 #include "../roads/lanes/polyline_ops.h"   // stations/pointAt: sampling along the route
@@ -258,6 +259,13 @@ nlohmann::json sceneTerrain(const Brief& b) {
         if (world.contains("calm")) terrain["relief_calm"] = world["calm"];
     }
     return terrain;
+}
+
+std::shared_ptr<const Hydrology> worldHydrology(const Brief& b) {
+    if (b.world.is_null() || !b.world.contains("base") || !b.world["base"].contains("rivers")) return nullptr;
+    json base = b.world["base"];
+    if (b.world.contains("seaLevel") && !base.contains("seaLevel")) base["seaLevel"] = b.world["seaLevel"];
+    return readTerrainParams(base).hydro;
 }
 
 HeightField sceneGround(const Brief& b) {
@@ -679,6 +687,142 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             edges.push_back({{"id", id}, {"class", mr.value("class", std::string("rural"))},
                              {"path", {{"points", pointsJson(route.points)}}}});
         }
+    }
+    // RIVERS AND BRIDGES (the world's hydrology, ADR-0104): every street that meets a river is
+    // judged where it is wet -- within its half-width of the water. A short crossing, open at both
+    // ends, becomes a BRIDGE: a floor at the water level plus clearance, held flat across the water
+    // and a little beyond, so the builder raises a deck on piers over it. A street that runs along
+    // the river, or ends in it, is cut back to the banks instead. Freeways and ramps stand clear
+    // already (the ring is elevated its whole length).
+    if (const std::shared_ptr<const Hydrology> hy = worldHydrology(b)) {
+        const json& classes = scene["classes"];
+        auto halfWidth = [&](const std::string& k) {
+            if (!classes.contains(k)) return 8.0;
+            const json& c = classes[k];
+            const double lanes = c.value("fwd", 1.0) + c.value("back", 1.0);
+            return 0.5 * lanes * c.value("w", 3.5) + c.value("shoulder", 0.0) + c.value("sidewalk", 0.0);
+        };
+        constexpr double kClear = 6.0;        // water to the deck's underside, plus its structure
+        constexpr double kMaxBridge = 180.0;  // wetter than this is a street along the river, not across it
+        constexpr double kStep = 2.0;
+        int bridges = 0, cuts = 0;
+        // 1. every street's wet runs: [s0, s1] along it, and the water level there
+        struct Run { double s0, s1, level; bool atStart, atEnd; int decision = 0; };   // decision: 1 bridge, -1 cut
+        struct Street { std::vector<Vec2> pts; std::vector<double> st; std::vector<Run> runs; bool river = false; };
+        std::vector<Street> streets(edges.size());
+        for (std::size_t ei = 0; ei < edges.size(); ++ei) {
+            json& e = edges[ei];
+            const std::string k = e.value("class", std::string());
+            if (k == "freeway" || k == "ramp" || !e.contains("path")) continue;
+            Street& S = streets[ei];
+            for (const json& q : e["path"]["points"]) S.pts.emplace_back(q[0].get<double>(), q[1].get<double>());
+            if (S.pts.size() < 2) continue;
+            S.river = true;
+            S.st = roads::lanes::stations(S.pts);
+            const double L = S.st.back(), hw = halfWidth(k);
+            bool in = false;
+            double s0 = 0.0, lvlSum = 0.0;
+            int lvlN = 0;
+            for (double sv = 0.0; sv <= L + 1e-6; sv += kStep) {
+                const Vec2 q = roads::lanes::pointAt(S.pts, S.st, std::min(sv, L));
+                double lvl = 0.0;
+                const bool wet = hy->distanceToRiver(q.x, q.y, 60.0, &lvl) < hw + 2.0;
+                if (wet && !in) { in = true; s0 = sv; lvlSum = 0; lvlN = 0; }
+                if (wet && std::isfinite(lvl)) { lvlSum += lvl; ++lvlN; }
+                if (!wet && in) { in = false; S.runs.push_back({s0, sv, lvlN ? lvlSum / lvlN : 0.0, s0 < kStep * 0.5, false}); }
+            }
+            if (in) S.runs.push_back({s0, L, lvlN ? lvlSum / lvlN : 0.0, s0 < kStep * 0.5, true});
+        }
+        // 2. runs inside a street: short ones are bridges, long ones (along the river) are cut
+        for (Street& S : streets)
+            for (Run& r : S.runs)
+                if (!r.atStart && !r.atEnd) r.decision = (r.s1 - r.s0 <= kMaxBridge) ? 1 : -1;
+        // 3. runs that reach a street's end meet other streets at a junction in the water: the
+        //    straightest pair through it, if both go on to dry land and the water between is short,
+        //    is ONE bridge; every other street wet at that junction is cut back
+        std::map<std::pair<long long, long long>, std::vector<std::pair<std::size_t, bool>>> atNode;   // node -> (street, its end?)
+        auto key = [](const Vec2& p) { return std::make_pair(std::llround(p.x * 10.0), std::llround(p.y * 10.0)); };
+        for (std::size_t ei = 0; ei < streets.size(); ++ei) {
+            const Street& S = streets[ei];
+            if (!S.river || S.runs.empty()) continue;
+            if (S.runs.front().atStart) atNode[key(S.pts.front())].push_back({ei, false});
+            if (S.runs.back().atEnd) atNode[key(S.pts.back())].push_back({ei, true});
+        }
+        auto endRun = [&](std::size_t ei, bool atEnd) -> Run& { Street& S = streets[ei]; return atEnd ? S.runs.back() : S.runs.front(); };
+        auto outDir = [&](std::size_t ei, bool atEnd) {   // leaving the node along the street
+            const Street& S = streets[ei];
+            const Vec2 a = atEnd ? S.pts.back() : S.pts.front();
+            const Vec2 b = roads::lanes::pointAt(S.pts, S.st, atEnd ? std::max(0.0, S.st.back() - 15.0) : std::min(S.st.back(), 15.0));
+            const Vec2 d = b - a;
+            return d.length() > 1e-9 ? d / d.length() : Vec2(1, 0);
+        };
+        for (auto& [node, list] : atNode) {
+            double best = -0.64;   // straighter than ~130 degrees apart
+            int ia = -1, ib = -1;
+            for (std::size_t a = 0; a < list.size(); ++a)
+                for (std::size_t c = a + 1; c < list.size(); ++c) {
+                    const Run& ra = endRun(list[a].first, list[a].second);
+                    const Run& rc = endRun(list[c].first, list[c].second);
+                    if ((ra.atStart && ra.atEnd) || (rc.atStart && rc.atEnd)) continue;   // wet end to end: no dry far side
+                    if ((ra.s1 - ra.s0) + (rc.s1 - rc.s0) > kMaxBridge) continue;
+                    const double cosang = dot(outDir(list[a].first, list[a].second), outDir(list[c].first, list[c].second));
+                    if (cosang < best) { best = cosang; ia = static_cast<int>(a); ib = static_cast<int>(c); }
+                }
+            for (std::size_t a = 0; a < list.size(); ++a) {
+                Run& r = endRun(list[a].first, list[a].second);
+                const bool paired = static_cast<int>(a) == ia || static_cast<int>(a) == ib;
+                if (paired && r.decision != -1) r.decision = 1;
+                else r.decision = -1;
+            }
+        }
+        for (Street& S : streets) for (Run& r : S.runs) if (r.decision == 0) r.decision = -1;
+        // 4. write them: bridges as floors (held flat across the wet run, at the water plus
+        //    clearance), cuts as the dry pieces that remain
+        json kept = json::array();
+        for (std::size_t ei = 0; ei < edges.size(); ++ei) {
+            json& e = edges[ei];
+            const Street& S = streets[ei];
+            if (!S.river || S.runs.empty()) { kept.push_back(std::move(e)); continue; }
+            const double L = S.st.back();
+            json floors = e.value("floor", json::array());
+            std::vector<std::pair<double, double>> cut;
+            for (const Run& r : S.runs) {
+                if (r.decision == 1) {
+                    const Vec2 m = roads::lanes::pointAt(S.pts, S.st, 0.5 * (r.s0 + r.s1));
+                    floors.push_back(json::array({std::round(m.x * 100) / 100, std::round(m.y * 100) / 100,
+                                                  std::round((r.level + kClear) * 100) / 100, 0.5 * (r.s1 - r.s0) + 14.0}));
+                    if (!r.atEnd) ++bridges;   // a paired bridge counts once (at its start side)
+                } else {
+                    cut.emplace_back(std::max(0.0, r.s0 - 4.0), std::min(L, r.s1 + 4.0));
+                    ++cuts;
+                }
+            }
+            if (cut.empty()) { e["floor"] = floors; kept.push_back(std::move(e)); continue; }
+            std::vector<std::pair<double, double>> dry;
+            double from = 0.0;
+            for (const auto& c : cut) { if (c.first > from) dry.emplace_back(from, c.first); from = c.second; }
+            if (from < L) dry.emplace_back(from, L);
+            int piece = 0;
+            for (const auto& dp : dry) {
+                if (dp.second - dp.first < 25.0) continue;   // a stub on the bank: not a street
+                std::vector<Vec2> sub{roads::lanes::pointAt(S.pts, S.st, dp.first)};
+                for (std::size_t i = 0; i < S.pts.size(); ++i) if (S.st[i] > dp.first + 0.5 && S.st[i] < dp.second - 0.5) sub.push_back(S.pts[i]);
+                sub.push_back(roads::lanes::pointAt(S.pts, S.st, dp.second));
+                json ne = e;
+                ne["id"] = e.value("id", std::string("e")) + "_r" + std::to_string(piece++);
+                ne["path"]["points"] = pointsJson(sub);
+                json f2 = json::array();
+                for (const json& f : floors) {
+                    const double sf = roads::lanes::project(S.pts, S.st, Vec2(f[0].get<double>(), f[1].get<double>())).station;
+                    if (sf > dp.first && sf < dp.second) f2.push_back(f);
+                }
+                if (f2.empty()) ne.erase("floor"); else ne["floor"] = f2;
+                kept.push_back(std::move(ne));
+            }
+        }
+        edges = std::move(kept);
+        std::printf("[plan] rivers: %zu in the world; %d bridges, %d streets cut back from the water\n",
+                    hy->rivers().size(), bridges, cuts);
     }
     scene["edges"] = std::move(edges);
     return scene;

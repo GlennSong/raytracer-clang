@@ -130,4 +130,5 @@ vocabulary, and a missing word is added HERE (C++ and Lua), not privately to one
 | Water polygon (rivers + lakes, one mesh) | `Hydrology::waterMesh` (ADR-0099) on lanes `geom2d` union + CDT | `level_loader` hydro water | clipped by `waterMeshCells` so it meets the ocean edge to edge; `Surface::River` flow-map shading |
 | Grade-limited terrain routing (mountain roads, switchbacks) | `procgen/city/terrain_route.h` `routeOnTerrain` (ADR-0103) | `plan_scene` `world.mountainRoads` | Galin 2010 A*, 32 directions, turn-priced states, earthwork-priced grade, self-spacing; trails and rail are the other readers |
 | Brief ground as numbers | `city_plan heights BRIEF [HALF STEP]` | placing mountain roads | plan coordinates |
+| Rivers in a city plan: bridges, cut-backs, block keep-out | `plan_scene` (world hydrology), `blocksFromHoles(..., water)`, `levelWaterKeepOut` (ADR-0104) | river_town | a bridge is a floor at water + 6 m; `Hydrology::corridorRings`, `distanceToRiver` (indexed, with level) |
 | Residency (stream by camera distance) | `engine/residency.h` (ADR-0095) | building cells | terrain tiles, road cells, forests are the planned clients |

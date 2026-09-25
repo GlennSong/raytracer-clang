@@ -2,6 +2,7 @@
 
 #include "engine/level_params.h"   // readTerrainParams: a level terrain block, read the way the level reads it
 #include "engine/procgen/terrain.h"
+#include "engine/procgen/hydrology.h"   // the base's rivers: relief stands back from them
 
 #include <algorithm>
 #include <cmath>
@@ -60,6 +61,16 @@ HeightField makeTerrain(const TerrainSpec& spec, const std::array<double, 4>& bo
         for (const auto& b : s.hills) h += b.h * std::exp(-((x - b.x) * (x - b.x) + (y - b.y) * (y - b.y)) / (b.r * b.r));
         if (s.hasFade) h *= 1.0 - ease((std::hypot(x - s.fadeX, y - s.fadeY) - s.fadeR0) / std::max(1e-6, s.fadeR1 - s.fadeR0));
         if (s.hasCalm) h *= 1.0 - ease((x * s.calmDx + y * s.calmDy - s.calmFrom) / std::max(1e-6, s.calmTo - s.calmFrom));
+        // RIVERS (the base's hydrology, ADR-0099): the city's hills stand back from the water. The
+        // base carves the channel and sets the water level; relief laid over it would put bumps in
+        // the river bed and hills in the water. It fades out over the last 100 m to a bank, and a
+        // HOLLOW (negative relief) further out still -- land below the water beside a river reads
+        // as a river on a levee.
+        if (baseParams && baseParams->hydro) {
+            const double d = baseParams->hydro->distanceToRiver(x, y, 320.0);
+            h *= ease((d - 10.0) / 100.0);
+            if (h < 0.0) h *= ease((d - 10.0) / 300.0);
+        }
         if (s.hasTilt) h += s.dzdx * (x - s.x0) + s.dzdy * (y - s.y0);
         if (baseParams) h += terrainHeight(*baseParams, *baseNoise, x, y);   // lanes y is world z
         return h;

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <queue>
 #include <set>
@@ -218,6 +219,8 @@ std::shared_ptr<const Hydrology> Hydrology::build(const std::function<double(dou
 
 void Hydrology::index() {
     segs_.clear();
+    farBin_.clear();
+    farBins_ = 0;
     reach_ = 0.0;
     for (const River& r : rivers_)
         for (std::size_t k = 0; k + 1 < r.nodes.size(); ++k) {
@@ -236,6 +239,20 @@ void Hydrology::index() {
         const int j1 = std::clamp(static_cast<int>((std::max(g.a.y, g.b.y) + r + p_.half) / binSize_), 0, bins_ - 1);
         for (int j = j0; j <= j1; ++j)
             for (int i = i0; i <= i1; ++i) bin_[static_cast<std::size_t>(j) * bins_ + i].push_back(static_cast<int>(s));
+    }
+    // the FAR index: each segment in every bin within kFarReach of it, for distance / level queries
+    // (the carve's own bins reach only its banks; widening them would slow every terrain sample)
+    farBins_ = std::max(1, static_cast<int>(std::ceil(2.0 * p_.half / kFarBin)));
+    farBin_.assign(static_cast<std::size_t>(farBins_) * farBins_, {});
+    for (std::size_t s = 0; s < segs_.size(); ++s) {
+        const Seg& g = segs_[s];
+        const double r = std::max(g.wa, g.wb) * 0.5 + kFarReach;
+        const int i0 = std::clamp(static_cast<int>((std::min(g.a.x, g.b.x) - r + p_.half) / kFarBin), 0, farBins_ - 1);
+        const int i1 = std::clamp(static_cast<int>((std::max(g.a.x, g.b.x) + r + p_.half) / kFarBin), 0, farBins_ - 1);
+        const int j0 = std::clamp(static_cast<int>((std::min(g.a.y, g.b.y) - r + p_.half) / kFarBin), 0, farBins_ - 1);
+        const int j1 = std::clamp(static_cast<int>((std::max(g.a.y, g.b.y) + r + p_.half) / kFarBin), 0, farBins_ - 1);
+        for (int j = j0; j <= j1; ++j)
+            for (int i = i0; i <= i1; ++i) farBin_[static_cast<std::size_t>(j) * farBins_ + i].push_back(static_cast<int>(s));
     }
 }
 
@@ -290,28 +307,34 @@ bool Hydrology::isWet(double x, double z, double margin) const {
     return false;
 }
 
-double Hydrology::distanceToRiver(double x, double z, double maxDist) const {
+double Hydrology::distanceToRiver(double x, double z, double maxDist, double* level) const {
     double best = maxDist;
-    for (const Seg& g : segs_) {
-        const Vec2 q(x, z), ab = g.b - g.a;
+    if (level) *level = std::numeric_limits<double>::quiet_NaN();
+    if (segs_.empty() || farBins_ <= 0) return best;
+    const int bi = static_cast<int>((x + p_.half) / kFarBin), bj = static_cast<int>((z + p_.half) / kFarBin);
+    if (bi < 0 || bj < 0 || bi >= farBins_ || bj >= farBins_) return best;
+    const Vec2 q(x, z);
+    for (int s : farBin_[static_cast<std::size_t>(bj) * farBins_ + bi]) {
+        const Seg& g = segs_[static_cast<std::size_t>(s)];
+        const Vec2 ab = g.b - g.a;
         const double L2 = dot(ab, ab);
         const double t = L2 > 1e-12 ? clampd(dot(q - g.a, ab) / L2, 0.0, 1.0) : 0.0;
-        const double w = g.wa + (g.wb - g.wa) * t;
-        best = std::min(best, (q - (g.a + ab * t)).length() - w * 0.5);
+        const double d = (q - (g.a + ab * t)).length() - (g.wa + (g.wb - g.wa) * t) * 0.5;
+        if (d < best) {
+            best = d;
+            if (level) *level = g.la + (g.lb - g.la) * t;
+        }
     }
     return best;
 }
 
-RenderMesh Hydrology::waterMesh(const std::vector<std::vector<Vec2>>& sea,
-                                const std::function<double(double, double)>& ground) const {
+std::vector<std::vector<Vec2>> Hydrology::outlineRings(double margin, std::vector<Vec2>* interior) const {
     namespace L = roads::lanes;
-    RenderMesh out;
     // 1. THE OUTLINE: every river's corridor (a quad per segment and a disc at each node, on a
     //    path resampled to its width) and every lake's cells (dilated one cell under its shore),
     //    unioned into one polygon set. Where a river meets another, a lake or the sea's edge the
     //    shapes merge; nothing can fold or overlap.
     std::vector<L::Ring> rings;
-    std::vector<Vec2> interior;   // river centre points: the triangulation's inner vertices
     auto disc = [&](const Vec2& c, double r) {
         L::Ring ring;
         for (int k = 0; k < 12; ++k) {
@@ -330,15 +353,15 @@ RenderMesh Hydrology::waterMesh(const std::vector<std::vector<Vec2>>& sea,
             if (acc >= step || k + 1 == r.nodes.size()) { path.push_back(r.nodes[k]); acc = 0.0; }
         }
         for (std::size_t k = 0; k < path.size(); ++k) {
-            const double hw = path[k].width * 0.5 * 1.05;
+            const double hw = path[k].width * 0.5 * 1.05 + margin;
             disc(path[k].p, hw);
-            interior.push_back(path[k].p);
+            if (interior) interior->push_back(path[k].p);
             if (k + 1 == path.size()) continue;
             const Vec2 a = path[k].p, b = path[k + 1].p, d = b - a;
             const double len = d.length();
             if (len < 1e-6) continue;
             const Vec2 n = perp(d / len);
-            const double hb = path[k + 1].width * 0.5 * 1.05;
+            const double hb = path[k + 1].width * 0.5 * 1.05 + margin;
             rings.push_back({a - n * hw, b - n * hb, b + n * hb, a + n * hw});
         }
     }
@@ -352,7 +375,7 @@ RenderMesh Hydrology::waterMesh(const std::vector<std::vector<Vec2>>& sea,
                 for (int a = i - 1; a <= i + 1; ++a)
                     if (a >= 0 && b >= 0 && a < n && b < n) in[static_cast<std::size_t>(b) * n + a] = 1;
         }
-        for (int c : lk.cells) interior.push_back(cellCenter(c));   // the lake's open water: away from the bank
+        if (interior) for (int c : lk.cells) interior->push_back(cellCenter(c));   // the lake's open water: away from the bank
         const double h = p_.cell * 0.5;
         for (std::size_t c = 0; c < in.size(); ++c) {
             if (!in[c]) continue;
@@ -379,6 +402,28 @@ RenderMesh Hydrology::waterMesh(const std::vector<std::vector<Vec2>>& sea,
             rings.push_back(std::move(hole));
         }
     }
+    return rings;
+}
+
+std::vector<std::vector<Vec2>> Hydrology::corridorRings(double margin) const {
+    namespace L = roads::lanes;
+    std::vector<std::vector<Vec2>> out;
+    const std::vector<L::Ring> rings = outlineRings(margin, nullptr);
+    if (rings.empty()) return out;
+    for (const L::Polygon2& poly : L::unionRings(rings)) {
+        out.push_back(poly.outer);
+        for (const L::Ring& h : poly.holes) out.push_back(h);
+    }
+    return out;
+}
+
+RenderMesh Hydrology::waterMesh(const std::vector<std::vector<Vec2>>& sea,
+                                const std::function<double(double, double)>& ground) const {
+    namespace L = roads::lanes;
+    RenderMesh out;
+    std::vector<Vec2> interior;   // river centre points: the triangulation's inner vertices
+    const std::vector<L::Ring> rings = outlineRings(0.0, &interior);
+    const int n = n_;
     if (rings.empty()) return out;
     L::PolySet water = L::unionRings(rings);
     // the sea is the ocean surface's: stop exactly at its cells (only those near the water)
