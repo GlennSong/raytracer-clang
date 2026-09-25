@@ -763,6 +763,21 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
     return h;
 }
 
+double terrainGridSurfaceHeight(const TerrainParams& params, const Noise& noise, double x, double z,
+                                double origin, double step) {
+    const double gx = (x - origin) / step, gz = (z - origin) / step;
+    const double i = std::floor(gx), j = std::floor(gz);
+    const double fx = gx - i, fz = gz - j;
+    const double x0 = origin + i * step, z0 = origin + j * step;
+    const double ha = terrainHeight(params, noise, x0, z0), hd = terrainHeight(params, noise, x0 + step, z0 + step);
+    if (fx >= fz) {   // triangle a, b, d
+        const double hb = terrainHeight(params, noise, x0 + step, z0);
+        return ha + (hb - ha) * fx + (hd - hb) * fz;
+    }
+    const double hc = terrainHeight(params, noise, x0, z0 + step);   // triangle a, d, c
+    return ha + (hc - ha) * fz + (hd - hc) * fx;
+}
+
 RenderMesh generateTerrain(const TerrainParams& params, const Noise& noise) {
     const int res = std::max(1, params.resolution);
     const int n = res + 1;                       // vertices per side

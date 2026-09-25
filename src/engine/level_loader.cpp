@@ -1935,6 +1935,13 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                 if (stp.shape == StylizedShape::Palm) leafMat.flags |= RenderMaterial::FLAG_TWO_SIDED;   // fronds are sheets
                 addPart(st.bark, barkMat);
                 addPart(st.canopy, leafMat);
+                // The trunk is the BARK's base (bedding, colliders), not the widest thing in
+                // the tree's bottom fifth -- for a pine that was its lowest branch tier.
+                float baseR = 0.0f;
+                for (const Vertex& vert : st.bark.vertices)
+                    if (vert.position.y < 0.6)
+                        baseR = std::max(baseR, static_cast<float>(std::sqrt(vert.position.x * vert.position.x + vert.position.z * vert.position.z)));
+                if (baseR > 0.0f) var.trunkRadius = baseR;
             } else if (kind == "rock") {
                 addPart(rockSdf ? generateRockSdf(rsp, seed)
                                 : generateRock(rp, Noise(seed)),
@@ -2239,7 +2246,16 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                     m = tilt * m;
                     m.m[0][3] = tx; m.m[1][3] = ty; m.m[2][3] = tz;
                 }
-                m.m[1][3] -= 0.12;   // bed the root ball just below grade
+                // Bed the root ball below grade -- and by the SLOPE under it: across a trunk of
+                // radius r on a slope of gradient g the ground falls r*g, and the lean adds its own.
+                {
+                    const double px = m.m[0][3], pz = m.m[2][3], e = 0.7;
+                    const double sx = (groundAt(px + e, pz) - groundAt(px - e, pz)) / (2 * e);
+                    const double sz = (groundAt(px, pz + e) - groundAt(px, pz - e)) / (2 * e);
+                    const double grade = std::sqrt(sx * sx + sz * sz);
+                    const double r = variantList[si].trunkRadius * std::sqrt(m.m[0][0] * m.m[0][0] + m.m[1][0] * m.m[1][0] + m.m[2][0] * m.m[2][0]);
+                    m.m[1][3] -= 0.12 + r * (grade + std::tan(maxTilt)) * 1.2;
+                }
                 // (was -0.35: tuned when placement sampled a DIFFERENT surface
                 // than the mesh — with the dilate-matched sample that much
                 // bedding buried every trunk on flat ground)
@@ -3762,6 +3778,24 @@ bool LevelLoader::load(const std::string& path,
                                             cfg.gridRes);
                 };
             });
+            // No CDLOD: the drawn surface is the static grid terrain's (one tile, or chunks),
+            // which on a rounded hill sits below the smooth field (floating trees).
+            if (!drawn && root.contains("terrain") && root["terrain"].is_object()) {
+                const json& tj = root["terrain"];
+                double origin, step;
+                if (tj.contains("chunks")) {
+                    const int cps = std::max(1, tj.value("chunks", 1));
+                    const double cs = tj.value("chunkSize", static_cast<double>(tp.size));
+                    origin = -cps * cs * 0.5;
+                    step = cs / std::max(1, tj.value("chunkResolution", tp.resolution));
+                } else {
+                    origin = -tp.size * 0.5;
+                    step = tp.size / std::max(1, tp.resolution);
+                }
+                drawn = [tp, nz, origin, step](double x, double z) {
+                    return terrainGridSurfaceHeight(tp, nz, x, z, origin, step);
+                };
+            }
             if (root.contains("vegetation"))
                 loadVegetation(root["vegetation"], tp, nz, world,
                                renderer, assets, levelDir, "veg",

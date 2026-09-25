@@ -304,6 +304,12 @@ Vec3 terrainColor(double worldX, double worldZ, double height, double normalUp,
 // normals, planar UVs spanning [0,1], and per-vertex height/slope coloration
 // (terrainColor) baked in. Centered on the origin.
 RenderMesh generateTerrain(const TerrainParams& params, const Noise& noise);
+// The height of the DRAWN grid terrain at (x, z): the triangle of a regular grid (corner
+// `origin`, spacing `step`, each cell split a->d as MeshBuilder::gridIndices winds it) that
+// generateTerrain / generateTerrainChunks emit, interpolated -- not the smooth field, which on
+// a rounded hill stands above the mesh's flat triangles (and planted trees floated).
+double terrainGridSurfaceHeight(const TerrainParams& params, const Noise& noise, double x, double z,
+                                double origin, double step);
 
 // Build one square annular ring of terrain from inner to outer half-extent at
 // `cells` resolution (coarse), with a hole for the inner (higher-detail) tile.

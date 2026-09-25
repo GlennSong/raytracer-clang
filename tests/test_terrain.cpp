@@ -408,3 +408,34 @@ TEST_CASE(terrain_chunk_collider_flag_by_radius) {
     CHECK(withCollider == 4);   // the four chunks straddling the origin
 }
 
+
+// Planting on the DRAWN grid terrain (floating trees on rounded hills): terrainGridSurfaceHeight
+// equals the mesh generateTerrain emits at any point -- found here by brute force over its
+// triangles -- while the smooth field it replaced stands off it.
+TEST_CASE(terrain_grid_surface_height_is_the_drawn_mesh) {
+    engine::TerrainParams p;
+    p.size = 40.0f; p.resolution = 8; p.heightScale = 12.0f; p.noiseScale = 0.08;
+    const engine::Noise n(7);
+    const engine::RenderMesh m = engine::generateTerrain(p, n);
+    double worstMesh = 0.0, worstField = 0.0;
+    for (int k = 0; k < 60; ++k) {
+        const double x = -19.0 + (k * 7.31) - 38.0 * std::floor((k * 7.31) / 38.0);
+        const double z = -19.0 + (k * 3.77) - 38.0 * std::floor((k * 3.77) / 38.0);
+        double meshY = 1e30;
+        for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+            const engine::Vec3 A = m.vertices[m.indices[t]].position, B = m.vertices[m.indices[t + 1]].position,
+                               C = m.vertices[m.indices[t + 2]].position;
+            const double d = (B.z - C.z) * (A.x - C.x) + (C.x - B.x) * (A.z - C.z);
+            const double l1 = ((B.z - C.z) * (x - C.x) + (C.x - B.x) * (z - C.z)) / d;
+            const double l2 = ((C.z - A.z) * (x - C.x) + (A.x - C.x) * (z - C.z)) / d;
+            const double l3 = 1.0 - l1 - l2;
+            if (l1 >= -1e-9 && l2 >= -1e-9 && l3 >= -1e-9) { meshY = l1 * A.y + l2 * B.y + l3 * C.y; break; }
+        }
+        CHECK(meshY < 1e29);
+        const double grid = engine::terrainGridSurfaceHeight(p, n, x, z, -p.size * 0.5, p.size / p.resolution);
+        worstMesh = std::max(worstMesh, std::fabs(grid - meshY));
+        worstField = std::max(worstField, std::fabs(engine::terrainHeight(p, n, x, z) - meshY));
+    }
+    CHECK(worstMesh < 1e-4);
+    CHECK(worstField > 0.05);   // the field really is a different surface
+}
