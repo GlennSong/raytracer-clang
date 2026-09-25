@@ -3810,6 +3810,37 @@ bool LevelLoader::load(const std::string& path,
                 r.mesh = assets.acquireMesh(m, "hydro:water");
                 world.add<Renderable>(e, r);
             }
+#ifdef RT_ROADS_LANES
+            // QUAYS (ADR-0104): where a river runs through the city -- within 35 m of its blocks --
+            // its banks are dressed stone walls, not grassy slopes.
+            if (!g_lanes.blocks.empty()) {
+                std::vector<engine::roads::lanes::Ring> rings;
+                for (const engine::Poly2& bl : g_lanes.blocks) rings.push_back(bl);
+                const engine::roads::lanes::PreparedSet city(
+                    engine::roads::lanes::offsetSet(engine::roads::lanes::unionRings(rings), 35.0));
+                RenderMesh qm = hy.quayMesh([&city](double x, double z) { return city.contains(Vec2(x, z)); }, levelGround);
+                if (!qm.vertices.empty()) {
+                    RenderMaterial qmat;
+                    qmat.albedo = Vec3(1, 1, 1);
+                    qmat.roughness = 0.85f; qmat.metallic = 0.0f; qmat.opacity = 1.0f;
+                    qmat.flags |= RenderMaterial::FLAG_TWO_SIDED;
+                    const StoneTextures stt = stoneTextures(StoneKind::Masonry, 3u);
+                    qmat.albedoMap = renderer.uploadTexture(stt.albedo.width, stt.albedo.height, stt.albedo.channels, stt.albedo.pixels.data());
+                    qmat.normalMap = renderer.uploadTexture(stt.normal.width, stt.normal.height, stt.normal.channels, stt.normal.pixels.data());
+                    qmat.triplanarScale = 2.4f;   // blocks about 0.8 x 0.4 m
+                    qmat.normalStrength = 0.7f;
+                    qmat.variation = 0.3f;
+                    const Entity qe = world.create();
+                    world.add<Transform>(qe, Transform{});
+                    world.add<PrevTransform>(qe, PrevTransform{Transform{}});
+                    Renderable qr;
+                    qr.material = qmat;
+                    qr.mesh = assets.acquireMesh(qm, "hydro:quays");
+                    world.add<Renderable>(qe, qr);
+                    std::fprintf(stderr, "[hydrology] quays: %zu verts\n", qm.vertices.size());
+                }
+            }
+#endif
         }
         // Retaining/fill walls (ADR-0075 P1b): one world-space entity for every
         // road's grade-break structures — concrete-grey, with a static MeshCollider

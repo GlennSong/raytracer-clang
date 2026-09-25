@@ -417,6 +417,64 @@ std::vector<std::vector<Vec2>> Hydrology::corridorRings(double margin) const {
     return out;
 }
 
+RenderMesh Hydrology::quayMesh(const std::function<bool(double, double)>& where,
+                               const std::function<double(double, double)>& ground, double parapet) const {
+    RenderMesh out;
+    // the wall stands just outside the water's outline (the water mesh reaches 1.05 x the half width)
+    for (const std::vector<Vec2>& ring : corridorRings(0.3)) {
+        if (ring.size() < 3) continue;
+        // resample the ring every <= 2.5 m
+        std::vector<Vec2> pts;
+        for (std::size_t i = 0; i < ring.size(); ++i) {
+            const Vec2 a = ring[i], b = ring[(i + 1) % ring.size()];
+            const int k = std::max(1, static_cast<int>(std::ceil((b - a).length() / 2.5)));
+            for (int m = 0; m < k; ++m) pts.push_back(a + (b - a) * (static_cast<double>(m) / k));
+        }
+        const std::size_t n = pts.size();
+        // which samples carry a wall: where the caller says, and beside a RIVER (not a lake shore)
+        std::vector<char> on(n, 0);
+        std::vector<double> lvl(n, 0.0), top(n, 0.0);
+        for (std::size_t i = 0; i < n; ++i) {
+            double level = 0.0;
+            const double d = distanceToRiver(pts[i].x, pts[i].y, 20.0, &level);
+            if (d > 3.0 || !std::isfinite(level) || !where(pts[i].x, pts[i].y)) continue;
+            // the bank behind the wall: a metre and a half out from the water
+            const Vec2 prev = pts[(i + n - 1) % n], next = pts[(i + 1) % n];
+            Vec2 t = next - prev;
+            t = t.length() > 1e-9 ? t / t.length() : Vec2(1, 0);
+            const Vec2 outward = Vec2(t.y, -t.x);   // the ring's right: away from the water for a CCW outer ring
+            const Vec2 q = pts[i] + outward * 1.5;
+            on[i] = 1;
+            lvl[i] = level;
+            top[i] = std::max(ground(q.x, q.y), level + 0.8) + parapet;
+        }
+        // strips over runs of wall samples
+        double u = 0.0;
+        for (std::size_t i = 0; i < n; ++i) {
+            const std::size_t j = (i + 1) % n;
+            if (!on[i] || !on[j]) continue;
+            const Vec2 a = pts[i], b = pts[j];
+            const double len = (b - a).length();
+            if (len < 1e-6) continue;
+            const Vec2 t = (b - a) / len;
+            const Vec3 nrm(-t.y, 0.0, t.x);   // toward the water (left of a CCW outer ring)
+            const uint32_t base = static_cast<uint32_t>(out.vertices.size());
+            auto put = [&](const Vec2& p, double y, double uu, double vv) {
+                Vertex v(Vec3(p.x, y, p.y), nrm, Vec3(t.x, 0.0, t.y), static_cast<float>(uu), static_cast<float>(vv));
+                v.color = Vec3(1, 1, 1);
+                out.vertices.push_back(v);
+            };
+            put(a, lvl[i] - 1.2, u, 0.0);
+            put(b, lvl[j] - 1.2, u + len, 0.0);
+            put(b, top[j], u + len, top[j] - lvl[j] + 1.2);
+            put(a, top[i], u, top[i] - lvl[i] + 1.2);
+            out.indices.insert(out.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+            u += len;
+        }
+    }
+    return out;
+}
+
 RenderMesh Hydrology::waterMesh(const std::vector<std::vector<Vec2>>& sea,
                                 const std::function<double(double, double)>& ground) const {
     namespace L = roads::lanes;

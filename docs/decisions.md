@@ -8080,6 +8080,14 @@ copied in, so rivers end at the sea.
   (`levelWaterKeepOut`, at the terrain pre-pass) for both of its block sites and the grow inputs.
   The lots producer computes the same for the bake.
 - `city_plan rivers BRIEF [STEP]` lists a brief's rivers in plan coordinates.
+- **Streets a ramp anchors to are never cut or renamed.** Ramps name their street by id; on metro,
+  cutting `s805` broke the bake. Their wet runs are bridged instead.
+- **Quays.** Where a river runs through the city (within 35 m of its blocks), `Hydrology::quayMesh`
+  builds a two-sided stone wall along the water's outline, from 1.2 m under the water to a 0.6 m
+  parapet above the bank behind it. It has a new `StoneKind::Masonry` recipe: dressed blocks in
+  running bond from `fieldBrick`, recessed joints, a tone per block and weathering streaks,
+  triplanar at 2.4 m. The river levels give their banks a 2.5 m minimum incision and a 4:1 inner
+  bank (`incisionMin`, `bankSteep`), so the wall has a bank to hold.
 
 **Consequences.**
 - `river_town` (brief `assets/city_plans/river_town.json`, level `assets/levels/river_town.json`):

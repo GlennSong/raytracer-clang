@@ -9,6 +9,7 @@ bool stoneKindFromName(const std::string& n, StoneKind& out) {
     if (n == "granite") out = StoneKind::Granite;
     else if (n == "sandstone") out = StoneKind::Sandstone;
     else if (n == "basalt") out = StoneKind::Basalt;
+    else if (n == "masonry") out = StoneKind::Masonry;
     else return false;
     return true;
 }
@@ -57,12 +58,27 @@ Recipe basalt(uint32_t s) {
     return {c, fieldAdd(fieldScaleBias(grain, 0.3, 0.45), fieldScaleBias(cols, -0.6, 0.0)), 4.0};
 }
 
+// MASONRY: dressed limestone blocks in running bond (a tile is 3 x 6 of them), recessed joints,
+// each block its own tone, fine grain, and darker weathering where water runs down a quay.
+Recipe masonry(uint32_t s) {
+    const Field2 blocks = fieldBrick(3, 6, 0.035, 0.22, s);   // 0.78..1 inside a block, 0 in a joint
+    const Field2 inBlock = fieldSmoothstep(blocks, 0.0, 0.05);
+    const Field2 grain = fieldTileFbm(s + 1, 14, 3), tone = fieldTileFbm(s + 2, 3, 2);
+    const Field2 streaks = fieldWarp(fieldBands(9), fieldTileFbm(s + 3, 3, 2), fieldConstant(0.5), 0.12);
+    ColorField2 c = colorMul(colorConstant(Vec3(0.30, 0.285, 0.26)),
+                             fieldAdd(fieldConstant(1.0), fieldAdd(fieldScaleBias(signedOf(grain), 0.06, 0.0), fieldScaleBias(signedOf(tone), 0.08, 0.0))));
+    c = colorMul(c, fieldScaleBias(blocks, 0.45, 0.55));   // each block's own tone, joints darkest
+    c = colorMixBy(c, colorConstant(Vec3(0.13, 0.125, 0.11)), fieldScaleBias(fieldMul(fieldSmoothstep(streaks, 0.55, 0.9), fieldTileFbm(s + 4, 4, 3)), 0.45, 0.0));
+    return {c, fieldAdd(fieldScaleBias(inBlock, 0.6, 0.1), fieldScaleBias(grain, 0.2, 0.0)), 3.0};
+}
+
 constexpr int kStoneVersion = 2;   // 2: darker granite, broken basalt cracks
 }  // namespace
 
 StoneTextures stoneTextures(StoneKind kind, uint32_t seed, int size) {
     const uint32_t s = seed * 6007u + static_cast<uint32_t>(kind) * 31337u;
-    const Recipe r = kind == StoneKind::Sandstone ? sandstone(s) : kind == StoneKind::Basalt ? basalt(s) : granite(s);
+    const Recipe r = kind == StoneKind::Sandstone ? sandstone(s) : kind == StoneKind::Basalt ? basalt(s)
+                   : kind == StoneKind::Masonry ? masonry(s) : granite(s);
     char key[96];
     StoneTextures t;
     std::snprintf(key, sizeof key, "stone/v%d/%d/%u/%d/albedo", kStoneVersion, static_cast<int>(kind), seed, size);

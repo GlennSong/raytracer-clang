@@ -776,6 +776,19 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             }
         }
         for (Street& S : streets) for (Run& r : S.runs) if (r.decision == 0) r.decision = -1;
+        // A street a RAMP anchors to (by id, from or to) must keep its id and its length: the ramp
+        // is built off it. Its wet runs are bridged, never cut.
+        std::set<std::string> anchored;
+        for (const json& e : edges)
+            for (const char* end : {"from", "to"}) {
+                if (!e.contains(end)) continue;
+                const json& v = e[end];
+                if (v.is_string()) anchored.insert(v.get<std::string>());
+                else if (v.is_object() && v.contains("edge")) anchored.insert(v["edge"].get<std::string>());
+            }
+        for (std::size_t ei = 0; ei < edges.size(); ++ei)
+            if (anchored.count(edges[ei].value("id", std::string())))
+                for (Run& r : streets[ei].runs) r.decision = 1;
         // 4. write them: bridges as floors (held flat across the wet run, at the water plus
         //    clearance), cuts as the dry pieces that remain
         json kept = json::array();

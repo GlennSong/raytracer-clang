@@ -239,7 +239,10 @@
    "riverArea": 3000000,
    "widthK": 0.012,
    "widthMax": 40,
-   "widthMin": 12
+   "widthMin": 12,
+   "bankSteep": 4.0,
+   "incisionMin": 2.5,
+   "incisionMax": 4.0
   },
   "rockLine": 240,
   "seed": 11,

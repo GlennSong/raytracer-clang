@@ -12,7 +12,7 @@
 
 namespace engine {
 
-enum class StoneKind { Granite, Sandstone, Basalt };
+enum class StoneKind { Granite, Sandstone, Basalt, Masonry };   // masonry: dressed blocks (quays, walls)
 bool stoneKindFromName(const std::string& n, StoneKind& out);
 
 struct StoneTextures {
