@@ -242,3 +242,64 @@ TEST_CASE(signal_landing_with_a_ramp_arm_is_not_controlled) {
         if (sig2.hasSignal(i)) ++signalled;
     CHECK(signalled >= 4);
 }
+
+// PROTECTED LEFTS (ADR-0109): where opposing approaches share a green and have a lane to turn from,
+// their slot opens with a LEAD ARROW -- lefts go, protected, while straight and right are red and so
+// is every crossing approach; then the shared green, when a left is permissive (it yields).
+namespace {
+NavGraph arterialCross() {
+    RoadGraph g;
+    g.nodes = { {Vec2(0, 0)}, {Vec2(0, 60)}, {Vec2(0, -60)}, {Vec2(60, 0)}, {Vec2(-60, 0)} };
+    g.edges = {
+        RoadEdge{1, 0, 22, RoadClass::Arterial, 0},
+        RoadEdge{2, 0, 22, RoadClass::Arterial, 0},
+        RoadEdge{3, 0, 22, RoadClass::Arterial, 0},
+        RoadEdge{4, 0, 22, RoadClass::Arterial, 0},
+    };
+    return buildNavGraph(g);
+}
+}  // namespace
+
+TEST_CASE(signal_protected_left_leads_the_shared_green) {
+    NavGraph nav = arterialCross();
+    SignalController s;
+    s.build(nav, 10.0, 2.0);
+    const int n = linkApproaching(nav, 0, -1), so = linkApproaching(nav, 0, 1);
+    const int e = linkApproaching(nav, -1, 0), w = linkApproaching(nav, 1, 0);
+    CHECK(n >= 0 && so >= 0 && e >= 0 && w >= 0);
+    CHECK(nav.links[n].lanes >= 2);
+    CHECK(s.hasLeftArrow(n) && s.hasLeftArrow(so));
+    bool sawArrow = false, sawPermissive = false;
+    for (int step = 0; step < 1200; ++step) {
+        const bool arrow = s.stateFor(n, Move::Left) == SignalState::Green && s.stateFor(n, Move::Straight) == SignalState::Red;
+        if (arrow) {
+            sawArrow = true;
+            CHECK(s.protectedLeft(n));
+            // nothing it crosses may move: the opposing straight and right, both perpendicular approaches
+            CHECK(s.stateFor(so, Move::Straight) == SignalState::Red);
+            CHECK(s.stateFor(so, Move::Right) == SignalState::Red);
+            for (int x : {e, w})
+                for (Move m : {Move::Left, Move::Straight, Move::Right}) CHECK(s.stateFor(x, m) == SignalState::Red);
+        }
+        if (s.stateFor(n, Move::Left) == SignalState::Green && s.stateFor(n, Move::Straight) == SignalState::Green) {
+            sawPermissive = true;
+            CHECK(!s.protectedLeft(n));   // the shared green: a left yields to oncoming
+        }
+        s.update(0.1);
+    }
+    CHECK(sawArrow);
+    CHECK(sawPermissive);
+}
+
+TEST_CASE(signal_one_lane_streets_have_no_arrow) {
+    NavGraph nav = cross();   // local, one lane a direction
+    SignalController s;
+    s.build(nav);
+    for (int i = 0; i < nav.linkCount(); ++i) {
+        CHECK(!s.hasLeftArrow(i));
+        for (int step = 0; step < 50; ++step) {
+            CHECK(s.stateFor(i, Move::Left) == s.stateFor(i, Move::Straight));
+            s.update(0.7);
+        }
+    }
+}

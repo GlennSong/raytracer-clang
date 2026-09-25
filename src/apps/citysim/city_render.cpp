@@ -1928,6 +1928,19 @@ void CityRenderSystem::syncGroups(World& world) {
         SignalState st = sc.stateForLink(li);
         int s = static_cast<int>(st);
         if (sig[s]) sig[s]->transforms.push_back(signalLensPose(li, st));
+        // THE LEFT ARROW (ADR-0109): a fourth lamp beside the head, on the side the left turn goes,
+        // lit green (or amber) through the lead arrow while the straight-on lamps show red
+        if (sc.hasLeftArrow(li)) {
+            const SignalState la = sc.stateFor(li, Move::Left);
+            if (la != SignalState::Red && st == SignalState::Red) {
+                const Vec2 u = nav_.direction(li);
+                const Vec3 turnSide(-u.y, 0, u.x);   // the nav frame's left of travel, in the world
+                Mat4 pose = signalLensPose(li, SignalState::Green);
+                pose = Mat4::trs(Vec3(0, 0, 0) + turnSide * 0.34, Quat(), Vec3(1, 1, 1)) * pose;
+                const int k = static_cast<int>(la);
+                if (sig[k]) sig[k]->transforms.push_back(pose);
+            }
+        }
     }
 
     for (InstanceGroup* c : cars) refreshBounds(c);

@@ -2968,6 +2968,16 @@ Real CitySim::stopLineBack(const Agent& a, const JunctionAhead& ja) const {
 // the box-occupancy / turn-yield / exit-room scan. Returns the speed target
 // after those caps plus the stop line the hard clamp in advance() holds at.
 // Pure query: no rng draws, no agent mutation.
+Move CitySim::moveFor(const Agent& a, int li) const {
+    for (std::size_t k = static_cast<std::size_t>(std::max(0, a.leg)); k + 1 < a.route.links.size(); ++k)
+        if (a.route.links[k] == li) return moveOf(nav_->direction(li), nav_->direction(a.route.links[k + 1]));
+    return Move::Straight;   // its last leg (or not on its route): straight on
+}
+
+SignalState CitySim::signalFor(const Agent& a, int li) const {
+    return signals_.stateFor(li, moveFor(a, li));
+}
+
 CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
                                                 Real target) const {
     JunctionGate gate;
@@ -3018,7 +3028,7 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
         // remains as bonus all-red scramble time.) Turning cars crossing the
         // walkway on green brake for peds via the vision wedge, as before.
         bool signalHolds =
-            car ? signals_.stateForLink(li) != SignalState::Green
+            car ? signalFor(a, li) != SignalState::Green
                 : !(signals_.stateForLink(li) == SignalState::Green ||
                     signals_.walkRemainingAt(toNode) >= 6.5);
         if (distToLine >= 0 && distToLine < kSignalApproach && signals_.hasSignal(li) &&
@@ -3053,6 +3063,8 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
             Vec2 jc = nav_->nodes[toNode];
             Real jr = junctionRadius(toNode);
             Real range = jr + 6.0;
+            // on its green ARROW a left turn is protected: everything it would cross is red
+            const bool protectedTurn = turning && signals_.protectedLeft(li) && moveFor(a, li) == Move::Left;
             // Gridlock escape: held this long by nothing but STALLED occupants, a
             // real driver inches through the box. Staggered per agent (brain bits)
             // so a ring of mutual waiters releases one at a time, deterministic.
@@ -3080,7 +3092,7 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
                     break;
                 }
                 // 2: turn yield against oncoming approach traffic.
-                if (!turning || along >= -0.3) continue;
+                if (!turning || along >= -0.3 || protectedTurn) continue;
                 if (b.speed > 0.5) { yieldAtLine = true; break; }  // live traffic
                 // A gridlocked car stops waiting on anything STALLED — including
                 // the stopped-turner tie-break below, whose cross-junction chains
@@ -3415,7 +3427,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     if (car) {
         const int jli = gate.approachLink;
         const bool redAhead = jli >= 0 && signals_.hasSignal(jli) &&
-                              signals_.stateForLink(jli) != SignalState::Green;
+                              signalFor(a, jli) != SignalState::Green;
         const bool nearJunc = gate.node >= 0 && gate.distToNode < kSignalApproach + 12.0;
         // The gridlock clock also runs for a WEDGE-PINNED car ANYWHERE on the
         // road — a wreck pile at a link ENTRANCE (post-crash bodies
@@ -3449,7 +3461,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         const int toNode = gate.node;
         const int jli = gate.approachLink;
         bool redAhead = signals_.hasSignal(jli) &&
-                        (car ? signals_.stateForLink(jli) != SignalState::Green
+                        (car ? signalFor(a, jli) != SignalState::Green
                              : !(signals_.stateForLink(jli) == SignalState::Green ||
                                  signals_.walkRemainingAt(toNode) >= 6.5));
         // A car that the cap has just brought to the line can overshoot it by a
@@ -4239,7 +4251,7 @@ void CitySim::computeCarWedge() {
                 const int bLi = b.route.links[b.leg];
                 const bool redBound =
                     signals_.hasSignal(bLi) &&
-                    signals_.stateForLink(bLi) != SignalState::Green &&
+                    signalFor(b, bLi) != SignalState::Green &&
                     b.distOnLeg < nav_->links[bLi].length - 3.0;
                 if (redBound) continue;           // the signal will stop them
             }

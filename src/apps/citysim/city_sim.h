@@ -1258,6 +1258,10 @@ private:
         Real distToNode = 0;        // route metres to the node
         Real distToLine = 0;        // route metres to the stop line (< 0: past it)
     };
+    // The signal a car faces at an approach, for ITS movement there (read off its route): during a
+    // lead arrow its left may be green while going straight is red (ADR-0109).
+    Move moveFor(const Agent& a, int approachLink) const;
+    SignalState signalFor(const Agent& a, int approachLink) const;
     JunctionGate junctionSpeedCap(const Agent& a, int li, Real target) const;
     // The next junction on the route within `horizon` route metres: the leg
     // whose link enters it, the distance to its node, and the length of the
