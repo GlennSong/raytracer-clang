@@ -123,6 +123,10 @@ struct RenderMaterial {
     // away instead of popping at a draw distance; and it casts no shadow (a field of blades
     // in the shadow map is noise and cost). Vulkan; Metal draws it unfaded, with shadows.
     static constexpr uint32_t FLAG_GRASS = 1u << 17;
+    // FLAG_SHADOW_ONLY (bit 18): drawn into the shadow maps and nowhere else -- an object the
+    // occlusion test hid from the camera (engine/occlusion.h) still shades what the camera sees.
+    // Set by RenderSystem per draw, never by a level. Vulkan (the only backend with occlusion).
+    static constexpr uint32_t FLAG_SHADOW_ONLY = 1u << 18;
     float fadeStart = 0.0f, fadeEnd = 0.0f;   // FLAG_GRASS only
     // FLAG_GRASS: grows in over [fadeInStart, fadeInEnd] (the far field's cards, arriving as the
     // clumps leave); off when equal. With FLAG_ALPHA_TEST the cut-out keeps its coverage down the
@@ -563,6 +567,20 @@ struct ReflectionProbe {
         : position(pos), influenceRadius(radius), boxMin(bMin), boxMax(bMax) {}
 };
 
+// OCCLUSION DEPTH (engine/occlusion.h): a small readback of a recent frame's depth, each texel
+// the FARTHEST depth in its screen tile (reverse-Z: the minimum), and the clip transform that frame
+// used (pixel y down: row 0 is the top). A few frames old by the time it is read.
+struct OcclusionDepth {
+    int width = 0, height = 0;        // tiles
+    int tilePixels = 16;
+    std::vector<float> depth;         // width * height, row-major from the top
+    Mat4 viewProj;                    // world -> clip, y flipped (Vulkan framebuffer)
+    Vec3 eye{0, 0, 0};
+    Vec3 forward{0, 0, -1};
+    uint64_t frame = 0;               // the renderer frame it was drawn in
+    bool valid = false;
+};
+
 struct RenderStats {
     uint32_t drawCalls = 0;
     uint32_t instancedDrawCalls = 0;
@@ -734,6 +752,9 @@ public:
                                    float /*originZ*/, float /*extent*/,
                                    float /*encodeLo*/, float /*encodeHi*/) {}
     virtual RenderStats getRenderStats() const = 0;
+    // The newest occlusion depth the GPU has finished (engine/occlusion.h), or null where the
+    // backend has none (the caller then culls by frustum only).
+    virtual const OcclusionDepth* occlusionDepth() const { return nullptr; }
 
     // Per-frame instance buffer capacities (general/shadow/foliage). A big level
     // (8 km city) raises these at load; small levels keep the lean defaults.

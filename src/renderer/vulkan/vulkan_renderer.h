@@ -39,6 +39,7 @@ public:
     void removeTexture(TextureHandle handle) override;
     void submitUi(const std::vector<UiQuad>& quads) override;
     RenderStats getRenderStats() const override;
+    const OcclusionDepth* occlusionDepth() const override;
 
     void beginFrame() override;
     void setCamera(const CameraState& camera) override;

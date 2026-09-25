@@ -546,6 +546,25 @@ struct VulkanRenderer::Impl {
     VkPipeline ssaoPipeline = VK_NULL_HANDLE;
     VkPipelineLayout ssaoBlurPipelineLayout = VK_NULL_HANDLE;
     VkPipeline ssaoBlurPipeline = VK_NULL_HANDLE;
+    // OCCLUSION DEPTH (engine/occlusion.h): the scene depth reduced to 16 px tiles by a compute pass,
+    // copied to a host buffer per frame in flight, snapshotted when that frame's fence has passed.
+    static constexpr int kOccTile = 16;
+    static constexpr int kOccMaxTexels = 320 * 320;   // 5120 x 5120 px of framebuffer
+    VkDescriptorSetLayout occSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool occPool = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> occSets{};
+    VkPipelineLayout occPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline occPipeline = VK_NULL_HANDLE;
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> occBuffers{};
+    std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> occMemory{};
+    std::array<void*, MAX_FRAMES_IN_FLIGHT> occMapped{};
+    std::array<OcclusionDepth, MAX_FRAMES_IN_FLIGHT> occPending{};   // what each slot's buffer will hold
+    OcclusionDepth occSnapshot;                                       // the newest finished one
+    bool occFailed = false;
+    Mat4 frameViewProj;             // this frame's world -> clip, y flipped (setCamera)
+    Vec3 frameEye{0, 0, 0}, frameForward{0, 0, -1};
+    bool ensureOcclusion();
+    void recordOcclusion(VkCommandBuffer cmd);
     bool  ssaoEnabledFrame = true;
     float ssaoRadius = 1.5f;
     float ssaoIntensity = 0.8f;
@@ -5004,6 +5023,124 @@ bool VulkanRenderer::Impl::recreateSwapchain() {
     return true;
 }
 
+bool VulkanRenderer::Impl::ensureOcclusion() {
+    if (occPipeline) return true;
+    if (occFailed) return false;
+    occFailed = true;   // until everything below succeeds
+    VkDescriptorSetLayoutBinding b[2]{};
+    b[0].binding = 0;
+    b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b[0].descriptorCount = 1;
+    b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    b[1].binding = 1;
+    b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    b[1].descriptorCount = 1;
+    b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = 2;
+    li.pBindings = b;
+    if (vkCreateDescriptorSetLayout(device, &li, nullptr, &occSetLayout) != VK_SUCCESS) return false;
+    VkDescriptorPoolSize sizes[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_FRAMES_IN_FLIGHT},
+                                     {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_FRAMES_IN_FLIGHT}};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = MAX_FRAMES_IN_FLIGHT;
+    pi.poolSizeCount = 2;
+    pi.pPoolSizes = sizes;
+    if (vkCreateDescriptorPool(device, &pi, nullptr, &occPool) != VK_SUCCESS) return false;
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VkDescriptorSetAllocateInfo a{};
+        a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        a.descriptorPool = occPool;
+        a.descriptorSetCount = 1;
+        a.pSetLayouts = &occSetLayout;
+        if (vkAllocateDescriptorSets(device, &a, &occSets[i]) != VK_SUCCESS) return false;
+        const VkDeviceSize bytes = sizeof(float) * kOccMaxTexels;
+        if (!createBuffer(bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, occBuffers[i],
+                          occMemory[i]))
+            return false;
+        vkMapMemory(device, occMemory[i], 0, bytes, 0, &occMapped[i]);
+    }
+    VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(int32_t) * 5};
+    VkPipelineLayoutCreateInfo pl{};
+    pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts = &occSetLayout;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &range;
+    if (vkCreatePipelineLayout(device, &pl, nullptr, &occPipelineLayout) != VK_SUCCESS) return false;
+    VkShaderModule mod = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/occlusion_reduce.comp.spv");
+    if (!mod) return false;
+    VkComputePipelineCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    ci.stage.module = mod;
+    ci.stage.pName = "main";
+    ci.layout = occPipelineLayout;
+    const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &occPipeline);
+    vkDestroyShaderModule(device, mod, nullptr);
+    if (r != VK_SUCCESS) { occPipeline = VK_NULL_HANDLE; return false; }
+    occFailed = false;
+    return true;
+}
+
+void VulkanRenderer::Impl::recordOcclusion(VkCommandBuffer cmd) {
+    static const bool off = [] { const char* e = std::getenv("RT_NO_OCCLUSION"); return e && e[0] == '1'; }();
+    if (off || !depthView || !compositeSampler || !ensureOcclusion()) return;
+    const int inW = static_cast<int>(swapchainExtent.width), inH = static_cast<int>(swapchainExtent.height);
+    const int outW = (inW + kOccTile - 1) / kOccTile, outH = (inH + kOccTile - 1) / kOccTile;
+    if (outW * outH > kOccMaxTexels || outW <= 0 || outH <= 0) return;
+    // the set for this frame: the (possibly recreated) depth view and this slot's buffer
+    VkDescriptorImageInfo img{compositeSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+    VkDescriptorBufferInfo buf{occBuffers[currentFrame], 0, VK_WHOLE_SIZE};
+    VkWriteDescriptorSet w[2]{};
+    for (int k = 0; k < 2; ++k) {
+        w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[k].dstSet = occSets[currentFrame];
+        w[k].dstBinding = static_cast<uint32_t>(k);
+        w[k].descriptorCount = 1;
+    }
+    w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w[0].pImageInfo = &img;
+    w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w[1].pBufferInfo = &buf;
+    vkUpdateDescriptorSets(device, 2, w, 0, nullptr);
+    // the scene pass's depth writes, before the compute reads
+    VkMemoryBarrier toCompute{};
+    toCompute.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    toCompute.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    toCompute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &toCompute, 0, nullptr, 0, nullptr);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, occPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, occPipelineLayout, 0, 1, &occSets[currentFrame], 0, nullptr);
+    const int32_t push[5] = {outW, outH, inW, inH, kOccTile};
+    vkCmdPushConstants(cmd, occPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
+    vkCmdDispatch(cmd, static_cast<uint32_t>((outW + 7) / 8), static_cast<uint32_t>((outH + 7) / 8), 1);
+    // ...and the compute's writes before the host reads them (after this frame's fence)
+    VkBufferMemoryBarrier toHost{};
+    toHost.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    toHost.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    toHost.srcQueueFamilyIndex = toHost.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toHost.buffer = occBuffers[currentFrame];
+    toHost.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &toHost,
+                         0, nullptr);
+    OcclusionDepth& o = occPending[currentFrame];
+    o.width = outW;
+    o.height = outH;
+    o.tilePixels = kOccTile;
+    o.viewProj = frameViewProj;
+    o.eye = frameEye;
+    o.forward = frameForward;
+    o.frame = frameCounter;
+    o.valid = true;
+}
+
 void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -5055,6 +5192,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     for (const DrawItem& item : drawQueue) {
         GpuMesh* m = meshes.get(item.mesh);
         if (!m || m->indexCount == 0) continue;
+        if (item.push.surfaceFlags[1] & RenderMaterial::FLAG_SHADOW_ONLY) continue;   // hidden: shadows only
         // FLAG_OVERLAY draws last with depth off, regardless of opacity/terrain.
         if (item.push.surfaceFlags[1] & RenderMaterial::FLAG_OVERLAY) overlay.push_back(&item);
         else if (item.terrain) terrainItems.push_back(&item);
@@ -5244,6 +5382,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     recordBloom(cmd);
     recordSsao(cmd);
     recordSsr(cmd);
+    recordOcclusion(cmd);
     // DOF (off by default) blurs the HDR scene; composite reads dofView when on.
     if (dofEnabledFrame) recordDof(cmd);
 
@@ -5344,6 +5483,21 @@ void VulkanRenderer::Impl::drawFrame() {
     if (!initialized || width == 0 || height == 0) return;
 
     vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+    // This slot's occlusion depth is finished: it becomes the snapshot the next culling reads.
+    if (occPending[currentFrame].valid && occMapped[currentFrame]) {
+        OcclusionDepth& o = occPending[currentFrame];
+        occSnapshot.width = o.width;
+        occSnapshot.height = o.height;
+        occSnapshot.tilePixels = o.tilePixels;
+        occSnapshot.viewProj = o.viewProj;
+        occSnapshot.eye = o.eye;
+        occSnapshot.forward = o.forward;
+        occSnapshot.frame = o.frame;
+        occSnapshot.depth.resize(static_cast<std::size_t>(o.width) * o.height);
+        std::memcpy(occSnapshot.depth.data(), occMapped[currentFrame], occSnapshot.depth.size() * sizeof(float));
+        occSnapshot.valid = true;
+        o.valid = false;
+    }
 
     // Whatever was uploaded since the last frame goes to the GPU as one batch, before
     // this frame can draw it; resources retired MAX_FRAMES_IN_FLIGHT frames ago are
@@ -5724,6 +5878,21 @@ void VulkanRenderer::shutdown() {
     if (impl->cloudDetailView) vkDestroyImageView(impl->device, impl->cloudDetailView, nullptr);
     if (impl->cloudDetailImage) vkDestroyImage(impl->device, impl->cloudDetailImage, nullptr);
     if (impl->cloudDetailMemory) vkFreeMemory(impl->device, impl->cloudDetailMemory, nullptr);
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        if (impl->occBuffers[i]) vkDestroyBuffer(impl->device, impl->occBuffers[i], nullptr);
+        if (impl->occMemory[i]) vkFreeMemory(impl->device, impl->occMemory[i], nullptr);
+        impl->occBuffers[i] = VK_NULL_HANDLE;
+        impl->occMemory[i] = VK_NULL_HANDLE;
+        impl->occMapped[i] = nullptr;
+    }
+    if (impl->occPipeline) vkDestroyPipeline(impl->device, impl->occPipeline, nullptr);
+    if (impl->occPipelineLayout) vkDestroyPipelineLayout(impl->device, impl->occPipelineLayout, nullptr);
+    if (impl->occPool) vkDestroyDescriptorPool(impl->device, impl->occPool, nullptr);
+    if (impl->occSetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->occSetLayout, nullptr);
+    impl->occPipeline = VK_NULL_HANDLE;
+    impl->occPipelineLayout = VK_NULL_HANDLE;
+    impl->occPool = VK_NULL_HANDLE;
+    impl->occSetLayout = VK_NULL_HANDLE;
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         if (impl->cloudUboBuffers[i]) vkDestroyBuffer(impl->device, impl->cloudUboBuffers[i], nullptr);
         if (impl->cloudUboMemory[i]) vkFreeMemory(impl->device, impl->cloudUboMemory[i], nullptr);
@@ -6114,6 +6283,9 @@ void VulkanRenderer::removeTexture(TextureHandle handle) {
 }
 
 RenderStats VulkanRenderer::getRenderStats() const { return impl->stats; }
+const OcclusionDepth* VulkanRenderer::occlusionDepth() const {
+    return impl->occSnapshot.valid ? &impl->occSnapshot : nullptr;
+}
 
 void VulkanRenderer::beginFrame() {
     impl->stats = RenderStats{};
@@ -6171,6 +6343,9 @@ void VulkanRenderer::setCamera(const CameraState& camera) {
     Mat4 flip;
     flip.m[1][1] = -1.0;
     Mat4 invFlippedVP = (flip * vp).inverse();
+    impl->frameViewProj = flip * vp;
+    impl->frameEye = camera.position;
+    impl->frameForward = normalize(camera.target - camera.position);
     packMat4(invFlippedVP, impl->cpuGlobals.invViewProjection, /*flipY=*/false);
     impl->cpuGlobals.cameraPosition[0] = static_cast<float>(camera.position.x);
     impl->cpuGlobals.cameraPosition[1] = static_cast<float>(camera.position.y);

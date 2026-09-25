@@ -2,6 +2,7 @@
 #include "../components.h"
 #include "../vehicle_lamps.h"   // duskRamp: street lights share the headlight boundary
 #include "../../profile.h"
+#include "../occlusion.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -190,6 +191,14 @@ void RenderSystem::render(FrameContext& ctx) {
         : Mat4::orthographic(cam.orthoHeight, cam.aspectRatio,
                               cam.nearPlane, cam.farPlane);
     Frustum frustum = Frustum::fromViewProjection(proj * view);
+    // OCCLUSION (engine/occlusion.h): a recent frame's depth, while it still stands for this view
+    const OcclusionDepth* occ = ctx.renderer.occlusionDepth();
+    Vec3 camFwd = cam.target - cam.position;
+    camFwd = camFwd.length() > 1e-9 ? camFwd * (1.0 / camFwd.length()) : Vec3(0, 0, -1);
+    if (occ && (cam.projection != CameraProjection::Perspective || !occlusionUsable(*occ, cam.position, camFwd))) occ = nullptr;
+    const double occSlack = occ ? (cam.position - occ->eye).length() + 0.25 : 0.0;
+    static const bool occStats = std::getenv("RT_OCC_STATS") != nullptr;
+    long occTested = 0, occCulled = 0, grpTested = 0, grpCulled = 0;
 
     // RT_DUMP_DRAWS=1: one-shot draw audit — every Renderable's bounds and the
     // cull verdict, printed once around frame ~60. The tool that ends "the mesh
@@ -282,6 +291,19 @@ void RenderSystem::render(FrameContext& ctx) {
                              "(%.0f,%.0f,%.0f)-(%.0f,%.0f,%.0f)\n",
                              entity.index, worldMin.x, worldMin.y, worldMin.z,
                              worldMax.x, worldMax.y, worldMax.z);
+            if (occ && !(r.material.flags & RenderMaterial::FLAG_OVERLAY)) {
+                ++occTested;
+                if (occludedBox(*occ, worldMin, worldMax, occSlack)) {
+                    ++occCulled;
+                    // hidden from the camera, but its shadow may fall where the camera sees
+                    if (r.material.opacity >= 1.0f && !(r.material.flags & RenderMaterial::FLAG_GRASS)) {
+                        RenderMaterial shadowOnly = r.material;
+                        shadowOnly.flags |= RenderMaterial::FLAG_SHADOW_ONLY;
+                        ctx.renderer.drawMesh(r.mesh, model, shadowOnly);
+                    }
+                    return;
+                }
+            }
             // HLOD distance policy (P1.2): detail chunks fade out past
             // drawDistance, their mass-box proxies fade IN at minDistance —
             // measured to the bounds centre so the pair swaps in lockstep.
@@ -314,12 +336,38 @@ void RenderSystem::render(FrameContext& ctx) {
             if (drawDist > 0 &&
                 (g.boundsCenter - cam.position).length() - g.boundsRadius > drawDist)
                 return;
+            bool hidden = false;
+            if (occ) {
+                ++grpTested;
+                const Vec3 rr(g.boundsRadius, g.boundsRadius, g.boundsRadius);
+                if (occludedBox(*occ, g.boundsCenter - rr, g.boundsCenter + rr, occSlack)) {
+                    ++grpCulled;
+                    hidden = true;
+                    if (g.material.flags & RenderMaterial::FLAG_GRASS) return;   // grass casts no shadow
+                }
+            }
             BoundingSphere mb = ctx.renderer.getMeshBounds(g.mesh);
             frustumCullInstances(g.transforms, frustum, mb.center, mb.radius,
                                  cam.position, drawDist, instanceScratch_);
-            if (!instanceScratch_.empty())
+            if (instanceScratch_.empty()) return;
+            if (hidden) {   // hidden from the camera, but its shadow may fall where the camera sees
+                RenderMaterial shadowOnly = g.material;
+                shadowOnly.flags |= RenderMaterial::FLAG_SHADOW_ONLY;
+                ctx.renderer.drawMeshInstanced(g.mesh, instanceScratch_, shadowOnly);
+            } else {
                 ctx.renderer.drawMeshInstanced(g.mesh, instanceScratch_, g.material);
+            }
         });
+    // RT_OCC_STATS=1: what the occlusion test saved, every 120 frames
+    if (occStats) {
+        static long frames = 0, t = 0, c = 0, gt = 0, gc = 0, used = 0;
+        t += occTested; c += occCulled; gt += grpTested; gc += grpCulled; used += occ ? 1 : 0;
+        if (++frames % 120 == 0) {
+            std::fprintf(stderr, "[occlusion] %ld/120 frames used it; entities %ld/%ld culled, groups %ld/%ld culled (per frame)\n",
+                         used, c / 120, t / 120, gc / 120, gt / 120);
+            t = c = gt = gc = used = 0;
+        }
+    }
 }
 
 void RenderSystem::onStop(FrameContext& /*ctx*/) {

@@ -7790,3 +7790,43 @@ test bed: 6 rivers and 9 lakes from its own relief. **Owed:**
 - the city: planned around rivers, arterials crossing on bridges;
 - widths tuned for the map's scale;
 - Metal.
+
+## ADR-0100 — Occlusion culling against a recent frame's depth, on the CPU
+
+**Context.** Glenn: "we may want to do occlusion for grass and trees to reduce objects drawn in the
+frame", with the full city in mind. The engine culls on the CPU (per entity AABB, per instance group,
+per instance) and submits one draw queue that the shadow maps and the main pass share. There were no
+compute pipelines and no depth readback.
+
+**Decision.**
+- **The depth, reduced on the GPU.** After the scene pass, a compute shader
+  (`occlusion_reduce.comp`, the renderer's first) reduces the depth buffer to 16 px tiles. Each tile
+  keeps its FARTHEST depth: reverse-Z, so the minimum.
+- **Read back, not waited for.** The result goes into a host-visible buffer per frame in flight.
+  When that frame's fence has passed (the start of a later `drawFrame`), it becomes
+  `Renderer::occlusionDepth()`, together with that frame's clip transform, eye and forward. It is
+  two to three frames old when read, so nothing ever waits on the GPU for it.
+- **The test** (`engine/occlusion.h`):
+  - A world box is projected with *that* frame's transform. It is hidden when its nearest depth is
+    farther than every tile it covers.
+  - The box is grown first by the camera's movement since that frame (slack), so parallax cannot
+    uncover it.
+  - Anything in doubt is visible: a box crossing the near plane, one covering more than 48×48
+    tiles, or any snapshot taken more than 0.75 m or 2.5° away from the current view.
+    `occlusionUsable()` decides whether the snapshot still stands.
+- **Hidden still casts shadows.** A hidden entity or group is submitted with the new
+  `FLAG_SHADOW_ONLY`, which the main pass skips and the shadow pass draws. A tree behind a ridge
+  still shadows the ridge. Hidden grass is dropped outright, since grass casts no shadow.
+- **The switches:** `RT_NO_OCCLUSION=1` turns it off, and `RT_OCC_STATS=1` reports what it culled.
+  Metal has no readback, so it culls by frustum only.
+
+**Consequences.** Measured with `tools/walk_probe.py`:
+- **river_valley, walking at 5 m/s:** about 215 of 800 instance groups are hidden per frame (grass
+  tiles and trees behind the hills). The median frame goes from 4.6 to 4.1 ms. Without the
+  shadow-only pass it was 3.5 ms, but shadows would pop.
+- **metro_planned, walking from the centre:** about 10,000 of 10,500 entities are hidden per frame,
+  and main-pass draw calls fall from 9,850 to 560. The CPU render phase goes from 7.2 to 6.4 ms at
+  the median. The GPU saving is not measured here (the capture's `gpu_ms` is 0).
+- **Screenshots match** with occlusion on and off, from the air and at street level.
+- **What the city's frame is actually made of:** the *fixed* step (city sim and physics) is 11 ms
+  at the median, with spikes of 50–300 ms. That, not drawing, is the next target.

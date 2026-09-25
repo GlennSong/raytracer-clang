@@ -211,6 +211,7 @@ add_library(engine_core STATIC
     src/engine/systems/residency_system.cpp
     src/engine/systems/grass_system.cpp
     src/engine/residency.cpp
+    src/engine/occlusion.cpp
     # NOTE: the agent-based city simulation (ADR-0060…0066) is NOT here. It is an
     # APPLICATION of the engine, built as its own `citysim` static library below
     # (src/apps/citysim). engine_core is the platform-free, city-free engine; a
@@ -1039,7 +1040,7 @@ function(rt_build_vulkan_shaders)
                    sky.vert sky.frag composite.vert composite.frag bloom.frag
                    ssao.frag ssao_blur.frag ssr.frag dof.frag brdf_lut.frag
                    atmosphere.frag clouds.frag clouds_composite.frag water.vert water.frag star.frag
-                   ui.vert ui.frag)
+                   ui.vert ui.frag occlusion_reduce.comp)
     set(VK_SPV_FILES "")
     foreach(shader ${VK_SHADERS})
         add_custom_command(

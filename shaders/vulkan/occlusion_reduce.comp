@@ -1,0 +1,28 @@
+#version 450
+// OCCLUSION DEPTH (engine/occlusion.h): the scene depth reduced to one texel per `tile` x `tile`
+// pixels, each the FARTHEST depth in its tile -- reverse-Z, so the minimum. Read back on the CPU a
+// couple of frames later: an object whose nearest depth is farther than every tile it covers was
+// hidden behind what was drawn there.
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D depthTex;
+layout(std430, set = 0, binding = 1) writeonly buffer Out { float depth[]; } outBuf;
+
+layout(push_constant) uniform Push {
+    ivec2 outSize;
+    ivec2 inSize;
+    int tile;
+} pc;
+
+void main() {
+    ivec2 o = ivec2(gl_GlobalInvocationID.xy);
+    if (o.x >= pc.outSize.x || o.y >= pc.outSize.y) return;
+    ivec2 base = o * pc.tile;
+    float farthest = 1.0;
+    for (int y = 0; y < pc.tile; ++y)
+        for (int x = 0; x < pc.tile; ++x) {
+            ivec2 p = min(base + ivec2(x, y), pc.inSize - 1);
+            farthest = min(farthest, texelFetch(depthTex, p, 0).r);
+        }
+    outBuf.depth[o.y * pc.outSize.x + o.x] = farthest;
+}
