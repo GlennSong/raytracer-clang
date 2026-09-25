@@ -7722,15 +7722,36 @@ lists rivers as a future reader of `Skeleton`.
   - shading uses flow maps (Vlachos, "Water Flow in Portal 2", 2010): two phase-offset layers
     advected along the flow, crossfaded.
 
-  Mouths and confluences are then just merged polygons. The ribbon word stays in the shape kit
+  Mouths and confluences are then just merged polygons. **Built** (`Hydrology::waterMesh`):
+  - Corridors are a quad per segment plus a 12-gon per node, on a path resampled to width/3.
+  - Lake cells are dilated one cell, unioned, and Chaikin-rounded three times, so no staircase.
+  - River centre points and lake cell centres are the CDT's interior points. u is 0 on the
+    outline and 0.5 at those points (the distance from the bank).
+  - Lake cells take the lake's level. Elsewhere a vertex takes the nearest segment's level,
+    flow and speed (a 64 m segment grid finds it). A river's level never falls below that of
+    the lake it enters.
+  - **The sea is the ocean mesh's, cell for cell.** The ocean fills cells where the NATURAL
+    ground (`WaterMeshParams::extent`, the terrain without the carve) is below sea level.
+    `waterMeshCells` hands those same squares to `waterMesh`, which subtracts them. The two
+    surfaces meet edge to edge and never overlap. Before, a channel cut below sea level near
+    the mouth let the ocean's 10 m cells show as a staircase under a doubled, blended river.
+    The mouth fade no longer touches alpha, only foam.
+
+  river_valley: 9.8 k vertices, 13 k triangles for every river and lake. `RT_WATER_OBJ=<path>`
+  dumps it. A steep reach (a 7 m lake draining 6 m in 40 m into a lagoon) now reads as a sloped
+  whitewater chute: that is where the owed waterfalls go.
+
+  The ribbon word stays in the shape kit
   (paths and fronds read it), now with a smoothed tangent and a half-width capped by the bend
   radius.
-- `Surface::River` shades moving water: shallows and foam at the banks, rapids foam by speed,
-  ripples downstream, and a fade into mouths.
+- `Surface::River` shades moving water with a flow map in world xz:
+  - two phases of noise, half a cycle apart, advected along the vertex flow at 0.25 + 3·speed m/s
+    and crossfaded;
+  - ripple normals from the same two phases;
+  - foam at the banks (from u) and white water only where speed > 0.35.
 
 **Consequences.** The drainage costs 0.15 s on a 376² grid (3 km at 8 m). `river_valley.json` is the
 test bed: 6 rivers and 9 lakes from its own relief. **Owed:**
-- the polygon water mesh and the flow-map shader (next);
 - waterfalls where the level drops sharply;
 - the ground-cover map's banks (wet sand, gravel, reeds) and riparian trees;
 - the city: planned around rivers, arterials crossing on bridges;

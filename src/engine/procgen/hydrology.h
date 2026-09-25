@@ -49,7 +49,7 @@ struct RiverNode {
     double area = 0;    // upstream area (m^2)
     double fade = 1;    // 1 upstream, 0 at a mouth: the surface fades into the sea or lake it meets
 };
-struct River { std::vector<RiverNode> nodes; bool mouth = false; };   // source -> end; mouth: ends in the sea or a lake
+struct River { std::vector<RiverNode> nodes; bool mouth = false; int intoLake = -1; };   // source -> end; mouth: ends in the sea or a lake
 
 struct Lake {
     double level = 0;
@@ -73,17 +73,20 @@ public:
     int gridSize() const { return n_; }
     Vec2 cellCenter(int idx) const;
 
-    // The water surfaces: one ribbon per river (u across 0..1, v the distance along in metres,
-    // colour r the flow speed 0..1 from the surface's slope, b its fade into a mouth) and one flat
-    // sheet per lake.
-    RenderMesh riverMesh() const;
-    RenderMesh lakeMesh() const;
+    // THE WATER SURFACE (ADR-0099): every river's corridor unioned with the lakes into one
+    // polygon set and triangulated (constrained Delaunay, the river centre lines as interior
+    // points), so mouths and confluences simply merge. Each vertex sits at its water level (a
+    // lake's own inside a lake, else the nearest river's) and carries the flow: the tangent is
+    // the flow direction, colour r the speed (0..1) and g the fade into a mouth, u the distance
+    // to the bank (0 at the bank, 0.5 well inside).
+    RenderMesh waterMesh(const std::vector<std::vector<Vec2>>& sea = {}) const;   // sea: cells it stops at
 
 private:
     HydroParams p_;
     int n_ = 0;
     std::vector<River> rivers_;
     std::vector<Lake> lakes_;
+    std::vector<int> lakeOfCell_;   // drainage cell -> lake index (-1 none)
     // the channel segments, binned on a coarse grid for the carve queries
     struct Seg { Vec2 a, b; double la, lb, wa, wb, da, db; };
     std::vector<Seg> segs_;

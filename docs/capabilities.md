@@ -126,4 +126,5 @@ vocabulary, and a missing word is added HERE (C++ and Lua), not privately to one
 | Stylized recipes: trees (11 shapes), rocks (4 families × 4 stones), grass clumps | `procgen/stylized_tree.h`, `stylized_rock.h`, `grass.h`; Lua `stylized.*` | vegetation species `stylized` / `stylized_rock`, `GrassSystem` | recipes over the kit; custom topology left: pine tiers, palm fronds (a ribbon word would absorb them) |
 | Legacy flora: parametric L-system trees, turtle trees, SDF rocks | `procgen/tree.h`, `lsystem.h`, `rock.h`; `flora.lua` | older levels | kept; the stylized recipes are the BotW direction |
 | Instanced drawing | Vulkan `drawMeshInstanced` (ADR-0097) | `InstanceGroup` (vegetation, grass, city groups) | one draw per visible set; `RT_NO_INSTANCING=1` for A/B |
+| Water polygon (rivers + lakes, one mesh) | `Hydrology::waterMesh` (ADR-0099) on lanes `geom2d` union + CDT | `level_loader` hydro water | clipped by `waterMeshCells` so it meets the ocean edge to edge; `Surface::River` flow-map shading |
 | Residency (stream by camera distance) | `engine/residency.h` (ADR-0095) | building cells | terrain tiles, road cells, forests are the planned clients |

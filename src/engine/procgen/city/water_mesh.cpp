@@ -6,6 +6,30 @@
 
 namespace engine {
 
+namespace {
+// A cell is sea when any of its corners is below sea level (on the extent's ground).
+bool seaCell(const HeightSampler& ground, const WaterMeshParams& p, double x0, double z0) {
+    const double x1 = x0 + p.cell, z1 = z0 + p.cell;
+    return ground(x0, z0) < p.seaLevel || ground(x1, z0) < p.seaLevel || ground(x0, z1) < p.seaLevel ||
+           ground(x1, z1) < p.seaLevel;
+}
+}  // namespace
+
+std::vector<std::vector<Vec2>> waterMeshCells(const HeightSampler& floor, const WaterMeshParams& p) {
+    std::vector<std::vector<Vec2>> out;
+    if (!floor || p.seaLevel <= -1e29 || p.cell <= 0.0) return out;
+    const HeightSampler& ground = p.extent ? p.extent : floor;
+    const int nx = std::max(1, static_cast<int>(std::ceil((p.hi.x - p.lo.x) / p.cell)));
+    const int nz = std::max(1, static_cast<int>(std::ceil((p.hi.y - p.lo.y) / p.cell)));
+    for (int j = 0; j < nz; ++j)
+        for (int i = 0; i < nx; ++i) {
+            const double x0 = p.lo.x + i * p.cell, z0 = p.lo.y + j * p.cell;
+            if (!seaCell(ground, p, x0, z0)) continue;
+            out.push_back({Vec2(x0, z0), Vec2(x0 + p.cell, z0), Vec2(x0 + p.cell, z0 + p.cell), Vec2(x0, z0 + p.cell)});
+        }
+    return out;
+}
+
 RenderMesh buildWaterMesh(const HeightSampler& floor, const WaterMeshParams& p) {
     RenderMesh mesh;
     if (!floor || p.seaLevel <= -1e29 || p.cell <= 0.0) return mesh;
@@ -48,8 +72,7 @@ RenderMesh buildWaterMesh(const HeightSampler& floor, const WaterMeshParams& p) 
     for (int j = 0; j < nz; ++j)
         for (int i = 0; i < nx; ++i) {
             const double x0 = p.lo.x + i * p.cell, z0 = p.lo.y + j * p.cell;
-            const double x1 = x0 + p.cell, z1 = z0 + p.cell;
-            if (depthAt(x0, z0) <= 0 && depthAt(x1, z0) <= 0 && depthAt(x0, z1) <= 0 && depthAt(x1, z1) <= 0) continue;  // all land: skip
+            if (!seaCell(p.extent ? p.extent : floor, p, x0, z0)) continue;  // all land: skip
             const uint32_t a00 = corner(i, j), a10 = corner(i + 1, j), a11 = corner(i + 1, j + 1), a01 = corner(i, j + 1);
             // wound to face up, as emitTriUV winds them
             mesh.indices.insert(mesh.indices.end(), {a00, a10, a11, a00, a11, a01});

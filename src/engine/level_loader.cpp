@@ -3728,6 +3728,7 @@ bool LevelLoader::load(const std::string& path,
         // shader (waves + depth-graded colour + shoreline foam baked into UV,
         // animated on windTime; low roughness + <1 opacity for SSR reflection and
         // fresnel). Uses levelGround (the un-carved floor) so it fills real basins.
+        std::vector<std::vector<Vec2>> seaCells;   // the ocean's cells: the rivers stop at them
         if (root["terrain"].contains("water") || root.contains("water")) {
             const json& w = root.contains("water") ? root["water"]
                                                    : root["terrain"]["water"];
@@ -3743,7 +3744,14 @@ bool LevelLoader::load(const std::string& path,
                 auto nat = levelGround;
                 waterFloor = [ew, nat](double x, double z) { return nat(x, z) + (*ew)(x, z); };
             }
+            if (terrainParams.hydro) {   // the sea is where the NATURAL ground is below it; carved channels are the rivers'
+                auto dry = std::make_shared<TerrainParams>(terrainParams);
+                dry->hydro = nullptr;
+                auto dn = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
+                wp.extent = [dry, dn](double x, double z) { return terrainHeight(*dry, *dn, x, z); };
+            }
             RenderMesh wmesh = engine::buildWaterMesh(waterFloor, wp);
+            seaCells = engine::waterMeshCells(waterFloor, wp);
             if (!wmesh.vertices.empty()) {
                 Entity we = world.create();
                 world.add<Transform>(we, Transform{});
@@ -3774,15 +3782,25 @@ bool LevelLoader::load(const std::string& path,
             wm.metallic = 0.0f;
             wm.opacity = 0.84f;
             wm.setSurface(RenderMaterial::Surface::River);
-            for (int part = 0; part < 2; ++part) {
-                RenderMesh m = part == 0 ? hy.riverMesh() : hy.lakeMesh();
-                if (m.vertices.empty()) continue;
+            // one surface for all of it: river corridors unioned with the lakes (ADR-0099)
+            RenderMesh m = hy.waterMesh(seaCells);
+            if (!m.vertices.empty()) {
+                std::fprintf(stderr, "[hydrology] water mesh: %zu verts, %zu tris\n", m.vertices.size(), m.indices.size() / 3);
+                if (const char* dump = std::getenv("RT_WATER_OBJ")) {   // debug: the water polygon as OBJ (v x y z speed fade u)
+                    if (FILE* f = std::fopen(dump, "w")) {
+                        for (const Vertex& v : m.vertices)
+                            std::fprintf(f, "v %.2f %.3f %.2f %.3f %.3f %.3f\n", v.position.x, v.position.y, v.position.z, v.color.x, v.color.y, v.u);
+                        for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3)
+                            std::fprintf(f, "f %u %u %u\n", m.indices[i] + 1, m.indices[i + 1] + 1, m.indices[i + 2] + 1);
+                        std::fclose(f);
+                    }
+                }
                 const Entity e = world.create();
                 world.add<Transform>(e, Transform{});
                 world.add<PrevTransform>(e, PrevTransform{Transform{}});
                 Renderable r;
                 r.material = wm;
-                r.mesh = assets.acquireMesh(m, part == 0 ? "hydro:rivers" : "hydro:lakes");
+                r.mesh = assets.acquireMesh(m, "hydro:water");
                 world.add<Renderable>(e, r);
             }
         }

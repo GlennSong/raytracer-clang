@@ -688,22 +688,35 @@ void main() {
         roughness = 0.95;
         texFlags = 0u;   // nothing below reads the slots as albedo / MR / normal / AO
     }
-    // RIVER (Surface::River, id 20; ADR-0099): the ribbon's own data drives it -- u across, v the
-    // distance along (m), the vertex colour's r the flow speed -- so it reads raw inColor.
+    // WATER (Surface::River, id 20; ADR-0099): one polygon for rivers and lakes. Per vertex: the
+    // tangent is the flow direction, colour r the speed (0 still .. 1 rapids), g the fade (0 at a
+    // mouth, into the sea), u the distance from the bank (0 at the shore .. 0.5 open water).
+    // The detail is a FLOW MAP (Vlachos, Portal 2): world-space noise advected along the flow in
+    // two phases half a cycle apart, crossfaded so neither is seen stretching.
     const bool river = pc.surfaceFlags.x == 20u;
-    float riverFlow = 0.0, riverSpeed = 0.0, riverFade = 1.0;
+    float riverSpeed = 0.0, riverFade = 1.0, flowBlend = 0.0;
+    vec2 flowA = vec2(0.0), flowB = vec2(0.0);
     if (river) {
         riverSpeed = clamp(inColor.r, 0.0, 1.0);
-        riverFlow = g.wind1.w * (0.5 + 3.5 * riverSpeed);   // how far the water has run (m)
-        float edge = min(inTexcoord.x, 1.0 - inTexcoord.x);  // 0 at a bank, 0.5 mid-river
+        riverFade = clamp(inColor.g, 0.0, 1.0);
+        vec2 dir = inWorldTangent.xz;
+        dir = dot(dir, dir) > 1e-8 ? normalize(dir) : vec2(1.0, 0.0);
+        vec2 vel = dir * (0.25 + 3.0 * riverSpeed);          // m/s; still water still drifts
+        const float cycle = 2.0;                              // s per phase
+        float ph0 = fract(g.wind1.w / cycle), ph1 = fract(g.wind1.w / cycle + 0.5);
+        flowA = vel * cycle * ph0;                            // how far each phase has advected
+        flowB = vel * cycle * ph1 + vec2(17.3, 9.1);          // (offset: two different patterns)
+        flowBlend = abs(1.0 - 2.0 * ph0);                     // 1 = all B while A resets
+        vec2 xz = inWorldPos.xz;
+        float edge = clamp(inTexcoord.x, 0.0, 0.5);           // 0 at a bank, 0.5 open water
         vec3 deep = pc.albedoMetallic.rgb;
         vec3 shallow = deep * 2.4 + vec3(0.02, 0.07, 0.06);
-        albedo = mix(shallow, deep, smoothstep(0.02, 0.3, edge));
-        float n1 = fbm2(inTexcoord.x * 3.0 + 1.7, (inTexcoord.y - riverFlow) * 0.35);
-        float n2 = vnoise2(inTexcoord.x * 9.0, (inTexcoord.y - riverFlow * 1.3) * 1.1);
-        riverFade = clamp(inColor.b, 0.0, 1.0);   // 0 at a mouth: fades into the sea or lake
-        float foam = (1.0 - smoothstep(0.0, 0.04, edge)) * (0.3 + 0.7 * n2) +
-                     riverSpeed * smoothstep(0.55, 0.8, n1 + 0.45 * n2);
+        albedo = mix(shallow, deep, smoothstep(0.0, 0.35, edge));
+        vec2 pa = (xz - flowA) * 0.12, pb = (xz - flowB) * 0.12;
+        float n1 = mix(fbm2(pa.x, pa.y), fbm2(pb.x, pb.y), flowBlend);
+        float n2 = mix(vnoise2(pa.x * 7.0, pa.y * 7.0), vnoise2(pb.x * 7.0, pb.y * 7.0), flowBlend);
+        float foam = (1.0 - smoothstep(0.0, 0.05, edge)) * (0.25 + 0.6 * n2) * (0.3 + 0.7 * riverSpeed) +
+                     smoothstep(0.35, 0.9, riverSpeed) * smoothstep(0.6, 0.85, n1 + 0.45 * n2);   // white water: rapids only
         foam = clamp(foam, 0.0, 1.0) * riverFade;
         albedo = mix(albedo, vec3(0.82, 0.88, 0.9), foam);
         roughness = mix(0.05, 0.45, foam);
@@ -798,7 +811,6 @@ void main() {
     // Alpha-cut foliage (FLAG_ALPHA_TEST = bit 1): drop fragments under the leaf
     // mask (the albedo map's alpha) before any shading. Ports lighting.metal.
     float mapAlpha = 1.0;   // FLAG_ALPHA_FROM_MAP (64): the albedo map's alpha shapes the fragment
-    if (river) mapAlpha = riverFade;   // a river's surface fades out at its mouth
     if (!interiorMap && ((texFlags & 1u) != 0u || (pc.surfaceFlags.y & 2u) != 0u)) {
         vec4 albedoTex = texture(albedoMap, inTexcoord);
         if ((texFlags & 1u) != 0u) albedo *= albedoTex.rgb;
@@ -815,14 +827,15 @@ void main() {
 
     vec3 N = normalize(inWorldNormal);
     if (featNormal) N = featN;
-    if (river) {   // ripples scrolling downstream: a noise gradient in the ribbon's frame
-        vec2 q = vec2(inTexcoord.x * 4.0, (inTexcoord.y - riverFlow) * 0.6);
-        float e = 0.05;
-        float h0 = fbm2(q.x, q.y), hx = fbm2(q.x + e, q.y), hy = fbm2(q.x, q.y + e);
-        vec3 T = normalize(inWorldTangent - N * dot(N, inWorldTangent));
-        vec3 B = cross(N, T);
-        float amp = 0.08 + 0.5 * riverSpeed;
-        N = normalize(N - (B * (hx - h0) + T * (hy - h0)) / e * amp * 0.1);
+    if (river) {   // ripples: the two flow phases' noise gradients in world xz, crossfaded
+        const float e = 0.04;
+        vec2 pa = (inWorldPos.xz - flowA) * 0.35, pb = (inWorldPos.xz - flowB) * 0.35;
+        float a0 = fbm2(pa.x, pa.y), b0 = fbm2(pb.x, pb.y);
+        vec2 ga = vec2(fbm2(pa.x + e, pa.y) - a0, fbm2(pa.x, pa.y + e) - a0);
+        vec2 gb = vec2(fbm2(pb.x + e, pb.y) - b0, fbm2(pb.x, pb.y + e) - b0);
+        vec2 grad = mix(ga, gb, flowBlend) / e;
+        float amp = (0.06 + 0.4 * riverSpeed) * 0.1;
+        N = normalize(N - vec3(grad.x, 0.0, grad.y) * amp);
     }
     // FLAG_FRONT_ONLY (128): the back of this surface does not exist.
     if ((pc.surfaceFlags.y & 128u) != 0u && dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0) discard;
