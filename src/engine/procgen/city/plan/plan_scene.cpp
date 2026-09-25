@@ -4,6 +4,7 @@
 #include "../roads/lanes/polyline_ops.h"   // stations/pointAt: sampling along the route
 #include "../roads/lanes/road_graph_spec.h"
 #include "../roads/lanes/terrain_recipe.h"
+#include "../terrain_route.h"   // mountain roads: grade-limited routes over the ground
 #include "../roads/lanes/vertical_profile.h"   // profileAlong, kDesignGrade: the deck the diamonds are sized against   // makeTerrain: the same ground the builder will make
 
 #include <algorithm>
@@ -294,6 +295,9 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         {"arterial", {{"w", b.arterialWidth / 6}, {"fwd", 3}, {"back", 3}, {"sidewalk", b.sidewalk}, {"g_max", 0.08}, {"rank", 2}, {"thick", 0.6}, {"window", 120}}},
         {"boulevard", {{"w", b.arterialWidth / 6}, {"fwd", 3}, {"back", 0}, {"sidewalk", b.sidewalk}, {"g_max", 0.08}, {"rank", 2}, {"thick", 0.6}, {"window", 120}}},
         {"freeway", {{"w", b.freewayWidth / 8}, {"fwd", 4}, {"back", 0}, {"shoulder", 2.5}, {"sidewalk", 0.0}, {"g_max", 0.06}, {"rank", 3}, {"thick", 1.2}, {"window", 200.0}}},
+        // RURAL: a country road out of town -- the mountain roads -- two lanes and a shoulder, no
+        // sidewalks (and so none of a street's kerbside furniture); drives as a collector
+        {"rural", {{"w", 3.5}, {"fwd", 1}, {"back", 1}, {"shoulder", 1.0}, {"sidewalk", 0.0}, {"g_max", 0.1}, {"rank", 1}, {"thick", 0.5}, {"window", 60}}},
         // 9%: an urban ramp's grade, and with 8% the diamonds on the hilly ring ran longer than the
         // 535 m between its arterials and only two fit, both on one side
         {"ramp", {{"w", 4.5}, {"fwd", 1}, {"back", 0}, {"shoulder", 2.5}, {"g_max", 0.09}, {"rank", 0}, {"thick", 1.0}, {"window", 40}}},
@@ -627,6 +631,53 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             if (std::getenv("RT_PLAN_WHY"))
                 std::printf("[plan] expressway %zu x ring chain %zu: %s\n", at.spur, at.chain,
                             at.r.built ? "system interchange, four ramps" : ("no interchange: " + at.r.why).c_str());
+        }
+    }
+    // MOUNTAIN ROADS (brief.world.mountainRoads): a road that climbs out of the city -- to a pass, a
+    // hilltop, a lookout -- routed over the scene's own ground within its class's grade
+    // (terrain_route.h): contours where it can, switchbacks where the slope is too steep. It starts
+    // at the street end nearest `from`, so it joins the network there.
+    //   {"from": [x, y], "to": [x, y], "class": "rural", "maxGrade": 0.08, "hardGrade": 0.45}
+    // (hardGrade is the ground's steepest a move may cross -- above maxGrade the builder cuts and
+    // fills, and the router prices that as earthwork; a hairpin on a steep face needs it)
+    if (!world.is_null() && world.contains("mountainRoads")) {
+        std::vector<Vec2> ends;   // every street endpoint a road could start from
+        for (const json& e : edges) {
+            const std::string k = e.value("class", std::string());
+            if (k == "freeway" || k == "ramp") continue;
+            const json& pts = e["path"]["points"];
+            if (pts.empty()) continue;
+            ends.emplace_back(pts.front()[0].get<double>(), pts.front()[1].get<double>());
+            ends.emplace_back(pts.back()[0].get<double>(), pts.back()[1].get<double>());
+        }
+        int n = 0;
+        for (const json& mr : world["mountainRoads"]) {
+            Vec2 from(mr["from"][0].get<double>(), mr["from"][1].get<double>());
+            const Vec2 to(mr["to"][0].get<double>(), mr["to"][1].get<double>());
+            double best = 1e30;
+            Vec2 snap = from;
+            for (const Vec2& q : ends)
+                if ((q - from).length() < best) { best = (q - from).length(); snap = q; }
+            if (best < 400.0) from = snap;
+            TerrainRouteParams rp;
+            rp.maxGrade = mr.value("maxGrade", 0.08);
+            rp.hardGrade = mr.value("hardGrade", 0.12);
+            rp.cell = mr.value("cell", 8.0);
+            rp.margin = mr.value("margin", 500.0);
+            rp.bendWeight = mr.value("bendWeight", rp.bendWeight);
+            rp.gradeWeight = mr.value("gradeWeight", rp.gradeWeight);
+            // inside the city's ground grid (the scene's terrain ends there), with room for a verge
+            const double gridHalf = world.value("grid", b.size * 0.5 + 60) - 80.0;
+            const double cx = b.center.x, cy = b.center.y;
+            rp.blocked = [gridHalf, cx, cy](double x, double y) { return std::fabs(x - cx) > gridHalf || std::fabs(y - cy) > gridHalf; };
+            const TerrainRoute route = routeOnTerrain(ground, from, to, rp);
+            const std::string id = "mr" + std::to_string(n++);
+            std::printf("[plan] mountain road %s: %s -- %.0f m long, climbs %.0f m, steepest %.1f %% (%zu points, %ld states)\n",
+                        id.c_str(), route.points.empty() ? "NO WAY UP" : "routed", route.length, route.climb,
+                        route.worstGrade * 100.0, route.points.size(), route.expanded);
+            if (route.points.size() < 2) continue;
+            edges.push_back({{"id", id}, {"class", mr.value("class", std::string("rural"))},
+                             {"path", {{"points", pointsJson(route.points)}}}});
         }
     }
     scene["edges"] = std::move(edges);

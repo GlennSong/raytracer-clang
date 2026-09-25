@@ -69,6 +69,7 @@ RoadClass classOf(const EdgeSpec& e) {
     if (e.cls == "freeway") return RoadClass::Freeway;
     if (e.cls == "arterial") return RoadClass::Arterial;
     if (e.cls == "collector") return RoadClass::Collector;
+    if (e.cls == "rural") return RoadClass::Collector;   // a country road: collector speeds, no sidewalks
     if (e.cls == "alley") return RoadClass::Alley;
     return RoadClass::Local;
 }

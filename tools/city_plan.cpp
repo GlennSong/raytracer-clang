@@ -32,7 +32,8 @@ static int usage() {
                  "usage: city_plan generate BRIEF.json OUT_DIR [--variants N]\n"
                  "       city_plan scene BRIEF.json OUT_SCENE.json [--no-ramps]\n"
                  "       city_plan brief\n"
-                 "       city_plan level-world BRIEF.json      the level's terrain + water blocks that match the brief's world, and its towns' hubs\n");
+                 "       city_plan level-world BRIEF.json      the level's terrain + water blocks that match the brief's world, and its towns' hubs\n"
+                 "       city_plan heights BRIEF.json [HALF STEP]   the brief's ground on a grid, plan coordinates (for placing mountain roads)\n");
     return 2;
 }
 
@@ -46,6 +47,26 @@ int main(int argc, char** argv) {
     const std::string verb = argv[1];
     if (verb == "brief") {
         std::cout << briefToJson(Brief{}).dump(2) << "\n";
+        return 0;
+    }
+    if (verb == "heights" && argc >= 3) {
+        // THE GROUND A BRIEF BUILDS ON, as numbers: its scene ground (the world base plus the city's
+        // relief) on a coarse grid in PLAN coordinates -- what to read before placing a mountain road.
+        std::ifstream in(argv[2]);
+        if (!in) { std::fprintf(stderr, "city_plan: cannot read %s\n", argv[2]); return 1; }
+        nlohmann::json bj;
+        in >> bj;
+        const Brief b = briefFromJson(bj);
+        const double half = argc > 3 ? std::atof(argv[3]) : 3000.0, step = argc > 4 ? std::atof(argv[4]) : 250.0;
+        const engine::HeightField g = sceneGround(b);
+        std::printf("%8s", "y\\x");
+        for (double x = -half; x <= half + 1e-6; x += step) std::printf("%6.0f", x);
+        std::printf("\n");
+        for (double y = half; y >= -half - 1e-6; y -= step) {
+            std::printf("%8.0f", y);
+            for (double x = -half; x <= half + 1e-6; x += step) std::printf("%6.0f", g(x, y));
+            std::printf("\n");
+        }
         return 0;
     }
     if (verb == "level-world" && argc == 3) {

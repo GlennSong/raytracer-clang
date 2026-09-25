@@ -7981,3 +7981,67 @@ are clear teal.
 - Rock is one tone at distance: no strata, no dark forest bands.
 - Slope-rock patches on the meadows read like flat decals.
 - The other levels are not yet calibrated.
+
+## ADR-0103 — Roads up mountains: a grade-limited router, and the builder does the rest
+
+**Context.** Glenn: "If there are more roads I'd be curious how they're built especially around and
+up and down mountains since I've never seen this engine do that." He hadn't, because it never had:
+metro_planned's outer loop stops 250 m short of the mountain front by design, and every street sits
+on the city's rolling relief.
+
+**Decision.**
+- **The router** (`procgen/city/terrain_route.h`, `routeOnTerrain`) follows Galin et al. 2010:
+  - A* on an 8 m grid, in 32 directions (every coprime step up to three cells), so a route can
+    take a gentle diagonal across a slope.
+  - The state is (cell, incoming direction), so turning is priced exactly. A turn sharper than 60°
+    per move is forbidden, so a hairpin is three or more moves.
+  - Cost per move: length × (1 + 2·grade + 400·(grade − maxGrade)²), plus 6·cell·turn².
+  - Grade is checked at each move's midpoint too, so a move cannot hop a ridge. Heights are cached
+    on the half-cell lattice, which every node and midpoint lies on.
+  - Grade above the design limit is *earthwork*: the builder cuts and fills, and the router prices
+    it rather than forbidding it. `hardGrade` rules out only the absurd (0.45 for these roads). On
+    metro's 60–100% mountain front a 12% ceiling found no route at all: a hairpin on a face that
+    steep needs a platform cut.
+  - The route may not crowd itself. Two stretches more than 80 m apart along it must stay 20 m
+    apart in plan. Each conflict blocks a disc, and the search runs again (up to six rounds).
+    Without this, a switchback leg ran under its neighbour's pavement and the builder bridged the
+    road over itself.
+  - A cone with a needle summit has no answer (near a point, every move climbs too fast), which is
+    correct.
+- **In the plan:** `brief.world.mountainRoads` lists `{from, to, class, maxGrade, hardGrade}`.
+  `from` snaps to the nearest street end within 400 m, so the road joins the network. The route
+  runs over the scene's own ground (`sceneGround`) and stays inside the city's ground grid, and it
+  becomes one scene edge.
+- **A `rural` road class:** two 3.5 m lanes, 1 m shoulders, no sidewalk (so no kerbside lamps). It
+  drives as a collector (`road_twin` classOf).
+- **The builder needed no change.** Its vertical profile, cut and fill, retaining walls and decks
+  on piers over hollows are what a mountain road is. The outer loop is elevated its whole length,
+  so the roads pass under it.
+- `city_plan heights BRIEF [HALF STEP]` prints a brief's ground in plan coordinates, for placing
+  roads.
+
+**Consequences.**
+- `metro_mountain` (brief `assets/city_plans/metro_mountain.json`, level
+  `assets/levels/metro_mountain.json`) is metro_planned plus two mountain roads:
+  - from the mountain city to a lookout: 2,989 m, climbing 286 m, with a stack of switchbacks near
+    the top;
+  - from the sw town to a second lookout: 1,497 m, climbing 96 m.
+- Each routes in 1–2 s (0.8–1 M states).
+- Rebuilding the city takes about 20 minutes (6,068 lanes).
+- **Viaducts.** Long stretches of both roads stand on piers. The builder raises the road onto a
+  deck wherever its smoothed profile is more than `rules.bridgeH` (4 m) above the ground, and this
+  range's ground is jagged (±80 m bumps at about 100 m scale), so the profile bridges dip after dip.
+  A router penalty on the change of grade between moves (`bendWeight`) was tried. It switched
+  corridors instead of smoothing one, and pushed the average grade to 11.6% (over the class's
+  10%), so it ships off (weight 0). The real levers are two:
+  - a per-class bridge height, so a country road builds embankments up to about 8 m, as real ones
+    do (`bridgeH` is read per vertex in terrain conforming, which does not know the road's class);
+  - eroded mountains (smooth ridges and valleys), part of the owed mountain pass.
+- **A gotcha on the way:** a lanes level names its graph twice, in `entities[].road.graph` (what
+  the city bundle builds) and in `citysim.graph` (the traffic). Changing only the second silently
+  reused metro_planned's city.
+- **Next:**
+  - villages and lookouts at the ends, not dead ends;
+  - tunnels where the earthwork is absurd;
+  - rivers inside the city with bridges (the hydrology is there; the planner does not avoid water
+    yet).

@@ -1,0 +1,407 @@
+{
+ "_comment": "metro_planned with mountain roads (terrain_route.h): its brief is assets/city_plans/metro_mountain.json -- the same city, plus world.mountainRoads climbing out of the mountain city and the sw town to two lookouts on the range. Built to see how the engine builds roads up and down mountains (Glenn, 2026-09-25).",
+ "citysim": {
+  "buildChance": 0.9,
+  "buildLots": true,
+  "busMaxWalk": 220.0,
+  "busRoutes": 4,
+  "busStops": 14,
+  "buses": 40,
+  "cars": -1,
+  "carsPerLaneKm": 35.0,
+  "debugWidgets": false,
+  "detailDistance": 300,
+  "districts": {
+   "hubs": [
+    {
+     "at": [
+      0.0,
+      0.0
+     ],
+     "kind": "financial"
+    },
+    {
+     "at": [
+      0.0,
+      620.0
+     ],
+     "kind": "commercial"
+    },
+    {
+     "at": [
+      -620.0,
+      -520.0
+     ],
+     "kind": "residential"
+    },
+    {
+     "_place": "sw town",
+     "at": [
+      -1726.0,
+      -1720.0
+     ],
+     "kind": "oldtown"
+    },
+    {
+     "_place": "sw town",
+     "at": [
+      -1638.0,
+      -1528.0
+     ],
+     "kind": "residential"
+    },
+    {
+     "_place": "mountain city",
+     "at": [
+      -1995.0,
+      71.0
+     ],
+     "kind": "financial"
+    },
+    {
+     "_place": "mountain city",
+     "at": [
+      -1907.0,
+      1124.0
+     ],
+     "kind": "commercial"
+    },
+    {
+     "_place": "mountain city",
+     "at": [
+      -2079.0,
+      -958.0
+     ],
+     "kind": "commercial"
+    },
+    {
+     "_place": "mountain city",
+     "at": [
+      -2071.0,
+      -1193.0
+     ],
+     "kind": "industrial"
+    },
+    {
+     "_place": "mountain city",
+     "at": [
+      -1541.0,
+      1253.0
+     ],
+     "kind": "residential"
+    },
+    {
+     "_place": "mountain city",
+     "at": [
+      -1603.0,
+      54.0
+     ],
+     "kind": "residential"
+    },
+    {
+     "_place": "mountain city",
+     "at": [
+      -1719.0,
+      -1102.0
+     ],
+     "kind": "residential"
+    },
+    {
+     "_place": "ne town",
+     "at": [
+      633.0,
+      2405.0
+     ],
+     "kind": "oldtown"
+    },
+    {
+     "_place": "ne town",
+     "at": [
+      553.0,
+      2229.0
+     ],
+     "kind": "residential"
+    }
+   ]
+  },
+  "dormancy": true,
+  "downtownRadius": 403.2500572213321,
+  "facadeDistance": 950,
+  "hailChance": 0.25,
+  "hailMinMetres": 350.0,
+  "hoursPerSecond": 0.05,
+  "hubRadius": 300,
+  "localHz": 30.0,
+  "longCommuteShare": 0.35,
+  "maxAmbient": 14000,
+  "midtownRadius": 800.0,
+  "pedDemoteRadius": 440.0,
+  "pedPromoteRadius": 300.0,
+  "pedestrians": -1,
+  "pedsPerKm": 120.0,
+  "perceptionReliability": 1.0,
+  "plinth": 0.45,
+  "seed": 7,
+  "sidewalk": 5.0,
+  "taxiFraction": 0.12,
+  "tiered": true,
+  "vehicles": "vehicles.lua",
+  "wander": false,
+  "busCommuteShare": 0.1,
+  "graph": "assets/lanelab/planned/metro_mountain_lanelab.json"
+ },
+ "dayNight": {
+  "dayMinutes": 1440.0,
+  "timeOfDay": 0.32292,
+  "weather": "fair"
+ },
+ "entities": [
+  {
+   "id": 1,
+   "name": "planned streets",
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "road": {
+    "builder": "lanes",
+    "graph": "assets/lanelab/planned/metro_mountain_lanelab.json",
+    "sidewalks": {
+     "arterial": 6.0,
+     "collector": 5.5,
+     "local": 5.0
+    }
+   },
+   "shape": "road"
+  }
+ ],
+ "environment": {
+  "clouds": {
+   "bottom": 900,
+   "coverage": 0.38,
+   "density": 0.05,
+   "lightSteps": 6,
+   "noiseScale": 0.0007,
+   "steps": 96,
+   "top": 1600,
+   "wind": 14
+  },
+  "sky": {
+   "aerial": 4.0,
+   "model": "scattering",
+   "turbidity": 2.0
+  },
+  "skyColor": [
+   0.55,
+   0.68,
+   0.86
+  ],
+  "fog": {
+   "density": 0.00016
+  }
+ },
+ "lighting": {
+  "ambientMultiplier": 0.5,
+  "exposure": 0.7,
+  "sun": {
+   "castsShadow": true,
+   "color": [
+    1,
+    0.98,
+    0.94
+   ],
+   "direction": [
+    0.4,
+    0.72,
+    -0.32
+   ],
+   "intensity": 6.0
+  }
+ },
+ "name": "metro_mountain",
+ "player": {
+  "collider": {
+   "halfHeight": 0.4,
+   "radius": 0.3,
+   "shape": "capsule"
+  },
+  "friction": 0.5,
+  "position": [
+   67.5,
+   14.213380398833378,
+   60.0
+  ]
+ },
+ "terrain": {
+  "_comment": "Written by `city_plan level-world assets/city_plans/metro_planned.json`: the brief's world, which the city's ground grid is built on. Edit the brief, not this.",
+  "cdlod": {
+   "worldHalf": 6000.0,
+   "baked": true
+  },
+  "heightScale": 7,
+  "material": {
+   "albedo": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "roughness": 1.0
+  },
+  "mountainAlongRange": true,
+  "mountainHeight": 350,
+  "mountainMaskScale": 0,
+  "mountainScale": 0.0015,
+  "noiseScale": 0.0005,
+  "octaves": 5,
+  "rangeHeight": 450,
+  "rangeSpine": [
+   [
+    -3000,
+    -6200
+   ],
+   [
+    -3500,
+    -3000
+   ],
+   [
+    -3300,
+    0
+   ],
+   [
+    -3000,
+    2200
+   ],
+   [
+    -1900,
+    3700
+   ],
+   [
+    0,
+    4400
+   ],
+   [
+    2200,
+    4700
+   ],
+   [
+    4200,
+    5200
+   ]
+  ],
+  "rangeVariation": 0.6,
+  "rangeWidth": 900,
+  "resolution": 1200,
+  "rockLine": 240,
+  "seed": 11,
+  "size": 12000,
+  "snowLine": 520,
+  "tiltX": -0.02,
+  "warp": 0.35,
+  "groundCover": {
+   "beachHeight": 3,
+   "uplandHeight": 90,
+   "mountainHeight": 260,
+   "snowHeight": 470,
+   "rockSlopeDeg": 34,
+   "dirtPatches": 0.15,
+   "seed": 5,
+   "grass": [
+    0.055,
+    0.085,
+    0.018
+   ],
+   "grassDry": [
+    0.1,
+    0.1,
+    0.04
+   ],
+   "rock": [
+    0.15,
+    0.14,
+    0.12
+   ],
+   "dirt": [
+    0.12,
+    0.085,
+    0.05
+   ]
+  }
+ },
+ "vegetation": {
+  "clearMargin": 4.0,
+  "clusterCount": 90,
+  "clusterRadius": 28,
+  "count": 22000,
+  "densityScale": 0.004,
+  "densityThreshold": -0.35,
+  "drawDistance": 1100,
+  "maxHeight": 150,
+  "maxScale": 1.4,
+  "maxSlopeDeg": 40,
+  "minHeight": 2.0,
+  "minScale": 0.7,
+  "region": 1600,
+  "seed": 31,
+  "spacingFactor": 0.75,
+  "species": [
+   {
+    "collide": true,
+    "kind": "script",
+    "script": "return flora.scatter_tree(seed, {species='pine'})",
+    "variants": 3
+   },
+   {
+    "collide": true,
+    "kind": "script",
+    "script": "return flora.scatter_tree(seed, {species='oak'})",
+    "variants": 2
+   },
+   {
+    "cuts": 4,
+    "faceted": true,
+    "kind": "rock",
+    "lumpScale": 0.45,
+    "lumps": 5,
+    "material": {
+     "albedo": [
+      0.26,
+      0.25,
+      0.24
+     ],
+     "roughness": 1.0
+    },
+    "sdfResolution": 18,
+    "skin": "sdf",
+    "smoothness": 0.22,
+    "variants": 3
+   }
+  ]
+ },
+ "vehicles": [
+  {
+   "position": [
+    70.0,
+    12.0,
+    70.0
+   ],
+   "recipe": "sedan",
+   "seed": 1,
+   "yaw": 0
+  }
+ ],
+ "version": 1,
+ "water": {
+  "cell": 20,
+  "color": [
+   0.012,
+   0.05,
+   0.08
+  ],
+  "foamBand": 36,
+  "opacity": 0.82,
+  "region": 6000,
+  "roughness": 0.04,
+  "seaLevel": -32.0
+ }
+}
