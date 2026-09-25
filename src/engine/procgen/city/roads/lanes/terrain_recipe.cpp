@@ -50,7 +50,11 @@ HeightField makeTerrain(const TerrainSpec& spec, const std::array<double, 4>& bo
     std::shared_ptr<const TerrainParams> baseParams;
     std::shared_ptr<const Noise> baseNoise;
     if (!s.base.is_null()) {
-        baseParams = std::make_shared<const TerrainParams>(readTerrainParams(s.base));
+        TerrainParams bp = readTerrainParams(s.base);
+        // an ERODED base is the ground the level renders (and the island planner sites on): the
+        // city must stand on it too, not on the analytic relief it was eroded from
+        if (s.base.value("erode", false)) bp.erodedBase = erodedForTerrain(s.base);
+        baseParams = std::make_shared<const TerrainParams>(std::move(bp));
         baseNoise = std::make_shared<const Noise>(s.base.value("seed", 0u));   // as the level loader seeds it
     }
     auto ease = [](double u) { u = std::clamp(u, 0.0, 1.0); return u * u * (3 - 2 * u); };

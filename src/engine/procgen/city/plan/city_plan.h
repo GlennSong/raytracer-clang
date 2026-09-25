@@ -101,6 +101,8 @@ struct CityPlan {
     RoadGraph streets;                 // local / collector / arterial, planar
     RoadGraph freeway;                 // ring + radials (grade-separated from streets)
     std::vector<Vec2> ring;            // the freeway ring's centreline, closed (empty: no ring)
+    std::vector<std::vector<Vec2>> limits;   // world.land.shape: the city's limits, grown over its land (closed outlines)
+    std::vector<Vec2> ringArc;         // world.land: the ring opened into a C where it met the sea (ring is then empty)
     std::vector<std::vector<Vec2>> spurs;   // the radial expressways, drawn from their far end in to midtown's boulevard
     // A TOWN at an expressway's far end, one per spur: a small grid square to the expressway, whose
     // main street crosses it at the GATE — where the expressway's boulevard pair meets it, as the

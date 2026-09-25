@@ -17,6 +17,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -35,6 +36,7 @@ static int usage() {
                  "       city_plan brief\n"
                  "       city_plan level-world BRIEF.json      the level's terrain + water blocks that match the brief's world, and its towns' hubs\n"
                  "       city_plan island SEED OUT_DIR [--variants N]   island worlds on the map: terrain, sites, ring freeway (ADR-0105)\n"
+                 "       city_plan island-cities SEED OUT_DIR   that island's cities and towns planned on its land, mapped (ADR-0106)\n"
                  "       city_plan rivers BRIEF.json [STEP]         the rivers its world's hydrology makes, plan coordinates\n"
                  "       city_plan heights BRIEF.json [HALF STEP]   the brief's ground on a grid, plan coordinates (for placing mountain roads)\n");
     return 2;
@@ -75,6 +77,87 @@ int main(int argc, char** argv) {
                         s, w.report["landKm2"].get<double>(), w.report["peak"]["height"].get<double>(), w.hydro ? w.hydro->rivers().size() : 0,
                         cities, towns, w.report["ringFreewayKm"].get<double>(),
                         unrouted ? (", " + std::to_string(unrouted) + " roads UNROUTED").c_str() : "", w.report["seconds"].get<double>(), base.c_str());
+        }
+        return 0;
+    }
+    if (verb == "island-cities" && argc >= 4) {
+        // THE ISLAND'S CITIES ON THE MAP (ADR-0106): each site planned by the city planner inside its
+        // own land -- a brief scaled to the site (islandSiteBrief), the plan cut at the sea and the
+        // steep ground, a city's ring a C against the coast -- and the island freeway run onto each
+        // city's ring. The whole island with every plan on it, a close-up per site, and the briefs.
+        const uint32_t seed = static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10));
+        const std::string outDir = argv[3];
+        std::filesystem::create_directories(outDir);
+        const nlohmann::json block = engine::islandTerrainBlock(seed);
+        engine::IslandWorld w = engine::planIsland(block);
+        struct Drawn { std::string name; engine::Vec2 at; double half; };
+        std::vector<Drawn> sites;
+        std::vector<std::pair<int, std::vector<std::vector<engine::Vec2>>>> cityLimits;
+        std::vector<std::pair<int, std::vector<engine::Vec2>>> arterialNodes;
+        engine::IslandMapLayer locals, collectors, arterials, freeways;
+        locals.rgb[0] = 0.96f; locals.rgb[1] = 0.95f; locals.rgb[2] = 0.92f; locals.widthM = 12;
+        collectors.rgb[0] = 1.0f; collectors.rgb[1] = 0.93f; collectors.rgb[2] = 0.62f; collectors.widthM = 16;
+        arterials.rgb[0] = 1.0f; arterials.rgb[1] = 0.84f; arterials.rgb[2] = 0.35f; arterials.widthM = 22; arterials.minPx = 1.4;
+        engine::IslandMapLayer limits;
+        limits.rgb[0] = 0.55f; limits.rgb[1] = 0.12f; limits.rgb[2] = 0.35f; limits.widthM = 4; limits.minPx = 1.2;
+        freeways.rgb[0] = 0.98f; freeways.rgb[1] = 0.60f; freeways.rgb[2] = 0.10f; freeways.widthM = 30; freeways.minPx = 2.5; freeways.casing = true;
+        for (std::size_t k = 0; k < w.sites.size(); ++k) {
+            const auto t0 = std::chrono::steady_clock::now();
+            const nlohmann::json bj = engine::islandSiteBrief(w, static_cast<int>(k));
+            std::ofstream(outDir + "/" + bj["name"].get<std::string>() + ".brief.json") << bj.dump(2) << "\n";
+            const Brief b = briefFromJson(bj);
+            const CityPlan plan = generatePlan(b);
+            double km[4] = {0, 0, 0, 0};
+            for (const auto& e : plan.streets.edges) {
+                const engine::Vec2 a = plan.streets.nodes[static_cast<std::size_t>(e.a)].pos, c = plan.streets.nodes[static_cast<std::size_t>(e.b)].pos;
+                engine::IslandMapLayer& L = e.klass == engine::RoadClass::Arterial ? arterials : e.klass == engine::RoadClass::Collector ? collectors : locals;
+                L.lines.push_back({a, c});
+                km[e.klass == engine::RoadClass::Arterial ? 2 : e.klass == engine::RoadClass::Collector ? 1 : 0] += (c - a).length() / 1000.0;
+            }
+            for (const auto& e : plan.freeway.edges) {
+                const engine::Vec2 a = plan.freeway.nodes[static_cast<std::size_t>(e.a)].pos, c = plan.freeway.nodes[static_cast<std::size_t>(e.b)].pos;
+                freeways.lines.push_back({a, c});
+                km[3] += (c - a).length() / 1000.0;
+            }
+            for (const auto& l : plan.limits) limits.lines.push_back(l);
+            if (!plan.limits.empty()) cityLimits.push_back({static_cast<int>(k), plan.limits});
+            else if (!plan.ringArc.empty()) engine::joinFreewayToRing(w, static_cast<int>(k), plan.ringArc, false);
+            else if (!plan.ring.empty()) engine::joinFreewayToRing(w, static_cast<int>(k), plan.ring, true);
+            {
+                std::vector<engine::Vec2> art;
+                for (const auto& e : plan.streets.edges)
+                    if (e.klass == engine::RoadClass::Arterial)
+                        for (int nd : {e.a, e.b}) art.push_back(plan.streets.nodes[static_cast<std::size_t>(nd)].pos);
+                arterialNodes.push_back({static_cast<int>(k), art});
+            }
+            sites.push_back({b.name, b.center, b.size * 0.5 + 250.0});
+            std::printf("%-16s %-13s at (%6.0f, %6.0f), %4.0f m across: %4zu blocks, streets %.1f km local / %.1f collector / %.1f arterial, freeway %.1f km%s (%.1f s)\n",
+                        b.name.c_str(), w.sites[k].kind.c_str(), b.center.x, b.center.y, b.size, plan.blocks.size(), km[0], km[1], km[2], km[3],
+                        !plan.ringArc.empty() ? ", ring a C on the coast" : !plan.ring.empty() ? ", closed ring" : "",
+                        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+        }
+        if (!cityLimits.empty()) {
+            engine::routeFreewayRoundCities(w, cityLimits);
+            // and every city onto it: link roads from its arterials (a city three or four, a town one or two)
+            for (const auto& [k, art] : arterialNodes) {
+                const bool city = w.sites[static_cast<std::size_t>(k)].kind == "city";
+                if (w.sites[static_cast<std::size_t>(k)].kind == "mountain town") continue;   // its road is the mountain road
+                engine::linkCityToFreeway(w, k, art, city ? 4 : 2, city ? 1000.0 : 700.0);
+            }
+            std::printf("island freeway round the cities: %.1f km, %d legs unrouted\n", w.report["ringFreewayKm"].get<double>(),
+                        w.report["freewayRoundCities"]["unrouted"].get<int>());
+        }
+        engine::IslandMapView whole;
+        whole.sites = false;
+        whole.layers = {limits, locals, collectors, arterials, freeways};
+        const std::string base = outDir + "/island_" + std::to_string(seed);
+        engine::writeIslandMap(w, base + "_cities.png", 2000, whole);
+        std::printf("-> %s_cities.png\n", base.c_str());
+        for (const Drawn& d : sites) {
+            engine::IslandMapView z = whole;
+            z.centre = d.at;
+            z.half = d.half;
+            engine::writeIslandMap(w, outDir + "/" + d.name + ".png", 1400, z);
         }
         return 0;
     }

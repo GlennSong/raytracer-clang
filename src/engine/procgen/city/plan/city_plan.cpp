@@ -1,5 +1,6 @@
 #include "city_plan.h"
 #include "plan_scene.h"   // the freeway both sides build: what the plan clears for the scene
+#include "land_shape.h"   // a city shaped by its land (world.land.shape)
 #include "../roads/lanes/road_graph_spec.h"   // stations
 #include "../roads/lanes/polyline_ops.h"
 #include "../roads/lanes/geom2d.h"          // constrainedTriangulation: the towns' cells     // pointAt, tangentAtStation: the loop's frame
@@ -548,6 +549,40 @@ std::vector<std::size_t> dpKeep(const Poly2& P, Real tol) {
     return out;
 }
 
+// Cut roads where `blocked(point, half-width)` holds -- walked at 4 m so a cut lands within a few
+// metres of the edge, not a vertex away -- keeping the pieces between longer than `minLen`.
+std::vector<Polyline> cutRoadsWhere(const std::vector<Polyline>& roads, Real sidewalk,
+                                    const std::function<bool(const Vec2&, Real)>& blocked, Real minLen = 30.0) {
+    std::vector<Polyline> kept;
+    for (const Polyline& p : roads) {
+        const Real half = p.width / 2 + sidewalk;
+        std::vector<Vec2> dense;
+        const std::size_t n = p.pts.size(), segs = p.closed ? n : n - 1;
+        for (std::size_t i = 0; n >= 2 && i < segs; ++i) {
+            const Vec2 a = p.pts[i], b = p.pts[(i + 1) % n];
+            const int m = std::max(1, static_cast<int>(std::ceil((b - a).length() / 4.0)));
+            for (int k = 0; k < m; ++k) dense.push_back(a + (b - a) * (Real(k) / m));
+        }
+        if (!p.closed && n) dense.push_back(p.pts.back());
+        bool any = false;
+        for (const Vec2& q : dense) if (blocked(q, half)) { any = true; break; }
+        if (!any) { kept.push_back(p); continue; }
+        Polyline cur = p;
+        cur.closed = false;
+        cur.pts.clear();
+        auto flush = [&] {
+            if (cur.pts.size() >= 2 && roads::lanes::stations(cur.pts).back() > minLen) kept.push_back(cur);
+            cur.pts.clear();
+        };
+        for (const Vec2& q : dense) {
+            if (blocked(q, half)) flush();
+            else cur.pts.push_back(q);
+        }
+        flush();
+    }
+    return kept;
+}
+
 }  // namespace
 
 // ---- brief I/O -------------------------------------------------------------------
@@ -651,11 +686,172 @@ CityPlan generatePlan(const Brief& B) {
     const Real ang = B.gridAngleDeg * kPi / 180.0;
     const Frame F{B.center, Vec2(std::cos(ang), std::sin(ang)), Vec2(-std::sin(ang), std::cos(ang))};
     const Real outerR = B.size * 0.5 - B.outerMargin;
-    auto midR = [&](Real theta) { return B.midRadius * (1.0 + 0.05 * ringNoise(theta, 99, B.seed)); };
-    // The freeway ring and its corridor: the ring's centreline radius at an angle, and the
-    // half-width out to the frontage roads either side of it.
-    auto freewayR = [&](Real th) { return B.freewayRadius + B.freewayWobble * ringNoise(th, 777, B.seed); };
     const Real corridorHalf = B.freewayWidth * 0.5 + 35.0;
+    // --- LAND (world.land, ADR-0106): a city sited on an island is shaped BY the island. Glenn: "The
+    // city also needs to fit the terrain. Part of the city is in the water and another part looks
+    // embedded into the mountain." So the land comes first: the city's FOOTPRINT is the buildable
+    // ground connected to its centre -- dry (above seaLevel + minHeight; a river is the river step's),
+    // gentle (maxSlope, measured over 40 m) and not far above the centre (maxRise: a city climbs its
+    // foothills, not the mountain) -- and the plan is drawn to it:
+    //   * midtown's rim follows the footprint's edge (a waterfront boulevard along the coast);
+    //   * the freeway ring pulls in along the foot of the slopes, and where it meets the sea it opens
+    //     into a C against the coast (plan.ringArc);
+    //   * every street outside the footprint is cut (below, before the river step).
+    const nlohmann::json landSpec = B.world.is_object() ? B.world.value("land", nlohmann::json()) : nlohmann::json();
+    struct LandMask { Vec2 o; Real cell = 10; int n = 0; std::vector<char> dry, fit, base; };
+    LandMask land;
+    // SHAPED (world.land.shape): the city's limits grown over its land to a target area, and the
+    // streets laid in them by depth (land_shape.h) -- not a circle trimmed to fit
+    const bool shaped = landSpec.is_object() && landSpec.value("shape", false);
+    LandShape shape;
+    std::shared_ptr<const Hydrology> landHy;   // the world's water, for the shape's inner edges and its bridges
+    constexpr int kBins = 360;
+    std::vector<Real> edgeR(kBins, 1e30);       // the footprint's reach along each bearing (smoothed)
+    std::vector<Real> edgeSea(kBins, 0);        // ...and how much of it ends at the water (0..1)
+    if (landSpec.is_object()) {
+        const HeightField g = sceneGround(B);
+        const std::shared_ptr<const Hydrology> hy = worldHydrology(B);
+        landHy = hy;
+        const Real sea = B.world.value("seaLevel", 0.0) + landSpec.value("minHeight", 1.5);
+        const Real maxSlope = landSpec.value("maxSlope", 0.08), maxRise = landSpec.value("maxRise", 50.0);
+        const Real half = B.size * 0.5 + 200;
+        land.o = B.center - Vec2(half, half);
+        land.n = static_cast<int>(std::ceil(2 * half / land.cell)) + 1;
+        const int N = land.n;
+        auto at = [N](int i, int j) { return static_cast<std::size_t>(j) * static_cast<std::size_t>(N) + static_cast<std::size_t>(i); };
+        std::vector<Real> h(static_cast<std::size_t>(N) * N);
+        std::vector<char> river(h.size(), 0);
+        for (int j = 0; j < N; ++j)
+            for (int i = 0; i < N; ++i) {
+                const Vec2 p(land.o.x + i * land.cell, land.o.y + j * land.cell);
+                h[at(i, j)] = g(p.x, p.y);
+                // a RIVER is not sea: its channel is carved below the beach, and a street across it is
+                // the river step's to bridge or stop -- as are its steep banks
+                river[at(i, j)] = hy && hy->distanceToRiver(p.x, p.y, 60.0) < 40.0;
+            }
+        const Real hc = g(B.center.x, B.center.y);
+        land.dry.assign(h.size(), 0);
+        land.base.assign(h.size(), 0);
+        std::vector<char> ok(h.size(), 0);
+        for (int j = 0; j < N; ++j)
+            for (int i = 0; i < N; ++i) {
+                const int i0 = std::max(0, i - 2), i1 = std::min(N - 1, i + 2), j0 = std::max(0, j - 2), j1 = std::min(N - 1, j + 2);
+                const Real sx = (h[at(i1, j)] - h[at(i0, j)]) / (land.cell * std::max(1, i1 - i0));
+                const Real sy = (h[at(i, j1)] - h[at(i, j0)]) / (land.cell * std::max(1, j1 - j0));
+                const std::size_t k = at(i, j);
+                land.dry[k] = h[k] > sea || river[k];
+                land.base[k] = land.dry[k] && (river[k] || std::hypot(sx, sy) < maxSlope);
+                ok[k] = land.base[k] && (river[k] || h[k] - hc < maxRise);
+            }
+        // the footprint: what of it is connected to the centre (the nearest fit ground, if the centre isn't)
+        land.fit.assign(h.size(), 0);
+        int ci = N / 2, cj = N / 2;
+        for (int r = 0; r < 40 && !ok[at(ci, cj)]; ++r)
+            for (int dj = -r; dj <= r; ++dj)
+                for (int di = -r; di <= r; ++di)
+                    if (!ok[at(ci, cj)] && ok[at(N / 2 + di, N / 2 + dj)]) { ci = N / 2 + di; cj = N / 2 + dj; }
+        if (ok[at(ci, cj)]) {
+            std::vector<std::pair<int, int>> stack{{ci, cj}};
+            land.fit[at(ci, cj)] = 1;
+            while (!stack.empty()) {
+                const auto [i, j] = stack.back();
+                stack.pop_back();
+                const int nb[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+                for (const auto& d : nb) {
+                    const int u = i + d[0], v = j + d[1];
+                    if (u < 0 || v < 0 || u >= N || v >= N || land.fit[at(u, v)] || !ok[at(u, v)]) continue;
+                    land.fit[at(u, v)] = 1;
+                    stack.push_back({u, v});
+                }
+            }
+        }
+        // its reach along each bearing, and what stops it
+        std::vector<Real> raw(kBins);
+        std::vector<char> rawSea(kBins, 0);
+        for (int b = 0; b < kBins; ++b) {
+            const Real th = 2 * kPi * b / kBins;
+            const Vec2 d(std::cos(th), std::sin(th));
+            Real r = 0;
+            for (; r < half - 20; r += land.cell * 0.5) {
+                const Vec2 p = B.center + d * r;
+                const int i = static_cast<int>(std::lround((p.x - land.o.x) / land.cell)), j = static_cast<int>(std::lround((p.y - land.o.y) / land.cell));
+                if (!land.fit[at(i, j)]) {
+                    // the COAST, if the water is within 200 m on: a bluff over the beach is the shore,
+                    // not a mountainside to pull the ring in from
+                    for (Real r2 = r; r2 < r + 200 && !rawSea[b]; r2 += land.cell) {
+                        const Vec2 q = B.center + d * r2;
+                        const int u = static_cast<int>(std::lround((q.x - land.o.x) / land.cell)), v = static_cast<int>(std::lround((q.y - land.o.y) / land.cell));
+                        rawSea[b] = u < 0 || v < 0 || u >= N || v >= N || !land.dry[at(u, v)];
+                    }
+                    break;
+                }
+            }
+            raw[b] = r;
+        }
+        // smoothed: the least reach within 5 degrees (a gully is not a gap), then averaged over 7
+        std::vector<Real> lo(kBins);
+        for (int b = 0; b < kBins; ++b) {
+            Real m = 1e30;
+            for (int k = -5; k <= 5; ++k) m = std::min(m, raw[static_cast<std::size_t>((b + k + kBins) % kBins)]);
+            lo[static_cast<std::size_t>(b)] = m;
+        }
+        for (int b = 0; b < kBins; ++b) {
+            Real sum = 0;
+            int sea = 0;
+            for (int k = -7; k <= 7; ++k) { sum += lo[static_cast<std::size_t>((b + k + kBins) % kBins)]; sea += rawSea[static_cast<std::size_t>((b + k + kBins) % kBins)]; }
+            edgeR[static_cast<std::size_t>(b)] = sum / 15;
+            edgeSea[static_cast<std::size_t>(b)] = sea / Real(15);
+        }
+        if (shaped) {
+            LandShapeParams sp;
+            sp.cell = land.cell;
+            sp.targetArea = landSpec.value("area", kPi * B.size * B.size * 0.16);
+            sp.slopeWeight = landSpec.value("slopeWeight", sp.slopeWeight);
+            sp.riseWeight = landSpec.value("riseWeight", sp.riseWeight);
+            sp.seaLevel = B.world.value("seaLevel", -1e9);
+            sp.coastPull = landSpec.value("coastPull", sp.coastPull);
+            sp.coastReach = landSpec.value("coastReach", sp.coastReach);
+            sp.smooth = landSpec.value("smooth", 60.0);
+            if (hy && landSpec.value("waterEdges", true)) sp.water = [hy](const Vec2& q) { return hy->isWet(q.x, q.y, 0.0); };
+            auto base = [&](const Vec2& q) {
+                const int i = static_cast<int>(std::lround((q.x - land.o.x) / land.cell)), j = static_cast<int>(std::lround((q.y - land.o.y) / land.cell));
+                return i >= 0 && j >= 0 && i < N && j < N && land.base[at(i, j)] != 0;
+            };
+            shape = growLandShape(g, base, B.center, half - 20, sp);
+        }
+    }
+    auto edgeAt = [&](Real th, Real* seaOut = nullptr) {
+        const int b = ((static_cast<int>(std::lround(th / (2 * kPi) * kBins)) % kBins) + kBins) % kBins;
+        if (seaOut) *seaOut = edgeSea[static_cast<std::size_t>(b)];
+        return edgeR[static_cast<std::size_t>(b)];
+    };
+    auto landAt = [&](const Vec2& p, bool streets) {
+        if (land.n == 0) return true;
+        const int i = static_cast<int>(std::lround((p.x - land.o.x) / land.cell)), j = static_cast<int>(std::lround((p.y - land.o.y) / land.cell));
+        if (i < 0 || j < 0 || i >= land.n || j >= land.n) return false;
+        const std::size_t k = static_cast<std::size_t>(j) * static_cast<std::size_t>(land.n) + static_cast<std::size_t>(i);
+        // the limits, and a street's overshoot; the city's own water is the river step's to judge
+        if (streets && shaped) return shape.depthAt(p) > -12.0 || shape.isWater(p);
+        return streets ? land.fit[k] != 0 : land.dry[k] != 0;
+    };
+    // The freeway ring and its corridor: the ring's centreline radius at an angle, and the
+    // half-width out to the frontage roads either side of it. On land it keeps its outer frontage
+    // road off the slopes; toward the sea it holds its radius and is cut there into a C.
+    auto freewayR = [&](Real th) {
+        const Real r = B.freewayRadius + B.freewayWobble * ringNoise(th, 777, B.seed);
+        Real sea = 0;
+        const Real e = edgeAt(th, &sea);
+        const Real onLand = std::min(r, e - corridorHalf - 30);
+        return onLand + (r - onLand) * smooth01((sea - 0.3) / 0.4);   // blended, so a C has no kink where coast meets foothill
+    };
+    auto midR = [&](Real theta) {
+        const Real r = B.midRadius * (1.0 + 0.05 * ringNoise(theta, 99, B.seed));
+        if (land.n == 0) return r;
+        // inside the ring's corridor, and inside the footprint: along the coast, a waterfront boulevard
+        Real lim = edgeAt(theta) - 40;
+        if (B.freewayRadius > 0) lim = std::min(lim, freewayR(theta) - corridorHalf - 40);
+        return std::max(std::min(r, lim), std::min(r, Real(150)));
+    };
     const bool haveFreeway = B.freewayRadius > B.midRadius + corridorHalf && B.freewayRadius + corridorHalf < outerR;
     // The warp field: zero in the core, full at midtown's rim — and zero again across the
     // freeway's corridor. The freeway is not warped (at 260 m a 19 m warp bends it tighter
@@ -834,6 +1030,187 @@ CityPlan generatePlan(const Brief& B) {
             if (onSpoke) continue;
             roads.push_back(ls);
         }
+    }
+    // --- SHAPED: the streets laid by the land's depth instead (land_shape.h) ---
+    Real shapeRim = 0, shapeCore = 0;
+    if (shaped && shape.area > 0) {
+        roads.clear();
+        spokeTheta.clear();
+        const Real edgeDepth = landSpec.value("edgeDepth", 45.0);
+        shapeRim = shape.depthHolding(landSpec.value("midShare", 0.35));
+        shapeCore = shape.depthHolding(landSpec.value("coreShare", 0.12));
+        // THE GRID in the deep part, in the brief's frame round the heart, block sizes growing out
+        // from it as they do round a centre; each line crossing midtown's rim and stopping just past
+        const Frame G{shape.heart, F.u, F.v};
+        Real reach = 0;
+        for (int j = 0; j < shape.n; ++j)
+            for (int i = 0; i < shape.n; ++i)
+                if (shape.depth[static_cast<std::size_t>(j) * shape.n + i] >= shapeRim)
+                    reach = std::max(reach, (shape.origin + Vec2(i * shape.cell, j * shape.cell) - shape.heart).length());
+        const Real coreR = std::sqrt(std::max(Real(1), shape.area * landSpec.value("coreShare", 0.12)) / kPi);
+        for (int axis = 0; axis < 2; ++axis) {
+            const bool alongV = axis == 0;
+            for (const auto& [off, idx] : gridPositions(alongV ? B.coreBlockU : B.coreBlockV, alongV ? B.midBlockU : B.midBlockV, coreR, reach)) {
+                const bool arterial = std::abs(idx) % std::max(1, B.arterialEvery) == 0;
+                Polyline cur;
+                cur.klass = arterial ? RoadClass::Arterial : RoadClass::Local;
+                cur.width = arterial ? B.arterialWidth : B.localWidth;
+                const Vec2 dirLine = alongV ? G.v : G.u;
+                auto flush = [&] { if (cur.pts.size() >= 2) roads.push_back(cur); cur.pts.clear(); };
+                for (Real t = -reach - 20; t <= reach + 20; t += 15.0) {
+                    const Vec2 p = alongV ? G.toWorld(off, t) : G.toWorld(t, off);
+                    const Real d = shape.depthAt(p);
+                    // grazing the rim (running along its contour) it stops short, as round a centre
+                    const bool grazing = std::fabs(dot(dirLine, shape.gradient(p))) < 0.35 &&
+                                         d - shapeRim < B.arterialWidth / 2 + B.sidewalk + cur.width / 2 + B.sidewalk;
+                    if (d >= shapeRim - 10.0 && !grazing) cur.pts.push_back(p);
+                    else flush();
+                }
+                flush();
+            }
+        }
+        // MIDTOWN'S RIM, a boulevard along the depth contour -- and the OUTSKIRTS' rings, contours
+        // further out, evenly between it and the last one near the limits
+        // smoothed along their length: the outer ones follow a ragged shore, and a street there
+        // should drive as a curve, not a zigzag
+        const Real smoothM = landSpec.value("streetSmooth", 90.0);
+        auto contourRoads = [&](Real level, RoadClass k, Real w) {
+            for (const std::vector<Vec2>& c : shape.contour(level, 15.0, 250.0, smoothM)) {
+                Polyline pl; pl.klass = k; pl.width = w; pl.pts = c;
+                pl.closed = c.size() > 2 && (c.front() - c.back()).length() < 30.0;
+                roads.push_back(pl);
+            }
+        };
+        contourRoads(shapeRim, RoadClass::Arterial, B.arterialWidth);
+        std::vector<Real> levels{shapeRim};
+        const int nRings = std::max(1, static_cast<int>(std::lround((shapeRim - edgeDepth) / std::max(Real(60), B.ringSpacing))));
+        for (int k = 1; k <= nRings && shapeRim - edgeDepth > 60; ++k) {
+            levels.push_back(shapeRim - (shapeRim - edgeDepth) * k / nRings);
+            contourRoads(levels.back(), RoadClass::Collector, B.collectorWidth);
+        }
+        // SPOKES: arterials from the rim down the depth to the last ring, every spokeSpacing along the rim
+        std::vector<std::vector<Vec2>> spokeLines;
+        const Real spokeSpacing = landSpec.value("spokeSpacing", 480.0);
+        for (const std::vector<Vec2>& rim : shape.contour(shapeRim, 15.0, 250.0, smoothM)) {
+            const std::vector<double> st = roads::lanes::stations(rim);
+            const int k = std::max(1, static_cast<int>(std::lround(st.back() / spokeSpacing)));
+            for (int i = 0; i < k; ++i) {
+                const Vec2 p = roads::lanes::pointAt(rim, st, st.back() * (i + 0.5) / k);
+                Polyline sp; sp.klass = RoadClass::Arterial; sp.width = B.arterialWidth;
+                sp.pts = descendDepth(shape, p + shape.gradient(p) * 8.0, levels.back() - 8.0);
+                if (sp.pts.size() >= 3) { spokeLines.push_back(sp.pts); roads.push_back(sp); }
+            }
+        }
+        // WEDGE STREETS across each band, square to its contours, staggered band to band, never
+        // beside a spoke or crowding the street before it where the lines converge (an inlet's shore)
+        const Real keep = B.arterialWidth / 2 + B.localWidth / 2 + 2 * B.sidewalk + 6;
+        for (std::size_t bi = 0; bi + 1 < levels.size(); ++bi) {
+            std::vector<std::vector<Vec2>> placed;
+            for (const std::vector<Vec2>& inner : shape.contour(levels[bi], 15.0, 150.0, smoothM)) {
+                const std::vector<double> st = roads::lanes::stations(inner);
+                const Real stagger = (bi % 2) * 0.5 * B.wedgeStreetSpacing;
+                for (Real s0 = stagger + 0.5 * B.wedgeStreetSpacing; s0 < st.back(); s0 += B.wedgeStreetSpacing) {
+                    const Vec2 p = roads::lanes::pointAt(inner, st, s0);
+                    std::vector<Vec2> line = descendDepth(shape, p + shape.gradient(p) * 8.0, levels[bi + 1] - 8.0);
+                    if (line.size() < 3) continue;
+                    bool clash = false;
+                    for (const auto* set : {&spokeLines, &placed})
+                        for (const std::vector<Vec2>& o : *set) {
+                            for (const Vec2& q : line) if (distToPolyline(q, o, false) < keep) { clash = true; break; }
+                            if (clash) break;
+                        }
+                    if (clash) continue;
+                    Polyline ls; ls.klass = RoadClass::Local; ls.width = B.localWidth; ls.pts = line;
+                    placed.push_back(line);
+                    roads.push_back(ls);
+                }
+            }
+        }
+        // BRIDGES. The river is an edge of the depth, so nothing crosses it by accident: each bridge
+        // is placed. Where an arterial comes down to the water (a spoke, a grid avenue), it crosses --
+        // no two within minBridgeGap -- and any stretch of river in the city longer than maxBridgeGap
+        // without one gets one midway. Each runs square across, from past the riverside street on one
+        // bank to past it on the other; the river step (below) keeps it as a bridge.
+        if (landHy && !shape.water.empty()) {
+            const nlohmann::json rp = B.world.value("riverPlan", nlohmann::json::object());
+            const Real minGap = rp.value("minBridgeGap", 250.0), maxGap = rp.value("maxBridgeGap", 600.0);
+            std::vector<Polyline> arterialsNow;
+            for (const Polyline& r : roads) if (r.klass == RoadClass::Arterial && !r.closed) arterialsNow.push_back(r);
+            int bridges = 0;
+            for (const River& rv : landHy->rivers()) {
+                std::vector<Vec2> line;
+                for (const RiverNode& nd : rv.nodes) line.push_back(nd.p);
+                if (line.size() < 2) continue;
+                const std::vector<double> st = roads::lanes::stations(line);
+                // the river's runs inside the city (its water cells in the footprint), by station
+                std::vector<std::pair<double, double>> runs;
+                bool in = false;
+                for (double sAt = 0; sAt <= st.back(); sAt += 10.0) {
+                    const bool w = shape.isWater(roads::lanes::pointAt(line, st, sAt));
+                    if (w && !in) { runs.push_back({sAt, sAt}); in = true; }
+                    if (w) runs.back().second = sAt;
+                    if (!w) in = false;
+                }
+                std::vector<double> want;
+                // where arterials come down to it
+                for (const Polyline& r : arterialsNow)
+                    for (const Vec2& end : {r.pts.front(), r.pts.back()}) {
+                        if (landHy->distanceToRiver(end.x, end.y, 200.0) > edgeDepth + 25) continue;
+                        const roads::lanes::Projection pr = roads::lanes::project(line, st, end);
+                        if (pr.distance < edgeDepth + 80 && shape.isWater(roads::lanes::pointAt(line, st, pr.station))) want.push_back(pr.station);
+                    }
+                std::sort(want.begin(), want.end());
+                std::vector<double> at;
+                for (double w : want) if (at.empty() || w - at.back() >= minGap) at.push_back(w);
+                // and the gaps, run by run
+                std::vector<double> filled;
+                for (const auto& [r0, r1] : runs) {
+                    if (r1 - r0 < 60.0) continue;
+                    std::vector<double> e{r0};
+                    for (double a2 : at) if (a2 > r0 && a2 < r1) e.push_back(a2);
+                    e.push_back(r1);
+                    for (std::size_t k = 0; k + 1 < e.size(); ++k) {
+                        const bool end0 = k == 0, end1 = k + 2 == e.size();
+                        // from a run's end (the city's edge) only half the gap counts: the first bridge
+                        // stands within maxGap/2 of where the river comes in
+                        const double span = e[k + 1] - e[k], limit = (end0 || end1) ? maxGap * 0.5 : maxGap;
+                        if (span <= limit) continue;
+                        const int extra = static_cast<int>(std::ceil(span / maxGap - ((end0 || end1) ? 0.5 : 0.0)));
+                        for (int q = 1; q <= std::max(1, extra); ++q) {
+                            const double f = end0 && !end1 ? 1.0 - (q - 0.5) / std::max(1, extra) * 0.999
+                                           : end1 && !end0 ? (q - 0.5) / std::max(1, extra)
+                                                           : static_cast<double>(q) / (std::max(1, extra) + 1);
+                            filled.push_back(e[k] + span * std::clamp(f, 0.0, 1.0));
+                        }
+                    }
+                }
+                at.insert(at.end(), filled.begin(), filled.end());
+                for (double sAt : at) {
+                    const Vec2 P = roads::lanes::pointAt(line, st, sAt);
+                    const Vec2 T = roads::lanes::pointAt(line, st, std::min(st.back(), sAt + 20)) - roads::lanes::pointAt(line, st, std::max(0.0, sAt - 20));
+                    if (T.length() < 1e-6) continue;
+                    const Vec2 Nn = Vec2(-T.y, T.x) * (1.0 / T.length());
+                    // out each way to past the riverside contour
+                    auto reach = [&](const Vec2& dir) {
+                        for (Real t = 5; t <= 260; t += 5) {
+                            const Vec2 q = P + dir * t;
+                            if (!shape.inside(q)) return Real(-1);
+                            if (!shape.isWater(q) && shape.depthAt(q) >= edgeDepth + 12) return t;
+                        }
+                        return Real(-1);
+                    };
+                    const Real t0 = reach(Nn * -1.0), t1 = reach(Nn);
+                    if (t0 < 0 || t1 < 0) continue;
+                    Polyline br; br.klass = RoadClass::Arterial; br.width = B.arterialWidth;
+                    const int m = std::max(2, static_cast<int>(std::ceil((t0 + t1) / 15.0)));
+                    for (int k = 0; k <= m; ++k) br.pts.push_back(P + Nn * (-t0 + (t0 + t1) * k / m));
+                    roads.push_back(br);
+                    ++bridges;
+                }
+            }
+            if (std::getenv("RT_PLAN_WHY")) std::printf("[plan] shaped: %d bridges placed\n", bridges);
+        }
+        plan.limits = shape.limits;
     }
     // --- the towns at the expressways' far ends ---
     // A site: the farthest point along the expressway's line, past the city by `gap` and inside the
@@ -1262,12 +1639,47 @@ CityPlan generatePlan(const Brief& B) {
 
     // --- freeway: a ring and radial spurs toward downtown ---
     std::vector<Polyline> fw;
+    bool ringKept = B.freewayRadius > 0 && !shaped;   // a shaped city's freeways are the region's, not a ring
     {
         Polyline ring; ring.klass = RoadClass::Freeway; ring.width = B.freewayWidth; ring.closed = true;
         const int n = static_cast<int>(2 * kPi * B.freewayRadius / 20.0);
         for (int i = 0; i < n; ++i) {
             const Real th = 2 * kPi * i / n;
             ring.pts.push_back(B.center + Vec2(std::cos(th), std::sin(th)) * freewayR(th));
+        }
+        // AGAINST THE COAST: the ring's longest run over land, as an open C. Less than 40% of it left
+        // and the city is a strip along the shore with no ring at all.
+        if (land.n && n >= 8) {
+            std::vector<char> ok(static_cast<std::size_t>(n));
+            bool all = true;
+            for (int i = 0; i < n; ++i) { ok[static_cast<std::size_t>(i)] = landAt(ring.pts[static_cast<std::size_t>(i)], false); all = all && ok[static_cast<std::size_t>(i)]; }
+            if (!all) {
+                int bestAt = 0, bestLen = 0;
+                for (int i = 0; i < n; ++i) {
+                    if (!ok[static_cast<std::size_t>(i)] || ok[static_cast<std::size_t>((i + n - 1) % n)]) continue;   // a run's start
+                    int len = 0;
+                    while (len < n && ok[static_cast<std::size_t>((i + len) % n)]) ++len;
+                    if (len > bestLen) { bestLen = len; bestAt = i; }
+                }
+                std::vector<Vec2> arc;
+                for (int k = 0; k < bestLen; ++k) arc.push_back(ring.pts[static_cast<std::size_t>((bestAt + k) % n)]);
+                // no hook at its ends: where the C comes out over the ragged shore the radius blend
+                // turns it sharply in its last few hundred metres -- it ends before the turn
+                for (int side = 0; side < 2 && arc.size() > 40; ++side) {
+                    std::size_t cut = 0;
+                    for (std::size_t k = 1; k < 15; ++k) {
+                        const Vec2 d0 = arc[k] - arc[k - 1], d1 = arc[k + 1] - arc[k];
+                        const Real c = dot(d0, d1) / std::max(Real(1e-9), d0.length() * d1.length());
+                        if (c < std::cos(20.0 * kPi / 180.0)) cut = k + 1;
+                    }
+                    arc.erase(arc.begin(), arc.begin() + static_cast<std::ptrdiff_t>(cut));
+                    std::reverse(arc.begin(), arc.end());
+                }
+                ring.pts = arc;
+                ring.closed = false;
+                if (bestLen >= n * 2 / 5) plan.ringArc = arc;
+                else ringKept = false;
+            }
         }
         fw.push_back(ring);
         std::vector<Real> spurTheta;
@@ -1317,8 +1729,13 @@ CityPlan generatePlan(const Brief& B) {
             fw.push_back(lp);
         }
     }
-    plan.freeway = planarizePolylines(fw);
-    plan.ring = fw.front().pts;
+    if (!ringKept || fw.front().pts.size() < 2) fw.front().pts.clear();
+    {
+        std::vector<Polyline> drawn;
+        for (const Polyline& p : fw) if (p.pts.size() >= 2) drawn.push_back(p);
+        plan.freeway = planarizePolylines(drawn);
+    }
+    if (plan.ringArc.empty() && ringKept) plan.ring = fw.front().pts;   // the closed ring; an open C is ringArc
     for (std::size_t i = 1; i < fw.size(); ++i) if (plan.loop.empty() || i + 1 < fw.size()) plan.spurs.push_back(fw[i].pts);   // the loop is last, not a spur
     // NO STREET RUNS DOWN THE FREEWAY'S RIGHT-OF-WAY. The ring already has its two frontage
     // roads and nothing crosses between them, but a radial SPUR had no such rule: ring roads
@@ -1391,40 +1808,19 @@ CityPlan generatePlan(const Brief& B) {
                     if (distToPolyline(q, keepOut[k], false) < keepReach[k] + half) return true;
                 return false;
             };
-            std::vector<Polyline> kept;
-            for (const Polyline& p : roads) {
-                const Real half = p.width / 2 + B.sidewalk;
-                // walked at 4 m so a cut lands within a few metres of the keep-out, not a vertex away
-                std::vector<Vec2> dense;
-                const std::size_t n = p.pts.size(), segs = p.closed ? n : n - 1;
-                for (std::size_t i = 0; i < segs; ++i) {
-                    const Vec2 a = p.pts[i], b = p.pts[(i + 1) % n];
-                    const int m = std::max(1, static_cast<int>(std::ceil((b - a).length() / 4.0)));
-                    for (int k = 0; k < m; ++k) dense.push_back(a + (b - a) * (Real(k) / m));
-                }
-                if (!p.closed) dense.push_back(p.pts.back());
-                bool any = false;
-                for (const Vec2& q : dense) if (blocked(q, half)) { any = true; break; }
-                if (!any) { kept.push_back(p); continue; }
-                Polyline cur = p;
-                cur.closed = false;
-                cur.pts.clear();
-                for (const Vec2& q : dense) {
-                    if (blocked(q, half)) {
-                        if (cur.pts.size() >= 2 && roads::lanes::stations(cur.pts).back() > 30.0) kept.push_back(cur);
-                        cur.pts.clear();
-                    } else {
-                        cur.pts.push_back(q);
-                    }
-                }
-                if (cur.pts.size() >= 2 && roads::lanes::stations(cur.pts).back() > 30.0) kept.push_back(cur);
-            }
-            roads.swap(kept);
+            roads = cutRoadsWhere(roads, B.sidewalk, blocked);
         }
     }
     // --- the street graph ---
     roads.insert(roads.end(), townRoads.begin(), townRoads.end());
     roads.insert(roads.end(), placeRoads.begin(), placeRoads.end());
+    roads.erase(std::remove_if(roads.begin(), roads.end(), [](const Polyline& p) { return p.pts.size() < 2; }), roads.end());
+    if (land.n) {
+        const std::size_t before = roads.size();
+        roads = cutRoadsWhere(roads, B.sidewalk, [&](const Vec2& q, Real) { return !landAt(q, true); }, 60.0);
+        if (std::getenv("RT_PLAN_WHY")) std::printf("[plan] land: %zu roads in, %zu pieces kept on land%s\n", before, roads.size(),
+                                                    plan.ringArc.empty() ? (plan.ring.empty() ? ", no ring" : "") : ", the ring a C against the coast");
+    }
     // --- RIVERS (ADR-0104). Glenn: "regenerate the city into two halves cut by the river and then
     // create a handful of bridges. Not every road would become a bridge. Look at Chicago." The river
     // is the world's (its hydrology). A street that crosses it is a BRIDGE only if it is a main
@@ -1438,9 +1834,10 @@ CityPlan generatePlan(const Brief& B) {
         const Real sideAt = quay + sideHalf;                              // its centreline, from the bank
         const Real maxGap = rp.value("maxBridgeGap", 650.0);
         const Real maxBridge = rp.value("maxBridge", 220.0);
-        const bool riverside = rp.value("riversideStreets", true);
+        // a shaped city's riverside street is its depth contour along the bank already
+        const bool riverside = rp.value("riversideStreets", !shaped);
         auto bank = [&](const Vec2& q) { return hy->distanceToRiver(q.x, q.y, 300.0); };
-        auto inCity = [&](const Vec2& q) { return (q - B.center).length() < outerR - 20.0; };
+        auto inCity = [&](const Vec2& q) { return shaped ? shape.depthAt(q) > 20.0 : (q - B.center).length() < outerR - 20.0; };
         // where each river crossing is along its river: (river, station) -> for the gap rule
         auto riverStation = [&](const Vec2& q, int* which, Vec2* tangent = nullptr) {
             double best = 1e30, bestS = 0.0;
@@ -1612,7 +2009,7 @@ CityPlan generatePlan(const Brief& B) {
         const Real pavement = B.localWidth + 2 * B.sidewalk;
         const Real minRadius = pavement;
         const Real minArea = std::pow(pavement + std::sqrt(3 * lot.frontWidth * lot.lotDepth), 2);
-        auto inCity = [&](const Vec2& p) { return (p - B.center).length() < outerR + 60; };
+        auto inCity = [&](const Vec2& p) { return shaped ? shape.depthAt(p) > -60.0 : (p - B.center).length() < outerR + 60; };
         int removed = 0;
         const int city = simplifyThinBlocks(plan.streets, minArea, minRadius, inCity, true, nullptr);
         const int out = simplifyThinBlocks(plan.streets, minArea, minRadius, [&](const Vec2& p) { return !inCity(p); }, !(B.world.is_object() ? B.world.value("simplifyBlocks", true) : true), &removed);
@@ -1620,6 +2017,14 @@ CityPlan generatePlan(const Brief& B) {
             std::printf("[plan] thin or tiny blocks (< %.0f m2, or 2A/P < %.0f m): %d in the city (left), %d beyond it (%d streets removed)\n",
                         minArea, minRadius, city, out, removed);
     }
+    // a street cut short by the SLOPES goes back to its junction (up a hillside it is a whisker, not a
+    // lane anyone laid); one cut by the sea stays -- a street that runs down to the water
+    if (land.n)
+        pruneStubsNear(plan.streets, [&](const Vec2& p) {
+            for (const Vec2& d : {Vec2(20, 0), Vec2(-20, 0), Vec2(0, 20), Vec2(0, -20)})
+                if (!landAt(p + d, true) && landAt(p + d, false)) return true;
+            return false;
+        });
     if (!keepOut.empty())
         pruneStubsNear(plan.streets, [&](const Vec2& p) {
             for (std::size_t k = 0; k < keepOut.size(); ++k)
@@ -1632,10 +2037,11 @@ CityPlan generatePlan(const Brief& B) {
         const Vec2 a = plan.streets.nodes[static_cast<std::size_t>(e.a)].pos, b = plan.streets.nodes[static_cast<std::size_t>(e.b)].pos;
         const Real ra = (a - B.center).length(), rb = (b - B.center).length();
         const Real thA = std::atan2(a.y - B.center.y, a.x - B.center.x);
-        const Real rf = B.freewayRadius + B.freewayWobble * ringNoise(thA, 777, B.seed);
+        const Real rf = freewayR(thA);
         if ((ra - rf) * (rb - rf) <= 0) {
             const Real t = std::fabs(ra - rb) > 1e-9 ? (rf - ra) / (rb - ra) : 0.5;
             const Vec2 p = a + (b - a) * t;
+            if (plan.ring.empty() && (plan.ringArc.empty() || distToPolyline(p, plan.ringArc, false) > 40.0)) continue;   // no ring there
             bool dup = false;
             for (const Vec2& q : plan.interchanges) if ((q - p).length() < 150.0) dup = true;
             if (!dup) plan.interchanges.push_back(p);
@@ -1691,8 +2097,13 @@ CityPlan generatePlan(const Brief& B) {
         PlanBlock pb;
         pb.face = std::move(face);
         pb.buildable = std::move(bld);
-        const Real r = (centroid(pb.buildable) - B.center).length();
-        pb.district = r < B.coreRadius ? 0 : r < B.midRadius ? 1 : 2;
+        if (shaped && shape.area > 0) {
+            const Real d = shape.depthAt(centroid(pb.buildable));
+            pb.district = d >= shapeCore ? 0 : d >= shapeRim ? 1 : 2;
+        } else {
+            const Real r = (centroid(pb.buildable) - B.center).length();
+            pb.district = r < B.coreRadius ? 0 : r < B.midRadius ? 1 : 2;
+        }
         plan.blocks.push_back(std::move(pb));
     }
     return plan;

@@ -239,4 +239,81 @@ TerrainRoute routeOnce(const HeightField& height, const Vec2& from, const Vec2& 
 
 }  // namespace
 
+std::vector<Vec2> tightenRoute(const HeightField& height, const std::vector<Vec2>& pts, const TightenParams& p) {
+    if (pts.size() < 3) return pts;
+    auto drivable = [&](const Vec2& a, const Vec2& b) {
+        const double L = (b - a).length();
+        if (L > p.maxStraight) return false;
+        const double ha = height(a.x, a.y), hb = height(b.x, b.y);
+        if (L > 1e-6 && std::fabs(hb - ha) / L > p.maxGrade) return false;
+        const int m = std::max(1, static_cast<int>(std::ceil(L / p.sample)));
+        for (int k = 1; k < m; ++k) {
+            const double t = static_cast<double>(k) / m;
+            const Vec2 q = a + (b - a) * t;
+            if (p.blocked && p.blocked(q.x, q.y)) return false;
+            if (std::fabs(height(q.x, q.y) - (ha + (hb - ha) * t)) > p.maxCutFill) return false;
+        }
+        return true;
+    };
+    // along the road, measured, so the look-ahead is bounded by distance, not by vertex count
+    std::vector<double> s(pts.size(), 0.0);
+    for (std::size_t k = 1; k < pts.size(); ++k) s[k] = s[k - 1] + (pts[k] - pts[k - 1]).length();
+    std::vector<Vec2> out{pts.front()};
+    std::size_t i = 0;
+    while (i + 1 < pts.size()) {
+        std::size_t best = i + 1;
+        // the farthest point it can reach straight -- up to three straights' worth along the road, so
+        // a spur kilometres long is seen whole
+        for (std::size_t j = i + 2; j < pts.size() && s[j] - s[i] <= 3.0 * p.maxStraight; ++j)
+            if (drivable(pts[i], pts[j])) best = j;
+        out.push_back(pts[best]);
+        i = best;
+    }
+    return out;
+}
+
+std::vector<Vec2> roundRoute(const std::vector<Vec2>& pts, double radius, double step) {
+    if (pts.size() < 3 || radius <= 0) return pts;
+    std::vector<Vec2> r{pts.front()};
+    for (std::size_t k = 0; k + 1 < pts.size(); ++k) {
+        const Vec2 a = pts[k], b = pts[k + 1];
+        const int m = std::max(1, static_cast<int>(std::ceil((b - a).length() / step)));
+        for (int j = 1; j <= m; ++j) r.push_back(a + (b - a) * (static_cast<double>(j) / m));
+    }
+    const int h = std::max(1, static_cast<int>(std::lround(radius / step)));
+    const int n = static_cast<int>(r.size());
+    // twice: a moving average's corner is a parabola; two make it a smooth arc
+    for (int pass = 0; pass < 2; ++pass) {
+        std::vector<Vec2> o(r.size());
+        for (int i = 0; i < n; ++i) {
+            const int w = std::min({h, i, n - 1 - i});
+            Vec2 sum(0, 0);
+            for (int k = -w; k <= w; ++k) sum = sum + r[static_cast<std::size_t>(i + k)];
+            o[static_cast<std::size_t>(i)] = sum * (1.0 / (2 * w + 1));
+        }
+        r.swap(o);
+    }
+    return r;
+}
+
+TerrainRoute measureRoute(const HeightField& height, const std::vector<Vec2>& pts, double window) {
+    TerrainRoute out;
+    out.points = pts;
+    double prevH = pts.empty() ? 0.0 : height(pts.front().x, pts.front().y);
+    std::vector<double> st{0.0}, hs{prevH};
+    for (std::size_t k = 1; k < pts.size(); ++k) {
+        const double L = (pts[k] - pts[k - 1]).length(), h = height(pts[k].x, pts[k].y);
+        out.length += L;
+        if (h > prevH) out.climb += h - prevH;
+        prevH = h;
+        st.push_back(out.length);
+        hs.push_back(h);
+    }
+    for (std::size_t a = 0, b = 0; a < st.size(); ++a) {
+        while (b < st.size() && st[b] - st[a] < window) ++b;
+        if (b < st.size()) out.worstGrade = std::max(out.worstGrade, std::fabs(hs[b] - hs[a]) / (st[b] - st[a]));
+    }
+    return out;
+}
+
 }  // namespace engine

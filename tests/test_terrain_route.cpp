@@ -33,3 +33,26 @@ TEST_CASE(terrain_route_winds_up_a_mountain_within_its_grade) {
     std::printf("[route] cone: %.0f m long, %.0f m climbed, worst %.3f, %zu points, %ld states\n",
                 r.length, r.climb, r.worstGrade, r.points.size(), r.expanded);
 }
+
+// TIGHTEN (Glenn: "a really tight hairpin. We should smooth out spikes like that"): on flat ground a
+// road that runs up a spur and back is drivable straight, so the spur goes; on a slope steeper than
+// the road's grade a switchback is NOT drivable straight, so it stays. Then corners are rounded.
+TEST_CASE(terrain_route_tighten_drops_a_spike_and_keeps_a_switchback) {
+    const HeightField flat = [](double, double) { return 0.0; };
+    const std::vector<Vec2> spike{{0, 0}, {200, 0}, {300, 300}, {310, 5}, {600, 0}};
+    const std::vector<Vec2> t = tightenRoute(flat, spike);
+    CHECK(t.size() == 2);   // straight from end to end
+    // 30% slope along y: the road climbs 60 m in two legs at ~6% each, and the legs must stay
+    const HeightField slope = [](double, double y) { return 0.3 * y; };
+    const std::vector<Vec2> zig{{0, 0}, {500, 50}, {0, 100}, {500, 150}};
+    TightenParams tp;
+    tp.maxGrade = 0.08;
+    const std::vector<Vec2> z = tightenRoute(slope, zig, tp);
+    CHECK(z.size() == zig.size());
+    // rounded: no turn sharper than the radius allows, ends held
+    const std::vector<Vec2> r = roundRoute(z, 15.0);
+    CHECK((r.front() - zig.front()).length() < 1e-9);
+    CHECK((r.back() - zig.back()).length() < 1e-9);
+    const TerrainRoute m = measureRoute(slope, r);
+    CHECK(m.worstGrade < 0.12);
+}

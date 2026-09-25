@@ -49,6 +49,26 @@ struct TerrainRoute {
 TerrainRoute routeOnTerrain(const HeightField& height, const Vec2& from, const Vec2& to,
                             const TerrainRouteParams& p = {});
 
+// TIGHTEN a routed road (string-pulling): wherever a straight line between two of its points is
+// drivable -- within `maxGrade` end to end, the ground never more than `maxCutFill` off that line,
+// no longer than `maxStraight`, nothing `blocked` -- the detour between them goes. Glenn: "a really
+// tight hairpin. We should smooth out spikes like that." A spike (up a spur and back), a zigzag on
+// flat ground, a waypoint forced off the natural line: all drivable straight, all removed. A real
+// switchback stays -- the straight line up the slope is too steep.
+struct TightenParams {
+    double maxGrade = 0.08, maxCutFill = 8.0, maxStraight = 900.0, sample = 10.0;
+    std::function<bool(double x, double y)> blocked;
+};
+std::vector<Vec2> tightenRoute(const HeightField& height, const std::vector<Vec2>& pts, const TightenParams& p = {});
+
+// ROUND its corners: resampled every `step` m and averaged over `radius` m either side, so no bend is
+// tighter than a car takes at the road's speed (a mountain road's hairpin ~15 m, a freeway's ~300 m).
+// The ends stay where they are.
+std::vector<Vec2> roundRoute(const std::vector<Vec2>& pts, double radius, double step = 10.0);
+
+// Length, climb and steepest grade (over `window` m) of a polyline on the ground.
+TerrainRoute measureRoute(const HeightField& height, const std::vector<Vec2>& pts, double window = 50.0);
+
 }  // namespace engine
 
 #endif

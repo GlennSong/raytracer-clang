@@ -8170,3 +8170,98 @@ block a level will use). Each variant takes about 10 s.
     bridges where it spans a river);
   - a ring road round each city, and local and intercity bus routes;
   - then the 3D build.
+
+## ADR-0106 — Cities shaped by their land: grown limits, a depth-field layout, the freeway behind them
+
+**Context.** Glenn chose island 8 (ADR-0105). The first attempt planned each site with the usual
+circle-and-ring brief, trimmed afterwards to the land (`world.land`: streets stop at the sea and on
+steep ground, the ring opens into a C against the coast). Glenn: "The city also needs to fit the
+terrain. Part of the city is in the water and another part looks embedded into the mountain." Then:
+"We probably don't need ring freeways if the city can't support it. We should have freeways that
+connect between cities … build a shape that better fits the contours and build a city within that
+shape instead of floodfilling a circle each time?"
+
+**Decision: the land draws the city's outline, and the city is laid out inside it.**
+1. **The limits grow** (`plan/land_shape.h`, `growLandShape`). Growth runs outward from the site,
+   cheapest ground first (Dijkstra), over buildable land: dry, under 15%, and a river counts as
+   land because the river step bridges it. It stops at a target area.
+   - Each step costs its length × (1 + 25·slope + 0.02·metres above the heart).
+   - Each step is cheaper near the sea (up to 60%, fading over 400 m), so a city runs down to its
+     shore instead of along the plain behind it.
+   - The outline is an iso-cost contour, smoothed by blur-and-threshold. Holes under 4 ha are filled.
+   - The results: city 0 is a strip between the foothills and the sea, city 1 a strip along the
+     east coast, and town 3 is bounded by its river.
+2. **A depth field lays it out.** Depth is the signed chamfer distance to the limits, lightly
+   blurred:
+   - the downtown grid fills the deepest 35% of the area, framed round the deepest point;
+   - midtown's boulevard is the depth contour there;
+   - the outskirts' collectors are evenly spaced depth contours down to 45 m from the edge;
+   - spokes (every 480 m along the rim) and wedge locals run down the depth gradient, square to the
+     contours, and are skipped where they converge;
+   - districts come from depth (core 12%, midtown 35%).
+   - Marching-squares contours and gradient descent are vocabulary (`contour`, `descendDepth`,
+     `depthHolding`). Everything downstream (river step, planarizer, blocks, lots) is unchanged.
+3. **No ring freeway on a shaped city.** The island's freeway serves it
+   (`routeFreewayRoundCities`):
+   - every city's limits, grown 40 m, are a no-go mask;
+   - each city's waypoint moves just outside its inland edge (the limits point nearest the range's
+     axis);
+   - the legs are routed again, so the freeway runs along the foot of the hills behind the towns;
+   - the pass and the mountain roads stop at the limits they reach, and the mountain road climbs
+     from the freeway's new line.
+4. **Island site briefs** (`islandSiteBrief`) set up each site:
+   - the island's terrain block as `world.base`;
+   - `world.land` with `shape` set;
+   - an area from the site's flat ground (π(1.15R)² for a city, πR² for a town);
+   - a grid squared to the nearest coast;
+   - no ring.
+   - `city_plan island-cities SEED OUT` plans every site and writes the island map with the plans
+     (limits, streets by class, freeways), a close-up per site, and each brief.
+5. **Kept, for circle briefs with `world.land`:** the land cut, and the ring opening into a C
+   (`CityPlan::ringArc`, blended between the coast and slope rules, hooks trimmed). Briefs without
+   `world.land` plan exactly as before: metro_planned's and metro_mountain's scene edges are
+   identical.
+6. The lanes terrain recipe now reads an eroded base (`erodedForTerrain`), so a city stands on the
+   ground the level renders.
+
+7. **Water is an edge inside the city** (`LandShapeParams::water`). Glenn: "the city blocks don't
+   follow the contours of the river … we should have bridges across the river … what I've observed
+   in actual cities."
+   - A river or lake stays in the footprint (the limits span it), but the depth field measures from
+     its banks too, so the ring streets and blocks run along both banks. The contour 45 m from the
+     water is the riverside street, which is why the river step's own riverside streets are off for a
+     shaped city.
+   - **Bridges are placed on purpose.** Every arterial that comes down to the water crosses it, no
+     two within 250 m. Any stretch of river in the city longer than 600 m without a bridge gets one
+     (300 m from where the river enters). Each bridge runs square across, from past the riverside
+     street on one bank to past it on the other. The river step keeps these as bridges. The land
+     cut lets the city's own water through, because what crosses it is the river step's call.
+   - Island 8: 11 bridges in city 0, 3 in city 1.
+9. **Every island road is finished for its kind** (`terrain_route.h`). Glenn: "a winding mountain
+   road that isn't connected to anything on either side. And also there is a really tight hairpin.
+   We should smooth out spikes like that."
+   - **Tightened** (`tightenRoute`, string-pulling): wherever the straight line between two of a
+     road's points is drivable, the detour between them goes. Drivable means within the road's
+     grade end to end, the ground within the cut-and-fill limit of that line, no longer than the
+     longest straight, and not blocked. A switchback stays, because its straight line is too steep.
+   - **Rounded** (`roundRoute`): corners are averaged out to a radius per kind — 150 m for a freeway,
+     30 m for the pass, 15 m for a mountain road.
+   - **The pass is ONE road over the saddle.** Forced through the saddle point as two legs, it met
+     itself in a spike (up a spur and back).
+   - **Connected:** the pass ends on the freeway at each side, not at a city's edge beside it, and
+     `linkCityToFreeway` adds link roads from each city's arterials (4 for a city, 2 for a town).
+10. **Edge streets are smoothed** so they drive as curves:
+   - contour streets get a 90 m moving average (`smoothPolyline`);
+   - the limits are smoothed at 60 m;
+   - the depth field gets two box blurs.
+
+**Consequences.**
+- Island 8: city 0 has 638 blocks, 150 km of streets and 3 bridges; city 1 has 342 blocks; six towns
+  have 35–137 blocks each. The freeway round the cities is 34.6 km with no unrouted legs. The run
+  takes about 20 s.
+- **Not yet built:**
+  - no interchange or link road where a city's arterial meets the freeway;
+  - the city ring C is not built in 3D (`plan_scene` builds only a closed ring);
+  - bus routes;
+  - the island's ragged, erosion-toothed coast (a terrain artifact) makes the limits jagged in
+    places.

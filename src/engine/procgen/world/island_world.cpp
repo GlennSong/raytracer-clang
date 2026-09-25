@@ -27,6 +27,33 @@ double rnd(uint32_t seed, int k) {   // a deterministic [0, 1) per (seed, k)
 }
 Vec2 fromAxis(double u, double v, double a) { return Vec2(u * std::cos(a) - v * std::sin(a), u * std::sin(a) + v * std::cos(a)); }
 double wrap360(double d) { d = std::fmod(d, 360.0); return d < 0 ? d + 360.0 : d; }
+// the island's roads, by kind: a freeway's grade and curvature; a mountain road's switchbacks
+TerrainRouteParams freewayRouteParams() {
+    TerrainRouteParams fw;
+    fw.cell = 30.0; fw.maxGrade = 0.05; fw.hardGrade = 0.30; fw.gradeWeight = 800.0; fw.turnWeight = 30.0; fw.maxTurnDeg = 25.0; fw.margin = 1400.0;
+    return fw;
+}
+// A routed road FINISHED for its kind (terrain_route.h): tightened -- no spike, no detour a straight
+// line could drive -- then its corners rounded to what its traffic takes, and measured again.
+void finishRoad(IslandRoad& rd, const HeightField& ground, const std::function<bool(double, double)>& blocked) {
+    if (rd.points.size() < 3) return;
+    TightenParams tp;
+    double radius = 15.0;
+    if (rd.kind == "freeway") { tp.maxGrade = 0.05; tp.maxCutFill = 12.0; tp.maxStraight = 1500.0; radius = 150.0; }
+    else if (rd.kind == "pass") { tp.maxGrade = 0.07; tp.maxCutFill = 8.0; tp.maxStraight = 600.0; radius = 30.0; }
+    else { tp.maxGrade = 0.08; tp.maxCutFill = 6.0; tp.maxStraight = 400.0; radius = 15.0; }
+    tp.blocked = blocked;
+    const TerrainRoute m = measureRoute(ground, roundRoute(tightenRoute(ground, rd.points, tp), radius));
+    rd.points = m.points;
+    rd.length = m.length;
+    rd.climb = m.climb;
+    rd.worstGrade = m.worstGrade;
+}
+TerrainRouteParams mountainRouteParams() {
+    TerrainRouteParams mr;
+    mr.cell = 12.0; mr.maxGrade = 0.08; mr.hardGrade = 0.45; mr.margin = 900.0;
+    return mr;
+}
 }  // namespace
 
 double IslandWorld::heightAt(double x, double z) const {
@@ -267,6 +294,7 @@ IslandWorld planIsland(const json& blockIn, double half, double cell) {
         rd.length = tr.length;
         rd.climb = tr.climb;
         rd.worstGrade = tr.worstGrade;
+        if (kind != "pass") finishRoad(rd, ground, rp.blocked);   // a pass is finished once its legs are one road
         w.roads.push_back(rd);
         return !tr.points.empty();
     };
@@ -278,8 +306,7 @@ IslandWorld planIsland(const json& blockIn, double half, double cell) {
         const Vec2 da = w.sites[static_cast<std::size_t>(a)].at - C, db = w.sites[static_cast<std::size_t>(b)].at - C;
         return std::atan2(da.y, da.x) < std::atan2(db.y, db.x);
     });
-    TerrainRouteParams fw;
-    fw.cell = 30.0; fw.maxGrade = 0.05; fw.hardGrade = 0.30; fw.gradeWeight = 800.0; fw.turnWeight = 30.0; fw.maxTurnDeg = 25.0; fw.margin = 1400.0;
+    const TerrainRouteParams fw = freewayRouteParams();
     for (std::size_t k = 0; k < ring.size() && ring.size() >= 2; ++k) {
         const int a = ring[k], b = ring[(k + 1) % ring.size()];
         if (ring.size() == 2 && k == 1) break;
@@ -315,6 +342,14 @@ IslandWorld planIsland(const json& blockIn, double half, double cell) {
             const std::size_t before = w.roads.size();
             route("pass", c0, c1, w.sites[static_cast<std::size_t>(c0)].at, saddle, ps);
             route("pass", c0, c1, saddle, w.sites[static_cast<std::size_t>(c1)].at, ps);
+            // ONE road over the saddle, not two meeting at it: forced through the saddle point, the
+            // legs met in a spike (up a spur and back); tightened as one, the spike is gone
+            if (w.roads.size() == before + 2 && !w.roads[before].points.empty() && !w.roads[before + 1].points.empty()) {
+                IslandRoad& one = w.roads[before];
+                one.points.insert(one.points.end(), w.roads[before + 1].points.begin() + 1, w.roads[before + 1].points.end());
+                w.roads.pop_back();
+                finishRoad(one, ground, [&w](double x, double z) { return w.heightAt(x, z) < 0.8; });
+            }
             saddleJson = {{"at", {std::round(saddle.x), std::round(saddle.y)}}, {"height", std::round(w.heightAt(saddle.x, saddle.y))}};
             (void)before;
         }
@@ -328,9 +363,7 @@ IslandWorld planIsland(const json& blockIn, double half, double cell) {
         for (const IslandRoad& rd : w.roads)
             for (const Vec2& q : rd.points)
                 if (rd.kind == "freeway" && (q - top).length() < best) { best = (q - top).length(); foot = q; }
-        TerrainRouteParams mr;
-        mr.cell = 12.0; mr.maxGrade = 0.08; mr.hardGrade = 0.45; mr.margin = 900.0;
-        route("mountain", -1, k, foot, top, mr);
+        route("mountain", -1, k, foot, top, mountainRouteParams());
     }
 
     // 5. THE REPORT
@@ -358,15 +391,280 @@ IslandWorld planIsland(const json& blockIn, double half, double cell) {
     return w;
 }
 
-bool writeIslandMap(const IslandWorld& w, const std::string& pngPath, int px) {
-    const double mpp = 2.0 * w.half / px;   // metres a pixel
+json islandSiteBrief(const IslandWorld& w, int site) {
+    const IslandSite& s = w.sites.at(static_cast<std::size_t>(site));
+    const bool city = s.kind == "city";
+    // TOWARD THE SEA: the nearest sea sample; a site inland squares to the range's axis instead
+    Vec2 toSea = w.axis;
+    double best = 1e30;
+    for (int j = 0; j < w.n; j += 2)
+        for (int i = 0; i < w.n; i += 2) {
+            if (w.height[static_cast<std::size_t>(j) * w.n + i] >= 0.0f) continue;
+            const Vec2 q(-w.half + i * w.cell, -w.half + j * w.cell);
+            const double d = (q - s.at).length();
+            if (d < best) { best = d; toSea = q - s.at; }
+        }
+    if (best > 3.0 * std::max(600.0, s.radius)) toSea = w.axis;
+    const double angle = std::atan2(toSea.y, toSea.x) * 180.0 / kPi;
+    // what it grows to (land_shape.h): a city its flat ground's disc and a little more, a town its own;
+    // the plan's square is room for that to run out along a valley or a strip of coast
+    const double area = kPi * std::pow(s.radius * (city ? 1.15 : 1.0), 2.0);
+    const double size = 2.0 * std::max(city ? 1400.0 : 500.0, s.radius * 2.4);
+    const double core = std::sqrt(area * 0.12 / kPi), mid = std::sqrt(area * 0.35 / kPi);
+    const uint32_t seed = static_cast<uint32_t>(w.terrain.value("seed", 0u) * 7919u + static_cast<uint32_t>(site) * 104729u + 17u);
+    const std::string name = (city ? "city_" : s.kind == "town" ? "town_" : "mountain_town_") + std::to_string(site);
+    json world = {
+        {"_comment", "An island site (island_world.h islandSiteBrief): the island's terrain block; the city grown over its land to its area and laid out by depth (land_shape.h)."},
+        {"base", w.terrain},
+        {"seaLevel", w.terrain.value("seaLevel", 0.0)},
+        {"grid", size * 0.5 + 60.0},
+        // a street may be as steep as a hill town's (15%); the growth prefers the flat ground anyway
+        {"land", {{"minHeight", 3.0}, {"maxSlope", 0.15}, {"shape", true}, {"area", area}, {"spokeSpacing", city ? 480.0 : 360.0}}},
+    };
+    return {
+        {"name", name},
+        {"seed", seed},
+        {"size", size},
+        {"center", {s.at.x, s.at.y}},
+        {"relief", 3.0},   // the island is the relief; the brief's hills would only roughen it
+        {"core", {{"angle", angle}, {"arterialEvery", 3}, {"block", {94.0, 64.0}}, {"radius", core}}},
+        {"midtown", {{"block", {158.0, 108.0}}, {"radius", mid}, {"warp", city ? 18.0 : 10.0}}},
+        {"outskirts", {{"curvature", 24.0}, {"margin", 120.0}, {"ringSpacing", city ? 140.0 : 120.0}, {"spokes", city ? 10 : 6}, {"streetSpacing", 95.0}}},
+        {"freeway", {{"radius", 0.0}, {"radials", 0}, {"wobble", 0.0}}},   // no ring: the island's freeway serves it
+        {"roads", {{"arterial", 22.0}, {"collector", 16.0}, {"freeway", 30.0}, {"local", 12.0}, {"sidewalk", 5.0}}},
+        {"world", world},
+    };
+}
+
+void joinFreewayToRing(IslandWorld& w, int site, const std::vector<Vec2>& ring, bool closed) {
+    if (ring.size() < 2) return;
+    // the ring's nearest point to q, along its segments
+    auto nearest = [&](const Vec2& q) {
+        Vec2 best = ring.front();
+        double bd = 1e30;
+        const std::size_t n = ring.size(), segs = closed ? n : n - 1;
+        for (std::size_t i = 0; i < segs; ++i) {
+            const Vec2 a = ring[i], ab = ring[(i + 1) % n] - a;
+            const double L2 = ab.x * ab.x + ab.y * ab.y;
+            const double t = L2 > 1e-12 ? std::clamp(((q - a).x * ab.x + (q - a).y * ab.y) / L2, 0.0, 1.0) : 0.0;
+            const Vec2 f = a + ab * t;
+            if ((q - f).length() < bd) { bd = (q - f).length(); best = f; }
+        }
+        return best;
+    };
+    for (IslandRoad& rd : w.roads) {
+        if (rd.points.size() < 2 || (rd.from != site && rd.to != site)) continue;
+        const bool atStart = rd.from == site;
+        std::vector<Vec2> pts = rd.points;
+        if (atStart) std::reverse(pts.begin(), pts.end());   // now it runs toward the site
+        // walk in until it comes within 60 m of the ring (its corridor), densified so it stops there
+        std::vector<Vec2> kept{pts.front()};
+        bool met = false;
+        for (std::size_t i = 0; i + 1 < pts.size() && !met; ++i) {
+            const int m = std::max(1, static_cast<int>(std::ceil((pts[i + 1] - pts[i]).length() / 20.0)));
+            for (int k = 1; k <= m; ++k) {
+                const Vec2 q = pts[i] + (pts[i + 1] - pts[i]) * (static_cast<double>(k) / m);
+                if ((q - nearest(q)).length() < 60.0) { met = true; break; }
+                kept.push_back(q);
+            }
+        }
+        if (!met || kept.size() < 2) continue;
+        kept.push_back(nearest(kept.back()));
+        if (atStart) std::reverse(kept.begin(), kept.end());
+        rd.points = kept;
+    }
+}
+
+void routeFreewayRoundCities(IslandWorld& w, const std::vector<std::pair<int, std::vector<std::vector<Vec2>>>>& cityLimits) {
+    const int n = w.n;
+    const std::size_t N = static_cast<std::size_t>(n) * n;
+    auto cellOf = [&](const Vec2& p, int& i, int& j) {
+        i = static_cast<int>(std::lround((p.x + w.half) / w.cell));
+        j = static_cast<int>(std::lround((p.y + w.half) / w.cell));
+        return i >= 0 && j >= 0 && i < n && j < n;
+    };
+    // each city's inside, rasterized (even-odd, row by row), and the no-go mask: every inside grown 40 m
+    std::vector<int> owner(N, -1);
+    for (const auto& [site, loops] : cityLimits)
+        for (int j = 0; j < n; ++j) {
+            const double z = -w.half + j * w.cell;
+            std::vector<double> xs;
+            for (const std::vector<Vec2>& L : loops)
+                for (std::size_t k = 0; k < L.size(); ++k) {
+                    const Vec2 a = L[k], b = L[(k + 1) % L.size()];
+                    if ((a.y > z) != (b.y > z)) xs.push_back(a.x + (z - a.y) / (b.y - a.y) * (b.x - a.x));
+                }
+            std::sort(xs.begin(), xs.end());
+            for (std::size_t k = 0; k + 1 < xs.size(); k += 2)
+                for (int i = std::max(0, static_cast<int>(std::ceil((xs[k] + w.half) / w.cell)));
+                     i < n && -w.half + i * w.cell <= xs[k + 1]; ++i)
+                    owner[static_cast<std::size_t>(j) * n + i] = site;
+        }
+    std::vector<char> nogo(N, 0);
+    const int grow = static_cast<int>(std::ceil(40.0 / w.cell));
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) {
+            if (owner[static_cast<std::size_t>(j) * n + i] < 0) continue;
+            for (int dj = -grow; dj <= grow; ++dj)
+                for (int di = -grow; di <= grow; ++di) {
+                    const int u = i + di, v = j + dj;
+                    if (u >= 0 && v >= 0 && u < n && v < n) nogo[static_cast<std::size_t>(v) * n + u] = 1;
+                }
+        }
+    auto blocked = [&](double x, double z) {
+        int i, j;
+        if (!cellOf(Vec2(x, z), i, j)) return true;
+        return nogo[static_cast<std::size_t>(j) * n + i] || w.heightAt(x, z) < 0.8;
+    };
+    // each city's WAYPOINT: the point of its limits nearest the range's axis, stepped out toward it
+    const json& il = w.terrain.value("island", json::object());
+    const Vec2 C(il.value("cx", 0.0), il.value("cz", 0.0));
+    const Vec2 ax = w.axis;
+    std::vector<Vec2> via(w.sites.size());
+    for (std::size_t k = 0; k < w.sites.size(); ++k) via[k] = w.sites[k].at;
+    for (const auto& [site, loops] : cityLimits) {
+        double best = 1e30;
+        Vec2 pick = w.sites[static_cast<std::size_t>(site)].at;
+        for (const std::vector<Vec2>& L : loops)
+            for (const Vec2& q : L) {
+                const Vec2 d = q - C;
+                const double off = std::fabs(d.x * ax.y - d.y * ax.x);   // distance from the axis line
+                if (off < best) { best = off; pick = q; }
+            }
+        const Vec2 d = pick - C;
+        const Vec2 foot = C + ax * (d.x * ax.x + d.y * ax.y);
+        Vec2 in = foot - pick;
+        in = in.length() > 1e-9 ? in * (1.0 / in.length()) : Vec2(0, 0);
+        Vec2 q = pick;
+        for (double t = 80.0; t <= 600.0 && blocked(q.x, q.y); t += 40.0) q = pick + in * t;
+        via[static_cast<std::size_t>(site)] = q;
+    }
+    const HeightField ground = [&w](double x, double z) { return w.heightAt(x, z); };
+    auto reroute = [&](IslandRoad& rd, const Vec2& from, const Vec2& to, TerrainRouteParams rp) {
+        rp.blocked = blocked;
+        const TerrainRoute tr = routeOnTerrain(ground, from, to, rp);
+        if (tr.points.empty()) return false;
+        rd.points = tr.points;
+        finishRoad(rd, ground, blocked);
+        return true;
+    };
+    double fwLen = 0.0;
+    int unrouted = 0;
+    for (IslandRoad& rd : w.roads) {
+        if (rd.kind != "freeway" || rd.from < 0 || rd.to < 0) continue;
+        if (!reroute(rd, via[static_cast<std::size_t>(rd.from)], via[static_cast<std::size_t>(rd.to)], freewayRouteParams())) ++unrouted;
+        fwLen += rd.length;
+    }
+    // the other roads stop at the limits they reach (their own end's city)
+    auto trimAt = [&](IslandRoad& rd, int site, bool atEnd) {
+        // walked from the road's other end toward this one; it ends where it first enters the city
+        std::vector<Vec2>& P = rd.points;
+        if (!atEnd) std::reverse(P.begin(), P.end());
+        std::size_t keep = 0;
+        while (keep < P.size()) {
+            int i, j;
+            if (cellOf(P[keep], i, j) && owner[static_cast<std::size_t>(j) * n + i] == site) break;
+            ++keep;
+        }
+        if (keep >= 2 && keep < P.size()) P.resize(keep);
+        if (!atEnd) std::reverse(P.begin(), P.end());
+    };
+    for (IslandRoad& rd : w.roads) {
+        if (rd.kind == "freeway" || rd.points.size() < 2) continue;
+        if (rd.kind == "mountain" && rd.to >= 0) {
+            // from the freeway where it now runs
+            const Vec2 top = w.sites[static_cast<std::size_t>(rd.to)].at;
+            Vec2 foot = rd.points.front();
+            double best = 1e30;
+            for (const IslandRoad& f : w.roads)
+                if (f.kind == "freeway") for (const Vec2& q : f.points) if ((q - top).length() < best) { best = (q - top).length(); foot = q; }
+            TerrainRouteParams mr = mountainRouteParams();
+            const TerrainRoute tr = routeOnTerrain(ground, foot, top, [&] { mr.blocked = [&w](double x, double z) { return w.heightAt(x, z) < 0.8; }; return mr; }());
+            if (!tr.points.empty()) { rd.points = tr.points; finishRoad(rd, ground, blocked); }
+        }
+        // a PASS ends ON the freeway at each side (an interchange there), not at a city's edge beside it
+        if (rd.kind == "pass") {
+            std::vector<Vec2>& P = rd.points;
+            for (int side = 0; side < 2; ++side) {
+                // walked from the saddle (the middle) out to this end
+                const std::size_t mid = P.size() / 2;
+                std::size_t cut = side ? P.size() : 0;
+                Vec2 onto;
+                for (std::size_t k = mid; side ? k < P.size() : k + 1 > 0; side ? ++k : --k) {
+                    double best = 1e30;
+                    for (const IslandRoad& f : w.roads)
+                        if (f.kind == "freeway")
+                            for (std::size_t q = 0; q + 1 < f.points.size(); ++q) {
+                                const Vec2 a = f.points[q], ab = f.points[q + 1] - a;
+                                const double L2 = ab.x * ab.x + ab.y * ab.y;
+                                const double t = L2 > 1e-12 ? std::clamp(((P[k] - a).x * ab.x + (P[k] - a).y * ab.y) / L2, 0.0, 1.0) : 0.0;
+                                const Vec2 fp = a + ab * t;
+                                if ((P[k] - fp).length() < best) { best = (P[k] - fp).length(); onto = fp; }
+                            }
+                    if (best < 60.0) { cut = k; break; }
+                    if (!side && k == 0) break;
+                }
+                if (side ? cut < P.size() : cut > 0) {
+                    if (side) { P.resize(cut + 1); P.back() = onto; }
+                    else { P.erase(P.begin(), P.begin() + static_cast<std::ptrdiff_t>(cut)); P.front() = onto; }
+                    if (side) rd.to = -1; else rd.from = -1;   // it ends on the freeway now
+                }
+            }
+            const TerrainRoute m = measureRoute(ground, P);
+            rd.length = m.length; rd.climb = m.climb; rd.worstGrade = m.worstGrade;
+        }
+        if (rd.from >= 0) trimAt(rd, rd.from, false);
+        if (rd.to >= 0) trimAt(rd, rd.to, true);
+    }
+    w.report["ringFreewayKm"] = std::round(fwLen / 100.0) / 10.0;
+    w.report["freewayRoundCities"] = {{"cities", cityLimits.size()}, {"unrouted", unrouted}};
+}
+
+void linkCityToFreeway(IslandWorld& w, int site, const std::vector<Vec2>& arterialNodes, int maxLinks, double spacing, double maxLength) {
+    // every candidate's nearest freeway point
+    struct C { Vec2 at, onto; double d; };
+    std::vector<C> cs;
+    for (const Vec2& p : arterialNodes) {
+        C c{p, p, 1e30};
+        for (const IslandRoad& f : w.roads)
+            if (f.kind == "freeway")
+                for (std::size_t q = 0; q + 1 < f.points.size(); ++q) {
+                    const Vec2 a = f.points[q], ab = f.points[q + 1] - a;
+                    const double L2 = ab.x * ab.x + ab.y * ab.y;
+                    const double t = L2 > 1e-12 ? std::clamp(((p - a).x * ab.x + (p - a).y * ab.y) / L2, 0.0, 1.0) : 0.0;
+                    const Vec2 fp = a + ab * t;
+                    if ((p - fp).length() < c.d) { c.d = (p - fp).length(); c.onto = fp; }
+                }
+        if (c.d <= maxLength) cs.push_back(c);
+    }
+    std::sort(cs.begin(), cs.end(), [](const C& a, const C& b) { return a.d < b.d; });
+    std::vector<Vec2> chosen;
+    for (const C& c : cs) {
+        if (static_cast<int>(chosen.size()) >= maxLinks) break;
+        bool near = false;
+        for (const Vec2& q : chosen) if ((q - c.onto).length() < spacing) near = true;
+        if (near) continue;
+        chosen.push_back(c.onto);
+        IslandRoad rd;
+        rd.kind = "link";
+        rd.from = site;
+        rd.points = {c.at, c.onto};
+        rd.length = c.d;
+        w.roads.push_back(rd);
+    }
+}
+
+bool writeIslandMap(const IslandWorld& w, const std::string& pngPath, int px, const IslandMapView& view) {
+    const double vhalf = view.half > 0.0 ? view.half : w.half;
+    const Vec2 vc = view.half > 0.0 ? view.centre : Vec2(0, 0);
+    const double mpp = 2.0 * vhalf / px;   // metres a pixel
     std::vector<float> img(static_cast<std::size_t>(px) * px * 3, 0.0f);
     auto put = [&](int x, int y, float r, float g, float b, float a = 1.0f) {
         if (x < 0 || y < 0 || x >= px || y >= px) return;
         float* p = &img[(static_cast<std::size_t>(y) * px + x) * 3];
         p[0] += (r - p[0]) * a; p[1] += (g - p[1]) * a; p[2] += (b - p[2]) * a;
     };
-    auto toPx = [&](const Vec2& q, double& x, double& y) { x = (q.x + w.half) / mpp; y = (w.half - q.y) / mpp; };   // north (+z) up
+    auto toPx = [&](const Vec2& q, double& x, double& y) { x = (q.x - vc.x + vhalf) / mpp; y = (vc.y + vhalf - q.y) / mpp; };   // north (+z) up
     auto mix3 = [](const float* a, const float* b, float t, float* o) { for (int k = 0; k < 3; ++k) o[k] = a[k] + (b[k] - a[k]) * t; };
     // relief and water
     const float sand[3] = {0.86f, 0.80f, 0.60f}, low[3] = {0.40f, 0.58f, 0.28f}, mid[3] = {0.46f, 0.52f, 0.30f},
@@ -375,7 +673,7 @@ bool writeIslandMap(const IslandWorld& w, const std::string& pngPath, int px) {
     const double lx = -0.6, ly = 0.75, lz = 0.9, ll = std::sqrt(lx * lx + ly * ly + lz * lz);
     for (int y = 0; y < px; ++y)
         for (int x = 0; x < px; ++x) {
-            const double wx = -w.half + (x + 0.5) * mpp, wz = w.half - (y + 0.5) * mpp;
+            const double wx = vc.x - vhalf + (x + 0.5) * mpp, wz = vc.y + vhalf - (y + 0.5) * mpp;
             const double h = w.heightAt(wx, wz);
             float c[3];
             if (h < 0.0) {
@@ -429,13 +727,20 @@ bool writeIslandMap(const IslandWorld& w, const std::string& pngPath, int px) {
             for (const RiverNode& nd : rv.nodes) { pts.push_back(nd.p); wsum += nd.width; }
             stroke(pts, std::max(1.4, wsum / std::max<std::size_t>(1, rv.nodes.size()) / mpp), 0.20f, 0.45f, 0.80f);
         }
+    for (const IslandMapLayer& L : view.layers) {
+        const double wpx = std::max(L.minPx, L.widthM / mpp);
+        if (L.casing) for (const auto& ln : L.lines) stroke(ln, wpx + 2.0, 0.12f, 0.10f, 0.08f);   // every casing, then every fill
+        for (const auto& ln : L.lines) stroke(ln, wpx, L.rgb[0], L.rgb[1], L.rgb[2]);
+    }
     for (const IslandRoad& rd : w.roads) {
         if (rd.points.empty()) continue;
         if (rd.kind == "freeway") { stroke(rd.points, 6.0, 0.15f, 0.10f, 0.05f); stroke(rd.points, 4.0, 0.98f, 0.60f, 0.10f); }
         else if (rd.kind == "pass") { stroke(rd.points, 4.5, 0.15f, 0.10f, 0.05f); stroke(rd.points, 3.0, 0.99f, 0.90f, 0.25f); }
+        else if (rd.kind == "link") { stroke(rd.points, 4.0, 0.15f, 0.10f, 0.05f); stroke(rd.points, 2.6, 0.99f, 0.80f, 0.20f); }
         else { stroke(rd.points, 3.2, 0.15f, 0.10f, 0.05f); stroke(rd.points, 1.8, 1.0f, 1.0f, 1.0f); }
     }
     for (const IslandSite& s : w.sites) {
+        if (!view.sites) break;
         double cx, cy;
         toPx(s.at, cx, cy);
         const float r = s.kind == "city" ? 0.85f : s.kind == "town" ? 0.95f : 0.62f;
@@ -456,7 +761,8 @@ bool writeIslandMap(const IslandWorld& w, const std::string& pngPath, int px) {
     }
     // a 5 km scale bar, bottom left
     {
-        const int x0 = 30, y0 = px - 34, len = static_cast<int>(5000.0 / mpp);
+        const double barM = vhalf > 4000.0 ? 5000.0 : vhalf > 1000.0 ? 1000.0 : 200.0;   // five ticks
+        const int x0 = 30, y0 = px - 34, len = static_cast<int>(barM / mpp);
         for (int yy = y0 - 3; yy <= y0 + 3; ++yy)
             for (int xx = x0 - 3; xx <= x0 + len + 3; ++xx) put(xx, yy, 0.05f, 0.05f, 0.05f);
         for (int yy = y0 - 1; yy <= y0 + 1; ++yy)

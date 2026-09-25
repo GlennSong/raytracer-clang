@@ -41,7 +41,7 @@ struct IslandSite {
 };
 
 struct IslandRoad {
-    std::string kind;          // "freeway", "pass", "mountain"
+    std::string kind;          // "freeway", "pass", "mountain", "link"
     std::vector<Vec2> points;
     double length = 0.0, climb = 0.0, worstGrade = 0.0;
     int from = -1, to = -1;    // site indices
@@ -67,8 +67,45 @@ nlohmann::json islandTerrainBlock(uint32_t seed, double half = 10000.0);
 
 IslandWorld planIsland(const nlohmann::json& terrainBlock, double half = 10000.0, double cell = 20.0);
 
+// A CITY BRIEF FOR A SITE (ADR-0106): the city planner's brief (city_plan.h, as JSON) scaled to the
+// site's flat ground -- a city gets a core grid, midtown, outskirts and a freeway ring; a town a small
+// grid and outskirts, no ring -- its grid squared to the coast (one axis runs down to the sea), and
+// its world the island's own terrain block with `land` set, so the plan is cut back to the ground it
+// may stand on and a ring that meets the sea opens into a C.
+nlohmann::json islandSiteBrief(const IslandWorld& w, int site);
+
+// Route the island's roads that end at `site` onto that city's own ring: each is cut back to where it
+// first comes within the ring's corridor and joined to the ring there (a system interchange, when it
+// is built) -- so the island freeway runs round the city's inland side on the ring, never through it.
+void joinFreewayToRing(IslandWorld& w, int site, const std::vector<Vec2>& ring, bool closed);
+
+// THE FREEWAY ROUND THE CITIES, NOT THROUGH THEM (ADR-0106). Once each site is planned, its limits
+// (closed outlines, CityPlan::limits) are no-go for the freeway: it is routed again from site to site,
+// each waypoint moved just outside its city on the inland side, so it runs along the foot of the hills
+// behind the towns -- the region's road, which the cities' arterials meet. The pass and the mountain
+// roads stop at the limits they reach, and the mountain road climbs from the new freeway.
+void routeFreewayRoundCities(IslandWorld& w, const std::vector<std::pair<int, std::vector<std::vector<Vec2>>>>& cityLimits);
+
+// LINK ROADS from a city's arterials to the freeway (an interchange at each): the arterial ends nearest
+// the freeway, up to `maxLinks`, their freeway ends at least `spacing` apart, none longer than maxLength.
+void linkCityToFreeway(IslandWorld& w, int site, const std::vector<Vec2>& arterialNodes, int maxLinks, double spacing, double maxLength = 700.0);
+
 // The map: shaded relief and water, buildable land tinted, sites and roads drawn. `px` a side.
-bool writeIslandMap(const IslandWorld& w, const std::string& pngPath, int px = 1400);
+// A view may zoom to a window (centre, half-width; 0 = the whole island) and lay extra lines over
+// it (a planned city's streets), each drawn `widthM` wide but never thinner than `minPx`.
+struct IslandMapLayer {
+    std::vector<std::vector<Vec2>> lines;
+    float rgb[3] = {0.1f, 0.1f, 0.1f};
+    double widthM = 10.0, minPx = 1.0;
+    bool casing = false;                   // a dark edge round each line
+};
+struct IslandMapView {
+    Vec2 centre{0, 0};
+    double half = 0.0;
+    bool sites = true;                     // the site circles
+    std::vector<IslandMapLayer> layers;    // drawn after the rivers, before the island roads
+};
+bool writeIslandMap(const IslandWorld& w, const std::string& pngPath, int px = 1400, const IslandMapView& view = {});
 
 }  // namespace engine
 

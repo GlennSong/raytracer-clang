@@ -117,3 +117,33 @@ TEST_CASE(city_plan_freeway_is_worth_driving_to) {
     CHECK(s.commutesSampled > 0);
     CHECK(s.freewayCommuteShare >= 0.15);
 }
+
+// A CITY SHAPED BY ITS LAND (ADR-0106): on a coastal plain with the sea to the west and a steep
+// range rising to the east, the city grows to its area over the plain -- down to the shore, not up
+// the slope -- and its depth field is deepest inside it, with contours and descent lines to lay it by.
+#include "../src/engine/procgen/city/plan/land_shape.h"
+TEST_CASE(city_shape_grows_over_the_plain_not_up_the_range) {
+    // x < -800 sea; a gentle plain; x > 600 a range climbing at 30%
+    const HeightField ground = [](double x, double) { return x < -800 ? -5.0 : x < 600 ? 8.0 + 0.01 * (x + 800) : 22.0 + 0.3 * (x - 600); };
+    auto buildable = [&](const Vec2& p) {
+        const double h = ground(p.x, p.y), s = std::fabs(ground(p.x + 5, p.y) - ground(p.x - 5, p.y)) / 10.0;
+        return h > 3.0 && s < 0.15;
+    };
+    LandShapeParams sp;
+    sp.targetArea = 2.0e6;
+    sp.seaLevel = 0.0;
+    const LandShape s = growLandShape(ground, buildable, Vec2(0, 0), 1600.0, sp);
+    CHECK(std::fabs(s.area - sp.targetArea) < 0.25 * sp.targetArea);
+    CHECK(!s.limits.empty());
+    CHECK(s.inside(s.heart));
+    CHECK(!s.inside(Vec2(900, 0)));          // not up the range
+    CHECK(s.inside(Vec2(-700, 0)));          // down to the shore (the waterfront pulls)
+    CHECK(!s.inside(Vec2(-900, 0)));         // not in the sea
+    // a contour inside it, and a street down the depth from it ending near the edge
+    const double rim = s.depthHolding(0.35);
+    const auto c = s.contour(rim);
+    CHECK(!c.empty());
+    const std::vector<Vec2> line = descendDepth(s, c.front().front() + s.gradient(c.front().front()) * 8.0, 40.0);
+    CHECK(line.size() > 3);
+    CHECK(s.depthAt(line.back()) < 45.0);
+}
