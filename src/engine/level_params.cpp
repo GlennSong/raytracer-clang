@@ -3,6 +3,11 @@
 
 #include "procgen/erosion.h"
 #include "procgen/ground_cover.h"
+#include "procgen/hydrology.h"
+#include "../log.h"
+#include <chrono>
+#include <map>
+#include <mutex>
 #include "procgen/noise.h"
 
 using json = nlohmann::json;
@@ -136,6 +141,45 @@ TerrainParams readTerrainParams(const json& t) {
         col("sand", gp.sand); col("rock", gp.rock); col("snow", gp.snow);
         p.cover = std::make_shared<const GroundCover>(gp);
         p.coverWeights = g.value("layered", true);   // textured layers (the loader binds them) or a flat colour
+    }
+    // HYDROLOGY (procgen/hydrology.h, ADR-0099): "rivers": {...} in the terrain block. The network
+    // is computed on the terrain's own base relief, once per process for a given terrain block
+    // (readTerrainParams runs many times a load, and every copy shares the network).
+    if (t.contains("rivers") && t["rivers"].is_object()) {
+        static std::mutex memoMutex;
+        static std::map<std::string, std::shared_ptr<const Hydrology>> memo;
+        const std::string key = t.dump();
+        std::lock_guard<std::mutex> lock(memoMutex);
+        auto it = memo.find(key);
+        if (it == memo.end()) {
+            const json& r = t["rivers"];
+            HydroParams hp;
+            hp.half = r.value("region", static_cast<double>(p.size)) * 0.5;
+            hp.cell = r.value("cell", hp.cell);
+            hp.seaLevel = p.seaLevel;
+            hp.riverArea = r.value("riverArea", hp.riverArea);
+            hp.widthMin = r.value("widthMin", hp.widthMin);
+            hp.widthMax = r.value("widthMax", hp.widthMax);
+            hp.widthK = r.value("widthK", hp.widthK);
+            hp.depthMin = r.value("depthMin", hp.depthMin);
+            hp.depthMax = r.value("depthMax", hp.depthMax);
+            hp.depthK = r.value("depthK", hp.depthK);
+            hp.bankSlope = r.value("bankSlope", hp.bankSlope);
+            hp.lakeMinArea = r.value("lakeMinArea", hp.lakeMinArea);
+            hp.lakeMinDepth = r.value("lakeMinDepth", hp.lakeMinDepth);
+            TerrainParams base = p;   // the relief the water runs over: no flatten, no earthwork
+            base.flatten.clear();
+            base.earthwork.reset();
+            base.hydro.reset();
+            const Noise n(t.value("seed", 0u));
+            const auto t0 = std::chrono::steady_clock::now();
+            auto hy = Hydrology::build([base, n](double x, double z) { return terrainBaseHeight(base, n, x, z); }, hp);
+            LOG_INFO << "[hydrology] " << hy->rivers().size() << " rivers, " << hy->lakes().size() << " lakes on a "
+                     << hy->gridSize() << "^2 grid (" << hp.cell << " m) in "
+                     << std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() << " s";
+            it = memo.emplace(key, std::move(hy)).first;
+        }
+        p.hydro = it->second;
     }
     return p;
 }

@@ -165,6 +165,12 @@ struct MeshBuilder {
     static void deform(RenderMesh& mesh, const std::function<Vec3(const Vec3&)>& fn);
     // Colour every vertex by a function of it (position, normal): gradients, moss by facing, AO.
     static void colorBy(RenderMesh& mesh, const std::function<Vec3(const Vertex&)>& fn);
+    // A RIBBON along a curve: a strip through `points`, `halfWidths[i]` to each side, the side
+    // direction horizontal-perpendicular to the curve (level across, like water or a road) unless
+    // `up` says otherwise. u runs 0..1 across, v the distance along in metres; normals `up`;
+    // `colours` per point (may be empty). Rivers today; fronds and paths are its other readers.
+    static RenderMesh ribbon(const std::vector<Vec3>& points, const std::vector<double>& halfWidths,
+                             const Vec3& up = Vec3(0, 1, 0), const std::vector<Vec3>& colours = {});
     // Indexed building blocks for custom topology (cone tiers, fronds): append one vertex (normal
     // normalised) and return its index; append a triangle wound to face `out`.
     static uint32_t vertex(RenderMesh& mesh, const Vec3& p, const Vec3& n, const Vec3& color);

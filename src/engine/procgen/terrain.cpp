@@ -1,5 +1,6 @@
 #include "terrain.h"
 #include "ground_cover.h"
+#include "hydrology.h"
 #include "../mesh_builder.h"
 #include "lsystem.h"
 #include "skeleton.h"
@@ -748,6 +749,8 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
     // placement all get natural drainage), else the raw analytic relief.
     double h = params.erodedBase ? (*params.erodedBase)(worldX, worldZ)
                                  : terrainBaseHeight(params, noise, worldX, worldZ);
+    // The rivers' channels (procgen/hydrology.h): cut, never raised.
+    if (params.hydro) h = params.hydro->carve(worldX, worldZ, h);
     // The earthwork field (procgen/earthwork.h): the ground reshaped to carry
     // the road network, ADDED to the relief so its detail survives. The stamps
     // below then have centimetres to absorb, not metres.

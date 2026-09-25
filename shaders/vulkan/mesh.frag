@@ -688,6 +688,27 @@ void main() {
         roughness = 0.95;
         texFlags = 0u;   // nothing below reads the slots as albedo / MR / normal / AO
     }
+    // RIVER (Surface::River, id 20; ADR-0099): the ribbon's own data drives it -- u across, v the
+    // distance along (m), the vertex colour's r the flow speed -- so it reads raw inColor.
+    const bool river = pc.surfaceFlags.x == 20u;
+    float riverFlow = 0.0, riverSpeed = 0.0, riverFade = 1.0;
+    if (river) {
+        riverSpeed = clamp(inColor.r, 0.0, 1.0);
+        riverFlow = g.wind1.w * (0.5 + 3.5 * riverSpeed);   // how far the water has run (m)
+        float edge = min(inTexcoord.x, 1.0 - inTexcoord.x);  // 0 at a bank, 0.5 mid-river
+        vec3 deep = pc.albedoMetallic.rgb;
+        vec3 shallow = deep * 2.4 + vec3(0.02, 0.07, 0.06);
+        albedo = mix(shallow, deep, smoothstep(0.02, 0.3, edge));
+        float n1 = fbm2(inTexcoord.x * 3.0 + 1.7, (inTexcoord.y - riverFlow) * 0.35);
+        float n2 = vnoise2(inTexcoord.x * 9.0, (inTexcoord.y - riverFlow * 1.3) * 1.1);
+        riverFade = clamp(inColor.b, 0.0, 1.0);   // 0 at a mouth: fades into the sea or lake
+        float foam = (1.0 - smoothstep(0.0, 0.04, edge)) * (0.3 + 0.7 * n2) +
+                     riverSpeed * smoothstep(0.55, 0.8, n1 + 0.45 * n2);
+        foam = clamp(foam, 0.0, 1.0) * riverFade;
+        albedo = mix(albedo, vec3(0.82, 0.88, 0.9), foam);
+        roughness = mix(0.05, 0.45, foam);
+        texFlags = 0u;
+    }
     // MATERIAL FEATURES (ADR-0098): triplanar maps, per-instance variation (the top layer is
     // applied after the normal, below).
     const vec4 feat0 = pc.features[0], feat1 = pc.features[1], feat2 = pc.features[2];
@@ -777,6 +798,7 @@ void main() {
     // Alpha-cut foliage (FLAG_ALPHA_TEST = bit 1): drop fragments under the leaf
     // mask (the albedo map's alpha) before any shading. Ports lighting.metal.
     float mapAlpha = 1.0;   // FLAG_ALPHA_FROM_MAP (64): the albedo map's alpha shapes the fragment
+    if (river) mapAlpha = riverFade;   // a river's surface fades out at its mouth
     if (!interiorMap && ((texFlags & 1u) != 0u || (pc.surfaceFlags.y & 2u) != 0u)) {
         vec4 albedoTex = texture(albedoMap, inTexcoord);
         if ((texFlags & 1u) != 0u) albedo *= albedoTex.rgb;
@@ -793,6 +815,15 @@ void main() {
 
     vec3 N = normalize(inWorldNormal);
     if (featNormal) N = featN;
+    if (river) {   // ripples scrolling downstream: a noise gradient in the ribbon's frame
+        vec2 q = vec2(inTexcoord.x * 4.0, (inTexcoord.y - riverFlow) * 0.6);
+        float e = 0.05;
+        float h0 = fbm2(q.x, q.y), hx = fbm2(q.x + e, q.y), hy = fbm2(q.x, q.y + e);
+        vec3 T = normalize(inWorldTangent - N * dot(N, inWorldTangent));
+        vec3 B = cross(N, T);
+        float amp = 0.08 + 0.5 * riverSpeed;
+        N = normalize(N - (B * (hx - h0) + T * (hy - h0)) / e * amp * 0.1);
+    }
     // FLAG_FRONT_ONLY (128): the back of this surface does not exist.
     if ((pc.surfaceFlags.y & 128u) != 0u && dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0) discard;
     // Normal map (bit 2): perturb N in tangent space. Gram-Schmidt the tangent

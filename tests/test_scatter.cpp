@@ -3,6 +3,7 @@
 #include "../src/engine/procgen/ground_cover.h"
 #include "../src/engine/procgen/ground_layers.h"
 #include "../src/engine/procgen/stylized_rock.h"
+#include "../src/engine/procgen/hydrology.h"
 #include "test_framework.h"
 
 #include "../src/engine/procgen/scatter.h"
@@ -290,4 +291,28 @@ TEST_CASE(stylized_rocks_every_family_and_stone) {
         }
     engine::RockFamily f;
     CHECK(!engine::rockFamilyFromName("pumice", f));
+}
+
+// Hydrology (procgen/hydrology.h): on a slope falling to the sea, water drains into rivers that
+// reach it; every river's level only falls downstream and never stands above the ground at its
+// centre; the carve only ever lowers the ground, and lowers it inside a channel.
+TEST_CASE(hydrology_rivers_run_downhill_to_the_sea) {
+    auto ground = [](double x, double z) {   // a tilted, rumpled plain: high in the west, sea in the east
+        return -0.04 * x + 6.0 * std::sin(z * 0.004) + 4.0 * std::sin(x * 0.006 + z * 0.003);
+    };
+    engine::HydroParams hp;
+    hp.half = 600; hp.cell = 8; hp.seaLevel = 0; hp.riverArea = 60000;
+    auto hy = engine::Hydrology::build(ground, hp);
+    CHECK(!hy->rivers().empty());
+    int toSea = 0;
+    for (const auto& r : hy->rivers()) {
+        for (std::size_t k = 1; k < r.nodes.size(); ++k) CHECK(r.nodes[k].level <= r.nodes[k - 1].level + 1e-9);
+        for (const auto& nd : r.nodes) CHECK(nd.level <= ground(nd.p.x, nd.p.y) - 0.25 + 1e-9 || nd.level <= hp.seaLevel + 1e-9);
+        if (r.mouth && r.nodes.back().level <= hp.seaLevel + 1e-6) ++toSea;
+    }
+    CHECK(toSea > 0);
+    const auto& mid = hy->rivers().front().nodes[hy->rivers().front().nodes.size() / 2];
+    const double h = ground(mid.p.x, mid.p.y);
+    CHECK(hy->carve(mid.p.x, mid.p.y, h) < h - 0.5);            // cut into a channel at the river
+    CHECK(hy->carve(-590, -590, ground(-590, -590)) <= ground(-590, -590));   // never raised anywhere
 }

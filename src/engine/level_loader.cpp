@@ -20,7 +20,8 @@
 #include "procgen/ground_cover.h"
 #include "procgen/ground_layers.h"
 #include "procgen/stylized_rock.h"
-#include "procgen/material_recipes.h"   // stone textures (the rock material)   // "kind":"stylized_rock" (the rock library)   // terrain layer textures (TerrainLayers surface)   // the cover decides grass density and tree biomes   // "kind":"stylized" species (the flora plan)            // the grass field's clumps (GrassSystem)          // the earthwork displacement field
+#include "procgen/material_recipes.h"
+#include "procgen/hydrology.h"   // rivers and lakes (ADR-0099)   // stone textures (the rock material)   // "kind":"stylized_rock" (the rock library)   // terrain layer textures (TerrainLayers surface)   // the cover decides grass density and tree biomes   // "kind":"stylized" species (the flora plan)            // the grass field's clumps (GrassSystem)          // the earthwork displacement field
 #include "mesh_builder.h"
 #include "asset_manager.h"
 #include "procgen/terrain.h"
@@ -3758,6 +3759,31 @@ bool LevelLoader::load(const std::string& path,
                 wr.material.setSurface(RenderMaterial::Surface::Water);
                 wr.mesh = assets.acquireMesh(wmesh, "water");
                 world.add<Renderable>(we, wr);
+            }
+        }
+        // RIVERS AND LAKES (procgen/hydrology.h, ADR-0099): the network the terrain drains into,
+        // its channels already cut into the ground (terrainHeight); here its water surfaces.
+        if (terrainParams.hydro) {
+            const Hydrology& hy = *terrainParams.hydro;
+            RenderMaterial wm;
+            const json* wj = root.contains("water") ? &root["water"] : nullptr;
+            wm.albedo = Vec3(0.02, 0.07, 0.085);
+            if (wj && wj->contains("color") && (*wj)["color"].is_array() && (*wj)["color"].size() == 3)
+                wm.albedo = Vec3((*wj)["color"][0], (*wj)["color"][1], (*wj)["color"][2]);
+            wm.roughness = 0.05f;
+            wm.metallic = 0.0f;
+            wm.opacity = 0.84f;
+            wm.setSurface(RenderMaterial::Surface::River);
+            for (int part = 0; part < 2; ++part) {
+                RenderMesh m = part == 0 ? hy.riverMesh() : hy.lakeMesh();
+                if (m.vertices.empty()) continue;
+                const Entity e = world.create();
+                world.add<Transform>(e, Transform{});
+                world.add<PrevTransform>(e, PrevTransform{Transform{}});
+                Renderable r;
+                r.material = wm;
+                r.mesh = assets.acquireMesh(m, part == 0 ? "hydro:rivers" : "hydro:lakes");
+                world.add<Renderable>(e, r);
             }
         }
         // Retaining/fill walls (ADR-0075 P1b): one world-space entity for every

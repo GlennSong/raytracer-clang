@@ -168,6 +168,10 @@ struct TerrainParams {
     // vertex colour (r grass, g dirt, b sand; rock the rest) for the TerrainLayers surface to
     // blend its textures by, instead of a finished colour.
     bool coverWeights = false;
+    // HYDROLOGY (procgen/hydrology.h, ADR-0099): the river network the land drains into. When set,
+    // terrainHeight cuts its channels into the base relief (before earthworks and flattening),
+    // so every consumer of the ground sees them. Built by readTerrainParams from "rivers".
+    std::shared_ptr<const class Hydrology> hydro;
     // COLOUR BANDS scale to the level's relief: `snowLine` is the height where
     // snow starts to win (the old hardcoded 74 m suited ~240 m peaks; a 450 m
     // range needs ~200+), `rockLine` where stone starts displacing ground cover.

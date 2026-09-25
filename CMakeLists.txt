@@ -107,6 +107,7 @@ add_library(engine_core STATIC
     src/engine/procgen/ground_layers.cpp
     src/engine/procgen/stylized_rock.cpp
     src/engine/procgen/material_recipes.cpp
+    src/engine/procgen/hydrology.cpp
     src/engine/procgen/sdf.cpp
     src/engine/procgen/city/polygon.cpp
     src/engine/procgen/city/shape_grammar.cpp

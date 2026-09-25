@@ -7688,3 +7688,51 @@ missing word, the word is added to the vocabulary, in C++ and in Lua, not privat
 fits, and its reason is written down. Palm fronds and pine tiers are still custom topology
 (`vertex` / `triFacing` recipes). A ribbon-along-a-curve word would absorb them, and will be added
 when the leaf-card work needs it.
+
+## ADR-0099 — Rivers and lakes are the land's own drainage, carved in; water is one polygon mesh
+
+**Context.** Water was a flat ocean plane. Glenn wants rivers that form the way real ones do (rain,
+downhill flow, erosion, cascading from the mountains, lakes, reaching the sea) and that divide a
+city so it needs bridges. ADR-0027 already planned "a river = a water recipe (+ carve)"; ADR-0033
+lists rivers as a future reader of `Skeleton`.
+
+**Decision.**
+- **Hydrology on the terrain** (`procgen/hydrology.h`):
+  - priority-flood depression filling (Barnes et al. 2014), which gives lakes at their spill
+    height and every cell's receiver;
+  - D8 flow accumulation (O'Callaghan & Mark 1984);
+  - rivers where the upstream area passes a threshold, traced from source to confluence, lake,
+    sea or edge, Chaikin-smoothed. Width and depth come from √area, and the water level only falls
+    downstream and never stands above the ground at the centre line. Where the ground rises, the
+    channel cuts through.
+
+  The network is built once per terrain block in `readTerrainParams` (`"rivers"`, memoised) and
+  shared through `TerrainParams::hydro`.
+- **The carve lives inside `terrainHeight`**, after the base relief and before earthworks and
+  flattening. It cuts a rounded channel plus banks at `bankSlope`, faded at 30 m, and only ever
+  lowers the ground. CDLOD, colliders, placement and the baked pyramid all see it. Channels need
+  a mesh fine enough to show them (the baked CDLOD's 1 m cells).
+- **The water surface is one POLYGON MESH, not a ribbon per river.** The first surfaces were
+  ribbons, and they folded and overlapped wherever rivers widen, bend hard, join, or meet the sea.
+  A 40 m river flared into an estuary on a tight bend fanned into crossed sheets. The decided form:
+  - buffer each river's corridor to its width, union it with the lakes and the sea's edge
+    (Clipper2, as the road builder does), and triangulate (CDT);
+  - each vertex sits at the water level (along the river, flat on a lake, sea level at the
+    coast), and carries the flow direction and speed of the nearest river segment;
+  - shading uses flow maps (Vlachos, "Water Flow in Portal 2", 2010): two phase-offset layers
+    advected along the flow, crossfaded.
+
+  Mouths and confluences are then just merged polygons. The ribbon word stays in the shape kit
+  (paths and fronds read it), now with a smoothed tangent and a half-width capped by the bend
+  radius.
+- `Surface::River` shades moving water: shallows and foam at the banks, rapids foam by speed,
+  ripples downstream, and a fade into mouths.
+
+**Consequences.** The drainage costs 0.15 s on a 376² grid (3 km at 8 m). `river_valley.json` is the
+test bed: 6 rivers and 9 lakes from its own relief. **Owed:**
+- the polygon water mesh and the flow-map shader (next);
+- waterfalls where the level drops sharply;
+- the ground-cover map's banks (wet sand, gravel, reeds) and riparian trees;
+- the city: planned around rivers, arterials crossing on bridges;
+- widths tuned for the map's scale;
+- Metal.

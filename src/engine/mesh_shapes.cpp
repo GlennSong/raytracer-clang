@@ -110,6 +110,50 @@ void MeshBuilder::colorBy(RenderMesh& mesh, const std::function<Vec3(const Verte
     for (Vertex& v : mesh.vertices) v.color = fn(v);
 }
 
+RenderMesh MeshBuilder::ribbon(const std::vector<Vec3>& pts, const std::vector<double>& hw, const Vec3& upIn,
+                               const std::vector<Vec3>& colours) {
+    RenderMesh m;
+    const std::size_t n = pts.size();
+    if (n < 2 || hw.size() < n) return m;
+    const Vec3 up = normalize(upIn);
+    auto flat = [&](Vec3 v) { return v - up * dot(v, up); };
+    double along = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (i > 0) along += (pts[i] - pts[i - 1]).length();
+        // The side direction from a tangent averaged over a few points (two neighbours flip on a
+        // kink), flattened against `up`.
+        const std::size_t a = i >= 3 ? i - 3 : 0, b = std::min(n - 1, i + 3);
+        Vec3 t = flat(pts[b] - pts[a]);
+        if (t.lengthSquared() < 1e-18) t = flat((i + 1 < n ? pts[i + 1] : pts[i]) - (i > 0 ? pts[i - 1] : pts[i]));
+        if (t.lengthSquared() < 1e-18) t = Vec3(1, 0, 0);
+        t = normalize(t);
+        const Vec3 side = normalize(cross(up, t));
+        // No wider than the bend is round: on a curve of radius R a half-width past R folds the
+        // strip over itself (a fan of crossed triangles).
+        double halfW = hw[i];
+        if (i > 0 && i + 1 < n) {
+            const Vec3 d0 = flat(pts[i] - pts[i - 1]), d1 = flat(pts[i + 1] - pts[i]);
+            const double l0 = d0.length(), l1 = d1.length();
+            if (l0 > 1e-9 && l1 > 1e-9) {
+                const double ang = std::acos(std::clamp(dot(d0 / l0, d1 / l1), -1.0, 1.0));
+                if (ang > 1e-4) halfW = std::min(halfW, 0.85 * 0.5 * (l0 + l1) / ang);
+            }
+        }
+        const Vec3 col = i < colours.size() ? colours[i] : Vec3(1, 1, 1);
+        for (int k = 0; k < 2; ++k) {
+            Vertex v(pts[i] + side * (k == 0 ? -halfW : halfW), up, t, static_cast<float>(k), static_cast<float>(along));
+            v.color = col;
+            m.vertices.push_back(v);
+        }
+    }
+    for (std::size_t i = 0; i + 1 < n; ++i) {
+        const uint32_t a = static_cast<uint32_t>(2 * i), b = a + 1, c = a + 2, d = a + 3;
+        triFacing(m, a, b, d, up);
+        triFacing(m, a, d, c, up);
+    }
+    return m;
+}
+
 uint32_t MeshBuilder::vertex(RenderMesh& mesh, const Vec3& p, const Vec3& n, const Vec3& color) {
     Vertex v(p, n.lengthSquared() > 1e-20 ? normalize(n) : Vec3(0, 1, 0), Vec3(1, 0, 0), 0.0f, 0.0f);
     v.color = color;

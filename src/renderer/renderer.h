@@ -186,6 +186,11 @@ struct RenderMaterial {
         // layers -- albedo slot grass, metallic-roughness dirt, normal sand, AO rock (rgb
         // gamma-encoded colour, a height) -- height-blended, world-planar, rock triplanar.
         TerrainLayers,
+        // RIVER (procgen/hydrology.h, ADR-0099): moving water on a ribbon -- u across the river
+        // (0..1), v the distance along it (m), vertex colour r its flow SPEED (0..1). Shallows at
+        // the banks, foam at the banks and where it runs fast, ripples scrolling downstream along
+        // the tangent. Lakes are the same surface at speed 0 (u = 0.5).
+        River,
     };
     static constexpr uint32_t SURFACE_SHIFT = 8;
     static constexpr uint32_t SURFACE_MASK = 0xFF00u;
