@@ -176,13 +176,24 @@ std::shared_ptr<const Hydrology> Hydrology::build(const std::function<double(dou
         // come from the area drained.
         for (std::size_t k = 0; k < r.nodes.size(); ++k) {
             RiverNode& nd = r.nodes[k];
-            nd.level = std::min(nd.level, ground(nd.p.x, nd.p.y) - 0.25);
-            if (k > 0) nd.level = std::min(nd.level, r.nodes[k - 1].level);
-            if (p.seaLevel > -1e29) nd.level = std::max(nd.level, p.seaLevel);
-            if (r.intoLake >= 0) nd.level = std::max(nd.level, H.lakes_[static_cast<std::size_t>(r.intoLake)].level);   // meets the lake, no step
             const double sq = std::sqrt(nd.area);
             nd.width = clampd(p.widthMin + p.widthK * sq, p.widthMin, p.widthMax);
             nd.depth = clampd(p.depthMin + p.depthK * sq, p.depthMin, p.depthMax);
+            // the lowest natural ground across the corridor (centre and just past each bank), less
+            // the incision: the water can never stand above a bank, and the channel is a trench
+            const Vec2 along = r.nodes[std::min(k + 1, r.nodes.size() - 1)].p - r.nodes[k > 0 ? k - 1 : 0].p;
+            const Vec2 side = along.length() > 1e-9 ? perp(along / along.length()) : Vec2(1, 0);
+            const double reach = nd.width * 0.5 + 3.0;
+            double low = ground(nd.p.x, nd.p.y);
+            for (double s : {-1.0, -0.5, 0.5, 1.0}) {
+                const Vec2 q = nd.p + side * (s * reach);
+                low = std::min(low, ground(q.x, q.y));
+            }
+            const double incision = clampd(p.incisionMin + p.incisionK * nd.width, p.incisionMin, p.incisionMax);
+            nd.level = std::min(nd.level, low - incision);
+            if (k > 0) nd.level = std::min(nd.level, r.nodes[k - 1].level);
+            if (p.seaLevel > -1e29) nd.level = std::max(nd.level, p.seaLevel);
+            if (r.intoLake >= 0) nd.level = std::max(nd.level, H.lakes_[static_cast<std::size_t>(r.intoLake)].level);   // meets the lake, no step
         }
         // THE MOUTH: over its last stretch into the sea or a lake the river widens (an estuary,
         // up to three times) and its surface fades out into the water it meets, instead of ending
@@ -244,8 +255,12 @@ double Hydrology::carve(double x, double z, double h) const {
         const double half = w * 0.5, reach = half + kBankReach;
         if (d >= reach) continue;
         const double level = g.la + (g.lb - g.la) * t, depth = g.da + (g.db - g.da) * t;
-        // a rounded channel to the water's edge, then banks rising at bankSlope
-        const double profile = d < half ? (level - depth) + depth * (d / half) * (d / half) : level + (d - half) * p_.bankSlope;
+        // a rounded channel to the water's edge, then the steep inner bank up the incision height,
+        // then the outer banks at bankSlope
+        const double incision = clampd(p_.incisionMin + p_.incisionK * w, p_.incisionMin, p_.incisionMax);
+        const double past = d - half, steepRun = incision / p_.bankSteep;
+        const double profile = d < half ? (level - depth) + depth * (d / half) * (d / half)
+                                        : level + (past < steepRun ? past * p_.bankSteep : incision + (past - steepRun) * p_.bankSlope);
         double cut = std::min(h, profile);
         // fade out at the reach so a deep gorge does not end in a step
         const double fade = clampd((d - reach * 0.75) / (reach * 0.25), 0.0, 1.0);

@@ -1485,10 +1485,13 @@ static void loadChunkedTerrain(const TerrainParams& p, const Noise& noise,
 // (terrain, roads, grading, earthwork all come from it), the lane city's bundle (the carved grid),
 // every flatten the loader assembled, and a code tag bumped when the height code changes.
 static constexpr const char* kBakedGroundCodeTag = "2026-09-24.1";
+static constexpr const char* kHydroCarveCodeTag = "2026-09-24.incision2";
 static uint64_t bakedGroundKey(const json& root, const TerrainParams& p) {
     using namespace engine::bundle;
     uint64_t h = fnv1aStr(std::string("rt-baked-ground/") + kBakedGroundCodeTag);
     h = fnv1aStr(root.dump(), h);
+    // the river carve's own code tag: only levels with rivers re-bake when it changes
+    if (p.hydro) h = fnv1aStr(std::string("hydro/") + kHydroCarveCodeTag, h);
 #ifdef RT_ROADS_LANES
     if (g_lanes.bundle) h = fnv1aStr(g_lanes.bundle->manifest().value("key", std::string()), h);
 #endif

@@ -36,7 +36,12 @@ struct HydroParams {
     double riverArea = 300000.0;    // upstream area (m^2) at which a channel is a river
     double widthMin = 5.0, widthMax = 70.0, widthK = 0.035;   // width = min + K * sqrt(area)
     double depthMin = 0.8, depthMax = 5.0, depthK = 0.0022;   // depth = min + K * sqrt(area)
-    double bankSlope = 0.35;        // the banks rise this much per metre beyond the channel
+    double bankSlope = 0.35;        // the outer banks rise this much per metre, out to the natural ground
+    // INCISION: the water sits this far below the LOWEST natural ground across its corridor (so it
+    // never hangs above a bank), and the inner bank climbs that height steeply (bankSteep per
+    // metre) before the outer slope -- a river runs in a trench, not flush with the meadow.
+    double incisionMin = 1.0, incisionMax = 3.5, incisionK = 0.05;   // incision = min + K * width
+    double bankSteep = 1.4;
     double lakeMinArea = 12000.0;   // m^2 of filled basin before it is a lake
     double lakeMinDepth = 0.6;      // m of fill before a cell is lake
     int smoothIterations = 3;       // Chaikin passes on each river's path (grid staircase -> curve)

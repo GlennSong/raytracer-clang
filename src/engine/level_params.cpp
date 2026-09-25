@@ -165,6 +165,10 @@ TerrainParams readTerrainParams(const json& t) {
             hp.depthMax = r.value("depthMax", hp.depthMax);
             hp.depthK = r.value("depthK", hp.depthK);
             hp.bankSlope = r.value("bankSlope", hp.bankSlope);
+            hp.incisionMin = r.value("incisionMin", hp.incisionMin);
+            hp.incisionMax = r.value("incisionMax", hp.incisionMax);
+            hp.incisionK = r.value("incisionK", hp.incisionK);
+            hp.bankSteep = r.value("bankSteep", hp.bankSteep);
             hp.lakeMinArea = r.value("lakeMinArea", hp.lakeMinArea);
             hp.lakeMinDepth = r.value("lakeMinDepth", hp.lakeMinDepth);
             TerrainParams base = p;   // the relief the water runs over: no flatten, no earthwork

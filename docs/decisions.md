@@ -7783,6 +7783,20 @@ lists rivers as a future reader of `Skeleton`.
   - ripple normals from the same two phases;
   - foam at the banks (from u) and white water only where speed > 0.35.
 
+- **The channel is a trench (2026-09-24, Glenn: "floating above the surface… not cut into the
+  ground like a trench").** There were two causes:
+  - **The level was checked only at the centreline.** Along a slope the downhill bank sat below
+    the water, and the surface hung in the air. Each node's level is now the LOWEST natural ground
+    across the corridor (centre, and ±½ and ±1 of the half-width + 3 m), less an *incision* of
+    1 + 0.05·width m, capped at 3.5.
+  - **The banks started flush with the water.** The carve now climbs a steep inner bank
+    (`bankSteep` 1.4, about 55°) up the incision height, then the outer `bankSlope`. Cut-only as
+    before, so the meadow is trimmed into a trench. The ground-cover map reads the steep bank as
+    earth and rock: a cut bank.
+
+  `HydroParams::incisionMin/Max/K`, `bankSteep` (level JSON `rivers.*`). The baked ground's key takes
+  a hydrology code tag only when the level has rivers, so other levels keep their caches.
+
 **Consequences.** The drainage costs 0.15 s on a 376² grid (3 km at 8 m). `river_valley.json` is the
 test bed: 6 rivers and 9 lakes from its own relief. **Owed:**
 - waterfalls where the level drops sharply;
