@@ -18,7 +18,8 @@
 #include "procgen/grass.h"
 #include "procgen/stylized_tree.h"
 #include "procgen/ground_cover.h"
-#include "procgen/ground_layers.h"   // terrain layer textures (TerrainLayers surface)   // the cover decides grass density and tree biomes   // "kind":"stylized" species (the flora plan)            // the grass field's clumps (GrassSystem)          // the earthwork displacement field
+#include "procgen/ground_layers.h"
+#include "procgen/stylized_rock.h"   // "kind":"stylized_rock" (the rock library)   // terrain layer textures (TerrainLayers surface)   // the cover decides grass density and tree biomes   // "kind":"stylized" species (the flora plan)            // the grass field's clumps (GrassSystem)          // the earthwork displacement field
 #include "mesh_builder.h"
 #include "asset_manager.h"
 #include "procgen/terrain.h"
@@ -1705,6 +1706,9 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         float colliderHeight = 0.0f; // 0 = auto from trunkHeight
         double colliderFriction = 0.8;
         uint32_t biomeMask = 0;      // bit per Biome where it may grow (0 = anywhere): "biome"
+        int coverReq = -1;           // "cover": grass 0 / dirt 1 / sand 2 / rock 3 must be >= 0.3 here (-1 = any)
+        double bedFraction = 0.0;    // sink this fraction of its height into the ground (stones)
+        double tiltDeg = 0.0;        // extra random tilt (stones settle at an angle)
     };
     std::vector<Variant> variantList;
     uint32_t vegSeed = veg.value("seed", 0u);
@@ -1810,6 +1814,13 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         float spColHeight = s.value("colliderHeight", 0.0f);
         double spColFriction = s.value("colliderFriction", 0.8);
         bool spWind = s.value("wind", false);   // FLAG_WIND sway for this species
+        // What the ground must be where it stands: "cover": "rock" | "dirt" | "sand" | "grass".
+        int spCover = -1;
+        if (s.contains("cover") && s["cover"].is_string()) {
+            const std::string cv = s["cover"].get<std::string>();
+            spCover = cv == "grass" ? 0 : cv == "dirt" ? 1 : cv == "sand" ? 2 : cv == "rock" ? 3 : -1;
+            if (spCover < 0) LOG_WARN << "vegetation species: unknown cover '" << cv << "'";
+        }
         // Where it grows (the ground-cover map's biomes): "biome": "beach" or ["lowland", "upland"].
         uint32_t spBiomes = 0;
         if (s.contains("biome")) {
@@ -1854,6 +1865,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
             uint32_t seed = vegSeed + 1000u * static_cast<uint32_t>(speciesIndex) + 1u + v;
             Variant var;
             var.biomeMask = spBiomes;
+            var.coverReq = spCover;
             var.collide = spCollide;
             var.colliderRadius = spColRadius;
             var.colliderHeight = spColHeight;
@@ -1928,6 +1940,23 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                     LOG_ERROR << "flora script error: " << err;
                 }
 #endif
+            } else if (kind == "stylized_rock") {
+                // THE ROCK LIBRARY (procgen/stylized_rock.h): family boulder | slab | pebbles |
+                // outcrop, "stone" granite | sandstone | basalt | mossy.
+                StylizedRockParams rp;
+                if (!rockFamilyFromName(s.value("family", std::string("boulder")), rp.family))
+                    LOG_WARN << "stylized_rock: unknown family '" << s.value("family", std::string()) << "'";
+                // "stone", not "material": a species' "material" is its render material (an object)
+                if (!rockMaterialFromName(s.value("stone", std::string("granite")), rp.material))
+                    LOG_WARN << "stylized_rock: unknown stone '" << s.value("stone", std::string()) << "'";
+                rp.size = s.value("size", rp.size);
+                rp.moss = s.value("moss", rp.moss);
+                RenderMaterial rockMat;
+                rockMat.albedo = Vec3(1, 1, 1);
+                rockMat.roughness = 1.0f; rockMat.metallic = 0.0f; rockMat.opacity = 1.0f;
+                addPart(stylizedRock(seed, rp), rockMat);
+                var.bedFraction = rp.family == RockFamily::Pebbles ? 0.3 : 0.22;
+                var.tiltDeg = rp.family == RockFamily::Outcrop ? 6.0 : 14.0;
             } else if (kind == "stylized") {
                 // STYLIZED (procgen/stylized_tree.h): shape round | spreading | columnar |
                 // flowering | pine | palm; bark and canopy are vertex-coloured, opaque parts.
@@ -2143,8 +2172,8 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     const double maxTilt = veg.value("maxTiltDeg", 0.0) * 3.14159265358979 / 180.0;
     std::vector<std::vector<Mat4>> buckets;
     bool anyBiome = false;
-    for (const Variant& v : variantList) anyBiome = anyBiome || v.biomeMask != 0;
-    if (terrain.cover && (anyBiome || tag == "veg")) {
+    for (const Variant& v : variantList) anyBiome = anyBiome || v.biomeMask != 0 || v.coverReq >= 0;
+    if (terrain.cover && (anyBiome || tag != "foliage")) {
         // BY BIOME (the ground-cover map): each placement picks among the variants that may grow
         // where it stands -- palms on the beach band, pines on the mountain -- and nothing grows
         // in the sea. Deterministic from the position.
@@ -2157,7 +2186,11 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
             if (cv.biome == Biome::Sea) continue;
             fits.clear();
             for (std::size_t vi = 0; vi < variantList.size(); ++vi)
-                if (variantList[vi].biomeMask == 0 || (variantList[vi].biomeMask >> static_cast<uint32_t>(cv.biome) & 1u)) fits.push_back(vi);
+                if (variantList[vi].biomeMask == 0 || (variantList[vi].biomeMask >> static_cast<uint32_t>(cv.biome) & 1u)) {
+                    const int req = variantList[vi].coverReq;
+                    const double w = req == 0 ? cv.grass : req == 1 ? cv.dirt : req == 2 ? cv.sand : req == 3 ? cv.rock + cv.snow : 1.0;
+                    if (w >= 0.3) fits.push_back(vi);
+                }
             if (fits.empty()) continue;
             uint64_t h = static_cast<uint64_t>(std::llround(x * 16.0)) * 0x9E3779B97F4A7C15ull ^ static_cast<uint64_t>(std::llround(z * 16.0)) * 0xC2B2AE3D27D4EB4Full ^ vegSeed;
             h ^= h >> 31; h *= 0xBF58476D1CE4E5B9ull; h ^= h >> 29;
@@ -2283,6 +2316,19 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                     const double grade = std::sqrt(sx * sx + sz * sz);
                     const double r = variantList[si].trunkRadius * std::sqrt(m.m[0][0] * m.m[0][0] + m.m[1][0] * m.m[1][0] + m.m[2][0] * m.m[2][0]);
                     m.m[1][3] -= 0.12 + r * (grade + std::tan(maxTilt)) * 1.2;
+                    // stones: settle at an angle, a fraction of their height below grade
+                    if (variantList[si].tiltDeg > 0.0) {
+                        const double dirA = unit(31) * 6.2831853, ang = variantList[si].tiltDeg * 3.14159265 / 180.0 * unit(32);
+                        const Mat4 tilt = Mat4::trs(Vec3(0, 0, 0), Quat::fromAxisAngle(Vec3(std::cos(dirA), 0, std::sin(dirA)), ang), Vec3(1, 1, 1));
+                        const Real tx = m.m[0][3], ty = m.m[1][3], tz = m.m[2][3];
+                        m.m[0][3] = m.m[1][3] = m.m[2][3] = 0;
+                        m = tilt * m;
+                        m.m[0][3] = tx; m.m[1][3] = ty; m.m[2][3] = tz;
+                    }
+                    if (variantList[si].bedFraction > 0.0) {
+                        const double sy = std::sqrt(m.m[0][1] * m.m[0][1] + m.m[1][1] * m.m[1][1] + m.m[2][1] * m.m[2][1]);
+                        m.m[1][3] -= variantList[si].bedFraction * variantList[si].trunkHeight * sy;
+                    }
                 }
                 // (was -0.35: tuned when placement sampled a DIFFERENT surface
                 // than the mesh — with the dilate-matched sample that much
@@ -3834,6 +3880,12 @@ bool LevelLoader::load(const std::string& path,
             if (root.contains("foliage"))
                 loadVegetation(root["foliage"], tp, nz, world,
                                renderer, assets, levelDir, "foliage", nullptr,
+                               placeDilate, drawn);
+            // ROCKS (the rock library): a scatter of their own, so stones are tuned apart from
+            // trees -- placed by biome and by what the ground is (outcrops on rock, pebbles on dirt).
+            if (root.contains("rocks"))
+                loadVegetation(root["rocks"], tp, nz, world,
+                               renderer, assets, levelDir, "rocks", nullptr,
                                placeDilate, drawn);
             // THE GRASS FIELD (flora plan): not scattered here -- GrassSystem plants it around
             // the camera, from clump meshes and the ground and density rules set up here.

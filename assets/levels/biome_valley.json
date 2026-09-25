@@ -205,5 +205,85 @@
   "maxSlopeDeg": 32,
   "patchiness": 0.35,
   "variantTint": 0.18
+ },
+ "rocks": {
+  "count": 9000,
+  "region": 1150,
+  "seed": 211,
+  "spacingFactor": 0.9,
+  "maxSlopeDeg": 55,
+  "minScale": 0.7,
+  "maxScale": 1.35,
+  "densityScale": 0.012,
+  "densityThreshold": -0.7,
+  "clusterCount": 90,
+  "clusterRadius": 25,
+  "species": [
+   {
+    "kind": "stylized_rock",
+    "family": "outcrop",
+    "size": 4.0,
+    "variants": 4,
+    "cover": "rock",
+    "stone": "granite"
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "boulder",
+    "size": 2.6,
+    "variants": 4,
+    "biome": [
+     "upland",
+     "mountain"
+    ],
+    "stone": "granite"
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "boulder",
+    "size": 2.6,
+    "variants": 4,
+    "biome": [
+     "lowland",
+     "upland"
+    ],
+    "stone": "mossy"
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "slab",
+    "size": 3.2,
+    "variants": 3,
+    "biome": [
+     "upland",
+     "mountain"
+    ],
+    "stone": "granite"
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "pebbles",
+    "size": 1.8,
+    "variants": 4,
+    "cover": "dirt",
+    "stone": "granite"
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "boulder",
+    "size": 2.08,
+    "variants": 3,
+    "biome": "beach",
+    "stone": "sandstone"
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "slab",
+    "size": 3.2,
+    "variants": 3,
+    "biome": "beach",
+    "stone": "basalt"
+   }
+  ]
  }
 }

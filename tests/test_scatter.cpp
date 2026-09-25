@@ -2,6 +2,7 @@
 #include "../src/engine/procgen/stylized_tree.h"
 #include "../src/engine/procgen/ground_cover.h"
 #include "../src/engine/procgen/ground_layers.h"
+#include "../src/engine/procgen/stylized_rock.h"
 #include "test_framework.h"
 
 #include "../src/engine/procgen/scatter.h"
@@ -269,4 +270,24 @@ TEST_CASE(ground_layer_textures_tile_without_a_seam) {
         if (sx > worstCol || sy > worstRow) std::printf("    layer %d: x seam %.0f (worst inner %.0f), y seam %.0f (worst inner %.0f)\n", L, sx, worstCol, sy, worstRow);
         CHECK(sx <= worstCol && sy <= worstRow);
     }
+}
+
+// The rock library (procgen/stylized_rock.h): every family and stone grows a closed-ish, small
+// mesh standing on y = 0, the same for a seed; unknown names are refused.
+TEST_CASE(stylized_rocks_every_family_and_stone) {
+    for (const char* fam : {"boulder", "slab", "pebbles", "outcrop"})
+        for (const char* st : {"granite", "sandstone", "basalt", "mossy"}) {
+            engine::StylizedRockParams p;
+            CHECK(engine::rockFamilyFromName(fam, p.family) && engine::rockMaterialFromName(st, p.material));
+            p.size = 2.0;
+            const engine::RenderMesh a = engine::stylizedRock(9, p), b = engine::stylizedRock(9, p);
+            double lo = 1e9, hi = -1e9;
+            for (const engine::Vertex& v : a.vertices) { lo = std::min(lo, (double)v.position.y); hi = std::max(hi, (double)v.position.y); }
+            const bool ok = !a.indices.empty() && a.indices.size() / 3 < 1500 && lo > -0.5 && lo < 0.3 && hi > 0.1 && hi < 4.0 &&
+                            a.vertices.size() == b.vertices.size();
+            if (!ok) std::printf("    %s/%s: %zu tris, y %.2f..%.2f\n", fam, st, a.indices.size() / 3, lo, hi);
+            CHECK(ok);
+        }
+    engine::RockFamily f;
+    CHECK(!engine::rockFamilyFromName("pumice", f));
 }
