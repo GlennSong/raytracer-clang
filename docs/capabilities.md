@@ -103,3 +103,27 @@ being used. One row per capability; the "used by" column is the audit trail.
 | Interior mapping `RenderMaterial::FLAG_INTERIOR_MAP` + `bakeRoomAtlas` | `renderer/renderer.h`; `shaders/vulkan/mesh.frag`; `engine/level_loader.cpp` | lit panes (`PartId::GlassLit`) in every facade tier | a virtual room behind a flat pane with parallax, from a baked 2×2 room atlas in the albedo slot; the faked tier of the windows plan; Metal owed |
 | Clear lobby glass `PartId::GlassClear` | `procgen/city/shape_grammar.cpp` (`appendGlassParts`, the ground-storey loop) | enterable buildings' ground storeys at Full detail | the real tier: outer and inner panes transparent, the lobby visible from the street |
 | Static instancing `InstanceGroup` | `engine/components.h:152` | vegetation, lamps, signals | candidate for repeated typical floors and beacon shells; instances are static, no per-instance culling |
+
+## Procedural vocabulary: textures, shapes, materials (ADR-0098, 2026-09-24)
+
+Opened late. The flora work first shipped private copies of noise, cells, RNGs and icospheres, because
+this ledger and ADR-0042/0043 were not checked first. Glenn's rule since: content is recipes over this
+vocabulary, and a missing word is added HERE (C++ and Lua), not privately to one recipe.
+
+| Capability | Where | Used by | Why / why not |
+|---|---|---|---|
+| 2D fields + combinators + bakes (gray / colour / normal / RGBA) | `procgen/texture_field.h` (ADR-0042/0043) | terrain layers, stone textures, Lua `texture.*` | the texture language. `fieldNoise` / `fieldFbm` do NOT tile; use `fieldTile*` |
+| Tileable fields: tile noise / fbm, cells, cell edges, cell id, bands, warp | `procgen/texture_field.h` | `ground_layers.cpp`, `material_recipes.cpp` | added 2026-09-24 from the terrain layers' private code |
+| Colour fields + `bakeFieldRGBA` (sRGB rgb, height in alpha) | `procgen/texture_field.h` | terrain layers, stones | feature albedo maps are sRGB (the shader decodes) |
+| Bake cache `bakeCached(key, bake)` → `cache/fields/` | `procgen/texture_field.h` | every recipe bake | the recipe string carries the version; replaced `cache/terrain_layers` |
+| Material recipes: stone (granite, sandstone, basalt) | `procgen/material_recipes.h` | rock library | add new material texture sets here |
+| Shape kit: icosphere, displaceNoise, cutByPlane, facet, leanNormals, deform, colorBy, tube, vertex / triFacing | `mesh_builder.h` / `mesh_shapes.cpp` | stylized trees, rocks, grass; Lua `mesh.*` | organic/mineral forms; `leanNormals` is the "one soft volume" trick |
+| Seeded stream `ProcRng` | `procgen/proc_rng.h` | flora generators | do not add another private `Rng` (city/district.cpp's predates it) |
+| Winding `MeshBuilder::emitTri` / `triFacing` | `mesh_builder.h` | everything | front face = `dot(cross(c-a, b-a), n) >= 0` |
+| Material features: triplanar, per-instance variation, top layer | `RenderMaterial` fields + `mesh.frag` (ADR-0098) | rocks | off at 0; Vulkan only (Metal owed) |
+| Terrain layers (height-blended, cover weights in vertex colour) | `Surface::TerrainLayers`, `procgen/ground_layers.h` | levels with `groundCover` | Metal owed |
+| Ground cover (weights + biome) | `procgen/ground_cover.h` | terrain colour, grass density, species `biome` / `cover` | the one answer to "what is the ground here" |
+| Stylized recipes: trees (11 shapes), rocks (4 families × 4 stones), grass clumps | `procgen/stylized_tree.h`, `stylized_rock.h`, `grass.h`; Lua `stylized.*` | vegetation species `stylized` / `stylized_rock`, `GrassSystem` | recipes over the kit; custom topology left: pine tiers, palm fronds (a ribbon word would absorb them) |
+| Legacy flora: parametric L-system trees, turtle trees, SDF rocks | `procgen/tree.h`, `lsystem.h`, `rock.h`; `flora.lua` | older levels | kept; the stylized recipes are the BotW direction |
+| Instanced drawing | Vulkan `drawMeshInstanced` (ADR-0097) | `InstanceGroup` (vegetation, grass, city groups) | one draw per visible set; `RT_NO_INSTANCING=1` for A/B |
+| Residency (stream by camera distance) | `engine/residency.h` (ADR-0095) | building cells | terrain tiles, road cells, forests are the planned clients |
