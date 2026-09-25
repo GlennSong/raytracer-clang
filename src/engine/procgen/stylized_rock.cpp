@@ -1,5 +1,7 @@
 #include "stylized_rock.h"
 #include "noise.h"
+#include "proc_rng.h"
+#include "../mesh_builder.h"
 
 #include <algorithm>
 #include <array>
@@ -28,43 +30,6 @@ bool rockMaterialFromName(const std::string& n, RockMaterial& out) {
 
 namespace {
 
-struct Rng {
-    uint64_t s;
-    explicit Rng(uint32_t seed) : s(0xA0761D6478BD642Full ^ (static_cast<uint64_t>(seed) * 0xE7037ED1A0B428DBull)) {}
-    double next() {
-        s ^= s >> 12; s ^= s << 25; s ^= s >> 27;
-        return static_cast<double>((s * 0x2545F4914F6CDD1Dull) >> 11) * (1.0 / 9007199254740992.0);
-    }
-    double in(double a, double b) { return a + (b - a) * next(); }
-};
-
-// The unit icosphere at `subdiv` levels (0: 12 verts / 20 faces, 1: 42 / 80).
-void icosphere(int subdiv, std::vector<Vec3>& v, std::vector<std::array<int, 3>>& f) {
-    const double t = (1.0 + std::sqrt(5.0)) / 2.0;
-    const double raw[12][3] = {{-1, t, 0}, {1, t, 0}, {-1, -t, 0}, {1, -t, 0}, {0, -1, t}, {0, 1, t},
-                               {0, -1, -t}, {0, 1, -t}, {t, 0, -1}, {t, 0, 1}, {-t, 0, -1}, {-t, 0, 1}};
-    v.clear();
-    for (const auto& r : raw) v.push_back(normalize(Vec3(r[0], r[1], r[2])));
-    f = {{0, 11, 5}, {0, 5, 1}, {0, 1, 7}, {0, 7, 10}, {0, 10, 11}, {1, 5, 9}, {5, 11, 4}, {11, 10, 2}, {10, 7, 6}, {7, 1, 8},
-         {3, 9, 4}, {3, 4, 2}, {3, 2, 6}, {3, 6, 8}, {3, 8, 9}, {4, 9, 5}, {2, 4, 11}, {6, 2, 10}, {8, 6, 7}, {9, 8, 1}};
-    for (int k = 0; k < subdiv; ++k) {
-        std::map<std::pair<int, int>, int> mid;
-        auto midpoint = [&](int a, int b) {
-            const auto key = std::make_pair(std::min(a, b), std::max(a, b));
-            auto it = mid.find(key);
-            if (it != mid.end()) return it->second;
-            v.push_back(normalize((v[static_cast<std::size_t>(a)] + v[static_cast<std::size_t>(b)]) * 0.5));
-            return mid[key] = static_cast<int>(v.size() - 1);
-        };
-        std::vector<std::array<int, 3>> nf;
-        for (const auto& t3 : f) {
-            const int a = midpoint(t3[0], t3[1]), b = midpoint(t3[1], t3[2]), c = midpoint(t3[2], t3[0]);
-            nf.push_back({t3[0], a, c}); nf.push_back({t3[1], b, a}); nf.push_back({t3[2], c, b}); nf.push_back({a, b, c});
-        }
-        f = std::move(nf);
-    }
-}
-
 struct Palette { Vec3 base, dark; double moss; };
 Palette paletteFor(RockMaterial m) {
     switch (m) {
@@ -76,64 +41,46 @@ Palette paletteFor(RockMaterial m) {
     }
 }
 
-// One stone into `m`: a displaced icosphere shaped by `scale`, cut by `cuts` planes (facets),
-// flat-ish shaded, coloured by facet with moss on top and a dark foot.
-void stone(RenderMesh& m, const Vec3& at, const Vec3& scale, int subdiv, int cuts, double lumps, Rng& rng,
+// One stone into `m`, as a recipe over the shape kit (MeshBuilder): an icosphere lumped by noise,
+// cut by a few planes into crisp breaks (and a flat foot), scaled, FACETED, coloured per facet
+// (moss on the faces that look up, a dark foot), its normals leaned a little toward the stone's
+// own volume -- semi-faceted.
+void stone(RenderMesh& m, const Vec3& at, const Vec3& scale, int subdiv, int cuts, double lumps, ProcRng& rng,
            const Noise& noise, const Palette& pal, double moss, double footY, bool flatTop = false) {
-    std::vector<Vec3> v; std::vector<std::array<int, 3>> f;
-    icosphere(subdiv, v, f);
-    const double off = rng.in(0, 100);
-    std::vector<std::pair<Vec3, double>> planes;   // unit normal, offset: keep dot(n, p) <= d
+    RenderMesh st = MeshBuilder::icosphere(subdiv);
+    const Vec3 o(0, 0, 0);
+    MeshBuilder::displaceNoise(st, o, lumps, 1.7, static_cast<uint32_t>(rng.next() * 4294967295.0));
     for (int c = 0; c < cuts; ++c) {
         const double a = rng.in(0, 6.2831853), el = rng.in(-0.3, 1.2);
-        planes.push_back({Vec3(std::cos(a) * std::cos(el), std::sin(el), std::sin(a) * std::cos(el)), rng.in(0.55, 0.85)});
+        MeshBuilder::cutByPlane(st, o, Vec3(std::cos(a) * std::cos(el), std::sin(el), std::sin(a) * std::cos(el)), rng.in(0.55, 0.85));
     }
     if (flatTop)   // a weathered, near-level top instead of a spire
-        planes.push_back({normalize(Vec3(rng.in(-0.25, 0.25), 1.0, rng.in(-0.25, 0.25))), rng.in(0.45, 0.7)});
-    std::vector<Vec3> P(v.size());
-    for (std::size_t i = 0; i < v.size(); ++i) {
-        Vec3 q = v[i] * (1.0 + lumps * noise.noise3(v[i].x * 1.7 + off, v[i].y * 1.7, v[i].z * 1.7 - off));
-        for (const auto& [n, d] : planes) {   // flatten onto each cut plane: crisp breaks
-            const double k = dot(q, n) - d;
-            if (k > 0) q = q - n * k;
-        }
-        if (q.y < -0.35) q.y = -0.35 + (q.y + 0.35) * 0.3;   // a flattened foot
-        P[i] = at + Vec3(q.x * scale.x, (q.y + 0.35) * scale.y, q.z * scale.z);
-    }
+        MeshBuilder::cutByPlane(st, o, Vec3(rng.in(-0.25, 0.25), 1.0, rng.in(-0.25, 0.25)), rng.in(0.45, 0.7));
+    MeshBuilder::cutByPlane(st, o, Vec3(0, -1, 0), 0.35);   // the flat foot it stands on
+    MeshBuilder::deform(st, [&](const Vec3& q) { return at + Vec3(q.x * scale.x, (q.y + 0.35) * scale.y, q.z * scale.z); });
     const Vec3 c0 = at + Vec3(0, 0.5 * scale.y, 0);
-    for (const auto& t3 : f) {
-        const Vec3 A = P[static_cast<std::size_t>(t3[0])], B = P[static_cast<std::size_t>(t3[1])], C = P[static_cast<std::size_t>(t3[2])];
-        Vec3 fn = cross(C - A, B - A);
-        if (fn.lengthSquared() < 1e-16) continue;
-        fn = normalize(fn);
-        const Vec3 fc = (A + B + C) * (1.0 / 3.0);
-        if (dot(fn, fc - c0) < 0) fn = fn * -1.0;
-        // facet colour: base varied per facet, moss on faces that look up, a dark foot
-        const double shade = 0.85 + 0.3 * rng.next();
+    MeshBuilder::facet(st, c0);
+    MeshBuilder::colorBy(st, [&](const Vertex& v) {
+        // one shade per facet: the facet's normal is shared by its three vertices, so hash it
+        const uint32_t hf = static_cast<uint32_t>(std::llround(v.normal.x * 977.0) * 73856093LL ^ std::llround(v.normal.y * 977.0) * 19349663LL ^
+                                                  std::llround(v.normal.z * 977.0) * 83492791LL);
+        const double shade = 0.85 + 0.3 * ((hf * 2654435761u) >> 8) / 16777215.0;
         Vec3 col = pal.base * shade;
-        const double up = std::clamp((fn.y - 0.25) / 0.4, 0.0, 1.0) * moss;
-        const double mossNoise = 0.5 + 0.5 * noise.noise3(fc.x * 1.3, fc.y * 1.3, fc.z * 1.3);
+        const double up = std::clamp((v.normal.y - 0.25) / 0.4, 0.0, 1.0) * moss;
+        const double mossNoise = 0.5 + 0.5 * noise.noise3(v.position.x * 1.3, v.position.y * 1.3, v.position.z * 1.3);
         col = col + (Vec3(0.045, 0.10, 0.02) - col) * std::clamp(up * (0.7 + 0.9 * mossNoise), 0.0, 1.0);
-        const double foot = std::clamp((fc.y - footY) / std::max(0.05, 0.25 * scale.y), 0.0, 1.0);
-        col = pal.dark + (col - pal.dark) * (0.45 + 0.55 * foot);
-        const uint32_t base = static_cast<uint32_t>(m.vertices.size());
-        for (const Vec3* p3 : {&A, &B, &C}) {
-            const Vec3 soft = normalize(*p3 - c0);
-            Vertex vx(*p3, normalize(fn * 0.75 + soft * 0.25), Vec3(1, 0, 0), 0.0f, 0.0f);   // semi-faceted
-            vx.color = col;
-            m.vertices.push_back(vx);
-        }
-        // front face as MeshBuilder::emitTri winds it
-        if (dot(cross(C - A, B - A), fn) >= 0) m.indices.insert(m.indices.end(), {base, base + 1, base + 2});
-        else m.indices.insert(m.indices.end(), {base, base + 2, base + 1});
-    }
+        const double foot = std::clamp((v.position.y - footY) / std::max(0.05, 0.25 * scale.y), 0.0, 1.0);
+        return pal.dark + (col - pal.dark) * (0.45 + 0.55 * foot);
+    });
+    MeshBuilder::leanNormals(st, c0, scale * 0.5, 0.25);
+    MeshBuilder::append(m, st);
 }
 
 }  // namespace
 
 RenderMesh stylizedRock(uint32_t seed, const StylizedRockParams& p) {
     RenderMesh m;
-    Rng rng(seed);
+    ProcRng rng(seed);
     const Noise noise(seed * 31u + 7u);
     const Palette pal = paletteFor(p.material);
     const double moss = p.moss >= 0 ? p.moss : pal.moss;

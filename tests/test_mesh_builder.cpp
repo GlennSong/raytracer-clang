@@ -169,3 +169,30 @@ TEST_CASE(mesh_grid_indices_face_up) {
     MeshBuilder::gridIndices(tiny, 1, 5);
     CHECK(tiny.indices.empty());
 }
+
+// The shape kit (mesh_shapes.cpp): icosphere counts and outward winding, a plane cut that
+// really flattens, faceting that keeps every face outward with its own vertices.
+TEST_CASE(shape_kit_icosphere_cut_facet) {
+    using engine::MeshBuilder; using engine::Vec3;
+    const engine::RenderMesh i0 = MeshBuilder::icosphere(0), i1 = MeshBuilder::icosphere(1);
+    CHECK(i0.vertices.size() == 12 && i0.indices.size() == 60);
+    CHECK(i1.vertices.size() == 42 && i1.indices.size() == 240);
+    auto outward = [](const engine::RenderMesh& m, const Vec3& c) {
+        for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+            const Vec3 A = m.vertices[m.indices[t]].position, B = m.vertices[m.indices[t + 1]].position, C = m.vertices[m.indices[t + 2]].position;
+            if (engine::dot(engine::cross(C - A, B - A), (A + B + C) * (1.0 / 3.0) - c) < 0) return false;   // emitTri's front face
+        }
+        return true;
+    };
+    CHECK(outward(i1, Vec3(0, 0, 0)));
+    engine::RenderMesh cut = i1;
+    MeshBuilder::cutByPlane(cut, Vec3(0, 0, 0), Vec3(0, 1, 0), 0.5);
+    double top = -1;
+    for (const auto& v : cut.vertices) top = std::max(top, static_cast<double>(v.position.y));
+    CHECK(std::fabs(top - 0.5) < 1e-9);
+    MeshBuilder::facet(cut, Vec3(0, 0, 0));
+    CHECK(cut.vertices.size() == cut.indices.size());   // each face its own three vertices
+    CHECK(outward(cut, Vec3(0, 0, 0)));
+    const engine::RenderMesh tube = MeshBuilder::tube({Vec3(0, 0, 0), Vec3(0, 1, 0), Vec3(0, 2, 0)}, {0.3, 0.2, 0.1}, 6);
+    CHECK(tube.vertices.size() == 18 && tube.indices.size() == 2u * 6u * 6u);
+}

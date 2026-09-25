@@ -1,24 +1,14 @@
 #include "grass.h"
+#include "proc_rng.h"
 
 #include <cmath>
 
 namespace engine {
 
-namespace {
-// A small deterministic generator: the same seed grows the same clump on every host.
-struct Rng {
-    uint64_t s;
-    explicit Rng(uint32_t seed) : s(0x9E3779B97F4A7C15ull ^ (static_cast<uint64_t>(seed) * 0xBF58476D1CE4E5B9ull)) {}
-    double next() {   // [0, 1)
-        s ^= s >> 12; s ^= s << 25; s ^= s >> 27;
-        return static_cast<double>((s * 0x2545F4914F6CDD1Dull) >> 11) * (1.0 / 9007199254740992.0);
-    }
-};
-}  // namespace
 
 RenderMesh grassClump(uint32_t seed, const GrassClumpParams& p) {
     RenderMesh m;
-    Rng rng(seed);
+    ProcRng rng(seed);
     const Vec3 up(0, 1, 0);
     auto vertex = [&](const Vec3& pos, double t) {   // t: 0 root .. 1 tip
         Vertex v(pos, up, Vec3(1, 0, 0), 0.0f, static_cast<float>(t));

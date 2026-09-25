@@ -502,6 +502,46 @@ TEST_CASE(procgen_script_builds_a_tileable_stone_texture) {
     CHECK(hi - lo > 30);
 }
 
+TEST_CASE(procgen_script_builds_a_stone_from_the_shape_kit) {
+    // The shape kit from Lua (the flora plan): an icosphere lumped, cut, faceted, coloured by a
+    // function of its facing (moss up top), its normals leaned toward its volume -- and the
+    // flora recipes themselves (stylized.tree / rock / grass) callable the same way.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::shared_ptr<RenderMesh> stoneP;
+    std::string err;
+    const char* code = R"LUA(
+        local s = mesh.icosphere(1)
+        s = mesh.displace(s, { amp = 0.2, freq = 1.7, seed = 4 })
+        s = mesh.cut(s, {0.3, 1, 0.1}, 0.6)
+        s = mesh.cut(s, {0, -1, 0}, 0.35)
+        s = mesh.facet(s)
+        s = mesh.color_by(s, function(p, n)
+            if n[2] > 0.5 then return {0.05, 0.1, 0.02} end   -- moss on the faces that look up
+            return {0.2, 0.19, 0.17}
+        end)
+        s = mesh.lean_normals(s, {0, 0, 0}, {1, 1, 1}, 0.25)
+        local bark, canopy = stylized.tree(3, { shape = "oak", height = 9 })
+        local rock = stylized.rock(3, { family = "outcrop", stone = "basalt" })
+        local tuft = stylized.grass(3, { blades = 8 })
+        return mesh.merge({ s, bark, canopy, rock, tuft })
+    )LUA";
+    CHECK(runProcgenMesh(vm, code, stoneP, &err));
+    if (!err.empty()) std::printf("    %s\n", err.c_str());
+    CHECK(stoneP != nullptr);
+    if (!stoneP) return;
+    const RenderMesh& stone = *stoneP;
+    CHECK(stone.indices.size() > 3000);
+    bool moss = false, grey = false;
+    for (const Vertex& v : stone.vertices) {
+        if (std::fabs(v.color.y - 0.1) < 1e-6 && std::fabs(v.color.x - 0.05) < 1e-6) moss = true;
+        if (std::fabs(v.color.x - 0.2) < 1e-6) grey = true;
+    }
+    CHECK(moss && grey);
+    std::shared_ptr<RenderMesh> bad;
+    CHECK(!runProcgenMesh(vm, "return stylized.rock(1, { family = 'pumice' })", bad, nullptr));
+}
+
 TEST_CASE(procgen_script_composes_terrain_heightfield) {
     // ADR-0043: terrain composes from primitives, then bakes to a mesh. `terrain`
     // is a callable table — terrain(params, seed) still runs the C++ preset.

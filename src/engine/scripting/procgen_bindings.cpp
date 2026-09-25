@@ -24,6 +24,9 @@
 #include "../procgen/city/parcel.h"
 #include "../procgen/proc_model.h"
 #include "../procgen/texture_field.h"
+#include "../procgen/stylized_tree.h"   // stylized.tree
+#include "../procgen/stylized_rock.h"   // stylized.rock
+#include "../procgen/grass.h"           // stylized.grass
 #include "../procgen/terrain_field.h"
 #include "../procgen/erosion.h"
 #include "../procgen/planet.h"
@@ -737,6 +740,129 @@ int l_mesh_bake_height_color(lua_State* L) {
     Vec3 high = checkVec3(L, 3);
     MeshBuilder::bakeHeightColor(*m, low, high);
     pushMesh(L, m);
+    return 1;
+}
+
+// --- the SHAPE KIT (MeshBuilder, the flora plan): organic and mineral forms from Lua ---
+// mesh.icosphere(subdiv) -> unit icosphere
+int l_mesh_icosphere(lua_State* L) {
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::icosphere(static_cast<int>(luaL_optinteger(L, 1, 1)))));
+    return 1;
+}
+// mesh.displace(mesh, {amp=0.2, freq=1.7, seed=0, center={0,0,0}}) -> lumps along the radius
+int l_mesh_displace(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    Vec3 c(0, 0, 0);
+    if (lua_istable(L, 2)) { lua_getfield(L, 2, "center"); if (lua_istable(L, -1)) c = checkVec3(L, -1); lua_pop(L, 1); }
+    MeshBuilder::displaceNoise(*m, c, optField(L, 2, "amp", 0.2), optField(L, 2, "freq", 1.7), static_cast<uint32_t>(optField(L, 2, "seed", 0)));
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.cut(mesh, normal, d, center={0,0,0}) -> clamped onto the plane: a crisp flat break
+int l_mesh_cut(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    const Vec3 n = checkVec3(L, 2);
+    const double d = luaL_checknumber(L, 3);
+    const Vec3 c = lua_istable(L, 4) ? checkVec3(L, 4) : Vec3(0, 0, 0);
+    MeshBuilder::cutByPlane(*m, c, n, d);
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.facet(mesh, center={0,0,0}) -> flat faces wound outward (the low-poly look)
+int l_mesh_facet(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::facet(*m, lua_istable(L, 2) ? checkVec3(L, 2) : Vec3(0, 0, 0));
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.lean_normals(mesh, center, radii, t) -> normals leaned toward the ellipsoid's (a soft volume)
+int l_mesh_lean_normals(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::leanNormals(*m, checkVec3(L, 2), checkVec3(L, 3), luaL_checknumber(L, 4));
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.color_by(mesh, function(pos, normal) return {r,g,b} end) -> recoloured per vertex
+int l_mesh_color_by(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    for (Vertex& v : m->vertices) {
+        lua_pushvalue(L, 2);
+        pushVec3(L, v.position);
+        pushVec3(L, v.normal);
+        lua_call(L, 2, 1);
+        v.color = checkVec3(L, -1);
+        lua_pop(L, 1);
+    }
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.tube({points...}, {radii...}, sides=6, {colours...}?) -> a tapered generalized cylinder
+int l_mesh_tube(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    std::vector<Vec3> pts, cols;
+    std::vector<double> radii;
+    for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, 1)); i <= n; ++i) {
+        lua_rawgeti(L, 1, i); pts.push_back(checkVec3(L, -1)); lua_pop(L, 1);
+    }
+    for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, 2)); i <= n; ++i) {
+        lua_rawgeti(L, 2, i); radii.push_back(luaL_checknumber(L, -1)); lua_pop(L, 1);
+    }
+    if (lua_istable(L, 4))
+        for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, 4)); i <= n; ++i) {
+            lua_rawgeti(L, 4, i); cols.push_back(checkVec3(L, -1)); lua_pop(L, 1);
+        }
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::tube(pts, radii, static_cast<int>(luaL_optinteger(L, 3, 6)), cols)));
+    return 1;
+}
+
+// --- stylized.* : the flora recipes, callable from Lua (procgen/stylized_tree.h, stylized_rock.h,
+// grass.h) -- so a species script, a level script or flora.lua composes with them.
+// stylized.tree(seed, {shape="oak", height=8, crown_radius, clumps}) -> bark, canopy
+int l_stylized_tree(lua_State* L) {
+    StylizedTreeParams p;
+    const uint32_t seed = static_cast<uint32_t>(luaL_checkinteger(L, 1));
+    if (lua_istable(L, 2)) {
+        lua_getfield(L, 2, "shape");
+        if (lua_isstring(L, -1) && !stylizedShapeFromName(lua_tostring(L, -1), p.shape)) luaL_error(L, "stylized.tree: unknown shape");
+        lua_pop(L, 1);
+        p.height = optField(L, 2, "height", p.height);
+        p.crownRadius = optField(L, 2, "crown_radius", 0.0);
+        p.clumps = static_cast<int>(optField(L, 2, "clumps", 0));
+    }
+    StylizedTree t = stylizedTree(seed, p);
+    pushMesh(L, std::make_shared<RenderMesh>(std::move(t.bark)));
+    pushMesh(L, std::make_shared<RenderMesh>(std::move(t.canopy)));
+    return 2;
+}
+// stylized.rock(seed, {family="boulder", stone="granite", size=1.5, moss}) -> mesh
+int l_stylized_rock(lua_State* L) {
+    StylizedRockParams p;
+    const uint32_t seed = static_cast<uint32_t>(luaL_checkinteger(L, 1));
+    if (lua_istable(L, 2)) {
+        lua_getfield(L, 2, "family");
+        if (lua_isstring(L, -1) && !rockFamilyFromName(lua_tostring(L, -1), p.family)) luaL_error(L, "stylized.rock: unknown family");
+        lua_pop(L, 1);
+        lua_getfield(L, 2, "stone");
+        if (lua_isstring(L, -1) && !rockMaterialFromName(lua_tostring(L, -1), p.material)) luaL_error(L, "stylized.rock: unknown stone");
+        lua_pop(L, 1);
+        p.size = optField(L, 2, "size", p.size);
+        p.moss = optField(L, 2, "moss", p.moss);
+    }
+    pushMesh(L, std::make_shared<RenderMesh>(stylizedRock(seed, p)));
+    return 1;
+}
+// stylized.grass(seed, {blades, height, width, radius, lean}) -> one clump
+int l_stylized_grass(lua_State* L) {
+    GrassClumpParams p;
+    const uint32_t seed = static_cast<uint32_t>(luaL_checkinteger(L, 1));
+    p.blades = static_cast<int>(optField(L, 2, "blades", p.blades));
+    p.height = optField(L, 2, "height", p.height);
+    p.width = optField(L, 2, "width", p.width);
+    p.radius = optField(L, 2, "radius", p.radius);
+    p.lean = optField(L, 2, "lean", p.lean);
+    pushMesh(L, std::make_shared<RenderMesh>(grassClump(seed, p)));
     return 1;
 }
 
@@ -2950,10 +3076,26 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"recompute_normals", l_mesh_recompute_normals},
         {"bake_height_color", l_mesh_bake_height_color},
         {"quad", l_mesh_quad},
+        {"icosphere", l_mesh_icosphere},
+        {"displace", l_mesh_displace},
+        {"cut", l_mesh_cut},
+        {"facet", l_mesh_facet},
+        {"lean_normals", l_mesh_lean_normals},
+        {"color_by", l_mesh_color_by},
+        {"tube", l_mesh_tube},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kMeshFns);
     lua_setglobal(L, "mesh");
+
+    static const luaL_Reg kStylizedFns[] = {
+        {"tree", l_stylized_tree},
+        {"rock", l_stylized_rock},
+        {"grass", l_stylized_grass},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kStylizedFns);
+    lua_setglobal(L, "stylized");
 
     lua_pushcfunction(L, l_scope);
     lua_setglobal(L, "scope");

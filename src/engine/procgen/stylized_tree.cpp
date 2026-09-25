@@ -1,5 +1,7 @@
 #include "stylized_tree.h"
 #include "noise.h"
+#include "proc_rng.h"
+#include "../mesh_builder.h"
 
 #include <algorithm>
 #include <array>
@@ -26,131 +28,47 @@ namespace {
 
 constexpr double kPi = 3.14159265358979;
 
-struct Rng {
-    uint64_t s;
-    explicit Rng(uint32_t seed) : s(0xD1B54A32D192ED03ull ^ (static_cast<uint64_t>(seed) * 0x9E3779B97F4A7C15ull)) {}
-    double next() {
-        s ^= s >> 12; s ^= s << 25; s ^= s >> 27;
-        return static_cast<double>((s * 0x2545F4914F6CDD1Dull) >> 11) * (1.0 / 9007199254740992.0);
-    }
-    double in(double a, double b) { return a + (b - a) * next(); }
-};
-
 Vec3 lerp3(const Vec3& a, const Vec3& b, double t) { return a + (b - a) * t; }
 
-uint32_t vert(RenderMesh& m, const Vec3& p, const Vec3& n, const Vec3& c) {
-    Vertex v(p, normalize(n), Vec3(1, 0, 0), 0.0f, 0.0f);
-    v.color = c;
-    m.vertices.push_back(v);
-    return static_cast<uint32_t>(m.vertices.size() - 1);
-}
-// One triangle facing `out` (the renderer's front face, as MeshBuilder::emitTri winds it).
-void tri(RenderMesh& m, uint32_t a, uint32_t b, uint32_t c, const Vec3& out) {
-    const Vec3& A = m.vertices[a].position; const Vec3& B = m.vertices[b].position; const Vec3& C = m.vertices[c].position;
-    if (dot(cross(C - A, B - A), out) >= 0) m.indices.insert(m.indices.end(), {a, b, c});
-    else m.indices.insert(m.indices.end(), {a, c, b});
+// The tree recipes build on the shape kit (MeshBuilder): icosphere, displaceNoise, deform,
+// leanNormals, colorBy, tube, vertex / triFacing.
+uint32_t vert(RenderMesh& m, const Vec3& p, const Vec3& n, const Vec3& c) { return MeshBuilder::vertex(m, p, n, c); }
+void tri(RenderMesh& m, uint32_t a, uint32_t b, uint32_t c, const Vec3& out) { MeshBuilder::triFacing(m, a, b, c, out); }
+void tube(RenderMesh& m, const std::vector<Vec3>& pts, const std::vector<double>& radii, int sides, const std::vector<Vec3>& colours) {
+    MeshBuilder::append(m, MeshBuilder::tube(pts, radii, sides, colours));
 }
 
-// A tapered tube through `pts`: `sides`-gon rings, radial normals, colour by ring.
-void tube(RenderMesh& m, const std::vector<Vec3>& pts, const std::vector<double>& radii, int sides,
-          const std::vector<Vec3>& colours) {
-    const std::size_t n = pts.size();
-    if (n < 2) return;
-    std::vector<uint32_t> base(n);
-    for (std::size_t i = 0; i < n; ++i) {
-        const Vec3 d = normalize(i + 1 < n ? pts[i + 1] - pts[i] : pts[i] - pts[i - 1]);
-        const Vec3 a = std::fabs(d.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
-        const Vec3 u = normalize(cross(d, a)), w = cross(d, u);
-        base[i] = static_cast<uint32_t>(m.vertices.size());
-        for (int k = 0; k < sides; ++k) {
-            const double t = 2 * kPi * k / sides;
-            const Vec3 r = u * std::cos(t) + w * std::sin(t);
-            vert(m, pts[i] + r * radii[i], r, colours[i]);
-        }
-    }
-    for (std::size_t i = 0; i + 1 < n; ++i)
-        for (int k = 0; k < sides; ++k) {
-            const uint32_t a = base[i] + k, b = base[i] + (k + 1) % sides, c = base[i + 1] + k, d = base[i + 1] + (k + 1) % sides;
-            const Vec3 out = m.vertices[a].normal;
-            tri(m, a, b, d, out);
-            tri(m, a, d, c, out);
-        }
-}
-
-// The unit icosphere, subdivided once: 42 vertices, 80 faces.
-struct Ico { std::vector<Vec3> v; std::vector<std::array<int, 3>> f, f0; };   // f0: the 20 base faces (vertices 0-11)
-const Ico& icosphere() {
-    static const Ico ico = [] {
-        Ico s;
-        const double t = (1.0 + std::sqrt(5.0)) / 2.0;
-        const double raw[12][3] = {{-1, t, 0}, {1, t, 0}, {-1, -t, 0}, {1, -t, 0}, {0, -1, t}, {0, 1, t},
-                                   {0, -1, -t}, {0, 1, -t}, {t, 0, -1}, {t, 0, 1}, {-t, 0, -1}, {-t, 0, 1}};
-        for (const auto& r : raw) s.v.push_back(normalize(Vec3(r[0], r[1], r[2])));
-        std::vector<std::array<int, 3>> f = {{0, 11, 5}, {0, 5, 1}, {0, 1, 7}, {0, 7, 10}, {0, 10, 11}, {1, 5, 9}, {5, 11, 4},
-                                             {11, 10, 2}, {10, 7, 6}, {7, 1, 8}, {3, 9, 4}, {3, 4, 2}, {3, 2, 6}, {3, 6, 8},
-                                             {3, 8, 9}, {4, 9, 5}, {2, 4, 11}, {6, 2, 10}, {8, 6, 7}, {9, 8, 1}};
-        s.f0 = f;
-        std::map<std::pair<int, int>, int> mid;
-        auto midpoint = [&](int a, int b) {
-            const auto key = std::make_pair(std::min(a, b), std::max(a, b));
-            auto it = mid.find(key);
-            if (it != mid.end()) return it->second;
-            s.v.push_back(normalize((s.v[static_cast<std::size_t>(a)] + s.v[static_cast<std::size_t>(b)]) * 0.5));
-            return mid[key] = static_cast<int>(s.v.size() - 1);
-        };
-        for (const auto& t3 : f) {
-            const int a = midpoint(t3[0], t3[1]), b = midpoint(t3[1], t3[2]), c = midpoint(t3[2], t3[0]);
-            s.f.push_back({t3[0], a, c}); s.f.push_back({t3[1], b, a}); s.f.push_back({t3[2], c, b}); s.f.push_back({a, b, c});
-        }
-        return s;
-    }();
-    return ico;
-}
-
-// One puffy clump of the crown: a noise-lumped icosphere, flattened a little underneath. Its
-// normals lean from the clump's own toward the crown's (centre C, radii E), so the crown
-// lights as one volume; colour darkens down and in, lightens up and out.
-void clump(RenderMesh& m, const Vec3& centre, double r, const Vec3& C, const Vec3& E, const Noise& noise,
-           double noiseOff, const Vec3& dark, const Vec3& light) {
-    const Ico& ico = icosphere();
-    const uint32_t base = static_cast<uint32_t>(m.vertices.size());
-    for (const Vec3& q : ico.v) {
-        const double bump = 1.0 + 0.22 * noise.noise3(q.x * 1.6 + noiseOff, q.y * 1.6, q.z * 1.6 - noiseOff);
-        Vec3 off = q * (r * bump);
-        if (off.y < 0) off.y *= 0.72;
-        const Vec3 P = centre + off;
+// One puffy clump of the crown: a noise-lumped icosphere, flattened a little underneath, its
+// normals leaned toward the crown's (centre C, radii E) so the crown lights as one volume; colour
+// darkens down and in, lightens up and out.
+void clump(RenderMesh& m, const Vec3& centre, double r, const Vec3& C, const Vec3& E, uint32_t seed,
+           const Vec3& dark, const Vec3& light) {
+    RenderMesh cl = MeshBuilder::icosphere(1);
+    MeshBuilder::displaceNoise(cl, Vec3(0, 0, 0), 0.22, 1.6, seed);
+    MeshBuilder::deform(cl, [&](const Vec3& q) { return centre + Vec3(q.x * r, q.y * r * (q.y < 0 ? 0.72 : 1.0), q.z * r); });
+    MeshBuilder::leanNormals(cl, C, E, 0.7);
+    MeshBuilder::colorBy(cl, [&](const Vertex& v) {
+        const Vec3& P = v.position;
         const Vec3 rel((P.x - C.x) / E.x, (P.y - C.y) / E.y, (P.z - C.z) / E.z);
-        const Vec3 nCrown = normalize(Vec3(rel.x / E.x, rel.y / E.y, rel.z / E.z));
-        const Vec3 n = normalize(lerp3(q, nCrown, 0.7));
         const double up = std::clamp((P.y - (C.y - E.y)) / (2.0 * E.y), 0.0, 1.0);
         const double outward = std::clamp(rel.length() / 1.25, 0.0, 1.0);
-        const double t = std::clamp(0.1 + 0.55 * up + 0.4 * outward * outward, 0.0, 1.0);
-        vert(m, P, n, lerp3(dark, light, t));
-    }
-    for (const auto& f : ico.f) {
-        const uint32_t a = base + static_cast<uint32_t>(f[0]), b = base + static_cast<uint32_t>(f[1]), c = base + static_cast<uint32_t>(f[2]);
-        const Vec3 fc = (m.vertices[a].position + m.vertices[b].position + m.vertices[c].position) * (1.0 / 3.0);
-        tri(m, a, b, c, fc - centre);
-    }
+        return lerp3(dark, light, std::clamp(0.1 + 0.55 * up + 0.4 * outward * outward, 0.0, 1.0));
+    });
+    MeshBuilder::append(m, cl);
 }
 
 // A tiny coarse blob (the 20-face icosahedron): a blossom on a flowering shrub.
-void bud(RenderMesh& m, const Vec3& centre, double r, const Vec3& colour, const Vec3& outward) {
-    const Ico& ico = icosphere();
-    const uint32_t base = static_cast<uint32_t>(m.vertices.size());
-    for (int i = 0; i < 12; ++i) {
-        const Vec3& q = ico.v[static_cast<std::size_t>(i)];
-        vert(m, centre + q * r, normalize(lerp3(q, outward, 0.6)), colour * (0.85 + 0.15 * q.y));
-    }
-    for (const auto& f : ico.f0) {
-        const uint32_t a = base + static_cast<uint32_t>(f[0]), b = base + static_cast<uint32_t>(f[1]), c = base + static_cast<uint32_t>(f[2]);
-        tri(m, a, b, c, (m.vertices[a].position + m.vertices[b].position + m.vertices[c].position) * (1.0 / 3.0) - centre);
-    }
+void bud(RenderMesh& m, const Vec3& centre, double r, const Vec3& colour, const Vec3& C, const Vec3& E) {
+    RenderMesh b = MeshBuilder::icosphere(0);
+    MeshBuilder::colorBy(b, [&](const Vertex& v) { return colour * (0.85 + 0.15 * v.position.y); });
+    MeshBuilder::deform(b, [&](const Vec3& q) { return centre + q * r; });
+    MeshBuilder::leanNormals(b, C, E, 0.6);
+    MeshBuilder::append(m, b);
 }
 
 // Broadleaf crowns and shrubs: a trunk (or none), a few limbs into the crown, clumps over an
 // ellipsoid. Each shape is a FORM -- crown proportions, trunk weight, limbs, stems, bark.
-StylizedTree broadleaf(uint32_t seed, const StylizedTreeParams& p, Rng& rng) {
+StylizedTree broadleaf(uint32_t seed, const StylizedTreeParams& p, ProcRng& rng) {
     StylizedTree t;
     const double H = p.height * rng.in(0.85, 1.15);
     struct Form {
@@ -201,7 +119,6 @@ StylizedTree broadleaf(uint32_t seed, const StylizedTreeParams& p, Rng& rng) {
     }
     if ((bark - defaults.barkColor).length() < 1e-9 && p.shape == StylizedShape::Birch) bark = Vec3(0.55, 0.53, 0.48);
     dark = dark * p.leafTint; light = light * p.leafTint;
-    const Noise noise(seed * 7u + 3u);
     // clump centres: a Fibonacci spread over the crown ellipsoid, plus a cap on top
     std::vector<std::pair<Vec3, double>> clumps;
     const double phase = rng.in(0, 2 * kPi);
@@ -218,7 +135,7 @@ StylizedTree broadleaf(uint32_t seed, const StylizedTreeParams& p, Rng& rng) {
     }
     clumps.push_back({C + Vec3(0, E.y * 0.55, 0), R * F.clumpR * 1.05});
     for (std::size_t i = 0; i < clumps.size(); ++i)
-        clump(t.canopy, clumps[i].first, clumps[i].second, C, E, noise, 3.7 * static_cast<double>(i), dark, light);
+        clump(t.canopy, clumps[i].first, clumps[i].second, C, E, seed * 7u + 3u + static_cast<uint32_t>(i) * 131u, dark, light);
     if (p.shape == StylizedShape::FloweringShrub) {   // blossom dotted over the top of the bush
         const Vec3 petal = defaultLeaves ? (rng.next() < 0.5 ? Vec3(0.85, 0.25, 0.40) : rng.next() < 0.5 ? Vec3(0.9, 0.85, 0.8) : Vec3(0.9, 0.65, 0.08))
                                          : light * 3.0;
@@ -226,7 +143,7 @@ StylizedTree broadleaf(uint32_t seed, const StylizedTreeParams& p, Rng& rng) {
             const double a = rng.in(0, 2 * kPi), el = rng.in(0.1, 1.2);
             const Vec3 dir(std::cos(a) * std::cos(el), std::sin(el), std::sin(a) * std::cos(el));
             const Vec3 at = C + Vec3(dir.x * E.x, dir.y * E.y, dir.z * E.z) * 1.02;
-            bud(t.canopy, at, R * 0.07 * rng.in(0.8, 1.2), petal * p.leafTint, dir);
+            bud(t.canopy, at, R * 0.07 * rng.in(0.8, 1.2), petal * p.leafTint, C, E);
         }
     }
     if (F.noTrunk) return t;
@@ -276,7 +193,7 @@ StylizedTree broadleaf(uint32_t seed, const StylizedTreeParams& p, Rng& rng) {
 }
 
 // A conifer: a straight trunk under stacked cone tiers with jagged, drooping rims.
-StylizedTree pine(uint32_t seed, const StylizedTreeParams& p, Rng& rng) {
+StylizedTree pine(uint32_t seed, const StylizedTreeParams& p, ProcRng& rng) {
     StylizedTree t;
     (void)seed;
     const double H = p.height * rng.in(0.85, 1.2);
@@ -322,7 +239,7 @@ StylizedTree pine(uint32_t seed, const StylizedTreeParams& p, Rng& rng) {
 }
 
 // A palm: a curved, ringed trunk and a crown of drooping fronds with sawtooth leaflet edges.
-StylizedTree palm(uint32_t seed, const StylizedTreeParams& p, Rng& rng) {
+StylizedTree palm(uint32_t seed, const StylizedTreeParams& p, ProcRng& rng) {
     StylizedTree t;
     (void)seed;
     const double H = p.height * rng.in(0.85, 1.2);
@@ -371,7 +288,7 @@ StylizedTree palm(uint32_t seed, const StylizedTreeParams& p, Rng& rng) {
 }  // namespace
 
 StylizedTree stylizedTree(uint32_t seed, const StylizedTreeParams& p) {
-    Rng rng(seed);
+    ProcRng rng(seed);
     switch (p.shape) {
         case StylizedShape::Pine: return pine(seed, p, rng);
         case StylizedShape::Palm: return palm(seed, p, rng);

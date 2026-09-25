@@ -7636,3 +7636,44 @@ flora plan) cannot be built on that.
 Frames match. The remaining single draws on metro are unique meshes (building chunks, road cells),
 which need merging or indirect draws, not instancing. Next in the flora plan: a baked tree catalog
 with polygon-capped LODs.
+
+## ADR-0098 — The procedural vocabulary grows; content is recipes over it
+
+**Context.** The flora work (ADR-0097's grass, the stylized trees, the rock library, the terrain
+layers) first shipped as capable generators. Each one privately carried its own random stream, its
+own icosphere, tube and emit helpers, its own tileable noise and cellular cracks, and its own disk
+cache. The engine already had a vocabulary for exactly this: `texture_field.h` (ADR-0042/0043,
+fields and bakes, exposed to Lua) and `MeshBuilder` plus the Lua `mesh` library. The new work went
+around them, so it added features without extending the engine. Glenn, 2026-09-24: "We should always
+look to expand the procedural capabilities of the engine and to use what is there as a language for
+building things and only do one offs if absolutely necessary."
+
+**Decision.** New content is a RECIPE over the engine's procedural vocabulary. When a recipe needs a
+missing word, the word is added to the vocabulary, in C++ and in Lua, not privately to the recipe.
+- **texture_field** gained:
+  - tileable fields: `fieldTileNoise` / `TileFbm` / `Cells` / `CellEdges` / `CellId` / `Bands`
+    (`fieldNoise` and `fieldFbm` do not tile);
+  - shaping: `Smoothstep`, `Invert`, `Min` / `Max`, `MixBy`, `Pow`, `Warp`;
+  - colour fields and `bakeFieldRGBA`;
+  - `bakeCached`, one content-keyed disk cache for any bake.
+
+  The terrain layers are now four recipes over these.
+- **MeshBuilder's shape kit** (`mesh_shapes.cpp`): `icosphere`, `displaceNoise`, `cutByPlane`,
+  `facet`, `leanNormals`, `deform`, `colorBy`, `tube`, `vertex` / `triFacing`. Also `ProcRng`
+  (`procgen/proc_rng.h`), the generators' one shared random stream. Stylized trees, rocks and grass
+  are now recipes over the kit.
+- **Lua** reaches all of it:
+  - `texture.tile_fbm`, `texture.cells`, … and `field:warp`, …;
+  - `mesh.icosphere` / `displace` / `cut` / `facet` / `lean_normals` / `color_by` / `tube`;
+  - `stylized.tree` / `rock` / `grass`.
+
+  A script composes with the same words the C++ recipes use; tests build a tileable stone texture
+  and a moss-topped stone in Lua.
+- **Shader work** follows the same rule. Triplanar sampling, top-projected layers and per-instance
+  variation become material features any surface can switch on, not per-surface special cases.
+
+**Consequences.** Looks are unchanged except that variants come from the shared random stream
+(different, but equivalent, trees and rocks). A one-off is acceptable only when no general word
+fits, and its reason is written down. Palm fronds and pine tiers are still custom topology
+(`vertex` / `triFacing` recipes). A ribbon-along-a-curve word would absorb them, and will be added
+when the leaf-card work needs it.
