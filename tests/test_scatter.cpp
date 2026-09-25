@@ -1,4 +1,5 @@
 #include "../src/engine/procgen/grass.h"
+#include "../src/engine/procgen/stylized_tree.h"
 #include "test_framework.h"
 
 #include "../src/engine/procgen/scatter.h"
@@ -192,4 +193,27 @@ TEST_CASE(grass_clump_is_blades_lit_as_a_carpet) {
     }
     CHECK(up && same && differs);
     CHECK(top > p.height * 0.6 && top < p.height * 1.4);
+}
+
+// Stylized trees (procgen/stylized_tree.h): every shape grows bark and canopy within the
+// polygon budget, stands on its base, reaches about its height, and is the same for a seed.
+TEST_CASE(stylized_trees_stay_in_budget_and_repeat) {
+    for (const char* name : {"round", "spreading", "columnar", "flowering", "pine", "palm"}) {
+        engine::StylizedTreeParams p;
+        CHECK(engine::stylizedShapeFromName(name, p.shape));
+        p.height = 8.0;
+        const engine::StylizedTree a = engine::stylizedTree(11, p), b = engine::stylizedTree(11, p);
+        const std::size_t tris = (a.bark.indices.size() + a.canopy.indices.size()) / 3;
+        double lo = 1e9, hi = -1e9;
+        for (const auto* m : {&a.bark, &a.canopy})
+            for (const engine::Vertex& v : m->vertices) { lo = std::min(lo, (double)v.position.y); hi = std::max(hi, (double)v.position.y); }
+        const bool ok = !a.bark.indices.empty() && !a.canopy.indices.empty() && tris < 2000 &&
+                        lo > -0.5 && lo < 0.5 && hi > 8.0 * 0.6 && hi < 8.0 * 1.45 &&
+                        a.canopy.vertices.size() == b.canopy.vertices.size() &&
+                        (a.canopy.vertices.back().position - b.canopy.vertices.back().position).length() < 1e-12;
+        if (!ok) std::printf("    %s: %zu tris, y %.2f..%.2f\n", name, tris, lo, hi);
+        CHECK(ok);
+    }
+    engine::StylizedShape s;
+    CHECK(!engine::stylizedShapeFromName("baobab", s));
 }

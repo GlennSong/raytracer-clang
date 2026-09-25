@@ -76,19 +76,40 @@
   "focusClear": 12,
   "species": [
    {
-    "kind": "script",
+    "kind": "stylized",
+    "shape": "round",
     "variants": 4,
-    "script": "return flora.scatter_tree(seed, {species='oak', iterations=4})"
+    "height": 7.5
    },
    {
-    "kind": "script",
-    "variants": 4,
-    "script": "return flora.scatter_tree(seed, {species='pine', iterations=4})"
+    "kind": "stylized",
+    "shape": "spreading",
+    "variants": 3,
+    "height": 8.0
    },
    {
-    "kind": "script",
-    "variants": 4,
-    "script": "return flora.scatter_tree(seed, {species='birch', iterations=4})"
+    "kind": "stylized",
+    "shape": "columnar",
+    "variants": 2,
+    "height": 10.0
+   },
+   {
+    "kind": "stylized",
+    "shape": "flowering",
+    "variants": 2,
+    "height": 5.5
+   },
+   {
+    "kind": "stylized",
+    "shape": "pine",
+    "variants": 3,
+    "height": 11.0
+   },
+   {
+    "kind": "stylized",
+    "shape": "palm",
+    "variants": 3,
+    "height": 8.5
    }
   ]
  },

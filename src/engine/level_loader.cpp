@@ -15,7 +15,8 @@
 #include "procgen/city/road_rules.h"    // DesignRules: the per-class grade table the
                                         // poke report hands weldChainProfiles
 #include "procgen/earthwork.h"
-#include "procgen/grass.h"            // the grass field's clumps (GrassSystem)          // the earthwork displacement field
+#include "procgen/grass.h"
+#include "procgen/stylized_tree.h"   // "kind":"stylized" species (the flora plan)            // the grass field's clumps (GrassSystem)          // the earthwork displacement field
 #include "mesh_builder.h"
 #include "asset_manager.h"
 #include "procgen/terrain.h"
@@ -1884,6 +1885,41 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                     LOG_ERROR << "flora script error: " << err;
                 }
 #endif
+            } else if (kind == "stylized") {
+                // STYLIZED (procgen/stylized_tree.h): shape round | spreading | columnar |
+                // flowering | pine | palm; bark and canopy are vertex-coloured, opaque parts.
+                StylizedTreeParams stp;
+                if (!stylizedShapeFromName(s.value("shape", std::string("round")), stp.shape))
+                    LOG_WARN << "stylized species: unknown shape '" << s.value("shape", std::string()) << "', using round";
+                stp.height = s.value("height", stp.height);
+                stp.crownRadius = s.value("crownRadius", 0.0);
+                stp.clumps = s.value("clumps", 0);
+                auto col = [&](const char* key, Vec3& into) {
+                    if (s.contains(key) && s[key].is_array() && s[key].size() == 3)
+                        into = Vec3(s[key][0].get<double>(), s[key][1].get<double>(), s[key][2].get<double>());
+                };
+                col("barkColor", stp.barkColor);
+                col("leafDark", stp.leafDark);
+                col("leafLight", stp.leafLight);
+                // Each variant a little different in green (lighter / darker, warmer / cooler), so a
+                // stand of one species is not one colour.
+                {
+                    const uint64_t h = static_cast<uint64_t>(seed) * 0x9E3779B97F4A7C15ull;
+                    const double b = 0.85 + 0.3 * static_cast<double>((h >> 20) & 1023u) / 1023.0;
+                    const double w = -0.12 + 0.24 * static_cast<double>((h >> 40) & 1023u) / 1023.0;
+                    const Vec3 shift(b * (1.0 + w), b, b * (1.0 - w));
+                    stp.leafTint = shift;
+                }
+                const StylizedTree st = stylizedTree(seed, stp);
+                RenderMaterial barkMat;
+                barkMat.albedo = Vec3(1, 1, 1);
+                barkMat.roughness = 0.95f; barkMat.metallic = 0.0f; barkMat.opacity = 1.0f;
+                RenderMaterial leafMat = barkMat;
+                leafMat.roughness = 1.0f;   // foliage: no highlight (0.8 read as plastic)
+                if (spWind) leafMat.flags |= RenderMaterial::FLAG_WIND;
+                if (stp.shape == StylizedShape::Palm) leafMat.flags |= RenderMaterial::FLAG_TWO_SIDED;   // fronds are sheets
+                addPart(st.bark, barkMat);
+                addPart(st.canopy, leafMat);
             } else if (kind == "rock") {
                 addPart(rockSdf ? generateRockSdf(rsp, seed)
                                 : generateRock(rp, Noise(seed)),
