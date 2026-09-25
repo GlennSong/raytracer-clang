@@ -139,5 +139,6 @@ vocabulary, and a missing word is added HERE (C++ and Lua), not privately to one
 | Place names from data (site-shaped: Port …, …ford, … Ridge) | `world/place_names.h`, `assets/data/places.json` (ADR-0107) | `city_plan island-cities` | deterministic per seed; routes/loop names in the same file |
 | Road sign plan + faces (exit, advance, gore, distance, route, entrance, do-not-enter, wrong-way, limit, trailblazer) | `world/road_signs.h` (`planIslandSigns`, `layoutSign`, `writeSignSheetSvg`) (ADR-0107) | `city_plan island-cities` → `signs.svg` | ring directions Inner/Outer Loop; plan L/R mirrored to world |
 | Text as vector outlines | `Font::svgPath` (text/font.h) | sign sheet | viewer-independent lettering |
+| Lane arrows painted per lane at junction approaches | `deck_mesh.cpp` paintSide, `assignLaneMoves` (ADR-0108) | any lanes scene (grid_city) | legs from edges leaving the box; pockets turn only; ≥2 lanes |
 | The island freeway routed round its cities | `routeFreewayRoundCities`, `islandSiteBrief` (ADR-0106) | `city_plan island-cities` | city limits + 40 m are no-go; waypoint on each inland edge |
 | Residency (stream by camera distance) | `engine/residency.h` (ADR-0095) | building cells | terrain tiles, road cells, forests are the planned clients |

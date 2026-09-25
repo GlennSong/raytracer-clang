@@ -11,6 +11,7 @@
 #include <functional>
 #include <tuple>
 #include <map>
+#include <set>
 #include <cstdio>
 
 namespace engine {
@@ -482,6 +483,94 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
                 int li = laneAt(lat); Vec2 a = A + N * lat, b = B + N * lat;
                 strip(paintW, std::vector<Vec2>{a, b}, std::vector<double>{zAt(li, a), zAt(li, b)}, 0.25, 0, 0, kPaintWhite);
             }
+            // LANE ARROWS (Glenn, 2026-09-25: "lane signs like arrows for where to turn ... they should be
+            // a part of the road"): what each approaching lane may do at this junction, painted in it twice
+            // -- 7 m and 30 m before the stop line. The junction's LEGS are the street edges that leave its
+            // box at this level (a road through it gives two, one ending in it one); each leg's angle from
+            // the approach's heading makes it a left, a straight or a right. The movements go to the lanes
+            // by position, the usual way: the leftmost lane turns left (and goes straight, with a lane
+            // beside it that does too), the rightmost turns right, the middle ones go straight; a turn
+            // pocket turns only. Painted where there is a choice of lanes (two or more approaching). The
+            // glyphs are built in plan coordinates pointing at the real legs, so the world's mirror
+            // (interchange.h) flips them with the roads.
+            {
+                std::vector<const LL*> app;
+                for (const LL& x : ls) if (x.approaching) app.push_back(&x);
+                const double sStop = sBox + sign * 5.2;
+                const Vec2 D = T * static_cast<double>(-sign);   // travel into the box
+                const Vec2 Lft = perp(D);                         // the plan's left of travel
+                // the approach lies at stations on the `sign` side of the box: back from the stop line is +sign
+                if (app.size() >= 2 && std::min(sStop, sStop + sign * 40.0) > 2.0 && std::max(sStop, sStop + sign * 40.0) < Lr - 2.0) {
+                    // the box, from just inside it
+                    const Vec2 C = pointAt(e.xy, e.s, sBox) + D * 6.0;   // 6 m into the box
+                    const double zC = H.deck(ls[0].li, pointAt(e.xy, e.s, sStop));
+                    std::set<int> parents;
+                    for (const Vec2& q : {C, C + D * 12.0, C + Lft * 12.0, C - Lft * 12.0, C + D * 6.0})
+                        for (int ojI : laneGrid.at(q)) { const Lane& o = L.lanes[static_cast<size_t>(ojI)]; if (!o.isConnector() && o.parent >= 0) parents.insert(o.parent); }
+                    bool hasL = false, hasS = false, hasR = false;
+                    for (int pe2 : parents) {
+                        const EdgeSpec& e2 = r.graph.edges[static_cast<size_t>(pe2)];
+                        if (e2.isRamp() || e2.cls == "freeway" || e2.s.size() < 2) continue;
+                        const Projection pr2 = project(e2.xy, e2.s, C);
+                        if (pr2.distance > 25.0) continue;
+                        // at this level (not a viaduct overhead or a road underneath)
+                        int anyLane = -1;
+                        for (size_t lj = 0; lj < L.lanes.size() && anyLane < 0; ++lj) if (L.lanes[lj].parent == pe2) anyLane = static_cast<int>(lj);
+                        if (anyLane < 0 || std::fabs(H.deck(anyLane, pointAt(e2.xy, e2.s, pr2.station)) - zC) > 1.5) continue;
+                        for (int w2 : {-1, +1}) {
+                            const double sLeg = pr2.station + w2 * 30.0;
+                            if (sLeg < 0.0 || sLeg > e2.s.back()) continue;   // the edge ends in this junction that way
+                            const Vec2 V = pointAt(e2.xy, e2.s, sLeg) - C;
+                            if (V.length() < 12.0) continue;
+                            const Vec2 v = V / V.length();
+                            const double a = std::atan2(cross(D, v), dot(D, v)) * 180.0 / 3.14159265358979;
+                            if (std::fabs(a) > 150.0) continue;          // the way it came
+                            if (std::fabs(a) < 35.0) hasS = true; else if (a > 0) hasL = true; else hasR = true;
+                        }
+                    }
+                    // the lanes, plan-left first
+                    std::sort(app.begin(), app.end(), [&](const LL* a, const LL* b) { return dot(N * a->lat, Lft) > dot(N * b->lat, Lft); });
+                    const std::size_t n = app.size();
+                    const std::vector<LaneMoves> moves = assignLaneMoves(n, hasL, hasS, hasR,
+                        L.lanes[static_cast<size_t>(app.front()->li)].kind == "turn", L.lanes[static_cast<size_t>(app.back()->li)].kind == "turn");
+                    for (std::size_t i = 0; i < n; ++i) {
+                        const bool mL = moves[i].left, mS = moves[i].straight, mR = moves[i].right;
+                        if (!mL && !mS && !mR) continue;
+                        // the glyph in its lane's frame: u forward from the tail, v to the plan's left
+                        // the second arrow only where the block is long enough that the next junction's
+                        // arrows (painted back from ITS stop line) don't meet it mid-block
+                        double gap = sign < 0 ? sBox : Lr - sBox;
+                        for (const Span& o : merged) {
+                            if (sign < 0 && o.s1 < sBox - 1.0) gap = std::min(gap, sBox - o.s1);
+                            if (sign > 0 && o.s0 > sBox + 1.0) gap = std::min(gap, o.s0 - sBox);
+                        }
+                        for (double back : {7.0, 30.0}) {
+                            if (back > 10.0 && gap < 110.0) continue;
+                            const double sTail = sStop + sign * (back + 5.0);
+                            const Vec2 base = pointAt(e.xy, e.s, sTail) + N * app[i]->lat;
+                            auto P = [&](double u, double v) { return base + D * u + Lft * v; };
+                            auto Z = [&](const Vec2& q) { return H.deck(app[i]->li, q) + 0.025; };
+                            auto shaft = [&](std::initializer_list<std::pair<double, double>> uv) {
+                                std::vector<Vec2> pts; std::vector<double> z;
+                                for (const auto& [u, v] : uv) { pts.push_back(P(u, v)); z.push_back(Z(pts.back())); }
+                                strip(paintW, pts, z, 0.15, 0, 0, kPaintWhite);
+                            };
+                            auto head = [&](double u, double v, double du, double dv, double len) {   // base centre, pointing (du, dv)
+                                const Vec2 b = P(u, v), dir = D * du + Lft * dv, side = perp(dir) * 0.45, tip = b + dir * len;
+                                MeshBuilder::emitQuad(paintW, world(b - side, Z(b - side)), world(tip, Z(tip)), world(tip, Z(tip)), world(b + side, Z(b + side)), Vec3(0, 1, 0), kPaintWhite);
+                            };
+                            const double turnAt = mS ? 1.6 : 2.4;   // a turn branches low when a straight arrow carries on above it
+                            shaft({{0.0, 0.0}, {mS ? 3.8 : turnAt, 0.0}});
+                            if (mS) head(3.8, 0.0, 1.0, 0.0, 1.2);
+                            for (int t2 : {+1, -1}) {
+                                if ((t2 > 0 && !mL) || (t2 < 0 && !mR)) continue;
+                                shaft({{turnAt, 0.0}, {turnAt + 0.55, 0.22 * t2}, {turnAt + 0.8, 0.5 * t2}});
+                                head(turnAt + 0.8, 0.5 * t2, 0.0, static_cast<double>(t2), 0.95);
+                            }
+                        }
+                    }
+                }
+            }
             // stop bar across the approaching lanes, a metre before the crosswalk — the minor road stops
             // for the major one (equal ranks: every approach stops)
             if (crossRank < ownRank) return;
@@ -504,6 +593,19 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     add("asphalt", asphalt, kAsphalt); add("concrete", concrete, kConcrete); add("guardrail", guardrail, kGuardrail); add("sidewalk", sidewalk, kSidewalk); add("shoulder", shoulder, kShoulder); add("median", median, kMedian);
     add("paint_white", paintW, kPaintWhite); add("paint_yellow", paintY, kPaintYellow); add("terrain", terrain, kGrass);
     return out;
+}
+
+std::vector<LaneMoves> assignLaneMoves(std::size_t n, bool hasL, bool hasS, bool hasR, bool leftPocket, bool rightPocket) {
+    std::vector<LaneMoves> m(n);
+    if (n == 1) { m[0] = {hasL, hasS, hasR}; return m; }
+    for (std::size_t i = 0; i < n; ++i) {
+        if (i == 0) { m[i].left = hasL; m[i].straight = hasS && (!leftPocket || !hasL); }                  // leftmost: left (+ straight)
+        else if (i + 1 == n) { m[i].right = hasR; m[i].straight = hasS && (!rightPocket || !hasR); }      // rightmost: right (+ straight)
+        else { m[i].straight = hasS; if (!hasS) { m[i].left = i * 2 < n && hasL; m[i].right = !m[i].left && hasR; } }   // middle
+        // an end lane with nothing its own way still carries on or turns the other (a T's stem: two lanes, left and right)
+        if (!m[i].left && !m[i].straight && !m[i].right) { m[i].straight = hasS; if (!hasS) { m[i].left = hasL && i == 0; m[i].right = hasR && i + 1 == n; } }
+    }
+    return m;
 }
 
 const char* edgeRoleName(EdgeRole role) {

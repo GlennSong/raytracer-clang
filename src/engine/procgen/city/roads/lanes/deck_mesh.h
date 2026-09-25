@@ -23,6 +23,15 @@ struct NamedMesh { std::string name; RenderMesh mesh; Vec3 color; };
 // shoulder, median, paint white, paint yellow, terrain. Empty meshes are omitted.
 std::vector<NamedMesh> buildMeshes(const Result& r);
 
+// LANE ARROWS: what each of an approach's lanes may do at a junction, given the moves the junction
+// offers (hasLeft/Straight/Right, in plan terms) and whether its leftmost / rightmost lane is a turn
+// pocket. Lanes are listed plan-left first. The usual assignment: the leftmost lane turns left (and
+// goes straight unless it is a pocket), the rightmost turns right (likewise), the middle ones go
+// straight -- or, with no straight on offer, split left and right. buildMeshes paints these.
+struct LaneMoves { bool left = false, straight = false, right = false; };
+std::vector<LaneMoves> assignLaneMoves(std::size_t lanes, bool hasLeft, bool hasStraight, bool hasRight,
+                                       bool leftPocket = false, bool rightPocket = false);
+
 // The parapet runs the mesher sweeps: a chain of deck-boundary points on an elevated freeway or ramp lane.
 // Exposed so a diagnostic can ask where a wall ENDS — a run whose cap sits on same-level pavement is a wall
 // standing in the middle of drivable road ("the freeway walls end up blocking the car", Glenn, 2026-09-07).

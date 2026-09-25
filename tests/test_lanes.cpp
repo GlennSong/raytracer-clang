@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <fstream>
 #include "engine/procgen/city/roads/lanes/geom2d.h"
+#include "engine/procgen/city/roads/lanes/deck_mesh.h"
 
 using namespace engine;
 using namespace engine::roads::lanes;
@@ -517,4 +518,30 @@ TEST_CASE(lanes_blocks_stand_back_from_a_river_through_them) {
     CHECK(dry.size() == 2);
     for (const Poly2& b : dry)
         for (const Vec2& p : b) CHECK(p.y <= 40.0 + 1e-6 || p.y >= 60.0 - 1e-6);
+}
+
+// LANE ARROWS (Glenn, 2026-09-25: "lane signs like arrows for where to turn ... they should be a part
+// of the road to define if you have a protected turn"): each lane of an approach is painted with what
+// it may do. The usual assignment, and the turn pockets that change it.
+TEST_CASE(lanes_arrows_assign_turns_to_the_lanes_that_make_them) {
+    using engine::roads::lanes::assignLaneMoves;
+    // a four-way, two lanes: left + straight, straight + right
+    auto m = assignLaneMoves(2, true, true, true);
+    CHECK(m[0].left && m[0].straight && !m[0].right);
+    CHECK(!m[1].left && m[1].straight && m[1].right);
+    // three lanes: the middle one goes straight only
+    m = assignLaneMoves(3, true, true, true);
+    CHECK(m[1].straight && !m[1].left && !m[1].right);
+    // a left-turn pocket turns left only; the lane beside it carries straight on
+    m = assignLaneMoves(3, true, true, true, true, false);
+    CHECK(m[0].left && !m[0].straight);
+    CHECK(m[1].straight);
+    // the stem of a T (no straight): the left lane turns left, the right lane right
+    m = assignLaneMoves(2, true, false, true);
+    CHECK(m[0].left && !m[0].straight && !m[0].right);
+    CHECK(m[1].right && !m[1].straight && !m[1].left);
+    // the top of a T with the cross street on the left: left + straight, straight only
+    m = assignLaneMoves(2, true, true, false);
+    CHECK(m[0].left && m[0].straight);
+    CHECK(m[1].straight && !m[1].right);
 }

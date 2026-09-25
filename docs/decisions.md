@@ -8341,3 +8341,37 @@ offline? … They don't have to be Hawaiian."
   - the 3D build of signs (gantries, posts, the atlas bake and its cache);
   - warning signs (curve chevrons, advisory speeds);
   - lane-use signs over multi-lane approaches.
+
+## ADR-0108 — Lane arrows are paint, from the junction's legs
+
+**Context.** Glenn: "we need lane signs like arrows for where to turn. I see the arrows blink on
+occasionally but they should be a part of the road to define if you have a protected turn, etc."
+What blinked were the city sim's debug intent arrows (`city:dbgarrow`), rebuilt every frame while a
+car moves with debug widgets on. The city sim app's own painted arrows (`buildRoadMarkings`) are
+guessed from junction angles and flat at one height. The lanes builder painted lane lines,
+crosswalks and stop bars, but no arrows. And street junctions carry no lane connectors; only authored
+ramps do.
+
+**Decision: the lanes builder paints them** (`deck_mesh.cpp`, beside each approach's crosswalk and
+stop bar).
+- **The junction's legs** are the street edges that leave its box at the approach's level: a road
+  through it gives two, one ending in it gives one, and a viaduct overhead or a road beneath is
+  excluded. Each leg's angle from the approach's heading makes it a left, a straight or a right
+  (within 35° is straight; past 150° is the way it came).
+- **The moves go to the lanes by position** (`assignLaneMoves`, pure and tested). The leftmost lane
+  turns left and goes straight, the rightmost turns right and goes straight, and the middle lanes go
+  straight. A turn pocket (`kind: turn`) turns only. The stem of a T gets left and right.
+- **Placement:** arrows are painted where there is a lane choice (two or more approaching lanes),
+  7 m before the stop line and again at 30 m where the block is long enough (≥ 110 m) that they don't
+  meet the next junction's arrows. They are draped on the deck (+0.025 m) like the stop bar.
+- **The glyphs are built in plan coordinates**, pointing at the real legs, so the world's mirror
+  flips them with the roads.
+
+**Consequences.**
+- On grid_city, the arterial × arterial junction's approaches read left+straight / straight+right,
+  the T with the boulevard reads the same, and one-lane locals get none.
+- Levels built from lanes scenes pick the arrows up when their scene is next built.
+- **Not yet:**
+  - protected turns: traffic signals have no turn-arrow phase (the next step of this work: a
+    protected-left phase, arrow signal heads, the sim obeying them, and the paint to match);
+  - the city sim app's own arrows are unchanged: they are still angle-guessed and flat.
