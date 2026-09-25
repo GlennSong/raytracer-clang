@@ -1515,6 +1515,33 @@ int l_tex_gradient_y(lua_State* L) {
     pushField(L, fieldGradientY());
     return 1;
 }
+// Tileable primitives (exactly periodic over the unit square): texture.tile_noise{seed, period},
+// tile_fbm{seed, period, octaves}, cells / cell_edges / cell_id{seed, period}, bands(count).
+int l_tex_tile_noise(lua_State* L) {
+    pushField(L, fieldTileNoise(static_cast<uint32_t>(optField(L, 1, "seed", 0)), static_cast<int>(optField(L, 1, "period", 4))));
+    return 1;
+}
+int l_tex_tile_fbm(lua_State* L) {
+    pushField(L, fieldTileFbm(static_cast<uint32_t>(optField(L, 1, "seed", 0)), static_cast<int>(optField(L, 1, "period", 4)),
+                              static_cast<int>(optField(L, 1, "octaves", 4))));
+    return 1;
+}
+int l_tex_cells(lua_State* L) {
+    pushField(L, fieldCells(static_cast<uint32_t>(optField(L, 1, "seed", 0)), static_cast<int>(optField(L, 1, "period", 8))));
+    return 1;
+}
+int l_tex_cell_edges(lua_State* L) {
+    pushField(L, fieldCellEdges(static_cast<uint32_t>(optField(L, 1, "seed", 0)), static_cast<int>(optField(L, 1, "period", 8))));
+    return 1;
+}
+int l_tex_cell_id(lua_State* L) {
+    pushField(L, fieldCellId(static_cast<uint32_t>(optField(L, 1, "seed", 0)), static_cast<int>(optField(L, 1, "period", 8))));
+    return 1;
+}
+int l_tex_bands(lua_State* L) {
+    pushField(L, fieldBands(luaL_checknumber(L, 1)));
+    return 1;
+}
 // Field methods (return new fields — immutable composition).
 int l_field_add(lua_State* L) { pushField(L, fieldAdd(checkField(L, 1), checkField(L, 2))); return 1; }
 int l_field_mul(lua_State* L) { pushField(L, fieldMul(checkField(L, 1), checkField(L, 2))); return 1; }
@@ -1527,11 +1554,60 @@ int l_field_scale_bias(lua_State* L) {
                                 luaL_checknumber(L, 3)));
     return 1;
 }
+int l_field_smoothstep(lua_State* L) {
+    pushField(L, fieldSmoothstep(checkField(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3)));
+    return 1;
+}
+int l_field_invert(lua_State* L) { pushField(L, fieldInvert(checkField(L, 1))); return 1; }
+int l_field_min(lua_State* L) { pushField(L, fieldMin(checkField(L, 1), checkField(L, 2))); return 1; }
+int l_field_max(lua_State* L) { pushField(L, fieldMax(checkField(L, 1), checkField(L, 2))); return 1; }
+int l_field_mix_by(lua_State* L) {
+    pushField(L, fieldMixBy(checkField(L, 1), checkField(L, 2), checkField(L, 3)));
+    return 1;
+}
+int l_field_pow(lua_State* L) { pushField(L, fieldPow(checkField(L, 1), luaL_checknumber(L, 2))); return 1; }
+// field:warp(du, dv, amount): sample displaced by two fields (tile-preserving when they tile).
+int l_field_warp(lua_State* L) {
+    pushField(L, fieldWarp(checkField(L, 1), checkField(L, 2), checkField(L, 3), luaL_optnumber(L, 4, 0.05)));
+    return 1;
+}
 int l_field_clamp(lua_State* L) {
     pushField(L, fieldClamp(checkField(L, 1), luaL_optnumber(L, 2, 0.0),
                             luaL_optnumber(L, 3, 1.0)));
     return 1;
 }
+// Colour fields (linear RGB over u, v): texture.color(rgb) -> ColorField; methods
+// color:mix_by(other, t_field), color:mul(field), color:tint(rgb). Baked by texture.bake_rgba.
+constexpr const char* kColorFieldMt = "engine.procgen.ColorField";
+void pushColorField(lua_State* L, ColorField2 f) {
+    void* mem = lua_newuserdatauv(L, sizeof(ColorField2), 0);
+    new (mem) ColorField2(std::move(f));
+    luaL_setmetatable(L, kColorFieldMt);
+}
+ColorField2& checkColorField(lua_State* L, int idx) {
+    return *static_cast<ColorField2*>(luaL_checkudata(L, idx, kColorFieldMt));
+}
+int colorFieldGc(lua_State* L) {
+    static_cast<ColorField2*>(lua_touserdata(L, 1))->~ColorField2();
+    return 0;
+}
+int l_tex_color(lua_State* L) { pushColorField(L, colorConstant(checkVec3(L, 1))); return 1; }
+int l_color_mix_by(lua_State* L) {
+    pushColorField(L, colorMixBy(checkColorField(L, 1), checkColorField(L, 2), checkField(L, 3)));
+    return 1;
+}
+int l_color_mul(lua_State* L) { pushColorField(L, colorMul(checkColorField(L, 1), checkField(L, 2))); return 1; }
+int l_color_tint(lua_State* L) { pushColorField(L, colorTint(checkColorField(L, 1), checkVec3(L, 2))); return 1; }
+// texture.bake_rgba(color, alpha_field, size, gamma=true) -> Image (albedo + height/mask in alpha).
+int l_tex_bake_rgba(lua_State* L) {
+    ColorField2& c = checkColorField(L, 1);
+    Field2& a = checkField(L, 2);
+    const int size = static_cast<int>(luaL_optinteger(L, 3, 256));
+    const bool gamma = lua_isnoneornil(L, 4) ? true : lua_toboolean(L, 4) != 0;
+    pushImage(L, std::make_shared<TextureData>(bakeFieldRGBA(c, a, size, gamma)));
+    return 1;
+}
+
 // texture.bake_gray(field, size) -> Image (roughness/height/AO map).
 int l_tex_bake_gray(lua_State* L) {
     int size = static_cast<int>(luaL_optinteger(L, 2, 256));
@@ -2766,6 +2842,24 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_pushcfunction(L, l_field_mix);        lua_setfield(L, -2, "mix");
         lua_pushcfunction(L, l_field_scale_bias); lua_setfield(L, -2, "scale_bias");
         lua_pushcfunction(L, l_field_clamp);      lua_setfield(L, -2, "clamp");
+        lua_pushcfunction(L, l_field_smoothstep); lua_setfield(L, -2, "smoothstep");
+        lua_pushcfunction(L, l_field_invert);     lua_setfield(L, -2, "invert");
+        lua_pushcfunction(L, l_field_min);        lua_setfield(L, -2, "min");
+        lua_pushcfunction(L, l_field_max);        lua_setfield(L, -2, "max");
+        lua_pushcfunction(L, l_field_mix_by);     lua_setfield(L, -2, "mix_by");
+        lua_pushcfunction(L, l_field_pow);        lua_setfield(L, -2, "pow");
+        lua_pushcfunction(L, l_field_warp);       lua_setfield(L, -2, "warp");
+        lua_setfield(L, -2, "__index");
+    }
+    lua_pop(L, 1);
+    // The ColorField metatable (texture.color): mix_by / mul / tint.
+    if (luaL_newmetatable(L, kColorFieldMt)) {
+        lua_pushcfunction(L, colorFieldGc);
+        lua_setfield(L, -2, "__gc");
+        lua_newtable(L);
+        lua_pushcfunction(L, l_color_mix_by); lua_setfield(L, -2, "mix_by");
+        lua_pushcfunction(L, l_color_mul);    lua_setfield(L, -2, "mul");
+        lua_pushcfunction(L, l_color_tint);   lua_setfield(L, -2, "tint");
         lua_setfield(L, -2, "__index");
     }
     lua_pop(L, 1);
@@ -2939,6 +3033,14 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"bake_gray", l_tex_bake_gray},
         {"bake_color", l_tex_bake_color},
         {"bake_normal", l_tex_bake_normal},
+        {"tile_noise", l_tex_tile_noise},
+        {"tile_fbm", l_tex_tile_fbm},
+        {"cells", l_tex_cells},
+        {"cell_edges", l_tex_cell_edges},
+        {"cell_id", l_tex_cell_id},
+        {"bands", l_tex_bands},
+        {"color", l_tex_color},
+        {"bake_rgba", l_tex_bake_rgba},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kTextureFns);

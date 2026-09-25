@@ -466,6 +466,42 @@ TEST_CASE(procgen_script_builds_a_brick_texture) {
     CHECK(!runProcgenTexture(vm, "return 5", none, nullptr));
 }
 
+TEST_CASE(procgen_script_builds_a_tileable_stone_texture) {
+    // The flora plan's vocabulary from Lua: warped cell cracks over tileable fbm grain, a
+    // colour field darkened in the cracks, the height in alpha -- the same primitives the
+    // terrain layers are built from, composed in a script.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    TextureData tex;
+    std::string err;
+    const char* code = R"LUA(
+        local grain = texture.tile_fbm{ seed=3, period=6, octaves=4 }
+        local cracks = texture.cell_edges{ seed=5, period=3 }
+            :warp(texture.tile_fbm{ seed=7, period=3 }, texture.tile_fbm{ seed=8, period=3 }, 0.06)
+            :smoothstep(0.0, 0.04):invert()
+        local shade = grain:scale_bias(0.3, 0.85):mul(cracks:scale_bias(-0.5, 1.0))
+        local stone = texture.color({0.21, 0.2, 0.18}):mul(shade)
+        return texture.bake_rgba(stone, grain:add(cracks:scale_bias(-0.6, 0.0)), 64)
+    )LUA";
+    CHECK(runProcgenTexture(vm, code, tex, &err));
+    if (!err.empty()) std::printf("    %s\n", err.c_str());
+    CHECK(tex.width == 64 && tex.channels == 4);
+    // it tiles: the wrap from the last column to the first is no rougher than the roughest
+    // neighbouring pair inside
+    auto px = [&](int x, int y, int c) { return static_cast<int>(tex.pixels[(static_cast<std::size_t>(y) * 64 + x) * 4 + c]); };
+    double worst = 0, seam = 0;
+    for (int x = 0; x < 64; ++x) {
+        double d = 0;
+        for (int y = 0; y < 64; ++y) for (int c = 0; c < 4; ++c) d += std::abs(px(x, y, c) - px((x + 1) % 64, y, c));
+        if (x == 63) seam = d; else worst = std::max(worst, d);
+    }
+    CHECK(seam <= worst);
+    // cracks are darker than stone somewhere
+    int lo = 255, hi = 0;
+    for (std::size_t i = 0; i < tex.pixels.size(); i += 4) { lo = std::min<int>(lo, tex.pixels[i]); hi = std::max<int>(hi, tex.pixels[i]); }
+    CHECK(hi - lo > 30);
+}
+
 TEST_CASE(procgen_script_composes_terrain_heightfield) {
     // ADR-0043: terrain composes from primitives, then bakes to a mesh. `terrain`
     // is a callable table — terrain(params, seed) still runs the C++ preset.

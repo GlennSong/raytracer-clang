@@ -8,9 +8,9 @@
 // layer's HEIGHT (alpha), which decides who wins at a transition (sand fills between
 // pebbles, rock pokes up through grass). No normal maps: the ground lights smooth.
 //
-// Each texture is exactly tileable (periodic lattice noise), RGBA8: rgb the albedo gamma-
-// encoded (8-bit linear darks band), a the height. Generated once per (layer, colour, seed,
-// size, generator version) and cached on disk (cache/terrain_layers/<key>.rgba).
+// Each layer is a RECIPE over texture_field's primitives (tileable noise, cells, bands, warps),
+// baked RGBA8 (rgb the albedo gamma-encoded, a the height) through texture_field's disk cache
+// (bakeCached). Exactly tileable because every primitive is.
 
 #include "tree.h"   // TextureData
 #include "../../rt_math.h"
