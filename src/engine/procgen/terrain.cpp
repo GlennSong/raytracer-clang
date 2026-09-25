@@ -1,4 +1,5 @@
 #include "terrain.h"
+#include "ground_cover.h"
 #include "../mesh_builder.h"
 #include "lsystem.h"
 #include "skeleton.h"
@@ -528,6 +529,7 @@ Vec3 terrainColor(double height, double normalUp, double noiseValue) {
 
 Vec3 terrainColor(double worldX, double worldZ, double height, double normalUp,
                   const Noise& noise, const TerrainParams& params) {
+    if (params.cover) return params.cover->at(worldX, worldZ, height, normalUp).colour;   // the ground-cover map
     // Rich entry (the mesh bakers): sample noise at DIFFERENT frequencies per band
     // so the terrain textures like a layered field — big colour regions, a ragged
     // snowline, mottled stone, fine grain — instead of one frequency modulating

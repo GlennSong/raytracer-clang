@@ -16,7 +16,8 @@
                                         // poke report hands weldChainProfiles
 #include "procgen/earthwork.h"
 #include "procgen/grass.h"
-#include "procgen/stylized_tree.h"   // "kind":"stylized" species (the flora plan)            // the grass field's clumps (GrassSystem)          // the earthwork displacement field
+#include "procgen/stylized_tree.h"
+#include "procgen/ground_cover.h"   // the cover decides grass density and tree biomes   // "kind":"stylized" species (the flora plan)            // the grass field's clumps (GrassSystem)          // the earthwork displacement field
 #include "mesh_builder.h"
 #include "asset_manager.h"
 #include "procgen/terrain.h"
@@ -1675,6 +1676,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         float colliderRadius = 0.0f; // 0 = auto from trunkRadius
         float colliderHeight = 0.0f; // 0 = auto from trunkHeight
         double colliderFriction = 0.8;
+        uint32_t biomeMask = 0;      // bit per Biome where it may grow (0 = anywhere): "biome"
     };
     std::vector<Variant> variantList;
     uint32_t vegSeed = veg.value("seed", 0u);
@@ -1780,6 +1782,18 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         float spColHeight = s.value("colliderHeight", 0.0f);
         double spColFriction = s.value("colliderFriction", 0.8);
         bool spWind = s.value("wind", false);   // FLAG_WIND sway for this species
+        // Where it grows (the ground-cover map's biomes): "biome": "beach" or ["lowland", "upland"].
+        uint32_t spBiomes = 0;
+        if (s.contains("biome")) {
+            std::vector<std::string> names;
+            if (s["biome"].is_string()) names.push_back(s["biome"].get<std::string>());
+            else if (s["biome"].is_array()) for (const auto& b : s["biome"]) if (b.is_string()) names.push_back(b.get<std::string>());
+            for (const std::string& n : names) {
+                Biome b;
+                if (biomeFromName(n, b)) spBiomes |= 1u << static_cast<uint32_t>(b);
+                else LOG_WARN << "vegetation species: unknown biome '" << n << "'";
+            }
+        }
         if (spWind) material.flags |= RenderMaterial::FLAG_WIND;
 
         // Optional: this species' mesh comes from a Lua flora script (inline
@@ -1811,6 +1825,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         for (int v = 0; v < variants; v++) {
             uint32_t seed = vegSeed + 1000u * static_cast<uint32_t>(speciesIndex) + 1u + v;
             Variant var;
+            var.biomeMask = spBiomes;
             var.collide = spCollide;
             var.colliderRadius = spColRadius;
             var.colliderHeight = spColHeight;
@@ -2091,8 +2106,32 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         stretchHi = veg["stretch"][1].get<double>();
     }
     const double maxTilt = veg.value("maxTiltDeg", 0.0) * 3.14159265358979 / 180.0;
-    std::vector<std::vector<Mat4>> buckets =
-        bucketPlacementsBySpecies(placements, variantList.size(), vegSeed + 7u);
+    std::vector<std::vector<Mat4>> buckets;
+    bool anyBiome = false;
+    for (const Variant& v : variantList) anyBiome = anyBiome || v.biomeMask != 0;
+    if (terrain.cover && (anyBiome || tag == "veg")) {
+        // BY BIOME (the ground-cover map): each placement picks among the variants that may grow
+        // where it stands -- palms on the beach band, pines on the mountain -- and nothing grows
+        // in the sea. Deterministic from the position.
+        buckets.assign(variantList.size(), {});
+        std::vector<std::size_t> fits;
+        for (const Placement& pl : placements) {
+            const double x = pl.position.x, z = pl.position.z, e = 0.8;
+            const double gx = (groundAt(x + e, z) - groundAt(x - e, z)) / (2 * e), gz = (groundAt(x, z + e) - groundAt(x, z - e)) / (2 * e);
+            const Cover cv = terrain.cover->at(x, z, pl.position.y, 1.0 / std::sqrt(1.0 + gx * gx + gz * gz));
+            if (cv.biome == Biome::Sea) continue;
+            fits.clear();
+            for (std::size_t vi = 0; vi < variantList.size(); ++vi)
+                if (variantList[vi].biomeMask == 0 || (variantList[vi].biomeMask >> static_cast<uint32_t>(cv.biome) & 1u)) fits.push_back(vi);
+            if (fits.empty()) continue;
+            uint64_t h = static_cast<uint64_t>(std::llround(x * 16.0)) * 0x9E3779B97F4A7C15ull ^ static_cast<uint64_t>(std::llround(z * 16.0)) * 0xC2B2AE3D27D4EB4Full ^ vegSeed;
+            h ^= h >> 31; h *= 0xBF58476D1CE4E5B9ull; h ^= h >> 29;
+            buckets[fits[h % fits.size()]].push_back(
+                Mat4::trs(pl.position, Quat::fromAxisAngle(Vec3(0, 1, 0), pl.yaw), Vec3(pl.scale, pl.scale, pl.scale)));
+        }
+    } else {
+        buckets = bucketPlacementsBySpecies(placements, variantList.size(), vegSeed + 7u);
+    }
     for (std::size_t si = 0; si < variantList.size(); ++si) {
         if (buckets[si].empty()) continue;
 
@@ -3750,17 +3789,21 @@ bool LevelLoader::load(const std::string& path,
                 const double maxSlope = gj.value("maxSlopeDeg", 32.0) * 3.14159265358979 / 180.0;
                 const double thin = 8.0 * 3.14159265358979 / 180.0;
                 const double sea = root.contains("water") ? root["water"].value("seaLevel", -1e30) : -1e30;
-                const double patchiness = gj.value("patchiness", 0.35), patchScale = gj.value("patchScale", 0.045);
+                const double patchiness = gj.value("patchiness", tp.cover ? 0.0 : 0.35), patchScale = gj.value("patchScale", 0.045);
                 const auto ground = gf.ground;
                 const Noise patches(gj.value("seed", 1u) + 911u);
-                gf.density = [ground, maxSlope, thin, sea, patchiness, patchScale, patches](double x, double z) {
+                const std::shared_ptr<const GroundCover> cover = tp.cover;
+                gf.density = [ground, maxSlope, thin, sea, patchiness, patchScale, patches, cover](double x, double z) {
                     const double h = 0.6;
                     const double y = ground(x, z);
                     if (y < sea + 0.15) return 0.0;
                     const double gx = (ground(x + h, z) - ground(x - h, z)) / (2 * h);
                     const double gz = (ground(x, z + h) - ground(x, z - h)) / (2 * h);
                     const double slope = std::atan(std::sqrt(gx * gx + gz * gz));
-                    double d = std::clamp((maxSlope - slope) / thin, 0.0, 1.0);
+                    // With a ground-cover map the cover decides (grass stops at sand, rock and
+                    // bare earth, raggedly); without one, the slope rule.
+                    double d = cover ? cover->at(x, z, y, std::cos(slope)).grass
+                                     : std::clamp((maxSlope - slope) / thin, 0.0, 1.0);
                     if (patchiness > 0.0) {
                         const double n = patches.fbm2(x * patchScale, z * patchScale, 3);   // about -1..1
                         d *= std::clamp(1.0 - patchiness + n * 1.4, 0.0, 1.0);

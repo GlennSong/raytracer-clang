@@ -160,6 +160,10 @@ struct TerrainParams {
     // sea floor below it, a sand/rock shore just above, then the upland bands.
     // -1e30 = no sea (inland terrain colours exactly as before).
     double seaLevel = -1e30;
+    // THE GROUND-COVER MAP (procgen/ground_cover.h). When set, terrainColor's rich entry colours
+    // from it (grass / dirt / sand / rock / snow) instead of the height bands below, so the
+    // terrain agrees with the grass field and the tree biomes. Null = the bands, as before.
+    std::shared_ptr<const class GroundCover> cover;
     // COLOUR BANDS scale to the level's relief: `snowLine` is the height where
     // snow starts to win (the old hardcoded 74 m suited ~240 m peaks; a 450 m
     // range needs ~200+), `rockLine` where stone starts displacing ground cover.

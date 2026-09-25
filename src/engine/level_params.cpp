@@ -2,6 +2,7 @@
 #include "procgen/terrain_lod.h"   // kBakedCell0 (ADR-0095)
 
 #include "procgen/erosion.h"
+#include "procgen/ground_cover.h"
 #include "procgen/noise.h"
 
 using json = nlohmann::json;
@@ -113,6 +114,27 @@ TerrainParams readTerrainParams(const json& t) {
             r.value("depthFalloff", 0.62f), r.value("angleJitter", 12.0f),
             r.value("seed", 0u));
         p.rangeWidth = r.value("width", p.rangeWidth);
+    }
+    // THE GROUND-COVER MAP (procgen/ground_cover.h): "groundCover": {...} in the terrain block.
+    // Its sea level is the terrain's (the water block's, via propagateWaterSeaLevel).
+    if (t.contains("groundCover") && t["groundCover"].is_object()) {
+        const json& g = t["groundCover"];
+        GroundCoverParams gp;
+        gp.seaLevel = p.seaLevel;
+        gp.beachHeight = g.value("beachHeight", gp.beachHeight);
+        gp.uplandHeight = g.value("uplandHeight", gp.uplandHeight);
+        gp.mountainHeight = g.value("mountainHeight", gp.mountainHeight);
+        gp.snowHeight = g.value("snowHeight", gp.snowHeight);
+        gp.rockSlopeDeg = g.value("rockSlopeDeg", gp.rockSlopeDeg);
+        gp.dirtPatches = g.value("dirtPatches", gp.dirtPatches);
+        gp.seed = g.value("seed", gp.seed);
+        auto col = [&](const char* key, Vec3& into) {
+            if (g.contains(key) && g[key].is_array() && g[key].size() == 3)
+                into = Vec3(g[key][0].get<double>(), g[key][1].get<double>(), g[key][2].get<double>());
+        };
+        col("grass", gp.grass); col("grassDry", gp.grassDry); col("dirt", gp.dirt);
+        col("sand", gp.sand); col("rock", gp.rock); col("snow", gp.snow);
+        p.cover = std::make_shared<const GroundCover>(gp);
     }
     return p;
 }

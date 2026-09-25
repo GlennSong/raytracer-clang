@@ -409,13 +409,16 @@ void surfaceReliefRoad(vec3 worldPos, inout vec3 normal, inout float rough) {
 void surfaceReliefTerrain(vec3 worldPos, inout vec3 normal, inout float rough) {
     float wx = worldPos.x, wz = worldPos.z;
     float slope = clamp(1.0 - normal.y, 0.0, 1.0);
-    float amp = 0.28 + 0.65 * slope;                 // steeper => more relief
+    // Steeper => more relief. Gentle ground stays soft (the stylized look: the fine octave on
+    // flat grass read as white glitter), rock keeps its grain.
+    float amp = 0.14 + 0.8 * slope;
+    float fineW = 0.08 + 0.3 * slope;
     float g0 = vnoise2(wx * 1.7, wz * 1.7) + 0.5 * vnoise2(wx * 5.3, wz * 5.3)
-             + 0.3 * vnoise2(wx * 15.0, wz * 15.0);
+             + fineW * vnoise2(wx * 15.0, wz * 15.0);
     float gx = vnoise2(wx * 1.7 + 0.4, wz * 1.7) + 0.5 * vnoise2(wx * 5.3 + 1.7, wz * 5.3)
-             + 0.3 * vnoise2(wx * 15.0 + 2.3, wz * 15.0) - g0;
+             + fineW * vnoise2(wx * 15.0 + 2.3, wz * 15.0) - g0;
     float gz = vnoise2(wx * 1.7, wz * 1.7 + 0.4) + 0.5 * vnoise2(wx * 5.3, wz * 5.3 + 1.7)
-             + 0.3 * vnoise2(wx * 15.0, wz * 15.0 + 2.3) - g0;
+             + fineW * vnoise2(wx * 15.0, wz * 15.0 + 2.3) - g0;
     normal = normalize(normal + vec3(-gx, 0.0, -gz) * amp);
     float snowy = clamp((worldPos.y - 80.0) / 30.0, 0.0, 1.0) * (1.0 - slope);
     rough = clamp(mix(0.93, 0.72, snowy) + (vnoise2(wx * 11.0, wz * 11.0) - 0.5) * 0.14,

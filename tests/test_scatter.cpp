@@ -1,5 +1,6 @@
 #include "../src/engine/procgen/grass.h"
 #include "../src/engine/procgen/stylized_tree.h"
+#include "../src/engine/procgen/ground_cover.h"
 #include "test_framework.h"
 
 #include "../src/engine/procgen/scatter.h"
@@ -219,4 +220,32 @@ TEST_CASE(stylized_trees_stay_in_budget_and_repeat) {
     }
     engine::StylizedShape s;
     CHECK(!engine::stylizedShapeFromName("baobab", s));
+}
+
+// The ground-cover map (procgen/ground_cover.h): weights sum to one; the sea floor is sea, the
+// strip just above it beach and sandy, flat lowland mostly grass, a steep face rock, high
+// ground mountain; and the same point always answers the same.
+TEST_CASE(ground_cover_bands_the_land_by_height_and_slope) {
+    engine::GroundCoverParams p;
+    p.seaLevel = 0.0; p.beachHeight = 2.5; p.uplandHeight = 30; p.mountainHeight = 60; p.dirtPatches = 0.0;
+    const engine::GroundCover gc(p);
+    auto sum = [](const engine::Cover& c) { return c.grass + c.dirt + c.sand + c.rock + c.snow; };
+    int sea = 0, beachSand = 0, lowGrass = 0, steepRock = 0, mountain = 0, n = 0;
+    for (int i = 0; i < 40; ++i) {
+        const double x = i * 17.3, z = i * -9.1;
+        const engine::Cover a = gc.at(x, z, -5.0, 1.0), b = gc.at(x, z, 0.8, 1.0), c = gc.at(x, z, 12.0, 1.0),
+                            d = gc.at(x, z, 12.0, std::cos(55.0 * 3.14159265 / 180.0)), e = gc.at(x, z, 90.0, 1.0);
+        for (const auto* q : {&a, &b, &c, &d, &e}) CHECK(std::fabs(sum(*q) - 1.0) < 1e-9);
+        sea += a.biome == engine::Biome::Sea;
+        beachSand += b.biome == engine::Biome::Beach && b.sand > 0.5;
+        lowGrass += c.biome == engine::Biome::Lowland && c.grass > 0.9;
+        steepRock += d.rock > 0.8;
+        mountain += e.biome == engine::Biome::Mountain;
+        ++n;
+    }
+    CHECK(sea == n && beachSand == n && lowGrass >= n - 2 && steepRock == n && mountain == n);
+    const engine::Cover r1 = gc.at(3.3, 4.4, 10.0, 0.95), r2 = gc.at(3.3, 4.4, 10.0, 0.95);
+    CHECK(r1.grass == r2.grass && (r1.colour - r2.colour).length() == 0.0);
+    engine::Biome b;
+    CHECK(engine::biomeFromName("mountain", b) && b == engine::Biome::Mountain && !engine::biomeFromName("tundra", b));
 }
