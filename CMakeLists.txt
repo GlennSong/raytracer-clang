@@ -103,6 +103,7 @@ add_library(engine_core STATIC
     src/engine/procgen/grass.cpp
     src/engine/procgen/stylized_tree.cpp
     src/engine/procgen/ground_cover.cpp
+    src/engine/procgen/ground_layers.cpp
     src/engine/procgen/sdf.cpp
     src/engine/procgen/city/polygon.cpp
     src/engine/procgen/city/shape_grammar.cpp

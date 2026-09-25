@@ -1,6 +1,7 @@
 #include "../src/engine/procgen/grass.h"
 #include "../src/engine/procgen/stylized_tree.h"
 #include "../src/engine/procgen/ground_cover.h"
+#include "../src/engine/procgen/ground_layers.h"
 #include "test_framework.h"
 
 #include "../src/engine/procgen/scatter.h"
@@ -248,4 +249,24 @@ TEST_CASE(ground_cover_bands_the_land_by_height_and_slope) {
     CHECK(r1.grass == r2.grass && (r1.colour - r2.colour).length() == 0.0);
     engine::Biome b;
     CHECK(engine::biomeFromName("mountain", b) && b == engine::Biome::Mountain && !engine::biomeFromName("tundra", b));
+}
+
+// Terrain layer textures (procgen/ground_layers.h) TILE: the wrap from the last column (row)
+// to the first is no rougher than the roughest pair of neighbouring columns (rows) inside the
+// tile -- a seam would stand out above all of them -- and a seed repeats.
+TEST_CASE(ground_layer_textures_tile_without_a_seam) {
+    for (int L = 0; L < 4; ++L) {
+        const auto layer = static_cast<engine::GroundLayer>(L);
+        const engine::TextureData a = engine::groundLayerTexture(layer, engine::Vec3(0.1, 0.1, 0.1), 64, 3);
+        const engine::TextureData b = engine::groundLayerTexture(layer, engine::Vec3(0.1, 0.1, 0.1), 64, 3);
+        CHECK(a.width == 64 && a.pixels.size() == 64u * 64u * 4u && a.pixels == b.pixels);
+        auto px = [&](int x, int y, int c) { return static_cast<int>(a.pixels[(static_cast<std::size_t>(y) * 64 + x) * 4 + c]); };
+        auto colPair = [&](int x0, int x1) { double d = 0; for (int y = 0; y < 64; ++y) for (int c = 0; c < 4; ++c) d += std::abs(px(x0, y, c) - px(x1, y, c)); return d; };
+        auto rowPair = [&](int y0, int y1) { double d = 0; for (int x = 0; x < 64; ++x) for (int c = 0; c < 4; ++c) d += std::abs(px(x, y0, c) - px(x, y1, c)); return d; };
+        double worstCol = 0, worstRow = 0;
+        for (int i = 0; i + 1 < 64; ++i) { worstCol = std::max(worstCol, colPair(i, i + 1)); worstRow = std::max(worstRow, rowPair(i, i + 1)); }
+        const double sx = colPair(63, 0), sy = rowPair(63, 0);
+        if (sx > worstCol || sy > worstRow) std::printf("    layer %d: x seam %.0f (worst inner %.0f), y seam %.0f (worst inner %.0f)\n", L, sx, worstCol, sy, worstRow);
+        CHECK(sx <= worstCol && sy <= worstRow);
+    }
 }

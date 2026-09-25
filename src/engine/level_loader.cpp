@@ -17,7 +17,8 @@
 #include "procgen/earthwork.h"
 #include "procgen/grass.h"
 #include "procgen/stylized_tree.h"
-#include "procgen/ground_cover.h"   // the cover decides grass density and tree biomes   // "kind":"stylized" species (the flora plan)            // the grass field's clumps (GrassSystem)          // the earthwork displacement field
+#include "procgen/ground_cover.h"
+#include "procgen/ground_layers.h"   // terrain layer textures (TerrainLayers surface)   // the cover decides grass density and tree biomes   // "kind":"stylized" species (the flora plan)            // the grass field's clumps (GrassSystem)          // the earthwork displacement field
 #include "mesh_builder.h"
 #include "asset_manager.h"
 #include "procgen/terrain.h"
@@ -1404,13 +1405,36 @@ static void loadPlayerSpawn(const json& player, World& world,
 // LevelWriter never writes it back as a document entity (it stays a regenerated
 // runtime object); its GPU mesh is owned by the AssetManager and freed on the
 // next clear().
+// TERRAIN LAYERS (procgen/ground_layers.h): when the terrain's cover bakes WEIGHTS into its
+// vertex colour (TerrainParams::coverWeights), give its material the four layer textures --
+// grass, dirt, sand, rock, in the albedo, MR, normal and AO slots -- and the TerrainLayers
+// surface. Built once per palette and seed, cached on disk. False = not layered (as before).
+static bool applyGroundLayers(RenderMaterial& m, const TerrainParams& p, Renderer* renderer) {
+    if (!p.cover || !p.coverWeights || !renderer) return false;
+    const GroundCoverParams& gp = p.cover->params();
+    const int size = 512;
+    auto upload = [&](GroundLayer layer, const Vec3& base) {
+        const TextureData td = groundLayerTextureCached(layer, base, size, gp.seed);
+        return renderer->uploadTexture(td.width, td.height, td.channels, td.pixels.data());
+    };
+    m.albedoMap = upload(GroundLayer::Grass, gp.grass);
+    m.metallicRoughnessMap = upload(GroundLayer::Dirt, gp.dirt);
+    m.normalMap = upload(GroundLayer::Sand, gp.sand);
+    m.aoMap = upload(GroundLayer::Rock, gp.rock);
+    m.albedo = Vec3(1, 1, 1);
+    m.roughness = 0.95f;
+    m.metallic = 0.0f;
+    m.setSurface(RenderMaterial::Surface::TerrainLayers);
+    return true;
+}
+
 // Chunked terrain (ADR-0034 Phase 1): a grid of independently-meshed chunks, each
 // with its own tight AABB so frustum culling rejects off-screen chunks, replacing
 // the single origin-centred tile + concentric LOD rings. Near chunks (within the
 // collider radius) carry a static collider so the player walks on them. Opt-in via
 // the level's "chunks" key; without it, loadTerrain keeps the legacy single tile.
 static void loadChunkedTerrain(const TerrainParams& p, const Noise& noise,
-                               const json& t, World& world, AssetManager& assets) {
+                               const json& t, World& world, AssetManager& assets, Renderer* renderer) {
     int chunksPerSide = t.value("chunks", 1);
     float chunkSize = t.value("chunkSize", p.size);
     int res = t.value("chunkResolution", p.resolution);
@@ -1425,6 +1449,7 @@ static void loadChunkedTerrain(const TerrainParams& p, const Noise& noise,
         material.roughness = 0.95f;
     }
 
+    applyGroundLayers(material, p, renderer);
     auto chunks = generateTerrainChunks(p, noise, chunksPerSide, chunkSize, res,
                                         colliderRadius);
     for (TerrainChunk& chunk : chunks) {
@@ -1474,7 +1499,7 @@ static uint64_t bakedGroundKey(const json& root, const TerrainParams& p) {
     return h;
 }
 
-static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world, uint64_t groundKey) {
+static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world, uint64_t groundKey, Renderer* renderer) {
     TerrainLodConfig cfg;
     cfg.params = p;
     cfg.seed = t.value("seed", 0u);
@@ -1514,6 +1539,7 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
     // colour; this only adds the normal/roughness detail (Surface::TerrainGround).
     if (cfg.material.surface() == RenderMaterial::Surface::None)
         cfg.material.setSurface(RenderMaterial::Surface::TerrainGround);
+    applyGroundLayers(cfg.material, p, renderer);
     // BAKED GROUND (ADR-0095): the final field -- every flatten folded in -- sampled once into
     // a height pyramid, and the CDLOD grid becomes the pyramid's (1 m at the finest level,
     // refined only where the ground needs it). RT_BAKED_TERRAIN=0 draws the formula instead.
@@ -1563,16 +1589,16 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
 }
 
 static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& t,
-                        World& world, AssetManager& assets, uint64_t groundKey = 0) {
+                        World& world, AssetManager& assets, uint64_t groundKey = 0, Renderer* renderer = nullptr) {
     bool wantCdlod = t.contains("cdlod") &&
                      (t["cdlod"].is_object() ||
                       (t["cdlod"].is_boolean() && t["cdlod"].get<bool>()));
     if (wantCdlod) {
-        loadCdlodTerrain(p, t, world, groundKey);
+        loadCdlodTerrain(p, t, world, groundKey, renderer);
         return;
     }
     if (t.contains("chunks") && t["chunks"].get<int>() > 0) {
-        loadChunkedTerrain(p, noise, t, world, assets);
+        loadChunkedTerrain(p, noise, t, world, assets, renderer);
         return;
     }
     Entity e = world.create();
@@ -1581,7 +1607,8 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
     world.add<PrevTransform>(e, PrevTransform{tr});
 
     RenderMesh terrainMesh;
-    if (t.value("erode", false) && !p.erodedBase) {
+    const bool eroded = t.value("erode", false) && !p.erodedBase;
+    if (eroded) {
         // Legacy static-mesh erode path (no pre-baked field): bake -> erode ->
         // mesh, the eroded grid being the source of truth for mesh and collider.
         // When loadLevel has already baked p.erodedBase (the shared path), fall
@@ -1619,6 +1646,7 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
     }
     if (r.material.surface() == RenderMaterial::Surface::None)
         r.material.setSurface(RenderMaterial::Surface::TerrainGround);   // ground micro-relief
+    if (!eroded) applyGroundLayers(r.material, p, renderer);   // the eroded mesh bakes a colour, not weights
     world.add<Renderable>(e, r);
 
     // Distant LOD rings extend the terrain to the horizon (mountains/hills) at a
@@ -3425,7 +3453,7 @@ bool LevelLoader::load(const std::string& path,
         // O(footprints) scan there dominates the build. Shared, so the carved
         // copies below reuse it.
         rebuildFlattenIndex(terrainParams);
-        loadTerrain(terrainParams, terrainNoise, root["terrain"], world, assets, bakedGroundKey(root, terrainParams));
+        loadTerrain(terrainParams, terrainNoise, root["terrain"], world, assets, bakedGroundKey(root, terrainParams), &renderer);
 
         // ELEVATION MAPS (RT_ELEVATION_MAP=<prefix>, see writeElevationMaps):
         // natural vs final vs drawn, from an independent probe grid over the

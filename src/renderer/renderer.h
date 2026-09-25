@@ -162,6 +162,11 @@ struct RenderMaterial {
         // Interior floor finishes (ADR-0080): polished veined stone and a
         // soft cut-pile floor covering, baked like the facade surfaces.
         Marble, Carpet,
+        // TERRAIN LAYERS (procgen/ground_layers.h): the vertex colour is the ground-cover
+        // WEIGHTS (r grass, g dirt, b sand, rock the rest) and the four texture slots are the
+        // layers -- albedo slot grass, metallic-roughness dirt, normal sand, AO rock (rgb
+        // gamma-encoded colour, a height) -- height-blended, world-planar, rock triplanar.
+        TerrainLayers,
     };
     static constexpr uint32_t SURFACE_SHIFT = 8;
     static constexpr uint32_t SURFACE_MASK = 0xFF00u;

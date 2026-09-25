@@ -135,6 +135,7 @@ TerrainParams readTerrainParams(const json& t) {
         col("grass", gp.grass); col("grassDry", gp.grassDry); col("dirt", gp.dirt);
         col("sand", gp.sand); col("rock", gp.rock); col("snow", gp.snow);
         p.cover = std::make_shared<const GroundCover>(gp);
+        p.coverWeights = g.value("layered", true);   // textured layers (the loader binds them) or a flat colour
     }
     return p;
 }

@@ -164,6 +164,10 @@ struct TerrainParams {
     // from it (grass / dirt / sand / rock / snow) instead of the height bands below, so the
     // terrain agrees with the grass field and the tree biomes. Null = the bands, as before.
     std::shared_ptr<const class GroundCover> cover;
+    // TERRAIN LAYERS (procgen/ground_layers.h): with a cover, bake the cover's WEIGHTS into the
+    // vertex colour (r grass, g dirt, b sand; rock the rest) for the TerrainLayers surface to
+    // blend its textures by, instead of a finished colour.
+    bool coverWeights = false;
     // COLOUR BANDS scale to the level's relief: `snowLine` is the height where
     // snow starts to win (the old hardcoded 74 m suited ~240 m peaks; a 450 m
     // range needs ~200+), `rockLine` where stone starts displacing ground cover.

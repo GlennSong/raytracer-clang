@@ -529,7 +529,10 @@ Vec3 terrainColor(double height, double normalUp, double noiseValue) {
 
 Vec3 terrainColor(double worldX, double worldZ, double height, double normalUp,
                   const Noise& noise, const TerrainParams& params) {
-    if (params.cover) return params.cover->at(worldX, worldZ, height, normalUp).colour;   // the ground-cover map
+    if (params.cover) {   // the ground-cover map: its colour, or its weights for the layered surface
+        const Cover c = params.cover->at(worldX, worldZ, height, normalUp);
+        return params.coverWeights ? Vec3(c.grass, c.dirt, c.sand) : c.colour;
+    }
     // Rich entry (the mesh bakers): sample noise at DIFFERENT frequencies per band
     // so the terrain textures like a layered field — big colour regions, a ragged
     // snowline, mottled stone, fine grain — instead of one frequency modulating

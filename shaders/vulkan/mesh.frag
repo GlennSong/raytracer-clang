@@ -352,6 +352,55 @@ vec3 surfWater(vec3 base, float depth, float shore, vec3 worldPos, float time) {
     return c;
 }
 
+// TERRAIN LAYERS (Surface::TerrainLayers, id 19; procgen/ground_layers.h): the vertex colour
+// carries the ground-cover weights (r grass, g dirt, b sand, rock the rest) and the material's
+// four texture slots the layers (rgb gamma-encoded, a height). Each layer is sampled world-planar
+// (4 m a tile; rock triplanar, so cliffs don't stretch), broken up against tiling by a second,
+// rotated sample and a macro tint, then HEIGHT-BLENDED: a layer's height lifts its weight, and
+// only layers near the top survive -- so edges are crisp and natural (sand between pebbles,
+// rock through grass) rather than a smear. The ground lights smooth: no bump noise.
+const float kLayerTile = 4.0;   // kGroundLayerTileMetres
+// One layer, world-planar. `mixB` (the anti-tiling blend, computed once a pixel) mixes in a
+// second, rotated sample at another scale, so the tile never visibly repeats.
+vec4 layerPlanar(sampler2D t, vec2 p, float mixB) {
+    vec4 a = texture(t, p / kLayerTile);
+    if (mixB < 0.01) return a;
+    vec2 q = mat2(0.8, -0.6, 0.6, 0.8) * p / (kLayerTile * 2.37) + vec2(0.37, 0.61);
+    return mix(a, texture(t, q), mixB);
+}
+// Rock: triplanar where the ground is steep (cliffs don't stretch), planar where it is not.
+vec4 layerRock(sampler2D t, vec3 wp, vec3 n, float mixB) {
+    if (abs(n.y) > 0.85) return layerPlanar(t, wp.xz, mixB);
+    vec3 w = pow(abs(n), vec3(4.0));
+    w /= (w.x + w.y + w.z);
+    return layerPlanar(t, wp.zy, mixB) * w.x + layerPlanar(t, wp.xz, mixB) * w.y + layerPlanar(t, wp.xy, mixB) * w.z;
+}
+vec3 terrainLayers(vec3 cover, vec3 wp, vec3 n) {
+    float wg = cover.r, wd = cover.g, ws = cover.b;
+    float wr = max(0.0, 1.0 - wg - wd - ws);
+    float mixB = 0.6 * smoothstep(0.35, 0.65, fbm2(wp.x * 0.045, wp.z * 0.045));
+    // only the layers present here are sampled
+    const vec4 none = vec4(0.0);
+    vec4 g = wg > 0.001 ? layerPlanar(albedoMap, wp.xz, mixB) : none;
+    vec4 d = wd > 0.001 ? layerPlanar(metallicRoughnessMap, wp.xz, mixB) : none;
+    vec4 s = ws > 0.001 ? layerPlanar(normalMap, wp.xz, mixB) : none;
+    vec4 r = wr > 0.001 ? layerRock(aoMap, wp, n, mixB) : none;
+    // height blend: weight plus height (a layer at weight 0 cannot appear), keep the top band
+    const float depth = 0.18;
+    float bg = wg > 0.001 ? wg + g.a * 0.5 : -1.0;
+    float bd = wd > 0.001 ? wd + d.a * 0.5 : -1.0;
+    float bs = ws > 0.001 ? ws + s.a * 0.5 : -1.0;
+    float br = wr > 0.001 ? wr + r.a * 0.5 : -1.0;
+    float top = max(max(bg, bd), max(bs, br)) - depth;
+    float kg = max(bg - top, 0.0), kd = max(bd - top, 0.0), ks = max(bs - top, 0.0), kr = max(br - top, 0.0);
+    float sum = max(kg + kd + ks + kr, 1e-5);
+    vec3 c = (pow(g.rgb, vec3(2.2)) * kg + pow(d.rgb, vec3(2.2)) * kd + pow(s.rgb, vec3(2.2)) * ks +
+              pow(r.rgb, vec3(2.2)) * kr) / sum;
+    // a broad macro tint so kilometres of ground aren't one tone (one cheap octave)
+    c *= 0.88 + 0.24 * vnoise2(wp.x * 0.008 + 3.1, wp.z * 0.008 - 1.7);
+    return c;
+}
+
 vec3 applySurface(uint id, vec3 base, vec3 worldPos, vec3 n, vec2 meshUV, float time) {
     vec2 uv = surfUV(worldPos, n);
     vec3 c;
@@ -612,6 +661,13 @@ void main() {
     vec3 emission = pc.emissionRough.rgb * (emissiveTint ? inColor : vec3(1.0));
     uint texFlags = pc.surfaceFlags.z;
     float ao = 1.0;
+    // TERRAIN LAYERS: the texture slots are the ground's layers, not the usual maps.
+    const bool layered = pc.surfaceFlags.x == 19u;
+    if (layered) {
+        albedo = terrainLayers(inColor, inWorldPos, normalize(inWorldNormal));
+        roughness = 0.95;
+        texFlags = 0u;   // nothing below reads the slots as albedo / MR / normal / AO
+    }
 
     // FLAG_INTERIOR_MAP (bit 16): a virtual room behind the pane. The pane's UV
     // (0..1 across, 0..1 up) is the room's front face; the view ray in the
