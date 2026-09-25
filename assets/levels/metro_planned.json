@@ -1,5 +1,5 @@
 {
- "_comment": "The first city built from a PLAN (ADR-0092): assets/city_plans/metro_planned.json is the brief Glenn picked (variant 4 of six), city_plan turns it into the lanes scene this level names, and the plan's own scorecard says what should come out \u2014 ~490 blocks and ~4100 buildings over 3 x 3 km.",
+ "_comment": "The first city built from a PLAN (ADR-0092): assets/city_plans/metro_planned.json is the brief Glenn picked (variant 4 of six), city_plan turns it into the lanes scene this level names, and the plan's own scorecard says what should come out — ~490 blocks and ~4100 buildings over 3 x 3 km.",
  "citysim": {
   "buildChance": 0.9,
   "buildLots": true,
@@ -151,7 +151,8 @@
  },
  "dayNight": {
   "dayMinutes": 1440.0,
-  "timeOfDay": 0.32292
+  "timeOfDay": 0.32292,
+  "weather": "fair"
  },
  "entities": [
   {
@@ -194,10 +195,13 @@
    0.55,
    0.68,
    0.86
-  ]
+  ],
+  "fog": {
+   "density": 0.00016
+  }
  },
  "lighting": {
-  "ambientMultiplier": 0.7,
+  "ambientMultiplier": 0.5,
   "exposure": 0.7,
   "sun": {
    "castsShadow": true,
@@ -292,7 +296,36 @@
   "size": 12000,
   "snowLine": 520,
   "tiltX": -0.02,
-  "warp": 0.35
+  "warp": 0.35,
+  "groundCover": {
+   "beachHeight": 3,
+   "uplandHeight": 90,
+   "mountainHeight": 260,
+   "snowHeight": 470,
+   "rockSlopeDeg": 34,
+   "dirtPatches": 0.15,
+   "seed": 5,
+   "grass": [
+    0.055,
+    0.085,
+    0.018
+   ],
+   "grassDry": [
+    0.1,
+    0.1,
+    0.04
+   ],
+   "rock": [
+    0.15,
+    0.14,
+    0.12
+   ],
+   "dirt": [
+    0.12,
+    0.085,
+    0.05
+   ]
+  }
  },
  "vegetation": {
   "clearMargin": 4.0,

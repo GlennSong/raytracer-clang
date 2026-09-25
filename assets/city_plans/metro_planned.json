@@ -110,7 +110,36 @@
       "rangeHeight": 450,
       "rangeVariation": 0.6,
       "snowLine": 520,
-      "rockLine": 240
+      "rockLine": 240,
+      "groundCover": {
+        "beachHeight": 3,
+        "uplandHeight": 90,
+        "mountainHeight": 260,
+        "snowHeight": 470,
+        "rockSlopeDeg": 34,
+        "dirtPatches": 0.15,
+        "seed": 5,
+        "grass": [
+          0.055,
+          0.085,
+          0.018
+        ],
+        "grassDry": [
+          0.1,
+          0.1,
+          0.04
+        ],
+        "rock": [
+          0.15,
+          0.14,
+          0.12
+        ],
+        "dirt": [
+          0.12,
+          0.085,
+          0.05
+        ]
+      }
     },
     "water": {
       "region": 6000,
