@@ -16,6 +16,7 @@ uint64_t mix(uint64_t x) {
 }
 double unit(uint64_t h) { return static_cast<double>(h >> 11) * (1.0 / 9007199254740992.0); }
 constexpr double kBuildBudgetMs = 2.0;
+constexpr double kKeepFar = 0.4;   // the outer ring's share of the clumps (RenderMaterial::keepFar)
 }  // namespace
 
 void GrassSystem::drop(World& world, Tile& t) {
@@ -65,9 +66,11 @@ void GrassSystem::update(FrameContext& ctx) {
         Tile& tile = tiles_[key];
         drop(ctx.world, tile);
         tile.lod = lod;
-        // the tile's clumps: a jittered grid, thinned by density, a variant each
-        const double step = f.spacing * (lod == 0 ? 1.0 : 1.6);
-        const double grow = lod == 0 ? 1.0 : 1.25;   // sparser clumps stand a little fuller
+        // the tile's clumps: a jittered grid, thinned by density, a variant each. Both rings use
+        // the SAME grid; each clump has a random rank, and the outer ring keeps only the ranks
+        // under keepFar -- exactly the clumps the shader has not yet shrunk away at the boundary
+        // (the thinning band ends there), so a tile changing ring changes nothing on screen.
+        const double step = f.spacing;
         const int n = std::max(1, static_cast<int>(std::floor(T / step)));
         std::vector<std::vector<Mat4>> per(nv);
         double ySum = 0.0; int yCount = 0;
@@ -77,12 +80,16 @@ void GrassSystem::update(FrameContext& ctx) {
                 const uint64_t h = mix(tileHash ^ (static_cast<uint64_t>(j) << 20 | static_cast<uint64_t>(i)));
                 const double x = key.first * T + (i + unit(h)) * step;
                 const double z = key.second * T + (j + unit(mix(h))) * step;
+                const double rank = unit(mix(h ^ 0x77ull));
+                if (lod == 1 && rank >= kKeepFar) continue;
                 const double dens = f.density ? f.density(x, z) : 1.0;
                 if (dens <= 0.0 || unit(mix(h ^ 0x51ull)) >= dens) continue;
                 const double y = f.ground(x, z);
                 const double yaw = unit(mix(h ^ 0xA7ull)) * 6.283185307;
-                const double s = grow * (0.8 + 0.45 * unit(mix(h ^ 0x3Dull))) * (0.75 + 0.25 * dens);   // thinner grass is shorter
-                per[mix(h ^ 0xC3ull) % nv].push_back(Mat4::trs(Vec3(x, y, z), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(s, s, s)));
+                const double s = (0.8 + 0.45 * unit(mix(h ^ 0x3Dull))) * (0.75 + 0.25 * dens);   // thinner grass is shorter
+                Mat4 m = Mat4::trs(Vec3(x, y, z), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(s, s, s));
+                m.m[3][0] = static_cast<Real>(rank);   // the rank rides in the bottom row (mesh.vert reads it)
+                per[mix(h ^ 0xC3ull) % nv].push_back(m);
                 ySum += y; ++yCount;
             }
         const Vec3 centre(key.first * T + T * 0.5, yCount ? ySum / yCount : cam.y, key.second * T + T * 0.5);
@@ -91,6 +98,11 @@ void GrassSystem::update(FrameContext& ctx) {
             InstanceGroup g;
             g.mesh = f.clumps[v];
             g.material = f.material;
+            // the thinning band ends where tiles change ring, so the swap is invisible
+            g.material.thinStart = static_cast<float>(f.nearRadius - 8.0);
+            g.material.thinEnd = static_cast<float>(f.nearRadius);
+            g.material.keepFar = static_cast<float>(kKeepFar);
+            g.material.growFar = 1.3f;
             g.transforms = std::move(per[v]);
             g.boundsCenter = centre;
             g.boundsRadius = T * 0.75 + 2.0;

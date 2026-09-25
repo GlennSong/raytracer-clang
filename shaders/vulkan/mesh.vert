@@ -73,23 +73,37 @@ layout(location = 4) out vec3 outWorldTangent;
 layout(location = 5) flat out vec3 outInstanceOrigin;   // per-instance variation (ADR-0098)
 
 void main() {
-    vec4 world = inModel * vec4(inPosition, 1.0);
+    const bool grass = (pc.surfaceFlags.y & (1u << 17)) != 0u;   // FLAG_GRASS
+    // Grass clumps carry their random rank in the transform's bottom row (GrassSystem); every
+    // other mesh's is (0, 0, 0, 1).
+    mat4 M = inModel;
+    float rank = 0.0;
+    if (grass) { rank = M[0][3]; M[0][3] = 0.0; }
+    vec4 world = M * vec4(inPosition, 1.0);
     vec3 normal = kPackedVertex ? octDecode(inNormal.xy) : inNormal.xyz;
     vec3 tangent = kPackedVertex ? octDecode(inTangent.xy) : inTangent.xyz;
 
     // Wind sway (FLAG_WIND = bit 2): displace in the wind direction, weighted by
     // height above the model's base (planted root, moving tips) and phase-offset
     // by world XZ so a field doesn't sway in unison. Ports lighting_entry.metal.
-    const bool grass = (pc.surfaceFlags.y & (1u << 17)) != 0u;   // FLAG_GRASS
     // Ground cover shrinks to nothing about its planted origin across the fade band, so the
-    // field thins away with distance instead of ending at a line.
+    // field thins away with distance instead of ending at a line; and across the thinning band
+    // (features[3]) the higher-ranked clumps shrink away first while the rest grow a little, so
+    // density falls CONTINUOUSLY and the sparse outer tiles (the survivors) swap in unseen.
     if (grass) {
-        vec3 origin = inModel[3].xyz;
-        float k = 1.0 - smoothstep(pc.morphStart, pc.morphEnd, distance(origin, g.cameraPosition.xyz));
+        vec3 origin = M[3].xyz;
+        float d = distance(origin, g.cameraPosition.xyz);
+        float k = 1.0 - smoothstep(pc.morphStart, pc.morphEnd, d);
+        vec4 thin = pc.features[3];
+        if (thin.y > thin.x) {
+            float t = smoothstep(thin.x, thin.y, d);
+            float keep = mix(1.0, thin.z, t);
+            k *= (1.0 - smoothstep(keep - 0.1, keep, rank)) * mix(1.0, thin.w, t);
+        }
         world.xyz = origin + (world.xyz - origin) * k;
     }
     if ((pc.surfaceFlags.y & 4u) != 0u) {
-        float baseY = inModel[3].y;
+        float baseY = M[3].y;
         // grass sways over its own half-metre height, not a tree's
         float swayHeight = grass ? 0.6 : g.wind2.y;
         float weight = clamp((world.y - baseY) / max(swayHeight, 0.001), 0.0, 1.0);
@@ -100,12 +114,12 @@ void main() {
     }
 
     outWorldPos = world.xyz;
-    outInstanceOrigin = inModel[3].xyz;
+    outInstanceOrigin = M[3].xyz;
     // Inverse-transpose so non-uniform scale keeps normals perpendicular.
-    mat3 normalMatrix = mat3(transpose(inverse(inModel)));
+    mat3 normalMatrix = mat3(transpose(inverse(M)));
     outWorldNormal = normalize(normalMatrix * normal);
     // Tangent in world space for normal mapping (matches Metal's model*tangent).
-    outWorldTangent = normalize((inModel * vec4(tangent, 0.0)).xyz);
+    outWorldTangent = normalize((M * vec4(tangent, 0.0)).xyz);
     outTexcoord = inTexcoord;
     outColor = inColor.rgb;
     gl_Position = g.viewProjection * world;

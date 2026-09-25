@@ -6378,6 +6378,9 @@ void VulkanRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
     f[6] = static_cast<float>(material.topColor.z); f[7] = material.topNoiseScale;
     f[8] = material.normalStrength; f[9] = f[10] = f[11] = 0.0f;
     f[12] = f[13] = f[14] = f[15] = 0.0f;
+    if (material.flags & RenderMaterial::FLAG_GRASS) {   // [3]: the grass's thinning band
+        f[12] = material.thinStart; f[13] = material.thinEnd; f[14] = material.keepFar; f[15] = material.growFar;
+    }
     item.push.albedoMetallic[0] = static_cast<float>(material.albedo.x);
     item.push.albedoMetallic[1] = static_cast<float>(material.albedo.y);
     item.push.albedoMetallic[2] = static_cast<float>(material.albedo.z);

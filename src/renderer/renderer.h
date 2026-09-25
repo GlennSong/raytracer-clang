@@ -124,6 +124,11 @@ struct RenderMaterial {
     // in the shadow map is noise and cost). Vulkan; Metal draws it unfaded, with shadows.
     static constexpr uint32_t FLAG_GRASS = 1u << 17;
     float fadeStart = 0.0f, fadeEnd = 0.0f;   // FLAG_GRASS only
+    // FLAG_GRASS: continuous thinning. Each clump carries a random RANK (its transform's bottom
+    // row, GrassSystem); across [thinStart, thinEnd] the clumps ranked above a falling threshold
+    // (to `keepFar`) shrink away and the rest grow toward `growFar` -- so the sparse outer ring,
+    // exactly the survivors of the dense inner one, swaps in with nothing left to pop.
+    float thinStart = 0.0f, thinEnd = 0.0f, keepFar = 1.0f, growFar = 1.0f;
     // MATERIAL FEATURES (ADR-0098): generic, any surface, each off at 0 (Vulkan; Metal owed).
     // Triplanar: the albedo and normal maps are sampled in WORLD space, one tile per
     // `triplanarScale` metres, on three axes blended by the normal -- no UVs needed, nothing
