@@ -8871,3 +8871,20 @@ Glenn then pointed at Josh's Channel, "Better Mountain Generators That Aren't Pe
 - hiking trails;
 - city planning with the forest;
 - exposing the tree generator to Lua (the procedural-language rule).
+
+## ADR-0130 — More species, an understory, grass layers (tall grass, reeds), leaf translucency
+
+**Context.** Glenn: "a variety of tree types, grass, reeds, tall grass and plant them where appropriate. Also rocks and clearings." Also: "Do the trees have normals? Could we get light cast?"
+
+**Decision.**
+- **Five more species** in `real_tree`: maple (palmate), aspen (pale bark, small round leaves), willow (drooping sprays, long narrow leaves), alder (dark, toothed) and shrub (many stems from the ground, a low crown).
+- **`ForestSpecies::wet`:** an affinity for the maps' drainage. Willow and alder stand along the streams.
+- **`understory`:** species placed in a second pass (`understorySpacing`, `understoryDensity`) under thin canopy, thickest at half-covered edges. Understory is drawn near only, with no impostors.
+- **`GrassSystem` drives every `GrassField`:** a tile key's layer is field × 2 + (1 for its cards). The level's `"grassLayers"` adds fields, each with a `"where"`:
+  - `tall`: drifts on open ground, thickest at forest edges (the canopy's c·(1 − c));
+  - `reeds`: the hydrology's shore band (`shoreBand`) and wet flat hollows from the maps.
+
+  Mesh keys carry the layer's tag.
+- **Leaf transmission:** alpha-cut cards in a LOD band get grass's backlit term, gated by the shadow map. A crown against the sun glows at its sunlit rim.
+
+**Consequences.** 1.07 M plants on island 8, placed in 3.7 s. The same 1.6 km walk ran p50 14.0 ms and p99 19.8 ms with no hitches. The forest interior reads darker than a real wood; ambient under a canopy is owed. A few trees stand in the lake margin: the placement uses the hydrology's wet test, and the drawn water extends past it.

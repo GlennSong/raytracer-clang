@@ -33,6 +33,8 @@ struct ForestSpecies {
     int variants = 4;
     double altLo = 0.0, altHi = 1e9;   // metres above the sea it prefers (soft edges)
     double weight = 1.0;
+    double wet = 0.0;                  // affinity for wet ground (the maps' drainage): 1 = willow, alder
+    bool understory = false;           // a bush under and around the canopy, in its own pass
 };
 
 struct ForestParams {
@@ -47,6 +49,8 @@ struct ForestParams {
     double nearM = 150.0;          // full models to here, crossfading over the last nearFadeM
     double nearFadeM = 40.0;
     double farM = 7000.0;          // impostors to here
+    double understorySpacing = 5.0;  // the understory pass's grid
+    double understoryDensity = 0.35; // its share where the canopy is, doubled along the edges
     uint32_t seed = 1;
 };
 

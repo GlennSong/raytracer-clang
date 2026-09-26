@@ -1032,6 +1032,21 @@ void main() {
         }
     }
 
+    // LEAF TRANSMISSION (ADR-0129): tree foliage -- alpha-cut cards in a LOD band -- lets the sun through
+    // as grass does, so a crown seen against the sun glows at its sunlit rim instead of going black.
+    // The shadow map already keeps it to the leaves the sun reaches (the crown's outside).
+    if ((pc.surfaceFlags.y & ((1u << 19) | 2u)) == ((1u << 19) | 2u)) {
+        for (int i = 0; i < min(g.counts.x, 32); ++i) {
+            if (int(g.lights[i].typeRange.x) != 1) continue;   // the sun
+            vec3 L = normalize(g.lights[i].directionInner.xyz);
+            float toward = pow(max(dot(-V, L), 0.0), 4.0);
+            vec3 transColor = albedo * vec3(1.7, 2.1, 0.9);
+            direct += transColor * g.lights[i].colorOuter.rgb * g.lights[i].positionIntensity.w
+                    * (0.06 + 0.75 * toward) * sunVis / PI;
+            break;
+        }
+    }
+
     // Image-based lighting from the procedural sky (analytic approximation of
     // Metal's baked irradiance + GGX-prefiltered split-sum; Phase 4b adds the
     // real cubemap bake + BRDF LUT, and HDR-equirect mode). g.ambient carries

@@ -1898,6 +1898,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     std::map<std::pair<int, int>, RenderMesh> farCells;
     for (const ForestTree& t : trees) {
         if (vars[t.variant].species < 0) continue;
+        if (fp.species[static_cast<std::size_t>(vars[t.variant].species)].understory) continue;   // bushes: near only
         RenderMesh& m = farCells[{static_cast<int>(std::floor(t.pos.x / fp.cellM)), static_cast<int>(std::floor(t.pos.z / fp.cellM))}];
         appendImpostor(m, t, vars[t.variant].slot, 1.0 / colourScale);
     }
@@ -4242,8 +4243,10 @@ bool LevelLoader::load(const std::string& path,
                 loadForest(root["terrain"]["forest"], tp, nz, world, renderer, assets, placeDilate, drawn);
             // THE GRASS FIELD (flora plan): not scattered here -- GrassSystem plants it around
             // the camera, from clump meshes and the ground and density rules set up here.
-            if (root.contains("grass") && root["grass"].is_object()) {
-                const json& gj = root["grass"];
+            // GRASS LAYERS (ADR-0130): "grass" is the meadow; "grassLayers" adds more fields, each with a
+            // "where": "meadow" (the cover's grass), "tall" (open ground in patches, thickest at forest
+            // edges and clearings), "reeds" (a band along the rivers and lake shores, and wet hollows)
+            auto plantGrass = [&](const json& gj, const std::string& tag) {
                 GrassField gf;
                 const double dilate = placeDilate;
                 gf.ground = drawn ? drawn
@@ -4260,14 +4263,34 @@ bool LevelLoader::load(const std::string& path,
                 const Noise patches(gj.value("seed", 1u) + 911u);
                 const std::shared_ptr<const GroundCover> cover = tp.cover;
                 const std::shared_ptr<const Hydrology> hydro = tp.hydro;
-                gf.density = [maxSlope, thin, sea, patchiness, patchScale, patches, cover, hydro](double x, double z, double y, double slopeCos) {
+                const std::string where = gj.value("where", std::string("meadow"));
+                const int kind = where == "tall" ? 1 : (where == "reeds" ? 2 : 0);
+                const double shore = gj.value("shoreBand", 6.0);
+                gf.density = [maxSlope, thin, sea, patchiness, patchScale, patches, cover, hydro, kind, shore](double x, double z, double y, double slopeCos) {
                     if (y < sea + 0.15) return 0.0;
                     if (hydro && hydro->isWet(x, z, 0.3)) return 0.0;   // not in the rivers and lakes
                     const double slope = std::acos(std::clamp(slopeCos, -1.0, 1.0));
+                    const TerrainMaps* maps = cover ? cover->params().maps.get() : nullptr;
+                    if (kind == 2) {   // REEDS: the shore band of fresh water, and wet flat hollows
+                        if (y < sea + 0.6 || slope > 0.2) return 0.0;
+                        double d = hydro && hydro->isWet(x, z, shore) ? 1.0 : 0.0;
+                        if (maps) d = std::max(d, std::clamp((maps->at(x, z).wet - 0.75) * 5.0, 0.0, 1.0) * (slope < 0.1 ? 1.0 : 0.0));
+                        if (d <= 0.0) return 0.0;
+                        return d * std::clamp(0.35 + patches.fbm2(x * 0.08, z * 0.08, 2) * 1.5, 0.0, 1.0);
+                    }
                     // With a ground-cover map the cover decides (grass stops at sand, rock and
                     // bare earth, raggedly); without one, the slope rule.
                     double d = cover ? cover->at(x, z, y, slopeCos).grass
                                      : std::clamp((maxSlope - slope) / thin, 0.0, 1.0);
+                    if (kind == 1) {   // TALL GRASS: in drifts on open ground, thickest along forest edges
+                        const double drift = std::clamp((patches.fbm2(x * 0.011 + 3.0, z * 0.011 - 5.0, 3) + 0.05) * 3.0, 0.0, 1.0);
+                        double edge = 0.0;
+                        if (cover && cover->params().forest) {
+                            const double c = forestCanopy(*cover->params().forest, sea, maps, x, z, y, slope * 57.2957795);
+                            edge = c * (1.0 - c) * 4.0;   // 1 at a half-covered edge, 0 in the open and deep inside
+                        }
+                        d *= std::max(drift, 0.9 * edge);
+                    }
                     if (patchiness > 0.0) {
                         const double n = patches.fbm2(x * patchScale, z * patchScale, 3);   // about -1..1
                         d *= std::clamp(1.0 - patchiness + n * 1.4, 0.0, 1.0);
@@ -4299,7 +4322,7 @@ bool LevelLoader::load(const std::string& path,
                                        cp.tipColor.z * (1.0 - tint * t));
                     vp.rootColor = cp.rootColor * (1.0 - 0.5 * tint * t);
                     gf.clumps.push_back(assets.acquireMesh(grassClump(gf.seed * 131u + static_cast<uint32_t>(v), vp),
-                                                           "grass:clump:" + std::to_string(v)));
+                                                           tag + ":clump:" + std::to_string(v)));
                 }
                 gf.spacing = gj.value("spacing", gf.spacing);
                 gf.nearRadius = gj.value("nearRadius", gf.nearRadius);
@@ -4316,7 +4339,7 @@ bool LevelLoader::load(const std::string& path,
                 // THE FAR FIELD: cards of baked blades beyond the clumps, growing in as they fade
                 if (gj.value("cards", true)) {
                     const TextureData ct = grassCardTexture(gf.seed * 7919u + 3u, cp);
-                    gf.card = assets.acquireMesh(grassCardMesh(cp), "grass:card");
+                    gf.card = assets.acquireMesh(grassCardMesh(cp), tag + ":card");
                     gf.cardSpacing = gj.value("cardSpacing", gf.cardSpacing);
                     gf.cardRadius = gj.value("cardRadius", gf.cardRadius);
                     gf.cardFadeIn = gj.value("cardFadeIn", gf.fadeStart - 6.0);
@@ -4332,7 +4355,11 @@ bool LevelLoader::load(const std::string& path,
                 }
                 const Entity ge = world.create();
                 world.add<GrassField>(ge, std::move(gf));
-            }
+            };
+            if (root.contains("grass") && root["grass"].is_object()) plantGrass(root["grass"], "grass");
+            if (root.contains("grassLayers") && root["grassLayers"].is_array())
+                for (std::size_t li = 0; li < root["grassLayers"].size(); ++li)
+                    if (root["grassLayers"][li].is_object()) plantGrass(root["grassLayers"][li], "grass" + std::to_string(li + 1));
         };
     }
 

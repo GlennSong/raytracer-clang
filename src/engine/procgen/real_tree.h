@@ -11,7 +11,8 @@
 //   conifers  spruce | fir: a straight leader, whorls of branches every half metre, drooping
 //             and upturned, crown a narrow cone; pine: a tall clear bole, a flat-topped crown of
 //             a few heavy limbs carrying needle tufts
-//   broadleaf oak | beech | birch: a trunk that forks into limbs, branches out to a crown SHELL
+//   broadleaf oak | beech | birch | maple | aspen | willow (hanging sprays) | alder | shrub (a
+//             multi-stemmed understory bush): a trunk that forks into limbs, branches out to a crown SHELL
 //             (points on an ellipsoid, the way real crowns carry their leaves outside), leaf
 //             clusters around every branch tip
 //
@@ -26,7 +27,7 @@
 
 namespace engine {
 
-enum class RealSpecies : uint8_t { Spruce = 0, Fir, Pine, Oak, Beech, Birch, Count };
+enum class RealSpecies : uint8_t { Spruce = 0, Fir, Pine, Oak, Beech, Birch, Maple, Aspen, Willow, Alder, Shrub, Count };
 bool realSpeciesFromName(const std::string& name, RealSpecies& out);
 const char* realSpeciesName(RealSpecies s);
 bool realSpeciesIsConifer(RealSpecies s);

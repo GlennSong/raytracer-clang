@@ -32,9 +32,9 @@ GrassSystem::Built buildTile(const GrassField& f, const GrassSystem::Key& key, i
     b.key = key;
     b.lod = lod;
     b.generation = generation;
-    const auto [layer, ix, iz] = key;
+    const auto [layer, ix, iz] = key;   // layer = field * 2 + (1: its cards)
     const bool cards = lod == 2;
-    const double T = layer == 1 ? f.cardTile : f.tile;
+    const double T = (layer & 1) ? f.cardTile : f.tile;
     const std::size_t nv = cards ? 1 : f.clumps.size();
     b.perVariant.resize(nv);
     const double x0 = ix * T, z0 = iz * T;
@@ -92,19 +92,21 @@ void GrassSystem::drop(World& world, Tile& t) {
 }
 
 void GrassSystem::update(FrameContext& ctx) {
-    GrassField* field = nullptr;
-    ctx.world.each<GrassField>([&](Entity, GrassField& f) { if (!field) field = &f; });
-    if (!field || field->clumps.empty() || !field->ground) return;
-    const GrassField& f = *field;
+    // SEVERAL FIELDS (ADR-0130: meadow grass, tall grass, reeds...): each keeps its own tiles, the
+    // tile key's layer being field * 2 + (1 for its cards)
+    std::vector<GrassField*> fields;
+    ctx.world.each<GrassField>([&](Entity, GrassField& f) { if (!f.clumps.empty() && f.ground) fields.push_back(&f); });
+    if (fields.empty()) return;
     const Vec3 cam = ctx.view.camera.position;
-    const bool haveCards = f.card.valid();
     // the layers: tile size, and the band of distances a tile must reach into to be wanted
-    struct Layer { double T, inner, reach; };
-    const Layer layers[2] = {
-        {f.tile, -1.0, f.radius + f.tile},                           // clumps; built a tile ahead
-        {f.cardTile, f.cardFadeIn - 2.0, f.cardRadius + f.cardTile},   // cards
-    };
-    const int nLayers = haveCards ? 2 : 1;
+    struct Layer { double T, inner, reach; bool on; };
+    std::vector<Layer> layers;
+    for (const GrassField* fp : fields) {
+        layers.push_back({fp->tile, -1.0, fp->radius + fp->tile, true});                                   // clumps; a tile ahead
+        layers.push_back({fp->cardTile, fp->cardFadeIn - 2.0, fp->cardRadius + fp->cardTile, fp->card.valid()});   // cards
+    }
+    const int nLayers = static_cast<int>(layers.size());
+    auto fieldOf = [&](int layer) -> const GrassField& { return *fields[static_cast<std::size_t>(layer / 2)]; };
     auto dists = [&](const Key& k, double& nearest, double& farthest) {   // XZ, camera to the tile's square
         const auto [layer, ix, iz] = k;
         const double T = layers[layer].T, x0 = ix * T, z0 = iz * T;
@@ -116,7 +118,7 @@ void GrassSystem::update(FrameContext& ctx) {
         farthest = std::sqrt(fx * fx + fz * fz);
     };
     auto nearestOf = [&](const Key& k) { double n, fa; dists(k, n, fa); return n; };
-    auto ringOf = [&](int layer, double d) { return layer == 1 ? 2 : (d < f.nearRadius ? 0 : 1); };
+    auto ringOf = [&](int layer, double d) { return (layer & 1) ? 2 : (d < fieldOf(layer).nearRadius ? 0 : 1); };
 
     // 1. COMMIT what the jobs finished (dropping results for tiles that left, or from before a stop)
     std::vector<Built> done;
@@ -135,6 +137,8 @@ void GrassSystem::update(FrameContext& ctx) {
             later.push_back(std::move(b));   // next frame
             continue;
         }
+        if (std::get<0>(b.key) >= nLayers) continue;   // a field that went away
+        const GrassField& f = fieldOf(std::get<0>(b.key));
         Tile& tile = it->second;
         drop(ctx.world, tile);   // the old ring's instances go only now, as the new ones arrive
         tile.lod = b.lod;
@@ -175,10 +179,10 @@ void GrassSystem::update(FrameContext& ctx) {
     // 2. DROP what left its layer's band (a little hysteresis)
     for (auto it = tiles_.begin(); it != tiles_.end();) {
         const int layer = std::get<0>(it->first);
-        double n, fa;
-        dists(it->first, n, fa);
-        const Layer& L = layers[layer];
-        if (layer >= nLayers || n > L.reach + L.T * 0.5 || fa < L.inner - L.T * 0.5) {
+        double n = 0, fa = 0;
+        if (layer < nLayers) dists(it->first, n, fa);
+        if (layer >= nLayers || !layers[layer].on || n > layers[layer].reach + layers[layer].T * 0.5 ||
+            fa < layers[layer].inner - layers[layer].T * 0.5) {
             drop(ctx.world, it->second);
             it = tiles_.erase(it);
         } else ++it;
@@ -188,6 +192,7 @@ void GrassSystem::update(FrameContext& ctx) {
     std::vector<std::pair<double, std::pair<Key, int>>> want;   // distance, (tile, ring)
     for (int layer = 0; layer < nLayers; ++layer) {
         const Layer& L = layers[layer];
+        if (!L.on) continue;
         const int i0 = static_cast<int>(std::floor((cam.x - L.reach) / L.T)), i1 = static_cast<int>(std::floor((cam.x + L.reach) / L.T));
         const int k0 = static_cast<int>(std::floor((cam.z - L.reach) / L.T)), k1 = static_cast<int>(std::floor((cam.z + L.reach) / L.T));
         for (int iz = k0; iz <= k1; ++iz)
@@ -205,9 +210,8 @@ void GrassSystem::update(FrameContext& ctx) {
     std::sort(want.begin(), want.end());
     if (first_) {   // the first frame: everything, here and now (in parallel)
         std::vector<Built> built(want.size());
-        const GrassField& fieldCopy = f;
         ctx.jobs.parallelFor(0, want.size(), [&](std::size_t k) {
-            built[k] = buildTile(fieldCopy, want[k].second.first, want[k].second.second, generation_);
+            built[k] = buildTile(fieldOf(std::get<0>(want[k].second.first)), want[k].second.first, want[k].second.second, generation_);
         });
         {
             std::lock_guard<std::mutex> lock(inbox_->m);
@@ -223,14 +227,15 @@ void GrassSystem::update(FrameContext& ctx) {
         commitAll_ = false;
         return;
     }
-    std::shared_ptr<GrassField> fieldCopy;   // the jobs' own: the field may be replaced meanwhile
+    std::vector<std::shared_ptr<GrassField>> copies(fields.size());   // the jobs' own: a field may be replaced meanwhile
     for (const auto& [d, what] : want) {
         if (inFlight_ >= kMaxInFlight) break;
         const auto& [key, ring] = what;
         Tile& tile = tiles_[key];
         tile.building = ring;
         ++inFlight_;
-        if (!fieldCopy) fieldCopy = std::make_shared<GrassField>(f);
+        std::shared_ptr<GrassField>& fieldCopy = copies[static_cast<std::size_t>(std::get<0>(key) / 2)];
+        if (!fieldCopy) fieldCopy = std::make_shared<GrassField>(fieldOf(std::get<0>(key)));
         ctx.jobs.run([inbox = inbox_, fieldCopy, key = key, lod = ring, gen = generation_] {
             Built b = buildTile(*fieldCopy, key, lod, gen);
             std::lock_guard<std::mutex> lock(inbox->m);

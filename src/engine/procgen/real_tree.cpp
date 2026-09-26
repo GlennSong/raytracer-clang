@@ -15,7 +15,7 @@ namespace {
 constexpr double kPi = 3.14159265358979;
 
 // ---- names -----------------------------------------------------------------------------------
-const char* const kNames[] = {"spruce", "fir", "pine", "oak", "beech", "birch"};
+const char* const kNames[] = {"spruce", "fir", "pine", "oak", "beech", "birch", "maple", "aspen", "willow", "alder", "shrub"};
 
 double smooth01(double a, double b, double x) {
     const double t = std::clamp((x - a) / (b - a), 0.0, 1.0);
@@ -98,6 +98,31 @@ Species speciesOf(RealSpecies s) {
             p = {16, 25, {0.24, 0.24, 0.22}, {0.26, 0.26, 0.24}, {0.058, 0.095, 0.022},
                  0, 0, 0, 0, 0, 0, 0, 0, 0,
                  0.38, 0.64, 0.34, 0.35, 42, 66, 1.5, 4, 140, 6, true, 0};
+            break;
+        case RealSpecies::Maple:
+            p = {12, 20, {0.14, 0.12, 0.10}, {0.15, 0.13, 0.11}, {0.055, 0.092, 0.022},
+                 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0.28, 0.60, 0.44, 0.38, 30, 58, 1.5, 5, 150, 6, false, 0};
+            break;
+        case RealSpecies::Aspen:
+            p = {14, 22, {0.52, 0.56, 0.48}, {0.58, 0.61, 0.53}, {0.075, 0.118, 0.035},
+                 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0.50, 0.72, 0.18, 0.26, 55, 75, 1.0, 6, 90, 5, true, 0.1};
+            break;
+        case RealSpecies::Willow:
+            p = {9, 15, {0.14, 0.12, 0.09}, {0.15, 0.13, 0.10}, {0.080, 0.110, 0.040},
+                 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0.25, 0.56, 0.55, 0.42, 35, 60, 1.9, 6, 130, 7, false, 1.3};
+            break;
+        case RealSpecies::Alder:
+            p = {12, 20, {0.18, 0.17, 0.15}, {0.19, 0.18, 0.16}, {0.034, 0.064, 0.020},
+                 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0.35, 0.62, 0.28, 0.36, 40, 65, 1.3, 5, 120, 6, true, 0};
+            break;
+        case RealSpecies::Shrub:
+            p = {2.2, 4.5, {0.13, 0.11, 0.09}, {0.14, 0.12, 0.10}, {0.050, 0.085, 0.025},
+                 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0.03, 0.55, 0.55, 0.45, 45, 75, 0.9, 5, 50, 5, false, 0};
             break;
         case RealSpecies::Birch:
         default:
@@ -219,10 +244,11 @@ void shellCrown(RealTree& t, RealSpecies s, ProcRng& r, double h) {
     const double forkY = h * sp.forkFrac * r.in(0.9, 1.1);
     const Vec3 C(r.in(-0.3, 0.3), h * sp.centreFrac, r.in(-0.3, 0.3));
     const double R = h * sp.rFrac * r.in(0.88, 1.12), Ry = h * sp.ryFrac * r.in(0.9, 1.1);
-    const double r0 = h * (s == RealSpecies::Birch ? 0.013 : 0.02);
+    const double r0 = h * (s == RealSpecies::Birch || s == RealSpecies::Aspen ? 0.013 : (s == RealSpecies::Shrub ? 0.018 : 0.02));
     std::vector<Vec3> axis;
     // the trunk runs on up into the crown (a stem that forks once at one point reads as a candelabra)
-    trunk(t.bark, r, h, sp.leader ? C.y + 0.6 * Ry : C.y + 0.3 * Ry, r0, sp, s == RealSpecies::Birch, &axis);
+    const bool bush = s == RealSpecies::Shrub;   // many stems from the ground, no trunk
+    trunk(t.bark, r, h, bush ? 0.12 * h : (sp.leader ? C.y + 0.6 * Ry : C.y + 0.3 * Ry), r0, sp, s == RealSpecies::Birch, &axis);
     t.height = std::max(h, C.y + Ry); t.crownRadius = R; t.crownBase = C.y - Ry; t.trunkRadius = r0 * 1.45;
     const Vec3 up(0, 1, 0);
     const Vec3 F = axisAt(axis, forkY);
@@ -245,7 +271,8 @@ void shellCrown(RealTree& t, RealSpecies s, ProcRng& r, double h) {
         const bool lead = sp.leader && m == 0;
         // STAGGERED up the stem, lowest limbs first, spreading widest
         const double f = M > 1 ? double(m) / (M - 1) : 0.0;
-        const Vec3 Fm = lead ? F : axisAt(axis, forkY + (C.y - forkY) * (0.05 + 0.75 * f) + r.in(-0.4, 0.4));
+        const Vec3 Fm = lead || bush ? F + (bush ? Vec3(r.in(-0.15, 0.15), 0.0, r.in(-0.15, 0.15)) : Vec3(0, 0, 0))
+                                     : axisAt(axis, forkY + (C.y - forkY) * (0.05 + 0.75 * f) + r.in(-0.4, 0.4));
         limbBase[m] = Fm;
         const double el = (lead ? r.in(78, 88) : r.in(sp.elevLo, sp.elevHi) + 18.0 * f) * kPi / 180.0;
         const double az = az0 + m * 2 * kPi / M + r.in(-0.35, 0.35);
@@ -395,26 +422,39 @@ void paintTile(Canvas& cv, RealSpecies s, ProcRng& r, int tx, int ty) {
     cv.stroke(X(0.5), Y(0.02), X(0.5), Y(0.35), 2.5 * pw, 0.5f);
     struct Leaf { double x, y, ang, len, wid; float lum; };
     std::vector<Leaf> leaves;
-    const double sizeK = s == RealSpecies::Birch ? 0.75 : (s == RealSpecies::Oak ? 1.0 : 0.95);
+    const double sizeK = s == RealSpecies::Birch || s == RealSpecies::Aspen ? 0.75 : (s == RealSpecies::Willow ? 1.25 : (s == RealSpecies::Oak || s == RealSpecies::Maple ? 1.0 : 0.95));
+    const bool hanging = s == RealSpecies::Birch || s == RealSpecies::Willow;
     for (int f = 0; f < forks; ++f) {
         const double ang = kPi * 0.5 + (f - (forks - 1) * 0.5) * r.in(0.35, 0.55);
         const double len = r.in(0.4, 0.58);
-        const double ex = 0.5 + len * std::cos(ang), ey = 0.35 + len * std::sin(ang) * (s == RealSpecies::Birch ? 0.8 : 1.0);
+        const double ex = 0.5 + len * std::cos(ang), ey = 0.35 + len * std::sin(ang) * (hanging ? 0.8 : 1.0);
         cv.stroke(X(0.5), Y(0.35), X(ex), Y(ey), 1.6 * pw, 0.5f);
-        const int nl = static_cast<int>((s == RealSpecies::Birch ? 7 : 6) + r.below(4));
+        const int nl = static_cast<int>((s == RealSpecies::Willow ? 11 : (hanging ? 7 : 6)) + r.below(4));
         for (int k = 0; k < nl; ++k) {
             const double f2 = 0.2 + 0.8 * (k + r.next()) / nl;
             const double px = 0.5 + (ex - 0.5) * f2, py = 0.35 + (ey - 0.35) * f2;
-            const double la = ang + (k % 2 ? 1 : -1) * r.in(0.5, 1.1) + (s == RealSpecies::Birch ? -0.4 : 0.0);
+            const double la = ang + (k % 2 ? 1 : -1) * r.in(0.5, 1.1) + (hanging ? -0.4 : 0.0);
             const double L = r.in(0.13, 0.19) * sizeK;
-            leaves.push_back({px + 0.5 * L * std::cos(la), py + 0.5 * L * std::sin(la), la, L, L * (s == RealSpecies::Oak ? 0.55 : (s == RealSpecies::Birch ? 0.7 : 0.58)),
+            double ratio = 0.58;   // width / length of the leaf
+            switch (s) {
+                case RealSpecies::Oak: ratio = 0.55; break;
+                case RealSpecies::Birch: ratio = 0.7; break;
+                case RealSpecies::Maple: ratio = 0.95; break;
+                case RealSpecies::Aspen: ratio = 0.9; break;
+                case RealSpecies::Willow: ratio = 0.16; break;
+                case RealSpecies::Alder: ratio = 0.8; break;
+                case RealSpecies::Shrub: ratio = 0.78; break;
+                default: break;
+            }
+            leaves.push_back({px + 0.5 * L * std::cos(la), py + 0.5 * L * std::sin(la), la, L, L * ratio,
                               static_cast<float>(r.in(0.7, 1.0))});
         }
     }
     // back to front by brightness: darker leaves first (they read as the ones behind)
     std::sort(leaves.begin(), leaves.end(), [](const Leaf& a, const Leaf& b) { return a.lum < b.lum; });
     for (const Leaf& L : leaves)
-        cv.leaf(X(L.x), Y(L.y), L.ang, L.len * s0, L.wid * s0, s == RealSpecies::Oak ? 3 : 0, s == RealSpecies::Beech ? 0.05 : (s == RealSpecies::Birch ? 0.08 : 0.0), L.lum);
+        cv.leaf(X(L.x), Y(L.y), L.ang, L.len * s0, L.wid * s0, s == RealSpecies::Oak ? 3 : (s == RealSpecies::Maple ? 2 : 0),
+                s == RealSpecies::Beech ? 0.05 : (s == RealSpecies::Birch || s == RealSpecies::Alder || s == RealSpecies::Shrub ? 0.08 : 0.0), L.lum);
 }
 
 // fill the RGB under transparent texels from covered neighbours (mips then average the right colour)
@@ -443,7 +483,7 @@ bool realSpeciesFromName(const std::string& name, RealSpecies& out) {
         if (name == kNames[i]) { out = static_cast<RealSpecies>(i); return true; }
     return false;
 }
-const char* realSpeciesName(RealSpecies s) { return kNames[std::min<int>(static_cast<int>(s), 5)]; }
+const char* realSpeciesName(RealSpecies s) { return kNames[std::min<int>(static_cast<int>(s), static_cast<int>(RealSpecies::Count) - 1)]; }
 bool realSpeciesIsConifer(RealSpecies s) { return s == RealSpecies::Spruce || s == RealSpecies::Fir || s == RealSpecies::Pine; }
 
 RealTree realTree(RealSpecies species, uint32_t seed, double height) {

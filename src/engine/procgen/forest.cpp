@@ -36,6 +36,8 @@ ForestParams forestFromJson(const nlohmann::json& j) {
     p.nearFadeM = j.value("nearFade", p.nearFadeM);
     p.farM = j.value("far", p.farM);
     p.seed = j.value("seed", p.seed);
+    p.understorySpacing = j.value("understorySpacing", p.understorySpacing);
+    p.understoryDensity = j.value("understoryDensity", p.understoryDensity);
     if (j.contains("species") && j["species"].is_array())
         for (const auto& s : j["species"]) {
             ForestSpecies fs;
@@ -44,6 +46,8 @@ ForestParams forestFromJson(const nlohmann::json& j) {
             fs.altLo = s.value("altLo", fs.altLo);
             fs.altHi = s.value("altHi", fs.altHi);
             fs.weight = s.value("weight", fs.weight);
+            fs.wet = s.value("wet", fs.wet);
+            fs.understory = s.value("understory", fs.understory);
             p.species.push_back(fs);
         }
     return p;
@@ -102,55 +106,70 @@ std::vector<ForestTree> placeForest(const ForestParams& p, double half, double s
                                     const std::function<bool(double, double)>& exclude, int vps) {
     std::vector<ForestTree> out;
     if (p.species.empty()) return out;
-    const int n = static_cast<int>(std::ceil(2.0 * half / p.spacing));
     const int T = std::max(1u, std::min(32u, std::thread::hardware_concurrency()));
-    std::vector<std::vector<ForestTree>> parts(T);
-    std::vector<std::thread> th;
     const Noise sn(p.seed * 7919u + 13u);
-    for (int t = 0; t < T; ++t)
-        th.emplace_back([&, t] {
-            for (int j = t; j < n; j += T)
-                for (int i = 0; i < n; ++i) {
-                    const uint32_t h = static_cast<uint32_t>(i) * 73856093u ^ static_cast<uint32_t>(j) * 19349663u ^ p.seed * 83492791u;
-                    const double x = -half + (i + 0.1 + 0.8 * unit(h)) * p.spacing, z = -half + (j + 0.1 + 0.8 * unit(h ^ 0xA5A5u)) * p.spacing;
-                    // the cheap part first: most of the island is rejected before a ground sample
-                    const double roll = unit(h ^ 0x51ED27u);
-                    const double pre = forestPrefilter(p, maps, x, z);
-                    if (roll >= pre) continue;
-                    const double y = ground(x, z);
-                    const double e = 1.5;
-                    const double gx = (ground(x + e, z) - ground(x - e, z)) / (2 * e), gz = (ground(x, z + e) - ground(x, z - e)) / (2 * e);
-                    const double slope = std::atan(std::sqrt(gx * gx + gz * gz)) * 180.0 / 3.14159265358979;
-                    const double d = pre * forestGrounded(p, sea, cover, x, z, y, slope);
-                    if (roll >= d) continue;
-                    if (exclude && exclude(x, z)) continue;
-                    // the species: its altitude band (soft), its weight, and a patchy field of its own
-                    const double alt = y - (sea > -1e29 ? sea : 0.0);
-                    int best = -1;
-                    double bw = -1e9;
-                    for (std::size_t s = 0; s < p.species.size(); ++s) {
-                        const ForestSpecies& fs = p.species[s];
-                        const double band = smooth(fs.altLo - 60.0, fs.altLo + 20.0, alt) * (1.0 - smooth(fs.altHi - 20.0, fs.altHi + 60.0, alt));
-                        if (band <= 0.0) continue;
-                        const double patch = sn.fbm2(x * 0.004 + 17.0 * s, z * 0.004 - 11.0 * s, 3);
-                        const double w = std::log(band * fs.weight + 1e-6) + 1.6 * patch + 0.35 * unit(h ^ (0x1234u + s));
-                        if (w > bw) { bw = w; best = static_cast<int>(s); }
+    bool anyUnder = false;
+    for (const ForestSpecies& fs : p.species) anyUnder = anyUnder || fs.understory;
+    // TWO PASSES over jittered grids: the canopy at the stand's spacing, then the understory (bushes
+    // under thin canopy and thickest along the edges), each choosing among its own species
+    for (int pass = 0; pass < (anyUnder ? 2 : 1); ++pass) {
+        const bool under = pass == 1;
+        const double spacing = under ? p.understorySpacing : p.spacing;
+        const uint32_t salt = under ? 0x5EED5u : 0u;
+        const int n = static_cast<int>(std::ceil(2.0 * half / spacing));
+        std::vector<std::vector<ForestTree>> parts(T);
+        std::vector<std::thread> th;
+        for (int t = 0; t < T; ++t)
+            th.emplace_back([&, t] {
+                for (int j = t; j < n; j += T)
+                    for (int i = 0; i < n; ++i) {
+                        const uint32_t h = (static_cast<uint32_t>(i) * 73856093u ^ static_cast<uint32_t>(j) * 19349663u ^ p.seed * 83492791u) + salt;
+                        const double x = -half + (i + 0.1 + 0.8 * unit(h)) * spacing, z = -half + (j + 0.1 + 0.8 * unit(h ^ 0xA5A5u)) * spacing;
+                        // the cheap part first: most of the island is rejected before a ground sample
+                        const double roll = unit(h ^ 0x51ED27u);
+                        const double pre = forestPrefilter(p, maps, x, z);
+                        // the understory takes a share of the canopy's density, most at a half-covered edge
+                        auto keep = [&](double d) { return under ? p.understoryDensity * (0.35 + 1.3 * 4.0 * d * (1.0 - d)) * (d > 0.05 ? 1.0 : 0.0) : d; };
+                        if (roll >= keep(pre) && (!under || pre <= 0.0)) continue;
+                        const double y = ground(x, z);
+                        const double e = 1.5;
+                        const double gx = (ground(x + e, z) - ground(x - e, z)) / (2 * e), gz = (ground(x, z + e) - ground(x, z - e)) / (2 * e);
+                        const double slope = std::atan(std::sqrt(gx * gx + gz * gz)) * 180.0 / 3.14159265358979;
+                        const double d = pre * forestGrounded(p, sea, cover, x, z, y, slope);
+                        if (roll >= keep(d)) continue;
+                        if (exclude && exclude(x, z)) continue;
+                        // the species: its altitude band (soft), its weight, its taste for wet ground, and a
+                        // patchy field of its own (stands, not a salad)
+                        const double alt = y - (sea > -1e29 ? sea : 0.0);
+                        const double wet = maps ? maps->at(x, z).wet : 0.0;
+                        int best = -1;
+                        double bw = -1e9;
+                        for (std::size_t s = 0; s < p.species.size(); ++s) {
+                            const ForestSpecies& fs = p.species[s];
+                            if (fs.understory != under) continue;
+                            const double band = smooth(fs.altLo - 60.0, fs.altLo + 20.0, alt) * (1.0 - smooth(fs.altHi - 20.0, fs.altHi + 60.0, alt));
+                            if (band <= 0.0) continue;
+                            const double wetK = 1.0 + fs.wet * ((0.03 + smooth(0.45, 0.8, wet)) * 4.0 - 1.0);
+                            const double patch = sn.fbm2(x * 0.004 + 17.0 * s, z * 0.004 - 11.0 * s, 3);
+                            const double w = std::log(band * fs.weight * wetK + 1e-6) + 1.6 * patch + 0.35 * unit(h ^ (0x1234u + static_cast<uint32_t>(s)));
+                            if (w > bw) { bw = w; best = static_cast<int>(s); }
+                        }
+                        if (best < 0) continue;
+                        const ForestSpecies& fs = p.species[best];
+                        ForestTree tr;
+                        tr.pos = Vec3(x, y, z);
+                        tr.yaw = static_cast<float>(unit(h ^ 0x77u) * 6.2831853);
+                        // stunted toward the treeline and at a stand's thin edge
+                        const double tl = p.treelineM;
+                        const double stunt = 1.0 - 0.5 * smooth(tl - 220.0, tl, alt);
+                        tr.scale = static_cast<float>((0.72 + 0.5 * unit(h ^ 0x99u)) * stunt * (0.8 + 0.2 * d));
+                        tr.variant = static_cast<uint16_t>(best * vps + static_cast<int>(unit(h ^ 0x3131u) * fs.variants) % fs.variants);
+                        parts[t].push_back(tr);
                     }
-                    if (best < 0) continue;
-                    const ForestSpecies& fs = p.species[best];
-                    ForestTree tr;
-                    tr.pos = Vec3(x, y, z);
-                    tr.yaw = static_cast<float>(unit(h ^ 0x77u) * 6.2831853);
-                    // stunted toward the treeline and at a stand's thin edge
-                    const double tl = p.treelineM;
-                    const double stunt = 1.0 - 0.5 * smooth(tl - 220.0, tl, alt);
-                    tr.scale = static_cast<float>((0.72 + 0.5 * unit(h ^ 0x99u)) * stunt * (0.8 + 0.2 * d));
-                    tr.variant = static_cast<uint16_t>(best * vps + static_cast<int>(unit(h ^ 0x3131u) * fs.variants) % fs.variants);
-                    parts[t].push_back(tr);
-                }
-        });
-    for (auto& x : th) x.join();
-    for (auto& v : parts) out.insert(out.end(), v.begin(), v.end());
+            });
+        for (auto& x : th) x.join();
+        for (auto& v : parts) out.insert(out.end(), v.begin(), v.end());
+    }
     return out;
 }
 
