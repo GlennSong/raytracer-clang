@@ -17,7 +17,7 @@ namespace engine {
 
 namespace {
 // bump when the pipeline's output changes for the same inputs: every weathered cache rebakes
-constexpr const char* kWeatherCodeTag = "2026-09-26.8";   // .2: massifs, peakier uplift; .3: peaks; .4: plains keep the original; .5: crags; .6: pointed summits, sharper crags; .7: refine; .8: the drain masked by height
+constexpr const char* kWeatherCodeTag = "2026-09-26.9";   // .2: massifs, peakier uplift; .3: peaks; .4: plains keep the original; .5: crags; .6: pointed summits, sharper crags; .7: refine; .8: the drain masked by height; .9: no detail on the plains
 // rows [0, n) in parallel (the refinement's per-cell passes over 16 M cells)
 template <class F>
 void parallelRows(int n, F&& f) {
@@ -91,7 +91,10 @@ Heightmap refineGrown(const Heightmap& grown, float base0, float sea, const Weat
                     const double gz = (src[static_cast<std::size_t>(zb) * n + x] - src[static_cast<std::size_t>(za) * n + x]) / ((zb - za) * cell);
                     const double damp = 1.0 / (1.0 + w.refineSlopeDamp * (gx * gx + gz * gz));
                     const double up = std::clamp((h - base0 - w.plainHeightM) / (2.0 * w.reliefRampM), 0.0, 1.0);
-                    const double m = 0.25 + 0.75 * up * up * (3.0 - 2.0 * up);   // hills get a quarter of it
+                    // none on the plains (flat alluvium: where the cities stand), a quarter on the low hills,
+                    // all of it in the mountains -- a floor of a quarter everywhere rolled the plains into
+                    // hills steeper than the city planner's buildable limit, and it found no sites at all
+                    const double m = 0.25 * std::clamp(up / 0.3, 0.0, 1.0) + 0.75 * up * up * (3.0 - 2.0 * up);
                     const double wx = x * cell, wz = z * cell, f = 1.0 / lambda;
                     const double qx = wx * f + 0.6 * dn.noise2(wx * f * 0.5 + 7.1 + level, wz * f * 0.5), qz = wz * f + 0.6 * dn.noise2(wx * f * 0.5, wz * f * 0.5 - 3.9 - level);
                     // half ridged (crests), half plain gradient noise (knolls, hollows)

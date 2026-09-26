@@ -1,4 +1,5 @@
 #include "island_world.h"
+#include "../../../log.h"
 
 #include "../noise.h"
 #include "../terrain.h"
@@ -601,9 +602,20 @@ void routeFreewayRoundCities(IslandWorld& w, const std::vector<std::pair<int, st
         in = in.length() > 1e-9 ? in * (1.0 / in.length()) : Vec2(0, 0);
         Vec2 q = pick;
         for (double t = 80.0; t <= 600.0 && blocked(q.x, q.y); t += 40.0) q = pick + in * t;
+        // still in the water or the city's margin (a town on a point, a lake behind it): the nearest open
+        // ground in rings round the pick -- an end in the water left the whole leg unrouted
+        for (double r = 60.0; r <= 1500.0 && blocked(q.x, q.y); r += 40.0)
+            for (int a = 0; a < 32; ++a) {
+                const double ang = a * 3.14159265358979 / 16.0;
+                const Vec2 c = pick + Vec2(std::cos(ang), std::sin(ang)) * r;
+                if (!blocked(c.x, c.y)) { q = c; break; }
+            }
         via[static_cast<std::size_t>(site)] = q;
     }
-    const HeightField ground = [&w](double x, double z) { return w.heightAt(x, z); };
+    // the freeway routes on the SMOOTHED ground (as the mountain roads do): it bridges and cuts the small
+    // gullies the weathered foothills are full of, which at 30 m cells read as 30 %+ grades and walled
+    // the north coast's leg in (ADR-0132)
+    const HeightField ground = [&w](double x, double z) { return w.smoothAt(x, z); };
     auto reroute = [&](IslandRoad& rd, const Vec2& from, const Vec2& to, TerrainRouteParams rp) {
         rp.blocked = blocked;
         const TerrainRoute tr = routeOnTerrain(ground, from, to, rp);
@@ -616,7 +628,20 @@ void routeFreewayRoundCities(IslandWorld& w, const std::vector<std::pair<int, st
     int unrouted = 0;
     for (IslandRoad& rd : w.roads) {
         if (rd.kind != "freeway" || rd.from < 0 || rd.to < 0) continue;
-        if (!reroute(rd, via[static_cast<std::size_t>(rd.from)], via[static_cast<std::size_t>(rd.to)], freewayRouteParams())) ++unrouted;
+        // the search box widened step by step: the way round a town on a point can run well outside the
+        // two ends' bounds (the north coast's leg needed ~4 km)
+        bool ok = false;
+        for (double margin : {1400.0, 2800.0, 4500.0}) {
+            TerrainRouteParams rp = freewayRouteParams();
+            rp.margin = margin;
+            if ((ok = reroute(rd, via[static_cast<std::size_t>(rd.from)], via[static_cast<std::size_t>(rd.to)], rp))) break;
+        }
+        if (!ok) {
+            ++unrouted;
+            const Vec2 a = via[static_cast<std::size_t>(rd.from)], b = via[static_cast<std::size_t>(rd.to)];
+            LOG_WARN << "[island] freeway " << w.sites[static_cast<std::size_t>(rd.from)].name << " -> " << w.sites[static_cast<std::size_t>(rd.to)].name
+                     << " unrouted (" << a.x << ", " << a.y << " -> " << b.x << ", " << b.y << ")";
+        }
         fwLen += rd.length;
     }
     // the other roads stop at the limits they reach (their own end's city)

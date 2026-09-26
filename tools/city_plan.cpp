@@ -44,7 +44,7 @@ static int usage() {
                  "       city_plan brief\n"
                  "       city_plan level-world BRIEF.json      the level's terrain + water blocks that match the brief's world, and its towns' hubs\n"
                  "       city_plan island SEED OUT_DIR [--variants N]   island worlds on the map: terrain, sites, ring freeway (ADR-0105)\n"
-                 "       city_plan island-cities SEED OUT_DIR [--png] [--view X Z HALF NAME]...   that island's cities and towns planned on its land, mapped, and extra close-ups (ADR-0106)\n"
+                 "       city_plan island-cities SEED OUT_DIR [--terrain LEVEL.json] [--png] [--view X Z HALF NAME]...   that island's cities and towns planned on its land, mapped, and extra close-ups (ADR-0106)\n"
                  "       city_plan rivers BRIEF.json [STEP]         the rivers its world's hydrology makes, plan coordinates\n"
                  "       city_plan heights BRIEF.json [HALF STEP]   the brief's ground on a grid, plan coordinates (for placing mountain roads)\n");
     return 2;
@@ -96,7 +96,16 @@ int main(int argc, char** argv) {
         const uint32_t seed = static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10));
         const std::string outDir = argv[3];
         std::filesystem::create_directories(outDir);
-        const nlohmann::json block = engine::islandTerrainBlock(seed);
+        // --terrain LEVEL.json (ADR-0132): plan on THAT level's ground -- the weathered island, its rivers,
+        // its forest and ground cover -- instead of the seed's generated one; its grass fields come along
+        nlohmann::json natureLevel;
+        for (int a = 4; a + 1 < argc; ++a)
+            if (std::string(argv[a]) == "--terrain") {
+                std::ifstream in(argv[a + 1]);
+                if (in) in >> natureLevel;
+                if (!natureLevel.contains("terrain")) { std::fprintf(stderr, "--terrain %s: no terrain block\n", argv[a + 1]); return 1; }
+            }
+        const nlohmann::json block = natureLevel.contains("terrain") ? natureLevel["terrain"] : engine::islandTerrainBlock(seed);
         engine::IslandWorld w = engine::planIsland(block);
         struct Drawn { std::string name; engine::Vec2 at; double half; };
         std::vector<Drawn> sites;
@@ -287,8 +296,12 @@ int main(int argc, char** argv) {
             nlohmann::json terrain = w.terrain;
             terrain["cdlod"] = {{"worldHalf", w.half}, {"baked", true}};
             if (level.contains("terrain") && level["terrain"].contains("material")) terrain["material"] = level["terrain"]["material"];
-            if (level.contains("terrain") && level["terrain"].contains("groundCover")) terrain["groundCover"] = level["terrain"]["groundCover"];
+            if (!natureLevel.contains("terrain") && level.contains("terrain") && level["terrain"].contains("groundCover"))
+                terrain["groundCover"] = level["terrain"]["groundCover"];   // (a nature level's own cover stays)
             level["terrain"] = terrain;
+            // the nature level's fields and light (ADR-0132): its grass layers, and its lighting (tuned for the forest)
+            for (const char* k : {"grass", "grassLayers", "lighting"})
+                if (natureLevel.contains(k)) level[k] = natureLevel[k];
             nlohmann::json water = level.value("water", nlohmann::json::object());
             water["seaLevel"] = w.terrain.value("seaLevel", 0.0);
             water["region"] = w.half;
