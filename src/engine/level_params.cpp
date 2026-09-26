@@ -1,4 +1,5 @@
 #include "level_params.h"
+#include "procgen/terrain_weather.h"   // the weathered ground (ADR-0126)
 #include "procgen/terrain_lod.h"   // kBakedCell0 (ADR-0095)
 
 #include "procgen/erosion.h"
@@ -297,6 +298,14 @@ std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(co
     const std::string key = tj.dump();
     std::lock_guard<std::mutex> lock(memoMutex);
     if (auto it = memo.find(key); it != memo.end()) return it->second;
+    // THE WEATHERED GROUND (ADR-0126): grown from uplift and weathered by water offline, cached on disk
+    if (tj.contains("weather") && tj["weather"].is_object()) {
+        auto grid = std::make_shared<const Heightmap>(weatheredTerrainCached(tj));
+        auto f = std::make_shared<const std::function<double(double, double)>>(
+            [grid](double x, double z) { return static_cast<double>(grid->sampleWorld(static_cast<float>(x), static_cast<float>(z))); });
+        memo[key] = f;
+        return f;
+    }
     TerrainParams eb = readTerrainParams(tj);
     Noise en(tj.value("seed", 0u));
     ErosionParams ep;

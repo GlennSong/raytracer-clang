@@ -8780,3 +8780,14 @@ river_valley, 1025² at 2.9 m, coarse 257² droplets + 20k water steps: 8.8 s.
 - Test: `stream_power_grows_a_drained_relief_from_uplift`.
 - **Not in any level yet.** The ground is new, so every island city, road and interchange must be replanned on it. Hillslopes may now be too smooth (the threshold stops sheet-flow gullies), to judge in 3D.
 - Next: the pipeline into the engine (`erodedForTerrain` behind a terrain block, cached), a terrain-only island level to fly over, then snow and the material maps.
+
+## ADR-0126 — The weathered ground in the engine, keeping the level's shape
+
+**Context.** ADR-0125's pipeline lived in `tools/rt_erode`. Glenn, looking at the result: "I feel like we lose some of the shape?" Stream power grows a narrow divide over wide, low, hilly foothills. That is real, but it is not the island the level drew, whose broad mountain mass and flat coastal plains (where the cities stand) were gone.
+
+**Decision.**
+- **`procgen/terrain_weather.{h,cpp}`:** `weatherTerrain` runs grow → keep the shape → cubic plus roughness onto the fine grid → breach, water and thermal. `weatheredTerrainCached` bakes it once into `cache/terrain/weather_<hash>.bin`, keyed on the terrain block and `kWeatherCodeTag`. `erodedForTerrain` returns it when a terrain has a `"weather"` block (with `"erode": true`), so the loader, hydrology and planner all see the same ground. `rt_erode --stream-power` now calls the engine function: one implementation.
+- **Keeping the shape:** final = low(original) + (grown − low(grown)), split at `shapeScale` (1.5 km). The original's broad masses and plateaus stay; the physics supplies the ridges, spurs and valleys.
+- **The grown structure fades out on low ground:** none below `plainHeight` (15 m) above the sea, all of it `reliefRamp` (120 m) higher. Coastal plains stay flat, as real alluvium and as the ground the cities need.
+
+**Consequences.** Island 8 keeps its outline, its elongated mass and its plains, and its mountains become a branching range. No level uses a `weather` block yet. Next: a terrain-only island level to fly over, then snow and the material maps.
