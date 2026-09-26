@@ -1560,7 +1560,7 @@ static void loadChunkedTerrain(const TerrainParams& p, const Noise& noise,
 // (terrain, roads, grading, earthwork all come from it), the lane city's bundle (the carved grid),
 // every flatten the loader assembled, and a code tag bumped when the height code changes.
 static constexpr const char* kBakedGroundCodeTag = "2026-09-25.1";   // land-only erosion blend baked to a grid
-static constexpr const char* kHydroCarveCodeTag = "2026-09-24.incision2";
+static constexpr const char* kHydroCarveCodeTag = "2026-09-25.shelf";   // sea mouths carry their channel across the shelf
 static uint64_t bakedGroundKey(const json& root, const TerrainParams& p) {
     using namespace engine::bundle;
     uint64_t h = fnv1aStr(std::string("rt-baked-ground/") + kBakedGroundCodeTag);
@@ -3833,7 +3833,14 @@ bool LevelLoader::load(const std::string& path,
                 auto dry = std::make_shared<TerrainParams>(terrainParams);
                 dry->hydro = nullptr;
                 auto dn = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
-                wp.extent = [dry, dn](double x, double z) { return terrainHeight(*dry, *dn, x, z); };
+                // ...except on a sea mouth's shelf channel (hydrology.h onShelf): carried past the coast, it
+                // is the SEA's -- without the ocean over it its carved floor showed as dark squares
+                auto hyp = terrainParams.hydro;
+                auto wet = std::make_shared<TerrainParams>(terrainParams);
+                wp.extent = [dry, dn, hyp, wet](double x, double z) {
+                    const double h = terrainHeight(*dry, *dn, x, z);
+                    return hyp->onShelf(x, z) ? std::min(h, terrainHeight(*wet, *dn, x, z)) : h;
+                };
             }
             RenderMesh wmesh = engine::buildWaterMesh(waterFloor, wp);
             seaCells = engine::waterMeshCells(waterFloor, wp);

@@ -876,7 +876,12 @@ void islandInterchanges(IslandWorld& w, const std::vector<std::pair<Vec2, Vec2>>
                         const double t = ((c - a).x * sv.y - (c - a).y * sv.x) / den, u = ((c - a).x * r.y - (c - a).y * r.x) / den;
                         if (t < 0 || t > 1 || u < 0 || u > 1) continue;
                         const Vec2 x = a + r * t;
-                        tents.push_back({sProf[j] + (sProf[j + 1] - sProf[j]) * u, w.heightAt(x.x, x.y) + 7.6});
+                        // over the crossing road's HIGHEST ground under both carriageways (the builder clears it
+                        // there, not at the centreline: a road climbing 12% rises a metre across one of them)
+                        const Vec2 rh = r * (1.0 / std::max(1e-9, r.length()));
+                        double zx = -1e30;
+                        for (int q = -5; q <= 5; ++q) { const Vec2 y = x + rh * (5.0 * q); zx = std::max(zx, w.heightAt(y.x, y.y)); }
+                        tents.push_back({sProf[j] + (sProf[j + 1] - sProf[j]) * u, zx + 7.6});
                     }
             }
             const double gd = roads::lanes::kDesignGrade * 0.06;

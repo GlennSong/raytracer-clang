@@ -51,6 +51,9 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
             scene["rules"] = ps.value("rules", json::object());
             break;
         }
+    // nothing meets the island freeway at grade: the pass rose to it inside its own diamond and crossed
+    // both carriageways as a level junction (Glenn: "literally crosses through two multilane freeways")
+    scene["rules"]["freeway_separates"] = true;
     // THE MOUNTAIN CLASS: the rural road's section, graded as mountain roads are (15%, a design grade of
     // 12%). At the rural 10% the pass -- climbing 8.2% on average up its valley -- could not keep to the
     // ground and rode a 2.5 km viaduct 45 m up
@@ -64,13 +67,16 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
     auto inWin = [&](const Vec2& p, double margin) {
         return !windowed || (std::fabs(p.x - o.windowCentre.x) <= o.windowHalf + margin && std::fabs(p.y - o.windowCentre.y) <= o.windowHalf + margin);
     };
-    // a polyline clipped to the window: its runs inside, each carried one point past the edge
+    // a polyline clipped to the window: its runs inside, each carried one point past the edge. "Inside"
+    // reaches 120 m past the window, within the 150 m of ground the window's grid adds: Saltwood's pass
+    // runs along the east edge, stepping 66 m out and back, and clipping it AT the edge cut it into three
+    // pieces with 100 and 290 m gaps (Glenn: "broken when we get into the mountains")
     auto clip = [&](const std::vector<Vec2>& P) {
         std::vector<std::vector<Vec2>> runs;
         if (!windowed) { runs.push_back(P); return runs; }
         std::vector<Vec2> cur;
         for (std::size_t i = 0; i < P.size(); ++i) {
-            if (inWin(P[i], 0.0)) {
+            if (inWin(P[i], 120.0)) {
                 if (cur.empty() && i > 0) cur.push_back(P[i - 1]);
                 cur.push_back(P[i]);
             } else if (!cur.empty()) {
@@ -186,15 +192,27 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
         chains[1] = {b1, b2};
         if (!closed) { chains[0] = {A}; std::vector<Vec2> rb = B; std::reverse(rb.begin(), rb.end()); chains[1] = {rb}; }
         // floors where a road passes under: every island road's crossings of the route
-        std::vector<Vec2> crossings;
+        std::vector<Vec2> crossings, crossDir;
         for (const IslandRoad& rd : w.roads) {
             if (rd.kind == "freeway" || rd.points.size() < 2) continue;
             for (std::size_t i = 0; i + 1 < rd.points.size(); ++i)
                 for (std::size_t j = 0; j + 1 < R0.size(); ++j) {
                     Vec2 x;
-                    if (segCross(rd.points[i], rd.points[i + 1], R0[j], R0[j + 1], x)) crossings.push_back(x);
+                    if (segCross(rd.points[i], rd.points[i + 1], R0[j], R0[j + 1], x)) {
+                        crossings.push_back(x);
+                        const Vec2 d = rd.points[i + 1] - rd.points[i];
+                        crossDir.push_back(d * (1.0 / std::max(1e-9, d.length())));
+                    }
                 }
         }
+        // the road under's highest ground beneath both carriageways (it climbs; the builder clears its top)
+        auto underHigh = [&](const Vec2& x) {
+            std::size_t k = 0;
+            for (std::size_t q = 0; q < crossings.size(); ++q) if ((crossings[q] - x).length() < 1e-6) k = q;
+            double z = -1e30;
+            for (int q = -5; q <= 5; ++q) { const Vec2 y = x + crossDir[k] * (5.0 * q); z = std::max(z, w.heightAt(y.x, y.y)); }
+            return z;
+        };
         const char* names[2][2] = {{"fw0_a", "fw0_a2"}, {"fw0_b", "fw0_b2"}};
         for (int side = 0; side < 2; ++side)
             for (std::size_t c = 0; c < chains[side].size(); ++c) {
@@ -203,7 +221,7 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
                 for (const Vec2& x : crossings) {
                     Vec2 f;
                     if (distToPolyline(x, P, &f) > o.carriage + 20.0) continue;
-                    floors.push_back({f.x, f.y, w.heightAt(x.x, x.y) + o.underClearance, 30.0});
+                    floors.push_back({f.x, f.y, underHigh(x) + o.underClearance, 30.0});
                 }
                 const std::vector<std::vector<Vec2>> pieces = clip(P);
                 for (std::size_t q = 0; q < pieces.size(); ++q) {

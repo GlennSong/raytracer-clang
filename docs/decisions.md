@@ -8592,3 +8592,27 @@ iteration time."
 - The same session's editor save dropped Saltwood's `road_signs` entity: the loader spawned the sign meshes with no `SourceSpec`, and `LevelWriter` saves only those. `road_signs` now gets a document entity, as `script` has, and the writer emits its keys flat (`{shape:"road_signs", file}`). The test `editor_save_keeps_the_road_signs_entity` loads and saves through the real paths.
 
 **Consequences.** Saltwood's cached load drops from 64.7 s to 32.7 s, and opening a level in the editor after the viewer no longer regenerates the ground.
+
+## ADR-0114 — Glenn's first drive of the island: freeway crossings, a pass that holds together, water that sits right
+
+**Context.** Glenn drove Saltwood (2026-09-25) and reported four problems:
+- the pass "literally crosses through two multilane freeways and onramps";
+- it is "broken when we get into the mountains";
+- lakes show "strange polygon spikes" from underneath;
+- "some of the rivers don't meet the ocean nicely and just stop near the edge".
+
+**Decision.**
+- **Freeway crossings are structure** (`Rules::freewaySeparates`, scene rule `freeway_separates`; on for the island scene, off by default). Where a freeway's centreline crosses a road that is not a ramp, the crossing is never levelled (`CrossingMeet::sep`, `mustSeparate`). The clearance lift then acts at any height difference. The road the scene floored over the crossing goes up, and otherwise the freeway does. The pass had risen to the freeway's height inside its own diamond, d0_0, and met both carriageways as a level junction. Authored scenes (freeway_cross, ring_city) cross streets at grade, so the rule is opt-in.
+- **The clearance lift clears the lower road's highest point under the deck**, sampled across the upper road's width, not the crossing centreline. The pass climbs 12% under the freeway, a metre across one carriageway: 8 new pairs were 0.5–0.9 m short. The diamond sizing (`island_world.cpp` tents) and the scene's freeway floors use the same rule: the highest ground within ±25 m along the road underneath.
+- **The window clip reaches 120 m past the window**, inside the 150 m of ground the window's grid adds. Saltwood's pass runs along the east edge, stepping 66 m out and back, and the clip cut it into three pieces with 100 m and 290 m gaps.
+- **Water vertices take their level from the nearest water.** A lake cell within three cells is searched; a lake beside the vertex wins, and otherwise the nearer of lake and river. With nothing near, every river segment is searched. The old fallback was the SEA's level: rounded lake outlines strayed past their cells, and those vertices dropped up to 513 m into the ground (5766 triangles spanned more than 4 m).
+- **Sea mouths carry their channel across the shelf.** A river into the sea continues along its last heading at sea level (`River::shelf`) until the floor is deeper than the channel, at most 600 m. The ocean covers that channel: its extent reads the carved ground there (`Hydrology::onShelf`). Rivers used to end at the first sea cell, on flats centimetres deep, so the river's water stopped in a rounded tip on a pale sand flat. `kHydroCarveCodeTag` is now `2026-09-25.shelf`.
+
+**Consequences.**
+- Saltwood window:
+  - the pass is one 4.4 km road under both carriageways;
+  - every freeway crossing clears its structure: 11 of 64 grade-separated pairs short, all city streets, where it was 19 of 48.
+- Link12's diamond (d0_3) is skewed, and its ramps are now further short: the on-ramp needs 169 m and has 70 m. It needs a rework.
+- The pass still bridges up to 25 m over gullies its smoothed route crossed.
+- Rivers falling off mountain lakes (river 8: 160 m in 200 m) remain tilted sheets until waterfalls are built.
+- Test: `island_water_surface_has_no_spikes` (no triangle spans 40 m; the steep count is reported).

@@ -120,10 +120,22 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
                 EdgeSpec& a = *paved[i]; EdgeSpec& b = *paved[j];
                 if (a.isRamp() && (a.from.edge == b.id || a.to.edge == b.id)) continue;   // a ramp and its own host: the gore, not a crossing
                 if (b.isRamp() && (b.from.edge == a.id || b.to.edge == a.id)) continue;
-                for (const Vec2& p : crossingsInclusive(a, b)) {
-                    const double za = projectZ(a, p), zb = projectZ(b, p); if (std::fabs(za - zb) < ((a.isRamp() || b.isRamp()) ? R.rampLevelDz : R.bridgeH)) continue;   // below: a level crossing the street meets
-                    EdgeSpec& hi = za > zb ? a : b; EdgeSpec& lo = za > zb ? b : a;
-                    const double need = std::min(za, zb) + R.underClearance + g.cls(hi).thick + R.structureDepth;
+                const std::vector<Vec2> meetsAB = crossingsInclusive(a, b);
+                const std::size_t crossedAB = crossings(a.xy, b.xy).size();   // crossingsInclusive lists the true crossings first
+                for (std::size_t mi = 0; mi < meetsAB.size(); ++mi) {
+                    const Vec2& p = meetsAB[mi];
+                    const bool sep = mi < crossedAB && R.freewaySeparates && mustSeparate(a, b);   // a freeway crossing is structure at any height
+                    const double za = projectZ(a, p), zb = projectZ(b, p); if (!sep && std::fabs(za - zb) < ((a.isRamp() || b.isRamp()) ? R.rampLevelDz : R.bridgeH)) continue;   // below: a level crossing the street meets
+                    // which goes over: the higher; for a forced separation, the one the scene asked to (a floor
+                    // point over the crossing), else the freeway
+                    bool aHi = za > zb;
+                    if (sep) {
+                        auto floored = [&](const EdgeSpec& e) { for (const auto& fp : e.floorPts) if (std::hypot(fp[0] - p.x, fp[1] - p.y) < 40.0) return true; return false; };
+                        const bool fa = floored(a), fb = floored(b);
+                        if (fa != fb) aHi = fa;
+                        else if (std::fabs(za - zb) < R.bridgeH && (a.cls == "freeway") != (b.cls == "freeway")) aHi = a.cls == "freeway";
+                    }
+                    EdgeSpec& hi = aHi ? a : b; EdgeSpec& lo = aHi ? b : a;
                     // The hold must span the whole crossing, not the centreline point: a tent peaks at its station
                     // and falls away at design grade, so the deck over the far kerb of a 20 m road sat half a
                     // metre low. The floor point holds flat over a half-span covering the lower road's paved band
@@ -133,6 +145,12 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
                     auto tangent = [](const EdgeSpec& e, double st) { const Vec2 q0 = pointAt(e.xy, e.s, std::max(0.0, st - 0.5)), q1 = pointAt(e.xy, e.s, std::min(e.s.back(), st + 0.5)); const Vec2 d = q1 - q0; const double L = std::hypot(d.x, d.y); return L > 1e-9 ? d / L : Vec2(1, 0); };
                     const Vec2 th = tangent(hi, sHi), tl = tangent(lo, sLo); const double sinT = std::max(0.25, std::fabs(cross(th, tl)));
                     const double span = (0.5 * pavedW(lo) + 0.5 * pavedW(hi) + 1.0) / sinT;
+                    // clear the lower road's HIGHEST point under the upper deck, not its height at the centreline:
+                    // the pass climbs 12% under the island freeway, a metre across its 20 m carriageway
+                    const double spanLo = (0.5 * pavedW(hi) + 1.0) / sinT;
+                    double zLo = aHi ? zb : za;
+                    for (int k = -4; k <= 4; ++k) zLo = std::max(zLo, interp(lo.s, lo.z, std::clamp(sLo + spanLo * k / 4.0, 0.0, lo.s.back())));
+                    const double need = zLo + R.underClearance + g.cls(hi).thick + R.structureDepth;
                     const double sts[3] = {std::max(0.0, sHi - span), sHi, std::min(hi.s.back(), sHi + span)};
                     bool low = false; for (double st : sts) if (interp(hi.s, hi.z, st) < need - 0.02) low = true;
                     if (!low) continue;
@@ -407,7 +425,7 @@ std::vector<Check> invariants(const Result& r) {
             }
         }
         std::sort(offenders.begin(), offenders.end(), [](const auto& x, const auto& y) { return x.first > y.first; });
-        dd << bad << " of " << pairs << " grade-separated lane pairs short of under_clearance + slab + structure"; if (bad) { dd << ", worst by " << std::fixed << std::setprecision(1) << worst << " m:"; for (size_t i = 0; i < offenders.size() && i < 8; ++i) dd << offenders[i].second; }
+        dd << bad << " of " << pairs << " grade-separated lane pairs short of under_clearance + slab + structure"; if (bad) { dd << ", worst by " << std::fixed << std::setprecision(1) << worst << " m:"; static const bool all = std::getenv("LANELAB_TRACE_CLEARANCE") != nullptr; for (size_t i = 0; i < offenders.size() && (all || i < 8); ++i) dd << offenders[i].second; }
         out.push_back({"grade-separated pairs clear their structure", dd.str(), bad == 0});
     }
     // Piers under their decks: a column topped above the built slab bottom stands out of the road.

@@ -24,7 +24,9 @@
 #include "../src/engine/asset_manager.h"
 #include "../src/engine/components.h"
 #include "../src/engine/level_loader.h"
-#include "../src/engine/level_writer.h"   // the editor's save (road_signs round trip)
+#include "../src/engine/level_writer.h"
+#include "../src/engine/level_params.h"      // readTerrainParams (the island water check)
+#include "../src/engine/procgen/hydrology.h"   // the editor's save (road_signs round trip)
 #include "../src/engine/drawn_road.h"
 #include "../src/engine/ai/pathfind.h"
 #include "../src/engine/mesh_uploader.h"
@@ -89,7 +91,7 @@ std::string simLevelPath() {
 }
 
 // Every shipped level, sorted so a failure names the same file run to run.
-// `*.json.cameras.json` sidecars are camera bookmarks, not levels.
+// `*.json.cameras.json` sidecars are camera bookmarks, and `*.signs.json` sign plans: not levels.
 std::vector<std::string> shippedLevels() {
     std::vector<std::string> out;
     std::error_code ec;
@@ -105,6 +107,7 @@ std::vector<std::string> shippedLevels() {
         const std::string name = dir + entry.path().filename().string();
         if (name.size() < 5 || name.compare(name.size() - 5, 5, ".json") != 0) continue;
         if (name.find(".cameras.json") != std::string::npos) continue;
+        if (name.find(".signs.json") != std::string::npos) continue;   // a road-sign plan (ADR-0110), read by its level
         // RT_LEVELS=a,b: only levels whose file name contains one of the substrings (timing one level).
         if (const char* only = std::getenv("RT_LEVELS"); only && *only) {
             bool keep = false; std::string list = only; size_t start = 0;
@@ -3279,4 +3282,72 @@ TEST_CASE(editor_save_keeps_the_road_signs_entity) {
         CHECK(!signs->contains("size"));
     }
     std::remove(path.c_str());
+}
+
+// THE ISLAND'S WATER (Glenn, 2026-09-25: "the lakes have a lot of weirdness. If you look at them from
+// underneath there are a lot of strange polygon spikes"): the water surface is one triangulation of the
+// rivers and lakes with a level per vertex. A triangle whose corners disagree by metres is a spike -- a
+// sheet of water tilted down into the ground. Rivers fall gently and a lake is flat, so no triangle of the
+// island's water may span more than a few metres of level.
+TEST_CASE(island_water_surface_has_no_spikes) {
+    std::ifstream in(levelsDir() + "/island_8_saltwood.json");
+    CHECK(in.good());
+    if (!in.good()) return;
+    const json root = json::parse(in);
+    const TerrainParams tp = readTerrainParams(root["terrain"]);
+    CHECK(tp.hydro != nullptr);
+    if (!tp.hydro) return;
+    const RenderMesh m = tp.hydro->waterMesh();
+    if (const char* at = std::getenv("RT_WATER_AT")) {   // debug: the lakes and river nodes around a point
+        double px = 0, pz = 0; std::sscanf(at, "%lf,%lf", &px, &pz);
+        for (std::size_t l = 0; l < tp.hydro->lakes().size(); ++l) {
+            const Lake& k = tp.hydro->lakes()[l];
+            if (px > k.minX - 150 && px < k.maxX + 150 && pz > k.minZ - 150 && pz < k.maxZ + 150)
+                std::printf("      lake %zu level %.1f box %.0f..%.0f x %.0f..%.0f cells %zu\n", l, k.level, k.minX, k.maxX, k.minZ, k.maxZ, k.cells.size());
+        }
+        for (std::size_t r = 0; r < tp.hydro->rivers().size(); ++r) {
+            const River& rv = tp.hydro->rivers()[r];
+            for (std::size_t k = 0; k < rv.nodes.size(); k += 1) {
+                const RiverNode& nd = rv.nodes[k];
+                if (std::hypot(nd.p.x - px, nd.p.y - pz) < 90) std::printf("      river %zu node %zu/%zu (%.0f, %.0f) level %.1f width %.1f intoLake %d\n", r, k, rv.nodes.size(), nd.p.x, nd.p.y, nd.level, nd.width, rv.intoLake);
+            }
+        }
+    }
+    if (std::getenv("RT_WATER_MOUTHS")) {   // debug: how each river ends
+        TerrainParams dry = tp; dry.hydro = nullptr;
+        Noise nz(root["terrain"].value("seed", 0u));
+        for (std::size_t r = 0; r < tp.hydro->rivers().size(); ++r) {
+            const River& rv = tp.hydro->rivers()[r];
+            if (rv.nodes.size() < 2) continue;
+            const RiverNode& e = rv.nodes.back(); const RiverNode& e0 = rv.nodes[rv.nodes.size() - 2];
+            Vec2 d = e.p - e0.p; d = d * (1.0 / std::max(1e-9, d.length()));
+            std::printf("      river %zu end (%.0f, %.0f) mouth %d lake %d level %.1f width %.0f ground", r, e.p.x, e.p.y, rv.mouth, rv.intoLake, e.level, e.width);
+            for (double t : {0.0, 25.0, 50.0, 100.0, 200.0}) std::printf(" %+.0f:%.1f", t, terrainHeight(dry, nz, e.p.x + d.x * t, e.p.y + d.y * t));
+            if (auto eb = erodedForTerrain(root["terrain"])) {
+                std::printf(" | eroded");
+                for (double t : {0.0, 25.0, 50.0, 100.0, 200.0}) std::printf(" %+.0f:%.1f", t, (*eb)(e.p.x + d.x * t, e.p.y + d.y * t));
+            }
+            std::printf("\n");
+        }
+    }
+    // A SPIKE is a triangle whose corners took their levels from different water: a vertex that found
+    // no lake cell beside it and no river in its bins fell back to the SEA's level, so a mountain lake's
+    // outline dropped 500 m into the ground (5766 triangles spanned > 4 m, the worst 513 m). What remains
+    // steep is real: rivers leaving mountain lakes fall ~160 m in 200 m (river 8 below lake 5), drawn as
+    // a tilted sheet until waterfalls are built -- their steepest triangle spans 29 m. So: no triangle
+    // spans 40 m, and the steep count is reported.
+    int spikes = 0, steep = 0; double worst = 0; Vec3 worstAt;
+    for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+        const Vec3 a = m.vertices[m.indices[i]].position, b = m.vertices[m.indices[i + 1]].position, c = m.vertices[m.indices[i + 2]].position;
+        const double span = std::max({a.y, b.y, c.y}) - std::min({a.y, b.y, c.y});
+        const Vec3 n = cross(b - a, c - a);
+        if (std::fabs(n.y) > 1e-9 && std::hypot(n.x, n.z) / std::fabs(n.y) > 0.5) ++steep;
+        if (span > 40.0) {
+            ++spikes;
+            if (std::getenv("RT_WATER_SPIKES")) std::printf("      spike %.1f m at (%.0f, %.0f) levels %.1f %.1f %.1f\n", span, a.x, a.z, a.y, b.y, c.y);
+        }
+        if (span > worst) { worst = span; worstAt = a; }
+    }
+    std::printf("    [water] %zu tris, %d span > 40 m, widest %.1f m at (%.0f, %.0f); %d steeper than 1:2 (cascades)\n", m.indices.size() / 3, spikes, worst, worstAt.x, worstAt.z, steep);
+    CHECK(spikes == 0);
 }

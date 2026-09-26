@@ -261,10 +261,50 @@ std::shared_ptr<const Hydrology> Hydrology::build(const std::function<double(dou
                 r.nodes[k].fade = f * f * (3.0 - 2.0 * f);
             }
         }
+        // OUT ACROSS THE SHELF: a river into the SEA carries its channel on along its last heading, at
+        // sea level, until the sea floor is deeper than the channel (at most 600 m). It used to end at
+        // the first sea cell, where the floor is centimetres under the surface: the river's deep water
+        // stopped in a rounded tip on a wide pale flat, and the ocean began a few hundred metres out
+        // (Glenn: "some of the rivers don't meet the ocean nicely and just stop near the edge"). The
+        // new nodes are faded out -- the surface there is the ocean's -- so only the carve sees them.
+        if (r.mouth && r.intoLake < 0 && p.seaLevel > -1e29 && r.nodes.size() >= 2) {
+            const RiverNode end = r.nodes.back();
+            Vec2 dir = end.p - r.nodes[r.nodes.size() - 2].p;
+            for (std::size_t k = r.nodes.size() - 1; k-- > 0 && dir.length() < 20.0;) dir = end.p - r.nodes[k].p;   // a heading over ~20 m
+            if (dir.length() > 1e-9) {
+                dir = dir / dir.length();
+                r.shelf = static_cast<int>(r.nodes.size()) - 1;
+                const double stepLen = p.cell * 0.5;
+                for (double t = stepLen; t <= 600.0; t += stepLen) {
+                    RiverNode nd = end;
+                    nd.p = end.p + dir * t;
+                    nd.level = p.seaLevel;
+                    nd.fade = 0.0;
+                    r.nodes.push_back(nd);
+                    if (ground(nd.p.x, nd.p.y) < p.seaLevel - end.depth - 1.0) break;   // the sea is deeper than the channel
+                }
+            }
+        }
         H.rivers_.push_back(std::move(r));
     }
     H.index();
     return hy;
+}
+
+bool Hydrology::onShelf(double x, double z) const {
+    const Vec2 q(x, z);
+    for (const River& r : rivers_) {
+        if (r.shelf < 0) continue;
+        for (std::size_t k = static_cast<std::size_t>(r.shelf); k + 1 < r.nodes.size(); ++k) {
+            const Vec2 a = r.nodes[k].p, ab = r.nodes[k + 1].p - a;
+            const double reach = std::max(r.nodes[k].width, r.nodes[k + 1].width) * 0.5 + kBankReach;
+            if (std::fabs(q.x - a.x) > reach + std::fabs(ab.x) || std::fabs(q.y - a.y) > reach + std::fabs(ab.y)) continue;
+            const double L2 = dot(ab, ab);
+            const double t = L2 > 1e-12 ? clampd(dot(q - a, ab) / L2, 0.0, 1.0) : 0.0;
+            if ((q - (a + ab * t)).length() <= reach) return true;
+        }
+    }
+    return false;
 }
 
 void Hydrology::index() {
@@ -607,10 +647,17 @@ RenderMesh Hydrology::waterMesh(const std::vector<std::vector<Vec2>>& sea,
         Vec2 flow(1, 0);
         const int gi = std::clamp(static_cast<int>(std::lround((q.x + p_.half) / p_.cell)), 0, n - 1);
         const int gj = std::clamp(static_cast<int>(std::lround((q.y + p_.half) / p_.cell)), 0, n - 1);
+        // the nearest lake cell within three cells (the rounded outline strays past the lake's own cells)
         int lake = -1;
-        for (int b = gj - 1; b <= gj + 1 && lake < 0; ++b)
-            for (int a = gi - 1; a <= gi + 1 && lake < 0; ++a)
-                if (a >= 0 && b >= 0 && a < n && b < n) lake = lakeOfCell_[static_cast<std::size_t>(b) * n + a];
+        double dLake = 1e30;
+        for (int b = gj - 3; b <= gj + 3; ++b)
+            for (int a = gi - 3; a <= gi + 3; ++a) {
+                if (a < 0 || b < 0 || a >= n || b >= n) continue;
+                const int l = lakeOfCell_[static_cast<std::size_t>(b) * n + a];
+                if (l < 0) continue;
+                const double d = (Vec2(-p_.half + a * p_.cell, -p_.half + b * p_.cell) - q).length();
+                if (d < dLake) { dLake = d; lake = l; }
+            }
         // the nearest river segment (the bins first, every segment if none is near)
         double best = 1e30, bestT = 0.0;
         const River* bestR = nullptr;
@@ -626,8 +673,20 @@ RenderMesh Hydrology::waterMesh(const std::vector<std::vector<Vec2>>& sea,
                     const double d = (q - (a + ab * t)).length();
                     if (d < best) { best = d; bestT = t; bestR = &r; bestK = static_cast<std::size_t>(k); }
                 }
-        // near a lake its level wins: a river's surface is at the lake's level where it meets it
-        if (lake >= 0) {
+        // No river in the bins and no lake near: every segment. It used to fall back to the SEA's level
+        // here, and a mountain lake's outline vertices dropped 500 m: the spikes under Glenn's lakes.
+        if (!bestR && lake < 0)
+            for (const River& r : rivers_)
+                for (std::size_t k = 0; k + 1 < r.nodes.size(); ++k) {
+                    const Vec2 a = r.nodes[k].p, ab = r.nodes[k + 1].p - a;
+                    const double L2 = dot(ab, ab);
+                    const double t = L2 > 1e-12 ? clampd(dot(q - a, ab) / L2, 0.0, 1.0) : 0.0;
+                    const double d = (q - (a + ab * t)).length();
+                    if (d < best) { best = d; bestT = t; bestR = &r; bestK = k; }
+                }
+        // a lake beside the vertex wins (a river's surface is at the lake's level where it meets it);
+        // farther off, whichever water is nearer
+        if (lake >= 0 && (dLake <= 1.5 * p_.cell || !bestR || dLake <= best)) {
             level = lakes_[static_cast<std::size_t>(lake)].level;
         } else if (bestR) {
             const RiverNode& A = bestR->nodes[bestK];

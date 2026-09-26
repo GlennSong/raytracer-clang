@@ -73,6 +73,7 @@ struct Rules {
     double step = 1.0, sameLevelDz = 1.0, blendLen = 20.0, closing = 0.0, bridgeH = 4.0, pierSpacing = 24.0;
     double slope = 0.5, conformW = 14.0, skirt = 1.6, skirtDrop = 0.15, endpointTol = 0.5;
     double underClearance = 5.0, structureDepth = 1.6;   // free height under a deck's structure over any road it crosses, and the girder depth below the slab
+    bool freewaySeparates = false;             // a freeway is never met at grade by a road crossing it (not a ramp): structure at any height. Off by default -- authored scenes (freeway_cross, ring_city) cross streets over freeways at grade -- and on for the island (ADR-0114)
     double rampLevelDz = 1.5;                  // a ramp within this of a street it crosses is at grade with it (the street meets it); above, it is structure (the ramp clears it)
 };
 

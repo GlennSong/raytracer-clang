@@ -35,7 +35,11 @@ double crossingConsistency(RoadLabGraph& g, double maxDz, double rampMaxDz, doub
 // `tee`: one STREET ending on another (neither a freeway nor a ramp) -- a junction, always levelled, never
 // read as a grade separation however far apart the two start (a river bridge's end meeting its riverside
 // street 2.8 m off was lifted to overpass clearance, and the agree loop diverged to 10 m)
-struct CrossingMeet { std::size_t hi = 0, lo = 0; Vec2 p; double sHi = 0, sLo = 0; bool ramp = false, tee = false; };
+// sep: with Rules::freewaySeparates, a FREEWAY's centreline crossing another road's (not a ramp) -- always a grade separation,
+// never levelled, whatever the two heights (island 8's pass rose to the freeway and met it at grade).
+struct CrossingMeet { std::size_t hi = 0, lo = 0; Vec2 p; double sHi = 0, sLo = 0; bool ramp = false, tee = false, sep = false; };
+// Two roads that may never meet at grade where their centrelines cross: a freeway and any road but a ramp.
+bool mustSeparate(const EdgeSpec& a, const EdgeSpec& b);
 std::vector<CrossingMeet> crossingMeets(const RoadLabGraph& g);
 // crossingConsistency over the cached meets: the same pairs, in the same order, the same result.
 double crossingConsistency(RoadLabGraph& g, const std::vector<CrossingMeet>& meets, double maxDz, double rampMaxDz, double radius = 100.0);

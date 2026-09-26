@@ -201,6 +201,7 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         R.step = num(r, "step", R.step); R.sameLevelDz = num(r, "same_level_dz", R.sameLevelDz); R.blendLen = num(r, "blend_len", R.blendLen); R.closing = num(r, "closing", R.closing);
         R.bridgeH = num(r, "bridge_h", R.bridgeH); R.pierSpacing = num(r, "pier_spacing", R.pierSpacing); R.slope = num(r, "slope", R.slope); R.conformW = num(r, "conform_w", R.conformW); R.underClearance = num(r, "under_clearance", R.underClearance); R.structureDepth = num(r, "structure_depth", R.structureDepth);
         R.rampLevelDz = num(r, "ramp_level_dz", R.rampLevelDz);
+        if (r.contains("freeway_separates") && r["freeway_separates"].is_boolean()) R.freewaySeparates = r["freeway_separates"].get<bool>();
         R.skirt = num(r, "skirt", R.skirt); R.skirtDrop = num(r, "skirt_drop", R.skirtDrop); R.endpointTol = num(r, "endpoint_tol", R.endpointTol);
     }
     if (spec.contains("terrain")) {

@@ -65,6 +65,7 @@ struct RiverNode {
 struct River {
     std::vector<RiverNode> nodes; bool mouth = false; int intoLake = -1;
     bool authored = false; double width0 = 0.0, width1 = 0.0;   // an authored course: its width, source to mouth
+    int shelf = -1;   // a sea mouth's channel carried across the shelf: the node it starts at (-1: none)
 };   // source -> end; mouth: ends in the sea or a lake
 
 struct Lake {
@@ -111,6 +112,9 @@ public:
     // Under open water: inside a lake, or within a river's width (plus `margin` metres). Binned:
     // cheap enough for a scatter to ask per placement, and safe on any thread.
     bool isWet(double x, double z, double margin = 0.0) const;
+    // On a sea mouth's SHELF channel (the carve carried past the coast, River::shelf) or its banks: where
+    // the ocean surface must cover the carved ground, though the uncarved ground stands above the sea.
+    bool onShelf(double x, double z) const;
     RenderMesh waterMesh(const std::vector<std::vector<Vec2>>& sea = {},
                          const std::function<double(double, double)>& ground = {}) const;   // sea: cells it stops at
 
