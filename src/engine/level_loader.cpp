@@ -886,6 +886,14 @@ static bool runScriptModel(const json& ent, const std::string& levelDir,
 // their content (a level loads them, it does not letter them), posts and gantries on the ground.
 static void loadRoadSignsEntity(const json& ent, const std::string& levelDir, World& world, Renderer& renderer,
                                 AssetManager& assets, const HeightField* ground) {
+    {
+        // Document entity, as shape:"script" has: the sign meshes below are runtime companions with no
+        // SourceSpec, so without it the editor's save dropped the whole entity from the level.
+        json recipe;
+        for (const char* k : {"file", "signs"})
+            if (ent.contains(k)) recipe[k] = ent[k];
+        spawnDocumentEntity(ent, "road_signs", recipe.dump(), world);
+    }
     const engine::Font* font = engine::signFont();
     if (!font) { LOG_WARN << "[roadsigns] no sign font: no road signs"; return; }
     std::vector<engine::IslandSign> signs;
@@ -1551,12 +1559,16 @@ static void loadChunkedTerrain(const TerrainParams& p, const Noise& noise,
 // THE BAKED GROUND'S CONTENT KEY (ADR-0095): everything the field reads -- the whole level JSON
 // (terrain, roads, grading, earthwork all come from it), the lane city's bundle (the carved grid),
 // every flatten the loader assembled, and a code tag bumped when the height code changes.
-static constexpr const char* kBakedGroundCodeTag = "2026-09-24.1";
+static constexpr const char* kBakedGroundCodeTag = "2026-09-25.1";   // land-only erosion blend baked to a grid
 static constexpr const char* kHydroCarveCodeTag = "2026-09-24.incision2";
 static uint64_t bakedGroundKey(const json& root, const TerrainParams& p) {
     using namespace engine::bundle;
     uint64_t h = fnv1aStr(std::string("rt-baked-ground/") + kBakedGroundCodeTag);
-    h = fnv1aStr(root.dump(), h);
+    // only what shapes the GROUND: the terrain block (relief, erosion, rivers, cdlod), and below the river
+    // carve, the road bundle and every flatten (grading, pads). It hashed the whole level before, so a
+    // tweak to the lighting, or the editor handing the loader its re-serialised document of the same level,
+    // rebuilt the island's 345 MB ground from scratch
+    h = fnv1aStr(root.contains("terrain") ? root["terrain"].dump() : std::string(), h);
     // the river carve's own code tag: only levels with rivers re-bake when it changes
     if (p.hydro) h = fnv1aStr(std::string("hydro/") + kHydroCarveCodeTag, h);
 #ifdef RT_ROADS_LANES

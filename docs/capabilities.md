@@ -144,5 +144,6 @@ vocabulary, and a missing word is added HERE (C++ and Lua), not privately to one
 | Protected left turns (lead arrow phase) | `SignalController::stateFor/protectedLeft`, `CitySim::moveFor/signalFor` (ADR-0109) | any signalised arterial junction | ≥2-lane approaches opposed in a shared green |
 | The island as a lanes scene + level (and a window of it) | `world/island_scene.h`, `city_plan island-cities --level NAME [--window X Z HALF]` (ADR-0112) | `assets/levels/island_8_saltwood.json` | freeway floors at underpasses only; mountain class 15% |
 | Dump an edge's solved profile | `LANELAB_DUMP_EDGE=<id> lanes_tool build …` (ADR-0112) | any lanes scene | deck z vs ground every 50 m |
+| A baked ground shared by editor and viewer | `bakedGroundKey` hashes the terrain block + flattens only; land-only erosion blend baked to a grid (ADR-0113) | `island_8_saltwood` | cached load 32.7 s; first open after a code-tag bump rebakes |
 | The island freeway routed round its cities | `routeFreewayRoundCities`, `islandSiteBrief` (ADR-0106) | `city_plan island-cities` | city limits + 40 m are no-go; waypoint on each inland edge |
 | Residency (stream by camera distance) | `engine/residency.h` (ADR-0095) | building cells | terrain tiles, road cells, forests are the planned clients |

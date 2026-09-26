@@ -8580,3 +8580,15 @@ iteration time."
   - the remaining under-covered lanes and sharp-angle junctions;
   - the full island's build time after these fixes;
   - tiling the meshing stages and streaming road and terrain tiles.
+
+## ADR-0113 — The editor and the viewer share the island: a ground key of what shapes it, a land-only blend baked to a grid, signs that survive a save
+
+**Context.** The editor re-baked Saltwood's 345 MB ground pyramid even though the viewer had just cached it. This happened because `bakedGroundKey` hashed the whole level (`root.dump()`). The editor hands the loader its own re-serialised copy of the same level, so the key differed and the cache missed. A lighting tweak rebuilt the ground the same way. Separately, a cached load of Saltwood still took about 65 s, and half of that was `erodedBase` sampling the analytic land-only blend per vertex.
+
+**Decision.**
+- The key hashes only what shapes the ground: the `terrain` block, the hydro tag, the lanes bundle key and every flatten polygon. The editor and the viewer now share the pyramid for the same level. A level that really does grade differently (other flattens) still gets its own bake.
+- When `erodeLandOnly` is on, `bakeErodedTerrain` bakes the blended height `a + (eroded - a)·w` onto the erosion grid, in parallel. `erodedBase` reads it bilinearly and samples analytically only outside the square.
+- `kBakedGroundCodeTag` is now `2026-09-25.1`, so each level rebakes once.
+- The same session's editor save dropped Saltwood's `road_signs` entity: the loader spawned the sign meshes with no `SourceSpec`, and `LevelWriter` saves only those. `road_signs` now gets a document entity, as `script` has, and the writer emits its keys flat (`{shape:"road_signs", file}`). The test `editor_save_keeps_the_road_signs_entity` loads and saves through the real paths.
+
+**Consequences.** Saltwood's cached load drops from 64.7 s to 32.7 s, and opening a level in the editor after the viewer no longer regenerates the ground.

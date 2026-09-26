@@ -9,6 +9,7 @@
 #include "../../curve.h"
 
 #include <algorithm>
+#include <thread>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -215,6 +216,46 @@ void bakeErodedTerrain(TerrainParams& params, const Noise& noise, double worldSi
     const double margin = std::max(1.0, worldSize * 0.06);   // feather band width
     HeightField analyticCopy = analytic;                     // both closures share `base`
     const double sea = params.erodeLandOnly && params.seaLevel > -1e29 ? params.seaLevel : -1e30;
+    if (sea > -1e29) {
+        // LAND ONLY, BAKED: the blend below needs the analytic relief at every sample (to know how near the
+        // sea it is), and evaluating that noise stack per sample cost far more than the eroded grid it
+        // blends -- a 1 m ground pyramid of the island spent minutes in it. So the blend is evaluated ONCE
+        // per eroded-grid node and the result sampled bilinearly, like the eroded grid itself (same
+        // resolution: nothing finer than the grid is lost). Beyond the square it is still the analytic relief.
+        const int n = std::max(2, res) + 1;
+        const double step = worldSize / (n - 1);
+        auto grid = std::make_shared<std::vector<float>>(static_cast<std::size_t>(n) * n);
+        std::vector<std::thread> workers;
+        const unsigned nt = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
+        for (unsigned t = 0; t < nt; ++t)
+            workers.emplace_back([&, t] {
+                for (int j = static_cast<int>(t); j < n; j += static_cast<int>(nt))
+                    for (int i = 0; i < n; ++i) {
+                        const double x = -half + i * step, z = -half + j * step;
+                        const double a = analyticCopy(x, z);
+                        double w = 1.0;
+                        if (a < sea + 2.0) w *= clamp01((a - (sea - 4.0)) / 6.0);
+                        (*grid)[static_cast<std::size_t>(j) * n + i] = static_cast<float>(a + (eroded(x, z) - a) * w);
+                    }
+            });
+        for (auto& th : workers) th.join();
+        params.erodedBase = std::make_shared<const std::function<double(double, double)>>(
+            [grid, n, step, analyticCopy, half, margin](double x, double z) {
+                const double wx = clamp01((half - std::fabs(x)) / margin);
+                const double wz = clamp01((half - std::fabs(z)) / margin);
+                const double w = wx < wz ? wx : wz;
+                if (w <= 0.0) return analyticCopy(x, z);
+                const double fx = std::clamp((x + half) / step, 0.0, n - 1.001), fz = std::clamp((z + half) / step, 0.0, n - 1.001);
+                const int i = static_cast<int>(fx), j = static_cast<int>(fz);
+                const double u = fx - i, v = fz - j;
+                auto H = [&](int a, int b) { return static_cast<double>((*grid)[static_cast<std::size_t>(b) * n + a]); };
+                const double baked = (H(i, j) * (1 - u) + H(i + 1, j) * u) * (1 - v) + (H(i, j + 1) * (1 - u) + H(i + 1, j + 1) * u) * v;
+                if (w >= 1.0) return baked;
+                const double a = analyticCopy(x, z);   // the feather band at the square's edge only
+                return a + (baked - a) * w;
+            });
+        return;
+    }
     params.erodedBase = std::make_shared<const std::function<double(double, double)>>(
         [eroded, analyticCopy, half, margin, sea](double x, double z) {
             double wx = clamp01((half - std::fabs(x)) / margin);

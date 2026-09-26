@@ -24,6 +24,7 @@
 #include "../src/engine/asset_manager.h"
 #include "../src/engine/components.h"
 #include "../src/engine/level_loader.h"
+#include "../src/engine/level_writer.h"   // the editor's save (road_signs round trip)
 #include "../src/engine/drawn_road.h"
 #include "../src/engine/ai/pathfind.h"
 #include "../src/engine/mesh_uploader.h"
@@ -3241,4 +3242,41 @@ TEST_CASE(block_census_lots_per_block) {
                         r.c.y);
         }
     }
+}
+
+// The editor's load -> save kept the level's roads but DROPPED its road signs (ADR-0110): the loader
+// spawned the sign meshes with no SourceSpec, and the writer only saves SourceSpec entities, so saving
+// island_8_saltwood in the editor quietly deleted `{shape:"road_signs", file}`. Load and save through
+// the real paths, as the editor does, and the entity must come back as it went in.
+TEST_CASE(editor_save_keeps_the_road_signs_entity) {
+    const std::string path = "/tmp/rt_road_signs_round_trip.json";
+    {
+        json level = {{"version", 1},
+                      {"entities", json::array({
+                          {{"id", 1}, {"name", "ground"}, {"shape", "box"}, {"size", {50, 1, 50}},
+                           {"position", {0, -0.5, 0}}, {"physics", {{"motion", "static"}}}},
+                          {{"id", 2}, {"name", "road signs"}, {"shape", "road_signs"},
+                           {"file", "no_such.signs.json"}, {"position", {0, 0, 0}}}})}};
+        std::ofstream(path) << level.dump(1);
+    }
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    CHECK(LevelLoader::load(path, world, *renderer, view, assets, /*editorMode=*/true));
+    CHECK(LevelWriter::save(path, world));
+    std::ifstream in(path);
+    const json saved = json::parse(in);
+    const json* signs = nullptr;
+    for (const json& e : saved["entities"])
+        if (e.value("shape", std::string()) == "road_signs") signs = &e;
+    CHECK(signs != nullptr);
+    if (signs) {
+        CHECK(signs->value("file", std::string()) == "no_such.signs.json");   // flat, as authored
+        CHECK(signs->value("name", std::string()) == "road signs");
+        CHECK(!signs->contains("road_signs"));
+        CHECK(!signs->contains("size"));
+    }
+    std::remove(path.c_str());
 }
