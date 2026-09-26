@@ -20,6 +20,7 @@
 #include "procgen/stylized_tree.h"
 #include "procgen/forest.h"         // "forest": real trees + impostors at island scale (ADR-0129)
 #include "procgen/terrain_maps.h"
+#include "procgen/terrain_weather.h"
 #include "procgen/trails.h"
 #include "procgen/ground_cover.h"
 #include "procgen/ground_layers.h"
@@ -1574,6 +1575,10 @@ static uint64_t bakedGroundKey(const json& root, const TerrainParams& p) {
     h = fnv1aStr(root.contains("terrain") ? root["terrain"].dump() : std::string(), h);
     // the river carve's own code tag: only levels with rivers re-bake when it changes
     if (p.hydro) h = fnv1aStr(std::string("hydro/") + kHydroCarveCodeTag, h);
+    // ...and the weathered ground's (ADR-0126): a regrown ground under an unchanged terrain block kept the
+    // OLD pyramid, metres off the new ground -- the player, placed on the new one, stood under the drawn
+    // (and collided) old one and fell through the world (Glenn: "there's a lot of falling through the floor")
+    if (root.contains("terrain") && root["terrain"].contains("weather")) h = fnv1aStr(std::string("weather/") + weatherCodeTag(), h);
 #ifdef RT_ROADS_LANES
     if (g_lanes.bundle) h = fnv1aStr(g_lanes.bundle->manifest().value("key", std::string()), h);
 #endif

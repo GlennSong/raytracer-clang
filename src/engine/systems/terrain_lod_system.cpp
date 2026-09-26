@@ -362,6 +362,13 @@ void TerrainLodSystem::fixedUpdate(FrameContext& ctx) {
     auto buildShape = [](std::shared_ptr<const pyramid::Pyramid> baked, const TerrainParams* params, const Noise* nz,
                          LodNode node, int gridRes, double eps) {
         LodNodeMesh built = baked ? generateBakedPatch(*baked, node) : generateLodNodeMesh(*params, *nz, node, gridRes, eps);
+        static const bool traceShape = std::getenv("RT_COLLIDER_TRACE") != nullptr;
+        if (traceShape) {
+            int bad = 0;
+            for (const Vertex& v : built.mesh.vertices) bad += !std::isfinite(v.position.y);
+            LOG_INFO << "[colliders]   patch (" << node.minX << ", " << node.minZ << ") y " << built.boundsMin.y << " .. " << built.boundsMax.y
+                     << ", " << built.mesh.indices.size() / 3 << " tris, " << bad << " non-finite";
+        }
         std::vector<Vec3> verts;
         verts.reserve(built.mesh.vertices.size());
         for (const Vertex& v : built.mesh.vertices) verts.push_back(v.position);
@@ -396,10 +403,18 @@ void TerrainLodSystem::fixedUpdate(FrameContext& ctx) {
             inbox->done.push_back({key, rev, std::move(shape)});
         });
     }
+    static const bool traceWin = std::getenv("RT_COLLIDER_TRACE") != nullptr;
     for (auto it = colliders_.begin(); it != colliders_.end();) {
         if (desired.count(it->first)) { ++it; continue; }
+        if (traceWin) LOG_INFO << "[colliders] drop tile key " << it->first << " (player " << player.x << ", " << player.z << ")";
         physics_->physicsWorld().removeBody(it->second);
         it = colliders_.erase(it);
+    }
+    if (traceWin) {
+        static int k = 0;
+        if (++k % 30 == 0) LOG_INFO << "[colliders] window at player (" << player.x << ", " << player.y << ", " << player.z << "), drawn ground there "
+                                    << (cfg->baked ? cfg->baked->height(player.x, player.z) : -1.0) << ", lookahead ("
+                                    << lookahead.x << ", " << lookahead.z << "), " << colliders_.size() << " tiles";
     }
 }
 

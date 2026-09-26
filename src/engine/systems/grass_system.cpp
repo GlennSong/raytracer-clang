@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 namespace engine {
 
@@ -17,7 +19,7 @@ uint64_t mix(uint64_t x) {
 }
 double unit(uint64_t h) { return static_cast<double>(h >> 11) * (1.0 / 9007199254740992.0); }
 constexpr double kCommitBudgetMs = 1.0;   // creating a tile's groups is cheap; this caps a burst
-constexpr int kMaxInFlight = 4;           // tile jobs at once: keeps ahead of a runner, leaves the pool
+constexpr int kMaxInFlight = 4;           // tile jobs at once: keeps ahead of a runner with several fields (ADR-0133), leaves the pool
 constexpr double kKeepFar = 0.4;          // the outer ring's share of the clumps (RenderMaterial::keepFar)
 constexpr double kGroundStep = 1.0;       // the tile's ground grid (m): the drawn terrain's own resolution
 
@@ -98,6 +100,16 @@ void GrassSystem::update(FrameContext& ctx) {
     ctx.world.each<GrassField>([&](Entity, GrassField& f) { if (!f.clumps.empty() && f.ground) fields.push_back(&f); });
     if (fields.empty()) return;
     const Vec3 cam = ctx.view.camera.position;
+    static const bool stats = [] { const char* e = std::getenv("RT_GRASS_STATS"); return e && e[0] == '1'; }();
+    if (stats) {   // RT_GRASS_STATS=1: fields, tiles committed, groups, jobs in flight -- every 120 frames
+        static long frame = 0;
+        if (++frame % 120 == 0) {
+            std::size_t groups = 0, committed = 0;
+            for (const auto& [k, t] : tiles_) { groups += t.groups.size(); committed += t.lod >= 0; }
+            std::fprintf(stderr, "[grass] %zu fields, %zu tiles (%zu committed), %zu groups, %d in flight, camera (%.0f, %.0f)\n",
+                         fields.size(), tiles_.size(), committed, groups, inFlight_, cam.x, cam.z);
+        }
+    }
     // the layers: tile size, and the band of distances a tile must reach into to be wanted
     struct Layer { double T, inner, reach; bool on; };
     std::vector<Layer> layers;
