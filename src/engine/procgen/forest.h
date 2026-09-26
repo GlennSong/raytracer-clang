@@ -1,0 +1,90 @@
+#ifndef RAYTRACER_ENGINE_PROCGEN_FOREST_H
+#define RAYTRACER_ENGINE_PROCGEN_FOREST_H
+
+// FORESTS (ADR-0129, Glenn: "Forests with many trees as well"). A level-scale forest is hundreds of
+// thousands of trees, so it is not a scatter of instanced models; it is three things:
+//   1. WHERE: a density field from the ground itself -- soil (terrain_maps.h), slope, the cover's rock,
+//      sand and snow, a wandering TREELINE, and stands and clearings (a slow noise) -- sampled on a
+//      jittered grid at the stand's spacing: a full stand where the density is 1, thinning at its edges.
+//   2. WHAT: the species by altitude, each preferring its own band, with a patchy noise per species so
+//      a hillside holds stands of one kind rather than a salad; stunted near the treeline.
+//   3. HOW FAR: real_tree.h models near (instanced, per cell), IMPOSTOR CARDS far -- two crossed side
+//      cards and a top card per tree, merged per cell into one mesh on one atlas -- crossfaded per
+//      pixel over a distance band (RenderMaterial::FLAG_LOD_BAND).
+// The city keeps it out through the caller's `exclude` (roads, pads, graded lots).
+
+#include "../../renderer/renderer.h"   // RenderMesh
+#include "../../rt_math.h"
+#include "real_tree.h"
+
+#include <nlohmann/json.hpp>
+
+#include <cstdint>
+#include <functional>
+#include <vector>
+
+namespace engine {
+
+class GroundCover;
+struct TerrainMaps;
+
+struct ForestSpecies {
+    RealSpecies species = RealSpecies::Spruce;
+    int variants = 4;
+    double altLo = 0.0, altHi = 1e9;   // metres above the sea it prefers (soft edges)
+    double weight = 1.0;
+};
+
+struct ForestParams {
+    std::vector<ForestSpecies> species;
+    double spacing = 7.5;          // metres between trees in a full stand
+    double coverage = 0.55;        // share of the eligible land that is forest
+    double standScaleM = 650.0;    // stands and clearings
+    double treelineM = 620.0;      // above the sea (wanders +-90 m)
+    double shoreClearM = 4.0;      // no trees within this height of the sea
+    double maxSlopeDeg = 40.0;
+    double cellM = 256.0;          // cull cells (near groups, far merged meshes)
+    double nearM = 150.0;          // full models to here, crossfading over the last nearFadeM
+    double nearFadeM = 40.0;
+    double farM = 7000.0;          // impostors to here
+    uint32_t seed = 1;
+};
+
+ForestParams forestFromJson(const nlohmann::json& j);
+
+struct ForestTree {
+    Vec3 pos;
+    float yaw = 0.0f, scale = 1.0f;
+    uint16_t variant = 0;          // index into the global variant list (species-major)
+};
+
+// The density at a point, 0..1 (height y is the ground there, slopeDeg its slope).
+double forestDensity(const ForestParams& p, double seaLevel, const GroundCover* cover, const TerrainMaps* maps,
+                     double x, double z, double y, double slopeDeg);
+
+// The canopy's cover at a point, 0..1, WITHOUT asking the ground cover (the cover asks this, to lay
+// leaf and needle litter under the trees): the density's stands, soil, shore, treeline and slope.
+double forestCanopy(const ForestParams& p, double seaLevel, const TerrainMaps* maps, double x, double z, double y,
+                    double slopeDeg);
+
+// Place the forest over the square [-half, half]^2. `ground` is the drawn ground (thread-safe),
+// `exclude` true where no tree may stand (roads, pads, water). Variant `v` of species `s` is global
+// index s * variantsPerSpecies + v (variantsPerSpecies = the max over species).
+std::vector<ForestTree> placeForest(const ForestParams& p, double half, double seaLevel, const GroundCover* cover,
+                                    const TerrainMaps* maps, const std::function<double(double, double)>& ground,
+                                    const std::function<bool(double, double)>& exclude, int variantsPerSpecies);
+
+// One tree variant's impostor slot in the atlas, and the tree's measures (unit scale).
+struct ImpostorSlot {
+    double u0 = 0, v0 = 0, u1 = 1, v1 = 1;     // side picture
+    double tu0 = 0, tv0 = 0, tu1 = 1, tv1 = 1; // top picture
+    double halfW = 1.0, height = 1.0, crownBase = 0.0, crownRadius = 1.0;
+};
+
+// Append `t`'s impostor (two crossed side cards + a top card) to `mesh`, world space. `colour` is the
+// vertex colour (1 / the atlas's colour scale).
+void appendImpostor(RenderMesh& mesh, const ForestTree& t, const ImpostorSlot& slot, double colour);
+
+}  // namespace engine
+
+#endif

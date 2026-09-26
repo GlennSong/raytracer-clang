@@ -713,6 +713,19 @@ vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
 }
 
 void main() {
+    // FLAG_LOD_BAND (bit 19, ADR-0129): drawn only inside a distance band, dithered at its edges, so a
+    // near model and its far impostor crossfade per pixel (features[3] = in0, in1, out0, out1)
+    if ((pc.surfaceFlags.y & (1u << 19)) != 0u) {
+        const vec4 b = pc.features[3];
+        const float d = distance(inWorldPos, g.cameraPosition.xyz);
+        float vis = 1.0;
+        if (b.y > b.x) vis *= smoothstep(b.x, b.y, d);
+        if (b.w > b.z) vis *= 1.0 - smoothstep(b.z, b.w, d);
+        // a 4x4 Bayer threshold: the band reads as a fine screen-door, not noise
+        const float bayer[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+        const ivec2 q = ivec2(gl_FragCoord.xy) & 3;
+        if (vis <= (bayer[q.y * 4 + q.x] + 0.5) / 16.0) discard;
+    }
     // FLAG_EMISSIVE_VERTEX_TINT (32): the vertex colour tints the emission, not the albedo.
     const bool emissiveTint = (pc.surfaceFlags.y & 32u) != 0u;
     vec3 albedo = pc.albedoMetallic.rgb * (emissiveTint ? vec3(1.0) : inColor);
@@ -875,7 +888,8 @@ void main() {
         float cut = albedoTex.a;
         // grass cards: keep the cut-out's coverage down the mips (Golus) -- a thin blade's alpha
         // averages toward nothing, and a far card would vanish
-        if ((pc.surfaceFlags.y & (1u << 17)) != 0u)
+        // (and tree cards, FLAG_LOD_BAND: a far crown's needles average away the same way)
+        if ((pc.surfaceFlags.y & ((1u << 17) | (1u << 19))) != 0u)
             cut *= 1.0 + max(textureQueryLod(albedoMap, inTexcoord).x, 0.0) * 0.3;
         if ((pc.surfaceFlags.y & 2u) != 0u && cut < 0.5) discard;
         if ((pc.surfaceFlags.y & 64u) != 0u) mapAlpha = albedoTex.a;

@@ -718,6 +718,10 @@ struct VulkanRenderer::Impl {
     VkPipelineLayout shadowPipelineLayout = VK_NULL_HANDLE;
     VkPipeline shadowPipeline = VK_NULL_HANDLE;
     VkPipeline shadowPipelinePacked = VK_NULL_HANDLE;   // same shader, the 32-byte stride
+    // THE ALPHA-CUT CASTER (ADR-0129): FLAG_ALPHA_TEST draws (leaf cards) cut their shadow by the
+    // albedo alpha -- a layout with the material set, a texcoord, a fragment stage
+    VkPipelineLayout shadowAlphaLayout = VK_NULL_HANDLE;
+    VkPipeline shadowAlphaPipeline = VK_NULL_HANDLE, shadowAlphaPipelinePacked = VK_NULL_HANDLE;
     VkSampler shadowSampler = VK_NULL_HANDLE;
     int activeCascadeCount = 0;
     float shadowDepthBiasConst = 1.25f;
@@ -797,6 +801,9 @@ struct VulkanRenderer::Impl {
     bool recreateSwapchain();
     void cleanupSwapchain();
     void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex);
+    // a transient material set (set 1 layout) for `item`'s textures, from this frame's pool chain;
+    // VK_NULL_HANDLE only on a true out-of-memory
+    VkDescriptorSet allocMaterialSet(const DrawItem& item);
     void drawFrame();
 
     // ---- helpers ----
@@ -4870,11 +4877,95 @@ bool VulkanRenderer::Impl::createShadowPipeline() {
     binding.stride = sizeof(GpuVertexPacked);
     if (result == VK_SUCCESS) result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &shadowPipelinePacked);
     vkDestroyShaderModule(device, vert, nullptr);
+    // the alpha-cut twin: + texcoord (location 5), + the material set, + a fragment stage that cuts
+    if (result == VK_SUCCESS) {
+        VkPipelineLayoutCreateInfo al = layoutInfo;
+        al.setLayoutCount = 1;
+        al.pSetLayouts = &materialSetLayout;
+        VkShaderModule av = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/mesh_shadow_alpha.vert.spv");
+        VkShaderModule af = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/mesh_shadow_alpha.frag.spv");
+        if (av && af && vkCreatePipelineLayout(device, &al, nullptr, &shadowAlphaLayout) == VK_SUCCESS) {
+            std::array<VkPipelineShaderStageCreateInfo, 2> st{};
+            for (auto& x : st) { x.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO; x.pName = "main"; }
+            st[0].stage = VK_SHADER_STAGE_VERTEX_BIT; st[0].module = av;
+            st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; st[1].module = af;
+            std::array<VkVertexInputAttributeDescription, 6> aa{};
+            for (int k = 0; k < 5; ++k) aa[k] = sattrs[k];
+            aa[5] = {5, 0, VK_FORMAT_R32G32_SFLOAT, static_cast<uint32_t>(offsetof(GpuVertex, texcoord))};
+            VkPipelineVertexInputStateCreateInfo avi = vertexInput;
+            avi.vertexAttributeDescriptionCount = static_cast<uint32_t>(aa.size());
+            avi.pVertexAttributeDescriptions = aa.data();
+            VkGraphicsPipelineCreateInfo ai = info;
+            ai.stageCount = 2;
+            ai.pStages = st.data();
+            ai.pVertexInputState = &avi;
+            ai.layout = shadowAlphaLayout;
+            binding.stride = sizeof(GpuVertex);
+            VkResult r1 = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &ai, nullptr, &shadowAlphaPipeline);
+            binding.stride = sizeof(GpuVertexPacked);
+            aa[5].offset = static_cast<uint32_t>(offsetof(GpuVertexPacked, texcoord));
+            if (r1 == VK_SUCCESS) r1 = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &ai, nullptr, &shadowAlphaPipelinePacked);
+            if (r1 != VK_SUCCESS) LOG_WARN("[vulkan] alpha-cut shadow pipeline failed; cards cast solid shadows");
+        }
+        if (av) vkDestroyShaderModule(device, av, nullptr);
+        if (af) vkDestroyShaderModule(device, af, nullptr);
+    }
     if (result != VK_SUCCESS) {
         LOG_ERROR("[vulkan] shadow pipeline creation failed");
         return false;
     }
     return true;
+}
+
+VkDescriptorSet VulkanRenderer::Impl::allocMaterialSet(const DrawItem& item) {
+    VkDescriptorSet matSet = VK_NULL_HANDLE;
+    VkDescriptorSetAllocateInfo dsa{};
+    dsa.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsa.descriptorSetCount = 1;
+    dsa.pSetLayouts = &materialSetLayout;
+    // Walk the frame's pool chain, growing it when every link is
+    // full. A draw is dropped only if pool CREATION fails (OOM) —
+    // never because a fixed cap was reached (the old behaviour,
+    // which vanished buildings/terrain view-dependently at metro
+    // scale as the visible set crossed the cap).
+    auto& chain = materialPools[currentFrame];
+    for (;;) {
+        dsa.descriptorPool = chain[materialPoolActive];
+        if (vkAllocateDescriptorSets(device, &dsa, &matSet) == VK_SUCCESS)
+            break;
+        if (materialPoolActive + 1 < chain.size()) {
+            ++materialPoolActive;
+            continue;
+        }
+        VkDescriptorPool grown = VK_NULL_HANDLE;
+        if (!createMaterialPool(&grown)) break;   // true OOM: drop draw
+        chain.push_back(grown);
+        ++materialPoolActive;
+        LOG_INFO("[vulkan] material pool chain grew to %zu links (frame %u)",
+                 chain.size(), currentFrame);
+    }
+    if (matSet == VK_NULL_HANDLE) {
+        if (!materialPoolExhaustedWarned) {
+            LOG_WARN("[vulkan] material pool allocation failed; draws dropped");
+            materialPoolExhaustedWarned = true;
+        }
+        return VK_NULL_HANDLE;
+    }
+    std::array<VkDescriptorImageInfo, 5> imgs{};
+    std::array<VkWriteDescriptorSet, 5> writes{};
+    for (uint32_t k = 0; k < 5; ++k) {
+        imgs[k].sampler = textureSampler;
+        imgs[k].imageView = textureViewOr(item.textures[k]);
+        imgs[k].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        writes[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[k].dstSet = matSet;
+        writes[k].dstBinding = k;
+        writes[k].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[k].descriptorCount = 1;
+        writes[k].pImageInfo = &imgs[k];
+    }
+    vkUpdateDescriptorSets(device, 5, writes.data(), 0, nullptr);
+    return matSet;
 }
 
 void VulkanRenderer::Impl::recordShadowPass(VkCommandBuffer cmd) {
@@ -4903,14 +4994,24 @@ void VulkanRenderer::Impl::recordShadowPass(VkCommandBuffer cmd) {
             for (const DrawItem& item : drawQueue) {
                 GpuMesh* m = meshes.get(item.mesh);
                 if (!m || m->indexCount == 0) continue;
-                const VkPipeline want = m->packed ? shadowPipelinePacked : shadowPipeline;
-                if (want != bound) { vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, want); bound = want; }
                 // Debug-gizmo overlays (FLAG_OVERLAY) and ground cover (FLAG_GRASS) cast no shadows.
                 if (item.push.surfaceFlags[1] & (RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS)) continue;
+                // alpha-cut surfaces (leaf cards) cut their shadow too, when their albedo map is bound
+                const bool cut = (item.push.surfaceFlags[1] & RenderMaterial::FLAG_ALPHA_TEST) && item.textures[0].valid() &&
+                                 shadowAlphaPipeline && shadowAlphaPipelinePacked;
+                const VkPipeline want = cut ? (m->packed ? shadowAlphaPipelinePacked : shadowAlphaPipeline)
+                                            : (m->packed ? shadowPipelinePacked : shadowPipeline);
+                if (want != bound) { vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, want); bound = want; }
+                const VkPipelineLayout layout = cut ? shadowAlphaLayout : shadowPipelineLayout;
+                if (cut) {
+                    const VkDescriptorSet ms = allocMaterialSet(item);
+                    if (ms == VK_NULL_HANDLE) continue;
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowAlphaLayout, 0, 1, &ms, 0, nullptr);
+                }
                 ShadowPush push;
                 std::memcpy(push.lightViewProj, cpuGlobals.cascadeVP[c], sizeof(push.lightViewProj));
                 // (the shadow shader reads the model per instance; this slot is unused)
-                vkCmdPushConstants(cmd, shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
+                vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT,
                                    0, sizeof(ShadowPush), &push);
                 const VkBuffer vbs[2] = {m->vertexBuffer, instanceBuffers[currentFrame]};
                 const VkDeviceSize offs[2] = {0, 0};
@@ -5258,53 +5359,8 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
                 push.albedoMetallic[2] = wireColor[2];
             } else {
                 // Material textures (set 1): a transient set from this frame's pool.
-                VkDescriptorSet matSet = VK_NULL_HANDLE;
-                VkDescriptorSetAllocateInfo dsa{};
-                dsa.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-                dsa.descriptorSetCount = 1;
-                dsa.pSetLayouts = &materialSetLayout;
-                // Walk the frame's pool chain, growing it when every link is
-                // full. A draw is dropped only if pool CREATION fails (OOM) —
-                // never because a fixed cap was reached (the old behaviour,
-                // which vanished buildings/terrain view-dependently at metro
-                // scale as the visible set crossed the cap).
-                auto& chain = materialPools[currentFrame];
-                for (;;) {
-                    dsa.descriptorPool = chain[materialPoolActive];
-                    if (vkAllocateDescriptorSets(device, &dsa, &matSet) == VK_SUCCESS)
-                        break;
-                    if (materialPoolActive + 1 < chain.size()) {
-                        ++materialPoolActive;
-                        continue;
-                    }
-                    VkDescriptorPool grown = VK_NULL_HANDLE;
-                    if (!createMaterialPool(&grown)) break;   // true OOM: drop draw
-                    chain.push_back(grown);
-                    ++materialPoolActive;
-                    LOG_INFO("[vulkan] material pool chain grew to %zu links (frame %u)",
-                             chain.size(), currentFrame);
-                }
-                if (matSet == VK_NULL_HANDLE) {
-                    if (!materialPoolExhaustedWarned) {
-                        LOG_WARN("[vulkan] material pool allocation failed; draws dropped");
-                        materialPoolExhaustedWarned = true;
-                    }
-                    continue;
-                }
-                std::array<VkDescriptorImageInfo, 5> imgs{};
-                std::array<VkWriteDescriptorSet, 5> writes{};
-                for (uint32_t k = 0; k < 5; ++k) {
-                    imgs[k].sampler = textureSampler;
-                    imgs[k].imageView = textureViewOr(item.textures[k]);
-                    imgs[k].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    writes[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    writes[k].dstSet = matSet;
-                    writes[k].dstBinding = k;
-                    writes[k].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    writes[k].descriptorCount = 1;
-                    writes[k].pImageInfo = &imgs[k];
-                }
-                vkUpdateDescriptorSets(device, 5, writes.data(), 0, nullptr);
+                const VkDescriptorSet matSet = allocMaterialSet(item);
+                if (matSet == VK_NULL_HANDLE) continue;
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1,
                                         &matSet, 0, nullptr);
             }
@@ -5761,6 +5817,8 @@ void VulkanRenderer::shutdown() {
     if (impl->shadowPipeline) vkDestroyPipeline(impl->device, impl->shadowPipeline, nullptr);
     if (impl->shadowPipelineLayout)
         vkDestroyPipelineLayout(impl->device, impl->shadowPipelineLayout, nullptr);
+    if (impl->shadowAlphaLayout) vkDestroyPipelineLayout(impl->device, impl->shadowAlphaLayout, nullptr);
+    impl->shadowAlphaLayout = VK_NULL_HANDLE;
     if (impl->shadowSampler) vkDestroySampler(impl->device, impl->shadowSampler, nullptr);
     for (int c = 0; c < RT_MAX_CASCADES; ++c) {
         if (impl->shadowFramebuffers[c]) vkDestroyFramebuffer(impl->device, impl->shadowFramebuffers[c], nullptr);
@@ -5796,7 +5854,7 @@ void VulkanRenderer::shutdown() {
     impl->terrainPipeline = VK_NULL_HANDLE;
     for (VkPipeline* p : {&impl->meshPipelinePacked, &impl->meshPipelineCulledPacked, &impl->wirePipelinePacked,
                           &impl->transparentPipelinePacked, &impl->waterPipelinePacked, &impl->overlayPipelinePacked,
-                          &impl->shadowPipelinePacked}) {
+                          &impl->shadowPipelinePacked, &impl->shadowAlphaPipeline, &impl->shadowAlphaPipelinePacked}) {
         if (*p) vkDestroyPipeline(impl->device, *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -6578,6 +6636,8 @@ void VulkanRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
     if (material.flags & RenderMaterial::FLAG_GRASS) {   // [3]: the grass's thinning band
         f[12] = material.thinStart; f[13] = material.thinEnd; f[14] = material.keepFar; f[15] = material.growFar;
         f[9] = material.fadeInStart; f[10] = material.fadeInEnd;   // [2].yz: the grow-in band
+    } else if (material.flags & RenderMaterial::FLAG_LOD_BAND) {   // [3]: the LOD band (ADR-0129)
+        f[12] = material.lodIn0; f[13] = material.lodIn1; f[14] = material.lodOut0; f[15] = material.lodOut1;
     }
     item.push.albedoMetallic[0] = static_cast<float>(material.albedo.x);
     item.push.albedoMetallic[1] = static_cast<float>(material.albedo.y);

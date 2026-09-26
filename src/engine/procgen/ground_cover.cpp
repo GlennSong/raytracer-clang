@@ -1,5 +1,6 @@
 #include "ground_cover.h"
 
+#include "forest.h"
 #include "terrain_maps.h"
 
 #include <algorithm>
@@ -81,9 +82,10 @@ Cover GroundCover::at(double x, double z, double height, double normalUp, double
                                           std::min(1.0, 2.0 * p_.dirtPatches) + 0.35 * dryUp * smooth(0.45, 0.6, patch),
                                       0.0, 1.0);
     // mapped: scree below the cliffs and washed gravel down the steeper channels read as bare earth
-    const double dirtAll = mapped ? std::max({dirtRaw, smooth(0.2, 0.5, ms.scree + 0.15 * jag),
-                                              0.8 * ms.wet * dryUp * smooth(8.0, 20.0, slope)})
-                                  : dirtRaw;
+    double dirtAll = mapped ? std::max({dirtRaw, smooth(0.2, 0.5, ms.scree + 0.15 * jag),
+                                        0.8 * ms.wet * dryUp * smooth(8.0, 20.0, slope)})
+                            : dirtRaw;
+    if (p_.forest) dirtAll = std::max(dirtAll, 0.78 * forestCanopy(*p_.forest, p_.seaLevel, p_.maps.get(), x, z, height, slope) + 0.1 * fine);
     Cover c;
     double rem = 1.0;
     c.snow = snowRaw * rem; rem -= c.snow;

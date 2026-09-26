@@ -99,6 +99,8 @@ add_library(engine_core STATIC
     src/engine/procgen/stream_power.cpp
     src/engine/procgen/terrain_weather.cpp
     src/engine/procgen/terrain_maps.cpp
+    src/engine/procgen/real_tree.cpp
+    src/engine/procgen/forest.cpp
     src/engine/procgen/rock.cpp
     src/engine/procgen/cellular.cpp
     src/engine/procgen/planet.cpp
@@ -1055,7 +1057,7 @@ function(rt_build_vulkan_shaders)
     endif()
     set(VK_SHADER_SRC_DIR ${CMAKE_SOURCE_DIR}/shaders/vulkan)
     file(MAKE_DIRECTORY ${VK_SHADER_OUT_DIR})
-    set(VK_SHADERS mesh.vert mesh.frag mesh_wire.frag mesh_shadow.vert terrain.vert
+    set(VK_SHADERS mesh.vert mesh.frag mesh_wire.frag mesh_shadow.vert mesh_shadow_alpha.vert mesh_shadow_alpha.frag terrain.vert
                    sky.vert sky.frag composite.vert composite.frag bloom.frag
                    ssao.frag ssao_blur.frag ssr.frag dof.frag brdf_lut.frag
                    atmosphere.frag clouds.frag clouds_composite.frag water.vert water.frag star.frag
@@ -1645,3 +1647,8 @@ if(EMSCRIPTEN)
 
     message(STATUS "Emscripten toolchain — building the WebGPU/WASM viewer_web target")
 endif()
+
+# rt_trees (ADR-0129): the real-tree gallery -- impostor pictures + foliage textures per species
+add_executable(rt_trees tools/rt_trees.cpp)
+target_link_libraries(rt_trees PRIVATE engine_core Threads::Threads)
+target_include_directories(rt_trees PRIVATE src)

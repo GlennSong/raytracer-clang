@@ -1,6 +1,7 @@
 #include "level_params.h"
 #include "procgen/terrain_weather.h"   // the weathered ground (ADR-0126)
 #include "procgen/terrain_maps.h"      // its maps (ADR-0128)
+#include "procgen/forest.h"            // its forest (ADR-0129)
 #include "procgen/terrain_lod.h"   // kBakedCell0 (ADR-0095)
 
 #include "procgen/erosion.h"
@@ -170,6 +171,8 @@ TerrainParams readTerrainParams(const json& t) {
         col("grass", gp.grass); col("grassDry", gp.grassDry); col("dirt", gp.dirt);
         col("sand", gp.sand); col("rock", gp.rock); col("snow", gp.snow);
         if (t.value("erode", false)) gp.maps = weatheredMapsFor(t);   // ADR-0128: nullptr unless weathered
+        if (t.contains("forest") && t["forest"].is_object())                // ADR-0129: litter under the canopy
+            gp.forest = std::make_shared<const ForestParams>(forestFromJson(t["forest"]));
         p.cover = std::make_shared<const GroundCover>(gp);
         p.coverWeights = g.value("layered", true);   // textured layers (the loader binds them) or a flat colour
     }

@@ -137,6 +137,7 @@ std::shared_ptr<const TerrainMaps> weatheredMapsFor(const nlohmann::json& tjIn) 
     nlohmann::json tj = tjIn;
     tj.erase("rivers");
     tj.erase("groundCover");   // the cover reads the maps; its palette does not change them
+    tj.erase("forest");        // ...nor does the forest standing on them
     static std::mutex mu;
     static std::map<std::string, std::shared_ptr<const TerrainMaps>> memo;
     const std::string key = tj.dump();
@@ -145,6 +146,7 @@ std::shared_ptr<const TerrainMaps> weatheredMapsFor(const nlohmann::json& tjIn) 
     std::uint64_t h = 1469598103934665603ULL;
     auto fold = [&](const std::string& s) { for (unsigned char c : s) { h ^= c; h *= 1099511628211ULL; } };
     fold(kMapsCodeTag);
+    fold(weatherCodeTag());
     fold(key);
     char path[256];
     std::snprintf(path, sizeof path, "cache/terrain/maps_%016llx.bin", static_cast<unsigned long long>(h));

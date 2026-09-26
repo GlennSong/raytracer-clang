@@ -8838,3 +8838,36 @@ Glenn then pointed at Josh's Channel, "Better Mountain Generators That Aren't Pe
 - **The stripes were SSAO.** Past a few hundred metres the ~1 m kernel is under a pixel. The depth test then reads its own precision, and the interleaved-gradient rotation printed columns that were multiplied into the haze. Occlusion now fades out between 120 and 350 m. Stripe energy in a hazy test crop fell from 1.41 to 0.46. The cloud march's sun jitter also moved from IGN to a hash; that same IGN structure had been the first suspect.
 
 **Consequences.** Alpine meadows between rock ribs, scree fans, snow in couloirs. Distant ground reads clean through the haze. Dirt stands in for scree (one texture serves both); a grey gravel layer is left for later.
+
+## ADR-0129 — Real trees and island-scale forests: models near, impostors far, crossfaded
+
+**Context.** Glenn: "some more realistic trees over the landscape. Forests with many trees as well", and that it must walk in real time. The existing trees are stylized (`stylized_tree`), or the old L-system trees he called "terrible". The scatter plants tens of thousands of instanced models with per-trunk colliders and cannot reach forest scale.
+
+**Decision.**
+- **`procgen/real_tree.{h,cpp}`:** six species built the way production foliage is: a bark skeleton of tapered tubes (`MeshBuilder::tube`) and foliage as alpha-cut cards carrying a painted spray.
+  - **Spruce and fir:** whorls every half metre, with drooping, upturned branches; a flat and a hanging spray card per step.
+  - **Pine, oak, beech and birch:** shell crowns. Points on an ellipsoid shell, limbs staggered up a continuing stem, twigs attached along the limbs that end inside their leaf clusters.
+  - **Crown-bent normals:** each card's normal points out from the crown's axis. Cards darken toward the crown's inside.
+  - **Foliage textures:** needle sprays, pine tufts, lobed, oval and deltoid leaves. Painted at 2× by a small canvas rasteriser, with colour dilated under the cut.
+  - **`renderImpostor`:** rasterises a tree on the CPU into side and top pictures.
+- **`procgen/forest.{h,cpp}` and the terrain's `"forest"` block:**
+  - **Density:** stands and clearings, soil and scree from the ADR-0128 maps, the shore, a wandering treeline, slope, and the cover's rock, sand and snow. It is sampled on a jittered grid, with the no-ground part tested first, so 743 k trees place in 2.5 s.
+  - **Species:** by altitude band, with a patchy field per species so stands form. Trees are stunted toward the treeline.
+  - **Keep-out:** roads, decks, the drawn road, flatten footprints and water.
+- **LOD:**
+  - Near: instanced per 512 m cell and variant.
+  - Far: every tree becomes two crossed side cards and a top card on one atlas, merged per 256 m cell (one draw per cell).
+  - **`RenderMaterial::FLAG_LOD_BAND`** (bit 19, features[3]) crossfades the two by a 4×4 Bayer screen-door over [near − fade, near].
+- **The alpha-cut shadow caster:** `mesh_shadow_alpha.{vert,frag}` and a pipeline with the material set. `FLAG_ALPHA_TEST` draws cut their shadow by the albedo alpha, so crowns cast dappled shade, not the rectangles of their cards. `allocMaterialSet` is factored out of the main pass.
+- **The forest floor:** `GroundCoverParams::forest` lays litter (the dirt layer) under the canopy (`forestCanopy`), and the grass field thins with it.
+- **The ground:** the refine's drain is masked by height (0.08 on the plains up to 1 in the mountains), which ends the slot canyons it sawed into the foothills. The maps' cache key folds the weather code tag.
+- **Tools:** `tools/rt_trees OUT` for the gallery.
+
+**Consequences.** Island 8 carries 430 k trees at coverage 0.48. A 1.6 km walk through the forest ran p50 15.7 ms and p99 19.1 ms with no hitches (VSync off, RTX 3080). The impostor vertices take 157 MB. Owed:
+- leaf translucency;
+- trunk colliders (streamed near the player; per-tree bodies do not scale);
+- more species (willow and alder by the water, maple, aspen, shrubs);
+- reeds and tall grass;
+- hiking trails;
+- city planning with the forest;
+- exposing the tree generator to Lua (the procedural-language rule).

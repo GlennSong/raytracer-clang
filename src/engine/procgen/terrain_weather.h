@@ -74,6 +74,9 @@ WeatherParams weatherFromJson(const nlohmann::json& weather, const nlohmann::jso
 // Grow and weather `tp`'s land. `grownOut` (optional) gets the fine grid before the water.
 Heightmap weatherTerrain(const TerrainParams& tp, uint32_t seed, const WeatherParams& w, Heightmap* grownOut = nullptr);
 
+// The pipeline's code tag (the maps' cache key folds it too: a regrown ground must not keep old maps).
+const char* weatherCodeTag();
+
 // The same, through the disk cache (cache/terrain/weather_<hash>.bin). Returns the fine grid.
 Heightmap weatheredTerrainCached(const nlohmann::json& terrainBlock);
 

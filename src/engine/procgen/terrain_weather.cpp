@@ -17,7 +17,7 @@ namespace engine {
 
 namespace {
 // bump when the pipeline's output changes for the same inputs: every weathered cache rebakes
-constexpr const char* kWeatherCodeTag = "2026-09-26.7";   // .2: massifs, peakier uplift; .3: peaks; .4: plains keep the original; .5: crags; .6: pointed summits, sharper crags; .7: refine
+constexpr const char* kWeatherCodeTag = "2026-09-26.8";   // .2: massifs, peakier uplift; .3: peaks; .4: plains keep the original; .5: crags; .6: pointed summits, sharper crags; .7: refine; .8: the drain masked by height
 // rows [0, n) in parallel (the refinement's per-cell passes over 16 M cells)
 template <class F>
 void parallelRows(int n, F&& f) {
@@ -113,7 +113,14 @@ Heightmap refineGrown(const Heightmap& grown, float base0, float sea, const Weat
             sp.rescale = false;
             sp.seaLevel = sea;
             const std::vector<float> zero(u.h.size(), 0.0f);
-            streamPowerErode(u, zero, sp, nullptr, last ? areaOut : nullptr);
+            // the drain cuts hard in the mountains and hardly at all on the low ground: at full strength
+            // everywhere it sawed smooth-walled slot canyons into the foothills
+            std::vector<float> erod(u.h.size());
+            for (std::size_t i = 0; i < erod.size(); ++i) {
+                const double up = std::clamp((u.h[i] - base0 - w.plainHeightM) / (2.5 * w.reliefRampM), 0.0, 1.0);
+                erod[i] = static_cast<float>(0.08 + 0.92 * up * up * (3.0 - 2.0 * up));
+            }
+            streamPowerErode(u, zero, sp, &erod, last ? areaOut : nullptr);
         }
         // 4. and blur once more: the single-cell channels the drainage cuts run along the grid's 8 directions
         blur121(u);
@@ -123,6 +130,8 @@ Heightmap refineGrown(const Heightmap& grown, float base0, float sea, const Weat
     return g;
 }
 }  // namespace
+
+const char* weatherCodeTag() { return kWeatherCodeTag; }
 
 WeatherParams weatherFromJson(const nlohmann::json& w, const nlohmann::json& tj) {
     WeatherParams p;
@@ -405,7 +414,7 @@ Heightmap weatheredTerrainCached(const nlohmann::json& tjIn) {
     nlohmann::json tj = tjIn;
     tj.erase("rivers");   // computed ON this ground
     // ...and what only paints or draws it: retuning the cover's palette must not rebake the ground
-    for (const char* k : {"groundCover", "cdlod", "material"}) tj.erase(k);
+    for (const char* k : {"groundCover", "cdlod", "material", "forest"}) tj.erase(k);
     std::uint64_t key = 1469598103934665603ULL;
     auto fold = [&](const std::string& s) { for (unsigned char c : s) { key ^= c; key *= 1099511628211ULL; } };
     fold(kWeatherCodeTag);

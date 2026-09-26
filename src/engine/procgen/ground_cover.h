@@ -23,6 +23,7 @@
 namespace engine {
 
 struct TerrainMaps;
+struct ForestParams;
 
 enum class Biome : uint8_t { Sea = 0, Beach, Lowland, Upland, Mountain, Count };
 bool biomeFromName(const std::string& name, Biome& out);
@@ -47,6 +48,9 @@ struct GroundCoverParams {
     // the ground sheds soil (steep, convex, high), scree below cliffs, meadow in the hollows, snow held in
     // gullies and blown off ridges, washed gravel down the channels
     std::shared_ptr<const TerrainMaps> maps;
+    // THE FOREST FLOOR (ADR-0129): under the terrain's "forest" canopy the ground is leaf and needle
+    // litter (the dirt layer) with a little grass, not meadow -- and the grass field thins with it
+    std::shared_ptr<const ForestParams> forest;
 };
 
 struct Cover {

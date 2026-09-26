@@ -127,6 +127,12 @@ struct RenderMaterial {
     // occlusion test hid from the camera (engine/occlusion.h) still shades what the camera sees.
     // Set by RenderSystem per draw, never by a level. Vulkan (the only backend with occlusion).
     static constexpr uint32_t FLAG_SHADOW_ONLY = 1u << 18;
+    // FLAG_LOD_BAND (bit 19, ADR-0129): the surface is drawn only inside a distance band from the
+    // camera, dithered in over [lodIn0, lodIn1] and out over [lodOut0, lodOut1] (an edge pair left
+    // equal is open) -- so a near model and its far impostor CROSSFADE per pixel instead of popping.
+    // Not with FLAG_GRASS (which owns the same push slot). Vulkan.
+    static constexpr uint32_t FLAG_LOD_BAND = 1u << 19;
+    float lodIn0 = 0.0f, lodIn1 = 0.0f, lodOut0 = 0.0f, lodOut1 = 0.0f;
     float fadeStart = 0.0f, fadeEnd = 0.0f;   // FLAG_GRASS only
     // FLAG_GRASS: grows in over [fadeInStart, fadeInEnd] (the far field's cards, arriving as the
     // clumps leave); off when equal. With FLAG_ALPHA_TEST the cut-out keeps its coverage down the

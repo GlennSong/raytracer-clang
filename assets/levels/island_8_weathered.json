@@ -210,57 +210,64 @@
     "incise": 0.012,
     "iterations": 20
    }
-  }
- },
- "vegetation": {
-  "clearMargin": 4.0,
-  "clusterCount": 90,
-  "clusterRadius": 28,
-  "count": 22000,
-  "densityScale": 0.004,
-  "densityThreshold": -0.35,
-  "drawDistance": 1100,
-  "maxHeight": 150,
-  "maxScale": 1.4,
-  "maxSlopeDeg": 40,
-  "minHeight": 2.0,
-  "minScale": 0.7,
-  "region": 1600,
-  "seed": 31,
-  "spacingFactor": 0.75,
-  "species": [
-   {
-    "collide": true,
-    "kind": "script",
-    "script": "return flora.scatter_tree(seed, {species='pine'})",
-    "variants": 3
-   },
-   {
-    "collide": true,
-    "kind": "script",
-    "script": "return flora.scatter_tree(seed, {species='oak'})",
-    "variants": 2
-   },
-   {
-    "cuts": 4,
-    "faceted": true,
-    "kind": "rock",
-    "lumpScale": 0.45,
-    "lumps": 5,
-    "material": {
-     "albedo": [
-      0.26,
-      0.25,
-      0.24
-     ],
-     "roughness": 1.0
+  },
+  "forest": {
+   "seed": 8,
+   "spacing": 7.5,
+   "coverage": 0.48,
+   "standScale": 650,
+   "treeline": 640,
+   "shoreClear": 4,
+   "maxSlopeDeg": 40,
+   "cell": 256,
+   "near": 150,
+   "nearFade": 40,
+   "far": 7000,
+   "species": [
+    {
+     "kind": "oak",
+     "variants": 4,
+     "altLo": 0,
+     "altHi": 180,
+     "weight": 1.0
     },
-    "sdfResolution": 18,
-    "skin": "sdf",
-    "smoothness": 0.22,
-    "variants": 3
-   }
-  ]
+    {
+     "kind": "beech",
+     "variants": 4,
+     "altLo": 20,
+     "altHi": 320,
+     "weight": 1.0
+    },
+    {
+     "kind": "birch",
+     "variants": 3,
+     "altLo": 60,
+     "altHi": 450,
+     "weight": 0.5
+    },
+    {
+     "kind": "pine",
+     "variants": 3,
+     "altLo": 0,
+     "altHi": 420,
+     "weight": 0.6
+    },
+    {
+     "kind": "spruce",
+     "variants": 4,
+     "altLo": 200,
+     "altHi": 700,
+     "weight": 1.2
+    },
+    {
+     "kind": "fir",
+     "variants": 4,
+     "altLo": 300,
+     "altHi": 700,
+     "weight": 1.0
+    }
+   ]
+  }
  },
  "vehicles": [
   {
@@ -287,5 +294,113 @@
   "region": 10000.0,
   "roughness": 0.04,
   "seaLevel": 0.0
+ },
+ "grass": {
+  "blades": 18,
+  "clumpRadius": 0.22,
+  "fadeEnd": 60,
+  "fadeStart": 44,
+  "height": 0.55,
+  "lean": 0.35,
+  "maxSlopeDeg": 32,
+  "nearRadius": 24,
+  "patchiness": 0.35,
+  "radius": 62,
+  "rootColor": [
+   0.018,
+   0.032,
+   0.008
+  ],
+  "seed": 7,
+  "spacing": 0.3,
+  "tipColor": [
+   0.1,
+   0.14,
+   0.03
+  ],
+  "variantTint": 0.18,
+  "width": 0.045,
+  "cardRadius": 320,
+  "cardSpacing": 1.6
+ },
+ "rocks": {
+  "clusterCount": 3000,
+  "clusterRadius": 25,
+  "count": 200000,
+  "densityScale": 0.012,
+  "densityThreshold": -0.7,
+  "maxScale": 1.35,
+  "maxSlopeDeg": 55,
+  "minScale": 0.7,
+  "region": 20000,
+  "seed": 211,
+  "spacingFactor": 0.9,
+  "species": [
+   {
+    "cover": "rock",
+    "family": "outcrop",
+    "kind": "stylized_rock",
+    "size": 4.0,
+    "stone": "granite",
+    "variants": 4
+   },
+   {
+    "biome": [
+     "upland",
+     "mountain"
+    ],
+    "family": "boulder",
+    "kind": "stylized_rock",
+    "size": 2.6,
+    "stone": "granite",
+    "variants": 4
+   },
+   {
+    "biome": [
+     "lowland",
+     "upland"
+    ],
+    "family": "boulder",
+    "kind": "stylized_rock",
+    "size": 2.6,
+    "stone": "mossy",
+    "variants": 4
+   },
+   {
+    "biome": [
+     "upland",
+     "mountain"
+    ],
+    "family": "slab",
+    "kind": "stylized_rock",
+    "size": 3.2,
+    "stone": "granite",
+    "variants": 3
+   },
+   {
+    "cover": "dirt",
+    "family": "pebbles",
+    "kind": "stylized_rock",
+    "size": 1.8,
+    "stone": "granite",
+    "variants": 4
+   },
+   {
+    "biome": "beach",
+    "family": "boulder",
+    "kind": "stylized_rock",
+    "size": 2.08,
+    "stone": "sandstone",
+    "variants": 3
+   },
+   {
+    "biome": "beach",
+    "family": "slab",
+    "kind": "stylized_rock",
+    "size": 3.2,
+    "stone": "basalt",
+    "variants": 3
+   }
+  ]
  }
 }

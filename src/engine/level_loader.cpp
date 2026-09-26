@@ -18,6 +18,8 @@
 #include "procgen/earthwork.h"
 #include "procgen/grass.h"
 #include "procgen/stylized_tree.h"
+#include "procgen/forest.h"         // "forest": real trees + impostors at island scale (ADR-0129)
+#include "procgen/terrain_maps.h"
 #include "procgen/ground_cover.h"
 #include "procgen/ground_layers.h"
 #include "procgen/stylized_rock.h"
@@ -1758,6 +1760,167 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
 // each species' GPU mesh (AssetManager dedup). Per-entity rendering for now —
 // instancing (the thousands-scale path) comes later. Carries no SourceSpec, so
 // these are regenerated runtime objects, not document entities.
+// FORESTS (procgen/forest.h, ADR-0129): the level's "forest" block. Real trees (real_tree.h) as
+// instanced models near the camera, grouped per near cell; far, every tree is an impostor (two
+// crossed side cards and a top card on one atlas), merged into one mesh per far cell; the two
+// crossfade per pixel over [near - nearFade, near] (FLAG_LOD_BAND). Kept off the roads, the city's
+// graded ground and the water, exactly as the scatter is.
+static void loadForest(const json& fj, const TerrainParams& terrain, const Noise& terrainNoise, World& world,
+                       Renderer& renderer, AssetManager& assets, double placeDilate,
+                       std::function<double(double, double)> drawnGround) {
+    RT_PROFILE_ZONE_NAMED("loadForest");
+    const auto t0 = std::chrono::steady_clock::now();
+    const ForestParams fp = forestFromJson(fj);
+    if (fp.species.empty()) return;
+    auto groundAt = [&](double x, double z) {
+        return drawnGround ? drawnGround(x, z) : terrainHeight(terrain, terrainNoise, x, z, placeDilate);
+    };
+    // THE VARIANTS: species-major, `vps` slots a species
+    int vps = 1;
+    for (const ForestSpecies& s : fp.species) vps = std::max(vps, s.variants);
+    const int nVar = static_cast<int>(fp.species.size()) * vps;
+    struct Var { MeshHandle bark, leaves; int species = -1; ImpostorSlot slot; RealTree tree; };
+    std::vector<Var> vars(nVar);
+    std::vector<TextureHandle> folTex(fp.species.size());
+    std::vector<TextureData> folData(fp.species.size());
+    for (std::size_t s = 0; s < fp.species.size(); ++s) {
+        folData[s] = realFoliageTexture(fp.species[s].species, 512, fp.seed + static_cast<uint32_t>(s) * 101u);
+        folTex[s] = renderer.uploadTexture(folData[s].width, folData[s].height, folData[s].channels, folData[s].pixels.data());
+        for (int v = 0; v < fp.species[s].variants; ++v) {
+            Var& var = vars[s * vps + v];
+            var.species = static_cast<int>(s);
+            var.tree = realTree(fp.species[s].species, fp.seed * 977u + static_cast<uint32_t>(s * 131 + v * 17), 0.0);
+            const std::string key = std::string("forest:") + realSpeciesName(fp.species[s].species) + ":" + std::to_string(fp.seed) + ":" + std::to_string(v);
+            var.bark = assets.acquireMesh(var.tree.bark, key + ":bark");
+            var.leaves = assets.acquireMesh(var.tree.foliage, key + ":leaves");
+        }
+    }
+    // THE IMPOSTOR ATLAS: a column per variant, the side picture over the top picture
+    const int cw = 128, sh = 256, th = 128, colourScale = 3;
+    const int aw = cw * nVar, ah = sh + th;
+    std::vector<uint8_t> atlas(static_cast<std::size_t>(aw) * ah * 4, 0);
+    for (int i = 0; i < nVar; ++i) {
+        Var& var = vars[i];
+        if (var.species < 0) continue;
+        uint8_t* col = atlas.data() + static_cast<std::size_t>(i) * cw * 4;
+        renderImpostor(var.tree, folData[var.species], false, cw, sh, colourScale, col, aw * 4);
+        renderImpostor(var.tree, folData[var.species], true, cw, th, colourScale, col + static_cast<std::size_t>(sh) * aw * 4, aw * 4);
+        ImpostorSlot& sl = var.slot;
+        const double half = var.tree.crownRadius * 1.18 + 0.5;   // renderImpostor's framing
+        sl.halfW = half;
+        sl.height = var.tree.height * 1.03;
+        sl.crownBase = var.tree.crownBase;
+        sl.crownRadius = var.tree.crownRadius;
+        const double eps = 0.5;
+        sl.u0 = (i * cw + eps) / aw; sl.u1 = ((i + 1) * cw - eps) / aw;
+        sl.v0 = eps / ah; sl.v1 = (sh - eps) / ah;
+        sl.tu0 = sl.u0; sl.tu1 = sl.u1;
+        sl.tv0 = (sh + eps) / ah; sl.tv1 = (sh + th - eps) / ah;
+    }
+    const TextureHandle atlasTex = renderer.uploadTexture(aw, ah, 4, atlas.data());
+
+    // WHERE: off the roads, the graded ground and the water
+    FlattenGrid keepOut;
+    if (!terrain.flatten.empty()) keepOut = buildFlattenGrid(terrain.flatten);
+    std::vector<const RoadDeckField*> decks;
+    world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { if (!d.field.spines.empty()) decks.push_back(&d.field); });
+    const engine::DrawnRoad drawnRoad = engine::gatherDrawnRoad(world);
+    const double margin = fj.value("clearMargin", 4.0);
+    auto exclude = [&](double x, double z) {
+        if (terrain.hydro && terrain.hydro->isWet(x, z, 2.0)) return true;
+        for (const RoadDeckField* d : decks) { double y = 0; if (d->heightAt(x, z, margin, &y)) return true; }
+        if (drawnRoad.near(x, z, margin)) return true;
+        return !terrain.flatten.empty() && flattenCovers(keepOut, terrain.flatten, x, z, margin);
+    };
+    const GroundCover* cover = terrain.cover.get();
+    const TerrainMaps* maps = cover ? cover->params().maps.get() : nullptr;
+    const std::vector<ForestTree> trees = placeForest(fp, terrain.size * 0.5, terrain.seaLevel, cover, maps, groundAt, exclude, vps);
+
+    // NEAR: instanced models per (near cell, variant, part), fading out over the band
+    RenderMaterial barkMat;
+    barkMat.albedo = Vec3(1, 1, 1);
+    barkMat.roughness = 0.92f; barkMat.metallic = 0.0f; barkMat.opacity = 1.0f;
+    barkMat.flags = RenderMaterial::FLAG_LOD_BAND;
+    barkMat.lodOut0 = static_cast<float>(fp.nearM - fp.nearFadeM);
+    barkMat.lodOut1 = static_cast<float>(fp.nearM);
+    const double nearCell = std::max(fp.cellM, 512.0);
+    std::map<std::pair<int, int>, std::vector<std::vector<Mat4>>> nearCells;
+    for (const ForestTree& t : trees) {
+        const std::pair<int, int> key{static_cast<int>(std::floor(t.pos.x / nearCell)), static_cast<int>(std::floor(t.pos.z / nearCell))};
+        auto& per = nearCells[key];
+        if (per.empty()) per.resize(nVar);
+        // yaw as appendImpostor turns it: local x -> (cos, 0, sin), local z -> (-sin, 0, cos)
+        const double c = std::cos(t.yaw) * t.scale, sn = std::sin(t.yaw) * t.scale;
+        Mat4 m;
+        m.m[0][0] = c;  m.m[0][2] = -sn; m.m[0][3] = t.pos.x;
+        m.m[1][1] = t.scale;            m.m[1][3] = t.pos.y - 0.15 * t.scale;
+        m.m[2][0] = sn; m.m[2][2] = c;  m.m[2][3] = t.pos.z;
+        per[t.variant].push_back(m);
+    }
+    std::size_t nearGroups = 0;
+    for (auto& [key, per] : nearCells)
+        for (int v = 0; v < nVar; ++v) {
+            if (per[v].empty() || vars[v].species < 0) continue;
+            Vec3 cen(0, 0, 0);
+            for (const Mat4& m : per[v]) cen = cen + Vec3(m.m[0][3], m.m[1][3], m.m[2][3]);
+            cen = cen / static_cast<Real>(per[v].size());
+            Real spread = 0;
+            for (const Mat4& m : per[v]) spread = std::max(spread, (Vec3(m.m[0][3], m.m[1][3], m.m[2][3]) - cen).length());
+            RenderMaterial leafMat = barkMat;
+            leafMat.roughness = 0.85f;
+            leafMat.flags |= RenderMaterial::FLAG_ALPHA_TEST | RenderMaterial::FLAG_TWO_SIDED | RenderMaterial::FLAG_WIND;
+            leafMat.albedoMap = folTex[vars[v].species];
+            for (int part = 0; part < 2; ++part) {
+                InstanceGroup g;
+                g.mesh = part == 0 ? vars[v].bark : vars[v].leaves;
+                g.material = part == 0 ? barkMat : leafMat;
+                g.transforms = per[v];
+                g.boundsCenter = cen;
+                g.boundsRadius = spread + vars[v].tree.height * 1.3;
+                g.drawDistance = fp.nearM + 10.0;
+                g.drawClass = engine::DrawClass::Scenery;
+                g.renderLayer = engine::LayerFoliage;
+                world.add<InstanceGroup>(world.create(), g);
+                ++nearGroups;
+            }
+        }
+
+    // FAR: every tree's impostor, merged per far cell, fading in over the band
+    RenderMaterial farMat;
+    farMat.albedo = Vec3(1, 1, 1);
+    farMat.roughness = 0.95f; farMat.metallic = 0.0f; farMat.opacity = 1.0f;
+    farMat.albedoMap = atlasTex;
+    farMat.flags = RenderMaterial::FLAG_ALPHA_TEST | RenderMaterial::FLAG_TWO_SIDED | RenderMaterial::FLAG_LOD_BAND;
+    farMat.lodIn0 = static_cast<float>(fp.nearM - fp.nearFadeM);
+    farMat.lodIn1 = static_cast<float>(fp.nearM);
+    farMat.lodOut0 = static_cast<float>(fp.farM * 0.85);
+    farMat.lodOut1 = static_cast<float>(fp.farM);
+    std::map<std::pair<int, int>, RenderMesh> farCells;
+    for (const ForestTree& t : trees) {
+        if (vars[t.variant].species < 0) continue;
+        RenderMesh& m = farCells[{static_cast<int>(std::floor(t.pos.x / fp.cellM)), static_cast<int>(std::floor(t.pos.z / fp.cellM))}];
+        appendImpostor(m, t, vars[t.variant].slot, 1.0 / colourScale);
+    }
+    std::size_t farVerts = 0;
+    for (auto& [key, mesh] : farCells) {
+        farVerts += mesh.vertices.size();
+        mesh.materialIndex = 0;
+        Entity e = world.create();
+        world.add<Transform>(e, Transform{});
+        world.add<PrevTransform>(e, PrevTransform{Transform{}});
+        Renderable r;
+        r.mesh = assets.acquireMesh(mesh, "forest:far:" + std::to_string(fp.seed) + ":" + std::to_string(key.first) + ":" + std::to_string(key.second));
+        r.material = farMat;
+        r.drawDistance = fp.farM + fp.cellM;
+        r.drawClass = engine::DrawClass::Scenery;
+        r.renderLayer = engine::LayerFoliage;
+        world.add<Renderable>(e, r);
+    }
+    LOG_INFO << "[forest] " << trees.size() << " trees, " << nVar << " variants, " << nearGroups << " near groups, "
+             << farCells.size() << " far cells (" << farVerts * 32 / 1048576 << " MB of impostor vertices) in "
+             << std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() << " s";
+}
+
 static void loadVegetation(const json& veg, const TerrainParams& terrain,
                            const Noise& terrainNoise, World& world,
                            Renderer& renderer, AssetManager& assets,
@@ -4073,6 +4236,10 @@ bool LevelLoader::load(const std::string& path,
                 loadVegetation(root["rocks"], tp, nz, world,
                                renderer, assets, levelDir, "rocks", nullptr,
                                placeDilate, drawn);
+            // FORESTS (ADR-0129): real trees near, impostors far, placed by the ground's maps
+            // (it lives in the terrain block: the ground cover lays litter under it)
+            if (root.contains("terrain") && root["terrain"].contains("forest") && root["terrain"]["forest"].is_object())
+                loadForest(root["terrain"]["forest"], tp, nz, world, renderer, assets, placeDilate, drawn);
             // THE GRASS FIELD (flora plan): not scattered here -- GrassSystem plants it around
             // the camera, from clump meshes and the ground and density rules set up here.
             if (root.contains("grass") && root["grass"].is_object()) {
