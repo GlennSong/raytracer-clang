@@ -1586,6 +1586,39 @@ void planTrails(IslandWorld& w) {
                 dests.push_back({openNear(c, 600.0), "lake"});
             }
     }
+    // THE TOWNS are out of bounds (a trail through a town stood under its buildings): every place's
+    // limits rasterized on the world grid, grown 30 m
+    std::vector<char> town(static_cast<std::size_t>(n) * n, 0);
+    {
+        const int grow = static_cast<int>(std::ceil(30.0 / w.cell));
+        std::vector<char> inside(town.size(), 0);
+        for (const IslandSite& st : w.sites)
+            for (int j = 0; j < n; ++j) {
+                const double z = -w.half + j * w.cell;
+                std::vector<double> xs;
+                for (const auto& L : st.limits)
+                    for (std::size_t k = 0; k < L.size(); ++k) {
+                        const Vec2 a = L[k], b = L[(k + 1) % L.size()];
+                        if ((a.y > z) != (b.y > z)) xs.push_back(a.x + (z - a.y) / (b.y - a.y) * (b.x - a.x));
+                    }
+                std::sort(xs.begin(), xs.end());
+                for (std::size_t k = 0; k + 1 < xs.size(); k += 2)
+                    for (int i = std::max(0, static_cast<int>(std::ceil((xs[k] + w.half) / w.cell))); i < n && -w.half + i * w.cell <= xs[k + 1]; ++i)
+                        inside[static_cast<std::size_t>(j) * n + i] = 1;
+            }
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i)
+                if (inside[static_cast<std::size_t>(j) * n + i])
+                    for (int dj = -grow; dj <= grow; ++dj)
+                        for (int di = -grow; di <= grow; ++di) {
+                            const int u = i + di, v = j + dj;
+                            if (u >= 0 && v >= 0 && u < n && v < n) town[static_cast<std::size_t>(v) * n + u] = 1;
+                        }
+    }
+    auto inTown = [&](double x, double z) {
+        const int i = static_cast<int>(std::lround((x + w.half) / w.cell)), j = static_cast<int>(std::lround((z + w.half) / w.cell));
+        return i >= 0 && j >= 0 && i < n && j < n && town[static_cast<std::size_t>(j) * n + i];
+    };
     // TRAILHEADS: each place's limits, the point facing the island's middle, stepped 60 m out
     std::vector<Vec2> heads(w.sites.size());
     std::vector<bool> has(w.sites.size(), false);
@@ -1598,13 +1631,15 @@ void planTrails(IslandWorld& w) {
         if (best >= 1e29) continue;
         Vec2 in = C - pick;
         in = in.length() > 1e-9 ? in * (1.0 / in.length()) : Vec2(0, 0);
-        heads[k] = openNear(pick + in * 60.0, 400.0);
+        Vec2 hd = pick + in * 60.0;
+        for (double t = 60.0; t <= 400.0 && (inTown(hd.x, hd.y) || w.water(hd.x, hd.y)); t += 20.0) hd = pick + in * t;
+        heads[k] = openNear(hd, 400.0);
         has[k] = true;
     }
     TerrainRouteParams fp;
     fp.cell = 12.0; fp.maxGrade = 0.10; fp.hardGrade = 0.65; fp.gradeWeight = 260.0; fp.flatWeight = 1.0;
     fp.turnWeight = 1.5; fp.maxTurnDeg = 95.0; fp.margin = 1200.0;
-    fp.blocked = [&w](double x, double z) { return w.water(x, z); };
+    fp.blocked = [&w, &inTown](double x, double z) { return w.water(x, z) || inTown(x, z); };
     const HeightField ground = [&w](double x, double z) { return w.heightAt(x, z); };
     auto walk = [&](const Vec2& a, const Vec2& b, const std::string& name) {
         const TerrainRoute tr = routeOnTerrain(ground, a, b, fp);

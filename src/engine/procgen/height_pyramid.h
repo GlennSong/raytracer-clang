@@ -104,7 +104,11 @@ using HeightFn = std::function<double(double x, double z, double step)>;
 
 // Build top-down: the top tile, then each tile's four children, kept where the parent's
 // drawn surface errs from them by more than the tolerance (they are then refined in turn).
-Pyramid buildPyramid(const PyramidSpec& spec, const HeightFn& h, JobSystem* jobs = nullptr);
+// `mustRefine` (optional, ADR-0134): a tile over [x0, x1] x [z0, z1] is refined whatever its error when
+// this says so -- a feature the ground cover draws finer than the heights need (a trail's worn earth
+// is 1.5 m wide; a smooth meadow's tiles would put their vertices metres apart and lose it).
+using RefineFn = std::function<bool(double x0, double z0, double x1, double z1, int level)>;
+Pyramid buildPyramid(const PyramidSpec& spec, const HeightFn& h, JobSystem* jobs = nullptr, const RefineFn& mustRefine = {});
 
 // ---- the bundle codec (ADR-0084: a section per tile) --------------------------------------
 constexpr uint32_t kTileCodecMagic = 0x54485452;   // "RTHT"

@@ -1642,6 +1642,18 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
             const double sp[] = {spec.originX, spec.originZ, spec.cell0, spec.tolerance, static_cast<double>(spec.levels)};
             key = engine::bundle::fnv1a(sp, sizeof(sp), key);
         }
+        // TRAILS refine the ground they cross to the finest cells (ADR-0134): their worn earth is drawn
+        // from the cover per vertex, and a smooth meadow's tiles would lose it between vertices
+        pyramid::RefineFn refine;
+        if (cfg.params.cover && cfg.params.cover->params().trails && !cfg.params.cover->params().trails->empty()) {
+            const std::shared_ptr<const TrailNetwork> tr = cfg.params.cover->params().trails;
+            refine = [tr](double x0, double z0, double x1, double z1, int) {
+                const double cx = 0.5 * (x0 + x1), cz = 0.5 * (z0 + z1), r = 0.5 * std::hypot(x1 - x0, z1 - z0);
+                return tr->distance(cx, cz, r + 3.0) < r + 3.0;
+            };
+            const char tag[] = "trails-refine-v1";
+            key = engine::bundle::fnv1a(tag, sizeof(tag), key);
+        }
         const char* nocacheEnv = std::getenv("RT_NOCACHE");
         const bool useCache = groundKey != 0 && !(nocacheEnv && nocacheEnv[0] == '1');
         const std::string cachePath = "cache/terrain/" + engine::bundle::hex16(key) + ".pyramid";
@@ -1653,7 +1665,7 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
             const TerrainParams& tp = cfg.params;
             JobSystem jobs;
             *pyr = pyramid::buildPyramid(
-                spec, [&](double x, double z, double step) { return lodVertexHeight(tp, *noise, x, z, step); }, &jobs);
+                spec, [&](double x, double z, double step) { return lodVertexHeight(tp, *noise, x, z, step); }, &jobs, refine);
             if (useCache && !pyramid::writePyramidBundle(*pyr, key, cachePath, &cacheErr))
                 LOG_WARN << "[terrain] baked ground not cached: " << cacheErr;
         }

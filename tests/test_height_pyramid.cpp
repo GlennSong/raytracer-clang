@@ -96,3 +96,17 @@ TEST_CASE(pyramid_bundle_round_trips_and_refuses_another_key) {
     CHECK(!readPyramidBundle(path, 0x9999, other, &err));   // another key: a miss, not a wrong ground
     std::remove(path.c_str());
 }
+
+// A must-refine rule (ADR-0134: the trails) refines flat ground the heights alone would leave at one
+// tile, down to level 0 where it asks, and nowhere else.
+TEST_CASE(pyramid_refines_where_a_rule_demands_even_on_flat_ground) {
+    const auto spec = pyramid::PyramidSpec::covering(0, 0, 1000, 1000, 1.0, 0.02);
+    const pyramid::Pyramid p = pyramid::buildPyramid(
+        spec, [](double, double, double) { return 5.0; }, nullptr,
+        [](double x0, double z0, double, double, int) { return x0 <= 10.0 && z0 <= 10.0; });   // the corner tiles
+    int level0 = 0, level0Far = 0;
+    for (const auto& [k, t] : p.tiles)
+        if (k.level == 0) { ++level0; if (k.tx > 1 || k.tz > 1) ++level0Far; }   // a refined tile stores all four children
+    CHECK(level0 >= 1);
+    CHECK(level0Far == 0);
+}

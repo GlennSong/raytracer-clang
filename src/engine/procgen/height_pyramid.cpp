@@ -105,7 +105,7 @@ double parentAtChild(const std::vector<double>& parent, int cx, int cz, int i, i
 
 }  // namespace
 
-Pyramid buildPyramid(const PyramidSpec& spec, const HeightFn& h, JobSystem* jobs) {
+Pyramid buildPyramid(const PyramidSpec& spec, const HeightFn& h, JobSystem* jobs, const RefineFn& mustRefine) {
     Pyramid out;
     out.spec = spec;
     struct Node { TileKey key; std::vector<double> samples; };
@@ -142,7 +142,13 @@ Pyramid buildPyramid(const PyramidSpec& spec, const HeightFn& h, JobSystem* jobs
             }
             HeightTile t = quantize(node.key, node.samples);
             t.error = err;
-            t.hasChildren = level > 0 && err > spec.tolerance;
+            bool force = false;
+            if (level > 0 && mustRefine) {
+                const double ts = spec.tileSize(level);
+                const double x0 = spec.originX + node.key.tx * ts, z0 = spec.originZ + node.key.tz * ts;
+                force = mustRefine(x0, z0, x0 + ts, z0 + ts, level);
+            }
+            t.hasChildren = level > 0 && (err > spec.tolerance || force);
             done[n] = std::move(t);
             if (done[n].hasChildren) {
                 std::lock_guard<std::mutex> lock(m);
