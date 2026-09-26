@@ -67,7 +67,6 @@ struct WeatherParams {
     double refineSlopeDamp = 1.5;
     double refineIncise = 2.0e-3;
     int refineInciseIterations = 10;
-    std::vector<float>* drainageOut = nullptr;   // the fine grid's drainage area (m^2), when refining
 };
 
 WeatherParams weatherFromJson(const nlohmann::json& weather, const nlohmann::json& terrainBlock);

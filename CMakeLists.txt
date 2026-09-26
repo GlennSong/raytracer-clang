@@ -98,6 +98,7 @@ add_library(engine_core STATIC
     src/engine/procgen/erosion.cpp
     src/engine/procgen/stream_power.cpp
     src/engine/procgen/terrain_weather.cpp
+    src/engine/procgen/terrain_maps.cpp
     src/engine/procgen/rock.cpp
     src/engine/procgen/cellular.cpp
     src/engine/procgen/planet.cpp

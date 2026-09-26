@@ -92,15 +92,15 @@
     0.1,
     0.04
    ],
-   "mountainHeight": 260,
+   "mountainHeight": 300,
    "rock": [
     0.15,
     0.14,
     0.12
    ],
-   "rockSlopeDeg": 34,
+   "rockSlopeDeg": 42,
    "seed": 5,
-   "snowHeight": 470,
+   "snowHeight": 720,
    "uplandHeight": 90
   },
   "heightScale": 6,

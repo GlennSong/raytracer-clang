@@ -8814,3 +8814,27 @@ Glenn then pointed at Josh's Channel, "Better Mountain Generators That Aren't Pe
 - The island's `weather.water` is off (0 steps, no breach, no thermal); `weatherTerrain` skips the GPU stage when there is nothing to run. `rt_erode` reads the level's `weather` block.
 
 **Consequences.** Branching gullies at 150, 80 and 40 m, crisp ridges, and summits of unlike height. Glenn: "I like that craggliness!" The bake takes about 3 minutes (grow 52 s, refine about 2 min on the CPU). The level's river hydrology runs on this ground. Still owed: material maps (drainage, scree, sediment, snow) into the ground cover, rock and snow shading, rocks and forests, and the city clearing them.
+
+## ADR-0128 — The ground's maps drive its cover; SSAO fades with distance
+
+**Context.** On the ADR-0127 ground the cover was height bands plus slope, so the whole range read as bare dark rock. Everything distant was also striped with soft vertical columns.
+
+**Decision.**
+- **`procgen/terrain_maps.{h,cpp}`:** from the weathered grid, `computeTerrainMaps` derives:
+  - **wet:** log drainage area, from one routing pass of the stream-power solver with K = 0;
+  - **scree:** moderate slopes within ~35 m of ground steeper than 40°;
+  - **soil:** gentle and concave ground holds it; steep and convex ground sheds it;
+  - **convex:** curvature at ~15 m.
+
+  They are stored at half resolution in 8 bits and cached as `cache/terrain/maps_<hash>.bin`. `weatheredMapsFor(terrainBlock)` hands them to `GroundCoverParams::maps` (`readTerrainParams`, only for an eroded terrain with a `weather` block).
+- **`GroundCover::at` with maps:**
+  - rock where soil cannot stay (the slope threshold shifts with soil; up high, thin soil is enough to bare it);
+  - dirt from scree below cliffs and washed gravel down the steeper channels;
+  - meadow in the hollows;
+  - the snowline drops in gullies and hollows and rises on ridges and spurs.
+
+  Without maps the cover is unchanged.
+- **Retuning the cover's palette no longer rebakes the ground:** `groundCover`, `cdlod` and `material` are left out of the weather cache key.
+- **The stripes were SSAO.** Past a few hundred metres the ~1 m kernel is under a pixel. The depth test then reads its own precision, and the interleaved-gradient rotation printed columns that were multiplied into the haze. Occlusion now fades out between 120 and 350 m. Stripe energy in a hazy test crop fell from 1.41 to 0.46. The cloud march's sun jitter also moved from IGN to a hash; that same IGN structure had been the first suspect.
+
+**Consequences.** Alpine meadows between rock ribs, scree fans, snow in couloirs. Distant ground reads clean through the haze. Dirt stands in for scree (one texture serves both); a grey gravel layer is left for later.

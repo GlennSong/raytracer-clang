@@ -17,9 +17,12 @@
 #include "noise.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace engine {
+
+struct TerrainMaps;
 
 enum class Biome : uint8_t { Sea = 0, Beach, Lowland, Upland, Mountain, Count };
 bool biomeFromName(const std::string& name, Biome& out);
@@ -40,6 +43,10 @@ struct GroundCoverParams {
     Vec3 sand{0.40, 0.34, 0.22};
     Vec3 rock{0.085, 0.080, 0.072};      // dark enough to sit beside stylized grass in full sun
     Vec3 snow{0.85, 0.88, 0.92};
+    // THE GROUND'S MAPS (ADR-0128, procgen/terrain_maps.h), when the terrain is a weathered one: rock where
+    // the ground sheds soil (steep, convex, high), scree below cliffs, meadow in the hollows, snow held in
+    // gullies and blown off ridges, washed gravel down the channels
+    std::shared_ptr<const TerrainMaps> maps;
 };
 
 struct Cover {

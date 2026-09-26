@@ -1,5 +1,7 @@
 #include "ground_cover.h"
 
+#include "terrain_maps.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -41,6 +43,8 @@ Cover GroundCover::at(double x, double z, double height, double normalUp, double
     //   aspect   -- shaded, north-facing (+z is north here) faces hold it lower, sunny faces melt higher;
     //   tongues  -- snow runs down the fall line in gullies: noise stretched ALONG the downslope direction.
     // All in proportion to the snow height, so a low island and a high range wander alike.
+    const bool mapped = p_.maps != nullptr;
+    const TerrainMapSample ms = mapped ? p_.maps->at(x, z) : TerrainMapSample{};
     double snowLine = p_.snowHeight;
     if (p_.snowHeight < 1e29) {
         const double S = std::max(50.0, p_.snowHeight);
@@ -56,25 +60,36 @@ Cover GroundCover::at(double x, double z, double height, double normalUp, double
             const double streak = noise_.noise2(along * 0.004 + 2.1, across * 0.045 - 6.3);   // ~250 m long, ~22 m wide
             snowLine -= S * 0.09 * std::max(0.0, streak) * std::min(1.0, hz * 3.0);
         }
+        // the ground's own shape (ADR-0128): gullies and hollows hold snow far below the line, ridges and
+        // spurs are blown bare above it
+        if (mapped) snowLine += S * (0.12 * ms.convex - 0.08 * ms.wet);
     }
     const double snowRaw = p_.snowHeight < 1e29
                                ? smooth(-0.1, 0.1, (h + 15.0 * jag - snowLine) / 20.0) *
                                      (1.0 - smooth(-0.15, 0.15, (slope + 6.0 * jag - 50.0) / 12.0))
                                : 0.0;
-    const double rockRaw = std::max(smooth(-0.15, 0.15, (slope + 7.0 * jag - p_.rockSlopeDeg) / 10.0),
-                                    0.55 * smooth(-0.2, 0.2, (h + 12.0 * jag - p_.mountainHeight * 1.25) / 30.0));
+    const double high = smooth(-0.2, 0.2, (h + 12.0 * jag - p_.mountainHeight * 1.25) / 30.0);
+    // mapped: bare rock where the ground cannot hold soil (steep, convex); up high, thin soil is enough to bare it
+    const double rockRaw = mapped
+        ? std::max(smooth(-0.15, 0.15, (slope + 7.0 * jag - p_.rockSlopeDeg - 6.0 * (ms.soil - 0.5)) / 10.0),
+                   high * smooth(0.25, 0.65, 1.0 - ms.soil + 0.15 * jag))
+        : std::max(smooth(-0.15, 0.15, (slope + 7.0 * jag - p_.rockSlopeDeg) / 10.0), 0.55 * high);
     const double sandRaw = sea ? 1.0 - smooth(-0.12, 0.12, (h + 1.2 * jag - p_.beachHeight) / p_.beachHeight) : 0.0;
     const double patch = noise_.fbm2(x * 0.045 + 7.0, z * 0.045 - 3.0, 3) * 0.5 + 0.5 + 0.18 * fine;
     const double dryUp = smooth(p_.uplandHeight, p_.mountainHeight, h);
     const double dirtRaw = std::clamp(smooth(0.66 - 0.4 * p_.dirtPatches, 0.74 - 0.4 * p_.dirtPatches, patch) *
                                           std::min(1.0, 2.0 * p_.dirtPatches) + 0.35 * dryUp * smooth(0.45, 0.6, patch),
                                       0.0, 1.0);
+    // mapped: scree below the cliffs and washed gravel down the steeper channels read as bare earth
+    const double dirtAll = mapped ? std::max({dirtRaw, smooth(0.2, 0.5, ms.scree + 0.15 * jag),
+                                              0.8 * ms.wet * dryUp * smooth(8.0, 20.0, slope)})
+                                  : dirtRaw;
     Cover c;
     double rem = 1.0;
     c.snow = snowRaw * rem; rem -= c.snow;
     c.rock = rockRaw * rem; rem -= c.rock;
     c.sand = sandRaw * rem; rem -= c.sand;
-    c.dirt = dirtRaw * rem; rem -= c.dirt;
+    c.dirt = dirtAll * rem; rem -= c.dirt;
     c.grass = std::max(0.0, rem);
     // biome: the band the point stands in (the sea floor counts as sea)
     if (sea && h < 0.0) c.biome = Biome::Sea;

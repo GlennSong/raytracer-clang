@@ -321,7 +321,7 @@ Heightmap weatherTerrain(const TerrainParams& tpIn, uint32_t seed, const Weather
     // 2. THE FINE GRID: refined level by level (ADR-0127), or cubic from the grown one plus roughness
     Heightmap hm;
     if (w.refine) {
-        hm = refineGrown(coarse, base0, sea, w, seed, w.drainageOut);
+        hm = refineGrown(coarse, base0, sea, w, seed, nullptr);
         if (w.roughnessM > 0.0) {
             const Noise rough(seed * 104729u + 5u);
             const double fc = tp.size / (hm.n - 1);
@@ -404,6 +404,8 @@ Heightmap weatherTerrain(const TerrainParams& tpIn, uint32_t seed, const Weather
 Heightmap weatheredTerrainCached(const nlohmann::json& tjIn) {
     nlohmann::json tj = tjIn;
     tj.erase("rivers");   // computed ON this ground
+    // ...and what only paints or draws it: retuning the cover's palette must not rebake the ground
+    for (const char* k : {"groundCover", "cdlod", "material"}) tj.erase(k);
     std::uint64_t key = 1469598103934665603ULL;
     auto fold = [&](const std::string& s) { for (unsigned char c : s) { key ^= c; key *= 1099511628211ULL; } };
     fold(kWeatherCodeTag);

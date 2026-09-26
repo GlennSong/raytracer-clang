@@ -102,6 +102,10 @@ void main() {
             occlusion += rangeCheck;
         }
     }
-    occlusion = 1.0 - (occlusion / float(SAMPLES)) * pc.intensity;
+    // FADED WITH DISTANCE: past a few hundred metres the kernel (a metre or so) is under a pixel and the
+    // depth test only reads its own precision -- the IGN rotation then printed soft VERTICAL COLUMNS over
+    // every distant mountain, multiplied into the haze. Contact shadow means nothing at that range.
+    float fadeAO = 1.0 - smoothstep(120.0, 350.0, distance(camPos, P));
+    occlusion = 1.0 - (occlusion / float(SAMPLES)) * pc.intensity * fadeAO;
     outAO = clamp(occlusion, 0.0, 1.0);
 }

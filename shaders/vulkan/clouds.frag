@@ -188,7 +188,13 @@ void main() {
     // Per-pixel start jitter breaks the shells of constant t; a decorrelated
     // offset for the sun march stops shadow slices locking to view slices.
     float jitter = clDither(gl_FragCoord.xy);
-    float lightJitter = fract(clIgn(gl_FragCoord.xy) + 0.5);
+    // (a hash, not IGN: IGN's structure runs ~15 px along x and barely changes along y, and with no
+    // temporal accumulation to average it the sun march printed soft VERTICAL COLUMNS over every
+    // distant mountain seen through thin cloud)
+    uvec2 hp = uvec2(gl_FragCoord.xy);
+    uint hh = hp.x * 1973u + hp.y * 9277u + 26699u;
+    hh = (hh ^ (hh >> 16)) * 0x7feb352du; hh = (hh ^ (hh >> 15)) * 0x846ca68bu; hh ^= hh >> 16;
+    float lightJitter = float(hh & 0xFFFFFFu) / 16777216.0;
     // High-frequency erosion budget: full detail while the step resolves the
     // detail cells, faded out past Nyquist.
     float detailCell = 1.0 / max(1e-6, 16.0 * u.params.z);
