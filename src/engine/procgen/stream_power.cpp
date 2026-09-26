@@ -11,7 +11,7 @@
 namespace engine {
 
 int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const StreamPowerParams& p,
-                     const std::vector<float>* erodibility) {
+                     const std::vector<float>* erodibility, std::vector<float>* areaOut) {
     if (erodibility && erodibility->size() != hm.h.size()) erodibility = nullptr;
     const int n = hm.n;
     if (n < 3 || uplift.size() != hm.h.size()) return 0;
@@ -134,6 +134,7 @@ int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const Stre
         for (std::size_t i = 0; i < N; ++i) if (!outlet[i]) h[i] = landLo + (h[i] - lo) * s;
     }
     for (std::size_t i = 0; i < N; ++i) hm.h[i] = static_cast<float>(h[i]);
+    if (areaOut) areaOut->assign(area.begin(), area.end());
     return it;
 }
 

@@ -35,8 +35,9 @@ struct StreamPowerParams {
 // Returns the number of iterations run.
 // `erodibility` (optional, n x n, around 1): K's multiplier per cell -- softer and harder rock, so the
 // valleys do not all come out alike.
+// `areaOut` (optional) gets the last iteration's drainage area per cell (m^2).
 int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const StreamPowerParams& p,
-                     const std::vector<float>* erodibility = nullptr);
+                     const std::vector<float>* erodibility = nullptr, std::vector<float>* areaOut = nullptr);
 
 }  // namespace engine
 

@@ -8791,3 +8791,26 @@ river_valley, 1025² at 2.9 m, coarse 257² droplets + 20k water steps: 8.8 s.
 - **The grown structure fades out on low ground:** none below `plainHeight` (15 m) above the sea, all of it `reliefRamp` (120 m) higher. Coastal plains stay flat, as real alluvium and as the ground the cities need.
 
 **Consequences.** Island 8 keeps its outline, its elongated mass and its plains, and its mountains become a branching range. No level uses a `weather` block yet. Next: a terrain-only island level to fly over, then snow and the material maps.
+
+## ADR-0127 — Separate summits, and refining the grown ground level by level
+
+**Context.** Glenn, on the ADR-0126 ground: "The heights of those mountains look fairly regular though. I like the ridges though." Then: "It's still flat and the mountains seem to have no detail. The beach is weird looking… a ton of long stretch marks." Three findings:
+- The kept envelope of the level's range is one broad ridge of one height. Massif noise only rippled that wall: the crest's spread moved from 161 m to 181 m.
+- The beach marks: blurred over 1.5 km, the shore sank under the sea. The land-stays-land clamp then pinned a flat strip at sea + 0.5 m, and the water pass combed it into grid-straight channels.
+- Rock detail added before the water pass (70 m of ridged noise) did not survive. With 6 k steps, 20 k steps, and 7× harder rock the result was identical, so the water's erosion was not the cause. The depression breach was: noise detail is full of closed hollows, and the breach fills or cuts every one.
+
+Glenn then pointed at Josh's Channel, "Better Mountain Generators That Aren't Perlin Noise or Erosion": a DLA ridge tree refined by upscaling and blurring at each level, and IQ's derivative-damped fBm.
+
+**Decision.**
+- **Peaks** (`"peaks": {height, spacing, uplift}`): one candidate summit per jittered `spacing` cell, kept where the range is high. Each is a pointed cone of its own reach. Heights are skewed low: a few big summits over many lesser ones. The cones lift the grow's uplift, so rivers radiate from the summits, and they lift the kept envelope. The grown relief is fuller under them. Island 8's crest spread went from 157 m to 237 m, and its high point from 970 m to 1296 m.
+- **The plains keep the original itself,** not its low-pass. That removed the flat strip and the beach marks.
+- **Refine** (`"refine": {detail, roughness, wavelength, slopeDamp, incise, iterations}`) replaces "cubic, then noise, then breach and water". Level 0 is the grown grid; each later level doubles it (1024 → 2048 → 4096 here). Per level:
+  1. **Upscale:** bilinear, then a binomial blur, so the ground is smooth at every scale (the video's point).
+  2. **Detail** at 8 cells' wavelength, with amplitude proportional to cell^0.8: half ridged, half plain gradient noise, domain-warped. It is damped by 1/(1 + k|∇h|²) (IQ) and faded by height above the plains.
+  3. **Drain:** a few stream-power steps with no uplift and no rescale, so the new detail becomes gullies and spurs that drain instead of pits.
+  4. **Blur again:** the drained channels follow the grid's 8 directions, and the blur softens them.
+
+  The grown grid is the ridge tree (DLA's role); each level branches it further. `streamPowerErode` gains `areaOut` (drainage area), which is kept for the material maps.
+- The island's `weather.water` is off (0 steps, no breach, no thermal); `weatherTerrain` skips the GPU stage when there is nothing to run. `rt_erode` reads the level's `weather` block.
+
+**Consequences.** Branching gullies at 150, 80 and 40 m, crisp ridges, and summits of unlike height. Glenn: "I like that craggliness!" The bake takes about 3 minutes (grow 52 s, refine about 2 min on the CPU). The level's river hydrology runs on this ground. Still owed: material maps (drainage, scree, sediment, snow) into the ground cover, rock and snow shading, rocks and forests, and the city clearing them.

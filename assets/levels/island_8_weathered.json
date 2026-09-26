@@ -1,0 +1,291 @@
+{
+ "_comment": "Island 8 with its terrain grown from uplift and weathered by water (ADR-0122..0126): no roads or cities yet (they are planned on the old ground). First open bakes the weathered ground (~4 min) into cache/terrain/.",
+ "dayNight": {
+  "dayMinutes": 1440.0,
+  "timeOfDay": 0.32292,
+  "weather": "fair"
+ },
+ "entities": [],
+ "environment": {
+  "clouds": {
+   "bottom": 900,
+   "coverage": 0.38,
+   "density": 0.05,
+   "lightSteps": 6,
+   "noiseScale": 0.0007,
+   "steps": 96,
+   "top": 1600,
+   "wind": 14
+  },
+  "fog": {
+   "density": 0.00016
+  },
+  "sky": {
+   "aerial": 4.0,
+   "model": "scattering",
+   "turbidity": 2.0
+  },
+  "skyColor": [
+   0.55,
+   0.68,
+   0.86
+  ]
+ },
+ "lighting": {
+  "ambientMultiplier": 0.5,
+  "exposure": 0.7,
+  "sun": {
+   "castsShadow": true,
+   "color": [
+    1,
+    0.98,
+    0.94
+   ],
+   "direction": [
+    0.4,
+    0.72,
+    -0.32
+   ],
+   "intensity": 6.0
+  }
+ },
+ "name": "island_8_weathered",
+ "player": {
+  "collider": {
+   "halfHeight": 0.4,
+   "radius": 0.3,
+   "shape": "capsule"
+  },
+  "friction": 0.5,
+  "position": [
+   -3334.448356017423,
+   14.02377077153313,
+   -797.5833894759727
+  ]
+ },
+ "terrain": {
+  "cdlod": {
+   "baked": true,
+   "worldHalf": 10000.0
+  },
+  "erode": true,
+  "erodeDroplets": 1500000,
+  "erodeLandOnly": true,
+  "erodeRadius": 3,
+  "erodeRes": 1024,
+  "erodeThermal": 16,
+  "groundCover": {
+   "beachHeight": 3,
+   "dirt": [
+    0.12,
+    0.085,
+    0.05
+   ],
+   "dirtPatches": 0.15,
+   "grass": [
+    0.055,
+    0.085,
+    0.018
+   ],
+   "grassDry": [
+    0.1,
+    0.1,
+    0.04
+   ],
+   "mountainHeight": 260,
+   "rock": [
+    0.15,
+    0.14,
+    0.12
+   ],
+   "rockSlopeDeg": 34,
+   "seed": 5,
+   "snowHeight": 470,
+   "uplandHeight": 90
+  },
+  "heightScale": 6,
+  "island": {
+   "angle": 117.84326076507568,
+   "aspect": 1.5514637947082521,
+   "cliffs": {
+    "from": 28.701289892196655,
+    "height": 98.85647773742676,
+    "to": 75.73035478591919
+   },
+   "coastNoise": 0.21829410552978518,
+   "coastScale": 0.0003765980303287506,
+   "peninsula": {
+    "bearing": 288.41194331645966,
+    "length": 3784.3425571918488,
+    "width": 808.7177991867065
+   },
+   "plainHeight": 12,
+   "radius": 5044.0,
+   "shelfDepth": 45
+  },
+  "material": {
+   "albedo": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "roughness": 1.0
+  },
+  "mountainAlongRange": true,
+  "mountainHeight": 335.909264087677,
+  "mountainMaskScale": 0,
+  "mountainScale": 0.0009,
+  "noiseScale": 0.0006,
+  "octaves": 5,
+  "rangeHeight": 845.1857483386993,
+  "rangeSpine": [
+   [
+    1743.0,
+    -4611.0
+   ],
+   [
+    1648.0,
+    -1895.0
+   ],
+   [
+    -53.0,
+    -28.0
+   ],
+   [
+    -978.0,
+    2249.0
+   ],
+   [
+    -2129.0,
+    4407.0
+   ]
+  ],
+  "rangeVariation": 0.65,
+  "rangeWidth": 2774.3785196717245,
+  "resolution": 1000,
+  "rivers": {
+   "bankSteep": 2.5,
+   "cell": 20,
+   "incisionMin": 1.5,
+   "lakeMinArea": 80000,
+   "region": 20000.0,
+   "riverArea": 2000000.0,
+   "widthK": 0.02,
+   "widthMax": 70,
+   "widthMin": 8
+  },
+  "rockLine": 520,
+  "seaLevel": 0.0,
+  "seed": 108,
+  "size": 20000.0,
+  "snowLine": 1300,
+  "warp": 0.35,
+  "weather": {
+   "res": 4096,
+   "grow": {
+    "res": 1024,
+    "iterations": 250,
+    "blur": 600
+   },
+   "water": {
+    "steps": 0,
+    "breach": 0,
+    "thermal": 0
+   },
+   "roughness": 0.6,
+   "shapeKeep": 1.0,
+   "shapeScale": 1500,
+   "massifs": 0.6,
+   "massifScale": 2500,
+   "peaks": {
+    "height": 450,
+    "spacing": 2200,
+    "uplift": 1.0
+   },
+   "refine": {
+    "detail": 40,
+    "roughness": 0.8,
+    "wavelength": 8,
+    "slopeDamp": 0.3,
+    "incise": 0.012,
+    "iterations": 20
+   }
+  }
+ },
+ "vegetation": {
+  "clearMargin": 4.0,
+  "clusterCount": 90,
+  "clusterRadius": 28,
+  "count": 22000,
+  "densityScale": 0.004,
+  "densityThreshold": -0.35,
+  "drawDistance": 1100,
+  "maxHeight": 150,
+  "maxScale": 1.4,
+  "maxSlopeDeg": 40,
+  "minHeight": 2.0,
+  "minScale": 0.7,
+  "region": 1600,
+  "seed": 31,
+  "spacingFactor": 0.75,
+  "species": [
+   {
+    "collide": true,
+    "kind": "script",
+    "script": "return flora.scatter_tree(seed, {species='pine'})",
+    "variants": 3
+   },
+   {
+    "collide": true,
+    "kind": "script",
+    "script": "return flora.scatter_tree(seed, {species='oak'})",
+    "variants": 2
+   },
+   {
+    "cuts": 4,
+    "faceted": true,
+    "kind": "rock",
+    "lumpScale": 0.45,
+    "lumps": 5,
+    "material": {
+     "albedo": [
+      0.26,
+      0.25,
+      0.24
+     ],
+     "roughness": 1.0
+    },
+    "sdfResolution": 18,
+    "skin": "sdf",
+    "smoothness": 0.22,
+    "variants": 3
+   }
+  ]
+ },
+ "vehicles": [
+  {
+   "position": [
+    70.0,
+    12.0,
+    70.0
+   ],
+   "recipe": "sedan",
+   "seed": 1,
+   "yaw": 0
+  }
+ ],
+ "version": 1,
+ "water": {
+  "cell": 20,
+  "color": [
+   0.012,
+   0.05,
+   0.08
+  ],
+  "foamBand": 36,
+  "opacity": 0.82,
+  "region": 10000.0,
+  "roughness": 0.04,
+  "seaLevel": 0.0
+ }
+}

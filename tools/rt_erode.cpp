@@ -113,15 +113,17 @@ int main(int argc, char** argv) {
         const engine::Heightmap coarse0 = coarse;
         if (spIters > 0) {
             // the engine's pipeline (ADR-0126): grow, cubic onto the fine grid with roughness, then water
-            engine::WeatherParams wp;
+            // the level's own weather block where it has one (massifs, peaks, shape keep), the flags over it
+            engine::WeatherParams wp = tj.contains("weather") ? engine::weatherFromJson(tj["weather"], tj) : engine::WeatherParams{};
             wp.res = res;
             wp.growRes = coarseRes;
             wp.growIterations = spIters;
-            wp.growBlurM = spBlurM;
-            wp.grow = sp;
-            wp.water = ep;
+            if (!tj.contains("weather")) { wp.growBlurM = spBlurM; wp.grow = sp; }
+            wp.water.waterSteps = ep.waterSteps;
+            wp.water.vulkan = ep.vulkan;
+            wp.water.seaLevel = ep.seaLevel;
             wp.water.droplets = 0;
-            wp.shapeKeep = shapeKeep;
+            if (!tj.contains("weather")) wp.shapeKeep = shapeKeep;
             engine::Heightmap grown;
             hm = engine::weatherTerrain(tp, tj.value("seed", 0u), wp, &grown);
             write(grown, "grown.f32");
