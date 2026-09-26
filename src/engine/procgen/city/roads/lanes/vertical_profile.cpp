@@ -204,6 +204,67 @@ double crossingConsistency(RoadLabGraph& g, double maxDz, double rampMaxDz, doub
     return worst;
 }
 
+std::vector<CrossingMeet> crossingMeets(const RoadLabGraph& g) {
+    // the same pairs, filters and order as crossingConsistency's own loop, without the heights
+    std::vector<std::size_t> thr;
+    for (std::size_t i = 0; i < g.edges.size(); ++i) if (g.edges[i].z.size() > 1 && g.edges[i].laneCount() > 0) thr.push_back(i);
+    std::vector<Bounds> box; box.reserve(thr.size()); for (std::size_t i : thr) box.push_back(boundsOf(g.edges[i].xy));
+    std::vector<CrossingMeet> out;
+    for (size_t i = 0; i < thr.size(); ++i) for (size_t j = i + 1; j < thr.size(); ++j) {
+        const EdgeSpec& a = g.edges[thr[i]]; const EdgeSpec& b = g.edges[thr[j]];
+        if (!near(box[i], box[j], g.hw(a) + g.hw(b) + 1.0)) continue;
+        if (a.isRamp() && b.isRamp()) continue;
+        if (a.isRamp() && (a.from.edge == b.id || a.to.edge == b.id)) continue;
+        if (b.isRamp() && (b.from.edge == a.id || b.to.edge == a.id)) continue;
+        std::vector<Vec2> meet = crossings(a.xy, b.xy);
+        const std::size_t crossed = meet.size();
+        for (int side = 0; side < 2; ++side) {
+            const EdgeSpec& e = side ? b : a;
+            const EdgeSpec& o = side ? a : b;
+            for (const Vec2& q : {e.xy.front(), e.xy.back()}) {
+                const Projection pr = project(o.xy, o.s, q);
+                if (pr.distance > g.hw(o) + g.hw(e)) continue;
+                if (pr.distance <= g.rules.endpointTol) continue;
+                if (std::min(distance(o.xy.front(), q), distance(o.xy.back(), q)) <= g.rules.endpointTol) continue;
+                bool dup = false;
+                for (const Vec2& m : meet) if (distance(m, q) < 1.0) dup = true;
+                if (!dup) meet.push_back(q);
+            }
+        }
+        const bool streets = !a.isRamp() && !b.isRamp() && a.cls != "freeway" && b.cls != "freeway";
+        for (std::size_t mi = 0; mi < meet.size(); ++mi) {
+            const Vec2& p = meet[mi];
+            const double aEnd = std::min(distance(a.xy.front(), p), distance(a.xy.back(), p));
+            const double bEnd = std::min(distance(b.xy.front(), p), distance(b.xy.back(), p));
+            if (aEnd < g.rules.endpointTol && bEnd < g.rules.endpointTol) continue;          // a shared node
+            const bool aWins = a.isRamp() ? true : b.isRamp() ? false : std::make_pair(g.cls(a).rank, -g.index.at(a.id)) >= std::make_pair(g.cls(b).rank, -g.index.at(b.id));
+            CrossingMeet m;
+            m.hi = aWins ? thr[i] : thr[j];
+            m.lo = aWins ? thr[j] : thr[i];
+            m.p = p;
+            m.sHi = project(g.edges[m.hi].xy, g.edges[m.hi].s, p).station;
+            m.sLo = project(g.edges[m.lo].xy, g.edges[m.lo].s, p).station;
+            m.ramp = a.isRamp() || b.isRamp();
+            m.tee = streets && mi >= crossed;   // an END under the other's band, not a crossing of centrelines
+            out.push_back(m);
+        }
+    }
+    return out;
+}
+
+double crossingConsistency(RoadLabGraph& g, const std::vector<CrossingMeet>& meets, double maxDz, double rampMaxDz, double radius) {
+    double worst = 0;
+    for (const CrossingMeet& m : meets) {
+        EdgeSpec& hi = g.edges[m.hi]; EdgeSpec& lo = g.edges[m.lo];
+        const double dz = interp(hi.s, hi.z, m.sHi) - interp(lo.s, lo.z, m.sLo);
+        if (!m.tee && std::fabs(dz) >= (m.ramp ? rampMaxDz : maxDz)) continue;   // grade separation (a street's tee never is)
+        worst = std::max(worst, std::fabs(dz)); if (std::fabs(dz) < 1e-4) continue;
+        const double R = std::max(radius, 1.5 * std::fabs(dz) / ((1 - kDesignGrade) * g.cls(lo).gMax / 4));   // four passes share the design headroom
+        for (size_t k = 0; k < lo.z.size(); ++k) { const double u = std::clamp(1 - std::fabs(lo.s[k] - m.sLo) / R, 0.0, 1.0); lo.z[k] += dz * u * u * (3 - 2 * u); }
+    }
+    return worst;
+}
+
 void rampProfile(RoadLabGraph& g, EdgeSpec& e, const HeightField& terrain) {
     const EdgeSpec* A = e.from.edge.empty() ? nullptr : g.find(e.from.edge); const EdgeSpec* B = e.to.edge.empty() ? nullptr : g.find(e.to.edge);
     e.s = stations(e.xy); e.t.resize(e.xy.size()); for (size_t i = 0; i < e.xy.size(); ++i) e.t[i] = terrain(e.xy[i].x, e.xy[i].y);

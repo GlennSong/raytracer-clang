@@ -16,6 +16,7 @@
 #include "engine/procgen/world/island_world.h"
 #include "engine/procgen/world/road_signs.h"
 #include "engine/procgen/world/road_sign_build.h"
+#include "engine/procgen/world/island_scene.h"
 #include "engine/procgen/city/street_names.h"
 #include "engine/ai/nav_graph.h"
 #include "engine/ai/pathfind.h"
@@ -103,6 +104,7 @@ int main(int argc, char** argv) {
         std::vector<std::pair<int, std::vector<engine::Vec2>>> arterialNodes;
         std::map<int, std::vector<std::string>> arterialNames;
         std::vector<engine::NavGraph> navs(w.sites.size());   // each place's streets, for its buses
+        std::vector<CityPlan> plans(w.sites.size());          // each place's plan, for the 3D level (--level)
         w.centres.assign(w.sites.size(), engine::Vec2(0, 0));
         engine::IslandMapLayer locals, collectors, arterials, freeways;
         locals.name = "streets-local"; collectors.name = "streets-collector"; arterials.name = "streets-arterial"; freeways.name = "city-freeways";
@@ -169,6 +171,7 @@ int main(int argc, char** argv) {
                 arterialNames[static_cast<int>(k)] = names;
             }
             sites.push_back({b.name, b.center, b.size * 0.5 + 250.0});
+            plans[k] = plan;
             std::printf("%-18s %-16s %-13s at (%6.0f, %6.0f), %4.0f m across: %4zu blocks, streets %.1f km local / %.1f collector / %.1f arterial, freeway %.1f km%s (%.1f s)\n",
                         w.sites[k].name.c_str(), b.name.c_str(), w.sites[k].kind.c_str(), b.center.x, b.center.y, b.size, plan.blocks.size(), km[0], km[1], km[2], km[3],
                         !plan.ringArc.empty() ? ", ring a C on the coast" : !plan.ring.empty() ? ", closed ring" : "",
@@ -183,9 +186,11 @@ int main(int argc, char** argv) {
                 // candidates, more than will be kept: the diamond passes keep the ones that fit and drop the rest
                 engine::linkCityToFreeway(w, k, art, city ? 6 : 4, city ? 700.0 : 300.0, 900.0, arterialNames[k]);
             }
-            std::vector<engine::Vec2> allArterial;
-            for (const auto& [k, art] : arterialNodes) allArterial.insert(allArterial.end(), art.begin(), art.end());
-            engine::islandInterchanges(w, allArterial);
+            std::vector<std::pair<engine::Vec2, engine::Vec2>> streetSegs;
+            for (const CityPlan& pl : plans)
+                for (const auto& e : pl.streets.edges)
+                    streetSegs.push_back({pl.streets.nodes[static_cast<std::size_t>(e.a)].pos, pl.streets.nodes[static_cast<std::size_t>(e.b)].pos});
+            engine::islandInterchanges(w, streetSegs);
             // BUSES: local loops in each place (the city sim's own network builder), then the intercity lines
             for (std::size_t k = 0; k < w.sites.size(); ++k) {
                 if (navs[k].nodes.empty() || w.sites[k].kind == "mountain town") continue;
@@ -237,11 +242,74 @@ int main(int argc, char** argv) {
                 }
                 std::printf("\n");
             }
+            for (const auto& rd : w.roads)
+                if (rd.kind == "pass" || rd.kind == "mountain")
+                    std::printf("%s: %.1f km, climbs %.0f m, steepest %.1f%% (over 50 m)\n", rd.kind.c_str(), rd.length / 1000.0, rd.climb, rd.worstGrade * 100.0);
             const auto& ic = w.report["interchanges"];
             std::printf("interchanges: %d diamonds at %d crossings (%zu ramps); refused: %s\n", ic["built"].get<int>(), ic["crossings"].get<int>(),
                         w.ramps.size(), ic["refused"].dump().c_str());
             std::printf("island freeway round the cities: %.1f km, %d legs unrouted\n", w.report["ringFreewayKm"].get<double>(),
                         w.report["freewayRoundCities"]["unrouted"].get<int>());
+        }
+        // THE 3D LEVEL (ADR-0112): --level NAME [--template LEVEL.json] writes the island as one lanes
+        // scene (assets/lanelab/planned/NAME_lanelab.json), its signs (assets/levels/NAME.signs.json)
+        // and the level (assets/levels/NAME.json), its sim/lighting/vehicle blocks from the template
+        std::string levelName, templatePath = "assets/levels/metro_planned.json";
+        engine::IslandSceneOptions sceneOpt;
+        for (int a = 4; a + 1 < argc; ++a) {
+            if (std::string(argv[a]) == "--level") levelName = argv[a + 1];
+            if (std::string(argv[a]) == "--template") templatePath = argv[a + 1];
+            // --window X Z HALF: only that square of the island (iterating on one part of it)
+            if (std::string(argv[a]) == "--window" && a + 3 < argc) {
+                sceneOpt.windowCentre = engine::Vec2(std::atof(argv[a + 1]), std::atof(argv[a + 2]));
+                sceneOpt.windowHalf = std::atof(argv[a + 3]);
+            }
+        }
+        if (!levelName.empty()) {
+            const auto t0 = std::chrono::steady_clock::now();
+            std::vector<nlohmann::json> placeScenes(w.sites.size());
+            for (std::size_t k = 0; k < w.sites.size(); ++k) placeScenes[k] = planToLanesScene(plans[k], SceneOptions{});
+            const nlohmann::json scene = engine::islandLanesScene(w, placeScenes, sceneOpt);
+            const std::string scenePath = "assets/lanelab/planned/" + levelName + "_lanelab.json";
+            std::ofstream(scenePath) << scene.dump(1) << "\n";
+            std::ofstream("assets/levels/" + levelName + ".signs.json") << nlohmann::json{{"signs", engine::roadSignsToJson(w.signs)}}.dump(1) << "\n";
+            nlohmann::json level;
+            {
+                std::ifstream in(templatePath);
+                if (in) in >> level;
+            }
+            level["name"] = levelName;
+            level["_comment"] = "Written by `city_plan island-cities " + std::to_string(seed) + " OUT --level " + levelName +
+                                "` (ADR-0112): the island, its places, roads and signs. Edit the generator, not this.";
+            nlohmann::json terrain = w.terrain;
+            terrain["cdlod"] = {{"worldHalf", w.half}, {"baked", true}};
+            if (level.contains("terrain") && level["terrain"].contains("material")) terrain["material"] = level["terrain"]["material"];
+            if (level.contains("terrain") && level["terrain"].contains("groundCover")) terrain["groundCover"] = level["terrain"]["groundCover"];
+            level["terrain"] = terrain;
+            nlohmann::json water = level.value("water", nlohmann::json::object());
+            water["seaLevel"] = w.terrain.value("seaLevel", 0.0);
+            water["region"] = w.half;
+            water["cell"] = 20;
+            level["water"] = water;
+            level["entities"] = nlohmann::json::array({
+                {{"id", 1}, {"name", "island roads and streets"}, {"position", {0.0, 0.0, 0.0}}, {"shape", "road"},
+                 {"road", {{"builder", "lanes"}, {"graph", scenePath}, {"sidewalks", {{"arterial", 6.0}, {"collector", 5.5}, {"local", 5.0}}}}}},
+                {{"id", 2}, {"name", "road signs"}, {"position", {0.0, 0.0, 0.0}}, {"shape", "road_signs"}, {"file", levelName + ".signs.json"}},
+            });
+            // districts: each place's centre (a city's downtown is financial, a town's centre commercial)
+            nlohmann::json hubs = nlohmann::json::array();
+            for (std::size_t k = 0; k < w.sites.size(); ++k)
+                hubs.push_back({{"_place", w.sites[k].name}, {"at", {w.centres[k].x, w.centres[k].y}}, {"kind", w.sites[k].kind == "city" ? "financial" : "commercial"}});
+            if (!level.contains("citysim")) level["citysim"] = nlohmann::json::object();
+            level["citysim"]["districts"]["hubs"] = hubs;
+            level["citysim"]["graph"] = scenePath;
+            // the player in the first city's centre
+            const engine::Vec2 spawn = w.centres.empty() ? engine::Vec2(0, 0) : w.centres[0];
+            if (!level.contains("player")) level["player"] = nlohmann::json::object();
+            level["player"]["position"] = {spawn.x, w.heightAt(spawn.x, spawn.y) + 2.0, spawn.y};
+            std::ofstream("assets/levels/" + levelName + ".json") << level.dump(1) << "\n";
+            std::printf("level: assets/levels/%s.json (scene %s: %zu edges; %zu signs) in %.1f s\n", levelName.c_str(), scenePath.c_str(), scene["edges"].size(),
+                        w.signs.size(), std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
         }
         engine::IslandMapView whole;
         whole.sites = false;

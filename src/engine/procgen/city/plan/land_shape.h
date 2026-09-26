@@ -40,6 +40,10 @@ struct LandShapeParams {
     // what crosses it is a bridge, placed on purpose (city_plan). Glenn: "the city blocks don't
     // follow the contours of the river ... what I've observed in actual cities."
     std::function<bool(const Vec2&)> water;
+    // ...and how far in from the water its depth is measured from: the riverside street (the contour at
+    // edgeDepth) then stands this much further back, and a bridge has the approach it needs to climb to
+    // its deck (at 45 m a 6 m rise at design grade did not fit, and bridge ends met their junctions high)
+    double waterSetback = 35.0;
 };
 
 struct LandShape {

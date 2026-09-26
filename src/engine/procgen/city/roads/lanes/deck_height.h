@@ -34,11 +34,16 @@ public:
     double distanceToLane(int lane, const Vec2& p, double radius) const;
     // The lane of one of `roads` whose footprint is nearest p (within radius), or -1.
     int nearestLane(const std::vector<int>& roads, const Vec2& p, double radius = 60.0) const;
+    // ...with the roads as a per-edge flag (build it once for a loop of queries: the vector form builds one
+    // per call, and the surface audit makes millions)
+    int nearestLane(const std::vector<char>& wantEdge, const Vec2& p, double radius = 60.0) const;
     // A layer (sidewalk, shoulder, median) follows the PAVEMENT it borders: the nearest lane's deck. The
     // old rule — the nearest road SPINE's profile — gave a corner sidewalk beside a wide arterial the
     // height of the narrow climbing local next to it, a metre proud, kerb faces showing (Glenn's raised
     // slab in the 4-way). Falls back to the nearest spine when no lane is within reach.
     double layerHeight(const std::vector<int>& roads, const Vec2& p) const;
+    double layerHeight(const std::vector<char>& wantEdge, const std::vector<int>& roads, const Vec2& p) const;
+    std::vector<char> edgeFlags(const std::vector<int>& roads) const;
 
 private:
     const RoadLabGraph& g_;
@@ -49,6 +54,12 @@ private:
     struct Boundary { std::vector<SegmentGrid> outers, holes; std::vector<Ring> outerRings, holeRings; std::vector<Box2> outerBoxes; };
     std::vector<Boundary> boundaries_;
     double blendTo(double z, const std::vector<int>& partners, const Vec2& p) const;
+    // NEAR-LANE INDEX: every lane in the cells its footprint's box, grown by kIndexReach, overlaps -- so a
+    // nearestLane within that radius tests the lanes of one cell, in lane order, not all of them
+    static constexpr double kIndexReach = 60.0, kIndexCell = 64.0;
+    double ix0_ = 0, iy0_ = 0; int inx_ = 0, iny_ = 0;
+    std::vector<std::vector<int>> index_;
+    const std::vector<int>* candidates(const Vec2& p) const;
 };
 
 }  // namespace roads::lanes

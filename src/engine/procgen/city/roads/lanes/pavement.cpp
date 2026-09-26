@@ -221,6 +221,9 @@ void buildSurfaces(const RoadLabGraph& g, const LaneSet& L, DeckHeight& H, Pavem
     std::vector<TriLevel> emit; std::vector<std::set<int>> partnerSets(nl); out.pairs.clear();
     auto rankKey = [&](int li) { const Lane& l = L.lanes[static_cast<size_t>(li)]; return std::make_pair(L.rank(li, g), -static_cast<double>(l.parent >= 0 ? l.parent : static_cast<int>(nl) + li)); };   // ROAD-level order: lanes of one road tie
     const unsigned nThreads = lanesThreads(threads); const LaneGrid grid(boxes, out.footprints);
+    // each footprint converted ONCE for the millions of point tests below (geom2d.h PreparedSet): the island's
+    // freeway lanes are single footprints 17 km long, and converting one per triangle made this pass 9 minutes
+    const std::vector<PreparedSet> prepared = prepareAll(out.footprints);
     // progress: the cover pass is most of this function; workers count triangles, chunk 0 (the calling thread) reports
     std::atomic<size_t> covered{0}; std::atomic<bool> stop{false}; const size_t totalTris = std::max<size_t>(1, T.tris.size());
     auto tick = [&](double f) { if (progress && !(*progress)(std::clamp(f, 0.0, 1.0))) stop.store(true); };
@@ -239,7 +242,7 @@ void buildSurfaces(const RoadLabGraph& g, const LaneSet& L, DeckHeight& H, Pavem
             for (int liI : grid.at(c)) {
                 const size_t li = static_cast<size_t>(liI); const Box2& b = boxes[li];
                 if (c.x < b.minX || c.x > b.maxX || c.y < b.minY || c.y > b.maxY) continue;
-                if (!contains(out.footprints[li], c)) continue;
+                if (!prepared[li].contains(c)) continue;
                 cover.emplace_back(H.own(liI, c), liI);
             }
             if (cover.empty()) continue;

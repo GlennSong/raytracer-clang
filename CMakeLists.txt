@@ -119,6 +119,7 @@ add_library(engine_core STATIC
     src/engine/procgen/world/place_names.cpp
     src/engine/procgen/world/road_signs.cpp
     src/engine/procgen/world/road_sign_build.cpp
+    src/engine/procgen/world/island_scene.cpp
     src/engine/procgen/city/site_plan.cpp
     src/engine/procgen/city/core_plan.cpp
     src/engine/procgen/city/room_plan.cpp

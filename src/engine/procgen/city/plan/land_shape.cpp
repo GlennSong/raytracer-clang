@@ -366,7 +366,13 @@ LandShape growLandShape(const HeightField& ground, const std::function<bool(cons
                 const std::size_t k = static_cast<std::size_t>(j) * n + i;
                 if (m[k] && p.water(s.origin + Vec2(i * p.cell, j * p.cell))) { s.water[k] = 1; dry[k] = 0; }
             }
-        s.depth = signedDepth(dry);
+        // depth = the nearer of the limits and the water set back: min(to the limits, to the water - setback)
+        const std::vector<float> fromLimits = s.depth, fromWater = signedDepth(dry);
+        std::vector<char> land(N, 1);
+        for (std::size_t k = 0; k < N; ++k) if (s.water[k]) land[k] = 0;
+        const std::vector<float> toWater = signedDepth(land);   // distance from the water alone
+        for (std::size_t k = 0; k < N; ++k)
+            s.depth[k] = std::min(fromLimits[k], std::min(fromWater[k], toWater[k] - static_cast<float>(p.waterSetback)));
     }
     s.maxDepth = 0.0;
     for (std::size_t k = 0; k < N; ++k) {

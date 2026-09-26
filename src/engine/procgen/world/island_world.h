@@ -100,6 +100,7 @@ struct IslandWorld {
     std::vector<IslandRoad> roads;
     Vec2 axis{1, 0};           // the island's long axis (the range runs along it)
     std::vector<std::vector<Vec2>> ramps;   // the interchanges' ramps (islandInterchanges), centrelines
+    std::vector<nlohmann::json> rampEdges;  // ...and as the lanes-scene edges diamondRamps wrote (anchors on fw0_a / fw0_b)
     std::vector<Vec2> freewayRoute;         // the freeway as the one route the diamonds were laid on
     bool routeClockwise = false;            // increasing station runs clockwise (seen on the map, north up)
     std::vector<IslandInterchange> interchanges;   // in station order
@@ -108,6 +109,11 @@ struct IslandWorld {
     std::vector<Vec2> centres;              // per site: its centre stop (the transit centre), set by the caller
     nlohmann::json report;
     double heightAt(double x, double z) const;   // bilinear
+    // the ground a MOUNTAIN road is routed and graded on: the height blurred over ~60 m, the way the road
+    // will meet it once the builder has cut the spurs and filled the gullies. On the raw eroded ground no
+    // route under 12% existed; on it, switchbacks do (ADR-0112)
+    std::vector<float> heightSmooth;
+    double smoothAt(double x, double z) const;
 };
 
 // A variant's terrain block from a seed: the island's shape, bearing, peninsula and cliffs, and
@@ -142,14 +148,15 @@ void linkCityToFreeway(IslandWorld& w, int site, const std::vector<Vec2>& arteri
                        const std::vector<std::string>& streets = {});
 
 // THE INTERCHANGES: every road that meets the freeway (a city's links, the pass, the mountain road)
-// CROSSES it -- carried on past, into the city's nearest arterial if one is there, else just far enough
-// for the far ramps to land -- and at each crossing the one
+// CROSSES it -- carried on past, to a T on the first street it meets if there is one within 500 m, else
+// just far enough for the far ramps to land -- and at each crossing the one
 // diamond generator (roads/lanes/interchange.h, as the level importer and the city planner use it)
 // lays the ramps: off from each carriageway before the crossing, on after it, landing on the road
 // either side. A crossing it refuses (too oblique, too close to the last, no room) is reported, not
 // forced. Fills w.ramps and w.report["interchanges"].
-// `cityStreets`: the cities' arterial junctions, for a crossing road to carry on into.
-void islandInterchanges(IslandWorld& w, const std::vector<Vec2>& cityStreets = {});
+// `cityStreets`: the places' streets as segments; a road carried on past the freeway ends in a T on the
+// first one it meets.
+void islandInterchanges(IslandWorld& w, const std::vector<std::pair<Vec2, Vec2>>& cityStreets = {});
 
 // INTERCITY BUSES over the island's roads, between the places' centres (w.centres): the RING line
 // calls at every place round the freeway (in and out of each on its link road and streets); the PASS

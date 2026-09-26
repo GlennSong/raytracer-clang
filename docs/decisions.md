@@ -8498,3 +8498,85 @@ island.
   Saltwood–Dunwyn, X3 runs Coldwell–Marlwick, plus 14 local lines.
 - **Not yet:** the sim running these intercity lines (it has one regional route type, for towns
   joined by freeway), timetables, and stop shelters on the island.
+
+## ADR-0112 — The island in 3D: one lanes scene, a window to iterate on, and a lanes builder that scales
+
+**Context.** The level loader wires one lanes city's terrain, lots, deck, nav and road graph (ordinal
+0 only), so the island is ONE lanes scene, as metro_planned's city, towns and loop are. The first
+full build of that scene was 3,866 edges and 14,592 lanes. It took 40 minutes, then over an hour of
+validation, and found real road faults. Glenn: "I wonder if we should start breaking roads up and tile
+large builds? … multi process building" and "if we could break this up maybe we could save on
+iteration time."
+
+**Decision.**
+1. **The scene** (`world/island_scene.h`, `islandLanesScene`; `city_plan island-cities SEED OUT
+   --level NAME [--template L] [--window X Z HALF]`). It writes the lanes scene, the level (terrain,
+   sea, entities, hubs, spawn, from a template's sim, lighting and vehicle blocks) and the sign plan.
+   - Every place's streets, from `planToLanesScene`, ids prefixed per place.
+   - The freeway as two carriageways offset 12 m from its route, each split into two chains at the
+     point farthest from any gore. It runs at grade, with FLOORS only where a road passes under it
+     (8.2 m) and at short river crossings.
+   - Ramps as `diamondRamps` wrote them, re-anchored to the chain holding their gore and emitted last
+     (an edge may only name edges before it).
+   - The pass and mountain road in a new "mountain" class (the rural section at 15%), links as
+     collectors.
+   - One terrain grid over the island at 20 m, with no relief of its own.
+   - **A window** keeps only a square: place edges reaching into it, island roads and freeway clipped
+     to it, ramps whose roads survive. The Saltwood window (4.4 km) builds in 80 s. It is the first
+     step toward building the island in tiles.
+2. **The lanes builder scales.** Each fix finds the same answers faster:
+   - **Crossing meets cached** (`crossingMeets`). Where roads meet does not change while their heights
+     are solved, so they are found once and every agree round re-levels only those. The profiles
+     stage went from 23 min to 6 on the whole island.
+   - **The cover pass uses prepared footprints** (`PreparedSet`): 9.5 min to 1 s in the window.
+   - **The surface-step audit uses the lane grid and prepared footprints.** It had scanned all 14,600
+     lanes for each of about 700,000 open deck edges, and taken most of an hour.
+   - **`DeckHeight::nearestLane` has a near-lane index**: lanes in 64 m cells, grown by the 60 m
+     search reach, tested in lane order. There are also `edgeFlags` overloads, and the audit reads a
+     sample's layer height once, not once per candidate.
+   - `LANELAB_DUMP_EDGE=<id>` prints an edge's solved profile against its ground; terrain timings are
+     split into sample, conform and deck check.
+3. **Road faults the first build found, and their fixes:**
+   - **Mountain roads were unbuildable** (the pass 35.8% and the mountain road 23.6% over 50 m). They
+     now route and grade on the island's height blurred over about 60 m (`IslandWorld::smoothAt`,
+     cut and fill as the builder will make it) at a 12–15% hard limit. The "mountain" class lets the
+     builder hold them: at rural 10% the pass rode a 2.5 km viaduct 45 m up.
+   - **River floors only on crossings.** A wet run over 200 m is a road beside the river; flooring
+     it at its highest water put the pass 110 m up.
+   - **Crossing roads end at the first street they meet** (a T), not at a junction further in; the
+     line between crossed streets and read as over- and underpasses.
+   - **Diamonds are sized against the deck as built** (the builder's own profile for the route, lifted
+     over each underpass). They had assumed ground + clearance everywhere.
+   - **A street ending on a street is a junction**, always levelled, never read as a grade separation
+     (`CrossingMeet::tee`); the clearance lift counts ends only where a freeway or ramp is involved.
+   - **A river bridge placed at an arterial's end CONTINUES the arterial** from that end. A separate
+     bridge beside it crossed the riverside street 5 m away, and the pair read as an overpass: a 10 m
+     junction mismatch.
+   - **Shaped plans collapse short junction CHAINS**, not only single 15 m samples, and a merged node
+     keeps the position of its widest road's node (an average put a kink in the arterial). Only
+     shaped plans for now; circle plans are unchanged.
+   - **A river's edge is set back 35 m in the depth field** (`LandShapeParams::waterSetback`), so the
+     riverside street stands about 80 m from the water, with a park strip between, and a bridge has
+     the approach its climb needs.
+
+**Consequences.**
+- The Saltwood window's validation went, over these fixes:
+
+  | Check | Before | After |
+  |---|---|---|
+  | Junction mismatch | 10.3 m | 31 cm |
+  | Deck cracks | 157 | 12 |
+  | Non-manifold edges | 26 | 0 |
+  | Surface steps | 143 | 1 |
+  | Lane adjacency | failing | passes |
+  | Under-covered lanes | 178 | 134 |
+  | Crossings short of clearance | 45 | 19 (three sharp-angle junctions) |
+
+- The window level loads in about 6.5 min (terrain pyramid 345 MB in 31.8 s, 199 signs on 2 atlas
+  pages) and runs at 45–74 FPS.
+- **Not yet:**
+  - **the window's edge** is a terrain cliff where its grid meets the level's ground: the seam
+    problem tiling must solve properly;
+  - the remaining under-covered lanes and sharp-angle junctions;
+  - the full island's build time after these fixes;
+  - tiling the meshing stages and streaming road and terrain tiles.

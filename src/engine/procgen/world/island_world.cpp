@@ -3,7 +3,8 @@
 #include "../noise.h"
 #include "../terrain.h"
 #include "../city/terrain_route.h"
-#include "../city/roads/lanes/interchange.h"   // diamondRamps: the one way on and off a freeway
+#include "../city/roads/lanes/interchange.h"
+#include "../city/roads/lanes/vertical_profile.h"   // profileAlong: the deck as the builder will make it   // diamondRamps: the one way on and off a freeway
 #include "../city/plan/land_shape.h"             // isoLines: contours, the coastline
 #include "place_names.h"
 #include "../../level_params.h"   // readTerrainParams: the island's terrain block, as a level reads it
@@ -61,7 +62,7 @@ void finishRoad(IslandRoad& rd, const HeightField& ground, const std::function<b
 }
 TerrainRouteParams mountainRouteParams() {
     TerrainRouteParams mr;
-    mr.cell = 12.0; mr.maxGrade = 0.08; mr.hardGrade = 0.45; mr.margin = 900.0;
+    mr.cell = 12.0; mr.maxGrade = 0.08; mr.hardGrade = 0.12; mr.margin = 1500.0;   // switchbacks, not 45% ramps
     return mr;
 }
 }  // namespace
@@ -71,6 +72,15 @@ double IslandWorld::heightAt(double x, double z) const {
     const int i = static_cast<int>(fx), j = static_cast<int>(fz);
     const double u = fx - i, v = fz - j;
     auto H = [&](int a, int b) { return static_cast<double>(height[static_cast<std::size_t>(b) * n + a]); };
+    return (H(i, j) * (1 - u) + H(i + 1, j) * u) * (1 - v) + (H(i, j + 1) * (1 - u) + H(i + 1, j + 1) * u) * v;
+}
+
+double IslandWorld::smoothAt(double x, double z) const {
+    if (heightSmooth.size() != height.size()) return heightAt(x, z);
+    const double fx = std::clamp((x + half) / cell, 0.0, n - 1.001), fz = std::clamp((z + half) / cell, 0.0, n - 1.001);
+    const int i = static_cast<int>(fx), j = static_cast<int>(fz);
+    const double u = fx - i, v = fz - j;
+    auto H = [&](int a, int b) { return static_cast<double>(heightSmooth[static_cast<std::size_t>(b) * n + a]); };
     return (H(i, j) * (1 - u) + H(i + 1, j) * u) * (1 - v) + (H(i, j + 1) * (1 - u) + H(i + 1, j + 1) * u) * v;
 }
 
@@ -291,11 +301,31 @@ IslandWorld planIsland(const json& blockIn, double half, double cell) {
         s.flatArea = cells * cell * cell;
     }
 
+    // the mountain roads' ground: a separable box blur, 3 cells (60 m) each way
+    {
+        const int N = w.n, r = 3;
+        std::vector<float> t(w.height.size());
+        w.heightSmooth.assign(w.height.size(), 0.0f);
+        for (int j = 0; j < N; ++j)
+            for (int i = 0; i < N; ++i) {
+                double sum = 0; int c = 0;
+                for (int k = std::max(0, i - r); k <= std::min(N - 1, i + r); ++k) { sum += w.height[static_cast<std::size_t>(j) * N + k]; ++c; }
+                t[static_cast<std::size_t>(j) * N + i] = static_cast<float>(sum / c);
+            }
+        for (int j = 0; j < N; ++j)
+            for (int i = 0; i < N; ++i) {
+                double sum = 0; int c = 0;
+                for (int k = std::max(0, j - r); k <= std::min(N - 1, j + r); ++k) { sum += t[static_cast<std::size_t>(k) * N + i]; ++c; }
+                w.heightSmooth[static_cast<std::size_t>(j) * N + i] = static_cast<float>(sum / c);
+            }
+    }
     // 4. ROADS over the ground (terrain_route.h)
     const HeightField ground = [&w](double x, double z) { return w.heightAt(x, z); };
+    const HeightField smoothGround = [&w](double x, double z) { return w.smoothAt(x, z); };
     auto route = [&](const std::string& kind, int a, int b, const Vec2& from, const Vec2& to, TerrainRouteParams rp) {
         rp.blocked = [&w](double x, double z) { return w.heightAt(x, z) < 0.8; };   // never over the sea
-        const TerrainRoute tr = routeOnTerrain(ground, from, to, rp);
+        const HeightField& g = (kind == "pass" || kind == "mountain") ? smoothGround : ground;
+        const TerrainRoute tr = routeOnTerrain(g, from, to, rp);
         IslandRoad rd;
         rd.kind = kind;
         rd.from = a;
@@ -304,7 +334,7 @@ IslandWorld planIsland(const json& blockIn, double half, double cell) {
         rd.length = tr.length;
         rd.climb = tr.climb;
         rd.worstGrade = tr.worstGrade;
-        if (kind != "pass") finishRoad(rd, ground, rp.blocked);   // a pass is finished once its legs are one road
+        if (kind != "pass") finishRoad(rd, g, rp.blocked);   // a pass is finished once its legs are one road
         w.roads.push_back(rd);
         return !tr.points.empty();
     };
@@ -348,7 +378,9 @@ IslandWorld planIsland(const json& blockIn, double half, double cell) {
                 }
             }
             TerrainRouteParams ps;
-            ps.cell = 24.0; ps.maxGrade = 0.07; ps.hardGrade = 0.60; ps.gradeWeight = 500.0; ps.turnWeight = 12.0; ps.margin = 3000.0;
+            // 12% at the very steepest, on a 12 m grid so switchbacks fit: the 60% the pass was first allowed
+            // (a 24 m grid could find nothing gentler) built as 2 km of bridge 110 m up (ADR-0112)
+            ps.cell = 12.0; ps.maxGrade = 0.07; ps.hardGrade = 0.15; ps.gradeWeight = 800.0; ps.turnWeight = 12.0; ps.margin = 4000.0;
             const std::size_t before = w.roads.size();
             route("pass", c0, c1, w.sites[static_cast<std::size_t>(c0)].at, saddle, ps);
             route("pass", c0, c1, saddle, w.sites[static_cast<std::size_t>(c1)].at, ps);
@@ -358,7 +390,7 @@ IslandWorld planIsland(const json& blockIn, double half, double cell) {
                 IslandRoad& one = w.roads[before];
                 one.points.insert(one.points.end(), w.roads[before + 1].points.begin() + 1, w.roads[before + 1].points.end());
                 w.roads.pop_back();
-                finishRoad(one, ground, [&w](double x, double z) { return w.heightAt(x, z) < 0.8; });
+                finishRoad(one, smoothGround, [&w](double x, double z) { return w.heightAt(x, z) < 0.8; });
             }
             saddleJson = {{"at", {std::round(saddle.x), std::round(saddle.y)}}, {"height", std::round(w.heightAt(saddle.x, saddle.y))}};
             (void)before;
@@ -604,8 +636,9 @@ void routeFreewayRoundCities(IslandWorld& w, const std::vector<std::pair<int, st
             for (const IslandRoad& f : w.roads)
                 if (f.kind == "freeway") for (const Vec2& q : f.points) if ((q - top).length() < best) { best = (q - top).length(); foot = q; }
             TerrainRouteParams mr = mountainRouteParams();
-            const TerrainRoute tr = routeOnTerrain(ground, foot, top, [&] { mr.blocked = [&w](double x, double z) { return w.heightAt(x, z) < 0.8; }; return mr; }());
-            if (!tr.points.empty()) { rd.points = tr.points; finishRoad(rd, ground, blocked); }
+            const HeightField smooth = [&w](double x, double z) { return w.smoothAt(x, z); };
+            const TerrainRoute tr = routeOnTerrain(smooth, foot, top, [&] { mr.blocked = [&w](double x, double z) { return w.heightAt(x, z) < 0.8; }; return mr; }());
+            if (!tr.points.empty()) { rd.points = tr.points; finishRoad(rd, smooth, blocked); }
         }
         // a PASS ends ON the freeway at each side (an interchange there), not at a city's edge beside it
         if (rd.kind == "pass") {
@@ -635,7 +668,7 @@ void routeFreewayRoundCities(IslandWorld& w, const std::vector<std::pair<int, st
                     if (side) rd.to = -1; else rd.from = -1;   // it ends on the freeway now
                 }
             }
-            const TerrainRoute m = measureRoute(ground, P);
+            const TerrainRoute m = measureRoute([&w](double x, double z) { return w.smoothAt(x, z); }, P);
             rd.length = m.length; rd.climb = m.climb; rd.worstGrade = m.worstGrade;
         }
         if (rd.from >= 0) trimAt(rd, rd.from, false);
@@ -682,7 +715,7 @@ void linkCityToFreeway(IslandWorld& w, int site, const std::vector<Vec2>& arteri
     }
 }
 
-void islandInterchanges(IslandWorld& w, const std::vector<Vec2>& cityStreets) {
+void islandInterchanges(IslandWorld& w, const std::vector<std::pair<Vec2, Vec2>>& cityStreets) {
     // the freeway's nearest point to p (and which leg, and the direction along it there)
     auto nearestFreeway = [&](const Vec2& p, Vec2& onto, Vec2& along) {
         double best = 1e30;
@@ -718,14 +751,23 @@ void islandInterchanges(IslandWorld& w, const std::vector<Vec2>& cityStreets) {
             }
             if (tail.empty()) continue;
             {
-                double best = 500.0;
-                Vec2 into = tail.back();
-                for (const Vec2& c : cityStreets) {
-                    const Vec2 d = c - onto;
-                    const double ahead = d.x * across.x + d.y * across.y;
-                    if (ahead > 80.0 && d.length() < best) { best = d.length(); into = c; }   // beyond the far ramps
+                // on into the place: to the FIRST street it meets beyond the far ramps (a T there), not on to
+                // a junction further in -- that line crossed the streets between, which the builder read as
+                // over- and underpasses (a 12 m mismatch in Saltwood, streets at 31%)
+                double bestT = 500.0;
+                Vec2 hit;
+                const Vec2 from = tail.back();
+                for (const auto& sg : cityStreets) {
+                    const Vec2 a = sg.first, ab = sg.second - sg.first;
+                    const Vec2 d = across * 500.0;
+                    const double den = d.x * ab.y - d.y * ab.x;
+                    if (std::fabs(den) < 1e-9) continue;
+                    const Vec2 fa = a - from;
+                    const double t = (fa.x * ab.y - fa.y * ab.x) / den, u = (fa.x * d.y - fa.y * d.x) / den;
+                    if (t < 0 || t > 1 || u < 0 || u > 1) continue;
+                    if (t * 500.0 < bestT) { bestT = t * 500.0; hit = from + d * t; }
                 }
-                if (best < 500.0) tail.push_back(into);
+                if (bestT < 500.0) tail.push_back(hit);
             }
             const Vec2 lead = onto - across * 60.0;
             if (end) {
@@ -750,6 +792,7 @@ void islandInterchanges(IslandWorld& w, const std::vector<Vec2>& cityStreets) {
         if (w.roads[k].kind != "freeway" && w.roads[k].points.size() >= 2) streets.push_back({w.roads[k].kind + std::to_string(k), w.roads[k].points, false});
     const HeightField ground = [&w](double x, double z) { return w.heightAt(x, z); };
     w.ramps.clear();
+    w.rampEdges.clear();
     w.interchanges.clear();
     int built = 0, candidates = 0, oblique = 0, spacing = 0, terminal = 0, room = 0, conflict = 0;
     // the freeway as ONE route: its legs end to end round the island (each leg's end is the next one's
@@ -812,6 +855,39 @@ void islandInterchanges(IslandWorld& w, const std::vector<Vec2>& cityStreets) {
         dop.rampHalf = 4.5 / 2 + 2.5;     // one 4.5 m lane, 2.5 m shoulders
         dop.gRamp = 0.09;
         dop.ground = ground;
+        // THE DECK AS IT WILL BE BUILT: the lanes builder's own profile for this route (its freeway class:
+        // a 200 m window at 6%), lifted to the underpass clearance over each road that crosses it and
+        // falling away at design grade. Without it the generator assumed ground + clearance everywhere,
+        // and on the foothills -- where the smoothed profile bridges the gullies -- ramps sized for 7 m had
+        // 20 m to climb (island_scene.h floors the scene's freeway the same way)
+        {
+            const std::vector<double> zProf = roads::lanes::profileAlong(route, ground, 200.0, 0.06);
+            std::vector<double> sProf{0.0};
+            for (std::size_t q = 1; q < route.size(); ++q) sProf.push_back(sProf.back() + (route[q] - route[q - 1]).length());
+            std::vector<std::pair<double, double>> tents;   // station, deck height
+            for (const IslandRoad& rd : w.roads) {
+                if (rd.kind == "freeway" || rd.points.size() < 2) continue;
+                for (std::size_t i = 0; i + 1 < rd.points.size(); ++i)
+                    for (std::size_t j = 0; j + 1 < route.size(); ++j) {
+                        const Vec2 a = rd.points[i], b = rd.points[i + 1], c = route[j], d = route[j + 1];
+                        const Vec2 r = b - a, sv = d - c;
+                        const double den = r.x * sv.y - r.y * sv.x;
+                        if (std::fabs(den) < 1e-12) continue;
+                        const double t = ((c - a).x * sv.y - (c - a).y * sv.x) / den, u = ((c - a).x * r.y - (c - a).y * r.x) / den;
+                        if (t < 0 || t > 1 || u < 0 || u > 1) continue;
+                        const Vec2 x = a + r * t;
+                        tents.push_back({sProf[j] + (sProf[j + 1] - sProf[j]) * u, w.heightAt(x.x, x.y) + 7.6});
+                    }
+            }
+            const double gd = roads::lanes::kDesignGrade * 0.06;
+            dop.deck = [sProf, zProf, tents, gd](double st) {
+                const std::size_t k = std::min<std::size_t>(sProf.size() - 1, std::max<std::size_t>(1, static_cast<std::size_t>(std::upper_bound(sProf.begin(), sProf.end(), st) - sProf.begin())));
+                const double f = (st - sProf[k - 1]) / std::max(1e-9, sProf[k] - sProf[k - 1]);
+                double z = zProf[k - 1] + (zProf[k] - zProf[k - 1]) * std::clamp(f, 0.0, 1.0);
+                for (const auto& [sc, zc] : tents) z = std::max(z, zc - gd * std::max(0.0, std::fabs(st - sc) - 30.0));
+                return z;
+            };
+        }
         // ONE ATTEMPT: the diamond generator over `these` streets (the candidate, and the roads already
         // served, which a ramp must not pass over), keeping only the ramps that land on `want` (or all,
         // when it is empty). Returns whether `want` got its diamond.
@@ -836,6 +912,7 @@ void islandInterchanges(IslandWorld& w, const std::vector<Vec2>& cityStreets) {
                 std::vector<Vec2> pts;
                 for (const json& pt : r["path"]["points"]) pts.push_back(Vec2(pt[0].get<double>(), pt[1].get<double>()));
                 w.ramps.push_back(pts);
+                w.rampEdges.push_back(r);
                 const json& anchor = off ? r["from"] : r["to"];
                 served.insert(sid);
                 // ids are <prefix>_<n>_<a|b>_<off|on>: the diamond is <prefix>_<n>

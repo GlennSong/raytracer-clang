@@ -142,5 +142,7 @@ vocabulary, and a missing word is added HERE (C++ and Lua), not privately to one
 | Lane arrows painted per lane at junction approaches | `deck_mesh.cpp` paintSide, `assignLaneMoves` (ADR-0108) | any lanes scene (grid_city) | legs from edges leaving the box; pockets turn only; ≥2 lanes |
 | Road signs built in 3D (posts, gantries, faces from cached atlas pages) | `world/road_sign_build.h`, level `shape:"road_signs"` (ADR-0110) | `assets/levels/sign_yard.json` | cache/road_signs keyed by face content; faces alpha-cut |
 | Protected left turns (lead arrow phase) | `SignalController::stateFor/protectedLeft`, `CitySim::moveFor/signalFor` (ADR-0109) | any signalised arterial junction | ≥2-lane approaches opposed in a shared green |
+| The island as a lanes scene + level (and a window of it) | `world/island_scene.h`, `city_plan island-cities --level NAME [--window X Z HALF]` (ADR-0112) | `assets/levels/island_8_saltwood.json` | freeway floors at underpasses only; mountain class 15% |
+| Dump an edge's solved profile | `LANELAB_DUMP_EDGE=<id> lanes_tool build …` (ADR-0112) | any lanes scene | deck z vs ground every 50 m |
 | The island freeway routed round its cities | `routeFreewayRoundCities`, `islandSiteBrief` (ADR-0106) | `city_plan island-cities` | city limits + 40 m are no-go; waypoint on each inland edge |
 | Residency (stream by camera distance) | `engine/residency.h` (ADR-0095) | building cells | terrain tiles, road cells, forests are the planned clients |

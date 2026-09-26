@@ -210,7 +210,10 @@ RoadGraph planarizePolylines(const std::vector<Polyline>& roads, Real snap = 0.6
 // triangle whose inside is narrower than the pavement around it. The plan cannot see the
 // harm (the block insets to nothing and drops out of the count) but the builder paves it,
 // and its lanes then sit inside each other's footprints. So the two ends become one node.
-void collapseShortLinks(RoadGraph& g, Real sidewalk) {
+// `chains`: measure a link as the whole CHAIN between two junctions (through its 15 m samples), not one
+// sample -- a 20 m connector of two samples between two arterials sat inside both their junctions and
+// no lane of it owned any pavement (the island's shaped cities, where contours, spokes and the grid meet)
+void collapseShortLinks(RoadGraph& g, Real sidewalk, bool chains = false) {
     for (int pass = 0; pass < 6; ++pass) {
         // Only a link BETWEEN JUNCTIONS counts: the graph's edges are 15 m samples along a
         // road, and collapsing those would fold every street into a point.
@@ -233,15 +236,54 @@ void collapseShortLinks(RoadGraph& g, Real sidewalk) {
             const int ra = find(e.a), rb = find(e.b);
             if (ra != rb) { merge[static_cast<std::size_t>(std::max(ra, rb))] = std::min(ra, rb); any = true; }
         }
+        if (chains) {
+            std::vector<std::vector<std::pair<int, int>>> adj(g.nodes.size());   // node -> (other node, edge)
+            for (std::size_t ei = 0; ei < g.edges.size(); ++ei) {
+                adj[static_cast<std::size_t>(g.edges[ei].a)].push_back({g.edges[ei].b, static_cast<int>(ei)});
+                adj[static_cast<std::size_t>(g.edges[ei].b)].push_back({g.edges[ei].a, static_cast<int>(ei)});
+            }
+            auto unite = [&](int a, int b) { const int ra = find(a), rb = find(b); if (ra != rb) { merge[static_cast<std::size_t>(std::max(ra, rb))] = std::min(ra, rb); any = true; } };
+            for (std::size_t j = 0; j < g.nodes.size(); ++j) {
+                if (degree[j] < 3) continue;
+                for (const auto& [first, e0] : adj[j]) {
+                    // walk the chain through degree-2 nodes to the next junction
+                    std::vector<int> interior;
+                    int prev = static_cast<int>(j), cur = first;
+                    Real len = (g.nodes[static_cast<std::size_t>(cur)].pos - g.nodes[j].pos).length();
+                    while (degree[static_cast<std::size_t>(cur)] == 2 && len < 80.0) {
+                        interior.push_back(cur);
+                        int next = -1;
+                        for (const auto& [o, ei] : adj[static_cast<std::size_t>(cur)]) if (o != prev) { next = o; break; }
+                        if (next < 0) break;
+                        len += (g.nodes[static_cast<std::size_t>(next)].pos - g.nodes[static_cast<std::size_t>(cur)].pos).length();
+                        prev = cur; cur = next;
+                    }
+                    if (degree[static_cast<std::size_t>(cur)] < 3 || cur == static_cast<int>(j)) continue;
+                    const Real want = 0.5 * (widest[j] + widest[static_cast<std::size_t>(cur)]) + 4 * sidewalk;
+                    if (len >= want) continue;
+                    unite(static_cast<int>(j), cur);
+                    for (int q : interior) unite(static_cast<int>(j), q);
+                }
+            }
+        }
         if (!any) return;
-        // Rebuild: merged nodes keep the average position, edges within a group disappear.
+        // Rebuild: merged nodes keep the average position (or, merging chains, the position of the node on
+        // the widest road -- an average put a kink in the arterial through it, and the next street crossed
+        // the kink beside the node), edges within a group disappear.
         std::vector<Vec2> sum(g.nodes.size(), Vec2(0, 0));
         std::vector<int> count(g.nodes.size(), 0);
+        std::vector<int> keep(g.nodes.size(), -1);
         for (std::size_t i = 0; i < g.nodes.size(); ++i) {
             const int r = find(static_cast<int>(i));
             sum[static_cast<std::size_t>(r)] = sum[static_cast<std::size_t>(r)] + g.nodes[i].pos;
             ++count[static_cast<std::size_t>(r)];
+            int& k = keep[static_cast<std::size_t>(r)];
+            if (k < 0 || widest[i] > widest[static_cast<std::size_t>(k)] + 1e-9 ||
+                (std::fabs(widest[i] - widest[static_cast<std::size_t>(k)]) <= 1e-9 && degree[i] > degree[static_cast<std::size_t>(k)])) k = static_cast<int>(i);
         }
+        if (chains)
+            for (std::size_t r = 0; r < g.nodes.size(); ++r)
+                if (keep[r] >= 0 && count[r] > 1) { sum[r] = g.nodes[static_cast<std::size_t>(keep[r])].pos * static_cast<double>(count[r]); }
         RoadGraph out;
         std::vector<int> remap(g.nodes.size(), -1);
         for (std::size_t i = 0; i < g.nodes.size(); ++i) {
@@ -1151,17 +1193,26 @@ CityPlan generatePlan(const Brief& B) {
                     if (w) runs.back().second = sAt;
                     if (!w) in = false;
                 }
-                std::vector<double> want;
-                // where arterials come down to it
+                // where arterials come down to it: the station, the arterial's end and its heading there --
+                // a bridge there CONTINUES the arterial from its end, so the two are one street through one
+                // junction with the riverside street (a separate bridge beside it crossed that street 5 m
+                // from the arterial, and the builder read the pair as an overpass: a 10 m junction)
+                struct Want { double s; Vec2 end, dir; };
+                std::vector<Want> want;
                 for (const Polyline& r : arterialsNow)
-                    for (const Vec2& end : {r.pts.front(), r.pts.back()}) {
+                    for (int side = 0; side < 2; ++side) {
+                        const Vec2 end = side ? r.pts.back() : r.pts.front();
+                        const Vec2 prev = side ? r.pts[r.pts.size() - 2] : r.pts[1];
                         if (landHy->distanceToRiver(end.x, end.y, 200.0) > edgeDepth + 25) continue;
                         const roads::lanes::Projection pr = roads::lanes::project(line, st, end);
-                        if (pr.distance < edgeDepth + 80 && shape.isWater(roads::lanes::pointAt(line, st, pr.station))) want.push_back(pr.station);
+                        const Vec2 d = end - prev;
+                        if (pr.distance < edgeDepth + 80 && shape.isWater(roads::lanes::pointAt(line, st, pr.station)) && d.length() > 1e-6)
+                            want.push_back({pr.station, end, d * (1.0 / d.length())});
                     }
-                std::sort(want.begin(), want.end());
+                std::sort(want.begin(), want.end(), [](const Want& a2, const Want& b2) { return a2.s < b2.s; });
                 std::vector<double> at;
-                for (double w : want) if (at.empty() || w - at.back() >= minGap) at.push_back(w);
+                std::map<double, Want> fromArterial;
+                for (const Want& w2 : want) if (at.empty() || w2.s - at.back() >= minGap) { at.push_back(w2.s); fromArterial[w2.s] = w2; }
                 // and the gaps, run by run
                 std::vector<double> filled;
                 for (const auto& [r0, r1] : runs) {
@@ -1186,6 +1237,26 @@ CityPlan generatePlan(const Brief& B) {
                 }
                 at.insert(at.end(), filled.begin(), filled.end());
                 for (double sAt : at) {
+                    if (auto fa = fromArterial.find(sAt); fa != fromArterial.end()) {
+                        // on from the arterial's end, the way it was heading, to past the far bank's riverside street
+                        const Vec2 E = fa->second.end, d = fa->second.dir;
+                        Real t1 = -1;
+                        bool wet = false;
+                        for (Real t = 5; t <= 400; t += 5) {
+                            const Vec2 q = E + d * t;
+                            if (!shape.inside(q)) break;
+                            if (shape.isWater(q)) wet = true;
+                            else if (wet && shape.depthAt(q) >= edgeDepth + 12) { t1 = t; break; }
+                        }
+                        if (t1 > 0) {
+                            Polyline br; br.klass = RoadClass::Arterial; br.width = B.arterialWidth;
+                            const int m = std::max(2, static_cast<int>(std::ceil(t1 / 15.0)));
+                            for (int k = 0; k <= m; ++k) br.pts.push_back(E + d * (t1 * k / m));
+                            roads.push_back(br);
+                            ++bridges;
+                            continue;
+                        }
+                    }
                     const Vec2 P = roads::lanes::pointAt(line, st, sAt);
                     const Vec2 T = roads::lanes::pointAt(line, st, std::min(st.back(), sAt + 20)) - roads::lanes::pointAt(line, st, std::max(0.0, sAt - 20));
                     if (T.length() < 1e-6) continue;
@@ -1997,7 +2068,7 @@ CityPlan generatePlan(const Brief& B) {
                     hy->rivers().size(), bridges, maxGap < 1e29 ? " + gap-fillers" : "", cut, sideRuns);
     }
     plan.streets = planarizePolylines(roads);
-    collapseShortLinks(plan.streets, B.sidewalk);
+    collapseShortLinks(plan.streets, B.sidewalk, shaped);   // chains too, for now only where the depth layout makes them
     pruneStubs(plan.streets, 45.0);
     {
         // thin and tiny blocks, counted over the whole map, split: the city, and the places out past it
