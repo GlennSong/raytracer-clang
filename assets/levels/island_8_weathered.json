@@ -350,33 +350,90 @@
     },
     {
      "family": "boulder",
-     "stone": "mossy",
-     "size": 2.0,
+     "stone": "granite",
+     "size": 3.2,
      "variants": 4,
      "ground": "field",
-     "spacing": 40,
+     "spacing": 60,
      "density": 0.35,
-     "draw": 600
+     "draw": 900,
+     "moss": 0.25
     },
     {
      "family": "boulder",
      "stone": "mossy",
-     "size": 1.5,
+     "size": 1.6,
+     "variants": 4,
+     "ground": "field",
+     "spacing": 30,
+     "density": 0.35,
+     "draw": 400
+    },
+    {
+     "family": "slab",
+     "stone": "granite",
+     "size": 2.6,
      "variants": 3,
-     "ground": "forest",
-     "spacing": 22,
-     "density": 0.5,
-     "draw": 350
+     "ground": "field",
+     "spacing": 70,
+     "density": 0.3,
+     "draw": 700,
+     "moss": 0.3
     },
     {
      "family": "boulder",
-     "stone": "sandstone",
-     "size": 1.8,
+     "stone": "mossy",
+     "size": 3.8,
+     "variants": 4,
+     "ground": "forest",
+     "spacing": 45,
+     "density": 0.45,
+     "draw": 600,
+     "moss": 0.85
+    },
+    {
+     "family": "boulder",
+     "stone": "mossy",
+     "size": 1.6,
+     "variants": 4,
+     "ground": "forest",
+     "spacing": 16,
+     "density": 0.5,
+     "draw": 300,
+     "moss": 0.8
+    },
+    {
+     "family": "slab",
+     "stone": "mossy",
+     "size": 2.8,
      "variants": 3,
-     "ground": "beach",
+     "ground": "forest",
      "spacing": 35,
+     "density": 0.4,
+     "draw": 450,
+     "moss": 0.8
+    },
+    {
+     "family": "boulder",
+     "stone": "granite",
+     "size": 2.2,
+     "variants": 3,
+     "ground": "forest",
+     "spacing": 40,
      "density": 0.35,
-     "draw": 600
+     "draw": 450,
+     "moss": 0.5
+    },
+    {
+     "family": "pebbles",
+     "stone": "mossy",
+     "size": 1.0,
+     "variants": 3,
+     "ground": "forest",
+     "spacing": 9,
+     "density": 0.4,
+     "draw": 150,
+     "moss": 0.7
     },
     {
      "family": "pebbles",
@@ -391,12 +448,45 @@
     {
      "family": "boulder",
      "stone": "granite",
-     "size": 1.1,
+     "size": 1.6,
+     "variants": 4,
+     "ground": "shore",
+     "spacing": 3.2,
+     "density": 0.7,
+     "draw": 450,
+     "moss": 0.15
+    },
+    {
+     "family": "boulder",
+     "stone": "granite",
+     "size": 3.0,
      "variants": 3,
      "ground": "shore",
-     "spacing": 9,
+     "spacing": 8,
+     "density": 0.55,
+     "draw": 700,
+     "moss": 0.2
+    },
+    {
+     "family": "slab",
+     "stone": "granite",
+     "size": 2.4,
+     "variants": 3,
+     "ground": "shore",
+     "spacing": 7,
      "density": 0.5,
-     "draw": 350
+     "draw": 600,
+     "moss": 0.1
+    },
+    {
+     "family": "boulder",
+     "stone": "sandstone",
+     "size": 1.8,
+     "variants": 3,
+     "ground": "beach",
+     "spacing": 35,
+     "density": 0.35,
+     "draw": 600
     }
    ]
   }
