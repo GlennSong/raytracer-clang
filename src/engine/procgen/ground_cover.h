@@ -52,7 +52,9 @@ class GroundCover {
 public:
     explicit GroundCover(const GroundCoverParams& p);
     // `height` is the ground's world Y at (x, z), `normalUp` its normal's y (1 = flat).
-    Cover at(double x, double z, double height, double normalUp) const;
+    // normalX/Z: the horizontal part of the surface normal, when the caller has it -- snow lies lower on
+    // shaded (north-facing) faces and runs down the fall line in tongues (ADR-0118); 0,0 = slope only
+    Cover at(double x, double z, double height, double normalUp, double normalX = 0.0, double normalZ = 0.0) const;
     const GroundCoverParams& params() const { return p_; }
 
 private:

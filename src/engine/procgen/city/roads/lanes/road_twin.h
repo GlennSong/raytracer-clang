@@ -26,7 +26,12 @@ namespace roads::lanes {
 // anything else that has to speak both vocabularies reads it here.
 RoadClass classOf(const EdgeSpec& e);
 
-RoadEntity roadTwin(const Result& r, double nodeSpacing = 60.0, bool forLots = false);
+// `forNav`: the twin the NAV graph is built from -- every edge's width is its travel lanes' own
+// (2 x the lanes' half-width), not the lot clearance band. The sim spreads a direction's lanes across
+// half the link width, and the padded band (shoulder + spine tolerance) put a car 1.25 m off its
+// painted lane on the island pass -- onto the shoulder, into a pier (Glenn: "ai cars don't drive in
+// the middle of the lane").
+RoadEntity roadTwin(const Result& r, double nodeSpacing = 60.0, bool forLots = false, bool forNav = false);
 // The nav twin carries a deck's TRAVEL width (what traffic spreads its lanes across); the lot
 // pass's right-of-way around a freeway or ramp is that plus this: shoulders, the twin tolerance
 // and the earthwork band either side.

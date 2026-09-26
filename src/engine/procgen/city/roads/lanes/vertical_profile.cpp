@@ -65,6 +65,17 @@ void throughProfile(EdgeSpec& e, const HeightField& terrain, const RoadClassSpec
         for (size_t i = 0; i < z.size(); ++i) z[i] = std::max(z[i], fp[2] - gd * std::max(0.0, std::fabs(e.s[i] - sc) - fp[3]));
     }
     e.z = gradeLimit(z, e.s, gd);
+    if (c.balance > 0.0) {   // blend toward the CUT envelope: -gradeLimit(-z) never fills
+        std::vector<double> neg(z.size());
+        for (size_t i = 0; i < z.size(); ++i) neg[i] = -z[i];
+        const std::vector<double> cut = gradeLimit(neg, e.s, gd);
+        for (size_t i = 0; i < z.size(); ++i) e.z[i] = (1.0 - c.balance) * e.z[i] + c.balance * (-cut[i]);
+        for (const auto& fp : e.floorPts) {   // the cut lowered the holds: every floor is cleared again (a design-grade cone keeps the grade)
+            const double sc = project(e.xy, e.s, Vec2(fp[0], fp[1])).station;
+            for (size_t i = 0; i < e.z.size(); ++i) e.z[i] = std::max(e.z[i], fp[2] - gd * std::max(0.0, std::fabs(e.s[i] - sc) - fp[3]));
+        }
+        if (e.hasZMin) for (double& v : e.z) v = std::max(v, e.zMin);
+    }
     // An open end is pinned to the ground there, and nothing may sit higher than the
     // grade allows from it: gradeLimit is the max of two monotone envelopes, so it
     // fills and never cuts. The cone has slope gd exactly, so the result is still

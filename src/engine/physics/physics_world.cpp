@@ -155,7 +155,10 @@ inline Mat4 fromJolt(const JPH::Mat44& m) {
     return r;
 }
 
-constexpr JPH::uint MAX_BODIES = 10240;
+// 65536: island_8_saltwood's load (5918 buildings, lots, road cells, trees, the fleet) filled 10240, and
+// the terrain collider under the spawn failed to add for eight fixed steps -- rebuilt on the main thread
+// each time (60 ms a step) -- until streaming freed some. A full pool drops ANY body silently.
+constexpr JPH::uint MAX_BODIES = 65536;
 constexpr JPH::uint MAX_BODY_PAIRS = 10240;
 constexpr JPH::uint MAX_CONTACT_CONSTRAINTS = 10240;
 

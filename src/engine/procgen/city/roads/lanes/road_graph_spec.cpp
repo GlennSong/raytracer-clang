@@ -182,7 +182,7 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         const nlohmann::json& j = it.value();
         c.lanes.w = num(j, "w", c.lanes.w); c.lanes.fwd = static_cast<int>(num(j, "fwd", c.lanes.fwd)); c.lanes.back = static_cast<int>(num(j, "back", c.lanes.back));
         c.lanes.gap = num(j, "gap", c.lanes.gap); c.shoulder = num(j, "shoulder", c.shoulder); c.sidewalk = num(j, "sidewalk", c.sidewalk); c.median = num(j, "median", c.median);
-        c.rank = static_cast<int>(num(j, "rank", c.rank)); c.gMax = num(j, "g_max", c.gMax); c.window = num(j, "window", c.window); c.thick = num(j, "thick", c.thick);
+        c.rank = static_cast<int>(num(j, "rank", c.rank)); c.gMax = num(j, "g_max", c.gMax); c.window = num(j, "window", c.window); c.balance = num(j, "balance", c.balance); c.thick = num(j, "thick", c.thick);
         if (j.contains("edges") && j["edges"].is_object()) {
             static const char* kRoleKey[5] = {"seam", "median", "vs_street", "elevated", "at_grade"};
             for (size_t i = 0; i < 5; ++i) {
@@ -191,7 +191,7 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
                 const std::string kind = e.value("kind", std::string("none"));
                 b.kind = kind == "wall" ? BarrierKind::Wall : kind == "guardrail" ? BarrierKind::Guardrail : BarrierKind::None;
                 b.h = num(e, "h", kind == "guardrail" ? 0.75 : 0.9);
-                b.offset = num(e, "offset", 0.0); b.thick = num(e, "thick", kind == "guardrail" ? 0.1 : 0.4); b.set = true;
+                b.offset = num(e, "offset", 0.0); b.thick = num(e, "thick", kind == "guardrail" ? 0.1 : 0.4); b.minDrop = num(e, "min_drop", 0.0); b.set = true;
                 c.edges[i] = b;
             }
         }

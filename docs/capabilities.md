@@ -147,5 +147,12 @@ vocabulary, and a missing word is added HERE (C++ and Lua), not privately to one
 | A baked ground shared by editor and viewer | `bakedGroundKey` hashes the terrain block + flattens only; land-only erosion blend baked to a grid (ADR-0113) | `island_8_saltwood` | cached load 32.7 s; first open after a code-tag bump rebakes |
 | Freeway crossings always grade-separated | scene rule `freeway_separates` (`Rules::freewaySeparates`, ADR-0114) | `island_8_saltwood` | off by default; the island scene sets it |
 | River mouths across the shelf; water levels from the nearest water | `River::shelf`, `Hydrology::onShelf`, `waterMesh` level choice (ADR-0114) | `island_8_saltwood`, `island_water_surface_has_no_spikes` | `RT_WATER_MOUTHS=1` / `RT_WATER_AT=x,z` print the ends and nearby water |
+| Drive a road, not a camera path | `tools/walk_probe.py LEVEL OUT --drive --path x,z:x,z [--min-ms 25]` (ADR-0115) | `island_8_saltwood` pass | possess car + drive_to; RT_DUMP_STATS names spike systems, RT_COLLIDER_TRACE the sync collider builds |
+| Signs and piers clear of other roads | `clearSignsOfPavement`, pier clearance square in lanes.cpp (ADR-0115) | `road_signs_never_stand_on_another_roads_pavement` | |
+| AI cars in the painted lane centre | `roadTwin(..., forNav=true)` feeds navRoadGraph (ADR-0115) | lanes levels | lot twin keeps its clearance band |
+| Mountain roads that cut as well as fill | class option `balance` (0..1) in lanes classes (ADR-0116) | island "mountain" class 0.5 | `lanes_a_balanced_profile_cuts_as_well_as_fills` |
+| Guardrails where the ground drops | class barrier `min_drop` (ADR-0117) | island "mountain" class | `parapetRuns` joins authored classes |
+| Lookout lay-bys | `islandLanesScene` lookouts -> `layby` pockets (ADR-0119) | Saltwood pass (-1407, 119) | |
+| Wandering snowline; rock structure + crag normals | `GroundCover::at(..., normalX, normalZ)` (ADR-0118); `rockStructure` + crag relief in mesh.frag (ADR-0120) | island 8 | Vulkan only |
 | The island freeway routed round its cities | `routeFreewayRoundCities`, `islandSiteBrief` (ADR-0106) | `city_plan island-cities` | city limits + 40 m are no-go; waypoint on each inland edge |
 | Residency (stream by camera distance) | `engine/residency.h` (ADR-0095) | building cells | terrain tiles, road cells, forests are the planned clients |

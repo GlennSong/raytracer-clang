@@ -1193,6 +1193,12 @@ private:
     }
     enum class GoalFire { NoRow, Blocked, Fired };
     GoalFire tryGoalEvent(Agent& a, GoalEvent event);
+    // DEPARTURES PER STEP: each departure routes, and a clock window can send thousands at once --
+    // measured on island_8_saltwood, 2313 wander routes in ONE step (357 ms), the hitch Glenn felt
+    // driving the pass. Past the budget a departure reports Blocked and retries next tick, as a
+    // driver waiting for launch clearance does. Buses are exempt.
+    static constexpr int kDeparturesPerStep = 200;
+    int departuresThisStep_ = 0;
     // Execute the agent's (GoTo) goal state: start the trip toward its target.
     // False when no trip launched (then a NoRoute row, if any, has been taken).
     bool startGoalTrip(Agent& a, int origin, bool fromRest);

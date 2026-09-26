@@ -1,3 +1,5 @@
+#include <chrono>
+#include "../../log.h"
 #include "terrain_lod_system.h"
 #include "physics_system.h"
 #include "../components.h"
@@ -370,10 +372,16 @@ void TerrainLodSystem::fixedUpdate(FrameContext& ctx) {
         if (colliders_.count(m.key)) continue;   // arrived above
         const bool underFeet = m.d2 <= feet2;   // player's own / adjacent cell: the floor is never deferred
         if (underFeet) {
+            static const bool trace = std::getenv("RT_COLLIDER_TRACE") != nullptr;
+            const auto t0 = std::chrono::steady_clock::now();
             const auto shape = buildShape(cfg->baked, &cfg->params, &noise, m.node, cfg->gridRes, normalEps);
             const PhysicsBodyId id = shape ? physics_->physicsWorld().addPreparedMesh(*shape, Vec3(0, 0, 0), 0.8)
                                            : INVALID_PHYSICS_BODY;
             if (id != INVALID_PHYSICS_BODY) colliders_[m.key] = id;
+            if (trace) LOG_INFO << "[colliders] SYNC tile (" << m.node.minX << ", " << m.node.minZ << ") d " << std::sqrt(m.d2)
+                                << " m, pending " << colliderPending_.count(m.key) << " (" << colliderPending_.size() << " jobs), "
+                                << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() << " ms, have " << colliders_.size()
+                                << ", revision " << colliderRevision_ << (shape ? (id == INVALID_PHYSICS_BODY ? ", ADD FAILED" : "") : ", NO SHAPE");
             continue;
         }
         if (colliderPending_.count(m.key) || colliderPending_.size() >= kMaxColliderJobs) continue;

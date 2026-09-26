@@ -477,7 +477,7 @@ TEST_CASE(lanes_lots_bake_reads_the_city_products_back_and_is_deterministic) {
     LevelInputs in; std::string err; CHECK(loadLevelInputs("assets/lanelab/levels/ring.json", in, &err));
     // The producer's grow, twice, from the cached ring scene's products: byte-identical lots.
     const CityProducts p = cityProductsFromResult(scene("ring_city"), cityRenderCell(in.level));
-    LotsCityInputs city; city.hasTerrain = p.hasTerrain; city.ground = p.ground; city.holes = p.holes; city.nav = p.nav; city.pavedSidewalk = p.bands.sidewalkWidth;
+    LotsCityInputs city; city.hasTerrain = p.hasTerrain; city.ground = p.ground; city.holes = p.holes; city.nav = p.lotNav; city.pavedSidewalk = p.bands.sidewalkWidth;
     nlohmann::json ra, rb;
     const NetLotResult ga = growLotsForLevel(in, city, &ra), gb = growLotsForLevel(in, city, &rb);
     CHECK(ga.lots.size() > 100 && ga.lots.size() == gb.lots.size() && ra["units"] == rb["units"] && !ga.parts.empty());
@@ -544,4 +544,39 @@ TEST_CASE(lanes_arrows_assign_turns_to_the_lanes_that_make_them) {
     m = assignLaneMoves(2, true, true, false);
     CHECK(m[0].left && m[0].straight);
     CHECK(m[1].straight && !m[1].right);
+}
+
+// ADR-0116: a mountain road CUTS through the rise it cannot climb. The profile used to be the grade-limited
+// envelope from above only -- it fills and never cuts -- so a pass over rough ground rode viaducts off every
+// bump (2.7 km of bridge in 4.2). `balance` blends toward the envelope from below: closer to the ground,
+// the grade kept, and a floor (a bridge's hold) still cleared.
+TEST_CASE(lanes_a_balanced_profile_cuts_as_well_as_fills) {
+    // a 2 km climb of 200 m (10%) with 25 m bumps every 150 m: steeper than 12% in places
+    const HeightField ground = [](double x, double) { return 0.1 * x + 12.5 * std::sin(x / 150.0 * 6.2831853); };
+    auto profile = [&](double balance, bool hold) {
+        EdgeSpec e;
+        for (double x = 0; x <= 2000.0; x += 2.0) e.xy.emplace_back(x, 0.0);
+        if (hold) e.floorPts.push_back({1000.0, 0.0, 0.1 * 1000.0 + 30.0, 20.0});   // a hold 30 m over the ground at 1 km
+        RoadClassSpec c; c.gMax = 0.15; c.window = 60.0; c.balance = balance;
+        throughProfile(e, ground, c);
+        return e;
+    };
+    const EdgeSpec fill = profile(0.0, false), bal = profile(0.5, false), held = profile(0.5, true);
+    // what makes a viaduct is how high the deck stands over the ground: the tallest fill
+    auto stats = [](const EdgeSpec& e, double& maxFill, double& maxGrade) {
+        maxFill = 0; maxGrade = 0;
+        for (std::size_t i = 0; i < e.z.size(); ++i) {
+            maxFill = std::max(maxFill, e.z[i] - e.t[i]);
+            if (i) maxGrade = std::max(maxGrade, std::fabs(e.z[i] - e.z[i - 1]) / (e.s[i] - e.s[i - 1]));
+        }
+    };
+    double gapF, gradeF, gapB, gradeB;
+    stats(fill, gapF, gradeF); stats(bal, gapB, gradeB);
+    std::printf("    [balance] tallest fill: fill-only %.1f m, balanced %.1f m; grade %.3f / %.3f\n", gapF, gapB, gradeF, gradeB);
+    CHECK(gapB < 0.7 * gapF);                          // it stands far lower off the ground
+    CHECK(gradeB <= 0.8 * 0.15 + 1e-6);                 // and keeps the design grade
+    const std::size_t mid = 500;                        // x = 1000
+    CHECK(held.z[mid] >= 0.1 * 1000.0 + 30.0 - 1e-6);   // a hold is still cleared
+    double gapH, gradeH; stats(held, gapH, gradeH);
+    CHECK(gradeH <= 0.8 * 0.15 + 1e-6);
 }

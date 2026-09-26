@@ -350,9 +350,17 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     }
     mark("parapet walls");
     auto groundAt = [&](const Vec2& p) { return r.hasTerrain ? r.terrain.sample(p.x, p.y) : 0.0; };
+    // the roads that carry barriers: freeways and ramps, and any class whose table AUTHORS one (the
+    // island's mountain road, ADR-0117) -- streets without are the lot pass's business
+    auto barriered = [&](const std::string& cls) {
+        if (cls == "freeway") return true;
+        const RoadClassSpec& c = r.graph.classes.count(cls) ? r.graph.classes.at(cls) : r.graph.classes.begin()->second;
+        for (const BarrierSpec& b : c.edges) if (b.set && b.kind != BarrierKind::None) return true;
+        return false;
+    };
     auto isDeckLane = [&](int li) {
         if (li < 0 || li >= static_cast<int>(L.lanes.size())) return false; const Lane& l = L.lanes[static_cast<size_t>(li)];
-        if (l.isConnector() || l.parent < 0) return false; const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)]; return e.isRamp() || e.cls == "freeway";
+        if (l.isConnector() || l.parent < 0) return false; const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)]; return e.isRamp() || barriered(e.cls);
     };
     for (size_t li = 0; li < L.lanes.size(); ++li) {
         if (!isDeckLane(static_cast<int>(li))) continue; const Lane& l = L.lanes[li]; if (l.s.size() < 2 || l.s.back() < 8) continue;
@@ -640,9 +648,22 @@ std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
     const LaneSet& L = r.lanes;
     std::vector<ParapetRun> out;
     const std::vector<Box2> laneBox = laneBoxes(r.pavement.footprints); const LaneGrid laneGrid(laneBox, r.pavement.footprints); const std::vector<PreparedSet> footprint = prepareAll(r.pavement.footprints);
-    auto isDeckLane = [&](int li) {
+    // freeways and ramps -- the pavement whose outline is a barrier line by default; anything else a ramp
+    // meets is a road it carries on into (a mouth, never walled)
+    auto isFreewayLane = [&](int li) {
         if (li < 0 || li >= static_cast<int>(L.lanes.size())) return false; const Lane& l = L.lanes[static_cast<size_t>(li)];
         if (l.isConnector() || l.parent < 0) return false; const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)]; return e.isRamp() || e.cls == "freeway";
+    };
+    // ...and every road whose class AUTHORS a barrier (the island's mountain road, ADR-0117)
+    auto authored = [&](const std::string& cls) {
+        auto it = r.graph.classes.find(cls); if (it == r.graph.classes.end()) return false;
+        for (const BarrierSpec& b : it->second.edges) if (b.set && b.kind != BarrierKind::None) return true;
+        return false;
+    };
+    auto isDeckLane = [&](int li) {
+        if (isFreewayLane(li)) return true;
+        if (li < 0 || li >= static_cast<int>(L.lanes.size())) return false; const Lane& l = L.lanes[static_cast<size_t>(li)];
+        return !l.isConnector() && l.parent >= 0 && authored(r.graph.edges[static_cast<size_t>(l.parent)].cls);
     };
     auto pavedLaneAt = [&](const Vec2& q, double z, bool deckOnly) {
         for (int ojI : laneGrid.at(q)) {
@@ -710,7 +731,8 @@ std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
             const bool onOtherPavement = [&] {
                 for (const Vec2& q : {pts[i], pts[i] + nrm * 0.6, pts[i] - nrm * 0.6}) {
                     const int hit = pavedLaneAt(q, z[i], false);
-                    if (hit >= 0 && !isDeckLane(hit)) return true;
+                    // another road's pavement (not a freeway or ramp, not this road's own lanes): it carries on
+                    if (hit >= 0 && !isFreewayLane(hit) && L.lanes[static_cast<size_t>(hit)].parent != L.lanes[static_cast<size_t>(inLane)].parent) return true;
                 }
                 return false;
             }();
@@ -720,6 +742,8 @@ std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
             else if (ne && ne->cls != "freeway" && !ne->isRamp() && nd <= 32.0) role[i] = EdgeRole::VsStreet;
             else role[i] = hAbove >= 1.5 ? EdgeRole::Elevated : EdgeRole::AtGrade;
             spec[i] = barrierFor(r.graph.cls(me), role[i]);
+            if (spec[i].kind != BarrierKind::None && spec[i].minDrop > 0.0 && z[i] - groundAt(pts[i] + outward * 5.0) < spec[i].minDrop)
+                spec[i] = BarrierSpec{};   // nowhere to fall here: no rail
         }
         // census over the ring
         for (size_t i = 0; i < n; ++i) {

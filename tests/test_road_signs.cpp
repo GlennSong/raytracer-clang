@@ -210,3 +210,29 @@ TEST_CASE(road_sign_atlas_is_cached_and_panels_read_left_to_right) {
     }
     CHECK(!m.steel.empty());
 }
+
+#include "../src/engine/procgen/world/island_scene.h"
+
+// Glenn's drive: a possessed car on the pass stopped dead under the freeway -- d0_0's guide sign stood
+// its posts in the pass's lane. The sign plan is placed from the road a sign serves; clearSignsOfPavement
+// moves any whose posts stand on ANY road's pavement along its own direction, or drops it.
+TEST_CASE(road_signs_never_stand_on_another_roads_pavement) {
+    nlohmann::json scene;
+    scene["classes"] = {{"mountain", {{"fwd", 1}, {"back", 1}, {"w", 3.5}, {"shoulder", 1.0}}}};
+    // a pass running north along x = 0 (paved half-width 3.5 + 1 + 0.5 margin = 5 m)
+    scene["edges"] = nlohmann::json::array({{{"id", "pass"}, {"class", "mountain"},
+                                             {"path", {{"points", nlohmann::json::array({nlohmann::json::array({0.0, -200.0}), nlohmann::json::array({0.0, 200.0})})}}}}});
+    std::vector<IslandSign> signs(3);
+    signs[0].at = Vec2(3.0, 0.0);   signs[0].facing = Vec2(1, 0); signs[0].mount = "roadside";   // posts in the pass's lane
+    signs[1].at = Vec2(40.0, 50.0); signs[1].facing = Vec2(1, 0); signs[1].mount = "roadside";   // clear of it
+    signs[2].at = Vec2(0.0, 30.0);  signs[2].facing = Vec2(0, 1); signs[2].mount = "roadside";   // standing IN the pass along it: nowhere to go
+    const auto [moved, dropped] = clearSignsOfPavement(signs, scene);
+    CHECK(moved == 1);
+    CHECK(dropped == 1);
+    CHECK(signs.size() == 2);
+    for (const IslandSign& s : signs) {
+        const Vec2 side(-s.facing.y, s.facing.x);
+        for (double k : {-1.0, 0.0, 1.0}) CHECK(std::fabs((s.at + side * (2.0 * k)).x) >= 5.0);   // every post off the pass
+    }
+    CHECK(signs[1].at.x == 40.0 && signs[1].at.y == 50.0);   // the clear one did not move
+}

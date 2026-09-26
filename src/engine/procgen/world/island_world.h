@@ -109,6 +109,9 @@ struct IslandWorld {
     std::vector<Vec2> centres;              // per site: its centre stop (the transit centre), set by the caller
     nlohmann::json report;
     double heightAt(double x, double z) const;   // bilinear
+    // Where a road may not go on the ground: the sea, or a lake and 12 m round it (Saltwood's pass ran
+    // its last stretch along lake 2's bed, 3.5 m under the water -- "you drove into the lake")
+    bool water(double x, double z) const;
     // the ground a MOUNTAIN road is routed and graded on: the height blurred over ~60 m, the way the road
     // will meet it once the builder has cut the spurs and filled the gullies. On the raw eroded ground no
     // route under 12% existed; on it, switchbacks do (ADR-0112)

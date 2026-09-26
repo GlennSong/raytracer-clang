@@ -67,6 +67,10 @@ TerrainRouteParams mountainRouteParams() {
 }
 }  // namespace
 
+bool IslandWorld::water(double x, double z) const {
+    return heightAt(x, z) < 0.8 || (hydro && hydro->inLake(x, z, 12.0));
+}
+
 double IslandWorld::heightAt(double x, double z) const {
     const double fx = std::clamp((x + half) / cell, 0.0, n - 1.001), fz = std::clamp((z + half) / cell, 0.0, n - 1.001);
     const int i = static_cast<int>(fx), j = static_cast<int>(fz);
@@ -120,6 +124,8 @@ json islandTerrainBlock(uint32_t seed, double half) {
         // over the range wants them (it climbs a valley to the saddle, not across every ridge)
         {"erode", true}, {"erodeLandOnly", true}, {"erodeRes", 1024}, {"erodeDroplets", 1500000}, {"erodeRadius", 3}, {"erodeThermal", 16},
         {"rivers", {{"region", 2.0 * half}, {"cell", 20}, {"riverArea", 2.0e6}, {"widthMin", 8}, {"widthMax", 70}, {"widthK", 0.02},
+                    // (widthVariation, ADR-0121, is not on yet: at 0.6 with gentler banks it re-cut Saltwood's
+                    // interchange d0_0 and 94 more lanes lost cover -- the city has to follow the rivers first)
                     {"lakeMinArea", 80000}, {"bankSteep", 2.5}, {"incisionMin", 1.5}}},
     };
     return block;
@@ -323,7 +329,7 @@ IslandWorld planIsland(const json& blockIn, double half, double cell) {
     const HeightField ground = [&w](double x, double z) { return w.heightAt(x, z); };
     const HeightField smoothGround = [&w](double x, double z) { return w.smoothAt(x, z); };
     auto route = [&](const std::string& kind, int a, int b, const Vec2& from, const Vec2& to, TerrainRouteParams rp) {
-        rp.blocked = [&w](double x, double z) { return w.heightAt(x, z) < 0.8; };   // never over the sea
+        rp.blocked = [&w](double x, double z) { return w.water(x, z); };   // never over the sea or a lake
         const HeightField& g = (kind == "pass" || kind == "mountain") ? smoothGround : ground;
         const TerrainRoute tr = routeOnTerrain(g, from, to, rp);
         IslandRoad rd;
@@ -372,6 +378,7 @@ IslandWorld planIsland(const json& blockIn, double half, double cell) {
                     across = across.length() > 1e-9 ? across / across.length() : Vec2(1, 0);
                     for (double o = -300; o <= 300; o += 50) {
                         const Vec2 p2 = q + across * o;
+                        if (w.water(p2.x, p2.y)) continue;   // a mountain lake fills the lowest saddle: go round it, not through
                         const double h = w.heightAt(p2.x, p2.y);
                         if (h < low) { low = h; saddle = p2; }
                     }
@@ -390,7 +397,7 @@ IslandWorld planIsland(const json& blockIn, double half, double cell) {
                 IslandRoad& one = w.roads[before];
                 one.points.insert(one.points.end(), w.roads[before + 1].points.begin() + 1, w.roads[before + 1].points.end());
                 w.roads.pop_back();
-                finishRoad(one, smoothGround, [&w](double x, double z) { return w.heightAt(x, z) < 0.8; });
+                finishRoad(one, smoothGround, [&w](double x, double z) { return w.water(x, z); });
             }
             saddleJson = {{"at", {std::round(saddle.x), std::round(saddle.y)}}, {"height", std::round(w.heightAt(saddle.x, saddle.y))}};
             (void)before;
@@ -571,7 +578,7 @@ void routeFreewayRoundCities(IslandWorld& w, const std::vector<std::pair<int, st
     auto blocked = [&](double x, double z) {
         int i, j;
         if (!cellOf(Vec2(x, z), i, j)) return true;
-        return nogo[static_cast<std::size_t>(j) * n + i] || w.heightAt(x, z) < 0.8;
+        return nogo[static_cast<std::size_t>(j) * n + i] || w.water(x, z);
     };
     // each city's WAYPOINT: the point of its limits nearest the range's axis, stepped out toward it
     const json& il = w.terrain.value("island", json::object());
@@ -637,7 +644,7 @@ void routeFreewayRoundCities(IslandWorld& w, const std::vector<std::pair<int, st
                 if (f.kind == "freeway") for (const Vec2& q : f.points) if ((q - top).length() < best) { best = (q - top).length(); foot = q; }
             TerrainRouteParams mr = mountainRouteParams();
             const HeightField smooth = [&w](double x, double z) { return w.smoothAt(x, z); };
-            const TerrainRoute tr = routeOnTerrain(smooth, foot, top, [&] { mr.blocked = [&w](double x, double z) { return w.heightAt(x, z) < 0.8; }; return mr; }());
+            const TerrainRoute tr = routeOnTerrain(smooth, foot, top, [&] { mr.blocked = [&w](double x, double z) { return w.water(x, z); }; return mr; }());
             if (!tr.points.empty()) { rd.points = tr.points; finishRoad(rd, smooth, blocked); }
         }
         // a PASS ends ON the freeway at each side (an interchange there), not at a city's edge beside it

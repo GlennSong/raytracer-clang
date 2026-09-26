@@ -189,6 +189,7 @@ TerrainParams readTerrainParams(const json& t) {
             hp.widthMin = r.value("widthMin", hp.widthMin);
             hp.widthMax = r.value("widthMax", hp.widthMax);
             hp.widthK = r.value("widthK", hp.widthK);
+            hp.widthVariation = r.value("widthVariation", hp.widthVariation);
             hp.depthMin = r.value("depthMin", hp.depthMin);
             hp.depthMax = r.value("depthMax", hp.depthMax);
             hp.depthK = r.value("depthK", hp.depthK);

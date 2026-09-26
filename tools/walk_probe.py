@@ -37,6 +37,11 @@ def main():
     ap.add_argument("--path", required=True, help="x,z:x,z:... waypoints")
     ap.add_argument("--speed", type=float, default=5.0, help="m/s")
     ap.add_argument("--hitch", type=float, default=2.0, help="a hitch is a frame over this x the median")
+    ap.add_argument("--min-ms", type=float, default=0.0, help="...and over this many ms (a fast median makes 2x noise)")
+    ap.add_argument("--drive", action="store_true",
+                    help="DRIVE it: possess a car at the first waypoint and drive_to the last (physics, "
+                         "colliders, the vehicle -- what a camera walk skips); --speed is ignored")
+    ap.add_argument("--drive-timeout", type=float, default=900)
     ap.add_argument("--viewer", default="build-viewer/viewer")
     ap.add_argument("--load-timeout", type=float, default=1400)
     ap.add_argument("--settle", type=float, default=5)
@@ -57,52 +62,68 @@ def main():
             if proc.poll() is not None or time.time() - t0 > 60: sys.exit("viewer did not open its control socket")
             time.sleep(0.2)
         send(sock, "camera?", timeout=a.load_timeout)
-        # the path, resampled every 4 m, with the ground under each sample
-        samples = []
-        for (x0, z0), (x1, z1) in zip(pts, pts[1:]):
-            n = max(1, int(math.hypot(x1 - x0, z1 - z0) / 4.0))
-            for k in range(n):
-                t = k / n
-                samples.append((x0 + (x1 - x0) * t, z0 + (z1 - z0) * t))
-        samples.append(pts[-1])
-        # the player's eye along the path (every 4th sample; linear between)
-        hs, last = [], 0.0
-        for k, (x, z) in enumerate(samples):
-            if k % 4 == 0 or k == len(samples) - 1:
-                h = eye_at(sock, x, z)
-                last = h if h is not None else last
-            hs.append(last)
-        for k in range(len(hs)):   # fill the skipped samples by interpolation
-            if k % 4 and k < len(hs) - 1:
-                k0, k1 = k - k % 4, min(len(hs) - 1, k - k % 4 + 4)
-                hs[k] = hs[k0] + (hs[k1] - hs[k0]) * (k - k0) / (k1 - k0)
-        time.sleep(a.settle)
-        # walk: stream poses at ~60 Hz
-        d = [0.0]
-        for i in range(1, len(samples)):
-            d.append(d[-1] + math.hypot(samples[i][0] - samples[i - 1][0], samples[i][1] - samples[i - 1][1]))
-        total, start = d[-1], time.time()
-        mark = send(sock, "camera?").split("frame=")[-1]
-        print(f"walking {total:.0f} m at {a.speed} m/s from frame {mark}", flush=True)
-        i = 0
-        while True:
-            s = (time.time() - start) * a.speed
-            if s >= total: break
-            while i + 1 < len(d) - 1 and d[i + 1] < s: i += 1
-            t = (s - d[i]) / max(1e-6, d[i + 1] - d[i])
-            x = samples[i][0] + (samples[i + 1][0] - samples[i][0]) * t
-            z = samples[i][1] + (samples[i + 1][1] - samples[i][1]) * t
-            y = hs[i] + (hs[i + 1] - hs[i]) * t
-            yaw = math.degrees(math.atan2(samples[i + 1][0] - samples[i][0], -(samples[i + 1][1] - samples[i][1])))
-            send(sock, f"camera {x:.2f} {y:.2f} {z:.2f} -4 {yaw:.2f}")
-            time.sleep(1 / 60)
-        end = send(sock, "camera?").split("frame=")[-1]
+        if a.drive:
+            time.sleep(a.settle)
+            print(send(sock, f"possess car {pts[0][0]:.1f} {pts[0][1]:.1f}"), flush=True)
+            time.sleep(2.0)
+            mark = send(sock, "camera?").split("frame=")[-1]
+            print(send(sock, f"drive_to {pts[-1][0]:.1f} {pts[-1][1]:.1f}"), flush=True)
+            start, state = time.time(), ""
+            while time.time() - start < a.drive_timeout:
+                time.sleep(2.0)
+                state = send(sock, "possess?")
+                print(f"  {time.time() - start:5.0f} s  {state}", flush=True)
+                if any(w in state for w in ("arrived", "no-route", "stuck")): break
+            end = send(sock, "camera?").split("frame=")[-1]
+            print(f"drove frames {mark}..{end}: {state}", flush=True)
+        else:   # WALK: the camera along the path
+            # the path, resampled every 4 m, with the ground under each sample
+            samples = []
+            for (x0, z0), (x1, z1) in zip(pts, pts[1:]):
+                n = max(1, int(math.hypot(x1 - x0, z1 - z0) / 4.0))
+                for k in range(n):
+                    t = k / n
+                    samples.append((x0 + (x1 - x0) * t, z0 + (z1 - z0) * t))
+            samples.append(pts[-1])
+            # the player's eye along the path (every 4th sample; linear between)
+            hs, last = [], 0.0
+            for k, (x, z) in enumerate(samples):
+                if k % 4 == 0 or k == len(samples) - 1:
+                    h = eye_at(sock, x, z)
+                    last = h if h is not None else last
+                hs.append(last)
+            for k in range(len(hs)):   # fill the skipped samples by interpolation
+                if k % 4 and k < len(hs) - 1:
+                    k0, k1 = k - k % 4, min(len(hs) - 1, k - k % 4 + 4)
+                    hs[k] = hs[k0] + (hs[k1] - hs[k0]) * (k - k0) / (k1 - k0)
+            time.sleep(a.settle)
+            # walk: stream poses at ~60 Hz
+            d = [0.0]
+            for i in range(1, len(samples)):
+                d.append(d[-1] + math.hypot(samples[i][0] - samples[i - 1][0], samples[i][1] - samples[i - 1][1]))
+            total, start = d[-1], time.time()
+            mark = send(sock, "camera?").split("frame=")[-1]
+            print(f"walking {total:.0f} m at {a.speed} m/s from frame {mark}", flush=True)
+            i = 0
+            while True:
+                s = (time.time() - start) * a.speed
+                if s >= total: break
+                while i + 1 < len(d) - 1 and d[i + 1] < s: i += 1
+                t = (s - d[i]) / max(1e-6, d[i + 1] - d[i])
+                x = samples[i][0] + (samples[i + 1][0] - samples[i][0]) * t
+                z = samples[i][1] + (samples[i + 1][1] - samples[i][1]) * t
+                y = hs[i] + (hs[i + 1] - hs[i]) * t
+                yaw = math.degrees(math.atan2(samples[i + 1][0] - samples[i][0], -(samples[i + 1][1] - samples[i][1])))
+                send(sock, f"camera {x:.2f} {y:.2f} {z:.2f} -4 {yaw:.2f}")
+                time.sleep(1 / 60)
+            end = send(sock, "camera?").split("frame=")[-1]
     finally:
         proc.terminate()
         try: proc.wait(10)
         except subprocess.TimeoutExpired: proc.kill()
 
-    rows = list(csv.DictReader(l for l in open(csv_path) if not l.startswith("#")))
+    rows = [r for r in csv.DictReader(l for l in open(csv_path) if not l.startswith("#"))
+            if r.get("total_ms") not in (None, "")]   # the last row can be cut off when the viewer closes
     fcol = "frame" if rows and "frame" in rows[0] else None
     walk = rows[-(int(end) - int(mark)):] if not fcol else [r for r in rows if int(mark) <= int(r[fcol]) <= int(end)]
     ms = [float(r["total_ms"]) for r in walk]
@@ -114,8 +135,8 @@ def main():
              f"{len(ms)} frames: p50 {med:.1f}  p95 {pct(.95):.1f}  p99 {pct(.99):.1f}  max {q[-1]:.1f} ms"]
     cols = [c for c in ("update_ms", "fixed_ms", "render_ms", "wait_ms", "encode_ms", "submit_ms", "gpu_ms",
                         "fixed_steps", "mesh_uploads", "texture_uploads", "draw_calls", "instances") if c in walk[0]]
-    hitches = [r for r in walk if float(r["total_ms"]) > a.hitch * med]
-    lines.append(f"{len(hitches)} hitches (> {a.hitch:g} x median):")
+    hitches = [r for r in walk if float(r["total_ms"]) > max(a.hitch * med, a.min_ms)]
+    lines.append(f"{len(hitches)} hitches (> {a.hitch:g} x median" + (f", > {a.min_ms:g} ms" if a.min_ms else "") + "):")
     for r in hitches[:40]:
         lines.append("  " + f"frame {r.get('frame', '?')}  {float(r['total_ms']):6.1f} ms  " +
                      "  ".join(f"{c.replace('_ms', '')}={r[c]}" for c in cols))

@@ -272,7 +272,10 @@ int main(int argc, char** argv) {
             const nlohmann::json scene = engine::islandLanesScene(w, placeScenes, sceneOpt);
             const std::string scenePath = "assets/lanelab/planned/" + levelName + "_lanelab.json";
             std::ofstream(scenePath) << scene.dump(1) << "\n";
-            std::ofstream("assets/levels/" + levelName + ".signs.json") << nlohmann::json{{"signs", engine::roadSignsToJson(w.signs)}}.dump(1) << "\n";
+            std::vector<engine::IslandSign> signs = w.signs;
+            const auto [signsMoved, signsDropped] = engine::clearSignsOfPavement(signs, scene);
+            std::printf("signs off the pavement: %d moved, %d dropped\n", signsMoved, signsDropped);
+            std::ofstream("assets/levels/" + levelName + ".signs.json") << nlohmann::json{{"signs", engine::roadSignsToJson(signs)}}.dump(1) << "\n";
             nlohmann::json level;
             {
                 std::ifstream in(templatePath);
@@ -309,7 +312,7 @@ int main(int argc, char** argv) {
             level["player"]["position"] = {spawn.x, w.heightAt(spawn.x, spawn.y) + 2.0, spawn.y};
             std::ofstream("assets/levels/" + levelName + ".json") << level.dump(1) << "\n";
             std::printf("level: assets/levels/%s.json (scene %s: %zu edges; %zu signs) in %.1f s\n", levelName.c_str(), scenePath.c_str(), scene["edges"].size(),
-                        w.signs.size(), std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+                        signs.size(), std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
         }
         engine::IslandMapView whole;
         whole.sites = false;

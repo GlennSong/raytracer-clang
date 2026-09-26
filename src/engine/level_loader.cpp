@@ -1559,7 +1559,7 @@ static void loadChunkedTerrain(const TerrainParams& p, const Noise& noise,
 // THE BAKED GROUND'S CONTENT KEY (ADR-0095): everything the field reads -- the whole level JSON
 // (terrain, roads, grading, earthwork all come from it), the lane city's bundle (the carved grid),
 // every flatten the loader assembled, and a code tag bumped when the height code changes.
-static constexpr const char* kBakedGroundCodeTag = "2026-09-25.1";   // land-only erosion blend baked to a grid
+static constexpr const char* kBakedGroundCodeTag = "2026-09-26.1";   // .1: the snowline wanders (lobes, aspect, tongues; ADR-0118)
 static constexpr const char* kHydroCarveCodeTag = "2026-09-25.shelf";   // sea mouths carry their channel across the shelf
 static uint64_t bakedGroundKey(const json& root, const TerrainParams& p) {
     using namespace engine::bundle;
@@ -2283,7 +2283,8 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         for (const Placement& pl : placements) {
             const double x = pl.position.x, z = pl.position.z, e = 0.8;
             const double gx = (groundAt(x + e, z) - groundAt(x - e, z)) / (2 * e), gz = (groundAt(x, z + e) - groundAt(x, z - e)) / (2 * e);
-            const Cover cv = terrain.cover->at(x, z, pl.position.y, 1.0 / std::sqrt(1.0 + gx * gx + gz * gz));
+            const double gl = std::sqrt(1.0 + gx * gx + gz * gz);
+            const Cover cv = terrain.cover->at(x, z, pl.position.y, 1.0 / gl, -gx / gl, -gz / gl);
             if (cv.biome == Biome::Sea) continue;
             if (terrain.hydro && terrain.hydro->isWet(x, z, 1.5)) continue;   // nor in rivers and lakes
             fits.clear();
@@ -3078,7 +3079,7 @@ bool LevelLoader::load(const std::string& path,
             g_lanes.row = cp.row;
             g_lanes.deck = cp.deck;
             g_lanes.deck.buildIndex();      // queried by the scatter, below, and by the poke report
-            g_lanes.nav = cp.nav;           // the streets a door faces
+            g_lanes.nav = cp.lotNav;        // the streets a door faces, at the lot clearance widths (the sim routes on cp.nav)
             g_lanes.pavedSidewalk = cp.bands.sidewalkWidth;   // the band a door walks to
             LOG_INFO << "[lanelab] " << g_lanes.blocks.size() << " city blocks published for the terrain pre-pass";
             sharedEroded = engine::roads::lanes::laneErodedBase(root, grid, sharedEroded);

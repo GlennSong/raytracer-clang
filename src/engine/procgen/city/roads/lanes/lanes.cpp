@@ -200,8 +200,12 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
         for (size_t li = 0; li < r.lanes.lanes.size(); ++li) {
             const Lane& l = r.lanes.lanes[li]; if (l.parent == ownIdx || r.pavement.footprints[li].empty()) continue;
             const PolySet& fp = r.pavement.footprints[li]; const Box2 b = ::engine::roads::lanes::bounds(fp[0]);
-            if (p.x < b.minX - 2 || p.x > b.maxX + 2 || p.y < b.minY - 2 || p.y > b.maxY + 2) continue;
-            for (const Vec2& q : {p, p + Vec2(1.5, 0), p - Vec2(1.5, 0), p + Vec2(0, 1.5), p - Vec2(0, 1.5)}) if (contains(fp, q)) return true;
+            // the pier's square (2.6 m, deck_mesh.cpp) and 1.5 m of clearance round it -- the other road's
+            // shoulder is not in its lane footprints, and a pier tested at its centre +-1.5 m stood half on the
+            // island pass's edge line: a car driving the pass pulled up against it
+            constexpr double kReach = 1.3 + 1.5;
+            if (p.x < b.minX - kReach || p.x > b.maxX + kReach || p.y < b.minY - kReach || p.y > b.maxY + kReach) continue;
+            for (double dx : {-kReach, 0.0, kReach}) for (double dy : {-kReach, 0.0, kReach}) if (contains(fp, p + Vec2(dx, dy))) return true;
         }
         return false;
     };

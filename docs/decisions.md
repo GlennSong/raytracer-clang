@@ -8616,3 +8616,95 @@ iteration time."
 - The pass still bridges up to 25 m over gullies its smoothed route crossed.
 - Rivers falling off mountain lakes (river 8: 160 m in 200 m) remain tilted sheets until waterfalls are built.
 - Test: `island_water_surface_has_no_spikes` (no triangle spans 40 m; the steep count is reported).
+
+## ADR-0115 — Driving the pass: what a car hits, where it drives, and what stalls it
+
+**Context.** Glenn reported hitching while driving in the mountains, AI cars "don't drive in the middle of the lane", and "you drove into the lake". A camera walk (`walk_probe.py`) skips physics, the vehicle and the sim's reaction to a player, so `walk_probe.py --drive` now possesses a car at the first waypoint and `drive_to`s the last. On Saltwood's pass the car stopped dead three times before it reached the end.
+
+**What it hit, and the fixes.**
+- **A guide sign's posts in the pass's lane**, under the freeway. The sign plan places a sign from the road it serves and knew nothing of the roads beside it. `clearSignsOfPavement` (island_scene.h) tests every sign's posts, or a gantry's uprights, against every scene edge's pavement (lanes + shoulder + 0.5 m). A blocked sign takes the smallest clear move: along its road, backing up first, up to 60 m, and up to 6 m to either side. Otherwise it is dropped. Saltwood: 10 moved, 7 dropped.
+- **A freeway pier on the pass's edge line.** Piers were tested at their centre ±1.5 m against lane footprints, which do not include shoulders. They now test their 2.6 m square plus 1.5 m of clearance.
+- **Where AI cars drive.** The nav graph was built from the lot twin, whose street widths carry the lot clearance: shoulder plus the 1.5 m spine tolerance. The sim spreads a direction's lanes across half the link width, so a car on the pass drove 3.0 m off the centreline, where the lane centre is 1.75 m: on the shoulder, into the pier. Local streets were 0.75 m out, and arterials' outer lanes 1.25 m out. The SIM's graph now comes from `roadTwin(..., forNav=true)`: every edge at its travel lanes' width. The LOT pass keeps the old graph at the clearance widths (`CityProducts::lotNav`, bundle section `roads/lotnav`): it keeps buildings width/2 + clearance off each street, and a first cut that fed it the travel widths moved every lanes level's buildings in (metro 6965 → 7029 lots). `kLanesBuildTag` is now `2026-09-26.2` and `kLotsBuildTag` `2026-09-26.1`.
+- **The lake.** Lake 2 filled the lowest point of the range's spine, which the saddle search picked, so the pass ran along the lake bed 3.5 m under water. `IslandWorld::water` (the sea, or within 12 m of a lake, `Hydrology::inLake`) now blocks every island route, and the saddle is the lowest DRY point.
+
+**What stalled it.**
+- **357 ms and 116 ms fixed steps: one agent routing the whole graph.** `startWanderTrip` scans goals until a route does not reverse the agent's arrival. At a spot whose only other exit is a dead-end stub, every route reversed: 2313 A* searches in one call. After 16 reversing routes it now floods what lies ahead (any exit but the arrival, never back through the start) and searches only that, with the U-turn priced out (1e6). It gives up to the fallback after 64. A non-reversing goal is still found whenever one exists, which was what the rejected scan cap lost. A per-step departure budget (`kDeparturesPerStep` = 200; past it a departure reports Blocked and retries next tick) guards the other burst.
+- **60 ms fixed steps at the spawn: a full body pool.** Saltwood's load filled Jolt's 10240 bodies. The terrain collider under the spawn failed to add, and was rebuilt on the main thread every step, for eight steps. `MAX_BODIES` is now 65536; a full pool drops any body silently. `RT_COLLIDER_TRACE=1` logs each on-the-spot collider build.
+- Result: the pass drive went from p99 15.7 ms, max 361 ms, to p99 15.0 ms, max 25.7 ms, over 92k frames.
+
+**And the shelf channel (ADR-0114) is kept out of the plan.** Stored in `River::nodes`, it re-cut Saltwood's coastal blocks, and the city came back with 75 deck cracks instead of 19. It is now `River::shelf`: only the carve and the ocean's extent read it, and `isWet`, `distanceToRiver`, `corridorRings` and the water surface see the river as before.
+
+**Still open.** The pass is 2.7 km of bridge in its 4.2 km through the window: its 12% design grade bridges gullies the 60 m-blurred route smoothed over (Glenn: "some of that road should hug the ground"). There are no guardrails, and the rush-hour routing step is still 14–19 ms.
+
+## ADR-0116 — A mountain road cuts as well as fills
+
+**Context.** The through profile is the grade-limited envelope from ABOVE (`gradeLimit`: the max of two slope-limited sweeps). It fills and never cuts. On a mountainside, every rise steeper than the design grade lifts the deck, which then comes down only at the design grade. Saltwood's pass stood 5–25 m over the ground, with 2.7 km of its 4.2 km on piers (Glenn: "some of that road should hug the ground").
+
+**Decision.**
+- A class option `balance` (0 by default: every city's roads unchanged) blends the profile toward the envelope from BELOW (`-gradeLimit(-z)`, which never fills).
+- Both envelopes keep the design grade, so any blend does.
+- Floors (bridge holds, underpasses) are cleared again after the blend. Each is a design-grade cone, so the max keeps the grade too.
+- The island scene's "mountain" class sets 0.5.
+
+**Consequences.**
+- Saltwood's pass: bridge 2.7 → 1.5 km (pass8, 4.2 km).
+- The deck stays within ±11 m of the ground, and the cuts are carved by the terrain conform ("no terrain above any deck" holds).
+- The window's other invariants are unchanged.
+- Test: `lanes_a_balanced_profile_cuts_as_well_as_fills` (the tallest fill 20.8 → 12.0 m on a bumpy 10% climb; the grade is kept, the hold cleared).
+- Still open: fills over the 4 m bridge threshold are still piers. A mountain road on an 8 m embankment is normal, so a class fill allowance is the next step if the viaducts still read wrong.
+
+## ADR-0117 — Guardrails where there is somewhere to fall
+
+**Context.** Glenn: "the mountain road needs railguards at some places". Barriers were built only along freeway and ramp outlines (`parapetRuns`), since a street's edges are the lot pass's business, so the pass had none, on its bridges or above its drops.
+
+**Decision.**
+- Any class whose table AUTHORS a barrier joins the barrier outline.
+- `BarrierSpec::minDrop` (`min_drop`) builds a barrier only where the ground 5 m out falls at least that far below the deck.
+- The island's mountain class carries a guardrail when elevated (its bridges), and at grade where the drop is ≥ 2 m. It has none against streets, at seams or in a median.
+- A mouth stays open: "another road's pavement" is now any lane that is not freeway or ramp and not this road's own, so the pass's ends and the ramp terminals on it carry on.
+- The pass's bridges also get the box girder freeways have.
+- `kLanesBuildTag` is now `2026-09-26.3`. A cached bundle baked by older code under the same tag showed no rails at all: a deck-mesh code change needs the tag.
+
+**Consequences.** Saltwood's barrier outline grew from 24.3 to 34.6 km (both sides of the pass) and every lanes invariant is unchanged. Whether rails read right on the drops still needs looking at in the viewer.
+
+## ADR-0118 — The snowline wanders
+
+**Context.** Glenn: "the mountain snow line is very regular which makes it look odd". The ground cover put snow at the snow height ±15 m of 55 m noise. On island 8 (snow at 470 m) that is a contour line.
+
+**Decision.** The line is moved by three terms, all in proportion to the snow height S:
+- **Lobes:** fbm at ~800 m and ~170 m, ±0.14 S and ±0.06 S.
+- **Aspect:** lower by up to 0.13 S on faces tilted toward +z, away from the island's sun at (+x, −z), and higher on sunny faces, scaled by how much the face tilts.
+- **Tongues:** noise stretched along the fall line (~250 m long, ~22 m across) that drops the line by up to 0.09 S down gullies.
+
+The cover map takes the normal's horizontal part (`GroundCover::at(..., normalX, normalZ)`, `terrainColor`, `terrainSnowWeight`). The mesher and the flora placement pass it; a caller without it gets only the lobes. `kBakedGroundCodeTag` is now `2026-09-26.1`.
+
+## ADR-0119 — Lookouts on the mountain roads
+
+**Context.** Glenn: the mountain road should "be widened at other parts -- maybe a lookout over the city and mountain lakes".
+
+**Decision.**
+- `islandLanesScene` scores the pass and the mountain road every 20 m, skipping 300 m at each end and bends over 15° across 80 m.
+- The score is the drop on either side: the ground 80–400 m out below the road, where the first 15 m is not a cut bank rising above it. It is weighted by how squarely that side faces a town or a lake (200 m–6 km away).
+- Up to two lookouts a road, 1.2 km apart, with at least a 40 m drop.
+- Each becomes a lay-by: a 70 m `layby` pocket lane (20 m tapers in and out) on the valley side. The builder's forward lanes lie right of the path, so a view to the right is a forward pocket.
+- The pocket only widens the pavement (the sim routes on the road graph), and its outline carries the guardrail (ADR-0117) because the drop is what it is.
+
+**Consequences.** Saltwood's window has one lookout, on the pass at (-1407, 119), 345 m up, looking down the valley to Saltwood, the river and the sea. No invariant changed. Owed: a "Scenic lookout" sign, and a lookout on roads other than the pass and the mountain road.
+
+## ADR-0120 — Rock and snow at mountain scale
+
+**Context.** Glenn now wants the island "bordering on realism", with "better procedural texturing/materials for the rock surfaces and snow", and said "the mountains look lowpoly". The terrain layers sample a 4 m rock texture, which averages to one grey past a few hundred metres, and the ground is lit smooth with no relief. A distant mountain was its mesh triangles and one tone.
+
+**Decision (Vulkan `mesh.frag`, terrain layers only; no Metal counterpart exists).**
+- **Rock colour** (`rockStructure`): broad warm/cool patches of stone (~90 m), and dark water stains streaking straight down steep faces. Bedding bands (~7 m) show on cliffs only, in patches, faded once a pixel covers too much of a band. A first cut that banded every rock slope read as a contour map and aliased into scanlines.
+- **Relief:** rock gets a per-pixel crag normal from three octaves (~80, 22 and 6 m), each projected on the plane the face mostly lies in (triplanar weights) and faded by pixel footprint. Snow gets a soft wind ripple.
+- **Snow:** a faint cool tint on steep or hollow snow, and roughness 0.62, smoother than stone.
+- `terrainLayers` reports its rock and snow shares (`gTerrainRock`, `gTerrainSnow`) for the relief.
+
+**Consequences.** The rock faces break up in tone and small relief, and together with ADR-0118 the snow reads as snow lying on a mountain, not a cap. The big peaks still read as pyramids at a distance: that is the height field. The next step is geometry — ridged detail or erosion channels baked into the terrain's height — not shading.
+
+## ADR-0121 — River width by reach (written, not yet on)
+
+`HydroParams::widthVariation` (terrain `rivers.widthVariation`, 0 = off) widens a river where it runs flat (to ~1 + 0.7 v) and narrows it where it falls (to ~1 − 0.35 v). The gradient is read over ±60 m of its own levels, with a slow swell of pools along the course and a 40 m smoothing, for Glenn's "the rivers are too narrow and could be wider at parts".
+
+It is OFF for the island. At 0.6, with gentler banks (bankSteep 1.2, bankSlope 0.25), Saltwood's plan re-cut: interchange d0_0's ramps fell 200 m short, a link hit 14.5%, 94 more lanes lost deck cover, and pavement steps went from 8 to 36. The city and the interchanges have to follow river edges that move before the rivers can widen. That is the next step.

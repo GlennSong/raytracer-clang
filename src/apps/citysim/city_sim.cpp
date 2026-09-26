@@ -1517,10 +1517,42 @@ bool CitySim::startWanderTrip(Agent& a, int from, bool fromRest) {
     // searching: a failed A* explores everything reachable before it gives up, the costliest
     // search there is, and an agent on a scrap of network met dozens of them per trip.
     std::vector<char> reach;
+    // ...and after a run of goals that are reachable only by turning back, flood once what lies AHEAD
+    // (from `from` by any exit but the one it arrived on, never through `from` again) and search only
+    // that: an agent whose other exit is a dead-end stub routed all 2313 nodes of island_8_saltwood
+    // in one step (357 ms, the hitch Glenn felt driving the pass) to take its fallback.
+    std::vector<char> ahead;
+    int reversing = 0;
+    auto floodAhead = [&] {
+        std::vector<char> seen(static_cast<std::size_t>(n), 0);
+        std::vector<int> stack;
+        const bool walk = a.mode == Agent::Mode::Pedestrian;
+        auto usable = [&](const engine::NavLink& L) {
+            return !walk || (L.klass != engine::RoadClass::Freeway && L.klass != engine::RoadClass::Ramp && L.walkable);
+        };
+        const engine::NavLink* in = a.arrivedLink >= 0 ? &nav_->links[static_cast<std::size_t>(a.arrivedLink)] : nullptr;
+        for (int li : nav_->outLinks[static_cast<std::size_t>(from)]) {
+            const engine::NavLink& L = nav_->links[static_cast<std::size_t>(li)];
+            if (!usable(L) || (in && L.from == in->to && L.to == in->from)) continue;
+            if (!seen[static_cast<std::size_t>(L.to)]) { seen[static_cast<std::size_t>(L.to)] = 1; stack.push_back(L.to); }
+        }
+        seen[static_cast<std::size_t>(from)] = 1;   // never back through the start
+        while (!stack.empty()) {
+            const int v = stack.back(); stack.pop_back();
+            for (int li : nav_->outLinks[static_cast<std::size_t>(v)]) {
+                const engine::NavLink& L = nav_->links[static_cast<std::size_t>(li)];
+                if (!usable(L) || seen[static_cast<std::size_t>(L.to)]) continue;
+                seen[static_cast<std::size_t>(L.to)] = 1; stack.push_back(L.to);
+            }
+        }
+        seen[static_cast<std::size_t>(from)] = 0;
+        return seen;
+    };
     for (int k = 0; k < n; ++k) {
         int goal = (start + k) % n;
         if (goal == from) continue;
         if (!reach.empty() && !reach[static_cast<std::size_t>(goal)]) continue;
+        if (!ahead.empty() && !ahead[static_cast<std::size_t>(goal)]) continue;
         engine::Route r = engine::findRoute(*nav_, from, goal,
                                             a.mode == Agent::Mode::Pedestrian,
                                             uturn >= 0 ? &departScale_ : nullptr);
@@ -1528,7 +1560,18 @@ bool CitySim::startWanderTrip(Agent& a, int from, bool fromRest) {
             if (reach.empty()) reach = engine::reachableFrom(*nav_, from, a.mode == Agent::Mode::Pedestrian);
             continue;
         }
-        if (reversesArrival(r) && !forcedUTurn) { if (fallback < 0) fallback = goal; continue; }
+        if (reversesArrival(r) && !forcedUTurn) {
+            if (fallback < 0) fallback = goal;
+            if (++reversing == 16 && ahead.empty()) {
+                ahead = floodAhead();
+                if (std::find(ahead.begin(), ahead.end(), 1) == ahead.end()) break;   // nothing ahead: the fallback it is
+                // every goal ahead HAS a way on without turning back, but a long one: at 50x the U-turn
+                // still won A* each time (1176 searches in one step). Price it out; the next goal goes on.
+                if (uturn >= 0) departScale_[static_cast<std::size_t>(uturn)] = 1e6;
+            }
+            if (reversing >= 64) break;   // bounded, whatever the graph: take the fallback
+            continue;
+        }
         startTrip(a, from, goal, fromRest);
         return a.moving;
     }
@@ -1748,6 +1791,9 @@ CitySim::GoalFire CitySim::tryGoalEvent(Agent& a, GoalEvent event) {
         if (a.archetype == Agent::Mode::Driver && !a.far() && !isBus(indexOf(a)) &&
             !launchClear(a, from))
             return GoalFire::Blocked;
+        if (!isBus(indexOf(a)) && departuresThisStep_ >= kDeparturesPerStep)
+            return GoalFire::Blocked;   // the step's routing budget is spent: leave next tick
+        ++departuresThisStep_;
         a.goal = next;
         a.goalHours = 0;
         startGoalTrip(a, from, /*fromRest=*/true);
@@ -1828,8 +1874,11 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
             }
             // Archetype, for the same reason as tryGoalEvent above.
             if (a.archetype != Agent::Mode::Driver || a.far() ||
-                isBus(indexOf(a)) || launchClear(a, from))
+                isBus(indexOf(a)) || launchClear(a, from)) {
+                if (!isBus(indexOf(a)) && departuresThisStep_ >= kDeparturesPerStep) return;   // retries next tick
+                if (!isBus(indexOf(a))) ++departuresThisStep_;
                 startGoalTrip(a, from, /*fromRest=*/true);
+            }
         }
         return;
     }
@@ -4279,6 +4328,7 @@ void CitySim::computeCarWedge() {
 }
 
 void CitySim::step(Real dt, Real hoursPerSecond) {
+    departuresThisStep_ = 0;
     // Cadence gate. Traffic is not physics: agents follow lanes, so advancing
     // by a bigger dt costs precision, not correctness. Bank the time and tick
     // when the period is due; everything downstream (including the far tier's

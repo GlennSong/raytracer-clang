@@ -250,8 +250,8 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
             Vertex v(Vec3(x, y, z), terrainNormal(params, noise, x, z, eps));
             v.u = static_cast<float>(x / node.size);
             v.v = static_cast<float>(z / node.size);
-            v.color = terrainColor(x, z, y, v.normal.y, noise, params);
-            if (params.cover && params.coverWeights) v.u = static_cast<float>(terrainSnowWeight(x, z, y, v.normal.y, params));
+            v.color = terrainColor(x, z, y, v.normal.y, noise, params, v.normal.x, v.normal.z);
+            if (params.cover && params.coverWeights) v.u = static_cast<float>(terrainSnowWeight(x, z, y, v.normal.y, params, v.normal.x, v.normal.z));
             mesh.vertices.push_back(v);
         }
     }
@@ -370,8 +370,8 @@ LodNodeMesh generateBakedTileMesh(const pyramid::Pyramid& p, const pyramid::Heig
             Vertex v(Vec3(x, y, z), nrm);
             v.u = static_cast<float>(x / size);
             v.v = static_cast<float>(z / size);
-            v.color = terrainColor(x, z, y, v.normal.y, noise, params);
-            if (params.cover && params.coverWeights) v.u = static_cast<float>(terrainSnowWeight(x, z, y, v.normal.y, params));
+            v.color = terrainColor(x, z, y, v.normal.y, noise, params, v.normal.x, v.normal.z);
+            if (params.cover && params.coverWeights) v.u = static_cast<float>(terrainSnowWeight(x, z, y, v.normal.y, params, v.normal.x, v.normal.z));
             mesh.vertices.push_back(v);
         }
     // The CDLOD morph target, as generateLodNodeMesh: even vertices stay, odd ones collapse to

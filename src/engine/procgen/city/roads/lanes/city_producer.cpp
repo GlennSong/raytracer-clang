@@ -19,7 +19,10 @@
 namespace engine {
 namespace roads::lanes {
 
-const char* const kLanesBuildTag = "2026-09-24.3";   // .3: hidden slab sides dropped, straight runs merged, layer boundaries oriented   // 2026-09-24.1: deck meshes welded, undersides only where a deck stands clear of the ground (ADR-0095)   // .2: slab sides only where they rise above the ground outside   // .1: the terrain is clamped under every deck VERTEX, not by centreline reach   // .2/.3: ramp ends (elevated or at-grade runs) welded to the road they merge into (nav twin)   // .4: one-way carriageways and ramps; the nav gets a deck's travel width   // .5: blocks are the holes of the pavement WITH its sidewalks
+const char* const kLanesBuildTag = "2026-09-26.3";   // .3: balanced mountain profiles, authored-class guardrails with min_drop, girders under their bridges
+//   // .2: the lot pass keeps its clearance-width graph (roads/lotnav)
+//   // .1: the nav twin carries travel-lane widths (cars in the lane centre)
+//   // .3: hidden slab sides dropped, straight runs merged, layer boundaries oriented   // 2026-09-24.1: deck meshes welded, undersides only where a deck stands clear of the ground (ADR-0095)   // .2: slab sides only where they rise above the ground outside   // .1: the terrain is clamped under every deck VERTEX, not by centreline reach   // .2/.3: ramp ends (elevated or at-grade runs) welded to the road they merge into (nav twin)   // .4: one-way carriageways and ramps; the nav gets a deck's travel width   // .5: blocks are the holes of the pavement WITH its sidewalks
 
 namespace {
 using bundle::BinReader;
@@ -256,7 +259,8 @@ CityProducts cityProductsFromResult(const Result& r, double renderCell, bool wit
     p.twin = roadTwin(r);
     HeightField ground;
     if (p.hasTerrain) { auto grid = std::make_shared<HeightGrid>(r.terrain); ground = [grid](double x, double z) { return grid->sample(x, z); }; }
-    p.nav = navRoadGraph(p.twin, ground ? ground : HeightField());
+    p.nav = navRoadGraph(roadTwin(r, 60.0, false, /*forNav=*/true), ground ? ground : HeightField());   // lanes at their painted centres
+    p.lotNav = navRoadGraph(p.twin, ground ? ground : HeightField());   // the lot pass's clearance widths, as before
     for (const RoadNode& n : p.twin.graph.nodes) p.row.nodes.push_back(n);
     for (const RoadEdge& e : p.twin.graph.edges)
         if (e.klass == RoadClass::Freeway || e.klass == RoadClass::Ramp) {
@@ -301,6 +305,7 @@ void writeCityProducts(bundle::BundleWriter& w, int ordinal, const CityProducts&
     if (p.hasTerrain) { BinWriter b; bundle::putHeightGrid(b, p.ground); w.add(pre + "ground", b.bytes); }
     { BinWriter b; bundle::putRoadEntity(b, p.twin); w.add(pre + "roads/twin", b.bytes); }
     { BinWriter b; bundle::putRoadGraph(b, p.nav); w.add(pre + "roads/nav", b.bytes); }
+    { BinWriter b; bundle::putRoadGraph(b, p.lotNav); w.add(pre + "roads/lotnav", b.bytes); }
     { BinWriter b; bundle::putRoadGraph(b, p.row); w.add(pre + "roads/row", b.bytes); }
     { BinWriter b; bundle::putRings(b, p.holes); w.add(pre + "blocks/holes", b.bytes); }
     { BinWriter b; bundle::putDeckField(b, p.deck); w.add(pre + "roads/deck", b.bytes); }
@@ -329,6 +334,7 @@ bool readCityProducts(const bundle::Bundle& b, int ordinal, CityProducts& p, std
     if (p.hasTerrain) { if (!section("ground", v)) return fail("ground: missing"); BinReader r(v.data, v.size); if (!bundle::getHeightGrid(r, p.ground)) return fail("ground: unreadable"); }
     if (!section("roads/twin", v)) return fail("roads/twin: missing"); { BinReader r(v.data, v.size); if (!bundle::getRoadEntity(r, p.twin)) return fail("roads/twin: unreadable"); }
     if (!section("roads/nav", v)) return fail("roads/nav: missing"); { BinReader r(v.data, v.size); if (!bundle::getRoadGraph(r, p.nav)) return fail("roads/nav: unreadable"); }
+    if (!section("roads/lotnav", v)) return fail("roads/lotnav: missing"); { BinReader r(v.data, v.size); if (!bundle::getRoadGraph(r, p.lotNav)) return fail("roads/lotnav: unreadable"); }
     if (!section("roads/row", v)) return fail("roads/row: missing"); { BinReader r(v.data, v.size); if (!bundle::getRoadGraph(r, p.row)) return fail("roads/row: unreadable"); }
     if (!section("blocks/holes", v)) return fail("blocks/holes: missing"); { BinReader r(v.data, v.size); if (!bundle::getRings(r, p.holes)) return fail("blocks/holes: unreadable"); }
     // The deck and the kerb line (2026-09-20): a bundle baked before they existed has neither,

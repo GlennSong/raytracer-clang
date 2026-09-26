@@ -24,7 +24,7 @@ Vec3 mix3(const Vec3& a, const Vec3& b, double t) { return a + (b - a) * t; }
 
 GroundCover::GroundCover(const GroundCoverParams& p) : p_(p), noise_(p.seed * 2654435761u + 17u) {}
 
-Cover GroundCover::at(double x, double z, double height, double normalUp) const {
+Cover GroundCover::at(double x, double z, double height, double normalUp, double normalX, double normalZ) const {
     const bool sea = p_.seaLevel > -1e29;
     const double h = sea ? height - p_.seaLevel : height;             // height above the sea
     const double slope = std::acos(std::clamp(normalUp, -1.0, 1.0)) * (180.0 / 3.14159265358979);
@@ -35,8 +35,30 @@ Cover GroundCover::at(double x, double z, double height, double normalUp) const 
     // raw coverage of each layer, sharpened after its noise
     // snow above the snowline -- but it slides off faces much past 50 degrees: ledges and gullies
     // hold it, cliffs stay bare rock (every alpine reference reads that way)
+    // THE SNOWLINE WANDERS (ADR-0118, Glenn: "the mountain snow line is very regular which makes it look
+    // odd"). A +-15 m ripple on a 470 m line read as a contour. Real lines move by hundreds of metres:
+    //   lobes    -- broad fields (~800 m and ~170 m) that push the line up a shoulder and down a basin;
+    //   aspect   -- shaded, north-facing (+z is north here) faces hold it lower, sunny faces melt higher;
+    //   tongues  -- snow runs down the fall line in gullies: noise stretched ALONG the downslope direction.
+    // All in proportion to the snow height, so a low island and a high range wander alike.
+    double snowLine = p_.snowHeight;
+    if (p_.snowHeight < 1e29) {
+        const double S = std::max(50.0, p_.snowHeight);
+        const double lobe = noise_.fbm2(x * 0.0012 - 21.7, z * 0.0012 + 13.3, 3), mid = noise_.fbm2(x * 0.006 + 4.4, z * 0.006 - 9.2, 3);
+        snowLine += S * (0.14 * lobe + 0.06 * mid);
+        const double hz = std::hypot(normalX, normalZ);   // how much the face tilts, and which way
+        if (hz > 1e-4) {
+            const double north = normalZ / hz;            // +1 facing north (shaded), -1 facing south
+            snowLine -= S * 0.13 * north * std::min(1.0, hz * 2.5);
+            // tongues: along the fall line (dx, dz), across it (-dz, dx); long along, narrow across
+            const double dx = normalX / hz, dz = normalZ / hz;
+            const double along = x * dx + z * dz, across = -x * dz + z * dx;
+            const double streak = noise_.noise2(along * 0.004 + 2.1, across * 0.045 - 6.3);   // ~250 m long, ~22 m wide
+            snowLine -= S * 0.09 * std::max(0.0, streak) * std::min(1.0, hz * 3.0);
+        }
+    }
     const double snowRaw = p_.snowHeight < 1e29
-                               ? smooth(-0.1, 0.1, (h + 15.0 * jag - p_.snowHeight) / 20.0) *
+                               ? smooth(-0.1, 0.1, (h + 15.0 * jag - snowLine) / 20.0) *
                                      (1.0 - smooth(-0.15, 0.15, (slope + 6.0 * jag - 50.0) / 12.0))
                                : 0.0;
     const double rockRaw = std::max(smooth(-0.15, 0.15, (slope + 7.0 * jag - p_.rockSlopeDeg) / 10.0),

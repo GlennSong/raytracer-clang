@@ -19,7 +19,8 @@ namespace engine {
 namespace roads::lanes {
 
 // Bump whenever the lot pass's output changes for the same inputs (the key cannot see code).
-const char* const kLotsBuildTag = "2026-09-24.5";   // .2-.4: soft foliage (emitSoftBox hedges, bushes, beds)   // 2026-09-24.1: grows on terrain, on the loader's ground (laneErodedBase + lotGroundFor, ADR-0095);   // ground-relative (draped) dressing slots; blocks behind the drawn sidewalk; door walks reach it   // 2026-09-22.1: ONE grow (engine::growCity) — the bake gets the streets and the paved band the loader always had
+const char* const kLotsBuildTag = "2026-09-26.1";   // .1: grows on roads/lotnav (the clearance widths), not the sim graph
+//   // .2-.4: soft foliage (emitSoftBox hedges, bushes, beds)   // 2026-09-24.1: grows on terrain, on the loader's ground (laneErodedBase + lotGroundFor, ADR-0095);   // ground-relative (draped) dressing slots; blocks behind the drawn sidewalk; door walks reach it   // 2026-09-22.1: ONE grow (engine::growCity) — the bake gets the streets and the paved band the loader always had
 
 namespace {
 using bundle::BinReader;
@@ -119,8 +120,10 @@ public:
         // The streets a door faces and the pavement it walks out to — what the loader hands the
         // grow when it grows in place. Without them the BAKED city's doors pointed whichever way
         // the block's plan ran, so a level looked different warm than cold.
-        if (!out.readBack(pre + "roads/nav", bytes)) return fail(pre + "roads/nav: missing");
-        { BinReader r(bytes.data(), bytes.size()); if (!bundle::getRoadGraph(r, city.nav)) return fail(pre + "roads/nav: unreadable"); }
+        // at the LOT clearance widths (roads/lotnav, ADR-0115) -- roads/nav is the sim's, at travel widths,
+        // and growing on it moved buildings a metre and a half closer to every street
+        if (!out.readBack(pre + "roads/lotnav", bytes)) return fail(pre + "roads/lotnav: missing");
+        { BinReader r(bytes.data(), bytes.size()); if (!bundle::getRoadGraph(r, city.nav)) return fail(pre + "roads/lotnav: unreadable"); }
         if (!out.readBack(pre + "roads/bands", bytes)) return fail(pre + "roads/bands: missing");
         { BinReader r(bytes.data(), bytes.size()); CurbBandAudit b; if (!bundle::getCurbBands(r, b)) return fail(pre + "roads/bands: unreadable"); city.pavedSidewalk = b.sidewalkWidth; }
         if (!report(0.03, "grow", std::to_string(city.holes.size()) + " pavement holes")) return fail("cancelled");

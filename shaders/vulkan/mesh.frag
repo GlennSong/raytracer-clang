@@ -376,6 +376,34 @@ vec4 layerRock(sampler2D t, vec3 wp, vec3 n, float mixB) {
     w /= (w.x + w.y + w.z);
     return layerPlanar(t, wp.zy, mixB) * w.x + layerPlanar(t, wp.xz, mixB) * w.y + layerPlanar(t, wp.xy, mixB) * w.z;
 }
+// The rock and snow shares terrainLayers settled on, for the relief below (ADR-0120).
+float gTerrainRock = 0.0, gTerrainSnow = 0.0;
+// ROCK AT MOUNTAIN SCALE (ADR-0120, Glenn: "bordering on realism, so better procedural texturing/
+// materials for the rock surfaces and snow"). The 4 m rock texture averages to one grey past a few
+// hundred metres; what reads on a mountain is structure at 5-200 m: STRATA (bedding bands along the
+// height, bent by a slow warp), broad warm/cool PATCHES of different stone, and water STAINS -- dark
+// streaks running straight down steep faces. Linear colour in, linear out.
+vec3 rockStructure(vec3 c, vec3 wp, vec3 n) {
+    // bedding shows on CLIFFS only, in patches, and never finer than a few pixels: a first cut banded
+    // every rock slope like a contour map and aliased into scanlines at range
+    float steepB = smoothstep(0.45, 0.8, 1.0 - abs(n.y));
+    float pix = length(fwidth(wp));
+    float warp = fbm2(wp.x * 0.018 + 1.3, wp.z * 0.018 - 4.2) * 14.0 + fbm2(wp.x * 0.07, wp.z * 0.07) * 3.0;
+    float bed = 0.5 + 0.5 * sin((wp.y + warp) * 0.85);                     // ~7 m bands
+    float show = steepB * smoothstep(0.45, 0.7, vnoise2(wp.x * 0.02 + 9.1, wp.z * 0.02 - 2.3))
+               * clamp(1.0 - pix * 2.5 / 7.0, 0.0, 1.0);
+    c *= mix(1.0, mix(0.88, 1.04, smoothstep(0.2, 0.8, bed)), show);
+    float patchN = vnoise2(wp.x * 0.011 - 7.7, wp.z * 0.011 + 3.3);
+    c *= mix(vec3(1.08, 1.01, 0.93), vec3(0.90, 0.95, 1.03), patchN);      // warm / cool stone
+    float steep = smoothstep(0.35, 0.75, 1.0 - abs(n.y));
+    if (steep > 0.001) {
+        vec2 h = normalize(vec2(-n.z, n.x) + vec2(1e-5, 0.0));              // along the face, horizontally
+        float u = dot(wp.xz, h);
+        float streak = smoothstep(0.55, 0.85, vnoise2(u * 0.35 + 2.0, wp.y * 0.02 - 5.0));
+        c *= 1.0 - 0.35 * streak * steep;                                    // stains run down, not across
+    }
+    return c;
+}
 vec3 terrainLayers(vec3 cover, float wsn, vec3 wp, vec3 n) {
     // weights: grass, dirt, sand in the vertex colour, SNOW in the vertex u, rock the remainder
     float wg = cover.r, wd = cover.g, ws = cover.b;
@@ -403,8 +431,12 @@ vec3 terrainLayers(vec3 cover, float wsn, vec3 wp, vec3 n) {
     float kg = max(bg - top, 0.0), kd = max(bd - top, 0.0), ks = max(bs - top, 0.0), kr = max(br - top, 0.0),
           kn = max(bn - top, 0.0);
     float sum = max(kg + kd + ks + kr + kn, 1e-5);
+    vec3 rock = kr > 0.0 ? rockStructure(pow(r.rgb, vec3(2.2)), wp, n) : vec3(0.0);
+    // snow: brighter on the flats, a faint cold blue where it sits steep or in a hollow of the rock
+    snow *= mix(vec3(0.93, 0.96, 1.02), vec3(1.0), smoothstep(0.75, 0.95, n.y));
     vec3 c = (pow(g.rgb, vec3(2.2)) * kg + pow(d.rgb, vec3(2.2)) * kd + pow(s.rgb, vec3(2.2)) * ks +
-              pow(r.rgb, vec3(2.2)) * kr + snow * kn) / sum;
+              rock * kr + snow * kn) / sum;
+    gTerrainRock = kr / sum; gTerrainSnow = kn / sum;
     // a broad macro tint so kilometres of ground aren't one tone (one cheap octave)
     c *= 0.88 + 0.24 * vnoise2(wp.x * 0.008 + 3.1, wp.z * 0.008 - 1.7);
     return c;
@@ -858,6 +890,37 @@ void main() {
 
     vec3 N = normalize(inWorldNormal);
     if (featNormal) N = featN;
+    // CRAGS (ADR-0120): the mesh's triangles are the only relief a distant mountain had ("the mountains
+    // look lowpoly"). Rock gets a per-pixel normal from two octaves of noise (~22 m and ~6 m), projected
+    // on the plane the face mostly lies in, each octave faded out once a pixel covers too much of it
+    // (no shimmer at range); snow gets a soft wind ripple.
+    if (layered && gTerrainRock + gTerrainSnow > 0.01) {
+        vec3 wp = inWorldPos;
+        float pix = length(fwidth(wp));
+        vec3 aw = pow(abs(N), vec3(3.0)); aw /= (aw.x + aw.y + aw.z);
+        vec3 bump = vec3(0.0);
+        for (int o = 0; o < 3; ++o) {   // ~80 m breaks a peak's big flat facets; 22 m and 6 m are crags
+            float L = o == 0 ? 80.0 : (o == 1 ? 22.0 : 6.0), amp = o == 0 ? 0.7 : (o == 1 ? 0.55 : 0.35);
+            float fade = clamp(1.0 - pix * 6.0 / L, 0.0, 1.0);
+            if (fade <= 0.0) continue;
+            float f = 1.0 / L, e = 0.15 * L;
+            // gradients on the three planes (x: zy, y: xz, z: xy)
+            float a = fbm2(wp.z * f, wp.y * f), ax = fbm2((wp.z + e) * f, wp.y * f), ay = fbm2(wp.z * f, (wp.y + e) * f);
+            float b = fbm2(wp.x * f + 3.1, wp.z * f), bx = fbm2((wp.x + e) * f + 3.1, wp.z * f), bz = fbm2(wp.x * f + 3.1, (wp.z + e) * f);
+            float c0 = fbm2(wp.x * f - 5.2, wp.y * f), cx = fbm2((wp.x + e) * f - 5.2, wp.y * f), cy = fbm2(wp.x * f - 5.2, (wp.y + e) * f);
+            vec3 gX = vec3(0.0, ay - a, ax - a) / e, gY = vec3(bx - b, 0.0, bz - b) / e, gZ = vec3(cx - c0, cy - c0, 0.0) / e;
+            bump += (gX * aw.x + gY * aw.y + gZ * aw.z) * amp * L * fade;
+        }
+        vec3 rockN = normalize(N - (bump - N * dot(bump, N)) * 0.35);
+        // snow: a shallow ripple across the slope
+        float rip = fbm2(inWorldPos.x * 0.45 + 1.7, inWorldPos.z * 0.45 - 0.9);
+        float ripx = fbm2((inWorldPos.x + 0.3) * 0.45 + 1.7, inWorldPos.z * 0.45 - 0.9) - rip;
+        float ripz = fbm2(inWorldPos.x * 0.45 + 1.7, (inWorldPos.z + 0.3) * 0.45 - 0.9) - rip;
+        vec3 snowN = normalize(N - vec3(ripx, 0.0, ripz) * 0.35 * clamp(1.0 - pix * 4.0, 0.0, 1.0));
+        float tot = gTerrainRock + gTerrainSnow;
+        N = normalize(mix(N, normalize(rockN * gTerrainRock + snowN * gTerrainSnow), clamp(tot, 0.0, 1.0)));
+        roughness = mix(roughness, 0.62, gTerrainSnow);   // settled snow is smoother than stone
+    }
     if (river) {   // ripples: the two flow phases' noise gradients in world xz, crossfaded
         const float e = 0.04;
         vec2 pa = (inWorldPos.xz - flowA) * 0.2, pb = (inWorldPos.xz - flowB) * 0.2;   // metre-scale swell, not grain

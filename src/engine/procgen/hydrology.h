@@ -35,6 +35,10 @@ struct HydroParams {
     double seaLevel = -1e30;        // cells below it are sea (outlets); -1e30 = no sea
     double riverArea = 300000.0;    // upstream area (m^2) at which a channel is a river
     double widthMin = 5.0, widthMax = 70.0, widthK = 0.035;   // width = min + K * sqrt(area)
+    // WIDTH BY REACH (ADR-0121; 0 = off): a river spreads where it runs flat and narrows where it falls,
+    // with a slow swell of pools along its course -- 0.6 makes flat reaches ~1.4x and falls ~0.8x.
+    // (Glenn: "the rivers are too narrow and could be wider at parts".)
+    double widthVariation = 0.0;
     double depthMin = 0.8, depthMax = 5.0, depthK = 0.0022;   // depth = min + K * sqrt(area)
     double bankSlope = 0.35;        // the outer banks rise this much per metre, out to the natural ground
     // INCISION: the water sits this far below the LOWEST natural ground across its corridor (so it
@@ -65,7 +69,10 @@ struct RiverNode {
 struct River {
     std::vector<RiverNode> nodes; bool mouth = false; int intoLake = -1;
     bool authored = false; double width0 = 0.0, width1 = 0.0;   // an authored course: its width, source to mouth
-    int shelf = -1;   // a sea mouth's channel carried across the shelf: the node it starts at (-1: none)
+    // A sea mouth's channel carried on across the shelf (from the mouth node): kept APART from `nodes` --
+    // only the carve and the ocean's extent see it; the planner, the water surface and the maps see the
+    // river ending where it did (put in `nodes`, it re-cut Saltwood's coastal blocks)
+    std::vector<RiverNode> shelf;
 };   // source -> end; mouth: ends in the sea or a lake
 
 struct Lake {
@@ -115,6 +122,8 @@ public:
     // On a sea mouth's SHELF channel (the carve carried past the coast, River::shelf) or its banks: where
     // the ocean surface must cover the carved ground, though the uncarved ground stands above the sea.
     bool onShelf(double x, double z) const;
+    // Inside a lake, or within `margin` metres of one (its drainage cells).
+    bool inLake(double x, double z, double margin = 0.0) const;
     RenderMesh waterMesh(const std::vector<std::vector<Vec2>>& sea = {},
                          const std::function<double(double, double)>& ground = {}) const;   // sea: cells it stops at
 
@@ -125,7 +134,7 @@ private:
     std::vector<Lake> lakes_;
     std::vector<int> lakeOfCell_;   // drainage cell -> lake index (-1 none)
     // the channel segments, binned on a coarse grid for the carve queries
-    struct Seg { Vec2 a, b; double la, lb, wa, wb, da, db; };
+    struct Seg { Vec2 a, b; double la, lb, wa, wb, da, db; bool shelf = false; };   // shelf: carve only
     std::vector<Seg> segs_;
     static constexpr double kBankReach = 30.0;   // how far past the water the banks may be cut (m)
     double binSize_ = 64.0, reach_ = 0.0;

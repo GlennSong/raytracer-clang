@@ -246,6 +246,34 @@ std::shared_ptr<const Hydrology> Hydrology::build(const std::function<double(dou
             if (p.seaLevel > -1e29) nd.level = std::max(nd.level, p.seaLevel);
             if (r.intoLake >= 0) nd.level = std::max(nd.level, H.lakes_[static_cast<std::size_t>(r.intoLake)].level);   // meets the lake, no step
         }
+        // WIDTH BY REACH (ADR-0121): the fall over +-60 m of the course, from the levels just set
+        if (p.widthVariation > 0.0 && r.nodes.size() >= 3) {
+            const double v = p.widthVariation;
+            const std::size_t n = r.nodes.size();
+            std::vector<double> st(n, 0.0), mul(n, 1.0);
+            for (std::size_t k = 1; k < n; ++k) st[k] = st[k - 1] + (r.nodes[k].p - r.nodes[k - 1].p).length();
+            const double phase = 0.37 * static_cast<double>(found.size() + H.rivers_.size());
+            for (std::size_t k = 0, a = 0, b = 0; k < n; ++k) {
+                while (a < k && st[k] - st[a] > 60.0) ++a;
+                while (b + 1 < n && st[b + 1] - st[k] <= 60.0) ++b;
+                const double run = std::max(1.0, st[b] - st[a]);
+                const double slope = std::max(0.0, r.nodes[a].level - r.nodes[b].level) / run;
+                const double t = std::clamp((slope - 0.004) / (0.04 - 0.004), 0.0, 1.0);
+                const double tt = t * t * (3.0 - 2.0 * t);
+                mul[k] = (1.0 + 0.7 * v) * (1.0 - tt) + (1.0 - 0.35 * v) * tt;
+                mul[k] *= 1.0 + 0.2 * v * std::sin(st[k] / 180.0 + phase);   // pools and narrows
+            }
+            // smooth over ~40 m so a width never steps
+            std::vector<double> sm(n, 1.0);
+            for (std::size_t k = 0, a = 0, b = 0; k < n; ++k) {
+                while (a < k && st[k] - st[a] > 40.0) ++a;
+                while (b + 1 < n && st[b + 1] - st[k] <= 40.0) ++b;
+                double sum = 0.0; for (std::size_t q = a; q <= b; ++q) sum += mul[q];
+                sm[k] = sum / static_cast<double>(b - a + 1);
+            }
+            for (std::size_t k = 0; k < n; ++k)
+                r.nodes[k].width = std::clamp(r.nodes[k].width * sm[k], p.widthMin * 0.8, p.widthMax * 1.5);
+        }
         // THE MOUTH: over its last stretch into the sea or a lake the river widens (an estuary,
         // up to three times) and its surface fades out into the water it meets, instead of ending
         // on top of it as a strip.
@@ -273,14 +301,14 @@ std::shared_ptr<const Hydrology> Hydrology::build(const std::function<double(dou
             for (std::size_t k = r.nodes.size() - 1; k-- > 0 && dir.length() < 20.0;) dir = end.p - r.nodes[k].p;   // a heading over ~20 m
             if (dir.length() > 1e-9) {
                 dir = dir / dir.length();
-                r.shelf = static_cast<int>(r.nodes.size()) - 1;
+                r.shelf.push_back(end);
                 const double stepLen = p.cell * 0.5;
                 for (double t = stepLen; t <= 600.0; t += stepLen) {
                     RiverNode nd = end;
                     nd.p = end.p + dir * t;
                     nd.level = p.seaLevel;
                     nd.fade = 0.0;
-                    r.nodes.push_back(nd);
+                    r.shelf.push_back(nd);
                     if (ground(nd.p.x, nd.p.y) < p.seaLevel - end.depth - 1.0) break;   // the sea is deeper than the channel
                 }
             }
@@ -291,13 +319,26 @@ std::shared_ptr<const Hydrology> Hydrology::build(const std::function<double(dou
     return hy;
 }
 
+bool Hydrology::inLake(double x, double z, double margin) const {
+    const int n = n_;
+    if (n <= 0 || lakeOfCell_.empty()) return false;
+    const int i0 = static_cast<int>(std::lround((x + p_.half) / p_.cell)), j0 = static_cast<int>(std::lround((z + p_.half) / p_.cell));
+    const int r = static_cast<int>(std::ceil(margin / p_.cell));
+    for (int j = j0 - r; j <= j0 + r; ++j)
+        for (int i = i0 - r; i <= i0 + r; ++i) {
+            if (i < 0 || j < 0 || i >= n || j >= n || lakeOfCell_[static_cast<std::size_t>(j) * n + i] < 0) continue;
+            const double dx = -p_.half + i * p_.cell - x, dz = -p_.half + j * p_.cell - z;
+            if (dx * dx + dz * dz <= (margin + 0.5 * p_.cell) * (margin + 0.5 * p_.cell)) return true;
+        }
+    return false;
+}
+
 bool Hydrology::onShelf(double x, double z) const {
     const Vec2 q(x, z);
     for (const River& r : rivers_) {
-        if (r.shelf < 0) continue;
-        for (std::size_t k = static_cast<std::size_t>(r.shelf); k + 1 < r.nodes.size(); ++k) {
-            const Vec2 a = r.nodes[k].p, ab = r.nodes[k + 1].p - a;
-            const double reach = std::max(r.nodes[k].width, r.nodes[k + 1].width) * 0.5 + kBankReach;
+        for (std::size_t k = 0; k + 1 < r.shelf.size(); ++k) {
+            const Vec2 a = r.shelf[k].p, ab = r.shelf[k + 1].p - a;
+            const double reach = std::max(r.shelf[k].width, r.shelf[k + 1].width) * 0.5 + kBankReach;
             if (std::fabs(q.x - a.x) > reach + std::fabs(ab.x) || std::fabs(q.y - a.y) > reach + std::fabs(ab.y)) continue;
             const double L2 = dot(ab, ab);
             const double t = L2 > 1e-12 ? clampd(dot(q - a, ab) / L2, 0.0, 1.0) : 0.0;
@@ -313,11 +354,12 @@ void Hydrology::index() {
     farBins_ = 0;
     reach_ = 0.0;
     for (const River& r : rivers_)
-        for (std::size_t k = 0; k + 1 < r.nodes.size(); ++k) {
-            const RiverNode &a = r.nodes[k], &b = r.nodes[k + 1];
-            segs_.push_back({a.p, b.p, a.level, b.level, a.width, b.width, a.depth, b.depth});
-            reach_ = std::max(reach_, std::max(a.width, b.width) * 0.5 + kBankReach);
-        }
+        for (const std::vector<RiverNode>* run : {&r.nodes, &r.shelf})   // the carve cuts the shelf channel too
+            for (std::size_t k = 0; k + 1 < run->size(); ++k) {
+                const RiverNode &a = (*run)[k], &b = (*run)[k + 1];
+                segs_.push_back({a.p, b.p, a.level, b.level, a.width, b.width, a.depth, b.depth, run == &r.shelf});
+                reach_ = std::max(reach_, std::max(a.width, b.width) * 0.5 + kBankReach);
+            }
     bins_ = std::max(1, static_cast<int>(std::ceil(2.0 * p_.half / binSize_)));
     bin_.assign(static_cast<std::size_t>(bins_) * bins_, {});
     for (std::size_t s = 0; s < segs_.size(); ++s) {
@@ -389,6 +431,7 @@ bool Hydrology::isWet(double x, double z, double margin) const {
     const Vec2 q(x, z);
     for (int s : bin_[static_cast<std::size_t>(bj) * bins_ + bi]) {
         const Seg& g = segs_[static_cast<std::size_t>(s)];
+        if (g.shelf) continue;   // under the sea: not a river
         const Vec2 ab = g.b - g.a;
         const double L2 = dot(ab, ab);
         const double t = L2 > 1e-12 ? clampd(dot(q - g.a, ab) / L2, 0.0, 1.0) : 0.0;
@@ -406,6 +449,7 @@ double Hydrology::distanceToRiver(double x, double z, double maxDist, double* le
     const Vec2 q(x, z);
     for (int s : farBin_[static_cast<std::size_t>(bj) * farBins_ + bi]) {
         const Seg& g = segs_[static_cast<std::size_t>(s)];
+        if (g.shelf) continue;   // under the sea: not a river bank
         const Vec2 ab = g.b - g.a;
         const double L2 = dot(ab, ab);
         const double t = L2 > 1e-12 ? clampd(dot(q - g.a, ab) / L2, 0.0, 1.0) : 0.0;

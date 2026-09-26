@@ -37,6 +37,13 @@ struct IslandSceneOptions {
 // `placeScenes[k]`: site k's planToLanesScene output (empty json: none).
 nlohmann::json islandLanesScene(const IslandWorld& w, const std::vector<nlohmann::json>& placeScenes, const IslandSceneOptions& o = {});
 
+// SIGNS OFF THE PAVEMENT: the sign plan knows the road each sign serves, not the roads beside it -- a
+// d0_0 guide sign stood its posts in the pass's lane under the freeway, and a car driving the pass hit
+// them. Every sign whose posts (a roadside pair, a gantry's uprights) stand on any scene edge's pavement
+// (lanes + shoulder + 0.5 m) slides along its own direction of travel to the nearest clear spot within
+// 60 m; one with none is dropped. Returns {moved, dropped}.
+std::pair<int, int> clearSignsOfPavement(std::vector<IslandSign>& signs, const nlohmann::json& scene, double carriageHalf = 11.0);
+
 }  // namespace engine
 
 #endif

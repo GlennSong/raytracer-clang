@@ -333,9 +333,11 @@ Vec3 terrainColor(double height, double normalUp, double noiseValue);
 // terrain carries it in the vertex's u (the layers sample by world position, not UV); 0 when
 // the level has no cover map or draws it as a flat colour.
 double terrainSnowWeight(double worldX, double worldZ, double height, double normalUp,
-                         const TerrainParams& params);
+                         const TerrainParams& params, double normalX = 0.0, double normalZ = 0.0);
+// normalX/Z (optional): the rest of the surface normal -- the ground cover lowers snow on shaded faces and
+// runs it down the fall line (ADR-0118); 0,0 = only the slope is known
 Vec3 terrainColor(double worldX, double worldZ, double height, double normalUp,
-                  const Noise& noise, const TerrainParams& params);
+                  const Noise& noise, const TerrainParams& params, double normalX = 0.0, double normalZ = 0.0);
 
 // Build the terrain mesh: a grid in the XZ plane with y = terrainHeight, smooth
 // normals, planar UVs spanning [0,1], and per-vertex height/slope coloration

@@ -576,15 +576,15 @@ Vec3 terrainColor(double height, double normalUp, double noiseValue) {
 }
 
 double terrainSnowWeight(double worldX, double worldZ, double height, double normalUp,
-                         const TerrainParams& params) {
+                         const TerrainParams& params, double normalX, double normalZ) {
     if (!params.cover || !params.coverWeights) return 0.0;
-    return params.cover->at(worldX, worldZ, height, normalUp).snow;
+    return params.cover->at(worldX, worldZ, height, normalUp, normalX, normalZ).snow;
 }
 
 Vec3 terrainColor(double worldX, double worldZ, double height, double normalUp,
-                  const Noise& noise, const TerrainParams& params) {
+                  const Noise& noise, const TerrainParams& params, double normalX, double normalZ) {
     if (params.cover) {   // the ground-cover map: its colour, or its weights for the layered surface
-        const Cover c = params.cover->at(worldX, worldZ, height, normalUp);
+        const Cover c = params.cover->at(worldX, worldZ, height, normalUp, normalX, normalZ);
         return params.coverWeights ? Vec3(c.grass, c.dirt, c.sand) : c.colour;
     }
     // Rich entry (the mesh bakers): sample noise at DIFFERENT frequencies per band
@@ -923,7 +923,7 @@ RenderMesh generateTerrain(const TerrainParams& params, const Noise& noise) {
     // noise term varies it). The shader multiplies these with the material.
     for (Vertex& v : mesh.vertices) {
         v.color = terrainColor(v.position.x, v.position.z, v.position.y,
-                               v.normal.y, noise, params);
+                               v.normal.y, noise, params, v.normal.x, v.normal.z);
     }
     return mesh;
 }
@@ -963,7 +963,7 @@ RenderMesh generateTerrainRing(const TerrainParams& params, const Noise& noise,
     MeshBuilder::generatePlanarUVs(mesh, /*axis=*/1, /*scale=*/1.0f / (outerHalf * 2.0f));
     for (Vertex& v : mesh.vertices) {
         v.color = terrainColor(v.position.x, v.position.z, v.position.y,
-                               v.normal.y, noise, params);
+                               v.normal.y, noise, params, v.normal.x, v.normal.z);
     }
     return mesh;
 }
@@ -1031,7 +1031,7 @@ std::vector<TerrainChunk> generateTerrainChunks(const TerrainParams& params,
                     // World-continuous UVs (tile across the whole world).
                     v.u = static_cast<float>(x / chunkSize);
                     v.v = static_cast<float>(z / chunkSize);
-                    v.color = terrainColor(x, z, y, v.normal.y, noise, params);
+                    v.color = terrainColor(x, z, y, v.normal.y, noise, params, v.normal.x, v.normal.z);
                     mesh.vertices.push_back(v);
                 }
             }
