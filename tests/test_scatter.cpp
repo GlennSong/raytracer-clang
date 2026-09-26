@@ -1,5 +1,7 @@
 #include "../src/engine/procgen/grass.h"
 #include "../src/engine/procgen/stylized_tree.h"
+#include "../src/engine/procgen/real_tree.h"
+#include "../src/engine/procgen/trails.h"
 #include "../src/engine/procgen/ground_cover.h"
 #include "../src/engine/procgen/ground_layers.h"
 #include "../src/engine/procgen/stylized_rock.h"
@@ -316,3 +318,38 @@ TEST_CASE(hydrology_rivers_run_downhill_to_the_sea) {
     CHECK(hy->carve(mid.p.x, mid.p.y, h) < h - 0.5);            // cut into a channel at the river
     CHECK(hy->carve(-590, -590, ground(-590, -590)) <= ground(-590, -590));   // never raised anywhere
 }
+
+// Real trees (procgen/real_tree.h, ADR-0129/0130): every species grows bark and foliage within a
+// near-model budget, the same seed grows the same tree, and its impostor covers a real share of the
+// picture (a crown, not a stick).
+TEST_CASE(real_trees_stay_in_budget_repeat_and_fill_their_impostor) {
+    for (int s = 0; s < static_cast<int>(engine::RealSpecies::Count); ++s) {
+        const auto sp = static_cast<engine::RealSpecies>(s);
+        const engine::RealTree a = engine::realTree(sp, 1234u, 0.0), b = engine::realTree(sp, 1234u, 0.0);
+        CHECK(!a.bark.indices.empty());
+        CHECK(!a.foliage.indices.empty());
+        CHECK(a.bark.indices.size() / 3 + a.foliage.indices.size() / 3 < 16000);   // a near model, instanced
+        CHECK(a.bark.vertices.size() == b.bark.vertices.size());
+        CHECK(a.foliage.vertices.size() == b.foliage.vertices.size());
+        CHECK(a.height > 1.5 && a.crownRadius > 0.3);
+        const engine::TextureData fol = engine::realFoliageTexture(sp, 128, 7u);
+        std::vector<uint8_t> img(64 * 128 * 4);
+        engine::renderImpostor(a, fol, false, 64, 128, 3.0, img.data(), 64 * 4);
+        int covered = 0;
+        for (std::size_t i = 3; i < img.size(); i += 4) covered += img[i] > 127;
+        CHECK(covered > 64 * 128 / 12);
+    }
+}
+
+// Trails (procgen/trails.h, ADR-0134): the distance to a path is the distance to its nearest segment,
+// capped, from any side.
+TEST_CASE(trail_network_measures_distance_to_the_nearest_path) {
+    const engine::TrailNetwork t({{engine::Vec2(0, 0), engine::Vec2(100, 0), engine::Vec2(100, 100)}});
+    CHECK(std::abs(t.distance(50, 3, 10) - 3.0) < 1e-9);
+    CHECK(std::abs(t.distance(104, 50, 10) - 4.0) < 1e-9);
+    CHECK(std::abs(t.distance(-2, 0, 10) - 2.0) < 1e-9);
+    CHECK(t.distance(50, 40, 10) == 10.0);
+    const engine::TrailNetwork e({});
+    CHECK(e.empty() && e.distance(0, 0, 5) == 5.0);
+}
+

@@ -24,7 +24,8 @@
 #include "../procgen/city/parcel.h"
 #include "../procgen/proc_model.h"
 #include "../procgen/texture_field.h"
-#include "../procgen/stylized_tree.h"   // stylized.tree
+#include "../procgen/stylized_tree.h"
+#include "../procgen/real_tree.h"   // stylized.tree
 #include "../procgen/stylized_rock.h"   // stylized.rock
 #include "../procgen/grass.h"           // stylized.grass
 #include "../procgen/terrain_field.h"
@@ -836,6 +837,23 @@ int l_stylized_tree(lua_State* L) {
     pushMesh(L, std::make_shared<RenderMesh>(std::move(t.canopy)));
     return 2;
 }
+// real.tree(seed, {species="spruce", height}) -> bark, foliage (ADR-0129/0135): the real-tree generator
+// (procgen/real_tree.h) from Lua; the foliage's uv run into the species' spray atlas (the loader's texture)
+int l_real_tree(lua_State* L) {
+    const uint32_t seed = static_cast<uint32_t>(luaL_checkinteger(L, 1));
+    RealSpecies sp = RealSpecies::Spruce;
+    double height = 0.0;
+    if (lua_istable(L, 2)) {
+        lua_getfield(L, 2, "species");
+        if (lua_isstring(L, -1) && !realSpeciesFromName(lua_tostring(L, -1), sp)) luaL_error(L, "real.tree: unknown species");
+        lua_pop(L, 1);
+        height = optField(L, 2, "height", 0.0);
+    }
+    RealTree t = realTree(sp, seed, height);
+    pushMesh(L, std::make_shared<RenderMesh>(std::move(t.bark)));
+    pushMesh(L, std::make_shared<RenderMesh>(std::move(t.foliage)));
+    return 2;
+}
 // stylized.rock(seed, {family="boulder", stone="granite", size=1.5, moss}) -> mesh
 int l_stylized_rock(lua_State* L) {
     StylizedRockParams p;
@@ -858,6 +876,9 @@ int l_stylized_grass(lua_State* L) {
     GrassClumpParams p;
     const uint32_t seed = static_cast<uint32_t>(luaL_checkinteger(L, 1));
     p.blades = static_cast<int>(optField(L, 2, "blades", p.blades));
+    p.flowers = static_cast<int>(optField(L, 2, "flowers", p.flowers));   // ADR-0133: stems with heads
+    p.petals = static_cast<int>(optField(L, 2, "petals", p.petals));
+    p.flowerSize = optField(L, 2, "flower_size", p.flowerSize);
     p.height = optField(L, 2, "height", p.height);
     p.width = optField(L, 2, "width", p.width);
     p.radius = optField(L, 2, "radius", p.radius);
@@ -3096,6 +3117,13 @@ void openProcgenLibrary(ScriptVM& vm) {
     };
     luaL_newlib(L, kStylizedFns);
     lua_setglobal(L, "stylized");
+
+    static const luaL_Reg kRealFns[] = {
+        {"tree", l_real_tree},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kRealFns);
+    lua_setglobal(L, "real");
 
     lua_pushcfunction(L, l_scope);
     lua_setglobal(L, "scope");
