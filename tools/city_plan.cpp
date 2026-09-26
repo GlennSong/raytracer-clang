@@ -259,6 +259,11 @@ int main(int argc, char** argv) {
                         w.ramps.size(), ic["refused"].dump().c_str());
             std::printf("island freeway round the cities: %.1f km, %d legs unrouted\n", w.report["ringFreewayKm"].get<double>(),
                         w.report["freewayRoundCities"]["unrouted"].get<int>());
+            // HIKING TRAILS (ADR-0134): trailheads on the places' edges to summits and lakes, and a coast path
+            engine::planTrails(w);
+            double trailKm = 0.0;
+            for (const auto& L : w.trails) for (std::size_t q = 0; q + 1 < L.size(); ++q) trailKm += (L[q + 1] - L[q]).length() / 1000.0;
+            std::printf("trails: %zu, %.1f km\n", w.trails.size(), trailKm);
         }
         // THE 3D LEVEL (ADR-0112): --level NAME [--template LEVEL.json] writes the island as one lanes
         // scene (assets/lanelab/planned/NAME_lanelab.json), its signs (assets/levels/NAME.signs.json)
@@ -298,6 +303,15 @@ int main(int argc, char** argv) {
             if (level.contains("terrain") && level["terrain"].contains("material")) terrain["material"] = level["terrain"]["material"];
             if (!natureLevel.contains("terrain") && level.contains("terrain") && level["terrain"].contains("groundCover"))
                 terrain["groundCover"] = level["terrain"]["groundCover"];   // (a nature level's own cover stays)
+            if (!w.trails.empty()) {   // the trails ride in the terrain block: the ground cover draws them
+                nlohmann::json tr = nlohmann::json::array();
+                for (const auto& L : w.trails) {
+                    nlohmann::json pl = nlohmann::json::array();
+                    for (const auto& q : L) pl.push_back({std::round(q.x * 10.0) / 10.0, std::round(q.y * 10.0) / 10.0});
+                    tr.push_back(pl);
+                }
+                terrain["trails"] = tr;
+            }
             level["terrain"] = terrain;
             // the nature level's fields and light (ADR-0132): its grass layers, and its lighting (tuned for the forest)
             for (const char* k : {"grass", "grassLayers", "lighting"})
@@ -329,7 +343,11 @@ int main(int argc, char** argv) {
         }
         engine::IslandMapView whole;
         whole.sites = false;
-        whole.layers = {limits, locals, collectors, arterials, freeways};
+        engine::IslandMapLayer trailLayer;
+        trailLayer.name = "trails";
+        trailLayer.rgb[0] = 0.55f; trailLayer.rgb[1] = 0.33f; trailLayer.rgb[2] = 0.12f; trailLayer.widthM = 6; trailLayer.minPx = 1.2;
+        trailLayer.lines = w.trails;
+        whole.layers = {limits, locals, collectors, arterials, freeways, trailLayer};
         const std::string base = outDir + "/island_" + std::to_string(seed);
         engine::writeIslandSvg(w, base + ".svg", whole);
         engine::writeIslandMap(w, base + "_cities.png", 2000, whole);   // a quick look; the SVG is the map

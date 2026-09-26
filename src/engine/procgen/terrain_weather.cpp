@@ -417,7 +417,7 @@ Heightmap weatheredTerrainCached(const nlohmann::json& tjIn) {
     nlohmann::json tj = tjIn;
     tj.erase("rivers");   // computed ON this ground
     // ...and what only paints or draws it: retuning the cover's palette must not rebake the ground
-    for (const char* k : {"groundCover", "cdlod", "material", "forest"}) tj.erase(k);
+    for (const char* k : {"groundCover", "cdlod", "material", "forest", "trails"}) tj.erase(k);
     std::uint64_t key = 1469598103934665603ULL;
     auto fold = [&](const std::string& s) { for (unsigned char c : s) { key ^= c; key *= 1099511628211ULL; } };
     fold(kWeatherCodeTag);

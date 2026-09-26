@@ -1,6 +1,7 @@
 #include "ground_cover.h"
 
 #include "forest.h"
+#include "trails.h"
 #include "terrain_maps.h"
 
 #include <algorithm>
@@ -86,6 +87,10 @@ Cover GroundCover::at(double x, double z, double height, double normalUp, double
                                         0.8 * ms.wet * dryUp * smooth(8.0, 20.0, slope)})
                             : dirtRaw;
     if (p_.forest) dirtAll = std::max(dirtAll, 0.78 * forestCanopy(*p_.forest, p_.seaLevel, p_.maps.get(), x, z, height, slope) + 0.1 * fine);
+    if (p_.trails) {   // the path: worn earth a metre and a half wide, its edge ragged with the grass
+        const double d = p_.trails->distance(x, z, 3.0);
+        if (d < 3.0) dirtAll = std::max(dirtAll, 1.0 - smooth(0.55, 1.1, d + 0.25 * fine));
+    }
     Cover c;
     double rem = 1.0;
     c.snow = snowRaw * rem; rem -= c.snow;

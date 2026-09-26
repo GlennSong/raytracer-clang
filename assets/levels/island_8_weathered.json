@@ -576,8 +576,8 @@
   {
    "where": "reeds",
    "seed": 33,
-   "blades": 14,
-   "height": 1.9,
+   "blades": 16,
+   "height": 2.2,
    "width": 0.022,
    "clumpRadius": 0.25,
    "lean": 0.12,
@@ -599,7 +599,180 @@
    "fadeStart": 40,
    "fadeEnd": 55,
    "cardRadius": 180,
-   "cardSpacing": 1.6
+   "cardSpacing": 1.6,
+   "clumpScale": 0.07,
+   "clumpCut": 0.15
+  },
+  {
+   "clumpRadius": 0.28,
+   "lean": 0.25,
+   "width": 0.03,
+   "rootColor": [
+    0.02,
+    0.035,
+    0.01
+   ],
+   "tipColor": [
+    0.09,
+    0.13,
+    0.035
+   ],
+   "variantTint": 0.1,
+   "radius": 80,
+   "nearRadius": 30,
+   "fadeStart": 60,
+   "fadeEnd": 80,
+   "cards": false,
+   "where": "flowers",
+   "seed": 51,
+   "blades": 6,
+   "height": 0.45,
+   "flowers": 5,
+   "flowerSize": 0.05,
+   "spacing": 0.9,
+   "variants": 7,
+   "clumpScale": 0.03,
+   "clumpCut": 0.2,
+   "flowerColors": [
+    [
+     0.75,
+     0.74,
+     0.68
+    ],
+    [
+     0.8,
+     0.6,
+     0.04
+    ],
+    [
+     0.3,
+     0.09,
+     0.55
+    ],
+    [
+     0.14,
+     0.24,
+     0.7
+    ],
+    [
+     0.8,
+     0.24,
+     0.38
+    ],
+    [
+     0.7,
+     0.05,
+     0.03
+    ],
+    [
+     0.85,
+     0.32,
+     0.05
+    ]
+   ]
+  },
+  {
+   "clumpRadius": 0.28,
+   "lean": 0.25,
+   "width": 0.03,
+   "rootColor": [
+    0.02,
+    0.035,
+    0.01
+   ],
+   "tipColor": [
+    0.09,
+    0.13,
+    0.035
+   ],
+   "variantTint": 0.1,
+   "radius": 80,
+   "nearRadius": 30,
+   "fadeStart": 60,
+   "fadeEnd": 80,
+   "cards": false,
+   "where": "clearing",
+   "seed": 61,
+   "blades": 5,
+   "height": 0.55,
+   "flowers": 9,
+   "flowerSize": 0.055,
+   "spacing": 0.5,
+   "variants": 4,
+   "clumpScale": 0.02,
+   "clumpCut": 0.0,
+   "flowerColors": [
+    [
+     0.32,
+     0.1,
+     0.6
+    ],
+    [
+     0.75,
+     0.74,
+     0.68
+    ],
+    [
+     0.82,
+     0.62,
+     0.05
+    ],
+    [
+     0.4,
+     0.14,
+     0.62
+    ]
+   ]
+  },
+  {
+   "clumpRadius": 0.28,
+   "lean": 0.25,
+   "width": 0.03,
+   "rootColor": [
+    0.02,
+    0.035,
+    0.01
+   ],
+   "tipColor": [
+    0.09,
+    0.13,
+    0.035
+   ],
+   "variantTint": 0.1,
+   "radius": 80,
+   "nearRadius": 30,
+   "fadeStart": 60,
+   "fadeEnd": 80,
+   "cards": false,
+   "where": "shore",
+   "seed": 71,
+   "blades": 8,
+   "height": 0.75,
+   "flowers": 4,
+   "flowerSize": 0.07,
+   "petals": 3,
+   "spacing": 0.8,
+   "variants": 3,
+   "clumpScale": 0.08,
+   "clumpCut": 0.3,
+   "shoreBand": 6,
+   "flowerColors": [
+    [
+     0.82,
+     0.66,
+     0.05
+    ],
+    [
+     0.45,
+     0.08,
+     0.42
+    ],
+    [
+     0.78,
+     0.76,
+     0.7
+    ]
+   ]
   }
  ]
 }

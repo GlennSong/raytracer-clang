@@ -23,6 +23,12 @@ struct GrassClumpParams {
     double lean = 0.35;         // how far a tip leans out, as a fraction of its height
     Vec3   rootColor{0.012, 0.035, 0.006};   // linear albedo: field grass, darker at the root
     Vec3   tipColor{0.075, 0.16, 0.022};
+    // FLOWERS (ADR-0133): this many of the blades are stems carrying a head -- a star of `petals` petals,
+    // `flowerSize` across, in `flowerColor`, with a yellow-brown centre -- held up at the stem's tip
+    int    flowers = 0;
+    int    petals = 5;
+    double flowerSize = 0.05;
+    Vec3   flowerColor{0.6, 0.08, 0.35};
 };
 
 // Three triangles a blade: a tapered quad to the bend, a triangle to the tip.

@@ -8908,3 +8908,46 @@ Glenn then pointed at Josh's Channel, "Better Mountain Generators That Aren't Pe
 - **Coverage:** forest coverage 0.48 → 0.42, for more clearings. The island level's ambient 0.5 → 0.75 (the forest interior was black).
 
 **Consequences.** 452 k rocks and 628 k trees and shrubs, placed in 5.4 s; the level loads in about 11 s cached. Boulder fields sit below the crags, outcrops on the ribs, erratics in the meadows, pebbles along the water. Impostor vertices fell to 77 MB.
+
+## ADR-0132 — The island's cities planned on the weathered ground; the freeway as one loop
+
+**Context.** Glenn: "Do city plans first and then trails would be a new addition", and later: "the free ways don't connect to each other as one giant loop". The island planner planned on the seed's generated ground, not the weathered one.
+
+**Decision.**
+- **`city_plan island-cities SEED OUT --terrain LEVEL.json`** plans on that level's terrain block: the weathered ground, its rivers, its forest and cover. The generated level (`--level`) takes the nature level's `grass`, `grassLayers` and `lighting`, and keeps its ground cover.
+- **Flat plains again.** The refine's detail is zero on the plains and rises to a quarter on the low hills. A quarter everywhere had rolled the plains past the planner's 9 % buildable limit, and it found no sites at all.
+- **The freeway closes its loop:**
+  - it routes on the smoothed ground (`smoothAt`, as the mountain roads do), bridging and cutting the foothill gullies;
+  - a place's waypoint that lands in water or a city margin searches rings for open ground;
+  - a leg that finds no way widens its search box (1.4 → 2.8 → 4.5 km). The north coast's leg needed about 4 km.
+  - An unrouted leg is logged with its ends.
+
+**Consequences.** Island 8 on the weathered ground: Saltwood and Weyby, six coastal towns, the pass, and a 37 km freeway in one loop with 10 diamonds. `island_8_nature` is its 3D level.
+
+## ADR-0133 — Flowers, and plants in clumps
+
+**Context.** Glenn: "a variety of flowers ... a field of them somewhere in a forest too. Flowers and tall reeds along the shore of lakes and rivers too. Not like all along the river but scattered in clumps."
+
+**Decision.**
+- **`GrassClumpParams::flowers`:** stems carrying a head, `petals` petals in `flowerColor` round a brown-gold centre, tilted up.
+- **`"flowerColors"`** gives each variant of a grass layer its colour, so one layer is a mixed meadow.
+- **New `where` rules:**
+  - `flowers`: open-meadow patches;
+  - `clearing`: open here, with canopy all round (sampled 70 m off in four directions) — the flower field in a forest clearing;
+  - `shore`: the water's band, a step back from the edge.
+- **Reeds and shore flowers grow in CLUMPS:** a noise cut hard (`clumpScale`, `clumpCut`), so stands alternate with open bank.
+
+**Consequences.** Flower layers draw no far cards (the card texture has no heads); they end at about 80 m.
+
+## ADR-0134 — Hiking trails as texture
+
+**Context.** Glenn: "Dirt paths for hiking trails", "Trails should hopefully just generate some texturing", and "If you can connect footpaths without a problem do that."
+
+**Decision.**
+- **`planTrails(IslandWorld&)`** (after the places' limits exist) routes footpaths on the ground: 12 m cells, gentle preferred, steep allowed at a price so switchbacks form, never over water, one Chaikin pass. They connect:
+  - each place's TRAILHEAD (the edge of its limits facing the island's middle, 60 m out) to its two nearest destinations within 7 km: summits (the highest point in 1.6 km, above 350 m, 1.5 km apart) and lakes;
+  - neighbouring places by a coast path (legs under 9 km).
+- **`city_plan --level`** writes them into the terrain block as `"trails"`. The ground cover (`GroundCoverParams::trails`, a `TrailNetwork` segment index) lays bare earth about 1.5 m wide with a ragged edge. Trees stay 2.5 m off and rocks 1.5 m; the meadow grass thins on it. No ground is moved.
+- **The weather and maps caches ignore `trails`.**
+
+**Consequences.** Island 8: 22 trails, 118 km. The map draws them as a layer.

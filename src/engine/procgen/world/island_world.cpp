@@ -1538,5 +1538,110 @@ bool writeIslandSvg(const IslandWorld& w, const std::string& svgPath, const Isla
     return static_cast<bool>(f);
 }
 
-}  // namespace engine
+void planTrails(IslandWorld& w) {
+    w.trails.clear();
+    w.trailNames.clear();
+    const int n = w.n;
+    auto H = [&](int i, int j) { return static_cast<double>(w.height[static_cast<std::size_t>(std::clamp(j, 0, n - 1)) * n + std::clamp(i, 0, n - 1)]); };
+    auto P = [&](int i, int j) { return Vec2(-w.half + i * w.cell, -w.half + j * w.cell); };
+    const json& il = w.terrain.value("island", json::object());
+    const Vec2 C(il.value("cx", 0.0), il.value("cz", 0.0));
+    auto openNear = [&](Vec2 p, double reach) {   // the nearest dry point in rings round p
+        if (!w.water(p.x, p.y)) return p;
+        for (double r = 20.0; r <= reach; r += 20.0)
+            for (int a = 0; a < 24; ++a) {
+                const Vec2 c = p + Vec2(std::cos(a * 0.2618), std::sin(a * 0.2618)) * r;
+                if (!w.water(c.x, c.y)) return c;
+            }
+        return p;
+    };
+    // DESTINATIONS: summits (the highest point in each 1.6 km, above 350 m, 1.5 km apart) and lakes
+    struct Dest { Vec2 at; std::string name; };
+    std::vector<Dest> dests;
+    {
+        const int step = std::max(1, static_cast<int>(100.0 / w.cell)), win = static_cast<int>(800.0 / w.cell);
+        std::vector<std::pair<double, Vec2>> peaks;
+        for (int j = win; j < n - win; j += step)
+            for (int i = win; i < n - win; i += step) {
+                const double h = H(i, j);
+                if (h < 350.0) continue;
+                bool top = true;
+                for (int dj = -win; dj <= win && top; dj += step)
+                    for (int di = -win; di <= win; di += step)
+                        if (H(i + di, j + dj) > h) { top = false; break; }
+                if (top) peaks.push_back({h, P(i, j)});
+            }
+        std::sort(peaks.begin(), peaks.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        int kept = 0;
+        for (const auto& [h, p] : peaks) {
+            bool far = true;
+            for (const Dest& d : dests) if ((d.at - p).length() < 1500.0) far = false;
+            if (!far) continue;
+            dests.push_back({p, "summit " + std::to_string(static_cast<int>(std::lround(h))) + " m"});
+            if (++kept >= 10) break;
+        }
+        if (w.hydro)
+            for (const Lake& L : w.hydro->lakes()) {
+                const Vec2 c((L.minX + L.maxX) * 0.5, (L.minZ + L.maxZ) * 0.5);
+                dests.push_back({openNear(c, 600.0), "lake"});
+            }
+    }
+    // TRAILHEADS: each place's limits, the point facing the island's middle, stepped 60 m out
+    std::vector<Vec2> heads(w.sites.size());
+    std::vector<bool> has(w.sites.size(), false);
+    for (std::size_t k = 0; k < w.sites.size(); ++k) {
+        const IslandSite& st = w.sites[k];
+        Vec2 pick = st.at;
+        double best = 1e30;
+        for (const auto& L : st.limits)
+            for (const Vec2& q : L) { const double d = (q - C).length(); if (d < best) { best = d; pick = q; } }
+        if (best >= 1e29) continue;
+        Vec2 in = C - pick;
+        in = in.length() > 1e-9 ? in * (1.0 / in.length()) : Vec2(0, 0);
+        heads[k] = openNear(pick + in * 60.0, 400.0);
+        has[k] = true;
+    }
+    TerrainRouteParams fp;
+    fp.cell = 12.0; fp.maxGrade = 0.10; fp.hardGrade = 0.65; fp.gradeWeight = 260.0; fp.flatWeight = 1.0;
+    fp.turnWeight = 1.5; fp.maxTurnDeg = 95.0; fp.margin = 1200.0;
+    fp.blocked = [&w](double x, double z) { return w.water(x, z); };
+    const HeightField ground = [&w](double x, double z) { return w.heightAt(x, z); };
+    auto walk = [&](const Vec2& a, const Vec2& b, const std::string& name) {
+        const TerrainRoute tr = routeOnTerrain(ground, a, b, fp);
+        if (tr.points.size() < 2) return;
+        // Chaikin once: a footpath curves, it does not zigzag cell to cell
+        std::vector<Vec2> s{tr.points.front()};
+        for (std::size_t k = 0; k + 1 < tr.points.size(); ++k) {
+            const Vec2 p = tr.points[k], q = tr.points[k + 1];
+            s.push_back(p * 0.75 + q * 0.25);
+            s.push_back(p * 0.25 + q * 0.75);
+        }
+        s.push_back(tr.points.back());
+        w.trails.push_back(std::move(s));
+        w.trailNames.push_back(name);
+    };
+    // each trailhead to its two nearest destinations within 7 km
+    for (std::size_t k = 0; k < w.sites.size(); ++k) {
+        if (!has[k]) continue;
+        std::vector<std::pair<double, int>> near;
+        for (std::size_t d = 0; d < dests.size(); ++d) {
+            const double L = (dests[d].at - heads[k]).length();
+            if (L < 7000.0) near.push_back({L, static_cast<int>(d)});
+        }
+        std::sort(near.begin(), near.end());
+        for (std::size_t m = 0; m < near.size() && m < 2; ++m)
+            walk(heads[k], dests[static_cast<std::size_t>(near[m].second)].at, w.sites[k].name + " to the " + dests[static_cast<std::size_t>(near[m].second)].name);
+    }
+    // the long-distance path: place to place round the coast (by bearing from the middle), legs under 9 km
+    std::vector<std::pair<double, int>> ring;
+    for (std::size_t k = 0; k < w.sites.size(); ++k)
+        if (has[k]) ring.push_back({std::atan2(heads[k].y - C.y, heads[k].x - C.x), static_cast<int>(k)});
+    std::sort(ring.begin(), ring.end());
+    for (std::size_t m = 0; m < ring.size(); ++m) {
+        const int a = ring[m].second, b = ring[(m + 1) % ring.size()].second;
+        if (a == b || (heads[static_cast<std::size_t>(a)] - heads[static_cast<std::size_t>(b)]).length() > 9000.0) continue;
+        walk(heads[static_cast<std::size_t>(a)], heads[static_cast<std::size_t>(b)], "coast path " + w.sites[static_cast<std::size_t>(a)].name + " - " + w.sites[static_cast<std::size_t>(b)].name);
+    }
+}
 
+}  // namespace engine

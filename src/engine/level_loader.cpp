@@ -20,6 +20,7 @@
 #include "procgen/stylized_tree.h"
 #include "procgen/forest.h"         // "forest": real trees + impostors at island scale (ADR-0129)
 #include "procgen/terrain_maps.h"
+#include "procgen/trails.h"
 #include "procgen/ground_cover.h"
 #include "procgen/ground_layers.h"
 #include "procgen/stylized_rock.h"
@@ -1826,8 +1827,10 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { if (!d.field.spines.empty()) decks.push_back(&d.field); });
     const engine::DrawnRoad drawnRoad = engine::gatherDrawnRoad(world);
     const double margin = fj.value("clearMargin", 4.0);
+    const TrailNetwork* trails = terrain.cover ? terrain.cover->params().trails.get() : nullptr;
     auto exclude = [&](double x, double z) {
         if (terrain.hydro && terrain.hydro->isWet(x, z, 2.0)) return true;
+        if (trails && trails->distance(x, z, 3.0) < 2.5) return true;   // the trails stay open (ADR-0134)
         for (const RoadDeckField* d : decks) { double y = 0; if (d->heightAt(x, z, margin, &y)) return true; }
         if (drawnRoad.near(x, z, margin)) return true;
         return !terrain.flatten.empty() && flattenCovers(keepOut, terrain.flatten, x, z, margin);
@@ -1925,6 +1928,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         std::function<double(double, double, double)> shoreAt;
         if (terrain.hydro) shoreAt = [h = terrain.hydro](double x, double z, double y) { return h->isWet(x, z, 0.0) ? 0.0 : h->shore(x, z, y); };
         auto excludeDry = [&](double x, double z) {
+            if (trails && trails->distance(x, z, 3.0) < 1.5) return true;
             for (const RoadDeckField* d : decks) { double yy = 0; if (d->heightAt(x, z, margin, &yy)) return true; }
             if (drawnRoad.near(x, z, margin)) return true;
             return !terrain.flatten.empty() && flattenCovers(keepOut, terrain.flatten, x, z, margin);
@@ -4375,25 +4379,49 @@ bool LevelLoader::load(const std::string& path,
                 const std::shared_ptr<const GroundCover> cover = tp.cover;
                 const std::shared_ptr<const Hydrology> hydro = tp.hydro;
                 const std::string where = gj.value("where", std::string("meadow"));
-                const int kind = where == "tall" ? 1 : (where == "reeds" ? 2 : 0);
+                // 0 meadow, 1 tall, 2 reeds, 3 flowers (open meadow patches), 4 clearing (a flower field
+                // in a forest clearing), 5 shore (flowers in clumps along the water)
+                const int kind = where == "tall" ? 1 : where == "reeds" ? 2 : where == "flowers" ? 3 : where == "clearing" ? 4 : where == "shore" ? 5 : 0;
+                const double clumpScale = gj.value("clumpScale", 0.06), clumpCut = gj.value("clumpCut", 0.25);
                 const double shore = gj.value("shoreBand", 6.0);
-                gf.density = [maxSlope, thin, sea, patchiness, patchScale, patches, cover, hydro, kind, shore](double x, double z, double y, double slopeCos) {
+                gf.density = [maxSlope, thin, sea, patchiness, patchScale, patches, cover, hydro, kind, shore, clumpScale, clumpCut](double x, double z, double y, double slopeCos) {
                     if (y < sea + 0.15) return 0.0;
                     if (hydro && hydro->isWet(x, z, 0.3)) return 0.0;   // not in the rivers and lakes
                     const double slope = std::acos(std::clamp(slopeCos, -1.0, 1.0));
                     const TerrainMaps* maps = cover ? cover->params().maps.get() : nullptr;
-                    if (kind == 2) {   // REEDS: the shore band of fresh water, and wet flat hollows
-                        if (y < sea + 0.6 || slope > 0.2) return 0.0;
+                    // CLUMPS (Glenn: "not like all along the river but scattered in clumps"): a noise over
+                    // the band, cut hard, so the plants stand in stands with open bank between
+                    auto clumps = [&](double salt) {
+                        const double n = patches.fbm2(x * clumpScale + salt, z * clumpScale - salt, 3);
+                        return std::clamp((n - clumpCut) * 5.0, 0.0, 1.0);
+                    };
+                    if (kind == 2 || kind == 5) {   // REEDS / SHORE FLOWERS: the fresh water's band, in clumps
+                        if (y < sea + 0.6 || slope > 0.25) return 0.0;
                         double d = hydro && hydro->isWet(x, z, shore) ? 1.0 : 0.0;
-                        if (maps) d = std::max(d, std::clamp((maps->at(x, z).wet - 0.75) * 5.0, 0.0, 1.0) * (slope < 0.1 ? 1.0 : 0.0));
+                        if (kind == 5 && hydro && hydro->isWet(x, z, 0.8)) d = 0.0;   // flowers keep a step back
+                        if (maps && kind == 2) d = std::max(d, std::clamp((maps->at(x, z).wet - 0.75) * 5.0, 0.0, 1.0) * (slope < 0.1 ? 1.0 : 0.0));
                         if (d <= 0.0) return 0.0;
-                        return d * std::clamp(0.35 + patches.fbm2(x * 0.08, z * 0.08, 2) * 1.5, 0.0, 1.0);
+                        return d * clumps(kind == 2 ? 0.0 : 41.0);
                     }
                     // With a ground-cover map the cover decides (grass stops at sand, rock and
                     // bare earth, raggedly); without one, the slope rule.
                     double d = cover ? cover->at(x, z, y, slopeCos).grass
                                      : std::clamp((maxSlope - slope) / thin, 0.0, 1.0);
                     if (hydro && d > 0.0) d *= 1.0 - 0.85 * hydro->shore(x, z, y);   // the pebbly shore (ADR-0131)
+                    if (kind == 3 || kind == 4) {   // FLOWERS: patches of open meadow / a field in a forest clearing
+                        if (!cover || !cover->params().forest) return kind == 3 ? d * clumps(7.0) : 0.0;
+                        const ForestParams& fp = *cover->params().forest;
+                        const double here = forestCanopy(fp, sea, maps, x, z, y, slope * 57.2957795);
+                        if (kind == 3) return d * (1.0 - here) * clumps(7.0);
+                        // a clearing: open here, forest all round (the canopy 70 m off, in four directions)
+                        double round = 0.0;
+                        for (int k = 0; k < 4; ++k) {
+                            const double a = k * 1.5707963 + 0.4;
+                            round += forestCanopy(fp, sea, maps, x + 70.0 * std::cos(a), z + 70.0 * std::sin(a), y, slope * 57.2957795);
+                        }
+                        round *= 0.25;
+                        return d * (1.0 - here) * std::clamp((round - 0.3) * 3.0, 0.0, 1.0) * clumps(13.0);
+                    }
                     if (kind == 1) {   // TALL GRASS: in drifts on open ground, thickest along forest edges
                         const double drift = std::clamp((patches.fbm2(x * 0.011 + 3.0, z * 0.011 - 5.0, 3) + 0.05) * 3.0, 0.0, 1.0);
                         double edge = 0.0;
@@ -4422,6 +4450,13 @@ bool LevelLoader::load(const std::string& path,
                 cp.lean = gj.value("lean", cp.lean);
                 cp.rootColor = colour("rootColor", cp.rootColor);
                 cp.tipColor = colour("tipColor", cp.tipColor);
+                cp.flowers = gj.value("flowers", cp.flowers);
+                cp.petals = gj.value("petals", cp.petals);
+                cp.flowerSize = gj.value("flowerSize", cp.flowerSize);
+                std::vector<Vec3> flowerColors;   // "flowerColors": a colour a variant
+                if (gj.contains("flowerColors") && gj["flowerColors"].is_array())
+                    for (const auto& c : gj["flowerColors"])
+                        if (c.is_array() && c.size() == 3) flowerColors.emplace_back(c[0].get<double>(), c[1].get<double>(), c[2].get<double>());
                 const int variants = std::max(1, gj.value("variants", 4));
                 gf.seed = gj.value("seed", 1u);
                 // Each variant is tinted a little differently (warmer / cooler, lighter / darker), so
@@ -4433,6 +4468,10 @@ bool LevelLoader::load(const std::string& path,
                     vp.tipColor = Vec3(cp.tipColor.x * (1.0 + tint * t), cp.tipColor.y * (1.0 + tint * 0.4 * t),
                                        cp.tipColor.z * (1.0 - tint * t));
                     vp.rootColor = cp.rootColor * (1.0 - 0.5 * tint * t);
+                    if (!flowerColors.empty()) {
+                        vp.flowerColor = flowerColors[static_cast<std::size_t>(v) % flowerColors.size()];
+                        vp.petals = cp.petals + (v % 3 == 2 ? 1 : 0);
+                    }
                     gf.clumps.push_back(assets.acquireMesh(grassClump(gf.seed * 131u + static_cast<uint32_t>(v), vp),
                                                            tag + ":clump:" + std::to_string(v)));
                 }

@@ -107,6 +107,8 @@ struct IslandWorld {
     std::vector<IslandSign> signs;
     std::vector<IslandBusLine> busLines;
     std::vector<Vec2> centres;              // per site: its centre stop (the transit centre), set by the caller
+    std::vector<std::vector<Vec2>> trails;  // hiking trails (planTrails): trailheads to summits and lakes, town to town
+    std::vector<std::string> trailNames;    // what each leads to
     nlohmann::json report;
     double heightAt(double x, double z) const;   // bilinear
     // Where a road may not go on the ground: the sea, or a lake and 12 m round it (Saltwood's pass ran
@@ -124,6 +126,12 @@ struct IslandWorld {
 nlohmann::json islandTerrainBlock(uint32_t seed, double half = 10000.0);
 
 IslandWorld planIsland(const nlohmann::json& terrainBlock, double half = 10000.0, double cell = 20.0);
+
+// HIKING TRAILS (ADR-0134): footpaths routed on the ground (gentle where they can, switchbacking where
+// they must, never over water) from each place's TRAILHEAD -- the edge of its limits facing the range --
+// to its nearest summits and mountain lakes, and between neighbouring places along the coast (a
+// long-distance path). Needs the places' limits (routeFreewayRoundCities). Fills w.trails.
+void planTrails(IslandWorld& w);
 
 // A CITY BRIEF FOR A SITE (ADR-0106): the city planner's brief (city_plan.h, as JSON) scaled to the
 // site's flat ground -- a city gets a core grid, midtown, outskirts and a freeway ring; a town a small

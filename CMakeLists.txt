@@ -101,6 +101,7 @@ add_library(engine_core STATIC
     src/engine/procgen/terrain_maps.cpp
     src/engine/procgen/real_tree.cpp
     src/engine/procgen/forest.cpp
+    src/engine/procgen/trails.cpp
     src/engine/procgen/rock.cpp
     src/engine/procgen/cellular.cpp
     src/engine/procgen/planet.cpp
