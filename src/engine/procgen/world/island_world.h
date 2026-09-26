@@ -133,6 +133,12 @@ IslandWorld planIsland(const nlohmann::json& terrainBlock, double half = 10000.0
 // long-distance path). Needs the places' limits (routeFreewayRoundCities). Fills w.trails.
 void planTrails(IslandWorld& w);
 
+// The pass's (and mountain road's) ends run on into their towns: each end, trimmed at its town's limits,
+// joins the nearest of that town's arterial nodes (ADR-0135). Call after routeFreewayRoundCities.
+void joinPassToTowns(IslandWorld& w, const std::vector<std::pair<int, std::vector<Vec2>>>& arterialNodes);
+// Cut out every loop where a polyline crosses itself (the loop's two ends are one spot); returns how many.
+int removeSelfCrossings(std::vector<Vec2>& points);
+
 // A CITY BRIEF FOR A SITE (ADR-0106): the city planner's brief (city_plan.h, as JSON) scaled to the
 // site's flat ground -- a city gets a core grid, midtown, outskirts and a freeway ring; a town a small
 // grid and outskirts, no ring -- its grid squared to the coast (one axis runs down to the sea), and

@@ -45,6 +45,38 @@ TerrainRouteParams freewayRouteParams() {
     fw.cell = 30.0; fw.maxGrade = 0.05; fw.hardGrade = 0.30; fw.gradeWeight = 800.0; fw.turnWeight = 30.0; fw.maxTurnDeg = 25.0; fw.margin = 1400.0;
     return fw;
 }
+// A road that CROSSES ITSELF (Glenn: "a place where it crosses over itself and becomes a hot mess"): the
+// router can wander out and come back through the same spot. Both ends of such a loop are one place (one
+// height), so the loop is cut out at the crossing and the road runs straight on.
+int cutLoops(std::vector<Vec2>& P) {
+    int cut = 0;
+    auto hit = [](const Vec2& a, const Vec2& b, const Vec2& c, const Vec2& e, Vec2& x) {
+        const Vec2 d1 = b - a, d2 = e - c;
+        const double den = d1.x * d2.y - d1.y * d2.x;
+        if (std::fabs(den) < 1e-12) return false;
+        const double t = ((c.x - a.x) * d2.y - (c.y - a.y) * d2.x) / den, u = ((c.x - a.x) * d1.y - (c.y - a.y) * d1.x) / den;
+        if (t < 0.0 || t > 1.0 || u < 0.0 || u > 1.0) return false;
+        x = a + d1 * t;
+        return true;
+    };
+    for (bool again = true; again && P.size() >= 4;) {
+        again = false;
+        for (std::size_t i = 0; i + 1 < P.size() && !again; ++i)
+            for (std::size_t j = i + 2; j + 1 < P.size(); ++j) {
+                Vec2 x;
+                if (!hit(P[i], P[i + 1], P[j], P[j + 1], x)) continue;
+                std::vector<Vec2> Q(P.begin(), P.begin() + static_cast<std::ptrdiff_t>(i + 1));
+                Q.push_back(x);
+                Q.insert(Q.end(), P.begin() + static_cast<std::ptrdiff_t>(j + 1), P.end());
+                P.swap(Q);
+                ++cut;
+                again = true;
+                break;
+            }
+    }
+    return cut;
+}
+
 // A routed road FINISHED for its kind (terrain_route.h): tightened -- no spike, no detour a straight
 // line could drive -- then its corners rounded to what its traffic takes, and measured again.
 void finishRoad(IslandRoad& rd, const HeightField& ground, const std::function<bool(double, double)>& blocked) {
@@ -55,7 +87,9 @@ void finishRoad(IslandRoad& rd, const HeightField& ground, const std::function<b
     else if (rd.kind == "pass") { tp.maxGrade = 0.07; tp.maxCutFill = 8.0; tp.maxStraight = 600.0; radius = 30.0; }
     else { tp.maxGrade = 0.08; tp.maxCutFill = 6.0; tp.maxStraight = 400.0; radius = 15.0; }
     tp.blocked = blocked;
-    const TerrainRoute m = measureRoute(ground, roundRoute(tightenRoute(ground, rd.points, tp), radius));
+    std::vector<Vec2> fin = roundRoute(tightenRoute(ground, rd.points, tp), radius);
+    cutLoops(fin);
+    const TerrainRoute m = measureRoute(ground, fin);
     rd.points = m.points;
     rd.length = m.length;
     rd.climb = m.climb;
@@ -672,7 +706,12 @@ void routeFreewayRoundCities(IslandWorld& w, const std::vector<std::pair<int, st
             const TerrainRoute tr = routeOnTerrain(smooth, foot, top, [&] { mr.blocked = [&w](double x, double z) { return w.water(x, z); }; return mr; }());
             if (!tr.points.empty()) { rd.points = tr.points; finishRoad(rd, smooth, blocked); }
         }
-        // a PASS ends ON the freeway at each side (an interchange there), not at a city's edge beside it
+        // a PASS is cut where it first meets the freeway on each side (beyond, the freeway already goes
+        // there). It used to END on the freeway: where the freeway ran on a viaduct no interchange fit, the
+        // grade separation lifted the pass clear and it stopped in the air (Glenn: "the mountain road in the
+        // air and doesn't connect to anything"). Its cut ends now run on into the nearest town's streets
+        // (joinPassToTowns), crossing the freeway on a bridge where they must.
+        if (rd.kind == "pass") cutLoops(rd.points);
         if (rd.kind == "pass") {
             std::vector<Vec2>& P = rd.points;
             for (int side = 0; side < 2; ++side) {
@@ -697,7 +736,7 @@ void routeFreewayRoundCities(IslandWorld& w, const std::vector<std::pair<int, st
                 if (side ? cut < P.size() : cut > 0) {
                     if (side) { P.resize(cut + 1); P.back() = onto; }
                     else { P.erase(P.begin(), P.begin() + static_cast<std::ptrdiff_t>(cut)); P.front() = onto; }
-                    if (side) rd.to = -1; else rd.from = -1;   // it ends on the freeway now
+                    if (side) rd.to = -1; else rd.from = -1;   // cut at the freeway: joinPassToTowns takes it on
                 }
             }
             const TerrainRoute m = measureRoute([&w](double x, double z) { return w.smoothAt(x, z); }, P);
@@ -1678,5 +1717,30 @@ void planTrails(IslandWorld& w) {
         walk(heads[static_cast<std::size_t>(a)], heads[static_cast<std::size_t>(b)], "coast path " + w.sites[static_cast<std::size_t>(a)].name + " - " + w.sites[static_cast<std::size_t>(b)].name);
     }
 }
+
+void joinPassToTowns(IslandWorld& w, const std::vector<std::pair<int, std::vector<Vec2>>>& arterialNodes) {
+    for (IslandRoad& rd : w.roads) {
+        if ((rd.kind != "pass" && rd.kind != "mountain") || rd.points.size() < 2) continue;
+        for (int side = 0; side < 2; ++side) {
+            const int site = side ? rd.to : rd.from;   // -1: cut at the freeway -- the nearest town's streets
+            const Vec2 end = side ? rd.points.back() : rd.points.front();
+            Vec2 best = end;
+            double bd = 1e30;
+            for (const auto& [k, nodes] : arterialNodes)
+                if (k == site || site < 0)
+                    for (const Vec2& q : nodes) if ((q - end).length() < bd) { bd = (q - end).length(); best = q; }
+            if (bd > 1200.0 || bd < 1.0) continue;
+            // a straight approach, in steps (the lanes builder drapes it on the ground)
+            const int steps = std::max(1, static_cast<int>(bd / 20.0));
+            std::vector<Vec2> add;
+            for (int k = 1; k <= steps; ++k) add.push_back(end + (best - end) * (static_cast<double>(k) / steps));
+            if (side) rd.points.insert(rd.points.end(), add.begin(), add.end());
+            else rd.points.insert(rd.points.begin(), add.rbegin(), add.rend());
+        }
+        cutLoops(rd.points);
+    }
+}
+
+int removeSelfCrossings(std::vector<Vec2>& points) { return cutLoops(points); }
 
 }  // namespace engine

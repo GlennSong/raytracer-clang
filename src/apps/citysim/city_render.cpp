@@ -228,6 +228,25 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
 
     nav_ = engine::buildNavGraph(combined);
     if (nav_.linkCount() == 0) return false;
+    // MIXED LINKS (Glenn: "cars get off the freeway and then sink into the ground and they appear"): a
+    // link from a ramp's last deck node (absolute Y) to a street node (height ABOVE the ground, usually 0)
+    // was marked absolute as a whole, so a car lerped from the deck toward y = 0 -- sea level -- along it,
+    // sank through the terrain, and popped back up on the next street link. The street end takes its
+    // absolute height from the drawn ground here, where the ground is known.
+    {
+        int mixed = 0;
+        for (engine::NavLink& L : nav_.links) {
+            if (!L.elevAbsolute || L.from < 0 || L.to < 0) continue;
+            const bool absA = combined.nodes[static_cast<std::size_t>(L.from)].elevAbsolute;
+            const bool absB = combined.nodes[static_cast<std::size_t>(L.to)].elevAbsolute;
+            if (absA == absB) continue;
+            const engine::Vec2 pa = nav_.nodes[static_cast<std::size_t>(L.from)], pb = nav_.nodes[static_cast<std::size_t>(L.to)];
+            if (!absA) L.elevA = groundAt(pa.x, pa.y) + L.layer * kLayerClearance + L.elevA;
+            if (!absB) L.elevB = groundAt(pb.x, pb.y) + L.layer * kLayerClearance + L.elevB;
+            ++mixed;
+        }
+        if (mixed) LOG_INFO << "[citysim] " << mixed << " deck-to-street links given the street end's ground height";
+    }
 
     // Connectivity truth (device: "I don't see the freeway connected yet"):
     // walk the built nav and report whether a car can actually reach the

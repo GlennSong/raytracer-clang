@@ -188,6 +188,7 @@ int main(int argc, char** argv) {
         }
         if (!cityLimits.empty()) {
             engine::routeFreewayRoundCities(w, cityLimits);
+            engine::joinPassToTowns(w, arterialNodes);   // ADR-0135: the pass runs into its towns
             // and every city onto it: link roads from its arterials (a city three or four, a town one or two)
             for (const auto& [k, art] : arterialNodes) {
                 const bool city = w.sites[static_cast<std::size_t>(k)].kind == "city";
@@ -332,6 +333,10 @@ int main(int argc, char** argv) {
                 hubs.push_back({{"_place", w.sites[k].name}, {"at", {w.centres[k].x, w.centres[k].y}}, {"kind", w.sites[k].kind == "city" ? "financial" : "commercial"}});
             if (!level.contains("citysim")) level["citysim"] = nlohmann::json::object();
             level["citysim"]["districts"]["hubs"] = hubs;
+            // a whole island at the template's density routed 14,000 cars and 14,000 walkers before the sim
+            // would start (Glenn: "it's taking a while to start up the simulation"); the tiered sim animates
+            // only what is near the player, so a lower cap reads as busy where you stand
+            if (natureLevel.contains("terrain")) level["citysim"]["maxAmbient"] = 4000;
             level["citysim"]["graph"] = scenePath;
             // the player in the first city's centre
             const engine::Vec2 spawn = w.centres.empty() ? engine::Vec2(0, 0) : w.centres[0];

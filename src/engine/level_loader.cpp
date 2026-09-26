@@ -4378,6 +4378,38 @@ bool LevelLoader::load(const std::string& path,
             // GRASS LAYERS (ADR-0130): "grass" is the meadow; "grassLayers" adds more fields, each with a
             // "where": "meadow" (the cover's grass), "tall" (open ground in patches, thickest at forest
             // edges and clearings), "reeds" (a band along the rivers and lake shores, and wet hollows)
+            // THE CITY IS SEALED GROUND (Glenn: "There's flowers everywhere!! In the city, it should be
+            // confined into the green spaces"): no grass or flowers on the drawn roads (streets, sidewalks,
+            // freeways, ramps) or on a building's pad; parks and green lots keep theirs. Both indexes are
+            // self-contained (the density runs on worker threads during play)
+            auto sealedRoads = std::make_shared<const engine::DrawnRoad>(engine::gatherDrawnRoad(world));
+            struct PadIndex {
+                std::vector<std::vector<engine::Vec2>> polys;
+                std::unordered_map<long long, std::vector<int>> bins;
+                double kBin = 32.0;
+                static long long key(int i, int j) { return (static_cast<long long>(i) << 32) ^ static_cast<unsigned>(j); }
+                bool covers(double x, double z) const {
+                    auto it = bins.find(key(static_cast<int>(std::floor(x / kBin)), static_cast<int>(std::floor(z / kBin))));
+                    if (it == bins.end()) return false;
+                    for (int k : it->second) if (engine::pointInPolygon(polys[static_cast<std::size_t>(k)], engine::Vec2(x, z))) return true;
+                    return false;
+                }
+            };
+            auto sealedPads = std::make_shared<PadIndex>();
+            if (preLots.grown)
+                for (const engine::LotBuilding& lb : preLots.lots) {
+                    if (lb.pad.size() < 3 || lb.type == "park" || lb.type == "green") continue;
+                    const int k = static_cast<int>(sealedPads->polys.size());
+                    sealedPads->polys.push_back(lb.pad);
+                    double x0 = 1e30, z0 = 1e30, x1 = -1e30, z1 = -1e30;
+                    for (const engine::Vec2& v : lb.pad) { x0 = std::min(x0, (double)v.x); x1 = std::max(x1, (double)v.x); z0 = std::min(z0, (double)v.y); z1 = std::max(z1, (double)v.y); }
+                    const double kb = sealedPads->kBin;
+                    for (int j = static_cast<int>(std::floor(z0 / kb)); j <= static_cast<int>(std::floor(z1 / kb)); ++j)
+                        for (int i = static_cast<int>(std::floor(x0 / kb)); i <= static_cast<int>(std::floor(x1 / kb)); ++i)
+                            sealedPads->bins[PadIndex::key(i, j)].push_back(k);
+                }
+            LOG_INFO << "[grass] sealed ground: " << sealedRoads->tris.size() << " road triangles, " << sealedPads->polys.size() << " building pads";
+            const std::shared_ptr<const PadIndex> padsRO = sealedPads;
             auto plantGrass = [&](const json& gj, const std::string& tag) {
                 GrassField gf;
                 const double dilate = placeDilate;
@@ -4401,8 +4433,11 @@ bool LevelLoader::load(const std::string& path,
                 const int kind = where == "tall" ? 1 : where == "reeds" ? 2 : where == "flowers" ? 3 : where == "clearing" ? 4 : where == "shore" ? 5 : 0;
                 const double clumpScale = gj.value("clumpScale", 0.06), clumpCut = gj.value("clumpCut", 0.25);
                 const double shore = gj.value("shoreBand", 6.0);
-                gf.density = [maxSlope, thin, sea, patchiness, patchScale, patches, cover, hydro, kind, shore, clumpScale, clumpCut](double x, double z, double y, double slopeCos) {
+                gf.density = [maxSlope, thin, sea, patchiness, patchScale, patches, cover, hydro, kind, shore, clumpScale, clumpCut,
+                              sealedRoads, padsRO](double x, double z, double y, double slopeCos) {
                     if (y < sea + 0.15) return 0.0;
+                    if (!sealedRoads->empty() && sealedRoads->near(x, z, 0.4)) return 0.0;   // the city's sealed ground
+                    if (padsRO->covers(x, z)) return 0.0;
                     if (hydro && hydro->isWet(x, z, 0.3)) return 0.0;   // not in the rivers and lakes
                     const double slope = std::acos(std::clamp(slopeCos, -1.0, 1.0));
                     const TerrainMaps* maps = cover ? cover->params().maps.get() : nullptr;
