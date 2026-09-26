@@ -305,6 +305,7 @@ std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(co
     ep.erodeRadius = tj.value("erodeRadius", ep.erodeRadius);
     ep.thermalIterations = tj.value("erodeThermal", ep.thermalIterations);
     ep.talus = tj.value("erodeTalus", ep.talus);
+    ep.vulkan = tj.value("erodeGpu", false);   // ADR-0122: opt-in on Vulkan builds
     bakeErodedTerrain(eb, en, eb.size, tj.value("erodeRes", 512), ep);
     memo[key] = eb.erodedBase;
     return eb.erodedBase;

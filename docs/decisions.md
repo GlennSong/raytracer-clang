@@ -8708,3 +8708,18 @@ The cover map takes the normal's horizontal part (`GroundCover::at(..., normalX,
 `HydroParams::widthVariation` (terrain `rivers.widthVariation`, 0 = off) widens a river where it runs flat (to ~1 + 0.7 v) and narrows it where it falls (to ~1 − 0.35 v). The gradient is read over ±60 m of its own levels, with a slow swell of pools along the course and a 40 m smoothing, for Glenn's "the rivers are too narrow and could be wider at parts".
 
 It is OFF for the island. At 0.6, with gentler banks (bankSteep 1.2, bankSlope 0.25), Saltwood's plan re-cut: interchange d0_0's ramps fell 200 m short, a link hit 14.5%, 94 more lanes lost deck cover, and pavement steps went from 8 to 36. The city and the interchanges have to follow river edges that move before the rivers can widen. That is the next step.
+
+## ADR-0122 — GPU erosion on Vulkan (the Linux twin of the Metal bake)
+
+**Context.** Glenn wants the terrain weathered much more finely and realistically, baked offline on the GPU (the compute-shader erosion threads he pointed at: Mei et al. 2007, Beyer's thesis, Sebastian Lague). The droplet sim (Beyer / Lague) had a Metal port (P0.5: fixed-point atomics, bit-deterministic, 2048² / 3M droplets in 1.08 s). On Linux, `erodeGpu` was a stub and the island eroded on the CPU at 1024². This is the first step: the GPU plumbing the finer, multi-process bake builds on.
+
+**Decision.**
+- `erosion_gpu_vk.cpp` implements the same seam (`erodeGpuAvailable` / `erodeGpu`). It has its own headless instance, device and compute queue; device-local buffers with a staging copy; and every dispatch in one command buffer with compute barriers between them, so dispatch order is data order.
+- `shaders/vulkan/erosion.comp` holds the Metal kernels in GLSL, one source compiled per kernel (`-DKERNEL_*`). It uses `roundEven` for the fixed point, so ± pairs still cancel.
+- Its cache tag is `vk-erosion-v1`: deterministic run to run, not bit-identical to Metal.
+- **Opt-in per terrain** (`"erodeGpu": true`, `ErosionParams::vulkan`). The GPU and CPU sims agree statistically, not bit for bit, and every Linux level so far was planned on CPU erosion, some of them by other sessions. Switching the default would quietly move their ground under their road plans. Metal keeps its automatic behaviour.
+
+**Consequences.**
+- On the RTX 3080: 1024² with 500k droplets in 59 ms, against 1137 ms on the CPU (19×).
+- Two runs are bit-identical, and the GPU and CPU agree statistically (the existing `test_erosion_gpu` cases, now run on Linux).
+- Next: the Mei et al. water-and-sediment ("pipe") model and thermal weathering as further kernels in the same context; a coarse-to-fine bake to ~2.5 m cells; and snow depth and material maps as outputs.

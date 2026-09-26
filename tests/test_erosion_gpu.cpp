@@ -114,7 +114,14 @@ TEST_CASE(erosion_gpu_unavailable_returns_false_and_env_pins_cpu) {
         std::printf("    [skip] no Metal GPU erosion available\n");
         return;
     }
-    CHECK(std::strcmp(erosionBackendTag(), "gpu-erosion-v1") == 0);
+    ErosionParams asks = testParams();
+    asks.vulkan = true;   // a Vulkan build runs on the GPU only when the terrain asks (ADR-0122)
+    CHECK(std::strcmp(erosionBackendTag(&asks), "gpu-erosion-v1") == 0 ||   // Metal
+          std::strcmp(erosionBackendTag(&asks), "vk-erosion-v1") == 0);
+#if defined(RT_HAVE_VULKAN_EROSION)
+    const ErosionParams notAsked = testParams();   // every level baked before ADR-0122 keeps the CPU sim
+    CHECK(std::strcmp(erosionBackendTag(&notAsked), "cpu") == 0);
+#endif
 }
 
 TEST_CASE(erosion_gpu_two_runs_bit_identical) {

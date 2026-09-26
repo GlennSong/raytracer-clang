@@ -1064,8 +1064,36 @@ function(rt_build_vulkan_shaders)
             VERBATIM)
         list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/${shader}.spv)
     endforeach()
+    # the erosion bake's kernels (ADR-0122): one GLSL source, one SPIR-V module per kernel
+    foreach(kernel droplets clamp apply_applied thermal apply)
+        string(TOUPPER ${kernel} KERNEL_UP)
+        add_custom_command(
+            OUTPUT ${VK_SHADER_OUT_DIR}/erosion_${kernel}.comp.spv
+            COMMAND ${Vulkan_GLSLC_EXECUTABLE} -DKERNEL_${KERNEL_UP}=1
+                    ${VK_SHADER_SRC_DIR}/erosion.comp
+                    -o ${VK_SHADER_OUT_DIR}/erosion_${kernel}.comp.spv
+            DEPENDS ${VK_SHADER_SRC_DIR}/erosion.comp
+            COMMENT "glslc erosion.comp (${kernel}) -> erosion_${kernel}.comp.spv"
+            VERBATIM)
+        list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/erosion_${kernel}.comp.spv)
+    endforeach()
     add_custom_target(vulkan_shaders DEPENDS ${VK_SPV_FILES})
 endfunction()
+
+# GPU erosion bake on Vulkan (ADR-0122): the Linux/Windows twin of erosion_gpu.mm, compiled into
+# engine_core when the SDK is present (every binary that bakes terrain -- viewer, city_plan, the tests
+# -- gets it); without it the CPU sim runs, as before.
+if(NOT APPLE)
+    find_package(Vulkan QUIET)
+    if(Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
+        rt_build_vulkan_shaders()
+        target_sources(engine_core PRIVATE src/engine/procgen/erosion_gpu_vk.cpp)
+        target_compile_definitions(engine_core PUBLIC RT_HAVE_VULKAN_EROSION=1
+                                   "RT_VULKAN_SHADER_DIR=\"${VK_SHADER_OUT_DIR}\"")
+        target_link_libraries(engine_core PUBLIC Vulkan::Vulkan)
+        add_dependencies(engine_core vulkan_shaders)
+    endif()
+endif()
 
 # ============================================================
 # visionOS immersive app. Built ONLY when cross-compiling for visionOS, which

@@ -1,0 +1,180 @@
+#version 450
+// GPU erosion bake, Vulkan (ADR-0122): the droplet hydraulic + thermal talus simulation of
+// src/engine/procgen/erosion.cpp, the same kernels as shaders/metal/erosion.metal (P0.5). One source,
+// compiled once per kernel by CMake (-DKERNEL_DROPLETS / _CLAMP / _APPLY_APPLIED / _THERMAL / _APPLY);
+// dispatched in order by src/engine/procgen/erosion_gpu_vk.cpp.
+//
+// DETERMINISM (as the Metal port): droplets run in fixed batches that READ the heightmap as the previous
+// batch left it and WRITE fixed-point int32 deltas (scale 2^16) by atomic add -- integer addition is
+// order-free, so a bake is bit-identical run to run. A droplet's randomness is a hash of (seed, index).
+// clampDelta caps each cell's applied change at its local relief on the snapshot and carries the rest
+// (mass conserved; see erosion.metal for why).
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) buffer Height  { float h[]; };
+layout(std430, set = 0, binding = 1) buffer Delta   { int delta[]; };
+layout(std430, set = 0, binding = 2) buffer Applied { int applied[]; };
+layout(std430, set = 0, binding = 3) readonly buffer BrushOff { int brushOff[]; };
+layout(std430, set = 0, binding = 4) readonly buffer BrushW   { float brushW[]; };
+
+// Mirrored by ErosionPushVk in erosion_gpu_vk.cpp (15 four-byte scalars, the Metal uniform layout).
+layout(push_constant) uniform U {
+    int   n;
+    int   batchStart;
+    int   batchCount;
+    int   maxLifetime;
+    int   brushCount;
+    uint  seed;
+    float inertia;
+    float sedimentCapacity;
+    float depositSpeed;
+    float erodeSpeed;
+    float evaporation;
+    float gravity;
+    float minSlope;
+    float talus;
+    float thermalRate;
+} u;
+
+const float kFixedScale = 65536.0;
+
+uint pcgHash(uint v) {
+    uint state = v * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+float rand01(uint seed, uint counter) {
+    uint hh = pcgHash(pcgHash(seed) ^ counter);
+    return float(hh >> 8) * (1.0 / 16777216.0);
+}
+// round() away from zero on .5 in GLSL is implementation-defined; roundEven is exact and symmetric,
+// so +v/-v pairs (thermal) still cancel in the integer domain
+void scatterFixed(int x, int z, float v) {
+    int fixedV = int(roundEven(v * kFixedScale));
+    if (fixedV != 0) atomicAdd(delta[z * u.n + x], fixedV);
+}
+
+#ifdef KERNEL_DROPLETS
+void heightAndGradient(float gx, float gz, out float height, out float outGx, out float outGz) {
+    int n = u.n;
+    int x0 = clamp(int(gx), 0, n - 2);
+    int z0 = clamp(int(gz), 0, n - 2);
+    float fx = clamp(gx - float(x0), 0.0, 1.0), fz = clamp(gz - float(z0), 0.0, 1.0);
+    float nw = h[z0 * n + x0], ne = h[z0 * n + x0 + 1];
+    float sw = h[(z0 + 1) * n + x0], se = h[(z0 + 1) * n + x0 + 1];
+    outGx = (ne - nw) * (1.0 - fz) + (se - sw) * fz;
+    outGz = (sw - nw) * (1.0 - fx) + (se - ne) * fx;
+    height = (nw * (1.0 - fx) + ne * fx) * (1.0 - fz) + (sw * (1.0 - fx) + se * fx) * fz;
+}
+void main() {
+    uint tid = gl_GlobalInvocationID.x;
+    if (int(tid) >= u.batchCount) return;
+    uint drop = uint(u.batchStart) + tid;
+    int n = u.n;
+    float px = rand01(u.seed, drop * 2u + 0u) * float(n - 1);
+    float pz = rand01(u.seed, drop * 2u + 1u) * float(n - 1);
+    float dx = 0.0, dz = 0.0;
+    float speed = 1.0, water = 1.0, sediment = 0.0;
+    for (int life = 0; life < u.maxLifetime; life++) {
+        int nx = int(px), nz = int(pz);
+        if (nx < 0 || nz < 0 || nx >= n - 1 || nz >= n - 1) break;
+        float fx = px - float(nx), fz = pz - float(nz);
+        float h0, gx, gz;
+        heightAndGradient(px, pz, h0, gx, gz);
+        dx = dx * u.inertia - gx * (1.0 - u.inertia);
+        dz = dz * u.inertia - gz * (1.0 - u.inertia);
+        float len = sqrt(dx * dx + dz * dz);
+        if (len < 1e-6) break;
+        dx /= len; dz /= len;
+        float nxp = px + dx, nzp = pz + dz;
+        if (nxp < 0.0 || nzp < 0.0 || nxp >= float(n - 1) || nzp >= float(n - 1)) break;
+        float h1, ggx, ggz;
+        heightAndGradient(nxp, nzp, h1, ggx, ggz);
+        float dh = h1 - h0;
+        float capacity = max(-dh, u.minSlope) * speed * water * u.sedimentCapacity;
+        if (sediment > capacity || dh > 0.0) {
+            float deposit = (dh > 0.0) ? min(dh, sediment) : (sediment - capacity) * u.depositSpeed;
+            sediment -= deposit;
+            scatterFixed(nx, nz, deposit * (1.0 - fx) * (1.0 - fz));
+            scatterFixed(nx + 1, nz, deposit * fx * (1.0 - fz));
+            scatterFixed(nx, nz + 1, deposit * (1.0 - fx) * fz);
+            scatterFixed(nx + 1, nz + 1, deposit * fx * fz);
+        } else {
+            float erodeAmt = min((capacity - sediment) * u.erodeSpeed, -dh);
+            for (int b = 0; b < u.brushCount; b++) {
+                int bx = nx + brushOff[2 * b], bz = nz + brushOff[2 * b + 1];
+                if (bx < 0 || bz < 0 || bx >= n || bz >= n) continue;
+                float w = erodeAmt * brushW[b];
+                scatterFixed(bx, bz, -w);
+                sediment += w;
+            }
+        }
+        speed = sqrt(max(0.0, speed * speed - dh * u.gravity));
+        water *= (1.0 - u.evaporation);
+        px = nxp; pz = nzp;
+    }
+}
+#endif
+
+#ifdef KERNEL_CLAMP
+void main() {
+    int n = u.n;
+    uint idxU = gl_GlobalInvocationID.x;
+    if (idxU >= uint(n * n)) return;
+    int idx = int(idxU), x = idx % n, z = idx / n;
+    int d = delta[idx];
+    if (d == 0) { applied[idx] = 0; return; }
+    float hh = h[idx], mn = hh, mx = hh;
+    if (x > 0)     { float v = h[idx - 1]; mn = min(mn, v); mx = max(mx, v); }
+    if (x < n - 1) { float v = h[idx + 1]; mn = min(mn, v); mx = max(mx, v); }
+    if (z > 0)     { float v = h[idx - n]; mn = min(mn, v); mx = max(mx, v); }
+    if (z < n - 1) { float v = h[idx + n]; mn = min(mn, v); mx = max(mx, v); }
+    float df = float(d) * (1.0 / kFixedScale);
+    float use = clamp(df, mn - hh, mx - hh);
+    int useFixed = int(roundEven(use * kFixedScale));
+    applied[idx] = useFixed;
+    delta[idx] = d - useFixed;
+}
+#endif
+
+#ifdef KERNEL_APPLY_APPLIED
+void main() {
+    uint tid = gl_GlobalInvocationID.x;
+    if (tid >= uint(u.n * u.n)) return;
+    int d = applied[tid];
+    if (d != 0) h[tid] += float(d) * (1.0 / kFixedScale);
+}
+#endif
+
+#ifdef KERNEL_THERMAL
+void main() {
+    int n = u.n;
+    uint idxU = gl_GlobalInvocationID.x;
+    if (idxU >= uint(n * n)) return;
+    int idx = int(idxU), x = idx % n, z = idx / n;
+    if (x < 1 || z < 1 || x >= n - 1 || z >= n - 1) return;
+    float here = h[idx];
+    int lx = x, lz = z; float lowest = here;
+    const ivec2 off[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1));
+    for (int i = 0; i < 4; i++) {
+        float nh = h[(z + off[i].y) * n + (x + off[i].x)];
+        if (nh < lowest) { lowest = nh; lx = x + off[i].x; lz = z + off[i].y; }
+    }
+    float drop = here - lowest;
+    if (drop > u.talus) {
+        float move = (drop - u.talus) * 0.5 * u.thermalRate;
+        scatterFixed(x, z, -move);
+        scatterFixed(lx, lz, move);
+    }
+}
+#endif
+
+#ifdef KERNEL_APPLY
+void main() {
+    uint tid = gl_GlobalInvocationID.x;
+    if (tid >= uint(u.n * u.n)) return;
+    int d = atomicExchange(delta[tid], 0);
+    if (d != 0) h[tid] += float(d) * (1.0 / kFixedScale);
+}
+#endif

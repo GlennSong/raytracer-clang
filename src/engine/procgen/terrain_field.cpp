@@ -661,7 +661,7 @@ HeightField erodeField(const HeightField& f, double worldSize, int resolution,
         // not bit-identical to each other, so the key names which one will
         // run — CPU- and GPU-baked caches never cross-contaminate, and a
         // kernel revision (tag bump) invalidates cleanly.
-        for (const char* t = erosionBackendTag(); *t; ++t) {
+        for (const char* t = erosionBackendTag(&params); *t; ++t) {
             key ^= static_cast<unsigned char>(*t);
             key *= 1099511628211ULL;
         }

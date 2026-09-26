@@ -45,6 +45,10 @@ struct ErosionParams {
     float talus = 1.2f;           // max height drop per cell before material slips
     float thermalRate = 0.5f;
     uint32_t seed = 0;
+    // Vulkan builds only (ADR-0122): run on the GPU when the terrain asks for it (terrain "erodeGpu").
+    // Off by default so switching a Linux build to GPU erosion does not quietly re-shape every level baked
+    // on the CPU sim (the two agree statistically, not bit for bit). Apple's Metal path ignores it.
+    bool vulkan = false;
 };
 
 // Runs the GPU (Metal) port when available — same model, seconds instead of
@@ -54,7 +58,8 @@ void erode(Heightmap& hm, const ErosionParams& params);
 // Which backend erode() will use: "gpu-erosion-v1" (Metal compute) or "cpu".
 // Folded into content-hash cache keys so CPU- and GPU-baked terrain caches
 // never cross-contaminate, and a future kernel revision invalidates cleanly.
-const char* erosionBackendTag();
+// The backend a bake with `p` will run on (null: the platform default) -- part of every erosion cache key.
+const char* erosionBackendTag(const ErosionParams* p = nullptr);
 
 // Build a terrain mesh from a (possibly eroded) heightmap: smooth normals,
 // planar UVs, and the same height/slope/altitude vertex coloring as
