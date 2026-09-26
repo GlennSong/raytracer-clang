@@ -21,6 +21,7 @@
 #include <cstring>
 #include <fstream>
 #include <mutex>
+#include <queue>
 #include <string>
 #include <vector>
 
@@ -60,10 +61,10 @@ const char* kKernelFile[kKernelCount] = {"erosion_droplets.comp.spv", "erosion_c
 struct WaterPushVk {
     int32_t n;
     int32_t parity;
-    float cellSize, dt, gravity, rain, capacity, dissolve, deposit, evaporate, seaLevel, minTilt, maxErodeDepth;
+    float cellSize, dt, gravity, rain, capacity, dissolve, deposit, evaporate, seaLevel, minTilt, maxErodeDepth, rockHardness;
 };
-static_assert(sizeof(WaterPushVk) == 13 * 4, "push block must match erosion_water.comp");
-constexpr uint32_t kWaterBindings = 9;
+static_assert(sizeof(WaterPushVk) == 14 * 4, "push block must match erosion_water.comp");
+constexpr uint32_t kWaterBindings = 10;
 
 struct VkErosion {
     VkInstance instance = VK_NULL_HANDLE;
@@ -250,6 +251,72 @@ bool makeBuffer(Buf& b, VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPro
     return vkBindBufferMemory(g.device, b.buf, b.mem, 0) == VK_SUCCESS;
 }
 
+// BREACH DEPRESSIONS (ADR-0124, after Lindsay 2016's least-cost breaching, simplified): a priority flood
+// from the map's edge and the sea inward, lowest first. A cell reached from a HIGHER one is in a hollow:
+// the path it was reached along is cut down to fall gently from it (grade `fall` per metre) out to the
+// outlet -- unless that would cut deeper than maxCut anywhere, when the hollow is left closed (a lake).
+// Returns the number of hollows breached.
+int breachDepressions(std::vector<float>& h, int n, float cell, float seaLevel, float maxCut) {
+    const std::size_t N = static_cast<std::size_t>(n) * n;
+    std::vector<int32_t> parent(N, -1);
+    std::vector<float> level(N, 0.0f);   // the flood's level: a filled hollow's spill height
+    std::vector<uint8_t> seen(N, 0);
+    using Item = std::pair<float, int32_t>;
+    std::priority_queue<Item, std::vector<Item>, std::greater<Item>> q;
+    for (int z = 0; z < n; ++z)
+        for (int x = 0; x < n; ++x) {
+            const int32_t i = z * n + x;
+            if (x == 0 || z == 0 || x == n - 1 || z == n - 1 || h[static_cast<std::size_t>(i)] < seaLevel) {
+                seen[static_cast<std::size_t>(i)] = 1;
+                level[static_cast<std::size_t>(i)] = h[static_cast<std::size_t>(i)];
+                q.push({h[static_cast<std::size_t>(i)], i});
+            }
+        }
+    const float fall = 0.002f;   // the cut channel's grade: 0.2 %
+    int breached = 0;
+    const int dx[4] = {1, -1, 0, 0}, dz[4] = {0, 0, 1, -1};
+    while (!q.empty()) {
+        const auto [lv, c] = q.top();
+        q.pop();
+        const int cx = c % n, cz = c / n;
+        for (int k = 0; k < 4; ++k) {
+            const int nx = cx + dx[k], nz = cz + dz[k];
+            if (nx < 0 || nz < 0 || nx >= n || nz >= n) continue;
+            const int32_t nb = nz * n + nx;
+            if (seen[static_cast<std::size_t>(nb)]) continue;
+            seen[static_cast<std::size_t>(nb)] = 1;
+            parent[static_cast<std::size_t>(nb)] = c;
+            float hn = h[static_cast<std::size_t>(nb)];
+            if (hn >= lv) { level[static_cast<std::size_t>(nb)] = hn; q.push({hn, nb}); continue; }
+            // a hollow: can the way out be cut so it falls all the way from here?
+            float worst = 0.0f, target = hn;
+            for (int32_t a = c; a >= 0; a = parent[static_cast<std::size_t>(a)]) {
+                target -= fall * cell;
+                const float ha = h[static_cast<std::size_t>(a)];
+                if (ha <= target) break;   // from here on the ground already falls
+                worst = std::max(worst, ha - target);
+                if (worst > maxCut) break;
+            }
+            if (worst <= maxCut) {
+                target = hn;
+                for (int32_t a = c; a >= 0; a = parent[static_cast<std::size_t>(a)]) {
+                    target -= fall * cell;
+                    float& ha = h[static_cast<std::size_t>(a)];
+                    if (ha <= target) break;
+                    ha = target;
+                }
+                ++breached;
+                level[static_cast<std::size_t>(nb)] = hn;
+                q.push({hn, nb});
+            } else {   // too deep to breach: it floods to the spill level (a lake, left for the water to fill)
+                level[static_cast<std::size_t>(nb)] = lv;
+                q.push({lv, nb});
+            }
+        }
+    }
+    return breached;
+}
+
 }  // namespace
 
 bool erodeGpuAvailable() {
@@ -406,20 +473,40 @@ bool erodeGpu(Heightmap& hm, const ErosionParams& p) {
     constexpr int kResidueFlushPasses = 8;   // as the Metal host: drain what the per-batch clamps held back
     for (int it = 0; it < kResidueFlushPasses; it++) clampApply();
 
+    // 1b. BREACH (CPU, ADR-0124): read the droplets' ground back, cut the shallow hollows open, send it up
+    if (p.waterSteps > 0 && p.breachDepth > 0.0f) {
+        barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+        vkCmdCopyBuffer(cmd, height.buf, staging.buf, 1, &whole);
+        if (!submit()) return false;
+        std::vector<float> hh(static_cast<std::size_t>(cells));
+        void* m = nullptr;
+        vkMapMemory(g.device, staging.mem, 0, cells * 4, 0, &m);
+        std::memcpy(hh.data(), m, cells * 4);
+        const float cellM = hm.worldSize > 0.0f ? hm.worldSize / static_cast<float>(n - 1) : 1.0f;
+        const int opened = breachDepressions(hh, n, cellM, p.seaLevel, p.breachDepth);
+        std::memcpy(m, hh.data(), cells * 4);
+        vkUnmapMemory(g.device, staging.mem);
+        LOG_INFO << "[erosion] breached " << opened << " hollows (cuts up to " << p.breachDepth << " m)";
+        begin();
+        vkCmdCopyBuffer(cmd, staging.buf, height.buf, 1, &whole);
+        barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, rw);
+    }
+
     // 2. WATER AND SEDIMENT (erosion_water.comp, ADR-0123): Mei et al.'s pipe model on the same height
     //    buffer, in chunks of 500 steps
-    Buf water, flux, vel, sed0, sed1, tilt, wet, relief;
+    Buf water, flux, vel, sed0, sed1, tilt, wet, relief, soil;
     VkDescriptorSet wset = VK_NULL_HANDLE;
     const bool withWater = p.waterSteps > 0;
     if (withWater) {
         if (!makeBuffer(water, cells * 4, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
-            !makeBuffer(flux, cells * 16, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
+            !makeBuffer(flux, cells * 32, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
             !makeBuffer(vel, cells * 8, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
             !makeBuffer(sed0, cells * 4, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
             !makeBuffer(sed1, cells * 4, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
             !makeBuffer(tilt, cells * 4, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
             !makeBuffer(wet, cells * 4, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
-            !makeBuffer(relief, cells * 8, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+            !makeBuffer(relief, cells * 8, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
+            !makeBuffer(soil, cells * 4, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
             LOG_WARN << "[erosion] GPU water allocation failed at n=" << n << ": CPU erosion";
             return false;
         }
@@ -430,7 +517,8 @@ bool erodeGpu(Heightmap& hm, const ErosionParams& p) {
         if (vkAllocateDescriptorSets(g.device, &wai, &wset) != VK_SUCCESS) return false;
         VkDescriptorBufferInfo wi[kWaterBindings] = {{height.buf, 0, VK_WHOLE_SIZE}, {water.buf, 0, VK_WHOLE_SIZE}, {flux.buf, 0, VK_WHOLE_SIZE},
                                                      {vel.buf, 0, VK_WHOLE_SIZE}, {sed0.buf, 0, VK_WHOLE_SIZE}, {sed1.buf, 0, VK_WHOLE_SIZE},
-                                                     {tilt.buf, 0, VK_WHOLE_SIZE}, {wet.buf, 0, VK_WHOLE_SIZE}, {relief.buf, 0, VK_WHOLE_SIZE}};
+                                                     {tilt.buf, 0, VK_WHOLE_SIZE}, {wet.buf, 0, VK_WHOLE_SIZE}, {relief.buf, 0, VK_WHOLE_SIZE},
+                                                     {soil.buf, 0, VK_WHOLE_SIZE}};
         VkWriteDescriptorSet ww[kWaterBindings]{};
         for (uint32_t i = 0; i < kWaterBindings; ++i) {
             ww[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -441,7 +529,7 @@ bool erodeGpu(Heightmap& hm, const ErosionParams& p) {
             ww[i].pBufferInfo = &wi[i];
         }
         vkUpdateDescriptorSets(g.device, kWaterBindings, ww, 0, nullptr);
-        for (Buf* bz : {&water, &flux, &vel, &sed0, &sed1, &tilt, &wet, &relief}) vkCmdFillBuffer(cmd, bz->buf, 0, bz->size, 0);
+        for (Buf* bz : {&water, &flux, &vel, &sed0, &sed1, &tilt, &wet, &relief, &soil}) vkCmdFillBuffer(cmd, bz->buf, 0, bz->size, 0);
         barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, rw);
         WaterPushVk w{};
         w.n = n;
@@ -457,6 +545,7 @@ bool erodeGpu(Heightmap& hm, const ErosionParams& p) {
         w.seaLevel = p.seaLevel;
         w.minTilt = p.waterMinTilt;
         w.maxErodeDepth = p.waterMaxCut;
+        w.rockHardness = p.waterRockHardness;
         auto wdispatch = [&](Kernel k) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g.pipes[k]);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g.waterPipeLayout, 0, 1, &wset, 0, nullptr);
@@ -502,7 +591,7 @@ bool erodeGpu(Heightmap& hm, const ErosionParams& p) {
             std::ofstream(std::string(dir) + "/" + name, std::ios::binary).write(static_cast<const char*>(m), static_cast<std::streamsize>(b.size));
             vkUnmapMemory(g.device, st.mem);
         };
-        dump(water, "water.f32"); dump(wet, "wet.f32"); dump(sed0, "sed.f32");
+        dump(water, "water.f32"); dump(wet, "wet.f32"); dump(sed0, "sed.f32"); dump(soil, "soil.f32");
     }
 
     void* src = nullptr;

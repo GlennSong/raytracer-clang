@@ -272,9 +272,15 @@ TEST_CASE(erosion_gpu_water_collects_in_the_valley_and_stays_bounded) {
     std::vector<float> w(a.h.size());
     CHECK(std::fread(w.data(), sizeof(float), w.size(), f) == w.size());
     std::fclose(f);
+    // the floor is a BAND (|x - 64| <= 4): the flow may split round a bar on the V's one-cell bottom (the
+    // central-difference slope there sees only the valley's fall -- ADR-0124), and the water still stands
+    // at the bottom, not on the slopes
     double floor = 0.0, slope = 0.0;
-    for (int z = 16; z < a.n - 16; ++z) { floor += w[static_cast<std::size_t>(z) * a.n + 64]; slope += w[static_cast<std::size_t>(z) * a.n + 32]; }
-    std::printf("    [water] mean depth on the floor %.3f m, on the slope %.3f m; heights %.1f..%.1f (was %.1f..%.1f)\n",
+    for (int z = 16; z < a.n - 16; ++z) {
+        for (int x = 60; x <= 68; ++x) floor += w[static_cast<std::size_t>(z) * a.n + x] / 9.0;
+        slope += w[static_cast<std::size_t>(z) * a.n + 32];
+    }
+    std::printf("    [water] mean depth at the bottom %.3f m, on the slope %.3f m; heights %.1f..%.1f (was %.1f..%.1f)\n",
                 floor / (a.n - 32), slope / (a.n - 32), lo, hi, blo, bhi);
     CHECK(floor > 5.0 * slope);
 #endif

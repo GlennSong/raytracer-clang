@@ -15,6 +15,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -50,6 +51,13 @@ int main(int argc, char** argv) {
     ep.vulkan = true;
     ep.seaLevel = tp.seaLevel > -1e29 ? static_cast<float>(tp.seaLevel) : -1e30f;
     int res = tj.value("erodeRes", 512);
+    // a droplet's life in METRES, not cells: 32 cells is 640 m at the island's 20 m but 94 m at 3 m, where a
+    // droplet dies before it finds a channel and only pits the ground (ADR-0124)
+    double lifetimeM = 0.0;
+    // COARSE TO FINE (ADR-0124): --coarse-res C runs the droplets + thermal at C (their constants are tuned
+    // in grid units for ~10-20 m cells; at 3 m they only pit the ground), adds that erosion's change to the
+    // fine grid (bilinear), then runs breaching + water at the fine resolution
+    int coarseRes = 0;
     for (int a = 3; a < argc; ++a) {
         const std::string k = argv[a];
         auto next = [&](double& v) { if (a + 1 < argc) v = std::atof(argv[++a]); };
@@ -63,10 +71,16 @@ int main(int argc, char** argv) {
         else if (k == "--deposit") { next(v); ep.waterDeposit = static_cast<float>(v); }
         else if (k == "--evaporate") { next(v); ep.waterEvaporate = static_cast<float>(v); }
         else if (k == "--thermal") { next(v); ep.thermalIterations = static_cast<int>(v); }
+        else if (k == "--rock-hardness") { next(v); ep.waterRockHardness = static_cast<float>(v); }
+        else if (k == "--deposit-rate") { next(v); ep.waterDeposit = static_cast<float>(v); }
+        else if (k == "--lifetime-m") { next(v); lifetimeM = v; }
+        else if (k == "--breach") { next(v); ep.breachDepth = static_cast<float>(v); }
+        else if (k == "--coarse-res") { next(v); coarseRes = static_cast<int>(v); }
         else if (k == "--cpu") ep.vulkan = false;
     }
 
     tp.resolution = res;
+    if (lifetimeM > 0.0) ep.maxLifetime = std::max(8, static_cast<int>(lifetimeM / (tp.size / res)));
     const engine::Noise noise(tj.value("seed", 0u));
     auto t0 = std::chrono::steady_clock::now();
     engine::Heightmap hm = engine::bakeHeightmap(tp, noise);
@@ -77,6 +91,30 @@ int main(int argc, char** argv) {
     write(hm, "before.f32");
     setenv("RT_EROSION_DUMP", out.c_str(), 1);
     auto t1 = std::chrono::steady_clock::now();
+    if (coarseRes > 0 && coarseRes < res) {
+        engine::TerrainParams ctp = tp;
+        ctp.resolution = coarseRes;
+        engine::Heightmap coarse = engine::bakeHeightmap(ctp, noise);
+        const engine::Heightmap coarse0 = coarse;
+        engine::ErosionParams cep = ep;
+        cep.waterSteps = 0;
+        cep.breachDepth = 0.0f;
+        cep.maxLifetime = engine::ErosionParams{}.maxLifetime;
+        engine::erode(coarse, cep);
+        // the coarse erosion's change, bilinear onto the fine grid
+        const int cn = coarse.n, fn = hm.n;
+        for (int z = 0; z < fn; ++z)
+            for (int x = 0; x < fn; ++x) {
+                const double gx = static_cast<double>(x) * (cn - 1) / (fn - 1), gz = static_cast<double>(z) * (cn - 1) / (fn - 1);
+                const int x0 = std::min(static_cast<int>(gx), cn - 2), z0 = std::min(static_cast<int>(gz), cn - 2);
+                const double tx = gx - x0, tz = gz - z0;
+                auto dAt = [&](int xx, int zz) { return static_cast<double>(coarse.get(xx, zz) - coarse0.get(xx, zz)); };
+                const double d = (dAt(x0, z0) * (1 - tx) + dAt(x0 + 1, z0) * tx) * (1 - tz) + (dAt(x0, z0 + 1) * (1 - tx) + dAt(x0 + 1, z0 + 1) * tx) * tz;
+                hm.set(x, z, hm.get(x, z) + static_cast<float>(d));
+            }
+        ep.droplets = 0;   // the fine pass is water only
+        std::printf("coarse: droplets + thermal at %d^2 (%.1f m cells)\n", cn, tp.size / coarseRes);
+    }
     engine::erode(hm, ep);
     auto t2 = std::chrono::steady_clock::now();
     write(hm, "after.f32");

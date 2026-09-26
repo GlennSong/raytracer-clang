@@ -8742,3 +8742,18 @@ Units are metres and seconds on the real cell size. Chunked submits (500 steps).
 - **Too much deposition:** valley floors fill flat, burying their relief.
 - Test: `erosion_gpu_water_collects_in_the_valley_and_stays_bounded`.
 - **Not used by any level yet.** Next: tune cut against fill; give the bed a hardness and the loose sediment its own layer, so channels stay incised; scale the droplet lifetime with resolution (at 3 m cells 32 steps only pits the surface); coarse-to-fine; a snow pass; and the maps (wetness, sediment) into the ground cover.
+
+## ADR-0124 — Erosion bake, second cut: a loose-sediment layer, breaching, eight pipes, coarse to fine
+
+**Context.** The first cut of the water model (ADR-0123) filled valleys flat, and the droplets pitted the ground at fine resolution.
+
+**What the next river_valley runs showed, and the fixes.**
+- **A loose-sediment layer** (after Šťava et al. 2008's layered materials). A `soil` buffer holds how much of the bed is deposited material. Water cuts it at the full rate and bedrock at `waterRockHardness` (0.15) of it, and deposits join it, so a river re-cuts its own floodplain instead of burying it.
+- **Breaching** (`breachDepth`; after Lindsay 2016, simplified). The noise relief is full of closed hollows, and the water filled every one flat with sediment. A priority flood from the map edge and the sea cuts every hollow shallower than `breachDepth` open along a 0.2% channel; deeper ones stay closed as lakes. It runs on the CPU between the droplets and the water. river_valley: 22–60k hollows opened, a connected drainage net, one real lake with a delta.
+- **Eight pipes.** With four, every rill and ridge lined up with the grid's axes: short horizontal and vertical dashes over the whole terrain. The diagonals (√2 longer, conducting less) make the flow close to isotropic. Flux is two vec4 a cell, and transport and the relief clamp use all eight neighbours.
+- **Coarse to fine** (`rt_erode --coarse-res`). The droplets' constants are tuned in grid units for ~10–20 m cells: at 2.9 m, a million of them pitted everything, cutting up to 130 m. They now run at the coarse resolution, their height change is added to the fine grid bilinearly, and breaching plus water run fine. `--lifetime-m` sets a droplet's life in metres.
+- **Remaining:**
+  - some residual axis streaks, probably from the upsampled coarse droplets;
+  - on a one-cell V bottom the central-difference slope sees only the down-valley fall, so the flow splits round a bar (the water test measures a band). Measuring the slope along the flow is the refinement.
+
+river_valley, 1025² at 2.9 m, coarse 257² droplets + 20k water steps: 8.8 s.

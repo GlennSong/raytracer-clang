@@ -58,6 +58,11 @@ def main():
         depth = np.clip(water / 2.0, 0, 1)[..., None]
         blue = np.array([0.10, 0.30, 0.75])
         Image.fromarray(((sh * (1 - depth) + blue * depth) * 255).astype(np.uint8)).save(os.path.join(d, "water.png"))
+        soil = cut(load(d, "soil.f32", n))
+        if soil is not None:   # loose sediment: brown by thickness over the hillshade
+            t = np.clip(soil / 5.0, 0, 1)[..., None]
+            brown = np.array([0.62, 0.50, 0.30])
+            Image.fromarray(((sh * (1 - t) + brown * t) * 255).astype(np.uint8)).save(os.path.join(d, "soil.png"))
         wet = cut(load(d, "wet.f32", n))
         if wet is not None:
             w = np.log1p(wet) / max(1e-6, np.log1p(np.percentile(wet, 99.5)))
